@@ -139,6 +139,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
     let u = |k: &str| p.get(k).and_then(Value::as_u64);
     let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(true);
     match req.method.as_str() {
+        "app.handoff" => ok(json!({"version": 2, "replace": true, "hiddenStart": true})),
         "ui.context.choose" => {
             let Some(id) = s("id") else { return err("missing `id`") };
             let Some(menu) = app.ui.canvas_tool_menu.as_ref() else { return err("no canvas context menu is open") };
@@ -161,7 +162,8 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
         "engine.execute" | "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().unwrap_or(json!({}));
-            if let Some(authorize) = app.services.automation_command.as_ref()
+            if !crate::control_files::hosted_save(app, id)
+                && let Some(authorize) = app.services.automation_command.as_ref()
                 && let Err(error) = authorize(id, &params)
             {
                 return err(error);
@@ -197,6 +199,13 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
         }
         "ui.menu.list" => ok(serde_json::to_value(crate::menus::menu_items(app)).unwrap_or_default()),
         "ui.inspect" => ok(inspect(app, ctx)),
+        "ui.theme" => {
+            // Hosts can match native panels without inspecting document pixels.
+            let tokens = crate::theme::Tokens::get(ctx);
+            let hex = |c: egui::Color32| format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b());
+            ok(json!({"theme": app.ui.theme.id(), "panel": hex(tokens.card), "dock": hex(tokens.dock),
+                "accent": hex(tokens.accent), "text": hex(tokens.text)}))
+        }
         "ui.set" => {
             if let Some(field) = p.as_object().and_then(|o| o.keys().find(|k| !UI_SET_FIELDS.contains(&k.as_str()))) {
                 return err(format!("unknown field `{field}` (fields: {})", UI_SET_FIELDS.join(", ")));
@@ -550,6 +559,13 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
             Outcome::Screenshot { token, path: s("path").map(str::to_string) }
         }
         "app.open" => match s("path") {
+            Some(path) if app.background_jobs && app.services.background_automation_read.is_some() && !crate::preset_files_ui::is_preset_file(path) => {
+                match crate::control_files::open_with_mode(app, path, req.params.get("replace").and_then(Value::as_bool).unwrap_or(false)) {
+                    Ok(photocraft_engine::jobs::Started::Job(job)) => Outcome::AfterJob(job),
+                    Ok(photocraft_engine::jobs::Started::Done(result)) => ok(result),
+                    Err(error) => err(error),
+                }
+            }
             Some(path) => {
                 let opened = match app.services.automation_read.as_mut() {
                     Some(read) => read(path),
@@ -568,6 +584,24 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
                 }))
             }
             None => err("missing `path`"),
+        },
+        "app.bind" => match (s("path"), s("preview"), app.session.active()) {
+            (Some(path), Some(preview), Some(state)) if path.ends_with(".pcraft") && preview.ends_with(".png") => {
+                app.jobs.host_target = Some((state.doc.id, path.to_string(), preview.to_string()));
+                ok(json!({"bound": true}))
+            }
+            _ => err("bind requires an open document, .pcraft path and .png preview"),
+        },
+        "app.stash" => match (s("path"), s("preview")) {
+            (Some(path), Some(preview)) => match crate::control_files::stash(app, path, preview) {
+                Ok(photocraft_engine::jobs::Started::Job(job)) if req.params.get("wait").and_then(Value::as_bool) == Some(false) => {
+                    ok(json!({"job": job.0, "pending": true}))
+                }
+                Ok(photocraft_engine::jobs::Started::Job(job)) => Outcome::AfterJob(job),
+                Ok(photocraft_engine::jobs::Started::Done(result)) => ok(result),
+                Err(error) => err(error),
+            },
+            _ => err("stash requires path and preview"),
         },
         "app.save" => wrap(app.save_automation(s("path").map(str::to_string)).map(|(p, w)| json!({"path": p, "warnings": w}))),
         "app.quit" => {
@@ -666,6 +700,21 @@ mod tests {
         match handle(app, ctx, &req) {
             Outcome::Done(v) => v,
             _ => panic!("{method}: expected an immediate reply"),
+        }
+    }
+
+    #[test]
+    fn host_theme_colors_follow_every_theme_without_a_document() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        for theme in crate::theme::ThemeKind::ALL {
+            app.set_theme(&ctx, theme);
+            let colors = call(&mut app, &ctx, "ui.theme", json!({}));
+            let tokens = crate::theme::Tokens::for_kind(theme);
+            assert_eq!(colors["result"]["theme"], theme.id());
+            assert_eq!(colors["result"]["panel"], format!("#{:02x}{:02x}{:02x}", tokens.card.r(), tokens.card.g(), tokens.card.b()));
+            assert_eq!(colors["result"]["dock"], format!("#{:02x}{:02x}{:02x}", tokens.dock.r(), tokens.dock.g(), tokens.dock.b()));
+            assert_eq!(colors["result"]["accent"], format!("#{:02x}{:02x}{:02x}", tokens.accent.r(), tokens.accent.g(), tokens.accent.b()));
         }
     }
 

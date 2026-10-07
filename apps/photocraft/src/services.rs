@@ -135,6 +135,17 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             Ok((name, bytes))
         }) as photocraft_ui_egui::AutomationReadFn
     });
+    let background_automation_read = automation.clone().map(|workspace| {
+        std::sync::Arc::new(move |path: &str| {
+            let bytes = workspace.read(path).map_err(|error| error.to_string())?;
+            let name = Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path).to_string();
+            Ok((name, bytes))
+        }) as photocraft_ui_egui::BackgroundAutomationReadFn
+    });
+    let background_automation_write = automation.clone().map(|workspace| {
+        std::sync::Arc::new(move |path: &str, bytes: &[u8]| workspace.write(path, bytes).map_err(|error| error.to_string()))
+            as photocraft_ui_egui::BackgroundAutomationWriteFn
+    });
     let automation_write = automation.clone().map(|workspace| {
         Box::new(move |path: &str, bytes: &[u8]| workspace.write(path, bytes).map_err(|error| error.to_string())) as photocraft_ui_egui::AutomationWriteFn
     });
@@ -173,6 +184,8 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         })),
         write: Some(Box::new(|path: &str, bytes: &[u8]| write_atomic(Path::new(path), bytes))),
         automation_read,
+        background_automation_read,
+        background_automation_write,
         automation_write,
         automation_command,
         encode_png: Some(Box::new(|w, h, rgba| {

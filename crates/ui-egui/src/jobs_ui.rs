@@ -39,6 +39,12 @@ pub struct OpenTab {
 /// The shell's job bookkeeping.
 #[derive(Default)]
 pub struct JobsUi {
+    /// Pending, failed and three recently saved host snapshots stay available
+    /// for returning to a photo without waiting on disk or decoding.
+    pub(crate) host_snapshots: std::collections::HashMap<String, (Arc<photocraft_doc::Document>, u64)>,
+    pub(crate) host_target: Option<(photocraft_doc::DocId, String, String)>,
+    pub(crate) host_inflight: std::collections::HashMap<String, JobId>,
+    pub(crate) host_saved: std::collections::VecDeque<String>,
     /// Control replies waiting for a job to end.
     pub(crate) waiters: Vec<(JobId, Sender<ControlResponse>)>,
     /// Background opens, in tab order.
@@ -130,6 +136,25 @@ pub fn cancel(app: &mut PhotocraftApp, id: JobId) {
 }
 
 fn on_event(app: &mut PhotocraftApp, e: JobEvent) {
+    if e.command == "app.stash" {
+        app.jobs.host_inflight.retain(|_, job| *job != e.id);
+        if let JobOutcome::Done(ref result) = e.outcome
+            && let (Some(path), Some(revision)) = (result.get("path").and_then(Value::as_str), result.get("revision").and_then(Value::as_u64))
+            && app.jobs.host_snapshots.get(path).is_some_and(|(_, saved)| *saved == revision)
+        {
+            app.jobs.host_saved.retain(|saved| saved != path);
+            app.jobs.host_saved.push_back(path.to_string());
+            // Keep a few recent photos warm; pending and failed snapshots
+            // remain pinned until the host saves them successfully.
+            while app.jobs.host_saved.len() > 3 {
+                if let Some(oldest) = app.jobs.host_saved.pop_front()
+                    && !app.jobs.host_inflight.contains_key(&oldest)
+                {
+                    app.jobs.host_snapshots.remove(&oldest);
+                }
+            }
+        }
+    }
     // Control requests waiting on this job.
     let reply = match &e.outcome {
         JobOutcome::Done(v) => json!({"ok": true, "result": v}),

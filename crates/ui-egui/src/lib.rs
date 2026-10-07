@@ -39,6 +39,7 @@ pub mod color_picker_ui;
 pub mod color_range_ui;
 pub mod comps_ui;
 pub mod control;
+mod control_files;
 pub mod crop_ui;
 pub mod dialogs;
 pub mod discard_ui;
@@ -160,6 +161,10 @@ pub type WriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
 pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<(String, Vec<u8>), String>>;
 /// Write bytes through the desktop control session's authorized write root.
 pub type AutomationWriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
+/// Capability-scoped I/O which can run on a file worker. These callbacks must
+/// enforce the same roots as the synchronous automation callbacks.
+pub type BackgroundAutomationReadFn = std::sync::Arc<dyn Fn(&str) -> Result<(String, Vec<u8>), String> + Send + Sync>;
+pub type BackgroundAutomationWriteFn = std::sync::Arc<dyn Fn(&str, &[u8]) -> Result<(), String> + Send + Sync>;
 /// Reject engine commands which still perform ambient filesystem I/O.
 pub type AutomationCommandFn = Box<dyn Fn(&str, &Value) -> Result<(), String>>;
 /// Open a URL in the system browser (native) — reliable cross-platform, unlike `ctx.open_url`.
@@ -217,6 +222,8 @@ pub struct Services {
     /// using `pick_open`, `pick_save` and `write` with the user's authority.
     pub automation_read: Option<AutomationReadFn>,
     pub automation_write: Option<AutomationWriteFn>,
+    pub background_automation_read: Option<BackgroundAutomationReadFn>,
+    pub background_automation_write: Option<BackgroundAutomationWriteFn>,
     pub automation_command: Option<AutomationCommandFn>,
     /// Encode an RGBA8 image as PNG (used for screenshots and `ui.render`).
     pub encode_png: Option<EncodePngFn>,

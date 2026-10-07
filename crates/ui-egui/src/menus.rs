@@ -102,6 +102,7 @@ fn workspace_name(id: &str) -> Option<&'static str> {
 /// Run a command id from any source (menu, shortcut, palette, automation).
 pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
     if app.automation_input
+        && !crate::control_files::hosted_save(app, id)
         && let Some(authorize) = app.services.automation_command.as_ref()
     {
         authorize(id, &params)?;
@@ -227,6 +228,14 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             }
         }
         "file.save" => {
+            if let Some((id, path, preview)) = app.jobs.host_target.clone()
+                && app.session.active().is_some_and(|state| state.doc.id == id)
+            {
+                return crate::control_files::stash(app, &path, &preview).map(|started| match started {
+                    photocraft_engine::jobs::Started::Job(job) => json!({"job": job.0, "pending": true}),
+                    photocraft_engine::jobs::Started::Done(result) => result,
+                });
+            }
             // Writes back only to a layered file; a flat one goes through Save As.
             let path = params
                 .get("path")

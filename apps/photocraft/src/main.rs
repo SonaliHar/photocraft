@@ -73,6 +73,7 @@ fn main() -> eframe::Result {
     let mut automation_write_root = std::env::var_os("PHOTOCRAFT_AUTOMATION_WRITE_ROOT").map(std::path::PathBuf::from);
     let mut files = Vec::new();
     let mut safe_gpu = false;
+    let mut hosted = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -82,6 +83,7 @@ fn main() -> eframe::Result {
             "--automation-read-root" => automation_read_root = args.next().map(std::path::PathBuf::from),
             "--automation-write-root" => automation_write_root = args.next().map(std::path::PathBuf::from),
             "--safe-gpu" => safe_gpu = true,
+            "--hosted" => hosted = true,
             "--version" => {
                 println!("photocraft {}", photocraft_engine::build_info::long_version());
                 return Ok(());
@@ -147,6 +149,17 @@ fn main() -> eframe::Result {
     // Brush presets load in the background; the app attaches them when they arrive.
     let presets = services::presets_dir().map(photocraft_engine::preset_store::open_dir_async);
     let mut options = native_options();
+    if hosted {
+        // The owner embeds and shows the native child only after it is ready.
+        // Restoring standalone geometry/visibility must not flash a top-level window.
+        // eframe unconditionally shows the first rendered frame. Keep that
+        // frame off the desktop; the host hides it before opening a document.
+        options.viewport =
+            options.viewport.with_visible(false).with_active(false).with_taskbar(false).with_position([-32000.0, -32000.0]).with_inner_size([640.0, 480.0]);
+        options.centered = false;
+        options.persist_window = false;
+        options.persistence_path = None;
+    }
     // eframe restores the saved window layout before our code runs; drop values that would crash it.
     ui_state::sanitize(options.persistence_path.as_deref());
     // Crash-safe GPU startup (#4): pick the backend (a marker left by a start that died in the
@@ -206,7 +219,8 @@ fn main() -> eframe::Result {
             // again when the displays may have changed.
             if let Some(rx) = monitor {
                 app.services.read_displays = Some(std::sync::Arc::new(monitor_profile::detect_async));
-                match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+                let profile_wait = if hosted { std::time::Duration::ZERO } else { std::time::Duration::from_secs(2) };
+                match rx.recv_timeout(profile_wait) {
                     Ok(r) => photocraft_ui_egui::monitor_status::apply(&mut app, r),
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => photocraft_ui_egui::monitor_status::pending(&mut app, rx),
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
