@@ -102,6 +102,7 @@
 	Fill…	Preencher…
 	Stroke…	Traçado…
 	Content-Aware Fill…	Preenchimento sensível ao conteúdo…
+	Delete and Fill Selection	Excluir e preencher seleção
 	Content-Aware Scale	Escala sensível ao conteúdo
 	Puppet Warp	Distorção de marionete
 	Perspective Warp	Distorção de perspectiva
@@ -467,7 +468,7 @@
 	Filter Gallery…	Galeria de filtros…
 	Adaptive Wide Angle…	Grande angular adaptável…
 	Camera Raw Filter…	Filtro Camera Raw…
-	Liquify…	Dissolver…
+	Liquify…	Liquefazer…
 	Vanishing Point…	Ponto de fuga…
 	Blur	Desfoque
 	Blur Gallery	Galeria de desfoque
@@ -526,7 +527,7 @@
 	Unsharp Mask…	Máscara de nitidez…
 	High Pass…	Passa-alta…
 	Stylize	Estilização
-	Diffuse…	Difusão…
+	Diffuse…	Difundir…
 	Emboss…	Entalhe…
 	Extrude…	Extrusão…
 	Find Edges	Indicação de arestas
@@ -999,6 +1000,7 @@
 	Fisheye	Olho de peixe
 	Fit	Ajustar
 	Fit Screen	Ajustar à tela
+	Fill Screen	Preencher tela
 	Fit in View	Ajustar à visualização
 	Fixed	Fixo
 	Fixed Ratio	Proporção fixa
@@ -1099,7 +1101,7 @@
 	Linear Gradient	Degradê linear
 	Link layers	Vincular camadas
 	Link width and height	Vincular largura e altura
-	Liquify is not open	Dissolver não está aberto
+	Liquify is not open	Liquefazer não está aberto
 	Load	Carregar
 	Load 3D LUT…	Carregar LUT 3D…
 	Load Photoshop brushes (.abr)	Carregar pincéis do Photoshop (.abr)
@@ -1327,6 +1329,7 @@
 	Set background color	Definir cor de fundo
 	Set foreground color	Definir cor de primeiro plano
 	Set painting symmetry options	Definir opções de simetria de pintura
+	Symmetry Off	Simetria desativada
 	Set shape fill type	Definir tipo de preenchimento da forma
 	Set shape stroke type	Definir tipo de traçado da forma
 	Set the text color	Definir a cor do texto
@@ -1783,6 +1786,7 @@
 	Never	Nunca
 	Normal tip	Ponta normal
 	Open as smart object	Abrir como objeto inteligente
+	Open in camera raw	Abrir no Camera Raw
 	Open documents as tabs	Abrir documentos como guias
 	Overscroll	Rolagem além dos limites
 	Performance	Desempenho
@@ -1898,6 +1902,7 @@
 	System Info…	Informações do sistema…
 	System Info	Informações do sistema
 	More panels	Mais painéis
+	More documents	Mais documentos
 	These settings aren't available in PhotoCraft yet.	Estas configurações ainda não estão disponíveis no PhotoCraft.
 	Graphics	Gráficos
 	Reset GPU Backend	Redefinir backend da GPU
@@ -1974,6 +1979,7 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Nenhum demarcador para criar a seleção: desenhe um com a ferramenta Caneta ou selecione um no painel Demarcadores.
 	Cancel opening	Cancelar abertura
 	Cancelled opening {name}	Abertura de {name} cancelada
+	Developing {name}	Revelando {name}
 	Cancelled {label}	{label} cancelado
 	Esc to cancel	Esc para cancelar
 	Opening {name}	Abrindo {name}
@@ -2457,6 +2463,7 @@
 	Invalid {mode} profile	Perfil {mode} inválido
 	Unnamed {mode} profile	Perfil {mode} sem nome
 	Show bounding box when dragging layer	Mostrar caixa delimitadora ao arrastar a camada
+	System title bar	Barra de título do sistema
 	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	Laço de congelamento: arraste para congelar uma área, Alt-arraste para descongelá-la (L)
 	Rendering Mode	Modo de renderização
 	Automatic (recommended)	Automático (recomendado)
@@ -2481,6 +2488,7 @@
 	Show Selected Region	Mostrar região selecionada
 cameraRaw	Light	Luz
 	Camera Raw Filter ({layer})	Filtro Camera Raw ({layer})
+	Camera Raw ({name})	Camera Raw ({name})
 cameraRaw	Lights	Claros
 cameraRaw	Darks	Escuros
 cameraRaw	Blacks	Pretos
@@ -2571,3 +2579,4 @@ cameraRaw	Whites	Brancos
 	% of all commits	% de todos os commits
 	Lines +/−	Linhas +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} linhas (Δ {delta}), +{binAdded} / −{binDeleted} arquivos binários, {first} – {last}
+	Apply At Canvas Bounds	Aplicar efeito nos limites da tela

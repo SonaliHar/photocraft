@@ -232,7 +232,11 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
                 *surf = filter(surf, &fp, area, bounds, selection.as_ref(), doc_bounds.union(&content))?;
                 return Ok(fp.clone());
             }
+            let locks = doc.effective_locks(layer);
             let l = doc.layer_mut(layer).ok_or(EngineError::NoLayer(layer))?;
+            if locks.pixels || locks.all {
+                return Err(EngineError::Other(format!("Could not complete your request because the layer \"{}\" is locked", l.name)));
+            }
             let mut fp = fp.clone();
             crate::filters_ext::resolve_in_layer(&mut fp, l, bounds);
             let surf = match &mut l.content {
@@ -245,13 +249,39 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
                 }
                 _ => return Err(EngineError::Other("not a pixel layer".into())),
             };
+            let before = locks.transparency.then(|| surf.clone());
             let content = surf.content_bounds();
             let area = algo::output_area(&fp, content, bounds, sel_bounds);
             *surf = filter(surf, &fp, area, bounds, selection.as_ref(), doc_bounds.union(&content))?;
+            if let Some(before) = &before {
+                keep_alpha(before, surf);
+            }
             Ok(fp)
         },
         move |fp| json!({ "layer": layer_id, "filter": serde_json::to_value(&fp).unwrap_or(Value::Null) }),
     )
+}
+
+/// Lock transparency: put the layer's alpha back after a filter, in the tiles it changed.
+fn keep_alpha(old: &photocraft_raster::Surface, new: &mut photocraft_raster::Surface) {
+    if old.format() != new.format() || !new.format().alpha {
+        return;
+    }
+    let mut coords: Vec<_> = new.tiles().filter(|(c, t)| old.tile(**c).is_none_or(|o| !std::sync::Arc::ptr_eq(o, t))).map(|(c, _)| *c).collect();
+    coords.extend(old.tiles().filter(|(c, _)| new.tile(**c).is_none()).map(|(c, _)| *c));
+    let n = new.channels();
+    for c in coords {
+        let r = c.rect();
+        let o = old.read_region(r);
+        let mut v = new.read_region(r);
+        for (pn, po) in v.chunks_exact_mut(n).zip(o.chunks_exact(n)) {
+            if let (Some(a), Some(b)) = (pn.last_mut(), po.last()) {
+                *a = *b;
+            }
+        }
+        new.write_region(r, &v);
+    }
+    new.prune();
 }
 
 macro_rules! filter_cmd {
@@ -351,9 +381,15 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-/// The most recent filter command in the session journal.
+/// The most recent filter command in the session journal, retargeted at the active layer: dialogs
+/// such as the Filter Gallery record the layer they ran on, and Last Filter applies to the
+/// current layer, as in Photoshop (#1270).
 fn last_filter(s: &Session) -> Option<(String, Value)> {
-    s.journal.iter().rev().find(|(id, _)| params_for(id, &Value::Null).is_some() && id.starts_with("filter.")).cloned()
+    let (id, mut params) = s.journal.iter().rev().find(|(id, _)| params_for(id, &Value::Null).is_some() && id.starts_with("filter.")).cloned()?;
+    if let Value::Object(m) = &mut params {
+        m.remove("layer");
+    }
+    Some((id, params))
 }
 
 #[cfg(test)]
@@ -526,6 +562,24 @@ mod tests {
         paint_pattern(&mut s2);
         s2.execute("filter.other.offset", json!({"horizontal": 6})).unwrap();
         assert_eq!(active_pixels(&s2), twice);
+    }
+
+    #[test]
+    fn last_filter_applies_to_the_active_layer() {
+        let mut s = session();
+        paint_pattern(&mut s);
+        let first = s.active().unwrap().active_layer.unwrap();
+        // Dialogs (Filter Gallery, Camera Raw…) record the layer they ran on.
+        s.execute("filter.other.offset", json!({"horizontal": 3, "layer": first.0})).unwrap();
+        let first_once = active_pixels(&s);
+        s.execute("layer.new.layer", json!({})).unwrap();
+        paint_pattern(&mut s);
+        let before = active_pixels(&s);
+        s.execute("filter.lastFilter", json!({})).unwrap();
+        assert_ne!(active_pixels(&s), before, "the active layer is filtered");
+        let d = s.active().unwrap();
+        let l = d.doc.layer(first).unwrap();
+        assert_eq!(l.surface().unwrap().read_region(photocraft_geom::Rect::new(0, 0, 48, 32)), first_once, "the first layer is left alone");
     }
 
     #[test]

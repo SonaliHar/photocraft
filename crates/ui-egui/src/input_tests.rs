@@ -90,6 +90,52 @@ fn keyboard_zoom_works_with_a_dialog_open() {
     assert_eq!(h.state().session.active().unwrap().doc.layers.len(), layers);
 }
 
+/// Select › Color Range: the eyedropper picks on the image itself (Photoshop), not only in the
+/// dialog's preview. Shift adds a sample, and the dialog stays open.
+#[test]
+fn color_range_eyedropper_picks_on_the_canvas() {
+    let mut h = harness();
+    crate::color_range_ui::open(h.state_mut());
+    h.run_steps(4);
+    let points = |h: &Harness<'static, PhotocraftApp>| {
+        let f = &h.state().ui.dialogs.last().unwrap().fields;
+        (f["points"].as_array().unwrap().len(), f["points"].clone())
+    };
+    let click = |h: &mut Harness<'static, PhotocraftApp>, p: Pos2, modifiers: Modifiers| {
+        h.hover_at(p);
+        h.run_steps(1);
+        h.event_modifiers(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers }, modifiers);
+        h.run_steps(1);
+        h.event_modifiers(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers }, modifiers);
+        h.run_steps(2);
+    };
+    // Zoomed in, the document reaches out from under the centred dialog.
+    {
+        let v = &mut h.state_mut().ui.views[0];
+        v.zoom = 3.0;
+        v.center = [200.0, 150.0];
+        v.fit_pending = false;
+    }
+    h.run_steps(2);
+    let v = h.state().ui.views[0].clone();
+    let c = h.state().last_canvas_rect.center();
+    let screen = |d: [f32; 2]| pos2(c.x + (d[0] - v.center[0]) * v.zoom, c.y + (d[1] - v.center[1]) * v.zoom);
+    let p = screen([30.5, 40.5]);
+    assert!(h.state().last_canvas_rect.contains(p));
+    click(&mut h, p, Modifiers::NONE);
+    let (n, pts) = points(&h);
+    assert_eq!(n, 1, "{pts}");
+    let at = doc_at(&h, p);
+    assert_eq!(pts[0][0].as_f64().unwrap().floor(), f64::from(at[0]).floor(), "{pts} vs {at:?}");
+    assert_eq!(pts[0][1].as_f64().unwrap().floor(), f64::from(at[1]).floor(), "{pts} vs {at:?}");
+    // ⇧-click adds another sample; the dialog never closes.
+    click(&mut h, screen([60.5, 40.5]), Modifiers::SHIFT);
+    assert_eq!(points(&h).0, 2);
+    assert_eq!(h.state().ui.dialogs.len(), 1);
+    // The document is untouched until OK.
+    assert!(h.state().session.active().unwrap().doc.selection.is_none());
+}
+
 #[test]
 fn clicking_outside_a_dialog_keeps_it_open_and_the_canvas_pans_and_zooms() {
     let mut h = harness();
@@ -254,10 +300,19 @@ fn alt_scroll_zooms_gently_around_the_pointer() {
     assert_eq!(zoom(&h), z2, "a plain scroll never zooms");
     assert!(h.state().ui.views[0].center[1] > c2[1], "a plain scroll pans");
 
-    // ⌘/Ctrl + scroll is still the faster gesture zoom.
-    wheel(&h, 1.0, Modifiers::COMMAND);
-    h.run_steps(40);
-    assert!(zoom(&h) / z2 > 1.05, "⌘-scroll zooms in bigger steps: {z2} -> {}", zoom(&h));
+    // ⌘/Ctrl + scroll pans sideways (#635), on Windows (Ctrl) and macOS (⌘) alike.
+    for m in [Modifiers { ctrl: true, command: true, ..Modifiers::NONE }, Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE }] {
+        let c = h.state().ui.views[0].center;
+        wheel(&h, -1.0, m);
+        h.run_steps(40);
+        let c1 = h.state().ui.views[0].center;
+        assert_eq!(zoom(&h), z2, "⌘/Ctrl-scroll never zooms");
+        assert!(c1[0] > c[0] && c1[1] == c[1], "⌘/Ctrl-scroll pans sideways: {c:?} -> {c1:?}");
+    }
+    // A pinch zooms around the pointer.
+    h.event(egui::Event::Zoom(1.25));
+    h.run_steps(2);
+    assert!((zoom(&h) / z2 - 1.25).abs() < 1e-3, "pinch zooms: {z2} -> {}", zoom(&h));
 }
 
 #[test]
@@ -356,4 +411,27 @@ fn kerning_field_values() {
     for s in ["", "tight", "1e9", "-5000", "NaN", "inf"] {
         assert_eq!(crate::type_tool::parse_kerning(s), None, "{s}");
     }
+}
+
+/// Sampling shows a pipette instead of the crosshair: the Eyedropper tool, and a painting tool
+/// with ⌥ held. Preferences › Cursors › Other Cursors = Precise keeps the crosshair.
+#[test]
+fn eyedropper_and_alt_sampling_show_a_pipette() {
+    let mut h = harness();
+    let p = h.state().last_canvas_rect.center();
+    let cursor = |h: &mut Harness<'static, PhotocraftApp>| {
+        h.hover_at(p);
+        h.run_steps(2);
+        h.output().platform_output.cursor_icon
+    };
+    h.state_mut().ui.tool = crate::state::Tool::Eyedropper;
+    assert_eq!(cursor(&mut h), egui::CursorIcon::None, "the pipette replaces the pointer");
+    h.state_mut().ui.tool = crate::state::Tool::Brush;
+    h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+    assert_eq!(cursor(&mut h), egui::CursorIcon::None, "⌥ samples with a pipette");
+    h.state_mut().run("prefs.set", json!({"values": {"cursors.other": "precise"}})).unwrap();
+    assert_eq!(cursor(&mut h), egui::CursorIcon::Crosshair, "Precise keeps the crosshair");
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.state_mut().ui.tool = crate::state::Tool::Eyedropper;
+    assert_eq!(cursor(&mut h), egui::CursorIcon::Crosshair);
 }

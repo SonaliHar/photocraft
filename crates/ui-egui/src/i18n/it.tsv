@@ -99,6 +99,7 @@
 	Fill…	Riempi…
 	Stroke…	Traccia…
 	Content-Aware Fill…	Riempimento in base al contenuto…
+	Delete and Fill Selection	Elimina e riempi selezione
 	Content-Aware Scale	Scala in base al contenuto
 	Puppet Warp	Altera marionetta
 	Perspective Warp	Altera prospettiva
@@ -1011,6 +1012,7 @@
 	Fisheye	Fisheye
 	Fit	Adatta
 	Fit Screen	Adatta a schermo
+	Fill Screen	Riempi schermo
 	Fit in View	Adatta in vista
 	Fixed	Fisso
 	Fixed Ratio	Proporzione fissa
@@ -1339,6 +1341,7 @@
 	Set background color	Imposta colore sfondo
 	Set foreground color	Imposta colore primo piano
 	Set painting symmetry options	Imposta opzioni simmetria pittura
+	Symmetry Off	Simmetria disattivata
 	Set shape fill type	Imposta tipo riempimento forma
 	Set shape stroke type	Imposta tipo traccia forma
 	Set the text color	Imposta colore testo
@@ -1803,6 +1806,7 @@
 	Never	Mai
 	Normal tip	Punta normale
 	Open as smart object	Apri come oggetto avanzato
+	Open in camera raw	Apri in Camera Raw
 	Open documents as tabs	Apri documenti come schede
 	Overscroll	Overscroll
 	Performance	Prestazioni
@@ -1840,6 +1844,7 @@
 	Show slice numbers	Mostra numeri sezioni
 	Show tooltips	Mostra tooltip
 	Show bounding box when dragging layer	Mostra riquadro selezione al trascinamento livello
+	System title bar	Barra del titolo di sistema
 	Show transformation values	Mostra valori trasformazione
 	Slice color	Colore sezioni
 	Smart guide color	Colore guide intelligenti
@@ -1923,6 +1928,7 @@
 	System Info…	Info sistema…
 	System Info	Info sistema
 	More panels	Altri pannelli
+	More documents	Altri documenti
 	These settings aren't available in PhotoCraft yet.	Queste impostazioni non sono ancora disponibili in PhotoCraft.
 	Graphics	Grafica
 	Reset GPU Backend	Reimposta backend GPU
@@ -2000,6 +2006,7 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Nessun tracciato da cui creare selezione: disegnane uno con Penna o selezionane uno nel pannello Tracciati.
 	Cancel opening	Annulla apertura
 	Cancelled opening {name}	Apertura {name} annullata
+	Developing {name}	Sviluppo di {name}
 	Cancelled {label}	{label} annullato
 	Esc to cancel	Esc per annullare
 	Opening {name}	Apertura {name}
@@ -2132,6 +2139,7 @@ cameraRaw	Light	Luce
 
 # Camera Raw: contextual controls and window title
 	Camera Raw Filter ({layer})	Filtro Camera Raw ({layer})
+	Camera Raw ({name})	Camera Raw ({name})
 cameraRaw	Lights	Toni chiari
 cameraRaw	Darks	Toni scuri
 cameraRaw	Red	Rossi
@@ -2206,3 +2214,4 @@ cameraRaw	Amount	Quantità
 	Lines +/−	Righe +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: {prs} PR, {commits} commit, +{added} / −{deleted} righe (Δ {delta}), +{binAdded} / −{binDeleted} risorse binarie, {first} – {last}
 	Convert to Layers	Converti in livelli
+	Apply At Canvas Bounds	Applica effetto ai limiti dell’area di lavoro

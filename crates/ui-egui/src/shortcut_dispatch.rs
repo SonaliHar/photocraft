@@ -50,7 +50,16 @@ pub const SECONDARY: &[(&str, &str)] = &[("edit.fill", "Shift+Backspace")];
 /// their overrides apply. Held temporary tools (Space…) are not here: see [`crate::hold_keys`].
 pub fn bindings(app: &PhotocraftApp) -> Vec<(String, KeyboardShortcut)> {
     let prefs = app.session.prefs();
-    let ui = crate::menus::UI_COMMANDS.iter().map(|(id, _, _, sc)| (*id, prefs.shortcut(id, *sc)));
+    // The Keyboard Shortcuts dialog lists Photoshop's Window › <panel> item (`window.panel.*`)
+    // in place of the shell command it runs (`window.toggle.*`, see `menus::panel_alias`), so an
+    // edit to that row reassigns or removes the shell command's default too (#1272).
+    let aliased = |id: &str, sc: Option<&str>| {
+        !prefs.shortcuts.contains_key(id)
+            && prefs.shortcuts.keys().any(|k| {
+                crate::menus::panel_alias(k) == Some(id) && crate::menu_catalog::CATALOG.iter().any(|c| c.3 == k.as_str() && c.2.is_some() && c.2 == sc)
+            })
+    };
+    let ui = crate::menus::UI_COMMANDS.iter().map(|(id, _, _, sc)| (*id, if aliased(id, *sc) { None } else { prefs.shortcut(id, *sc) }));
     let engine = photocraft_engine::command_specs().iter().map(|c| (c.id, prefs.shortcut(c.id, c.shortcut)));
     let own: std::collections::HashSet<&str> = crate::menus::UI_COMMANDS
         .iter()
@@ -73,8 +82,13 @@ pub fn bindings(app: &PhotocraftApp) -> Vec<(String, KeyboardShortcut)> {
         .map(|(id, sc)| (id.as_str(), Some(sc.as_str())));
     // Photoshop's second shortcuts, kept while the command's main one is the default.
     let secondary = SECONDARY.iter().filter(|(id, _)| !prefs.shortcuts.contains_key(*id)).map(|&(id, sc)| (id, Some(sc)));
+    // A key the user assigned in Edit › Keyboard Shortcuts belongs to that command, ahead of any
+    // default that still names it (#1272): OK clears the old owner's row, but that row can be
+    // another id for the same item, or a default the dialog doesn't list.
+    let mut candidates: Vec<(&str, Option<&str>)> = ui.chain(engine).chain(catalog).chain(overrides).chain(secondary).collect();
+    candidates.sort_by_key(|(id, sc)| !(sc.is_some() && prefs.shortcuts.get(*id).map(String::as_str) == *sc));
     let mut all: Vec<(String, KeyboardShortcut)> = Vec::new();
-    for (id, sc) in ui.chain(engine).chain(catalog).chain(overrides).chain(secondary) {
+    for (id, sc) in candidates {
         let Some(sc) = sc.and_then(parse) else { continue };
         if !all.iter().any(|(_, b)| *b == sc) {
             all.push((id.to_string(), sc));
@@ -189,6 +203,7 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
             Some(id)
         });
         let Some(id) = next else { break };
+        let id = delete_key_command(app, id);
         let owner = key_owner(app, ctx);
         dispatch(app, ctx, &id);
         ran = true;
@@ -197,6 +212,23 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
         }
     }
     ran
+}
+
+/// Clear's key (Delete / Backspace) with nothing selected deletes the selected layers, of any
+/// kind, as in Photoshop (#1077): Edit › Clear only clears pixel layers, so on an adjustment, fill,
+/// type or shape layer the key did nothing. A selection, a targeted layer mask, a single channel
+/// or Quick Mask keeps Clear.
+fn delete_key_command(app: &PhotocraftApp, id: String) -> String {
+    if id != "edit.clear" {
+        return id;
+    }
+    let Some(st) = app.session.active() else { return id };
+    let composite = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite && st.doc.quick_mask.is_none();
+    let mask = app.ui.mask_target && st.active_layer.and_then(|l| st.doc.layer(l)).is_some_and(|l| l.mask.is_some());
+    if st.doc.selection.is_some() || !composite || mask {
+        return id;
+    }
+    "layer.delete".into()
 }
 
 /// Why `id` can't run now (the engine's reason when it has one).

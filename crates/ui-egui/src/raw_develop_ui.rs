@@ -434,6 +434,9 @@ mod tests {
         if let Started::Job(job) = started {
             app.session.wait_job(job).unwrap();
         }
+        assert!(app.session.prefs().raw_defaults.open_in_camera_raw);
+        assert!(app.pending_raw_open.is_none(), "hosted RAW must not queue the standalone import dialog");
+        assert!(app.camera_raw.is_none());
         open(&mut app, &json!({})).unwrap();
         let settings = RawDevelopment { exposure: -1.0, ..Default::default() };
         control(&mut app, &json!({"settings":settings})).unwrap();

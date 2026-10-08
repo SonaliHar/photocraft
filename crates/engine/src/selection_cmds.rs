@@ -119,6 +119,37 @@ fn eyedropper_samples(p: &Value, key: &str, area: Rect, px: &[[f32; 4]], bad: &i
     Ok(out)
 }
 
+/// Composite RGB (the compositor's output profile for the document) → CIE Lab D50.
+fn lab_transform(s: &Session) -> Result<std::sync::Arc<photocraft_cms::Transform>> {
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let src = crate::color_cmds::composite_profile(&d.doc);
+    photocraft_cms::cached(&src, photocraft_cms::Builtin::LabD50.profile(), photocraft_cms::TransformOptions::default())
+        .map_err(|e| EngineError::Other(format!("colour management: {e}")))
+}
+
+/// The Lab profile's normalised encoding (ICC v4) → L 0–100, a and b −128–127.
+fn decode_lab(v: [f32; 3]) -> [f32; 3] {
+    [v[0] * 100.0, v[1] * 255.0 - 128.0, v[2] * 255.0 - 128.0]
+}
+
+fn colour_to_lab(t: &photocraft_cms::Transform, rgb: [f32; 3]) -> [f32; 3] {
+    let mut out = [0.0f32; 3];
+    t.eval(&rgb.map(|v| v.clamp(0.0, 1.0)), &mut out);
+    decode_lab(out)
+}
+
+/// RGBA pixels → Lab + alpha (L, a, b, alpha).
+fn pixels_to_lab(t: &photocraft_cms::Transform, px: &[[f32; 4]]) -> Vec<[f32; 4]> {
+    let src: Vec<[f32; 4]> = px.iter().map(|p| [p[0].clamp(0.0, 1.0), p[1].clamp(0.0, 1.0), p[2].clamp(0.0, 1.0), p[3]]).collect();
+    let mut out = vec![[0.0f32; 4]; px.len()];
+    t.convert_f32(src.as_flattened(), 4, out.as_flattened_mut(), 4, true);
+    for p in &mut out {
+        let [l, a, b] = decode_lab([p[0], p[1], p[2]]);
+        *p = [l, a, b, p[3]];
+    }
+    out
+}
+
 fn color_range(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "select.colorRange";
     let bad = |msg: String| EngineError::BadParams { cmd: CMD.into(), msg };
@@ -130,40 +161,80 @@ fn color_range(s: &mut Session, p: &Value) -> Result<Value> {
             let (area, px) = sample_pixels(s, b(p, "sampleAllLayers", true))?;
             let w = area.width() as usize;
             // The dialog's eyedroppers: colours picked on the image, at their positions.
-            let mut samples = eyedropper_samples(p, "points", area, &px, &bad)?;
+            let plus = eyedropper_samples(p, "points", area, &px, &bad)?;
             let minus = eyedropper_samples(p, "subtractPoints", area, &px, &bad)?;
+            // The order the eyedropper clicks came in ("+" a point, "-" a subtracted point):
+            // Photoshop applies them one after another. Without it, all additions come first.
+            let order: Vec<bool> = match p.get("order") {
+                None => std::iter::repeat_n(true, plus.len()).chain(std::iter::repeat_n(false, minus.len())).collect(),
+                Some(o) => {
+                    let o = o.as_array().ok_or_else(|| bad("`order` must be a list of \"+\" and \"-\"".into()))?;
+                    let order = o
+                        .iter()
+                        .map(|v| match v.as_str() {
+                            Some("+") => Ok(true),
+                            Some("-") => Ok(false),
+                            _ => Err(bad(format!("bad entry {v} in `order` (want \"+\" or \"-\")"))),
+                        })
+                        .collect::<Result<Vec<bool>>>()?;
+                    if order.iter().filter(|x| **x).count() != plus.len() || order.iter().filter(|x| !**x).count() != minus.len() {
+                        return Err(bad("`order` must list each of `points` (\"+\") and `subtractPoints` (\"-\") once".into()));
+                    }
+                    order
+                }
+            };
+            let mut fixed: Vec<[f32; 3]> = Vec::new();
             if let Some(cs) = p.get("colors") {
                 let cs = cs.as_array().ok_or_else(|| bad("`colors` must be a list of colours".into()))?;
-                for c in cs {
-                    samples.push(sel::RangeSample { color: parse_color(&json!({ "color": c })), at: None });
-                }
+                fixed.extend(cs.iter().map(|c| parse_color(&json!({ "color": c }))));
             }
-            if p.get("color").is_some() || samples.is_empty() {
-                let color = if p.get("color").is_some() {
-                    parse_color(p)
-                } else {
-                    let [r, g, b, _] = s.tools.foreground;
-                    [r, g, b]
-                };
-                samples.push(sel::RangeSample { color, at: None });
+            if p.get("color").is_some() {
+                fixed.push(parse_color(p));
             }
             // Localized Color Clusters: Range is a percentage of the canvas's longer side.
+            let plus_at: Vec<(f32, f32)> = plus.iter().filter_map(|x| x.at).collect();
             let localized = if b(p, "localized", false) {
-                if !samples.iter().chain(&minus).any(|x| x.at.is_some()) {
+                if plus_at.is_empty() {
                     return Err(bad("localized clusters need eyedropper `points`".into()));
                 }
                 Some(f(p, "range", 100.0).clamp(0.0, 100.0) / 100.0 * area.width().max(area.height()) as f32)
             } else {
                 None
             };
-            let mut mask = sel::color_range_samples(&px, w, &samples, fuzz(40.0), localized);
-            // The minus eyedropper: colours matching a subtracted sample (same Fuzziness) drop out.
-            if !minus.is_empty() {
-                let cut = sel::color_range_samples(&px, w, &minus, fuzz(40.0), localized);
-                for (m, c) in mask.iter_mut().zip(&cut) {
-                    *m *= 1.0 - c;
+            // Photoshop compares colours in Lab, through the document's profile
+            // (sel::lab_range_coverage). The samples span one Lab box; "Add to Sample" grows it,
+            // "Subtract from Sample" reshapes it (sel::LabRange::subtract).
+            let to_lab = lab_transform(s)?;
+            // 8-bit documents are compared on the 8-bit Lab grid, samples and pixels alike.
+            let grid = s.active().is_some_and(|d| d.doc.depth == photocraft_doc::SampleType::U8);
+            let q = |c: [f32; 3]| if grid { sel::quantize_lab8(c) } else { c };
+            let mut lab = pixels_to_lab(&to_lab, &px);
+            if grid {
+                for p in &mut lab {
+                    let [l, a, b] = sel::quantize_lab8([p[0], p[1], p[2]]);
+                    *p = [l, a, b, p[3]];
                 }
             }
+            let colour_to_lab = |t: &photocraft_cms::Transform, c: [f32; 3]| q(colour_to_lab(t, c));
+            let foreground = || {
+                let [r, g, b, _] = s.tools.foreground;
+                sel::LabRange::point(colour_to_lab(&to_lab, [r, g, b]))
+            };
+            let fixed_lab: Vec<[f32; 3]> = fixed.iter().map(|c| colour_to_lab(&to_lab, *c)).collect();
+            let mut range = sel::LabRange::spanning(&fixed_lab);
+            let (mut pi, mut mi) = (plus.iter(), minus.iter());
+            for add in order {
+                if add {
+                    if let Some(x) = pi.next() {
+                        let c = colour_to_lab(&to_lab, x.color);
+                        range = Some(range.map_or(sel::LabRange::point(c), |r| r.grow(&c)));
+                    }
+                } else if let Some(x) = mi.next() {
+                    range = Some(range.unwrap_or_else(foreground).subtract(&colour_to_lab(&to_lab, x.color), fuzz(40.0)));
+                }
+            }
+            let range = range.unwrap_or_else(foreground);
+            let mask = sel::color_range_lab(&lab, w, &range, fuzz(40.0), grid, localized.map(|r| (r, plus_at.as_slice())));
             (area, mask)
         }
         "reds" | "yellows" | "greens" | "cyans" | "blues" | "magentas" => {
@@ -235,15 +306,33 @@ fn modify(s: &mut Session, p: &Value, op: &str) -> Result<Value> {
         return Err(EngineError::BadParams { cmd: format!("select.modify.{op}"), msg: format!("radius must be a number in 0..{max}") });
     }
     let r = r.max(0.0);
+    // Photoshop's "Apply effect at canvas bounds": when on, the canvas edge is a selection edge
+    // (Select All then Contract shrinks from the edges); when off, the selection is taken to
+    // continue past the canvas. Border has no such option: its band always follows the canvas edge,
+    // or a Select All would border to nothing.
+    let at_bounds = op == "border" || b(p, "applyAtCanvasBounds", false);
     let (area, m) = current_mask(&s.active().ok_or(EngineError::NoDocument)?.doc);
     let (w, h) = (area.width() as usize, area.height() as usize);
-    let out = match op {
-        "expand" => sel::expand(&m, w, h, r),
-        "contract" => sel::contract(&m, w, h, r),
-        "border" => sel::border(&m, w, h, r),
-        "smooth" => sel::smooth(&m, w, h, r),
-        _ => sel::feather(&m, w, h, r),
+    // Feather reaches 3σ = 1.5 r; the others reach r. A margin past that keeps the canvas edge out of
+    // reach. A selection clear of the canvas edge needs none: both readings agree there.
+    let reach = if op == "feather" { r * 1.5 } else { r };
+    let pad = if touches_edge(&m, w, h) { reach.ceil() as usize + 2 } else { 0 };
+    let grown = |n: usize| pad.checked_mul(2).and_then(|p| n.checked_add(p));
+    let (Some(pw), Some(ph)) = (grown(w), grown(h)) else {
+        return Err(EngineError::BadParams { cmd: format!("select.modify.{op}"), msg: "the selection is too large to modify".into() });
     };
+    if pw.checked_mul(ph).is_none_or(|n| n > MAX_MODIFY_PIXELS) {
+        return Err(EngineError::BadParams { cmd: format!("select.modify.{op}"), msg: "the selection is too large to modify".into() });
+    }
+    let padded = pad_mask(&m, w, h, pad, at_bounds);
+    let out = match op {
+        "expand" => sel::expand(&padded, pw, ph, r),
+        "contract" => sel::contract(&padded, pw, ph, r),
+        "border" => sel::border(&padded, pw, ph, r),
+        "smooth" => sel::smooth(&padded, pw, ph, r),
+        _ => sel::feather(&padded, pw, ph, r),
+    };
+    let out = crop_mask(&out, pw, pad, w, h);
     let label = match op {
         "expand" => "Expand Selection",
         "contract" => "Contract Selection",
@@ -252,6 +341,47 @@ fn modify(s: &mut Session, p: &Value, op: &str) -> Result<Value> {
         _ => "Feather Selection",
     };
     set_selection(s, label, area, out, SelectionMode::Replace)
+}
+
+/// The largest padded mask Modify works on (a 300000 × 300000 canvas is 9e10 pixels; this caps a
+/// padded copy at ~4 GB of f32, beyond which the edit is refused rather than aborting on allocation).
+const MAX_MODIFY_PIXELS: usize = 1 << 30;
+
+/// Whether any pixel on the outermost rows or columns of `m` (`w`×`h`) is selected.
+fn touches_edge(m: &[f32], w: usize, h: usize) -> bool {
+    let sel = |x: usize, y: usize| m.get(y * w + x).is_some_and(|v| *v > 0.0);
+    (0..w).any(|x| sel(x, 0) || sel(x, h.saturating_sub(1))) || (0..h).any(|y| sel(0, y) || sel(w.saturating_sub(1), y))
+}
+
+/// `m` (`w`×`h`) with a `pad`-pixel margin: unselected when `outside_empty`, else the nearest
+/// edge pixel repeated (the selection continues past the canvas).
+fn pad_mask(m: &[f32], w: usize, h: usize, pad: usize, outside_empty: bool) -> Vec<f32> {
+    let pw = w + 2 * pad;
+    let mut out = vec![0.0f32; pw * (h + 2 * pad)];
+    if w == 0 || h == 0 {
+        return out;
+    }
+    for (py, row) in out.chunks_exact_mut(pw).enumerate() {
+        let inside_y = (pad..pad + h).contains(&py);
+        if outside_empty && !inside_y {
+            continue;
+        }
+        let y = py.saturating_sub(pad).min(h - 1);
+        for (px, v) in row.iter_mut().enumerate() {
+            let inside_x = (pad..pad + w).contains(&px);
+            if outside_empty && !inside_x {
+                continue;
+            }
+            let x = px.saturating_sub(pad).min(w - 1);
+            *v = m.get(y * w + x).copied().unwrap_or(0.0);
+        }
+    }
+    out
+}
+
+/// The `w`×`h` centre of a mask padded by `pad_mask`.
+fn crop_mask(m: &[f32], pw: usize, pad: usize, w: usize, h: usize) -> Vec<f32> {
+    m.chunks_exact(pw).skip(pad).take(h).flat_map(|row| row.iter().skip(pad).take(w).copied()).collect()
 }
 
 /// Grow (contiguous) / Similar (anywhere): pixels whose colour lies within
@@ -346,15 +476,33 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.colorRange",
             "Color Range…",
             ["Select"],
-            r##"{"select":"sampledColors|reds|yellows|greens|cyans|blues|magentas|highlights|midtones|shadows|outOfGamut"="sampledColors","color":"#rrggbb"=foreground,"colors":["#rrggbb",…]?,"points":[[x,y],…]? (eyedropper samples),"subtractPoints":[[x,y],…]? (minus eyedropper),"fuzziness":0..200=40 (tones: 0..100 %=20),"localized":bool=false,"range":0..100=100 (% of the longer side),"tonalRange":level|[lo,hi] (shadows 65, highlights 190, midtones [105,150]),"invert":bool=false,"sampleAllLayers":bool=true,"mode":"replace|add|subtract|intersect"="replace"}"##,
+            r##"{"select":"sampledColors|reds|yellows|greens|cyans|blues|magentas|highlights|midtones|shadows|outOfGamut"="sampledColors","color":"#rrggbb"=foreground,"colors":["#rrggbb",…]?,"points":[[x,y],…]? (eyedropper samples),"subtractPoints":[[x,y],…]? (minus eyedropper),"order":["+"|"-",…]? (click order of points and subtractPoints; default all points first),"fuzziness":0..200=40 (tones: 0..100 %=20),"localized":bool=false,"range":0..100=100 (% of the longer side),"tonalRange":level|[lo,hi] (shadows 65, highlights 190, midtones [105,150]),"invert":bool=false,"sampleAllLayers":bool=true,"mode":"replace|add|subtract|intersect"="replace"}"##,
             has_doc,
             color_range
         ),
         spec!("select.modify.border", "Border…", ["Select", "Modify"], r##"{"radius":1..200=1}"##, has_selection, |s, p| modify(s, p, "border")),
-        spec!("select.modify.smooth", "Smooth…", ["Select", "Modify"], r##"{"radius":1..500=1}"##, has_selection, |s, p| modify(s, p, "smooth")),
-        spec!("select.modify.expand", "Expand…", ["Select", "Modify"], r##"{"radius":1..500=1}"##, has_selection, |s, p| modify(s, p, "expand")),
-        spec!("select.modify.contract", "Contract…", ["Select", "Modify"], r##"{"radius":1..500=1}"##, has_selection, |s, p| modify(s, p, "contract")),
-        spec!("select.modify.feather", "Feather…", ["Select", "Modify"], r##"{"radius":0.1..1000=1}"##, has_selection, |s, p| modify(s, p, "feather")),
+        spec!("select.modify.smooth", "Smooth…", ["Select", "Modify"], r##"{"radius":1..500=1,"applyAtCanvasBounds":bool=false}"##, has_selection, |s, p| {
+            modify(s, p, "smooth")
+        }),
+        spec!("select.modify.expand", "Expand…", ["Select", "Modify"], r##"{"radius":1..500=1,"applyAtCanvasBounds":bool=false}"##, has_selection, |s, p| {
+            modify(s, p, "expand")
+        }),
+        spec!(
+            "select.modify.contract",
+            "Contract…",
+            ["Select", "Modify"],
+            r##"{"radius":1..500=1,"applyAtCanvasBounds":bool=false}"##,
+            has_selection,
+            |s, p| modify(s, p, "contract")
+        ),
+        spec!(
+            "select.modify.feather",
+            "Feather…",
+            ["Select", "Modify"],
+            r##"{"radius":0.1..1000=1,"applyAtCanvasBounds":bool=false}"##,
+            has_selection,
+            |s, p| modify(s, p, "feather")
+        ),
         spec!("select.grow", "Grow", ["Select"], r##"{"tolerance":0..255=32,"sampleAllLayers":bool=false}"##, has_selection, |s, p| grow_similar(s, p, true)),
         spec!("select.similar", "Similar", ["Select"], r##"{"tolerance":0..255=32,"sampleAllLayers":bool=false}"##, has_selection, |s, p| grow_similar(
             s, p, false
@@ -408,9 +556,36 @@ mod tests {
     #[test]
     fn color_range_selects_by_colour() {
         let mut s = session();
-        s.execute("select.colorRange", json!({"color": "#ff0000", "fuzziness": 10})).unwrap();
+        s.execute("select.colorRange", json!({"color": "#ff0000", "fuzziness": 40})).unwrap();
+        // The sampled colour itself is fully selected (as with Photoshop's eyedropper).
         assert_eq!(coverage(&s, 10, 10), 1.0);
         assert_eq!(coverage(&s, 20, 20), 0.0);
+        s.execute("select.colorRange", json!({"color": "#ff0000", "fuzziness": 100})).unwrap();
+        assert_eq!(coverage(&s, 10, 10), 1.0);
+        assert_eq!(coverage(&s, 20, 20), 0.0);
+    }
+
+    #[test]
+    fn color_range_compares_in_lab_like_photoshop() {
+        // Photoshop weighs hue (Lab a/b) three times as much as lightness; a per-channel RGB
+        // distance can't tell a lighter shade from a redder one.
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 30, "height": 10})).unwrap();
+        s.edit("paint", |doc, _| {
+            let bg = doc.layers[0].surface_mut().unwrap();
+            let v = |c: u8| f32::from(c) / 255.0;
+            bg.fill_rect(Rect::new(0, 0, 10, 10), &[v(200), v(140), v(120), 1.0]); // skin
+            bg.fill_rect(Rect::new(10, 0, 20, 10), &[v(220), v(160), v(140), 1.0]); // lighter skin
+            bg.fill_rect(Rect::new(20, 0, 30, 10), &[v(220), v(140), v(120), 1.0]); // redder skin
+            Ok(())
+        })
+        .unwrap();
+        s.execute("select.colorRange", json!({"points": [[5, 5]], "fuzziness": 40})).unwrap();
+        assert!(coverage(&s, 5, 5) > 0.98);
+        // Both differ from the sample by 20 levels in one RGB channel, yet the lighter one is
+        // kept clearly more (about 0.55 vs 0.31).
+        let (lighter, redder) = (coverage(&s, 15, 5), coverage(&s, 25, 5));
+        assert!(lighter > redder + 0.15 && redder > 0.0, "lighter {lighter}, redder {redder}");
     }
 
     /// Red squares (from `session`), a blue square, a black and a mid-grey strip on white.
@@ -430,20 +605,57 @@ mod tests {
     #[test]
     fn color_range_several_samples_points_and_invert() {
         let mut s = session_colours();
-        s.execute("select.colorRange", json!({"colors": ["#ff0000", "#0000ff"], "fuzziness": 10})).unwrap();
+        // Several samples span one Lab box (Photoshop's Minimum/Maximum): red and blue take
+        // both squares, black, grey and white stay out.
+        s.execute("select.colorRange", json!({"colors": ["#ff0000", "#0000ff"], "fuzziness": 100})).unwrap();
         assert_eq!((coverage(&s, 10, 10), coverage(&s, 30, 10), coverage(&s, 10, 24)), (1.0, 1.0, 1.0));
-        assert_eq!(coverage(&s, 2, 2), 0.0);
+        assert_eq!((coverage(&s, 2, 2), coverage(&s, 22, 24), coverage(&s, 32, 24)), (0.0, 0.0, 0.0));
         // Eyedropper point on the blue square; `invert` flips the result.
-        s.execute("select.colorRange", json!({"points": [[7, 22]], "fuzziness": 10, "invert": true})).unwrap();
+        s.execute("select.colorRange", json!({"points": [[7, 22]], "fuzziness": 100, "invert": true})).unwrap();
         assert_eq!((coverage(&s, 10, 24), coverage(&s, 10, 10), coverage(&s, 2, 2)), (0.0, 1.0, 1.0));
         // Localized clusters: picked on the left red square, a 25% range (10 px) leaves the right one.
-        s.execute("select.colorRange", json!({"points": [[10, 10]], "fuzziness": 10, "localized": true, "range": 25})).unwrap();
+        s.execute("select.colorRange", json!({"points": [[10, 10]], "fuzziness": 100, "localized": true, "range": 25})).unwrap();
         assert_eq!(coverage(&s, 10, 10), 1.0);
         assert!(coverage(&s, 13, 10) > 0.5);
         assert_eq!(coverage(&s, 30, 10), 0.0);
         // One undo step per call.
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(coverage(&s, 2, 2), 1.0);
+    }
+
+    #[test]
+    fn color_range_subtract_follows_photoshop_and_the_click_order() {
+        // Grey strips from dark to light; samples at both ends span the whole run.
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 50, "height": 10})).unwrap();
+        s.edit("paint", |doc, _| {
+            let bg = doc.layers[0].surface_mut().unwrap();
+            for (i, v) in [0.30f32, 0.40, 0.50, 0.60, 0.70].iter().enumerate() {
+                bg.fill_rect(Rect::new(i as i32 * 10, 0, i as i32 * 10 + 10, 10), &[*v, *v, *v, 1.0]);
+            }
+            Ok(())
+        })
+        .unwrap();
+        let run = |s: &mut Session, extra: Value| {
+            let mut p = json!({"points": [[5, 5], [45, 5]], "fuzziness": 10});
+            p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            s.execute("select.colorRange", p).unwrap();
+            (0..5).map(|i| coverage(s, i * 10 + 5, 5)).collect::<Vec<f32>>()
+        };
+        assert!(run(&mut s, json!({})).iter().all(|v| *v > 0.99), "both samples span every strip");
+        // Subtracting a colour inside the range moves the nearer edge onto it: the strips beyond
+        // it drop out, the subtracted grey itself stays selected (Photoshop does the same).
+        let cut = run(&mut s, json!({"subtractPoints": [[15, 5]]}));
+        assert!(cut[0] < 0.5 && cut[1] > 0.99 && cut[4] > 0.99, "{cut:?}");
+        // Order matters: adding the dark strip back after the subtraction restores it.
+        let readd = run(&mut s, json!({"points": [[5, 5], [45, 5], [5, 5]], "subtractPoints": [[15, 5]], "order": ["+", "+", "-", "+"]}));
+        assert!(readd[0] > 0.99, "{readd:?}");
+        let sub_last = run(&mut s, json!({"points": [[5, 5], [45, 5], [5, 5]], "subtractPoints": [[15, 5]], "order": ["+", "+", "+", "-"]}));
+        assert!(sub_last[0] < 0.5, "{sub_last:?}");
+        // A malformed or inconsistent order is an error, never a panic.
+        for bad in [json!(["+"]), json!(["+", "+", "x"]), json!("+-"), json!(["-", "-", "+"])] {
+            assert!(s.execute("select.colorRange", json!({"points": [[5, 5], [45, 5]], "subtractPoints": [[15, 5]], "order": bad})).is_err(), "{bad}");
+        }
     }
 
     #[test]
@@ -539,6 +751,53 @@ mod tests {
             }
         }
         assert!(s.active().unwrap().doc.selection.is_some());
+    }
+
+    #[test]
+    fn modify_select_all_honours_canvas_bounds() {
+        let all = || {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 40, "height": 30})).unwrap();
+            s.execute("select.all", json!({})).unwrap();
+            s
+        };
+        // Off (Photoshop's default): the selection continues past the canvas, so the edges stay.
+        for op in ["contract", "smooth", "expand", "feather"] {
+            let mut s = all();
+            s.execute(&format!("select.modify.{op}"), json!({"radius": 4})).unwrap();
+            assert_eq!(coverage(&s, 0, 15), 1.0, "{op}");
+            assert_eq!(coverage(&s, 20, 0), 1.0, "{op}");
+        }
+        // On: the canvas edge is a selection edge (#1277).
+        let mut s = all();
+        s.execute("select.modify.contract", json!({"radius": 4, "applyAtCanvasBounds": true})).unwrap();
+        assert_eq!(coverage(&s, 2, 15), 0.0);
+        assert_eq!(coverage(&s, 20, 28), 0.0);
+        assert_eq!(coverage(&s, 20, 15), 1.0);
+        let mut s = all();
+        s.execute("select.modify.feather", json!({"radius": 4, "applyAtCanvasBounds": true})).unwrap();
+        let e = coverage(&s, 0, 15);
+        assert!(e > 0.2 && e < 0.8, "{e}");
+        assert_eq!(coverage(&s, 20, 15), 1.0);
+        let mut s = all();
+        s.execute("select.modify.smooth", json!({"radius": 4, "applyAtCanvasBounds": true})).unwrap();
+        assert!(coverage(&s, 0, 0) < 1.0);
+        // Border always follows the canvas edge: a band inside it, not an empty selection.
+        let mut s = all();
+        s.execute("select.modify.border", json!({"radius": 4})).unwrap();
+        assert!(coverage(&s, 0, 15) > 0.0);
+        assert_eq!(coverage(&s, 20, 15), 0.0);
+    }
+
+    #[test]
+    fn modify_away_from_the_canvas_edge_ignores_canvas_bounds() {
+        for at in [false, true] {
+            let mut s = session();
+            s.execute("select.rect", json!({"x": 10, "y": 10, "width": 10, "height": 10})).unwrap();
+            s.execute("select.modify.contract", json!({"radius": 4, "applyAtCanvasBounds": at})).unwrap();
+            assert_eq!(coverage(&s, 11, 15), 0.0);
+            assert_eq!(coverage(&s, 15, 15), 1.0);
+        }
     }
 
     #[test]

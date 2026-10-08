@@ -63,16 +63,25 @@ pub(crate) fn has_paintable(s: &Session) -> std::result::Result<(), String> {
 
 /// Surface a paint command writes to: the layer's pixels, or its mask with `"target":"mask"`.
 pub(crate) fn paint_surface<'a>(doc: &'a mut Document, id: LayerId, p: &Value) -> Result<&'a mut photocraft_raster::Surface> {
-    let locks = doc.effective_locks(id);
-    let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-    if !is_mask_target(p) && (locks.pixels || locks.all) {
-        return Err(EngineError::Other(format!("Could not complete your request because the layer \"{}\" is locked", l.name)));
+    if !is_mask_target(p) {
+        check_pixels_unlocked(doc, id)?;
     }
+    let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
     if is_mask_target(p) {
         l.mask.as_mut().map(|m| &mut m.surface).ok_or_else(|| EngineError::Other("layer has no mask".into()))
     } else {
         l.surface_mut().ok_or_else(|| EngineError::Other("not a pixel layer".into()))
     }
+}
+
+/// Refuse a layer whose pixels are locked (directly or through a group), with Photoshop's message.
+pub(crate) fn check_pixels_unlocked(doc: &Document, id: LayerId) -> Result<()> {
+    let locks = doc.effective_locks(id);
+    let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    if locks.pixels || locks.all {
+        return Err(EngineError::Other(format!("Could not complete your request because the layer \"{}\" is locked", l.name)));
+    }
+    Ok(())
 }
 
 pub(crate) fn is_mask_target(p: &Value) -> bool {
@@ -179,11 +188,19 @@ pub fn blend_from_str(s: &str) -> Option<BlendMode> {
     std::iter::once(BlendMode::PassThrough).chain(BlendMode::LAYER_MODES).find(|m| norm(m.label()) == want || norm(&format!("{m:?}")) == want)
 }
 
+/// The active selection as the mask of a layer being created, or None without a selection.
+/// Photoshop masks a new adjustment or fill layer with the selection, so the adjustment acts on
+/// the selected area only (#1250); the selection itself stays, as Reveal Selection leaves it.
+pub(crate) fn selection_mask(doc: &Document) -> Option<LayerMask> {
+    doc.selection.as_ref().map(|sel| LayerMask { surface: sel.clone(), ..LayerMask::reveal_all() })
+}
+
 fn new_adjustment(s: &mut Session, adj: Adjustment) -> Result<Value> {
     let label = format!("New {} Layer", adj.label());
     let name = adj.label().to_string();
     let id = s.edit(&label, |doc, active| {
-        let l = Layer::new(doc.next_layer_name(&name), LayerContent::Adjustment(adj));
+        let mut l = Layer::new(doc.next_layer_name(&name), LayerContent::Adjustment(adj));
+        l.mask = selection_mask(doc);
         let id = doc.insert_above(*active, l);
         *active = Some(id);
         Ok(id)
@@ -218,8 +235,7 @@ fn destructive_adjust(s: &mut Session, label: &str, adj: Adjustment, p: &Value) 
     s.edit(label, |doc, _| {
         let sel = doc.selection.clone();
         let mode = doc.mode;
-        let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        let surf = l.surface_mut().ok_or_else(|| EngineError::Other("not a pixel layer".into()))?;
+        let surf = paint_surface(doc, id, &Value::Null)?;
         pixels::adjust_surface(surf, &adj, sel.as_ref(), mode);
         Ok(())
     })?;
@@ -410,6 +426,8 @@ fn build() -> Vec<CommandSpec> {
                         ("add", Some(o)) => combine(&o, &shape, area, |a, b| a.max(b)),
                         ("subtract", Some(o)) => combine(&o, &shape, area, |a, b| a * (1.0 - b)),
                         ("intersect", Some(o)) => combine(&o, &shape, area, |a, b| a.min(b)),
+                        // With no existing selection, neither operation can select new pixels.
+                        ("subtract" | "intersect", None) => Surface::new(photocraft_color::PixelFormat::GRAY8),
                         _ => shape,
                     };
                     // Nothing selected on the canvas (e.g. dragged entirely outside it) deselects.
@@ -457,7 +475,7 @@ fn build() -> Vec<CommandSpec> {
                 // A copy of the Background layer is an ordinary, unlocked layer (Photoshop).
                 let from_background = src.name == "Background" && src.locks.transparency && doc.layers.first().is_some_and(|b| b.id == id);
                 let mut dup = src.duplicate();
-                dup.name = format!("{} copy", dup.name);
+                dup.name = doc.copy_name(&dup.name);
                 if from_background {
                     dup.locks = Default::default();
                 }
@@ -474,6 +492,9 @@ fn build() -> Vec<CommandSpec> {
             let id = layer_param(s, p)?;
             s.edit("Delete Layer", |doc, active| {
                 doc.remove(id).ok_or(EngineError::NoLayer(id))?;
+                if doc.layers.is_empty() {
+                    return Err(EngineError::Other("a document must keep at least one layer".into()));
+                }
                 if *active == Some(id) {
                     *active = doc.top_layer();
                 }
@@ -629,6 +650,7 @@ fn build() -> Vec<CommandSpec> {
                 let fmt = doc.pixel_format();
                 let mut bg = Layer::raster("Background", fmt);
                 bg.locks.transparency = true;
+                bg.locks.position = true;
                 *crate::pixels_mut(&mut bg)? = photocraft_compose::flatten_to_surface(doc, fmt, Some([1.0, 1.0, 1.0]));
                 *active = Some(bg.id);
                 doc.layers = vec![bg];
@@ -639,7 +661,8 @@ fn build() -> Vec<CommandSpec> {
         cmd!("layer.newFillLayer.solidColor", "Solid Color…", ["Layer", "New Fill Layer"], None, r##"{"color":"#rrggbb"=foreground}"##, has_doc, |s, p| {
             let c = color_param(p, "color", s.tools.foreground);
             let id = s.edit("New Color Fill Layer", |doc, active| {
-                let l = Layer::new(doc.next_layer_name("Color Fill"), LayerContent::Fill(Fill::Solid(Color::rgba(c[0], c[1], c[2], c[3]))));
+                let mut l = Layer::new(doc.next_layer_name("Color Fill"), LayerContent::Fill(Fill::Solid(Color::rgba(c[0], c[1], c[2], c[3]))));
+                l.mask = selection_mask(doc);
                 let id = doc.insert_above(*active, l);
                 *active = Some(id);
                 Ok(id)
@@ -667,7 +690,9 @@ fn build() -> Vec<CommandSpec> {
                         style,
                         reverse,
                     );
-                    let id = doc.insert_above(*active, Layer::new(doc.next_layer_name("Gradient Fill"), LayerContent::Fill(fill)));
+                    let mut l = Layer::new(doc.next_layer_name("Gradient Fill"), LayerContent::Fill(fill));
+                    l.mask = selection_mask(doc);
+                    let id = doc.insert_above(*active, l);
                     *active = Some(id);
                     Ok(id)
                 })?;

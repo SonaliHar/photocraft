@@ -35,13 +35,14 @@ mod gradient_bake;
 pub mod linked;
 mod multichannel_map;
 pub mod pattern_map;
-mod pixels;
+pub mod pixels;
 mod psd_export;
 mod psd_import;
 pub mod raw;
 pub mod raw_smart;
 pub mod slices_map;
 pub mod smart_map;
+pub mod svg;
 pub mod text_styles_map;
 pub mod tiff_layers;
 pub mod vector_map;
@@ -76,6 +77,9 @@ pub enum IoError {
     /// Camera raw decode failure.
     #[error("{0}")]
     Raw(#[from] photocraft_raw::RawError),
+    /// An SVG that does not parse (or is too large to rasterise).
+    #[error("SVG: {0}")]
+    Svg(String),
     /// A background import was cancelled ([`import_with`]).
     #[error("cancelled")]
     Cancelled,
@@ -176,6 +180,9 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -
     }
     if raw::is_raw(bytes) {
         return raw::import_raw(name, bytes);
+    }
+    if has_extension(name, "svg") || has_extension(name, "svgz") || svg::is_svg(bytes) {
+        return svg::import_svg(name, bytes);
     }
     flat::import_flat(name, bytes)
 }

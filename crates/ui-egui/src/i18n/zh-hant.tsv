@@ -107,6 +107,7 @@
 	Fill…	填滿…
 	Stroke…	筆畫…
 	Content-Aware Fill…	內容感知填滿…
+	Delete and Fill Selection	刪除並填滿選取範圍
 	Content-Aware Scale	內容感知縮放
 	Puppet Warp	操控彎曲
 	Perspective Warp	透視彎曲
@@ -1019,6 +1020,7 @@
 	Fisheye	魚眼
 	Fit	符合
 	Fit Screen	符合螢幕
+	Fill Screen	填滿螢幕
 	Fit in View	符合檢視
 	Fixed	固定
 	Fixed Ratio	固定比例
@@ -1347,6 +1349,7 @@
 	Set background color	設定背景色
 	Set foreground color	設定前景色
 	Set painting symmetry options	設定繪畫對稱選項
+	Symmetry Off	關閉對稱
 	Set shape fill type	設定形狀填滿類型
 	Set shape stroke type	設定形狀筆畫類型
 	Set the text color	設定文字顏色
@@ -1806,6 +1809,7 @@
 	Never	永不
 	Normal tip	一般筆尖
 	Open as smart object	以智慧型物件開啟
+	Open in camera raw	在 Camera Raw 中開啟
 	Open documents as tabs	以索引標籤開啟文件
 	Overscroll	超出捲動
 	Performance	效能
@@ -1843,6 +1847,7 @@
 	Show slice numbers	顯示切片編號
 	Show tooltips	顯示工具提示
 	Show bounding box when dragging layer	拖曳圖層時顯示邊界框
+	System title bar	系統標題列
 	Show transformation values	顯示變形數值
 	Slice color	切片顏色
 	Smart guide color	智慧型參考線顏色
@@ -1922,6 +1927,7 @@
 	System Info…	系統資訊…
 	System Info	系統資訊
 	More panels	更多面板
+	More documents	更多文件
 	These settings aren't available in PhotoCraft yet.	這些設定在 PhotoCraft 中尚未提供。
 	Graphics	圖形
 	Reset GPU Backend	重設 GPU 後端
@@ -1999,6 +2005,7 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	沒有可用來建立選取範圍的路徑：請使用鋼筆工具繪製，或在路徑面板中選取一個路徑。
 	Cancel opening	取消開啟
 	Cancelled opening {name}	已取消開啟 {name}
+	Developing {name}	正在處理 {name}
 	Cancelled {label}	已取消 {label}
 	Esc to cancel	按 Esc 取消
 	Opening {name}	正在開啟 {name}
@@ -2037,6 +2044,7 @@
 cameraRaw	Light	光線
 # Camera Raw: contextual controls and window title
 	Camera Raw Filter ({layer})	Camera Raw 濾鏡（{layer}）
+	Camera Raw ({name})	Camera Raw（{name}）
 cameraRaw	Lights	亮調
 cameraRaw	Darks	暗調
 cameraRaw	Blacks	黑色色階
@@ -2110,3 +2118,4 @@ cameraRaw	Blending	混合
 	% of all commits	佔全部提交的 %
 	Lines +/−	行數 +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}：{prs} 個 PR，{commits} 次提交，行 +{added} / −{deleted}（Δ {delta}），二進位檔 +{binAdded} / −{binDeleted}，{first} – {last}
+	Apply At Canvas Bounds	套用效果至版面邊界

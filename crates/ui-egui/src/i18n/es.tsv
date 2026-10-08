@@ -99,6 +99,7 @@
 	Fill…	Rellenar…
 	Stroke…	Contornear…
 	Content-Aware Fill…	Relleno de contenido…
+	Delete and Fill Selection	Eliminar y rellenar selección
 	Content-Aware Scale	Escalado de contenido
 	Puppet Warp	Deformación de clavos
 	Perspective Warp	Deformación en perspectiva
@@ -1013,6 +1014,7 @@
 	Fisheye	Ojo de pez
 	Fit	Encajar
 	Fit Screen	Encajar en pantalla
+	Fill Screen	Rellenar pantalla
 	Fit in View	Encajar en la vista
 	Fixed	Fijo
 	Fixed Ratio	Relación fija
@@ -1341,6 +1343,7 @@
 	Set background color	Establecer el color de fondo
 	Set foreground color	Establecer el color frontal
 	Set painting symmetry options	Establecer opciones de simetría de pintura
+	Symmetry Off	Simetría desactivada
 	Set shape fill type	Establecer el tipo de relleno de la forma
 	Set shape stroke type	Establecer el tipo de trazo de la forma
 	Set the text color	Establecer el color del texto
@@ -1806,6 +1809,7 @@
 	Never	Nunca
 	Normal tip	Punta normal
 	Open as smart object	Abrir como objeto inteligente
+	Open in camera raw	Abrir en Camera Raw
 	Open documents as tabs	Abrir los documentos como pestañas
 	Overscroll	Sobredesplazamiento
 	Performance	Rendimiento
@@ -1843,6 +1847,7 @@
 	Show slice numbers	Mostrar los números de sección
 	Show tooltips	Mostrar las descripciones emergentes
 	Show bounding box when dragging layer	Mostrar el cuadro delimitador al arrastrar la capa
+	System title bar	Barra de título del sistema
 	Show transformation values	Mostrar los valores de transformación
 	Slice color	Color de las secciones
 	Smart guide color	Color de las guías inteligentes
@@ -1926,6 +1931,7 @@
 	System Info…	Información del sistema…
 	System Info	Información del sistema
 	More panels	Más paneles
+	More documents	Más documentos
 	These settings aren't available in PhotoCraft yet.	Estos ajustes aún no están disponibles en PhotoCraft.
 	Graphics	Gráficos
 	Reset GPU Backend	Restablecer el backend de GPU
@@ -2003,6 +2009,7 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	No hay ningún trazado para crear una selección: dibuje uno con la herramienta Pluma o seleccione uno en el panel Trazados.
 	Cancel opening	Cancelar apertura
 	Cancelled opening {name}	Se canceló la apertura de {name}
+	Developing {name}	Revelando {name}
 	Cancelled {label}	Se canceló {label}
 	Esc to cancel	Esc para cancelar
 	Opening {name}	Abriendo {name}
@@ -2127,6 +2134,7 @@
 cameraRaw	Light	Luz
 # Camera Raw: contextual controls and window title
 	Camera Raw Filter ({layer})	Filtro Camera Raw ({layer})
+	Camera Raw ({name})	Camera Raw ({name})
 cameraRaw	Lights	Tonos claros
 cameraRaw	Darks	Tonos oscuros
 cameraRaw	Red	Rojos
@@ -2204,3 +2212,4 @@ cameraRaw	Amount	Cantidad
 	% of all commits	% de todos los commits
 	Lines +/−	Líneas +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: {prs} PR, {commits} commits, +{added} / −{deleted} líneas (Δ {delta}), +{binAdded} / −{binDeleted} archivos binarios, {first} – {last}
+	Apply At Canvas Bounds	Aplicar efecto en los límites del lienzo

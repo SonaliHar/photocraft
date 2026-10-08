@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use egui::{Color32, CursorIcon, Pos2, Stroke, pos2, vec2};
 use photocraft_algo::transform::Homography;
-use photocraft_doc::{Document, LayerContent, LayerId};
+use photocraft_doc::{DocId, Document, LayerContent, LayerId};
 use photocraft_geom::warp::{BezierMesh, Warp, WarpStyle};
 use serde_json::json;
 
@@ -202,8 +202,11 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
 pub fn begin_copy(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
     let selection = app.session.active().is_some_and(|d| d.doc.selection.is_some());
     app.run(if selection { "layer.new.layerViaCopy" } else { "layer.duplicate" }, json!({}))?;
+    let made = app.session.active().and_then(|st| st.active_layer.map(|layer| (st.doc.id, layer)));
     if let Err(e) = begin(app, ctx) {
-        take_back_made(app);
+        if let Some((document, layer)) = made {
+            take_back_made(app, document, layer);
+        }
         return Err(e);
     }
     if let Some(t) = app.ui.transform.as_mut() {
@@ -224,10 +227,25 @@ pub fn begin_placed(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), 
 
 /// Undoes the layer a cancelled or failed session made (⌥⌘T's copy, a placed file), leaving
 /// nothing to redo.
-fn take_back_made(app: &mut PhotocraftApp) {
-    app.session.undo();
-    if let Some(st) = app.session.active_mut() {
+fn take_back_made(app: &mut PhotocraftApp, document: DocId, layer: LayerId) {
+    // Tabs can move or close while transforming. Only undo the creation in its own document,
+    // and only while it is still the latest step (it may already have been undone).
+    let Some(index) = app.session.documents().iter().position(|st| {
+        st.doc.id == document
+            && st.doc.layer(layer).is_some()
+            && st.history.past_len().checked_sub(1).and_then(|i| st.history.state(i)).is_some_and(|before| before.layer(layer).is_none())
+    }) else {
+        return;
+    };
+    let active = app.session.active_index();
+    app.session.set_active(index);
+    if app.session.undo()
+        && let Some(st) = app.session.active_mut()
+    {
         st.history.clear_redo();
+    }
+    if let Some(active) = active {
+        app.session.set_active(active);
     }
     app.sync_views();
 }
@@ -487,6 +505,11 @@ fn contains(l: &photocraft_doc::Layer, id: LayerId) -> bool {
 }
 
 pub fn commit(app: &mut PhotocraftApp) {
+    let document = app.transform_preview.as_ref().map(|pv| pv.doc.id);
+    if document.is_some_and(|id| app.session.active().is_none_or(|st| st.doc.id != id)) {
+        cancel(app);
+        return;
+    }
     let Some(t) = app.ui.transform.take() else { return };
     app.transform_preview = None;
     if t.selection {
@@ -525,8 +548,10 @@ pub fn commit(app: &mut PhotocraftApp) {
             }
         }
         Err(e) => {
-            if made.is_some() {
-                take_back_made(app);
+            if made.is_some()
+                && let Some(document) = document
+            {
+                take_back_made(app, document, LayerId(t.layer));
             }
             app.ui.status = e;
         }
@@ -538,7 +563,8 @@ pub fn commit(app: &mut PhotocraftApp) {
 /// just before it (`ui.pointer`'s `tool`) goes to that tool.
 pub fn end_if_left(app: &mut PhotocraftApp) {
     let Some(t) = &app.ui.transform else { return };
-    if app.session.active().and_then(|s| s.doc.layer(LayerId(t.layer))).is_none() {
+    if app.session.active().is_none_or(|st| app.transform_preview.as_ref().is_some_and(|pv| pv.doc.id != st.doc.id) || st.doc.layer(LayerId(t.layer)).is_none())
+    {
         cancel(app);
     } else if app.transform_preview.as_ref().is_some_and(|pv| pv.tool != app.ui.tool) {
         commit(app);
@@ -546,10 +572,12 @@ pub fn end_if_left(app: &mut PhotocraftApp) {
 }
 
 pub fn cancel(app: &mut PhotocraftApp) {
-    let made = app.ui.transform.take().is_some_and(|t| t.made.is_some());
-    app.transform_preview = None;
-    if made {
-        take_back_made(app);
+    let transform = app.ui.transform.take();
+    let preview = app.transform_preview.take();
+    if let (Some(t), Some(pv)) = (transform, preview)
+        && t.made.is_some()
+    {
+        take_back_made(app, pv.doc.id, LayerId(t.layer));
     }
 }
 
@@ -725,6 +753,40 @@ fn distort_allows(mode: TransformMode, h: Hit) -> bool {
     mode != TransformMode::Distort || !matches!(h, Hit::Outside | Hit::Edge(_))
 }
 
+/// The turn at each corner of a quad (cross products of consecutive edges): all the same sign
+/// for a convex quad, mixed for a concave or self-intersecting one.
+fn turns(q: &[[f64; 2]; 4]) -> [f64; 4] {
+    std::array::from_fn(|k| {
+        let (a, b, c) = (q[k], q[(k + 1) % 4], q[(k + 2) % 4]);
+        (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0])
+    })
+}
+
+/// Is `q` convex with the orientation `sign`, every corner turning by more than a sliver?
+fn convex(q: &[[f64; 2]; 4], sign: f64, min_turn: f64) -> bool {
+    turns(q).iter().all(|t| t * sign > min_turn)
+}
+
+/// Distort and Perspective stop a corner where the box would turn concave or fold over itself,
+/// as Photoshop does (#1323): the result moves from `from` towards `to` as far as the quad stays
+/// convex. A box that is not convex to begin with is left free.
+fn keep_convex(from: [[f64; 2]; 4], to: [[f64; 2]; 4]) -> [[f64; 2]; 4] {
+    let t0 = turns(&from);
+    let sign = t0[0].signum();
+    // A sliver: a thousandth of the starting box's smallest turn, so the stop is short of flat.
+    let min_turn = t0.iter().map(|t| t.abs()).fold(f64::INFINITY, f64::min) * 1e-3;
+    if !(min_turn.is_finite() && min_turn > 0.0) || !convex(&from, sign, 0.0) || convex(&to, sign, min_turn) {
+        return to;
+    }
+    let lerp = |t: f64| -> [[f64; 2]; 4] { std::array::from_fn(|k| [from[k][0] + (to[k][0] - from[k][0]) * t, from[k][1] + (to[k][1] - from[k][1]) * t]) };
+    let (mut lo, mut hi) = (0.0f64, 1.0f64);
+    for _ in 0..40 {
+        let mid = (lo + hi) / 2.0;
+        if convex(&lerp(mid), sign, min_turn) { lo = mid } else { hi = mid }
+    }
+    lerp(lo)
+}
+
 fn apply_drag(s: &mut TransformSession, g: Gesture, p: [f64; 2], mods: egui::Modifiers) {
     let (dx, dy) = (p[0] - g.start[0], p[1] - g.start[1]);
     match g.hit {
@@ -776,13 +838,16 @@ fn apply_drag(s: &mut TransformSession, g: Gesture, p: [f64; 2], mods: egui::Mod
                 _ => 1,
             };
             let (mx, my) = if horizontal { (dx, 0.0) } else { (0.0, dy) };
-            s.quad[i] = [g.quad0[i][0] + mx, g.quad0[i][1] + my];
-            s.quad[j] = [g.quad0[j][0] - mx, g.quad0[j][1] - my];
+            let mut q = g.quad0;
+            q[i] = [g.quad0[i][0] + mx, g.quad0[i][1] + my];
+            q[j] = [g.quad0[j][0] - mx, g.quad0[j][1] - my];
+            s.quad = keep_convex(g.quad0, q);
         }
         Hit::Corner(i) if mods.command => {
-            // Distort: move the corner freely.
-            s.quad = g.quad0;
-            s.quad[i] = [g.quad0[i][0] + dx, g.quad0[i][1] + dy];
+            // Distort: move the corner freely, up to where the box would fold over (#1323).
+            let mut q = g.quad0;
+            q[i] = [g.quad0[i][0] + dx, g.quad0[i][1] + dy];
+            s.quad = keep_convex(g.quad0, q);
         }
         Hit::Edge(i) if mods.command => {
             // Skew: the edge's two corners move together (⇧: only along the edge).
@@ -1268,6 +1333,22 @@ fn readout(t: &TransformSession) -> (f64, f64, f64, f64) {
 /// Width of the mode, cancel and commit cluster kept on the right of the options bar.
 const ACTIONS_W: f32 = 140.0;
 
+/// Reach of the reference point X/Y fields: the largest document side (`image.canvasSize`'s limit).
+const POSITION_LIMIT_PX: f32 = 300_000.0;
+/// Reach of the W/H fields. The engine takes any scale; this lets a 30 px layer span the largest
+/// document (#1267).
+const SCALE_LIMIT_PCT: f32 = 1_000_000.0;
+
+/// The W or H field's limit for a box side of `side` px: as far as the result stays within the
+/// largest document side, so a typed scale can't ask for an image too large to allocate.
+fn scale_limit_pct(side: f64) -> f32 {
+    let side = side.abs();
+    if !side.is_finite() || side < 1e-6 {
+        return SCALE_LIMIT_PCT;
+    }
+    ((f64::from(POSITION_LIMIT_PX) / side * 100.0) as f32).clamp(100.0, SCALE_LIMIT_PCT)
+}
+
 /// Options bar while transforming: reference point X/Y, W/H %, angle, interpolation, and, pinned
 /// to the right, the warp switch, cancel and commit.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -1299,9 +1380,9 @@ fn transform_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &TransformSes
     let mut px = t.pivot[0] as f32;
     let mut py = t.pivot[1] as f32;
     lbl(ui, "X:");
-    let rx = crate::widgets::value_field(ui, &mut px, -30000.0..=30000.0, "px", 72.0);
+    let rx = crate::widgets::value_field(ui, &mut px, -POSITION_LIMIT_PX..=POSITION_LIMIT_PX, "px", 72.0);
     lbl(ui, "Y:");
-    let ry = crate::widgets::value_field(ui, &mut py, -30000.0..=30000.0, "px", 72.0);
+    let ry = crate::widgets::value_field(ui, &mut py, -POSITION_LIMIT_PX..=POSITION_LIMIT_PX, "px", 72.0);
     if (rx.changed() || ry.changed())
         && let Some(s) = app.ui.transform.as_mut()
     {
@@ -1311,8 +1392,9 @@ fn transform_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &TransformSes
     }
     crate::widgets::vline(ui, 22.0);
     let (mut w, mut h) = (sx as f32, sy as f32);
+    let (wlim, hlim) = (scale_limit_pct(t.rect[2] - t.rect[0]), scale_limit_pct(t.rect[3] - t.rect[1]));
     lbl(ui, "W:");
-    let rw = crate::widgets::value_field(ui, &mut w, -10000.0..=10000.0, "%", 66.0);
+    let rw = crate::widgets::value_field(ui, &mut w, -wlim..=wlim, "%", 66.0);
     let link_id = egui::Id::new("transform-link");
     let mut link: bool = ui.data(|d| d.get_temp(link_id)).unwrap_or(true);
     if crate::icons::button(ui, if link { "link" } else { "unlink" }, 22.0, link, tl!("Maintain aspect ratio")).clicked() {
@@ -1320,10 +1402,12 @@ fn transform_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &TransformSes
         ui.data_mut(|d| d.insert_temp(link_id, link));
     }
     lbl(ui, "H:");
-    let rh = crate::widgets::value_field(ui, &mut h, -10000.0..=10000.0, "%", 66.0);
+    let rh = crate::widgets::value_field(ui, &mut h, -hlim..=hlim, "%", 66.0);
     if rw.changed() || rh.changed() {
         let (kx, ky) = if link {
             let k = if rw.changed() { w as f64 / sx.max(1e-9) } else { h as f64 / sy.max(1e-9) };
+            // Linked, the other side follows: keep it within its own limit too.
+            let k = k.min(f64::from(wlim) / sx.abs().max(1e-9)).min(f64::from(hlim) / sy.abs().max(1e-9));
             (k, k)
         } else {
             (w as f64 / sx.max(1e-9), h as f64 / sy.max(1e-9))
@@ -1594,6 +1678,60 @@ mod tests {
         assert!(h.state().ui.transform.is_none());
     }
 
+    /// Types `text` + Enter into the `n`th numeric field of the transform bar (X, Y, W, H, angle…).
+    fn type_into_bar_field(n: usize, text: &str) -> TransformSession {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.ui.transform = Some(session());
+        let mut h = Harness::builder().with_size(vec2(900.0, 48.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                ui.horizontal_centered(|ui| options_bar(app, ui));
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run_steps(6);
+        h.get_all_by_role(egui::accesskit::Role::SpinButton).nth(n).unwrap().click();
+        h.run();
+        for c in text.chars() {
+            h.event(egui::Event::Text(c.to_string()));
+            h.run();
+        }
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        h.state().ui.transform.clone().unwrap()
+    }
+
+    /// Large documents need scales past 10000% and positions past 30000 px (#1267).
+    #[test]
+    fn transform_fields_reach_large_documents() {
+        let t = type_into_bar_field(2, "15000");
+        let (sx, sy, _, _) = readout(&t);
+        assert!((sx - 15000.0).abs() < 0.5 && (sy - 15000.0).abs() < 0.5, "{sx} {sy}");
+        assert!((t.quad[1][0] - t.quad[0][0] - 15_000.0).abs() < 1.0, "{:?}", t.quad);
+        let t = type_into_bar_field(0, "250000");
+        assert!((t.pivot[0] - 250_000.0).abs() < 1.0, "{:?}", t.pivot);
+    }
+
+    /// A typed scale stops where the box reaches the largest document side, not past what can be
+    /// allocated: the 100 × 50 px test box tops out at 300000 % wide.
+    #[test]
+    fn typed_scales_stay_within_the_largest_document() {
+        assert_eq!(scale_limit_pct(20.0), SCALE_LIMIT_PCT);
+        assert_eq!(scale_limit_pct(3000.0), 10_000.0);
+        assert_eq!(scale_limit_pct(1e9), 100.0);
+        assert_eq!(scale_limit_pct(0.0), SCALE_LIMIT_PCT);
+        assert_eq!(scale_limit_pct(f64::NAN), SCALE_LIMIT_PCT);
+        let t = type_into_bar_field(2, "99999999");
+        let (sx, sy, _, _) = readout(&t);
+        let side = t.rect[2] - t.rect[0];
+        assert!(sx <= f64::from(scale_limit_pct(side)) + 0.5 && sy <= f64::from(scale_limit_pct(t.rect[3] - t.rect[1])) + 0.5, "{sx} {sy}");
+    }
+
     fn drag(s: &mut TransformSession, from: [f64; 2], to: [f64; 2], mods: egui::Modifiers) {
         let g = Gesture { hit: hit(s, from, 8.0), start: from, quad0: s.quad, pivot0: s.pivot };
         apply_drag(s, g, to, mods);
@@ -1828,6 +1966,87 @@ mod tests {
         assert_eq!(app.session.active().unwrap().doc.layers.len(), layers);
     }
 
+    /// #1099: cancel, frame cleanup and a commit before the next frame all belong to the
+    /// original document, including after tab reordering and with shared layer IDs.
+    #[test]
+    fn cancelling_a_copy_after_switching_documents_preserves_the_active_document() {
+        for reorder in [false, true] {
+            for finish in [cancel, end_if_left, commit] {
+                let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+                let original = app.session.active().unwrap().doc.clone();
+                let steps = app.session.active().unwrap().history.past_len();
+                begin_copy(&mut app, &egui::Context::default()).unwrap();
+                app.ui.transform.as_mut().unwrap().quad = corners([12.0, 8.0, 28.0, 24.0]);
+                // Cloning a document deliberately shares layer IDs, but gets a fresh document ID.
+                let other = app.session.active().unwrap().doc.as_ref().clone();
+                app.session.add_document(other, None);
+                app.run("layer.new.layer", json!({})).unwrap();
+                app.run("layer.new.layer", json!({})).unwrap();
+                assert!(app.session.undo());
+                let st = app.session.active().unwrap();
+                let (doc, history, redo, revision, layer) =
+                    (st.doc.clone(), st.history.entries(), st.history.redo_labels().map(str::to_owned).collect::<Vec<_>>(), st.revision, st.active_layer);
+                if reorder {
+                    app.session.move_document(0, 1);
+                }
+                finish(&mut app);
+                assert!(app.ui.transform.is_none() && app.transform_preview.is_none());
+                let st = app.session.active().unwrap();
+                assert!(Arc::ptr_eq(&st.doc, &doc), "the selected document's pixels are unchanged");
+                assert_eq!((st.history.entries(), st.revision, st.active_layer), (history, revision, layer));
+                assert_eq!(st.history.redo_labels().collect::<Vec<_>>(), redo);
+                let origin = app.session.documents().iter().find(|st| st.doc.id == original.id).unwrap();
+                assert!(Arc::ptr_eq(&origin.doc, &original), "only the originating copy is undone");
+                assert_eq!(origin.history.past_len(), steps);
+                assert!(!origin.history.can_redo());
+            }
+        }
+    }
+
+    #[test]
+    fn cancelling_a_copy_after_its_document_closes_does_not_undo_another_document() {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        begin_copy(&mut app, &egui::Context::default()).unwrap();
+        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        let doc = app.session.active().unwrap().doc.clone();
+        let steps = app.session.active().unwrap().history.past_len();
+        app.session.close(0);
+        end_if_left(&mut app);
+        let st = app.session.active().unwrap();
+        assert!(Arc::ptr_eq(&st.doc, &doc));
+        assert_eq!(st.history.past_len(), steps);
+        assert!(app.ui.transform.is_none() && app.transform_preview.is_none());
+    }
+
+    #[test]
+    fn cancelling_an_already_undone_copy_preserves_history_and_redo() {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        begin_copy(&mut app, &egui::Context::default()).unwrap();
+        assert!(app.session.undo());
+        let st = app.session.active().unwrap();
+        let (doc, history, redo) = (st.doc.clone(), st.history.entries(), st.history.redo_labels().map(str::to_owned).collect::<Vec<_>>());
+        end_if_left(&mut app);
+        let st = app.session.active().unwrap();
+        assert!(Arc::ptr_eq(&st.doc, &doc));
+        assert_eq!(st.history.entries(), history);
+        assert_eq!(st.history.redo_labels().collect::<Vec<_>>(), redo);
+        assert!(app.ui.transform.is_none() && app.transform_preview.is_none());
+    }
+
+    #[test]
+    fn cancelling_a_copy_does_not_undo_a_later_edit() {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        begin_copy(&mut app, &egui::Context::default()).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        let st = app.session.active().unwrap();
+        let (doc, history) = (st.doc.clone(), st.history.entries());
+        cancel(&mut app);
+        let st = app.session.active().unwrap();
+        assert!(Arc::ptr_eq(&st.doc, &doc));
+        assert_eq!(st.history.entries(), history);
+    }
+
     /// #670: picking another tool applies the open transform, as one history step.
     #[test]
     fn picking_another_tool_applies_the_transform() {
@@ -1904,6 +2123,37 @@ mod tests {
         // Free Transform from the menu switches the live box back.
         crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({})).unwrap();
         assert_eq!(app.ui.transform.as_ref().unwrap().mode, TransformMode::Free);
+    }
+
+    #[test]
+    fn a_distort_corner_stops_before_the_box_folds_over() {
+        // #1323: dragging a corner across the opposite diagonal stops short of it, so the box
+        // stays convex instead of folding into a bow tie.
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        app.ui.extras.snap = false;
+        let ctx = egui::Context::default();
+        crate::menus::invoke(&mut app, &ctx, "edit.transform.distort", json!({})).unwrap();
+        let q0 = app.ui.transform.as_ref().unwrap().quad;
+        // Top-left far past the bottom-right corner.
+        press_drag(&mut app, q0[0], [60.0, 60.0], egui::Modifiers::NONE);
+        let q = app.ui.transform.as_ref().unwrap().quad;
+        let sign = turns(&q0)[0].signum();
+        assert!(turns(&q).iter().all(|t| t * sign > 0.0), "still convex: {q:?}");
+        assert_eq!([q[1], q[2], q[3]], [q0[1], q0[2], q0[3]], "the other corners stay put");
+        // It went as far as it could along the drag: up to the TR–BL diagonal (x + y = 32).
+        assert!(q[0][0] > 15.0 && q[0][0] < 16.0 && (q[0][0] - q[0][1]).abs() < 1e-6, "{q:?}");
+        // A drag that keeps the box convex is not held back.
+        press_drag(&mut app, q[0], [2.0, 4.0], egui::Modifiers::NONE);
+        assert_eq!(app.ui.transform.as_ref().unwrap().quad[0], [2.0, 4.0]);
+    }
+
+    #[test]
+    fn keep_convex_leaves_a_degenerate_start_alone() {
+        let flat = [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]];
+        let to = [[5.0, 5.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]];
+        assert_eq!(keep_convex(flat, to), to);
+        let nan = [[f64::NAN, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        let _ = keep_convex(nan, to);
     }
 
     #[test]

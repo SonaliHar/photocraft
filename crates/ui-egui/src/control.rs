@@ -313,15 +313,18 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 if let Some(z) = p.get("zoom").and_then(Value::as_f64) {
                     app.ui.views[i].zoom = (z as f32).clamp(0.01, 64.0);
                     app.ui.views[i].fit_pending = false;
+                    app.ui.views[i].fill_pending = false;
                 }
                 if let Some(c) = p.get("center").and_then(Value::as_array)
                     && c.len() == 2
                 {
                     app.ui.views[i].center = [c[0].as_f64().unwrap_or(0.0) as f32, c[1].as_f64().unwrap_or(0.0) as f32];
                     app.ui.views[i].fit_pending = false;
+                    app.ui.views[i].fill_pending = false;
                 }
                 if p.get("fit").and_then(Value::as_bool) == Some(true) {
                     app.ui.views[i].fit_pending = true;
+                    app.ui.views[i].fill_pending = false;
                 }
             }
             if let Some(name) = s("theme") {
@@ -415,8 +418,10 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             None => err("no such dialog"),
         },
         "ui.window.open" => {
-            if let Some(d) = u("document") {
-                app.session.set_active(d as usize);
+            if let Some(d) = u("document")
+                && !app.session.set_active(d as usize)
+            {
+                return err(format!("no document {d}"));
             }
             wrap(crate::menus::invoke(app, ctx, "window.newWindowForDocument", json!({})))
         }
@@ -490,6 +495,10 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 }
                 if let Some(d) = app.drag.as_mut().filter(|d| crate::hold_keys::repositions(d.tool)) {
                     d.reposition = space;
+                }
+                // Color Range › Sampled Colors on top: a press is its eyedropper on the image.
+                if matches!(ev, ToolEvent::Down { .. }) && crate::color_range_ui::pick_top(app, [x, y], mods) {
+                    continue;
                 }
                 tool_event(app, ev, mods);
             }
@@ -870,6 +879,22 @@ mod tests {
             assert_eq!(app.ui.theme, kind);
             assert_eq!(ThemeKind::from_name(kind.id()), Some(kind));
         }
+    }
+
+    #[test]
+    fn ui_window_open_rejects_an_unknown_document_index() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        // An out-of-range index must error instead of silently switching the active document
+        // and opening the window for whatever is active now.
+        let before = app.session.active_index();
+        let r = call(&mut app, &ctx, "ui.window.open", json!({"document": 99}));
+        assert_eq!(r["ok"], false, "{r}");
+        assert!(r["error"].as_str().unwrap().contains("no document 99"), "{r}");
+        assert_eq!(app.session.active_index(), before, "the active document is untouched");
+        // A valid index still opens the window.
+        assert_eq!(call(&mut app, &ctx, "ui.window.open", json!({"document": 0}))["ok"], true);
     }
 
     #[test]

@@ -874,6 +874,16 @@ fn layer_effects_opacity_fill_blend_and_off_canvas() {
         d.layers.push(l);
         fx_check(&mut g, &d, &format!("opacity {opacity} fill {fill} {blend:?}"));
     }
+    // Fill below 100 % with an Outside stroke: the interior stays clear of the stroke (the
+    // "outline only" look of Fill 0 %).
+    for fill in [0.0, 0.5] {
+        let mut d = fx_doc(80, 80, SampleType::U8);
+        let mut l = blob("ring", d.pixel_format(), 40.0, 40.0, 20.0, [0.2, 0.6, 0.9]);
+        l.effects.items = vec![Effect::Stroke(stroke(4.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(0.95, 0.85, 0.1))))];
+        l.fill_opacity = fill;
+        d.layers.push(l);
+        fx_check(&mut g, &d, &format!("outside stroke at fill {fill}"));
+    }
     // Shapes partly off the canvas (their effects reach back in) and a masked effect layer.
     let mut d = fx_doc(90, 70, SampleType::U8);
     let mut l = blob("edge", d.pixel_format(), 4.0, 66.0, 18.0, [0.9, 0.9, 0.2]);
@@ -987,6 +997,31 @@ fn layer_effects_update_incrementally() {
     // A change of shape with the move rebuilds.
     d.layers[1].surface_mut().unwrap().fill_rect(Rect::new(300, 300, 310, 310), &[1.0, 1.0, 1.0, 0.5]);
     fx_check(&mut g, &d, "moved and painted");
+}
+
+#[test]
+fn layer_effects_move_with_a_layer_overhanging_the_canvas() {
+    // A layer the size of the canvas with a drop shadow and a stroke, dragged with the Move tool
+    // (#761): its pixels overhang the edge, yet each move reuses the maps instead of rebuilding
+    // them, and the result still matches the CPU.
+    let Some(mut g) = gpu() else { return };
+    let mut d = fx_doc(160, 120, SampleType::U8);
+    let mut l = noise_layer("full", PixelFormat::RGBA8, Rect::new(-6, -4, 166, 124), 3, 0.6);
+    l.surface_mut().unwrap().fill_rect(Rect::new(40, 30, 90, 70), &[0.0, 0.0, 0.0, 0.0]);
+    l.effects.items = vec![
+        Effect::DropShadow(shadow(BlendMode::Multiply, 0.8, 120.0, 6.0, 5.0, 0.0)),
+        Effect::Stroke(stroke(3.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(1.0, 1.0, 1.0)))),
+    ];
+    d.layers.push(l);
+    let first = fx_check(&mut g, &d, "initial");
+    assert!(first.fx_programs > 0);
+    for (dx, dy) in [(3, 2), (5, -4), (-9, 7)] {
+        let s = d.layers[1].surface().unwrap();
+        let moved = s.translated(dx, dy, s.content_bounds());
+        *d.layers[1].surface_mut().unwrap() = moved;
+        let s = fx_check(&mut g, &d, &format!("moved by ({dx}, {dy})"));
+        assert_eq!(s.fx_programs, 0, "moved by ({dx}, {dy}): {s:?}");
+    }
 }
 
 #[test]

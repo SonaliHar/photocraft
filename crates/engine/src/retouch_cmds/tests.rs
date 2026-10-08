@@ -3,6 +3,30 @@ use photocraft_color::ColorMode;
 
 const DEPTHS: [u64; 3] = [8, 16, 32];
 
+#[test]
+fn clone_preview_matches_source_without_mutating_session() {
+    use crate::presets::clone_source::Mapping;
+    for depth in DEPTHS {
+        let mut s = session(32, 32, depth, "rgb");
+        paint_layer(&mut s, |x, y| [x as f32 / 32.0, y as f32 / 32.0, 0.25, 1.0]);
+        s.execute("cloneSource.set", json!({"source": [8,8]})).unwrap();
+        let revision = s.active().unwrap().revision;
+        let slots = s.presets.clone.clone();
+        let map = Mapping { source: (8.0, 8.0), anchor: (20.0, 20.0), m: [1.0, 0.0, 0.0, 1.0] };
+        let buf = clone_preview(&s, Rect::new(20, 20, 21, 21), &map, "current").unwrap();
+        let expected = rgba(&s, 8, 8);
+        for (actual, expected) in buf.px[0].iter().zip(expected) {
+            assert!((actual - expected).abs() < 0.001);
+        }
+        assert_eq!(s.active().unwrap().revision, revision);
+        assert_eq!(s.presets.clone, slots);
+        assert!(clone_preview(&s, Rect::new(0, 0, 2048, 2048), &map, "current").is_err());
+        assert!(clone_preview(&s, Rect::new(20, 20, 21, 21), &map, "invalid").is_err());
+        let invalid = Mapping { source: (f64::NAN, 0.0), ..map };
+        assert!(clone_preview(&s, Rect::new(0, 0, 1, 1), &invalid, "current").is_err());
+    }
+}
+
 fn session(w: u32, h: u32, depth: u64, mode: &str) -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": w, "height": h, "depth": depth, "mode": mode})).unwrap();
@@ -873,4 +897,32 @@ fn content_aware_move_fails_gracefully() {
         assert!(s.execute("paint.contentAwareMove", p.clone()).is_err(), "{p}");
     }
     assert!(s.execute("paint.contentAwareMove", json!({"offset": [10, 0], "structure": 7.0, "color": null})).is_ok());
+}
+
+#[test]
+fn clone_and_heal_with_a_far_source_are_plain_errors() {
+    // Issue #1111: a translation whose offset saturates `Rect::translate` used to sample a
+    // narrower window, relabel it full-size and index past the buffer (a panic the dispatch
+    // guard turned into an internal error). It is a bad-params error, and the layer is untouched.
+    for cmd in ["paint.cloneStamp", "paint.healingBrush"] {
+        let mut s = session(40, 30, 8, "rgb");
+        paint_layer(&mut s, texture);
+        let before = rgba(&s, 10, 10);
+        let steps = s.active().unwrap().history.past_len();
+        for p in [
+            json!({"points": [[10, 10]], "source": [3e9, 0]}),
+            json!({"points": [[10, 10]], "source": [0, -3e9]}),
+            json!({"points": [[10, 10]], "offset": [2147483647, 0]}),
+            json!({"points": [[10, 10], [30, 10]], "source": [2147483640, 0]}),
+        ] {
+            let err = s.execute(cmd, p.clone()).expect_err(&format!("{cmd} {p}"));
+            assert!(matches!(err, EngineError::BadParams { .. }), "{cmd} {p}: {err:?}");
+        }
+        assert_eq!(rgba(&s, 10, 10), before, "{cmd}: a refused stroke changed the layer");
+        assert_eq!(s.active().unwrap().history.past_len(), steps, "{cmd}: a refused stroke recorded a history step");
+        // A source far outside the canvas but inside the coordinate range is still fine: it clones
+        // transparency.
+        s.execute(cmd, json!({"points": [[10, 10]], "source": [1e6, 1e6]})).unwrap();
+        s.execute(cmd, json!({"points": [[10, 10], [30, 10]], "source": [2147483000, 0]})).unwrap();
+    }
 }

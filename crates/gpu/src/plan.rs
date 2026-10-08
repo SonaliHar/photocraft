@@ -15,7 +15,7 @@
 use photocraft_color::BlendMode;
 use photocraft_compose::adjust::{self, Transfer};
 use photocraft_compose::effects::has_effects;
-use photocraft_doc::adjust::ToneSpace;
+use photocraft_doc::adjust::{ToneSpace, lut3d_len};
 use photocraft_doc::{Adjustment, Document, Effect, Fill, FxPaint, GlobalLight, Glow, Gradient, Layer, LayerContent, LayerId, Pattern, StrokePosition};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
@@ -342,7 +342,7 @@ enum Cov {
 /// Shader flags for effect passes (keep in sync with compose.wgsl). Coverage `m` of a paint, with
 /// `a` the layer's alpha and `inside` = `a > 0.5/255`:
 /// knockout `m × (1 − a × k)` (k in `p4.w`); gate `inside ? m : 0`; rel `inside ? min(m / a, 1) : 0`;
-/// stroke-out `inside ? (vector ? 0 : 1) : m`.
+/// stroke-out `inside ? (vector ? 0 : (1 − a) / (1 − layer alpha), 1 at an opaque layer) : m`.
 pub const F_KNOCKOUT: u32 = 16;
 /// Effect merge: A already holds the layer; only mix with the backdrop by the layer's opacity.
 pub const F_NO_LAYER: u32 = 32;
@@ -1110,8 +1110,9 @@ impl<'a> Planner<'a> {
             .collect();
         if !outs.is_empty() {
             let (mut acc, mut cover): (Option<Slot>, Option<Slot>) = (None, None);
-            if outline {
-                // The layer's alpha rides along the coverage (`effects::outline_share`).
+            if outline || !vector_shape {
+                // The layer's alpha rides along the coverage: `effects::outline_share`, and for
+                // pixel layers the stroke's share beneath a partly covering layer (fill < 100 %).
                 let ll = self.retain(l);
                 cover = Some(init(self, ll, None, INIT_COVER, 1.0));
             }
@@ -1537,11 +1538,12 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
             }
             (15, p, Some(vec![row]))
         }
-        Adjustment::ColorLookup { lut: Some(table), size, tetrahedral, dither, .. } if *size >= 2 && table.len() >= (*size as usize).pow(3) * 3 => {
+        Adjustment::ColorLookup { lut: Some(table), size, tetrahedral, dither, .. } if lut3d_len(*size).is_some_and(|len| table.len() >= len) => {
             // The flattened table (n³ RGB triplets) spans as many 4096-wide rows as it needs.
             let n = *size as usize;
-            let len = n * n * n * 3;
-            let rows = table[..len]
+            let rows = lut3d_len(*size)
+                .and_then(|len| table.get(..len))
+                .unwrap_or_default()
                 .chunks(4096)
                 .map(|c| {
                     let mut row = [0.0f32; 4096];
@@ -1608,6 +1610,15 @@ mod tests {
     use super::*;
     use photocraft_color::{Color, ColorMode, SampleType};
     use photocraft_geom::Size;
+
+    #[test]
+    fn color_lookup_with_an_overflowing_stored_size_uploads_no_table() {
+        for size in [1 << 22, u32::MAX] {
+            let a = Adjustment::ColorLookup { name: "x".into(), lut: Some(std::sync::Arc::new(vec![0.5; 24])), size, tetrahedral: false, dither: false };
+            let (kind, _, rows) = adjustment_program(&a, Transfer::Srgb, SampleType::U8);
+            assert_eq!((kind, rows.is_none()), (0, true), "size {size}");
+        }
+    }
 
     #[test]
     fn slots_are_recycled() {
