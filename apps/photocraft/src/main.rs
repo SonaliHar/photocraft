@@ -2,11 +2,14 @@
 //!
 //! Usage: `photocraft [--control <port>] [--control-token <64-hex> |
 //! --control-token-file <path>] [--automation-read-root <dir>]
-//! [--automation-write-root <dir>] [--safe-gpu] [files…]`
+//! [--automation-write-root <dir>] [--safe-gpu] [--in-window-menus] [files…]`
 //!
 //! `--safe-gpu` starts with the CPU renderer (no GPU canvas; a software adapter for the window
 //! where the platform has one) for this launch, e.g. after a graphics driver crash. A start that
 //! crashes inside the driver also falls back by itself next time (see `gpu_startup`).
+//!
+//! `--in-window-menus` (or `PHOTOCRAFT_IN_WINDOW_MENUS=1`) keeps the menus inside the window on
+//! macOS instead of the macOS menu bar (`mac_menu`).
 //!
 //! `--control <port>` (or `PHOTOCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server.
 //! The first line must authenticate; subsequent request lines get reply lines.
@@ -23,7 +26,12 @@ mod app_icon;
 mod apple_events;
 mod control_server;
 mod crash_guard;
+mod cursor;
 mod gpu_startup;
+#[cfg(target_os = "macos")]
+mod mac_menu;
+#[cfg(target_os = "macos")]
+mod mac_window;
 // Pure logic is tested on every platform; only Linux runs the check.
 #[cfg(any(target_os = "linux", test))]
 mod linux_libs;
@@ -40,6 +48,11 @@ use photocraft_ui_egui::PhotocraftApp;
 /// Matches the `.desktop` file and hicolor icon name, so Wayland docks pick up the icon.
 const APP_ID: &str = "ai.storyteller.photocraft";
 
+/// Windows and Linux: no OS title bar; the app's top bar is the title bar, with its own caption
+/// buttons and edge resizing (`photocraft_ui_egui::titlebar`), as Photoshop does on Windows. macOS
+/// keeps its traffic lights over the integrated title strip.
+const CUSTOM_TITLEBAR: bool = !cfg!(target_os = "macos");
+
 /// The main window: 1440 × 900 (shrunk to fit the monitor, and maximized on the first frame
 /// when it still doesn't fit, `work_area::fit_window`), centred on the main monitor. Without
 /// `centered`, Windows cascades each new window from the top-left corner, so it opened at a
@@ -53,6 +66,7 @@ fn native_options() -> eframe::NativeOptions {
             .with_inner_size([1440.0, 900.0])
             .with_min_inner_size([760.0, 480.0])
             .with_drag_and_drop(true)
+            .with_decorations(!CUSTOM_TITLEBAR)
             .with_fullsize_content_view(true)
             .with_titlebar_shown(false)
             .with_title_shown(false),
@@ -64,9 +78,58 @@ fn native_options() -> eframe::NativeOptions {
     }
 }
 
+/// Parse a `--control` / `PHOTOCRAFT_CONTROL_PORT` value. An unparseable port is an error that
+/// names the value (issue #701): silently running with no control server leaves a launcher or
+/// agent unable to tell a typo from a successful grant.
+fn parse_control_port(value: &str, source: &str) -> Result<u16, String> {
+    value.trim().parse().map_err(|_| format!("{source}: `{value}` is not a valid port (expected a number from 0 to 65535)"))
+}
+
+/// Process exit status for the collected `--control` / `PHOTOCRAFT_CONTROL_PORT` errors: `None`
+/// when there are none, else 2 (a command-line usage error), never 0.
+fn control_args_exit_code(errors: &[String]) -> Option<i32> {
+    if errors.is_empty() { None } else { Some(2) }
+}
+
+#[cfg(test)]
+mod control_port_tests {
+    use super::{control_args_exit_code, parse_control_port};
+
+    #[test]
+    fn control_port_errors_exit_non_zero() {
+        assert_eq!(control_args_exit_code(&[]), None);
+        let errors = vec![parse_control_port("nope", "--control").unwrap_err()];
+        assert_eq!(control_args_exit_code(&errors), Some(2));
+    }
+
+    #[test]
+    fn control_port_accepts_valid_numbers() {
+        assert_eq!(parse_control_port("50494", "--control"), Ok(50494));
+        assert_eq!(parse_control_port(" 8080 ", "--control"), Ok(8080));
+        assert_eq!(parse_control_port("0", "PHOTOCRAFT_CONTROL_PORT"), Ok(0));
+    }
+
+    #[test]
+    fn control_port_rejects_unparseable_values_naming_them() {
+        // Out of range, a following flag eaten as the value, and an empty value all fail,
+        // naming the offending value in the message.
+        let err = parse_control_port("78787", "--control").unwrap_err();
+        assert!(err.contains("78787"), "{err}");
+        assert!(parse_control_port("--safe-gpu", "--control").is_err());
+        assert!(parse_control_port("", "--control").is_err());
+    }
+}
+
 fn main() -> eframe::Result {
     crash_guard::install_hook();
-    let mut control_port: Option<u16> = std::env::var("PHOTOCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
+    let mut control_port: Option<u16> = None;
+    let mut control_arg_errors: Vec<String> = Vec::new();
+    if let Some(value) = std::env::var("PHOTOCRAFT_CONTROL_PORT").ok().filter(|v| !v.trim().is_empty()) {
+        match parse_control_port(&value, "PHOTOCRAFT_CONTROL_PORT") {
+            Ok(port) => control_port = Some(port),
+            Err(error) => control_arg_errors.push(error),
+        }
+    }
     let mut control_token = None;
     let mut control_token_file = None;
     let mut automation_read_root = std::env::var_os("PHOTOCRAFT_AUTOMATION_READ_ROOT").map(std::path::PathBuf::from);
@@ -74,16 +137,24 @@ fn main() -> eframe::Result {
     let mut files = Vec::new();
     let mut safe_gpu = false;
     let mut hosted = false;
+    let mut in_window_menus = std::env::var_os("PHOTOCRAFT_IN_WINDOW_MENUS").is_some_and(|v| !v.is_empty() && v != "0");
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
-            "--control" => control_port = args.next().and_then(|p| p.parse().ok()),
+            "--control" => match args.next() {
+                Some(value) => match parse_control_port(&value, "--control") {
+                    Ok(port) => control_port = Some(port),
+                    Err(error) => control_arg_errors.push(error),
+                },
+                None => control_arg_errors.push("--control: missing port value (expected `--control <port>`)".to_string()),
+            },
             "--control-token" => control_token = args.next(),
             "--control-token-file" => control_token_file = args.next().map(std::path::PathBuf::from),
             "--automation-read-root" => automation_read_root = args.next().map(std::path::PathBuf::from),
             "--automation-write-root" => automation_write_root = args.next().map(std::path::PathBuf::from),
             "--safe-gpu" => safe_gpu = true,
             "--hosted" => hosted = true,
+            "--in-window-menus" => in_window_menus = true,
             "--version" => {
                 println!("photocraft {}", photocraft_engine::build_info::long_version());
                 return Ok(());
@@ -92,6 +163,16 @@ fn main() -> eframe::Result {
             _ if a.starts_with("-psn_") => {}
             _ => files.push(a),
         }
+    }
+
+    // A malformed control port must not silently drop the control server (issue #701): name the
+    // bad value and fail the launch, like `photocraft-cli serve --port` does for the same typo.
+    // Exit status 2 is the usual command-line usage error, so a launcher sees the failure.
+    if let Some(code) = control_args_exit_code(&control_arg_errors) {
+        for error in &control_arg_errors {
+            eprintln!("photocraft: {error}");
+        }
+        std::process::exit(code);
     }
 
     // winit and wgpu dlopen the windowing and GPU libraries, and some of those crates panic when
@@ -212,6 +293,11 @@ fn main() -> eframe::Result {
             }
             let mut app = PhotocraftApp::new(Session::new(), services);
             app.integrated_titlebar = cfg!(target_os = "macos");
+            // The host owns window controls and resizing for its embedded child.
+            app.custom_titlebar = CUSTOM_TITLEBAR && !hosted;
+            // Only the title bar's free gap drags the window, never the menus (mac_window.rs).
+            #[cfg(target_os = "macos")]
+            mac_window::disable_native_title_drag();
             // Long commands and file opens run as background jobs with progress and Cancel (#210).
             app.background_jobs = std::env::var_os("PHOTOCRAFT_INLINE_JOBS").is_none();
             // Displays and their profiles (#569): wait briefly so the first frames already use
@@ -296,7 +382,15 @@ fn main() -> eframe::Result {
             #[cfg(target_os = "macos")]
             {
                 app.services.os_events = Some(apple_events.connect(&cc.egui_ctx));
+                // The macOS menu bar, installed now so winit's default menu doesn't stay up.
+                if !in_window_menus {
+                    app.services.native_menu = mac_menu::install(&cc.egui_ctx, &app);
+                }
             }
+            #[cfg(not(target_os = "macos"))]
+            let _ = in_window_menus;
+            // Where file drags and drops are (winit 0.30 doesn't say).
+            app.services.cursor_pos = cursor::service(cc);
             // Tablet pressure/tilt/eraser (winit drops them): the macOS monitor installed above
             // and the X11 reader write into this feed.
             app.stylus.feed = stylus_feed;

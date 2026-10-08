@@ -29,6 +29,9 @@
 	Open Recent	打开最近文件
 	Clear Recent Files	清除最近文件
 	Close	关闭
+	Minimize	最小化
+	Maximize	最大化
+	Restore	向下还原
 	Close All	关闭全部
 	Close Others	关闭其他
 	Save	保存
@@ -311,6 +314,7 @@
 	Smart Object	智能对象
 	Convert to Smart Object	转换为智能对象
 	Convert to Embedded	转换为嵌入对象
+	Convert to Layers	转换为图层
 	Convert to Linked…	转换为链接对象…
 	Edit Contents	编辑内容
 	Replace Contents…	替换内容…
@@ -527,6 +531,7 @@
 	Flame…	火焰…
 	Lens Flare…	镜头光晕…
 	Lighting Effects…	光照效果…
+	Relight…	重新打光…
 	Picture Frame…	相框…
 	Tree…	树…
 	Sharpen	锐化
@@ -902,8 +907,6 @@
 	Create new pattern from the selection	从选区创建图案
 	Create new shape from the current path	从当前路径创建形状
 	Create new snapshot	创建快照
-	Create new style (from the selected type)	创建样式（基于选中的文字）
-	Create new style from the selected layer	从选中的图层创建样式
 	Create new tool preset	创建工具预设
 	Crop Factor	裁切系数
 	Ctrl	Ctrl
@@ -965,11 +968,14 @@
 	Divide…	划分…
 	Document	文档
 	Don't Save	不保存
+	No	否
+	Yes	是
 	Done	完成
 	Dots	点
 	Drag a rectangle around the object	围绕对象拖出矩形
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	在图像上拖动以添加约束；按 Shift 保持水平或垂直；右键单击删除。
 	Drag to move the active shape's path or the Work Path	拖动以移动当前形状的路径或工作路径
+	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	单击：选择锚点 · 拖动：移动锚点、手柄或线段 · {shift}-单击：添加 · {alt}-单击：整个子路径
 	Draw with the Pen tool (P) or make a work path from a selection.	使用钢笔工具（P）绘制，或从选区创建工作路径。
 	Drop an image or PSD anywhere to open it.	将图像或 PSD 拖放到任意位置即可打开。
 	Native file drag-and-drop is unavailable	Wayland 上不支持原生文件拖放
@@ -1500,6 +1506,7 @@
 	Comic Book	漫画
 	Conform	拉伸
 	Content-Aware Fill needs a selection on a pixel layer	内容识别填充需要像素图层上的选区
+	Couldn't place {name}: {error}	无法置入 {name}：{error}
 	Could not transform: the layer is empty	无法变换：图层为空
 	Could not use Perspective Warp: the layer is empty	无法使用透视变形：图层为空
 	Could not use Puppet Warp: no opaque pixels	无法使用操控变形：没有不透明像素
@@ -1604,6 +1611,7 @@
 	Paint Bucket Tool	油漆桶工具
 	Paints from the document's opening state	从文档打开时的状态绘制
 	Path Selection Tool	路径选择工具
+	Direct Selection Tool	直接选择工具
 	Pattern Overlay	图案叠加
 	Pen Pressure	钢笔压力
 	Pen Tilt	钢笔倾斜
@@ -1794,6 +1802,7 @@
 	Light gray	浅灰色
 	Line	线条
 	Lines	线条
+	Lossless	无损
 	Lowercase extension	小写扩展名
 	Maximize psd compatibility	最大化 PSD 兼容性
 	Medium gray	中灰色
@@ -1922,7 +1931,6 @@
 	5 x 5	5 × 5
 	Grid:	网格：
 	Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)	冻结套索：拖动以冻结区域，按住 Alt 拖动以解冻 (L)
-
 	Shadow Clipping Warning (U)	阴影剪切警告 (U)
 	Highlight Clipping Warning (O)	高光剪切警告 (O)
 	Show Lab Color Readouts	显示 Lab 颜色读数
@@ -1931,9 +1939,7 @@
 	Show Skin Tone Indicator	显示肤色指示线
 	Tone Histogram	色调直方图
 	Show Selected Region	显示选定区域
-
 cameraRaw	Light	光线
-
 # Camera Raw: contextual controls and window title
 	Camera Raw Filter ({layer})	Camera Raw 滤镜（{layer}）
 cameraRaw	Lights	亮调
@@ -2048,7 +2054,6 @@ cameraRaw	Blending	混合
 	Use tablet pressure	使用数位板压感
 	Vulkan	Vulkan
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	没有可用于生成选区的路径：请用钢笔工具绘制路径，或在路径面板中选择路径。
-
 # Layer navigation, copy transforms and cancellable opening (labels added on main since this catalog).
 	Cancel opening	取消打开
 	Cancelled opening {name}	已取消打开 {name}
@@ -2059,7 +2064,6 @@ cameraRaw	Blending	混合
 	Opening…	正在打开…
 	Reading…	正在读取…
 	Working…	正在处理…
-
 # Rendering mode and recovery
 	Rendering Mode	渲染模式
 	Automatic (recommended)	自动（推荐）
@@ -2076,3 +2080,64 @@ cameraRaw	Blending	混合
 	Details	详细信息
 	Rendering mode	渲染模式
 	Edit Type	编辑文字
+
+
+	New Style…	新建样式…
+	Style {name} saved	已保存样式 {name}
+
+	Create new style (from the selected type)	新建样式（基于所选文本）
+	Create new style from the selected layer	从所选图层新建样式
+
+	Make Default	设为默认
+	Reset to Default	重置为默认
+	Full-resolution preview unavailable	全分辨率预览不可用
+	No patterns	无图案
+	Enable {name}	启用{name}
+	Hold Alt while drawing for straight segments	绘制中按住 Alt 可逐点连接直线
+	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	拖动圈选或逐点绘制 · 圈选中按住 Alt 画直线 · {add} 添加 · 起笔前按 {sub} 减去
+	Move	移动
+	Extend	扩展
+	Structure:	结构：
+	Content-Aware Move Tool	内容感知移动工具
+	TIFF Options	TIFF 选项
+	Including layers will increase file size.	包含图层会增加文件大小。
+	Discard Layers and Save a Copy	扔掉图层并存储副本
+	Don't show again	不再显示
+	Save failed: {error}	存储失败：{error}
+	Save cancelled	已取消存储
+	Magnetic Lasso Tool	磁性套索工具
+	Frequency	频率
+	Use tablet pressure to change pen width	使用绘图板压力以更改钢笔宽度
+
+# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+	About	关于
+	Contributors	贡献者
+	Models	模型
+	Sort	排序
+	Username	用户名
+	Display name	显示名称
+	Real name	真实姓名
+	Reverse the order	反转顺序
+	Grab bag	列表
+	Table	表格
+	Name (A–Z)	名称 (A–Z)
+	Merged PRs	已合并的 PR
+	Commits	提交
+	Lines added	新增行数
+	Lines deleted	删除行数
+	Line delta	行数增减
+	Binary assets added	新增二进制文件
+	Binary assets removed	删除二进制文件
+	First commit	首次提交
+	First	首次
+	Last commit	最近提交
+	Last	最近
+	Contributors: {contributors} · Commits: {commits}	贡献者：{contributors} · 提交：{commits}
+	No contributor data was built into this copy.	此副本未内置贡献者数据。
+	No model credits were built into this copy.	此副本未内置模型致谢。
+	Company	公司
+	Model	模型
+	Version	版本
+	% of all commits	占全部提交的 %
+	Lines +/−	行数 +/−
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}：{prs} 个 PR，{commits} 次提交，行 +{added} / −{deleted}（Δ {delta}），二进制文件 +{binAdded} / −{binDeleted}，{first} – {last}

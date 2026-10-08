@@ -188,6 +188,7 @@ mod tests {
     fn hosted_save_uses_scoped_io_even_when_ambient_file_commands_are_denied() {
         let mut app = app(Arc::new(|_, _| Ok(())));
         app.services.automation_command = Some(Box::new(|_, _| Err("ambient IO denied".into())));
+        app.services.automation_authorize = Some(|_, _| Err(EngineError::Other("ambient engine IO denied".into())));
         app.automation_input = true;
         let id = app.session.active().unwrap().doc.id;
         app.jobs.host_target = Some((id, "photo.pcraft".into(), "preview.png".into()));
@@ -196,9 +197,14 @@ mod tests {
         let response = crate::control::handle(&mut app, &ctx, &request);
         let crate::control::Outcome::Done(value) = response else { panic!("expected an immediate job response") };
         assert_eq!(value["ok"], true);
+        assert!(app.session.authorize.is_none(), "control request leaked its authorization gate");
         let job = photocraft_engine::jobs::JobId(value["result"]["job"].as_u64().unwrap());
         app.session.wait_job(job).unwrap();
         assert!(!hosted_save(&app, "file.saveAs"));
+        let (request, _) = crate::ControlRequest::new("ui.menu.invoke", json!({"id": "file.saveAs"}));
+        let response = crate::control::handle(&mut app, &ctx, &request);
+        let crate::control::Outcome::Done(value) = response else { panic!("expected an authorization error") };
+        assert_eq!(value["ok"], false);
     }
 
     #[test]
