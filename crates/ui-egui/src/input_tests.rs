@@ -430,8 +430,11 @@ fn eyedropper_and_alt_sampling_show_a_pipette() {
     h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
     assert_eq!(cursor(&mut h), egui::CursorIcon::None, "⌥ samples with a pipette");
     h.state_mut().run("prefs.set", json!({"values": {"cursors.other": "precise"}})).unwrap();
-    assert_eq!(cursor(&mut h), egui::CursorIcon::Crosshair, "Precise keeps the crosshair");
+    // Windows draws a visible black/white crosshair on the canvas (#737) and
+    // hides its inverting system cursor; other platforms use the system one.
+    let precise = if cfg!(target_os = "windows") { egui::CursorIcon::None } else { egui::CursorIcon::Crosshair };
+    assert_eq!(cursor(&mut h), precise, "Precise keeps the crosshair");
     h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
     h.state_mut().ui.tool = crate::state::Tool::Eyedropper;
-    assert_eq!(cursor(&mut h), egui::CursorIcon::Crosshair);
+    assert_eq!(cursor(&mut h), precise);
 }
