@@ -1,5 +1,5 @@
 //! GPU vs CPU parity: every blend mode, adjustment, group/clip/mask/fill combination must match
-//! the reference compositor within 2/255 (premultiplied). Skips when no GPU adapter exists.
+//! the reference compositor within 1/255 plus f32 rounding (premultiplied). Skips when no GPU adapter exists.
 
 use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::adjust::{CurvePoint, HueRange, LevelsChannel};
@@ -7,7 +7,10 @@ use photocraft_doc::{Adjustment, Document, Fill, GradientStyle, Layer, LayerCont
 use photocraft_geom::{Rect, Size};
 use photocraft_gpu::{Compositor, render_to_vec};
 
-const TOL: f32 = 1.0 / 255.0;
+// Allow the existing one-level budget plus f32 rounding from premultiplying
+// alpha and subtracting. A GPU alpha just below 1 can otherwise reject an
+// exact one-level difference; this does not admit another quantized level.
+const TOL: f32 = 1.0 / 255.0 + 4.0 * f32::EPSILON;
 
 /// Concurrent wgpu instances in one process segfault on some drivers (RADV), so the GPU tests
 /// take this lock and hold it until their device is dropped.
@@ -118,6 +121,16 @@ fn worst_diff(cpu: &[[f32; 4]], gpu: &[[f32; 4]]) -> (f32, usize) {
         }
     }
     worst
+}
+
+#[test]
+fn parity_budget_accepts_one_level_with_float_rounding_but_rejects_two() {
+    let cpu = [[0.46666667, 0.9019608, 0.89411765, 1.0]];
+    let gpu = [[0.46666664, 0.89803916, 0.8941176, 0.99999994]];
+    assert!(worst_diff(&cpu, &gpu).0 <= TOL);
+    let two_levels = [[cpu[0][0], cpu[0][1] - 2.0 / 255.0, cpu[0][2], 1.0]];
+    assert!(worst_diff(&cpu, &two_levels).0 > TOL);
+    assert!(worst_diff(&cpu, &[[f32::NAN, 0.0, 0.0, 1.0]]).0 > TOL);
 }
 
 /// GPU (whole textures, then pages) vs CPU over `rect`: Err with the worst pixel if over the
