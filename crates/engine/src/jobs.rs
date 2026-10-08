@@ -717,6 +717,10 @@ impl Session {
         crate::edit_menu_cmds::after_command(self, id);
         crate::automate_cmds::after_command(self, id);
         self.sync_preset_store();
+        if journal {
+            self.history_cache.dirty = true;
+            self.poll_history_cache();
+        }
         if !journal {
             return;
         }
