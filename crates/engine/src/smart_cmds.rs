@@ -294,10 +294,15 @@ pub fn apply_smart_filters(placed: &Surface, sm: &SmartObject, canvas: Rect) -> 
 /// Renders a smart object from its source. `Ok(None)` when the source is unavailable (a missing
 /// linked file, or a PSD placed layer without embedded data): callers keep the existing cache.
 pub fn render(doc: &Document, sm: &SmartObject) -> Result<Option<Surface>> {
-    let Some((name, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return Ok(None) };
-    let img = match sm.stack_mode {
-        Some(mode) => stack_image(&name, &bytes, doc.pixel_format(), mode)?,
-        None => source_image(&name, &bytes, doc.pixel_format())?,
+    let source = if sm.raw_development.is_some() { sm.raw_decode_source.as_ref().unwrap_or(&sm.source) } else { &sm.source };
+    if sm.raw_development.is_some() && !matches!(source, SmartSource::Embedded { .. }) {
+        return Err(other("RAW sensor data must be embedded"));
+    }
+    let Some((name, bytes)) = source_bytes(&doc.metadata, source) else { return Ok(None) };
+    let img = match (&sm.raw_development, sm.stack_mode) {
+        (Some(settings), _) => crate::raw_develop_cmds::source_image(doc, &name, &bytes, settings)?,
+        (None, Some(mode)) => stack_image(&name, &bytes, doc.pixel_format(), mode)?,
+        (None, None) => source_image(&name, &bytes, doc.pixel_format())?,
     };
     // Through the warp (source space) and the transform in one pass; whole-pixel moves are exact.
     let placed = match &sm.perspective {
@@ -616,7 +621,21 @@ fn set_source(s: &mut Session, p: &Value, label: &str, keep_psd: bool, make: imp
     let id = layer_param(s, p)?;
     s.edit(label, |doc, _| {
         let new = make(&doc.metadata, &smart(doc, id)?.source)?;
-        smart_mut(doc, id)?.source = new;
+        let old = smart(doc, id)?;
+        if old.raw_development.is_some() && matches!(new, SmartSource::Linked { .. }) {
+            return Err(other("RAW development requires embedded camera data; linked RAW replacement is not supported"));
+        }
+        let new_bytes = source_bytes(&doc.metadata, &new);
+        let unchanged = source_bytes(&doc.metadata, &old.source).zip(new_bytes.as_ref()).is_some_and(|((_, a), (_, b))| a.as_slice() == b.as_slice());
+        let is_raw = new_bytes.is_some_and(|(_, bytes)| photocraft_io::raw::is_raw(&bytes));
+        let sm = smart_mut(doc, id)?;
+        sm.source = new;
+        if !unchanged {
+            sm.raw_decode_source = None;
+            if !is_raw {
+                sm.raw_development = None;
+            }
+        }
         if !keep_psd {
             detach_psd(doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?);
         }
@@ -645,6 +664,9 @@ fn export_contents(s: &mut Session, p: &Value) -> Result<Value> {
 fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
+    if smart(&st.doc, id)?.raw_development.is_some() {
+        return Err(other("RAW contents use RAW Development; they cannot be replaced with a decoded child document"));
+    }
     let parent = st.doc.id;
     let (name, bytes) = source_bytes(&st.doc.metadata, &smart(&st.doc, id)?.source).ok_or_else(|| other("the smart object's contents are unavailable"))?;
     let mut child = decode_source(&name, &bytes)?;

@@ -279,6 +279,10 @@ pub enum ContentM {
         live: Option<LiveShape>,
     },
     Smart {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        raw_development: Option<photocraft_doc::RawDevelopment>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        raw_decode_source: Option<SmartSourceM>,
         source: SmartSourceM,
         transform: Affine,
         smart_filters: Vec<SmartFilter>,

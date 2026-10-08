@@ -585,6 +585,8 @@ mod tests {
             let l = Layer::new(
                 "so",
                 LayerContent::Smart(SmartObject {
+                    raw_development: None,
+                    raw_decode_source: None,
                     source: SmartSource::Linked { path: String::new() },
                     transform: photocraft_geom::Affine::IDENTITY,
                     smart_filters: vec![],

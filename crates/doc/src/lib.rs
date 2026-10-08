@@ -15,6 +15,7 @@ pub mod comps;
 pub mod effects;
 pub mod mode;
 pub mod pattern;
+pub mod raw_development;
 pub mod slices;
 pub mod text;
 pub mod text_styles;
@@ -38,6 +39,7 @@ pub use pattern::Pattern;
 pub use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
 pub use photocraft_geom::{Affine, Rect, Size};
 pub use photocraft_raster::Surface;
+pub use raw_development::{RawDemosaic, RawDevelopment, RawWhiteBalance};
 use serde::{Deserialize, Serialize};
 pub use slices::{Slice, SliceKind, SliceOrigin, Slices};
 pub use text_styles::TextStyles;
@@ -353,6 +355,10 @@ fn normalize_runs<S: Clone>(text: &str, runs: Vec<(usize, S)>, base: S) -> Vec<(
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SmartObject {
+    /// Sensor settings for an embedded RAW source; never a pixel smart filter.
+    pub raw_development: Option<RawDevelopment>,
+    /// Optional losslessly unpacked sensor DNG. `source` always retains the original camera file.
+    pub raw_decode_source: Option<SmartSource>,
     /// Embedded source file bytes (PSD, PNG, …) or linked path.
     pub source: SmartSource,
     pub transform: Affine,
@@ -385,6 +391,8 @@ impl SmartObject {
     pub fn new(source: SmartSource, transform: Affine, cache: Option<Surface>) -> Self {
         Self {
             source,
+            raw_development: None,
+            raw_decode_source: None,
             transform,
             smart_filters: Vec::new(),
             cache,

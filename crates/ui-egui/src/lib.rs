@@ -107,6 +107,7 @@ pub mod proxy;
 pub mod puppet_ui;
 pub mod quick_pick;
 pub mod rasterize_prompt;
+mod raw_develop_ui;
 pub mod retouch_ui;
 mod rgb_histogram;
 pub mod rulers;
@@ -410,6 +411,7 @@ pub struct PhotocraftApp {
     pub(crate) gradient: gradient_ui::LiveGradient,
     /// Filter › Camera Raw Filter dialog (camera_raw_ui).
     pub(crate) camera_raw: Option<camera_raw_ui::CameraRawDialog>,
+    pub(crate) raw_development: Option<raw_develop_ui::Dialog>,
     /// Filter › Adaptive Wide Angle dialog (wide_angle_ui).
     pub(crate) wide_angle: Option<wide_angle_ui::WideAngleDialog>,
     /// Signature of the image we last put on the OS clipboard (to tell ours from other apps').
@@ -530,6 +532,7 @@ impl PhotocraftApp {
             distort: Default::default(),
             gradient: Default::default(),
             camera_raw: None,
+            raw_development: None,
             wide_angle: None,
             tone_hist: None,
             doc_hist: None,
@@ -629,6 +632,9 @@ impl PhotocraftApp {
             && let Some(authorize) = self.services.automation_command.as_ref()
         {
             authorize(id, &params)?;
+        }
+        if id == "layer.smartObjects.editContents" && raw_develop_ui::is_raw(self, &params) {
+            return raw_develop_ui::open(self, &params);
         }
         if let Some(r) = transform_tool::intercept(self, id) {
             return r;
@@ -1097,6 +1103,7 @@ impl eframe::App for PhotocraftApp {
         tiff_options_ui::show(self, &ctx);
         distort_ui::show(self, &ctx);
         camera_raw_ui::show(self, &ctx);
+        raw_develop_ui::show(self, &ctx);
         wide_angle_ui::show(self, &ctx);
         canvas::extra_windows(self, &ctx);
         notices::show(self, &ctx);

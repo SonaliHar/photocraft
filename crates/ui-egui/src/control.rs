@@ -146,11 +146,20 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
 
 fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
+    if req.method == "app.open" {
+        if p.get("rawSmartObject").is_some_and(|v| !v.is_boolean()) {
+            return err("rawSmartObject must be a boolean");
+        }
+        if p.get("rawSensorPath").is_some_and(|v| v.as_str().is_none_or(str::is_empty)) {
+            return err("rawSensorPath must be a nonempty scoped path");
+        }
+    }
     let s = |k: &str| p.get(k).and_then(Value::as_str);
     let u = |k: &str| p.get(k).and_then(Value::as_u64);
     let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(true);
     match req.method.as_str() {
-        "app.handoff" => ok(json!({"version": 2, "replace": true, "hiddenStart": true})),
+        "app.handoff" => ok(json!({"version": 2, "replace": true, "hiddenStart": true, "rawSmartObject": 1, "rawSensorAdapter": 1})),
+        "ui.rawDevelopment" => run_waiting(app, wait, |app| crate::raw_develop_ui::control(app, p)),
         "ui.context.choose" => {
             let Some(id) = s("id") else { return err("missing `id`") };
             let Some(menu) = app.ui.canvas_tool_menu.as_ref() else { return err("no canvas context menu is open") };
@@ -575,13 +584,22 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         }
         "app.open" => match s("path") {
             Some(path) if app.background_jobs && app.services.background_automation_read.is_some() && !crate::preset_files_ui::is_preset_file(path) => {
-                match crate::control_files::open_with_mode(app, path, req.params.get("replace").and_then(Value::as_bool).unwrap_or(false)) {
+                match crate::control_files::open_with_sensor(
+                    app,
+                    path,
+                    req.params.get("replace").and_then(Value::as_bool).unwrap_or(false),
+                    req.params.get("rawSmartObject").and_then(Value::as_bool).unwrap_or(false),
+                    req.params.get("rawSensorPath").and_then(Value::as_str),
+                ) {
                     Ok(photocraft_engine::jobs::Started::Job(job)) => Outcome::AfterJob(job),
                     Ok(photocraft_engine::jobs::Started::Done(result)) => ok(result),
                     Err(error) => err(error),
                 }
             }
             Some(path) => {
+                if p.get("rawSmartObject").and_then(Value::as_bool) == Some(true) || p.get("rawSensorPath").is_some() {
+                    return err("RAW smart-object import requires scoped background read authority");
+                }
                 let opened = match app.services.automation_read.as_mut() {
                     Some(read) => read(path),
                     None => Err("automation read authority is not configured".into()),

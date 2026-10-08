@@ -296,6 +296,8 @@ impl Ctx<'_> {
                 _ => None,
             };
             LayerContent::Smart(SmartObject {
+                raw_development: None,
+                raw_decode_source: None,
                 source: SmartSource::Linked { path: id },
                 transform,
                 smart_filters: stack.filters,

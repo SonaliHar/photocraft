@@ -15,7 +15,25 @@ pub fn open(app: &mut PhotocraftApp, path: &str) -> Result<Started, String> {
     open_with_mode(app, path, false)
 }
 
+#[cfg(test)]
 pub fn open_with_mode(app: &mut PhotocraftApp, path: &str, replace: bool) -> Result<Started, String> {
+    open_with_options(app, path, replace, false)
+}
+
+#[cfg(test)]
+pub fn open_with_options(app: &mut PhotocraftApp, path: &str, replace: bool, raw_smart: bool) -> Result<Started, String> {
+    open_with_sensor(app, path, replace, raw_smart, None)
+}
+
+pub fn open_with_sensor(app: &mut PhotocraftApp, path: &str, replace: bool, raw_smart: bool, sensor_path: Option<&str>) -> Result<Started, String> {
+    if sensor_path.is_some() && !raw_smart {
+        return Err("rawSensorPath requires rawSmartObject".into());
+    }
+    let sensor_path = sensor_path.map(str::to_string);
+    crate::raw_develop_ui::settle(app);
+    if app.raw_development.is_some() {
+        return Err("Commit or cancel RAW Development before opening another document".into());
+    }
     let previous = if replace { app.session.active().map(|state| state.doc.id) } else { None };
     if let Some((doc, _)) = app.jobs.host_snapshots.get(path) {
         let name = doc.name.clone();
@@ -37,7 +55,13 @@ pub fn open_with_mode(app: &mut PhotocraftApp, path: &str, replace: bool) -> Res
             move |ctx| {
                 ctx.check()?;
                 let (name, bytes) = read(&path).map_err(EngineError::Other)?;
-                let imported = photocraft_io::import(&name, &bytes).map_err(|e| EngineError::Other(e.to_string()))?;
+                let sensor = sensor_path.as_ref().map(|path| read(path).map_err(EngineError::Other)).transpose()?;
+                let imported = if raw_smart {
+                    photocraft_io::raw_smart::import_with_sensor(&name, &bytes, sensor.as_ref().map(|(name, bytes)| (name.as_str(), bytes.as_slice())))
+                } else {
+                    photocraft_io::import(&name, &bytes)
+                }
+                .map_err(|e| EngineError::Other(e.to_string()))?;
                 ctx.check()?;
                 Ok((name, imported))
             },
@@ -58,6 +82,10 @@ fn close_replaced(session: &mut photocraft_engine::Session, previous: Option<pho
 }
 
 pub fn stash(app: &mut PhotocraftApp, path: &str, preview: &str) -> Result<Started, String> {
+    crate::raw_develop_ui::settle(app);
+    if app.raw_development.is_some() {
+        return Err("Commit or cancel RAW Development before saving".into());
+    }
     if !path.to_ascii_lowercase().ends_with(".pcraft") || !preview.to_ascii_lowercase().ends_with(".png") {
         return Err("stash requires a .pcraft project and a .png preview".into());
     }
