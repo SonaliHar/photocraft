@@ -35,11 +35,17 @@ pub fn open_with_sensor(app: &mut PhotocraftApp, path: &str, replace: bool, raw_
         return Err("Commit or cancel RAW Development before opening another document".into());
     }
     let previous = if replace { app.session.active().map(|state| state.doc.id) } else { None };
-    if let Some((doc, _)) = app.jobs.host_snapshots.get(path) {
+    if let Some((doc, revision)) = app.jobs.host_snapshots.get(path) {
         let name = doc.name.clone();
         let doc = (**doc).clone();
+        let revision = *revision;
         close_replaced(&mut app.session, previous);
         app.session.add_document(doc, Some(path.to_string()));
+        if let Some(state) = app.session.active_mut() {
+            // A pending stash owns this revision. Resetting it to zero makes
+            // Save reject the very snapshot that is already being written.
+            state.revision = revision;
+        }
         app.sync_views();
         return Ok(Started::Done(json!({"path": path, "name": name, "warnings": []})));
     }
@@ -179,6 +185,8 @@ mod tests {
             recorded.lock().unwrap().push((path.to_string(), bytes.to_vec()));
             Ok(())
         }));
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        let revision = app.session.active().unwrap().revision;
         let started = stash(&mut app, "photo.jpg.pcraft", "photo.jpg.photocraft.png").unwrap();
         assert!(matches!(started, Started::Job(_)));
         assert!(app.session.active_job().is_none(), "a save must not lock editing");
@@ -186,8 +194,15 @@ mod tests {
         let restored = open(&mut app, "photo.jpg.pcraft").unwrap();
         assert!(matches!(restored, Started::Done(_)), "restore must not wait for disk");
         assert_eq!(app.session.active().unwrap().doc.name, "photo");
+        let restored_revision = app.session.active().unwrap().revision;
+        let repeated_save = stash(&mut app, "photo.jpg.pcraft", "photo.jpg.photocraft.png");
+        let dirty_while_saving = app.session.active().unwrap().is_dirty();
         gate.store(true, Ordering::Relaxed);
         finish(&mut app, started).unwrap();
+        assert_eq!(restored_revision, revision, "restore must retain the pending snapshot's revision");
+        assert!(matches!(repeated_save, Ok(Started::Job(_))), "Save should reuse the pending snapshot: {repeated_save:?}");
+        assert!(dirty_while_saving);
+        assert!(!app.session.active().unwrap().is_dirty(), "completion should mark the restored revision saved");
         assert_eq!(writes.lock().unwrap().len(), 2);
     }
 
