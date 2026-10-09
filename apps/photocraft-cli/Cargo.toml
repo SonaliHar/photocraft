@@ -4,6 +4,7 @@ description = "Headless Photocraft: convert, inspect, run commands, batch, MCP s
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+build = "build.rs"
 
 [features]
 # Open HEIC/HEIF photos (the optional photocraft-heif crate). Not default so distributors choose
@@ -33,4 +34,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [dev-dependencies]
 flate2 = { workspace = true }
+[build-dependencies]
+# Icon + VERSIONINFO for photocraft-cli.exe; build.rs only uses it when targeting Windows.
+winresource = "0.1"
 

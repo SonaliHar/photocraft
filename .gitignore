@@ -20,3 +20,4 @@ target/
 .DS_Store
 Thumbs.db
 .idea/
+__pycache__/
