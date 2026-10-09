@@ -1265,25 +1265,33 @@ impl Compositor {
             if let Ok(mut view) = staging.slice(..).get_mapped_range_mut() {
                 let default = default_nonzero.then(|| convert_tile(surface, None, kind, TileCoord::new(0, 0)));
                 let row = TILE_SIZE as usize * bpp;
-                for c in region.tiles() {
-                    let converted;
-                    let bytes = match (surface.tile(c), &default) {
-                        (Some(t), _) => {
-                            converted = convert_tile(surface, Some(t), kind, c);
-                            stats.tiles_uploaded += 1;
-                            stats.bytes_uploaded += converted.len();
-                            r.tiles.insert(c, t.clone());
-                            &converted
-                        }
-                        (None, Some(d)) => d,
-                        (None, None) => continue,
-                    };
-                    let tr = c.rect();
-                    let (ox, oy) = ((tr.x0 - region.x0) as usize, (tr.y0 - region.y0) as usize);
-                    for (y, src) in bytes.chunks_exact(row).enumerate() {
-                        let o = ((oy + y) * w + ox) * bpp;
-                        if o + row <= view.len() {
-                            view.slice(o..o + row).copy_from_slice(src);
+                // Tiles are converted on all cores a batch at a time (a batch is a few tile rows,
+                // so the transient copies stay small); the copy into the mapped buffer stays here.
+                let coords: Vec<TileCoord> = region.tiles().collect();
+                for batch in coords.chunks(64) {
+                    let converted = par_map(batch.to_vec(), |c| surface.tile(c).map(|t| convert_tile(surface, Some(t), kind, c)));
+                    for (c, conv) in batch.iter().copied().zip(converted) {
+                        let owned;
+                        let bytes = match (conv, &default) {
+                            (Some(b), _) => {
+                                stats.tiles_uploaded += 1;
+                                stats.bytes_uploaded += b.len();
+                                if let Some(t) = surface.tile(c) {
+                                    r.tiles.insert(c, t.clone());
+                                }
+                                owned = b;
+                                &owned
+                            }
+                            (None, Some(d)) => d,
+                            (None, None) => continue,
+                        };
+                        let tr = c.rect();
+                        let (ox, oy) = ((tr.x0 - region.x0) as usize, (tr.y0 - region.y0) as usize);
+                        for (y, src) in bytes.chunks_exact(row).enumerate() {
+                            let o = ((oy + y) * w + ox) * bpp;
+                            if o + row <= view.len() {
+                                view.slice(o..o + row).copy_from_slice(src);
+                            }
                         }
                     }
                 }
@@ -1703,10 +1711,42 @@ fn write_tile(queue: &wgpu::Queue, r: &Resident, c: TileCoord, bytes: &[u8]) {
     );
 }
 
+/// Half-float bits for every 16-bit sample, built from the same two functions the generic
+/// path uses (`read_sample`, then `f32_to_f16`), so the result is identical to it.
+fn u16_to_f16_lut() -> &'static [u16] {
+    static LUT: std::sync::OnceLock<Vec<u16>> = std::sync::OnceLock::new();
+    LUT.get_or_init(|| (0..=u16::MAX).map(|v| f32_to_f16(photocraft_color::read_sample(&v.to_ne_bytes(), SampleType::U16, 0))).collect())
+}
+
+/// Maps `items` in parallel (in order); sequentially on wasm.
+#[cfg(not(target_arch = "wasm32"))]
+fn par_map<T: Send, R: Send>(items: Vec<T>, f: impl Fn(T) -> R + Sync + Send) -> Vec<R> {
+    use rayon::prelude::*;
+    items.into_par_iter().map(f).collect()
+}
+#[cfg(target_arch = "wasm32")]
+fn par_map<T, R>(items: Vec<T>, f: impl Fn(T) -> R) -> Vec<R> {
+    items.into_iter().map(f).collect()
+}
+
 /// Tile pixels in the texture's format. `tile = None` gives the default pixel everywhere.
 fn convert_tile(surface: &Surface, tile: Option<&Arc<Tile>>, kind: TexKind, c: TileCoord) -> Vec<u8> {
     if let (Some(t), TexKind::Rgba8Direct | TexKind::R8Direct) = (tile, kind) {
         return t.bytes().to_vec();
+    }
+    // 16-bit RGBA (a developed RAW, a 16-bit TIFF): a table lookup per sample instead of the
+    // generic per-pixel float path.
+    if let (Some(t), TexKind::Rgba16F) = (tile, kind) {
+        let fmt = surface.format();
+        if fmt.sample == SampleType::U16 && fmt.mode == photocraft_color::ColorMode::Rgb && fmt.alpha {
+            let lut = u16_to_f16_lut();
+            let src = t.bytes();
+            let mut out = vec![0u8; src.len()];
+            for (o, s) in out.chunks_exact_mut(2).zip(src.chunks_exact(2)) {
+                o.copy_from_slice(&lut[u16::from_ne_bytes([s[0], s[1]]) as usize].to_le_bytes());
+            }
+            return out;
+        }
     }
     let n = (TILE_SIZE * TILE_SIZE) as usize;
     let fmt = surface.format();
@@ -1895,6 +1935,46 @@ pub fn render_to_vec_stats(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Deterministic 16-bit RGBA pixels, edge values included.
+    fn rgba16_surface(w: u32, h: u32) -> Surface {
+        let fmt = PixelFormat::new(photocraft_color::ColorMode::Rgb, SampleType::U16, true);
+        let mut s = Surface::new(fmt);
+        let mut x = 0x9e37_79b9u32;
+        let mut bytes = Vec::with_capacity((w * h * 8) as usize);
+        for i in 0..(w * h * 4) {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            let v: u16 = match i % 97 {
+                0 => 0,
+                1 => 65535,
+                2 => 1,
+                _ => (x >> 8) as u16,
+            };
+            bytes.extend_from_slice(&v.to_ne_bytes());
+        }
+        s.write_interleaved(Rect::new(0, 0, w as i32, h as i32), &bytes);
+        s
+    }
+
+    #[test]
+    fn rgba16_fast_path_matches_the_generic_conversion_bit_for_bit() {
+        let s = rgba16_surface(300, 300);
+        for c in [TileCoord::new(0, 0), TileCoord::new(1, 0), TileCoord::new(1, 1)] {
+            let tile = s.tile(c).expect("tile written");
+            let fast = convert_tile(&s, Some(tile), TexKind::Rgba16F, c);
+            let fmt = s.format();
+            let mut expected = Vec::new();
+            for px in s.read_region(c.rect()).chunks_exact(fmt.channels()) {
+                for v in photocraft_raster::to_rgba(&fmt, px) {
+                    expected.extend(f32_to_f16(v).to_le_bytes());
+                }
+            }
+            assert_eq!(fast.len(), expected.len());
+            assert!(fast == expected, "tile {c:?} differs from the generic conversion");
+        }
+    }
 
     #[test]
     fn half_roundtrip() {

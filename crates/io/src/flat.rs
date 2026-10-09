@@ -79,11 +79,28 @@ pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult,
         // Converted a band of rows at a time: no second full-size copy of the image.
         let row = img.data().len() / (h.max(1) as usize);
         let band = (BAND_BYTES / row.max(1)).max(1);
-        for (i, rows) in img.data().chunks(row.max(1) * band).enumerate() {
+        let bands: Vec<(usize, &[u8])> = img.data().chunks(row.max(1) * band).enumerate().collect();
+        // A few bands are converted at once on separate threads (sequentially on wasm); each
+        // batch is written into the surface in order before the next one starts.
+        let threads = if cfg!(target_arch = "wasm32") { 1 } else { std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 8) };
+        let convert = |(i, rows): (usize, &[u8])| -> Result<(i32, u32, Image), IoError> {
             let n = (rows.len() / row.max(1)) as u32;
             let part = Image::from_raw(w, n, img.layout(), img.sample_type(), rows.to_vec())?.convert(target_layout, csample);
-            let y0 = (i * band) as i32;
-            s.write_interleaved(Rect::new(0, y0, w as i32, y0 + n as i32), part.data());
+            Ok(((i * band) as i32, n, part))
+        };
+        for batch in bands.chunks(threads) {
+            let parts: Vec<Result<(i32, u32, Image), IoError>> = if batch.len() < 2 {
+                batch.iter().map(|b| convert(*b)).collect()
+            } else {
+                std::thread::scope(|scope| {
+                    let handles: Vec<_> = batch.iter().map(|b| scope.spawn(|| convert(*b))).collect();
+                    handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err(IoError::Unsupported("image conversion worker panicked".into())))).collect()
+                })
+            };
+            for part in parts {
+                let (y0, n, part) = part?;
+                s.write_interleaved(Rect::new(0, y0, w as i32, y0 + n as i32), part.data());
+            }
         }
     }
     s.prune();

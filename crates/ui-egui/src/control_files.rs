@@ -122,8 +122,15 @@ pub fn stash(app: &mut PhotocraftApp, path: &str, preview: &str) -> Result<Start
             false,
             move |ctx| {
                 ctx.check()?;
-                let project = photocraft_io::export(&doc, &path, &Default::default()).map_err(|e| EngineError::Other(e.to_string()))?;
-                let render = photocraft_io::export(&doc, &preview, &Default::default()).map_err(|e| EngineError::Other(e.to_string()))?;
+                // The project and its preview are independent encodes of the same snapshot: run
+                // them side by side. Both finish before either result is looked at.
+                let (project, render) = std::thread::scope(|scope| {
+                    let project = scope.spawn(|| photocraft_io::export(&doc, &path, &Default::default()));
+                    let render = photocraft_io::export(&doc, &preview, &Default::default());
+                    (project.join(), render)
+                });
+                let project = project.map_err(|_| EngineError::Other("project encoder stopped unexpectedly".into()))?.map_err(|e| EngineError::Other(e.to_string()))?;
+                let render = render.map_err(|e| EngineError::Other(e.to_string()))?;
                 ctx.check()?;
                 // Each capability write is atomic. Report success only after both.
                 write(&path, &project.bytes).map_err(EngineError::Other)?;
