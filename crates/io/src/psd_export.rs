@@ -1194,8 +1194,10 @@ fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u32) -
         ImageResource::new(ids::GLOBAL_ANGLE, (doc.global_light.angle.round() as i32).to_be_bytes().to_vec()),
         ImageResource::new(ids::GLOBAL_ALTITUDE, (doc.global_light.altitude.round() as i32).to_be_bytes().to_vec()),
     ];
-    if let Some(icc) = &doc.icc_profile {
-        resources.push(ImageResource::new(ids::ICC_PROFILE, icc.to_vec()));
+    match crate::xcf_export::effective_icc(doc) {
+        Ok(Some(icc)) => resources.push(ImageResource::new(ids::ICC_PROFILE, icc)),
+        Ok(None) => {}
+        Err(error) => ex.warnings.push(format!("Cannot represent imported sample interpretation in PSD ICC: {error}")),
     }
     if !doc.guides.horizontal.is_empty() || !doc.guides.vertical.is_empty() {
         resources.push(ImageResource::new(1032, guides_resource(doc)));

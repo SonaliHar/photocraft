@@ -14,6 +14,8 @@ use crate::pinned::{PinnedCorpus, Upstream};
 /// https://github.com/storytold/photocraft-corpus: our Photoshop-authored oracle PSDs
 /// (`photoshop/`). Bump through a PR after committing there.
 pub const PHOTOCRAFT_CORPUS_COMMIT: &str = "f5b1178cab15309e05b7b504545df3c701f6d8fd";
+/// XCF authoring changes are currently local. Set only after the reviewed revision is public.
+pub const XCF_CORPUS_COMMIT: Option<&str> = None;
 /// https://github.com/psd-tools/psd-tools (MIT): `tests/psd_files` (main, 2026-10-05).
 pub const PSD_TOOLS_COMMIT: &str = "96eb134c17b2c65edf4c4151c0f00b802ada86c2";
 /// https://github.com/Agamnentzar/ag-psd (MIT): `test/` (master, 2026-07-02).
@@ -136,3 +138,34 @@ pub const HEIF: PinnedCorpus = PinnedCorpus {
 
 /// Every pinned corpus, in fetch order.
 pub const ALL: &[&PinnedCorpus] = &[&PSD_MIXED, &PSD_TOOLS, &PHOTOSHOP, &HEIF];
+
+/// Original GIMP-authored inputs, independent references and assertions.
+pub fn xcf() -> Result<&'static PinnedCorpus, String> {
+    XCF_CORPUS_COMMIT.ok_or("XCF corpus has no published immutable revision yet; use `cargo xtask corpus --xcf --local` for authoring validation")?;
+    Ok(&XCF)
+}
+
+pub const XCF: PinnedCorpus = PinnedCorpus {
+    name: "xcf",
+    dest: "xcf",
+    upstreams: &[Upstream {
+        prefix: "",
+        repo: "storytold/photocraft-corpus",
+        commit: match XCF_CORPUS_COMMIT {
+            Some(commit) => commit,
+            None => "",
+        },
+        subdir: "xcf",
+        extras: &[("LICENSE-MIT", "LICENSE-MIT"), ("LICENSE-APACHE", "LICENSE-APACHE"), ("xcf/README.md", "README.md")],
+    }],
+    manifest: "xtask/xcf-corpus.sha256",
+    exts: &["xcf", "png", "json", "bin"],
+    subset: false,
+    sources_md: |c| {
+        format!(
+            "# Original GIMP XCF oracle corpus\n\nOriginal artwork authored by PhotoCraft contributors, MIT OR Apache-2.0. Independent GIMP references. Revision: {}. Verified against {}. Local mode may contain unpublished authoring changes; inspect manifest.json for version and coverage.\n",
+            c.upstreams.first().map_or("unpublished", |u| u.commit),
+            c.manifest
+        )
+    },
+};

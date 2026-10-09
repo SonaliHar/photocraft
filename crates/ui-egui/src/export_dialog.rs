@@ -224,6 +224,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     let ext = s_fmt(f);
     let suggested = format!("{stem}.{ext}");
     let path = app.services.pick_save.as_mut().and_then(|p| p(&suggested)).ok_or("cancelled")?;
+    app.validate_document_destination(&path, false)?;
     let out = export_document(&doc, f, None)?;
     let export = app.services.export.as_ref().ok_or("no exporter configured")?;
     let (bytes, warnings) = export(&out, &path, &settings(f))?;

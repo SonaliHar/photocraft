@@ -16,6 +16,7 @@ const DENIED: &str = "automation filesystem access is not granted";
 #[derive(Clone)]
 struct RootCapability {
     dir: Arc<Dir>,
+    identity: PathBuf,
 }
 
 /// Separate directory capabilities for automation reads and writes.
@@ -31,6 +32,49 @@ pub struct AuthorizedWorkspace {
 }
 
 impl AuthorizedWorkspace {
+    /// Check an output through the write capability without obtaining ambient authority.
+    /// Existing XCF contents remain protected even when renamed or hard-linked.
+    pub fn guard_write(&self, path: &str, protected_source: Option<&str>) -> Result<(), AutomationError> {
+        use std::io::Read;
+        crate::files::validate_write_name(Path::new(path), None)?;
+        let relative = relative_path(path)?;
+        let root = self.write.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: write authority is absent")))?;
+        if let (Some(source), Some(read)) = (protected_source, &self.read) {
+            let source = relative_path(source)?;
+            let same_root = read.identity == root.identity;
+            if same_root && source == relative {
+                return Err(AutomationError::BadRequest("the original XCF source is protected; choose a different destination".into()));
+            }
+        }
+        match root.dir.open(&relative) {
+            Ok(mut file) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(source) = protected_source {
+                    let read =
+                        self.read.as_ref().ok_or_else(|| AutomationError::BadRequest("cannot establish source identity without read authority".into()))?;
+                    let original = read.dir.open(relative_path(source)?).map_err(|e| file_error("identify source", source, e))?;
+                    let destination = file.try_clone().map_err(|e| file_error("identify destination", path, e))?;
+                    let a = same_file::Handle::from_file(original.into_std()).map_err(|e| file_error("identify source", source, e))?;
+                    let b = same_file::Handle::from_file(destination.into_std()).map_err(|e| file_error("identify destination", path, e))?;
+                    if a == b {
+                        return Err(AutomationError::BadRequest("an alias of the original XCF source is protected; choose a different destination".into()));
+                    }
+                }
+                let mut prefix = [0; 9];
+                let full = match file.read_exact(&mut prefix) {
+                    Ok(()) => true,
+                    Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => false,
+                    Err(e) => return Err(file_error("validate write", path, e)),
+                };
+                if full && &prefix == b"gimp xcf " {
+                    return Err(AutomationError::BadRequest("an existing XCF destination is protected; choose a different destination".into()));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(file_error("validate write", path, e)),
+        }
+        Ok(())
+    }
     /// Open the configured roots as capabilities. Either authority may be
     /// omitted; omitted authority fails closed.
     pub fn new(read_root: Option<&Path>, write_root: Option<&Path>) -> Result<Self, AutomationError> {
@@ -59,6 +103,7 @@ impl AuthorizedWorkspace {
     /// resolution and file creation relative to the held directory handle, so
     /// a non-existent final target is supported without ambient path access.
     pub fn write(&self, path: &str, bytes: &[u8]) -> Result<(), AutomationError> {
+        self.guard_write(path, None)?;
         let relative = relative_path(path)?;
         let root = self.write.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: write authority is absent")))?;
         let leaf = relative.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -94,7 +139,8 @@ fn open_root(path: Option<&Path>, authority: &str) -> Result<Option<RootCapabili
     }
     let dir = Dir::open_ambient_dir(path, ambient_authority())
         .map_err(|e| AutomationError::Io(format!("cannot open automation {authority} root `{}`: {e}", path.display())))?;
-    Ok(Some(RootCapability { dir: Arc::new(dir) }))
+    let identity = std::fs::canonicalize(path).map_err(|e| AutomationError::Io(format!("cannot identify automation {authority} root: {e}")))?;
+    Ok(Some(RootCapability { dir: Arc::new(dir), identity }))
 }
 
 fn relative_path(raw: &str) -> Result<PathBuf, AutomationError> {

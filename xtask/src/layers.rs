@@ -38,6 +38,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("color", Class::Layer(0)),
     ("raster", Class::Layer(0)),
     ("psd", Class::Standalone),
+    ("xcf", Class::Standalone),
     ("codecs", Class::Standalone),
     // Optional HEIF/HEIC decoder (heic-rs), used only by `codecs` behind its `heif` feature.
     ("heif", Class::Standalone),
@@ -198,11 +199,10 @@ pub fn check(crates: &[Crate]) -> Vec<Violation> {
                 match classify(&d.name) {
                     // Unregistered deps are reported on their own entry.
                     None => {}
-                    Some(Class::Testkit) => {
-                        if d.kind != DepKind::Dev {
-                            out.push(Violation::TestkitAsNormalDep { krate: c.name.clone() });
-                        }
+                    Some(Class::Testkit) if d.kind != DepKind::Dev => {
+                        out.push(Violation::TestkitAsNormalDep { krate: c.name.clone() });
                     }
+                    Some(Class::Testkit) => {}
                     Some(dc) => {
                         let to = dc.layer().unwrap_or(u8::MAX);
                         if to >= layer && !(to == layer && intra_layer_allowed(&c.name, &d.name)) {

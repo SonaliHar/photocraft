@@ -27,6 +27,10 @@ schemars = "1"
 getrandom = { workspace = true }
 cap-std = "4"
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+same-file = "1.0.6"
+
 [dev-dependencies]
+flate2 = { workspace = true }
 rmcp = { version = "3.5", default-features = false, features = ["client", "server", "macros", "transport-io"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "sync", "net", "io-util", "time"] }

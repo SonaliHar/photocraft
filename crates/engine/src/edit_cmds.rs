@@ -369,8 +369,9 @@ fn auto_adjust(s: &mut Session, kind: &str) -> Result<Value> {
     s.edit(label, |doc, _| {
         let sel = doc.selection.clone();
         let mode = doc.mode;
+        let transfer = photocraft_compose::adjust::Transfer::for_doc(doc);
         let surf = doc.layer_mut(id).and_then(|l| l.surface_mut()).ok_or(EngineError::NoLayer(id))?;
-        crate::pixels::adjust_surface(surf, &adj, sel.as_ref(), mode);
+        crate::pixels::adjust_surface_with_transfer(surf, &adj, sel.as_ref(), mode, transfer);
         Ok(())
     })?;
     Ok(Value::Null)

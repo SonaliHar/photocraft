@@ -193,3 +193,9 @@ target = "30-50 end-to-end workflow acceptance tasks driven through MCP or comma
 status = "partial"
 issue = 216
 note = "automation/tests/agent_tasks.rs: 10 MCP tasks"
+
+[[item]]
+id = "FILE-XCF-1"
+target = "GIMP XCF projects open as editable documents with independently verified display fidelity"
+status = "partial"
+note = "2026-10-09: 58 supported GIMP 2.8/2.10/3.x inputs match independent PNG references within 0.8010/255 after CMS conversion; 5 explicit unsupported inputs are rejected separately. RGB/Gray U8/U16/half/F32 linear/nonlinear/perceptual, indexed duplicate identity, masks, groups, raw/RLE/zlib and compatible ICC are covered. Imported policies use whole-document CPU fallback; native saves retain original indexed/ICC provenance. Non-normal operators, text/vector/GEGL editing and XCF writing remain outside this import scope"

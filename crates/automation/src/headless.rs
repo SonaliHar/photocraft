@@ -91,7 +91,11 @@ impl Headless {
             }
             None => Some(requested.to_string()),
         };
+        let source_path = if o.origin.is_read_only() { Some(requested.to_string()) } else { path.clone() };
         let index = self.session.add_document(o.document, path);
+        if let Some(state) = self.session.active_mut() {
+            state.set_import_origin(o.origin, requested, source_path);
+        }
         let d = &self.session.documents()[index];
         Ok(json!({
             "index": index,
@@ -107,9 +111,9 @@ impl Headless {
     /// saves to the document's own path.
     pub fn save(&mut self, index: Option<usize>, path: Option<&Path>, format: Option<&str>, opts: &ExportOptions) -> Result<Value, AutomationError> {
         let i = self.doc_index(index)?;
-        let (stored_path, doc) = {
+        let (stored_path, doc, source) = {
             let state = &self.session.documents()[i];
-            (state.path.clone(), state.doc.clone())
+            (state.path.clone(), state.doc.clone(), state.source.clone())
         };
         let target: PathBuf = match (path, stored_path.as_deref()) {
             (Some(p), _) => p.to_path_buf(),
@@ -133,10 +137,13 @@ impl Headless {
         let warnings = match &self.filesystem {
             Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into())),
             Filesystem::TrustedLocal => {
+                files::validate_destination(&target, source.as_ref(), format)?;
                 let writer = self.writers.entry(doc.id.0).or_default();
                 files::save(&doc, &target, format, opts, Some(writer))?
             }
             Filesystem::Workspace(workspace) => {
+                files::validate_write_name(&target, format)?;
+                workspace.guard_write(target_text, source.as_ref().filter(|s| s.origin.is_read_only()).and_then(|s| s.path.as_deref()))?;
                 let (bytes, warnings) = files::save_bytes(&doc, target_text, format, opts)?;
                 workspace.write(target_text, &bytes)?;
                 warnings
@@ -160,8 +167,19 @@ impl Headless {
         let requested = path.to_str().ok_or_else(|| AutomationError::BadRequest("automation paths must be valid UTF-8".into()))?;
         match &self.filesystem {
             Filesystem::Denied => Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into())),
-            Filesystem::TrustedLocal => photocraft_format::atomic_write(path, bytes).map_err(|error| AutomationError::Io(error.to_string())),
-            Filesystem::Workspace(workspace) => workspace.write(requested, bytes),
+            Filesystem::TrustedLocal => {
+                files::validate_destination(path, None, None)?;
+                for source in self.session.documents().iter().filter_map(|s| s.source.as_ref()).filter(|s| s.origin.is_read_only()) {
+                    files::validate_destination(path, Some(source), None)?;
+                }
+                photocraft_format::atomic_write(path, bytes).map_err(|error| AutomationError::Io(error.to_string()))
+            }
+            Filesystem::Workspace(workspace) => {
+                for source in self.session.documents().iter().filter_map(|s| s.source.as_ref()).filter(|s| s.origin.is_read_only()) {
+                    workspace.guard_write(requested, source.path.as_deref())?;
+                }
+                workspace.write(requested, bytes)
+            }
         }
     }
 

@@ -711,6 +711,7 @@ fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
     let st = WebSettings::from_params(p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();
+    let source = d.source.clone();
     let (wdoc, sx, sy) = web_document(&doc, p, &st)?;
     let buf = photocraft_compose::flatten(&wdoc);
     let bw = wdoc.size.width as usize;
@@ -737,6 +738,7 @@ fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({"format": o.ext, "bytes": o.bytes.len(), "width": o.width, "height": o.height, "colors": o.colors}));
     }
     if let Some(path) = single.filter(|_| dir.is_none() && (all.len() == 1 || p.get("slices").is_none())) {
+        crate::file_cmds::validate_destination(path, source.as_ref())?;
         let o = optimize(&buf.px, bw, wdoc.bounds(), &st, icc, xmp.as_deref(), dpi, false)?;
         write_file(path, &o.bytes)?;
         crate::automate_cmds::fire_event(s, "export");
@@ -799,6 +801,7 @@ fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
             let name = unique(&stem, o.ext);
             let rel = if images.is_empty() { name.clone() } else { format!("{images}/{name}") };
             let out = join(&dir, &rel);
+            crate::file_cmds::validate_destination(&out, source.as_ref())?;
             write_file(&out, &o.bytes)?;
             total += o.bytes.len();
             files.push(out);
@@ -819,11 +822,13 @@ fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
         let grid = cells.len() > 1;
         let spacer = grid.then(|| if images.is_empty() { "spacer.gif".to_string() } else { format!("{images}/spacer.gif") });
         if let Some(sp) = &spacer {
+            crate::file_cmds::validate_destination(&join(&dir, sp), source.as_ref())?;
             let gif = photocraft_codecs::web::encode_gif_indexed(1, 1, &[0], &[[0, 0, 0]], Some(0), false).map_err(other)?;
             write_file(&join(&dir, sp), &gif)?;
         }
         let page = html_table(&base, wdoc.size.width, wdoc.size.height, &cells, spacer.as_deref());
         let hp = join(&dir, &format!("{base}.html"));
+        crate::file_cmds::validate_destination(&hp, source.as_ref())?;
         write_file(&hp, page.as_bytes())?;
         html_path = Some(hp);
     }
@@ -875,6 +880,7 @@ fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     let metadata = serde_json::to_value(prefs.metadata).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+    crate::file_cmds::validate_destination(&path, d.source.as_ref())?;
     let mut o = serde_json::Map::new();
     o.insert(
         "metadata".into(),
@@ -1074,6 +1080,10 @@ fn asset_settings(spec: &AssetSpec) -> WebSettings {
 
 /// Exports every asset named by `doc`'s layers into `dir`. Returns (files, errors).
 pub fn generate_assets(doc: &Document, dir: &str) -> (Vec<String>, Vec<Value>) {
+    generate_assets_with_source(doc, dir, None)
+}
+
+fn generate_assets_with_source(doc: &Document, dir: &str, source: Option<&crate::SourceIdentity>) -> (Vec<String>, Vec<Value>) {
     let dpi = f64::from(doc.resolution_dpi.max(1.0));
     let mut defaults: Option<Vec<AssetDefault>> = None;
     let mut jobs: Vec<(LayerId, AssetSpec)> = Vec::new();
@@ -1125,6 +1135,7 @@ pub fn generate_assets(doc: &Document, dir: &str) -> (Vec<String>, Vec<Value>) {
                 let (name_stem, ext) = spec.file.rsplit_once('.').unwrap_or((spec.file.as_str(), "png"));
                 let rel = format!("{}{}{}.{ext}", v.folder, name_stem, v.suffix);
                 let out = join(dir, &rel);
+                crate::file_cmds::validate_destination(&out, source)?;
                 if spec.format == "webp" {
                     crate::file_cmds::save_doc(&wdoc, &out, None)?;
                     return Ok(out);
@@ -1169,7 +1180,7 @@ fn image_assets(s: &mut Session, p: &Value) -> Result<Value> {
     }
     match dir {
         Some(dir) if !cfg!(target_arch = "wasm32") => {
-            let (files, errors) = generate_assets(&d.doc, &dir);
+            let (files, errors) = generate_assets_with_source(&d.doc, &dir, d.source.as_ref());
             Ok(json!({"enabled": true, "dir": dir, "files": files, "errors": errors}))
         }
         _ => Ok(json!({"enabled": true, "dir": null, "files": [], "note": "assets are written when the document is saved"})),
@@ -1183,7 +1194,7 @@ pub fn on_saved(s: &Session, index: usize) -> Option<Value> {
         return None;
     }
     let dir = assets_dir(d.path.as_deref()?);
-    let (files, errors) = generate_assets(&d.doc, &dir);
+    let (files, errors) = generate_assets_with_source(&d.doc, &dir, d.source.as_ref());
     Some(json!({"dir": dir, "files": files, "errors": errors}))
 }
 

@@ -1,0 +1,19 @@
+[package]
+name = "photocraft-io-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+[package.metadata]
+cargo-fuzz = true
+[dependencies]
+libfuzzer-sys = "0.4"
+photocraft-io = { path = ".." }
+photocraft-raster = { path = "../../raster" }
+photocraft-xcf = { path = "../../xcf" }
+[[bin]]
+name = "xcf_import"
+path = "fuzz_targets/xcf_import.rs"
+test = false
+doc = false
+bench = false
+[workspace]

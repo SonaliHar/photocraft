@@ -77,6 +77,7 @@ pub mod slice_cmds;
 pub mod smart_cmds;
 pub mod smartselect_cmds;
 pub mod snap;
+mod source_policy;
 pub mod stamp_cmds;
 pub mod symmetry_cmds;
 mod timeline_cmds;
@@ -94,6 +95,7 @@ pub mod vp_cmds;
 pub mod warp_cmds;
 pub mod web_cmds;
 mod wia_cmds;
+pub use source_policy::SourceIdentity;
 
 use std::sync::Arc;
 
@@ -155,6 +157,8 @@ pub struct DocState {
     /// Anchor of ⇧-click range selection (the last plainly or ⌘-clicked layer).
     pub layer_anchor: Option<LayerId>,
     pub path: Option<String>,
+    /// Original import provenance, separate from Save As destination and undo history.
+    pub source: Option<SourceIdentity>,
     /// Increments on every change; UIs re-render when it moves.
     pub revision: u64,
     pub saved_revision: u64,
@@ -180,6 +184,12 @@ pub struct DocState {
 }
 
 impl DocState {
+    /// Record the detected policy without granting filesystem authority.
+    pub fn set_import_origin(&mut self, origin: photocraft_io::ImportOrigin, label: impl Into<String>, path: Option<String>) {
+        self.source = Some(SourceIdentity::new(label, path.clone(), origin));
+        self.path = if origin.is_read_only() { None } else { path };
+    }
+
     pub fn new(doc: Document, path: Option<String>) -> Self {
         let active_layer = doc.top_layer();
         let mut history = History::default();
@@ -191,6 +201,7 @@ impl DocState {
             selected_layers: active_layer.into_iter().collect(),
             layer_anchor: active_layer,
             path,
+            source: None,
             revision: 1,
             saved_revision: 1,
             last_damage: None,

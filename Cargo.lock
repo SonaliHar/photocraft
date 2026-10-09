@@ -3508,6 +3508,7 @@ version = "0.5.0"
 dependencies = [
  "base64",
  "cap-std",
+ "flate2",
  "getrandom 0.3.4",
  "photocraft-codecs",
  "photocraft-compose",
@@ -3517,6 +3518,7 @@ dependencies = [
  "photocraft-geom",
  "photocraft-io",
  "rmcp",
+ "same-file",
  "schemars",
  "serde",
  "serde_json",
@@ -3528,6 +3530,7 @@ dependencies = [
 name = "photocraft-cli"
 version = "0.5.0"
 dependencies = [
+ "flate2",
  "photocraft-automation",
  "photocraft-codecs",
  "photocraft-engine",
@@ -3578,6 +3581,7 @@ name = "photocraft-compose"
 version = "0.5.0"
 dependencies = [
  "criterion",
+ "photocraft-cms",
  "photocraft-color",
  "photocraft-doc",
  "photocraft-geom",
@@ -3592,6 +3596,7 @@ dependencies = [
 name = "photocraft-doc"
 version = "0.5.0"
 dependencies = [
+ "blake3",
  "photocraft-color",
  "photocraft-geom",
  "photocraft-raster",
@@ -3623,6 +3628,7 @@ dependencies = [
  "photocraft-text",
  "photocraft-vector",
  "rayon",
+ "same-file",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -3683,6 +3689,7 @@ name = "photocraft-io"
 version = "0.5.0"
 dependencies = [
  "blake3",
+ "flate2",
  "photocraft-algo",
  "photocraft-cms",
  "photocraft-codecs",
@@ -3697,6 +3704,7 @@ dependencies = [
  "photocraft-raw",
  "photocraft-text",
  "photocraft-vector",
+ "photocraft-xcf",
  "proptest",
  "serde_json",
  "thiserror 2.0.21",
@@ -3811,6 +3819,7 @@ dependencies = [
  "egui",
  "egui_extras",
  "egui_kittest",
+ "flate2",
  "log",
  "photocraft-algo",
  "photocraft-cms",
@@ -3864,6 +3873,16 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "photocraft-xcf"
+version = "0.5.0"
+dependencies = [
+ "flate2",
+ "half",
+ "proptest",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

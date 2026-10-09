@@ -1445,7 +1445,13 @@ mod open_recent_tests {
         use photocraft_color::{ColorMode, SampleType};
         use photocraft_geom::Size;
         let services = crate::Services {
-            import: Some(Box::new(|_n: &str, _b: &[u8]| Ok((photocraft_doc::Document::new("t", Size::new(4, 4), ColorMode::Rgb, SampleType::U8), Vec::new())))),
+            import: Some(Box::new(|_n: &str, _b: &[u8]| {
+                Ok(photocraft_io::ImportResult {
+                    document: photocraft_doc::Document::new("t", Size::new(4, 4), ColorMode::Rgb, SampleType::U8),
+                    warnings: Vec::new(),
+                    origin: Default::default(),
+                })
+            })),
             ..Default::default()
         };
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);

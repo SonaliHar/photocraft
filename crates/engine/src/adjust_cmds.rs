@@ -206,7 +206,7 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
 
 /// Image › Adjustments run as a smart filter (`image.adjustments.<kind>` recorded on a smart
 /// object): the adjustment applied to a copy of `surf`. `None` for kinds or params it can't run.
-pub(crate) fn adjust_as_filter(kind: &str, p: &Value, surf: &Surface) -> Option<Surface> {
+pub(crate) fn adjust_as_filter(kind: &str, p: &Value, surf: &Surface, transfer: Option<photocraft_compose::adjust::Transfer>) -> Option<Surface> {
     let mut out = surf.clone();
     if kind == "shadowsHighlights" {
         let sh = shadows_highlights_params(p);
@@ -214,7 +214,8 @@ pub(crate) fn adjust_as_filter(kind: &str, p: &Value, surf: &Surface) -> Option<
     } else {
         let mode = surf.format().mode;
         let adj = crate::adjust_params::from_params(kind, p, None, mode).ok()?;
-        crate::pixels::adjust_surface(&mut out, &adj, None, mode);
+        let transfer = transfer.unwrap_or_else(|| photocraft_compose::adjust::Transfer::for_document(mode, surf.format().sample));
+        crate::pixels::adjust_surface_with_transfer(&mut out, &adj, None, mode, transfer);
     }
     out.prune();
     Some(out)

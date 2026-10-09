@@ -10,6 +10,66 @@ use std::rc::Rc;
 /// Writes recorded by the fake writer: (path, bytes).
 type Written = Rc<RefCell<Vec<(String, Vec<u8>)>>>;
 
+#[test]
+fn xcf_origin_named_psd_is_read_only_and_save_as_suggests_native() {
+    let (mut app, written) = app_with(None, None);
+    app.open_file("/pics/source.psd", b"gimp xcf v013\0").unwrap();
+    let state = app.session.active().unwrap();
+    assert!(state.path.is_none());
+    assert_eq!(state.source.as_ref().unwrap().path.as_deref(), Some("/pics/source.psd"));
+    let suggestions: Rc<RefCell<Vec<String>>> = Rc::default();
+    let captured = suggestions.clone();
+    app.services.pick_save = Some(Box::new(move |name| {
+        captured.borrow_mut().push(name.to_string());
+        None
+    }));
+    assert_eq!(app.save_as(None).unwrap_err(), "cancelled");
+    assert_eq!(*suggestions.borrow(), ["source.pcraft"]);
+    assert!(written.borrow().is_empty());
+}
+
+#[test]
+fn native_save_as_retains_protection_against_source_and_xcf_outputs() {
+    let (mut app, written) = app_with(None, None);
+    app.open_file("/pics/source.psd", b"gimp xcf v013\0").unwrap();
+    app.save_as(Some("/pics/edited.pcraft".into())).unwrap();
+    assert!(app.save_as(Some("/pics/source.psd".into())).is_err());
+    assert!(app.save_as(Some("/pics/other.XCF".into())).is_err());
+    assert_eq!(written.borrow().len(), 1);
+    assert_eq!(app.session.active().unwrap().path.as_deref(), Some("/pics/edited.pcraft"));
+}
+
+#[test]
+fn denied_destination_fails_before_encoding_or_writing() {
+    let (mut app, written) = app_with(None, None);
+    app.open_file("/pics/source.psd", b"gimp xcf v013\0").unwrap();
+    let encoded = Rc::new(RefCell::new(0));
+    let count = encoded.clone();
+    app.services.export = Some(Box::new(move |_, _, _| {
+        *count.borrow_mut() += 1;
+        Ok((b"out".to_vec(), Vec::new()))
+    }));
+    app.services.validate_write = Some(Box::new(|_, _| Err("protected source alias".into())));
+    assert_eq!(app.save_as(Some("/pics/alias.psd".into())).unwrap_err(), "protected source alias");
+    assert_eq!(*encoded.borrow(), 0);
+    assert!(written.borrow().is_empty());
+}
+
+#[test]
+fn failed_open_preserves_existing_dirty_document_and_source_policy() {
+    let (mut app, _) = app_with(None, None);
+    app.open_file("/pics/source.psd", b"gimp xcf v013\0").unwrap();
+    app.session.active_mut().unwrap().revision += 1;
+    let before = app.session.active().unwrap().clone();
+    assert!(app.open_file("broken.xcf", b"bad").is_err());
+    let after = app.session.active().unwrap();
+    assert_eq!(app.session.documents().len(), 1);
+    assert_eq!(after.doc, before.doc);
+    assert_eq!(after.revision, before.revision);
+    assert_eq!(after.source, before.source);
+    assert_eq!(after.path, before.path);
+}
+
 /// An app whose importer names the document after the file (like `photocraft-io`) and reports a
 /// warning for names containing "warn", and fails for bytes "bad"; the exporter warns for ".png"
 /// and the writer records what it wrote.
@@ -23,7 +83,11 @@ fn app_with(pick_open: Option<(String, Vec<u8>)>, pick_save: Option<String>) -> 
                 return Err("not an image".into());
             }
             let warnings = if name.contains("warn") { vec!["Adjustment layer \"Curves 1\" was flattened".to_string()] } else { Vec::new() };
-            Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), warnings))
+            Ok(photocraft_io::ImportResult {
+                document: Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8),
+                warnings,
+                origin: photocraft_io::ImportOrigin::detected(bytes),
+            })
         })),
         export: Some(Box::new(|_doc: &Document, path: &str, _s: &crate::ExportSettings| {
             let warnings = if path.ends_with(".png") { vec!["Layers were flattened".to_string()] } else { Vec::new() };

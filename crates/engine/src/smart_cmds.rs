@@ -102,6 +102,7 @@ struct CacheEntry {
     key: CacheKey,
     image: SourceImage,
     decodes: u32,
+    imported_interpretation: bool,
 }
 
 /// Decoded source composites by content hash, most recent last. Re-filtering or re-transforming
@@ -124,12 +125,16 @@ fn cache_get(key: &CacheKey) -> Option<SourceImage> {
 }
 
 fn cache_put(key: CacheKey, image: SourceImage) {
+    cache_put_with_interpretation(key, image, false);
+}
+
+fn cache_put_with_interpretation(key: CacheKey, image: SourceImage, imported_interpretation: bool) {
     let Ok(mut c) = SOURCE_CACHE.lock() else { return };
     let decodes = match c.iter().position(|e| e.key == key) {
         Some(i) => c.remove(i).decodes + 1,
         None => 1,
     };
-    c.push(CacheEntry { key, image, decodes });
+    c.push(CacheEntry { key, image, decodes, imported_interpretation });
     let size = |e: &CacheEntry| e.image.bounds.width() as usize * e.image.bounds.height() as usize * e.key.1.channels() * 4;
     while c.len() > CACHE_ENTRIES || (c.len() > 1 && c.iter().map(size).sum::<usize>() > CACHE_BYTES) {
         c.remove(0);
@@ -165,10 +170,45 @@ pub fn source_image(file_name: &str, bytes: &[u8], fmt: PixelFormat) -> Result<S
     let doc = decode_source(file_name, bytes)?;
     let buf = photocraft_compose::flatten(&doc);
     let img = SourceImage { surface: Arc::new(buffer_to_surface(&buf, fmt)), bounds: doc.bounds() };
-    cache_put(key, img.clone());
+    cache_put_with_interpretation(key, img.clone(), doc.sample_encoding.is_some());
     Ok(img)
 }
 
+fn interpreted_cache_key(bytes: &[u8], target: &Document) -> CacheKey {
+    let mut key = cache_key(bytes, target.pixel_format());
+    let mut hash = blake3::Hasher::new();
+    hash.update(&key.0);
+    hash.update(b"target-interpretation:");
+    hash.update(&crate::color_cmds::document_profile(target).to_bytes());
+    hash.update(format!("{:?}", target.sample_encoding).as_bytes());
+    key.0 = *hash.finalize().as_bytes();
+    key
+}
+
+/// Composite imported contents in the destination document's effective sample interpretation.
+/// Ordinary source/target documents retain the existing format-only cache and rendering.
+pub fn source_image_for_document(file_name: &str, bytes: &[u8], target: &Document) -> Result<SourceImage> {
+    let interpreted = interpreted_cache_key(bytes, target);
+    if let Some(image) = cache_get(&interpreted) {
+        return Ok(image);
+    }
+    let ordinary = cache_key(bytes, target.pixel_format());
+    let ordinary_cached = target.sample_encoding.is_none()
+        && SOURCE_CACHE.lock().ok().is_some_and(|cache| cache.iter().any(|entry| entry.key == ordinary && !entry.imported_interpretation));
+    if ordinary_cached && let Some(image) = cache_get(&ordinary) {
+        return Ok(image);
+    }
+    let source = decode_source(file_name, bytes)?;
+    if source.sample_encoding.is_none() && target.sample_encoding.is_none() {
+        let buffer = photocraft_compose::flatten(&source);
+        let image = SourceImage { surface: Arc::new(buffer_to_surface(&buffer, target.pixel_format())), bounds: source.bounds() };
+        cache_put(ordinary, image.clone());
+        return Ok(image);
+    }
+    let image = SourceImage { surface: Arc::new(crate::pixels::flattened_into(&source, target)?), bounds: source.bounds() };
+    cache_put_with_interpretation(interpreted, image.clone(), true);
+    Ok(image)
+}
 /// Layer › Smart Objects › Stack Mode: the source's layers (or, when it holds a single group, the
 /// group's layers) combined per pixel with `mode`. Cached like [`source_image`], keyed by mode.
 pub fn stack_image(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photocraft_doc::StackMode) -> Result<SourceImage> {
@@ -179,6 +219,9 @@ pub fn stack_image(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photoc
         return Ok(img);
     }
     let doc = decode_source(file_name, bytes)?;
+    if doc.sample_encoding.is_some() {
+        return Err(other("stack modes on imported source encodings are not verified; convert the contents to a common ordinary document first"));
+    }
     let layers: &[Layer] = match doc.layers.as_slice() {
         [only] if only.is_group() => only.children().unwrap_or_default(),
         all => all,
@@ -274,6 +317,10 @@ fn mask_mix(base: &Surface, filtered: &Surface, mask: &LayerMask) -> Surface {
 
 /// Runs the smart filter stack on the placed (unfiltered) content.
 pub fn apply_smart_filters(placed: &Surface, sm: &SmartObject, canvas: Rect) -> Surface {
+    apply_smart_filters_with_transfer(placed, sm, canvas, None)
+}
+
+fn apply_smart_filters_with_transfer(placed: &Surface, sm: &SmartObject, canvas: Rect, transfer: Option<photocraft_compose::adjust::Transfer>) -> Surface {
     if !sm.filters_enabled || !sm.smart_filters.iter().any(|f| f.visible) {
         return placed.clone();
     }
@@ -282,7 +329,7 @@ pub fn apply_smart_filters(placed: &Surface, sm: &SmartObject, canvas: Rect) -> 
     let extent = canvas.union(&placed.content_bounds());
     for f in sm.smart_filters.iter().filter(|f| f.visible) {
         // Unknown ids (e.g. Photoshop filters we don't implement) leave the pixels alone.
-        let Some(out) = crate::filters::apply_filter_to_surface(&f.command, &f.params, &cur, canvas, None, extent) else { continue };
+        let Some(out) = crate::filters::apply_filter_to_surface_with_transfer(&f.command, &f.params, &cur, canvas, None, extent, transfer) else { continue };
         cur = if f.blend == BlendMode::Normal && f.opacity >= 1.0 { out } else { blend_surfaces(&cur, &out, f.blend, f.opacity.clamp(0.0, 1.0)) };
     }
     match sm.filter_mask.as_ref().filter(|m| m.enabled) {
@@ -296,15 +343,18 @@ pub fn apply_smart_filters(placed: &Surface, sm: &SmartObject, canvas: Rect) -> 
 pub fn render(doc: &Document, sm: &SmartObject) -> Result<Option<Surface>> {
     let Some((name, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return Ok(None) };
     let img = match sm.stack_mode {
+        Some(_) if doc.sample_encoding.is_some() => {
+            return Err(other("stack modes on imported document encodings are not verified; convert the document first"));
+        }
         Some(mode) => stack_image(&name, &bytes, doc.pixel_format(), mode)?,
-        None => source_image(&name, &bytes, doc.pixel_format())?,
+        None => source_image_for_document(&name, &bytes, doc)?,
     };
     // Through the warp (source space) and the transform in one pass; whole-pixel moves are exact.
     let placed = match &sm.perspective {
         Some(p) => photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &Homography(*p), sm.warp.as_ref()),
         None => photocraft_algo::warp::place_source(&img.surface, img.bounds, &sm.transform, sm.warp.as_ref()),
     };
-    Ok(Some(apply_smart_filters(&placed, sm, doc.bounds())))
+    Ok(Some(apply_smart_filters_with_transfer(&placed, sm, doc.bounds(), Some(photocraft_compose::adjust::Transfer::for_doc(doc)))))
 }
 
 /// The smart object's pixels below smart filter `index` (the input that filter edits): the placed
@@ -370,6 +420,7 @@ fn mask_from_selection(sel: &Surface) -> LayerMask {
 /// pixels (and still recorded).
 pub(crate) fn add_smart_filter(doc: &mut Document, id: LayerId, sf: photocraft_doc::SmartFilter, selection: Option<&Surface>) -> Result<()> {
     let canvas = doc.bounds();
+    let transfer = photocraft_compose::adjust::Transfer::for_doc(doc);
     let renderable = source_bytes(&doc.metadata, &smart(doc, id)?.source).is_some();
     let sm = smart_mut(doc, id)?;
     if renderable {
@@ -383,7 +434,7 @@ pub(crate) fn add_smart_filter(doc: &mut Document, id: LayerId, sf: photocraft_d
     }
     let bounds = selection.map(Surface::content_bounds).filter(|b| !b.is_empty()).unwrap_or(canvas);
     let cache = sm.cache.as_ref().ok_or_else(|| other("smart object has no pixels"))?;
-    let out = crate::filters::apply_filter_to_surface(&sf.command, &sf.params, cache, bounds, selection, canvas)
+    let out = crate::filters::apply_filter_to_surface_with_transfer(&sf.command, &sf.params, cache, bounds, selection, canvas, Some(transfer))
         .ok_or_else(|| other(format!("unknown filter {}", sf.command)))?;
     sm.cache = Some(out);
     sm.smart_filters.push(sf);
@@ -523,6 +574,8 @@ pub fn layer_to_smart(doc: &Document, l: &Layer) -> Result<Layer> {
     let mut sub = Document::new(format!("{}.pcraft", l.name), doc.size, doc.mode, doc.depth);
     sub.resolution_dpi = doc.resolution_dpi;
     sub.icc_profile = doc.icc_profile.clone();
+    sub.sample_encoding = doc.sample_encoding;
+    sub.source_color_context = doc.source_color_context.clone();
     sub.global_light = doc.global_light;
     if any_layer(l, &|x| matches!(x.content, LayerContent::Smart(_))) {
         // Nested PSD placed layers find their embedded files here.
@@ -553,7 +606,11 @@ pub fn layer_to_smart(doc: &Document, l: &Layer) -> Result<Layer> {
     sub.size = Size::new(b.width(), b.height());
     let bytes = encode_source(&sub)?;
     // Seed the decode cache with the composite we already have.
-    cache_put(cache_key(&bytes, fmt), SourceImage { surface: Arc::new(translate_surface(&cache, -b.x0, -b.y0)), bounds: sub.bounds() });
+    cache_put_with_interpretation(
+        if doc.sample_encoding.is_some() { interpreted_cache_key(&bytes, doc) } else { cache_key(&bytes, fmt) },
+        SourceImage { surface: Arc::new(translate_surface(&cache, -b.x0, -b.y0)), bounds: sub.bounds() },
+        doc.sample_encoding.is_some(),
+    );
 
     let source = SmartSource::Embedded { file_name: sub.name.clone(), bytes: Arc::new(bytes) };
     let mut out = Layer::new(
@@ -1016,3 +1073,59 @@ mod unpack;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod imported_adjustment_filter_tests {
+    use super::*;
+    use photocraft_doc::{ColorMode, SampleEncoding, SampleType, SmartFilter};
+    #[test]
+    fn adjustment_filters_use_document_transfer_and_preserve_ordinary_defaults() {
+        for (depth, encoding, value) in [
+            (SampleType::U16, Some(SampleEncoding::Linear), 0.25),
+            (SampleType::F32, Some(SampleEncoding::NonlinearProfile), 0.5),
+            (SampleType::U16, None, 0.5),
+            (SampleType::F32, None, 0.5),
+        ] {
+            let mut doc = Document::new("filter transfer", Size::new(1, 1), ColorMode::Rgb, depth);
+            doc.sample_encoding = encoding;
+            doc.icc_profile = Some(
+                if encoding == Some(SampleEncoding::Linear) { photocraft_cms::Builtin::LinearSrgb } else { photocraft_cms::Builtin::Srgb }.profile().to_bytes(),
+            );
+            let mut layer = Layer::raster("samples", doc.pixel_format());
+            layer.surface_mut().unwrap().write_pixel(0, 0, &[value, value, value, 1.0]);
+            let samples = layer.surface().unwrap().clone();
+            let raw = samples.pixel(0, 0)[0];
+            let filter = SmartFilter {
+                command: "image.adjustments.exposure".into(),
+                params: json!({"exposure":1.0}),
+                blend: BlendMode::Normal,
+                opacity: 1.0,
+                visible: true,
+            };
+            let expected = match encoding {
+                Some(SampleEncoding::Linear) => raw * 2.0,
+                Some(SampleEncoding::NonlinearProfile) => photocraft_color::convert::linear_to_srgb(photocraft_color::convert::srgb_to_linear(raw) * 2.0),
+                _ if depth == SampleType::F32 => raw * 2.0,
+                _ => (raw.powf(2.2) * 2.0).powf(1.0 / 2.2),
+            };
+            let converted = layer_to_smart(&doc, &layer).unwrap();
+            let LayerContent::Smart(mut smart) = converted.content else { panic!("expected smart object") };
+            smart.smart_filters.push(filter.clone());
+            let rendered = render(&doc, &smart).unwrap().unwrap();
+            assert!((rendered.pixel(0, 0)[0] - expected).abs() < 2.0 / 65535.0, "{depth:?}/{encoding:?}");
+            if encoding.is_none() {
+                assert_eq!(rendered, apply_smart_filters(&samples, &smart, doc.bounds()), "ordinary default changed");
+            }
+            // Unavailable linked contents still use the same interpretation when filtering cache.
+            let mut missing = SmartObject::new(SmartSource::Linked { path: String::new() }, Affine::IDENTITY, Some(samples.clone()));
+            missing.filters_enabled = true;
+            let cached_layer = Layer::new("missing", LayerContent::Smart(missing));
+            let id = cached_layer.id;
+            doc.layers = vec![cached_layer];
+            add_smart_filter(&mut doc, id, filter, None).unwrap();
+            let LayerContent::Smart(updated) = &doc.layers[0].content else { panic!("expected smart object") };
+            assert!((updated.cache.as_ref().unwrap().pixel(0, 0)[0] - expected).abs() < 2.0 / 65535.0);
+            assert_eq!(layer.surface().unwrap(), &samples);
+        }
+    }
+}

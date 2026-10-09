@@ -173,10 +173,14 @@ fn on_event(app: &mut PhotocraftApp, e: JobEvent) {
             app.ui.panels.brush_settings = true;
             app.ui.brush_tab = 1;
         }
-        JobOutcome::Done(_) => {
+        JobOutcome::Done(value) => {
             app.sync_views();
             app.ui.status = e.label;
             app.ui.status_error = false;
+            if let Some(items) = value.get("warnings").and_then(Value::as_array) {
+                let warnings: Vec<String> = items.iter().filter_map(|warning| warning.as_str().map(str::to_string)).collect();
+                notices::io_warnings(app, &app.ui.status.clone(), &warnings);
+            }
         }
         JobOutcome::Failed(err) => {
             app.sync_views();

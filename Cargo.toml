@@ -18,6 +18,7 @@ photocraft-raster = { path = "crates/raster" }
 photocraft-doc = { path = "crates/doc" }
 photocraft-ops = { path = "crates/ops" }
 photocraft-psd = { path = "crates/psd" }
+photocraft-xcf = { path = "crates/xcf" }
 photocraft-codecs = { path = "crates/codecs" }
 photocraft-raw = { path = "crates/raw" }
 photocraft-compose = { path = "crates/compose" }

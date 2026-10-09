@@ -582,6 +582,9 @@ fn create_layer(s: &mut Session, p: &Value) -> Result<Value> {
             alone.effects.items = vec![e1];
             alone.effects.psd_raw = None;
             let mut tmp = Document::new("fx", doc.size, doc.mode, doc.depth);
+            tmp.icc_profile = doc.icc_profile.clone();
+            tmp.sample_encoding = doc.sample_encoding;
+            tmp.source_color_context = doc.source_color_context.clone();
             tmp.global_light = light;
             tmp.patterns = doc.patterns.clone();
             tmp.layers = vec![alone];
@@ -669,6 +672,8 @@ pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
     let mut out = Document::new(l.name.clone(), photocraft_doc::Size::new(b.width(), b.height()), doc.mode, doc.depth);
     out.resolution_dpi = doc.resolution_dpi;
     out.icc_profile = doc.icc_profile.clone();
+    out.sample_encoding = doc.sample_encoding;
+    out.source_color_context = doc.source_color_context.clone();
     let mut surf = Surface::new(fmt);
     let rows: Vec<f32> = (b.y0..b.y1)
         .flat_map(|y| {
@@ -687,6 +692,7 @@ fn export_layer(s: &mut Session, p: &Value, cmd: &str, png_only: bool) -> Result
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let mut ldoc = layer_document(&d.doc, id)?;
     let path = p.get("path").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| bad(cmd, "missing `path` (UIs ask for one)"))?;
+    crate::file_cmds::validate_destination(path, d.source.as_ref())?;
     let lower = path.to_ascii_lowercase();
     if png_only && !lower.ends_with(".png") {
         return Err(bad(cmd, "Quick Export as PNG writes .png files"));

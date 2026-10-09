@@ -298,7 +298,7 @@ impl<'a> DocCtx<'a> {
     pub fn of(doc: &'a Document) -> Self {
         DocCtx {
             canvas: doc.bounds(),
-            transfer: Transfer::for_document(doc.mode, doc.depth),
+            transfer: Transfer::for_doc(doc),
             light: doc.global_light,
             patterns: &doc.patterns,
             mode: doc.mode,
@@ -310,6 +310,19 @@ impl<'a> DocCtx<'a> {
 
 /// Build the pass list for `doc`.
 pub fn plan(doc: &Document) -> Result<Plan<'_>, Unsupported> {
+    // Imported working encodings are implemented by the CPU oracle only. Reject the complete
+    // plan, even for hidden layers, so unhide cannot silently change the compositing backend.
+    let mut todo = vec![doc.layers.as_slice()];
+    while let Some(layers) = todo.pop() {
+        for layer in layers {
+            if layer.import_compositing.is_some() {
+                return Err(Unsupported("imported source-over working encodings require the CPU compositor".into()));
+            }
+            if let Some(children) = layer.children() {
+                todo.push(children);
+            }
+        }
+    }
     if doc.mode == photocraft_color::ColorMode::Multichannel {
         return Err(Unsupported("Multichannel inks (printed on the CPU)".into()));
     }
@@ -1437,7 +1450,7 @@ pub fn adjustment_on_gpu(adj: &Adjustment) -> bool {
 /// A tone transfer as the shader's `t_decode`/`t_encode` exponent (0: the sRGB curve).
 fn transfer_exponent(t: Transfer) -> f32 {
     match t {
-        Transfer::Srgb => 0.0,
+        Transfer::Srgb | Transfer::SrgbExact => 0.0,
         Transfer::Gamma(g) => g,
     }
 }

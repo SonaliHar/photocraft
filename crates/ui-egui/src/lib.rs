@@ -153,7 +153,7 @@ pub use file_open::OsEvent;
 pub use state::{Tool, UiState};
 
 /// Decode a file: (document, warnings about anything approximated or dropped).
-pub type ImportFn = Box<dyn Fn(&str, &[u8]) -> Result<(Document, Vec<String>), String>>;
+pub type ImportFn = Box<dyn Fn(&str, &[u8]) -> Result<photocraft_io::ImportResult, String>>;
 /// Encoder settings chosen in Export As (the file format comes from the name's extension).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExportSettings {
@@ -186,6 +186,8 @@ pub type PickOpenFn = Box<dyn FnMut() -> Option<(String, Result<Vec<u8>, String>
 pub type PickOpenPathsFn = Box<dyn FnMut() -> Option<Vec<String>>>;
 pub type PickSaveFn = Box<dyn FnMut(&str) -> Option<String>>;
 pub type WriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
+/// Validate a destination within the same authority as its eventual write, before encoding.
+pub type ValidateWriteFn = Box<dyn Fn(&str, Option<&photocraft_engine::SourceIdentity>) -> Result<(), String>>;
 /// Read bytes through the desktop control session's authorized read root.
 pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<(String, Vec<u8>), String>>;
 /// Write bytes through the desktop control session's authorized write root.
@@ -247,10 +249,12 @@ pub struct Services {
     pub pick_save: Option<PickSaveFn>,
     /// Write bytes to a path (native) or trigger a download (web).
     pub write: Option<WriteFn>,
+    pub validate_write: Option<ValidateWriteFn>,
     /// File access used only by control/MCP requests. Interactive dialogs keep
     /// using `pick_open`, `pick_save` and `write` with the user's authority.
     pub automation_read: Option<AutomationReadFn>,
     pub automation_write: Option<AutomationWriteFn>,
+    pub automation_validate_write: Option<ValidateWriteFn>,
     pub automation_command: Option<AutomationCommandFn>,
     /// Same policy as [`Self::automation_command`], as a function pointer the engine calls for
     /// each step of `actions.play`. Installed on the session only while a control request or
@@ -653,11 +657,15 @@ impl PhotocraftApp {
         self.perf.last_command = id.to_string();
         self.perf.command_ms = gpu_canvas::now_ms() - t0;
         match &r {
-            Ok(_) => {
+            Ok(value) => {
                 self.sync_views();
                 if self.ui.status_error {
                     self.ui.status.clear();
                     self.ui.status_error = false;
+                }
+                if let Some(items) = value.get("warnings").and_then(Value::as_array) {
+                    let warnings: Vec<String> = items.iter().filter_map(|warning| warning.as_str().map(str::to_string)).collect();
+                    notices::io_warnings(self, id, &warnings);
                 }
             }
             Err(e) => {
@@ -753,10 +761,13 @@ impl PhotocraftApp {
             return Ok(Vec::new());
         }
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let (doc, warnings) = import(name, bytes)?;
+        let photocraft_io::ImportResult { document: doc, warnings, origin } = import(name, bytes)?;
         // Edit › Color Settings policies apply on open; mismatches can ask what to do.
         // No path yet: a bare name isn't a location to save back to (`open_file` sets the path).
         let (_, color) = self.session.open_document(doc, None);
+        if let Some(state) = self.session.active_mut() {
+            state.set_import_origin(origin, name, None);
+        }
         self.sync_views();
         self.ui.status = format!("Opened {name}");
         self.ui.status_error = false;
@@ -794,9 +805,12 @@ impl PhotocraftApp {
     /// events and no Color Settings policy (which may read user-configured profile paths).
     fn import_automation_document(&mut self, name: &str, bytes: &[u8]) -> Result<Vec<String>, String> {
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let (doc, warnings) = import(name, bytes)?;
+        let photocraft_io::ImportResult { document: doc, warnings, origin } = import(name, bytes)?;
         // The caller records the path it read from.
         self.session.add_document(doc, None);
+        if let Some(state) = self.session.active_mut() {
+            state.set_import_origin(origin, name, None);
+        }
         self.sync_views();
         self.ui.status = format!("Opened {name}");
         self.ui.status_error = false;
@@ -836,7 +850,10 @@ impl PhotocraftApp {
         }
         let st = self.session.active().ok_or("no document")?;
         // Documents are named after their file ("cat.png"): suggest "cat.psd", not "cat.png.psd".
-        let suggested = st.path.clone().unwrap_or_else(|| format!("{}.psd", st.doc.name.rsplit_once('.').map_or(st.doc.name.as_str(), |(stem, _)| stem)));
+        let suggested = st.path.clone().unwrap_or_else(|| {
+            let extension = if st.source.as_ref().is_some_and(|source| source.origin.is_read_only()) { "pcraft" } else { "psd" };
+            format!("{}.{extension}", st.doc.name.rsplit_once('.').map_or(st.doc.name.as_str(), |(stem, _)| stem))
+        });
         let path = match path {
             Some(p) => p,
             None => self.services.pick_save.as_mut().and_then(|f| f(&suggested)).ok_or("cancelled")?,
@@ -853,6 +870,7 @@ impl PhotocraftApp {
     /// Encodes the active document with `settings` and writes it to `path`, which becomes the
     /// document's path. Returns the path and the export warnings (also shown to the user).
     pub(crate) fn write_document(&mut self, path: String, settings: &ExportSettings) -> Result<(String, Vec<String>), String> {
+        self.validate_document_destination(&path, false)?;
         let st = self.session.active().ok_or("no document")?;
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&st.doc, &path, settings)?;
@@ -875,6 +893,22 @@ impl PhotocraftApp {
         Ok((path, warnings))
     }
 
+    /// Validate using the authority of the selected write route before encoding or touching it.
+    pub(crate) fn validate_document_destination(&self, path: &str, automation: bool) -> Result<(), String> {
+        let state = self.session.active().ok_or("no document")?;
+        if photocraft_engine::file_cmds::extension(path).as_deref() == Some("xcf") {
+            return Err("XCF is an import-only format; choose a writable destination such as .pcraft".into());
+        }
+        if let Some(source) = state.source.as_ref() {
+            source.check_destination(path)?;
+        }
+        let validate = if automation { self.services.automation_validate_write.as_ref() } else { self.services.validate_write.as_ref() };
+        if let Some(validate) = validate {
+            validate(path, state.source.as_ref())?;
+        }
+        Ok(())
+    }
+
     /// Save through the control session's capability-scoped writer. No file
     /// picker or ambient writer is reachable from this path. Returns the path
     /// written and the export warnings (also shown to the user).
@@ -884,6 +918,7 @@ impl PhotocraftApp {
         let target = path
             .or_else(|| state.path.clone().filter(|p| photocraft_engine::file_cmds::saves_in_place(p)))
             .ok_or("pass `path`: a save without one writes back only to the document's own PSD, PSB or .pcraft file")?;
+        self.validate_document_destination(&target, true)?;
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&state.doc, &target, &ExportSettings::default())?;
         let write = self.services.automation_write.as_mut().ok_or("automation write authority is not configured")?;

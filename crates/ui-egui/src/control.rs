@@ -912,7 +912,11 @@ mod tests {
         let w = written.clone();
         let services = crate::Services {
             import: Some(Box::new(|name: &str, _b: &[u8]| {
-                Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), vec!["Adjustment layer flattened".to_string()]))
+                Ok(photocraft_io::ImportResult {
+                    document: Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8),
+                    warnings: vec!["Adjustment layer flattened".to_string()],
+                    origin: Default::default(),
+                })
             })),
             export: Some(Box::new(|_d: &Document, _p: &str, _s: &crate::ExportSettings| Ok((b"out".to_vec(), vec!["Layers were flattened".to_string()])))),
             automation_read: Some(Box::new(|path: &str| Ok((path.rsplit('/').next().unwrap_or(path).to_string(), b"x".to_vec())))),

@@ -34,6 +34,7 @@ mod flat;
 mod gradient_bake;
 pub mod linked;
 mod multichannel_map;
+mod origin;
 pub mod pattern_map;
 mod pixels;
 mod psd_export;
@@ -44,6 +45,8 @@ pub mod smart_map;
 pub mod text_styles_map;
 pub mod tiff_layers;
 pub mod vector_map;
+mod xcf_export;
+pub mod xcf_import;
 
 use photocraft_codecs::{CodecError, EncodeOptions};
 use photocraft_doc::Document;
@@ -51,12 +54,16 @@ use photocraft_psd::{PsdError, PsdFile};
 
 pub use adjust_map::ADJUSTMENT_KEYS;
 pub use flat::{document_to_image, import_tiff_page};
+pub use origin::{ImportFormat, ImportOrigin, SourcePolicy};
 pub use psd_export::{PsdExportOptions, document_to_psd, document_to_psd_with};
 pub use psd_import::{psd_to_document, psd_to_document_with};
 
 /// Errors from import/export.
 #[derive(Debug, thiserror::Error)]
 pub enum IoError {
+    /// XCF parse or semantic admission failure.
+    #[error("{0}")]
+    Xcf(#[from] photocraft_xcf::XcfError),
     /// PSD parse/write failure.
     #[error("PSD: {0}")]
     Psd(#[from] PsdError),
@@ -87,6 +94,8 @@ pub struct ImportResult {
     pub document: Document,
     /// Human-readable notes about anything approximated or dropped.
     pub warnings: Vec<String>,
+    /// Actual detected format and runtime source write policy.
+    pub origin: ImportOrigin,
 }
 
 /// Result of [`export`].
@@ -149,16 +158,24 @@ pub fn import(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
 /// reports progress. A cancelled import fails with [`IoError::Cancelled`].
 pub fn import_with(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -> Result<ImportResult, IoError> {
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    let r = import_stages(name, bytes, ctl)?;
+    let mut r = import_stages(name, bytes, ctl)?;
+    r.origin = ImportOrigin::detected(bytes);
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(1.0);
     Ok(r)
 }
 
 fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -> Result<ImportResult, IoError> {
+    if photocraft_xcf::is_xcf(bytes) || has_extension(name, "xcf") {
+        return xcf_import::import(name, bytes, ctl);
+    }
     // A declared native extension must reach its loader so malformed bundles retain format errors.
     if has_extension(name, photocraft_format::EXTENSION) || photocraft_format::is_pcraft(bytes) {
-        return Ok(ImportResult { document: photocraft_format::load_from_bytes(bytes)?, warnings: Vec::new() });
+        return Ok(ImportResult {
+            document: photocraft_format::load_from_bytes(bytes)?,
+            warnings: Vec::new(),
+            origin: ImportOrigin::writable(ImportFormat::Pcraft),
+        });
     }
     if is_psd(bytes) {
         let file = PsdFile::from_bytes(bytes)?;
@@ -171,7 +188,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -
         ctl.progress(0.05);
         let (mut document, warnings) = psd_import::psd_to_document_with(&file, ctl).ok_or(IoError::Cancelled)?;
         document.name = name.to_string();
-        return Ok(ImportResult { document, warnings });
+        return Ok(ImportResult { document, warnings, origin: ImportOrigin::detected(bytes) });
     }
     if raw::is_raw(bytes) {
         return raw::import_raw(name, bytes);
@@ -191,6 +208,9 @@ fn has_extension(name: &str, expected: &str) -> bool {
 /// bare extension).
 pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result<ExportResult, IoError> {
     let ext = extension(name_or_ext);
+    if ext == "xcf" {
+        return Err(IoError::Unsupported("XCF is an import-only format; choose a writable destination such as .pcraft".into()));
+    }
     if ext == photocraft_format::EXTENSION {
         let previews = photocraft_format::SaveOptions {
             thumbnail: Some(photocraft_compose::thumbnail(doc, 256)),
@@ -199,8 +219,10 @@ pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result
         return Ok(ExportResult { bytes: photocraft_format::save_to_bytes(doc, &previews)?, warnings: Vec::new() });
     }
     if ext == "psd" || ext == "psb" {
+        xcf_export::effective_icc(doc).map_err(|error| IoError::Unsupported(format!("cannot represent imported sample interpretation in PSD: {error}")))?;
         let o = PsdExportOptions { force_psb: opts.force_psb || ext == "psb", ..Default::default() };
-        let (file, warnings) = document_to_psd_with(doc, &o);
+        let (file, mut warnings) = document_to_psd_with(doc, &o);
+        warnings.extend(import_state_export_warnings(doc));
         // Never write a header the reader would refuse (e.g. a zero-sized canvas).
         file.header.validate()?;
         let bytes = file.to_bytes()?;
@@ -208,9 +230,38 @@ pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result
     }
     let format = photocraft_codecs::from_extension(&ext).ok_or_else(|| IoError::UnknownFormat(name_or_ext.to_string()))?;
     if format == photocraft_codecs::Format::Tiff && opts.tiff_layers && tiff_layers::would_write_layers(doc) {
-        return tiff_layers::export_layered(doc, opts);
+        let mut result = tiff_layers::export_layered(doc, opts)?;
+        result.warnings.extend(import_state_export_warnings(doc));
+        return Ok(result);
     }
-    flat::export_flat(doc, format, opts)
+    let mut result = flat::export_flat(doc, format, opts)?;
+    result.warnings.extend(import_state_export_warnings(doc));
+    Ok(result)
+}
+
+fn import_state_export_warnings(doc: &Document) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if doc.sample_encoding.is_some() || doc.source_color_context.is_some() {
+        warnings.push("Original GIMP sample interpretation and color provenance are not retained by this format; save as .pcraft to keep them".into());
+    }
+    for (_, _, layer) in doc.walk() {
+        if layer.indexed_source.is_none() && layer.import_compositing.is_none() {
+            continue;
+        }
+        // Diagnostics remain bounded even when an imported layer has a very long Unicode name.
+        let mut characters = layer.name.chars();
+        let mut label: String = characters.by_ref().take(128).collect();
+        if characters.next().is_some() {
+            label.push('…');
+        }
+        if layer.indexed_source.is_some() {
+            warnings.push(format!("Layer {label:?}: original GIMP palette indices are not retained by this format; save as .pcraft to keep them"));
+        }
+        if layer.import_compositing.is_some() {
+            warnings.push(format!("Layer {label:?}: original GIMP compositing settings are not retained by this format; save as .pcraft to keep them"));
+        }
+    }
+    warnings
 }
 
 /// The PSD's merged composite as straight RGBA floats (row-major), converted
@@ -248,4 +299,40 @@ pub fn merged_composite(file: &PsdFile) -> Result<Vec<[f32; 4]>, IoError> {
     let l = doc.layers.first().ok_or_else(|| IoError::Unsupported("no merged image".into()))?;
     let s = l.surface().ok_or_else(|| IoError::Unsupported("no merged image".into()))?;
     Ok(photocraft_compose::surface_to_buffer(s, doc.bounds()).px)
+}
+
+#[cfg(test)]
+mod xcf_export_tests {
+    use super::*;
+
+    #[test]
+    fn xcf_exports_are_explicitly_unsupported() {
+        let doc = Document::new("test", photocraft_doc::Size::new(1, 1), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        assert!(matches!(export(&doc, "out.XCF", &ExportOptions::default()), Err(IoError::Unsupported(_))));
+    }
+
+    #[test]
+    fn source_interpretation_loss_is_named_and_native_retains_it() {
+        let mut doc = Document::new("test", photocraft_doc::Size::new(1, 1), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        assert!(import_state_export_warnings(&doc).is_empty());
+        doc.sample_encoding = Some(photocraft_doc::SampleEncoding::Linear);
+        assert!(import_state_export_warnings(&doc).iter().any(|warning| warning.contains("GIMP sample interpretation")));
+        assert!(export(&doc, "pcraft", &ExportOptions::default()).unwrap().warnings.is_empty());
+    }
+
+    #[test]
+    fn interpretation_diagnostics_bound_unicode_layer_names() {
+        let mut doc = Document::new("test", photocraft_doc::Size::new(1, 1), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        let mut layer = photocraft_doc::Layer::raster("🎨".repeat(10000), doc.pixel_format());
+        layer.import_compositing = Some(photocraft_doc::ImportCompositing {
+            blend_encoding: photocraft_doc::SampleEncoding::NonlinearProfile,
+            composite_encoding: photocraft_doc::SampleEncoding::NonlinearProfile,
+            pass_through: false,
+        });
+        doc.layers.push(layer);
+        let warnings = import_state_export_warnings(&doc);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains('…'));
+        assert!(warnings[0].len() < 1024);
+    }
 }

@@ -14,8 +14,8 @@ type Inbox = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
 /// Everything File › Open reads: PhotoCraft and Photoshop documents, flat images, and Photoshop
 /// brushes (.abr) and gradients (.grd), which go to the preset libraries.
 const OPEN_EXTS: &[&str] = &[
-    "pcraft", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pam",
-    "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd",
+    "xcf", "pcraft", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm",
+    "pam", "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd",
 ];
 const CANVAS_ID: &str = "photocraft_canvas";
 
@@ -138,7 +138,7 @@ impl eframe::App for WebShell {
 fn services(inbox: Inbox, ctx: egui::Context) -> Services {
     let open_inbox = inbox.clone();
     Services {
-        import: Some(Box::new(|name: &str, bytes: &[u8]| photocraft_io::import(name, bytes).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string()))),
+        import: Some(Box::new(|name: &str, bytes: &[u8]| photocraft_io::import(name, bytes).map_err(|e| e.to_string()))),
         export: Some(Box::new(|doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings| {
             let mut opts = photocraft_io::ExportOptions::default();
             if let Some(q) = settings.jpeg_quality {

@@ -1,6 +1,6 @@
 # Roadmap
 
-Status legend: ✅ done · 🟡 in progress · ⬜ not started. Updated 2026-10-07.
+Status legend: ✅ done · 🟡 in progress · ⬜ not started. Updated 2026-10-09.
 
 **Parity metrics.** `cargo xtask parity` measures how much of Photoshop's menu tree is *wired to a
 command* and writes [`parity.md`](parity.md). It does **not** measure whether those commands behave
@@ -91,6 +91,18 @@ Synthetic 8/16/32-bit PSD → edit → `.pcraft` → PSD tests preserve the filt
 undo/redo. Unmapped Camera Raw fields/versions remain opaque; Photoshop
 acceptance of generated exports and pixel parity are still unverified. Corpus floors above are
 unchanged.
+
+2026-10-09: XCF import now has 58 supported GIMP 2.8/2.10/3.x corpus inputs verified
+against independent GIMP-exported PNGs after both sides pass through ICC colour management.
+The worst colour/alpha difference is 0.8010/255 (the acceptance limit remains 2/255);
+five deliberately unsupported cases are counted separately. Coverage includes RGB/Gray
+U8/U16/half/F32 linear, nonlinear and perceptual encodings, compatible embedded ICC,
+indexed duplicate-palette identity, masks, isolated/pass-through groups and raw/RLE/zlib.
+Original samples, ICC and indexed provenance survive native saves and edits. Imported
+composition policies explicitly use whole-document CPU fallback, verified on a hardware
+GPU adapter. Other blend operators and editable text/vector/GEGL features remain outside
+this scope; XCF writing is not supported. These measurements cover the checked corpus,
+not arbitrary GIMP projects or interactive desktop acceptance.
 
 ### Where we're going (priority order)
 

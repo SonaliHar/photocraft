@@ -9,3 +9,14 @@ target/
 /temp
 /book/output
 /craft-fonts
+.env*
+*.rs.bk
+*.rlib
+*.profraw
+*.profdata
+*.log
+*.tmp
+*.swp
+.DS_Store
+Thumbs.db
+.idea/

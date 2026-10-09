@@ -2,7 +2,8 @@
 //! a document's canvas, which places the file as a layer), command-line paths at launch
 //! and the OS's "open these documents" requests (macOS Finder double-click, Open With, drops on the
 //! Dock icon) all go through [`PhotocraftApp::open_file`], so each one names the document after the
-//! file, remembers its path (File › Save writes back to it) and adds it to Open Recent. Failures
+//! file, records its source and adds it to Open Recent. Writable formats also establish a
+//! destination for File › Save; XCF projects require Save As. Failures
 //! are shown as errors (status bar + notice); import warnings as a notice.
 
 use crate::{PhotocraftApp, notices};
@@ -45,7 +46,8 @@ pub fn display_name(path: &str) -> String {
 
 impl PhotocraftApp {
     /// Open `bytes` read from the file at `path`: the document is named after the file, keeps
-    /// `path` for File › Save, and `path` goes to the top of Open Recent. Returns the import
+    /// its source identity, and `path` goes to the top of Open Recent. Writable formats also
+    /// keep `path` for File › Save; XCF requires a new destination. Returns the import
     /// warnings (also shown to the user).
     pub fn open_file(&mut self, path: &str, bytes: &[u8]) -> Result<Vec<String>, String> {
         // Brushes/gradients go to the preset libraries (no document, no Open Recent entry).
@@ -65,10 +67,12 @@ impl PhotocraftApp {
     /// Record that the active document was just opened from `path`: File › Save writes back to it
     /// (unless it's a template) and it goes to the top of Open Recent.
     pub(crate) fn opened_from(&mut self, path: &str) {
-        if !is_template(path)
-            && let Some(st) = self.session.active_mut()
-        {
-            st.path = Some(path.to_string());
+        if let Some(st) = self.session.active_mut() {
+            let origin = st.source.as_ref().map_or_else(photocraft_io::ImportOrigin::default, |source| source.origin);
+            st.set_import_origin(origin, display_name(path), Some(path.to_string()));
+            if is_template(path) {
+                st.path = None;
+            }
         }
         self.push_recent(path);
     }
@@ -209,6 +213,12 @@ impl PhotocraftApp {
     pub(crate) fn place_bytes(&mut self, name: &str, bytes: Vec<u8>, linked: Option<String>) -> Result<serde_json::Value, String> {
         let r = photocraft_engine::file_cmds::place_bytes(&mut self.session, name, bytes, linked, &serde_json::json!({})).map_err(|e| e.to_string());
         self.sync_views();
+        if let Ok(value) = &r
+            && let Some(items) = value.get("warnings").and_then(serde_json::Value::as_array)
+        {
+            let warnings: Vec<String> = items.iter().filter_map(serde_json::Value::as_str).map(str::to_owned).collect();
+            notices::io_warnings(self, &format!("Placed {name}"), &warnings);
+        }
         r
     }
 

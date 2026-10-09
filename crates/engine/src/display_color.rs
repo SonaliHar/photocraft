@@ -394,13 +394,15 @@ impl ColorState {
     /// profile).
     pub fn canvas_display_for(&self, doc: &Document, display: Option<u32>) -> Result<Arc<CanvasDisplay>> {
         let space = mode_space(doc.mode);
-        let doc_hash = doc.icc_profile.as_ref().and_then(|b| profile_from_bytes(b).ok()).filter(|p| p.color_space == space).map_or(0, |p| p.content_hash());
+        // Explicit source transfer can change interpretation while ICC bytes remain identical.
+        // Cache by the effective composite profile, so encoding edits/undo invalidate display.
+        let composite = composite_profile(doc);
+        let doc_hash = composite.content_hash();
         let monitor = self.monitor_for(display);
         let key = (space, doc_hash, monitor.content_hash());
         if let Some(d) = self.display.canvas.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
             return Ok(d.clone());
         }
-        let composite = composite_profile(doc);
         let encode_srgb = is_linear_rgb(&composite);
         let source = if encode_srgb { Arc::new(srgb_curve_twin(&composite)) } else { composite };
         let transform = if source.content_hash() == monitor.content_hash() {

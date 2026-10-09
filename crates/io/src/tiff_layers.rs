@@ -112,7 +112,7 @@ pub(crate) fn import_layered(name: &str, img: &Image, layers: &[u8]) -> Result<I
     if !img.meta.text.is_empty() {
         warnings.push(format!("{} text metadata entries are not kept in the document", img.meta.text.len()));
     }
-    Ok(ImportResult { document: doc, warnings })
+    Ok(ImportResult { document: doc, warnings, origin: crate::ImportOrigin::writable(crate::ImportFormat::Flat(photocraft_codecs::Format::Tiff)) })
 }
 
 /// Interleaved native-endian samples → planar big-endian planes (PSD merged-image order),

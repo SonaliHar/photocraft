@@ -405,6 +405,10 @@ impl Session {
     /// The job's result is `{document, name, warnings, color}`; on wasm it runs inline.
     pub fn start_open(&mut self, name: &str, source: OpenSource) -> Result<Started> {
         let label = format!("Opening {name}");
+        let source_path = match &source {
+            OpenSource::Path(path) => Some(path.clone()),
+            OpenSource::Bytes(_) => None,
+        };
         let name_w = name.to_string();
         let name_a = name.to_string();
         self.start_job(
@@ -426,7 +430,14 @@ impl Session {
                 })
             },
             move |s, r: photocraft_io::ImportResult| {
+                let origin = r.origin;
                 let (index, color) = s.open_document(r.document, None);
+                if let Some(state) = s.active_mut() {
+                    state.set_import_origin(origin, &name_a, source_path.clone());
+                    if source_path.as_deref().is_some_and(crate::file_cmds::is_template) {
+                        state.path = None;
+                    }
+                }
                 Ok(json!({"document": index, "name": name_a, "warnings": r.warnings, "color": color}))
             },
         )

@@ -13,8 +13,11 @@ pub mod analysis;
 pub mod blend_if;
 pub mod comps;
 pub mod effects;
+pub mod import_compositing;
+pub mod indexed_source;
 pub mod mode;
 pub mod pattern;
+pub mod sample_encoding;
 pub mod slices;
 pub mod text;
 pub mod text_styles;
@@ -33,11 +36,14 @@ pub use effects::{
     Bevel, BevelContour, BevelStyle, BevelTechnique, BevelTexture, Contour, Effect, FxCommon, FxPaint, GlobalLight, Glow, GlowSource, GlowTechnique, Gradient,
     GradientStyle, Satin, Shadow, StrokeFx, StrokePosition,
 };
+pub use import_compositing::ImportCompositing;
+pub use indexed_source::{IndexedSource, IndexedSourceError};
 pub use mode::{ColorTable, Duotone, DuotoneInk, StackMode};
 pub use pattern::Pattern;
 pub use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
 pub use photocraft_geom::{Affine, Rect, Size};
 pub use photocraft_raster::Surface;
+pub use sample_encoding::{SampleEncoding, SourceColorContext};
 use serde::{Deserialize, Serialize};
 pub use slices::{Slice, SliceKind, SliceOrigin, Slices};
 pub use text_styles::TextStyles;
@@ -454,6 +460,8 @@ impl LayerContent {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Layer {
+    pub indexed_source: Option<IndexedSource>,
+    pub import_compositing: Option<ImportCompositing>,
     pub id: LayerId,
     pub name: String,
     pub visible: bool,
@@ -502,6 +510,8 @@ pub struct Layer {
 impl Layer {
     pub fn new(name: impl Into<String>, content: LayerContent) -> Self {
         Layer {
+            indexed_source: None,
+            import_compositing: None,
             id: LayerId::fresh(),
             name: name.into(),
             visible: true,
@@ -643,6 +653,8 @@ pub struct Metadata {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Document {
+    pub sample_encoding: Option<SampleEncoding>,
+    pub source_color_context: Option<SourceColorContext>,
     pub id: DocId,
     pub name: String,
     pub size: Size,
@@ -702,6 +714,8 @@ pub type LayerPath = Vec<usize>;
 impl Document {
     pub fn new(name: impl Into<String>, size: Size, mode: ColorMode, depth: SampleType) -> Self {
         Document {
+            sample_encoding: None,
+            source_color_context: None,
             id: DocId::fresh(),
             name: name.into(),
             size,

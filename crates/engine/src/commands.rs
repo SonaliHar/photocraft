@@ -218,9 +218,10 @@ fn destructive_adjust(s: &mut Session, label: &str, adj: Adjustment, p: &Value) 
     s.edit(label, |doc, _| {
         let sel = doc.selection.clone();
         let mode = doc.mode;
+        let transfer = photocraft_compose::adjust::Transfer::for_doc(doc);
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         let surf = l.surface_mut().ok_or_else(|| EngineError::Other("not a pixel layer".into()))?;
-        pixels::adjust_surface(surf, &adj, sel.as_ref(), mode);
+        pixels::adjust_surface_with_transfer(surf, &adj, sel.as_ref(), mode, transfer);
         Ok(())
     })?;
     Ok(Value::Null)
@@ -616,7 +617,7 @@ fn build() -> Vec<CommandSpec> {
                 below.push(idx - 1);
                 let lower = doc.layer_at(&below).ok_or(EngineError::NoLayer(id))?.clone();
                 let upper = doc.layer(id).ok_or(EngineError::NoLayer(id))?.clone();
-                let merged = pixels::merge_down(doc.bounds(), &lower, &upper, doc.pixel_format());
+                let merged = pixels::merge_down(doc, &lower, &upper);
                 doc.remove(id);
                 *doc.layer_at_mut(&below).ok_or(EngineError::NoLayer(lower.id))? = merged;
                 *active = Some(lower.id);

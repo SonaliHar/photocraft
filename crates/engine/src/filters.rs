@@ -153,6 +153,19 @@ pub fn apply_filter_to_surface(
     selection: Option<&photocraft_raster::Surface>,
     canvas: photocraft_geom::Rect,
 ) -> Option<photocraft_raster::Surface> {
+    apply_filter_to_surface_with_transfer(id, params, surf, bounds, selection, canvas, None)
+}
+
+/// As [`apply_filter_to_surface`], with an explicit document transfer for adjustment filters.
+pub fn apply_filter_to_surface_with_transfer(
+    id: &str,
+    params: &Value,
+    surf: &photocraft_raster::Surface,
+    bounds: photocraft_geom::Rect,
+    selection: Option<&photocraft_raster::Surface>,
+    canvas: photocraft_geom::Rect,
+    transfer: Option<photocraft_compose::adjust::Transfer>,
+) -> Option<photocraft_raster::Surface> {
     // Liquify / Puppet Warp / Perspective Warp smart filters (distort_cmds).
     if let Some(out) = crate::distort_cmds::apply_to_surface(id, params, surf, canvas) {
         return Some(out);
@@ -163,7 +176,7 @@ pub fn apply_filter_to_surface(
     }
     // Image › Adjustments recorded as smart filters (Levels, Curves, Shadows/Highlights… from PSD).
     if let Some(kind) = id.strip_prefix("image.adjustments.") {
-        return crate::adjust_cmds::adjust_as_filter(kind, params, surf);
+        return crate::adjust_cmds::adjust_as_filter(kind, params, surf, transfer);
     }
     // WebAssembly plug-in smart filters (plugin_cmds).
     if id == crate::plugin_cmds::RUN {

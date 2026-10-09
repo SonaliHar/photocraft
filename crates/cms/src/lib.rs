@@ -27,6 +27,7 @@ pub mod profile;
 pub mod synth;
 pub mod transform;
 mod write;
+pub mod xcf_color;
 
 pub use builtin::Builtin;
 pub use clut::Clut;

@@ -14,8 +14,8 @@ use std::sync::Arc;
 /// Everything File › Open reads: PhotoCraft and Photoshop documents, flat images, and Photoshop
 /// brushes (.abr) and gradients (.grd), which go to the preset libraries.
 const OPEN_EXTS: &[&str] = &[
-    "pcraft", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pam",
-    "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd",
+    "xcf", "pcraft", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm",
+    "pam", "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd",
 ];
 
 /// File › Save As formats: (filter name, extensions). The filter matching the suggested name's
@@ -68,6 +68,7 @@ fn recovery_dir() -> Option<PathBuf> {
 /// [`photocraft_format::atomic`]). Every document write (Save, Save As, Export, Save for Web) and
 /// the preferences go through here, so a failed or interrupted save never destroys the old file.
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    photocraft_automation::files::validate_destination(path, None, None).map_err(|e| e.to_string())?;
     photocraft_format::atomic_write(path, bytes).map_err(|e| e.to_string())
 }
 
@@ -139,6 +140,12 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     let automation_write = automation.clone().map(|workspace| {
         Box::new(move |path: &str, bytes: &[u8]| workspace.write(path, bytes).map_err(|error| error.to_string())) as photocraft_ui_egui::AutomationWriteFn
     });
+    let automation_validate_write = automation.clone().map(|workspace| {
+        Box::new(move |path: &str, source: Option<&photocraft_engine::SourceIdentity>| {
+            let protected = source.filter(|s| s.origin.is_read_only()).and_then(|s| s.path.as_deref());
+            workspace.guard_write(path, protected).map_err(|e| e.to_string())
+        }) as photocraft_ui_egui::ValidateWriteFn
+    });
     let step: fn(&str, &serde_json::Value) -> photocraft_engine::Result<()> = photocraft_automation::workspace::authorize_desktop_engine_step;
     let automation_authorize = automation.is_some().then_some(step);
     let automation_command = automation.map(|_| {
@@ -147,9 +154,11 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         }) as photocraft_ui_egui::AutomationCommandFn
     });
     Services {
-        import: Some(Box::new(|name: &str, bytes: &[u8]| {
-            crate::crash_guard::guard("Open", || photocraft_io::import(name, bytes).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string()))
+        validate_write: Some(Box::new(|path, source| {
+            photocraft_automation::files::validate_destination(Path::new(path), source, None).map_err(|e| e.to_string())
         })),
+        automation_validate_write,
+        import: Some(Box::new(|name: &str, bytes: &[u8]| crate::crash_guard::guard("Open", || photocraft_io::import(name, bytes).map_err(|e| e.to_string())))),
         export: Some(Box::new(|doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings| {
             let mut opts = photocraft_io::ExportOptions::default();
             if let Some(q) = settings.jpeg_quality {

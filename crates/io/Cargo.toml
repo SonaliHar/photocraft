@@ -24,6 +24,7 @@ photocraft-doc = { workspace = true }
 photocraft-compose = { workspace = true }
 photocraft-algo = { workspace = true }
 photocraft-psd = { workspace = true }
+photocraft-xcf = { workspace = true }
 photocraft-codecs = { workspace = true }
 photocraft-raw = { workspace = true }
 photocraft-text = { workspace = true }
@@ -35,6 +36,7 @@ serde_json = { workspace = true }
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 
 [dev-dependencies]
+flate2 = { workspace = true }
 photocraft-psd = { workspace = true, features = ["testgen"] }
 photocraft-raw = { workspace = true, features = ["testgen"] }
 proptest = { workspace = true }

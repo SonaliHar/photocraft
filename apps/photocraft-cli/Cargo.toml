@@ -30,3 +30,7 @@ photocraft-codecs = { workspace = true }
 serde_json = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
+
+[dev-dependencies]
+flate2 = { workspace = true }
+

@@ -40,3 +40,6 @@ flate2 = { workspace = true }
 photocraft-raw = { workspace = true, features = ["testgen"] }
 # WebAssembly text -> binary for plug-in test modules (Apache-2.0 WITH LLVM-exception).
 wat = "1.228"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+same-file = "1.0"

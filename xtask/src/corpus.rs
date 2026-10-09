@@ -9,18 +9,27 @@ use crate::pinned::USER_AGENT;
 use crate::{cargo, root, run};
 
 /// Crates with corpus tests (behind their `corpus` feature).
-pub const CORPUS_CRATES: &[&str] = &["photocraft-psd", "photocraft-codecs", "photocraft-io", "photocraft-engine"];
+pub const CORPUS_CRATES: &[&str] = &["photocraft-xcf", "photocraft-psd", "photocraft-codecs", "photocraft-io", "photocraft-engine"];
 
 /// Corpus crates with a `heif` feature: test-corpus enables it so the HEIF corpus tests run.
 const HEIF_CRATES: &[&str] = &["photocraft-codecs", "photocraft-io"];
 
 /// Paths whose changes make `test-corpus --changed` run (the file-format and rendering crates).
-const CRITICAL: &[&str] = &["crates/psd/", "crates/io/", "crates/codecs/", "crates/heif/", "crates/compose/", "crates/gpu/", "crates/text/", "crates/format/"];
+const CRITICAL: &[&str] =
+    &["crates/xcf/", "crates/psd/", "crates/io/", "crates/codecs/", "crates/heif/", "crates/compose/", "crates/gpu/", "crates/text/", "crates/format/"];
 
 /// `cargo xtask corpus [--all | --pngsuite | --download | --psd | --psd-tools | --heif | --photoshop [--local]] [--update-manifest]`
 pub fn cmd(args: &[&str]) -> Result<(), String> {
     let update = args.contains(&"--update-manifest");
     let mut did = false;
+    if args.contains(&"--xcf") {
+        if args.contains(&"--local") {
+            corpus_pins::XCF.fetch_local(&local_clone()?, update)?;
+        } else {
+            corpus_pins::xcf()?.fetch(update)?;
+        }
+        did = true;
+    }
     if args.contains(&"--all") {
         return fetch_all(args.contains(&"--local"));
     }
@@ -76,6 +85,13 @@ pub fn fetch_all(local: bool) -> Result<(), String> {
             c.fetch(false)?;
         }
     }
+    if local {
+        corpus_pins::XCF.fetch_local(&local_clone()?, false)?;
+    } else if let Ok(corpus) = corpus_pins::xcf() {
+        corpus.fetch(false)?;
+    } else {
+        eprintln!("XCF corpus: publication/pin pending; existing published corpora retained. Use --xcf --local to validate local XCF authoring changes.");
+    }
     println!("all corpora present and verified under {}", root().join("corpus").display());
     Ok(())
 }
@@ -88,6 +104,11 @@ fn list() {
     let corpus = root().join("corpus");
     let png = corpus.join("pngsuite");
     let png_ok = pngsuite_count(&png) > 0;
+    println!(
+        "  corpus/xcf/ [{}] original GIMP XCF oracles; published pin: {:?}. Fetch: --xcf [--local]",
+        status(corpus_pins::XCF.is_current()),
+        corpus_pins::XCF_CORPUS_COMMIT
+    );
     println!(
         "Test corpora live under {} (gitignored, never committed). The corpus tests are opt-in
 (cargo feature `corpus`) and fail, not skip, when a corpus is missing. CI always runs them.

@@ -13,22 +13,31 @@ use crate::AutomationError;
 pub struct Opened {
     pub document: Document,
     pub warnings: Vec<String>,
+    pub origin: photocraft_io::ImportOrigin,
 }
 
 /// Decode a document that was read through a filesystem capability.
 pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<Opened, AutomationError> {
-    if Path::new(name).extension().is_some_and(|extension| extension.eq_ignore_ascii_case(photocraft_format::EXTENSION)) {
-        return Ok(Opened { document: photocraft_format::load_from_bytes(bytes)?, warnings: Vec::new() });
+    if !bytes.starts_with(b"gimp xcf ") && Path::new(name).extension().is_some_and(|extension| extension.eq_ignore_ascii_case(photocraft_format::EXTENSION)) {
+        return Ok(Opened {
+            document: photocraft_format::load_from_bytes(bytes)?,
+            warnings: Vec::new(),
+            origin: photocraft_io::ImportOrigin::writable(photocraft_io::ImportFormat::Pcraft),
+        });
     }
     let r = photocraft_io::import(name, bytes)?;
-    Ok(Opened { document: r.document, warnings: r.warnings })
+    Ok(Opened { document: r.document, warnings: r.warnings, origin: r.origin })
 }
 
 /// Open a document from disk. Directory bundles and `.pcraft` ZIPs load
 /// natively; everything else goes through `photocraft-io` (PSD, PNG, …).
 pub fn open(path: &Path) -> Result<Opened, AutomationError> {
     if path.is_dir() {
-        return Ok(Opened { document: photocraft_format::load_path(path)?, warnings: Vec::new() });
+        return Ok(Opened {
+            document: photocraft_format::load_path(path)?,
+            warnings: Vec::new(),
+            origin: photocraft_io::ImportOrigin::writable(photocraft_io::ImportFormat::Pcraft),
+        });
     }
     let bytes = photocraft_format::read_file(path).map_err(|e| AutomationError::Io(format!("{}: {e}", path.display())))?;
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -50,6 +59,7 @@ pub fn save(
     opts: &ExportOptions,
     writer: Option<&mut PcraftWriter>,
 ) -> Result<Vec<String>, AutomationError> {
+    validate_destination(path, None, format_override)?;
     let ext = format_override
         .map(|f| f.trim_start_matches('.').to_ascii_lowercase())
         .or_else(|| path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()))
@@ -69,6 +79,7 @@ pub fn save(
 /// Encode a document for a capability-scoped write. Unlike [`save`], this
 /// never obtains ambient filesystem authority and emits `.pcraft` as a ZIP.
 pub fn save_bytes(doc: &Document, name: &str, format_override: Option<&str>, opts: &ExportOptions) -> Result<(Vec<u8>, Vec<String>), AutomationError> {
+    validate_write_name(Path::new(name), format_override)?;
     let ext = format_override
         .map(|format| format.trim_start_matches('.').to_ascii_lowercase())
         .or_else(|| Path::new(name).extension().map(|extension| extension.to_string_lossy().to_ascii_lowercase()))
@@ -78,6 +89,52 @@ pub fn save_bytes(doc: &Document, name: &str, format_override: Option<&str>, opt
     }
     let result = photocraft_io::export(doc, &ext, opts)?;
     Ok((result.bytes, result.warnings))
+}
+
+/// Reject import-only names independently of any format override, before encoding.
+pub fn validate_write_name(path: &Path, format_override: Option<&str>) -> Result<(), AutomationError> {
+    if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("xcf"))
+        || format_override.is_some_and(|ext| ext.trim_start_matches('.').eq_ignore_ascii_case("xcf"))
+    {
+        return Err(AutomationError::BadRequest("XCF is import-only; choose a writable format and destination".into()));
+    }
+    Ok(())
+}
+
+/// Native callers already holding ambient file authority validate the destination before
+/// encoding or creating a temporary output. Capability callers use `guard_write` instead.
+pub fn validate_destination(path: &Path, source: Option<&photocraft_engine::SourceIdentity>, format_override: Option<&str>) -> Result<(), AutomationError> {
+    use std::io::Read;
+    validate_write_name(path, format_override)?;
+    if let Some(source) = source.filter(|s| s.origin.is_read_only()).and_then(|s| s.path.as_deref()) {
+        let source = Path::new(source);
+        if source == path || matches!((std::fs::canonicalize(source), std::fs::canonicalize(path)), (Ok(a),Ok(b)) if a == b) {
+            return Err(AutomationError::BadRequest("the original XCF source is protected; choose a different destination".into()));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if path.exists() && same_file::is_same_file(source, path).map_err(|e| AutomationError::Io(format!("cannot establish XCF source identity: {e}")))? {
+            return Err(AutomationError::BadRequest("an alias of the original XCF source is protected; choose a different destination".into()));
+        }
+    }
+    match std::fs::File::open(path) {
+        Ok(mut file) => {
+            let mut prefix = [0; 9];
+            let full = match file.read_exact(&mut prefix) {
+                Ok(()) => true,
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => false,
+                Err(e) => return Err(AutomationError::Io(format!("validate destination {}: {e}", path.display()))),
+            };
+            if full && &prefix == b"gimp xcf " {
+                return Err(AutomationError::BadRequest("an existing XCF destination is protected; choose a different destination".into()));
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) if path.is_dir() => {
+            let _ = e;
+        }
+        Err(e) => return Err(AutomationError::Io(format!("cannot validate destination {}: {e}", path.display()))),
+    }
+    Ok(())
 }
 
 /// Flattened document as PNG, scaled to fit `max_side` (0 = full size).

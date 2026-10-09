@@ -10,6 +10,23 @@
 mod interrupt;
 pub use interrupt::{Cancelled, Interrupt};
 
+/// Invalid or unallocatable encoded raster input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RasterInputError {
+    InvalidBounds,
+    LengthMismatch,
+    LimitExceeded,
+    AllocationFailed,
+    Cancelled,
+}
+
+impl std::fmt::Display for RasterInputError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid encoded raster input: {self:?}")
+    }
+}
+impl std::error::Error for RasterInputError {}
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -454,6 +471,78 @@ impl Surface {
     }
 
     /// Build from interleaved *encoded* bytes of `format` covering `r`.
+    /// Checked import boundary. Samples are copied without float normalization.
+    pub fn try_from_interleaved(format: PixelFormat, r: Rect, bytes: &[u8]) -> Result<Self, RasterInputError> {
+        Self::try_from_interleaved_with(format, r, bytes, &Interrupt::NONE)
+    }
+
+    pub fn try_from_interleaved_with(format: PixelFormat, r: Rect, bytes: &[u8], interrupt: &Interrupt<'_>) -> Result<Self, RasterInputError> {
+        let mut s = Self::new(format);
+        s.try_write_interleaved_with(r, bytes, interrupt)?;
+        Ok(s)
+    }
+
+    /// Validate and stage encoded input before changing this surface.
+    pub fn try_write_interleaved(&mut self, r: Rect, bytes: &[u8]) -> Result<(), RasterInputError> {
+        self.try_write_interleaved_with(r, bytes, &Interrupt::NONE)
+    }
+
+    pub fn try_write_interleaved_with(&mut self, r: Rect, bytes: &[u8], interrupt: &Interrupt<'_>) -> Result<(), RasterInputError> {
+        if interrupt.cancelled() {
+            return Err(RasterInputError::Cancelled);
+        }
+        const MAX_SIDE: u32 = 262_144;
+        const COORD_LIMIT: i32 = 1 << 29;
+        if r.x1 < r.x0 || r.y1 < r.y0 || [r.x0, r.x1, r.y0, r.y1].iter().any(|v| !(-COORD_LIMIT..=COORD_LIMIT).contains(v)) {
+            return Err(RasterInputError::InvalidBounds);
+        }
+        if r.width() > MAX_SIDE || r.height() > MAX_SIDE {
+            return Err(RasterInputError::LimitExceeded);
+        }
+        let bpp = self.format.bytes_per_pixel();
+        let w = usize::try_from(r.width()).map_err(|_| RasterInputError::LimitExceeded)?;
+        let h = usize::try_from(r.height()).map_err(|_| RasterInputError::LimitExceeded)?;
+        let len = w.checked_mul(h).and_then(|v| v.checked_mul(bpp)).ok_or(RasterInputError::LimitExceeded)?;
+        if len > 2 * (1usize << 30) {
+            return Err(RasterInputError::LimitExceeded);
+        }
+        if bytes.len() != len {
+            return Err(RasterInputError::LengthMismatch);
+        }
+        let mut staged = self.clone();
+        let tile_len = (TILE_SIZE as usize).checked_mul(TILE_SIZE as usize).and_then(|v| v.checked_mul(bpp)).ok_or(RasterInputError::LimitExceeded)?;
+        for tc in r.tiles() {
+            if interrupt.cancelled() {
+                return Err(RasterInputError::Cancelled);
+            }
+            let mut data = Vec::new();
+            data.try_reserve_exact(tile_len).map_err(|_| RasterInputError::AllocationFailed)?;
+            if let Some(t) = self.tile(tc) {
+                data.extend_from_slice(t.bytes());
+            } else {
+                data.resize(tile_len, 0);
+                for p in data.chunks_exact_mut(bpp) {
+                    p.copy_from_slice(self.default_bytes());
+                }
+            }
+            let tr = tc.rect().intersect(&r);
+            let span = tr.width() as usize * bpp;
+            for y in tr.y0..tr.y1 {
+                let src = (((y - r.y0) as usize) * w + (tr.x0 - r.x0) as usize) * bpp;
+                let dst = (((y - tc.ty * TILE_SIZE) as usize) * TILE_SIZE as usize + (tr.x0 - tc.tx * TILE_SIZE) as usize) * bpp;
+                let source = bytes.get(src..src + span).ok_or(RasterInputError::LengthMismatch)?;
+                data.get_mut(dst..dst + span).ok_or(RasterInputError::InvalidBounds)?.copy_from_slice(source);
+            }
+            staged.tiles.insert(tc, Arc::new(Tile { data: data.into_boxed_slice() }));
+        }
+        if interrupt.cancelled() {
+            return Err(RasterInputError::Cancelled);
+        }
+        *self = staged;
+        Ok(())
+    }
+
+    /// Build from interleaved *encoded* bytes of `format` covering `r`.
     pub fn from_interleaved(format: PixelFormat, r: Rect, bytes: &[u8]) -> Self {
         let mut s = Surface::new(format);
         s.write_interleaved(r, bytes);
@@ -827,5 +916,49 @@ mod tests {
         s.fill_rect(Rect::new(0, 0, 2000, 1500), &[1.0]);
         s.fill_rect(Rect::new(-700, 4000, -699, 4001), &[0.5]);
         assert_eq!(s.content_bounds(), Rect::new(-700, 0, 2000, 4001));
+    }
+}
+
+#[cfg(test)]
+mod checked_import_tests {
+    use super::*;
+    #[test]
+    fn rejects_bad_input_without_changing_surface() {
+        let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
+        let mut s = Surface::new(fmt);
+        let before = s.clone();
+        for r in [Rect::new(i32::MIN, 0, i32::MAX, 1), Rect::new(1, 0, 0, 1), Rect::new(0, 0, 300000, 1)] {
+            assert!(s.try_write_interleaved(r, &[]).is_err());
+            assert_eq!(s, before);
+        }
+        assert!(s.try_write_interleaved(Rect::new(0, 0, 1, 1), &[0]).is_err());
+        assert_eq!(s, before);
+    }
+    #[test]
+    fn exact_native_samples_across_negative_tile_boundary() {
+        for depth in SampleType::ALL {
+            let f = PixelFormat::new(ColorMode::Grayscale, depth, true);
+            let r = Rect::new(-1, -1, 2, 1);
+            let bytes: Vec<u8> = (0..r.width() as usize * r.height() as usize * f.bytes_per_pixel()).map(|n| (n * 17) as u8).collect();
+            let s = Surface::try_from_interleaved(f, r, &bytes).unwrap();
+            assert_eq!(s.to_interleaved(r), bytes);
+        }
+    }
+}
+
+#[cfg(test)]
+mod cancelled_ingestion_tests {
+    use super::*;
+    #[test]
+    fn cancellation_between_staged_tiles_keeps_original() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let mut s = Surface::new(PixelFormat::RGBA8);
+        s.write_pixel(0, 0, &[1.0, 0.0, 0.0, 1.0]);
+        let original = s.clone();
+        let calls = AtomicUsize::new(0);
+        let cancel = || calls.fetch_add(1, Ordering::Relaxed) >= 2;
+        let ctl = Interrupt::cancel_only(&cancel);
+        assert_eq!(s.try_write_interleaved_with(Rect::new(0, 0, 257, 1), &vec![255; 257 * 4], &ctl), Err(RasterInputError::Cancelled));
+        assert_eq!(s, original);
     }
 }

@@ -374,3 +374,32 @@ fn proof_colors_still_apply_on_top() {
     s.execute("view.gamutWarning", json!({"on": true})).unwrap();
     assert_ne!(sig, s.color.display_signature(&d));
 }
+
+#[test]
+fn imported_encoding_controls_display_at_every_depth() {
+    let s = Session::new();
+    for depth in SampleType::ALL {
+        let mut d = rgb_doc(Some(Builtin::Srgb.profile()), [0.5; 3], depth);
+        let legacy = shown(&s, &d);
+        d.sample_encoding = Some(photocraft_doc::SampleEncoding::Linear);
+        let linear = shown(&s, &d);
+        let expected = photocraft_color::convert::linear_to_srgb(0.5) * 255.0;
+        for v in linear {
+            assert!((v - expected).abs() <= TOL, "{depth:?} linear shown {v}");
+        }
+        assert_eq!(
+            d.layers[0].surface().unwrap().pixel(4, 4)[0],
+            if depth == SampleType::U8 {
+                128.0 / 255.0
+            } else if depth == SampleType::U16 {
+                32768.0 / 65535.0
+            } else {
+                0.5
+            }
+        );
+        d.sample_encoding = Some(photocraft_doc::SampleEncoding::NonlinearProfile);
+        assert_eq!(shown(&s, &d), legacy, "nonlinear float must display in its profile rather than inherit HDR assumption");
+        d.sample_encoding = None;
+        assert_eq!(shown(&s, &d), legacy);
+    }
+}

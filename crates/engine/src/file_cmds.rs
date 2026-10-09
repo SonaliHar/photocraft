@@ -89,6 +89,7 @@ pub(crate) fn read_file(path: &str) -> Result<Vec<u8>> {
 /// Every file the engine writes goes through here: crash-safe (temp file + fsync + rename, see
 /// [`photocraft_format::atomic`]), so a failed save never destroys the previous file.
 pub(crate) fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
+    validate_destination(path, None)?;
     photocraft_format::atomic_write(std::path::Path::new(path), bytes).map_err(|e| EngineError::Other(e.to_string()))
 }
 #[cfg(target_arch = "wasm32")]
@@ -115,9 +116,10 @@ pub(crate) fn list_images(dir: &str) -> Result<Vec<String>> {
 }
 
 /// Extensions the batch commands pick up from a folder.
+#[cfg(not(target_arch = "wasm32"))]
 const OPENABLE: &[&str] = &[
-    "psd", "psb", "pcraft", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "exr", "hdr", "qoi", "ico", "pnm", "ppm", "pgm", "heic", "heif",
-    "hif", "dng", "cr2", "nef", "nrw", "arw", "pef",
+    "xcf", "psd", "psb", "pcraft", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "exr", "hdr", "qoi", "ico", "pnm", "ppm", "pgm", "heic",
+    "heif", "hif", "dng", "cr2", "nef", "nrw", "arw", "pef",
 ];
 
 pub(crate) fn file_name(path: &str) -> String {
@@ -178,7 +180,66 @@ pub(crate) fn sanitize(name: &str) -> String {
 }
 
 pub(crate) fn import(name: &str, bytes: &[u8]) -> Result<Document> {
-    photocraft_io::import(name, bytes).map(|r| r.document).map_err(|e| EngineError::Other(format!("{name}: {e}")))
+    let result = import_result(name, bytes)?;
+    // Older helper contracts cannot return warnings. Fail explicitly for XCF instead of
+    // silently dropping fidelity information; helpers with warning channels use import_result.
+    if result.origin.is_read_only() && !result.warnings.is_empty() {
+        return Err(EngineError::Other(format!("{name}: XCF import requires attention: {}", result.warnings.join("; "))));
+    }
+    Ok(result.document)
+}
+
+pub(crate) fn import_result(name: &str, bytes: &[u8]) -> Result<photocraft_io::ImportResult> {
+    photocraft_io::import(name, bytes).map_err(|e| EngineError::Other(format!("{name}: {e}")))
+}
+
+/// Validate before encoding, with only the ambient authority of this native engine route.
+pub(crate) fn validate_destination(path: &str, source: Option<&crate::SourceIdentity>) -> Result<()> {
+    if extension(path).as_deref() == Some("xcf") {
+        return Err(EngineError::Other("XCF is an import-only format; choose a writable destination such as .pcraft".into()));
+    }
+    if let Some(source) = source {
+        source.check_destination(path).map_err(EngineError::Other)?;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::io::Read;
+        let target = std::path::Path::new(path);
+        if let Some(original) = source.filter(|s| s.origin.is_read_only()).and_then(|s| s.path.as_deref())
+            && target.exists()
+            && same_file::is_same_file(original, target).map_err(|e| EngineError::Other(format!("cannot establish XCF source identity: {e}")))?
+        {
+            return Err(EngineError::Other("an alias of the original XCF source is protected".into()));
+        }
+        if let Some(original) = source.filter(|s| s.origin.is_read_only()).and_then(|s| s.path.as_deref())
+            && let (Ok(a), Ok(b)) = (std::fs::canonicalize(original), std::fs::canonicalize(target))
+            && a == b
+        {
+            return Err(EngineError::Other("the original XCF source is protected".into()));
+        }
+        match std::fs::File::open(target) {
+            Ok(mut file) => {
+                let mut magic = [0u8; 9];
+                let mut read = 0;
+                while let Some(remaining) = magic.get_mut(read..) {
+                    if remaining.is_empty() {
+                        break;
+                    }
+                    let n = file.read(remaining).map_err(|e| EngineError::Other(format!("cannot inspect save destination: {e}")))?;
+                    if n == 0 {
+                        break;
+                    }
+                    read += n;
+                }
+                if &magic == b"gimp xcf " {
+                    return Err(EngineError::Other("the destination contains an XCF project and is protected".into()));
+                }
+            }
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::IsADirectory) => {}
+            Err(e) => return Err(EngineError::Other(format!("cannot validate save destination: {e}"))),
+        }
+    }
+    Ok(())
 }
 
 /// What a headless save writes beyond the format: JPEG quality and TIFF layers.
@@ -223,6 +284,7 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
 }
 
 pub(crate) fn save_doc(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> Result<Vec<String>> {
+    validate_destination(path, None)?;
     let (bytes, warnings) = encode(doc, path, save)?;
     write_file(path, &bytes)?;
     Ok(warnings)
@@ -293,7 +355,8 @@ fn close_others(s: &mut Session, p: &Value) -> Result<Value> {
 fn revert(s: &mut Session) -> Result<Value> {
     let path = s.active().and_then(|d| d.path.clone()).ok_or(EngineError::Other("the document has never been saved".into()))?;
     let bytes = read_file(&path)?;
-    let fresh = import(&file_name(&path), &bytes)?;
+    let imported = import_result(&file_name(&path), &bytes)?;
+    let fresh = imported.document;
     s.edit("Revert", |doc, active| {
         let (id, name) = (doc.id, doc.name.clone());
         *doc = fresh;
@@ -305,12 +368,21 @@ fn revert(s: &mut Session) -> Result<Value> {
     })?;
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     st.saved_revision = st.revision;
-    Ok(json!({"path": path, "layers": st.doc.layers.len()}))
+    // Content can change outside the app; a renamed XCF must never inherit its old save path.
+    if st.source.as_ref().is_some_and(|source| source.origin.is_read_only()) {
+        if imported.origin.is_read_only() {
+            st.path = None;
+        }
+    } else {
+        st.set_import_origin(imported.origin, file_name(&path), Some(path.clone()));
+    }
+    Ok(json!({"path": path, "layers": st.doc.layers.len(), "warnings": imported.warnings}))
 }
 
 fn save_a_copy(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path", "file.saveACopy")?.to_string();
     let d = s.active().ok_or(EngineError::NoDocument)?;
+    validate_destination(&path, d.source.as_ref())?;
     let mut doc = (*d.doc).clone();
     if p.get("layers").and_then(Value::as_bool) == Some(false) {
         // "Layers" unchecked in Save a Copy: write the flattened image.
@@ -341,7 +413,10 @@ pub fn open_bytes_as(s: &mut Session, name: &str, bytes: &[u8], as_ext: Option<&
         }
     };
     // Color Settings policies (preserve / convert / discard the embedded profile).
-    let (i, color) = s.open_document(doc, path);
+    let (i, color) = s.open_document(doc, path.clone());
+    if let Some(state) = s.active_mut() {
+        state.set_import_origin(r.origin, name, path);
+    }
     // Import notes (e.g. how a camera raw was developed, or that only its preview opened).
     Ok(json!({"document": i, "color": color, "warnings": r.warnings}))
 }
@@ -364,8 +439,8 @@ pub const PLACE_EMBEDDED: &str = "Place Embedded";
 pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<String>, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (cw, ch) = (d.doc.size.width as f64, d.doc.size.height as f64);
-    let fmt = d.doc.pixel_format();
-    let src = import(name, &bytes)?;
+    let imported = import_result(name, &bytes)?;
+    let src = imported.document;
     let (w, h) = (src.size.width as f64, src.size.height as f64);
     let scale = match f64_param(p, "scale") {
         Some(k) => (k / 100.0).max(1e-4),
@@ -377,7 +452,7 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
         _ => (cw / 2.0, ch / 2.0),
     };
     let (dx, dy) = ((center.0 - w * scale / 2.0).round(), (center.1 - h * scale / 2.0).round());
-    let mut px = flattened(&src, fmt);
+    let mut px = crate::pixels::flattened_into(&src, &d.doc)?;
     if (scale - 1.0).abs() > 1e-9 {
         px = resize_surface(&px, scale, scale, Resample::Bicubic);
     }
@@ -394,7 +469,7 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
         *active = Some(id);
         Ok(id)
     })?;
-    Ok(json!({"layer": id.0, "scale": scale * 100.0, "bounds": [dx, dy, dx + w * scale, dy + h * scale]}))
+    Ok(json!({"layer": id.0, "scale": scale * 100.0, "bounds": [dx, dy, dx + w * scale, dy + h * scale], "warnings": imported.warnings}))
 }
 
 fn place(s: &mut Session, p: &Value, linked: bool) -> Result<Value> {
@@ -672,6 +747,7 @@ pub(crate) fn batch_inputs(p: &Value, cmd: &str) -> Result<Vec<String>> {
 pub(crate) fn process_files(inputs: &[String], output: &str, format: &str, save: SaveOpts, suffix: &str, f: &dyn Fn(&mut Session) -> Result<()>) -> Value {
     let mut files = Vec::new();
     let mut errors = Vec::new();
+    let mut warnings = Vec::new();
     let mut written = OutputClaims::default();
     for path in inputs {
         let ext =
@@ -681,11 +757,20 @@ pub(crate) fn process_files(inputs: &[String], output: &str, format: &str, save:
             written.check(&out).map_err(EngineError::Other)?;
             let bytes = read_file(path)?;
             let mut scratch = Session::new();
-            let doc = import(&file_name(path), &bytes)?;
-            scratch.add_document(doc, Some(path.clone()));
+            let imported = import_result(&file_name(path), &bytes)?;
+            if imported.origin.is_read_only() && format == "same" {
+                return Err(EngineError::Other("XCF batch inputs require an explicit writable output format, such as pcraft".into()));
+            }
+            let source = crate::SourceIdentity::new(file_name(path), Some(path.clone()), imported.origin);
+            warnings.extend(imported.warnings.into_iter().map(|warning| format!("{}: {warning}", file_name(path))));
+            scratch.add_document(imported.document, Some(path.clone()));
+            if let Some(state) = scratch.active_mut() {
+                state.set_import_origin(source.origin, &source.label, source.path.clone());
+            }
             f(&mut scratch)?;
             let d = scratch.active().ok_or(EngineError::NoDocument)?;
-            save_doc(&d.doc, &out, save)?;
+            validate_destination(&out, Some(&source))?;
+            warnings.extend(save_doc(&d.doc, &out, save)?);
             Ok(())
         })();
         match r {
@@ -696,7 +781,7 @@ pub(crate) fn process_files(inputs: &[String], output: &str, format: &str, save:
             Err(e) => errors.push(json!({"file": path, "error": e.to_string()})),
         }
     }
-    json!({"files": files, "errors": errors})
+    json!({"files": files, "errors": errors, "warnings": warnings})
 }
 
 /// The output paths a batch run has written, so a later input whose output name matches an
@@ -772,16 +857,28 @@ fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::BadParams { cmd: cmd.into(), msg: "no files to load".into() });
     }
     let mut docs = Vec::new();
+    let mut warnings = Vec::new();
     for path in &paths {
         let bytes = read_file(path)?;
-        docs.push((file_name(path), import(&file_name(path), &bytes)?));
+        let imported = import_result(&file_name(path), &bytes)?;
+        warnings.extend(imported.warnings.into_iter().map(|warning| format!("{}: {warning}", file_name(path))));
+        docs.push((file_name(path), imported.document));
     }
     let first = &docs[0].1;
+    // A stack has one interpretation. Reject mismatched imported samples before changing
+    // the session rather than copying differently encoded values into that interpretation.
+    if docs.iter().any(|(_, doc)| doc.sample_encoding != first.sample_encoding || doc.icc_profile != first.icc_profile)
+        && docs.iter().any(|(_, doc)| doc.sample_encoding.is_some())
+    {
+        return Err(EngineError::Other("stack inputs use different sample encodings or profiles; convert them to a common color interpretation first".into()));
+    }
     let w = docs.iter().map(|(_, d)| d.size.width).max().unwrap_or(1);
     let h = docs.iter().map(|(_, d)| d.size.height).max().unwrap_or(1);
     let mut stack = Document::new(stem(&paths[0]), photocraft_doc::Size::new(w, h), first.mode, first.depth);
     stack.resolution_dpi = first.resolution_dpi;
     stack.icc_profile = first.icc_profile.clone();
+    stack.sample_encoding = first.sample_encoding;
+    stack.source_color_context = first.source_color_context.clone();
     let fmt = stack.pixel_format();
     // First file at the bottom, like Photoshop's script.
     for (name, d) in &docs {
@@ -797,7 +894,7 @@ fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value> {
         stack.layers = vec![smart];
     }
     let i = s.add_document(stack, None);
-    Ok(json!({"document": i, "layers": n}))
+    Ok(json!({"document": i, "layers": n, "warnings": warnings}))
 }
 
 // ---------- Scripts: flatten effects / masks ----------
@@ -906,6 +1003,7 @@ fn layers_to_files(s: &mut Session, p: &Value) -> Result<Value> {
         only.clipped = false;
         one.layers = vec![only];
         let path = join(&dir, &format!("{}_{:04}_{}.{format}", sanitize(&prefix), i, sanitize(&l.name)));
+        validate_destination(&path, d.source.as_ref())?;
         save_doc(&one, &path, SaveOpts::from_params(p))?;
         files.push(path);
     }

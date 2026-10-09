@@ -198,6 +198,8 @@ fn convert(a: &Args, _out: &mut dyn Write, err: &mut dyn Write) -> R {
     let opts = export_opts(a)?;
     let o = files::open(Path::new(input)).map_err(|e| e.to_string())?;
     warn_all(err, &o.warnings);
+    let source = photocraft_engine::SourceIdentity::new(input, Some(input.to_string()), o.origin);
+    files::validate_destination(Path::new(output), Some(&source), a.get("--format")).map_err(|e| e.to_string())?;
     let ws = files::save(&o.document, Path::new(output), a.get("--format"), &opts, None).map_err(|e| e.to_string())?;
     warn_all(err, &ws);
     Ok(())
@@ -288,7 +290,8 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 }
 
 fn is_input(p: &Path) -> bool {
-    let known = |e: &str| matches!(e, "pcraft" | "psd" | "psb") || photocraft_codecs::from_extension(e).is_some_and(|f| photocraft_codecs::caps(f).read);
+    let known =
+        |e: &str| matches!(e, "pcraft" | "psd" | "psb" | "xcf") || photocraft_codecs::from_extension(e).is_some_and(|f| photocraft_codecs::caps(f).read);
     p.is_file() && p.extension().is_some_and(|e| known(&e.to_string_lossy().to_ascii_lowercase()))
 }
 
@@ -323,12 +326,17 @@ fn batch(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
         let r = (|| -> Result<Vec<String>, String> {
             written.check(&target_text)?;
             let mut h = Headless::trusted_local();
-            h.open(input).map_err(|e| e.to_string())?;
+            let opened = h.open(input).map_err(|e| e.to_string())?;
+            let mut warnings: Vec<String> = serde_json::from_value(opened["warnings"].clone()).unwrap_or_default();
+            if h.session.active().and_then(|state| state.source.as_ref()).is_some_and(|source| source.origin.is_read_only()) && format.is_none() {
+                return Err("XCF batch input requires --format with an existing writable output format".into());
+            }
             for (id, p) in &actions {
                 h.command_run(id, p.clone()).map_err(|e| format!("`{id}`: {e}"))?;
             }
             let r = h.save(None, Some(&target), Some(&ext), &opts).map_err(|e| e.to_string())?;
-            Ok(serde_json::from_value(r["warnings"].clone()).unwrap_or_default())
+            warnings.extend(serde_json::from_value::<Vec<String>>(r["warnings"].clone()).unwrap_or_default());
+            Ok(warnings)
         })();
         match r {
             Ok(ws) => {

@@ -167,6 +167,14 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
         },
     };
     LayerM {
+        indexed_source: l.indexed_source.as_ref().map(|i| IndexedSourceM {
+            indices: sink.blob(i.indices()),
+            alpha: opt_blob(i.alpha(), sink),
+            palette: i.palette().to_vec(),
+            bounds: i.bounds(),
+            fingerprint: hex(&i.expanded_fingerprint()),
+        }),
+        import_compositing: l.import_compositing,
         id: l.id.0,
         name: l.name.clone(),
         visible: l.visible,
@@ -209,6 +217,11 @@ fn channel_m(c: &AlphaChannel, sink: &mut dyn Sink) -> ChannelM {
 
 pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
     DocM {
+        sample_encoding: d.sample_encoding,
+        source_color_context: d
+            .source_color_context
+            .as_ref()
+            .map(|c| SourceColorContextM { original_icc: opt_blob(&c.original_icc, sink), source_precision: c.source_precision }),
         id: d.id.0,
         name: d.name.clone(),
         size: d.size,
@@ -464,6 +477,16 @@ impl Loader<'_> {
             psd_blocks.push((key4(k)?, self.fetch.blob(h)?));
         }
         Ok(Layer {
+            indexed_source: m
+                .indexed_source
+                .as_ref()
+                .map(|i| {
+                    let fingerprint: [u8; 32] = unhex(&i.fingerprint)?.try_into().map_err(|_| FormatError::corrupt("indexed fingerprint length"))?;
+                    photocraft_doc::IndexedSource::from_parts(self.fetch.blob(&i.indices)?, self.opt_blob(&i.alpha)?, i.palette.clone(), i.bounds, fingerprint)
+                        .map_err(|_| FormatError::corrupt("invalid indexed-source planes, palette or bounds"))
+                })
+                .transpose()?,
+            import_compositing: m.import_compositing,
             id: self.id(m.id),
             name: m.name.clone(),
             visible: m.visible,
@@ -534,6 +557,18 @@ impl Loader<'_> {
             DocId::fresh()
         };
         Ok(Document {
+            sample_encoding: m.sample_encoding,
+            source_color_context: m
+                .source_color_context
+                .as_ref()
+                .map(|c| -> Result<_> {
+                    let original_icc = self.opt_blob(&c.original_icc)?;
+                    if original_icc.as_ref().is_some_and(|p| p.len() > 16 << 20) {
+                        return Err(FormatError::LimitExceeded("source ICC profile".into()));
+                    }
+                    Ok(photocraft_doc::SourceColorContext { original_icc, source_precision: c.source_precision })
+                })
+                .transpose()?,
             id,
             name: m.name.clone(),
             size: m.size,

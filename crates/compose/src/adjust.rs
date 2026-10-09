@@ -19,11 +19,30 @@ use crate::Buffer;
 pub enum Transfer {
     /// sRGB piecewise curve.
     Srgb,
+    /// Exact sRGB for imported perceptual/profile samples (without Photoshop Exposure's 2.2 approximation).
+    SrgbExact,
     /// Pure power law with this exponent.
     Gamma(f32),
 }
 
 impl Transfer {
+    pub fn for_doc(doc: &photocraft_doc::Document) -> Self {
+        use photocraft_doc::SampleEncoding;
+        match doc.sample_encoding {
+            None => Self::for_document(doc.mode, doc.depth),
+            Some(SampleEncoding::Linear) => Self::Gamma(1.0),
+            Some(SampleEncoding::Perceptual) => Self::SrgbExact,
+            Some(SampleEncoding::NonlinearProfile) => {
+                let profile = doc.icc_profile.as_ref().and_then(|p| photocraft_cms::Profile::parse(p).ok());
+                let curve = profile.as_ref().and_then(|p| p.gray_trc.as_ref().or_else(|| p.trc.as_ref().and_then(|t| t.first())));
+                match curve {
+                    Some(photocraft_cms::Curve::Identity) => Self::Gamma(1.0),
+                    Some(photocraft_cms::Curve::Gamma(g)) => Self::Gamma(*g as f32),
+                    _ => Self::SrgbExact,
+                }
+            }
+        }
+    }
     /// Default transfer for a document's colour mode and depth. 32-bit samples are linear, and
     /// Photoshop's Exposure works on them as stored (photoshop corpus rgb32 and gray32
     /// exposure.psd: within 0.5/255, against 69/255 through the 2.2 curve).
@@ -47,13 +66,13 @@ impl Transfer {
     }
     fn decode(self, v: f32) -> f32 {
         match self {
-            Transfer::Srgb => photocraft_color::convert::srgb_to_linear(v.max(0.0)),
+            Transfer::Srgb | Transfer::SrgbExact => photocraft_color::convert::srgb_to_linear(v.max(0.0)),
             Transfer::Gamma(g) => v.max(0.0).powf(g),
         }
     }
     fn encode(self, v: f32) -> f32 {
         match self {
-            Transfer::Srgb => photocraft_color::convert::linear_to_srgb(v.max(0.0)),
+            Transfer::Srgb | Transfer::SrgbExact => photocraft_color::convert::linear_to_srgb(v.max(0.0)),
             Transfer::Gamma(g) => v.max(0.0).powf(1.0 / g),
         }
     }

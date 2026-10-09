@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 
-use photocraft_cms::{Builtin, ColorSpace, GamutCheck, Intent, Lut3d, Profile, SampleKind, Transform};
+use photocraft_cms::{Builtin, ColorSpace, Curve, GamutCheck, Intent, Lut3d, Profile, SampleKind, Transform};
 use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{DocId, Document, Effect, Fill, FxPaint, Layer, LayerContent};
 use photocraft_raster::Surface;
@@ -376,7 +376,7 @@ impl ColorState {
         let size = size.max(2);
         let pv = self.proof(doc.id);
         let display = self.canvas_display_for(doc, on)?;
-        if !pv.enabled && !pv.gamut_warning && !(hdr && crate::proof_sim::hdr_active(self, doc)) {
+        if !(pv.enabled || pv.gamut_warning || hdr && crate::proof_sim::hdr_active(self, doc)) {
             return Ok(display.transform.as_ref().map(|t| Lut3d::from_transform(t, size).to_rgba8()));
         }
         let lut = self.display_lut_with(doc, size, hdr, on)?;
@@ -449,11 +449,37 @@ pub fn profile_from_bytes(bytes: &Arc<Vec<u8>>) -> std::result::Result<Arc<Profi
 /// The document's profile: its embedded profile when it parses and matches the mode,
 /// otherwise the mode's working profile.
 pub fn document_profile(doc: &Document) -> Arc<Profile> {
-    doc.icc_profile
+    let profile = doc
+        .icc_profile
         .as_ref()
         .and_then(|b| profile_from_bytes(b).ok())
         .filter(|p| p.color_space == mode_space(doc.mode))
-        .unwrap_or_else(|| working_profile(doc.mode))
+        .unwrap_or_else(|| working_profile(doc.mode));
+    if let Some(encoding) = doc.sample_encoding {
+        if encoding == photocraft_doc::SampleEncoding::NonlinearProfile {
+            return profile;
+        }
+        let matches = |curve: &Curve| match encoding {
+            photocraft_doc::SampleEncoding::Linear => curve.is_identity(),
+            photocraft_doc::SampleEncoding::Perceptual => (0..=32).all(|i| {
+                let v = i as f32 / 32.0;
+                (curve.eval(v) - photocraft_cms::curve::srgb_trc().eval(v)).abs() < 0.0001
+            }),
+            photocraft_doc::SampleEncoding::NonlinearProfile => true,
+        };
+        if profile.gray_trc.as_ref().is_some_and(matches) || profile.trc.as_ref().is_some_and(|t| t.iter().all(matches)) {
+            return profile;
+        }
+        let encoding = match encoding {
+            photocraft_doc::SampleEncoding::Linear => photocraft_cms::xcf_color::Encoding::Linear,
+            photocraft_doc::SampleEncoding::NonlinearProfile => photocraft_cms::xcf_color::Encoding::NonlinearProfile,
+            photocraft_doc::SampleEncoding::Perceptual => photocraft_cms::xcf_color::Encoding::Perceptual,
+        };
+        if let Ok(effective) = photocraft_cms::xcf_color::effective_profile(Some(&profile.to_bytes()), profile.color_space, encoding) {
+            return Arc::new(effective);
+        }
+    }
+    profile
 }
 
 /// Profile describing the compositor's RGB output for this document (see the module docs).
@@ -654,6 +680,9 @@ pub fn convert_document(doc: &mut Document, dst: &Profile, intent: Intent, bpc: 
     }
     doc.mode = to_mode;
     doc.icc_profile = Some(dst.to_bytes());
+    if doc.sample_encoding.is_some() {
+        doc.sample_encoding = Some(photocraft_doc::SampleEncoding::NonlinearProfile);
+    }
     // Leaving Indexed / Duotone: the palette and inks no longer apply.
     doc.color_table = None;
     doc.duotone = None;
@@ -741,6 +770,9 @@ fn assign_profile(s: &mut Session, p: &Value) -> Result<Value> {
     };
     s.edit("Assign Profile", |doc, _| {
         doc.icc_profile = bytes;
+        if doc.sample_encoding.is_some() {
+            doc.sample_encoding = Some(photocraft_doc::SampleEncoding::NonlinearProfile);
+        }
         Ok(())
     })?;
     Ok(json!({ "profile": desc }))
@@ -910,6 +942,9 @@ fn profile_mismatch(s: &mut Session, p: &Value) -> Result<Value> {
         "discard" | "off" => {
             s.edit("Discard Profile", |doc, _| {
                 doc.icc_profile = None;
+                if doc.sample_encoding.is_some() {
+                    doc.sample_encoding = Some(photocraft_doc::SampleEncoding::NonlinearProfile);
+                }
                 Ok(())
             })?;
             Ok(json!({"action": "discarded"}))
@@ -918,6 +953,9 @@ fn profile_mismatch(s: &mut Session, p: &Value) -> Result<Value> {
             let w = s.color.working(mode);
             s.edit("Assign Profile", |doc, _| {
                 doc.icc_profile = Some(w.to_bytes());
+                if doc.sample_encoding.is_some() {
+                    doc.sample_encoding = Some(photocraft_doc::SampleEncoding::NonlinearProfile);
+                }
                 Ok(())
             })?;
             Ok(json!({"action": "assigned", "profile": w.description}))
@@ -1328,5 +1366,49 @@ mod settings_tests {
         s.execute("color.profileMismatch", json!({"action": "discard"})).unwrap();
         assert!(s.active().unwrap().doc.icc_profile.is_none());
         assert!(s.execute("color.profileMismatch", json!({"action": "explode"})).is_err());
+    }
+}
+
+#[cfg(test)]
+mod imported_profile_transition_tests {
+    use super::*;
+    #[test]
+    fn explicit_conversion_assignment_and_discard_keep_original_provenance() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":2,"height":2,"depth":32})).unwrap();
+        let original = Some(photocraft_doc::SourceColorContext { original_icc: Some(Builtin::Srgb.profile().to_bytes()), source_precision: 600 });
+        {
+            let d = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+            d.sample_encoding = Some(photocraft_doc::SampleEncoding::Linear);
+            d.icc_profile = Some(Builtin::LinearSrgb.profile().to_bytes());
+            d.source_color_context = original.clone();
+            d.layers[0].surface_mut().unwrap().write_pixel(0, 0, &[0.25, 0.25, 0.25, 1.0]);
+        }
+        s.execute("edit.convertToProfile", json!({"profile":"srgb"})).unwrap();
+        let d = &s.active().unwrap().doc;
+        assert_eq!(d.sample_encoding, Some(photocraft_doc::SampleEncoding::NonlinearProfile));
+        assert_eq!(d.source_color_context, original);
+        let converted = d.layers[0].surface().unwrap().pixel(0, 0)[0];
+        assert!((converted - photocraft_color::convert::linear_to_srgb(0.25)).abs() < 0.001);
+        s.execute("edit.assignProfile", json!({"profile":"linear-srgb"})).unwrap();
+        let d = &s.active().unwrap().doc;
+        assert_eq!(d.layers[0].surface().unwrap().pixel(0, 0)[0], converted);
+        assert_eq!(photocraft_compose::adjust::Transfer::for_doc(d), photocraft_compose::adjust::Transfer::Gamma(1.0));
+        assert_eq!(d.source_color_context, original);
+        s.execute("edit.assignProfile", json!({"profile":"none"})).unwrap();
+        let d = &s.active().unwrap().doc;
+        assert_eq!(d.sample_encoding, Some(photocraft_doc::SampleEncoding::NonlinearProfile));
+        assert!(d.icc_profile.is_none());
+        assert_eq!(d.source_color_context, original);
+        assert_eq!(d.layers[0].surface().unwrap().pixel(0, 0)[0], converted);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(document_profile(&s.active().unwrap().doc).same_colors(Builtin::LinearSrgb.profile()));
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(document_profile(&s.active().unwrap().doc).same_colors(Builtin::Srgb.profile()));
+        s.execute("edit.undo", json!({})).unwrap();
+        let d = &s.active().unwrap().doc;
+        assert_eq!(d.sample_encoding, Some(photocraft_doc::SampleEncoding::Linear));
+        assert_eq!(d.source_color_context, original);
+        assert_eq!(d.layers[0].surface().unwrap().pixel(0, 0)[0], 0.25);
     }
 }

@@ -35,6 +35,10 @@ pub struct Manifest {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DocM {
+    #[serde(default)]
+    pub sample_encoding: Option<photocraft_doc::SampleEncoding>,
+    #[serde(default)]
+    pub source_color_context: Option<SourceColorContextM>,
     pub id: u64,
     pub name: String,
     pub size: Size,
@@ -196,6 +200,10 @@ pub struct FillCacheM {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LayerM {
+    #[serde(default)]
+    pub indexed_source: Option<IndexedSourceM>,
+    #[serde(default)]
+    pub import_compositing: Option<photocraft_doc::ImportCompositing>,
     pub id: u64,
     pub name: String,
     pub visible: bool,
@@ -225,6 +233,23 @@ pub struct LayerM {
     pub blend_if: photocraft_doc::BlendIf,
     #[serde(default)]
     pub video: Option<VideoDataM>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceColorContextM {
+    pub original_icc: Option<Hash>,
+    pub source_precision: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IndexedSourceM {
+    pub indices: Hash,
+    pub alpha: Option<Hash>,
+    pub palette: Vec<[u8; 3]>,
+    pub bounds: photocraft_geom::Rect,
+    pub fingerprint: Hash,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

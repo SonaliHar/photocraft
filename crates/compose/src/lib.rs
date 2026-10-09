@@ -261,6 +261,8 @@ pub fn render_layer(layer: &Layer, rect: Rect) -> Buffer {
         std::slice::from_ref(layer),
         &mut buf,
         &Ctx {
+            source_encoding: None,
+            source_profile: None,
             canvas: rect,
             transfer: adjust::Transfer::Srgb,
             light: photocraft_doc::GlobalLight::default(),
@@ -424,6 +426,8 @@ impl RenderVectorMasks {
 
 /// Rendering context shared down the tree.
 struct Ctx<'a> {
+    source_encoding: Option<photocraft_doc::SampleEncoding>,
+    source_profile: Option<photocraft_cms::Profile>,
     /// Document canvas: fill layers and gradients are laid out relative to it, never to the render rect.
     canvas: Rect,
     /// Tone transfer used by adjustments that work in linear light.
@@ -444,8 +448,22 @@ struct Ctx<'a> {
 impl<'a> Ctx<'a> {
     fn for_doc(doc: &Document, patterns: &'a pattern::PreparedPatterns<'a>) -> Self {
         Self {
+            source_encoding: doc.sample_encoding,
+            source_profile: match &doc.source_color_context {
+                _ if doc.sample_encoding == Some(photocraft_doc::SampleEncoding::NonlinearProfile) => {
+                    doc.icc_profile.as_ref().and_then(|p| photocraft_cms::Profile::parse(p).ok())
+                }
+                Some(context) => context.original_icc.as_ref().and_then(|p| photocraft_cms::Profile::parse(p).ok()).or_else(|| {
+                    Some(if doc.mode == photocraft_color::ColorMode::Grayscale {
+                        photocraft_cms::Builtin::SGray.profile().clone()
+                    } else {
+                        photocraft_cms::Builtin::Srgb.profile().clone()
+                    })
+                }),
+                None => doc.icc_profile.as_ref().and_then(|p| photocraft_cms::Profile::parse(p).ok()),
+            },
             canvas: doc.bounds(),
-            transfer: adjust::Transfer::for_document(doc.mode, doc.depth),
+            transfer: adjust::Transfer::for_doc(doc),
             light: doc.global_light,
             patterns,
             mode: doc.mode,
@@ -1071,6 +1089,18 @@ fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: &mut Buffer
             for (i, (p, a)) in backdrop.px.iter_mut().zip(&before.px).enumerate() {
                 let k = opacity * mask_k(&mv, i);
                 let b = *p;
+                if let Some(policy) = layer.import_compositing {
+                    let profile = cx.source_profile.as_ref().unwrap_or_else(|| photocraft_cms::Builtin::Srgb.profile());
+                    *p = psblend::imported_group_mix(
+                        *a,
+                        b,
+                        k,
+                        cx.source_encoding.unwrap_or(photocraft_doc::SampleEncoding::NonlinearProfile),
+                        policy.composite_encoding,
+                        profile,
+                    );
+                    continue;
+                }
                 // Coverage mixes premultiplied colour; the stored buffer remains straight alpha.
                 let wa = a[3] * (1.0 - k);
                 let wb = b[3] * k;
@@ -1180,7 +1210,23 @@ fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: &mut Buffer
     for c in clipped.iter().filter(|c| c.visible) {
         composite_atop(c, &mut content, cx);
     }
-    blend_into_g(backdrop, &content, layer.blend, opacity, text_gamma(layer));
+    if let Some(policy) = layer.import_compositing.filter(|_| layer.blend == BlendMode::Normal || layer.blend == BlendMode::PassThrough) {
+        let source_encoding = cx.source_encoding.unwrap_or(photocraft_doc::SampleEncoding::NonlinearProfile);
+        let profile = cx.source_profile.as_ref().unwrap_or_else(|| photocraft_cms::Builtin::Srgb.profile());
+        for (b, s) in backdrop.px.iter_mut().zip(&content.px) {
+            // Indexed Normal uses binary coverage rather than generating colors outside the
+            // palette: public GIMP compositing specification, "Layer modes", indexed Normal.
+            if cx.mode == photocraft_color::ColorMode::Indexed {
+                if s[3] * opacity > 0.5 {
+                    *b = [s[0], s[1], s[2], 1.0];
+                }
+                continue;
+            }
+            *b = psblend::imported_source_over(*b, *s, opacity, source_encoding, policy.composite_encoding, profile);
+        }
+    } else {
+        blend_into_g(backdrop, &content, layer.blend, opacity, text_gamma(layer));
+    }
 }
 
 /// The coverage-mixing gamma of a layer: the text blending gamma

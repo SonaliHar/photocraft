@@ -14,6 +14,57 @@
 
 use photocraft_color::blend::{self as generic, BlendMode};
 
+/// Normal/source-over in an imported composite working space. Only temporary RGB values
+/// change encoding; surfaces retain their exact original bytes and alpha stays linear coverage.
+pub fn imported_source_over(
+    backdrop: [f32; 4],
+    source: [f32; 4],
+    opacity: f32,
+    stored: photocraft_doc::SampleEncoding,
+    working: photocraft_doc::SampleEncoding,
+    profile: &photocraft_cms::Profile,
+) -> [f32; 4] {
+    use photocraft_cms::xcf_color::{Encoding, convert_encoding};
+    let encoding = |e| match e {
+        photocraft_doc::SampleEncoding::Linear => Encoding::Linear,
+        photocraft_doc::SampleEncoding::NonlinearProfile => Encoding::NonlinearProfile,
+        photocraft_doc::SampleEncoding::Perceptual => Encoding::Perceptual,
+    };
+    let convert = |rgb, from, to| convert_encoding(profile, encoding(from), encoding(to), rgb);
+    let b = convert([backdrop[0], backdrop[1], backdrop[2]], stored, working);
+    let s = convert([source[0], source[1], source[2]], stored, working);
+    let out = composite(BlendMode::Normal, [b[0], b[1], b[2], backdrop[3]], [s[0], s[1], s[2], source[3]], opacity);
+    let rgb = convert([out[0], out[1], out[2]], working, stored);
+    [rgb[0], rgb[1], rgb[2], out[3]]
+}
+
+/// Coverage interpolation for a pass-through group's opacity/mask, in its working space.
+pub fn imported_group_mix(
+    a: [f32; 4],
+    b: [f32; 4],
+    k: f32,
+    stored: photocraft_doc::SampleEncoding,
+    working: photocraft_doc::SampleEncoding,
+    profile: &photocraft_cms::Profile,
+) -> [f32; 4] {
+    let encoding = |e| match e {
+        photocraft_doc::SampleEncoding::Linear => photocraft_cms::xcf_color::Encoding::Linear,
+        photocraft_doc::SampleEncoding::NonlinearProfile => photocraft_cms::xcf_color::Encoding::NonlinearProfile,
+        photocraft_doc::SampleEncoding::Perceptual => photocraft_cms::xcf_color::Encoding::Perceptual,
+    };
+    let convert = |rgb, from, to| photocraft_cms::xcf_color::convert_encoding(profile, encoding(from), encoding(to), rgb);
+    let ac = convert([a[0], a[1], a[2]], stored, working);
+    let bc = convert([b[0], b[1], b[2]], stored, working);
+    let wa = a[3] * (1.0 - k);
+    let wb = b[3] * k;
+    let alpha = wa + wb;
+    if alpha <= 0.0 {
+        return [0.0; 4];
+    }
+    let rgb = convert(std::array::from_fn(|i| (ac[i] * wa + bc[i] * wb) / alpha), working, stored);
+    [rgb[0], rgb[1], rgb[2], alpha]
+}
+
 fn vivid_light_ps(cb: f32, cs: f32) -> f32 {
     if cs <= 0.5 {
         if cs <= 0.0 { 0.0 } else { 1.0 - ((1.0 - cb) / (2.0 * cs)).min(1.0) }
