@@ -43,6 +43,7 @@ pub mod raw_smart;
 pub mod slices_map;
 pub mod smart_map;
 pub mod svg;
+mod text_import;
 pub mod text_styles_map;
 pub mod tiff_layers;
 pub mod vector_map;
@@ -176,6 +177,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt) -
         ctl.progress(0.05);
         let (mut document, warnings) = psd_import::psd_to_document_with(&file, ctl).ok_or(IoError::Cancelled)?;
         document.name = name.to_string();
+        text_import::prepare(&mut document);
         return Ok(ImportResult { document, warnings });
     }
     if raw::is_raw(bytes) {
@@ -208,7 +210,8 @@ pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result
     }
     if ext == "psd" || ext == "psb" {
         let o = PsdExportOptions { force_psb: opts.force_psb || ext == "psb", ..Default::default() };
-        let (file, warnings) = document_to_psd_with(doc, &o);
+        let (mut file, mut warnings) = document_to_psd_with(doc, &o);
+        warnings.extend(tiff_layers::strip_foreign_order_blocks(&mut file));
         // Never write a header the reader would refuse (e.g. a zero-sized canvas).
         file.header.validate()?;
         let bytes = file.to_bytes()?;

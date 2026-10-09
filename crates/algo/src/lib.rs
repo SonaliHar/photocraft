@@ -53,6 +53,7 @@ pub mod poisson;
 pub mod puppet;
 pub mod pyramid;
 pub mod quantize;
+pub mod redeye;
 mod relight;
 mod render;
 pub mod render2;
@@ -103,6 +104,19 @@ pub enum RadialMethod {
     #[default]
     Spin,
     Zoom,
+}
+
+/// Sampling quality for radial blur. Higher quality improves large-radius detail at greater cost.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum RadialQuality {
+    /// Up to 64 intervals per pixel for a faster, coarser result.
+    Draft,
+    /// Up to 256 intervals per pixel; the default.
+    #[default]
+    Good,
+    /// Up to 4096 intervals per pixel.
+    Best,
 }
 
 /// Noise distribution.
@@ -195,6 +209,8 @@ pub enum FilterParams {
     RadialBlur {
         amount: f32,
         method: RadialMethod,
+        #[serde(default)]
+        quality: RadialQuality,
         center_x: f32,
         center_y: f32,
     },
@@ -686,7 +702,9 @@ pub fn kernel(params: &FilterParams, src: &Image, out: Rect, ctx: &Ctx) -> Vec<f
         FilterParams::GaussianBlur { radius } => blur::gaussian(src, out, ctx, *radius),
         FilterParams::BoxBlur { radius } => blur::boxed(src, out, ctx, *radius),
         FilterParams::MotionBlur { angle, distance } => blur::motion(src, out, ctx, *angle, *distance),
-        FilterParams::RadialBlur { amount, method, center_x, center_y } => blur::radial(src, out, ctx, *amount, *method, (*center_x, *center_y)),
+        FilterParams::RadialBlur { amount, method, quality, center_x, center_y } => {
+            blur::radial(src, out, ctx, *amount, *method, *quality, (*center_x, *center_y))
+        }
         FilterParams::SurfaceBlur { radius, threshold } => blur::surface(src, out, ctx, *radius, *threshold),
         FilterParams::UnsharpMask { amount, radius, threshold } => sharpen::unsharp(src, out, ctx, *amount, *radius, *threshold),
         FilterParams::SmartSharpen { amount, radius, reduce_noise } => sharpen::smart(src, out, ctx, *amount, *radius, *reduce_noise),
@@ -949,6 +967,9 @@ pub fn apply_tiled_with(
     }
     if let Some(boxes) = blur::box_widths(params) {
         return apply_box_blur(out, surface, area, extent, selection, &boxes, ctl);
+    }
+    if let Some(result) = blur::motion_apply::apply(surface, params, area, bounds, selection, extent, tile, ctl) {
+        return result;
     }
     let fmt = surface.format();
     let ctx = Ctx { bounds, mode: fmt.mode, alpha: fmt.alpha };

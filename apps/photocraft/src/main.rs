@@ -325,6 +325,7 @@ fn main() -> eframe::Result {
     let sentinel_ms = t_sentinel.elapsed().as_secs_f64() * 1000.0;
     log::info!("GPU startup: {:?} ({sentinel_ms:.2} ms)", plan);
     let retry_cpu = !safe_gpu && plan.backend != photocraft_engine::prefs::GpuBackend::Cpu;
+    let keep_marker = gpu_startup::keep_marker_after_error(&plan, os);
     let app_created = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let created_in_callback = app_created.clone();
     let started_sentinel = sentinel.clone();
@@ -341,6 +342,11 @@ fn main() -> eframe::Result {
             #[cfg(target_os = "linux")]
             {
                 services.is_wayland = display == Some(tablet::DisplayKind::Wayland);
+                if services.is_wayland {
+                    let var = |name| std::env::var(name).ok();
+                    services.xwayland_command =
+                        services::xwayland_command(var("FLATPAK_ID").as_deref(), var("APPIMAGE").as_deref(), std::env::var_os("DISPLAY").is_some());
+                }
             }
             let mut app = PhotocraftApp::new(Session::new(), services);
             app.integrated_titlebar = cfg!(target_os = "macos");
@@ -454,8 +460,10 @@ fn main() -> eframe::Result {
             // Paths on the command line (Linux/Windows file associations, `photocraft a.psd`).
             app.open_paths(&files);
             if !unreadable_paths.is_empty() {
-                let lines = unreadable_paths.iter().map(|p| format!("{p}: the path is not valid Unicode; rename the file and open it again.")).collect();
-                photocraft_ui_egui::notices::post(&mut app, "Could not open", lines, true, None);
+                use photocraft_ui_egui::i18n;
+                let line = i18n::t("{path}: the path is not valid Unicode; rename the file and open it again.");
+                let lines = unreadable_paths.iter().map(|p| i18n::fmt(line, &[("path", p.as_str())])).collect();
+                photocraft_ui_egui::notices::post(&mut app, i18n::t("Could not open"), lines, true, None);
             }
             // Portable marker found but its data folder isn't writable (#228): say where settings went.
             if let Some(w) = &app_dirs::current().warning {
@@ -464,12 +472,15 @@ fn main() -> eframe::Result {
             Ok(Box::new(app))
         }),
     );
-    // Closed or failed outside graphics initialization: not a driver crash. A renderer
-    // error keeps the marker, so the next start tries a safer backend.
-    if !gpu_startup::keep_marker_after_run(&result)
+    // Closed or failed outside graphics initialization: not a driver crash. A renderer error
+    // keeps the marker, so the next start tries a safer backend, unless there is no safer one:
+    // a failed CPU start would otherwise pin every later start to CPU.
+    let renderer_error = gpu_startup::keep_marker_after_run(&result);
+    if !(renderer_error && keep_marker)
         && let Some(mut s) = sentinel.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
     {
         if result.is_err()
+            && !renderer_error
             && let Some(marker) = previous.crashed()
         {
             // This failure supplies no new graphics-crash evidence: retain the previous

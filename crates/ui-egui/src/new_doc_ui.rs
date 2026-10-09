@@ -121,6 +121,46 @@ fn clipboard_preset(f: &Map<String, Value>) -> Option<Preset> {
     Some((CLIPBOARD, dim(0)?, dim(1)?, 72.0))
 }
 
+/// Set Width or Height (`key`) from a value typed in `unit`: whole pixels for `file.new`, plus the
+/// typed value so the field keeps showing it (see [`shown_size`]).
+pub fn set_size(f: &mut Map<String, Value>, key: &str, v: f32, unit: &str, ppi: f32) {
+    f.insert(key.into(), px_value(from_unit(v, unit, ppi)));
+    f.insert(typed_key(key), json!({"value": v, "unit": unit}));
+    f.remove("__preset");
+}
+
+/// What Width or Height (`key`, `d` pixels when unset) shows in `unit`: the value the user typed
+/// while it still gives the field's pixel count, else the pixels converted. Converting the rounded
+/// pixels back on every keystroke turned a typed `5` mm into 14 px and the text into `4.9` (#1147).
+/// A size over the 300000 px limit shows the limit, not the typed value the document won't have.
+pub fn shown_size(f: &Map<String, Value>, key: &str, d: f32, unit: &str, ppi: f32) -> f32 {
+    let px = get_f(f, key, d);
+    let typed = f.get(&typed_key(key)).and_then(Value::as_object).filter(|t| unit != "px" && t.get("unit").and_then(Value::as_str) == Some(unit));
+    match typed.and_then(|t| t.get("value")).and_then(Value::as_f64) {
+        Some(v) if from_unit(v as f32, unit, ppi).max(1.0) == px => v as f32,
+        _ => to_unit(px, unit, ppi),
+    }
+}
+
+fn typed_key(key: &str) -> String {
+    format!("__{key}Typed")
+}
+
+/// Swap Width and Height (the Orientation buttons), with the values typed for them, so a typed
+/// 841 x 1189 mm turns into 1189 x 841 mm, not 1188.9 x 841.
+pub fn swap_size(f: &mut Map<String, Value>) {
+    let (w, h) = (get_f(f, "width", 1920.0), get_f(f, "height", 1080.0));
+    f.insert("width".into(), px_value(h));
+    f.insert("height".into(), px_value(w));
+    let (typed_w, typed_h) = (f.remove(&typed_key("width")), f.remove(&typed_key("height")));
+    if let Some(t) = typed_h {
+        f.insert(typed_key("width"), t);
+    }
+    if let Some(t) = typed_w {
+        f.insert(typed_key("height"), t);
+    }
+}
+
 /// Apply a preset to the dialog fields.
 pub fn apply_preset(f: &mut Map<String, Value>, p: &Preset) {
     f.insert("width".into(), json!(p.1));
@@ -163,6 +203,15 @@ fn get_s(f: &Map<String, Value>, k: &str, d: &str) -> String {
 fn small_label(ui: &mut egui::Ui, s: &str) {
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(s).size(11.5).color(t.text_dim));
+}
+
+/// Lay out a preset card's title centred in `width`: wrapped onto at most two lines, the rest
+/// elided, so long translations stay inside the card.
+fn card_title(painter: &egui::Painter, title: &str, width: f32, color: egui::Color32) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple(title.to_owned(), egui::FontId::proportional(12.0), color, width);
+    job.wrap.max_rows = 2;
+    job.halign = egui::Align::Center;
+    painter.layout_job(job)
 }
 
 /// Paint a page thumbnail with the preset's aspect ratio.
@@ -224,7 +273,9 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                             ui.painter().rect_stroke(r, t.radius, Stroke::new(1.5, t.accent), StrokeKind::Inside);
                         }
                         page_icon(ui, Rect::from_center_size(pos2(r.center().x, r.top() + 34.0), vec2(40.0, 40.0)), p.1, p.2, &t);
-                        ui.painter().text(pos2(r.center().x, r.top() + 72.0), Align2::CENTER_CENTER, tl!(p.0), egui::FontId::proportional(12.0), t.text);
+                        let title = card_title(ui.painter(), tl!(p.0), card.x - 12.0, t.text);
+                        let elided = title.elided;
+                        ui.painter().galley(pos2(r.center().x, r.top() + 70.0 - title.size().y / 2.0), title, t.text);
                         let unit = if p.3 >= 300.0 { "in" } else { "px" };
                         let size = if unit == "in" {
                             format!(
@@ -236,7 +287,8 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                         } else {
                             format!("{} x {} px @ {} ppi", p.1, p.2, p.3)
                         };
-                        ui.painter().text(pos2(r.center().x, r.top() + 90.0), Align2::CENTER_CENTER, size, egui::FontId::proportional(10.5), t.text_faint);
+                        ui.painter().text(pos2(r.center().x, r.top() + 97.0), Align2::CENTER_CENTER, size, egui::FontId::proportional(10.5), t.text_faint);
+                        let resp = if elided { resp.on_hover_text(tl!(p.0)) } else { resp };
                         if resp.clicked() {
                             apply_preset(f, p);
                         }
@@ -260,10 +312,9 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             let mut unit = get_s(f, "__unit", "px");
             small_label(ui, tl!("Width"));
             ui.horizontal(|ui| {
-                let mut w = to_unit(get_f(f, "width", 1920.0), &unit, ppi);
+                let mut w = shown_size(f, "width", 1920.0, &unit, ppi);
                 if widgets::value_field(ui, &mut w, 0.01..=300_000.0, "", 110.0).changed() {
-                    f.insert("width".into(), px_value(from_unit(w, &unit, ppi)));
-                    f.remove("__preset");
+                    set_size(f, "width", w, &unit, ppi);
                 }
                 let opts: Vec<(String, &str)> = UNITS.iter().map(|u| (u.0.to_string(), u.1)).collect();
                 if widgets::dropdown(ui, "nd-unit", &mut unit, &opts, 120.0) {
@@ -272,18 +323,16 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             });
             small_label(ui, tl!("Height"));
             ui.horizontal(|ui| {
-                let mut h = to_unit(get_f(f, "height", 1080.0), &unit, ppi);
+                let mut h = shown_size(f, "height", 1080.0, &unit, ppi);
                 if widgets::value_field(ui, &mut h, 0.01..=300_000.0, "", 110.0).changed() {
-                    f.insert("height".into(), px_value(from_unit(h, &unit, ppi)));
-                    f.remove("__preset");
+                    set_size(f, "height", h, &unit, ppi);
                 }
                 ui.add_space(6.0);
                 small_label(ui, tl!("Orientation"));
                 let (w, h) = (get_f(f, "width", 1920.0), get_f(f, "height", 1080.0));
                 for (icon, portrait) in [("rectangle-vertical", true), ("rectangle-horizontal", false)] {
                     if icons::button(ui, icon, 24.0, (h > w) == portrait, if portrait { "Portrait" } else { "Landscape" }).clicked() && (h > w) != portrait {
-                        f.insert("width".into(), px_value(h));
-                        f.insert("height".into(), px_value(w));
+                        swap_size(f);
                     }
                 }
             });
@@ -353,6 +402,38 @@ mod tests {
         assert_eq!(to_unit(640.0, "px", 72.0), 640.0);
     }
 
+    /// #1147: 5 mm at 72 ppi is 14 px, which is 4.94 mm. The field must keep showing the typed 5.
+    #[test]
+    fn typed_size_in_a_physical_unit_shows_as_typed() {
+        let mut f = crate::state::UiState::new_document_fields();
+        set_size(&mut f, "height", 5.0, "mm", 72.0);
+        assert_eq!(command_params(&f)["height"], json!(14));
+        assert_eq!(shown_size(&f, "height", 1080.0, "mm", 72.0), 5.0);
+        // Another unit, or pixels changed elsewhere (a preset, the orientation swap): converted.
+        assert_eq!(shown_size(&f, "height", 1080.0, "cm", 72.0), to_unit(14.0, "cm", 72.0));
+        f.insert("height".into(), json!(1080));
+        assert_eq!(shown_size(&f, "height", 1080.0, "mm", 72.0), to_unit(1080.0, "mm", 72.0));
+        // Pixels show whole pixels.
+        set_size(&mut f, "width", 512.4, "px", 72.0);
+        assert_eq!(shown_size(&f, "width", 1920.0, "px", 72.0), 512.0);
+        // Over the 300000 px limit the field shows the limit.
+        set_size(&mut f, "width", 300_000.0, "mm", 72.0);
+        assert_eq!(command_params(&f)["width"], json!(300_000));
+        assert_eq!(shown_size(&f, "width", 1920.0, "mm", 72.0), to_unit(300_000.0, "mm", 72.0));
+    }
+
+    /// #1147: the Orientation buttons swap the typed values too: 841 x 1189 mm becomes 1189 x 841.
+    #[test]
+    fn orientation_swap_keeps_the_typed_values() {
+        let mut f = crate::state::UiState::new_document_fields();
+        set_size(&mut f, "width", 841.0, "mm", 72.0);
+        set_size(&mut f, "height", 1189.0, "mm", 72.0);
+        swap_size(&mut f);
+        let p = command_params(&f);
+        assert_eq!((p["width"].clone(), p["height"].clone()), (json!(3370), json!(2384)));
+        assert_eq!((shown_size(&f, "width", 1920.0, "mm", 72.0), shown_size(&f, "height", 1080.0, "mm", 72.0)), (1189.0, 841.0));
+    }
+
     #[test]
     fn resolution_keeps_physical_size_in_physical_units_and_pixels_in_px() {
         let a4 = CATEGORIES.iter().find(|c| c.0 == "Print").unwrap().1.iter().find(|p| p.0 == "A4").unwrap();
@@ -370,6 +451,21 @@ mod tests {
         set_resolution(&mut f, 150.0);
         let p = command_params(&f);
         assert_eq!((p["width"].clone(), p["height"].clone(), p["resolution"].clone()), (json!(2480), json!(3508), json!(150.0)));
+    }
+
+    #[test]
+    fn preset_card_titles_fit_the_card_in_every_language() {
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            for lang in crate::i18n::Lang::all() {
+                for p in CATEGORIES.iter().flat_map(|c| c.1.iter()) {
+                    let title = crate::i18n::tr(lang, p.0);
+                    let g = card_title(ui.painter(), title, 152.0, egui::Color32::WHITE);
+                    assert!(g.size().x <= 152.0 && g.rows.len() <= 2 && !g.elided, "{}: {title}", lang.code());
+                }
+            }
+        });
+        out.textures_delta.clear();
     }
 
     #[test]
@@ -556,6 +652,20 @@ mod tests {
             type_into(&mut h, 1, "1.5");
             enter(&mut h);
             assert_eq!(created(&h), (600, 450, 300.0));
+        }
+
+        /// #1147: typed digit by digit, millimetres used to be rewritten after each keystroke
+        /// (`8` became `8.1`), so 841 never arrived.
+        #[test]
+        fn typed_size_in_millimetres_keeps_every_digit() {
+            let mut h = harness();
+            let mut f = fields(&h);
+            f.insert("__unit".into(), serde_json::json!("mm"));
+            set_fields(&mut h, f);
+            type_into(&mut h, 0, "841");
+            type_into(&mut h, 1, "1189");
+            enter(&mut h);
+            assert_eq!(created(&h), (2384, 3370, 72.0));
         }
 
         #[test]

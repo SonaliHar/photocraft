@@ -13,10 +13,11 @@
 //!
 //! Per frame the shader draws, in *device pixels*:
 //! - a soft analytic drop shadow around the document on the pasteboard (erf-blurred box),
-//! - a screen-space transparency checkerboard (8 pt squares, grays 255/204) under the document,
+//! - a transparency checkerboard (8 pt squares, grays 255/204, the same size at every zoom)
+//!   under the document, anchored to the document's top-left corner so it moves with the image,
 //! - the document itself, sampled trilinearly when zoomed out, bilinearly between 1× and 2×, and
 //!   with an anti-aliased "sharp nearest" filter at integer scales and ≥ 2×,
-//! - a one-device-pixel pixel grid at zoom ≥ 8.
+//! - a one-device-pixel pixel grid above 500% zoom, over pixels with content only.
 //!
 //! GPU resources live in the renderer's `callback_resources` type map; the per-frame callback only
 //! carries plain view parameters, so it is `Send + Sync` on every target (including wasm).
@@ -386,7 +387,7 @@ impl GpuCanvas {
         // compositor does it, and edits in the view (damage rects) stay on the GPU.
         if region == doc.bounds() && !comp.fits_budget(doc, region) {
             res.compositor = Some(comp);
-            return Err(photocraft_gpu::Unsupported("layers exceed the GPU memory budget; full refresh on the CPU".into()));
+            return Err(photocraft_gpu::Unsupported(OVER_BUDGET.into()));
         }
         if fresh {
             let tex = DocTextures::new(device, res, size, self.tile, format);
@@ -1040,6 +1041,9 @@ fn texel_to_f32(format: wgpu::TextureFormat, b: &[u8]) -> [f32; 4] {
 /// Floor of the compositor's memory budget: enough for a viewport's pages of a dozen layers.
 pub const MIN_GPU_BUDGET: u64 = 512 << 20;
 
+/// Why a full refresh whose layer pages don't fit [`memory_budget`] goes to the CPU compositor.
+pub const OVER_BUDGET: &str = "layers exceed the GPU memory budget; full refresh on the CPU";
+
 /// GPU memory the wgpu compositor may hold for layer pages and effect maps: what Memory Usage
 /// (`allowance`, Preferences › Performance) leaves after the document's pixels and History
 /// (`pixels`), at most a quarter of physical memory (`ram`; 16 GB assumed when unknown), and at
@@ -1591,7 +1595,8 @@ impl CanvasCallback {
         let p = &self.params;
         let (origin, scale) = self.placement(ppp);
         let (mode, lod) = filter_mode(scale);
-        let grid = if p.pixel_grid && p.zoom >= 8.0 { 0.16 } else { 0.0 };
+        // The pixel grid shows above 500% and lightens a dark pixel by about a quarter.
+        let grid = if p.pixel_grid && p.zoom > 5.0 { 0.25 } else { 0.0 };
         let square = if style.checker_square > 0.0 { (style.checker_square * ppp).round().max(1.0) } else { 0.0 };
         let (l, d, g) = (style.checker_light, style.checker_dark, style.gamut_color);
         // 32-bit preview: linear-light gain 2^exposure (0 = off) and 1 / gamma.
@@ -1612,8 +1617,8 @@ impl CanvasCallback {
             lod,
             grid,
             square,
-            (self.rect.min.x * ppp).round(),
-            (self.rect.min.y * ppp).round(),
+            0.0,
+            0.0,
             p.display as f32,
             if out_linear { 1.0 } else { 0.0 },
             l[0],
@@ -1717,7 +1722,7 @@ struct View {
     a: vec4<f32>, // screen_w, screen_h, scale (device px per doc px), pixels_per_point
     b: vec4<f32>, // doc origin x, y (device px), doc w, h (doc px)
     c: vec4<f32>, // filter mode, lod, grid alpha, checker square (device px)
-    d: vec4<f32>, // checker anchor x, y (device px), display (0 none, 1 LUT, 2 LUT + gamut), output linear
+    d: vec4<f32>, // unused x, y, display (0 none, 1 LUT, 2 LUT + gamut), output linear
     e: vec4<f32>, // checker light rgb, gamut warning opacity
     f: vec4<f32>, // checker dark rgb, 32-bit preview gain (2^exposure; 0 = off)
     g: vec4<f32>, // gamut warning rgb, 32-bit preview 1 / gamma
@@ -1803,11 +1808,13 @@ fn vs_tile(@builtin(vertex_index) vi: u32) -> VOut {
     return VOut(px_to_clip(p));
 }
 
+// Cells are screen-sized (view.c.w device px) but anchored to the document's top-left corner, so
+// the pattern moves with the image as it is panned or zoomed.
 fn checker(p: vec2<f32>) -> vec3<f32> {
     if (view.c.w <= 0.0) {
         return vec3(1.0);
     }
-    let c = floor((p - view.d.xy) / view.c.w);
+    let c = floor((p - view.b.xy) / view.c.w);
     let odd = fract((c.x + c.y) * 0.5) > 0.25;
     return select(view.e.xyz, view.f.xyz, odd);
 }
@@ -1851,12 +1858,13 @@ fn fs_tile(in: VOut) -> @location(0) vec4<f32> {
         col = vec4(shown * col.a, col.a);
     }
     var rgb = col.rgb + checker(p) * (1.0 - col.a);
-    let grid = view.c.z;
+    // The pixel grid is drawn over pixels with content, not over empty checker.
+    let grid = view.c.z * col.a;
     if (grid > 0.0) {
         let e = fract(d) * scale;
         if (e.x < 1.0 || e.y < 1.0) {
-            let l = dot(rgb, vec3(0.299, 0.587, 0.114));
-            rgb = mix(rgb, select(vec3(1.0), vec3(0.0), l > 0.55), grid);
+            let on_light = dot(rgb, vec3(0.299, 0.587, 0.114)) > 0.55;
+            rgb = mix(rgb, select(vec3(1.0), vec3(0.0), on_light), select(grid, grid * 0.64, on_light));
         }
     }
     if (view.d.w > 0.5) {

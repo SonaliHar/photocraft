@@ -559,14 +559,18 @@ pub fn commit(app: &mut PhotocraftApp) {
 }
 
 /// A transform whose layer or document went away (undo, close) ends silently; picking another tool
-/// applies it. Checked every frame and before each pointer event, so a press with a tool chosen
-/// just before it (`ui.pointer`'s `tool`) goes to that tool.
+/// or selecting another layer (Layers panel, ⌘-click, the control channel) applies it, so the box
+/// never stays on a layer that is no longer the active one (#1400). Checked every frame and before
+/// each pointer event, so a press with a tool chosen just before it (`ui.pointer`'s `tool`) goes to
+/// that tool.
 pub fn end_if_left(app: &mut PhotocraftApp) {
     let Some(t) = &app.ui.transform else { return };
-    if app.session.active().is_none_or(|st| app.transform_preview.as_ref().is_some_and(|pv| pv.doc.id != st.doc.id) || st.doc.layer(LayerId(t.layer)).is_none())
-    {
+    let Some(st) = app.session.active() else { return cancel(app) };
+    if app.transform_preview.as_ref().is_some_and(|pv| pv.doc.id != st.doc.id) || st.doc.layer(LayerId(t.layer)).is_none() {
         cancel(app);
-    } else if app.transform_preview.as_ref().is_some_and(|pv| pv.tool != app.ui.tool) {
+    } else if app.transform_preview.as_ref().is_some_and(|pv| pv.tool != app.ui.tool)
+        || (!t.selection && st.active_layer.is_some_and(|active| active.0 != t.layer))
+    {
         commit(app);
     }
 }
@@ -641,8 +645,8 @@ fn step(app: &mut PhotocraftApp, redo: bool) -> serde_json::Value {
 }
 
 /// Which part of the box a document point hits.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Hit {
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) enum Hit {
     Corner(usize),
     Edge(usize),
     Pivot,
@@ -652,7 +656,7 @@ enum Hit {
 
 /// The nearest handle within `tol` (on a small box their grab areas overlap), else inside or
 /// outside the box.
-fn hit(t: &TransformSession, p: [f64; 2], tol: f64) -> Hit {
+pub(crate) fn hit(t: &TransformSession, p: [f64; 2], tol: f64) -> Hit {
     let d = |a: [f64; 2]| ((a[0] - p[0]).powi(2) + (a[1] - p[1]).powi(2)).sqrt();
     let mid = |i: usize| {
         let (a, b) = (t.quad[i], t.quad[(i + 1) % 4]);
@@ -679,12 +683,12 @@ fn inside(q: &[[f64; 2]; 4], p: [f64; 2]) -> bool {
 }
 
 /// Transient drag state (kept in egui memory; not part of the serialised session).
-#[derive(Clone, Copy, Debug)]
-struct Gesture {
-    hit: Hit,
-    start: [f64; 2],
-    quad0: [[f64; 2]; 4],
-    pivot0: [f64; 2],
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Gesture {
+    pub(crate) hit: Hit,
+    pub(crate) start: [f64; 2],
+    pub(crate) quad0: [[f64; 2]; 4],
+    pub(crate) pivot0: [f64; 2],
 }
 
 /// Pointer input while transforming. Returns false when no transform is active.
@@ -787,7 +791,7 @@ fn keep_convex(from: [[f64; 2]; 4], to: [[f64; 2]; 4]) -> [[f64; 2]; 4] {
     lerp(lo)
 }
 
-fn apply_drag(s: &mut TransformSession, g: Gesture, p: [f64; 2], mods: egui::Modifiers) {
+pub(crate) fn apply_drag(s: &mut TransformSession, g: Gesture, p: [f64; 2], mods: egui::Modifiers) {
     let (dx, dy) = (p[0] - g.start[0], p[1] - g.start[1]);
     match g.hit {
         Hit::Inside => {
@@ -2073,6 +2077,56 @@ mod tests {
         let st = app.session.active().unwrap();
         assert_eq!(st.history.past_len(), steps + 1);
         assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds(), photocraft_geom::Rect::new(28, 8, 44, 24));
+    }
+
+    /// #1400: selecting another layer while transforming applies the box to the layer it was on,
+    /// and the next transform starts on the newly selected layer.
+    #[test]
+    fn selecting_another_layer_applies_the_transform_and_the_next_one_follows() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        let first = app.session.active().unwrap().active_layer.unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.session
+            .edit("paint", |doc, a| {
+                doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(40, 40, 56, 60), &[0.0, 0.0, 1.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        let second = app.session.active().unwrap().active_layer.unwrap();
+        app.run("layer.select", json!({"layer": first.0})).unwrap();
+        app.ui.tool = Tool::Move;
+        crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({})).unwrap();
+        if let Some(t) = app.ui.transform.as_mut() {
+            t.quad = t.quad.map(|[x, y]| [x + 20.0, y]);
+        }
+        let steps = app.session.active().unwrap().history.past_len();
+        app.run("layer.select", json!({"layer": second.0})).unwrap();
+        end_if_left(&mut app);
+        assert!(app.ui.transform.is_none() && app.transform_preview.is_none(), "the box left the old layer");
+        let st = app.session.active().unwrap();
+        assert_eq!(st.active_layer, Some(second));
+        assert_eq!(st.history.past_len(), steps + 1, "applied as one step");
+        let bounds = |id: LayerId| st.doc.layer(id).unwrap().surface().unwrap().content_bounds();
+        assert_eq!(bounds(first), photocraft_geom::Rect::new(28, 8, 44, 24), "applied to the layer it was on");
+        assert_eq!(bounds(second), photocraft_geom::Rect::new(40, 40, 56, 60), "the new layer is untouched");
+        crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({})).unwrap();
+        let t = app.ui.transform.as_ref().unwrap();
+        assert_eq!((t.layer, t.rect), (second.0, [40.0, 40.0, 56.0, 60.0]), "the next box is on the selected layer");
+    }
+
+    /// Transform Selection moves the selection outline, not a layer: selecting a layer keeps it open.
+    #[test]
+    fn selecting_another_layer_keeps_a_transform_selection_open() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        let first = app.session.active().unwrap().active_layer.unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("select.all", json!({})).unwrap();
+        begin_selection(&mut app, &ctx).unwrap();
+        app.run("layer.select", json!({"layer": first.0})).unwrap();
+        end_if_left(&mut app);
+        assert!(app.ui.transform.as_ref().is_some_and(|t| t.selection));
     }
 
     /// A control-channel stroke that picks another tool applies the box first, then paints.
