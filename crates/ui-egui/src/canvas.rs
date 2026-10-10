@@ -1277,6 +1277,26 @@ pub fn navigator_waits_for_gpu(app: &PhotocraftApp, idx: usize, ctx: &egui::Cont
 }
 
 pub fn navigator_texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Option<egui::TextureId> {
+    if app.session.documents().get(idx)?.doc.size.area() > 16 << 20 {
+        let revision = app.session.documents().get(idx)?.revision;
+        let (doc, preview) = display_doc(app, idx);
+        let (display, display_key) = canvas_display(app, &doc, None);
+        let k = doc.size.width.max(doc.size.height).div_ceil(512).next_power_of_two();
+        let key = crate::canvas_stream::PageKey {
+            doc: doc.id.0,
+            snapshot: std::sync::Arc::as_ptr(&doc) as usize as u64,
+            revision,
+            preview,
+            display: display_key,
+            factor: k,
+            x: 0,
+            y: 0,
+        };
+        let s = app.streams.entry((doc.id, egui::Id::new("stream-navigator").value())).or_default();
+        s.update(ctx, doc.clone(), &[key], display, crate::canvas_stream::StreamOptions { limit: 32 << 20, gpu: None, refine: false });
+        s.upload(ctx, &doc, &[key], None, 8 << 20, false);
+        return s.texture(&key);
+    }
     if app.gpu.is_none() {
         return ensure_texture(app, ctx, idx, app.session.color.main_display).map(|(t, _)| t);
     }
@@ -1641,7 +1661,12 @@ fn gpu_budget(app: &mut PhotocraftApp, gpu: &crate::gpu_canvas::GpuCanvas, idx: 
     }
     let _ = idx;
     // Graphics resources have their own cap. Reserve space for visible output pages and staging.
-    let budget = allowance.saturating_sub((allowance / 4).min(128 << 20)).max(8 << 20);
+    let output = (allowance / 8).clamp(8 << 20, 256 << 20);
+    gpu.set_output_budget(output);
+    gpu.set_canvas_budget(output);
+    let staging = (allowance / 16).max(4 << 20);
+    let budget = allowance.saturating_sub(output).saturating_sub(staging).saturating_mul(4) / 5;
+    let budget = budget.max(8 << 20);
     gpu.set_memory_budget(budget);
     app.perf.gpu_budget_mb = budget >> 20;
     app.perf.gpu_budget_allowance = allowance;
@@ -1940,11 +1965,16 @@ pub(crate) fn retain_gpu_documents(app: &mut PhotocraftApp) {
         let mut live: Vec<u64> = app.session.documents().iter().flat_map(|st| [st.doc.id.0, st.doc.id.0 ^ (1u64 << 61), st.doc.id.0 ^ (1u64 << 62)]).collect();
         live.extend(crate::adjust_preview::gpu_keys(app));
         gpu.retain(&live);
+        for st in app.session.documents() {
+            let keys: Vec<u64> = app.streams.iter().filter(|((id, _), _)| *id == st.doc.id).flat_map(|(_, s)| s.gpu_keys()).collect();
+            gpu.retain_pages(st.doc.id.0, &keys);
+        }
     }
     crate::background_redraw::retain(app);
     // Upload markers must not outlive the resources they describe: native reopen can reuse
     // both the document ID and revision before the next frame while a preview dialog stays open.
     let documents = app.session.documents();
+    app.streams.retain(|(id, _), _| documents.iter().any(|d| d.doc.id == *id));
     if app.filter_preview.as_ref().is_some_and(|preview| !documents.iter().any(|st| st.doc.id == preview.key.doc)) {
         app.filter_preview = None;
     }
@@ -2901,7 +2931,75 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         // A flipped or pixel-aspect-corrected view draws through the CPU path (the GPU canvas shader
         // has no mirroring or non-square pixels). Rotation stays on the GPU: it is a view uniform.
         let gpu_ok = crate::gpu_canvas::gpu_view_ok(flip, view.rotation, aspect);
-        if app.gpu.is_some()
+        let filter_proxy = ensure_filter_preview(app, idx, &ctx);
+        if filter_proxy.is_none()
+            && !app.ui.view.pattern_preview
+            && (doc.size.area() > 16 << 20 || doc.size.area().saturating_mul(16) > (u64::from(app.session.prefs().performance.gpu_memory_mb) << 20) / 8)
+        {
+            let revision = app.session.documents().get(idx).map_or(0, |s| s.revision);
+            let (render_doc, preview) = display_doc(app, idx);
+            let (display, display_key) = canvas_display(app, &render_doc, output);
+            let wanted = crate::canvas_stream::pages(&render_doc, visible_doc_rect(&xf), view.zoom, revision, preview, display_key);
+            let gpu = app.gpu.clone().filter(|_| gpu_ok);
+            let allowance = u64::from(app.session.prefs().performance.gpu_memory_mb) << 20;
+            let output_limit = (allowance / 8).clamp(8 << 20, 256 << 20);
+            if let Some(g) = &gpu {
+                gpu_budget(app, g, idx, true, visible_doc_rect(&xf));
+            }
+            // Tab indices move when documents close or reorder; the view belongs to the document.
+            let stream_key = (doc.id, egui::Id::new(("stream-canvas", ctx.viewport_id())).value());
+            let count = (app.streams.len() + usize::from(!app.streams.contains_key(&stream_key))).max(1) as u64;
+            let s = app.streams.entry(stream_key).or_default();
+            let encode_srgb = display.as_ref().is_some_and(|d| d.encode_srgb);
+            if let Some(target) = wanted.first()
+                && let Some(damage) = app.session.documents().get(idx).and_then(|s| s.last_damage)
+            {
+                let damage = if damage.is_empty() { damage } else { damage.inflate(effect_reach(&render_doc.layers)) };
+                s.rebase_damage(&render_doc, *target, damage, gpu.as_ref());
+            }
+            s.update(
+                &ctx,
+                render_doc.clone(),
+                &wanted,
+                display,
+                crate::canvas_stream::StreamOptions { limit: (256 << 20) / count, gpu: gpu.as_ref(), refine: true },
+            );
+            s.upload(&ctx, &render_doc, &wanted, gpu.as_ref(), output_limit, encode_srgb);
+            if let Some(g) = &gpu {
+                on_gpu = true;
+                app.perf.gpu = true;
+                let params = crate::gpu_canvas::ViewParams {
+                    doc: doc.id.0,
+                    doc_size: size,
+                    zoom: point_zoom,
+                    center: view.center,
+                    rotation: if view.rotation.is_finite() { view.rotation.to_radians() } else { 0.0 },
+                    shadow: drop_shadow,
+                    pixel_grid,
+                    view_key: egui::Id::new(("pc-stream-canvas", ctx.viewport_id(), idx)).value(),
+                    display: sync_display_lut(app, &doc, doc.id.0, output),
+                    output: output.unwrap_or(0),
+                    hdr: hdr_preview(app, &doc),
+                    offset: [0.0, 0.0],
+                };
+                let _ = g;
+                crate::gpu_canvas::GpuCanvas::paint(&painter, rect, params);
+            } else {
+                if drop_shadow {
+                    painter.add(egui::Shadow { offset: [0, 8], blur: 28, spread: 0, color: Color32::from_black_alpha(150) }.as_shape(img_rect, 0));
+                }
+                if let Some(square) = app.session.prefs().transparency_and_gamut.square() {
+                    let id = checker(app, &ctx);
+                    let tiles = img_rect.size() / (2.0 * square);
+                    painter.image(id, img_rect, Rect::from_min_max(Pos2::ZERO, pos2(tiles.x, tiles.y)), Color32::WHITE);
+                } else {
+                    painter.rect_filled(img_rect, 0.0, Color32::WHITE);
+                }
+                if let Some(s) = app.streams.get(&stream_key) {
+                    s.paint_cpu(&painter, &xf, &doc, &wanted);
+                }
+            }
+        } else if app.gpu.is_some()
             && gpu_ok
             && let Some((k, key, preview_size)) =
                 ensure_adjust_proxy(app, idx, view.zoom).or_else(|| ensure_filter_preview(app, idx, &ctx)).or_else(|| ensure_proxy_preview(app, idx))
@@ -5940,6 +6038,38 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn closing_earlier_tabs_keeps_the_surviving_document_stream() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        for name in ["closed", "survivor"] {
+            app.session.add_document(
+                Document::new(name, photocraft_doc::Size::new(8192, 4096), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::F32),
+                None,
+            );
+        }
+        app.sync_views();
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::default());
+        let draw = |app: &mut PhotocraftApp| {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 700.0))), ..Default::default() };
+            let mut output = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| document_area(app, ui));
+            });
+            output.textures_delta.clear();
+        };
+        draw(&mut app);
+        assert_eq!(app.streams.len(), 1);
+        let key = *app.streams.keys().next().unwrap();
+        let before = app.streams[&key].stats.cache_limit;
+        app.run("file.close", json!({"document": 0})).unwrap();
+        draw(&mut app);
+        assert_eq!(app.streams.len(), 1, "the surviving view must not duplicate its cache after its tab index changes");
+        assert!(app.streams.contains_key(&key));
+        assert_eq!(app.streams[&key].stats.cache_limit, before);
+        app.run("file.close", json!({})).unwrap();
+        assert!(app.streams.is_empty());
+    }
 
     /// #569: displays 1 (sRGB) and 4 (Display P3) side by side, and a document filled with an
     /// sRGB colour.

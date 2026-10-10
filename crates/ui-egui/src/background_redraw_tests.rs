@@ -49,6 +49,9 @@ fn gpu_app() -> Option<Gpu> {
                 app.set_wgpu(rs.clone());
             }
             app.background_jobs = true;
+            // These tests exercise full-texture redraws, not viewport streaming. Admit their
+            // 12 MP fixtures explicitly; small budgets correctly select the page renderer.
+            app.run("prefs.set", json!({"path": "performance.gpuMemoryMb", "value": 4096})).expect("GPU budget");
             app
         })
     }));

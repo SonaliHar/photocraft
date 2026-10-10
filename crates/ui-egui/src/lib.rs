@@ -46,6 +46,7 @@ pub mod camera_raw_ui;
 pub mod canvas;
 pub mod canvas_autoscroll;
 mod canvas_popup;
+pub mod canvas_stream;
 pub mod canvas_tool_menu;
 pub mod cas_transform;
 pub mod channel_options_ui;
@@ -504,6 +505,7 @@ pub struct PhotocraftApp {
     /// Canvas caches per (document, display): CPU textures hold monitor values; the GPU
     /// canvas state is shared (`canvas::GPU_OUTPUT`).
     canvases: HashMap<(DocId, u32), canvas::CanvasCache>,
+    streams: HashMap<(DocId, u64), canvas_stream::Stream>,
     /// Navigator textures belong to open documents, not the lifetime of the egui context.
     navigator_textures: HashMap<DocId, canvas::NavigatorCache>,
     /// `canvas::display_doc`'s live-adjust and Duotone documents per document: (snapshot,
@@ -770,6 +772,7 @@ impl PhotocraftApp {
             ui: UiState::default(),
             services,
             canvases: HashMap::new(),
+            streams: HashMap::new(),
             navigator_textures: HashMap::new(),
             display_memo: HashMap::new(),
             navigator_gpu: HashMap::new(),

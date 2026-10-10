@@ -127,6 +127,11 @@ impl Tile {
         }
         (x0 != usize::MAX).then_some((x0 as u16, y0 as u16, x1 as u16, y1 as u16))
     }
+
+    /// Nonblocking residency check; use [`spill::try_resident_scope`] to keep it stable.
+    pub fn is_resident(&self) -> bool {
+        self.cell.is_resident()
+    }
     /// Byte length, without touching the pixels (they may be on disk).
     pub fn len(&self) -> usize {
         self.cell.len()
@@ -184,8 +189,6 @@ impl DerefMut for TileBytesMut<'_> {
     fn deref_mut(&mut self) -> &mut [u8] {
         self.0.as_deref_mut().unwrap_or(&mut self.1)
     }
-
-
 }
 
 #[derive(Clone, Debug)]
@@ -227,11 +230,13 @@ impl UniformTiles {
         }
         let bytes = t.try_bytes().ok()?;
         let mut px = bytes.chunks_exact(bpp);
-        let k = px.next().filter(|p0| px.all(|p| p == *p0)).map(|p0| match self.canonical.iter().position(|c| c.try_bytes().is_ok_and(|bytes| bytes.get(..bpp) == Some(p0))) {
-            Some(k) => k,
-            None => {
-                self.canonical.push(t.clone());
-                self.canonical.len() - 1
+        let k = px.next().filter(|p0| px.all(|p| p == *p0)).map(|p0| {
+            match self.canonical.iter().position(|c| c.try_bytes().is_ok_and(|bytes| bytes.get(..bpp) == Some(p0))) {
+                Some(k) => k,
+                None => {
+                    self.canonical.push(t.clone());
+                    self.canonical.len() - 1
+                }
             }
         });
         self.of.insert(Arc::as_ptr(t), k);

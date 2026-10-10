@@ -36,5 +36,5 @@ until the tile is readable again. Recovery can retry the original bytes after th
 becomes available; zeros from a failed display read must never become saved pixels.
 
 Scratch storage alone does not make every format, filter or renderer streamable. See
-[native PSD/EXR streaming](streaming-io.md) for the seekable import and output APIs. Viewport
-rendering is a separate change built on these guards and memory reservations.
+[native PSD/EXR streaming](streaming-io.md) for the seekable import and output APIs and
+[viewport streaming](streaming-gpu.md) for rendering built on these guards and reservations.

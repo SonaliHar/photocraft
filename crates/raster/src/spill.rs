@@ -57,6 +57,10 @@ impl Cell {
         self.error.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
 
+    pub(crate) fn is_resident(&self) -> bool {
+        self.data.try_read().is_ok_and(|data| data.is_some())
+    }
+
     fn set_error(&self, error: Option<String>) {
         let mut old = self.error.lock().unwrap_or_else(PoisonError::into_inner);
         match (old.is_some(), error.is_some()) {
@@ -163,6 +167,7 @@ impl Cell {
 
     /// Move this tile to disk if nobody is using it. Returns the bytes freed.
     fn evict(&self, file: &Arc<ScratchFile>) -> Result<usize, String> {
+        let Ok(_residency) = RESIDENCY_BARRIER.try_lock() else { return Ok(0) };
         let Ok(mut w) = self.data.try_write() else { return Ok(0) };
         let Some(bytes) = w.as_ref() else { return Ok(0) };
         let mut slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
@@ -241,6 +246,14 @@ static M: Manager = Manager {
     reloads: AtomicU64::new(0),
     written: AtomicU64::new(0),
 };
+
+static RESIDENCY_BARRIER: Mutex<()> = Mutex::new(());
+
+/// A short nonblocking barrier for consumers that must never fault disk pixels on the UI
+/// thread. After checking all their input tiles, eviction cannot invalidate that check.
+pub fn try_resident_scope() -> Option<std::sync::MutexGuard<'static, ()>> {
+    RESIDENCY_BARRIER.try_lock().ok()
+}
 
 impl Manager {
     fn register(&self, cell: &Arc<Cell>) {
@@ -523,9 +536,31 @@ fn log_error(msg: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // These tests exercise the same process-wide eviction barrier and integrity counters.
+    static EVICTION_TESTS: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn resident_scope_prevents_eviction_and_check_never_reloads() {
+        let _test = EVICTION_TESTS.lock().unwrap();
+        let dir = std::env::temp_dir().join(format!("pc-resident-scope-{}", std::process::id()));
+        let file = Arc::new(ScratchFile::create(&dir).unwrap());
+        let cell = Cell::new(vec![23; 1024]);
+        let scope = try_resident_scope().unwrap();
+        assert!(cell.is_resident());
+        assert_eq!(cell.evict(&file).unwrap(), 0);
+        assert!(try_resident_scope().is_none(), "busy must not block the UI");
+        drop(scope);
+        assert_eq!(cell.evict(&file).unwrap(), 1024);
+        let reloads = stats().reloads;
+        assert!(!cell.is_resident());
+        assert_eq!(stats().reloads, reloads);
+        drop((cell, file));
+        let _ = std::fs::remove_dir(dir);
+    }
 
     #[test]
     fn failed_read_retains_backing_and_blocks_commit_until_repaired() {
+        let _test = EVICTION_TESTS.lock().unwrap();
         let dir = std::env::temp_dir().join(format!("photocraft-read-failure-{}", std::process::id()));
         let file = Arc::new(ScratchFile::create(&dir).unwrap());
         let mut tile = crate::Tile { cell: Cell::new(vec![73; 1024]) };
