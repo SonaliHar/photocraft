@@ -215,3 +215,58 @@ fn truncated_raws_with_a_fittable_preview_do_not_panic() {
         let _ = import("x.nef", &b[..n]);
     }
 }
+
+/// Mean of each colour channel of a developed document, 0..1.
+fn channel_means(r: &photocraft_io::ImportResult) -> [f64; 3] {
+    let img = photocraft_io::document_to_image(&r.document, &mut Vec::new()).unwrap();
+    let n = img.layout().channels();
+    let values = img.to_normalized();
+    let mut sum = [0.0f64; 3];
+    for px in values.chunks_exact(n) {
+        for (s, v) in sum.iter_mut().zip(px) {
+            *s += f64::from(*v);
+        }
+    }
+    sum.map(|s| s / (values.len() / n) as f64)
+}
+
+/// Camera Raw's Open re-develops a raw with the photographer's white balance. The colour fitted to the camera's JPEG
+/// is the camera's own rendering, so it must be fitted at the as-shot white balance: a matrix fitted to a changed
+/// white balance absorbs the change and the control would do nothing.
+#[test]
+fn a_changed_white_balance_is_not_cancelled_by_the_fitted_colour() {
+    let (w, h) = (480, 320);
+    let cam = patches(w, h);
+    let bytes = nef_uncompressed(&cam, w, h, Some(camera_rendering(&cam, w, h)));
+    let develop = |white_balance| {
+        let opts = photocraft_raw::DevelopOptions { white_balance, ..Default::default() };
+        photocraft_io::raw::import_raw_with("DSC_0004.NEF", &bytes, &opts).unwrap()
+    };
+    let as_shot = develop(photocraft_raw::WhiteBalance::AsShot);
+    let warm = develop(photocraft_raw::WhiteBalance::Multipliers([1.5, 1.0, 0.65]));
+    let cool = develop(photocraft_raw::WhiteBalance::Multipliers([0.7, 1.0, 1.4]));
+    for r in [&as_shot, &warm, &cool] {
+        assert!(fitted(&r.warnings), "{:?}", r.warnings);
+    }
+    let red_over_blue = |r: &photocraft_io::ImportResult| channel_means(r)[0] / channel_means(r)[2];
+    let (before, warmer, cooler) = (red_over_blue(&as_shot), red_over_blue(&warm), red_over_blue(&cool));
+    // Cancelled, the ratio stays within about 1% of the as-shot one (0.99 measured before the fix).
+    assert!(warmer > before * 1.15, "red/blue {before:.3} as shot, {warmer:.3} with a warmer white balance");
+    assert!(cooler < before / 1.15, "red/blue {before:.3} as shot, {cooler:.3} with a cooler white balance");
+}
+
+/// The look does not depend on the exposure asked for either: exposure is applied after it.
+#[test]
+fn exposure_still_scales_a_fitted_raw() {
+    let (w, h) = (480, 320);
+    let cam = patches(w, h);
+    let bytes = nef_uncompressed(&cam, w, h, Some(camera_rendering(&cam, w, h)));
+    let develop = |exposure| {
+        let opts = photocraft_raw::DevelopOptions { exposure, ..Default::default() };
+        photocraft_io::raw::import_raw_with("DSC_0005.NEF", &bytes, &opts).unwrap()
+    };
+    let (flat, bright) = (develop(0.0), develop(1.0));
+    assert!(fitted(&flat.warnings) && fitted(&bright.warnings));
+    let (a, b) = (channel_means(&flat), channel_means(&bright));
+    assert!(b[1] > a[1] * 1.2, "green {:.3} at 0 EV, {:.3} at +1 EV", a[1], b[1]);
+}

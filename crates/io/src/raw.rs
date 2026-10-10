@@ -173,7 +173,11 @@ fn develop_fitted(bytes: &[u8], opts: &DevelopOptions) -> Result<photocraft_raw:
     let mut opts = Cow::Borrowed(opts);
     if opts.camera_look.is_none()
         && sensor.color.calibrations.is_empty()
-        && let Ok(look) = fit_preview_look(bytes, &sensor, &opts)
+        // The look is the camera's own rendering, so it is fitted at the as-shot white balance whatever balance
+        // is asked for: a matrix fitted to a changed balance absorbs the change, and Camera Raw's white balance
+        // would do nothing on every file without a calibration. (Exposure is applied after the look, so it is
+        // not affected.)
+        && let Ok(look) = fit_preview_look(bytes, &sensor, &DevelopOptions { white_balance: WhiteBalance::AsShot, ..DevelopOptions::clone(&opts) })
     {
         opts.to_mut().camera_look = Some(look);
     }
