@@ -331,10 +331,7 @@ pub fn dpx_bits_param(p: &Value, cmd: &str) -> Result<Option<photocraft_io::DpxB
     }
 }
 
-/// Encodes `doc` for `path`'s extension.
-pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> Result<(Vec<u8>, Vec<String>)> {
-    crate::allocation::checkpoint("saving document")?;
-    let save = save.into();
+fn save_options(doc: &Document, save: SaveOpts) -> photocraft_io::ExportOptions {
     let mut opts = photocraft_io::ExportOptions {
         tiff_layers: save.tiff_layers,
         tga_bits: save.tga_bits,
@@ -353,20 +350,21 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
         opts.encode.webp_quality = q;
         opts.encode.webp_lossless = false;
     }
+    opts
+}
+
+/// Encodes `doc` for `path`'s extension.
+pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> Result<(Vec<u8>, Vec<String>)> {
+    crate::allocation::checkpoint("saving document")?;
+    let opts = save_options(doc, save.into());
     photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| EngineError::Other(format!("{path}: {e}")))
 }
 
 pub(crate) fn save_doc(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> Result<Vec<String>> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let save = save.into();
-        let mut opts = photocraft_io::ExportOptions { tiff_layers: save.tiff_layers, ..Default::default() };
-        if let Some(q) = save.quality {
-            let q = (q.clamp(0.0, 12.0) / 12.0 * 99.0 + 1.0).round() as u8;
-            opts.encode.jpeg_quality = q;
-            opts.encode.webp_quality = q;
-            opts.encode.webp_lossless = false;
-        }
+        crate::allocation::checkpoint("saving document")?;
+        let opts = save_options(doc, save.into());
         photocraft_io::export_path_with(doc, std::path::Path::new(path), &opts, &photocraft_raster::Interrupt::NONE)
             .map_err(|e| EngineError::Other(format!("{path}: {e}")))
     }

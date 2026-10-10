@@ -185,7 +185,12 @@ fn sink_error(e: std::io::Error) -> photocraft_psd::PsdError {
     photocraft_psd::PsdError::Invalid(format!("stream output: {e}"))
 }
 
-pub(crate) fn export_into<W: Write + Seek>(doc: &photocraft_doc::Document, out: &mut W, ctl: Interrupt<'_>) -> Result<Vec<String>, IoError> {
+pub(crate) fn export_into<W: Write + Seek>(
+    doc: &photocraft_doc::Document,
+    out: &mut W,
+    options: &crate::ExportOptions,
+    ctl: Interrupt<'_>,
+) -> Result<Vec<String>, IoError> {
     if !matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale | ColorMode::Cmyk | ColorMode::Lab) {
         return Err(IoError::Unsupported("seekable PSB export requires RGB, Gray, CMYK or Lab".into()));
     }
@@ -218,8 +223,25 @@ pub(crate) fn export_into<W: Write + Seek>(doc: &photocraft_doc::Document, out: 
         .saturating_add(metadata.saturating_mul(4))
         .saturating_add(embedded.saturating_mul(4));
     let _working = photocraft_raster::memory::try_reserve(working).map_err(IoError::Unsupported)?;
-    let opts = crate::psd_export::PsdExportOptions { force_psb: true, ..Default::default() };
-    let (file, warnings, sources) = crate::psd_export::stream_metadata(doc, &opts);
+    let opts = crate::psd_export::PsdExportOptions { force_psb: true, maximize_compatibility: options.psd_maximize_compatibility, ..Default::default() };
+    let (mut file, mut warnings, sources) = crate::with_span(&ctl, 0.0, 0.1, |ctl| crate::psd_export::stream_metadata(doc, &opts, ctl));
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    if !doc.metadata.text.is_empty() {
+        warnings.push("free-form text metadata is not supported by PSD/PSB; it will be dropped".into());
+    }
+    warnings.extend(crate::tiff_layers::strip_foreign_order_blocks(&mut file));
+    if options.image_previews {
+        match crate::psd_thumbnail::resource(doc) {
+            Ok(resource) => {
+                let at = file.resources.iter().position(|r| r.id == photocraft_psd::resources::ids::VERSION_INFO).unwrap_or(file.resources.len());
+                file.resources.insert(at, resource);
+            }
+            Err(e) => warnings.push(format!("image preview not saved: {e}")),
+        }
+    }
+    file.header.validate()?;
+    let merged_channels = fmt.mode.color_channels() + usize::from(file.merged_has_alpha());
+    let real_merged = options.psd_maximize_compatibility || file.layers().is_empty();
     let check = || -> photocraft_psd::Result<()> {
         if ctl.cancelled() {
             return Err(photocraft_psd::PsdError::Invalid("stream export cancelled".into()));
@@ -231,6 +253,7 @@ pub(crate) fn export_into<W: Write + Seek>(doc: &photocraft_doc::Document, out: 
         out,
         |i, id, out| {
             check()?;
+            ctl.progress(0.15 + 0.35 * i as f32 / file.layers().len().max(1) as f32);
             let rec = file.layers().get(i).ok_or_else(|| photocraft_psd::PsdError::Invalid("missing output record".into()))?;
             let source = rec.layer_id().and_then(|id| sources.get(&id)).and_then(|(pixels, mask)| if id == -2 { mask.as_ref() } else { pixels.as_ref() });
             let r = rec.channel_rect(id);
@@ -270,9 +293,9 @@ pub(crate) fn export_into<W: Write + Seek>(doc: &photocraft_doc::Document, out: 
             let cc = fmt.mode.color_channels();
             let white = photocraft_raster::from_rgba(&fmt, [1.0; 4]);
             let space = photocraft_compose::cmyk_space(doc);
-            photocraft_compose::render_bands(doc, doc.bounds(), 64, |band| -> photocraft_psd::Result<()> {
+            let mut write_band = |band: photocraft_compose::Buffer| -> photocraft_psd::Result<()> {
                 check()?;
-                let mut planes: Vec<Vec<u8>> = (0..=cc).map(|_| Vec::with_capacity(band.px.len() * fmt.sample.bytes())).collect();
+                let mut planes: Vec<Vec<u8>> = (0..merged_channels).map(|_| Vec::with_capacity(band.px.len() * fmt.sample.bytes())).collect();
                 photocraft_color::convert::with_cmyk_space(space.as_ref(), || {
                     let mut v = [0.0; 5];
                     for p in &band.px {
@@ -304,9 +327,22 @@ pub(crate) fn export_into<W: Write + Seek>(doc: &photocraft_doc::Document, out: 
                 }
                 ctl.progress(0.5 + 0.5 * band.rect.y1 as f32 / doc.size.height.max(1) as f32);
                 Ok(())
-            })?;
-            for (i, channel) in doc.channels.iter().chain(doc.quick_mask.iter()).take(usize::from(file.header.channels).saturating_sub(cc + 1)).enumerate() {
-                let index = cc + 1 + i;
+            };
+            if real_merged {
+                photocraft_compose::render_bands(doc, doc.bounds(), 64, &mut write_band)?;
+            } else {
+                let mut y = 0;
+                while y < doc.size.height {
+                    let end = y.saturating_add(64).min(doc.size.height);
+                    let rect = Rect::from_xywh(0, y as i32, doc.size.width, end - y);
+                    write_band(photocraft_compose::Buffer { rect, px: vec![[1.0; 4]; doc.size.width as usize * (end - y) as usize] })?;
+                    y = end;
+                }
+            }
+            for (i, channel) in
+                doc.channels.iter().chain(doc.quick_mask.iter()).take(usize::from(file.header.channels).saturating_sub(merged_channels)).enumerate()
+            {
+                let index = merged_channels + i;
                 let mask_fmt = photocraft_color::PixelFormat::new(ColorMode::Grayscale, fmt.sample, false);
                 let converted = (channel.surface.format() != mask_fmt).then(|| channel.surface.convert(mask_fmt));
                 let surface = converted.as_ref().unwrap_or(&channel.surface);

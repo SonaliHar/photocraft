@@ -349,3 +349,36 @@ fn streaming_encoder_unwind_closes_and_removes_temporary_file() {
     assert_eq!(std::fs::read(&p).unwrap(), ORIGINAL);
     assert_no_temp(&d.0);
 }
+
+#[cfg(windows)]
+#[test]
+fn streaming_read_only_temporary_is_removed_on_rejected_or_unwinding_commit() {
+    for unwind in [false, true] {
+        let dir = TempDir::new("stream-read-only");
+        let path = dir.0.join("document.psb");
+        std::fs::write(&path, ORIGINAL).unwrap();
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&path, permissions).unwrap();
+        let result = std::panic::catch_unwind(|| {
+            atomic_write_stream_with_commit(
+                &path,
+                |file| file.write_all(b"complete"),
+                || {
+                    if unwind {
+                        panic!("injected read-only commit panic");
+                    }
+                    Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled before commit"))
+                },
+            )
+        });
+        if unwind {
+            assert!(result.is_err());
+        } else {
+            assert_eq!(result.unwrap().unwrap_err().kind(), io::ErrorKind::Interrupted);
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), ORIGINAL);
+        assert!(std::fs::metadata(&path).unwrap().permissions().readonly());
+        assert_no_temp(&dir.0);
+    }
+}

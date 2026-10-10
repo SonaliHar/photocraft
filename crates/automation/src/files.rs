@@ -82,7 +82,7 @@ pub fn save(
         return Ok(Vec::new());
     }
     #[cfg(not(target_arch = "wasm32"))]
-    if ext == "psb" || ext == "psd" && (opts.force_psb || doc.size.width > 30_000 || doc.size.height > 30_000) {
+    if photocraft_io::needs_psb_stream(doc, &format!("output.{ext}"), opts) {
         let mut warnings = Vec::new();
         photocraft_format::atomic::atomic_write_stream(path, |file| {
             warnings = photocraft_io::export_psb_into(doc, file, &photocraft_raster::Interrupt::NONE).map_err(|e| std::io::Error::other(e.to_string()))?;

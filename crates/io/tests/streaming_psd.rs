@@ -64,7 +64,8 @@ fn seekable_export_preserves_merged_layers_masks_and_unknown_metadata() {
             let input = photocraft_psd::testgen::layered(Version::Psb, mode, depth, Compression::ZipPrediction);
             let doc = photocraft_io::import("input", &input.to_bytes().unwrap()).unwrap().document;
             let (reference, _) = photocraft_io::document_to_psd_with(&doc, &photocraft_io::PsdExportOptions { force_psb: true, ..Default::default() });
-            photocraft_io::export_path_with(&doc, &path, &Default::default(), &Interrupt::NONE).unwrap();
+            photocraft_io::export_path_with(&doc, &path, &photocraft_io::ExportOptions { image_previews: false, ..Default::default() }, &Interrupt::NONE)
+                .unwrap();
             let output = photocraft_psd::PsdFile::from_bytes(&std::fs::read(&path).unwrap()).unwrap();
             assert_eq!(output.header, reference.header, "{mode:?}/{depth}");
             assert_eq!(output.resources, reference.resources);

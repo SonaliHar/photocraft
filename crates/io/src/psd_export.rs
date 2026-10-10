@@ -1369,9 +1369,9 @@ pub fn document_to_psd_with(doc: &Document, opts: &PsdExportOptions) -> (PsdFile
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn stream_metadata(doc: &Document, opts: &PsdExportOptions) -> (PsdFile, Vec<String>, StreamSources) {
+pub(crate) fn stream_metadata(doc: &Document, opts: &PsdExportOptions, ctl: &Interrupt) -> (PsdFile, Vec<String>, StreamSources) {
     let mut sources = StreamSources::new();
-    let (file, warnings) = document_to_psd_nested(doc, opts, 0, &Interrupt::NONE, Some(&mut sources));
+    let (file, warnings) = document_to_psd_nested(doc, opts, 0, ctl, Some(&mut sources));
     (file, warnings, sources)
 }
 
@@ -1622,7 +1622,7 @@ fn document_to_psd_nested(
     // live nowhere else.
     let real_merged = opts.maximize_compatibility || ex.records.is_empty();
     let (mut planes, has_alpha) = if ex.deferred {
-        (Vec::new(), true)
+        (Vec::new(), real_merged)
     } else if real_merged {
         // Merged composite, rendered and encoded in bands (no full-size float composite). Matting
         // against white only changes pixels with alpha < 1; if some are slightly translucent but

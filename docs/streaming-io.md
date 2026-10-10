@@ -27,8 +27,7 @@ document without a source save path.
 The seekable output API accepts a caller-owned writer; atomic path output encodes into a temporary
 file beside the destination, syncs it using the shared platform helper, then renames it. Encoder
 failure, cancellation or unwinding removes the temporary and preserves the old destination. Its
-integration with the desktop background-save service is a separate change, using upstream's
-`SaveCtl` and document-lock/saved-revision contract.
+integration with the desktop background-save service is documented in [streamed saves](streaming-save.md).
 
 Synthetic tests compare streamed import with the byte decoder across PSD/PSB versions, depths,
 colour modes and compression, and verify masks, metadata, cancellation, EXR chunk handling,

@@ -260,10 +260,11 @@ impl Headless {
             }
             Filesystem::Workspace(workspace) => {
                 #[cfg(not(target_arch = "wasm32"))]
-                if format
-                    .map(|f| f.trim_start_matches('.').eq_ignore_ascii_case("psb"))
-                    .unwrap_or_else(|| target.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("psb")))
-                {
+                if photocraft_io::needs_psb_stream(
+                    &doc,
+                    &format.map(|f| format!("output.{}", f.trim_start_matches('.'))).unwrap_or_else(|| target_text.to_string()),
+                    opts,
+                ) {
                     let mut warnings = Vec::new();
                     workspace.write_stream(target_text, |file| {
                         warnings = photocraft_io::export_psb_into(&doc, file, &photocraft_raster::Interrupt::NONE)

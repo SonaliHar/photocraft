@@ -102,6 +102,16 @@ impl AuthorizedWorkspace {
     /// Atomically publish a seekable encoder through the held write capability. No ambient
     /// paths are exposed to the encoder, including for temporary-file creation and rename.
     pub fn write_stream(&self, path: &str, encode: impl FnOnce(&mut cap_std::fs::File) -> std::io::Result<()>) -> Result<(), AutomationError> {
+        self.write_stream_with_commit(path, encode, || Ok(()))
+    }
+
+    /// Approve publication after encoding and flushing; rejection preserves the old destination.
+    pub fn write_stream_with_commit(
+        &self,
+        path: &str,
+        encode: impl FnOnce(&mut cap_std::fs::File) -> std::io::Result<()>,
+        commit: impl FnOnce() -> std::io::Result<()>,
+    ) -> Result<(), AutomationError> {
         struct Cleanup(Arc<Dir>, PathBuf);
         impl Drop for Cleanup {
             fn drop(&mut self) {
@@ -120,7 +130,9 @@ impl AuthorizedWorkspace {
         // This binding drops before the cleanup guard if an encoder unwinds.
         let mut file = file;
         let written = encode(&mut file).and_then(|()| photocraft_format::atomic::sync_file(&file.into_std()));
-        let renamed = written.and_then(|()| photocraft_format::atomic::retry_rename(RenameRetry::platform(), || root.dir.rename(&tmp, &root.dir, &relative)));
+        let renamed = written
+            .and_then(|()| commit())
+            .and_then(|()| photocraft_format::atomic::retry_rename(RenameRetry::platform(), || root.dir.rename(&tmp, &root.dir, &relative)));
         if let Err(e) = renamed {
             let _ = root.dir.remove_file(&tmp);
             return Err(file_error("write", path, e));
@@ -522,6 +534,20 @@ mod tests {
             })
             .unwrap();
         assert_eq!(std::fs::read(inside.join("kept.psb")).unwrap(), b"0007payload");
+    }
+
+    #[test]
+    fn seekable_capability_rejected_commit_preserves_destination_and_cleans_temporary() {
+        let (inside, _, workspace) = roots("stream-commit-rejected");
+        std::fs::write(inside.join("kept.psb"), b"original").unwrap();
+        let result = workspace.write_stream_with_commit(
+            "kept.psb",
+            |file| file.write_all(b"replacement"),
+            || Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "cancelled before publication")),
+        );
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(inside.join("kept.psb")).unwrap(), b"original");
+        assert!(temp_files(&inside).is_empty());
     }
 
     #[test]

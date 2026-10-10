@@ -502,36 +502,84 @@ pub fn export_with(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl:
 /// formats with only a bytes encoder use the checked working-set admission in [`export`].
 #[cfg(not(target_arch = "wasm32"))]
 pub fn export_path_with(doc: &Document, path: &std::path::Path, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Vec<String>, IoError> {
+    export_path_with_commit(doc, path, opts, ctl, || Ok(()))
+}
+
+/// Whether native output needs the bounded PSB writer, including automatic PSD size promotion.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn needs_psb_stream(doc: &Document, name: &str, opts: &ExportOptions) -> bool {
+    let ext = extension(name);
+    ext == "psb" || ext == "psd" && (opts.force_psb || doc.size.width > 30_000 || doc.size.height > 30_000 || psd_export::psd_size_exceeds_limit(doc))
+}
+
+/// Encode and flush an owned temporary, then call `commit` immediately before publication.
+/// After commit succeeds, no cancellation check may turn a successful publication into failure.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn export_path_with_commit(
+    doc: &Document,
+    path: &std::path::Path,
+    opts: &ExportOptions,
+    ctl: &photocraft_raster::Interrupt<'_>,
+    commit: impl FnOnce() -> Result<(), IoError>,
+) -> Result<Vec<String>, IoError> {
+    use std::io::Write;
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
-    if ext == "psb" || ext == "psd" && (opts.force_psb || doc.size.width > 30_000 || doc.size.height > 30_000) {
+    let mut warnings = Vec::new();
+    let mut commit_error = None;
+    let streaming = needs_psb_stream(doc, &path.to_string_lossy(), opts);
+    let encoded = if streaming {
         photocraft_raster::spill::check_integrity().map_err(IoError::Unsupported)?;
-        let mut warnings = Vec::new();
-        let result = photocraft_format::atomic::atomic_write_stream_with_commit(
-            path,
-            |out| {
-                warnings = psd_stream::export_into(doc, out, *ctl).map_err(|e| std::io::Error::other(e.to_string()))?;
+        None
+    } else {
+        let result = export_with(doc, &path.to_string_lossy(), opts, ctl)?;
+        warnings = result.warnings;
+        Some(result.bytes)
+    };
+    let result = photocraft_format::atomic::atomic_write_stream_with_commit(
+        path,
+        |out| {
+            if let Some(bytes) = encoded {
+                out.write_all(&bytes)
+            } else {
+                warnings = psd_stream::export_into(doc, out, opts, *ctl).map_err(|e| std::io::Error::other(e.to_string()))?;
                 Ok(())
-            },
-            || ctl.check().map_err(|e| std::io::Error::new(std::io::ErrorKind::Interrupted, e)),
-        );
-        if result.is_err() && ctl.cancelled() {
-            return Err(IoError::Cancelled);
-        }
-        result.map_err(|e| IoError::Unsupported(e.to_string()))?;
-        return Ok(warnings);
+            }
+        },
+        || {
+            ctl.check().map_err(|e| std::io::Error::new(std::io::ErrorKind::Interrupted, e))?;
+            commit().map_err(|e| {
+                let message = e.to_string();
+                commit_error = Some(e);
+                std::io::Error::other(message)
+            })
+        },
+    );
+    if let Some(error) = commit_error {
+        return Err(error);
     }
-    let result = export(doc, &path.to_string_lossy(), opts)?;
-    ctl.check().map_err(|_| IoError::Cancelled)?;
-    photocraft_format::atomic_write(path, &result.bytes).map_err(|e| IoError::Unsupported(e.to_string()))?;
-    Ok(result.warnings)
+    if result.is_err() && ctl.cancelled() {
+        return Err(IoError::Cancelled);
+    }
+    result.map_err(|e| IoError::Unsupported(e.to_string()))?;
+    Ok(warnings)
 }
 
 /// Write a native PSB to an already authorized seekable output. The caller owns atomic
 /// publication and cleanup; this never opens an ambient path.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn export_psb_into<W: std::io::Write + std::io::Seek>(doc: &Document, out: &mut W, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Vec<String>, IoError> {
-    psd_stream::export_into(doc, out, *ctl)
+    export_psb_into_with_options(doc, out, &ExportOptions { image_previews: false, ..Default::default() }, ctl)
+}
+
+/// Seekable PSB output honoring the same compatibility and preview settings as byte exports.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn export_psb_into_with_options<W: std::io::Write + std::io::Seek>(
+    doc: &Document,
+    out: &mut W,
+    opts: &ExportOptions,
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<Vec<String>, IoError> {
+    psd_stream::export_into(doc, out, opts, *ctl)
 }
 
 /// Run `f` with an interrupt whose progress `0..=1` fills `lo..=hi` of `ctl`'s (same cancellation).
