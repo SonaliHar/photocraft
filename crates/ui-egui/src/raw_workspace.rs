@@ -260,7 +260,7 @@ pub fn queue_dialog(app: &mut PhotocraftApp, document: Option<DocId>) {
 pub fn control(app: &mut PhotocraftApp, ctx: &egui::Context, p: &serde_json::Value) -> Result<serde_json::Value, String> {
     use serde_json::json;
     if let Some(object) = p.as_object()
-        && let Some(key) = object.keys().find(|key| !["open", "commit", "cancel", "done", "wait"].contains(&key.as_str()))
+        && let Some(key) = object.keys().find(|key| !["open", "set", "commit", "cancel", "done", "wait"].contains(&key.as_str()))
     {
         return Err(format!("unknown ui.cameraRaw field `{key}`"));
     }
@@ -279,7 +279,16 @@ pub fn control(app: &mut PhotocraftApp, ctx: &egui::Context, p: &serde_json::Val
     if open && app.camera_raw.is_none() {
         app.raw_workspace.opened_for = app.session.active().map(|state| state.doc.id);
         camera_raw_ui::open(app, ctx)?;
-    } else if done {
+    }
+    if let Some(set) = p.get("set") {
+        // Adjusting the open dialog. `ui.menu.invoke filter.cameraRaw {ui: {set}}` is refused while Camera Raw
+        // is open (menu commands are blocked behind a modal), so the workspace has its own route to the same code.
+        if app.camera_raw.is_none() {
+            return Err("Camera Raw is not open".into());
+        }
+        camera_raw_ui::menu(app, ctx, "filter.cameraRaw", &json!({"ui": {"set": set}})).ok_or("Camera Raw is not open")??;
+    }
+    if done {
         // Leaving the photo: a raw keeps its settings as a recipe and nothing is developed.
         left = Some(camera_raw_ui::done(app)?);
     } else if commit {
@@ -456,6 +465,29 @@ mod tests {
         assert!(control(&mut app, &ctx, &json!({"open": "yes"})).is_err());
         assert!(control(&mut app, &ctx, &json!({"open": true, "commit": true})).is_err());
         assert!(app.camera_raw.is_none(), "a rejected request opens nothing");
+    }
+
+    #[test]
+    fn the_control_adjusts_the_open_dialog() {
+        let (mut app, ctx) = app_with_document();
+        assert!(control(&mut app, &ctx, &json!({"set": {"exposure": 1.0}})).unwrap_err().contains("not open"));
+        control(&mut app, &ctx, &json!({"open": true})).unwrap();
+        let state = control(&mut app, &ctx, &json!({"set": {"exposure": 1.0, "contrast": 25}})).unwrap();
+        assert_eq!(state["changed"], true);
+        // A bad request changes nothing.
+        assert!(control(&mut app, &ctx, &json!({"set": {"nonsense": 1}})).unwrap_err().contains("nonsense"));
+        assert!(control(&mut app, &ctx, &json!({"set": 3})).is_err());
+        assert_eq!(control(&mut app, &ctx, &json!({})).unwrap()["changed"], true);
+        // The menu route is refused behind the open dialog (upstream's modal policy), which is why `set` exists.
+        assert!(!crate::menus::modal_allows(&app, "filter.cameraRaw"));
+        // Settings and the leaving action can be one call; so can opening and adjusting.
+        let steps = history(&app);
+        let applied = control(&mut app, &ctx, &json!({"set": {"exposure": -1.0}, "commit": true})).unwrap();
+        assert_eq!((applied["open"].as_bool(), applied["applied"].as_bool()), (Some(false), Some(true)));
+        assert_eq!(history(&app), steps + 1);
+        let again = control(&mut app, &ctx, &json!({"open": true, "set": {"exposure": 0.5}})).unwrap();
+        assert_eq!((again["open"].as_bool(), again["changed"].as_bool()), (Some(true), Some(true)));
+        assert!(control(&mut app, &ctx, &json!({"open": true, "set": {"exposure": 1.0}, "cancel": true})).is_err());
     }
 
     #[test]
