@@ -254,7 +254,7 @@ fn tile_bytes(doc: &Document, seen: &mut HashSet<usize>) -> usize {
     tiles::surfaces(doc, |surface| {
         for (_, tile) in surface.tiles() {
             if seen.insert(Arc::as_ptr(tile) as usize) {
-                n = n.saturating_add(tile.bytes().len());
+                n = n.saturating_add(tile.len());
             }
         }
     });

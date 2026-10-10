@@ -218,6 +218,7 @@ pub fn load(app: &mut PhotocraftApp) {
         let template = "Preferences were reset: {error}";
         app.ui.status = crate::i18n::fmt(tl!(template), &[("error", &e)]);
     }
+    app.session.apply_prefs();
     crate::dock::restore(app);
     crate::brush_picker::restore(app);
     crate::last_brush::restore(app);
@@ -1477,7 +1478,7 @@ fn field_visible(section: &str, obj: &Map<String, Value>, k: &str, query: &str) 
     (query.is_empty() || preference_matches(section, k, query))
         && !drawn_elsewhere
         && !prefs::is_hidden(&path)
-        && obj.get(k).is_some_and(|v| !matches!(v, Value::Null | Value::Object(_)))
+        && obj.get(k).is_some_and(|v| (path == "performance.memoryUsagePercent" && v.is_null()) || !matches!(v, Value::Null | Value::Object(_)))
 }
 
 /// Generic editor for a section's fields: checkboxes, dropdowns for choices, colour swatches,
@@ -1513,6 +1514,18 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
         let v = obj.get(&k).cloned().unwrap_or(Value::Null);
         let human = humanize(&k);
         let label = tl!(&human).to_string();
+        if path == "performance.memoryUsagePercent" {
+            ui.label(RichText::new(&label).color(t.text_dim));
+            let mut enabled = v.is_number();
+            let mut percent = v.as_u64().unwrap_or(70) as u32;
+            ui.horizontal(|ui| {
+                crate::widgets::checkbox(ui, &mut enabled, "");
+                ui.add_enabled(enabled, egui::DragValue::new(&mut percent).range(1..=95).suffix("%"));
+            });
+            obj.insert(k, if enabled { json!(percent) } else { Value::Null });
+            ui.end_row();
+            continue;
+        }
         match &v {
             Value::Bool(b) => {
                 ui.label("");
@@ -2835,10 +2848,10 @@ mod tests {
         let values = prefs::Preferences::default().to_json();
         assert!(has_visible_fields(&values, "general"));
         assert!(has_visible_fields(&values, "fileHandling"));
+        assert!(has_visible_fields(&values, "scratchDisks"));
+        assert!(!prefs::is_hidden("scratchDisks.disks"));
         // Every setting of these sections is still unimplemented.
-        for section in ["integrations", "scratchDisks"] {
-            assert!(!has_visible_fields(&values, section), "{section}");
-        }
+        assert!(!has_visible_fields(&values, "integrations"));
         // "Fill new type layers with placeholder text" and "Use Escape to Commit" are live; other Type rows stay hidden.
         assert!(has_visible_fields(&values, "type"));
         assert!(!prefs::is_hidden("type.fillNewTypeLayersWithPlaceholder"));
