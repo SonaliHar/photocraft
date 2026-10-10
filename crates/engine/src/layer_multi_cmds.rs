@@ -330,7 +330,20 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mask_target = p.get("target").and_then(Value::as_str) == Some("mask");
     let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
-    let ids = s.edit("Move", |doc, _| {
+    for id in move_targets(&before, &roots) {
+        if let Some(layer) = before.layer(id) {
+            for surface in layer.surface().into_iter().chain(layer.mask.as_ref().filter(|mask| mask.linked).map(|mask| &mask.surface)) {
+                for (coord, _) in surface.tiles() {
+                    let x = i64::from(coord.tx) * i64::from(photocraft_geom::TILE_SIZE);
+                    let y = i64::from(coord.ty) * i64::from(photocraft_geom::TILE_SIZE);
+                    if [x, y, x + i64::from(dx), y + i64::from(dy)].into_iter().any(|value| !(-1_000_000_000..=1_000_000_000).contains(&value)) {
+                        return Err(EngineError::BadParams { cmd: "layer.translate".into(), msg: "move exceeds supported pixel coordinates".into() });
+                    }
+                }
+            }
+        }
+    }
+    let result = s.edit_with_cache("Move", false, |doc, _| {
         let (alone, rest): (Vec<LayerId>, Vec<LayerId>) = roots.iter().partition(|id| mask_target && doc.layer(**id).is_some_and(moves_mask_alone));
         let mut ids = move_targets(doc, &rest);
         if ids.is_empty() && alone.is_empty() {
@@ -354,7 +367,10 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
             crate::artboard_cmds::fit_canvas(doc);
         }
         Ok(ids)
-    })?;
+    });
+    let ids = result?;
+    s.compact_translation(&before, &ids, dx, dy);
+    s.poll_history_cache();
     note_damage(s, &before, &ids);
     Ok(Value::Null)
 }
