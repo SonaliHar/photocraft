@@ -35,5 +35,6 @@ A failed read retains its backing extent and blocks editing, cache admission and
 until the tile is readable again. Recovery can retry the original bytes after the storage
 becomes available; zeros from a failed display read must never become saved pixels.
 
-Scratch storage alone does not make every format, filter or renderer streamable. The native
-PSD/EXR import and viewport streaming changes build on these guards and memory reservations.
+Scratch storage alone does not make every format, filter or renderer streamable. See
+[native PSD/EXR streaming](streaming-io.md) for the seekable import and output APIs. Viewport
+rendering is a separate change built on these guards and memory reservations.
