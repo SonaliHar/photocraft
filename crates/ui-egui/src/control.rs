@@ -223,8 +223,15 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
     let u = |k: &str| p.get(k).and_then(Value::as_u64);
     let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(true);
     match req.method.as_str() {
-        "app.handoff" => ok(json!({"version": 2, "replace": true, "hiddenStart": true, "rawSmartObject": 1, "rawSensorAdapter": 1})),
+        "app.handoff" => {
+            ok(json!({"version": 2, "replace": true, "hiddenStart": true, "rawSmartObject": 1, "rawSensorAdapter": 1, "cameraRaw": 1, "cameraRawPrefetch": 1}))
+        }
         "ui.rawDevelopment" => run_waiting(app, wait, |app| crate::raw_develop_ui::control(app, p)),
+        "ui.cameraRaw" => run_waiting(app, wait, |app| crate::raw_workspace::control(app, ctx, p)),
+        "app.prefetch" => match (s("path"), s("signature")) {
+            (Some(path), Some(signature)) => wrap(crate::raw_workspace::request_prefetch(app, path, signature)),
+            _ => err("prefetch requires path and signature"),
+        },
         "ui.context.choose" => {
             let Some(id) = s("id") else { return err("missing `id`") };
             let Some(menu) = app.ui.canvas_tool_menu.as_ref() else { return err("no canvas context menu is open") };
@@ -286,6 +293,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             ok(json!({"theme": app.ui.theme.id(), "panel": hex(tokens.card), "dock": hex(tokens.dock),
                 "accent": hex(tokens.accent), "text": hex(tokens.text)}))
         }
+        "ui.viewport" => ok(viewport(app, ctx)),
         "ui.set" => {
             if let Some(field) = p.as_object().and_then(|o| o.keys().find(|k| !UI_SET_FIELDS.contains(&k.as_str()))) {
                 return err(format!("unknown field `{field}` (fields: {})", UI_SET_FIELDS.join(", ")));
@@ -722,12 +730,17 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         }
         "app.open" => match s("path") {
             Some(path) if app.background_jobs && app.services.background_automation_read.is_some() && !crate::preset_files_ui::is_preset_file(path) => {
+                let camera_raw = match req.params.get("cameraRaw").map(crate::raw_workspace::OpenSpec::parse).transpose() {
+                    Ok(spec) => spec,
+                    Err(error) => return err(error),
+                };
                 match crate::control_files::open_with_sensor(
                     app,
                     path,
                     req.params.get("replace").and_then(Value::as_bool).unwrap_or(false),
                     req.params.get("rawSmartObject").and_then(Value::as_bool).unwrap_or(false),
                     req.params.get("rawSensorPath").and_then(Value::as_str),
+                    camera_raw,
                 ) {
                     Ok(photocraft_engine::jobs::Started::Job(job)) => Outcome::AfterJob(job),
                     Ok(photocraft_engine::jobs::Started::Done(result)) => ok(result),
@@ -762,7 +775,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             _ => err("bind requires an open document, .pcraft path and .png preview"),
         },
         "app.stash" => match (s("path"), s("preview")) {
-            (Some(path), Some(preview)) => match crate::control_files::stash(app, path, preview) {
+            (Some(path), Some(preview)) => match crate::control_files::stash_with_display(app, path, preview, s("display")) {
                 Ok(photocraft_engine::jobs::Started::Job(job)) if req.params.get("wait").and_then(Value::as_bool) == Some(false) => {
                     ok(json!({"job": job.0, "pending": true}))
                 }
@@ -780,6 +793,23 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         }
         other => err(format!("unknown method `{other}`")),
     }
+}
+
+/// Where the image is drawn, in physical window pixels, without the cost of [`inspect`]: the
+/// canvas and, while Camera Raw is open, its preview. A host that paints a cached picture over
+/// the embedded window uses these to cover just the image and leave the panels visible.
+pub fn viewport(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
+    let scale = ctx.pixels_per_point();
+    let rect = |r: egui::Rect| {
+        json!({"x": (r.left() * scale).round(), "y": (r.top() * scale).round(),
+        "width": (r.width() * scale).round(), "height": (r.height() * scale).round()})
+    };
+    let screen = ctx.content_rect();
+    json!({
+        "window": {"width": (screen.width() * scale).round(), "height": (screen.height() * scale).round(), "pixelsPerPoint": scale},
+        "canvas": rect(app.last_canvas_rect),
+        "cameraRaw": app.camera_raw.as_ref().map(|dialog| json!({"open": true, "view": dialog.viewport.map(rect), "preview": dialog.scope.preview_rect.map(rect)})),
+    })
 }
 
 /// Snapshot of everything on screen, addressable by id.
@@ -881,6 +911,21 @@ mod tests {
             assert_eq!(colors["result"]["dock"], format!("#{:02x}{:02x}{:02x}", tokens.dock.r(), tokens.dock.g(), tokens.dock.b()));
             assert_eq!(colors["result"]["accent"], format!("#{:02x}{:02x}{:02x}", tokens.accent.r(), tokens.accent.g(), tokens.accent.b()));
         }
+    }
+
+    #[test]
+    fn viewport_reports_the_canvas_in_physical_pixels_without_a_document() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.last_canvas_rect = egui::Rect::from_min_size(egui::pos2(10.0, 20.5), egui::vec2(300.0, 200.0));
+        let reply = call(&mut app, &ctx, "ui.viewport", json!({}));
+        assert_eq!(reply["ok"], true, "{reply}");
+        let result = &reply["result"];
+        // Points scaled by pixels-per-point (1.0 here: egui applies a new scale only on the next
+        // frame) and rounded to whole pixels.
+        assert_eq!(result["canvas"], json!({"x": 10.0, "y": 21.0, "width": 300.0, "height": 200.0}));
+        assert_eq!(result["window"]["pixelsPerPoint"], 1.0);
+        assert!(result["cameraRaw"].is_null(), "no Camera Raw dialog is open");
     }
 
     #[test]

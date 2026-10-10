@@ -47,6 +47,11 @@ pub struct JobsUi {
     pub(crate) host_target: Option<(photocraft_doc::DocId, String, String)>,
     pub(crate) host_inflight: std::collections::HashMap<String, JobId>,
     pub(crate) host_saved: std::collections::VecDeque<String>,
+    /// Camera Raw workspace: the raw just opened for the dialog (its bytes, and what the host asked for).
+    /// One slot: a newer open replaces an older one that never got its dialog, so no file is kept for long.
+    pub(crate) workspace_raw: Arc<std::sync::Mutex<Option<crate::raw_workspace::PendingRaw>>>,
+    /// Camera Raw workspace: the next raw, developed ahead of time.
+    pub(crate) workspace_prefetch: crate::raw_workspace::SharedPrefetch,
     /// Control replies waiting for a job to end.
     pub(crate) waiters: Vec<(JobId, Sender<ControlResponse>)>,
     /// Background opens, in tab order.
@@ -139,6 +144,9 @@ pub fn cancel(app: &mut PhotocraftApp, id: JobId) {
 }
 
 fn on_event(app: &mut PhotocraftApp, e: JobEvent) {
+    if e.command == "app.open" {
+        crate::raw_workspace::on_open_event(app, e.document, matches!(e.outcome, JobOutcome::Done(_)));
+    }
     if e.command == "app.stash" {
         app.jobs.host_inflight.retain(|_, job| *job != e.id);
         if let JobOutcome::Done(ref result) = e.outcome

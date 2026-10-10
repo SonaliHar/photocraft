@@ -111,6 +111,8 @@ pub mod puppet_ui;
 pub mod quick_pick;
 pub mod rasterize_prompt;
 mod raw_develop_ui;
+pub mod raw_recipe;
+pub mod raw_workspace;
 pub mod retouch_ui;
 mod rgb_histogram;
 pub mod rulers;
@@ -425,6 +427,9 @@ pub struct PhotocraftApp {
     /// A raw file just opened interactively, waiting for the open-time Camera Raw dialog (shown
     /// on the next frame, which has the egui context).
     pub(crate) pending_raw_open: Option<camera_raw_ui::RawOpen>,
+    /// Camera Raw workspace (`photocraft --raw-workspace`): Camera Raw opens by itself on a document and
+    /// is drawn inside the main window instead of in a window of its own. See `raw_workspace`.
+    pub raw_workspace: raw_workspace::State,
     /// The open-time re-develop (or its Camera Raw step) running in the background.
     pub(crate) raw_redevelop: Option<camera_raw_ui::Redevelop>,
     /// Filter › Adaptive Wide Angle dialog (wide_angle_ui).
@@ -557,6 +562,7 @@ impl PhotocraftApp {
             camera_raw: None,
             raw_development: None,
             pending_raw_open: None,
+            raw_workspace: raw_workspace::State::default(),
             raw_redevelop: None,
             wide_angle: None,
             tone_hist: None,
@@ -1119,8 +1125,16 @@ impl eframe::App for PhotocraftApp {
         }
         let t = theme::Tokens::get(&ctx);
         let backdrop = if chrome { prefs_ui::pasteboard_color(self).unwrap_or(t.canvas) } else { egui::Color32::BLACK };
+        // In the Camera Raw workspace its dialog covers the whole window while it is open: drawing the document
+        // behind it, and building its canvas on the GPU (seconds for a 45 MP photo, with the window frozen
+        // meanwhile), would be work nobody sees.
+        // The dialog is queued or opened before the canvas is drawn, so the frame the document lands in is covered too.
+        raw_workspace::auto_open(self, &ctx);
+        let covered = raw_workspace::canvas_covered(self);
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(backdrop)).show(ui, |ui| {
-            canvas::document_area(self, ui);
+            if !covered {
+                canvas::document_area(self, ui);
+            }
         });
         panels::properties_window(self, &ctx);
         brush_panel::window(self, &ctx);

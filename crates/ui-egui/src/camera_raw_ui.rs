@@ -176,6 +176,13 @@ pub struct RawOpen {
     pub path: Option<String>,
     /// The file, when it was opened from bytes (no path to read it again from).
     pub bytes: Option<std::sync::Arc<Vec<u8>>>,
+    /// Camera Raw workspace: the photo's stored recipe, which the dialog opens with.
+    pub initial: Option<CameraRaw>,
+    /// Camera Raw workspace: where the recipe and its render are kept.
+    pub targets: crate::raw_recipe::Targets,
+    /// Camera Raw workspace: "Open" continues this saved document (the photo's full-editor project)
+    /// instead of developing a new one, so earlier work in the full editor is never replaced.
+    pub continue_from: Option<String>,
 }
 
 /// Should an interactive open of `name` show the open-time Camera Raw dialog? `warnings` are
@@ -198,16 +205,20 @@ pub fn queue_open_dialog(app: &mut PhotocraftApp, name: &str, path: Option<&str>
             name: name.to_string(),
             path: path.map(str::to_string),
             bytes: bytes.map(|b| std::sync::Arc::new(b.to_vec())),
+            initial: None,
+            targets: Default::default(),
+            continue_from: None,
         });
     }
 }
 
 /// Opens the queued open-time dialog on its document's (only) layer.
-fn open_raw(app: &mut PhotocraftApp, ctx: &egui::Context, raw: RawOpen) -> Result<(), String> {
+pub(crate) fn open_raw(app: &mut PhotocraftApp, ctx: &egui::Context, raw: RawOpen) -> Result<(), String> {
     let index = document_index(app, raw.document).ok_or("the raw document was closed")?;
     app.session.set_active(index);
     let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
-    open_pixels(app, ctx, layer, surf, CameraRaw::default(), Coverage::None, Target::OpenRaw)?;
+    let initial = raw.initial.clone().unwrap_or_default();
+    open_pixels(app, ctx, layer, surf, initial, Coverage::None, Target::OpenRaw)?;
     if let Some(d) = app.camera_raw.as_mut() {
         d.layer_name = raw.name.clone();
         d.raw_open = Some(raw);
@@ -220,7 +231,7 @@ fn document_index(app: &PhotocraftApp, id: photocraft_doc::DocId) -> Option<usiz
 }
 
 /// The non-default settings of `p` as engine params.
-fn non_defaults(p: &CameraRaw) -> Value {
+pub(crate) fn non_defaults(p: &CameraRaw) -> Value {
     let full = serde_json::to_value(p).unwrap_or(json!({}));
     let def = serde_json::to_value(CameraRaw::default()).unwrap_or(json!({}));
     let mut out = serde_json::Map::new();
@@ -333,6 +344,9 @@ fn finish_redevelop(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen, 
             *id = new_id;
         }
     }
+    if let Some(new_id) = app.session.documents().get(index).map(|st| st.doc.id) {
+        crate::raw_workspace::claim(app, new_id);
+    }
     let warnings: Vec<String> =
         v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
     crate::notices::io_warnings(app, &format!("Opened {}", raw.name), &without_develop_note(&warnings));
@@ -415,9 +429,13 @@ pub fn on_redevelop_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::
 }
 
 /// Cancel: closes the dialog; for the open-time dialog also the document it was opening.
-fn cancel(app: &mut PhotocraftApp) {
+pub(crate) fn cancel(app: &mut PhotocraftApp) {
     let Some(d) = app.camera_raw.take() else { return };
+    // Cancel hands the window to the full editor: its canvas draws from now on.
+    app.raw_workspace.browsing = None;
+    // In the Camera Raw workspace the host owns the document: Cancel only closes the dialog.
     if let (Target::OpenRaw, Some(raw)) = (d.target, &d.raw_open)
+        && !app.raw_workspace.enabled
         && let Some(index) = document_index(app, raw.document)
     {
         app.session.close(index);
@@ -489,9 +507,10 @@ fn open_pixels(
     let k = w.max(h).div_ceil(PROXY_SIDE).max(1);
     let (pw, ph) = (w.div_ceil(k), h.div_ceil(k));
     let mut proxy = vec![[0.0f32; 4]; pw * ph];
-    let mut row = vec![[0.0f32; 4]; w];
-    for py in 0..ph {
-        // Box-average k×k blocks.
+    // One proxy row: the box average of its k source rows. Rows are independent, so they are built in
+    // parallel (a 45 MP photo's proxy took 2.5-4 s on one core, with the whole editor frozen meanwhile).
+    let build_row = |py: usize, out: &mut [[f32; 4]]| {
+        let mut row = vec![[0.0f32; 4]; w];
         let mut acc = vec![[0.0f32; 5]; pw];
         for dy in 0..k {
             let y = area.y0 + (py * k + dy).min(h - 1) as i32;
@@ -504,9 +523,18 @@ fn open_pixels(
                 a[4] += 1.0;
             }
         }
-        for (x, a) in acc.iter().enumerate() {
-            proxy[py * pw + x] = [a[0] / a[4], a[1] / a[4], a[2] / a[4], a[3] / a[4]];
+        for (o, a) in out.iter_mut().zip(&acc) {
+            *o = [a[0] / a[4], a[1] / a[4], a[2] / a[4], a[3] / a[4]];
         }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        proxy.par_chunks_mut(pw).enumerate().for_each(|(py, out)| build_row(py, out));
+    }
+    #[cfg(target_arch = "wasm32")]
+    for (py, out) in proxy.chunks_mut(pw).enumerate() {
+        build_row(py, out);
     }
     // Coverage at the centre of each proxy block.
     let sample = |value: &dyn Fn(i32, i32) -> f32| {
@@ -715,7 +743,12 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     Some(Ok(app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)).unwrap_or(Value::Null)))
 }
 
-fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
+/// Whether the open dialog's settings differ from the ones it opened with.
+pub(crate) fn changed(app: &PhotocraftApp) -> bool {
+    app.camera_raw.as_ref().is_some_and(|d| d.params != d.original)
+}
+
+pub(crate) fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
     let d = app.camera_raw.as_ref().ok_or(tl!("Camera Raw isn't open"))?;
     let result = match d.target {
         Target::NewFilter => {
@@ -736,11 +769,65 @@ fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
         Target::OpenRaw => {
             let raw = d.raw_open.clone().ok_or("no raw file is being opened")?;
             let params = d.params.clone();
+            // Open goes to the full editor: its canvas draws from now on.
+            app.raw_workspace.browsing = None;
+            // Open keeps the recipe too, so the next visit starts from what was just chosen.
+            crate::raw_recipe::persist(app, raw.document, &raw.targets, &params);
+            if let Some(project) = raw.continue_from.clone() {
+                // The photo already has a full-editor document: go back to it, untouched.
+                app.camera_raw = None;
+                app.raw_workspace.expect_continue = true;
+                return match crate::control_files::open_with_sensor(app, &project, true, false, None, None)? {
+                    photocraft_engine::jobs::Started::Job(job) => Ok(json!({"job": job.0, "pending": true, "continued": project})),
+                    photocraft_engine::jobs::Started::Done(done) => Ok(done),
+                };
+            }
             commit_open_raw(app, &params, &raw)?
         }
     };
     app.camera_raw = None;
     Ok(result)
+}
+
+/// Which kind of dialog is open, for a host: `openRaw` (a raw opened in Camera Raw), `newFilter` or `smartFilter`.
+pub(crate) fn target_name(app: &PhotocraftApp) -> Option<&'static str> {
+    // Names for a host, not labels: indexed rather than matched to strings, so the translation scan skips them.
+    const NAMES: [&str; 3] = ["openRaw", "newFilter", "smartFilter"];
+    app.camera_raw.as_ref().map(|d| {
+        NAMES[match d.target {
+            Target::OpenRaw => 0,
+            Target::NewFilter => 1,
+            Target::SmartFilter(_) => 2,
+        }]
+    })
+}
+
+/// The open dialog's settings as a recipe file's content.
+pub(crate) fn recipe(app: &PhotocraftApp) -> Option<Value> {
+    app.camera_raw.as_ref().map(|d| crate::raw_recipe::to_json(&d.params))
+}
+
+/// Leaving the photo the dialog is on ("Done"): a raw's settings are kept as its recipe and nothing is
+/// developed or applied to a document, so browsing past a photo never costs a develop or a save; any other
+/// dialog applies as a photo switch does (changed settings as one history step, untouched ones just close).
+pub(crate) fn done(app: &mut PhotocraftApp) -> Result<Value, String> {
+    let Some(d) = app.camera_raw.as_ref() else { return Ok(json!({"open": false, "changed": false})) };
+    let changed = d.params != d.original;
+    if d.target != Target::OpenRaw {
+        if changed {
+            commit(app)?;
+        } else {
+            cancel(app);
+        }
+        return Ok(json!({"open": false, "changed": changed}));
+    }
+    let raw = d.raw_open.clone().ok_or("no raw file is being opened")?;
+    let params = d.params.clone();
+    app.camera_raw = None;
+    if changed {
+        crate::raw_recipe::persist(app, raw.document, &raw.targets, &params);
+    }
+    Ok(json!({"open": false, "changed": changed, "recipe": crate::raw_recipe::to_json(&params)}))
 }
 
 fn temp_stops() -> Vec<Color32> {
@@ -836,8 +923,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.ui.status_error = true;
     }
     let Some(d) = app.camera_raw.as_ref() else { return };
-    // Where the platform has no extra windows (the web build), draw over the main window.
-    if ctx.embed_viewports() {
+    // Where the platform has no extra windows (the web build), or in the Camera Raw workspace, draw
+    // over the main window.
+    if ctx.embed_viewports() || app.raw_workspace.embedded() {
         draw(app, ctx, false);
         return;
     }
@@ -1362,6 +1450,21 @@ mod tests {
         app.open_bytes("c.dng", &dng).unwrap();
         assert!(app.pending_raw_open.is_none());
         // A non-raw never queues the dialog; a closed document is an error, not a panic.
-        assert!(open_raw(&mut app, &ctx, RawOpen { document: photocraft_doc::DocId(u64::MAX), name: "x".into(), path: None, bytes: None }).is_err());
+        assert!(
+            open_raw(
+                &mut app,
+                &ctx,
+                RawOpen {
+                    document: photocraft_doc::DocId(u64::MAX),
+                    name: "x".into(),
+                    path: None,
+                    bytes: None,
+                    initial: None,
+                    targets: Default::default(),
+                    continue_from: None
+                }
+            )
+            .is_err()
+        );
     }
 }

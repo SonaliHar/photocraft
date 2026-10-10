@@ -474,7 +474,7 @@ mod tests {
             "sensor.dng" => Ok(("sensor.dng".into(), (*sensor).clone())),
             _ => Err("outside read grant".into()),
         }));
-        let started = crate::control_files::open_with_sensor(&mut app, "camera.NEF", true, true, Some("sensor.dng")).unwrap();
+        let started = crate::control_files::open_with_sensor(&mut app, "camera.NEF", true, true, Some("sensor.dng"), None).unwrap();
         if let Started::Job(job) = started {
             app.session.wait_job(job).unwrap();
         }
@@ -483,11 +483,11 @@ mod tests {
         assert!(!app.raw_development.as_ref().unwrap().bytes.is_empty());
         control(&mut app, &json!({"cancel":true})).unwrap();
         let previous = app.session.active().unwrap().doc.id;
-        let started = crate::control_files::open_with_sensor(&mut app, "camera.NEF", true, true, Some("../outside")).unwrap();
+        let started = crate::control_files::open_with_sensor(&mut app, "camera.NEF", true, true, Some("../outside"), None).unwrap();
         if let Started::Job(job) = started {
             assert!(app.session.wait_job(job).is_err());
         }
         assert_eq!(app.session.active().unwrap().doc.id, previous);
-        assert!(crate::control_files::open_with_sensor(&mut app, "camera.NEF", true, false, Some("sensor.dng")).is_err());
+        assert!(crate::control_files::open_with_sensor(&mut app, "camera.NEF", true, false, Some("sensor.dng"), None).is_err());
     }
 }

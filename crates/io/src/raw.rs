@@ -115,6 +115,14 @@ pub fn import_raw(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
     import_raw_with(name, bytes, &DevelopOptions { limits: limits(), ..Default::default() })
 }
 
+/// Develops a raw for browsing in Camera Raw: the Malvar–He–Cutler demosaic (about a third of the default
+/// AHD's time on a 45 MP file, and sharp), so a photo is ready for the dialog in about two seconds rather
+/// than five. The dialog works on a reduced proxy; a settings change that re-develops from the sensor
+/// (exposure, white balance) does it at full quality.
+pub fn import_raw_browse(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
+    import_raw_with(name, bytes, &DevelopOptions { demosaic: photocraft_raw::Demosaic::Mhc, limits: limits(), ..Default::default() })
+}
+
 /// In the import note of a raw developed from its sensor data with the default settings (not of
 /// a preview fallback): what the open-time Camera Raw dialog looks for.
 pub const DEVELOPED_NOTE: &str = "developed with default settings";

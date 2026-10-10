@@ -334,6 +334,51 @@ pub fn export_flat(doc: &Document, format: Format, opts: &ExportOptions) -> Resu
     encode_image(&img, format, opts, warnings)
 }
 
+/// A screen-sized preview of `doc` as an untagged sRGB JPEG, at most `max_side` pixels on its
+/// longer side.
+///
+/// It exists for hosts that browse many documents quickly: it is built from the compositor's
+/// reduced render (a downsampled proxy for large documents), so it costs a small fraction of a
+/// full-size export and never holds a full-size composite. Transparency is matted over white and
+/// the colours are converted from the document's profile to sRGB, so a viewer that ignores
+/// embedded profiles shows what the editor shows. No metadata is written.
+pub fn export_display_jpeg(doc: &Document, max_side: u32, quality: u8) -> Result<ExportResult, IoError> {
+    let buf = photocraft_compose::thumbnail_buffer(doc, max_side.max(1));
+    // The compositor renders CMYK and Lab documents in sRGB already.
+    let icc = if matches!(doc.mode, ColorMode::Cmyk | ColorMode::Lab) { None } else { doc.icc_profile.as_ref().map(|i| i.to_vec()) };
+    display_jpeg_from_buffer(&buf, icc, quality)
+}
+
+/// [`export_display_jpeg`] for pixels the caller already has (straight-alpha floats in the colours of
+/// `icc`, sRGB when `None`): a host that adjusts a reduced render itself, such as a Camera Raw recipe
+/// applied to a screen-sized copy, encodes it with the same colour handling.
+pub fn display_jpeg_from_buffer(buf: &photocraft_compose::Buffer, icc: Option<Vec<u8>>, quality: u8) -> Result<ExportResult, IoError> {
+    use photocraft_cms::{Builtin, Intent};
+    let (w, h) = (buf.rect.width(), buf.rect.height());
+    if w == 0 || h == 0 {
+        return Err(IoError::Unsupported("an empty document has no preview".to_string()));
+    }
+    let mut vals = Vec::with_capacity(buf.px.len().saturating_mul(3));
+    for p in &buf.px {
+        let a = if p[3].is_nan() { 1.0 } else { p[3].clamp(0.0, 1.0) };
+        for &c in &p[..3] {
+            let c = if c.is_nan() { 0.0 } else { c };
+            vals.push(c * a + (1.0 - a));
+        }
+    }
+    let img = Image::from_normalized(w, h, ChannelLayout::Rgb, CSample::F32, &vals)?.with_icc(icc);
+    drop(vals);
+    let img = match convert_rgb(&img, Builtin::Srgb.profile(), Intent::Perceptual, true, CSample::U8)? {
+        Some(converted) => converted,
+        None => map_bands(&img, ChannelLayout::Rgb, CSample::U8, |vals| vals)?.with_icc(None),
+    };
+    let mut opts = ExportOptions::default();
+    opts.encode.jpeg_quality = quality.clamp(1, 100);
+    opts.encode.embed_icc = false;
+    opts.encode.embed_metadata = false;
+    encode_image(&img, Format::Jpeg, &opts, Vec::new())
+}
+
 /// Encodes a flat codec image as `format`: the fidelity warnings, then the codec. The end of
 /// every flat export, and of a layered TIFF (whose composite is a flat image to other readers),
 /// so export-wide policies on the image's metadata apply to both.

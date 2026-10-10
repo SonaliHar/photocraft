@@ -493,16 +493,29 @@ impl GpuCanvas {
         }
         let region = damage.unwrap_or(bounds);
         let encode_srgb = display.is_some_and(|d| d.encode_srgb);
-        let gpu = if key == doc.id.0 { self.composite(doc, region, encode_srgb) } else { Err(photocraft_gpu::Unsupported("preview texture".into())) };
+        // A whole large document on a GPU that shares the CPU's memory is composited faster by the banded CPU
+        // path than by the wgpu compositor (measured: 45 MP in 2 s against 12-23 s on an Intel UHD 620). Edits that
+        // touch part of the document still go to the GPU.
+        let forced = std::env::var("PHOTOCRAFT_FULL_REFRESH").ok();
+        let cpu_first = damage.is_none()
+            && prefers_cpu_full_refresh(self.rs.adapter.get_info().device_type, bounds.width() as u64 * bounds.height() as u64, forced.as_deref());
+        let gpu = if cpu_first {
+            None
+        } else if key == doc.id.0 {
+            Some(self.composite(doc, region, encode_srgb))
+        } else {
+            Some(Err(photocraft_gpu::Unsupported("preview texture".into())))
+        };
         match gpu {
-            Ok(stats) => {
+            None => {}
+            Some(Ok(stats)) => {
                 out.kind = if damage.is_some() { "gpu-rect" } else { "gpu-full" };
                 out.px = region.width() as u64 * region.height() as u64;
                 out.composite_ms = now_ms() - t0;
                 out.uploads = stats.tiles_uploaded as u64;
                 return out;
             }
-            Err(e) => out.fallback = Some(e.0),
+            Some(Err(e)) => out.fallback = Some(e.0),
         }
         if let Some(r) = damage {
             if r.is_empty() {
@@ -520,7 +533,8 @@ impl GpuCanvas {
             }
         }
         self.upload_composite(key, doc, display);
-        out.kind = "full";
+        // A chosen path is not a fallback: no "redrawing on the CPU" notice for it.
+        out.kind = if cpu_first { "cpu-full" } else { "full" };
         out.px = bounds.width() as u64 * bounds.height() as u64;
         out.composite_ms = now_ms() - t0;
         out
@@ -1042,6 +1056,20 @@ fn texel_to_f32(format: wgpu::TextureFormat, b: &[u8]) -> [f32; 4] {
 pub const MIN_GPU_BUDGET: u64 = 512 << 20;
 
 /// Why a full refresh whose layer pages don't fit [`memory_budget`] goes to the CPU compositor.
+/// Full refreshes above this many pixels use the banded CPU compositor on a GPU that is not a discrete one.
+pub const CPU_FULL_REFRESH_PX: u64 = 16_000_000;
+
+/// Whether a full refresh of `px` pixels should be composited on the CPU rather than by the wgpu compositor.
+/// `forced` is `PHOTOCRAFT_FULL_REFRESH`: `cpu` or `gpu` overrides the choice (for measuring).
+pub fn prefers_cpu_full_refresh(device: wgpu::DeviceType, px: u64, forced: Option<&str>) -> bool {
+    match forced {
+        Some("cpu") => return true,
+        Some("gpu") => return false,
+        _ => {}
+    }
+    px > CPU_FULL_REFRESH_PX && !matches!(device, wgpu::DeviceType::DiscreteGpu | wgpu::DeviceType::VirtualGpu)
+}
+
 pub const OVER_BUDGET: &str = "layers exceed the GPU memory budget; full refresh on the CPU";
 
 /// GPU memory the wgpu compositor may hold for layer pages and effect maps: what Memory Usage
@@ -1929,6 +1957,21 @@ mod mip_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn large_full_refreshes_use_the_cpu_unless_discrete() {
+        use wgpu::DeviceType::{Cpu, DiscreteGpu, IntegratedGpu, Other, VirtualGpu};
+        let big = CPU_FULL_REFRESH_PX + 1;
+        assert!(prefers_cpu_full_refresh(IntegratedGpu, big, None));
+        assert!(prefers_cpu_full_refresh(Cpu, big, None));
+        assert!(prefers_cpu_full_refresh(Other, big, None));
+        assert!(!prefers_cpu_full_refresh(DiscreteGpu, big, None));
+        assert!(!prefers_cpu_full_refresh(VirtualGpu, big, None));
+        assert!(!prefers_cpu_full_refresh(IntegratedGpu, CPU_FULL_REFRESH_PX, None), "smaller documents stay on the GPU");
+        assert!(prefers_cpu_full_refresh(DiscreteGpu, 10, Some("cpu")));
+        assert!(!prefers_cpu_full_refresh(IntegratedGpu, big, Some("gpu")));
+        assert!(prefers_cpu_full_refresh(IntegratedGpu, big, Some("anything else")), "an unknown override changes nothing");
+    }
+
     use super::*;
 
     #[test]

@@ -22,18 +22,30 @@ pub fn open_with_mode(app: &mut PhotocraftApp, path: &str, replace: bool) -> Res
 
 #[cfg(test)]
 pub fn open_with_options(app: &mut PhotocraftApp, path: &str, replace: bool, raw_smart: bool) -> Result<Started, String> {
-    open_with_sensor(app, path, replace, raw_smart, None)
+    open_with_sensor(app, path, replace, raw_smart, None, None)
 }
 
-pub fn open_with_sensor(app: &mut PhotocraftApp, path: &str, replace: bool, raw_smart: bool, sensor_path: Option<&str>) -> Result<Started, String> {
+pub fn open_with_sensor(
+    app: &mut PhotocraftApp,
+    path: &str,
+    replace: bool,
+    raw_smart: bool,
+    sensor_path: Option<&str>,
+    camera_raw: Option<crate::raw_workspace::OpenSpec>,
+) -> Result<Started, String> {
     if sensor_path.is_some() && !raw_smart {
         return Err("rawSensorPath requires rawSmartObject".into());
+    }
+    if camera_raw.is_some() && (raw_smart || sensor_path.is_some() || !app.raw_workspace.enabled) {
+        return Err("cameraRaw needs the Camera Raw workspace and cannot be combined with rawSmartObject".into());
     }
     let sensor_path = sensor_path.map(str::to_string);
     crate::raw_develop_ui::settle(app);
     if app.raw_development.is_some() {
         return Err("Commit or cancel RAW Development before opening another document".into());
     }
+    // Camera Raw workspace: the photo being left keeps what was adjusted, then the next one opens.
+    crate::raw_workspace::settle(app)?;
     let previous = if replace { app.session.active().map(|state| state.doc.id) } else { None };
     if let Some((doc, revision)) = app.jobs.host_snapshots.get(path) {
         let name = doc.name.clone();
@@ -52,6 +64,11 @@ pub fn open_with_sensor(app: &mut PhotocraftApp, path: &str, replace: bool, raw_
     let read = app.services.background_automation_read.clone().ok_or("background automation read authority is not configured")?;
     let path = path.to_string();
     let applied_path = path.clone();
+    let pending_raw = app.jobs.workspace_raw.clone();
+    let wants_dialog = camera_raw.is_some();
+    let workspace = app.raw_workspace.enabled;
+    // A raw the host asked to have ready already is developed: opening it is then just adding the document.
+    let prepared = camera_raw.as_ref().and_then(|spec| crate::raw_workspace::take_prepared(&app.jobs.workspace_prefetch, &path, spec.signature.as_deref()));
     app.session
         .start_job(
             "app.open",
@@ -60,22 +77,44 @@ pub fn open_with_sensor(app: &mut PhotocraftApp, path: &str, replace: bool, raw_
             false,
             move |ctx| {
                 ctx.check()?;
+                if let Some(ready) = prepared {
+                    return Ok((ready.name, ready.imported, Some(ready.bytes)));
+                }
                 let (name, bytes) = read(&path).map_err(EngineError::Other)?;
                 let sensor = sensor_path.as_ref().map(|path| read(path).map_err(EngineError::Other)).transpose()?;
+                let camera_raw_import = wants_dialog && photocraft_io::raw::is_raw(&bytes);
                 let imported = if raw_smart {
                     photocraft_io::raw_smart::import_with_sensor(&name, &bytes, sensor.as_ref().map(|(name, bytes)| (name.as_str(), bytes.as_slice())))
+                } else if camera_raw_import {
+                    // Browsing in Camera Raw: a fast develop for the dialog (see `import_raw_browse`).
+                    photocraft_io::raw::import_raw_browse(&name, &bytes)
                 } else {
                     photocraft_io::import(&name, &bytes)
                 }
                 .map_err(|e| EngineError::Other(e.to_string()))?;
                 ctx.check()?;
-                Ok((name, imported))
+                let kept = camera_raw_import.then(|| std::sync::Arc::new(bytes));
+                Ok((name, imported, kept))
             },
-            move |session, (name, imported)| {
+            move |session, (name, imported, kept)| {
                 // Automation never runs script events or ambient color-policy I/O.
                 close_replaced(session, previous);
+                // Only a raw developed from its sensor data can open in Camera Raw; an embedded-preview
+                // fallback is the host's cue to take its own route for that file.
+                let dialog = wants_dialog && kept.is_some() && imported.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
                 session.add_document(imported.document, Some(applied_path.clone()));
-                Ok(json!({"path": applied_path, "name": name, "warnings": imported.warnings}))
+                let mut result = json!({"path": applied_path, "name": name, "warnings": imported.warnings});
+                if wants_dialog {
+                    result["cameraRaw"] = json!({"dialog": dialog});
+                }
+                if workspace && (wants_dialog || raw_smart) {
+                    // The host decided how this file opens: Camera Raw's dialog, or its own route. Either way the
+                    // automatic Camera Raw must leave the document alone (see `queue_dialog`).
+                    let (bytes, spec) = if dialog { (kept, camera_raw.unwrap_or_default()) } else { (None, Default::default()) };
+                    *pending_raw.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                        Some(crate::raw_workspace::PendingRaw { path: applied_path.clone(), bytes, spec });
+                }
+                Ok(result)
             },
         )
         .map_err(|e| e.to_string())
@@ -87,13 +126,32 @@ fn close_replaced(session: &mut photocraft_engine::Session, previous: Option<pho
     }
 }
 
+/// Longest side and JPEG quality of the browsing preview a stash can write beside the project.
+pub const DISPLAY_LONG_SIDE: u32 = 2560;
+pub const DISPLAY_QUALITY: u8 = 90;
+
 pub fn stash(app: &mut PhotocraftApp, path: &str, preview: &str) -> Result<Started, String> {
+    stash_with_display(app, path, preview, None)
+}
+
+/// [`stash`] that also writes `display`, a screen-sized sRGB JPEG of the same snapshot, for hosts
+/// that show an edited photo from a cached render while browsing. It is made beside the project
+/// encode (from the compositor's reduced render, not a full-size one) and written as soon as it is
+/// ready, so a quick return to the photo can use it long before the project and full render land.
+/// It is a convenience: a failure to make or write it never fails the save.
+pub fn stash_with_display(app: &mut PhotocraftApp, path: &str, preview: &str, display: Option<&str>) -> Result<Started, String> {
     crate::raw_develop_ui::settle(app);
     if app.raw_development.is_some() {
         return Err("Commit or cancel RAW Development before saving".into());
     }
+    crate::raw_workspace::settle(app)?;
     if !path.to_ascii_lowercase().ends_with(".pcraft") || !preview.to_ascii_lowercase().ends_with(".png") {
         return Err("stash requires a .pcraft project and a .png preview".into());
+    }
+    if let Some(display) = display
+        && !(display.to_ascii_lowercase().ends_with(".jpg") || display.to_ascii_lowercase().ends_with(".jpeg"))
+    {
+        return Err("stash `display` must be a .jpg file".into());
     }
     let write = app.services.background_automation_write.clone().ok_or("background automation write authority is not configured")?;
     let state = app.session.active().ok_or("no document")?;
@@ -109,6 +167,7 @@ pub fn stash(app: &mut PhotocraftApp, path: &str, preview: &str) -> Result<Start
     }
     let path = path.to_string();
     let preview = preview.to_string();
+    let display = display.map(str::to_string);
     let applied_path = path.clone();
     let id = doc.id;
     let job_path = path.clone();
@@ -124,18 +183,32 @@ pub fn stash(app: &mut PhotocraftApp, path: &str, preview: &str) -> Result<Start
                 ctx.check()?;
                 // The project and its preview are independent encodes of the same snapshot: run
                 // them side by side. Both finish before either result is looked at.
-                let (project, render) = std::thread::scope(|scope| {
+                let (project, render, shown) = std::thread::scope(|scope| {
                     let project = scope.spawn(|| photocraft_io::export(&doc, &path, &Default::default()));
+                    // Small and quick: written the moment it exists, ahead of the large files.
+                    let shown = display.as_ref().map(|target| {
+                        scope.spawn(|| {
+                            let jpeg = photocraft_io::export_display_jpeg(&doc, DISPLAY_LONG_SIDE, DISPLAY_QUALITY).map_err(|e| e.to_string())?;
+                            write(target, &jpeg.bytes)
+                        })
+                    });
                     let render = photocraft_io::export(&doc, &preview, &Default::default());
-                    (project.join(), render)
+                    (project.join(), render, shown.map(|handle| handle.join()))
                 });
-                let project = project.map_err(|_| EngineError::Other("project encoder stopped unexpectedly".into()))?.map_err(|e| EngineError::Other(e.to_string()))?;
+                let project =
+                    project.map_err(|_| EngineError::Other("project encoder stopped unexpectedly".into()))?.map_err(|e| EngineError::Other(e.to_string()))?;
                 let render = render.map_err(|e| EngineError::Other(e.to_string()))?;
                 ctx.check()?;
                 // Each capability write is atomic. Report success only after both.
                 write(&path, &project.bytes).map_err(EngineError::Other)?;
                 write(&preview, &render.bytes).map_err(EngineError::Other)?;
-                Ok((project.warnings, render.warnings))
+                let mut warnings = project.warnings;
+                match shown {
+                    Some(Ok(Err(error))) => warnings.push(format!("display preview not written: {error}")),
+                    Some(Err(_)) => warnings.push("display preview not written: its encoder stopped unexpectedly".to_string()),
+                    Some(Ok(Ok(()))) | None => {}
+                }
+                Ok((warnings, render.warnings))
             },
             move |session, (mut warnings, render_warnings)| {
                 if let Some(state) = session.active_mut().filter(|state| state.doc.id == id && state.revision == revision) {
@@ -255,6 +328,77 @@ mod tests {
         let response = crate::control::handle(&mut app, &ctx, &request);
         let crate::control::Outcome::Done(value) = response else { panic!("expected an authorization error") };
         assert_eq!(value["ok"], false);
+    }
+
+    #[test]
+    fn stash_with_display_writes_a_small_jpeg_beside_the_project() {
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let recorded = writes.clone();
+        let mut app = app(Arc::new(move |path, bytes| {
+            recorded.lock().unwrap().push((path.to_string(), bytes.to_vec()));
+            Ok(())
+        }));
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        let started = stash_with_display(&mut app, "photo.pcraft", "photo.png", Some("photo.display.jpg")).unwrap();
+        finish(&mut app, started).unwrap();
+        let writes = writes.lock().unwrap();
+        let display = writes.iter().find(|(path, _)| path == "photo.display.jpg").expect("display written");
+        assert!(display.1.starts_with(&[0xFF, 0xD8]), "not a JPEG");
+        assert_eq!(writes.len(), 3);
+    }
+
+    #[test]
+    fn a_failed_display_write_does_not_fail_the_save() {
+        let mut app = app(Arc::new(|path, _| if path.ends_with(".jpg") { Err("read-only".into()) } else { Ok(()) }));
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        let started = stash_with_display(&mut app, "photo.pcraft", "photo.png", Some("photo.display.jpg")).unwrap();
+        let result = finish(&mut app, started).expect("the project and render still save");
+        assert!(result["warnings"].to_string().contains("display preview not written"), "{result}");
+        assert!(!app.session.active().unwrap().is_dirty());
+    }
+
+    #[test]
+    fn stash_display_must_be_a_jpeg() {
+        let mut app = app(Arc::new(|_, _| Ok(())));
+        assert!(stash_with_display(&mut app, "photo.pcraft", "photo.png", Some("photo.png")).is_err());
+        assert!(stash_with_display(&mut app, "photo.pcraft", "photo.png", Some("photo.JPEG")).is_ok());
+    }
+
+    #[test]
+    fn switching_photos_in_the_camera_raw_workspace_keeps_what_was_adjusted() {
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let recorded = writes.clone();
+        let mut app = app(Arc::new(move |path, bytes| {
+            recorded.lock().unwrap().push((path.to_string(), bytes.len()));
+            Ok(())
+        }));
+        let ctx = egui::Context::default();
+        app.raw_workspace.enabled = true;
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        crate::raw_workspace::auto_open(&mut app, &ctx);
+        assert!(app.camera_raw.is_some());
+        crate::camera_raw_ui::menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}}})).unwrap().unwrap();
+        let steps = app.session.active().unwrap().history.past_len();
+        // The host saves the photo it is leaving: the open dialog's changes land in that save.
+        let started = stash(&mut app, "photo.pcraft", "photo.png").unwrap();
+        finish(&mut app, started).unwrap();
+        assert!(app.camera_raw.is_none());
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
+        assert_eq!(writes.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn stashing_past_an_untouched_camera_raw_dialog_does_not_edit_the_photo() {
+        let mut app = app(Arc::new(|_, _| Ok(())));
+        let ctx = egui::Context::default();
+        app.raw_workspace.enabled = true;
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        crate::raw_workspace::auto_open(&mut app, &ctx);
+        let steps = app.session.active().unwrap().history.past_len();
+        let started = stash(&mut app, "photo.pcraft", "photo.png").unwrap();
+        finish(&mut app, started).unwrap();
+        assert!(app.camera_raw.is_none());
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps);
     }
 
     #[test]
