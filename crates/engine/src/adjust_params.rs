@@ -203,7 +203,7 @@ pub fn from_params(kind: &str, p: &Value, base: Option<&Adjustment>, mode: Color
             };
             Adjustment::GradientMap { stops, reverse: r.boolean("reverse", rev0)?, dither: r.boolean("dither", dither0)? }
         }
-        "selectiveColor" => crate::adjust_cmds::selective_from_params(p, base.filter(|b| matches!(b, Adjustment::SelectiveColor { .. }))),
+        "selectiveColor" => crate::adjust_cmds::selective_from_params(p, base.filter(|b| matches!(b, Adjustment::SelectiveColor { .. })))?,
         "colorLookup" => crate::adjust_cmds::lookup_from_params(p, base.filter(|b| matches!(b, Adjustment::ColorLookup { .. })))?,
         other => return Err(bad("adjustment", format!("unknown adjustment kind `{other}`"))),
     })
@@ -391,6 +391,9 @@ fn hue_saturation(r: &Reader<'_>, base: Option<&Adjustment>) -> Result<Adjustmen
     let colorize = r.boolean("colorize", c)?;
     // Colorize hue is 0..360, a shift is -180..180.
     let hue = if colorize { r.num("hue", h.rem_euclid(360.0), 0.0, 360.0)? } else { r.num("hue", h, -180.0, 180.0)? };
+    // Turning Colorize on starts at 25% saturation unless one is given, like the dialog's
+    // checkbox and Photoshop; an explicit 0 stays 0, which colorizes to grey (#2326).
+    let s = if colorize && !c { s.max(25.0) } else { s };
     let (saturation, lightness) = (r.num("saturation", s, if colorize { 0.0 } else { -100.0 }, 100.0)?, r.num("lightness", l, -100.0, 100.0)?);
     for (i, key) in HUE_RANGES.iter().enumerate() {
         let Some(o) = r.object(key)? else { continue };
@@ -880,6 +883,13 @@ mod tests {
         assert!(matches!(a, Adjustment::BlackWhite { weights, tint: Some(_) } if weights[0] == 120.0 && weights[1] == 60.0));
         let a = from_params("hueSaturation", &json!({"blues": {"hue": 40}}), None, ColorMode::Rgb).unwrap();
         assert!(matches!(&a, Adjustment::HueSaturation { ranges, .. } if ranges[4].hue == 40.0 && ranges[0].is_neutral()));
+        // Colorize without a saturation starts at 25%; an explicit 0 and an already colorized base are kept.
+        let a = from_params("hueSaturation", &json!({"colorize": true, "hue": 30}), None, ColorMode::Rgb).unwrap();
+        assert!(matches!(a, Adjustment::HueSaturation { colorize: true, saturation: 25.0, .. }), "{a:?}");
+        let a = from_params("hueSaturation", &json!({"colorize": true, "saturation": 0}), None, ColorMode::Rgb).unwrap();
+        assert!(matches!(a, Adjustment::HueSaturation { colorize: true, saturation: 0.0, .. }), "{a:?}");
+        let a = from_params("hueSaturation", &json!({"hue": 120}), Some(&a), ColorMode::Rgb).unwrap();
+        assert!(matches!(a, Adjustment::HueSaturation { colorize: true, saturation: 0.0, hue: 120.0, .. }), "{a:?}");
         let a = from_params("gradientMap", &json!({"stops": [[1, "#ffffff"], [0, "#000000"]], "dither": true}), None, ColorMode::Rgb).unwrap();
         assert!(matches!(&a, Adjustment::GradientMap { stops, dither: true, .. } if stops[0].0 == 0.0));
         // CMYK curves: ink channels; Lab: lightness without a composite.
@@ -909,6 +919,12 @@ mod tests {
             ("channelMixer", json!({"red": [1, 2, 3]})),
             ("gradientMap", json!({"stops": [[0, "#000"]]})),
             ("gradientMap", json!({"stops": 7})),
+            ("selectiveColor", json!({"method": 5})),
+            ("selectiveColor", json!({"reds": "not-an-array"})),
+            ("selectiveColor", json!({"colors": "reds", "cyan": "50"})),
+            ("colorLookup", json!({"lut": 42})),
+            ("colorLookup", json!({"interpolation": 5})),
+            ("colorLookup", json!({"dither": "yes"})),
             ("nope", json!({})),
             ("levels", json!([1, 2])),
         ] {

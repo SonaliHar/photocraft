@@ -305,3 +305,124 @@ fn export_rejects_a_board_too_far_from_the_origin() {
     assert_eq!((one.size.width, one.size.height), (50, 50));
     assert_eq!(one.artboards()[0].2.rect, Rect::new(0, 0, 50, 50));
 }
+
+/// #1531: a board 40×40 at (10, 10) holding a red square at (10..30)², the artboard active.
+fn board_with_square(s: &mut Session) -> LayerId {
+    add_square(s, Rect::new(10, 10, 30, 30), [1.0, 0.0, 0.0, 1.0]);
+    let gid = LayerId(s.execute("layer.new.artboardFromLayers", json!({"name": "Board"})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("layer.artboard.set", json!({"width": 40, "height": 40})).unwrap();
+    s.execute("layer.select", json!({"layer": gid.0})).unwrap();
+    gid
+}
+
+fn red_at(s: &Session, x: i32, y: i32) -> bool {
+    let px = photocraft_compose::render(doc(s), Rect::new(x, y, x + 1, y + 1)).px[0];
+    px[0] > 0.99 && px[1] < 0.01 && px[3] > 0.99
+}
+
+#[test]
+fn duplicate_artboard_lands_beside_the_original_with_its_contents() {
+    // #1531: the copy sat exactly on the original, so nothing visible happened.
+    let mut s = session(8);
+    let gid = board_with_square(&mut s);
+    let size = doc(&s).size;
+    let r = s.execute("layer.duplicate", json!({})).unwrap();
+    let copy = r["layer"].as_u64().unwrap();
+    assert_eq!(board_rect(&s, gid.0), Rect::new(10, 10, 50, 50), "the original stays");
+    // Photoshop: right of the original with the artboard gap, the canvas growing to show it.
+    assert_eq!(board_rect(&s, copy), Rect::new(150, 10, 190, 50));
+    assert!(doc(&s).size.width >= 190, "{:?}", doc(&s).size);
+    assert!(red_at(&s, 155, 15), "the copy's contents moved with it");
+    assert!(red_at(&s, 15, 15), "the original's contents stay");
+    assert_eq!(doc(&s).layer(LayerId(copy)).unwrap().name, "Board copy");
+    // Again from the original: the spot beside it is taken, so the next free one.
+    s.execute("layer.select", json!({"layer": gid.0})).unwrap();
+    let copy2 = s.execute("layer.duplicate", json!({})).unwrap()["layer"].as_u64().unwrap();
+    assert_eq!(board_rect(&s, copy2), Rect::new(290, 10, 330, 50));
+    // One undo step each: the copy and the canvas growth go together.
+    s.undo();
+    s.undo();
+    assert_eq!(doc(&s).artboards().len(), 1);
+    assert_eq!(doc(&s).size, size);
+    // `inPlace` (the Move tool's ⌥-drag) keeps the copy on the original.
+    s.execute("layer.select", json!({"layer": gid.0})).unwrap();
+    let copy3 = s.execute("layer.duplicate", json!({"inPlace": true})).unwrap()["layer"].as_u64().unwrap();
+    assert_eq!(board_rect(&s, copy3), Rect::new(10, 10, 50, 50));
+}
+
+#[test]
+fn duplicating_several_artboards_places_each_copy_in_a_free_spot() {
+    let mut s = session(8);
+    let a = board_with_square(&mut s);
+    let b = s.execute("layer.new.artboard", json!({"rect": [10, 100, 40, 40]})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.select", json!({"layer": a.0})).unwrap();
+    s.execute("layer.select", json!({"layer": b, "mode": "add"})).unwrap();
+    let r = s.execute("layer.duplicate", json!({})).unwrap();
+    assert_eq!(r["layers"].as_array().unwrap().len(), 2);
+    let boards: Vec<Rect> = doc(&s).artboards().iter().map(|b| b.2.rect).collect();
+    assert_eq!(boards.len(), 4);
+    for (i, x) in boards.iter().enumerate() {
+        for y in &boards[i + 1..] {
+            assert!(x.intersect(y).is_empty(), "{x:?} overlaps {y:?}");
+        }
+    }
+    let canvas = doc(&s).bounds();
+    assert!(boards.iter().all(|r| r.intersect(&canvas) == *r), "{boards:?} in {canvas:?}");
+    // One undo step.
+    s.undo();
+    assert_eq!(doc(&s).artboards().len(), 2);
+}
+
+#[test]
+fn moving_an_artboard_past_the_canvas_grows_it() {
+    // #1531: a board dragged right of the canvas was cut off at the old edge.
+    let mut s = session(8);
+    let gid = board_with_square(&mut s);
+    s.execute("layer.translate", json!({"dx": 200, "dy": 60})).unwrap();
+    assert_eq!(board_rect(&s, gid.0), Rect::new(210, 70, 250, 110));
+    assert_eq!((doc(&s).size.width, doc(&s).size.height), (250, 110));
+    assert!(red_at(&s, 215, 75));
+    s.undo();
+    assert_eq!((doc(&s).size.width, doc(&s).size.height), (100, 80));
+}
+
+#[test]
+fn moving_an_artboard_past_the_canvas_keeps_its_shapes_whole() {
+    // #2389: a shape's pixels are cut at the canvas; the board moved before the canvas grew,
+    // so its shape rendered against the old edge and stayed missing or clipped.
+    let shape_board = |s: &mut Session| {
+        s.execute("file.new", json!({"width": 100, "height": 100, "background": "transparent"})).unwrap();
+        let sh = s.execute("shape.create", json!({"kind": "rect", "rect": [10, 20, 30, 30], "fill": "#ff0000"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.new.artboardFromLayers", json!({})).unwrap();
+        sh
+    };
+    for (cmd, p, size, red, not_red) in [
+        ("layer.artboard.set", json!({"x": 120}), (150, 100), [(121, 21), (130, 30), (149, 49)], None),
+        ("layer.translate", json!({"dx": 110, "dy": 0}), (150, 100), [(121, 21), (130, 30), (149, 49)], None),
+        ("layer.artboard.set", json!({"y": 120}), (100, 150), [(11, 121), (20, 130), (39, 149)], None),
+        // Partly past the edge: the whole shape, not just the part inside the old canvas.
+        ("layer.artboard.set", json!({"x": 90}), (120, 100), [(91, 21), (95, 30), (110, 30)], Some((15, 30))),
+    ] {
+        let mut s = Session::new();
+        let sh = shape_board(&mut s);
+        s.execute(cmd, p.clone()).unwrap();
+        assert_eq!((doc(&s).size.width, doc(&s).size.height), size, "{cmd} {p}");
+        for (x, y) in red {
+            assert!(red_at(&s, x, y), "{cmd} {p}: ({x}, {y})");
+        }
+        if let Some((x, y)) = not_red {
+            assert!(!red_at(&s, x, y), "{cmd} {p}: ({x}, {y}) left behind");
+        }
+        let info = s.execute("shape.info", json!({"layer": sh})).unwrap();
+        assert_eq!(info["bounds"], json!([red[0].0 - 1, red[0].1 - 1, 30, 30]), "{cmd} {p}");
+        // One undo step back to the original board; redo brings the whole shape back.
+        s.undo();
+        assert_eq!((doc(&s).size.width, doc(&s).size.height), (100, 100));
+        assert!(red_at(&s, 20, 30), "{cmd} {p}: undo");
+        s.redo();
+        assert_eq!((doc(&s).size.width, doc(&s).size.height), size);
+        for (x, y) in red {
+            assert!(red_at(&s, x, y), "{cmd} {p}: redo ({x}, {y})");
+        }
+    }
+}

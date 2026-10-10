@@ -45,17 +45,18 @@ pub struct ActiveSnap {
 pub fn options(app: &PhotocraftApp) -> SnapOptions {
     let st = &app.ui.view.snap_to;
     let e = &app.ui.extras;
-    let grid_step = app.session.active().map_or(18.0, |d| {
+    let grid_step = app.session.active().map_or([18.0; 2], |d| {
         let g = &app.session.prefs().guides_grid_and_slices;
         let ppi = app.session.prefs().units_and_rulers.point_size.per_inch();
-        g.major_px(d.doc.resolution_dpi as f64, d.doc.size.width as f64, ppi) / g.subdivisions.max(1) as f64
+        crate::rulers::grid_major_px(g, d.doc.resolution_dpi.max(1.0) as f64, [d.doc.size.width as f64, d.doc.size.height as f64], ppi)
+            .map(|step| step / g.subdivisions.max(1) as f64)
     });
     SnapOptions { guides: st.guides && e.guides, grid: st.grid && e.grid, layers: st.layers, document: st.document_bounds, selection: true, grid_step }
 }
 
 /// Snap tolerance in document pixels at the current zoom.
 pub fn tolerance(app: &PhotocraftApp) -> f64 {
-    SNAP_PX / app.current_zoom().max(0.01) as f64
+    SNAP_PX / app.point_zoom().max(0.01) as f64
 }
 
 fn smart_on(app: &PhotocraftApp) -> bool {
@@ -69,7 +70,8 @@ fn snap_on(app: &PhotocraftApp) -> bool {
 /// Targets of the active document (smart = layer alignments only).
 fn build(app: &PhotocraftApp, exclude: &[LayerId], smart: bool) -> SnapTargets {
     let Some(st) = app.session.active() else { return SnapTargets::default() };
-    let opts = if smart { SnapOptions { guides: false, grid: false, layers: true, document: true, selection: false, grid_step: 0.0 } } else { options(app) };
+    let opts =
+        if smart { SnapOptions { guides: false, grid: false, layers: true, document: true, selection: false, grid_step: [0.0; 2] } } else { options(app) };
     let t = SnapTargets::from_document(&st.doc, &opts, exclude);
     if smart { t.filtered(SnapKind::is_smart) } else { t }
 }
@@ -138,6 +140,13 @@ fn override_held(mods: egui::Modifiers) -> bool {
     mods.ctrl && !mods.mac_cmd
 }
 
+/// The Move tool's press at `p` picked other layers (Auto-Select): the drag moves those, so its
+/// box, what it snaps and what it leaves out of the targets are theirs, not the ones selected
+/// before (a group or an empty layer selected before had no box at all).
+pub(crate) fn retarget_move(app: &mut PhotocraftApp, p: [f64; 2]) {
+    begin(app, p);
+}
+
 /// Start snapping for a drag beginning at `p` (called on pointer down).
 fn begin(app: &mut PhotocraftApp, p: [f64; 2]) {
     app.prefs_rt.snap = None;
@@ -165,10 +174,21 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2]) {
         let exclude = app.session.active().map(|s| s.selected_layers()).unwrap_or_default();
         moving_rect(app).map(|rect| (Gesture::Move { rect }, exclude))
     } else if tool == Tool::Crop
-        && let Some(rect) = app.ui.crop_rect.filter(|r| crate::crop_ui::hit(*r, p, tol) == crate::crop_ui::Hit::Inside)
+        && (crate::crop_mode::classic(app) || app.crop.default_frame)
+        && let Some(rect) = app.ui.crop_rect.filter(|r| crate::crop_ui::angle(app) == 0.0 && crate::crop_ui::hit(*r, p, tol) == crate::crop_ui::Hit::Inside)
     {
-        // Moving the crop frame snaps its edges, like the Move tool's layer bounds.
-        Some((Gesture::Move { rect }, Vec::new()))
+        // Inside the untouched default frame draws a new crop (in both modes): snap its corner, not
+        // the old canvas-sized frame's bounds. An edited Classic Mode frame still moves and snaps
+        // its edges.
+        let gesture = if app.crop.default_frame { Gesture::Point } else { Gesture::Move { rect } };
+        Some((gesture, Vec::new()))
+    } else if tool == Tool::Crop
+        && (crate::crop_ui::turns_at(app, p)
+            || app.ui.crop_rect.is_some_and(|r| crate::crop_ui::hit_turned(r, crate::crop_ui::angle(app), p, tol) == crate::crop_ui::Hit::Inside))
+    {
+        // Turning the frame, moving a turned one (its edges don't line up with anything), or in
+        // the default mode moving or turning the image under the box: no snapping.
+        None
     } else if is_point_tool(tool) {
         Some((Gesture::Point, Vec::new()))
     } else {
@@ -342,6 +362,40 @@ mod tests {
     }
 
     #[test]
+    fn drawing_a_new_crop_snaps_its_corner_not_the_default_frame() {
+        // In both crop modes: the default mode draws a new box inside the untouched frame too.
+        for (classic, snap, end) in [(true, false, [300.0, 220.0]), (true, true, [294.0, 217.0]), (false, false, [300.0, 220.0]), (false, true, [294.0, 217.0])]
+        {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 640, "height": 480, "background": "white"})).unwrap();
+            app.run("shape.create", json!({"kind": "rect", "rect": [100, 80, 200, 140], "fill": "#d59b40"})).unwrap();
+            app.sync_views();
+            app.ppp = 2.0;
+            app.ui.views[0].zoom = 1.0;
+            app.ui.views[0].fit_pending = false;
+            app.ui.tool = Tool::Crop;
+            app.ui.tool_options.crop_shield.classic_mode = classic;
+            app.ui.extras.snap = snap;
+            app.ui.view.show.smart_guides = true;
+            crate::crop_ui::ensure_frame(&mut app);
+            let view = app.ui.views[0].clone();
+            let history = app.session.active().unwrap().history.past_len();
+            let m = egui::Modifiers::NONE;
+            crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 100.0, y: 80.0, pressure: 1.0 }, m);
+            crate::canvas::tool_event(&mut app, ToolEvent::Move { x: end[0], y: end[1], pressure: 1.0 }, m);
+            crate::canvas::tool_event(&mut app, ToolEvent::Up { x: end[0], y: end[1] }, m);
+            // Smart Guides must not snap the old canvas-sized frame as if it were moving.
+            // With View Snap on, the new corner still snaps to the nearby shape's edges.
+            assert_eq!(app.ui.crop_rect, Some([100.0, 80.0, 300.0, 220.0]), "Classic Mode: {classic}, View Snap: {snap}");
+            // The default mode's Auto Center Preview re-centres the drawn box; Classic Mode keeps the view.
+            if classic {
+                assert_eq!(app.ui.views[0], view);
+            }
+            assert_eq!(app.session.active().unwrap().history.past_len(), history);
+        }
+    }
+
+    #[test]
     fn move_tool_snaps_to_other_layer_edges_with_smart_guides() {
         let mut app = app_with_box();
         app.ui.tool = Tool::Move;
@@ -353,6 +407,35 @@ mod tests {
         crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 323.0, y: 100.0 }, m);
         assert_eq!(mover_bounds(&app).x0, 300);
         assert!(app.prefs_rt.snap.is_none());
+    }
+
+    /// The drag's box and snapping belong to the layer Auto-Select picks on the press, not to the
+    /// one selected before: another layer (its box would move instead), or an empty layer (no box,
+    /// no snapping at all).
+    #[test]
+    fn move_tool_box_and_snapping_follow_the_auto_selected_layer() {
+        for before in ["target", "empty"] {
+            let mut app = app_with_box();
+            let mover = app.session.active().unwrap().active_layer.unwrap();
+            if before == "empty" {
+                app.run("layer.new.layer", json!({"name": "empty"})).unwrap();
+            } else {
+                let st = app.session.active().unwrap();
+                let target = st.doc.walk().into_iter().find(|(_, _, l)| l.name == "target").unwrap().2.id;
+                app.run("layer.select", json!({"layer": target.0})).unwrap();
+            }
+            app.ui.tool = Tool::Move;
+            app.ui.tool_options.move_auto_select = true;
+            let m = egui::Modifiers::NONE;
+            crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 60.0, pressure: 1.0 }, m);
+            assert_eq!(app.session.active().unwrap().active_layer, Some(mover), "{before}: Auto-Select picked the mover");
+            let gesture = app.prefs_rt.snap.as_ref().map(|s| s.gesture.clone());
+            assert_eq!(gesture, Some(Gesture::Move { rect: [40.0, 40.0, 90.0, 80.0] }), "{before}: the box is the mover's");
+            // The mover's left edge lands 3 px right of the target's and snaps to it.
+            crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 323.0, y: 100.0, pressure: 1.0 }, m);
+            crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 323.0, y: 100.0 }, m);
+            assert_eq!(mover_bounds(&app).x0, 300, "{before}: snapped to the target's edge");
+        }
     }
 
     #[test]
@@ -450,6 +533,23 @@ mod tests {
     }
 
     #[test]
+    fn percentage_grid_snaps_at_separate_axis_intervals() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 1280, "height": 720})).unwrap();
+        app.ui.extras.grid = true;
+        app.ui.view.snap_to.grid = true;
+        app.run(
+            "prefs.set",
+            json!({"values": {"guidesGridAndSlices.gridlineEvery": 20, "guidesGridAndSlices.gridUnit": "percent", "guidesGridAndSlices.subdivisions": 2}}),
+        )
+        .unwrap();
+        let opts = options(&app);
+        assert_eq!(opts.grid_step, [128.0, 72.0]);
+        let targets = SnapTargets::from_document(&app.session.active().unwrap().doc, &opts, &[]);
+        assert_eq!(targets.snap_point([127.0, 71.0], 2.0).0, [128.0, 72.0]);
+    }
+
+    #[test]
     fn grid_snapping_uses_preferences() {
         let mut app = app_with_box();
         app.ui.extras.grid = true;
@@ -458,7 +558,7 @@ mod tests {
             json!({"values": {"guidesGridAndSlices.gridlineEvery": 100, "guidesGridAndSlices.gridUnit": "pixels", "guidesGridAndSlices.subdivisions": 4}}),
         )
         .unwrap();
-        assert_eq!(options(&app).grid_step, 25.0);
+        assert_eq!(options(&app).grid_step, [25.0; 2]);
         app.ui.tool = Tool::RectMarquee;
         let m = egui::Modifiers::NONE;
         crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 152.0, y: 127.0, pressure: 1.0 }, m);
