@@ -347,10 +347,13 @@ fn prefetched_path(app: &PhotocraftApp) -> Option<String> {
 /// * `open`: opens it on the active document when it is not open;
 /// * `commit`: applies it as `settle` does (changed settings as one step, an untouched dialog just closes);
 /// * `cancel`: closes it without applying anything.
+///
+/// Adjusting the open dialog is the editor's own `ui.menu.invoke {"id":"filter.cameraRaw","params":{"ui":{"set":{...}}}}`,
+/// which it allows while the dialog is open.
 pub fn control(app: &mut PhotocraftApp, ctx: &egui::Context, p: &serde_json::Value) -> Result<serde_json::Value, String> {
     use serde_json::json;
     if let Some(object) = p.as_object()
-        && let Some(key) = object.keys().find(|key| !["open", "set", "commit", "cancel", "done", "wait"].contains(&key.as_str()))
+        && let Some(key) = object.keys().find(|key| !["open", "commit", "cancel", "done", "wait"].contains(&key.as_str()))
     {
         return Err(format!("unknown ui.cameraRaw field `{key}`"));
     }
@@ -369,14 +372,6 @@ pub fn control(app: &mut PhotocraftApp, ctx: &egui::Context, p: &serde_json::Val
     if open && app.camera_raw.is_none() {
         app.raw_workspace.opened_for = app.session.active().map(|state| state.doc.id);
         camera_raw_ui::open(app, ctx)?;
-    }
-    if let Some(set) = p.get("set") {
-        // Adjusting the open dialog. `ui.menu.invoke filter.cameraRaw {ui: {set}}` is refused while Camera Raw
-        // is open (menu commands are blocked behind a modal), so the workspace has its own route to the same code.
-        if app.camera_raw.is_none() {
-            return Err("Camera Raw is not open".into());
-        }
-        camera_raw_ui::menu(app, ctx, "filter.cameraRaw", &json!({"ui": {"set": set}})).ok_or("Camera Raw is not open")??;
     }
     if done {
         // Leaving the photo: a raw keeps its settings as a recipe and nothing is developed. The host opens another
@@ -645,27 +640,35 @@ mod tests {
         assert_eq!(promised, reported, "the picture a host laid over the frame does not move when the dialog takes over");
     }
 
+    /// What the editor itself answers to a control request, as a host sends it.
+    fn request(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: serde_json::Value) -> serde_json::Value {
+        let (req, _rx) = crate::control::ControlRequest::new(method, params);
+        match crate::control::handle(app, ctx, &req) {
+            crate::control::Outcome::Done(value) => value,
+            _ => panic!("{method}: expected an immediate reply"),
+        }
+    }
+
     #[test]
-    fn the_control_adjusts_the_open_dialog() {
+    fn the_open_dialog_is_adjusted_through_the_menu_route_and_ui_camera_raw_leaves_it() {
         let (mut app, ctx) = app_with_document();
-        assert!(control(&mut app, &ctx, &json!({"set": {"exposure": 1.0}})).unwrap_err().contains("not open"));
+        let set = |app: &mut PhotocraftApp, settings: serde_json::Value| {
+            request(app, &ctx, "ui.menu.invoke", json!({"id": "filter.cameraRaw", "params": {"ui": {"set": settings}}}))
+        };
         control(&mut app, &ctx, &json!({"open": true})).unwrap();
-        let state = control(&mut app, &ctx, &json!({"set": {"exposure": 1.0, "contrast": 25}})).unwrap();
-        assert_eq!(state["changed"], true);
-        // A bad request changes nothing.
-        assert!(control(&mut app, &ctx, &json!({"set": {"nonsense": 1}})).unwrap_err().contains("nonsense"));
-        assert!(control(&mut app, &ctx, &json!({"set": 3})).is_err());
+        let changed = set(&mut app, json!({"exposure": 1.0, "contrast": 25}));
+        assert_eq!(changed["ok"], true, "{changed}");
         assert_eq!(control(&mut app, &ctx, &json!({})).unwrap()["changed"], true);
-        // The menu route is refused behind the open dialog (upstream's modal policy), which is why `set` exists.
-        assert!(!crate::menus::modal_allows(&app, "filter.cameraRaw"));
-        // Settings and the leaving action can be one call; so can opening and adjusting.
+        // A bad request changes nothing, and `ui.cameraRaw` has no settings of its own: the editor's own route is the one.
+        let bad = set(&mut app, json!({"nonsense": 1}));
+        assert_eq!(bad["ok"], false, "{bad}");
+        assert!(control(&mut app, &ctx, &json!({"set": {"exposure": 1.0}})).unwrap_err().contains("unknown ui.cameraRaw field `set`"));
+        assert_eq!(control(&mut app, &ctx, &json!({})).unwrap()["changed"], true);
+        // Leaving is `ui.cameraRaw`'s.
         let steps = history(&app);
-        let applied = control(&mut app, &ctx, &json!({"set": {"exposure": -1.0}, "commit": true})).unwrap();
+        let applied = control(&mut app, &ctx, &json!({"commit": true})).unwrap();
         assert_eq!((applied["open"].as_bool(), applied["applied"].as_bool()), (Some(false), Some(true)));
         assert_eq!(history(&app), steps + 1);
-        let again = control(&mut app, &ctx, &json!({"open": true, "set": {"exposure": 0.5}})).unwrap();
-        assert_eq!((again["open"].as_bool(), again["changed"].as_bool()), (Some(true), Some(true)));
-        assert!(control(&mut app, &ctx, &json!({"open": true, "set": {"exposure": 1.0}, "cancel": true})).is_err());
     }
 
     #[test]
