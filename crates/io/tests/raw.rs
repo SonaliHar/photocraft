@@ -270,3 +270,59 @@ fn exposure_still_scales_a_fitted_raw() {
     let (a, b) = (channel_means(&flat), channel_means(&bright));
     assert!(b[1] > a[1] * 1.2, "green {:.3} at 0 EV, {:.3} at +1 EV", a[1], b[1]);
 }
+
+/// A raw as browsed in Camera Raw: a fraction of the size, the full development's colour.
+#[test]
+fn a_browsed_raw_is_reduced_in_size_but_not_in_colour() {
+    let (w, h) = (480, 320);
+    let cam = patches(w, h);
+    let bytes = nef_uncompressed(&cam, w, h, Some(camera_rendering(&cam, w, h)));
+    let reduced = photocraft_io::raw::import_raw_browse_reduced_to("DSC_0010.NEF", &bytes, 100).unwrap().expect("a Bayer raw reduces");
+    assert_eq!(reduced.full_size, (480, 320));
+    let (rw, rh) = (reduced.import.document.size.width, reduced.import.document.size.height);
+    assert!(rw < 480 && rh < 320, "reduced: {rw}x{rh}");
+    assert_eq!(rw as usize * h, rh as usize * w, "the same shape: {rw}x{rh}");
+    assert!(fitted(&reduced.import.warnings), "the colour fitted to the camera's JPEG is kept: {:?}", reduced.import.warnings);
+    assert!(reduced.import.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE)), "still what the dialog looks for");
+    let full = photocraft_io::raw::import_raw_with("DSC_0010.NEF", &bytes, &photocraft_raw::DevelopOptions::default()).unwrap();
+    let (a, b) = (channel_means(&full), channel_means(&reduced.import));
+    for k in 0..3 {
+        assert!((a[k] - b[k]).abs() < 0.03, "channel {k}: full {:.3}, reduced {:.3}", a[k], b[k]);
+    }
+}
+
+#[test]
+fn a_calibrated_dng_reduces_with_its_own_colour() {
+    let (w, h) = (96, 64);
+    let mut spec = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 65535));
+    spec.as_shot_neutral = Some([0.6, 1.0, 0.8]);
+    let reduced = photocraft_io::raw::import_raw_browse_reduced_to("shot.dng", &spec.build(), 20).unwrap().expect("a DNG reduces");
+    assert_eq!(reduced.full_size, (96, 64));
+    assert!(!fitted(&reduced.import.warnings), "a calibrated file keeps its calibration: {:?}", reduced.import.warnings);
+}
+
+#[test]
+fn a_raw_the_decoder_cannot_read_is_left_to_the_full_import() {
+    assert!(photocraft_io::raw::import_raw_browse_reduced_to("x.NEF", &nef_with_preview(), 10).unwrap().is_none());
+}
+
+#[test]
+fn truncated_raws_do_not_panic_when_reduced() {
+    let (w, h) = (96, 64);
+    let cam = patches(w, h);
+    let b = nef_uncompressed(&cam, w, h, Some(camera_rendering(&cam, w, h)));
+    for n in (0..b.len()).step_by(211) {
+        let _ = photocraft_io::raw::import_raw_browse_reduced_to("x.nef", &b[..n], 20);
+    }
+}
+
+/// Photos at or under twice the browsing size are cheap to develop in full: reducing them would only lose pixels.
+#[test]
+fn a_photo_that_is_already_small_is_not_reduced() {
+    let (w, h) = (480, 320);
+    let cam = patches(w, h);
+    let bytes = nef_uncompressed(&cam, w, h, Some(camera_rendering(&cam, w, h)));
+    assert!(photocraft_io::raw::import_raw_browse_reduced("DSC_0011.NEF", &bytes).unwrap().is_none(), "the browsing size is far above 480 px");
+    assert!(photocraft_io::raw::import_raw_browse_reduced_to("DSC_0011.NEF", &bytes, 241).unwrap().is_none(), "just under twice the target");
+    assert!(photocraft_io::raw::import_raw_browse_reduced_to("DSC_0011.NEF", &bytes, 240).unwrap().is_some(), "twice the target");
+}

@@ -181,23 +181,20 @@ pub(crate) fn resolve_neutral(s: &Sensor, opts: &DevelopOptions, sc: &Scale, war
     })
 }
 
-/// Develops sensor data.
-pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
-    let c = s.crop;
-    if c.is_empty() || c.x + c.width > s.width || c.y + c.height > s.height || s.data.len() < s.width * s.height * s.samples {
-        return Err(RawError::malformed("crop lies outside the sensor data"));
-    }
-    if s.samples != 1 && s.samples != 3 {
-        return Err(RawError::unsupported(format!("{} samples per pixel", s.samples)));
-    }
-    // Working buffers: one f32 plane plus f32 RGB plus u16 RGB per pixel, and
-    // a green plane for non-Bayer patterns.
-    let bayer = s.cfa.as_ref().is_none_or(|cfa| cfa.is_bayer());
-    opts.limits.check(c.width as u64, c.height as u64, if bayer { 4 + 12 + 6 } else { 4 + 4 + 12 + 6 })?;
-    let mut warnings = s.warnings.clone();
-    let sc = Scale::new(s);
+/// The colour side of a development, shared by the full and the reduced one: white balance, the camera → ProPhoto matrix
+/// (with exposure folded in) and the tone + gamma table.
+pub(crate) struct ColorSetup {
+    /// Camera-channel multipliers (R, G, B) of the white balance.
+    pub mult: [f32; 3],
+    /// Balanced camera → XYZ D50 (the demosaicer's own conversion).
+    pub to_xyz: Mat3,
+    /// Balanced camera RGB → linear ProPhoto, scaled by the exposure.
+    pub out_m: [[f32; 3]; 3],
+    pub lut: GammaLut,
+}
 
-    let neutral = resolve_neutral(s, opts, &sc, &mut warnings)?;
+pub(crate) fn color_setup(s: &Sensor, opts: &DevelopOptions, sc: &Scale, warnings: &mut Vec<String>) -> Result<ColorSetup> {
+    let neutral = resolve_neutral(s, opts, sc, warnings)?;
     let mult = neutral.map(|v| (1.0 / v) as f32);
 
     // Balanced camera → XYZ D50: a look fitted to the camera's JPEG, the file's calibration,
@@ -222,6 +219,143 @@ pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
     let gain = 2f64.powf(s.baseline_exposure + opts.exposure.clamp(-10.0, 10.0));
     let out_m = color::scale(&color::mul(&color::xyz_d50_to_prophoto(), &to_xyz), gain);
     let out_m: [[f32; 3]; 3] = out_m.map(|r| r.map(|v| v as f32));
+    let lut = match look {
+        Some(l) => GammaLut::with_tone(l.tone.as_ref()),
+        None => GammaLut::with_curve(&s.tone_curve),
+    };
+    Ok(ColorSetup { mult, to_xyz, out_m, lut })
+}
+
+/// Fills rows of the normalised, white-balanced, clipped CFA plane: what demosaicing starts from, and what the reduced
+/// development averages.
+pub(crate) struct RowNormalizer<'a> {
+    s: &'a Sensor,
+    sc: &'a Scale<'a>,
+    mult: [f32; 3],
+    cfa: &'a crate::sensor::Cfa,
+    /// Black varies at most per 2×2 position, so black and gain repeat every `period` columns.
+    periodic: bool,
+    period: usize,
+}
+
+impl<'a> RowNormalizer<'a> {
+    pub(crate) fn new(s: &'a Sensor, sc: &'a Scale<'a>, mult: [f32; 3], cfa: &'a crate::sensor::Cfa) -> Self {
+        let bl = &s.black;
+        let periodic = bl.delta_h.is_empty() && bl.delta_v.is_empty() && matches!(bl.rows, 1 | 2) && matches!(bl.cols, 1 | 2) && cfa.width <= 16;
+        let period = if cfa.width.is_multiple_of(2) { cfa.width.max(2) } else { cfa.width * 2 };
+        RowNormalizer { s, sc, mult, cfa, periodic, period }
+    }
+
+    /// Data row `y`: `row.len()` samples from the crop's left edge.
+    pub(crate) fn fill(&self, y: usize, row: &mut [f32]) {
+        let (s, c, w) = (self.s, self.s.crop, row.len());
+        let (cfa, mult, sc) = (self.cfa, self.mult, self.sc);
+        if self.periodic {
+            // Per column of the period: black and the combined scale × white-balance gain.
+            let bl = &s.black;
+            let k: Vec<(f32, f32)> = (0..self.period)
+                .map(|p| {
+                    let x = c.x + p;
+                    let black = bl.at(x.saturating_sub(s.active.x), y.saturating_sub(s.active.y), 0, 1);
+                    let range = s.white[0] - black;
+                    let gain = if range >= 1.0 { mult[usize::from(cfa.color(x, y)).min(2)] / range } else { 0.0 };
+                    (black, gain)
+                })
+                .collect();
+            let src = &s.data[y * s.width + c.x..y * s.width + c.x + w];
+            let ks = k.iter().cycle();
+            match &sc.lin {
+                None => {
+                    for ((v, &raw), &(black, gain)) in row.iter_mut().zip(src).zip(ks) {
+                        *v = ((f32::from(raw) - black) * gain).clamp(0.0, 1.0);
+                    }
+                }
+                Some(l) => {
+                    for ((v, &raw), &(black, gain)) in row.iter_mut().zip(src).zip(ks) {
+                        let lin = f32::from(l.get(usize::from(raw)).or_else(|| l.last()).copied().unwrap_or(raw));
+                        *v = ((lin - black) * gain).clamp(0.0, 1.0);
+                    }
+                }
+            }
+        } else {
+            for (i, v) in row.iter_mut().enumerate() {
+                let x = c.x + i;
+                let ch = usize::from(cfa.color(x, y)).min(2);
+                *v = (sc.value(x, y, 0) * mult[ch]).clamp(0.0, 1.0);
+            }
+        }
+        // Lens-shading gain maps, after the white-balance clip so clipped highlights stay neutral.
+        if let Some(g) = gain_row(s, y, c.x, w, 0) {
+            for (v, g) in row.iter_mut().zip(g) {
+                *v = (*v * g).clamp(0.0, 1.0);
+            }
+        }
+    }
+}
+
+/// Camera RGB (`w × h`, balanced) → ProPhoto, exposure, tone, gamma 1.8, 16 bits, orientation: the end of every development.
+pub(crate) fn finish(
+    s: &Sensor,
+    opts: &DevelopOptions,
+    rgb: Vec<f32>,
+    (w, h): (usize, usize),
+    setup: &ColorSetup,
+    pattern: Option<String>,
+    warnings: Vec<String>,
+) -> Developed {
+    let ColorSetup { mult, out_m, lut, .. } = setup;
+    let band = par::band_rows(w);
+    let mut out = vec![0u16; w * h * 3];
+    par::chunks_mut(&mut out, band * w * 3, |b, chunk| {
+        let start = b * band * w * 3;
+        let src = &rgb[start..start + chunk.len()];
+        for (o, p) in chunk.as_chunks_mut::<3>().0.iter_mut().zip(src.as_chunks::<3>().0) {
+            for k in 0..3 {
+                o[k] = lut.encode(out_m[k][0] * p[0] + out_m[k][1] * p[1] + out_m[k][2] * p[2]);
+            }
+        }
+    });
+    // The float image is the largest buffer: gone before the orientation makes another copy.
+    drop(rgb);
+    let (out, ow, oh) = if opts.orient { orient(out, w, h, s.orientation) } else { (out, w, h) };
+    let nmax = mult.iter().cloned().fold(f32::MAX, f32::min).max(1e-6);
+    Developed {
+        width: ow as u32,
+        height: oh as u32,
+        rgb: out,
+        info: RawInfo {
+            format: s.format,
+            make: s.make.clone(),
+            model: s.model.clone(),
+            sensor_width: s.width,
+            sensor_height: s.height,
+            cfa: pattern,
+            wb_multipliers: mult.map(|m| f64::from(m / nmax)),
+            orientation: s.orientation,
+            baseline_exposure: s.baseline_exposure,
+        },
+        warnings,
+    }
+}
+
+/// Develops sensor data.
+pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
+    let c = s.crop;
+    if c.is_empty() || c.x + c.width > s.width || c.y + c.height > s.height || s.data.len() < s.width * s.height * s.samples {
+        return Err(RawError::malformed("crop lies outside the sensor data"));
+    }
+    if s.samples != 1 && s.samples != 3 {
+        return Err(RawError::unsupported(format!("{} samples per pixel", s.samples)));
+    }
+    // Working buffers: one f32 plane plus f32 RGB plus u16 RGB per pixel, and
+    // a green plane for non-Bayer patterns.
+    let bayer = s.cfa.as_ref().is_none_or(|cfa| cfa.is_bayer());
+    opts.limits.check(c.width as u64, c.height as u64, if bayer { 4 + 12 + 6 } else { 4 + 4 + 12 + 6 })?;
+    let mut warnings = s.warnings.clone();
+    let sc = Scale::new(s);
+
+    let setup = color_setup(s, opts, &sc, &mut warnings)?;
+    let (mult, to_xyz) = (setup.mult, setup.to_xyz);
 
     let (w, h) = (c.width, c.height);
     let band = par::band_rows(w);
@@ -232,55 +366,10 @@ pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
             // Normalized, balanced, clipped CFA plane.
             let mut plane = Padded::new(w, h);
             let stride = plane.stride;
-            // Fast path: black varies at most per 2×2 position, so black and gain
-            // repeat every `period` columns (the CFA width, made even).
-            let bl = &s.black;
-            let periodic = bl.delta_h.is_empty() && bl.delta_v.is_empty() && matches!(bl.rows, 1 | 2) && matches!(bl.cols, 1 | 2) && cfa.width <= 16;
-            let period = if cfa.width % 2 == 0 { cfa.width.max(2) } else { cfa.width * 2 };
+            let normalizer = RowNormalizer::new(s, &sc, mult, cfa);
             plane.fill_rows(band, |y0, chunk| {
                 for (r, prow) in chunk.chunks_exact_mut(stride).enumerate() {
-                    let row = &mut prow[PAD..PAD + w];
-                    let y = c.y + y0 + r;
-                    if periodic {
-                        // Per column of the period: black and the combined scale × white-balance gain.
-                        let k: Vec<(f32, f32)> = (0..period)
-                            .map(|p| {
-                                let x = c.x + p;
-                                let black = bl.at(x.saturating_sub(s.active.x), y.saturating_sub(s.active.y), 0, 1);
-                                let range = s.white[0] - black;
-                                let gain = if range >= 1.0 { mult[usize::from(cfa.color(x, y)).min(2)] / range } else { 0.0 };
-                                (black, gain)
-                            })
-                            .collect();
-                        let src = &s.data[y * s.width + c.x..y * s.width + c.x + w];
-                        let ks = k.iter().cycle();
-                        match &sc.lin {
-                            None => {
-                                for ((v, &raw), &(black, gain)) in row.iter_mut().zip(src).zip(ks) {
-                                    *v = ((f32::from(raw) - black) * gain).clamp(0.0, 1.0);
-                                }
-                            }
-                            Some(l) => {
-                                for ((v, &raw), &(black, gain)) in row.iter_mut().zip(src).zip(ks) {
-                                    let lin = f32::from(l.get(usize::from(raw)).or_else(|| l.last()).copied().unwrap_or(raw));
-                                    *v = ((lin - black) * gain).clamp(0.0, 1.0);
-                                }
-                            }
-                        }
-                    } else {
-                        for (i, v) in row.iter_mut().enumerate() {
-                            let x = c.x + i;
-                            let ch = usize::from(cfa.color(x, y)).min(2);
-                            *v = (sc.value(x, y, 0) * mult[ch]).clamp(0.0, 1.0);
-                        }
-                    }
-                    // Lens-shading gain maps, after the white-balance clip so clipped
-                    // highlights stay neutral.
-                    if let Some(g) = gain_row(s, y, c.x, w, 0) {
-                        for (v, g) in row.iter_mut().zip(g) {
-                            *v = (*v * g).clamp(0.0, 1.0);
-                        }
-                    }
+                    normalizer.fill(c.y + y0 + r, &mut prow[PAD..PAD + w]);
                 }
             });
             plane.fill_borders();
@@ -319,43 +408,8 @@ pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
         }
     }
 
-    // Camera → ProPhoto, exposure, the look's tone curve, gamma 1.8, 16 bits.
-    let mut out = vec![0u16; w * h * 3];
-    let lut = match look {
-        Some(l) => GammaLut::with_tone(l.tone.as_ref()),
-        None => GammaLut::with_curve(&s.tone_curve),
-    };
-    par::chunks_mut(&mut out, band * w * 3, |b, chunk| {
-        let start = b * band * w * 3;
-        let src = &rgb[start..start + chunk.len()];
-        for (o, p) in chunk.as_chunks_mut::<3>().0.iter_mut().zip(src.as_chunks::<3>().0) {
-            for k in 0..3 {
-                o[k] = lut.encode(out_m[k][0] * p[0] + out_m[k][1] * p[1] + out_m[k][2] * p[2]);
-            }
-        }
-    });
-    rgb.clear();
-    rgb.shrink_to_fit();
-
-    let (out, ow, oh) = if opts.orient { orient(out, w, h, s.orientation) } else { (out, w, h) };
-    let nmax = mult.iter().cloned().fold(f32::MAX, f32::min).max(1e-6);
-    Ok(Developed {
-        width: ow as u32,
-        height: oh as u32,
-        rgb: out,
-        info: RawInfo {
-            format: s.format,
-            make: s.make.clone(),
-            model: s.model.clone(),
-            sensor_width: s.width,
-            sensor_height: s.height,
-            cfa: pattern,
-            wb_multipliers: mult.map(|m| f64::from(m / nmax)),
-            orientation: s.orientation,
-            baseline_exposure: s.baseline_exposure,
-        },
-        warnings,
-    })
+    // Camera → ProPhoto, exposure, the look's tone curve, gamma 1.8, 16 bits, orientation.
+    Ok(finish(s, opts, rgb, (w, h), &setup, pattern, warnings))
 }
 
 /// Gain-map factors (DNG OpcodeList2 GainMap) for data row `y`, columns
@@ -388,7 +442,7 @@ fn gain_row(s: &Sensor, y: usize, x0: usize, w: usize, k: usize) -> Option<Vec<f
 /// Linear 0..1 → gamma-1.8 16-bit code. Tabulated over `s = sqrt(v)`, where
 /// the curve `s^(2/1.8)` is smooth down to 0, with linear interpolation
 /// (error below 0.2 code values).
-struct GammaLut {
+pub(crate) struct GammaLut {
     table: Vec<f32>,
 }
 
@@ -426,7 +480,7 @@ impl GammaLut {
     }
 
     #[inline]
-    fn encode(&self, v: f32) -> u16 {
+    pub(crate) fn encode(&self, v: f32) -> u16 {
         let v = if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
         let x = v.sqrt() * GAMMA_STEPS as f32;
         let i = (x as usize).min(GAMMA_STEPS);

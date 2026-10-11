@@ -65,7 +65,9 @@ pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<
         return Err(IoError::Raw(RawError::Malformed(format!("exposure {} EV is out of range", tuning.exposure))));
     }
     let sensor = photocraft_raw::decode(bytes, &limits()).map_err(IoError::Raw)?;
-    let mut opts = DevelopOptions { limits: limits(), exposure, ..Default::default() };
+    // The demosaic browsing used (sharp, and a third of the default's time): Open must not take longer than the photo did to
+    // browse, and its colour must be the colour that was browsed.
+    let mut opts = DevelopOptions { demosaic: photocraft_raw::Demosaic::Mhc, limits: limits(), exposure, ..Default::default() };
     let wb_applied = match sensor.camera_wb {
         Some(m) => {
             let g = wb_gains(tuning.temperature, tuning.tint);
@@ -74,6 +76,7 @@ pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<
         }
         None => false,
     };
+    let opts = with_fitted_look(bytes, &sensor, &opts);
     let dev = photocraft_raw::develop_sensor(&sensor, &opts).map_err(IoError::Raw)?;
     let wb = if wb_applied {
         format!("as-shot white balance, temperature {:+.0}, tint {:+.0}", tuning.temperature, tuning.tint)
@@ -167,9 +170,8 @@ pub fn fit_preview_look(raw: &[u8], sensor: &Sensor, opts: &DevelopOptions) -> R
     photocraft_raw::fit_look(sensor, opts, &Reference { width: w, height: h, rgb: &rgb }).map_err(|e| e.to_string())
 }
 
-/// Decodes and develops; a file without colour calibration gets a look fitted to its preview.
-fn develop_fitted(bytes: &[u8], opts: &DevelopOptions) -> Result<photocraft_raw::Developed, RawError> {
-    let sensor = photocraft_raw::decode(bytes, &opts.limits)?;
+/// `opts`, with a look fitted to the camera's JPEG added when the file has no colour calibration of its own.
+fn with_fitted_look<'a>(bytes: &[u8], sensor: &Sensor, opts: &'a DevelopOptions) -> Cow<'a, DevelopOptions> {
     let mut opts = Cow::Borrowed(opts);
     if opts.camera_look.is_none()
         && sensor.color.calibrations.is_empty()
@@ -177,11 +179,63 @@ fn develop_fitted(bytes: &[u8], opts: &DevelopOptions) -> Result<photocraft_raw:
         // is asked for: a matrix fitted to a changed balance absorbs the change, and Camera Raw's white balance
         // would do nothing on every file without a calibration. (Exposure is applied after the look, so it is
         // not affected.)
-        && let Ok(look) = fit_preview_look(bytes, &sensor, &DevelopOptions { white_balance: WhiteBalance::AsShot, ..DevelopOptions::clone(&opts) })
+        && let Ok(look) = fit_preview_look(bytes, sensor, &DevelopOptions { white_balance: WhiteBalance::AsShot, ..DevelopOptions::clone(&opts) })
     {
         opts.to_mut().camera_look = Some(look);
     }
+    opts
+}
+
+/// Decodes and develops; a file without colour calibration gets a look fitted to its preview.
+fn develop_fitted(bytes: &[u8], opts: &DevelopOptions) -> Result<photocraft_raw::Developed, RawError> {
+    let sensor = photocraft_raw::decode(bytes, &opts.limits)?;
+    let opts = with_fitted_look(bytes, &sensor, opts);
     photocraft_raw::develop_sensor(&sensor, &opts)
+}
+
+/// Longer side, in pixels, of the document a browsed raw is developed into (see [`import_raw_browse_reduced`]). Camera Raw's
+/// own preview is at most about 900 pixels; this leaves room for a 2x display and for the recipe's screen-sized render.
+pub const BROWSE_LONG_EDGE: usize = 1800;
+
+/// A raw developed at reduced size, and the size of the full development it stands in for.
+#[derive(Debug)]
+pub struct ReducedImport {
+    pub import: ImportResult,
+    /// Width and height of the full-resolution development (after orientation).
+    pub full_size: (u32, u32),
+}
+
+/// Develops a raw for browsing in Camera Raw: at a fraction of its size, so the photo is ready after little more than reading
+/// the file (about a second for 45 MP, against about three for [`import_raw_browse`]). Every colour decision is the full
+/// development's (white balance, the camera's calibration or the look fitted to its JPEG, tone, gamma, orientation); only the
+/// demosaicing is replaced by averaging each colour inside a block of the sensor. Opening the photo for editing develops it in
+/// full.
+///
+/// `Ok(None)` when this file cannot be reduced or is small enough not to need it (not a Bayer sensor, a variant the decoder does
+/// not read, or under twice the browsing size); the caller then develops it in full.
+pub fn import_raw_browse_reduced(name: &str, bytes: &[u8]) -> Result<Option<ReducedImport>, IoError> {
+    import_raw_browse_reduced_to(name, bytes, BROWSE_LONG_EDGE)
+}
+
+/// [`import_raw_browse_reduced`] with the longer side asked for given (the browsing size is [`BROWSE_LONG_EDGE`]).
+pub fn import_raw_browse_reduced_to(name: &str, bytes: &[u8], target_long_edge: usize) -> Result<Option<ReducedImport>, IoError> {
+    let opts = DevelopOptions { limits: limits(), ..Default::default() };
+    let sensor = match photocraft_raw::decode(bytes, &opts.limits) {
+        Ok(sensor) => sensor,
+        Err(RawError::Unsupported(_)) => return Ok(None),
+        Err(e) => return Err(IoError::Raw(e)),
+    };
+    let opts = with_fitted_look(bytes, &sensor, &opts);
+    match photocraft_raw::develop_reduced(&sensor, &opts, target_long_edge) {
+        Ok(reduced) => {
+            let format = photocraft_raw::identify(bytes).map(|f| f.name()).unwrap_or("camera raw");
+            let summary = format!("{DEVELOPED_NOTE} (reduced resolution for browsing, as-shot white balance)");
+            let import = developed_document(name, format, reduced.developed, &summary)?;
+            Ok(Some(ReducedImport { import, full_size: (reduced.full_width, reduced.full_height) }))
+        }
+        Err(RawError::Unsupported(_)) => Ok(None),
+        Err(e) => Err(IoError::Raw(e)),
+    }
 }
 
 /// In the import note of a raw developed from its sensor data with the default settings (not of

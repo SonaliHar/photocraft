@@ -59,6 +59,7 @@ mod orf;
 mod par;
 mod preview;
 mod raf;
+mod reduced;
 mod rw2;
 mod sensor;
 mod sony;
@@ -75,6 +76,7 @@ pub use crate::error::RawError;
 pub use crate::look::{CameraLook, LookRejected, PROXY_EDGE, Reference, ToneCurve, fit_look};
 pub use crate::opcodes::GainMap;
 pub use crate::preview::{Preview, embedded_preview, embedded_previews};
+pub use crate::reduced::{ReducedDeveloped, develop_reduced};
 pub use crate::sensor::{BlackLevels, Cfa, Rect, Sensor};
 
 use crate::tiff::{Tiff, tag};
