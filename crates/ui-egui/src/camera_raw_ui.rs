@@ -23,6 +23,102 @@ use crate::theme::Tokens;
 use crate::widgets;
 
 const PROXY_SIDE: usize = 900;
+
+/// How long a swap to the next photo may take before the dialog shows that it is busy.
+const BUSY_AFTER: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// The preview proxy of a photo, built ahead of the dialog on a worker thread (see [`proxy_for`]). Averaging a 45 MP photo
+/// down to 900 px takes a few hundred milliseconds even spread over every core; on the editor's own thread that freezes
+/// the whole window at each photo.
+#[derive(Clone)]
+pub(crate) struct ProxyData {
+    area: Rect,
+    k: usize,
+    pw: usize,
+    ph: usize,
+    pixels: std::sync::Arc<Vec<[f32; 4]>>,
+}
+
+impl std::fmt::Debug for ProxyData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ProxyData({}x{} of {:?}, 1/{})", self.pw, self.ph, self.area, self.k)
+    }
+}
+
+/// Where a layer's proxy lives and how big it is.
+struct ProxyGeometry {
+    area: Rect,
+    w: usize,
+    h: usize,
+    k: usize,
+    pw: usize,
+    ph: usize,
+}
+
+fn proxy_geometry(canvas: Rect, surf: &photocraft_raster::Surface) -> Result<ProxyGeometry, String> {
+    // Use the engine filter domain, including pixels outside the canvas: spatial Camera Raw
+    // stages (vignette, grain, local contrast) must agree with the committed result.
+    let area = canvas.union(&surf.content_bounds());
+    let width = area.x1.checked_sub(area.x0).filter(|n| (1..=1_048_576).contains(n));
+    let height = area.y1.checked_sub(area.y0).filter(|n| (1..=1_048_576).contains(n));
+    let (Some(w), Some(h)) = (width, height) else {
+        return Err("Camera Raw preview bounds are too large".into());
+    };
+    let (w, h) = (w as usize, h as usize);
+    if w.checked_mul(h).is_none_or(|pixels| pixels > 512_000_000) {
+        return Err("Camera Raw preview bounds are too large".into());
+    }
+    let k = w.max(h).div_ceil(PROXY_SIDE).max(1);
+    let (pw, ph) = (w.div_ceil(k), h.div_ceil(k));
+    Ok(ProxyGeometry { area, w, h, k, pw, ph })
+}
+
+fn proxy_pixels(surf: &photocraft_raster::Surface, g: &ProxyGeometry) -> Vec<[f32; 4]> {
+    let ProxyGeometry { area, w, h, k, pw, ph } = *g;
+    let mut proxy = vec![[0.0f32; 4]; pw * ph];
+    // One proxy row: the box average of its k source rows. Rows are independent, so they are built in
+    // parallel (a 45 MP photo's proxy took 2.5-4 s on one core, with the whole editor frozen meanwhile).
+    let build_row = |py: usize, out: &mut [[f32; 4]]| {
+        let mut row = vec![[0.0f32; 4]; w];
+        let mut acc = vec![[0.0f32; 5]; pw];
+        for dy in 0..k {
+            let y = area.y0 + (py * k + dy).min(h - 1) as i32;
+            surf.read_rgba_into(Rect::new(area.x0, y, area.x1, y + 1), &mut row);
+            for (x, q) in row.iter().enumerate() {
+                let a = &mut acc[x / k];
+                for c in 0..4 {
+                    a[c] += q[c];
+                }
+                a[4] += 1.0;
+            }
+        }
+        for (o, a) in out.iter_mut().zip(&acc) {
+            *o = [a[0] / a[4], a[1] / a[4], a[2] / a[4], a[3] / a[4]];
+        }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        proxy.par_chunks_mut(pw).enumerate().for_each(|(py, out)| build_row(py, out));
+    }
+    #[cfg(target_arch = "wasm32")]
+    for (py, out) in proxy.chunks_mut(pw).enumerate() {
+        build_row(py, out);
+    }
+    proxy
+}
+
+/// The proxy of a freshly developed raw's pixel layer, for a worker thread to build before the dialog needs it. `None`
+/// when the document has no raster layer or it is too large; the dialog then builds it itself, as before.
+pub(crate) fn proxy_for(document: &photocraft_doc::Document) -> Option<ProxyData> {
+    let surf = document.walk().into_iter().find_map(|(_, _, layer)| match &layer.content {
+        photocraft_doc::LayerContent::Raster(surface) => Some(surface.clone()),
+        _ => None,
+    })?;
+    let geometry = proxy_geometry(document.bounds(), &surf).ok()?;
+    let pixels = proxy_pixels(&surf, &geometry);
+    Some(ProxyData { area: geometry.area, k: geometry.k, pw: geometry.pw, ph: geometry.ph, pixels: std::sync::Arc::new(pixels) })
+}
 const PANEL_W: f32 = 330.0;
 const BANDS: [&str; 8] = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"];
 
@@ -62,9 +158,21 @@ pub struct CameraRawDialog {
     pub render_ms: f64,
     /// Set for the open-time dialog ([`Target::OpenRaw`]).
     raw_open: Option<RawOpen>,
+    /// The photo was left for the next one, which has not taken the dialog over yet.
+    busy_since: Option<std::time::Instant>,
 }
 
 impl CameraRawDialog {
+    /// Whether the photo was left for the next one, which has not taken over yet.
+    pub(crate) fn busy(&self) -> bool {
+        self.busy_since.is_some()
+    }
+
+    /// Whether the document under the dialog is a reduced-resolution stand-in for the photo.
+    pub(crate) fn is_stand_in(&self) -> bool {
+        self.raw_open.as_ref().is_some_and(|raw| raw.full_size.is_some())
+    }
+
     pub fn describe(&self, view: &crate::state::CameraRawScopeState, navigation: &crate::state::CameraRawPreviewState) -> Value {
         let h = self.histogram();
         let mut result = json!({"layer": self.layer.0, "params": serde_json::to_value(&self.params).unwrap_or(Value::Null), "proxy": [self.pw, self.ph],
@@ -183,6 +291,11 @@ pub struct RawOpen {
     /// Camera Raw workspace: "Open" continues this saved document (the photo's full-editor project)
     /// instead of developing a new one, so earlier work in the full editor is never replaced.
     pub continue_from: Option<String>,
+    /// The preview proxy, built ahead on a worker thread; the dialog builds its own when this is missing.
+    pub(crate) proxy: Option<ProxyData>,
+    /// Set when the document is a reduced-resolution stand-in made for browsing: the size of the full development it stands
+    /// in for. Open then develops the photo in full, whatever was adjusted.
+    pub(crate) full_size: Option<(u32, u32)>,
 }
 
 /// Should an interactive open of `name` show the open-time Camera Raw dialog? `warnings` are
@@ -208,17 +321,21 @@ pub fn queue_open_dialog(app: &mut PhotocraftApp, name: &str, path: Option<&str>
             initial: None,
             targets: Default::default(),
             continue_from: None,
+            proxy: None,
+            full_size: None,
         });
     }
 }
 
 /// Opens the queued open-time dialog on its document's (only) layer.
-pub(crate) fn open_raw(app: &mut PhotocraftApp, ctx: &egui::Context, raw: RawOpen) -> Result<(), String> {
+pub(crate) fn open_raw(app: &mut PhotocraftApp, ctx: &egui::Context, mut raw: RawOpen) -> Result<(), String> {
+    let prepared = raw.proxy.take();
+    let full_size = raw.full_size;
     let index = document_index(app, raw.document).ok_or("the raw document was closed")?;
     app.session.set_active(index);
     let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
     let initial = raw.initial.clone().unwrap_or_default();
-    open_pixels(app, ctx, layer, surf, initial, Coverage::None, Target::OpenRaw)?;
+    open_pixels(app, ctx, layer, surf, initial, OpenAs { coverage: Coverage::None, target: Target::OpenRaw, prepared, full_size })?;
     if let Some(d) = app.camera_raw.as_mut() {
         d.layer_name = raw.name.clone();
         d.raw_open = Some(raw);
@@ -275,7 +392,10 @@ fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen) -
         (None, Some(p)) => Some(photocraft_engine::jobs::OpenSource::Path(p.clone())),
         _ => None,
     };
-    let Some(source) = source.filter(|_| tuning != photocraft_io::raw::RawTuning::default()) else {
+    // A reduced stand-in is never the photo that gets edited: Open develops the real one (with the adjustments that act on the
+    // sensor data applied while doing so), whatever was changed.
+    let stand_in = raw.full_size.is_some();
+    let Some(source) = source.filter(|_| stand_in || tuning != photocraft_io::raw::RawTuning::default()) else {
         return finish_open_raw(app, index, params.clone(), None, Some(raw));
     };
     app.session.set_active(index);
@@ -456,7 +576,14 @@ enum Coverage {
 pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
     photocraft_engine::commands::find("filter.cameraRaw").map(|c| (c.enabled)(&app.session)).unwrap_or(Err("unknown command".into()))?;
     let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
-    open_pixels(app, ctx, layer, surf, CameraRaw::default(), Coverage::Selection, Target::NewFilter)
+    open_pixels(
+        app,
+        ctx,
+        layer,
+        surf,
+        CameraRaw::default(),
+        OpenAs { coverage: Coverage::Selection, target: Target::NewFilter, prepared: None, full_size: None },
+    )
 }
 
 /// Opens Camera Raw on smart filter `index` of smart layer `layer`, with its stored settings and
@@ -477,7 +604,18 @@ pub fn open_smart_filter(app: &mut PhotocraftApp, ctx: &egui::Context, layer: La
         .map_err(|e| e.to_string())?
         .ok_or("the smart object's contents are unavailable (missing linked file?)")?;
     let coverage = sm.filter_mask.clone().filter(|m| m.enabled).map_or(Coverage::None, Coverage::Mask);
-    open_pixels(app, ctx, layer, surf, params, coverage, Target::SmartFilter(index))
+    open_pixels(app, ctx, layer, surf, params, OpenAs { coverage, target: Target::SmartFilter(index), prepared: None, full_size: None })
+}
+
+/// How a dialog is opened on a layer.
+struct OpenAs {
+    coverage: Coverage,
+    target: Target,
+    /// The preview proxy, when a worker thread already built it.
+    prepared: Option<ProxyData>,
+    /// The size of the photo the layer is a reduced stand-in for (its pixels are fewer; everything the dialog says about size,
+    /// and the scale its pixel-radius effects use, is the photo's).
+    full_size: Option<(u32, u32)>,
 }
 
 fn open_pixels(
@@ -486,56 +624,20 @@ fn open_pixels(
     layer: LayerId,
     surf: photocraft_raster::Surface,
     params: CameraRaw,
-    coverage: Coverage,
-    target: Target,
+    how: OpenAs,
 ) -> Result<(), String> {
+    let OpenAs { coverage, target, prepared, full_size } = how;
     let st = app.session.active().ok_or("no document")?;
     let canvas = st.doc.bounds();
     let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
-    // Use the engine filter domain, including pixels outside the canvas: spatial Camera Raw
-    // stages (vignette, grain, local contrast) must agree with the committed result.
-    let area = canvas.union(&surf.content_bounds());
-    let width = area.x1.checked_sub(area.x0).filter(|n| (1..=1_048_576).contains(n));
-    let height = area.y1.checked_sub(area.y0).filter(|n| (1..=1_048_576).contains(n));
-    let (Some(w), Some(h)) = (width, height) else {
-        return Err("Camera Raw preview bounds are too large".into());
+    let geometry = proxy_geometry(canvas, &surf)?;
+    let (area, w, h, k, pw, ph) = (geometry.area, geometry.w, geometry.h, geometry.k, geometry.pw, geometry.ph);
+    let (full_w, full_h) = full_size.map(|(fw, fh)| (fw as usize, fh as usize)).unwrap_or((w, h));
+    // The proxy a worker thread built ahead, when it is for this very layer; otherwise built here.
+    let proxy: Vec<[f32; 4]> = match prepared.filter(|p| p.area == area && p.k == k && p.pw == pw && p.ph == ph) {
+        Some(p) => (*p.pixels).clone(),
+        None => proxy_pixels(&surf, &geometry),
     };
-    let (w, h) = (w as usize, h as usize);
-    if w.checked_mul(h).is_none_or(|pixels| pixels > 512_000_000) {
-        return Err("Camera Raw preview bounds are too large".into());
-    }
-    let k = w.max(h).div_ceil(PROXY_SIDE).max(1);
-    let (pw, ph) = (w.div_ceil(k), h.div_ceil(k));
-    let mut proxy = vec![[0.0f32; 4]; pw * ph];
-    // One proxy row: the box average of its k source rows. Rows are independent, so they are built in
-    // parallel (a 45 MP photo's proxy took 2.5-4 s on one core, with the whole editor frozen meanwhile).
-    let build_row = |py: usize, out: &mut [[f32; 4]]| {
-        let mut row = vec![[0.0f32; 4]; w];
-        let mut acc = vec![[0.0f32; 5]; pw];
-        for dy in 0..k {
-            let y = area.y0 + (py * k + dy).min(h - 1) as i32;
-            surf.read_rgba_into(Rect::new(area.x0, y, area.x1, y + 1), &mut row);
-            for (x, q) in row.iter().enumerate() {
-                let a = &mut acc[x / k];
-                for c in 0..4 {
-                    a[c] += q[c];
-                }
-                a[4] += 1.0;
-            }
-        }
-        for (o, a) in out.iter_mut().zip(&acc) {
-            *o = [a[0] / a[4], a[1] / a[4], a[2] / a[4], a[3] / a[4]];
-        }
-    };
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use rayon::prelude::*;
-        proxy.par_chunks_mut(pw).enumerate().for_each(|(py, out)| build_row(py, out));
-    }
-    #[cfg(target_arch = "wasm32")]
-    for (py, out) in proxy.chunks_mut(pw).enumerate() {
-        build_row(py, out);
-    }
     // Coverage at the centre of each proxy block.
     let sample = |value: &dyn Fn(i32, i32) -> f32| {
         (0..ph)
@@ -583,8 +685,8 @@ fn open_pixels(
         selection,
         pw,
         ph,
-        full_w: w,
-        full_h: h,
+        full_w,
+        full_h,
         preview_ppp: ctx.pixels_per_point(),
         detail: super::camera_raw_detail_ui::DetailPreview::new(
             surf,
@@ -608,9 +710,12 @@ fn open_pixels(
         curve_rect: None,
         render_ms: 0.0,
         raw_open: None,
+        busy_since: None,
     };
     d.render(ctx);
     app.camera_raw = Some(d);
+    // The dialog is up: the loading frame that stood in for it is done.
+    app.raw_workspace.end_shell();
     Ok(())
 }
 
@@ -914,7 +1019,8 @@ fn curve_editor(ui: &mut egui::Ui, p: &mut CameraRaw, dirty: &mut bool, state: &
 }
 
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    if app.camera_raw.is_none()
+    // A queued dialog opens when none is up, or takes over from the previous photo's dialog that was left for it.
+    if app.camera_raw.as_ref().is_none_or(CameraRawDialog::busy)
         && let Some(raw) = app.pending_raw_open.take()
         && let Err(e) = open_raw(app, ctx, raw)
     {
@@ -962,12 +1068,131 @@ impl CameraRawDialog {
     }
 }
 
+/// Where the dialog's parts go in a window the size of `screen`. One definition for the dialog and for the loading frame
+/// ([`draw_shell`]) that stands in for it, so the host's picture of a photo, laid over `view`, does not move when the dialog
+/// replaces the frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Layout {
+    pub title: ERect,
+    pub body: ERect,
+    pub preview_body: ERect,
+    /// Where the photo is shown.
+    pub view: ERect,
+    /// The settings panel.
+    pub right: ERect,
+    pub foot: ERect,
+}
+
+pub(crate) fn layout(screen: ERect, own_window: bool) -> Layout {
+    let footer_h = 48.0;
+    let title = ERect::from_min_size(screen.min, vec2(screen.width(), if own_window { 0.0 } else { 30.0 }));
+    let body = ERect::from_min_max(pos2(screen.left(), title.bottom()), pos2(screen.right(), screen.bottom() - footer_h));
+    let preview_body = ERect::from_min_max(body.min, pos2((body.right() - PANEL_W).max(body.left() + 1.0), body.bottom()));
+    let view = ERect::from_min_max(
+        preview_body.min + vec2(16.0, 16.0),
+        pos2((preview_body.right() - 16.0).max(preview_body.left() + 17.0), (preview_body.bottom() - 48.0).max(preview_body.top() + 17.0)),
+    );
+    let right = ERect::from_min_max(pos2(body.right() - PANEL_W, body.top()), body.max);
+    let foot = ERect::from_min_max(pos2(screen.left(), screen.bottom() - footer_h), screen.max);
+    Layout { title, body, preview_body, view, right, foot }
+}
+
+/// Leaves the open-time dialog's photo without closing the dialog: the next photo is on its way and takes the dialog
+/// over, so the window never shows it going away and coming back. What was adjusted is kept as the photo's recipe, as
+/// [`done`] does; the dialog stays up, marked busy (its controls dim if the swap takes more than a moment), until the next
+/// photo replaces its contents.
+pub(crate) fn leave_in_place(app: &mut PhotocraftApp) -> Result<(), String> {
+    let Some(d) = app.camera_raw.as_mut() else { return Ok(()) };
+    if d.target != Target::OpenRaw {
+        return Err("only the open-time dialog can hand over to the next photo".into());
+    }
+    let raw = d.raw_open.clone().ok_or("no raw file is being opened")?;
+    let params = d.params.clone();
+    let changed = d.params != d.original;
+    d.original = d.params.clone();
+    d.busy_since = d.busy_since.or_else(|| Some(std::time::Instant::now()));
+    if changed {
+        crate::raw_recipe::persist(app, raw.document, &raw.targets, &params);
+    }
+    Ok(())
+}
+
+/// The dialog's frame while the Camera Raw workspace is still developing the photo (its dialog opens a moment later):
+/// the same title bar, preview area, settings panel and footer as [`draw`], with nothing in it usable. The window shows
+/// this instead of the editor's menus and panels, which a photo being browsed has no use for, and the host's picture of
+/// the photo lies over `layout().view` until the dialog takes it over.
+pub(crate) fn draw_shell(ctx: &egui::Context, name: &str) {
+    let t = Tokens::get(ctx);
+    let screen = ctx.content_rect();
+    let lay = layout(screen, false);
+    // No fade-in: while it fades, the editor's own windows show through, which is what the frame is there to hide.
+    egui::Area::new(egui::Id::new("camera-raw-shell")).order(egui::Order::Foreground).fixed_pos(screen.min).fade_in(false).show(ctx, |ui| {
+        let (full, _) = ui.allocate_exact_size(screen.size(), Sense::click_and_drag());
+        let painter = ui.painter().clone();
+        painter.rect_filled(full, 0.0, t.chrome);
+        painter.rect_filled(lay.title, 0.0, t.dock);
+        painter.line_segment([lay.title.left_bottom(), lay.title.right_bottom()], Stroke::new(1.0, t.separator));
+        painter.rect_filled(lay.view, 0.0, t.canvas);
+        // The photo's name is not known in the moment between leaving one photo and being asked for the next: no title
+        // rather than the wrong one.
+        if !name.is_empty() {
+            painter.text(
+                lay.title.center(),
+                Align2::CENTER_CENTER,
+                crate::i18n::fmt(tl!("Camera Raw ({name})"), &[("name", name)]),
+                FontId::proportional(13.0),
+                t.text,
+            );
+            painter.text(
+                lay.view.center(),
+                Align2::CENTER_CENTER,
+                crate::i18n::fmt(tl!("Developing {name}"), &[("name", name)]),
+                FontId::proportional(13.0),
+                t.text_faint,
+            );
+        }
+        painter.rect_filled(lay.right, 0.0, t.dock);
+        painter.line_segment([lay.right.left_top(), lay.right.left_bottom()], Stroke::new(1.0, t.separator));
+        let mut y = lay.right.top() + 26.0;
+        for section in ["Light", "Color", "Effects", "Curve", "Color Mixer", "Color Grading", "Detail"] {
+            painter.text(
+                pos2(lay.right.left() + 18.0, y),
+                Align2::LEFT_CENTER,
+                crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", section),
+                FontId::proportional(13.0),
+                t.text_faint,
+            );
+            y += 30.0;
+        }
+        painter.rect_filled(lay.foot, 0.0, t.dock);
+        painter.line_segment([lay.foot.left_top(), lay.foot.right_top()], Stroke::new(1.0, t.separator));
+        let mut fu = ui.new_child(egui::UiBuilder::new().max_rect(lay.foot.shrink2(vec2(16.0, 9.0))).layout(egui::Layout::right_to_left(egui::Align::Center)));
+        fu.add_enabled_ui(false, |fu| {
+            widgets::dialog_buttons(
+                fu,
+                &[
+                    widgets::DialogButton::new(widgets::ButtonRole::Default, tl!("Open"), 90.0),
+                    widgets::DialogButton::new(widgets::ButtonRole::Cancel, tl!("Cancel"), 90.0),
+                ],
+            );
+        });
+    });
+}
+
 /// The dialog's contents over the whole of `ctx`'s window. `own_window`: the OS window already
 /// shows the title, so none is painted.
 fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
     let mut action: Option<&str> = None;
+    // The photo was left for the next one, which has not taken the dialog over yet: nothing in the dialog may act
+    // meanwhile, and if the swap takes more than a moment the controls dim to say so.
+    let busy_since = app.camera_raw.as_ref().and_then(|d| d.busy_since);
+    let busy = busy_since.is_some();
+    let busy_visible = busy_since.is_some_and(|since| since.elapsed() >= BUSY_AFTER);
+    if busy && !busy_visible {
+        ctx.request_repaint_after(BUSY_AFTER);
+    }
     egui::Area::new(egui::Id::new("camera-raw-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let Some(d) = app.camera_raw.as_mut() else { return };
         d.curve_rect = None;
@@ -978,22 +1203,18 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         let (full, _) = ui.allocate_exact_size(screen.size(), Sense::click());
         let painter = ui.painter().clone();
         painter.rect_filled(full, 0.0, t.chrome);
-        let title = ERect::from_min_size(full.min, vec2(full.width(), if own_window { 0.0 } else { 30.0 }));
+        let lay = layout(screen, own_window);
+        let title = lay.title;
         if !own_window {
             painter.rect_filled(title, 0.0, t.dock);
             painter.line_segment([title.left_bottom(), title.right_bottom()], Stroke::new(1.0, t.separator));
             painter.text(title.center(), Align2::CENTER_CENTER, d.window_title(), FontId::proportional(13.0), t.text);
         }
         let ok_label = if d.target == Target::OpenRaw { tl!("Open") } else { tl!("OK") };
-        let footer_h = 48.0;
-        let body = ERect::from_min_max(pos2(full.left(), title.bottom()), pos2(full.right(), full.bottom() - footer_h));
         let scope = &mut app.ui.camera_raw_scope;
         // Clip both pixels and scope overlays before painting the settings dock/footer.
-        let preview_body = ERect::from_min_max(body.min, pos2((body.right() - PANEL_W).max(body.left() + 1.0), body.bottom()));
-        let view = ERect::from_min_max(
-            preview_body.min + vec2(16.0, 16.0),
-            pos2((preview_body.right() - 16.0).max(preview_body.left() + 17.0), (preview_body.bottom() - 48.0).max(preview_body.top() + 17.0)),
-        );
+        let preview_body = lay.preview_body;
+        let view = lay.view;
         d.viewport = Some(view);
         d.preview_ppp = ctx.pixels_per_point();
         let size = vec2(d.full_w as f32, d.full_h as f32) / ctx.pixels_per_point();
@@ -1007,7 +1228,8 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             // Never tile a checker across the offscreen extent of a highly zoomed image.
             widgets::checker(preview.painter(), r.intersect(view), 8.0);
             preview.painter().image(tex.id(), r, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-            let detail_needed = r.width() * ctx.pixels_per_point() > d.pw as f32 || r.height() * ctx.pixels_per_point() > d.ph as f32;
+            // A stand-in made for browsing has no more detail to show: zoomed in, the photo is developed in full by Open.
+            let detail_needed = (r.width() * ctx.pixels_per_point() > d.pw as f32 || r.height() * ctx.pixels_per_point() > d.ph as f32) && !d.is_stand_in();
             d.detail.paint(&preview, r, d.preview_revision, d.show_before, &d.params, detail_needed);
             if d.detail.pending() {
                 ctx.request_repaint_after(std::time::Duration::from_millis(50));
@@ -1022,17 +1244,20 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         let mut nav_ui = ui.new_child(egui::UiBuilder::new().max_rect(toolbar).layout(egui::Layout::left_to_right(egui::Align::Center)));
         nav_ui.set_clip_rect(preview_body.intersect(ui.clip_rect()));
         super::camera_raw_preview_ui::toolbar(&mut nav_ui, navigation, view, size, &mut scope.sampler_tool);
-        if d.detail.pending() {
+        if d.detail.pending() || busy_visible {
             nav_ui.spinner();
         }
         if let Some(error) = &d.detail.error {
             nav_ui.label(egui::RichText::new(tl!("Full-resolution preview unavailable")).color(t.text_faint)).on_hover_text(error);
         }
         // Panels.
-        let right = ERect::from_min_max(pos2(body.right() - PANEL_W, body.top()), body.max);
+        let right = lay.right;
         painter.rect_filled(right, 0.0, t.dock);
         painter.line_segment([right.left_top(), right.left_bottom()], Stroke::new(1.0, t.separator));
         let mut props = ui.new_child(egui::UiBuilder::new().max_rect(right.shrink2(vec2(14.0, 10.0))));
+        if busy_visible {
+            props.disable();
+        }
         // This header is outside the settings scroll area and follows the same Before/After
         // selector as the texture. Both derive from the same completed preview revision.
         super::camera_raw_scope_ui::header(&mut props, d, scope);
@@ -1146,10 +1371,13 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             ctx.request_repaint();
         }
         // Footer.
-        let foot = ERect::from_min_max(pos2(full.left(), full.bottom() - footer_h), full.max);
+        let foot = lay.foot;
         painter.rect_filled(foot, 0.0, t.dock);
         painter.line_segment([foot.left_top(), foot.right_top()], Stroke::new(1.0, t.separator));
         let mut fu = ui.new_child(egui::UiBuilder::new().max_rect(foot.shrink2(vec2(16.0, 9.0))).layout(egui::Layout::right_to_left(egui::Align::Center)));
+        if busy_visible {
+            fu.disable();
+        }
         if let Some(role) = widgets::dialog_buttons(
             &mut fu,
             &[
@@ -1171,6 +1399,9 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
     }
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         action = Some("cancel");
+    }
+    if busy {
+        action = None;
     }
     match action {
         Some("ok") => {
@@ -1318,7 +1549,14 @@ mod tests {
         let layer = app.session.active().unwrap().active_layer.unwrap();
         let mut source = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
         source.write_region(Rect::new(30_000, 30_000, 30_001, 30_001), &[0.5, 0.5, 0.5, 1.0]);
-        let result = open_pixels(&mut app, &ctx, layer, source, CameraRaw::default(), Coverage::None, Target::NewFilter);
+        let result = open_pixels(
+            &mut app,
+            &ctx,
+            layer,
+            source,
+            CameraRaw::default(),
+            OpenAs { coverage: Coverage::None, target: Target::NewFilter, prepared: None, full_size: None },
+        );
         assert!(result.unwrap_err().contains("bounds are too large"));
         assert!(app.camera_raw.is_none());
     }
@@ -1463,7 +1701,9 @@ mod tests {
                     bytes: None,
                     initial: None,
                     targets: Default::default(),
-                    continue_from: None
+                    continue_from: None,
+                    proxy: None,
+                    full_size: None,
                 }
             )
             .is_err()

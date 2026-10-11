@@ -265,9 +265,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
     let u = |k: &str| p.get(k).and_then(Value::as_u64);
     let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(true);
     match req.method.as_str() {
-        "app.handoff" => {
-            ok(json!({"version": 2, "replace": true, "hiddenStart": true, "rawSmartObject": 1, "rawSensorAdapter": 1, "cameraRaw": 1, "cameraRawPrefetch": 1}))
-        }
+        "app.handoff" => ok(
+            json!({"version": 2, "replace": true, "hiddenStart": true, "rawSmartObject": 1, "rawSensorAdapter": 1, "cameraRaw": 1, "cameraRawPrefetch": 1, "cameraRawSwitch": 1}),
+        ),
         "ui.rawDevelopment" => run_waiting(app, wait, |app| crate::raw_develop_ui::control(app, p)),
         "ui.cameraRaw" => run_waiting(app, wait, |app| crate::raw_workspace::control(app, ctx, p)),
         "app.prefetch" => match (s("path"), s("signature")) {
@@ -340,7 +340,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             let tokens = crate::theme::Tokens::get(ctx);
             let hex = |c: egui::Color32| format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b());
             ok(json!({"theme": app.ui.theme.id(), "panel": hex(tokens.card), "dock": hex(tokens.dock),
-                "accent": hex(tokens.accent), "text": hex(tokens.text)}))
+                "accent": hex(tokens.accent), "text": hex(tokens.text), "canvas": hex(tokens.canvas)}))
         }
         "ui.viewport" => ok(viewport(app, ctx)),
         "ui.set" => {
@@ -1045,10 +1045,19 @@ pub fn viewport(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "width": (r.width() * scale).round(), "height": (r.height() * scale).round()})
     };
     let screen = ctx.content_rect();
+    let camera_raw = match app.camera_raw.as_ref() {
+        Some(dialog) => json!({"open": true, "busy": dialog.busy(), "view": dialog.viewport.map(rect), "preview": dialog.scope.preview_rect.map(rect)}),
+        // The workspace is waiting for the next photo's dialog: its frame stands in, with the dialog's own view.
+        None if crate::raw_workspace::shell_active(app) => {
+            let view = crate::camera_raw_ui::layout(screen, false).view;
+            json!({"open": false, "loading": true, "view": rect(view), "preview": rect(view)})
+        }
+        None => Value::Null,
+    };
     json!({
         "window": {"width": (screen.width() * scale).round(), "height": (screen.height() * scale).round(), "pixelsPerPoint": scale},
         "canvas": rect(app.last_canvas_rect),
-        "cameraRaw": app.camera_raw.as_ref().map(|dialog| json!({"open": true, "view": dialog.viewport.map(rect), "preview": dialog.scope.preview_rect.map(rect)})),
+        "cameraRaw": camera_raw,
     })
 }
 

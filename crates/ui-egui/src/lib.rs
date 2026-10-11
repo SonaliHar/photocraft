@@ -1457,6 +1457,7 @@ impl eframe::App for PhotocraftApp {
         tiff_options_ui::show(self, &ctx);
         distort_ui::show(self, &ctx);
         camera_raw_ui::show(self, &ctx);
+        raw_workspace::show_shell(self, &ctx);
         raw_develop_ui::show(self, &ctx);
         wide_angle_ui::show(self, &ctx);
         canvas::extra_windows(self, &ctx);

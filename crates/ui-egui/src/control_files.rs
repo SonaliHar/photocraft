@@ -44,8 +44,15 @@ pub fn open_with_sensor(
     if app.raw_development.is_some() {
         return Err("Commit or cancel RAW Development before opening another document".into());
     }
-    // Camera Raw workspace: the photo being left keeps what was adjusted, then the next one opens.
-    crate::raw_workspace::settle(app)?;
+    // Camera Raw workspace: the photo being left keeps what was adjusted, then the next one opens. When Camera Raw is
+    // showing a raw and the next photo is one too, the dialog stays up and the next photo takes it over, so the window
+    // never shows it closing and coming back.
+    let in_place = camera_raw.is_some() && app.raw_workspace.enabled && crate::camera_raw_ui::target_name(app) == Some("openRaw");
+    if in_place {
+        crate::camera_raw_ui::leave_in_place(app)?;
+    } else {
+        crate::raw_workspace::settle(app)?;
+    }
     let previous = if replace { app.session.active().map(|state| state.doc.id) } else { None };
     if let Some((doc, revision)) = app.jobs.host_snapshots.get(path) {
         let name = doc.name.clone();
@@ -67,6 +74,15 @@ pub fn open_with_sensor(
     let pending_raw = app.jobs.workspace_raw.clone();
     let wants_dialog = camera_raw.is_some();
     let workspace = app.raw_workspace.enabled;
+    if workspace {
+        if !wants_dialog {
+            app.raw_workspace.end_shell();
+        } else if !in_place {
+            // The photo's Camera Raw is on its way: its frame stands in for the editor's windows until the dialog opens.
+            let name = std::path::Path::new(&path).file_name().and_then(|name| name.to_str()).unwrap_or(&path).to_string();
+            crate::raw_workspace::begin_shell(app, &name, false);
+        }
+    }
     // A raw the host asked to have ready already is developed: opening it is then just adding the document.
     let prepared = camera_raw.as_ref().and_then(|spec| crate::raw_workspace::take_prepared(&app.jobs.workspace_prefetch, &path, spec.signature.as_deref()));
     app.session
@@ -78,25 +94,32 @@ pub fn open_with_sensor(
             move |ctx| {
                 ctx.check()?;
                 if let Some(ready) = prepared {
-                    return Ok((ready.name, ready.imported, Some(ready.bytes)));
+                    return Ok((ready.name, ready.imported, Some(ready.bytes), ready.proxy, ready.full_size));
                 }
                 let (name, bytes) = read(&path).map_err(EngineError::Other)?;
                 let sensor = sensor_path.as_ref().map(|path| read(path).map_err(EngineError::Other)).transpose()?;
                 let camera_raw_import = wants_dialog && photocraft_io::raw::is_raw(&bytes);
+                let mut full_size = None;
                 let imported = if raw_smart {
                     photocraft_io::raw_smart::import_with_sensor(&name, &bytes, sensor.as_ref().map(|(name, bytes)| (name.as_str(), bytes.as_slice())))
                 } else if camera_raw_import {
-                    // Browsing in Camera Raw: a fast develop for the dialog (see `import_raw_browse`).
-                    photocraft_io::raw::import_raw_browse(&name, &bytes)
+                    // Browsing in Camera Raw: reduced in size when the file allows, so the photo is ready after little more than
+                    // reading it (see `develop_for_browsing`).
+                    crate::raw_workspace::develop_for_browsing(&name, &bytes).map(|(imported, size)| {
+                        full_size = size;
+                        imported
+                    })
                 } else {
                     photocraft_io::import(&name, &bytes)
                 }
                 .map_err(|e| EngineError::Other(e.to_string()))?;
                 ctx.check()?;
+                // The dialog's proxy is built here, on the worker, not by the editor's own thread when the dialog opens.
+                let proxy = if camera_raw_import { crate::camera_raw_ui::proxy_for(&imported.document) } else { None };
                 let kept = camera_raw_import.then(|| std::sync::Arc::new(bytes));
-                Ok((name, imported, kept))
+                Ok((name, imported, kept, proxy, full_size))
             },
-            move |session, (name, imported, kept)| {
+            move |session, (name, imported, kept, proxy, full_size)| {
                 // Automation never runs script events or ambient color-policy I/O.
                 close_replaced(session, previous);
                 // Only a raw developed from its sensor data can open in Camera Raw; an embedded-preview
@@ -110,9 +133,10 @@ pub fn open_with_sensor(
                 if workspace && (wants_dialog || raw_smart) {
                     // The host decided how this file opens: Camera Raw's dialog, or its own route. Either way the
                     // automatic Camera Raw must leave the document alone (see `queue_dialog`).
-                    let (bytes, spec) = if dialog { (kept, camera_raw.unwrap_or_default()) } else { (None, Default::default()) };
+                    let (bytes, spec, proxy, full_size) =
+                        if dialog { (kept, camera_raw.unwrap_or_default(), proxy, full_size) } else { (None, Default::default(), None, None) };
                     *pending_raw.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
-                        Some(crate::raw_workspace::PendingRaw { path: applied_path.clone(), bytes, spec });
+                        Some(crate::raw_workspace::PendingRaw { path: applied_path.clone(), bytes, spec, proxy, full_size });
                 }
                 Ok(result)
             },

@@ -32,6 +32,8 @@ pub struct State {
     /// document and nobody has pressed Open or Cancel, nothing draws it (a 45 MP canvas costs seconds, and the host
     /// shows its own picture of the photo meanwhile), including after the dialog was left with Done.
     pub(crate) browsing: Option<DocId>,
+    /// The loading frame shown while the next photo's dialog is on its way.
+    pub(crate) shell: Option<Shell>,
 }
 
 impl State {
@@ -49,7 +51,63 @@ pub fn canvas_covered(app: &PhotocraftApp) -> bool {
     }
     app.camera_raw.is_some()
         || app.pending_raw_open.is_some()
+        || shell_active(app)
         || app.raw_workspace.browsing.is_some_and(|id| app.session.active().is_some_and(|st| st.doc.id == id))
+}
+
+/// How long a loading frame left standing after a photo was left waits for the host's next `app.open` before giving up.
+const SHELL_GRACE: std::time::Duration = std::time::Duration::from_millis(2500);
+/// The longest a loading frame stays up, whatever happens.
+const SHELL_LIMIT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// The Camera Raw frame that stands in for the dialog while the next photo is developed (see [`camera_raw_ui::draw_shell`]).
+pub(crate) struct Shell {
+    name: String,
+    since: std::time::Instant,
+    /// The photo was just left and the host is expected to open another any moment; if it does not, the frame goes.
+    awaiting_open: bool,
+    /// The document that was left: the frame only stands in while it is still the active one.
+    left: Option<DocId>,
+}
+
+impl State {
+    /// The loading frame goes away: the dialog is up, or there will be no dialog.
+    pub(crate) fn end_shell(&mut self) {
+        self.shell = None;
+    }
+}
+
+/// Puts the loading frame up: `name` is the photo being opened (or, with `awaiting_open`, the one just left, whose
+/// successor the host is about to open).
+pub(crate) fn begin_shell(app: &mut PhotocraftApp, name: &str, awaiting_open: bool) {
+    if app.raw_workspace.enabled {
+        let left = if awaiting_open { app.session.active().map(|st| st.doc.id) } else { None };
+        app.raw_workspace.shell = Some(Shell { name: name.to_string(), since: std::time::Instant::now(), awaiting_open, left });
+    }
+}
+
+/// Whether the loading frame is what the window shows: the workspace is waiting for a photo's dialog, and none is open.
+pub fn shell_active(app: &PhotocraftApp) -> bool {
+    app.raw_workspace.enabled
+        && app.camera_raw.is_none()
+        && app.raw_workspace.shell.as_ref().is_some_and(|shell| {
+            let age = shell.since.elapsed();
+            let still_there = !shell.awaiting_open || shell.left == app.session.active().map(|st| st.doc.id);
+            age < SHELL_LIMIT && still_there && !(shell.awaiting_open && age > SHELL_GRACE)
+        })
+}
+
+/// Draws the loading frame when it is due; called every frame after the dialog (which, once open, replaces it).
+pub fn show_shell(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if !shell_active(app) {
+        app.raw_workspace.shell = None;
+        return;
+    }
+    if let Some(shell) = &app.raw_workspace.shell {
+        camera_raw_ui::draw_shell(ctx, &shell.name);
+    }
+    // Wake up to notice a frame nobody is going to replace.
+    ctx.request_repaint_after(std::time::Duration::from_millis(500));
 }
 
 /// Marks `document` as settled: no automatic Camera Raw for it.
@@ -68,10 +126,15 @@ pub fn on_open_event(app: &mut PhotocraftApp, document: Option<DocId>, done: boo
         if let Some(id) = document.or_else(|| app.session.active().map(|st| st.doc.id)) {
             claim(app, id);
         }
+        app.raw_workspace.end_shell();
         return;
     }
     if done {
         queue_dialog(app, document);
+    }
+    // The frame stays only while a dialog is about to open on the photo that just landed.
+    if !done || app.pending_raw_open.is_none() {
+        app.raw_workspace.end_shell();
     }
 }
 
@@ -140,6 +203,10 @@ pub struct Prepared {
     pub name: String,
     pub bytes: std::sync::Arc<Vec<u8>>,
     pub imported: photocraft_io::ImportResult,
+    /// Set when `imported` is a reduced-resolution stand-in: the size of the full development it stands in for.
+    pub(crate) full_size: Option<(u32, u32)>,
+    /// The dialog's preview proxy, built on the prefetch thread so opening the photo does no such work on the editor's.
+    pub(crate) proxy: Option<camera_raw_ui::ProxyData>,
 }
 
 #[derive(Default)]
@@ -197,13 +264,17 @@ pub fn request_prefetch(app: &mut PhotocraftApp, path: &str, signature: &str) ->
             // One worker thread for the develop (it parallelises through rayon): whatever is open keeps the other cores.
             let pool = POOL.get_or_init(|| rayon::ThreadPoolBuilder::new().num_threads(1).thread_name(|_| "camera-raw-prefetch-worker".into()).build().ok());
             let imported = match pool {
-                Some(pool) => pool.install(|| photocraft_io::raw::import_raw_browse(&name, &bytes)),
-                None => photocraft_io::raw::import_raw_browse(&name, &bytes),
+                Some(pool) => pool.install(|| develop_for_browsing(&name, &bytes)),
+                None => develop_for_browsing(&name, &bytes),
             };
-            let Ok(imported) = imported else { return };
+            let Ok((imported, full_size)) = imported else { return };
+            let proxy = match pool {
+                Some(pool) => pool.install(|| camera_raw_ui::proxy_for(&imported.document)),
+                None => camera_raw_ui::proxy_for(&imported.document),
+            };
             let mut slot = shared.lock().unwrap_or_else(PoisonError::into_inner);
             if slot.want.as_ref().is_some_and(|(p, s)| *p == path && *s == signature) {
-                slot.ready = Some(Prepared { path, signature, name, bytes: std::sync::Arc::new(bytes), imported });
+                slot.ready = Some(Prepared { path, signature, name, bytes: std::sync::Arc::new(bytes), imported, full_size, proxy });
             }
         });
         if let Err(error) = spawned {
@@ -218,6 +289,15 @@ pub fn request_prefetch(app: &mut PhotocraftApp, path: &str, signature: &str) ->
     }
 }
 
+/// Develops a raw for browsing in Camera Raw: reduced in size when the file allows (a second for 45 MP rather than three),
+/// else in full. The second value is the size of the full development a reduced one stands in for.
+pub(crate) fn develop_for_browsing(name: &str, bytes: &[u8]) -> Result<(photocraft_io::ImportResult, Option<(u32, u32)>), photocraft_io::IoError> {
+    if let Some(reduced) = photocraft_io::raw::import_raw_browse_reduced(name, bytes)? {
+        return Ok((reduced.import, Some(reduced.full_size)));
+    }
+    Ok((photocraft_io::raw::import_raw_browse(name, bytes)?, None))
+}
+
 /// A document the host opened for the Camera Raw workspace: for a raw developed from its sensor data, its bytes
 /// (the dialog re-develops from them) and the host's request; without bytes, a file the host takes its own route
 /// for (the retained-raw smart object, or a fallback after the sensor decode was unavailable), which must not get
@@ -226,6 +306,8 @@ pub struct PendingRaw {
     pub path: String,
     pub bytes: Option<std::sync::Arc<Vec<u8>>>,
     pub spec: OpenSpec,
+    pub(crate) proxy: Option<camera_raw_ui::ProxyData>,
+    pub(crate) full_size: Option<(u32, u32)>,
 }
 
 /// A raw opened with `cameraRaw` has landed: queue its Camera Raw dialog on the document (shown next frame).
@@ -248,7 +330,15 @@ pub fn queue_dialog(app: &mut PhotocraftApp, document: Option<DocId>) {
         initial: pending.spec.recipe,
         targets: pending.spec.targets,
         continue_from: pending.spec.continue_from,
+        proxy: pending.proxy,
+        full_size: pending.full_size,
     });
+}
+
+/// The path of the raw `app.prefetch` has developed and is holding for the host, if any: opening that photo costs next to
+/// nothing, so a host need not wait for the selection to rest before asking for it.
+fn prefetched_path(app: &PhotocraftApp) -> Option<String> {
+    app.jobs.workspace_prefetch.lock().unwrap_or_else(std::sync::PoisonError::into_inner).ready.as_ref().map(|ready| ready.path.clone())
 }
 
 /// `ui.cameraRaw {open?, commit?, cancel?}`: the workspace's dialog for a host.
@@ -289,8 +379,13 @@ pub fn control(app: &mut PhotocraftApp, ctx: &egui::Context, p: &serde_json::Val
         camera_raw_ui::menu(app, ctx, "filter.cameraRaw", &json!({"ui": {"set": set}})).ok_or("Camera Raw is not open")??;
     }
     if done {
-        // Leaving the photo: a raw keeps its settings as a recipe and nothing is developed.
+        // Leaving the photo: a raw keeps its settings as a recipe and nothing is developed. The host opens another
+        // photo next; its Camera Raw frame is up from now, so the editor's own windows never show in between.
+        let leaving_a_raw = camera_raw_ui::target_name(app) == Some("openRaw");
         left = Some(camera_raw_ui::done(app)?);
+        if leaving_a_raw {
+            begin_shell(app, "", true);
+        }
     } else if commit {
         if camera_raw_ui::target_name(app) == Some("openRaw") {
             // "Open": develop the raw with the settings (or continue its saved document).
@@ -305,7 +400,7 @@ pub fn control(app: &mut PhotocraftApp, ctx: &egui::Context, p: &serde_json::Val
         camera_raw_ui::cancel(app);
     }
     let mut state = json!({"open": app.camera_raw.is_some(), "changed": camera_raw_ui::changed(app), "applied": applied,
-        "workspace": app.raw_workspace.enabled, "target": camera_raw_ui::target_name(app)});
+        "workspace": app.raw_workspace.enabled, "target": camera_raw_ui::target_name(app), "prefetched": prefetched_path(app)});
     if let Some(recipe) = camera_raw_ui::recipe(app) {
         state["recipe"] = recipe;
     }
@@ -465,6 +560,89 @@ mod tests {
         assert!(control(&mut app, &ctx, &json!({"open": "yes"})).is_err());
         assert!(control(&mut app, &ctx, &json!({"open": true, "commit": true})).is_err());
         assert!(app.camera_raw.is_none(), "a rejected request opens nothing");
+    }
+
+    #[test]
+    fn the_camera_raw_frame_stands_in_from_the_open_request_until_the_dialog_is_up() {
+        use photocraft_engine::jobs::Started;
+        let (mut app, _writes) = host_app(vec![("IMG.dng", synthetic_raw())]);
+        let ctx = egui::Context::default();
+        assert!(!shell_active(&app));
+        let started = crate::control_files::open_with_sensor(&mut app, "IMG.dng", true, false, None, Some(spec(None))).unwrap();
+        let Started::Job(job) = started else { panic!("expected a background open") };
+        assert!(shell_active(&app), "up as soon as the host asks for the photo");
+        assert!(canvas_covered(&app));
+        let loading = crate::control::viewport(&app, &ctx)["cameraRaw"].clone();
+        assert_eq!((loading["open"].as_bool(), loading["loading"].as_bool()), (Some(false), Some(true)), "{loading}");
+        assert_eq!(loading["view"], loading["preview"]);
+        app.session.wait_job(job).unwrap();
+        crate::jobs_ui::tick(&mut app, &ctx);
+        assert!(shell_active(&app), "still up while the dialog is queued");
+        let raw = app.pending_raw_open.take().expect("the raw's dialog is queued");
+        camera_raw_ui::open_raw(&mut app, &ctx, raw).unwrap();
+        assert!(!shell_active(&app) && app.raw_workspace.shell.is_none(), "the dialog replaced it");
+        assert_eq!(crate::control::viewport(&app, &ctx)["cameraRaw"]["open"], true);
+    }
+
+    #[test]
+    fn a_photo_that_does_not_get_a_dialog_takes_the_frame_down() {
+        let (mut app, ctx) = app_with_document();
+        app.raw_workspace.enabled = true;
+        // A failed or cancelled open.
+        begin_shell(&mut app, "a.NEF", false);
+        on_open_event(&mut app, None, false);
+        assert!(app.raw_workspace.shell.is_none());
+        // An open that finished without a dialog to queue (a file the editor could not develop).
+        begin_shell(&mut app, "a.NEF", false);
+        on_open_event(&mut app, None, true);
+        assert!(app.raw_workspace.shell.is_none() && app.pending_raw_open.is_none());
+        // An open that is not for Camera Raw at all.
+        begin_shell(&mut app, "a.NEF", true);
+        app.raw_workspace.end_shell();
+        assert!(!shell_active(&app));
+        // Outside the workspace there is no frame to show.
+        app.raw_workspace.enabled = false;
+        begin_shell(&mut app, "a.NEF", false);
+        assert!(!shell_active(&app) && app.raw_workspace.shell.is_none());
+        let _ = ctx;
+    }
+
+    #[test]
+    fn leaving_a_raw_keeps_the_frame_up_for_the_next_photo_but_not_for_long() {
+        let (mut app, _writes) = host_app(vec![("IMG.dng", synthetic_raw())]);
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+        open_in_camera_raw(&mut app, &ctx, spec(None));
+        assert!(!shell_active(&app), "the dialog itself is showing");
+        control(&mut app, &ctx, &json!({"done": true})).unwrap();
+        assert!(shell_active(&app), "no editor windows between one photo and the next");
+        // If the host does not open another photo, the frame does not stay.
+        let shell = app.raw_workspace.shell.as_mut().unwrap();
+        shell.since = shell.since.checked_sub(std::time::Duration::from_secs(3)).unwrap();
+        assert!(!shell_active(&app));
+        ctx.run_ui(egui::RawInput::default(), |ui| show_shell(&mut app, ui.ctx())).textures_delta.clear();
+        assert!(app.raw_workspace.shell.is_none());
+    }
+
+    #[test]
+    fn the_loading_frame_is_drawn_with_the_dialogs_own_geometry() {
+        let (mut app, ctx) = app_with_document();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+        app.raw_workspace.enabled = true;
+        let frame = |app: &mut PhotocraftApp, draw: &dyn Fn(&mut PhotocraftApp, &egui::Context)| {
+            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))), ..Default::default() };
+            ctx.run_ui(input, |ui| draw(app, ui.ctx())).textures_delta.clear();
+        };
+        begin_shell(&mut app, "IMG.dng", false);
+        frame(&mut app, &|app, ctx| show_shell(app, ctx));
+        assert!(shell_active(&app), "the frame draws without opening anything");
+        let promised = crate::control::viewport(&app, &ctx)["cameraRaw"]["view"].clone();
+        camera_raw_ui::open(&mut app, &ctx).unwrap();
+        frame(&mut app, &|app, ctx| camera_raw_ui::show(app, ctx));
+        let drawn = app.camera_raw.as_ref().unwrap().viewport.expect("the dialog laid out its view");
+        assert_eq!(drawn, camera_raw_ui::layout(ctx.content_rect(), false).view);
+        let reported = crate::control::viewport(&app, &ctx)["cameraRaw"]["view"].clone();
+        assert_eq!(promised, reported, "the picture a host laid over the frame does not move when the dialog takes over");
     }
 
     #[test]
@@ -670,6 +848,55 @@ mod tests {
         assert!(app.camera_raw.is_none(), "the saved document is the full editor's: Camera Raw must not open on it again");
     }
 
+    /// A raw big enough to be browsed reduced: its longer side is more than twice the browsing size.
+    fn big_raw() -> Vec<u8> {
+        use photocraft_raw::testgen::{DngSpec, mosaic, scene};
+        let (w, h) = (3700, 1900);
+        let mut spec = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 30000));
+        spec.as_shot_neutral = Some([0.5, 1.0, 0.7]);
+        spec.build()
+    }
+
+    #[test]
+    fn a_large_raw_is_browsed_as_a_stand_in_but_the_dialog_speaks_for_the_photo() {
+        let (mut app, _writes) = host_app(vec![("IMG.dng", big_raw())]);
+        let ctx = egui::Context::default();
+        open_in_camera_raw(&mut app, &ctx, spec(None));
+        let dialog = app.camera_raw.as_ref().expect("a dialog");
+        assert!(dialog.is_stand_in());
+        let described = dialog.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview);
+        assert_eq!(described["sourceSize"], json!([3700, 1900]), "the photo's size, not the stand-in's");
+        let size = app.session.active().unwrap().doc.size;
+        assert!(size.width < 3700 && size.width >= 1800, "the document is reduced: {}x{}", size.width, size.height);
+    }
+
+    #[test]
+    fn open_develops_a_stand_in_in_full_even_when_nothing_was_adjusted() {
+        let (mut app, _writes) = host_app(vec![("IMG.dng", big_raw())]);
+        let ctx = egui::Context::default();
+        open_in_camera_raw(&mut app, &ctx, spec(None));
+        let before = app.session.active().unwrap().doc.id;
+        control(&mut app, &ctx, &json!({"commit": true})).unwrap();
+        crate::jobs_ui::tick(&mut app, &ctx);
+        let after = app.session.active().expect("a document");
+        assert_ne!(before, after.doc.id, "the stand-in is replaced by the real photo");
+        assert_eq!((after.doc.size.width, after.doc.size.height), (3700, 1900));
+        assert_eq!(app.session.documents().len(), 1);
+        assert!(app.camera_raw.is_none());
+    }
+
+    #[test]
+    fn a_small_raw_is_browsed_as_itself_and_open_keeps_its_document() {
+        let (mut app, _writes) = host_app(vec![("IMG.dng", synthetic_raw())]);
+        let ctx = egui::Context::default();
+        open_in_camera_raw(&mut app, &ctx, spec(None));
+        assert!(!app.camera_raw.as_ref().unwrap().is_stand_in());
+        let before = app.session.active().unwrap().doc.id;
+        control(&mut app, &ctx, &json!({"commit": true})).unwrap();
+        crate::jobs_ui::tick(&mut app, &ctx);
+        assert_eq!(app.session.active().unwrap().doc.id, before, "nothing to redo: it was never reduced");
+    }
+
     #[test]
     fn open_develops_the_raw_and_the_new_document_is_left_to_the_full_editor() {
         let (mut app, _writes) = host_app(vec![("IMG.dng", synthetic_raw())]);
@@ -835,14 +1062,109 @@ mod tests {
     }
 
     #[test]
+    fn a_prepared_raw_comes_with_the_dialogs_proxy_so_opening_it_builds_none() {
+        let (mut app, _writes) = host_app(vec![("IMG.dng", synthetic_raw())]);
+        request_prefetch(&mut app, "IMG.dng", "10:1").unwrap();
+        wait_until("the prefetch", || ready_path(&app).is_some());
+        let prepared = take_prepared(&app.jobs.workspace_prefetch, "IMG.dng", Some("10:1")).expect("prepared");
+        let proxy = prepared.proxy.expect("the proxy was built on the prefetch thread");
+        let from_document = camera_raw_ui::proxy_for(&prepared.imported.document).expect("a proxy for the same document");
+        assert_eq!(format!("{proxy:?}"), format!("{from_document:?}"));
+    }
+
+    /// Two raws, as a host browsing a folder opens them one after the other.
+    fn two_photos() -> (PhotocraftApp, Writes, egui::Context) {
+        let (app, writes) = host_app(vec![("A.dng", synthetic_raw()), ("B.dng", synthetic_raw())]);
+        (app, writes, egui::Context::default())
+    }
+
+    fn open_photo(app: &mut PhotocraftApp, ctx: &egui::Context, path: &str) {
+        use photocraft_engine::jobs::Started;
+        let mut spec = spec(None);
+        spec.targets = Targets { recipe: Some(format!("{path}.cameraraw.json")), display: Some(format!("{path}.photocraft.display.jpg")) };
+        let started = crate::control_files::open_with_sensor(app, path, true, false, None, Some(spec)).unwrap();
+        let Started::Job(job) = started else { panic!("expected a background open") };
+        app.session.wait_job(job).unwrap();
+        crate::jobs_ui::tick(app, ctx);
+        let raw = app.pending_raw_open.take().expect("the raw's dialog is queued");
+        camera_raw_ui::open_raw(app, ctx, raw).unwrap();
+    }
+
+    fn dialog_name(app: &PhotocraftApp) -> String {
+        let d = app.camera_raw.as_ref().expect("a dialog is open");
+        d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)["openingRaw"]["name"].as_str().unwrap_or_default().to_string()
+    }
+
+    #[test]
+    fn the_dialog_stays_up_while_the_next_photo_takes_it_over() {
+        use photocraft_engine::jobs::Started;
+        let (mut app, writes, ctx) = two_photos();
+        open_photo(&mut app, &ctx, "A.dng");
+        assert_eq!(dialog_name(&app), "A.dng");
+        adjust(&mut app, &ctx, 1.5);
+
+        // The host asks for the next photo while the first one's dialog is up.
+        let mut spec = spec(None);
+        spec.targets = Targets { recipe: Some("B.dng.cameraraw.json".into()), display: None };
+        let started = crate::control_files::open_with_sensor(&mut app, "B.dng", true, false, None, Some(spec)).unwrap();
+        let Started::Job(job) = started else { panic!("expected a background open") };
+        let dialog = app.camera_raw.as_ref().expect("the dialog did not close");
+        assert!(dialog.busy(), "marked busy until the next photo takes over");
+        assert!(!shell_active(&app), "no loading frame: the dialog itself stays");
+        let reported = crate::control::viewport(&app, &ctx)["cameraRaw"].clone();
+        assert_eq!((reported["open"].as_bool(), reported["busy"].as_bool()), (Some(true), Some(true)), "{reported}");
+        let recipe = written(&writes, "A.dng.cameraraw.json").expect("what was adjusted on the first photo was kept as its recipe");
+        assert_eq!(raw_recipe::from_json(&serde_json::from_slice(&recipe).unwrap()).unwrap().exposure, 1.5);
+
+        app.session.wait_job(job).unwrap();
+    }
+
+    #[test]
+    fn the_next_photos_proxy_comes_from_the_job_and_replaces_the_dialog_in_one_step() {
+        use photocraft_engine::jobs::Started;
+        let (mut app, _writes, ctx) = two_photos();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+        open_photo(&mut app, &ctx, "A.dng");
+        let mut spec = spec(None);
+        spec.targets = Targets { recipe: Some("B.dng.cameraraw.json".into()), display: None };
+        let started = crate::control_files::open_with_sensor(&mut app, "B.dng", true, false, None, Some(spec)).unwrap();
+        let Started::Job(job) = started else { panic!("expected a background open") };
+        app.session.wait_job(job).unwrap();
+        crate::jobs_ui::tick(&mut app, &ctx);
+        assert_eq!(dialog_name(&app), "A.dng", "still the old photo's dialog until the frame swaps it");
+        assert!(app.pending_raw_open.as_ref().is_some_and(|raw| raw.proxy.is_some()), "queued, with the proxy the job built");
+        // The frame the app draws takes it over: the way the dialog really opens, not a call that bypasses it.
+        ctx.run_ui(egui::RawInput::default(), |ui| camera_raw_ui::show(&mut app, ui.ctx())).textures_delta.clear();
+        assert!(app.pending_raw_open.is_none());
+        assert_eq!(dialog_name(&app), "B.dng");
+        assert!(!app.camera_raw.as_ref().unwrap().busy(), "the new photo's dialog is ready");
+        assert_eq!(app.session.documents().len(), 1, "the photo left behind was closed");
+        assert_eq!(app.session.active().unwrap().doc.name, "B.dng");
+        assert_eq!(crate::control::viewport(&app, &ctx)["cameraRaw"]["busy"], false);
+    }
+
+    #[test]
+    fn a_dialog_that_is_not_the_open_time_one_is_settled_not_handed_over() {
+        let (mut app, _writes, ctx) = two_photos();
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        camera_raw_ui::open(&mut app, &ctx).unwrap();
+        assert!(camera_raw_ui::leave_in_place(&mut app).is_err());
+        assert!(app.camera_raw.as_ref().is_some_and(|d| !d.busy()), "a filter dialog is never marked busy");
+    }
+
+    #[test]
     fn a_raw_prepared_ahead_opens_without_reading_or_developing_again() {
         let (mut app, _writes) = host_app(vec![("IMG.dng", synthetic_raw())]);
         let reads = count_reads(&mut app);
         request_prefetch(&mut app, "IMG.dng", "10:1").unwrap();
         wait_until("the prefetch", || ready_path(&app).is_some());
         assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let ctx = egui::Context::default();
+        assert_eq!(control(&mut app, &ctx, &json!({})).unwrap()["prefetched"], "IMG.dng", "the host can see what is ready");
         let result = open_with(&mut app, "IMG.dng", Some("10:1"));
         assert_eq!(result["cameraRaw"]["dialog"], true, "{result}");
+        assert!(control(&mut app, &ctx, &json!({})).unwrap()["prefetched"].is_null(), "and that it was used");
         assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1, "the open used what was prepared");
         assert!(ready_path(&app).is_none(), "the slot is emptied by the open");
         assert_eq!(app.session.documents().len(), 1);
