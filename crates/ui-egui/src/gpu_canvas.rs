@@ -27,6 +27,8 @@
 
 use std::collections::HashMap;
 use std::num::NonZeroU64;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use eframe::egui_wgpu::{self, CallbackResources, CallbackTrait, RenderState, ScreenDescriptor};
 use eframe::wgpu;
@@ -110,7 +112,16 @@ pub struct GpuCanvas {
     tile: u32,
     high: HighPolicy,
     health: photocraft_gpu::DeviceHealth,
+    /// A compositor is being built on a worker thread (see [`GpuCanvas::warm_compositor`]).
+    warming: Arc<AtomicBool>,
+    /// A composite that finds no compositor starts building one on a worker thread and draws on the CPU meanwhile, instead of
+    /// building it on the spot (see [`GpuCanvas::set_background_build`]).
+    background_build: Arc<AtomicBool>,
 }
+
+/// Why [`GpuCanvas::composite`] stood aside while the compositor was being prepared: not a failure, the CPU compositor draws
+/// meanwhile and the next refresh may find the GPU one.
+pub const COMPOSITOR_WARMING: &str = "the GPU compositor is still being prepared";
 
 /// Can `adapter` use `Rgba16Float` as a sampled, filtered, render-target and copy texture?
 /// (Core WebGPU guarantees it; WebGL2 needs `EXT_color_buffer_float`, and some drivers lack it.)
@@ -144,7 +155,92 @@ impl GpuCanvas {
         res.separate_mip_targets = rs.adapter.get_info().backend == wgpu::Backend::Dx12;
         rs.renderer.write().callback_resources.insert(res);
         log::info!("gpu canvas: target {:?}, max texture {max}, tile {tile}, 16F canvas {high:?}", rs.target_format);
-        Self { rs: rs.clone(), tile, high, health }
+        Self { rs: rs.clone(), tile, high, health, warming: Arc::new(AtomicBool::new(false)), background_build: Arc::new(AtomicBool::new(false)) }
+    }
+
+    /// Builds the wgpu compositor on a worker thread, so the first document that wants it does not stop the UI while the
+    /// driver compiles its shaders (about 12 s on an Intel UHD 620 through D3D12: the UI thread sat in `D3DCompile`). Until it
+    /// is ready, [`GpuCanvas::composite`] answers [`COMPOSITOR_WARMING`] and the CPU compositor draws. Returns whether a build
+    /// was started (`false`: one already exists, failed, is on its way, or there are no threads or no GPU compositing here).
+    /// The compile competes with whatever else runs (it slowed browsing swaps by 10-15% on a laptop), so start it when
+    /// nothing latency-sensitive does, or let [`GpuCanvas::set_background_build`] start it at the first draw.
+    pub fn warm_compositor(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        {
+            false
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.fault().is_some() || std::env::var_os("PHOTOCRAFT_CPU_COMPOSE").is_some() {
+                return false;
+            }
+            {
+                let renderer = self.rs.renderer.read();
+                let Some(res) = renderer.callback_resources.get::<Resources>() else { return false };
+                if res.compositor.is_some() || res.compositor_failed.is_some() {
+                    return false;
+                }
+            }
+            self.spawn_compositor_build()
+        }
+    }
+
+    /// Whether a composite that finds no compositor builds one on a worker thread (answering [`COMPOSITOR_WARMING`], so the
+    /// CPU compositor draws meanwhile) rather than on the calling thread, where the driver's shader compile stops the UI for
+    /// seconds. Off by default; the Camera Raw workspace turns it on, since its first canvas draw (Open) comes at a moment
+    /// the user is waiting.
+    pub fn set_background_build(&self, on: bool) {
+        self.background_build.store(on, Ordering::Release);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn spawn_compositor_build(&self) -> bool {
+        if self.warming.swap(true, Ordering::AcqRel) {
+            return false;
+        }
+        let canvas = self.clone();
+        match std::thread::Builder::new().name("gpu-compositor-warmup".into()).spawn(move || canvas.build_compositor_off_thread()) {
+            Ok(_) => true,
+            Err(error) => {
+                log::warn!("could not start the GPU compositor warm-up: {error}");
+                self.warming.store(false, Ordering::Release);
+                false
+            }
+        }
+    }
+
+    /// Whether a compositor is being built by [`GpuCanvas::warm_compositor`].
+    pub fn compositor_warming(&self) -> bool {
+        self.warming.load(Ordering::Acquire)
+    }
+
+    /// Whether the wgpu compositor exists (built by a draw or by the warm-up).
+    pub fn compositor_ready(&self) -> bool {
+        let r = self.rs.renderer.read();
+        r.callback_resources.get::<Resources>().is_some_and(|res| res.compositor.is_some())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn build_compositor_off_thread(&self) {
+        let began = now_ms();
+        // No renderer lock while the driver compiles: the UI keeps drawing, and takes the result when it is done.
+        let built = photocraft_gpu::Compositor::try_new_with_format(&self.rs.device, photocraft_gpu::Compositor::preferred_acc_format(&self.rs.adapter));
+        {
+            let mut renderer = self.rs.renderer.write();
+            if let Some(res) = renderer.callback_resources.get_mut::<Resources>() {
+                match built {
+                    // A draw that built its own meanwhile, or a canvas released after a fault, keeps what it has.
+                    Ok(comp) if res.compositor.is_none() && res.compositor_failed.is_none() => res.compositor = Some(comp),
+                    Ok(_) => {}
+                    Err(e) => {
+                        log::warn!("{e}; using the CPU compositor");
+                        res.compositor_failed.get_or_insert(e);
+                    }
+                }
+            }
+        }
+        self.warming.store(false, Ordering::Release);
+        log::info!("gpu compositor ready after {:.0} ms (built off the UI thread)", now_ms() - began);
     }
 
     /// The device's health flag (shared with the wgpu compositor and the paint callback).
@@ -384,6 +480,13 @@ impl GpuCanvas {
         }
         let mut comp = match res.compositor.take() {
             Some(c) => c,
+            // Being built on a worker thread: not a failure, and not worth stopping the UI for.
+            None if self.warming.load(Ordering::Acquire) => return Err(photocraft_gpu::Unsupported(COMPOSITOR_WARMING.into())),
+            // Nothing built yet, and this thread is not to do it: a worker does, and the CPU draws until it is done.
+            #[cfg(not(target_arch = "wasm32"))]
+            None if self.background_build.load(Ordering::Acquire) && self.spawn_compositor_build() => {
+                return Err(photocraft_gpu::Unsupported(COMPOSITOR_WARMING.into()));
+            }
             None => match photocraft_gpu::Compositor::try_new_with_format(device, photocraft_gpu::Compositor::preferred_acc_format(&self.rs.adapter)) {
                 Ok(c) => c,
                 Err(e) => {

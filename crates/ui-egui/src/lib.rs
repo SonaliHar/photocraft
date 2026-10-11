@@ -838,6 +838,26 @@ impl PhotocraftApp {
         self.gpu.is_some()
     }
 
+    /// Starts building the GPU compositor on a worker thread (see [`gpu_canvas::GpuCanvas::warm_compositor`]); `false` when
+    /// there is nothing to start.
+    pub fn warm_gpu_compositor(&self) -> bool {
+        self.gpu.as_ref().is_some_and(gpu_canvas::GpuCanvas::warm_compositor)
+    }
+
+    /// Whether the first GPU composite builds the compositor on a worker thread (the CPU draws until it is ready) instead of on
+    /// the UI thread, where the driver's shader compile stops the window for seconds (see
+    /// [`gpu_canvas::GpuCanvas::set_background_build`]).
+    pub fn gpu_background_build(&self, on: bool) {
+        if let Some(gpu) = &self.gpu {
+            gpu.set_background_build(on);
+        }
+    }
+
+    /// Whether the GPU canvas has its compositor, or is building one.
+    pub fn gpu_compositor_state(&self) -> Option<(bool, bool)> {
+        self.gpu.as_ref().map(|g| (g.compositor_ready(), g.compositor_warming()))
+    }
+
     /// The GPU canvas's device health flag (tests inject faults through it).
     pub fn gpu_health(&self) -> Option<photocraft_gpu::DeviceHealth> {
         self.gpu.as_ref().map(|g| g.health().clone())
@@ -1631,6 +1651,7 @@ impl eframe::App for PhotocraftApp {
         // meanwhile), would be work nobody sees.
         // The dialog is queued or opened before the canvas is drawn, so the frame the document lands in is covered too.
         raw_workspace::auto_open(self, &ctx);
+        raw_workspace::gpu_builds_in_background(self);
         let covered = raw_workspace::canvas_covered(self);
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(backdrop)).show(ui, |ui| {
             if !covered {

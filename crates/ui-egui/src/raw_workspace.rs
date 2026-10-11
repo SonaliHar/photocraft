@@ -444,6 +444,19 @@ pub fn auto_open(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
+/// The first time the editor draws a document's canvas (Open does, at a moment the user is waiting) it needs the GPU compositor,
+/// whose shaders the driver compiles for about 12 s on an Intel UHD 620; built on the drawing thread, the whole window stops for
+/// that long. In the workspace the build runs on a worker thread instead and the canvas draws on the CPU until it is ready.
+///
+/// It starts then, not ahead of time while browsing: the compile takes a core and the driver's own threads, which slowed every
+/// photo swap that overlapped it (prepared 165 -> 189 ms, unprepared 1.72 -> 1.99 s on that laptop), and browsing must never wait
+/// for background work. Called every frame; cheap.
+pub fn gpu_builds_in_background(app: &mut PhotocraftApp) {
+    if app.raw_workspace.enabled {
+        app.gpu_background_build(true);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1228,6 +1241,17 @@ mod tests {
         app.raw_workspace.enabled = true;
         app.services.background_automation_read = None;
         assert!(request_prefetch(&mut app, "IMG.dng", "10:1").is_err());
+    }
+
+    #[test]
+    fn the_workspace_asks_the_gpu_canvas_to_build_in_the_background_only_when_it_is_on() {
+        // No GPU canvas in a unit test: the call must be harmless either way.
+        let (mut app, _ctx) = app_with_document();
+        app.raw_workspace.enabled = false;
+        gpu_builds_in_background(&mut app);
+        app.raw_workspace.enabled = true;
+        gpu_builds_in_background(&mut app);
+        assert!(!app.warm_gpu_compositor(), "without a GPU canvas there is nothing to build");
     }
 
     #[test]
