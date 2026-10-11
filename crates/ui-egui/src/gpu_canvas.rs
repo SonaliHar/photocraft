@@ -27,8 +27,8 @@
 
 use std::collections::HashMap;
 use std::num::NonZeroU64;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use eframe::egui_wgpu::{self, CallbackResources, CallbackTrait, RenderState, ScreenDescriptor};
 use eframe::wgpu;
@@ -114,10 +114,23 @@ pub struct GpuCanvas {
     health: photocraft_gpu::DeviceHealth,
     /// A compositor is being built on a worker thread (see [`GpuCanvas::warm_compositor`]).
     warming: Arc<AtomicBool>,
-    /// A composite that finds no compositor starts building one on a worker thread and draws on the CPU meanwhile, instead of
-    /// building it on the spot (see [`GpuCanvas::set_background_build`]).
-    background_build: Arc<AtomicBool>,
+    /// Work that would stop the calling thread for seconds runs on a worker thread instead (see
+    /// [`GpuCanvas::set_background_work`]).
+    background_work: Arc<AtomicBool>,
+    /// The full redraws running on worker threads, by document: each one's cancel flag.
+    refreshing: Arc<Mutex<std::collections::HashMap<u64, Arc<AtomicBool>>>>,
+    /// Background redraws take turns: a restarted one waits for the one it replaces to stop.
+    refresh_turn: Arc<Mutex<()>>,
+    /// Asks the UI to draw a frame (a background redraw has uploaded something).
+    wake: Arc<Mutex<Option<Wake>>>,
 }
+
+/// What a background redraw calls to have the UI draw a frame.
+type Wake = Arc<dyn Fn() + Send + Sync>;
+
+/// Documents of at least this many pixels redraw in the background when asked ([`GpuCanvas::refresh_in_background`]); a
+/// smaller one costs less than the hand-over.
+pub const BACKGROUND_REFRESH_MIN_PX: u64 = 2_000_000;
 
 /// Why [`GpuCanvas::composite`] stood aside while the compositor was being prepared: not a failure, the CPU compositor draws
 /// meanwhile and the next refresh may find the GPU one.
@@ -155,7 +168,17 @@ impl GpuCanvas {
         res.separate_mip_targets = rs.adapter.get_info().backend == wgpu::Backend::Dx12;
         rs.renderer.write().callback_resources.insert(res);
         log::info!("gpu canvas: target {:?}, max texture {max}, tile {tile}, 16F canvas {high:?}", rs.target_format);
-        Self { rs: rs.clone(), tile, high, health, warming: Arc::new(AtomicBool::new(false)), background_build: Arc::new(AtomicBool::new(false)) }
+        Self {
+            rs: rs.clone(),
+            tile,
+            high,
+            health,
+            warming: Arc::new(AtomicBool::new(false)),
+            background_work: Arc::default(),
+            refreshing: Arc::default(),
+            refresh_turn: Arc::default(),
+            wake: Arc::default(),
+        }
     }
 
     /// Builds the wgpu compositor on a worker thread, so the first document that wants it does not stop the UI while the
@@ -163,7 +186,7 @@ impl GpuCanvas {
     /// is ready, [`GpuCanvas::composite`] answers [`COMPOSITOR_WARMING`] and the CPU compositor draws. Returns whether a build
     /// was started (`false`: one already exists, failed, is on its way, or there are no threads or no GPU compositing here).
     /// The compile competes with whatever else runs (it slowed browsing swaps by 10-15% on a laptop), so start it when
-    /// nothing latency-sensitive does, or let [`GpuCanvas::set_background_build`] start it at the first draw.
+    /// nothing latency-sensitive does, or let [`GpuCanvas::set_background_work`] start it at the first draw.
     pub fn warm_compositor(&self) -> bool {
         #[cfg(target_arch = "wasm32")]
         {
@@ -185,12 +208,53 @@ impl GpuCanvas {
         }
     }
 
-    /// Whether a composite that finds no compositor builds one on a worker thread (answering [`COMPOSITOR_WARMING`], so the
-    /// CPU compositor draws meanwhile) rather than on the calling thread, where the driver's shader compile stops the UI for
-    /// seconds. Off by default; the Camera Raw workspace turns it on, since its first canvas draw (Open) comes at a moment
-    /// the user is waiting.
-    pub fn set_background_build(&self, on: bool) {
-        self.background_build.store(on, Ordering::Release);
+    /// Whether work that would stop the calling thread for seconds runs on a worker thread instead: a composite that finds no
+    /// compositor builds one there (answering [`COMPOSITOR_WARMING`], so the CPU compositor draws meanwhile; the driver's
+    /// shader compile takes ~12 s), and [`GpuCanvas::refresh_in_background`] redraws a large document there (the CPU path takes
+    /// ~2.4 s for 45 MP). Off by default; the Camera Raw workspace turns it on, since its first canvas draw (Open) comes at a
+    /// moment the user is waiting.
+    pub fn set_background_work(&self, on: bool) {
+        self.background_work.store(on, Ordering::Release);
+    }
+
+    /// What a background redraw calls after each band it has uploaded and when it ends (the UI should draw a frame).
+    pub fn set_wake(&self, wake: impl Fn() + Send + Sync + 'static) {
+        *self.wake.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(wake));
+    }
+
+    /// Whether [`GpuCanvas::set_wake`] was called.
+    pub fn has_wake(&self) -> bool {
+        self.wake.lock().unwrap_or_else(PoisonError::into_inner).is_some()
+    }
+
+    fn wake_ui(&self) {
+        let wake = self.wake.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        if let Some(wake) = wake {
+            wake();
+        }
+    }
+
+    /// Whether a redraw of the whole of `doc` is done on the CPU on this canvas (a large document on a GPU that shares the
+    /// CPU's memory: see [`prefers_cpu_full_refresh`]). An edit whose damage covers the whole document is then a full redraw:
+    /// as a damage rect it would be composited into one float buffer the size of the document (720 MB for 45 MP, ~10 s on an
+    /// Intel UHD 620, all on the calling thread) instead of in bands.
+    pub fn redraws_whole_document_on_cpu(&self, doc: &photocraft_doc::Document) -> bool {
+        let bounds = doc.bounds();
+        let px = u64::from(bounds.width()) * u64::from(bounds.height());
+        let forced = std::env::var("PHOTOCRAFT_FULL_REFRESH").ok();
+        prefers_cpu_full_refresh(self.rs.adapter.get_info().device_type, px, forced.as_deref())
+    }
+
+    /// Whether document `key` has a full redraw running on a worker thread.
+    pub fn background_refreshing(&self, key: u64) -> bool {
+        self.refreshing.lock().unwrap_or_else(PoisonError::into_inner).contains_key(&key)
+    }
+
+    /// Stops the background redraw of document `key`, if any (its worker leaves at the next band).
+    fn cancel_background_refresh(&self, key: u64) {
+        if let Some(cancel) = self.refreshing.lock().unwrap_or_else(PoisonError::into_inner).remove(&key) {
+            cancel.store(true, Ordering::Release);
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -484,7 +548,7 @@ impl GpuCanvas {
             None if self.warming.load(Ordering::Acquire) => return Err(photocraft_gpu::Unsupported(COMPOSITOR_WARMING.into())),
             // Nothing built yet, and this thread is not to do it: a worker does, and the CPU draws until it is done.
             #[cfg(not(target_arch = "wasm32"))]
-            None if self.background_build.load(Ordering::Acquire) && self.spawn_compositor_build() => {
+            None if self.background_work.load(Ordering::Acquire) && self.spawn_compositor_build() => {
                 return Err(photocraft_gpu::Unsupported(COMPOSITOR_WARMING.into()));
             }
             None => match photocraft_gpu::Compositor::try_new_with_format(device, photocraft_gpu::Compositor::preferred_acc_format(&self.rs.adapter)) {
@@ -611,6 +675,8 @@ impl GpuCanvas {
             // Nothing reaches the GPU any more; the app switches to the CPU canvas.
             return Refresh { kind: "lost", fallback: Some(f.to_string()), ..Default::default() };
         }
+        // This redraw is the newer one: a background redraw of the same document must not write over it.
+        self.cancel_background_refresh(key);
         let bounds = doc.bounds();
         let size = [doc.size.width, doc.size.height];
         let format = self.format_for(doc.depth, size);
@@ -675,6 +741,19 @@ impl GpuCanvas {
     /// band (each band converted and uploaded before the next is rendered), so a huge document
     /// never needs a full-size float composite or texture-format copy in memory.
     pub fn upload_composite(&self, key: u64, doc: &photocraft_doc::Document, display: Option<&photocraft_engine::display_color::CanvasDisplay>) {
+        self.upload_composite_until(key, doc, display, &|| false, &|| {});
+    }
+
+    /// [`GpuCanvas::upload_composite`] that stops, leaving the texture as it is, once `cancelled` says so (checked before each
+    /// band) or the document's texture is no longer the size it began with; `progress` is called after each band.
+    fn upload_composite_until(
+        &self,
+        key: u64,
+        doc: &photocraft_doc::Document,
+        display: Option<&photocraft_engine::display_color::CanvasDisplay>,
+        cancelled: &dyn Fn() -> bool,
+        progress: &dyn Fn(),
+    ) {
         let size = [doc.size.width, doc.size.height];
         if size[0] == 0 || size[1] == 0 || !self.health.is_ok() {
             return;
@@ -690,28 +769,120 @@ impl GpuCanvas {
             }
         }
         let mut rgba = Vec::new();
-        let _ = photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| -> Result<(), ()> {
-            if !self.health.is_ok() {
+        let rendered = photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| -> Result<(), ()> {
+            if !self.health.is_ok() || cancelled() {
                 return Err(());
             }
             texels_into(format, &texture_buffer(display, &band).px, &mut rgba);
             let renderer = self.rs.renderer.read();
             let d = renderer.callback_resources.get::<Resources>().and_then(|r| r.docs.get(&key)).ok_or(())?;
+            // A texture of another size or format took its place (the document changed shape): these bands are no use to it.
+            if d.size != size || d.format != format || cancelled() {
+                return Err(());
+            }
             d.write(queue, [0, band.rect.y0 as u32], [size[0], band.rect.height()], size[0], &rgba);
             drop(renderer);
             // Flush the staged band so its staging memory is reclaimed while the next renders.
             queue.submit(std::iter::empty::<wgpu::CommandBuffer>());
             self.health.poll(device);
+            progress();
             Ok(())
         });
-        if !self.health.is_ok() {
+        if rendered.is_err() || !self.health.is_ok() {
             return;
         }
         let mut renderer = self.rs.renderer.write();
         if let Some(res) = renderer.callback_resources.get_mut::<Resources>()
             && let Some(d) = res.docs.get(&key)
+            && d.size == size
         {
             d.regenerate_mips(device, queue, res, [0, 0, size[0], size[1]]);
+        }
+    }
+
+    /// The full redraw of `doc` ([`GpuCanvas::refresh`] with no damage), for a canvas that must not stop for it: with
+    /// [`GpuCanvas::set_background_work`] on and a document of at least [`BACKGROUND_REFRESH_MIN_PX`] pixels, what `refresh`
+    /// would do on the CPU runs on a worker thread, band by band, uploading each band as it is done (the canvas shows the
+    /// document filling in from the top, and [`GpuCanvas::set_wake`]'s callback asks for a frame per band). A later redraw of the
+    /// same document stops it and starts over. Returns what happened here, on the calling thread (the worker's time is not in
+    /// it), or `None` when `refresh` is the right call (background work is off, the document is small, it is not this
+    /// canvas's own).
+    pub fn refresh_in_background(
+        &self,
+        key: u64,
+        doc: &Arc<photocraft_doc::Document>,
+        display: Option<&Arc<photocraft_engine::display_color::CanvasDisplay>>,
+    ) -> Option<Refresh> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (key, doc, display);
+            None
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if !self.background_work.load(Ordering::Acquire) || key != doc.id.0 || self.fault().is_some() {
+                return None;
+            }
+            let bounds = doc.bounds();
+            let px = u64::from(bounds.width()) * u64::from(bounds.height());
+            if px < BACKGROUND_REFRESH_MIN_PX {
+                return None;
+            }
+            let t0 = now_ms();
+            // The older redraw must not write over this one, and a GPU composite below writes the same texture.
+            self.cancel_background_refresh(key);
+            let mut out = Refresh::default();
+            let forced = std::env::var("PHOTOCRAFT_FULL_REFRESH").ok();
+            let cpu_first = prefers_cpu_full_refresh(self.rs.adapter.get_info().device_type, px, forced.as_deref());
+            if !cpu_first {
+                match self.composite(doc, bounds, display.is_some_and(|d| d.encode_srgb)) {
+                    Ok(stats) => {
+                        out.kind = "gpu-full";
+                        out.px = px;
+                        out.composite_ms = now_ms() - t0;
+                        out.uploads = stats.tiles_uploaded as u64;
+                        return Some(out);
+                    }
+                    Err(e) => out.fallback = Some(e.0),
+                }
+            }
+            let size = [doc.size.width, doc.size.height];
+            let format = self.format_for(doc.depth, size);
+            {
+                let mut renderer = self.rs.renderer.write();
+                let res = renderer.callback_resources.get_mut::<Resources>()?;
+                if res.docs.get(&key).is_none_or(|d| d.size != size || d.format != format) {
+                    let tex = DocTextures::new(&self.rs.device, res, size, self.tile, format);
+                    res.docs.insert(key, tex);
+                }
+            }
+            let cancel = Arc::new(AtomicBool::new(false));
+            self.refreshing.lock().unwrap_or_else(PoisonError::into_inner).insert(key, cancel.clone());
+            let (canvas, doc, display) = (self.clone(), doc.clone(), display.cloned());
+            let worker = {
+                let cancel = cancel.clone();
+                move || {
+                    let _turn = canvas.refresh_turn.lock().unwrap_or_else(PoisonError::into_inner);
+                    if !cancel.load(Ordering::Acquire) {
+                        canvas.upload_composite_until(key, &doc, display.as_deref(), &|| cancel.load(Ordering::Acquire), &|| canvas.wake_ui());
+                    }
+                    let mut running = canvas.refreshing.lock().unwrap_or_else(PoisonError::into_inner);
+                    if running.get(&key).is_some_and(|c| Arc::ptr_eq(c, &cancel)) {
+                        running.remove(&key);
+                    }
+                    drop(running);
+                    canvas.wake_ui();
+                }
+            };
+            if let Err(error) = std::thread::Builder::new().name("gpu-canvas-refresh".into()).spawn(worker) {
+                log::warn!("could not start the background redraw: {error}; redrawing on this thread");
+                self.refreshing.lock().unwrap_or_else(PoisonError::into_inner).remove(&key);
+                return None;
+            }
+            out.kind = if cpu_first { "cpu-full" } else { "full" };
+            out.px = px;
+            out.composite_ms = now_ms() - t0;
+            Some(out)
         }
     }
 

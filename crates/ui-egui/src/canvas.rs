@@ -1335,9 +1335,13 @@ fn ensure_gpu(app: &mut PhotocraftApp, idx: usize, visible: DRect) -> bool {
         }
         return true;
     }
-    let partial = present && damage.is_some();
+    // A redraw of the whole document that is still running on a worker thread is replaced by a new one, not patched; and an
+    // edit that touched all of a large document is a full redraw too (see `redraws_whole_document_on_cpu`).
+    let whole = damage.is_some_and(|r| r.contains_rect(&doc.bounds())) && gpu.redraws_whole_document_on_cpu(&doc);
+    let partial = present && damage.is_some() && !whole && !gpu.background_refreshing(id.0);
     gpu_budget(app, &gpu, idx, partial, visible);
-    let r = gpu.refresh(id.0, &doc, if partial { damage } else { None }, display.as_deref());
+    let background = if partial { None } else { gpu.refresh_in_background(id.0, &doc, display.as_ref()) };
+    let r = background.unwrap_or_else(|| gpu.refresh(id.0, &doc, if partial { damage } else { None }, display.as_deref()));
     if r.kind == "lost" {
         // The device is gone: draw this frame on the CPU path; `gpu_status` drops the GPU canvas.
         return false;

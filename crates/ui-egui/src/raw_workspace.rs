@@ -444,16 +444,17 @@ pub fn auto_open(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
-/// The first time the editor draws a document's canvas (Open does, at a moment the user is waiting) it needs the GPU compositor,
-/// whose shaders the driver compiles for about 12 s on an Intel UHD 620; built on the drawing thread, the whole window stops for
-/// that long. In the workspace the build runs on a worker thread instead and the canvas draws on the CPU until it is ready.
+/// The first time the editor draws a document's canvas (Open does, at a moment the user is waiting) two things would stop the
+/// whole window on the drawing thread: the GPU compositor's shaders, which the driver compiles for about 12 s on an Intel
+/// UHD 620, and the CPU redraw of the full-size photo (~2.4 s for 45 MP). In the workspace both run on worker threads instead:
+/// the canvas draws on the CPU until the compositor is ready, and the photo fills in from the top as its bands are uploaded.
 ///
-/// It starts then, not ahead of time while browsing: the compile takes a core and the driver's own threads, which slowed every
+/// They start then, not ahead of time while browsing: the compile takes a core and the driver's own threads, which slowed every
 /// photo swap that overlapped it (prepared 165 -> 189 ms, unprepared 1.72 -> 1.99 s on that laptop), and browsing must never wait
 /// for background work. Called every frame; cheap.
-pub fn gpu_builds_in_background(app: &mut PhotocraftApp) {
+pub fn gpu_works_in_background(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.raw_workspace.enabled {
-        app.gpu_background_build(true);
+        app.gpu_background_work(ctx);
     }
 }
 
@@ -1244,13 +1245,13 @@ mod tests {
     }
 
     #[test]
-    fn the_workspace_asks_the_gpu_canvas_to_build_in_the_background_only_when_it_is_on() {
+    fn the_workspace_asks_the_gpu_canvas_to_work_in_the_background_only_when_it_is_on() {
         // No GPU canvas in a unit test: the call must be harmless either way.
-        let (mut app, _ctx) = app_with_document();
+        let (mut app, ctx) = app_with_document();
         app.raw_workspace.enabled = false;
-        gpu_builds_in_background(&mut app);
+        gpu_works_in_background(&mut app, &ctx);
         app.raw_workspace.enabled = true;
-        gpu_builds_in_background(&mut app);
+        gpu_works_in_background(&mut app, &ctx);
         assert!(!app.warm_gpu_compositor(), "without a GPU canvas there is nothing to build");
     }
 
