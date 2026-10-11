@@ -3142,3 +3142,21 @@ curves	Smooth	Glätten
 	Sent to {printer}	An {printer} gesendet
 	set in Print Settings…	in den Druckeinstellungen festlegen…
 	ICO is limited to 256 × 256 pixels	ICO ist auf 256 × 256 Pixel begrenzt
+	Duplicate	Duplizieren
+	Import…	Importieren…
+
+	Return to Original	Zum Original zurück
+
+	Current	Aktuell
+
+	Branch	Zweig
+
+	Retry storage	Speicher erneut versuchen
+
+	Unlimited history	Unbegrenzter Verlauf
+
+	Use available disk space	Verfügbaren Speicherplatz nutzen
+
+	Undo disk space grows only when needed. Unlimited history retains states until storage is full. Scratch paths apply to the next cache session.	Speicher für Rückgängig wächst nach Bedarf. Unbegrenzter Verlauf behält Zustände bis der Speicher voll ist. Pfade gelten für die nächste Cache-Sitzung.
+
+	Change opacity	Deckkraft ändern

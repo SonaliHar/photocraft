@@ -545,7 +545,7 @@ impl Session {
             doc.id = photocraft_doc::DocId::fresh();
         }
         let mut st = DocState::new(doc, path);
-        st.history.max_states = self.prefs.get().performance.history_states.max(1) as usize;
+        st.history.max_states = if self.prefs.get().performance.unlimited_history { 0 } else { self.prefs.get().performance.history_states.max(1) as usize };
         // Session-wide accounting replaces per-document trimming.
         st.history.max_bytes = 0;
         self.docs.push(st);
@@ -703,6 +703,7 @@ impl Session {
     }
 
     pub(crate) fn edit_with_cache<R>(&mut self, label: &str, poll: bool, f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>) -> Result<R> {
+        self.admit_history_edit()?;
         let restrict = self.color_restrict;
         let sampler_map = self.sampler_map.take();
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
@@ -882,6 +883,19 @@ impl Session {
         self.history_cache.dirty = true;
         self.poll_history_cache();
         Ok(true)
+    }
+
+    pub(crate) fn apply_history_destination(&mut self, id: u64, doc: Arc<Document>, branch: Option<u64>) -> Result<()> {
+        let st = self.active_mut().ok_or(EngineError::NoDocument)?;
+        st.history.jump_loaded_on_path(st.doc.clone(), id, doc.clone(), branch).map_err(EngineError::Other)?;
+        st.doc = doc;
+        st.coalesce = None;
+        restore_target(st, st.history.current_layers().clone());
+        st.revision = st.revision.saturating_add(1);
+        st.last_damage = None;
+        self.history_cache.dirty = true;
+        self.poll_history_cache();
+        Ok(())
     }
 }
 

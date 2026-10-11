@@ -319,16 +319,23 @@ fn start_next_recovery(app: &mut PhotocraftApp) {
                 let history = doc.history.map(photocraft_ops::History::from_checkpoint).transpose().map_err(photocraft_engine::EngineError::Other)?;
                 let context: RecoveryContext = serde_json::from_value(doc.context.clone()).unwrap_or_default();
                 s.add_document(doc.document, doc.path);
+                let state_limit = if s.prefs().performance.unlimited_history { 0 } else { s.prefs().performance.history_states.max(1) as usize };
                 let st = s.active_mut().ok_or(photocraft_engine::EngineError::NoDocument)?;
                 if let Some(mut history) = history {
                     history.remap_document_id(st.doc.id);
+                    // Restore every state first; current retention policy governs future edits.
+                    history.max_states = state_limit;
+                    history.max_bytes = 0;
                     st.history = history;
+                    st.history.max_states = state_limit;
+                    st.history.enforce_state_limit();
                 }
                 if doc.context.get("activeLayer").is_some() {
                     st.active_layer = context.active_layer.filter(|id| st.doc.layer(*id).is_some());
                     st.selected_layers = context.selected_layers.into_iter().filter(|id| st.doc.layer(*id).is_some()).collect();
                     st.layer_anchor = context.layer_anchor.filter(|id| st.doc.layer(*id).is_some());
                 }
+                let state_limit = if s.prefs().performance.unlimited_history { 0 } else { s.prefs().performance.history_states.max(1) as usize };
                 let st = s.active_mut().ok_or(photocraft_engine::EngineError::NoDocument)?;
                 st.saved_revision = 0;
                 let (id, revision) = (st.doc.id, st.revision);
@@ -1189,6 +1196,9 @@ fn humanize(key: &str) -> String {
         "darkTheme" => return "Dark Theme".into(),
         "lightTheme" => return "Light Theme".into(),
         _ => {}
+    if key == "useAvailableSpace" {
+        return "Use available disk space".into();
+    }
     }
     // These controls appear only for WebP, so reuse the existing translated labels.
     if key == "webpLossless" {
@@ -1666,11 +1676,15 @@ fn section_fields(
     }
     if section == "scratchDisks" {
         #[cfg(not(target_arch = "wasm32"))]
-        ui.label(tl!("Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session."));
+        ui.label(tl!(
+            "Undo disk space grows only when needed. Unlimited history retains states until storage is full. Scratch paths apply to the next cache session."
+        ));
         #[cfg(target_arch = "wasm32")]
         ui.label(tl!("This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app."));
     }
-    keys.retain(|k| field_visible(section, obj, k, &query));
+    keys.retain(|k| field_visible(section, obj, k, &query)
+        && !(section == "performance" && k == "historyStates" && obj.get("unlimitedHistory").and_then(Value::as_bool) == Some(true))
+        && !(section == "scratchDisks" && k == "budgetMb" && obj.get("useAvailableSpace").and_then(Value::as_bool) == Some(true)));
     egui::Grid::new(("prefs-grid", section)).num_columns(2).spacing([14.0, 7.0]).show(ui, |ui| field_rows(ui, section, obj, keys, lang));
 }
 
@@ -1683,6 +1697,8 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
         let human = match path.as_str() {
             "performance.memoryUsageMb" => "Memory budget (MiB)".to_string(),
             "scratchDisks.budgetMb" => "Undo disk budget (MiB)".to_string(),
+            "performance.unlimitedHistory" => "Unlimited history".to_string(),
+            "scratchDisks.useAvailableSpace" => "Use available disk space".to_string(),
             _ => humanize(&k),
         };
         let label = tl!(&human).to_string();
@@ -3647,5 +3663,41 @@ mod tests {
         crate::transform_tool::cancel(&mut app);
         let d = crate::menus::invoke(&mut app, &ctx, "edit.presets.presetManager", json!({})).unwrap()["dialog"].as_u64().unwrap();
         assert!(crate::dialogs::confirm(&mut app, d).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod unlimited_recovery_tests {
+    use super::*;
+    #[test]
+    fn recovered_legacy_limits_do_not_override_unlimited_session_retention() {
+        let mut source = photocraft_engine::Session::new();
+        source.execute("file.new", json!({"width":8,"height":8})).unwrap();
+        source.execute("edit.fill", json!({"color":"#FF0000"})).unwrap();
+        let active = source.active().unwrap();
+        let mut checkpoint = active.history.checkpoint();
+        checkpoint.max_states = 1;
+        checkpoint.max_bytes = 1;
+        let record =
+            crate::RecoveredDocument { key: "legacy".into(), path: None, document: (*active.doc).clone(), history: Some(checkpoint), context: json!({}) };
+        let mut record = Some(record);
+        let services = crate::Services {
+            recover: Some(Box::new(move || crate::RecoveryBatch { documents: record.take().into_iter().collect(), errors: Vec::new() })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        assert_eq!(app.session.active().unwrap().history.max_states, 0);
+        assert_eq!(app.session.active().unwrap().history.max_bytes, 0);
+        for name in ["Erase", "Move", "Opacity"] {
+            app.session
+                .edit(name, |doc, _| {
+                    doc.name = name.into();
+                    Ok(())
+                })
+                .unwrap();
+        }
+        let original = app.session.active().unwrap().history.state_by_id(app.session.active().unwrap().doc.clone(), 0).unwrap();
+        assert_eq!(original.identity.parent, None);
+        assert_eq!(app.session.active().unwrap().history.timeline().len(), 5);
     }
 }

@@ -3133,3 +3133,49 @@ curves	Smooth	Haluskan
 	Sent to {printer}	Dikirim ke {printer}
 	set in Print Settings…	diatur di Pengaturan Cetak…
 	ICO is limited to 256 × 256 pixels	ICO dibatasi hingga 256 × 256 piksel
+# Runtime and historical themes
+	Apply Theme	Terapkan Tema
+	Cancel Theme Preview	Batalkan Pratinjau Tema
+	Duplicate Theme	Duplikat Tema
+	Edit Theme Definition	Edit Definisi Tema
+	Export Theme…	Ekspor Tema…
+	Import Theme…	Impor Tema…
+	List Themes	Daftar Tema
+	Mac OS 9.1 Platinum Theme	Tema Mac OS 9.1 Platinum
+	Macintosh System 6 Theme	Tema Macintosh System 6
+	Preview Theme	Pratinjau Tema
+	Remove Theme	Hapus Tema
+	Reset Theme	Atur Ulang Tema
+	Select Theme	Pilih Tema
+	Theme Details	Detail Tema
+	Theme Manager…	Pengelola Tema…
+	Windows 98 SE Theme	Tema Windows 98 SE
+	Caption font	Font Judul
+	Copy JSON	Salin JSON
+	Draft: {name}	Draf: {name}
+	Edit the definition below. Duplicate a built-in theme before changing it.	Edit definisi di bawah. Duplikat tema bawaan sebelum mengubahnya.
+	Font {requested} is unavailable; using {actual}.	Font {requested} tidak tersedia; menggunakan {actual}.
+	Preview is active. Cancel restores your saved theme.	Pratinjau aktif. Batalkan untuk memulihkan tema tersimpan.
+	Reset Changes	Atur Ulang Perubahan
+	Saved theme	Tema tersimpan
+	Scroll down	Gulir ke bawah
+	Scroll left	Gulir ke kiri
+	Scroll right	Gulir ke kanan
+	Scroll up	Gulir ke atas
+	Theme Manager	Pengelola Tema
+	Theme definition exceeds 64 KiB	Definisi tema melebihi 64 KiB
+	Theme id	ID tema
+
+	Return to Original	Kembali ke asli
+
+	Branch	Cabang
+
+	Retry storage	Coba penyimpanan lagi
+
+	Unlimited history	Riwayat tanpa batas
+
+	Use available disk space	Gunakan ruang disk tersedia
+
+	Undo disk space grows only when needed. Unlimited history retains states until storage is full. Scratch paths apply to the next cache session.	Ruang pembatalan bertambah sesuai kebutuhan. Riwayat tanpa batas menyimpan keadaan hingga penyimpanan penuh. Jalur berlaku pada sesi cache berikutnya.
+
+	Change opacity	Ubah opasitas

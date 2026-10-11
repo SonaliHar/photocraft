@@ -449,8 +449,8 @@ fn build() -> Vec<CommandSpec> {
             Ok(Value::Null)
         }),
         // Edit
-        cmd!("edit.undo", "Undo", ["Edit"], Some("Cmd+Z"), "{}", can_undo, |s, _| Ok(json!(s.try_undo()?))),
-        cmd!("edit.redo", "Redo", ["Edit"], Some("Cmd+Shift+Z"), "{}", can_redo, |s, _| Ok(json!(s.try_redo()?))),
+        cmd!("edit.undo", "Undo", ["Edit"], Some("Cmd+Z"), "{}", can_undo, |s, _| crate::history_cmds::step(s, false)),
+        cmd!("edit.redo", "Redo", ["Edit"], Some("Cmd+Shift+Z"), "{}", can_redo, |s, _| crate::history_cmds::step(s, true)),
         cmd!(
             "edit.fill",
             "Fill…",
@@ -693,7 +693,15 @@ fn build() -> Vec<CommandSpec> {
                 let (opacity, fill) = (unit("opacity")?, unit("fill")?);
                 let only_visibility =
                     p.as_object().is_some_and(|o| o.contains_key("visible") && o.keys().all(|k| matches!(k.as_str(), "layer" | "visible" | "coalesce")));
-                let label = if only_visibility { "Layer Visibility" } else { "Layer Properties" };
+                let only_opacity =
+                    p.as_object().is_some_and(|o| o.contains_key("opacity") && o.keys().all(|k| matches!(k.as_str(), "layer" | "opacity" | "coalesce")));
+                let label = if only_visibility {
+                    "Layer Visibility"
+                } else if only_opacity {
+                    "Change opacity"
+                } else {
+                    "Layer Properties"
+                };
                 let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
                 // Clipping and channel changes reach the layers around it: recomposite everything.
                 let local = p.get("clipped").is_none() && p.get("channels").is_none();
@@ -1260,6 +1268,7 @@ fn build() -> Vec<CommandSpec> {
             journal: true,
         });
     }
+    v.extend(crate::history_cmds::specs());
     v.extend(crate::layer_style::specs());
     v.extend(crate::filters::specs());
     v.extend(crate::filters_ext::specs());

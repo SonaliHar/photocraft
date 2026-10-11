@@ -100,6 +100,7 @@ pub mod gpu_canvas;
 pub mod gpu_status;
 pub mod gradient_ui;
 pub mod guide_layout_ui;
+pub mod history_panel;
 pub mod hold_keys;
 pub mod i18n;
 mod icon_data;
@@ -631,6 +632,7 @@ pub struct PhotocraftApp {
     /// History snapshot thumbnails by (document, snapshot id): a snapshot never changes, so each
     /// is made once (`snapshot_thumb`, #2966).
     snapshot_thumbs: HashMap<(DocId, u64), egui::TextureHandle>,
+    history_previews: history_panel::HistoryPreviews,
     /// Snapshots whose live layer/mask keys were last used to prune thumbnail handles.
     thumb_documents: Vec<(DocId, std::sync::Weak<Document>)>,
     /// Content bounds cached per (key, revision): scanning a 36 MP layer every frame cost ~77 ms.
@@ -833,6 +835,7 @@ impl PhotocraftApp {
             last_frame_time: 0.0,
             thumbs: HashMap::new(),
             snapshot_thumbs: HashMap::new(),
+            history_previews: Default::default(),
             thumb_documents: Vec::new(),
             bounds_cache: HashMap::new(),
             proxy: None,
