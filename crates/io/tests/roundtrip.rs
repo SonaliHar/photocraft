@@ -115,8 +115,6 @@ fn text_shape_smart_raw_blocks_survive() {
     let mut smart = Layer::new(
         "Smart",
         LayerContent::Smart(SmartObject {
-            raw_development: None,
-            raw_decode_source: None,
             contents_id: SmartContentsId::fresh(),
             source: SmartSource::Linked { path: String::new() },
             transform: photocraft_geom::Affine::IDENTITY,

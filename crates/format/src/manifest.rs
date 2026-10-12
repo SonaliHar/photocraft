@@ -293,10 +293,6 @@ pub enum ContentM {
         live: Option<LiveShape>,
     },
     Smart {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        raw_development: Option<photocraft_doc::RawDevelopment>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        raw_decode_source: Option<SmartSourceM>,
         /// Shared source identity; older bundles did not record it.
         #[serde(default)]
         contents_id: Option<u64>,

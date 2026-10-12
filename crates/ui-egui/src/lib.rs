@@ -157,7 +157,6 @@ pub mod proxy;
 pub mod puppet_ui;
 pub mod quick_pick;
 pub mod rasterize_prompt;
-mod raw_develop_ui;
 pub mod raw_recipe;
 pub mod raw_workspace;
 pub mod retouch_ui;
@@ -635,7 +634,6 @@ pub struct PhotocraftApp {
     pub(crate) gradient: gradient_ui::LiveGradient,
     /// Filter › Camera Raw Filter dialog (camera_raw_ui).
     pub(crate) camera_raw: Option<camera_raw_ui::CameraRawDialog>,
-    pub(crate) raw_development: Option<raw_develop_ui::Dialog>,
     /// A raw file just opened interactively, waiting for the open-time Camera Raw dialog (shown
     /// on the next frame, which has the egui context).
     pub(crate) pending_raw_open: Option<camera_raw_ui::RawOpen>,
@@ -810,7 +808,6 @@ impl PhotocraftApp {
             distort: Default::default(),
             gradient: Default::default(),
             camera_raw: None,
-            raw_development: None,
             pending_raw_open: None,
             raw_workspace: raw_workspace::State::default(),
             raw_redevelop: None,
@@ -967,9 +964,6 @@ impl PhotocraftApp {
             && let Some(authorize) = self.services.automation_command.as_ref()
         {
             authorize(id, &params)?;
-        }
-        if id == "layer.smartObjects.editContents" && raw_develop_ui::is_raw(self, &params) {
-            return raw_develop_ui::open(self, &params);
         }
         if let Some(result) = panel_docking::command(self, id, &params) {
             return result;
@@ -1777,7 +1771,6 @@ impl eframe::App for PhotocraftApp {
         distort_ui::show(self, &ctx);
         camera_raw_ui::show(self, &ctx);
         raw_workspace::show_shell(self, &ctx);
-        raw_develop_ui::show(self, &ctx);
         wide_angle_ui::show(self, &ctx);
         canvas::extra_windows(self, &ctx);
         notices::show(self, &ctx);

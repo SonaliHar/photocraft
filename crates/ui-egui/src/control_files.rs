@@ -17,32 +17,12 @@ pub fn open(app: &mut PhotocraftApp, path: &str) -> Result<Started, String> {
 
 #[cfg(test)]
 pub fn open_with_mode(app: &mut PhotocraftApp, path: &str, replace: bool) -> Result<Started, String> {
-    open_with_options(app, path, replace, false)
+    open_with_camera_raw(app, path, replace, None)
 }
 
-#[cfg(test)]
-pub fn open_with_options(app: &mut PhotocraftApp, path: &str, replace: bool, raw_smart: bool) -> Result<Started, String> {
-    open_with_sensor(app, path, replace, raw_smart, None, None)
-}
-
-pub fn open_with_sensor(
-    app: &mut PhotocraftApp,
-    path: &str,
-    replace: bool,
-    raw_smart: bool,
-    sensor_path: Option<&str>,
-    camera_raw: Option<crate::raw_workspace::OpenSpec>,
-) -> Result<Started, String> {
-    if sensor_path.is_some() && !raw_smart {
-        return Err("rawSensorPath requires rawSmartObject".into());
-    }
-    if camera_raw.is_some() && (raw_smart || sensor_path.is_some() || !app.raw_workspace.enabled) {
-        return Err("cameraRaw needs the Camera Raw workspace and cannot be combined with rawSmartObject".into());
-    }
-    let sensor_path = sensor_path.map(str::to_string);
-    crate::raw_develop_ui::settle(app);
-    if app.raw_development.is_some() {
-        return Err("Commit or cancel RAW Development before opening another document".into());
+pub fn open_with_camera_raw(app: &mut PhotocraftApp, path: &str, replace: bool, camera_raw: Option<crate::raw_workspace::OpenSpec>) -> Result<Started, String> {
+    if camera_raw.is_some() && !app.raw_workspace.enabled {
+        return Err("cameraRaw needs the Camera Raw workspace".into());
     }
     // Camera Raw workspace: the photo being left keeps what was adjusted, then the next one opens. When Camera Raw is
     // showing a raw and the next photo is one too, the dialog stays up and the next photo takes it over, so the window
@@ -97,12 +77,9 @@ pub fn open_with_sensor(
                     return Ok((ready.name, ready.imported, Some(ready.bytes), ready.proxy, ready.full_size));
                 }
                 let (name, bytes) = read(&path).map_err(EngineError::Other)?;
-                let sensor = sensor_path.as_ref().map(|path| read(path).map_err(EngineError::Other)).transpose()?;
                 let camera_raw_import = wants_dialog && photocraft_io::raw::is_raw(&bytes);
                 let mut full_size = None;
-                let imported = if raw_smart {
-                    photocraft_io::raw_smart::import_with_sensor(&name, &bytes, sensor.as_ref().map(|(name, bytes)| (name.as_str(), bytes.as_slice())))
-                } else if camera_raw_import {
+                let imported = if camera_raw_import {
                     // Browsing in Camera Raw: reduced in size when the file allows, so the photo is ready after little more than
                     // reading it (see `develop_for_browsing`).
                     crate::raw_workspace::develop_for_browsing(&name, &bytes).map(|(imported, size)| {
@@ -130,9 +107,9 @@ pub fn open_with_sensor(
                 if wants_dialog {
                     result["cameraRaw"] = json!({"dialog": dialog});
                 }
-                if workspace && (wants_dialog || raw_smart) {
-                    // The host decided how this file opens: Camera Raw's dialog, or its own route. Either way the
-                    // automatic Camera Raw must leave the document alone (see `queue_dialog`).
+                if workspace && wants_dialog {
+                    // The host decided how this file opens. A file that could not be developed from its sensor data gets no
+                    // dialog, and the automatic Camera Raw must leave the document alone (see `queue_dialog`).
                     let (bytes, spec, proxy, full_size) =
                         if dialog { (kept, camera_raw.unwrap_or_default(), proxy, full_size) } else { (None, Default::default(), None, None) };
                     *pending_raw.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
@@ -164,10 +141,6 @@ pub fn stash(app: &mut PhotocraftApp, path: &str, preview: &str) -> Result<Start
 /// ready, so a quick return to the photo can use it long before the project and full render land.
 /// It is a convenience: a failure to make or write it never fails the save.
 pub fn stash_with_display(app: &mut PhotocraftApp, path: &str, preview: &str, display: Option<&str>) -> Result<Started, String> {
-    crate::raw_develop_ui::settle(app);
-    if app.raw_development.is_some() {
-        return Err("Commit or cancel RAW Development before saving".into());
-    }
     crate::raw_workspace::settle(app)?;
     if !path.to_ascii_lowercase().ends_with(".pcraft") || !preview.to_ascii_lowercase().ends_with(".png") {
         return Err("stash requires a .pcraft project and a .png preview".into());

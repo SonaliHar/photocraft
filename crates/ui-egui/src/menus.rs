@@ -240,9 +240,6 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
     if let Some(r) = crate::distort_ui::menu(app, ctx, id, &params) {
         return r;
     }
-    if id == "layer.smartObjects.editContents" && crate::raw_develop_ui::is_raw(app, &params) {
-        return crate::raw_develop_ui::open(app, &params);
-    }
     // Camera Raw Filter dialog (and its control params).
     if let Some(r) = crate::camera_raw_ui::menu(app, ctx, id, &params) {
         return r;

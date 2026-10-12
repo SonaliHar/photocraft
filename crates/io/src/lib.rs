@@ -53,7 +53,6 @@ mod psd_export;
 mod psd_import;
 pub mod psd_thumbnail;
 pub mod raw;
-pub mod raw_smart;
 pub mod slices_map;
 pub mod smart_map;
 pub mod svg;

@@ -380,16 +380,7 @@ fn place(name: &str, bytes: &[u8], fmt: PixelFormat, sm: &SmartObject) -> Result
         Some(mode) => stack_image(name, bytes, fmt, mode)?,
         None => source_image(name, bytes, fmt)?,
     };
-    place_image(&img, sm)
-}
-
-/// A RAW-developed source (see [`crate::raw_develop_cmds`]) placed in document pixels, before any smart filter.
-fn place_developed(doc: &Document, name: &str, bytes: &[u8], settings: &photocraft_doc::RawDevelopment, sm: &SmartObject) -> Result<Surface> {
-    place_image(&crate::raw_develop_cmds::source_image(doc, name, bytes, settings)?, sm)
-}
-
-/// `img` through the warp (source space) and the transform in one pass; whole-pixel moves are exact.
-fn place_image(img: &SourceImage, sm: &SmartObject) -> Result<Surface> {
+    // Through the warp (source space) and the transform in one pass; whole-pixel moves are exact.
     Ok(match &sm.perspective {
         Some(p) => photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &Homography(*p), sm.warp.as_ref())?,
         None => photocraft_algo::warp::place_source(&img.surface, img.bounds, &sm.transform, sm.warp.as_ref())?,
@@ -406,32 +397,14 @@ pub fn render(doc: &Document, sm: &SmartObject) -> Result<Option<Surface>> {
 /// is cancelled. Gives the same pixels as [`apply_smart_filters`] on the placed source, but
 /// starts from the deepest stage of the stack already rendered (see [`stack_cache`]).
 fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Result<Option<Surface>> {
-    // A RAW-developed object is developed from its sensor data, which must be embedded.
-    let source = if sm.raw_development.is_some() { sm.raw_decode_source.as_ref().unwrap_or(&sm.source) } else { &sm.source };
-    if sm.raw_development.is_some() && !matches!(source, SmartSource::Embedded { .. }) {
-        return Err(other("RAW sensor data must be embedded"));
-    }
-    let Some((name, bytes)) = source_bytes(&doc.metadata, source) else { return Ok(None) };
+    let Some((name, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return Ok(None) };
     let (fmt, canvas) = (doc.pixel_format(), doc.bounds());
-    // What the development depends on besides the bytes: its settings and the colour profile it is converted to.
-    let development = match &sm.raw_development {
-        Some(settings) => {
-            let mut h = blake3::Hasher::new();
-            h.update(&serde_json::to_vec(settings).map_err(|e| other(e.to_string()))?);
-            h.update(&crate::color_cmds::composite_profile(doc).to_bytes());
-            Some(*h.finalize().as_bytes())
-        }
-        None => None,
-    };
-    let placed_key = stack_cache::placed_key(&bytes, fmt, sm, canvas, development);
+    let placed_key = stack_cache::placed_key(&bytes, fmt, sm, canvas);
     let placed = || -> Result<Stage> {
         if let Some(stage) = stack_cache::get(&placed_key) {
             return Ok(stage);
         }
-        let surface = match &sm.raw_development {
-            Some(settings) => place_developed(doc, &name, &bytes, settings, sm)?,
-            None => place(&name, &bytes, fmt, sm)?,
-        };
+        let surface = place(&name, &bytes, fmt, sm)?;
         // Edge pixels repeat at the canvas ∪ placed-content edge, as for layer filters.
         let stage = Stage { extent: canvas.union(&surface.content_bounds()), surface };
         stack_cache::put(placed_key, &stage);
@@ -842,26 +815,8 @@ fn set_source(s: &mut Session, p: &Value, label: &str, keep_psd: bool, make: imp
 fn set_shared_source(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, new: SmartSource) -> Result<Value> {
     let (parent, contents_id) = s.edit(label, |doc, _| {
         let contents_id = smart(doc, id)?.contents_id;
-        let shared = instances(doc, contents_id);
-        // RAW development needs the camera data inside the document: check every instance before changing any.
-        for &instance in &shared {
-            if smart(doc, instance)?.raw_development.is_some() && matches!(new, SmartSource::Linked { .. }) {
-                return Err(other("RAW development requires embedded camera data; linked RAW replacement is not supported"));
-            }
-        }
-        let new_bytes = source_bytes(&doc.metadata, &new);
-        let is_raw = new_bytes.as_ref().is_some_and(|(_, bytes)| photocraft_io::raw::is_raw(bytes));
-        for instance in shared {
-            let old = smart(doc, instance)?;
-            let unchanged = source_bytes(&doc.metadata, &old.source).zip(new_bytes.as_ref()).is_some_and(|((_, a), (_, b))| a.as_slice() == b.as_slice());
-            let sm = smart_mut(doc, instance)?;
-            sm.source = new.clone();
-            if !unchanged {
-                sm.raw_decode_source = None;
-                if !is_raw {
-                    sm.raw_development = None;
-                }
-            }
+        for instance in instances(doc, contents_id) {
+            smart_mut(doc, instance)?.source = new.clone();
             if !keep_psd {
                 detach_psd(doc.layer_mut(instance).ok_or(EngineError::NoLayer(instance))?);
             }
@@ -904,9 +859,6 @@ fn export_contents(s: &mut Session, p: &Value) -> Result<Value> {
 fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    if smart(&st.doc, id)?.raw_development.is_some() {
-        return Err(other("RAW contents use RAW Development; they cannot be replaced with a decoded child document"));
-    }
     let parent = st.doc.id;
     let contents_id = smart(&st.doc, id)?.contents_id;
     // Already open for editing: switch to that document rather than opening another copy.

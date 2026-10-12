@@ -933,7 +933,7 @@ pub(crate) fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
                 // The photo already has a full-editor document: go back to it, untouched.
                 app.camera_raw = None;
                 app.raw_workspace.expect_continue = true;
-                return match crate::control_files::open_with_sensor(app, &project, true, false, None, None)? {
+                return match crate::control_files::open_with_camera_raw(app, &project, true, None)? {
                     photocraft_engine::jobs::Started::Job(job) => Ok(json!({"job": job.0, "pending": true, "continued": project})),
                     photocraft_engine::jobs::Started::Done(done) => Ok(done),
                 };

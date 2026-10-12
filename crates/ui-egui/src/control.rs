@@ -325,22 +325,11 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
 
 fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
-    if req.method == "app.open" {
-        if p.get("rawSmartObject").is_some_and(|v| !v.is_boolean()) {
-            return err("rawSmartObject must be a boolean");
-        }
-        if p.get("rawSensorPath").is_some_and(|v| v.as_str().is_none_or(str::is_empty)) {
-            return err("rawSensorPath must be a nonempty scoped path");
-        }
-    }
     let s = |k: &str| p.get(k).and_then(Value::as_str);
     let u = |k: &str| p.get(k).and_then(Value::as_u64);
     let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(true);
     match req.method.as_str() {
-        "app.handoff" => ok(
-            json!({"version": 2, "replace": true, "hiddenStart": true, "rawSmartObject": 1, "rawSensorAdapter": 1, "cameraRaw": 1, "cameraRawPrefetch": 1, "cameraRawSwitch": 1}),
-        ),
-        "ui.rawDevelopment" => run_waiting(app, wait, |app| crate::raw_develop_ui::control(app, p)),
+        "app.handoff" => ok(json!({"version": 2, "replace": true, "hiddenStart": true, "cameraRaw": 1, "cameraRawPrefetch": 1, "cameraRawSwitch": 1})),
         "ui.cameraRaw" => run_waiting(app, wait, |app| crate::raw_workspace::control(app, ctx, p)),
         "app.prefetch" => match (s("path"), s("signature")) {
             (Some(path), Some(signature)) => wrap(crate::raw_workspace::request_prefetch(app, path, signature)),
@@ -1149,23 +1138,13 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     Ok(spec) => spec,
                     Err(error) => return err(error),
                 };
-                match crate::control_files::open_with_sensor(
-                    app,
-                    path,
-                    req.params.get("replace").and_then(Value::as_bool).unwrap_or(false),
-                    req.params.get("rawSmartObject").and_then(Value::as_bool).unwrap_or(false),
-                    req.params.get("rawSensorPath").and_then(Value::as_str),
-                    camera_raw,
-                ) {
+                match crate::control_files::open_with_camera_raw(app, path, req.params.get("replace").and_then(Value::as_bool).unwrap_or(false), camera_raw) {
                     Ok(photocraft_engine::jobs::Started::Job(job)) => Outcome::AfterJob(job),
                     Ok(photocraft_engine::jobs::Started::Done(result)) => ok(result),
                     Err(error) => err(error),
                 }
             }
             Some(path) => {
-                if p.get("rawSmartObject").and_then(Value::as_bool) == Some(true) || p.get("rawSensorPath").is_some() {
-                    return err("RAW smart-object import requires scoped background read authority");
-                }
                 // Directory .pcraft (the native on-disk form) loads through a capability-scoped
                 // source; the single-file (zip) form falls back to the bytes path, as do all
                 // other formats.

@@ -525,35 +525,11 @@ geometry persist in preferences `dialogs["filter.cameraRaw.scope"]`; probes and 
 visibility reset when the dialog opens. HDR scopes are not implemented. See
 [camera-raw-histogram.md](camera-raw-histogram.md).
 
-### Image Triage RAW source development (fork integration)
+### Image Triage host capabilities (fork integration)
 
-`app.handoff` advertises `rawSmartObject: 1`, `rawSensorAdapter: 1`, `cameraRaw: 1` (the Camera Raw workspace's raw handling below) and `cameraRawPrefetch: 1` (`app.prefetch`).
-`app.open {path, replace?, rawSmartObject: true, rawSensorPath?: path}` imports
-sensor RAW as a smart object with embedded original bytes and versioned settings.
-Both paths use the existing scoped background read capability. An adapter must
-contain a CFA sensor DNG, never developed RGB. Unsupported sensor input is an error;
-the host must not silently fall back to a camera JPEG or TIFF. The optional
-adapter is embedded separately; the original remains Export Contents.
-
-`layer.rawDevelopment.inspect {layer?}` reports settings and `sensorBacked`.
-`layer.rawDevelopment.set {layer?, settings}` develops the sensor on an engine
-worker and commits one undo step. Settings are `{version:1, exposure:-10..10,
-whiteBalance:{mode:"asShot"|"auto"|"multipliers", rgb:[r,g,b]?},
-demosaic:"ahd"|"mhc"|"bilinear"}`. Multipliers are finite 0.01–100.
-Development occurs before placement, warp, smart filters and composition.
-
-Edit Contents on a RAW-backed object opens RAW Development rather than the
-generic child-document path. `ui.rawDevelopment {open?,layer?,settings?,commit?,cancel?}`
-opens the embedded source without ambient filesystem access, drives its draft,
-and reports preview readiness and `applying`. Combined settings and commit apply
-the supplied settings. Generic automated Edit Contents retains its filesystem
-authorization policy; the host uses this scoped RAW action instead.
-Commit waits for its engine job
-through normal control waiters; failure retains the draft. The host commits before
-switching/closing and skips periodic stash while a draft is open. `app.stash`
-rejects unresolved drafts. Native projects retain source, adapter and settings;
-PSD export warns that development settings require `.pcraft`. The existing
-pixel Camera Raw Filter remains a separate downstream operation.
+`app.handoff` advertises `cameraRaw: 1` (the Camera Raw workspace's raw handling), `cameraRawPrefetch: 1`
+(`app.prefetch`) and `cameraRawSwitch: 1` (the dialog stays up between photos). A raw the decoder cannot develop
+from its sensor data opens as its embedded preview, with no Camera Raw dialog.
 
 ### Editing and composing actions
 

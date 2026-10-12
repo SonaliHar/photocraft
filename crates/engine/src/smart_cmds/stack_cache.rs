@@ -33,14 +33,10 @@ const ENTRIES: usize = 64;
 pub const BUDGET: usize = 768 << 20;
 
 /// The first stage: what placing `bytes` (the source contents) through the smart object's
-/// transform, warp or perspective gives at pixel format `fmt` on `canvas`. `development` is a digest of what a
-/// RAW-developed source also depends on (its settings and the colour profile it is converted to).
-pub(super) fn placed_key(bytes: &[u8], fmt: PixelFormat, sm: &SmartObject, canvas: Rect, development: Option<[u8; 32]>) -> StageKey {
+/// transform, warp or perspective gives at pixel format `fmt` on `canvas`.
+pub(super) fn placed_key(bytes: &[u8], fmt: PixelFormat, sm: &SmartObject, canvas: Rect) -> StageKey {
     let mut h = blake3::Hasher::new();
     h.update(bytes);
-    if let Some(development) = development {
-        h.update(&development);
-    }
     for v in sm.transform.m {
         h.update(&v.to_bits().to_le_bytes());
     }

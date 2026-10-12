@@ -332,8 +332,6 @@ impl Ctx<'_> {
                 _ => None,
             };
             LayerContent::Smart(SmartObject {
-                raw_development: None,
-                raw_decode_source: None,
                 contents_id,
                 source: SmartSource::Linked { path: id },
                 transform,

@@ -154,11 +154,6 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             live: s.live.clone(),
         },
         LayerContent::Smart(s) => ContentM::Smart {
-            raw_development: s.raw_development.clone(),
-            raw_decode_source: s.raw_decode_source.as_ref().map(|source| match source {
-                SmartSource::Embedded { file_name, bytes } => SmartSourceM::Embedded { file_name: file_name.clone(), blob: sink.blob(bytes) },
-                SmartSource::Linked { path } => SmartSourceM::Linked { path: path.clone() },
-            }),
             contents_id: Some(s.contents_id.0),
             source: match &s.source {
                 SmartSource::Embedded { file_name, bytes } => SmartSourceM::Embedded { file_name: file_name.clone(), blob: sink.blob(bytes) },
@@ -478,34 +473,9 @@ impl Loader<'_> {
                 cache: self.opt_surface(cache)?,
                 psd_raw: self.opt_blob(psd_raw)?,
             }),
-            ContentM::Smart {
-                contents_id,
-                source,
-                transform,
-                smart_filters,
-                cache,
-                psd_raw,
-                filters_enabled,
-                filter_mask,
-                warp,
-                stack_mode,
-                perspective,
-                raw_development,
-                raw_decode_source,
-            } => {
-                if let Some(settings) = raw_development {
-                    settings.validate().map_err(FormatError::corrupt)?;
-                }
+            ContentM::Smart { contents_id, source, transform, smart_filters, cache, psd_raw, filters_enabled, filter_mask, warp, stack_mode, perspective } => {
                 LayerContent::Smart(SmartObject {
                     contents_id: self.contents_id(*contents_id, source),
-                    raw_development: raw_development.clone(),
-                    raw_decode_source: match raw_decode_source {
-                        Some(SmartSourceM::Embedded { file_name, blob }) => {
-                            Some(SmartSource::Embedded { file_name: file_name.clone(), bytes: self.fetch.blob(blob)? })
-                        }
-                        Some(SmartSourceM::Linked { .. }) => return Err(FormatError::corrupt("RAW decode source must be embedded")),
-                        None => None,
-                    },
                     source: match source {
                         SmartSourceM::Embedded { file_name, blob } => SmartSource::Embedded { file_name: file_name.clone(), bytes: self.fetch.blob(blob)? },
                         SmartSourceM::Linked { path } => SmartSource::Linked { path: path.clone() },

@@ -422,7 +422,7 @@ fn settle_any(app: &mut PhotocraftApp) -> Result<(), String> {
 /// every frame before the dialog is drawn; does nothing unless a document is ready and nothing else
 /// holds the dialog.
 pub fn auto_open(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    if !app.raw_workspace.enabled || app.camera_raw.is_some() || app.pending_raw_open.is_some() || app.raw_development.is_some() {
+    if !app.raw_workspace.enabled || app.camera_raw.is_some() || app.pending_raw_open.is_some() {
         return;
     }
     let Some(state) = app.session.active() else {
@@ -577,7 +577,7 @@ mod tests {
         let (mut app, _writes) = host_app(vec![("IMG.dng", synthetic_raw())]);
         let ctx = egui::Context::default();
         assert!(!shell_active(&app));
-        let started = crate::control_files::open_with_sensor(&mut app, "IMG.dng", true, false, None, Some(spec(None))).unwrap();
+        let started = crate::control_files::open_with_camera_raw(&mut app, "IMG.dng", true, Some(spec(None))).unwrap();
         let Started::Job(job) = started else { panic!("expected a background open") };
         assert!(shell_active(&app), "up as soon as the host asks for the photo");
         assert!(canvas_covered(&app));
@@ -749,7 +749,7 @@ mod tests {
     /// Opens the raw as a host would, lets the app notice it landed, and shows the queued dialog.
     fn open_in_camera_raw(app: &mut PhotocraftApp, ctx: &egui::Context, spec: OpenSpec) -> serde_json::Value {
         use photocraft_engine::jobs::Started;
-        let started = crate::control_files::open_with_sensor(app, "IMG.dng", true, false, None, Some(spec)).unwrap();
+        let started = crate::control_files::open_with_camera_raw(app, "IMG.dng", true, Some(spec)).unwrap();
         let Started::Job(job) = started else { panic!("expected a background open") };
         let result = app.session.wait_job(job).unwrap();
         crate::jobs_ui::tick(app, ctx);
@@ -950,7 +950,7 @@ mod tests {
         let project = photocraft_io::export(&doc, "x.pcraft", &Default::default()).unwrap().bytes;
         let (mut app, _writes) = host_app(vec![("x.pcraft", project)]);
         let ctx = egui::Context::default();
-        let started = crate::control_files::open_with_sensor(&mut app, "x.pcraft", true, false, None, Some(spec(None))).unwrap();
+        let started = crate::control_files::open_with_camera_raw(&mut app, "x.pcraft", true, Some(spec(None))).unwrap();
         let photocraft_engine::jobs::Started::Job(job) = started else { panic!("expected a job") };
         let result = app.session.wait_job(job).unwrap();
         crate::jobs_ui::tick(&mut app, &ctx);
@@ -958,19 +958,6 @@ mod tests {
         assert!(app.pending_raw_open.is_none());
         auto_open(&mut app, &ctx);
         assert!(app.camera_raw.is_none(), "a file the host takes its own route for gets no automatic Camera Raw");
-    }
-
-    #[test]
-    fn the_retained_raw_route_gets_no_automatic_camera_raw() {
-        let (mut app, _writes) = host_app(vec![("IMG.dng", synthetic_raw())]);
-        let ctx = egui::Context::default();
-        let started = crate::control_files::open_with_sensor(&mut app, "IMG.dng", true, true, None, None).unwrap();
-        let photocraft_engine::jobs::Started::Job(job) = started else { panic!("expected a job") };
-        app.session.wait_job(job).unwrap();
-        crate::jobs_ui::tick(&mut app, &ctx);
-        auto_open(&mut app, &ctx);
-        assert!(app.camera_raw.is_none() && app.pending_raw_open.is_none());
-        assert_eq!(app.session.documents().len(), 1);
     }
 
     #[test]
@@ -996,9 +983,8 @@ mod tests {
     fn camera_raw_needs_the_workspace() {
         let (mut app, _writes) = host_app(vec![("IMG.dng", synthetic_raw())]);
         app.raw_workspace.enabled = false;
-        assert!(crate::control_files::open_with_sensor(&mut app, "IMG.dng", true, false, None, Some(spec(None))).is_err());
+        assert!(crate::control_files::open_with_camera_raw(&mut app, "IMG.dng", true, Some(spec(None))).is_err());
         app.raw_workspace.enabled = true;
-        assert!(crate::control_files::open_with_sensor(&mut app, "IMG.dng", true, true, None, Some(spec(None))).is_err(), "not with a smart-object import");
     }
 
     #[test]
@@ -1073,7 +1059,7 @@ mod tests {
     fn open_with(app: &mut PhotocraftApp, path: &str, signature: Option<&str>) -> serde_json::Value {
         let mut spec = spec(None);
         spec.signature = signature.map(str::to_string);
-        let started = crate::control_files::open_with_sensor(app, path, true, false, None, Some(spec)).unwrap();
+        let started = crate::control_files::open_with_camera_raw(app, path, true, Some(spec)).unwrap();
         let photocraft_engine::jobs::Started::Job(job) = started else { panic!("expected a job") };
         app.session.wait_job(job).unwrap()
     }
@@ -1099,7 +1085,7 @@ mod tests {
         use photocraft_engine::jobs::Started;
         let mut spec = spec(None);
         spec.targets = Targets { recipe: Some(format!("{path}.cameraraw.json")), display: Some(format!("{path}.photocraft.display.jpg")) };
-        let started = crate::control_files::open_with_sensor(app, path, true, false, None, Some(spec)).unwrap();
+        let started = crate::control_files::open_with_camera_raw(app, path, true, Some(spec)).unwrap();
         let Started::Job(job) = started else { panic!("expected a background open") };
         app.session.wait_job(job).unwrap();
         crate::jobs_ui::tick(app, ctx);
@@ -1123,7 +1109,7 @@ mod tests {
         // The host asks for the next photo while the first one's dialog is up.
         let mut spec = spec(None);
         spec.targets = Targets { recipe: Some("B.dng.cameraraw.json".into()), display: None };
-        let started = crate::control_files::open_with_sensor(&mut app, "B.dng", true, false, None, Some(spec)).unwrap();
+        let started = crate::control_files::open_with_camera_raw(&mut app, "B.dng", true, Some(spec)).unwrap();
         let Started::Job(job) = started else { panic!("expected a background open") };
         let dialog = app.camera_raw.as_ref().expect("the dialog did not close");
         assert!(dialog.busy(), "marked busy until the next photo takes over");
@@ -1144,7 +1130,7 @@ mod tests {
         open_photo(&mut app, &ctx, "A.dng");
         let mut spec = spec(None);
         spec.targets = Targets { recipe: Some("B.dng.cameraraw.json".into()), display: None };
-        let started = crate::control_files::open_with_sensor(&mut app, "B.dng", true, false, None, Some(spec)).unwrap();
+        let started = crate::control_files::open_with_camera_raw(&mut app, "B.dng", true, Some(spec)).unwrap();
         let Started::Job(job) = started else { panic!("expected a background open") };
         app.session.wait_job(job).unwrap();
         crate::jobs_ui::tick(&mut app, &ctx);

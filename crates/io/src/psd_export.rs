@@ -662,10 +662,6 @@ impl Ex {
     /// otherwise the blocks are regenerated (from the imported descriptor where the source is
     /// the same). Without a source that can be embedded the layer is written as pixels.
     fn smart_blocks(&mut self, l: &Layer, sm: &photocraft_doc::SmartObject, template: Option<crate::smart_map::Placed>, raw: &mut Vec<([u8; 4], Vec<u8>)>) {
-        if sm.raw_development.is_some() {
-            self.warnings
-                .push(format!("layer \"{}\": RAW source is embedded, but development settings require .pcraft and are not mapped to Photoshop", l.name));
-        }
         use crate::smart_map::{FilterStack, PlacedSpec, filter_fx, plld_bytes, sold_bytes, uuid_from};
         let src = match self.smart_source(sm, template.as_ref()) {
             Ok(s) => s,
