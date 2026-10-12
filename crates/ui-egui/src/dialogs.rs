@@ -302,7 +302,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                             crate::file_ui::ok_label(&d.fields).unwrap_or(tl!("OK"))
                         };
                         // Dialogs that need an input first (a preset name, a selection) grey OK out.
-                        let can_ok = crate::crop_presets::can_confirm(app, &fields);
+                        let can_ok = crate::crop_presets::can_confirm(app, &fields) && crate::genai_ui::can_confirm(app, &fields);
                         let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0).enabled(can_ok);
                         // Photoshop: holding Alt turns Cancel into Reset (the dialog stays open).
                         let reset = ui.input(|i| i.modifiers.alt) && crate::adjust_dialog::resets(&fields);

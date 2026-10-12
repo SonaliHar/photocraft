@@ -36,6 +36,8 @@ pub struct Runtime {
     /// Variation thumbnails for the Properties panel, by variation layer: (pixels fingerprint,
     /// texture).
     thumbs: std::collections::HashMap<LayerId, (u64, egui::TextureHandle)>,
+    /// The provider last chosen in the prompt dialog, this session.
+    last_provider: Option<String>,
 }
 
 /// What Generative AI Settings keeps in `prefs.dialogs[PREF]`.
@@ -219,6 +221,15 @@ fn open_prompt(app: &mut PhotocraftApp) -> u64 {
     f.insert(PROMPT_MARK.into(), json!(true));
     f.insert("__label".into(), json!("Generative Fill"));
     f.insert("prompt".into(), json!(last));
+    let ids = app.session.image_provider_ids();
+    let chosen = app
+        .genai
+        .last_provider
+        .clone()
+        .filter(|p| ids.contains(p))
+        .or_else(|| app.session.image_provider().map(|p| p.info().id.to_owned()))
+        .unwrap_or_default();
+    f.insert("provider".into(), json!(chosen));
     app.ui.open_dialog(DialogKind::Command, f)
 }
 
@@ -255,7 +266,23 @@ fn prompt_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
         f.insert("prompt".into(), json!(prompt));
     }
     ui.add_space(6.0);
-    if let Some(info) = app.session.image_provider().map(|p| p.info()) {
+    let ids = app.session.image_provider_ids();
+    let mut chosen = f.get("provider").and_then(Value::as_str).unwrap_or("").to_owned();
+    if ids.len() > 1 {
+        let opts: Vec<(String, &str)> = ids.iter().map(|id| (id.clone(), provider_name(id))).collect();
+        ui.horizontal(|ui| {
+            ui.label(tl!("Provider"));
+            if crate::widgets::dropdown(ui, "genai-fill-provider", &mut chosen, &opts, 260.0) {
+                f.insert("provider".into(), json!(chosen));
+            }
+        });
+        ui.add_space(6.0);
+    }
+    if let Some(p) = app.session.image_provider_by_id(&chosen).or_else(|| app.session.image_provider()) {
+        let info = p.info();
+        if p.needs_prompt() && prompt.trim().is_empty() {
+            faint(ui, &crate::i18n::fmt(tl!("{provider} needs a prompt."), &[("provider", info.name)]));
+        }
         faint(
             ui,
             &crate::i18n::fmt(
@@ -403,11 +430,29 @@ fn confirm_provider(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<V
     Ok(json!({"provider": spec.id, "model": model, "ready": app.session.image_provider_by_id(spec.id).is_some()}))
 }
 
-/// OK in the prompt dialog: remember the prompt and run the fill.
+/// Whether OK is available: the prompt dialog needs a prompt for providers without a promptless
+/// mode. Other dialogs are unaffected.
+pub fn can_confirm(app: &PhotocraftApp, fields: &Map<String, Value>) -> bool {
+    if !fields.contains_key(PROMPT_MARK) {
+        return true;
+    }
+    let prompt = fields.get("prompt").and_then(Value::as_str).unwrap_or("");
+    let chosen = fields.get("provider").and_then(Value::as_str).unwrap_or("");
+    let provider = app.session.image_provider_by_id(chosen).or_else(|| app.session.image_provider());
+    !(provider.is_some_and(|p| p.needs_prompt()) && prompt.trim().is_empty())
+}
+
+/// OK in the prompt dialog: remember the prompt and the provider, and run the fill.
 fn confirm_prompt(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     let prompt = f.get("prompt").and_then(Value::as_str).unwrap_or("").trim().to_owned();
     app.session.prefs.edit(|p| p.dialogs.insert(FILL.into(), json!({"prompt": prompt})));
-    app.run(FILL, json!({"prompt": prompt}))
+    let chosen = f.get("provider").and_then(Value::as_str).filter(|id| app.session.image_provider_by_id(id).is_some()).map(str::to_owned);
+    let mut params = json!({"prompt": prompt});
+    if let Some(id) = &chosen {
+        params["provider"] = json!(id);
+    }
+    app.genai.last_provider = chosen;
+    app.run(FILL, params)
 }
 
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
@@ -461,9 +506,14 @@ pub fn prefs_rows(app: &PhotocraftApp, ui: &mut egui::Ui) -> bool {
         return false;
     }
     ui.label(egui::RichText::new(tl!("Generative AI")).font(crate::theme::semibold(12.5)).color(t.text));
+    let count = app.session.image_provider_ids().len();
     let status = match app.session.image_provider().map(|p| p.info()) {
+        Some(info) if count > 1 => crate::i18n::fmt(
+            tl!("Generative Fill uses {name} ({model}) by default; {count} providers are set up."),
+            &[("name", info.name), ("model", &info.model), ("count", &count.to_string())],
+        ),
         Some(info) => crate::i18n::fmt(tl!("Generative Fill uses {name} ({model})."), &[("name", info.name), ("model", &info.model)]),
-        None => tl!("Off. Set up a provider with your own API key to use Generative Fill.").to_string(),
+        None => tl!("Off. Set up a provider with your own credentials to use Generative Fill.").to_string(),
     };
     faint(ui, &status);
     ui.add_space(4.0);

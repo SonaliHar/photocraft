@@ -307,3 +307,21 @@ fn removing_the_only_provider_deletes_its_credentials_and_turns_fill_off() {
     assert_eq!(parse_saved(app.session.prefs().dialogs.get(PREF)), Saved::default());
     assert!(!fill_in_menu(&app));
 }
+
+#[test]
+fn the_prompt_dialog_passes_the_chosen_provider_and_remembers_it() {
+    let store = Store::default();
+    let (mut app, restored) = configured(&store, &["gemini"]);
+    restored.unwrap();
+    let id = open_prompt(&mut app);
+    let mut f = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+    assert_eq!(f["provider"], "gemini", "starts on the default");
+    f.insert("prompt".into(), json!("a lighthouse"));
+    confirm(&mut app, &f).unwrap();
+    assert_eq!(app.genai.last_provider.as_deref(), Some("gemini"));
+    f.insert("prompt".into(), json!(""));
+    assert!(can_confirm(&app, &f), "Gemini continues the image without a prompt");
+    let mut other = Map::new();
+    other.insert("x".into(), json!(1));
+    assert!(can_confirm(&app, &other), "other dialogs are not affected");
+}
