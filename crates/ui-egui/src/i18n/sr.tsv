@@ -4281,3 +4281,7 @@ shape	Appearance	Izgled
 	This document's layers: {needed} of {budget} for layers	Slojevi ovog dokumenta: {needed} od {budget} za slojeve
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Slojevima ovog dokumenta treba {needed}, a smeju da zauzmu {budget}: ceo dokument se ponovo iscrtava na CPU-u
 	GPU Memory (MB, 0 = Automatic)	GPU memorija (MB, 0 = Automatski)
+# Interface › ⌘H Hides PhotoCraft (macOS)
+	⌘H Hides PhotoCraft	⌘H sakriva PhotoCraft
+	View › Extras uses ⌃⌘H.	Prikaz › Dodatni elementi koristi ⌃⌘H.
+	Hide PhotoCraft uses ⌃⌘H.	Sakrij PhotoCraft koristi ⌃⌘H.

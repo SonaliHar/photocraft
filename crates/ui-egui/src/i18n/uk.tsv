@@ -3907,3 +3907,6 @@ curves	Smooth	Згладити
 	This document's layers: {needed} of {budget} for layers	Шари цього документа: {needed} з {budget} для шарів
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Шарам цього документа потрібно {needed}, але займати вони можуть {budget}: увесь документ перемальовується на CPU
 	GPU Memory (MB, 0 = Automatic)	Пам'ять GPU (МБ, 0 = автоматично)
+	⌘H Hides PhotoCraft	⌘H приховує PhotoCraft
+	View › Extras uses ⌃⌘H.	Перегляд › Допоміжні елементи — ⌃⌘H.
+	Hide PhotoCraft uses ⌃⌘H.	Приховати PhotoCraft — ⌃⌘H.
