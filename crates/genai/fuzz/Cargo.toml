@@ -21,3 +21,10 @@ path = "fuzz_targets/openai.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "stability"
+path = "fuzz_targets/stability.rs"
+test = false
+doc = false
+bench = false
