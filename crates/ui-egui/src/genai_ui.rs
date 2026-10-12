@@ -63,7 +63,7 @@ pub fn restore(app: &mut PhotocraftApp) -> Result<(), String> {
         app.session.set_image_provider(None);
         return Err(crate::i18n::fmt(tl!("No API key is saved for {provider}."), &[("provider", &provider)]));
     };
-    let built = (services.provider)(&provider, &model, key)?;
+    let built = (services.provider)(&provider, &model, photocraft_genai::Credentials::api_key(key))?;
     app.session.set_image_provider(Some(built));
     Ok(())
 }
@@ -259,7 +259,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         let services = app.services.genai.as_ref().ok_or_else(|| tl!("Generative AI needs the desktop app.").to_string())?;
         if let Some(key) = photocraft_genai::ApiKey::new(&typed) {
             // Check the provider builds (model id) before the key is stored.
-            (services.provider)(&provider, &model, key.clone())?;
+            (services.provider)(&provider, &model, photocraft_genai::Credentials::api_key(key.clone()))?;
             (services.save_key)(&provider, key.expose())?;
         }
     }

@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use photocraft_engine::Session;
-use photocraft_genai::{ApiKey, Capabilities, EditRequest, GeneratedImage, ImageProvider, ProviderInfo};
+use photocraft_genai::{Capabilities, EditRequest, GeneratedImage, ImageProvider, ProviderInfo};
 
 use egui_kittest::kittest::Queryable;
 
@@ -48,8 +48,8 @@ fn services(store: &Store) -> GenAiServices {
             c.borrow_mut().remove(p);
             Ok(())
         }),
-        provider: Box::new(|_, model, key: ApiKey| {
-            assert_eq!(key.expose(), SECRET);
+        provider: Box::new(|_, model, creds: photocraft_genai::Credentials| {
+            assert_eq!(creds.require(photocraft_genai::API_KEY).unwrap().expose(), SECRET);
             Ok(Arc::new(Fake { model: model.into() }))
         }),
         key_store_name: "the test store",

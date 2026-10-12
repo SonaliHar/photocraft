@@ -27,6 +27,23 @@ pub const MODELS: &[(&str, &str)] = &[
 ];
 pub const DEFAULT_MODEL: &str = "gemini-nano-banana-2.1";
 
+fn build(model: &str, creds: crate::Credentials, http: std::sync::Arc<dyn HttpTransport>) -> Result<std::sync::Arc<dyn ImageProvider>> {
+    let key = creds.require(crate::API_KEY)?.clone();
+    Ok(std::sync::Arc::new(GeminiProvider::new(key, model, http)?))
+}
+
+pub const SPEC: crate::ProviderSpec = crate::ProviderSpec {
+    id: ID,
+    name: NAME,
+    host: HOST,
+    result_hosts: &[],
+    models: MODELS,
+    fields: &[crate::API_KEY_FIELD],
+    key_page: "https://aistudio.google.com/apikey",
+    note: "Results carry Google's SynthID watermark.",
+    build,
+};
+
 /// Output aspect ratios the image models accept.
 const RATIOS: &[(u32, u32)] = &[(1, 1), (3, 2), (2, 3), (3, 4), (4, 3), (4, 5), (5, 4), (9, 16), (16, 9), (21, 9)];
 

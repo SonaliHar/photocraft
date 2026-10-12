@@ -6,7 +6,7 @@ use std::io::Read as _;
 use std::sync::Arc;
 use std::time::Duration;
 
-use photocraft_genai::{ApiKey, GenError, HttpRequest, HttpResponse, HttpTransport, Method};
+use photocraft_genai::{Credentials, GenError, HttpRequest, HttpResponse, HttpTransport, Method};
 use photocraft_ui_egui::GenAiServices;
 
 /// The credential store's service name; the account is the provider id (`gemini`).
@@ -69,14 +69,9 @@ impl HttpTransport for Https {
     }
 }
 
-fn build(provider: &str, model: &str, key: ApiKey) -> Result<photocraft_engine::genai_cmds::SharedProvider, String> {
-    match provider {
-        photocraft_genai::gemini::ID => {
-            let p = photocraft_genai::gemini::GeminiProvider::new(key, model, Https::new()).map_err(|e| e.to_string())?;
-            Ok(Arc::new(p))
-        }
-        other => Err(format!("unknown generative AI provider `{other}`")),
-    }
+fn build(provider: &str, model: &str, creds: Credentials) -> Result<photocraft_engine::genai_cmds::SharedProvider, String> {
+    let spec = photocraft_genai::spec(provider).ok_or_else(|| format!("unknown generative AI provider `{provider}`"))?;
+    (spec.build)(model, creds, Arc::new(Https::new())).map_err(|e| e.to_string())
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -144,14 +139,15 @@ pub fn services() -> GenAiServices {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use photocraft_genai::ApiKey;
 
     #[test]
-    fn builds_gemini_and_rejects_unknown_providers_and_models() {
-        let key = || ApiKey::new("k").unwrap();
-        let p = build("gemini", "", key()).unwrap();
+    fn builds_registered_providers_and_rejects_unknown_ones() {
+        let creds = || photocraft_genai::Credentials::api_key(ApiKey::new("k").unwrap());
+        let p = build("gemini", "", creds()).unwrap();
         assert_eq!(p.info().model, photocraft_genai::gemini::DEFAULT_MODEL);
-        assert!(build("gemini", "../etc", key()).is_err());
-        assert!(build("other", "", key()).is_err());
+        assert!(build("gemini", "../etc", creds()).is_err());
+        assert!(build("other", "", creds()).is_err());
     }
 
     /// Developer harness for tuning Generative Fill against the real service: runs one fill with
@@ -178,8 +174,10 @@ mod tests {
             // Free: answer with results saved from an earlier run, to tune what happens after.
             Some(files) => Arc::new(Replay { results: files.split(',').map(|f| std::fs::read(f.trim()).unwrap()).collect(), next: Default::default() }),
             None => {
-                let key = store::load(photocraft_genai::gemini::ID).unwrap().expect("no Gemini key saved in Generative AI Settings");
-                build("gemini", &var("PHOTOCRAFT_LIVE_MODEL").unwrap_or_default(), ApiKey::new(&key).unwrap()).unwrap()
+                let id = var("PHOTOCRAFT_LIVE_PROVIDER").unwrap_or_else(|| photocraft_genai::gemini::ID.into());
+                let secret = store::load(&id).unwrap().unwrap_or_else(|| panic!("no credentials saved for {id} in Generative AI Settings"));
+                let creds = photocraft_genai::Credentials::from_secret(&secret).expect("unreadable saved credentials");
+                build(&id, &var("PHOTOCRAFT_LIVE_MODEL").unwrap_or_default(), creds).unwrap()
             }
         };
 

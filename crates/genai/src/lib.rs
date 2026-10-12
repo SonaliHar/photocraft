@@ -17,6 +17,8 @@
 mod credentials;
 pub mod gemini;
 pub use credentials::*;
+mod registry;
+pub use registry::*;
 pub mod fetch;
 pub mod mask;
 pub mod multipart;
