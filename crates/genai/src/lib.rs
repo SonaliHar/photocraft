@@ -70,25 +70,78 @@ impl std::fmt::Debug for ApiKey {
     }
 }
 
-/// One HTTPS POST. Header values may hold a credential, so a transport must not log them.
+/// HTTP method of a provider request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Method {
+    Get,
+    Post,
+    Put,
+}
+
+/// One HTTPS request. Header values may hold a credential, so a transport must not log them (and
+/// this type deliberately has no `Debug`).
+#[derive(Clone)]
 pub struct HttpRequest {
+    pub method: Method,
     pub url: String,
     pub headers: Vec<(&'static str, String)>,
     pub body: Vec<u8>,
 }
 
-/// Any HTTP status comes back as a response (the provider reads the service's error body);
-/// only a failure to talk to the server at all is an `Err`.
+impl HttpRequest {
+    pub fn new(method: Method, url: impl Into<String>) -> Self {
+        Self { method, url: url.into(), headers: Vec::new(), body: Vec::new() }
+    }
+    pub fn get(url: impl Into<String>) -> Self {
+        Self::new(Method::Get, url)
+    }
+    pub fn post(url: impl Into<String>, body: Vec<u8>) -> Self {
+        Self { body, ..Self::new(Method::Post, url) }
+    }
+    pub fn put(url: impl Into<String>) -> Self {
+        Self::new(Method::Put, url)
+    }
+    pub fn header(mut self, name: &'static str, value: impl Into<String>) -> Self {
+        self.headers.push((name, value.into()));
+        self
+    }
+    /// Sets a JSON body and its content type.
+    pub fn json(self, body: &serde_json::Value) -> Self {
+        let mut r = self.header("content-type", "application/json");
+        r.body = body.to_string().into_bytes();
+        r
+    }
+}
+
+/// Any HTTP status comes back as a response (the provider reads the service's error body); only a
+/// failure to talk to the server at all is an `Err`. Header names are lower-case.
 pub struct HttpResponse {
     pub status: u16,
+    pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+}
+
+impl HttpResponse {
+    /// A response header by name, ignoring case.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
+    }
+    pub fn is_success(&self) -> bool {
+        (200..300).contains(&self.status)
+    }
 }
 
 /// The network seam. The desktop app implements it over HTTPS; tests use a fake; the web build
 /// has none, so generative commands are simply unavailable there.
 pub trait HttpTransport: Send + Sync {
     /// Blocking: called from an engine background job, never the UI thread.
-    fn post(&self, request: HttpRequest) -> Result<HttpResponse>;
+    fn send(&self, request: HttpRequest) -> Result<HttpResponse>;
+}
+
+impl<T: HttpTransport + ?Sized> HttpTransport for std::sync::Arc<T> {
+    fn send(&self, request: HttpRequest) -> Result<HttpResponse> {
+        (**self).send(request)
+    }
 }
 
 /// What a provider can do; the UI and the engine's `enabled` checks read it.
@@ -229,6 +282,39 @@ pub fn png_size(bytes: &[u8]) -> Option<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn requests_build_with_method_headers_and_json() {
+        let r = HttpRequest::post("https://h.example/x", Vec::new()).header("x-key", "v").json(&serde_json::json!({"a": 1}));
+        assert_eq!(r.method, Method::Post);
+        assert_eq!(r.url, "https://h.example/x");
+        assert!(r.headers.contains(&("x-key", "v".to_owned())));
+        assert!(r.headers.contains(&("content-type", "application/json".to_owned())));
+        assert_eq!(r.body, br#"{"a":1}"#);
+        assert_eq!(HttpRequest::get("https://h.example/").method, Method::Get);
+        assert_eq!(HttpRequest::put("https://h.example/").method, Method::Put);
+    }
+
+    #[test]
+    fn response_headers_are_case_insensitive() {
+        let r = HttpResponse { status: 429, headers: vec![("Retry-After".into(), "7".into())], body: Vec::new() };
+        assert_eq!(r.header("retry-after"), Some("7"));
+        assert_eq!(r.header("x-missing"), None);
+        assert!(!r.is_success());
+        assert!(HttpResponse { status: 204, headers: Vec::new(), body: Vec::new() }.is_success());
+    }
+
+    #[test]
+    fn an_arc_of_a_transport_is_a_transport() {
+        struct Echo;
+        impl HttpTransport for Echo {
+            fn send(&self, r: HttpRequest) -> Result<HttpResponse> {
+                Ok(HttpResponse { status: 200, headers: Vec::new(), body: r.url.into_bytes() })
+            }
+        }
+        let shared: std::sync::Arc<dyn HttpTransport> = std::sync::Arc::new(Echo);
+        assert_eq!(shared.send(HttpRequest::get("https://a/")).unwrap().body, b"https://a/");
+    }
 
     #[test]
     fn api_keys_never_print_and_are_scrubbed() {

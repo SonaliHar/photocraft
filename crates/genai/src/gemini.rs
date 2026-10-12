@@ -77,11 +77,8 @@ impl<T: HttpTransport> GeminiProvider<T> {
             },
         });
         let body = serde_json::to_vec(&body).map_err(|_| GenError::Invalid("could not encode the request".into()))?;
-        let response = self.transport.post(HttpRequest {
-            url: ENDPOINT.into(),
-            headers: vec![("x-goog-api-key", self.key.expose().to_owned()), ("content-type", "application/json".into())],
-            body,
-        })?;
+        let response =
+            self.transport.send(HttpRequest::post(ENDPOINT, body).header("x-goog-api-key", self.key.expose()).header("content-type", "application/json"))?;
         if response.body.len() > crate::MAX_RESPONSE {
             return Err(GenError::BadResponse("the response is too large"));
         }
@@ -256,15 +253,15 @@ mod tests {
             Self { sent: Mutex::new(Vec::new()), replies: Mutex::new(replies) }
         }
         fn ok(body: Value) -> Result<HttpResponse> {
-            Ok(HttpResponse { status: 200, body: serde_json::to_vec(&body).unwrap() })
+            Ok(HttpResponse { status: 200, headers: Vec::new(), body: serde_json::to_vec(&body).unwrap() })
         }
         fn status(status: u16, body: Value) -> Result<HttpResponse> {
-            Ok(HttpResponse { status, body: serde_json::to_vec(&body).unwrap() })
+            Ok(HttpResponse { status, headers: Vec::new(), body: serde_json::to_vec(&body).unwrap() })
         }
     }
 
     impl HttpTransport for Fake {
-        fn post(&self, r: HttpRequest) -> Result<HttpResponse> {
+        fn send(&self, r: HttpRequest) -> Result<HttpResponse> {
             let body = serde_json::from_slice(&r.body).unwrap_or(Value::Null);
             self.sent.lock().unwrap().push((r.url, r.headers, body));
             self.replies.lock().unwrap().remove(0)
@@ -337,7 +334,7 @@ mod tests {
             (Fake::status(500, json!({"error": {"message": "boom AIza-test-secret"}})), GenError::Http { status: 500, message: "boom [key]".into() }),
             (Fake::ok(json!({"output_text": "I can't help with that."})), GenError::Refused("I can't help with that.".into())),
             (Fake::ok(json!({})), GenError::Refused("it returned no image".into())),
-            (Ok(HttpResponse { status: 200, body: b"<html>".to_vec() }), GenError::BadResponse("not JSON")),
+            (Ok(HttpResponse { status: 200, headers: Vec::new(), body: b"<html>".to_vec() }), GenError::BadResponse("not JSON")),
             (Fake::ok(json!({"output_image": {"data": "%%%"}})), GenError::BadResponse("the image data is not base64")),
             (Err(GenError::Network("timed out".into())), GenError::Network("timed out".into())),
         ];

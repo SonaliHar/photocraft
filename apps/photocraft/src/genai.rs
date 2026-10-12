@@ -6,7 +6,7 @@ use std::io::Read as _;
 use std::sync::Arc;
 use std::time::Duration;
 
-use photocraft_genai::{ApiKey, GenError, HttpRequest, HttpResponse, HttpTransport};
+use photocraft_genai::{ApiKey, GenError, HttpRequest, HttpResponse, HttpTransport, Method};
 use photocraft_ui_egui::GenAiServices;
 
 /// The credential store's service name; the account is the provider id (`gemini`).
@@ -29,14 +29,35 @@ impl Https {
 }
 
 impl HttpTransport for Https {
-    fn post(&self, request: HttpRequest) -> photocraft_genai::Result<HttpResponse> {
-        let mut call = self.agent.post(&request.url);
-        for (name, value) in &request.headers {
-            call = call.header(*name, value.as_str());
-        }
+    fn send(&self, request: HttpRequest) -> photocraft_genai::Result<HttpResponse> {
+        let url = request.url.as_str();
         // ureq's error text names the host and the failure, never header values.
-        let mut response = call.send(&request.body[..]).map_err(|e| GenError::Network(e.to_string()))?;
+        let sent = match request.method {
+            Method::Get => {
+                let mut call = self.agent.get(url);
+                for (name, value) in &request.headers {
+                    call = call.header(*name, value.as_str());
+                }
+                call.call()
+            }
+            Method::Post => {
+                let mut call = self.agent.post(url);
+                for (name, value) in &request.headers {
+                    call = call.header(*name, value.as_str());
+                }
+                call.send(&request.body[..])
+            }
+            Method::Put => {
+                let mut call = self.agent.put(url);
+                for (name, value) in &request.headers {
+                    call = call.header(*name, value.as_str());
+                }
+                call.send(&request.body[..])
+            }
+        };
+        let mut response = sent.map_err(|e| GenError::Network(e.to_string()))?;
         let status = response.status().as_u16();
+        let headers = response.headers().iter().filter_map(|(k, v)| Some((k.as_str().to_ascii_lowercase(), v.to_str().ok()?.to_owned()))).collect();
         let mut body = Vec::new();
         response
             .body_mut()
@@ -44,7 +65,7 @@ impl HttpTransport for Https {
             .take(photocraft_genai::MAX_RESPONSE as u64 + 1)
             .read_to_end(&mut body)
             .map_err(|e| GenError::Network(format!("reading the response failed: {e}")))?;
-        Ok(HttpResponse { status, body })
+        Ok(HttpResponse { status, headers, body })
     }
 }
 
@@ -211,7 +232,7 @@ mod tests {
 
     #[test]
     fn the_transport_refuses_plain_http_without_sending() {
-        let r = Https::new().post(HttpRequest { url: "http://example.invalid/".into(), headers: vec![("x-goog-api-key", "secret".into())], body: Vec::new() });
+        let r = Https::new().send(HttpRequest::post("http://example.invalid/", Vec::new()).header("x-goog-api-key", "secret"));
         let e = r.err().unwrap();
         assert!(matches!(e, GenError::Network(_)), "{e:?}");
         assert!(!e.to_string().contains("secret"));
