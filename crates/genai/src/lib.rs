@@ -14,7 +14,9 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod credentials;
 pub mod gemini;
+pub use credentials::*;
 
 /// Largest response body a provider accepts (a 4K PNG is well under this).
 pub const MAX_RESPONSE: usize = 48 * 1024 * 1024;
