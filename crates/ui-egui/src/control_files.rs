@@ -135,6 +135,49 @@ pub fn stash(app: &mut PhotocraftApp, path: &str, preview: &str) -> Result<Start
     stash_with_display(app, path, preview, None)
 }
 
+/// The pool the hosted save encodes on: half of rayon's threads, its own. On rayon's shared pool the encoders took
+/// every core for seconds, and whatever the window needed from that pool meanwhile (a canvas redraw) waited behind them.
+/// Measured on a 45 MP 16-bit photo with the editor held to 8 logical processors, zooming while it saves: slowest answer
+/// 97-901 ms before, 35-80 ms after; the save takes about a quarter longer. (The two large encoders also start their own
+/// thread per core, which this does not bound: on 4 processors the stall is unchanged.)
+#[cfg(not(target_arch = "wasm32"))]
+fn save_pool() -> Option<&'static rayon::ThreadPool> {
+    static POOL: std::sync::OnceLock<Option<rayon::ThreadPool>> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| {
+        let threads = (rayon::current_num_threads() / 2).max(1);
+        rayon::ThreadPoolBuilder::new().num_threads(threads).thread_name(|index| format!("host-save-{index}")).build().ok()
+    })
+    .as_ref()
+}
+
+/// Runs the hosted save's encoders side by side on [`save_pool`]. An encoder that panics is an `Err` for that encoder
+/// alone; the others still finish.
+fn side_by_side<A: Send, B: Send, C: Send>(
+    project: impl FnOnce() -> A + Send,
+    render: impl FnOnce() -> B + Send,
+    shown: Option<impl FnOnce() -> C + Send>,
+) -> (std::thread::Result<A>, std::thread::Result<B>, Option<std::thread::Result<C>>) {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    let project = move || catch_unwind(AssertUnwindSafe(project));
+    let render = move || catch_unwind(AssertUnwindSafe(render));
+    let shown = move || shown.map(|encode| catch_unwind(AssertUnwindSafe(encode)));
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let all = move || {
+            let (project, (render, shown)) = rayon::join(project, || rayon::join(render, shown));
+            (project, render, shown)
+        };
+        match save_pool() {
+            Some(pool) => pool.install(all),
+            None => all(),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        (project(), render(), shown())
+    }
+}
+
 /// [`stash`] that also writes `display`, a screen-sized sRGB JPEG of the same snapshot, for hosts
 /// that show an edited photo from a cached render while browsing. It is made beside the project
 /// encode (from the compositor's reduced render, not a full-size one) and written as soon as it is
@@ -178,20 +221,20 @@ pub fn stash_with_display(app: &mut PhotocraftApp, path: &str, preview: &str, di
             false,
             move |ctx| {
                 ctx.check()?;
-                // The project and its preview are independent encodes of the same snapshot: run
-                // them side by side. Both finish before either result is looked at.
-                let (project, render, shown) = std::thread::scope(|scope| {
-                    let project = scope.spawn(|| photocraft_io::export(&doc, &path, &Default::default()));
+                // The project, its preview and the display render are independent encodes of the same
+                // snapshot: run them side by side. All finish before any result is looked at.
+                let (project, render, shown) = side_by_side(
+                    || photocraft_io::export(&doc, &path, &Default::default()),
+                    || photocraft_io::export(&doc, &preview, &Default::default()),
                     // Small and quick: written the moment it exists, ahead of the large files.
-                    let shown = display.as_ref().map(|target| {
-                        scope.spawn(|| {
+                    display.as_ref().map(|target| {
+                        || {
                             let jpeg = photocraft_io::export_display_jpeg(&doc, DISPLAY_LONG_SIDE, DISPLAY_QUALITY).map_err(|e| e.to_string())?;
                             write(target, &jpeg.bytes)
-                        })
-                    });
-                    let render = photocraft_io::export(&doc, &preview, &Default::default());
-                    (project.join(), render, shown.map(|handle| handle.join()))
-                });
+                        }
+                    }),
+                );
+                let render = render.map_err(|_| EngineError::Other("preview encoder stopped unexpectedly".into()))?;
                 let project =
                     project.map_err(|_| EngineError::Other("project encoder stopped unexpectedly".into()))?.map_err(|e| EngineError::Other(e.to_string()))?;
                 let render = render.map_err(|e| EngineError::Other(e.to_string()))?;
