@@ -400,9 +400,9 @@ pub struct Session {
     /// A finished live stroke offered to the `paint.stroke` / `paint.pencil` that commits it
     /// ([`Session::offer_live_stroke`]).
     pub(crate) live_commit: Option<brush_cmds::LiveCommit>,
-    /// The generative image provider the app configured (see [`genai_cmds`]); `None` keeps
-    /// generative commands off and the session network-free.
-    genai: Option<genai_cmds::SharedProvider>,
+    /// The generative image providers the app configured (see [`genai_cmds`]); empty keeps
+    /// Generative Fill off.
+    genai: genai_cmds::Providers,
     /// What each generative layer made in this session was generated from (see [`genai_cmds`]).
     genai_sources: std::collections::HashMap<LayerId, std::sync::Arc<genai_cmds::Source>>,
 }

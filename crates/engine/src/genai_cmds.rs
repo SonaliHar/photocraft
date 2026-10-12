@@ -41,16 +41,69 @@ const RESULT_SIDE: u32 = 8192;
 /// A configured provider, shared with the background job that calls it.
 pub type SharedProvider = Arc<dyn ImageProvider>;
 
+/// The configured providers by id (the registry id, which is also their `info().id`), and the
+/// one Generative Fill uses when no `provider` param names another.
+#[derive(Default, Clone)]
+pub struct Providers {
+    by_id: std::collections::BTreeMap<String, SharedProvider>,
+    default: Option<String>,
+}
+
 impl Session {
-    /// Install (or with `None`, remove) the generative image provider. The app builds it from the
-    /// user's settings and key; headless and test sessions have none unless they set one.
+    /// Install one provider as the only and default one (or with `None`, remove all).
     pub fn set_image_provider(&mut self, provider: Option<SharedProvider>) {
-        self.genai = provider;
+        let mut by_id = std::collections::BTreeMap::new();
+        let default = provider.map(|p| {
+            let id = p.info().id.to_owned();
+            by_id.insert(id.clone(), p);
+            id
+        });
+        self.genai = Providers { by_id, default };
     }
 
-    pub fn image_provider(&self) -> Option<&SharedProvider> {
-        self.genai.as_ref()
+    /// Install every configured provider. A `default` that isn't among them falls back to the
+    /// first by id.
+    pub fn set_image_providers(&mut self, by_id: std::collections::BTreeMap<String, SharedProvider>, default: Option<String>) {
+        let default = default.filter(|d| by_id.contains_key(d)).or_else(|| by_id.keys().next().cloned());
+        self.genai = Providers { by_id, default };
     }
+
+    /// The default provider.
+    pub fn image_provider(&self) -> Option<&SharedProvider> {
+        self.genai.default.as_ref().and_then(|d| self.genai.by_id.get(d))
+    }
+
+    pub fn image_provider_by_id(&self, id: &str) -> Option<&SharedProvider> {
+        self.genai.by_id.get(id)
+    }
+
+    pub fn image_provider_ids(&self) -> Vec<String> {
+        self.genai.by_id.keys().cloned().collect()
+    }
+}
+
+/// The provider `p["provider"]` names, else `recorded` (the one that made a generative layer),
+/// else the default.
+fn chosen_provider(s: &Session, p: &Value, cmd: &str, recorded: Option<&str>) -> Result<SharedProvider> {
+    let bad = |msg: String| EngineError::BadParams { cmd: cmd.into(), msg };
+    match p.get("provider") {
+        None | Some(Value::Null) => match recorded {
+            Some(id) => s
+                .image_provider_by_id(id)
+                .cloned()
+                .ok_or_else(|| bad(format!("`{id}`, which made this layer, is no longer set up; pass `provider` to use another"))),
+            None => s.image_provider().cloned().ok_or_else(|| bad("no generative AI provider".into())),
+        },
+        Some(Value::String(id)) => s.image_provider_by_id(id).cloned().ok_or_else(|| bad(format!("no generative AI provider `{id}` is set up"))),
+        Some(_) => Err(bad("`provider` must be text".into())),
+    }
+}
+
+fn check_prompt_for(provider: &dyn ImageProvider, prompt: &str, cmd: &str) -> Result<()> {
+    if provider.needs_prompt() && prompt.trim().is_empty() {
+        return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("{} needs a prompt", provider.info().name) });
+    }
+    Ok(())
 }
 
 fn bad(msg: impl Into<String>) -> EngineError {
@@ -467,6 +520,8 @@ pub(crate) struct Source {
     area: Rect,
     request: EditRequest,
     reference: Reference,
+    /// The provider that made it, for Generate More.
+    provider: String,
 }
 
 fn variations_param(p: &Value, key: &str) -> Result<usize> {
@@ -583,7 +638,9 @@ fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     photocraft_genai::check_prompt(&prompt, false).map_err(|e| bad(e.to_string()))?;
     let count = variations_param(p, "variations")?;
     fill_enabled(s).map_err(bad)?;
-    let provider = s.image_provider().cloned().ok_or_else(|| bad("no generative AI provider"))?;
+    let provider = chosen_provider(s, p, FILL, None)?;
+    check_prompt_for(provider.as_ref(), &prompt, FILL)?;
+    let provider_id = provider.info().id.to_owned();
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc = st.doc.clone();
     let sel = doc.selection.clone().ok_or_else(|| bad("no selection"))?;
@@ -604,7 +661,7 @@ fn fill(s: &mut Session, p: &Value) -> Result<Value> {
             let results = request_all(ctx, provider.as_ref(), &request, count)?;
             ctx.progress(0.9, "Placing the results");
             let placed = place_all(&request, &results, area, &reference)?;
-            let source = Source { prompt: request.prompt.clone(), area, request, reference };
+            let source = Source { prompt: request.prompt.clone(), area, request, reference, provider: provider_id };
             Ok((placed, sel, source))
         },
         move |s, (placed, sel, source)| {
@@ -691,8 +748,9 @@ fn more(s: &mut Session, p: &Value) -> Result<Value> {
     let count = variations_param(p, "count").map_err(|_| bad(format!("`count` must be a whole number from 1 to {MAX_VARIATIONS}")))?;
     more_enabled(s).map_err(bad)?;
     let group = generative_target(s, p).ok_or_else(|| bad("select a generative layer first".into()))?;
-    let provider = s.image_provider().cloned().ok_or_else(|| bad("no generative AI provider".into()))?;
     let source = s.genai_sources.get(&group).cloned().ok_or_else(|| bad("select a generative layer first".into()))?;
+    let provider = chosen_provider(s, p, MORE, Some(&source.provider))?;
+    check_prompt_for(provider.as_ref(), &source.prompt, MORE)?;
     crate::jobs::run(
         s,
         LABEL,
@@ -727,7 +785,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Generative Fill…",
             menu: &["Edit"],
             shortcut: None,
-            params: r#"{"prompt":str?,"variations":1..4=3} fills the selection through the configured provider: a new group masked by the selection holds one layer per variation, the first showing. An empty prompt continues the surrounding image through it. Sends the selected area and its surroundings to that provider, once per variation."#,
+            params: r#"{"prompt":str?,"variations":1..4=3,"provider":str?} fills the selection through the configured provider: a new group masked by the selection holds one layer per variation, the first showing. An empty prompt continues the surrounding image through it. Sends the selected area and its surroundings to that provider, once per variation. "provider" names a configured provider (default: the one chosen in Generative AI Settings)."#,
             enabled: fill_enabled,
             run: fill,
             journal: true,
@@ -747,7 +805,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Generate More",
             menu: &[],
             shortcut: None,
-            params: r#"{"count":1..4=3,"layer":id?} asks the provider for more variations of the active generative layer, with the same image, mask and prompt, and adds them to it. Sends that area to the provider again."#,
+            params: r#"{"count":1..4=3,"layer":id?,"provider":str?} asks the provider for more variations of the active generative layer, with the same image, mask and prompt, and adds them to it. Without "provider" it asks the provider that made the layer. Sends that area to the provider again."#,
             enabled: more_enabled,
             run: more,
             journal: true,

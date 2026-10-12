@@ -554,3 +554,102 @@ fn upload_scale_shrinks_grows_and_never_exceeds_the_upload_side() {
     assert!((upload_scale(3072.0, 1536, 0) - 0.5).abs() < 1e-9);
     assert!(upload_scale(10.0, 2048, 100_000) <= 204.8 + 1e-9, "min_side is capped at UPLOAD_SIDE");
 }
+
+/// `Fake` under another id.
+struct Named {
+    id: &'static str,
+    inner: Arc<Fake>,
+    needs_prompt: bool,
+}
+
+impl ImageProvider for Named {
+    fn info(&self) -> ProviderInfo {
+        ProviderInfo { id: self.id, name: self.id, model: "m".into(), host: "example.invalid" }
+    }
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
+    }
+    fn needs_prompt(&self) -> bool {
+        self.needs_prompt
+    }
+    fn edit(&self, r: &EditRequest) -> photocraft_genai::Result<GeneratedImage> {
+        self.inner.edit(r)
+    }
+}
+
+fn two_providers(s: &mut Session) -> (Arc<Fake>, Arc<Fake>) {
+    let (red, blue) = (Fake::new([255, 0, 0]), Fake::new([0, 0, 255]));
+    let mut map: std::collections::BTreeMap<String, SharedProvider> = Default::default();
+    map.insert("red".into(), Arc::new(Named { id: "red", inner: red.clone(), needs_prompt: false }));
+    map.insert("blue".into(), Arc::new(Named { id: "blue", inner: blue.clone(), needs_prompt: true }));
+    s.set_image_providers(map, Some("red".into()));
+    (red, blue)
+}
+
+#[test]
+fn the_provider_param_picks_one_and_the_default_is_used_without_it() {
+    let mut s = session(64, 64);
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    let (red, blue) = two_providers(&mut s);
+    assert_eq!(s.image_provider_ids(), vec!["blue".to_owned(), "red".to_owned()]);
+    assert_eq!(s.image_provider().unwrap().info().id, "red");
+    s.execute(FILL, json!({"prompt": "x", "variations": 1})).unwrap();
+    assert_eq!((red.sent.lock().unwrap().len(), blue.sent.lock().unwrap().len()), (1, 0));
+    s.execute(FILL, json!({"prompt": "x", "variations": 1, "provider": "blue"})).unwrap();
+    assert_eq!(blue.sent.lock().unwrap().len(), 1);
+    let e = s.execute(FILL, json!({"prompt": "x", "provider": "green"})).unwrap_err().to_string();
+    assert!(e.contains("green"), "{e}");
+    assert!(s.execute(FILL, json!({"prompt": "x", "provider": 3})).is_err());
+}
+
+#[test]
+fn an_empty_prompt_is_refused_before_sending_for_providers_that_need_one() {
+    let mut s = session(64, 64);
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    let (_, blue) = two_providers(&mut s);
+    let history = s.active().unwrap().history.past_len();
+    let e = s.execute(FILL, json!({"prompt": "  ", "provider": "blue"})).unwrap_err().to_string();
+    assert!(e.contains("needs a prompt"), "{e}");
+    assert!(blue.sent.lock().unwrap().is_empty());
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+    s.execute(FILL, json!({"prompt": "", "variations": 1})).unwrap();
+}
+
+#[test]
+fn generate_more_uses_the_provider_that_made_the_layer() {
+    let mut s = session(64, 64);
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    let (red, blue) = two_providers(&mut s);
+    let r = s.execute(FILL, json!({"prompt": "x", "variations": 1, "provider": "blue"})).unwrap();
+    s.execute(MORE, json!({"layer": r["layer"], "count": 1})).unwrap();
+    assert_eq!(blue.sent.lock().unwrap().len(), 2, "more went to blue, not the default");
+    assert!(red.sent.lock().unwrap().is_empty());
+    s.execute(MORE, json!({"layer": r["layer"], "count": 1, "provider": "red"})).unwrap();
+    assert_eq!(red.sent.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn generate_more_needs_the_provider_that_made_the_layer() {
+    let mut s = session(64, 64);
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    two_providers(&mut s);
+    let r = s.execute(FILL, json!({"prompt": "x", "variations": 1, "provider": "blue"})).unwrap();
+    // Blue is removed in the settings.
+    let red: SharedProvider = s.image_provider_by_id("red").unwrap().clone();
+    s.set_image_providers([("red".to_owned(), red)].into(), Some("red".into()));
+    let history = s.active().unwrap().history.past_len();
+    let children = group(&s, r["layer"].as_u64().unwrap()).children().unwrap().len();
+    let e = s.execute(MORE, json!({"layer": r["layer"], "count": 1})).unwrap_err().to_string();
+    assert!(e.contains("blue"), "{e}");
+    assert_eq!(s.active().unwrap().history.past_len(), history, "no undo step");
+    assert_eq!(group(&s, r["layer"].as_u64().unwrap()).children().unwrap().len(), children);
+}
+
+#[test]
+fn set_image_provider_still_installs_one_default() {
+    let mut s = session(16, 16);
+    s.set_image_provider(Some(Fake::new([1, 2, 3])));
+    assert_eq!(s.image_provider_ids(), vec!["fake".to_owned()]);
+    s.set_image_provider(None);
+    assert!(s.image_provider().is_none() && s.image_provider_ids().is_empty());
+}
