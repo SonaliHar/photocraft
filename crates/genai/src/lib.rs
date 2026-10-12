@@ -17,8 +17,11 @@
 mod credentials;
 pub mod gemini;
 pub use credentials::*;
+pub mod fetch;
 pub mod mask;
 pub mod multipart;
+pub mod poll;
+pub mod providers;
 #[cfg(test)]
 pub(crate) mod testing;
 

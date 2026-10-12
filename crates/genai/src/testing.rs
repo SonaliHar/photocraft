@@ -5,6 +5,7 @@
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde_json::Value;
 
@@ -77,4 +78,19 @@ pub fn edit_request(prompt: &str, w: u32, h: u32) -> EditRequest {
 
 pub fn header<'a>(r: &'a HttpRequest, name: &str) -> Option<&'a str> {
     r.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
+}
+
+/// Never sleeps; `sleep` moves time on.
+#[derive(Default)]
+pub struct FakeClock {
+    now: Mutex<Duration>,
+}
+
+impl crate::poll::Clock for FakeClock {
+    fn now(&self) -> Duration {
+        *self.now.lock().unwrap()
+    }
+    fn sleep(&self, d: Duration) {
+        *self.now.lock().unwrap() += d;
+    }
 }
