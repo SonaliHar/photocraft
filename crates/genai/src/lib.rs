@@ -17,6 +17,10 @@
 mod credentials;
 pub mod gemini;
 pub use credentials::*;
+pub mod mask;
+pub mod multipart;
+#[cfg(test)]
+pub(crate) mod testing;
 
 /// Largest response body a provider accepts (a 4K PNG is well under this).
 pub const MAX_RESPONSE: usize = 48 * 1024 * 1024;

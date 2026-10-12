@@ -4457,6 +4457,7 @@ name = "photocraft-genai"
 version = "0.7.0"
 dependencies = [
  "base64 0.22.1",
+ "png 0.18.1",
  "serde_json",
  "thiserror 2.0.21",
 ]

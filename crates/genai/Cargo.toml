@@ -12,3 +12,5 @@ workspace = true
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 base64 = "0.22"
+# Mask conversion between each provider's conventions (mask.rs). Pure Rust, builds for wasm.
+png = "0.18"
