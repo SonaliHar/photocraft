@@ -35,3 +35,10 @@ path = "fuzz_targets/ideogram.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "bria"
+path = "fuzz_targets/bria.rs"
+test = false
+doc = false
+bench = false
