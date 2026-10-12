@@ -27,7 +27,7 @@ pub struct ProviderSpec {
     pub build: BuildFn,
 }
 
-static PROVIDERS: &[ProviderSpec] = &[crate::gemini::SPEC];
+static PROVIDERS: &[ProviderSpec] = &[crate::gemini::SPEC, crate::providers::openai::SPEC];
 
 pub fn providers() -> &'static [ProviderSpec] {
     PROVIDERS

@@ -1,6 +1,4 @@
 //! Shared test helpers: a scripted transport and tiny PNGs.
-// Helpers are consumed by the provider tasks that follow; drop this allow once they all are.
-#![allow(dead_code)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
 use std::collections::VecDeque;

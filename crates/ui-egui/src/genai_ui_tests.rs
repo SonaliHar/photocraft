@@ -325,3 +325,37 @@ fn the_prompt_dialog_passes_the_chosen_provider_and_remembers_it() {
     other.insert("x".into(), json!(1));
     assert!(can_confirm(&app, &other), "other dialogs are not affected");
 }
+
+#[test]
+fn restore_installs_the_rest_when_one_credential_set_is_broken() {
+    let store = Store::default();
+    store.borrow_mut().insert("openai".into(), "{corrupt".into());
+    let (app, restored) = configured(&store, &["openai", "gemini"]);
+    let e = restored.unwrap_err();
+    assert!(e.contains("openai"), "{e}");
+    assert_eq!(app.session.image_provider_ids(), vec!["gemini".to_owned()]);
+    assert_eq!(app.session.image_provider().unwrap().info().id, "gemini", "the default falls back to one that works");
+}
+
+#[test]
+fn removing_a_provider_moves_the_default() {
+    let store = Store::default();
+    let (mut app, restored) = configured(&store, &["openai", "gemini"]);
+    restored.unwrap();
+    remove_provider(&mut app, "openai").unwrap();
+    assert!(!store.borrow().contains_key("openai"));
+    assert_eq!(app.session.image_provider_ids(), vec!["gemini".to_owned()]);
+    assert_eq!(parse_saved(app.session.prefs().dialogs.get(PREF)).default, "gemini");
+}
+
+#[test]
+fn the_settings_default_choice_is_saved_on_ok() {
+    let store = Store::default();
+    let (mut app, restored) = configured(&store, &["gemini", "openai"]);
+    restored.unwrap();
+    let id = open_settings(&mut app);
+    let mut fields = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+    fields.insert("default".into(), json!("openai"));
+    confirm(&mut app, &fields).unwrap();
+    assert_eq!(app.session.image_provider().unwrap().info().id, "openai");
+}
