@@ -236,7 +236,7 @@ fn clip(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::HttpResponse;
+    use crate::{CancelToken, HttpResponse};
     use std::sync::Mutex;
 
     /// A request as sent: URL, headers, JSON body.
@@ -285,7 +285,7 @@ mod tests {
     }
 
     fn edit(prompt: &str, w: u32, h: u32) -> EditRequest {
-        EditRequest { image: png_of(w, h), mask: png_of(w, h), prompt: prompt.into(), size: ImageSize::Medium }
+        EditRequest { image: png_of(w, h), mask: png_of(w, h), prompt: prompt.into(), size: ImageSize::Medium, cancel: CancelToken::default() }
     }
 
     #[test]

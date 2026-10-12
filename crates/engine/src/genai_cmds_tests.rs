@@ -449,3 +449,108 @@ fn drift_that_varies_across_the_image_leaves_no_seam() {
     let worst = (0..n).filter(|&i| inside(i)).map(|i| (px[i * 4] - 0.5).abs()).fold(0.0f32, f32::max);
     assert!(worst < 0.02, "worst {worst}");
 }
+
+/// Spins until its job is cancelled (or 5 s pass) and records whether it saw the cancel.
+struct Waits {
+    started: std::sync::atomic::AtomicBool,
+    saw_cancel: std::sync::atomic::AtomicBool,
+}
+
+impl ImageProvider for Waits {
+    fn info(&self) -> ProviderInfo {
+        ProviderInfo { id: "waits", name: "Waits", model: "w".into(), host: "example.invalid" }
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities { generate: false, edit: true, variations: false }
+    }
+    fn edit(&self, r: &EditRequest) -> photocraft_genai::Result<GeneratedImage> {
+        self.started.store(true, Ordering::SeqCst);
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_secs(5) {
+            if r.cancel.is_cancelled() {
+                self.saw_cancel.store(true, Ordering::SeqCst);
+                return Err(GenError::Cancelled);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        Err(GenError::Timeout)
+    }
+}
+
+#[test]
+fn cancelling_the_job_reaches_the_provider() {
+    let mut s = session(64, 64);
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    let waits = Arc::new(Waits { started: false.into(), saw_cancel: false.into() });
+    s.set_image_provider(Some(waits.clone()));
+    let crate::jobs::Started::Job(id) = s.start(FILL, json!({"prompt": "x", "variations": 1})).unwrap() else { panic!("expected a job") };
+    // Cancel only once the provider is waiting, or the job stops before ever calling it.
+    let start = std::time::Instant::now();
+    while !waits.started.load(Ordering::SeqCst) && start.elapsed() < std::time::Duration::from_secs(4) {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(s.cancel_job(id));
+    let start = std::time::Instant::now();
+    while !waits.saw_cancel.load(Ordering::SeqCst) && start.elapsed() < std::time::Duration::from_secs(4) {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(waits.saw_cancel.load(Ordering::SeqCst), "the provider's token turned cancelled");
+}
+
+/// A provider with size limits, answering like `Fake`.
+struct Sized {
+    inner: Arc<Fake>,
+    max: u32,
+    min: u32,
+}
+
+impl ImageProvider for Sized {
+    fn info(&self) -> ProviderInfo {
+        self.inner.info()
+    }
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
+    }
+    fn max_side(&self) -> u32 {
+        self.max
+    }
+    fn min_side(&self) -> u32 {
+        self.min
+    }
+    fn edit(&self, r: &EditRequest) -> photocraft_genai::Result<GeneratedImage> {
+        self.inner.edit(r)
+    }
+}
+
+#[test]
+fn a_tiny_selection_is_upscaled_to_the_providers_minimum() {
+    let mut s = session(200, 200);
+    s.execute("select.rect", json!({"x": 95, "y": 95, "width": 10, "height": 10})).unwrap();
+    let fake = Fake::new([255, 0, 0]);
+    s.set_image_provider(Some(Arc::new(Sized { inner: fake.clone(), max: 2048, min: 512 })));
+    s.execute(FILL, json!({"prompt": "x", "variations": 1})).unwrap();
+    let sent = fake.sent.lock().unwrap();
+    let (w, h) = photocraft_genai::png_size(&sent[0].image).unwrap();
+    assert_eq!(w.max(h), 512, "the upload's long side reaches min_side");
+    assert_eq!(rgb_at(&s, 100, 100), [255, 0, 0], "and the result still lands in the selection");
+}
+
+#[test]
+fn a_providers_max_side_caps_the_upload() {
+    let mut s = session(3000, 1000);
+    s.execute("select.rect", json!({"x": 100, "y": 100, "width": 2600, "height": 700})).unwrap();
+    let fake = Fake::new([0, 0, 255]);
+    s.set_image_provider(Some(Arc::new(Sized { inner: fake.clone(), max: 1536, min: 0 })));
+    s.execute(FILL, json!({"prompt": "x", "variations": 1})).unwrap();
+    let (w, h) = photocraft_genai::png_size(&fake.sent.lock().unwrap()[0].image).unwrap();
+    assert!(w.max(h) <= 1536, "{w}x{h}");
+}
+
+#[test]
+fn upload_scale_shrinks_grows_and_never_exceeds_the_upload_side() {
+    assert!((upload_scale(4096.0, 2048, 0) - 0.5).abs() < 1e-9);
+    assert!((upload_scale(1000.0, 2048, 0) - 1.0).abs() < 1e-9);
+    assert!((upload_scale(100.0, 2048, 512) - 5.12).abs() < 1e-9);
+    assert!((upload_scale(3072.0, 1536, 0) - 0.5).abs() < 1e-9);
+    assert!(upload_scale(10.0, 2048, 100_000) <= 204.8 + 1e-9, "min_side is capped at UPLOAD_SIDE");
+}

@@ -33,6 +33,12 @@ pub enum GenError {
     Auth,
     #[error("the image service's quota or rate limit was reached; try again later")]
     Quota,
+    #[error("the image service's rate limit was reached; try again {}", retry_text(.0))]
+    RateLimited(Option<u64>),
+    #[error("the image service declined this request under its content policy: {0}")]
+    Moderated(String),
+    #[error("the image service didn't finish in time")]
+    Timeout,
     #[error("the image service declined this request: {0}")]
     Refused(String),
     #[error("the image service failed (HTTP {status}): {message}")]
@@ -43,6 +49,37 @@ pub enum GenError {
     BadResponse(&'static str),
     #[error("cancelled")]
     Cancelled,
+}
+
+fn retry_text(seconds: &Option<u64>) -> String {
+    match seconds {
+        Some(s) => format!("in {s} s"),
+        None => "later".to_owned(),
+    }
+}
+
+/// Asks a running request to stop. Polling providers check it every tick; a request already on
+/// the wire finishes and its result is dropped.
+#[derive(Clone, Default)]
+pub struct CancelToken(Option<std::sync::Arc<dyn Fn() -> bool + Send + Sync>>);
+
+impl CancelToken {
+    pub fn new(cancelled: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        Self(Some(std::sync::Arc::new(cancelled)))
+    }
+    pub fn is_cancelled(&self) -> bool {
+        self.0.as_ref().is_some_and(|f| f())
+    }
+    /// `Err(Cancelled)` once cancelled, for `?` between steps.
+    pub fn check(&self) -> Result<()> {
+        if self.is_cancelled() { Err(GenError::Cancelled) } else { Ok(()) }
+    }
+}
+
+impl std::fmt::Debug for CancelToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CancelToken")
+    }
 }
 
 pub type Result<T> = std::result::Result<T, GenError>;
@@ -202,12 +239,14 @@ pub struct GenerateRequest {
 /// Change the masked part of `image` (Generative Fill). The engine sends `image` with the masked
 /// area already cleared to flat grey, so the provider fills a hole rather than repainting what
 /// was there. An empty prompt asks it to continue the surroundings through the hole.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct EditRequest {
     pub image: Vec<u8>,
     pub mask: Vec<u8>,
     pub prompt: String,
     pub size: ImageSize,
+    /// The engine sets it from the job; the default never cancels.
+    pub cancel: CancelToken,
 }
 
 /// Another take on a whole image, optionally steered by a prompt.
@@ -236,6 +275,18 @@ pub trait ImageProvider: Send + Sync {
     /// instead of stretching the result.
     fn edit_aspect(&self, w: u32, h: u32) -> (u32, u32) {
         (w, h)
+    }
+    /// Longest side an edit's image may have; the engine scales its upload to fit.
+    fn max_side(&self) -> u32 {
+        2048
+    }
+    /// Shortest long side an edit's image may have; smaller uploads are scaled up to it.
+    fn min_side(&self) -> u32 {
+        0
+    }
+    /// Whether an edit needs a prompt (no promptless "continue the image" mode).
+    fn needs_prompt(&self) -> bool {
+        false
     }
     fn generate(&self, _request: &GenerateRequest) -> Result<GeneratedImage> {
         Err(GenError::Unsupported(self.info().name))
@@ -356,5 +407,27 @@ mod tests {
         assert_eq!(png_size(&png), Some((640, 480)));
         assert_eq!(png_size(b"GIF89a"), None);
         assert_eq!(png_size(&png[..20]), None);
+    }
+
+    #[test]
+    fn cancel_tokens_read_their_source_and_default_to_never() {
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let f = flag.clone();
+        let t = CancelToken::new(move || f.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!t.is_cancelled());
+        assert!(t.check().is_ok());
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(t.clone().is_cancelled());
+        assert_eq!(t.check(), Err(GenError::Cancelled));
+        assert!(!CancelToken::default().is_cancelled());
+        assert_eq!(format!("{:?}", EditRequest::default().cancel), "CancelToken");
+    }
+
+    #[test]
+    fn new_errors_read_well() {
+        assert!(GenError::RateLimited(Some(12)).to_string().contains("in 12 s"));
+        assert!(GenError::RateLimited(None).to_string().contains("later"));
+        assert!(GenError::Moderated("nope".into()).to_string().contains("nope"));
+        assert!(GenError::Timeout.to_string().contains("in time"));
     }
 }

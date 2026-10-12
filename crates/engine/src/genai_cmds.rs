@@ -57,6 +57,15 @@ fn bad(msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: FILL.into(), msg: msg.into() }
 }
 
+/// How much the context area is scaled for the upload: down to fit `UPLOAD_SIDE` and the
+/// provider's `max_side`, up to its `min_side` (never past `UPLOAD_SIDE`).
+pub(crate) fn upload_scale(long: f64, max_side: u32, min_side: u32) -> f64 {
+    let long = long.max(1.0);
+    let down = (f64::from(UPLOAD_SIDE.min(max_side).max(1)) / long).min(1.0);
+    let up = (f64::from(min_side) / long).min(f64::from(UPLOAD_SIDE) / long);
+    down.max(up)
+}
+
 fn other(e: impl std::fmt::Display) -> EngineError {
     EngineError::Other(e.to_string())
 }
@@ -473,6 +482,10 @@ fn variations_param(p: &Value, key: &str) -> Result<usize> {
 /// Ask for `count` results of one request. The calls run side by side (each is a slow network
 /// round trip); any that fail are dropped as long as one succeeds.
 fn request_all(ctx: &crate::jobs::JobCtx, provider: &dyn ImageProvider, request: &EditRequest, count: usize) -> Result<Vec<Vec<u8>>> {
+    let mut request = request.clone();
+    let job = ctx.clone();
+    request.cancel = photocraft_genai::CancelToken::new(move || job.cancelled());
+    let request = &request;
     let name = provider.info().name;
     let msg = if count == 1 { format!("Waiting for {name}") } else { format!("Waiting for {name} ({count} variations)") };
     ctx.progress(0.15, &msg);
@@ -576,7 +589,7 @@ fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     let sel = doc.selection.clone().ok_or_else(|| bad("no selection"))?;
     let canvas = doc.bounds();
     let area = context_area(sel.content_bounds().intersect(&canvas), canvas, |w, h| provider.edit_aspect(w, h));
-    let k = (f64::from(UPLOAD_SIDE) / f64::from(area.width().max(area.height()))).min(1.0);
+    let k = upload_scale(f64::from(area.width().max(area.height())), provider.max_side(), provider.min_side());
     let (w, h) = (((f64::from(area.width()) * k).round() as u32).max(1), ((f64::from(area.height()) * k).round() as u32).max(1));
     let name = layer_name(&prompt);
     crate::jobs::run(
@@ -587,7 +600,7 @@ fn fill(s: &mut Session, p: &Value) -> Result<Value> {
             ctx.progress(0.05, "Preparing image");
             let (image, mask, reference) = request_images(&scaled(&srgb_composite(&doc, area)?, area, w, h), &sel, area, w, h)?;
             ctx.check()?;
-            let request = EditRequest { image, mask, prompt, size: ImageSize::for_long_side(w.max(h)) };
+            let request = EditRequest { image, mask, prompt, size: ImageSize::for_long_side(w.max(h)), cancel: photocraft_genai::CancelToken::default() };
             let results = request_all(ctx, provider.as_ref(), &request, count)?;
             ctx.progress(0.9, "Placing the results");
             let placed = place_all(&request, &results, area, &reference)?;
