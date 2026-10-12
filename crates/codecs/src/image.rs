@@ -506,11 +506,10 @@ impl Image {
                 SampleType::F16 => f16::ONE.to_bits().to_ne_bytes().to_vec(),
                 SampleType::F32 => 1.0f32.to_ne_bytes().to_vec(),
             };
-            let dst = src + bps;
-            let mut out = vec![0u8; self.data.len() / src * dst];
-            for (o, px) in out.chunks_exact_mut(dst).zip(self.data.chunks_exact(src)) {
-                o[..src].copy_from_slice(px);
-                o[src..].copy_from_slice(&one);
+            let mut out = Vec::with_capacity(self.data.len() / src * (src + bps));
+            for px in self.data.chunks_exact(src) {
+                out.extend_from_slice(px);
+                out.extend_from_slice(&one);
             }
             out
         } else if let Some(fast) = self.convert_int_direct(layout, sample) {
