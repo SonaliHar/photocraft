@@ -7,4 +7,5 @@ pub mod fal;
 pub mod flux_fill;
 pub mod ideogram;
 pub mod openai;
+pub mod replicate;
 pub mod stability;
