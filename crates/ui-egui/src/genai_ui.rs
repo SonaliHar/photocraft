@@ -1,11 +1,12 @@
-//! Generative AI in the shell (#41): Generative AI Settings (provider, model and API key), the
-//! Edit › Generative Fill prompt, and installing the configured provider on the session.
+//! Generative AI in the shell (#41): Generative AI Settings (every provider, each set up in its
+//! own dialog with its model and credentials, and the default), the Edit › Generative Fill
+//! prompt, and installing the configured providers on the session.
 //!
-//! Off by default: until the user picks a provider and saves a key, no provider exists, the
-//! Generative Fill menu item is hidden and nothing is ever contacted. The provider and model live
-//! in preferences (shell-owned `dialogs` entry); the key lives only in the OS credential store
-//! ([`crate::GenAiServices`]) and in process memory. The key is typed into a buffer outside the
-//! dialog's fields, so `ui.inspect` and the control channel never see it.
+//! Off by default: until the user sets up a provider, none exists, the Generative Fill menu item
+//! is hidden and nothing is ever contacted. Which providers are set up, their models and the
+//! default live in preferences (shell-owned `dialogs` entry); credentials live only in the OS
+//! credential store ([`crate::GenAiServices`]) and in process memory. Credentials are typed into
+//! buffers outside the dialog's fields, so `ui.inspect` and the control channel never see them.
 
 use photocraft_doc::{Layer, LayerId};
 use serde_json::{Map, Value, json};
@@ -22,50 +23,109 @@ const MORE: &str = photocraft_engine::genai_cmds::MORE;
 const THUMB: u32 = 96;
 const SETTINGS_MARK: &str = "__genaiSettings";
 const PROMPT_MARK: &str = "__genaiPrompt";
-/// `prefs.dialogs` entry holding `{"provider", "model"}`.
+/// `prefs.dialogs` entry holding [`Saved`].
 const PREF: &str = "ui.generativeAiSettings";
-const KEY_PAGE: &str = "https://aistudio.google.com/apikey";
+const PROVIDER_MARK: &str = "__genaiProvider";
 
 /// Shell state that must not be serialised or inspected.
 #[derive(Default)]
 pub struct Runtime {
-    /// What is typed in the settings dialog's key field. Cleared when the dialog closes.
-    key_input: String,
+    /// What is typed in a provider dialog's credential fields, by field name. Cleared when the
+    /// dialog opens, closes or saves.
+    key_inputs: std::collections::HashMap<&'static str, String>,
     /// Variation thumbnails for the Properties panel, by variation layer: (pixels fingerprint,
     /// texture).
     thumbs: std::collections::HashMap<LayerId, (u64, egui::TextureHandle)>,
 }
 
-/// Providers the settings offer: (id, name). Only providers the app can build appear.
-fn providers() -> Vec<(String, &'static str)> {
-    vec![(String::new(), tl!("None")), (photocraft_genai::gemini::ID.into(), photocraft_genai::gemini::NAME)]
+/// What Generative AI Settings keeps in `prefs.dialogs[PREF]`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Saved {
+    pub default: String,
+    pub models: std::collections::BTreeMap<String, String>,
+    pub configured: Vec<String>,
 }
 
-fn saved(app: &PhotocraftApp) -> (String, String) {
-    let v = app.session.prefs().dialogs.get(PREF);
-    let get = |k: &str| v.and_then(|v| v.get(k)).and_then(Value::as_str).unwrap_or("").to_owned();
-    (get("provider"), get("model"))
-}
-
-/// Build the saved provider and install it on the session (at launch and after Settings). Reads
-/// the credential store only when a provider is configured; never touches the network.
-pub fn restore(app: &mut PhotocraftApp) -> Result<(), String> {
-    let (provider, model) = saved(app);
-    if provider.is_empty() {
-        app.session.set_image_provider(None);
-        return Ok(());
+impl Saved {
+    pub(crate) fn to_json(&self) -> Value {
+        json!({"default": self.default, "models": self.models, "configured": self.configured})
     }
+}
+
+/// Reads the saved settings, including the single-provider `{"provider", "model"}` form.
+pub(crate) fn parse_saved(v: Option<&Value>) -> Saved {
+    let Some(v) = v else { return Saved::default() };
+    if let Some(p) = v.get("provider").and_then(Value::as_str) {
+        if p.is_empty() || photocraft_genai::spec(p).is_none() {
+            return Saved::default();
+        }
+        let model = v.get("model").and_then(Value::as_str).unwrap_or("").to_owned();
+        return Saved { default: p.into(), models: [(p.to_owned(), model)].into(), configured: vec![p.into()] };
+    }
+    let configured: Vec<String> = v
+        .get("configured")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).filter(|id| photocraft_genai::spec(id).is_some()).map(str::to_owned).collect())
+        .unwrap_or_default();
+    let models = v
+        .get("models")
+        .and_then(Value::as_object)
+        .map(|m| m.iter().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_owned()))).collect())
+        .unwrap_or_default();
+    let mut default = v.get("default").and_then(Value::as_str).unwrap_or("").to_owned();
+    if !configured.contains(&default) {
+        default = configured.first().cloned().unwrap_or_default();
+    }
+    Saved { default, models, configured }
+}
+
+fn saved(app: &PhotocraftApp) -> Saved {
+    parse_saved(app.session.prefs().dialogs.get(PREF))
+}
+
+fn store_saved(app: &mut PhotocraftApp, saved: &Saved) {
+    let v = saved.to_json();
+    app.session.prefs.edit(|p| p.dialogs.insert(PREF.into(), v));
+}
+
+fn provider_name(id: &str) -> &str {
+    photocraft_genai::spec(id).map_or(id, |s| s.name)
+}
+
+/// Build every configured provider and install them (at launch and after any settings change).
+/// A provider whose credentials are missing or unreadable is skipped and named in the error; the
+/// rest still work. Reads the credential store only for configured providers; never touches the
+/// network.
+pub fn restore(app: &mut PhotocraftApp) -> Result<(), String> {
+    let saved = saved(app);
     let Some(services) = app.services.genai.as_ref() else {
         return Ok(());
     };
-    let key = (services.load_key)(&provider)?.and_then(|k| photocraft_genai::ApiKey::new(&k));
-    let Some(key) = key else {
-        app.session.set_image_provider(None);
-        return Err(crate::i18n::fmt(tl!("No API key is saved for {provider}."), &[("provider", &provider)]));
-    };
-    let built = (services.provider)(&provider, &model, photocraft_genai::Credentials::api_key(key))?;
-    app.session.set_image_provider(Some(built));
-    Ok(())
+    let mut built = std::collections::BTreeMap::new();
+    let mut problems = Vec::new();
+    for id in &saved.configured {
+        let model = saved.models.get(id).map_or("", String::as_str);
+        let creds = match (services.load_key)(id) {
+            Ok(secret) => secret.as_deref().and_then(photocraft_genai::Credentials::from_secret),
+            Err(e) => {
+                problems.push(format!("{id}: {e}"));
+                continue;
+            }
+        };
+        let Some(creds) = creds else {
+            problems.push(crate::i18n::fmt(tl!("No API key is saved for {provider}."), &[("provider", id)]));
+            continue;
+        };
+        match (services.provider)(id, model, creds) {
+            Ok(p) => {
+                built.insert(id.clone(), p);
+            }
+            Err(e) => problems.push(format!("{id}: {e}")),
+        }
+    }
+    let default = Some(saved.default.clone()).filter(|d| built.contains_key(d));
+    app.session.set_image_providers(built, default);
+    if problems.is_empty() { Ok(()) } else { Err(problems.join(" ")) }
 }
 
 /// Menu, palette and shortcut entry points. Clicking Generative Fill asks for a prompt; with
@@ -93,34 +153,61 @@ pub fn menu_visible(app: &PhotocraftApp) -> bool {
 }
 
 pub fn owns(fields: &Map<String, Value>) -> bool {
-    fields.contains_key(SETTINGS_MARK) || fields.contains_key(PROMPT_MARK)
+    fields.contains_key(SETTINGS_MARK) || fields.contains_key(PROMPT_MARK) || fields.contains_key(PROVIDER_MARK)
 }
 
 pub fn ok_label(fields: &Map<String, Value>) -> Option<&'static str> {
-    if fields.contains_key(PROMPT_MARK) { Some(tl!("Generate")) } else { None }
+    if fields.contains_key(PROMPT_MARK) {
+        Some(tl!("Generate"))
+    } else if fields.contains_key(PROVIDER_MARK) {
+        Some(tl!("Save"))
+    } else {
+        None
+    }
 }
 
 pub fn open_settings(app: &mut PhotocraftApp) -> u64 {
     if let Some(d) = app.ui.dialogs.iter().find(|d| d.fields.contains_key(SETTINGS_MARK)) {
         return d.id;
     }
-    app.genai.key_input.clear();
-    let (mut provider, mut model) = saved(app);
-    if provider.is_empty() {
-        // Opening the settings is the way to turn it on: start on the one provider there is.
-        provider = photocraft_genai::gemini::ID.into();
-    }
-    if model.is_empty() {
-        model = photocraft_genai::gemini::DEFAULT_MODEL.into();
-    }
-    let has_key = app.services.genai.as_ref().and_then(|s| (s.load_key)(&provider).ok().flatten()).is_some();
+    let saved = saved(app);
     let mut f = Map::new();
     f.insert(SETTINGS_MARK.into(), json!(true));
     f.insert("__label".into(), json!("Generative AI Settings"));
-    f.insert("provider".into(), json!(provider));
+    f.insert("default".into(), json!(saved.default));
+    app.ui.open_dialog(DialogKind::Command, f)
+}
+
+/// The Set Up / Edit dialog for one provider. `None` for an unknown id.
+pub(crate) fn open_provider(app: &mut PhotocraftApp, id: &str) -> Option<u64> {
+    let spec = photocraft_genai::spec(id)?;
+    if let Some(d) = app.ui.dialogs.iter().find(|d| d.fields.get(PROVIDER_MARK).and_then(Value::as_str) == Some(spec.id)) {
+        return Some(d.id);
+    }
+    app.genai.key_inputs.clear();
+    let saved = saved(app);
+    let model = saved.models.get(spec.id).filter(|m| !m.is_empty()).cloned().or_else(|| spec.models.first().map(|m| m.0.to_owned())).unwrap_or_default();
+    let has_key = app.services.genai.as_ref().and_then(|s| (s.load_key)(spec.id).ok().flatten()).is_some();
+    let mut f = Map::new();
+    f.insert(PROVIDER_MARK.into(), json!(spec.id));
+    f.insert("__label".into(), json!(spec.name));
     f.insert("model".into(), json!(model));
     f.insert("hasKey".into(), json!(has_key));
-    app.ui.open_dialog(DialogKind::Command, f)
+    Some(app.ui.open_dialog(DialogKind::Command, f))
+}
+
+pub(crate) fn remove_provider(app: &mut PhotocraftApp, id: &str) -> Result<(), String> {
+    if let Some(s) = app.services.genai.as_ref() {
+        (s.delete_key)(id)?;
+    }
+    let mut saved = saved(app);
+    saved.configured.retain(|c| c != id);
+    saved.models.remove(id);
+    if saved.default == id {
+        saved.default = saved.configured.first().cloned().unwrap_or_default();
+    }
+    store_saved(app, &saved);
+    restore(app)
 }
 
 fn open_prompt(app: &mut PhotocraftApp) -> u64 {
@@ -138,6 +225,8 @@ fn open_prompt(app: &mut PhotocraftApp) -> u64 {
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     if f.contains_key(PROMPT_MARK) {
         prompt_body(app, ui, f);
+    } else if f.contains_key(PROVIDER_MARK) {
+        provider_body(app, ui, f);
     } else {
         settings_body(app, ui, f);
     }
@@ -183,94 +272,165 @@ fn settings_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String,
         faint(ui, tl!("Generative AI needs the desktop app."));
         return;
     }
-    let mut provider = f.get("provider").and_then(Value::as_str).unwrap_or("").to_owned();
-    let options = providers();
-    let opts: Vec<(String, &str)> = options.iter().map(|(id, name)| (id.clone(), *name)).collect();
-    egui::Grid::new("genai-settings").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
-        ui.label(tl!("Provider"));
-        if crate::widgets::dropdown(ui, "genai-provider", &mut provider, &opts, 220.0) {
-            f.insert("provider".into(), json!(provider));
-        }
-        ui.end_row();
-        if provider == photocraft_genai::gemini::ID {
-            ui.label(tl!("Model"));
-            let mut model = f.get("model").and_then(Value::as_str).unwrap_or(photocraft_genai::gemini::DEFAULT_MODEL).to_owned();
-            let models: Vec<(String, &str)> = photocraft_genai::gemini::MODELS.iter().map(|(id, name)| ((*id).to_owned(), *name)).collect();
-            if crate::widgets::dropdown(ui, "genai-model", &mut model, &models, 220.0) {
-                f.insert("model".into(), json!(model));
+    let saved = saved(app);
+    if saved.configured.len() > 1 {
+        let opts: Vec<(String, &str)> = saved.configured.iter().map(|id| (id.clone(), provider_name(id))).collect();
+        let mut chosen = f.get("default").and_then(Value::as_str).unwrap_or(saved.default.as_str()).to_owned();
+        ui.horizontal(|ui| {
+            ui.label(tl!("Default for Generative Fill"));
+            if crate::widgets::dropdown(ui, "genai-default", &mut chosen, &opts, 260.0) {
+                f.insert("default".into(), json!(chosen));
             }
-            ui.end_row();
-            ui.label(tl!("API key"));
-            let has_key = f.get("hasKey").and_then(Value::as_bool) == Some(true);
+        });
+        ui.add_space(8.0);
+    }
+    let mut open = None;
+    let mut remove = None;
+    egui::Grid::new("genai-providers").num_columns(3).spacing([14.0, 8.0]).show(ui, |ui| {
+        for spec in photocraft_genai::providers() {
+            let configured = saved.configured.iter().any(|c| c == spec.id);
+            ui.vertical(|ui| {
+                ui.add(egui::Label::new(egui::RichText::new(spec.name).color(t.text)).extend());
+                ui.add(egui::Label::new(egui::RichText::new(spec.host).color(t.text_faint).size(12.0)).extend());
+            });
+            let status = if configured { tl!("Set up") } else { tl!("Not set up") };
+            ui.add(egui::Label::new(egui::RichText::new(status).color(t.text_faint).size(12.0)).extend());
             ui.horizontal(|ui| {
-                let hint = if has_key { tl!("Saved (paste to replace)") } else { tl!("Paste your Gemini API key") };
-                let r = ui.add(egui::TextEdit::singleline(&mut app.genai.key_input).password(true).hint_text(hint).desired_width(220.0));
-                crate::field_tab::register(ui.ctx(), r.id);
-                if has_key && crate::widgets::secondary_button(ui, tl!("Remove Key"), 0.0).clicked() {
-                    let removed = app.services.genai.as_ref().map(|s| (s.delete_key)(&provider));
-                    match removed {
-                        Some(Ok(())) => {
-                            f.insert("hasKey".into(), json!(false));
-                            app.session.set_image_provider(None);
-                        }
-                        Some(Err(e)) => app.ui.status = e,
-                        None => {}
-                    }
+                let label = if configured { tl!("Edit…") } else { tl!("Set Up…") };
+                if crate::widgets::secondary_button(ui, label, 0.0).clicked() {
+                    open = Some(spec.id);
+                }
+                if configured && crate::widgets::secondary_button(ui, tl!("Remove"), 0.0).clicked() {
+                    remove = Some(spec.id);
                 }
             });
             ui.end_row();
         }
     });
-    if provider == photocraft_genai::gemini::ID {
-        ui.add_space(4.0);
-        if ui.link(tl!("Get a Gemini API key from Google AI Studio")).clicked() {
-            crate::links::open(app, &ui.ctx().clone(), KEY_PAGE);
+    if let Some(id) = open {
+        open_provider(app, id);
+    }
+    if let Some(id) = remove
+        && let Err(e) = remove_provider(app, id)
+    {
+        app.ui.status = e;
+    }
+    ui.add_space(8.0);
+    crate::widgets::hairline(ui);
+    ui.add_space(6.0);
+    faint(ui, tl!("Each Generative Fill makes three variations, so it sends three requests, each billed to your account."));
+    let store = app.services.genai.as_ref().map_or("", |s| s.key_store_name);
+    faint(ui, &crate::i18n::fmt(tl!("Your credentials are kept in {store}, never in PhotoCraft's settings files."), &[("store", tl!(store))]));
+}
+
+fn provider_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let Some(spec) = f.get(PROVIDER_MARK).and_then(Value::as_str).and_then(photocraft_genai::spec) else { return };
+    let has_key = f.get("hasKey").and_then(Value::as_bool) == Some(true);
+    egui::Grid::new("genai-provider").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
+        if spec.models.len() > 1 {
+            ui.label(tl!("Model"));
+            let mut model = f.get("model").and_then(Value::as_str).unwrap_or("").to_owned();
+            let models: Vec<(String, &str)> = spec.models.iter().map(|(id, name)| ((*id).to_owned(), *name)).collect();
+            if crate::widgets::dropdown(ui, "genai-model", &mut model, &models, 240.0) {
+                f.insert("model".into(), json!(model));
+            }
+            ui.end_row();
         }
-        ui.add_space(8.0);
-        crate::widgets::hairline(ui);
-        ui.add_space(6.0);
-        ui.label(egui::RichText::new(tl!("What is sent, and to whom")).font(crate::theme::semibold(12.5)).color(t.text));
-        ui.add_space(2.0);
-        faint(
-            ui,
+        for field in spec.fields {
+            ui.label(tl!(field.label));
+            let hint = if has_key { tl!("Saved (leave empty to keep)") } else { tl!("Paste here") };
+            let buf = app.genai.key_inputs.entry(field.name).or_default();
+            let r = ui.add(egui::TextEdit::singleline(buf).password(true).hint_text(hint).desired_width(240.0));
+            crate::field_tab::register(ui.ctx(), r.id);
+            ui.end_row();
+        }
+    });
+    ui.add_space(4.0);
+    if ui.link(crate::i18n::fmt(tl!("Get credentials from {name}"), &[("name", spec.name)])).clicked() {
+        crate::links::open(app, &ui.ctx().clone(), spec.key_page);
+    }
+    ui.add_space(8.0);
+    crate::widgets::hairline(ui);
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new(tl!("What is sent, and to whom")).font(crate::theme::semibold(12.5)).color(t.text));
+    faint(
+        ui,
+        &crate::i18n::fmt(
             tl!(
-                "Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a black-and-white mask of the selection, and your prompt to Google (generativelanguage.googleapis.com) with your API key. Google's Gemini API terms and privacy policy apply, and its usage is billed to your key. Results carry Google's SynthID watermark."
+                "Nothing is sent until you run Generative Fill. Each time you do, PhotoCraft sends the selected area and the image around it, a mask of the selection, and your prompt to {name} ({host}) with your credentials. Its terms and privacy policy apply, and its usage is billed to your account."
             ),
-        );
-        ui.add_space(4.0);
-        faint(ui, tl!("Each Generative Fill makes three variations, so it sends three requests, each billed to your key."));
-        ui.add_space(4.0);
-        let store = app.services.genai.as_ref().map_or("", |s| s.key_store_name);
-        faint(ui, &crate::i18n::fmt(tl!("Your key is kept in {store}, never in PhotoCraft's settings files."), &[("store", tl!(store))]));
+            &[("name", spec.name), ("host", spec.host)],
+        ),
+    );
+    if !spec.result_hosts.is_empty() {
+        let hosts = spec.result_hosts.iter().map(|h| h.trim_start_matches('.')).collect::<Vec<_>>().join(", ");
+        faint(ui, &crate::i18n::fmt(tl!("Results are downloaded from {hosts}."), &[("hosts", &hosts)]));
+    }
+    if !spec.note.is_empty() {
+        faint(ui, tl!(spec.note));
     }
 }
 
-/// OK: remember the choice, save a newly typed key, and install the provider (or remove it).
+/// OK in the provider dialog: merge typed fields into the saved credentials, check the provider
+/// builds, store, configure and install.
+fn confirm_provider(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+    let spec = f.get(PROVIDER_MARK).and_then(Value::as_str).and_then(photocraft_genai::spec).ok_or("unknown provider")?;
+    let model = f.get("model").and_then(Value::as_str).unwrap_or("").to_owned();
+    let typed = std::mem::take(&mut app.genai.key_inputs);
+    let services = app.services.genai.as_ref().ok_or_else(|| tl!("Generative AI needs the desktop app.").to_string())?;
+    let mut creds = (services.load_key)(spec.id)?.as_deref().and_then(photocraft_genai::Credentials::from_secret).unwrap_or_default();
+    for field in spec.fields {
+        if let Some(k) = typed.get(field.name).and_then(|t| photocraft_genai::ApiKey::new(t)) {
+            creds.insert(field.name, k);
+        }
+    }
+    if !creds.has_all(spec.fields) {
+        return Err(crate::i18n::fmt(tl!("Enter every field for {provider}."), &[("provider", spec.name)]));
+    }
+    (services.provider)(spec.id, &model, creds.clone())?;
+    (services.save_key)(spec.id, &creds.to_secret())?;
+    let mut saved = saved(app);
+    if !saved.configured.iter().any(|c| c == spec.id) {
+        saved.configured.push(spec.id.to_owned());
+    }
+    saved.models.insert(spec.id.to_owned(), model.clone());
+    if saved.default.is_empty() {
+        saved.default = spec.id.to_owned();
+    }
+    store_saved(app, &saved);
+    restore(app)?;
+    Ok(json!({"provider": spec.id, "model": model, "ready": app.session.image_provider_by_id(spec.id).is_some()}))
+}
+
+/// OK in the prompt dialog: remember the prompt and run the fill.
+fn confirm_prompt(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+    let prompt = f.get("prompt").and_then(Value::as_str).unwrap_or("").trim().to_owned();
+    app.session.prefs.edit(|p| p.dialogs.insert(FILL.into(), json!({"prompt": prompt})));
+    app.run(FILL, json!({"prompt": prompt}))
+}
+
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     if f.contains_key(PROMPT_MARK) {
-        let prompt = f.get("prompt").and_then(Value::as_str).unwrap_or("").trim().to_owned();
-        app.session.prefs.edit(|p| p.dialogs.insert(FILL.into(), json!({"prompt": prompt})));
-        return app.run(FILL, json!({"prompt": prompt}));
+        return confirm_prompt(app, f);
     }
-    let typed = std::mem::take(&mut app.genai.key_input);
-    let provider = f.get("provider").and_then(Value::as_str).unwrap_or("").to_owned();
-    let model = f.get("model").and_then(Value::as_str).unwrap_or("").to_owned();
-    if !provider.is_empty() {
-        let services = app.services.genai.as_ref().ok_or_else(|| tl!("Generative AI needs the desktop app.").to_string())?;
-        if let Some(key) = photocraft_genai::ApiKey::new(&typed) {
-            // Check the provider builds (model id) before the key is stored.
-            (services.provider)(&provider, &model, photocraft_genai::Credentials::api_key(key.clone()))?;
-            (services.save_key)(&provider, key.expose())?;
-        }
+    if f.contains_key(PROVIDER_MARK) {
+        return confirm_provider(app, f);
     }
-    app.session.prefs.edit(|p| p.dialogs.insert(PREF.into(), json!({"provider": provider, "model": model})));
+    let mut saved = saved(app);
+    if let Some(d) = f.get("default").and_then(Value::as_str)
+        && saved.configured.iter().any(|c| c == d)
+    {
+        saved.default = d.to_owned();
+    }
+    store_saved(app, &saved);
     restore(app)?;
-    Ok(json!({"provider": provider, "model": model, "ready": app.session.image_provider().is_some()}))
+    Ok(json!({"default": saved.default, "configured": saved.configured}))
 }
 
-/// Dialog closed without OK: drop whatever was typed in the key field.
+/// Dialog closed without OK: drop whatever was typed in credential fields.
 pub fn cancelled(app: &mut PhotocraftApp) {
-    app.genai.key_input.clear();
+    app.genai.key_inputs.clear();
 }
 
 /// The Generative Fill button (and its settings arrow) for the selection tools' options bar,
