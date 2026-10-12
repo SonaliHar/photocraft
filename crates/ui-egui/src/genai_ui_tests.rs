@@ -359,3 +359,35 @@ fn the_settings_default_choice_is_saved_on_ok() {
     confirm(&mut app, &fields).unwrap();
     assert_eq!(app.session.image_provider().unwrap().info().id, "openai");
 }
+
+#[test]
+fn the_prompt_dialog_offers_configured_providers_and_remembers_the_choice() {
+    let store = Store::default();
+    let (mut app, restored) = configured(&store, &["gemini", "ideogram-v3"]);
+    restored.unwrap();
+    let id = open_prompt(&mut app);
+    let mut f = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+    assert_eq!(f["provider"], "gemini", "starts on the default");
+    f.insert("provider".into(), json!("ideogram-v3"));
+    f.insert("prompt".into(), json!("a lighthouse"));
+    confirm(&mut app, &f).unwrap();
+    assert_eq!(app.genai.last_provider.as_deref(), Some("ideogram-v3"));
+    app.ui.dialogs.clear();
+    let id = open_prompt(&mut app);
+    assert_eq!(app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["provider"], "ideogram-v3", "remembered this session");
+}
+
+#[test]
+fn ok_is_off_for_an_empty_prompt_on_a_provider_that_needs_one() {
+    let store = Store::default();
+    let (mut app, restored) = configured(&store, &["gemini", "ideogram-v3"]);
+    restored.unwrap();
+    let id = open_prompt(&mut app);
+    let mut f = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+    f.insert("prompt".into(), json!(""));
+    assert!(can_confirm(&app, &f));
+    f.insert("provider".into(), json!("ideogram-v3"));
+    assert!(!can_confirm(&app, &f));
+    f.insert("prompt".into(), json!("a lighthouse"));
+    assert!(can_confirm(&app, &f));
+}
