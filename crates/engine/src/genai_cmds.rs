@@ -99,6 +99,24 @@ fn chosen_provider(s: &Session, p: &Value, cmd: &str, recorded: Option<&str>) ->
     }
 }
 
+/// Menu enablement has no params: pass when some configured provider can fill selections.
+fn any_editor(s: &Session) -> std::result::Result<(), String> {
+    if s.genai.by_id.is_empty() {
+        return Err("set up a generative AI provider first (Generative AI Settings)".into());
+    }
+    if !s.genai.by_id.values().any(|p| p.capabilities().edit) {
+        return Err("none of the configured providers can fill selections".into());
+    }
+    Ok(())
+}
+
+fn check_can_edit(provider: &dyn ImageProvider, cmd: &str) -> Result<()> {
+    if !provider.capabilities().edit {
+        return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("{} can't fill selections", provider.info().name) });
+    }
+    Ok(())
+}
+
 fn check_prompt_for(provider: &dyn ImageProvider, prompt: &str, cmd: &str) -> Result<()> {
     if provider.needs_prompt() && prompt.trim().is_empty() {
         return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("{} needs a prompt", provider.info().name) });
@@ -124,10 +142,7 @@ fn other(e: impl std::fmt::Display) -> EngineError {
 }
 
 fn fill_enabled(s: &Session) -> std::result::Result<(), String> {
-    let p = s.image_provider().ok_or("set up a generative AI provider first (Generative AI Settings)")?;
-    if !p.capabilities().edit {
-        return Err(format!("{} can't fill selections", p.info().name));
-    }
+    any_editor(s)?;
     let st = s.active().ok_or("no document open")?;
     let sel = st.doc.selection.as_ref().ok_or("no selection")?;
     if sel.content_bounds().intersect(&st.doc.bounds()).is_empty() {
@@ -639,6 +654,7 @@ fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     let count = variations_param(p, "variations")?;
     fill_enabled(s).map_err(bad)?;
     let provider = chosen_provider(s, p, FILL, None)?;
+    check_can_edit(provider.as_ref(), FILL)?;
     check_prompt_for(provider.as_ref(), &prompt, FILL)?;
     let provider_id = provider.info().id.to_owned();
     let st = s.active().ok_or(EngineError::NoDocument)?;
@@ -736,10 +752,7 @@ fn select_variation(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn more_enabled(s: &Session) -> std::result::Result<(), String> {
-    let p = s.image_provider().ok_or("set up a generative AI provider first (Generative AI Settings)")?;
-    if !p.capabilities().edit {
-        return Err(format!("{} can't fill selections", p.info().name));
-    }
+    any_editor(s)?;
     select_enabled(s)
 }
 
@@ -750,6 +763,7 @@ fn more(s: &mut Session, p: &Value) -> Result<Value> {
     let group = generative_target(s, p).ok_or_else(|| bad("select a generative layer first".into()))?;
     let source = s.genai_sources.get(&group).cloned().ok_or_else(|| bad("select a generative layer first".into()))?;
     let provider = chosen_provider(s, p, MORE, Some(&source.provider))?;
+    check_can_edit(provider.as_ref(), MORE)?;
     check_prompt_for(provider.as_ref(), &source.prompt, MORE)?;
     crate::jobs::run(
         s,

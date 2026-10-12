@@ -560,6 +560,7 @@ struct Named {
     id: &'static str,
     inner: Arc<Fake>,
     needs_prompt: bool,
+    can_edit: bool,
 }
 
 impl ImageProvider for Named {
@@ -567,7 +568,7 @@ impl ImageProvider for Named {
         ProviderInfo { id: self.id, name: self.id, model: "m".into(), host: "example.invalid" }
     }
     fn capabilities(&self) -> Capabilities {
-        self.inner.capabilities()
+        Capabilities { edit: self.can_edit, ..self.inner.capabilities() }
     }
     fn needs_prompt(&self) -> bool {
         self.needs_prompt
@@ -580,8 +581,8 @@ impl ImageProvider for Named {
 fn two_providers(s: &mut Session) -> (Arc<Fake>, Arc<Fake>) {
     let (red, blue) = (Fake::new([255, 0, 0]), Fake::new([0, 0, 255]));
     let mut map: std::collections::BTreeMap<String, SharedProvider> = Default::default();
-    map.insert("red".into(), Arc::new(Named { id: "red", inner: red.clone(), needs_prompt: false }));
-    map.insert("blue".into(), Arc::new(Named { id: "blue", inner: blue.clone(), needs_prompt: true }));
+    map.insert("red".into(), Arc::new(Named { id: "red", inner: red.clone(), needs_prompt: false, can_edit: true }));
+    map.insert("blue".into(), Arc::new(Named { id: "blue", inner: blue.clone(), needs_prompt: true, can_edit: true }));
     s.set_image_providers(map, Some("red".into()));
     (red, blue)
 }
@@ -652,4 +653,42 @@ fn set_image_provider_still_installs_one_default() {
     assert_eq!(s.image_provider_ids(), vec!["fake".to_owned()]);
     s.set_image_provider(None);
     assert!(s.image_provider().is_none() && s.image_provider_ids().is_empty());
+}
+
+/// "red" (the default) and "blue", with the given edit abilities.
+fn abilities(s: &mut Session, red_edits: bool, blue_edits: bool) -> (Arc<Fake>, Arc<Fake>) {
+    let (red, blue) = (Fake::new([255, 0, 0]), Fake::new([0, 0, 255]));
+    let mut map: std::collections::BTreeMap<String, SharedProvider> = Default::default();
+    map.insert("red".into(), Arc::new(Named { id: "red", inner: red.clone(), needs_prompt: false, can_edit: red_edits }));
+    map.insert("blue".into(), Arc::new(Named { id: "blue", inner: blue.clone(), needs_prompt: false, can_edit: blue_edits }));
+    s.set_image_providers(map, Some("red".into()));
+    (red, blue)
+}
+
+#[test]
+fn a_chosen_provider_that_can_edit_works_when_the_default_cannot() {
+    let mut s = session(64, 64);
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    let (red, blue) = abilities(&mut s, false, true);
+    assert!(s.is_enabled(FILL), "any provider that can edit enables the command");
+    s.execute(FILL, json!({"prompt": "x", "variations": 1, "provider": "blue"})).unwrap();
+    assert_eq!((red.sent.lock().unwrap().len(), blue.sent.lock().unwrap().len()), (0, 1));
+}
+
+#[test]
+fn a_chosen_provider_that_cannot_edit_is_refused_before_sending() {
+    let mut s = session(64, 64);
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    let (_, blue) = abilities(&mut s, true, false);
+    let history = s.active().unwrap().history.past_len();
+    let e = s.execute(FILL, json!({"prompt": "x", "provider": "blue"})).unwrap_err().to_string();
+    assert!(e.contains("can't fill selections"), "{e}");
+    assert!(blue.sent.lock().unwrap().is_empty());
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+    // Generate More checks the provider that made the layer too.
+    let r = s.execute(FILL, json!({"prompt": "x", "variations": 1})).unwrap();
+    abilities(&mut s, true, false);
+    let e = s.execute(MORE, json!({"layer": r["layer"], "provider": "blue"})).unwrap_err().to_string();
+    assert!(e.contains("can't fill selections"), "{e}");
+    assert!(blue.sent.lock().unwrap().is_empty());
 }
