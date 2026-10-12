@@ -134,14 +134,28 @@ mod tests {
         assert_eq!(d.read_info().unwrap().info().color_type, png::ColorType::Rgb);
     }
 
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for &b in bytes {
+            crc ^= u32::from(b);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            }
+        }
+        !crc
+    }
+
     #[test]
     fn junk_and_huge_headers_are_errors_not_panics() {
         assert!(decode_rgba8(b"not a png").is_err());
         assert!(decode_rgba8(&[]).is_err());
         let mut huge = png(1, 1);
-        // IHDR width/height live at bytes 16..24; claim 100000 x 100000.
+        // IHDR width/height live at bytes 16..24; claim 100000 x 100000, then fix the chunk CRC
+        // (over "IHDR" + 13 data bytes, bytes 12..29) so the decoder reaches the size guard.
         huge[16..20].copy_from_slice(&100_000u32.to_be_bytes());
         huge[20..24].copy_from_slice(&100_000u32.to_be_bytes());
-        assert!(decode_rgba8(&huge).is_err());
+        let crc = crc32(&huge[12..29]);
+        huge[29..33].copy_from_slice(&crc.to_be_bytes());
+        assert_eq!(decode_rgba8(&huge), Err(GenError::Invalid("the image is too large".into())));
     }
 }
