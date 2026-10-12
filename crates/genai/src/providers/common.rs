@@ -53,6 +53,10 @@ fn clip(s: &str, max: usize) -> String {
     }
 }
 
+/// The most of a non-JSON body that is read; it is scrubbed whole, then clipped, so a secret
+/// can't be cut in half by the clip and slip past the scrub.
+const SCAN_LIMIT: usize = 64 * 1024;
+
 /// The service's own error message, scrubbed and clipped.
 pub fn error_text(body: &[u8], creds: &Credentials) -> String {
     let text = match serde_json::from_slice::<Value>(body) {
@@ -60,9 +64,9 @@ pub fn error_text(body: &[u8], creds: &Credentials) -> String {
             .iter()
             .find_map(|p| v.pointer(p).and_then(Value::as_str).map(str::to_owned))
             .unwrap_or_default(),
-        Err(_) => String::from_utf8_lossy(body.get(..400).unwrap_or(body)).into_owned(),
+        Err(_) => String::from_utf8_lossy(body.get(..SCAN_LIMIT).unwrap_or(body)).into_owned(),
     };
-    creds.scrub(&clip(text.trim(), 300))
+    clip(&creds.scrub(text.trim()), 300)
 }
 
 /// The error for a non-2xx reply that no provider-specific rule matched.
@@ -167,5 +171,18 @@ mod tests {
         assert_eq!(prompt_or_continue("  "), CONTINUE_PROMPT);
         assert_eq!(prompt_or_continue(" a boat "), "a boat");
         assert_eq!(form_urlencode(&[("a", "x y"), ("scope", "openid,AdobeID")]), "a=x%20y&scope=openid%2CAdobeID");
+    }
+
+    #[test]
+    fn a_long_secret_straddling_the_clip_point_is_still_scrubbed() {
+        let secret = "k".repeat(600);
+        let long = Credentials::api_key(ApiKey::new(&secret).unwrap());
+        let text = format!("{}{secret}{}", "x".repeat(250), "y".repeat(50));
+        let json_body = json!({"error": {"message": text}}).to_string();
+        for body in [json_body.as_bytes(), text.as_bytes()] {
+            let out = error_text(body, &long);
+            assert!(!out.contains(&secret[..20]), "a fragment of the secret leaked");
+            assert!(out.contains("[key]"));
+        }
     }
 }
