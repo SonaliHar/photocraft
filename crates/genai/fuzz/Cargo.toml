@@ -42,3 +42,10 @@ path = "fuzz_targets/bria.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "bfl"
+path = "fuzz_targets/bfl.rs"
+test = false
+doc = false
+bench = false

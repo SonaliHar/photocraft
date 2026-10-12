@@ -27,8 +27,14 @@ pub struct ProviderSpec {
     pub build: BuildFn,
 }
 
-static PROVIDERS: &[ProviderSpec] =
-    &[crate::gemini::SPEC, crate::providers::openai::SPEC, crate::providers::stability::SPEC, crate::providers::ideogram::SPEC, crate::providers::bria::SPEC];
+static PROVIDERS: &[ProviderSpec] = &[
+    crate::gemini::SPEC,
+    crate::providers::openai::SPEC,
+    crate::providers::stability::SPEC,
+    crate::providers::ideogram::SPEC,
+    crate::providers::bria::SPEC,
+    crate::providers::bfl::SPEC,
+];
 
 pub fn providers() -> &'static [ProviderSpec] {
     PROVIDERS
