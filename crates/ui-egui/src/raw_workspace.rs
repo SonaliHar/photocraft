@@ -295,7 +295,7 @@ pub(crate) fn develop_for_browsing(name: &str, bytes: &[u8]) -> Result<(photocra
     if let Some(reduced) = photocraft_io::raw::import_raw_browse_reduced(name, bytes)? {
         return Ok((reduced.import, Some(reduced.full_size)));
     }
-    Ok((photocraft_io::raw::import_raw_browse(name, bytes)?, None))
+    Ok((photocraft_io::raw::import_raw(name, bytes)?, None))
 }
 
 /// A document the host opened for the Camera Raw workspace: for a raw developed from its sensor data, its bytes

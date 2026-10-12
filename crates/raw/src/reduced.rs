@@ -1,15 +1,14 @@
 //! A reduced-resolution development, for showing a photo while it is being browsed.
 //!
 //! A Camera Raw dialog shows a picture of a few thousand pixels at most, not 45 million. Demosaicing the whole sensor only to
-//! average it down again costs seconds; here every output pixel is the plain average of each colour's samples inside a block of
-//! the sensor ([`develop_reduced`]): one pass over the data, no interpolation, and so no demosaicing artefacts. The colour
-//! handling is the full development's own (white balance, the camera look or calibration, exposure, tone, gamma, orientation):
-//! the same code, not a copy of it, so the two cannot drift apart.
+//! average it down again costs seconds. [`develop_reduced`] instead averages each colour's samples inside blocks of the sensor
+//! into a small Bayer mosaic and hands that to [`develop_sensor`]: the development itself (white balance, the camera look or
+//! calibration, exposure, tone, gamma, orientation) is the full one's, unchanged, so the two cannot drift apart.
 
-use crate::develop::{DevelopOptions, Developed, RowNormalizer, Scale, color_setup, finish};
+use crate::develop::{DevelopOptions, Developed, develop_sensor};
 use crate::error::{RawError, Result};
 use crate::par;
-use crate::sensor::Sensor;
+use crate::sensor::{BlackLevels, Cfa, Rect, Sensor};
 
 /// A reduced development and the size of the full one it stands in for.
 #[derive(Debug, Clone)]
@@ -20,16 +19,16 @@ pub struct ReducedDeveloped {
     pub full_height: u32,
 }
 
-/// The block size (an even number of sensor pixels, so every block holds the same colours) that leaves the longer side at
-/// least `target_long_edge` pixels.
-fn block_size(long_side: usize, target_long_edge: usize) -> usize {
-    (2 * (long_side / (2 * target_long_edge.max(1)))).max(2)
+/// How many times smaller the reduced picture is: the largest whole factor that leaves the longer side at least
+/// `target_long_edge` pixels.
+fn factor(long_side: usize, target_long_edge: usize) -> usize {
+    (long_side / target_long_edge.max(1)).max(1)
 }
 
-/// Develops `s` at a fraction of its size: the longer side comes out at least `target_long_edge` pixels where the sensor allows.
+/// Develops `s` at a fraction of its size: the longer side comes out at least `target_long_edge` pixels.
 ///
-/// Only Bayer sensors at least twice `target_long_edge` long are reduced; anything else is refused with [`RawError`], and the
-/// caller develops it in full.
+/// Only plain Bayer sensors at least twice `target_long_edge` long are reduced (no black-level deltas, no lens-shading gain
+/// maps: both are indexed by sensor position); anything else is refused with [`RawError`], and the caller develops it in full.
 pub fn develop_reduced(s: &Sensor, opts: &DevelopOptions, target_long_edge: usize) -> Result<ReducedDeveloped> {
     let c = s.crop;
     if c.is_empty() || c.x + c.width > s.width || c.y + c.height > s.height || s.data.len() < s.width * s.height * s.samples {
@@ -41,64 +40,88 @@ pub fn develop_reduced(s: &Sensor, opts: &DevelopOptions, target_long_edge: usiz
     if !cfa.is_bayer() {
         return Err(RawError::unsupported("a reduced development needs a Bayer sensor"));
     }
-    // Only where it pays: a photo under twice the target is cheap to develop in full, and halving it would leave less than asked.
-    if c.width.max(c.height) < 2 * target_long_edge.max(1) {
+    let bl = &s.black;
+    if !bl.delta_h.is_empty() || !bl.delta_v.is_empty() || !matches!(bl.rows, 1 | 2) || !matches!(bl.cols, 1 | 2) || !s.gain_maps.is_empty() {
+        return Err(RawError::unsupported("black levels or gain maps that vary across the sensor"));
+    }
+    // Only where it pays: a photo under twice the target is cheap to develop in full.
+    let k = factor(c.width.max(c.height), target_long_edge);
+    if k < 2 {
         return Err(RawError::unsupported("small enough to develop in full"));
     }
-    let f = block_size(c.width.max(c.height), target_long_edge);
+    // A block of f × f sensor pixels becomes one 2 × 2 cell of the reduced mosaic; f is even, so every block starts on the
+    // same colours and the same black levels.
+    let f = 2 * k;
     let (bw, bh) = (c.width / f, c.height / f);
     if bw == 0 || bh == 0 {
         return Err(RawError::malformed("the sensor is too small to reduce"));
     }
-    opts.limits.check(bw as u64, bh as u64, 12 + 12 + 6)?;
-    let mut warnings = s.warnings.clone();
-    let sc = Scale::new(s);
-    let setup = color_setup(s, opts, &sc, &mut warnings)?;
-
-    // The colours of the 2×2 cell at the crop's origin; every block starts on one (f is even).
-    let phase = cfa.phase(c.x, c.y);
-    let pattern = phase.iter().map(|c| ['R', 'G', 'B'][usize::from(*c).min(2)]).collect::<String>();
-    // Each of the four cells appears f²/4 times in a block.
-    let mut count = [0.0f32; 3];
-    for ch in phase {
-        count[usize::from(ch).min(2)] += (f * f / 4) as f32;
-    }
-    let inverse = count.map(|n| if n > 0.0 { 1.0 / n } else { 0.0 });
-    let normalizer = RowNormalizer::new(s, &sc, setup.mult, cfa);
-    let mut rgb = vec![0.0f32; bw * bh * 3];
-    // One output row per task: it averages f source rows.
-    par::chunks_mut(&mut rgb, bw * 3, |by, out| {
-        let mut line = vec![0.0f32; bw * f];
-        let mut acc = vec![[0.0f32; 3]; bw];
+    let (w, h) = (2 * bw, 2 * bh);
+    opts.limits.check(w as u64, h as u64, 2)?;
+    let lin = s.linearization.as_deref();
+    let linear = |raw: u16| lin.map_or(raw, |l| l.get(usize::from(raw)).or_else(|| l.last()).copied().unwrap_or(raw));
+    let samples = (k * k) as u64;
+    let mut data = vec![0u16; w * h];
+    // One row of blocks (two mosaic rows) per task.
+    par::chunks_mut(&mut data, 2 * w, |by, out| {
+        let mut sums = vec![0u64; 2 * w];
         for dy in 0..f {
-            normalizer.fill(c.y + by * f + dy, &mut line);
-            let (even, odd) = (usize::from(phase[(dy % 2) * 2]).min(2), usize::from(phase[(dy % 2) * 2 + 1]).min(2));
-            for (cell, block) in acc.iter_mut().zip(line.chunks_exact(f)) {
-                let (mut a, mut b) = (0.0f32, 0.0f32);
+            let start = (c.y + by * f + dy) * s.width + c.x;
+            let src = &s.data[start..start + bw * f];
+            let row = &mut sums[(dy % 2) * w..(dy % 2 + 1) * w];
+            for (cell, block) in row.as_chunks_mut::<2>().0.iter_mut().zip(src.chunks_exact(f)) {
                 for pair in block.as_chunks::<2>().0 {
-                    a += pair[0];
-                    b += pair[1];
+                    cell[0] += u64::from(linear(pair[0]));
+                    cell[1] += u64::from(linear(pair[1]));
                 }
-                cell[even] += a;
-                cell[odd] += b;
             }
         }
-        for (px, cell) in out.as_chunks_mut::<3>().0.iter_mut().zip(&acc) {
-            for k in 0..3 {
-                px[k] = cell[k] * inverse[k];
-            }
+        for (o, sum) in out.iter_mut().zip(&sums) {
+            *o = ((sum + samples / 2) / samples) as u16;
         }
     });
 
+    let (ox, oy) = (c.x.saturating_sub(s.active.x), c.y.saturating_sub(s.active.y));
+    let black = BlackLevels {
+        rows: 2,
+        cols: 2,
+        values: vec![bl.at(ox, oy, 0, 1), bl.at(ox + 1, oy, 0, 1), bl.at(ox, oy + 1, 0, 1), bl.at(ox + 1, oy + 1, 0, 1)],
+        delta_h: Vec::new(),
+        delta_v: Vec::new(),
+    };
+    // Field by field (not `..s.clone()`, which would copy the full sensor data).
+    let small = Sensor {
+        format: s.format,
+        make: s.make.clone(),
+        model: s.model.clone(),
+        width: w,
+        height: h,
+        samples: 1,
+        data,
+        cfa: Some(Cfa { width: 2, height: 2, colors: cfa.phase(c.x, c.y).to_vec(), origin_x: 0, origin_y: 0 }),
+        linearization: None,
+        black,
+        white: s.white,
+        active: Rect::new(0, 0, w, h),
+        crop: Rect::new(0, 0, w, h),
+        color: s.color.clone(),
+        camera_wb: s.camera_wb,
+        orientation: s.orientation,
+        baseline_exposure: s.baseline_exposure,
+        gain_maps: Vec::new(),
+        tone_curve: s.tone_curve.clone(),
+        black_point: s.black_point,
+        warnings: s.warnings.clone(),
+    };
+    let developed = develop_sensor(&small, opts)?;
     let (full_width, full_height) = if opts.orient && (5..=8).contains(&s.orientation) { (c.height, c.width) } else { (c.width, c.height) };
-    let developed = finish(s, opts, rgb, (bw, bh), &setup, Some(pattern), warnings);
     Ok(ReducedDeveloped { developed, full_width: full_width as u32, full_height: full_height as u32 })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{WhiteBalance, develop_sensor};
+    use crate::WhiteBalance;
 
     /// A smooth camera-space scene: gradients and a gentle swirl, so box averages and demosaiced pixels agree closely.
     fn smooth(w: usize, h: usize) -> Vec<[f32; 3]> {
@@ -138,16 +161,12 @@ mod tests {
     }
 
     #[test]
-    fn blocks_are_even_and_keep_the_target() {
-        assert_eq!(block_size(8256, 1800), 4);
-        assert_eq!(block_size(6000, 1800), 2);
-        assert_eq!(block_size(3000, 1800), 2);
-        assert_eq!(block_size(100, 1000), 2);
-        assert_eq!(block_size(5000, 0), 5000);
-        for long in [4000, 5472, 6000, 8256, 9504] {
-            let f = block_size(long, 1800);
-            assert!(f.is_multiple_of(2) && (long / f >= 1800 || f == 2), "{long}: {f}");
-        }
+    fn the_factor_keeps_the_target() {
+        assert_eq!(factor(8256, 1800), 4);
+        assert_eq!(factor(6000, 1800), 3);
+        assert_eq!(factor(3000, 1800), 1);
+        assert_eq!(factor(100, 1000), 1);
+        assert_eq!(factor(5000, 0), 5000);
     }
 
     #[test]
@@ -157,7 +176,7 @@ mod tests {
         let opts = DevelopOptions { white_balance: WhiteBalance::Multipliers([1.4, 1.0, 1.2]), ..Default::default() };
         let full = develop_sensor(&s, &opts).unwrap();
         let reduced = develop_reduced(&s, &opts, 100).unwrap();
-        let f = block_size(w, 100);
+        let f = factor(w, 100);
         assert_eq!((reduced.developed.width as usize, reduced.developed.height as usize), (w / f, h / f));
         assert_eq!((reduced.full_width, reduced.full_height), (full.width, full.height));
         let difference = mean_difference(&full, &reduced.developed, f);
@@ -208,10 +227,10 @@ mod tests {
 
     #[test]
     fn the_whole_crop_is_used_not_just_a_multiple_of_the_block() {
-        // 250 x 170 with 4-pixel blocks: the right and bottom remainders are dropped, never read past.
+        // 250 x 170 with 8-pixel blocks: the right and bottom remainders are dropped, never read past.
         let s = sensor(250, 170);
         let reduced = develop_reduced(&s, &DevelopOptions::default(), 60).unwrap();
-        let f = block_size(250, 60);
-        assert_eq!((reduced.developed.width as usize, reduced.developed.height as usize), (250 / f, 170 / f));
+        let f = 2 * factor(250, 60);
+        assert_eq!((reduced.developed.width as usize, reduced.developed.height as usize), (2 * (250 / f), 2 * (170 / f)));
     }
 }

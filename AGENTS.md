@@ -18,6 +18,11 @@ the rebuilt editor passes the native checks and Image Triage's live handoff.
 Never push to `origin` or create an upstream PR for this integration. Push to the
 user's fork only when requested. See `../ImageTriage/AGENTS.md` for the workflow.
 
+The fork carries only what hosting PhotoCraft inside Image Triage needs. When upstream
+has built something the fork also built, drop the fork's version and take upstream's,
+in conflicts and in automatic merges alike; fork code should sit in its own files and
+call upstream's functions unchanged rather than edit them.
+
 | Read | Why |
 |---|---|
 | `docs/architecture.md` | Crate map, dependency layers, the engine/UI seam, document model |

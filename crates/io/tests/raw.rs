@@ -22,6 +22,18 @@ fn dng_opens_as_16_bit_prophoto() {
     assert!(r.warnings.iter().any(|w| w.contains("DNG") && w.contains("ProPhoto")), "{:?}", r.warnings);
 }
 
+/// #3497: a monochrome (one-sample LinearRaw) DNG, as VueScan writes film scans, opens as a
+/// 16-bit RGB document (neutral grey) instead of failing as unsupported.
+#[test]
+fn monochrome_dng_opens() {
+    let (w, h) = (40, 24);
+    let data: Vec<u16> = (0..w * h).map(|i| (i % w * 1600) as u16).collect();
+    let r = import("S261009_90_67.dng", &DngSpec::monochrome(w, h, data).build()).unwrap();
+    let d = &r.document;
+    assert_eq!((d.size.width, d.size.height, d.mode, d.depth), (40, 24, ColorMode::Rgb, SampleType::U16));
+    assert!(r.warnings.iter().all(|w| !w.contains("colour matrix") && !w.contains("preview")), "{:?}", r.warnings);
+}
+
 #[test]
 fn cr2_opens() {
     let (w, h) = (48, 16);
@@ -132,6 +144,10 @@ fn jpeg(img: Image) -> Vec<u8> {
 
 /// An uncompressed NEF-like raw of `cam` with an optional JPEG preview in IFD0.
 fn nef_uncompressed(cam: &[[f32; 3]], w: usize, h: usize, preview: Option<Vec<u8>>) -> Vec<u8> {
+    nef_uncompressed_with_wb(cam, w, h, preview, None)
+}
+
+fn nef_uncompressed_with_wb(cam: &[[f32; 3]], w: usize, h: usize, preview: Option<Vec<u8>>, wb: Option<[u32; 2]>) -> Vec<u8> {
     let data = mosaic(cam, w, [0, 1, 1, 2], 0, 4095);
     let mut t = TiffBuilder::default();
     let strip = t.blob(data.iter().flat_map(|v| v.to_le_bytes()).collect());
@@ -150,6 +166,15 @@ fn nef_uncompressed(cam: &[[f32; 3]], w: usize, h: usize, preview: Option<Vec<u8
         (33422, Val::Byte(vec![0, 1, 1, 2])),
     ]);
     let mut ifd0 = vec![(271, Val::Ascii("NIKON CORPORATION".into())), (330, Val::Ifds(vec![raw]))];
+    if let Some([r, b]) = wb {
+        let mut note = TiffBuilder::default();
+        let note_ifd = note.ifd(vec![(0x000C, Val::Rational(vec![(r, 1024), (b, 1024), (1, 1), (1, 1)]))]);
+        note.chain = vec![note_ifd];
+        let mut maker = b"Nikon\0\x02\x10\0\0".to_vec();
+        maker.extend(note.build());
+        let exif = t.ifd(vec![(37500, Val::Undefined(maker))]);
+        ifd0.push((34665, Val::Ifds(vec![exif])));
+    }
     if let Some(j) = preview {
         let len = j.len() as u32;
         let b = t.blob(j);
@@ -179,6 +204,49 @@ fn uncalibrated_raw_takes_its_colour_from_the_camera_jpeg() {
 }
 
 #[test]
+fn camera_raw_tuning_keeps_the_default_look_and_applies_user_gains_after_fitting() {
+    use photocraft_io::raw::{RawTuning, fit_preview_look, import_raw_tuned};
+    use photocraft_raw::{DevelopOptions, WhiteBalance, decode, develop_sensor};
+
+    let (w, h) = (480, 320);
+    let cam: Vec<_> = patches(w, h).into_iter().map(|c| c.map(|v| v * 0.6)).collect();
+    let balanced: Vec<_> = cam.iter().map(|c| [c[0] * 2.0, c[1], c[2] * 1.5]).collect();
+    let bytes = nef_uncompressed_with_wb(&cam, w, h, Some(camera_rendering(&balanced, w, h)), Some([2048, 1536]));
+    let normal = import("camera.nef", &bytes).unwrap();
+    assert!(fitted(&normal.warnings));
+    let sensor = decode(&bytes, &Default::default()).unwrap();
+    let look = fit_preview_look(&bytes, &sensor, &DevelopOptions::default()).unwrap();
+    for tuning in [
+        RawTuning::default(),
+        RawTuning { exposure: 0.5, ..Default::default() },
+        RawTuning { exposure: -0.5, temperature: 20.0, tint: -15.0, ..Default::default() },
+    ] {
+        let (got, applied) = import_raw_tuned("camera.nef", &bytes, &tuning).unwrap();
+        assert!(applied && fitted(&got.warnings) && !fallback(&got.warnings), "{:?}", got.warnings);
+        assert_eq!(got.document.depth, SampleType::U16);
+        assert_eq!((got.document.size.width, got.document.size.height), (w as u32, h as u32));
+        let gains = photocraft_algo::camera_raw::white_balance_gains(tuning.temperature, tuning.tint).map(f64::from);
+        let expected = develop_sensor(
+            &sensor,
+            &DevelopOptions {
+                exposure: f64::from(tuning.exposure),
+                white_balance: WhiteBalance::Multipliers([2.0 * gains[0], gains[1], 1.5 * gains[2]]),
+                camera_look: Some(look.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let expected_bytes: Vec<_> = expected.rgb.iter().flat_map(|v| v.to_ne_bytes()).collect();
+        let actual = photocraft_io::document_to_image(&got.document, &mut Vec::new()).unwrap();
+        assert_eq!(actual.data(), expected_bytes, "tuning {tuning:?} must not refit away the user controls");
+        if tuning == RawTuning::default() {
+            let original = photocraft_io::document_to_image(&normal.document, &mut Vec::new()).unwrap();
+            assert_eq!(actual.data(), original.data());
+        }
+    }
+}
+
+#[test]
 fn unusable_previews_keep_the_neutral_fallback() {
     let (w, h) = (480, 320);
     let cam = patches(w, h);
@@ -201,8 +269,13 @@ fn unusable_previews_keep_the_neutral_fallback() {
         Some(garbage),
     ];
     for (i, p) in previews.into_iter().enumerate() {
-        let r = import("DSC_0003.NEF", &nef_uncompressed(&cam, w, h, p)).unwrap();
+        let bytes = nef_uncompressed(&cam, w, h, p);
+        let r = import("DSC_0003.NEF", &bytes).unwrap();
         assert!(fallback(&r.warnings) && !fitted(&r.warnings), "preview {i}: {:?}", r.warnings);
+        let (tuned, wb) =
+            photocraft_io::raw::import_raw_tuned("DSC_0003.NEF", &bytes, &photocraft_io::raw::RawTuning { exposure: 0.5, ..Default::default() }).unwrap();
+        assert!(!wb && fallback(&tuned.warnings) && !fitted(&tuned.warnings), "preview {i}: {:?}", tuned.warnings);
+        assert_eq!(tuned.document.depth, SampleType::U16);
     }
 }
 
@@ -213,6 +286,7 @@ fn truncated_raws_with_a_fittable_preview_do_not_panic() {
     let b = nef_uncompressed(&cam, w, h, Some(camera_rendering(&cam, w, h)));
     for n in (0..b.len()).step_by(211) {
         let _ = import("x.nef", &b[..n]);
+        let _ = photocraft_io::raw::import_raw_tuned("x.nef", &b[..n], &Default::default());
     }
 }
 
@@ -228,47 +302,6 @@ fn channel_means(r: &photocraft_io::ImportResult) -> [f64; 3] {
         }
     }
     sum.map(|s| s / (values.len() / n) as f64)
-}
-
-/// Camera Raw's Open re-develops a raw with the photographer's white balance. The colour fitted to the camera's JPEG
-/// is the camera's own rendering, so it must be fitted at the as-shot white balance: a matrix fitted to a changed
-/// white balance absorbs the change and the control would do nothing.
-#[test]
-fn a_changed_white_balance_is_not_cancelled_by_the_fitted_colour() {
-    let (w, h) = (480, 320);
-    let cam = patches(w, h);
-    let bytes = nef_uncompressed(&cam, w, h, Some(camera_rendering(&cam, w, h)));
-    let develop = |white_balance| {
-        let opts = photocraft_raw::DevelopOptions { white_balance, ..Default::default() };
-        photocraft_io::raw::import_raw_with("DSC_0004.NEF", &bytes, &opts).unwrap()
-    };
-    let as_shot = develop(photocraft_raw::WhiteBalance::AsShot);
-    let warm = develop(photocraft_raw::WhiteBalance::Multipliers([1.5, 1.0, 0.65]));
-    let cool = develop(photocraft_raw::WhiteBalance::Multipliers([0.7, 1.0, 1.4]));
-    for r in [&as_shot, &warm, &cool] {
-        assert!(fitted(&r.warnings), "{:?}", r.warnings);
-    }
-    let red_over_blue = |r: &photocraft_io::ImportResult| channel_means(r)[0] / channel_means(r)[2];
-    let (before, warmer, cooler) = (red_over_blue(&as_shot), red_over_blue(&warm), red_over_blue(&cool));
-    // Cancelled, the ratio stays within about 1% of the as-shot one (0.99 measured before the fix).
-    assert!(warmer > before * 1.15, "red/blue {before:.3} as shot, {warmer:.3} with a warmer white balance");
-    assert!(cooler < before / 1.15, "red/blue {before:.3} as shot, {cooler:.3} with a cooler white balance");
-}
-
-/// The look does not depend on the exposure asked for either: exposure is applied after it.
-#[test]
-fn exposure_still_scales_a_fitted_raw() {
-    let (w, h) = (480, 320);
-    let cam = patches(w, h);
-    let bytes = nef_uncompressed(&cam, w, h, Some(camera_rendering(&cam, w, h)));
-    let develop = |exposure| {
-        let opts = photocraft_raw::DevelopOptions { exposure, ..Default::default() };
-        photocraft_io::raw::import_raw_with("DSC_0005.NEF", &bytes, &opts).unwrap()
-    };
-    let (flat, bright) = (develop(0.0), develop(1.0));
-    assert!(fitted(&flat.warnings) && fitted(&bright.warnings));
-    let (a, b) = (channel_means(&flat), channel_means(&bright));
-    assert!(b[1] > a[1] * 1.2, "green {:.3} at 0 EV, {:.3} at +1 EV", a[1], b[1]);
 }
 
 /// A raw as browsed in Camera Raw: a fraction of the size, the full development's colour.
@@ -325,4 +358,29 @@ fn a_photo_that_is_already_small_is_not_reduced() {
     assert!(photocraft_io::raw::import_raw_browse_reduced("DSC_0011.NEF", &bytes).unwrap().is_none(), "the browsing size is far above 480 px");
     assert!(photocraft_io::raw::import_raw_browse_reduced_to("DSC_0011.NEF", &bytes, 241).unwrap().is_none(), "just under twice the target");
     assert!(photocraft_io::raw::import_raw_browse_reduced_to("DSC_0011.NEF", &bytes, 240).unwrap().is_some(), "twice the target");
+}
+
+/// The open-time Camera Raw re-develop keeps the colour rendering the default open used: a raw
+/// without calibration gets the same look fitted to its JPEG, so neutral settings give the same
+/// pixels, and the previews' tone curve is the look's.
+#[test]
+fn a_re_develop_keeps_the_fitted_look() {
+    let (w, h) = (480, 320);
+    let cam = patches(w, h);
+    let nef = nef_uncompressed(&cam, w, h, Some(camera_rendering(&cam, w, h)));
+    let opened = import("DSC_0003.NEF", &nef).unwrap();
+    let (again, _) = photocraft_io::raw::import_raw_tuned("DSC_0003.NEF", &nef, &Default::default()).unwrap();
+    assert!(fitted(&again.warnings), "{:?}", again.warnings);
+    let pixels = |d: &photocraft_doc::Document| {
+        let s = d.layers[0].surface().unwrap();
+        let mut px = vec![[0.0f32; 4]; w * h];
+        s.read_rgba_into(photocraft_geom::Rect::new(0, 0, w as i32, h as i32), &mut px);
+        px
+    };
+    assert_eq!(pixels(&opened.document), pixels(&again.document));
+    let curve = photocraft_io::raw::tone_curve(&nef);
+    assert!(curve.len() > 2 && curve.windows(2).all(|k| k[1][0] > k[0][0] && k[1][1] >= k[0][1]), "{curve:?}");
+    // The camera's brightening curve: mid-grey comes out lighter.
+    let mid = curve.iter().find(|k| k[0] >= 0.18).unwrap();
+    assert!(mid[1] > mid[0], "{mid:?}");
 }
