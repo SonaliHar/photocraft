@@ -132,7 +132,7 @@ pub const DISPLAY_LONG_SIDE: u32 = 2560;
 pub const DISPLAY_QUALITY: u8 = 90;
 
 pub fn stash(app: &mut PhotocraftApp, path: &str, preview: &str) -> Result<Started, String> {
-    stash_with_display(app, path, preview, None)
+    stash_with_display(app, path, Some(preview), None)
 }
 
 /// The pool the hosted save encodes on: half of rayon's threads, its own. On rayon's shared pool the encoders took
@@ -183,9 +183,12 @@ fn side_by_side<A: Send, B: Send, C: Send>(
 /// encode (from the compositor's reduced render, not a full-size one) and written as soon as it is
 /// ready, so a quick return to the photo can use it long before the project and full render land.
 /// It is a convenience: a failure to make or write it never fails the save.
-pub fn stash_with_display(app: &mut PhotocraftApp, path: &str, preview: &str, display: Option<&str>) -> Result<Started, String> {
+pub fn stash_with_display(app: &mut PhotocraftApp, path: &str, preview: Option<&str>, display: Option<&str>) -> Result<Started, String> {
     crate::raw_workspace::settle(app)?;
-    if !path.to_ascii_lowercase().ends_with(".pcraft") || !preview.to_ascii_lowercase().ends_with(".png") {
+    if preview.is_none() && display.is_none() {
+        return Err("stash requires a preview or a display render".into());
+    }
+    if !path.to_ascii_lowercase().ends_with(".pcraft") || preview.is_some_and(|preview| !preview.to_ascii_lowercase().ends_with(".png")) {
         return Err("stash requires a .pcraft project and a .png preview".into());
     }
     if let Some(display) = display
@@ -206,7 +209,7 @@ pub fn stash_with_display(app: &mut PhotocraftApp, path: &str, preview: &str, di
         return Err("The previous photo snapshot is still saving; the current edits are retained".into());
     }
     let path = path.to_string();
-    let preview = preview.to_string();
+    let preview = preview.map(str::to_string);
     let display = display.map(str::to_string);
     let applied_path = path.clone();
     let id = doc.id;
@@ -225,7 +228,8 @@ pub fn stash_with_display(app: &mut PhotocraftApp, path: &str, preview: &str, di
                 // snapshot: run them side by side. All finish before any result is looked at.
                 let (project, render, shown) = side_by_side(
                     || photocraft_io::export(&doc, &path, &Default::default()),
-                    || photocraft_io::export(&doc, &preview, &Default::default()),
+                    // The full-size render is the heaviest encode of a save; a host that autosaves while the photo is open leaves it out.
+                    || preview.as_ref().map(|target| photocraft_io::export(&doc, target, &Default::default())),
                     // Small and quick: written the moment it exists, ahead of the large files.
                     display.as_ref().map(|target| {
                         || {
@@ -237,18 +241,20 @@ pub fn stash_with_display(app: &mut PhotocraftApp, path: &str, preview: &str, di
                 let render = render.map_err(|_| EngineError::Other("preview encoder stopped unexpectedly".into()))?;
                 let project =
                     project.map_err(|_| EngineError::Other("project encoder stopped unexpectedly".into()))?.map_err(|e| EngineError::Other(e.to_string()))?;
-                let render = render.map_err(|e| EngineError::Other(e.to_string()))?;
+                let render = render.transpose().map_err(|e| EngineError::Other(e.to_string()))?;
                 ctx.check()?;
                 // Each capability write is atomic. Report success only after both.
                 write(&path, &project.bytes).map_err(EngineError::Other)?;
-                write(&preview, &render.bytes).map_err(EngineError::Other)?;
+                if let (Some(target), Some(render)) = (&preview, &render) {
+                    write(target, &render.bytes).map_err(EngineError::Other)?;
+                }
                 let mut warnings = project.warnings;
                 match shown {
                     Some(Ok(Err(error))) => warnings.push(format!("display preview not written: {error}")),
                     Some(Err(_)) => warnings.push("display preview not written: its encoder stopped unexpectedly".to_string()),
                     Some(Ok(Ok(()))) | None => {}
                 }
-                Ok((warnings, render.warnings))
+                Ok((warnings, render.map(|render| render.warnings).unwrap_or_default()))
             },
             move |session, (mut warnings, render_warnings)| {
                 if let Some(state) = session.active_mut().filter(|state| state.doc.id == id && state.revision == revision) {
@@ -379,7 +385,7 @@ mod tests {
             Ok(())
         }));
         app.session.execute("layer.new.layer", json!({})).unwrap();
-        let started = stash_with_display(&mut app, "photo.pcraft", "photo.png", Some("photo.display.jpg")).unwrap();
+        let started = stash_with_display(&mut app, "photo.pcraft", Some("photo.png"), Some("photo.display.jpg")).unwrap();
         finish(&mut app, started).unwrap();
         let writes = writes.lock().unwrap();
         let display = writes.iter().find(|(path, _)| path == "photo.display.jpg").expect("display written");
@@ -391,17 +397,43 @@ mod tests {
     fn a_failed_display_write_does_not_fail_the_save() {
         let mut app = app(Arc::new(|path, _| if path.ends_with(".jpg") { Err("read-only".into()) } else { Ok(()) }));
         app.session.execute("layer.new.layer", json!({})).unwrap();
-        let started = stash_with_display(&mut app, "photo.pcraft", "photo.png", Some("photo.display.jpg")).unwrap();
+        let started = stash_with_display(&mut app, "photo.pcraft", Some("photo.png"), Some("photo.display.jpg")).unwrap();
         let result = finish(&mut app, started).expect("the project and render still save");
         assert!(result["warnings"].to_string().contains("display preview not written"), "{result}");
         assert!(!app.session.active().unwrap().is_dirty());
     }
 
     #[test]
+    fn stash_without_a_preview_writes_the_project_and_the_display_jpeg_only() {
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let recorded = writes.clone();
+        let mut app = app(Arc::new(move |path, bytes| {
+            recorded.lock().unwrap().push((path.to_string(), bytes.to_vec()));
+            Ok(())
+        }));
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        let started = stash_with_display(&mut app, "photo.pcraft", None, Some("photo.display.jpg")).unwrap();
+        finish(&mut app, started).unwrap();
+        let writes = writes.lock().unwrap();
+        let mut paths: Vec<&str> = writes.iter().map(|(path, _)| path.as_str()).collect();
+        paths.sort_unstable();
+        assert_eq!(paths, ["photo.display.jpg", "photo.pcraft"], "no full-size render was encoded or written");
+        assert!(!app.session.active().unwrap().is_dirty(), "the save still counts as a save");
+    }
+
+    #[test]
+    fn stash_needs_a_preview_or_a_display_render() {
+        let mut app = app(Arc::new(|_, _| Ok(())));
+        let error = stash_with_display(&mut app, "photo.pcraft", None, None).unwrap_err();
+        assert!(error.contains("preview or a display"), "{error}");
+        assert!(stash_with_display(&mut app, "photo.pcraft", Some("photo.display.jpg"), None).is_err(), "a preview is a .png");
+    }
+
+    #[test]
     fn stash_display_must_be_a_jpeg() {
         let mut app = app(Arc::new(|_, _| Ok(())));
-        assert!(stash_with_display(&mut app, "photo.pcraft", "photo.png", Some("photo.png")).is_err());
-        assert!(stash_with_display(&mut app, "photo.pcraft", "photo.png", Some("photo.JPEG")).is_ok());
+        assert!(stash_with_display(&mut app, "photo.pcraft", Some("photo.png"), Some("photo.png")).is_err());
+        assert!(stash_with_display(&mut app, "photo.pcraft", Some("photo.png"), Some("photo.JPEG")).is_ok());
     }
 
     #[test]

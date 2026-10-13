@@ -329,7 +329,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
     let u = |k: &str| p.get(k).and_then(Value::as_u64);
     let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(true);
     match req.method.as_str() {
-        "app.handoff" => ok(json!({"version": 2, "replace": true, "hiddenStart": true, "cameraRaw": 1, "cameraRawPrefetch": 1, "cameraRawSwitch": 1})),
+        "app.handoff" => ok(
+            json!({"version": 2, "replace": true, "hiddenStart": true, "cameraRaw": 1, "cameraRawPrefetch": 1, "cameraRawSwitch": 1, "stashWithoutPreview": 1}),
+        ),
         "ui.cameraRaw" => run_waiting(app, wait, |app| crate::raw_workspace::control(app, ctx, p)),
         "app.prefetch" => match (s("path"), s("signature")) {
             (Some(path), Some(signature)) => wrap(crate::raw_workspace::request_prefetch(app, path, signature)),
@@ -1189,16 +1191,18 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             }
             _ => err("bind requires an open document, .pcraft path and .png preview"),
         },
-        "app.stash" => match (s("path"), s("preview")) {
-            (Some(path), Some(preview)) => match crate::control_files::stash_with_display(app, path, preview, s("display")) {
-                Ok(photocraft_engine::jobs::Started::Job(job)) if req.params.get("wait").and_then(Value::as_bool) == Some(false) => {
-                    ok(json!({"job": job.0, "pending": true}))
+        "app.stash" => match s("path") {
+            Some(path) if s("preview").is_some() || s("display").is_some() => {
+                match crate::control_files::stash_with_display(app, path, s("preview"), s("display")) {
+                    Ok(photocraft_engine::jobs::Started::Job(job)) if req.params.get("wait").and_then(Value::as_bool) == Some(false) => {
+                        ok(json!({"job": job.0, "pending": true}))
+                    }
+                    Ok(photocraft_engine::jobs::Started::Job(job)) => Outcome::AfterJob(job),
+                    Ok(photocraft_engine::jobs::Started::Done(result)) => ok(result),
+                    Err(error) => err(error),
                 }
-                Ok(photocraft_engine::jobs::Started::Job(job)) => Outcome::AfterJob(job),
-                Ok(photocraft_engine::jobs::Started::Done(result)) => ok(result),
-                Err(error) => err(error),
-            },
-            _ => err("stash requires path and preview"),
+            }
+            _ => err("stash requires path and preview or display"),
         },
         "app.save" => match crate::targa_options_ui::bits_param(p, "app.save") {
             Ok(tga_bits) => {
