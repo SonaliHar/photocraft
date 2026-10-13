@@ -1518,7 +1518,7 @@ mod tests {
                     _ => None,
                 }
             }
-            h.output().shapes.iter().find_map(|shape| find(&shape.shape, title)).expect("visible preset title")
+            h.output().shapes.iter().find_map(|shape| find(&shape.shape, title)).unwrap_or_else(|| panic!("visible preset title: {title:?}"))
         }
 
         fn second_click_creates_once(h: &mut Harness<'static, PhotocraftApp>, at: egui::Pos2) {
@@ -1780,11 +1780,11 @@ mod tests {
         fn picked_orientation_turns_the_presets() {
             let mut h = harness();
             h.get_by_label("Print").click();
-            h.run_steps(2);
-            // The default 1920 x 1080 is already landscape: Landscape swaps nothing, but is picked.
-            let label = h.get_by_label("Orientation").rect();
-            let gap = h.ctx.global_style().spacing.item_spacing.x;
-            click_at(&mut h, egui::pos2(label.right() + gap + 24.0 + gap + 12.0, label.center().y));
+            h.run();
+            // Use the named button; the responsive layout can change icon positions.
+            h.get_by_role_and_label(Role::Button, "Landscape").click();
+            h.run();
+            assert_eq!(fields(&h)["__orientation"], "landscape");
             assert_eq!((fields(&h)["width"].as_u64(), fields(&h)["height"].as_u64()), (Some(1920), Some(1080)));
             let _ = preset_title_at(&h, "11.7 x 8.3 in @ 300 ppi");
             let at = preset_title_at(&h, "A4");
