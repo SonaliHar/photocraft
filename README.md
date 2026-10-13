@@ -113,7 +113,7 @@ Every screenshot here is the real app at work on public-domain art, rendered off
       <br>
       <sub>An elliptical selection becomes the mask of a Hue/Saturation layer, so only the face keeps its color.<br><i>Girl with a Pearl Earring</i>, Johannes Vermeer, c. 1665</sub>
       <h3>Selections that understand your image</h3>
-      Marquees, lassos and the Magic Wand for precision; Quick Selection, Object Selection and Select Subject when you want the computer to do the tracing; Select and Mask to refine hair-fine edges.
+      Marquees, lassos and the Magic Wand for precision; Quick Selection, Object Selection and Select Subject (a local AI model, downloaded once) when you want the computer to do the tracing; Generative Fill with the AI provider of your choice; Select and Mask to refine hair-fine edges.
       <br><br>
       Feather, expand, contract, smooth, grow, reselect. Turn any selection into a layer mask, a vector path or a shape. Smart selection runs on your machine, with no cloud and no account.
     </td>

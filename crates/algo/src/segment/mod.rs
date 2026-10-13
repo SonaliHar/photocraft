@@ -28,6 +28,7 @@
 pub mod focus;
 pub mod gmm;
 pub mod grabcut;
+pub mod matte;
 pub mod maxflow;
 pub mod quick;
 pub mod sky;

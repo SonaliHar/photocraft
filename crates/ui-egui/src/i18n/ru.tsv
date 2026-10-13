@@ -2996,3 +2996,6 @@ curves	Smooth	Сгладить
 	Remove after each stroke	Удалять после каждого штриха
 	Apply the removal ({key})	Применить удаление ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Штрихов к удалению: {n} (Enter применяет, Esc отменяет)
+
+# Generative Fill (Edit menu and selection tool options)
+	Generative Fill…	Генеративная заливка…

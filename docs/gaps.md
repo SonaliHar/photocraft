@@ -106,9 +106,15 @@ what an agent can't finish alone.
 - **Estimate:** 120–200 h.
 
 ### G15. AI and generative features
-- **Missing:** Generative Fill and Expand, Generative Upscale, Neural Filters, Sky Replacement,
-  Super Zoom, ML Select Subject/Sky. There is no ML runtime (AUTO-219-7). Classical substitutes
-  exist (GrabCut/max-flow selection, Remove tool by non-local patch completion).
+- **Missing:** Generative Expand, Generative Upscale, Neural Filters, Sky Replacement,
+  Super Zoom, ML Select Sky. Classical substitutes exist (GrabCut/max-flow selection, Remove tool
+  by non-local patch completion).
+- **Progress (2026-10-12):** Select Subject / Remove Background can use a local ONNX model
+  (IS-Net general use through the pure-Rust `tract` runtime, downloaded once, falls back to the
+  classical algorithm) and Edit › Generative Fill… sends the selection and a prompt to a provider
+  the user picks (Cloudflare Workers AI free tier, a local AUTOMATIC1111/Forge server, Gemini,
+  OpenAI or compatible, Stability). See [ai.md](ai.md). The provider requests are tested against
+  mock servers, not yet against the live services.
 - **Evidence:** Photoshop's `Required/UXP` ships the Neural Filters gallery and its `.kys` has
   a Neural Filters taskspace; users ask for local models (#2313, #1996, #2682).
 - **Estimate:** 300–600 h. **Human:** owner decision #41 (model licences, local vs remote).

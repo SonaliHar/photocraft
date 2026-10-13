@@ -2641,3 +2641,6 @@ curves	Smooth	平滑
 	Remove after each stroke	每次描邊後移除
 	Apply the removal ({key})	套用移除 ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	待移除的描邊：{n}（Enter 套用，Esc 取消）
+
+# Generative Fill (Edit menu and selection tool options)
+	Generative Fill…	生成式填滿…

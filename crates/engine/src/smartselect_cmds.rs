@@ -4,7 +4,7 @@
 //! composite), run them, and store the result as the selection (or a mask / new layer).
 
 use photocraft_algo::matting::{self, RefineParams};
-use photocraft_algo::segment::{Sampler, SurfaceSampler, focus, grabcut, quick, subject};
+use photocraft_algo::segment::{Sampler, SurfaceSampler, focus, grabcut, quick};
 use photocraft_algo::selection::{Region, SelectionMode, combine_region};
 use photocraft_doc::{Document, Layer, LayerContent, LayerId, LayerMask};
 use photocraft_geom::Rect;
@@ -149,6 +149,10 @@ pub struct SubjectCache {
     doc_id: Option<photocraft_doc::DocId>,
     /// The sampled layer; `None` = the composite.
     target: Option<LayerId>,
+    /// Which segmenter was asked for (a different one is a different answer).
+    engine: Option<crate::subject_model::Engine>,
+    /// Which segmenter answered (`"model"` or `"classic"`).
+    used: &'static str,
     region: Option<std::sync::Arc<Region>>,
 }
 
@@ -161,22 +165,48 @@ impl SubjectCache {
     }
 }
 
+/// Select Subject. The search runs as a background job (the first use may download the model);
+/// a repeat on unchanged pixels reuses the previous answer at once.
 fn select_subject(s: &mut Session, p: &Value) -> Result<Value> {
+    use crate::subject_model;
     let all_layers = b(p, "sampleAllLayers", true);
+    let engine = subject_model::Engine::from_params("select.subject", p)?;
+    let sel_mode = mode(p, "replace");
     let d = s.active().ok_or(EngineError::NoDocument)?;
     // What `with_doc_sampler` samples: the active layer's pixels, else the composite.
     let target = d.active_layer.filter(|id| !all_layers && d.doc.layer(*id).and_then(Layer::surface).is_some());
     let c = &s.subject_cache;
-    let hit = c.target == target && c.doc.upgrade().is_some_and(|old| crate::layer_multi_cmds::same_pixels(&old, &d.doc));
-    let region = if hit {
-        c.region.clone()
-    } else {
-        let doc = std::sync::Arc::clone(&d.doc);
-        let region = with_doc_sampler(&doc, d.active_layer, all_layers, |smp, doc| subject::select_subject(smp, doc.bounds())).map(std::sync::Arc::new);
-        s.subject_cache = SubjectCache { doc: std::sync::Arc::downgrade(&doc), doc_id: Some(doc.id), target, region: region.clone() };
-        region
-    };
-    let out = apply(s, "Select Subject", region.as_deref(), mode(p, "replace"))?;
+    let hit = c.target == target && c.engine == Some(engine) && c.doc.upgrade().is_some_and(|old| crate::layer_multi_cmds::same_pixels(&old, &d.doc));
+    if hit {
+        let (region, used) = (c.region.clone(), c.used);
+        return finish_subject(s, region, used, None, sel_mode);
+    }
+    let doc = std::sync::Arc::clone(&d.doc);
+    let active = d.active_layer;
+    let work_doc = std::sync::Arc::clone(&doc);
+    crate::jobs::run(
+        s,
+        "Select Subject",
+        true,
+        move |ctx| subject_model::find(&work_doc, active, all_layers, engine, ctx),
+        move |s, found| {
+            let region = found.region.map(std::sync::Arc::new);
+            s.subject_cache = SubjectCache {
+                doc: std::sync::Arc::downgrade(&doc),
+                doc_id: Some(doc.id),
+                target,
+                engine: Some(engine),
+                used: found.engine,
+                region: region.clone(),
+            };
+            finish_subject(s, region, found.engine, found.note, sel_mode)
+        },
+    )
+}
+
+/// Store the subject as the selection and describe what happened.
+fn finish_subject(s: &mut Session, region: Option<std::sync::Arc<Region>>, used: &'static str, note: Option<String>, m: SelectionMode) -> Result<Value> {
+    let mut out = apply(s, "Select Subject", region.as_deref(), m)?;
     // Follow the document past the selection edit just made (same pixels), so a short history
     // dropping the older state doesn't turn the next repeat into a miss.
     if let Some(d) = s.active()
@@ -184,6 +214,15 @@ fn select_subject(s: &mut Session, p: &Value) -> Result<Value> {
         && s.subject_cache.doc.upgrade().is_some_and(|old| crate::layer_multi_cmds::same_pixels(&old, &d.doc))
     {
         s.subject_cache.doc = std::sync::Arc::downgrade(&d.doc);
+    }
+    out["engine"] = json!(used);
+    if let Some(n) = &note {
+        out["note"] = json!(n);
+    }
+    if out.get("changed").and_then(Value::as_bool) == Some(false) {
+        out["status"] = json!("No subject found: try Object Selection or the Lasso");
+    } else if let Some(n) = note {
+        out["status"] = json!(n);
     }
     Ok(out)
 }
@@ -381,7 +420,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.subject",
             "Subject",
             ["Select"],
-            r##"{"sampleAllLayers":bool=true,"mode":"replace|add|subtract|intersect"="replace"}"##,
+            r##"{"sampleAllLayers":bool=true,"mode":"replace|add|subtract|intersect"="replace","engine":"auto|classic|model"="auto"} → {selected,changed,bounds,engine:"model|classic",note?} (engine: the local IS-Net model, downloaded once to the model cache, or the classical saliency + GrabCut heuristic; auto = the model when it is already downloaded, else classic; model = always the model, downloading it if needed; runs as a background job)"##,
             has_doc,
             select_subject
         ),

@@ -598,6 +598,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 let r = app.run("select.subject", json!({}));
                 report_smart_result(app, r, tl!("No subject found — try Object Selection or the Lasso"));
             }
+            crate::genfill_ui::options_button(app, ui);
         }
         Tool::ObjectSelection => {
             crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
@@ -607,6 +608,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 let r = app.run("select.subject", json!({}));
                 report_smart_result(app, r, tl!("No subject found — try a rectangle around the object"));
             }
+            crate::genfill_ui::options_button(app, ui);
         }
         Tool::RedEye => {
             opt(ui, tl!("Pupil Size"));

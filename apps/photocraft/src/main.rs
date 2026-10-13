@@ -155,6 +155,8 @@ fn main() -> eframe::Result {
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     crash_guard::install_hook();
+    // Select Subject fetches its model on first use here (tests, the CLI and scripts stay offline).
+    photocraft_engine::subject_model::set_auto_download(true);
     // The system font scan can take seconds (minutes on some Macs): run it off the UI thread.
     photocraft_ui_egui::type_tool::warm_fonts();
     let mut control_port: Option<u16> = None;

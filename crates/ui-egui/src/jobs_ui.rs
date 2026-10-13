@@ -497,9 +497,10 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
             app.ui.panels.brush_settings = true;
             app.ui.brush_tab = 1;
         }
-        JobOutcome::Done(_) => {
+        JobOutcome::Done(v) => {
             app.sync_views();
-            app.ui.status = e.label;
+            // A command may say what happened ("No subject found", "Generative Fill done").
+            app.ui.status = v.get("status").and_then(Value::as_str).map_or(e.label, str::to_string);
             app.ui.status_error = false;
         }
         JobOutcome::Failed(err) => {
