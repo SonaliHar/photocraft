@@ -147,6 +147,7 @@ impl<'a, 'b, 's> Snapshot<'a, 'b, 's> {
             work_path: None,
             clipping_path: None,
             quick_mask: None,
+            quick_mask_unselected: source.quick_mask_unselected,
             patterns: Vec::new(),
             color_table: None,
             duotone: None,
@@ -159,6 +160,7 @@ impl<'a, 'b, 's> Snapshot<'a, 'b, 's> {
             slices: Default::default(),
             variables: Default::default(),
             timeline: None,
+            file_encoding: source.file_encoding,
         };
         doc.layers.try_reserve_exact(source.layers.len()).map_err(|_| E::AllocationFailed)?;
         if doc.layers.capacity() != source.layers.len() {

@@ -3,7 +3,7 @@ use crate::{EngineError, Result, Session};
 use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent, LayerId, Path, item_identity::ItemRef};
 use photocraft_geom::Rect;
-use photocraft_paint::{BrushSettings, DualBrush, GrayTile, Pattern, StrokePoint, Texture, TipShape};
+use photocraft_paint::{BrushSettings, DualBrush, GrayTile, StoredTile, Pattern, StrokePoint, Texture, TipShape};
 use photocraft_raster::{Interrupt, MAX_CHECKED_RASTER_BYTES, Surface};
 use serde_json::{Value, json};
 const ID: &str = "path.stroke";
@@ -125,15 +125,33 @@ fn tile_bytes(tile: &GrayTile) -> Result<u64> {
         .ok_or_else(|| error("invalid sampled brush bitmap"))?;
     count.checked_mul(2).filter(|bytes| *bytes <= MAX_CHECKED_RASTER_BYTES).ok_or_else(|| error("sampled brush capacity limit"))
 }
+// Stored payloads stay owned by their upstream cache; only the bounded key is copied.
+fn stored_bytes(tile: &StoredTile) -> Result<u64> {
+    if tile.key.len() > 4096 || tile.width == 0 || tile.height == 0 { return Err(error("invalid stored brush metadata")); }
+    let full = match &tile.full { Some(full) => tile_bytes(full)?, None => 0 };
+    tile_bytes(&tile.preview)?.checked_add(full).and_then(|n| n.checked_add(tile.key.capacity() as u64))
+        .filter(|n| *n <= MAX_CHECKED_RASTER_BYTES).ok_or_else(|| error("stored brush capacity limit"))
+}
+fn stored_copy(tile: &StoredTile, control: &Interrupt<'_>) -> Result<StoredTile> {
+    poll(control)?;
+    stored_bytes(tile)?;
+    let mut key = String::new();
+    key.try_reserve_exact(tile.key.len()).map_err(|_| error("stored brush key allocation denied"))?;
+    key.push_str(&tile.key);
+    poll(control)?;
+    Ok(StoredTile { key, width: tile.width, height: tile.height, preview: tile.preview.clone(), full: tile.full.clone() })
+}
 fn tip_bytes(tip: &TipShape) -> Result<u64> {
     match tip {
         TipShape::Round => Ok(0),
         TipShape::Sampled(tile) => tile_bytes(tile),
+        TipShape::Stored(tile) => stored_bytes(tile),
     }
 }
-fn brush_bytes(brush: &BrushSettings) -> Result<u64> {
+pub(super) fn brush_bytes(brush: &BrushSettings) -> Result<u64> {
     let pattern = match &brush.texture.pattern {
         Pattern::Tile(tile) => tile_bytes(tile)?,
+        Pattern::Stored(tile) => stored_bytes(tile)?,
         Pattern::Procedural { size, .. } => u64::from((*size).clamp(8, 1024)).pow(2) * 4,
     };
     tip_bytes(&brush.tip)?
@@ -161,6 +179,7 @@ fn tip_copy(tip: &TipShape, control: &Interrupt<'_>) -> Result<TipShape> {
     match tip {
         TipShape::Round => Ok(TipShape::Round),
         TipShape::Sampled(tile) => Ok(TipShape::Sampled(tile_copy(tile, control)?)),
+        TipShape::Stored(tile) => Ok(TipShape::Stored(stored_copy(tile, control)?)),
     }
 }
 fn brush_copy(b: &BrushSettings, control: &Interrupt<'_>) -> Result<BrushSettings> {
@@ -169,6 +188,7 @@ fn brush_copy(b: &BrushSettings, control: &Interrupt<'_>) -> Result<BrushSetting
     let pattern = match &b.texture.pattern {
         Pattern::Procedural { style, size, seed } => Pattern::Procedural { style: style.clone(), size: *size, seed: *seed },
         Pattern::Tile(tile) => Pattern::Tile(tile_copy(tile, control)?),
+        Pattern::Stored(tile) => Pattern::Stored(stored_copy(tile, control)?),
     };
     // Only bitmap payloads allocate; scalar/dynamic sections have no containers.
     Ok(BrushSettings {
@@ -181,6 +201,8 @@ fn brush_copy(b: &BrushSettings, control: &Interrupt<'_>) -> Result<BrushSetting
         pressure_size: b.pressure_size,
         pressure_opacity: b.pressure_opacity,
         color: b.color,
+        color_cmyk: b.color_cmyk,
+        square: b.square,
         background: b.background,
         erase: b.erase,
         mode: b.mode,

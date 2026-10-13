@@ -22,6 +22,12 @@ mod asset_paths;
 mod boot_contract_probe;
 #[cfg(target_arch = "wasm32")]
 mod bounded_resource_read;
+#[cfg(any(target_arch = "wasm32", test))]
+mod preset_bridge;
+
+#[cfg(target_arch = "wasm32")]
+mod indexed_presets;
+
 #[cfg(target_arch = "wasm32")]
 mod web;
 #[cfg(target_arch = "wasm32")]

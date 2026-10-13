@@ -56,11 +56,14 @@ impl Census<'_, '_> {
             psd_raw,
             runs,
             paragraphs,
-            shape: _,
+            shape,
             orientation: _,
             antialias: _,
             warp,
         } = text;
+        if let crate::text::TextShape::Path { path, .. } = shape {
+            self.vector(&path.knots)?;
+        }
         self.texts = self.texts.checked_add(1).ok_or(BackingError::Length)?;
         self.owned(std::mem::size_of::<(LayerId, TextLayer)>())?;
         self.string(value)?;

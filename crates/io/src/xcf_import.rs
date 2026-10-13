@@ -2377,14 +2377,14 @@ fn map_accounted<P: MappingPlane, S>(
         return Err(IoError::Unsupported("XCF item set membership references a missing declaration".into()));
     }
     for g in file.guides {
-        if (g.position as f32) as i32 != g.position {
+        if (f64::from(g.position)) as i32 != g.position {
             warnings.push(format!("Guide at {} omitted; position is not exactly representable", g.position));
             continue;
         }
         if g.horizontal {
-            doc.guides.horizontal.push(g.position as f32);
+            doc.guides.horizontal.push(f64::from(g.position));
         } else {
-            doc.guides.vertical.push(g.position as f32);
+            doc.guides.vertical.push(f64::from(g.position));
         }
     }
     if state.selection.selected.len() == 1 {
@@ -2416,7 +2416,7 @@ fn map_accounted<P: MappingPlane, S>(
     ctl.progress(1.0);
     budget.charge(crate::xcf_assessment::allocation_bound(&doc)?)?;
     let assessment = Some(crate::xcf_assessment::after_qualified_import(&doc, ctl)?);
-    Ok((ImportResult { document: doc, warnings, origin: ImportOrigin::xcf(), assessment }, budget.peak))
+    Ok((ImportResult { document: doc, warnings, origin: ImportOrigin::xcf(), assessment, source_read_only: true, preview_only: false}, budget.peak))
 }
 
 #[allow(clippy::too_many_arguments)]

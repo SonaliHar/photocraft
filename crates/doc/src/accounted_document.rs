@@ -492,8 +492,8 @@ fn validate_backed_layers(
 /// Capacity census for an intentionally explicit bounded tree model-copy domain.
 /// Owned complex collections are refused, never assigned a fabricated size.
 fn census(doc: &Document, actual: bool, control: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
-    let crate::Metadata { xmp: _, exif: _, psd_resources: _, psd_global_blocks: _ } = &doc.metadata;
-    let crate::Guides { horizontal: _, vertical: _ } = &doc.guides;
+    let crate::Metadata { xmp: _, exif: _, psd_resources: _, psd_global_blocks: _, text: _ } = &doc.metadata;
+    let crate::Guides { horizontal: _, vertical: _, colors: _ } = &doc.guides;
     let crate::text_styles::TextStyles { character: _, paragraph: _, basic: _, psd_raw: _ } = &doc.text_styles;
     let crate::text_styles::ParagraphStyleDef { id: _, name: _, para_attrs: _, char_attrs: _ } = &doc.text_styles.basic;
     let crate::analysis::Measurement { scale: _, count_groups: _, active_count_group: _, ruler: _ } = &doc.measurement;
@@ -525,6 +525,7 @@ fn census(doc: &Document, actual: bool, control: &ReadControl<'_>) -> Result<Mod
         work_path: _,
         clipping_path: _,
         quick_mask: _,
+        quick_mask_unselected: _,
         patterns: _,
         color_table: _,
         duotone: _,
@@ -537,6 +538,7 @@ fn census(doc: &Document, actual: bool, control: &ReadControl<'_>) -> Result<Mod
         slices: _,
         variables: _,
         timeline: _,
+        file_encoding: _,
     } = doc;
     control.check(1)?;
     if !doc.channels.is_empty()
@@ -590,6 +592,13 @@ fn census(doc: &Document, actual: bool, control: &ReadControl<'_>) -> Result<Mod
     add_vec(&mut size, &doc.layers, actual)?;
     add_vec(&mut size, &doc.guides.horizontal, actual)?;
     add_vec(&mut size, &doc.guides.vertical, actual)?;
+    add_vec(&mut size, &doc.guides.colors, actual)?;
+    add_vec(&mut size, &doc.metadata.text, actual)?;
+    for (key, value) in &doc.metadata.text {
+        control.check(1)?;
+        add_string(&mut size, key, actual)?;
+        add_string(&mut size, value, actual)?;
+    }
     add_vec(&mut size, &doc.metadata.psd_resources, actual)?;
     add_vec(&mut size, &doc.metadata.psd_global_blocks, actual)?;
     for (_, name, _) in &doc.metadata.psd_resources {

@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use photocraft_doc::{Pattern, Rect};
+use photocraft_doc::{ColorMode, Pattern, PixelFormat, Rect, SampleType};
 
 pub(crate) const PREPARED_PATTERN_BYTES: usize = 64 << 20;
 const MAX_PREPARED_PATTERNS: usize = 64;
@@ -24,12 +24,14 @@ pub(crate) struct PreparedPatterns<'a> {
     patterns: &'a [Pattern],
     budget: usize,
     checked: bool,
+    /// The colour mode the patterns are painted into (see [`pattern_rgba`]).
+    mode: ColorMode,
     state: Mutex<PreparedState>,
 }
 
 impl<'a> PreparedPatterns<'a> {
     pub(crate) fn new(patterns: &'a [Pattern], budget: usize) -> Self {
-        Self { patterns, budget, checked: false, state: Mutex::new(PreparedState { slots: HashMap::new(), reserved_bytes: 0 }) }
+        Self { patterns, budget, mode: ColorMode::Rgb, checked: false, state: Mutex::new(PreparedState { slots: HashMap::new(), reserved_bytes: 0 }) }
     }
 
     /// Eager checked cache: every immutable source is prepared before rendering.
@@ -40,6 +42,9 @@ impl<'a> PreparedPatterns<'a> {
         budget: usize,
         control: &photocraft_raster::Interrupt<'_>,
     ) -> Result<Self, photocraft_raster::RasterInputError> {
+        Self::try_new_in_mode_with_interrupt(patterns,budget,ColorMode::Rgb,control)
+    }
+    pub(crate) fn try_new_in_mode_with_interrupt(patterns:&'a [Pattern],budget:usize,mode:ColorMode,control:&photocraft_raster::Interrupt<'_>)->Result<Self,photocraft_raster::RasterInputError>{
         use photocraft_raster::RasterInputError as E;
         control.check().map_err(|_| E::Cancelled)?;
         if patterns.len() > MAX_PREPARED_PATTERNS {
@@ -58,7 +63,7 @@ impl<'a> PreparedPatterns<'a> {
         slots.try_reserve(patterns.len()).map_err(|_| E::AllocationFailed)?;
         let mut reserved = patterns.len() * 1024;
         for p in patterns {
-            let tile = Tile::try_new_with_interrupt(p, budget - reserved, control)?;
+            let tile = Tile::try_new_in_mode_with_interrupt(p, budget - reserved, mode, control)?;
             if let Some(ref tile) = tile {
                 reserved = reserved.checked_add(tile.px.capacity().checked_mul(16).ok_or(E::LimitExceeded)?).ok_or(E::LimitExceeded)?;
             }
@@ -73,7 +78,12 @@ impl<'a> PreparedPatterns<'a> {
             slots.insert(std::ptr::from_ref(p) as usize, Arc::new(slot));
         }
         control.check().map_err(|_| E::Cancelled)?;
-        Ok(Self { patterns, budget, checked: true, state: Mutex::new(PreparedState { slots, reserved_bytes: reserved }) })
+        Ok(Self { patterns, budget, mode, checked: true, state: Mutex::new(PreparedState { slots, reserved_bytes: reserved }) })
+    }
+
+    pub(crate) fn in_mode(mut self, mode: ColorMode) -> Self {
+        self.mode = mode;
+        self
     }
 
     pub(crate) fn source(&self) -> &'a [Pattern] {
@@ -82,7 +92,7 @@ impl<'a> PreparedPatterns<'a> {
 
     pub(crate) fn get(&self, id: &str, name: &str) -> Option<Arc<Tile>> {
         let p = photocraft_doc::pattern::find(self.patterns, id, name)?;
-        if p.is_empty() {
+        if !p.is_paintable() {
             return None;
         }
         let bytes = usize::try_from(p.width)
@@ -113,10 +123,10 @@ impl<'a> PreparedPatterns<'a> {
                 // Conversion must stay serial: Rayon work stealing can re-enter this slot
                 // while its initializer is running inside an effect-map OnceLock.
                 // Run on the requesting worker to preserve its active CMYK profile.
-                slot.get_or_init(|| Tile::new(p).map(Arc::new)).clone()
+                slot.get_or_init(|| Tile::new_in(p, self.mode).map(Arc::new)).clone()
             }
             None if self.checked => None,
-            None => Tile::new(p).map(Arc::new),
+            None => Tile::new_in(p, self.mode).map(Arc::new),
         }
     }
 }
@@ -143,6 +153,30 @@ fn pattern_bytes(p: &Pattern) -> Result<usize, photocraft_raster::RasterInputErr
     photocraft_raster::checked_region_byte_len(Rect::new(0, 0, w, h), photocraft_color::PixelFormat::RGBA32F)
 }
 
+/// A pattern's pixels (straight-alpha RGBA, row-major) as they look painted into a document of
+/// colour mode `mode`. A pattern keeps its own colours (an RGB pattern stays RGB, in the
+/// library and in the document), but in a Grayscale or CMYK document it paints that mode's
+/// colours: what Edit › Fill writes into the document's pixels, and what Photoshop shows (the
+/// pattern in colour in its picker, filled in grey). Empty for a pattern that isn't
+/// [paintable](Pattern::is_paintable).
+pub fn pattern_rgba(p: &Pattern, mode: ColorMode) -> Vec<[f32; 4]> {
+    let Some(n) = p.is_paintable().then(|| usize::try_from(p.pixel_count()).ok()).flatten() else {
+        return Vec::new();
+    };
+    let mut px = vec![[0.0f32; 4]; n];
+    p.surface.read_rgba_into(p.rect(), &mut px);
+    let paints_in = matches!(mode, ColorMode::Grayscale | ColorMode::Bitmap | ColorMode::Duotone | ColorMode::Cmyk);
+    if paints_in && p.surface.format().mode != mode {
+        let fmt = PixelFormat::new(mode, SampleType::F32, true);
+        let mut v = [0.0f32; 5];
+        for q in &mut px {
+            let n = photocraft_raster::from_rgba_into(&fmt, *q, &mut v);
+            *q = photocraft_raster::to_rgba(&fmt, v.get(..n).unwrap_or_default());
+        }
+    }
+    px
+}
+
 /// A pattern converted once to straight-alpha RGBA for sampling.
 pub struct Tile {
     w: usize,
@@ -153,12 +187,17 @@ pub struct Tile {
 
 impl Tile {
     pub fn new(p: &Pattern) -> Option<Tile> {
-        if p.is_empty() {
+        Tile::new_in(p, ColorMode::Rgb)
+    }
+
+    /// The tile of `p` painted into a document of colour mode `mode` (see [`pattern_rgba`]).
+    /// `None` when the pattern isn't [paintable](Pattern::is_paintable).
+    pub fn new_in(p: &Pattern, mode: ColorMode) -> Option<Tile> {
+        if !p.is_paintable() {
             return None;
         }
         let (w, h) = (p.width as usize, p.height as usize);
-        let mut px = vec![[0.0f32; 4]; w * h];
-        p.surface.read_rgba_into(p.rect(), &mut px);
+        let mut px = pattern_rgba(p, mode);
         for q in &mut px {
             for c in 0..3 {
                 q[c] *= q[3];
@@ -173,6 +212,9 @@ impl Tile {
         budget: usize,
         control: &photocraft_raster::Interrupt<'_>,
     ) -> Result<Option<Tile>, photocraft_raster::RasterInputError> {
+        Self::try_new_in_mode_with_interrupt(p,budget,ColorMode::Rgb,control)
+    }
+    fn try_new_in_mode_with_interrupt(p:&Pattern,budget:usize,mode:ColorMode,control:&photocraft_raster::Interrupt<'_>)->Result<Option<Tile>,photocraft_raster::RasterInputError>{
         use photocraft_raster::RasterInputError as E;
         control.check().map_err(|_| E::Cancelled)?;
         p.surface.try_validate_tile_origins_with(control)?;
@@ -180,7 +222,7 @@ impl Tile {
         if bytes > budget.min(PREPARED_PATTERN_BYTES) {
             return Err(E::LimitExceeded);
         }
-        if p.is_empty() {
+        if !p.is_paintable() {
             return Ok(None);
         }
         let (w, h) = (p.width as usize, p.height as usize);
@@ -203,7 +245,9 @@ impl Tile {
                 // Preserve the existing display conversion and active CMYK
                 // context, but bound each legacy read to at most 4096 pixels.
                 p.surface.read_rgba_into(Rect::new(x as i32, y as i32, end as i32, y as i32 + 1), out);
+                let paints_in=matches!(mode,ColorMode::Grayscale|ColorMode::Bitmap|ColorMode::Duotone|ColorMode::Cmyk);
                 for q in out {
+                    if paints_in && p.surface.format().mode!=mode {let fmt=PixelFormat::new(mode,SampleType::F32,true);let mut values=[0.0f32;5];let n=photocraft_raster::from_rgba_into(&fmt,*q,&mut values);*q=photocraft_raster::to_rgba(&fmt,values.get(..n).unwrap_or_default());}
                     for c in 0..3 {
                         q[c] *= q[3];
                     }
@@ -237,7 +281,7 @@ impl Tile {
                 if wx == 0.0 {
                     continue;
                 }
-                let p = self.at(x0 + dx, y0 + dy);
+                let p = self.at(x0.saturating_add(dx), y0.saturating_add(dy));
                 let k = wx * wy;
                 for c in 0..4 {
                     acc[c] += p[c] * k;
@@ -339,6 +383,17 @@ mod tests {
     }
 
     #[test]
+    fn patterns_too_large_to_paint_are_skipped_without_allocating() {
+        // Only the size is declared (no tiles): a hostile file can claim any size.
+        let p = Pattern { id: "big".into(), name: "Big".into(), width: 9000, height: 8000, surface: Surface::new(PixelFormat::RGBA8) };
+        assert!(!p.is_paintable());
+        assert!(Tile::new(&p).is_none());
+        assert!(pattern_rgba(&p, ColorMode::Rgb).is_empty());
+        let list = [p];
+        assert!(PreparedPatterns::new(&list, 0).get("big", "").is_none());
+    }
+
+    #[test]
     fn link_phase_scale_and_angle_move_the_origin() {
         let t = Tile::new(&checker()).unwrap();
         let linked = Placement::new(Rect::new(2, 0, 10, 10), true, (0.0, 0.0), 1.0, 0.0);
@@ -353,6 +408,16 @@ mod tests {
         let rot = Placement::new(Rect::EMPTY, false, (0.0, 0.0), 1.0, 90.0);
         let (u, v) = rot.map(1.0, 3.0);
         assert!((u - -3.0).abs() < 1e-9 && (v - 1.0).abs() < 1e-9, "{u},{v}");
+    }
+
+    #[test]
+    fn sampling_at_hostile_phases_does_not_overflow() {
+        let patterns = [checker()];
+        let prepared = PreparedPatterns::new(&patterns, PREPARED_PATTERN_BYTES);
+        let t = prepared.get(&patterns[0].id, "").unwrap();
+        for u in [1.0e30, -1.0e30, f64::INFINITY, f64::NAN] {
+            let _ = t.sample(u, u);
+        }
     }
 }
 

@@ -26,7 +26,7 @@ pub fn render_bands_with_interrupt(
     }
     let cmyk = cmyk_space(doc);
     let patterns = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
-        pattern::PreparedPatterns::try_new_with_interrupt(&doc.patterns, pattern::PREPARED_PATTERN_BYTES, control)
+        pattern::PreparedPatterns::try_new_in_mode_with_interrupt(&doc.patterns, pattern::PREPARED_PATTERN_BYTES, doc.pixel_format().mode, control)
     })?;
     let mut cx = Ctx::for_doc(doc, &patterns);
     cx.checked_effects = true;
@@ -53,7 +53,7 @@ pub fn render_with_interrupt(doc: &Document, rect: Rect, control: &Interrupt<'_>
     photocraft_raster::checked_region_byte_len(rect, photocraft_color::PixelFormat::RGBA32F)?;
     let cmyk = cmyk_space(doc);
     let patterns = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
-        pattern::PreparedPatterns::try_new_with_interrupt(&doc.patterns, pattern::PREPARED_PATTERN_BYTES, control)
+        pattern::PreparedPatterns::try_new_in_mode_with_interrupt(&doc.patterns, pattern::PREPARED_PATTERN_BYTES, doc.pixel_format().mode, control)
     })?;
     let mut cx = Ctx::for_doc(doc, &patterns);
     cx.checked_effects = true;
@@ -298,7 +298,7 @@ pub(super) fn prepare_checked_effects(doc: &Document, cx: &Ctx, control: &Interr
         control.check().map_err(|_| E::Cancelled)?;
         let mut table = cx.fx_maps.lock().unwrap_or_else(|e| e.into_inner());
         table.try_reserve(1).map_err(|_| E::AllocationFailed)?;
-        table.insert(key, std::sync::Arc::new(maps));
+        table.insert(key, (std::sync::Arc::new(maps), false));
     }
     Ok(())
 }

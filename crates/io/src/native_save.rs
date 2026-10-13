@@ -31,6 +31,7 @@ pub(super) struct Payloads<'a, 'i> {
     seen: HashSet<(u8, usize)>,
     bytes: usize,
     index: usize,
+    map_bytes: usize,
     limits: PreparationLimits,
     control: &'a Interrupt<'i>,
 }
@@ -62,6 +63,7 @@ impl Payloads<'_, '_> {
     }
     fn surface(&mut self, surface: &Surface) -> Result<(), IoError> {
         surface.try_validate_tile_origins_with(self.control).map_err(|e| IoError::Unsupported(e.to_string()))?;
+        self.map_bytes = self.map_bytes.checked_add(surface.tile_count().checked_mul(256).ok_or_else(|| limit("native raster map overflow"))?).ok_or_else(|| limit("native raster map overflow"))?;
         self.add(3, surface.default_bytes().as_ptr() as usize, surface.default_bytes().len())?;
         for (_, tile) in surface.tiles() {
             self.add(4, Arc::as_ptr(tile) as usize, tile.bytes().len())?;
@@ -97,6 +99,9 @@ impl Payloads<'_, '_> {
         if let Some(video) = &layer.video {
             for surface in &video.frames {
                 self.surface(surface)?;
+            }
+            if let Some(original)=&video.original_frames {
+                for surface in original {self.surface(surface)?;}
             }
         }
         match &layer.content {
@@ -136,11 +141,11 @@ impl Payloads<'_, '_> {
 }
 /// Unique retained raster/source payloads, including hidden layers and immutable caches.
 /// This measures payload capacity, not every model container or arbitrary metadata allocation.
-pub fn retained_native_payload_bytes(doc: &Document, limits: PreparationLimits, control: &Interrupt<'_>) -> Result<usize, IoError> {
+fn retained_native_payload_and_maps(doc: &Document, limits: PreparationLimits, control: &Interrupt<'_>) -> Result<(usize, usize), IoError> {
     let mut check = PcraftWriter::new();
     check.set_preparation_limits(limits)?;
     poll(control)?;
-    let mut payloads = Payloads { seen: HashSet::new(), bytes: 0, index: 0, limits, control };
+    let mut payloads = Payloads { seen: HashSet::new(), bytes: 0, index: 0, map_bytes: 0, limits, control };
     for bytes in
         [doc.icc_profile.as_ref(), doc.metadata.exif.as_ref(), doc.source_color_context.as_ref().and_then(|c| c.original_icc.as_ref())].into_iter().flatten()
     {
@@ -193,7 +198,13 @@ pub fn retained_native_payload_bytes(doc: &Document, limits: PreparationLimits, 
             }
         }
     }
-    Ok(payloads.bytes)
+    Ok((payloads.bytes, payloads.map_bytes))
+}
+pub fn retained_native_payload_bytes(doc: &Document, limits: PreparationLimits, control: &Interrupt<'_>) -> Result<usize, IoError> {
+    Ok(retained_native_payload_and_maps(doc, limits, control)?.0)
+}
+pub(crate) fn retained_native_map_bytes(doc: &Document, limits: PreparationLimits, control: &Interrupt<'_>) -> Result<usize, IoError> {
+    Ok(retained_native_payload_and_maps(doc, limits, control)?.1)
 }
 /// Measured public canonical/structural String and Vec capacities, excluding
 /// retained raster, cache, resource and other immutable byte payloads.
@@ -208,7 +219,7 @@ pub fn retained_native_model_bytes(doc: &Document, limits: PreparationLimits, co
     let mut check = PcraftWriter::new();
     check.set_preparation_limits(limits)?;
     poll(control)?;
-    let mut counter = Payloads { seen: HashSet::new(), bytes: 0, index: 0, limits, control };
+    let mut counter = Payloads { seen: HashSet::new(), bytes: 0, index: 0, map_bytes: 0, limits, control };
     super::native_save_model::measure(doc, &mut counter, control)?;
     poll(control)?;
     Ok(counter.bytes)
@@ -218,7 +229,7 @@ pub fn retained_native_model_bytes(doc: &Document, limits: PreparationLimits, co
 /// Legacy text/effect/vector/private map allocations and allocator overhead remain unmeasured.
 pub fn retained_native_input_bytes(doc: &Document, limits: PreparationLimits, control: &Interrupt<'_>) -> Result<usize, IoError> {
     let payload = retained_native_payload_bytes(doc, limits, control)?;
-    let mut counter = Payloads { seen: HashSet::new(), bytes: payload, index: 0, limits, control };
+    let mut counter = Payloads { seen: HashSet::new(), bytes: payload, index: 0, map_bytes: 0, limits, control };
     super::native_save_model::measure(doc, &mut counter, control)?;
     Ok(counter.bytes)
 }

@@ -34,6 +34,17 @@ impl Axes {
         if !scale[0].is_finite() || scale[0] <= 0.0 {
             return Err(PhysicalLayoutError::Geometry);
         }
+        if let TextShape::Path { path, start, .. } = &layer.shape {
+            if path.knots.len() > 100_000 || !start.is_finite() || scale != [1.0, 1.0] {
+                return Err(PhysicalLayoutError::Geometry);
+            }
+            for knot in &path.knots {
+                for point in [knot.anchor, knot.in_ctrl, knot.out_ctrl] {
+                    bounded(point.x)?;
+                    bounded(point.y)?;
+                }
+            }
+        }
         if layer.text.len() > 1 << 20 || layer.runs.len() > 100_000 || layer.paragraphs.len() > 100_000 {
             return Err(PhysicalLayoutError::InputLimit);
         }

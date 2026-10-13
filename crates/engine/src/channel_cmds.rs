@@ -42,6 +42,10 @@ pub enum ChannelTarget {
     Color(usize),
     /// An alpha or spot channel (index into [`Document::channels`]).
     Alpha(usize),
+    /// The active layer's layer mask.
+    LayerMask,
+    /// The active layer's vector mask.
+    VectorMask,
 }
 
 /// Per-document Channels panel state: the target and the eye toggles. Not part of history.
@@ -254,6 +258,7 @@ impl Default for QuickMaskOptions {
 pub(crate) fn fix_view(st: &mut DocState) {
     let n = st.doc.channels.len();
     let colors = color_count(&st.doc);
+    let quick = st.doc.quick_mask.is_some();
     if st.channel_view.editing_mask.is_some() && mask_editing_target(st).is_none() {
         st.channel_view.editing_mask = None;
     }
@@ -265,14 +270,24 @@ pub(crate) fn fix_view(st: &mut DocState) {
         ChannelTarget::Color(k) if k >= colors || colors < 2 => v.target = ChannelTarget::Composite,
         _ => {}
     }
-    // Never leave the canvas showing nothing at all.
-    if v.visible_colors(colors) == 0 && !(0..n).any(|i| v.alpha_shown(i)) {
-        v.color_hidden.clear();
-    }
     crate::mask_view_cmds::fix(st);
+    // An alpha/spot eye, Quick Mask, or the active layer's mask can be the only thing on the
+    // canvas (so R, G and B can all be off). Otherwise the colour channels come back.
+    let active = st.active_layer;
+    let shown = {
+        let doc = &st.doc;
+        let v = &st.channel_view;
+        (0..n).any(|i| v.alpha_shown(i)) || (quick && !v.quick_mask_hidden) || active.is_some_and(|id| doc.layer(id).is_some_and(|l| l.mask.is_some()))
+    };
+    if st.channel_view.visible_colors(colors) == 0 && !shown {
+        st.channel_view.color_hidden.clear();
+    }
 }
 
 /// Bump the revision for a view-only change without dirtying a clean document.
+/// `"layer"` param of a source: a layer id, a layer name (the topmost of that name, as a loaded
+/// Photoshop action refers to it), or `"merged"` (default). An unknown name is an error.
+
 fn touch(st: &mut DocState) {
     let clean = st.saved_revision == st.revision;
     st.revision += 1;
@@ -318,8 +333,8 @@ pub fn channel_format(doc: &Document) -> PixelFormat {
     PixelFormat::new(ColorMode::Grayscale, doc.depth, false)
 }
 
-/// Next free "Alpha N" name.
-fn next_alpha_name(doc: &Document, base: &str) -> String {
+/// Next free "`base` N" name (Alpha 1, Spot Color 2, …).
+pub fn next_alpha_name(doc: &Document, base: &str) -> String {
     // `channels.len() + 1` candidates always include a free one.
     (1..=doc.channels.len() + 1).map(|n| format!("{base} {n}")).find(|n| !doc.channels.iter().any(|c| &c.name == n)).unwrap_or_else(|| base.to_string())
 }
@@ -383,7 +398,9 @@ fn channel_identity(value: &Value) -> Option<u64> {
                 return None;
             }
             let id = text.parse::<u64>().ok()?;
-            if id.to_string() != *text { return None; }
+            if id.to_string() != *text {
+                return None;
+            }
             id
         }
         _ => return None,
@@ -502,8 +519,19 @@ fn ref_planes(doc: &Document, layer: Option<LayerId>, active: Option<LayerId>, r
                     s.read_rgba_into(area, &mut px);
                     vec![px.iter().map(|p| p[3]).collect()]
                 }
-                // Adjustment and fill layers cover the whole canvas.
-                None => vec![vec![1.0; area.width() as usize * area.height() as usize]],
+                // A shape can have no pixel cache yet (for example after loading a document).
+                // Use its existing renderer rather than treating it as a canvas-wide fill.
+                None => match &l.content {
+                    LayerContent::Shape(shape) => vec![
+                        photocraft_vector::CompiledShape::new(shape, photocraft_vector::DEFAULT_TOLERANCE, area)
+                            .render_rgba(area)
+                            .into_iter()
+                            .map(|p| p[3])
+                            .collect(),
+                    ],
+                    // Adjustment and fill layers cover the whole canvas.
+                    _ => vec![vec![1.0; area.width() as usize * area.height() as usize]],
+                },
             }
         }
         ChanRef::LayerMask => {
@@ -552,97 +580,185 @@ fn source_poll(control: &photocraft_raster::Interrupt<'_>) -> Result<()> {
 }
 fn source_buffer(length: usize, control: &photocraft_raster::Interrupt<'_>) -> Result<Vec<f32>> {
     source_poll(control)?;
-    let mut out = Vec::new(); out.try_reserve_exact(length).map_err(|_| EngineError::Other("channel plane allocation failed".into()))?;
-    if out.capacity() > length.checked_mul(2).ok_or_else(|| EngineError::Other("channel plane length overflow".into()))? { return Err(EngineError::Other("channel plane capacity exceeded".into())); }
-    while out.len() < length { source_poll(control)?; out.resize(out.len().saturating_add(4096).min(length), 0.0); }
+    let mut out = Vec::new();
+    out.try_reserve_exact(length).map_err(|_| EngineError::Other("channel plane allocation failed".into()))?;
+    if out.capacity() > length.checked_mul(2).ok_or_else(|| EngineError::Other("channel plane length overflow".into()))? {
+        return Err(EngineError::Other("channel plane capacity exceeded".into()));
+    }
+    while out.len() < length {
+        source_poll(control)?;
+        out.resize(out.len().saturating_add(4096).min(length), 0.0);
+    }
     Ok(out)
 }
 fn source_dimensions(doc: &Document, cmd: &str) -> Result<(Rect, usize)> {
     let width = i32::try_from(doc.size.width).map_err(|_| bad(cmd, "source width is too large"))?;
     let height = i32::try_from(doc.size.height).map_err(|_| bad(cmd, "source height is too large"))?;
-    if width <= 0 || height <= 0 { return Err(bad(cmd, "source dimensions must be nonzero")); }
+    if width <= 0 || height <= 0 {
+        return Err(bad(cmd, "source dimensions must be nonzero"));
+    }
     let area = Rect::new(0, 0, width, height);
     let bytes = photocraft_raster::checked_region_byte_len(area, PixelFormat::RGBA32F)?;
     Ok((area, bytes / 16))
 }
 fn source_format(format: PixelFormat) -> Result<()> {
-    if matches!(format.sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) { return Err(EngineError::Other("channel arithmetic does not support U32/F64 source samples".into())); }
-    if !(1..=5).contains(&format.channels()) { return Err(EngineError::Other("unsupported channel source format".into())); } Ok(())
+    if matches!(format.sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
+        return Err(EngineError::Other("channel arithmetic does not support U32/F64 source samples".into()));
+    }
+    if !(1..=5).contains(&format.channels()) {
+        return Err(EngineError::Other("unsupported channel source format".into()));
+    }
+    Ok(())
 }
 fn source_owner<'a>(doc: &'a Document, id: Option<LayerId>, merged: bool, control: &photocraft_raster::Interrupt<'_>) -> Result<Option<&'a Layer>> {
-    let mut stack = Vec::new(); let mut found = None; let mut count = 0usize;
-    if doc.layers.len() > 100000 { return Err(EngineError::Other("source layer count exceeds preparation limit".into())); }
+    let mut stack = Vec::new();
+    let mut found = None;
+    let mut count = 0usize;
+    if doc.layers.len() > 100000 {
+        return Err(EngineError::Other("source layer count exceeds preparation limit".into()));
+    }
     stack.try_reserve(doc.layers.len()).map_err(|_| EngineError::Other("source layer allocation failed".into()))?;
     stack.extend(doc.layers.iter().map(|layer| (layer, 0usize)));
     while let Some((layer, depth)) = stack.pop() {
-        source_poll(control)?; count = count.checked_add(1).filter(|n| *n <= 100000).ok_or_else(|| EngineError::Other("source layer count exceeds preparation limit".into()))?;
-        if depth >= 100 { return Err(EngineError::Other("source layer depth exceeds preparation limit".into())); }
-        if Some(layer.id) == id { if found.is_some() { return Err(EngineError::Other("ambiguous source layer identity".into())); } found = Some(layer); }
+        source_poll(control)?;
+        count = count.checked_add(1).filter(|n| *n <= 100000).ok_or_else(|| EngineError::Other("source layer count exceeds preparation limit".into()))?;
+        if depth >= 100 {
+            return Err(EngineError::Other("source layer depth exceeds preparation limit".into()));
+        }
+        if Some(layer.id) == id {
+            if found.is_some() {
+                return Err(EngineError::Other("ambiguous source layer identity".into()));
+            }
+            found = Some(layer);
+        }
         if merged {
-            if let Some(surface) = layer.surface() { source_format(surface.format())?; }
-            if let Some(mask) = &layer.mask { source_format(mask.surface.format())?; }
-            if let Some(cache) = &layer.fill_cache { source_format(cache.surface.format())?; }
+            if let Some(surface) = layer.surface() {
+                source_format(surface.format())?;
+            }
+            if let Some(mask) = &layer.mask {
+                source_format(mask.surface.format())?;
+            }
+            if let Some(cache) = &layer.fill_cache {
+                source_format(cache.surface.format())?;
+            }
         }
         if let Some(children) = layer.children() {
-            if count.checked_add(stack.len()).and_then(|n| n.checked_add(children.len())).is_none_or(|n| n > 100000) { return Err(EngineError::Other("source layer count exceeds preparation limit".into())); }
+            if count.checked_add(stack.len()).and_then(|n| n.checked_add(children.len())).is_none_or(|n| n > 100000) {
+                return Err(EngineError::Other("source layer count exceeds preparation limit".into()));
+            }
             stack.try_reserve(children.len()).map_err(|_| EngineError::Other("source layer allocation failed".into()))?;
-            if stack.capacity() > 200000 { return Err(EngineError::Other("source layer capacity exceeds preparation limit".into())); }
+            if stack.capacity() > 200000 {
+                return Err(EngineError::Other("source layer capacity exceeds preparation limit".into()));
+            }
             stack.extend(children.iter().map(|child| (child, depth + 1)));
         }
     }
-    if let Some(id) = id { return found.map(Some).ok_or(EngineError::NoLayer(id)); } Ok(None)
+    if let Some(id) = id {
+        return found.map(Some).ok_or(EngineError::NoLayer(id));
+    }
+    Ok(None)
 }
 fn source_vector(mask: &photocraft_doc::VectorMask, area: Rect, control: &photocraft_raster::Interrupt<'_>) -> Result<Vec<f32>> {
     let limits = photocraft_vector::VectorPreparationLimits::default();
-    if mask.path.subpaths.len() > limits.max_components { return Err(EngineError::Other("source vector mask count exceeds limit".into())); }
+    if mask.path.subpaths.len() > limits.max_components {
+        return Err(EngineError::Other("source vector mask count exceeds limit".into()));
+    }
     let mut knots = 0usize;
-    for path in &mask.path.subpaths { source_poll(control)?; knots = knots.checked_add(path.knots.len()).filter(|n| *n <= limits.max_edges).ok_or_else(|| EngineError::Other("source vector mask knot count exceeds limit".into()))?; }
-    let bytes = knots.checked_mul(std::mem::size_of::<photocraft_doc::Knot>()).and_then(|n| n.checked_add(mask.path.subpaths.len().checked_mul(std::mem::size_of::<photocraft_doc::Subpath>())?)).ok_or_else(|| EngineError::Other("source vector mask size overflow".into()))?;
-    if bytes > limits.max_bytes / 2 { return Err(EngineError::Other("source vector mask copy exceeds limit".into())); }
-    let mut subpaths = Vec::new(); subpaths.try_reserve_exact(mask.path.subpaths.len()).map_err(|_| EngineError::Other("source vector mask allocation failed".into()))?;
     for path in &mask.path.subpaths {
-        source_poll(control)?; let mut copy = Vec::new(); copy.try_reserve_exact(path.knots.len()).map_err(|_| EngineError::Other("source vector mask allocation failed".into()))?;
-        if copy.capacity() > path.knots.len().saturating_mul(2) { return Err(EngineError::Other("source vector mask capacity exceeded".into())); }
-        for chunk in path.knots.chunks(256) { source_poll(control)?; copy.extend_from_slice(chunk); }
+        source_poll(control)?;
+        knots = knots
+            .checked_add(path.knots.len())
+            .filter(|n| *n <= limits.max_edges)
+            .ok_or_else(|| EngineError::Other("source vector mask knot count exceeds limit".into()))?;
+    }
+    let bytes = knots
+        .checked_mul(std::mem::size_of::<photocraft_doc::Knot>())
+        .and_then(|n| n.checked_add(mask.path.subpaths.len().checked_mul(std::mem::size_of::<photocraft_doc::Subpath>())?))
+        .ok_or_else(|| EngineError::Other("source vector mask size overflow".into()))?;
+    if bytes > limits.max_bytes / 2 {
+        return Err(EngineError::Other("source vector mask copy exceeds limit".into()));
+    }
+    let mut subpaths = Vec::new();
+    subpaths.try_reserve_exact(mask.path.subpaths.len()).map_err(|_| EngineError::Other("source vector mask allocation failed".into()))?;
+    for path in &mask.path.subpaths {
+        source_poll(control)?;
+        let mut copy = Vec::new();
+        copy.try_reserve_exact(path.knots.len()).map_err(|_| EngineError::Other("source vector mask allocation failed".into()))?;
+        if copy.capacity() > path.knots.len().saturating_mul(2) {
+            return Err(EngineError::Other("source vector mask capacity exceeded".into()));
+        }
+        for chunk in path.knots.chunks(256) {
+            source_poll(control)?;
+            copy.extend_from_slice(chunk);
+        }
         subpaths.push(photocraft_doc::Subpath { closed: path.closed, knots: copy, op: path.op });
     }
-    let shape = photocraft_doc::VectorMask { path: photocraft_doc::Path { subpaths, fill_rule: mask.path.fill_rule, inverted: mask.path.inverted }, enabled: true, linked: mask.linked, density: 1.0, feather: 0.0 };
+    let shape = photocraft_doc::VectorMask {
+        path: photocraft_doc::Path { subpaths, fill_rule: mask.path.fill_rule, inverted: mask.path.inverted },
+        enabled: true,
+        linked: mask.linked,
+        density: 1.0,
+        feather: 0.0,
+    };
     let compiled = photocraft_vector::CompiledVectorMask::try_new_with_interrupt(&shape, limits, control)?;
     Ok(compiled.try_render_with_interrupt(area, limits, control)?)
 }
 fn source_native(surface: &Surface, area: Rect, control: &photocraft_raster::Interrupt<'_>, mut visit: impl FnMut(usize, &[f32]) -> Result<()>) -> Result<()> {
     source_format(surface.format())?;
     let read = photocraft_raster::backing::ReadControl { interrupt: control, work: &|_| Ok(()) };
-    let view = photocraft_raster::checked_view::CheckedRasterView::resident_with_control(surface, area, &read).map_err(|e| if control.cancelled() { EngineError::Cancelled } else { EngineError::Other(e.to_string()) })?;
-    let format = surface.format(); let mut raw = [0u8; 40]; let mut values = [0.0f32; 5]; let mut index = 0usize;
-    for y in area.y0..area.y1 { source_poll(control)?; for x in area.x0..area.x1 {
-        if index.is_multiple_of(256) { source_poll(control)?; }
-        let encoded = raw.get_mut(..format.bytes_per_pixel()).ok_or_else(|| EngineError::Other("invalid source pixel size".into()))?;
-        view.read_logical_pixel_native_into(x, y, encoded, &read).map_err(|e| { if control.cancelled() { EngineError::Cancelled } else { EngineError::Other(e.to_string()) } })?;
-        for (channel, value) in values.get_mut(..format.channels()).ok_or_else(|| EngineError::Other("invalid source channels".into()))?.iter_mut().enumerate() {
-            *value = photocraft_color::read_sample(encoded, format.sample, channel);
-            if !value.is_finite() { return Err(EngineError::Other("nonfinite channel source sample".into())); }
+    let view = photocraft_raster::checked_view::CheckedRasterView::resident_with_control(surface, area, &read)
+        .map_err(|e| if control.cancelled() { EngineError::Cancelled } else { EngineError::Other(e.to_string()) })?;
+    let format = surface.format();
+    let mut raw = [0u8; 40];
+    let mut values = [0.0f32; 5];
+    let mut index = 0usize;
+    for y in area.y0..area.y1 {
+        source_poll(control)?;
+        for x in area.x0..area.x1 {
+            if index.is_multiple_of(256) {
+                source_poll(control)?;
+            }
+            let encoded = raw.get_mut(..format.bytes_per_pixel()).ok_or_else(|| EngineError::Other("invalid source pixel size".into()))?;
+            view.read_logical_pixel_native_into(x, y, encoded, &read)
+                .map_err(|e| if control.cancelled() { EngineError::Cancelled } else { EngineError::Other(e.to_string()) })?;
+            for (channel, value) in
+                values.get_mut(..format.channels()).ok_or_else(|| EngineError::Other("invalid source channels".into()))?.iter_mut().enumerate()
+            {
+                *value = photocraft_color::read_sample(encoded, format.sample, channel);
+                if !value.is_finite() {
+                    return Err(EngineError::Other("nonfinite channel source sample".into()));
+                }
+            }
+            visit(index, values.get(..format.channels()).ok_or_else(|| EngineError::Other("invalid source channels".into()))?)?;
+            index = index.checked_add(1).ok_or_else(|| EngineError::Other("channel source index overflow".into()))?;
         }
-        visit(index, values.get(..format.channels()).ok_or_else(|| EngineError::Other("invalid source channels".into()))?)?;
-        index = index.checked_add(1).ok_or_else(|| EngineError::Other("channel source index overflow".into()))?;
-    } } source_poll(control)
+    }
+    source_poll(control)
 }
 fn read_plane_with_interrupt(surface: &Surface, area: Rect, control: &photocraft_raster::Interrupt<'_>) -> Result<Vec<f32>> {
     let bytes = photocraft_raster::checked_region_byte_len(area, PixelFormat::RGBA32F)?;
     let mut plane = source_buffer(bytes / 16, control)?;
     source_native(surface, area, control, |index, pixel| {
-        *plane.get_mut(index).ok_or_else(|| EngineError::Other("source plane length mismatch".into()))? = *pixel.first().ok_or_else(|| EngineError::Other("empty source pixel".into()))?; Ok(())
-    })?; Ok(plane)
+        *plane.get_mut(index).ok_or_else(|| EngineError::Other("source plane length mismatch".into()))? =
+            *pixel.first().ok_or_else(|| EngineError::Other("empty source pixel".into()))?;
+        Ok(())
+    })?;
+    Ok(plane)
 }
 fn source_reference(value: &Value, doc: &Document, cmd: &str) -> Result<ChanRef> {
     match value {
-        Value::String(text) if text.len() <= 4096 => {},
-        Value::Number(number) if number.as_u64().and_then(|n| usize::try_from(n).ok()).is_some() => {},
+        Value::String(text) if text.len() <= 4096 => {}
+        Value::Number(number) if number.as_u64().and_then(|n| usize::try_from(n).ok()).is_some() => {}
         Value::Object(map) if map.len() <= 2 => {
             for (key, value) in map {
-                if key == "channelId" { if channel_identity(value).is_none() { return Err(bad(cmd, "invalid channel identity")); } }
-                else if matches!(key.as_str(), "color" | "alpha") && value.as_u64().and_then(|n| usize::try_from(n).ok()).is_some() {}
-                else { return Err(bad(cmd, "invalid channel reference")); }
+                if key == "channelId" {
+                    if channel_identity(value).is_none() {
+                        return Err(bad(cmd, "invalid channel identity"));
+                    }
+                } else if matches!(key.as_str(), "color" | "alpha") && value.as_u64().and_then(|n| usize::try_from(n).ok()).is_some() {
+                } else {
+                    return Err(bad(cmd, "invalid channel reference"));
+                }
             }
         }
         _ => return Err(bad(cmd, "invalid channel reference")),
@@ -651,30 +767,48 @@ fn source_reference(value: &Value, doc: &Document, cmd: &str) -> Result<ChanRef>
 }
 fn source_with_interrupt(s: &Session, p: &Value, cmd: &str, gray: bool, control: &photocraft_raster::Interrupt<'_>) -> Result<Vec<Vec<f32>>> {
     source_poll(control)?;
-    if !p.is_object() && !p.is_null() { return Err(bad(cmd, "source must be an object")); }
+    if !p.is_object() && !p.is_null() {
+        return Err(bad(cmd, "source must be an object"));
+    }
     if let Some(value) = p.get("document") {
-        if !value.is_null() && value.as_u64().and_then(|n| usize::try_from(n).ok()).is_none()
-            && value.as_f64().filter(|n| n.is_finite() && n.fract() == 0.0 && *n >= 0.0 && *n < s.documents().len() as f64).is_none() { return Err(bad(cmd, "invalid source document index")); }
+        if !value.is_null()
+            && value.as_u64().and_then(|n| usize::try_from(n).ok()).is_none()
+            && value.as_f64().filter(|n| n.is_finite() && n.fract() == 0.0 && *n >= 0.0 && *n < s.documents().len() as f64).is_none()
+        {
+            return Err(bad(cmd, "invalid source document index"));
+        }
     }
     let di = doc_index(s, p, "document")?;
-    let st = s.documents().get(di).ok_or_else(|| bad(cmd, "invalid source document index"))?; let target = s.active().ok_or(EngineError::NoDocument)?;
+    let st = s.documents().get(di).ok_or_else(|| bad(cmd, "invalid source document index"))?;
+    let target = s.active().ok_or(EngineError::NoDocument)?;
     // Only the actually selected source is fenced. Unrelated inactive previews
     // are not a source-preparation policy; persisted saved attachments are not
     // runtime floating previews and are left to existing source consumers.
     if st.floating.is_some() || st.coalesce.is_some() || s.command_has_job_on(st.doc.id) {
         return Err(bad(cmd, "finish the selected source document's preview, gesture or job first"));
     }
-    source_dimensions(&st.doc, cmd)?; source_dimensions(&target.doc, cmd)?;
-    if st.doc.size != target.doc.size { return Err(bad(cmd, "source dimensions must match the target")); }
+    source_dimensions(&st.doc, cmd)?;
+    source_dimensions(&target.doc, cmd)?;
+    if st.doc.size != target.doc.size {
+        return Err(bad(cmd, "source dimensions must match the target"));
+    }
     source_format(st.doc.pixel_format())?;
-    if st.doc.channels.len() > 100000 { return Err(bad(cmd, "source channel count exceeds preparation limit")); }
-    let reference = match parameter_ref(p, "channel") { Some(value) => source_reference(value, &st.doc, cmd)?, None => ChanRef::Composite };
+    if st.doc.channels.len() > 100000 {
+        return Err(bad(cmd, "source channel count exceeds preparation limit"));
+    }
+    let reference = match parameter_ref(p, "channel") {
+        Some(value) => source_reference(value, &st.doc, cmd)?,
+        None => ChanRef::Composite,
+    };
     let layer = match p.get("layer") {
         None | Some(Value::Null) => None,
         Some(Value::String(text)) if text.is_empty() || text == "merged" => None,
         Some(value) => Some(LayerId(value.as_u64().filter(|id| *id != 0).ok_or_else(|| bad(cmd, "source layer must be an ID or merged"))?)),
     };
-    let invert = match p.get("invert") { None | Some(Value::Null) => false, Some(value) => value.as_bool().ok_or_else(|| bad(cmd, "invert must be boolean"))? };
+    let invert = match p.get("invert") {
+        None | Some(Value::Null) => false,
+        Some(value) => value.as_bool().ok_or_else(|| bad(cmd, "invert must be boolean"))?,
+    };
     source_from_snapshot_with_interrupt(&st.doc, st.active_layer, SnapshotSource { layer, channel: reference, gray, invert }, cmd, control)
 }
 
@@ -699,93 +833,217 @@ pub(crate) fn source_from_snapshot_with_interrupt(
     source_poll(control)?;
     let (area, pixels) = source_dimensions(doc, cmd)?;
     source_format(doc.pixel_format())?;
-    if doc.channels.len() > 100000 { return Err(bad(cmd, "source channel count exceeds preparation limit")); }
+    if doc.channels.len() > 100000 {
+        return Err(bad(cmd, "source channel count exceeds preparation limit"));
+    }
     let SnapshotSource { layer, channel: reference, gray, invert } = source;
-    if layer.is_some_and(|id| id.0 == 0) { return Err(bad(cmd, "source layer must be nonzero")); }
-    let colors = color_count(doc); if colors == 0 || colors > 4 { return Err(bad(cmd, "unsupported source color channels")); }
-    if let ChanRef::Color(channel) = reference { if channel >= colors { return Err(bad(cmd, "source color channel out of range")); } }
+    if layer.is_some_and(|id| id.0 == 0) {
+        return Err(bad(cmd, "source layer must be nonzero"));
+    }
+    let colors = color_count(doc);
+    if colors == 0 || colors > 4 {
+        return Err(bad(cmd, "unsupported source color channels"));
+    }
+    if let ChanRef::Color(channel) = reference {
+        if channel >= colors {
+            return Err(bad(cmd, "source color channel out of range"));
+        }
+    }
     match reference {
-        ChanRef::Alpha(index) => { source_format(doc.channels.get(index).ok_or_else(|| bad(cmd, "source alpha channel out of range"))?.surface.format())?; }
-        ChanRef::QuickMask => { source_format(doc.quick_mask.as_ref().ok_or_else(|| bad(cmd, "not in Quick Mask mode"))?.surface.format())?; }
-        ChanRef::Selection => { if let Some(surface) = &doc.selection { source_format(surface.format())?; } }
+        ChanRef::Alpha(index) => {
+            source_format(doc.channels.get(index).ok_or_else(|| bad(cmd, "source alpha channel out of range"))?.surface.format())?;
+        }
+        ChanRef::QuickMask => {
+            source_format(doc.quick_mask.as_ref().ok_or_else(|| bad(cmd, "not in Quick Mask mode"))?.surface.format())?;
+        }
+        ChanRef::Selection => {
+            if let Some(surface) = &doc.selection {
+                source_format(surface.format())?;
+            }
+        }
         _ => {}
     }
     let needed_layer = if matches!(reference, ChanRef::LayerMask | ChanRef::Transparency | ChanRef::VectorMask) {
         Some(layer.or(active_layer).ok_or_else(|| bad(cmd, "source needs a layer"))?)
-    } else { layer };
+    } else {
+        layer
+    };
     let checked_owner = if needed_layer.is_some() || matches!(reference, ChanRef::Composite | ChanRef::Color(_)) {
         source_owner(doc, needed_layer, needed_layer.is_none() && matches!(reference, ChanRef::Composite | ChanRef::Color(_)), control)?
-    } else { None };
+    } else {
+        None
+    };
     if let Some(owner) = checked_owner {
-        if matches!(reference, ChanRef::Composite | ChanRef::Color(_) | ChanRef::Transparency) { if let Some(surface) = owner.surface() { source_format(surface.format())?; } }
-        if reference == ChanRef::LayerMask { source_format(owner.mask.as_ref().ok_or_else(|| bad(cmd, "source layer has no mask"))?.surface.format())?; }
-        if reference == ChanRef::VectorMask && owner.vector_mask.is_none() { return Err(bad(cmd, "source layer has no vector mask")); }
+        if matches!(reference, ChanRef::Composite | ChanRef::Color(_) | ChanRef::Transparency) {
+            if let Some(surface) = owner.surface() {
+                source_format(surface.format())?;
+            }
+        }
+        if reference == ChanRef::LayerMask {
+            source_format(owner.mask.as_ref().ok_or_else(|| bad(cmd, "source layer has no mask"))?.surface.format())?;
+        }
+        if reference == ChanRef::VectorMask && owner.vector_mask.is_none() {
+            return Err(bad(cmd, "source layer has no vector mask"));
+        }
     }
     let count = if reference == ChanRef::Composite && !gray { colors } else { 1 };
     // All output capacity, grayscale reduction and a whole compositor temporary
     // are admitted together before any canvas-sized allocation (2x Vec slack).
-    let peak = (pixels as u64).checked_mul((count as u64).checked_mul(8).and_then(|n| n.checked_add(32)).ok_or_else(|| bad(cmd, "plane budget overflow"))?).ok_or_else(|| bad(cmd, "plane budget overflow"))?;
+    let peak = (pixels as u64)
+        .checked_mul((count as u64).checked_mul(8).and_then(|n| n.checked_add(32)).ok_or_else(|| bad(cmd, "plane budget overflow"))?)
+        .ok_or_else(|| bad(cmd, "plane budget overflow"))?;
     let metadata = 100000u64 * std::mem::size_of::<(&Layer, usize)>() as u64 * 2;
     let vector_extra = if reference == ChanRef::VectorMask { 128u64 << 20 } else { 0 };
-    if peak.checked_add(metadata).and_then(|n| n.checked_add(vector_extra)).is_none_or(|n| n > photocraft_raster::MAX_CHECKED_RASTER_BYTES) { return Err(bad(cmd, "source plane preparation exceeds resident limit")); }
-    let mut planes = Vec::new(); planes.try_reserve_exact(count).map_err(|_| bad(cmd, "plane allocation failed"))?;
-    for _ in 0..count { planes.push(source_buffer(pixels, control)?); }
+    if peak.checked_add(metadata).and_then(|n| n.checked_add(vector_extra)).is_none_or(|n| n > photocraft_raster::MAX_CHECKED_RASTER_BYTES) {
+        return Err(bad(cmd, "source plane preparation exceeds resident limit"));
+    }
+    let mut planes = Vec::new();
+    planes.try_reserve_exact(count).map_err(|_| bad(cmd, "plane allocation failed"))?;
+    for _ in 0..count {
+        planes.push(source_buffer(pixels, control)?);
+    }
     let fmt = doc.pixel_format();
     let mut store = |index: usize, pixel: &[f32]| -> Result<()> {
-        let value = match reference { ChanRef::Color(channel) => *pixel.get(channel).ok_or_else(|| bad(cmd, "source channel shape mismatch"))?, _ => *pixel.first().ok_or_else(|| bad(cmd, "empty source pixel"))? };
+        let value = match reference {
+            ChanRef::Color(channel) => *pixel.get(channel).ok_or_else(|| bad(cmd, "source channel shape mismatch"))?,
+            _ => *pixel.first().ok_or_else(|| bad(cmd, "empty source pixel"))?,
+        };
         if reference == ChanRef::Composite && gray && colors > 1 {
-            let mut native = [0.0f32; 5]; native.get_mut(..colors).ok_or_else(|| bad(cmd, "source channel shape mismatch"))?.copy_from_slice(pixel.get(..colors).ok_or_else(|| bad(cmd, "source channel shape mismatch"))?);
-            if fmt.alpha { *native.get_mut(colors).ok_or_else(|| bad(cmd, "source alpha shape mismatch"))? = 1.0; }
-            *planes.first_mut().and_then(|plane| plane.get_mut(index)).ok_or_else(|| bad(cmd, "source plane length mismatch"))? = luminosity(to_rgba(&fmt, &native));
+            let mut native = [0.0f32; 5];
+            native
+                .get_mut(..colors)
+                .ok_or_else(|| bad(cmd, "source channel shape mismatch"))?
+                .copy_from_slice(pixel.get(..colors).ok_or_else(|| bad(cmd, "source channel shape mismatch"))?);
+            if fmt.alpha {
+                *native.get_mut(colors).ok_or_else(|| bad(cmd, "source alpha shape mismatch"))? = 1.0;
+            }
+            *planes.first_mut().and_then(|plane| plane.get_mut(index)).ok_or_else(|| bad(cmd, "source plane length mismatch"))? =
+                luminosity(to_rgba(&fmt, &native));
         } else if reference == ChanRef::Composite && !gray {
-            for (channel, plane) in planes.iter_mut().enumerate() { *plane.get_mut(index).ok_or_else(|| bad(cmd, "source plane length mismatch"))? = *pixel.get(channel).ok_or_else(|| bad(cmd, "source channel shape mismatch"))?; }
-        } else { *planes.first_mut().and_then(|plane| plane.get_mut(index)).ok_or_else(|| bad(cmd, "source plane length mismatch"))? = value; }
+            for (channel, plane) in planes.iter_mut().enumerate() {
+                *plane.get_mut(index).ok_or_else(|| bad(cmd, "source plane length mismatch"))? =
+                    *pixel.get(channel).ok_or_else(|| bad(cmd, "source channel shape mismatch"))?;
+            }
+        } else {
+            *planes.first_mut().and_then(|plane| plane.get_mut(index)).ok_or_else(|| bad(cmd, "source plane length mismatch"))? = value;
+        }
         Ok(())
     };
     match reference {
         ChanRef::Composite | ChanRef::Color(_) => match layer {
             Some(id) => {
-                let owner = checked_owner.ok_or(EngineError::NoLayer(id))?; let surface = owner.surface().ok_or_else(|| bad(cmd, "source layer has no pixels"))?;
+                let owner = checked_owner.ok_or(EngineError::NoLayer(id))?;
+                let surface = owner.surface().ok_or_else(|| bad(cmd, "source layer has no pixels"))?;
                 source_native(surface, area, control, |index, pixel| {
-                    if surface.format() == fmt { store(index, pixel) } else {
-                        let rgba = to_rgba(&surface.format(), pixel); let mut native = [0.0; 5]; photocraft_raster::from_rgba_into(&fmt, rgba, &mut native); store(index, &native)
+                    if surface.format() == fmt {
+                        store(index, pixel)
+                    } else {
+                        let rgba = to_rgba(&surface.format(), pixel);
+                        let mut native = [0.0; 5];
+                        photocraft_raster::from_rgba_into(&fmt, rgba, &mut native);
+                        store(index, &native)
                     }
                 })?;
             }
             None => {
                 // Preserve the existing imported legacy display route; it has
                 // boundary polling only, not a newly qualified canonical route.
-                let buffer = if doc.xcf_state.is_some() { source_poll(control)?; let buffer = photocraft_compose::render(doc, area)?; source_poll(control)?; buffer }
-                    else { photocraft_compose::render_with_interrupt(doc, area, control)? };
-                if buffer.px.len() != pixels { return Err(bad(cmd, "composite source length mismatch")); }
-                for (index, rgba) in buffer.px.iter().enumerate() { if index.is_multiple_of(256) { source_poll(control)?; } if !rgba.iter().all(|value| value.is_finite()) { return Err(bad(cmd, "nonfinite composite source")); }
-                    let mut native = [0.0; 5]; photocraft_raster::from_rgba_into(&fmt, *rgba, &mut native); store(index, &native)?;
+                let buffer = if doc.xcf_state.is_some() {
+                    source_poll(control)?;
+                    let buffer = photocraft_compose::render(doc, area)?;
+                    source_poll(control)?;
+                    buffer
+                } else {
+                    photocraft_compose::render_with_interrupt(doc, area, control)?
+                };
+                if buffer.px.len() != pixels {
+                    return Err(bad(cmd, "composite source length mismatch"));
+                }
+                for (index, rgba) in buffer.px.iter().enumerate() {
+                    if index.is_multiple_of(256) {
+                        source_poll(control)?;
+                    }
+                    if !rgba.iter().all(|value| value.is_finite()) {
+                        return Err(bad(cmd, "nonfinite composite source"));
+                    }
+                    let mut native = [0.0; 5];
+                    photocraft_raster::from_rgba_into(&fmt, *rgba, &mut native);
+                    store(index, &native)?;
                 }
             }
         },
-        ChanRef::Alpha(index) => { let plane = read_plane_with_interrupt(&doc.channels.get(index).ok_or_else(|| bad(cmd, "source alpha channel out of range"))?.surface, area, control)?; planes.clear(); planes.push(plane); },
-        ChanRef::QuickMask => { let plane = read_plane_with_interrupt(&doc.quick_mask.as_ref().ok_or_else(|| bad(cmd, "not in Quick Mask mode"))?.surface, area, control)?; planes.clear(); planes.push(plane); },
-        ChanRef::Selection => { if let Some(surface) = &doc.selection { let plane = read_plane_with_interrupt(surface, area, control)?; planes.clear(); planes.push(plane); } },
+        ChanRef::Alpha(index) => {
+            let plane =
+                read_plane_with_interrupt(&doc.channels.get(index).ok_or_else(|| bad(cmd, "source alpha channel out of range"))?.surface, area, control)?;
+            planes.clear();
+            planes.push(plane);
+        }
+        ChanRef::QuickMask => {
+            let plane = read_plane_with_interrupt(&doc.quick_mask.as_ref().ok_or_else(|| bad(cmd, "not in Quick Mask mode"))?.surface, area, control)?;
+            planes.clear();
+            planes.push(plane);
+        }
+        ChanRef::Selection => {
+            if let Some(surface) = &doc.selection {
+                let plane = read_plane_with_interrupt(surface, area, control)?;
+                planes.clear();
+                planes.push(plane);
+            }
+        }
         ChanRef::LayerMask | ChanRef::Transparency | ChanRef::VectorMask => {
-            let id = needed_layer.ok_or_else(|| bad(cmd, "source needs a layer"))?; let owner = checked_owner.ok_or(EngineError::NoLayer(id))?;
+            let id = needed_layer.ok_or_else(|| bad(cmd, "source needs a layer"))?;
+            let owner = checked_owner.ok_or(EngineError::NoLayer(id))?;
             match reference {
-                ChanRef::LayerMask => { let plane = read_plane_with_interrupt(&owner.mask.as_ref().ok_or_else(|| bad(cmd, "source layer has no mask"))?.surface, area, control)?; planes.clear(); planes.push(plane); },
+                ChanRef::LayerMask => {
+                    let plane = read_plane_with_interrupt(&owner.mask.as_ref().ok_or_else(|| bad(cmd, "source layer has no mask"))?.surface, area, control)?;
+                    planes.clear();
+                    planes.push(plane);
+                }
                 ChanRef::Transparency => {
-                    if let Some(surface) = owner.surface() { source_native(surface, area, control, |index, pixel| { let value = to_rgba(&surface.format(), pixel)[3]; *planes.first_mut().and_then(|plane| plane.get_mut(index)).ok_or_else(|| bad(cmd, "source plane length mismatch"))? = value; Ok(()) })?; }
-                    else { for chunk in planes.first_mut().ok_or_else(|| bad(cmd, "missing source plane"))?.chunks_mut(4096) { source_poll(control)?; chunk.fill(1.0); } }
+                    if let Some(surface) = owner.surface() {
+                        source_native(surface, area, control, |index, pixel| {
+                            let value = to_rgba(&surface.format(), pixel)[3];
+                            *planes.first_mut().and_then(|plane| plane.get_mut(index)).ok_or_else(|| bad(cmd, "source plane length mismatch"))? = value;
+                            Ok(())
+                        })?;
+                    } else {
+                        for chunk in planes.first_mut().ok_or_else(|| bad(cmd, "missing source plane"))?.chunks_mut(4096) {
+                            source_poll(control)?;
+                            chunk.fill(1.0);
+                        }
+                    }
                 }
                 ChanRef::VectorMask => {
                     let mask = owner.vector_mask.as_ref().ok_or_else(|| bad(cmd, "source layer has no vector mask"))?;
-                    let plane = source_vector(mask, area, control)?; planes.clear(); planes.push(plane);
+                    let plane = source_vector(mask, area, control)?;
+                    planes.clear();
+                    planes.push(plane);
                 }
                 _ => return Err(bad(cmd, "invalid source reference")),
             }
         }
     }
-    for plane in &mut planes { if plane.len() != pixels { return Err(bad(cmd, "source plane length mismatch")); } for (index, value) in plane.iter_mut().enumerate() {
-        if index.is_multiple_of(256) { source_poll(control)?; } if !value.is_finite() { return Err(bad(cmd, "nonfinite source plane")); } if invert { *value = 1.0 - *value; if !value.is_finite() { return Err(bad(cmd, "source inversion overflow")); } }
-    } }
-    source_poll(control)?; Ok(planes)
+    for plane in &mut planes {
+        if plane.len() != pixels {
+            return Err(bad(cmd, "source plane length mismatch"));
+        }
+        for (index, value) in plane.iter_mut().enumerate() {
+            if index.is_multiple_of(256) {
+                source_poll(control)?;
+            }
+            if !value.is_finite() {
+                return Err(bad(cmd, "nonfinite source plane"));
+            }
+            if invert {
+                *value = 1.0 - *value;
+                if !value.is_finite() {
+                    return Err(bad(cmd, "source inversion overflow"));
+                }
+            }
+        }
+    }
+    source_poll(control)?;
+    Ok(planes)
 }
 
 #[cfg(test)]
@@ -793,32 +1051,58 @@ mod snapshot_source_tests {
     use super::*;
     #[test]
     fn frozen_ordinary_source_matches_existing_luminosity_and_color_planes() {
-        for sample in [photocraft_color::SampleType::U8,photocraft_color::SampleType::U16,photocraft_color::SampleType::F32] {
-            let mut doc=Document::new("Own source",photocraft_doc::Size::new(2,1),photocraft_color::ColorMode::Rgb,sample);
-            let mut surface=Surface::new(doc.pixel_format());
-            surface.try_write_region_f64(doc.bounds(),&[0.2,0.4,0.8,1.0,0.9,0.1,0.3,0.25]).unwrap();
-            let layer=Layer::new("Own pixels",LayerContent::Raster(surface));let id=layer.id;doc.layers.push(layer);
-            let before=doc.clone();
-            let request=SnapshotSource{layer:Some(id),channel:ChanRef::Composite,gray:true,invert:false};
-            let actual=source_from_snapshot_with_interrupt(&doc,Some(id),request,"owned.snapshot",&photocraft_raster::Interrupt::NONE).unwrap();
-            assert_eq!(actual,vec![gray_plane(&doc,Some(id),Some(id),ChanRef::Composite).unwrap()]);
-            let color=SnapshotSource{channel:ChanRef::Color(1),gray:false,..request};
-            assert_eq!(source_from_snapshot_with_interrupt(&doc,Some(id),color,"owned.snapshot",&photocraft_raster::Interrupt::NONE).unwrap(),ref_planes(&doc,Some(id),Some(id),ChanRef::Color(1)).unwrap());
-            let inverted=source_from_snapshot_with_interrupt(&doc,Some(id),SnapshotSource{invert:true,..request},"owned.snapshot",&photocraft_raster::Interrupt::NONE).unwrap();
-            assert_eq!(inverted,actual.into_iter().map(|plane|plane.into_iter().map(|value|1.0-value).collect::<Vec<_>>()).collect::<Vec<_>>());
-            assert_eq!(doc,before);
+        for sample in [photocraft_color::SampleType::U8, photocraft_color::SampleType::U16, photocraft_color::SampleType::F32] {
+            let mut doc = Document::new("Own source", photocraft_doc::Size::new(2, 1), photocraft_color::ColorMode::Rgb, sample);
+            let mut surface = Surface::new(doc.pixel_format());
+            surface.try_write_region_f64(doc.bounds(), &[0.2, 0.4, 0.8, 1.0, 0.9, 0.1, 0.3, 0.25]).unwrap();
+            let layer = Layer::new("Own pixels", LayerContent::Raster(surface));
+            let id = layer.id;
+            doc.layers.push(layer);
+            let before = doc.clone();
+            let request = SnapshotSource { layer: Some(id), channel: ChanRef::Composite, gray: true, invert: false };
+            let actual = source_from_snapshot_with_interrupt(&doc, Some(id), request, "owned.snapshot", &photocraft_raster::Interrupt::NONE).unwrap();
+            assert_eq!(actual, vec![gray_plane(&doc, Some(id), Some(id), ChanRef::Composite).unwrap()]);
+            let color = SnapshotSource { channel: ChanRef::Color(1), gray: false, ..request };
+            assert_eq!(
+                source_from_snapshot_with_interrupt(&doc, Some(id), color, "owned.snapshot", &photocraft_raster::Interrupt::NONE).unwrap(),
+                ref_planes(&doc, Some(id), Some(id), ChanRef::Color(1)).unwrap()
+            );
+            let inverted = source_from_snapshot_with_interrupt(
+                &doc,
+                Some(id),
+                SnapshotSource { invert: true, ..request },
+                "owned.snapshot",
+                &photocraft_raster::Interrupt::NONE,
+            )
+            .unwrap();
+            assert_eq!(inverted, actual.into_iter().map(|plane| plane.into_iter().map(|value| 1.0 - value).collect::<Vec<_>>()).collect::<Vec<_>>());
+            assert_eq!(doc, before);
         }
     }
     #[test]
     fn snapshot_source_refuses_bad_bounds_references_wide_and_cancel_without_mutation() {
-        let doc=Document::new("Own source",photocraft_doc::Size::new(2,1),photocraft_color::ColorMode::Rgb,photocraft_color::SampleType::U8);
-        let request=SnapshotSource{layer:None,channel:ChanRef::Color(3),gray:true,invert:false};
-        assert!(source_from_snapshot_with_interrupt(&doc,None,request,"owned.snapshot",&photocraft_raster::Interrupt::NONE).is_err());
-        assert!(matches!(source_from_snapshot_with_interrupt(&doc,None,request,"owned.snapshot",&photocraft_raster::Interrupt::cancel_only(&||true)),Err(EngineError::Cancelled)));
-        let mut wide=doc.clone();wide.depth=photocraft_color::SampleType::F64;
-        assert!(source_from_snapshot_with_interrupt(&wide,None,SnapshotSource{channel:ChanRef::Composite,..request},"owned.snapshot",&photocraft_raster::Interrupt::NONE).is_err());
-        let mut malformed=doc.clone();malformed.size.width=0;
-        assert!(source_from_snapshot_with_interrupt(&malformed,None,request,"owned.snapshot",&photocraft_raster::Interrupt::NONE).is_err());
+        let doc = Document::new("Own source", photocraft_doc::Size::new(2, 1), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        let request = SnapshotSource { layer: None, channel: ChanRef::Color(3), gray: true, invert: false };
+        assert!(source_from_snapshot_with_interrupt(&doc, None, request, "owned.snapshot", &photocraft_raster::Interrupt::NONE).is_err());
+        assert!(matches!(
+            source_from_snapshot_with_interrupt(&doc, None, request, "owned.snapshot", &photocraft_raster::Interrupt::cancel_only(&|| true)),
+            Err(EngineError::Cancelled)
+        ));
+        let mut wide = doc.clone();
+        wide.depth = photocraft_color::SampleType::F64;
+        assert!(
+            source_from_snapshot_with_interrupt(
+                &wide,
+                None,
+                SnapshotSource { channel: ChanRef::Composite, ..request },
+                "owned.snapshot",
+                &photocraft_raster::Interrupt::NONE
+            )
+            .is_err()
+        );
+        let mut malformed = doc.clone();
+        malformed.size.width = 0;
+        assert!(source_from_snapshot_with_interrupt(&malformed, None, request, "owned.snapshot", &photocraft_raster::Interrupt::NONE).is_err());
     }
 }
 
@@ -884,7 +1168,13 @@ fn mask_wire(value: &Value, cmd: &str) -> Result<()> {
         Value::String(text) if text.len() <= 4096 => Ok(()),
         Value::Number(_) | Value::Bool(_) | Value::Null => Ok(()),
         Value::Object(map) if map.len() <= 2 => {
-            for (key, value) in map { if key.len() > 32 || value.is_array() || value.is_object() { return Err(bad(cmd, "invalid nested mask parameter")); } mask_wire(value, cmd)?; } Ok(())
+            for (key, value) in map {
+                if key.len() > 32 || value.is_array() || value.is_object() {
+                    return Err(bad(cmd, "invalid nested mask parameter"));
+                }
+                mask_wire(value, cmd)?;
+            }
+            Ok(())
         }
         _ => Err(bad(cmd, "mask parameter exceeds bounded scalar shape")),
     }
@@ -892,25 +1182,41 @@ fn mask_wire(value: &Value, cmd: &str) -> Result<()> {
 fn mask_plane_with_interrupt(s: &Session, p: &Value, cmd: &str, control: &photocraft_raster::Interrupt<'_>) -> Result<Option<Vec<f32>>> {
     source_poll(control)?;
     let owned;
-    let spec = if let Some(value) = p.get("mask") { value } else {
+    let spec = if let Some(value) = p.get("mask") {
+        value
+    } else {
         let mut map = serde_json::Map::new();
         for (key, field) in [("document", "maskDocument"), ("layer", "maskLayer"), ("channel", "maskChannel"), ("invert", "maskInvert")] {
             if let Some(value) = p.get(field) {
                 mask_wire(value, cmd)?;
-                if value.is_null() || value.as_str().is_some_and(|text| text.is_empty() || (key == "layer" && text == "merged")) { continue; }
+                if value.is_null() || value.as_str().is_some_and(|text| text.is_empty() || (key == "layer" && text == "merged")) {
+                    continue;
+                }
                 map.insert(key.into(), value.clone());
             }
         }
-        if map.is_empty() { return Ok(None); } owned = Value::Object(map); &owned
+        if map.is_empty() {
+            return Ok(None);
+        }
+        owned = Value::Object(map);
+        &owned
     };
     match spec {
         Value::Null | Value::Bool(false) => Ok(None),
         Value::Object(map) if map.len() <= 8 => {
-            for (key, value) in map { if key.len() > 32 { return Err(bad(cmd, "mask parameter key exceeds limit")); } mask_wire(value, cmd)?; }
-            if spec.get("channel").is_none_or(|channel| channel == "none") { return Ok(None); }
+            for (key, value) in map {
+                if key.len() > 32 {
+                    return Err(bad(cmd, "mask parameter key exceeds limit"));
+                }
+                mask_wire(value, cmd)?;
+            }
+            if spec.get("channel").is_none_or(|channel| channel == "none") {
+                return Ok(None);
+            }
             let planes = source_with_interrupt(s, spec, cmd, true, control)?;
             let plane = planes.into_iter().next().ok_or_else(|| bad(cmd, "mask source has no plane"))?;
-            source_poll(control)?; Ok(Some(plane))
+            source_poll(control)?;
+            Ok(Some(plane))
         }
         _ => Err(bad(cmd, "mask source must be a bounded source object or false")),
     }
@@ -925,48 +1231,74 @@ mod checked_source_drafts {
     #[test]
     fn supported_native_source_and_luminosity_match_existing_math() {
         for depth in [8, 16, 32] {
-            let mut session = Session::new(); session.execute("file.new", json!({"width":3,"height":2,"depth":depth})).unwrap();
-            let active = session.active().unwrap(); let id = active.active_layer.unwrap();
+            let mut session = Session::new();
+            session.execute("file.new", json!({"width":3,"height":2,"depth":depth})).unwrap();
+            let active = session.active().unwrap();
+            let id = active.active_layer.unwrap();
             for gray in [false, true] {
-                let expected = if gray { vec![gray_plane(&active.doc, Some(id), active.active_layer, ChanRef::Composite).unwrap()] }
-                    else { ref_planes(&active.doc, Some(id), active.active_layer, ChanRef::Composite).unwrap() };
-                let actual = source_with_interrupt(&session, &json!({"layer":id.0}), "own-source-test", gray, &Interrupt::NONE).unwrap(); assert_eq!(actual, expected);
+                let expected = if gray {
+                    vec![gray_plane(&active.doc, Some(id), active.active_layer, ChanRef::Composite).unwrap()]
+                } else {
+                    ref_planes(&active.doc, Some(id), active.active_layer, ChanRef::Composite).unwrap()
+                };
+                let actual = source_with_interrupt(&session, &json!({"layer":id.0}), "own-source-test", gray, &Interrupt::NONE).unwrap();
+                assert_eq!(actual, expected);
             }
         }
     }
     #[test]
     fn source_indices_mask_shapes_and_early_cancel_fail_gracefully() {
-        let mut session = Session::new(); session.execute("file.new", json!({"width":2,"height":2})).unwrap();
-        for params in [json!({"document":1e100}), json!({"document":-1}), json!({"layer":{}}), json!({"channel":{"alpha":usize::MAX}}), json!({"channel":{"color":9}}), json!({"invert":"yes"})] {
+        let mut session = Session::new();
+        session.execute("file.new", json!({"width":2,"height":2})).unwrap();
+        for params in [
+            json!({"document":1e100}),
+            json!({"document":-1}),
+            json!({"layer":{}}),
+            json!({"channel":{"alpha":usize::MAX}}),
+            json!({"channel":{"color":9}}),
+            json!({"invert":"yes"}),
+        ] {
             assert!(source_with_interrupt(&session, &params, "own-source-test", false, &Interrupt::NONE).is_err());
         }
         assert!(mask_plane_with_interrupt(&session, &json!({"mask":{"channel":{"alpha":{"nested":true}}}}), "own-mask-test", &Interrupt::NONE).is_err());
         assert!(mask_plane_with_interrupt(&session, &json!({"mask":true}), "own-mask-test", &Interrupt::NONE).is_err());
         assert!(mask_plane_with_interrupt(&session, &json!({"mask":false}), "own-mask-test", &Interrupt::NONE).unwrap().is_none());
-        let cancel = || true; assert!(matches!(source_with_interrupt(&session, &json!({}), "own-source-test", true, &Interrupt::cancel_only(&cancel)), Err(EngineError::Cancelled)));
+        let cancel = || true;
+        assert!(matches!(source_with_interrupt(&session, &json!({}), "own-source-test", true, &Interrupt::cancel_only(&cancel)), Err(EngineError::Cancelled)));
     }
     #[test]
     fn checked_plane_refuses_wide_nonfinite_and_reversed_geometry() {
         for depth in [SampleType::U32, SampleType::F64] {
-            let surface = Surface::new(PixelFormat::new(ColorMode::Grayscale, depth, false)); assert!(read_plane_with_interrupt(&surface, Rect::new(0,0,1,1), &Interrupt::NONE).is_err());
+            let surface = Surface::new(PixelFormat::new(ColorMode::Grayscale, depth, false));
+            assert!(read_plane_with_interrupt(&surface, Rect::new(0, 0, 1, 1), &Interrupt::NONE).is_err());
         }
-        let mut surface = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false)); let area = Rect::new(0,0,1,1);
-        surface.try_write_interleaved(area, &f32::NAN.to_ne_bytes()).unwrap(); let before = surface.clone();
-        assert!(read_plane_with_interrupt(&surface, area, &Interrupt::NONE).is_err()); assert_eq!(surface, before);
-        assert!(read_plane_with_interrupt(&surface, Rect::new(2,0,1,1), &Interrupt::NONE).is_err());
+        let mut surface = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
+        let area = Rect::new(0, 0, 1, 1);
+        surface.try_write_interleaved(area, &f32::NAN.to_ne_bytes()).unwrap();
+        let before = surface.clone();
+        assert!(read_plane_with_interrupt(&surface, area, &Interrupt::NONE).is_err());
+        assert_eq!(surface, before);
+        assert!(read_plane_with_interrupt(&surface, Rect::new(2, 0, 1, 1), &Interrupt::NONE).is_err());
     }
     #[test]
     fn only_selected_source_gestures_and_runtime_previews_block_preparation() {
         let mut session = Session::new();
-        for _ in 0..3 { session.execute("file.new", json!({"width":2,"height":2})).unwrap(); }
+        for _ in 0..3 {
+            session.execute("file.new", json!({"width":2,"height":2})).unwrap();
+        }
         session.docs[0].coalesce = Some("unrelated inactive gesture".into());
         let params = json!({"document":1});
         assert!(source_with_interrupt(&session, &params, "own-source-test", true, &Interrupt::NONE).is_ok());
         session.docs[1].coalesce = Some("selected source gesture".into());
         assert!(source_with_interrupt(&session, &params, "own-source-test", true, &Interrupt::NONE).is_err());
         assert!(mask_plane_with_interrupt(&session, &json!({"mask":{"document":1,"channel":"composite"}}), "own-mask-test", &Interrupt::NONE).is_err());
-        session.docs[1].coalesce = None; session.docs[0].coalesce = None; session.active = Some(0);
-        session.execute("select.all", json!({})).unwrap(); session.execute("select.float", json!({})).unwrap(); assert!(session.docs[0].floating.is_some()); session.active = Some(2);
+        session.docs[1].coalesce = None;
+        session.docs[0].coalesce = None;
+        session.active = Some(0);
+        session.execute("select.all", json!({})).unwrap();
+        session.execute("select.float", json!({})).unwrap();
+        assert!(session.docs[0].floating.is_some());
+        session.active = Some(2);
         assert!(source_with_interrupt(&session, &params, "own-source-test", true, &Interrupt::NONE).is_ok());
         assert!(source_with_interrupt(&session, &json!({"document":0}), "own-source-test", true, &Interrupt::NONE).is_err());
     }
@@ -1019,6 +1351,24 @@ pub(crate) fn target_surface<'a>(doc: &'a mut Document, layer: Option<LayerId>, 
     }
 }
 
+pub(crate) fn read_target_surface<'a>(doc: &'a Document, layer: Option<LayerId>, p: &Value) -> Result<&'a Surface> {
+    match target_of(p) {
+        Target::Alpha(i) => {
+            let n = doc.channels.len();
+            doc.channels.get(i).map(|c| &c.surface).ok_or_else(|| EngineError::Other(format!("no alpha channel {i} (document has {n})")))
+        }
+        Target::QuickMask => doc.quick_mask.as_ref().map(|c| &c.surface).ok_or_else(|| EngineError::Other("not in Quick Mask mode".into())),
+        Target::Pixels => {
+            let id = layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
+            doc.layer(id).and_then(Layer::surface).ok_or(EngineError::NoLayer(id))
+        }
+        Target::Mask => {
+            let id = layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
+            doc.layer(id).and_then(|l| l.mask.as_ref()).map(|m| m.surface.as_ref()).ok_or(EngineError::NoLayer(id))
+        }
+    }
+}
+
 /// The grayscale surface filters and adjustments edit instead of the layer's pixels (made explicit
 /// over the canvas), if the params target one: an alpha channel, the Quick Mask, or the mask of
 /// `layer`.
@@ -1032,12 +1382,17 @@ pub(crate) fn channel_surface_for_filter<'a>(doc: &'a mut Document, layer: Optio
     Ok(Some(surf))
 }
 
-/// Commands that edit a targeted layer mask in place of the layer: the Image › Adjustments table
-/// and the filters. A mask target enables them on any layer with a mask, so ⌘I inverts an
-/// adjustment layer's mask as in Photoshop (#780).
+/// Commands that edit a targeted layer mask in place of the layer: the Image › Adjustments table,
+/// the filters and the fills (Edit › Fill and its keys). A mask target enables them on any layer
+/// with a mask, so ⌘I inverts an adjustment layer's mask (#780) and Fill fills it (#2456) as in
+/// Photoshop.
 fn edits_mask(id: &str) -> bool {
     id.strip_prefix("image.adjustments.").is_some_and(|kind| crate::adjust_params::default_for(kind, ColorMode::Rgb).is_ok())
         || crate::filters::params_for(id, &Value::Null).is_some()
+        || id == "edit.fill"
+        // Copying a targeted mask (#2928).
+        || id == "edit.copy"
+        || crate::fill_key_cmds::IDS.contains(&id)
 }
 
 /// The precondition of `id` when `p` targets the active layer's mask (`"target":"mask"`): the
@@ -1052,7 +1407,9 @@ pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<st
 /// Whether command `id` edits the targeted channel or mask when its params name no `"target"`
 /// (filters, adjustments, paint and fill commands); the shell adds its mask target to these.
 pub fn follows_target(id: &str) -> bool {
-    routed(id)
+    // Moving the selected pixels (⌘-drag, Move tool) moves the targeted mask's, not the layer's.
+    // Moving a layer with its unlinked mask targeted moves the mask alone (`layer.translate`).
+    routed(id) || id == "select.float" || id == "layer.translate"
 }
 
 /// Commands whose target follows the Channels panel.
@@ -1062,8 +1419,17 @@ fn routed(id: &str) -> bool {
         || id.starts_with("image.adjustments.")
         || matches!(id, "paint.stroke" | "paint.pencil" | "paint.bucket" | "paint.gradient" | "paint.mixerBrush" | "edit.fill" | "image.applyImage")
         || crate::fill_key_cmds::IDS.contains(&id)
-        // Pasting into a targeted mask or channel (#1035).
-        || matches!(id, "edit.paste" | "edit.pasteSpecial.pasteInPlace" | "edit.pasteSpecial.pasteInto" | "edit.pasteSpecial.pasteOutside")
+        // Pasting into a targeted mask or channel (#1035); Copy takes a targeted mask (#2928).
+        || matches!(id, "edit.copy" | "edit.paste" | "edit.pasteSpecial.pasteInPlace" | "edit.pasteSpecial.pasteInto" | "edit.pasteSpecial.pasteOutside")
+        // Edit › Transform › Rotate/Flip turn a targeted mask or channel (#2835).
+        || matches!(
+            id,
+            "edit.transform.rotate180"
+                | "edit.transform.rotate90Cw"
+                | "edit.transform.rotate90Ccw"
+                | "edit.transform.flipHorizontal"
+                | "edit.transform.flipVertical"
+        )
         || matches!(
             id,
             "paint.cloneStamp"
@@ -1078,6 +1444,7 @@ fn routed(id: &str) -> bool {
                 | "paint.smudge"
                 | "paint.historyBrush"
                 | "paint.redEye"
+                | "paint.remove"
         )
 }
 
@@ -1090,7 +1457,7 @@ pub(crate) fn inject_target(s: &Session, id: &str, params: Value) -> Value {
     let t = match st.channel_view.target {
         ChannelTarget::Alpha(i) if i < st.doc.channels.len() => json!({ "channel": i }),
         ChannelTarget::Composite if st.doc.quick_mask.is_some() => json!("quickMask"),
-        ChannelTarget::Composite if mask_editing_target(st).is_some() => json!("mask"),
+        ChannelTarget::LayerMask => json!("mask"),
         // Viewing the active layer's mask (⌥-click): pixel commands edit the mask.
         ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some() => json!("mask"),
         _ => return params,
@@ -1140,6 +1507,71 @@ pub(crate) fn restrict_to_color(before: &Document, after: &mut Document, id: Lay
         new.write_region(r, &v);
     }
     new.prune();
+}
+
+/// The colour channel Clear is limited to: the Channels panel targets a single one.
+pub(crate) fn targeted_color(s: &Session) -> Option<usize> {
+    match s.active()?.channel_view.target {
+        ChannelTarget::Color(k) => Some(k),
+        _ => None,
+    }
+}
+
+/// Clear (Delete) with colour channel `k` of layer `id` targeted (#2720): fill the selected area
+/// (or the canvas) of that channel only with the background colour's value for it, as Photoshop
+/// does. A channel has no transparency of its own, so the other channels and the layer's alpha
+/// stay; partly selected pixels blend.
+pub(crate) fn clear_color_channel(doc: &mut Document, id: LayerId, k: usize, background: [f32; 4]) -> Result<()> {
+    let canvas = doc.bounds();
+    let sel = doc.selection.clone();
+    let area = sel.as_ref().map_or(canvas, |m| m.content_bounds().intersect(&canvas));
+    let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
+    let fmt = surf.format();
+    let n = fmt.channels();
+    // The background colour in the layer's colour model, so `k` picks the right component.
+    let Some(v) = from_rgba(&fmt, [background[0], background[1], background[2], 1.0]).get(k).copied().filter(|_| k < n) else {
+        return Err(EngineError::Other(format!("no colour channel {k} in this layer")));
+    };
+    if area.is_empty() {
+        return Ok(());
+    }
+    let cover = sel.map(|m| (m.read_region(area), m.format().channels().max(1)));
+    let mut px = surf.read_region(area);
+    for (i, p) in px.chunks_exact_mut(n).enumerate() {
+        let w = cover.as_ref().map_or(1.0, |(m, mk)| m.get(i * mk).copied().unwrap_or(0.0));
+        if let Some(c) = p.get_mut(k) {
+            *c += (v - *c) * w.clamp(0.0, 1.0);
+        }
+    }
+    surf.write_region(area, &px);
+    surf.prune();
+    Ok(())
+}
+
+/// The alpha channel or Quick Mask the Channels panel targets, as `"target"` params: Clear
+/// (Delete) fills it instead of the layer (#2734).
+pub(crate) fn targeted_channel(s: &Session) -> Option<Value> {
+    let st = s.active()?;
+    let t = match st.channel_view.target {
+        ChannelTarget::Alpha(i) if i < st.doc.channels.len() => json!({ "channel": i }),
+        ChannelTarget::Composite if st.doc.quick_mask.is_some() => json!("quickMask"),
+        _ => return None,
+    };
+    Some(json!({ "target": t }))
+}
+
+/// Clear (Delete) with an alpha channel or the Quick Mask targeted (`target` from
+/// [`targeted_channel`]): fill the selected area (or the canvas) of it with the background colour,
+/// as gray, as Photoshop does. Partly selected pixels blend.
+pub(crate) fn clear_channel(doc: &mut Document, target: &Value, background: [f32; 4]) -> Result<()> {
+    let canvas = doc.bounds();
+    let sel = doc.selection.clone();
+    let area = sel.as_ref().map_or(canvas, |m| m.content_bounds().intersect(&canvas));
+    if area.is_empty() {
+        return Ok(());
+    }
+    let (surf, _) = target_surface(doc, None, target)?;
+    crate::fill_cmds::fill_color(surf, area, [background[0], background[1], background[2], 1.0], sel.as_ref())
 }
 
 /// The active document targets an alpha channel or is in Quick Mask mode, so pixel commands
@@ -1212,11 +1644,7 @@ fn quick_mask_from(doc: &Document, o: &QuickMaskOptions) -> AlphaChannel {
     let fmt = channel_format(doc);
     let surface = match &doc.selection {
         Some(s) => plane_surface(&sel::mask_from_surface(Some(s), area), area, fmt),
-        None => {
-            let mut s = Surface::new(fmt);
-            s.fill_rect(area, &[1.0]);
-            s
-        }
+        None => unselected_surface(area, fmt, o.indicates),
     };
     AlphaChannel { color: o.color, opacity: o.opacity, indicates: o.indicates, ..AlphaChannel::new("Quick Mask", surface) }
 }
@@ -1226,7 +1654,7 @@ fn quick_mask_from(doc: &Document, o: &QuickMaskOptions) -> AlphaChannel {
 fn selection_from(doc: &Document, ch: &AlphaChannel) -> Option<Surface> {
     let area = doc.bounds();
     let vals = read_plane(&ch.surface, area);
-    if vals.iter().all(|v| *v >= 1.0 - 0.5 / 255.0) {
+    if doc.quick_mask_unselected && ch.indicates != ColorIndicates::SelectedAreas && uniform(&vals, 1.0) {
         return None;
     }
     sel::combine(None, &vals, area, SelectionMode::Replace)
@@ -1327,7 +1755,11 @@ fn target(s: &mut Session, t: ChannelTarget) {
     v.target = t;
     v.editing_mask = None;
     match t {
-        ChannelTarget::Composite => v.color_hidden.clear(),
+        ChannelTarget::Composite => {
+            v.color_hidden.clear();
+            v.alpha_visible.clear();
+        }
+        ChannelTarget::LayerMask | ChannelTarget::VectorMask => v.color_hidden.clear(),
         ChannelTarget::Color(k) => {
             v.color_hidden = (0..colors).map(|c| c != k).collect();
             v.alpha_visible.clear();
@@ -1338,6 +1770,8 @@ fn target(s: &mut Session, t: ChannelTarget) {
         }
     }
     fix_view_now(st);
+
+    s.tools.target_mask(t == ChannelTarget::LayerMask);
 }
 
 mod view_controlled;
@@ -2126,17 +2560,25 @@ pub fn specs() -> Vec<CommandSpec> {
             "Load Selection…",
             ["Select"],
             None,
-            r##"{"channel":index|name|{channelId:id}|"composite"|"red|green|blue|…"|"transparency"|"mask"|"vectorMask"|"quickMask"|"selection","layer":id?,"document":index?,"invert":bool=false,"operation":"new|add|subtract|intersect"="new","nativeCoverage":bool=false,"coverageContext":"unit"?,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
+            r##"{"channel":index|name|"composite"|"red|green|blue|…"|"transparency"|"mask"|"vectorMask"|"quickMask"|"selection"|"targeted" (the Channels panel's target),"layer":id?,"document":index?,"invert":bool=false,"operation":"new|add|subtract|intersect"="new"}"##,
             has_doc,
             load_selection
         ),
-        spec!("select.editInQuickMaskMode", "Edit in Quick Mask Mode", ["Select"], Some("Q"), r##"{"on":bool?=toggle,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_doc, quick_mask),
+        spec!(
+            "select.editInQuickMaskMode",
+            "Edit in Quick Mask Mode",
+            ["Select"],
+            Some("Q"),
+            r##"{"on":bool?=toggle,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
+            has_doc,
+            quick_mask
+        ),
         spec!(
             "image.applyImage",
             "Apply Image…",
             ["Image"],
             None,
-            r##"{"source":{"document":index?,"layer":id|"merged"="merged","channel":"composite"|"red|…"|index|"selection"|"transparency"|"mask"="composite","invert":bool=false},"blending":"normal|multiply|screen|overlay|softLight|hardLight|colorDodge|colorBurn|darken|lighten|difference|exclusion|linearBurn|linearDodge|add|subtract|…"="multiply","opacity":0..100=100,"scale":1..2=1,"offset":-255..255=0,"preserveTransparency":bool=false,"mask":{"document","layer","channel","invert"}?,"sourceChannel|sourceDocument|sourceLayer|sourceInvert|maskChannel|…":flat form of source/mask?}"##,
+            r##"{"source":{"document":index?,"layer":id|name|"merged"="merged","channel":"composite"|"red|…"|index|"selection"|"transparency"|"mask"="composite","invert":bool=false},"blending":"normal|multiply|screen|overlay|softLight|hardLight|colorDodge|colorBurn|darken|lighten|difference|exclusion|linearBurn|linearDodge|add|subtract|…"="multiply","opacity":0..100=100,"scale":1..2=1,"offset":-255..255=0,"preserveTransparency":bool=false,"mask":{"document","layer","channel","invert"}?,"sourceChannel|sourceDocument|sourceLayer|sourceInvert|maskChannel|…":flat form of source/mask?}"##,
             has_apply_target,
             apply_image
         ),
@@ -2176,10 +2618,42 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             duplicate_channel
         ),
-        spec!("channel.delete", "Delete Channel", [], None, r##"{"channel":index|name|{channelId:id}?=targeted,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_channels, delete_channel),
-        spec!("channel.rename", "Rename Channel", [], None, r##"{"channel":index|name|{channelId:id},"name":str,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_channels, rename_channel),
-        spec!("channel.move", "Reorder Channel", [], None, r##"{"channel":index|name|{channelId:id},"to":index,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_channels, move_channel),
-        spec!("channel.target", "Target Channel", [], None, r##"{"channel":"composite"|"red|green|blue|…"|index|name="composite","documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_doc, target_cmd),
+        spec!(
+            "channel.delete",
+            "Delete Channel",
+            [],
+            None,
+            r##"{"channel":index|name|{channelId:id}?=targeted,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
+            has_channels,
+            delete_channel
+        ),
+        spec!(
+            "channel.rename",
+            "Rename Channel",
+            [],
+            None,
+            r##"{"channel":index|name|{channelId:id},"name":str,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
+            has_channels,
+            rename_channel
+        ),
+        spec!(
+            "channel.move",
+            "Reorder Channel",
+            [],
+            None,
+            r##"{"channel":index|name|{channelId:id},"to":index,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
+            has_channels,
+            move_channel
+        ),
+        spec!(
+            "channel.target",
+            "Target Channel",
+            [],
+            None,
+            r##"{"channel":"composite"|"red|green|blue|…"|index|name="composite","documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
+            has_doc,
+            target_cmd
+        ),
         spec!(
             "channel.setVisible",
             "Channel Visibility",
@@ -2220,6 +2694,16 @@ pub fn specs() -> Vec<CommandSpec> {
             journal: false,
         },
         spec!("channel.target.composite", "Target Composite Channel", [], Some("Cmd+2"), "{}", has_doc, |s, _| target_slot(s, 2)),
+        // ⌘\ targets the active layer's mask, as clicking its thumbnail does.
+        spec!("channel.target.layerMask", "Target Layer Mask", [], Some("Cmd+\\"), "{}", has_layer_mask, |s, _| target_cmd(
+            s,
+            &serde_json::json!({"channel": "mask"})
+        )),
+        // ⌘⌥2 loads the image's luminosity as a selection (⌘-click on the composite channel).
+        spec!("select.loadLuminosity", "Load Luminosity", [], Some("Cmd+Alt+2"), "{}", has_doc, |s, _| load_selection(
+            s,
+            &serde_json::json!({"channel": "composite"})
+        )),
         spec!("channel.target.slot3", "Target Channel 3", [], Some("Cmd+3"), "{}", slot_ok::<3>, |s, _| target_slot(s, 3)),
         spec!("channel.target.slot4", "Target Channel 4", [], Some("Cmd+4"), "{}", slot_ok::<4>, |s, _| target_slot(s, 4)),
         spec!("channel.target.slot5", "Target Channel 5", [], Some("Cmd+5"), "{}", slot_ok::<5>, |s, _| target_slot(s, 5)),
@@ -2228,6 +2712,13 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("channel.target.slot8", "Target Channel 8", [], Some("Cmd+8"), "{}", slot_ok::<8>, |s, _| target_slot(s, 8)),
         spec!("channel.target.slot9", "Target Channel 9", [], Some("Cmd+9"), "{}", slot_ok::<9>, |s, _| target_slot(s, 9)),
     ]
+}
+
+/// Target Layer Mask: the active layer has a mask.
+fn has_layer_mask(s: &Session) -> std::result::Result<(), String> {
+    let st = s.active().ok_or("no document open")?;
+    let layer = st.active_layer.and_then(|id| st.doc.layer(id)).ok_or("no active layer")?;
+    layer.mask.as_ref().map(|_| ()).ok_or_else(|| "the active layer has no layer mask".to_string())
 }
 
 fn slot_ok<const N: usize>(s: &Session) -> std::result::Result<(), String> {
@@ -2326,8 +2817,21 @@ mod canonical_channel_identity_tests {
     #[test]
     fn malformed_identity_never_falls_back_to_alpha_index_or_name() {
         let doc = document();
-        for value in [json!(""), json!("0"), json!("01"), json!("+1"), json!(" 1"), json!("1.0"), json!("１"),
-            json!("18446744073709551616"), json!("100000000000000000000"), json!(true), json!([]), json!({}), json!(null)] {
+        for value in [
+            json!(""),
+            json!("0"),
+            json!("01"),
+            json!("+1"),
+            json!(" 1"),
+            json!("1.0"),
+            json!("１"),
+            json!("18446744073709551616"),
+            json!("100000000000000000000"),
+            json!(true),
+            json!([]),
+            json!({}),
+            json!(null),
+        ] {
             assert_eq!(parse_ref(&json!({"channelId":value,"alpha":0,"color":0}), &doc), None);
         }
     }
@@ -2350,4 +2854,18 @@ mod canonical_channel_identity_tests {
         assert_eq!(session.active().unwrap().channel_view.target, ChannelTarget::Alpha(1));
         assert_eq!(session.active().unwrap().doc, source);
     }
+}
+
+#[cfg(test)]
+fn unselected_surface(area: Rect, fmt: PixelFormat, indicates: ColorIndicates) -> Surface {
+    let mut s = Surface::new(fmt);
+    if indicates != ColorIndicates::SelectedAreas {
+        s.fill_rect(area, &[1.0]);
+    }
+    s
+}
+
+#[cfg(test)]
+fn uniform(vals: &[f32], target: f32) -> bool {
+    vals.iter().all(|v| (v - target).abs() <= 0.5 / 255.0)
 }

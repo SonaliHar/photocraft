@@ -72,8 +72,8 @@ mod tests {
     fn synchronous_and_automation_opens_publish_material_import_notices() {
         for automation in [false, true] {
             let services = crate::Services {
-                import: Some(Box::new(|name, _| {
-                    Ok(photocraft_io::ImportResult {
+                import: Some(Box::new(|name, _, _depth| {
+                    Ok(photocraft_io::ImportResult { source_read_only: false, preview_only: false,
                         document: photocraft_doc::Document::new(
                             name,
                             photocraft_geom::Size::new(4, 4),
@@ -125,7 +125,7 @@ mod tests {
         let rgba = photocraft_codecs::decode(&reference).unwrap().convert(photocraft_codecs::ChannelLayout::Rgba, photocraft_codecs::SampleType::U8);
         let expected = egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.data());
         let services = crate::Services {
-            import: Some(Box::new(|name, bytes| photocraft_io::import(name, bytes).map_err(|error| error.to_string()))),
+            import: Some(Box::new(|name, bytes, _depth| photocraft_io::import(name, bytes).map_err(|error| error.to_string()))),
             ..Default::default()
         };
         let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), services);

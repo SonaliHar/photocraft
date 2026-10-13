@@ -1,6 +1,6 @@
 //! Controlled ordinary presentation warp. Exact legacy f32 source association,
 //! f64 sampler accumulation and f32/native output quantization, not raw nearest.
-use super::{Homography,Interp,catmull_rom};
+use super::{Homography,Interp,bicubic};
 use crate::{resample::{Resample,try_resize_surface_with_interrupt},wide_geometry::GeometryLimits};
 use photocraft_color::{ColorMode,SampleType};
 use photocraft_geom::{Rect,TILE_SIZE};
@@ -161,7 +161,7 @@ pub fn try_warp_surface_legacy_with_limits(source:&Surface,bounds:Rect,mapping:&
                     }
                     Interp::Bicubic => {
                         let (ix, iy) = (u.floor() as i32, v.floor() as i32);
-                        let (wx, wy) = (catmull_rom(u - ix as f64), catmull_rom(v - iy as f64));
+                        let (wx, wy) = (bicubic(u - ix as f64), bicubic(v - iy as f64));
                         for (j, wyj) in wy.iter().enumerate() {
                             for (i, wxi) in wx.iter().enumerate() {
                                 let k = wxi * wyj;

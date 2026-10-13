@@ -311,7 +311,7 @@ impl Rasterizer {
             for (o, a) in out.get_mut(start..start + w).ok_or(E::LengthMismatch)?.iter_mut().zip(&st.acc) {
                 ctl.tick(1)?;
                 sum += *a;
-                *o = sum.clamp(0.0, 1.0);
+                *o = if sum >= super::RESIDUE { sum.min(1.0) } else { 0.0 };
             }
         }
         Ok(())

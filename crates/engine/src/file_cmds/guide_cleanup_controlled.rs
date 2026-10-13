@@ -91,7 +91,7 @@ fn boards(document: &Document, control: &Interrupt<'_>) -> Result<Vec<Rect>> {
     poll(control)?;
     Ok(boards)
 }
-fn retained(values: &[f32], boards: &[Rect], vertical: bool, control: &Interrupt<'_>) -> Result<(Vec<f32>, usize)> {
+fn retained(values: &[f64], boards: &[Rect], vertical: bool, control: &Interrupt<'_>) -> Result<(Vec<f64>, usize)> {
     let mut output = Vec::new();
     output.try_reserve_exact(values.len()).map_err(|_| error("guide copy allocation denied"))?;
     if output.capacity() > values.len().saturating_add(1024) {
@@ -154,7 +154,9 @@ fn prepare(document: &crate::DocumentSnapshot, control: &Interrupt<'_>) -> Resul
     let (horizontal, h) = retained(&document.guides.horizontal, &boards, false, control)?;
     let cleared = v.checked_add(h).ok_or_else(|| error("clear count overflow"))?;
     poll(control)?;
-    Ok((Guides { horizontal, vertical }, cleared))
+    let mut guides = Guides { horizontal, vertical, colors: copied_colors(&document.guides.colors, control)? };
+    guides.prune_colors();
+    Ok((guides, cleared))
 }
 pub(crate) fn run(session: &mut Session, params: &Value) -> Result<Value> {
     dispatch_preflight(session, params, false)?;
@@ -301,6 +303,22 @@ mod tests {
         let cancel = || true;
         assert!(matches!(prepare(&before, &Interrupt::cancel_only(&cancel)), Err(EngineError::Cancelled)));
         assert!(state.doc.shares_state(&before));
-        assert!(retained(&[f32::NAN], &[Rect::new(0, 0, 10, 10)], true, &Interrupt::NONE).is_err());
+        assert!(retained(&[f64::NAN], &[Rect::new(0, 0, 10, 10)], true, &Interrupt::NONE).is_err());
     }
+}
+
+fn copied_colors(values: &[photocraft_doc::GuideColor], control: &Interrupt<'_>) -> Result<Vec<photocraft_doc::GuideColor>> {
+    if values.len() > 100_000 {
+        return Err(error("guide color metadata limit"));
+    }
+    let mut output = Vec::new();
+    output.try_reserve_exact(values.len()).map_err(|_| error("guide color allocation denied"))?;
+    for value in values {
+        poll(control)?;
+        if !value.position.is_finite() {
+            return Err(error("nonfinite guide color position"));
+        }
+        output.push(*value);
+    }
+    Ok(output)
 }

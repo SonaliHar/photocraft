@@ -24,14 +24,14 @@
 
 pub mod atomic;
 pub mod autosave;
-pub mod canonical_tile;
-pub mod canonical_object;
-pub mod canonical_load;
 pub mod canonical_archive;
-pub mod finite_raster;
-pub mod finite_raster_archive;
+pub mod canonical_load;
+pub mod canonical_object;
+pub mod canonical_tile;
 mod convert;
 mod finite;
+pub mod finite_raster;
+pub mod finite_raster_archive;
 pub mod manifest;
 mod migrate;
 mod model_accounting;
@@ -46,14 +46,14 @@ use std::path::Path;
 use photocraft_doc::Document;
 use photocraft_raster::Rgba8Image;
 
-pub use atomic::atomic_write;
+pub use atomic::{atomic_write, atomic_write_progress};
 #[cfg(not(target_arch = "wasm32"))]
 pub use autosave::RecoveryStore;
 pub use autosave::{Autosaver, RecoveryEntry, discard_recovery, list_recovery, recover};
 pub use convert::MAX_GROUP_DEPTH;
 pub use manifest::{FORMAT_VERSION, Manifest};
 pub use read::read_file;
-pub use store::{DEFAULT_REVERIFY_BUDGET, PcraftWriter, PreparationLimits, PreparationObserver, SaveStats};
+pub use store::{ByteSource, DEFAULT_REVERIFY_BUDGET, PcraftWriter, PreparationLimits, PreparationObserver, SaveStats, read_entry};
 
 /// File extension of the native format.
 pub const EXTENSION: &str = "pcraft";
@@ -106,11 +106,35 @@ pub struct LoadOptions {
     /// Keep document and layer ids from the file (the id counter is advanced
     /// past them). When `false`, fresh ids are assigned.
     pub preserve_ids: bool,
+    /// Longest canvas side the manifest may declare (Photoshop's PSB limit, as for PSD and
+    /// `file.new`).
+    pub max_canvas_side: u32,
+    /// Most canvas pixels the manifest may declare. A canvas is a few bytes of JSON, but the
+    /// compositor, thumbnails and display textures work in proportion to its area, so a caller
+    /// handling untrusted files (a previewer, a batch job) may lower it. The default admits every
+    /// canvas the app lets a user create.
+    pub max_canvas_pixels: u64,
 }
+
+/// Default [`LoadOptions::max_canvas_side`].
+pub const MAX_CANVAS_SIDE: u32 = 300_000;
+/// Default [`LoadOptions::max_canvas_pixels`]: the full 300000 × 300000 PSB canvas. `file.new`,
+/// Canvas Size, Image Size (Resample off) and PSB import all reach it, and a document that can be
+/// created and saved must reopen. Loading itself stays proportional to the file: layers, masks
+/// and channels are sparse tiles read from the bundle under the byte budgets, so a huge declared
+/// canvas with no content allocates nothing for its area.
+pub const MAX_CANVAS_PIXELS: u64 = MAX_CANVAS_SIDE as u64 * MAX_CANVAS_SIDE as u64;
 
 impl Default for LoadOptions {
     fn default() -> Self {
-        LoadOptions { max_manifest_bytes: 256 << 20, max_blob_bytes: 1 << 30, max_total_bytes: 16 << 30, preserve_ids: true }
+        LoadOptions {
+            max_manifest_bytes: 256 << 20,
+            max_blob_bytes: 1 << 30,
+            max_total_bytes: 16 << 30,
+            preserve_ids: true,
+            max_canvas_side: MAX_CANVAS_SIDE,
+            max_canvas_pixels: MAX_CANVAS_PIXELS,
+        }
     }
 }
 
@@ -174,51 +198,77 @@ pub fn load_path(path: &Path) -> Result<Document> {
     load_path_with(path, &LoadOptions::default())
 }
 
+/// Load from any byte source — a directory behind a capability handle, an archive, a test
+/// fixture — the same migration and limits as the path loads.
+pub fn load_bytes_source(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Document> {
+    store::load(src, opts)
+}
+
 pub fn load_path_with(path: &Path, opts: &LoadOptions) -> Result<Document> {
-    load_path_with_interrupt(path,opts,&photocraft_raster::Interrupt::NONE)
+    load_path_with_interrupt(path, opts, &photocraft_raster::Interrupt::NONE)
 }
 /// Controlled trusted-local path loading. Directory object reads/decompression
 /// and single-file stream loading share the same token and unchanged limits.
 /// Checks around filesystem calls are cooperative, not syscall interruption.
-pub fn load_path_with_interrupt(path:&Path,opts:&LoadOptions,control:&photocraft_raster::Interrupt<'_>)->Result<Document> {
-    if control.cancelled() {return Err(FormatError::Cancelled);}
-    let metadata=std::fs::metadata(path);
-    if control.cancelled() {return Err(FormatError::Cancelled);}
-    let metadata=metadata?;
-    let document=if metadata.is_dir() {
-        store::load_with_interrupt(&store::DirSource{root:path.to_path_buf()},opts,control)
-    }else{
-        let file=std::fs::File::open(path);
-        if control.cancelled() {return Err(FormatError::Cancelled);}
-        load_from_stream(file?,opts,Default::default(),control)
+pub fn load_path_with_interrupt(path: &Path, opts: &LoadOptions, control: &photocraft_raster::Interrupt<'_>) -> Result<Document> {
+    if control.cancelled() {
+        return Err(FormatError::Cancelled);
+    }
+    let metadata = std::fs::metadata(path);
+    if control.cancelled() {
+        return Err(FormatError::Cancelled);
+    }
+    let metadata = metadata?;
+    let document = if metadata.is_dir() {
+        store::load_with_interrupt(&store::DirSource { root: path.to_path_buf() }, opts, control)
+    } else {
+        let file = std::fs::File::open(path);
+        if control.cancelled() {
+            return Err(FormatError::Cancelled);
+        }
+        load_from_stream(file?, opts, Default::default(), control)
     };
-    if control.cancelled() {return Err(FormatError::Cancelled);}
+    if control.cancelled() {
+        return Err(FormatError::Cancelled);
+    }
     document
 }
 
-#[cfg(all(test,not(target_arch="wasm32")))]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod controlled_path_load_drafts {
     use super::*;
-    fn directory()->std::path::PathBuf {
-        use std::sync::atomic::{AtomicU64,Ordering};
-        static SERIAL:AtomicU64=AtomicU64::new(0);
-        std::env::temp_dir().join(format!("photocraft-controlled-dir-{}-{}",std::process::id(),SERIAL.fetch_add(1,Ordering::Relaxed)))
+    fn directory() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SERIAL: AtomicU64 = AtomicU64::new(0);
+        std::env::temp_dir().join(format!("photocraft-controlled-dir-{}-{}", std::process::id(), SERIAL.fetch_add(1, Ordering::Relaxed)))
     }
     #[test]
     fn directory_cancellation_and_default_output_match_existing_loader() {
-        let path=directory();assert!(!path.exists());
-        let document=Document::with_background("own directory",photocraft_doc::Size::new(4,3),photocraft_doc::ColorMode::Rgb,photocraft_doc::SampleType::U16,photocraft_doc::Color::WHITE);
-        PcraftWriter::new().save_dir(&document,&path,&Default::default()).unwrap();
-        assert_eq!(load_path_with_interrupt(&path,&Default::default(),&photocraft_raster::Interrupt::NONE).unwrap(),document);
-        assert!(matches!(load_path_with_interrupt(&path,&Default::default(),&photocraft_raster::Interrupt::cancel_only(&||true)),Err(FormatError::Cancelled)));
-        let calls=std::sync::atomic::AtomicUsize::new(0);
-        let cancel=||calls.fetch_add(1,std::sync::atomic::Ordering::Relaxed)>=6;
-        assert!(matches!(load_path_with_interrupt(&path,&Default::default(),&photocraft_raster::Interrupt::cancel_only(&cancel)),Err(FormatError::Cancelled)));
-        assert_eq!(load_path(&path).unwrap(),document);
+        let path = directory();
+        assert!(!path.exists());
+        let document = Document::with_background(
+            "own directory",
+            photocraft_doc::Size::new(4, 3),
+            photocraft_doc::ColorMode::Rgb,
+            photocraft_doc::SampleType::U16,
+            photocraft_doc::Color::WHITE,
+        );
+        PcraftWriter::new().save_dir(&document, &path, &Default::default()).unwrap();
+        assert_eq!(load_path_with_interrupt(&path, &Default::default(), &photocraft_raster::Interrupt::NONE).unwrap(), document);
+        assert!(matches!(
+            load_path_with_interrupt(&path, &Default::default(), &photocraft_raster::Interrupt::cancel_only(&|| true)),
+            Err(FormatError::Cancelled)
+        ));
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let cancel = || calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 6;
+        assert!(matches!(
+            load_path_with_interrupt(&path, &Default::default(), &photocraft_raster::Interrupt::cancel_only(&cancel)),
+            Err(FormatError::Cancelled)
+        ));
+        assert_eq!(load_path(&path).unwrap(), document);
         std::fs::remove_dir_all(path).unwrap();
     }
 }
-
 
 /// Read and migrate only the manifest (fast: no tiles are decoded).
 pub fn read_manifest(bytes: &[u8]) -> Result<Manifest> {
@@ -231,7 +281,7 @@ pub fn read_thumbnail(bytes: &[u8]) -> Result<Option<Vec<u8>>> {
     let src = store::ZipSource::new(bytes)?;
     let m = store::read_manifest(&src, &LoadOptions::default())?;
     match m.thumbnail {
-        Some(p) => Ok(Some(store::Source::get(&src, &p, 64 << 20)?)),
+        Some(p) => Ok(Some(src.get(&p, 64 << 20)?)),
         None => Ok(None),
     }
 }

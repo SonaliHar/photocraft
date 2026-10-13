@@ -10,9 +10,9 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
-const PACK_BYTES: u64 = 4_033_515;
-const PACK_SHA: &str = "2da61a2cd8ad540f4ac2d7099a8c9e404201d3b7b611d7230700edc8ea5c735c";
-const PACK_SRI: &str = "sha256-LaYaLNitVA9KwtcJmoyeQEIB07e2EdcjBwDtyOpcc1w=";
+const PACK_BYTES: u64 = 5_475_109;
+const PACK_SHA: &str = "0c250df50784e1740ee6a9dc246ed70f3526aa32bdac04796de35c2d20b1f299";
+const PACK_SRI: &str = "sha256-DCUN9QeE4XQO5qncJG7XDzUmqjK9rAR5beNcLSCx8pk=";
 const FONT_PACKAGE_SHA: &str = "773fa9c96dd0dbef887e39d0ed6177f141cce4d68e6041df77570aa3702dfa13";
 const INTER_SHA: &str = "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82";
 const RAW_CAP: u64 = 8 << 20;
@@ -137,7 +137,7 @@ fn catalog_bounds(bytes: &[u8]) -> Result<(u32, u32, u32), String> {
     for line in text.lines() {
         lines = lines.checked_add(1).ok_or("catalog line overflow")?;
         max = max.max(u32::try_from(line.len()).map_err(|_| "catalog line width")?);
-        if lines > 4096 || max > 1024 {
+        if lines > pins::MAX_CATALOG_LINES || max > 1024 {
             return Err("catalog grammar input limit".into());
         }
         if line.trim().is_empty() || line.starts_with('#') {
@@ -165,7 +165,7 @@ fn font_role(id: &str) -> Result<(&'static str, u32), String> {
     }
 }
 fn validate_records(records: &[Record]) -> Result<(), String> {
-    if records.len() != 21 {
+    if records.len() != pins::INPUTS.len() {
         return Err("asset record count".into());
     }
     let mut ids = BTreeSet::new();
@@ -195,7 +195,7 @@ fn descriptors(records: &[Record]) -> Result<String, String> {
         "#[rustfmt::skip]\npub const SCHEMA_VERSION:u32=1;\n#[rustfmt::skip]\npub const PACK_BYTES:u64={PACK_BYTES};\n#[rustfmt::skip]\npub const PACK_SHA256:[u8;32]={};\n#[rustfmt::skip]\npub const PACK_FILE:&str=\"assetpack-v1-{PACK_SHA}.bin\";\n#[rustfmt::skip]\npub const PACK_SRI:&str=\"{PACK_SRI}\";",
         hex_array(PACK_SHA)?
     );
-    s.push_str("#[rustfmt::skip]\npub const DESCRIPTORS:[Descriptor;21]=[\n");
+    let _ = writeln!(s, "#[rustfmt::skip]\npub const DESCRIPTORS:[Descriptor;{}]=[", pins::INPUTS.len());
     for r in records {
         let (kind, font, catalog) = if let Some(code) = r.id.strip_prefix("catalog/") {
             (
@@ -439,7 +439,7 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
                 return Err(format!("web-assets stale/corrupt {name}"));
             }
         }
-        println!("web-assets verified21ranges/9licenses/{PACK_BYTES}B/{PACK_SHA}");
+        println!("web-assets verified {} ranges/9licenses/{PACK_BYTES}B/{PACK_SHA}", pins::INPUTS.len());
         return Ok(());
     }
     // Complete staging before publication. Existing destinations are never removed.
@@ -457,7 +457,7 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
         }
     }
     fs::rename(&stage, &out).map_err(|e| format!("complete asset staging publication: {e}"))?;
-    println!("web-assets wrote21ranges/9licenses/{PACK_BYTES}B/{PACK_SHA}");
+    println!("web-assets wrote {} ranges/9licenses/{PACK_BYTES}B/{PACK_SHA}", pins::INPUTS.len());
     Ok(())
 }
 /// Distribution verification uses only compiled identities, never downloaded metadata.
@@ -473,14 +473,14 @@ fn verify_distribution(out: &Path) -> Result<(), String> {
         drop(pinned(&source_path(out, license.output)?, license.length, 64 << 10, license.sha)?);
     }
     for (name, expected) in [
-        ("web_asset_descriptors.rs", "c40072986e6fda64e905ac85f4cbd2cec31f9e7b414f3c045682113f4e05fb60"),
-        ("asset-manifest.json", "762d17452f9d5bf113533410be85805ebdaa46b36fb4064b31a47c9e125c1c1c"),
+        ("web_asset_descriptors.rs", "f0a059589e1a7ed4b36dc61b4bb2cf45e882f0eb629001c054c597483f1ff0fc"),
+        ("asset-manifest.json", "b0acb3b3d7d39f0c9fd869251cb0c0c390ad8797b156246f6228e3a013721f08"),
     ] {
         if sha256::reader_hex(fs::File::open(source_path(out, name)?).map_err(|e| e.to_string())?, 64 << 10)? != expected {
             return Err(format!("web-assets package stale/corrupt {name}"));
         }
     }
-    println!("web-assets package verified 21 ranges and nine licenses: {PACK_SHA}");
+    println!("web-assets package verified {} ranges and nine licenses: {PACK_SHA}", pins::INPUTS.len());
     Ok(())
 }
 #[cfg(test)]

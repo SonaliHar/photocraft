@@ -32,15 +32,24 @@ pub(crate) fn open(app:&mut PhotocraftApp,command:&str)->Option<u64> {
         Ok::<_,String>((ChannelCreateOrigin{dialog:0,command:command.into(),document:active.doc.id,revision:active.revision,snapshot:active.doc.downgrade()},spec.label))
     })();
     let (mut target,label)=match prepared {Ok(value)=>value,Err(error)=>{app.ui.status=error;app.ui.status_error=true;return None;}};
+    if command==SPOT {
+        let id=crate::channel_options_ui::open_new_spot(app)?;
+        target.dialog=id;app.ui.channel_create_origin=Some(target);return Some(id);
+    }
     let mut fixed=Map::new();fixed.insert("__channelCreate".into(),json!(true));fixed.insert("name".into(),json!(""));fixed.insert("color".into(),json!("#ff0000"));
     let id=crate::filter_dialog::open_with_spec(app,command,label,if command==ALPHA {ALPHA_SPEC}else {SPOT_SPEC},fixed);
     if let Some(dialog)=app.ui.dialog_mut(id) {dialog.fields.remove("__preview");}
     target.dialog=id;app.ui.channel_create_origin=Some(target);Some(id)
 }
+pub(crate) fn capture_spot(app:&mut PhotocraftApp,id:u64) {
+    app.ui.channel_create_origin=None;
+    if idle(app).is_err(){return;}
+    if let Some(active)=app.session.active(){app.ui.channel_create_origin=Some(ChannelCreateOrigin{dialog:id,command:SPOT.into(),document:active.doc.id,revision:active.revision,snapshot:active.doc.downgrade()});}
+}
 pub(crate) fn owns(fields:&Map<String,Value>)->bool {
     fields.get("__command").and_then(Value::as_str).is_some_and(supported) || fields.get("__channelCreate").and_then(Value::as_bool)==Some(true)
 }
-pub(crate) fn body(ui:&mut egui::Ui,fields:&mut Map<String,Value>) {crate::filter_dialog::body(ui,fields);}
+pub(crate) fn body(ui:&mut egui::Ui,fields:&mut Map<String,Value>) {if crate::channel_options_ui::owns_new_spot(fields) {crate::channel_options_ui::new_spot_body(ui,fields);}else {crate::filter_dialog::body(ui,fields);}}
 fn invalid()->String {tl!("Check the channel settings and try again.").into()}
 pub(crate) fn confirm(app:&mut PhotocraftApp,id:u64,fields:&Map<String,Value>)->Result<Value,String> {
     let target=app.ui.channel_create_origin.take().ok_or(tl!("The document changed. Reopen the channel dialog."))?;idle(app)?;
@@ -49,6 +58,15 @@ pub(crate) fn confirm(app:&mut PhotocraftApp,id:u64,fields:&Map<String,Value>)->
     if target.dialog!=id || fields.get("__command").and_then(Value::as_str)!=Some(target.command.as_str()) || !supported(&target.command)
         || active.doc.id!=target.document || active.revision!=target.revision || !active.doc.shares_state(&snapshot) {
         return Err(tl!("The document changed. Reopen the channel dialog.").into());
+    }
+    if target.command==SPOT && crate::channel_options_ui::owns_new_spot(fields) {
+        if fields.len()>16 || fields.keys().any(|key|!key.starts_with("__") && !matches!(key.as_str(),"name"|"color"|"solidity"|"documentId"|"expectedRevision"))
+            || fields.get("name").and_then(Value::as_str).is_none_or(|name|name.len()>2048 || name.contains('\0'))
+            || fields.get("color").and_then(Value::as_str).is_none_or(|color|color.len()>9 || color.contains('\0'))
+            || fields.get("solidity").and_then(Value::as_f64).is_none_or(|amount|!amount.is_finite()) {return Err(invalid());}
+        let mut fields=fields.clone();
+        fields.insert("documentId".into(),json!(target.document.0.to_string()));fields.insert("expectedRevision".into(),json!(target.revision.to_string()));
+        return crate::channel_options_ui::confirm_new_spot(app,&fields);
     }
     let allowed=|key:&str|matches!(key,"name"|"color"|"documentId"|"expectedRevision") || if target.command==ALPHA {matches!(key,"fill"|"opacity"|"indicates")}else {matches!(key,"solidity"|"fromSelection")};
     if fields.len()>16 || fields.keys().any(|key|!key.starts_with("__") && !allowed(key)) {return Err(invalid());}

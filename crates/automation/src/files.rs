@@ -15,97 +15,181 @@ pub struct Opened {
     pub warnings: Vec<String>,
     pub origin: photocraft_io::ImportOrigin,
     pub assessment: Option<photocraft_io::xcf_assessment::ImportAssessment>,
+    pub source_read_only: bool,
+    pub preview_only: bool,
 }
 
 /// Decode a document that was read through a filesystem capability.
 pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<Opened, AutomationError> {
-    open_bytes_with_interrupt(name,bytes,&photocraft_raster::Interrupt::NONE)
+    open_bytes_with_interrupt(name, bytes, &photocraft_raster::Interrupt::NONE)
 }
 /// Controlled byte fallback shared with capability-scoped opened handles.
-pub fn open_bytes_with_interrupt(name:&str,bytes:&[u8],control:&photocraft_raster::Interrupt<'_>)->Result<Opened,AutomationError> {
+pub fn open_bytes_with_interrupt(name: &str, bytes: &[u8], control: &photocraft_raster::Interrupt<'_>) -> Result<Opened, AutomationError> {
     poll(control)?;
     if photocraft_format::is_pcraft(bytes) {
         return Ok(Opened {
-            document: photocraft_format::load_from_bytes_with_interrupt(bytes,&Default::default(),control).map_err(|error|if matches!(error,photocraft_format::FormatError::Cancelled) {AutomationError::Engine(photocraft_engine::EngineError::Cancelled)} else {AutomationError::Format(error)})?,
+            document: photocraft_format::load_from_bytes_with_interrupt(bytes, &Default::default(), control).map_err(|error| {
+                if matches!(error, photocraft_format::FormatError::Cancelled) {
+                    AutomationError::Engine(photocraft_engine::EngineError::Cancelled)
+                } else {
+                    AutomationError::Format(error)
+                }
+            })?,
             warnings: Vec::new(),
             origin: photocraft_io::ImportOrigin::writable(photocraft_io::ImportFormat::Pcraft),
             assessment: None,
+            source_read_only: false,
+            preview_only: false,
         });
     }
-    let r = photocraft_io::import_with(name, bytes,control).map_err(|error| {
-        if matches!(error,photocraft_io::IoError::Cancelled) {return AutomationError::Engine(photocraft_engine::EngineError::Cancelled);}
+    let r = photocraft_io::import_with(name, bytes, control).map_err(|error| {
+        if matches!(error, photocraft_io::IoError::Cancelled) {
+            return AutomationError::Engine(photocraft_engine::EngineError::Cancelled);
+        }
         let known_xcf = photocraft_io::ImportOrigin::detected(bytes).format == photocraft_io::ImportFormat::Xcf
             || matches!(&error, photocraft_io::IoError::Xcf(_))
             || matches!(&error, photocraft_io::IoError::Unsupported(message) if message.starts_with("XCF "));
         if known_xcf { AutomationError::XcfImport(Box::new(error.into())) } else { AutomationError::Import(error) }
     })?;
-    Ok(Opened { document: r.document, warnings: r.warnings, origin: r.origin, assessment: r.assessment })
+    Ok(Opened {
+        document: r.document,
+        warnings: r.warnings,
+        origin: r.origin,
+        assessment: r.assessment,
+        source_read_only: r.source_read_only,
+        preview_only: r.preview_only,
+    })
 }
 
 /// Open a document from disk. Directory bundles and `.pcraft` ZIPs load
 /// natively; everything else goes through `photocraft-io` (PSD, PNG, …).
 pub fn open(path: &Path) -> Result<Opened, AutomationError> {
-    open_with_interrupt(path,&photocraft_raster::Interrupt::NONE)
+    open_with_interrupt(path, &photocraft_raster::Interrupt::NONE)
 }
 /// Native files use a single held stream and standard load limits. Other content
 /// retains the authorized-size byte fallback on that same handle; directory
 /// bundles propagate cancellation through their bounded object loader.
-pub fn open_with_interrupt(path:&Path,control:&photocraft_raster::Interrupt<'_>)->Result<Opened,AutomationError> {
-    use std::io::{Seek,SeekFrom};
+pub fn open_with_interrupt(path: &Path, control: &photocraft_raster::Interrupt<'_>) -> Result<Opened, AutomationError> {
+    use std::io::{Seek, SeekFrom};
     poll(control)?;
-    let directory=path.is_dir();poll(control)?;
+    let directory = path.is_dir();
+    poll(control)?;
     if directory {
-        let document=photocraft_format::load_path_with_interrupt(path,&Default::default(),control).map_err(|error|if matches!(error,photocraft_format::FormatError::Cancelled) {AutomationError::Engine(photocraft_engine::EngineError::Cancelled)}else{AutomationError::Format(error)})?;poll(control)?;
+        let document = photocraft_format::load_path_with_interrupt(path, &Default::default(), control).map_err(|error| {
+            if matches!(error, photocraft_format::FormatError::Cancelled) {
+                AutomationError::Engine(photocraft_engine::EngineError::Cancelled)
+            } else {
+                AutomationError::Format(error)
+            }
+        })?;
+        poll(control)?;
         return Ok(Opened {
             document,
             warnings: Vec::new(),
             origin: photocraft_io::ImportOrigin::writable(photocraft_io::ImportFormat::Pcraft),
             assessment: None,
+            source_read_only: false,
+            preview_only: false,
         });
     }
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let mut file=std::fs::File::open(path).map_err(|error|AutomationError::Io(format!("{}: {error}",path.display())))?;
+    let mut file = std::fs::File::open(path).map_err(|error| AutomationError::Io(format!("{}: {error}", path.display())))?;
     poll(control)?;
-    let metadata=file.metadata().map_err(|error|AutomationError::Io(format!("{}: {error}",path.display())))?;
-    if !metadata.is_file() {return Err(AutomationError::BadRequest("document path must be a regular file".into()));}
-    if let Some(result)=photocraft_io::import_native_stream_candidate(&name,&mut file,control).map_err(|error|if matches!(error,photocraft_io::IoError::Cancelled){AutomationError::Engine(photocraft_engine::EngineError::Cancelled)}else{AutomationError::Import(error)})? {
-        poll(control)?;return Ok(Opened {document:result.document,warnings:result.warnings,origin:result.origin,assessment:result.assessment});
+    let metadata = file.metadata().map_err(|error| AutomationError::Io(format!("{}: {error}", path.display())))?;
+    if !metadata.is_file() {
+        return Err(AutomationError::BadRequest("document path must be a regular file".into()));
     }
-    poll(control)?;file.seek(SeekFrom::Start(0)).map_err(|error|AutomationError::Io(format!("{}: {error}",path.display())))?;poll(control)?;
-    let bytes=photocraft_format::read::read_all_with_interrupt(&mut file,metadata.len(),control).map_err(|error|if control.cancelled(){AutomationError::Engine(photocraft_engine::EngineError::Cancelled)}else{AutomationError::Io(format!("{}: {error}",path.display()))})?;
-    open_bytes_with_interrupt(&name,&bytes,control)
+    if let Some(result) = photocraft_io::import_native_stream_candidate(&name, &mut file, control).map_err(|error| {
+        if matches!(error, photocraft_io::IoError::Cancelled) {
+            AutomationError::Engine(photocraft_engine::EngineError::Cancelled)
+        } else {
+            AutomationError::Import(error)
+        }
+    })? {
+        poll(control)?;
+        return Ok(Opened {
+            document: result.document,
+            warnings: result.warnings,
+            origin: result.origin,
+            assessment: result.assessment,
+            source_read_only: result.source_read_only,
+            preview_only: result.preview_only,
+        });
+    }
+    poll(control)?;
+    file.seek(SeekFrom::Start(0)).map_err(|error| AutomationError::Io(format!("{}: {error}", path.display())))?;
+    poll(control)?;
+    let bytes = photocraft_format::read::read_all_with_interrupt(&mut file, metadata.len(), control).map_err(|error| {
+        if control.cancelled() {
+            AutomationError::Engine(photocraft_engine::EngineError::Cancelled)
+        } else {
+            AutomationError::Io(format!("{}: {error}", path.display()))
+        }
+    })?;
+    open_bytes_with_interrupt(&name, &bytes, control)
 }
 
-#[cfg(all(test,not(target_arch="wasm32")))]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod controlled_native_open_tests {
     use super::*;
-    fn path(label:&str)->std::path::PathBuf {
-        use std::sync::atomic::{AtomicU64,Ordering};static SERIAL:AtomicU64=AtomicU64::new(0);
-        std::env::temp_dir().join(format!("photocraft-stream-open-{}-{}-{label}",std::process::id(),SERIAL.fetch_add(1,Ordering::Relaxed)))
+    fn path(label: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SERIAL: AtomicU64 = AtomicU64::new(0);
+        std::env::temp_dir().join(format!("photocraft-stream-open-{}-{}-{label}", std::process::id(), SERIAL.fetch_add(1, Ordering::Relaxed)))
     }
     #[test]
     fn native_central_manifest_content_beats_misnamed_png_suffix() {
-        let document=Document::with_background("Own native open",photocraft_doc::Size::new(2,1),photocraft_doc::ColorMode::Rgb,photocraft_doc::SampleType::U16,photocraft_doc::Color::WHITE);
-        let bytes=photocraft_format::save_to_bytes(&document,&Default::default()).unwrap();let archive=photocraft_format::zip::ZipReader::new(&bytes).unwrap();
-        let mut writer=photocraft_format::zip::ZipWriter::new();writer.add("owned-first-extra",b"own").unwrap();
-        for entry in &archive.entries {writer.add(&entry.name,&archive.read(entry,1<<20).unwrap()).unwrap();}
-        let path=path("misnamed.png");std::fs::write(&path,writer.finish().unwrap()).unwrap();
-        let opened=open_with_interrupt(&path,&photocraft_raster::Interrupt::NONE).unwrap();assert_eq!(opened.document,document);assert_eq!(opened.origin,photocraft_io::ImportOrigin::writable(photocraft_io::ImportFormat::Pcraft));assert!(opened.warnings.is_empty());assert!(opened.assessment.is_none());
+        let document = Document::with_background(
+            "Own native open",
+            photocraft_doc::Size::new(2, 1),
+            photocraft_doc::ColorMode::Rgb,
+            photocraft_doc::SampleType::U16,
+            photocraft_doc::Color::WHITE,
+        );
+        let bytes = photocraft_format::save_to_bytes(&document, &Default::default()).unwrap();
+        let archive = photocraft_format::zip::ZipReader::new(&bytes).unwrap();
+        let mut writer = photocraft_format::zip::ZipWriter::new();
+        writer.add("owned-first-extra", b"own").unwrap();
+        for entry in &archive.entries {
+            writer.add(&entry.name, &archive.read(entry, 1 << 20).unwrap()).unwrap();
+        }
+        let path = path("misnamed.png");
+        std::fs::write(&path, writer.finish().unwrap()).unwrap();
+        let opened = open_with_interrupt(&path, &photocraft_raster::Interrupt::NONE).unwrap();
+        assert_eq!(opened.document, document);
+        assert_eq!(opened.origin, photocraft_io::ImportOrigin::writable(photocraft_io::ImportFormat::Pcraft));
+        assert!(opened.warnings.is_empty());
+        assert!(opened.assessment.is_none());
         std::fs::remove_file(path).unwrap();
     }
     #[test]
     fn byte_fallback_preserves_flat_content_and_named_xcf_failures() {
-        let image=photocraft_codecs::Image::from_raw(1,1,photocraft_codecs::ChannelLayout::Rgba,photocraft_codecs::SampleType::U8,vec![1,2,3,255]).unwrap();
-        let bytes=photocraft_codecs::encode(&image,photocraft_codecs::Format::Png,&Default::default()).unwrap();let path=path("own.png");std::fs::write(&path,&bytes).unwrap();
-        let opened=open_with_interrupt(&path,&photocraft_raster::Interrupt::NONE).unwrap();let byte_open=open_bytes(path.file_name().unwrap().to_str().unwrap(),&bytes).unwrap();assert_eq!(opened.document.name,byte_open.document.name);assert_eq!(opened.origin,byte_open.origin);assert_eq!(opened.document.layers.first().unwrap().surface(),byte_open.document.layers.first().unwrap().surface());std::fs::remove_file(path).unwrap();
-        let path=self::path("misnamed.pcraft");std::fs::write(&path,b"gimp xcf v013\0").unwrap();
-        assert!(matches!(open_with_interrupt(&path,&photocraft_raster::Interrupt::NONE),Err(AutomationError::XcfImport(_))));std::fs::remove_file(path).unwrap();
+        let image =
+            photocraft_codecs::Image::from_raw(1, 1, photocraft_codecs::ChannelLayout::Rgba, photocraft_codecs::SampleType::U8, vec![1, 2, 3, 255]).unwrap();
+        let bytes = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+        let path = path("own.png");
+        std::fs::write(&path, &bytes).unwrap();
+        let opened = open_with_interrupt(&path, &photocraft_raster::Interrupt::NONE).unwrap();
+        let byte_open = open_bytes(path.file_name().unwrap().to_str().unwrap(), &bytes).unwrap();
+        assert_eq!(opened.document.name, byte_open.document.name);
+        assert_eq!(opened.origin, byte_open.origin);
+        assert_eq!(opened.document.layers.first().unwrap().surface(), byte_open.document.layers.first().unwrap().surface());
+        std::fs::remove_file(path).unwrap();
+        let path = self::path("misnamed.pcraft");
+        std::fs::write(&path, b"gimp xcf v013\0").unwrap();
+        assert!(matches!(open_with_interrupt(&path, &photocraft_raster::Interrupt::NONE), Err(AutomationError::XcfImport(_))));
+        std::fs::remove_file(path).unwrap();
     }
     #[test]
     fn early_cancel_and_truncated_native_return_errors_without_loading() {
-        let path=path("own.pcraft");std::fs::write(&path,b"PK\x03\x04").unwrap();
-        assert!(matches!(open_with_interrupt(&path,&photocraft_raster::Interrupt::cancel_only(&||true)),Err(AutomationError::Engine(photocraft_engine::EngineError::Cancelled))));
-        assert!(open_with_interrupt(&path,&photocraft_raster::Interrupt::NONE).is_err());std::fs::remove_file(path).unwrap();
+        let path = path("own.pcraft");
+        std::fs::write(&path, b"PK\x03\x04").unwrap();
+        assert!(matches!(
+            open_with_interrupt(&path, &photocraft_raster::Interrupt::cancel_only(&|| true)),
+            Err(AutomationError::Engine(photocraft_engine::EngineError::Cancelled))
+        ));
+        assert!(open_with_interrupt(&path, &photocraft_raster::Interrupt::NONE).is_err());
+        std::fs::remove_file(path).unwrap();
     }
 }
 
@@ -115,6 +199,17 @@ pub fn previews(doc: &Document) -> Result<SaveOptions, AutomationError> {
         thumbnail: Some(photocraft_compose::thumbnail(doc, 256).map_err(photocraft_io::IoError::from)?),
         composite: Some(photocraft_compose::thumbnail(doc, 1024).map_err(photocraft_io::IoError::from)?),
     })
+}
+
+/// Encode the name the saved native bundle will report on reopening. Save As updates
+/// the session identity only *after* a successful write; without a separate snapshot
+/// the manifest serializes the previous name instead.
+fn named_for_output(doc: &Document, path: &str) -> Document {
+    let mut named = doc.clone();
+    if let Some(name) = path.rsplit(['/', '\\']).next().filter(|name| !name.is_empty()) {
+        named.name = name.to_owned();
+    }
+    named
 }
 
 /// Save or export `doc` to `path`, choosing the format from the extension
@@ -133,9 +228,10 @@ pub fn save(
         .or_else(|| path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()))
         .ok_or_else(|| AutomationError::BadRequest(format!("cannot tell the format of `{}`; pass a format", path.display())))?;
     if ext == photocraft_format::EXTENSION {
+        let named = named_for_output(doc, &path.to_string_lossy());
         let mut local = PcraftWriter::new();
         let w = writer.unwrap_or(&mut local);
-        w.save_path(doc, path, &previews(doc)?)?;
+        w.save_path(&named, path, &previews(&named)?)?;
         return Ok(Vec::new());
     }
     let r = photocraft_io::export(doc, &ext, opts)?;
@@ -153,7 +249,8 @@ pub fn save_bytes(doc: &Document, name: &str, format_override: Option<&str>, opt
         .or_else(|| Path::new(name).extension().map(|extension| extension.to_string_lossy().to_ascii_lowercase()))
         .ok_or_else(|| AutomationError::BadRequest(format!("cannot tell the format of `{name}`; pass a format")))?;
     if ext == photocraft_format::EXTENSION {
-        return Ok((photocraft_format::save_to_bytes(doc, &previews(doc)?)?, Vec::new()));
+        let named = named_for_output(doc, name);
+        return Ok((photocraft_format::save_to_bytes(&named, &previews(&named)?)?, Vec::new()));
     }
     let result = photocraft_io::export(doc, &ext, opts)?;
     Ok((result.bytes, result.warnings))
@@ -322,20 +419,56 @@ pub fn write_protected_native_with_interrupt(
     protection: &photocraft_engine::WriteProtection,
     control: &photocraft_raster::Interrupt<'_>,
 ) -> Result<(), AutomationError> {
-    write_protected_stream_with_interrupt(path,protection,control,|file| {
+    write_protected_native_progress_with_interrupt(path, bytes, protection, &|_| {}, control)
+}
+/// Byte-write progress under previously granted native authority. Completion is
+/// reported only after the same held-parent guarded rename publishes the result.
+pub fn write_protected_native_progress(
+    path: &Path,
+    bytes: &[u8],
+    protection: &photocraft_engine::WriteProtection,
+    progress: &dyn Fn(f32),
+) -> Result<(), AutomationError> {
+    write_protected_native_progress_with_interrupt(path, bytes, protection, progress, &photocraft_raster::Interrupt::NONE)
+}
+/// Cooperative cancellation and progress share the original source/alias/fingerprint
+/// guards. Blocking filesystem calls cannot themselves be interrupted.
+pub fn write_protected_native_progress_with_interrupt(
+    path: &Path,
+    bytes: &[u8],
+    protection: &photocraft_engine::WriteProtection,
+    progress: &dyn Fn(f32),
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<(), AutomationError> {
+    poll(control)?;
+    progress(0.0);
+    write_protected_stream_with_interrupt(path, protection, control, |file| {
         use std::io::Write;
+        let mut written_bytes = 0usize;
         for chunk in bytes.chunks(64 << 10) {
-            poll(control)?;let written=file.write_all(chunk);poll(control)?;
-            written.map_err(|error|AutomationError::Io(format!("cannot write save temporary: {error}")))?;
+            poll(control)?;
+            let result = file.write_all(chunk);
+            poll(control)?;
+            result.map_err(|error| AutomationError::Io(format!("cannot write save temporary: {error}")))?;
+            written_bytes = written_bytes.checked_add(chunk.len()).ok_or_else(|| AutomationError::Io("save progress byte count overflow".into()))?;
+            if !bytes.is_empty() {
+                progress(((written_bytes as f64 / bytes.len() as f64) * 0.99) as f32);
+            }
+            poll(control)?;
         }
         Ok(())
-    })
+    })?;
+    // Successful rename is the commit point; do not turn it into cancellation.
+    progress(1.0);
+    Ok(())
 }
 /// Prepared bounded native serializer; publication remains in this held-parent guard.
 pub(crate) fn write_protected_stream_with_interrupt<R>(
-    path:&Path,protection:&photocraft_engine::WriteProtection,control:&photocraft_raster::Interrupt<'_>,
-    write:impl FnOnce(&mut cap_std::fs::File)->Result<R,AutomationError>,
-)->Result<R,AutomationError> {
+    path: &Path,
+    protection: &photocraft_engine::WriteProtection,
+    control: &photocraft_raster::Interrupt<'_>,
+    write: impl FnOnce(&mut cap_std::fs::File) -> Result<R, AutomationError>,
+) -> Result<R, AutomationError> {
     poll(control)?;
     #[cfg(target_arch = "wasm32")]
     {
@@ -390,7 +523,7 @@ pub(crate) fn write_protected_stream_with_interrupt<R>(
         let mut file = parent.open_with(&tmp, &options).map_err(|error| AutomationError::Io(format!("cannot create save temporary: {error}")))?;
         let written = (|| {
             poll(control)?;
-            let output=write(&mut file)?;
+            let output = write(&mut file)?;
             poll(control)?;
             let synced = file.sync_all();
             poll(control)?;
@@ -399,10 +532,17 @@ pub(crate) fn write_protected_stream_with_interrupt<R>(
             if let Ok(metadata) = parent.metadata(leaf) {
                 let _ = file.set_permissions(metadata.permissions());
             }
-            poll(control)?;Ok(output)
+            poll(control)?;
+            Ok(output)
         })();
         drop(file);
-        let output=match written {Ok(output)=>output,Err(error)=>{let _=parent.remove_file(&tmp);return Err(error);}};
+        let output = match written {
+            Ok(output) => output,
+            Err(error) => {
+                let _ = parent.remove_file(&tmp);
+                return Err(error);
+            }
+        };
         let mut protection_failure = None;
         let result = photocraft_format::atomic::retry_rename(photocraft_format::atomic::RenameRetry::platform(), || {
             let checked = check().and_then(|()| poll(control));

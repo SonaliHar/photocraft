@@ -72,7 +72,7 @@ impl<'a> ExactFont<'a> {
     }
     /// Existing authorized OFL build asset, not a name lookup or fallback.
     pub fn bundled_inter(ctl: &Interrupt<'_>) -> Result<ExactFont<'static>, TextSourceError> {
-        ExactFont::authorize(crate::fonts::INTER_REGULAR, &INTER_SHA, ctl)
+        ExactFont::authorize(&crate::fonts::INTER_REGULAR[..], &INTER_SHA, ctl)
     }
 }
 #[derive(Clone, Copy)]

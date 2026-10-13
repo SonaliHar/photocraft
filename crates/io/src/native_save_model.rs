@@ -232,7 +232,9 @@ impl Walk<'_, '_, '_> {
         Ok(())
     }
     fn legacy_document(&mut self, doc: &Document) -> Result<(), IoError> {
-        let Metadata { xmp, exif: _, psd_resources, psd_global_blocks } = &doc.metadata;
+        let Metadata { xmp, exif: _, psd_resources, psd_global_blocks, text } = &doc.metadata;
+        slots(self.counter, text)?;
+        for (key,value) in text { self.visit(0)?; string(self.counter,key)?; string(self.counter,value)?; }
         optional(self.counter, xmp)?;
         slots(self.counter, psd_resources)?;
         slots(self.counter, psd_global_blocks)?;
@@ -247,6 +249,7 @@ impl Walk<'_, '_, '_> {
         }
         slots(self.counter, &doc.guides.horizontal)?;
         slots(self.counter, &doc.guides.vertical)?;
+        slots(self.counter, &doc.guides.colors)?;
         slots(self.counter, &doc.paths)?;
         for path in &doc.paths {
             self.visit(0)?;
@@ -290,6 +293,16 @@ impl Walk<'_, '_, '_> {
             }
             if let Some(indexed) = &layer.indexed_source {
                 self.counter.add(7, indexed.palette().as_ptr() as usize, indexed.palette_capacity_bytes())?;
+            }
+            if let LayerContent::Text(text) = &layer.content
+                && let photocraft_doc::text::TextShape::Path { path, .. } = &text.shape {
+                slots(self.counter,&path.knots)?;
+                for _ in &path.knots { self.visit(0)?; }
+            }
+            if let Some(video)=&layer.video {
+                slots(self.counter,&video.frames)?;
+                if let Some(original)=&video.original_frames {slots(self.counter,original)?;}
+                if let photocraft_doc::video::VideoSource::File {path}=&video.source {string(self.counter,path)?;}
             }
             if let LayerContent::Group(group) = &layer.content {
                 self.layers(&group.children, depth + 1)?;

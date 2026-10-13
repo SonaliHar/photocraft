@@ -186,8 +186,23 @@ mod external {
         let provider = PROVIDER.get().ok_or(FontBootstrapError::ProviderMissing)?;
         provider()
     }
+    // A static engine identity, not retained font bytes or source-render authority.
+    // Different references still take the guarded mark path; the FontDb flag keeps
+    // that path idempotent even if a provider later returns another published engine.
+    static MARKED_SHARED: OnceLock<&'static Mutex<TextEngine>> = OnceLock::new();
     pub fn try_shared() -> Result<&'static Mutex<TextEngine>, FontBootstrapError> {
-        Ok(ready_refs()?.shared)
+        let shared = ready_refs()?.shared;
+        if MARKED_SHARED.get().is_none_or(|marked| !std::ptr::eq(*marked, shared)) {
+            // Do not block/re-enter a locked engine merely to publish cache metadata.
+            // In particular the external nonblocking adapter may call this function.
+            match shared.try_lock() {
+                Ok(mut engine) => engine.fonts.mark_shared_if_needed(),
+                Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner().fonts.mark_shared_if_needed(),
+                Err(std::sync::TryLockError::WouldBlock) => return Err(FontBootstrapError::NotReady),
+            }
+            let _ = MARKED_SHARED.set(shared);
+        }
+        Ok(shared)
     }
 
     #[cfg(test)]

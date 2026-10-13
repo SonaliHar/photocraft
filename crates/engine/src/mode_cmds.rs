@@ -11,9 +11,9 @@ use photocraft_algo::quantize::{self, Dither, Forced};
 use photocraft_color::ColorMode;
 #[cfg(test)]
 use photocraft_color::{PixelFormat, SampleType};
+use photocraft_doc::{Document, Duotone, Layer, LayerContent, Size};
 #[cfg(test)]
 use photocraft_raster::Surface;
-use photocraft_doc::{Document, Duotone, Layer, LayerContent, Size};
 use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
@@ -21,11 +21,11 @@ use serde_json::json;
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
-mod rotation_controlled;
-mod indexed_controlled;
 mod bitmap_controlled;
-mod duotone_controlled;
 mod color_table_controlled;
+mod duotone_controlled;
+mod indexed_controlled;
+mod rotation_controlled;
 pub(crate) fn color_table_dispatch_preflight(s: &Session, p: &Value, background: bool) -> Result<()> {
     color_table_controlled::dispatch_preflight(s, p, background)
 }
@@ -240,3 +240,5 @@ pub fn display_document(doc: &Document) -> Option<Document> {
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) use rotation_controlled::rotate_document_with_interrupt;

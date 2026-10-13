@@ -21,7 +21,7 @@ fn decimal(value: &Value) -> Option<u64> {
     }
     text.parse().ok()
 }
-fn request(session: &Session, params: &Value) -> Result<LayerId> {
+fn request(session: &Session, params: &Value) -> Result<Vec<LayerId>> {
     if !params.is_null() {
         let object = params.as_object().filter(|map| map.len() <= 3).ok_or_else(|| bad("bounded mask parameters required"))?;
         if !object.keys().all(|key| matches!(key.as_str(), "layer" | "documentId" | "expectedRevision")) {
@@ -29,10 +29,19 @@ fn request(session: &Session, params: &Value) -> Result<LayerId> {
         }
     }
     let state = session.active().ok_or(EngineError::NoDocument)?;
-    let id = match params.get("layer") {
-        None => state.active_layer.ok_or_else(|| bad("no active layer"))?,
-        Some(value) => LayerId(value.as_u64().filter(|id| *id != 0).ok_or_else(|| bad("layer must be a nonzero unsigned integer"))?),
-    };
+    if state.selected_layers.len() > 10_000 {
+        return Err(bad("mask target count limit"));
+    }
+    if let Some(value) = params.get("layer") {
+        if value.as_u64().filter(|id| *id != 0).is_none() {
+            return Err(bad("layer must be a nonzero unsigned integer"));
+        }
+    }
+    // Use the upstream multi-selected mask eligibility and ordering policy.
+    let ids = crate::layer_multi_cmds::mask_targets(session, params)?;
+    if ids.is_empty() || ids.len() > 10_000 {
+        return Err(bad("mask target count limit"));
+    }
     match (params.get("documentId"), params.get("expectedRevision")) {
         (None, None) => {}
         (Some(id), Some(revision)) if state.doc.id.0 != 0 && decimal(id) == Some(state.doc.id.0) && decimal(revision) == Some(state.revision) => {}
@@ -52,25 +61,43 @@ fn request(session: &Session, params: &Value) -> Result<LayerId> {
     if state.doc.xcf_state.is_some() || state.doc.color_table.is_some() || state.doc.mode == photocraft_doc::ColorMode::Indexed {
         return Err(bad("source/indexed mask replacement is not qualified"));
     }
-    let mut found = 0usize;
+    let mut sorted = Vec::new();
+    sorted.try_reserve_exact(ids.len()).map_err(|_| bad("mask target allocation"))?;
+    sorted.extend_from_slice(&ids);
+    sorted.sort_unstable();
+    if sorted.windows(2).any(|pair| pair.first() == pair.get(1)) {
+        return Err(bad("ambiguous mask owner"));
+    }
+    let mut found = Vec::new();
+    found.try_reserve_exact(ids.len()).map_err(|_| bad("mask target allocation"))?;
+    found.resize(ids.len(), 0usize);
     photocraft_doc::resident_structure::visit_layers_with(&state.doc, &Interrupt::NONE, |layer| {
-        if layer.id == id {
-            found += 1;
+        if let Ok(index) = sorted.binary_search(&layer.id) {
+            let count = found.get_mut(index).ok_or(photocraft_raster::RasterInputError::InvalidBounds)?;
+            *count = count.checked_add(1).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
             if layer.indexed_source.is_some() || layer.video.is_some() {
                 return Err(photocraft_raster::RasterInputError::UnsupportedConversion);
             }
         }
         Ok(true)
     })?;
-    if found != 1 {
+    if found.iter().any(|count| *count != 1) {
         return Err(bad("missing or ambiguous mask owner"));
     }
-    crate::xcf_item_locks::require_layer_mask_content(&state.doc, id)?;
+    for id in &ids {
+        crate::xcf_item_locks::require_layer_mask_content(&state.doc, *id)?;
+    }
     let selection = state.doc.selection.as_ref().ok_or_else(|| bad("no selection"))?;
     if selection.format().mode != photocraft_doc::ColorMode::Grayscale || selection.format().alpha {
         return Err(bad("selection must be native Gray without alpha"));
     }
-    Ok(id)
+    if selection.format().sample != state.doc.depth
+        && (matches!(selection.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64)
+            || matches!(state.doc.depth, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64))
+    {
+        return Err(bad("wide selection mask depth conversion requires explicit qualified policy"));
+    }
+    Ok(ids)
 }
 pub(crate) fn dispatch_preflight(session: &Session, params: &Value, _background: bool) -> Result<()> {
     request(session, params).map(|_| ())
@@ -116,11 +143,12 @@ fn copy_storage(source: &Surface, control: &Interrupt<'_>) -> Result<Surface> {
     Ok(output)
 }
 pub(crate) fn run(session: &mut Session, params: &Value) -> Result<Value> {
-    let id = request(session, params)?;
+    let ids = request(session, params)?;
     let state = session.active().ok_or(EngineError::NoDocument)?;
     let snapshot = state.doc.clone();
     let revision = state.revision;
     let active = state.active_layer;
+    let selected = state.selected_layers.clone();
     let weak = snapshot.downgrade();
     let worker = snapshot.clone();
     crate::jobs::run(
@@ -131,14 +159,25 @@ pub(crate) fn run(session: &mut Session, params: &Value) -> Result<Value> {
             ctx.stage(0., 0.95, "Add Layer Mask", |control| {
                 admission(&worker, control)?;
                 poll(control)?;
-                crate::xcf_item_locks::require_layer_mask_content(&worker, id)?;
-                let storage = copy_storage(worker.selection.as_ref().ok_or_else(|| bad("selection disappeared"))?, control)?;
+                for id in &ids {
+                    poll(control)?;
+                    crate::xcf_item_locks::require_layer_mask_content(&worker, *id)?;
+                }
+                let selection = worker.selection.as_ref().ok_or_else(|| bad("selection disappeared"))?;
+                let storage = if selection.format().sample == worker.depth {
+                    copy_storage(selection, control)?
+                } else {
+                    poll(control)?;
+                    let converted = selection.try_convert_legacy(selection.format().with_sample(worker.depth)).map_err(|e| error(control, e))?;
+                    poll(control)?;
+                    converted
+                };
                 let mask = LayerMask { surface: Arc::new(storage), enabled: true, linked: true, density: 1., feather: 0. };
                 poll(control)?;
-                Ok((mask, ctx.clone()))
+                Ok((mask, ids, ctx.clone()))
             })
         },
-        move |session, (mask, ctx)| {
+        move |session, (mask, ids, ctx)| {
             ctx.stage(0.95, 1., "Add Layer Mask", |control| {
                 poll(control)?;
                 let state = session.active().ok_or(EngineError::NoDocument)?;
@@ -147,6 +186,7 @@ pub(crate) fn run(session: &mut Session, params: &Value) -> Result<Value> {
                     || !state.doc.shares_state(&snapshot)
                     || !weak.is_current(&state.doc)
                     || state.active_layer != active
+                    || state.selected_layers != selected
                     || state.floating.is_some()
                     || state.coalesce.is_some()
                     || session.command_has_job_on(snapshot.id)
@@ -158,9 +198,12 @@ pub(crate) fn run(session: &mut Session, params: &Value) -> Result<Value> {
                 }
                 session.edit_with_interrupt("Add Layer Mask", control, move |doc, _| {
                     poll(control)?;
-                    crate::xcf_item_locks::require_layer_mask_content(doc, id)?;
-                    crate::extra_cmds::background_to_layer_for_mask(doc, id);
-                    doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = Some(mask);
+                    for id in ids {
+                        poll(control)?;
+                        crate::xcf_item_locks::require_layer_mask_content(doc, id)?;
+                        crate::extra_cmds::background_to_layer_for_mask(doc, id);
+                        doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = Some(mask.clone());
+                    }
                     // The selection is intentionally retained, matching Reveal Selection.
                     poll(control)?;
                     Ok(Value::Null)

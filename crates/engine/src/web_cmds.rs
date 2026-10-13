@@ -19,7 +19,7 @@ use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::file_cmds::{join, native_doc, stem, write_file_with_source};
+use crate::file_cmds::{join, native_doc, stem, write_file, write_file_with_source};
 use crate::{EngineError, Result, Session};
 
 mod asset_geometry;
@@ -81,6 +81,10 @@ pub struct WebSettings {
     pub format: WebFormat,
     pub palette: PaletteKind,
     pub colors: usize,
+    /// Fixed opaque source palette in index order.
+    pub color_table: Option<Vec<[u8; 3]>>,
+    /// Replacements applied after quantization, preserving pixel indices.
+    pub color_table_edits: std::collections::BTreeMap<usize, [u8; 3]>,
     pub dither: Dither,
     /// 0..=1.
     pub dither_amount: f32,
@@ -106,6 +110,8 @@ impl Default for WebSettings {
             format: WebFormat::Png24,
             palette: PaletteKind::Selective,
             colors: 256,
+            color_table: None,
+            color_table_edits: Default::default(),
             dither: Dither::Diffusion,
             dither_amount: 0.88,
             transparency: true,
@@ -132,8 +138,13 @@ fn hex3(s: &str) -> Option<[f32; 3]> {
 impl WebSettings {
     /// Settings from command parameters (missing keys keep the defaults; Photoshop's preset
     /// names such as "GIF 128 Dithered" or "JPEG High" are accepted as `"preset"`).
+    ///
+    /// Without a preset there is no matte, as in Photoshop's scripted Save for Web
+    /// (`ExportOptionsSaveForWeb` left at its defaults): a GIF or PNG-8 keeps the colour of its
+    /// partly transparent pixels instead of lightening them towards white (#4115). Formats
+    /// without transparency still go over white.
     pub fn from_params(p: &Value, cmd: &str) -> Result<Self> {
-        let mut st = WebSettings::default();
+        let mut st = WebSettings { matte: None, ..WebSettings::default() };
         if let Some(preset) = p.get("preset").and_then(Value::as_str) {
             st = preset_settings(preset).ok_or_else(|| bad(cmd, format!("unknown preset `{preset}`")))?;
         }
@@ -198,6 +209,27 @@ impl WebSettings {
                 m => return Err(bad(cmd, format!("unknown metadata `{m}` (none|copyright|copyrightAndContact|all)"))),
             };
         }
+        if let Some(table) = p.get("colorTable") {
+            let table = table.as_array().filter(|a| (1..=256).contains(&a.len())).ok_or_else(|| bad(cmd, "colorTable must contain 1–256 #rrggbb colours"))?;
+            st.color_table = Some(
+                table
+                    .iter()
+                    .map(|v| v.as_str().and_then(hex3).map(|c| c.map(to8)).ok_or_else(|| bad(cmd, "colorTable entries must be #rrggbb colours")))
+                    .collect::<Result<Vec<_>>>()?,
+            );
+        }
+        if let Some(edits) = p.get("colorTableEdits") {
+            let edits = edits
+                .as_object()
+                .filter(|m| m.len() <= 256)
+                .ok_or_else(|| bad(cmd, "colorTableEdits must be an object of palette indices to #rrggbb colours"))?;
+            let table = st.color_table.as_ref().ok_or_else(|| bad(cmd, "colorTableEdits requires colorTable"))?;
+            for (index, value) in edits {
+                let index = index.parse::<usize>().ok().filter(|i| *i < table.len()).ok_or_else(|| bad(cmd, "colorTableEdits index is outside colorTable"))?;
+                let color = value.as_str().and_then(hex3).map(|c| c.map(to8)).ok_or_else(|| bad(cmd, "colorTableEdits values must be #rrggbb colours"))?;
+                st.color_table_edits.insert(index, color);
+            }
+        }
         Ok(st)
     }
 }
@@ -235,8 +267,21 @@ impl WebSettings {
             WebMetadata::All => "all",
         };
         let matte = self.matte.map_or("none".to_string(), |c| format!("#{:02x}{:02x}{:02x}", to8(c[0]), to8(c[1]), to8(c[2])));
-        json!({"format": format, "palette": palette, "colors": self.colors, "dither": dither, "ditherAmount": (self.dither_amount * 100.0).round(), "transparency": self.transparency, "matte": matte, "interlaced": self.interlaced, "webSnap": (self.web_snap * 100.0).round(), "quality": self.quality, "progressive": self.progressive, "optimized": self.optimized, "embedIcc": self.embed_icc, "metadata": metadata, "convertToSrgb": self.convert_to_srgb})
+        let mut p = json!({"format": format, "palette": palette, "colors": self.colors, "dither": dither, "ditherAmount": (self.dither_amount * 100.0).round(), "transparency": self.transparency, "matte": matte, "interlaced": self.interlaced, "webSnap": (self.web_snap * 100.0).round(), "quality": self.quality, "progressive": self.progressive, "optimized": self.optimized, "embedIcc": self.embed_icc, "metadata": metadata, "convertToSrgb": self.convert_to_srgb});
+        if let Some(table) = &self.color_table {
+            p["colorTable"] = json!(table.iter().map(|c| rgb_hex(*c)).collect::<Vec<_>>());
+        }
+        if !self.color_table_edits.is_empty() {
+            p["colorTableEdits"] =
+                json!(self.color_table_edits.iter().map(|(i, c)| (i.to_string(), rgb_hex(*c))).collect::<std::collections::BTreeMap<_, _>>());
+        }
+        p
     }
+}
+
+/// A palette colour in command/control-channel notation.
+pub fn rgb_hex(c: [u8; 3]) -> String {
+    format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
 }
 
 /// Save for Web's named presets.
@@ -327,6 +372,11 @@ pub struct Optimized {
     pub height: u32,
     /// Colours in the palette (indexed formats).
     pub colors: Option<usize>,
+    /// Opaque source palette before replacements (empty for non-indexed formats).
+    pub color_table: Vec<[u8; 3]>,
+    pub transparent_index: Option<usize>,
+    /// Indexed pixels for previews; empty for non-indexed formats or when preview is disabled.
+    pub indices: Vec<u8>,
     /// What the optimised file looks like, straight RGBA8 (for the dialog's previews).
     pub preview: Vec<u8>,
 }
@@ -381,9 +431,10 @@ fn optimize_with_png_density(
     if w == 0 || h == 0 {
         return Err(other("empty slice"));
     }
+    let (w, h) = (rect.width() as usize, rect.height() as usize);
     let row = |y: i32| {
         let o = y as usize * bw;
-        &px[o + rect.x0 as usize..o + rect.x1 as usize]
+        px.get(o + rect.x0 as usize..o + rect.x1 as usize).unwrap_or(&[])
     };
     let region = || (rect.y0..rect.y1).flat_map(row);
     let matte = st.matte.unwrap_or([1.0, 1.0, 1.0]);
@@ -393,6 +444,9 @@ fn optimize_with_png_density(
     let (ww, hh) = (w as u32, h as u32);
     let e = |e: photocraft_codecs::CodecError| other(e);
     let mut look: Vec<u8> = Vec::new();
+    let mut color_table = Vec::new();
+    let mut transparent_index = None;
+    let mut indices = Vec::new();
     let (bytes, colors) = match st.format {
         WebFormat::Png24 => {
             let alpha = st.transparency && region().any(|p| p[3] < 1.0);
@@ -474,16 +528,22 @@ fn optimize_with_png_density(
                 })
                 .collect();
             let room = if transparent { st.colors.saturating_sub(1).max(2) } else { st.colors };
-            // Large images: build adaptive palettes from an even ~1 MP sample (Exact needs all).
-            let n_opaque = work.iter().filter(|p| p[3] >= 0.5).count();
-            let step = if n_opaque > 1 << 20 && st.palette != PaletteKind::Exact { n_opaque / (1 << 20) + 1 } else { 1 };
-            let mut src: Vec<[f32; 4]> = work.iter().filter(|p| p[3] >= 0.5).step_by(step).copied().collect();
-            if src.is_empty() {
-                src = work.clone();
-            }
-            let mut pal = quantize::build_palette(&src, st.palette, room, Forced::None).map_err(other)?;
-            drop(src);
-            if st.web_snap > 0.0 {
+            let mut pal = if let Some(table) = &st.color_table {
+                if table.is_empty() || table.len() > if transparent { 255 } else { 256 } {
+                    return Err(other("colorTable has too many entries for this image's transparency"));
+                }
+                table.clone()
+            } else {
+                // Large images: build adaptive palettes from an even ~1 MP sample (Exact needs all).
+                let n_opaque = work.iter().filter(|p| p[3] >= 0.5).count();
+                let step = if n_opaque > 1 << 20 && st.palette != PaletteKind::Exact { n_opaque / (1 << 20) + 1 } else { 1 };
+                let mut src: Vec<[f32; 4]> = work.iter().filter(|p| p[3] >= 0.5).step_by(step).copied().collect();
+                if src.is_empty() {
+                    src = work.clone();
+                }
+                quantize::build_palette(&src, st.palette, room, Forced::None).map_err(other)?
+            };
+            if st.web_snap > 0.0 && st.color_table.is_none() {
                 let tol = (st.web_snap * 255.0) as u8;
                 for c in &mut pal {
                     let snap = c.map(|x| ((f32::from(x) / 51.0).round() * 51.0) as u8);
@@ -495,16 +555,23 @@ fn optimize_with_png_density(
             if transparent {
                 pal.truncate(255);
             }
+            let first = pal.first().copied().ok_or_else(|| other("empty colour table"))?;
+            color_table = pal.clone();
             let t = transparent.then(|| {
-                pal.push(pal[0]);
+                pal.push(first);
                 pal.len() - 1
             });
+            transparent_index = t;
             let idx = quantize_rows(&mut work, w, &pal, st.dither, st.dither_amount, t);
+            for (index, color) in &st.color_table_edits {
+                let slot = pal.get_mut(*index).filter(|_| Some(*index) != t).ok_or_else(|| other("colour edit is outside the opaque palette"))?;
+                *slot = *color;
+            }
             if preview {
                 look = idx
                     .iter()
                     .flat_map(|k| {
-                        let c = pal[*k as usize];
+                        let c = pal.get(*k as usize).copied().unwrap_or(first);
                         [c[0], c[1], c[2], if Some(*k as usize) == t { 0 } else { 255 }]
                     })
                     .collect();
@@ -513,12 +580,15 @@ fn optimize_with_png_density(
             let bytes = if st.format == WebFormat::Gif {
                 photocraft_codecs::web::encode_gif_indexed(ww, hh, &idx, &pal, tt, st.interlaced).map_err(e)?
             } else {
-                photocraft_codecs::encode_png_indexed(ww, hh, &idx, &pal, tt).map_err(e)?
+                photocraft_codecs::encode_png_indexed(ww, hh, &idx, &pal, tt, None).map_err(e)?
             };
+            if preview {
+                indices = idx;
+            }
             (bytes, Some(pal.len()))
         }
     };
-    Ok(Optimized { bytes, ext: st.format.ext(), width: ww, height: hh, colors, preview: look })
+    Ok(Optimized { bytes, ext: st.format.ext(), width: ww, height: hh, colors, color_table, transparent_index, indices, preview: look })
 }
 
 /// Nearest palette entry through a lazily filled 6-bit-per-channel inverse colour map: each
@@ -649,11 +719,65 @@ fn quantize_rows(px: &mut [[f32; 4]], w: usize, pal: &[[u8; 3]], dither: Dither,
 /// A file-name-safe slice name.
 fn slice_file(name: &str) -> String {
     let s: String = name.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_') { c } else { '_' }).collect();
-    if s.is_empty() { "slice".into() } else { s }
+    let s = if s.is_empty() { "slice".into() } else { s };
+    portable_generated_stem(s)
+}
+
+/// Generated filenames should remain usable on Windows even when a document or slice is named
+/// after a reserved device. Caller-supplied path components are still rejected below.
+fn portable_generated_stem(stem: String) -> String {
+    if is_windows_device_asset_name(&stem) { format!("{stem}_") } else { stem }
 }
 
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+/// Imported slice URLs are document data. Only ordinary web/contact links and relative links
+/// become anchors; an unsupported scheme leaves the image unlinked.
+fn safe_slice_url(url: &str) -> bool {
+    if url.is_empty() || url.trim() != url || url.chars().any(|c| c.is_control() || c == '\\') {
+        return false;
+    }
+    let delimiter = url.find(['/', '?', '#']).unwrap_or(url.len());
+    let Some(colon) = url.find(':').filter(|pos| *pos < delimiter) else {
+        return true;
+    };
+    let scheme = url.get(..colon).unwrap_or_default().to_ascii_lowercase();
+    let rest = url.get(colon + 1..).unwrap_or_default();
+    match scheme.as_str() {
+        "http" | "https" | "ftp" | "ftps" => rest.strip_prefix("//").is_some_and(|host| !host.is_empty() && !host.starts_with('/')),
+        "mailto" | "tel" => !rest.is_empty(),
+        _ => false,
+    }
+}
+
+/// Keep the image folder relative to the selected export directory on every platform.
+fn web_images_folder(images: &str, cmd: &str) -> Result<String> {
+    if images.is_empty() {
+        return Ok(String::new());
+    }
+    let trimmed = images.trim_end_matches(['/', '\\']);
+    if trimmed.is_empty() {
+        return Err(bad(cmd, "imagesFolder must be a relative folder name"));
+    }
+    let parts = asset_path_components(trimmed).map_err(|e| bad(cmd, format!("imagesFolder: {e}")))?;
+    Ok(parts.join("/"))
+}
+
+fn web_output_path(dir: &str, relative: &str) -> Result<String> {
+    let root = if dir.is_empty() { "." } else { dir };
+    asset_output_path(root, relative).map(|(actual, _)| actual)
+}
+
+fn web_derived_path(dir: &str, relative: &str, native_paths: bool) -> Result<String> {
+    if native_paths {
+        web_output_path(dir, relative)
+    } else {
+        // Browser downloads use logical names, without a host filesystem to inspect.
+        asset_path_components(relative)?;
+        Ok(join(dir, relative))
+    }
 }
 
 fn scale_rect(r: Rect, sx: f64, sy: f64) -> Rect {
@@ -713,14 +837,14 @@ fn html_table(title: &str, w: u32, h: u32, cells: &[(Rect, String, String)], spa
             s.push_str(&td);
         }
         if let Some(sp) = spacer {
-            s.push_str(&format!("\t\t<td>\n\t\t\t<img src=\"{sp}\" width=\"1\" height=\"{}\" alt=\"\"></td>\n", ys[j + 1] - ys[j]));
+            s.push_str(&format!("\t\t<td>\n\t\t\t<img src=\"{}\" width=\"1\" height=\"{}\" alt=\"\"></td>\n", html_escape(sp), ys[j + 1] - ys[j]));
         }
         s.push_str("\t</tr>\n");
     }
     if let Some(sp) = spacer {
         s.push_str("\t<tr>\n");
         for i in 0..nc {
-            s.push_str(&format!("\t\t<td>\n\t\t\t<img src=\"{sp}\" width=\"{}\" height=\"1\" alt=\"\"></td>\n", xs[i + 1] - xs[i]));
+            s.push_str(&format!("\t\t<td>\n\t\t\t<img src=\"{}\" width=\"{}\" height=\"1\" alt=\"\"></td>\n", html_escape(sp), xs[i + 1] - xs[i]));
         }
         s.push_str("\t\t<td></td>\n\t</tr>\n");
     }
@@ -751,7 +875,40 @@ fn png_density_for_document(doc: &Document, cmd: &str) -> Result<Option<photocra
 }
 
 fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
+    save_for_web_impl(s, p, &mut write_file, true)
+}
+
+/// Save for Web through a platform writer (native files or browser downloads).
+/// The writer receives every image, spacer and HTML file. A write error stops the export;
+/// only a complete export remembers its settings and fires the export event. A custom writer
+/// that targets the local filesystem must enforce its own path confinement.
+pub fn save_for_web_with_writer(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u8]) -> Result<()>) -> Result<Value> {
+    save_for_web_impl(s, p, write, false)
+}
+
+/// Settings to seed the Save for Web dialog from on the next launch: `file_menu` is session
+/// state, so a complete export also writes the preferences' remembered dialog settings (like
+/// Fill, Liquify and the filter dialogs). The destination is per export, never remembered.
+fn remember_web_settings(s: &mut Session, cmd: &str, settings: &Value) {
+    let mut m = settings.clone();
+    if let Some(o) = m.as_object_mut() {
+        for k in ["path", "dir", "trustedSliceHtml"] {
+            o.remove(k);
+        }
+    }
+    s.prefs.edit(|p| {
+        p.dialogs.insert(cmd.to_string(), m);
+    });
+}
+
+fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u8]) -> Result<()>, native_paths: bool) -> Result<Value> {
     let cmd = "file.export.saveForWebLegacy";
+    if let Some(authorize) = s.authorize {
+        authorize(cmd, p)?;
+    }
+    // Direct platform calls must export the moved selection as it appears on the canvas,
+    // just as Session::execute does before dispatching the native command.
+    crate::float_cmds::before_command(s, cmd)?;
     let st = WebSettings::from_params(p, cmd)?;
     let delivery = s.web_export_delivery;
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -773,6 +930,10 @@ fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
     let xmp = web_xmp(&d.doc, st.metadata);
     if st.format == WebFormat::Png24 && xmp.is_some() {
         png_density_for_document(&d.doc, cmd)?;
+    }
+    let mut last_web = p.clone();
+    if let Some(fields) = last_web.as_object_mut() {
+        fields.remove("trustedSliceHtml");
     }
     let doc = d.doc.clone();
     let source = d.source.clone();
@@ -801,7 +962,7 @@ fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
     // Estimate only (the dialog's annotations): the whole image, or each chosen slice.
     if single.is_none() && dir.is_none() {
         let o = optimize_with_png_density(&buf.px, bw, wdoc.bounds(), &st, icc, xmp.as_deref(), dpi, false, density)?;
-        s.file_menu.last_web = Some(p.clone());
+        s.file_menu.last_web = Some(last_web.clone());
         return Ok(json!({"format": o.ext, "bytes": o.bytes.len(), "width": o.width, "height": o.height, "colors": o.colors}));
     }
     if let Some(path) = single.filter(|_| dir.is_none() && (all.len() == 1 && (delivery.is_none() || doc.slices.is_empty()) || p.get("slices").is_none())) {
@@ -810,23 +971,29 @@ fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(delivery) = delivery {
             delivery.send(path, &o.bytes)?;
         } else {
-            write_file_with_source(path, &o.bytes, &doc, source.as_ref())?;
+            if native_paths {
+                write_file_with_source(path, &o.bytes, &doc, source.as_ref())?;
+            } else {
+                write(path, &o.bytes)?;
+            }
         }
-        s.file_menu.last_web = Some(p.clone());
+        remember_web_settings(s, cmd, &last_web);
+        s.file_menu.last_web = Some(last_web.clone());
         crate::automate_cmds::fire_event(s, "export");
         return Ok(json!({"files": [path], "bytes": o.bytes.len(), "width": o.width, "height": o.height, "colors": o.colors}));
     }
     let dir =
         dir.map(str::to_string).or_else(|| single.and_then(|f| std::path::Path::new(f).parent().map(|d| d.to_string_lossy().into_owned()))).unwrap_or_default();
     let html = p.get("html").and_then(Value::as_bool).unwrap_or(false);
-    let images = p.get("imagesFolder").and_then(Value::as_str).unwrap_or("images");
+    let images = web_images_folder(p.get("imagesFolder").and_then(Value::as_str).unwrap_or("images"), cmd)?;
+    let trusted_slice_html = p.get("trustedSliceHtml").and_then(Value::as_bool).unwrap_or(false);
     if let Some(delivery) = delivery
         && !images.is_empty()
     {
-        delivery.check_name(images)?;
+        delivery.check_name(&images)?;
     }
     let images = images.to_string();
-    let base = single.map(stem).unwrap_or_else(|| slices::base_name(&doc));
+    let base = portable_generated_stem(single.map(stem).unwrap_or_else(|| slices::base_name(&doc)));
     if let Some(delivery) = delivery {
         delivery.check_name(&format!("{base}.zip"))?;
     }
@@ -897,7 +1064,7 @@ fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
                 let text = if k > 0 {
                     String::new()
                 } else {
-                    stored.map(|s| if s.cell_text_is_html { s.cell_text.clone() } else { html_escape(&s.cell_text) }).unwrap_or_default()
+                    stored.map(|s| if trusted_slice_html && s.cell_text_is_html { s.cell_text.clone() } else { html_escape(&s.cell_text) }).unwrap_or_default()
                 };
                 let bg = stored.and_then(|s| s.background).map(|c| format!(" bgcolor=\"#{:02X}{:02X}{:02X}\"", c[1], c[2], c[3])).unwrap_or_default();
                 cells.push((piece, bg, text));
@@ -912,13 +1079,17 @@ fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
             if let Some(archive) = archive.as_mut() {
                 archive.add(&rel, &o.bytes)?;
             } else {
-                write_file_with_source(&out, &o.bytes, &doc, source.as_ref())?;
+                if native_paths {
+                    write_file_with_source(&out, &o.bytes, &doc, source.as_ref())?;
+                } else {
+                    write(&web_derived_path(&dir, &rel, false)?, &o.bytes)?;
+                }
             }
             total = total.checked_add(o.bytes.len()).ok_or_else(|| other("Save for Web output length overflow"))?;
             files.push(out);
             let alt = stored.map_or(String::new(), |s| html_escape(&s.alt));
             let img = format!("\n\t\t\t<img src=\"{}\" width=\"{}\" height=\"{}\" alt=\"{alt}\">", html_escape(&rel), piece.width(), piece.height());
-            let body = match stored.filter(|s| !s.url.is_empty()) {
+            let body = match stored.filter(|s| safe_slice_url(&s.url)) {
                 Some(s) => {
                     let target = if s.target.is_empty() { String::new() } else { format!(" target=\"{}\"", html_escape(&s.target)) };
                     format!("\n\t\t\t<a href=\"{}\"{target}>{img}</a>", html_escape(&s.url))
@@ -938,7 +1109,11 @@ fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
             if let Some(archive) = archive.as_mut() {
                 archive.add(sp, &gif)?;
             } else {
-                write_file_with_source(&join(&dir, sp), &gif, &doc, source.as_ref())?;
+                if native_paths {
+                    write_file_with_source(&join(&dir, sp), &gif, &doc, source.as_ref())?;
+                } else {
+                    write(&web_derived_path(&dir, sp, false)?, &gif)?;
+                }
             }
         }
         if let Some(plan) = plan.as_mut() {
@@ -950,7 +1125,11 @@ fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(archive) = archive.as_mut() {
             archive.add(&format!("{base}.html"), page.as_bytes())?;
         } else {
-            write_file_with_source(&hp, page.as_bytes(), &doc, source.as_ref())?;
+            if native_paths {
+                write_file_with_source(&hp, page.as_bytes(), &doc, source.as_ref())?;
+            } else {
+                write(&web_derived_path(&dir, &format!("{base}.html"), false)?, page.as_bytes())?;
+            }
         }
         html_path = Some(hp);
     }
@@ -961,7 +1140,8 @@ fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         None
     };
-    s.file_menu.last_web = Some(p.clone());
+    remember_web_settings(s, cmd, &last_web);
+    s.file_menu.last_web = Some(last_web.clone());
     crate::automate_cmds::fire_event(s, "export");
     Ok(
         json!({"download": download, "files": files, "html": html_path, "bytes": total, "slices": chosen.len(), "width": wdoc.size.width, "height": wdoc.size.height}),
@@ -1029,6 +1209,7 @@ fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
     );
     o.insert("convertToSrgb".into(), json!(prefs.convert_to_srgb));
     o.insert("transparency".into(), json!(true));
+    o.insert("matte".into(), json!("#ffffff"));
     match fmt.as_str() {
         "jpg" => {
             o.insert("format".into(), json!("jpeg"));
@@ -1217,6 +1398,95 @@ fn asset_settings(spec: &AssetSpec) -> WebSettings {
     }
 }
 
+fn is_windows_device_asset_name(component: &str) -> bool {
+    let stem = component.split('.').next().unwrap_or(component).trim_end_matches(' ').to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$" | "CONIN$" | "CONOUT$")
+        || stem.strip_prefix("COM").is_some_and(|n| matches!(n, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"))
+        || stem.strip_prefix("LPT").is_some_and(|n| matches!(n, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"))
+}
+
+/// Layer names and `default` folders are document data, so reject unsafe output components.
+fn asset_path_components(relative: &str) -> Result<Vec<&str>> {
+    // Split both separator styles even on Unix, where a backslash would otherwise be a legal
+    // filename. This also catches Windows drive, rooted, and UNC paths on every platform.
+    let mut parts = Vec::new();
+    for part in relative.split(['/', '\\']) {
+        if part.is_empty()
+            || part == "."
+            || part == ".."
+            || part.ends_with('.')
+            || part.ends_with(' ')
+            || part.contains(':')
+            || part.contains('\0')
+            || is_windows_device_asset_name(part)
+        {
+            return Err(other(format!("asset path {relative:?} has an unsafe component {part:?}")));
+        }
+        parts.push(part);
+    }
+    Ok(parts)
+}
+
+/// Resolve a generated asset below the selected output directory. The atomic writer follows an
+/// existing file symlink, so reject it and directory symlinks before writing.
+fn asset_output_path(dir: &str, relative: &str) -> Result<(String, String)> {
+    if dir.is_empty() {
+        return Err(other("image assets need an output directory"));
+    }
+    let mut parts = asset_path_components(relative)?;
+    // Keep the caller's spelling in the result (for example /var on macOS), while writes use
+    // the canonical directory so a symlink in the selected root cannot move the destination.
+    let mut reported = std::path::PathBuf::from(dir);
+    for part in &parts {
+        reported.push(part);
+    }
+    let file = parts.pop().ok_or_else(|| other(format!("asset path {relative:?} is empty")))?;
+    let chosen_root: std::path::PathBuf = std::path::Path::new(dir).components().collect();
+    std::fs::create_dir_all(&chosen_root).map_err(|e| other(format!("asset output directory {dir:?}: {e}")))?;
+    // The caller chose this root, so a symlink to an existing directory is intentional. All
+    // document-derived components below it are checked against its canonical target.
+    let root = std::fs::canonicalize(&chosen_root).map_err(|e| other(format!("asset output directory {dir:?}: {e}")))?;
+    let mut parent = root.clone();
+    for part in parts {
+        parent.push(part);
+        match std::fs::symlink_metadata(&parent) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(other(format!("asset path {relative:?} crosses a symlink at {}", parent.display())));
+            }
+            Ok(meta) if !meta.is_dir() => {
+                return Err(other(format!("asset path {relative:?} has a non-directory at {}", parent.display())));
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&parent).map_err(|e| other(format!("asset folder {}: {e}", parent.display())))?;
+            }
+            Err(e) => return Err(other(format!("asset folder {}: {e}", parent.display()))),
+        }
+        let actual = std::fs::canonicalize(&parent).map_err(|e| other(format!("asset folder {}: {e}", parent.display())))?;
+        if !actual.starts_with(&root) {
+            return Err(other(format!("asset path {relative:?} escapes output directory {dir:?}")));
+        }
+        parent = actual;
+    }
+    let parent = std::fs::canonicalize(&parent).map_err(|e| other(format!("asset folder {}: {e}", parent.display())))?;
+    if !parent.starts_with(&root) {
+        return Err(other(format!("asset path {relative:?} escapes output directory {dir:?}")));
+    }
+    let output = parent.join(file);
+    match std::fs::symlink_metadata(&output) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err(other(format!("asset path {relative:?} points to a symlink")));
+        }
+        Ok(meta) if !meta.is_file() => {
+            return Err(other(format!("asset path {relative:?} is not a file")));
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(other(format!("asset path {relative:?}: {e}"))),
+    }
+    Ok((output.to_string_lossy().into_owned(), reported.to_string_lossy().into_owned()))
+}
+
 /// Exports every asset named by `doc`'s layers into `dir`. Returns (files, errors).
 pub fn generate_assets(doc: &Document, dir: &str) -> (Vec<String>, Vec<Value>) {
     generate_assets_with_source(doc, dir, None)
@@ -1258,6 +1528,9 @@ fn generate_assets_with_source(doc: &Document, dir: &str, source: Option<&crate:
     for (id, spec) in &jobs {
         for v in &variants {
             let r = (|| -> Result<String> {
+                let (name_stem, ext) = spec.file.rsplit_once('.').unwrap_or((spec.file.as_str(), "png"));
+                let rel = format!("{}{}{}.{ext}", v.folder, name_stem, v.suffix);
+                asset_path_components(&rel)?;
                 let mut one = crate::layer_menu_cmds::layer_document(doc, *id)?;
                 one.metadata = Default::default();
                 let (w0, h0) = (f64::from(one.size.width), f64::from(one.size.height));
@@ -1348,7 +1621,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Save for Web (Legacy)…",
             &["File", "Export"],
             Some("Cmd+Alt+Shift+S"),
-            r##"{"preset":"GIF 128 Dithered|JPEG High|PNG-24|…"?,"format":"gif|png8|png24|jpeg|wbmp"="png24","palette":"perceptual|selective|adaptive|restrictive|exact|systemMac|systemWindows|uniform"="selective","colors":2..256=256,"dither":"none|diffusion|pattern|noise"="diffusion","ditherAmount":0..100=88,"transparency":bool=true,"matte":"#rrggbb|none"="#ffffff","interlaced":bool=false,"webSnap":0..100=0,"quality":0..100=60,"progressive":bool=false,"optimized":bool=true,"embedIcc":bool=false,"metadata":"none|copyright|copyrightAndContact|all"="copyright","convertToSrgb":bool=true,"width"|"height"|"percent"? (image size),"resample":"bicubic|bilinear|nearest"?,"path":file? (whole image),"dir":folder? (one file per slice in images/),"html":bool=false,"slices":"all|user"="all","numbers":[n]?} → no path/dir: {bytes,width,height,colors} estimate; else {files, html, bytes}"##,
+            r##"{"preset":"GIF 128 Dithered|JPEG High|PNG-24|…"?,"format":"gif|png8|png24|jpeg|wbmp"="png24","palette":"perceptual|selective|adaptive|restrictive|exact|systemMac|systemWindows|uniform"="selective","colors":2..256=256,"colorTable":["#rrggbb",…]? (fixed opaque source palette, 1–256 entries; 255 with transparency),"colorTableEdits":{"0":"#rrggbb",…}? (replace entries after indexing; requires colorTable),"dither":"none|diffusion|pattern|noise"="diffusion","ditherAmount":0..100=88,"transparency":bool=true,"matte":"#rrggbb|none"="none" (a preset's own: white; formats without transparency go over white),"interlaced":bool=false,"webSnap":0..100=0,"quality":0..100=60,"progressive":bool=false,"optimized":bool=true,"embedIcc":bool=false,"metadata":"none|copyright|copyrightAndContact|all"="copyright","convertToSrgb":bool=true,"width"|"height"|"percent"? (image size),"resample":"bicubic|bilinear|nearest"?,"path":file? (whole image),"dir":folder? (one file per slice in images/),"imagesFolder":relative-folder?="images","html":bool=false,"trustedSliceHtml":bool=false (only for trusted documents; emit raw no-image cell HTML),"slices":"all|user"="all","numbers":[n]?} → no path/dir: {bytes,width,height,colors,colorTable,transparentIndex} estimate; else {files, html, bytes}"##,
             has_doc,
             save_for_web
         ),

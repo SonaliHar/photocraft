@@ -46,7 +46,18 @@ fn target_policy(doc:&Document,id:LayerId,ctl:&Interrupt<'_>)->Result<()>{
     if matches!(surface.format().sample,SampleType::U32|SampleType::F64){return Err(bad(CMD,"authoritative U32/F64 fill blend arithmetic is unsupported"));}
     if surface.format().channels()>5{return Err(bad(CMD,"fill channel count"));}poll(ctl)
 }
-fn path<'a>(s:&'a Session,p:&Value,ctl:&Interrupt<'_>)->Result<&'a Path>{
+fn limit_selection(selection:Option<&Surface>,area:Rect,coverage:&mut [f32],ctl:&Interrupt<'_>)->Result<()> {
+    let Some(selection)=selection else{return Ok(())};let format=selection.format();
+    if matches!(format.sample,SampleType::U32|SampleType::F64)||format.mode!=photocraft_color::ColorMode::Grayscale||format.alpha{return Err(bad(CMD,"selected fill coverage requires ordinary Gray native context"));}
+    let width=area.width() as usize;let bpp=format.bytes_per_pixel();let mut raw=[0u8;40];
+    let raw=raw.get_mut(..bpp).ok_or_else(||bad(CMD,"selection sample size"))?;
+    for y in area.y0..area.y1{poll(ctl)?;for x in area.x0..area.x1{
+        selection.try_read_pixel_bytes(x,y,raw).map_err(|e|error(e,ctl))?;let value=photocraft_color::read_sample(raw,format.sample,0);if !value.is_finite(){return Err(bad(CMD,"nonfinite selected fill coverage"));}
+        let offset=usize::try_from(i64::from(y)-i64::from(area.y0)).ok().and_then(|v|v.checked_mul(width)).and_then(|v|usize::try_from(i64::from(x)-i64::from(area.x0)).ok().and_then(|x|v.checked_add(x))).ok_or_else(||bad(CMD,"selection coverage offset"))?;
+        *coverage.get_mut(offset).ok_or_else(||bad(CMD,"selection coverage shape"))?*=value;
+    }}poll(ctl)
+}
+pub(super) fn path<'a>(s:&'a Session,p:&Value,ctl:&Interrupt<'_>)->Result<&'a Path>{
     let st=s.active().ok_or(EngineError::NoDocument)?;if st.doc.paths.len()>10000{return Err(bad(CMD,"saved path count"));}
     if let Some(id)=saved_path_id(p)?{let mut found=None;for saved in &st.doc.paths{poll(ctl)?;if saved.id==id&&found.replace(&saved.path).is_some(){return Err(bad(CMD,"ambiguous path identity"));}}return found.ok_or_else(||bad(CMD,"no saved path with pathId"));}
     let name=p.get("name").and_then(Value::as_str);
@@ -77,7 +88,8 @@ fn admit(doc:&DocumentSnapshot,path:&Path,o:Options,ctl:&Interrupt<'_>)->Result<
         span(area.x0,area.x1)?.checked_mul(span(area.y0,area.y1)?).ok_or_else(||bad(CMD,"tile count"))?
     };let surface=doc.layer(o.layer).and_then(|l|l.surface()).ok_or(EngineError::NoLayer(o.layer))?;
     let tilebytes=photocraft_raster::checked_region_byte_len(photocraft_geom::TileCoord::new(0,0).rect(),surface.format()).map_err(|e|error(e,ctl))? as u64;
-    let scratch=pixels.checked_mul(if o.feather>0.0{56}else{8}).and_then(|v|v.checked_add((f64::from(o.feather)*1.5).ceil() as u64*256)).and_then(|v|v.checked_add(u64::from(area.width().max(area.height()))*64)).and_then(|v|v.checked_add(65536)).ok_or_else(||bad(CMD,"coverage/kernel scratch overflow"))?;
+    if doc.selection.as_ref().is_some_and(|s|matches!(s.format().sample,SampleType::U32|SampleType::F64)||s.format().mode!=photocraft_color::ColorMode::Grayscale||s.format().alpha){return Err(bad(CMD,"selected fill coverage requires ordinary Gray native context"));}
+    let scratch=pixels.checked_mul(if o.feather>0.0{56}else{8}).and_then(|v|v.checked_add((f64::from(o.feather)*3.0).ceil() as u64*256)).and_then(|v|v.checked_add(u64::from(area.width().max(area.height()))*64)).and_then(|v|v.checked_add(65536)).ok_or_else(||bad(CMD,"coverage/kernel scratch overflow"))?;
     let total=model.checked_mul(4).and_then(|v|v.checked_add(payload)).and_then(|v|v.checked_add(raster.clone_metadata_bytes.checked_mul(4)?)).and_then(|v|v.checked_add(path_bytes.checked_mul(2)?)).and_then(|v|v.checked_add(128<<20)).and_then(|v|v.checked_add(scratch)).and_then(|v|v.checked_add(tiles.checked_mul(tilebytes.checked_add(1024)?)?)).and_then(|v|v.checked_add(tilebytes.checked_mul(2)?));
     let work=pixels.checked_mul(if o.feather>0.0{2048}else{128}).and_then(|v|v.checked_add(model.checked_mul(8)?));
     if total.is_none_or(|v|v>MAX_CHECKED_RASTER_BYTES)||work.is_none_or(|v|v>4_000_000_000){return Err(bad(CMD,"fill retained/output/kernel/work limit"));}poll(ctl)
@@ -106,14 +118,20 @@ fn stage(doc:&DocumentSnapshot,path:&Path,o:Options,ctl:&Interrupt<'_>)->Result<
     // Preparation and coverage each reserve 2e9 work; the command's remaining
     // kernel/write/metadata admission reserves at most 4e9, cumulatively 8e9.
     let limits=VectorPreparationLimits{max_work:2_000_000_000,..VectorPreparationLimits::default()};
-    let mask=CompiledVectorMask::try_new_with_interrupt(&VectorMask::new(copy_path(path,ctl)?),limits,ctl).map_err(|e|error(e,ctl))?;
-    let pad=(o.feather.ceil() as i32).checked_mul(2).ok_or_else(||bad(CMD,"feather padding"))?;
+    let mut vector_mask=VectorMask::new(copy_path(path,ctl)?);
+    // An inverted empty fill is full coverage, unlike the inverted-empty
+    // vector-mask convention. The disabled mask's declared constant-one
+    // geometry implements that fill case without fabricating source pixels.
+    if path.is_empty(){vector_mask.enabled=false;}
+    let mask=CompiledVectorMask::try_new_with_interrupt(&vector_mask,limits,ctl).map_err(|e|error(e,ctl))?;
+    let pad=(o.feather.ceil() as i32).checked_mul(3).and_then(|v|v.checked_add(1)).ok_or_else(||bad(CMD,"feather padding"))?;
     let area=mask.pixel_bounds().map_or(doc.bounds(),|b|b.inflate(pad).intersect(&doc.bounds()));if area.is_empty(){return Ok(None);}
     let coverage_bytes=photocraft_raster::checked_region_byte_len(area,photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Grayscale,SampleType::F32,false)).map_err(|e|error(e,ctl))?;
     let render_limits=VectorPreparationLimits{max_bytes:coverage_bytes.checked_mul(2).and_then(|v|v.checked_add(mask.preparation_bytes())).ok_or_else(||bad(CMD,"coverage capacity"))?,..limits};
     let mut coverage=mask.try_render_with_interrupt(area,render_limits,ctl).map_err(|e|error(e,ctl))?;
     if !o.aa{for batch in coverage.chunks_mut(256){poll(ctl)?;for v in batch{*v=if *v>=0.5{1.0}else{0.0};}}}
     if o.feather>0.0{coverage=photocraft_algo::selection::try_feather_with_interrupt(&coverage,area.width() as usize,area.height() as usize,o.feather,ctl).map_err(|e|error(e,ctl))?;}
+    limit_selection(doc.selection.as_ref(),area,&mut coverage,ctl)?;
     poll(ctl)?;let mut result=(**doc).clone();let lock=result.effective_locks(o.layer).transparency;
     let surface=result.layer_mut(o.layer).and_then(|l|l.surface_mut()).ok_or(EngineError::NoLayer(o.layer))?;
     paint(surface,area,&coverage,o,lock,ctl)?;
@@ -152,7 +170,7 @@ mod tests {
             let o=Options{layer:id,src:[0.8,0.2,0.6,0.9],opacity:0.65,mode:BlendMode::Normal,feather,aa:true};
             let path=state.doc.work_path.as_ref().unwrap();let mut expected=state.doc.layers[0].surface().unwrap().clone();
             let r=photocraft_vector::fill_rasterizer(path,photocraft_vector::DEFAULT_TOLERANCE);
-            let area=r.pixel_bounds().map_or(state.doc.bounds(),|b|b.inflate((feather.ceil() as i32)*2).intersect(&state.doc.bounds()));
+            let area=r.pixel_bounds().map_or(state.doc.bounds(),|b|b.inflate((feather.ceil() as i32)*3+1).intersect(&state.doc.bounds()));
             let mut cov=r.render(area);if feather>0.0{cov=photocraft_algo::selection::feather(&cov,area.width() as usize,area.height() as usize,feather);}
             super::super::paint_coverage(&mut expected,area,&cov,o.src,o.opacity,o.mode,false);
             let actual=stage(&state.doc,path,o,&Interrupt::NONE).unwrap().unwrap();
@@ -170,5 +188,15 @@ mod tests {
         s.edit("Redo seed",|doc,_|{doc.name.push_str(" changed");Ok(())}).unwrap();assert!(s.undo());let revision=s.active().unwrap().revision;
         run(&mut s,&Value::Null).unwrap();assert_eq!(s.active().unwrap().revision,revision);assert!(s.redo());
         s.edit("Lock",|doc,_|{doc.layers[0].locks.pixels=true;Ok(())}).unwrap();assert!(dispatch_preflight(&s,&Value::Null,false).is_err());
+    }
+    #[test]
+    fn upstream_soft_selection_multiplies_fill_coverage_after_feather(){
+        let mut s=setup(SampleType::U16);
+        s.edit("Owned soft selection",|doc,_|{doc.selection=Some(Surface::try_with_default_bytes(photocraft_color::PixelFormat::GRAY8,&[128]).unwrap());Ok(())}).unwrap();
+        let state=s.active().unwrap();let id=state.doc.layers[0].id;let path=state.doc.work_path.as_ref().unwrap();let o=Options{layer:id,src:[0.8,0.2,0.6,0.9],opacity:0.65,mode:BlendMode::Normal,feather:1.0,aa:true};
+        let r=photocraft_vector::fill_rasterizer(path,photocraft_vector::DEFAULT_TOLERANCE);let area=r.pixel_bounds().map_or(state.doc.bounds(),|b|b.inflate(4).intersect(&state.doc.bounds()));
+        let cov=r.render(area);let mut cov=photocraft_algo::selection::feather(&cov,area.width() as usize,area.height() as usize,1.0);let mask=photocraft_algo::selection::mask_from_surface(state.doc.selection.as_ref(),area);for(c,m)in cov.iter_mut().zip(mask){*c*=m;}
+        let mut expected=state.doc.layers[0].surface().unwrap().clone();super::super::paint_coverage(&mut expected,area,&cov,o.src,o.opacity,o.mode,false);
+        assert_eq!(stage(&state.doc,path,o,&Interrupt::NONE).unwrap().unwrap().layer(id).unwrap().surface(),Some(&expected));
     }
 }

@@ -62,6 +62,7 @@ fn policy(doc:&Document,t:Target,cmd:&str,ctl:&Interrupt<'_>)->Result<()> {
             let(mut n,mut m)=(0,0);visit(&doc.layers,id,0,&mut n,&mut m,cmd,ctl)?;if id.0==0||m!=1{return Err(bad(cmd,"missing/ambiguous layer identity"));}
             let locks=doc.effective_locks(id);if locks.all||locks.pixels||locks.position{return Err(bad(cmd,"vector owner is locked"));}let layer=doc.layer(id).ok_or(EngineError::NoLayer(id))?;if layer.indexed_source.is_some()||layer.video.is_some()||matches!(layer.content,LayerContent::BackedRaster(_)){return Err(bad(cmd,"source geometry edit is unsupported"));}
             if shape&&matches!(doc.depth,photocraft_color::SampleType::U32|photocraft_color::SampleType::F64){return Err(bad(cmd,"wide shape regeneration is unsupported"));}
+            if let LayerContent::Shape(sh)=&layer.content{photocraft_vector::flatten::validate_shape(&sh.path,sh.stroke.as_ref()).map_err(|e|bad(cmd,e))?;}
             if doc.xcf_state.as_ref().is_some_and(|state|state.source_items.iter().any(|v|v.owner==ItemRef::Layer(id))){return Err(bad(cmd,"source-bound layer path interpretation is unsupported"));}
         },
         Target::Saved(id)=>{if id.0==0{return Err(bad(cmd,"zero path identity"));}let mut matches=0;for p in &doc.paths{poll(ctl)?;if p.id==id{matches+=1;}}if matches!=1{return Err(bad(cmd,"ambiguous saved path identity"));}if let Some(state)=&doc.xcf_state{if state.items.len()>10000||state.source_items.len()>10000{return Err(bad(cmd,"typed path metadata count"));}doc.validate_xcf_state_with(ctl).map_err(|e|error(cmd,ctl,e))?;
@@ -108,6 +109,7 @@ fn install(doc:&mut Document,t:Target,path:Path,cmd:&str,ctl:&Interrupt<'_>)->Re
                 // Legacy shape fill/stroke math has no inner interrupt API.
                 // Admitted work/storage is bounded; cancellation is polled on
                 // both sides and only this private candidate can be changed.
+                photocraft_vector::flatten::validate_shape(&sh.path,sh.stroke.as_ref()).map_err(|e|bad(cmd,e))?;
                 poll(ctl)?;sh.cache=Some(photocraft_vector::render_shape(sh,format,bounds));poll(ctl)?;
             }else{layer.vector_mask.as_mut().ok_or_else(||bad(cmd,"vector mask disappeared"))?.path=path;}
         },

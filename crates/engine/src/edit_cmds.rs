@@ -26,6 +26,8 @@ pub struct Clip {
     pub bounds: Rect,
     pub color: ClipColorContext,
     pub composition: Vec<photocraft_doc::import_compositing::GimpComposition>,
+    pub layers: Option<std::sync::Arc<Document>>,
+    pub resolution: Option<f32>,
 }
 
 impl Clip {
@@ -39,6 +41,8 @@ impl Clip {
             surface,
             bounds,
             composition: Vec::new(),
+            layers: None,
+            resolution: None,
             color: ClipColorContext {
                 mode: photocraft_doc::ColorMode::Rgb,
                 icc_profile: Some(photocraft_cms::Builtin::Srgb.profile().to_bytes()),
@@ -256,7 +260,7 @@ fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect, color: ClipColorCont
     let area = sel.map_or_else(|| src.content_bounds().intersect(&canvas), |mask| mask.content_bounds().intersect(&canvas));
     let mut out = Surface::new(with_alpha);
     if area.is_empty() {
-        return Ok(Clip { surface: out, bounds: Rect::EMPTY, color, composition: Vec::new() });
+        return Ok(Clip { surface: out, bounds: Rect::EMPTY, color, composition: Vec::new(), layers: None, resolution: None });
     }
     for tile in area.tiles() {
         let rect = tile.rect().intersect(&area);
@@ -313,7 +317,7 @@ fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect, color: ClipColorCont
     }
     out.prune();
     let bounds = out.content_bounds();
-    Ok(Clip { surface: out, bounds, color, composition: Vec::new() })
+    Ok(Clip { surface: out, bounds, color, composition: Vec::new(), layers: None, resolution: None })
 }
 
 /// Merged composite of the visible document as a surface in the document's format.
@@ -347,11 +351,22 @@ fn prepare_copy(s: &Session, merged: bool) -> Result<Clip> {
     let canvas = d.doc.bounds();
     let color = ClipColorContext::from_document(&d.doc)?;
     let mut clip = if merged {
-        lift(&merged_surface(&d.doc)?, d.doc.selection.as_ref(), canvas, color)?
+        lift(&merged_surface(&d.doc)?,d.doc.selection.as_ref(),canvas,color)?
     } else {
-        let id = d.active_layer.ok_or(EngineError::Other("no active layer".into()))?;
-        let surf = d.doc.layer(id).and_then(Layer::surface).ok_or(EngineError::Other("the active layer has no pixels".into()))?;
-        lift(surf, d.doc.selection.as_ref(), canvas, color)?
+        let id=d.active_layer.ok_or_else(||pixel_error("no active layer"))?;
+        let several=multi_copy_ids(d)?;
+        let mut layers=if !several.is_empty() {Some(whole_layers(d,&several)?)} else if takes_whole(d,id)? {Some(whole_layer(d,id)?)}else {None};
+        if let Some(copies)=&mut layers {copy_linked_sources(&d.doc,copies)?;}
+        let mut clip=match (d.doc.layer(id).and_then(Layer::surface).filter(|_|several.is_empty()),&layers) {
+            (Some(surface),_)=>lift(surface,d.doc.selection.as_ref(),canvas,color)?,
+            (None,Some(copies))=>{
+                let mut shown=copies.clone();
+                for layer in &mut shown.layers {layer.visible=true;}
+                lift(&merged_surface(&shown)?,None,canvas,color)?
+            }
+            _=>return Err(pixel_error("the active layer has no pixels")),
+        };
+        clip.layers=layers.map(std::sync::Arc::new);clip
     };
     if let Some(state) = &d.doc.xcf_state {
         clip.composition = state
@@ -364,6 +379,7 @@ fn prepare_copy(s: &Session, merged: bool) -> Result<Clip> {
     if clip.bounds.is_empty() {
         return Err(EngineError::Other("Could not copy: the selected area is empty".into()));
     }
+    clip.resolution = Some(d.doc.resolution_dpi);
     Ok(clip)
 }
 
@@ -392,7 +408,9 @@ pub(crate) fn preflight_clear_area(doc: &Document, id: LayerId, area: Rect) -> R
     let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let Some(surface) = layer.surface() else { return Ok(()) };
     if matches!(surface.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
-        if crate::extra_cmds::is_background(layer) { return Err(pixel_error("authoritative U32/F64 Background fill-clear is unsupported")); }
+        if doc.is_background(id) {
+            return Err(pixel_error("authoritative U32/F64 Background fill-clear is unsupported"));
+        }
         crate::pixels::preflight_clear_surface(surface, area, doc.selection.as_ref(), &photocraft_raster::Interrupt::NONE)?;
     }
     Ok(())
@@ -401,18 +419,24 @@ pub(crate) fn preflight_clear_area(doc: &Document, id: LayerId, area: Rect) -> R
 /// Cut / Clear on a layer: makes the selected pixels transparent. The Background can't hold
 /// transparency, so there the area is filled with the background colour instead (Photoshop).
 pub(crate) fn clear_area(doc: &mut Document, id: LayerId, area: Rect, sel: Option<&Surface>, background: [f32; 4]) -> Result<()> {
-    let bg = crate::extra_cmds::is_background(doc.layer(id).ok_or(EngineError::NoLayer(id))?);
+    let bg = doc.is_background(id);
     let source = doc.layer(id).and_then(Layer::surface);
     let wide = source.is_some_and(|surface| matches!(surface.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64));
-    if wide && bg { return Err(pixel_error("authoritative U32/F64 Background fill-clear is unsupported")); }
-    if wide && let Some(source) = source { crate::pixels::preflight_clear_surface(source, area, sel, &photocraft_raster::Interrupt::NONE)?; }
+    if wide && bg {
+        return Err(pixel_error("authoritative U32/F64 Background fill-clear is unsupported"));
+    }
+    if wide && let Some(source) = source {
+        crate::pixels::preflight_clear_surface(source, area, sel, &photocraft_raster::Interrupt::NONE)?;
+    }
     let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
     if bg {
-        crate::pixels::fill_surface(surf, area, background, sel, true);
+        crate::pixels::try_fill_surface(surf, area, background, sel, true)?;
     } else {
         crate::pixels::try_clear_surface(surf, area, sel, &photocraft_raster::Interrupt::NONE)?;
     }
-    if !wide { surf.prune(); }
+    if !wide {
+        surf.prune();
+    }
     Ok(())
 }
 
@@ -428,9 +452,13 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
     if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
         return paste_to_target(s, p, in_place, None, "Paste");
     }
+    if let Some(channel)=crate::channel_clip::paste_color_target(s,p) {return crate::channel_clip::paste(s,p,channel,in_place,None,"Paste");}
     let canvas = d.doc.bounds();
     let fmt = d.doc.pixel_format();
     let (dx, dy) = paste_offset(&clip, canvas, p, in_place)?;
+    if let Some(layers) = clip.layers.as_deref().filter(|_| crate::layer_copy_cmds::layered(d.doc.mode)) {
+        return paste_layers(s, layers, dx, dy);
+    }
     let moved = shifted(&clip.surface, dx, dy)?;
     let target = PixelFormat::new(fmt.mode, fmt.sample, true);
     let target_profile = crate::color_cmds::try_document_profile(&d.doc)?;
@@ -449,7 +477,7 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
 /// How far a paste moves the clipboard pixels: not at all in place (or when they lie on the
 /// canvas and no `center` is given), else onto `center` (the view centre from the UI) or the
 /// canvas centre.
-fn paste_offset(clip: &Clip, canvas: Rect, p: &Value, in_place: bool) -> Result<(i32, i32)> {
+pub(crate) fn paste_offset(clip: &Clip, canvas: Rect, p: &Value, in_place: bool) -> Result<(i32, i32)> {
     if in_place || (clip.bounds.intersect(&canvas) == clip.bounds && p.get("center").is_none()) {
         return Ok((0, 0));
     }
@@ -469,7 +497,7 @@ fn paste_offset(clip: &Clip, canvas: Rect, p: &Value, in_place: bool) -> Result<
     Ok((dx as i32, dy as i32))
 }
 
-fn shifted(surface: &Surface, dx: i32, dy: i32) -> Result<Surface> {
+pub(crate) fn shifted(surface: &Surface, dx: i32, dy: i32) -> Result<Surface> {
     surface.try_validate_tile_origins().map_err(pixel_error)?;
     if dx == 0 && dy == 0 {
         surface.try_validate_tile_origins().map_err(pixel_error)?;
@@ -852,10 +880,11 @@ pub fn specs() -> Vec<CommandSpec> {
         };
     }
     vec![
-        spec!("edit.cut", "Cut", &["Edit"], Some("Cmd+X"), "{}", has_pixels, |s, _| {
+        spec!("edit.cut", "Cut", &["Edit"], Some("Cmd+X"), "{}", has_pixels, |s, p| {
             // Refuse a locked layer before copying, so a refused Cut leaves the clipboard alone.
             let id = active_id(s)?;
             crate::commands::check_pixels_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
+            if let Some(channel)=crate::channel_clip::paste_color_target(s,p) {return crate::channel_clip::cut(s,id,channel);}
             preflight_clear_selected(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
             let clip = prepare_copy(s, false)?;
             let b = clip.bounds;
@@ -865,7 +894,10 @@ pub fn specs() -> Vec<CommandSpec> {
             s.clipboard = Some(clip);
             Ok(r)
         }),
-        spec!("edit.copy", "Copy", &["Edit"], Some("Cmd+C"), "{}", has_layer_pixels, |s, _| copy(s, false)),
+        spec!("edit.copy", "Copy", &["Edit"], Some("Cmd+C"), "{}", can_copy, |s, p| {
+            if crate::commands::is_mask_target(p) {return copy_mask(s);}
+            match crate::channel_clip::copy(s)? {Some(result)=>Ok(result),None=>copy(s,false)}
+        }),
         spec!("edit.copyMerged", "Copy Merged", &["Edit"], Some("Cmd+Shift+C"), "{}", has_doc, |s, _| copy(s, true)),
         spec!(
             "edit.paste",
@@ -915,14 +947,42 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             |s, _| transform_again_copy(s)
         ),
-        spec!("view.newGuide", "New Guide…", &["View"], None, r##"{"orientation":"horizontal|vertical","position":finite number,"unit":"px|in|mm|pt|pc|document"="px","documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (vertical uses X DPI; horizontal uses Y DPI; native f32 position storage)"##, has_doc, |s, p| guide_cmd(
-            s, p, "new"
-        )),
-        spec!("view.moveGuide", "Move Guide", &[], None, r##"{"orientation":"horizontal|vertical","index":n,"position":finite number,"unit":"px|in|mm|pt|pc|document"="px","documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (per-axis DPI; native f32 position storage)"##, has_doc, |s, p| guide_cmd(
-            s, p, "move"
-        )),
-        spec!("view.deleteGuide", "Delete Guide", &[], None, r##"{"orientation":"horizontal|vertical","index":n,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_doc, |s, p| guide_cmd(s, p, "delete")),
-        spec!("view.clearGuides", "Clear Guides", &["View"], None, r##"{"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_doc, |s, p| guide_cmd(s, p, "clear")),
+        spec!(
+            "view.newGuide",
+            "New Guide…",
+            &["View"],
+            None,
+            r##"{"orientation":"horizontal|vertical","position":finite number,"unit":"px|in|mm|pt|pc|document"="px","documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (vertical uses X DPI; horizontal uses Y DPI; native f32 position storage)"##,
+            has_doc,
+            |s, p| guide_cmd(s, p, "new")
+        ),
+        spec!(
+            "view.moveGuide",
+            "Move Guide",
+            &[],
+            None,
+            r##"{"orientation":"horizontal|vertical","index":n,"position":finite number,"unit":"px|in|mm|pt|pc|document"="px","documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (per-axis DPI; native f32 position storage)"##,
+            has_doc,
+            |s, p| guide_cmd(s, p, "move")
+        ),
+        spec!(
+            "view.deleteGuide",
+            "Delete Guide",
+            &[],
+            None,
+            r##"{"orientation":"horizontal|vertical","index":n,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
+            has_doc,
+            |s, p| guide_cmd(s, p, "delete")
+        ),
+        spec!(
+            "view.clearGuides",
+            "Clear Guides",
+            &["View"],
+            None,
+            r##"{"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
+            has_doc,
+            |s, p| guide_cmd(s, p, "clear")
+        ),
     ]
 }
 
@@ -1037,7 +1097,7 @@ mod tests {
         let raw: Vec<_> = [0.5, 0.2, 0.7, payload].iter().flat_map(|v| v.to_ne_bytes()).collect();
         let source = Surface::try_from_interleaved(PixelFormat::RGBA64F, area, &raw).unwrap();
         let before = source.clone();
-        let gray = PixelFormat::new(ColorMode::Grayscale, SampleType::F64, true);
+        let gray = PixelFormat::new(photocraft_color::ColorMode::Grayscale, SampleType::F64, true);
         let converted = convert_clip(&source, &color, gray, Builtin::GrayGamma22.profile()).unwrap();
         assert_eq!(converted.try_read_interleaved(area).unwrap().get(8..16).unwrap(), payload.to_ne_bytes());
         let cancelled = photocraft_raster::Interrupt::cancel_only(&|| true);
@@ -1067,7 +1127,7 @@ mod tests {
         assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().try_read_interleaved(area).unwrap(), raw);
         let colors = [0.5 + 2.0_f64.powi(-40), -0.0, 0.7, 1.0];
         let mut doc = clipboard_float_document(ColorMode::Rgb, photocraft_cms::Builtin::Srgb, &colors);
-        let mut selection = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false));
+        let mut selection = Surface::new(PixelFormat::new(photocraft_color::ColorMode::Grayscale, SampleType::F64, false));
         let coverage = 0.375 + 2.0_f64.powi(-40);
         selection.try_write_region_f64(area, &[coverage]).unwrap();
         doc.selection = Some(selection);
@@ -1120,6 +1180,8 @@ mod tests {
             surface: Surface::try_from_interleaved(PixelFormat::RGBA64F, area, &raw).unwrap(),
             bounds: area,
             composition: Vec::new(),
+            layers: None,
+            resolution: None,
             color: ClipColorContext::from_document(&s.active().unwrap().doc).unwrap(),
         });
         let before = s.active().unwrap().doc.as_ref().clone();
@@ -1133,6 +1195,8 @@ mod tests {
             surface: Surface::new(PixelFormat::GRAYA8),
             bounds: area,
             composition: Vec::new(),
+            layers: None,
+            resolution: None,
             color: ClipColorContext::from_document(&s.active().unwrap().doc).unwrap(),
         });
         let history = s.active().unwrap().history.past_len();
@@ -1584,11 +1648,12 @@ mod tests {
     fn guide_physical_units_use_independent_axes_and_preserve_redo_on_refusal() {
         let mut s = session();
         s.edit("Own axes", |document, _| {
-            document.set_physical_resolution(photocraft_doc::PhysicalResolution {
-                x_dpi: 144.0, y_dpi: 288.0, unit: photocraft_doc::PhysicalUnit::Inch,
-            }).map_err(|error| EngineError::Other(error.to_string()))?;
+            document
+                .set_physical_resolution(photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: 288.0, unit: photocraft_doc::PhysicalUnit::Inch })
+                .map_err(|error| EngineError::Other(error.to_string()))?;
             Ok(())
-        }).unwrap();
+        })
+        .unwrap();
         s.execute("view.newGuide", json!({"orientation":"vertical","position":1.0,"unit":"in"})).unwrap();
         s.execute("view.newGuide", json!({"orientation":"horizontal","position":25.4,"unit":"mm"})).unwrap();
         assert_eq!(s.active().unwrap().doc.guides.vertical, vec![144.0]);
@@ -1614,12 +1679,205 @@ mod tests {
         let mut s = session();
         let document = s.active().unwrap().doc.id.0.to_string();
         let revision = s.active().unwrap().revision.to_string();
-        s.edit("Own intervening edit", |document, _| { document.name = "Changed name".into(); Ok(()) }).unwrap();
+        s.edit("Own intervening edit", |document, _| {
+            document.name = "Changed name".into();
+            Ok(())
+        })
+        .unwrap();
         assert!(s.undo());
         let before = s.active().unwrap().doc.clone();
-        assert!(s.execute("view.newGuide", json!({"documentId":document,"expectedRevision":revision,"orientation":"vertical","position":1,"unit":"in"})).is_err());
+        assert!(
+            s.execute("view.newGuide", json!({"documentId":document,"expectedRevision":revision,"orientation":"vertical","position":1,"unit":"in"})).is_err()
+        );
         assert_eq!(s.active().unwrap().doc, before);
         assert!(s.redo());
         assert_eq!(s.active().unwrap().doc.name, "Changed name");
     }
+}
+
+fn multi_copy_ids(d: &crate::DocState) -> Result<Vec<LayerId>> {
+    if d.doc.selection.is_some() || !crate::layer_copy_cmds::layered(d.doc.mode) { return Ok(Vec::new()); }
+    let selected=d.selected_layers()?;
+    if selected.len()<2 { return Ok(Vec::new()); }
+    Ok(crate::layer_multi_cmds::top_level(&d.doc,&selected))
+}
+fn whole_layers(d:&crate::DocState,ids:&[LayerId])->Result<Document> {
+    let mut copies=scratch_doc(&d.doc);
+    copies.layers.try_reserve(ids.len()).map_err(|_|pixel_error("not enough memory to copy layers"))?;
+    for id in ids {
+        let mut layer=d.doc.layer(*id).ok_or(EngineError::NoLayer(*id))?.clone();
+        if d.doc.is_background(*id) {layer.name="Layer 0".into();layer.locks=Default::default();}
+        copies.layers.push(layer);
+    }
+    Ok(copies)
+}
+fn can_copy(s:&Session)->std::result::Result<(),String> {
+    if crate::channel_clip::copies_alpha_channel(s) {return Ok(());}
+    let d=s.active().ok_or("no document open")?;
+    if !multi_copy_ids(d).map_err(|error|error.to_string())?.is_empty() {return Ok(());}
+    has_layer_pixels(s).or_else(|error| {
+        let id=d.active_layer.ok_or(error.clone())?;
+        if takes_whole(d,id).map_err(|error|error.to_string())? {Ok(())}else {Err(error)}
+    })
+}
+fn copy_linked_sources(source: &Document, copies: &mut Document) -> Result<()> {
+    fn collect<'a>(layers: &'a [Layer], depth: usize, paths: &mut std::collections::HashSet<&'a str>) -> Result<()> {
+        if depth > photocraft_doc::MAX_GROUP_DEPTH {
+            return Err(EngineError::Other("can't copy linked smart objects from layers nested too deeply".into()));
+        }
+        for layer in layers {
+            if let LayerContent::Smart(sm) = &layer.content
+                && let photocraft_doc::SmartSource::Linked { path } = &sm.source
+            {
+                paths.try_reserve(1).map_err(|_| EngineError::Other("not enough memory to copy smart-object source IDs".into()))?;
+                paths.insert(path);
+            }
+            if let Some(children) = layer.children().filter(|children| !children.is_empty()) {
+                collect(children, depth + 1, paths)?;
+            }
+        }
+        Ok(())
+    }
+    let mut paths = std::collections::HashSet::new();
+    collect(&copies.layers, 0, &mut paths)?;
+    if paths.is_empty() {
+        return Ok(());
+    }
+    for (signature, key, data) in &source.metadata.psd_global_blocks {
+        if !matches!(key, b"lnk2" | b"lnk3" | b"lnkD" | b"lnkE") {
+            continue;
+        }
+        let selected = photocraft_io::linked::select_items(data, &|uuid, _| paths.contains(uuid))
+            .map_err(|e| EngineError::Other(format!("Could not copy smart-object contents: {e}; the clipboard was not changed")))?;
+        let selected = selected.map(std::sync::Arc::new).unwrap_or_else(|| data.clone());
+        if !selected.is_empty() {
+            copies.metadata.psd_global_blocks.try_reserve(1).map_err(|_| EngineError::Other("not enough memory to copy smart-object source records".into()))?;
+            copies.metadata.psd_global_blocks.push((*signature, *key, selected));
+        }
+    }
+    Ok(())
+}
+
+fn takes_whole(d: &crate::DocState, id: LayerId) -> Result<bool> {
+    Ok(d.doc.selection.is_none()
+        && d.selected_layers()?.len() <= 1
+        && crate::layer_copy_cmds::layered(d.doc.mode)
+        && d.doc.layer(id).is_some_and(|l| matches!(l.content, LayerContent::Smart(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Group(_))))
+}
+fn whole_layer(d: &crate::DocState, id: LayerId) -> Result<Document> {
+    if !takes_whole(d,id)? { return Err(pixel_error("the active layer cannot be copied as a whole layer")); }
+    let layer=d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    let mut copies=scratch_doc(&d.doc);
+    copies.layers.push(layer.clone());
+    Ok(copies)
+}
+
+
+fn copy_mask(s: &mut Session) -> Result<Value> {
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let canvas = d.doc.bounds();
+    let id = d.active_layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
+    let mask = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?.mask.as_ref().ok_or_else(|| EngineError::Other("the active layer has no layer mask".into()))?;
+    if matches!(mask.surface.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {return Err(pixel_error("authoritative U32/F64 mask copying is unsupported"));}
+    let sel = d.doc.selection.as_ref();
+    let area = sel.map_or(canvas, |m| m.content_bounds().intersect(&canvas));
+    if area.is_empty() {
+        return Err(EngineError::Other("Could not copy: the selected area is empty".into()));
+    }
+    let n = mask.surface.format().channels().max(1);
+    let values = crate::allocation::read_region(&mask.surface, area, "copying the mask")?;
+    let len = values
+        .len()
+        .checked_div(n)
+        .and_then(|pixels| pixels.checked_mul(2))
+        .ok_or_else(|| EngineError::Other("not enough memory for copying the mask (requested size overflowed); the document was not changed".into()))?;
+    let cover = sel.map(|m| (m.read_region(area), m.format().channels().max(1)));
+    let mut px = crate::allocation::filled(len, 0.0, "copying the mask")?;
+    for (i, p) in values.chunks_exact(n).enumerate() {
+        px[i * 2] = p.first().copied().unwrap_or(0.0);
+        px[i * 2 + 1] = cover.as_ref().map_or(1.0, |(m, mk)| m.get(i * mk).copied().unwrap_or(0.0));
+    }
+    let fmt = PixelFormat::new(photocraft_color::ColorMode::Grayscale, mask.surface.format().sample, true);
+    let mut surface = Surface::new(fmt);
+    surface
+        .try_write_region(area, &px)
+        .map_err(|e| EngineError::Other(format!("not enough memory while copying the mask ({e}); the document was not changed")))?;
+    surface.prune();
+    let bounds = surface.content_bounds();
+    if bounds.is_empty() {
+        return Err(EngineError::Other("Could not copy: the selected area is empty".into()));
+    }
+    let b = bounds;
+    let resolution = Some(d.doc.resolution_dpi);
+    s.clipboard = Some(Clip { surface, bounds: b, layers: None, resolution, color: ClipColorContext::from_document(&d.doc)?, composition: Vec::new() });
+    Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()], "target": "mask"}))
+}
+
+fn paste_layers(s: &mut Session, layers: &Document, dx: i32, dy: i32) -> Result<Value> {
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let mut copies = layers.clone();
+    for l in &mut copies.layers {
+        *l = l.duplicate();
+    }
+    crate::layer_copy_cmds::adapt_copies(s, &mut copies, &d.doc)?;
+    crate::layer_copy_cmds::translate_copies(&mut copies, dx, dy)?;
+    let patterns: Vec<_> = copies.patterns.iter().filter(|pat| !d.doc.patterns.iter().any(|q| q.id == pat.id)).cloned().collect();
+    // A copied smart object may name a PSD-embedded linked file; land its `lnk` block too (#3584).
+    let mut linked = Vec::new();
+    for (signature, key, data) in copies.metadata.psd_global_blocks.iter().filter(|(_, k, _)| matches!(k, b"lnk2" | b"lnk3" | b"lnkD" | b"lnkE")) {
+        if d.doc.metadata.psd_global_blocks.iter().any(|(_, dk, dd)| dk == key && std::sync::Arc::ptr_eq(dd, data)) {
+            continue;
+        }
+        // The clipboard may contain a subset of a destination block. Compare complete records,
+        // so copying one layer in the same document does not duplicate large embedded files.
+        let missing = photocraft_io::linked::select_items(data, &|_, raw| {
+            !d.doc.metadata.psd_global_blocks.iter().any(|(_, dk, dd)| dk == key && photocraft_io::linked::contains_item(dd, raw))
+        })
+        .map_err(|e| EngineError::Other(format!("Could not paste smart-object contents: {e}; the document was not changed")))?;
+        let missing = missing.map(std::sync::Arc::new).unwrap_or_else(|| data.clone());
+        if !missing.is_empty() {
+            linked.try_reserve(1).map_err(|_| EngineError::Other("not enough memory to paste smart-object source records".into()))?;
+            linked.push((*signature, *key, missing));
+        }
+    }
+    let id = s.edit("Paste", |doc, active| {
+        doc.patterns.extend(patterns);
+        doc.metadata.psd_global_blocks.extend(linked);
+        for l in copies.layers {
+            *active = Some(doc.insert_above(*active, l));
+        }
+        doc.selection = None;
+        active.ok_or(EngineError::Other("nothing to paste".into()))
+    })?;
+    Ok(json!({"layer": id.0, "offset": [dx, dy]}))
+}
+
+fn scratch_doc(doc: &Document) -> Document {
+    let mut copies = Document::new("", doc.size, doc.mode, doc.depth);
+    copies.icc_profile = doc.icc_profile.clone();
+    copies.resolution_dpi = doc.resolution_dpi;
+    copies.patterns = doc.patterns.clone();
+    copies
+}
+
+pub const GUIDE_COLORS: [(&str, [u8; 3]); 9] = [
+    ("lightBlue", [0x33, 0x66, 0xff]),
+    ("lightRed", [0xff, 0x33, 0x33]),
+    ("green", [0x33, 0xff, 0x33]),
+    ("mediumBlue", [0x33, 0x33, 0xff]),
+    ("yellow", [0xff, 0xcc, 0x00]),
+    ("magenta", [0xff, 0x00, 0xff]),
+    ("cyan", [0x4a, 0xff, 0xff]),
+    ("lightGray", [0xe7, 0xe7, 0xe7]),
+    ("black", [0x00, 0x00, 0x00]),
+];
+
+/// A guide `color`: one of [`GUIDE_COLORS`]' names or `"#rrggbb"`. `None` when there is no `color`
+/// (the guide uses Preferences › Guides, Grid & Slices › Guide colour).
+fn guide_color(p: &Value) -> Result<Option<[u8; 3]>> {
+    let Some(v) = p.get("color") else { return Ok(None) };
+    let text = v.as_str().ok_or(EngineError::Other("`color` must be a colour name or \"#rrggbb\"".into()))?;
+    GUIDE_COLORS.iter().find(|(name, ..)| name.eq_ignore_ascii_case(text)).map(|(.., rgb)| *rgb).or_else(|| crate::prefs::parse_hex(text)).map(Some).ok_or_else(
+        || EngineError::Other(format!("`color` {text:?} is not a guide colour: use \"#rrggbb\" or one of {}", GUIDE_COLORS.map(|c| c.0).join(", "))),
+    )
 }

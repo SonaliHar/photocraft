@@ -45,7 +45,7 @@ fn boolean(params: &Value, key: &str) -> Result<bool> {
 fn plan(session: &Session, params: &Value, shape: bool) -> Result<Plan> {
     if !params.is_null()
         && !params.as_object().is_some_and(|object| {
-            object.len() <= 11
+            object.len() <= 12
                 && object.keys().all(|key| {
                     if shape {
                         matches!(key.as_str(), "layer" | "documentId" | "expectedRevision")
@@ -63,6 +63,7 @@ fn plan(session: &Session, params: &Value, shape: bool) -> Result<Plan> {
                                 | "clearExisting"
                                 | "documentId"
                                 | "expectedRevision"
+                                | "target"
                         )
                     }
                 })
@@ -107,7 +108,19 @@ fn plan(session: &Session, params: &Value, shape: bool) -> Result<Plan> {
         }
         Some(value) => [value.as_f64().filter(|value| value.is_finite()).ok_or_else(|| error("margin must be finite or four finite values"))?; 4],
     };
+    match params.get("target").and_then(Value::as_str) {
+        None | Some("document" | "selectedArtboards") => {}
+        _ => return Err(error("target must be document or selectedArtboards")),
+    };
     let gutter = number(params, "gutter")?.unwrap_or(0.);
+    if margin.iter().any(|v| *v < 0.)
+        || gutter < 0.
+        || number(params, "rowGutter")?.is_some_and(|v| v < 0.)
+        || number(params, "width")?.is_some_and(|v| v < 0.)
+        || number(params, "height")?.is_some_and(|v| v < 0.)
+    {
+        return Err(error("layout sizes must be nonnegative"));
+    }
     Ok(Plan::Layout(Layout {
         columns: count("columns")?,
         rows: count("rows")?,
@@ -136,10 +149,9 @@ pub(crate) fn dispatch_preflight(session: &Session, params: &Value, shape: bool,
     }
     Ok(())
 }
-fn unique(values: &mut Vec<f32>, value: f64, control: &Interrupt<'_>) -> Result<()> {
-    let value = value as f32;
+fn unique(values: &mut Vec<f64>, value: f64, control: &Interrupt<'_>) -> Result<()> {
     if !value.is_finite() {
-        return Err(error("coordinate exceeds finite native f32 storage"));
+        return Err(error("coordinate exceeds finite native f64 storage"));
     }
     for (index, current) in values.iter().enumerate() {
         if index.is_multiple_of(1024) {
@@ -159,7 +171,7 @@ fn unique(values: &mut Vec<f32>, value: f64, control: &Interrupt<'_>) -> Result<
     values.push(value);
     Ok(())
 }
-fn lines(start: f64, end: f64, count: u32, width: Option<f64>, gutter: f64, center: bool, output: &mut Vec<f32>, control: &Interrupt<'_>) -> Result<()> {
+fn lines(start: f64, end: f64, count: u32, width: Option<f64>, gutter: f64, center: bool, output: &mut Vec<f64>, control: &Interrupt<'_>) -> Result<()> {
     let available = (end - start).max(0.);
     if count == 0 {
         return poll(control);
@@ -177,7 +189,7 @@ fn lines(start: f64, end: f64, count: u32, width: Option<f64>, gutter: f64, cent
     }
     Ok(())
 }
-fn copied(values: &[f32], control: &Interrupt<'_>) -> Result<Vec<f32>> {
+fn copied(values: &[f64], control: &Interrupt<'_>) -> Result<Vec<f64>> {
     let mut output = Vec::new();
     output.try_reserve_exact(values.len()).map_err(|_| error("guide copy allocation denied"))?;
     for (index, value) in values.iter().enumerate() {
@@ -250,11 +262,19 @@ fn shape_bounds(document: &Document, id: LayerId, control: &Interrupt<'_>) -> Re
     }
     bounds.ok_or_else(|| error("shape has no path"))
 }
-fn prepare(snapshot: &crate::DocumentSnapshot, plan: Plan, control: &Interrupt<'_>) -> Result<(Guides, Value)> {
+fn prepare_targets(
+    snapshot: &crate::DocumentSnapshot,
+    plan: Plan,
+    targets: &[photocraft_geom::Rect],
+    selected: bool,
+    control: &Interrupt<'_>,
+) -> Result<(Guides, Value)> {
     poll(control)?;
     snapshot.validate_resident()?;
     let added = match plan {
-        Plan::Layout(layout) => u64::from(layout.columns + layout.rows) * 2 + 4,
+        Plan::Layout(layout) => {
+            (u64::from(layout.columns + layout.rows) * 2 + 4).checked_mul(targets.len() as u64).ok_or_else(|| error("guide target work overflow"))?
+        }
         Plan::Shape(_) => 6,
     };
     let existing = snapshot.guides.horizontal.len().checked_add(snapshot.guides.vertical.len()).ok_or_else(|| error("guide count overflow"))? as u64;
@@ -278,18 +298,26 @@ fn prepare(snapshot: &crate::DocumentSnapshot, plan: Plan, control: &Interrupt<'
     let (vertical, horizontal, clear, response) = match plan {
         Plan::Layout(layout) => {
             let [top, left, bottom, right] = layout.margin;
-            let width = f64::from(snapshot.size.width);
-            let height = f64::from(snapshot.size.height);
             let mut vertical = Vec::new();
             let mut horizontal = Vec::new();
-            if layout.margin.iter().any(|value| *value != 0.) {
-                unique(&mut vertical, left, control)?;
-                unique(&mut vertical, width - right, control)?;
-                unique(&mut horizontal, top, control)?;
-                unique(&mut horizontal, height - bottom, control)?;
+            if targets.is_empty() {
+                return Err(error("select at least one artboard"));
             }
-            lines(left, width - right, layout.columns, layout.width, layout.gutter, layout.center, &mut vertical, control)?;
-            lines(top, height - bottom, layout.rows, layout.height, layout.row_gutter, layout.center, &mut horizontal, control)?;
+            for rect in targets {
+                poll(control)?;
+                let (x0, y0, x1, y1) = (f64::from(rect.x0) + left, f64::from(rect.y0) + top, f64::from(rect.x1) - right, f64::from(rect.y1) - bottom);
+                if x0 >= x1 || y0 >= y1 {
+                    return Err(error("margins must leave space inside the target"));
+                }
+                if layout.margin.iter().any(|value| *value != 0.) {
+                    unique(&mut vertical, x0, control)?;
+                    unique(&mut vertical, x1, control)?;
+                    unique(&mut horizontal, y0, control)?;
+                    unique(&mut horizontal, y1, control)?;
+                }
+                lines(x0, x1, layout.columns, layout.width, layout.gutter, layout.center, &mut vertical, control)?;
+                lines(y0, y1, layout.rows, layout.height, layout.row_gutter, layout.center, &mut horizontal, control)?;
+            }
             if vertical.is_empty() && horizontal.is_empty() {
                 return Err(error("give columns, rows or a margin"));
             }
@@ -309,11 +337,20 @@ fn prepare(snapshot: &crate::DocumentSnapshot, plan: Plan, control: &Interrupt<'
             (vertical, horizontal, false, json!({"bounds":[x0,y0,x1,y1]}))
         }
     };
-    let mut result = if clear {
+    let mut result = if clear && !selected {
         Guides::default()
     } else {
-        Guides { horizontal: copied(&snapshot.guides.horizontal, control)?, vertical: copied(&snapshot.guides.vertical, control)? }
+        Guides {
+            horizontal: copied(&snapshot.guides.horizontal, control)?,
+            vertical: copied(&snapshot.guides.vertical, control)?,
+            colors: copied_colors(&snapshot.guides.colors, control)?,
+        }
     };
+    if clear && selected {
+        result.vertical.retain(|v| !targets.iter().any(|r| *v >= f64::from(r.x0) && *v <= f64::from(r.x1)));
+        result.horizontal.retain(|v| !targets.iter().any(|r| *v >= f64::from(r.y0) && *v <= f64::from(r.y1)));
+        result.prune_colors();
+    }
     for value in vertical {
         poll(control)?;
         unique(&mut result.vertical, f64::from(value), control)?;
@@ -331,6 +368,17 @@ pub(crate) fn run(session: &mut Session, params: &Value, shape: bool) -> Result<
     let state = session.active().ok_or(EngineError::NoDocument)?;
     let baseline = state.doc.clone();
     let revision = state.revision;
+    let selected = !shape && params.get("target").and_then(Value::as_str) == Some("selectedArtboards");
+    let mut targets = Vec::new();
+    if selected {
+        targets = crate::guide_layout::try_selected_artboards(session)?;
+        if targets.is_empty() {
+            return Err(error("select at least one artboard"));
+        }
+    } else {
+        targets.try_reserve_exact(1).map_err(|_| error("target allocation denied"))?;
+        targets.push(baseline.bounds());
+    }
     let work = baseline.clone();
     let label = if shape { "New Guides From Shape" } else { "New Guide Layout" };
     crate::jobs::run(
@@ -339,7 +387,7 @@ pub(crate) fn run(session: &mut Session, params: &Value, shape: bool) -> Result<
         true,
         move |ctx| {
             ctx.stage(0., 0.95, label, |control| {
-                let (guides, response) = prepare(&work, plan, control)?;
+                let (guides, response) = prepare_targets(&work, plan, &targets, selected, control)?;
                 Ok((guides, response, ctx.clone()))
             })
         },
@@ -363,7 +411,7 @@ pub(crate) fn run(session: &mut Session, params: &Value, shape: bool) -> Result<
     )
 }
 fn exact_guides(first: &Guides, second: &Guides, control: &Interrupt<'_>) -> Result<bool> {
-    let same = |first: &[f32], second: &[f32]| -> Result<bool> {
+    let same = |first: &[f64], second: &[f64]| -> Result<bool> {
         if first.len() != second.len() {
             return Ok(false);
         }
@@ -378,7 +426,7 @@ fn exact_guides(first: &Guides, second: &Guides, control: &Interrupt<'_>) -> Res
         poll(control)?;
         Ok(true)
     };
-    Ok(same(&first.horizontal, &second.horizontal)? && same(&first.vertical, &second.vertical)?)
+    Ok(same(&first.horizontal, &second.horizontal)? && same(&first.vertical, &second.vertical)? && first.colors == second.colors)
 }
 
 #[cfg(test)]
@@ -506,4 +554,25 @@ mod tests {
         assert!(matches!(prepare(&before, planned, &Interrupt::cancel_only(&cancel)), Err(EngineError::Cancelled)));
         assert!(state.doc.shares_state(&before));
     }
+}
+
+fn copied_colors(values: &[photocraft_doc::GuideColor], control: &Interrupt<'_>) -> Result<Vec<photocraft_doc::GuideColor>> {
+    if values.len() > 100_000 {
+        return Err(error("guide color metadata limit"));
+    }
+    let mut output = Vec::new();
+    output.try_reserve_exact(values.len()).map_err(|_| error("guide color allocation denied"))?;
+    for value in values {
+        poll(control)?;
+        if !value.position.is_finite() {
+            return Err(error("nonfinite guide color position"));
+        }
+        output.push(*value);
+    }
+    Ok(output)
+}
+
+#[cfg(test)]
+fn prepare(snapshot: &crate::DocumentSnapshot, plan: Plan, control: &Interrupt<'_>) -> Result<(Guides, Value)> {
+    prepare_targets(snapshot, plan, &[snapshot.bounds()], false, control)
 }

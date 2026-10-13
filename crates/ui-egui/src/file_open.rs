@@ -34,6 +34,20 @@ pub enum DropTarget {
     Elsewhere,
 }
 
+/// `warnings` from an import, plus one for each font family the active document's type uses that
+/// isn't installed (#4559): Photoshop warns about missing fonts as a file opens, and the CLI and
+/// automation already report them; the type would otherwise silently render in a fallback face.
+pub(crate) fn with_missing_fonts(app: &PhotocraftApp, mut warnings: Vec<String>) -> Vec<String> {
+    if let Some(st) = app.session.active() {
+        for w in photocraft_engine::type_extra_cmds::missing_font_warnings(&st.doc) {
+            if !warnings.contains(&w) {
+                warnings.push(w);
+            }
+        }
+    }
+    warnings
+}
+
 /// A dropped file's name ("dropped" when it has none).
 fn dropped_name(f: &egui::DroppedFileHandle) -> String {
     f.path().file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dropped".into())
@@ -68,11 +82,12 @@ impl PhotocraftApp {
     /// policy. A native stream has no original byte buffer; byte imports retain
     /// it only for the existing Camera Raw dialog flow.
     pub(crate) fn finish_import(&mut self, name: &str, imported: photocraft_io::ImportResult, original_bytes: Option<&[u8]>) -> Result<Vec<String>, String> {
-        let photocraft_io::ImportResult { document, mut warnings, origin, assessment } = imported;
+        let photocraft_io::ImportResult { document, mut warnings, origin, assessment, source_read_only, preview_only } = imported;
         crate::import_assessment_ui::append(&mut warnings, assessment.as_ref());
         let (_, color) = self.session.open_document(document, None).map_err(|error| error.to_string())?;
-        if let Some(state) = self.session.active_mut() { state.set_import_origin(origin, name, None); }
+        if let Some(state) = self.session.active_mut() { state.set_import_origin(origin, name, None); state.source_read_only |= source_read_only || preview_only; }
         self.sync_views();
+        let warnings = with_missing_fonts(self, warnings);
         self.ui.status = format!("Opened {name}");
         self.ui.status_error = false;
         if crate::camera_raw_ui::wants_open_dialog(self, &warnings) {
@@ -89,12 +104,12 @@ impl PhotocraftApp {
     }
 
     /// Record that the active document was just opened from `path`: File › Save writes back to it
-    /// (unless it's a template) and it goes to the top of Open Recent.
+    /// (unless it's a template or derivative preview) and it goes to the top of Open Recent.
     pub(crate) fn opened_from(&mut self, path: &str) {
         if let Some(st) = self.session.active_mut() {
             let origin = st.source.as_ref().map_or_else(photocraft_io::ImportOrigin::default, |source| source.origin);
             st.set_import_origin(origin, display_name(path), Some(path.to_string()));
-            if is_template(path) {
+            if is_template(path) || st.source_read_only {
                 st.path = None;
             }
         }
@@ -148,23 +163,40 @@ impl PhotocraftApp {
     }
 
     /// Open several files, reporting each failure to the user instead of stopping. Relative paths
-    /// are resolved against the working directory so the remembered path stays valid. Returns how
-    /// many opened.
+    /// are resolved against the working directory so the remembered path stays valid. The files
+    /// open in name order ([`natural_cmp`]: `File_2` before `File_10`), and their tabs keep that
+    /// order however long each takes to open in the background (#3248). Returns how many opened.
     pub fn open_paths(&mut self, paths: &[String]) -> usize {
+        let mut paths: Vec<String> = paths.iter().map(|p| absolute(p)).collect();
+        paths.sort_by(|a, b| natural_cmp(a, b));
+        let batch = crate::jobs_ui::begin_batch(self);
         let mut opened = 0;
-        for p in paths {
-            let abs = absolute(p);
-            match self.open_path(&abs) {
-                Ok(_) => opened += 1,
-                Err(e) => self.open_failed(&display_name(p), &e),
+        for (seq, abs) in paths.iter().enumerate() {
+            let order = crate::jobs_ui::OpenOrder { batch, seq };
+            let pending = self.jobs.opens.len();
+            match self.open_path(abs) {
+                Ok(_) => {
+                    opened += 1;
+                    // A background open's tab takes its place when it finishes; a document opened
+                    // at once is in place now.
+                    match self.jobs.opens.get_mut(pending) {
+                        Some(tab) => tab.order = Some(order),
+                        None => crate::jobs_ui::opened_in_order(&mut self.jobs, order),
+                    }
+                }
+                Err(e) => self.open_failed(&display_name(abs), &e),
             }
         }
+        crate::jobs_ui::end_batch(&mut self.jobs);
         opened
     }
 
     /// Show "Couldn't open <name>: <error>" as an error (status bar + notice).
     pub fn open_failed(&mut self, name: &str, err: &str) {
-        self.failed(format!("Couldn't open {name}: {err}"));
+        self.failed({
+            let template = "Couldn't open {name}: {error}";
+            crate::i18n::fmt(tl!(template), &[("name", name), ("error", err)])
+        });
     }
 
     /// Log `msg` and show it as an error (status bar + notice).
@@ -279,6 +311,47 @@ impl PhotocraftApp {
             }
         }
     }
+}
+
+/// Order names like a file browser does: runs of digits by their value (`File_2` before
+/// `File_10`), everything else case-insensitively; names equal that way fall back to the exact
+/// text so the order is total.
+pub(crate) fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let (mut x, mut y) = (a.chars().peekable(), b.chars().peekable());
+    loop {
+        match (x.peek().copied(), y.peek().copied()) {
+            (None, None) => return a.cmp(b),
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(c), Some(d)) if c.is_ascii_digit() && d.is_ascii_digit() => {
+                let (m, n) = (digit_run(&mut x), digit_run(&mut y));
+                let (m, n) = (m.trim_start_matches('0'), n.trim_start_matches('0'));
+                match m.len().cmp(&n.len()).then_with(|| m.cmp(n)) {
+                    Ordering::Equal => {}
+                    o => return o,
+                }
+            }
+            (Some(c), Some(d)) => {
+                x.next();
+                y.next();
+                match c.to_lowercase().cmp(d.to_lowercase()) {
+                    Ordering::Equal => {}
+                    o => return o,
+                }
+            }
+        }
+    }
+}
+
+/// Take the run of ASCII digits at the front of `it`.
+fn digit_run(it: &mut std::iter::Peekable<std::str::Chars>) -> String {
+    let mut run = String::new();
+    while let Some(c) = it.peek().copied().filter(char::is_ascii_digit) {
+        run.push(c);
+        it.next();
+    }
+    run
 }
 
 #[cfg(not(target_arch = "wasm32"))]

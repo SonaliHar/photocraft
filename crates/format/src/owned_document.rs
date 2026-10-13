@@ -141,6 +141,9 @@ pub fn load_document_from_owned_archive(
         id_map: HashMap::new(),
         channel_map: HashMap::new(),
         path_map: HashMap::new(),
+        contents_id_map: HashMap::new(),
+        legacy_linked_contents: HashMap::new(),
+        tiles: HashMap::new(),
     };
     let document = loader.document_with_interrupt(&manifest.document, control.interrupt)?;
     let max_id = loader.max_id;

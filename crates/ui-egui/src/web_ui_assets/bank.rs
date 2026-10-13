@@ -103,7 +103,7 @@ impl WebUiAssets {
                 }
             }
         }
-        if next != assets::PACK_BYTES || defaults.len() != 4 || custom_ranges.len() != 3 || catalogs.len() != 14 {
+        if next != assets::PACK_BYTES || defaults.len() != 4 || custom_ranges.len() != 3 || catalogs.len() != assets::DESCRIPTORS.iter().filter(|d| d.kind == AssetKind::Catalog).count() {
             return Err(UiAssetError::Length);
         }
         let face = |role| custom_ranges.get(&role).and_then(|r| pack.get(r.clone())).ok_or(UiAssetError::Metadata("custom-font"));

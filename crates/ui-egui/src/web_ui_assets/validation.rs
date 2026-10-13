@@ -55,7 +55,7 @@ pub(super) fn validate_pack(pack: &[u8], check: &mut dyn FnMut(u64) -> Result<()
             }
         }
     }
-    if next != assets::PACK_BYTES || fonts != 7 || catalogs != 14 {
+    if next != assets::PACK_BYTES || fonts != 7 || catalogs as usize != assets::DESCRIPTORS.iter().filter(|d| d.kind == AssetKind::Catalog).count() {
         return Err(UiAssetError::Length);
     }
     Ok(())

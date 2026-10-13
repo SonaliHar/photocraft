@@ -107,7 +107,7 @@ fn parse(session: &Session, params: &Value) -> Result<BitmapMethod> {
             if !cell.is_finite() || cell > f64::from(f32::MAX) {
                 return Err(error("physical halftone cell exceeds supported precision range"));
             }
-            Ok(BitmapMethod::Halftone { cell: cell as f32, angle, shape: HalftoneShape::from_id(shape) })
+            Ok(BitmapMethod::Halftone { cell: cell as f32, angle, shape: HalftoneShape::from_id(shape).ok_or_else(|| error("unknown halftone shape"))? })
         }
         _ => Err(error("method must be threshold, threshold50, pattern, diffusion or halftone")),
     }

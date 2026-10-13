@@ -123,5 +123,20 @@ pub fn specs() -> Vec<CommandSpec> {
         enabled,
         run: inspect,
         journal: false,
+    }, CommandSpec {
+        id: "xcf.source.inspect",
+        label: "Inspect Imported GIMP Source Details",
+        menu: &[],
+        shortcut: None,
+        params: "{owner:{kind:layer|channel|mask|path,id:canonical nonzero U64 string},offset?:0..100000,limit?:1..64} -> exact typed source metadata; bounded reply without resource authority",
+        enabled,
+        run: inspect_source,
+        journal: false,
     }]
+}
+
+fn inspect_source(session: &mut Session, params: &Value) -> Result<Value> {
+    let (owner, offset, limit) = crate::inspect_xcf_typed::selector(params)?;
+    let doc = &session.active().ok_or(EngineError::NoDocument)?.doc;
+    crate::inspect_xcf_typed::source_with_interrupt(doc, owner, offset, limit, &photocraft_raster::Interrupt::NONE)
 }

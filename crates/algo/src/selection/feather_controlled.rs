@@ -351,7 +351,7 @@ pub(super) fn try_feather(m:&[f32],w:usize,h:usize,radius:f32,ctl:&Interrupt<'_>
     let n=w.checked_mul(h).ok_or(RasterInputError::InvalidBounds)?;
     if n!=m.len(){return Err(RasterInputError::LengthMismatch);}
     if !radius.is_finite(){return Err(RasterInputError::InvalidSample);}
-    let sigma=(radius.max(0.0)/2.0).min(MAX_SIGMA);
+    let sigma=radius.max(0.0).min(MAX_SIGMA);
     let r=(sigma*3.0).ceil() as usize;
     let active=sigma>=0.1 && n!=0;
     let bytes=if active {n.checked_mul(48).and_then(|n|n.checked_add(r.checked_mul(256)?))

@@ -40,6 +40,10 @@ fn integer(command: &str, value: Option<&Value>, maximum: u64, positive: bool) -
 /// this module does not handle the command. Unknown commands/edits are untouched.
 /// This admits no nested containers, payload strings, locators or grants.
 pub(crate) fn dispatch_preflight(command: &str, params: &Value) -> Result<bool> {
+    if command == "xcf.source.inspect" {
+        crate::inspect_xcf_typed::selector(params)?;
+        return Ok(true);
+    }
     let keys: &[&str] = match command {
         "xcf.assess" => &[],
         "xcf.inspect" => &["offset", "limit"],

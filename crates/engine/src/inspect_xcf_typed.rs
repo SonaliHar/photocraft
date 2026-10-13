@@ -256,3 +256,58 @@ pub fn source_with_interrupt(document: &Document, owner: ItemRef, offset: usize,
         "configuration":{"total":configuration.len(),"offset":offset,"limit":limit,"entries":entries,"truncated":end<configuration.len()},
         "numericEncoding":"integers:decimal strings; F32/F64:fixed-width lowercase hexadecimal bits","accessGranted":false,"qualification":false,"admission":"typed metadata only; no schema/evaluator/recovery authority"}))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use photocraft_doc::{ColorMode, SampleType, Size, xcf_items::SourceItem};
+
+    fn fixture(configuration: Vec<FilterArgument>) -> (Document, ItemRef) {
+        let owner = ItemRef::Layer(photocraft_doc::LayerId(u64::MAX));
+        let mut doc = Document::new("Source details", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+        let mut state = photocraft_doc::xcf_state::XcfState::default();
+        state.source_items.push(SourceItem {
+            owner,
+            source: EditableSource::Vector { path: PathId(7), source_modified: false, configuration },
+            transform: None,
+            cache: None,
+        });
+        doc.xcf_state = Some(state);
+        (doc, owner)
+    }
+
+    #[test]
+    fn source_detail_preserves_integer_extremes_nan_payload_and_signed_zero() {
+        let values = [
+            ExactNumber::Unsigned { width: 64, value: u64::MAX },
+            ExactNumber::Signed { width: 64, value: i64::MIN },
+            ExactNumber::Float64Bits(0x7ff8_0000_0000_0042),
+            ExactNumber::Float32Bits(0x8000_0000),
+        ];
+        let configuration = values.into_iter().enumerate().map(|(i, value)| FilterArgument {
+            name: format!("field{i}"), value: FilterValue::Number(value),
+        }).collect();
+        let (doc, owner) = fixture(configuration);
+        let before = doc.clone();
+        let result = source_with_interrupt(&doc, owner, 0, 64, &Interrupt::NONE).unwrap();
+        assert_eq!(result["configuration"]["entries"][0]["value"]["Number"]["Unsigned"]["value"], "18446744073709551615");
+        assert_eq!(result["configuration"]["entries"][1]["value"]["Number"]["Signed"]["value"], "-9223372036854775808");
+        assert_eq!(result["configuration"]["entries"][2]["value"]["Number"]["Float64Bits"], "0x7ff8000000000042");
+        assert_eq!(result["configuration"]["entries"][3]["value"]["Number"]["Float32Bits"], "0x80000000");
+        assert_eq!(result["accessGranted"], false);
+        assert_eq!(doc, before);
+    }
+
+    #[test]
+    fn hostile_selectors_and_overlarge_nested_configuration_refuse() {
+        for params in [
+            json!({"owner":{"kind":"layer","id":u64::MAX}}),
+            json!({"owner":{"kind":"layer","id":"01"}}),
+            json!({"owner":{"kind":"layer","id":"1"},"limit":0}),
+            json!({"owner":{"kind":"layer","id":"1"},"locator":"ambient"}),
+        ] { assert!(selector(&params).is_err()); }
+        let nested = vec![FilterArgument { name: "member".into(), value: FilterValue::Bool(true) }; 65];
+        let (doc, owner) = fixture(vec![FilterArgument { name: "nested".into(), value: FilterValue::Config(nested) }]);
+        assert!(source_with_interrupt(&doc, owner, 0, 1, &Interrupt::NONE).is_err());
+    }
+}

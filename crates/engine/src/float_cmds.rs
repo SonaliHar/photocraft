@@ -31,6 +31,8 @@ pub struct CutParts {
     pub layer: LayerId,
     rest: Surface,
     piece: Surface,
+    /// The pieces are the layer's mask (`"target":"mask"`), not its pixels.
+    mask: bool,
 }
 
 impl CutParts {
@@ -46,27 +48,36 @@ impl CutParts {
     /// Split `layer` of `doc` by its selection. With `copy` the selected pixels stay in the layer
     /// too (the piece is a duplicate). Without, they leave a transparent hole, or on the Background,
     /// which can't hold transparency, one filled with `background` (Photoshop). Errors without a
-    /// selection or pixels.
-    pub fn new(doc: &Document, layer: LayerId, copy: bool, background: [f32; 4]) -> Result<Self> {
+    /// selection or pixels. With `mask` the layer's mask is split instead of its pixels; the hole it
+    /// leaves takes the background colour (as on the Background layer).
+    pub fn new(doc: &Document, layer: LayerId, copy: bool, background: [f32; 4], mask: bool) -> Result<Self> {
         let sel = doc.selection.as_ref().ok_or_else(|| EngineError::Other("no selection".into()))?;
         let l = doc.layer(layer).ok_or(EngineError::NoLayer(layer))?;
-        let LayerContent::Raster(surf) = &l.content else {
-            return Err(EngineError::Other("the layer has no pixels to move".into()));
+        let surf = if mask {
+            l.mask.as_ref().ok_or_else(|| EngineError::Other("the layer has no mask".into()))?.surface.as_ref()
+        } else {
+            let LayerContent::Raster(surf) = &l.content else {
+                return Err(EngineError::Other("the layer has no pixels to move".into()));
+            };
+            surf
         };
         let fmt = surf.format();
         let with_alpha = PixelFormat::new(fmt.mode, fmt.sample, true);
-        let mut rest = if fmt == with_alpha {
+        let full = if fmt == with_alpha {
             surf.clone()
         } else {
             surf.try_convert(with_alpha).map_err(|e| crate::EngineError::Other(format!("pixel conversion: {e}")))?
         };
+        // Masks retain their gray format; only the lifted piece carries alpha.
+        let mut rest = if mask { surf.clone() } else { full.clone() };
         let mut piece = Surface::new(with_alpha);
-        let fill = !copy && crate::extra_cmds::is_background(l);
-        let b = sel.content_bounds().intersect(&surf.content_bounds());
+        let fill = !copy && (mask || doc.is_background(layer));
+        // A mask's untouched pixels (its default, e.g. white) move too, so take the whole canvas.
+        let b = sel.content_bounds().intersect(&if mask { doc.bounds() } else { surf.content_bounds() });
         if !b.is_empty() {
             let n = with_alpha.channels();
             let a = n - 1;
-            let mut rp = rest.read_region(b);
+            let mut rp = full.read_region(b);
             let mut pp = rp.clone();
             let w = b.width() as usize;
             for (i, (p, r)) in pp.chunks_exact_mut(n).zip(rp.chunks_exact_mut(n)).enumerate() {
@@ -80,29 +91,43 @@ impl CutParts {
                     r[a] *= 1.0 - k;
                 }
             }
-            rest.write_region(b, &rp);
+            if !mask {
+                rest.write_region(b, &rp);
+            }
             if fill {
-                crate::pixels::fill_surface(&mut rest, b, background, Some(sel), true);
+                crate::pixels::try_fill_surface(&mut rest, b, background, Some(sel), true)?;
             }
             rest.prune();
             piece.write_region(b, &pp);
             piece.prune();
         }
-        Ok(Self { layer, rest, piece })
+        Ok(Self { layer, rest, piece, mask })
     }
 
     /// `doc` with the piece moved by whole pixels (dx, dy) over the cut-out layer.
     pub fn moved(&self, doc: &Document, dx: i32, dy: i32) -> Result<Document> {
         let mut d = doc.clone();
-        let surf = d
-            .layer_mut(self.layer)
-            .ok_or(EngineError::NoLayer(self.layer))?
-            .surface_mut()
-            .ok_or_else(|| EngineError::Other("the layer has no pixels to move".into()))?;
-        let mut out = self.rest.clone();
-        crate::transform_cmds::composite_over(&mut out, &photocraft_algo::resample::translate_surface(&self.piece, dx, dy));
-        *surf = out;
+        self.place(&mut d, dx, dy)?;
         Ok(d)
+    }
+
+    /// Put the piece, moved by (dx, dy), over the cut-out layer (or mask) of `doc`.
+    fn place(&self, doc: &mut Document, dx: i32, dy: i32) -> Result<()> {
+        let l = doc.layer_mut(self.layer).ok_or(EngineError::NoLayer(self.layer))?;
+        let surf = if self.mask {
+            l.mask.as_mut().map(|m| std::sync::Arc::make_mut(&mut m.surface)).ok_or_else(|| EngineError::Other("the layer has no mask".into()))?
+        } else {
+            l.surface_mut().ok_or_else(|| EngineError::Other("the layer has no pixels to move".into()))?
+        };
+        let mut out = self.rest.clone();
+        let piece = photocraft_algo::resample::translate_surface(&self.piece, dx, dy);
+        if self.mask {
+            crate::fill_cmds::composite_over(&mut out, &piece, piece.content_bounds(), None)?;
+        } else {
+            crate::transform_cmds::composite_over(&mut out, &piece);
+        }
+        *surf = out;
+        Ok(())
     }
 }
 
@@ -143,12 +168,17 @@ fn can_float(s: &Session) -> std::result::Result<(), String> {
     if !matches!(l.content, LayerContent::Raster(_)) {
         return Err("the active layer has no pixels to move".into());
     }
-    let locks = st.doc.effective_locks(l.id);
-    // The Background is position-locked, but its selected pixels move (Photoshop).
-    if locks.all || (locks.position && !crate::extra_cmds::is_background(l)) {
+    if locked_for_float(&st.doc, l) {
         return Err(format!("layer \"{}\" is locked", l.name));
     }
     Ok(())
+}
+
+/// Do `l`'s locks (its own, or a locked group's: `effective_locks`) stop its selected pixels
+/// floating? The Background is position-locked, but its selected pixels move (Photoshop).
+pub fn locked_for_float(doc: &Document, l: &photocraft_doc::Layer) -> bool {
+    let locks = doc.effective_locks(l.id);
+    locks.all || (locks.position && !doc.is_background(l.id))
 }
 
 fn float(s: &mut Session, p: &Value) -> Result<Value> {
@@ -158,7 +188,7 @@ fn float(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     if floating(st).is_none() {
         let layer = st.active_layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
-        let parts = CutParts::new(&st.doc, layer, copy, background)?;
+        let parts = CutParts::new(&st.doc, layer, copy, background, crate::commands::is_mask_target(p))?;
         st.floating = Some(Floating { layer, offset: (0, 0), revision: st.revision, parts: Arc::new(parts) });
     }
     let f = st.floating.as_mut().ok_or(EngineError::NoDocument)?;
@@ -179,9 +209,7 @@ pub fn drop_floating(s: &mut Session) -> Result<Value> {
         return Ok(json!({"dropped": true, "offset": [0, 0]}));
     }
     s.edit("Move", |doc, _| {
-        let moved = f.parts.moved(doc, dx, dy)?;
-        let surf = moved.layer(f.layer).and_then(|l| l.surface()).cloned().ok_or(EngineError::NoLayer(f.layer))?;
-        *doc.layer_mut(f.layer).ok_or(EngineError::NoLayer(f.layer))?.surface_mut().ok_or(EngineError::NoLayer(f.layer))? = surf;
+        f.parts.place(doc, dx, dy)?;
         doc.selection = doc.selection.as_ref().map(|sel| photocraft_algo::resample::translate_surface(sel, dx, dy));
         Ok(())
     })?;
@@ -198,19 +226,64 @@ fn keeps_floating(id: &str) -> bool {
 pub(crate) fn before_command(s: &mut Session, id: &str) -> Result<Option<Value>> {
     // Precision inspection reads current persisted pixels without committing or
     // normalizing a transient floating preview, including a stale preview.
-    if matches!(id, "document.pixel.inspect" | "xcf.assess" | "xcf.inspect" | "xcf.composition.inspect" | "xcf.filter.inspect" | "xcf.resource.inspect" | "xcf.filter.graph.inspectPlan") {
+    if matches!(
+        id,
+        "document.pixel.inspect"
+            | "xcf.assess"
+            | "xcf.inspect"
+            | "xcf.composition.inspect"
+            | "xcf.filter.inspect"
+            | "xcf.resource.inspect"
+            | "xcf.filter.graph.inspectPlan"
+    ) {
         return Ok(None);
     }
     // Substitution refuses floating state in its own preflight. Preserve even a
     // stale piece so a failed replacement cannot normalize or drop it first.
-    if matches!(id, "xcf.link.substitute" | "xcf.link.recover" | "xcf.link.refresh" | "xcf.link.setPlacement" | "xcf.link.setTransform" | "xcf.composition.set" | "xcf.item.locks.set" | "xcf.items.select") {
+    if matches!(
+        id,
+        "xcf.link.substitute"
+            | "xcf.link.recover"
+            | "xcf.link.refresh"
+            | "xcf.link.setPlacement"
+            | "xcf.link.setTransform"
+            | "xcf.composition.set"
+            | "xcf.item.locks.set"
+            | "xcf.items.select"
+    ) {
         return Ok(None);
     }
     if matches!(id, "xcf.itemSet.rename" | "xcf.itemSet.delete" | "xcf.itemSet.setMembers" | "xcf.itemSet.create") {
         return Ok(None);
     }
-    if matches!(id, "xcf.mask.enabled.set" | "xcf.mask.geometry.set" | "xcf.channel.overlay.set" | "xcf.items.visibility.set" | "xcf.layer.affine.apply" | "xcf.filter.move" | "xcf.filter.remove" | "xcf.filter.insert" | "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.mask.enabled.set" | "xcf.indexed.pixel.set" | "xcf.indexed.palette.set" | "xcf.text.name.set" | "xcf.channel.name.set" | "xcf.channel.locks.set" | "xcf.channel.indicates.set" | "xcf.path.name.set" | "xcf.vector.fill.color.set" | "xcf.vector.stroke.color.set") { return Ok(None); }
-    if id == "layer.layerMask.enabled" && s.active().is_some_and(|state| state.doc.xcf_state.is_some()) { return Ok(None); }
+    if matches!(
+        id,
+        "xcf.mask.enabled.set"
+            | "xcf.mask.geometry.set"
+            | "xcf.channel.overlay.set"
+            | "xcf.items.visibility.set"
+            | "xcf.layer.affine.apply"
+            | "xcf.filter.move"
+            | "xcf.filter.remove"
+            | "xcf.filter.insert"
+            | "xcf.filter.set"
+            | "xcf.filter.enable"
+            | "xcf.filter.mask.enabled.set"
+            | "xcf.indexed.pixel.set"
+            | "xcf.indexed.palette.set"
+            | "xcf.text.name.set"
+            | "xcf.channel.name.set"
+            | "xcf.channel.locks.set"
+            | "xcf.channel.indicates.set"
+            | "xcf.path.name.set"
+            | "xcf.vector.fill.color.set"
+            | "xcf.vector.stroke.color.set"
+    ) {
+        return Ok(None);
+    }
+    if id == "layer.layerMask.enabled" && s.active().is_some_and(|state| state.doc.xcf_state.is_some()) {
+        return Ok(None);
+    }
     let Some(st) = s.active_mut() else { return Ok(None) };
     if floating(st).is_none() {
         st.floating = None;
@@ -233,7 +306,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Float Selection",
             menu: &[],
             shortcut: None,
-            params: r##"{"dx":px=0,"dy":px=0,"copy":bool=false} → {layer, offset} (cuts the selected pixels of the active layer into a floating piece the first time, or with copy leaves them and floats a duplicate; on the Background the hole takes the background colour; then moves it by whole pixels; dropped by select.drop or any other command, put back by edit.undo)"##,
+            params: r##"{"dx":px=0,"dy":px=0,"copy":bool=false,"target":"pixels"|"mask"="pixels" (mask: float the selected part of the layer's mask, the hole takes the background colour)} → {layer, offset} (cuts the selected pixels of the active layer into a floating piece the first time, or with copy leaves them and floats a duplicate; on the Background the hole takes the background colour; then moves it by whole pixels; dropped by select.drop or any other command, put back by edit.undo)"##,
             enabled: can_float,
             journal: true,
             run: float,

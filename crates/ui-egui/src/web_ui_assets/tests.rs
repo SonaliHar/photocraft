@@ -81,7 +81,7 @@ fn exact_payload_and_catalog_registry_are_complete() {
     assert_eq!(actual, expected);
     assert_eq!(
         crate::i18n::LANGUAGES.iter().map(|l| l.code).collect::<Vec<_>>(),
-        ["en", "ja", "zh-hans", "zh-hant", "es", "ru", "cs", "fr", "id", "ko", "pl", "de", "pt-br", "el", "it"]
+        ["en", "ja", "zh-hans", "zh-hant", "es", "ru", "uk", "sr", "cs", "fr", "id", "ko", "pl", "de", "pt-br", "el", "nl", "it", "hu", "tr", "vi"]
     );
 }
 

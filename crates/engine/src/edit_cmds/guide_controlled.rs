@@ -18,8 +18,9 @@ fn controlled(control: &Interrupt<'_>, message: impl std::fmt::Display) -> Engin
 #[derive(Clone, Copy)]
 struct Plan {
     vertical: bool,
-    position: Option<f32>,
+    position: Option<f64>,
     index: Option<usize>,
+    color: Option<[u8; 3]>,
 }
 fn decimal(value: &Value) -> Option<u64> {
     let text = value.as_str()?;
@@ -34,8 +35,8 @@ fn plan(session: &Session, params: &Value, op: &str) -> Result<Plan> {
     }
     if !params.is_null()
         && !params.as_object().is_some_and(|object| {
-            object.len() <= 6
-                && object.keys().all(|key| matches!(key.as_str(), "orientation" | "position" | "unit" | "index" | "documentId" | "expectedRevision"))
+            object.len() <= 7
+                && object.keys().all(|key| matches!(key.as_str(), "orientation" | "position" | "unit" | "index" | "color" | "documentId" | "expectedRevision"))
         })
     {
         return Err(error("expected bounded guide parameters"));
@@ -80,13 +81,13 @@ fn plan(session: &Session, params: &Value, op: &str) -> Result<Plan> {
     let unit = fixed.as_ref().unwrap_or(&resolution.unit);
     let position = params
         .get("position")
-        .map(|value| -> Result<f32> {
+        .map(|value| -> Result<f64> {
             let coordinate = value.as_f64().filter(|value| value.is_finite()).ok_or_else(|| error("position must be finite"))?;
             let axis = if vertical { Axis::X } else { Axis::Y };
             let pixels = physical_size::units_to_pixels(coordinate.abs(), resolution, unit, axis).map_err(error)?.copysign(coordinate);
-            let value = pixels as f32;
+            let value = pixels;
             if !value.is_finite() {
-                return Err(error("position exceeds finite native f32 storage"));
+                return Err(error("position exceeds finite native f64 storage"));
             }
             Ok(value)
         })
@@ -105,7 +106,8 @@ fn plan(session: &Session, params: &Value, op: &str) -> Result<Plan> {
     if op == "new" && guides.len() >= 100_000 {
         return Err(error("guide count limit"));
     }
-    Ok(Plan { vertical, position, index })
+    let color = if op == "new" { super::guide_color(params)? } else { None };
+    Ok(Plan { vertical, position, index, color })
 }
 /// Root calls before float normalization or cloning the foreign parameter AST.
 pub(crate) fn dispatch_preflight(session: &Session, params: &Value, op: &str, _background: bool) -> Result<()> {
@@ -144,7 +146,7 @@ fn prepare(document: &crate::DocumentSnapshot, control: &Interrupt<'_>) -> Resul
     }
     poll(control)
 }
-fn copied(values: &[f32], op: &str, selected: bool, plan: Plan, control: &Interrupt<'_>) -> Result<Vec<f32>> {
+fn copied(values: &[f64], op: &str, selected: bool, plan: Plan, control: &Interrupt<'_>) -> Result<Vec<f64>> {
     if op == "clear" {
         poll(control)?;
         return Ok(Vec::new());
@@ -182,10 +184,27 @@ fn guides(document: &Document, plan: Plan, op: &str, control: &Interrupt<'_>) ->
     if document.guides.horizontal.len() > 100_000 || document.guides.vertical.len() > 100_000 {
         return Err(error("guide copy work limit"));
     }
-    Ok(Guides {
+    let mut result = Guides {
         horizontal: copied(&document.guides.horizontal, op, !plan.vertical, plan, control)?,
         vertical: copied(&document.guides.vertical, op, plan.vertical, plan, control)?,
-    })
+        colors: copied_colors(&document.guides.colors, control)?,
+    };
+    if op == "move" {
+        if let Some(from) =
+            plan.index.and_then(|index| if plan.vertical { document.guides.vertical.get(index) } else { document.guides.horizontal.get(index) }).copied()
+        {
+            if let (Some(to), Some(rgb)) = (plan.position, document.guides.color(plan.vertical, from)) {
+                result.colors.try_reserve(1).map_err(|_| error("guide color allocation denied"))?;
+                result.set_color(plan.vertical, to, Some(rgb));
+            }
+        }
+    }
+    if op == "new" && plan.color.is_some() {
+        result.colors.try_reserve(1).map_err(|_| error("guide color allocation denied"))?;
+        result.set_color(plan.vertical, plan.position.ok_or_else(|| error("missing position"))?, plan.color);
+    }
+    result.prune_colors();
+    Ok(result)
 }
 pub(crate) fn run(session: &mut Session, params: &Value, op: &str) -> Result<Value> {
     dispatch_preflight(session, params, op, false)?;
@@ -337,7 +356,23 @@ mod tests {
         run(&mut session, &json!({"orientation":"vertical","index":1,"position":72,"unit":"pt"}), "move").unwrap();
         run(&mut session, &json!({"orientation":"vertical","index":2}), "delete").unwrap();
         let guides = &session.active().unwrap().doc.guides;
-        assert_eq!(guides.vertical.iter().map(|value| value.to_bits()).collect::<Vec<_>>(), vec![(-0.0f32).to_bits(), 144f32.to_bits()]);
+        assert_eq!(guides.vertical.iter().map(|value| value.to_bits()).collect::<Vec<_>>(), vec![(-0.0f64).to_bits(), 144f64.to_bits()]);
         assert_eq!(guides.horizontal, vec![2.25]);
     }
+}
+
+fn copied_colors(values: &[photocraft_doc::GuideColor], control: &Interrupt<'_>) -> Result<Vec<photocraft_doc::GuideColor>> {
+    if values.len() > 100_000 {
+        return Err(error("guide color metadata limit"));
+    }
+    let mut output = Vec::new();
+    output.try_reserve_exact(values.len()).map_err(|_| error("guide color allocation denied"))?;
+    for value in values {
+        poll(control)?;
+        if !value.position.is_finite() {
+            return Err(error("nonfinite guide color position"));
+        }
+        output.push(*value);
+    }
+    Ok(output)
 }

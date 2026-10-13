@@ -445,7 +445,8 @@ fn canonical_raster_transform_bounds(doc: &Document, id: LayerId) -> Result<Opti
 }
 
 fn transform(s: &mut Session, p: &Value) -> Result<Value> {
-    transform_with_interrupt(s, p, &Interrupt::NONE)
+    let params = with_panel_target(s, p);
+    transform_with_interrupt(s, &params, &Interrupt::NONE)
 }
 
 /// Controlled transform staging. Command registry dispatch currently uses no token.
@@ -493,7 +494,7 @@ pub fn transform_with_interrupt(s: &mut Session, p: &Value, control: &Interrupt<
         // Affine [a b c d e f] maps (x, y) → (a·x + c·y + e, b·x + d·y + f).
         Homography([v[0], v[2], v[4], v[1], v[3], v[5], 0.0, 0.0, 1.0])
     } else {
-        return Err(bad("pass `quad` (where the rect's corners go) or `matrix`"));
+        relative_matrix(p, rect)?.ok_or_else(|| bad("pass quad, matrix or relative scale/rotate/move parameters"))?
     };
     if h.inverse().is_none() {
         return Err(bad("the transform collapses the layer"));
@@ -838,4 +839,100 @@ mod tests {
         sel.fill_rect(Rect::new(0, 0, 4, 4), &[1.0]);
         assert!(split_gray_selected(&s, &sel).is_none());
     }
+}
+
+pub(crate) fn move_gray_selected(
+    s: &Surface,
+    sel: &Surface,
+    warp: &dyn Fn(&Surface, Rect) -> Result<Surface>,
+    whole: &dyn Fn(&Surface) -> Result<Surface>,
+) -> Result<Surface> {
+    let Some((lifted, mut out)) = try_split_gray_selected(s, sel)? else { return whole(s) };
+    let src = lifted.content_bounds();
+    if src.is_empty() {
+        return Ok(out);
+    }
+    let w = warp(&lifted, src)?;
+    let b = w.content_bounds();
+    if !b.is_empty() {
+        let moved = crate::allocation::read_region(&w, b, "compositing transformed mask pixels")?;
+        let under = crate::allocation::read_region(&out, b, "compositing transformed mask pixels")?;
+        let mut flat = crate::allocation::filled(under.len(), 0.0, "compositing transformed mask pixels")?;
+        for (i, (p, u)) in moved.as_chunks::<2>().0.iter().zip(&under).enumerate() {
+            flat[i] = p[0] * p[1] + u * (1.0 - p[1]);
+        }
+        out.try_write_region(b, &flat)?;
+    }
+    out.prune();
+    Ok(out)
+}
+
+fn transform_locks(l: &Layer, group: Locks, background: bool) -> Locks {
+    let mut own = l.locks;
+    if background {
+        own.position = false;
+        own.transparency = false;
+    }
+    own.union(group)
+}
+
+pub fn locked_for_transform(doc: &Document, id: LayerId) -> bool {
+    let Some(l) = doc.layer(id) else { return false };
+    // An explicit stack rather than recursion: documents can nest deeply.
+    let mut stack = vec![(l, group_locks(doc, id).unwrap_or(Locks { all: true, ..Default::default() }), doc.is_background(id))];
+    while let Some((l, group, background)) = stack.pop() {
+        let locks = transform_locks(l, group, background);
+        if locks.position || locks.all {
+            return true;
+        }
+        if let LayerContent::Group(g) = &l.content {
+            stack.extend(g.children.iter().map(|c| (c, locks, false)));
+        }
+    }
+    false
+}
+
+fn with_panel_target(s: &Session, p: &Value) -> Value {
+    let mut p = if p.is_object() { p.clone() } else { json!({}) };
+    if p.get("target").is_none()
+        && p.get("layer").is_none()
+        && let (Some(m), Some(Value::Object(t))) = (p.as_object_mut(), crate::channel_cmds::targeted_channel(s))
+    {
+        m.extend(t);
+    }
+    p
+}
+
+pub const MAX_TRANSFORM_PIXELS: u64 = 1 << 30;
+
+pub(crate) fn warp_gray(source: &Surface, h: &Homography, interp: Interp) -> Result<Surface> {
+    try_warp_gray(source, h, interp)
+}
+
+pub fn moves_whole(layer: &Layer) -> bool {
+    matches!(layer.content, LayerContent::Group(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_))
+}
+
+fn relative_matrix(p: &Value, rect: [f64; 4]) -> Result<Option<Homography>> {
+    let num = |k: &str| -> Result<Option<f64>> {
+        match p.get(k) {
+            None | Some(Value::Null) => Ok(None),
+            Some(v) => v.as_f64().filter(|f| f.is_finite()).map(Some).ok_or_else(|| bad(format!("`{k}` must be a finite number"))),
+        }
+    };
+    let (sx, sy, rot, dx, dy) = (num("scaleX")?, num("scaleY")?, num("rotate")?, num("dx")?, num("dy")?);
+    if sx.is_none() && sy.is_none() && rot.is_none() && dx.is_none() && dy.is_none() {
+        return Ok(None);
+    }
+    let (sx, sy) = (sx.unwrap_or(100.0) / 100.0, sy.unwrap_or(100.0) / 100.0);
+    if sx.abs() < 1e-6 || sy.abs() < 1e-6 {
+        return Err(bad("`scaleX` and `scaleY` must not be 0"));
+    }
+    let (cx, cy) = ((rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0);
+    let (sin, cos) = rot.unwrap_or(0.0).to_radians().sin_cos();
+    // (x, y) → translate(-c) → scale → rotate → translate(c + d).
+    let (a, b, c, d) = (sx * cos, sx * sin, -sy * sin, sy * cos);
+    let e = cx + dx.unwrap_or(0.0) - a * cx - c * cy;
+    let f = cy + dy.unwrap_or(0.0) - b * cx - d * cy;
+    Ok(Some(Homography([a, c, e, b, d, f, 0.0, 0.0, 1.0])))
 }

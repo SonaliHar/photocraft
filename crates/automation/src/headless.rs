@@ -9,14 +9,16 @@ use photocraft_format::PcraftWriter;
 use photocraft_io::ExportOptions;
 use serde_json::{Value, json};
 
-use crate::workspace::{authorize_engine_command, authorize_engine_step};
+use crate::workspace::{ExportSequence, authorize_engine_command, authorize_engine_step};
 use crate::{AuthorizedWorkspace, AutomationError, files};
 
 mod linked_root;
 
-fn native_save_requested(name:&str,format:Option<&str>)->bool {
-    format.map(|value|value.trim_start_matches('.')).or_else(||Path::new(name).extension().and_then(|value|value.to_str()))
-        .is_some_and(|value|value.eq_ignore_ascii_case(photocraft_format::EXTENSION))
+fn native_save_requested(name: &str, format: Option<&str>) -> bool {
+    format
+        .map(|value| value.trim_start_matches('.'))
+        .or_else(|| Path::new(name).extension().and_then(|value| value.to_str()))
+        .is_some_and(|value| value.eq_ignore_ascii_case(photocraft_format::EXTENSION))
 }
 
 /// Unrun during the implementation-first pass.
@@ -42,107 +44,223 @@ mod calculation_dispatch_drafts {
     }
 }
 
-#[cfg(all(test,not(target_arch="wasm32")))]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod prepared_native_save_tests {
     use super::*;
-    fn root()->PathBuf {
-        use std::sync::atomic::{AtomicU64,Ordering};static SERIAL:AtomicU64=AtomicU64::new(0);
-        let stamp=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let path=std::env::temp_dir().join(format!("photocraft-headless-native-stream-{}-{stamp}-{}",std::process::id(),SERIAL.fetch_add(1,Ordering::Relaxed)));
-        std::fs::create_dir(&path).unwrap();path
+    fn root() -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SERIAL: AtomicU64 = AtomicU64::new(0);
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("photocraft-headless-native-stream-{}-{stamp}-{}", std::process::id(), SERIAL.fetch_add(1, Ordering::Relaxed)));
+        std::fs::create_dir(&path).unwrap();
+        path
     }
-    fn own_document()->photocraft_doc::Document {
-        photocraft_doc::Document::with_background("Own streaming document",photocraft_doc::Size::new(3,2),photocraft_doc::ColorMode::Rgb,photocraft_doc::SampleType::U16,photocraft_doc::Color::WHITE)
+    fn own_document() -> photocraft_doc::Document {
+        photocraft_doc::Document::with_background(
+            "Own streaming document",
+            photocraft_doc::Size::new(3, 2),
+            photocraft_doc::ColorMode::Rgb,
+            photocraft_doc::SampleType::U16,
+            photocraft_doc::Color::WHITE,
+        )
     }
     // Implementation-first drafts: exercise actual prepared plan/sink joins later.
     #[test]
     fn workspace_and_trusted_native_save_roundtrip_preserve_model_history_and_source() {
-        for trusted in [false,true] {
-            let root=root();let mut headless=if trusted {Headless::trusted_local()} else {Headless::with_workspace(AuthorizedWorkspace::new(Some(&root),Some(&root)).unwrap())};
-            headless.session.add_document(own_document(),None).unwrap();headless.session.edit("Own real edit",|doc,_| {doc.name="Own current model".into();Ok(())}).unwrap();
-            let before=headless.session.active().unwrap().doc.clone();let revision=headless.session.active().unwrap().revision;let labels=headless.session.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>();
-            let path=if trusted {root.join("own.pcraft")} else {PathBuf::from("own.pcraft")};
-            headless.save_with_interrupt(None,Some(&path),None,&Default::default(),&photocraft_raster::Interrupt::NONE).unwrap();
-            let bytes=std::fs::read(root.join("own.pcraft")).unwrap();assert_eq!(photocraft_format::load_from_bytes(&bytes).unwrap(),*before);
-            let active=headless.session.active().unwrap();assert!(active.doc.shares_state(&before));assert_eq!(active.revision,revision);assert_eq!(active.saved_revision,revision);assert!(active.source.is_none());assert_eq!(active.history.entry_labels().map(str::to_owned).collect::<Vec<_>>(),labels);
-            assert_eq!(std::fs::read_dir(&root).unwrap().count(),1);std::fs::remove_file(root.join("own.pcraft")).unwrap();std::fs::remove_dir(root).unwrap();
+        for trusted in [false, true] {
+            let root = root();
+            let mut headless =
+                if trusted { Headless::trusted_local() } else { Headless::with_workspace(AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap()) };
+            headless.session.add_document(own_document(), None).unwrap();
+            headless
+                .session
+                .edit("Own real edit", |doc, _| {
+                    doc.name = "Own current model".into();
+                    Ok(())
+                })
+                .unwrap();
+            let before = headless.session.active().unwrap().doc.clone();
+            let revision = headless.session.active().unwrap().revision;
+            let labels = headless.session.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>();
+            let path = if trusted { root.join("own.pcraft") } else { PathBuf::from("own.pcraft") };
+            headless.save_with_interrupt(None, Some(&path), None, &Default::default(), &photocraft_raster::Interrupt::NONE).unwrap();
+            let bytes = std::fs::read(root.join("own.pcraft")).unwrap();
+            assert_eq!(photocraft_format::load_from_bytes(&bytes).unwrap(), *before);
+            let active = headless.session.active().unwrap();
+            assert!(active.doc.shares_state(&before));
+            assert_eq!(active.revision, revision);
+            assert_eq!(active.saved_revision, revision);
+            assert!(active.source.is_none());
+            assert_eq!(active.history.entry_labels().map(str::to_owned).collect::<Vec<_>>(), labels);
+            assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+            std::fs::remove_file(root.join("own.pcraft")).unwrap();
+            std::fs::remove_dir(root).unwrap();
         }
     }
     #[test]
     fn nonactive_open_source_alias_refuses_before_output_and_does_not_mark_saved() {
-        let root=root();let original=root.join("original-source.bin");std::fs::write(&original,b"own original source bytes").unwrap();std::fs::hard_link(&original,root.join("alias.pcraft")).unwrap();
-        let mut headless=Headless::with_workspace(AuthorizedWorkspace::new(Some(&root),Some(&root)).unwrap());headless.session.add_document(own_document(),None).unwrap();
-        headless.session.active_mut().unwrap().set_import_origin(photocraft_io::ImportOrigin::xcf(),"Own protected source",Some("original-source.bin".into()));
-        headless.session.add_document(own_document(),None).unwrap();headless.session.edit("Own dirty edit",|doc,_| {doc.name="dirty output".into();Ok(())}).unwrap();
-        let before=headless.session.active().unwrap().doc.clone();let saved=headless.session.active().unwrap().saved_revision;
-        assert!(headless.save_with_interrupt(None,Some(Path::new("alias.pcraft")),None,&Default::default(),&photocraft_raster::Interrupt::NONE).is_err());
-        assert!(headless.session.active().unwrap().doc.shares_state(&before));assert_eq!(headless.session.active().unwrap().saved_revision,saved);assert!(headless.session.active().unwrap().path.is_none());
-        assert_eq!(std::fs::read(&original).unwrap(),b"own original source bytes");assert_eq!(std::fs::read_dir(&root).unwrap().count(),2);
-        std::fs::remove_file(root.join("alias.pcraft")).unwrap();std::fs::remove_file(original).unwrap();std::fs::remove_dir(root).unwrap();
+        let root = root();
+        let original = root.join("original-source.bin");
+        std::fs::write(&original, b"own original source bytes").unwrap();
+        std::fs::hard_link(&original, root.join("alias.pcraft")).unwrap();
+        let mut headless = Headless::with_workspace(AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap());
+        headless.session.add_document(own_document(), None).unwrap();
+        headless.session.active_mut().unwrap().set_import_origin(
+            photocraft_io::ImportOrigin::xcf(),
+            "Own protected source",
+            Some("original-source.bin".into()),
+        );
+        headless.session.add_document(own_document(), None).unwrap();
+        headless
+            .session
+            .edit("Own dirty edit", |doc, _| {
+                doc.name = "dirty output".into();
+                Ok(())
+            })
+            .unwrap();
+        let before = headless.session.active().unwrap().doc.clone();
+        let saved = headless.session.active().unwrap().saved_revision;
+        assert!(headless.save_with_interrupt(None, Some(Path::new("alias.pcraft")), None, &Default::default(), &photocraft_raster::Interrupt::NONE).is_err());
+        assert!(headless.session.active().unwrap().doc.shares_state(&before));
+        assert_eq!(headless.session.active().unwrap().saved_revision, saved);
+        assert!(headless.session.active().unwrap().path.is_none());
+        assert_eq!(std::fs::read(&original).unwrap(), b"own original source bytes");
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 2);
+        std::fs::remove_file(root.join("alias.pcraft")).unwrap();
+        std::fs::remove_file(original).unwrap();
+        std::fs::remove_dir(root).unwrap();
     }
     #[test]
     fn lower_archive_cap_refusal_never_publishes_partial_native_output() {
-        let root=root();std::fs::write(root.join("out.pcraft"),b"original destination").unwrap();
-        let workspace=AuthorizedWorkspace::new(Some(&root),Some(&root)).unwrap();let document=own_document();
-        let mut limits=photocraft_io::NativeSaveLimits::default();limits.archive.max_archive_bytes=1;
+        let root = root();
+        std::fs::write(root.join("out.pcraft"), b"original destination").unwrap();
+        let workspace = AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap();
+        let document = own_document();
+        let mut limits = photocraft_io::NativeSaveLimits::default();
+        limits.archive.max_archive_bytes = 1;
         // A lower cap may refuse during preparation or writing, never publication.
-        if let Ok(prepared)=photocraft_io::prepare_native_stream(&document,limits,&photocraft_raster::Interrupt::NONE) {
-            let result=workspace.write_protected_stream_with_interrupt("out.pcraft",&[],&[],&photocraft_raster::Interrupt::NONE,move|file| {
-                let (_,result)=prepared.write(file).map_err(native_save_error)?;Ok(result)
-            });assert!(result.is_err());
+        if let Ok(prepared) = photocraft_io::prepare_native_stream(&document, limits, &photocraft_raster::Interrupt::NONE) {
+            let result = workspace.write_protected_stream_with_interrupt("out.pcraft", &[], &[], &photocraft_raster::Interrupt::NONE, move |file| {
+                let (_, result) = prepared.write(file).map_err(native_save_error)?;
+                Ok(result)
+            });
+            assert!(result.is_err());
         }
-        assert_eq!(std::fs::read(root.join("out.pcraft")).unwrap(),b"original destination");assert_eq!(std::fs::read_dir(&root).unwrap().count(),1);
-        std::fs::remove_file(root.join("out.pcraft")).unwrap();std::fs::remove_dir(root).unwrap();
+        assert_eq!(std::fs::read(root.join("out.pcraft")).unwrap(), b"original destination");
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        std::fs::remove_file(root.join("out.pcraft")).unwrap();
+        std::fs::remove_dir(root).unwrap();
     }
     #[test]
     fn streamed_open_trusted_and_workspace_preserve_native_model_and_runtime_origin() {
-        for trusted in [false,true] {
-            let root=root();let original=own_document();let bytes=photocraft_format::save_to_bytes(&original,&Default::default()).unwrap();std::fs::write(root.join("own.pcraft"),&bytes).unwrap();
-            let mut headless=if trusted {Headless::trusted_local()} else {Headless::with_workspace(AuthorizedWorkspace::new(Some(&root),None).unwrap())};
-            let path=if trusted {root.join("own.pcraft")} else {PathBuf::from("own.pcraft")};
-            let response=headless.open_with_interrupt(&path,&photocraft_raster::Interrupt::NONE).unwrap();assert_eq!(response["index"],0);
-            let active=headless.session.active().unwrap();assert_eq!(*active.doc,original);assert_eq!(active.path.as_deref(),path.to_str());assert_eq!(active.source.as_ref().unwrap().origin,photocraft_io::ImportOrigin::writable(photocraft_io::ImportFormat::Pcraft));assert!(!active.history.can_undo());
-            std::fs::remove_file(root.join("own.pcraft")).unwrap();std::fs::remove_dir(root).unwrap();
+        for trusted in [false, true] {
+            let root = root();
+            let original = own_document();
+            let bytes = photocraft_format::save_to_bytes(&original, &Default::default()).unwrap();
+            std::fs::write(root.join("own.pcraft"), &bytes).unwrap();
+            let mut headless = if trusted { Headless::trusted_local() } else { Headless::with_workspace(AuthorizedWorkspace::new(Some(&root), None).unwrap()) };
+            let path = if trusted { root.join("own.pcraft") } else { PathBuf::from("own.pcraft") };
+            let response = headless.open_with_interrupt(&path, &photocraft_raster::Interrupt::NONE).unwrap();
+            assert_eq!(response["index"], 0);
+            let active = headless.session.active().unwrap();
+            assert_eq!(*active.doc, original);
+            assert_eq!(active.path.as_deref(), path.to_str());
+            assert_eq!(active.source.as_ref().unwrap().origin, photocraft_io::ImportOrigin::writable(photocraft_io::ImportFormat::Pcraft));
+            assert!(!active.history.can_undo());
+            std::fs::remove_file(root.join("own.pcraft")).unwrap();
+            std::fs::remove_dir(root).unwrap();
         }
     }
     #[test]
     fn cancelled_open_keeps_existing_tabs_focus_source_and_real_redo() {
-        use std::sync::atomic::{AtomicUsize,Ordering};
-        let root=root();let original=own_document();std::fs::write(root.join("own.pcraft"),photocraft_format::save_to_bytes(&original,&Default::default()).unwrap()).unwrap();
-        let setup=|| {let mut headless=Headless::with_workspace(AuthorizedWorkspace::new(Some(&root),None).unwrap());headless.session.add_document(original.clone(),None).unwrap();headless.session.edit("Real redo",|doc,_| {doc.name="redo sentinel".into();Ok(())}).unwrap();assert!(headless.session.undo());headless};
-        let mut measured=setup();let count=AtomicUsize::new(0);let measure=||{count.fetch_add(1,Ordering::Relaxed);false};measured.open_with_interrupt(Path::new("own.pcraft"),&photocraft_raster::Interrupt::cancel_only(&measure)).unwrap();
-        assert!(count.load(Ordering::Relaxed)>1);
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let root = root();
+        let original = own_document();
+        std::fs::write(root.join("own.pcraft"), photocraft_format::save_to_bytes(&original, &Default::default()).unwrap()).unwrap();
+        let setup = || {
+            let mut headless = Headless::with_workspace(AuthorizedWorkspace::new(Some(&root), None).unwrap());
+            headless.session.add_document(original.clone(), None).unwrap();
+            headless
+                .session
+                .edit("Real redo", |doc, _| {
+                    doc.name = "redo sentinel".into();
+                    Ok(())
+                })
+                .unwrap();
+            assert!(headless.session.undo());
+            headless
+        };
+        let mut measured = setup();
+        let count = AtomicUsize::new(0);
+        let measure = || {
+            count.fetch_add(1, Ordering::Relaxed);
+            false
+        };
+        measured.open_with_interrupt(Path::new("own.pcraft"), &photocraft_raster::Interrupt::cancel_only(&measure)).unwrap();
+        assert!(count.load(Ordering::Relaxed) > 1);
         for threshold in 0..count.load(Ordering::Relaxed) {
-            let mut headless=setup();let before=headless.session.active().unwrap().doc.clone();let revision=headless.session.active().unwrap().revision;let source=headless.session.active().unwrap().source.clone();
-            let calls=AtomicUsize::new(0);let stop=||calls.fetch_add(1,Ordering::Relaxed)>=threshold;
-            let result=headless.open_with_interrupt(Path::new("own.pcraft"),&photocraft_raster::Interrupt::cancel_only(&stop));
-            if matches!(result,Err(AutomationError::Engine(photocraft_engine::EngineError::Cancelled))) {
-                assert_eq!(headless.session.documents().len(),1);let active=headless.session.active().unwrap();assert!(active.doc.shares_state(&before));assert_eq!(active.revision,revision);assert_eq!(active.source,source);assert!(active.path.is_none());
-                assert!(headless.session.redo());assert_eq!(headless.session.active().unwrap().doc.name,"redo sentinel");
-            } else {assert!(result.is_ok());assert_eq!(headless.session.documents().len(),2);}
+            let mut headless = setup();
+            let before = headless.session.active().unwrap().doc.clone();
+            let revision = headless.session.active().unwrap().revision;
+            let source = headless.session.active().unwrap().source.clone();
+            let calls = AtomicUsize::new(0);
+            let stop = || calls.fetch_add(1, Ordering::Relaxed) >= threshold;
+            let result = headless.open_with_interrupt(Path::new("own.pcraft"), &photocraft_raster::Interrupt::cancel_only(&stop));
+            if matches!(result, Err(AutomationError::Engine(photocraft_engine::EngineError::Cancelled))) {
+                assert_eq!(headless.session.documents().len(), 1);
+                let active = headless.session.active().unwrap();
+                assert!(active.doc.shares_state(&before));
+                assert_eq!(active.revision, revision);
+                assert_eq!(active.source, source);
+                assert!(active.path.is_none());
+                assert!(headless.session.redo());
+                assert_eq!(headless.session.active().unwrap().doc.name, "redo sentinel");
+            } else {
+                assert!(result.is_ok());
+                assert_eq!(headless.session.documents().len(), 2);
+            }
         }
-        std::fs::remove_file(root.join("own.pcraft")).unwrap();std::fs::remove_dir(root).unwrap();
+        std::fs::remove_file(root.join("own.pcraft")).unwrap();
+        std::fs::remove_dir(root).unwrap();
     }
     #[test]
     fn denied_or_failed_native_open_does_not_install_partial_tab() {
-        let root=root();std::fs::write(root.join("bad.pcraft"),b"PK\x03\x04").unwrap();
-        let mut denied=Headless::new();assert!(matches!(denied.open_with_interrupt(&root.join("missing.pcraft"),&photocraft_raster::Interrupt::NONE),Err(AutomationError::BadRequest(_))));assert!(denied.session.documents().is_empty());
-        let mut headless=Headless::with_workspace(AuthorizedWorkspace::new(Some(&root),None).unwrap());headless.session.add_document(own_document(),None).unwrap();let before=headless.session.active().unwrap().doc.clone();
-        assert!(headless.open_with_interrupt(Path::new("bad.pcraft"),&photocraft_raster::Interrupt::NONE).is_err());assert_eq!(headless.session.documents().len(),1);assert!(headless.session.active().unwrap().doc.shares_state(&before));
-        std::fs::remove_file(root.join("bad.pcraft")).unwrap();std::fs::remove_dir(root).unwrap();
+        let root = root();
+        std::fs::write(root.join("bad.pcraft"), b"PK\x03\x04").unwrap();
+        let mut denied = Headless::new();
+        assert!(matches!(denied.open_with_interrupt(&root.join("missing.pcraft"), &photocraft_raster::Interrupt::NONE), Err(AutomationError::BadRequest(_))));
+        assert!(denied.session.documents().is_empty());
+        let mut headless = Headless::with_workspace(AuthorizedWorkspace::new(Some(&root), None).unwrap());
+        headless.session.add_document(own_document(), None).unwrap();
+        let before = headless.session.active().unwrap().doc.clone();
+        assert!(headless.open_with_interrupt(Path::new("bad.pcraft"), &photocraft_raster::Interrupt::NONE).is_err());
+        assert_eq!(headless.session.documents().len(), 1);
+        assert!(headless.session.active().unwrap().doc.shares_state(&before));
+        std::fs::remove_file(root.join("bad.pcraft")).unwrap();
+        std::fs::remove_dir(root).unwrap();
     }
 }
-fn native_save_error(error:photocraft_io::IoError)->AutomationError {
-    if matches!(error,photocraft_io::IoError::Cancelled) {AutomationError::Engine(photocraft_engine::EngineError::Cancelled)} else {AutomationError::Import(error)}
+fn native_save_error(error: photocraft_io::IoError) -> AutomationError {
+    if matches!(error, photocraft_io::IoError::Cancelled) {
+        AutomationError::Engine(photocraft_engine::EngineError::Cancelled)
+    } else {
+        AutomationError::Import(error)
+    }
 }
 
 fn encode_save_with_interrupt(
-    document: &photocraft_doc::Document, name: &str, format: Option<&str>, options: &ExportOptions,
+    document: &photocraft_doc::Document,
+    name: &str,
+    format: Option<&str>,
+    options: &ExportOptions,
     control: &photocraft_raster::Interrupt<'_>,
 ) -> Result<(Vec<u8>, Vec<String>), AutomationError> {
     control.check().map_err(|_| photocraft_engine::EngineError::Cancelled)?;
     files::validate_write_name(Path::new(name), format)?;
-    if native_save_requested(name,format) {return Err(AutomationError::BadRequest("native file saves require the prepared streaming sink".into()));}
+    if native_save_requested(name, format) {
+        return Err(AutomationError::BadRequest("native file saves require the prepared streaming sink".into()));
+    }
     // Legacy flat encoders currently poll at their boundary. The final guarded
     // writer still observes cancellation before creating or publishing output.
     let encoded = files::save_bytes(document, name, format, options)?;
@@ -239,22 +357,28 @@ impl Headless {
 
     /// Open a file and make it the active document.
     pub fn open(&mut self, path: &Path) -> Result<Value, AutomationError> {
-        self.open_with_interrupt(path,&photocraft_raster::Interrupt::NONE)
+        self.open_with_interrupt(path, &photocraft_raster::Interrupt::NONE)
     }
     /// Controlled native stream opening and atomic Session publication. Directory
     /// native bundles retain their legacy boundary-only controlled loader.
-    pub fn open_with_interrupt(&mut self,path:&Path,control:&photocraft_raster::Interrupt<'_>)->Result<Value,AutomationError> {
-        control.check().map_err(|_|photocraft_engine::EngineError::Cancelled)?;
+    pub fn open_with_interrupt(&mut self, path: &Path, control: &photocraft_raster::Interrupt<'_>) -> Result<Value, AutomationError> {
+        control.check().map_err(|_| photocraft_engine::EngineError::Cancelled)?;
         let requested = path.to_str().ok_or_else(|| AutomationError::BadRequest("automation paths must be valid UTF-8".into()))?;
         let mut o = match &self.filesystem {
             Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: read authority is absent".into())),
-            Filesystem::TrustedLocal => files::open_with_interrupt(path,control)?,
-            Filesystem::Workspace(workspace) => workspace.open_document_with_interrupt(requested,control)?,
+            Filesystem::TrustedLocal => files::open_with_interrupt(path, control)?,
+            Filesystem::Workspace(workspace) => workspace.open_document_with_interrupt(requested, control)?,
         };
         // Complete response serialization and owned runtime provenance before
         // admission: a failure must not leave a newly focused partial tab.
-        let assessment=o.assessment.map(serde_json::to_value).transpose().map_err(|error|AutomationError::Other(format!("XCF assessment serialization: {error}")))?;
-        let owned=|value:&str|->Result<String,AutomationError> {let mut result=String::new();result.try_reserve_exact(value.len()).map_err(|_|AutomationError::Other("open provenance allocation failed".into()))?;result.push_str(value);Ok(result)};
+        let assessment =
+            o.assessment.map(serde_json::to_value).transpose().map_err(|error| AutomationError::Other(format!("XCF assessment serialization: {error}")))?;
+        let owned = |value: &str| -> Result<String, AutomationError> {
+            let mut result = String::new();
+            result.try_reserve_exact(value.len()).map_err(|_| AutomationError::Other("open provenance allocation failed".into()))?;
+            result.push_str(value);
+            Ok(result)
+        };
         let path = match file_cmds::template_name(&self.session, requested) {
             Some(untitled) => {
                 o.document.name = untitled;
@@ -262,8 +386,10 @@ impl Headless {
             }
             None => Some(owned(requested)?),
         };
-        let source_path = if o.origin.is_read_only() { Some(owned(requested)?) } else { path.as_deref().map(owned).transpose()? };
-        let source_label=owned(requested)?;
+        let read_only = o.source_read_only || o.origin.is_read_only();
+        let path = path.filter(|_| !read_only);
+        let source_path = if read_only { Some(owned(requested)?) } else { path.as_deref().map(owned).transpose()? };
+        let source_label = owned(requested)?;
         let mut response = json!({
             "name": o.document.name,
             "width": o.document.size.width,
@@ -271,14 +397,126 @@ impl Headless {
             "layers": o.document.layer_count(),
             "warnings": o.warnings,
         });
-        if let Some(assessment)=assessment {response["assessment"]=assessment;}
-        control.check().map_err(|_|photocraft_engine::EngineError::Cancelled)?;
-        let index=self.session.add_document_with_interrupt(o.document,path,control)?;
+        if let Some(assessment) = assessment {
+            response["assessment"] = assessment;
+        }
+        control.check().map_err(|_| photocraft_engine::EngineError::Cancelled)?;
+        let index = self.session.add_document_with_interrupt(o.document, path, control)?;
         // Successful publication is the commit point. No postcommit poll may
         // report cancellation for a tab that has already been installed.
-        if let Some(state)=self.session.active_mut() {state.set_import_origin(o.origin,source_label,source_path);}
-        response["index"]=json!(index);
+        if let Some(state) = self.session.active_mut() {
+            state.set_import_origin(o.origin, source_label, source_path);
+            state.source_read_only = read_only;
+        }
+        response["index"] = json!(index);
         Ok(response)
+    }
+
+    /// Place a file into a document as a Smart Object layer: the capability-scoped counterpart
+    /// of `file.placeEmbedded`, which reads an ambient path and is therefore refused in
+    /// automation (#2810). `path` resolves beneath the read root the way `open` resolves one,
+    /// and `params` carries the command's own options (`scale`, `fit`, `center`).
+    pub fn place(&mut self, index: Option<usize>, path: &str, params: &Value) -> Result<Value, AutomationError> {
+        let i = self.doc_index(index)?;
+        if self.session.active_index() != Some(i) && !self.session.set_active(i) {
+            return Err(AutomationError::BadRequest(format!("no document at index {i}")));
+        }
+        let mut opts = params.as_object().cloned().unwrap_or_default();
+        opts.insert("path".into(), json!(path));
+        // Where ambient paths are allowed the command reads the file itself, as everywhere else.
+        if matches!(&self.filesystem, Filesystem::TrustedLocal) {
+            return self.command_run("file.placeEmbedded", Value::Object(opts));
+        }
+        let bytes = match &self.filesystem {
+            Filesystem::Workspace(workspace) => workspace.read(path)?,
+            _ => {
+                return Err(AutomationError::BadRequest("automation filesystem access is not granted: read authority is absent".into()));
+            }
+        };
+        let name = Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path);
+        self.sync_jobs();
+        // The bytes are already in memory and the path resolved beneath the root capability, so
+        // placing them needs no filesystem check of its own (`place_bytes` is the command body).
+        Ok(file_cmds::place_bytes(&mut self.session, name, bytes, None, &Value::Object(opts))?)
+    }
+
+    /// Export each exported layer of a document as its own file beneath the write root: the
+    /// capability-scoped `file.export.layersToFiles`, which takes an ambient `dir` and is
+    /// therefore refused in automation (#3216). The bytes come from the command's own core, so
+    /// both paths write the same files. The write capability refuses to overwrite a file that
+    /// already exists, where the ambient command would, and it creates the directory before the
+    /// export runs, so a refused export can leave an empty directory behind â€” never a file.
+    pub fn export_layers(&mut self, index: Option<usize>, dir: &str, params: &Value) -> Result<Value, AutomationError> {
+        let i = self.doc_index(index)?;
+        if self.session.active_index() != Some(i) && !self.session.set_active(i) {
+            return Err(AutomationError::BadRequest(format!("no document at index {i}")));
+        }
+        if matches!(&self.filesystem, Filesystem::TrustedLocal) {
+            let mut opts = params.as_object().cloned().unwrap_or_default();
+            opts.insert("dir".into(), json!(dir));
+            return self.command_run("file.export.layersToFiles", Value::Object(opts));
+        }
+        self.sync_jobs();
+        let workspace = match &self.filesystem {
+            Filesystem::Workspace(workspace) => workspace,
+            _ => return Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into())),
+        };
+        let mut outputs = workspace.export_sequence(dir)?;
+        let written = file_cmds::export_layers_with(&self.session, params, |name, bytes| {
+            outputs.write(name, bytes).map_err(|e| photocraft_engine::EngineError::Other(e.to_string()))
+        });
+        exported(dir, written, &mut outputs)
+    }
+
+    /// Export each data set of a document as its own flattened file beneath the write root: the
+    /// capability-scoped `file.export.dataSetsAsFiles` (#3216). As in the command, the whole
+    /// batch is planned first and colliding names are refused before any file is written; the
+    /// directory itself is created before that, so a refused batch can leave it empty behind.
+    pub fn export_data_sets(&mut self, index: Option<usize>, dir: &str, params: &Value) -> Result<Value, AutomationError> {
+        let i = self.doc_index(index)?;
+        if self.session.active_index() != Some(i) && !self.session.set_active(i) {
+            return Err(AutomationError::BadRequest(format!("no document at index {i}")));
+        }
+        if matches!(&self.filesystem, Filesystem::TrustedLocal) {
+            let mut opts = params.as_object().cloned().unwrap_or_default();
+            opts.insert("dir".into(), json!(dir));
+            return self.command_run("file.export.dataSetsAsFiles", Value::Object(opts));
+        }
+        self.sync_jobs();
+        let workspace = match &self.filesystem {
+            Filesystem::Workspace(workspace) => workspace,
+            _ => return Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into())),
+        };
+        let mut outputs = workspace.export_sequence(dir)?;
+        let written = photocraft_engine::export_data_sets_with(&self.session, params, |name, bytes| {
+            outputs.write(name, bytes).map_err(|e| photocraft_engine::EngineError::Other(e.to_string()))
+        });
+        exported(dir, written, &mut outputs)
+    }
+
+    /// Import a data set CSV from the read root: the capability-scoped
+    /// `file.import.variableDataSets`, which takes an ambient `path` and is therefore refused
+    /// in automation (#3216). The file is read beneath the root the way `open` reads one and
+    /// handed to the command's own parser over the text it already has.
+    pub fn import_data_sets(&mut self, index: Option<usize>, path: &str, params: &Value) -> Result<Value, AutomationError> {
+        let i = self.doc_index(index)?;
+        if self.session.active_index() != Some(i) && !self.session.set_active(i) {
+            return Err(AutomationError::BadRequest(format!("no document at index {i}")));
+        }
+        if matches!(&self.filesystem, Filesystem::TrustedLocal) {
+            let mut opts = params.as_object().cloned().unwrap_or_default();
+            opts.insert("path".into(), json!(path));
+            return self.command_run("file.import.variableDataSets", Value::Object(opts));
+        }
+        let text = match &self.filesystem {
+            Filesystem::Workspace(workspace) => {
+                let bytes = workspace.read(path)?;
+                String::from_utf8(bytes).map_err(|e| AutomationError::BadRequest(format!("automation read `{path}` is not valid UTF-8: {e}")))?
+            }
+            _ => return Err(AutomationError::BadRequest("automation filesystem access is not granted: read authority is absent".into())),
+        };
+        self.sync_jobs();
+        Ok(photocraft_engine::import_data_sets_text(&mut self.session, &text, params)?)
     }
 
     /// Save (`.pcraft` or any export format by extension). With no path,
@@ -288,7 +526,14 @@ impl Headless {
     }
 
     /// Controlled byte saves preserve the token through native preparation and commit.
-    pub fn save_with_interrupt(&mut self, index: Option<usize>, path: Option<&Path>, format: Option<&str>, opts: &ExportOptions, control: &photocraft_raster::Interrupt<'_>) -> Result<Value, AutomationError> {
+    pub fn save_with_interrupt(
+        &mut self,
+        index: Option<usize>,
+        path: Option<&Path>,
+        format: Option<&str>,
+        opts: &ExportOptions,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<Value, AutomationError> {
         control.check().map_err(|_| photocraft_engine::EngineError::Cancelled)?;
         let i = self.doc_index(index)?;
         let (stored_path, doc) = {
@@ -298,14 +543,16 @@ impl Headless {
         };
         let target: PathBuf = match (path, stored_path.as_deref()) {
             (Some(p), _) => p.to_path_buf(),
-            // Like the desktop's File › Save: without a new path, only a layered file is written
+            // Like the desktop's File â€º Save: without a new path, only a layered file is written
             // back, in its own format; a flattened or converted copy never replaces it (#416).
             (None, Some(p)) => {
                 let own = file_cmds::extension(p);
                 let written = format.map(|f| f.trim_start_matches('.').to_ascii_lowercase()).or_else(|| own.clone());
-                if !file_cmds::saves_in_place(p) || written != own {
+                if !file_cmds::holds_at(&doc, p) || written != own {
+                    let lost = file_cmds::losses_at(&doc, p);
+                    let why = if lost.is_empty() { String::new() } else { format!(" (it can't keep: {})", lost.join("; ")) };
                     return Err(AutomationError::BadRequest(format!(
-                        "pass `path`: without one, only a PSD, PSB or .pcraft file is written back, in its own format, so `{p}` was left unchanged"
+                        "pass `path`: without one, only a PSD, PSB, .pcraft or OpenRaster file that holds the whole document is written back, in its own format, so `{p}` was left unchanged{why}"
                     )));
                 }
                 PathBuf::from(p)
@@ -315,7 +562,7 @@ impl Headless {
             }
         };
         let target_text = target.to_str().ok_or_else(|| AutomationError::BadRequest("automation paths must be valid UTF-8".into()))?;
-        let warnings = match &self.filesystem {
+        let mut warnings = match &self.filesystem {
             Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into())),
             Filesystem::TrustedLocal => {
                 let protection = self.write_protection(control)?;
@@ -324,12 +571,13 @@ impl Headless {
                     control.check().map_err(|_| photocraft_engine::EngineError::Cancelled)?;
                     let writer = self.writers.entry(doc.id.0).or_default();
                     files::save(&doc, &target, format, opts, Some(writer))?
-                } else if native_save_requested(target_text,format) {
+                } else if native_save_requested(target_text, format) {
                     // Source identities and target checks precede preparation; all
                     // preview/model admission completes before opening the temp.
-                    let prepared=photocraft_io::prepare_native_stream(&doc,Default::default(),control).map_err(native_save_error)?;
-                    let result=files::write_protected_stream_with_interrupt(&target,&protection,control,move|file| {
-                        let (_,result)=prepared.write(file).map_err(native_save_error)?;Ok(result)
+                    let prepared = photocraft_io::prepare_native_stream(&doc, Default::default(), control).map_err(native_save_error)?;
+                    let result = files::write_protected_stream_with_interrupt(&target, &protection, control, move |file| {
+                        let (_, result) = prepared.write(file).map_err(native_save_error)?;
+                        Ok(result)
                     })?;
                     result.warnings
                 } else {
@@ -342,33 +590,36 @@ impl Headless {
                 files::validate_write_name(&target, format)?;
                 let protection = self.write_protection(control)?;
                 workspace.guard_write_protected_with_interrupt(target_text, &protection.sources, &protection.fingerprints, control)?;
-                if native_save_requested(target_text,format) {
-                    workspace.save_native_with_interrupt(&doc,target_text,&protection,Default::default(),control)?.warnings
+                if native_save_requested(target_text, format) {
+                    workspace.save_native_with_interrupt(&doc, target_text, &protection, Default::default(), control)?.warnings
                 } else {
-                    let (bytes,warnings)=encode_save_with_interrupt(&doc,target_text,format,opts,control)?;
-                    workspace.write_protected_with_interrupt(target_text,&bytes,&protection.sources,&protection.fingerprints,control)?;
+                    let (bytes, warnings) = encode_save_with_interrupt(&doc, target_text, format, opts, control)?;
+                    workspace.write_protected_with_interrupt(target_text, &bytes, &protection.sources, &protection.fingerprints, control)?;
                     warnings
                 }
             }
         };
-        // A layered document save (PSD, PSB or .pcraft) is a full write, not a flattened copy:
-        // record the current revision as saved so the session stops reporting `dirty`, and make
-        // the file the document's path. A flat export (PNG, JPEG, …) is a copy and leaves both
-        // alone (#1547).
+        warnings.extend(photocraft_engine::type_extra_cmds::missing_font_warnings(&doc));
+        // A layered document save (PSD, PSB, OpenRaster or .pcraft) that holds the whole document is a
+        // full write, not a flattened copy: record the current revision as saved so the session
+        // stops reporting `dirty`, and make the file the document's path. A flat export (PNG,
+        // JPEG, â€¦), or an OpenRaster file that drops part of it, is a copy and leaves both alone
+        // (#1547, #3806).
         let ext =
             format.map(|f| f.trim_start_matches('.').to_ascii_lowercase()).or_else(|| target.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()));
-        let layered = matches!(ext.as_deref(), Some("psd" | "psb")) || ext.as_deref() == Some(photocraft_format::EXTENSION);
-        if layered {
+        if ext.as_deref().is_some_and(|e| file_cmds::holds(&doc, e)) {
             // Saving by index must not retarget the next automation command.
             let previously_active = self.session.active_index();
             self.session.set_active(i);
-            if let Some(st) = self.session.active_mut() {
-                st.saved_revision = st.revision;
-                st.path = Some(target.to_string_lossy().into_owned());
-            }
+            let saved = self
+                .session
+                .active_mut()
+                .ok_or(photocraft_engine::EngineError::NoDocument)
+                .and_then(|state| state.saved_to(target.to_string_lossy().into_owned()));
             if let Some(active) = previously_active {
                 self.session.set_active(active);
             }
+            saved?;
         }
         Ok(json!({ "path": target.to_string_lossy(), "warnings": warnings }))
     }
@@ -457,21 +708,7 @@ impl Headless {
     }
 
     pub fn command_list(&self) -> Value {
-        Value::Array(
-            command_specs()
-                .iter()
-                .map(|c| {
-                    json!({
-                        "id": c.id,
-                        "label": c.label,
-                        "menu": c.menu,
-                        "shortcut": c.shortcut,
-                        "params": c.params,
-                        "enabled": self.session.is_enabled(c.id),
-                    })
-                })
-                .collect(),
-        )
+        Value::Array(command_specs().iter().map(|c| photocraft_engine::commands::list_entry(&self.session, c, self.session.disabled_reason(c.id))).collect())
     }
 
     pub fn command_run(&mut self, id: &str, params: Value) -> Result<Value, AutomationError> {
@@ -479,14 +716,26 @@ impl Headless {
     }
 
     /// Run a command; with `wait` false, a job-capable command (filters, Content-Aware Fill,
-    /// Photomerge, …) runs in the background and this returns `{"job": id}` at once (poll with
+    /// Photomerge, â€¦) runs in the background and this returns `{"job": id}` at once (poll with
     /// `jobs.list`, stop with `jobs.cancel`). Other commands finish before returning either way.
     pub fn command_start(&mut self, id: &str, params: Value, wait: bool) -> Result<Value, AutomationError> {
         let params = if params.is_null() { json!({}) } else { params };
         if !matches!(&self.filesystem, Filesystem::TrustedLocal) {
+            if id == "file.export.renderVideo" {
+                return self.render_video(params, |_, _| true);
+            }
             authorize_engine_command(id, &params)?;
         }
-        if matches!(id, "document.pixel.inspect" | "xcf.assess" | "xcf.inspect" | "xcf.composition.inspect" | "xcf.filter.inspect" | "xcf.resource.inspect" | "xcf.filter.graph.inspectPlan") {
+        if matches!(
+            id,
+            "document.pixel.inspect"
+                | "xcf.assess"
+                | "xcf.inspect"
+                | "xcf.composition.inspect"
+                | "xcf.filter.inspect"
+                | "xcf.resource.inspect"
+                | "xcf.filter.graph.inspectPlan"
+        ) {
             // These queries read the currently installed snapshot. Publishing
             // a queued job is a separate event, not an inspection side effect.
             return Ok(self.session.execute(id, params)?);
@@ -496,11 +745,41 @@ impl Headless {
             // A nonwaiting request still receives its completed inline result.
             return Ok(self.session.execute(id, params)?);
         }
-        if matches!(id, "xcf.link.substitute" | "xcf.link.recover" | "xcf.item.locks.set" |
-            "xcf.items.select" | "xcf.items.visibility.set" | "xcf.channel.overlay.set" |
-            "xcf.mask.enabled.set" | "xcf.mask.geometry.set" | "xcf.layer.affine.apply" | "xcf.filter.move" | "xcf.filter.remove" | "xcf.filter.insert" | "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.mask.enabled.set" | "xcf.indexed.pixel.set" | "xcf.indexed.palette.set" | "xcf.text.name.set" | "xcf.channel.name.set" | "xcf.channel.locks.set" | "xcf.channel.indicates.set" | "xcf.path.name.set" | "xcf.vector.fill.color.set" | "xcf.vector.stroke.color.set" |
-            "xcf.itemSet.create" | "xcf.itemSet.rename" | "xcf.itemSet.delete" | "xcf.itemSet.setMembers" |
-            "xcf.link.refresh" | "xcf.link.setPlacement" | "xcf.link.setTransform" | "layer.renameLayer") {
+        if matches!(
+            id,
+            "xcf.link.substitute"
+                | "xcf.link.recover"
+                | "xcf.item.locks.set"
+                | "xcf.items.select"
+                | "xcf.items.visibility.set"
+                | "xcf.channel.overlay.set"
+                | "xcf.mask.enabled.set"
+                | "xcf.mask.geometry.set"
+                | "xcf.layer.affine.apply"
+                | "xcf.filter.move"
+                | "xcf.filter.remove"
+                | "xcf.filter.insert"
+                | "xcf.filter.set"
+                | "xcf.filter.enable"
+                | "xcf.filter.mask.enabled.set"
+                | "xcf.indexed.pixel.set"
+                | "xcf.indexed.palette.set"
+                | "xcf.text.name.set"
+                | "xcf.channel.name.set"
+                | "xcf.channel.locks.set"
+                | "xcf.channel.indicates.set"
+                | "xcf.path.name.set"
+                | "xcf.vector.fill.color.set"
+                | "xcf.vector.stroke.color.set"
+                | "xcf.itemSet.create"
+                | "xcf.itemSet.rename"
+                | "xcf.itemSet.delete"
+                | "xcf.itemSet.setMembers"
+                | "xcf.link.refresh"
+                | "xcf.link.setPlacement"
+                | "xcf.link.setTransform"
+                | "layer.renameLayer"
+        ) {
             if !wait {
                 return Err(AutomationError::BadRequest(format!("{id}.context: synchronous dispatch is required")));
             }
@@ -515,5 +794,51 @@ impl Headless {
             photocraft_engine::jobs::Started::Done(v) => v,
             photocraft_engine::jobs::Started::Job(job) => json!({"job": job.0, "pending": true}),
         })
+    }
+}
+
+impl Headless {
+    /// A direct automation Render Video uses only the launch-time write capability. Nested
+    /// engine actions still reject this filesystem command until they can carry capabilities.
+    pub(crate) fn render_video(&mut self, params: Value, progress: impl FnMut(usize, usize) -> bool) -> Result<Value, AutomationError> {
+        self.sync_jobs();
+        let Filesystem::Workspace(workspace) = &self.filesystem else {
+            return Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into()));
+        };
+        let dir = params.get("dir").and_then(Value::as_str).ok_or_else(|| AutomationError::BadRequest("renderVideo needs `dir`".into()))?;
+        let mut outputs = workspace.export_sequence(dir)?;
+        let result = photocraft_engine::render_video_with(
+            &self.session,
+            &params,
+            |name, bytes| outputs.write(name, bytes).map_err(|e| photocraft_engine::EngineError::Other(e.to_string())),
+            progress,
+        );
+        match result {
+            Ok(value) => {
+                outputs.commit();
+                Ok(value)
+            }
+            Err(error) => {
+                outputs.cleanup()?;
+                Err(error.into())
+            }
+        }
+    }
+}
+
+/// Common tail of the two capability-scoped exports: the sequence keeps what it wrote, or drops
+/// every file it created, so a half-finished export never looks like a finished one.
+fn exported(dir: &str, written: photocraft_engine::Result<Vec<String>>, outputs: &mut ExportSequence) -> Result<Value, AutomationError> {
+    match written {
+        Ok(names) => {
+            outputs.commit();
+            let files: Vec<String> = names.iter().map(|name| format!("{dir}/{name}")).collect();
+            let count = files.len();
+            Ok(json!({"files": files, "count": count}))
+        }
+        Err(error) => {
+            outputs.cleanup()?;
+            Err(error.into())
+        }
     }
 }

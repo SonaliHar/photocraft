@@ -77,7 +77,9 @@ fn scaled(bounds: Rect, sx: f64, sy: f64) -> Result<Rect, RasterInputError> {
 /// Scale explicit source bounds about the document origin. Missing/outside samples use
 /// the exact source default, or repeat `bounds` edges when requested. Nearest and unit
 /// scale retain raw bytes; other methods premultiply/unpremultiply entirely in f64.
-/// Caller chooses the working color encoding. PreserveDetails sharpening is unsupported.
+/// Caller chooses the working color encoding. PreserveDetails sharpening and the
+/// upstream Smoother/Sharper/Automatic phase-and-pass policies are unsupported in
+/// this separate native-wide arithmetic lane.
 pub fn try_resize(
     source: &Surface,
     bounds: Rect,
@@ -87,7 +89,10 @@ pub fn try_resize(
 ) -> Result<(Surface, Rect), RasterInputError> {
     let format = source.format();
     checked_region_byte_len(bounds, format)?;
-    if options.filter == Resample::PreserveDetails {
+    if matches!(
+        options.filter,
+        Resample::PreserveDetails | Resample::BicubicSmoother | Resample::BicubicSharper | Resample::BicubicAutomatic
+    ) {
         return Err(RasterInputError::UnsupportedConversion);
     }
     let scaled_bounds = scaled(bounds, options.scale_x, options.scale_y)?;

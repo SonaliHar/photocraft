@@ -27,7 +27,9 @@ fn flag(p: &Value, k: &str, d: bool) -> bool {
 }
 
 /// A finite number param clamped to `range`, `default` when absent; non-numbers are an error.
-fn number(p: &Value, cmd: &str, k: &str, default: f64, range: std::ops::RangeInclusive<f64>) -> Result<f64> {
+/// A numeric param clamped to `range`; missing or null gives `default`, anything else not a
+/// finite number is BadParams. Shared with the Paint Bucket and Gradient opacity.
+pub(crate) fn number(p: &Value, cmd: &str, k: &str, default: f64, range: std::ops::RangeInclusive<f64>) -> Result<f64> {
     match p.get(k) {
         None | Some(Value::Null) => Ok(default),
         Some(v) => {
@@ -76,7 +78,10 @@ fn preflight_pixels(doc: &Document, id: LayerId, cmd: &str) -> Result<()> {
     crate::commands::check_pixels_unlocked(doc, id)?;
     let surface = doc.layer(id).and_then(Layer::surface).ok_or(EngineError::NoLayer(id))?;
     if matches!(surface.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64)
-        || doc.selection.as_ref().is_some_and(|selection| matches!(selection.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64))
+        || doc
+            .selection
+            .as_ref()
+            .is_some_and(|selection| matches!(selection.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64))
     {
         return Err(bad(cmd, "eraser sampling/composition for authoritative U32/F64 samples is unsupported"));
     }
@@ -87,7 +92,9 @@ fn preflight_pixels(doc: &Document, id: LayerId, cmd: &str) -> Result<()> {
 /// native lock. Imported alpha and inherited group locks are not unlocked.
 fn alpha_after_background_conversion(doc: &Document, layer: &Layer) -> Result<bool> {
     let locked = crate::xcf_item_locks::transparency_locked(doc, layer.id)?;
-    if !is_background(layer) { return Ok(locked); }
+    if !is_background(layer) {
+        return Ok(locked);
+    }
     let locks = crate::xcf_item_locks::effective_layer_locks(doc, layer.id)?;
     if locks.imported.alpha {
         return Err(EngineError::Other("eraser cannot promote a Background with imported alpha locks".into()));
@@ -175,8 +182,8 @@ fn background_eraser(s: &mut Session, p: &Value) -> Result<Value> {
     let stroke = Stroke { brush, points: pts };
     let dmg = s.edit("Background Eraser", |doc, _| {
         let selection = doc.selection.clone();
+        crate::extra_cmds::background_to_layer(doc, id);
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        unlock_background(l);
         let surf = l.surface_mut().ok_or_else(|| bad(CMD, "not a pixel layer"))?;
         Ok(apply_background_eraser(surf, &stroke, &bs, selection.as_ref()))
     })?;

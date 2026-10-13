@@ -78,7 +78,7 @@ pub fn import_native_stream_candidate<R: Read + Seek>(
     crate::xcf_export::active_implicit_profile(&document).map_err(|error| IoError::Unsupported(format!("native working profile: {error}")))?;
     poll(control)?;
     control.progress(1.0);
-    Ok(Some(ImportResult { document, warnings: Vec::new(), origin: ImportOrigin::writable(ImportFormat::Pcraft), assessment: None }))
+    Ok(Some(ImportResult { document, warnings: Vec::new(), origin: ImportOrigin::writable(ImportFormat::Pcraft), assessment: None , source_read_only: (ImportOrigin::writable(ImportFormat::Pcraft)).is_read_only(), preview_only: false}))
 }
 
 #[cfg(test)]

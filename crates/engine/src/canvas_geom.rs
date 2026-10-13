@@ -211,12 +211,12 @@ pub(crate) fn transform_doc_marks(doc: &mut Document, a: &Affine) {
     let [m0, m1, m2, m3, tx, ty] = a.m;
     let g = &mut doc.guides;
     if m1.abs() < EPS && m2.abs() < EPS {
-        g.horizontal.iter_mut().for_each(|y| *y = (m3 * f64::from(*y) + ty) as f32);
-        g.vertical.iter_mut().for_each(|x| *x = (m0 * f64::from(*x) + tx) as f32);
+        g.horizontal.iter_mut().for_each(|y| *y = m3 * *y + ty);
+        g.vertical.iter_mut().for_each(|x| *x = m0 * *x + tx);
     } else if m0.abs() < EPS && m3.abs() < EPS {
         // A horizontal guide at y becomes a vertical one at x' = m2·y + tx, and vice versa.
-        let v: Vec<f32> = g.horizontal.iter().map(|y| (m2 * f64::from(*y) + tx) as f32).collect();
-        let h: Vec<f32> = g.vertical.iter().map(|x| (m1 * f64::from(*x) + ty) as f32).collect();
+        let v: Vec<f64> = g.horizontal.iter().map(|y| m2 * y + tx).collect();
+        let h: Vec<f64> = g.vertical.iter().map(|x| m1 * x + ty).collect();
         g.horizontal = h;
         g.vertical = v;
     } else {
@@ -353,10 +353,10 @@ fn marks_with_interrupt(doc: &mut Document, a: &Affine, control: &Interrupt<'_>)
     for slice in &mut doc.slices.list { turn_poll(control)?; let mapped = map_box(a, [slice.rect.x0 as f64, slice.rect.y0 as f64, slice.rect.x1 as f64, slice.rect.y1 as f64]); finite_canvas(&mapped)?; slice.rect = map_rect(a, slice.rect); }
     let [m0, m1, m2, m3, tx, ty] = a.m;
     let guides = &mut doc.guides;
-    let map_guides = |values: &mut [f32], scale: f64, offset: f64| -> crate::Result<()> {
+    let map_guides = |values: &mut [f64], scale: f64, offset: f64| -> crate::Result<()> {
         for chunk in values.chunks_mut(256) { turn_poll(control)?; for value in chunk {
-            let next = scale * f64::from(*value) + offset;
-            if !next.is_finite() || next.abs() > f64::from(f32::MAX) { return Err(crate::EngineError::Other("Canvas guide exceeds finite f32 range".into())); } *value = next as f32;
+            let next = scale * *value + offset;
+            if !next.is_finite() { return Err(crate::EngineError::Other("Canvas guide exceeds finite f64 range".into())); } *value = next;
         } } Ok(())
     };
     if m1.abs() < EPS && m2.abs() < EPS { map_guides(&mut guides.horizontal, m3, ty)?; map_guides(&mut guides.vertical, m0, tx)?; }

@@ -1,5 +1,5 @@
 //! Held-parent destination protection and atomic replacement through capabilities.
-use super::{AuthorizedWorkspace, DENIED, file_error, relative_path};
+use super::{AuthorizedWorkspace, DENIED, file_error, request_path};
 use crate::AutomationError;
 use cap_std::fs::{Dir, OpenOptions};
 use std::{
@@ -23,7 +23,7 @@ impl<'a> Sources<'a> {
     fn paths(self) -> impl Iterator<Item = &'a str> {
         self.one.into_iter().chain(self.many.iter().map(String::as_str))
     }
-    fn validate(self, control: &photocraft_raster::Interrupt<'_>) -> Result<(), AutomationError> {
+    fn validate(self, workspace: &AuthorizedWorkspace, control: &photocraft_raster::Interrupt<'_>) -> Result<(), AutomationError> {
         poll(control)?;
         if self.many.len() > 4096 {
             return Err(AutomationError::BadRequest("automation protected source count exceeds limit".into()));
@@ -33,7 +33,7 @@ impl<'a> Sources<'a> {
             if path.is_empty() || path.len() > 4096 {
                 return Err(AutomationError::BadRequest("automation protected source path is empty or too long".into()));
             }
-            relative_path(path)?;
+            request_path(path, workspace.read.as_ref())?;
         }
         Ok(())
     }
@@ -65,7 +65,7 @@ impl<'a> Target<'a> {
         if photocraft_io::is_xcf_filename(request) {
             return Err(AutomationError::BadRequest("XCF is import-only; choose a writable format and destination".into()));
         }
-        let relative = relative_path(request)?;
+        let relative = request_path(request, workspace.write.as_ref())?;
         let root = workspace.write.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: write authority is absent")))?;
         let leaf = relative.file_name().ok_or_else(|| AutomationError::BadRequest("automation destination has no filename".into()))?.into();
         let parent_path = relative.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
@@ -77,16 +77,22 @@ impl<'a> Target<'a> {
         let root = self.workspace.write.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: write authority is absent")))?;
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let parent_path=self.relative.parent().filter(|path|!path.as_os_str().is_empty()).unwrap_or_else(||Path::new("."));
-            let current=root.dir.open_dir(parent_path).map_err(|error|file_error("recheck write parent",self.request,error))?;
-            let held=same_file::Handle::from_file(self.parent.try_clone().map_err(|error|file_error("identify held write parent",self.request,error))?.into_std_file()).map_err(|error|file_error("identify held write parent",self.request,error))?;
-            let current=same_file::Handle::from_file(current.into_std_file()).map_err(|error|file_error("identify current write parent",self.request,error))?;
-            if held!=current {return Err(AutomationError::BadRequest("automation destination parent changed during write".into()));}
+            let parent_path = self.relative.parent().filter(|path| !path.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+            let current = root.dir.open_dir(parent_path).map_err(|error| file_error("recheck write parent", self.request, error))?;
+            let held = same_file::Handle::from_file(
+                self.parent.try_clone().map_err(|error| file_error("identify held write parent", self.request, error))?.into_std_file(),
+            )
+            .map_err(|error| file_error("identify held write parent", self.request, error))?;
+            let current =
+                same_file::Handle::from_file(current.into_std_file()).map_err(|error| file_error("identify current write parent", self.request, error))?;
+            if held != current {
+                return Err(AutomationError::BadRequest("automation destination parent changed during write".into()));
+            }
         }
         for source in sources.paths() {
             poll(control)?;
             if let Some(read) = &self.workspace.read {
-                if read.identity == root.identity && relative_path(source)? == self.relative {
+                if read.identity == root.identity && request_path(source, self.workspace.read.as_ref())? == self.relative {
                     return Err(AutomationError::BadRequest("the original XCF source is protected; choose a different destination".into()));
                 }
             }
@@ -108,7 +114,7 @@ impl<'a> Target<'a> {
                         .read
                         .as_ref()
                         .ok_or_else(|| AutomationError::BadRequest("cannot establish source identity without read authority".into()))?;
-                    let original = read.dir.open(relative_path(source)?).map_err(|e| file_error("identify source", source, e))?;
+                    let original = read.dir.open(request_path(source, self.workspace.read.as_ref())?).map_err(|e| file_error("identify source", source, e))?;
                     let destination = file.try_clone().map_err(|e| file_error("identify destination", self.request, e))?;
                     let a = same_file::Handle::from_file(original.into_std()).map_err(|e| file_error("identify source", source, e))?;
                     let b = same_file::Handle::from_file(destination.into_std()).map_err(|e| file_error("identify destination", self.request, e))?;
@@ -139,7 +145,7 @@ pub(super) fn check_with_interrupt(
     fingerprints: &[String],
     control: &photocraft_raster::Interrupt<'_>,
 ) -> Result<(), AutomationError> {
-    sources.validate(control)?;
+    sources.validate(workspace, control)?;
     photocraft_io::source_protection::validate_fingerprints_with_interrupt(fingerprints, control).map_err(protection_error)?;
     poll(control)?;
     let target = Target::open(workspace, path)?;
@@ -158,10 +164,12 @@ pub(super) fn write_with_interrupt(
     fingerprints: &[String],
     control: &photocraft_raster::Interrupt<'_>,
 ) -> Result<(), AutomationError> {
-    write_stream_with_interrupt(workspace,path,sources,fingerprints,control,|file| {
+    write_stream_with_interrupt(workspace, path, sources, fingerprints, control, |file| {
         for chunk in bytes.chunks(64 << 10) {
-            poll(control)?;let written=file.write_all(chunk);poll(control)?;
-            written.map_err(|error|file_error("write temporary",path,error))?;
+            poll(control)?;
+            let written = file.write_all(chunk);
+            poll(control)?;
+            written.map_err(|error| file_error("write temporary", path, error))?;
         }
         Ok(())
     })
@@ -170,11 +178,14 @@ pub(super) fn write_with_interrupt(
 /// Caller prepares all bounded encoding state before entering this sink seam.
 /// The callback can seek the owned temp; it cannot publish or select another path.
 pub(super) fn write_stream_with_interrupt<R>(
-    workspace:&AuthorizedWorkspace,path:&str,sources:Sources<'_>,fingerprints:&[String],
-    control:&photocraft_raster::Interrupt<'_>,
-    write:impl FnOnce(&mut cap_std::fs::File)->Result<R,AutomationError>,
-) -> Result<R,AutomationError> {
-    sources.validate(control)?;
+    workspace: &AuthorizedWorkspace,
+    path: &str,
+    sources: Sources<'_>,
+    fingerprints: &[String],
+    control: &photocraft_raster::Interrupt<'_>,
+    write: impl FnOnce(&mut cap_std::fs::File) -> Result<R, AutomationError>,
+) -> Result<R, AutomationError> {
+    sources.validate(workspace, control)?;
     photocraft_io::source_protection::validate_fingerprints_with_interrupt(fingerprints, control).map_err(protection_error)?;
     poll(control)?;
     let target = Target::open(workspace, path)?;
@@ -188,7 +199,7 @@ pub(super) fn write_stream_with_interrupt<R>(
     let mut file = target.parent.open_with(&tmp, &options).map_err(|error| file_error("create write temporary", path, error))?;
     let written = (|| {
         poll(control)?;
-        let output=write(&mut file)?;
+        let output = write(&mut file)?;
         poll(control)?;
         let synced = file.sync_all();
         poll(control)?;
@@ -197,7 +208,13 @@ pub(super) fn write_stream_with_interrupt<R>(
     })();
     // Close before Windows rename. Cancellation/errors clean only the owned temp.
     drop(file);
-    let output=match written {Ok(output)=>output,Err(error)=>{let _=target.parent.remove_file(&tmp);return Err(error);}};
+    let output = match written {
+        Ok(output) => output,
+        Err(error) => {
+            let _ = target.parent.remove_file(&tmp);
+            return Err(error);
+        }
+    };
     let mut protection_failure = None;
     let result = photocraft_format::atomic::retry_rename(photocraft_format::atomic::RenameRetry::platform(), || {
         // Cancellation and protection are rechecked beneath the same held parent

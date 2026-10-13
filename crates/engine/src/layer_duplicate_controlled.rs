@@ -43,12 +43,15 @@ fn census(doc: &Document, control: &Interrupt<'_>) -> Result<usize> {
 }
 pub(crate) fn dispatch_preflight(session: &Session, params: &Value, _background: bool) -> Result<()> {
     if !params.is_null() {
-        let object = params.as_object().filter(|map| map.len() <= 4).ok_or_else(|| bad("expected bounded duplicate parameters"))?;
-        if !object.keys().all(|key| matches!(key.as_str(), "layer" | "inPlace" | "documentId" | "expectedRevision")) {
+        let object = params.as_object().filter(|map| map.len() <= 5).ok_or_else(|| bad("expected bounded duplicate parameters"))?;
+        if !object.keys().all(|key| matches!(key.as_str(), "layer" | "name" | "inPlace" | "documentId" | "expectedRevision")) {
             return Err(bad("unknown duplicate parameter"));
         }
     }
     explicit(params)?;
+    if params.get("name").is_some_and(|value| value.as_str().is_none_or(|name| name.len() > 2048 || name.contains('\0'))) {
+        return Err(bad("name must be a bounded string without NUL"));
+    }
     if let Some(value) = params.get("inPlace") {
         if !value.is_boolean() {
             return Err(bad("inPlace must be boolean"));
@@ -222,6 +225,16 @@ pub(crate) fn run(session: &mut Session, params: &Value) -> Result<Value> {
     selection.extend_from_slice(state.selection_ids());
     let view = state.channel_view.clone();
     let multiple = params.get("layer").is_none() && selection.len() > 1;
+    let copy_name = if multiple {
+        None
+    } else if let Some(name) = params.get("name").and_then(Value::as_str) {
+        let mut owned = String::new();
+        owned.try_reserve_exact(name.len()).map_err(|_| bad("copy name allocation"))?;
+        owned.push_str(name);
+        Some(owned)
+    } else {
+        None
+    };
     let requested = explicit(params)?.or(active).ok_or_else(|| bad("no active layer"))?;
     let in_place = params.get("inPlace").and_then(Value::as_bool).unwrap_or(false);
     let worker = snapshot.clone();
@@ -264,6 +277,11 @@ pub(crate) fn run(session: &mut Session, params: &Value) -> Result<Value> {
                     } else {
                         crate::commands::layer_copy(&document, id)?
                     };
+                    if let Some(name) = &copy_name {
+                        copy.name.clear();
+                        copy.name.try_reserve_exact(name.len()).map_err(|_| bad("copy name allocation"))?;
+                        copy.name.push_str(name);
+                    }
                     poll(control)?;
                     unique_copy_ids(&mut copy, &mut identities, output, 0, control)?;
                     let new_id = document.insert_above(Some(id), copy);

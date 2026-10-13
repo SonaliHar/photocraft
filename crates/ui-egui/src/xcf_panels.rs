@@ -18,6 +18,7 @@ mod filter_stack;
 mod filter_insert;
 mod filter_mask;
 mod graph_inspect;
+mod source_inspect;
 mod item_sets;
 mod indexed_palette;
 mod linked_image;
@@ -51,6 +52,7 @@ pub(crate) fn linked_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, laye
 
 pub(crate) fn editing_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: LayerId) {
     current_items::properties(app, ui, layer);
+    source_inspect::properties(app, ui, layer);
     indexed_palette::properties(app, ui, layer);
     layer_mask::properties(app, ui, layer);
     mask_geometry::properties(app, ui, layer);

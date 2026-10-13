@@ -12,7 +12,7 @@ pub(crate) const MAX_RENDER_PIXELS: u64 = 64 * 1024 * 1024;
 #[cfg(test)]
 fn render_bounded(eng: &mut photocraft_text::TextEngine, t: &mut TextLayer, dpi: f32, format: photocraft_color::PixelFormat) {
     let layout = eng.layout(t, dpi);
-    let warp = photocraft_text::render::layout_warp(&layout, t.warp.as_ref());
+    let warp = photocraft_text::render::layout_deform(&layout, t);
     let ink = photocraft_text::render::ink_rect_warped(&layout, &t.transform, warp.as_ref());
     if u64::from(ink.width()).saturating_mul(u64::from(ink.height())) > MAX_RENDER_PIXELS {
         t.cache = Some(photocraft_raster::Surface::new(photocraft_color::PixelFormat { alpha: true, ..format }));
@@ -102,14 +102,12 @@ pub(crate) fn prepare(doc: &mut Document) -> Result<(), crate::IoError> {
         let mut changed = false;
         for run in &mut text.runs {
             if let Some(ps) = &run.style.postscript_name
-                && !eng.fonts.has_family(&run.style.font_family)
-            {
-                let font = eng.fonts.resolve_postscript(ps);
-                if font.exact || eng.fonts.has_family(&font.family) {
-                    run.style.font_family = font.family;
-                    run.style.weight = font.weight;
-                    run.style.italic = font.italic;
-                    changed = true;
+                && !eng.fonts.faces(&run.style.font_family).iter().any(|face|face.postscript_name.as_deref()==Some(ps.as_str())) {
+                let font=eng.fonts.resolve_postscript(ps);
+                let installed=eng.fonts.has_family(&run.style.font_family);
+                let exact_recovery=font.exact && (!installed || font.family.strip_prefix(&run.style.font_family).is_some_and(|suffix|suffix.starts_with('-')));
+                if exact_recovery || (!installed && eng.fonts.has_family(&font.family)) {
+                    run.style.font_family=font.family;run.style.weight=font.weight;run.style.italic=font.italic;changed=true;
                 }
             }
         }

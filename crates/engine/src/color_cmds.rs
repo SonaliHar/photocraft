@@ -23,8 +23,8 @@ use serde_json::{Value, json};
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
-mod convert_controlled;
 mod assign_controlled;
+mod convert_controlled;
 pub(crate) fn assignment_dispatch_preflight(s: &Session, p: &Value, background: bool) -> Result<()> {
     assign_controlled::dispatch_preflight(s, p, background)
 }
@@ -52,7 +52,7 @@ pub struct ProofSetup {
 impl Default for ProofSetup {
     fn default() -> Self {
         ProofSetup {
-            name: Builtin::CoatedCmyk.id().into(),
+            name: "working-cmyk".into(),
             profile: Arc::new(Builtin::CoatedCmyk.profile().clone()),
             intent: Intent::RelativeColorimetric,
             bpc: true,
@@ -142,7 +142,8 @@ impl Default for ColorSettings {
         Self {
             working_rgb: Builtin::Srgb.id().into(),
             working_cmyk: Builtin::CoatedCmyk.id().into(),
-            working_gray: Builtin::SGray.id().into(),
+            // Photoshop's default working gray is Dot Gain 20 %.
+            working_gray: Builtin::DotGain20Compat.id().into(),
             policy_rgb: Policy::Preserve,
             policy_cmyk: Policy::Preserve,
             policy_gray: Policy::Preserve,
@@ -181,12 +182,17 @@ impl ColorSettings {
     }
 }
 
-/// Check that each working space resolves to a profile of the right colour space.
+/// Check that each working space resolves to the right colour space and RGB can be both a
+/// source and editing destination for the configured rendering intent.
 pub fn validate_settings(c: &ColorSettings) -> std::result::Result<(), String> {
     for (space, spec) in [(ColorSpace::Rgb, &c.working_rgb), (ColorSpace::Cmyk, &c.working_cmyk), (ColorSpace::Gray, &c.working_gray)] {
         let p = resolve_profile(spec, None, space_mode(space)).map_err(|e| e.to_string())?;
         if p.color_space != space {
             return Err(format!("working space `{spec}` is {:?}, not {space:?}", p.color_space));
+        }
+        if space == ColorSpace::Rgb {
+            p.pcs_to_device(c.intent()).map_err(|e| format!("working RGB space `{spec}` cannot be a destination for {}: {e}", c.intent().id()))?;
+            p.device_to_pcs(c.intent()).map_err(|e| format!("working RGB space `{spec}` cannot be a source for {}: {e}", c.intent().id()))?;
         }
     }
     let m = c.monitor_profile.as_str();
@@ -224,13 +230,16 @@ pub struct ColorState {
 
 impl ColorState {
     /// The working profile of a mode from Color Settings (the built-in default when the
-    /// setting does not resolve).
+    /// setting does not resolve or cannot be both an RGB source and editing destination).
     pub fn working(&self, mode: ColorMode) -> Arc<Profile> {
         let space = mode_space(mode);
         self.settings
             .working_spec(space)
             .and_then(|spec| resolve_profile(spec, None, Some(mode)).ok())
-            .filter(|p| p.color_space == space)
+            .filter(|p| {
+                p.color_space == space
+                    && (space != ColorSpace::Rgb || (p.pcs_to_device(self.settings.intent()).is_ok() && p.device_to_pcs(self.settings.intent()).is_ok()))
+            })
             .unwrap_or_else(|| working_profile(mode))
     }
 
@@ -253,8 +262,28 @@ impl ColorState {
     /// Cancellation remains a failure, rather than being reported as a kept
     /// profile and allowing a cancelled background open to publish a document.
     pub fn open_policy_with_interrupt(&self, doc: &mut Document, control: &photocraft_raster::Interrupt<'_>) -> Result<Value> {
+        self.open_policy_with_exif_and_interrupt(doc, false, control)
+    }
+    pub fn open_policy_with_exif_and_interrupt(&self, doc: &mut Document, ignore_exif: bool, control: &photocraft_raster::Interrupt<'_>) -> Result<Value> {
         control.check().map_err(|_| EngineError::Cancelled)?;
         let space = mode_space(doc.mode);
+        if !matches!(space, ColorSpace::Rgb | ColorSpace::Cmyk | ColorSpace::Gray) {
+            return Ok(json!({"action": "kept"}));
+        }
+        let exif_srgb = space == ColorSpace::Rgb
+            && !ignore_exif
+            && doc.icc_profile.is_none()
+            && doc.metadata.exif.as_deref().and_then(|e| photocraft_codecs::exif_color_space(e)) == Some(photocraft_codecs::EXIF_COLOR_SPACE_SRGB);
+        if exif_srgb {
+            doc.icc_profile = Some(Builtin::Srgb.profile().to_bytes().into());
+        }
+        let report = self.apply_open_policy(doc, space, control)?;
+        Ok(if exif_srgb { merge(report, json!({"exif": true})) } else { report })
+    }
+
+    /// [`ColorState::open_policy`] once the document's profile is known.
+    fn apply_open_policy(&self, doc: &mut Document, space: ColorSpace, control: &photocraft_raster::Interrupt<'_>) -> Result<Value> {
+        control.check().map_err(|_| EngineError::Cancelled)?;
         if !matches!(space, ColorSpace::Rgb | ColorSpace::Cmyk | ColorSpace::Gray) {
             return Ok(json!({"action": "kept"}));
         }
@@ -632,12 +661,24 @@ pub fn convert_surface(s: &Surface, from: ColorMode, to: PixelFormat, t: &Transf
     let mut dpo = vec![0.0f32; ds];
     t.convert_f32(&dp, ss, &mut dpo, ds, true);
     let mut out = Surface::with_default(to, &dpo);
-    // Convert all tiles in one parallel pass into a staging buffer, then store them.
-    let tiles: Vec<_> = s.tiles().map(|(c, t)| (*c, t.clone())).collect();
+    // Convert every distinct tile once, in one parallel pass into a staging buffer, then store
+    // them. Coordinates that share a tile (a filled background) share the converted one (#4531).
+    let mut distinct: Vec<std::sync::Arc<photocraft_raster::Tile>> = Vec::new();
+    let mut slot: std::collections::HashMap<*const photocraft_raster::Tile, usize> = std::collections::HashMap::new();
+    let tiles: Vec<(photocraft_geom::TileCoord, usize)> = s
+        .tiles()
+        .map(|(c, tile)| {
+            let i = *slot.entry(std::sync::Arc::as_ptr(tile)).or_insert_with(|| {
+                distinct.push(tile.clone());
+                distinct.len() - 1
+            });
+            (*c, i)
+        })
+        .collect();
     let tile_px = (photocraft_geom::TILE_SIZE * photocraft_geom::TILE_SIZE) as usize;
     let dst_len = tile_px * to.bytes_per_pixel();
-    let mut staging = vec![0u8; dst_len * tiles.len()];
-    let jobs: Vec<(&[u8], &mut [u8])> = tiles.iter().map(|(_, t)| t.bytes()).zip(staging.chunks_mut(dst_len.max(1))).collect();
+    let mut staging = vec![0u8; dst_len * distinct.len()];
+    let jobs: Vec<(&[u8], &mut [u8])> = distinct.iter().map(|t| t.bytes()).zip(staging.chunks_mut(dst_len.max(1))).collect();
     let kind = match sf.sample {
         SampleType::U8 => SampleKind::U8,
         SampleType::U16 => SampleKind::U16,
@@ -645,8 +686,17 @@ pub fn convert_surface(s: &Surface, from: ColorMode, to: PixelFormat, t: &Transf
         SampleType::U32 | SampleType::F64 => return Err(EngineError::Other("wide surface dispatch mismatch".into())),
     };
     t.convert_bytes_many(kind, jobs, ss, ds, true);
-    for ((c, _), bytes) in tiles.iter().zip(staging.chunks(dst_len.max(1))) {
-        out.tile_mut(*c).bytes_mut().copy_from_slice(bytes);
+    let mut converted: Vec<Option<std::sync::Arc<photocraft_raster::Tile>>> = vec![None; distinct.len()];
+    for (c, i) in tiles {
+        if let Some(Some(tile)) = converted.get(i) {
+            out.put_tiles([(c, tile.clone())]);
+            continue;
+        }
+        let Some(bytes) = staging.chunks(dst_len.max(1)).nth(i) else { continue };
+        out.tile_mut(c).bytes_mut().copy_from_slice(bytes);
+        if let Some(slot) = converted.get_mut(i) {
+            *slot = out.tile(c).cloned();
+        }
     }
     Ok(out)
 }
@@ -792,23 +842,24 @@ fn convert_color(c: &mut Color, from: ColorMode, to: ColorMode, t: &Transform) {
     c.c = nc;
 }
 
-fn convert_fill(f: &mut Fill, from: ColorMode, to: ColorMode, t: &Transform) {
+fn convert_fill(f: &mut Fill, cc: &mut dyn FnMut(&mut Color)) {
     match f {
-        Fill::Solid(c) => convert_color(c, from, to, t),
-        Fill::Gradient { stops, .. } => stops.iter_mut().for_each(|s| convert_color(&mut s.1, from, to, t)),
+        Fill::Solid(c) => cc(c),
+        Fill::Gradient { stops, .. } => stops.iter_mut().for_each(|s| cc(&mut s.1)),
         Fill::Pattern { .. } => {}
     }
 }
 
-fn convert_layer_colors(l: &mut Layer, from: ColorMode, to: ColorMode, t: &Transform) {
-    let mut cc = |c: &mut Color| convert_color(c, from, to, t);
+/// Applies `cc` to every colour value of `l` (fill, text, shape and effect colours), recursing
+/// into groups.
+fn convert_layer_colors(l: &mut Layer, cc: &mut dyn FnMut(&mut Color)) {
     let mut touched_fx = false;
     for e in &mut l.effects.items {
         touched_fx = true;
         match e {
             Effect::DropShadow(s) | Effect::InnerShadow(s) => cc(&mut s.color),
-            Effect::OuterGlow(g) | Effect::InnerGlow(g) => paint_colors(&mut g.paint, &mut cc),
-            Effect::Stroke(s) => paint_colors(&mut s.paint, &mut cc),
+            Effect::OuterGlow(g) | Effect::InnerGlow(g) => paint_colors(&mut g.paint, cc),
+            Effect::Stroke(s) => paint_colors(&mut s.paint, cc),
             Effect::ColorOverlay { color, .. } => cc(color),
             Effect::GradientOverlay { gradient, .. } => gradient.stops.iter_mut().for_each(|s| cc(&mut s.1)),
             Effect::Satin(s) => cc(&mut s.color),
@@ -821,7 +872,7 @@ fn convert_layer_colors(l: &mut Layer, from: ColorMode, to: ColorMode, t: &Trans
     }
     let _ = touched_fx;
     match &mut l.content {
-        LayerContent::Fill(f) => convert_fill(f, from, to, t),
+        LayerContent::Fill(f) => convert_fill(f, cc),
         LayerContent::Text(tx) => {
             cc(&mut tx.color);
             for r in &mut tx.runs {
@@ -830,15 +881,15 @@ fn convert_layer_colors(l: &mut Layer, from: ColorMode, to: ColorMode, t: &Trans
         }
         LayerContent::Shape(sh) => {
             if let Some(f) = &mut sh.fill {
-                convert_fill(f, from, to, t);
+                convert_fill(f, cc);
             }
             if let Some(s) = &mut sh.stroke {
-                convert_fill(&mut s.paint, from, to, t);
+                convert_fill(&mut s.paint, cc);
             }
         }
         LayerContent::Group(g) => {
             for c in &mut g.children {
-                convert_layer_colors(c, from, to, t);
+                convert_layer_colors(c, cc);
             }
         }
         _ => {}
@@ -859,7 +910,7 @@ fn convert_fill_with_interrupt(f: &mut Fill, from: ColorMode, to: ColorMode, t: 
     }
     Ok(())
 }
-fn paint_colors_with_interrupt(p: &mut FxPaint, cc: &mut impl FnMut(&mut Color) -> Result<()>) -> Result<()> {
+fn paint_colors_with_interrupt<F: FnMut(&mut Color) -> Result<()> + ?Sized>(p: &mut FxPaint, cc: &mut F) -> Result<()> {
     match p {
         FxPaint::Color(color) => cc(color)?,
         FxPaint::Gradient(gradient) => {
@@ -924,7 +975,7 @@ fn convert_layer_colors_with_interrupt(l: &mut Layer, from: ColorMode, to: Color
     Ok(())
 }
 
-fn paint_colors(p: &mut FxPaint, cc: &mut impl FnMut(&mut Color)) {
+fn paint_colors(p: &mut FxPaint, cc: &mut (impl FnMut(&mut Color) + ?Sized)) {
     match p {
         FxPaint::Color(c) => cc(c),
         FxPaint::Gradient(g) => g.stops.iter_mut().for_each(|s| cc(&mut s.1)),
@@ -935,7 +986,8 @@ fn paint_colors(p: &mut FxPaint, cc: &mut impl FnMut(&mut Color)) {
 /// Converts every pixel layer (and cached text/shape/smart pixels and fill caches) of `doc`
 /// from its profile to `dst`, switching the mode to `dst`'s colour space. Masks, alpha
 /// channels and the selection are untouched; fill, text, shape and effect colours are
-/// converted. The document is tagged with `dst`.
+/// converted. A Duotone document going to a colour space starts from its ink colours
+/// (the controlled ink conversion). The document is tagged with `dst`.
 pub fn convert_document(doc: &mut Document, dst: &Profile, intent: Intent, bpc: bool) -> Result<()> {
     convert_document_controlled(doc, dst, intent, bpc, &photocraft_raster::Interrupt::NONE, false)
 }
@@ -984,7 +1036,7 @@ fn convert_document_controlled(
         if controlled {
             convert_layer_colors_with_interrupt(l, from_mode, to_mode, &t, control)?;
         } else {
-            convert_layer_colors(l, from_mode, to_mode, &t);
+            convert_layer_colors(l, &mut |color| convert_color(color, from_mode, to_mode, &t));
         }
         // Preserved PSD blocks describing colours in the old mode no longer apply.
     }
@@ -1276,7 +1328,7 @@ impl Session {
         path: Option<String>,
         control: &photocraft_raster::Interrupt<'_>,
     ) -> Result<(usize, Value)> {
-        let report = self.color.open_policy_with_interrupt(&mut doc, control)?;
+        let report = self.color.open_policy_with_exif_and_interrupt(&mut doc, self.prefs().file_handling.ignore_exif_profile_tag, control)?;
         control.check().map_err(|_| EngineError::Cancelled)?;
         Ok((self.add_document_with_interrupt(doc, path, control)?, report))
     }
@@ -1316,7 +1368,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "edit.colorSettings",
             "Color Settings…",
             ["Edit"],
-            r##"{"workingRgb":"srgb|display-p3|adobe-rgb-compat|prophoto-compat|linear-srgb|rec2020","workingCmyk":"coated-cmyk","workingGray":"sgray|gray-gamma-2.2","policyRgb":"preserve|convert|off","policyCmyk":"preserve|convert|off","policyGray":"preserve|convert|off","askOnMismatch":bool=true,"askOnPaste":bool=true,"askOnMissing":bool=false,"intent":"relative|perceptual|saturation|absolute","blendTextGamma":1.0..2.2|bool=1.45,"bpc":bool=true,"dither":bool=true,"monitorProfile":"auto|srgb|display-p3|adobe-rgb-compat|prophoto-compat|rec2020","reset":bool=false} (working spaces and the monitor profile also accept .icc paths; monitor `auto` = the main display's profile when the platform provides it, else sRGB; the reply's `monitorStatus` says which profile is in use and why: source auto|manual|fallback, reason)"##,
+            r##"{"workingRgb":"srgb|display-p3|adobe-rgb-compat|prophoto-compat|linear-srgb|rec2020","workingCmyk":"coated-cmyk","workingGray":"dot-gain-20-compat|sgray|gray-gamma-2.2","policyRgb":"preserve|convert|off","policyCmyk":"preserve|convert|off","policyGray":"preserve|convert|off","askOnMismatch":bool=true,"askOnPaste":bool=true,"askOnMissing":bool=false,"intent":"relative|perceptual|saturation|absolute","blendTextGamma":1.0..2.2|bool=1.45,"bpc":bool=true,"dither":bool=true,"monitorProfile":"auto|srgb|display-p3|adobe-rgb-compat|prophoto-compat|rec2020","reset":bool=false} (working spaces and the monitor profile also accept .icc paths; monitor `auto` = the main display's profile when the platform provides it, else sRGB; the reply's `monitorStatus` says which profile is in use and why: source auto|manual|fallback, reason)"##,
             always,
             color_settings,
             true,
@@ -1359,6 +1411,29 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests {
     use super::*;
     use photocraft_geom::Rect;
+
+    /// Image › Mode to CMYK keeps a filled background's shared tile shared (#4531): one
+    /// converted tile for the whole grid, the same colour everywhere.
+    #[test]
+    fn mode_conversion_keeps_shared_tiles_shared() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 2048, "height": 1024, "background": "white"})).unwrap();
+        let distinct = |s: &Session| {
+            let doc = &s.active().unwrap().doc;
+            let surf = doc.layers[0].surface().unwrap();
+            let mut seen: Vec<_> = surf.tiles().map(|(_, t)| std::sync::Arc::as_ptr(t)).collect();
+            seen.sort();
+            seen.dedup();
+            (seen.len(), surf.tile_count())
+        };
+        let (before, count) = distinct(&s);
+        s.execute("image.mode.cmyk", json!({})).unwrap();
+        let (after, count_after) = distinct(&s);
+        assert_eq!((after, count_after), (before, count), "{before} distinct of {count} before");
+        let doc = &s.active().unwrap().doc;
+        let surf = doc.layers[0].surface().unwrap();
+        assert_eq!(surf.pixel(5, 5), surf.pixel(2000, 1000), "the same converted white everywhere");
+    }
 
     fn session(mode: &str, depth: u32) -> Session {
         let mut s = Session::new();
@@ -1516,7 +1591,10 @@ mod tests {
         let t = s.color.display_transform(doc(&s)).unwrap();
         let mut o = [0.0f32; 3];
         t.eval(&[0.5, 0.5, 0.5], &mut o);
-        assert!(o.iter().all(|v| (v - 0.5).abs() < 2e-3), "sGray displays as sRGB gray: {o:?}");
+        // The default working gray (Dot Gain 20 %-compatible, gamma 1.732) shows gray 0.5 as the
+        // sRGB value of linear 0.5^1.732, as Photoshop does: lighter than sGray's 0.5.
+        let want = photocraft_color::convert::linear_to_srgb(0.5f32.powf(1.732));
+        assert!(o.iter().all(|v| (v - want).abs() < 2e-3), "Dot Gain 20 % gray displays as {want}: {o:?}");
         let s = session("cmyk", 8);
         assert_eq!(composite_profile(doc(&s)).description, "sRGB IEC61966-2.1");
     }
@@ -1643,6 +1721,128 @@ mod settings_tests {
         let (_, r) = s.open_document(d, None).unwrap();
         assert_eq!(r["action"], "assigned");
         assert_eq!(desc(&s.active().unwrap().doc).as_deref(), Some("Display P3"));
+    }
+
+    /// Display P3 as an input profile with only an AToB table, like Apple's Wide Color Sharing
+    /// Profile embedded in iPhone photos.
+    fn input_only_p3() -> Profile {
+        let p3 = Builtin::DisplayP3.profile();
+        let t = Transform::new(p3, Builtin::LabD50.profile(), Intent::RelativeColorimetric, false).unwrap();
+        let clut = photocraft_cms::Clut::sample(vec![9; 3], 3, |inp, out| t.eval(inp, out));
+        let ident = || photocraft_cms::pipeline::Stage::Curves(vec![photocraft_cms::Curve::Identity; 3]);
+        let lut = photocraft_cms::profile::Lut {
+            kind: photocraft_cms::profile::LutKind::Ab,
+            inputs: 3,
+            outputs: 3,
+            stages: vec![ident(), photocraft_cms::pipeline::Stage::Clut(clut), ident()],
+        };
+        let mut p = p3.clone();
+        p.class = photocraft_cms::ProfileClass::Input;
+        p.pcs = photocraft_cms::Pcs::Lab;
+        p.description = "Input-only P3".into();
+        (p.matrix, p.trc) = (None, None);
+        p.a2b = [Some(lut), None, None];
+        p.b2a = [None, None, None];
+        p.with_encoded_bytes()
+    }
+
+    #[test]
+    fn input_only_profiles_are_converted_on_open() {
+        // #3876: an iPhone photo's input-only profile was kept as the document's space, so
+        // compositing anything into it failed with "RGB profile without matrix/TRC or BToA tags".
+        let input = input_only_p3();
+        assert!(Builtin::DisplayP3.profile().can_be_destination());
+        assert!(!input.can_be_destination());
+        let mut s = Session::new();
+        let mut d = tagged("srgb");
+        d.icc_profile = Some(input.to_bytes());
+        let (photo, r) = s.open_document(d, None);
+        assert_eq!((r["action"].as_str(), r["inputOnly"].as_bool(), r["ask"].as_bool()), (Some("converted"), Some(true), Some(true)));
+        let doc = &s.active().unwrap().doc;
+        assert!(desc(doc).unwrap().starts_with("sRGB"));
+        // Converted from P3, not reinterpreted as sRGB.
+        assert!((doc.layers[0].surface().unwrap().pixel(1, 1)[0] - 0.2).abs() > 0.01);
+        let (other, _) = s.open_document(tagged("srgb"), None);
+        s.execute("layer.copyToDocument", json!({"document": photo, "source": other})).unwrap();
+        // Off still discards the profile, and profiles that can be a destination are still kept.
+        s.execute("edit.colorSettings", json!({"policyRgb": "off"})).unwrap();
+        let mut d = tagged("srgb");
+        d.icc_profile = Some(input.to_bytes());
+        let (_, r) = s.open_document(d, None);
+        assert_eq!((r["action"].as_str(), r["inputOnly"].as_bool()), (Some("discarded"), Some(true)));
+        s.execute("edit.colorSettings", json!({"policyRgb": "preserve"})).unwrap();
+        let (_, r) = s.open_document(tagged("display-p3"), None);
+        assert_eq!((r["action"].as_str(), r.get("inputOnly")), (Some("kept"), None));
+    }
+
+    /// A little-endian EXIF block whose Exif IFD holds ColorSpace = `space`.
+    fn exif_color_space(space: u16) -> Vec<u8> {
+        let mut b = b"Exif\0\0II\x2a\0\x08\0\0\0".to_vec();
+        // IFD0: the Exif IFD pointer (LONG) to offset 26, then no next IFD.
+        b.extend([1, 0, 0x69, 0x87, 4, 0, 1, 0, 0, 0, 26, 0, 0, 0, 0, 0, 0, 0]);
+        // Exif IFD: ColorSpace (SHORT).
+        b.extend([1, 0, 0x01, 0xA0, 3, 0, 1, 0, 0, 0]);
+        b.extend(space.to_le_bytes());
+        b.extend([0, 0, 0, 0, 0, 0]);
+        b
+    }
+
+    fn untagged_camera_file(space: Option<u16>) -> Document {
+        let mut d = tagged("srgb");
+        d.icc_profile = None;
+        d.metadata.exif = space.map(|v| Arc::new(exif_color_space(v)));
+        d
+    }
+
+    /// The tag survives a real JPEG: written without an ICC profile, read back, opened as sRGB.
+    #[test]
+    fn exif_srgb_jpeg_round_trip() {
+        let mut s = Session::new();
+        s.execute("edit.colorSettings", json!({"workingRgb": "display-p3"})).unwrap();
+        let r = photocraft_io::export(&untagged_camera_file(Some(1)), "x.jpg", &photocraft_io::ExportOptions::default()).unwrap();
+        let back = photocraft_io::import("x.jpg", &r.bytes).unwrap().document;
+        assert!(back.icc_profile.is_none(), "no ICC profile in the file");
+        let (_, r) = s.open_document(back, None);
+        assert_eq!((r["action"].as_str(), r["exif"].as_bool()), (Some("kept"), Some(true)));
+        assert!(desc(&s.active().unwrap().doc).unwrap().starts_with("sRGB"));
+    }
+
+    /// #204: a camera file with no ICC profile but EXIF ColorSpace = sRGB opens as sRGB, as in
+    /// Photoshop; Ignore EXIF Profile Tag opens it untagged (the working space).
+    #[test]
+    fn exif_srgb_tag_unless_ignored() {
+        let mut s = Session::new();
+        // Working sRGB: tagged sRGB, nothing to ask.
+        let (_, r) = s.open_document(untagged_camera_file(Some(1)), None);
+        assert_eq!((r["action"].as_str(), r["exif"].as_bool(), r.get("ask")), (Some("kept"), Some(true), None));
+        assert!(desc(&s.active().unwrap().doc).unwrap().starts_with("sRGB"));
+        // Working Display P3, Preserve: it stays sRGB instead of being read as P3.
+        s.execute("edit.colorSettings", json!({"policyRgb": "preserve", "workingRgb": "display-p3"})).unwrap();
+        let (_, r) = s.open_document(untagged_camera_file(Some(1)), None);
+        assert_eq!((r["action"].as_str(), r["mismatch"].as_bool(), r["exif"].as_bool()), (Some("kept"), Some(true), Some(true)));
+        assert!(desc(&s.active().unwrap().doc).unwrap().starts_with("sRGB"));
+        // Convert: converted from sRGB to P3, so the pixel values change.
+        s.execute("edit.colorSettings", json!({"policyRgb": "convert"})).unwrap();
+        let (_, r) = s.open_document(untagged_camera_file(Some(1)), None);
+        assert_eq!(r["action"], "converted");
+        let d = &s.active().unwrap().doc;
+        assert_eq!(desc(d).as_deref(), Some("Display P3"));
+        assert!((d.layers[0].surface().unwrap().pixel(1, 1)[0] - 0.2).abs() > 0.01);
+        // Uncalibrated, no EXIF, or Ignore EXIF Profile Tag on: untagged, so the working space.
+        s.execute("edit.colorSettings", json!({"policyRgb": "preserve"})).unwrap();
+        for (space, ignore) in [(Some(0xFFFF), false), (None, false), (Some(1), true)] {
+            s.execute("prefs.set", json!({"path": "fileHandling.ignoreExifProfileTag", "value": ignore})).unwrap();
+            let (_, r) = s.open_document(untagged_camera_file(space), None);
+            assert_eq!((r["action"].as_str(), r.get("exif")), (Some("assigned"), None), "{space:?}, ignore {ignore}");
+            assert_eq!(desc(&s.active().unwrap().doc).as_deref(), Some("Display P3"));
+        }
+        // An embedded profile always wins over the EXIF tag.
+        s.execute("prefs.set", json!({"path": "fileHandling.ignoreExifProfileTag", "value": false})).unwrap();
+        let mut d = tagged("adobe-rgb-compat");
+        d.metadata.exif = Some(Arc::new(exif_color_space(1)));
+        let (_, r) = s.open_document(d, None);
+        assert_eq!((r["action"].as_str(), r.get("exif")), (Some("kept"), None));
+        assert_eq!(desc(&s.active().unwrap().doc), Some(Builtin::from_id("adobe-rgb-compat").unwrap().profile().description.clone()));
     }
 
     #[test]

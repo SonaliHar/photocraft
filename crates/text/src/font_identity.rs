@@ -7,61 +7,98 @@ use std::sync::{Arc, Mutex, Weak};
 const MAX_BYTES: usize = 16 << 20;
 const MAX_ENTRIES: usize = 64;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FontIdentityError { InputLimit, IdentityMismatch, Cancelled, Allocation }
+pub enum FontIdentityError {
+    InputLimit,
+    IdentityMismatch,
+    Cancelled,
+    Allocation,
+}
 impl std::fmt::Display for FontIdentityError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "authorized font byte identity: {self:?}") }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "authorized font byte identity: {self:?}")
+    }
 }
 impl std::error::Error for FontIdentityError {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FontByteIdentity { digest: [u8; 32], length: usize }
-impl FontByteIdentity {
-    pub fn sha256(&self) -> &[u8; 32] { &self.digest }
-    pub fn byte_len(&self) -> usize { self.length }
+pub struct FontByteIdentity {
+    digest: [u8; 32],
+    length: usize,
 }
-struct Entry { bytes: Weak<Vec<u8>>, identity: FontByteIdentity }
+impl FontByteIdentity {
+    pub fn sha256(&self) -> &[u8; 32] {
+        &self.digest
+    }
+    pub fn byte_len(&self) -> usize {
+        self.length
+    }
+}
+struct Entry {
+    bytes: Weak<Vec<u8>>,
+    identity: FontByteIdentity,
+}
 #[derive(Default)]
-pub struct FontIdentityCache { entries: Vec<Entry> }
+pub struct FontIdentityCache {
+    entries: Vec<Entry>,
+}
 fn poll(control: &Interrupt<'_>) -> Result<(), FontIdentityError> {
     control.check().map_err(|_| FontIdentityError::Cancelled)
 }
 fn digest(bytes: &[u8], control: &Interrupt<'_>) -> Result<FontByteIdentity, FontIdentityError> {
     poll(control)?;
-    if bytes.is_empty() || bytes.len() > MAX_BYTES { return Err(FontIdentityError::InputLimit); }
+    if bytes.is_empty() || bytes.len() > MAX_BYTES {
+        return Err(FontIdentityError::InputLimit);
+    }
     let mut digest = Sha256::new();
-    for chunk in bytes.chunks(4096) { poll(control)?; digest.update(chunk); }
+    for chunk in bytes.chunks(4096) {
+        poll(control)?;
+        digest.update(chunk);
+    }
     let digest: [u8; 32] = digest.finalize().into();
     poll(control)?;
     Ok(FontByteIdentity { digest, length: bytes.len() })
 }
 fn matches(identity: FontByteIdentity, expected: &[u8; 32], control: &Interrupt<'_>) -> Result<FontByteIdentity, FontIdentityError> {
     poll(control)?;
-    if &identity.digest != expected { return Err(FontIdentityError::IdentityMismatch); }
+    if &identity.digest != expected {
+        return Err(FontIdentityError::IdentityMismatch);
+    }
     poll(control)?;
     Ok(identity)
 }
 impl FontIdentityCache {
     /// Invalidate all supplied-byte identities; no source allocation is retained.
-    pub fn clear(&mut self) { self.entries.clear(); }
-    pub fn entry_count(&self) -> usize { self.entries.len() }
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
     /// Pointer equality is used only after upgrading a live Weak owner. Safe Arc
     /// mutation either fails while another strong owner exists or disconnects
     /// Weak owners through make_mut; a reused address cannot forge a cache hit.
     /// Every hit still compares the independently computed digest to expected.
     pub fn identify(&mut self, bytes: &Arc<Vec<u8>>, expected: &[u8; 32], control: &Interrupt<'_>) -> Result<FontByteIdentity, FontIdentityError> {
         poll(control)?;
-        if bytes.is_empty() || bytes.len() > MAX_BYTES { return Err(FontIdentityError::InputLimit); }
+        if bytes.is_empty() || bytes.len() > MAX_BYTES {
+            return Err(FontIdentityError::InputLimit);
+        }
         for entry in &self.entries {
             poll(control)?;
             if let Some(source) = entry.bytes.upgrade()
-                && Arc::ptr_eq(&source, bytes) && entry.identity.length == bytes.len()
-            { return matches(entry.identity, expected, control); }
+                && Arc::ptr_eq(&source, bytes)
+                && entry.identity.length == bytes.len()
+            {
+                return matches(entry.identity, expected, control);
+            }
         }
         let identity = matches(digest(bytes, control)?, expected, control)?;
         // Only successful uncancelled proofs enter the bounded cache. Dead Weak
         // owners are removed; content is never reread through an ambient locator.
         self.entries.retain(|entry| entry.bytes.strong_count() != 0);
         poll(control)?;
-        if self.entries.len() == MAX_ENTRIES { self.entries.remove(0); }
+        if self.entries.len() == MAX_ENTRIES {
+            self.entries.remove(0);
+        }
         self.entries.try_reserve(1).map_err(|_| FontIdentityError::Allocation)?;
         poll(control)?;
         self.entries.push(Entry { bytes: Arc::downgrade(bytes), identity });
@@ -78,11 +115,13 @@ pub fn invalidate_bundled_identity() {
 }
 pub fn identify_borrowed(bytes: &[u8], expected: &[u8; 32], control: &Interrupt<'_>) -> Result<FontByteIdentity, FontIdentityError> {
     poll(control)?;
-    let bundled = std::ptr::eq(bytes, super::INTER_REGULAR);
+    let bundled = std::ptr::eq(bytes, &super::INTER_REGULAR[..]);
     if bundled {
         // The lock never spans hashing or caller work: bounded scalar copy only.
         let cached = *BUNDLED_INTER.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(identity) = cached { return matches(identity, expected, control); }
+        if let Some(identity) = cached {
+            return matches(identity, expected, control);
+        }
     }
     let identity = matches(digest(bytes, control)?, expected, control)?;
     if bundled {
@@ -96,7 +135,9 @@ pub fn identify_borrowed(bytes: &[u8], expected: &[u8; 32], control: &Interrupt<
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn expected(bytes: &[u8]) -> [u8; 32] { Sha256::digest(bytes).into() }
+    fn expected(bytes: &[u8]) -> [u8; 32] {
+        Sha256::digest(bytes).into()
+    }
     #[test]
     fn mutable_owner_and_cancelled_hit_do_not_reuse_old_identity() {
         let mut bytes = Arc::new(vec![1, 2, 3]);
@@ -119,7 +160,8 @@ mod tests {
             retained.push(bytes);
         }
         assert_eq!(cache.entry_count(), MAX_ENTRIES);
-        cache.clear(); assert_eq!(cache.entry_count(), 0);
+        cache.clear();
+        assert_eq!(cache.entry_count(), 0);
         assert_eq!(cache.identify(&Arc::new(Vec::new()), &[0; 32], &Interrupt::NONE), Err(FontIdentityError::InputLimit));
     }
     #[test]

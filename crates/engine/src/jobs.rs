@@ -221,6 +221,8 @@ pub struct Jobs {
     /// Workers of cancelled jobs that may still be unwinding (native).
     #[cfg(not(target_arch = "wasm32"))]
     draining: Vec<std::thread::JoinHandle<()>>,
+    /// The context inline job work runs under (see [`Session::set_inline_job_ctx`]).
+    inline: Option<JobCtx>,
 }
 
 const RECENT: usize = 16;
@@ -257,7 +259,7 @@ fn independent_of_document(id: &str) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn read_path(name: &str, path: &str, ctx: &JobCtx) -> Result<photocraft_io::ImportResult> {
+fn read_path_with_svg_group_depth(name: &str, path: &str, ctx: &JobCtx, max_svg_group_depth: usize) -> Result<photocraft_io::ImportResult> {
     use std::io::{Seek, SeekFrom};
     ctx.check()?;
     // Only the already-authorized native OpenSource::Path lane reaches this
@@ -285,7 +287,7 @@ fn read_path(name: &str, path: &str, ctx: &JobCtx) -> Result<photocraft_io::Impo
             .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { EngineError::Other(format!("{path}: {error}")) })
     })?;
     ctx.check()?;
-    let imported = ctx.stage(0.02, 0.95, "Decoding", |control| photocraft_io::import_with(name, &bytes, control)).map_err(|error| match error {
+    let imported = ctx.stage(0.02, 0.95, "Decoding", |control| photocraft_io::import_with_svg_group_depth_and_interrupt(name, &bytes, max_svg_group_depth, control)).map_err(|error| match error {
         photocraft_io::IoError::Cancelled => EngineError::Cancelled,
         error => EngineError::Other(error.to_string()),
     })?;
@@ -294,8 +296,13 @@ fn read_path(name: &str, path: &str, ctx: &JobCtx) -> Result<photocraft_io::Impo
 }
 
 #[cfg(target_arch = "wasm32")]
-fn read_path(_name: &str, path: &str, _ctx: &JobCtx) -> Result<photocraft_io::ImportResult> {
+fn read_path_with_svg_group_depth(_name: &str, path: &str, _ctx: &JobCtx, _max_svg_group_depth: usize) -> Result<photocraft_io::ImportResult> {
     Err(EngineError::Other(format!("cannot open paths on the web: {path}")))
+}
+
+#[cfg(test)]
+fn read_path(name: &str, path: &str, ctx: &JobCtx) -> Result<photocraft_io::ImportResult> {
+    read_path_with_svg_group_depth(name, path, ctx, usize::MAX)
 }
 
 /// Run a job-capable command's heavy part. `work` runs on a worker thread when the command was
@@ -314,7 +321,7 @@ pub fn run<T: Send + 'static>(
     apply: impl FnOnce(&mut Session, T) -> Result<Value> + Send + 'static,
 ) -> Result<Value> {
     if !s.jobs.spawn || cfg!(target_arch = "wasm32") {
-        let t = work(&JobCtx::new())?;
+        let t = work(&s.jobs.inline.clone().unwrap_or_default())?;
         return apply(s, t);
     }
     if s.jobs.pending.is_some() {
@@ -384,7 +391,7 @@ pub fn edit_job<R: Send + 'static>(
 ) -> Result<Value> {
     if !s.jobs.spawn || cfg!(target_arch = "wasm32") {
         // Inline: exactly `Session::edit`, as before jobs existed.
-        let ctx = JobCtx::new();
+        let ctx = s.jobs.inline.clone().unwrap_or_default();
         let r = s.edit(label, |doc, active| f(doc, active, &ctx))?;
         return Ok(finish(r));
     }
@@ -426,6 +433,14 @@ pub enum OpenSource {
 pub const OPEN_JOB: &str = "file.open";
 
 impl Session {
+    /// Run the heavy part of inline (not background) job commands under `ctx`, so another thread
+    /// can cancel them: a live preview whose parameters changed stops its stale computation
+    /// (`Err(Cancelled)`, the document unchanged) instead of finishing it. `None` restores the
+    /// default, a context nothing can cancel.
+    pub fn set_inline_job_ctx(&mut self, ctx: Option<JobCtx>) {
+        self.jobs.inline = ctx;
+    }
+
     /// Run a command, in the background when it supports it (see [`jobs`](crate::jobs)). Errors
     /// like [`Session::execute`] for unknown, disabled or failing commands.
     pub fn start(&mut self, id: &str, params: Value) -> Result<Started> {
@@ -445,6 +460,7 @@ impl Session {
         };
         let name_w = name.to_string();
         let name_a = name.to_string();
+        let max_svg_group_depth = self.prefs().file_handling.rasterize_svg_groups_deeper_than as usize;
         self.start_job(
             OPEN_JOB,
             json!({"name": name}),
@@ -453,11 +469,11 @@ impl Session {
             move |ctx| {
                 ctx.progress(0.0, "Reading");
                 let imported = match source {
-                    OpenSource::Path(p) => read_path(&name_w, &p, ctx)?,
+                    OpenSource::Path(p) => read_path_with_svg_group_depth(&name_w, &p, ctx, max_svg_group_depth)?,
                     OpenSource::Bytes(bytes) => {
                         ctx.check()?;
                         ctx.progress(0.02, "Decoding");
-                        ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_with(&name_w, &bytes, ctl)).map_err(|e| match e {
+                        ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_with_svg_group_depth_and_interrupt(&name_w, &bytes, max_svg_group_depth, ctl)).map_err(|e| match e {
                             photocraft_io::IoError::Cancelled => EngineError::Cancelled,
                             e => EngineError::Other(e.to_string()),
                         })?
@@ -470,12 +486,13 @@ impl Session {
                 let origin = r.origin;
                 let (index, color) = ctx.stage(0.95, 1.0, "Preparing Document", |control| s.open_document_with_interrupt(r.document, None, control))?;
                 if let Some(state) = s.active_mut() {
+                    state.source_read_only = r.source_read_only;
                     state.set_import_origin(origin, &name_a, source_path.clone());
                     if source_path.as_deref().is_some_and(crate::file_cmds::is_template) {
                         state.path = None;
                     }
                 }
-                Ok(json!({"document": index, "name": name_a, "warnings": r.warnings, "color": color, "assessment": r.assessment}))
+                Ok(json!({"document": index, "name": name_a, "warnings": r.warnings, "color": color, "assessment": r.assessment, "previewOnly": r.preview_only}))
             },
         )
     }
@@ -560,6 +577,11 @@ impl Session {
     /// stays unchanged. The document is unlocked at once. False if no such job is running.
     pub fn cancel_job(&mut self, id: JobId) -> bool {
         let Some(i) = self.jobs.running.iter().position(|r| r.id == id) else { return false };
+        // A print worker can already have handed the job to the OS. Discarding its result
+        // would falsely report cancellation; removal belongs to the system print queue.
+        if matches!(self.jobs.running[i].command.as_str(), "file.print" | "file.printOneCopy") {
+            return false;
+        }
         let job = self.jobs.running.remove(i);
         job.ctx.cancel();
         self.end_job(&job, JobOutcome::Cancelled);
@@ -611,7 +633,7 @@ impl Session {
 
     /// Running jobs followed by the last few that ended (newest last), for `jobs.list`.
     pub fn jobs_with_recent(&self) -> Vec<JobInfo> {
-        self.jobs.recent.iter().cloned().chain(self.jobs()).collect()
+        self.jobs().into_iter().chain(self.jobs.recent.iter().cloned()).collect()
     }
 
     /// The running job that locks document `doc`, if any.
@@ -774,6 +796,9 @@ impl Session {
         if id == "layer.duplicate" {
             crate::layer_duplicate_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
         }
+        if matches!(id, "paint.stroke" | "paint.pencil") {
+            crate::brush_cmds::stroke_dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        }
         if matches!(id, "path.clippingPath.set" | "path.clippingPath.clear") {
             crate::vector_cmds::clipping_dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         }
@@ -788,6 +813,9 @@ impl Session {
         }
         if id == "path.stroke" {
             crate::vector_cmds::path_stroke_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if matches!(id, "path.moveAnchors" | "path.moveHandle" | "path.bendSegment" | "path.convertPoint") {
+            crate::path_edit_cmds::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         }
         if id == "layer.layerMask.revealSelection" {
             crate::layer_mask_storage_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
@@ -917,13 +945,27 @@ impl Session {
         if self.active().is_some_and(|state| state.doc.accounted().is_some()) {
             return Err(EngineError::Disabled(id.to_string(), "this command has not yet been qualified for an accounted native document".into()));
         }
+        // Last Filter runs as the filter it repeats: journaled, recorded in an action, faded and
+        // run as a job like that filter, so a recorded step replays the same filter anywhere
+        // (#3089), as Transform Again records its transform (#1440). With no filter yet it falls
+        // through to its own precondition.
+        if id == "filter.lastFilter"
+            && let Some((filter, p)) = crate::filters::last_filter(self).filter(|(f, _)| f != id)
+        {
+            return self.dispatch(&filter, p, background);
+        }
+        if id == "file.new" {
+            crate::document_preset_cmds::validate_new_params(self, &params)?;
+        }
+        crate::param_check::check(spec, &params)?;
+        crate::filters::validate_params(id, &params)?;
         // A floating selection drops before any other command (Undo puts it back instead).
         if let Some(v) = crate::float_cmds::before_command(self, id)? {
             return Ok(Started::Done(v));
         }
         // Pixel commands follow the Channels panel target unless the caller names one.
         let run_params = crate::channel_cmds::inject_target(self, id, crate::commands::inject_kind(id, params.clone()));
-        if let Err(why) = crate::smart_cmds::target_enabled(self, spec, &params).unwrap_or_else(|| self.precondition(spec, &run_params)) {
+        if let Err(why) = self.explicit_layer_enabled(spec, &params).unwrap_or_else(|| self.precondition(spec, &run_params)) {
             return Err(EngineError::Disabled(id.to_string(), why));
         }
         if let Some(why) = self.job_conflict(id, spec.journal) {
@@ -936,11 +978,20 @@ impl Session {
         self.coalesce_request = params.get("coalesce").and_then(Value::as_str).map(str::to_string);
         self.color_restrict = crate::channel_cmds::color_restriction(self, id, &run_params);
         self.jobs.spawn = background;
+        // Commands this one runs on its own behalf journal after this mark (#3067).
+        let nested_from = self.journal.len();
+        // A replayable command is recorded as one step, so recording pauses while it runs: an
+        // action it plays (a script step) must not flush the steps it ran so far into the action
+        // being recorded, nor move the recording mark past the entries it is about to replace.
+        let recording = if spec.journal && crate::actions_cmds::replayable(id) { self.actions.recording.take() } else { None };
         // Last-resort guard (AGENTS.md, Never crash): a command that panics anyway fails with an
         // error instead of taking the app down. `edit` only commits a document after its closure
         // returns, so the documents are unchanged.
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &run_params)))
             .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` failed with an internal error (logged); the document is unchanged"))));
+        if self.actions.recording.is_none() {
+            self.actions.recording = recording;
+        }
         self.jobs.spawn = false;
         self.coalesce_request = None;
         self.color_restrict = None;
@@ -966,14 +1017,15 @@ impl Session {
                 if xcf_query || matches!(id, "document.pixel.inspect" | "xcf.filter.graph.inspectPlan") {
                     return Ok(Started::Done(v));
                 }
-                self.after_command_result(id, params, spec.journal, &v)?;
+                self.after_command_result_nested(id, params, spec.journal, &v, Some(nested_from))?;
                 Ok(Started::Done(v))
             }
         }
     }
 
     /// Bookkeeping after a command (or a job's apply) succeeded.
-    fn after_command(&mut self, id: &str, params: Value, journal: bool) -> Result<()> {
+    /// Nested replayable commands replace the steps they dispatched in the journal.
+    fn after_command_nested(&mut self, id: &str, params: Value, journal: bool, nested_from: Option<usize>) -> Result<()> {
         // A layer-mask view ends when another layer becomes active (#196).
         if let Some(st) = self.active_mut() {
             crate::mask_view_cmds::fix(st);
@@ -981,24 +1033,34 @@ impl Session {
         crate::edit_menu_cmds::after_command(self, id)?;
         crate::automate_cmds::after_command(self, id)?;
         self.sync_preset_store();
-        if journal && !crate::brush_cmds::coalesce_journal(self, id, &params) {
+        if !journal {
+            return Ok(());
+        }
+        if let Some(from) = nested_from.filter(|_| crate::actions_cmds::replayable(id)) {
+            self.journal.truncate(from);
+        }
+        if !crate::brush_cmds::coalesce_journal(self, id, &params) {
             self.journal.push((id.to_string(), params));
         }
         Ok(())
     }
 
+    #[cfg(test)]
+    fn after_command_result(&mut self, id: &str, params: Value, journal: bool, result: &Value) -> Result<()> {
+        self.after_command_result_nested(id, params, journal, result, None)
+    }
     /// Cross-document channel edits publish their destination without
     /// switching tabs. Repair derived view/slice state on that destination.
-    fn after_command_result(&mut self, id: &str, params: Value, journal: bool, result: &Value) -> Result<()> {
+    fn after_command_result_nested(&mut self, id: &str, params: Value, journal: bool, result: &Value, nested_from: Option<usize>) -> Result<()> {
         if !matches!(id, "channel.duplicate" | "select.saveSelection") {
-            return self.after_command(id, params, journal);
+            return self.after_command_nested(id, params, journal, nested_from);
         }
         let index = result.get("document").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok())
             .filter(|i| self.docs.get(*i).is_some())
             .ok_or_else(|| EngineError::Other(format!("`{id}` returned an invalid destination")))?;
         let viewed = self.active;
         self.active = Some(index);
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.after_command(id, params, journal)))
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.after_command_nested(id, params, journal, nested_from)))
             .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` bookkeeping failed with an internal error"))));
         self.active = viewed;
         outcome
@@ -1038,11 +1100,18 @@ impl Session {
         };
         self.coalesce_request = coalesce.clone();
         self.color_restrict = *color_restrict;
+        // Apply-time hooks can dispatch commands too. Keep the same single-step recording
+        // contract as synchronous dispatch without truncating work done while the worker ran.
+        let nested_from = self.journal.len();
+        let recording = if *journal && crate::actions_cmds::replayable(command) { self.actions.recording.take() } else { None };
         let r = match apply {
             Some(f) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self, payload)))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{label}` failed with an internal error (logged); the document is unchanged")))),
             None => Err(EngineError::Other("internal error: job applied twice".into())),
         };
+        if self.actions.recording.is_none() {
+            self.actions.recording = recording;
+        }
         self.coalesce_request = None;
         self.color_restrict = None;
         // Finish successful command bookkeeping on the document the job edited.
@@ -1054,6 +1123,7 @@ impl Session {
                 "document.pixel.inspect"
                     | "xcf.assess"
                     | "xcf.inspect"
+                    | "xcf.source.inspect"
                     | "xcf.composition.inspect"
                     | "xcf.filter.inspect"
                     | "xcf.resource.inspect"
@@ -1061,7 +1131,7 @@ impl Session {
             )
         {
             match &r {
-                Ok(value) => self.after_command_result(command, params.clone(), *journal, value),
+                Ok(value) => self.after_command_result_nested(command, params.clone(), *journal, value, Some(nested_from)),
                 Err(_) => Ok(()),
             }
         } else {
@@ -1123,11 +1193,17 @@ pub fn specs() -> Vec<crate::commands::CommandSpec> {
                 None | Some(Value::Null) => {
                     let n = s.jobs.running.len();
                     s.cancel_all_jobs();
-                    Ok(json!({"cancelled": n}))
+                    Ok(json!({"cancelled": n.saturating_sub(s.jobs.running.len())}))
                 }
                 Some(v) => {
                     let id = v.as_u64().ok_or_else(|| EngineError::BadParams { cmd: "jobs.cancel".into(), msg: "`job` must be a job id".into() })?;
-                    if s.cancel_job(JobId(id)) { Ok(json!({"cancelled": 1})) } else { Err(EngineError::Other(format!("no running job {id}"))) }
+                    if s.cancel_job(JobId(id)) {
+                        Ok(json!({"cancelled": 1}))
+                    } else if s.job(JobId(id)).is_some() {
+                        Err(EngineError::Other("printing cannot be cancelled here; use the system print queue".into()))
+                    } else {
+                        Err(EngineError::Other(format!("no running job {id}")))
+                    }
                 }
             },
             journal: false,

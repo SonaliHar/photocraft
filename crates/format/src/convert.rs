@@ -6,7 +6,7 @@ use std::sync::Arc;
 use photocraft_color::{PixelFormat, SampleType};
 use photocraft_doc::{
     AlphaChannel, CompAppearance, CompLayerState, DocId, Document, Effects, FillCache, Group, Layer, LayerComp, LayerContent, LayerId, LayerMask, Metadata,
-    NamedPath, Pattern, ShapeLayer, SmartObject, SmartSource, TextLayer,
+    NamedPath, Pattern, ShapeLayer, SmartContentsId, SmartObject, SmartSource, TextLayer,
 };
 use photocraft_geom::{TILE_SIZE, TileCoord};
 use photocraft_raster::{Surface, Tile};
@@ -94,6 +94,7 @@ pub(crate) trait Fetch {
     }
 }
 
+#[cfg(test)]
 #[cfg(test)]
 pub(crate) fn checked_owned_bytes(bytes: Arc<Vec<u8>>, control: &photocraft_raster::Interrupt<'_>) -> Result<Vec<u8>> {
     if control.cancelled() {
@@ -336,7 +337,15 @@ pub(crate) fn unhex(s: &str) -> Result<Vec<u8>> {
     }
     (0..s.len())
         .step_by(2)
-        .map(|i| u8::from_str_radix(s.get(i..i + 2).unwrap_or("x"), 16).map_err(|_| FormatError::corrupt(format!("bad hex `{s}`"))))
+        .map(|i| {
+            let pair = s.get(i..i + 2).unwrap_or("x");
+            // `from_str_radix` accepts a leading `+`; reject anything that is not
+            // two ASCII hex digits so a malformed string fails as corrupt (#1818).
+            if !pair.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err(FormatError::corrupt(format!("bad hex `{s}`")));
+            }
+            u8::from_str_radix(pair, 16).map_err(|_| FormatError::corrupt(format!("bad hex `{s}`")))
+        })
         .collect()
 }
 
@@ -526,6 +535,7 @@ fn opt_blob(b: &Option<Arc<Vec<u8>>>, sink: &mut dyn Sink<'_>) -> Result<Option<
 fn video_m(v: &photocraft_doc::VideoData, sink: &mut dyn Sink<'_>) -> Result<crate::manifest::VideoDataM> {
     Ok(crate::manifest::VideoDataM {
         frames: mapped(&v.frames, sink, surface_m)?,
+        original_frames: v.original_frames.as_ref().map(|frames| mapped(frames, sink, surface_m)).transpose()?,
         source: metadata(&v.source, sink)?,
         fps: v.fps,
         show_altered: v.show_altered,
@@ -552,7 +562,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink<'_>) -> Result<LayerM> {
             psd_raw: opt_blob(&t.psd_raw, sink)?,
             runs: metadata_vec(&t.runs, sink)?,
             paragraphs: metadata_vec(&t.paragraphs, sink)?,
-            shape: t.shape,
+            shape: metadata(&t.shape, sink)?,
             orientation: t.orientation,
             antialias: t.antialias,
             warp: metadata(&t.warp, sink)?,
@@ -566,6 +576,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink<'_>) -> Result<LayerM> {
             live: metadata(&s.live, sink)?,
         },
         LayerContent::Smart(s) => ContentM::Smart {
+            contents_id: Some(s.contents_id.0),
             source: match &s.source {
                 SmartSource::Embedded { file_name, bytes } => SmartSourceM::Embedded { file_name: string(file_name, sink)?, blob: sink.blob(bytes)? },
                 SmartSource::Linked { path } => SmartSourceM::Linked { path: metadata(path, sink)? },
@@ -732,6 +743,7 @@ pub(crate) fn doc_m<'doc>(d: &'doc Document, sink: &mut dyn Sink<'doc>) -> Resul
         metadata: MetadataM {
             xmp: optional_string(&d.metadata.xmp, sink)?,
             exif: opt_blob(&d.metadata.exif, sink)?,
+            text: metadata_vec(&d.metadata.text, sink)?,
             psd_resources: mapped(&d.metadata.psd_resources, sink, |(id, n, b), sink| Ok((*id, string(n, sink)?, sink.blob(b)?)))?,
             psd_global_blocks: mapped(&d.metadata.psd_global_blocks, sink, |(s, k, b), sink| Ok((hex(s), hex(k), sink.blob(b)?)))?,
         },
@@ -742,6 +754,7 @@ pub(crate) fn doc_m<'doc>(d: &'doc Document, sink: &mut dyn Sink<'doc>) -> Resul
         work_path: metadata(&d.work_path, sink)?,
         clipping_path: metadata(&d.clipping_path, sink)?,
         quick_mask: d.quick_mask.as_ref().map(|c| channel_m(c, sink)).transpose()?,
+        quick_mask_unselected: d.quick_mask_unselected,
         patterns: mapped(&d.patterns, sink, |p, sink| {
             Ok(PatternM { id: string(&p.id, sink)?, name: string(&p.name, sink)?, width: p.width, height: p.height, surface: surface_m(&p.surface, sink)? })
         })?,
@@ -749,6 +762,7 @@ pub(crate) fn doc_m<'doc>(d: &'doc Document, sink: &mut dyn Sink<'doc>) -> Resul
         duotone: metadata(&d.duotone, sink)?,
         variables: metadata(&d.variables, sink)?,
         timeline: metadata(&d.timeline, sink)?,
+        file_encoding: d.file_encoding,
         layer_comps: mapped(&d.layer_comps, sink, comp_m)?,
         last_applied_comp: d.last_applied_comp,
         last_document_state: d.last_document_state.as_ref().map(|c| comp_m(c, sink)).transpose()?,
@@ -803,6 +817,13 @@ pub(crate) struct Loader<'a> {
     pub id_map: std::collections::HashMap<u64, LayerId>,
     pub channel_map: std::collections::HashMap<photocraft_doc::item_identity::ChannelId, photocraft_doc::item_identity::ChannelId>,
     pub path_map: std::collections::HashMap<photocraft_doc::item_identity::PathId, photocraft_doc::item_identity::PathId>,
+    pub contents_id_map: std::collections::HashMap<u64, SmartContentsId>,
+    pub legacy_linked_contents: std::collections::HashMap<String, SmartContentsId>,
+    /// Decoded tiles by content hash and sample type. Saves store a tile once however often it
+    /// is referenced (a solid fill shares one tile), so a load decodes and charges the byte
+    /// budget once per distinct tile and hands every reference the same copy-on-write `Arc`
+    /// (#3315). Grouped by sample type: in-memory byte order depends on it.
+    pub tiles: std::collections::HashMap<SampleType, std::collections::HashMap<Hash, Arc<Tile>>>,
 }
 
 impl Loader<'_> {
@@ -818,7 +839,21 @@ impl Loader<'_> {
         for frame in &m.frames {
             frames.push(self.surface(frame)?);
         }
-        Ok(photocraft_doc::VideoData { frames, source: self.model_clone(&m.source)?, fps: m.fps, show_altered: m.show_altered })
+        if m.original_frames.as_ref().is_some_and(|o| o.len() != frames.len()) {
+            return Err(FormatError::corrupt("video original frame count differs from edited frame count"));
+        }
+        let original_frames = m
+            .original_frames
+            .as_ref()
+            .map(|source| {
+                let mut original = self.model_vec(source.len())?;
+                for frame in source {
+                    original.push(self.surface(frame)?);
+                }
+                Ok::<_, FormatError>(original)
+            })
+            .transpose()?;
+        Ok(photocraft_doc::VideoData { frames, original_frames, source: self.model_clone(&m.source)?, fps: m.fps, show_altered: m.show_altered })
     }
 
     fn surface(&mut self, m: &SurfaceM) -> Result<Surface> {
@@ -834,6 +869,7 @@ impl Loader<'_> {
         // tile size): -8388608 ..= 8388606. A damaged manifest can name any index (#938).
         let fits = |i: i32| i.checked_mul(TILE_SIZE).is_some() && i.checked_add(1).and_then(|e| e.checked_mul(TILE_SIZE)).is_some();
         for t in &m.tiles {
+            self.fetch.model_poll(1)?;
             if !fits(t.tx) || !fits(t.ty) {
                 return Err(FormatError::corrupt(format!("tile ({}, {}) is outside the coordinate range", t.tx, t.ty)));
             }
@@ -841,9 +877,22 @@ impl Loader<'_> {
             if s.tile(c).is_some() {
                 return Err(FormatError::corrupt(format!("duplicate tile ({}, {})", t.tx, t.ty)));
             }
+            if let Some(tile) = self.tiles.get(&f.sample).and_then(|m| m.get(&t.hash)) {
+                // One hash names one byte string, so a cached tile of another length means
+                // the same hash was referenced from formats of different pixel sizes.
+                if tile.bytes().len() != len {
+                    return Err(FormatError::corrupt(format!("tile {} is referenced with different sizes", t.hash)));
+                }
+                s.put_tiles([(c, tile.clone())]);
+                continue;
+            }
             let mut bytes = self.fetch.tile(&t.hash, len)?;
             swap_to_le(&mut bytes, f.sample);
-            s.tile_mut(c).bytes_mut().copy_from_slice(&bytes);
+            self.fetch.model_reserve(1024)?;
+            s.try_tile_mut(c).map_err(|e| FormatError::LimitExceeded(e.to_string()))?.bytes_mut().copy_from_slice(&bytes);
+            if let Some(tile) = s.tile(c) {
+                self.tiles.entry(f.sample).or_default().insert(t.hash.clone(), tile.clone());
+            }
         }
         Ok(s)
     }
@@ -865,14 +914,23 @@ impl Loader<'_> {
     }
 
     fn id(&mut self, raw: u64) -> LayerId {
-        let id = if self.preserve_ids {
-            self.max_id = self.max_id.max(raw);
-            LayerId(raw)
-        } else {
-            LayerId::fresh()
-        };
+        let id = if self.preserve_ids { LayerId(raw) } else { LayerId::fresh() };
         self.id_map.insert(raw, id);
         id
+    }
+
+    fn contents_id(&mut self, raw: Option<u64>, source: &SmartSourceM) -> SmartContentsId {
+        if let Some(raw) = raw {
+            return *self.contents_id_map.entry(raw).or_insert_with(|| if self.preserve_ids { SmartContentsId(raw) } else { SmartContentsId::fresh() });
+        }
+        // Legacy embedded blobs may be deduplicated despite representing independent objects.
+        // Only a nonempty linked path provides an existing shared-source identity.
+        if let SmartSourceM::Linked { path } = source
+            && !path.is_empty()
+        {
+            return *self.legacy_linked_contents.entry(path.clone()).or_insert_with(SmartContentsId::fresh);
+        }
+        SmartContentsId::fresh()
     }
 
     fn comp(&mut self, m: &LayerCompM) -> Result<LayerComp> {
@@ -944,7 +1002,7 @@ impl Loader<'_> {
                     psd_raw: self.opt_blob(psd_raw)?,
                     runs: self.model_clone(runs)?,
                     paragraphs: self.model_clone(paragraphs)?,
-                    shape: *shape,
+                    shape: self.model_clone(shape)?,
                     orientation: *orientation,
                     antialias: *antialias,
                     warp: self.model_clone(warp)?,
@@ -958,8 +1016,9 @@ impl Loader<'_> {
                 cache: self.opt_surface(cache)?,
                 psd_raw: self.opt_blob(psd_raw)?,
             }),
-            ContentM::Smart { source, transform, smart_filters, cache, psd_raw, filters_enabled, filter_mask, warp, stack_mode, perspective } => {
+            ContentM::Smart { contents_id, source, transform, smart_filters, cache, psd_raw, filters_enabled, filter_mask, warp, stack_mode, perspective } => {
                 LayerContent::Smart(SmartObject {
+                    contents_id: self.contents_id(*contents_id, source),
                     source: match source {
                         SmartSourceM::Embedded { file_name, blob } => {
                             SmartSource::Embedded { file_name: self.model_clone(file_name)?, bytes: self.fetch.blob(blob)? }
@@ -1048,6 +1107,43 @@ impl Loader<'_> {
     }
 
     pub(crate) fn document_with_interrupt(&mut self, m: &DocM, control: &photocraft_raster::Interrupt<'_>) -> Result<Document> {
+        // Reserve every stored id before allocating identities missing from older bundles. If an
+        // id is implausibly large, remap the whole document while retaining shared contents groups.
+        if self.preserve_ids {
+            fn max_ids(layers: &[LayerM], depth: usize, max: &mut u64, control: &photocraft_raster::Interrupt<'_>) -> Result<()> {
+                if depth > MAX_GROUP_DEPTH && !layers.is_empty() {
+                    return Err(too_deep());
+                }
+                for l in layers {
+                    control.check().map_err(|_| FormatError::Cancelled)?;
+                    *max = (*max).max(l.id);
+                    match &l.content {
+                        ContentM::Group { children, .. } => max_ids(children, depth + 1, max, control)?,
+                        ContentM::Smart { contents_id: Some(id), .. } => *max = (*max).max(*id),
+                        _ => {}
+                    }
+                }
+                Ok(())
+            }
+            let mut max = m.id;
+            max_ids(&m.layers, 0, &mut max, control)?;
+            for channel in m.channels.iter().chain(m.quick_mask.iter()) {
+                control.check().map_err(|_| FormatError::Cancelled)?;
+                if let Some(id) = channel.id {
+                    max = max.max(id.0);
+                }
+            }
+            for path in &m.paths {
+                control.check().map_err(|_| FormatError::Cancelled)?;
+                if let Some(id) = path.id {
+                    max = max.max(id.0);
+                }
+            }
+            self.max_id = self.max_id.max(max);
+            if !reserve_ids_through(max) {
+                self.preserve_ids = false;
+            }
+        }
         if m.channels.len() > 10000 {
             return Err(FormatError::LimitExceeded("channels".into()));
         }
@@ -1063,6 +1159,7 @@ impl Loader<'_> {
         let mut md = Metadata {
             xmp: self.model_clone(&m.metadata.xmp)?,
             exif: self.opt_blob(&m.metadata.exif)?,
+            text: self.model_clone(&m.metadata.text)?,
             psd_resources: self.model_vec(m.metadata.psd_resources.len())?,
             psd_global_blocks: self.model_vec(m.metadata.psd_global_blocks.len())?,
         };
@@ -1079,6 +1176,15 @@ impl Loader<'_> {
         }
         let mut patterns = self.model_vec(m.patterns.len())?;
         for p in &m.patterns {
+            // Sizes come from the file: a pattern with no tiles can claim any size, and renderers
+            // allocate per pixel.
+            let max = photocraft_doc::pattern::MAX_EDGE;
+            if p.width == 0 || p.height == 0 {
+                return Err(FormatError::corrupt(format!("pattern `{}` is {}×{} px", p.name, p.width, p.height)));
+            }
+            if p.width > max || p.height > max {
+                return Err(FormatError::LimitExceeded(format!("pattern `{}` is {}×{} px (max {max} per side)", p.name, p.width, p.height)));
+            }
             patterns.push(Pattern {
                 id: self.model_clone(&p.id)?,
                 name: self.model_clone(&p.name)?,
@@ -1266,11 +1372,13 @@ impl Loader<'_> {
             work_path: self.model_clone(&m.work_path)?,
             clipping_path: self.model_clone(&m.clipping_path)?,
             quick_mask,
+            quick_mask_unselected: m.quick_mask_unselected,
             patterns,
             color_table: self.model_clone(&m.color_table)?,
             duotone: self.model_clone(&m.duotone)?,
             variables: self.model_clone(&m.variables)?,
             timeline: self.model_clone(&m.timeline)?,
+            file_encoding: m.file_encoding,
             layer_comps,
             last_applied_comp: m.last_applied_comp,
             last_document_state,
@@ -1689,5 +1797,39 @@ mod json_adapter_tests {
         let mut bytes = Vec::new();
         text.serialize(&mut serde_json::Serializer::with_formatter(&mut bytes, Observed(&maximum))).unwrap();
         assert!(maximum.get() > 8192);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unhex_rejects_leading_plus() {
+        // `u8::from_str_radix` accepts a leading `+`; unhex must not (#1818).
+        assert!(unhex("+5").is_err());
+        assert!(unhex("ab+5").is_err());
+        assert!(unhex("+5cd").is_err());
+    }
+
+    #[test]
+    fn unhex_rejects_non_hex_characters() {
+        assert!(unhex("zz").is_err());
+        assert!(unhex(" 1").is_err());
+        assert!(unhex("g0").is_err());
+    }
+
+    #[test]
+    fn unhex_accepts_valid_hex() {
+        assert_eq!(unhex("00").unwrap(), vec![0x00]);
+        assert_eq!(unhex("ff").unwrap(), vec![0xff]);
+        assert_eq!(unhex("0123456789abcdef").unwrap(), vec![0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]);
+        assert_eq!(unhex("FF").unwrap(), vec![0xff]);
+    }
+
+    #[test]
+    fn unhex_rejects_odd_length() {
+        assert!(unhex("0").is_err());
+        assert!(unhex("abc").is_err());
     }
 }
