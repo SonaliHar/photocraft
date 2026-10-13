@@ -38,12 +38,12 @@ entered. Gemini (the Nano Banana image models, default `gemini-nano-banana-2.1`)
 | Provider (id) | Credentials | Sent to | Results from | Prompt | Retention (vendor docs, 2026-10) |
 |---|---|---|---|---|---|
 | Google Gemini (`gemini`) | API key | generativelanguage.googleapis.com | inline | optional | per Google's terms |
-| FLUX.1 Fill [pro] · Black Forest Labs (`flux-fill.bfl`) | API key | api.bfl.ai | delivery-*.bfl.ai | optional (FLUX Erase without) | result URLs expire after 10 min |
-| FLUX.1 Fill [pro] · fal (`flux-fill.fal`) | API key | queue.fal.run | *.fal.media | optional | per the account's media-expiry setting |
-| FLUX.1 Fill [pro] · Replicate (`flux-fill.replicate`) | API token | api.replicate.com | replicate.delivery | optional | inputs and outputs deleted after 1 h |
+| FLUX.1 Fill [pro] · Black Forest Labs (`flux-fill.bfl`) | API key | `api.bfl.ai`, regional `*.bfl.ai` polling hosts | `*.bfl.ai` | optional (FLUX Erase without) | result URLs expire after 10 min |
+| FLUX.1 Fill [pro] · fal (`flux-fill.fal`) | API key | queue.fal.run | `fal.media`, `*.fal.media` | optional | per the account's media-expiry setting |
+| FLUX.1 Fill [pro] · Replicate (`flux-fill.replicate`) | API token | api.replicate.com | `replicate.delivery`, `*.replicate.delivery` | optional | inputs and outputs deleted after 1 h |
 | Adobe Firefly Fill (`firefly`) | client ID + secret | ims-na1.adobelogin.com, firefly-api.adobe.io | *.amazonaws.com (pre-signed) | required | uploads kept 7 days |
 | Ideogram 3.0 Inpaint (`ideogram-v3`) | API key | api.ideogram.ai | ideogram.ai | required | temporary URLs |
-| Bria Gen Fill and Erase (`bria`) | API token | engine.prod.bria-api.com | *.bria-api.com / *.bria.ai | optional (Erase without) | temporary URLs |
+| Bria Gen Fill and Erase (`bria`) | API token | engine.prod.bria-api.com | `*.bria-api.com` / `*.bria.ai` | optional (Erase without) | temporary URLs |
 | Stability AI Inpaint (`stability`) | API key | api.stability.ai | inline | optional | per Stability's terms |
 | OpenAI GPT Image (`openai`) | API key | api.openai.com | inline | optional | per OpenAI's terms |
 
@@ -57,10 +57,12 @@ Rules every provider follows:
 - Credentials are stored per provider in the OS credential store. A provider with several fields
   (Firefly's client ID and secret) keeps them as one JSON secret under one entry.
 - A request goes only to the hosts in the "Sent to" column. Where a service answers with a URL to
-  poll or download, the URL's host is checked against the provider's list before any credential is
-  sent to it, and a result is downloaded only from the hosts in "Results from". Anything else is an
-  error.
-- Requests run inside the cancellable job: cancelling stops polling and abandons the download.
+  poll or cancel, its host is checked against those hosts before any credential is sent to it, and
+  a result is downloaded only from hosts matching the "Results from" entries (`*.x` = any
+  subdomain of `x`, not `x` itself; an entry without `*` is that exact host). Anything else is an
+  error. Replicate also sends its token with the download, to its own delivery hosts.
+- Requests run inside the cancellable job: cancelling stops polling and skips the download; a
+  request already in flight finishes and its result is discarded.
 
 **Verified live (2026-10-12).** OpenAI, Stability, Bria and Black Forest Labs were exercised
 against the real services (a prompt fill and a promptless removal each). Ideogram's request reached
@@ -104,7 +106,8 @@ request (`PHOTOCRAFT_LIVE_REPLAY`). Gemini returns JPEG (its only output format)
 - Credentials live in the OS credential store: the macOS Keychain, Windows Credential Manager. On
   Linux and the BSDs they stay in process memory and are asked for again after a restart; they are
   never written to a file. Multi-field credentials are one JSON secret per provider.
-- Preferences hold only the default provider id and per-provider model
+- Preferences hold only the default provider id, the list of configured provider ids and
+  per-provider model
   (`dialogs["ui.generativeAiSettings"]`).
 - Credential fields are not dialog fields, so `ui.inspect` and the control channel never see them.
   An `ApiKey` never prints (`Debug` is redacted), errors never carry a response body, and a
