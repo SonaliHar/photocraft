@@ -2,6 +2,12 @@
 
 Update this at the end of every session: newest entry on top, keep it short.
 
+## 2026-10-13: local agent (MG-03), written up by Claude
+
+- LaMa ONNX verified: SHA-256 matches, tensors and value conventions found by experiment, CPU median 1,217 ms per 512×512 on the 7950X. Details: `agents/models/lama.md`; raw output in `E:\CraftML\work\lama-check\report.txt`.
+- The agent's run was interrupted after the main results (an extra size probe was cancelled), so Claude wrote the report and set MG-03 to `done`.
+- Next: PC-01 (Codex, running in the `E:\CraftML\work\wt\pc-01` worktree).
+
 ## 2026-10-13: local agent (PC-00)
 
 Baseline build and test of the fork **unchanged** (PC-00). No source file touched; `CARGO_TARGET_DIR=target/agent-local`, cold build (no `target/` before, empty `~/.cargo/registry`).
