@@ -314,7 +314,7 @@ fn duplicate_destinations_that_are_not_new_fail_cleanly() {
         json!({"document": []}),
         json!({"document": {}}),
         json!({"document": "other"}),
-        json!({"document": "new", "layer": 999_999}),
+        json!({"document": "new", "layer": u64::MAX}),
     ] {
         let before = (doc(&s, 0).clone(), s.documents().len(), s.active_index());
         let err = s.execute("layer.duplicate", p.clone()).unwrap_err().to_string();

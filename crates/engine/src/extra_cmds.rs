@@ -1624,7 +1624,7 @@ mod tests {
         let bg_locks = doc(&s).layer(bg).unwrap().locks;
         assert!(s.execute("layer.toggleLockTransparency", json!({"layer": bg.0})).is_err());
         assert_eq!(doc(&s).layer(bg).unwrap().locks, bg_locks, "the Background is left alone");
-        assert!(s.execute("layer.toggleLockTransparency", json!({"layer": 999_999})).is_err());
+        assert!(s.execute("layer.toggleLockTransparency", json!({"layer": u64::MAX})).is_err());
     }
 
     #[test]

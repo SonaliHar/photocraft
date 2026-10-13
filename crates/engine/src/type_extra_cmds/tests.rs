@@ -300,7 +300,7 @@ fn type_attaches_to_a_path_and_releases_it() {
     .unwrap();
     assert!(s.execute("type.attachToPath", json!({"subpath": 5})).is_err());
     assert!(s.execute("type.attachToPath", json!({"start": "far"})).is_err());
-    assert!(s.execute("type.attachToPath", json!({"shape": 9999})).is_err());
+    assert!(s.execute("type.attachToPath", json!({"shape": u64::MAX})).is_err());
     s.execute("type.attachToPath", json!({"start": 4})).unwrap();
     assert!(matches!(text(&s, id).shape, TextShape::Path { start, .. } if start == 4.0));
     let on_path = ink(&s, id);
