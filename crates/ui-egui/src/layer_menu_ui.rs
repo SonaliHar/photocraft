@@ -14,7 +14,7 @@ pub(crate) fn mask_toggle_label(enabled: bool) -> &'static str {
 }
 
 /// The command behind "Add Layer Mask" (the panel button and this menu). Like Photoshop, an active
-/// selection becomes the mask; ⌥ inverts it (Hide Selection, or Hide All without a selection).
+/// selection becomes the mask; ÃƒÂ¢Ã…â€™Ã‚Â¥ inverts it (Hide Selection, or Hide All without a selection).
 pub fn add_mask_command(has_selection: bool, alt: bool) -> &'static str {
     match (has_selection, alt) {
         (true, false) => "layer.layerMask.revealSelection",
@@ -26,7 +26,7 @@ pub fn add_mask_command(has_selection: bool, alt: bool) -> &'static str {
 
 /// What the Layers panel "Add a mask" button does for `layer` (#2075). Like Photoshop it never
 /// replaces a mask: a layer without a layer mask gets one ([`add_mask_command`]); a layer that
-/// already has one gets a vector mask instead (⌥: Hide All); a layer with both (or a shape layer,
+/// already has one gets a vector mask instead (ÃƒÂ¢Ã…â€™Ã‚Â¥: Hide All); a layer with both (or a shape layer,
 /// whose path is already its vector mask, with a layer mask) gets nothing (`None`).
 pub fn mask_button_command(layer: Option<&Layer>, has_selection: bool, alt: bool) -> Option<&'static str> {
     let l = layer?;
@@ -51,19 +51,19 @@ pub fn single_layer_only(id: &str) -> bool {
 
 /// The context menu entries for a layer (Photoshop 2026 order, trimmed to the layer kind).
 pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
-    let mut v: Vec<Entry> = vec![Some((tl!("Blending Options…"), "layer.layerStyle.blendingOptions"))];
+    let mut v: Vec<Entry> = vec![Some((tl!("Blending OptionsÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦"), "layer.layerStyle.blendingOptions"))];
     v.push(None);
-    v.push(Some((if multi { tl!("Duplicate Layers…") } else { tl!("Duplicate Layer…") }, "layer.duplicate")));
+    v.push(Some((if multi { tl!("Duplicate LayersÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦") } else { tl!("Duplicate LayerÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦") }, "layer.duplicate")));
     v.push(Some((if multi { tl!("Delete Layers") } else { tl!("Delete Layer") }, "layer.delete")));
     if !multi {
-        v.push(Some((tl!("Group from Layers…"), "layer.groupLayers")));
+        v.push(Some((tl!("Group from LayersÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦"), "layer.groupLayers")));
     }
     v.push(None);
     v.push(Some((tl!("Quick Export As PNG"), "layer.quickExportAsPng")));
-    v.push(Some((tl!("Export As…"), "layer.exportAs")));
+    v.push(Some((tl!("Export AsÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦"), "layer.exportAs")));
     v.push(None);
-    v.push(Some((tl!("Artboard from Layers…"), "layer.new.artboardFromLayers")));
-    v.push(Some((tl!("Frame from Layers…"), "layer.new.frameFromLayers")));
+    v.push(Some((tl!("Artboard from LayersÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦"), "layer.new.artboardFromLayers")));
+    v.push(Some((tl!("Frame from LayersÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦"), "layer.new.frameFromLayers")));
     v.push(None);
     v.push(Some((tl!("Convert to Smart Object"), "layer.smartObjects.convertToSmartObject")));
     if multi {
@@ -123,19 +123,19 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
 }
 
 /// The layer style menu of an effect row ("Effects" or one effect) under a layer (#2846), in
-/// Photoshop's order. It acts on that layer, like Layer ▸ Layer Style.
+/// Photoshop's order. It acts on that layer, like Layer ÃƒÂ¢Ã¢â‚¬â€œÃ‚Â¸ Layer Style.
 pub fn effects_entries() -> Vec<Entry> {
     vec![
-        Some((tl!("Blending Options…"), "layer.layerStyle.blendingOptions")),
+        Some((tl!("Blending OptionsÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦"), "layer.layerStyle.blendingOptions")),
         None,
         Some((tl!("Copy Layer Style"), "layer.layerStyle.copyLayerStyle")),
         Some((tl!("Paste Layer Style"), "layer.layerStyle.pasteLayerStyle")),
         Some((tl!("Clear Layer Style"), "layer.layerStyle.clear")),
         None,
-        Some((tl!("Global Light…"), "layer.layerStyle.globalLight")),
+        Some((tl!("Global LightÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦"), "layer.layerStyle.globalLight")),
         Some((tl!("Create Layer"), "layer.layerStyle.createLayer")),
         Some((tl!("Hide All Effects"), "layer.layerStyle.hideAllEffects")),
-        Some((tl!("Scale Effects…"), "layer.layerStyle.scaleEffects")),
+        Some((tl!("Scale EffectsÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦"), "layer.layerStyle.scaleEffects")),
     ]
 }
 
@@ -148,7 +148,7 @@ pub fn show(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bo
         let has_selection = app.session.active().is_some_and(|s| s.doc.selection.is_some());
         items(app, ui, l, on_set, entries(l, on_set, has_selection), actions);
         ui.separator();
-        if ui.button(tl!("Rename Layer…")).clicked() {
+        if ui.button(tl!("Rename LayerÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦")).clicked() {
             rename = true;
             ui.close();
         }
@@ -158,7 +158,7 @@ pub fn show(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bo
 }
 
 /// The menu of `l`'s layer-mask thumbnail (#4575), in Photoshop's order. It acts on `l`, which it
-/// selects first like the row menu. Photoshop's Mask Options… (the overlay colour) has no
+/// selects first like the row menu. Photoshop's Mask OptionsÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ (the overlay colour) has no
 /// command yet, so it is left out.
 pub fn show_mask(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, actions: &mut Vec<(String, Value)>) {
     let Some(mask) = &l.mask else { return };
@@ -171,7 +171,7 @@ pub fn show_mask(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, actio
         ];
         items(app, ui, l, false, edits, actions);
         ui.separator();
-        // ⌘⇧-, ⌘⌥- and ⌘⇧⌥-clicking the thumbnail, as menu items.
+        // ÃƒÂ¢Ã…â€™Ã‹Å“ÃƒÂ¢Ã¢â‚¬Â¡Ã‚Â§-, ÃƒÂ¢Ã…â€™Ã‹Å“ÃƒÂ¢Ã…â€™Ã‚Â¥- and ÃƒÂ¢Ã…â€™Ã‹Å“ÃƒÂ¢Ã¢â‚¬Â¡Ã‚Â§ÃƒÂ¢Ã…â€™Ã‚Â¥-clicking the thumbnail, as menu items.
         let loads =
             [(tl!("Add Mask to Selection"), "add"), (tl!("Subtract Mask from Selection"), "subtract"), (tl!("Intersect Mask with Selection"), "intersect")];
         for (label, operation) in loads {
@@ -182,7 +182,7 @@ pub fn show_mask(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, actio
             }
         }
         ui.separator();
-        if ui.add_enabled(crate::menus::is_enabled(app, "select.selectAndMask"), egui::Button::new(tl!("Select and Mask…"))).clicked() {
+        if ui.add_enabled(crate::menus::is_enabled(app, "select.selectAndMask"), egui::Button::new(tl!("Select and MaskÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦"))).clicked() {
             // Like double-clicking the thumbnail with that preference on: it refines the mask.
             actions.push(("layer.select".into(), json!({"layer": l.id.0})));
             actions.push(("ui.maskTarget".into(), json!(true)));
@@ -222,11 +222,21 @@ fn items(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bool,
                 // selected first when clicked, so its items stay available.
                 let is_active = app.session.active().is_some_and(|s| s.active_layer == Some(l.id));
                 let enabled = !(on_set && single_layer_only(id)) && if on_set || is_active { crate::menus::is_enabled(app, id) } else { true };
-                if ui.add_enabled(enabled, egui::Button::new(tl!(&label))).clicked() {
+                let storage = matches!(id,"layer.layerMask.revealAll"|"layer.layerMask.hideAll"|"layer.layerMask.delete"|"layer.layerMask.apply"|"layer.layerMask.hideSelection"|"layer.layerMask.fromTransparency"|"layer.layerMask.revealSelection");
+                let prepared = storage.then(||crate::xcf_panels::mask_storage_params(app,l.id,on_set,id));
+                let ready = prepared.as_ref().is_none_or(|params|params.is_ok());
+                let response = ui.add_enabled(enabled && ready, egui::Button::new(tl!(&label)));
+                if let Some(Err(error)) = &prepared {
+                    response.clone().on_disabled_hover_text(error);
+                }
+                if response.clicked() {
+                    // Capture parameters before the queued row focus change. Engine rechecks the
+                    // captured document/revision immediately before its one metadata transaction.
+                    let params = match prepared {Some(Ok(params))=>params,Some(Err(_))=>continue,None=>Value::Null};
                     if !on_set {
                         actions.push(("layer.select".into(), json!({"layer": l.id.0})));
                     }
-                    actions.push((id.into(), Value::Null));
+                    actions.push((id.into(), params));
                     ui.close();
                 }
             }
@@ -507,9 +517,9 @@ mod tests {
         let (thumbs, _) = crate::mask_thumbs_ui::recorded(&h.ctx, masked.0).expect("mask thumbnail drawn");
         let at = thumbs.iter().find(|(k, _)| *k == crate::mask_thumbs_ui::MaskKind::Pixel).unwrap().1.center();
         click(&mut h, at, PointerButton::Secondary);
-        assert!(h.query_by_label("Blending Options…").is_none(), "the mask menu, not the layer menu");
+        assert!(h.query_by_label("Blending OptionsÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦").is_none(), "the mask menu, not the layer menu");
         for item in
-            ["Disable Layer Mask", "Delete Layer Mask", "Apply Layer Mask", "Subtract Mask from Selection", "Intersect Mask with Selection", "Select and Mask…"]
+            ["Disable Layer Mask", "Delete Layer Mask", "Apply Layer Mask", "Subtract Mask from Selection", "Intersect Mask with Selection", "Select and MaskÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦"]
         {
             h.get_by_label(item);
         }
@@ -663,14 +673,14 @@ mod tests {
     fn multi_selection_menu_greys_what_acts_on_one_layer() {
         use egui_kittest::kittest::{NodeT, Queryable};
         let (h, _) = open_multi_selection_menu();
-        for label in ["Blending Options…", "Copy Layer Style"] {
+        for label in ["Blending OptionsÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦", "Copy Layer Style"] {
             assert!(h.get_by_label(label).accesskit_node().is_disabled(), "{label} works on one layer only");
         }
         for label in [
             "Quick Export As PNG",
-            "Export As…",
+            "Export AsÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦",
             "Add Layer Mask",
-            "Duplicate Layers…",
+            "Duplicate LayersÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦",
             "Delete Layers",
             "Convert to Smart Object",
             "Rasterize Layers",
@@ -787,7 +797,7 @@ mod tests {
         assert!(mask.pixel(1, 5)[0] > 0.99 && mask.pixel(8, 5)[0] < 0.01);
     }
 
-    /// #2075: clicking the mask button again (with or without ⌥) used to replace the layer's
+    /// #2075: clicking the mask button again (with or without ÃƒÂ¢Ã…â€™Ã‚Â¥) used to replace the layer's
     /// mask, discarding what was painted into it. Like Photoshop, it now adds a vector mask, and
     /// does nothing once the layer has both.
     #[test]
@@ -813,7 +823,7 @@ mod tests {
             .unwrap();
             let painted = layer(&s).mask.unwrap().surface.pixel(3, 3)[0];
             assert!((painted - 0.5).abs() < 0.01);
-            // Second click: a vector mask (⌥ hides all), the layer mask is untouched.
+            // Second click: a vector mask (ÃƒÂ¢Ã…â€™Ã‚Â¥ hides all), the layer mask is untouched.
             let second = mask_button_command(Some(&layer(&s)), false, alt).unwrap();
             assert_eq!(second, if alt { "layer.vectorMask.hideAll" } else { "layer.vectorMask.revealAll" });
             s.execute(second, json!({})).unwrap();

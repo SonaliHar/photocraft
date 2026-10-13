@@ -71,6 +71,12 @@ pub struct OwnedPreparedCurveTables {
     tables: [[f64; 256]; 5],
 }
 impl OwnedPreparedCurveTables {
+    /// Fixed owned tables, validated once without intermediate heap vectors.
+    pub fn try_from_tables(tables: [[f64; 256]; 5]) -> Result<Self, RasterInputError> {
+        for samples in &tables { FreeCurve { samples }.validate()?; }
+        Ok(Self { tables })
+    }
+
     pub fn try_new(tables: [Vec<f64>; 5]) -> Result<Self, RasterInputError> {
         let [value, red, green, blue, alpha] = tables;
         Ok(Self { tables: [copy_table(&value)?, copy_table(&red)?, copy_table(&green)?, copy_table(&blue)?, copy_table(&alpha)?] })

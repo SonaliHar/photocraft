@@ -1,4 +1,4 @@
-//! Window › Actions, as engine commands (`actions.record` / `stop` / `play` / `list` / `get` /
+//! Window â€º Actions, as engine commands (`actions.record` / `stop` / `play` / `list` / `get` /
 //! `delete` / `move` / `rename` / `toggle`).
 //!
 //! The list lives on [`Session`] so the panel, the CLI, the control channel and MCP share one
@@ -14,6 +14,9 @@
 //! step, because the outer `actions.play` id would otherwise hide a recorded `file.*` command from
 //! the top-level check.
 
+#[path = "action_recipe.rs"]
+mod action_recipe;
+
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
@@ -26,7 +29,7 @@ fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
 
-/// One recorded action. `steps` is the `[[id, params], …]` shape `file.automate.batch` and
+/// One recorded action. `steps` is the `[[id, params], â€¦]` shape `file.automate.batch` and
 /// droplets already accept.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Action {
@@ -115,7 +118,7 @@ pub fn replayable(id: &str) -> bool {
             && (shell_view_command(id) || shell_save_command(id) || crate::commands::find(id).is_some_and(|c| c.journal)))
 }
 
-/// File › Save, Save As and Save a Copy, recorded by the desktop shell once the save has a path
+/// File â€º Save, Save As and Save a Copy, recorded by the desktop shell once the save has a path
 /// (#2032, #4373). The shell replays them; batch and droplets write to their destination folder
 /// instead.
 pub fn shell_save_command(id: &str) -> bool {
@@ -281,12 +284,20 @@ pub(crate) fn flush_recording(s: &mut Session) -> Result<()> {
     if idx >= s.actions.list.len() {
         return Err(bad("actions.stop", "the action being recorded no longer exists"));
     }
-    let steps: Vec<_> = pending_steps(s, idx).cloned().collect();
-    s.actions.recording = Some((s.journal.len(), idx));
+    let count=pending_steps(s,idx).count();
+    let mut steps=Vec::new();
+    steps.try_reserve_exact(count).map_err(|_|bad("actions.stop","cannot allocate recorded steps"))?;
+    for (id,params) in pending_steps(s,idx) {
+        steps.push((id.clone(),action_recipe::normalize(id,params.clone())?));
+    }
+    // Complete all normalization and reserve publication storage before advancing the cursor.
+    let action=s.actions.list.get_mut(idx).ok_or_else(||bad("actions.stop","the action being recorded no longer exists"))?;
+    action.steps.try_reserve(steps.len()).map_err(|_|bad("actions.stop","cannot allocate recorded steps"))?;
     if !steps.is_empty() {
-        s.actions.list[idx].steps.extend(steps);
+        action.steps.extend(steps);
         s.actions.touch();
     }
+    s.actions.recording = Some((s.journal.len(), idx));
     Ok(())
 }
 
@@ -570,7 +581,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "List Actions",
             menu: &[],
             shortcut: None,
-            params: "{} → {actions:[{name, steps:count, set:name|null}], recording:name|null}",
+            params: "{} â†’ {actions:[{name, steps:count, set:name|null}], recording:name|null}",
             enabled: always,
             run: list,
             journal: false,
@@ -580,7 +591,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Get Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index} → {name, steps:[[id, params]…], disabled:[step…], dialogs:[step…], set:name|null} (steps is the shape file.automate.batch and droplets take; disabled lists the 0-based steps playback skips; dialogs the steps whose dialog Photoshop would show; set the action set from Load Actions)"##,
+            params: r##"{"action":name|index} â†’ {name, steps:[[id, params]â€¦], disabled:[stepâ€¦], dialogs:[stepâ€¦], set:name|null} (steps is the shape file.automate.batch and droplets take; disabled lists the 0-based steps playback skips; dialogs the steps whose dialog Photoshop would show; set the action set from Load Actions)"##,
             enabled: always,
             run: get,
             journal: false,
@@ -590,7 +601,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Record Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"name":str? (new action, default "Action N")} or {"action":name|index} (append) → {action, index}"##,
+            params: r##"{"name":str? (new action, default "Action N")} or {"action":name|index} (append) â†’ {action, index}"##,
             enabled: always,
             run: record,
             journal: false,
@@ -600,7 +611,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Stop Recording",
             menu: &[],
             shortcut: None,
-            params: "{} → {action, steps:count} (steps recorded since actions.record, queries and action-editing commands omitted)",
+            params: "{} â†’ {action, steps:count} (steps recorded since actions.record, queries and action-editing commands omitted)",
             enabled: always,
             run: stop,
             journal: false,
@@ -610,7 +621,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Play Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index, "from":step?} → {action, ran, failed?:{step, id, error}}. step and from are 0-based; steps switched off with actions.toggle are skipped. Stops at the first error (the command still returns ok, with failed set) and leaves one history step per step that ran. Nested calls are supported up to 16 levels; cycles are rejected. Recording stores a named call rather than its expanded commands. Each step is checked with Session::authorize when one is installed."##,
+            params: r##"{"action":name|index, "from":step?} â†’ {action, ran, failed?:{step, id, error}}. step and from are 0-based; steps switched off with actions.toggle are skipped. Stops at the first error (the command still returns ok, with failed set) and leaves one history step per step that ran. Nested calls are supported up to 16 levels; cycles are rejected. Recording stores a named call rather than its expanded commands. Each step is checked with Session::authorize when one is installed."##,
             enabled: always,
             run: play,
             journal: false,
@@ -620,7 +631,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Delete Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index, "step":index?} → {deleted:name} or {action, deletedStep, steps:count}. step is 0-based, including pending recorded steps. Whole-action deletion is refused while recording."##,
+            params: r##"{"action":name|index, "step":index?} â†’ {deleted:name} or {action, deletedStep, steps:count}. step is 0-based, including pending recorded steps. Whole-action deletion is refused while recording."##,
             enabled: always,
             run: delete,
             journal: false,
@@ -630,7 +641,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Toggle Action Steps",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index, "step":index?, "enabled":bool?} → {action, disabled:[step…]}. Switch one 0-based step (including pending recorded steps) on or off for playback, Batch and droplets; omitted enabled flips it. Without step, switch every step: on unless all already are, or as enabled says."##,
+            params: r##"{"action":name|index, "step":index?, "enabled":bool?} â†’ {action, disabled:[stepâ€¦]}. Switch one 0-based step (including pending recorded steps) on or off for playback, Batch and droplets; omitted enabled flips it. Without step, switch every step: on unless all already are, or as enabled says."##,
             enabled: always,
             run: toggle,
             journal: false,
@@ -640,7 +651,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Rename Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index, "name":str} → {action, index}. The name must not be empty or whitespace-only and must be unique. Nested Play Action steps and the action's function key follow the rename."##,
+            params: r##"{"action":name|index, "name":str} â†’ {action, index}. The name must not be empty or whitespace-only and must be unique. Nested Play Action steps and the action's function key follow the rename."##,
             enabled: always,
             run: rename,
             journal: false,
@@ -1269,7 +1280,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// AUTO-219-4: a recording made on one document replays on a second one — a crop, a filter,
+    /// AUTO-219-4: a recording made on one document replays on a second one â€” a crop, a filter,
     /// a selection fill and styled text all act on the document the replay runs in.
     #[test]
     fn a_recorded_edit_run_replays_on_a_second_document() {

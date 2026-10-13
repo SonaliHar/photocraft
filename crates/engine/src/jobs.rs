@@ -820,6 +820,16 @@ impl Session {
         if id == "layer.layerMask.revealSelection" {
             crate::layer_mask_storage_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
         }
+        if id == "select.inverse" {
+            crate::selection_inverse_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if matches!(id, "edit.fill" | "edit.clear") {
+            crate::native_gray_fill_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        }
+        crate::layer_mask_storage_controlled::actions_dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        if matches!(id, "edit.copy" | "edit.cut" | "edit.paste" | "edit.pasteSpecial.pasteInPlace" | "edit.pasteSpecial.pasteInto" | "edit.pasteSpecial.pasteOutside") {
+            crate::channel_clip::native_gray_dispatch_preflight(self, &params, &photocraft_raster::Interrupt::NONE)?;
+        }
         crate::xcf_item_set_manage_cmds::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         crate::xcf_vector_guard::pre_dispatch(self, id, &params)?;
         if id == "layer.renameLayer" {

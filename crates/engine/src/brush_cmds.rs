@@ -436,6 +436,12 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
     let (id, brush, zoom) = stroke_target(s, p, brush)?;
     let restricted_color = s.color_restrict.is_some();
     let cmyk = doc_cmyk_space(s);
+    let reflected = match &symmetry {
+        Some(axis) => stroke_controlled::prepare_reflected_passes(
+            axis, &pts, photocraft_paint::stroke_controlled::StrokeLimits::default(), &photocraft_raster::Interrupt::NONE,
+        )?,
+        None => Vec::new(),
+    };
     // The live stroke the canvas already rendered for exactly these params: take its pixels
     // instead of rendering the whole stroke again (the hitch at pen-up).
     let live = s.live_commit.take().filter(|l| l.matches(s, cmd, p, &pts));
@@ -455,31 +461,31 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
             let wide = wide_stroke_context(doc, id, p, &brush, format, lock, restricted_color, auto_erase)?;
 
             if let Some(mut wide) = wide {
-                if symmetry.as_ref().is_some_and(|axis| axis.mirror_count() > 1) {
-                    return Err(bad(cmd, "wide multi-axis symmetry is not qualified"));
-                }
                 let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
                 wide.budget.extend(&brush, &pts)?;
-                if let Some(axis) = &symmetry {
-                    wide.budget.extend(&brush, &axis.reflected_passes(&pts).into_iter().next().unwrap_or_default())?;
+                for pass in &reflected {
+                    wide.budget.extend(&brush, pass)?;
                 }
                 let pre = surf.clone();
                 let mut renderer = StrokeRenderer::new(&brush, Some(format), zoom);
                 renderer.push(&pts);
                 renderer.finish();
-                let damage = if let Some(axis) = &symmetry {
-                    let reflected = axis.reflected_passes(&pts).into_iter().next().unwrap_or_default();
-                    if crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, &reflected) {
-                        let mut mirror = StrokeRenderer::new(&brush, Some(format), zoom);
-                        mirror.push(&reflected);
-                        mirror.finish();
-                        renderer.try_composite_union_wide(&mirror, &pre, surf, &wide.color, sel.as_ref(), lock, wide.clip, &photocraft_raster::Interrupt::NONE)
-                    } else {
-                        renderer.try_composite_wide(&pre, surf, &wide.color, sel.as_ref(), lock, wide.clip, &photocraft_raster::Interrupt::NONE)
-                    }
-                } else {
-                    renderer.try_composite_wide(&pre, surf, &wide.color, sel.as_ref(), lock, wide.clip, &photocraft_raster::Interrupt::NONE)
-                };
+                let mut mirrors = Vec::new();
+                mirrors.try_reserve_exact(reflected.len()).map_err(|_| bad(cmd, "mirror renderer allocation"))?;
+                for pass in &reflected {
+                    if !crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, pass) { continue; }
+                    let mut mirror = StrokeRenderer::new(&brush, Some(format), zoom);
+                    mirror.push(pass);
+                    mirror.finish();
+                    mirrors.push(mirror);
+                }
+                let mut references = Vec::new();
+                references.try_reserve_exact(mirrors.len()).map_err(|_| bad(cmd, "mirror references allocation"))?;
+                references.extend(mirrors.iter());
+                let damage = renderer.try_composite_union_many_wide(
+                    &references, &pre, surf, &wide.color, sel.as_ref(), lock, wide.clip,
+                    photocraft_paint::stroke_controlled::StrokeLimits::default(), &photocraft_raster::Interrupt::NONE,
+                );
                 return damage.map_err(|e| bad("paint.stroke", e.to_string()));
             }
             let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
@@ -643,6 +649,7 @@ pub struct LiveStroke {
     cmyk: Option<std::sync::Arc<photocraft_color::convert::CmykSpace>>,
     /// Every point rendered so far, in order.
     points: Vec<StrokePoint>,
+    point_ledger: stroke_controlled::live_batch_controlled::LiveBatchLedger,
     /// The document and revision the stroke started on.
     base: (photocraft_doc::DocId, u64),
 }
@@ -717,9 +724,6 @@ impl LiveStroke {
         }
         let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
         let symmetry = s.active().and_then(|st| st.symmetry.clone());
-        if wide.is_some() && symmetry.as_ref().is_some_and(|axis| axis.mirror_count() > 1) {
-            return Err(bad(cmd, "wide multi-axis symmetry is not qualified"));
-        }
         let mirrors: Vec<_> = (0..symmetry.as_ref().map_or(0, |s| s.mirror_count())).map(|_| StrokeRenderer::new(&brush, Some(surf.format()), zoom)).collect();
         let mirror_distinct = vec![false; mirrors.len()];
         let pre = surf.clone();
@@ -741,6 +745,7 @@ impl LiveStroke {
             wide,
             cmyk: doc_cmyk_space(s),
             points: Vec::new(),
+            point_ledger: Default::default(),
             base,
         };
         live.push(&pts)?;
@@ -778,48 +783,50 @@ impl LiveStroke {
     /// nothing new appears on release.
     /// Invalid coordinates reject the whole batch without changing the preview.
     pub fn push(&mut self, pts: &[StrokePoint]) -> Result<Rect> {
+        self.push_with_interrupt(pts, &photocraft_raster::Interrupt::NONE)
+    }
+
+    /// Publish a private incremental preview only after the final cancellation fence.
+    /// Legacy generator and compositor calls are polled at their boundaries.
+    pub fn push_with_interrupt(&mut self, pts: &[StrokePoint], control: &photocraft_raster::Interrupt<'_>) -> Result<Rect> {
+        let (candidate, damage) = stroke_controlled::live_transaction_controlled::push_transaction(
+            self, pts, photocraft_paint::stroke_controlled::StrokeLimits::default(), control, |candidate, pts| candidate.push_staged(pts, control),
+        )?;
+        *self = candidate;
+        Ok(damage)
+    }
+
+    fn push_staged(&mut self, pts: &[StrokePoint], control: &photocraft_raster::Interrupt<'_>) -> Result<Rect> {
         check_coords(pts, &self.cmd)?;
-        if let Some(wide) = &mut self.wide {
-            let mut budget = wide.budget.clone();
-            budget.extend(&self.renderer.ctx.brush, pts)?;
-            if let Some(axis) = &self.symmetry {
-                for reflected in axis.reflected_passes(pts) {
-                    budget.extend(&self.renderer.ctx.brush, &reflected)?;
-                }
-            }
-            wide.budget = budget;
-        }
-        self.points.extend_from_slice(pts);
+        let prepared = stroke_controlled::live_batch_controlled::PreparedLiveBatch::prepare(
+            self, pts, &self.point_ledger, photocraft_paint::stroke_controlled::StrokeLimits::default(), control,
+        )?;
+        let used_work = self.point_ledger.work_units();
+        let (reflected, ledger) = prepared.install(self, used_work, control)?;
+        self.point_ledger = ledger;
         let cmyk = self.cmyk.clone();
         photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
             self.renderer.push(pts);
-            if let Some(symmetry) = &self.symmetry {
-                for ((mirror, distinct), reflected) in self.mirrors.iter_mut().zip(&mut self.mirror_distinct).zip(symmetry.reflected_passes(pts)) {
-                    *distinct |= crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(pts, &reflected);
-                    mirror.push(&reflected);
-                }
+            for (mirror, reflected) in self.mirrors.iter_mut().zip(&reflected) {
+                mirror.push(reflected);
             }
             let (surf, _) = crate::channel_cmds::target_surface(self.doc.try_resident_mut()?, self.layer, &self.params)?;
             if let Some(wide) = &self.wide {
-                let mut preview = self.renderer.clone();
-                preview.finish();
-                let damage = if self.mirror_distinct.first().copied().unwrap_or(false) {
-                    let mut mirror = self.mirrors.first().ok_or_else(|| bad(&self.cmd, "missing symmetric renderer"))?.clone();
+                let limits = photocraft_paint::stroke_controlled::StrokeLimits::default();
+                let mut preview = photocraft_paint::render::clone_incremental_state_with_interrupt(&self.renderer, &self.mirrors, None, limits, control)
+                    .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;
+                preview.renderer.finish();
+                for mirror in &mut preview.mirrors {
+                    control.check().map_err(|_| EngineError::Cancelled)?;
                     mirror.finish();
-                    preview.try_composite_union_wide(
-                        &mirror,
-                        &self.pre,
-                        surf,
-                        &wide.color,
-                        self.sel.as_ref(),
-                        self.lock,
-                        wide.clip,
-                        &photocraft_raster::Interrupt::NONE,
-                    )
-                } else {
-                    preview.try_composite_wide(&self.pre, surf, &wide.color, self.sel.as_ref(), self.lock, wide.clip, &photocraft_raster::Interrupt::NONE)
                 }
-                .map_err(|e| bad(&self.cmd, e.to_string()))?;
+                control.check().map_err(|_| EngineError::Cancelled)?;
+                let mut mirrors = Vec::new();
+                mirrors.try_reserve_exact(preview.mirrors.len()).map_err(|_| bad(&self.cmd, "mirror references allocation"))?;
+                mirrors.extend(preview.mirrors.iter().zip(&self.mirror_distinct).filter(|(_, distinct)| **distinct).map(|(mirror, _)| mirror));
+                let damage = preview.renderer.try_composite_union_many_wide(
+                    &mirrors, &self.pre, surf, &wide.color, self.sel.as_ref(), self.lock, wide.clip, limits, control,
+                ).map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;
                 let old = std::mem::replace(&mut self.tail, damage);
                 return Ok(old.union(&damage));
             }

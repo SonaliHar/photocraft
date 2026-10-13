@@ -321,15 +321,22 @@ fn qualify_source_inner<'a>(
     } else {
         names(layout, &["font-size", "font-size-unit", "language", "base-direction", "justification", "box-mode", "box-unit", "antialias", "hinting"])?;
     }
-    if !matches!(field(layout,"font-size")?,FilterValue::Number(ExactNumber::Float64Bits(v)) if *v==size_px.to_bits()) {
-        return Err(invalid());
-    }
     for (key, value) in
         [("font-size-unit", "pixels"), ("language", "C"), ("base-direction", "ltr"), ("justification", "left"), ("box-mode", "dynamic"), ("box-unit", "pixels")]
     {
         if !string(field(layout, key)?, value) {
             return Err(invalid());
         }
+    }
+    // Resolve the current source layout through the shared unit preparation path.
+    // The exact pixels gate above remains the admission boundary: physical/custom
+    // source rendering needs its own independent qualification, not scalar DPI.
+    let unit_layout = super::prepare_source_unit_layout(item, None, ctl)?;
+    if unit_layout.font_size.x_pixels.to_bits() != size_px.to_bits()
+        || unit_layout.font_size.y_pixels.to_bits() != size_px.to_bits()
+        || unit_layout.box_size.is_some()
+    {
+        return Err(invalid());
     }
     if field(layout, "antialias")? != &FilterValue::Bool(antialias) || field(layout, "hinting")? != &FilterValue::Bool(false) {
         return Err(invalid());

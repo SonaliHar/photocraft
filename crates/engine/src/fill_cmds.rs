@@ -125,6 +125,9 @@ fn flag(p: &Value, k: &str, d: bool) -> Result<bool> {
 
 /// Edit › Fill.
 pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(result) = crate::native_gray_fill_controlled::try_run(s, CMD, p)? {
+        return Ok(result);
+    }
     let contents = contents(p)?;
     let mode = mode(p)?;
     let opacity = opacity(p)?;

@@ -243,6 +243,7 @@ pub mod work_area;
 pub mod workspace_ui;
 mod xcf_labels;
 mod xcf_panels;
+mod gray_clipboard;
 pub mod zoom_levels;
 pub mod zoom_tool;
 

@@ -47,6 +47,11 @@ const NOISE_SALT: u64 = 0x006E_6F69_7365;
 
 #[path = "stroke_controlled.rs"]
 mod controlled;
+#[path = "incremental_clone_controlled.rs"]
+pub(crate) mod incremental_clone_controlled;
+#[path = "wide_union_controlled.rs"]
+mod wide_union_controlled;
+pub use incremental_clone_controlled::{IncrementalCloneRequirements, IncrementalStrokeState, incremental_state_requirements, clone_incremental_state_with_interrupt};
 pub use controlled::{StrokeError,StrokeLimits,apply_stroke_with_interrupt,render_stroke_with_interrupt,reflected_passes_with_interrupt,render_stroke_passes_with_interrupt};
 
 #[inline]

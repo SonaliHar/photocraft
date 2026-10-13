@@ -550,6 +550,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             Ok(Value::Null)
         }
         "edit.paste" if params.as_object().is_none_or(|o| o.is_empty()) => {
+            let target = crate::gray_clipboard::capture(app, id, &params)?;
             // Photoshop: paste in place when the copied area is visible, else centred in the view;
             // images from other apps are always centred.
             app.import_os_clipboard();
@@ -568,6 +569,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
                 Some(i) if !visible => json!({"center": app.ui.views[i].center}),
                 _ => json!({}),
             };
+            let p = if let Some(target) = target { crate::gray_clipboard::request(app, &target, p)? } else { p };
             app.run("edit.paste", p)
         }
         "view.rulers" | "view.show.grid" | "view.show.guides" | "view.snap" | "view.lockGuides" => {
@@ -698,7 +700,12 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             let kind = &ls["layer.layerStyle.".len()..];
             crate::layer_style::open(app, Some(kind)).map(|d| json!({"dialog": d})).ok_or_else(|| "no active layer".to_string())
         }
-        _ => app.run(id, params),
+        _ => {
+            let params = if let Some(target) = crate::gray_clipboard::capture(app, id, &params)? {
+                crate::gray_clipboard::request(app, &target, params)?
+            } else { params };
+            app.run(id, params)
+        },
     }
 }
 

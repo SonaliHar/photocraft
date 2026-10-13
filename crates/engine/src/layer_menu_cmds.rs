@@ -125,89 +125,17 @@ fn edit_rgba(s: &mut Session, label: &str, grow: i32, f: impl FnOnce(&mut Vec<[f
 
 /// Layer › Layer Mask › Apply: multiply the pixels' alpha by the mask, then delete the mask.
 fn apply_mask(s: &mut Session, p: &Value) -> Result<Value> {
-    let id = layer_param(s, p)?;
-    s.edit("Apply Layer Mask", |doc, _| {
-        // Applying a feathered mask must bake the same softened coverage the compositor
-        // displays. LayerMask::values_into accounts for density but not feather (#3044).
-        let feathered = {
-            let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-            if layer.mask.as_ref().is_some_and(|m| m.enabled && photocraft_compose::masks::feather_sigma(m.feather) > 0.0) {
-                // Do not bake an independent vector mask that remains attached after Apply.
-                let mut mask_only = layer.clone();
-                mask_only.vector_mask = None;
-                // Cover off-canvas pixels too: outside its area the combined mask is only the
-                // mask's default value, which would hide moved-off content (#3043).
-                let area = layer.surface().map_or(doc.bounds(), |surf| doc.bounds().union(&surf.content_bounds()));
-                photocraft_compose::masks::combined_mask(&mask_only, area)
-            } else {
-                None
-            }
-        };
-        let mask = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask.take().ok_or_else(|| other("the layer has no layer mask"))?;
-        let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
-        let r = surf.content_bounds();
-        if !r.is_empty() {
-            let mut px = read_rgba(surf, r);
-            let mut m = Vec::new();
-            if let Some(ref softened) = feathered {
-                softened.read_region_into(r, &mut m);
-            } else {
-                mask.values_into(r, &mut m);
-            }
-            for (q, k) in px.iter_mut().zip(&m) {
-                q[3] *= k;
-            }
-            write_rgba(surf, r, &px);
-            surf.prune();
-        }
-        Ok(Value::Null)
-    })
+    crate::layer_mask_storage_controlled::apply(s, p)
 }
 
 /// Layer › Layer Mask › From Transparency: the alpha becomes a layer mask and the pixels opaque.
 fn mask_from_transparency(s: &mut Session, p: &Value) -> Result<Value> {
-    let id = layer_param(s, p)?;
-    s.edit("From Transparency", |doc, _| {
-        let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
-        // Masks are attached to layer coordinates, including pixels temporarily off-canvas.
-        // Clipping to document bounds loses their alpha permanently when moved back (#3043).
-        let r = surf.content_bounds();
-        let mut mask = LayerMask::hide_all();
-        if !r.is_empty() {
-            let mut px = read_rgba(surf, r);
-            let alpha: Vec<f32> = px.iter().map(|q| q[3]).collect();
-            std::sync::Arc::make_mut(&mut mask.surface).write_region(r, &alpha);
-            std::sync::Arc::make_mut(&mut mask.surface).prune();
-            for q in &mut px {
-                q[3] = 1.0;
-            }
-            write_rgba(surf, r, &px);
-        }
-        doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = Some(mask);
-        Ok(Value::Null)
-    })
+    crate::layer_mask_storage_controlled::from_transparency(s, p)
 }
 
 /// Layer › Layer Mask › Hide Selection: a mask that hides the selected area.
 fn hide_selection(s: &mut Session, p: &Value) -> Result<Value> {
-    let ids = crate::layer_multi_cmds::mask_targets(s, p)?;
-    s.edit("Add Layer Mask", |doc, _| {
-        let sel = doc.selection.clone().ok_or_else(|| other("no selection"))?;
-        let bounds = doc.bounds();
-        let mut v = sel.read_region(bounds);
-        for x in &mut v {
-            *x = 1.0 - *x;
-        }
-        let mut mask = LayerMask::reveal_all();
-        std::sync::Arc::make_mut(&mut mask.surface).write_region(bounds, &v);
-        std::sync::Arc::make_mut(&mut mask.surface).prune();
-        for id in &ids {
-            crate::extra_cmds::background_to_layer_for_mask(doc, *id);
-            doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?.mask = Some(mask.clone());
-        }
-        doc.selection = None;
-        Ok(Value::Null)
-    })
+    crate::layer_mask_storage_controlled::hide_selection(s, p)
 }
 
 /// Layer › Mask All Objects: detects the main objects (the Select › Subject segmentation over the
@@ -919,8 +847,8 @@ macro_rules! spec {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        spec!("layer.layerMask.apply", "Apply", ["Layer", "Layer Mask"], r##"{"layer":id?}"##, has_raster_with_mask, apply_mask),
-        spec!("layer.layerMask.fromTransparency", "From Transparency", ["Layer", "Layer Mask"], r##"{"layer":id?}"##, has_raster, mask_from_transparency),
+        spec!("layer.layerMask.apply", "Apply", ["Layer", "Layer Mask"], r##"{"layer":id?,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_raster_with_mask, apply_mask),
+        spec!("layer.layerMask.fromTransparency", "From Transparency", ["Layer", "Layer Mask"], r##"{"layer":id?,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_raster, mask_from_transparency),
         spec!(
             "layer.layerMask.hideSelection",
             "Hide Selection",

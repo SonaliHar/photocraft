@@ -18,6 +18,44 @@ use crate::channel_cmds::ChannelTarget;
 use crate::edit_cmds::{Clip, ClipColorContext};
 use crate::{EngineError, Result, Session};
 
+mod wide_controlled;
+/// Borrowed native-target dispatch guard; no clipboard/document publication.
+pub(crate) fn native_gray_dispatch_preflight(s: &Session, p: &Value, ctl: &photocraft_raster::Interrupt<'_>) -> Result<()> {
+    wide_controlled::dispatch_preflight(s, p, ctl)
+}
+
+/// Closed native Gray route. Ordinary targets return None without mutation.
+pub(crate) fn try_copy_native_gray(s: &mut Session, p: &Value, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Option<Value>> {
+    wide_controlled::copy(s, p, ctl)
+}
+pub(crate) fn try_cut_native_gray(s: &mut Session, p: &Value, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Option<Value>> {
+    wide_controlled::cut(s, p, ctl)
+}
+pub(crate) fn try_paste_native_gray(
+    s: &mut Session,
+    p: &Value,
+    in_place: bool,
+    limit: Option<&Surface>,
+    label: &str,
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<Option<Value>> {
+    wide_controlled::paste(s, p, in_place, limit, label, ctl)
+}
+
+/// Native Paste Into/Outside before any ordinary selection clone or f32 inversion.
+pub(crate) fn try_paste_special_native_gray(s: &mut Session, p: &Value, outside: bool, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Option<Value>> {
+    wide_controlled::paste_special(s, p, outside, ctl)
+}
+
+/// Current raw Copy eligibility; canonical metadata is validated on dispatch.
+pub(crate) fn native_gray_copy_candidate(s: &Session) -> bool {
+    wide_controlled::target_candidate(s)
+}
+/// Additional metadata hazards for writes; not execution authorization.
+pub(crate) fn native_gray_write_candidate(s: &Session) -> bool {
+    wide_controlled::write_candidate(s)
+}
+
 /// The colour channel a paste writes into: the Channels panel targets one and the params name no
 /// other target.
 pub(crate) fn paste_color_target(s: &Session, p: &Value) -> Option<usize> {
@@ -33,6 +71,9 @@ pub(crate) fn paste_color_target(s: &Session, p: &Value) -> Option<usize> {
 /// Copy the targeted colour or alpha channel as a grayscale clip, inside the selection (or the
 /// whole canvas). `Ok(None)` when no single channel is targeted: Copy copies the layer.
 pub(crate) fn copy(s: &mut Session) -> Result<Option<Value>> {
+    if let Some(result) = try_copy_native_gray(s, &Value::Null, &photocraft_raster::Interrupt::NONE)? {
+        return Ok(Some(result));
+    }
     let Some(d) = s.active() else { return Ok(None) };
     let doc = &d.doc;
     let canvas = doc.bounds();
@@ -50,7 +91,9 @@ pub(crate) fn copy(s: &mut Session) -> Result<Option<Value>> {
         }
     };
     require_narrow(src)?;
-    if let Some(selection) = doc.selection.as_ref() { require_narrow(selection)?; }
+    if let Some(selection) = doc.selection.as_ref() {
+        require_narrow(selection)?;
+    }
     let n = src.format().channels();
     if k >= n {
         return Err(EngineError::Other(format!("no colour channel {k} in this layer")));
@@ -75,7 +118,14 @@ pub(crate) fn copy(s: &mut Session) -> Result<Option<Value>> {
     if bounds.is_empty() {
         return Err(EngineError::Other("Could not copy: the selected area is empty".into()));
     }
-    s.clipboard = Some(Clip { surface, bounds, color: ClipColorContext { mode: ColorMode::Grayscale, icc_profile: None, sample_encoding: None, interpretation: Default::default() }, composition: Vec::new(), layers: None, resolution: Some(doc.resolution_dpi) });
+    s.clipboard = Some(Clip {
+        surface,
+        bounds,
+        color: ClipColorContext { mode: ColorMode::Grayscale, icc_profile: None, sample_encoding: None, interpretation: Default::default() },
+        composition: Vec::new(),
+        layers: None,
+        resolution: Some(doc.resolution_dpi),
+    });
     Ok(Some(json!({"bounds": [bounds.x0, bounds.y0, bounds.width(), bounds.height()], "channel": k})))
 }
 
@@ -88,8 +138,12 @@ pub(crate) fn paste(s: &mut Session, p: &Value, k: usize, in_place: bool, limit:
     let canvas = d.doc.bounds();
     let id = d.active_layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
     require_narrow(&clip.surface)?;
-    if let Some(surface) = d.doc.layer(id).and_then(Layer::surface) { require_narrow(surface)?; }
-    if let Some(limit) = limit { require_narrow(limit)?; }
+    if let Some(surface) = d.doc.layer(id).and_then(Layer::surface) {
+        require_narrow(surface)?;
+    }
+    if let Some(limit) = limit {
+        require_narrow(limit)?;
+    }
     let (dx, dy) = crate::edit_cmds::paste_offset(&clip, canvas, p, in_place)?;
     let src = crate::edit_cmds::shifted(&clip.surface, dx, dy)?;
     let area = src.content_bounds().intersect(&canvas);
@@ -125,7 +179,9 @@ pub(crate) fn paste(s: &mut Session, p: &Value, k: usize, in_place: bool, limit:
 /// value for it, as Photoshop does. The other channels and the layer's transparency stay as they
 /// are. One history step.
 pub(crate) fn cut(s: &mut Session, id: LayerId, k: usize) -> Result<Value> {
-    if let Some(surface) = s.active().and_then(|state| state.doc.layer(id)).and_then(Layer::surface) { require_narrow(surface)?; }
+    if let Some(surface) = s.active().and_then(|state| state.doc.layer(id)).and_then(Layer::surface) {
+        require_narrow(surface)?;
+    }
     let r = copy(s)?.ok_or_else(|| EngineError::Other("no colour channel is targeted".into()))?;
     let bg = s.tools.background;
     s.edit("Cut Pixels", |doc, _| crate::channel_cmds::clear_color_channel(doc, id, k, bg))?;

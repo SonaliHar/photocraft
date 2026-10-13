@@ -74,6 +74,8 @@ pub mod layer_menu_cmds;
 pub mod layer_multi_cmds;
 mod layer_duplicate_controlled;
 mod layer_mask_storage_controlled;
+mod selection_inverse_controlled;
+pub(crate) mod native_gray_fill_controlled;
 pub mod layer_nav_cmds;
 pub mod layer_style;
 pub mod lens_cmds;

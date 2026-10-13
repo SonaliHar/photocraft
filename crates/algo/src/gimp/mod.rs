@@ -4,6 +4,8 @@ pub mod alpha_clip_finite;
 pub mod color_balance;
 pub mod color_to_alpha;
 pub mod curves;
+/// Typed configured candidates; stored-source admission remains separately qualified.
+pub mod configured;
 /// Standalone candidate kernel; import qualification remains a separate gate.
 pub mod global_stretch_contrast;
 pub mod global_normalize;

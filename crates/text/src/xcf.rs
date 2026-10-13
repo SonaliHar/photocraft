@@ -15,6 +15,11 @@ mod config;
 pub mod outline;
 mod rectilinear;
 pub mod underline;
+pub mod unit_layout;
+pub mod unit_outline;
+pub mod unit_raster_policy;
+#[path = "xcf_units.rs"]
+pub mod units;
 pub use config::{
     QualifiedRectilinearText, QualifiedUnderlinedText, RectilinearLineLayout, TextColor, TextColorEncoding, prepare_qualified_rectilinear_with_charge,
     qualify_colored_rectilinear_source, qualify_layout_rectilinear_geometry, qualify_outline_source, qualify_placed_layout_colored_rectilinear_source,
@@ -28,6 +33,41 @@ pub use rectilinear::{
     prepare_scaled_rectilinear_with_charge, prepare_spaced_rectilinear_with_charge, qualify_multiline_rectilinear_geometry, qualify_rectilinear_geometry,
     qualify_scaled_rectilinear_geometry, render_rectilinear_mode_with_charge, render_rectilinear_with_charge, render_scaled_rectilinear_with_charge,
 };
+
+/// Prepare the current retained text layout's explicit two-axis unit basis.
+/// This does not authorize a font, validate the original AST against an evaluator,
+/// or qualify rendering. Callers retain both axes instead of collapsing to scalar DPI.
+pub fn prepare_source_unit_layout(
+    item: &photocraft_doc::xcf_items::SourceItem,
+    resolution: Option<&photocraft_doc::PhysicalResolution>,
+    control: &Interrupt<'_>,
+) -> Result<units::TextUnitLayout, TextSourceError> {
+    use photocraft_doc::{xcf_filters::FilterValue, xcf_items::EditableSource};
+    poll(control)?;
+    let EditableSource::Text { configuration, .. } = &item.source else {
+        return Err(TextSourceError::Unsupported("unit basis requires retained text source"));
+    };
+    if configuration.len() > 64 {
+        return Err(TextSourceError::Budget);
+    }
+    let mut layout = None;
+    for argument in configuration {
+        poll(control)?;
+        if argument.name.len() > 128 {
+            return Err(TextSourceError::Budget);
+        }
+        if argument.name == "layout" {
+            if layout.is_some() {
+                return Err(TextSourceError::Unsupported("duplicate retained text layout"));
+            }
+            let FilterValue::Config(fields) = &argument.value else {
+                return Err(TextSourceError::Unsupported("malformed retained text layout"));
+            };
+            layout = Some(fields.as_slice());
+        }
+    }
+    units::resolve_layout(layout.ok_or(TextSourceError::Unsupported("missing retained text layout"))?, resolution, control)
+}
 
 const INTER_SHA: [u8; 32] = [
     0x40, 0xd6, 0x92, 0xfc, 0xe1, 0x88, 0xe4, 0x47, 0x1e, 0x2b, 0x3c, 0xba, 0x93, 0x7b, 0xe9, 0x67, 0x87, 0x8f, 0x63, 0x1a, 0xd3, 0xeb, 0xbb, 0xdc, 0xd5, 0x87,

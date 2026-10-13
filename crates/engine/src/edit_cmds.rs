@@ -231,6 +231,11 @@ fn has_pixels(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+fn can_cut(s: &Session) -> std::result::Result<(), String> {
+    if crate::channel_clip::native_gray_write_candidate(s) { return Ok(()); }
+    has_pixels(s)
+}
+
 /// Copy only reads: any layer that shows pixels will do, so a smart object, type or shape layer
 /// copies what it shows (Photoshop).
 fn has_layer_pixels(s: &Session) -> std::result::Result<(), String> {
@@ -443,6 +448,9 @@ pub(crate) fn clear_area(doc: &mut Document, id: LayerId, area: Rect, sel: Optio
 /// Paste as a new layer (or into the targeted mask or channel: [`paste_to_target`]). `in_place` keeps the original position; otherwise the pixels are centred
 /// on `center` (the view centre from the UI) or the canvas, unless they already overlap the canvas.
 fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
+    if let Some(result) = crate::channel_clip::try_paste_native_gray(s, p, in_place, None, "Paste", &photocraft_raster::Interrupt::NONE)? {
+        return Ok(result);
+    }
     let clip = s.clipboard.clone().ok_or(EngineError::Other("the clipboard is empty".into()))?;
     require_ordinary_clip(&clip)?;
     let Some(d) = s.active() else {
@@ -512,6 +520,9 @@ pub(crate) fn shifted(surface: &Surface, dx: i32, dy: i32) -> Result<Surface> {
 /// over what was there. Their transparency, and `limit` (Paste Into / Outside), let it show
 /// through. One history step.
 pub(crate) fn paste_to_target(s: &mut Session, p: &Value, in_place: bool, limit: Option<&Surface>, label: &str) -> Result<Value> {
+    if let Some(result) = crate::channel_clip::try_paste_native_gray(s, p, in_place, limit, label, &photocraft_raster::Interrupt::NONE)? {
+        return Ok(result);
+    }
     let clip = s.clipboard.clone().ok_or(EngineError::Other("the clipboard is empty".into()))?;
     require_ordinary_clip(&clip)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -880,7 +891,10 @@ pub fn specs() -> Vec<CommandSpec> {
         };
     }
     vec![
-        spec!("edit.cut", "Cut", &["Edit"], Some("Cmd+X"), "{}", has_pixels, |s, p| {
+        spec!("edit.cut", "Cut", &["Edit"], Some("Cmd+X"), "{}", can_cut, |s, p| {
+            if let Some(result) = crate::channel_clip::try_cut_native_gray(s, p, &photocraft_raster::Interrupt::NONE)? {
+                return Ok(result);
+            }
             // Refuse a locked layer before copying, so a refused Cut leaves the clipboard alone.
             let id = active_id(s)?;
             crate::commands::check_pixels_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
@@ -895,6 +909,9 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(r)
         }),
         spec!("edit.copy", "Copy", &["Edit"], Some("Cmd+C"), "{}", can_copy, |s, p| {
+            if let Some(result) = crate::channel_clip::try_copy_native_gray(s, p, &photocraft_raster::Interrupt::NONE)? {
+                return Ok(result);
+            }
             if crate::commands::is_mask_target(p) {return copy_mask(s);}
             match crate::channel_clip::copy(s)? {Some(result)=>Ok(result),None=>copy(s,false)}
         }),
@@ -1712,6 +1729,7 @@ fn whole_layers(d:&crate::DocState,ids:&[LayerId])->Result<Document> {
     Ok(copies)
 }
 fn can_copy(s:&Session)->std::result::Result<(),String> {
+    if crate::channel_clip::native_gray_copy_candidate(s) { return Ok(()); }
     if crate::channel_clip::copies_alpha_channel(s) {return Ok(());}
     let d=s.active().ok_or("no document open")?;
     if !multi_copy_ids(d).map_err(|error|error.to_string())?.is_empty() {return Ok(());}

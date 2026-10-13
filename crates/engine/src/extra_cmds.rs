@@ -404,6 +404,9 @@ fn can_reselect(s: &Session) -> std::result::Result<(), String> {
 }
 
 fn paste_into(s: &mut Session, p: &Value, outside: bool) -> Result<Value> {
+    if let Some(result) = crate::channel_clip::try_paste_special_native_gray(s, p, outside, &photocraft_raster::Interrupt::NONE)? {
+        return Ok(result);
+    }
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let selection = d.doc.selection.clone().ok_or(EngineError::Other("Paste Into needs a selection".into()))?;
     let canvas = d.doc.bounds();

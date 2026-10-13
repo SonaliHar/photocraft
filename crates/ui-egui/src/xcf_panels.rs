@@ -34,6 +34,10 @@ mod text_view_cache;
 mod vector_style;
 mod underline;
 
+pub(crate) fn mask_storage_params(app:&PhotocraftApp,layer:LayerId,on_set:bool,command:&str)->Result<serde_json::Value,String> {
+    layer_mask::queued_params(app,layer,on_set,command)
+}
+
 fn run_checked(app: &mut PhotocraftApp, captured: &photocraft_engine::document_snapshot::DocumentSnapshot, revision: u64, command: &str, params: serde_json::Value) {
     if !app.session.active().is_some_and(|current| current.doc.id == captured.id && current.revision == revision && current.doc.shares_state(captured)) {
         app.ui.status = "xcf.properties.stale-target".into();

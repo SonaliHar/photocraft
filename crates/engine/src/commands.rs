@@ -501,6 +501,9 @@ fn build() -> Vec<CommandSpec> {
             crate::fill_cmds::fill
         ),
         cmd!("edit.clear", "Clear", ["Edit"], Some("Delete"), "{} (a targeted channel or Quick Mask is cleared alone)", has_pixel_or_channel, |s, p| {
+            if let Some(result) = crate::native_gray_fill_controlled::try_run(s, "edit.clear", p)? {
+                return Ok(result);
+            }
             let bg = s.tools.background;
             // A targeted alpha channel or Quick Mask is filled instead (#2734).
             if let Some(t) = crate::channel_cmds::targeted_channel(s) {
@@ -540,19 +543,7 @@ fn build() -> Vec<CommandSpec> {
             })?;
             Ok(Value::Null)
         }),
-        cmd!("select.inverse", "Inverse", ["Select"], Some("Cmd+Shift+I"), "{}", has_selection, |s, _| {
-            s.edit("Inverse", |doc, _| {
-                let old = doc.selection.take().unwrap_or_else(|| Surface::new(photocraft_color::PixelFormat::GRAY8));
-                let b = doc.bounds();
-                let data: Vec<f32> = old.read_region(b).into_iter().map(|v| 1.0 - v).collect();
-                let mut m = Surface::new(photocraft_color::PixelFormat::GRAY8);
-                m.write_region(b, &data);
-                m.prune();
-                doc.selection = Some(m);
-                Ok(())
-            })?;
-            Ok(Value::Null)
-        }),
+        cmd!("select.inverse", "Inverse", ["Select"], Some("Cmd+Shift+I"), r##"{"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_selection, crate::selection_inverse_controlled::run),
         cmd!(
             "select.rect",
             "Rectangular Selection",
@@ -775,26 +766,21 @@ fn build() -> Vec<CommandSpec> {
             "Reveal All",
             ["Layer", "Layer Mask"],
             None,
-            r##"{"layer":id?} (no layer: every selected layer that can take a mask)"##,
+            r##"{"layer":id?,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (no layer: every selected layer that can take a mask)"##,
             has_layer,
-            |s, p| set_mask(s, p, "Add Layer Mask", Some(LayerMask::reveal_all()))
+            crate::layer_mask_storage_controlled::reveal_all
         ),
         cmd!(
             "layer.layerMask.hideAll",
             "Hide All",
             ["Layer", "Layer Mask"],
             None,
-            r##"{"layer":id?} (no layer: every selected layer that can take a mask)"##,
+            r##"{"layer":id?,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (no layer: every selected layer that can take a mask)"##,
             has_layer,
-            |s, p| set_mask(s, p, "Add Layer Mask", Some(LayerMask::hide_all()))
+            crate::layer_mask_storage_controlled::hide_all
         ),
         cmd!("layer.layerMask.revealSelection", "Reveal Selection", ["Layer", "Layer Mask"], None, r##"{"layer":id?,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_selection, crate::layer_mask_storage_controlled::run),
-        cmd!("layer.layerMask.delete", "Delete", ["Layer", "Layer Mask"], None, r##"{"layer":id?}"##, has_layer, |s, p| set_mask(
-            s,
-            p,
-            "Delete Layer Mask",
-            None
-        )),
+        cmd!("layer.layerMask.delete", "Delete", ["Layer", "Layer Mask"], None, r##"{"layer":id?,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_layer, crate::layer_mask_storage_controlled::delete),
         cmd!("layer.mergeDown", "Merge Down", ["Layer"], None, r##"{"layer":id?}"##, has_layer, |s, p| {
             let id = layer_param(s, p)?;
             s.edit("Merge Down", |doc, active| {
@@ -1456,23 +1442,6 @@ fn arrange(s: &mut Session, p: &Value, delta: i32) -> Result<Value> {
             return Err(EngineError::Other("layer can't move further".into()));
         }
         crate::clip_group::settle(doc, &[id], &before, false);
-        Ok(())
-    })?;
-    Ok(Value::Null)
-}
-
-/// Add (`Some`) or remove (`None`) a layer mask. Adding acts on every selected layer that can take
-/// one ([`crate::layer_multi_cmds::mask_targets`]), in one history step.
-fn set_mask(s: &mut Session, p: &Value, label: &str, mask: Option<LayerMask>) -> Result<Value> {
-    let ids = if mask.is_some() { crate::layer_multi_cmds::mask_targets(s, p)? } else { vec![layer_param(s, p)?] };
-    s.edit(label, |doc, _| {
-        let mask = mask.clone().map(|mask| mask_at_depth(mask, doc.depth)).transpose()?;
-        for id in &ids {
-            if mask.is_some() {
-                crate::extra_cmds::background_to_layer_for_mask(doc, *id);
-            }
-            doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?.mask = mask.clone();
-        }
         Ok(())
     })?;
     Ok(Value::Null)

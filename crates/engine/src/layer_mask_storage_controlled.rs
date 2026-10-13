@@ -316,3 +316,24 @@ mod tests {
         assert!(session.active().unwrap().doc.shares_state(&before));
     }
 }
+
+mod actions;
+pub(crate) fn reveal_all(session: &mut Session, params: &Value) -> Result<Value> { actions::run(session, params, actions::Action::Reveal) }
+pub(crate) fn hide_all(session: &mut Session, params: &Value) -> Result<Value> { actions::run(session, params, actions::Action::Hide) }
+pub(crate) fn delete(session: &mut Session, params: &Value) -> Result<Value> { actions::run(session, params, actions::Action::Delete) }
+pub(crate) fn apply(session: &mut Session, params: &Value) -> Result<Value> { actions::run(session, params, actions::Action::Apply) }
+pub(crate) fn actions_dispatch_preflight(session: &Session, id: &str, params: &Value, _background: bool) -> Result<()> {
+    let action = match id {
+        "layer.layerMask.revealAll" => actions::Action::Reveal,
+        "layer.layerMask.hideAll" => actions::Action::Hide,
+        "layer.layerMask.delete" => actions::Action::Delete,
+        "layer.layerMask.apply" => actions::Action::Apply,
+        "layer.layerMask.hideSelection" => actions::Action::HideSelection,
+        "layer.layerMask.fromTransparency" => actions::Action::FromTransparency,
+        _ => return Ok(()),
+    };
+    actions::dispatch_preflight(session, params, action)
+}
+
+pub(crate) fn hide_selection(session: &mut Session, params: &Value) -> Result<Value> { actions::run(session, params, actions::Action::HideSelection) }
+pub(crate) fn from_transparency(session: &mut Session, params: &Value) -> Result<Value> { actions::run(session, params, actions::Action::FromTransparency) }

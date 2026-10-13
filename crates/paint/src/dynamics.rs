@@ -10,6 +10,9 @@ use crate::brush::{BrushSettings, Control, Dynamic, Smoothing};
 use crate::rng::{rand_signed, rand01, stream};
 use crate::{Dab, StrokePoint};
 
+#[path = "generator_clone_controlled.rs"]
+mod clone_controlled;
+
 /// Maximum pulled-string length at 100 % smoothing, in screen pixels.
 pub const MAX_STRING_PX: f64 = 100.0;
 /// Stroke time over which exponential smoothing moves its fraction of the way to the pointer.
