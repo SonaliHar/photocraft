@@ -1206,9 +1206,14 @@ fn apply_box_blur(
 /// otherwise hidden colours leak into feathered edges and alpha-removing filters darken them.
 fn mix_selection(data: &mut [f32], t: Rect, sel: &Surface, orig: &Image, alpha: bool) {
     let w = t.width() as usize;
+    // One selection row at a time: one tile lookup per run instead of an alloc + lookup per pixel.
+    let mut coverage = vec![0.0; w];
     for (i, px) in data.chunks_exact_mut(orig.ch.max(1)).enumerate() {
         let (x, y) = (t.x0 + (i % w) as i32, t.y0 + (i / w) as i32);
-        let k = sel.pixel(x, y)[0].clamp(0.0, 1.0);
+        if i % w == 0 {
+            sel.sample_row_strided(y, t.x0, 1, 0, &mut coverage);
+        }
+        let k = coverage.get(i % w).copied().unwrap_or(0.0).clamp(0.0, 1.0);
         if k >= 1.0 {
             continue;
         }

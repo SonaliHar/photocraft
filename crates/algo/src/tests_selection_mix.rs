@@ -96,3 +96,19 @@ fn selection_mixing_without_alpha_keeps_every_channel_independent() {
         assert_eq!(data, vec![0.375; ch]);
     }
 }
+
+#[test]
+fn selection_mixing_reads_per_pixel_coverage_across_tiles() {
+    // Straddles the tile origin so rows span two tiles and default (untiled) coverage.
+    let r = Rect::new(-2, -1, 3, 2);
+    let mut sel = selection(0.0);
+    for (i, (x, y)) in [(-2, -1), (-1, -1), (0, -1), (2, 0), (-2, 1), (1, 1)].into_iter().enumerate() {
+        sel.write_pixel(x, y, &[0.2 * i as f32]);
+    }
+    let n = (r.width() * r.height()) as usize;
+    let original = Image { rect: r, ch: 1, data: vec![0.0; n] };
+    let mut data = vec![1.0; n];
+    mix_selection(&mut data, r, &sel, &original, false);
+    let expected: Vec<f32> = (r.y0..r.y1).flat_map(|y| (r.x0..r.x1).map(move |x| (x, y))).map(|(x, y)| sel.pixel(x, y)[0].clamp(0.0, 1.0)).collect();
+    assert_eq!(data, expected);
+}
