@@ -4,8 +4,9 @@
 //!
 //! The selection's bounds plus some surrounding context are rendered (all visible layers, in
 //! sRGB) and sent with a mask of the selection, once per variation (three by default, as
-//! Photoshop makes). The results land in a new group masked by the selection, one layer per
-//! variation with the first showing, so nothing under it changes and one undo removes it.
+//! Photoshop makes). The results land in a new group masked by the selection with a softened
+//! edge, as Photoshop's generative layers are (see [`blended_mask`]), one layer per variation with
+//! the first showing, so nothing under it changes and one undo removes it.
 //! `layer.generative.selectVariation` flips between them and `layer.generative.more` asks for
 //! more. The network calls run as one cancellable background job.
 //!
@@ -14,6 +15,7 @@
 
 use std::sync::Arc;
 
+use photocraft_algo::selection as sel_algo;
 use photocraft_cms::{Builtin, Intent, Transform};
 use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType as CodecSample};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
@@ -636,6 +638,75 @@ fn place_all(request: &EditRequest, results: &[Vec<u8>], area: Rect, reference: 
     Ok(placed.into_iter().map(|(p, _)| p).collect())
 }
 
+/// Selections whose long side is shorter than this keep a hard edge.
+const SOFT_EDGE_MIN_SIDE: u32 = 64;
+/// Widest edge band, in document pixels.
+const MAX_EDGE_BAND: u32 = 32;
+/// Largest area (pixels) the soft edge is worked out over; past it the selection's own edge is
+/// used rather than allocating several more full-size planes.
+const MAX_EDGE_PIXELS: usize = 1 << 28;
+
+/// How wide (document pixels) the blend between a fill and the image around it is: 1.5% of the
+/// selection's long side, at most [`MAX_EDGE_BAND`], none for small selections. Model output
+/// rarely lines up exactly with the original at the selection's edge (a crease that steps, an
+/// edge the model ends at the boundary); a band this wide hides the step, as the soft edge of
+/// Photoshop's generative layer masks does.
+fn edge_band(selected: Rect) -> u32 {
+    let long = selected.width().max(selected.height());
+    if long < SOFT_EDGE_MIN_SIDE {
+        return 0;
+    }
+    ((0.015 * f64::from(long)).round() as u32).min(MAX_EDGE_BAND)
+}
+
+/// The generative layer's mask: the selection (`sel`, whose content lies in `selected`) grown by
+/// half the [`edge_band`] and feathered by as much again (Gaussian, sigma = half the band), so the
+/// fill fades into the image across a band centred just outside the selection's edge. Worked out
+/// over the selection's bounds plus the band's reach only; past the canvas the selection is taken
+/// to continue (as Select › Modify does by default), so a selection running off the canvas isn't
+/// faded at the canvas edge. Partial (feathered) selections work: both steps take coverage.
+fn blended_mask(sel: &Surface, selected: Rect, canvas: Rect) -> Surface {
+    let b = edge_band(selected);
+    if b == 0 {
+        return sel.clone();
+    }
+    let half = b as f32 / 2.0;
+    // Growing reaches b/2, the feather 3σ = 3b/2 past that.
+    let margin = (2 * b + 2) as i32;
+    let outer = Rect::new(
+        selected.x0.saturating_sub(margin),
+        selected.y0.saturating_sub(margin),
+        selected.x1.saturating_add(margin),
+        selected.y1.saturating_add(margin),
+    );
+    let inner = outer.intersect(&canvas);
+    let (ow, oh, iw, ih) = (outer.width() as usize, outer.height() as usize, inner.width() as usize, inner.height() as usize);
+    if inner.is_empty() || ow.checked_mul(oh).is_none_or(|n| n > MAX_EDGE_PIXELS) {
+        return sel.clone();
+    }
+    let known = sel_algo::mask_from_surface(Some(sel), inner);
+    // Outside the canvas, the nearest pixel on it.
+    let at = |x: i32, y: i32| -> f32 {
+        let ix = (x.clamp(inner.x0, inner.x1 - 1) - inner.x0) as usize;
+        let iy = (y.clamp(inner.y0, inner.y1 - 1) - inner.y0) as usize;
+        known.get(iy * iw + ix).copied().unwrap_or(0.0)
+    };
+    let mut m = Vec::with_capacity(ow * oh);
+    for y in outer.y0..outer.y1 {
+        m.extend((outer.x0..outer.x1).map(|x| at(x, y)));
+    }
+    let soft = sel_algo::feather(&sel_algo::expand(&m, ow, oh, half), ow, oh, half);
+    let (dx, dy) = ((inner.x0 - outer.x0) as usize, (inner.y0 - outer.y0) as usize);
+    let mut cropped = Vec::with_capacity(iw * ih);
+    for row in soft.chunks_exact(ow).skip(dy).take(ih) {
+        cropped.extend(row.iter().skip(dx).take(iw).map(|v| v.clamp(0.0, 1.0)));
+    }
+    if cropped.len() != iw * ih {
+        return sel.clone();
+    }
+    sel_algo::combine(None, &cropped, inner, sel_algo::SelectionMode::Replace).unwrap_or_else(|| sel.clone())
+}
+
 fn variation_layer(doc: &Document, pixels: &Surface, n: usize, visible: bool) -> Result<Layer> {
     let converted = to_document(doc, pixels)?;
     let mut layer = Layer::raster(format!("Variation {n}"), converted.format());
@@ -659,9 +730,10 @@ fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     let provider_id = provider.info().id.to_owned();
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc = st.doc.clone();
-    let sel = doc.selection.clone().ok_or_else(|| bad("no selection"))?;
+    let selection = doc.selection.clone().ok_or_else(|| bad("no selection"))?;
     let canvas = doc.bounds();
-    let area = context_area(sel.content_bounds().intersect(&canvas), canvas, |w, h| provider.edit_aspect(w, h));
+    let selected = selection.content_bounds().intersect(&canvas);
+    let area = context_area(selected, canvas, |w, h| provider.edit_aspect(w, h));
     let k = upload_scale(f64::from(area.width().max(area.height())), provider.max_side(), provider.min_side());
     let (w, h) = (((f64::from(area.width()) * k).round() as u32).max(1), ((f64::from(area.height()) * k).round() as u32).max(1));
     let name = layer_name(&prompt);
@@ -671,23 +743,25 @@ fn fill(s: &mut Session, p: &Value) -> Result<Value> {
         true,
         move |ctx| {
             ctx.progress(0.05, "Preparing image");
-            let (image, mask, reference) = request_images(&scaled(&srgb_composite(&doc, area)?, area, w, h), &sel, area, w, h)?;
+            let (image, mask, reference) = request_images(&scaled(&srgb_composite(&doc, area)?, area, w, h), &selection, area, w, h)?;
             ctx.check()?;
             let request = EditRequest { image, mask, prompt, size: ImageSize::for_long_side(w.max(h)), cancel: photocraft_genai::CancelToken::default() };
             let results = request_all(ctx, provider.as_ref(), &request, count)?;
             ctx.progress(0.9, "Placing the results");
             let placed = place_all(&request, &results, area, &reference)?;
+            let mask = blended_mask(&selection, selected, canvas);
             let source = Source { prompt: request.prompt.clone(), area, request, reference, provider: provider_id };
-            Ok((placed, sel, source))
+            Ok((placed, mask, source))
         },
-        move |s, (placed, sel, source)| {
+        move |s, (placed, mask, source)| {
             let (group, ids) = s.edit(LABEL, |doc, active| {
                 // Photoshop's generative layer holds its variations; here that is a group masked by
-                // the selection with one layer per variation, the first one showing.
+                // the selection with a softened edge, as Photoshop's generative layers are, with one
+                // layer per variation, the first one showing.
                 let children = placed.iter().enumerate().map(|(i, px)| variation_layer(doc, px, i + 1, i == 0)).collect::<Result<Vec<_>>>()?;
                 let ids: Vec<u64> = children.iter().map(|l| l.id.0).collect();
                 let mut group = Layer::group(name, children);
-                group.mask = Some(LayerMask { surface: sel, ..LayerMask::reveal_all() });
+                group.mask = Some(LayerMask { surface: mask, ..LayerMask::reveal_all() });
                 let id = doc.insert_above(*active, group);
                 crate::layer_multi_cmds::check_group_depth(doc, LABEL)?;
                 *active = Some(id);
@@ -804,7 +878,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Generative Fill…",
             menu: &["Edit"],
             shortcut: None,
-            params: r#"{"prompt":str?,"variations":1..4=3,"provider":str?} fills the selection through the configured provider: a new group masked by the selection holds one layer per variation, the first showing. An empty prompt continues the surrounding image through it. Sends the selected area and its surroundings to that provider, once per variation. "provider" names a configured provider (default: the one chosen in Generative AI Settings)."#,
+            params: r#"{"prompt":str?,"variations":1..4=3,"provider":str?} fills the selection through the configured provider: a new group masked by the selection with a softened edge, as Photoshop's generative layers are, holds one layer per variation, the first showing. An empty prompt continues the surrounding image through it. Sends the selected area and its surroundings to that provider, once per variation. "provider" names a configured provider (default: the one chosen in Generative AI Settings)."#,
             enabled: fill_enabled,
             run: fill,
             journal: true,

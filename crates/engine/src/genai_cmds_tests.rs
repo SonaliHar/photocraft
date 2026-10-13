@@ -170,7 +170,8 @@ fn a_result_of_another_size_is_scaled_to_the_area() {
     s.set_image_provider(Some(fake));
     s.execute(FILL, json!({"prompt": "grass"})).unwrap();
     assert_eq!(rgb_at(&s, 150, 150), [0, 255, 0]);
-    assert_eq!(rgb_at(&s, 101, 101), [0, 255, 0]);
+    // Just inside the corner, clear of the softened edge (a 2 px band on a 100 px selection).
+    assert_eq!(rgb_at(&s, 104, 104), [0, 255, 0]);
 }
 
 #[test]
@@ -694,4 +695,84 @@ fn a_chosen_provider_that_cannot_edit_is_refused_before_sending() {
     let e = s.execute(MORE, json!({"layer": r["layer"], "provider": "blue"})).unwrap_err().to_string();
     assert!(e.contains("can't fill selections"), "{e}");
     assert!(blue.sent.lock().unwrap().is_empty());
+}
+
+/// The generative group's mask value at (`x`, `y`).
+fn mask_at(s: &Session, id: u64, x: i32, y: i32) -> f32 {
+    group(s, id).mask.as_ref().unwrap().value(x, y)
+}
+
+#[test]
+fn the_edge_band_grows_with_the_selection() {
+    assert_eq!(edge_band(Rect::from_xywh(0, 0, 40, 40)), 0, "small selections keep a hard edge");
+    assert_eq!(edge_band(Rect::from_xywh(0, 0, 63, 10)), 0);
+    assert_eq!(edge_band(Rect::from_xywh(0, 0, 1000, 1000)), 15);
+    assert_eq!(edge_band(Rect::from_xywh(0, 0, 4000, 4000)), 32, "capped");
+    assert_eq!(edge_band(Rect::from_xywh(0, 0, 10, 2000)), 30, "the long side counts");
+    assert_eq!(edge_band(Rect::EMPTY), 0);
+}
+
+#[test]
+fn the_generative_layer_mask_has_a_soft_edge_past_the_selection() {
+    let mut s = session(300, 300);
+    s.execute("select.rect", json!({"x": 50, "y": 50, "width": 100, "height": 100})).unwrap();
+    s.set_image_provider(Some(Fake::new([255, 0, 0])));
+    let r = s.execute(FILL, json!({"prompt": "x", "variations": 1})).unwrap();
+    let id = r["layer"].as_u64().unwrap();
+    let b = edge_band(Rect::from_xywh(50, 50, 100, 100)) as i32;
+    assert!(b > 0);
+    assert!(mask_at(&s, id, 100, 100) > 0.99, "{}", mask_at(&s, id, 100, 100));
+    assert!(mask_at(&s, id, 50 - b - 2, 100) < 0.01, "{}", mask_at(&s, id, 50 - b - 2, 100));
+    let edge = mask_at(&s, id, 50, 100);
+    assert!(edge > 0.0 && edge < 1.0, "the selection's edge is blended: {edge}");
+    assert!(mask_at(&s, id, 49, 100) > 0.0, "the blend reaches past the selection");
+    // The variation covers the band the mask now reveals.
+    assert_eq!(variation_rgb(&s, id, 0, 50 - b, 100), variation_rgb(&s, id, 0, 100, 100));
+    // The selection itself is unchanged.
+    assert_eq!(doc(&s).selection.as_ref().unwrap().content_bounds(), Rect::from_xywh(50, 50, 100, 100));
+}
+
+#[test]
+fn a_small_selection_keeps_its_hard_edge() {
+    let mut s = session(100, 100);
+    s.execute("select.rect", json!({"x": 30, "y": 30, "width": 40, "height": 40})).unwrap();
+    s.set_image_provider(Some(Fake::new([255, 0, 0])));
+    let r = s.execute(FILL, json!({"prompt": "x", "variations": 1})).unwrap();
+    let id = r["layer"].as_u64().unwrap();
+    for (x, y) in [(29, 50), (50, 29), (70, 50), (50, 70), (10, 10)] {
+        assert_eq!(mask_at(&s, id, x, y), 0.0, "({x},{y})");
+    }
+    for (x, y) in [(30, 50), (69, 69), (50, 50)] {
+        assert_eq!(mask_at(&s, id, x, y), 1.0, "({x},{y})");
+    }
+}
+
+#[test]
+fn the_soft_edge_does_not_fade_at_the_canvas_edge() {
+    // A selection running off the canvas continues past it, so the fill isn't dimmed there.
+    let mut s = session(300, 300);
+    s.execute("select.rect", json!({"x": 0, "y": 50, "width": 150, "height": 150})).unwrap();
+    s.set_image_provider(Some(Fake::new([255, 0, 0])));
+    let r = s.execute(FILL, json!({"prompt": "x", "variations": 1})).unwrap();
+    let id = r["layer"].as_u64().unwrap();
+    assert!(mask_at(&s, id, 0, 120) > 0.99, "{}", mask_at(&s, id, 0, 120));
+    let edge = mask_at(&s, id, 149, 120);
+    assert!(edge > 0.0 && edge < 1.0, "{edge}");
+}
+
+#[test]
+fn blended_mask_softens_partial_selections_too() {
+    // A feathered (partial) selection still works: values stay in 0..1 and the middle is kept.
+    let canvas = Rect::from_xywh(0, 0, 400, 400);
+    let selected = Rect::from_xywh(100, 100, 200, 200);
+    let m: Vec<f32> = (0..200 * 200).map(|i| if (i % 200) < 10 { 0.5 } else { 1.0 }).collect();
+    let sel = photocraft_algo::selection::combine(None, &m, selected, photocraft_algo::selection::SelectionMode::Replace).unwrap();
+    let out = blended_mask(&sel, selected, canvas);
+    let v = |x: i32, y: i32| out.sample_channel(x, y, 0);
+    assert!(v(200, 200) > 0.99);
+    assert!(v(50, 200) == 0.0);
+    for x in 90..110 {
+        let a = v(x, 200);
+        assert!((0.0..=1.0).contains(&a), "{x}: {a}");
+    }
 }
