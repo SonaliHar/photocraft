@@ -677,8 +677,6 @@ fn is_pro(theme: ThemeKind) -> bool {
 
 #[test]
 fn theme_switch_keeps_the_selected_color_group_panel() {
-    use egui_kittest::kittest::Queryable;
-
     for theme in ThemeKind::ALL {
         for (tab, name) in Group::Color.tabs(true).iter().enumerate() {
             let (mut app, _, _) = app_with_layers();
@@ -689,7 +687,7 @@ fn theme_switch_keeps_the_selected_color_group_panel() {
             h.run_steps(4);
             assert_eq!(Group::Color.tabs(is_pro(theme)).get(h.state().ui.dock_tabs.color), Some(name), "{theme:?}");
             if *name == "Color" && !is_pro(theme) {
-                assert!(h.query_by_label("Hue").is_some(), "{theme:?}: Color picker missing");
+                assert!(crate::color_panel_ui::last_rects(&h.ctx).field.is_some(), "{theme:?}: Color picker missing");
             }
             h.state_mut().set_theme(&ctx, ThemeKind::Pro);
             h.run_steps(4);

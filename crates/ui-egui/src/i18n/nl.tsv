@@ -3897,3 +3897,17 @@ curves	Smooth	Vloeiend maken
 @plural	{n} action|{n} actions	{n} handeling|{n} handelingen
 	Auto Add/Delete	Automatisch toevoegen/verwijderen
 	ICO is limited to 256 × 256 pixels	ICO is beperkt tot 256 × 256 pixels
+
+# Color panel modes (#294)
+	Hue Cube	Kleurtoonkubus
+	Brightness Cube	Helderheidskubus
+	Color Wheel	Kleurenwiel
+	Grayscale Sliders	Schuifregelaars voor grijswaarden
+	RGB Sliders	RGB-schuifregelaars
+	HSB Sliders	HSB-schuifregelaars
+	CMYK Sliders	CMYK-schuifregelaars
+	Lab Sliders	Lab-schuifregelaars
+	Web Color Sliders	Schuifregelaars voor webkleuren
+	Copy Color's Hex Code	Hexcode van kleur kopiëren
+	Color management is unavailable.	Kleurbeheer is niet beschikbaar.
+	Out of gamut for printing: click to use the closest printable color	Buiten het afdrukkleurbereik: klik om de dichtstbijzijnde afdrukbare kleur te gebruiken

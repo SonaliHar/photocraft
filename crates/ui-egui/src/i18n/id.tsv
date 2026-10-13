@@ -3126,3 +3126,17 @@ curves	Smooth	Haluskan
 @plural	{n} action|{n} actions	{n} tindakan
 	Auto Add/Delete	Tambah/Hapus Otomatis
 	ICO is limited to 256 × 256 pixels	ICO dibatasi hingga 256 × 256 piksel
+
+# Color panel modes (#294)
+	Hue Cube	Kubus Hue
+	Brightness Cube	Kubus Kecerahan
+	Color Wheel	Roda Warna
+	Grayscale Sliders	Penggeser Grayscale
+	RGB Sliders	Penggeser RGB
+	HSB Sliders	Penggeser HSB
+	CMYK Sliders	Penggeser CMYK
+	Lab Sliders	Penggeser Lab
+	Web Color Sliders	Penggeser Warna Web
+	Copy Color's Hex Code	Salin Kode Hex Warna
+	Color management is unavailable.	Manajemen warna tidak tersedia.
+	Out of gamut for printing: click to use the closest printable color	Di luar gamut cetak: klik untuk memakai warna cetak terdekat

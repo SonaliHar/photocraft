@@ -54,6 +54,7 @@ pub mod channels_panel;
 pub mod chrome_ui;
 pub mod cjk_fonts;
 pub mod clip_line_ui;
+pub mod color_panel_ui;
 pub mod color_picker_ui;
 pub mod color_range_ui;
 pub mod comps_ui;
@@ -1877,6 +1878,8 @@ impl eframe::App for PhotocraftApp {
         // remembered once the pointer is up. Here, after every panel, rather than in the
         // picker's own code: the control channel can set it while the picker is closed.
         brush_picker::persist(self, &ctx);
+        // The Color panel's mode, likewise (`ui.set {colorPanel}` works with the panel hidden).
+        color_panel_ui::persist(self, &ctx);
         // The tool's brush (settings and tip references) is remembered the same way. Like the
         // picker's view, in the frame loop, so the control channel can set it with the panels
         // closed; the engine's revision counter keeps an unchanged brush free.

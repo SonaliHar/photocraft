@@ -3927,3 +3927,17 @@ layerLabel	No Color	Sem cor
 @plural	{n} action|{n} actions	{n} ação|{n} ações
 	Auto Add/Delete	Adicionar/excluir automaticamente
 	ICO is limited to 256 × 256 pixels	ICO é limitado a 256 × 256 pixels
+
+# Color panel modes (#294)
+	Hue Cube	Cubo de matiz
+	Brightness Cube	Cubo de brilho
+	Color Wheel	Roda de cores
+	Grayscale Sliders	Controles deslizantes de tons de cinza
+	RGB Sliders	Controles deslizantes RGB
+	HSB Sliders	Controles deslizantes HSB
+	CMYK Sliders	Controles deslizantes CMYK
+	Lab Sliders	Controles deslizantes Lab
+	Web Color Sliders	Controles deslizantes de cores da Web
+	Copy Color's Hex Code	Copiar código hexadecimal da cor
+	Color management is unavailable.	O gerenciamento de cores não está disponível.
+	Out of gamut for printing: click to use the closest printable color	Fora da gama de impressão: clique para usar a cor imprimível mais próxima

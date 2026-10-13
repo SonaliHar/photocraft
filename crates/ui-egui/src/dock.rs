@@ -506,14 +506,11 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
         let resp = widgets::card_ex(&mut child, g.key(), &tabs, &mut sel, collapsed, !locked, |ui, shown_tab| {
             let Some(&tab) = indices.get(shown_tab) else { return };
             let inner = ui.available_height().max(0.0);
-            if g.scrolls_itself(tab) {
+            // The Color panel fits its controls to the group itself (and scrolls when it can't).
+            if g.scrolls_itself(tab) || tabs.get(shown_tab) == Some(&"Color") {
                 ui.set_min_height(inner);
                 body(app, ui, g, tab);
             } else {
-                // The pro Color field stretches to the group's height instead of a fixed 120 pt.
-                if t.pro && g == Group::Color && tab == 0 {
-                    ui.data_mut(|d| d.insert_temp(crate::panels::color_field_fill_id(), inner));
-                }
                 // No scroll fade: it darkens real colours, swatches and previews at the edge
                 // (#2726); the scroll bar already shows there is more.
                 ui.spacing_mut().scroll.fade.strength = 0.0;
@@ -599,6 +596,10 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
             }
             if tabs.get(sel) == Some(&"Swatches") {
                 crate::swatches_ui::panel_menu(app, ui);
+                ui.separator();
+            }
+            if tabs.get(sel) == Some(&"Color") {
+                crate::color_panel_ui::panel_menu(app, ui);
                 ui.separator();
             }
             if tabs.get(sel) == Some(&"Brush Settings") {

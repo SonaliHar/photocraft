@@ -3835,3 +3835,17 @@ curves	Smooth	Εξομάλυνση
 @plural	{n} action|{n} actions	{n} ενέργεια|{n} ενέργειες
 	Auto Add/Delete	Αυτόματη προσθήκη/διαγραφή
 	ICO is limited to 256 × 256 pixels	Το ICO περιορίζεται σε 256 × 256 εικονοστοιχεία
+
+# Color panel modes (#294)
+	Hue Cube	Κύβος απόχρωσης
+	Brightness Cube	Κύβος φωτεινότητας
+	Color Wheel	Χρωματικός τροχός
+	Grayscale Sliders	Ρυθμιστικά κλίμακας του γκρι
+	RGB Sliders	Ρυθμιστικά RGB
+	HSB Sliders	Ρυθμιστικά HSB
+	CMYK Sliders	Ρυθμιστικά CMYK
+	Lab Sliders	Ρυθμιστικά Lab
+	Web Color Sliders	Ρυθμιστικά χρωμάτων Web
+	Copy Color's Hex Code	Αντιγραφή δεκαεξαδικού κωδικού χρώματος
+	Color management is unavailable.	Η διαχείριση χρωμάτων δεν είναι διαθέσιμη.
+	Out of gamut for printing: click to use the closest printable color	Εκτός χρωματικής γκάμας εκτύπωσης: κάντε κλικ για να χρησιμοποιήσετε το πλησιέστερο εκτυπώσιμο χρώμα

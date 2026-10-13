@@ -4211,3 +4211,17 @@ shape	Appearance	Izgled
 	Ink Characteristics	Karakteristike mastila
 	Solidity:	Punoća:
 	Redrawing	Ponovno iscrtavanje
+
+# Color panel modes (#294)
+	Hue Cube	Kocka nijansi
+	Brightness Cube	Kocka osvetljenosti
+	Color Wheel	Točak boja
+	Grayscale Sliders	Klizači nijansi sive
+	RGB Sliders	RGB klizači
+	HSB Sliders	HSB klizači
+	CMYK Sliders	CMYK klizači
+	Lab Sliders	Lab klizači
+	Web Color Sliders	Klizači veb boja
+	Copy Color's Hex Code	Kopiraj heksadecimalni kod boje
+	Color management is unavailable.	Upravljanje bojama nije dostupno.
+	Out of gamut for printing: click to use the closest printable color	Van gamuta za štampu: kliknite da biste koristili najbližu boju koja može da se odštampa
