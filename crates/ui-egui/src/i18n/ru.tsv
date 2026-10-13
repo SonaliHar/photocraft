@@ -3138,3 +3138,24 @@ curves	Smooth	Сгладить
 	Sta.sh drafts open their page. Published works open in PhotoCraft.	Черновики Sta.sh открывают свою страницу. Опубликованные работы открываются в PhotoCraft.
 	DeviantArt did not offer a download.	DeviantArt не предложил скачивание.
 	Saved file	Сохранённый файл
+
+
+# Dynamic selection context menu and appearance favorites
+	Select Inverse	Инвертировать выделение
+	Pro (Light)	Pro (светлая)
+	Pro (Light Gray)	Pro (светло-серая)
+
+# Measurement Log column headers (analysis_cmds::COLUMNS)
+	Label	Метка
+	Date and Time	Дата и время
+	Scale Units	Единицы масштаба
+	Scale Factor	Коэффициент масштаба
+	Area	Площадь
+	Perimeter	Периметр
+	Circularity	Круглость
+	Gray Value (Minimum)	Уровень серого (минимум)
+	Gray Value (Maximum)	Уровень серого (максимум)
+	Gray Value (Mean)	Уровень серого (среднее)
+	Gray Value (Median)	Уровень серого (медиана)
+	Integrated Density	Интегральная плотность
+	Length	Длина
