@@ -327,6 +327,7 @@ mod tests {
                     k,
                     None,
                     ChannelTarget::Alpha(0),
+                    &[],
                 )
                 .unwrap();
                 let ctx = egui::Context::default();

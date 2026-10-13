@@ -33,14 +33,14 @@ mod tests{
     use super::*;
     #[test]
     fn sampled_and_stored_equality_keeps_existing_semantics_and_polls(){
-        let mut a=BrushSettings{tip:TipShape::Sampled(GrayTile{width:1024,height:1,data:vec![7;1024]}),..Default::default()};let mut b=a.clone();
+        let mut a=BrushSettings{tip:TipShape::Sampled(GrayTile{width:1024,height:1,data:vec![7;1024].into()}),..Default::default()};let mut b=a.clone();
         assert_eq!(equal(&a,&b,10000,&Interrupt::NONE).unwrap(),a==b);
-        if let TipShape::Sampled(tile)=&mut b.tip{*tile.data.get_mut(900).unwrap()=8;}
+        if let TipShape::Sampled(tile)=&mut b.tip{*std::sync::Arc::make_mut(&mut tile.data).get_mut(900).unwrap()=8;}
         assert_eq!(equal(&a,&b,10000,&Interrupt::NONE).unwrap(),a==b);
         let count=std::cell::Cell::new(0);let stop=||{count.set(count.get()+1);count.get()>4;};
         assert!(matches!(equal(&a,&a,10000,&Interrupt::cancel_only(&stop)),Err(RasterInputError::Cancelled)));
-        let stored=StoredTile{key:"owned-key".into(),width:1024,height:1,preview:std::sync::Arc::new(GrayTile{width:1,height:1,data:vec![0]}),full:None};
-        a.tip=TipShape::Stored(stored.clone());b.tip=TipShape::Stored(StoredTile{preview:std::sync::Arc::new(GrayTile{width:1,height:1,data:vec![65535]}),..stored});
+        let stored=StoredTile{key:"owned-key".into(),width:1024,height:1,preview:std::sync::Arc::new(GrayTile{width:1,height:1,data:vec![0].into()}),full:None};
+        a.tip=TipShape::Stored(stored.clone());b.tip=TipShape::Stored(StoredTile{preview:std::sync::Arc::new(GrayTile{width:1,height:1,data:vec![65535].into()}),..stored});
         assert_eq!(equal(&a,&b,10000,&Interrupt::NONE).unwrap(),a==b);
     }
 }

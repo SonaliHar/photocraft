@@ -450,8 +450,9 @@ impl Session {
     /// Open a file in the background: read (for a path) and decode on a worker, with progress
     /// (per layer for PSD/PSB) and cancellation, then add the document like
     /// [`Session::open_document`] (Color Settings policies apply). `name` names the document.
-    /// The job's result adds import-time `assessment` to
-    /// `{document, name, warnings, color}`; on wasm it runs inline.
+    /// Results include import assessment. Profile questions return a private
+    /// `{held,name,warnings,color,assessment}` until the prompt is answered;
+    /// otherwise `{document,name,warnings,color,assessment}`. WASM runs inline.
     pub fn start_open(&mut self, name: &str, source: OpenSource) -> Result<Started> {
         let label = format!("Opening {name}");
         let source_path = match &source {
@@ -483,10 +484,18 @@ impl Session {
                 Ok((imported, ctx.clone()))
             },
             move |s, (r, ctx): (photocraft_io::ImportResult, JobCtx)| {
+                ctx.check()?;
                 let origin = r.origin;
+                let read_only = r.source_read_only || origin.is_read_only();
+                let raw = r.warnings.iter().any(|warning| warning.contains(photocraft_io::raw::DEVELOPED_NOTE));
+                if let Some(question) = s.color.open_question(&r.document).filter(|_| !raw) {
+                    ctx.check()?;
+                    let held = s.hold_open_import(r.document, read_only, origin)?;
+                    return Ok(json!({"held":held,"name":name_a,"warnings":r.warnings,"color":question,"assessment":r.assessment,"previewOnly":r.preview_only}));
+                }
                 let (index, color) = ctx.stage(0.95, 1.0, "Preparing Document", |control| s.open_document_with_interrupt(r.document, None, control))?;
                 if let Some(state) = s.active_mut() {
-                    state.source_read_only = r.source_read_only;
+                    state.source_read_only = read_only;
                     state.set_import_origin(origin, &name_a, source_path.clone());
                     if source_path.as_deref().is_some_and(crate::file_cmds::is_template) {
                         state.path = None;

@@ -884,6 +884,32 @@ fn guide_cmd(s: &mut Session, p: &Value, op: &str) -> Result<Value> {
     guide_controlled::run(s, p, op)
 }
 
+/// Farthest the ruler zero point may sit from the image, in document pixels.
+const MAX_RULER_ORIGIN: f64 = 1.0e7;
+
+/// Move the rulers' zero point (`view.setRulerOrigin`), or put it back at the image's top-left
+/// (`view.resetRulerOrigin`, `p` = None). Undoable like the guides.
+fn ruler_origin_cmd(s: &mut Session, p: Option<&Value>) -> Result<Value> {
+    let origin = match p {
+        None => [0.0, 0.0],
+        Some(p) => {
+            let axis = |k: &str| {
+                p.get(k)
+                    .and_then(Value::as_f64)
+                    .filter(|v| v.is_finite() && v.abs() <= MAX_RULER_ORIGIN)
+                    .ok_or_else(|| EngineError::Other(format!("`{k}` must be a number of pixels within ±{MAX_RULER_ORIGIN}")))
+            };
+            [axis("x")?, axis("y")?]
+        }
+    };
+    let label = if p.is_some() { "Set Ruler Origin" } else { "Reset Ruler Origin" };
+    s.edit(label, |doc, _| {
+        doc.ruler_origin = origin;
+        Ok(())
+    })?;
+    Ok(json!({"x": origin[0], "y": origin[1]}))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     macro_rules! spec {
         ($id:expr, $label:expr, $menu:expr, $sc:expr, $params:expr, $enabled:expr, $run:expr) => {
@@ -969,7 +995,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "New Guide…",
             &["View"],
             None,
-            r##"{"orientation":"horizontal|vertical","position":finite number,"unit":"px|in|mm|pt|pc|document"="px","documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (vertical uses X DPI; horizontal uses Y DPI; native f32 position storage)"##,
+            r##"{"orientation":"horizontal|vertical","position":finite number|unit-bearing string (px/in/cm/mm/pt/pc/%),"unit":"px|in|mm|pt|pc|document"="px","documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (vertical uses X DPI; horizontal uses Y DPI; native f64 position storage)"##,
             has_doc,
             |s, p| guide_cmd(s, p, "new")
         ),
@@ -978,7 +1004,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Move Guide",
             &[],
             None,
-            r##"{"orientation":"horizontal|vertical","index":n,"position":finite number,"unit":"px|in|mm|pt|pc|document"="px","documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (per-axis DPI; native f32 position storage)"##,
+            r##"{"orientation":"horizontal|vertical","index":n,"position":finite number|unit-bearing string (px/in/cm/mm/pt/pc/%),"unit":"px|in|mm|pt|pc|document"="px","documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (per-axis DPI; native f64 position storage)"##,
             has_doc,
             |s, p| guide_cmd(s, p, "move")
         ),
@@ -1000,6 +1026,18 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             |s, p| guide_cmd(s, p, "clear")
         ),
+        spec!(
+            "view.setRulerOrigin",
+            "Set Ruler Origin",
+            &[],
+            None,
+            r##"{"x":px,"y":px} (the rulers' zero point in document pixels; the rulers and Info panel measure from it)"##,
+            has_doc,
+            |s, p| ruler_origin_cmd(s, Some(p))
+        ),
+        spec!("view.resetRulerOrigin", "Reset Ruler Origin", &[], None, "{} (zero point back at the image's top-left)", has_doc, |s, _| ruler_origin_cmd(
+            s, None
+        )),
     ]
 }
 
@@ -1659,6 +1697,166 @@ mod tests {
         s.execute("view.clearGuides", json!({})).unwrap();
         assert!(s.active().unwrap().doc.guides.vertical.is_empty());
         assert!(s.execute("view.moveGuide", json!({"orientation": "vertical", "index": 3, "position": 1})).is_err());
+    }
+
+    /// #2955: the rulers' zero point is set and reset by command, undoable, and bad params are
+    /// refused without touching the document.
+    #[test]
+    fn ruler_origin_is_set_reset_and_undoable() {
+        let mut s = session();
+        assert_eq!(s.active().unwrap().doc.ruler_origin, [0.0, 0.0]);
+        assert_eq!(s.execute("view.setRulerOrigin", json!({"x": 40, "y": 12.5})).unwrap(), json!({"x": 40.0, "y": 12.5}));
+        assert_eq!(s.active().unwrap().doc.ruler_origin, [40.0, 12.5]);
+        s.execute("view.resetRulerOrigin", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc.ruler_origin, [0.0, 0.0]);
+        s.undo();
+        assert_eq!(s.active().unwrap().doc.ruler_origin, [40.0, 12.5]);
+        for bad in [json!({}), json!({"x": 1}), json!({"x": "a", "y": 2}), json!({"x": 1e300, "y": 0}), json!({"x": -2e7, "y": 0}), json!(null), json!([1, 2])]
+        {
+            assert!(s.execute("view.setRulerOrigin", bad.clone()).is_err(), "{bad} is refused");
+        }
+        assert_eq!(s.active().unwrap().doc.ruler_origin, [40.0, 12.5]);
+        let mut empty = Session::new();
+        assert!(empty.execute("view.setRulerOrigin", json!({"x": 1, "y": 2})).is_err());
+        assert!(empty.execute("view.resetRulerOrigin", json!({})).is_err());
+    }
+
+    /// The last guide added in `orientation` for `position`.
+    fn new_guide(s: &mut Session, orientation: &str, position: Value) -> f64 {
+        s.execute("view.newGuide", json!({"orientation": orientation, "position": position})).unwrap();
+        let g = &s.active().unwrap().doc.guides;
+        *if orientation == "vertical" { &g.vertical } else { &g.horizontal }.last().unwrap()
+    }
+
+    #[test]
+    fn guide_positions_take_photoshop_units() {
+        let mut s = Session::new();
+        // 4 × 2 inches at 100 ppi.
+        s.execute("file.new", json!({"width": 400, "height": 200, "resolution": 100})).unwrap();
+        // Percent follows the guide's own axis: the width for a vertical guide, the height for a horizontal one.
+        assert_eq!(new_guide(&mut s, "vertical", json!("50%")), 200.0);
+        assert_eq!(new_guide(&mut s, "horizontal", json!("50%")), 100.0);
+        for one_inch in ["1in", "1 in", "2.54cm", "25.4 mm", "72pt", "6pc", "100px", "100", "1,0 inch"] {
+            assert!((new_guide(&mut s, "vertical", json!(one_inch)) - 100.0).abs() < 1e-3, "{one_inch}");
+        }
+        // Fractional and negative positions are kept; a plain number is pixels, as before.
+        assert_eq!(new_guide(&mut s, "horizontal", json!("12.5px")), 12.5);
+        assert_eq!(new_guide(&mut s, "vertical", json!("-10px")), -10.0);
+        assert_eq!(new_guide(&mut s, "vertical", json!(40)), 40.0);
+        // Points and picas follow Units & Rulers › Point Size.
+        s.execute("prefs.set", json!({"path": "unitsAndRulers.pointSize", "value": "traditional"})).unwrap();
+        assert!((new_guide(&mut s, "vertical", json!("72.27pt")) - 100.0).abs() < 1e-3);
+        // A guide moved with a unit lands where a new one would.
+        s.execute("view.moveGuide", json!({"orientation": "horizontal", "index": 0, "position": "25%"})).unwrap();
+        assert_eq!(s.active().unwrap().doc.guides.horizontal[0], 50.0);
+    }
+
+    #[test]
+    fn new_guides_keep_their_own_colour_through_moves_deletes_and_undo() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 400, "height": 200})).unwrap();
+        let color = |s: &Session, vertical: bool, p: f64| s.active().unwrap().doc.guides.color(vertical, p);
+        // Without a colour a guide uses the preference colour, as ruler-drag guides always did.
+        s.execute("view.newGuide", json!({"orientation": "vertical", "position": 10})).unwrap();
+        assert_eq!(color(&s, true, 10.0), None);
+        assert!(s.active().unwrap().doc.guides.colors.is_empty());
+        s.execute("view.newGuide", json!({"orientation": "vertical", "position": 20, "color": "magenta"})).unwrap();
+        s.execute("view.newGuide", json!({"orientation": "horizontal", "position": 20, "color": "#123456"})).unwrap();
+        s.execute("view.newGuide", json!({"orientation": "vertical", "position": 30, "color": "LightBlue"})).unwrap();
+        assert_eq!(color(&s, true, 20.0), Some([0xff, 0x00, 0xff]));
+        assert_eq!(color(&s, false, 20.0), Some([0x12, 0x34, 0x56]), "the same position across is a different guide");
+        assert_eq!(color(&s, true, 30.0), Some([0x33, 0x66, 0xff]), "names are case-insensitive");
+        // Moving takes the colour along.
+        s.execute("view.moveGuide", json!({"orientation": "vertical", "index": 1, "position": 25})).unwrap();
+        assert_eq!((color(&s, true, 20.0), color(&s, true, 25.0)), (None, Some([0xff, 0x00, 0xff])));
+        // Undo restores it where it was.
+        s.undo();
+        assert_eq!((color(&s, true, 20.0), color(&s, true, 25.0)), (Some([0xff, 0x00, 0xff]), None));
+        // Deleting drops it; clearing drops them all.
+        s.execute("view.deleteGuide", json!({"orientation": "vertical", "index": 2})).unwrap();
+        assert_eq!(color(&s, true, 30.0), None);
+        assert_eq!(s.active().unwrap().doc.guides.colors.len(), 2);
+        s.execute("view.clearGuides", json!({})).unwrap();
+        assert!(s.active().unwrap().doc.guides.colors.is_empty());
+    }
+
+    #[test]
+    fn moving_one_of_two_coloured_guides_at_one_position_leaves_the_other_its_colour() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 400, "height": 200})).unwrap();
+        for _ in 0..2 {
+            s.execute("view.newGuide", json!({"orientation": "vertical", "position": 50, "color": "green"})).unwrap();
+        }
+        s.execute("view.moveGuide", json!({"orientation": "vertical", "index": 0, "position": 60})).unwrap();
+        let g = &s.active().unwrap().doc.guides;
+        assert_eq!((g.color(true, 50.0), g.color(true, 60.0)), (Some([0x33, 0xff, 0x33]), Some([0x33, 0xff, 0x33])));
+    }
+
+    #[test]
+    fn cyan_is_the_default_guide_colour_so_ruler_guides_read_as_cyan() {
+        let default = crate::prefs::Preferences::default().guides_grid_and_slices.guide_color;
+        let cyan = GUIDE_COLORS.iter().find(|(name, ..)| *name == "cyan").map(|(.., rgb)| *rgb);
+        assert_eq!(cyan, crate::prefs::parse_hex(&default));
+    }
+
+    #[test]
+    fn bad_guide_colours_are_refused_without_a_guide() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 400, "height": 200})).unwrap();
+        let undo_before = s.active().unwrap().history.can_undo();
+        for bad in [json!("puce"), json!("#12345"), json!("#gggggg"), json!(""), json!(7), json!(null), json!(["cyan"])] {
+            assert!(s.execute("view.newGuide", json!({"orientation": "vertical", "position": 10, "color": bad.clone()})).is_err(), "{bad}");
+        }
+        let g = &s.active().unwrap().doc.guides;
+        assert!(g.vertical.is_empty() && g.colors.is_empty());
+        assert_eq!(s.active().unwrap().history.can_undo(), undo_before);
+    }
+
+    #[test]
+    fn bad_guide_positions_are_refused_without_a_guide() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 400, "height": 200, "resolution": 100})).unwrap();
+        let undo_before = s.active().unwrap().history.can_undo();
+        for bad in [
+            json!("abc"),
+            json!("50 furlongs"),
+            json!(""),
+            json!("%"),
+            json!("NaN"),
+            json!("inf"),
+            json!("1e400"),
+            json!("2000000px"),
+            json!(1e300),
+            json!(true),
+            json!([1]),
+        ] {
+            assert!(s.execute("view.newGuide", json!({"orientation": "vertical", "position": bad.clone()})).is_err(), "{bad}");
+        }
+        assert!(s.execute("view.newGuide", json!({"orientation": "vertical"})).is_err(), "no position");
+        let g = &s.active().unwrap().doc.guides;
+        assert!(g.vertical.is_empty() && g.horizontal.is_empty());
+        assert_eq!(s.active().unwrap().history.can_undo(), undo_before, "a refused guide records no history step");
+    }
+
+    /// Guides keep their exact place (#2918): 1 cm at 300 ppi through New Guide and .pcraft, and
+    /// a 1/32 px PSD position past 2^19 px, where f32 has no 1/32 steps left.
+    #[test]
+    fn guides_keep_sub_pixel_positions_through_pcraft_and_psd() {
+        let (cm, far) = (300.0 / 2.54, 600_000.031_25);
+        let mut s = session();
+        s.execute("view.newGuide", json!({"orientation": "horizontal", "position": cm})).unwrap();
+        s.execute("view.newGuide", json!({"orientation": "vertical", "position": far})).unwrap();
+        fn wide(v: impl Into<f64>) -> f64 {
+            v.into()
+        }
+        let exact = |g: &photocraft_doc::Guides| (wide(g.horizontal[0]), wide(g.vertical[0]));
+        let doc = &s.active().unwrap().doc;
+        assert_eq!(exact(&doc.guides), (cm, far));
+        let pcraft = photocraft_format::save_to_bytes(doc, &Default::default()).unwrap();
+        assert_eq!(exact(&photocraft_format::load_from_bytes(&pcraft).unwrap().guides), (cm, far));
+        let psd = photocraft_io::export(doc, "psd", &Default::default()).unwrap().bytes;
+        let back = photocraft_io::import("g.psd", &psd).unwrap().document.guides;
+        assert_eq!(wide(back.vertical[0]), far, "1032 stores 1/32 px");
     }
 
     #[test]

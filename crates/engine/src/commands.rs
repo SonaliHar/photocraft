@@ -544,7 +544,7 @@ fn build() -> Vec<CommandSpec> {
             "Layer…",
             ["Layer", "New"],
             Some("Cmd+Shift+N"),
-            r##"{"name":str?,"clipToPrevious":bool=false (Use Previous Layer to Create Clipping Mask; inside a clip group the layer joins it anyway),"color":"none|red|orange|yellow|green|seafoam|blue|indigo|magenta|fuchsia|violet|gray"="none","mode":"Normal|Multiply|…"="Normal","opacity":0..1=1,"fillNeutral":bool=false (fill with the mode's neutral color: modes without one are an error)}"##,
+            r##"{"name":str?,"clipToPrevious":bool=false (Use Previous Layer to Create Clipping Mask; inside a clip group the layer joins it anyway),"color":"none|red|orange|yellow|green|seafoam|blue|indigo|magenta|fuchsia|violet|gray"="none","mode":"Normal|Multiply|…"="Normal","opacity":0..1=1,"fillNeutral":bool=false (fill with the mode's neutral color: modes without one are an error),"position":"above|below"="above" (below: the Layers panel's Cmd/Ctrl-click; never under the Background)}"##,
             has_doc,
             crate::new_layer::run
         ),
@@ -572,9 +572,14 @@ fn build() -> Vec<CommandSpec> {
             "Duplicate Layer…",
             ["Layer"],
             None,
-            r##"{"layer":id?,"name":str? (single-copy name),"inPlace":bool=false (artboards: keep the copy on the original instead of beside it),"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (no layer: every selected layer)"##,
+            r##"{"layer":id?,"inPlace":bool=false,"name":str?,"document":index|"new"=same document,"documentName":str?,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (no layer: every selected layer)"##,
             has_layer,
-            crate::layer_duplicate_controlled::run
+            |s, p| {
+                if p.get("document").and_then(Value::as_str) == Some("new") {
+                    return crate::layer_copy_cmds::duplicate_to_new_document(s, p);
+                }
+                crate::layer_duplicate_controlled::run(s, p)
+            }
         ),
         cmd!("layer.delete", "Delete Layer", ["Layer", "Delete"], None, r##"{"layer":id?} (no layer: every selected layer)"##, has_layer, |s, p| {
             if crate::layer_multi_cmds::multi(s, p) {
@@ -650,13 +655,8 @@ fn build() -> Vec<CommandSpec> {
                     if let Some(Value::Object(m)) = p.get("locks") {
                         for (k, v) in m {
                             let v = v.as_bool().unwrap_or(false);
-                            match k.as_str() {
-                                "transparency" => l.locks.transparency = v,
-                                "pixels" => l.locks.pixels = v,
-                                "position" => l.locks.position = v,
-                                "artboard" => l.locks.artboard = v,
-                                "all" => l.locks.all = v,
-                                other => return Err(bad("layer.setProps", format!("unknown lock `{other}`"))),
+                            if !l.locks.set(k, v) {
+                                return Err(bad("layer.setProps", format!("unknown lock `{k}`")));
                             }
                         }
                     }
@@ -1249,6 +1249,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::analysis_cmds::specs());
     v.extend(crate::notes_cmds::specs());
     v.extend(crate::history_cmds::specs());
+    v.extend(crate::history_select_cmds::specs());
     v.extend(crate::proof_sim::specs());
     v.extend(crate::presets::specs());
     v.extend(crate::document_preset_cmds::specs());

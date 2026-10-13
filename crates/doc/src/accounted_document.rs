@@ -539,6 +539,7 @@ fn census(doc: &Document, actual: bool, control: &ReadControl<'_>) -> Result<Mod
         variables: _,
         timeline: _,
         file_encoding: _,
+        ruler_origin: _,
     } = doc;
     control.check(1)?;
     if !doc.channels.is_empty()

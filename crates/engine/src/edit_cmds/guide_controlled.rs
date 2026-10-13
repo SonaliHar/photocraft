@@ -82,14 +82,24 @@ fn plan(session: &Session, params: &Value, op: &str) -> Result<Plan> {
     let position = params
         .get("position")
         .map(|value| -> Result<f64> {
-            let coordinate = value.as_f64().filter(|value| value.is_finite()).ok_or_else(|| error("position must be finite"))?;
-            let axis = if vertical { Axis::X } else { Axis::Y };
-            let pixels = physical_size::units_to_pixels(coordinate.abs(), resolution, unit, axis).map_err(error)?.copysign(coordinate);
-            let value = pixels;
-            if !value.is_finite() {
-                return Err(error("position exceeds finite native f64 storage"));
+            resolution.validate().map_err(error)?;
+            let pixels = if let Some(text) = value.as_str() {
+                if text.len() > 256 || text.contains('\0') {
+                    return Err(error("position length limit"));
+                }
+                let (number, suffix) = crate::prefs::Unit::parse_length(text).ok_or_else(|| error("position must be a number with px, in, cm, mm, pt, pc or %"))?;
+                let dpi = if vertical { resolution.x_dpi } else { resolution.y_dpi };
+                let extent = if vertical { document.size.width } else { document.size.height };
+                suffix.unwrap_or(crate::prefs::Unit::Pixels).to_px(number, dpi, f64::from(extent), session.prefs().units_and_rulers.point_size.per_inch())
+            } else {
+                let coordinate = value.as_f64().filter(|value| value.is_finite()).ok_or_else(|| error("position must be finite"))?;
+                let axis = if vertical { Axis::X } else { Axis::Y };
+                physical_size::units_to_pixels(coordinate.abs(), resolution, unit, axis).map_err(error)?.copysign(coordinate)
+            };
+            if !pixels.is_finite() || pixels.abs() > 1_000_000.0 {
+                return Err(error("position is out of range (at most 1000000 px from the canvas origin)"));
             }
-            Ok(value)
+            Ok(pixels)
         })
         .transpose()?;
     let index = params
@@ -331,7 +341,7 @@ mod tests {
         let before = state.doc.clone();
         for params in [
             json!({"orientation":"diagonal","position":1}),
-            json!({"position":"1"}),
+            json!({"position":"invalid length"}),
             json!({"position":1,"unit":"bogus"}),
             json!({"index":999999,"position":1}),
             json!({"position":1,"documentId":before.id.0.to_string()}),
@@ -359,6 +369,19 @@ mod tests {
         assert_eq!(guides.vertical.iter().map(|value| value.to_bits()).collect::<Vec<_>>(), vec![(-0.0f64).to_bits(), 144f64.to_bits()]);
         assert_eq!(guides.horizontal, vec![2.25]);
     }
+    #[test]
+    fn upstream_string_units_use_physical_axes_and_bounded_percent() {
+        let mut session = Session::new();
+        session.execute("file.new", json!({"width":400,"height":200})).unwrap();
+        session.edit("Axes", |doc, _| {
+            doc.set_physical_resolution(PhysicalResolution { x_dpi:144.0, y_dpi:288.0, unit:PhysicalUnit::Inch }).map_err(error)?;
+            Ok(())
+        }).unwrap();
+        assert_eq!(plan(&session,&json!({"orientation":"vertical","position":"1 in"}),"new").unwrap().position,Some(144.0));
+        assert_eq!(plan(&session,&json!({"orientation":"horizontal","position":"1 in"}),"new").unwrap().position,Some(288.0));
+        assert_eq!(plan(&session,&json!({"orientation":"vertical","position":"50%"}),"new").unwrap().position,Some(200.0));
+        assert!(plan(&session,&json!({"position":"x".repeat(257)}),"new").is_err());
+    }
 }
 
 fn copied_colors(values: &[photocraft_doc::GuideColor], control: &Interrupt<'_>) -> Result<Vec<photocraft_doc::GuideColor>> {
@@ -375,4 +398,6 @@ fn copied_colors(values: &[photocraft_doc::GuideColor], control: &Interrupt<'_>)
         output.push(*value);
     }
     Ok(output)
+
+
 }

@@ -18,7 +18,7 @@ impl Mips{
         poll(control)?;self::limits(limits)?;
         let mut w=usize::try_from(tile.width).map_err(|_|StrokeError::Limit)?;let mut h=usize::try_from(tile.height).map_err(|_|StrokeError::Limit)?;
         if w==0||h==0||w.checked_mul(h)!=Some(tile.data.len()){return Err(StrokeError::InvalidInput("sampled tip dimensions"));}
-        let retained_bytes=mul(tile.data.capacity() as u64,size_of::<u16>() as u64)?;
+        let retained_bytes=add(mul(tile.data.len() as u64,size_of::<u16>() as u64)?,32)?;
         if retained_bytes>limits.resident_bytes{return Err(StrokeError::Limit);}
         let mut pixels=0u64;let mut work=0u64;let mut levels=0usize;
         loop{
@@ -76,7 +76,7 @@ mod tests{
     #[test]
     fn odd_and_thin_mips_keep_upstream_reduction_words(){
         for(w,h)in [(1u32,1u32),(1,257),(257,1),(5,7),(256,129)]{
-            let tile=GrayTile{width:w,height:h,data:(0..w*h).map(|i|i.wrapping_mul(7919) as u16).collect()};
+            let tile=GrayTile{width:w,height:h,data:(0..w*h).map(|i|i.wrapping_mul(7919) as u16).collect::<Vec<_>>().into()};
             let baseline=Mips::new(&tile);let current=Mips::try_new_with_interrupt(&tile,StrokeLimits::default(),&Interrupt::NONE).unwrap();
             assert_eq!(baseline.levels.len(),current.levels.len());
             for(a,b)in baseline.levels.iter().zip(&current.levels){assert_eq!((a.0,a.1),(b.0,b.1));assert_eq!(a.2.iter().map(|v|v.to_bits()).collect::<Vec<_>>(),b.2.iter().map(|v|v.to_bits()).collect::<Vec<_>>());}
@@ -84,7 +84,7 @@ mod tests{
     }
     #[test]
     fn aggregate_pyramid_and_late_cancel_refuse_without_result(){
-        let tile=GrayTile{width:257,height:129,data:vec![12345;257*129]};
+        let tile=GrayTile{width:257,height:129,data:vec![12345;257*129].into()};
         let req=Mips::controlled_requirements(&tile,StrokeLimits::default(),&Interrupt::NONE).unwrap();
         let small=StrokeLimits{resident_bytes:req.retained_bytes+req.staged_bytes-1,..StrokeLimits::default()};
         assert!(matches!(Mips::try_new_with_interrupt(&tile,small,&Interrupt::NONE),Err(StrokeError::Limit)));

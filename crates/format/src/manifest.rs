@@ -67,6 +67,9 @@ pub struct DocM {
     pub layers: Vec<LayerM>,
     pub channels: Vec<ChannelM>,
     pub guides: Guides,
+    /// The rulers' zero point in document pixels (absent in older files: the top-left).
+    #[serde(default)]
+    pub ruler_origin: [f64; 2],
     pub selection: Option<SurfaceM>,
     #[serde(default)]
     pub selection_channel_id: Option<photocraft_doc::item_identity::ChannelId>,

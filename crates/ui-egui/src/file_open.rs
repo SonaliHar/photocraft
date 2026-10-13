@@ -37,12 +37,19 @@ pub enum DropTarget {
 /// `warnings` from an import, plus one for each font family the active document's type uses that
 /// isn't installed (#4559): Photoshop warns about missing fonts as a file opens, and the CLI and
 /// automation already report them; the type would otherwise silently render in a fallback face.
-pub(crate) fn with_missing_fonts(app: &PhotocraftApp, mut warnings: Vec<String>) -> Vec<String> {
-    if let Some(st) = app.session.active() {
-        for w in photocraft_engine::type_extra_cmds::missing_font_warnings(&st.doc) {
-            if !warnings.contains(&w) {
-                warnings.push(w);
-            }
+pub(crate) fn with_missing_fonts(app: &PhotocraftApp, warnings: Vec<String>) -> Vec<String> {
+    match app.session.active() {
+        Some(st) => with_missing_fonts_of(&st.doc, warnings),
+        None => warnings,
+    }
+}
+
+/// [`with_missing_fonts`] for `doc` itself: a file held back for its profile prompt
+/// (`open_prompt`) isn't the active document yet.
+pub(crate) fn with_missing_fonts_of(doc: &photocraft_doc::Document, mut warnings: Vec<String>) -> Vec<String> {
+    for w in photocraft_engine::type_extra_cmds::missing_font_warnings(doc) {
+        if !warnings.contains(&w) {
+            warnings.push(w);
         }
     }
     warnings
@@ -73,33 +80,32 @@ impl PhotocraftApp {
             crate::jobs_ui::start_open(self, &display_name(path), Some(path.to_string()), crate::jobs_ui::bytes(bytes))?;
             return Ok(Vec::new());
         }
-        let warnings = self.open_bytes(&display_name(path), bytes)?;
-        self.opened_from(path);
-        Ok(warnings)
+        self.open_bytes_from(&display_name(path), bytes, Some(path))
     }
 
     /// Publish an already prepared import using the shared interactive-open
     /// policy. A native stream has no original byte buffer; byte imports retain
     /// it only for the existing Camera Raw dialog flow.
-    pub(crate) fn finish_import(&mut self, name: &str, imported: photocraft_io::ImportResult, original_bytes: Option<&[u8]>) -> Result<Vec<String>, String> {
+    pub(crate) fn finish_import(&mut self, name: &str, imported: photocraft_io::ImportResult, original_bytes: Option<&[u8]>, path: Option<&str>) -> Result<Vec<String>, String> {
         let photocraft_io::ImportResult { document, mut warnings, origin, assessment, source_read_only, preview_only } = imported;
         crate::import_assessment_ui::append(&mut warnings, assessment.as_ref());
-        let (_, color) = self.session.open_document(document, None).map_err(|error| error.to_string())?;
-        if let Some(state) = self.session.active_mut() { state.set_import_origin(origin, name, None); state.source_read_only |= source_read_only || preview_only; }
-        self.sync_views();
-        let warnings = with_missing_fonts(self, warnings);
-        self.ui.status = format!("Opened {name}");
-        self.ui.status_error = false;
-        if crate::camera_raw_ui::wants_open_dialog(self, &warnings) {
-            crate::camera_raw_ui::queue_open_dialog(self, name, None, original_bytes);
-            notices::io_warnings(self, &format!("Opened {name}"), &crate::camera_raw_ui::without_develop_note(&warnings));
-        } else { notices::io_warnings(self, &format!("Opened {name}"), &warnings); }
-        photocraft_engine::automate_cmds::document_opened(&mut self.session);
-        self.sync_views();
-        let ask = color.get("ask").and_then(serde_json::Value::as_bool) == Some(true);
-        if ask && (color.get("mismatch").and_then(serde_json::Value::as_bool) == Some(true) || color.get("missing").is_some()) {
-            crate::prefs_ui::open_mismatch(self, &color);
-        }
+        let warnings=with_missing_fonts_of(&document,warnings);
+        let developed=warnings.iter().any(|warning|warning.contains(photocraft_io::raw::DEVELOPED_NOTE));
+        let question=self.session.color.open_question(&document).filter(|_|!developed);
+        let wants_raw=crate::camera_raw_ui::wants_open_dialog(self,&warnings);
+        let bytes=if wants_raw&&path.is_none(){
+            if let Some(source)=original_bytes{
+                let mut bytes=Vec::new();bytes.try_reserve_exact(source.len()).map_err(|_|"could not reserve Camera Raw source bytes")?;
+                bytes.extend_from_slice(source);Some(std::sync::Arc::new(bytes))
+            }else{None}
+        }else{None};
+        // A queued prompt owns this import and its path. It must never stamp the
+        // unrelated currently active tab or publish before Color Settings asks.
+        crate::open_prompt::arrive_checked(self,crate::open_prompt::Held{
+            doc:document,origin:Some(origin),read_only:source_read_only||preview_only||origin.is_read_only(),
+            name:name.to_string(),path:path.map(str::to_string),warnings:warnings.clone(),bytes,
+            slot:None,question,policy_applied:false,
+        })?;
         Ok(warnings)
     }
 
@@ -144,8 +150,7 @@ impl PhotocraftApp {
                 .map_err(|error| format!("{path}: {error}"))?;
             if let Some(imported) = imported
             {
-                let warnings = self.finish_import(&name, imported, None)?;
-                self.opened_from(path);
+                let warnings = self.finish_import(&name, imported, None, Some(path))?;
                 return Ok(warnings);
             }
         }
@@ -214,6 +219,12 @@ impl PhotocraftApp {
             DropTarget::Tabs(slot) => Some(slot),
             DropTarget::Canvas | DropTarget::Elsewhere => None,
         };
+        // A box still open from an earlier drop (or any Free Transform) is applied first (#4833):
+        // the queue below places the next file only once no box is open, so a separate drop
+        // would otherwise wait unseen for ↩. Files dropped together still go one by one.
+        if target == DropTarget::Canvas && self.ui.transform.is_some() && files.iter().any(|f| !crate::preset_files_ui::is_preset_file(&dropped_name(f))) {
+            crate::transform_tool::commit(self);
+        }
         for f in files {
             let name = dropped_name(&f);
             if target == DropTarget::Canvas && !crate::preset_files_ui::is_preset_file(&name) {

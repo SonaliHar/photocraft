@@ -123,7 +123,7 @@ fn tile_bytes(tile: &GrayTile) -> Result<u64> {
         .checked_mul(u64::from(tile.height))
         .filter(|count| *count > 0 && *count == tile.data.len() as u64)
         .ok_or_else(|| error("invalid sampled brush bitmap"))?;
-    count.checked_mul(2).filter(|bytes| *bytes <= MAX_CHECKED_RASTER_BYTES).ok_or_else(|| error("sampled brush capacity limit"))
+    count.checked_mul(2).and_then(|bytes|bytes.checked_add(32)).filter(|bytes| *bytes <= MAX_CHECKED_RASTER_BYTES).ok_or_else(|| error("sampled brush capacity limit"))
 }
 // Stored payloads stay owned by their upstream cache; only the bounded key is copied.
 fn stored_bytes(tile: &StoredTile) -> Result<u64> {
@@ -162,19 +162,12 @@ pub(super) fn brush_bytes(brush: &BrushSettings) -> Result<u64> {
         .ok_or_else(|| error("brush/tip/texture residency limit"))
 }
 fn tile_copy(tile: &GrayTile, control: &Interrupt<'_>) -> Result<GrayTile> {
-    tile_bytes(tile)?;
-    let mut data = Vec::new();
-    data.try_reserve_exact(tile.data.len()).map_err(|_| error("sampled brush allocation denied"))?;
-    if data.capacity() != tile.data.len() {
-        return Err(error("sampled brush capacity mismatch"));
-    }
-    for chunk in tile.data.chunks(1024) {
-        poll(control)?;
-        data.extend_from_slice(chunk);
-    }
-    poll(control)?;
-    Ok(GrayTile { width: tile.width, height: tile.height, data })
+    poll(control)?;tile_bytes(tile)?;
+    // Upstream immutable shared samples are retained, not reconstructed.
+    let data=std::sync::Arc::clone(&tile.data);
+    poll(control)?;Ok(GrayTile { width: tile.width, height: tile.height, data })
 }
+
 fn tip_copy(tip: &TipShape, control: &Interrupt<'_>) -> Result<TipShape> {
     match tip {
         TipShape::Round => Ok(TipShape::Round),
@@ -614,13 +607,13 @@ mod tests {
     #[test]
     fn sampled_brush_snapshot_is_fallible_owned_and_bounded() {
         let mut brush = BrushSettings::default();
-        brush.tip = TipShape::Sampled(GrayTile { width: 2, height: 2, data: vec![0, 1, 32768, 65535] });
-        brush.texture.pattern = Pattern::Tile(GrayTile { width: 2, height: 2, data: vec![65535, 32768, 1, 0] });
+        brush.tip = TipShape::Sampled(GrayTile { width: 2, height: 2, data: vec![0, 1, 32768, 65535].into() });
+        brush.texture.pattern = Pattern::Tile(GrayTile { width: 2, height: 2, data: vec![65535, 32768, 1, 0].into() });
         let snapshot = brush_snapshot(&brush, MAX_CHECKED_RASTER_BYTES, &Interrupt::NONE).unwrap();
         assert_eq!(snapshot, brush);
         let TipShape::Sampled(original) = &brush.tip else { panic!("sampled") };
         let TipShape::Sampled(copied) = &snapshot.tip else { panic!("sampled") };
-        assert_ne!(original.data.as_ptr(), copied.data.as_ptr());
+        assert!(std::sync::Arc::ptr_eq(&original.data, &copied.data));
         assert!(brush_snapshot(&brush, 1, &Interrupt::NONE).is_err());
         let cancel = || true;
         assert!(matches!(brush_snapshot(&brush, MAX_CHECKED_RASTER_BYTES, &Interrupt::cancel_only(&cancel)), Err(EngineError::Cancelled)));

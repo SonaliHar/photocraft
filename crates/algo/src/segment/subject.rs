@@ -10,7 +10,7 @@
 //!    probability; background-weighted contrast gives foreground cues; a least-squares
 //!    optimisation with smoothness between neighbours combines them.
 //! 3. Blended with frequency-tuned saliency (R. Achanta, S. Hemami, F. Estrada and
-//!    S. Süsstrunk, "Frequency-tuned Salient Region Detection", CVPR 2009): distance of the
+//!    S. SÃ¼sstrunk, "Frequency-tuned Salient Region Detection", CVPR 2009): distance of the
 //!    lightly blurred CIELAB image from its mean colour.
 //! 4. Otsu's threshold on the saliency map seeds a GrabCut trimap (low-saliency border pixels
 //!    are definite background); the result is cleaned (small islands dropped, small holes
@@ -23,6 +23,7 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
 use photocraft_geom::Rect;
+use photocraft_raster::{Interrupt, RasterInputError};
 
 use super::grabcut::{self, BG, PR_BG, PR_FG};
 use super::slic::{rgb_to_lab, slic_lab};
@@ -35,6 +36,11 @@ const SIGMA_SPA: f32 = 0.25;
 
 /// Selects the most salient object on the canvas.
 pub fn select_subject(sampler: &dyn Sampler, canvas: Rect) -> super::SamplingResult<Option<Region>> {
+    select_subject_with(sampler, canvas, &Interrupt::NONE)
+}
+
+/// Checked sampling with cancellation between stages and inside every min cut.
+pub fn select_subject_with(sampler: &dyn Sampler, canvas: Rect, ctl: &Interrupt) -> super::SamplingResult<Option<Region>> {
     if canvas.width() < 4 || canvas.height() < 4 {
         return Ok(None);
     }
@@ -47,6 +53,7 @@ pub fn select_subject(sampler: &dyn Sampler, canvas: Rect) -> super::SamplingRes
     )?;
     let (w, h) = (img.w, img.h);
     let sal = saliency(&img);
+    ctl.check().map_err(|_| RasterInputError::Cancelled)?;
     let t = otsu(&sal).clamp(0.15, 0.85);
     let mut trimap = vec![PR_BG; w * h];
     let mut any_fg = false;
@@ -67,15 +74,13 @@ pub fn select_subject(sampler: &dyn Sampler, canvas: Rect) -> super::SamplingRes
     if !any_fg {
         return Ok(None);
     }
-    let Some((fg, bg)) = grabcut::grabcut(&img, &mut trimap, 6) else {
-        return Ok(None);
-    };
+    let Some((fg, bg)) = grabcut::grabcut_with(&img, &mut trimap, 6, ctl).map_err(|_| RasterInputError::Cancelled)? else { return Ok(None) };
     let low: Vec<bool> = trimap.iter().map(|v| *v == PR_FG || *v == grabcut::FG).collect();
     let low = super::clean_mask(&low, w, h, 0.2, 0.05);
     if !low.iter().any(|v| *v) {
         return Ok(None);
     }
-    super::finish_region(sampler, canvas, step, &low, w, h, Some((&fg, &bg)))
+    super::finish_region_with(sampler, canvas, step, &low, w, h, Some((&fg, &bg)), ctl)
 }
 
 /// Per-pixel saliency in `0..=1` (see the module docs).
@@ -156,7 +161,7 @@ pub fn saliency(img: &super::RgbImage) -> Vec<f32> {
     }
     let mx = wctr.iter().copied().fold(0.0f32, f32::max).max(1e-6);
     let wfg: Vec<f32> = wctr.iter().map(|v| v / mx).collect();
-    // Saliency optimisation: min Σ wbg s² + Σ wfg (s−1)² + Σ_{i~j} w_ij (s_i − s_j)² (Gauss–Seidel).
+    // Saliency optimisation: min Î£ wbg sÂ² + Î£ wfg (sâˆ’1)Â² + Î£_{i~j} w_ij (s_i âˆ’ s_j)Â² (Gaussâ€“Seidel).
     let wij: Vec<Vec<f32>> = (0..n).map(|p| adj[p].iter().map(|&q| (-dapp(p, q).powi(2) / (2.0 * SIGMA_CLR * SIGMA_CLR)).exp() + 0.1).collect()).collect();
     let mut s = wfg.clone();
     for _ in 0..200 {

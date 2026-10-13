@@ -169,7 +169,7 @@ fn brush_assets(brush: &BrushSettings, cmd: &str) -> Result<u64> {
             .filter(|count| *count > 0 && *count == tile.data.len() as u64)
             .ok_or_else(|| bad(cmd, "invalid retained brush asset"))?;
         bytes = bytes
-            .checked_add((tile.data.capacity() as u64).checked_mul(16).ok_or_else(|| bad(cmd, "brush asset accounting overflow"))?)
+            .checked_add((tile.data.len() as u64).checked_mul(16).and_then(|bytes|bytes.checked_add(32)).ok_or_else(|| bad(cmd, "brush asset accounting overflow"))?)
             .and_then(|bytes| bytes.checked_add(count.checked_mul(16)?))
             .filter(|bytes| *bytes <= MAX_CHECKED_RASTER_BYTES)
             .ok_or_else(|| bad(cmd, "brush asset limit"))?;

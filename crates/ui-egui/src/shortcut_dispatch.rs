@@ -241,7 +241,7 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
             // panels instead, #1313): the shortcut took it, so cancel that move.
             ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
         }
-        let id = match delete_key_command(app, id) {
+        let id = match delete_key_command(app, id).and_then(|id|clip_key_command(app,id)) {
             Ok(id) => id,
             Err(error) => {
                 app.ui.status = error;
@@ -249,6 +249,7 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
                 return true;
             }
         };
+
         let owner = key_owner(app, ctx);
         dispatch(app, ctx, &id);
         ran = true;
@@ -289,6 +290,30 @@ fn delete_key_command(app: &PhotocraftApp, id: String) -> Result<String, String>
         return Ok(id);
     }
     Ok("layer.delete".into())
+}
+
+/// Create Clipping Mask's key (⌥⌘G) releases when there is nothing left to clip, as in Photoshop,
+/// whose Layer menu has one item that reads Create or Release Clipping Mask with the same
+/// shortcut: pressing it again takes the clip off. That is when the layers Create Clipping Mask
+/// would clip are all clipped already: the selected layer, or with several selected, every one
+/// above the lowest.
+/// Read-only menu caption hint; a failed selection does not advertise Release.
+/// Actual shortcut dispatch uses the checked query below and reports its error.
+pub(crate) fn clip_key_releases(app:&PhotocraftApp)->bool {
+    clip_key_releases_checked(app).is_ok_and(|release|release)
+}
+fn clip_key_releases_checked(app:&PhotocraftApp)->Result<bool,String> {
+    let Some(st)=app.session.active() else {return Ok(false)};
+    let selected=st.selected_layers().map_err(|error|error.to_string())?;
+    let clips=match selected.as_slice() {
+        []=>return Ok(false),
+        [one]=>std::slice::from_ref(one),
+        [_lowest,above @ ..]=>above,
+    };
+    Ok(clips.iter().all(|id|st.doc.layer(*id).is_some_and(|layer|layer.clipped)))
+}
+fn clip_key_command(app:&PhotocraftApp,id:String)->Result<String,String> {
+    if id=="layer.createClippingMask" && clip_key_releases_checked(app)? {Ok("layer.releaseClippingMask".into())} else {Ok(id)}
 }
 
 /// Why `id` can't run now (the engine's reason when it has one).

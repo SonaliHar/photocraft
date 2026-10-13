@@ -60,7 +60,11 @@ impl<'a,'b> CloneBudget<'a,'b> {
     }
 }
 
-fn gray_requirement(tile:&crate::tile::GrayTile)->Result<IncrementalCloneRequirements>{vector_requirement(&tile.data)}
+fn gray_requirement(tile:&crate::tile::GrayTile)->Result<IncrementalCloneRequirements>{
+    // Shared immutable samples have no Vec spare capacity and no clone payload.
+    //32 bytes conservatively cover the Arc owner/header, not all allocator RSS.
+    Ok(IncrementalCloneRequirements{retained_bytes:sum(scaled(tile.data.len(),size_of::<u16>())?,32)?,staged_bytes:0,work_units:(tile.data.len() as u64).checked_mul(2).and_then(|n|n.checked_add(1)).ok_or(StrokeError::Limit)?})
+}
 fn stored_requirement(tile:&crate::tile::StoredTile,limits:StrokeLimits,control:&Interrupt<'_>)->Result<IncrementalCloneRequirements>{
     poll(control)?;
     let mut out=IncrementalCloneRequirements{retained_bytes:tile.key.capacity() as u64,staged_bytes:tile.key.len() as u64,work_units:(tile.key.len() as u64).checked_mul(2).ok_or(StrokeError::Limit)?};
@@ -77,7 +81,9 @@ pub(crate) fn brush_requirements(brush:&BrushSettings,limits:StrokeLimits,contro
     out.add(match &brush.texture.pattern{Pattern::Procedural{..}=>Default::default(),Pattern::Tile(tile)=>gray_requirement(tile)?,Pattern::Stored(tile)=>stored_requirement(tile,limits,control)?},limits)?;
     Ok(out)
 }
-fn copy_gray(tile:&crate::tile::GrayTile,budget:&mut CloneBudget<'_,'_>)->Result<crate::tile::GrayTile>{Ok(crate::tile::GrayTile{width:tile.width,height:tile.height,data:budget.copy(&tile.data)?})}
+fn copy_gray(tile:&crate::tile::GrayTile,budget:&mut CloneBudget<'_,'_>)->Result<crate::tile::GrayTile>{
+    budget.work(1)?;Ok(crate::tile::GrayTile{width:tile.width,height:tile.height,data:Arc::clone(&tile.data)})
+}
 fn copy_stored(tile:&crate::tile::StoredTile,budget:&mut CloneBudget<'_,'_>)->Result<crate::tile::StoredTile>{Ok(crate::tile::StoredTile{key:budget.string(&tile.key)?,width:tile.width,height:tile.height,preview:Arc::clone(&tile.preview),full:tile.full.as_ref().map(Arc::clone)})}
 fn copy_tip(tip:&TipShape,budget:&mut CloneBudget<'_,'_>)->Result<TipShape>{match tip{TipShape::Round=>Ok(TipShape::Round),TipShape::Sampled(tile)=>Ok(TipShape::Sampled(copy_gray(tile,budget)?)),TipShape::Stored(tile)=>Ok(TipShape::Stored(copy_stored(tile,budget)?))}}
 pub(crate) fn copy_brush(b:&BrushSettings,budget:&mut CloneBudget<'_,'_>)->Result<BrushSettings>{
@@ -181,12 +187,13 @@ mod tests {
     }
     #[test]
     fn raw_nan_signed_zero_and_shared_assets_survive_private_clone() {
-        let tile=crate::tile::GrayTile{width:1,height:1,data:vec![65535]};
+        let tile=crate::tile::GrayTile{width:1,height:1,data:vec![65535].into()};
         let mut renderer=StrokeRenderer::new(&BrushSettings{tip:TipShape::Sampled(tile),..Default::default()},Some(photocraft_color::PixelFormat::RGBA32F),1.0);
         renderer.scratch=vec![f32::from_bits(0x7fc01234),-0.0];
         let cloned=renderer.try_clone_with_interrupt(StrokeLimits::default(),&Interrupt::NONE).unwrap();
         assert_eq!(renderer.scratch.iter().map(|v|v.to_bits()).collect::<Vec<_>>(),cloned.scratch.iter().map(|v|v.to_bits()).collect::<Vec<_>>());
         assert!(Arc::ptr_eq(renderer.ctx.tip.as_ref().unwrap(),cloned.ctx.tip.as_ref().unwrap()));
+        if let (TipShape::Sampled(before),TipShape::Sampled(after))=(&renderer.ctx.brush.tip,&cloned.ctx.brush.tip){assert!(Arc::ptr_eq(&before.data,&after.data));}else{panic!("sampled brush identity retained");}
         let req=renderer.incremental_clone_requirements(StrokeLimits::default(),&Interrupt::NONE).unwrap();
         assert!(renderer.try_clone_with_interrupt(StrokeLimits{resident_bytes:req.retained_bytes+req.staged_bytes-1,..Default::default()},&Interrupt::NONE).is_err());
         let stop=||true;assert!(matches!(renderer.try_clone_with_interrupt(StrokeLimits::default(),&Interrupt::cancel_only(&stop)),Err(StrokeError::Cancelled)));

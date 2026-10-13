@@ -139,6 +139,7 @@ impl<'a, 'b, 's> Snapshot<'a, 'b, 's> {
             layers: Vec::new(),
             channels: Vec::new(),
             guides: Default::default(),
+            ruler_origin: source.ruler_origin,
             selection: None,
             selection_channel_id: None,
             metadata: Default::default(),

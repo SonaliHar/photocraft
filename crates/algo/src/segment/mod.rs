@@ -3,7 +3,7 @@
 //!
 //! Everything here is classical (no learned models) and implemented from the published papers:
 //!
-//! * [`maxflow`]: hybrid push/relabel (Goldberg & Tarjan, JACM 1988) and Boykov–Kolmogorov
+//! * [`maxflow`]: hybrid push/relabel (Goldberg & Tarjan, JACM 1988) and Boykovâ€“Kolmogorov
 //!   min-cut / max-flow (Boykov & Kolmogorov, "An Experimental
 //!   Comparison of Min-Cut/Max-Flow Algorithms for Energy Minimization in Vision", PAMI 2004).
 //! * [`gmm`]: Gaussian mixture colour models (k-means++ initialisation, Arthur & Vassilvitskii
@@ -35,7 +35,7 @@ pub mod slic;
 pub mod subject;
 
 use photocraft_geom::Rect;
-use photocraft_raster::{RasterInputError, Surface};
+use photocraft_raster::{Interrupt, RasterInputError, Surface};
 
 pub use crate::selection::Region;
 use gmm::Gmm;
@@ -79,7 +79,7 @@ impl RgbImage {
             .collect();
         Self { w, h, px }
     }
-    /// Box-average downsampling by an integer `step` (output `ceil(w/step) × ceil(h/step)`).
+    /// Box-average downsampling by an integer `step` (output `ceil(w/step) Ã— ceil(h/step)`).
     pub fn downsample(&self, step: usize) -> RgbImage {
         if step <= 1 {
             return self.clone();
@@ -333,7 +333,7 @@ fn d2(a: [f32; 3], b: [f32; 3]) -> f32 {
 /// The 4 forward neighbour offsets of an 8-connected grid and their lengths.
 const NB: [(i32, i32, f32); 4] = [(1, 0, 1.0), (0, 1, 1.0), (1, 1, std::f32::consts::SQRT_2), (-1, 1, std::f32::consts::SQRT_2)];
 
-/// GrabCut's contrast parameter: `β = 1 / (2 ⟨‖z_m − z_n‖²⟩)` over 8-neighbour pairs.
+/// GrabCut's contrast parameter: `Î² = 1 / (2 âŸ¨â€–z_m âˆ’ z_nâ€–Â²âŸ©)` over 8-neighbour pairs.
 pub fn contrast_beta(img: &RgbImage) -> f32 {
     let (w, h) = (img.w as i32, img.h as i32);
     let mut sum = 0.0f64;
@@ -359,7 +359,7 @@ pub const HARD_FG: u8 = 1;
 pub const HARD_BG: u8 = 2;
 
 /// Binary labelling of a grid by one min cut (Boykov & Jolly 2001):
-/// minimises `Σ D_p(l_p) + Σ_{p~q} [l_p ≠ l_q] γ e^{-β‖z_p−z_q‖²} / dist(p,q)` over the
+/// minimises `Î£ D_p(l_p) + Î£_{p~q} [l_p â‰  l_q] Î³ e^{-Î²â€–z_pâˆ’z_qâ€–Â²} / dist(p,q)` over the
 /// 8-connected grid. `cost_fg[i]` / `cost_bg[i]` are the data costs of labelling pixel `i`
 /// foreground / background; `fixed[i]` is [`FREE`], [`HARD_FG`] or [`HARD_BG`]. Only free pixels
 /// become graph nodes (links to fixed neighbours fold into terminal capacities). Returns
@@ -368,7 +368,7 @@ pub fn grid_cut(img: &RgbImage, cost_fg: &[f32], cost_bg: &[f32], fixed: &[u8], 
     grid_cut_weighted::<true>(img, cost_fg, cost_bg, fixed, |d2| gamma * (-beta * d2).exp())
 }
 
-/// [`grid_cut`] with any edge weight: separating neighbours costs `weight(‖z_p−z_q‖²) / dist(p,q)`.
+/// [`grid_cut`] with any edge weight: separating neighbours costs `weight(â€–z_pâˆ’z_qâ€–Â²) / dist(p,q)`.
 /// Only links touching a free pixel need a weight; fixed/fixed links cannot change the cut.
 pub fn grid_cut_with(img: &RgbImage, cost_fg: &[f32], cost_bg: &[f32], fixed: &[u8], weight: impl Fn(f32) -> f32) -> Vec<bool> {
     grid_cut_weighted::<true>(img, cost_fg, cost_bg, fixed, weight)
@@ -490,7 +490,7 @@ fn add_fixed_link(g: &mut Graph, node: usize, fixed: u8, wt: f32) {
     }
 }
 
-/// Data costs `(−ln p(z|fg), −ln p(z|bg))` for every pixel.
+/// Data costs `(âˆ’ln p(z|fg), âˆ’ln p(z|bg))` for every pixel.
 pub fn data_costs(img: &RgbImage, fg: &Gmm, bg: &Gmm) -> (Vec<f32>, Vec<f32>) {
     let eval = |p: &[f32; 3]| (fg.neg_log(*p), bg.neg_log(*p));
     #[cfg(not(target_arch = "wasm32"))]
@@ -607,7 +607,7 @@ fn components4(mask: &[bool], w: usize, h: usize) -> (Vec<u32>, Vec<usize>) {
     (lab, sizes)
 }
 
-/// Softens a hard 0/255 mask's edges: edge pixels blend with their 3×3 neighbourhood (the same
+/// Softens a hard 0/255 mask's edges: edge pixels blend with their 3Ã—3 neighbourhood (the same
 /// rule as the magic wand's anti-aliasing).
 pub fn antialias_u8(mask: &mut [u8], w: usize, h: usize) {
     let src = mask.to_vec();
@@ -685,6 +685,21 @@ pub fn finish_region(
     lh: usize,
     models: Option<(&Gmm, &Gmm)>,
 ) -> SamplingResult<Option<Region>> {
+    finish_region_with(sampler, window, step, low, lw, lh, models, &Interrupt::NONE)
+}
+
+/// Checked sampling with cancellation before band tiles and inside every min cut.
+#[allow(clippy::too_many_arguments)]
+pub fn finish_region_with(
+    sampler: &dyn Sampler,
+    window: Rect,
+    step: usize,
+    low: &[bool],
+    lw: usize,
+    lh: usize,
+    models: Option<(&Gmm, &Gmm)>,
+    ctl: &Interrupt,
+) -> SamplingResult<Option<Region>> {
     let (w, h, n) = sample_shape(window, 1)?;
     if window.is_empty() {
         return Ok(None);
@@ -728,7 +743,7 @@ pub fn finish_region(
         #[cfg(target_arch = "wasm32")]
         mask.chunks_mut(w).enumerate().for_each(|(y, r)| fill(y, r));
         if let Some((fg, bg)) = models {
-            refine_band(sampler, window, step, low, &band, lw, lh, fg, bg, &mut mask)?;
+            refine_band(sampler, window, step, low, &band, lw, lh, fg, bg, &mut mask, ctl)?;
         }
     }
     antialias_u8(&mut mask, w, h);
@@ -748,6 +763,7 @@ fn refine_band(
     fg: &Gmm,
     bg: &Gmm,
     mask: &mut [u8],
+    ctl: &Interrupt,
 ) -> SamplingResult<()> {
     const T: i32 = 192;
     const HALO: i32 = 12;
@@ -769,7 +785,9 @@ fn refine_band(
         }
         ty = ty.saturating_add(T).min(window.y1);
     }
+    let cancel = || ctl.cancelled();
     let run = |t: &Rect| -> SamplingResult<(Rect, Vec<bool>)> {
+        ctl.check().map_err(|_| RasterInputError::Cancelled)?;
         let r = t.inflate(HALO).intersect(&window);
         let img = sampler.rgb(r)?;
         check_image(&img, r.width() as usize, r.height() as usize)?;
@@ -793,7 +811,8 @@ fn refine_band(
             }
         }
         let beta = contrast_beta(&img);
-        let cut = grid_cut(&img, &cfg, &cbg, &fixed, 50.0, beta);
+        // `grid_cut`'s weight, with the cut stopping on cancel.
+        let cut = grid_cut_cancellable(&img, &cfg, &cbg, &fixed, |d2| 50.0 * (-beta * d2).exp(), &cancel).ok_or(RasterInputError::Cancelled)?;
         let (cw, ch) = (t.width() as usize, t.height() as usize);
         let mut core = Vec::with_capacity(cw * ch);
         for yy in 0..ch {
@@ -803,6 +822,7 @@ fn refine_band(
         }
         Ok((*t, core))
     };
+    // A cancelled tile ends the collect; tiles not yet started see `ctl` and return at once.
     #[cfg(not(target_arch = "wasm32"))]
     let results: Vec<(Rect, Vec<bool>)> = {
         use rayon::prelude::*;
@@ -842,7 +862,7 @@ impl Rng {
     pub fn f32(&mut self) -> f32 {
         (self.next_u64() >> 40) as f32 / (1u64 << 24) as f32
     }
-    /// Standard normal (Box–Muller).
+    /// Standard normal (Boxâ€“Muller).
     pub fn normal(&mut self) -> f32 {
         let u = self.f32().max(1e-7);
         let v = self.f32();

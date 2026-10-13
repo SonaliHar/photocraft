@@ -80,7 +80,7 @@ mod tests{
     #[test]
     fn cancellation_never_returns_partial_renderer_set_or_changes_document(){
         let mut session=crate::Session::new();session.execute("file.new",serde_json::json!({"width":8,"height":8})).unwrap();let state=session.active().unwrap();let before=state.doc.clone();
-        let brush=BrushSettings{tip:photocraft_paint::brush::TipShape::Sampled(photocraft_paint::tile::GrayTile{width:257,height:129,data:vec![12345;257*129]}),..Default::default()};
+        let brush=BrushSettings{tip:photocraft_paint::brush::TipShape::Sampled(photocraft_paint::tile::GrayTile{width:257,height:129,data:vec![12345;257*129].into()}),..Default::default()};
         let n=std::cell::Cell::new(0);let stop=||{n.set(n.get()+1);n.get()>100;};
         assert!(matches!(prepare_renderers(&state.doc,&brush,PixelFormat::RGBA8,1.0,3,&Interrupt::cancel_only(&stop)),Err(EngineError::Cancelled)));
         assert!(state.doc.shares_state(&before));

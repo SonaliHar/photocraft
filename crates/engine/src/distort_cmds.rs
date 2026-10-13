@@ -10,6 +10,8 @@
 //! resampling. The params are the data in every case (strokes, pins and planes are small
 //! compared with a field or a mesh, and replay is deterministic), so nothing needs a blob.
 
+use std::cell::RefCell;
+
 use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, apply_liquify, auto_cell};
 use photocraft_algo::perspective::{PerspectiveMap, Plane, Straighten, straighten};
 use photocraft_algo::puppet::{PuppetDensity, PuppetMode, PuppetPin, PuppetWarp, puppet_warp};
@@ -268,7 +270,9 @@ fn run_on_layer(s: &mut Session, cmd: &str, label: &str, p: &Value, moves: bool,
             return Err(bad(cmd, "wide selected distortion arithmetic is not qualified"));
         }
         let group = crate::transform_cmds::group_locks(doc, id)?;
-        if moves { crate::extra_cmds::background_to_layer(doc, id); }
+        if moves {
+            crate::extra_cmds::background_to_layer(doc, id);
+        }
 
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         if let LayerContent::Smart(_) = l.content {
@@ -293,7 +297,6 @@ fn run_on_layer(s: &mut Session, cmd: &str, label: &str, p: &Value, moves: bool,
             && m.linked
         {
             m.surface = std::sync::Arc::new(mf(&m.surface, selection.as_ref())?);
-
         }
         Ok(())
     })?;
@@ -367,7 +370,24 @@ fn puppet(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     }
     let it = interp(p);
     let too_far = || bad(cmd, "the pins stretch the content too far: the result would cover more than 2^30 pixels");
-    run_on_layer(s, cmd, "Puppet Warp", p, true, &|surf, sel, _| deform_selected(surf, sel, &|x| try_puppet_surface(x, &w, it)?.ok_or_else(too_far)), None)
+    // A linked layer mask moves with the pixels on the same mesh (#4910): the layer's warp
+    // solves the mesh once and leaves the moved mask here for the mask step.
+    let linked = s.active().and_then(|d| d.doc.layer(id)).and_then(|l| l.mask.as_ref()).filter(|m| m.linked).map(|m| m.surface.clone());
+    let moved_mask: RefCell<Option<Surface>> = RefCell::new(None);
+    let layer_fn = |surf: &Surface, sel: Option<&Surface>, _: Rect| {
+        deform_selected(surf, sel, &|x| {
+            let b = x.content_bounds();
+            if b.is_empty() {
+                return Ok(x.clone());
+            }
+            let (out, mask) = photocraft_algo::puppet::try_puppet_warp_with_mask(x, b, &w, it, linked.as_deref(), &photocraft_raster::Interrupt::NONE)?
+                .ok_or_else(too_far)?;
+            *moved_mask.borrow_mut() = mask;
+            Ok(out)
+        })
+    };
+    let mask_fn = |m: &Surface, _: Option<&Surface>| Ok(moved_mask.borrow_mut().take().unwrap_or_else(|| m.clone()));
+    run_on_layer(s, cmd, "Puppet Warp", p, true, &layer_fn, Some(&mask_fn))
 }
 
 fn perspective(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
@@ -382,12 +402,16 @@ fn perspective(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let mask_fn = |m: &Surface, sel: Option<&Surface>| {
         let Some(map) = &map else { return Ok(m.clone()) };
         let f = |x, y| map.map(x, y);
-        let whole = |m: &Surface| try_warp_mesh_gray(m, &f, Interp::Bilinear).map_err(|e| bad(cmd,e.to_string()));
+        let whole = |m: &Surface| try_warp_mesh_gray(m, &f, Interp::Bilinear).map_err(|e| bad(cmd, e.to_string()));
         match sel {
-            Some(sel) => crate::transform_cmds::move_gray_selected(m, sel, &|lifted, src| photocraft_algo::warp::try_warp_mesh_surface(lifted, src, &f, Interp::Bilinear).map_err(|e| bad(cmd,e.to_string())), &whole),
+            Some(sel) => crate::transform_cmds::move_gray_selected(
+                m,
+                sel,
+                &|lifted, src| photocraft_algo::warp::try_warp_mesh_surface(lifted, src, &f, Interp::Bilinear).map_err(|e| bad(cmd, e.to_string())),
+                &whole,
+            ),
             None => whole(m),
         }
-
     };
     let mut r = run_on_layer(
         s,

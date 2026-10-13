@@ -1297,6 +1297,26 @@ pub fn try_render(
 
 /// Checked puppet deformation: wide interpolation is explicitly unsupported.
 pub fn try_puppet_warp(src: &Surface, bounds: Rect, w: &PuppetWarp, interp: Interp) -> Result<Option<Surface>, photocraft_raster::RasterInputError> {
+    try_puppet_warp_with_mask(src, bounds, w, interp, None, &photocraft_raster::Interrupt::NONE).map(|out| out.map(|(surface, _)| surface))
+}
+
+/// Checked same-mesh deformation of pixels and their linked ordinary one-channel mask.
+/// Wide interpolation is refused; cancellation is checked at solver/render boundaries.
+pub fn try_puppet_warp_with_mask(
+    src: &Surface,
+    bounds: Rect,
+    w: &PuppetWarp,
+    interp: Interp,
+    mask: Option<&Surface>,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<Option<(Surface, Option<Surface>)>, photocraft_raster::RasterInputError> {
+    use photocraft_raster::RasterInputError;
+    control.check().map_err(|_| RasterInputError::Cancelled)?;
+    if let Some(mask) = mask {
+        if mask.channels() != 1 || matches!(mask.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
+            return Err(RasterInputError::UnsupportedConversion);
+        }
+    }
     if matches!(src.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
         return Err(photocraft_raster::RasterInputError::UnsupportedConversion);
     }
@@ -1311,9 +1331,11 @@ pub fn try_puppet_warp(src: &Surface, bounds: Rect, w: &PuppetWarp, interp: Inte
     }
     photocraft_raster::checked_region_byte_len(bounds, src.format())?;
     let prepared = src.try_convert(src.format())?;
+    control.check().map_err(|_| RasterInputError::Cancelled)?;
     let (solver, v, order) = deform(&prepared, bounds, w, ITERATIONS);
+    control.check().map_err(|_| RasterInputError::Cancelled)?;
     if solver.mesh.tris.is_empty() {
-        return Ok(Some(prepared));
+        return Ok(Some((prepared, mask.cloned())));
     }
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for point in &v {
@@ -1325,7 +1347,21 @@ pub fn try_puppet_warp(src: &Surface, bounds: Rect, w: &PuppetWarp, interp: Inte
     if (x1 - x0 + 1.0) * (y1 - y0 + 1.0) > MAX_WARP_PIXELS {
         return Ok(None);
     }
-    try_render(&prepared, bounds, &solver.mesh, &v, &order, interp).map(Some)
+    let output = Rect::new(x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as i32);
+    photocraft_raster::checked_region_byte_len(output, prepared.format())?;
+    if let Some(mask) = mask {
+        let mesh_bounds = Rect::new(bounds.x0.saturating_sub(2), bounds.y0.saturating_sub(2), bounds.x1.saturating_add(2), bounds.y1.saturating_add(2));
+        photocraft_raster::checked_region_byte_len(mesh_bounds, photocraft_color::PixelFormat::new(mask.format().mode, mask.format().sample, true))?;
+        photocraft_raster::checked_region_byte_len(output, mask.format())?;
+    }
+    let out = try_render(&prepared, bounds, &solver.mesh, &v, &order, interp)?;
+    control.check().map_err(|_| RasterInputError::Cancelled)?;
+    let moved_mask = match mask {
+        Some(mask) => Some(try_render_mask(mask, &solver.mesh, &v, &order, interp, control)?),
+        None => None,
+    };
+    control.check().map_err(|_| RasterInputError::Cancelled)?;
+    Ok(Some((out, moved_mask)))
 }
 
 /// Rasterizes the mesh deformation of `src` (inside `bounds`): the deformed triangles only, so
@@ -1344,11 +1380,18 @@ pub const MAX_WARP_PIXELS: f64 = (1u64 << 30) as f64;
 /// Applies a puppet warp to `src` (content inside `bounds`). `None` when the deformed mesh would
 /// span more than [`MAX_WARP_PIXELS`].
 pub fn puppet_warp(src: &Surface, bounds: Rect, w: &PuppetWarp, interp: Interp) -> Option<Surface> {
+    puppet_warp_with_mask(src, bounds, w, interp, None).map(|(out, _)| out)
+}
+
+/// [`puppet_warp`], also moving `mask` (a one-channel layer mask linked to `src`) with the same
+/// mesh, as Photoshop moves a linked mask with its layer (#4910). The mask is `None` in the
+/// result when none was given.
+pub fn puppet_warp_with_mask(src: &Surface, bounds: Rect, w: &PuppetWarp, interp: Interp, mask: Option<&Surface>) -> Option<(Surface, Option<Surface>)> {
     let (solver, v, order) = deform(src, bounds, w, ITERATIONS);
     // No triangles (an expansion that shrinks every pixel away): nothing to warp. Rendering the
     // empty mesh would drop every pixel of the layer.
     if solver.mesh.tris.is_empty() {
-        return Some(src.clone());
+        return Some((src.clone(), mask.cloned()));
     }
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for p in &v {
@@ -1358,7 +1401,160 @@ pub fn puppet_warp(src: &Surface, bounds: Rect, w: &PuppetWarp, interp: Interp) 
     if area.is_nan() || area > MAX_WARP_PIXELS {
         return None;
     }
-    Some(render(src, bounds, &solver.mesh, &v, &order, interp))
+    let out = render(src, bounds, &solver.mesh, &v, &order, interp);
+    Some((out, mask.map(|m| render_mask(m, &solver.mesh, &v, &order, interp))))
+}
+
+/// Fallible companion of the upstream linked-mask renderer, with identical lift/lay equations.
+/// The inner triangle renderer remains boundary-cancellable rather than deeply interruptible.
+fn try_render_mask(
+    mask: &Surface,
+    mesh: &PuppetMesh,
+    deformed: &[[f64; 2]],
+    order: &[usize],
+    interp: Interp,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<Surface, photocraft_raster::RasterInputError> {
+    use photocraft_raster::{MAX_CHECKED_RASTER_BYTES, RasterInputError};
+    let poll = || control.check().map_err(|_| RasterInputError::Cancelled);
+    poll()?;
+    let mut out = mask.clone();
+    if mesh.tris.is_empty() || deformed.len() != mesh.verts.len() || mask.channels() != 1 {
+        return Ok(out);
+    }
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for point in &mesh.verts {
+        poll()?;
+        if point.iter().any(|x| !x.is_finite()) {
+            return Err(RasterInputError::InvalidBounds);
+        }
+        (x0, y0, x1, y1) = (x0.min(point[0]), y0.min(point[1]), x1.max(point[0]), y1.max(point[1]));
+    }
+    let lim = f64::from(1 << 20);
+    let src = Rect::new(x0.max(-lim).floor() as i32 - 1, y0.max(-lim).floor() as i32 - 1, x1.min(lim).ceil() as i32 + 1, y1.min(lim).ceil() as i32 + 1);
+    if src.is_empty() {
+        return Ok(out);
+    }
+    let read = |surface: &Surface, bounds: Rect| -> Result<Vec<f32>, RasterInputError> {
+        poll()?;
+        let bytes = photocraft_raster::checked_region_byte_len(bounds, surface.format())?;
+        let count = bytes.checked_div(surface.format().sample.bytes()).ok_or(RasterInputError::InvalidSample)?;
+        let scratch_bytes = count.checked_mul(std::mem::size_of::<f32>()).and_then(|n| u64::try_from(n).ok());
+        if scratch_bytes.is_none_or(|n| n > MAX_CHECKED_RASTER_BYTES) {
+            return Err(RasterInputError::LimitExceeded);
+        }
+        let values = surface.try_read_region(bounds).map_err(|_| RasterInputError::AllocationFailed)?;
+        poll()?;
+        Ok(values)
+    };
+    let default = mask.default_pixel().first().copied().unwrap_or(0.0);
+    let fmt = mask.format();
+    let input = read(mask, src)?;
+    let len = input.len().checked_mul(2).ok_or(RasterInputError::LimitExceeded)?;
+    if len.checked_mul(std::mem::size_of::<f32>()).and_then(|n| u64::try_from(n).ok()).is_none_or(|n| n > MAX_CHECKED_RASTER_BYTES) {
+        return Err(RasterInputError::LimitExceeded);
+    }
+    let mut alpha = Vec::new();
+    alpha.try_reserve_exact(len).map_err(|_| RasterInputError::AllocationFailed)?;
+    for value in input {
+        poll()?;
+        alpha.extend_from_slice(&[value, 1.0]);
+    }
+    let mut tmp = Surface::new(photocraft_color::PixelFormat::new(fmt.mode, fmt.sample, true));
+    tmp.try_write_region(src, &alpha).map_err(|_| RasterInputError::AllocationFailed)?;
+    drop(alpha);
+    let mut tris = Vec::new();
+    tris.try_reserve_exact(order.len()).map_err(|_| RasterInputError::AllocationFailed)?;
+    for index in order {
+        poll()?;
+        tris.push(*mesh.tris.get(*index).ok_or(RasterInputError::InvalidBounds)?);
+    }
+    let mut vertices = Vec::new();
+    vertices.try_reserve_exact(mesh.verts.len()).map_err(|_| RasterInputError::AllocationFailed)?;
+    for point in &mesh.verts {
+        poll()?;
+        vertices.push((*point, *point));
+    }
+    let lifted = crate::warp::try_warp_triangles(&tmp, src, &vertices, &tris, Interp::Nearest)?;
+    let mut lay = |surface: &Surface, lift: bool| -> Result<(), RasterInputError> {
+        poll()?;
+        let bounds = surface.try_content_bounds_with_interrupt(control)?;
+        if bounds.is_empty() {
+            return Ok(());
+        }
+        let under = read(&out, bounds)?;
+        let samples = read(surface, bounds)?;
+        if samples.len() != under.len().checked_mul(2).ok_or(RasterInputError::LimitExceeded)? {
+            return Err(RasterInputError::LengthMismatch);
+        }
+        let mut flat = Vec::new();
+        flat.try_reserve_exact(under.len()).map_err(|_| RasterInputError::AllocationFailed)?;
+        for (pixel, value) in samples.as_chunks::<2>().0.iter().zip(under) {
+            poll()?;
+            flat.push(if lift { default * pixel[1] + value * (1.0 - pixel[1]) } else { pixel[0] * pixel[1] + value * (1.0 - pixel[1]) });
+        }
+        out.try_write_region(bounds, &flat).map_err(|_| RasterInputError::AllocationFailed)?;
+        poll()
+    };
+    lay(&lifted, true)?;
+    for (vertex, (destination, source)) in vertices.iter_mut().zip(deformed.iter().zip(&mesh.verts)) {
+        poll()?;
+        *vertex = (*destination, *source);
+    }
+    let warped = crate::warp::try_warp_triangles(&tmp, src, &vertices, &tris, interp)?;
+    lay(&warped, false)?;
+    out.try_prune_with(control)?;
+    poll()?;
+    Ok(out)
+}
+
+/// Moves a one-channel layer mask with a deformed mesh: the mask under the mesh is lifted,
+/// deformed like the layer's pixels and laid over the rest. The area the mesh leaves takes the
+/// mask's default value (as [`crate::warp::warp_mesh_gray`] leaves it); outside the mesh the
+/// mask keeps its values.
+pub fn render_mask(mask: &Surface, mesh: &PuppetMesh, deformed: &[[f64; 2]], order: &[usize], interp: Interp) -> Surface {
+    let mut out = mask.clone();
+    if mesh.tris.is_empty() || deformed.len() != mesh.verts.len() || mask.format().channels() != 1 {
+        return out;
+    }
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for p in &mesh.verts {
+        (x0, y0, x1, y1) = (x0.min(p[0]), y0.min(p[1]), x1.max(p[0]), y1.max(p[1]));
+    }
+    if !(x0.is_finite() && y0.is_finite() && x1.is_finite() && y1.is_finite()) {
+        return out;
+    }
+    // The mesh's source area, a pixel wider so its edge samples stay inside.
+    let lim = f64::from(1 << 20);
+    let src = Rect::new(x0.max(-lim).floor() as i32 - 1, y0.max(-lim).floor() as i32 - 1, x1.min(lim).ceil() as i32 + 1, y1.min(lim).ceil() as i32 + 1);
+    if src.is_empty() {
+        return out;
+    }
+    let default = mask.default_pixel().first().copied().unwrap_or(0.0);
+    let fmt = mask.format();
+    let mut tmp = Surface::new(photocraft_color::PixelFormat::new(fmt.mode, fmt.sample, true));
+    tmp.write_region(src, &mask.read_region(src).iter().flat_map(|g| [*g, 1.0]).collect::<Vec<f32>>());
+    let tris: Vec<[usize; 3]> = order.iter().filter_map(|&t| mesh.tris.get(t).copied()).collect();
+    // Lift: where the undeformed mesh covers the mask, the mask takes its default value.
+    let still: Vec<([f64; 2], [f64; 2])> = mesh.verts.iter().map(|s| (*s, *s)).collect();
+    let lifted = crate::warp::warp_triangles(&tmp, src, &still, &tris, Interp::Nearest);
+    let b = lifted.content_bounds();
+    if !b.is_empty() {
+        let under = out.read_region(b);
+        let flat: Vec<f32> = lifted.read_region(b).as_chunks::<2>().0.iter().zip(&under).map(|(p, u)| default * p[1] + u * (1.0 - p[1])).collect();
+        out.write_region(b, &flat);
+    }
+    // Lay the deformed mask over what is left.
+    let moved: Vec<([f64; 2], [f64; 2])> = deformed.iter().zip(&mesh.verts).map(|(d, s)| (*d, *s)).collect();
+    let warped = crate::warp::warp_triangles(&tmp, src, &moved, &tris, interp);
+    let b = warped.content_bounds();
+    if !b.is_empty() {
+        let under = out.read_region(b);
+        let flat: Vec<f32> = warped.read_region(b).as_chunks::<2>().0.iter().zip(&under).map(|(p, u)| p[0] * p[1] + u * (1.0 - p[1])).collect();
+        out.write_region(b, &flat);
+    }
+    out.prune();
+    out
 }
 
 #[cfg(test)]
@@ -1499,6 +1695,33 @@ mod tests {
         assert!(puppet_warp(&s, b, &pin([-1e7, 62.0]), Interp::Bilinear).is_none());
         let near = puppet_warp(&s, b, &pin([70.0, 66.0]), Interp::Bilinear).expect("a near pin warps");
         assert!(!near.content_bounds().is_empty());
+    }
+
+    #[test]
+    fn a_linked_mask_moves_with_the_mesh_and_leaves_its_default_behind() {
+        // #4910. A hide-all mask (default 0) that reveals the bar's top (y 10..30): moved down by
+        // 8, the revealed patch moves along, what it left is hidden again, and the mask away
+        // from the puppet keeps its values.
+        let s = blob(SampleType::U8);
+        let b = s.content_bounds();
+        for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut mask = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, sample, false), &[0.0]);
+            mask.fill_rect(Rect::new(20, 10, 36, 30), &[1.0]);
+            mask.fill_rect(Rect::new(90, 90, 94, 94), &[0.5]);
+            let w = PuppetWarp {
+                pins: vec![PuppetPin { src: [28.0, 30.0], dst: [28.0, 38.0], rotate: None, depth: 0 }],
+                mode: PuppetMode::Rigid,
+                density: PuppetDensity::Normal,
+                expansion: 2.0,
+            };
+            let (_, moved) = puppet_warp_with_mask(&s, b, &w, Interp::Bilinear, Some(&mask)).expect("warps");
+            let m = moved.expect("a mask in, a mask out");
+            let at = |x, y| m.sample_channel(x, y, 0);
+            assert!(at(28, 20) > 0.99 && at(28, 36) > 0.99, "{sample:?}: the revealed patch moved down");
+            assert!(at(28, 15) < 0.01, "{sample:?}: its old top is hidden again");
+            assert!((at(91, 91) - 0.5).abs() <= 1.0 / 255.0, "{sample:?}: away from the mesh nothing changes");
+            assert!(puppet_warp_with_mask(&s, b, &w, Interp::Bilinear, None).expect("warps").1.is_none());
+        }
     }
 
     #[test]

@@ -740,6 +740,7 @@ pub(crate) fn doc_m<'doc>(d: &'doc Document, sink: &mut dyn Sink<'doc>) -> Resul
         guides: metadata(&d.guides, sink)?,
         selection: d.selection.as_ref().map(|s| surface_m(s, sink)).transpose()?,
         selection_channel_id: d.selection_channel_id,
+        ruler_origin: d.ruler_origin,
         metadata: MetadataM {
             xmp: optional_string(&d.metadata.xmp, sink)?,
             exif: opt_blob(&d.metadata.exif, sink)?,
@@ -1364,6 +1365,7 @@ impl Loader<'_> {
             layers,
             channels,
             guides: self.model_clone(&m.guides)?,
+            ruler_origin: m.ruler_origin,
             selection: self.opt_surface(&m.selection)?,
             selection_channel_id,
             metadata: md,

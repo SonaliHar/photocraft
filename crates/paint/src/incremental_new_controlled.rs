@@ -103,8 +103,8 @@ fn pattern(brush:&BrushSettings,budget:&mut CloneBudget<'_,'_>)->Result<Option<A
     let texture=&brush.texture;if !texture.enabled{return Ok(None);}
     if texture.pattern.bitmap().is_some_and(|tile|!valid(tile)){return Ok(None);}
     let (width,height,mut data)=match &texture.pattern{
-        Pattern::Tile(tile)=>{let mut data=vector(budget,tile.data.len())?;for value in &tile.data{budget.work(1)?;data.push(f32::from(*value)/65535.0);}(tile.width as usize,tile.height as usize,data)},
-        Pattern::Stored(stored)=>{let tile=stored.bitmap();let mut data=vector(budget,tile.data.len())?;for value in &tile.data{budget.work(1)?;data.push(f32::from(*value)/65535.0);}(tile.width as usize,tile.height as usize,data)},
+        Pattern::Tile(tile)=>{let mut data=vector(budget,tile.data.len())?;for value in tile.data.iter(){budget.work(1)?;data.push(f32::from(*value)/65535.0);}(tile.width as usize,tile.height as usize,data)},
+        Pattern::Stored(stored)=>{let tile=stored.bitmap();let mut data=vector(budget,tile.data.len())?;for value in tile.data.iter(){budget.work(1)?;data.push(f32::from(*value)/65535.0);}(tile.width as usize,tile.height as usize,data)},
         Pattern::Procedural{style,size,seed}=>{let style=*style;let n=(*size).clamp(8,1024) as usize;let s=n as f32;let salt=u64::from(*seed)*0x0100_0000_01B3+17;let mut data=vector(budget,n*n)?;
             for y in 0..n{budget.poll()?;for x in 0..n{budget.work(256)?;let(fx,fy)=(x as f32+0.5,y as f32+0.5);
             let v = match style {
@@ -145,7 +145,7 @@ mod tests{
     #[test]
     fn controlled_construction_keeps_brush_mips_texture_and_continuation(){
         for procedural in [false,true]{
-            let tile=GrayTile{width:5,height:7,data:(0..35).map(|i|(i*1739) as u16).collect()};
+            let tile=GrayTile{width:5,height:7,data:(0..35).map(|i|(i*1739) as u16).collect::<Vec<_>>().into()};
             let mut brush=BrushSettings{tip:TipShape::Sampled(tile.clone()),size:8.0,pressure_size:false,..Default::default()};
             brush.dual_brush.enabled=true;brush.dual_brush.tip=TipShape::Sampled(tile.clone());
             brush.texture.enabled=true;brush.texture.pattern=if procedural{Pattern::Procedural{style:PatternStyle::Paper,size:17,seed:7}}else{Pattern::Tile(tile)};
@@ -162,7 +162,7 @@ mod tests{
     }
     #[test]
     fn constructor_tiny_budget_and_cancel_never_return_partial_renderer(){
-        let brush=BrushSettings{tip:TipShape::Sampled(GrayTile{width:257,height:129,data:vec![12345;257*129]}),..Default::default()};
+        let brush=BrushSettings{tip:TipShape::Sampled(GrayTile{width:257,height:129,data:vec![12345;257*129].into()}),..Default::default()};
         assert!(matches!(StrokeRenderer::try_new_with_interrupt(&brush,None,1.0,StrokeLimits{resident_bytes:1,..Default::default()},&Interrupt::NONE),Err(StrokeError::Limit)));
         let count=std::cell::Cell::new(0);let stop=||{count.set(count.get()+1);count.get()>80;};
         assert!(matches!(StrokeRenderer::try_new_with_interrupt(&brush,None,1.0,StrokeLimits::default(),&Interrupt::cancel_only(&stop)),Err(StrokeError::Cancelled)));

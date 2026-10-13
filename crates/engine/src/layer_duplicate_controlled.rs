@@ -43,14 +43,26 @@ fn census(doc: &Document, control: &Interrupt<'_>) -> Result<usize> {
 }
 pub(crate) fn dispatch_preflight(session: &Session, params: &Value, _background: bool) -> Result<()> {
     if !params.is_null() {
-        let object = params.as_object().filter(|map| map.len() <= 5).ok_or_else(|| bad("expected bounded duplicate parameters"))?;
-        if !object.keys().all(|key| matches!(key.as_str(), "layer" | "name" | "inPlace" | "documentId" | "expectedRevision")) {
+        let object = params.as_object().filter(|map| map.len() <= 7).ok_or_else(|| bad("expected bounded duplicate parameters"))?;
+        if !object.keys().all(|key| matches!(key.as_str(), "layer" | "name" | "inPlace" | "documentId" | "expectedRevision" | "document" | "documentName")) {
             return Err(bad("unknown duplicate parameter"));
         }
     }
     explicit(params)?;
-    if params.get("name").is_some_and(|value| value.as_str().is_none_or(|name| name.len() > 2048 || name.contains('\0'))) {
-        return Err(bad("name must be a bounded string without NUL"));
+    for key in ["name", "documentName"] {
+        if params.get(key).is_some_and(|value| value.as_str().is_none_or(|name| name.len() > 2048 || name.contains('\0'))) {
+            return Err(bad(format!("{key} must be a bounded string without NUL")));
+        }
+    }
+    if let Some(destination) = params.get("document") {
+        let same = destination.as_u64().is_some_and(|index| session.active_index().is_some_and(|active| index == active as u64));
+        if destination.as_str() != Some("new") && !same {
+            return Err(bad(if destination.as_u64().is_some() {
+                "the destination is another open document (use layer.copyToDocument)"
+            } else {
+                "document must be the current document index or new"
+            }));
+        }
     }
     if let Some(value) = params.get("inPlace") {
         if !value.is_boolean() {
@@ -139,7 +151,7 @@ fn subtree_count(layer: &Layer, depth: usize, control: &Interrupt<'_>) -> Result
     }
     Ok(count)
 }
-fn admission(doc: &Document, targets: &[LayerId], in_place: bool, control: &Interrupt<'_>) -> Result<usize> {
+pub(crate) fn admission(doc: &Document, targets: &[LayerId], in_place: bool, control: &Interrupt<'_>) -> Result<usize> {
     poll(control)?;
     let count = census(doc, control)?;
     let mut copies = 0usize;
@@ -475,4 +487,14 @@ mod tests {
         assert!(session.active().unwrap().doc.shares_state(&before));
         assert!(matches!(before.layers[0].content, LayerContent::Raster(_)));
     }
+    #[test]
+    fn upstream_new_destination_and_same_index_are_bounded_before_dispatch() {
+        let session = fixture(SampleType::U32);
+        dispatch_preflight(&session, &json!({"document":"new", "documentName":"Owned copy"}), false).unwrap();
+        dispatch_preflight(&session, &json!({"document":session.active_index().unwrap()}), false).unwrap();
+        for params in [json!({"document":true}), json!({"document":1.5}), json!({"document":"other"}), json!({"documentName":3}), json!({"documentName":"x".repeat(2049)})] {
+            assert!(dispatch_preflight(&session, &params, false).is_err());
+        }
+    }
+
 }

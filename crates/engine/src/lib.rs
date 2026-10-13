@@ -60,6 +60,7 @@ pub mod group_view_cmds;
 pub mod guide_layout;
 pub mod hidden_target;
 pub mod history_cmds;
+pub mod history_select_cmds;
 pub mod image_cmds;
 pub mod inspect;
 pub mod inspect_pixel_cmds;
@@ -286,6 +287,8 @@ pub struct DocState {
     /// Increments on every change; UIs re-render when it moves.
     pub revision: u64,
     pub saved_revision: u64,
+    /// How much of `revision` came from view-only changes (channel eyes, targeting): pixel caches can ignore those.
+    pub view_revision: u64,
     /// Area changed by the latest revision (None = assume everything changed).
     pub last_damage: Option<photocraft_geom::Rect>,
     /// Coalescing key of the latest history step (see [`Session::execute`]'s `coalesce` param).
@@ -334,6 +337,7 @@ impl DocState {
             source: self.source.clone(),
             source_read_only: self.source_read_only,
             revision: self.revision,
+            view_revision: self.view_revision,
             saved_revision: self.saved_revision,
             last_damage: self.last_damage,
             coalesce: self.coalesce.clone(),
@@ -428,6 +432,7 @@ impl DocState {
             source_read_only: false,
             revision: 1,
             saved_revision: 1,
+            view_revision: 0,
             last_damage: None,
             coalesce: None,
             channel_view,
@@ -510,6 +515,13 @@ pub struct ToolState {
     /// preset stays "the current brush" so `brush.presets.update` can overwrite it); cleared when
     /// the brush is reset or the preset is gone.
     pub current_preset: Option<String>,
+    /// Bumped whenever `brush` or `current_preset` changes ([`ToolState::brush_changed`]). The
+    /// last-brush persistence watches it instead of comparing the brush itself, so an unchanged
+    /// brush costs a counter compare per frame, not a clone and serialise.
+    pub brush_rev: u64,
+    /// The revision whose value is in `Preferences::last_brush` (a restored one counts as saved):
+    /// [`brush_rev`](Self::brush_rev) == `brush_saved_rev` means there is nothing new to write.
+    pub brush_saved_rev: u64,
     /// A layer mask is the edit target ([`ToolState::target_mask`]).
     pub mask_targeted: bool,
     /// The foreground/background pair of the edit target that isn't current: the layer pixels'
@@ -544,6 +556,13 @@ impl ToolState {
     /// background (reveal-paint first).
     pub const MASK_COLORS: [[f32; 4]; 2] = [[1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0]];
 
+    /// Note that `brush` or `current_preset` changed. Every setter of either (commands and the
+    /// shell's tool-switch paths) calls this; the last-brush persistence only serialises when the
+    /// revision has moved since the stored value ([`Self::brush_saved_rev`]).
+    pub fn brush_changed(&mut self) {
+        self.brush_rev = self.brush_rev.wrapping_add(1);
+    }
+
     /// Switch the edit target between layer pixels and a layer mask. Like Photoshop, the mask and
     /// the pixels keep separate app-wide foreground/background pairs: changing the target puts
     /// the current pair aside and brings back the other one, so colours picked while a mask is
@@ -576,6 +595,8 @@ impl Default for ToolState {
             mixer: Default::default(),
             brush_gesture: None,
             current_preset: None,
+            brush_rev: 0,
+            brush_saved_rev: 0,
             mask_targeted: false,
             other_colors: Self::MASK_COLORS,
             cmyk_picks: Vec::new(),
@@ -659,6 +680,12 @@ pub struct Session {
     /// A finished live stroke offered to the `paint.stroke` / `paint.pencil` that commits it
     /// ([`Session::offer_live_stroke`]).
     pub(crate) live_commit: Option<brush_cmds::LiveCommit>,
+    /// Documents a background open decoded but held back until the user answers the profile
+    /// prompt ([`ColorState::open_question`](color_cmds::ColorState::open_question)): `(id,
+    /// document, source read-only, import origin)`. The shell takes them with
+    /// [`Session::take_held_open_with_origin`].
+    held_opens: Vec<(u64, Document, bool, Option<photocraft_io::ImportOrigin>)>,
+    next_held_open: u64,
 }
 
 /// Move item `i` of `v` to position `to`, clamped to the end. Returns where it went; `None` when
@@ -772,6 +799,28 @@ impl Session {
         st.history.max_bytes = self.prefs.get().performance.history_budget_bytes();
         let read_control = photocraft_raster::backing::ReadControl { interrupt: control, work: &|_| Ok(()) };
         self.publish_document_state(st, &read_control)
+    }
+
+    /// Holds a decoded document back from opening (see `held_opens`); returns its id.
+    pub(crate) fn hold_open_import(&mut self, doc: Document, source_read_only: bool, origin: photocraft_io::ImportOrigin) -> Result<u64> {
+        let next = self.next_held_open.checked_add(1).ok_or_else(|| EngineError::Other("held-open identity exhausted".into()))?;
+        self.held_opens.try_reserve(1).map_err(|_| EngineError::Other("could not reserve held-open storage".into()))?;
+        self.held_opens.push((next, doc, source_read_only, Some(origin)));
+        self.next_held_open = next;
+        Ok(next)
+    }
+
+    /// Takes a document a background open held back for the profile prompt: the document and
+    /// whether its source is read-only. `None` when there is no such document (already taken).
+    pub fn take_held_open(&mut self, id: u64) -> Option<(Document, bool)> {
+        self.take_held_open_with_origin(id).map(|(doc, read_only, _)| (doc, read_only))
+    }
+
+    /// Import identity accompanies the private document through the profile queue.
+    pub fn take_held_open_with_origin(&mut self, id: u64) -> Option<(Document, bool, Option<photocraft_io::ImportOrigin>)> {
+        let i = self.held_opens.iter().position(|(h, _, _, _)| *h == id)?;
+        let (_, doc, read_only, origin) = self.held_opens.remove(i);
+        Some((doc, read_only, origin))
     }
 
     pub fn close(&mut self, index: usize) -> Option<DocState> {

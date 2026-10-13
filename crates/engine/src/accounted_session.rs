@@ -41,6 +41,7 @@ impl DocState {
             source: None,
             source_read_only: false,
             revision: 1,
+            view_revision: 0,
             saved_revision: 1,
             last_damage: None,
             coalesce: None,

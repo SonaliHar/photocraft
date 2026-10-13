@@ -47,7 +47,7 @@ mod content_aware_move;
 mod patch;
 
 mod pattern_stamp;
-
+mod periodic;
 mod remove;
 
 pub use content_aware_move::{ContentAwarePreview, preview as content_aware_move_preview};
@@ -118,7 +118,7 @@ pub fn stroke_brush(base: &BrushSettings, p: &Value) -> BrushSettings {
 
         flow: pct("flow", 100.0, 1.0, 100.0),
 
-        // Brush Settings â€º Brush Tip Shape â€º Spacing, as the Brush uses it (#2140).
+        // Brush Settings Ã¢â‚¬Âº Brush Tip Shape Ã¢â‚¬Âº Spacing, as the Brush uses it (#2140).
         spacing: pct("spacing", base.spacing * 100.0, 1.0, 1000.0),
 
         erase: false,
@@ -322,7 +322,7 @@ fn clone_mapping(s: &mut Session, p: &Value, stroke: &Stroke, cmd: &str) -> Resu
 /// Source pixels for destination `rect`: a translated read, or a bilinear resample when the
 
 /// clone source is scaled, rotated or flipped.
-
+#[allow(clippy::too_many_arguments)]
 fn clone_sample(
     pre: &Document,
 
@@ -335,9 +335,12 @@ fn clone_sample(
     rect: Rect,
 
     map: &crate::presets::clone_source::Mapping,
-
+    wrap: bool,
     cmd: &str,
 ) -> Result<Region> {
+    let read = |rect| {
+        if wrap { periodic::sample(pre, id, surf, which, rect, cmd) } else { sample(pre, id, surf, which, rect) }
+    };
     if map.is_translation() {
         let off = map.offset();
 
@@ -350,16 +353,12 @@ fn clone_sample(
         if src.width() != rect.width() || src.height() != rect.height() {
             return Err(bad(cmd, format!("source offset [{}, {}] is too far: the sample window leaves the coordinate range", off.0, off.1)));
         }
-
-        let mut r = sample(pre, id, surf, which, src)?;
-
+        let mut r = read(src)?;
         r.rect = rect;
 
         return Ok(r);
     }
-
-    let src = sample(pre, id, surf, which, map.source_rect(rect))?;
-
+    let src = read(map.source_rect(rect))?;
     Ok(crate::presets::clone_source::resample(&src, rect, map, alpha_index(&surf.format())))
 }
 
@@ -368,6 +367,17 @@ fn clone_sample(
 /// Both destination and transformed source allocations are bounded for interactive use.
 
 pub fn clone_preview(s: &Session, rect: Rect, map: &crate::presets::clone_source::Mapping, sample_layer: &str) -> Result<photocraft_compose::Buffer> {
+    clone_preview_periodic(s, rect, map, sample_layer, false)
+}
+
+/// Clone-source overlay with optional source repetition for View > Pattern Preview.
+pub fn clone_preview_periodic(
+    s: &Session,
+    rect: Rect,
+    map: &crate::presets::clone_source::Mapping,
+    sample_layer: &str,
+    wrap: bool,
+) -> Result<photocraft_compose::Buffer> {
     if ![map.source.0, map.source.1, map.anchor.0, map.anchor.1].into_iter().chain(map.m).all(|v| v.is_finite() && v.abs() < 1_000_000.0) {
         return Err(bad("clone.preview", "invalid preview mapping"));
     }
@@ -395,9 +405,7 @@ pub fn clone_preview(s: &Session, rect: Rect, map: &crate::presets::clone_source
     let surf = d.doc.layer(id).and_then(|l| l.surface()).ok_or_else(|| bad("clone.preview", "no pixel surface"))?;
 
     let which = sample_layers(&json!({"sampleLayer": sample_layer}), "clone.preview")?;
-
-    let region = clone_sample(&d.doc, Some(id), surf, which, rect, map, "clone.preview")?;
-
+    let region = clone_sample(&d.doc, Some(id), surf, which, rect, map, wrap, "clone.preview")?;
     let px = region.data.chunks_exact(surf.format().channels()).map(|p| to_rgba(&surf.format(), p)).collect();
 
     Ok(photocraft_compose::Buffer { rect, px })
@@ -473,23 +481,26 @@ fn clone_stamp(s: &mut Session, p: &Value) -> Result<Value> {
     let map = clone_mapping(s, p, &stroke, CMD)?;
 
     let off = map.offset();
-
-    let dmg = run_stroke(s, "Clone Stamp", id, p, |pre, surf, sel, lock| {
-        if let Some(l) = live {
-            *surf = l.surface;
-
-            return Ok(l.bounds);
-        }
-
-        let (bounds, cov) = stroke_coverage(&stroke);
-
-        // Samples come from the pre-stroke state, so pixels painted earlier in the stroke are never re-cloned.
-
-        let paint = clone_sample(pre, id, surf, which, bounds, &map, CMD)?;
-
-        Ok(apply_coverage(surf, bounds, &cov, stroke.brush.opacity, sel, lock, &paint, mode))
-    })?;
-
+    let dmg =
+        run_stroke(s, "Clone Stamp", id, p, |pre, surf, sel, lock| {
+            if let Some(l) = live {
+                *surf = l.surface;
+                return Ok(l.bounds);
+            }
+            if flag(p, "wrap", false) {
+                let mut renderer = photocraft_paint::StrokeRenderer::new(&stroke.brush, None, 1.0);
+                renderer.push(&stroke.points);
+                renderer.finish();
+                let before = surf.clone();
+                let bounds = renderer.bounds();
+                return periodic::Composite { target: surf, before: &before, tile: pre.bounds(), opacity: stroke.brush.opacity, selection: sel, lock, mode }
+                    .draw(bounds, &stroke.brush, &stroke.points, |r| clone_sample(pre, id, &before, which, r, &map, true, CMD));
+            }
+            let (bounds, cov) = stroke_coverage(&stroke);
+            // Samples come from the pre-stroke state, so pixels painted earlier in the stroke are never re-cloned.
+            let paint = clone_sample(pre, id, surf, which, bounds, &map, flag(p, "wrap", false), CMD)?;
+            Ok(apply_coverage(surf, bounds, &cov, stroke.brush.opacity, sel, lock, &paint, mode))
+        })?;
     let mut r = clone_result(dmg, off, aligned, p, &stroke);
 
     if from_live {
@@ -655,7 +666,12 @@ impl LiveRetouch {
     /// Everything the stroke has touched so far.
 
     pub fn bounds(&self) -> Rect {
-        self.renderer.bounds().union(&self.tail)
+        let bounds = self.renderer.bounds().union(&self.tail);
+        if self.cmd == "paint.cloneStamp" && flag(&self.params, "wrap", false) {
+            periodic::project(bounds, self.pre.bounds()).into_iter().fold(Rect::EMPTY, |a, b| a.union(&b))
+        } else {
+            bounds
+        }
     }
 
     /// Every point rendered so far, in order.
@@ -722,7 +738,9 @@ impl LiveRetouch {
         self.points.extend_from_slice(&pts);
 
         self.renderer.push(&pts);
-
+        if self.cmd == "paint.cloneStamp" && flag(&self.params, "wrap", false) {
+            return self.push_periodic();
+        }
         let old = std::mem::replace(&mut self.tail, Rect::EMPTY);
 
         let mut dmg = Rect::EMPTY;
@@ -758,6 +776,27 @@ impl LiveRetouch {
         Ok(dmg)
     }
 
+    fn push_periodic(&mut self) -> Result<Rect> {
+        let mut dirty = self.renderer.take_dirty_rect().union(&self.tail);
+        let mut tail = self.renderer.tail_preview();
+        self.tail = tail.as_mut().map_or(Rect::EMPTY, |t| t.take_dirty_rect());
+        dirty = dirty.union(&self.tail);
+        let LivePaint::Clone { which, map, cmd } = &self.paint else {
+            return Err(bad(&self.cmd, "periodic painting requires a clone source"));
+        };
+        let (surf, _) = crate::channel_cmds::target_surface(self.doc.try_resident_mut()?, self.id, &self.params)?;
+        periodic::Composite {
+            target: surf,
+            before: &self.pre_surf,
+            tile: self.pre.bounds(),
+            opacity: self.opacity,
+            selection: self.sel.as_ref(),
+            lock: self.lock,
+            mode: self.mode,
+        }
+        .draw(dirty, &self.brush, &self.points, |r| clone_sample(&self.pre, self.id, &self.pre_surf, *which, r, map, true, cmd))
+    }
+
     /// Redraw `r` from the pre-stroke pixels with the clone source through coverage `cov`.
 
     fn composite(&mut self, r: Rect, cov: &[f32]) -> Result<Rect> {
@@ -766,8 +805,9 @@ impl LiveRetouch {
         }
 
         let paint = match &self.paint {
-            LivePaint::Clone { which, map, cmd } => clone_sample(&self.pre, self.id, &self.pre_surf, *which, r, map, cmd)?,
-
+            LivePaint::Clone { which, map, cmd } => {
+                clone_sample(&self.pre, self.id, &self.pre_surf, *which, r, map, *cmd == "paint.cloneStamp" && flag(&self.params, "wrap", false), cmd)?
+            }
             LivePaint::History(src) => Region::read(src, r),
         };
 
@@ -860,9 +900,7 @@ fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
         let (g, cov) = pad_coverage(bounds, &cov, 2);
 
         let fmt = surf.format();
-
-        let src = clone_sample(pre, id, surf, which, g, &map, CMD)?;
-
+        let src = clone_sample(pre, id, surf, which, g, &map, false, CMD)?;
         // The destination the texture is fitted to: the layer itself, or what the user sees when
 
         // sampling several layers (so healing onto an empty layer matches the composite).
@@ -1031,7 +1069,7 @@ enum SpotType {
 
 /// Photoshop 25.4 (measured): a dab changes exactly the brush's footprint, and Content-Aware takes
 
-/// its texture from around it, as Edit › Fill does from its window
+/// its texture from around it, as Edit â€º Fill does from its window
 
 /// ([`crate::fill_cmds::sampling_window`] of the stroke's bounds), which is what this samples.
 
@@ -1734,7 +1772,7 @@ macro_rules! brush_params {
 
     ($extra:literal) => {
 
-        concat!("{", r#""points":[[x,y,pressure?],â€¦],"size":1..5000 px=tool size,"hardness":0..100=tool hardness,"opacity":1..100=100,"flow":1..100=100,"spacing":1..1000 (% of size)=Brush Settings spacing,"layer":id?=active,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target"#, $extra, "}")
+        concat!("{", r#""points":[[x,y,pressure?],Ã¢â‚¬Â¦],"size":1..5000 px=tool size,"hardness":0..100=tool hardness,"opacity":1..100=100,"flow":1..100=100,"spacing":1..1000 (% of size)=Brush Settings spacing,"layer":id?=active,"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target"#, $extra, "}")
 
     };
 
@@ -1754,7 +1792,7 @@ pub fn specs() -> Vec<CommandSpec> {
             shortcut: None,
 
             params: brush_params!(
-                ",\"source\":[sx,sy] (sampled under the first point) | \"offset\":[dx,dy],\"aligned\":bool=true,\"sampleLayer\":\"current|currentAndBelow|all\"=\"current\",\"mode\":\"normal|multiply|\u{2026}\"=\"normal\" \u{2192} {\"damage\",\"offset\",\"aligned\",\"nextSource\"}"
+                r#","source":[sx,sy] (sampled under the first point) | "offset":[dx,dy],"aligned":bool=true,"sampleLayer":"current|currentAndBelow|all"="current","mode":"normal|multiply|â€¦"="normal","wrap":bool=false (repeat source and stroke at document edges for Pattern Preview) â†’ {"damage","offset","aligned","nextSource"}"#
             ),
 
             enabled: has_pixel_layer,
@@ -1862,7 +1900,7 @@ pub fn specs() -> Vec<CommandSpec> {
             shortcut: None,
 
             params: brush_params!(
-                r#","strokes":[[[x,y,pressure?],â€¦],â€¦]? (several strokes removed together, as one job and one undo step; else "points"),"closeLoops":bool=true (a stroke around an object removes what it encloses),"sampleAllLayers":bool=false,"newLayer":bool=false (the fill goes to a new layer above the target, which stays as it was) â†’ {"damage","layer"?} (a background job)"#
+                r#","strokes":[[[x,y,pressure?],Ã¢â‚¬Â¦],Ã¢â‚¬Â¦]? (several strokes removed together, as one job and one undo step; else "points"),"closeLoops":bool=true (a stroke around an object removes what it encloses),"sampleAllLayers":bool=false,"newLayer":bool=false (the fill goes to a new layer above the target, which stays as it was) Ã¢â€ â€™ {"damage","layer"?} (a background job)"#
             ),
 
             enabled: has_pixel_layer,
