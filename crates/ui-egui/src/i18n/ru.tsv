@@ -3159,3 +3159,4 @@ curves	Smooth	Сгладить
 	set name	имя набора
 	{set} (modified)	{set} (изменён)
 	Random	Случайно
+	Show file name in title	Показывать имя файла в заголовке
