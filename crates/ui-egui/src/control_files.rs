@@ -524,7 +524,9 @@ mod tests {
         assert_eq!(app.session.documents().len(), 1);
         gate.store(true, Ordering::Relaxed);
         finish(&mut app, started).unwrap();
-        assert_eq!(app.session.active().unwrap().doc.name, "replacement");
+        // A saved project is named after the file it was saved under (upstream #3571), not after the document it held.
+        assert_eq!(app.session.active().unwrap().doc.name, "next.pcraft");
+        assert_ne!(app.session.active().unwrap().doc.id, previous, "the replacement is the open document");
         assert_eq!(app.session.documents().len(), 1);
     }
 

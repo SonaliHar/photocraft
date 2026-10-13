@@ -904,7 +904,9 @@ mod tests {
         app.session.wait_job(photocraft_engine::jobs::JobId(job)).unwrap();
         crate::jobs_ui::tick(&mut app, &ctx);
         assert_eq!(app.session.documents().len(), 1);
-        assert_eq!(app.session.active().unwrap().doc.name, "saved edits");
+        // The saved project, named after its file (upstream #3571), at the size it was saved with: not a new development.
+        let continued = &app.session.active().unwrap().doc;
+        assert_eq!((continued.name.as_str(), continued.size.width, continued.size.height), ("IMG.dng.pcraft", 8, 8));
         auto_open(&mut app, &ctx);
         assert!(app.camera_raw.is_none(), "the saved document is the full editor's: Camera Raw must not open on it again");
     }
