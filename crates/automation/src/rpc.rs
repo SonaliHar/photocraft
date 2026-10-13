@@ -91,17 +91,9 @@ impl Headless {
                 let all = self.command_list();
                 Ok(match str_of(&p, "filter").map(str::to_lowercase) {
                     None => all,
-                    Some(n) => Value::Array(
-                        all.as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter(|c| {
-                                let hay = format!("{} {}", c["id"].as_str().unwrap_or(""), c["label"].as_str().unwrap_or(""));
-                                hay.to_lowercase().contains(&n)
-                            })
-                            .cloned()
-                            .collect(),
-                    ),
+                    Some(n) => {
+                        Value::Array(all.as_array().into_iter().flatten().filter(|c| photocraft_engine::commands::list_entry_matches(c, &n)).cloned().collect())
+                    }
                 })
             }
             "session.list" => Ok(self.session_list()),
