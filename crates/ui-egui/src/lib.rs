@@ -338,6 +338,8 @@ pub type AutomationOpenPcraftFn = Box<dyn FnMut(&str) -> Result<Option<(String, 
 pub type AutomationCommandFn = Box<dyn Fn(&str, &Value) -> Result<(), String>>;
 /// Open a URL in the system browser (native) — reliable cross-platform, unlike `ctx.open_url`.
 pub type OpenUrlFn = Box<dyn Fn(&str) -> Result<(), String>>;
+/// Check for an application update, when the host platform supplies an updater.
+pub type CheckForUpdatesFn = Box<dyn FnMut() -> Result<(), String>>;
 /// Hand an update to the host application's native updater, which fetches and installs it.
 pub type InstallUpdateFn = Box<dyn FnMut() -> Result<(), String>>;
 pub type EncodePngFn = Box<dyn Fn(u32, u32, &[u8]) -> Result<Vec<u8>, String>>;
