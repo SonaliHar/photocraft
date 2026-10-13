@@ -31,6 +31,7 @@ fn has_timeline(s: &Session) -> std::result::Result<(), String> {
 /// Mutate the document timeline without a history step (navigation / metadata).
 fn with_timeline(s: &mut Session, f: impl FnOnce(&mut Option<Timeline>)) -> Result<Value> {
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
+    st.doc.validate_resident()?;
     let mut doc = (*st.doc).clone();
     crate::video_cmds::store(&mut doc);
     f(&mut doc.timeline);
@@ -38,7 +39,7 @@ fn with_timeline(s: &mut Session, f: impl FnOnce(&mut Option<Timeline>)) -> Resu
         t.clamp();
     }
     crate::video_cmds::sync(&mut doc);
-    st.doc = Arc::new(doc);
+    st.doc = crate::document_snapshot::DocumentSnapshot::from_resident(Arc::new(doc))?;
     st.revision += 1;
     info(s)
 }
@@ -255,9 +256,10 @@ mod tests {
                     let mut s = Session::new();
                     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
                     let st = s.active_mut().unwrap();
+                    st.doc.validate_resident().unwrap();
                     let mut doc = (*st.doc).clone();
                     doc.timeline = Some(Timeline { fps: f32::NAN, duration, current, work_start: usize::MAX, work_end: 0 });
-                    st.doc = Arc::new(doc);
+                    st.doc = crate::document_snapshot::DocumentSnapshot::from_resident(Arc::new(doc)).unwrap();
                     let r = s.execute(cmd, json!({})).unwrap_or_else(|e| panic!("{cmd} d={duration} c={current}: {e}"));
                     let t = &r["timeline"];
                     let d = t["duration"].as_u64().unwrap();

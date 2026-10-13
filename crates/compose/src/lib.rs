@@ -2,7 +2,7 @@
 //!
 //! Flattens a [`Document`] layer tree into straight-alpha RGBA (f32) for any rectangle. It encodes
 //! Photoshop layer semantics in one place:
-//! - blend modes, opacity × fill opacity, visibility
+//! - blend modes, opacity Ã— fill opacity, visibility
 //! - layer masks with density
 //! - clipping groups (clipped layers composite *atop* their base)
 //! - pass-through vs isolated groups
@@ -18,21 +18,63 @@
 
 pub mod adjust;
 pub mod advanced;
+pub mod backed_document;
+pub mod backed_normal;
+pub mod backed_normal_stack;
 pub mod bounds;
 pub mod effects;
+mod feather_cache;
+pub mod feather_interrupt;
 pub mod fill_layout;
+pub mod gimp_blend;
+pub mod gimp_channel_mixer;
+pub mod gimp_absolute;
+pub mod gimp_unpremultiply;
+mod gimp_color_balance;
+pub mod gimp_color_overlay;
+pub mod gimp_color_rotate;
+pub mod gimp_video_degradation;
+pub mod gimp_component_hsv_hsl;
+pub mod gimp_composite;
+mod gimp_curves;
+mod gimp_filters;
+mod gimp_levels;
+pub mod gimp_link_items;
+pub mod gimp_link_cubic;
+pub mod gimp_link_linear;
+pub mod gimp_link_nearest;
+pub mod gimp_link_nohalo;
+pub mod gimp_mono_mixer;
+mod gimp_neighborhood;
+pub mod gimp_filter_mask_state;
+pub mod gimp_red_eye;
+pub mod gimp_render;
+pub mod gimp_text_items;
+pub mod gimp_vector_items;
 pub mod gradient_fill;
 pub mod masks;
 pub mod multichannel;
 pub mod pattern;
 pub mod proxy;
 pub mod psblend;
+mod render_interrupt;
 pub mod shape_split;
+mod vector_interrupt;
+pub use render_interrupt::{render_bands_with_interrupt, render_with_interrupt};
+mod preparation_bridge;
+pub mod preview_budget;
+pub mod proxy_preview;
+pub mod styled_preview;
+mod thumbnail_interrupt;
+pub use thumbnail_interrupt::{
+    render_reduced_damage_with_interrupt, render_reduced_rect_with_interrupt, render_reduced_with_interrupt, thumbnail_buffer_with_interrupt,
+    thumbnail_with_interrupt,
+};
 
 use photocraft_color::blend::BlendMode;
 use photocraft_doc::{Document, Fill, Layer, LayerContent, Pattern};
 use photocraft_geom::Rect;
-use photocraft_raster::{Rgba8Image, Surface};
+use photocraft_raster::{Interrupt, RasterInputError, Rgba8Image, Surface};
 use psblend as blend;
 
 pub use advanced::advanced_active;
@@ -78,17 +120,142 @@ impl Buffer {
     }
 }
 
+/// An ordinary display renderer does not implicitly materialize fallible storage.
+/// Use `backed_document::PreparedBackedDocument` for supported bounded native bands.
+fn require_resident(doc: &Document) -> Result<(), RasterInputError> {
+    if doc.has_backed_rasters()? {
+        return Err(RasterInputError::UnsupportedConversion);
+    }
+    proxy::validate_surfaces_with_interrupt(doc, &Interrupt::NONE)
+}
+
+/// Validate resident storage and bounded layer/tile structure without rendering,
+/// allocating a pixel plane, or reading an immutable native backing.
+pub fn validate_resident_document(doc: &Document) -> Result<(), RasterInputError> {
+    require_resident(doc)
+}
+
+/// An already rendered resident-only region for algorithms with infallible
+/// pixel callbacks. Preparation propagates all storage/validation errors before
+/// the algorithm starts; sampling never renders, allocates, or performs IO.
+pub struct PreparedResidentRegion {
+    buffer: Buffer,
+}
+impl PreparedResidentRegion {
+    pub fn new(doc: &Document, rect: Rect) -> Result<Self, RasterInputError> {
+        let buffer = render(doc, rect)?;
+        let width = usize::try_from(i64::from(rect.x1) - i64::from(rect.x0)).map_err(|_| RasterInputError::InvalidBounds)?;
+        let height = usize::try_from(i64::from(rect.y1) - i64::from(rect.y0)).map_err(|_| RasterInputError::InvalidBounds)?;
+        if width.checked_mul(height) != Some(buffer.px.len()) {
+            return Err(RasterInputError::LengthMismatch);
+        }
+        Ok(Self { buffer })
+    }
+    pub fn bounds(&self) -> Rect {
+        self.buffer.rect
+    }
+    /// `None` outside this prepared region; missing preparation is never
+    /// substituted for transparent document content.
+    pub fn rgba(&self, x: i32, y: i32) -> Option<[f32; 4]> {
+        let rect = self.buffer.rect;
+        if x < rect.x0 || y < rect.y0 || x >= rect.x1 || y >= rect.y1 {
+            return None;
+        }
+        let offset = (i64::from(y) - i64::from(rect.y0))
+            .checked_mul(i64::from(rect.x1) - i64::from(rect.x0))
+            .and_then(|n| n.checked_add(i64::from(x) - i64::from(rect.x0)))
+            .and_then(|n| usize::try_from(n).ok());
+        offset.and_then(|index| self.buffer.px.get(index)).copied()
+    }
+    pub fn rgba_region(&self, rect: Rect) -> Result<Vec<[f32; 4]>, RasterInputError> {
+        let bounds = self.bounds();
+        if rect.x0 < bounds.x0 || rect.y0 < bounds.y0 || rect.x1 > bounds.x1 || rect.y1 > bounds.y1 {
+            return Err(RasterInputError::InvalidBounds);
+        }
+        let count = photocraft_raster::checked_region_byte_len(rect, photocraft_color::PixelFormat::RGBA32F)? / 16;
+        let mut pixels = Vec::new();
+        pixels.try_reserve_exact(count).map_err(|_| RasterInputError::AllocationFailed)?;
+        for y in rect.y0..rect.y1 {
+            for x in rect.x0..rect.x1 {
+                pixels.push(self.rgba(x, y).ok_or(RasterInputError::LengthMismatch)?);
+            }
+        }
+        Ok(pixels)
+    }
+}
+pub fn render(doc: &Document, rect: Rect) -> Result<Buffer, RasterInputError> {
+    render_tiled(doc, rect, RENDER_TILE)
+}
+pub fn render_tiled(doc: &Document, rect: Rect, tile: i32) -> Result<Buffer, RasterInputError> {
+    require_resident(doc)?;
+    photocraft_raster::checked_region_byte_len(rect, photocraft_color::PixelFormat::RGBA32F)?;
+    Ok(render_tiled_resident(doc, rect, tile))
+}
+#[derive(Debug, PartialEq, Eq)]
+pub enum RenderBandError<E> {
+    Render(RasterInputError),
+    Sink(E),
+}
+impl<E: std::fmt::Display> std::fmt::Display for RenderBandError<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Render(e) => e.fmt(f),
+            Self::Sink(e) => e.fmt(f),
+        }
+    }
+}
+impl<E: std::error::Error + 'static> std::error::Error for RenderBandError<E> {}
+pub fn render_bands<E>(doc: &Document, rect: Rect, rows: i32, sink: impl FnMut(Buffer) -> Result<(), E>) -> Result<(), RenderBandError<E>> {
+    require_resident(doc).map_err(RenderBandError::Render)?;
+    photocraft_raster::checked_region_byte_len(rect, photocraft_color::PixelFormat::GRAY8).map_err(RenderBandError::Render)?;
+    render_bands_resident(doc, rect, rows, sink).map_err(RenderBandError::Sink)
+}
+pub fn flatten(doc: &Document) -> Result<Buffer, RasterInputError> {
+    render(doc, doc.bounds())
+}
+pub fn flatten_to_surface(doc: &Document, fmt: photocraft_color::PixelFormat, background: Option<[f32; 3]>) -> Result<Surface, RasterInputError> {
+    require_resident(doc)?;
+    Ok(flatten_to_surface_resident(doc, fmt, background))
+}
+pub fn render_layer(layer: &Layer, rect: Rect) -> Result<Buffer, RasterInputError> {
+    if layer.has_backed_rasters()? {
+        return Err(RasterInputError::UnsupportedConversion);
+    }
+    photocraft_raster::checked_region_byte_len(rect, photocraft_color::PixelFormat::RGBA32F)?;
+    Ok(render_layer_resident(layer, rect))
+}
+pub fn thumbnail(doc: &Document, side: u32) -> Result<Rgba8Image, RasterInputError> {
+    require_resident(doc)?;
+    Ok(thumbnail_resident(doc, side))
+}
+pub fn thumbnail_buffer(doc: &Document, side: u32) -> Result<Buffer, RasterInputError> {
+    require_resident(doc)?;
+    Ok(thumbnail_buffer_resident(doc, side))
+}
+pub fn render_reduced(doc: &Document, w: u32, h: u32) -> Result<Buffer, RasterInputError> {
+    require_resident(doc)?;
+    Ok(render_reduced_resident(doc, w, h))
+}
+pub fn render_reduced_rect(doc: &Document, rect: Rect, w: u32, h: u32) -> Result<Buffer, RasterInputError> {
+    require_resident(doc)?;
+    Ok(render_reduced_rect_resident(doc, rect, w, h))
+}
+pub fn render_reduced_damage(doc: &Document, w: u32, h: u32, damage: Rect) -> Result<Buffer, RasterInputError> {
+    require_resident(doc)?;
+    Ok(render_reduced_damage_resident(doc, w, h, damage))
+}
+
 /// Tile size for parallel rendering (tile results are independent).
 pub const RENDER_TILE: i32 = 256;
 
-/// Composite the whole document over `rect`, in parallel 256² tiles on
+/// Composite the whole document over `rect`, in parallel 256Â² tiles on
 /// native targets (single-threaded on wasm).
-pub fn render(doc: &Document, rect: Rect) -> Buffer {
-    render_tiled(doc, rect, RENDER_TILE)
+fn render_resident(doc: &Document, rect: Rect) -> Buffer {
+    render_tiled_resident(doc, rect, RENDER_TILE)
 }
 
 /// [`render`] with an explicit tile size (tests check tile independence).
-pub fn render_tiled(doc: &Document, rect: Rect, tile: i32) -> Buffer {
+fn render_tiled_resident(doc: &Document, rect: Rect, tile: i32) -> Buffer {
     let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES);
     let cx = Ctx::for_doc(doc, &patterns);
     render_tiled_with(doc, rect, tile, &cx)
@@ -203,7 +370,7 @@ pub const BAND_PIXELS: u64 = 8 << 20;
 /// a band render in parallel). Peak memory is one band instead of the whole composite, so huge
 /// documents can be exported or displayed without a full-size float copy. `band_rows` of 0 picks
 /// about [`BAND_PIXELS`] per band; bands are whole multiples of [`RENDER_TILE`] rows.
-pub fn render_bands<E>(doc: &Document, rect: Rect, band_rows: i32, mut sink: impl FnMut(Buffer) -> Result<(), E>) -> Result<(), E> {
+fn render_bands_resident<E>(doc: &Document, rect: Rect, band_rows: i32, mut sink: impl FnMut(Buffer) -> Result<(), E>) -> Result<(), E> {
     if rect.is_empty() {
         return Ok(());
     }
@@ -230,11 +397,11 @@ pub fn band_rows_for(width: u32, requested: i32) -> i32 {
 /// The document's composite as a pixel surface in `fmt` (straight RGBA converted to its model
 /// and depth), optionally flattened over an opaque `background`; rendered and written in bands,
 /// so no full-size float composite is held. Tiles equal to the default pixel are pruned.
-pub fn flatten_to_surface(doc: &Document, fmt: photocraft_color::PixelFormat, background: Option<[f32; 3]>) -> Surface {
+fn flatten_to_surface_resident(doc: &Document, fmt: photocraft_color::PixelFormat, background: Option<[f32; 3]>) -> Surface {
     let mut s = Surface::new(fmt);
     let n = fmt.channels();
     let mut data = Vec::new();
-    let _ = render_bands(doc, doc.bounds(), 0, |band| -> Result<(), ()> {
+    let _ = render_bands_resident(doc, doc.bounds(), 0, |band| -> Result<(), ()> {
         let band = match background {
             Some(bg) => band.over_background(bg),
             None => band,
@@ -252,12 +419,8 @@ pub fn flatten_to_surface(doc: &Document, fmt: photocraft_color::PixelFormat, ba
 }
 
 /// Composite the full canvas.
-pub fn flatten(doc: &Document) -> Buffer {
-    render(doc, doc.bounds())
-}
-
 /// Render an arbitrary subset: a single layer (e.g. for thumbnails), isolated.
-pub fn render_layer(layer: &Layer, rect: Rect) -> Buffer {
+fn render_layer_resident(layer: &Layer, rect: Rect) -> Buffer {
     let mut buf = Buffer::transparent(rect);
     let patterns = pattern::PreparedPatterns::new(&[], pattern::PREPARED_PATTERN_BYTES);
     composite_stack_at(
@@ -273,6 +436,11 @@ pub fn render_layer(layer: &Layer, rect: Rect) -> Buffer {
             mode: photocraft_color::ColorMode::Rgb,
             depth: photocraft_color::SampleType::F32,
             vector_masks: RenderVectorMasks::default(),
+            checked_effects: false,
+            vector_control: None,
+            checked_vectors: Default::default(),
+            checked_feathers: Default::default(),
+            preparation: None,
             fx_maps: Default::default(),
             doc: None,
         },
@@ -289,12 +457,12 @@ pub const PROXY_THUMBNAIL_PIXELS: u64 = 16 << 20;
 /// histograms, at most `max_side` pixels on its longer side. Large documents are reduced from a
 /// downsampled proxy (about twice the thumbnail's size), so a thumbnail of a 200 MP document
 /// costs milliseconds and no full-size composite; the rest stream the exact composite in bands.
-pub fn thumbnail(doc: &Document, max_side: u32) -> Rgba8Image {
-    thumbnail_buffer(doc, max_side).to_rgba8()
+fn thumbnail_resident(doc: &Document, max_side: u32) -> Rgba8Image {
+    thumbnail_buffer_resident(doc, max_side).to_rgba8()
 }
 
 /// [`thumbnail`] as straight-alpha floats (for callers that colour-convert it first).
-pub fn thumbnail_buffer(doc: &Document, max_side: u32) -> Buffer {
+fn thumbnail_buffer_resident(doc: &Document, max_side: u32) -> Buffer {
     let b = doc.bounds();
     let longest = b.width().max(b.height()).max(1);
     let scale = (max_side as f32 / longest as f32).min(1.0);
@@ -302,22 +470,22 @@ pub fn thumbnail_buffer(doc: &Document, max_side: u32) -> Buffer {
     let h = ((b.height() as f32 * scale).round() as u32).max(1);
     let k = longest / max_side.max(1).saturating_mul(2);
     if k >= 2 && doc.size.area() > PROXY_THUMBNAIL_PIXELS && proxy::proxy_faithful(doc) {
-        render_reduced(&proxy::proxy_document(doc, k), w, h)
+        render_reduced_resident(&proxy::proxy_document_resident(doc, k), w, h)
     } else {
-        render_reduced(doc, w, h)
+        render_reduced_resident(doc, w, h)
     }
 }
 
-/// The document's composite area-averaged (premultiplied) down to `w`×`h` (clamped to the
+/// The document's composite area-averaged (premultiplied) down to `w`Ã—`h` (clamped to the
 /// document size), rendered in bands so no full-size composite is held.
-pub fn render_reduced(doc: &Document, w: u32, h: u32) -> Buffer {
+fn render_reduced_resident(doc: &Document, w: u32, h: u32) -> Buffer {
     render_reduced_in_bands(doc, doc.bounds(), w, h, None, 0)
 }
 
 /// [`render_reduced`] of any area of the document plane, `rect`, which may lie past the canvas
 /// (layer pixels there are kept until a crop deletes them). The buffer's rect is in output pixels
 /// from (0, 0).
-pub fn render_reduced_rect(doc: &Document, rect: Rect, w: u32, h: u32) -> Buffer {
+fn render_reduced_rect_resident(doc: &Document, rect: Rect, w: u32, h: u32) -> Buffer {
     render_reduced_in_bands(doc, rect, w, h, None, 0)
 }
 
@@ -325,7 +493,7 @@ pub fn render_reduced_rect(doc: &Document, rect: Rect, w: u32, h: u32) -> Buffer
 /// affect: the output pixels whose source areas meet it, rendered from just those areas, with the
 /// same values the whole reduction gives them. The buffer's rect is in output pixels (empty when
 /// `damage` misses the document), so a reduced canvas texture can update only what a stroke touched.
-pub fn render_reduced_damage(doc: &Document, w: u32, h: u32, damage: Rect) -> Buffer {
+fn render_reduced_damage_resident(doc: &Document, w: u32, h: u32, damage: Rect) -> Buffer {
     render_reduced_in_bands(doc, doc.bounds(), w, h, Some(damage), 0)
 }
 
@@ -338,7 +506,7 @@ fn render_reduced_in_bands(doc: &Document, b: Rect, w: u32, h: u32, damage: Opti
     if fw == 0 || fh == 0 {
         return Buffer::transparent(if damage.is_some() { Rect::EMPTY } else { full });
     }
-    // Output column / row of each document column / row: output pixel t covers [t·f/n, (t+1)·f/n).
+    // Output column / row of each document column / row: output pixel t covers [tÂ·f/n, (t+1)Â·f/n).
     let span = |t: usize, f: usize, n: usize| (t * f / n, ((t + 1) * f / n).max(t * f / n + 1).min(f));
     // The output pixel whose span holds document column / row `x` (spans are contiguous: n <= f).
     let cell = |x: usize, f: usize, n: usize| ((x + 1) * n).saturating_sub(1) / f;
@@ -360,7 +528,7 @@ fn render_reduced_in_bands(doc: &Document, b: Rect, w: u32, h: u32, damage: Opti
     let (sy0, sy1) = (span(oy0, fh, h).0, span(oy0 + oh - 1, fh, h).1);
     let src = Rect::new(b.x0 + sx0 as i32, b.y0 + sy0 as i32, b.x0 + sx1 as i32, b.y0 + sy1 as i32);
     if (w, h) == (fw, fh) {
-        let mut px = render(doc, src);
+        let mut px = render_resident(doc, src);
         px.rect = out;
         return px;
     }
@@ -375,7 +543,7 @@ fn render_reduced_in_bands(doc: &Document, b: Rect, w: u32, h: u32, damage: Opti
     let (cols, rows) = (map(fw, w), map(fh, h));
     let cols = &cols[sx0..sx1];
     let mut acc = vec![[0.0f32; 4]; ow * oh];
-    let ok: Result<(), ()> = render_bands(doc, src, band_rows, |band| {
+    let ok: Result<(), ()> = render_bands_resident(doc, src, band_rows, |band| {
         let (by0, by1) = ((band.rect.y0 - b.y0) as usize, (band.rect.y1 - b.y0) as usize);
         let (t0, t1) = (rows[by0] as usize, rows[by1 - 1] as usize + 1);
         let sw = sx1 - sx0;
@@ -421,9 +589,10 @@ struct RenderVectorMasks {
 }
 
 impl RenderVectorMasks {
-    fn values(&self, mask: &photocraft_doc::VectorMask, rect: Rect) -> Vec<f32> {
-        // Addresses identify immutable mask instances only for this render's lifetime.
-        let key = std::ptr::from_ref(mask) as usize;
+    fn values(&self, mask: &photocraft_doc::VectorMask, identity: &photocraft_doc::VectorMask, rect: Rect) -> Vec<f32> {
+        // Identity belongs to the persistent immutable source owner, even when
+        // mask selection uses a temporary layer for effect-hiding semantics.
+        let key = std::ptr::from_ref(identity) as usize;
         let slot = {
             let mut masks = self.masks.lock().unwrap_or_else(|e| e.into_inner());
             masks.entry(key).or_default().clone()
@@ -451,11 +620,18 @@ struct Ctx<'a> {
     mode: photocraft_color::ColorMode,
     depth: photocraft_color::SampleType,
     vector_masks: RenderVectorMasks,
-    /// Effect maps used by this render, by cache key: built before the parallel tiles (see
-    /// [`prepare_effects`]) and held for the whole render, so eviction can't force a rebuild.
+    /// The interruptible renderer prepopulates qualified shadow maps. Other
+    /// styles retain legacy preparation and its documented internal gaps.
+    checked_effects: bool,
+    vector_control: Option<&'a photocraft_raster::Interrupt<'a>>,
+    checked_vectors: vector_interrupt::CheckedVectorMasks,
+    checked_feathers: feather_cache::CheckedFeatherMasks,
+    /// Effect maps held for this render, so eviction cannot force a rebuild.
     fx_maps: std::sync::Mutex<std::collections::HashMap<u64, std::sync::Arc<effects::FxMaps>>>,
     /// The document being rendered (deep knockouts reveal its Background); `None` for a lone layer.
     doc: Option<&'a Document>,
+    // Last: cache owners above are destroyed before their live leases.
+    preparation: Option<preparation_bridge::PreparationBridge<'a>>,
 }
 
 impl<'a> Ctx<'a> {
@@ -483,6 +659,11 @@ impl<'a> Ctx<'a> {
             mode: doc.mode,
             depth: doc.depth,
             vector_masks: RenderVectorMasks::default(),
+            checked_effects: false,
+            vector_control: None,
+            checked_vectors: Default::default(),
+            checked_feathers: Default::default(),
+            preparation: None,
             fx_maps: Default::default(),
         }
     }
@@ -536,12 +717,12 @@ fn effect_layers<'l>(layers: &'l [Layer], rect: Rect, depth: u32, out: &mut Vec<
     }
 }
 
-/// Composite an isolated group's sibling list (bottom→top) onto `backdrop` (its own buffer).
+/// Composite an isolated group's sibling list (bottomâ†’top) onto `backdrop` (its own buffer).
 fn composite_stack(layers: &[Layer], backdrop: &mut Buffer, cx: &Ctx) {
     composite_stack_at(layers, backdrop, cx, advanced::Scope::ISOLATED);
 }
 
-/// Composite a sibling list (bottom→top) onto `backdrop`; `scope` says where the stack sits (see
+/// Composite a sibling list (bottomâ†’top) onto `backdrop`; `scope` says where the stack sits (see
 /// [`advanced::Scope`]: it decides what knockouts reveal).
 fn composite_stack_at(layers: &[Layer], backdrop: &mut Buffer, cx: &Ctx, scope: advanced::Scope) {
     // Shallow knockouts stop at the bottom of this stack: the backdrop it starts from.
@@ -569,14 +750,16 @@ fn composite_stack_at(layers: &[Layer], backdrop: &mut Buffer, cx: &Ctx, scope: 
 /// Steps per unit of an integer document's samples: Photoshop applies adjustment layers to
 /// buffers of the document's depth (8-bit: 255 levels, 16-bit: 32768), so their result is
 /// rounded there; a steep curve then amplifies the rounding of its input exactly as in
-/// Photoshop (psd-tools adjustment_nested_composition_4: 9.6 → 5.1 % of pixels off;
+/// Photoshop (psd-tools adjustment_nested_composition_4: 9.6 â†’ 5.1 % of pixels off;
 /// exposure_grayscale passes). Blends stay in float (quantising them too made other files
 /// worse).
 pub fn adjustment_quantum(depth: photocraft_color::SampleType) -> Option<f32> {
     match depth {
         photocraft_color::SampleType::U8 => Some(255.0),
         photocraft_color::SampleType::U16 => Some(32768.0),
-        photocraft_color::SampleType::F32 => None,
+        // Wide imported formats do not use Photoshop's 8/16-bit adjustment quantization.
+        // This compositor's float display buffer is separate from authoritative raw storage.
+        photocraft_color::SampleType::U32 | photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64 => None,
     }
 }
 
@@ -618,6 +801,7 @@ pub fn layer_bounds(layer: &Layer, canvas: Rect) -> Rect {
             }
         }),
         LayerContent::Fill(_) => canvas,
+        LayerContent::BackedRaster(backed) => backed.operative_bounds(),
         _ => {
             let b = layer.surface().map_or(Rect::EMPTY, bounds::content_bounds);
             // Effects follow a filled shape's outline, also where its fill is transparent.
@@ -644,7 +828,7 @@ pub fn effect_outline(layer: &Layer) -> Option<&photocraft_doc::vector::Path> {
 /// The shape a layer's effects are built from over `rect` (row-major): its content's alpha
 /// (masks applied), completed for shapes with an [`effect_outline`] by the outline's coverage
 /// where the fill is see-through. With `l` the alpha and `f` the fill's own opacity (the largest
-/// alpha around), the shape is `l + (1 - f) × coverage`: Photoshop's own rasterization where the
+/// alpha around), the shape is `l + (1 - f) Ã— coverage`: Photoshop's own rasterization where the
 /// fill is opaque (it can differ from ours by a fraction of a pixel: psd-tools shape-fx2), the
 /// path where the fill fades out (psd-tools stroke-effects).
 fn effect_shape(layer: &Layer, rect: Rect, cx: &Ctx) -> Vec<f32> {
@@ -687,7 +871,7 @@ fn effect_shape(layer: &Layer, rect: Rect, cx: &Ctx) -> Vec<f32> {
 /// The frame layer-effect gradients and linked patterns are laid out in, when it isn't the
 /// layer's pixel bounds: a shape layer's path bounds, truncated to whole pixels. Its rendered
 /// pixels can extend past the path (transparent anti-aliasing margin), which Photoshop ignores:
-/// psd-tools shape-fx2's 45° overlay spans the 0.92–29.61 path as 0–29 (29 px, centred at 14.5),
+/// psd-tools shape-fx2's 45Â° overlay spans the 0.92â€“29.61 path as 0â€“29 (29 px, centred at 14.5),
 /// not the 32 px of pixels.
 pub fn paint_bounds(layer: &Layer) -> Option<Rect> {
     let LayerContent::Shape(sh) = &layer.content else { return None };
@@ -699,6 +883,22 @@ pub fn paint_bounds(layer: &Layer) -> Option<Rect> {
 /// The layer's effective mask over `rect` (row-major), read once per tile: the pixel mask
 /// times the rasterized vector mask.
 fn mask_vals(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<Vec<f32>> {
+    mask_vals_with_mask_identity(layer, rect, cx, layer)
+}
+
+fn mask_vals_with_mask_identity(layer: &Layer, rect: Rect, cx: &Ctx, owner: &Layer) -> Option<Vec<f32>> {
+    let identity = owner.vector_mask.as_ref();
+    if masks::has_feather(layer)
+        && let Some(control) = cx.vector_control
+    {
+        return match cx.checked_feathers.values_budgeted(layer, owner, cx.canvas, rect, control, cx.preparation.as_ref()) {
+            Ok(values) => values,
+            Err(error) => {
+                cx.checked_vectors.record(error);
+                None
+            }
+        };
+    }
     // Feathers blur across tiles: read the cached, canvas-wide combined mask.
     if masks::has_feather(layer)
         && let Some(s) = masks::combined_mask(layer, cx.canvas)
@@ -707,7 +907,23 @@ fn mask_vals(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<Vec<f32>> {
         s.read_region_into(rect, &mut v);
         return Some(v);
     }
-    let vector = layer.vector_mask.as_ref().map(|vm| cx.vector_masks.values(vm, rect));
+    let vector = if let Some(vm) = &layer.vector_mask {
+        if let Some(control) = cx.vector_control {
+            match cx.checked_vectors.values_budgeted(vm, identity.unwrap_or(vm), rect, control, cx.preparation.as_ref()) {
+                Ok(values) => Some(values),
+                Err(error) => {
+                    cx.checked_vectors.record(error);
+                    // Abandon this private microblock. Its checked boundary
+                    // propagates the first error before copying/delivering pixels.
+                    return None;
+                }
+            }
+        } else {
+            Some(cx.vector_masks.values(vm, identity.unwrap_or(vm), rect))
+        }
+    } else {
+        None
+    };
     let Some(m) = layer.mask.as_ref() else { return vector };
     let mut v = Vec::new();
     m.values_into(rect, &mut v);
@@ -757,10 +973,18 @@ fn render_content(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<Buffer> {
 /// filled shape. Zero for adjustment layers.
 ///
 /// See also [`stroke_frame`].
-pub fn layer_shape(doc: &Document, layer: &Layer, rect: Rect) -> Vec<f32> {
+pub fn layer_shape(doc: &Document, layer: &Layer, rect: Rect) -> Result<Vec<f32>, RasterInputError> {
+    require_resident(doc)?;
+    if layer.has_backed_rasters()? {
+        return Err(RasterInputError::UnsupportedConversion);
+    }
+    photocraft_raster::checked_region_byte_len(
+        rect,
+        photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Grayscale, photocraft_color::SampleType::F32, false),
+    )?;
     let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES);
     let cx = Ctx::for_doc(doc, &patterns);
-    effect_shape(layer, rect, &cx)
+    Ok(effect_shape(layer, rect, &cx))
 }
 
 /// The frame a gradient stroke `st` of `layer` is laid out in (`effects::FxMaps::stroke_frame`),
@@ -855,7 +1079,7 @@ fn empty_in(layer: &Layer, rect: Rect) -> bool {
     }
 }
 
-/// Blending Options › Channels as per-channel weights over display RGB (1 = the layer's result,
+/// Blending Options â€º Channels as per-channel weights over display RGB (1 = the layer's result,
 /// 0 = the backdrop's value kept), or `None` when every channel blends. RGB documents map R, G, B
 /// directly and a grayscale document's single channel covers all three; other modes composite in
 /// display RGB, where a restriction to their own channels has no exact equivalent, so it is
@@ -977,7 +1201,7 @@ pub fn occludes_below(layer: &Layer, mode: photocraft_color::ColorMode) -> bool 
         && !blend_if_active(layer, mode)
 }
 
-/// Whether Blending Options › Blend If changes how `layer` composites in a `mode` document.
+/// Whether Blending Options â€º Blend If changes how `layer` composites in a `mode` document.
 /// RGB documents test Gray and R, G, B; grayscale (and duotone) documents their one channel.
 /// Other modes composite in display RGB, where ranges over their own channels have no exact
 /// equivalent, so (like channel restrictions) the setting round-trips but isn't applied there.
@@ -1018,7 +1242,7 @@ fn blend_if_weight(layer: &Layer, mode: photocraft_color::ColorMode, this: Optio
 
 /// Apply `layer`'s Blend If to a finished composite: `out` (the backdrop with the layer drawn)
 /// is mixed back towards `before` (the backdrop without it) where the ranges hide the layer.
-/// Mixing premultiplied colour by `k` equals compositing the layer at `k` × its alpha, since
+/// Mixing premultiplied colour by `k` equals compositing the layer at `k` Ã— its alpha, since
 /// every blend mode's source-over result is linear in the source alpha.
 fn apply_blend_if(layer: &Layer, before: &Buffer, out: &mut Buffer, cx: &Ctx) {
     // "This Layer" is the layer's own colour; adjustment layers (no content of their own) are
@@ -1344,7 +1568,7 @@ fn layer_identity(layer: &Layer, h: &mut std::collections::hash_map::DefaultHash
         LayerContent::Fill(f) => {
             format!("{f:?}").hash(h);
             // The cached pixels are what shapes the maps while they match the fill: a
-            // pixel-only rewrite of the cache (Image › Transform, crop) leaves `f` alone, and
+            // pixel-only rewrite of the cache (Image â€º Transform, crop) leaves `f` alone, and
             // the stale maps would keep shadowing the pre-rewrite shape.
             if let Some(c) = &layer.fill_cache
                 && c.fill == *f
@@ -1380,7 +1604,7 @@ struct FxCache {
     bytes: usize,
 }
 
-/// Default effect-cache budget (Preferences › Performance can change it).
+/// Default effect-cache budget (Preferences â€º Performance can change it).
 pub const DEFAULT_FX_CACHE_BUDGET: usize = 768 << 20;
 static FX_CACHE_BUDGET: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(DEFAULT_FX_CACHE_BUDGET);
 
@@ -1400,7 +1624,7 @@ pub fn effect_cache_bytes() -> usize {
     fx_cache().lock().unwrap_or_else(|e| e.into_inner()).bytes
 }
 
-/// Drop every cached effect map (Edit › Purge › All). Returns the bytes released.
+/// Drop every cached effect map (Edit â€º Purge â€º All). Returns the bytes released.
 pub fn purge_effect_cache() -> usize {
     let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
     let freed = c.bytes;
@@ -1418,24 +1642,28 @@ fn fx_cache() -> &'static std::sync::Mutex<FxCache> {
 /// The layer's effect maps over its whole region (layer bounds grown by the effect reach, within
 /// the canvas grown likewise), built once per layer state and shared by every tile.
 fn effect_maps(layer: &Layer, cx: &Ctx) -> std::sync::Arc<effects::FxMaps> {
-    use std::hash::{Hash, Hasher};
     let m = effects::margin(layer);
     let region = layer_bounds(layer, cx.canvas).inflate(m).intersect(&cx.canvas.inflate(m));
-    if std::env::var_os("PHOTOCRAFT_FX_NOCACHE").is_some() {
+    if !cx.checked_effects && std::env::var_os("PHOTOCRAFT_FX_NOCACHE").is_some() {
         let shape = if region.is_empty() { Vec::new() } else { effect_shape(layer, region, cx) };
         return std::sync::Arc::new(effects::build_maps_prepared(layer, shape, region, &cx.light, &texture_ctx(layer, region, cx), cx.patterns));
     }
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    layer_identity(layer, &mut h);
-    (region.x0, region.y0, region.x1, region.y1).hash(&mut h);
-    (cx.light.angle.to_bits(), cx.light.altitude.to_bits()).hash(&mut h);
-    let key = h.finish();
+    let key = effect_cache_key(layer, region, cx);
     // Prepared for this render (see `prepare_effects`): no global lookup, no build.
     if let Some(m) = cx.fx_maps.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
         return m.clone();
     }
     let maps = cached_effect_maps(layer, region, key, cx);
     cx.fx_maps.lock().unwrap_or_else(|e| e.into_inner()).entry(key).or_insert(maps).clone()
+}
+
+fn effect_cache_key(layer: &Layer, region: Rect, cx: &Ctx) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    layer_identity(layer, &mut h);
+    (region.x0, region.y0, region.x1, region.y1).hash(&mut h);
+    (cx.light.angle.to_bits(), cx.light.altitude.to_bits()).hash(&mut h);
+    h.finish()
 }
 
 /// The layer's effect maps from the global cache, built on a miss.
@@ -1464,6 +1692,12 @@ fn cached_effect_maps(layer: &Layer, region: Rect, key: u64, cx: &Ctx) -> std::s
             let maps = effects::build_maps_prepared(layer, shape, region, &cx.light, &texture_ctx(layer, region, cx), cx.patterns);
             let bytes = maps.bytes();
             let maps = std::sync::Arc::new(maps);
+            // A failed checked mask abandons this private preparation. Never
+            // publish maps computed from its discarded microblock to later
+            // renders through the shared successful-result cache.
+            if cx.checked_vectors.error().is_err() {
+                return maps;
+            }
             if slot.set(FxEntry { maps: maps.clone(), _pin: layer.clone(), bytes }).is_ok() {
                 // Counted exactly once, by the build that filled the slot, and only while the
                 // slot is still cached (eviction may have dropped it meanwhile).
@@ -1635,10 +1869,10 @@ mod xcf_merge_interaction_tests {
                 Some(ImportCompositing { blend_encoding: SampleEncoding::Linear, composite_encoding: SampleEncoding::Linear, pass_through: false });
             top.blend_if.set(0, [BlendRange { black: [0, 0], white: [200, 200] }, BlendRange::FULL]);
             doc.layers = vec![background, top];
-            assert_eq!(render(&doc, doc.bounds()).px[0], [0.0, 0.0, 0.0, 1.0]);
+            assert_eq!(render(&doc, doc.bounds()).unwrap().px[0], [0.0, 0.0, 0.0, 1.0]);
             doc.layers[1].blend_if.set(0, [BlendRange::FULL, BlendRange::FULL]);
             let expected = if encoding == SampleEncoding::Linear { 0.5 } else { photocraft_color::convert::linear_to_srgb(0.5) };
-            assert!((render(&doc, doc.bounds()).px[0][0] - expected).abs() < 2.0 / 65535.0);
+            assert!((render(&doc, doc.bounds()).unwrap().px[0][0] - expected).abs() < 2.0 / 65535.0);
         }
     }
 }

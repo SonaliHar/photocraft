@@ -26,6 +26,7 @@ pub mod pipeline;
 pub mod profile;
 pub mod synth;
 pub mod transform;
+pub mod wide;
 mod write;
 pub mod xcf_color;
 
@@ -36,6 +37,7 @@ pub use gamut::GamutCheck;
 pub use lut3d::Lut3d;
 pub use profile::{ColorSpace, Pcs, Profile, ProfileClass};
 pub use transform::{SampleKind, Transform, TransformOptions, black_point, cached};
+pub use wide::{WideSampleKind, WideWork};
 
 /// ICC rendering intent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]

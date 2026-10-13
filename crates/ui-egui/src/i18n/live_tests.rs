@@ -231,7 +231,7 @@ fn a_control_request_changes_the_drawing_language_in_the_same_frame() {
             assert_eq!(reply.try_recv().expect("response")["ok"], true);
             assert_eq!(current(), lang(code));
             assert!(drawn_text(&h).iter().any(|text| text == tr(lang(code), "File")), "the menu must change in this frame: {code}");
-            assert!(std::sync::Arc::ptr_eq(&document, &h.state().session.active().expect("document").doc), "switching language must preserve the document");
+            assert!(std::ptr::eq((document).as_ref(), (h.state().session.active().expect("document").doc).as_ref()), "switching language must preserve the document");
         }
         assert!(h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": []})).is_err());
         h.step();

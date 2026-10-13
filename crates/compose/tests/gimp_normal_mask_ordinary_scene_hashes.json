@@ -1,0 +1,13 @@
+{
+  "medium": {
+    "batch-manifest.json": "4ab44a8cc057e287b9f301f8a49e20368c88dd6f9e892ae17236b405a1ae229a",
+    "observations.json": "67c2cb9bb916b44796be1e3ce401bea59087d1eb01609192be8130f98ef5f05f",
+    "fresh/observations.json": "541b3da5fcceb6e930511c877fd2121de877675df9e689c3d3a4fa3e95cf6328",
+    "faithful-observations.json": "0a92880830d0e42c70c1fa623d4f8a8d955b107543db6d799494277bbf92c7d4",
+    "faithful-fresh/faithful-observations.json": "ad5f3d1d8f08a386f3e508bd5f38e5a77b975d5b8a2062602eb39b1b0b1cec39",
+    "VERIFICATION.json": "c337fdab5ea6036b5afcbd018dcf8d748a37106bf50c99bda1834a09680fb8d2",
+    "assignment-controls.json": "49e95df49f61249ca5498e2cc5ffec75483316c4be4671df2827e42331efd4cd",
+    "own-rgb-parametric-trc.icc": "d4ddff2458010156aebea135bf7cb68b5f1b65a418f116f4783cf62287036feb",
+    "own-gray-parametric-trc.icc": "78efd53a209447804e9dad749bb56be82c10fbe17345b1f82cc272ef48473aaf"
+  }
+}

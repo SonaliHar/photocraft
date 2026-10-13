@@ -154,7 +154,7 @@ mod tests {
         queue_fallback_notice(&mut app, "device unavailable");
         let state = serde_json::to_value(&app.ui).unwrap();
         assert_eq!(state["gpu_fallback_notice"], "device unavailable");
-        assert_eq!(crate::control::inspect(&app, &egui::Context::default())["gpuFallbackNotice"], "device unavailable");
+        assert_eq!(crate::control::inspect(&app, &egui::Context::default()).unwrap()["gpuFallbackNotice"], "device unavailable");
     }
 
     #[test]

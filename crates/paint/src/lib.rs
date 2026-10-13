@@ -29,6 +29,8 @@ pub mod replace;
 pub mod retouch;
 pub mod rng;
 pub mod tile;
+pub mod wide;
+pub mod wide_erase;
 
 pub use brush::{
     BrushPreset, BrushSettings, ColorDynamics, Control, DualBrush, Dynamic, MAX_BRUSH_SIZE, MAX_SCATTER, MaskMode, Pattern, PatternStyle, Pose, Scattering,
@@ -36,6 +38,7 @@ pub use brush::{
 };
 pub use mixer::MixerSettings;
 pub use render::{BrushContext, StrokeRenderer, grid_center, grid_square, render_stroke};
+pub use render::{StrokeError,StrokeLimits,apply_stroke_with_interrupt,render_stroke_with_interrupt};
 pub use tile::GrayTile;
 
 /// One input sample. Missing stylus data defaults to "mouse": full pressure, no tilt/rotation.

@@ -11,6 +11,13 @@ use serde_json::{Value, json};
 use crate::theme::{self, Tokens};
 use crate::{PhotocraftApp, icons, widgets};
 
+#[path = "xcf_panels/channel_overlay.rs"]
+mod channel_overlay;
+#[path = "xcf_panels/channel_name.rs"]
+mod channel_name;
+#[path = "xcf_panels/channel_locks.rs"]
+mod channel_locks;
+
 #[derive(Clone, Copy, PartialEq)]
 enum Row {
     Composite,
@@ -81,6 +88,12 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     let shown_colors = if colors > 1 { colors } else { 0 };
     let mut actions: Vec<(String, Value)> = Vec::new();
+    if let ChannelTarget::Alpha(index) = view.target
+        && let Some(channel) = doc.channels.get(index) {
+        channel_overlay::show(app, ui, channel.id);
+        channel_name::show(app, ui, channel.id);
+        channel_locks::show(app, ui, channel.id);
+    }
     // The buttons sit in a footer at the panel's bottom, like Photoshop's.
     let footer = 34.0;
     let fill = ui.available_height() > footer + 60.0;
@@ -300,6 +313,14 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.ui.mask_target = on;
     }
     for (id, p) in actions {
+        if matches!(id.as_str(), "channel.new" | "channel.newSpot") {
+            crate::channel_create_dialog::open(app, &id);
+            continue;
+        }
+        if id == "channel.duplicate" {
+            crate::channel_action_dialog::open(app, &id, &p);
+            continue;
+        }
         if id == "ui.renameChannel" {
             if let Some(i) = p.as_u64().and_then(|i| doc.channels.get(i as usize)) {
                 let row = Row::Alpha(p.as_u64().unwrap_or(0) as usize);

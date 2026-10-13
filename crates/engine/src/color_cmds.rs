@@ -23,6 +23,15 @@ use serde_json::{Value, json};
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
+mod convert_controlled;
+mod assign_controlled;
+pub(crate) fn assignment_dispatch_preflight(s: &Session, p: &Value, background: bool) -> Result<()> {
+    assign_controlled::dispatch_preflight(s, p, background)
+}
+pub(crate) fn conversion_dispatch_preflight(s: &Session, id: &str, p: &Value, background: bool) -> Result<bool> {
+    convert_controlled::dispatch_preflight(s, id, p, background)
+}
+
 // ------------------------------------------------------------------ state
 
 /// View › Proof Setup settings.
@@ -239,14 +248,21 @@ impl ColorState {
     /// Apply the colour management policy to a document being opened. Returns what happened
     /// (`action`: kept|converted|discarded|assigned|untagged) and whether to ask the user.
     pub fn open_policy(&self, doc: &mut Document) -> Value {
+        self.open_policy_with_interrupt(doc, &photocraft_raster::Interrupt::NONE).unwrap_or_else(|_| json!({"action":"kept"}))
+    }
+    /// Cancellation remains a failure, rather than being reported as a kept
+    /// profile and allowing a cancelled background open to publish a document.
+    pub fn open_policy_with_interrupt(&self, doc: &mut Document, control: &photocraft_raster::Interrupt<'_>) -> Result<Value> {
+        control.check().map_err(|_| EngineError::Cancelled)?;
         let space = mode_space(doc.mode);
         if !matches!(space, ColorSpace::Rgb | ColorSpace::Cmyk | ColorSpace::Gray) {
-            return json!({"action": "kept"});
+            return Ok(json!({"action": "kept"}));
         }
         let working = self.working(doc.mode);
         let policy = self.settings.policy(doc.mode);
         let embedded = doc.icc_profile.as_ref().and_then(|b| profile_from_bytes(b).ok()).filter(|p| p.color_space == space);
-        match embedded {
+        control.check().map_err(|_| EngineError::Cancelled)?;
+        Ok(match embedded {
             Some(emb) => {
                 // Compared by colour, not bytes: Photoshop's sRGB IEC61966-2.1 is our working sRGB.
                 let mismatch = !emb.same_colors(&working);
@@ -255,32 +271,52 @@ impl ColorState {
                 // Photoshop keeps 32-bit documents in a linear version of the working space.
                 let linear_hdr = doc.depth == SampleType::F32 && emb.same_colors(Builtin::LinearSrgb.profile());
                 if !mismatch || linear_hdr {
-                    return merge(base, json!({"action": "kept"}));
+                    return Ok(merge(base, json!({"action": "kept"})));
                 }
                 let action = match policy {
                     Policy::Preserve => "kept",
                     Policy::Off => {
+                        if let Err(error) = validate_analytic_xcf_profile_change_with_interrupt(doc, None, control) {
+                            if matches!(error, EngineError::Cancelled) {
+                                return Err(error);
+                            }
+                            return Ok(merge(base, json!({"action": "kept", "ask": self.settings.ask_on_mismatch, "warning": error.to_string()})));
+                        }
+                        control.check().map_err(|_| EngineError::Cancelled)?;
                         doc.icc_profile = None;
+                        doc.working_profile_interpretation = photocraft_doc::WorkingProfileInterpretation::Icc;
                         "discarded"
                     }
-                    Policy::Convert => match convert_document(doc, &working, self.settings.intent(), self.settings.bpc) {
+                    Policy::Convert => match convert_document_with_interrupt(doc, &working, self.settings.intent(), self.settings.bpc, control) {
                         Ok(()) => "converted",
+                        Err(EngineError::Cancelled) => return Err(EngineError::Cancelled),
                         Err(_) => "kept",
                     },
                 };
                 merge(base, json!({"action": action, "ask": self.settings.ask_on_mismatch}))
             }
             None => {
+                if let Err(error) = validate_analytic_xcf_profile_change_with_interrupt(doc, None, control) {
+                    if matches!(error, EngineError::Cancelled) {
+                        return Err(error);
+                    }
+                    return Ok(
+                        json!({"action": "kept", "working": working.description, "policy": policy.id(), "ask": self.settings.ask_on_missing, "missing": true, "warning": error.to_string()}),
+                    );
+                }
                 // Untagged files are assumed to be in the working space; tag them when it is not
                 // the built-in default so they display (and save) as intended.
                 let default = working_profile(doc.mode);
                 let assign = policy != Policy::Off && working.content_hash() != default.content_hash();
                 if assign {
-                    doc.icc_profile = Some(working.to_bytes());
+                    let bytes = working.to_bytes();
+                    control.check().map_err(|_| EngineError::Cancelled)?;
+                    doc.icc_profile = Some(bytes);
+                    doc.working_profile_interpretation = photocraft_doc::WorkingProfileInterpretation::Icc;
                 }
                 json!({"action": if assign { "assigned" } else { "untagged" }, "working": working.description, "policy": policy.id(), "ask": self.settings.ask_on_missing, "missing": true})
             }
-        }
+        })
     }
 
     /// Proofing state of a document (defaults: coated CMYK, relative colorimetric + BPC, off).
@@ -447,9 +483,37 @@ pub fn profile_from_bytes(bytes: &Arc<Vec<u8>>) -> std::result::Result<Arc<Profi
     Ok(p)
 }
 
+/// Checked native sample interpretation. Malformed or mismatched assigned profiles
+/// fail before a wide edit, rather than selecting a replacement profile.
+pub fn try_document_profile(doc: &Document) -> Result<Arc<Profile>> {
+    doc.working_profile_interpretation.validate_with(doc.icc_profile.as_deref().map(Vec::as_slice), doc.mode).map_err(|e| EngineError::Other(e.to_string()))?;
+    let encoding = match doc.sample_encoding.unwrap_or(photocraft_doc::SampleEncoding::NonlinearProfile) {
+        photocraft_doc::SampleEncoding::Linear => photocraft_cms::xcf_color::Encoding::Linear,
+        photocraft_doc::SampleEncoding::NonlinearProfile => photocraft_cms::xcf_color::Encoding::NonlinearProfile,
+        photocraft_doc::SampleEncoding::Perceptual => photocraft_cms::xcf_color::Encoding::Perceptual,
+    };
+    if !matches!(doc.working_profile_interpretation, photocraft_doc::WorkingProfileInterpretation::Icc) {
+        let bytes = doc.icc_profile.as_ref().ok_or_else(|| EngineError::Other("implicit working profile is missing current ICC bytes".into()))?;
+        return photocraft_cms::xcf_color::effective_implicit_profile(bytes, mode_space(doc.mode), encoding).map(Arc::new).map_err(cms_err);
+    }
+    let profile = match &doc.icc_profile {
+        Some(bytes) => profile_from_bytes(bytes).map_err(cms_err)?,
+        None => working_profile(doc.mode),
+    };
+    if profile.color_space != mode_space(doc.mode) {
+        return Err(EngineError::Other("document profile does not match its color model".into()));
+    }
+    photocraft_cms::xcf_color::effective_profile_from_definition(&profile, encoding).map(Arc::new).map_err(cms_err)
+}
+
 /// The document's profile: its embedded profile when it parses and matches the mode,
 /// otherwise the mode's working profile.
 pub fn document_profile(doc: &Document) -> Arc<Profile> {
+    if !matches!(doc.working_profile_interpretation, photocraft_doc::WorkingProfileInterpretation::Icc)
+        && let Ok(profile) = try_document_profile(doc)
+    {
+        return profile;
+    }
     let profile = doc
         .icc_profile
         .as_ref()
@@ -553,10 +617,13 @@ fn profile_json(p: &Profile) -> Value {
 
 /// Converts one surface's colour channels with `t` into `to` (alpha copied). Surfaces whose
 /// model is not `from` fall back to the generic per-pixel conversion.
-pub fn convert_surface(s: &Surface, from: ColorMode, to: PixelFormat, t: &Transform) -> Surface {
+pub fn convert_surface(s: &Surface, from: ColorMode, to: PixelFormat, t: &Transform) -> Result<Surface> {
     let sf = s.format();
     if sf.mode != from || t.inputs() != sf.mode.color_channels() || t.outputs() != to.mode.color_channels() || sf.alpha != to.alpha {
-        return s.convert(to);
+        return s.try_convert(to).map_err(|e| EngineError::Other(format!("cannot convert surface: {e}")));
+    }
+    if matches!(sf.sample, SampleType::U32 | SampleType::F64) {
+        return convert_wide_surface(s, PixelFormat { sample: sf.sample, ..to }, t);
     }
     let (ss, ds) = (sf.channels(), to.channels());
     let to = PixelFormat { sample: sf.sample, ..to };
@@ -575,12 +642,137 @@ pub fn convert_surface(s: &Surface, from: ColorMode, to: PixelFormat, t: &Transf
         SampleType::U8 => SampleKind::U8,
         SampleType::U16 => SampleKind::U16,
         SampleType::F32 => SampleKind::F32,
+        SampleType::U32 | SampleType::F64 => return Err(EngineError::Other("wide surface dispatch mismatch".into())),
     };
     t.convert_bytes_many(kind, jobs, ss, ds, true);
     for ((c, _), bytes) in tiles.iter().zip(staging.chunks(dst_len.max(1))) {
         out.tile_mut(*c).bytes_mut().copy_from_slice(bytes);
     }
-    out
+    Ok(out)
+}
+
+fn convert_surface_with_interrupt(s: &Surface, from: ColorMode, to: PixelFormat, t: &Transform, control: &photocraft_raster::Interrupt<'_>) -> Result<Surface> {
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    let sf = s.format();
+    if sf.mode != from || t.inputs() != sf.mode.color_channels() || t.outputs() != to.mode.color_channels() || sf.alpha != to.alpha {
+        return s.try_convert_with(to, control).map_err(|error| {
+            if error == photocraft_raster::RasterInputError::Cancelled {
+                EngineError::Cancelled
+            } else {
+                EngineError::Other(format!("cannot convert surface: {error}"))
+            }
+        });
+    }
+    let to = PixelFormat { sample: sf.sample, ..to };
+    if matches!(sf.sample, SampleType::U32 | SampleType::F64) {
+        return convert_wide_surface_with_interrupt(s, to, t, control);
+    }
+    let (ss, ds) = (sf.channels(), to.channels());
+    let dp = s.default_pixel();
+    let mut dpo = vec![0.0f32; ds];
+    t.convert_f32(&dp, ss, &mut dpo, ds, true);
+    let mut out = Surface::with_default(to, &dpo);
+    let kind = match sf.sample {
+        SampleType::U8 => SampleKind::U8,
+        SampleType::U16 => SampleKind::U16,
+        SampleType::F32 => SampleKind::F32,
+        _ => return Err(EngineError::Other("wide surface dispatch mismatch".into())),
+    };
+    let pixels = (65_536 / sf.bytes_per_pixel().max(to.bytes_per_pixel())).max(1);
+    let src_chunk = pixels.checked_mul(sf.bytes_per_pixel()).ok_or_else(|| EngineError::Other("color source chunk overflow".into()))?;
+    let dst_chunk = pixels.checked_mul(to.bytes_per_pixel()).ok_or_else(|| EngineError::Other("color destination chunk overflow".into()))?;
+    for (coordinate, tile) in s.tiles() {
+        control.check().map_err(|_| EngineError::Cancelled)?;
+        let count = tile.bytes().len().checked_div(sf.bytes_per_pixel()).ok_or_else(|| EngineError::Other("color source pixel size".into()))?;
+        let length = count.checked_mul(to.bytes_per_pixel()).ok_or_else(|| EngineError::Other("color tile size overflow".into()))?;
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(length).map_err(|_| EngineError::Other("color tile allocation failed".into()))?;
+        for _ in (0..length).step_by(65_536) {
+            control.check().map_err(|_| EngineError::Cancelled)?;
+            let next = bytes.len().saturating_add(65_536).min(length);
+            bytes.resize(next, 0);
+        }
+        for (source, destination) in tile.bytes().chunks(src_chunk).zip(bytes.chunks_mut(dst_chunk)) {
+            control.check().map_err(|_| EngineError::Cancelled)?;
+            t.convert_bytes_many(kind, vec![(source, destination)], ss, ds, true);
+        }
+        control.check().map_err(|_| EngineError::Cancelled)?;
+        let destination = out.tile_mut(*coordinate).bytes_mut();
+        if destination.len() != bytes.len() {
+            return Err(EngineError::Other("color converted tile size mismatch".into()));
+        }
+        destination.copy_from_slice(&bytes);
+    }
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    Ok(out)
+}
+
+/// Authoritative wide conversion stays in native-endian U32/F64 buffers. The
+/// output surface is private until all defaults and tiles have converted.
+fn convert_wide_surface(s: &Surface, to: PixelFormat, t: &Transform) -> Result<Surface> {
+    convert_wide_surface_with_interrupt(s, to, t, &photocraft_raster::Interrupt::NONE)
+}
+fn convert_wide_surface_with_interrupt(s: &Surface, to: PixelFormat, t: &Transform, control: &photocraft_raster::Interrupt<'_>) -> Result<Surface> {
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    use photocraft_cms::{WideSampleKind, WideWork, xcf_color::NonFinitePolicy};
+    let sf = s.format();
+    let kind = match sf.sample {
+        SampleType::U32 => WideSampleKind::U32,
+        SampleType::F64 => WideSampleKind::F64,
+        _ => return Err(EngineError::Other("expected a wide surface".into())),
+    };
+    let allocate = |length: usize| -> Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(length).map_err(|_| EngineError::Other("wide conversion allocation failed".into()))?;
+        for _ in (0..length).step_by(65_536) {
+            control.check().map_err(|_| EngineError::Cancelled)?;
+            let next = bytes.len().saturating_add(65_536).min(length);
+            bytes.resize(next, 0);
+        }
+        Ok(bytes)
+    };
+    let convert = |source: &[u8], destination: &mut [u8]| -> Result<()> {
+        let pixels = (65_536 / sf.bytes_per_pixel().max(to.bytes_per_pixel())).max(1);
+        let src_chunk = pixels.checked_mul(sf.bytes_per_pixel()).ok_or_else(|| EngineError::Other("wide source size overflow".into()))?;
+        let dst_chunk = pixels.checked_mul(to.bytes_per_pixel()).ok_or_else(|| EngineError::Other("wide destination size overflow".into()))?;
+        let mut reserved = 0u64;
+        for (src, dst) in source.chunks(src_chunk).zip(destination.chunks_mut(dst_chunk)) {
+            control.check().map_err(|_| EngineError::Cancelled)?;
+            t.try_convert_bytes_wide(kind, src, sf.channels(), dst, to.channels(), true, NonFinitePolicy::PreserveBits, &mut |work| {
+                if control.cancelled() {
+                    return Err(photocraft_cms::CmsError::Invalid("color conversion cancelled".into()));
+                }
+                match work {
+                    WideWork::ReserveBytes(n) => {
+                        let next = reserved.checked_add(n).ok_or_else(|| photocraft_cms::CmsError::Invalid("wide conversion reservation overflow".into()))?;
+                        if next > 65_536 {
+                            return Err(photocraft_cms::CmsError::Invalid("wide conversion scratch limit".into()));
+                        }
+                        reserved = next;
+                    }
+                    WideWork::ReleaseBytes(n) => reserved = reserved.saturating_sub(n),
+                    WideWork::SampleUnits(_) => {}
+                }
+                Ok(())
+            })
+            .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { cms_err(error) })?;
+        }
+        Ok(())
+    };
+    let mut default = allocate(to.bytes_per_pixel())?;
+    convert(s.default_bytes(), &mut default)?;
+    let mut out = Surface::try_with_default_bytes(to, &default).map_err(|e| EngineError::Other(e.to_string()))?;
+    for (coordinate, tile) in s.tiles() {
+        control.check().map_err(|_| EngineError::Cancelled)?;
+        let count = tile.bytes().len().checked_div(sf.bytes_per_pixel()).ok_or_else(|| EngineError::Other("invalid wide pixel size".into()))?;
+        let length = count.checked_mul(to.bytes_per_pixel()).ok_or_else(|| EngineError::Other("wide tile size overflow".into()))?;
+        let mut bytes = allocate(length)?;
+        convert(tile.bytes(), &mut bytes)?;
+        let converted = Surface::try_from_interleaved(to, coordinate.rect(), &bytes).map_err(|e| EngineError::Other(e.to_string()))?;
+        out.put_tiles(converted.tiles().map(|(coordinate, tile)| (*coordinate, tile.clone())));
+    }
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    Ok(out)
 }
 
 /// Converts a colour value that is in `from` (the document's old mode) to the new mode.
@@ -653,6 +845,85 @@ fn convert_layer_colors(l: &mut Layer, from: ColorMode, to: ColorMode, t: &Trans
     }
 }
 
+fn convert_fill_with_interrupt(f: &mut Fill, from: ColorMode, to: ColorMode, t: &Transform, control: &photocraft_raster::Interrupt<'_>) -> Result<()> {
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    match f {
+        Fill::Solid(color) => convert_color(color, from, to, t),
+        Fill::Gradient { stops, .. } => {
+            for (_, color) in stops {
+                control.check().map_err(|_| EngineError::Cancelled)?;
+                convert_color(color, from, to, t);
+            }
+        }
+        Fill::Pattern { .. } => {}
+    }
+    Ok(())
+}
+fn paint_colors_with_interrupt(p: &mut FxPaint, cc: &mut impl FnMut(&mut Color) -> Result<()>) -> Result<()> {
+    match p {
+        FxPaint::Color(color) => cc(color)?,
+        FxPaint::Gradient(gradient) => {
+            for (_, color) in &mut gradient.stops {
+                cc(color)?;
+            }
+        }
+        FxPaint::Pattern { .. } => {}
+    }
+    Ok(())
+}
+fn convert_layer_colors_with_interrupt(l: &mut Layer, from: ColorMode, to: ColorMode, t: &Transform, control: &photocraft_raster::Interrupt<'_>) -> Result<()> {
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    let mut cc = |color: &mut Color| {
+        control.check().map_err(|_| EngineError::Cancelled)?;
+        convert_color(color, from, to, t);
+        Ok(())
+    };
+    for effect in &mut l.effects.items {
+        control.check().map_err(|_| EngineError::Cancelled)?;
+        match effect {
+            Effect::DropShadow(shadow) | Effect::InnerShadow(shadow) => cc(&mut shadow.color)?,
+            Effect::OuterGlow(glow) | Effect::InnerGlow(glow) => paint_colors_with_interrupt(&mut glow.paint, &mut cc)?,
+            Effect::Stroke(stroke) => paint_colors_with_interrupt(&mut stroke.paint, &mut cc)?,
+            Effect::ColorOverlay { color, .. } => cc(color)?,
+            Effect::GradientOverlay { gradient, .. } => {
+                for (_, color) in &mut gradient.stops {
+                    cc(color)?;
+                }
+            }
+            Effect::Satin(satin) => cc(&mut satin.color)?,
+            Effect::BevelEmboss(bevel) => {
+                cc(&mut bevel.highlight_color)?;
+                cc(&mut bevel.shadow_color)?;
+            }
+            Effect::PatternOverlay { .. } => {}
+        }
+    }
+    match &mut l.content {
+        LayerContent::Fill(fill) => convert_fill_with_interrupt(fill, from, to, t, control)?,
+        LayerContent::Text(text) => {
+            cc(&mut text.color)?;
+            for run in &mut text.runs {
+                cc(&mut run.style.color)?;
+            }
+        }
+        LayerContent::Shape(shape) => {
+            if let Some(fill) = &mut shape.fill {
+                convert_fill_with_interrupt(fill, from, to, t, control)?;
+            }
+            if let Some(stroke) = &mut shape.stroke {
+                convert_fill_with_interrupt(&mut stroke.paint, from, to, t, control)?;
+            }
+        }
+        LayerContent::Group(group) => {
+            for child in &mut group.children {
+                convert_layer_colors_with_interrupt(child, from, to, t, control)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn paint_colors(p: &mut FxPaint, cc: &mut impl FnMut(&mut Color)) {
     match p {
         FxPaint::Color(c) => cc(c),
@@ -666,21 +937,63 @@ fn paint_colors(p: &mut FxPaint, cc: &mut impl FnMut(&mut Color)) {
 /// channels and the selection are untouched; fill, text, shape and effect colours are
 /// converted. The document is tagged with `dst`.
 pub fn convert_document(doc: &mut Document, dst: &Profile, intent: Intent, bpc: bool) -> Result<()> {
+    convert_document_controlled(doc, dst, intent, bpc, &photocraft_raster::Interrupt::NONE, false)
+}
+pub fn convert_document_with_interrupt(doc: &mut Document, dst: &Profile, intent: Intent, bpc: bool, control: &photocraft_raster::Interrupt<'_>) -> Result<()> {
+    convert_document_controlled(doc, dst, intent, bpc, control, true)
+}
+fn convert_document_controlled(
+    doc: &mut Document,
+    dst: &Profile,
+    intent: Intent,
+    bpc: bool,
+    control: &photocraft_raster::Interrupt<'_>,
+    controlled: bool,
+) -> Result<()> {
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    validate_analytic_xcf_profile_change_with_interrupt(doc, Some(dst), control)?;
     let to_mode = space_mode(dst.color_space).ok_or_else(|| EngineError::Other(format!("cannot convert to a {:?} profile", dst.color_space)))?;
-    let src = document_profile(doc);
+    let src = if matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale | ColorMode::Indexed) { try_document_profile(doc)? } else { document_profile(doc) };
     let from_mode = doc.pixel_format().mode;
     let t = Transform::new(&src, dst, intent, bpc).map_err(cms_err)?;
     let fmt = PixelFormat::new(to_mode, doc.depth, true);
-    crate::image_cmds::for_each_surface(&mut doc.layers, false, &mut |surf, _| {
+    // Conversion can fail on a later tile (e.g. nonfinite color samples). Stage
+    // a COW layer tree so even callers outside Session::edit remain atomic.
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    let mut layers = doc.layers.clone();
+    let mut error = None;
+    crate::image_cmds::for_each_surface(&mut layers, false, &mut |surf, _| {
+        if control.cancelled() {
+            error = Some(EngineError::Cancelled);
+            return;
+        }
+        if error.is_some() {
+            return;
+        }
         let f = PixelFormat { alpha: surf.format().alpha, ..fmt };
-        *surf = convert_surface(surf, from_mode, f, &t);
+        let converted = if controlled { convert_surface_with_interrupt(surf, from_mode, f, &t, control) } else { convert_surface(surf, from_mode, f, &t) };
+        match converted {
+            Ok(converted) => *surf = converted,
+            Err(e) => error = Some(e),
+        }
     });
-    for l in &mut doc.layers {
-        convert_layer_colors(l, from_mode, to_mode, &t);
+    if let Some(error) = error {
+        return Err(error);
+    }
+    for l in &mut layers {
+        if controlled {
+            convert_layer_colors_with_interrupt(l, from_mode, to_mode, &t, control)?;
+        } else {
+            convert_layer_colors(l, from_mode, to_mode, &t);
+        }
         // Preserved PSD blocks describing colours in the old mode no longer apply.
     }
+    let profile_bytes = dst.to_bytes();
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    doc.layers = layers;
     doc.mode = to_mode;
-    doc.icc_profile = Some(dst.to_bytes());
+    doc.icc_profile = Some(profile_bytes);
+    doc.working_profile_interpretation = photocraft_doc::WorkingProfileInterpretation::Icc;
     if doc.sample_encoding.is_some() {
         doc.sample_encoding = Some(photocraft_doc::SampleEncoding::NonlinearProfile);
     }
@@ -693,30 +1006,10 @@ pub fn convert_document(doc: &mut Document, dst: &Profile, intent: Intent, bpc: 
 /// Image › Mode › RGB/Grayscale/CMYK/Lab through the CMS. Params: `profile` (destination,
 /// default the mode's working profile), `intent` (default relative), `bpc` (default true).
 pub fn convert_mode(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value> {
-    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
-    if doc.mode == ColorMode::Multichannel && mode != ColorMode::Multichannel {
+    if s.active().ok_or(EngineError::NoDocument)?.doc.mode == ColorMode::Multichannel && mode != ColorMode::Multichannel {
         return crate::multichannel_cmds::convert_from(s, mode, p);
     }
-    if doc.mode == mode && p.get("profile").is_none() {
-        return Ok(Value::Null);
-    }
-    let dst = match p.get("profile").and_then(Value::as_str) {
-        Some(spec) => s.color.resolve(spec, Some(doc), Some(mode))?,
-        None => s.color.working(mode),
-    };
-    if space_mode(dst.color_space)
-        != Some(match mode {
-            ColorMode::Bitmap | ColorMode::Duotone => ColorMode::Grayscale,
-            ColorMode::Indexed | ColorMode::Multichannel => ColorMode::Rgb,
-            m => m,
-        })
-    {
-        return Err(EngineError::Other(format!("profile `{}` is {:?}, not {mode:?}", dst.description, dst.color_space)));
-    }
-    let intent = intent_or(p, s.color.settings.intent())?;
-    let bpc = bool_param(p, "bpc", s.color.settings.bpc);
-    s.edit("Mode Change", |doc, _| convert_document(doc, &dst, intent, bpc))?;
-    Ok(json!({ "profile": dst.description, "intent": intent.id(), "bpc": bpc }))
+    convert_controlled::convert_mode(s, mode, p)
 }
 
 // ------------------------------------------------------------------ gamut
@@ -725,7 +1018,7 @@ pub fn convert_mode(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value
 /// canvas pixel (255 = out of gamut, transparent pixels never are), plus the count.
 pub fn gamut_mask(doc: &Document, setup: &ProofSetup, threshold: f32) -> Result<(Vec<u8>, usize)> {
     let check = GamutCheck::new(&composite_profile(doc), &setup.profile, threshold).map_err(cms_err)?;
-    let buf = photocraft_compose::flatten(doc);
+    let buf = photocraft_compose::flatten(doc)?;
     let mut count = 0;
     let mask = buf
         .px
@@ -752,45 +1045,43 @@ fn always(_: &Session) -> std::result::Result<(), String> {
     Ok(())
 }
 
+/// A source qualification survives edits, so validate the active replacement
+/// against its persisted renderer contract before committing profile history.
+fn validate_analytic_xcf_profile_change(doc: &Document, profile: Option<&Profile>) -> Result<()> {
+    validate_analytic_xcf_profile_change_with_interrupt(doc, profile, &photocraft_raster::Interrupt::NONE)
+}
+fn validate_analytic_xcf_profile_change_with_interrupt(doc: &Document, profile: Option<&Profile>, control: &photocraft_raster::Interrupt<'_>) -> Result<()> {
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    if let Some(state) = &doc.xcf_state {
+        for item in &state.items {
+            control.check().map_err(|_| EngineError::Cancelled)?;
+            let Some(required) =
+                item.composition.as_ref().and_then(|policy| photocraft_doc::import_compositing::analytic_normal_encoding(&policy.compatibility_epoch))
+            else {
+                continue;
+            };
+            // Existing profile commands explicitly reset sample interpretation to
+            // nonlinear. Reject that unproved transition before any pixel/history edit.
+            if required != photocraft_doc::SampleEncoding::NonlinearProfile || doc.sample_encoding != Some(required) {
+                return Err(EngineError::Other("analytic XCF composition cannot reset its epoch-bound sample encoding".into()));
+            }
+            let profile = profile.ok_or_else(|| EngineError::Other("analytic XCF composition requires an assigned ICC profile".into()))?;
+            if profile.color_space != mode_space(doc.mode) {
+                return Err(EngineError::Other("analytic XCF composition requires the current color model".into()));
+            }
+            photocraft_cms::xcf_color::qualify_effective_analytic_profile(profile, photocraft_cms::xcf_color::Encoding::NonlinearProfile).map_err(cms_err)?;
+        }
+    }
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    Ok(())
+}
+
 fn assign_profile(s: &mut Session, p: &Value) -> Result<Value> {
-    let spec =
-        p.get("profile").and_then(Value::as_str).ok_or_else(|| EngineError::BadParams { cmd: "edit.assignProfile".into(), msg: "missing `profile`".into() })?;
-    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
-    let bytes = if spec == "none" {
-        None
-    } else {
-        let prof = s.color.resolve(spec, Some(doc), None)?;
-        if prof.color_space != mode_space(doc.mode) {
-            return Err(EngineError::Other(format!("profile `{}` is {:?}; the document is {:?}", prof.description, prof.color_space, doc.mode)));
-        }
-        Some(prof.to_bytes())
-    };
-    let desc = match &bytes {
-        Some(b) => profile_from_bytes(b).map(|p| p.description.clone()).unwrap_or_default(),
-        None => "none".into(),
-    };
-    s.edit("Assign Profile", |doc, _| {
-        doc.icc_profile = bytes;
-        if doc.sample_encoding.is_some() {
-            doc.sample_encoding = Some(photocraft_doc::SampleEncoding::NonlinearProfile);
-        }
-        Ok(())
-    })?;
-    Ok(json!({ "profile": desc }))
+    assign_controlled::run(s, p)
 }
 
 fn convert_to_profile(s: &mut Session, p: &Value) -> Result<Value> {
-    let spec = p
-        .get("profile")
-        .and_then(Value::as_str)
-        .ok_or_else(|| EngineError::BadParams { cmd: "edit.convertToProfile".into(), msg: "missing `profile`".into() })?;
-    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
-    let dst = s.color.resolve(spec, Some(doc), None)?;
-    let intent = intent_or(p, s.color.settings.intent())?;
-    let bpc = bool_param(p, "bpc", s.color.settings.bpc);
-    s.edit("Convert to Profile", |doc, _| convert_document(doc, &dst, intent, bpc))?;
-    let d = &s.active().ok_or(EngineError::NoDocument)?.doc;
-    Ok(json!({ "profile": dst.description, "mode": format!("{:?}", d.mode), "intent": intent.id(), "bpc": bpc }))
+    convert_controlled::convert_to_profile(s, p)
 }
 
 fn profile_info(s: &mut Session, p: &Value) -> Result<Value> {
@@ -942,7 +1233,9 @@ fn profile_mismatch(s: &mut Session, p: &Value) -> Result<Value> {
         }
         "discard" | "off" => {
             s.edit("Discard Profile", |doc, _| {
+                validate_analytic_xcf_profile_change(doc, None)?;
                 doc.icc_profile = None;
+                doc.working_profile_interpretation = photocraft_doc::WorkingProfileInterpretation::Icc;
                 if doc.sample_encoding.is_some() {
                     doc.sample_encoding = Some(photocraft_doc::SampleEncoding::NonlinearProfile);
                 }
@@ -953,7 +1246,9 @@ fn profile_mismatch(s: &mut Session, p: &Value) -> Result<Value> {
         "assignWorking" => {
             let w = s.color.working(mode);
             s.edit("Assign Profile", |doc, _| {
+                validate_analytic_xcf_profile_change(doc, Some(&w))?;
                 doc.icc_profile = Some(w.to_bytes());
+                doc.working_profile_interpretation = photocraft_doc::WorkingProfileInterpretation::Icc;
                 if doc.sample_encoding.is_some() {
                     doc.sample_encoding = Some(photocraft_doc::SampleEncoding::NonlinearProfile);
                 }
@@ -972,9 +1267,18 @@ impl Session {
     /// Add a document read from a file, applying the Color Settings policy first (preserve,
     /// convert to the working space, or discard the embedded profile). Returns the document
     /// index and a report (`action`, `mismatch`, `ask`) the UI can turn into a prompt.
-    pub fn open_document(&mut self, mut doc: Document, path: Option<String>) -> (usize, Value) {
-        let report = self.color.open_policy(&mut doc);
-        (self.add_document(doc, path), report)
+    pub fn open_document(&mut self, doc: Document, path: Option<String>) -> Result<(usize, Value)> {
+        self.open_document_with_interrupt(doc, path, &photocraft_raster::Interrupt::NONE)
+    }
+    pub fn open_document_with_interrupt(
+        &mut self,
+        mut doc: Document,
+        path: Option<String>,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<(usize, Value)> {
+        let report = self.color.open_policy_with_interrupt(&mut doc, control)?;
+        control.check().map_err(|_| EngineError::Cancelled)?;
+        Ok((self.add_document_with_interrupt(doc, path, control)?, report))
     }
 }
 
@@ -994,7 +1298,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "edit.assignProfile",
             "Assign Profile…",
             ["Edit"],
-            r##"{"profile":"working|srgb|display-p3|adobe-rgb-compat|prophoto-compat|linear-srgb|rec2020|gray-gamma-2.2|sgray|lab-d50|coated-cmyk|none" (or a path to an .icc file)}"##,
+            r##"{"profile":"working|srgb|display-p3|adobe-rgb-compat|prophoto-compat|linear-srgb|rec2020|gray-gamma-2.2|sgray|lab-d50|coated-cmyk|none" (or a path to an .icc file),"documentId":"canonical u64 string"?,"expectedRevision":"canonical u64 string"?}"##,
             has_doc,
             assign_profile,
             true
@@ -1003,7 +1307,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "edit.convertToProfile",
             "Convert to Profile…",
             ["Edit"],
-            r##"{"profile":"srgb|display-p3|adobe-rgb-compat|prophoto-compat|linear-srgb|rec2020|gray-gamma-2.2|sgray|lab-d50|coated-cmyk|working" (or a path to an .icc file),"intent":"perceptual|relative|saturation|absolute"="relative","bpc":bool=true}"##,
+            r##"{"profile":"srgb|display-p3|adobe-rgb-compat|prophoto-compat|linear-srgb|rec2020|gray-gamma-2.2|sgray|lab-d50|coated-cmyk|working" (or a path to an .icc file),"intent":"perceptual|relative|saturation|absolute"="relative","bpc":bool=true,"documentId":"canonical u64 string"?,"expectedRevision":"canonical u64 string"?}"##,
             has_doc,
             convert_to_profile,
             true
@@ -1286,11 +1590,11 @@ mod settings_tests {
     fn open_policies() {
         let mut s = Session::new();
         // Preserve (default): an Adobe RGB file keeps its profile and asks.
-        let (_, r) = s.open_document(tagged("adobe-rgb-compat"), None);
+        let (_, r) = s.open_document(tagged("adobe-rgb-compat"), None).unwrap();
         assert_eq!((r["action"].as_str(), r["mismatch"].as_bool(), r["ask"].as_bool()), (Some("kept"), Some(true), Some(true)));
         assert!(desc(&s.active().unwrap().doc).unwrap().starts_with("Adobe RGB"));
         // Matching profiles never ask.
-        let (_, r) = s.open_document(tagged("srgb"), None);
+        let (_, r) = s.open_document(tagged("srgb"), None).unwrap();
         assert_eq!(r["mismatch"], false);
         // Nor does the same space in other bytes: sRGB as Photoshop embeds it (v2, 1024-entry
         // tables) is the working sRGB, even under Convert, and the file keeps its own profile.
@@ -1304,7 +1608,7 @@ mod settings_tests {
         assert_ne!(bytes, Builtin::Srgb.profile().to_bytes());
         let mut d = tagged("srgb");
         d.icc_profile = Some(bytes.clone());
-        let (_, r) = s.open_document(d, None);
+        let (_, r) = s.open_document(d, None).unwrap();
         assert_eq!((r["action"].as_str(), r["mismatch"].as_bool(), r.get("ask")), (Some("kept"), Some(false), None));
         assert_eq!(s.active().unwrap().doc.icc_profile.as_ref(), Some(&bytes));
         // A 32-bit document in Photoshop's linear sRGB (a v2 profile recording the D65 display
@@ -1316,27 +1620,27 @@ mod settings_tests {
         assert_ne!(bytes, Builtin::LinearSrgb.profile().to_bytes());
         let mut d = Document::with_background("t", photocraft_doc::Size::new(8, 8), ColorMode::Rgb, SampleType::F32, Color::rgba(0.2, 0.6, 0.9, 1.0));
         d.icc_profile = Some(bytes.clone());
-        let (_, r) = s.open_document(d, None);
+        let (_, r) = s.open_document(d, None).unwrap();
         assert_eq!((r["action"].as_str(), r.get("ask")), (Some("kept"), None));
         assert_eq!(s.active().unwrap().doc.icc_profile.as_ref(), Some(&bytes));
         s.execute("edit.colorSettings", json!({"policyRgb": "preserve"})).unwrap();
         // Convert to working: pixels converted and the document tagged with sRGB.
         s.execute("edit.colorSettings", json!({"policyRgb": "convert"})).unwrap();
-        let (_, r) = s.open_document(tagged("adobe-rgb-compat"), None);
+        let (_, r) = s.open_document(tagged("adobe-rgb-compat"), None).unwrap();
         assert_eq!(r["action"], "converted");
         let d = &s.active().unwrap().doc;
         assert!(desc(d).unwrap().starts_with("sRGB"));
         assert!((d.layers[0].surface().unwrap().pixel(1, 1)[0] - 0.2).abs() > 0.01, "values changed by the conversion");
         // Off: the embedded profile is discarded.
         s.execute("edit.colorSettings", json!({"policyRgb": "off"})).unwrap();
-        let (_, r) = s.open_document(tagged("display-p3"), None);
+        let (_, r) = s.open_document(tagged("display-p3"), None).unwrap();
         assert_eq!(r["action"], "discarded");
         assert!(s.active().unwrap().doc.icc_profile.is_none());
         // Untagged files are assumed to be in a non-default working space and tagged with it.
         s.execute("edit.colorSettings", json!({"policyRgb": "preserve", "workingRgb": "display-p3"})).unwrap();
         let mut d = tagged("srgb");
         d.icc_profile = None;
-        let (_, r) = s.open_document(d, None);
+        let (_, r) = s.open_document(d, None).unwrap();
         assert_eq!(r["action"], "assigned");
         assert_eq!(desc(&s.active().unwrap().doc).as_deref(), Some("Display P3"));
     }
@@ -1360,7 +1664,7 @@ mod settings_tests {
     #[test]
     fn mismatch_resolution_command() {
         let mut s = Session::new();
-        s.open_document(tagged("adobe-rgb-compat"), None);
+        s.open_document(tagged("adobe-rgb-compat"), None).unwrap();
         s.execute("color.profileMismatch", json!({"action": "convert"})).unwrap();
         assert!(desc(&s.active().unwrap().doc).unwrap().starts_with("sRGB"));
         s.undo();
@@ -1379,7 +1683,7 @@ mod imported_profile_transition_tests {
         s.execute("file.new", json!({"width":2,"height":2,"depth":32})).unwrap();
         let original = Some(photocraft_doc::SourceColorContext { original_icc: Some(Builtin::Srgb.profile().to_bytes()), source_precision: 600 });
         {
-            let d = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+            let d = s.active_mut().unwrap().doc.try_resident_mut().unwrap();
             d.sample_encoding = Some(photocraft_doc::SampleEncoding::Linear);
             d.icc_profile = Some(Builtin::LinearSrgb.profile().to_bytes());
             d.source_color_context = original.clone();
@@ -1411,5 +1715,55 @@ mod imported_profile_transition_tests {
         assert_eq!(d.sample_encoding, Some(photocraft_doc::SampleEncoding::Linear));
         assert_eq!(d.source_color_context, original);
         assert_eq!(d.layers[0].surface().unwrap().pixel(0, 0)[0], 0.25);
+    }
+    // Unrun cancellation/publication drafts for the controlled open path.
+    #[test]
+    fn controlled_conversion_cancel_keeps_original_document_and_tabs() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let mut document = tagged("adobe-rgb-compat");
+        document.layers[0].surface_mut().unwrap().write_pixel(0, 0, &[0.3, 0.4, 0.5, 1.0]);
+        let original = document.clone();
+        let polls = AtomicUsize::new(0);
+        let cancel = || polls.fetch_add(1, Ordering::Relaxed) >= 11;
+        assert!(matches!(
+            convert_document_with_interrupt(
+                &mut document,
+                Builtin::Srgb.profile(),
+                Intent::RelativeColorimetric,
+                true,
+                &photocraft_raster::Interrupt::cancel_only(&cancel)
+            ),
+            Err(EngineError::Cancelled)
+        ));
+        assert_eq!(document, original);
+        let mut session = Session::new();
+        session.add_document(tagged("srgb"), None).unwrap();
+        session.color.settings.policy_rgb = Policy::Convert;
+        let prior = session.active().unwrap().doc.clone();
+        let active = session.active;
+        let count = session.docs.len();
+        let settings = session.color.settings.clone();
+        assert!(matches!(
+            session.open_document_with_interrupt(original, None, &photocraft_raster::Interrupt::cancel_only(&|| true)),
+            Err(EngineError::Cancelled)
+        ));
+        assert_eq!(session.docs.len(), count);
+        assert_eq!(session.active, active);
+        assert_eq!(session.active().unwrap().doc, prior);
+        assert_eq!(session.color.settings, settings);
+    }
+    #[test]
+    fn controlled_conversion_none_preserves_scalar_native_depth_results() {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32, SampleType::U32, SampleType::F64] {
+            let mut original = Document::with_background("depth", photocraft_doc::Size::new(8, 8), ColorMode::Rgb, depth, Color::rgba(0.2, 0.6, 0.9, 1.0));
+            original.icc_profile = Some(Builtin::from_id("adobe-rgb-compat").unwrap().profile().to_bytes());
+            original.layers[0].surface_mut().unwrap().write_pixel(0, 0, &[0.1, 0.3, 0.7, 0.5]);
+            let mut scalar = original.clone();
+            let mut controlled = original;
+            convert_document(&mut scalar, Builtin::Srgb.profile(), Intent::RelativeColorimetric, true).unwrap();
+            convert_document_with_interrupt(&mut controlled, Builtin::Srgb.profile(), Intent::RelativeColorimetric, true, &photocraft_raster::Interrupt::NONE)
+                .unwrap();
+            assert_eq!(controlled, scalar, "{depth:?}");
+        }
     }
 }

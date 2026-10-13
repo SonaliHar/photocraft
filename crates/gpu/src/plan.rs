@@ -310,6 +310,9 @@ impl<'a> DocCtx<'a> {
 
 /// Build the pass list for `doc`.
 pub fn plan(doc: &Document) -> Result<Plan<'_>, Unsupported> {
+    if doc.has_backed_rasters().map_err(|error| Unsupported(error.to_string()))? {
+        return Err(Unsupported("Native-backed raster requires the checked CPU compositor".into()));
+    }
     // Imported working encodings are implemented by the CPU oracle only. Reject the complete
     // plan, even for hidden layers, so unhide cannot silently change the compositing backend.
     let mut todo = vec![doc.layers.as_slice()];

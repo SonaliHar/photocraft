@@ -13,8 +13,11 @@ use photocraft_raster::Surface;
 use serde::{Deserialize, Serialize};
 
 use crate::resample::{Resample, resize_surface};
+mod wide;
+mod legacy_controlled;
+pub use legacy_controlled::try_warp_surface_legacy_with_limits;
 
-/// 3×3 projective matrix, row-major: `[x', y', w'] = H · [x, y, 1]`.
+/// 3Ã—3 projective matrix, row-major: `[x', y', w'] = H Â· [x, y, 1]`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Homography(pub [f64; 9]);
 
@@ -58,7 +61,7 @@ impl Homography {
         Some(Homography(c.map(|v| v / det)))
     }
 
-    /// Unit square → quad (corners in order: (0,0), (1,0), (1,1), (0,1)).
+    /// Unit square â†’ quad (corners in order: (0,0), (1,0), (1,1), (0,1)).
     fn square_to_quad(q: [[f64; 2]; 4]) -> Option<Homography> {
         let [[x0, y0], [x1, y1], [x2, y2], [x3, y3]] = q;
         let (sx, sy) = (x0 - x1 + x2 - x3, y0 - y1 + y2 - y3);
@@ -123,9 +126,141 @@ fn catmull_rom(t: f64) -> [f64; 4] {
     [-0.5 * t3 + t2 - 0.5 * t, 1.5 * t3 - 2.5 * t2 + 1.0, -1.5 * t3 + 2.0 * t2 + 0.5 * t, 0.5 * t3 - 0.5 * t2]
 }
 
-/// Warp `src` (its content inside `src_rect`) by `h` (source → destination document space).
+/// Warp `src` (its content inside `src_rect`) by `h` (source â†’ destination document space).
 /// The result has the same format as `src`, with alpha added if `src` had none; pixels outside
 /// the warped quad are transparent.
+/// Checked authoritative entry point. Wide data uses bounded normalized f64
+/// bilinear sampling, or exact raw identity/whole-pixel translation.
+pub fn try_warp_surface(src: &Surface, src_rect: Rect, h: &Homography, interp: Interp) -> Result<Surface, photocraft_raster::RasterInputError> {
+    if matches!(src.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
+        return try_warp_surface_with_limits(src, src_rect, h, interp, crate::wide_geometry::GeometryLimits::default(), &photocraft_raster::Interrupt::NONE);
+    }
+    if h.0.iter().any(|v| !v.is_finite()) {
+        return Err(photocraft_raster::RasterInputError::InvalidBounds);
+    }
+    use photocraft_raster::{RasterInputError, checked_region_byte_len};
+    checked_region_byte_len(src_rect, src.format())?;
+    // The presentation sampler has a finite coordinate domain and dense per-tile
+    // intermediates. Reject mappings outside it instead of saturating a crop.
+    let corners = [(src_rect.x0, src_rect.y0), (src_rect.x1, src_rect.y0), (src_rect.x1, src_rect.y1), (src_rect.x0, src_rect.y1)];
+    let inv = h.inverse().ok_or(RasterInputError::InvalidBounds)?;
+    let mut lo = [f64::MAX; 2];
+    let mut hi = [f64::MIN; 2];
+    let mut sign = 0.0_f64;
+    for (x, y) in corners {
+        if i64::from(x).abs() > 1_000_000 || i64::from(y).abs() > 1_000_000 {
+            return Err(RasterInputError::InvalidBounds);
+        }
+        let denominator = h.0[6] * f64::from(x) + h.0[7] * f64::from(y) + h.0[8];
+        if !denominator.is_finite() || denominator.abs() < 1e-12 || (sign != 0.0 && denominator.signum() != sign) {
+            return Err(RasterInputError::InvalidBounds);
+        }
+        sign = denominator.signum();
+        let (u, v) = h.apply(f64::from(x), f64::from(y));
+        if !u.is_finite() || !v.is_finite() || u.abs() > 1_000_000.0 || v.abs() > 1_000_000.0 {
+            return Err(RasterInputError::InvalidBounds);
+        }
+        lo[0] = lo[0].min(u);
+        lo[1] = lo[1].min(v);
+        hi[0] = hi[0].max(u);
+        hi[1] = hi[1].max(v);
+    }
+    let destination = Rect::new(lo[0].floor() as i32 - 1, lo[1].floor() as i32 - 1, hi[0].ceil() as i32 + 1, hi[1].ceil() as i32 + 1);
+    let mut format = src.format();
+    format.alpha = true;
+    checked_region_byte_len(destination, format)?;
+    sign = 0.0;
+    for (x, y) in [(destination.x0, destination.y0), (destination.x1, destination.y0), (destination.x1, destination.y1), (destination.x0, destination.y1)] {
+        let denominator = inv.0[6] * f64::from(x) + inv.0[7] * f64::from(y) + inv.0[8];
+        if !denominator.is_finite() || denominator.abs() < 1e-12 || (sign != 0.0 && denominator.signum() != sign) {
+            return Err(RasterInputError::InvalidBounds);
+        }
+        sign = denominator.signum();
+    }
+    let prepared = src.try_convert(format)?;
+    Ok(warp_surface(&prepared, src_rect, h, interp))
+}
+
+/// Bounded raw nearest-neighbor RGB/Gray transform at every native sample depth.
+/// Inverse destination pixel centers select the half-open source pixel cell;
+/// its native bytes are copied without premultiplication or color conversion.
+/// This preserves hidden color at zero alpha and floating signed-zero bits.
+/// Outside the explicit source rectangle is transparent zero. Profiles and
+/// transfer encodings are unchanged; this API performs no interpolation math.
+pub fn try_warp_nearest_surface_with_limits(
+    src: &Surface,
+    src_rect: Rect,
+    h: &Homography,
+    limits: crate::wide_geometry::GeometryLimits,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<Surface, photocraft_raster::RasterInputError> {
+    wide::warp(src, src_rect, h, Interp::Nearest, limits, control)
+}
+
+/// Finite-unit f64 bilinear sampling with independently observed associated
+/// working colors: multiply and divide colors by max(actual alpha, 2^-16),
+/// while interpolating actual alpha unchanged. This preserves hidden colors
+/// continuously across the association floor. Caller supplies working samples
+/// and qualifies profile conversion and target rounding. Ordinary Bilinear is
+/// unchanged. The public GIMP/Babl boundary evidence is kept in the independent
+/// legal-linear-geometry-evidence packet, including adjacent F32 floor values.
+pub fn try_warp_bilinear_hidden_surface_with_limits(
+    src: &Surface,
+    src_rect: Rect,
+    h: &Homography,
+    limits: crate::wide_geometry::GeometryLimits,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<Surface, photocraft_raster::RasterInputError> {
+    if src.format().sample != photocraft_color::SampleType::F64 {
+        return Err(photocraft_raster::RasterInputError::UnsupportedConversion);
+    }
+    wide::bilinear_hidden(src, src_rect, h, limits, control)
+}
+
+/// Bounded U32/F64 RGB/Gray transform. Exact identity/integer translations
+/// preserve raw sample/default bits. Nearest maps copy exact native samples; Bilinear maps require normalized
+/// finite sampled colors/alpha; transparent taps outside the explicit source ROI.
+/// Interpolation uses current sample encoding, f64 premultiplied accumulation,
+/// and one final target quantization. No minification prefilter or HDR admission.
+/// Other sample types use the existing checked `try_warp_surface` entry point.
+pub fn try_warp_surface_with_limits(
+    src: &Surface,
+    src_rect: Rect,
+    h: &Homography,
+    interp: Interp,
+    limits: crate::wide_geometry::GeometryLimits,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<Surface, photocraft_raster::RasterInputError> {
+    if !matches!(src.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
+        return Err(photocraft_raster::RasterInputError::UnsupportedConversion);
+    }
+    wide::warp(src, src_rect, h, interp, limits, control)
+}
+
+/// Explicit BC(1/2,1/4) cubic reconstruction of caller-supplied linear working samples.
+/// Finite unit RGB/Gray inputs only. Floating output retains reconstruction overshoot;
+/// integer output quantizes/clamps once. This is distinct from legacy Catmull-Rom Bicubic.
+/// No implicit profile/transfer conversion or minification prefilter is performed.
+pub fn try_warp_cubic_surface_with_limits(
+    src: &Surface,
+    src_rect: Rect,
+    h: &Homography,
+    limits: crate::wide_geometry::GeometryLimits,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<Surface, photocraft_raster::RasterInputError> {
+    if !matches!(src.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
+        return Err(photocraft_raster::RasterInputError::UnsupportedConversion);
+    }
+    wide::cubic(src, src_rect, h, limits, control)
+}
+
+/// Finite projective image of an explicit drawable rectangle (outward-rounded).
+/// This is independent of sparse/nontransparent content bounds.
+pub fn try_warp_bounds(bounds: Rect, h: &Homography) -> Result<Rect, photocraft_raster::RasterInputError> {
+    wide::extent(bounds, h)
+}
+
+/// Legacy f32 presentation warp; authoritative commands use `try_warp_surface`.
 pub fn warp_surface(src: &Surface, src_rect: Rect, h: &Homography, interp: Interp) -> Surface {
     let mut fmt = src.format();
     let converted;
@@ -143,7 +278,7 @@ pub fn warp_surface(src: &Surface, src_rect: Rect, h: &Homography, interp: Inter
     let mut h = *h;
     let mut src_rect = src_rect;
     // Pre-reduce for large downscales (bicubic alone aliases below ~50%).
-    let (cx, cy) = ((src_rect.x0 + src_rect.x1) as f64 / 2.0, (src_rect.y0 + src_rect.y1) as f64 / 2.0);
+    let (cx, cy) = ((f64::from(src_rect.x0) + f64::from(src_rect.x1)) / 2.0, (f64::from(src_rect.y0) + f64::from(src_rect.y1)) / 2.0);
     let scale = h.local_scale(cx, cy);
     let reduced;
     if interp != Interp::Nearest && scale < 0.5 && scale > 0.0 {
@@ -173,10 +308,10 @@ pub fn warp_surface(src: &Surface, src_rect: Rect, h: &Homography, interp: Inter
     let work = |t: &Rect| -> Option<(Rect, Vec<f32>)> {
         // Source footprint of this tile (inverse-mapped corners), padded for the filter.
         let tc = [(t.x0, t.y0), (t.x1, t.y0), (t.x1, t.y1), (t.x0, t.y1)].map(|(x, y)| inv.apply(x as f64, y as f64));
-        let fx0 = tc.iter().map(|c| c.0).fold(f64::MAX, f64::min).floor() as i32 - 3;
-        let fy0 = tc.iter().map(|c| c.1).fold(f64::MAX, f64::min).floor() as i32 - 3;
-        let fx1 = tc.iter().map(|c| c.0).fold(f64::MIN, f64::max).ceil() as i32 + 3;
-        let fy1 = tc.iter().map(|c| c.1).fold(f64::MIN, f64::max).ceil() as i32 + 3;
+        let fx0 = (tc.iter().map(|c| c.0).fold(f64::MAX, f64::min).floor() as i32).saturating_sub(3);
+        let fy0 = (tc.iter().map(|c| c.1).fold(f64::MAX, f64::min).floor() as i32).saturating_sub(3);
+        let fx1 = (tc.iter().map(|c| c.0).fold(f64::MIN, f64::max).ceil() as i32).saturating_add(3);
+        let fy1 = (tc.iter().map(|c| c.1).fold(f64::MIN, f64::max).ceil() as i32).saturating_add(3);
         let foot = Rect::new(fx0, fy0, fx1, fy1).intersect(&src_rect);
         if foot.is_empty() || !src_ref.has_tiles_in(foot) {
             return None;
@@ -283,7 +418,7 @@ mod tests {
         let h = Homography::rect_to_quad(r, q).unwrap();
         for (p, e) in [(10.0, 20.0), (110.0, 20.0), (110.0, 70.0), (10.0, 70.0)].iter().zip(q) {
             let (x, y) = h.apply(p.0, p.1);
-            assert!((x - e[0]).abs() < 1e-9 && (y - e[1]).abs() < 1e-9, "{p:?} → {x},{y} vs {e:?}");
+            assert!((x - e[0]).abs() < 1e-9 && (y - e[1]).abs() < 1e-9, "{p:?} â†’ {x},{y} vs {e:?}");
         }
         let inv = h.inverse().unwrap();
         let (x, y) = inv.apply(90.0, 60.0);
@@ -318,7 +453,7 @@ mod tests {
         );
         let b = up.content_bounds();
         assert!(b.width() >= 80 && b.width() <= 82 && b.height() >= 40 && b.height() <= 42, "{b:?}");
-        // 90° rotation about (20, 10): a 40×20 box becomes 20×40.
+        // 90Â° rotation about (20, 10): a 40Ã—20 box becomes 20Ã—40.
         let q = [[30.0, -10.0], [30.0, 30.0], [10.0, 30.0], [10.0, -10.0]];
         let rot = warp_surface(&s, r, &Homography::rect_to_quad([0.0, 0.0, 40.0, 20.0], q).unwrap(), Interp::Bilinear);
         let b = rot.content_bounds();
@@ -329,7 +464,7 @@ mod tests {
 
     #[test]
     fn large_downscale_is_prefiltered() {
-        // A 1px checkerboard shrunk 8× must come out ~50% grey, not aliased black/white.
+        // A 1px checkerboard shrunk 8Ã— must come out ~50% grey, not aliased black/white.
         let mut s = rgba();
         for y in 0..64 {
             for x in 0..64 {
@@ -352,5 +487,29 @@ mod tests {
         assert!(o.format().alpha);
         assert_eq!(o.pixel(2, 2)[3], 0.0);
         assert_eq!(o.pixel(7, 2), vec![1.0, 0.0, 0.0, 1.0]);
+    }
+}
+
+#[cfg(test)]
+mod checked_conversion_tests {
+    use super::*;
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    #[test]
+    fn checked_warp_preserves_wide_and_f32_nearest_identity() {
+        let area = Rect::new(0, 0, 1, 1);
+        let wide = Surface::try_from_interleaved(PixelFormat::new(ColorMode::Grayscale, SampleType::U32, false), area, &0x80000001u32.to_ne_bytes()).unwrap();
+        let before = wide.clone();
+        let out = try_warp_surface(&wide, area, &Homography::IDENTITY, Interp::Nearest).unwrap();
+        let mut expected = 0x80000001u32.to_ne_bytes().to_vec();
+        expected.extend(u32::MAX.to_ne_bytes());
+        assert_eq!(out.try_read_interleaved(area).unwrap(), expected);
+        assert_eq!(wide, before);
+        let bits = [0x3eaaaaabu32, 0x80000000, 0x3f000001];
+        let raw: Vec<_> = bits.iter().flat_map(|b| b.to_ne_bytes()).collect();
+        let source = Surface::try_from_interleaved(PixelFormat::new(ColorMode::Rgb, SampleType::F32, false), area, &raw).unwrap();
+        let out = try_warp_surface(&source, area, &Homography([1., 0., 0., 0., 1., 0., 0., 0., 1.]), Interp::Nearest).unwrap();
+        let mut expected = raw;
+        expected.extend(1f32.to_ne_bytes());
+        assert_eq!(out.try_read_interleaved(area).unwrap(), expected);
     }
 }

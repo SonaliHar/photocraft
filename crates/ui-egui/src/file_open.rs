@@ -64,6 +64,30 @@ impl PhotocraftApp {
         Ok(warnings)
     }
 
+    /// Publish an already prepared import using the shared interactive-open
+    /// policy. A native stream has no original byte buffer; byte imports retain
+    /// it only for the existing Camera Raw dialog flow.
+    pub(crate) fn finish_import(&mut self, name: &str, imported: photocraft_io::ImportResult, original_bytes: Option<&[u8]>) -> Result<Vec<String>, String> {
+        let photocraft_io::ImportResult { document, mut warnings, origin, assessment } = imported;
+        crate::import_assessment_ui::append(&mut warnings, assessment.as_ref());
+        let (_, color) = self.session.open_document(document, None).map_err(|error| error.to_string())?;
+        if let Some(state) = self.session.active_mut() { state.set_import_origin(origin, name, None); }
+        self.sync_views();
+        self.ui.status = format!("Opened {name}");
+        self.ui.status_error = false;
+        if crate::camera_raw_ui::wants_open_dialog(self, &warnings) {
+            crate::camera_raw_ui::queue_open_dialog(self, name, None, original_bytes);
+            notices::io_warnings(self, &format!("Opened {name}"), &crate::camera_raw_ui::without_develop_note(&warnings));
+        } else { notices::io_warnings(self, &format!("Opened {name}"), &warnings); }
+        photocraft_engine::automate_cmds::document_opened(&mut self.session);
+        self.sync_views();
+        let ask = color.get("ask").and_then(serde_json::Value::as_bool) == Some(true);
+        if ask && (color.get("mismatch").and_then(serde_json::Value::as_bool) == Some(true) || color.get("missing").is_some()) {
+            crate::prefs_ui::open_mismatch(self, &color);
+        }
+        Ok(warnings)
+    }
+
     /// Record that the active document was just opened from `path`: File › Save writes back to it
     /// (unless it's a template) and it goes to the top of Open Recent.
     pub(crate) fn opened_from(&mut self, path: &str) {
@@ -96,7 +120,25 @@ impl PhotocraftApp {
             crate::jobs_ui::start_open(self, &display_name(path), Some(path.to_string()), photocraft_engine::jobs::OpenSource::Path(path.to_string()))?;
             return Ok(Vec::new());
         }
-        let bytes = photocraft_format::read_file(std::path::Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
+        let mut input = std::fs::File::open(path).map_err(|error| format!("{path}: {error}"))?;
+        if !self.background_jobs && !crate::preset_files_ui::PRESET_EXTS.contains(&ext.as_str()) {
+            let name = self.open_name(&display_name(path));
+            let imported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(||
+                photocraft_io::import_native_stream_candidate(&name, &mut input, &photocraft_raster::Interrupt::NONE)))
+                .map_err(|_| format!("{path}: Open failed unexpectedly; the existing document was retained"))?
+                .map_err(|error| format!("{path}: {error}"))?;
+            if let Some(imported) = imported
+            {
+                let warnings = self.finish_import(&name, imported, None)?;
+                self.opened_from(path);
+                return Ok(warnings);
+            }
+        }
+        // The negative candidate restores its cursor. Read the same held file,
+        // preserving the existing byte importer and preset route without a reopen.
+        let hint = input.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+        let bytes = photocraft_format::read::read_all_with_interrupt(&mut input, hint, &photocraft_raster::Interrupt::NONE)
+            .map_err(|error| format!("{path}: {error}"))?;
         self.open_file(path, &bytes)
     }
 

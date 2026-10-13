@@ -155,8 +155,8 @@ fn mask_from_transparency(s: &mut Session, p: &Value) -> Result<Value> {
         if !r.is_empty() {
             let mut px = read_rgba(surf, r);
             let alpha: Vec<f32> = px.iter().map(|q| q[3]).collect();
-            mask.surface.write_region(r, &alpha);
-            mask.surface.prune();
+            std::sync::Arc::make_mut(&mut mask.surface).write_region(r, &alpha);
+            std::sync::Arc::make_mut(&mut mask.surface).prune();
             for q in &mut px {
                 q[3] = 1.0;
             }
@@ -178,8 +178,8 @@ fn hide_selection(s: &mut Session, p: &Value) -> Result<Value> {
             *x = 1.0 - *x;
         }
         let mut mask = LayerMask::reveal_all();
-        mask.surface.write_region(bounds, &v);
-        mask.surface.prune();
+        std::sync::Arc::make_mut(&mut mask.surface).write_region(bounds, &v);
+        std::sync::Arc::make_mut(&mut mask.surface).prune();
         crate::extra_cmds::background_to_layer_for_mask(doc, id);
         doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = Some(mask);
         doc.selection = None;
@@ -202,20 +202,20 @@ fn mask_all_objects(s: &mut Session, p: &Value) -> Result<Value> {
         _ => {
             struct Composite<'a>(&'a Document);
             impl photocraft_algo::segment::Sampler for Composite<'_> {
-                fn rgba(&self, r: Rect) -> Vec<[f32; 4]> {
-                    photocraft_compose::render(self.0, r).px
+                fn rgba(&self, r: Rect) -> std::result::Result<Vec<[f32; 4]>, photocraft_raster::RasterInputError> {
+                    Ok(photocraft_compose::render(self.0, r)?.px)
                 }
             }
             photocraft_algo::segment::subject::select_subject(&Composite(&doc), doc.bounds())
         }
-    };
+    }?;
     let region = region.ok_or_else(|| other("no objects were found"))?;
     let bbox = region.bbox;
     s.edit("Mask All Objects", |doc, _| {
         let mut mask = LayerMask::hide_all();
         let v: Vec<f32> = region.mask.iter().map(|m| f32::from(*m) / 255.0).collect();
-        mask.surface.write_region(bbox, &v);
-        mask.surface.prune();
+        std::sync::Arc::make_mut(&mut mask.surface).write_region(bbox, &v);
+        std::sync::Arc::make_mut(&mut mask.surface).prune();
         doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = Some(mask);
         Ok(())
     })?;
@@ -674,7 +674,7 @@ fn create_layer(s: &mut Session, p: &Value) -> Result<Value> {
             tmp.global_light = light;
             tmp.patterns = doc.patterns.clone();
             tmp.layers = vec![alone];
-            let buf = photocraft_compose::render(&tmp, area);
+            let buf = photocraft_compose::render(&tmp, area)?;
             let mut surf = Surface::new(fmt);
             let data: Vec<f32> = buf.px.iter().flat_map(|q| photocraft_raster::from_rgba(&fmt, *q)).collect();
             surf.write_region(area, &data);
@@ -733,6 +733,10 @@ fn content_options(s: &mut Session, _: &Value) -> Result<Value> {
 /// The layer rendered alone (visible, its blend mode ignored) and trimmed to its pixels, as a
 /// one-layer document — what Export As does for a layer.
 pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
+    if matches!(doc.depth, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
+        return crate::layer_export_wide::extract(doc, id, crate::layer_export_wide::Limits::default(), &photocraft_raster::Interrupt::NONE);
+    }
+    doc.effective_resolution().validate().map_err(|error| EngineError::Other(error.to_string()))?;
     let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let mut alone = l.clone();
     alone.visible = true;
@@ -742,7 +746,7 @@ pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
     tmp.layers = vec![alone];
     tmp.selection = None;
     let area = doc.bounds();
-    let buf = photocraft_compose::render(&tmp, area);
+    let buf = photocraft_compose::render(&tmp, area)?;
     let w = area.width() as usize;
     let mut b = Rect::EMPTY;
     for (i, q) in buf.px.iter().enumerate() {
@@ -757,7 +761,9 @@ pub fn layer_document(doc: &Document, id: LayerId) -> Result<Document> {
     let fmt = doc.pixel_format();
     let mut out = Document::new(l.name.clone(), photocraft_doc::Size::new(b.width(), b.height()), doc.mode, doc.depth);
     out.resolution_dpi = doc.resolution_dpi;
+    out.physical_resolution = doc.physical_resolution.clone();
     out.icc_profile = doc.icc_profile.clone();
+    out.working_profile_interpretation = doc.working_profile_interpretation.clone();
     out.sample_encoding = doc.sample_encoding;
     out.source_color_context = doc.source_color_context.clone();
     let mut surf = Surface::new(fmt);
@@ -786,9 +792,10 @@ fn export_layer(s: &mut Session, p: &Value, cmd: &str, png_only: bool) -> Result
     let scale = num(p, "scale", 100.0).clamp(1.0, 1000.0);
     if (scale - 100.0).abs() > 1e-3 {
         let mut tmp = Session::new();
-        tmp.add_document(ldoc, None);
+        tmp.add_document(ldoc, None)?;
         let w = (tmp.active().map_or(1, |d| d.doc.size.width) as f32 * scale / 100.0).round().max(1.0);
         tmp.execute("image.imageSize", json!({"width": w}))?;
+        tmp.active().ok_or(EngineError::NoDocument)?.doc.validate_resident()?;
         ldoc = (*tmp.active().ok_or(EngineError::NoDocument)?.doc).clone();
     }
     let out = photocraft_io::export(&ldoc, path, &Default::default()).map_err(|e| other(e.to_string()))?;

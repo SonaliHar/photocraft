@@ -91,7 +91,7 @@ fn cancel_does_nothing() {
     assert_eq!(app.ui.dialogs.len(), 1);
     app.ui.close_dialog(id).unwrap();
     assert_eq!(past(&app), before.0);
-    assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &before.1) || *app.session.active().unwrap().doc == *before.1);
+    assert!(std::ptr::eq((app.session.active().unwrap().doc).as_ref(), (before.1).as_ref()) || *app.session.active().unwrap().doc == *before.1);
     assert_eq!(active_content(&app), "Type");
 }
 

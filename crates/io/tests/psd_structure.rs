@@ -180,7 +180,10 @@ fn fallback_modes_import_flattened() {
 #[test]
 fn multichannel_imports_ink_channels() {
     for depth in testgen::mode_depths(ColorMode::Multichannel) {
-        let f = testgen::merged_only(Version::Psd, ColorMode::Multichannel, *depth, Compression::Rle, 9, 5);
+        let mut f = testgen::merged_only(Version::Psd, ColorMode::Multichannel, *depth, Compression::Rle, 9, 5);
+        // The shared generator includes an invalid dummy ICC for resource tests.
+        // Numeric ink round-trip does not assign that unrelated color interpretation.
+        f.resources.retain(|r| r.id != photocraft_psd::resources::ids::ICC_PROFILE);
         let (d, _) = psd_to_document(&f);
         assert_eq!(d.mode, photocraft_color::ColorMode::Multichannel);
         assert!(d.layers.is_empty());
@@ -406,14 +409,14 @@ fn fill_layer_keeps_photoshop_pixels() {
     let fc = l.fill_cache.as_ref().expect("cache");
     assert_eq!(fc.surface.pixel(1, 1), vec![10.0 / 255.0, 20.0 / 255.0, 30.0 / 255.0, 1.0]);
     // The compositor uses the cache while the fill is unchanged.
-    let flat = photocraft_compose::flatten(&d);
+    let flat = photocraft_compose::flatten(&d).unwrap();
     let p = flat.get(1, 1);
     assert!((p[0] - 10.0 / 255.0).abs() < 1e-3, "{p:?}");
     // Editing the fill invalidates the cache.
     let mut d2 = d.clone();
     let n = d2.layers.len();
     d2.layers[n - 1].content = LayerContent::Fill(photocraft_doc::Fill::Solid(photocraft_color::Color::rgb(0.0, 0.0, 1.0)));
-    let p = photocraft_compose::flatten(&d2).get(1, 1);
+    let p = photocraft_compose::flatten(&d2).unwrap().get(1, 1);
     assert!(p[2] > 0.99 && p[0] < 0.01, "{p:?}");
 }
 
@@ -450,7 +453,7 @@ fn guides_and_alpha_names_roundtrip() {
             )),
         ));
     }
-    let f = document_to_psd(&d);
+    let f = document_to_psd(&d).unwrap();
     // RGB + merged transparency (the empty document is transparent) + 2 alpha channels.
     assert_eq!(f.header.channels, 6);
     let (d2, _) = psd_to_document(&f);

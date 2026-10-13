@@ -136,21 +136,29 @@ pub fn sky_mask_low(img: &RgbImage, threshold: f32) -> Option<Vec<bool>> {
 }
 
 /// Selects the sky over `canvas`. `None` if no sky was found.
-pub fn select_sky(sampler: &dyn Sampler, canvas: Rect, p: SkyParams) -> Option<Region> {
+pub fn select_sky(sampler: &dyn Sampler, canvas: Rect, p: SkyParams) -> super::SamplingResult<Option<Region>> {
     if canvas.width() < 4 || canvas.height() < 4 {
-        return None;
+        return Ok(None);
     }
+    let (_, _, output_len) = super::sample_shape(canvas, 1)?;
     let step = scale_for(canvas, WORK_PX);
-    let img = sampler.rgb_scaled(canvas, step);
+    let img = sampler.rgb_scaled(canvas, step)?;
+    super::check_image(
+        &img,
+        canvas.width() as usize / step + usize::from(!(canvas.width() as usize).is_multiple_of(step)),
+        canvas.height() as usize / step + usize::from(!(canvas.height() as usize).is_multiple_of(step)),
+    )?;
     let (lw, lh) = (img.w, img.h);
-    let low = sky_mask_low(&img, p.threshold)?;
+    let Some(low) = sky_mask_low(&img, p.threshold) else {
+        return Ok(None);
+    };
     let lowf: Vec<f32> = low.iter().map(|v| if *v { 1.0 } else { 0.0 }).collect();
     let soft = p.softness.clamp(0.0, 100.0) / 100.0;
     let r = ((step as f32 * (1.0 + 2.0 * soft)).ceil() as usize).max(3);
     let eps = 1e-4 + 4e-3 * soft;
     // Contrast after filtering: soft 0 → narrow ramp, 1 → the filter output as is.
     let k = 0.08 + 0.42 * soft;
-    let (w, h) = (canvas.width() as usize, canvas.height() as usize);
+    let w = canvas.width() as usize;
     let coarse = |x: i32, y: i32| -> f32 {
         // Bilinear upsample of the working mask (pixel centres).
         let fx = ((x - canvas.x0) as f32 + 0.5) / step as f32 - 0.5;
@@ -168,13 +176,13 @@ pub fn select_sky(sampler: &dyn Sampler, canvas: Rect, p: SkyParams) -> Option<R
     while ty < canvas.y1 {
         let mut tx = canvas.x0;
         while tx < canvas.x1 {
-            tiles.push(Rect::new(tx, ty, (tx + T).min(canvas.x1), (ty + T).min(canvas.y1)));
-            tx += T;
+            tiles.push(Rect::new(tx, ty, tx.saturating_add(T).min(canvas.x1), ty.saturating_add(T).min(canvas.y1)));
+            tx = tx.saturating_add(T).min(canvas.x1);
         }
-        ty += T;
+        ty = ty.saturating_add(T).min(canvas.y1);
     }
     let ri = r as i32;
-    let run = |t: &Rect| -> (Rect, Vec<u8>) {
+    let run = |t: &Rect| -> super::SamplingResult<(Rect, Vec<u8>)> {
         let win = t.inflate(ri).intersect(&canvas);
         let (ww, wh) = (win.width() as usize, win.height() as usize);
         let pm: Vec<f32> = (0..ww * wh).map(|i| coarse(win.x0 + (i % ww) as i32, win.y0 + (i / ww) as i32)).collect();
@@ -191,20 +199,22 @@ pub fn select_sky(sampler: &dyn Sampler, canvas: Rect, p: SkyParams) -> Option<R
             o
         };
         if hi <= 0.0 || lo >= 1.0 {
-            return (*t, vec![if lo >= 1.0 { 255 } else { 0 }; t.width() as usize * t.height() as usize]);
+            return Ok((*t, super::filled(t.width() as usize * t.height() as usize, if lo >= 1.0 { 255 } else { 0 })?));
         }
-        let guide: Vec<f32> = sampler.rgb(win).px.iter().map(|q| luma(*q)).collect();
+        let guide_image = sampler.rgb(win)?;
+        super::check_image(&guide_image, ww, wh)?;
+        let guide: Vec<f32> = guide_image.px.iter().map(|q| luma(*q)).collect();
         let q = guided_filter_gray(&guide, &pm, ww, wh, r, eps);
-        (*t, crop(&q))
+        Ok((*t, crop(&q)))
     };
     #[cfg(not(target_arch = "wasm32"))]
     let parts: Vec<(Rect, Vec<u8>)> = {
         use rayon::prelude::*;
-        tiles.par_iter().map(run).collect()
+        tiles.par_iter().map(run).collect::<super::SamplingResult<Vec<_>>>()?
     };
     #[cfg(target_arch = "wasm32")]
-    let parts: Vec<(Rect, Vec<u8>)> = tiles.iter().map(run).collect();
-    let mut mask = vec![0u8; w * h];
+    let parts: Vec<(Rect, Vec<u8>)> = tiles.iter().map(run).collect::<super::SamplingResult<Vec<_>>>()?;
+    let mut mask = super::filled(output_len, 0u8)?;
     for (t, v) in parts {
         let tw = t.width() as usize;
         for (row, y) in (t.y0..t.y1).enumerate() {
@@ -212,7 +222,7 @@ pub fn select_sky(sampler: &dyn Sampler, canvas: Rect, p: SkyParams) -> Option<R
             mask[o..o + tw].copy_from_slice(&v[row * tw..(row + 1) * tw]);
         }
     }
-    trim_region(Region { bbox: canvas, mask })
+    Ok(trim_region(Region { bbox: canvas, mask }))
 }
 
 #[cfg(test)]
@@ -245,7 +255,7 @@ mod tests {
     #[test]
     fn finds_sky_and_not_ground_or_tree() {
         let img = landscape(160, 100);
-        let r = select_sky(&ImageSampler { img: &img, origin: (0, 0) }, Rect::new(0, 0, 160, 100), SkyParams::default()).expect("sky");
+        let r = select_sky(&ImageSampler { img: &img, origin: (0, 0) }, Rect::new(0, 0, 160, 100), SkyParams::default()).unwrap().expect("sky");
         assert!(r.at(10, 5) > 0.9, "top-left sky");
         assert!(r.at(80, 50) > 0.9, "sky near the horizon");
         assert!(r.at(10, 80) < 0.1, "ground");
@@ -259,13 +269,13 @@ mod tests {
             let n = (((x * 7919 + y * 104_729) % 97) as f32 / 97.0 - 0.5) * 0.3;
             [0.35 + n, 0.3 + n, 0.12]
         });
-        assert!(select_sky(&ImageSampler { img: &img, origin: (0, 0) }, Rect::new(0, 0, 64, 64), SkyParams::default()).is_none());
+        assert!(select_sky(&ImageSampler { img: &img, origin: (0, 0) }, Rect::new(0, 0, 64, 64), SkyParams::default()).unwrap().is_none());
     }
 
     #[test]
     fn overcast_sky_is_found() {
         let img = RgbImage::from_fn(64, 64, |_, y| if y < 30 { [0.85, 0.86, 0.88] } else { [0.2, 0.3, 0.1] });
-        let r = select_sky(&ImageSampler { img: &img, origin: (0, 0) }, Rect::new(0, 0, 64, 64), SkyParams::default()).expect("sky");
+        let r = select_sky(&ImageSampler { img: &img, origin: (0, 0) }, Rect::new(0, 0, 64, 64), SkyParams::default()).unwrap().expect("sky");
         assert!(r.at(30, 10) > 0.9 && r.at(30, 50) < 0.1);
     }
 

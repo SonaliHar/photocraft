@@ -19,7 +19,7 @@ fn five_layer_doc(n: u32) -> Document {
     let mut d = Document::with_background("bench", Size::new(n, n), ColorMode::Rgb, SampleType::U8, Color::WHITE);
     let mut a = Layer::new("masked", LayerContent::Raster(filled(n, 3)));
     let mut m = LayerMask::reveal_all();
-    m.surface.fill_rect(Rect::new(0, 0, n as i32 / 2, n as i32), &[0.3]);
+    std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::new(0, 0, n as i32 / 2, n as i32), &[0.3]);
     a.mask = Some(m);
     d.layers.push(a);
     let mut b = Layer::new("multiply", LayerContent::Raster(filled(n, 7)));
@@ -41,7 +41,7 @@ fn mask_heavy_doc() -> Document {
     for i in 0..20u8 {
         let mut l = Layer::new(format!("l{i}"), LayerContent::Raster(filled(n, i + 2)));
         let mut m = LayerMask::hide_all();
-        m.surface.fill_rect(Rect::new(i as i32 * 50, 0, i as i32 * 50 + 1200, n as i32), &[0.8]);
+        std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::new(i as i32 * 50, 0, i as i32 * 50 + 1200, n as i32), &[0.8]);
         l.mask = Some(m);
         l.opacity = 0.6;
         d.layers.push(l);
@@ -53,9 +53,23 @@ fn benches(c: &mut Criterion) {
     let doc = five_layer_doc(6016);
     let mut g = c.benchmark_group("compose");
     g.sample_size(10);
-    g.bench_function("flatten_6016_5_layers", |b| b.iter(|| photocraft_compose::flatten(&doc)));
+    g.bench_function("flatten_6016_5_layers", |b| {
+        b.iter(|| {
+            photocraft_compose::flatten(&doc).unwrap_or_else(|error| {
+                eprintln!("resident composition benchmark failed: {error}");
+                std::process::exit(1)
+            })
+        })
+    });
     let masks = mask_heavy_doc();
-    g.bench_function("flatten_2048_20_masked_layers", |b| b.iter(|| photocraft_compose::flatten(&masks)));
+    g.bench_function("flatten_2048_20_masked_layers", |b| {
+        b.iter(|| {
+            photocraft_compose::flatten(&masks).unwrap_or_else(|error| {
+                eprintln!("resident masked composition benchmark failed: {error}");
+                std::process::exit(1)
+            })
+        })
+    });
     let stroke = photocraft_paint::Stroke {
         brush: photocraft_paint::BrushSettings { size: 60.0, hardness: 0.5, ..Default::default() },
         points: (0..500).map(|i| photocraft_paint::StrokePoint::new(100.0 + i as f64 * 7.0, 1000.0 + (i as f64 * 0.05).sin() * 400.0, 1.0)).collect(),

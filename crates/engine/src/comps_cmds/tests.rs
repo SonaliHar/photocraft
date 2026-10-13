@@ -199,7 +199,7 @@ fn export_comps_to_files_naming() {
     // Each file shows its comp: B's blue square only in the first.
     let blue = |path: &str| {
         let doc = photocraft_io::import("x.png", &std::fs::read(path).unwrap()).unwrap().document;
-        photocraft_compose::render(&doc, Rect::new(35, 25, 36, 26)).px[0]
+        photocraft_compose::render(&doc, Rect::new(35, 25, 36, 26)).unwrap().px[0]
     };
     assert!(blue(&files[0])[2] > 0.9 && blue(&files[0])[0] < 0.1);
     assert!(blue(&files[1])[2] > 0.9 && blue(&files[1])[0] > 0.9);

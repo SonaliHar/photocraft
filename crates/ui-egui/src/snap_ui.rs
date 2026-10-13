@@ -45,10 +45,10 @@ pub struct ActiveSnap {
 pub fn options(app: &PhotocraftApp) -> SnapOptions {
     let st = &app.ui.view.snap_to;
     let e = &app.ui.extras;
-    let grid_step = app.session.active().map_or(18.0, |d| {
+    let grid_step = app.session.active().map_or([18.0; 2], |d| {
         let g = &app.session.prefs().guides_grid_and_slices;
         let ppi = app.session.prefs().units_and_rulers.point_size.per_inch();
-        g.major_px(d.doc.resolution_dpi as f64, d.doc.size.width as f64, ppi) / g.subdivisions.max(1) as f64
+        crate::rulers::physical_grid_steps(&d.doc, g, ppi).map(|steps| steps.map(|step| step / f64::from(g.subdivisions.max(1)))).unwrap_or([0.0; 2])
     });
     SnapOptions { guides: st.guides && e.guides, grid: st.grid && e.grid, layers: st.layers, document: st.document_bounds, selection: true, grid_step }
 }
@@ -69,7 +69,8 @@ fn snap_on(app: &PhotocraftApp) -> bool {
 /// Targets of the active document (smart = layer alignments only).
 fn build(app: &PhotocraftApp, exclude: &[LayerId], smart: bool) -> SnapTargets {
     let Some(st) = app.session.active() else { return SnapTargets::default() };
-    let opts = if smart { SnapOptions { guides: false, grid: false, layers: true, document: true, selection: false, grid_step: 0.0 } } else { options(app) };
+    let opts =
+        if smart { SnapOptions { guides: false, grid: false, layers: true, document: true, selection: false, grid_step: [0.0; 2] } } else { options(app) };
     let t = SnapTargets::from_document(&st.doc, &opts, exclude);
     if smart { t.filtered(SnapKind::is_smart) } else { t }
 }
@@ -83,7 +84,7 @@ fn moving_rect(app: &PhotocraftApp) -> Option<[f64; 4]> {
         let r = st.doc.selection.as_ref()?.content_bounds().translate(dx, dy);
         return (!r.is_empty()).then(|| [r.x0, r.y0, r.x1, r.y1].map(f64::from));
     }
-    union(st.selected_layers().into_iter().filter_map(|id| layer_rect(&st.doc, id)))
+    union(st.selection_ids().iter().copied().filter_map(|id| layer_rect(&st.doc, id)))
 }
 
 fn is_point_tool(t: Tool) -> bool {
@@ -147,40 +148,41 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2]) {
     }
     let tool = app.ui.tool;
     let tol = tolerance(app);
+    let transform_exclude = app.ui.transform.as_ref().map(|t| [LayerId(t.layer)]);
     let gesture = if let Some(t) = &app.ui.transform {
         if t.mode == crate::state::TransformMode::Distort {
             // Distort is freehand corner placement (fitting an image onto a screen, say): guides
             // and edges pulling the corners about only get in the way.
             None
         } else if near_handle(&t.quad, p, crate::transform_tool::handle_tolerance(app)) {
-            Some((Gesture::Point, vec![LayerId(t.layer)]))
+            Some((Gesture::Point, transform_exclude.as_ref().map_or(&[][..], |ids| ids.as_slice())))
         } else if in_quad(&t.quad, p) {
-            Some((Gesture::TransformMove { rect: quad_rect(&t.quad) }, vec![LayerId(t.layer)]))
+            Some((Gesture::TransformMove { rect: quad_rect(&t.quad) }, transform_exclude.as_ref().map_or(&[][..], |ids| ids.as_slice())))
         } else {
             None
         }
     } else if tool == Tool::Move && crate::rulers::guide_at(app, p[0], p[1]).is_some() {
-        Some((Gesture::Guide, Vec::new()))
+        Some((Gesture::Guide, &[][..]))
     } else if tool == Tool::Move {
-        let exclude = app.session.active().map(|s| s.selected_layers()).unwrap_or_default();
+        let exclude = app.session.active().map_or(&[][..], |s| s.selection_ids());
         moving_rect(app).map(|rect| (Gesture::Move { rect }, exclude))
     } else if tool == Tool::Crop
         && let Some(rect) = app.ui.crop_rect.filter(|r| crate::crop_ui::hit(*r, p, tol) == crate::crop_ui::Hit::Inside)
     {
         // Moving the crop frame snaps its edges, like the Move tool's layer bounds.
-        Some((Gesture::Move { rect }, Vec::new()))
+        Some((Gesture::Move { rect }, &[][..]))
     } else if is_point_tool(tool) {
-        Some((Gesture::Point, Vec::new()))
+        Some((Gesture::Point, &[][..]))
     } else {
         None
     };
     let Some((gesture, exclude)) = gesture else { return };
-    let mut targets = if snap_on(app) { build(app, &exclude, false) } else { SnapTargets::default() };
+    let mut targets = if snap_on(app) { build(app, exclude, false) } else { SnapTargets::default() };
     if gesture == Gesture::Guide {
         // A guide never snaps to itself (or other guides).
         targets = targets.filtered(|k| k != SnapKind::Guide);
     }
-    let smart = if matches!(gesture, Gesture::Move { .. }) && smart_on(app) { build(app, &exclude, true) } else { SnapTargets::default() };
+    let smart = if matches!(gesture, Gesture::Move { .. }) && smart_on(app) { build(app, exclude, true) } else { SnapTargets::default() };
     app.prefs_rt.snap = Some(ActiveSnap { gesture, start: p, targets, smart, disabled: false });
 }
 
@@ -458,12 +460,73 @@ mod tests {
             json!({"values": {"guidesGridAndSlices.gridlineEvery": 100, "guidesGridAndSlices.gridUnit": "pixels", "guidesGridAndSlices.subdivisions": 4}}),
         )
         .unwrap();
-        assert_eq!(options(&app).grid_step, 25.0);
+        assert_eq!(options(&app).grid_step, [25.0; 2]);
         app.ui.tool = Tool::RectMarquee;
         let m = egui::Modifiers::NONE;
         crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 152.0, y: 127.0, pressure: 1.0 }, m);
         crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 199.0, y: 176.0 }, m);
         let sel = app.session.active().unwrap().doc.selection.as_ref().unwrap().content_bounds();
         assert_eq!((sel.x0, sel.y0, sel.x1, sel.y1), (150, 125, 200, 175));
+    }
+
+    fn grid_only(app: &PhotocraftApp) -> SnapTargets {
+        let mut opts = options(app);
+        opts.guides = false;
+        opts.layers = false;
+        opts.document = false;
+        opts.selection = false;
+        SnapTargets::from_document(&app.session.active().unwrap().doc, &opts, &[])
+    }
+
+    #[test]
+    fn grid_snapping_matches_each_physical_resolution_axis() {
+        let mut app = app_with_box();
+        app.ui.extras.grid = true;
+        app.session
+            .active_mut()
+            .unwrap()
+            .doc
+            .try_resident_mut()
+            .unwrap()
+            .set_physical_resolution(photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: 288.0, unit: photocraft_doc::PhysicalUnit::Inch })
+            .unwrap();
+        app.run(
+            "prefs.set",
+            json!({"values": {
+                "guidesGridAndSlices.gridlineEvery": 1,
+                "guidesGridAndSlices.gridUnit": "inches",
+                "guidesGridAndSlices.subdivisions": 4,
+            }}),
+        )
+        .unwrap();
+        let targets = grid_only(&app);
+        assert_eq!(targets.snap_point([106.0, 34.0], 4.0).0, [108.0, 34.0]);
+        assert_eq!(targets.snap_point([106.0, 70.0], 4.0).0, [108.0, 72.0]);
+        assert_eq!(targets.snap_rect([106.0, 34.0, 130.0, 58.0], 4.0).0, [2.0, 0.0]);
+    }
+
+    #[test]
+    fn grid_snapping_percent_uses_each_canvas_dimension() {
+        let mut app = app_with_box();
+        app.ui.extras.grid = true;
+        app.run(
+            "prefs.set",
+            json!({"values": {
+                "guidesGridAndSlices.gridlineEvery": 10,
+                "guidesGridAndSlices.gridUnit": "percent",
+                "guidesGridAndSlices.subdivisions": 1,
+            }}),
+        )
+        .unwrap();
+        assert_eq!(grid_only(&app).snap_point([38.0, 28.0], 3.0).0, [40.0, 30.0]);
+    }
+
+    #[test]
+    fn grid_snapping_rejects_invalid_physical_resolution() {
+        let mut app = app_with_box();
+        app.ui.extras.grid = true;
+        app.session.active_mut().unwrap().doc.try_resident_mut().unwrap().physical_resolution =
+            Some(photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: f64::NAN, unit: photocraft_doc::PhysicalUnit::Inch });
+        assert!(grid_only(&app).grid.is_none());
     }
 }

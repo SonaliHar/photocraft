@@ -30,6 +30,18 @@ next to them.
 | `assets/app-icon/` (all files) | PhotoCraft app icon (nine-tailed kitsune) | The project owner (drawn in ArtCraft, vectorised) | Original work, see [`assets/app-icon/README.md`](assets/app-icon/README.md) | MIT OR Apache-2.0, [`assets/app-icon/LICENSE.txt`](assets/app-icon/LICENSE.txt) |
 | `packaging/macos/dmg/` (all files) | PhotoCraft DMG window background and layout | @XusBadia, from the PhotoCraft app icon | Original work, see [`packaging/macos/dmg/README.md`](packaging/macos/dmg/README.md) | MIT OR Apache-2.0, like the code |
 
+### Vendored compression code
+
+Only audited bounded decoding APIs are exposed. Adaptations and original notices are
+kept next to the source; development comparison libraries are not runtime dependencies.
+
+| Path | Title | Author | Source | License |
+|---|---|---|---|---|
+| `vendor/xcf-bzip2/` (except the randomization table) | Safe bounded bzip2 decoder adaptation | Paolo Barbolini; adaptations by PhotoCraft contributors | [bzip2-rs 0.1.2](https://github.com/paolobarbolini/bzip2-rs); adjacent `ADAPTATION.md` | MIT OR Apache-2.0, adjacent `LICENSE-MIT` and `LICENSE-APACHE` |
+| `vendor/xcf-bzip2/src/randtable.rs` | Historical bzip2 randomization schedule | Julian R Seward, Federico Mena Quintero, Micah Snyder; Trifecta Tech Foundation and contributors | [libbz2-rs-sys 0.2.5](https://github.com/trifectatechfoundation/libbzip2-rs); adjacent `ADAPTATION.md` | bzip2-1.0.6, adjacent `LICENSE-randtable` |
+| `vendor/xcf-xz/` | Safe bounded XZ decoder adaptation and structural validator | lzma-rust2 contributors; adaptations by PhotoCraft contributors | [lzma-rust2 0.21.0](https://github.com/hasenbanck/lzma-rust2); adjacent `ADAPTATION.md` | Apache-2.0, adjacent `LICENSE` |
+| `vendor/xcf-gzip/` | Bounded gzip member/header/checksum adapter | PhotoCraft contributors | Original Rust implementation from [RFC 1952](https://www.rfc-editor.org/rfc/rfc1952); calls miniz_oxide 0.9.1 without copying its implementation | MIT OR Apache-2.0, adjacent `LICENSE-MIT` and `LICENSE-APACHE`; dependency notices in `ADAPTATION.md` |
+
 ### Optional build input: craft-fonts (not files in this repo)
 
 Builds made with `CRAFT_FONTS_DIR` (all official releases) embed fonts from
@@ -72,6 +84,10 @@ Artwork shown in the screenshots (all public domain, via Wikimedia Commons; deta
 
 ## Test data (not committed, not shipped)
 
+| Path | Title | Author | Source | License |
+|---|---|---|---|---|
+| `apps/photocraft-web/src/boot-contract-fixture/synthetic-type.psd` | Synthetic bootstrap editable text PSD | PhotoCraft contributors | `crates/io/examples/boot_contract_fixture.rs` | CC0-1.0 (adjacent `LICENSE.txt`) |
+
 `corpus/` is gitignored and no test fixtures are committed to the repository.
 `cargo xtask corpus --all` fetches every corpus at the pinned commits in `xtask/src/corpus_pins.rs`
 and verifies each file against the sha256 lists in `xtask/*.sha256`, with the upstream licence
@@ -79,12 +95,18 @@ next to the files:
 
 | Path (fetched) | Title | Author | Source | License |
 |---|---|---|---|---|
-| `corpus/photoshop/` (256 PSDs) | Photoshop oracle corpus: smart filters, layer-style effects, type, adjustments in every mode and depth | PhotoCraft contributors (authored with Adobe Photoshop 2026 by a script) | [https://github.com/storytold/photocraft-corpus](https://github.com/storytold/photocraft-corpus) (`photoshop/`, with its generator and README) | MIT OR Apache-2.0 |
+| `corpus/photoshop/` (256 PSDs) | Photoshop oracle corpus: smart filters, layer-style effects, type, adjustments in every mode and depth | PhotoCraft contributors (authored with Adobe Photoshop 2026 by a script) | [https://github.com/Terra854/photocraft-corpus](https://github.com/Terra854/photocraft-corpus) (`photoshop/`, with its generator and README) | MIT OR Apache-2.0 |
 | `corpus/psd-tools/` (309 files) | psd-tools test set | Kota Yamaguchi and contributors | [psd-tools `tests/psd_files`](https://github.com/psd-tools/psd-tools/tree/main/tests/psd_files) | MIT, Copyright (c) 2019 Kota Yamaguchi |
 | `corpus/psd/` (170 files) | Small selection of the psd-tools and ag-psd test files | Kota Yamaguchi; Agamnentzar | psd-tools (above) and [ag-psd `test/`](https://github.com/Agamnentzar/ag-psd/tree/master/test) | MIT (both) |
 | `corpus/heif/` (9 files, 0.1 MB) | HEIC/HEIF test files: `heic-rs/` checkerboards, RGB strips and a grid-tiled photo with EXIF and XMP (synthetic pixels encoded by macOS `sips`, each `.ref.png` Apple's decode); `pillow-heif/` the 10-bit RGBA `RGBA_10__29x100.heif` and its source `RGBA_16__29x100.png` | Thomas Braun (heic-rs); Pillow-Heif contributors | [heic-rs `tests/fixtures`](https://github.com/tbraun96/heic-rs/tree/main/tests/fixtures), [pillow-heif `tests/images`](https://github.com/bigcat88/pillow_heif/tree/master/tests/images) | MIT OR Apache-2.0 (heic-rs); BSD-3-Clause (pillow-heif) |
 | `corpus/exr/` (5 files, 2.3 MB) | The deep OpenEXR test images `11`, `42`, `64`, `multivariate` and `objectid.deep.exr` | Contributors to the OpenEXR Project | [openexr `src/test/bin/test_images`](https://github.com/AcademySoftwareFoundation/openexr/tree/main/src/test/bin/test_images) | BSD-3-Clause |
 | `corpus/pngsuite/` | PngSuite | Willem van Schaik | <http://www.schaik.com/pngsuite/> | Public domain |
-| `corpus/xcf/` (reviewed local authoring corpus; publication deferred at the user's request) | Original GIMP XCF project and projection oracles, including transparent NONE/zlib transport variants independently verified in GIMP | PhotoCraft contributors | [photocraft-corpus](https://github.com/storytold/photocraft-corpus), `xcf/` and `tools/gimp-oracles/`; exact authoring versions and provenance in `manifest.json` | MIT OR Apache-2.0; adjacent `LICENSE-MIT` and `LICENSE-APACHE` |
+| `corpus/xcf/` (reviewed local authoring corpus; publication deferred at the user's request) | Original GIMP XCF project and projection oracles, including transparent NONE/zlib transport variants independently verified in GIMP | PhotoCraft contributors | [photocraft-corpus](https://github.com/Terra854/photocraft-corpus), `xcf/` and `tools/gimp-oracles/`; exact authoring versions and provenance in `manifest.json` | MIT OR Apache-2.0; adjacent `LICENSE-MIT` and `LICENSE-APACHE` |
 
 Files copied into `corpus/` by hand (tiff, exr, raw) must be MIT, BSD or CC0.
+
+## Local native codec dependency
+
+| Path | Title | Author | Source | License |
+|---|---|---|---|---|
+| `vendor/ruzstd/` | ruzstd 0.9.0 Zstandard codec with checked regenerated-block limits and safe ring storage | Moritz Borcherding; PhotoCraft contributors (local safety changes) | crates.io ruzstd 0.9.0, <https://github.com/KillingSpark/zstd-rs> | MIT, [`vendor/ruzstd/LICENSE`](vendor/ruzstd/LICENSE) |

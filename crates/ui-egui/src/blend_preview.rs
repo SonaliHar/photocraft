@@ -63,7 +63,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     {
         return Some((shown.clone(), key));
     }
-    let mut doc = (*st.doc).clone();
+    let mut doc = st.doc.resident_arc()?.as_ref().clone();
     let l = doc.layer_mut(p.layer).filter(|l| l.blend != mode)?;
     l.blend = mode;
     // Duotone documents display through their inks.

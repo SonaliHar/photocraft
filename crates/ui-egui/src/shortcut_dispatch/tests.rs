@@ -313,7 +313,7 @@ fn alt_brackets_walk_the_layers_panel() {
     }
     press(&mut h, "Alt+Shift+[");
     assert_eq!(active_name(&h), "Hello");
-    assert_eq!(h.state().session.active().unwrap().selected_layers().len(), 2, "⇧⌥[ adds to the selection");
+    assert_eq!(h.state().session.active().unwrap().selection_ids().len(), 2, "⇧⌥[ adds to the selection");
 }
 
 /// #626: [ ] ⇧[ ⇧] are commands listed under Tools in Edit › Keyboard Shortcuts, so they rebind.
@@ -498,7 +498,7 @@ fn named_action_function_key_replays_and_survives_preferences_roundtrip() {
     crate::actions::assign_shortcut(h.state_mut(), "LivePrint 2R", "F6").unwrap();
     let saved = serde_json::to_value(h.state().session.prefs()).unwrap();
     let restored = serde_json::from_value(saved).unwrap();
-    h.state_mut().session.edit_prefs(|p| *p = restored);
+    h.state_mut().session.edit_prefs(|p| *p = restored).unwrap();
     h.state_mut().ui.actions.selected = None;
     press(&mut h, "F6");
     assert_eq!(active_name(&h), "F6 overlay");

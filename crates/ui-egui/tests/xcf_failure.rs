@@ -12,7 +12,7 @@ fn cancelled_and_failed_open_preserve_dirty_ui_document() {
     let bytes = xcf::image(13, 150, 0, 1, 1, &[31, 61, 91, 255]);
     app.open_file("original.xcf", &bytes).unwrap();
     app.run("layer.setProps", json!({"name":"Unsaved"})).unwrap();
-    let before = app.session.active().unwrap().clone();
+    let before = app.session.active().unwrap().try_clone_resident().unwrap();
     let recents = app.ui.recent_files.clone();
     app.background_jobs = true;
     app.open_file("cancelled.xcf", &bytes).unwrap();

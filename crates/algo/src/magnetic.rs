@@ -20,6 +20,7 @@ use std::collections::{BinaryHeap, HashMap};
 use std::f32::consts::{PI, SQRT_2};
 
 use photocraft_geom::Rect;
+use photocraft_raster::RasterInputError;
 
 /// Side of the cached pixel blocks (px).
 const BLOCK: i32 = 128;
@@ -77,9 +78,9 @@ impl Settings {
     }
 }
 
-/// Reads straight-alpha RGBA8 pixels of a rectangle inside the image, row-major. A result of the
-/// wrong length reads as transparent.
-pub type Fetch<'a> = dyn FnMut(Rect) -> Vec<[u8; 4]> + 'a;
+/// Reads straight-alpha RGBA8 pixels inside the image, row-major. Read errors and
+/// malformed lengths propagate without caching a substitute transparent block.
+pub type Fetch<'a> = dyn FnMut(Rect) -> Result<Vec<[u8; 4]>, RasterInputError> + 'a;
 
 /// Edge tracing over one image, caching the pixels it has read.
 #[derive(Debug)]
@@ -106,14 +107,14 @@ impl Tracer {
     /// Where a fastening point near `p` goes: the centre of the most prominent edge within the
     /// detection width, or `p` itself (kept inside the image) when no edge there reaches the
     /// contrast. `None` when `p` is not a finite point or the image is empty.
-    pub fn snap(&mut self, fetch: &mut Fetch, p: [f64; 2], s: Settings) -> Option<[f64; 2]> {
+    pub fn snap(&mut self, fetch: &mut Fetch, p: [f64; 2], s: Settings) -> Result<Option<[f64; 2]>, RasterInputError> {
         let s = Settings::new(s.width, s.contrast);
-        let p = self.clamp_point(p)?;
+        let Some(p) = self.clamp_point(p) else { return Ok(None) };
         let r = s.width;
         let (px, py) = self.pixel(p);
         let ri = r.ceil() as i32 + 1;
         let area = Rect::new(px.saturating_sub(ri), py.saturating_sub(ri), px.saturating_add(ri + 1), py.saturating_add(ri + 1)).intersect(&self.bounds);
-        let f = self.field(fetch, area);
+        let f = self.field(fetch, area)?;
         let mut best: Option<(f32, [f64; 2])> = None;
         for y in area.y0..area.y1 {
             for x in area.x0..area.x1 {
@@ -133,16 +134,16 @@ impl Tracer {
                 }
             }
         }
-        Some(best.map_or(p, |(_, q)| q))
+        Ok(Some(best.map_or(p, |(_, q)| q)))
     }
 
     /// The border from `from` to `to` along the edges near `guide`, the pointer's path between
     /// them (`from` and `to` are its ends whatever it holds). It starts at `from` and ends at `to`
     /// exactly (both kept inside the image). Empty when either is not a finite point or the image
     /// is empty.
-    pub fn trace(&mut self, fetch: &mut Fetch, from: [f64; 2], to: [f64; 2], guide: &[[f64; 2]], s: Settings) -> Vec<[f64; 2]> {
+    pub fn trace(&mut self, fetch: &mut Fetch, from: [f64; 2], to: [f64; 2], guide: &[[f64; 2]], s: Settings) -> Result<Vec<[f64; 2]>, RasterInputError> {
         let s = Settings::new(s.width, s.contrast);
-        let (Some(from), Some(to)) = (self.clamp_point(from), self.clamp_point(to)) else { return Vec::new() };
+        let (Some(from), Some(to)) = (self.clamp_point(from), self.clamp_point(to)) else { return Ok(Vec::new()) };
         let mut g = Vec::with_capacity(guide.len().saturating_add(2));
         g.push(from);
         g.extend(guide.iter().filter_map(|q| self.clamp_point(*q)));
@@ -150,24 +151,30 @@ impl Tracer {
         // A coarse guide is enough for the corridor, and much cheaper to draw.
         let g = simplify(&g, 0.5);
         if length(&g) > MAX_GUIDE_LENGTH {
-            return g;
+            return Ok(g);
         }
         let pieces = split(&g, PIECE);
         let mut out = vec![from];
         let mut cur = from;
         let last = pieces.len().saturating_sub(1);
         for (k, piece) in pieces.iter().enumerate() {
-            let target = if k == last { to } else { piece.last().and_then(|q| self.snap(fetch, *q, s)).unwrap_or(to) };
-            out.extend(self.trace_piece(fetch, cur, target, piece, s).into_iter().skip(1));
+            let target = if k == last {
+                to
+            } else if let Some(q) = piece.last() {
+                self.snap(fetch, *q, s)?.unwrap_or(to)
+            } else {
+                to
+            };
+            out.extend(self.trace_piece(fetch, cur, target, piece, s)?.into_iter().skip(1));
             cur = target;
         }
         // Within half a pixel: drops the staircase of pixel steps, keeps the curve of an edge.
-        simplify(&out, 0.5)
+        Ok(simplify(&out, 0.5))
     }
 
     /// One piece of [`Tracer::trace`]: the cheapest path from `a` to `b` in the corridor around
     /// `guide`, from `a` to `b` inclusive.
-    fn trace_piece(&mut self, fetch: &mut Fetch, a: [f64; 2], b: [f64; 2], guide: &[[f64; 2]], s: Settings) -> Vec<[f64; 2]> {
+    fn trace_piece(&mut self, fetch: &mut Fetch, a: [f64; 2], b: [f64; 2], guide: &[[f64; 2]], s: Settings) -> Result<Vec<[f64; 2]>, RasterInputError> {
         let rad = s.radius();
         let (ax, ay) = self.pixel(a);
         let (bx, by) = self.pixel(b);
@@ -177,24 +184,24 @@ impl Tracer {
             bbox = bbox.union(&Rect::new(x, y, x + 1, y + 1));
         }
         let area = bbox.inflate(rad.ceil() as i32 + 1).intersect(&self.bounds);
-        let f = self.field(fetch, area);
+        let f = self.field(fetch, area)?;
         let mut near = corridor(area, guide, rad);
-        let (Some(start), Some(goal)) = (f.index(ax, ay), f.index(bx, by)) else { return vec![a, b] };
+        let (Some(start), Some(goal)) = (f.index(ax, ay), f.index(bx, by)) else { return Ok(vec![a, b]) };
         for i in [start, goal] {
             if let Some(v) = near.get_mut(i) {
                 *v = 0.0;
             }
         }
-        let Some(cells) = search(&f, &near, (rad * rad) as f32, start, goal, s.contrast) else { return vec![a, b] };
+        let Some(cells) = search(&f, &near, (rad * rad) as f32, start, goal, s.contrast) else { return Ok(vec![a, b]) };
         let mut pts: Vec<[f64; 2]> = cells.iter().map(|&i| f.point_at(i, s.contrast)).collect();
-        match pts.len() {
+        Ok(match pts.len() {
             0 | 1 => vec![a, b],
             n => {
                 pts[0] = a;
                 pts[n - 1] = b;
                 pts
             }
-        }
+        })
     }
 
     /// `p` kept inside the image, or `None` if it is not a finite point or the image is empty.
@@ -214,22 +221,19 @@ impl Tracer {
     }
 
     /// Edge features over `area` (inside the image).
-    fn field(&mut self, fetch: &mut Fetch, area: Rect) -> Field {
+    fn field(&mut self, fetch: &mut Fetch, area: Rect) -> Result<Field, RasterInputError> {
         // Sobel reads one ring beyond the gradient, and non-maximum suppression one beyond the area.
         let ext = area.inflate(2).intersect(&self.bounds);
-        let px = self.pixels(fetch, ext);
-        Field::new(area, ext, &px)
+        let px = self.pixels(fetch, ext)?;
+        Ok(Field::new(area, ext, &px))
     }
 
     /// Straight RGBA8 pixels of `r` (inside the image), through the block cache.
-    fn pixels(&mut self, fetch: &mut Fetch, r: Rect) -> Vec<[u8; 4]> {
+    fn pixels(&mut self, fetch: &mut Fetch, r: Rect) -> Result<Vec<[u8; 4]>, RasterInputError> {
         let w = r.width() as usize;
         let mut out = vec![[0u8; 4]; w * r.height() as usize];
         if r.is_empty() {
-            return out;
-        }
-        if self.blocks.len() > MAX_BLOCKS {
-            self.blocks.clear();
+            return Ok(out);
         }
         let (bx0, by0) = (r.x0.div_euclid(BLOCK), r.y0.div_euclid(BLOCK));
         let (bx1, by1) = ((r.x1 - 1).div_euclid(BLOCK), (r.y1 - 1).div_euclid(BLOCK));
@@ -246,10 +250,17 @@ impl Tracer {
                     continue;
                 }
                 let n = br.width() as usize * br.height() as usize;
-                let block = self.blocks.entry((bx, by)).or_insert_with(|| {
-                    let v = fetch(br);
-                    if v.len() == n { v } else { vec![[0; 4]; n] }
-                });
+                if !self.blocks.contains_key(&(bx, by)) {
+                    let block = fetch(br)?;
+                    if block.len() != n {
+                        return Err(RasterInputError::LengthMismatch);
+                    }
+                    if self.blocks.len() >= MAX_BLOCKS {
+                        self.blocks.clear();
+                    }
+                    self.blocks.insert((bx, by), block);
+                }
+                let block = self.blocks.get(&(bx, by)).ok_or(RasterInputError::LengthMismatch)?;
                 let ov = br.intersect(&r);
                 let len = ov.width() as usize;
                 for y in ov.y0..ov.y1 {
@@ -261,7 +272,7 @@ impl Tracer {
                 }
             }
         }
-        out
+        Ok(out)
     }
 }
 

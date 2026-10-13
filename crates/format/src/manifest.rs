@@ -11,11 +11,15 @@ use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{
     Adjustment, ClippingPath, Effect, Fill, GlobalLight, Guides, LabelColor, LiveShape, Locks, Path, ShapeStroke, SmartFilter, VectorMask, text,
 };
-use photocraft_geom::{Affine, Size};
+use photocraft_geom::{Affine, Rect, Size};
 use serde::{Deserialize, Serialize};
 
 /// Current manifest version written by this build.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 7;
+
+fn default_reader_version() -> u32 {
+    1
+}
 
 /// Hex-encoded BLAKE3 hash (64 chars).
 pub type Hash = String;
@@ -23,6 +27,8 @@ pub type Hash = String;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
     pub format_version: u32,
+    #[serde(default = "default_reader_version")]
+    pub minimum_reader_version: u32,
     /// Free-form writer identification, e.g. `photocraft-format 0.1.0`.
     pub generator: String,
     pub document: DocM,
@@ -36,9 +42,20 @@ pub struct Manifest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DocM {
     #[serde(default)]
+    pub physical_resolution: Option<photocraft_doc::PhysicalResolution>,
+    /// Content-addressed imported state; never persisted runtime grants.
+    #[serde(default)]
+    pub xcf_state: Option<Hash>,
+    #[serde(default)]
+    pub xcf_filter_masks: Vec<FilterMaskM>,
+    #[serde(default)]
+    pub xcf_source_caches: Vec<SourceCacheM>,
+    #[serde(default)]
     pub sample_encoding: Option<photocraft_doc::SampleEncoding>,
     #[serde(default)]
     pub source_color_context: Option<SourceColorContextM>,
+    #[serde(default)]
+    pub working_profile_interpretation: photocraft_doc::WorkingProfileInterpretation,
     pub id: u64,
     pub name: String,
     pub size: Size,
@@ -51,6 +68,8 @@ pub struct DocM {
     pub channels: Vec<ChannelM>,
     pub guides: Guides,
     pub selection: Option<SurfaceM>,
+    #[serde(default)]
+    pub selection_channel_id: Option<photocraft_doc::item_identity::ChannelId>,
     pub metadata: MetadataM,
     pub global_light: GlobalLight,
     /// Saved paths (Paths panel).
@@ -72,20 +91,20 @@ pub struct DocM {
     /// Duotone inks.
     #[serde(default)]
     pub duotone: Option<photocraft_doc::Duotone>,
-    /// Window › Layer Comps.
+    /// Window â€º Layer Comps.
     #[serde(default)]
     pub layer_comps: Vec<LayerCompM>,
     #[serde(default)]
     pub last_applied_comp: Option<u32>,
     #[serde(default)]
     pub last_document_state: Option<LayerCompM>,
-    /// Image › Variables and Data Sets.
+    /// Image â€º Variables and Data Sets.
     #[serde(default)]
     pub variables: photocraft_doc::Variables,
-    /// Window › Timeline.
+    /// Window â€º Timeline.
     #[serde(default)]
     pub timeline: Option<photocraft_doc::Timeline>,
-    /// Image › Analysis: measurement scale, count groups, ruler.
+    /// Image â€º Analysis: measurement scale, count groups, ruler.
     #[serde(default)]
     pub measurement: photocraft_doc::Measurement,
     /// Note tool annotations.
@@ -97,6 +116,17 @@ pub struct DocM {
     /// Web slices (user and layer-based; layer ids are remapped on load).
     #[serde(default, skip_serializing_if = "photocraft_doc::Slices::is_empty")]
     pub slices: photocraft_doc::Slices,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceCacheM {
+    pub owner: photocraft_doc::item_identity::ItemRef,
+    pub blob: Hash,
+    pub byte_len: usize,
+    pub width: u32,
+    pub height: u32,
+    pub format: PixelFormat,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -143,6 +173,8 @@ pub struct PatternM {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NamedPathM {
+    #[serde(default)]
+    pub id: Option<photocraft_doc::item_identity::PathId>,
     pub name: String,
     pub path: Path,
     #[serde(default)]
@@ -161,7 +193,7 @@ pub struct SurfaceM {
     pub format: PixelFormat,
     /// Default ("untouched") pixel as hex of its little-endian encoded bytes.
     pub default: String,
-    /// 256×256 tiles, interleaved little-endian samples.
+    /// 256Ã—256 tiles, interleaved little-endian samples.
     pub tiles: Vec<TileRef>,
 }
 
@@ -259,13 +291,16 @@ pub struct IndexedSourceM {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ContentM {
+    FiniteRaster {
+        raster: crate::finite_raster::FiniteRasterM,
+    },
     Raster {
         surface: SurfaceM,
     },
     Group {
         children: Vec<LayerM>,
         expanded: bool,
-        /// Artboard (Layer › New › Artboard).
+        /// Artboard (Layer â€º New â€º Artboard).
         #[serde(default)]
         artboard: Option<photocraft_doc::Artboard>,
     },
@@ -321,7 +356,7 @@ pub enum ContentM {
         warp: Option<photocraft_geom::warp::Warp>,
         #[serde(default)]
         stack_mode: Option<photocraft_doc::StackMode>,
-        /// Distort / Perspective placement (row-major 3×3); absent for affine placements.
+        /// Distort / Perspective placement (row-major 3Ã—3); absent for affine placements.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         perspective: Option<[f64; 9]>,
     },
@@ -340,6 +375,8 @@ pub enum SmartSourceM {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChannelM {
+    #[serde(default)]
+    pub id: Option<photocraft_doc::item_identity::ChannelId>,
     pub name: String,
     pub surface: SurfaceM,
     pub spot: Option<(Color, f32)>,
@@ -391,4 +428,12 @@ mod channel_tests {
         assert_eq!(c.opacity, 0.5);
         assert_eq!(c.indicates, photocraft_doc::ColorIndicates::MaskedAreas);
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FilterMaskM {
+    pub id: photocraft_doc::item_identity::MaskId,
+    pub owner: photocraft_doc::item_identity::FilterId,
+    pub bounds: Rect,
+    pub surface: SurfaceM,
 }

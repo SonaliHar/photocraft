@@ -1,4 +1,5 @@
 use super::*;
+use photocraft_color::SampleType;
 use photocraft_doc::{Layer, LayerContent};
 
 fn tmp(name: &str) -> String {
@@ -280,7 +281,7 @@ fn previews_show_the_optimised_pixels() {
     let s = session(8);
     let doc = s.active().unwrap().doc.clone();
     let (wd, _, _) = web_document(&doc, &json!({}), &WebSettings::default()).unwrap();
-    let buf = photocraft_compose::flatten(&wd);
+    let buf = photocraft_compose::flatten(&wd).unwrap();
     for f in ["jpeg", "gif", "png8", "png24", "wbmp"] {
         let st = WebSettings::from_params(&json!({"format": f, "quality": 90, "transparency": false}), "x").unwrap();
         let o = optimize(&buf.px, 64, wd.bounds(), &st, None, None, 72.0, true).unwrap();
@@ -358,4 +359,265 @@ fn overlapping_slices_keep_the_later_slice_in_html() {
         .sum();
     assert_eq!(area, 64 * 48);
     assert!(files.iter().any(|f| f.ends_with("images/under_01.png")), "the covered slice is cut into pieces: {files:?}");
+}
+
+fn physical_png_crc(bytes: &[u8]) -> u32 {
+    let mut crc = u32::MAX;
+    for &byte in bytes {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 0 { crc >> 1 } else { (crc >> 1) ^ 0xedb8_8320 };
+        }
+    }
+    !crc
+}
+fn physical_png_density(bytes: &[u8]) -> Option<(u32, u32, u8)> {
+    assert_eq!(bytes.get(..8).unwrap(), &[137, 80, 78, 71, 13, 10, 26, 10]);
+    let mut pos = 8usize;
+    let mut density = None;
+    while pos < bytes.len() {
+        let length = usize::try_from(u32::from_be_bytes(bytes.get(pos..pos + 4).unwrap().try_into().unwrap())).unwrap();
+        let end = pos.checked_add(length).unwrap().checked_add(12).unwrap();
+        let chunk = bytes.get(pos + 4..end - 4).unwrap();
+        assert_eq!(physical_png_crc(chunk), u32::from_be_bytes(bytes.get(end - 4..end).unwrap().try_into().unwrap()), "PNG chunk CRC");
+        if chunk.get(..4).unwrap() == b"pHYs" {
+            assert!(density.is_none());
+            assert_eq!(length, 9);
+            density = Some((
+                u32::from_be_bytes(chunk.get(4..8).unwrap().try_into().unwrap()),
+                u32::from_be_bytes(chunk.get(8..12).unwrap().try_into().unwrap()),
+                *chunk.get(12).unwrap(),
+            ));
+        }
+        pos = end;
+    }
+    assert_eq!(pos, bytes.len());
+    density
+}
+fn physical_png_session(dir: &str, depth: SampleType, legacy: f32, canonical: Option<(f64, f64)>) -> Session {
+    let mut d = Document::with_background(
+        "PNG density native witness",
+        photocraft_doc::Size::new(24, 16),
+        photocraft_color::ColorMode::Rgb,
+        depth,
+        photocraft_color::Color::rgba(0.25, 0.5, 0.75, 1.0),
+    );
+    d.resolution_dpi = legacy;
+    d.physical_resolution = canonical.map(|(x_dpi, y_dpi)| photocraft_doc::PhysicalResolution {
+        x_dpi,
+        y_dpi,
+        unit: photocraft_doc::PhysicalUnit::Custom(photocraft_doc::CustomUnit {
+            name: "Quarter inch".into(),
+            factor: 4.0,
+            digits: 3,
+            symbol: "qi".into(),
+            abbreviation: "qi".into(),
+        }),
+    });
+    d.metadata.xmp = Some("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"/></x:xmpmeta>".into());
+    let bytes = photocraft_format::save_to_bytes(&d, &Default::default()).unwrap();
+    let path = format!("{dir}/source.pcraft");
+    std::fs::write(&path, &bytes).unwrap();
+    let imported = photocraft_io::import(&path, &bytes).unwrap().document;
+    assert_eq!(imported.physical_resolution, d.physical_resolution);
+    let mut s = Session::new();
+    s.add_document(imported, Some(path)).unwrap();
+    s
+}
+fn physical_png_export(s: &mut Session, path: &str, metadata: &str) -> Vec<u8> {
+    let state = s.active().unwrap();
+    let before = format!("{:?}", state.doc);
+    let source = format!("{:?}", state.source);
+    let history = state.history.past_len();
+    let revision = state.revision;
+    let native = photocraft_format::save_to_bytes(&state.doc, &Default::default()).unwrap();
+    s.execute("file.export.saveForWebLegacy", json!({"format":"png24","metadata":metadata,"convertToSrgb":false,"path":path})).unwrap();
+    let state = s.active().unwrap();
+    assert_eq!(format!("{:?}", state.doc), before);
+    assert_eq!(format!("{:?}", state.source), source);
+    assert_eq!(state.history.past_len(), history);
+    assert_eq!(state.revision, revision);
+    assert_eq!(photocraft_format::save_to_bytes(&state.doc, &Default::default()).unwrap(), native);
+    std::fs::read(path).unwrap()
+}
+#[test]
+fn physical_png_canonical_square_native() {
+    for depth in [SampleType::U8, SampleType::U16] {
+        let dir = tmp(&format!("physical-png-square-{depth:?}"));
+        let mut s = physical_png_session(&dir, depth, 300.0, Some((144.25, 144.25)));
+        let bytes = physical_png_export(&mut s, &format!("{dir}/out.png"), "all");
+        assert_eq!(physical_png_density(&bytes), Some((5679, 5679, 1)));
+        let decoded = photocraft_codecs::decode(&bytes).unwrap();
+        assert_eq!(decoded.dimensions(), (24, 16));
+        assert_eq!(decoded.sample_type(), photocraft_codecs::SampleType::U8);
+    }
+}
+#[test]
+fn physical_png_canonical_unequal_native() {
+    for depth in [SampleType::U8, SampleType::U16] {
+        let dir = tmp(&format!("physical-png-unequal-{depth:?}"));
+        let mut s = physical_png_session(&dir, depth, 300.0, Some((144.25, 287.75)));
+        let bytes = physical_png_export(&mut s, &format!("{dir}/out.png"), "all");
+        assert_eq!(physical_png_density(&bytes), Some((5679, 11329, 1)));
+        let none = physical_png_export(&mut s, &format!("{dir}/none.png"), "none");
+        assert_eq!(physical_png_density(&none), None);
+        assert_eq!(photocraft_codecs::decode(&bytes).unwrap().data(), photocraft_codecs::decode(&none).unwrap().data());
+    }
+}
+#[test]
+fn physical_png_legacy_legal_and_metadata_none_controls() {
+    for (dpi, ppm) in [(72.0, 2835), (144.25, 5679), (0.001, 0), (f32::from_bits(1280316328), 2147483520)] {
+        let dir = tmp(&format!("physical-png-legacy-{}", dpi.to_bits()));
+        let mut s = physical_png_session(&dir, SampleType::U8, dpi, None);
+        let bytes = physical_png_export(&mut s, &format!("{dir}/out.png"), "all");
+        assert_eq!(physical_png_density(&bytes), Some((ppm, ppm, 1)));
+    }
+    let dir = tmp("physical-png-legacy-high-none");
+    let mut s = physical_png_session(&dir, SampleType::U8, f32::from_bits(1280316329), None);
+    let bytes = physical_png_export(&mut s, &format!("{dir}/none.png"), "none");
+    assert_eq!(physical_png_density(&bytes), None);
+}
+#[test]
+fn physical_png_legacy_nonconforming_wire_refused_atomically() {
+    let dir = tmp("physical-png-legacy-boundary-atomic");
+    let mut s = physical_png_session(&dir, SampleType::U8, f32::from_bits(1280316329), None);
+    let path = format!("{dir}/existing.png");
+    let sentinel = b"do not overwrite invalid-density destination";
+    std::fs::write(&path, sentinel).unwrap();
+    let state = s.active().unwrap();
+    let before = format!("{:?}", state.doc);
+    let source = format!("{:?}", state.source);
+    let revision = state.revision;
+    let history = state.history.past_len();
+    let preference = s.file_menu.last_web.clone();
+    let result = s.execute("file.export.saveForWebLegacy", json!({"format":"png24","metadata":"all","convertToSrgb":false,"path":path}));
+    assert!(result.is_err(), "legacy f32 wire emits2147483648, above PNG's integer limit; actual result {result:?}");
+    assert_eq!(std::fs::read(&path).unwrap(), sentinel);
+    let state = s.active().unwrap();
+    assert_eq!(format!("{:?}", state.doc), before);
+    assert_eq!(format!("{:?}", state.source), source);
+    assert_eq!(state.revision, revision);
+    assert_eq!(state.history.past_len(), history);
+    assert_eq!(s.file_menu.last_web, preference);
+}
+
+#[test]
+fn physical_png_slices_reuse_canonical_metadata_without_source_edits() {
+    let dir = tmp("physical-png-slices");
+    let mut s = physical_png_session(&dir, SampleType::U16, 300.0, Some((144.25, 287.75)));
+    s.edit("Owned crop pattern", |doc, _| {
+        let bounds = doc.bounds();
+        let format = doc.pixel_format();
+        let mut data = Vec::new();
+        for y in 0_u16..16 {
+            for x in 0_u16..24 {
+                let pixel = [f32::from(x) / 23.0, f32::from(y) / 15.0, f32::from((x + y) % 7) / 6.0, 1.0];
+                data.extend(photocraft_raster::from_rgba(&format, pixel));
+            }
+        }
+        doc.layers[0].surface_mut().unwrap().write_region(bounds, &data);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("slice.new", json!({"rect":[2,3,8,6],"name":"density-crop"})).unwrap();
+    let state = s.active().unwrap();
+    let native = photocraft_format::save_to_bytes(&state.doc, &Default::default()).unwrap();
+    let source = format!("{:?}", state.source);
+    let history = state.history.past_len();
+    let revision = state.revision;
+    let reply = s
+        .execute("file.export.saveForWebLegacy", json!({"format":"png24","metadata":"all","convertToSrgb":false,"dir":format!("{dir}/export"),"slices":"user"}))
+        .unwrap();
+    let files = reply["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1);
+    let bytes = std::fs::read(files[0].as_str().unwrap()).unwrap();
+    assert_eq!(physical_png_density(&bytes), Some((5679, 11329, 1)));
+    let image = photocraft_codecs::decode(&bytes).unwrap();
+    assert_eq!(image.dimensions(), (8, 6));
+    let full = physical_png_export(&mut s, &format!("{dir}/whole.png"), "all");
+    let full = photocraft_codecs::decode(&full).unwrap();
+    let channels = full.layout().channels();
+    let mut expected = Vec::new();
+    for y in 3usize..9 {
+        let begin = (y * 24 + 2) * channels;
+        expected.extend_from_slice(full.data().get(begin..begin + 8 * channels).unwrap());
+    }
+    assert_eq!(image.data(), expected);
+    let state = s.active().unwrap();
+    assert_eq!(photocraft_format::save_to_bytes(&state.doc, &Default::default()).unwrap(), native);
+    assert_eq!(format!("{:?}", state.source), source);
+    assert_eq!(state.history.past_len(), history);
+    assert_eq!(state.revision, revision);
+}
+#[test]
+fn physical_png_without_xmp_keeps_omission_and_nonphysical_formats() {
+    let dir = tmp("physical-png-no-xmp");
+    let mut s = physical_png_session(&dir, SampleType::U8, 300.0, Some((144.25, 287.75)));
+    s.active_mut().unwrap().doc.try_resident_mut().unwrap().metadata.xmp = None;
+    let bytes = physical_png_export(&mut s, &format!("{dir}/no-xmp.png"), "all");
+    assert_eq!(physical_png_density(&bytes), None);
+    for format in ["png8", "gif", "wbmp"] {
+        let result = s.execute("file.export.saveForWebLegacy", json!({"format":format,"metadata":"all","convertToSrgb":false}));
+        assert!(result.is_ok(), "{format}: {result:?}");
+    }
+}
+#[test]
+fn physical_png_hostile_density_refusal_preserves_destinations_and_preferences() {
+    use photocraft_doc::{CustomUnit, PhysicalResolution, PhysicalUnit};
+    let mut cases = vec![
+        PhysicalResolution { x_dpi: 0.0, y_dpi: 72.0, unit: PhysicalUnit::Inch },
+        PhysicalResolution { x_dpi: 72.0, y_dpi: f64::NAN, unit: PhysicalUnit::Inch },
+        PhysicalResolution { x_dpi: f64::INFINITY, y_dpi: 72.0, unit: PhysicalUnit::Inch },
+        PhysicalResolution { x_dpi: -1.0, y_dpi: 72.0, unit: PhysicalUnit::Inch },
+        PhysicalResolution::square(f64::MAX),
+        PhysicalResolution::square(0.0254 * (f64::from(i32::MAX) + 1.0)),
+    ];
+    cases.push(PhysicalResolution {
+        x_dpi: 144.25,
+        y_dpi: 287.75,
+        unit: PhysicalUnit::Custom(CustomUnit { name: "Invalid factor".into(), factor: 0.0, digits: 1, symbol: "x".into(), abbreviation: "x".into() }),
+    });
+    for field in 0..3 {
+        let mut unit = CustomUnit { name: "Bounded".into(), factor: 4.0, digits: 1, symbol: "q".into(), abbreviation: "q".into() };
+        let oversized = "x".repeat((1 << 20) + 1);
+        match field {
+            0 => unit.name = oversized,
+            1 => unit.symbol = oversized,
+            _ => unit.abbreviation = oversized,
+        }
+        cases.push(PhysicalResolution { x_dpi: 144.25, y_dpi: 287.75, unit: PhysicalUnit::Custom(unit) });
+    }
+    for (i, resolution) in cases.into_iter().enumerate() {
+        let dir = tmp(&format!("physical-png-hostile-{i}"));
+        let mut s = physical_png_session(&dir, SampleType::U8, 300.0, None);
+        s.active_mut().unwrap().doc.try_resident_mut().unwrap().physical_resolution = Some(resolution);
+        let state = s.active().unwrap();
+        let history = state.history.past_len();
+        let revision = state.revision;
+        let id = state.doc.id;
+        let before = format!("{:?}", state.doc);
+        let preference = s.file_menu.last_web.clone();
+        let source = format!("{:?}", state.source);
+        let sentinel = b"unchanged existing output";
+        let path = format!("{dir}/existing.png");
+        std::fs::write(&path, sentinel).unwrap();
+        let result = s.execute("file.export.saveForWebLegacy", json!({"format":"png24","metadata":"all","convertToSrgb":false,"path":path}));
+        assert!(result.is_err(), "{result:?}");
+        assert_eq!(std::fs::read(&path).unwrap(), sentinel);
+        let absent = format!("{dir}/new.png");
+        assert!(s.execute("file.export.saveForWebLegacy", json!({"format":"png24","metadata":"all","convertToSrgb":false,"path":absent})).is_err());
+        assert!(!std::path::Path::new(&absent).exists());
+        let export = format!("{dir}/new-slices");
+        assert!(
+            s.execute("file.export.saveForWebLegacy", json!({"format":"png24","metadata":"all","convertToSrgb":false,"dir":export,"slices":"all"})).is_err()
+        );
+        assert!(!std::path::Path::new(&export).exists());
+        let state = s.active().unwrap();
+        assert_eq!(state.doc.id, id);
+        assert_eq!(format!("{:?}", state.doc), before);
+        assert_eq!(format!("{:?}", state.source), source);
+        assert_eq!(state.history.past_len(), history);
+        assert_eq!(state.revision, revision);
+        assert_eq!(s.file_menu.last_web, preference);
+    }
 }

@@ -93,13 +93,34 @@ fn source(app: &mut PhotocraftApp) -> Option<&mut EdgeSource> {
     app.magnetic.source.as_mut()
 }
 
-fn snap(app: &mut PhotocraftApp, p: [f64; 2], s: Settings) -> [f64; 2] {
-    source(app).and_then(|src| src.snap(p, s)).unwrap_or(p)
+fn snap(app: &mut PhotocraftApp, p: [f64; 2], s: Settings) -> Option<[f64; 2]> {
+    let result = match source(app) {
+        Some(src) => src.snap(p, s),
+        None => return Some(p),
+    };
+    match result {
+        Ok(point) => Some(point.unwrap_or(p)),
+        Err(error) => {
+            app.ui.status = format!("Magnetic Lasso: {error}");
+            app.ui.status_error = true;
+            None
+        }
+    }
 }
 
-fn trace(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], guide: &[[f64; 2]], s: Settings) -> Vec<[f64; 2]> {
-    let t = source(app).map(|src| src.trace(from, to, guide, s)).unwrap_or_default();
-    if t.is_empty() { vec![from, to] } else { t }
+fn trace(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], guide: &[[f64; 2]], s: Settings) -> Option<Vec<[f64; 2]>> {
+    let result = match source(app) {
+        Some(src) => src.trace(from, to, guide, s),
+        None => return Some(vec![from, to]),
+    };
+    match result {
+        Ok(points) => Some(if points.is_empty() { vec![from, to] } else { points }),
+        Err(error) => {
+            app.ui.status = format!("Magnetic Lasso: {error}");
+            app.ui.status_error = true;
+            None
+        }
+    }
 }
 
 /// Pointer events while the Magnetic Lasso is the tool (it takes them all).
@@ -122,7 +143,7 @@ fn down(app: &mut PhotocraftApp, p: [f64; 2], pressure: f32, mods: Modifiers) {
         // The first fastening point; the modifiers held now set the selection mode.
         let mode = crate::canvas::selection_mode(app, mods).to_owned();
         app.magnetic = Runtime::default();
-        let start = snap(app, p, s);
+        let Some(start) = snap(app, p, s) else { return };
         let doc = app.session.active().map_or(0, |d| d.doc.id.0);
         app.ui.magnetic = MagneticLasso { path: vec![start], anchors: vec![0], trail: vec![p], mode, doc, ..Default::default() };
         return;
@@ -135,7 +156,8 @@ fn down(app: &mut PhotocraftApp, p: [f64; 2], pressure: f32, mods: Modifiers) {
             vec![last, first]
         } else {
             let guide = app.ui.magnetic.trail.clone();
-            trace(app, last, first, &guide, s)
+            let Some(closing) = trace(app, last, first, &guide, s) else { return };
+            closing
         };
         let m = &mut app.ui.magnetic;
         m.path.extend(closing.into_iter().skip(1));
@@ -214,13 +236,17 @@ fn extend_trail(app: &mut PhotocraftApp, q: [f64; 2], s: Settings) {
 /// The pointer is at `q`: trace the live segment to the edge near it and, with `fasten`, fasten
 /// points behind the pointer while the live segment is long enough.
 fn follow(app: &mut PhotocraftApp, q: [f64; 2], s: Settings, fasten: bool) {
+    let previous = app.ui.magnetic.clone();
+    let Some(target) = snap(app, q, s) else { return };
     extend_trail(app, q, s);
-    let target = snap(app, q, s);
     let every = spacing(app);
     for _ in 0..64 {
         let Some(&from) = app.ui.magnetic.path.last() else { return };
         let guide = app.ui.magnetic.trail.clone();
-        let live = trace(app, from, target, &guide, s);
+        let Some(live) = trace(app, from, target, &guide, s) else {
+            app.ui.magnetic = previous;
+            return;
+        };
         // The part of the border `spacing` behind its start no longer changes as the pointer
         // moves: fasten it.
         match cut(&live, every).filter(|_| fasten) {
@@ -303,13 +329,17 @@ pub fn close(app: &mut PhotocraftApp, straight: bool) {
     if !app.ui.magnetic.active() {
         return;
     }
+    let previous = app.ui.magnetic.clone();
     end_freehand(app);
     fasten_live(app);
     let m = &app.ui.magnetic;
     let (Some(&first), Some(&last)) = (m.path.first(), m.path.last()) else { return };
     if !straight {
         let s = settings(app, 0.0);
-        let mut closing = trace(app, last, first, &[], s);
+        let Some(mut closing) = trace(app, last, first, &[], s) else {
+            app.ui.magnetic = previous;
+            return;
+        };
         // The border ends where it starts.
         closing.pop();
         app.ui.magnetic.path.extend(closing.into_iter().skip(1));

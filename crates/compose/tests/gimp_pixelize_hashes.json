@@ -1,0 +1,9 @@
+{
+  "operations/gegl-pixelize/operation-gegl-pixelize.source.0.native.bin": "43f6f4fc2d130f29652d05e5c1f251a3121bc249bee2844ff2bc0be3483a87b6",
+  "operations/gegl-pixelize/operation-gegl-pixelize.xcf": "a4b746de40767cbd07467cad702cda4611c95e614c718164696ef475b2fe1f34",
+  "operations/gegl-pixelize/operation-gegl-pixelize.edit.xcf": "70568d0661810256762e3b9bd5a4d933d1ac0220be8094cb71fa2ee2f6ed9545",
+  "operations/gegl-pixelize/operation-gegl-pixelize.reopened_state.json": "8410d2e4534d101754f8fdc38f397a046a859a4f5c8e83af9ffc491c8e60be40",
+  "operations/gegl-pixelize/operation-gegl-pixelize.edited_state.json": "c7bab8af2e586dc004a42f4ffbedff33d69097299ce06c27349ebf84f3d25846",
+  "operations/gegl-pixelize/operation-gegl-pixelize.ref.png": "045de0836a1c39dee15f2cc065f482da7ab1b976f9525dfe82c6b74969e9d08c",
+  "operations/gegl-pixelize/operation-gegl-pixelize.edit.ref.png": "c27d9e8a4e90da7547889ba55e7d4c1e5a98d2ada98c58a30a6022ffd2af907f"
+}

@@ -407,7 +407,7 @@ fn targeted_session() -> (Session, usize) {
     let before = s.active().unwrap().history.past_len();
     s.edit("texture", |doc, active| {
         let b = doc.bounds();
-        texture_surface(&mut doc.layer_mut(active.unwrap()).unwrap().mask.as_mut().unwrap().surface, b);
+        texture_surface(std::sync::Arc::make_mut(&mut doc.layer_mut(active.unwrap()).unwrap().mask.as_mut().unwrap().surface), b);
         texture_surface(&mut doc.channels[0].surface, b);
         Ok(())
     })

@@ -63,7 +63,7 @@ fn navigate(s: &mut Session, step: Step, add: bool) -> Result<Value> {
     };
     let id = rows.get(target).copied().ok_or_else(|| EngineError::Other("no layer there".into()))?;
     if add {
-        let mut sel = st.selected_layers();
+        let mut sel = st.selected_layers()?;
         if !sel.contains(&id) {
             sel.push(id);
         }
@@ -73,7 +73,7 @@ fn navigate(s: &mut Session, step: Step, add: bool) -> Result<Value> {
         s.select_layer(id)?;
     }
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    Ok(json!({"layer": id.0, "selected": st.selected_layers().iter().map(|l| l.0).collect::<Vec<_>>()}))
+    Ok(json!({"layer": id.0, "selected": st.selection_ids().iter().map(|l| l.0).collect::<Vec<_>>()}))
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -140,7 +140,7 @@ mod tests {
             assert_eq!(active(&s), want);
         }
         s.execute("layer.selectBottom", json!({})).unwrap();
-        assert_eq!((active(&s), s.active().unwrap().selected_layers()), (bg, vec![bg]));
+        assert_eq!((active(&s), s.active().unwrap().selected_layers().unwrap()), (bg, vec![bg]));
         s.execute("layer.selectTop", json!({})).unwrap();
         assert_eq!(active(&s), d);
     }
@@ -162,14 +162,14 @@ mod tests {
         assert_eq!(active(&s), a);
         s.execute("layer.addAboveToSelection", json!({})).unwrap();
         s.execute("layer.addAboveToSelection", json!({})).unwrap();
-        let mut sel = s.active().unwrap().selected_layers();
+        let mut sel = s.active().unwrap().selected_layers().unwrap();
         sel.sort();
         let mut want = vec![a, group, d];
         want.sort();
         assert_eq!((active(&s), sel), (d, want));
         s.execute("layer.addBelowToSelection", json!({})).unwrap();
         assert_eq!(active(&s), group, "the active layer moves; the selection keeps every layer");
-        assert_eq!(s.active().unwrap().selected_layers().len(), 3);
+        assert_eq!(s.active().unwrap().selected_layers().unwrap().len(), 3);
     }
 
     #[test]

@@ -28,6 +28,16 @@ for w in fidelity_warnings(&img, Format::Jpeg) {         // e.g. "16-bit will be
 let out = encode(&img, Format::Tiff, &EncodeOptions::default())?;
 ```
 
+For PNG exports with independent physical-resolution axes, use
+`PngDensity::from_dpi(x_dpi, y_dpi)` and
+`encode_png_with_density(&img, &options, density)`. This shares the ordinary
+PNG conversion, depth and interlacing path; it writes the checked density when
+`options.embed_metadata` is enabled. The constructor accepts positive finite
+f64 DPI, rounds the exact binary value to pixels per metre with upward half
+ties, and rejects values beyond [PNG's 31-bit integer range](https://www.w3.org/TR/png-3/#7IntegersAndByteOrder). Very small positive
+DPI may round to zero. The image metadata and existing scalar `encode` API
+remain unchanged.
+
 ## Capability matrix (default build)
 
 | Format | Read | Write | Depths (native) | Layouts (native) | Alpha | ICC | EXIF | XMP | DPI | Text | Lossy write | Backend |

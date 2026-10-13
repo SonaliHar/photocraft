@@ -11,7 +11,7 @@ use photocraft_doc::{CompLayerState, Document, LayerComp, LayerId};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::file_cmds::{SaveOpts, join, native_doc, sanitize, save_doc, stem, str_param};
+use crate::file_cmds::{SaveOpts, join, native_doc, sanitize, save_doc_with_protection_document, stem, str_param};
 use crate::{EngineError, Result, Session};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -67,6 +67,42 @@ fn flag(p: &Value, key: &str, default: bool) -> bool {
 /// Restores `comp`'s recorded state (only what its options select; `all` forces everything).
 /// Layers deleted since the capture are skipped. Position-locked layers still move, as in
 /// Photoshop, because the comp is not a user drag.
+pub fn try_apply_comp(doc: &mut Document, comp: &LayerComp, all: bool) -> Result<()> {
+    let (vis, pos, app) = if all { (true, true, true) } else { (comp.apply_visibility, comp.apply_position, comp.apply_appearance) };
+    // Walk order (parents before children): a moved artboard carries its children, which are
+    // then placed absolutely, so the result does not depend on how far the parent moved.
+    let order: Vec<LayerId> = doc.walk().into_iter().map(|(_, _, l)| l.id).collect();
+    for id in order {
+        let Some(st) = comp.state(id) else { continue };
+        if pos
+            && let Some((x, y)) = st.position
+            && let Some((cx, cy)) = doc.layer(id).and_then(layer_position)
+            && (x, y) != (cx, cy)
+            // Recorded positions can come from files; a move that does not fit an `i32` is
+            // skipped rather than wrapped onto some other position (#1017).
+            && let (Some(dx), Some(dy)) = (x.checked_sub(cx), y.checked_sub(cy))
+        {
+            let snapshot = doc.clone();
+            if let Some(l) = doc.layer_mut(id) {
+                crate::commands::try_translate_layer(&snapshot, l, dx, dy)?;
+                crate::vector_cmds::translate_vectors(&snapshot, l, f64::from(dx), f64::from(dy));
+            }
+        }
+        let Some(l) = doc.layer_mut(id) else { continue };
+        if vis && let Some(v) = st.visible {
+            l.visible = v;
+        }
+        if app && let Some(a) = &st.appearance {
+            l.blend = a.blend;
+            l.opacity = a.opacity;
+            l.fill_opacity = a.fill_opacity;
+            l.effects = a.effects.clone();
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub fn apply_comp(doc: &mut Document, comp: &LayerComp, all: bool) {
     let (vis, pos, app) = if all { (true, true, true) } else { (comp.apply_visibility, comp.apply_position, comp.apply_appearance) };
     // Walk order (parents before children): a moved artboard carries its children, which are
@@ -176,7 +212,7 @@ fn apply(s: &mut Session, id: u32, label: &str) -> Result<Value> {
                 states: capture_states(doc),
             });
         }
-        apply_comp(doc, &comp, false);
+        try_apply_comp(doc, &comp, false)?;
         doc.last_applied_comp = Some(id);
         Ok(())
     })?;
@@ -294,7 +330,7 @@ fn set_options(s: &mut Session, p: &Value) -> Result<Value> {
 fn restore_last(s: &mut Session) -> Result<Value> {
     s.edit("Restore Last Document State", |doc, _| {
         let last = doc.last_document_state.clone().ok_or_else(|| EngineError::Other("no Last Document State".into()))?;
-        apply_comp(doc, &last, true);
+        try_apply_comp(doc, &last, true)?;
         doc.last_applied_comp = None;
         Ok(())
     })?;
@@ -352,6 +388,7 @@ fn comps_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
+    let source = d.source.clone();
     let doc = d.doc.clone();
     let chosen: Vec<u32> = match p.get("comps") {
         Some(Value::Array(a)) => a.iter().map(|v| crate::commands::u32_id(cmd, "comps", v)).collect::<Result<Vec<_>>>()?,
@@ -361,10 +398,10 @@ fn comps_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let mut files = Vec::new();
     for (i, c) in doc.layer_comps.iter().enumerate().filter(|(_, c)| chosen.contains(&c.id)) {
         let mut one = (*doc).clone();
-        apply_comp(&mut one, c, false);
+        try_apply_comp(&mut one, c, false)?;
         one.last_applied_comp = Some(c.id);
         let path = join(&dir, &format!("{}_{:04}_{}.{format}", sanitize(&prefix), i, sanitize(&c.name)));
-        save_doc(&one, &path, SaveOpts::from_params(p))?;
+        save_doc_with_protection_document(&one, &path, SaveOpts::from_params(p), &doc, source.as_ref())?;
         files.push(path);
     }
     if files.is_empty() {

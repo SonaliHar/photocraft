@@ -9,6 +9,9 @@ pub fn psd_depth(s: SampleType) -> u16 {
         SampleType::U8 => 8,
         SampleType::U16 => 16,
         SampleType::F32 => 32,
+        // PSD has no unsigned-32 or float-64 storage. Exporters explicitly convert
+        // these to float32 and report that loss before using this header mapping.
+        SampleType::U32 | SampleType::F64 => 32,
     }
 }
 
@@ -31,6 +34,16 @@ fn invert_sample(bytes: &mut [u8], s: SampleType) {
         SampleType::F32 => {
             let v = f32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
             bytes.copy_from_slice(&(1.0 - v).to_ne_bytes());
+        }
+        SampleType::U32 => {
+            if let Some(raw) = bytes.get(..4).and_then(|b| <[u8; 4]>::try_from(b).ok()) {
+                bytes.copy_from_slice(&(u32::MAX - u32::from_ne_bytes(raw)).to_ne_bytes());
+            }
+        }
+        SampleType::F64 => {
+            if let Some(raw) = bytes.get(..8).and_then(|b| <[u8; 8]>::try_from(b).ok()) {
+                bytes.copy_from_slice(&(1.0 - f64::from_ne_bytes(raw)).to_ne_bytes());
+            }
         }
     }
 }
@@ -93,7 +106,7 @@ pub fn deinterleave(bytes: &[u8], ch: usize, s: SampleType, invert: &[bool]) -> 
     let bs = bands(n);
     let parts: Vec<Vec<Vec<u8>>> = par_map(bs.clone(), |band| {
         let mut planes = vec![Vec::with_capacity(band.len() * bps); ch];
-        let mut tmp = [0u8; 4];
+        let mut tmp = [0u8; 8];
         for p in band {
             for (c, plane) in planes.iter_mut().enumerate() {
                 let src = &bytes[p * row + c * bps..p * row + (c + 1) * bps];
@@ -125,6 +138,8 @@ pub fn max_sample(s: SampleType) -> Vec<u8> {
         SampleType::U8 => vec![255],
         SampleType::U16 => 65535u16.to_ne_bytes().to_vec(),
         SampleType::F32 => 1.0f32.to_ne_bytes().to_vec(),
+        SampleType::U32 => u32::MAX.to_ne_bytes().to_vec(),
+        SampleType::F64 => 1.0f64.to_ne_bytes().to_vec(),
     }
 }
 
@@ -160,6 +175,8 @@ pub fn encode_be(v: f32, s: SampleType, out: &mut Vec<u8>) {
         SampleType::U8 => out.push((v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8),
         SampleType::U16 => out.extend_from_slice(&((v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16).to_be_bytes()),
         SampleType::F32 => out.extend_from_slice(&v.to_be_bytes()),
+        SampleType::U32 => out.extend_from_slice(&((f64::from(v).clamp(0.0, 1.0) * f64::from(u32::MAX)).round() as u32).to_be_bytes()),
+        SampleType::F64 => out.extend_from_slice(&f64::from(v).to_be_bytes()),
     }
 }
 
@@ -173,6 +190,8 @@ pub fn decode_be(bytes: &[u8], index: usize, s: SampleType) -> f32 {
             let o = index * 4;
             f32::from_be_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]])
         }
+        SampleType::U32 => u32::from_be_bytes(bytes[index * 4..index * 4 + 4].try_into().unwrap()) as f32 / u32::MAX as f32,
+        SampleType::F64 => f64::from_be_bytes(bytes[index * 8..index * 8 + 8].try_into().unwrap()) as f32,
     }
 }
 

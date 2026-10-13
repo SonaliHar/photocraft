@@ -159,7 +159,7 @@ fn read(doc: &mut Document, plan: &Plan, p: &Value, rect: Rect) -> Result<Region
     let (surf, _) = crate::channel_cmds::target_surface(doc, plan.id, p)?;
     if plan.all_layers {
         let fmt = surf.format();
-        return Ok(composite_region(doc, None, SampleLayers::All, rect, fmt));
+        return composite_region(doc, None, SampleLayers::All, rect, fmt);
     }
     Ok(Region::read(surf, rect))
 }

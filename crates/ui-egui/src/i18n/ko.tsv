@@ -2827,3 +2827,108 @@ fontWeight	Italic	기울임
 	Rotate View Tool	보기 회전 도구
 	Reset View	보기 재설정
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	중심 주위를 드래그해 보기를 회전합니다  ·  Shift는 15°로 제한
+
+# Imported GIMP text and filter controls
+	Additional filters are available through command inspection	명령 정보에서 추가 필터를 사용할 수 있습니다
+	Alpha threshold	알파 임계값
+	An explicit resolution edit sets both axes.	해상도를 직접 변경하면 두 축에 모두 적용됩니다.
+	Apply Text	텍스트 적용
+	Blue frequency	파랑 주파수
+	Blue phase shift	파랑 위상 이동
+	Blue weight	파랑 가중치
+	CIE Lab	CIE Lab 색 공간
+	CIE Yuv	CIE Yuv 색 공간
+	Changing this imported GIMP mode is not supported yet.	가져온 GIMP 모드 변경은 아직 지원되지 않습니다.
+	Clip high	상한 클리핑
+	Clip low	하한 클리핑
+	Cyan / Red	청록 / 빨강
+	Decrease Levels	단계 수 줄이기
+	Desaturate mode	탈색 모드
+	Filter editing is unavailable	필터를 편집할 수 없습니다
+	GIMP Filters	GIMP 필터
+	GIMP Text	GIMP 텍스트
+	Green frequency	초록 주파수
+	Green phase shift	초록 위상 이동
+	Green weight	초록 가중치
+	Histogram channel	히스토그램 채널
+	Hue frequency	색상 주파수
+	Hue phase shift	색상 위상 이동
+	Increase Levels	단계 수 늘리기
+	Intended temperature	목표 색온도
+	Keep blue	파랑 유지
+	Keep green	초록 유지
+	Keep hue	색상 유지
+	Keep lightness	명도 유지
+	Keep red	빨강 유지
+	Keep saturation	채도 유지
+	Layer content is locked	레이어 내용이 잠겨 있습니다
+	Letter spacing	자간
+	Lightness frequency	명도 주파수
+	Lightness phase shift	명도 위상 이동
+	Line spacing	줄 간격
+	Lower limit	하한
+	Luma	루마
+	Magenta / Green	자홍 / 초록
+	Move Down	아래로 이동
+	Move Up	위로 이동
+	Native	고유
+	Original temperature	원래 색온도
+	Preserve luminosity	광도 유지
+	Process in sRGB	sRGB에서 처리
+	Red frequency	빨강 주파수
+	Red phase shift	빨강 위상 이동
+	Red weight	빨강 가중치
+	Remove Filter	필터 제거
+	Reset Text	텍스트 초기화
+	Saturation colorspace	채도 색 공간
+	Saturation frequency	채도 주파수
+	Saturation phase shift	채도 위상 이동
+	Text X	텍스트 X 좌표
+	Text Y	텍스트 Y 좌표
+	Text content	텍스트 내용
+	Text editing is unavailable for this layer.	이 레이어의 텍스트는 편집할 수 없습니다.
+	Upper limit	상한
+	Value	명암값
+	Yellow / Blue	노랑 / 파랑
+	From color	원래 색
+	To color	대체 색
+	Red threshold	빨강 임계값
+	Green threshold	초록 임계값
+	Blue threshold	파랑 임계값
+	Underlined characters	밑줄이 있는 문자
+	Start character	시작 문자
+	End character (exclusive)	끝 문자 (제외)
+	Apply underline	밑줄 적용
+	Clear underline	밑줄 해제
+	Text content editing is unavailable for this layer.	이 레이어에서는 텍스트 내용을 편집할 수 없습니다.
+	Transparency threshold	투명도 임계값
+	Opacity threshold	불투명도 임계값
+	Component	성분
+	Y'CbCr Y'	Y'CbCr Y'
+	Y'CbCr Cb	Y'CbCr Cb
+	Y'CbCr Cr	Y'CbCr Cr
+
+	Destination start angle	대상 시작 각도
+
+	Destination end angle	대상 끝 각도
+	GIMP Linked Image	GIMP 연결 이미지
+	Original byte identity is unavailable. The selected PNG is a Reduced substitution (8 MiB limit).	원본 바이트와의 동일성을 확인할 수 없습니다. 선택한 PNG는 충실도를 낮춘 대체 이미지입니다(8 MiB 제한).
+	Replace Linked Image (Reduced)…	연결 이미지 교체(충실도 감소)…
+	Resource picker unavailable.	리소스 선택기를 사용할 수 없습니다.
+	The selected PNG must match the retained original byte identity (8 MiB limit). Exact recovery applies to this linked image only.	선택한 PNG는 보존된 원본 바이트 식별 정보와 일치해야 합니다(8 MiB 제한). 정확한 복구는 이 연결된 이미지에만 적용됩니다.
+	Recover Linked Image (Exact)…	연결된 이미지 복구(정확)…
+	Saved floating attachment	저장된 떠 있는 레이어 연결
+	Attachment target	연결 대상
+	Detach the saved relationship without changing pixels.	픽셀을 변경하지 않고 저장된 관계를 해제합니다.
+	Detach Floating Layer	떠 있는 레이어 연결 해제
+	Complete or cancel the pixel-move preview before detaching the saved relationship.	저장된 관계를 해제하기 전에 픽셀 이동 미리보기를 완료하거나 취소하세요.
+	Saved named item sets	저장된 이름 있는 항목 집합
+	Only sets containing this layer are shown; saved searches are not evaluated.	이 레이어를 포함하는 집합만 표시하며 저장된 검색은 평가하지 않습니다.
+	Rename Saved Item Set…	저장된 항목 집합 이름 변경…
+	Delete Saved Item Set	저장된 항목 집합 삭제
+	Saved set name	저장된 집합 이름
+	Apply Saved Item Set Name	저장된 항목 집합 이름 적용
+	Enter a replacement name for this long saved name.	이 긴 저장된 이름을 대체할 이름을 입력하세요.
+	Only the first 64 matching sets are shown.	일치하는 집합 중 처음 64개만 표시합니다.
+	Complete or cancel the pixel-move preview before editing saved item sets.	저장된 항목 집합을 편집하기 전에 픽셀 이동 미리보기를 완료하거나 취소하세요.
+	Remove this layer from set	이 레이어를 세트에서 제거

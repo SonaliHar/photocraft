@@ -67,7 +67,10 @@ fn isolate(layers: &mut [Layer], id: LayerId) -> bool {
 }
 
 /// Histograms of `doc` as seen by `source`, in the channels of `space`.
-pub fn compute_histograms(doc: &Document, source: HistSource, space: ToneSpace) -> Histograms {
+pub fn compute_histograms(doc: &Document, source: HistSource, space: ToneSpace) -> Result<Histograms, String> {
+    if doc.has_backed_rasters().map_err(|error| error.to_string())? {
+        return Err("Histogram preview requires a resident document".into());
+    }
     let mut d = doc.clone();
     match source {
         HistSource::BelowLayer(hide) => {
@@ -79,7 +82,7 @@ pub fn compute_histograms(doc: &Document, source: HistSource, space: ToneSpace) 
             isolate(&mut d.layers, id);
         }
     }
-    let img = photocraft_compose::thumbnail(&d, 384);
+    let img = photocraft_compose::thumbnail(&d, 384).map_err(|error| error.to_string())?;
     let n = match space {
         ToneSpace::Rgb => 4,
         ToneSpace::Cmyk => 5,
@@ -115,7 +118,7 @@ pub fn compute_histograms(doc: &Document, source: HistSource, space: ToneSpace) 
             }
         }
     }
-    Histograms { tag: tag(source, space), ch: h }
+    Ok(Histograms { tag: tag(source, space), ch: h })
 }
 
 /// Cached histograms for a tone editor; recomputed only when something other than the editor's
@@ -138,7 +141,13 @@ pub fn histograms(app: &mut PhotocraftApp, source: HistSource, space: ToneSpace)
         return h.clone();
     }
     let t0 = crate::gpu_canvas::now_ms();
-    let h = Arc::new(compute_histograms(&st.doc, source, space));
+    let h = match compute_histograms(&st.doc, source, space) {
+        Ok(histograms) => Arc::new(histograms),
+        Err(error) => {
+            app.ui.status = format!("Histogram unavailable: {error}");
+            return app.tone_hist.as_ref().map_or_else(|| Arc::new(Histograms::default()), |(_, _, _, h)| h.clone());
+        }
+    };
     app.perf.span("histogram", crate::gpu_canvas::now_ms() - t0);
     app.tone_hist = Some((doc_id, layer, rev, h.clone()));
     h
@@ -255,7 +264,7 @@ pub fn histogram_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     .name("histogram".into())
                     .spawn(move || {
                         let t0 = crate::gpu_canvas::now_ms();
-                        let h = Arc::new(compute_histograms(&doc, HistSource::BelowLayer(LayerId(u64::MAX)), ToneSpace::Rgb));
+                        let h = compute_histograms(&doc, HistSource::BelowLayer(LayerId(u64::MAX)), ToneSpace::Rgb).map(Arc::new);
                         let _ = tx.send((doc.id, crate::gpu_canvas::now_ms() - t0, h));
                         ctx.request_repaint();
                     })
@@ -265,7 +274,7 @@ pub fn histogram_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let spawned = false;
             if !spawned {
                 let t0 = crate::gpu_canvas::now_ms();
-                let h = Arc::new(compute_histograms(&st.doc, HistSource::BelowLayer(LayerId(u64::MAX)), ToneSpace::Rgb));
+                let h = compute_histograms(&st.doc, HistSource::BelowLayer(LayerId(u64::MAX)), ToneSpace::Rgb).map(Arc::new);
                 let _ = tx.send((doc_id, crate::gpu_canvas::now_ms() - t0, h));
             }
             app.hist_job = Some((doc_id, rev, rx));
@@ -281,7 +290,10 @@ pub fn histogram_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             Ok((_, ms, h)) => {
                 app.perf.span("histogram", ms);
                 if *jd == doc_id {
-                    app.doc_hist = Some((doc_id, *jr, crate::gpu_canvas::now_ms(), h));
+                    match h {
+                        Ok(h) => app.doc_hist = Some((doc_id, *jr, crate::gpu_canvas::now_ms(), h)),
+                        Err(error) => app.ui.status = format!("Histogram unavailable: {error}"),
+                    }
                 }
                 app.hist_job = None;
             }
@@ -343,7 +355,7 @@ mod tests {
         s.execute("file.new", json!({"width": 64, "height": 64})).unwrap(); // white
         s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap();
         let st = s.active().unwrap();
-        let h = compute_histograms(&st.doc, HistSource::BelowLayer(st.active_layer.unwrap()), ToneSpace::Rgb);
+        let h = compute_histograms(&st.doc, HistSource::BelowLayer(st.active_layer.unwrap()), ToneSpace::Rgb).unwrap();
         assert!(h[0][255] > 0 && h[0][0] == 0, "sees the white image, not the inverted result");
         assert_eq!(h[9], [0; 256], "out-of-range channels are empty, not a panic");
     }
@@ -357,10 +369,10 @@ mod tests {
         s.execute("select.rect", json!({"x": 0, "y": 0, "width": 32, "height": 32})).unwrap();
         s.execute("edit.fill", json!({"color": "#000000"})).unwrap();
         let st = s.active().unwrap();
-        let h = compute_histograms(&st.doc, HistSource::Layer(bg), ToneSpace::Rgb);
+        let h = compute_histograms(&st.doc, HistSource::Layer(bg), ToneSpace::Rgb).unwrap();
         assert!(h[0][255] > 0 && h[0][0] == 0, "the black layer above is hidden");
-        assert_eq!(compute_histograms(&st.doc, HistSource::Layer(bg), ToneSpace::Cmyk).ch.len(), 5);
-        assert_eq!(compute_histograms(&st.doc, HistSource::Layer(bg), ToneSpace::Lab).ch.len(), 3);
+        assert_eq!(compute_histograms(&st.doc, HistSource::Layer(bg), ToneSpace::Cmyk).unwrap().ch.len(), 5);
+        assert_eq!(compute_histograms(&st.doc, HistSource::Layer(bg), ToneSpace::Lab).unwrap().ch.len(), 3);
     }
 }
 
@@ -399,6 +411,7 @@ mod hist_async_tests {
             assert_eq!(job.1, rev);
             // The worker delivers (its repaint request is a no-op outside a frame).
             let (did, _, h) = job.2.recv().expect("the worker delivers the histogram");
+            let h = h.unwrap();
             assert_eq!(did, doc_id);
             assert!(!h.ch.is_empty(), "the histogram has data");
             // Delivering it for the revision it was computed from lands in the cache.

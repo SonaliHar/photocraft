@@ -15,8 +15,9 @@ type Inbox = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
 /// Everything File › Open reads: PhotoCraft and Photoshop documents, flat images, and Photoshop
 /// brushes (.abr), gradients (.grd) and swatches (.aco, .ase), which go to the preset libraries.
 const OPEN_EXTS: &[&str] = &[
-    "xcf", "pcraft", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm",
-    "pam", "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "ase",
+    "xcf", "xcf.gz", "xcf.bz2", "xcf.xz", "pcraft", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi",
+    "exr", "hdr", "pbm", "pgm", "ppm", "pam", "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd",
+    "svg", "svgz", "aco", "ase",
 ];
 const CANVAS_ID: &str = "photocraft_canvas";
 
@@ -26,6 +27,13 @@ pub fn start() {
         let Some(document) = web_sys::window().and_then(|w| w.document()) else {
             log::error!("no document");
             return;
+        };
+        let ready = match crate::web_asset_loader::prepare_boot(None).await {
+            Ok(ready) => ready,
+            Err(error) => {
+                crate::web_asset_loader::show_boot_error(&document, &error);
+                return;
+            }
         };
         let Some(canvas) = document.get_element_by_id(CANVAS_ID).and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok()) else {
             log::error!("missing <canvas id=\"{CANVAS_ID}\">");
@@ -46,9 +54,11 @@ pub fn start() {
                 canvas,
                 options,
                 Box::new(move |cc| {
-                    PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
+                    PhotocraftApp::setup_context_ready(&cc.egui_ctx, ThemeKind::Pro, ready)?;
                     let inbox: Inbox = Arc::default();
-                    let mut app = PhotocraftApp::new(Session::new(), services(inbox.clone()));
+                    let mut session = Session::new();
+                    session.set_web_export_delivery(Some(download));
+                    let mut app = PhotocraftApp::new_ready(session, services(inbox.clone()), ready)?;
                     listen_pen(&pen_target, app.stylus.feed.clone());
                     app.set_theme(&cc.egui_ctx, ThemeKind::Pro);
                     if let Some(rs) = cc.wgpu_render_state.clone()
@@ -66,7 +76,7 @@ pub fn start() {
         if let Some(el) = document.get_element_by_id("photocraft_loading") {
             match result {
                 Ok(()) => el.remove(),
-                Err(e) => el.set_inner_html(&format!("<p>PhotoCraft failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>")),
+                Err(e) => el.set_text_content(Some(&format!("PhotoCraft failed to start: {e:?}. A browser with WebGPU or WebGL2 is required."))),
             }
         }
     });
@@ -160,6 +170,7 @@ impl eframe::App for WebShell {
 }
 
 fn services(inbox: Inbox) -> Services {
+    let mut resource_picker: Option<crate::bounded_resource_read::PickerHandle> = None;
     Services {
         screen_pick: screen_color_service(),
         import: Some(Box::new(|name: &str, bytes: &[u8]| photocraft_io::import(name, bytes).map_err(|e| e.to_string()))),
@@ -176,20 +187,34 @@ fn services(inbox: Inbox) -> Services {
             opts.xmp = if settings.xmp_all { photocraft_io::XmpEmbed::All } else { photocraft_io::XmpEmbed::None };
             photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
         })),
-        file_dialog: Some(Box::new(|request, _parent, reply| match request {
-            // The browser's file picker hands over the file's contents, not a path.
-            FileDialogRequest::Open { .. } => wasm_bindgen_futures::spawn_local(async move {
-                let picked = rfd::AsyncFileDialog::new().add_filter("All Formats", OPEN_EXTS).pick_file().await;
-                let answer = match picked {
-                    Some(file) => Some(FileDialogAnswer::Contents(file.file_name(), file.read().await)),
-                    None => None,
-                };
-                reply.send(answer);
-            }),
-            // No save dialog on the web: the suggested name becomes the download name.
-            FileDialogRequest::Save { suggested } => {
-                let name = std::path::Path::new(&suggested).file_name().map_or_else(|| suggested.clone(), |n| n.to_string_lossy().to_string());
-                reply.send(Some(FileDialogAnswer::SaveTo(name)));
+        file_dialog: Some(Box::new(move |request, _parent, reply| {
+            if resource_picker.as_ref().is_some_and(|picker| picker.finished()) {
+                resource_picker = None;
+            }
+            match request {
+                FileDialogRequest::XcfLinkedImage => {
+                    resource_picker = Some(crate::bounded_resource_read::pick_resource(move |result| {
+                        reply.send(match result {
+                            Ok(Some(selected)) => Some(FileDialogAnswer::Contents(selected.name, selected.bytes)),
+                            Ok(None) => None,
+                            Err(error) => Some(FileDialogAnswer::Failed(error.to_string())),
+                        });
+                    }));
+                }
+                // The browser's file picker hands over the file's contents, not a path.
+                FileDialogRequest::Open { .. } => wasm_bindgen_futures::spawn_local(async move {
+                    let picked = rfd::AsyncFileDialog::new().add_filter("All Formats", OPEN_EXTS).pick_file().await;
+                    let answer = match picked {
+                        Some(file) => Some(FileDialogAnswer::Contents(file.file_name(), file.read().await)),
+                        None => None,
+                    };
+                    reply.send(answer);
+                }),
+                // No save dialog on the web: the suggested name becomes the download name.
+                FileDialogRequest::Save { suggested } => {
+                    let name = std::path::Path::new(&suggested).file_name().map_or_else(|| suggested.clone(), |n| n.to_string_lossy().to_string());
+                    reply.send(Some(FileDialogAnswer::SaveTo(name)));
+                }
             }
         })),
         write: Some(Box::new(|path: &str, bytes: &[u8]| download(path, bytes))),

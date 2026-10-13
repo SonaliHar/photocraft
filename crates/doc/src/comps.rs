@@ -71,6 +71,7 @@ impl LayerComp {
 /// an artboard. Empty for adjustment/fill layers and plain groups.
 pub fn position_bounds(l: &Layer) -> Rect {
     match &l.content {
+        LayerContent::BackedRaster(backed) => backed.operative_bounds(),
         LayerContent::Group(g) => g.artboard.as_ref().map_or(Rect::EMPTY, |a| a.rect),
         LayerContent::Adjustment(_) | LayerContent::Fill(_) => Rect::EMPTY,
         _ => l.surface().map_or(Rect::EMPTY, |s| s.content_bounds()),

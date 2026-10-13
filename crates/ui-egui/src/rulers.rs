@@ -100,10 +100,26 @@ pub fn content_rect(app: &PhotocraftApp, rect: Rect) -> Rect {
     if app.ui.extras.rulers { Rect::from_min_max(rect.min + vec2(RULER, RULER), rect.max) } else { rect }
 }
 
+fn vertical_label(painter: &egui::Painter, center_x: f32, mut y: f32, text: &str, font: &egui::FontId, color: Color32) {
+    for ch in text.chars() {
+        let galley = painter.layout_no_wrap(ch.to_string(), font.clone(), color);
+        let height = galley.size().y;
+        painter.galley(pos2(center_x - galley.size().x * 0.5, y), galley, color);
+        y += height;
+    }
+}
+
 /// Tick step (document px) so major ticks are at least ~60 screen px apart: 1, 2, 5, 10, 20, 50…
 #[cfg(test)]
 fn tick_step(zoom: f32) -> f64 {
     nice_step(60.0 / zoom.max(1e-4) as f64, true)
+}
+
+pub(crate) fn physical_grid_steps(doc: &Document, g: &photocraft_engine::prefs::GuidesGridAndSlices, ppi: f64) -> Option<[f64; 2]> {
+    let legacy = photocraft_doc::PhysicalResolution::square(f64::from(doc.resolution_dpi));
+    let resolution = doc.physical_resolution.as_ref().unwrap_or(&legacy);
+    resolution.validate().ok()?;
+    Some([g.major_px(resolution.x_dpi, doc.size.width as f64, ppi), g.major_px(resolution.y_dpi, doc.size.height as f64, ppi)])
 }
 
 /// View › Show › Grid, from Preferences › Guides, Grid & Slices (spacing, subdivisions, colour,
@@ -111,24 +127,48 @@ fn tick_step(zoom: f32) -> f64 {
 pub fn draw_grid(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) {
     let g = &app.session.prefs().guides_grid_and_slices;
     let ppi = app.session.prefs().units_and_rulers.point_size.per_inch();
-    let major = g.major_px(doc.resolution_dpi.max(1.0) as f64, doc.size.width as f64, ppi);
-    let minor = major / g.subdivisions.max(1) as f64;
+    let Some(majors) = physical_grid_steps(doc, g, ppi) else {
+        return;
+    };
     let base = pref_color(&g.grid_color, Color32::from_gray(140));
     let (w, h) = (doc.size.width as f64, doc.size.height as f64);
-    for (step, alpha) in [(minor, 0.45f32), (major, 1.0)] {
-        if step * (xf.zoom as f64) < 6.0 || (alpha < 1.0 && g.subdivisions <= 1) {
-            continue;
-        }
-        let st = Stroke::new(1.0, base.gamma_multiply(alpha));
-        let mut x = step;
-        while x < w {
-            styled_line(painter, xf.to_screen(x as f32, 0.0), xf.to_screen(x as f32, h as f32), st, g.grid_style);
-            x += step;
-        }
-        let mut y = step;
-        while y < h {
-            styled_line(painter, xf.to_screen(0.0, y as f32), xf.to_screen(w as f32, y as f32), st, g.grid_style);
-            y += step;
+    let clip = painter.clip_rect();
+    let corners = [xf.to_doc(clip.left_top()), xf.to_doc(clip.right_top()), xf.to_doc(clip.left_bottom()), xf.to_doc(clip.right_bottom())];
+    if corners.iter().flatten().any(|v| !v.is_finite()) {
+        return;
+    }
+    let visible = [
+        (
+            corners.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min).clamp(0.0, w),
+            corners.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max).clamp(0.0, w),
+        ),
+        (
+            corners.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min).clamp(0.0, h),
+            corners.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max).clamp(0.0, h),
+        ),
+    ];
+    for (vertical, major, extent) in [(true, majors[0], w), (false, majors[1], h)] {
+        for (step, alpha) in [(major / g.subdivisions.max(1) as f64, 0.45f32), (major, 1.0)] {
+            if !step.is_finite() || step <= 0.0 || step * (xf.zoom as f64) < 6.0 || (alpha < 1.0 && g.subdivisions <= 1) {
+                continue;
+            }
+            let st = Stroke::new(1.0, base.gamma_multiply(alpha));
+            let (start, end) = if vertical { visible[0] } else { visible[1] };
+            let mut at = (start / step).ceil().max(1.0) * step;
+            let mut count = 0usize;
+            while at < extent.min(end) && count < 4096 {
+                if vertical {
+                    styled_line(painter, xf.to_screen(at as f32, 0.0), xf.to_screen(at as f32, h as f32), st, g.grid_style);
+                } else {
+                    styled_line(painter, xf.to_screen(0.0, at as f32), xf.to_screen(w as f32, at as f32), st, g.grid_style);
+                }
+                let next = at + step;
+                if next <= at {
+                    break;
+                }
+                at = next;
+                count += 1;
+            }
         }
     }
 }
@@ -221,12 +261,23 @@ pub fn draw_rulers(app: &mut PhotocraftApp, ui: &mut egui::Ui, full: Rect, xf: &
     // Preferences › Units & Rulers: labels in the ruler unit (percent of the document's side).
     let ur = &app.session.prefs().units_and_rulers;
     let (unit, ppi) = (ur.rulers, ur.point_size.per_inch());
-    let (dpi, size) =
-        app.session.active().map_or((72.0, [1.0, 1.0]), |d| (d.doc.resolution_dpi.max(1.0) as f64, [d.doc.size.width as f64, d.doc.size.height as f64]));
+    let (dpi, size) = if let Some(d) = app.session.active() {
+        let legacy = photocraft_doc::PhysicalResolution::square(f64::from(d.doc.resolution_dpi));
+        let resolution = d.doc.physical_resolution.as_ref().unwrap_or(&legacy);
+        if resolution.validate().is_err() {
+            return;
+        }
+        ([resolution.x_dpi, resolution.y_dpi], [d.doc.size.width as f64, d.doc.size.height as f64])
+    } else {
+        ([72.0, 72.0], [1.0, 1.0])
+    };
     let whole = unit == photocraft_engine::prefs::Unit::Pixels;
     let label = |v: f64, step: f64| -> String { if step >= 1.0 || whole { format!("{}", v.round() as i64) } else { crate::widgets::fmt_num2(v) } };
-    for (vertical, extent) in [(false, size[0]), (true, size[1])] {
-        let px_per_unit = unit.to_px(1.0, dpi, extent, ppi).max(1e-9);
+    for (vertical, extent, axis_dpi) in [(false, size[0], dpi[0]), (true, size[1], dpi[1])] {
+        let px_per_unit = unit.to_px(1.0, axis_dpi, extent, ppi).max(1e-9);
+        if !px_per_unit.is_finite() {
+            continue;
+        }
         let step = nice_step(60.0 / (xf.zoom as f64 * px_per_unit).max(1e-6), whole);
         let (d0, d1) = if vertical {
             (xf.to_doc(left.left_top())[1], xf.to_doc(left.left_bottom())[1])
@@ -235,7 +286,8 @@ pub fn draw_rulers(app: &mut PhotocraftApp, ui: &mut egui::Ui, full: Rect, xf: &
         };
         let (u0, u1) = (d0 / px_per_unit, d1 / px_per_unit);
         let mut v = (u0 / step).floor() * step;
-        while v <= u1 {
+        let mut count = 0usize;
+        while v <= u1 && count < 4096 {
             let at = |u: f64| -> f32 {
                 let px = (u * px_per_unit) as f32;
                 if vertical { xf.to_screen(0.0, px).y } else { xf.to_screen(px, 0.0).x }
@@ -243,10 +295,9 @@ pub fn draw_rulers(app: &mut PhotocraftApp, ui: &mut egui::Ui, full: Rect, xf: &
             let c = at(v);
             if vertical {
                 p.line_segment([pos2(left.right() - RULER, c), pos2(left.right(), c)], tick);
-                // Labels stacked, as in Photoshop.
-                for (i, ch) in label(v, step).chars().enumerate() {
-                    p.text(pos2(left.left() + 3.0, c + 2.0 + i as f32 * 8.5), Align2::LEFT_TOP, ch, font.clone(), t.text_dim);
-                }
+                // Use the actual font height so decimal points and minus signs
+                // do not overlap adjacent glyphs in the narrow vertical ruler.
+                vertical_label(&p, left.center().x, c + 2.0, &label(v, step), &font, t.text_dim);
             } else {
                 p.line_segment([pos2(c, top.bottom() - RULER), pos2(c, top.bottom())], tick);
                 p.text(pos2(c + 2.0, top.top() + 1.0), Align2::LEFT_TOP, label(v, step), font.clone(), t.text_dim);
@@ -260,7 +311,12 @@ pub fn draw_rulers(app: &mut PhotocraftApp, ui: &mut egui::Ui, full: Rect, xf: &
                     p.line_segment([pos2(m, top.bottom() - len), pos2(m, top.bottom())], tick);
                 }
             }
-            v += step;
+            let next = v + step;
+            if next <= v {
+                break;
+            }
+            v = next;
+            count += 1;
         }
     }
     // Pointer position markers.
@@ -304,6 +360,27 @@ pub fn draw_rulers(app: &mut PhotocraftApp, ui: &mut egui::Ui, full: Rect, xf: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vertical_decimal_glyphs_fit_ruler_and_do_not_overlap() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            vertical_label(ui.painter(), 8., 20., "0.25", &egui::FontId::proportional(9.), Color32::WHITE);
+        });
+        output.textures_delta.clear();
+        let glyphs: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|s| if let egui::Shape::Text(t) = &s.shape { Some((t.pos, t.galley.size(), t.galley.text())) } else { None })
+            .collect();
+        assert_eq!(glyphs.iter().map(|v| v.2).collect::<Vec<_>>(), ["0", ".", "2", "5"]);
+        for (pos, size, _) in &glyphs {
+            assert!(pos.x >= 0. && pos.x + size.x <= RULER);
+        }
+        for pair in glyphs.windows(2) {
+            assert!(pair[0].0.y + pair[0].1.y <= pair[1].0.y);
+        }
+    }
 
     #[test]
     fn unit_steps_allow_fractions() {
@@ -399,5 +476,71 @@ mod tests {
         assert!(app.session.active().unwrap().doc.guides.vertical.is_empty());
         app.ui.extras.lock_guides = true;
         assert_eq!(guide_at(&app, 0.0, 0.0), None);
+    }
+    #[test]
+    fn physical_grid_and_ruler_units_measure_each_axis() {
+        let mut doc = Document::new("axes", photocraft_doc::Size::new(144, 288), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        doc.set_physical_resolution(photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: 288.0, unit: photocraft_doc::PhysicalUnit::Inch }).unwrap();
+        doc.resolution_dpi = 999.0;
+        let mut grid = photocraft_engine::prefs::GuidesGridAndSlices { gridline_every: 1.0, grid_unit: Unit::Inches, ..Default::default() };
+        assert_eq!(physical_grid_steps(&doc, &grid, 72.0), Some([144.0, 288.0]));
+        let r = doc.effective_resolution();
+        assert_eq!(Unit::Inches.to_px(1.0, r.x_dpi, 144.0, 72.0), 144.0);
+        assert_eq!(Unit::Inches.to_px(1.0, r.y_dpi, 288.0, 72.0), 288.0);
+        grid.grid_unit = Unit::Percent;
+        grid.gridline_every = 50.0;
+        assert_eq!(physical_grid_steps(&doc, &grid, 72.0), Some([72.0, 144.0]));
+        doc.physical_resolution.as_mut().unwrap().y_dpi = f64::NAN;
+        assert_eq!(physical_grid_steps(&doc, &grid, 72.0), None);
+    }
+}
+
+#[cfg(test)]
+mod physical_resolution_borrow_tests {
+    use super::*;
+    fn unit() -> photocraft_doc::PhysicalUnit {
+        photocraft_doc::PhysicalUnit::Custom(photocraft_doc::CustomUnit {
+            name: "Own".into(),
+            factor: 7.25,
+            digits: 4,
+            symbol: "u".into(),
+            abbreviation: "own".into(),
+        })
+    }
+    fn resolution(x: f64, y: f64) -> photocraft_doc::PhysicalResolution {
+        photocraft_doc::PhysicalResolution { x_dpi: x, y_dpi: y, unit: unit() }
+    }
+
+    #[test]
+    fn grid_custom_legacy_unequal_tiny_and_invalid_controls() {
+        let mut d = Document::new("borrow", photocraft_doc::Size::new(144, 288), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        let mut g = photocraft_engine::prefs::GuidesGridAndSlices { gridline_every: 1.0, grid_unit: Unit::Inches, ..Default::default() };
+        d.resolution_dpi = 999.0;
+        d.physical_resolution = Some(resolution(144.0, 288.0));
+        let before = d.clone();
+        assert_eq!(physical_grid_steps(&d, &g, 72.0), Some([144.0, 288.0]));
+        assert_eq!(d, before);
+        g.grid_unit = Unit::Percent;
+        g.gridline_every = 50.0;
+        assert_eq!(physical_grid_steps(&d, &g, 72.0), Some([72.0, 144.0]));
+        g.grid_unit = Unit::Inches;
+        g.gridline_every = 1.0;
+        d.physical_resolution = Some(resolution(0.5, 0.25));
+        assert_eq!(physical_grid_steps(&d, &g, 72.0), Some([0.5, 0.25]));
+        for y in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            d.physical_resolution = Some(resolution(144.0, y));
+            assert_eq!(physical_grid_steps(&d, &g, 72.0), None);
+        }
+        for name in [String::new(), "bad\0name".into(), "x".repeat((1 << 20) + 1)] {
+            let mut r = resolution(144.0, 288.0);
+            if let photocraft_doc::PhysicalUnit::Custom(u) = &mut r.unit {
+                u.name = name;
+            }
+            d.physical_resolution = Some(r);
+            assert_eq!(physical_grid_steps(&d, &g, 72.0), None);
+        }
+        d.physical_resolution = None;
+        d.resolution_dpi = 72.0;
+        assert_eq!(physical_grid_steps(&d, &g, 72.0), Some([72.0, 72.0]));
     }
 }

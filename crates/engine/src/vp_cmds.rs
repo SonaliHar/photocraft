@@ -3,7 +3,7 @@
 //! ([`photocraft_algo::vanishing`]). The edit lands on the active pixel layer, or on a new layer
 //! with `"newLayer": true` (Photoshop's advice for non-destructive Vanishing Point work).
 
-use photocraft_algo::vanishing::{Edge, Scene, VpPlane, clone_stroke, paste};
+use photocraft_algo::vanishing::{Edge, Scene, VpPlane, clone_stroke, try_paste};
 use photocraft_doc::{Document, Layer, LayerContent, LayerId};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
@@ -75,12 +75,16 @@ fn has_layer(s: &Session) -> std::result::Result<(), String> {
 }
 
 /// Composites `top` over `dst` (premultiplied source-over), same format.
-fn over(dst: &mut Surface, top: &Surface) {
+fn over(dst: &mut Surface, top: &Surface) -> Result<()> {
     let b = top.content_bounds();
     if b.is_empty() {
-        return;
+        return Ok(());
     }
-    let top = if top.format() == dst.format() { top.clone() } else { top.convert(dst.format()) };
+    let top = if top.format() == dst.format() {
+        top.clone()
+    } else {
+        top.try_convert(dst.format()).map_err(|e| crate::EngineError::Other(format!("pixel conversion: {e}")))?
+    };
     let fmt = dst.format();
     let n = fmt.channels();
     let (t, mut d) = (top.read_region(b), dst.read_region(b));
@@ -97,10 +101,20 @@ fn over(dst: &mut Surface, top: &Surface) {
         dp[n - 1] = oa;
     }
     dst.write_region(b, &d);
+    Ok(())
 }
 
 fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
+    if matches!(st.doc.depth, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64)
+        || st
+            .active_layer
+            .and_then(|id| st.doc.layer(id))
+            .and_then(Layer::surface)
+            .is_some_and(|x| matches!(x.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64))
+    {
+        return Err(bad("wide Vanishing Point clone/composite arithmetic is not qualified"));
+    }
     let canvas = st.doc.bounds();
     let sc = scene(p, canvas)?;
     // Paste sources resolved up front (layer pixels or the clipboard).
@@ -137,7 +151,7 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
             active.ok_or_else(|| EngineError::Other("no active layer".into()))?
         };
         // A new layer clones from the visible image; otherwise from the layer itself.
-        let base: Option<Surface> = new_layer.then(|| crate::file_cmds::flattened(doc, doc.pixel_format()));
+        let base: Option<Surface> = if new_layer { Some(crate::file_cmds::flattened(doc, doc.pixel_format())?) } else { None };
         let locks = doc.effective_locks(id);
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         if locks.all || locks.pixels {
@@ -145,8 +159,8 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let surf = l.surface_mut().ok_or_else(|| EngineError::Other("Vanishing Point needs a pixel layer".into()))?;
         for (plane, src, rect, at, width) in &pastes {
-            if let Some(out) = paste(&sc, *plane, src, *rect, *at, *width) {
-                over(surf, &out);
+            if let Some(out) = try_paste(&sc, *plane, src, *rect, *at, *width).map_err(|e| bad(format!("paste: {e}")))? {
+                over(surf, &out)?;
             }
         }
         for (k, c) in clones.iter().enumerate() {
@@ -159,7 +173,7 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
             let mut work = match &base {
                 Some(b) => {
                     let mut w = b.clone();
-                    over(&mut w, surf);
+                    over(&mut w, surf)?;
                     w
                 }
                 None => surf.clone(),

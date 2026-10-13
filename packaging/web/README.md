@@ -162,3 +162,45 @@ PhotoCraft renders with wgpu. It uses **WebGPU** when the browser has it and fal
 For example: `<iframe src="https://example.com/photocraft/?webgl" ...>`.
 
 A browser with neither WebGPU nor WebGL2 gets a message in place of the app.
+
+## Pinned UI assets
+
+The candidate browser build externalizes seven font faces and fourteen translation
+catalogs into `ui-assets/assetpack-v1-51089930431321d226cf0cb56ee8e3028b7c543f93ada4737cc9a737ae674b8d.bin`.
+It is a payload-only 4,001,124-byte file. Compiled Rust descriptors define all
+21 ranges and SHA256 identities; `asset-manifest.json` is audit metadata. The nine
+license files under `ui-assets/licenses/` must travel with the pack.
+Catalogs and license texts use canonical LF bytes: only CRLF pairs collapse;
+Unicode and standalone CR remain exact. Raw source files are not rewritten.
+Inter Regular stays compiled into the text engine. Native builds keep their existing
+assets and require no asset pack.
+
+The candidate `apps/photocraft-web/Trunk.toml` has one Rust `pre_build` hook:
+`cargo run --locked --manifest-path ../../xtask/Cargo.toml -- web-assets --prepare`.
+It completes before Trunk plans its asset copies. Local `trunk build`, official
+`packaging/web/package.sh`, the release CI web job, and the existing Docker builder
+all use that configuration, so a clean checkout needs no manual generated files.
+The hook uses locked Cargo metadata to locate exactly `epaint_default_fonts` 0.36.2
+and its cached registry archive, respects the resolved Cargo registry location,
+and verifies the archive, all source bytes, compiled metadata, and nine licenses.
+Cargo may fetch missing locked registry inputs; for an offline build, first populate
+the Cargo cache and set `CARGO_NET_OFFLINE=true` (Trunk's CLI offline flag alone does
+not configure its external hook). Missing or untrusted font inputs fail with a named
+error. Existing output is checked without replacement, and stale or corrupt output
+stops the build before it can be copied.
+
+For a separate generator audit, run `cargo xtask web-assets --prepare --check`.
+The explicit `--out`, `--font-crate`, and `--font-archive` form remains available for
+controlled external build inputs. `generated/web-ui-assets/` stays ignored; never
+commit the pack or font binaries. Native builds and native tests need no asset pack.
+
+`packaging/web/package.sh`, including `--skip-build`, invokes
+`cargo xtask web-assets --verify-package dist/web/ui-assets`. This verifies whole
+payload and range hashes, all nine licenses, and exact generated descriptor and
+audit metadata bytes without needing the font registry at packaging time. Missing,
+stale, or corrupt files fail packaging. Serve the pack as `application/octet-stream`;
+its content-addressed name permits immutable caching. The decoded length and hashes
+remain authoritative when HTTP compression is enabled.
+
+The existing 25,165,824-byte WASM threshold remains unchanged. A release build must
+prove its emitted WASM size; asset extraction alone is not evidence of meeting it.

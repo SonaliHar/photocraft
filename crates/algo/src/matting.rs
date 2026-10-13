@@ -369,27 +369,39 @@ pub fn refine_buffer(img: Option<&RgbImage>, m: &[f32], w: usize, h: usize, p: &
 
 /// Refines a selection mask. `mask(r)` returns coverage over `r` (row-major); `content` bounds
 /// its non-zero pixels; the result is clipped to `canvas`. `sampler` supplies the guide image
-/// (only read when `radius > 0`). Returns `None` when nothing remains selected.
-pub fn refine_mask(sampler: &dyn Sampler, mask: &(dyn Fn(Rect) -> Vec<f32> + Sync), content: Rect, canvas: Rect, p: &RefineParams) -> Option<Region> {
+/// (only read when `radius > 0`). Returns `Ok(None)` when nothing remains selected;
+/// guide read failures remain errors and never become empty selections.
+pub fn refine_mask(
+    sampler: &dyn Sampler,
+    mask: &(dyn Fn(Rect) -> Vec<f32> + Sync),
+    content: Rect,
+    canvas: Rect,
+    p: &RefineParams,
+) -> crate::segment::SamplingResult<Option<Region>> {
     let content = content.intersect(&canvas);
     if content.is_empty() {
-        return None;
+        return Ok(None);
     }
     let bbox = content.inflate(p.spread()).intersect(&canvas);
+    let (_, _, output_len) = crate::segment::sample_shape(bbox, 1)?;
     let halo = p.halo();
     let mut tiles = Vec::new();
     let mut y = bbox.y0;
     while y < bbox.y1 {
         let mut x = bbox.x0;
         while x < bbox.x1 {
-            tiles.push(Rect::new(x, y, (x + TILE).min(bbox.x1), (y + TILE).min(bbox.y1)));
-            x += TILE;
+            tiles.push(Rect::new(x, y, x.saturating_add(TILE).min(bbox.x1), y.saturating_add(TILE).min(bbox.y1)));
+            x = x.saturating_add(TILE).min(bbox.x1);
         }
-        y += TILE;
+        y = y.saturating_add(TILE).min(bbox.y1);
     }
-    let run = |t: &Rect| -> (Rect, Vec<u8>) {
+    let run = |t: &Rect| -> crate::segment::SamplingResult<(Rect, Vec<u8>)> {
         let r = t.inflate(halo).intersect(&canvas);
         let m = mask(r);
+        let (_, _, count) = crate::segment::sample_shape(r, 4)?;
+        if m.len() != count || m.iter().any(|v| !v.is_finite()) {
+            return Err(photocraft_raster::RasterInputError::LengthMismatch);
+        }
         let (rw, rh) = (r.width() as usize, r.height() as usize);
         let first = m.first().copied().unwrap_or(0.0);
         let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -402,21 +414,24 @@ pub fn refine_mask(sampler: &dyn Sampler, mask: &(dyn Fn(Rect) -> Vec<f32> + Syn
             out
         };
         if (first == 0.0 || first == 1.0) && m.iter().all(|v| *v == first) {
-            return (*t, vec![q(first); cw * ch]);
+            return Ok((*t, crate::segment::filled(cw * ch, q(first))?));
         }
-        let img = p.uses_image().then(|| sampler.rgb(r));
+        let img = p.uses_image().then(|| sampler.rgb(r)).transpose()?;
+        if let Some(img) = &img {
+            crate::segment::check_image(img, rw, rh)?;
+        }
         let out = refine_buffer(img.as_ref(), &m, rw, rh, p);
-        (*t, core(&out))
+        Ok((*t, core(&out)))
     };
     #[cfg(not(target_arch = "wasm32"))]
     let results: Vec<(Rect, Vec<u8>)> = {
         use rayon::prelude::*;
-        tiles.par_iter().map(run).collect()
+        tiles.par_iter().map(run).collect::<crate::segment::SamplingResult<Vec<_>>>()?
     };
     #[cfg(target_arch = "wasm32")]
-    let results: Vec<(Rect, Vec<u8>)> = tiles.iter().map(run).collect();
+    let results: Vec<(Rect, Vec<u8>)> = tiles.iter().map(run).collect::<crate::segment::SamplingResult<Vec<_>>>()?;
     let bw = bbox.width() as usize;
-    let mut out = vec![0u8; bw * bbox.height() as usize];
+    let mut out = crate::segment::filled(output_len, 0u8)?;
     for (t, data) in results {
         let cw = t.width() as usize;
         for (yy, row) in data.chunks_exact(cw).enumerate() {
@@ -424,7 +439,7 @@ pub fn refine_mask(sampler: &dyn Sampler, mask: &(dyn Fn(Rect) -> Vec<f32> + Syn
             out[o..o + cw].copy_from_slice(row);
         }
     }
-    crate::segment::trim_region(Region { bbox, mask: out })
+    Ok(crate::segment::trim_region(Region { bbox, mask: out }))
 }
 
 /// A mask reader over a [`Region`] (zero outside its box).
@@ -695,7 +710,7 @@ mod tests {
         let reg = Region { bbox: Rect::new(0, 0, w as i32, h as i32), mask };
         let p = RefineParams { radius: 6.0, feather: 2.0, contrast: 10.0, ..Default::default() };
         let canvas = reg.bbox;
-        let out = refine_mask(&s, &region_reader(&reg), canvas, canvas, &p).unwrap();
+        let out = refine_mask(&s, &region_reader(&reg), canvas, canvas, &p).unwrap().unwrap();
         let whole: Vec<f32> = reg.mask.iter().map(|v| *v as f32 / 255.0).collect();
         let full = refine_buffer(Some(&img), &whole, w, h, &p);
         let mut maxd = 0.0f32;

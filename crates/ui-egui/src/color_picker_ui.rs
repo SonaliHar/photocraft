@@ -750,7 +750,7 @@ mod screen_integration_tests {
             app
         });
         h.run_steps(8);
-        let before = h.state().session.active().unwrap().history.entries().len();
+        let before = h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
         let fg = h.state().session.tools.foreground;
         h.get_by_label("Set the text color").click();
         h.run_steps(6);
@@ -758,7 +758,7 @@ mod screen_integration_tests {
         h.get_by_label("Pick screen color").click();
         h.run_steps(6);
         assert_eq!(h.state().ui.dialogs.last().unwrap().fields["color"], "#ff8800");
-        assert_eq!(h.state().session.active().unwrap().history.entries().len(), before, "sampling is only a dialog field change");
+        assert_eq!(h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), before, "sampling is only a dialog field change");
         assert_eq!(h.state().session.tools.foreground, fg);
         h.get_by_label("OK").click();
         h.run_steps(4);
@@ -766,6 +766,6 @@ mod screen_integration_tests {
         let layer = doc.layer(photocraft_doc::LayerId(id)).unwrap();
         let photocraft_doc::LayerContent::Text(text) = &layer.content else { panic!("not text") };
         assert_eq!(text.color.to_rgba8(), [255, 136, 0, 255]);
-        assert_eq!(h.state().session.active().unwrap().history.entries().len(), before + 1);
+        assert_eq!(h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), before + 1);
     }
 }

@@ -170,7 +170,7 @@ fn edits_to_a_frame_survive_scrubbing_and_render() {
     let stem = s.active().unwrap().doc.name.rsplit_once('.').map_or(s.active().unwrap().doc.name.clone(), |(a, _)| a.to_string());
     let f1 = std::fs::read(format!("{out}/{stem}_0001.png")).unwrap();
     let doc = photocraft_io::import("f1.png", &f1).unwrap().document;
-    let flat = crate::file_cmds::flattened(&doc, doc.pixel_format());
+    let flat = crate::file_cmds::flattened(&doc, doc.pixel_format()).unwrap();
     let q = flat.pixel(2, 2);
     assert!(q[2] > 0.99 && q[0] < 0.01, "rendered frame 1 is blue: {q:?}");
 }

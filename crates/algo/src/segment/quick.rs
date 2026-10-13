@@ -38,9 +38,9 @@ pub const WORK_PX: usize = 160_000;
 /// Grows a selection from a brush stroke (`points` in document pixels, brush diameter `size`).
 /// Returns the new region (to be added to or subtracted from the current selection), or `None`
 /// when the stroke misses the canvas.
-pub fn quick_select(sampler: &dyn Sampler, canvas: Rect, points: &[(f32, f32)], size: f32, work_px: usize) -> Option<Region> {
+pub fn quick_select(sampler: &dyn Sampler, canvas: Rect, points: &[(f32, f32)], size: f32, work_px: usize) -> super::SamplingResult<Option<Region>> {
     if points.is_empty() {
-        return None;
+        return Ok(None);
     }
     let size = size.max(1.0);
     let r = size / 2.0;
@@ -53,22 +53,23 @@ pub fn quick_select(sampler: &dyn Sampler, canvas: Rect, points: &[(f32, f32)], 
     }
     let bbox = Rect::new(x0.floor() as i32, y0.floor() as i32, (x1.ceil() as i32).saturating_add(1), (y1.ceil() as i32).saturating_add(1)).intersect(&canvas);
     if bbox.is_empty() {
-        return None;
+        return Ok(None);
     }
     let margin = (size * 6.0).max(512.0) as i32;
     let window = bbox.inflate(margin).intersect(&canvas);
     let step = super::scale_for(window, work_px);
-    let img = sampler.rgb_scaled(window, step);
+    let img = sampler.rgb_scaled(window, step)?;
+    super::check_image(&img, (window.width() as usize).div_ceil(step), (window.height() as usize).div_ceil(step))?;
     let (lw, lh) = (img.w, img.h);
     let st = step as f32;
     let pts: Vec<(f32, f32)> = points.iter().map(|&(x, y)| ((x - window.x0 as f32) / st, (y - window.y0 as f32) / st)).collect();
     let seeds = stroke_mask(&pts, (r / st).max(0.75), lw, lh);
     if !seeds.iter().any(|s| *s) {
-        return None;
+        return Ok(None);
     }
     let (fg, bg, low) = segment(&img, &seeds);
     if !low.iter().any(|v| *v) {
-        return None;
+        return Ok(None);
     }
     super::finish_region(sampler, window, step, &low, lw, lh, Some((&fg, &bg)))
 }

@@ -64,7 +64,7 @@ pub(crate) fn document(mode: ColorMode, depth: SampleType, selection: bool) -> (
     target.opacity = 0.8;
     target.blend = BlendMode::Multiply;
     let mut m = LayerMask::reveal_all();
-    m.surface.fill_rect(Rect::from_xywh(0, 0, 10, 10), &[0.3]);
+    std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::from_xywh(0, 0, 10, 10), &[0.3]);
     target.mask = Some(m);
     let id = target.id;
     let mut clip = Layer::raster("clipped", fmt);
@@ -91,7 +91,7 @@ pub(crate) fn document(mode: ColorMode, depth: SampleType, selection: bool) -> (
 /// The document after running the real destructive command on `target`.
 pub(crate) fn destructive(doc: &Document, target: LayerId, kind: &str, params: &Value) -> Option<Document> {
     let mut s = photocraft_engine::Session::new();
-    s.add_document(doc.clone(), None);
+    s.add_document(doc.clone(), None).unwrap();
     s.select_layer(target).ok()?;
     s.execute(&format!("image.adjustments.{kind}"), params.clone()).ok()?;
     Some((*s.active()?.doc).clone())
@@ -99,7 +99,7 @@ pub(crate) fn destructive(doc: &Document, target: LayerId, kind: &str, params: &
 
 /// Largest premultiplied difference between two composites.
 pub(crate) fn max_diff(a: &Document, b: &Document) -> f32 {
-    let (ra, rb) = (photocraft_compose::render(a, a.bounds()), photocraft_compose::render(b, b.bounds()));
+    let (ra, rb) = (photocraft_compose::render(a, a.bounds()).unwrap(), photocraft_compose::render(b, b.bounds()).unwrap());
     let pm = |p: &[f32; 4]| [p[0] * p[3], p[1] * p[3], p[2] * p[3], p[3]];
     ra.px.iter().zip(&rb.px).map(|(x, y)| (0..4).map(|c| (pm(x)[c] - pm(y)[c]).abs()).fold(0.0, f32::max)).fold(0.0, f32::max)
 }
@@ -188,10 +188,10 @@ fn preview_changes_nothing_outside_its_region() {
     for selection in [false, true] {
         let (doc, target) = document(ColorMode::Rgb, SampleType::U8, selection);
         let r = region(&doc, target);
-        let before = photocraft_compose::render(&doc, doc.bounds());
+        let before = photocraft_compose::render(&doc, doc.bounds()).unwrap();
         for kind in KINDS {
             let p = preview_document(&doc, target, kind, &sample(kind)).unwrap();
-            let after = photocraft_compose::render(&p, doc.bounds());
+            let after = photocraft_compose::render(&p, doc.bounds()).unwrap();
             for (i, (a, b)) in before.px.iter().zip(&after.px).enumerate() {
                 let (x, y) = ((i % 40) as i32, (i / 40) as i32);
                 if !r.contains(x, y) {
@@ -204,7 +204,7 @@ fn preview_changes_nothing_outside_its_region() {
 
 fn app_with(doc: Document, target: LayerId) -> PhotocraftApp {
     let mut s = photocraft_engine::Session::new();
-    s.add_document(doc, None);
+    s.add_document(doc, None).unwrap();
     s.select_layer(target).unwrap();
     PhotocraftApp::new(s, crate::Services::default())
 }
@@ -229,7 +229,7 @@ fn dialog_previews_through_the_layer() {
         assert!(first.layer(PREVIEW_LAYER).is_some());
         // Unchanged settings: the cached preview, same key.
         let (again, k1b) = display_doc(app, 0).unwrap();
-        assert!(Arc::ptr_eq(&first, &again) && k1 == k1b);
+        assert!(std::ptr::eq((first).as_ref(), (again).as_ref()) && k1 == k1b);
         // A change: new key, and the canvas only recomposites the target's area.
         let d = app.ui.dialog_mut(id).unwrap();
         d.fields.insert("gamma".into(), json!(1.6));
@@ -260,7 +260,7 @@ fn dialog_previews_through_the_layer() {
         assert!(display_doc(app, 0).is_none());
         assert!(on_layer(app, 0), "still the layer path, just hidden");
         harness.run_steps(2);
-        assert!(Arc::ptr_eq(&harness.state().session.active().unwrap().doc, &committed), "previewing leaves the document alone");
+        assert!(std::ptr::eq((harness.state().session.active().unwrap().doc).as_ref(), (committed).as_ref()), "previewing leaves the document alone");
         if confirm {
             crate::dialogs::confirm(harness.state_mut(), id).unwrap();
             let st = harness.state().session.active().unwrap();
@@ -271,7 +271,7 @@ fn dialog_previews_through_the_layer() {
             harness.state_mut().ui.close_dialog(id);
             harness.run_steps(2);
             let st = harness.state().session.active().unwrap();
-            assert!(Arc::ptr_eq(&st.doc, &committed), "Cancel leaves the document untouched");
+            assert!(std::ptr::eq((st.doc).as_ref(), (committed).as_ref()), "Cancel leaves the document untouched");
             assert_eq!(st.history.past_len(), steps);
         }
         let app = harness.state_mut();
@@ -317,13 +317,13 @@ fn proxy_factor_follows_the_zoom() {
 fn proxy_preview_has_its_own_ids() {
     let (doc, target) = document(ColorMode::Rgb, SampleType::U8, true);
     let base = base_document(&doc, target).unwrap();
-    let proxy = proxy_base(&base, 2);
+    let proxy = proxy_base(&base, 2).unwrap();
     assert_eq!((proxy.size.width, proxy.size.height), (20, 16));
     assert_ne!(proxy.id, doc.id);
     assert!(proxy.walk().iter().all(|(_, _, l)| doc.layer(l.id).is_none() && l.id != PREVIEW_LAYER));
     let p = proxy_with_settings(&proxy, "curves", &sample("curves")).unwrap();
     let full = with_settings(&base, "curves", &sample("curves")).unwrap();
-    let (a, b) = (photocraft_compose::render(&p, p.bounds()), photocraft_compose::render(&full, full.bounds()));
+    let (a, b) = (photocraft_compose::render(&p, p.bounds()).unwrap(), photocraft_compose::render(&full, full.bounds()).unwrap());
     // Nearest-neighbour proxy: pixel (x, y) shows the full composite at (2x, 2y).
     for y in 0..16 {
         for x in 0..20 {

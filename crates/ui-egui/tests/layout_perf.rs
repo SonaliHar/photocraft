@@ -9,7 +9,7 @@ mod layout_doc;
 
 use egui::{Event, Modifiers, PointerButton, Pos2};
 use egui_kittest::Harness;
-use photocraft_doc::{Document, LayerContent, LayerId};
+use photocraft_doc::{LayerContent, LayerId};
 use photocraft_engine::layer_multi_cmds::{layer_bounds, move_targets, moved};
 use photocraft_geom::Rect;
 use photocraft_ui_egui::canvas::ViewXform;
@@ -25,7 +25,7 @@ fn app() -> (H, layout_doc::Handles) {
     let h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_pixels_per_point(1.0).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
-        app.session.open_document(doc, None);
+        app.session.open_document(doc, None).unwrap();
         app.sync_views();
         app
     });
@@ -34,7 +34,7 @@ fn app() -> (H, layout_doc::Handles) {
     (h, handles)
 }
 
-fn doc(h: &H) -> std::sync::Arc<Document> {
+fn doc(h: &H) -> photocraft_engine::document_snapshot::DocumentSnapshot {
     h.state().session.active().expect("document").doc.clone()
 }
 
@@ -110,17 +110,17 @@ fn move_drag_follows_the_pointer_and_is_one_undo_step() {
         h.state_mut().run("layer.select", json!({"layer": id.0})).expect("select");
         h.run_steps(2);
         let before = bounds(&h, id);
-        let undo = h.state().session.active().expect("doc").history.entries().len();
+        let undo = h.state().session.active().expect("doc").history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
         let from = point_on(&h, id);
         press_and_drag(&mut h, from, [40.0, 25.0], 6);
         // While dragging the document is untouched (no history step per pointer move) and the
         // canvas shows the moved layers.
         assert_eq!(bounds(&h, id), before, "the drag commits nothing until release");
-        assert_eq!(h.state().session.active().expect("doc").history.entries().len(), undo);
+        assert_eq!(h.state().session.active().expect("doc").history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), undo);
         assert!(h.state().perf.spans.contains_key("move preview"), "the canvas shows the layers moving");
         release(&mut h, [from[0] + 40.0, from[1] + 25.0]);
         assert_eq!(bounds(&h, id), before.translate(40, 25), "the layer lands where the pointer went");
-        assert_eq!(h.state().session.active().expect("doc").history.entries().len(), undo + 1, "one undo step");
+        assert_eq!(h.state().session.active().expect("doc").history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), undo + 1, "one undo step");
         h.state_mut().run("edit.undo", json!({})).expect("undo");
         assert_eq!(bounds(&h, id), before);
     }
@@ -151,7 +151,7 @@ fn a_move_tool_click_selects_without_moving() {
     h.state_mut().ui.tool = Tool::Move;
     h.state_mut().ui.tool_options.move_auto_select = true;
     for id in [k.text, k.shape, k.pixel, k.text] {
-        let before = (bounds(&h, id), h.state().session.active().expect("doc").history.entries().len());
+        let before = (bounds(&h, id), h.state().session.active().expect("doc").history.entries(&photocraft_engine::read_control_none()).unwrap().values().len());
         let p = screen(&h, point_on(&h, id));
         h.event(Event::PointerMoved(p));
         h.step();
@@ -160,7 +160,7 @@ fn a_move_tool_click_selects_without_moving() {
         h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
         h.run_steps(2);
         assert_eq!(h.state().session.active().and_then(|s| s.active_layer), Some(id), "the click selects the layer under it");
-        assert_eq!((bounds(&h, id), h.state().session.active().expect("doc").history.entries().len()), before, "and moves nothing");
+        assert_eq!((bounds(&h, id), h.state().session.active().expect("doc").history.entries(&photocraft_engine::read_control_none()).unwrap().values().len()), before, "and moves nothing");
     }
 }
 
@@ -195,7 +195,7 @@ fn selecting_recomposites_nothing_and_hiding_only_the_layer() {
 fn the_move_preview_is_what_the_move_commits() {
     let (d, k) = layout_doc::build(layout_doc::Spec::small());
     let mut s = photocraft_engine::Session::new();
-    s.open_document(d, None);
+    s.open_document(d, None).unwrap();
     for id in [k.text, k.shape, k.group, k.smart, k.pixel, k.closed_group] {
         s.execute("layer.select", json!({"layer": id.0})).expect("select");
         let before = s.active().expect("doc").doc.clone();
@@ -207,7 +207,7 @@ fn the_move_preview_is_what_the_move_commits() {
         let dmg = after.last_damage.unwrap_or_else(|| panic!("{id:?} {}: a move has a damage rect", before.layer(id).map_or("?", |l| l.content.kind_name())));
         let b0 = photocraft_compose::composite_bounds(before.layer(id).expect("layer"), before.bounds()).expect("bounds");
         assert!(dmg.contains_rect(&b0) && dmg.contains_rect(&b0.translate(13, -7).intersect(&before.bounds())), "{dmg:?} vs {b0:?}");
-        let (a, b) = (photocraft_compose::flatten(&preview), photocraft_compose::flatten(&after.doc));
+        let (a, b) = (photocraft_compose::flatten(&preview).unwrap(), photocraft_compose::flatten(&after.doc).unwrap());
         let worst = a.px.iter().zip(&b.px).flat_map(|(p, q)| (0..4).map(move |c| (p[c] * p[3] - q[c] * q[3]).abs())).fold(0.0f32, f32::max);
         assert!(worst <= 2.0 / 255.0, "{id:?}: preview differs from the commit by {}/255", worst * 255.0);
         s.execute("edit.undo", json!({})).expect("undo");
@@ -241,7 +241,7 @@ fn layout_document_composites_on_the_gpu_like_the_cpu() {
     let (_, texts) = layout_doc::count(&d);
     assert!(texts >= 10);
     assert!(d.walk().iter().any(|(_, _, l)| matches!(l.content, LayerContent::Smart(_))));
-    let cpu = photocraft_compose::flatten(&d);
+    let cpu = photocraft_compose::flatten(&d).unwrap();
     let gpu = photocraft_gpu::render_to_vec(&mut comp, &device, &queue, &d, d.bounds()).expect("the layout composites on the GPU");
     let mut worst = 0.0f32;
     for (c, g) in cpu.px.iter().zip(&gpu) {

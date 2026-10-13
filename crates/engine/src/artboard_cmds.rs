@@ -14,7 +14,7 @@ use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, color_param, int, int_i32};
-use crate::file_cmds::{SaveOpts, encode, f64_param, join, native_doc, sanitize, save_doc, stem, str_param, write_file};
+use crate::file_cmds::{SaveOpts, encode, f64_param, join, native_doc, sanitize, save_doc_with_protection_document, stem, str_param, write_file_with_source};
 use crate::{EngineError, Result, Session};
 
 /// Artboard size presets (name, width, height) in pixels, Photoshop's common devices and pages.
@@ -77,7 +77,7 @@ fn has_plain_group(s: &Session) -> std::result::Result<(), String> {
 
 fn has_free_layers(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document open")?;
-    let sel = d.selected_layers();
+    let sel = d.selection_ids();
     if sel.is_empty() {
         return Err("select one or more layers".into());
     }
@@ -149,6 +149,16 @@ fn xywh(r: Rect) -> [i64; 4] {
 /// it puts it right of the board, a [`GAP`] away, sliding further right past any board in the
 /// way. Moves the copy, layer `id` (just inserted on top of its original), there with its
 /// contents and grows the canvas to show it; anything that isn't an artboard is left alone.
+mod place_copy_controlled;
+
+pub(crate) fn place_copy_preflight_with_interrupt(doc: &Document, id: LayerId, control: &photocraft_raster::Interrupt<'_>) -> Result<()> {
+    place_copy_controlled::preflight(doc, id, control)
+}
+
+pub(crate) fn place_copy_with_interrupt(doc: &mut Document, id: LayerId, control: &photocraft_raster::Interrupt<'_>) -> Result<()> {
+    place_copy_controlled::run(doc, id, control)
+}
+
 pub(crate) fn place_copy(doc: &mut Document, id: LayerId) -> Result<()> {
     let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let Some(r) = l.artboard().map(|a| a.rect) else { return Ok(()) };
@@ -175,7 +185,7 @@ pub(crate) fn place_copy(doc: &mut Document, id: LayerId) -> Result<()> {
     doc.size = Size::new(x1.clamp(1, 300_000) as u32, doc.size.height);
     let snapshot = doc.clone();
     let copy = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-    crate::commands::translate_layer(&snapshot, copy, dx, 0);
+    crate::commands::try_translate_layer(&snapshot, copy, dx, 0)?;
     crate::vector_cmds::translate_vectors(&snapshot, copy, f64::from(dx), 0.0);
     fit_canvas(doc);
     Ok(())
@@ -268,7 +278,7 @@ fn artboard_from_group(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
-    let sel = crate::layer_multi_cmds::selected(s);
+    let sel = crate::layer_multi_cmds::selected(s)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = d.doc.bounds();
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
@@ -333,7 +343,7 @@ fn set_props(s: &mut Session, p: &Value) -> Result<Value> {
         if move_contents && (dx, dy) != (0, 0) {
             let snapshot = doc.clone();
             let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-            crate::commands::translate_layer(&snapshot, l, dx, dy);
+            crate::commands::try_translate_layer(&snapshot, l, dx, dy)?;
             crate::vector_cmds::translate_vectors(&snapshot, l, f64::from(dx), f64::from(dy));
         }
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
@@ -387,7 +397,7 @@ pub fn artboard_document(doc: &Document, id: LayerId) -> Result<Option<Document>
     };
     let mut group = l.clone();
     group.visible = true;
-    crate::commands::translate_layer(doc, &mut group, dx, dy);
+    crate::commands::try_translate_layer(doc, &mut group, dx, dy)?;
     crate::vector_cmds::translate_vectors(doc, &mut group, f64::from(dx), f64::from(dy));
     let mut one = doc.clone();
     one.name = l.name.clone();
@@ -430,12 +440,13 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
+    let source = d.source.clone();
     let doc = d.doc.clone();
     let mut files = Vec::new();
     for one in chosen_documents(&doc, p)? {
         let name = if prefix.is_empty() { sanitize(&one.name) } else { format!("{}_{}", sanitize(&prefix), sanitize(&one.name)) };
         let path = join(&dir, &format!("{name}.{format}"));
-        save_doc(&one, &path, SaveOpts::from_params(p))?;
+        save_doc_with_protection_document(&one, &path, SaveOpts::from_params(p), &doc, source.as_ref())?;
         files.push(path);
     }
     if files.is_empty() {
@@ -444,11 +455,31 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"files": files}))
 }
 
-/// A minimal PDF with one page per JPEG image: (width px, height px, dpi, JPEG bytes).
+/// One PDF page: (width px, height px, (x DPI, y DPI), JPEG bytes).
+pub type RasterPdfPage = (u32, u32, (f64, f64), Vec<u8>);
+
+/// A minimal PDF with one page per JPEG image.
 /// Pages are sized so the image prints at its resolution.
-pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
-    let mut out: Vec<u8> = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec();
+pub fn raster_pdf(pages: &[RasterPdfPage]) -> Result<Vec<u8>> {
+    let cmd = "file.export.artboardsToPdf";
+    // Bound object identifiers, aggregate output and input-sized reservations before writing.
+    if pages.is_empty() || pages.len() > 10_000 {
+        return Err(bad(cmd, "PDF requires between 1 and 10000 pages"));
+    }
+    let objects = pages.len().checked_mul(3).and_then(|n| n.checked_add(2)).ok_or_else(|| bad(cmd, "PDF object count overflow"))?;
+    let mut output_bound = pages.len().checked_mul(4096).and_then(|n| n.checked_add(4096)).ok_or_else(|| bad(cmd, "PDF output size overflow"))?;
+    for (w, h, (x_dpi, y_dpi), jpeg) in pages {
+        pdf_page_points(*w, *h, (*x_dpi, *y_dpi))?;
+        output_bound = output_bound.checked_add(jpeg.len()).ok_or_else(|| bad(cmd, "PDF output size overflow"))?;
+        if output_bound > 512 << 20 {
+            return Err(bad(cmd, "PDF output exceeds the 512 MiB buffer limit"));
+        }
+    }
+    let mut out: Vec<u8> = Vec::new();
+    out.try_reserve_exact(output_bound).map_err(|_| bad(cmd, "PDF output allocation failed"))?;
+    out.extend_from_slice(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n");
     let mut offsets: Vec<usize> = Vec::new();
+    offsets.try_reserve_exact(objects).map_err(|_| bad(cmd, "PDF object allocation failed"))?;
     let mut obj = |out: &mut Vec<u8>, body: &[u8]| {
         offsets.push(out.len());
         out.extend_from_slice(format!("{} 0 obj\n", offsets.len()).as_bytes());
@@ -456,12 +487,15 @@ pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
         out.extend_from_slice(b"\nendobj\n");
     };
     // Objects: 1 catalog, 2 page tree, then per page: page, contents, image.
-    let kids: Vec<String> = (0..pages.len()).map(|i| format!("{} 0 R", 3 + i * 3)).collect();
+    let mut kids = Vec::new();
+    kids.try_reserve_exact(pages.len()).map_err(|_| bad(cmd, "PDF page allocation failed"))?;
+    for i in 0..pages.len() {
+        kids.push(format!("{} 0 R", 3 + i * 3));
+    }
     obj(&mut out, b"<< /Type /Catalog /Pages 2 0 R >>");
     obj(&mut out, format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids.join(" "), pages.len()).as_bytes());
-    for (i, (w, h, dpi, jpeg)) in pages.iter().enumerate() {
-        let k = 72.0 / f64::from(dpi.max(1.0));
-        let (pw, ph) = (f64::from(*w) * k, f64::from(*h) * k);
+    for (i, (w, h, (x_dpi, y_dpi), jpeg)) in pages.iter().enumerate() {
+        let (pw, ph) = (f64::from(*w) * (72.0 / x_dpi), f64::from(*h) * (72.0 / y_dpi));
         let (contents, image) = (4 + i * 3, 5 + i * 3);
         obj(
             &mut out,
@@ -477,6 +511,8 @@ pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
             jpeg.len()
         )
         .into_bytes();
+        img.try_reserve_exact(jpeg.len().checked_add(16).ok_or_else(|| bad(cmd, "PDF image size overflow"))?)
+            .map_err(|_| bad(cmd, "PDF image allocation failed"))?;
         img.extend_from_slice(jpeg);
         img.extend_from_slice(b"\nendstream");
         obj(&mut out, &img);
@@ -487,7 +523,18 @@ pub fn raster_pdf(pages: &[(u32, u32, f32, Vec<u8>)]) -> Vec<u8> {
         out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
     }
     out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", offsets.len() + 1).as_bytes());
-    out
+    Ok(out)
+}
+
+fn pdf_page_points(width: u32, height: u32, (x_dpi, y_dpi): (f64, f64)) -> Result<(f64, f64)> {
+    let cmd = "file.export.artboardsToPdf";
+    photocraft_doc::PhysicalResolution { x_dpi, y_dpi, unit: photocraft_doc::PhysicalUnit::Inch }
+        .validate().map_err(|error| bad(cmd, error.to_string()))?;
+    let (pw, ph) = (f64::from(width) * (72.0 / x_dpi), f64::from(height) * (72.0 / y_dpi));
+    if width == 0 || height == 0 || !pw.is_finite() || !ph.is_finite() || pw < 0.0005 || ph < 0.0005 {
+        return Err(bad(cmd, "PDF page size must be finite, positive and representable in points"));
+    }
+    Ok((pw, ph))
 }
 
 /// File › Export › Artboards to PDF: one page per board (flattened over white, JPEG-encoded).
@@ -495,11 +542,15 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToPdf";
     let path = str_param(p, "path", cmd)?.to_string();
     let d = s.active().ok_or(EngineError::NoDocument)?;
+    let source = d.source.clone();
     let doc = d.doc.clone();
+    let resolution = doc.effective_resolution();
+    resolution.validate().map_err(|error| bad(cmd, error.to_string()))?;
     let quality = f64_param(p, "quality").or(Some(10.0));
     let mut pages = Vec::new();
     for one in chosen_documents(&doc, p)? {
-        let buf = photocraft_compose::flatten(&one).over_background([1.0, 1.0, 1.0]);
+        pdf_page_points(one.size.width, one.size.height, (resolution.x_dpi, resolution.y_dpi))?;
+        let buf = photocraft_compose::flatten(&one)?.over_background([1.0, 1.0, 1.0]);
         let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
         let mut flat = Document::new(&one.name, one.size, ColorMode::Rgb, SampleType::U8);
         let mut surf = Surface::new(fmt);
@@ -507,12 +558,12 @@ fn artboards_to_pdf(s: &mut Session, p: &Value) -> Result<Value> {
         surf.write_region(one.bounds(), &vals);
         flat.layers.push(Layer::new("Background", LayerContent::Raster(surf)));
         let (jpeg, _) = encode(&flat, "page.jpg", quality)?;
-        pages.push((one.size.width, one.size.height, doc.resolution_dpi, jpeg));
+        pages.push((one.size.width, one.size.height, (resolution.x_dpi, resolution.y_dpi), jpeg));
     }
     if pages.is_empty() {
         return Err(bad(cmd, "no matching artboards"));
     }
-    write_file(&path, &raster_pdf(&pages))?;
+    write_file_with_source(&path, &raster_pdf(&pages)?, &doc, source.as_ref())?;
     Ok(json!({"path": path, "pages": pages.len()}))
 }
 

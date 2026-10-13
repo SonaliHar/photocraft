@@ -25,7 +25,7 @@ fn all_seven_languages_render_camera_raw_and_switch_without_resetting_view_or_fi
         h.state_mut().session.prefs.edit(|p| p.interface.language = lang.code().into());
         h.run_steps(4);
         let tr = |s| i18n::tr_ctx(lang, "cameraRaw", s);
-        let before = control::inspect(h.state(), &ctx)["cameraRaw"].clone();
+        let before = control::inspect(h.state(), &ctx).unwrap()["cameraRaw"].clone();
         for section in ["Light", "Color", "Effects", "Curve", "Color Mixer", "Color Grading", "Detail"] {
             assert!(h.query_by_label(tr(section)).is_some(), "{}: {section}", lang.code());
         }
@@ -87,7 +87,7 @@ fn all_seven_languages_render_camera_raw_and_switch_without_resetting_view_or_fi
             h.event(egui::Event::PointerButton { pos: outside, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
         }
         h.run_steps(3);
-        let preview = control::inspect(h.state(), &ctx)["cameraRaw"]["previewRect"].clone();
+        let preview = control::inspect(h.state(), &ctx).unwrap()["cameraRaw"]["previewRect"].clone();
         h.hover_at(pos2((preview[0].as_f64().unwrap() + preview[2].as_f64().unwrap()) as f32 * 0.5, 400.0));
         h.run_steps(3);
         if let Ok(dir) = std::env::var("PHOTOCRAFT_LOCALE_SNAPSHOTS") {
@@ -99,7 +99,7 @@ fn all_seven_languages_render_camera_raw_and_switch_without_resetting_view_or_fi
         h.run_steps(3);
         assert!(h.query_by_label("Aqua").is_some(), "{} → en: preserve the open section", lang.code());
         assert!(h.query_by_label("Exposure").is_none(), "{} → en: Light stays collapsed", lang.code());
-        let after = control::inspect(h.state(), &ctx)["cameraRaw"].clone();
+        let after = control::inspect(h.state(), &ctx).unwrap()["cameraRaw"].clone();
         assert_eq!(after["params"], before["params"]);
         assert_eq!(after["previewRevision"], before["previewRevision"]);
         assert_eq!(after["histogram"], before["histogram"]);

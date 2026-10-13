@@ -100,7 +100,19 @@ impl Transform {
     }
 
     pub fn with_options(src: &Profile, dst: &Profile, opts: TransformOptions) -> Result<Transform, CmsError> {
-        let stages = link_stages(src, dst, opts.intent, opts.bpc)?;
+        // A valid same-space RGB/Gray assignment does not require an inverse LUT.
+        // Validate its interpretation before admitting exact raw sample identity.
+        if exact_color_model(src, dst) && matches!(src.color_space, ColorSpace::Rgb | ColorSpace::Gray) {
+            crate::xcf_color::validate_profile(src)?;
+            return Ok(Self::from_pipeline(Pipeline::new(src.channels(), Vec::new()), opts));
+        }
+        let mut stages = link_stages(src, dst, opts.intent, opts.bpc)?;
+        // Identical parsed models need no color conversion. A PCS round trip would
+        // introduce matrix/inverse rounding and destroy authoritative wide bits.
+        // Do not use same_colors: its perceptual tolerance is not an identity proof.
+        if exact_color_model(src, dst) {
+            stages.clear();
+        }
         let mut t = Self::from_pipeline(Pipeline::new(src.channels(), stages), opts);
         if opts.intent != Intent::AbsoluteColorimetric {
             t.fix_white(src.color_space, dst.color_space);
@@ -230,6 +242,17 @@ impl Transform {
     #[inline]
     pub fn eval(&self, input: &[f32], out: &mut [f32]) {
         self.pipeline.eval(input, out);
+    }
+
+    /// Wide, checked color evaluation; never implicitly narrows a source sample to f32.
+    /// Invalid stages and nonfinite input/output return errors without modifying out.
+    pub fn try_eval_f64(&self, input: &[f64], out: &mut [f64]) -> Result<(), CmsError> {
+        self.pipeline.try_eval_f64(input, out)
+    }
+
+    /// Exact identity provenance, including identical-profile construction.
+    pub fn is_identity(&self) -> bool {
+        self.inputs == self.outputs && self.pipeline.stages.is_empty()
     }
 
     /// Lookup-table evaluation of one colour (what integer buffers use).
@@ -457,6 +480,24 @@ impl Transform {
     fn check(&self, ss: usize, ds: usize) {
         assert!(ss >= self.inputs && ds >= self.outputs, "pixel stride smaller than the channel count");
     }
+}
+
+// Profile byte/hash caches and descriptive tags do not change its color model.
+// Compare every interpretation field exactly; tolerance-based color similarity
+// cannot authorize an authoritative sample identity.
+fn exact_color_model(a: &Profile, b: &Profile) -> bool {
+    a.version == b.version
+        && a.class == b.class
+        && a.color_space == b.color_space
+        && a.pcs == b.pcs
+        && a.white_point == b.white_point
+        && a.black_point == b.black_point
+        && a.chad == b.chad
+        && a.matrix == b.matrix
+        && a.trc == b.trc
+        && a.gray_trc == b.gray_trc
+        && a.a2b == b.a2b
+        && a.b2a == b.b2a
 }
 
 fn device_white(cs: ColorSpace) -> Option<Vec<f32>> {

@@ -1,10 +1,8 @@
 //! Native platform services: file dialogs (rfd), filesystem, codecs.
 
-use photocraft_codecs::{ChannelLayout, EncodeOptions, Image, SampleType as CS};
-use photocraft_color::{ColorMode, SampleType};
-use photocraft_doc::{Document, Layer, Size};
+use photocraft_codecs::{ChannelLayout, EncodeOptions, Image};
+use photocraft_doc::Document;
 use photocraft_format::RecoveryStore;
-use photocraft_geom::Rect;
 use photocraft_ui_egui::{FileDialogAnswer, FileDialogReply, FileDialogRequest, Recovered, Services};
 use std::cell::RefCell;
 use std::future::Future;
@@ -16,8 +14,9 @@ use std::sync::Arc;
 /// Everything File › Open reads: PhotoCraft and Photoshop documents, flat images, and Photoshop
 /// brushes (.abr), gradients (.grd) and swatches (.aco, .ase), which go to the preset libraries.
 const OPEN_EXTS: &[&str] = &[
-    "xcf", "pcraft", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm",
-    "pam", "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "ase",
+    "xcf", "xcf.gz", "xcf.bz2", "xcf.xz", "pcraft", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi",
+    "exr", "hdr", "pbm", "pgm", "ppm", "pam", "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd",
+    "svg", "svgz", "aco", "ase",
 ];
 
 /// File › Save As formats: (filter name, extensions). The filter matching the suggested name's
@@ -65,6 +64,17 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
         dialog = dialog.set_parent(parent);
     }
     let answer: Pin<Box<dyn Future<Output = Option<FileDialogAnswer>> + Send>> = match request {
+        FileDialogRequest::XcfLinkedImage => {
+            let picked = dialog.add_filter("PNG", &["png"]).pick_file();
+            Box::pin(async move {
+                let file = picked.await?;
+                match crate::bounded_resource_read::read_selection(Some(file.path())) {
+                    Ok(Some(selected)) => Some(FileDialogAnswer::Contents(selected.name, selected.bytes)),
+                    Ok(None) => None,
+                    Err(error) => Some(FileDialogAnswer::Failed(error.to_string())),
+                }
+            })
+        }
         FileDialogRequest::Open { multiple } => {
             let dialog = dialog.add_filter("All Formats", OPEN_EXTS).add_filter("PhotoCraft", &["pcraft"]);
             if multiple {
@@ -145,7 +155,60 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     photocraft_format::atomic_write(path, bytes).map_err(|e| e.to_string())
 }
 
+/// Interactive native output streams the prepared archive directly to its
+/// atomic staging file. All-open source exclusions remain live at every final
+/// target check; a snapshot does not grant any retained source-path reads.
+fn save_native(
+    snapshot: &photocraft_engine::document_snapshot::DocumentSnapshot,
+    path: &str,
+    protection: &photocraft_engine::WriteProtection,
+) -> Result<photocraft_ui_egui::services::NativeSaveResult, String> {
+    crate::crash_guard::guard("Save", || {
+        snapshot.validate_resident().map_err(|error| error.to_string())?;
+        let target = Path::new(path);
+        let control = photocraft_raster::Interrupt::NONE;
+        let guard = |candidate: &Path| -> Result<(), photocraft_io::IoError> {
+            photocraft_automation::files::validate_destination_protected_with_interrupt(candidate, protection, Some("pcraft"), &control)
+                .map_err(|error| photocraft_io::IoError::Unsupported(error.to_string()))
+        };
+        // Preserve the existing native atomic writer's parent-directory policy.
+        // Admission and target guards precede preparation; the writer repeats
+        // guards on its resolved target and each atomic rename attempt.
+        let result = photocraft_io::save_native_path_guarded(snapshot, target, Default::default(), &control, &guard).map_err(|error| error.to_string())?;
+        Ok(photocraft_ui_egui::services::NativeSaveResult { warnings: result.warnings })
+    })
+}
+
 type SharedRecovery = Rc<RefCell<Option<RecoveryStore>>>;
+
+/// Explicit read-root material only; never the generic document reader or a stored locator.
+fn rooted_linked_replacement(workspace: &photocraft_automation::AuthorizedWorkspace, path: &str, reply: FileDialogReply) {
+    let path = match crate::bounded_resource_read::rooted_request_path(path) {
+        Ok(path) => path,
+        Err(error) => {
+            reply.send(Some(FileDialogAnswer::Failed(error.to_string())));
+            return;
+        }
+    };
+    let workspace = workspace.clone();
+    // Keep a second owner until spawn succeeds, so spawn failure is a visible error, not Cancel.
+    let reply = Arc::new(std::sync::Mutex::new(Some(reply)));
+    let worker_reply = Arc::clone(&reply);
+    let worker = std::thread::Builder::new().name("linked resource read".into()).spawn(move || {
+        let answer = match crate::bounded_resource_read::read_rooted(&workspace, &path) {
+            Ok(selected) => FileDialogAnswer::Contents(selected.name, selected.bytes),
+            Err(error) => FileDialogAnswer::Failed(error.to_string()),
+        };
+        if let Some(reply) = worker_reply.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+            reply.send(Some(answer));
+        }
+    });
+    if worker.is_err()
+        && let Some(reply) = reply.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+    {
+        reply.send(Some(FileDialogAnswer::Failed("xcf.resource.read-start-failed".into())));
+    }
+}
 
 /// Run `f` on the recovery store (`Err` without a config directory). The service closures never
 /// call each other, so the store is never borrowed twice.
@@ -161,8 +224,15 @@ fn recovery_services(dir: Option<PathBuf>) -> Services {
     let store: SharedRecovery = Rc::new(RefCell::new(dir.map(RecoveryStore::new)));
     let (s1, s2, s3, s4) = (store.clone(), store.clone(), store.clone(), store.clone());
     Services {
-        autosave: Some(Box::new(move |doc: &Arc<Document>, revision: u64, path: Option<&str>| {
-            with_store(&s1, |s| s.autosave_checked(doc, revision, path.map(str::to_string)))?
+        write_protected: Some(Box::new(|path, bytes, protection| {
+            photocraft_automation::files::write_protected_native(Path::new(path), bytes, protection).map_err(|error| error.to_string())
+        })),
+        validate_write_protected: Some(Box::new(|path, protection| {
+            photocraft_automation::files::validate_destination_protected(Path::new(path), protection, None).map_err(|error| error.to_string())
+        })),
+        autosave: Some(Box::new(move |doc: &photocraft_engine::document_snapshot::DocumentSnapshot, revision: u64, path: Option<&str>| {
+            let resident = doc.resident_arc().ok_or("Automatic recovery saving is not supported for this accounted document")?;
+            with_store(&s1, |s| s.autosave_checked(resident, revision, path.map(str::to_string)))?
         })),
         autosave_results: Some(Box::new(move || with_store(&s4, |s| s.take_completed()).unwrap_or_default())),
         discard_autosave: Some(Box::new(move |id: u64| {
@@ -230,14 +300,30 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             Ok((name, bytes))
         }) as photocraft_ui_egui::AutomationReadFn
     });
+    let automation_read_xcf_linked_replacement = automation.clone().map(|workspace| {
+        Box::new(move |path: &str, reply: FileDialogReply| rooted_linked_replacement(&workspace, path, reply))
+            as photocraft_ui_egui::file_dialog::AutomationReadXcfLinkedReplacementFn
+    });
     let automation_write = automation.clone().map(|workspace| {
-        Box::new(move |path: &str, bytes: &[u8]| workspace.write(path, bytes).map_err(|error| error.to_string())) as photocraft_ui_egui::AutomationWriteFn
+        Box::new(move |path: &str, bytes: &[u8], protection: &photocraft_engine::WriteProtection| {
+            workspace.write_protected(path, bytes, &protection.sources, &protection.fingerprints).map_err(|error| error.to_string())
+        }) as photocraft_ui_egui::AutomationWriteFn
     });
     let automation_validate_write = automation.clone().map(|workspace| {
-        Box::new(move |path: &str, source: Option<&photocraft_engine::SourceIdentity>| {
-            let protected = source.filter(|s| s.origin.is_read_only()).and_then(|s| s.path.as_deref());
-            workspace.guard_write(path, protected).map_err(|e| e.to_string())
-        }) as photocraft_ui_egui::ValidateWriteFn
+        Box::new(move |path: &str, protection: &photocraft_engine::WriteProtection| {
+            workspace.guard_write_protected(path, &protection.sources, &protection.fingerprints).map_err(|e| e.to_string())
+        }) as photocraft_ui_egui::AutomationValidateWriteFn
+    });
+    let automation_native_save = automation.clone().map(|workspace| {
+        Box::new(move |snapshot: &photocraft_engine::DocumentSnapshot, path: &str, protection: &photocraft_engine::WriteProtection| {
+            crate::crash_guard::guard("Save", || {
+                snapshot.validate_resident().map_err(|error| error.to_string())?;
+                let result = workspace
+                    .save_native_with_interrupt(snapshot, path, protection, photocraft_io::NativeSaveLimits::default(), &photocraft_raster::Interrupt::NONE)
+                    .map_err(|error| error.to_string())?;
+                Ok(photocraft_ui_egui::services::NativeSaveResult { warnings: result.warnings })
+            })
+        }) as photocraft_ui_egui::services::NativeSaveFn
     });
     let step: fn(&str, &serde_json::Value) -> photocraft_engine::Result<()> = photocraft_automation::workspace::authorize_desktop_engine_step;
     let automation_authorize = automation.is_some().then_some(step);
@@ -247,10 +333,12 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         }) as photocraft_ui_egui::AutomationCommandFn
     });
     Services {
+        native_save: Some(Box::new(save_native)),
         validate_write: Some(Box::new(|path, source| {
             photocraft_automation::files::validate_destination(Path::new(path), source, None).map_err(|e| e.to_string())
         })),
         automation_validate_write,
+        automation_native_save,
         import: Some(Box::new(|name: &str, bytes: &[u8]| crate::crash_guard::guard("Open", || photocraft_io::import(name, bytes).map_err(|e| e.to_string())))),
         export: Some(Box::new(|doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings| {
             let mut opts = photocraft_io::ExportOptions::default();
@@ -268,6 +356,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         file_dialog: Some(Box::new(show_file_dialog)),
         write: Some(Box::new(|path: &str, bytes: &[u8]| write_atomic(Path::new(path), bytes))),
         automation_read,
+        automation_read_xcf_linked_replacement,
         automation_write,
         automation_command,
         automation_authorize,
@@ -321,66 +410,10 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     }
 }
 
-/// Flat-image import via photocraft-codecs (kept for reference/tests; the app uses photocraft-io).
+/// Reference/test entry point uses the same typed import as the application.
 #[allow(dead_code)]
 pub fn import_flat(name: &str, bytes: &[u8]) -> Result<Document, String> {
-    let img = photocraft_codecs::decode(bytes).map_err(|e| e.to_string())?;
-    let (w, h) = (img.width(), img.height());
-    let depth = match img.sample_type() {
-        CS::U8 => SampleType::U8,
-        CS::U16 => SampleType::U16,
-        _ => SampleType::F32,
-    };
-    let gray = matches!(img.layout(), ChannelLayout::Gray | ChannelLayout::GrayA);
-    let cmyk = matches!(img.layout(), ChannelLayout::Cmyk | ChannelLayout::CmykA);
-    let mode = if gray {
-        ColorMode::Grayscale
-    } else if cmyk {
-        ColorMode::Cmyk
-    } else {
-        ColorMode::Rgb
-    };
-    let target = match mode {
-        ColorMode::Grayscale => ChannelLayout::GrayA,
-        ColorMode::Cmyk => ChannelLayout::CmykA,
-        _ => ChannelLayout::Rgba,
-    };
-    let sample = match depth {
-        SampleType::U8 => CS::U8,
-        SampleType::U16 => CS::U16,
-        SampleType::F32 => CS::F32,
-    };
-    let conv = img.convert(target, sample);
-    let stem = std::path::Path::new(name).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or(name.to_string());
-    let mut doc = Document::new(stem, Size::new(w, h), mode, depth);
-    doc.icc_profile = img.icc.clone().map(std::sync::Arc::new);
-    if let Some((x, _)) = img.meta.dpi {
-        doc.resolution_dpi = x;
-    }
-    let mut layer = Layer::raster("Background", doc.pixel_format());
-    let data = conv.to_normalized();
-    layer.surface_mut().ok_or("new raster layer has no pixels")?.write_region(Rect::from_xywh(0, 0, w, h), &data);
-    doc.layers.push(layer);
-    Ok(doc)
-}
-
-#[allow(dead_code)]
-pub fn export_flat(doc: &Document, path: &str) -> Result<Vec<u8>, String> {
-    let format = photocraft_codecs::from_extension(path).ok_or_else(|| format!("unknown file type for {path}"))?;
-    let buf = photocraft_compose::flatten(doc);
-    let (w, h) = (buf.rect.width(), buf.rect.height());
-    let data: Vec<f32> = buf.px.iter().flat_map(|p| *p).collect();
-    let img = match doc.depth {
-        SampleType::U8 => Image::from_u8(w, h, ChannelLayout::Rgba, buf.to_rgba8().pixels),
-        SampleType::U16 => Image::from_u16(w, h, ChannelLayout::Rgba, &data.iter().map(|v| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16).collect::<Vec<_>>()),
-        SampleType::F32 => Image::from_f32(w, h, ChannelLayout::Rgba, &data),
-    }
-    .map_err(|e| e.to_string())?;
-    let img = match &doc.icc_profile {
-        Some(icc) if doc.mode == ColorMode::Rgb => img.with_icc(Some((**icc).clone())),
-        _ => img,
-    };
-    photocraft_codecs::encode(&img, format, &EncodeOptions::default()).map_err(|e| e.to_string())
+    photocraft_io::import(name, bytes).map(|result| result.document).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -515,7 +548,7 @@ mod tests {
 
     /// The first pixel of each open document, and whether it's unsaved.
     fn open_docs(app: &PhotocraftApp) -> Vec<([f32; 4], bool)> {
-        app.session.documents().iter().map(|d| (photocraft_compose::flatten(&d.doc).px.first().copied().unwrap_or_default(), d.is_dirty())).collect()
+        app.session.documents().iter().map(|d| (photocraft_compose::flatten(&d.doc).unwrap().px.first().copied().unwrap_or_default(), d.is_dirty())).collect()
     }
 
     fn index_of(app: &PhotocraftApp, color: [f32; 4]) -> usize {
@@ -576,7 +609,7 @@ mod tests {
         prefs_ui::tick(&mut app, &ctx);
         let left = list_recovery(&dir);
         assert_eq!(left.len(), 1);
-        assert_eq!(photocraft_compose::flatten(&photocraft_format::recover(&left[0]).unwrap()).px.first().copied(), Some(GREEN));
+        assert_eq!(photocraft_compose::flatten(&photocraft_format::recover(&left[0]).unwrap()).unwrap().px.first().copied(), Some(GREEN));
         let green = index_of(&app, GREEN);
         app.run("file.close", json!({"document": green})).unwrap();
         prefs_ui::tick(&mut app, &ctx);
@@ -628,7 +661,7 @@ mod tests {
         assert_eq!(recovered.len(), 1, "unchanged revision should retry after failure");
         assert_eq!(recovered[0].info.revision, revision);
         let restored = photocraft_format::recover(&recovered[0]).unwrap();
-        assert_eq!(photocraft_compose::flatten(&restored).px.first().copied(), Some(RED));
+        assert_eq!(photocraft_compose::flatten(&restored).unwrap().px.first().copied(), Some(RED));
         drop(app);
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -641,6 +674,60 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn native_stream_capability_roundtrips_and_protects_other_open_source() {
+        let directory = temp("native-stream");
+        let mut document = Document::new("Own native stream", photocraft_doc::Size::new(2, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U16);
+        document.layers.push(photocraft_doc::Layer::raster("Own raster", document.pixel_format()));
+        let snapshot = photocraft_engine::DocumentSnapshot::from_resident(Arc::new(document)).unwrap();
+        let output = directory.join("own.pcraft");
+        let output_text = output.to_str().unwrap();
+        let protection = photocraft_engine::WriteProtection::default();
+        let result = save_native(&snapshot, output_text, &protection).unwrap();
+        assert!(result.warnings.is_empty());
+        let restored = photocraft_format::load_from_bytes(&std::fs::read(&output).unwrap()).unwrap();
+        assert_eq!(restored, *snapshot);
+        let protected = directory.join("another-open-source.pcraft");
+        let original = b"Own existing source bytes";
+        std::fs::write(&protected, original).unwrap();
+        let protection = photocraft_engine::WriteProtection { sources: vec![protected.to_str().unwrap().into()], fingerprints: Vec::new() };
+        assert!(save_native(&snapshot, protected.to_str().unwrap(), &protection).is_err());
+        assert_eq!(std::fs::read(&protected).unwrap(), original);
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 2);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn flat_import_retains_unequal_dpi_axes() {
+        let mut img = Image::from_u8(2, 1, ChannelLayout::Rgba, vec![255, 0, 0, 255, 0, 255, 0, 255]).unwrap();
+        img.meta.dpi = Some((144.0, 288.0));
+        let bytes = photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &EncodeOptions::default()).unwrap();
+        let doc = super::import_flat("axes.png", &bytes).unwrap();
+        let resolution = doc.effective_resolution();
+        assert!((resolution.x_dpi - 144.0).abs() < 0.1);
+        assert!((resolution.y_dpi - 288.0).abs() < 0.1);
+        assert!((resolution.inches(144, 288).unwrap().0 - 1.0).abs() < 0.001);
+        assert!((resolution.inches(144, 288).unwrap().1 - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn typed_import_preserves_native_wide_samples_and_rejects_corrupt_input() {
+        use photocraft_doc::{ColorMode, Layer, SampleType, Size};
+        let integer: Vec<u8> = [1_u32, 123456789, u32::MAX - 1, u32::MAX, 3141592653, 17, 2000000001, 1234567].into_iter().flat_map(u32::to_ne_bytes).collect();
+        let floating: Vec<u8> = [f64::from_bits(0x3fe0000000000001), 0.1, 0.2, 1.0, 0.25, 0.5, 0.75, 0.125].into_iter().flat_map(f64::to_ne_bytes).collect();
+        for (depth, bytes) in [(SampleType::U32, integer), (SampleType::F64, floating)] {
+            let mut document = Document::new("wide", Size::new(2, 1), ColorMode::Rgb, depth);
+            let mut layer = Layer::raster("Wide samples", document.pixel_format());
+            layer.surface_mut().unwrap().try_write_interleaved(document.bounds(), &bytes).unwrap();
+            document.layers.push(layer);
+            let encoded = photocraft_format::save_to_bytes(&document, &Default::default()).unwrap();
+            let imported = super::import_flat("wide.pcraft", &encoded).unwrap();
+            assert_eq!(imported, document);
+            assert_eq!(imported.layers[0].surface().unwrap().try_read_interleaved(imported.bounds()).unwrap(), bytes);
+        }
+        assert!(super::import_flat("broken.xcf", b"gimp xcf v022\0truncated").is_err());
     }
 
     fn red_png(w: u32, h: u32) -> Vec<u8> {

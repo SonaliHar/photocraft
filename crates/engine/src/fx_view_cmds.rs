@@ -97,11 +97,11 @@ mod tests {
         let (mut s, a, b) = session();
         let st = s.active_mut().unwrap();
         st.saved_revision = st.revision;
-        let steps = s.active().unwrap().history.entries().len();
+        let steps = s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len();
         assert!(open(&s, a) && open(&s, b), "effects lists start open");
         assert_eq!(s.execute(ID, json!({"layer": a})).unwrap()["expanded"], false);
         assert!(!open(&s, a) && open(&s, b));
-        assert_eq!(s.active().unwrap().history.entries().len(), steps, "no history step");
+        assert_eq!(s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len(), steps, "no history step");
         assert_eq!(s.active().unwrap().saved_revision, s.active().unwrap().revision, "still clean");
         s.execute(ID, json!({"layer": a, "all": true})).unwrap();
         assert!(open(&s, a) && open(&s, b), "toggling an open-and-closed set from a closed layer opens all");

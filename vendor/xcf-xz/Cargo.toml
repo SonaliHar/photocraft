@@ -1,0 +1,23 @@
+[package]
+name="xcf-xz"
+version="0.1.0"
+edition="2024"
+license="Apache-2.0"
+publish=false
+
+[workspace]
+
+[dependencies]
+crc32fast = "=1.5.2"
+sha2 = "=0.11.0"
+
+[features]
+default=["std","xz"]
+std=[]
+xz=[]
+encoder=[]
+optimization=[]
+lzip=[]
+
+[dev-dependencies]
+lzma-rust2 = {version="=0.21.0",default-features=false,features=["std","xz","encoder"]}

@@ -69,10 +69,12 @@ pub(crate) fn has_paintable(s: &Session) -> std::result::Result<(), String> {
 pub(crate) fn paint_surface<'a>(doc: &'a mut Document, id: LayerId, p: &Value) -> Result<&'a mut photocraft_raster::Surface> {
     if !is_mask_target(p) {
         check_pixels_unlocked(doc, id)?;
+    } else {
+        crate::xcf_item_locks::require_layer_mask_content(doc, id)?;
     }
     let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
     if is_mask_target(p) {
-        l.mask.as_mut().map(|m| &mut m.surface).ok_or_else(|| EngineError::Other("layer has no mask".into()))
+        l.mask.as_mut().map(|m| std::sync::Arc::make_mut(&mut m.surface)).ok_or_else(|| EngineError::Other("layer has no mask".into()))
     } else {
         l.surface_mut().ok_or_else(|| EngineError::Other("not a pixel layer".into()))
     }
@@ -80,6 +82,9 @@ pub(crate) fn paint_surface<'a>(doc: &'a mut Document, id: LayerId, p: &Value) -
 
 /// Refuse a layer whose pixels are locked (directly or through a group), with Photoshop's message.
 pub(crate) fn check_pixels_unlocked(doc: &Document, id: LayerId) -> Result<()> {
+    if doc.xcf_state.is_some() {
+        crate::xcf_item_locks::effective_layer_locks(doc, id)?.require(crate::xcf_item_locks::EditKind::Content)?;
+    }
     let locks = doc.effective_locks(id);
     let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     if locks.pixels || locks.all {
@@ -104,11 +109,46 @@ fn has_selection(s: &Session) -> std::result::Result<(), String> {
 
 /// Image › Image Rotation by a right angle or a flip (pixels, vectors, guides, … all move).
 fn turn(s: &mut Session, label: &str, t: crate::canvas_geom::Turn) -> Result<Value> {
-    s.edit(label, |doc, _| {
-        crate::canvas_geom::turn_canvas(doc, t);
-        Ok(())
-    })?;
-    Ok(Value::Null)
+    let state=s.active().ok_or(EngineError::NoDocument)?;
+    if state.revision==u64::MAX {return Err(EngineError::Other("canvas turn revision limit".into()));}
+    state.doc.validate_resident()?;
+    let baseline=state.doc.clone();let revision=state.revision;let work_base=baseline.clone();
+    let work_label=label.to_owned();let apply_label=label.to_owned();
+    crate::jobs::run(s,label,true,move|ctx| {
+        ctx.stage(0.0,0.95,&work_label,|control| {
+            control.check().map_err(|_|EngineError::Cancelled)?;
+            // Admit before the whole Document clone, including the apply edit's
+            // possible sparse-map clone. Retained raster/source payloads are shared;
+            // only the measured model capacity slice has a clone multiplier.
+            let footprint=work_base.resident_raster_footprint_with(control)?;
+            if footprint.clone_metadata_bytes.checked_mul(3).and_then(|n|n.checked_add(footprint.retained_bytes)).is_none_or(|n|n>photocraft_raster::MAX_CHECKED_RASTER_BYTES) {
+                return Err(EngineError::Other("canvas turn retained/COW staging limit".into()));
+            }
+            let limits=photocraft_io::NativeSaveLimits::default().preparation;
+            let payload=photocraft_io::retained_native_payload_bytes(&work_base,limits,control).map_err(|error|if control.cancelled(){EngineError::Cancelled}else{EngineError::Other(error.to_string())})?;
+            let model=photocraft_io::retained_native_model_bytes(&work_base,limits,control).map_err(|error|if control.cancelled(){EngineError::Cancelled}else{EngineError::Other(error.to_string())})?;
+            if (model as u64).checked_mul(3).and_then(|n|n.checked_add(payload as u64)).and_then(|n|n.checked_add(footprint.clone_metadata_bytes.checked_mul(3)?)).is_none_or(|n|n>photocraft_raster::MAX_CHECKED_RASTER_BYTES) {
+                return Err(EngineError::Other("canvas turn retained/model staging limit".into()));
+            }
+            control.check().map_err(|_|EngineError::Cancelled)?;
+            let mut doc=(*work_base).clone();
+            crate::canvas_geom::turn_canvas_with_interrupt(&mut doc,t,control)?;
+            control.check().map_err(|_|EngineError::Cancelled)?;
+            Ok((doc,ctx.clone()))
+        })
+    },move|s,(doc,ctx)| {
+        // Generic jobs restores the original target tab and checks its weak
+        // snapshot; retain a revision fence too for focus-only changes.
+        let current=s.active().ok_or(EngineError::NoDocument)?;
+        if current.doc.id!=baseline.id || current.revision!=revision || !current.doc.shares_state(&baseline) {
+            return Err(EngineError::Other("canvas turn target changed while preparing".into()));
+        }
+        ctx.stage(0.95,1.0,&apply_label,|control| {
+            control.check().map_err(|_|EngineError::Cancelled)?;
+            s.edit_with_interrupt(&apply_label,control,move|current,_| {*current=doc;Ok(())})?;
+            Ok(Value::Null)
+        })
+    })
 }
 
 macro_rules! cmd {
@@ -209,7 +249,7 @@ fn set_clipped(s: &mut Session, p: &Value, clip: bool) -> Result<Value> {
     let ids: Vec<LayerId> = if p.get("layer").is_some() {
         vec![layer_param(s, p)?]
     } else {
-        let selected = s.active().ok_or(EngineError::NoDocument)?.selected_layers();
+        let selected = s.active().ok_or(EngineError::NoDocument)?.selected_layers()?;
         match (clip, selected.as_slice()) {
             (_, []) => vec![layer_param(s, p)?],
             (_, [one]) => vec![*one],
@@ -242,7 +282,7 @@ pub fn blend_from_str(s: &str) -> Option<BlendMode> {
 /// Photoshop masks a new adjustment or fill layer with the selection, so the adjustment acts on
 /// the selected area only (#1250); the selection itself stays, as Reveal Selection leaves it.
 pub(crate) fn selection_mask(doc: &Document) -> Option<LayerMask> {
-    doc.selection.as_ref().map(|sel| LayerMask { surface: sel.clone(), ..LayerMask::reveal_all() })
+    doc.selection.as_ref().map(|sel| LayerMask { surface: std::sync::Arc::new(sel.clone()), ..LayerMask::reveal_all() })
 }
 
 /// Mask a fill or adjustment layer being created, as Photoshop does: the path selected in the
@@ -290,7 +330,7 @@ fn destructive_adjust(s: &mut Session, label: &str, adj: Adjustment, p: &Value) 
             let sel = doc.selection.clone();
             let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
             let mask = l.mask.as_mut().ok_or_else(|| EngineError::Other("layer has no mask".into()))?;
-            pixels::adjust_mask(&mut mask.surface, &adj, sel.as_ref());
+            pixels::adjust_mask(std::sync::Arc::make_mut(&mut mask.surface), &adj, sel.as_ref())?;
             Ok(Value::Null)
         });
     }
@@ -299,7 +339,7 @@ fn destructive_adjust(s: &mut Session, label: &str, adj: Adjustment, p: &Value) 
         return s.edit(label, |doc, _| {
             let sel = doc.selection.clone();
             if let Some(surf) = crate::channel_cmds::channel_surface_for_filter(doc, None, p)? {
-                pixels::adjust_surface(surf, &adj, sel.as_ref(), ColorMode::Grayscale);
+                pixels::adjust_surface(surf, &adj, sel.as_ref(), ColorMode::Grayscale)?;
                 surf.prune();
             }
             Ok(Value::Null)
@@ -311,7 +351,7 @@ fn destructive_adjust(s: &mut Session, label: &str, adj: Adjustment, p: &Value) 
         let mode = doc.mode;
         let transfer = photocraft_compose::adjust::Transfer::for_doc(doc);
         let surf = paint_surface(doc, id, &Value::Null)?;
-        pixels::adjust_surface_with_transfer(surf, &adj, sel.as_ref(), mode, transfer);
+        pixels::adjust_surface_with_transfer(surf, &adj, sel.as_ref(), mode, transfer)?;
         Ok(())
     })?;
     Ok(Value::Null)
@@ -375,7 +415,7 @@ fn build() -> Vec<CommandSpec> {
                     }
                 };
                 doc.resolution_dpi = res;
-                let i = s.add_document(doc, None);
+                let i = s.add_document(doc, None)?;
                 Ok(json!({ "document": i }))
             }
         ),
@@ -399,6 +439,9 @@ fn build() -> Vec<CommandSpec> {
         cmd!("edit.clear", "Clear", ["Edit"], Some("Delete"), "{}", has_pixel_layer, |s, p| {
             let id = layer_param(s, p)?;
             let bg = s.tools.background;
+            let current = &s.active().ok_or(EngineError::NoDocument)?.doc;
+            let area = current.selection.as_ref().map_or(current.bounds(), |mask| mask.content_bounds());
+            crate::edit_cmds::preflight_clear_area(current, id, area)?;
             s.edit("Clear", |doc, _| {
                 let sel = doc.selection.clone();
                 let area = sel.as_ref().map(|m| m.content_bounds()).unwrap_or(doc.bounds());
@@ -539,25 +582,9 @@ fn build() -> Vec<CommandSpec> {
             "Duplicate Layer…",
             ["Layer"],
             None,
-            r##"{"layer":id?,"inPlace":bool=false (artboards: keep the copy on the original instead of beside it)} (no layer: every selected layer)"##,
+            r##"{"layer":id?,"inPlace":bool=false (artboards: keep the copy on the original instead of beside it),"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (no layer: every selected layer)"##,
             has_layer,
-            |s, p| {
-                let in_place = p.get("inPlace").and_then(Value::as_bool).unwrap_or(false);
-                if crate::layer_multi_cmds::multi(s, p) {
-                    return crate::layer_multi_cmds::duplicate_selected(s, in_place);
-                }
-                let id = layer_param(s, p)?;
-                let nid = s.edit("Duplicate Layer", |doc, active| {
-                    let dup = layer_copy(doc, id)?;
-                    let nid = doc.insert_above(Some(id), dup);
-                    if !in_place {
-                        crate::artboard_cmds::place_copy(doc, nid)?;
-                    }
-                    *active = Some(nid);
-                    Ok(nid)
-                })?;
-                Ok(json!({ "layer": nid.0 }))
-            }
+            crate::layer_duplicate_controlled::run
         ),
         cmd!("layer.delete", "Delete Layer", ["Layer", "Delete"], None, r##"{"layer":id?} (no layer: every selected layer)"##, has_layer, |s, p| {
             if crate::layer_multi_cmds::multi(s, p) {
@@ -690,11 +717,7 @@ fn build() -> Vec<CommandSpec> {
             "Add Layer Mask",
             Some(LayerMask::hide_all())
         )),
-        cmd!("layer.layerMask.revealSelection", "Reveal Selection", ["Layer", "Layer Mask"], None, r##"{"layer":id?}"##, has_selection, |s, p| {
-            let sel = s.active().and_then(|d| d.doc.selection.clone()).ok_or(EngineError::Other("no selection".into()))?;
-            let mask = LayerMask { surface: sel, ..LayerMask::reveal_all() };
-            set_mask(s, p, "Add Layer Mask", Some(mask))
-        }),
+        cmd!("layer.layerMask.revealSelection", "Reveal Selection", ["Layer", "Layer Mask"], None, r##"{"layer":id?,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_selection, crate::layer_mask_storage_controlled::run),
         cmd!("layer.layerMask.delete", "Delete", ["Layer", "Layer Mask"], None, r##"{"layer":id?}"##, has_layer, |s, p| set_mask(
             s,
             p,
@@ -713,7 +736,7 @@ fn build() -> Vec<CommandSpec> {
                 below.push(idx - 1);
                 let lower = doc.layer_at(&below).ok_or(EngineError::NoLayer(id))?.clone();
                 let upper = doc.layer(id).ok_or(EngineError::NoLayer(id))?.clone();
-                let merged = pixels::merge_down(doc, &lower, &upper);
+                let merged = pixels::merge_down(doc, &lower, &upper)?;
                 doc.remove(id);
                 *doc.layer_at_mut(&below).ok_or(EngineError::NoLayer(lower.id))? = merged;
                 *active = Some(lower.id);
@@ -727,7 +750,7 @@ fn build() -> Vec<CommandSpec> {
                 let mut bg = Layer::raster("Background", fmt);
                 bg.locks.transparency = true;
                 bg.locks.position = true;
-                *crate::pixels_mut(&mut bg)? = photocraft_compose::flatten_to_surface(doc, fmt, Some([1.0, 1.0, 1.0]));
+                *crate::pixels_mut(&mut bg)? = photocraft_compose::flatten_to_surface(doc, fmt, Some([1.0, 1.0, 1.0]))?;
                 *active = Some(bg.id);
                 doc.layers = vec![bg];
                 Ok(())
@@ -883,7 +906,7 @@ fn build() -> Vec<CommandSpec> {
             shortcut: None,
             params: "{}",
             enabled: always,
-            run: |s, _| Ok(inspect::session(s)),
+            run: |s, _| inspect::session(s),
             journal: false,
         },
         CommandSpec {
@@ -901,7 +924,7 @@ fn build() -> Vec<CommandSpec> {
                     }
                     None => s.active().ok_or(EngineError::NoDocument)?,
                 };
-                Ok(inspect::document(d))
+                inspect::document(d)
             },
             journal: false,
         },
@@ -973,8 +996,14 @@ fn build() -> Vec<CommandSpec> {
                 let coord = |k: &str| i32::try_from(int(p, k).unwrap_or(0)).map_err(|_| bad("document.pixel", format!("{k} must fit in 32 bits")));
                 let (x, y) = (coord("x")?, coord("y")?);
                 let d = s.active().ok_or(EngineError::NoDocument)?;
-                // At i32::MAX the 1x1 rect saturates to empty: a pixel that far out is transparent.
-                let px = photocraft_compose::render(&d.doc, Rect::from_xywh(x, y, 1, 1)).px.first().copied().unwrap_or_default();
+                // A half-open pixel at the last representable coordinate cannot
+                // intersect a valid retained raster. Do not ask the renderer to
+                // interpret an empty rectangle as a successful pixel read.
+                let (Some(x1), Some(y1)) = (x.checked_add(1), y.checked_add(1)) else {
+                    let transparent = [0.0f32; 4];
+                    return Ok(json!(transparent));
+                };
+                let px = photocraft_compose::render(&d.doc, Rect::new(x, y, x1, y1))?.px.first().copied().unwrap_or_default();
                 Ok(json!(px))
             },
             journal: false,
@@ -1167,6 +1196,40 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::group_view_cmds::specs());
     v.extend(crate::fx_view_cmds::specs());
     v.extend(crate::mask_view_cmds::specs());
+    v.extend(crate::xcf_editing::relationship_specs().into_iter().filter(|spec| !matches!(spec.id,
+        crate::xcf_item_set_manage_cmds::RENAME | crate::xcf_item_set_manage_cmds::DELETE | crate::xcf_item_set_manage_cmds::MEMBERS)));
+    v.extend(crate::xcf_item_set_manage_cmds::specs());
+    v.extend(crate::xcf_item_state_cmds::specs());
+    v.extend(crate::xcf_item_set_create_cmds::specs());
+    v.extend(crate::xcf_mask_cmds::specs());
+    v.extend(crate::xcf_mask_geometry_cmds::specs());
+    v.extend(crate::xcf_filter_mask_cmds::specs());
+    v.extend(crate::xcf_selection_cmds::specs());
+    v.extend(crate::xcf_channel_state_cmds::specs());
+    v.extend(crate::xcf_channel_name_cmds::specs());
+    v.extend(crate::xcf_channel_locks_cmds::specs());
+    v.extend(crate::xcf_channel_indicates_cmds::specs());
+    v.extend(crate::xcf_wide_point_cmds::specs());
+    v.extend(crate::xcf_filter_insert_cmds::specs());
+    v.extend(crate::xcf_indexed_pixel_cmds::specs());
+    v.extend(crate::xcf_indexed_palette_cmds::specs());
+    v.extend(crate::xcf_text_transform_cmds::specs());
+    v.extend(crate::xcf_vector_style_cmds::specs());
+    v.extend(crate::xcf_path_state_cmds::specs());
+    v.extend(crate::xcf_filter_graph_cmds::specs());
+    v.extend(crate::xcf_floating::specs());
+    v.extend(crate::xcf_composition_cmds::specs());
+    v.extend(crate::xcf_filter_cmds::specs());
+    v.extend(crate::xcf_assessment_cmds::specs());
+    v.extend(crate::xcf_inspect_cmds::specs());
+    v.extend(crate::inspect_pixel_cmds::specs());
+    v.extend(crate::xcf_vector_cmds::specs());
+    v.extend(crate::xcf_text_cmds::specs());
+    v.extend(crate::xcf_resource_cmds::specs());
+    v.extend(crate::xcf_link_cmds::specs());
+    v.extend(crate::xcf_link_geometry_cmds::specs());
+    v.extend(crate::xcf_link_substitution_cmds::specs());
+    v.extend(crate::xcf_link_substitution_cmds::recover_specs());
     v.extend(crate::actions_cmds::specs());
     v
 }
@@ -1250,6 +1313,39 @@ fn combine(a: &Surface, b: &Surface, area: Rect, f: impl Fn(f32, f32) -> f32) ->
 
 /// Move a layer's pixels, linked mask and type by whole pixels (vectors move via
 /// `vector_cmds::translate_vectors`).
+pub(crate) fn try_translate_layer(doc: &Document, l: &mut Layer, dx: i32, dy: i32) -> Result<()> {
+    use crate::layer_multi_cmds::shift_surface as translate_surface;
+    // Linked patterns in the layer's effects move with it.
+    if let Some(r) = &mut l.effects.reference {
+        *r = (r.0 + f64::from(dx), r.1 + f64::from(dy));
+    }
+    if let Some(m) = &mut l.mask
+        && m.linked
+    {
+        m.surface = std::sync::Arc::new(translate_surface(&m.surface, dx, dy));
+    }
+    match &mut l.content {
+        LayerContent::Raster(s) => *s = translate_surface(s, dx, dy),
+        LayerContent::Text(t) => {
+            t.transform = photocraft_geom::Affine::translate(dx as f64, dy as f64).mul(&t.transform);
+            crate::type_cmds::try_refresh(doc, t)?;
+        }
+        LayerContent::Group(g) => {
+            // Moving an artboard moves the board with its contents.
+            if let Some(a) = &mut g.artboard {
+                a.rect = a.rect.translate(dx, dy);
+            }
+            for c in &mut g.children {
+                try_translate_layer(doc, c, dx, dy)?;
+            }
+        }
+        LayerContent::Smart(sm) => crate::smart_cmds::shift_smart(sm, dx, dy),
+        _ => {}
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn translate_layer(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
     use crate::layer_multi_cmds::shift_surface as translate_surface;
     // Linked patterns in the layer's effects move with it.
@@ -1259,7 +1355,7 @@ pub(crate) fn translate_layer(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
     if let Some(m) = &mut l.mask
         && m.linked
     {
-        m.surface = translate_surface(&m.surface, dx, dy);
+        m.surface = std::sync::Arc::new(translate_surface(&m.surface, dx, dy));
     }
     match &mut l.content {
         LayerContent::Raster(s) => *s = translate_surface(s, dx, dy),
@@ -1327,7 +1423,7 @@ mod xcf_merge_interaction_tests {
             layer.locks.pixels = true;
             doc.layers.push(layer);
             let mut session = Session::new();
-            session.open_document(doc, None);
+            session.open_document(doc, None).unwrap();
             let before = session.active().unwrap().doc.clone();
             for command in ["image.adjustments.exposure", "image.autoTone", "image.autoContrast", "image.autoColor"] {
                 assert!(session.execute(command, json!({"exposure":1.0})).is_err(), "{command} changed locked imported pixels");

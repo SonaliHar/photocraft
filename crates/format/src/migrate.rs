@@ -8,9 +8,64 @@ use crate::{FormatError, Result};
 
 pub(crate) type Step = fn(&mut Value) -> Result<()>;
 
-/// `STEPS[i]` upgrades version `i + 1` to `i + 2`. Empty while version 1 is
-/// the only version.
-pub(crate) const STEPS: &[Step] = &[];
+/// `STEPS[i]` upgrades version `i + 1` to `i + 2`.
+pub(crate) const STEPS: &[Step] =
+    &[resolution_axes, source_cache_blobs, current_text_origin, finite_raster_content, current_resource_resolution, current_linked_geometry];
+fn current_linked_geometry(value: &mut Value) -> Result<()> {
+    if value.get("document").and_then(Value::as_object).is_none() {
+        return Err(FormatError::corrupt("manifest has no document object"));
+    }
+    // The optional current geometry defaults absent. Keep original source
+    // transforms/cache blobs unchanged; never fabricate an edit during migration.
+    Ok(())
+}
+fn current_resource_resolution(value: &mut Value) -> Result<()> {
+    if value.get("document").and_then(Value::as_object).is_none() {
+        return Err(FormatError::corrupt("manifest has no document object"));
+    }
+    // Optional current resolutions default absent; original resource identity and
+    // source-state blobs are unchanged. No filesystem authority is serialized.
+    Ok(())
+}
+fn finite_raster_content(value: &mut Value) -> Result<()> {
+    if value.get("document").and_then(Value::as_object).is_none() {
+        return Err(FormatError::corrupt("manifest has no document object"));
+    }
+    // Preserve all old resident/native/source bytes; no finite extent invented.
+    Ok(())
+}
+fn current_text_origin(v: &mut Value) -> Result<()> {
+    if v.get("document").and_then(Value::as_object).is_none() {
+        return Err(FormatError::corrupt("manifest has no document object"));
+    }
+    // Source-state blobs retain their original bytes. The new optional placement
+    // defaults to None on decode; migration never invents an edit or new cache.
+    Ok(())
+}
+fn source_cache_blobs(v: &mut Value) -> Result<()> {
+    if v.get("document").and_then(Value::as_object).is_none() {
+        return Err(FormatError::corrupt("manifest has no document object"));
+    }
+    // Inline caches remain valid and are decoded by the existing source state model.
+    // The new optional blob records default empty; migration never fabricates bytes.
+    Ok(())
+}
+fn resolution_axes(v: &mut Value) -> Result<()> {
+    let document = v.get_mut("document").and_then(Value::as_object_mut).ok_or_else(|| FormatError::corrupt("manifest has no document object"))?;
+    if !document.contains_key("physical_resolution") {
+        let dpi = document.get("resolution_dpi").and_then(Value::as_f64).ok_or_else(|| FormatError::corrupt("legacy resolution missing"))?;
+        // Version 1 stored this field as f32. Recover that value before widening.
+        let dpi = dpi as f32;
+        if !dpi.is_finite() || dpi <= 0.0 {
+            return Err(FormatError::corrupt("legacy resolution must be positive finite"));
+        }
+        let dpi = f64::from(dpi);
+        document.insert("physical_resolution".into(), serde_json::json!({"x_dpi": dpi,"y_dpi": dpi,"unit":"Inch"}));
+    }
+    let object = v.as_object_mut().ok_or_else(|| FormatError::corrupt("manifest object missing"))?;
+    object.insert("minimum_reader_version".into(), Value::from(2));
+    Ok(())
+}
 
 /// Upgrade `v` in place to `target` using `steps`.
 pub(crate) fn migrate_with(v: &mut Value, steps: &[Step], target: u32) -> Result<u32> {

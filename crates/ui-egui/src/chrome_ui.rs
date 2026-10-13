@@ -95,9 +95,15 @@ pub fn status_info_text(doc: &Document, key: &str, tool: &str, profile: &str) ->
         }
         _ => crate::i18n::fmt(
             tl!("{w} px x {h} px ({ppi} ppi)"),
-            &[("w", &doc.size.width.to_string()), ("h", &doc.size.height.to_string()), ("ppi", &widgets::fmt_num(doc.resolution_dpi as f64))],
+            &[("w", &doc.size.width.to_string()), ("h", &doc.size.height.to_string()), ("ppi", &resolution_label(doc))],
         ),
     }
+}
+
+pub(crate) fn resolution_label(doc: &Document) -> String {
+    let legacy = photocraft_doc::PhysicalResolution::square(f64::from(doc.resolution_dpi));
+    let r = doc.physical_resolution.as_ref().unwrap_or(&legacy);
+    if r.x_dpi == r.y_dpi { widgets::fmt_num(r.x_dpi) } else { format!("{} × {}", widgets::fmt_num(r.x_dpi), widgets::fmt_num(r.y_dpi)) }
 }
 
 fn profile_name(doc: &Document) -> String {
@@ -274,6 +280,13 @@ mod tests {
     }
 
     #[test]
+    fn unequal_axis_status_names_both_effective_resolutions() {
+        let mut d = doc();
+        d.set_physical_resolution(photocraft_doc::PhysicalResolution { x_dpi: 144., y_dpi: 288., unit: photocraft_doc::PhysicalUnit::Inch }).unwrap();
+        assert_eq!(status_info_text(&d, "dimensions", "", ""), "2400 px x 1500 px (144 × 288 ppi)");
+    }
+
+    #[test]
     fn document_sizes_match_photoshop_rounding() {
         let d = doc();
         // 2400 x 1500 x 3 bytes = 10.3M flattened, as Photoshop shows.
@@ -323,5 +336,66 @@ mod tests {
         for (k, _) in STATUS_INFO {
             assert!(!status_info_text(&d, k, "x", "p").is_empty());
         }
+    }
+}
+
+#[cfg(test)]
+mod physical_resolution_borrow_tests {
+    use super::*;
+    fn unit() -> photocraft_doc::PhysicalUnit {
+        photocraft_doc::PhysicalUnit::Custom(photocraft_doc::CustomUnit {
+            name: "Own".into(),
+            factor: 7.25,
+            digits: 4,
+            symbol: "u".into(),
+            abbreviation: "own".into(),
+        })
+    }
+    fn resolution(x: f64, y: f64) -> photocraft_doc::PhysicalResolution {
+        photocraft_doc::PhysicalResolution { x_dpi: x, y_dpi: y, unit: unit() }
+    }
+
+    #[test]
+    fn resolution_labels_keep_existing_display_policy() {
+        let mut d = Document::new("borrow", photocraft_doc::Size::new(144, 288), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        d.resolution_dpi = 300.0;
+        d.physical_resolution = Some(resolution(144.0, 288.0));
+        let before = d.clone();
+        assert_eq!(resolution_label(&d), "144 × 288");
+        assert_eq!(d, before);
+        d.physical_resolution = Some(resolution(0.5, 0.25));
+        assert_eq!(resolution_label(&d), "0.5 × 0.3");
+        d.physical_resolution = None;
+        assert_eq!(resolution_label(&d), "300");
+        // Borrow-only supplement preserves the existing unvalidated label policy.
+        d.physical_resolution = Some(resolution(0.0, 144.0));
+        assert_eq!(resolution_label(&d), "0 × 144");
+        let mut r = resolution(144.0, 144.0);
+        if let photocraft_doc::PhysicalUnit::Custom(u) = &mut r.unit {
+            u.factor = 0.0;
+        }
+        d.physical_resolution = Some(r);
+        assert_eq!(resolution_label(&d), "144");
+    }
+    #[test]
+    fn checked_cached_text_reuses_layout_and_refuses_bad_custom_before_hit() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", serde_json::json!({"width":100,"height":60})).unwrap();
+        let id = photocraft_doc::LayerId(app.session.execute("type.create", serde_json::json!({"text":"Own","size":12})).unwrap()["layer"].as_u64().unwrap());
+        app.session.active_mut().unwrap().doc.try_resident_mut().unwrap().physical_resolution = Some(resolution(144.0, 144.0));
+        let (first, _, _) = crate::type_tool::layout(&mut app, id).unwrap();
+        let (second, _, _) = crate::type_tool::layout(&mut app, id).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+        assert_eq!(first.px_per_pt, 2.0);
+        if let photocraft_doc::PhysicalUnit::Custom(u) =
+            &mut app.session.active_mut().unwrap().doc.try_resident_mut().unwrap().physical_resolution.as_mut().unwrap().unit
+        {
+            u.factor = 0.0;
+        }
+        let before = app.session.active().unwrap().doc.clone();
+        assert!(crate::type_tool::layout(&mut app, id).is_none());
+        assert!(app.ui.status_error);
+        assert!(std::sync::Arc::ptr_eq(&first, &app.type_layout.as_ref().unwrap().1));
+        assert!(app.session.active().unwrap().doc.shares_state(&before));
     }
 }

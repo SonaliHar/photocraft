@@ -245,3 +245,102 @@ fn double_click_beside_the_name_opens_layer_style() {
     assert_eq!(h.state().session.documents().len(), docs + 1, "Edit Contents opened the source");
     assert_eq!(styles(&h), 0);
 }
+
+
+#[test]
+fn captured_layer_rename_uses_registered_id_selectors_trim_and_one_undo() {
+    let (session, [layer, _, _]) = session();
+    let mut app = PhotocraftApp::new(session, crate::Services::default());
+    let context = egui::Context::default();
+    let before = app.session.active().unwrap().doc.clone();
+    let revision = app.session.active().unwrap().revision;
+    assert!(super::start_rename_checked(&mut app, &context, layer, "Alpha").is_none());
+    let mut draft = super::rename(&context).unwrap();
+    draft.text = "  Own captured rename  ".into();
+    super::store(&context, Some(draft));
+    let (id,params) = super::end_rename_checked(&mut app, &context, true).unwrap();
+    assert_eq!(id, "layer.renameLayer");
+    assert_eq!(params["layerId"], layer.to_string());
+    assert!(params.get("layer").is_none());
+    assert_eq!(params["documentId"], before.id.0.to_string());
+    assert_eq!(params["expectedRevision"], revision.to_string());
+    assert_eq!(params["name"], "Own captured rename");
+    app.run(&id,params).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(layer)).unwrap().name,"Own captured rename");
+    app.run("edit.undo",json!({})).unwrap();
+    assert_eq!(*app.session.active().unwrap().doc,*before);
+    app.run("edit.redo",json!({})).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(layer)).unwrap().name,"Own captured rename");
+}
+
+#[test]
+fn captured_rename_rejects_same_revision_replacement_and_reports_error() {
+    let (session, [layer, _, _]) = session();
+    let mut app = PhotocraftApp::new(session,crate::Services::default());
+    let context = egui::Context::default();
+    super::start_rename_checked(&mut app,&context,layer,"Alpha");
+    let mut draft=super::rename(&context).unwrap();
+    draft.text="Own stale rename".into();
+    super::store(&context,Some(draft));
+    app.session.active_mut().unwrap().doc.try_resident_mut().unwrap().name="Own new snapshot".into();
+    let before=app.session.active().unwrap().doc.clone();
+    let history=app.session.active().unwrap().history.past_len();
+    assert!(super::end_rename_checked(&mut app,&context,true).is_none());
+    assert!(app.ui.status_error);
+    assert_eq!(app.ui.status,"layer.rename.ui.stale-target");
+    assert!(app.session.active().unwrap().doc.shares_state(&before));
+    assert_eq!(app.session.active().unwrap().history.past_len(),history);
+}
+
+#[test]
+fn captured_rename_byte_bound_never_dispatches_multibyte_overflow() {
+    let (session, [layer, _, _])=session();
+    let mut app=PhotocraftApp::new(session,crate::Services::default());
+    let context=egui::Context::default();
+    super::start_rename_checked(&mut app,&context,layer,"Alpha");
+    let mut draft=super::rename(&context).unwrap();
+    draft.text="Ω".repeat(2049);
+    super::store(&context,Some(draft));
+    let before=app.session.active().unwrap().doc.clone();
+    assert!(super::end_rename_checked(&mut app,&context,true).is_none());
+    assert_eq!(app.ui.status,"layer.rename.ui.invalid-name");
+    assert!(app.session.active().unwrap().doc.shares_state(&before));
+}
+
+
+#[test]
+fn captured_second_editor_commits_first_before_binding_its_revision() {
+    let (session,[first,second,_])=session();
+    let mut app=PhotocraftApp::new(session,crate::Services::default());
+    let context=egui::Context::default();
+    super::start_rename_checked(&mut app,&context,first,"Alpha");
+    let mut draft=super::rename(&context).unwrap();draft.text="Own first".into();super::store(&context,Some(draft));
+    super::start_rename_checked(&mut app,&context,second,"Beta");
+    assert_eq!(app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(first)).unwrap().name,"Own first");
+    let mut draft=super::rename(&context).unwrap();draft.text="Own second".into();super::store(&context,Some(draft));
+    let (command,params)=super::end_rename_checked(&mut app,&context,true).unwrap();
+    assert_eq!(params["expectedRevision"],app.session.active().unwrap().revision.to_string());
+    app.run(&command,params).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(second)).unwrap().name,"Own second");
+}
+
+
+#[test]
+fn captured_rename_layer_id_above_json_exact_number_range_is_a_lossless_string() {
+    let (session,[old,_,_])=session();
+    let mut app=PhotocraftApp::new(session,crate::Services::default());
+    let high=9_007_199_254_740_995u64;
+    {
+        let active=app.session.active_mut().unwrap();
+        active.doc.try_resident_mut().unwrap().layers.iter_mut().find(|layer|layer.id.0==old).unwrap().id=photocraft_doc::LayerId(high);
+        active.active_layer=Some(photocraft_doc::LayerId(high));
+    }
+    let context=egui::Context::default();
+    super::start_rename_checked(&mut app,&context,high,"Alpha");
+    let mut draft=super::rename(&context).unwrap();draft.text="Own high identity".into();super::store(&context,Some(draft));
+    let (command,params)=super::end_rename_checked(&mut app,&context,true).unwrap();
+    assert_eq!(params["layerId"].as_str(),Some("9007199254740995"));
+    assert!(params.get("layer").is_none());
+    app.run(&command,params).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(high)).unwrap().name,"Own high identity");
+}

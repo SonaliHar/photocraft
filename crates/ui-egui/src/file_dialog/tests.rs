@@ -32,6 +32,102 @@ fn answer(open: &Open, answer: Option<FileDialogAnswer>) {
 }
 
 #[test]
+fn bounded_resource_failure_preserves_document_history_and_real_redo() {
+    let (mut app, open, _) = app();
+    app.session
+        .edit("Redo seed", |document, _| {
+            document.name = "Redo resource guard".into();
+            Ok(())
+        })
+        .unwrap();
+    let redo = app.session.active().unwrap().doc.clone();
+    assert!(app.session.undo());
+    let before = app.session.active().unwrap().doc.clone();
+    let revision = app.session.active().unwrap().revision;
+    app.pick_xcf_link_bytes(|_, _, _| panic!("failure must not invoke the continuation")).unwrap();
+    let ctx = egui::Context::default();
+    app.poll_file_dialog(&ctx, None);
+    assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::XcfLinkedImage, _)]));
+    answer(&open, Some(FileDialogAnswer::Failed("xcf.resource.read-failed".into())));
+    app.poll_file_dialog(&ctx, None);
+    assert!(app.ui.status_error);
+    assert_eq!(app.ui.status, "xcf.resource.read-failed");
+    assert!(app.session.active().unwrap().doc.shares_state(&before));
+    assert_eq!(app.session.active().unwrap().revision, revision);
+    assert!(app.session.redo());
+    assert!(app.session.active().unwrap().doc.shares_state(&redo));
+}
+
+#[test]
+fn bounded_resource_cancel_is_distinct_from_disconnected_service() {
+    for cancelled in [true, false] {
+        let (mut app, open, _) = app();
+        app.ui.status = "Unchanged status".into();
+        app.ui.status_error = false;
+        app.pick_xcf_link_bytes(|_, _, _| panic!("no answer must not invoke the continuation")).unwrap();
+        let ctx = egui::Context::default();
+        app.poll_file_dialog(&ctx, None);
+        if cancelled {
+            answer(&open, None);
+        } else {
+            open.borrow_mut().clear();
+        }
+        app.poll_file_dialog(&ctx, None);
+        assert_eq!(app.ui.status_error, !cancelled);
+        assert_eq!(app.ui.status, if cancelled { "Unchanged status" } else { "xcf.resource.picker-unavailable" });
+    }
+}
+
+#[test]
+fn bounded_resource_rejects_paths_and_oversized_service_bytes() {
+    for response in [
+        FileDialogAnswer::Paths(vec!["inert-stored-locator.png".into()]),
+        FileDialogAnswer::SaveTo("unused.png".into()),
+        FileDialogAnswer::Contents("empty.png".into(), Vec::new()),
+        FileDialogAnswer::Contents("oversized.png".into(), vec![0; (8 << 20) + 1]),
+    ] {
+        let (mut app, open, _) = app();
+        let before = app.session.active().unwrap().doc.clone();
+        app.pick_xcf_link_bytes(|_, _, _| panic!("invalid answer must not reach the command")).unwrap();
+        let ctx = egui::Context::default();
+        app.poll_file_dialog(&ctx, None);
+        answer(&open, Some(response));
+        app.poll_file_dialog(&ctx, None);
+        assert!(app.ui.status_error);
+        assert!(app.session.active().unwrap().doc.shares_state(&before));
+        assert!(!app.file_dialog_open());
+    }
+}
+
+#[test]
+fn bounded_resource_accepts_the_exact_transport_cap_without_mutating() {
+    let (mut app, open, _) = app();
+    let before = app.session.active().unwrap().doc.clone();
+    let reached = Rc::new(std::cell::Cell::new(false));
+    let callback = reached.clone();
+    app.pick_xcf_link_bytes(move |_, _, bytes| {
+        assert_eq!(bytes.len(), 8 << 20);
+        callback.set(true);
+        Ok(Value::Null)
+    })
+    .unwrap();
+    let ctx = egui::Context::default();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::Contents("boundary.png".into(), vec![0; 8 << 20])));
+    app.poll_file_dialog(&ctx, None);
+    assert!(reached.get());
+    assert!(app.session.active().unwrap().doc.shares_state(&before));
+}
+
+#[test]
+fn bounded_resource_missing_service_is_a_failure_while_open_remains_cancelled() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+    assert_eq!(app.open_dialog_file().unwrap_err(), CANCELLED);
+    assert_eq!(app.pick_xcf_link_bytes(|_, _, _| Ok(Value::Null)).unwrap_err(), "xcf.resource.picker-unavailable");
+    assert!(!app.file_dialog_open());
+}
+
+#[test]
 fn the_app_keeps_running_while_a_dialog_is_open() {
     let (mut app, open, written) = app();
     let ctx = egui::Context::default();

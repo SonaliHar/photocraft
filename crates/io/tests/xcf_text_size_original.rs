@@ -1,0 +1,55 @@
+#![cfg(feature = "corpus")]
+use sha2::{Digest, Sha256};
+fn hash(bytes: &[u8]) -> String {
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+fn root() -> std::path::PathBuf {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../photocraft-corpus/xcf/full/text-size-evidence");
+    let bytes = std::fs::read(root.join("SHA256SUMS.json")).unwrap();
+    assert_eq!(hash(&bytes), "caf94a273f103f9ddafdf0090c5a839f1a97d2a24e3f44519913a6bf19d07eb4");
+    let files: std::collections::BTreeMap<String, String> = serde_json::from_slice(&bytes).unwrap();
+    for (name, expected) in files {
+        assert_eq!(hash(&std::fs::read(root.join(&name)).unwrap()), expected, "{name}");
+    }
+    root
+}
+fn projection(doc: &photocraft_doc::Document) -> Vec<u8> {
+    photocraft_compose::gimp_render::try_render(doc, doc.bounds(), &mut |_| Ok(()))
+        .unwrap()
+        .px
+        .iter()
+        .flat_map(|p| p.iter().map(|v| (v * 255.).round().clamp(0., 255.) as u8))
+        .collect()
+}
+#[test]
+#[ignore = "requires frozen original exact-font GIMP antialiased text sources and public edits"]
+fn scaled_aa_original_states_source_cache_native_and_projection() {
+    let root = root();
+    let observations: serde_json::Value = serde_json::from_slice(&std::fs::read(root.join("observations.json")).unwrap()).unwrap();
+    for row in observations["rows"].as_array().unwrap().iter().filter(|r| r["state"]["antialias"] == true) {
+        let name = row["case"].as_str().unwrap();
+        let bytes = std::fs::read(root.join(format!("{name}.xcf"))).unwrap();
+        let doc = photocraft_io::import("text.xcf", &bytes).unwrap().document;
+        let state = doc.xcf_state.as_ref().unwrap();
+        assert_eq!(state.source_items.len(), 1);
+        let cache = state.source_items[0].cache.as_ref().unwrap();
+        assert_eq!(cache.bytes.as_slice(), std::fs::read(root.join(row["state"]["native"]["file"].as_str().unwrap())).unwrap());
+        cache.validate().unwrap();
+        assert_eq!(
+            doc.layers[0].surface().unwrap().try_read_interleaved(photocraft_geom::Rect::new(8, 4, 8 + cache.width as i32, 4 + cache.height as i32)).unwrap(),
+            cache.bytes.as_slice()
+        );
+        let expected = std::fs::read(root.join(row["state"]["projection"]["file"].as_str().unwrap())).unwrap();
+        assert_eq!(expected, std::fs::read(root.join("round2").join(row["state"]["projection"]["file"].as_str().unwrap())).unwrap());
+        let actual = projection(&doc);
+        let max = actual.iter().zip(&expected).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+        assert_eq!(actual.len(), expected.len());
+        assert!(max <= 2, "{name}: {max}/255 exceeds unchanged display bound");
+        let saved = photocraft_io::export(&doc, "text.pcraft", &Default::default()).unwrap();
+        let reopened = photocraft_io::import("text.pcraft", &saved.bytes).unwrap().document;
+        assert_eq!(reopened, doc);
+        assert_eq!(projection(&reopened), actual);
+        assert_eq!(std::fs::read(root.join(format!("{name}.xcf"))).unwrap(), bytes);
+        println!("{name}: max {max}/255, exact immutable cache/native document");
+    }
+}

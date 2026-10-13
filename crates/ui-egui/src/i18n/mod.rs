@@ -18,10 +18,12 @@
 //! - [`trn`]: plural-aware (`{n}` is filled in). [`fmt`]: fill `{name}` placeholders after [`tr`];
 //!   translators may reorder placeholders freely.
 
-mod catalog;
+pub(crate) mod catalog;
 mod system;
 
+#[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
 pub use system::system_lang;
+pub use system::try_system_lang;
 
 use std::cell::Cell;
 use std::sync::OnceLock;
@@ -35,6 +37,7 @@ pub struct LangInfo {
     /// The language's name in itself, shown in the Preferences dropdown.
     pub name: &'static str,
     /// Catalog file contents (empty for the built-in English).
+    #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
     pub source: &'static str,
     /// Plural form index for a count (English: 0 = one, 1 = other; Japanese and Chinese: always 0;
     /// Czech: 0 = one, 1 = few (2–4), 2 = other; French: 0 = one (0 and 1), 1 = other). A catalog's `@plural` entries list one form per
@@ -42,6 +45,7 @@ pub struct LangInfo {
     pub plural: fn(u64) -> usize,
     /// Must the catalog cover every menu string? (checked by the tests)
     pub complete_menus: bool,
+    #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
     catalog: OnceLock<Catalog>,
 }
 
@@ -97,37 +101,162 @@ fn plural_polish(n: u64) -> usize {
 
 /// The registry. English first: it is the fallback and the source language.
 pub static LANGUAGES: [LangInfo; 15] = [
-    LangInfo { code: "en", name: "English", source: "", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
-    LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo {
-        code: "zh-hans", name: "简体中文", source: include_str!("zh-hans.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new()
+        code: "en",
+        name: "English",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: "",
+        plural: plural_one_other,
+        complete_menus: false,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
+    LangInfo {
+        code: "ja",
+        name: "日本語",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: include_str!("ja.tsv"),
+        plural: plural_none,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
+    LangInfo {
+        code: "zh-hans",
+        name: "简体中文",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: include_str!("zh-hans.tsv"),
+        plural: plural_none,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
     },
     // Traditional Chinese in the vocabulary used in Taiwan; `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant-*`
     // locales all resolve here (see `candidates`).
     LangInfo {
-        code: "zh-hant", name: "繁體中文", source: include_str!("zh-hant.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new()
+        code: "zh-hant",
+        name: "繁體中文",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: include_str!("zh-hant.tsv"),
+        plural: plural_none,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
     },
-    LangInfo { code: "es", name: "Español", source: include_str!("es.tsv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
-    LangInfo { code: "ru", name: "Русский", source: include_str!("ru.tsv"), plural: plural_russian, complete_menus: true, catalog: OnceLock::new() },
-    LangInfo { code: "cs", name: "Čeština", source: include_str!("cs.tsv"), plural: plural_cs, complete_menus: true, catalog: OnceLock::new() },
-    LangInfo { code: "fr", name: "Français", source: include_str!("fr.tsv"), plural: plural_fr, complete_menus: true, catalog: OnceLock::new() },
-    LangInfo { code: "id", name: "Bahasa Indonesia", source: include_str!("id.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
-    LangInfo { code: "ko", name: "한국어", source: include_str!("ko.tsv"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
-    LangInfo { code: "pl", name: "Polski", source: include_str!("pl.tsv"), plural: plural_polish, complete_menus: true, catalog: OnceLock::new() },
-    LangInfo { code: "de", name: "Deutsch", source: include_str!("de.tsv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo {
+        code: "es",
+        name: "Español",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: include_str!("es.tsv"),
+        plural: plural_one_other,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
+    LangInfo {
+        code: "ru",
+        name: "Русский",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: include_str!("ru.tsv"),
+        plural: plural_russian,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
+    LangInfo {
+        code: "cs",
+        name: "Čeština",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: include_str!("cs.tsv"),
+        plural: plural_cs,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
+    LangInfo {
+        code: "fr",
+        name: "Français",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: include_str!("fr.tsv"),
+        plural: plural_fr,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
+    LangInfo {
+        code: "id",
+        name: "Bahasa Indonesia",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: include_str!("id.tsv"),
+        plural: plural_none,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
+    LangInfo {
+        code: "ko",
+        name: "한국어",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: include_str!("ko.tsv"),
+        plural: plural_none,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
+    LangInfo {
+        code: "pl",
+        name: "Polski",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: include_str!("pl.tsv"),
+        plural: plural_polish,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
+    LangInfo {
+        code: "de",
+        name: "Deutsch",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: include_str!("de.tsv"),
+        plural: plural_one_other,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
     // Brazilian Portuguese; `pt`, `pt-BR` and `pt-PT` locales all resolve here (see `candidates`).
     LangInfo {
         code: "pt-br",
         name: "Português (Brasil)",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
         source: include_str!("pt-br.tsv"),
         plural: plural_pt,
         complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
         catalog: OnceLock::new(),
     },
-    LangInfo { code: "el", name: "Ελληνικά", source: include_str!("el.tsv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
-    LangInfo { code: "it", name: "Italiano", source: include_str!("it.tsv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo {
+        code: "el",
+        name: "Ελληνικά",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: include_str!("el.tsv"),
+        plural: plural_one_other,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
+    LangInfo {
+        code: "it",
+        name: "Italiano",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: include_str!("it.tsv"),
+        plural: plural_one_other,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
 ];
 
+#[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
 impl LangInfo {
     fn catalog(&self) -> &Catalog {
         self.catalog.get_or_init(|| Catalog::parse(self.source))
@@ -136,7 +265,21 @@ impl LangInfo {
 
 /// A language the UI can be shown in (a handle into [`LANGUAGES`]).
 #[derive(Clone, Copy)]
-pub struct Lang(&'static LangInfo);
+pub struct Lang(&'static LangInfo, CatalogSource);
+#[derive(Clone, Copy)]
+enum CatalogSource {
+    English,
+    #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+    Builtin,
+    #[cfg(all(target_arch = "wasm32", feature = "web_external_assets"))]
+    Ready(ReadyCatalog),
+}
+#[cfg(all(target_arch = "wasm32", feature = "web_external_assets"))]
+#[derive(Clone, Copy)]
+pub(crate) struct ReadyCatalog {
+    pub(crate) source: &'static str,
+    pub(crate) parsed: &'static OnceLock<Catalog>,
+}
 
 impl std::fmt::Debug for Lang {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -153,19 +296,44 @@ impl PartialEq for Lang {
 impl Eq for Lang {}
 
 impl Lang {
-    pub const EN: Lang = Lang(&LANGUAGES[0]);
+    pub const EN: Lang = Lang(&LANGUAGES[0], CatalogSource::English);
 
+    pub fn try_from_code(code: &str) -> Result<Option<Lang>, crate::web_ui_assets::UiAssetError> {
+        let Some(info) = LANGUAGES.iter().find(|info| info.code.eq_ignore_ascii_case(code)) else { return Ok(None) };
+        if info.code == "en" {
+            return Ok(Some(Self::EN));
+        }
+        #[cfg(all(target_arch = "wasm32", feature = "web_external_assets"))]
+        let source = CatalogSource::Ready(crate::web_ui_assets::ready()?.catalog(info.code)?);
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        let source = CatalogSource::Builtin;
+        Ok(Some(Lang(info, source)))
+    }
+    pub fn try_from_pref(pref: &str) -> Result<Lang, crate::web_ui_assets::UiAssetError> {
+        if pref.eq_ignore_ascii_case("auto") {
+            return try_system_lang();
+        }
+        if let Some(lang) = Self::try_from_code(pref)? {
+            return Ok(lang);
+        }
+        if let Some(lang) = try_lang_from_tag(pref)? {
+            return Ok(lang);
+        }
+        try_system_lang()
+    }
     pub fn code(self) -> &'static str {
         self.0.code
     }
 
     /// A language by its exact code.
+    #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
     pub fn from_code(code: &str) -> Option<Lang> {
-        LANGUAGES.iter().find(|l| l.code.eq_ignore_ascii_case(code)).map(Lang)
+        LANGUAGES.iter().find(|l| l.code.eq_ignore_ascii_case(code)).map(|info| Lang(info, CatalogSource::Builtin))
     }
 
     /// Resolve the `interface.language` preference: a language code, or `auto` (and anything
     /// unknown, e.g. a code from a newer version) to follow the system locale.
+    #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
     pub fn from_pref(pref: &str) -> Lang {
         if pref.eq_ignore_ascii_case("auto") {
             return system_lang();
@@ -174,8 +342,9 @@ impl Lang {
     }
 
     /// Every registered language.
+    #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
     pub fn all() -> impl Iterator<Item = Lang> {
-        LANGUAGES.iter().map(Lang)
+        LANGUAGES.iter().map(|info| Lang(info, CatalogSource::Builtin))
     }
 
     pub fn name(self) -> &'static str {
@@ -188,7 +357,16 @@ impl Lang {
     }
 
     fn catalog(self) -> &'static Catalog {
-        self.0.catalog()
+        match self.1 {
+            CatalogSource::English => {
+                static ENGLISH: OnceLock<Catalog> = OnceLock::new();
+                ENGLISH.get_or_init(Catalog::default)
+            }
+            #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+            CatalogSource::Builtin => self.0.catalog(),
+            #[cfg(all(target_arch = "wasm32", feature = "web_external_assets"))]
+            CatalogSource::Ready(ready) => ready.parsed.get_or_init(|| Catalog::parse(ready.source)),
+        }
     }
 }
 
@@ -216,12 +394,26 @@ fn candidates(tag: &str) -> Vec<String> {
 
 /// The registered language for a locale tag such as `ja_JP.UTF-8`, `ja-JP`, `zh-TW`; `None` if
 /// the language isn't supported. `C`/`POSIX` mean English.
+#[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
 pub fn lang_from_tag(tag: &str) -> Option<Lang> {
     let cands = candidates(tag);
     if matches!(cands.first().map(String::as_str), Some("c" | "posix")) {
         return Some(Lang::EN);
     }
     cands.iter().find_map(|c| Lang::from_code(c))
+}
+
+pub fn try_lang_from_tag(tag: &str) -> Result<Option<Lang>, crate::web_ui_assets::UiAssetError> {
+    let cands = candidates(tag);
+    if matches!(cands.first().map(String::as_str), Some("c" | "posix")) {
+        return Ok(Some(Lang::EN));
+    }
+    for candidate in cands {
+        if let Some(lang) = Lang::try_from_code(&candidate)? {
+            return Ok(Some(lang));
+        }
+    }
+    Ok(None)
 }
 
 thread_local! {
@@ -266,6 +458,7 @@ pub fn language_scope(lang: Lang) -> impl Drop {
 
 /// Apply a committed language to this context. Font caches are rebuilt only on a language
 /// change, so Han glyphs follow the selected script even when the previous font covered them.
+#[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
 pub fn sync_context(ctx: &egui::Context, language: &str) {
     let lang = Lang::from_pref(language);
     set_current(lang);
@@ -276,6 +469,19 @@ pub fn sync_context(ctx: &egui::Context, language: &str) {
         crate::theme::install_fonts(ctx);
         ctx.request_repaint();
     }
+}
+
+pub fn try_sync_context(ctx: &egui::Context, language: &str) -> Result<(), crate::web_ui_assets::UiAssetError> {
+    let lang = Lang::try_from_pref(language)?;
+    let id = egui::Id::new("photocraft-ui-language");
+    let changed = ctx.data(|data| data.get_temp::<Lang>(id) != Some(lang));
+    if changed {
+        crate::theme::try_install_fonts(ctx)?;
+        ctx.data_mut(|data| data.insert_temp(id, lang));
+        ctx.request_repaint();
+    }
+    set_current(lang);
+    Ok(())
 }
 
 /// Does `lang` have a catalog entry for this plain string? (English never does: it is the source.)

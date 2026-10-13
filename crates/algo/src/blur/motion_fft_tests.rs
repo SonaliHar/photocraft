@@ -289,6 +289,9 @@ fn motion_fft_pipeline_supports_depths_models_edges_selections_and_tile_seams() 
                             SampleType::U8 => 1.0 / 255.0 + 1e-7,
                             SampleType::U16 => 1.0 / 65_535.0 + 1e-7,
                             SampleType::F32 => 1e-6,
+                            SampleType::U32 | SampleType::F64 => {
+                                panic!("this legacy FFT oracle only exercises U8/U16/F32; wide dispatch is separately tested as unsupported")
+                            }
                         };
                         for tile in [5, 17, 256] {
                             let actual = crate::apply_tiled(&source, &params, rect, rect, mask, tile, extent).read_region(rect.inflate(2));

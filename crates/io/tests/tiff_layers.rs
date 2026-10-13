@@ -88,8 +88,8 @@ fn tiff_and_psd_open_as_the_same_document() {
         )
         .unwrap()
         .document;
-        let a = photocraft_compose::flatten(&d).px;
-        let b = photocraft_compose::flatten(&flat).px;
+        let a = photocraft_compose::flatten(&d).unwrap().px;
+        let b = photocraft_compose::flatten(&flat).unwrap().px;
         assert!(max_diff(&a, &b) <= 2.0 / 255.0, "{mode:?} {depth:?}: composite differs by {}", max_diff(&a, &b));
     }
 }

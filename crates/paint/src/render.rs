@@ -25,6 +25,10 @@ use crate::{Dab, StrokePoint, dab_coverage};
 pub const COV_TILE: i32 = 64;
 const NOISE_SALT: u64 = 0x006E_6F69_7365;
 
+#[path = "stroke_controlled.rs"]
+mod controlled;
+pub use controlled::{StrokeError,StrokeLimits,apply_stroke_with_interrupt,render_stroke_with_interrupt};
+
 #[inline]
 /// Where an aliased (Pencil) dab of `diameter` pixels centred near (`x`, `y`) lands on the pixel
 /// grid: the centre of the pixel holding the point for odd diameters, the nearest pixel corner
@@ -420,6 +424,159 @@ pub struct StrokeRenderer {
 }
 
 impl StrokeRenderer {
+    /// Recompose from exact pre-stroke samples. Coverage geometry is f32;
+    /// authoritative color and alpha arithmetic stays f64. Clip to a finite
+    /// imported drawable extent when supplied, preserving all outside bytes.
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_composite_wide(
+        &self,
+        pre: &Surface,
+        target: &mut Surface,
+        native_color: &Surface,
+        selection: Option<&Surface>,
+        lock_transparency: bool,
+        clip: Option<Rect>,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<Rect, photocraft_raster::RasterInputError> {
+        self.try_composite_wide_passes(None, pre, target, native_color, selection, lock_transparency, clip, control)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn try_composite_wide_passes(
+        &self,
+        other: Option<&Self>,
+        pre: &Surface,
+        target: &mut Surface,
+        native_color: &Surface,
+        selection: Option<&Surface>,
+        lock_transparency: bool,
+        clip: Option<Rect>,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<Rect, photocraft_raster::RasterInputError> {
+        use photocraft_raster::{MAX_CHECKED_RASTER_BYTES, RasterInputError};
+        let brush = &self.ctx.brush;
+        if self.per_dab_color
+            || other.is_some_and(|other| other.per_dab_color || other.ctx.brush != *brush || other.fmt != self.fmt)
+            || brush.mode != BlendMode::Normal
+            || pre.format() != target.format()
+            || (brush.erase && (!pre.format().alpha || lock_transparency))
+        {
+            return Err(RasterInputError::UnsupportedConversion);
+        }
+        if control.cancelled() {
+            return Err(RasterInputError::Cancelled);
+        }
+        pre.try_validate_tile_origins_with(control)?;
+        target.try_validate_tile_origins_with(control)?;
+        native_color.try_validate_tile_origins_with(control)?;
+        if let Some(selection) = selection {
+            selection.try_validate_tile_origins_with(control)?;
+        }
+        let combined_bounds = other.map_or(self.bounds(), |other| self.bounds().union(&other.bounds()));
+        let bounds = clip.map_or(combined_bounds, |r| combined_bounds.intersect(&r));
+        let bytes = photocraft_raster::checked_region_byte_len(bounds, pre.format())? as u64;
+        let coverage_bytes = self
+            .cov
+            .tiles
+            .len()
+            .checked_add(self.dual.as_ref().map_or(0, |v| v.tiles.len()))
+            .and_then(|n| n.checked_add(other.map_or(0, |other| other.cov.tiles.len().saturating_add(other.dual.as_ref().map_or(0, |v| v.tiles.len())))))
+            .and_then(|n| n.checked_mul(64 * 64 * 4))
+            .ok_or(RasterInputError::LimitExceeded)? as u64;
+        let target_bytes = target.resident_payload_bytes()?;
+        let retained = pre
+            .resident_payload_bytes()?
+            .checked_mul(2)
+            .and_then(|v| v.checked_add(bytes))
+            .and_then(|v| v.checked_add(target_bytes))
+            .and_then(|v| v.checked_add(coverage_bytes.checked_mul(2)?))
+            .and_then(|v| v.checked_add(256 * 256 * pre.format().bytes_per_pixel() as u64 * 3))
+            .ok_or(RasterInputError::LimitExceeded)?;
+        if retained.checked_add(selection.map_or(Ok(0), Surface::resident_payload_bytes)?).ok_or(RasterInputError::LimitExceeded)? > MAX_CHECKED_RASTER_BYTES
+            || bytes > 1_000_000_000
+        {
+            return Err(RasterInputError::LimitExceeded);
+        }
+        let mut staged = pre.clone();
+        // Disjoint coverage tiles are order-independent; avoid an allocated key list.
+        for &(tx, ty) in self.cov.tiles.keys().chain(other.into_iter().flat_map(|other| other.cov.tiles.keys().filter(|key| !self.cov.tiles.contains_key(key))))
+        {
+            if control.cancelled() {
+                return Err(RasterInputError::Cancelled);
+            }
+            let x0 = tx.checked_mul(COV_TILE).ok_or(RasterInputError::InvalidBounds)?;
+            let y0 = ty.checked_mul(COV_TILE).ok_or(RasterInputError::InvalidBounds)?;
+            let area = Rect::new(
+                x0,
+                y0,
+                x0.checked_add(COV_TILE).ok_or(RasterInputError::InvalidBounds)?,
+                y0.checked_add(COV_TILE).ok_or(RasterInputError::InvalidBounds)?,
+            )
+            .intersect(&bounds);
+            if area.is_empty() {
+                continue;
+            }
+            let count = usize::try_from(area.width())
+                .ok()
+                .and_then(|w| usize::try_from(area.height()).ok().and_then(|h| w.checked_mul(h)))
+                .ok_or(RasterInputError::InvalidBounds)?;
+            let mut coverage = Vec::new();
+            coverage.try_reserve_exact(count).map_err(|_| RasterInputError::AllocationFailed)?;
+            for y in area.y0..area.y1 {
+                for x in area.x0..area.x1 {
+                    let primary = self.cov.get(x, y).max(other.map_or(0.0, |other| other.cov.get(x, y)));
+                    let dual = self.dual.as_ref().map(|d| d.get(x, y).max(other.and_then(|other| other.dual.as_ref()).map_or(0.0, |d| d.get(x, y))));
+                    let value = if primary <= 0.0 { 0.0 } else { self.ctx.stroke_mask(primary, dual, x, y) };
+                    coverage.push(f64::from(value));
+                }
+            }
+            if brush.erase {
+                crate::wide_erase::try_erase_coverage(
+                    &mut staged,
+                    area,
+                    &coverage,
+                    f64::from(brush.opacity),
+                    selection,
+                    false,
+                    crate::wide_erase::EraseColorPolicy::Preserve,
+                    crate::wide_erase::EraseLimits::default(),
+                    control,
+                )?;
+            } else {
+                crate::wide::try_apply_normal_coverage(
+                    &mut staged,
+                    native_color,
+                    area,
+                    &coverage,
+                    f64::from(brush.opacity),
+                    selection,
+                    lock_transparency,
+                    control,
+                )?;
+            }
+        }
+        if control.cancelled() {
+            return Err(RasterInputError::Cancelled);
+        }
+        *target = staged;
+        Ok(bounds)
+    }
+
+    /// Mirrored wide strokes share one coverage ceiling, including axis pixels.
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_composite_union_wide(
+        &self,
+        other: &Self,
+        pre: &Surface,
+        target: &mut Surface,
+        native_color: &Surface,
+        selection: Option<&Surface>,
+        lock_transparency: bool,
+        clip: Option<Rect>,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<Rect, photocraft_raster::RasterInputError> {
+        self.try_composite_wide_passes(Some(other), pre, target, native_color, selection, lock_transparency, clip, control)
+    }
     /// Composite the union of this stroke and a mirrored pass as one stroke. This keeps
     /// overlapping dabs on a symmetry axis under one opacity ceiling at every bit depth.
     pub fn composite_union(&self, other: &Self, pre: &Surface, target: &mut Surface, selection: Option<&Surface>, lock_transparency: bool) -> Rect {

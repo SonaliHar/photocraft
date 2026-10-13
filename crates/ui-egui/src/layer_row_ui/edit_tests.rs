@@ -67,7 +67,7 @@ fn text_thumbnail_opens_inline_editing_and_typing_is_one_undo_step() {
         let mut s = session();
         let id = s.execute("type.create", json!({"text": "Hello 世界", "size": 48, "x": 100, "y": 180})).unwrap()["layer"].as_u64().unwrap();
         s.execute("layer.new.layer", json!({"name": "Other active layer"})).unwrap();
-        let steps = s.active().unwrap().history.entries().len();
+        let steps = s.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
         let layers = s.active().unwrap().doc.layers.len();
         let mut h = harness(s, ppp);
         let at = thumbnail(&h, id);
@@ -76,14 +76,14 @@ fn text_thumbnail_opens_inline_editing_and_typing_is_one_undo_step() {
         let ed = h.state().ui.text_edit.as_ref().expect("inline text editor");
         assert_eq!((ed.layer, ed.anchor, ed.caret, ed.created), (id, 0, 8, false));
         assert!(h.state().ui.dialogs.is_empty(), "no Layer Style dialog");
-        assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps, "entering native text adds no edit");
+        assert_eq!(h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), steps, "entering native text adds no edit");
         assert_eq!(h.state().session.active().unwrap().doc.layers.len(), layers);
         for typed in ["New", " text"] {
             h.event(Event::Text(typed.into()));
             h.run_steps(2);
         }
         assert_eq!(text(&h, id), "New text");
-        assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps + 1);
+        assert_eq!(h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), steps + 1);
         crate::type_tool::commit(h.state_mut());
         assert!(h.state_mut().session.undo());
         assert_eq!(text(&h, id), "Hello 世界");
@@ -138,11 +138,11 @@ fn reentering_type_edit_keeps_the_session_and_cancel_restores_cached_pixels() {
         moved.transform = photocraft_geom::Affine::translate(350.0, 280.0);
         let cache = photocraft_text::shared().lock().unwrap().render(&moved, 72.0, photocraft_color::PixelFormat::RGBA8).1.surface;
         t.cache = Some(cache.clone());
-        st.doc = std::sync::Arc::new(doc);
+        st.doc = photocraft_engine::document_snapshot::DocumentSnapshot::from_resident(std::sync::Arc::new(doc)).unwrap();
         st.revision += 1;
         cache
     };
-    let steps = s.active().unwrap().history.entries().len();
+    let steps = s.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
     let mut h = harness(s, 1.0);
     let at = thumbnail(&h, id);
     double_click(&mut h, at);
@@ -151,7 +151,7 @@ fn reentering_type_edit_keeps_the_session_and_cancel_restores_cached_pixels() {
     h.run_steps(2);
     double_click(&mut h, at);
     assert_eq!(h.state().ui.text_edit.as_ref().unwrap().session, key);
-    assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps + 1);
+    assert_eq!(h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), steps + 1);
     crate::type_tool::cancel(h.state_mut());
     assert_eq!(text(&h, id), "Hello");
     let st = h.state().session.active().unwrap();

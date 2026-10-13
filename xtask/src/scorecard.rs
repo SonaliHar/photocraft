@@ -777,7 +777,7 @@ const MIXED: Source = Source { label: "io corpus", env: "PHOTOCRAFT_CORPUS", def
 const PSD_TOOLS: Source =
     Source { label: "psd-tools corpus", env: "X", default_dir: "corpus/psd-tools", pass_floor: 212, roundtrip_floor: 307, extra: 5 };
 
-/// Ours (256 files; https://github.com/storytold/photocraft-corpus), grouped by feature.
+/// Ours (256 files; https://github.com/Terra854/photocraft-corpus), grouped by feature.
 const PHOTOSHOP: Source = Source { label: "photoshop oracles", dir: "corpus/photoshop", group_depth: 2, pass_floor: 74, roundtrip_floor: 256 };
 "#;
         let c = parse_corpus(src);

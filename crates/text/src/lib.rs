@@ -22,12 +22,19 @@ pub mod fonts;
 pub mod glyphs;
 pub mod layout;
 pub mod optical;
+mod physical_layout;
+pub use physical_layout::PhysicalLayoutError;
 pub mod psd;
 pub mod psd_styles;
 pub mod raster;
 pub mod render;
 pub mod spell;
 pub mod warp;
+pub mod web_boot_fonts;
+pub mod xcf;
+pub use web_boot_fonts::{FontBootstrapError, WebCustomFace, try_shared};
+#[cfg(all(target_arch = "wasm32", feature = "web_external_bundled_fonts"))]
+pub use web_boot_fonts::{WebTextRefs, install_web_font_provider};
 
 use photocraft_color::PixelFormat;
 use photocraft_doc::TextLayer;
@@ -45,6 +52,7 @@ pub struct TextEngine {
     layouter: layout::Layouter,
 }
 
+#[cfg(not(all(target_arch = "wasm32", feature = "web_external_bundled_fonts")))]
 impl Default for TextEngine {
     fn default() -> Self {
         Self::new()
@@ -53,11 +61,13 @@ impl Default for TextEngine {
 
 impl TextEngine {
     /// Bundled fonts only: deterministic output (tests, web).
+    #[cfg(not(all(target_arch = "wasm32", feature = "web_external_bundled_fonts")))]
     pub fn new() -> Self {
         Self { fonts: FontDb::new(), layouter: layout::Layouter::new() }
     }
 
     /// Bundled plus installed system fonts (native desktop).
+    #[cfg(not(all(target_arch = "wasm32", feature = "web_external_bundled_fonts")))]
     pub fn with_system_fonts() -> Self {
         Self { fonts: FontDb::with_system_fonts(), layouter: layout::Layouter::new() }
     }
@@ -65,6 +75,55 @@ impl TextEngine {
     /// Lays out a text layer (text space: pixels, before `layer.transform`).
     pub fn layout(&mut self, layer: &TextLayer, dpi: f32) -> TextLayout {
         self.layouter.layout(&mut self.fonts, layer, dpi)
+    }
+
+    /// Checked physical X/Y layout. The scalar API retains its original behavior.
+    /// This never replaces a painted cache or acquires font/resource authority.
+    pub fn layout_with_resolution(&mut self, layer: &TextLayer, resolution: &photocraft_doc::PhysicalResolution) -> Result<TextLayout, PhysicalLayoutError> {
+        self.layouter.layout_with_resolution(&mut self.fonts, layer, resolution)
+    }
+
+    /// Outline rasterization with physical axes, before layer affine/warp transforms.
+    pub fn render_with_resolution(
+        &mut self,
+        layer: &TextLayer,
+        resolution: &photocraft_doc::PhysicalResolution,
+        format: PixelFormat,
+    ) -> Result<(TextLayout, Rendered), PhysicalLayoutError> {
+        let layout = self.layout_with_resolution(layer, resolution)?;
+        let warp = render::layout_warp(&layout, layer.warp.as_ref());
+        let rendered = render::rasterize_warped(&layout, &layer.transform, format, layer.antialias, warp.as_ref());
+        Ok((layout, rendered))
+    }
+
+    /// Explicit cache refresh only after checked layout/render succeeds.
+    pub fn render_layer_with_resolution(
+        &mut self,
+        layer: &mut TextLayer,
+        resolution: &photocraft_doc::PhysicalResolution,
+        format: PixelFormat,
+    ) -> Result<photocraft_geom::Rect, PhysicalLayoutError> {
+        let (_, rendered) = self.render_with_resolution(layer, resolution, format)?;
+        layer.cache = Some(rendered.surface);
+        Ok(rendered.rect)
+    }
+
+    /// Checked physical-axis pair kerning in the existing dimensionless 1/1000-em units.
+    /// Along-line pixel scale cancels between pair gap and em; the paragraph box
+    /// must first enter the scalar basis so line membership stays correct.
+    pub fn pair_kerning_with_resolution(
+        &mut self,
+        layer: &TextLayer,
+        resolution: &photocraft_doc::PhysicalResolution,
+        at: usize,
+    ) -> Result<Option<f32>, PhysicalLayoutError> {
+        let axes = physical_layout::Axes::checked(layer, resolution)?;
+        if axes.scale == [1.0, 1.0] {
+            return Ok(self.pair_kerning(layer, axes.dpi, at));
+        }
+        let mut scalar = layer.clone();
+        scalar.shape = psd::physical_shape(layer.shape, axes.scale, true)?;
+        Ok(self.pair_kerning(&scalar, axes.dpi, at))
     }
 
     /// Kerning (1/1000 em) between the character starting at byte `at` and the next one, as
@@ -137,6 +196,7 @@ impl TextEngine {
 
 /// A process-wide engine for callers without their own (bundled fonts only on the web; bundled
 /// plus system fonts elsewhere). Locking is cheap relative to layout.
+#[cfg(not(all(target_arch = "wasm32", feature = "web_external_bundled_fonts")))]
 pub fn shared() -> &'static std::sync::Mutex<TextEngine> {
     static ENGINE: std::sync::OnceLock<std::sync::Mutex<TextEngine>> = std::sync::OnceLock::new();
     ENGINE.get_or_init(|| {
@@ -149,3 +209,25 @@ pub fn shared() -> &'static std::sync::Mutex<TextEngine> {
 mod tests;
 #[cfg(test)]
 mod vertical_tests;
+
+#[cfg(any(test, all(target_arch = "wasm32", feature = "web_external_bundled_fonts")))]
+impl TextEngine {
+    pub fn prepare_from_boot_faces(
+        faces: &fonts::WebCustomFonts,
+        charge: &mut dyn FnMut(u64) -> Result<(), FontBootstrapError>,
+    ) -> Result<Self, FontBootstrapError> {
+        // Pure local construction: never shared(), try_shared(), provider lookup,
+        // WebRunner, or L6 methods. Library parser/index overhead is still unqualified
+        // until overlay measurement; no invented byte multiplier is charged here.
+        charge(0)?;
+        let fonts = FontDb::prepare_from_boot_faces(faces, charge)?;
+        let layouter = layout::Layouter::new();
+        charge(0)?;
+        Ok(Self { fonts, layouter })
+    }
+
+    pub fn try_new(charge: &mut dyn FnMut(u64) -> Result<(), FontBootstrapError>) -> Result<Self, FontBootstrapError> {
+        let ready = web_boot_fonts::ready_refs()?;
+        Self::prepare_from_boot_faces(ready.faces, charge)
+    }
+}

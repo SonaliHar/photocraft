@@ -1,4 +1,4 @@
-//! Vector masks on the GPU: the planner samples the layer's combined mask (pixel mask × the
+//! Vector masks on the GPU: the planner samples the layer's combined mask (pixel mask Ã— the
 //! rasterised path, `compose::masks::combined_mask`); results must match the CPU compositor.
 
 use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
@@ -18,7 +18,7 @@ fn gpu() -> Option<(wgpu::Device, wgpu::Queue, photocraft_gpu::Compositor)> {
 }
 
 fn check(g: &mut (wgpu::Device, wgpu::Queue, photocraft_gpu::Compositor), d: &Document, what: &str) {
-    let cpu = photocraft_compose::flatten(d);
+    let cpu = photocraft_compose::flatten(d).unwrap();
     let out = photocraft_gpu::render_to_vec(&mut g.2, &g.0, &g.1, d, d.bounds()).unwrap_or_else(|e| panic!("{what}: {e}"));
     let worst = cpu
         .px
@@ -54,7 +54,7 @@ fn vector_masks_match_the_cpu() {
             let mut l = painted("a", fmt, [0.9, 0.2, 0.1, 0.8]);
             l.vector_mask = Some(tri(inverted, density));
             let mut m = LayerMask::reveal_all();
-            m.surface.fill_rect(Rect::new(20, 0, 44, 34), &[0.3]);
+            std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::new(20, 0, 44, 34), &[0.3]);
             m.density = 0.9;
             l.mask = Some(m);
             l.blend = BlendMode::Multiply;

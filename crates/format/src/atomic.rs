@@ -98,6 +98,101 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     atomic_write_with(&RealFs, RenameRetry::platform(), path, bytes)
 }
 
+/// Produce a file directly in an exclusively created sibling temporary file,
+/// then replace the destination after the caller's commit gate succeeds.
+/// A writer, flush or gate failure removes only the file created by this call.
+/// The gate also runs before each rename retry so cancellation while a Windows
+/// scanner holds the destination does not install an obsolete save.
+pub fn atomic_write_stream<T, E>(
+    path: &Path,
+    write: impl FnOnce(&mut std::fs::File) -> std::result::Result<T, E>,
+    before_commit: impl Fn() -> std::result::Result<(), E>,
+) -> std::result::Result<T, E>
+where
+    E: From<io::Error>,
+{
+    before_commit()?;
+    let target = resolve_symlink(path);
+    atomic_write_stream_to(path, target, write, |_| before_commit())
+}
+
+fn atomic_write_stream_to<T, E>(
+    path: &Path,
+    target: PathBuf,
+    write: impl FnOnce(&mut std::fs::File) -> std::result::Result<T, E>,
+    before_commit: impl Fn(&Path) -> std::result::Result<(), E>,
+) -> std::result::Result<T, E>
+where
+    E: From<io::Error>,
+{
+    let name = target.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "destination is not a file path"))?;
+    let dir = target.parent().filter(|dir| !dir.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(dir).map_err(|error| write_error(error, path, dir))?;
+    let mut temporary = None;
+    for _ in 0..8 {
+        let candidate = dir.join(temp_name(&name.to_string_lossy()));
+        match std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&candidate) {
+            Ok(file) => {
+                temporary = Some((candidate, file));
+                break;
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(write_error(error, path, dir).into()),
+        }
+    }
+    let (temporary, mut file) = temporary.ok_or_else(|| io::Error::new(io::ErrorKind::AlreadyExists, "could not create a sibling temporary file"))?;
+    let result = (|| {
+        let output = write(&mut file)?;
+        file.flush().map_err(|error| write_error(error, path, dir))?;
+        file.sync_all().map_err(|error| write_error(error, path, dir))?;
+        Ok(output)
+    })();
+    // Windows replacement requires the temporary handle to be closed first.
+    #[cfg(not(target_arch = "wasm32"))]
+    drop(file);
+    let result = result.and_then(|output| {
+        if target.exists() {
+            let _ = RealFs.copy_permissions(&target, &temporary);
+        }
+        let retry = RenameRetry::platform();
+        let mut delay = retry.first_delay_ms;
+        let mut left = retry.attempts;
+        loop {
+            before_commit(&target)?;
+            match std::fs::rename(&temporary, &target) {
+                Err(error) if error.kind() == io::ErrorKind::PermissionDenied && left > 0 => {
+                    left -= 1;
+                    sleep_ms(delay);
+                    delay = delay.saturating_mul(2);
+                }
+                Err(error) => return Err(rename_error(error, path).into()),
+                Ok(()) => break,
+            }
+        }
+        let _ = RealFs.sync_dir(dir);
+        Ok(output)
+    });
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
+/// Target-aware optional streaming entry point. Caller namespace authorization
+/// remains external; the gate must validate the actual replacement target.
+pub fn atomic_write_stream_guarded<T, E>(
+    path: &Path,
+    write: impl FnOnce(&mut std::fs::File) -> std::result::Result<T, E>,
+    before_commit: impl Fn(&Path) -> std::result::Result<(), E>,
+) -> std::result::Result<T, E>
+where
+    E: From<io::Error>,
+{
+    let target = resolve_symlink(path);
+    before_commit(&target)?;
+    atomic_write_stream_to(path, target, write, before_commit)
+}
+
 /// [`atomic_write`] through an explicit file system and retry policy (the failure-injection seam).
 pub fn atomic_write_with(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, bytes: &[u8]) -> io::Result<()> {
     let target = resolve_symlink(path);

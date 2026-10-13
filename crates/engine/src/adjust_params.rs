@@ -698,7 +698,7 @@ pub fn curves_eyedropper_from_params(s: &crate::Session, p: &Value) -> Result<Op
             return Err(bad(CMD, "`eyedropper.at` is outside the image"));
         }
         let rect = photocraft_geom::Rect::from_xywh(x.floor() as i32, y.floor() as i32, 1, 1);
-        let [r, g, b, a] = photocraft_compose::render(&d.doc, rect).px.first().copied().unwrap_or_default();
+        let [r, g, b, a] = photocraft_compose::render(&d.doc, rect)?.px.first().copied().unwrap_or_default();
         if a <= 0.0 {
             return Err(bad(CMD, "the sampled pixel is transparent"));
         }

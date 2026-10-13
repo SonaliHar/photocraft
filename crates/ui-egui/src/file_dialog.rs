@@ -26,6 +26,8 @@ pub enum FileDialogRequest {
     /// Files to read: several for File › Open, one for a command that reads a file (Place,
     /// scripts, notes, presets).
     Open { multiple: bool },
+    /// Explicit linked-image replacement; platforms read at most the fixed resource cap.
+    XcfLinkedImage,
     /// Where to write, starting from `suggested` (a file name, or the document's own path).
     Save { suggested: String },
 }
@@ -39,10 +41,12 @@ pub enum FileDialogAnswer {
     Contents(String, Vec<u8>),
     /// The path to save to (desktop), or the download's name (web).
     SaveTo(String),
+    /// A visible platform failure, distinct from user cancellation.
+    Failed(String),
 }
 
-/// Hands a dialog's answer to the app and wakes it, from any thread. Dropping it unanswered
-/// (a dialog that failed to show) counts as Cancel.
+/// Hands a dialog's answer to the app and wakes it, from any thread. An unanswered ordinary
+/// dialog counts as Cancel; a bounded resource request reports an unavailable service.
 pub struct FileDialogReply {
     tx: Sender<Option<FileDialogAnswer>>,
     ctx: egui::Context,
@@ -60,6 +64,10 @@ impl FileDialogReply {
 /// The window (`None` in tests) is the dialog's parent.
 pub type FileDialogFn = Box<dyn FnMut(FileDialogRequest, Option<&eframe::Frame>, FileDialogReply)>;
 
+/// Dedicated held-root read used only for explicit linked-image automation replacement.
+/// Reply with bounded Contents or Failed; names carry no authority and no picker is opened.
+pub type AutomationReadXcfLinkedReplacementFn = Box<dyn FnMut(&str, FileDialogReply)>;
+
 /// What to do with the answer (`None`: cancelled).
 type Then = Box<dyn FnOnce(&mut PhotocraftApp, Option<FileDialogAnswer>) -> Result<Value, String>>;
 
@@ -69,6 +77,7 @@ pub(crate) struct Pending {
     request: Option<FileDialogRequest>,
     answer: Option<Receiver<Option<FileDialogAnswer>>>,
     then: Then,
+    bounded_resource: bool,
 }
 
 /// The error of a cancelled dialog: not reported, since backing out is the user's choice.
@@ -90,6 +99,9 @@ impl PhotocraftApp {
         then: impl FnOnce(&mut Self, FileDialogAnswer) -> Result<Value, String> + 'static,
     ) -> Result<Value, String> {
         if self.services.file_dialog.is_none() {
+            if matches!(request, FileDialogRequest::XcfLinkedImage) {
+                return Err("xcf.resource.picker-unavailable".into());
+            }
             return Err(CANCELLED.into());
         }
         if self.file_dialog.is_some() {
@@ -97,11 +109,36 @@ impl PhotocraftApp {
         }
         let kind = match request {
             FileDialogRequest::Open { .. } => "open",
+            FileDialogRequest::XcfLinkedImage => "resource",
             FileDialogRequest::Save { .. } => "save",
         };
-        let then: Then = Box::new(move |app, answer| answer.map_or_else(|| Err(CANCELLED.into()), |a| then(app, a)));
-        self.file_dialog = Some(Pending { request: Some(request), answer: None, then });
+        let bounded_resource = matches!(request, FileDialogRequest::XcfLinkedImage);
+        let then: Then = Box::new(move |app, answer| match answer {
+            None => Err(CANCELLED.into()),
+            Some(FileDialogAnswer::Failed(error)) => Err(error),
+            Some(answer) => then(app, answer),
+        });
+        self.file_dialog = Some(Pending { request: Some(request), answer: None, then, bounded_resource });
         Ok(json!({ "fileDialog": kind }))
+    }
+
+    /// Start a dedicated automation read after the caller has captured its typed target.
+    /// This shares only completion bookkeeping with dialogs, never their file authority.
+    pub(crate) fn read_automation_xcf_linked_replacement(
+        &mut self,
+        ctx: &egui::Context,
+        code: &'static str,
+        path: &str,
+        then: impl FnOnce(&mut Self, Option<FileDialogAnswer>) -> Result<Value, String> + 'static,
+    ) -> Result<(), String> {
+        if self.file_dialog.is_some() {
+            return Err(format!("{code}.busy"));
+        }
+        let read = self.services.automation_read_xcf_linked_replacement.as_mut().ok_or_else(|| format!("{code}.read-unavailable"))?;
+        let (tx, rx) = mpsc::channel();
+        self.file_dialog = Some(Pending { request: None, answer: Some(rx), then: Box::new(then), bounded_resource: true });
+        read(path, FileDialogReply { tx, ctx: ctx.clone() });
+        Ok(())
     }
 
     /// Ask where to save: `then` gets the chosen path.
@@ -122,6 +159,16 @@ impl PhotocraftApp {
         })
     }
 
+    /// Only service-read bytes from an explicit bounded picker may enter resource replacement.
+    pub(crate) fn pick_xcf_link_bytes(&mut self, then: impl FnOnce(&mut Self, String, Vec<u8>) -> Result<Value, String> + 'static) -> Result<Value, String> {
+        self.ask_file(FileDialogRequest::XcfLinkedImage, move |app, answer| match answer {
+            FileDialogAnswer::Contents(_, bytes) if bytes.is_empty() => Err("xcf.resource.empty".into()),
+            FileDialogAnswer::Contents(name, bytes) if bytes.len() <= 8 << 20 => then(app, name, bytes),
+            FileDialogAnswer::Contents(_, _) => Err("xcf.resource.too-large".into()),
+            _ => Err(UNEXPECTED.into()),
+        })
+    }
+
     /// File › Open: opens every chosen file, reporting each failure (see [`Self::open_paths`]).
     pub fn open_dialog_file(&mut self) -> Result<Value, String> {
         self.ask_file(FileDialogRequest::Open { multiple: true }, |app, answer| {
@@ -135,6 +182,7 @@ impl PhotocraftApp {
                     }
                 }
                 FileDialogAnswer::SaveTo(_) => return Err(UNEXPECTED.into()),
+                FileDialogAnswer::Failed(error) => return Err(error),
             }
             Ok(Value::Null)
         })
@@ -179,7 +227,8 @@ impl PhotocraftApp {
         let answer = match p.answer.as_ref().map(Receiver::try_recv) {
             Some(Err(TryRecvError::Empty)) => return,
             Some(Ok(answer)) => answer,
-            // The reply was dropped unanswered: the dialog couldn't be shown.
+            // A resource show/read failure cannot silently become user cancellation.
+            Some(Err(TryRecvError::Disconnected)) | None if p.bounded_resource => Some(FileDialogAnswer::Failed("xcf.resource.picker-unavailable".into())),
             Some(Err(TryRecvError::Disconnected)) | None => None,
         };
         let Some(Pending { then, .. }) = self.file_dialog.take() else { return };
@@ -202,6 +251,7 @@ fn read_picked(answer: FileDialogAnswer) -> Result<(String, Vec<u8>), String> {
             Ok((path, bytes))
         }
         FileDialogAnswer::SaveTo(_) => Err(UNEXPECTED.into()),
+        FileDialogAnswer::Failed(error) => Err(error),
     }
 }
 

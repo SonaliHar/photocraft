@@ -8,7 +8,7 @@ fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, p: Value) -> Result<Value,
     camera_raw_ui::menu(app, ctx, "filter.cameraRaw", &p).ok_or("missing handler")?
 }
 fn inspect(h: &Harness<'_, PhotocraftApp>) -> Value {
-    control::inspect(h.state(), &h.ctx)["cameraRaw"].clone()
+    control::inspect(h.state(), &h.ctx).unwrap()["cameraRaw"].clone()
 }
 fn rect(h: &Harness<'_, PhotocraftApp>, field: &str) -> Rect {
     let v = inspect(h);
@@ -73,7 +73,7 @@ fn invalid_mixed_controller_requests_leave_dialog_preferences_and_document_uncha
         assert!(menu(h.state_mut(), &ctx, json!({"ui":request})).is_err());
         assert_eq!(inspect(&h), before);
         assert_eq!(h.state().session.prefs().dialogs, preferences);
-        assert!(std::sync::Arc::ptr_eq(&h.state().session.active().unwrap().doc, &document));
+        assert!(std::ptr::eq((h.state().session.active().unwrap().doc).as_ref(), (document).as_ref()));
     }
     let result = menu(h.state_mut(), &ctx, json!({"ui":{"set":{"exposure":1.0},"scope":{"tone":{"zone":"exposure","delta":0.5}}}})).unwrap();
     assert_eq!(result["params"]["exposure"], 1.5);
@@ -106,7 +106,7 @@ fn failed_commit_keeps_the_dialog_and_filter_settings_for_retry() {
     let document = h.state().session.active().unwrap().doc.clone();
     assert!(menu(h.state_mut(), &ctx, json!({"ui":{"commit":true}})).is_err());
     assert_eq!(inspect(&h)["params"]["exposure"], 0.5);
-    assert!(std::sync::Arc::ptr_eq(&h.state().session.active().unwrap().doc, &document));
+    assert!(std::ptr::eq((h.state().session.active().unwrap().doc).as_ref(), (document).as_ref()));
     h.state_mut().run("layer.lockLayers", json!({"pixels":false})).unwrap();
     menu(h.state_mut(), &ctx, json!({"ui":{"commit":true}})).unwrap();
     assert!(inspect(&h).is_null());
@@ -124,7 +124,7 @@ fn malformed_curves_fail_in_both_preview_and_engine_without_an_edit() {
             assert!(menu(h.state_mut(), &ctx, json!({"ui":{"set":settings}})).is_err());
             assert!(h.state_mut().run("filter.cameraRaw", settings).is_err());
             assert_eq!(inspect(&h), before);
-            assert!(std::sync::Arc::ptr_eq(&h.state().session.active().unwrap().doc, &document));
+            assert!(std::ptr::eq((h.state().session.active().unwrap().doc).as_ref(), (document).as_ref()));
         }
     }
 }
@@ -170,13 +170,13 @@ fn exact_clipping_rgb_lab_capped_samplers_and_reversible_tone_controls() {
             assert_eq!(no_op["previewRevision"], reading["previewRevision"]);
             assert_eq!(no_op["scopeRevision"], reading["scopeRevision"]);
             assert_eq!(app.session.active().unwrap().history.past_len(), history);
-            assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
+            assert!(std::ptr::eq((original).as_ref(), (app.session.active().unwrap().doc).as_ref()));
             menu(&mut app, &ctx, json!({"ui":{"cancel":true}})).unwrap();
-            assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
+            assert!(std::ptr::eq((original).as_ref(), (app.session.active().unwrap().doc).as_ref()));
             menu(&mut app, &ctx, json!({"ui":{"scope":{"tone":{"zone":"exposure","delta":0.5}},"commit":true}})).unwrap();
             assert_eq!(app.session.active().unwrap().history.past_len(), history + 1);
             app.run("edit.undo", json!({})).unwrap();
-            assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
+            assert!(std::ptr::eq((original).as_ref(), (app.session.active().unwrap().doc).as_ref()));
         }
     }
 }
@@ -318,10 +318,10 @@ fn selected_region_scope_and_preview_share_the_engine_selection_boundary() {
     let before = menu(&mut app, &ctx, json!({"ui":{"before":true}})).unwrap();
     assert_eq!(before["vectorscope"]["before"], true);
     let after = menu(&mut app, &ctx, json!({"ui":{"before":false}})).unwrap();
-    assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
+    assert!(std::ptr::eq((original).as_ref(), (app.session.active().unwrap().doc).as_ref()));
     // Atomic validation: a bad property must not apply the valid tone delta or probe.
     assert!(menu(&mut app, &ctx, json!({"ui":{"scope":{"tone":{"zone":"exposure","delta":1},"sample":[0.5,0.5],"zzz":true}}})).is_err());
-    let unchanged = control::inspect(&app, &ctx)["cameraRaw"].clone();
+    let unchanged = control::inspect(&app, &ctx).unwrap()["cameraRaw"].clone();
     assert_eq!(unchanged["params"], after["params"]);
     assert_eq!(unchanged["scope"], after["scope"]);
     assert_eq!(unchanged["pointerReadout"], after["pointerReadout"]);
@@ -568,7 +568,7 @@ fn curve_deletion_reentry_keyboard_limits_and_controller_replacement_share_captu
     assert_eq!(curve_points(&h).as_array().unwrap().len(), 16);
     let ctx = h.ctx.clone();
     menu(h.state_mut(), &ctx, json!({"ui":{"cancel":true}})).unwrap();
-    assert!(std::sync::Arc::ptr_eq(&original, &h.state().session.active().unwrap().doc));
+    assert!(std::ptr::eq((original).as_ref(), (h.state().session.active().unwrap().doc).as_ref()));
 }
 
 #[test]

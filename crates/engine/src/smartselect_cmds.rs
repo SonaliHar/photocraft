@@ -38,25 +38,37 @@ fn bad(cmd: &str, msg: &str) -> EngineError {
 struct CompositeSampler<'a>(&'a Document);
 
 impl Sampler for CompositeSampler<'_> {
-    fn rgba(&self, r: Rect) -> Vec<[f32; 4]> {
-        photocraft_compose::render(self.0, r).px
+    fn rgba(&self, r: Rect) -> std::result::Result<Vec<[f32; 4]>, photocraft_raster::RasterInputError> {
+        Ok(photocraft_compose::render(self.0, r)?.px)
     }
 }
 
 /// Runs `f` with a sampler over the active layer (or the composite with `all_layers`, or when the
 /// active layer has no pixels).
-fn with_sampler<R>(s: &Session, all_layers: bool, f: impl FnOnce(&dyn Sampler, &Document) -> R) -> Result<R> {
+fn with_sampler<R>(
+    s: &Session,
+    all_layers: bool,
+    f: impl FnOnce(&dyn Sampler, &Document) -> std::result::Result<R, photocraft_raster::RasterInputError>,
+) -> Result<R> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    Ok(with_doc_sampler(&d.doc, d.active_layer, all_layers, f))
+    with_doc_sampler(&d.doc, d.active_layer, all_layers, f)
 }
 
 /// Runs `f` with a sampler over `layer`'s pixels in `doc` (or the composite with `all_layers`, or
 /// when the layer has no pixels).
-pub(crate) fn with_doc_sampler<R>(doc: &Document, layer: Option<LayerId>, all_layers: bool, f: impl FnOnce(&dyn Sampler, &Document) -> R) -> R {
-    match (all_layers, layer.and_then(|id| doc.layer(id)).and_then(Layer::surface)) {
+pub(crate) fn with_doc_sampler<R>(
+    doc: &Document,
+    layer: Option<LayerId>,
+    all_layers: bool,
+    f: impl FnOnce(&dyn Sampler, &Document) -> std::result::Result<R, photocraft_raster::RasterInputError>,
+) -> Result<R> {
+    if !all_layers && layer.and_then(|id| doc.layer(id)).is_some_and(|l| matches!(l.content, photocraft_doc::LayerContent::BackedRaster(_))) {
+        return Err(EngineError::Other("active backed layer requires an accounted sampler".into()));
+    }
+    Ok(match (all_layers, layer.and_then(|id| doc.layer(id)).and_then(Layer::surface)) {
         (false, Some(surf)) => f(&SurfaceSampler(surf), doc),
         _ => f(&CompositeSampler(doc), doc),
-    }
+    }?)
 }
 
 /// Stores `region` combined with the current selection by `m` as one history step.
@@ -99,8 +111,10 @@ fn quick_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let enhance = b(p, "enhanceEdge", false);
     let region = with_sampler(s, b(p, "sampleAllLayers", false), |smp, doc| {
         let canvas = doc.bounds();
-        let r = quick::quick_select(smp, canvas, &pts, size, quick::WORK_PX)?;
-        if enhance { matting::refine_mask(smp, &matting::region_reader(&r), r.bbox, canvas, &ENHANCE) } else { Some(r) }
+        let Some(r) = quick::quick_select(smp, canvas, &pts, size, quick::WORK_PX)? else {
+            return Ok(None);
+        };
+        if enhance { matting::refine_mask(smp, &matting::region_reader(&r), r.bbox, canvas, &ENHANCE) } else { Ok(Some(r)) }
     })?;
     apply(s, "Quick Selection", region, m)
 }
@@ -161,7 +175,9 @@ fn refine_edge(s: &mut Session, p: &Value) -> Result<Value> {
         output = "newLayerWithMask".into();
     }
     let region = with_sampler(s, b(p, "sampleAllLayers", false), |smp, doc| {
-        let sel = doc.selection.as_ref()?;
+        let Some(sel) = doc.selection.as_ref() else {
+            return Ok(None);
+        };
         matting::refine_mask(smp, &matting::surface_reader(sel), sel.content_bounds(), doc.bounds(), &params)
     })?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -179,7 +195,7 @@ fn refine_edge(s: &mut Session, p: &Value) -> Result<Value> {
             s.edit("Select and Mask", |doc, _| {
                 let surface =
                     region.as_ref().map(matting::region_surface).unwrap_or_else(|| photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8));
-                doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = Some(LayerMask { surface, ..LayerMask::reveal_all() });
+                doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = Some(LayerMask { surface: std::sync::Arc::new(surface), ..LayerMask::reveal_all() });
                 doc.selection = None;
                 Ok(())
             })?;
@@ -197,7 +213,7 @@ fn refine_edge(s: &mut Session, p: &Value) -> Result<Value> {
             let pixels = if decontaminate { matting::decontaminate(src, reg, params.radius, amount) } else { src.clone() };
             let with_mask = output == "newLayerWithMask";
             let (content, mask) = if with_mask {
-                (pixels, Some(LayerMask { surface: matting::region_surface(reg), ..LayerMask::reveal_all() }))
+                (pixels, Some(LayerMask { surface: std::sync::Arc::new(matting::region_surface(reg)), ..LayerMask::reveal_all() }))
             } else {
                 (matting::masked_copy(&pixels, reg), None)
             };

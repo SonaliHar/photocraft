@@ -1,0 +1,11 @@
+{
+  "observations.json": "643988995c2daa9742b2fe0d6d7eea883326e83db3055aff550b7bfc39314f78",
+  "fresh/observations.json": "1d2d31f265ad23dd2eaad8eafa33b46563b801db5fc6a1ab1787d8e1ca62f1cc",
+  "faithful-observations.json": "4c2b1b2b7831bcebdbc39bbcce2b7ba94dec679134c9868596739fa7ab16a240",
+  "faithful-fresh/faithful-observations.json": "a94a4c42253761e285c4725893e906eccff34222ae71f7993163a85b80a7209f",
+  "VERIFICATION.json": "2c67781ed8009644e72813d335f1005c6d47e766839d5c5401431995af8be93c",
+  "batch-manifest.json": "597f151d1b49db20c2d16440846f3498966c846d0f5707898488727460fd1cae",
+  "assignment-controls.json": "3889bcbd4bf0a15b8ec55be3cc304eebfde3e0d78882db1a857bcf013fb18705",
+  "own-rgb-parametric-trc.icc": "7855278f24ad8df78bc3594b71bd32f319d10c79c94ce08b40f584e274e5131e",
+  "own-gray-parametric-trc.icc": "6d471b2715ae958a95f83991e30a433023aba606e70adc7f9ef800795def13a7"
+}

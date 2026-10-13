@@ -52,10 +52,10 @@ fn shape_layer(sh: ShapeLayer) -> Layer {
 #[test]
 fn saved_paths_work_path_and_clipping_roundtrip() {
     let mut d = doc();
-    d.paths.push(NamedPath { name: "Outline".into(), path: path(), psd_raw: None });
+    d.paths.push(NamedPath::new("Outline", path()));
     let mut inv = path();
     inv.inverted = true;
-    d.paths.push(NamedPath { name: "Inverted".into(), path: inv, psd_raw: None });
+    d.paths.push(NamedPath::new("Inverted", inv));
     d.work_path = Some(Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (128.0, 0.0), (128.0, 128.0)])]));
     d.clipping_path = Some(photocraft_doc::ClippingPath { name: "Outline".into(), flatness: 0.0 });
     let b = roundtrip(&d);
@@ -148,7 +148,7 @@ fn vector_mask_roundtrip_and_removal() {
     assert_eq!(b.layers[1].vector_mask.as_ref(), Some(&vm));
     assert!(b.layers[1].psd_blocks.iter().any(|(k, _)| k == b"vmsk"));
     // The composite honours it (left half black, right half white).
-    let f = photocraft_compose::flatten(&b);
+    let f = photocraft_compose::flatten(&b).unwrap();
     assert!(f.get(10, 10)[0] < 0.01 && f.get(200, 10)[0] > 0.99);
     // Removing the vector mask removes the block.
     let mut c = b.clone();

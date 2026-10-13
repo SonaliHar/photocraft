@@ -607,6 +607,12 @@ pub fn open_dir_async(root: std::path::PathBuf) -> std::sync::mpsc::Receiver<Ope
 }
 
 impl PresetStore {
+    /// Whether the normal command after-hook would perform no preset or action writes.
+    /// This only compares revisions; it does not inspect or call the backend.
+    pub(crate) fn is_clean_for(&self, presets_rev: u64, actions_rev: u64) -> bool {
+        self.synced_rev == Some(presets_rev) && self.actions_rev == actions_rev
+    }
+
     /// Warnings from writes since the last call (the shell shows them in the status bar).
     pub fn take_warnings(&mut self) -> Vec<String> {
         std::mem::take(&mut self.warnings)

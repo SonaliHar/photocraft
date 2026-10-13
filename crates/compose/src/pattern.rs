@@ -23,12 +23,57 @@ struct PreparedState {
 pub(crate) struct PreparedPatterns<'a> {
     patterns: &'a [Pattern],
     budget: usize,
+    checked: bool,
     state: Mutex<PreparedState>,
 }
 
 impl<'a> PreparedPatterns<'a> {
     pub(crate) fn new(patterns: &'a [Pattern], budget: usize) -> Self {
-        Self { patterns, budget, state: Mutex::new(PreparedState { slots: HashMap::new(), reserved_bytes: 0 }) }
+        Self { patterns, budget, checked: false, state: Mutex::new(PreparedState { slots: HashMap::new(), reserved_bytes: 0 }) }
+    }
+
+    /// Eager checked cache: every immutable source is prepared before rendering.
+    /// The conservative slot allowance also charges cache metadata. Legacy lazy
+    /// callers retain their existing cache-exhaustion behavior.
+    pub(crate) fn try_new_with_interrupt(
+        patterns: &'a [Pattern],
+        budget: usize,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<Self, photocraft_raster::RasterInputError> {
+        use photocraft_raster::RasterInputError as E;
+        control.check().map_err(|_| E::Cancelled)?;
+        if patterns.len() > MAX_PREPARED_PATTERNS {
+            return Err(E::LimitExceeded);
+        }
+        let budget = budget.min(PREPARED_PATTERN_BYTES);
+        let mut total = patterns.len().checked_mul(1024).ok_or(E::LimitExceeded)?;
+        for p in patterns {
+            control.check().map_err(|_| E::Cancelled)?;
+            total = total.checked_add(pattern_bytes(p)?).ok_or(E::LimitExceeded)?;
+        }
+        if total > budget {
+            return Err(E::LimitExceeded);
+        }
+        let mut slots = HashMap::new();
+        slots.try_reserve(patterns.len()).map_err(|_| E::AllocationFailed)?;
+        let mut reserved = patterns.len() * 1024;
+        for p in patterns {
+            let tile = Tile::try_new_with_interrupt(p, budget - reserved, control)?;
+            if let Some(ref tile) = tile {
+                reserved = reserved.checked_add(tile.px.capacity().checked_mul(16).ok_or(E::LimitExceeded)?).ok_or(E::LimitExceeded)?;
+            }
+            if reserved > budget {
+                return Err(E::LimitExceeded);
+            }
+            let slot = OnceLock::new();
+            // A fresh OnceLock cannot already contain a value.
+            if slot.set(tile.map(Arc::new)).is_err() {
+                return Err(E::UnsupportedConversion);
+            }
+            slots.insert(std::ptr::from_ref(p) as usize, Arc::new(slot));
+        }
+        control.check().map_err(|_| E::Cancelled)?;
+        Ok(Self { patterns, budget, checked: true, state: Mutex::new(PreparedState { slots, reserved_bytes: reserved }) })
     }
 
     pub(crate) fn source(&self) -> &'a [Pattern] {
@@ -70,9 +115,32 @@ impl<'a> PreparedPatterns<'a> {
                 // Run on the requesting worker to preserve its active CMYK profile.
                 slot.get_or_init(|| Tile::new(p).map(Arc::new)).clone()
             }
+            None if self.checked => None,
             None => Tile::new(p).map(Arc::new),
         }
     }
+}
+
+pub(crate) fn checked_reservation_bytes(patterns: &[Pattern], token: &photocraft_raster::Interrupt<'_>) -> Result<usize, photocraft_raster::RasterInputError> {
+    use photocraft_raster::RasterInputError as E;
+    if patterns.len() > MAX_PREPARED_PATTERNS {
+        return Err(E::LimitExceeded);
+    }
+    let mut bytes = patterns.len().checked_mul(1024).ok_or(E::LimitExceeded)?;
+    for p in patterns {
+        token.check().map_err(|_| E::Cancelled)?;
+        bytes = bytes.checked_add(pattern_bytes(p)?).ok_or(E::LimitExceeded)?;
+    }
+    if bytes > PREPARED_PATTERN_BYTES {
+        return Err(E::LimitExceeded);
+    }
+    Ok(bytes)
+}
+fn pattern_bytes(p: &Pattern) -> Result<usize, photocraft_raster::RasterInputError> {
+    use photocraft_raster::RasterInputError as E;
+    let w = i32::try_from(p.width).map_err(|_| E::InvalidBounds)?;
+    let h = i32::try_from(p.height).map_err(|_| E::InvalidBounds)?;
+    photocraft_raster::checked_region_byte_len(Rect::new(0, 0, w, h), photocraft_color::PixelFormat::RGBA32F)
 }
 
 /// A pattern converted once to straight-alpha RGBA for sampling.
@@ -97,6 +165,53 @@ impl Tile {
             }
         }
         Some(Tile { w, h, px })
+    }
+
+    /// Checked display preparation; legacy callers retain the old constructor.
+    pub fn try_new_with_interrupt(
+        p: &Pattern,
+        budget: usize,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<Option<Tile>, photocraft_raster::RasterInputError> {
+        use photocraft_raster::RasterInputError as E;
+        control.check().map_err(|_| E::Cancelled)?;
+        p.surface.try_validate_tile_origins_with(control)?;
+        let bytes = pattern_bytes(p)?;
+        if bytes > budget.min(PREPARED_PATTERN_BYTES) {
+            return Err(E::LimitExceeded);
+        }
+        if p.is_empty() {
+            return Ok(None);
+        }
+        let (w, h) = (p.width as usize, p.height as usize);
+        let count = bytes / 16;
+        let mut px = Vec::new();
+        px.try_reserve_exact(count).map_err(|_| E::AllocationFailed)?;
+        if px.capacity().checked_mul(16).is_none_or(|n| n > budget.min(PREPARED_PATTERN_BYTES)) {
+            return Err(E::LimitExceeded);
+        }
+        while px.len() < count {
+            control.check().map_err(|_| E::Cancelled)?;
+            px.resize(px.len().saturating_add(4096).min(count), [0.0; 4]);
+        }
+        for y in 0..h {
+            for x in (0..w).step_by(4096) {
+                control.check().map_err(|_| E::Cancelled)?;
+                let end = x.saturating_add(4096).min(w);
+                let start = y.checked_mul(w).and_then(|n| n.checked_add(x)).ok_or(E::LimitExceeded)?;
+                let out = px.get_mut(start..start + end - x).ok_or(E::LengthMismatch)?;
+                // Preserve the existing display conversion and active CMYK
+                // context, but bound each legacy read to at most 4096 pixels.
+                p.surface.read_rgba_into(Rect::new(x as i32, y as i32, end as i32, y as i32 + 1), out);
+                for q in out {
+                    for c in 0..3 {
+                        q[c] *= q[3];
+                    }
+                }
+            }
+        }
+        control.check().map_err(|_| E::Cancelled)?;
+        Ok(Some(Tile { w, h, px }))
     }
 
     #[inline]
@@ -238,5 +353,60 @@ mod tests {
         let rot = Placement::new(Rect::EMPTY, false, (0.0, 0.0), 1.0, 90.0);
         let (u, v) = rot.map(1.0, 3.0);
         assert!((u - -3.0).abs() < 1e-9 && (v - 1.0).abs() < 1e-9, "{u},{v}");
+    }
+}
+
+#[cfg(test)]
+mod checked_preparation_tests {
+    use super::*;
+    use photocraft_color::PixelFormat;
+    use photocraft_raster::{Interrupt, RasterInputError, Surface};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    #[test]
+    fn checked_pattern_polls_inside_conversion() {
+        let pattern = Pattern {
+            id: "own prepared".into(),
+            name: "own original".into(),
+            width: 4096,
+            height: 128,
+            surface: Surface::with_default(PixelFormat::RGBA16, &[0.2, 0.6, 0.8, 0.5]),
+        };
+        let before = pattern.clone();
+        let polls = AtomicUsize::new(0);
+        let cancel = || polls.fetch_add(1, Ordering::Relaxed) >= 170;
+        assert!(matches!(Tile::try_new_with_interrupt(&pattern, PREPARED_PATTERN_BYTES, &Interrupt::cancel_only(&cancel)), Err(RasterInputError::Cancelled)));
+        assert_eq!(pattern, before);
+    }
+    #[test]
+    fn checked_pattern_exact_display_and_combined_budget() {
+        use photocraft_color::{ColorMode, SampleType};
+        for format in [
+            PixelFormat::RGBA8,
+            PixelFormat::RGBA16,
+            PixelFormat::RGBA32F,
+            PixelFormat::new(ColorMode::Rgb, SampleType::U32, true),
+            PixelFormat::new(ColorMode::Rgb, SampleType::F64, true),
+        ] {
+            let mut pattern =
+                Pattern { id: "own".into(), name: "original".into(), width: 19, height: 7, surface: Surface::with_default(format, &[0.19, 0.67, 0.83, 0.41]) };
+            pattern.surface.fill_rect(Rect::new(1, 2, 8, 6), &[0.82, 0.37, 0.07, 0.69]);
+            let before = pattern.clone();
+            let legacy = Tile::new(&pattern).unwrap();
+            let checked = Tile::try_new_with_interrupt(&pattern, PREPARED_PATTERN_BYTES, &Interrupt::NONE).unwrap().unwrap();
+            assert_eq!(legacy.px, checked.px);
+            assert_eq!(pattern, before);
+            let patterns = [pattern.clone(), pattern];
+            let bytes = pattern_bytes(&patterns[0]).unwrap();
+            assert!(matches!(PreparedPatterns::try_new_with_interrupt(&patterns, bytes * 2 + 2047, &Interrupt::NONE), Err(RasterInputError::LimitExceeded)));
+            let cache = PreparedPatterns::try_new_with_interrupt(&patterns, bytes * 2 + 2048, &Interrupt::NONE).unwrap();
+            assert_eq!(cache.get("own", "").unwrap().px, legacy.px);
+        }
+    }
+    #[test]
+    fn checked_pattern_bounds_and_zero_budget_fail_before_conversion() {
+        let mut pattern = Pattern { id: "own".into(), name: "original".into(), width: 1, height: 1, surface: Surface::new(PixelFormat::RGBA8) };
+        assert!(matches!(Tile::try_new_with_interrupt(&pattern, 0, &Interrupt::NONE), Err(RasterInputError::LimitExceeded)));
+        pattern.width = u32::MAX;
+        assert!(matches!(Tile::try_new_with_interrupt(&pattern, PREPARED_PATTERN_BYTES, &Interrupt::NONE), Err(RasterInputError::InvalidBounds)));
     }
 }

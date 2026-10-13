@@ -142,7 +142,7 @@ fn a_configured_but_disabled_effect_stays_discoverable_in_the_panel() {
     let layer_id = session.execute("layer.new.layer", json!({"name": "Styled"})).unwrap()["layer"].as_u64().unwrap();
     session.execute("layer.layerStyle.dropShadow", json!({"layer": layer_id})).unwrap();
     let state = session.active_mut().unwrap();
-    let doc = std::sync::Arc::make_mut(&mut state.doc);
+    let doc = state.doc.try_resident_mut().unwrap();
     let layer = doc.layers.iter_mut().find(|layer| layer.id.0 == layer_id).unwrap();
     let Some(Effect::DropShadow(shadow)) = layer.effects.items.first_mut() else { panic!("drop shadow was configured") };
     shadow.common.enabled = false;
@@ -174,7 +174,7 @@ fn collapse_all_groups_from_the_panel_menu_and_it_is_saved() {
         let bytes = photocraft_io::export(&doc, name, &Default::default()).unwrap().bytes;
         let back = photocraft_io::import(name, &bytes).unwrap().document;
         let mut s = photocraft_engine::Session::new();
-        s.add_document(back, None);
+        s.add_document(back, None).unwrap();
         assert!(groups_open(&s).iter().all(|o| !o), "{name}: groups stay closed");
     }
 }

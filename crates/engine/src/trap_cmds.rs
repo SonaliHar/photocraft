@@ -106,7 +106,7 @@ mod tests {
             assert!(d[4 * ch] > 0.5, "cyan trapped into the magenta edge");
         }
         // One history step.
-        assert_eq!(st.history.entries().last().map(|e| e.as_str()), Some("Trap"));
+        assert_eq!(st.history.entries(&crate::read_control_none()).unwrap().values().to_vec().last().map(|e| e.as_str()), Some("Trap"));
     }
 
     #[test]

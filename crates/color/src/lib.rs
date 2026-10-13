@@ -7,6 +7,10 @@
 
 pub mod blend;
 pub mod convert;
+mod checked_samples;
+pub mod checked_arithmetic;
+
+pub use checked_samples::{checked_pixel_byte_len, checked_sample_byte_len, pixel_channel_byte_range, try_copy_sample_raw, try_read_sample_raw, try_write_sample_raw};
 
 pub use blend::BlendMode;
 
@@ -29,16 +33,20 @@ pub enum SampleType {
     U8,
     U16,
     F32,
+    U32,
+    F64,
 }
 
 impl SampleType {
-    pub const ALL: [SampleType; 3] = [SampleType::U8, SampleType::U16, SampleType::F32];
+    pub const ALL: [SampleType; 5] = [SampleType::U8, SampleType::U16, SampleType::F32, SampleType::U32, SampleType::F64];
 
     pub const fn bytes(self) -> usize {
         match self {
             SampleType::U8 => 1,
             SampleType::U16 => 2,
             SampleType::F32 => 4,
+            SampleType::U32 => 4,
+            SampleType::F64 => 8,
         }
     }
     pub const fn bits(self) -> u32 {
@@ -85,6 +93,8 @@ impl PixelFormat {
     pub const RGBA8: PixelFormat = PixelFormat { mode: ColorMode::Rgb, sample: SampleType::U8, alpha: true };
     pub const RGBA16: PixelFormat = PixelFormat { mode: ColorMode::Rgb, sample: SampleType::U16, alpha: true };
     pub const RGBA32F: PixelFormat = PixelFormat { mode: ColorMode::Rgb, sample: SampleType::F32, alpha: true };
+    pub const RGBA32: PixelFormat = PixelFormat { mode: ColorMode::Rgb, sample: SampleType::U32, alpha: true };
+    pub const RGBA64F: PixelFormat = PixelFormat { mode: ColorMode::Rgb, sample: SampleType::F64, alpha: true };
     pub const GRAY8: PixelFormat = PixelFormat { mode: ColorMode::Grayscale, sample: SampleType::U8, alpha: false };
     pub const GRAYA8: PixelFormat = PixelFormat { mode: ColorMode::Grayscale, sample: SampleType::U8, alpha: true };
     pub const CMYKA8: PixelFormat = PixelFormat { mode: ColorMode::Cmyk, sample: SampleType::U8, alpha: true };
@@ -103,38 +113,154 @@ impl PixelFormat {
     }
 }
 
-/// Read one sample at `index` (sample index, not byte index) as normalised f32.
-/// U8/U16 map to [0, 1]; F32 is returned as stored.
+/// A checked sample access never reads or writes outside the supplied byte slice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SampleAccessError {
+    OffsetOverflow,
+    OutOfBounds,
+    NonFiniteInteger,
+    NarrowingOverflow,
+}
+impl std::fmt::Display for SampleAccessError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid sample access: {self:?}")
+    }
+}
+impl std::error::Error for SampleAccessError {}
+
+/// Checked range for a channel sample. Storage retains the existing native-endian layout.
+pub fn sample_byte_range(sample: SampleType, index: usize, byte_len: usize) -> Result<std::ops::Range<usize>, SampleAccessError> {
+    let start = index.checked_mul(sample.bytes()).ok_or(SampleAccessError::OffsetOverflow)?;
+    let end = start.checked_add(sample.bytes()).ok_or(SampleAccessError::OffsetOverflow)?;
+    if end > byte_len {
+        return Err(SampleAccessError::OutOfBounds);
+    }
+    Ok(start..end)
+}
+
+/// Read an authoritative sample using f64 arithmetic; U32 codes are never routed through f32.
+/// Floating signed zero, subnormals, HDR and nonfinite bit patterns are not normalized.
+pub fn try_read_sample_f64(bytes: &[u8], sample: SampleType, index: usize) -> Result<f64, SampleAccessError> {
+    let range = sample_byte_range(sample, index, bytes.len())?;
+    let data = bytes.get(range).ok_or(SampleAccessError::OutOfBounds)?;
+    let value = match sample {
+        SampleType::U8 => f64::from(*data.first().ok_or(SampleAccessError::OutOfBounds)?) / 255.0,
+        SampleType::U16 => f64::from(u16::from_ne_bytes(data.try_into().map_err(|_| SampleAccessError::OutOfBounds)?)) / 65535.0,
+        SampleType::U32 => f64::from(u32::from_ne_bytes(data.try_into().map_err(|_| SampleAccessError::OutOfBounds)?)) / f64::from(u32::MAX),
+        SampleType::F32 => f64::from(f32::from_ne_bytes(data.try_into().map_err(|_| SampleAccessError::OutOfBounds)?)),
+        SampleType::F64 => f64::from_ne_bytes(data.try_into().map_err(|_| SampleAccessError::OutOfBounds)?),
+    };
+    Ok(value)
+}
+
+/// Explicit numerical conversion to the destination type. Integer quantization uses f64;
+/// finite overflow while narrowing to f32 is rejected before any bytes change.
+pub fn try_write_sample_f64(bytes: &mut [u8], sample: SampleType, index: usize, value: f64) -> Result<(), SampleAccessError> {
+    let range = sample_byte_range(sample, index, bytes.len())?;
+    if matches!(sample, SampleType::U8 | SampleType::U16 | SampleType::U32) && !value.is_finite() {
+        return Err(SampleAccessError::NonFiniteInteger);
+    }
+    if sample == SampleType::F32 && value.is_finite() && value.abs() > f64::from(f32::MAX) {
+        return Err(SampleAccessError::NarrowingOverflow);
+    }
+    let data = bytes.get_mut(range).ok_or(SampleAccessError::OutOfBounds)?;
+    match sample {
+        SampleType::U8 => data.copy_from_slice(&[(value.clamp(0.0, 1.0) * 255.0).round() as u8]),
+        SampleType::U16 => data.copy_from_slice(&((value.clamp(0.0, 1.0) * 65535.0).round() as u16).to_ne_bytes()),
+        SampleType::U32 => data.copy_from_slice(&((value.clamp(0.0, 1.0) * f64::from(u32::MAX)).round() as u32).to_ne_bytes()),
+        SampleType::F32 => data.copy_from_slice(&(value as f32).to_ne_bytes()),
+        SampleType::F64 => data.copy_from_slice(&value.to_ne_bytes()),
+    }
+    Ok(())
+}
+
+/// Explicit f32 presentation conversion. This may round U32/F64 and overflow finite F64;
+/// it never changes authoritative storage. Malformed access returns an error.
+pub fn try_read_sample_display_f32(bytes: &[u8], sample: SampleType, index: usize) -> Result<f32, SampleAccessError> {
+    Ok(try_read_sample_f64(bytes, sample, index)? as f32)
+}
+
+/// Legacy f32 accessor. Valid old formats retain their old arithmetic; invalid access reads
+/// zero. New authoritative wide paths must use the checked f64/raw APIs instead.
 #[inline]
 pub fn read_sample(bytes: &[u8], sample: SampleType, index: usize) -> f32 {
+    let Ok(range) = sample_byte_range(sample, index, bytes.len()) else { return 0.0 };
+    let Some(data) = bytes.get(range) else { return 0.0 };
     match sample {
-        SampleType::U8 => bytes[index] as f32 / 255.0,
-        SampleType::U16 => {
-            let o = index * 2;
-            u16::from_ne_bytes([bytes[o], bytes[o + 1]]) as f32 / 65535.0
-        }
-        SampleType::F32 => {
-            let o = index * 4;
-            f32::from_ne_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]])
-        }
+        SampleType::U8 => data.first().copied().unwrap_or(0) as f32 / 255.0,
+        SampleType::U16 => data.try_into().map(u16::from_ne_bytes).unwrap_or(0) as f32 / 65535.0,
+        SampleType::F32 => data.try_into().map(f32::from_ne_bytes).unwrap_or(0.0),
+        SampleType::U32 | SampleType::F64 => try_read_sample_display_f32(bytes, sample, index).unwrap_or(0.0),
     }
 }
 
-/// Write a normalised f32 sample; integer types are clamped and rounded.
+/// Legacy f32 writer; invalid offsets leave bytes unchanged. Original U8/U16 quantization
+/// is retained. Wide editing must opt into the checked f64/raw writer.
 #[inline]
-pub fn write_sample(bytes: &mut [u8], sample: SampleType, index: usize, v: f32) {
+pub fn write_sample(bytes: &mut [u8], sample: SampleType, index: usize, value: f32) {
+    let Ok(range) = sample_byte_range(sample, index, bytes.len()) else { return };
+    let Some(data) = bytes.get_mut(range) else { return };
     match sample {
-        SampleType::U8 => bytes[index] = (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8,
-        SampleType::U16 => {
-            let o = index * 2;
-            let q = (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16;
-            bytes[o..o + 2].copy_from_slice(&q.to_ne_bytes());
+        SampleType::U8 => data.copy_from_slice(&[(value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8]),
+        SampleType::U16 => data.copy_from_slice(&((value.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16).to_ne_bytes()),
+        SampleType::F32 => data.copy_from_slice(&value.to_ne_bytes()),
+        SampleType::U32 => {
+            let normalized = if value.is_nan() { 0.0 } else { value.clamp(0.0, 1.0) };
+            let _ = try_write_sample_f64(data, sample, 0, f64::from(normalized));
         }
-        SampleType::F32 => {
-            let o = index * 4;
-            bytes[o..o + 4].copy_from_slice(&v.to_ne_bytes());
-        }
+        SampleType::F64 => data.copy_from_slice(&f64::from(value).to_ne_bytes()),
     }
+}
+
+/// Exact IEEE754 half→single widening expressed as bits. The caller retains the original
+/// half bits/precision as provenance; widening alone does not make the source F32-authored.
+pub fn widen_f16_to_f32_bits(bits: u16) -> u32 {
+    let sign = u32::from(bits & 0x8000) << 16;
+    let exponent = u32::from((bits >> 10) & 0x1f);
+    let fraction = u32::from(bits & 0x03ff);
+    if exponent == 0 {
+        if fraction == 0 {
+            return sign;
+        }
+        let shift = fraction.leading_zeros() - 21;
+        let normalized = fraction << shift;
+        return sign | ((113 - shift) << 23) | ((normalized & 0x03ff) << 13);
+    }
+    if exponent == 31 {
+        return sign | 0x7f80_0000 | (fraction << 13);
+    }
+    sign | ((exponent + 112) << 23) | (fraction << 13)
+}
+
+/// Explicit finite IEEE754 binary32 -> binary16 rounding, nearest with ties to even.
+/// This is a requested target quantization, not authoritative F32 storage conversion.
+/// Nonfinite input or rounding beyond finite binary16 returns an error, never a clamp.
+pub fn try_round_f32_to_f16_bits(value: f32) -> Result<u16, SampleAccessError> {
+    if !value.is_finite() {
+        return Err(SampleAccessError::NarrowingOverflow);
+    }
+    let bits = value.to_bits();
+    let sign = ((bits >> 16) & 0x8000) as u16;
+    let exponent = ((bits >> 23) & 0xff) as i32 - 127;
+    if exponent < -25 {
+        return Ok(sign);
+    }
+    if exponent > 15 {
+        return Err(SampleAccessError::NarrowingOverflow);
+    }
+    let significand = (bits & 0x7fffff) | 0x800000;
+    let shift = if exponent < -14 { (-exponent - 1) as u32 } else { 13 };
+    let mut rounded = significand >> shift;
+    let remainder = significand & ((1u32 << shift) - 1);
+    let halfway = 1u32 << (shift - 1);
+    if remainder > halfway || (remainder == halfway && rounded & 1 != 0) {
+        rounded += 1;
+    }
+    let magnitude = if exponent < -14 { rounded } else { (((exponent + 14) as u32) << 10) + rounded };
+    if magnitude >= 0x7c00 {
+        return Err(SampleAccessError::NarrowingOverflow);
+    }
+    Ok(sign | magnitude as u16)
 }
 
 /// A colour value in the document's model with alpha, as normalised floats.
@@ -193,14 +319,14 @@ mod tests {
     #[test]
     fn sample_roundtrip_all_depths() {
         for s in SampleType::ALL {
-            let mut buf = vec![0u8; 16];
+            let mut buf = vec![0u8; 32];
             for (i, v) in [0.0f32, 0.25, 0.5, 1.0].iter().enumerate() {
                 write_sample(&mut buf, s, i, *v);
                 let r = read_sample(&buf, s, i);
                 let tol = match s {
                     SampleType::U8 => 1.0 / 255.0,
                     SampleType::U16 => 1.0 / 65535.0,
-                    SampleType::F32 => 0.0,
+                    SampleType::F32 | SampleType::U32 | SampleType::F64 => 0.0,
                 };
                 assert!((r - v).abs() <= tol, "{s:?} {v} -> {r}");
             }

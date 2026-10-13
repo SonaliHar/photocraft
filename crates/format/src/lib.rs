@@ -24,13 +24,22 @@
 
 pub mod atomic;
 pub mod autosave;
+pub mod canonical_tile;
+pub mod canonical_object;
+pub mod canonical_load;
+pub mod canonical_archive;
+pub mod finite_raster;
+pub mod finite_raster_archive;
 mod convert;
 mod finite;
 pub mod manifest;
 mod migrate;
+mod model_accounting;
+pub mod owned_document;
 pub mod read;
 mod store;
 pub mod zip;
+mod zstd_stream;
 
 use std::path::Path;
 
@@ -44,13 +53,15 @@ pub use autosave::{Autosaver, RecoveryEntry, discard_recovery, list_recovery, re
 pub use convert::MAX_GROUP_DEPTH;
 pub use manifest::{FORMAT_VERSION, Manifest};
 pub use read::read_file;
-pub use store::{DEFAULT_REVERIFY_BUDGET, PcraftWriter, SaveStats};
+pub use store::{DEFAULT_REVERIFY_BUDGET, PcraftWriter, PreparationLimits, PreparationObserver, SaveStats};
 
 /// File extension of the native format.
 pub const EXTENSION: &str = "pcraft";
 
 #[derive(Debug, thiserror::Error)]
 pub enum FormatError {
+    #[error("native operation cancelled")]
+    Cancelled,
     #[error("corrupt .pcraft bundle: {0}")]
     Corrupt(String),
     #[error("unsupported .pcraft feature: {0}")]
@@ -116,7 +127,8 @@ pub fn is_pcraft(bytes: &[u8]) -> bool {
             return true;
         }
     }
-    zip::ZipReader::new(bytes).is_ok_and(|archive| archive.find("manifest.json").is_some())
+    zip::stream::Reader::new(std::io::Cursor::new(bytes), Default::default(), &photocraft_raster::Interrupt::NONE)
+        .is_ok_and(|archive| archive.contains("manifest.json"))
 }
 
 /// Save to an in-memory ZIP bundle (one-shot; use [`PcraftWriter`] for
@@ -135,19 +147,78 @@ pub fn load_from_bytes_with(bytes: &[u8], opts: &LoadOptions) -> Result<Document
     store::load(&src, opts)
 }
 
+/// Checks cancellation before loading and during bounded source-cache decompression/hashing.
+/// Legacy surface and unrelated blob decoding still use their existing bounded loaders.
+pub fn load_from_bytes_with_interrupt(bytes: &[u8], opts: &LoadOptions, control: &photocraft_raster::Interrupt<'_>) -> Result<Document> {
+    if control.cancelled() {
+        return Err(FormatError::Cancelled);
+    }
+    load_from_stream(std::io::Cursor::new(bytes), opts, Default::default(), control)
+}
+
+/// Load a seekable ZIP/ZIP64 stream without collecting the encoded archive.
+/// Expanded objects still use the existing native loader's per-object/total limits.
+/// This is not activation of the independently gated native_large XCF policy.
+pub fn load_from_stream<R: std::io::Read + std::io::Seek>(
+    input: R,
+    opts: &LoadOptions,
+    limits: zip::stream::Limits,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<Document> {
+    let source = store::StreamSource::new(input, limits, *control)?;
+    store::load_with_interrupt(&source, opts, control)
+}
+
 /// Load a bundle from a path: a directory bundle or a ZIP file.
 pub fn load_path(path: &Path) -> Result<Document> {
     load_path_with(path, &LoadOptions::default())
 }
 
 pub fn load_path_with(path: &Path, opts: &LoadOptions) -> Result<Document> {
-    if path.is_dir() {
-        store::load(&store::DirSource { root: path.to_path_buf() }, opts)
-    } else {
-        let bytes = read::read_file(path)?;
-        load_from_bytes_with(&bytes, opts)
+    load_path_with_interrupt(path,opts,&photocraft_raster::Interrupt::NONE)
+}
+/// Controlled trusted-local path loading. Directory object reads/decompression
+/// and single-file stream loading share the same token and unchanged limits.
+/// Checks around filesystem calls are cooperative, not syscall interruption.
+pub fn load_path_with_interrupt(path:&Path,opts:&LoadOptions,control:&photocraft_raster::Interrupt<'_>)->Result<Document> {
+    if control.cancelled() {return Err(FormatError::Cancelled);}
+    let metadata=std::fs::metadata(path);
+    if control.cancelled() {return Err(FormatError::Cancelled);}
+    let metadata=metadata?;
+    let document=if metadata.is_dir() {
+        store::load_with_interrupt(&store::DirSource{root:path.to_path_buf()},opts,control)
+    }else{
+        let file=std::fs::File::open(path);
+        if control.cancelled() {return Err(FormatError::Cancelled);}
+        load_from_stream(file?,opts,Default::default(),control)
+    };
+    if control.cancelled() {return Err(FormatError::Cancelled);}
+    document
+}
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+mod controlled_path_load_drafts {
+    use super::*;
+    fn directory()->std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64,Ordering};
+        static SERIAL:AtomicU64=AtomicU64::new(0);
+        std::env::temp_dir().join(format!("photocraft-controlled-dir-{}-{}",std::process::id(),SERIAL.fetch_add(1,Ordering::Relaxed)))
+    }
+    #[test]
+    fn directory_cancellation_and_default_output_match_existing_loader() {
+        let path=directory();assert!(!path.exists());
+        let document=Document::with_background("own directory",photocraft_doc::Size::new(4,3),photocraft_doc::ColorMode::Rgb,photocraft_doc::SampleType::U16,photocraft_doc::Color::WHITE);
+        PcraftWriter::new().save_dir(&document,&path,&Default::default()).unwrap();
+        assert_eq!(load_path_with_interrupt(&path,&Default::default(),&photocraft_raster::Interrupt::NONE).unwrap(),document);
+        assert!(matches!(load_path_with_interrupt(&path,&Default::default(),&photocraft_raster::Interrupt::cancel_only(&||true)),Err(FormatError::Cancelled)));
+        let calls=std::sync::atomic::AtomicUsize::new(0);
+        let cancel=||calls.fetch_add(1,std::sync::atomic::Ordering::Relaxed)>=6;
+        assert!(matches!(load_path_with_interrupt(&path,&Default::default(),&photocraft_raster::Interrupt::cancel_only(&cancel)),Err(FormatError::Cancelled)));
+        assert_eq!(load_path(&path).unwrap(),document);
+        std::fs::remove_dir_all(path).unwrap();
     }
 }
+
 
 /// Read and migrate only the manifest (fast: no tiles are decoded).
 pub fn read_manifest(bytes: &[u8]) -> Result<Manifest> {

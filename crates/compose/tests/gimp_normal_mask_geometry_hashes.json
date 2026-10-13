@@ -1,0 +1,24 @@
+{
+  "left-top": {
+    "observations.json": "1a565ade2d3f9f3dcef51124cda6b46d656e7785c0958a6bed75043b85f01633",
+    "fresh/observations.json": "b148162b3d9a6f300492d6fdd30f1f8716c56161d7b0d01ea995fb5a70693abf",
+    "faithful-observations.json": "cadb963ab51d17ff0e11db65b266af940cc205656a66baacf180126e115df11e",
+    "faithful-fresh/faithful-observations.json": "a5bd3af07d3c7cbff8d7f9d076a84064c5cbbb21e25f18f6fc3d19d86fdc3ebb",
+    "VERIFICATION.json": "e217de783bfbf5142c02bc481f46d7833e07401dfb000a3ff12c3f28a503baff",
+    "assignment-controls.json": "95001ffdc953d53b4208e3704bcd7e91a46d08931e6ceaec462d1283aa0f6e85",
+    "batch-manifest.json": "ab6f10edd7b86ab6eeab7e33308c1b1fe949677fd1325ef0bbf153c6b3f5f0fe",
+    "own-rgb-parametric-trc.icc": "d4ddff2458010156aebea135bf7cb68b5f1b65a418f116f4783cf62287036feb",
+    "own-gray-parametric-trc.icc": "78efd53a209447804e9dad749bb56be82c10fbe17345b1f82cc272ef48473aaf"
+  },
+  "right-bottom": {
+    "observations.json": "52b4a0906fdc09d4f84e264bd9cff45bb6b53457cdb7808248599f5d007c557e",
+    "fresh/observations.json": "e358f30737e4d907854328a6d07da31b77beb542b4a598cb019087ce2f4183f2",
+    "faithful-observations.json": "a812920b6bc0f99a74dec37154a67e62cdece407ffdc6c0584fa80cc77306be3",
+    "faithful-fresh/faithful-observations.json": "454ac6a96a62093da1b1ff7fe458be237dd96287f27f1d0696735f9b29137002",
+    "VERIFICATION.json": "e217de783bfbf5142c02bc481f46d7833e07401dfb000a3ff12c3f28a503baff",
+    "assignment-controls.json": "c9eb99719254752c26fc7af58252bae09db60834634d32cbb17ccb8466152077",
+    "batch-manifest.json": "0e99d6650f8ad11bc3ef1de4d5ce661a93b4bda17ee74320420d0c824c9798a3",
+    "own-rgb-parametric-trc.icc": "d4ddff2458010156aebea135bf7cb68b5f1b65a418f116f4783cf62287036feb",
+    "own-gray-parametric-trc.icc": "78efd53a209447804e9dad749bb56be82c10fbe17345b1f82cc272ef48473aaf"
+  }
+}

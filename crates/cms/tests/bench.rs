@@ -2,6 +2,35 @@
 
 use photocraft_cms::{Builtin, Intent, Transform};
 
+/// Stream a 24 MP RGB workload through the same cached table, avoiding image allocation in
+/// the timing. This measures the old f32 reference against the new f64 interpolation path.
+#[test]
+#[ignore]
+fn bench_wide_rgb_clut_24mp() {
+    use photocraft_cms::Clut;
+    use std::hint::black_box;
+    let clut = Clut::sample(vec![17; 3], 3, |input, output| {
+        output.copy_from_slice(input);
+    });
+    let pixels = 24_000_000;
+    let mut f32_out = [0.0; 3];
+    let begin = std::time::Instant::now();
+    for i in 0..pixels {
+        let input = [((i % 997) as f32 + 0.5) / 997.0, 0.375, 0.875];
+        clut.eval(black_box(&input), black_box(&mut f32_out));
+    }
+    let old = begin.elapsed();
+    let mut f64_out = [0.0; 3];
+    let begin = std::time::Instant::now();
+    for i in 0..pixels {
+        let input = [((i % 997) as f64 + 0.5) / 997.0, 0.375, 0.875];
+        clut.try_eval_f64(black_box(&input), black_box(&mut f64_out)).unwrap();
+    }
+    let wide = begin.elapsed();
+    eprintln!("24 MP RGB CLUT f32={old:?}, checked f64={wide:?}, ratio={:.3}", wide.as_secs_f64() / old.as_secs_f64());
+    assert!(f64_out.iter().all(|value| value.is_finite()));
+}
+
 #[test]
 #[ignore]
 fn bench_srgb8_to_cmyk8() {

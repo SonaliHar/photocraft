@@ -2317,3 +2317,109 @@ fontWeight	Italic	Cursiva
 	Rotate View Tool	Herramienta Rotar vista
 	Reset View	Restablecer vista
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Arrastre alrededor del centro para rotar la vista  ·  Mayús fija a 15°
+
+# XCF editable text and independently qualified GIMP filter controls.
+	Additional filters are available through command inspection	Hay más filtros disponibles mediante la inspección de comandos
+	Alpha threshold	Umbral alfa
+	An explicit resolution edit sets both axes.	Una modificación explícita de la resolución ajusta ambos ejes.
+	Apply Text	Aplicar texto
+	Blue frequency	Frecuencia del azul
+	Blue phase shift	Desfase del azul
+	Blue weight	Peso del azul
+	CIE Lab	CIE Lab
+	CIE Yuv	CIE Yuv
+	Changing this imported GIMP mode is not supported yet.	Aún no se admite cambiar este modo importado de GIMP.
+	Clip high	Limitar valores altos
+	Clip low	Limitar valores bajos
+	Cyan / Red	Cian / Rojo
+	Decrease Levels	Reducir niveles
+	Desaturate mode	Modo de desaturación
+	Filter editing is unavailable	La edición de filtros no está disponible
+	GIMP Filters	Filtros de GIMP
+	GIMP Text	Texto de GIMP
+	Green frequency	Frecuencia del verde
+	Green phase shift	Desfase del verde
+	Green weight	Peso del verde
+	Histogram channel	Canal del histograma
+	Hue frequency	Frecuencia del tono
+	Hue phase shift	Desfase del tono
+	Increase Levels	Aumentar niveles
+	Intended temperature	Temperatura de destino
+	Keep blue	Mantener el azul
+	Keep green	Mantener el verde
+	Keep hue	Mantener el tono
+	Keep lightness	Mantener la luminosidad
+	Keep red	Mantener el rojo
+	Keep saturation	Mantener la saturación
+	Layer content is locked	El contenido de la capa está bloqueado
+	Letter spacing	Espaciado entre caracteres
+	Lightness frequency	Frecuencia de la luminosidad
+	Lightness phase shift	Desfase de la luminosidad
+	Line spacing	Interlineado
+	Lower limit	Límite inferior
+	Luma	Luma
+	Magenta / Green	Magenta / Verde
+	Move Down	Mover hacia abajo
+	Move Up	Mover hacia arriba
+	Native	Nativo
+	Original temperature	Temperatura original
+	Preserve luminosity	Conservar luminosidad
+	Process in sRGB	Procesar en sRGB
+	Red frequency	Frecuencia del rojo
+	Red phase shift	Desfase del rojo
+	Red weight	Peso del rojo
+	Remove Filter	Eliminar filtro
+	Reset Text	Restablecer texto
+	Saturation colorspace	Espacio de color de saturación
+	Saturation frequency	Frecuencia de la saturación
+	Saturation phase shift	Desfase de la saturación
+	Strength	Intensidad
+	Text X	Texto X
+	Text Y	Texto Y
+	Text content	Contenido del texto
+	Text editing is unavailable for this layer.	La edición de texto no está disponible para esta capa.
+	Upper limit	Límite superior
+	Value	Valor
+	Yellow / Blue	Amarillo / Azul
+	From color	Color de origen
+	To color	Color de destino
+	Red threshold	Umbral rojo
+	Green threshold	Umbral verde
+	Blue threshold	Umbral azul
+	Underlined characters	Caracteres subrayados
+	Start character	Carácter inicial
+	End character (exclusive)	Carácter final (excluido)
+	Apply underline	Aplicar subrayado
+	Clear underline	Quitar subrayado
+	Text content editing is unavailable for this layer.	La edición del contenido de texto no está disponible para esta capa.
+	Transparency threshold	Umbral de transparencia
+	Opacity threshold	Umbral de opacidad
+	Component	Componente
+	Y'CbCr Y'	Y'CbCr Y'
+	Y'CbCr Cb	Y'CbCr Cb
+	Y'CbCr Cr	Y'CbCr Cr
+
+	Destination start angle	Ángulo inicial de destino
+
+	Destination end angle	Ángulo final de destino
+	GIMP Linked Image	Imagen vinculada de GIMP
+	Original byte identity is unavailable. The selected PNG is a Reduced substitution (8 MiB limit).	No se puede verificar la identidad con los bytes originales. El PNG seleccionado es una sustitución de fidelidad reducida (límite de 8 MiB).
+	Replace Linked Image (Reduced)…	Reemplazar imagen vinculada (fidelidad reducida)…
+	Resource picker unavailable.	El selector de recursos no está disponible.
+	The selected PNG must match the retained original byte identity (8 MiB limit). Exact recovery applies to this linked image only.	El PNG seleccionado debe coincidir con la identidad de bytes original conservada (límite de 8 MiB). La recuperación exacta se aplica solo a esta imagen vinculada.
+	Recover Linked Image (Exact)…	Recuperar imagen vinculada (exacta)…
+	Saved floating attachment	Vínculo flotante guardado
+	Attachment target	Destino del vínculo
+	Detach the saved relationship without changing pixels.	Separar la relación guardada sin cambiar los píxeles.
+	Detach Floating Layer	Separar capa flotante
+	Complete or cancel the pixel-move preview before detaching the saved relationship.	Complete o cancele la vista previa del movimiento de píxeles antes de separar la relación guardada.
+	Saved named item sets	Conjuntos de elementos con nombre guardados
+	Only sets containing this layer are shown; saved searches are not evaluated.	Solo se muestran los conjuntos que contienen esta capa; no se evalúan las búsquedas guardadas.
+	Rename Saved Item Set…	Renombrar conjunto de elementos guardado…
+	Delete Saved Item Set	Eliminar conjunto de elementos guardado
+	Saved set name	Nombre del conjunto guardado
+	Apply Saved Item Set Name	Aplicar nombre del conjunto de elementos guardado
+	Enter a replacement name for this long saved name.	Introduzca un nombre de reemplazo para este nombre guardado largo.
+	Only the first 64 matching sets are shown.	Solo se muestran los primeros 64 conjuntos coincidentes.
+	Complete or cancel the pixel-move preview before editing saved item sets.	Complete o cancele la vista previa del movimiento de píxeles antes de editar conjuntos de elementos guardados.
+	Remove this layer from set	Quitar esta capa del conjunto

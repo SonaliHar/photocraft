@@ -1190,10 +1190,26 @@ fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let (rev, size) = (st.revision, st.doc.size);
     // Positions and sizes in the ruler unit (Preferences › Units & Rulers).
     let units = app.session.prefs().units_and_rulers.clone();
-    let dpi = st.doc.resolution_dpi as f64;
-    let fx = move |px: f64| units.format(px, dpi, size.width as f64);
-    let units_y = app.session.prefs().units_and_rulers.clone();
-    let fy = move |px: f64| units_y.format(px, dpi, size.height as f64);
+    let legacy = photocraft_doc::PhysicalResolution::square(f64::from(st.doc.resolution_dpi));
+    let resolution = st.doc.physical_resolution.as_ref().unwrap_or(&legacy);
+    let dpi = resolution.validate().ok().map(|()| [resolution.x_dpi, resolution.y_dpi]);
+    let format_axis = |px: f64, extent: f64, axis: usize| {
+        use photocraft_engine::prefs::Unit;
+        // Pixels and percent do not depend on physical metadata. For physical units, convert
+        // at unit DPI then divide by the actual axis: the preference helper's hostile-DPI
+        // clamp must not silently replace a valid small authoritative resolution.
+        let value = units.rulers.from_px(px, 1.0, extent, units.point_size.per_inch());
+        let value = match units.rulers {
+            Unit::Pixels | Unit::Percent => value,
+            _ => {
+                let Some(axis_dpi) = dpi.and_then(|axes| axes.get(axis).copied()) else { return "—".to_string() };
+                value / axis_dpi
+            }
+        };
+        if value.is_finite() { format!("{:.*}", units.rulers.decimals(), value) } else { "—".to_string() }
+    };
+    let fx = |px: f64| format_axis(px, f64::from(size.width), 0);
+    let fy = |px: f64| format_axis(px, f64::from(size.height), 1);
     let sel = st.doc.selection.as_ref().map(photocraft_compose::bounds::content_bounds);
     let pos = app
         .hover_doc
@@ -1403,7 +1419,19 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let doc = st.doc.clone();
     let active = st.active_layer;
     let active_layer = active.and_then(|id| doc.layer(id));
-    let selection = st.selected_layers();
+    let selection_owner = st.accounted_selection().cloned();
+    let resident_selection = if selection_owner.is_none() {
+        match st.selected_layers() {
+            Ok(ids) => ids,
+            Err(error) => {
+                ui.label(error.to_string());
+                return;
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    let selection = selection_owner.as_ref().map_or(resident_selection.as_slice(), |owner| owner.selected());
     let isolated = st.isolated_layers.clone();
     let mut actions: Vec<(String, Value)> = Vec::new();
 
@@ -1447,12 +1475,17 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let opacity_label = if t.pro { tl!("Opacity:") } else { tl!("Opacity") };
                 let right = (body_text_width(ui, opacity_label) + LAYER_PCT_W + 2.0 * ui.spacing().item_spacing.x + 16.0).max(150.0);
                 let w = ui.available_width() - right;
-                let (chosen, hovered) = widgets::dropdown_hovered(ui, "blend", &mut m, &blend_options(l.is_group()), w.max(100.0));
-                if chosen {
-                    actions.push(("layer.setProps".into(), json!({"layer": l.id.0, "blend": m.label()})));
+                if let Some(source_label) = crate::xcf_labels::source_blend_label(&doc, l) {
+                    crate::xcf_labels::readonly_blend(ui, source_label, w.max(100.0));
+                    crate::blend_preview::hover(app, l.id, None);
+                } else {
+                    let (chosen, hovered) = widgets::dropdown_hovered(ui, "blend", &mut m, &blend_options(l.is_group()), w.max(100.0));
+                    if chosen {
+                        actions.push(("layer.setProps".into(), json!({"layer": l.id.0, "blend": m.label()})));
+                    }
+                    // Hovering a mode previews it on the canvas (#970).
+                    crate::blend_preview::hover(app, l.id, hovered.filter(|_| !chosen));
                 }
-                // Hovering a mode previews it on the canvas (#970).
-                crate::blend_preview::hover(app, l.id, hovered.filter(|_| !chosen));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let mut o = l.opacity * 100.0;
                     let r = widgets::popup_value_field(ui, opacity_label, &mut o, 0.0..=100.0, "%", LAYER_PCT_W);
@@ -1542,7 +1575,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 }
                 if !filter.is_empty() {
                     let kind = match &l.content {
-                        LayerContent::Raster(_) => "pixel",
+                        LayerContent::Raster(_) | LayerContent::BackedRaster(_) => "pixel",
                         LayerContent::Adjustment(_) | LayerContent::Fill(_) => "adjustment",
                         LayerContent::Text(_) => "type",
                         LayerContent::Shape(_) => "shape",
@@ -1570,7 +1603,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // committed: nothing else could commit or cancel it.
             if let Some(layer) = crate::layer_row_ui::renaming(ui.ctx())
                 && !crate::layer_row_ui::recorded(ui.ctx()).iter().any(|r| r.layer == layer)
-                && let Some(done) = crate::layer_row_ui::end_rename(ui.ctx(), true)
+                && let Some(done) = crate::layer_row_ui::end_rename_checked(app, ui.ctx(), true)
             {
                 actions.push(done);
             }
@@ -1679,7 +1712,11 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             continue;
         }
-        let _ = app.run(&id, p);
+        if id == "layer.renameLayer" {
+            if let Err(error) = app.run(&id, p) { app.ui.status = error; app.ui.status_error = true; }
+        } else {
+            let _ = app.run(&id, p);
+        }
     }
 }
 
@@ -1893,7 +1930,8 @@ fn layer_row(
     }
     // Right-hand indicators first; the name gets what is left and ends in "…" (#144).
     let fx_open = app.session.active().is_none_or(|d| !d.fx_collapsed.contains(&l.id));
-    let (name_right, indicators, fx_toggled) = crate::layer_row_ui::indicators(ui, &painter, rect, x, l, fx_open, actions);
+    let (name_right, indicators, fx_toggled) =
+        crate::layer_row_ui::indicators(ui, &painter, rect, x, l, crate::xcf_labels::source_blend_label(doc, l), fx_open, actions);
     let name_color = if l.visible { t.text } else { t.text_faint };
     let font = if selected && !t.pro { theme::medium(13.0) } else { egui::FontId::proportional(if t.pro { 12.0 } else { 13.0 }) };
     // Photoshop before 2026 set the Background layer's name in italics; 2026 sets it upright.
@@ -1969,7 +2007,7 @@ fn layer_row(
         if crate::doc_props_ui::is_background(doc, l) {
             actions.push(("layer.new.layerFromBackground".into(), json!({})));
         } else if name_rect.is_some_and(|n| on(Rect::from_x_y_ranges(n.x_range(), rect.y_range()))) {
-            if let Some(done) = crate::layer_row_ui::start_rename(ctx, l.id.0, &l.name) {
+            if let Some(done) = crate::layer_row_ui::start_rename_checked(app, ctx, l.id.0, &l.name) {
                 // One rename at a time: starting this one commits any other (#314).
                 actions.push(done);
             }
@@ -1987,7 +2025,7 @@ fn layer_row(
         }
     }
     let edit_rect = Rect::from_min_max(pos2(x - 3.0, rect.center().y - 11.0), pos2(name_right.max(x + 40.0), rect.center().y + 11.0));
-    if let Some(done) = crate::layer_row_ui::rename_field(ui, l.id.0, edit_rect) {
+    if let Some(done) = crate::layer_row_ui::rename_field_checked(app, ui, l.id.0, edit_rect) {
         actions.push(done);
     }
     // Right-click context menu.
@@ -1995,7 +2033,7 @@ fn layer_row(
         // Right-clicking inside a multi-selection keeps it and acts on every selected layer.
         let on_set = row.multi && selected;
         if crate::layer_menu_ui::show(app, ui, l, on_set, actions)
-            && let Some(done) = crate::layer_row_ui::start_rename(ui.ctx(), l.id.0, &l.name)
+            && let Some(done) = crate::layer_row_ui::start_rename_checked(app, ui.ctx(), l.id.0, &l.name)
         {
             actions.push(done);
         }
@@ -2029,8 +2067,11 @@ fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui,
             // Keep row layout and outside thumbnail decorations when the image is clipped.
             if ui.is_rect_visible(rect) {
                 widgets::checker(p, rect, 5.0);
-                let tex = app.layer_thumb(ctx, doc, l);
-                p.image(tex, rect, Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+                if let Ok(tex) = app.layer_thumb(ctx, doc, l) {
+                    p.image(tex, rect, Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+                } else {
+                    icons::paint(ui, rect, "image", 18.0, t.text_dim);
+                }
             }
         }
     }
@@ -2056,9 +2097,17 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         return;
     };
     let doc = st.doc.clone();
-    let entries = st.history.entries();
-    let current = entries.len() - 1;
-    let redo: Vec<String> = st.history.redo_labels().map(str::to_string).collect();
+    let history = st.history.clone();
+    let entries_owner = match history.entries(&photocraft_engine::read_control_none()) {
+        Ok(entries) => entries,
+        Err(error) => {
+            ui.label(error.to_string());
+            return;
+        }
+    };
+    let entries = entries_owner.values();
+    let current = entries.len().saturating_sub(1);
+    let redo = history.redo_labels();
     // Snapshot row (Photoshop shows the document's opening state with a thumbnail).
     {
         let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::hover());
@@ -2066,15 +2115,16 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         if let Some(layer) = doc.layers.first() {
             widgets::checker(ui.painter(), thumb, 4.0);
-            let tex = app.layer_thumb(&ctx, &doc, layer);
-            ui.painter().image(tex, thumb, Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+            if let Ok(tex) = app.layer_thumb(&ctx, &doc, layer) {
+                ui.painter().image(tex, thumb, Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+            }
         }
         ui.painter().rect_stroke(thumb, 0.0, Stroke::new(1.0, t.separator), StrokeKind::Outside);
         ui.painter().text(pos2(thumb.right() + 8.0, rect.center().y), Align2::LEFT_CENTER, &doc.name, egui::FontId::proportional(12.0), t.text);
         ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.0, t.separator));
     }
     let mut target: Option<isize> = None;
-    let all = entries.iter().map(|e| (e.clone(), false)).chain(redo.iter().map(|e| (e.clone(), true)));
+    let all = entries.iter().map(|e| (e.as_str(), false)).chain(redo.map(|e| (e, true)));
     // The dock gives History a fixed height: the rows scroll above the footer.
     let footer = if t.pro { 34.0 } else { 0.0 };
     let max_h = (ui.available_height() - footer).max(40.0);
@@ -2086,7 +2136,7 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             } else if resp.hovered() {
                 ui.painter().rect_filled(rect, 0.0, t.hover.gamma_multiply(0.5));
             }
-            let icon = match e.as_str() {
+            let icon = match e {
                 s if s.contains("Brush") || s.contains("Eraser") => "brush",
                 s if s.contains("Layer") => "layers",
                 s if s.contains("Select") || s.contains("Marquee") || s.contains("Deselect") || s.contains("Lasso") => "square-dashed",
@@ -2102,7 +2152,7 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 12.0,
                 if is_redo { t.text_faint } else { t.icon },
             );
-            ui.painter().text(pos2(rect.left() + 58.0, rect.center().y), Align2::LEFT_CENTER, &e, egui::FontId::proportional(12.0), color);
+            ui.painter().text(pos2(rect.left() + 58.0, rect.center().y), Align2::LEFT_CENTER, e, egui::FontId::proportional(12.0), color);
             if resp.clicked() {
                 target = Some(i as isize - current as isize);
             }
@@ -2142,11 +2192,33 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(st) = app.session.active() else { return };
     let Some(id) = st.active_layer else { return };
     let Some(layer) = st.doc.layer(id) else { return };
-    // The floating card appears for adjustment and fill layers (their controls live here).
-    if !matches!(layer.content, LayerContent::Adjustment(_) | LayerContent::Fill(_)) {
+    // Raster-owned imported filters use the same checked Properties editor as the dock.
+    let raster_filters = matches!(layer.content, LayerContent::Raster(_) | LayerContent::BackedRaster(_))
+        && st.doc.xcf_state.as_ref().is_some_and(|state| {
+            state.filter_stacks.iter().any(|stack| stack.owner == photocraft_doc::item_identity::ItemRef::Layer(id) && !stack.nodes.is_empty())
+        });
+    let raster_link = matches!(layer.content, LayerContent::Raster(_))
+        && st.doc.xcf_state.as_ref().is_some_and(|state| {
+            state.source_items.len() <= 10_000
+                && state.resources.len() <= 10_000
+                && state.source_items.iter().any(|source| {
+                    if source.owner != photocraft_doc::item_identity::ItemRef::Layer(id) {
+                        return false;
+                    }
+                    let photocraft_doc::xcf_items::EditableSource::Linked { resource, .. } = source.source else { return false };
+                    state.resources.iter().any(|entry| {
+                        entry.id == resource && entry.kind == photocraft_doc::xcf_resources::ResourceKind::LinkedImage
+                    })
+                })
+        });
+    let floating_attachment = st.doc.xcf_state.as_ref().and_then(|state| state.floating.as_ref()).is_some_and(|floating| floating.layer == id);
+    let saved_item_sets = crate::xcf_panels::has_item_set_properties(&st.doc, id);
+    let imported_metadata = st.doc.xcf_state.is_some();
+    if !matches!(layer.content, LayerContent::Adjustment(_) | LayerContent::Fill(_)) && !raster_filters && !raster_link && !floating_attachment && !saved_item_sets && !imported_metadata {
         return;
     }
-    let layer = layer.clone();
+    let document = st.doc.clone();
+    let Some(layer) = document.layer(id) else { return };
     let t = Tokens::get(ctx);
     let canvas = app.last_canvas_rect;
     let width = 320.0;
@@ -2180,6 +2252,7 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
             drag = grip.drag_delta();
             ui.add_space(6.0);
+            crate::xcf_notices::properties(app, ui);
             let icon = match &layer.content {
                 LayerContent::Adjustment(_) => "sliders-horizontal",
                 LayerContent::Group(_) => "folder",
@@ -2208,7 +2281,18 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 if let LayerContent::Adjustment(adj) = &layer.content {
                     adjustment_controls(app, ui, id, adj);
                 } else {
-                    layer_controls(app, ui, &layer);
+                    layer_controls(app, ui, layer);
+                }
+                crate::xcf_panels::text_properties(app, ui, id);
+                crate::xcf_panels::linked_properties(app, ui, id);
+                crate::xcf_panels::editing_properties(app, ui, id);
+                crate::xcf_panels::item_set_properties(app, ui, id);
+                if raster_filters {
+                    // Retained stacks stay scrollable within the visible canvas; the editor
+                    // retains its own node limit, eligibility checks and command dispatch.
+                    egui::ScrollArea::vertical().max_height((canvas.bottom() - ui.cursor().top() - 14.0).max(0.0)).show(ui, |ui| {
+                        crate::xcf_panels::filter_properties(app, ui, id);
+                    });
                 }
             });
         });
@@ -2225,7 +2309,8 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
 fn adjustment_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &photocraft_doc::Adjustment) {
     crate::adjust_editors::layer_editor(app, ui, id, adj);
     ui.add_space(6.0);
-    let layer = app.session.active().and_then(|s| s.doc.layer(id).cloned());
+    let snapshot = app.session.active().map(|s| s.doc.clone());
+    let layer = snapshot.as_ref().and_then(|s| s.layer(id));
     if let Some(l) = layer {
         ui.horizontal(|ui| {
             let mut vis = l.visible;
@@ -2250,8 +2335,7 @@ fn adjustment_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, 
 
 fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     let t = Tokens::get(ui.ctx());
-    if let Some(s) = layer.surface() {
-        let b = app.cached_bounds(layer.id.0, s);
+    if let Some(b) = app.cached_layer_bounds(layer) {
         egui::Grid::new("props-grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
             for (k, v) in [("X", b.x0.to_string()), ("Y", b.y0.to_string()), ("W", b.width().to_string()), ("H", b.height().to_string())] {
                 ui.label(RichText::new(k).color(t.text_dim));
@@ -2289,6 +2373,7 @@ fn properties_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Borrowed from the document snapshot: cloning the layer every frame copied whole groups.
     let doc = st.doc.clone();
     let Some(layer) = doc.layer(id) else { return };
+    crate::xcf_notices::properties(app, ui);
     // Header: kind icon, layer name and kind (#155); sections below draw their own separators.
     crate::props_layout::header(ui, layer);
     let is_adjustment = matches!(layer.content, LayerContent::Adjustment(_));
@@ -2317,6 +2402,11 @@ fn properties_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             crate::vector_ui::shape_properties(app, ui, id);
         }
     }
+    crate::xcf_panels::text_properties(app, ui, id);
+    crate::xcf_panels::linked_properties(app, ui, id);
+    crate::xcf_panels::editing_properties(app, ui, id);
+    crate::xcf_panels::item_set_properties(app, ui, id);
+    crate::xcf_panels::filter_properties(app, ui, id);
 }
 
 /// Photoshop's Adjustments panel: a grid of one-click adjustment layers.
@@ -2737,8 +2827,8 @@ fn layer_drag_and_drop(
         }
     }
     if released {
-        let selected = app.session.active().map(|st| st.selected_layers()).unwrap_or_default();
-        let mut payload = layer_drop_payload(dragged, l.id, position, &selected);
+        let selected = app.session.active().map_or(&[][..], |st| st.selection_ids());
+        let mut payload = layer_drop_payload(dragged, l.id, position, selected);
         if copy && let Some(o) = payload.as_object_mut() {
             o.insert("copy".into(), json!(true));
         }
@@ -3063,11 +3153,11 @@ mod history_transform_tests {
                 let ctx = h.ctx.clone();
                 crate::transform_tool::begin(h.state_mut(), &ctx).unwrap();
             }
-            let steps = h.state().session.active().unwrap().history.entries().len();
+            let steps = h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
             // The first state's row, below the 38 pt snapshot row.
             let row = h.ctx.input(|i| i.viewport_rect()).min + vec2(60.0, 60.0);
             click(&mut h, row);
-            let after = h.state().session.active().unwrap().history.entries().len();
+            let after = h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
             if transforming {
                 assert_eq!(after, steps, "the document's history is untouched");
                 assert!(h.state().ui.transform.is_some());
@@ -3280,7 +3370,7 @@ mod toolbar_hidden_tests {
 
     fn hide(app: &mut PhotocraftApp, tools: &[Tool]) {
         let names: Vec<String> = tools.iter().map(|tool| format!("{tool:?}")).collect();
-        app.session.edit_prefs(|p| p.toolbar.hidden = names);
+        app.session.edit_prefs(|p| p.toolbar.hidden = names).unwrap();
     }
 
     #[test]
@@ -3461,3 +3551,7 @@ mod group_drag_selection_tests {
         assert_eq!(layer_drop_payload(a.0, group, "below", &[]), json!({"layer": 10, "target": 20, "position": "below"}));
     }
 }
+
+#[cfg(test)]
+#[path = "panels/info_resolution_tests.rs"]
+mod info_resolution_tests;

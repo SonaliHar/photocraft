@@ -18,7 +18,7 @@ fn fixture(ppp: f32) -> Harness<'static, PhotocraftApp> {
     h
 }
 fn inspect(h: &Harness<'_, PhotocraftApp>) -> Value {
-    control::inspect(h.state(), &h.ctx)["cameraRaw"].clone()
+    control::inspect(h.state(), &h.ctx).unwrap()["cameraRaw"].clone()
 }
 fn rectangle(h: &Harness<'_, PhotocraftApp>, key: &str) -> Rect {
     let v = inspect(h);

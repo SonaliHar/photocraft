@@ -8,3 +8,10 @@ filehash = true
 [serve]
 addresses = ["127.0.0.1"]
 port = 8765
+
+# Generate and authenticate ignored UI assets before Trunk plans copy-dir assets.
+# One Rust hook covers local builds, release packaging, and the Docker builder.
+[[hooks]]
+stage = "pre_build"
+command = "cargo"
+command_arguments = ["run", "--locked", "--manifest-path", "../../xtask/Cargo.toml", "--", "web-assets", "--prepare"]

@@ -5,7 +5,6 @@ use egui_kittest::kittest::Queryable;
 use photocraft_ui_egui::PhotocraftApp;
 use photocraft_ui_egui::control::{ControlRequest, Outcome, handle};
 use serde_json::{Value, json};
-use std::sync::Arc;
 
 type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
 
@@ -125,7 +124,7 @@ fn preview_toggle_and_cancel_keep_the_document_while_ok_applies_rotation() {
     h.run_steps(4);
     setup(&mut h, 400, 240, 1.0, [200.0, 120.0]);
     let st = h.state().session.active().unwrap();
-    let (doc, revision, history) = (st.doc.clone(), st.revision, st.history.entries());
+    let (doc, revision, history) = (st.doc.clone(), st.revision, st.history.entries(&photocraft_engine::read_control_none()).unwrap().values().to_vec());
     let id = open(&mut h);
     assert!(blue(&mut h, "control-zero-on").0 > 5_000);
     h.get_by_label("Preview").click();
@@ -142,9 +141,9 @@ fn preview_toggle_and_cancel_keep_the_document_while_ok_applies_rotation() {
     h.get_by_label("Cancel").click();
     h.run_steps(4);
     let st = h.state().session.active().unwrap();
-    assert!(Arc::ptr_eq(&st.doc, &doc), "Cancel must keep the committed document");
+    assert!(std::ptr::eq((st.doc).as_ref(), (doc).as_ref()), "Cancel must keep the committed document");
     assert_eq!(st.revision, revision);
-    assert_eq!(st.history.entries(), history);
+    assert_eq!(st.history.entries(&photocraft_engine::read_control_none()).unwrap().values().to_vec(), history);
     assert!(blue(&mut h, "control-cancel").0 > 5_000);
 
     let id = open(&mut h);
@@ -156,7 +155,7 @@ fn preview_toggle_and_cancel_keep_the_document_while_ok_applies_rotation() {
     assert!(h.state().ui.dialogs.is_empty());
     let st = h.state().session.active().unwrap();
     assert_eq!((st.doc.size.width, st.doc.size.height), (453, 453));
-    assert_eq!(st.history.entries().len(), history.len() + 1);
+    assert_eq!(st.history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), history.len() + 1);
     assert!(st.revision > revision);
     assert_eq!(h.state().ui.views[0].center, [226.5, 226.5]);
     assert!(blue(&mut h, "control-ok").0 > 5_000, "the applied rotation must be visible");

@@ -35,12 +35,12 @@ fn layer_color_groups_and_overlapping_selection_are_one_undo_step() {
         let (mut s, [outer, inner, leaf, other]) = fixture(depth);
         crate::layer_multi_cmds::set_selection(&mut s, vec![outer, leaf], Some(leaf), Some(outer)).unwrap();
         let before = s.active().unwrap().doc.clone();
-        let selected = s.active().unwrap().selected_layers();
+        let selected = s.active().unwrap().selected_layers().unwrap();
         let past = s.active().unwrap().history.past_len();
         let r = s.execute(ID, json!({"color": "seafoam"})).unwrap();
         assert_eq!(r["layers"], json!([outer.0, inner.0, leaf.0]));
         assert_eq!(s.active().unwrap().history.past_len(), past + 1);
-        assert_eq!(s.active().unwrap().selected_layers(), selected);
+        assert_eq!(s.active().unwrap().selected_layers().unwrap(), selected);
         assert_eq!(s.active().unwrap().last_damage, Some(photocraft_geom::Rect::EMPTY));
         let after = s.active().unwrap().doc.clone();
         for id in [outer, inner, leaf] {

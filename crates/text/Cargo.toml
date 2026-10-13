@@ -6,6 +6,9 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+web_external_bundled_fonts = []
+
 [lints]
 workspace = true
 
@@ -20,6 +23,9 @@ photocraft-psd = { workspace = true }
 parley = { version = "0.11", default-features = false, features = ["std"] }
 skrifa = "0.44"
 flate2 = { workspace = true }
+sha2 = "0.10"
+harfrust = "0.12"
+quick-xml = "0.41"
 
 # ICU dictionary data for Japanese word boundaries and complex-script (Thai, Lao, Khmer, Burmese)
 # line breaking. Native only: the CJK dictionary alone is 3.8 MB of wasm, and the web build must
@@ -27,3 +33,8 @@ flate2 = { workspace = true }
 # to the generic Unicode rules for those scripts.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 parley = { version = "0.11", default-features = false, features = ["std", "complex-scripts"] }
+
+[dev-dependencies]
+photocraft-cms = { workspace = true }
+photocraft-xcf = { workspace = true }
+serde_json = { workspace = true }

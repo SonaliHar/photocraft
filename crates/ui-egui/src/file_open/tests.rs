@@ -12,6 +12,37 @@ use std::rc::Rc;
 type Written = Rc<RefCell<Vec<(String, Vec<u8>)>>>;
 
 #[test]
+fn explicit_native_save_as_suggests_native_for_existing_psd_and_refuses_other_suffix() {
+    let (mut app, written) = app_with(Vec::new());
+    app.open_file("/pics/edited.psd", b"other").unwrap();
+    let (picker, requests) = file_dialog::fake(vec![None]);
+    app.services.file_dialog = Some(picker);
+    let ctx = egui::Context::default();
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({"format":"pcraft"})).unwrap();
+    answer(&mut app);
+    assert!(matches!(requests.borrow().as_slice(), [FileDialogRequest::Save { suggested }] if suggested == "/pics/edited.pcraft"));
+    assert!(menus::invoke(&mut app, &ctx, "file.saveAs", json!({"format":"pcraft","path":"/pics/other.psd"})).is_err());
+    assert!(menus::invoke(&mut app, &ctx, "file.saveAs", json!({"format":"unknown","path":"/pics/other.pcraft"})).is_err());
+    assert!(written.borrow().is_empty());
+    assert_eq!(app.session.active().unwrap().path.as_deref(), Some("/pics/edited.psd"));
+}
+
+#[test]
+fn native_save_picker_rejects_changed_snapshot_without_writing_or_refocusing() {
+    let (mut app, written) = app_with(vec![Some(FileDialogAnswer::SaveTo("/pics/edited.pcraft".into()))]);
+    app.open_file("/pics/edited.psd", b"other").unwrap();
+    app.save_native_as(None).unwrap();
+    app.session.edit("Own intermediate edit", |document, _| { document.name = "Changed".into(); Ok(()) }).unwrap();
+    let before = app.session.active().unwrap().doc.clone();
+    let revision = app.session.active().unwrap().revision;
+    answer(&mut app);
+    assert!(written.borrow().is_empty());
+    assert!(app.ui.status_error);
+    assert!(app.session.active().unwrap().doc.shares_state(&before));
+    assert_eq!(app.session.active().unwrap().revision, revision);
+}
+
+#[test]
 fn xcf_origin_named_psd_is_read_only_and_save_as_suggests_native() {
     let (mut app, written) = app_with(Vec::new());
     app.open_file("/pics/source.psd", b"gimp xcf v013\0").unwrap();
@@ -92,7 +123,7 @@ fn failed_open_preserves_existing_dirty_document_and_source_policy() {
     let (mut app, _) = app_with(Vec::new());
     app.open_file("/pics/source.psd", b"gimp xcf v013\0").unwrap();
     app.session.active_mut().unwrap().revision += 1;
-    let before = app.session.active().unwrap().clone();
+    let before = app.session.active().unwrap().try_clone_resident().unwrap();
     assert!(app.open_file("broken.xcf", b"bad").is_err());
     let after = app.session.active().unwrap();
     assert_eq!(app.session.documents().len(), 1);
@@ -118,6 +149,7 @@ fn app_with(answers: Vec<Option<FileDialogAnswer>>) -> (PhotocraftApp, Written) 
                 document: Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8),
                 warnings,
                 origin: photocraft_io::ImportOrigin::detected(bytes),
+                assessment: None,
             })
         })),
         export: Some(Box::new(|_doc: &Document, path: &str, _s: &crate::ExportSettings| {
@@ -529,15 +561,15 @@ fn switching_documents_after_a_canvas_drop_undoes_only_the_place() {
     app.run("layer.new.layer", json!({})).unwrap();
     assert!(app.session.undo());
     let st = app.session.active().unwrap();
-    let (other, history, redo, revision) = (st.doc.clone(), st.history.entries(), st.history.redo_labels().map(str::to_owned).collect::<Vec<_>>(), st.revision);
+    let (other, history, redo, revision) = (st.doc.clone(), st.history.entries(&photocraft_engine::read_control_none()).unwrap().values().to_vec(), st.history.redo_labels().map(str::to_owned).collect::<Vec<_>>(), st.revision);
     crate::transform_tool::end_if_left(&mut app);
     assert!(app.ui.transform.is_none() && app.transform_preview.is_none());
     let st = app.session.active().unwrap();
-    assert!(std::sync::Arc::ptr_eq(&st.doc, &other));
-    assert_eq!((st.history.entries(), st.revision), (history, revision));
+    assert!(std::ptr::eq((st.doc).as_ref(), (other).as_ref()));
+    assert_eq!((st.history.entries(&photocraft_engine::read_control_none()).unwrap().values().to_vec(), st.revision), (history, revision));
     assert_eq!(st.history.redo_labels().collect::<Vec<_>>(), redo);
     let origin = &app.session.documents()[0];
-    assert!(std::sync::Arc::ptr_eq(&origin.doc, &original));
+    assert!(std::ptr::eq((origin.doc).as_ref(), (original).as_ref()));
     assert_eq!(origin.history.past_len(), steps);
     assert!(!origin.history.can_redo());
 }
@@ -736,4 +768,77 @@ fn notices_render_without_panicking() {
     let mut out = ctx.run_ui(Default::default(), |ui| notices::show(&mut app, ui.ctx()));
     out.textures_delta.clear();
     assert_eq!(app.ui.notices.len(), 2);
+}
+
+
+#[cfg(not(target_arch = "wasm32"))]
+fn own_stream_open_file(bytes: &[u8], suffix: &str) -> std::path::PathBuf {
+    use std::io::Write;
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    for _ in 0..100 {
+        let serial = SEQUENCE.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("photocraft-own-stream-open-{}-{serial}.{suffix}",std::process::id()));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => { file.write_all(bytes).unwrap(); return path; }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => panic!("own stream-open fixture: {error}"),
+        }
+    }
+    panic!("own stream-open fixture namespace exhausted")
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn inline_native_stream_open_skips_whole_byte_service_and_records_source_recent() {
+    let doc=Document::with_background("Own stored name",photocraft_geom::Size::new(2,2),ColorMode::Rgb,SampleType::U16,photocraft_doc::Color::WHITE);
+    let bytes=photocraft_format::save_to_bytes(&doc,&Default::default()).unwrap();
+    let path=own_stream_open_file(&bytes,"pcraft");
+    let mut app=PhotocraftApp::new(photocraft_engine::Session::new(),Services {import:Some(Box::new(|_,_|Err("byte importer must not run".into()))),..Default::default()});
+    let path_text=path.to_str().unwrap();
+    assert!(app.open_path(path_text).unwrap().is_empty());
+    let active=app.session.active().unwrap();
+    assert_eq!(active.doc.depth,SampleType::U16);
+    assert_eq!(active.path.as_deref(),Some(path_text));
+    assert_eq!(active.source.as_ref().unwrap().path.as_deref(),Some(path_text));
+    assert_eq!(active.source.as_ref().unwrap().origin.format,photocraft_io::ImportFormat::Pcraft);
+    assert_eq!(app.ui.recent_files.first().map(String::as_str),Some(path_text));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn inline_negative_stream_candidate_replays_same_full_bytes_to_existing_service() {
+    let data=b"Own non-native content";
+    let path=own_stream_open_file(data,"png");
+    let observed=Rc::new(RefCell::new(Vec::new()));
+    let capture=observed.clone();
+    let mut app=PhotocraftApp::new(photocraft_engine::Session::new(),Services {import:Some(Box::new(move |_,bytes| {
+        capture.borrow_mut().extend_from_slice(bytes);
+        Err("own fallback refusal".into())
+    })),..Default::default()});
+    assert_eq!(app.open_path(path.to_str().unwrap()).unwrap_err(),"own fallback refusal");
+    assert_eq!(observed.borrow().as_slice(),data);
+    assert!(app.session.documents().is_empty());
+    assert!(app.ui.recent_files.is_empty());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn corrupt_inline_native_stream_open_preserves_dirty_current_document_and_redo() {
+    let path=own_stream_open_file(b"PK\x03\x04Own corrupt native bundle","pcraft");
+    let mut app=PhotocraftApp::new(photocraft_engine::Session::new(),Services::default());
+    app.session.execute("file.new",json!({"width":2,"height":2})).unwrap();
+    app.session.edit("Own redo seed",|doc,_| {doc.name="Own seeded".into();Ok(())}).unwrap();
+    app.session.execute("edit.undo",json!({})).unwrap();
+    let before=app.session.active().unwrap().doc.clone();
+    let revision=app.session.active().unwrap().revision;
+    assert!(app.session.active().unwrap().history.can_redo());
+    assert!(app.open_path(path.to_str().unwrap()).is_err());
+    assert!(app.session.active().unwrap().doc.shares_state(&before));
+    assert_eq!(app.session.active().unwrap().revision,revision);
+    assert!(app.session.active().unwrap().history.can_redo());
+    assert_eq!(app.session.documents().len(),1);
+    assert!(app.ui.recent_files.is_empty());
+    std::fs::remove_file(path).unwrap();
 }

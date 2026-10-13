@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
+photocraft-doc = { workspace = true }
 photocraft-raster = { workspace = true }
 serde = { workspace = true }
 rustfft = "6.4.1"
@@ -20,5 +21,13 @@ rustfft = "6.4.1"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }
 
+[features]
+corpus = []
+
 [dev-dependencies]
+flate2 = { workspace = true }
+photocraft-codecs = { workspace = true }
+photocraft-cms = { workspace = true }
 serde_json = { workspace = true }
+
+sha2 = "0.10"

@@ -32,9 +32,11 @@ pub mod exif;
 pub mod features;
 mod fxutil;
 mod gallery;
+pub mod gimp;
 pub mod hdr;
 pub mod histogram;
 mod image;
+pub mod indexed_geometry;
 pub mod inpaint;
 pub mod lens;
 pub mod liquify;
@@ -76,6 +78,10 @@ pub mod vanishing;
 pub mod vectorscope;
 mod video;
 pub mod warp;
+pub mod wide;
+pub mod wide_geometry;
+pub mod wide_paint;
+pub mod wide_resample;
 pub mod wideangle;
 
 pub use artistic::{GALLERY_CATEGORIES, GalleryEffect, GalleryFilter, GalleryParam, GalleryParamKind};
@@ -963,6 +969,12 @@ pub fn apply_tiled_with(
     extent: Option<Rect>,
     ctl: &photocraft_raster::Interrupt,
 ) -> Option<Surface> {
+    if matches!(surface.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
+        return match params {
+            FilterParams::Invert => wide::try_invert(surface, area, selection, ctl).ok(),
+            _ => None,
+        };
+    }
     let mut out = surface.clone();
     if area.is_empty() {
         return Some(out);

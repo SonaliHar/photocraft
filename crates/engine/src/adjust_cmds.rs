@@ -228,7 +228,7 @@ pub(crate) fn adjust_as_filter(kind: &str, p: &Value, surf: &Surface, transfer: 
         let mode = surf.format().mode;
         let adj = crate::adjust_params::from_params(kind, p, None, mode).ok()?;
         let transfer = transfer.unwrap_or_else(|| photocraft_compose::adjust::Transfer::for_document(mode, surf.format().sample));
-        crate::pixels::adjust_surface_with_transfer(&mut out, &adj, None, mode, transfer);
+        crate::pixels::adjust_surface_with_transfer(&mut out, &adj, None, mode, transfer).ok()?;
     }
     out.prune();
     Some(out)
@@ -273,9 +273,9 @@ fn stats_pixels(doc: &Document, layer: Option<u64>, use_selection: bool) -> Resu
     let px: Vec<[f32; 4]> = match layer {
         Some(id) => {
             let l = doc.layer(photocraft_doc::LayerId(id)).ok_or(EngineError::NoLayer(photocraft_doc::LayerId(id)))?;
-            photocraft_compose::render_layer(l, area).px
+            photocraft_compose::render_layer(l, area)?.px
         }
-        None => photocraft_compose::flatten(doc).px,
+        None => photocraft_compose::flatten(doc)?.px,
     };
     let mask = doc.selection.as_ref().filter(|_| use_selection).map(|sel| photocraft_algo::selection::mask_from_surface(Some(sel), area));
     Ok((px, mask))
@@ -333,7 +333,7 @@ fn hdr_toning(s: &mut Session, p: &Value) -> Result<Value> {
     };
     // Like Photoshop, HDR Toning flattens the image first (one history step).
     s.edit("HDR Toning", |doc, active| {
-        let buf = photocraft_compose::flatten(doc).over_background([1.0, 1.0, 1.0]);
+        let buf = photocraft_compose::flatten(doc)?.over_background([1.0, 1.0, 1.0]);
         let (w, hgt) = (buf.rect.width() as usize, buf.rect.height() as usize);
         let mut px = buf.px;
         tone::hdr_toning(&mut px, w, hgt, &h);

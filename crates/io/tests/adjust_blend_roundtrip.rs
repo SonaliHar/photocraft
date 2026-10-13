@@ -27,7 +27,7 @@ fn export_import(doc: &Document) -> (Document, Vec<String>, PsdFile) {
 }
 
 fn assert_composite_eq(a: &Document, b: &Document, ctx: &str) {
-    let (x, y) = (photocraft_compose::flatten(a), photocraft_compose::flatten(b));
+    let (x, y) = (photocraft_compose::flatten(a).unwrap(), photocraft_compose::flatten(b).unwrap());
     assert_eq!(x.rect, y.rect, "{ctx}: composite rect");
     let m = max_diff(&x.px, &y.px);
     assert!(m <= TOL, "{ctx}: composite differs by {m} (> 1/255)");
@@ -139,7 +139,7 @@ fn adjustment_doc(adj: &Adjustment, depth: SampleType) -> Document {
     let mut masked = Layer::new("masked", LayerContent::Adjustment(adj.clone()));
     masked.opacity = g(128);
     masked.blend = BlendMode::Multiply;
-    masked.mask = Some(LayerMask { surface: mask_surface(depth, Rect::new(4, 3, 20, 15), 1.0, 3), enabled: true, linked: true, density: 1.0, feather: 0.0 });
+    masked.mask = Some(LayerMask { surface: std::sync::Arc::new(mask_surface(depth, Rect::new(4, 3, 20, 15), 1.0, 3)), enabled: true, linked: true, density: 1.0, feather: 0.0 });
     d.layers.push(masked);
     d.layers.push(raster("clip base", fmt, Rect::new(10, 2, 28, 18), 9, true));
     let mut clipped = Layer::new("clipped", LayerContent::Adjustment(adj.clone()));
@@ -233,7 +233,7 @@ fn blend_doc(mode: BlendMode) -> Document {
     l.fill_opacity = g(150);
     l.opacity = g(220);
     l.mask =
-        Some(LayerMask { surface: mask_surface(SampleType::U8, Rect::new(3, 2, 15, 10), 1.0, 4), enabled: true, linked: true, density: 1.0, feather: 0.0 });
+        Some(LayerMask { surface: std::sync::Arc::new(mask_surface(SampleType::U8, Rect::new(3, 2, 15, 10), 1.0, 4)), enabled: true, linked: true, density: 1.0, feather: 0.0 });
     d.layers.push(l);
     let mut clipped = raster("clipped", fmt, Rect::new(0, 0, 12, 16), 3, true);
     clipped.clipped = true;

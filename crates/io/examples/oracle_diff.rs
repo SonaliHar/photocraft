@@ -16,15 +16,15 @@
 //! ONLY="name,name" …                                                                  # only these top-level layers (+ the bottom one)
 //! DUMP_FX=1 …                                                                          # raw effects descriptors
 //! ```
-fn main() {
-    let path = std::env::args().nth(1).expect("path");
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let path = std::env::args().nth(1).ok_or("path is required")?;
     if std::path::Path::new(&path).is_dir() {
-        corpus_summary(std::path::Path::new(&path));
-        return;
+        corpus_summary(std::path::Path::new(&path))?;
+        return Ok(());
     }
-    let bytes = std::fs::read(&path).unwrap();
-    let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
-    let mut imp = photocraft_io::import(&path, &bytes).unwrap();
+    let bytes = std::fs::read(&path)?;
+    let file = photocraft_psd::PsdFile::from_bytes(&bytes)?;
+    let mut imp = photocraft_io::import(&path, &bytes)?;
     if std::env::var_os("HIDE_ADJ").is_some() {
         // Composite without adjustment layers (their input, for fitting transfer curves).
         fn hide(ls: &mut [photocraft_doc::Layer]) {
@@ -219,7 +219,7 @@ fn main() {
             }
         }
     }
-    let ours = photocraft_compose::flatten(doc).px;
+    let ours = photocraft_compose::flatten(doc)?.px;
     let merged = photocraft_io::merged_composite(&file).unwrap();
     if std::env::args().nth(3).as_deref() == Some("png") {
         // ours | photoshop | diff heatmap, side by side (over white).
@@ -260,7 +260,7 @@ fn main() {
                 .unwrap();
         std::fs::write(&out, photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap()).unwrap();
         println!("wrote {out}");
-        return;
+        return Ok(());
     }
     if std::env::args().nth(3).as_deref() == Some("dump") {
         // dump prefix: raw little-endian f32 RGBA (straight) planes for offline fitting:
@@ -283,7 +283,7 @@ fn main() {
             meta += &format!("{i} {}\n", l.name);
         }
         std::fs::write(format!("{out}.txt"), meta).unwrap();
-        return;
+        return Ok(());
     }
     if std::env::args().nth(3).as_deref() == Some("layerpx") {
         // layerpx x y: each layer's own pixel (0-255).
@@ -294,7 +294,7 @@ fn main() {
                 println!("{:?}: {:?}", l.2.name, s.pixel(x, y).iter().map(|v| (v * 255.0 * 100.0).round() / 100.0).collect::<Vec<_>>());
             }
         }
-        return;
+        return Ok(());
     }
     if std::env::args().nth(3).as_deref() == Some("grid") {
         // grid x0 y0 x1 y1 [channel]: ours / photoshop values (0-255, premultiplied colour).
@@ -314,7 +314,7 @@ fn main() {
                 println!("  y={y:4} {}", row.join(""));
             }
         }
-        return;
+        return Ok(());
     }
     if std::env::args().nth(3).as_deref() == Some("bylayer") {
         // Max error and bad-pixel count inside each layer's bounds grown by its effects' reach
@@ -354,7 +354,7 @@ fn main() {
             let fx: Vec<&str> = l.effects.items.iter().filter(|e| e.enabled()).map(|e| e.label()).collect();
             println!("{:<32} {:>6.1} at {:?} bad {:>6}  {:?} {:?}", l.name, worst * 255.0, at, bad, l.blend, fx);
         }
-        return;
+        return Ok(());
     }
     if std::env::args().nth(3).as_deref() == Some("worst") {
         // The N worst pixels (premultiplied max channel error), with coordinates.
@@ -371,7 +371,7 @@ fn main() {
             let (a, b) = (ours[i], merged[i]);
             println!("({:4},{:4}) d={:5.1} ours {:?} ps {:?}", i % w, i / w, d * 255.0, a.map(|v| (v * 255.0).round()), b.map(|v| (v * 255.0).round()));
         }
-        return;
+        return Ok(());
     }
     if std::env::args().nth(3).as_deref() == Some("row") {
         let w = doc.size.width as usize;
@@ -382,7 +382,7 @@ fn main() {
             let (a, b) = (ours[y * w + x], merged[y * w + x]);
             println!("x={x:5} ours {:?} ps {:?}", a.map(|v| (v * 1000.0).round() / 1000.0), b.map(|v| (v * 1000.0).round() / 1000.0));
         }
-        return;
+        return Ok(());
     }
     if std::env::args().nth(3).as_deref() == Some("solve") {
         // solve layer-name x0 y0 x1 y1: per pixel the layer's content alpha `l`, its shape's path
@@ -407,7 +407,7 @@ fn main() {
                 println!("({x:3},{y:3}) l {la:.3} cov {c:.3} A {:.3} ours {:.3} s {s:.3} ps {:?}", p[3], o[3], p.map(|v| (v * 255.0).round()));
             }
         }
-        return;
+        return Ok(());
     }
     if std::env::args().nth(3).as_deref() == Some("line") {
         // line x0 y0 x1 y1: every pixel on the segment, straight RGBA 0-255, ours | ps.
@@ -419,7 +419,7 @@ fn main() {
             let (o, p) = (ours[y * w + x], merged[y * w + x]);
             println!("({x:4},{y:4}) ours {:?} ps {:?}", o.map(|v| (v * 255.0).round()), p.map(|v| (v * 255.0).round()));
         }
-        return;
+        return Ok(());
     }
     if std::env::args().nth(3).as_deref() == Some("col") {
         let (w, h) = (doc.size.width as usize, doc.size.height as usize);
@@ -429,16 +429,17 @@ fn main() {
             let (a, b) = (ours[y * w + x], merged[y * w + x]);
             println!("y={y:5} ours {:?} ps {:?}", a.map(|v| (v * 1000.0).round() / 1000.0), b.map(|v| (v * 1000.0).round() / 1000.0));
         }
-        return;
+        return Ok(());
     }
     let n = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(8usize);
     for (i, (a, b)) in ours.iter().zip(&merged).enumerate().take(n) {
         println!("{i:4}: ours {:?}\n      ps   {:?}", a.map(|v| (v * 1000.0).round() / 1000.0), b.map(|v| (v * 1000.0).round() / 1000.0));
     }
+    Ok(())
 }
 
 /// The corpus oracle table (as `tests/corpus.rs`), files in parallel, without a test build.
-fn corpus_summary(root: &std::path::Path) {
+fn corpus_summary(root: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     fn collect(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         let Ok(rd) = std::fs::read_dir(dir) else { return };
         for e in rd.flatten() {
@@ -455,16 +456,16 @@ fn corpus_summary(root: &std::path::Path) {
     files.sort();
     const TOL: f32 = 2.0 / 255.0;
     type Row = (String, Option<(f32, f32)>);
-    let row = |p: &std::path::PathBuf| -> Row {
+    let row = |p: &std::path::PathBuf| -> Result<Row, String> {
         let name = p.strip_prefix(root).unwrap_or(p).display().to_string();
-        let Ok(bytes) = std::fs::read(p) else { return (name, None) };
-        let Ok(file) = photocraft_psd::PsdFile::from_bytes(&bytes) else { return (name, None) };
-        let Ok(imp) = photocraft_io::import(&name, &bytes) else { return (name, None) };
+        let Ok(bytes) = std::fs::read(p) else { return Ok((name, None)) };
+        let Ok(file) = photocraft_psd::PsdFile::from_bytes(&bytes) else { return Ok((name, None)) };
+        let Ok(imp) = photocraft_io::import(&name, &bytes) else { return Ok((name, None)) };
         if file.has_real_merged_data() == Some(false) || file.layers().is_empty() {
-            return (name, None);
+            return Ok((name, None));
         }
-        let Ok(merged) = photocraft_io::merged_composite(&file) else { return (name, None) };
-        let ours = photocraft_compose::flatten(&imp.document).px;
+        let Ok(merged) = photocraft_io::merged_composite(&file) else { return Ok((name, None)) };
+        let ours = photocraft_compose::flatten(&imp.document).map_err(|error| format!("{name}: render failed: {error}"))?.px;
         let mut m = 0.0f32;
         let mut bad = 0usize;
         for (a, b) in ours.iter().zip(&merged) {
@@ -474,11 +475,11 @@ fn corpus_summary(root: &std::path::Path) {
                 bad += 1;
             }
         }
-        (name, Some((m, 100.0 * bad as f32 / ours.len().max(1) as f32)))
+        Ok((name, Some((m, 100.0 * bad as f32 / ours.len().max(1) as f32))))
     };
     // Files in parallel (a few threads; flatten itself is tile-parallel).
     let next = std::sync::atomic::AtomicUsize::new(0);
-    let mut rows: Vec<(usize, Row)> = std::thread::scope(|sc| {
+    let batches = std::thread::scope(|sc| {
         let hs: Vec<_> = (0..4)
             .map(|_| {
                 sc.spawn(|| {
@@ -492,10 +493,11 @@ fn corpus_summary(root: &std::path::Path) {
                 })
             })
             .collect();
-        hs.into_iter().flat_map(|h| h.join().unwrap()).collect()
-    });
+        hs.into_iter().map(|handle| handle.join().map_err(|_| std::io::Error::other("oracle worker failed"))).collect::<Result<Vec<_>, _>>()
+    })?;
+    let mut rows: Vec<(usize, Result<Row, String>)> = batches.into_iter().flatten().collect();
     rows.sort_by_key(|r| r.0);
-    let rows: Vec<Row> = rows.into_iter().map(|r| r.1).collect();
+    let rows: Vec<Row> = rows.into_iter().map(|r| r.1).collect::<Result<_, _>>()?;
     let (mut pass, mut diff, mut skip) = (0, 0, 0);
     for (name, r) in &rows {
         match r {
@@ -511,4 +513,5 @@ fn corpus_summary(root: &std::path::Path) {
         }
     }
     println!("{} files: {pass} pass, {diff} differ, {skip} skipped/errors", rows.len());
+    Ok(())
 }

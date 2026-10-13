@@ -7,7 +7,7 @@ fn opened(name: &str) -> Session {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../corpus/xcf").join(name);
     let imported = photocraft_io::import(name, &std::fs::read(path).expect("run cargo xtask corpus --xcf")).unwrap();
     let mut session = Session::new();
-    session.open_document(imported.document, None);
+    session.open_document(imported.document, None).unwrap();
     session
 }
 #[test]
@@ -29,7 +29,13 @@ fn current(s: &Session) -> bool {
     let d = &s.active().unwrap().doc;
     let layer = d.layers.iter().find(|l| l.indexed_source.is_some()).unwrap();
     let source = layer.indexed_source.as_ref().unwrap();
-    source.current_matches(layer.surface().unwrap(), &d.color_table.as_ref().unwrap().colors, source.bounds())
+    let canonical = &d.xcf_state.as_ref().unwrap().editable_indexed.iter().find(|r| r.owner == layer.id).unwrap().raster;
+    // Expanded RGB cannot distinguish duplicate palette ordinals. Current identity must
+    // also compare the editable index/alpha planes and their operative bounds.
+    canonical.indices() == source.indices()
+        && canonical.alpha() == source.alpha().as_ref()
+        && canonical.palette() == source.palette()
+        && source.current_matches(layer.surface().unwrap(), &d.color_table.as_ref().unwrap().colors, canonical.bounds())
 }
 #[test]
 fn indexed_pixels_palette_and_position_edits_invalidate_then_undo_restores_identity() {
@@ -45,6 +51,13 @@ fn indexed_pixels_palette_and_position_edits_invalidate_then_undo_restores_ident
     ] {
         s.execute(command, params).unwrap();
         assert!(!current(&s), "{command}: edited content cannot claim original index identity");
+        if command == "image.adjustments.invert" {
+            let after = &s.active().unwrap().doc;
+            let canonical = &after.xcf_state.as_ref().unwrap().editable_indexed.iter().find(|r| r.owner == id).unwrap().raster;
+            assert!(before.layer(id).unwrap().indexed_source.as_ref().unwrap().indices().contains(&1));
+            assert!(canonical.indices().iter().all(|&index| index == 0), "equal palette entries use the first nearest-color ordinal");
+            assert_eq!(after.layer(id).unwrap().surface(), before.layer(id).unwrap().surface(), "duplicate palette colors expand identically");
+        }
         assert_eq!(s.active().unwrap().doc.layer(id).unwrap().indexed_source, before.layer(id).unwrap().indexed_source);
         assert_eq!(s.active().unwrap().doc.sample_encoding, before.sample_encoding);
         s.execute("edit.undo", json!({})).unwrap();
@@ -71,8 +84,8 @@ fn layer_export_and_native_smart_conversion_preserve_imported_interpretation() {
     assert_eq!(child.icc_profile, d.icc_profile);
     let mut after = (**d).clone();
     after.layers = vec![smart];
-    let expected = photocraft_compose::render(d, d.bounds());
-    let actual = photocraft_compose::render(&after, after.bounds());
+    let expected = photocraft_compose::render(d, d.bounds()).unwrap();
+    let actual = photocraft_compose::render(&after, after.bounds()).unwrap();
     for (a, b) in actual.px.iter().zip(expected.px) {
         for (a, b) in a.iter().zip(b) {
             assert!((a - b).abs() <= 2.0 / 65535.0);
@@ -93,7 +106,7 @@ fn placed_xcf_refresh_keeps_destination_interpretation_and_original_embedded_byt
             if linear {
                 target.sample_encoding = Some(photocraft_doc::SampleEncoding::Linear);
             }
-            session.open_document(target, None);
+            session.open_document(target, None).unwrap();
             photocraft_engine::file_cmds::place_bytes(&mut session, name, bytes.clone(), None, &json!({"fit":false})).unwrap();
             let id = session.active().unwrap().active_layer.unwrap();
             let layer = session.active().unwrap().doc.layer(id).unwrap();

@@ -21,7 +21,7 @@ fn solid_layer(name: &str, rect: Rect, rgba: [f32; 4]) -> Layer {
 }
 
 fn px(doc: &Document, x: i32, y: i32) -> [f32; 4] {
-    render(doc, Rect::from_xywh(x, y, 1, 1)).px[0]
+    render(doc, Rect::from_xywh(x, y, 1, 1)).unwrap().px[0]
 }
 
 #[test]
@@ -89,7 +89,7 @@ fn layer_mask_hides_pixels() {
     let mut d = doc_white(4, 4);
     let mut l = solid_layer("k", Rect::new(0, 0, 4, 4), [0.0, 0.0, 0.0, 1.0]);
     let mut m = LayerMask::reveal_all();
-    m.surface.fill_rect(Rect::new(0, 0, 2, 4), &[0.0]);
+    std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::new(0, 0, 2, 4), &[0.0]);
     l.mask = Some(m);
     d.layers.push(l);
     assert!(close4(px(&d, 0, 0), [1.0; 4]));
@@ -176,7 +176,7 @@ fn mask_feather_blurs_the_edge() {
     let mut d = doc_white(64, 8);
     let mut l = solid_layer("k", Rect::new(0, 0, 64, 8), [0.0, 0.0, 0.0, 1.0]);
     let mut m = LayerMask::hide_all();
-    m.surface.fill_rect(Rect::new(0, 0, 32, 8), &[1.0]);
+    std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::new(0, 0, 32, 8), &[1.0]);
     l.mask = Some(m);
     d.layers.push(l.clone());
     assert!(px(&d, 31, 4)[0] < 0.01 && px(&d, 32, 4)[0] > 0.99, "sharp without feather");
@@ -235,7 +235,7 @@ fn adjustment_opacity_and_mask() {
     let mut adj = Layer::new("inv", LayerContent::Adjustment(Adjustment::Invert));
     adj.opacity = 0.5;
     let mut m = LayerMask::reveal_all();
-    m.surface.fill_rect(Rect::new(2, 0, 4, 1), &[0.0]);
+    std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::new(2, 0, 4, 1), &[0.0]);
     adj.mask = Some(m);
     d.layers.push(adj);
     assert!((px(&d, 0, 0)[0] - 0.5).abs() <= E);
@@ -327,11 +327,11 @@ fn dissolve_coverage_matches_opacity() {
     l.blend = BlendMode::Dissolve;
     l.opacity = 0.3;
     d.layers.push(l);
-    let b = flatten(&d);
+    let b = flatten(&d).unwrap();
     let covered = b.px.iter().filter(|p| p[3] > 0.5).count() as f32 / b.px.len() as f32;
     assert!((covered - 0.3).abs() < 0.05, "{covered}");
     // deterministic
-    assert_eq!(flatten(&d), b);
+    assert_eq!(flatten(&d).unwrap(), b);
 }
 
 #[test]
@@ -341,8 +341,8 @@ fn render_is_tile_independent() {
     let mut l = solid_layer("a", Rect::new(20, 20, 280, 280), [0.1, 0.5, 0.9, 0.7]);
     l.blend = BlendMode::Overlay;
     d.layers.push(l);
-    let full = flatten(&d);
-    let sub = render(&d, Rect::new(250, 250, 270, 262));
+    let full = flatten(&d).unwrap();
+    let sub = render(&d, Rect::new(250, 250, 270, 262)).unwrap();
     for y in 250..262 {
         for x in 250..270 {
             assert_eq!(full.get(x, y), sub.get(x, y));
@@ -376,11 +376,11 @@ fn sixteen_bit_and_float_layers_composite() {
 #[test]
 fn thumbnail_dimensions() {
     let d = doc_white(400, 200);
-    let t = thumbnail(&d, 100);
+    let t = thumbnail(&d, 100).unwrap();
     assert_eq!((t.width, t.height), (100, 50));
     assert_eq!(&t.pixels[0..4], &[255, 255, 255, 255]);
     let small = doc_white(10, 5);
-    let t = thumbnail(&small, 100);
+    let t = thumbnail(&small, 100).unwrap();
     assert_eq!((t.width, t.height), (10, 5));
 }
 
@@ -682,10 +682,10 @@ fn effects_render_identically_in_tiles() {
                 *surface = surface.convert(photocraft_color::PixelFormat { sample: depth, ..surface.format() });
             }
         }
-        let full = flatten(&d);
+        let full = flatten(&d).unwrap();
         // Compare every boundary pixel: a few sampled points miss application-halo regressions.
         for tile in [1, 7, 33] {
-            assert_eq!(render_tiled(&d, d.bounds(), tile), full, "{depth:?}, tile {tile}");
+            assert_eq!(render_tiled(&d, d.bounds(), tile).unwrap(), full, "{depth:?}, tile {tile}");
         }
     }
 }
@@ -696,7 +696,7 @@ fn parallel_tiles_match_single_pass() {
     let mut d = doc_white(97, 61);
     let mut a = solid_layer("a", Rect::new(5, 5, 70, 50), [1.0, 0.2, 0.1, 0.8]);
     let mut m = LayerMask::reveal_all();
-    m.surface.fill_rect(Rect::new(0, 0, 40, 61), &[0.25]);
+    std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::new(0, 0, 40, 61), &[0.25]);
     m.density = 0.8;
     a.mask = Some(m);
     a.effects.items.push(stroke(3.0, StrokePosition::Outside));
@@ -713,11 +713,11 @@ fn parallel_tiles_match_single_pass() {
     f.opacity = 0.3;
     d.layers.push(f);
     let r = d.bounds();
-    let whole = render_tiled(&d, r, 10_000);
+    let whole = render_tiled(&d, r, 10_000).unwrap();
     for tile in [7, 16, 33] {
-        assert_eq!(render_tiled(&d, r, tile), whole, "tile {tile}");
+        assert_eq!(render_tiled(&d, r, tile).unwrap(), whole, "tile {tile}");
     }
-    assert_eq!(render(&d, r), whole);
+    assert_eq!(render(&d, r).unwrap(), whole);
 }
 
 #[test]
@@ -728,7 +728,7 @@ fn vector_mask_combines_with_pixel_mask() {
     // Vector mask reveals x in 0..4 (and half of column 4); the pixel mask hides rows 0..2.
     l.vector_mask = Some(VectorMask::new(Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (4.5, 0.0), (4.5, 8.0), (0.0, 8.0)])])));
     let mut m = LayerMask::reveal_all();
-    m.surface.fill_rect(Rect::new(0, 0, 8, 2), &[0.0]);
+    std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::new(0, 0, 8, 2), &[0.0]);
     l.mask = Some(m);
     d.layers.push(l);
     assert!(close4(px(&d, 1, 4), [0.0, 0.0, 0.0, 1.0]));
@@ -736,8 +736,8 @@ fn vector_mask_combines_with_pixel_mask() {
     assert!(close4(px(&d, 4, 4), [0.5, 0.5, 0.5, 1.0]));
     assert!(close4(px(&d, 1, 1), [1.0; 4]));
     // Tiled rendering gives the same result.
-    let whole = render_tiled(&d, d.bounds(), 3);
-    assert_eq!(whole.px, render_tiled(&d, d.bounds(), 256).px);
+    let whole = render_tiled(&d, d.bounds(), 3).unwrap();
+    assert_eq!(whole.px, render_tiled(&d, d.bounds(), 256).unwrap().px);
     // Density and disabling.
     let top = d.layers.len() - 1;
     let vm = d.layers[top].vector_mask.as_mut().unwrap();
@@ -764,7 +764,8 @@ fn effect_maps_are_cached_and_invalidated_by_pixel_changes() {
     let a = effect_maps(&doc.layers[1], &cx);
     let b = effect_maps(&doc.layers[1], &cx);
     assert!(std::sync::Arc::ptr_eq(&a, &b), "second request hits the cache");
-    let first = flatten(&doc);
+    let first = flatten(&doc).unwrap();
+    drop(cx); // End the immutable preparation/cache lifetime before mutation.
     // Editing the layer's pixels changes its tiles, so the maps are rebuilt.
     doc.layers[1].surface_mut().unwrap().fill_rect(Rect::new(8, 8, 20, 20), &[0.0, 0.0, 1.0, 1.0]);
     let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES);
@@ -772,9 +773,9 @@ fn effect_maps_are_cached_and_invalidated_by_pixel_changes() {
     let c = effect_maps(&doc.layers[1], &cx);
     assert!(!std::sync::Arc::ptr_eq(&a, &c), "pixel edit invalidates");
     // Cached rendering equals a fresh build (tiled and full renders agree too).
-    let again = flatten(&doc);
+    let again = flatten(&doc).unwrap();
     let region = doc.bounds();
-    let tiled = render_tiled(&doc, region, 16);
+    let tiled = render_tiled(&doc, region, 16).unwrap();
     for (p, q) in again.px.iter().zip(&tiled.px) {
         assert!(close4(*p, *q));
     }
@@ -785,10 +786,10 @@ fn effect_maps_are_cached_and_invalidated_by_pixel_changes() {
     masked.layers[1].mask = Some(photocraft_doc::LayerMask::reveal_all());
     assert!(close4(px(&masked, 20, 32), [0.0, 0.0, 0.0, 1.0]));
     masked.layers[1].mask = Some(photocraft_doc::LayerMask::hide_all());
-    let warm = flatten(&masked);
+    let warm = flatten(&masked).unwrap();
     let mut cold = masked.clone();
     cold.layers[1].id = Layer::raster("uncached", cold.pixel_format()).id;
-    assert!(warm.px == flatten(&cold).px, "default-only mask changes must invalidate cached effects");
+    assert!(warm.px == flatten(&cold).unwrap().px, "default-only mask changes must invalidate cached effects");
     assert!(close4(px(&masked, 20, 32), [1.0; 4]));
 }
 
@@ -1079,7 +1080,7 @@ fn effect_maps_built_inside_parallel_tiles_do_not_deadlock() {
         s.size = 30.0;
     }
     d.layers.push(l);
-    let out = render(&d, d.bounds());
+    let out = render(&d, d.bounds()).unwrap();
     assert_eq!(out.px.len(), 900 * 700);
 }
 
@@ -1252,7 +1253,7 @@ fn small_gradient_fill_matches_photoshop_at_all_depths() {
         let mut d = Document::new("g", Size::new(4, 4), ColorMode::Rgb, depth);
         let fill = Fill::gradient(stops.clone(), 30.0, 1.0, photocraft_doc::GradientStyle::Reflected, false);
         d.layers.push(Layer::new("g", LayerContent::Fill(fill)));
-        let out = flatten(&d);
+        let out = flatten(&d).unwrap();
         for y in 0..4usize {
             for x in 0..4usize {
                 let want = (x as f32 - y as f32).abs() / 4.0;
@@ -1336,13 +1337,13 @@ fn tall_doc(w: u32, h: u32) -> Document {
 fn render_tiled_in_place_matches_one_tile_with_many_bands() {
     // Enough bands for the band-parallel path, and few for the tile-parallel one.
     let d = tall_doc(37, 900);
-    let whole = render_tiled(&d, d.bounds(), 10_000);
+    let whole = render_tiled(&d, d.bounds(), 10_000).unwrap();
     for tile in [5, 64, 300] {
-        assert_eq!(render_tiled(&d, d.bounds(), tile), whole, "tile {tile}");
+        assert_eq!(render_tiled(&d, d.bounds(), tile).unwrap(), whole, "tile {tile}");
     }
     let r = Rect::new(3, 17, 30, 811);
-    assert_eq!(render_tiled(&d, r, 4).px, render_tiled(&d, r, 10_000).px);
-    assert!(render_tiled(&d, Rect::new(5, 5, 5, 900), 4).px.is_empty());
+    assert_eq!(render_tiled(&d, r, 4).unwrap().px, render_tiled(&d, r, 10_000).unwrap().px);
+    assert!(render_tiled(&d, Rect::new(5, 5, 5, 900), 4).unwrap().px.is_empty());
 }
 
 #[test]
@@ -1360,7 +1361,7 @@ fn render_bands_cover_the_rect_in_order() {
     .unwrap();
     // 100 rows round up to one 256-row tile band.
     assert_eq!(rows, vec![(10, 266), (266, 522), (522, 690)]);
-    assert_eq!(px, render(&d, r).px);
+    assert_eq!(px, render(&d, r).unwrap().px);
     // The sink's error stops the render.
     let mut n = 0;
     assert_eq!(
@@ -1368,7 +1369,7 @@ fn render_bands_cover_the_rect_in_order() {
             n += 1;
             Err("stop")
         }),
-        Err("stop")
+        Err(RenderBandError::Sink("stop"))
     );
     assert_eq!(n, 1);
     assert_eq!(band_rows_for(14_000, 0) % RENDER_TILE, 0);
@@ -1377,7 +1378,7 @@ fn render_bands_cover_the_rect_in_order() {
 
 /// The previous thumbnail: flatten, then area-average (premultiplied).
 fn reference_reduce(doc: &Document, w: usize, h: usize) -> Vec<[f32; 4]> {
-    let full = flatten(doc);
+    let full = flatten(doc).unwrap();
     let (fw, fh) = (full.rect.width() as usize, full.rect.height() as usize);
     let mut out = Vec::new();
     for ty in 0..h {
@@ -1410,9 +1411,9 @@ fn reduced_render_matches_the_full_composite_averaged() {
         assert_eq!(got.px, reference_reduce(&d, w as usize, h as usize), "{w}x{h} band {band}");
     }
     // Full size is the composite itself; an empty document reduces to transparency.
-    assert_eq!(render_reduced(&d, 53, 1000).px, flatten(&d).px);
+    assert_eq!(render_reduced(&d, 53, 1000).unwrap().px, flatten(&d).unwrap().px);
     let empty = Document::new("e", Size::new(0, 0), ColorMode::Rgb, SampleType::U8);
-    assert_eq!(render_reduced(&empty, 4, 4).px, vec![[0.0; 4]]);
+    assert_eq!(render_reduced(&empty, 4, 4).unwrap().px, vec![[0.0; 4]]);
 }
 
 #[test]
@@ -1468,12 +1469,12 @@ fn reduced_render_of_an_area_past_the_canvas() {
     paint(&mut whole, 20, 10);
     let area = Rect::new(-20, -10, 60, 40);
     for (w, h) in [(80, 50), (8, 5), (27, 13), (1, 1)] {
-        let got = render_reduced_rect(&d, area, w, h);
+        let got = render_reduced_rect(&d, area, w, h).unwrap();
         assert_eq!(got.rect, Rect::new(0, 0, w as i32, h as i32));
-        assert_eq!(got.px, render_reduced(&whole, w, h).px, "{w}x{h}");
+        assert_eq!(got.px, render_reduced(&whole, w, h).unwrap().px, "{w}x{h}");
     }
     // Past every layer there is nothing to show.
-    assert!(render_reduced_rect(&d, Rect::new(100, 100, 120, 110), 20, 10).px.iter().all(|p| p[3] == 0.0));
+    assert!(render_reduced_rect(&d, Rect::new(100, 100, 120, 110), 20, 10).unwrap().px.iter().all(|p| p[3] == 0.0));
 }
 
 #[test]
@@ -1482,7 +1483,7 @@ fn large_documents_thumbnail_from_a_proxy() {
     // thumbnail of the right size whose colours match the exact reduction.
     let mut d = doc_white(4200, 4200);
     d.layers.push(solid_layer("red", Rect::new(0, 0, 2100, 4200), [1.0, 0.0, 0.0, 1.0]));
-    let t = thumbnail(&d, 100);
+    let t = thumbnail(&d, 100).unwrap();
     assert_eq!((t.width, t.height), (100, 100));
     let at = |x: usize, y: usize| t.pixels[(y * 100 + x) * 4..(y * 100 + x) * 4 + 4].to_vec();
     assert_eq!(at(10, 50), vec![255, 0, 0, 255]);
@@ -1544,10 +1545,10 @@ fn effect_maps_with_nested_rayon_work_do_not_deadlock() {
     std::thread::spawn(move || {
         let Ok(pool) = rayon::ThreadPoolBuilder::new().num_threads(8).build() else { return };
         let d = nested_parallel_fx_doc();
-        let first = pool.install(|| render_tiled(&d, d.bounds(), 64));
+        let first = pool.install(|| render_tiled(&d, d.bounds(), 64).unwrap());
         for _ in 0..100 {
             purge_effect_cache();
-            let out = pool.install(|| render_tiled(&d, d.bounds(), 64));
+            let out = pool.install(|| render_tiled(&d, d.bounds(), 64).unwrap());
             assert!(out.px == first.px, "renders differ between rounds");
         }
         let _ = tx.send(());

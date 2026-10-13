@@ -46,6 +46,85 @@ pub fn place_source(src: &Surface, src_rect: Rect, t: &photocraft_geom::Affine, 
     crate::transform::warp_surface(src, src_rect, &crate::transform::Homography([a, c, e, b, d, f, 0.0, 0.0, 1.0]), Interp::Bicubic)
 }
 
+/// Checked placement: whole-pixel affine translations retain encoded samples;
+/// interpolation uses the checked sampler and rejects unsupported wide data.
+pub fn try_place_source(
+    src: &Surface,
+    src_rect: Rect,
+    t: &photocraft_geom::Affine,
+    warp: Option<&photocraft_geom::warp::Warp>,
+) -> Result<Surface, photocraft_raster::RasterInputError> {
+    use photocraft_raster::RasterInputError;
+    photocraft_raster::checked_region_byte_len(src_rect, src.format())?;
+    if t.m.iter().any(|v| !v.is_finite()) {
+        return Err(RasterInputError::InvalidBounds);
+    }
+    let [a, b, c, d, e, f] = t.m;
+    if warp.is_none_or(|w| w.is_identity()) && a == 1.0 && b == 0.0 && c == 0.0 && d == 1.0 && e == e.round() && f == f.round() {
+        src.try_validate_tile_origins()?;
+        if e < f64::from(i32::MIN) + 512.0 || e > f64::from(i32::MAX) - 512.0 || f < f64::from(i32::MIN) + 512.0 || f > f64::from(i32::MAX) - 512.0 {
+            return Err(RasterInputError::InvalidBounds);
+        }
+        let (dx, dy) = (e as i32, f as i32);
+        for (coord, _) in src.tiles() {
+            let rect = coord.rect();
+            for (value, delta) in [(rect.x0, dx), (rect.x1, dx), (rect.y0, dy), (rect.y1, dy)] {
+                let result = value.checked_add(delta).ok_or(RasterInputError::InvalidBounds)?;
+                if !(i32::MIN + 512..=i32::MAX - 512).contains(&result) {
+                    return Err(RasterInputError::InvalidBounds);
+                }
+            }
+        }
+        let prepared = src.try_convert(src.format())?;
+        return Ok(prepared.translated(dx, dy, src_rect));
+    }
+    if let Some(w) = warp.filter(|w| !w.is_identity()) {
+        return try_warp_mesh_surface(
+            src,
+            src_rect,
+            &|x, y| {
+                let (u, v) = w.map(x, y);
+                (a * u + c * v + e, b * u + d * v + f)
+            },
+            Interp::Bicubic,
+        );
+    }
+    crate::transform::try_warp_surface(src, src_rect, &crate::transform::Homography([a, c, e, b, d, f, 0.0, 0.0, 1.0]), Interp::Bicubic)
+}
+
+/// Checked projective placement; failures never substitute a rendered cache.
+pub fn try_place_source_projective(
+    src: &Surface,
+    src_rect: Rect,
+    h: &crate::transform::Homography,
+    warp: Option<&photocraft_geom::warp::Warp>,
+) -> Result<Surface, photocraft_raster::RasterInputError> {
+    try_place_source_projective_with_interp(src, src_rect, h, warp, Interp::Bicubic)
+}
+
+/// Explicit interpolation selection for checked projective placement. Bilinear
+/// admits the normalized wide transform domain; mesh warps remain separately bounded.
+pub fn try_place_source_projective_with_interp(
+    src: &Surface,
+    src_rect: Rect,
+    h: &crate::transform::Homography,
+    warp: Option<&photocraft_geom::warp::Warp>,
+    interp: Interp,
+) -> Result<Surface, photocraft_raster::RasterInputError> {
+    if let Some(w) = warp.filter(|w| !w.is_identity()) {
+        return try_warp_mesh_surface(
+            src,
+            src_rect,
+            &|x, y| {
+                let (u, v) = w.map(x, y);
+                h.apply(u, v)
+            },
+            interp,
+        );
+    }
+    crate::transform::try_warp_surface(src, src_rect, h, interp)
+}
+
 /// [`place_source`] through a projective map `h` (source → document; Distort, Perspective): the
 /// warp first (in source space), then `h`.
 pub fn place_source_projective(src: &Surface, src_rect: Rect, h: &crate::transform::Homography, warp: Option<&photocraft_geom::warp::Warp>) -> Surface {
@@ -62,6 +141,88 @@ pub fn place_source_projective(src: &Surface, src_rect: Rect, h: &crate::transfo
 /// Warps the content of `src` inside `src_rect` through the forward map `f` (source document
 /// coordinates → destination document coordinates). Output has `src`'s format with alpha
 /// added; pixels outside the warped area are transparent.
+/// Checked authoritative mesh entry point; the existing f32 sampler cannot
+/// retain U32/F64 interpolation and explicitly rejects it.
+pub fn try_warp_mesh_surface(
+    src: &Surface,
+    src_rect: Rect,
+    f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync),
+    interp: Interp,
+) -> Result<Surface, photocraft_raster::RasterInputError> {
+    use photocraft_raster::{RasterInputError, checked_region_byte_len};
+    let prepared = checked_source(src)?;
+    checked_region_byte_len(src_rect, prepared.format())?;
+    if src_rect.is_empty() {
+        return Ok(Surface::new(prepared.format()));
+    }
+    let (sw, sh) = (f64::from(src_rect.width()), f64::from(src_rect.height()));
+    let nx = ((sw / CELL).ceil() as usize).clamp(1, MAX_CELLS);
+    let ny = ((sh / CELL).ceil() as usize).clamp(1, MAX_CELLS);
+    let mut verts = Vec::new();
+    verts.try_reserve_exact((nx + 1) * (ny + 1)).map_err(|_| RasterInputError::LimitExceeded)?;
+    for j in 0..=ny {
+        for i in 0..=nx {
+            let sx = f64::from(src_rect.x0) + sw * i as f64 / nx as f64;
+            let sy = f64::from(src_rect.y0) + sh * j as f64 / ny as f64;
+            let (dx, dy) = f(sx, sy);
+            verts.push(([dx, dy], [sx, sy]));
+        }
+    }
+    let mut tris = Vec::new();
+    tris.try_reserve_exact(nx * ny * 2).map_err(|_| RasterInputError::LimitExceeded)?;
+    for j in 0..ny {
+        for i in 0..nx {
+            let a = j * (nx + 1) + i;
+            tris.push([a, a + 1, a + nx + 2]);
+            tris.push([a, a + nx + 2, a + nx + 1]);
+        }
+    }
+    try_warp_triangles(&prepared, src_rect, &verts, &tris, interp)
+}
+
+fn checked_source(src: &Surface) -> Result<Surface, photocraft_raster::RasterInputError> {
+    if matches!(src.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
+        return Err(photocraft_raster::RasterInputError::UnsupportedConversion);
+    }
+    let mut format = src.format();
+    format.alpha = true;
+    src.try_convert(format)
+}
+
+/// Checked textured-triangle entry point with exact alpha-channel preparation.
+pub fn try_warp_triangles(
+    src: &Surface,
+    src_rect: Rect,
+    verts: &[([f64; 2], [f64; 2])],
+    tris: &[[usize; 3]],
+    interp: Interp,
+) -> Result<Surface, photocraft_raster::RasterInputError> {
+    let prepared = checked_source(src)?;
+    if verts.iter().any(|v| v.0.iter().chain(v.1.iter()).any(|x| !x.is_finite())) || tris.iter().flatten().any(|i| *i >= verts.len()) {
+        return Err(photocraft_raster::RasterInputError::InvalidBounds);
+    }
+    use photocraft_raster::{RasterInputError, checked_region_byte_len};
+    checked_region_byte_len(src_rect, prepared.format())?;
+    if verts.iter().any(|v| v.0.iter().chain(v.1.iter()).any(|x| x.abs() > 1_000_000.0)) {
+        return Err(RasterInputError::InvalidBounds);
+    }
+    if !verts.is_empty() {
+        let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+        for (point, _) in verts {
+            for c in 0..2 {
+                lo[c] = lo[c].min(point[c]);
+                hi[c] = hi[c].max(point[c]);
+            }
+        }
+        checked_region_byte_len(
+            Rect::new(lo[0].floor() as i32 - 1, lo[1].floor() as i32 - 1, hi[0].ceil() as i32 + 1, hi[1].ceil() as i32 + 1),
+            prepared.format(),
+        )?;
+    }
+    Ok(warp_triangles(&prepared, src_rect, verts, tris, interp))
+}
+
+/// Legacy presentation mesh; authoritative commands use `try_warp_mesh_surface`.
 pub fn warp_mesh_surface(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), interp: Interp) -> Surface {
     if src_rect.is_empty() {
         let fmt = src.format();
@@ -298,6 +459,39 @@ pub fn warp_triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2
 /// [`warp_mesh_surface`] for single-channel surfaces whose outside reads as their default value
 /// (layer masks, selections): the content is warped with alpha and flattened back onto the
 /// default.
+/// Checked numeric-mask mesh warp; unsupported wide arithmetic returns an error.
+pub fn try_warp_mesh_gray(s: &Surface, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), interp: Interp) -> Result<Surface, photocraft_raster::RasterInputError> {
+    let _prepared = checked_source(s)?;
+    photocraft_raster::checked_region_byte_len(s.content_bounds(), s.format())?;
+    if s.channels() != 1 {
+        return Err(photocraft_raster::RasterInputError::UnsupportedConversion);
+    }
+    let default = s.default_pixel().first().copied().unwrap_or(0.0);
+    let fmt = s.format();
+    let src = s.content_bounds();
+    let mut out = Surface::with_default(fmt, &[default]);
+    if src.is_empty() {
+        return Ok(out);
+    }
+    let with_alpha = PixelFormat::new(fmt.mode, fmt.sample, true);
+    let mut tmp = Surface::new(with_alpha);
+    let v = s.read_region(src);
+    tmp.write_region(src, &v.iter().flat_map(|g| [*g, 1.0]).collect::<Vec<f32>>());
+    let w = try_warp_mesh_surface(&tmp, src, f, interp)?;
+    // Clear the old region and write the warped one separately, as `warp_gray` does: one dense
+    // `src ∪ warped` buffer grows with the square of how far a mesh moves the content (#995).
+    // `Surface` is tile-sparse, so a distant region costs only its own tiles.
+    out.write_region(src, &vec![default; src.width() as usize * src.height() as usize]);
+    let b = w.content_bounds();
+    if !b.is_empty() {
+        let px = w.read_region(b);
+        let flat: Vec<f32> = px.as_chunks::<2>().0.iter().map(|p| p[0] * p[1] + default * (1.0 - p[1])).collect();
+        out.write_region(b, &flat);
+    }
+    out.prune();
+    Ok(out)
+}
+
 pub fn warp_mesh_gray(s: &Surface, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), interp: Interp) -> Surface {
     let default = s.default_pixel().first().copied().unwrap_or(0.0);
     let fmt = s.format();
@@ -405,5 +599,18 @@ mod tests {
         assert_eq!(o.pixel(0, 0), vec![1.0]);
         assert_eq!(o.pixel(12, 6), vec![0.0]);
         assert_eq!(o.pixel(5, 6), vec![1.0]);
+    }
+}
+
+#[cfg(test)]
+mod checked_conversion_tests {
+    use super::*;
+    use photocraft_color::{ColorMode, SampleType};
+    #[test]
+    fn checked_mesh_wide_and_bad_triangle_inputs_are_errors() {
+        let area = Rect::new(0, 0, 1, 1);
+        let wide = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false));
+        assert!(try_warp_mesh_surface(&wide, area, &|x, y| (x, y), Interp::Nearest).is_err());
+        assert!(try_warp_triangles(&Surface::new(PixelFormat::RGBA8), area, &[], &[[0, 1, 2]], Interp::Nearest).is_err());
     }
 }

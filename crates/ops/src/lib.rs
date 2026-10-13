@@ -145,7 +145,12 @@ impl History {
 
     /// Entries for a History panel: past labels oldest→newest, then the current label.
     pub fn entries(&self) -> Vec<String> {
-        self.undo.iter().map(|s| s.label.clone()).chain(std::iter::once(self.current_label.clone())).collect()
+        self.entry_labels().map(str::to_owned).collect()
+    }
+
+    /// Borrowed past/current panel labels; no snapshot or label allocation.
+    pub fn entry_labels(&self) -> impl Iterator<Item = &str> {
+        self.undo.iter().map(|s| s.label.as_str()).chain(std::iter::once(self.current_label.as_str()))
     }
 
     /// Document of past entry `i`, indexed like [`History::entries`] (0 = oldest). The last entry is

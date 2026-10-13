@@ -1,0 +1,428 @@
+//! Controlled one-shot legacy stroke rendering. Private surfaces are published
+//! only after successful generation, coverage accumulation and compositing.
+use super::*;
+use crate::{Stroke,dynamics::{Smoother,DabBuilder,DualBuilder,StepInput,apply_pose},brush::{Texture,DualBrush,PatternStyle}};
+use photocraft_raster::Interrupt;
+use photocraft_color::{SampleType,read_sample,write_sample};
+use std::mem::size_of;
+const MAX_WORK:u64=8_000_000_000;
+const MAX_POINTS:usize=100_000;
+const MAX_DABS:usize=1_000_000;
+const MIN_SPEED_STEP:f64=0.5;
+const MAX_AIRBRUSH_DABS_PER_SEGMENT:usize=512;
+#[derive(Clone,Copy,Debug)]
+pub struct StrokeLimits {pub resident_bytes:u64,pub work_units:u64}
+impl Default for StrokeLimits{fn default()->Self{Self{resident_bytes:photocraft_raster::MAX_CHECKED_RASTER_BYTES,work_units:MAX_WORK}}}
+#[derive(Clone,Debug,PartialEq,Eq)]
+pub enum StrokeError{Cancelled,InvalidInput(&'static str),Unsupported(&'static str),Limit,Allocation,Raster}
+impl std::fmt::Display for StrokeError{fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result{match self{Self::Cancelled=>f.write_str("stroke cancelled"),Self::InvalidInput(s)=>write!(f,"invalid stroke: {s}"),Self::Unsupported(s)=>write!(f,"unsupported stroke: {s}"),Self::Limit=>f.write_str("stroke resource limit"),Self::Allocation=>f.write_str("stroke allocation failed"),Self::Raster=>f.write_str("invalid stroke raster")}}}
+impl std::error::Error for StrokeError{}
+type Result<T>=std::result::Result<T,StrokeError>;
+struct Budget<'a,'b>{control:&'a Interrupt<'b>,limits:StrokeLimits,work:u64}
+impl Budget<'_,'_>{
+    fn poll(&self)->Result<()>{self.control.check().map_err(|_|StrokeError::Cancelled)}
+    fn tick(&mut self,n:u64)->Result<()>{self.poll()?;self.work=self.work.checked_add(n).filter(|n|*n<=self.limits.work_units).ok_or(StrokeError::Limit)?;Ok(())}
+    fn vector<T>(&self,n:usize)->Result<Vec<T>>{self.poll()?;let bytes=n.checked_mul(size_of::<T>()).ok_or(StrokeError::Limit)?;if bytes as u64>self.limits.resident_bytes{return Err(StrokeError::Limit);}let mut out=Vec::new();out.try_reserve_exact(n).map_err(|_|StrokeError::Allocation)?;if out.capacity().checked_mul(size_of::<T>()).is_none_or(|v|v>bytes){return Err(StrokeError::Limit);}Ok(out)}
+    fn raster<T>(&self,value:std::result::Result<T,photocraft_raster::RasterInputError>)->Result<T>{value.map_err(|error|match error{photocraft_raster::RasterInputError::Cancelled=>StrokeError::Cancelled,photocraft_raster::RasterInputError::AllocationFailed=>StrokeError::Allocation,photocraft_raster::RasterInputError::LimitExceeded=>StrokeError::Limit,_=>if self.control.cancelled(){StrokeError::Cancelled}else{StrokeError::Raster}})}
+}
+fn at<T:Copy>(values:&[T],index:usize)->Result<T>{values.get(index).copied().ok_or(StrokeError::InvalidInput("internal index"))}
+fn area(rect:Rect)->Result<usize>{usize::try_from(i64::from(rect.x1)-i64::from(rect.x0)).ok().and_then(|w|usize::try_from(i64::from(rect.y1)-i64::from(rect.y0)).ok().and_then(|h|w.checked_mul(h))).ok_or(StrokeError::InvalidInput("bounds"))}
+fn check_rect(rect:Rect)->Result<()>{if [rect.x0,rect.y0,rect.x1,rect.y1].iter().any(|v|!(-(1<<28)..=(1<<28)).contains(v)){return Err(StrokeError::InvalidInput("coordinates"));}area(rect)?;Ok(())}
+fn finite(values:&[f32])->Result<()>{if values.iter().any(|v|!v.is_finite()){Err(StrokeError::InvalidInput("nonfinite settings"))}else{Ok(())}}
+// The numeric dynamics/renderer never read raw tip/pattern payload fields after
+// preparation. Keep those fields inert in their private scalar settings copies;
+// the real supplied assets are prepared separately and exactly below.
+fn numeric_brush(b:&BrushSettings)->BrushSettings{
+    let t=&b.texture;let d=&b.dual_brush;
+    BrushSettings{size:b.size,hardness:b.hardness,spacing:b.spacing,spacing_enabled:b.spacing_enabled,opacity:b.opacity,flow:b.flow,pressure_size:b.pressure_size,pressure_opacity:b.pressure_opacity,color:b.color,background:b.background,erase:b.erase,mode:b.mode,tip:TipShape::Round,angle:b.angle,roundness:b.roundness,flip_x:b.flip_x,flip_y:b.flip_y,aliased:b.aliased,shape_dynamics:b.shape_dynamics.clone(),scattering:b.scattering.clone(),texture:Texture{enabled:t.enabled,pattern:Pattern::default(),invert:t.invert,scale:t.scale,brightness:t.brightness,contrast:t.contrast,each_tip:t.each_tip,mode:t.mode,depth:t.depth,depth_jitter:t.depth_jitter},dual_brush:DualBrush{enabled:d.enabled,mode:d.mode,tip:TipShape::Round,size:d.size,hardness:d.hardness,roundness:d.roundness,angle:d.angle,spacing:d.spacing,scatter:d.scatter,both_axes:d.both_axes,count:d.count,flip:d.flip},color_dynamics:b.color_dynamics.clone(),transfer:b.transfer.clone(),pose:b.pose.clone(),noise:b.noise,wet_edges:b.wet_edges,build_up:b.build_up,build_up_rate:b.build_up_rate,smoothing:b.smoothing.clone(),protect_texture:b.protect_texture,locks:b.locks.clone(),mixer:b.mixer.clone(),seed:b.seed}.bounded_for_render()
+}
+fn validate_brush(b:&BrushSettings)->Result<()> {
+    finite(&[b.size,b.hardness,b.spacing,b.opacity,b.flow,b.angle,b.roundness,b.build_up_rate,b.shape_dynamics.tilt_scale,b.dual_brush.size,b.dual_brush.hardness,b.dual_brush.roundness,b.dual_brush.angle,b.dual_brush.spacing,b.dual_brush.scatter,b.color_dynamics.hue_jitter,b.color_dynamics.saturation_jitter,b.color_dynamics.brightness_jitter,b.color_dynamics.purity,b.pose.tilt_x,b.pose.tilt_y,b.pose.rotation,b.pose.pressure,b.texture.scale,b.texture.brightness,b.texture.contrast,b.texture.depth,b.smoothing.amount])?;
+    finite(&b.color)?;finite(&b.background)?;
+    for d in [&b.shape_dynamics.size,&b.shape_dynamics.angle,&b.shape_dynamics.roundness,&b.scattering.scatter,&b.scattering.count_jitter,&b.texture.depth_jitter,&b.color_dynamics.fg_bg,&b.transfer.opacity,&b.transfer.flow,&b.transfer.wetness,&b.transfer.mix]{finite(&[d.jitter,d.minimum])?;}
+    Ok(())
+}
+fn asset_pixels(b:&BrushSettings)->Result<u64>{
+    let mut n=0u64;
+    for tip in [&b.tip,&b.dual_brush.tip]{if let TipShape::Sampled(tile)=tip{let count=(tile.width as u64).checked_mul(tile.height as u64).filter(|n|*n==tile.data.len() as u64&&*n>0).ok_or(StrokeError::InvalidInput("sampled tip"))?;n=n.checked_add(count.checked_mul(12).and_then(|n|n.checked_add((tile.data.capacity() as u64).checked_mul(2)?)).ok_or(StrokeError::Limit)?).ok_or(StrokeError::Limit)?;}}
+    if b.texture.enabled{let count=match &b.texture.pattern{Pattern::Procedural{size,seed,..}=>{u64::from(*seed).checked_mul(0x0100_0000_01B3).and_then(|n|n.checked_add(17)).ok_or(StrokeError::InvalidInput("procedural seed overflow"))?;u64::from((*size).clamp(8,1024)).pow(2)},Pattern::Tile(tile)=>{let count=(tile.width as u64).checked_mul(tile.height as u64).filter(|n|*n==tile.data.len() as u64&&*n>0).ok_or(StrokeError::InvalidInput("texture tile"))?;n=n.checked_add((tile.data.capacity() as u64).checked_mul(2).ok_or(StrokeError::Limit)?).ok_or(StrokeError::Limit)?;count}};n=n.checked_add(count.checked_mul(8).ok_or(StrokeError::Limit)?).ok_or(StrokeError::Limit)?;}
+    Ok(n)
+}
+fn mips(tip:&TipShape,budget:&mut Budget<'_,'_>)->Result<Option<Arc<Mips>>>{
+    let TipShape::Sampled(tile)=tip else{return Ok(None);};let mut levels:Vec<(usize,usize,Vec<f32>)>=budget.vector(33)?;let mut first:Vec<f32>=budget.vector(tile.data.len())?;
+    for value in &tile.data{budget.tick(1)?;first.push(f32::from(*value)/65535.0);}levels.push((tile.width as usize,tile.height as usize,first));
+    while let Some((w,h,values))=levels.last(){budget.poll()?;if *w<=1&&*h<=1{break;}let(nw,nh)=((*w).div_ceil(2),(*h).div_ceil(2));let mut next=budget.vector(nw.checked_mul(nh).ok_or(StrokeError::Limit)?)?;
+        for y in 0..nh{budget.poll()?;for x in 0..nw{budget.tick(1)?;let(mut sum,mut count)=(0.0,0.0);for dy in 0..2{for dx in 0..2{let(sx,sy)=(x*2+dx,y*2+dy);if sx<*w&&sy<*h{sum+=at(values,sy*w+sx)?;count+=1.0;}}}next.push(sum/count);}}
+        if levels.len()>=levels.capacity(){return Err(StrokeError::Limit);}levels.push((nw,nh,next));
+    }budget.poll()?;Ok(Some(Arc::new(Mips{levels})))
+}
+
+#[inline]
+fn proc_smooth(t: f32) -> f32 {
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Tileable value noise with `period` lattice cells over the tile.
+fn proc_noise(x: f32, y: f32, period: i32, salt: u64) -> f32 {
+    let (x0, y0) = (x.floor(), y.floor());
+    let (tx, ty) = (proc_smooth(x - x0), proc_smooth(y - y0));
+    let (xi, yi) = (x0 as i32, y0 as i32);
+    let h = |i: i32, j: i32| hash2(i.rem_euclid(period), j.rem_euclid(period), salt);
+    let a = h(xi, yi) + (h(xi + 1, yi) - h(xi, yi)) * tx;
+    let b = h(xi, yi + 1) + (h(xi + 1, yi + 1) - h(xi, yi + 1)) * tx;
+    a + (b - a) * ty
+}
+
+/// Tileable fractal noise in 0..1 (`cells` lattice cells across at the base octave).
+fn proc_fbm(x: f32, y: f32, size: f32, cells: i32, octaves: u32, salt: u64) -> f32 {
+    let (mut sum, mut amp, mut norm, mut c) = (0.0, 1.0, 0.0, cells);
+    for o in 0..octaves {
+        sum += proc_noise(x / size * c as f32, y / size * c as f32, c, salt.wrapping_add(o as u64 * 7919)) * amp;
+        norm += amp;
+        amp *= 0.5;
+        c *= 2;
+    }
+    sum / norm
+}
+
+
+fn pattern(brush:&BrushSettings,budget:&mut Budget<'_,'_>)->Result<Option<Arc<PatternImage>>>{
+    let texture=&brush.texture;if !texture.enabled{return Ok(None);}
+    let (width,height,mut data)=match &texture.pattern{
+        Pattern::Tile(tile)=>{let mut data=budget.vector(tile.data.len())?;for value in &tile.data{budget.tick(1)?;data.push(f32::from(*value)/65535.0);}(tile.width as usize,tile.height as usize,data)},
+        Pattern::Procedural{style,size,seed}=>{let style=*style;let n=(*size).clamp(8,1024) as usize;let s=n as f32;let salt=u64::from(*seed)*0x0100_0000_01B3+17;let mut data=budget.vector(n*n)?;
+            for y in 0..n{budget.poll()?;for x in 0..n{budget.tick(256)?;let(fx,fy)=(x as f32+0.5,y as f32+0.5);
+            let v = match style {
+                PatternStyle::Noise => proc_fbm(fx, fy, s, 8, 4, salt),
+                PatternStyle::Paper => {
+                    let base = proc_fbm(fx, fy, s, 16, 4, salt);
+                    let grain = hash2(x as i32, y as i32, salt ^ 0x55);
+                    ((base - 0.5) * 2.2 + 0.5 + (grain - 0.5) * 0.35).clamp(0.0, 1.0)
+                }
+                PatternStyle::Canvas => {
+                    // Over/under weave: threads every 8 px, alternating which direction is on top.
+                    let period = 8.0;
+                    let (cx, cy) = ((fx / period).floor() as i32, (fy / period).floor() as i32);
+                    let (u, v) = ((fx / period).fract(), (fy / period).fract());
+                    let warp = (std::f32::consts::PI * u).sin();
+                    let weft = (std::f32::consts::PI * v).sin();
+                    let top = if (cx + cy) % 2 == 0 { warp } else { weft };
+                    (0.25 + 0.65 * top + (hash2(x as i32, y as i32, salt) - 0.5) * 0.15).clamp(0.0, 1.0)
+                }
+                PatternStyle::Dots => {
+                    let period = 8.0;
+                    let (u, v) = ((fx / period).fract() - 0.5, (fy / period).fract() - 0.5);
+                    let d = (u * u + v * v).sqrt();
+                    1.0 - proc_smooth(((0.35 - d) / 0.1 + 0.5).clamp(0.0, 1.0))
+                }
+            };
+
+            data.push(v);
+            }}(n,n,data)
+        }
+    };
+    let(br,ct)=(texture.brightness.clamp(-1.0,1.0),texture.contrast.clamp(-1.0,1.0));
+    for value in &mut data{budget.tick(1)?;let mut x=(*value-0.5)*(1.0+ct)+0.5+br;x=x.clamp(0.0,1.0);*value=if texture.invert{1.0-x}else{x};}
+    Ok(Some(Arc::new(PatternImage{width,height,data})))
+}
+fn lerp_pt(a: &StrokePoint, b: &StrokePoint, f: f64) -> StrokePoint {
+    let ff = f as f32;
+    StrokePoint {
+        x: a.x + (b.x - a.x) * f,
+        y: a.y + (b.y - a.y) * f,
+        pressure: a.pressure + (b.pressure - a.pressure) * ff,
+        tilt_x: a.tilt_x + (b.tilt_x - a.tilt_x) * ff,
+        tilt_y: a.tilt_y + (b.tilt_y - a.tilt_y) * ff,
+        rotation: a.rotation + (b.rotation - a.rotation) * ff,
+        wheel: a.wheel + (b.wheel - a.wheel) * ff,
+        time: a.time + (b.time - a.time) * f,
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ControlledWalker {
+    last: Option<StrokePoint>,
+    /// Path distance from `last` to the next step.
+    next_at: f64,
+    /// First point, emitted lazily once the initial direction is known.
+    pending_first: Option<StrokePoint>,
+    initial_dir: Option<f32>,
+    dir: f32,
+    step: u64,
+    /// Airbrush interval in ms (None = off).
+    interval: Option<f64>,
+    time_acc: f64,
+    /// Speed spacing (Spacing unchecked): one step per this many ms of stroke time.
+    speed: Option<f64>,
+    speed_acc: f64,
+}
+
+impl ControlledWalker {
+    fn new(build_up_interval_ms: Option<f64>) -> Self {
+        Self {
+            last: None,
+            next_at: 0.0,
+            pending_first: None,
+            initial_dir: None,
+            dir: 0.0,
+            step: 0,
+            interval: build_up_interval_ms,
+            time_acc: 0.0,
+            speed: None,
+            speed_acc: 0.0,
+        }
+    }
+
+    /// Space steps by stroke time instead of distance ([`SPEED_SPACING_MS`]): faster movement
+    /// spreads them out. Segments without timestamps are spaced by distance.
+    fn speed_spacing(mut self, interval_ms: f64) -> Self {
+        self.speed = Some(interval_ms.max(0.1));
+        self
+    }
+
+    fn emit(&mut self, point: StrokePoint, out: &mut impl FnMut(StepInput) -> Result<()>) -> Result<()> {
+        let s = StepInput { point, direction: self.dir, initial_direction: self.initial_dir.unwrap_or(self.dir), step: self.step };
+        self.step = self.step.checked_add(1).ok_or(StrokeError::Limit)?;
+        out(s)
+    }
+
+    fn push(&mut self, p: StrokePoint, step_len: &impl Fn(&StrokePoint) -> f64, out: &mut impl FnMut(StepInput) -> Result<()>) -> Result<()> {
+        let Some(a) = self.last else {
+            self.last = Some(p);
+            self.pending_first = Some(p);
+            self.next_at = step_len(&p);
+            return Ok(());
+        };
+        let (dx, dy) = (p.x - a.x, p.y - a.y);
+        let len = (dx * dx + dy * dy).sqrt();
+        if len > 1e-9 {
+            self.dir = (-dy).atan2(dx) as f32;
+            if self.initial_dir.is_none() {
+                self.initial_dir = Some(self.dir);
+            }
+        }
+        if let Some(f) = self.pending_first.take() {
+            self.emit(f, out)?;
+        }
+        if len > 1e-9 {
+            // Speed spacing needs the segment's duration; without timestamps (a straight ⇧-click
+            // line, or input that carries no times) the segment is spaced by distance instead.
+            let dt = p.time - a.time;
+            match self.speed.filter(|_| dt > 0.0 && dt.is_finite()) {
+                None => {
+                    while self.next_at <= len + 1e-9 {
+                        let q = lerp_pt(&a, &p, (self.next_at / len).min(1.0));
+                        self.emit(q, out)?;
+                        self.next_at += step_len(&q).max(0.25);
+                    }
+                    self.next_at -= len;
+                }
+                Some(iv) => {
+                    self.speed_acc += dt;
+                    let max_n = (len / MIN_SPEED_STEP).ceil().max(1.0) as usize;
+                    let mut n = 0;
+                    while self.speed_acc >= iv && n < max_n {
+                        self.speed_acc -= iv;
+                        let f = ((dt - self.speed_acc) / dt).clamp(0.0, 1.0);
+                        self.emit(lerp_pt(&a, &p, f), out)?;
+                        n += 1;
+                    }
+                    if n == max_n {
+                        self.speed_acc = self.speed_acc.rem_euclid(iv);
+                    }
+                }
+            }
+        }
+        if let Some(iv) = self.interval {
+            let dt = p.time - a.time;
+            if dt > 0.0 && dt.is_finite() {
+                if dt > iv * MAX_AIRBRUSH_DABS_PER_SEGMENT as f64 {
+                    // A stalled or hostile timestamp must not replay an arbitrarily long backlog.
+                    self.time_acc = 0.0;
+                    self.emit(p, out)?;
+                    self.last = Some(p);
+                    return Ok(());
+                }
+                self.time_acc += dt;
+                let mut n = 0;
+                while self.time_acc >= iv && n < MAX_AIRBRUSH_DABS_PER_SEGMENT {
+                    self.time_acc -= iv;
+                    let f = ((dt - self.time_acc) / dt).clamp(0.0, 1.0);
+                    self.emit(lerp_pt(&a, &p, f), out)?;
+                    n += 1;
+                }
+            }
+        }
+        self.last = Some(p);
+        Ok(())
+    }
+
+    fn finish(&mut self, out: &mut impl FnMut(StepInput) -> Result<()>) -> Result<()> {
+        if let Some(f) = self.pending_first.take() {
+            self.emit(f, out)?;
+        }
+        Ok(())
+    }
+}
+
+
+fn generate(brush:&BrushSettings,points:&[StrokePoint],zoom:f32,steps:usize,primary_limit:usize,dual_limit:usize,budget:&mut Budget<'_,'_>)->Result<(Vec<Dab>,Vec<Dab>)>{
+    let mut primary:Vec<Dab>=budget.vector(primary_limit)?;let mut dual:Vec<Dab>=budget.vector(dual_limit)?;let mut scratch:Vec<StrokePoint>=budget.vector(64)?;let mut emitted:Vec<StepInput>=budget.vector(steps)?;
+    let mut smoother=Smoother::new(&brush.smoothing,zoom);let interval=brush.build_up.then(||1000.0/f64::from(brush.build_up_rate.clamp(0.1,1000.0)));
+    let mut walker=if brush.spacing_enabled{ControlledWalker::new(interval)}else{ControlledWalker::new(interval).speed_spacing(crate::dynamics::SPEED_SPACING_MS)};
+    let mut dual_walker=brush.dual_brush.enabled.then(||ControlledWalker::new(None));let mut builder=DabBuilder::new(brush);let mut dual_builder=brush.dual_brush.enabled.then(||DualBuilder::new(brush));
+    fn walk(points:&[StrokePoint],brush:&BrushSettings,walker:&mut ControlledWalker,dual_walker:&mut Option<ControlledWalker>,builder:&mut DabBuilder,dual_builder:&mut Option<DualBuilder>,emitted:&mut Vec<StepInput>,primary:&mut Vec<Dab>,dual:&mut Vec<Dab>,budget:&mut Budget<'_,'_>)->Result<()> {
+        for p in points{budget.poll()?;let p=apply_pose(brush,*p);emitted.clear();let length=|p:&StrokePoint|builder.step_len(p);
+            walker.push(p,&length,&mut |step|{budget.tick(1)?;if emitted.len()>=emitted.capacity(){return Err(StrokeError::Limit);}emitted.push(step);Ok(())})?;
+            for step in &*emitted{budget.tick(1)?;let count=if brush.scattering.enabled{brush.scattering.count.clamp(1,16) as usize}else{1};if primary.len().checked_add(count).is_none_or(|n|n>primary.capacity()){return Err(StrokeError::Limit);}builder.build(step,primary);}
+            if let(Some(walker),Some(builder))=(dual_walker.as_mut(),dual_builder.as_mut()){emitted.clear();let length=|p:&StrokePoint|builder.step_len(p);walker.push(p,&length,&mut|step|{budget.tick(1)?;if emitted.len()>=emitted.capacity(){return Err(StrokeError::Limit);}emitted.push(step);Ok(())})?;for step in &*emitted{budget.tick(1)?;if dual.len().checked_add(brush.dual_brush.count.clamp(1,16) as usize).is_none_or(|n|n>dual.capacity()){return Err(StrokeError::Limit);}builder.build(step,dual);}}
+        }Ok(())
+    }
+    for p in points{budget.poll()?;scratch.clear();smoother.push(*p,&mut scratch);walk(&scratch,brush,&mut walker,&mut dual_walker,&mut builder,&mut dual_builder,&mut emitted,&mut primary,&mut dual,budget)?;}
+    scratch.clear();smoother.finish(&mut scratch);walk(&scratch,brush,&mut walker,&mut dual_walker,&mut builder,&mut dual_builder,&mut emitted,&mut primary,&mut dual,budget)?;
+    emitted.clear();walker.finish(&mut|step|{budget.tick(1)?;if emitted.len()>=emitted.capacity(){return Err(StrokeError::Limit);}emitted.push(step);Ok(())})?;
+    for step in &emitted{budget.tick(1)?;let count=if brush.scattering.enabled{brush.scattering.count.clamp(1,16) as usize}else{1};if primary.len().checked_add(count).is_none_or(|n|n>primary.capacity()){return Err(StrokeError::Limit);}builder.build(step,&mut primary);}
+    if let(Some(walker),Some(builder))=(dual_walker.as_mut(),dual_builder.as_mut()){emitted.clear();walker.finish(&mut|step|{budget.tick(1)?;if emitted.len()>=emitted.capacity(){return Err(StrokeError::Limit);}emitted.push(step);Ok(())})?;for step in &emitted{budget.tick(1)?;if dual.len().checked_add(brush.dual_brush.count.clamp(1,16) as usize).is_none_or(|n|n>dual.capacity()){return Err(StrokeError::Limit);}builder.build(step,&mut dual);}}
+    budget.poll()?;Ok((primary,dual))
+}
+fn cov_tiles(rect:Rect)->Result<u64>{if rect.is_empty(){return Ok(0);}check_rect(rect)?;let w=i64::from((rect.x1-1).div_euclid(COV_TILE))-i64::from(rect.x0.div_euclid(COV_TILE))+1;let h=i64::from((rect.y1-1).div_euclid(COV_TILE))-i64::from(rect.y0.div_euclid(COV_TILE))+1;u64::try_from(w).ok().and_then(|w|u64::try_from(h).ok().and_then(|h|w.checked_mul(h))).ok_or(StrokeError::Limit)}
+fn accumulate(cov:&mut CoverageMap,rect:Rect,vals:&[f32],ceil:f32,use_max:bool,color:Option<&[f32]>,budget:&mut Budget<'_,'_>)->Result<()> {
+    if rect.is_empty(){return Ok(());}cov.bounds=cov.bounds.union(&rect);let w=rect.width() as usize;let nc=cov.nc;let want_col=color.is_some()&&nc>0;
+    let(t0x,t0y)=(rect.x0.div_euclid(COV_TILE),rect.y0.div_euclid(COV_TILE));let(t1x,t1y)=((rect.x1-1).div_euclid(COV_TILE),(rect.y1-1).div_euclid(COV_TILE));
+    for ty in t0y..=t1y{budget.poll()?;for tx in t0x..=t1x{budget.tick(1)?;let tr=Rect::new(tx*COV_TILE,ty*COV_TILE,(tx+1)*COV_TILE,(ty+1)*COV_TILE).intersect(&rect);if tr.is_empty(){continue;}
+        let mut any=false;for y in tr.y0..tr.y1{budget.poll()?;let row=(y-rect.y0) as usize*w;let start=row+(tr.x0-rect.x0) as usize;let end=row+(tr.x1-rect.x0) as usize;if vals.get(start..end).ok_or(StrokeError::InvalidInput("coverage row"))?.iter().any(|v|*v>0.0){any=true;break;}}
+        if !any{continue;}
+        if !cov.tiles.contains_key(&(tx,ty)){if cov.tiles.len()>=cov.tiles.capacity(){return Err(StrokeError::Limit);}let mut values=budget.vector((COV_TILE*COV_TILE) as usize)?;values.resize((COV_TILE*COV_TILE) as usize,0.0);let mut col=budget.vector(if want_col{(COV_TILE*COV_TILE) as usize*nc}else{0})?;if want_col{col.resize((COV_TILE*COV_TILE) as usize*nc,0.0);}cov.tiles.insert((tx,ty),CovTile{cov:values,col});}
+        let tile=cov.tiles.get_mut(&(tx,ty)).ok_or(StrokeError::InvalidInput("coverage tile"))?;
+        if want_col&&tile.col.is_empty(){tile.col=budget.vector((COV_TILE*COV_TILE) as usize*nc)?;tile.col.resize((COV_TILE*COV_TILE) as usize*nc,0.0);}
+        for y in tr.y0..tr.y1{budget.poll()?;let row=(y-rect.y0) as usize*w;let trow=((y-ty*COV_TILE)*COV_TILE) as usize;for x in tr.x0..tr.x1{budget.tick(1)?;let v=at(vals,row+(x-rect.x0) as usize)?;if v<=0.0{continue;}let ti=trow+(x-tx*COV_TILE) as usize;let c=at(&tile.cov,ti)?;let nv=if use_max{c.max(v*ceil)}else if ceil>c{c+v*(ceil-c)}else{c};if nv<=c{continue;}
+            if let(true,Some(col))=(want_col,color){let k=if c<1.0{(nv-c)/(1.0-c)}else{0.0};let p=tile.col.get_mut(ti*nc..(ti+1)*nc).ok_or(StrokeError::InvalidInput("coverage color"))?;for(i,value)in p.iter_mut().enumerate(){*value=at(col,i)?*k+*value*(1.0-k);}}
+            *tile.cov.get_mut(ti).ok_or(StrokeError::InvalidInput("coverage index"))?=nv;
+        }}
+    }}Ok(())
+}
+fn raster_dabs(ctx:&BrushContext,format:PixelFormat,dabs:&[Dab],dual:bool,cov:&mut CoverageMap,maximum:usize,budget:&mut Budget<'_,'_>)->Result<()> {
+    let mut scratch=budget.vector(maximum)?;let mut row=budget.vector(maximum)?;let mut native=[0.0f32;8];
+    for dab in dabs{budget.poll()?;let rect=ctx.dab_rect(dab,dual);check_rect(rect)?;let length=area(rect)?;if length>scratch.capacity(){return Err(StrokeError::Limit);}scratch.clear();
+        // Reusing the legacy rasterizer one absolute row at a time preserves
+        // every coordinate/math operation while bounding cancellation latency.
+        for y in rect.y0..rect.y1{budget.poll()?;let strip=Rect::new(rect.x0,y,rect.x1,y+1);ctx.rasterize(dab,dual,strip,&mut row);scratch.extend_from_slice(&row);}
+        let col=if !dual && cov.nc>0{from_rgba_into(&format,dab.color,&mut native);Some(&native[..cov.nc])}else{None};
+        accumulate(cov,rect,&scratch,if dual{1.0}else{dab.opacity},!dual&&ctx.brush.wet_edges,col,budget)?;
+        if !dual{cov.bounds=cov.bounds.union(&rect);}
+    }Ok(())
+}
+
+fn native_tiles(rect:Rect)->Result<u64>{if rect.is_empty(){return Ok(0);}check_rect(rect)?;let size=photocraft_geom::TILE_SIZE;let w=i64::from((rect.x1-1).div_euclid(size))-i64::from(rect.x0.div_euclid(size))+1;let h=i64::from((rect.y1-1).div_euclid(size))-i64::from(rect.y0.div_euclid(size))+1;u64::try_from(w).ok().and_then(|w|u64::try_from(h).ok().and_then(|h|w.checked_mul(h))).ok_or(StrokeError::Limit)}
+fn clone_surface(source:&Surface,budget:&mut Budget<'_,'_>)->Result<Surface>{
+    budget.raster(source.try_validate_tile_origins_with(budget.control))?;let mut out=budget.raster(Surface::try_with_default_bytes(source.format(),source.default_bytes()))?;
+    // Standard BTreeMap/Arc publication has no stable fallible allocator API;
+    // map/tile headroom is precharged and every bounded insertion is polled.
+    for(position,tile)in source.tiles(){budget.tick(1)?;out.put_tiles(std::iter::once((*position,Arc::clone(tile))));}budget.poll()?;Ok(out)
+}
+fn resident(source:&Surface,budget:&mut Budget<'_,'_>)->Result<u64>{
+    let minimum=(source.tile_count() as u64).checked_mul(256).ok_or(StrokeError::Limit)?;
+    if minimum>budget.limits.resident_bytes{return Err(StrokeError::Limit);}
+    let mut bytes=(source.default_bytes().len() as u64).checked_add(minimum).ok_or(StrokeError::Limit)?;
+    for(_,tile)in source.tiles(){budget.tick(1)?;bytes=bytes.checked_add(tile.bytes().len() as u64).filter(|n|*n<=budget.limits.resident_bytes).ok_or(StrokeError::Limit)?;}
+    Ok(bytes)
+}
+fn sort_keys(keys:&mut[(i32,i32)],budget:&mut Budget<'_,'_>)->Result<()>{
+    fn sift(keys:&mut[(i32,i32)],mut root:usize,end:usize,budget:&mut Budget<'_,'_>)->Result<()>{loop{budget.tick(1)?;let child=root.checked_mul(2).and_then(|n|n.checked_add(1)).ok_or(StrokeError::Limit)?;if child>=end{return Ok(());}let right=child+1;let largest=if right<end&&at(keys,right)?>at(keys,child)?{right}else{child};if at(keys,root)?>=at(keys,largest)?{return Ok(());}keys.swap(root,largest);root=largest;}}
+    for root in (0..keys.len()/2).rev(){sift(keys,root,keys.len(),budget)?;}for end in (1..keys.len()).rev(){budget.tick(1)?;keys.swap(0,end);sift(keys,0,end,budget)?;}Ok(())
+}
+fn composite(ctx:&BrushContext,cov:&CoverageMap,dual:Option<&CoverageMap>,pre:&Surface,target:&mut Surface,selection:Option<&Surface>,lock_transparency:bool,budget:&mut Budget<'_,'_>)->Result<Rect>{
+    let mut keys=budget.vector(cov.tiles.len())?;for key in cov.tiles.keys(){budget.tick(1)?;keys.push(*key);}sort_keys(&mut keys,budget)?;
+    let bounds=cov.bounds;let fmt=target.format();let n=fmt.channels();let a_idx=alpha_index(&fmt);let nc=fmt.mode.color_channels();let b=&ctx.brush;let opacity=b.opacity.clamp(0.0,1.0);let mut src=[0.0f32;8];from_rgba_into(&fmt,b.color,&mut src);if let Some(a)=a_idx{*src.get_mut(a).ok_or(StrokeError::InvalidInput("alpha index"))?=b.color[3];}
+    let count=(COV_TILE*COV_TILE) as usize;let mut raw=budget.vector(count*fmt.bytes_per_pixel())?;raw.resize(count*fmt.bytes_per_pixel(),0);let mut region=budget.vector(count*n)?;let mut selected_raw=budget.vector(count*selection.map_or(0,|surface|surface.format().bytes_per_pixel()))?;selected_raw.resize(selected_raw.capacity(),0);let mut selected=budget.vector(count*selection.map_or(0,Surface::channels))?;
+    for(tx,ty)in keys{budget.poll()?;let Some(tile)=cov.tiles.get(&(tx,ty))else{continue;};let tr=Rect::new(tx*COV_TILE,ty*COV_TILE,(tx+1)*COV_TILE,(ty+1)*COV_TILE).intersect(&bounds);if tr.is_empty(){continue;}let pixels=area(tr)?;let raw_length=pixels.checked_mul(fmt.bytes_per_pixel()).ok_or(StrokeError::Limit)?;
+        budget.raster(pre.try_read_interleaved_into_with(tr,raw.get_mut(..raw_length).ok_or(StrokeError::Limit)?,budget.control))?;region.clear();for sample in 0..pixels*n{budget.tick(1)?;region.push(read_sample(raw.get(..raw_length).ok_or(StrokeError::Limit)?,fmt.sample,sample));}
+        selected.clear();if let Some(selection)=selection{let format=selection.format();let length=pixels.checked_mul(format.bytes_per_pixel()).ok_or(StrokeError::Limit)?;budget.raster(selection.try_read_interleaved_into_with(tr,selected_raw.get_mut(..length).ok_or(StrokeError::Limit)?,budget.control))?;for sample in 0..pixels*selection.channels(){budget.tick(1)?;selected.push(read_sample(selected_raw.get(..length).ok_or(StrokeError::Limit)?,format.sample,sample));}}
+        let w=tr.width() as usize;
+        for y in tr.y0..tr.y1{budget.poll()?;for x in tr.x0..tr.x1{budget.tick(1)?;let ti=((y-ty*COV_TILE)*COV_TILE+(x-tx*COV_TILE)) as usize;let c=at(&tile.cov,ti)?;if c<=0.0{continue;}let i=(y-tr.y0) as usize*w+(x-tr.x0) as usize;let m=ctx.stroke_mask(c,dual.map(|surface|surface.get(x,y)),x,y);let s=if let Some(selection)=selection{at(&selected,i*selection.channels())?}else{1.0};let mut k=(m*opacity*s).min(1.0);if k<=0.0{continue;}if b.mode==BlendMode::Dissolve{k=if hash2(x,y,b.seed)<k{1.0}else{0.0};if k==0.0{continue;}}
+            let px=region.get_mut(i*n..(i+1)*n).ok_or(StrokeError::InvalidInput("region index"))?;
+            if b.erase{if let(Some(a),false)=(a_idx,lock_transparency){*px.get_mut(a).ok_or(StrokeError::InvalidInput("alpha index"))?*=1.0-k;}continue;}
+            if lock_transparency&&a_idx.is_some_and(|a|px.get(a).is_some_and(|value|*value<=0.0)){continue;}
+            if cov.nc>0&&!tile.col.is_empty(){let p=tile.col.get(ti*nc..(ti+1)*nc).ok_or(StrokeError::InvalidInput("color index"))?;for ch in 0..nc{*src.get_mut(ch).ok_or(StrokeError::InvalidInput("source index"))?=at(p,ch)?/c;}}
+            if matches!(b.mode,BlendMode::Normal|BlendMode::Dissolve){over_native(&fmt,px,src.get(..n).ok_or(StrokeError::InvalidInput("source channels"))?,k,lock_transparency);}else{let d=to_rgba(&fmt,px);let sr=to_rgba(&fmt,src.get(..n).ok_or(StrokeError::InvalidInput("source channels"))?);let mut out=photocraft_color::blend::composite(b.mode,d,sr,k);if lock_transparency{out[3]=d[3];}let mut encoded=[0.0f32;8];from_rgba_into(&fmt,out,&mut encoded);px.copy_from_slice(encoded.get(..n).ok_or(StrokeError::InvalidInput("encoded channels"))?);}
+        }}
+        for(sample,value)in region.iter().enumerate(){budget.tick(1)?;write_sample(raw.get_mut(..raw_length).ok_or(StrokeError::Limit)?,fmt.sample,sample,*value);}
+        budget.raster(target.try_write_interleaved_with(tr,raw.get(..raw_length).ok_or(StrokeError::Limit)?,budget.control))?;
+    }budget.poll()?;Ok(bounds)
+}
+pub fn apply_stroke_with_interrupt(target:&mut Surface,stroke:&Stroke,selection:Option<&Surface>,lock_transparency:bool,limits:StrokeLimits,control:&Interrupt<'_>)->Result<Rect>{render_stroke_with_interrupt(target,&stroke.brush,&stroke.points,selection,lock_transparency,1.0,limits,control)}
+pub fn render_stroke_with_interrupt(target:&mut Surface,brush:&BrushSettings,points:&[StrokePoint],selection:Option<&Surface>,lock_transparency:bool,zoom:f32,limits:StrokeLimits,control:&Interrupt<'_>)->Result<Rect>{
+    let mut budget=Budget{control,limits,work:0};budget.poll()?;
+    if limits.resident_bytes>photocraft_raster::MAX_CHECKED_RASTER_BYTES||limits.work_units>MAX_WORK{return Err(StrokeError::Limit);}if points.is_empty(){return Ok(Rect::EMPTY);}
+    let fmt=target.format();if !matches!(fmt.sample,SampleType::U8|SampleType::U16|SampleType::F32){return Err(StrokeError::Unsupported("native wide stroke arithmetic"));}if fmt.channels()==0||fmt.channels()>8{return Err(StrokeError::Unsupported("channel count"));}
+    if let Some(selection)=selection{if !matches!(selection.format().sample,SampleType::U8|SampleType::U16|SampleType::F32)||selection.channels()==0||selection.channels()>8{return Err(StrokeError::Unsupported("selection arithmetic"));}}
+    if points.len()>MAX_POINTS||!zoom.is_finite(){return Err(StrokeError::InvalidInput("points/zoom"));}validate_brush(brush)?;let assets=asset_pixels(brush)?;
+    let mut distance=0.0;let mut bounds=Rect::EMPTY;let mut last:Option<&StrokePoint>=None;
+    for point in points{budget.tick(1)?;if !point.x.is_finite()||!point.y.is_finite()||!point.time.is_finite()||point.x.abs()>f64::from(1<<27)||point.y.abs()>f64::from(1<<27){return Err(StrokeError::InvalidInput("point coordinates/time"));}finite(&[point.pressure,point.tilt_x,point.tilt_y,point.rotation,point.wheel])?;if let Some(previous)=last{distance+=(point.x-previous.x).hypot(point.y-previous.y);}last=Some(point);let x=point.x.floor() as i32;let y=point.y.floor() as i32;bounds=bounds.union(&Rect::new(x,y,x+1,y+1));}
+    if brush.smoothing.amount>0.0{let diagonal=(f64::from(bounds.width())).hypot(f64::from(bounds.height()));distance=diagonal*(points.len() as f64*64.0+1.0);}
+    let air=if brush.build_up{514u64}else{2};let smoothed=(points.len() as u64).checked_mul(if brush.smoothing.amount>0.0{64}else{1}).and_then(|n|n.checked_add(1)).ok_or(StrokeError::Limit)?;
+    let steps=(distance*4.0).ceil();if !steps.is_finite()||steps>MAX_DABS as f64{return Err(StrokeError::Limit);}let steps=(steps as u64).checked_add(smoothed.checked_mul(air).ok_or(StrokeError::Limit)?).and_then(|n|n.checked_add(2)).ok_or(StrokeError::Limit)?;
+    let count=if brush.scattering.enabled{brush.scattering.count.clamp(1,16) as u64}else{1};let primary=steps.checked_mul(count).filter(|n|*n<=MAX_DABS as u64).ok_or(StrokeError::Limit)?;
+    let dual=if brush.dual_brush.enabled{steps.checked_mul(brush.dual_brush.count.clamp(1,16) as u64).filter(|n|*n<=MAX_DABS as u64).ok_or(StrokeError::Limit)?}else{0};
+    let source=resident(target,&mut budget)?;let selected=if let Some(selection)=selection{resident(selection,&mut budget)?}else{0};
+    let source_maps=(target.tile_count() as u64).checked_add(selection.map_or(0,|surface|surface.tile_count() as u64)).and_then(|n|n.checked_mul(768)).ok_or(StrokeError::Limit)?;
+    let generation=primary.checked_add(dual).and_then(|n|n.checked_mul(size_of::<Dab>() as u64)).and_then(|n|n.checked_add(steps.checked_mul(size_of::<StepInput>() as u64)?)).and_then(|n|n.checked_add(assets.checked_mul(2)?)).and_then(|n|n.checked_add((points.len() as u64).checked_mul(size_of::<StrokePoint>() as u64)?)).and_then(|n|n.checked_add(4096)).ok_or(StrokeError::Limit)?;
+    let base=source.checked_add(selected).and_then(|n|n.checked_add(source_maps)).and_then(|n|n.checked_add(generation)).ok_or(StrokeError::Limit)?;
+    let generation_work=steps.checked_mul(256).and_then(|n|n.checked_add(assets.checked_mul(256)?)).ok_or(StrokeError::Limit)?;if base>limits.resident_bytes||generation_work>limits.work_units{return Err(StrokeError::Limit);}
+    let numeric=numeric_brush(brush);let(primary,dual)=generate(&numeric,points,zoom,steps as usize,primary as usize,dual as usize,&mut budget)?;
+    // Sample preparation is admitted before allocation; no unchecked BrushContext
+    // constructor or raw asset clone occurs in this controlled lane.
+    let ctx=BrushContext{brush:numeric,tip:mips(&brush.tip,&mut budget)?,dual_tip:if brush.dual_brush.enabled{mips(&brush.dual_brush.tip,&mut budget)?}else{None},texture:pattern(brush,&mut budget)?};
+    let per_color=brush.color_dynamics.enabled&&!brush.erase;let nc=if per_color{fmt.mode.color_channels()}else{0};let mut total_pixels=0u64;let mut tiles=0u64;let mut maximum=0usize;let mut union=Rect::EMPTY;
+    for(dab,is_dual)in primary.iter().map(|dab|(dab,false)).chain(dual.iter().map(|dab|(dab,true))){budget.poll()?;if !dab.center.x.is_finite()||!dab.center.y.is_finite(){return Err(StrokeError::InvalidInput("dab center"));}finite(&[dab.radius,dab.alpha,dab.opacity,dab.angle,dab.roundness,dab.proj_scale,dab.proj_angle,dab.depth])?;finite(&dab.color)?;let rect=ctx.dab_rect(dab,is_dual);check_rect(rect)?;let pixels=area(rect)?;maximum=maximum.max(pixels);total_pixels=total_pixels.checked_add(pixels as u64).ok_or(StrokeError::Limit)?;tiles=tiles.checked_add(cov_tiles(rect)?).ok_or(StrokeError::Limit)?;if !is_dual{union=union.union(&rect);}}
+    let cov_count=tiles;let native=native_tiles(union)?;let tile_bytes=photocraft_geom::TILE_SIZE as u64*photocraft_geom::TILE_SIZE as u64*fmt.bytes_per_pixel() as u64;
+    let extra=cov_count.checked_mul((COV_TILE*COV_TILE) as u64).and_then(|n|n.checked_mul((nc as u64+1)*4)).and_then(|n|n.checked_add(tiles.checked_mul(2048)?)).and_then(|n|n.checked_add(native.checked_mul(tile_bytes+512)?)).and_then(|n|n.checked_add((maximum as u64).checked_mul(8)?)).and_then(|n|n.checked_add(1<<20)).ok_or(StrokeError::Limit)?;
+    let source_tiles=target.tile_count() as u64;
+    let work=total_pixels.checked_mul(256).and_then(|n|n.checked_add(tiles.checked_mul(native.checked_add(source_tiles)?)?.checked_mul(32)?)).and_then(|n|n.checked_add(source_tiles.checked_mul(source_tiles)?.checked_mul(16)?)).and_then(|n|n.checked_add(generation_work)).ok_or(StrokeError::Limit)?;
+    if base.checked_add(extra).is_none_or(|n|n>limits.resident_bytes)||work>limits.work_units{return Err(StrokeError::Limit);}
+    let mut cov=CoverageMap::new(nc);let mut dual_cov=CoverageMap::new(0);let tile_capacity=usize::try_from(tiles).map_err(|_|StrokeError::Limit)?;cov.tiles.try_reserve(tile_capacity).map_err(|_|StrokeError::Allocation)?;if brush.dual_brush.enabled{dual_cov.tiles.try_reserve(tile_capacity).map_err(|_|StrokeError::Allocation)?;}
+    let actual_map=(cov.tiles.capacity() as u64).checked_add(dual_cov.tiles.capacity() as u64).and_then(|n|n.checked_mul(128)).ok_or(StrokeError::Limit)?;if actual_map>tiles.checked_mul(2048).and_then(|n|n.checked_add(4096)).ok_or(StrokeError::Limit)?{return Err(StrokeError::Limit);}
+    raster_dabs(&ctx,fmt,&primary,false,&mut cov,maximum,&mut budget)?;raster_dabs(&ctx,fmt,&dual,true,&mut dual_cov,maximum,&mut budget)?;
+    let mut output=clone_surface(target,&mut budget)?;
+    let damage=composite(&ctx,&cov,brush.dual_brush.enabled.then_some(&dual_cov),target,&mut output,selection,lock_transparency,&mut budget)?;
+    budget.poll()?;*target=output;Ok(damage)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn controlled_matches_legacy_brush_pencil_eraser_selection_and_native_depths() {
+        for format in [PixelFormat::RGBA8,PixelFormat::RGBA16,PixelFormat::RGBA32F,PixelFormat::GRAYA8,PixelFormat::CMYKA8] {
+            for mode in 0..5 {
+                let mut brush=BrushSettings{size:5.0,pressure_size:false,opacity:0.7,flow:0.3,color:[0.2,0.7,0.3,1.0],seed:7,..Default::default()};
+                if mode==1{brush.aliased=true;}if mode==2{brush.erase=true;}if mode==3{brush.mode=BlendMode::Multiply;}if mode==4{brush.color_dynamics.enabled=true;brush.color_dynamics.hue_jitter=0.1;brush.dual_brush.enabled=true;brush.dual_brush.size=3.0;brush.texture.enabled=true;brush.texture.pattern=Pattern::Procedural{style:PatternStyle::Canvas,size:8,seed:1};}
+                let points=[StrokePoint::new(3.0,3.0,1.0),StrokePoint::new(12.0,5.0,0.6),StrokePoint::new(6.0,9.0,0.9)];
+                let mut expected=Surface::new(format);let background=if format.mode==photocraft_color::ColorMode::Grayscale{vec![0.6,0.8]}else if format.mode==photocraft_color::ColorMode::Cmyk{vec![0.1,0.2,0.3,0.4,0.8]}else{vec![0.6,0.5,0.4,0.8]};expected.fill_rect(Rect::new(-3,-3,18,18),&background);let mut actual=expected.clone();
+                let mut selection=Surface::new(PixelFormat::GRAY8);selection.fill_rect(Rect::new(-3,-3,9,18),&[0.6]);
+                let damage=super::super::render_stroke(&mut expected,&brush,&points,Some(&selection),mode==3,1.0);
+                let controlled=render_stroke_with_interrupt(&mut actual,&brush,&points,Some(&selection),mode==3,1.0,StrokeLimits::default(),&Interrupt::NONE).unwrap();
+                assert_eq!(damage,controlled);assert_eq!(actual,expected);
+            }
+        }
+    }
+    #[test]
+    fn sampled_assets_and_smoothing_retain_old_dab_and_stroke_order() {
+        let mut brush=BrushSettings{size:5.0,pressure_size:false,seed:11,..Default::default()};
+        brush.tip=TipShape::Sampled(crate::GrayTile::from_fn(3,2,|x,y|(x+y) as f32/3.0));brush.texture.enabled=true;brush.texture.pattern=Pattern::Tile(crate::GrayTile::from_fn(2,3,|x,y|(x+y) as f32/3.0));brush.smoothing.amount=0.3;
+        let points=[StrokePoint::new(2.0,3.0,1.0),StrokePoint{x:9.0,y:8.0,time:32.0,..Default::default()},StrokePoint{x:5.0,y:12.0,time:64.0,..Default::default()}];
+        let stroke=Stroke{brush:brush.clone(),points:points.to_vec()};let mut budget=Budget{control:&Interrupt::NONE,limits:StrokeLimits::default(),work:0};
+        let numeric=numeric_brush(&brush);let(dabs,_)=generate(&numeric,&points,1.0,100_000,100_000,0,&mut budget).unwrap();assert_eq!(dabs,crate::dabs(&stroke));
+        let mut expected=Surface::new(PixelFormat::RGBA32F);let mut actual=expected.clone();let damage=super::super::render_stroke(&mut expected,&brush,&points,None,false,1.0);
+        assert_eq!(render_stroke_with_interrupt(&mut actual,&brush,&points,None,false,1.0,StrokeLimits::default(),&Interrupt::NONE).unwrap(),damage);assert_eq!(actual,expected);
+    }
+    #[test]
+    fn last_fence_cancel_and_budget_or_wide_refusal_preserve_caller_surface() {
+        let brush=BrushSettings{size:3.0,pressure_size:false,..Default::default()};let points=[StrokePoint::new(2.0,2.0,1.0),StrokePoint::new(6.0,2.0,1.0)];let before=Surface::new(PixelFormat::RGBA16);let mut rehearsal=before.clone();
+        let calls=std::cell::Cell::new(0usize);let observe=||{calls.set(calls.get()+1);false};
+        render_stroke_with_interrupt(&mut rehearsal,&brush,&points,None,false,1.0,StrokeLimits::default(),&Interrupt::cancel_only(&observe)).unwrap();let last=calls.get();assert!(last>1);calls.set(0);let cancel=||{calls.set(calls.get()+1);calls.get()>=last};let mut actual=before.clone();
+        assert_eq!(render_stroke_with_interrupt(&mut actual,&brush,&points,None,false,1.0,StrokeLimits::default(),&Interrupt::cancel_only(&cancel)).unwrap_err(),StrokeError::Cancelled);assert_eq!(actual,before);
+        assert!(render_stroke_with_interrupt(&mut actual,&brush,&points,None,false,1.0,StrokeLimits{resident_bytes:1,work_units:MAX_WORK},&Interrupt::NONE).is_err());assert_eq!(actual,before);
+        let mut wide=Surface::new(PixelFormat::new(photocraft_color::ColorMode::Rgb,SampleType::F64,true));let before=wide.clone();assert!(matches!(render_stroke_with_interrupt(&mut wide,&brush,&points,None,false,1.0,StrokeLimits::default(),&Interrupt::NONE),Err(StrokeError::Unsupported(_))));assert_eq!(wide,before);
+    }
+}

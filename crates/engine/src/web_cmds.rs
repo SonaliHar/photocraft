@@ -19,8 +19,10 @@ use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::file_cmds::{join, native_doc, stem, write_file};
+use crate::file_cmds::{join, native_doc, stem, write_file_with_source};
 use crate::{EngineError, Result, Session};
+
+mod asset_geometry;
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
@@ -286,7 +288,7 @@ pub fn preset_settings(name: &str) -> Option<WebSettings> {
 /// by `"width"`/`"height"`/`"percent"`, flattened. Returns the document and the scale factors.
 pub fn web_document(doc: &Document, p: &Value, st: &WebSettings) -> Result<(Document, f64, f64)> {
     let mut tmp = Session::new();
-    tmp.add_document(doc.clone(), None);
+    tmp.add_document(doc.clone(), None)?;
     let mode = doc.mode;
     if mode != photocraft_color::ColorMode::Rgb {
         tmp.execute("image.mode.rgb", json!({}))?;
@@ -311,6 +313,7 @@ pub fn web_document(doc: &Document, p: &Value, st: &WebSettings) -> Result<(Docu
         let resample = p.get("resample").and_then(Value::as_str).unwrap_or("bicubic");
         tmp.execute("image.imageSize", json!({"width": nw, "height": nh, "resample": resample}))?;
     }
+    tmp.active().ok_or(EngineError::NoDocument)?.doc.validate_resident()?;
     let out = (*tmp.active().ok_or(EngineError::NoDocument)?.doc).clone();
     Ok((out, nw / w0, nh / h0))
 }
@@ -359,6 +362,21 @@ pub fn web_xmp(doc: &Document, m: WebMetadata) -> Option<String> {
 /// the file looks like (the dialog's panes); exports skip it.
 #[allow(clippy::too_many_arguments)]
 pub fn optimize(px: &[[f32; 4]], bw: usize, rect: Rect, st: &WebSettings, icc: Option<&[u8]>, xmp: Option<&str>, dpi: f32, preview: bool) -> Result<Optimized> {
+    optimize_with_png_density(px, bw, rect, st, icc, xmp, dpi, preview, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn optimize_with_png_density(
+    px: &[[f32; 4]],
+    bw: usize,
+    rect: Rect,
+    st: &WebSettings,
+    icc: Option<&[u8]>,
+    xmp: Option<&str>,
+    dpi: f32,
+    preview: bool,
+    density: Option<photocraft_codecs::PngDensity>,
+) -> Result<Optimized> {
     let (w, h) = (rect.width() as usize, rect.height() as usize);
     if w == 0 || h == 0 {
         return Err(other("empty slice"));
@@ -396,7 +414,12 @@ pub fn optimize(px: &[[f32; 4]], bw: usize, rect: Rect, st: &WebSettings, icc: O
                 embed_metadata: xmp.is_some(),
                 ..Default::default()
             };
-            (photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &opts).map_err(e)?, None)
+            let bytes = match density {
+                Some(density) => photocraft_codecs::encode_png_with_density(&img, &opts, density),
+                None => photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &opts),
+            }
+            .map_err(e)?;
+            (bytes, None)
         }
         WebFormat::Jpeg => {
             let mut rgb = Vec::with_capacity(w * h * 3);
@@ -706,19 +729,63 @@ fn html_table(title: &str, w: u32, h: u32, cells: &[(Rect, String, String)], spa
 }
 
 /// File › Export › Save for Web (Legacy).
+// Preflight only PNG metadata that will be emitted. Borrow custom-unit strings
+// before validation, before web_document can clone input metadata.
+fn png_density_for_document(doc: &Document, cmd: &str) -> Result<Option<photocraft_codecs::PngDensity>> {
+    let legacy = photocraft_doc::PhysicalResolution::square(f64::from(doc.resolution_dpi));
+    let resolution = doc.physical_resolution.as_ref().unwrap_or(&legacy);
+    resolution.validate().map_err(|error| bad(cmd, format!("invalid PNG physical resolution: {error}")))?;
+    let checked = photocraft_codecs::PngDensity::from_dpi(resolution.x_dpi, resolution.y_dpi).map_err(|error| bad(cmd, error.to_string()))?;
+    // Preserve existing f32 density rounding for valid legacy metadata. Only
+    // canonical f64 axes override the existing encoder metadata field.
+    if doc.physical_resolution.is_none() {
+        // Check the exact legacy writer's f32 operation, not a rounded f32 limit.
+        let wire_ppm = (doc.resolution_dpi / 0.0254_f32).round();
+        if !wire_ppm.is_finite() || wire_ppm < 0.0 || f64::from(wire_ppm) > f64::from(i32::MAX) {
+            return Err(bad(cmd, "legacy PNG density exceeds the PNG integer limit"));
+        }
+        Ok(None)
+    } else {
+        Ok(Some(checked))
+    }
+}
+
 fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.saveForWebLegacy";
     let st = WebSettings::from_params(p, cmd)?;
+    let delivery = s.web_export_delivery;
     let d = s.active().ok_or(EngineError::NoDocument)?;
+    let mut plan = delivery.map(|_| crate::web_export_delivery::PlanBudget::default());
+    if let Some(delivery) = delivery {
+        delivery.preflight_source(&d.doc, p)?;
+        if let Some(plan) = plan.as_mut() {
+            let bands = plan.before_grid(d.doc.bounds(), &mut d.doc.slices.list.iter().map(|slice| slice.rect), d.doc.slices.list.len())?;
+            let stored = d.doc.slices.list.iter().filter(|slice| !slice.rect.intersect(&d.doc.bounds()).is_empty()).count();
+            let resolved_upper = stored.checked_add(bands).ok_or_else(|| other("resolved slice count overflow"))?;
+            delivery.check_plan(resolved_upper)?;
+            plan.charge_work(resolved_upper.checked_mul(d.doc.slices.list.len()).ok_or_else(|| other("slice resolution lookup overflow"))?)?;
+            let selected_upper = crate::web_export_delivery::PlanBudget::selected_upper(resolved_upper, stored, p);
+            if p.get("html").and_then(Value::as_bool).unwrap_or(false) {
+                plan.charge_stacking_scans(selected_upper, d.doc.slices.list.len())?;
+            }
+        }
+    }
+    let xmp = web_xmp(&d.doc, st.metadata);
+    if st.format == WebFormat::Png24 && xmp.is_some() {
+        png_density_for_document(&d.doc, cmd)?;
+    }
     let doc = d.doc.clone();
     let source = d.source.clone();
     let (wdoc, sx, sy) = web_document(&doc, p, &st)?;
-    let buf = photocraft_compose::flatten(&wdoc);
+    let buf = photocraft_compose::flatten(&wdoc)?;
     let bw = wdoc.size.width as usize;
     let icc = wdoc.icc_profile.as_deref().map(|v| v.as_slice());
-    let xmp = web_xmp(&doc, st.metadata);
     let dpi = wdoc.resolution_dpi;
+    let density = if st.format == WebFormat::Png24 && xmp.is_some() { png_density_for_document(&wdoc, cmd)? } else { None };
     let all = slices::resolve(&doc);
+    if let Some(delivery) = delivery {
+        delivery.check_plan(all.len())?;
+    }
     let pick = p.get("slices").and_then(Value::as_str).unwrap_or("all");
     let numbers: Option<Vec<u64>> = p.get("numbers").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).collect());
     let chosen: Vec<&ResolvedSlice> = all
@@ -731,25 +798,41 @@ fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
         .collect();
     let single = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty());
     let dir = p.get("dir").and_then(Value::as_str).filter(|v| !v.is_empty());
-    s.file_menu.last_web = Some(p.clone());
     // Estimate only (the dialog's annotations): the whole image, or each chosen slice.
     if single.is_none() && dir.is_none() {
-        let o = optimize(&buf.px, bw, wdoc.bounds(), &st, icc, xmp.as_deref(), dpi, false)?;
+        let o = optimize_with_png_density(&buf.px, bw, wdoc.bounds(), &st, icc, xmp.as_deref(), dpi, false, density)?;
+        s.file_menu.last_web = Some(p.clone());
         return Ok(json!({"format": o.ext, "bytes": o.bytes.len(), "width": o.width, "height": o.height, "colors": o.colors}));
     }
-    if let Some(path) = single.filter(|_| dir.is_none() && (all.len() == 1 || p.get("slices").is_none())) {
+    if let Some(path) = single.filter(|_| dir.is_none() && (all.len() == 1 && (delivery.is_none() || doc.slices.is_empty()) || p.get("slices").is_none())) {
         crate::file_cmds::validate_destination(path, source.as_ref())?;
-        let o = optimize(&buf.px, bw, wdoc.bounds(), &st, icc, xmp.as_deref(), dpi, false)?;
-        write_file(path, &o.bytes)?;
+        let o = optimize_with_png_density(&buf.px, bw, wdoc.bounds(), &st, icc, xmp.as_deref(), dpi, false, density)?;
+        if let Some(delivery) = delivery {
+            delivery.send(path, &o.bytes)?;
+        } else {
+            write_file_with_source(path, &o.bytes, &doc, source.as_ref())?;
+        }
+        s.file_menu.last_web = Some(p.clone());
         crate::automate_cmds::fire_event(s, "export");
         return Ok(json!({"files": [path], "bytes": o.bytes.len(), "width": o.width, "height": o.height, "colors": o.colors}));
     }
     let dir =
         dir.map(str::to_string).or_else(|| single.and_then(|f| std::path::Path::new(f).parent().map(|d| d.to_string_lossy().into_owned()))).unwrap_or_default();
     let html = p.get("html").and_then(Value::as_bool).unwrap_or(false);
-    let images = p.get("imagesFolder").and_then(Value::as_str).unwrap_or("images").to_string();
+    let images = p.get("imagesFolder").and_then(Value::as_str).unwrap_or("images");
+    if let Some(delivery) = delivery
+        && !images.is_empty()
+    {
+        delivery.check_name(images)?;
+    }
+    let images = images.to_string();
     let base = single.map(stem).unwrap_or_else(|| slices::base_name(&doc));
+    if let Some(delivery) = delivery {
+        delivery.check_name(&format!("{base}.zip"))?;
+    }
+    let mut archive = delivery.map(|d| d.archive()).transpose()?;
     let mut files = Vec::new();
+    let mut source_metadata = 0usize;
     let mut cells: Vec<(Rect, String, String)> = Vec::new();
     let mut total = 0usize;
     // Output names are unique (case-insensitively, for macOS and Windows file systems): two
@@ -778,13 +861,37 @@ fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
         // In the HTML table a slice shows only where no slice above covers it; that visible part
         // is cut into rectangles, each its own cell (and image), as Photoshop's subslices.
         let pieces = if html {
-            let above: Vec<Rect> = chosen.iter().filter(|o| z(o) > z(r)).map(|o| scale_rect(o.rect, sx, sy).intersect(&wdoc.bounds())).collect();
+            let above: Vec<Rect> = if delivery.is_some() {
+                let mut above = Vec::new();
+                above.try_reserve_exact(chosen.len()).map_err(|_| other("slice overlap allocation"))?;
+                above.extend(chosen.iter().filter(|o| z(o) > z(r)).map(|o| scale_rect(o.rect, sx, sy).intersect(&wdoc.bounds())));
+                above
+            } else {
+                chosen.iter().filter(|o| z(o) > z(r)).map(|o| scale_rect(o.rect, sx, sy).intersect(&wdoc.bounds())).collect()
+            };
+            if let Some(plan) = plan.as_mut() {
+                plan.before_grid(rect, &mut above.iter().copied(), above.len())?;
+            }
             slices::auto_slices(rect, &above)
         } else {
             vec![rect]
         };
         let split = pieces.len() > 1;
         let stored = r.id.and_then(|id| doc.slices.get(id));
+        if let Some(delivery) = delivery {
+            // Bound source text before cloning or escaping it (at most six UTF-8 bytes per input byte).
+            let text_bytes = stored.map_or(0, |s| s.cell_text.len().saturating_add(s.alt.len()).saturating_add(s.url.len()).saturating_add(s.target.len()));
+            source_metadata = source_metadata
+                .checked_add(text_bytes.checked_mul(pieces.len()).and_then(|v| v.checked_mul(6)).ok_or_else(|| other("HTML metadata overflow"))?)
+                .ok_or_else(|| other("HTML metadata overflow"))?;
+            delivery.check_source_metadata(source_metadata)?;
+            if r.name.len() > 900 {
+                return Err(other("Save for Web delivery: slice name exceeds filename budget"));
+            }
+            delivery.check_plan(cells.len().checked_add(pieces.len()).ok_or_else(|| other("slice count overflow"))?)?;
+            cells.try_reserve(pieces.len()).map_err(|_| other("slice cells allocation"))?;
+            files.try_reserve(pieces.len()).map_err(|_| other("slice files allocation"))?;
+        }
         for (k, piece) in pieces.into_iter().enumerate() {
             if r.kind == SliceKind::NoImage {
                 let text = if k > 0 {
@@ -796,14 +903,18 @@ fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
                 cells.push((piece, bg, text));
                 continue;
             }
-            let o = optimize(&buf.px, bw, piece, &st, icc, xmp.as_deref(), dpi, false)?;
+            let o = optimize_with_png_density(&buf.px, bw, piece, &st, icc, xmp.as_deref(), dpi, false, density)?;
             let stem = if split { format!("{}_{:02}", slice_file(&r.name), k + 1) } else { slice_file(&r.name) };
             let name = unique(&stem, o.ext);
             let rel = if images.is_empty() { name.clone() } else { format!("{images}/{name}") };
             let out = join(&dir, &rel);
             crate::file_cmds::validate_destination(&out, source.as_ref())?;
-            write_file(&out, &o.bytes)?;
-            total += o.bytes.len();
+            if let Some(archive) = archive.as_mut() {
+                archive.add(&rel, &o.bytes)?;
+            } else {
+                write_file_with_source(&out, &o.bytes, &doc, source.as_ref())?;
+            }
+            total = total.checked_add(o.bytes.len()).ok_or_else(|| other("Save for Web output length overflow"))?;
             files.push(out);
             let alt = stored.map_or(String::new(), |s| html_escape(&s.alt));
             let img = format!("\n\t\t\t<img src=\"{}\" width=\"{}\" height=\"{}\" alt=\"{alt}\">", html_escape(&rel), piece.width(), piece.height());
@@ -824,16 +935,37 @@ fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(sp) = &spacer {
             crate::file_cmds::validate_destination(&join(&dir, sp), source.as_ref())?;
             let gif = photocraft_codecs::web::encode_gif_indexed(1, 1, &[0], &[[0, 0, 0]], Some(0), false).map_err(other)?;
-            write_file(&join(&dir, sp), &gif)?;
+            if let Some(archive) = archive.as_mut() {
+                archive.add(sp, &gif)?;
+            } else {
+                write_file_with_source(&join(&dir, sp), &gif, &doc, source.as_ref())?;
+            }
+        }
+        if let Some(plan) = plan.as_mut() {
+            plan.before_grid(wdoc.bounds(), &mut cells.iter().map(|cell| cell.0), cells.len())?;
         }
         let page = html_table(&base, wdoc.size.width, wdoc.size.height, &cells, spacer.as_deref());
         let hp = join(&dir, &format!("{base}.html"));
         crate::file_cmds::validate_destination(&hp, source.as_ref())?;
-        write_file(&hp, page.as_bytes())?;
+        if let Some(archive) = archive.as_mut() {
+            archive.add(&format!("{base}.html"), page.as_bytes())?;
+        } else {
+            write_file_with_source(&hp, page.as_bytes(), &doc, source.as_ref())?;
+        }
         html_path = Some(hp);
     }
+    let download = if let Some(archive) = archive {
+        let name = format!("{}.zip", slice_file(&base));
+        let encoded = archive.finish(&name)?;
+        Some(json!({"name": name, "bytes": encoded}))
+    } else {
+        None
+    };
+    s.file_menu.last_web = Some(p.clone());
     crate::automate_cmds::fire_event(s, "export");
-    Ok(json!({"files": files, "html": html_path, "bytes": total, "slices": chosen.len(), "width": wdoc.size.width, "height": wdoc.size.height}))
+    Ok(
+        json!({"download": download, "files": files, "html": html_path, "bytes": total, "slices": chosen.len(), "width": wdoc.size.width, "height": wdoc.size.height}),
+    )
 }
 
 // ---------- Export Preferences / Quick Export ----------
@@ -867,6 +999,7 @@ fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
     let prefs = s.prefs().export.clone();
     let fmt = serde_json::to_value(prefs.quick_export_format).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_else(|| "png".into());
     let d = s.active().ok_or(EngineError::NoDocument)?;
+    let source = d.source.clone();
     let doc = d.doc.clone();
     let path = match p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty()) {
         Some(v) => v.to_string(),
@@ -910,7 +1043,8 @@ fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
             // Keeping quality absent preserves the historical lossless Quick Export behavior.
             let (wdoc, _, _) = web_document(&doc, &json!({}), &WebSettings { convert_to_srgb: prefs.convert_to_srgb, ..Default::default() })?;
             let quality = if prefs.webp_lossless { None } else { Some((f64::from(prefs.webp_quality.clamp(1, 100)) - 1.0) * 12.0 / 99.0) };
-            let warnings = crate::file_cmds::save_doc(&wdoc, &path, quality)?;
+            let (bytes, warnings) = crate::file_cmds::encode(&wdoc, &path, quality)?;
+            write_file_with_source(&path, &bytes, &doc, source.as_ref())?;
             crate::automate_cmds::fire_event(s, "export");
             return Ok(json!({"path": path, "format": fmt, "warnings": warnings}));
         }
@@ -921,7 +1055,7 @@ fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
     let q = Value::Object(o);
     let st = WebSettings::from_params(&q, cmd)?;
     let (wdoc, _, _) = web_document(&doc, &json!({}), &st)?;
-    let buf = photocraft_compose::flatten(&wdoc);
+    let buf = photocraft_compose::flatten(&wdoc)?;
     let xmp = web_xmp(&doc, st.metadata);
     let opt = optimize(
         &buf.px,
@@ -933,7 +1067,7 @@ fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
         wdoc.resolution_dpi,
         false,
     )?;
-    write_file(&path, &opt.bytes)?;
+    write_file_with_source(&path, &opt.bytes, &doc, source.as_ref())?;
     crate::automate_cmds::fire_event(s, "export");
     Ok(json!({"path": path, "format": fmt, "bytes": opt.bytes.len()}))
 }
@@ -1089,18 +1223,29 @@ pub fn generate_assets(doc: &Document, dir: &str) -> (Vec<String>, Vec<Value>) {
 }
 
 fn generate_assets_with_source(doc: &Document, dir: &str, source: Option<&crate::SourceIdentity>) -> (Vec<String>, Vec<Value>) {
-    let dpi = f64::from(doc.resolution_dpi.max(1.0));
+    let axes = match asset_geometry::axes(doc) {
+        Ok(axes) => axes,
+        Err(error) => return (Vec::new(), vec![json!({"asset": null, "error": error.to_string()})]),
+    };
     let mut defaults: Option<Vec<AssetDefault>> = None;
     let mut jobs: Vec<(LayerId, AssetSpec)> = Vec::new();
     for (_, _, l) in doc.walk() {
-        if let Some(d) = parse_defaults(&l.name, dpi) {
+        let parsed_defaults = match asset_geometry::defaults(&l.name, axes) {
+            Ok(value) => value,
+            Err(error) => return (Vec::new(), vec![json!({"asset": l.name, "error": error.to_string()})]),
+        };
+        if let Some(d) = parsed_defaults {
             defaults = Some(d);
             continue;
         }
         if matches!(l.content, LayerContent::Adjustment(_)) {
             continue;
         }
-        for spec in parse_asset_name(&l.name, dpi) {
+        let specs = match asset_geometry::names(&l.name, axes) {
+            Ok(value) => value,
+            Err(error) => return (Vec::new(), vec![json!({"asset": l.name, "error": error.to_string()})]),
+        };
+        for spec in specs {
             jobs.push((l.id, spec));
         }
     }
@@ -1116,24 +1261,8 @@ fn generate_assets_with_source(doc: &Document, dir: &str, source: Option<&crate:
                 let mut one = crate::layer_menu_cmds::layer_document(doc, *id)?;
                 one.metadata = Default::default();
                 let (w0, h0) = (f64::from(one.size.width), f64::from(one.size.height));
-                // The layer's own size spec wins; default variants scale on top of it.
-                let mut k = spec.scale.unwrap_or(1.0);
-                let (mut tw, mut th) = (w0 * k, h0 * k);
-                match (spec.width, spec.height) {
-                    (Some(w), Some(h)) => (tw, th) = (w, h),
-                    (Some(w), None) => (tw, th) = (w, h0 * w / w0),
-                    (None, Some(h)) => (tw, th) = (w0 * h / h0, h),
-                    _ => {}
-                }
-                k = v.scale.unwrap_or(1.0);
-                tw *= k;
-                th *= k;
-                match (v.width, v.height) {
-                    (Some(w), Some(h)) => (tw, th) = (w, h),
-                    (Some(w), None) => (tw, th) = (w, th * w / tw),
-                    (None, Some(h)) => (tw, th) = (tw * h / th, h),
-                    _ => {}
-                }
+                // The layer's own size spec wins; default variants scale on top.
+                let (tw, th) = asset_geometry::dimensions((w0, h0), spec, v)?;
                 let st = asset_settings(spec);
                 let p = json!({"width": tw.round().max(1.0), "height": th.round().max(1.0)});
                 let (wdoc, _, _) = web_document(&one, &p, &WebSettings { convert_to_srgb: true, ..st.clone() })?;
@@ -1142,12 +1271,13 @@ fn generate_assets_with_source(doc: &Document, dir: &str, source: Option<&crate:
                 let out = join(dir, &rel);
                 crate::file_cmds::validate_destination(&out, source)?;
                 if spec.format == "webp" {
-                    crate::file_cmds::save_doc(&wdoc, &out, None)?;
+                    let (bytes, _) = crate::file_cmds::encode(&wdoc, &out, None)?;
+                    write_file_with_source(&out, &bytes, doc, source)?;
                     return Ok(out);
                 }
-                let buf = photocraft_compose::flatten(&wdoc);
+                let buf = photocraft_compose::flatten(&wdoc)?;
                 let o = optimize(&buf.px, wdoc.size.width as usize, wdoc.bounds(), &st, None, None, wdoc.resolution_dpi, false)?;
-                write_file(&out, &o.bytes)?;
+                write_file_with_source(&out, &o.bytes, doc, source)?;
                 Ok(out)
             })();
             match r {

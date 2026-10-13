@@ -265,7 +265,7 @@ pub(crate) fn hiding_mask(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<Vec<f32
     only.id = layer.id;
     only.mask = layer.mask.clone().filter(|_| a.layer_mask_hides_effects);
     only.vector_mask = layer.vector_mask.clone().filter(|_| a.vector_mask_hides_effects);
-    mask_vals(&only, rect, cx)
+    super::mask_vals_with_mask_identity(&only, rect, cx, layer)
 }
 
 /// Mix `out` back towards `before` where `mask` hides the layer: `out ← mix(before, out, mask)`.

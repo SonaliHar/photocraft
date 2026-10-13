@@ -45,7 +45,20 @@ async fn xcf_actual_mcp_open_migration_and_capabilities() {
     assert!(opened["warnings"].is_array());
     let before = value(call(&client, "doc_inspect", json!({})).await);
     assert_eq!(before["width"], 1);
-    assert_eq!(call(&client, "doc_open", json!({"path":"broken.xcf"})).await.is_error, Some(true));
+    let semantics = value(call(&client, "command_run", json!({"id":"xcf.inspect","params":{"limit":1}})).await);
+    assert_eq!(semantics["format"], "xcf");
+    assert_eq!(semantics["items"]["entries"][0]["item"]["kind"], "layer");
+    assert!(semantics["items"]["entries"][0]["item"]["id"].is_string());
+    assert_eq!(semantics["resolution"]["xDpi"], semantics["resolution"]["yDpi"]);
+    for params in [json!({"limit":129}), json!({"readLocator":true}), json!({"offset":"1"})] {
+        assert_eq!(call(&client, "command_run", json!({"id":"xcf.inspect","params":params})).await.is_error, Some(true));
+    }
+    assert_eq!(value(call(&client, "doc_inspect", json!({})).await), before);
+    let failed = call(&client, "doc_open", json!({"path":"broken.xcf"})).await;
+    assert_eq!(failed.is_error, Some(true));
+    let details = failed.structured_content.as_ref().unwrap();
+    assert_eq!(details["errorDetails"]["sourceFormat"], "xcf");
+    assert_eq!(details["errorDetails"]["diagnostics"][0]["code"], "truncated_xcf");
     assert_eq!(value(call(&client, "doc_inspect", json!({})).await)["name"], before["name"]);
     for args in [json!({}), json!({"path":"project.pcraft"}), json!({"path":"new.XCF","format":"pcraft"})] {
         assert_eq!(call(&client, "doc_save", args).await.is_error, Some(true));
@@ -62,6 +75,7 @@ async fn xcf_actual_mcp_open_migration_and_capabilities() {
     let reopened = value(call(&client, "doc_inspect", json!({})).await);
     assert_eq!(reopened["width"], before["width"]);
     assert_eq!(reopened["height"], before["height"]);
+    assert_eq!(value(call(&client, "command_run", json!({"id":"xcf.inspect","params":{"limit":1}})).await), semantics);
     let half = value(call(&client, "doc_open", json!({"path":"half.xcf"})).await);
     assert!(half["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("F16")));
     client.cancel().await.unwrap();

@@ -25,7 +25,7 @@ pub(crate) fn moves_selected_pixels(app: &PhotocraftApp) -> bool {
     app.ui.tool == Tool::Move
         && app.ui.transform.is_none()
         && st.doc.selection.is_some()
-        && st.selected_layers().len() <= 1
+        && st.selection_ids().len() <= 1
         && st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.visible)
         && app.session.is_enabled("select.float")
 }
@@ -111,10 +111,10 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         return None;
     };
     let st = app.session.documents().get(idx)?;
-    let (doc_id, revision, doc) = (st.doc.id, st.revision, st.doc.clone());
+    let (doc_id, revision, doc) = (st.doc.id, st.revision, st.doc.resident_arc()?.clone());
     let fresh = app.move_preview.as_ref().is_some_and(|p| p.doc == doc_id && p.revision == revision);
     if !fresh {
-        let ids = photocraft_engine::layer_multi_cmds::move_targets(&doc, &st.selected_layers());
+        let ids = photocraft_engine::layer_multi_cmds::move_targets(&doc, st.selection_ids());
         if ids.is_empty() {
             return None;
         }
@@ -273,7 +273,7 @@ mod tests {
         app.session.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
         app.session.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
         app.session.execute("select.deselect", json!({})).unwrap();
-        app.session.edit_prefs(|p| p.interface.show_bounding_box_when_dragging_layer = outline);
+        app.session.edit_prefs(|p| p.interface.show_bounding_box_when_dragging_layer = outline).unwrap();
         app.ui.tool = Tool::Move;
         let m = egui::Modifiers::NONE;
         crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 16.0, y: 16.0, pressure: 1.0 }, m);

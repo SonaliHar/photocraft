@@ -226,6 +226,10 @@ fn is_latin1_keyword(k: &str) -> bool {
 }
 
 pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
+    encode_with_density(src, plan, opts, None)
+}
+
+pub(crate) fn encode_with_density(src: &Image, plan: Plan, opts: &EncodeOptions, density: Option<crate::PngDensity>) -> Result<Vec<u8>, CodecError> {
     let img = src.converted(plan.layout, plan.sample);
     let (w, h) = img.dimensions();
     let color = match img.layout() {
@@ -263,7 +267,10 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
             // The pixels are written as they are shown: never let a viewer rotate them again.
             info.exif_metadata = Some(crate::orientation::upright_exif(exif).into_owned().into());
         }
-        if let Some((x, y)) = img.meta.dpi
+        if let Some(density) = density {
+            let (xppu, yppu) = density.pixels_per_meter();
+            info.pixel_dims = Some(png::PixelDimensions { xppu, yppu, unit: png::Unit::Meter });
+        } else if let Some((x, y)) = img.meta.dpi
             && x > 0.0
             && y > 0.0
         {

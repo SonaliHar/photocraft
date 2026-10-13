@@ -15,7 +15,7 @@ fn nonlinear_float_linear_source_over_preserves_source_and_alpha() {
     d.sample_encoding = Some(SampleEncoding::NonlinearProfile);
     d.layers = vec![layer(&d, 0.0, 1.0, SampleEncoding::Linear), layer(&d, 1.0, 0.5, SampleEncoding::Linear)];
     let before = d.clone();
-    let b = photocraft_compose::render(&d, d.bounds());
+    let b = photocraft_compose::render(&d, d.bounds()).unwrap();
     let expected = photocraft_color::convert::linear_to_srgb(0.5);
     assert!((b.px[0][0] - expected).abs() < 1e-5);
     assert_eq!(b.px[0][3], 1.0);
@@ -26,7 +26,7 @@ fn linear_integer_nonlinear_composite_differs_from_stored_space_mix() {
     let mut d = Document::new("linear integer", Size::new(1, 1), ColorMode::Rgb, SampleType::U16);
     d.sample_encoding = Some(SampleEncoding::Linear);
     d.layers = vec![layer(&d, 0.0, 1.0, SampleEncoding::Perceptual), layer(&d, 1.0, 0.5, SampleEncoding::Perceptual)];
-    let b = photocraft_compose::render(&d, d.bounds());
+    let b = photocraft_compose::render(&d, d.bounds()).unwrap();
     assert!((b.px[0][0] - photocraft_color::convert::srgb_to_linear(0.5)).abs() < 2.0 / 65535.0);
 }
 #[test]
@@ -45,9 +45,9 @@ fn groups_isolate_and_pass_through_children_and_masks() {
             &0.5f32.to_ne_bytes(),
         )
         .unwrap();
-        group.mask = Some(photocraft_doc::LayerMask { surface: mask, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+        group.mask = Some(photocraft_doc::LayerMask { surface: std::sync::Arc::new(mask), enabled: true, linked: true, density: 1.0, feather: 0.0 });
         d.layers = vec![bottom, group];
-        assert!((photocraft_compose::render(&d, d.bounds()).px[0][0] - 0.3).abs() < 1e-5);
+        assert!((photocraft_compose::render(&d, d.bounds()).unwrap().px[0][0] - 0.3).abs() < 1e-5);
     }
 }
 #[test]
@@ -80,6 +80,6 @@ fn imported_indexed_normal_thresholds_opacity_and_mask_coverage() {
         let mut top = layer(&d, 1.0, 1.0, SampleEncoding::Linear);
         top.opacity = opacity;
         d.layers = vec![bottom, top];
-        assert_eq!(photocraft_compose::render(&d, d.bounds()).px[0], [expected, expected, expected, 1.0]);
+        assert_eq!(photocraft_compose::render(&d, d.bounds()).unwrap().px[0], [expected, expected, expected, 1.0]);
     }
 }

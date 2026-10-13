@@ -16,7 +16,7 @@
 use photocraft_algo::panorama::Layout;
 use photocraft_algo::pyramid;
 use photocraft_algo::transform::Interp;
-use photocraft_doc::{Document, Layer, LayerContent, LayerId, LayerMask};
+use photocraft_doc::{Layer, LayerContent, LayerId, LayerMask};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, to_rgba};
 use serde_json::{Value, json};
@@ -30,19 +30,19 @@ fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
 }
 
 /// The selected raster layers, bottom to top.
-fn selected_pixel_layers(s: &Session) -> Vec<LayerId> {
-    let Some(st) = s.active() else { return Vec::new() };
-    st.selected_layers().into_iter().filter(|id| st.doc.layer(*id).is_some_and(|l| matches!(l.content, LayerContent::Raster(_)))).collect()
+fn selected_pixel_layers(s: &Session) -> Result<Vec<LayerId>> {
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    Ok(st.selected_layers()?.into_iter().filter(|id| st.doc.layer(*id).is_some_and(|l| matches!(l.content, LayerContent::Raster(_)))).collect())
 }
 
 fn two_layers(s: &Session) -> std::result::Result<(), String> {
     s.active().ok_or("no document open")?;
-    if selected_pixel_layers(s).len() < 2 { Err("select two or more pixel layers in the Layers panel".into()) } else { Ok(()) }
+    if selected_pixel_layers(s).map_err(|e| e.to_string())?.len() < 2 { Err("select two or more pixel layers in the Layers panel".into()) } else { Ok(()) }
 }
 
 fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "edit.autoAlignLayers";
-    let ids = selected_pixel_layers(s);
+    let ids = selected_pixel_layers(s)?;
     if ids.len() < 2 {
         return Err(bad(cmd, "select two or more pixel layers"));
     }
@@ -51,6 +51,14 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
         .ok_or_else(|| bad(cmd, format!("unknown projection `{projection}` (auto|perspective|cylindrical|spherical|collage|reposition)")))?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc = st.doc.clone();
+    if ids.iter().any(|id| {
+        doc.layer(*id)
+            .and_then(Layer::surface)
+            .is_some_and(|x| matches!(x.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64))
+    }) {
+        return Err(bad(cmd, "wide alignment interpolation is not qualified; layers were kept unchanged"));
+    }
+
     let reference = match p.get("reference").and_then(Value::as_u64) {
         Some(r) if ids.contains(&LayerId(r)) => LayerId(r),
         Some(r) => return Err(bad(cmd, format!("reference {r} is not a selected pixel layer"))),
@@ -84,11 +92,15 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
             let l = doc.layer(ids[i]).ok_or(EngineError::NoLayer(ids[i]))?;
             let surf = l.surface().ok_or(EngineError::NoLayer(ids[i]))?;
             let b = surf.content_bounds();
-            let px = if b.is_empty() { surf.clone() } else { warp_placed(surf, b, (0.0, 0.0), pl, (0.0, 0.0), interp) };
-            let mask = l.mask.as_ref().map(|m| {
-                let mb = m.surface.content_bounds();
-                if mb.is_empty() { m.surface.clone() } else { warp_placed(&m.surface, mb, (0.0, 0.0), pl, (0.0, 0.0), Interp::Bilinear) }
-            });
+            let px = if b.is_empty() { surf.clone() } else { warp_placed(surf, b, (0.0, 0.0), pl, (0.0, 0.0), interp)? };
+            let mask = l
+                .mask
+                .as_ref()
+                .map(|m| -> Result<Surface> {
+                    let mb = m.surface.content_bounds();
+                    if mb.is_empty() { Ok(m.surface.as_ref().clone()) } else { warp_placed(&m.surface, mb, (0.0, 0.0), pl, (0.0, 0.0), Interp::Bilinear) }
+                })
+                .transpose()?;
             Ok((ids[i], px, mask))
         })
         .collect::<Result<_>>()?;
@@ -99,7 +111,7 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
                 *surf = px.clone();
             }
             if let (Some(m), Some(ms)) = (&mut l.mask, mask) {
-                m.surface = ms.clone();
+                m.surface = std::sync::Arc::new(ms.clone());
             }
         }
         Ok(())
@@ -129,7 +141,7 @@ fn pixels(l: &Layer, area: Rect) -> Option<(Vec<f32>, photocraft_color::PixelFor
 
 fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "edit.autoBlendLayers";
-    let ids = selected_pixel_layers(s);
+    let ids = selected_pixel_layers(s)?;
     if ids.len() < 2 {
         return Err(bad(cmd, "select two or more pixel layers"));
     }
@@ -139,7 +151,7 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let seamless = p.get("seamlessTones").and_then(Value::as_bool).unwrap_or(true);
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let doc: std::sync::Arc<Document> = st.doc.clone();
+    let doc = st.doc.clone();
     let mut area = Rect::EMPTY;
     for id in &ids {
         if let Some(b) = doc.layer(*id).and_then(|l| l.surface()).map(|s| s.content_bounds()) {
@@ -197,8 +209,8 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
         for (id, wt) in ids.iter().zip(&weights) {
             let l = doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?;
             let mut mask = LayerMask::hide_all();
-            mask.surface.write_region(area, wt);
-            mask.surface.prune();
+            std::sync::Arc::make_mut(&mut mask.surface).write_region(area, wt);
+            std::sync::Arc::make_mut(&mut mask.surface).prune();
             l.mask = Some(mask);
         }
         let Some(px) = &blended else { return Ok(None) };

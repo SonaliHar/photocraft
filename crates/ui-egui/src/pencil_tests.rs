@@ -159,7 +159,7 @@ fn b_cycles_brush_pencil_and_mixer_brush() {
     press(&mut h, Modifiers::NONE);
     assert_eq!(h.state().ui.tool, Tool::MixerBrush);
     // Use Shift Key for Tool Switch: ⇧B cycles, B keeps the group's tool.
-    h.state_mut().session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = true);
+    h.state_mut().session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = true).unwrap();
     press(&mut h, Modifiers::SHIFT);
     assert_eq!(h.state().ui.tool, Tool::Brush);
     press(&mut h, Modifiers::SHIFT);

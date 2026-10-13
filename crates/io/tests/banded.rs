@@ -31,7 +31,7 @@ fn layered(w: u32, h: u32, depth: SampleType, alpha: f32) -> Document {
 }
 
 fn composite_q(doc: &Document, scale: f32) -> Vec<f32> {
-    photocraft_compose::flatten(doc).px.iter().flat_map(|p| [p[0], p[1], p[2], p[3]]).map(|v| (v.clamp(0.0, 1.0) * scale).round()).collect()
+    photocraft_compose::flatten(doc).unwrap().px.iter().flat_map(|p| [p[0], p[1], p[2], p[3]]).map(|v| (v.clamp(0.0, 1.0) * scale).round()).collect()
 }
 
 #[test]
@@ -79,10 +79,10 @@ fn psd_merged_image_matches_composite_and_drops_near_opaque_alpha() {
     // Alpha 0.999 rounds to 255: no alpha channel, so the merged image must not be matted.
     for alpha in [1.0, 0.999, 0.5] {
         let d = layered(400, 300, SampleType::U8, alpha);
-        let file = document_to_psd(&d);
+        let file = document_to_psd(&d).unwrap();
         assert_eq!(file.merged_has_alpha(), alpha < 0.99, "alpha {alpha}");
         let merged = merged_composite(&file).unwrap();
-        let want = photocraft_compose::flatten(&d).px;
+        let want = photocraft_compose::flatten(&d).unwrap().px;
         let m = merged.iter().zip(&want).flat_map(|(a, b)| (0..4).map(move |i| (a[i] - b[i]).abs())).fold(0.0f32, f32::max);
         // Un-matting divides the 8-bit rounding error by alpha.
         assert!(m <= 1.0 / (255.0 * alpha) + 1e-4, "alpha {alpha}: max diff {m}");

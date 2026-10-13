@@ -1,0 +1,22 @@
+[package]
+name="xcf-bzip2"
+version="0.1.0"
+edition="2024"
+license="(MIT OR Apache-2.0) AND bzip2-1.0.6"
+publish=false
+
+[workspace]
+
+[dependencies]
+crc32fast = "=1.5.2"
+tinyvec = "=1.13.3"
+
+[features]
+default=[]
+nightly=[]
+rustc_1_37=[]
+rustc_1_40=[]
+rustc_1_51=[]
+
+[dev-dependencies]
+bzip2 = "=0.6.1"

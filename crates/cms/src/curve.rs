@@ -18,6 +18,8 @@ pub enum Curve {
     },
     /// Samples at evenly spaced inputs over `[0, 1]`, normalised outputs.
     Table(Vec<f32>),
+    /// Parsed ICC integer table normalized in f64, without first rounding entries to f32.
+    Table64(Vec<f64>),
 }
 
 /// The sRGB transfer function (IEC 61966-2.1) as ICC parametric type 3.
@@ -46,6 +48,10 @@ impl Curve {
                 let n = t.len();
                 n < 2 || t.iter().enumerate().all(|(i, v)| (*v as f64 - i as f64 / (n - 1) as f64).abs() < 1.0 / 65535.0)
             }
+            Curve::Table64(t) => {
+                let n = t.len();
+                n < 2 || t.iter().enumerate().all(|(i, v)| (*v - i as f64 / (n - 1) as f64).abs() < 1.0 / 65535.0)
+            }
             _ => false,
         }
     }
@@ -54,9 +60,16 @@ impl Curve {
     pub fn eval64(&self, x: f64) -> f64 {
         match self {
             Curve::Identity => x,
-            Curve::Gamma(g) => mirror(x, |v| v.powf(*g)),
+            Curve::Gamma(g) => {
+                if *g == 1.0 && x.is_finite() {
+                    x
+                } else {
+                    mirror(x, |v| v.powf(*g))
+                }
+            }
             Curve::Parametric { kind, p } => para(*kind, p, x),
-            Curve::Table(t) => table(t, x as f32) as f64,
+            Curve::Table(t) => table64(t, x),
+            Curve::Table64(t) => table64(t, x),
         }
     }
 
@@ -74,14 +87,15 @@ impl Curve {
         match self {
             Curve::Identity => y,
             Curve::Gamma(g) => {
-                if g.abs() < 1e-12 {
+                if (*g == 1.0 && y.is_finite()) || g.abs() < 1e-12 {
                     y
                 } else {
                     mirror(y, |v| v.powf(1.0 / g))
                 }
             }
             Curve::Parametric { kind, p } => para_inverse(*kind, p, y).unwrap_or_else(|| numeric_inverse(|x| para(*kind, p, x), y)),
-            Curve::Table(t) => table_inverse(t, y as f32) as f64,
+            Curve::Table(t) => table_inverse64(t, y),
+            Curve::Table64(t) => table_inverse64(t, y),
         }
     }
 
@@ -108,7 +122,7 @@ impl Curve {
 
 #[inline]
 fn mirror(x: f64, f: impl Fn(f64) -> f64) -> f64 {
-    if x < 0.0 { -f(-x) } else { f(x) }
+    if x.is_sign_negative() { -f(-x) } else { f(x) }
 }
 
 fn pw(base: f64, g: f64) -> f64 {
@@ -118,7 +132,13 @@ fn pw(base: f64, g: f64) -> f64 {
 fn para(kind: u16, p: &[f64; 7], x: f64) -> f64 {
     let [g, a, b, c, d, e, f] = *p;
     match kind {
-        0 => mirror(x, |v| v.powf(g)),
+        0 => {
+            if g == 1.0 && x.is_finite() {
+                x
+            } else {
+                mirror(x, |v| v.powf(g))
+            }
+        }
         1 => {
             if a != 0.0 && x >= -b / a {
                 pw(a * x + b, g)
@@ -160,7 +180,13 @@ fn para_inverse(kind: u16, p: &[f64; 7], y: f64) -> Option<f64> {
     }
     let root = |v: f64| if v <= 0.0 { 0.0 } else { v.powf(1.0 / g) };
     Some(match kind {
-        0 => mirror(y, |v| v.powf(1.0 / g)),
+        0 => {
+            if g == 1.0 && y.is_finite() {
+                y
+            } else {
+                mirror(y, |v| v.powf(1.0 / g))
+            }
+        }
         1 => {
             if a == 0.0 {
                 return None;
@@ -235,6 +261,56 @@ fn table(t: &[f32], x: f32) -> f32 {
             t[i] + (t[i + 1] - t[i]) * f
         }
     }
+}
+
+// ICC table entries have their encoded precision; the sample and interpolation must not
+// inherit the f32 precision of the entry storage when evaluating a wide source.
+fn table64<T: Copy + Into<f64>>(t: &[T], x: f64) -> f64 {
+    let Some(&first) = t.first() else { return x };
+    if t.len() == 1 {
+        return first.into();
+    }
+    if !x.is_finite() {
+        return x;
+    }
+    let pos = x.clamp(0.0, 1.0) * (t.len() - 1) as f64;
+    let i = (pos as usize).min(t.len() - 2);
+    let (Some(&a), Some(&b)) = (t.get(i), t.get(i + 1)) else { return x };
+    a.into() + (b.into() - a.into()) * (pos - i as f64)
+}
+
+fn table_inverse64<T: Copy + Into<f64>>(t: &[T], y: f64) -> f64 {
+    let (Some(&first), Some(&last)) = (t.first(), t.last()) else { return y };
+    if t.len() < 2 || !y.is_finite() {
+        return y;
+    }
+    let (first, last) = (first.into(), last.into());
+    let increasing = last >= first;
+    let (low, high) = if increasing { (first, last) } else { (last, first) };
+    if y <= low || y >= high {
+        let start = if y <= low { increasing } else { !increasing };
+        let edge = if start { first } else { last };
+        let i = if start {
+            t.iter().position(|v| ((*v).into() - edge).abs() > 1e-7).map_or(t.len() - 1, |i| i.saturating_sub(1))
+        } else {
+            t.iter().rposition(|v| ((*v).into() - edge).abs() > 1e-7).map_or(0, |i| i + 1)
+        };
+        return i as f64 / (t.len() - 1) as f64;
+    }
+    let (mut lo, mut hi) = (0, t.len() - 1);
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        let Some(&v) = t.get(mid) else { return y };
+        if (v.into() < y) == increasing {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let (Some(&a), Some(&b)) = (t.get(lo), t.get(hi)) else { return y };
+    let (a, b) = (a.into(), b.into());
+    let fraction = if b != a { (y - a) / (b - a) } else { 0.5 };
+    (lo as f64 + fraction) / (t.len() - 1) as f64
 }
 
 /// Exact inverse of a piecewise-linear table (binary search), for increasing or decreasing tables.
@@ -335,5 +411,83 @@ mod tests {
         assert!((c.eval_inverse64(c.eval64(2.0)) - 2.0).abs() < 1e-9);
         let g = Curve::Gamma(2.2);
         assert!((g.eval64(-0.5) + 0.5f64.powf(2.2)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn exact_one_preserves_finite_extended_domain_bits() {
+        let curves = [Curve::Gamma(1.0), Curve::Parametric { kind: 0, p: [1.0, 7.0, -3.0, 11.0, 0.5, 9.0, -2.0] }];
+        let mut values = vec![
+            -f64::MAX,
+            -1e300,
+            -65504.0,
+            -17.25,
+            -2.0,
+            -1.0,
+            -0.125,
+            -f64::MIN_POSITIVE,
+            -f64::from_bits(1),
+            -0.0,
+            0.0,
+            f64::from_bits(1),
+            f64::MIN_POSITIVE,
+            0.125,
+            1.0,
+            2.0,
+            17.25,
+            65504.0,
+            1e300,
+            f64::MAX,
+        ];
+        for sign in [0, 1_u64 << 63] {
+            for exponent in [0, 1, 2, 256, 1022, 1023, 1024, 1536, 2045, 2046] {
+                for mantissa in [0, 1, 0x4000, 0x8_0000_0000_0000, 0xf_ffff_ffff_ffff] {
+                    values.push(f64::from_bits(sign | (exponent << 52) | mantissa));
+                }
+            }
+        }
+        for x in values {
+            for curve in &curves {
+                assert_eq!(curve.eval64(x).to_bits(), x.to_bits());
+                assert_eq!(curve.eval_inverse64(x).to_bits(), x.to_bits());
+                let y = x as f32;
+                if y.is_finite() {
+                    assert_eq!(curve.eval(y).to_bits(), y.to_bits());
+                    assert_eq!(curve.eval_inverse(y).to_bits(), y.to_bits());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn exact_one_keeps_nonfinite_expression_policy() {
+        for curve in [Curve::Gamma(1.0), Curve::Parametric { kind: 0, p: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] }] {
+            for x in [f64::INFINITY, f64::NEG_INFINITY] {
+                assert_eq!(curve.eval64(x).to_bits(), mirror(x, |v| v.powf(1.0)).to_bits());
+                assert_eq!(curve.eval_inverse64(x).to_bits(), mirror(x, |v| v.powf(1.0)).to_bits());
+            }
+            for x in [f64::NAN, f64::from_bits(0x7ff8_0000_0000_0042), f64::from_bits(0xfff8_0000_0000_0042)] {
+                assert!(curve.eval64(x).is_nan());
+                assert!(curve.eval_inverse64(x).is_nan());
+            }
+        }
+    }
+
+    #[test]
+    fn near_one_curves_keep_analytic_behavior() {
+        for g in [1.0 - 1e-10, 1.0 + 1e-10, 1.8, 2.2] {
+            for curve in [Curve::Gamma(g), Curve::Parametric { kind: 0, p: [g, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] }] {
+                for x in [-2.0_f64, -0.5, -0.0, 0.0, 0.125, 0.5, 1.0, 2.0] {
+                    assert_eq!(curve.eval64(x).to_bits(), mirror(x, |v| v.powf(g)).to_bits());
+                    assert_eq!(curve.eval_inverse64(x).to_bits(), mirror(x, |v| v.powf(1.0 / g)).to_bits());
+                }
+            }
+        }
+        for curve in [Curve::Table(vec![0.0, 1.0]), Curve::Table64(vec![0.0, 1.0])] {
+            assert_eq!(curve.eval64(-2.0), 0.0);
+            assert_eq!(curve.eval64(2.0), 1.0);
+        }
+        let threshold = Curve::Parametric { kind: 1, p: [1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0] };
+        assert_eq!(threshold.eval64(-2.0), 0.0);
+        assert_eq!(threshold.eval_inverse64(-2.0), 0.0);
     }
 }

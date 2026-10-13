@@ -300,7 +300,7 @@ fn cmd_drag_floats_the_selected_pixels() {
     let d = doc(&app);
     assert!(d.selection.is_none() && offset(&app).is_none());
     assert!(alpha(&d, 12, 12) == 0.0 && alpha(&d, 26, 21) == 1.0 && alpha(&d, 44, 39) == 1.0);
-    let labels: Vec<String> = app.session.active().unwrap().history.entries().into_iter().skip(steps + 1).map(|e| e.to_string()).collect();
+    let labels: Vec<String> = app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().to_vec().into_iter().skip(steps + 1).map(|e| e.to_string()).collect();
     assert_eq!(labels.first().map(String::as_str), Some("Move"), "{labels:?}");
 }
 

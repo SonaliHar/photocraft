@@ -56,7 +56,7 @@ fn from_layers_and_group_then_compose_clips() {
         assert_eq!(doc(&s).artboard_of(red), Some(gid));
         // Grow the board; the white background shows around the square, nothing outside it.
         s.execute("layer.artboard.set", json!({"width": 40, "height": 40})).unwrap();
-        let px = |s: &Session, x, y| photocraft_compose::render(doc(s), Rect::new(x, y, x + 1, y + 1)).px[0];
+        let px = |s: &Session, x, y| photocraft_compose::render(doc(s), Rect::new(x, y, x + 1, y + 1)).unwrap().px[0];
         assert!(px(&s, 40, 40)[0] > 0.99 && px(&s, 40, 40)[1] > 0.99, "{depth}");
         assert!(px(&s, 15, 15)[1] < 0.01);
         // Moving the board moves its contents.
@@ -145,14 +145,101 @@ fn export_to_files_and_pdf() {
 
 #[test]
 fn raster_pdf_xref_offsets_point_at_objects() {
-    let pdf = raster_pdf(&[(2, 3, 72.0, vec![0xff, 0xd8, 0xff, 0xd9])]);
+    let pdf = raster_pdf(&[(2, 3, (72.0, 72.0), vec![0xff, 0xd8, 0xff, 0xd9])]).unwrap();
     let text = String::from_utf8_lossy(&pdf).into_owned();
-    let xref = text.rfind("xref\n").unwrap();
-    let offsets: Vec<usize> = text[xref..].lines().skip(3).take(5).map(|l| l[..10].parse().unwrap()).collect();
+    let xref = pdf.windows(5).position(|bytes| bytes == b"xref\n").unwrap();
+    let table = std::str::from_utf8(pdf.get(xref..).unwrap()).unwrap();
+    let offsets: Vec<usize> = table.lines().skip(3).take(5).map(|l| l[..10].parse().unwrap()).collect();
+    assert_eq!(offsets.len(), 5);
     for (i, o) in offsets.iter().enumerate() {
-        assert!(text[*o..].starts_with(&format!("{} 0 obj", i + 1)));
+        assert!(pdf.get(*o..).unwrap().starts_with(format!("{} 0 obj", i + 1).as_bytes()));
     }
     assert!(text.contains("/MediaBox [0 0 2.000 3.000]"));
+}
+
+fn resolution_pdf_path() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("photocraft-artboard-resolution-{}-{}.pdf", std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))
+}
+
+#[test]
+fn pdf_export_sizes_each_axis_from_exact_custom_resolution() {
+    let mut s = session(8);
+    s.execute("layer.new.artboard", json!({"rect": [0, 0, 24, 36]})).unwrap();
+    let resolution = photocraft_doc::PhysicalResolution {
+        x_dpi: 144.25, y_dpi: 287.5,
+        unit: photocraft_doc::PhysicalUnit::Custom(photocraft_doc::CustomUnit {
+            name: "Own page unit".into(), factor: 2.5, digits: 3, symbol: "u".into(), abbreviation: "ou".into(),
+        }),
+    };
+    s.active_mut().unwrap().doc.try_resident_mut().unwrap().set_physical_resolution(resolution.clone()).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let path = resolution_pdf_path();
+    s.execute("file.export.artboardsToPdf", json!({"path":path.to_string_lossy()})).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("/MediaBox [0 0 11.979 9.016]"), "unequal axes determine page points independently");
+    assert!(text.contains("q 11.979 0 0 9.016 0 0 cm /Im0 Do Q"));
+    assert_eq!(doc(&s).effective_resolution(), resolution);
+    assert!(s.active().unwrap().doc.shares_state(&before));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn pdf_export_invalid_resolution_preserves_existing_file_and_session() {
+    let mut s = session(8);
+    s.execute("layer.new.artboard", json!({"rect": [0, 0, 12, 8]})).unwrap();
+    s.execute("layer.artboard.set", json!({"name":"Future name"})).unwrap();
+    s.undo();
+    assert!(s.active().unwrap().history.can_redo());
+    let path = resolution_pdf_path();
+    for resolution in [
+        photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: f64::NAN, unit: photocraft_doc::PhysicalUnit::Inch },
+        photocraft_doc::PhysicalResolution { x_dpi: f64::INFINITY, y_dpi: 144.0, unit: photocraft_doc::PhysicalUnit::Inch },
+        photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: 0.0, unit: photocraft_doc::PhysicalUnit::Inch },
+        photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: f64::MIN_POSITIVE / 1024.0, unit: photocraft_doc::PhysicalUnit::Inch },
+        photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: f64::MAX, unit: photocraft_doc::PhysicalUnit::Inch },
+        photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: 144.0, unit: photocraft_doc::PhysicalUnit::Custom(photocraft_doc::CustomUnit {
+            name: "Invalid unit".into(), factor: f64::NAN, digits: 1, symbol: "u".into(), abbreviation: "u".into(),
+        }) },
+    ] {
+        s.active_mut().unwrap().doc.try_resident_mut().unwrap().physical_resolution = Some(resolution);
+        let state = s.active().unwrap();
+        let (before, revision, past, future, active) = (state.doc.clone(), state.revision, state.history.past_len(), state.history.can_redo(), state.active_layer);
+        std::fs::write(&path, b"existing export stays intact").unwrap();
+        assert!(s.execute("file.export.artboardsToPdf", json!({"path":path.to_string_lossy()})).is_err());
+        let state = s.active().unwrap();
+        assert!(state.doc.shares_state(&before));
+        assert_eq!((state.revision, state.history.past_len(), state.history.can_redo(), state.active_layer), (revision, past, future, active));
+        assert_eq!(std::fs::read(&path).unwrap(), b"existing export stays intact");
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn raster_pdf_refuses_invalid_axes_and_preserves_subunit_resolution() {
+    for axes in [(0.0, 72.0), (-1.0, 72.0), (72.0, f64::NAN), (f64::INFINITY, 72.0),
+        (72.0, f64::MIN_POSITIVE / 1024.0), (72.0, f64::MAX)] {
+        assert!(raster_pdf(&[(2, 3, axes, vec![])]).is_err());
+    }
+    assert!(raster_pdf(&[]).is_err());
+    assert!(raster_pdf(&[(0, 3, (72.0, 72.0), vec![])]).is_err());
+    let pdf = raster_pdf(&[(2, 3, (0.5, 1.0), vec![0xff, 0xd8, 0xff, 0xd9])]).unwrap();
+    assert!(String::from_utf8_lossy(&pdf).contains("/MediaBox [0 0 288.000 216.000]"));
+}
+
+#[test]
+fn raster_pdf_square_sizes_preserve_legacy_bytes() {
+    use sha2::{Digest, Sha256};
+    // Actual before-change helper outputs, generated from the hash-bound source snapshot.
+    for (pages, expected) in [
+        (vec![(2, 3, (72.0, 72.0), vec![255, 216, 255, 217])], "75fc31cd41238fd5971674ebc57471c4760d9d4081ebdbda7648122848d12345"),
+        (vec![(24, 36, (300.0, 300.0), vec![255, 216, 1, 2, 255, 217]), (12, 8, (144.25, 144.25), vec![255, 216, 3, 4, 255, 217])],
+            "eb5776a9ad46eb8d1fd3a4ba63d49726ccb1f988fa04bb13941513a42b3a116f"),
+    ] {
+        let hash: String = Sha256::digest(raster_pdf(&pages).unwrap()).iter().map(|byte| format!("{byte:02x}")).collect();
+        assert_eq!(hash, expected);
+    }
 }
 
 #[test]
@@ -316,7 +403,7 @@ fn board_with_square(s: &mut Session) -> LayerId {
 }
 
 fn red_at(s: &Session, x: i32, y: i32) -> bool {
-    let px = photocraft_compose::render(doc(s), Rect::new(x, y, x + 1, y + 1)).px[0];
+    let px = photocraft_compose::render(doc(s), Rect::new(x, y, x + 1, y + 1)).unwrap().px[0];
     px[0] > 0.99 && px[1] < 0.01 && px[3] > 0.99
 }
 

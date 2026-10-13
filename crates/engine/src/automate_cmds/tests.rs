@@ -125,7 +125,7 @@ fn statistics_makes_a_stack_mode_smart_object() {
     let LayerContent::Smart(so) = &d.layers[0].content else { panic!("not a smart object") };
     assert_eq!(so.stack_mode, Some(photocraft_doc::StackMode::Mean));
     // Mean of 20, 60, 100 = 60.
-    let px = photocraft_compose::flatten(d).px[0];
+    let px = photocraft_compose::flatten(d).unwrap().px[0];
     assert!((px[0] * 255.0 - 60.0).abs() < 1.5, "{px:?}");
     assert!(s.execute("file.scripts.statistics", json!({"mode": "average", "input": dir})).is_err());
 }

@@ -16,7 +16,7 @@ use photocraft_text::spell::Dictionary;
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, layer_param};
-use crate::type_cmds::{refresh, replace_text};
+use crate::type_cmds::{replace_text, try_refresh};
 use crate::{EngineError, Result, Session};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -104,7 +104,7 @@ fn change(s: &mut Session, p: &Value) -> Result<Value> {
         let snapshot = doc.clone();
         if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
             replace_text(t, a, b, &to);
-            refresh(&snapshot, t);
+            try_refresh(&snapshot, t)?;
         }
         Ok(())
     })?;
@@ -134,7 +134,7 @@ fn change_all(s: &mut Session, p: &Value) -> Result<Value> {
                     for (a, b) in hits.iter().rev() {
                         replace_text(t, *a, *b, &to);
                     }
-                    refresh(&snapshot, t);
+                    try_refresh(&snapshot, t)?;
                 }
             }
             Ok(())
@@ -159,7 +159,7 @@ fn add_word(s: &mut Session, p: &Value) -> Result<Value> {
             pr.user_dictionary.sort_by_key(|w| w.to_lowercase());
             true
         }
-    });
+    })?;
     Ok(json!({ "added": added, "word": word, "userDictionary": s.prefs().user_dictionary }))
 }
 
@@ -169,7 +169,7 @@ fn remove_word(s: &mut Session, p: &Value) -> Result<Value> {
         let n = pr.user_dictionary.len();
         pr.user_dictionary.retain(|w| !w.eq_ignore_ascii_case(&word));
         n != pr.user_dictionary.len()
-    });
+    })?;
     Ok(json!({ "removed": removed, "userDictionary": s.prefs().user_dictionary }))
 }
 
@@ -215,7 +215,7 @@ fn insert_text(s: &mut Session, p: &Value) -> Result<Value> {
         let snapshot = doc.clone();
         if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
             replace_text(t, ba, bb, &new);
-            refresh(&snapshot, t);
+            try_refresh(&snapshot, t)?;
         }
         Ok(())
     })?;

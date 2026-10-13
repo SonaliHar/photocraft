@@ -2,6 +2,49 @@ use super::*;
 
 const DEPTHS: [u64; 3] = [8, 16, 32];
 
+#[test]
+fn exported_layer_preserves_both_resolution_axes_and_custom_unit() {
+    for mode in ["rgb", "gray"] {
+        for depth in DEPTHS {
+            let mut s = session(depth, mode);
+            paint(&mut s, |x, y| if (8..32).contains(&x) && (9..20).contains(&y) { [0.3, 0.6, 0.9, 1.0] } else { [0.0; 4] });
+            let resolution = photocraft_doc::PhysicalResolution {
+                x_dpi: 144.25,
+                y_dpi: 287.75,
+                unit: photocraft_doc::PhysicalUnit::Custom(photocraft_doc::CustomUnit {
+                    name: "Test centimeter".into(),
+                    factor: 2.54,
+                    digits: 3,
+                    symbol: "cm".into(),
+                    abbreviation: "cm".into(),
+                }),
+            };
+            s.active_mut().unwrap().doc.try_resident_mut().unwrap().set_physical_resolution(resolution.clone()).unwrap();
+            let before = doc(&s).clone();
+            let out = layer_document(doc(&s), active(&s).id).unwrap();
+            assert_eq!(out.size, photocraft_doc::Size::new(24, 11), "{mode}/{depth}");
+            assert_eq!(out.effective_resolution(), resolution, "{mode}/{depth}");
+            let native = photocraft_format::save_to_bytes(&out, &Default::default()).unwrap();
+            let back = photocraft_format::load_from_bytes(&native).unwrap();
+            assert_eq!(back.effective_resolution(), resolution, "{mode}/{depth}");
+            assert_eq!(*doc(&s), before, "layer export leaves the original unchanged");
+        }
+    }
+}
+
+#[test]
+fn exported_layer_rejects_invalid_physical_resolution_without_mutation() {
+    let mut s = session(16, "rgb");
+    paint(&mut s, |_, _| [0.3, 0.6, 0.9, 1.0]);
+    let id = active(&s).id;
+    for y_dpi in [0.0, -1.0, f64::INFINITY, f64::NAN] {
+        let document = s.active_mut().unwrap().doc.try_resident_mut().unwrap();
+        document.physical_resolution = Some(photocraft_doc::PhysicalResolution { x_dpi: 144.25, y_dpi, unit: photocraft_doc::PhysicalUnit::Inch });
+        assert!(layer_document(document, id).is_err());
+        assert_eq!(document.physical_resolution.as_ref().unwrap().y_dpi.to_bits(), y_dpi.to_bits());
+    }
+}
+
 fn session(depth: u64, mode: &str) -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 40, "height": 30, "depth": depth, "mode": mode, "background": "transparent"})).unwrap();
@@ -76,7 +119,7 @@ fn mask_apply_from_transparency_hide_selection() {
         assert_eq!(l.mask.as_ref().unwrap().value(30, 5), 1.0);
         assert_eq!(l.surface().unwrap().rgba(30, 5)[3], 1.0);
         // The composite looks the same.
-        let px = photocraft_compose::render(doc(&s), Rect::from_xywh(5, 5, 1, 1)).px[0];
+        let px = photocraft_compose::render(doc(&s), Rect::from_xywh(5, 5, 1, 1)).unwrap().px[0];
         assert_eq!(px[3], 0.0);
         s.execute("edit.undo", json!({})).unwrap();
         assert!(active(&s).mask.is_none());
@@ -146,7 +189,7 @@ fn blending_options_blend_if() {
         let mut s = session(depth, "rgb");
         // Black on the left, white on the right.
         paint(&mut s, |x, _| if x < 20 { [0.0, 0.0, 0.0, 1.0] } else { [1.0; 4] });
-        let at = |s: &Session, x: i32| photocraft_compose::flatten(doc(s)).get(x, 5);
+        let at = |s: &Session, x: i32| photocraft_compose::flatten(doc(s)).unwrap().get(x, 5);
         // Gray › This Layer: black point 50 hides the black half.
         s.execute("layer.layerStyle.blendingOptions", json!({"blendIf": {"channel": "gray", "thisLayer": [50, 255]}})).unwrap();
         assert_eq!(at(&s, 5)[3], 0.0, "depth {depth}");
@@ -238,7 +281,7 @@ fn blending_options_advanced_blending() {
         assert_eq!(l.excluded_channels, 0b010);
         // A deep knockout at fill 0 with no Background reveals transparency where the layer has
         // pixels.
-        let p = photocraft_compose::flatten(doc(&s)).get(5, 5);
+        let p = photocraft_compose::flatten(doc(&s)).unwrap().get(5, 5);
         assert!(p[3] < 2.0 / 255.0, "{depth}: {p:?}");
         // Inspect reports the switches; omitted keys keep their values; one undo step each.
         let info = crate::inspect::layer(active(&s));
@@ -318,7 +361,7 @@ fn create_layer_splits_effects_and_keeps_the_look() {
     s.execute("layer.layerStyle.dropShadow", json!({"blend": "normal", "distance": 4, "size": 2, "opacity": 60})).unwrap();
     s.execute("layer.layerStyle.colorOverlay", json!({"color": "#ff8000", "opacity": 50, "add": true})).unwrap();
     let id = active(&s).id;
-    let before = photocraft_compose::flatten(doc(&s));
+    let before = photocraft_compose::flatten(doc(&s)).unwrap();
     let n0 = doc(&s).layers.len();
     let r = s.execute("layer.layerStyle.createLayer", json!({})).unwrap();
     assert_eq!(r["layers"], json!(2));
@@ -328,7 +371,7 @@ fn create_layer_splits_effects_and_keeps_the_look() {
     assert!(d.layers[i - 1].name.ends_with("Drop Shadow") && !d.layers[i - 1].clipped);
     assert!(d.layers[i + 1].name.ends_with("Color Overlay") && d.layers[i + 1].clipped);
     assert!(d.layers[i].effects.items.is_empty());
-    let after = photocraft_compose::flatten(d);
+    let after = photocraft_compose::flatten(d).unwrap();
     let worst = before.px.iter().zip(&after.px).map(|(a, b)| (0..4).map(|c| (a[c] - b[c]).abs()).fold(0.0, f32::max)).fold(0.0, f32::max);
     assert!(worst < 3.0 / 255.0, "composite changed by {}", worst * 255.0);
     assert!(!s.is_enabled("layer.layerStyle.createLayer"));
@@ -522,7 +565,174 @@ fn load_files_into_stack_as_smart_object_then_median() {
     assert_eq!(doc(&s).layers.len(), 1);
     assert!(matches!(doc(&s).layers[0].content, LayerContent::Smart(_)));
     s.execute("layer.smartObjects.stackMode.median", json!({})).unwrap();
-    let px = photocraft_compose::render(doc(&s), Rect::from_xywh(2, 2, 1, 1)).px[0];
+    let px = photocraft_compose::render(doc(&s), Rect::from_xywh(2, 2, 1, 1)).unwrap().px[0];
     assert!((px[0] - 0.2).abs() < 2.0 / 255.0, "{px:?}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+mod current_profile_export_tests {
+    use crate::Session;
+    use photocraft_cms::{
+        ColorSpace,
+        xcf_color::{Encoding, effective_implicit_profile, effective_profile},
+    };
+    use photocraft_doc::{
+        ColorMode, CustomUnit, Document, Layer, PhysicalResolution, PhysicalUnit, Rect, SampleEncoding, SampleType, Size, WorkingProfileInterpretation,
+    };
+    use serde_json::{Value, json};
+    use std::{error::Error, path::PathBuf};
+    type R<T> = Result<T, Box<dyn Error>>;
+    fn source(depth: SampleType, implicit: bool) -> R<Document> {
+        let mut d = Document::new("Own current export", Size::new(8, 6), ColorMode::Rgb, depth);
+        let icc = effective_profile(None, ColorSpace::Rgb, Encoding::NonlinearProfile)?.to_bytes();
+        effective_implicit_profile(&icc, ColorSpace::Rgb, Encoding::NonlinearProfile)?;
+        d.working_profile_interpretation = if implicit { WorkingProfileInterpretation::implicit_srgb(&icc) } else { WorkingProfileInterpretation::Icc };
+        d.icc_profile = Some(icc);
+        d.sample_encoding = Some(SampleEncoding::NonlinearProfile);
+        d.set_physical_resolution(PhysicalResolution {
+            x_dpi: 144.25,
+            y_dpi: 287.75,
+            unit: PhysicalUnit::Custom(CustomUnit { name: "Own unit".into(), factor: 2.54, digits: 3, symbol: "u".into(), abbreviation: "own".into() }),
+        })?;
+        let mut l = Layer::raster("Own selected", d.pixel_format());
+        l.surface_mut().ok_or("raster")?.fill_rect(Rect::new(1, 2, 5, 5), &[0.02, 0.19, 0.73, 1.0]);
+        d.layers.push(l);
+        d.working_profile_interpretation.validate_with(d.icc_profile.as_deref().map(Vec::as_slice), d.mode)?;
+        Ok(d)
+    }
+    fn state(s: &Session) -> R<Value> {
+        let a = s.active().ok_or("state")?;
+        Ok(
+            json!({"revision":a.revision,"saved":a.saved_revision,"source":format!("{:?}",a.source),"history":a.history.entry_labels().collect::<Vec<_>>(),"redo":a.history.redo_labels().collect::<Vec<_>>()}),
+        )
+    }
+    fn run(depth: SampleType, implicit: bool) -> R<Value> {
+        let d = source(depth, implicit)?;
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../temp/sol3-layer-export-current-marker-repair-20261012/native-tests");
+        std::fs::create_dir_all(&directory)?;
+        let prefix = format!("{depth:?}-{}", if implicit { "implicit" } else { "icc" });
+        let input = directory.join(format!("{prefix}-source.pcraft"));
+        let output = directory.join(format!("{prefix}-export.pcraft"));
+        let original = photocraft_format::save_to_bytes(&d, &Default::default())?;
+        std::fs::write(&input, &original)?;
+        let doc = photocraft_format::load_from_bytes(&original)?;
+        if doc != d {
+            return Err("source native changed".into());
+        }
+        let id = doc.layers.first().ok_or("layer")?.id;
+        let helper = crate::layer_menu_cmds::layer_document(&doc, id)?;
+        let mut s = Session::new();
+        s.add_document(doc, Some(input.to_str().ok_or("source path")?.to_string()))?;
+        s.edit("Actual redo witness", |d, _| {
+            d.name.push_str(" redo");
+            Ok(())
+        })?;
+        s.execute("edit.undo", json!({}))?;
+        let before = s.active().ok_or("source")?.doc.clone();
+        let before_state = state(&s)?;
+        let before_source = s.active().ok_or("source identity")?.source.clone();
+        let before_native = photocraft_format::save_to_bytes(&before, &Default::default())?;
+        let command = s.execute("layer.exportAs", json!({"layer":id.0,"path":output.to_str().ok_or("path")?,"scale":100}))?;
+        let saved = std::fs::read(&output)?;
+        let out = photocraft_format::load_from_bytes(&saved)?;
+        if out.size != helper.size
+            || out.mode != helper.mode
+            || out.depth != helper.depth
+            || out.icc_profile != helper.icc_profile
+            || out.sample_encoding != helper.sample_encoding
+            || out.working_profile_interpretation != helper.working_profile_interpretation
+            || out.physical_resolution != helper.physical_resolution
+        {
+            return Err("registered native output semantic fields differ helper".into());
+        }
+        if out.working_profile_interpretation != before.working_profile_interpretation {
+            return Err(format!(
+                "{depth:?}: registeredexport CURRENT {:?}, expected {:?}",
+                out.working_profile_interpretation, before.working_profile_interpretation
+            )
+            .into());
+        }
+        if out.icc_profile != before.icc_profile
+            || out.sample_encoding != before.sample_encoding
+            || out.source_color_context != before.source_color_context
+            || out.mode != before.mode
+            || out.depth != before.depth
+            || out.physical_resolution != before.physical_resolution
+            || out.resolution_dpi.to_bits() != before.resolution_dpi.to_bits()
+        {
+            return Err("layer export currentcolor/physical metadata changed".into());
+        }
+        let mut refusal_rows = Vec::new();
+        for params in [
+            json!({"layer":u64::MAX,"path":directory.join(format!("{prefix}-bad-layer.pcraft"))}),
+            json!({"layer":id.0}),
+            json!({"layer":id.0,"path":directory.join(format!("{prefix}-refused.xcf"))}),
+        ] {
+            let e = s.execute("layer.exportAs", params.clone()).err().ok_or("expected export refusal")?;
+            refusal_rows.push(json!({"params":params,"error":e.to_string()}));
+        }
+        if !s.active().ok_or("after")?.doc.shares_state(&before)
+            || s.active().ok_or("source identity")?.source != before_source
+            || state(&s)? != before_state
+            || photocraft_format::save_to_bytes(&s.active().ok_or("after")?.doc, &Default::default())? != before_native
+            || std::fs::read(&input)? != original
+        {
+            return Err("export/refusals changed source/native/history/redo".into());
+        }
+        let source_cpu = photocraft_compose::gimp_render::try_render(&before, Rect::new(1, 2, 5, 5), &mut |_| Ok(()))?;
+        let out_cpu = photocraft_compose::gimp_render::try_render(&out, out.bounds(), &mut |_| Ok(()))?;
+        let max = source_cpu.px.iter().zip(&out_cpu.px).flat_map(|(a, b)| a.iter().zip(b).map(|(a, b)| (*a - *b).abs())).fold(0.0_f64, f64::max);
+        let srcpixels = before.layers.first().and_then(|l| l.surface()).ok_or("source surface")?.try_read_interleaved(Rect::new(1, 2, 5, 5))?;
+        let outputpixels = out.layers.first().and_then(|l| l.surface()).ok_or("output surface")?.try_read_interleaved(out.bounds())?;
+        if srcpixels != outputpixels {
+            return Err("neutralRGBnative crop samples changed".into());
+        }
+        let (zip, _) = photocraft_format::PcraftWriter::new().save_zip_stream(
+            &out,
+            &Default::default(),
+            std::io::Cursor::new(Vec::new()),
+            Default::default(),
+            64 << 20,
+            &photocraft_raster::Interrupt::NONE,
+        )?;
+        let zip = zip.into_inner();
+        std::fs::write(directory.join(format!("{prefix}-export-zip64.pcraft")), &zip)?;
+        let reopen =
+            photocraft_format::load_from_stream(std::io::Cursor::new(zip), &Default::default(), Default::default(), &photocraft_raster::Interrupt::NONE)?;
+        if reopen != out {
+            return Err("ZIP64 output changed".into());
+        }
+        Ok(
+            json!({"depth":format!("{depth:?}"),"implicit":implicit,"command":command,"source_marker":before.working_profile_interpretation,"output_marker":out.working_profile_interpretation,"marker_lost":before.working_profile_interpretation!=out.working_profile_interpretation,"ICC_encoding_sourceContext_exact":before.icc_profile==out.icc_profile&&before.sample_encoding==out.sample_encoding&&before.source_color_context==out.source_color_context,"mode_depth_exact":before.mode==out.mode&&before.depth==out.depth,"physical_exact":before.physical_resolution==out.physical_resolution&&before.resolution_dpi.to_bits()==out.resolution_dpi.to_bits(),"out_size":[out.size.width,out.size.height],"CURRENT_checked_CPU_max_absolute":max,"native_crop_words_exact":true,"source_file_snapshot_native_history_actualredo_exact":true,"legacy_andZIP64_output_exact":true,"refusals":refusal_rows}),
+        )
+    }
+
+    #[test]
+    fn registered_layer_export_retains_current_marker_u8() {
+        run(SampleType::U8, true).unwrap();
+    }
+    #[test]
+    fn registered_layer_export_retains_current_marker_u16() {
+        run(SampleType::U16, true).unwrap();
+    }
+    #[test]
+    fn registered_layer_export_retains_current_marker_f32() {
+        run(SampleType::F32, true).unwrap();
+    }
+    #[test]
+    fn registered_layer_export_keeps_ordinary_icc() {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            run(depth, false).unwrap();
+        }
+    }
+    #[test]
+    fn wide_implicit_context_stays_refused() {
+        for depth in [SampleType::U32, SampleType::F64] {
+            let d = source(depth, true).unwrap();
+            let before = photocraft_format::save_to_bytes(&d, &Default::default()).unwrap();
+            let error = crate::layer_menu_cmds::layer_document(&d, d.layers[0].id).unwrap_err().to_string();
+            assert_eq!(error, "wide layer export: unsupported source color context");
+            assert_eq!(photocraft_format::save_to_bytes(&d, &Default::default()).unwrap(), before);
+        }
+    }
 }

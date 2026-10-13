@@ -7,6 +7,7 @@ license.workspace = true
 publish = false
 
 [features]
+web_boot_contract_tests = ["dep:serde_json"]
 # Open HEIC/HEIF photos (the optional photocraft-heif crate). Not default so distributors choose
 # it; official builds (CI, packaging/, release) build with `--features heif`.
 heif = ["photocraft-codecs/heif"]
@@ -23,15 +24,20 @@ photocraft-engine = { workspace = true }
 photocraft-io = { workspace = true }
 photocraft-codecs = { workspace = true }
 photocraft-doc = { workspace = true }
-photocraft-ui-egui = { workspace = true }
+photocraft-ui-egui = { workspace = true, default-features = false }
 egui = { workspace = true }
 log = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+# The ready asset bank supplies all original fonts before the first frame.
+photocraft-ui-egui = { workspace = true, default-features = false, features = ["web_external_assets"] }
+photocraft-text = { workspace = true, features = ["web_external_bundled_fonts"] }
+sha2 = "0.10"
+serde_json = { workspace = true, optional = true }
 # `wgpu` pulls egui-wgpu's defaults: WebGPU plus the WebGL2 fallback.
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit"] }
+eframe = { workspace = true, features = ["wgpu", "accesskit"] }
 rfd = { workspace = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "Storage", "Event", "EventTarget", "MouseEvent", "PointerEvent", "BeforeUnloadEvent", "AbortController", "AbortSignal", "DomException"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "HtmlInputElement", "FileList", "File", "FileReader", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "Storage", "Event", "EventTarget", "MouseEvent", "PointerEvent", "BeforeUnloadEvent", "AbortController", "AbortSignal", "DomException", "Request", "RequestInit", "RequestMode", "RequestCredentials", "RequestRedirect", "RequestCache", "Response", "ReadableStream", "ReadableStreamDefaultReader", "Cache", "CacheStorage", "Performance", "Node", "Headers"] }

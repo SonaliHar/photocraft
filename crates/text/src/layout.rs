@@ -170,11 +170,52 @@ pub struct TextLayout {
     pub styles: Vec<CharStyle>,
     /// Pixels per point used (dpi / 72).
     pub px_per_pt: f32,
+    /// Ephemeral outline scale in text-space axes; None keeps the scalar path exact.
+    /// Positions, line/cluster metrics and decorations already carry this scale.
+    pub physical_scale: Option<[f64; 2]>,
     /// Vertical type: line space is turned 90° clockwise into text space.
     pub vertical: bool,
 }
 
 impl TextLayout {
+    /// Physical pixels per point in document text-space X/Y axes.
+    pub fn px_per_pt_axes(&self) -> [f64; 2] {
+        let scale = self.physical_scale.unwrap_or([1.0, 1.0]);
+        [f64::from(self.px_per_pt) * scale[0], f64::from(self.px_per_pt) * scale[1]]
+    }
+
+    fn apply_physical_axes(&mut self, scale: [f64; 2]) -> Result<(), crate::PhysicalLayoutError> {
+        use crate::physical_layout::bounded;
+        if scale == [1.0, 1.0] {
+            return Ok(());
+        }
+        let along = if self.vertical { scale[1] } else { scale[0] };
+        let cross = if self.vertical { scale[0] } else { scale[1] };
+        for glyph in &mut self.glyphs {
+            glyph.x = bounded(f64::from(glyph.x) * scale[0])?;
+            glyph.y = bounded(f64::from(glyph.y) * scale[1])?;
+        }
+        for decoration in &mut self.decorations {
+            decoration.x0 = bounded(f64::from(decoration.x0) * scale[0])?;
+            decoration.x1 = bounded(f64::from(decoration.x1) * scale[0])?;
+            decoration.y0 = bounded(f64::from(decoration.y0) * scale[1])?;
+            decoration.y1 = bounded(f64::from(decoration.y1) * scale[1])?;
+        }
+        for line in &mut self.lines {
+            line.x0 = bounded(f64::from(line.x0) * along)?;
+            line.x1 = bounded(f64::from(line.x1) * along)?;
+            line.baseline = bounded(f64::from(line.baseline) * cross)?;
+            line.ascent = bounded(f64::from(line.ascent) * cross)?;
+            line.descent = bounded(f64::from(line.descent) * cross)?;
+        }
+        for cluster in &mut self.clusters {
+            cluster.x = bounded(f64::from(cluster.x) * along)?;
+            cluster.advance = bounded(f64::from(cluster.advance) * along)?;
+        }
+        self.physical_scale = Some(scale);
+        Ok(())
+    }
+
     /// Line space → text space: the identity for horizontal type; for vertical type the line
     /// direction points down and the cross-line direction (towards the next line) points left.
     pub fn to_text(&self, x: f32, y: f32) -> (f32, f32) {
@@ -389,6 +430,22 @@ impl Layouter {
     }
 
     pub fn layout(&mut self, fonts: &mut FontDb, t: &TextLayer, dpi: f32) -> TextLayout {
+        self.layout_scalar(fonts, t, dpi, [1.0, 1.0])
+    }
+
+    pub fn layout_with_resolution(
+        &mut self,
+        fonts: &mut FontDb,
+        t: &TextLayer,
+        resolution: &photocraft_doc::PhysicalResolution,
+    ) -> Result<TextLayout, crate::PhysicalLayoutError> {
+        let axes = crate::physical_layout::Axes::checked(t, resolution)?;
+        let mut result = self.layout_scalar(fonts, t, axes.dpi, axes.scale);
+        result.apply_physical_axes(axes.scale)?;
+        Ok(result)
+    }
+
+    fn layout_scalar(&mut self, fonts: &mut FontDb, t: &TextLayer, dpi: f32, physical_scale: [f64; 2]) -> TextLayout {
         let k = if dpi > 0.0 { dpi / 72.0 } else { 1.0 };
         let runs = t.char_runs();
         let paras = t.paragraph_runs();
@@ -429,7 +486,19 @@ impl Layouter {
 
         let text = &t.text;
         let (box_rect, is_box) = match t.shape {
-            TextShape::Box { x, y, width, height } => ((x, y, width, height), true),
+            TextShape::Box { x, y, width, height } => {
+                let rect = if physical_scale == [1.0, 1.0] {
+                    (x, y, width, height)
+                } else {
+                    (
+                        (f64::from(x) / physical_scale[0]) as f32,
+                        (f64::from(y) / physical_scale[1]) as f32,
+                        (f64::from(width) / physical_scale[0]) as f32,
+                        (f64::from(height) / physical_scale[1]) as f32,
+                    )
+                };
+                (rect, true)
+            }
             TextShape::Point => ((0.0, 0.0, 0.0, 0.0), false),
         };
         let mut prev_baseline: Option<f32> = None;

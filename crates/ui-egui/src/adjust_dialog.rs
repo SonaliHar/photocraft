@@ -290,7 +290,7 @@ mod tests {
                 &crate::filter_dialog::params_of(&fields),
                 1,
             );
-            assert!(prev.is_some(), "{kind}: preview");
+            assert!(prev.is_ok(), "{kind}: preview: {prev:?}");
             assert_eq!(harness.state().session.active().unwrap().revision, before, "{kind}: previewing leaves the document alone");
             let r = crate::dialogs::confirm(harness.state_mut(), id);
             assert!(r.is_ok(), "{kind}: {r:?}");
@@ -423,7 +423,7 @@ mod tests {
         harness.state_mut().ui.close_dialog(id);
         harness.run_steps(2);
         let after = harness.state().session.active().unwrap().doc.clone();
-        assert!(std::sync::Arc::ptr_eq(&before, &after));
+        assert!(std::ptr::eq((before).as_ref(), (after).as_ref()));
         assert!(harness.state().ui.dialogs.is_empty());
     }
     #[test]
@@ -449,17 +449,17 @@ mod tests {
             let points = &h.state().ui.dialogs[0].fields["points"];
             assert_eq!(points.as_array().unwrap().len(), 3);
             assert!(points[1][0].as_f64().unwrap() > 150.0 && points[1][1].as_f64().unwrap() > 150.0, "{points}");
-            assert!(std::sync::Arc::ptr_eq(&original, &h.state().session.active().unwrap().doc));
+            assert!(std::ptr::eq((original).as_ref(), (h.state().session.active().unwrap().doc).as_ref()));
             assert_eq!(h.state().session.active().unwrap().history.past_len(), steps);
             if confirm {
                 crate::dialogs::confirm(h.state_mut(), id).unwrap();
                 assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
                 h.state_mut().run("edit.undo", json!({})).unwrap();
-                assert!(std::sync::Arc::ptr_eq(&original, &h.state().session.active().unwrap().doc));
+                assert!(std::ptr::eq((original).as_ref(), (h.state().session.active().unwrap().doc).as_ref()));
             } else {
                 h.state_mut().ui.close_dialog(id);
                 h.run_steps(2);
-                assert!(std::sync::Arc::ptr_eq(&original, &h.state().session.active().unwrap().doc));
+                assert!(std::ptr::eq((original).as_ref(), (h.state().session.active().unwrap().doc).as_ref()));
             }
         }
     }
@@ -483,7 +483,7 @@ mod tests {
         assert!(sample_at(&mut app, 8.0, 8.0));
         assert_eq!(channel_points(&app, "red"), first, "repeated samples resolve from the armed baseline");
         let st = app.session.active().unwrap();
-        assert!(std::sync::Arc::ptr_eq(&st.doc, &original));
+        assert!(std::ptr::eq((st.doc).as_ref(), (original).as_ref()));
         assert_eq!(st.revision, revision);
         assert_eq!(st.history.past_len(), steps);
     }
@@ -543,20 +543,20 @@ mod tests {
             let id = open(&mut app, "image.adjustments.curves").unwrap();
             arm(&mut app, id, "white");
             assert!(sample_at(&mut app, 8.0, 8.0));
-            assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &original));
+            assert!(std::ptr::eq((app.session.active().unwrap().doc).as_ref(), (original).as_ref()));
             assert_eq!(app.session.active().unwrap().history.past_len(), steps);
             if confirm {
                 crate::dialogs::confirm(&mut app, id).unwrap();
                 let committed = app.session.active().unwrap().doc.clone();
-                assert!(!std::sync::Arc::ptr_eq(&committed, &original));
+                assert!(!std::ptr::eq((committed).as_ref(), (original).as_ref()));
                 assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
                 app.run("edit.undo", json!({})).unwrap();
-                assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &original));
+                assert!(std::ptr::eq((app.session.active().unwrap().doc).as_ref(), (original).as_ref()));
                 app.run("edit.redo", json!({})).unwrap();
-                assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &committed));
+                assert!(std::ptr::eq((app.session.active().unwrap().doc).as_ref(), (committed).as_ref()));
             } else {
                 app.ui.close_dialog(id);
-                assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &original));
+                assert!(std::ptr::eq((app.session.active().unwrap().doc).as_ref(), (original).as_ref()));
                 assert_eq!(app.session.active().unwrap().history.past_len(), steps);
             }
         }

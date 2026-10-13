@@ -2225,3 +2225,110 @@ fontWeight	Italic	斜體
 	Rotate View Tool	旋轉檢視工具
 	Reset View	重設檢視
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	繞中心拖曳以旋轉檢視  ·  Shift 限制為 15°
+
+# Imported GIMP text and filter controls
+	Additional filters are available through command inspection	可透過命令資訊使用更多濾鏡
+	Alpha	透明度
+	Alpha threshold	透明度閾值
+	An explicit resolution edit sets both axes.	直接修改解析度會同時設定兩個軸。
+	Apply Text	套用文字
+	Blue frequency	藍色頻率
+	Blue phase shift	藍色相位偏移
+	Blue weight	藍色權重
+	CIE Lab	CIE Lab 色彩空間
+	CIE Yuv	CIE Yuv 色彩空間
+	Changing this imported GIMP mode is not supported yet.	尚未支援變更此匯入的 GIMP 模式。
+	Clip high	截斷高值
+	Clip low	截斷低值
+	Cyan / Red	青色 / 紅色
+	Decrease Levels	減少色階數
+	Desaturate mode	去色模式
+	Filter editing is unavailable	無法編輯濾鏡
+	GIMP Filters	GIMP 濾鏡
+	GIMP Text	GIMP 文字
+	Green frequency	綠色頻率
+	Green phase shift	綠色相位偏移
+	Green weight	綠色權重
+	Histogram channel	直方圖色版
+	Hue frequency	色相頻率
+	Hue phase shift	色相相位偏移
+	Increase Levels	增加色階數
+	Intended temperature	目標色溫
+	Keep blue	保留藍色
+	Keep green	保留綠色
+	Keep hue	保留色相
+	Keep lightness	保留明度
+	Keep red	保留紅色
+	Keep saturation	保留飽和度
+	Layer content is locked	圖層內容已鎖定
+	Letter spacing	字距
+	Lightness frequency	明度頻率
+	Lightness phase shift	明度相位偏移
+	Line spacing	行距
+	Lower limit	下限
+	Luma	亮度訊號
+	Magenta / Green	洋紅 / 綠色
+	Move Down	下移
+	Move Up	上移
+	Native	原生
+	Original temperature	原始色溫
+	Preserve luminosity	保留光度
+	Process in sRGB	在 sRGB 中處理
+	Red frequency	紅色頻率
+	Red phase shift	紅色相位偏移
+	Red weight	紅色權重
+	Remove Filter	移除濾鏡
+	Reset Text	重設文字
+	Saturation colorspace	飽和度色彩空間
+	Saturation frequency	飽和度頻率
+	Saturation phase shift	飽和度相位偏移
+	Strength	強度
+	Text X	文字 X 座標
+	Text Y	文字 Y 座標
+	Text content	文字內容
+	Text editing is unavailable for this layer.	無法編輯此圖層的文字。
+	Upper limit	上限
+	Value	明暗值
+	Yellow / Blue	黃色 / 藍色
+	From color	來源色彩
+	To color	替換色彩
+	Red threshold	紅色臨界值
+	Green threshold	綠色臨界值
+	Blue threshold	藍色臨界值
+	Underlined characters	有底線的字元
+	Start character	起始字元
+	End character (exclusive)	結束字元（不包含）
+	Apply underline	套用底線
+	Clear underline	清除底線
+	Text content editing is unavailable for this layer.	此圖層無法編輯文字內容。
+	Transparency threshold	透明度閾值
+	Opacity threshold	不透明度閾值
+	Component	分量
+	Y'CbCr Y'	Y'CbCr Y'
+	Y'CbCr Cb	Y'CbCr Cb
+	Y'CbCr Cr	Y'CbCr Cr
+
+	Destination start angle	目標起始角度
+
+	Destination end angle	目標結束角度
+	GIMP Linked Image	GIMP 連結影像
+	Original byte identity is unavailable. The selected PNG is a Reduced substitution (8 MiB limit).	無法確認與原始位元組完全一致。所選 PNG 是保真度降低的替代影像（上限 8 MiB）。
+	Replace Linked Image (Reduced)…	取代連結影像（保真度降低）…
+	Resource picker unavailable.	無法使用資源選擇器。
+	The selected PNG must match the retained original byte identity (8 MiB limit). Exact recovery applies to this linked image only.	所選 PNG 必須與保留的原始位元組識別一致（上限 8 MiB）。精確復原僅適用於此連結影像。
+	Recover Linked Image (Exact)…	復原連結影像（精確）…
+	Saved floating attachment	已儲存的浮動附著關係
+	Attachment target	附著目標
+	Detach the saved relationship without changing pixels.	解除已儲存的關係，不變更像素。
+	Detach Floating Layer	解除浮動圖層附著
+	Complete or cancel the pixel-move preview before detaching the saved relationship.	解除已儲存的關係前，請完成或取消像素移動預覽。
+	Saved named item sets	已儲存的具名項目集
+	Only sets containing this layer are shown; saved searches are not evaluated.	僅顯示包含此圖層的項目集；不計算已儲存的搜尋。
+	Rename Saved Item Set…	重新命名已儲存的項目集…
+	Delete Saved Item Set	刪除已儲存的項目集
+	Saved set name	已儲存的項目集名稱
+	Apply Saved Item Set Name	套用已儲存的項目集名稱
+	Enter a replacement name for this long saved name.	請輸入替代名稱以取代此較長的已儲存名稱。
+	Only the first 64 matching sets are shown.	僅顯示前 64 個符合的項目集。
+	Complete or cancel the pixel-move preview before editing saved item sets.	編輯已儲存的項目集前，請完成或取消像素移動預覽。
+	Remove this layer from set	從集合中移除此圖層

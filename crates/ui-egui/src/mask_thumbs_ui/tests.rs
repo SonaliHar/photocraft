@@ -224,12 +224,12 @@ fn layer_thumb_center(h: &Harness<'_, PhotocraftApp>, id: u64) -> Pos2 {
 }
 
 fn mask_view(h: &Harness<'_, PhotocraftApp>) -> serde_json::Value {
-    photocraft_engine::inspect::document(h.state().session.active().unwrap())["layerMaskView"].clone()
+    photocraft_engine::inspect::document(h.state().session.active().unwrap()).unwrap()["layerMaskView"].clone()
 }
 
 fn canvas_px(h: &Harness<'_, PhotocraftApp>) -> Option<Vec<egui::Color32>> {
     let st = h.state().session.active().unwrap();
-    crate::channel_view::render(&st.doc, &st.channel_view, photocraft_geom::Rect::new(0, 0, 200, 100), 1, false)
+    crate::channel_view::render(&st.doc, &st.channel_view, photocraft_geom::Rect::new(0, 0, 200, 100), 1, false).unwrap()
 }
 
 fn near(a: Rect, b: Rect) -> bool {
@@ -262,7 +262,7 @@ fn alt_click_views_the_mask_in_gray_and_the_layer_thumbnail_returns() {
         click_with(&mut h, p, Modifiers::NONE);
         assert_eq!(mask_view(&h), serde_json::Value::Null, "@{ppp}x the layer thumbnail returns");
         assert!(!h.state().ui.mask_target, "and targets the pixels");
-        assert!(std::sync::Arc::ptr_eq(&doc, &h.state().session.active().unwrap().doc), "viewing never touched the document");
+        assert!(std::ptr::eq((doc).as_ref(), (h.state().session.active().unwrap().doc).as_ref()), "viewing never touched the document");
     }
 }
 

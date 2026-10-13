@@ -574,13 +574,33 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
             o.pixel_art_preview = flag_param(p, o.pixel_art_preview);
             Ok(json!(o.pixel_art_preview))
         }
-        "view.twoHundredPercent" | "view.printSize" => {
+        "view.twoHundredPercent" => {
             let i = app.session.active_index().ok_or("no document")?;
-            // Print Size assumes Photoshop's default 72 ppi screen resolution.
-            let dpi = app.session.active().map_or(72.0, |d| d.doc.resolution_dpi.max(1.0));
-            let z = if id == "view.twoHundredPercent" { 2.0 } else { 72.0 / dpi };
-            app.ui.views[i].zoom = z.clamp(0.01, 64.0);
-            Ok(json!({"zoom": app.ui.views[i].zoom}))
+            let view = app.ui.views.get_mut(i).ok_or("missing document view")?;
+            view.zoom = 2.0;
+            Ok(json!({"zoom": view.zoom}))
+        }
+        "view.printSize" => {
+            let i = app.session.active_index().ok_or("no document")?;
+            let view = app.ui.views.get_mut(i).ok_or("missing document view")?;
+            let doc = &app.session.active().ok_or("no document")?.doc;
+            let legacy = photocraft_doc::PhysicalResolution::square(f64::from(doc.resolution_dpi));
+            let resolution = doc.physical_resolution.as_ref().unwrap_or(&legacy);
+            resolution.validate().map_err(|error| format!("invalid Print Size resolution: {error}"))?;
+            if resolution.x_dpi != resolution.y_dpi {
+                return Err("unsupported unequal-axis Print Size view".into());
+            }
+            // Preserve the existing 72 ppi screen convention and 0.01..64 scalar view range.
+            // Compare thresholds first: valid tiny/huge f64 DPI never overflows the ratio or cast.
+            let zoom = if resolution.x_dpi <= 72.0 / 64.0 {
+                64.0
+            } else if resolution.x_dpi >= 72.0 / 0.01 {
+                0.01
+            } else {
+                (72.0 / resolution.x_dpi) as f32
+            };
+            view.zoom = zoom;
+            Ok(json!({"zoom": view.zoom}))
         }
         "view.fitLayersOnScreen" => fit_layers(app),
         "view.fitArtboardOnScreen" => crate::artboard_ui::fit_artboard(app),
@@ -593,8 +613,8 @@ fn fit_layers(app: &mut PhotocraftApp) -> Result<Value, String> {
     let i = app.session.active_index().ok_or("no document")?;
     let st = app.session.active().ok_or("no document")?;
     let mut b = photocraft_geom::Rect::EMPTY;
-    for id in st.selected_layers() {
-        if let Some(r) = st.doc.layer(id).and_then(|l| l.surface()).map(|s| s.content_bounds()) {
+    for id in st.selection_ids() {
+        if let Some(r) = st.doc.layer(*id).and_then(|l| l.surface()).map(|s| s.content_bounds()) {
             b = if b.is_empty() { r } else { b.union(&r) };
         }
     }
@@ -833,6 +853,12 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
     if !no_params(params) {
         return None;
     }
+    if matches!(id, "select.loadSelection" | "select.saveSelection") {
+        return Some(match crate::channel_action_dialog::open(app, id, params) {
+            Some(dialog) => Ok(json!({"dialog":dialog})),
+            None => Err(app.ui.status.clone()),
+        });
+    }
     let doc = app.session.active().map(|d| (d.doc.size.width, d.doc.size.height, d.doc.name.clone()));
     let dir = default_dir(app);
     let label = photocraft_engine::commands::find(id).map_or(id, |c| c.label);
@@ -954,7 +980,7 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
             )
         }
         // Channel workflow dialogs (see channels_panel.rs for the channel references).
-        "select.saveSelection" | "select.loadSelection" | "image.applyImage" | "image.calculations" => {
+        "image.applyImage" | "image.calculations" => {
             let st = app.session.active()?;
             let d = &st.doc;
             let mode = d.pixel_format().mode;
@@ -963,7 +989,6 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
                 chans.extend(photocraft_engine::channel_cmds::color_names(mode).iter().map(|n| n.to_string()));
             }
             chans.extend(d.channels.iter().map(|c| c.name.clone()));
-            let alphas: Vec<String> = std::iter::once("new".to_string()).chain(d.channels.iter().map(|c| c.name.clone())).collect();
             let blends = [
                 "multiply",
                 "screen",
@@ -985,19 +1010,6 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
             let mut load = chans.clone();
             load.extend(["transparency", "mask", "selection"].map(String::from));
             match id {
-                "select.saveSelection" => dialog(
-                    app,
-                    json!({"channel": "new", "name": "", "operation": "new"}),
-                    json!({"channel": alphas, "operation": ["new", "replace", "add", "subtract", "intersect"]}),
-                ),
-                "select.loadSelection" => {
-                    let first = d.channels.first().map_or_else(|| chans[0].clone(), |c| c.name.clone());
-                    dialog(
-                        app,
-                        json!({"channel": first, "invert": false, "operation": "new"}),
-                        json!({"channel": load, "operation": ["new", "add", "subtract", "intersect"]}),
-                    )
-                }
                 "image.applyImage" => {
                     let mut masks = vec!["none".to_string()];
                     masks.extend(load.iter().cloned());

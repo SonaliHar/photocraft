@@ -3272,3 +3272,108 @@ cameraRaw	Roughness	Chropowatość
 	Rotate View Tool	Narzędzie Obróć widok
 	Reset View	Resetuj widok
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Przeciągnij wokół środka, aby obrócić widok  ·  Shift ogranicza do 15°
+
+# Imported GIMP properties and filters
+	Additional filters are available through command inspection	Dodatkowe filtry są dostępne przez przegląd poleceń
+	Alpha threshold	Próg alfa
+	An explicit resolution edit sets both axes.	Jawna zmiana rozdzielczości ustawia obie osie.
+	Apply Text	Zastosuj tekst
+	Blue frequency	Częstotliwość niebieskiego
+	Blue phase shift	Przesunięcie fazy niebieskiego
+	Blue weight	Waga niebieskiego
+	CIE Lab	CIE Lab
+	CIE Yuv	CIE Yuv
+	Changing this imported GIMP mode is not supported yet.	Zmiana tego importowanego trybu GIMP nie jest jeszcze obsługiwana.
+	Clip high	Obetnij wysokie wartości
+	Clip low	Obetnij niskie wartości
+	Cyan / Red	Cyjan / Czerwony
+	Decrease Levels	Zmniejsz liczbę poziomów
+	Desaturate mode	Tryb usuwania nasycenia
+	Filter editing is unavailable	Edycja filtra jest niedostępna
+	GIMP Filters	Filtry GIMP
+	GIMP Text	Tekst GIMP
+	Green frequency	Częstotliwość zielonego
+	Green phase shift	Przesunięcie fazy zielonego
+	Green weight	Waga zielonego
+	Histogram channel	Kanał histogramu
+	Hue frequency	Częstotliwość odcienia
+	Hue phase shift	Przesunięcie fazy odcienia
+	Increase Levels	Zwiększ liczbę poziomów
+	Intended temperature	Docelowa temperatura
+	Keep blue	Zachowaj niebieski
+	Keep green	Zachowaj zielony
+	Keep hue	Zachowaj odcień
+	Keep lightness	Zachowaj jasność
+	Keep red	Zachowaj czerwony
+	Keep saturation	Zachowaj nasycenie
+	Layer content is locked	Zawartość warstwy jest zablokowana
+	Letter spacing	Odstępy między literami
+	Lightness frequency	Częstotliwość jasności
+	Lightness phase shift	Przesunięcie fazy jasności
+	Line spacing	Interlinia
+	Lower limit	Dolna granica
+	Luma	Luma
+	Magenta / Green	Magenta / Zielony
+	Move Down	Przesuń w dół
+	Move Up	Przesuń w górę
+	Native	Natywny
+	Original temperature	Pierwotna temperatura
+	Preserve luminosity	Zachowaj luminancję
+	Process in sRGB	Przetwarzaj w sRGB
+	Red frequency	Częstotliwość czerwonego
+	Red phase shift	Przesunięcie fazy czerwonego
+	Red weight	Waga czerwonego
+	Remove Filter	Usuń filtr
+	Reset Text	Przywróć tekst
+	Saturation colorspace	Przestrzeń barw nasycenia
+	Saturation frequency	Częstotliwość nasycenia
+	Saturation phase shift	Przesunięcie fazy nasycenia
+	Text X	Tekst X
+	Text Y	Tekst Y
+	Text content	Treść tekstu
+	Text editing is unavailable for this layer.	Edycja tekstu jest niedostępna dla tej warstwy.
+	Upper limit	Górna granica
+	Value	Wartość
+	Yellow / Blue	Żółty / Niebieski
+	From color	Kolor źródłowy
+	To color	Kolor zastępujący
+	Red threshold	Próg czerwieni
+	Green threshold	Próg zieleni
+	Blue threshold	Próg niebieskiego
+	Underlined characters	Podkreślone znaki
+	Start character	Znak początkowy
+	End character (exclusive)	Znak końcowy (wyłączny)
+	Apply underline	Zastosuj podkreślenie
+	Clear underline	Usuń podkreślenie
+	Text content editing is unavailable for this layer.	Edycja treści tekstu nie jest dostępna dla tej warstwy.
+	Transparency threshold	Próg przezroczystości
+	Opacity threshold	Próg krycia
+	Component	Składowa
+	Y'CbCr Y'	Y'CbCr Y'
+	Y'CbCr Cb	Y'CbCr Cb
+	Y'CbCr Cr	Y'CbCr Cr
+
+	Destination start angle	Kąt początkowy celu
+
+	Destination end angle	Kąt końcowy celu
+	GIMP Linked Image	Połączony obraz GIMP
+	Original byte identity is unavailable. The selected PNG is a Reduced substitution (8 MiB limit).	Nie można potwierdzić zgodności z oryginalnymi bajtami. Wybrany PNG jest zamiennikiem o obniżonej wierności (limit 8 MiB).
+	Replace Linked Image (Reduced)…	Zastąp połączony obraz (obniżona wierność)…
+	Resource picker unavailable.	Wybór zasobu jest niedostępny.
+	The selected PNG must match the retained original byte identity (8 MiB limit). Exact recovery applies to this linked image only.	Wybrany plik PNG musi odpowiadać zachowanej oryginalnej tożsamości bajtów (limit 8 MiB). Dokładne odzyskanie dotyczy tylko tego połączonego obrazu.
+	Recover Linked Image (Exact)…	Odzyskaj połączony obraz (dokładnie)…
+	Saved floating attachment	Zapisane powiązanie pływające
+	Attachment target	Cel powiązania
+	Detach the saved relationship without changing pixels.	Odłącz zapisane powiązanie bez zmiany pikseli.
+	Detach Floating Layer	Odłącz pływającą warstwę
+	Complete or cancel the pixel-move preview before detaching the saved relationship.	Zakończ lub anuluj podgląd przesuwania pikseli przed odłączeniem zapisanego powiązania.
+	Saved named item sets	Zapisane nazwane zestawy elementów
+	Only sets containing this layer are shown; saved searches are not evaluated.	Wyświetlane są tylko zestawy zawierające tę warstwę; zapisane wyszukiwania nie są wykonywane.
+	Rename Saved Item Set…	Zmień nazwę zapisanego zestawu elementów…
+	Delete Saved Item Set	Usuń zapisany zestaw elementów
+	Saved set name	Nazwa zapisanego zestawu
+	Apply Saved Item Set Name	Zastosuj nazwę zapisanego zestawu elementów
+	Enter a replacement name for this long saved name.	Wprowadź nazwę zastępczą dla tej długiej zapisanej nazwy.
+	Only the first 64 matching sets are shown.	Wyświetlanych jest tylko pierwszych 64 pasujących zestawów.
+	Complete or cancel the pixel-move preview before editing saved item sets.	Zakończ lub anuluj podgląd przesuwania pikseli przed edycją zapisanych zestawów elementów.
+	Remove this layer from set	Usuń tę warstwę z zestawu

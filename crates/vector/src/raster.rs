@@ -12,6 +12,7 @@
 //! from first principles here; it needs no sub-sampling and handles overlapping components
 //! exactly.
 
+mod checked;
 use photocraft_doc::{FillRule, PathOp};
 use photocraft_geom::Rect;
 

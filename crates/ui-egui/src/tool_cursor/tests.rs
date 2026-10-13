@@ -67,9 +67,9 @@ fn unchanged_geometry_reuses_the_os_upload_and_dpi_invalidates_it() {
     let shape = Shape::Circle { radius: 20.0, centre: false };
     let a = cached_image(&ctx, shape, 1.0).unwrap();
     let b = cached_image(&ctx, shape, 1.0).unwrap();
-    assert!(Arc::ptr_eq(&a.rgba, &b.rgba));
+    assert!(std::ptr::eq((a.rgba).as_ref(), (b.rgba).as_ref()));
     let scaled = cached_image(&ctx, shape, 2.0).unwrap();
-    assert!(!Arc::ptr_eq(&a.rgba, &scaled.rgba));
+    assert!(!std::ptr::eq((a.rgba).as_ref(), (scaled.rgba).as_ref()));
     assert!(scaled.size[0] > a.size[0]);
     let larger = cached_image(&ctx, Shape::Circle { radius: 40.0, centre: false }, 2.0).unwrap();
     assert!(larger.size[0] > scaled.size[0]);
@@ -194,7 +194,7 @@ fn brush_hover_uses_an_os_bitmap_that_survives_motion_but_not_tool_or_panel_chan
     h.event(Event::PointerMoved(p + vec2(25.0, 12.0)));
     h.run_steps(2);
     let moved = h.output().platform_output.cursor_image.clone().unwrap();
-    assert!(Arc::ptr_eq(&initial.rgba, &moved.rgba), "moving does not rasterize or re-upload the cursor");
+    assert!(std::ptr::eq((initial.rgba).as_ref(), (moved.rgba).as_ref()), "moving does not rasterize or re-upload the cursor");
 
     h.event(Event::PointerMoved(pos2(20.0, 12.0)));
     h.run_steps(2);

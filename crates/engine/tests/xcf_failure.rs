@@ -13,7 +13,7 @@ fn cancelled_or_failed_background_open_preserves_dirty_session() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width":2,"height":2})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
-    let before = s.active().unwrap().clone();
+    let before = s.active().unwrap().try_clone_resident().unwrap();
     let bytes = xcf::image(13, 150, 0, 1, 1, &[31, 61, 91, 255]);
     let Started::Job(job) = s.start_open("project.xcf", OpenSource::Bytes(Arc::new(bytes))).unwrap() else {
         panic!("expected native job");

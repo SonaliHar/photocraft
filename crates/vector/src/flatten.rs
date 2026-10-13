@@ -30,7 +30,7 @@ impl Polyline {
 }
 
 /// Straight segment: both control points lie on the chord (within 1e-9 px) between its ends.
-fn is_line(seg: &[Point; 4]) -> bool {
+pub(crate) fn is_line(seg: &[Point; 4]) -> bool {
     let [p0, c1, c2, p1] = seg;
     let (dx, dy) = (p1.x - p0.x, p1.y - p0.y);
     let len2 = dx * dx + dy * dy;
@@ -48,7 +48,7 @@ fn is_line(seg: &[Point; 4]) -> bool {
 
 /// Number of uniform pieces so that the chord deviation of the cubic is at most `tol`
 /// (bound `max|B''| / 8n²` with `max|B''| <= 6·max(|p0−2c1+c2|, |c1−2c2+p1|)`).
-fn pieces(seg: &[Point; 4], tol: f64) -> usize {
+pub(crate) fn pieces(seg: &[Point; 4], tol: f64) -> usize {
     let [p0, c1, c2, p1] = seg;
     let d1 = ((p0.x - 2.0 * c1.x + c2.x).powi(2) + (p0.y - 2.0 * c1.y + c2.y).powi(2)).sqrt();
     let d2 = ((c1.x - 2.0 * c2.x + p1.x).powi(2) + (c1.y - 2.0 * c2.y + p1.y).powi(2)).sqrt();
@@ -60,7 +60,7 @@ fn pieces(seg: &[Point; 4], tol: f64) -> usize {
     if n.is_finite() { (n as usize).clamp(1, 1 << 16) } else { 1 }
 }
 
-fn eval(seg: &[Point; 4], t: f64) -> (f64, f64) {
+pub(crate) fn eval(seg: &[Point; 4], t: f64) -> (f64, f64) {
     let [p0, c1, c2, p1] = seg;
     let mt = 1.0 - t;
     let a = mt * mt * mt;

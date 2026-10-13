@@ -10,6 +10,10 @@ use parley::FontContext;
 use parley::fontique::{Blob, Collection, CollectionOptions, FontStyle, GenericFamily, SourceCache};
 use skrifa::raw::FileRef;
 use skrifa::{MetadataProvider, string::StringId};
+#[path = "font_identity.rs"]
+mod font_identity;
+pub use font_identity::{FontByteIdentity, FontIdentityCache, FontIdentityError};
+pub use font_identity::{identify_borrowed as identify_authorized_font_bytes, invalidate_bundled_identity};
 
 /// Family used when a style names no family or an unknown one.
 pub const DEFAULT_FAMILY: &str = "Inter";
@@ -19,11 +23,15 @@ pub const MONO_FAMILY: &str = "JetBrains Mono";
 // The font files are embedded once, here. The UI (`ui-egui` theme) uses these same statics:
 // a second `include_bytes!` of the same file elsewhere put a second 1.5 MB copy into the wasm.
 pub static INTER_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+#[cfg(not(all(target_arch = "wasm32", feature = "web_external_bundled_fonts")))]
 pub static INTER_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/Inter-Medium.ttf");
+#[cfg(not(all(target_arch = "wasm32", feature = "web_external_bundled_fonts")))]
 pub static INTER_SEMIBOLD: &[u8] = include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf");
+#[cfg(not(all(target_arch = "wasm32", feature = "web_external_bundled_fonts")))]
 pub static JETBRAINS_MONO_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf");
 
 /// Fonts shipped with Photocraft (OFL; licences in `assets/fonts`).
+#[cfg(not(all(target_arch = "wasm32", feature = "web_external_bundled_fonts")))]
 pub static BUNDLED: &[(&str, &[u8])] = &[
     ("Inter-Regular.ttf", INTER_REGULAR),
     ("Inter-Medium.ttf", INTER_MEDIUM),
@@ -70,7 +78,8 @@ pub struct ResolvedFont {
     pub family: String,
     pub weight: u16,
     pub italic: bool,
-    /// True when the exact face was found; false for a heuristic family guess.
+    /// True for a PostScript name-table match, false for a heuristic family guess.
+    /// This is not byte-identity evidence or XCF exact-render authorization.
     pub exact: bool,
 }
 
@@ -80,8 +89,10 @@ pub struct FontDb {
     /// PostScript name → (family, weight, italic), filled lazily.
     ps_cache: HashMap<String, Option<ResolvedFont>>,
     fallbacks: Vec<String>,
+    authorized_identities: FontIdentityCache,
 }
 
+#[cfg(not(all(target_arch = "wasm32", feature = "web_external_bundled_fonts")))]
 impl Default for FontDb {
     fn default() -> Self {
         Self::new()
@@ -90,6 +101,7 @@ impl Default for FontDb {
 
 impl FontDb {
     /// Bundled fonts only (deterministic: used by tests and the web build).
+    #[cfg(not(all(target_arch = "wasm32", feature = "web_external_bundled_fonts")))]
     pub fn new() -> Self {
         let collection = Collection::new(CollectionOptions { shared: false, system_fonts: false });
         let mut db = FontDb {
@@ -97,6 +109,7 @@ impl FontDb {
             system_loaded: false,
             ps_cache: HashMap::new(),
             fallbacks: Vec::new(),
+            authorized_identities: FontIdentityCache::default(),
         };
         for (_, bytes) in BUNDLED {
             db.register_font_data(bytes.to_vec());
@@ -111,6 +124,7 @@ impl FontDb {
     }
 
     /// Bundled fonts plus the fonts installed on this machine (no-op on the web).
+    #[cfg(not(all(target_arch = "wasm32", feature = "web_external_bundled_fonts")))]
     pub fn with_system_fonts() -> Self {
         let mut db = Self::new();
         db.load_system_fonts();
@@ -139,6 +153,7 @@ impl FontDb {
                 self.fcx.collection.load_fonts_from_paths([f]);
             }
             self.ps_cache.clear();
+            self.authorized_identities.clear();
             self.refresh_generics();
         }
     }
@@ -149,6 +164,7 @@ impl FontDb {
     }
 
     /// Registers embedded font data without copying it.
+    #[cfg(not(all(target_arch = "wasm32", feature = "web_external_bundled_fonts")))]
     fn register_static_font(&mut self, bytes: &'static [u8]) -> Vec<String> {
         self.register_blob(Blob::new(Arc::new(bytes)))
     }
@@ -168,8 +184,23 @@ impl FontDb {
         // metrics differ from the public family's.
         names.sort_by_key(|n| (is_hidden_family(n), n.to_lowercase()));
         self.ps_cache.clear();
+        self.authorized_identities.clear();
         self.refresh_generics();
         names
+    }
+
+    /// Identity of explicitly supplied immutable bytes only. This never scans
+    /// installed fonts or promotes a name match to qualified source rendering.
+    /// No font is registered and no resource locator is consulted.
+    pub fn identify_authorized_bytes(&mut self, bytes: &Arc<Vec<u8>>, retained_sha256: &[u8; 32], control: &photocraft_raster::Interrupt<'_>) -> Result<FontByteIdentity, FontIdentityError> {
+        self.authorized_identities.identify(bytes, retained_sha256, control)
+    }
+
+    /// Explicit invalidation for caller changes in authorized source identity.
+    /// Font registration/system refresh also clears this database's Weak cache.
+    pub fn invalidate_authorized_identities(&mut self) {
+        self.authorized_identities.clear();
+        invalidate_bundled_identity();
     }
 
     fn refresh_generics(&mut self) {
@@ -444,5 +475,74 @@ mod tests {
         let mut files = Vec::new();
         super::collect_font_files(std::path::Path::new("/nonexistent/photocraft/fonts"), 0, &mut files);
         assert!(files.is_empty());
+    }
+}
+
+#[cfg(any(test, all(target_arch = "wasm32", feature = "web_external_bundled_fonts")))]
+pub use crate::web_boot_fonts::WebCustomFonts;
+#[cfg(any(test, all(target_arch = "wasm32", feature = "web_external_bundled_fonts")))]
+impl FontDb {
+    pub fn try_new(charge: &mut dyn FnMut(u64) -> Result<(), crate::FontBootstrapError>) -> Result<Self, crate::FontBootstrapError> {
+        let ready = crate::web_boot_fonts::ready_refs()?;
+        Self::prepare_from_boot_faces(ready.faces, charge)
+    }
+
+    pub(crate) fn prepare_from_boot_faces(
+        faces: &WebCustomFonts,
+        charge: &mut dyn FnMut(u64) -> Result<(), crate::FontBootstrapError>,
+    ) -> Result<Self, crate::FontBootstrapError> {
+        use crate::{FontBootstrapError as Error, WebCustomFace as Role};
+        charge(0)?;
+        let mut db = Self {
+            fcx: FontContext { collection: Collection::new(CollectionOptions { shared: false, system_fonts: false }), source_cache: SourceCache::default() },
+            system_loaded: false,
+            ps_cache: HashMap::new(),
+            fallbacks: Vec::new(),
+            authorized_identities: FontIdentityCache::default(),
+        };
+        // Keep the original regular-font copy policy; no ExactFont or compose
+        // authority/charge change. The three other copies were charged by faces.
+        charge(u64::try_from(INTER_REGULAR.len()).map_err(|_| Error::Budget)?)?;
+        let mut regular = Vec::new();
+        regular.try_reserve_exact(INTER_REGULAR.len()).map_err(|_| Error::Allocation)?;
+        regular.extend_from_slice(INTER_REGULAR);
+        db.register_font_data(regular);
+        db.require_boot_face(Role::InterRegular)?;
+        for (role, blob) in faces.ordered_blobs() {
+            charge(0)?;
+            db.register_blob(blob);
+            db.require_boot_face(role)?;
+        }
+        // Current wasm craft-fonts input is empty. Keep the existing policy;
+        // any future nonempty input needs explicit accounting rather than silence.
+        #[cfg(all(target_arch = "wasm32", feature = "web_external_bundled_fonts"))]
+        if !crate::craft_fonts::CRAFT_FONTS.is_empty() {
+            return Err(Error::FaceRegistration(Role::InterRegular));
+        }
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_bundled_fonts")))]
+        for font in crate::craft_fonts::CRAFT_FONTS.iter().filter(|font| font.is_japanese()) {
+            db.register_static_font(font.bytes);
+        }
+        db.refresh_generics();
+        charge(0)?;
+        Ok(db)
+    }
+
+    fn require_boot_face(&mut self, role: crate::WebCustomFace) -> Result<(), crate::FontBootstrapError> {
+        use crate::{FontBootstrapError as Error, WebCustomFace as Role};
+        let (family, weight) = match role {
+            Role::InterRegular => (DEFAULT_FAMILY, 400.0),
+            Role::InterMedium => (DEFAULT_FAMILY, 500.0),
+            Role::InterSemiBold => (DEFAULT_FAMILY, 600.0),
+            Role::JetBrainsMono => (MONO_FAMILY, 400.0),
+        };
+        let info = self.fcx.collection.family_by_name(family).ok_or(Error::FaceRegistration(role))?;
+        if !info.fonts().iter().any(|font| {
+            let value = font.weight().value();
+            value.is_finite() && value == weight && font.index() == 0 && matches!(font.style(), FontStyle::Normal)
+        }) {
+            return Err(Error::FaceRegistration(role));
+        }
+        Ok(())
     }
 }

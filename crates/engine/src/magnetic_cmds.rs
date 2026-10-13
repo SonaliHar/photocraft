@@ -6,8 +6,6 @@
 //! `"trace": false`, so an action replays exactly that outline. Given fastening points alone,
 //! `select.magneticLasso` traces the whole border itself, for scripts and agents.
 
-use std::sync::Arc;
-
 use photocraft_algo::magnetic::{self, Settings, Tracer};
 use photocraft_algo::selection as sel;
 use photocraft_doc::{DocId, Document, LayerId};
@@ -27,7 +25,7 @@ const MAX_LENGTH: f64 = 200_000.0;
 /// tool sees only the current layer), else the composite. A snapshot of one document revision,
 /// read lazily and cached while a border is drawn.
 pub struct EdgeSource {
-    doc: Arc<Document>,
+    doc: crate::document_snapshot::DocumentSnapshot,
     layer: Option<LayerId>,
     revision: u64,
     tracer: Tracer,
@@ -57,28 +55,35 @@ impl EdgeSource {
 
     /// Where a fastening point near `p` goes: on the most prominent edge within the detection
     /// width, else at `p` (see [`Tracer::snap`]).
-    pub fn snap(&mut self, p: [f64; 2], s: Settings) -> Option<[f64; 2]> {
+    pub fn snap(&mut self, p: [f64; 2], s: Settings) -> Result<Option<[f64; 2]>> {
         let (doc, layer) = (&self.doc, self.layer);
-        self.tracer.snap(&mut |r| read(doc, layer, r), p, s)
+        Ok(self.tracer.snap(&mut |r| read(doc, layer, r), p, s)?)
     }
 
     /// The border from `from` to `to` along the edges near `guide`, the pointer's path between them
     /// (see [`Tracer::trace`]).
-    pub fn trace(&mut self, from: [f64; 2], to: [f64; 2], guide: &[[f64; 2]], s: Settings) -> Vec<[f64; 2]> {
+    pub fn trace(&mut self, from: [f64; 2], to: [f64; 2], guide: &[[f64; 2]], s: Settings) -> Result<Vec<[f64; 2]>> {
         let (doc, layer) = (&self.doc, self.layer);
-        self.tracer.trace(&mut |r| read(doc, layer, r), from, to, guide, s)
+        Ok(self.tracer.trace(&mut |r| read(doc, layer, r), from, to, guide, s)?)
     }
 }
 
 /// Straight RGBA8 pixels of `r` from the layer, or the composite without one.
-fn read(doc: &Document, layer: Option<LayerId>, r: Rect) -> Vec<[u8; 4]> {
-    match layer.and_then(|id| doc.layer(id)).and_then(|l| l.surface()) {
-        Some(surface) => sel::rgba8_image(surface, r),
+fn read(doc: &Document, layer: Option<LayerId>, r: Rect) -> std::result::Result<Vec<[u8; 4]>, photocraft_raster::RasterInputError> {
+    Ok(match layer.and_then(|id| doc.layer(id)).and_then(|l| l.surface()) {
+        Some(surface) => {
+            surface.try_validate_tile_origins()?;
+            photocraft_raster::checked_region_byte_len(
+                r,
+                photocraft_color::PixelFormat::new(photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8, true),
+            )?;
+            sel::rgba8_image(surface, r)
+        }
         None => {
             let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-            photocraft_compose::render(doc, r).px.iter().map(|p| p.map(q)).collect()
+            photocraft_compose::render(doc, r)?.px.iter().map(|p| p.map(q)).collect()
         }
-    }
+    })
 }
 
 fn bad(msg: impl Into<String>) -> EngineError {
@@ -155,14 +160,14 @@ fn trace_border(src: &mut EdgeSource, pts: &[[f64; 2]], settings: Settings, stra
         return Err(bad(format!("the border is longer than {MAX_LENGTH} px")));
     }
     ring.pop();
-    let anchors: Vec<[f64; 2]> = ring.iter().filter_map(|q| src.snap(*q, settings)).collect();
+    let anchors: Vec<[f64; 2]> = ring.iter().map(|q| src.snap(*q, settings)).collect::<Result<Vec<_>>>()?.into_iter().flatten().collect();
     let Some(&first) = anchors.first() else { return Err(EngineError::Other("the document has no pixels".into())) };
     let mut out = vec![first];
     for w in anchors.windows(2) {
-        out.extend(src.trace(w[0], w[1], &[], settings).into_iter().skip(1));
+        out.extend(src.trace(w[0], w[1], &[], settings)?.into_iter().skip(1));
     }
     if !straight && let Some(&last) = anchors.last() {
-        out.extend(src.trace(last, first, &[], settings).into_iter().skip(1));
+        out.extend(src.trace(last, first, &[], settings)?.into_iter().skip(1));
         // The ring ends where it started.
         out.pop();
     }

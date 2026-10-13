@@ -94,7 +94,7 @@ fn the_frame_loop_keeps_running_during_a_slow_job_and_esc_cancels_it() {
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
     assert!(h.state().session.job(job).is_none());
-    assert!(Arc::ptr_eq(&h.state().session.active().unwrap().doc, &doc_before));
+    assert!(std::ptr::eq((h.state().session.active().unwrap().doc).as_ref(), (doc_before).as_ref()));
     assert!(h.state().ui.status.contains("Cancelled"), "{}", h.state().ui.status);
     assert!(h.query_by_label("Esc to cancel").is_none(), "the dialog closed");
 }

@@ -202,18 +202,18 @@ fn edited_adjustment_regenerates_block_unedited_keeps_raw() {
         let mut t = d.clone();
         t.layers.push(l.clone());
         t
-    });
+    }).unwrap();
     let rec = psd.layers().iter().find(|r| r.name() == "lv").unwrap();
     let mut raw = rec.block(b"levl").unwrap().data.clone();
     raw[2 + 5 * 10 + 1] = 7; // record 5 in_black = 7 (not modelled)
     l.psd_blocks = vec![(*b"levl", Arc::new(raw.clone()))];
     d.layers.push(l);
-    let f = document_to_psd(&d);
+    let f = document_to_psd(&d).unwrap();
     assert_eq!(f.layers().iter().find(|r| r.name() == "lv").unwrap().block(b"levl").unwrap().data, raw, "unchanged: raw kept");
     if let LayerContent::Adjustment(Adjustment::Levels { master, .. }) = &mut d.layers.last_mut().unwrap().content {
         master.in_black = 10.0 / 255.0;
     }
-    let f = document_to_psd(&d);
+    let f = document_to_psd(&d).unwrap();
     let data = &f.layers().iter().find(|r| r.name() == "lv").unwrap().block(b"levl").unwrap().data;
     assert_ne!(data, &raw, "edited: regenerated");
     assert_eq!(data[3], 10);
@@ -310,7 +310,7 @@ fn psd_raw_resources_and_global_blocks_preserved() {
 #[test]
 fn document_to_psd_direct_api() {
     let d = gen_doc(ColorMode::Rgb, SampleType::U8, Features::ALL);
-    let f = document_to_psd(&d);
+    let f = document_to_psd(&d).unwrap();
     assert_eq!(f.header.width, 24);
     let (d2, _warnings) = psd_to_document(&f);
     assert_docs_eq(&d, &d2);
@@ -319,7 +319,7 @@ fn document_to_psd_direct_api() {
 #[test]
 fn big_document_goes_psb_with_warning() {
     let d = photocraft_doc::Document::new("big", photocraft_geom::Size::new(30_001, 1), ColorMode::Grayscale, SampleType::U8);
-    let (f, w) = document_to_psd_with(&d, &PsdExportOptions::default());
+    let (f, w) = document_to_psd_with(&d, &PsdExportOptions::default()).unwrap();
     assert_eq!(f.header.version, photocraft_psd::Version::Psb);
     assert!(w.iter().any(|w| w.contains("PSB")));
 }
@@ -350,7 +350,7 @@ fn effects_roundtrip_typed_and_raw() {
     assert_eq!(fx.items.len(), 3);
     let raw = fx.psd_raw.clone().expect("lfx2 kept");
     // Unchanged → the same lfx2 bytes are written again.
-    let f = document_to_psd(&back);
+    let f = document_to_psd(&back).unwrap();
     let rec = f.layers().iter().find(|r| r.name() == back.layers[1].name).unwrap();
     assert_eq!(rec.block(b"lfx2").unwrap().data, *raw);
     // Edited → regenerated.
@@ -358,7 +358,7 @@ fn effects_roundtrip_typed_and_raw() {
     if let Effect::DropShadow(s) = &mut edited.layers[1].effects.items[0] {
         s.distance = 20.0;
     }
-    let f = document_to_psd(&edited);
+    let f = document_to_psd(&edited).unwrap();
     let rec = f.layers().iter().find(|r| r.name() == back.layers[1].name).unwrap();
     let data = &rec.block(b"lfx2").unwrap().data;
     assert_ne!(data, &*raw);
@@ -375,7 +375,7 @@ fn group_effects_use_lfxs() {
         .effects
         .items
         .push(Effect::ColorOverlay { common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0), color: photocraft_color::Color::rgb(1.0, 0.0, 0.0) });
-    let f = document_to_psd(&d);
+    let f = document_to_psd(&d).unwrap();
     let rec = f.layers().iter().find(|r| r.name() == d.layers[n].name && r.section_type().is_folder()).unwrap();
     assert!(rec.block(b"lfxs").is_some() && rec.block(b"lfx2").is_none());
     let (back, _) = psd_to_document(&f);
@@ -390,7 +390,7 @@ fn clearing_effects_drops_stale_blocks() {
     let back = roundtrip(&d);
     let mut cleared = back.clone();
     cleared.layers[1].effects = Effects { enabled: true, ..Default::default() };
-    let f = document_to_psd(&cleared);
+    let f = document_to_psd(&cleared).unwrap();
     let rec = f.layers().iter().find(|r| r.name() == back.layers[1].name).unwrap();
     assert!(rec.block(b"lfx2").is_none());
 }
@@ -452,7 +452,7 @@ fn channel_restrictions_round_trip_as_brst() {
     a.excluded_channels = 0b110;
     let b = Layer::raster("b", d.pixel_format());
     d.layers = vec![a, b];
-    let f = document_to_psd(&d);
+    let f = document_to_psd(&d).unwrap();
     let rec = f.layers().iter().find(|r| r.name() == "a").unwrap();
     assert_eq!(rec.block(b"brst").unwrap().data, vec![0, 0, 0, 1, 0, 0, 0, 2]);
     assert!(f.layers().iter().find(|r| r.name() == "b").unwrap().block(b"brst").is_none());
@@ -462,7 +462,7 @@ fn channel_restrictions_round_trip_as_brst() {
     // Cleared restrictions drop the preserved block.
     let mut cleared = back.clone();
     cleared.layers[0].excluded_channels = 0;
-    let f = document_to_psd(&cleared);
+    let f = document_to_psd(&cleared).unwrap();
     assert!(f.layers().iter().find(|r| r.name() == "a").unwrap().block(b"brst").is_none());
 }
 
@@ -490,7 +490,7 @@ fn advanced_blending_round_trips_as_tagged_blocks() {
         g.fill_opacity = 128.0 / 255.0;
         let b = Layer::raster("b", d.pixel_format());
         d.layers = vec![a, b, g];
-        let f = document_to_psd(&d);
+        let f = document_to_psd(&d).unwrap();
         let rec = |name: &str| f.layers().iter().find(|r| r.name() == name).unwrap().clone();
         let ra = rec("a");
         for (k, v) in [(b"knko", 2u8), (b"infx", 1), (b"clbl", 0), (b"tsly", 0), (b"lmgm", 1), (b"vmgm", 1)] {
@@ -508,7 +508,7 @@ fn advanced_blending_round_trips_as_tagged_blocks() {
         // Reset to the defaults: the imported blocks stay (in place) with default values.
         let mut reset = back.clone();
         reset.layers[0].advanced = AdvancedBlending::default();
-        let f = document_to_psd(&reset);
+        let f = document_to_psd(&reset).unwrap();
         let ra = f.layers().iter().find(|r| r.name() == "a").unwrap();
         assert_eq!(ra.block(b"knko").unwrap().data, vec![0, 0, 0, 0]);
         assert_eq!(ra.block(b"clbl").unwrap().data, vec![1, 0, 0, 0]);
@@ -532,7 +532,7 @@ fn blend_if_round_trips_as_blending_ranges() {
     g.blend_if.set(1, [BlendRange { black: [1, 2], white: [3, 4] }, BlendRange::FULL]);
     let b = Layer::raster("b", d.pixel_format());
     d.layers = vec![a, b, g];
-    let f = document_to_psd(&d);
+    let f = document_to_psd(&d).unwrap();
     let rec = f.layers().iter().find(|r| r.name() == "a").unwrap();
     let full = [0u8, 0, 255, 255, 0, 0, 255, 255];
     let mut want = Vec::new();

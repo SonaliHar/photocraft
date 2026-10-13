@@ -57,7 +57,7 @@ fn columns_document() -> Document {
 fn setup(h: &mut Harness, zoom: f32) {
     {
         let app = h.state_mut();
-        app.session.add_document(columns_document(), None);
+        app.session.add_document(columns_document(), None).unwrap();
         app.sync_views();
         app.ui.extras.rulers = false;
     }

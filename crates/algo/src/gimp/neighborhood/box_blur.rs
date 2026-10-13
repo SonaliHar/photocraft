@@ -1,0 +1,169 @@
+//! Checked f64 square-neighborhood mean, independently derived from public
+//! GEGL box-blur documentation and original native edge/alpha observations.
+//! Caller supplies linear working-space samples and owns CMS/envelope mapping.
+use super::{GaussianAbyss, GaussianLimits, allocate, poll, read_premultiplied};
+use photocraft_color::try_write_sample_f64;
+use photocraft_geom::Rect;
+use photocraft_raster::{Interrupt, MAX_CHECKED_RASTER_BYTES, RasterInputError, Surface, checked_region_byte_len};
+
+/// Public stock radius domain and independently observed radius-inflated extent.
+pub fn box_blur_extent(input: Rect, radius: u32) -> Result<Rect, RasterInputError> {
+    if radius > 1000 {
+        return Err(RasterInputError::UnsupportedConversion);
+    }
+    if input.is_empty() {
+        return Err(RasterInputError::InvalidBounds);
+    }
+    let r = radius as i32;
+    Ok(Rect::new(
+        input.x0.checked_sub(r).ok_or(RasterInputError::InvalidBounds)?,
+        input.y0.checked_sub(r).ok_or(RasterInputError::InvalidBounds)?,
+        input.x1.checked_add(r).ok_or(RasterInputError::InvalidBounds)?,
+        input.y1.checked_add(r).ok_or(RasterInputError::InvalidBounds)?,
+    ))
+}
+/// Square mean with repeated endpoints (stock Clamp) and premultiplied alpha.
+/// Writes only the requested ROI within the operation's radius-inflated extent.
+/// Scratch is tile-local, all authoritative reads/math remain f64, original/default
+/// bytes stay unchanged, and cancellation abandons the private output.
+pub fn try_box_blur(
+    source: &Surface,
+    output: Rect,
+    input: Rect,
+    radius: u32,
+    limits: GaussianLimits,
+    interrupt: &Interrupt<'_>,
+) -> Result<Surface, RasterInputError> {
+    checked_region_byte_len(input, source.format())?;
+    checked_region_byte_len(output, source.format())?;
+    source.try_validate_tile_origins_with(interrupt)?;
+    let extent = box_blur_extent(input, radius)?;
+    checked_region_byte_len(extent, source.format())?;
+    if output.intersect(&extent) != output {
+        return Err(RasterInputError::InvalidBounds);
+    }
+    if output.is_empty() || radius == 0 {
+        return Ok(source.clone());
+    }
+    let channels = source.channels();
+    let r = radius as usize;
+    let window = r.checked_mul(2).and_then(|v| v.checked_add(1)).ok_or(RasterInputError::LimitExceeded)?;
+    let tile_bytes = (256 * 256 * source.format().bytes_per_pixel()) as u64;
+    let mut new_tiles = 0u64;
+    let mut work = 0u64;
+    let mut max_scratch = 0u64;
+    for (index, tile) in output.tiles().enumerate() {
+        if index.is_multiple_of(256) && interrupt.cancelled() {
+            return Err(RasterInputError::Cancelled);
+        }
+        let part = tile.rect().intersect(&output);
+        if source.tile(tile).is_none() {
+            new_tiles = new_tiles.checked_add(tile_bytes + 64).ok_or(RasterInputError::LimitExceeded)?;
+        }
+        let w = part.width() as u64;
+        let h = (part.height() as u64).checked_add((r as u64) * 2).ok_or(RasterInputError::LimitExceeded)?;
+        let samples = w.checked_mul(h).and_then(|v| v.checked_mul(channels as u64)).ok_or(RasterInputError::LimitExceeded)?;
+        let scratch = samples
+            .checked_mul(8)
+            .and_then(|v| v.checked_add(checked_region_byte_len(part, source.format()).ok()? as u64))
+            .ok_or(RasterInputError::LimitExceeded)?;
+        max_scratch = max_scratch.max(scratch);
+        let units = h
+            .checked_mul(w.checked_mul(4).and_then(|v| v.checked_add(window as u64)).ok_or(RasterInputError::LimitExceeded)?)
+            .and_then(|v| v.checked_mul(channels as u64))
+            .and_then(|v| v.checked_mul(16))
+            .ok_or(RasterInputError::LimitExceeded)?;
+        work = work.checked_add(units).ok_or(RasterInputError::LimitExceeded)?;
+    }
+    let peak = source
+        .resident_payload_bytes()?
+        .checked_mul(2)
+        .and_then(|v| v.checked_add(new_tiles))
+        .and_then(|v| v.checked_add(max_scratch))
+        .and_then(|v| v.checked_add(tile_bytes * 2 + 4096))
+        .and_then(|v| v.checked_add((source.tile_count() as u64) * 128))
+        .ok_or(RasterInputError::LimitExceeded)?;
+    if peak > limits.resident_bytes.min(MAX_CHECKED_RASTER_BYTES) || work > limits.work_units {
+        return Err(RasterInputError::LimitExceeded);
+    }
+    let mut result = source.clone();
+    let mut units = 0;
+    for tile in output.tiles() {
+        let part = tile.rect().intersect(&output);
+        let w = part.width() as usize;
+        let h = part.height() as usize;
+        let rows = h + 2 * r;
+        let mut horizontal = allocate::<f64>(w.checked_mul(rows).and_then(|v| v.checked_mul(channels)).ok_or(RasterInputError::LimitExceeded)?)?;
+        for (row, dest) in horizontal.chunks_exact_mut(w * channels).enumerate() {
+            let y = i64::from(part.y0) + row as i64 - r as i64;
+            let mut sum = [0.; 5];
+            let mut pixel = [0.; 5];
+            for offset in 0..window {
+                poll(&mut units, channels, interrupt)?;
+                read_premultiplied(
+                    source,
+                    input,
+                    GaussianAbyss::Clamp,
+                    i64::from(part.x0) + offset as i64 - r as i64,
+                    y,
+                    pixel.get_mut(..channels).ok_or(RasterInputError::LengthMismatch)?,
+                )?;
+                for (s, v) in sum.iter_mut().zip(pixel.iter()).take(channels) {
+                    *s += v;
+                }
+            }
+            for (x, p) in dest.chunks_exact_mut(channels).enumerate() {
+                poll(&mut units, channels * 4, interrupt)?;
+                for (v, s) in p.iter_mut().zip(&sum) {
+                    *v = *s / window as f64;
+                }
+                if x + 1 < w {
+                    for (sign, xx) in [(-1., i64::from(part.x0) + x as i64 - r as i64), (1., i64::from(part.x0) + x as i64 + r as i64 + 1)] {
+                        read_premultiplied(source, input, GaussianAbyss::Clamp, xx, y, pixel.get_mut(..channels).ok_or(RasterInputError::LengthMismatch)?)?;
+                        for (s, v) in sum.iter_mut().zip(pixel.iter()).take(channels) {
+                            *s += sign * v;
+                        }
+                    }
+                }
+            }
+        }
+        let mut raw = allocate::<u8>(checked_region_byte_len(part, source.format())?)?;
+        for x in 0..w {
+            let mut sum = [0.; 5];
+            for row in 0..window {
+                poll(&mut units, channels, interrupt)?;
+                let sample = horizontal.get((row * w + x) * channels..(row * w + x + 1) * channels).ok_or(RasterInputError::LengthMismatch)?;
+                for (s, v) in sum.iter_mut().zip(sample) {
+                    *s += v;
+                }
+            }
+            for y in 0..h {
+                poll(&mut units, channels * 4, interrupt)?;
+                let alpha = if source.format().alpha { sum.get(channels - 1).copied().ok_or(RasterInputError::LengthMismatch)? / window as f64 } else { 1. };
+                let offset = (y * w + x) * source.format().bytes_per_pixel();
+                let pixel = raw.get_mut(offset..offset + source.format().bytes_per_pixel()).ok_or(RasterInputError::LengthMismatch)?;
+                for (c, s) in sum.iter().take(channels).enumerate() {
+                    let value =
+                        if source.format().alpha && c + 1 < channels { if alpha > 0. { *s / window as f64 / alpha } else { 0. } } else { *s / window as f64 };
+                    if !value.is_finite() {
+                        return Err(RasterInputError::InvalidSample);
+                    }
+                    try_write_sample_f64(pixel, source.format().sample, c, value).map_err(|_| RasterInputError::InvalidSample)?;
+                }
+                if y + 1 < h {
+                    for (sign, row) in [(-1., y), (1., y + window)] {
+                        let sample = horizontal.get((row * w + x) * channels..(row * w + x + 1) * channels).ok_or(RasterInputError::LengthMismatch)?;
+                        for (s, v) in sum.iter_mut().zip(sample) {
+                            *s += sign * v;
+                        }
+                    }
+                }
+            }
+        }
+        result.try_write_interleaved_with(part, &raw, interrupt)?;
+    }
+    if interrupt.cancelled() {
+        return Err(RasterInputError::Cancelled);
+    }
+    Ok(result)
+}

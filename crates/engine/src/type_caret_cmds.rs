@@ -74,10 +74,10 @@ fn frame(doc: &Document, id: LayerId, cmd: &str) -> Result<Frame> {
     let text = t.text.clone();
     let transform = t.transform;
     let ink = t.cache.as_ref().map(|c| c.content_bounds()).filter(|r| !r.is_empty());
-    let dpi = doc.resolution_dpi;
+    let resolution = crate::type_cmds::checked_layout_resolution(doc)?;
     let layout = {
-        let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
-        eng.layout(t, dpi)
+        let mut eng = crate::type_cmds::text_engine()?.lock().unwrap_or_else(|e| e.into_inner());
+        eng.layout_with_resolution(t, &resolution).map_err(|error| EngineError::Other(error.to_string()))?
     };
     Ok(Frame { id, text, transform, ink, layout })
 }
@@ -102,14 +102,17 @@ impl Frame {
 }
 
 /// Topmost visible type layer under the point. `walk` is bottom-up; the Type tool hits the top first.
-fn topmost(doc: &Document, x: f64, y: f64) -> Option<Frame> {
+fn topmost(doc: &Document, x: f64, y: f64) -> Result<Option<Frame>> {
     let mut ids: Vec<LayerId> =
         doc.walk().into_iter().filter(|(_, _, l)| l.visible && matches!(l.content, LayerContent::Text(_))).map(|(_, _, l)| l.id).collect();
     ids.reverse();
-    ids.into_iter().find_map(|id| {
-        let f = frame(doc, id, "type.hitTest").ok()?;
-        f.contains(x, y).then_some(f)
-    })
+    for id in ids {
+        let f = frame(doc, id, "type.hitTest")?;
+        if f.contains(x, y) {
+            return Ok(Some(f));
+        }
+    }
+    Ok(None)
 }
 
 /// Line-space column for a document x. Translate and scale keep that x as the same column on
@@ -139,7 +142,7 @@ fn hit_test(s: &Session, p: &Value) -> Result<Value> {
             let id = v.as_u64().ok_or_else(|| bad(CMD, "`layer` must be a layer id"))?;
             frame(&doc, LayerId(id), CMD)?
         }
-        _ => topmost(&doc, x, y).ok_or_else(|| bad(CMD, "no type layer under the point"))?,
+        _ => topmost(&doc, x, y)?.ok_or_else(|| bad(CMD, "no type layer under the point"))?,
     };
     let (tx, ty) = to_text(frame.transform, x, y);
     let (index, line) = photocraft_text::hit_char(&frame.layout, &frame.text, tx, ty);
@@ -236,6 +239,95 @@ mod tests {
 
     fn create(s: &mut Session, p: Value) -> u64 {
         s.execute("type.create", p).unwrap()["layer"].as_u64().unwrap()
+    }
+
+    #[test]
+    fn physical_selected_caret_uses_square_authority_without_query_mutation() {
+        let mut s = session();
+        let id = create(&mut s, json!({"text":"AV","size":24,"x":30,"y":60}));
+        s.edit("Physical square source", |doc, _| {
+            doc.physical_resolution = Some(photocraft_doc::PhysicalResolution::square(144.0));
+            doc.resolution_dpi = 72.0;
+            Ok(())
+        })
+        .unwrap();
+        let source = s.active().unwrap().doc.clone();
+        let layer = source.layer(LayerId(id)).unwrap();
+        let LayerContent::Text(t) = &layer.content else { panic!("fixture must be type") };
+        let layout = crate::type_cmds::text_engine().unwrap().lock().unwrap_or_else(|error| error.into_inner()).layout(t, 144.0);
+        let expected = layout.caret_segment(1).map(|(x, y)| {
+            let p = t.transform.apply(Point::new(f64::from(x), f64::from(y)));
+            [p.x, p.y]
+        });
+        let revision = s.active().unwrap().revision;
+        let history = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>();
+        let result = s.execute("type.caret", json!({"index":1})).unwrap();
+        assert_eq!(result["segment"], json!(expected), "selected caret silently used legacy72 instead of physical144");
+        assert_eq!(s.active().unwrap().doc, source);
+        assert_eq!(s.active().unwrap().revision, revision);
+        assert_eq!(s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>(), history);
+        let miss = s.execute("type.hitTest", json!({"x":-500,"y":-500})).unwrap_err();
+        assert!(miss.to_string().contains("no type layer under the point"));
+    }
+
+    #[test]
+    fn physical_invalid_queries_keep_errors_and_source_unchanged() {
+        for (x, y) in [(0.0, 144.0), (144.0, 0.0), (f64::INFINITY, 144.0), (144.0, -72.0)] {
+            let mut s = session();
+            let id = create(&mut s, json!({"text":"AV","size":24,"x":30,"y":60}));
+            s.edit("Query redo witness", |doc, _| {
+                doc.name.push_str(" redo");
+                Ok(())
+            })
+            .unwrap();
+            s.execute("edit.undo", json!({})).unwrap();
+            s.active_mut().unwrap().doc.try_resident_mut().unwrap().physical_resolution =
+                Some(photocraft_doc::PhysicalResolution { x_dpi: x, y_dpi: y, unit: photocraft_doc::PhysicalUnit::Inch });
+            let source = s.active().unwrap().doc.clone();
+            let revision = s.active().unwrap().revision;
+            let redo = s.active().unwrap().history.redo_labels().map(str::to_owned).collect::<Vec<_>>();
+            for (command, params) in [
+                ("type.caret", json!({"index":1})),
+                ("type.navigate", json!({"index":1,"move":"end"})),
+                ("type.hitTest", json!({"layer":id,"x":35,"y":50})),
+                ("type.hitTest", json!({"x":35,"y":50})),
+            ] {
+                let result = s.execute(command, params);
+                assert!(result.is_err(), "{command} supplied bogus physical metrics for {x}/{y}");
+                let error = result.unwrap_err().to_string();
+                assert!(!error.contains("no type layer under the point"), "topmost swallowed physical error: {error}");
+                assert_eq!(s.active().unwrap().doc, source);
+                assert_eq!(s.active().unwrap().revision, revision);
+                assert_eq!(s.active().unwrap().history.redo_labels().map(str::to_owned).collect::<Vec<_>>(), redo);
+            }
+        }
+    }
+
+    #[test]
+    fn physical_unequal_caret_uses_both_axes_without_query_history_changes() {
+        for (x, y) in [(144.0, 72.0), (72.0, 144.0)] {
+            let mut s = session();
+            let id = create(&mut s, json!({"text":"AV","size":24,"x":30,"y":60}));
+            s.edit("Query redo witness", |doc, _| { doc.name.push_str(" redo"); Ok(()) }).unwrap();
+            s.execute("edit.undo", json!({})).unwrap();
+            s.active_mut().unwrap().doc.try_resident_mut().unwrap().physical_resolution =
+                Some(photocraft_doc::PhysicalResolution { x_dpi: x, y_dpi: y, unit: photocraft_doc::PhysicalUnit::Inch });
+            let source = s.active().unwrap().doc.clone();
+            let LayerContent::Text(t) = &source.layer(LayerId(id)).unwrap().content else { panic!("fixture must be type") };
+            let base = crate::type_cmds::text_engine().unwrap().lock().unwrap_or_else(|error| error.into_inner()).layout(t, y as f32);
+            let expected = base.caret_segment(1).map(|(cx, cy)| {
+                let p = t.transform.apply(Point::new(f64::from(cx) * x / y, f64::from(cy)));
+                [p.x, p.y]
+            });
+            let revision = s.active().unwrap().revision;
+            let redo = s.active().unwrap().history.redo_labels().map(str::to_owned).collect::<Vec<_>>();
+            let result = s.execute("type.caret", json!({"layer":id,"index":1})).unwrap();
+            assert_eq!(result["segment"], json!(expected));
+            assert_eq!(s.execute("type.navigate", json!({"layer":id,"index":1,"move":"end"})).unwrap()["index"], 2);
+            assert_eq!(s.active().unwrap().doc, source);
+            assert_eq!(s.active().unwrap().revision, revision);
+            assert_eq!(s.active().unwrap().history.redo_labels().map(str::to_owned).collect::<Vec<_>>(), redo);
+        }
     }
 
     fn u(v: &Value, k: &str) -> u64 {
@@ -363,13 +455,13 @@ mod tests {
         assert_eq!(go(&mut s, id, start1 as usize, "linePrev", Some(x)), lines[0]["start"].as_u64().unwrap());
 
         // Queries do not record history or a journal entry.
-        let steps = s.active().unwrap().history.entries().len();
+        let steps = s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len();
         let rev = s.active().unwrap().revision;
         let journal = s.journal.len();
         s.execute("type.hitTest", json!({"layer": id, "x": x, "y": caret0["segment"][0][1]})).unwrap();
         s.execute("type.caret", json!({"layer": id, "index": 1})).unwrap();
         s.execute("type.navigate", json!({"layer": id, "index": 0, "move": "end"})).unwrap();
-        assert_eq!(s.active().unwrap().history.entries().len(), steps);
+        assert_eq!(s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len(), steps);
         assert_eq!(s.active().unwrap().revision, rev);
         assert_eq!(s.journal.len(), journal);
     }

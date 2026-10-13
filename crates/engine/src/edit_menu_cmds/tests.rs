@@ -121,7 +121,7 @@ fn content_aware_fill_huge_area_neither_panics_nor_wraps() {
 fn huge_selection(size: (u32, u32), rects: &[Rect]) -> Session {
     let mut s = blob_session(8);
     let st = s.active_mut().unwrap();
-    let doc = std::sync::Arc::make_mut(&mut st.doc);
+    let doc = st.doc.try_resident_mut().unwrap();
     doc.size = photocraft_geom::Size::new(size.0, size.1);
     let mut sel = Surface::new(PixelFormat::GRAY8);
     for r in rects {
@@ -166,7 +166,7 @@ fn content_aware_fill_huge_window_is_an_error() {
         let err = s.execute("edit.contentAwareFill", p).expect_err(name).to_string();
         assert!(err.contains("too large for Content-Aware fill"), "{name}: {err}");
         let st = s.active().unwrap();
-        assert!(std::sync::Arc::ptr_eq(&before, &st.doc), "{name}: the document changed");
+        assert!(before.shares_state(&st.doc), "{name}: the document changed");
         assert_eq!(st.history.past_len(), past, "{name}: a history step was recorded");
     }
     // Control: an ordinary selection still fills.
@@ -408,7 +408,7 @@ fn find_in_the_active_layer_finds_nothing_when_it_is_not_type() {
     let mut s = session(8);
     let id = s.execute("type.create", json!({"text": "abc def", "x": 2, "y": 12})).unwrap()["layer"].as_u64().unwrap();
     s.execute("layer.new.layer", json!({"name": "raster"})).unwrap();
-    let steps = s.active().unwrap().history.entries().len();
+    let steps = s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len();
     for action in ["find", "change", "changeFind"] {
         for forward in [true, false] {
             let r =
@@ -418,7 +418,7 @@ fn find_in_the_active_layer_finds_nothing_when_it_is_not_type() {
     }
     let r = s.execute("edit.findAndReplaceText", json!({"find": "abc", "replace": "x", "allLayers": false})).unwrap();
     assert_eq!(r["count"].as_u64(), Some(0));
-    assert_eq!(s.active().unwrap().history.entries().len(), steps);
+    assert_eq!(s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len(), steps);
     // With the type layer active, the same search finds it.
     s.execute("layer.select", json!({"layer": id})).unwrap();
     let r = s.execute("edit.findAndReplaceText", json!({"find": "abc", "allLayers": false, "action": "find"})).unwrap();

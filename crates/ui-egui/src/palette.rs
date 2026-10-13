@@ -85,7 +85,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     ui.add_space(6.0);
                     crate::widgets::hairline(ui);
                     ui.add_space(6.0);
-                    let lang = crate::i18n::Lang::from_pref(&app.session.prefs().interface.language);
+                    let lang = match crate::i18n::Lang::try_from_pref(&app.session.prefs().interface.language) {
+                        Ok(lang) => lang,
+                        Err(error) => {
+                            app.ui.status = error.to_string();
+                            app.ui.status_error = true;
+                            return;
+                        }
+                    };
                     let mut hits: Vec<(i32, String, String, Option<String>, bool)> = crate::menus::menu_items(app)
                         .into_iter()
                         .filter_map(|m| {

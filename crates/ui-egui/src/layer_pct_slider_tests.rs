@@ -26,7 +26,7 @@ fn layer(h: &Harness<'_, PhotocraftApp>) -> photocraft_doc::Layer {
 }
 
 fn steps(h: &Harness<'_, PhotocraftApp>) -> usize {
-    h.state().session.active().unwrap().history.entries().len()
+    h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len()
 }
 
 fn by_role(h: &Harness<'_, PhotocraftApp>, name: &str, role: Role) -> Option<Rect> {

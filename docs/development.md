@@ -350,7 +350,7 @@ against committed **sha256 manifests**. All pins are in one place:
 
 | Directory | What | Source | Manifest |
 |---|---|---|---|
-| `corpus/photoshop/` | 256 PSDs we authored with Photoshop: smart filters, layer-style effect shapes, the text engine, adjustments in every mode and depth | https://github.com/storytold/photocraft-corpus (ours, MIT OR Apache-2.0) | `xtask/photoshop-corpus.sha256` |
+| `corpus/photoshop/` | 256 PSDs we authored with Photoshop: smart filters, layer-style effect shapes, the text engine, adjustments in every mode and depth | https://github.com/Terra854/photocraft-corpus (ours, MIT OR Apache-2.0) | `xtask/photoshop-corpus.sha256` |
 | `corpus/psd/` | 170 small psd-tools and ag-psd files, the mix most PSD tests use | psd-tools and ag-psd upstreams (MIT) | `xtask/psd-corpus.sha256` |
 | `corpus/psd-tools/` | the complete psd-tools test set (309 files) | psd-tools upstream (MIT) | `xtask/psd-tools-corpus.sha256` |
 | `corpus/heif/` | 9 small HEIC/HEIF files (checkerboards, RGB strips, a grid-tiled photo with EXIF/XMP, each with Apple's decode as `.ref.png`; a 10-bit RGBA file with its source PNG), for the `heif` feature | heic-rs (MIT OR Apache-2.0) and pillow-heif (BSD-3-Clause) upstreams | `xtask/heif-corpus.sha256` |
@@ -382,9 +382,9 @@ scripts/fetch-corpus.sh            # the same as cargo xtask corpus --all
   the manifests. A download happens only when a pin changes; otherwise the cache restores in seconds
   and is re-verified (sha256) before the tests run. Fork PRs read the base branch's cache.
 
-**Our own corpus: [photocraft-corpus](https://github.com/storytold/photocraft-corpus).**
+**Our own corpus: [photocraft-corpus](https://github.com/Terra854/photocraft-corpus).**
 
-- **Authoring clone:** a normal git clone, `git clone git@github.com:storytold/photocraft-corpus.git`,
+- **Authoring clone:** a normal git clone, `git clone git@github.com:Terra854/photocraft-corpus.git`,
   placed next to this checkout (`../photocraft-corpus`). Its generators write there, and you commit
   and push there.
 - **Consuming copy:** `corpus/photoshop/` here. It is a plain directory: the pinned snapshot

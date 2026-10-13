@@ -16,12 +16,16 @@
 //! Every edit re-renders the shape layer's cache with `photocraft-vector` in one undoable step.
 //! PSD blocks stay byte-identical while they still decode to the model (see `photocraft-io`).
 
-use photocraft_algo::selection::{self as sel, SelectionMode};
-use photocraft_color::{BlendMode, Color};
+use photocraft_algo::selection as sel;
+use photocraft_color::Color;
+#[cfg(test)]
+use photocraft_color::BlendMode;
 use photocraft_doc::{
-    ClippingPath, Document, Fill, FillRule, GradientStyle, Knot, Layer, LayerContent, LayerId, LineCap, LineJoin, LiveShape, NamedPath, Path, PathOp,
-    ShapeLayer, ShapeStroke, StrokeAlign, Subpath, VectorMask,
+    Document, Fill, FillRule, GradientStyle, Layer, LayerContent, LayerId, LineCap, LineJoin, LiveShape, Path, PathOp,
+    ShapeLayer, ShapeStroke, StrokeAlign, VectorMask,
 };
+#[cfg(test)]
+use photocraft_doc::NamedPath;
 use photocraft_geom::{Affine, Point, Rect};
 use photocraft_vector as vector;
 use serde_json::{Value, json};
@@ -110,8 +114,21 @@ fn paste_shape_stroke(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub(crate) fn layer_id(s: &Session, p: &Value) -> Result<LayerId> {
-    match p.get("layer").and_then(Value::as_u64) {
-        Some(id) => Ok(LayerId(id)),
+    match p.get("layer") {
+        Some(value) => {
+            let id = match value {
+                Value::Number(number) => number.as_u64(),
+                Value::String(text)
+                    if !text.is_empty() && text.len() <= 20 && !text.starts_with('0') && text.bytes().all(|byte| byte.is_ascii_digit()) =>
+                {
+                    text.parse::<u64>().ok()
+                }
+                _ => None,
+            };
+            id.filter(|id| *id != 0)
+                .map(LayerId)
+                .ok_or_else(|| bad("vector", "layer must be a nonzero canonical decimal string or unsigned integer"))
+        }
         None => s.active().and_then(|d| d.active_layer).ok_or(EngineError::Other("no active layer".into())),
     }
 }
@@ -194,40 +211,17 @@ fn op_name(op: PathOp) -> &'static str {
     }
 }
 
-/// Parses a path from the compact JSON form (or the serde form).
+#[path = "vector_path_input.rs"]
+mod path_input;
+
+/// Borrowed path admission before dispatcher parameter copying or path allocation.
+pub fn preflight_path_value(v: &Value) -> std::result::Result<(), String> {
+    path_input::preflight(v)
+}
+
+/// Parses bounded compact or serde paths using fallible owned vectors.
 pub fn parse_path(v: &Value) -> std::result::Result<Path, String> {
-    let subs = v.get("subpaths").and_then(Value::as_array).ok_or("path needs `subpaths`")?;
-    let mut out = Vec::with_capacity(subs.len());
-    for (i, s) in subs.iter().enumerate() {
-        let knots_v = s.get("knots").and_then(Value::as_array).ok_or(format!("subpath {i} needs `knots`"))?;
-        let mut knots = Vec::with_capacity(knots_v.len());
-        for (j, k) in knots_v.iter().enumerate() {
-            let knot = if k.is_array() {
-                let a = pt(k).ok_or(format!("knot {i}.{j}: expected [x, y]"))?;
-                Knot::corner(a.x, a.y)
-            } else {
-                let a = k.get("anchor").and_then(pt).ok_or(format!("knot {i}.{j}: missing anchor"))?;
-                let get = |keys: &[&str]| keys.iter().find_map(|key| k.get(*key).and_then(pt));
-                Knot {
-                    anchor: a,
-                    in_ctrl: get(&["in", "inCtrl", "in_ctrl"]).unwrap_or(a),
-                    out_ctrl: get(&["out", "outCtrl", "out_ctrl"]).unwrap_or(a),
-                    smooth: k.get("smooth").and_then(Value::as_bool).unwrap_or(false),
-                }
-            };
-            knots.push(knot);
-        }
-        let op = match s.get("op").and_then(Value::as_str) {
-            Some(o) => op_from(o).ok_or(format!("subpath {i}: unknown op `{o}`"))?,
-            None => PathOp::Combine,
-        };
-        out.push(Subpath { closed: s.get("closed").and_then(Value::as_bool).unwrap_or(true), knots, op });
-    }
-    let fill_rule = match v.get("fillRule").or_else(|| v.get("fill_rule")).and_then(Value::as_str).map(str::to_ascii_lowercase).as_deref() {
-        Some("evenodd" | "even-odd" | "even_odd") => FillRule::EvenOdd,
-        _ => FillRule::NonZero,
-    };
-    Ok(Path { subpaths: out, fill_rule, inverted: v.get("inverted").and_then(Value::as_bool).unwrap_or(false) })
+    path_input::decode(v)
 }
 
 /// The compact JSON form of a path.
@@ -662,7 +656,11 @@ fn shape_rasterize(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let fmt = snapshot.pixel_format();
         let surface = sh.cache.take().unwrap_or_else(|| photocraft_raster::Surface::new(fmt));
-        let surface = if surface.format() == fmt { surface } else { surface.convert(fmt) };
+        let surface = if surface.format() == fmt {
+            surface
+        } else {
+            surface.try_convert(fmt).map_err(|e| crate::EngineError::Other(format!("pixel conversion: {e}")))?
+        };
         l.content = LayerContent::Raster(surface);
         l.psd_blocks.retain(|(k, _)| !SHAPE_BLOCKS.contains(&k));
         Ok(())
@@ -700,6 +698,36 @@ fn resolve_path(s: &Session, name: Option<&str>) -> Result<Path> {
     d.doc.paths.iter().find(|p| p.name == n).map(|p| p.path.clone()).ok_or_else(|| EngineError::Other(format!("no path named \"{n}\"")))
 }
 
+pub(crate) fn saved_path_id(params: &Value) -> Result<Option<photocraft_doc::item_identity::PathId>> {
+    params
+        .get("pathId")
+        .map(|value| {
+            let id = match value {
+                Value::String(text) if !text.is_empty() && text.len() <= 20 && !text.starts_with('0') && text.bytes().all(|byte| byte.is_ascii_digit()) => text.parse::<u64>().ok(),
+                Value::Number(number) => number.as_u64(),
+                _ => None,
+            };
+            id.filter(|id| *id != 0)
+                .map(photocraft_doc::item_identity::PathId)
+                .ok_or_else(|| bad("path", "pathId must be a nonzero canonical decimal string or unsigned integer"))
+        })
+        .transpose()
+}
+fn resolve_path_params(s: &Session, params: &Value) -> Result<Path> {
+    if let Some(id) = saved_path_id(params)? {
+        return s
+            .active()
+            .ok_or(EngineError::NoDocument)?
+            .doc
+            .paths
+            .iter()
+            .find(|path| path.id == id)
+            .map(|path| path.path.clone())
+            .ok_or_else(|| bad("path", "no saved path with pathId"));
+    }
+    resolve_path(s, params.get("name").and_then(Value::as_str))
+}
+
 /// The path an edit targets, except a shape layer's (edit those with [`with_shape`], which
 /// re-renders them): `layer`'s vector mask when given, else the work path or a saved path.
 pub(crate) fn path_mut<'a>(doc: &'a mut Document, name: &str, layer: Option<LayerId>) -> Result<&'a mut Path> {
@@ -724,260 +752,93 @@ fn paths_list(s: &Session) -> Result<Value> {
         }
     });
     Ok(json!({
-        "paths": doc.paths.iter().map(|p| json!({ "name": p.name, "knots": knots(&p.path), "subpaths": p.path.subpaths.len() })).collect::<Vec<_>>(),
+        "paths": doc.paths.iter().map(|p| json!({ "pathId": p.id.0, "pathIdString": p.id.0.to_string(), "name": p.name, "knots": knots(&p.path), "subpaths": p.path.subpaths.len() })).collect::<Vec<_>>(),
         "workPath": doc.work_path.as_ref().map(|p| json!({ "knots": knots(p), "subpaths": p.subpaths.len() })),
         "clippingPath": doc.clipping_path.as_ref().map(|c| json!({ "name": c.name, "flatness": c.flatness })),
         "layerPath": layer,
     }))
 }
 
+mod path_storage_controlled;
+
+pub(crate) fn path_storage_dispatch_preflight(s: &Session, command: &str, p: &Value, background: bool) -> Result<()> {
+    path_storage_controlled::dispatch_preflight(s, command, p, background)
+}
+
 fn path_set(s: &mut Session, p: &Value) -> Result<Value> {
-    const CMD: &str = "path.set";
-    let path = parse_path(p.get("path").ok_or_else(|| bad(CMD, "missing `path`"))?).map_err(|e| bad(CMD, e))?;
-    let name = p.get("name").and_then(Value::as_str).map(str::to_string);
-    let append = p.get("op").and_then(Value::as_str).map(|o| op_from(o).ok_or_else(|| bad(CMD, format!("unknown op `{o}`")))).transpose()?;
-    s.edit(if is_work(name.as_deref()) { "Work Path" } else { "Save Path" }, |doc, _| {
-        let merge = |old: Option<&Path>, new: Path| match (old, append) {
-            (Some(o), Some(op)) => {
-                let mut o = o.clone();
-                o.subpaths.extend(new.subpaths.into_iter().map(|mut sp| {
-                    sp.op = op;
-                    sp
-                }));
-                o
-            }
-            _ => new,
-        };
-        if is_work(name.as_deref()) {
-            doc.work_path = Some(merge(doc.work_path.as_ref(), path));
-        } else {
-            let n = name.clone().unwrap_or_default();
-            match doc.paths.iter_mut().find(|q| q.name == n) {
-                Some(q) => {
-                    q.path = merge(Some(&q.path), path);
-                }
-                None => doc.paths.push(NamedPath { name: n, path, psd_raw: None }),
-            }
-        }
-        Ok(())
-    })?;
-    let path = resolve_path(s, name.as_deref())?;
-    Ok(json!({ "name": name.unwrap_or_else(|| "work".into()), "path": path_json(&path) }))
+    path_storage_controlled::run(s, "path.set", p)
 }
 
 fn path_delete(s: &mut Session, p: &Value) -> Result<Value> {
-    let name = p.get("name").and_then(Value::as_str).map(str::to_string);
-    s.edit("Delete Path", |doc, _| {
-        if is_work(name.as_deref()) {
-            return doc.work_path.take().map(|_| ()).ok_or_else(|| EngineError::Other("no work path".into()));
-        }
-        let n = name.clone().unwrap_or_default();
-        let before = doc.paths.len();
-        doc.paths.retain(|q| q.name != n);
-        if doc.paths.len() == before {
-            return Err(EngineError::Other(format!("no path named \"{n}\"")));
-        }
-        if doc.clipping_path.as_ref().is_some_and(|c| c.name == n) {
-            doc.clipping_path = None;
-        }
-        Ok(())
-    })?;
-    Ok(Value::Null)
+    path_storage_controlled::run(s, "path.delete", p)
+}
+
+mod clipping_controlled;
+
+pub(crate) fn clipping_dispatch_preflight(s: &Session, command: &str, p: &Value, background: bool) -> Result<()> {
+    clipping_controlled::dispatch_preflight(s, command, p, background)
 }
 
 fn clipping_path_set(s: &mut Session, p: &Value) -> Result<Value> {
-    const CMD: &str = "path.clippingPath.set";
-    let name = p.get("name").and_then(Value::as_str).filter(|name| !name.is_empty()).ok_or_else(|| bad(CMD, "missing saved path `name`"))?.to_owned();
-    let flatness = match p.get("flatness") {
-        Some(value) => {
-            value.as_f64().filter(|value| value.is_finite() && (0.0..=100.0).contains(value)).ok_or_else(|| bad(CMD, "`flatness` must be between 0 and 100"))?
-                as f32
-        }
-        None => 0.0,
-    };
-    s.edit("Clipping Path", |doc, _| {
-        if !doc.paths.iter().any(|path| path.name == name) {
-            return Err(EngineError::Other(format!("no saved path named \"{name}\"")));
-        }
-        doc.clipping_path = Some(ClippingPath { name: name.clone(), flatness });
-        Ok(())
-    })?;
-    Ok(json!({ "name": name, "flatness": flatness }))
+    clipping_controlled::run(s, "path.clippingPath.set", p)
 }
 
-fn clipping_path_clear(s: &mut Session, _p: &Value) -> Result<Value> {
-    s.edit("Clear Clipping Path", |doc, _| {
-        doc.clipping_path.take().ok_or_else(|| EngineError::Other("no clipping path".into()))?;
-        Ok(())
-    })?;
-    Ok(Value::Null)
+fn clipping_path_clear(s: &mut Session, p: &Value) -> Result<Value> {
+    clipping_controlled::run(s, "path.clippingPath.clear", p)
+}
+
+mod path_transform_controlled;
+
+pub(crate) fn path_transform_dispatch_preflight(s: &Session, p: &Value, background: bool) -> Result<()> {
+    path_transform_controlled::dispatch_preflight(s, p, background)
 }
 
 fn path_transform(s: &mut Session, p: &Value) -> Result<Value> {
-    const CMD: &str = "path.transform";
-    let name = p.get("name").and_then(Value::as_str).unwrap_or("work").to_owned();
-    let layer_id = if name == "layer" { Some(layer_id(s, p)?) } else { None };
-    let transform = if let Some(values) = p.get("matrix") {
-        let values = values.as_array().filter(|values| values.len() == 6).ok_or_else(|| bad(CMD, "`matrix` must contain six numbers"))?;
-        let mut m = [0.0; 6];
-        for (slot, value) in m.iter_mut().zip(values) {
-            *slot = value
-                .as_f64()
-                .filter(|number| number.is_finite() && number.abs() <= 1_000_000.0)
-                .ok_or_else(|| bad(CMD, "matrix entries must be finite numbers with magnitude at most 1000000"))?;
-        }
-        Affine { m }
-    } else {
-        let number = |key: &str, default: f64| -> Result<f64> {
-            match p.get(key) {
-                Some(value) => value
-                    .as_f64()
-                    .filter(|n| n.is_finite() && n.abs() <= 1_000_000.0)
-                    .ok_or_else(|| bad(CMD, format!("`{key}` must be a finite number with magnitude at most 1000000"))),
-                None => Ok(default),
-            }
-        };
-        if !["translateX", "translateY", "scaleX", "scaleY", "angle"].iter().any(|key| p.get(*key).is_some()) {
-            return Err(bad(CMD, "pass `matrix` or translate/scale/angle parameters"));
-        }
-        let (tx, ty) = (number("translateX", 0.0)?, number("translateY", 0.0)?);
-        let (sx, sy) = (number("scaleX", 1.0)?, number("scaleY", 1.0)?);
-        let angle = number("angle", 0.0)?;
-        let path = resolve_path(s, Some(&name))?;
-        let (x0, y0, x1, y1) = path.control_bounds().ok_or_else(|| bad(CMD, "path has no points to transform"))?;
-        let (cx, cy) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5);
-        Affine::translate(-cx, -cy)
-            .then(&Affine { m: [sx, 0.0, 0.0, sy, 0.0, 0.0] })
-            .then(&Affine::rotate(angle.to_radians()))
-            .then(&Affine::translate(cx + tx, cy + ty))
-    };
-    let m = transform.m;
-    if let Some(id) = layer_id
-        && s.active().and_then(|d| d.doc.layer(id)).is_some_and(|layer| matches!(layer.content, LayerContent::Shape(_)))
-    {
-        with_shape(s, id, "Transform Path", |shape, _| {
-            transform_shape(shape, &transform);
-            shape.psd_raw = None;
-            Ok(())
-        })?;
-        return Ok(json!({ "name": name, "matrix": m }));
-    }
-    s.edit("Transform Path", |doc, _| {
-        let path = path_mut(doc, &name, layer_id)?;
-        *path = path.transform(&transform);
-        Ok(())
-    })?;
-    Ok(json!({ "name": name, "matrix": m }))
+    path_transform_controlled::run(s, p)
+}
+
+mod path_name_controlled;
+
+pub(crate) fn path_name_dispatch_preflight(s: &Session, p: &Value, background: bool) -> Result<()> {
+    path_name_controlled::dispatch_preflight(s, "path.rename", p, background).map(|_| ())
 }
 
 fn path_rename(s: &mut Session, p: &Value) -> Result<Value> {
-    const CMD: &str = "path.rename";
-    let name = p.get("name").and_then(Value::as_str).map(str::to_string);
-    let to = p.get("to").and_then(Value::as_str).filter(|t| !t.is_empty()).ok_or_else(|| bad(CMD, "missing `to`"))?.to_string();
-    if is_work(Some(&to)) {
-        return Err(bad(CMD, "`to` cannot name the work path"));
-    }
-    s.edit(if is_work(name.as_deref()) { "Save Path" } else { "Rename Path" }, |doc, _| {
-        if doc.paths.iter().any(|q| q.name == to) {
-            return Err(EngineError::Other(format!("a path named \"{to}\" already exists")));
-        }
-        if is_work(name.as_deref()) {
-            // Photoshop: saving the work path turns it into a named path.
-            let path = doc.work_path.take().ok_or_else(|| EngineError::Other("no work path".into()))?;
-            doc.paths.push(NamedPath { name: to.clone(), path, psd_raw: None });
-            return Ok(());
-        }
-        let n = name.clone().unwrap_or_default();
-        let q = doc.paths.iter_mut().find(|q| q.name == n).ok_or_else(|| EngineError::Other(format!("no path named \"{n}\"")))?;
-        q.name = to.clone();
-        if let Some(c) = doc.clipping_path.as_mut()
-            && c.name == n
-        {
-            c.name = to.clone();
-        }
-        Ok(())
-    })?;
-    Ok(json!({ "name": to }))
+    path_name_controlled::path_rename(s, p)
+}
+
+mod path_selection_controlled;
+
+pub(crate) fn path_selection_dispatch_preflight(s: &Session, p: &Value, background: bool) -> Result<()> {
+    path_selection_controlled::dispatch_preflight(s, "path.toSelection", p, background).map(|_| ())
 }
 
 fn path_to_selection(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = resolve_path(s, p.get("name").and_then(Value::as_str))?;
-    let feather = f64p(p, "feather").unwrap_or(0.0) as f32;
-    let aa = p.get("antiAlias").and_then(Value::as_bool).unwrap_or(true);
-    let mode = SelectionMode::parse(p.get("mode").and_then(Value::as_str).unwrap_or("replace"));
-    let area = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
-    let mut mask = vector::fill_rasterizer(&path, vector::DEFAULT_TOLERANCE).render(area);
-    if !aa {
-        for v in &mut mask {
-            *v = if *v >= 0.5 { 1.0 } else { 0.0 };
-        }
-    }
-    if feather > 0.0 {
-        mask = sel::feather(&mask, area.width() as usize, area.height() as usize, feather);
-    }
-    let selected = s.edit("Make Selection", |doc, _| {
-        doc.selection = sel::combine(doc.selection.as_ref(), &mask, area, mode);
-        Ok(doc.selection.is_some())
-    })?;
-    Ok(json!({ "selected": selected }))
+    path_selection_controlled::path_to_selection(s, p)
+}
+
+mod trace_controlled;
+
+pub(crate) fn trace_dispatch_preflight(s: &Session, p: &Value, background: bool) -> Result<()> {
+    trace_controlled::dispatch_preflight(s, p, background)
 }
 
 fn select_to_work_path(s: &mut Session, p: &Value) -> Result<Value> {
-    let tol = f64p(p, "tolerance").unwrap_or(2.0).clamp(0.5, 10.0);
-    let d = s.active().ok_or(EngineError::NoDocument)?;
-    let area = d.doc.bounds();
-    let sel_surface = d.doc.selection.as_ref().ok_or_else(|| EngineError::Other("no selection".into()))?;
-    let mask = sel::mask_from_surface(Some(sel_surface), area);
-    let path = vector::trace::trace_mask(&mask, area, 0.0, tol);
-    let knots: usize = path.subpaths.iter().map(|s| s.knots.len()).sum();
-    let subpaths = path.subpaths.len();
-    s.edit("Make Work Path", |doc, _| {
-        doc.work_path = Some(path);
-        Ok(())
-    })?;
-    Ok(json!({ "subpaths": subpaths, "knots": knots }))
+    trace_controlled::run(s, p)
+}
+
+mod path_fill_controlled;
+
+pub(crate) fn path_fill_dispatch_preflight(s: &Session, p: &Value, background: bool) -> Result<()> {
+    path_fill_controlled::dispatch_preflight(s, p, background)
 }
 
 fn path_fill(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = resolve_path(s, p.get("name").and_then(Value::as_str))?;
-    let fg = s.tools.foreground;
-    let c = p.get("color").and_then(color).unwrap_or(Color::rgba(fg[0], fg[1], fg[2], fg[3]));
-    let rgb = c.to_rgb();
-    let src = [rgb[0], rgb[1], rgb[2], c.alpha];
-    let opacity = (f64p(p, "opacity").unwrap_or(100.0) / 100.0).clamp(0.0, 1.0) as f32;
-    let mode = p.get("mode").and_then(Value::as_str).and_then(blend_from_str).unwrap_or(BlendMode::Normal);
-    let feather = f64p(p, "feather").unwrap_or(0.0) as f32;
-    let aa = p.get("antiAlias").and_then(Value::as_bool).unwrap_or(true);
-    let id = layer_id(s, p)?;
-    s.edit("Fill Path", |doc, _| {
-        let area = doc.bounds();
-        let r = vector::fill_rasterizer(&path, vector::DEFAULT_TOLERANCE);
-        let feather_pad = (feather.ceil() as i32).saturating_mul(2);
-        let area = r.pixel_bounds().map_or(area, |b| b.inflate(feather_pad).intersect(&area));
-        if area.is_empty() {
-            return Ok(());
-        }
-        let mut cov = r.render(area);
-        if !aa {
-            cov.iter_mut().for_each(|v| *v = if *v >= 0.5 { 1.0 } else { 0.0 });
-        }
-        if feather > 0.0 {
-            cov = sel::feather(&cov, area.width() as usize, area.height() as usize, feather);
-        }
-        let locks = doc.effective_locks(id);
-        let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        if locks.pixels || locks.all {
-            return Err(EngineError::Other(format!("Could not complete your request because the layer \"{}\" is locked", l.name)));
-        }
-        let lock = locks.transparency;
-        let surf = l.surface_mut().ok_or_else(|| EngineError::Other("Fill Path needs a pixel layer".into()))?;
-        paint_coverage(surf, area, &cov, src, opacity, mode, lock);
-        Ok(())
-    })?;
-    Ok(Value::Null)
+    path_fill_controlled::run(s, p)
 }
 
 /// Composites `src` × coverage onto a surface over `area` (any pixel format).
+#[cfg(test)]
 fn paint_coverage(surf: &mut photocraft_raster::Surface, area: Rect, cov: &[f32], src: [f32; 4], opacity: f32, mode: BlendMode, lock_alpha: bool) {
     let fmt = surf.format();
     let ch = fmt.channels();
@@ -997,63 +858,16 @@ fn paint_coverage(surf: &mut photocraft_raster::Surface, area: Rect, cov: &[f32]
     surf.prune();
 }
 
-fn path_stroke(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = resolve_path(s, p.get("name").and_then(Value::as_str))?;
-    let tool = p.get("tool").and_then(Value::as_str).unwrap_or("brush");
-    let base = s.tools.brush.clone();
-    let fg = s.tools.foreground;
-    let mut brush = photocraft_paint::BrushSettings {
-        size: f64p(p, "size").map_or(base.size, |v| v as f32),
-        hardness: f64p(p, "hardness").map_or(base.hardness, |v| v as f32),
-        opacity: f64p(p, "opacity").map_or(base.opacity, |v| (v / 100.0) as f32),
-        color: p.get("color").and_then(color).map_or(fg, |c| {
-            let v = c.to_rgb();
-            [v[0], v[1], v[2], c.alpha]
-        }),
-        erase: tool == "eraser",
-        ..base
-    };
-    // The path is the exact geometry: stroke smoothing (a hand-drawing aid) would cut its corners.
-    brush.smoothing.amount = 0.0;
-    match tool {
-        "pencil" => brush.hardness = 1.0,
-        "brush" | "eraser" => {}
-        o => return Err(bad("path.stroke", format!("unknown tool `{o}` (brush|pencil|eraser)"))),
-    }
-    crate::brush_cmds::validate_brush(&brush, "path.stroke")?;
-    let lines = vector::flatten_path(&path, 0.1);
-    let id = layer_id(s, p)?;
-    let bg = s.tools.background;
-    let dmg = s.edit("Stroke Path", |doc, _| {
-        let sel = doc.selection.clone();
-        let lock = doc.effective_locks(id).transparency;
-        let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        let surf = l.surface_mut().ok_or_else(|| EngineError::Other("Stroke Path needs a pixel layer".into()))?;
-        let mut brush = brush.clone();
-        if brush.erase && lock {
-            // Locked transparency (e.g. the Background): the Eraser paints the background colour (#76).
-            brush.erase = false;
-            brush.color = bg;
-        }
-        let mut dmg = Rect::EMPTY;
-        for pl in &lines {
-            let mut pts: Vec<photocraft_paint::StrokePoint> = pl.pts.iter().map(|&(x, y)| photocraft_paint::StrokePoint::new(x, y, 1.0)).collect();
-            if pl.closed
-                && let Some(first) = pts.first().copied()
-            {
-                pts.push(first);
-            }
-            if pts.is_empty() {
-                continue;
-            }
-            let r = photocraft_paint::apply_stroke(surf, &photocraft_paint::Stroke { brush: brush.clone(), points: pts }, sel.as_ref(), lock);
-            dmg = if dmg.is_empty() { r } else { dmg.union(&r) };
-        }
-        Ok(dmg)
-    })?;
-    Ok(json!({ "damage": [dmg.x0, dmg.y0, dmg.width(), dmg.height()] }))
+mod path_stroke_controlled;
+pub use path_stroke_controlled::brush_snapshot as path_stroke_brush_snapshot;
+
+pub(crate) fn path_stroke_dispatch_preflight(s: &Session, p: &Value, background: bool) -> Result<()> {
+    path_stroke_controlled::dispatch_preflight(s, p, background)
 }
 
+fn path_stroke(s: &mut Session, p: &Value) -> Result<Value> {
+    path_stroke_controlled::run(s, p)
+}
 // ---------------------------------------------------------------------------
 // Vector masks
 // ---------------------------------------------------------------------------
@@ -1155,15 +969,17 @@ fn vector_mask_rasterize(s: &mut Session, p: &Value) -> Result<Value> {
         let vals = vector::vector_mask_values(&vm, area);
         let mut mask = l.mask.take().unwrap_or_else(|| {
             let mut m = photocraft_doc::LayerMask::reveal_all();
-            m.surface =
-                photocraft_raster::Surface::with_default(photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Grayscale, depth, false), &[1.0]);
+            m.surface = std::sync::Arc::new(photocraft_raster::Surface::with_default(
+                photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Grayscale, depth, false),
+                &[1.0],
+            ));
             m
         });
         // Outside the canvas the vector mask is 0 unless it is empty/inverted; keep the old default there.
         let old = mask.surface.read_region(area);
         let merged: Vec<f32> = old.iter().zip(&vals).map(|(a, b)| a * b).collect();
-        mask.surface.write_region(area, &merged);
-        mask.surface.prune();
+        std::sync::Arc::make_mut(&mut mask.surface).write_region(area, &merged);
+        std::sync::Arc::make_mut(&mut mask.surface).prune();
         l.mask = Some(mask);
         Ok(())
     })?;
@@ -1289,7 +1105,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "List Paths",
             menu: &[],
             shortcut: None,
-            params: r##"{} → {paths:[{name,knots,subpaths}],workPath,clippingPath,layerPath (active layer's shape path / vector mask)}"##,
+            params: r##"{} → {paths:[{pathId:legacy u64,pathIdString:canonical string,name,knots,subpaths}],workPath,clippingPath,layerPath (active layer's shape path / vector mask)}"##,
             enabled: has_doc,
             run: |s, _| paths_list(s),
             journal: false,
@@ -1299,12 +1115,15 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Path Info",
             menu: &[],
             shortcut: None,
-            params: r##"{"name":str|"work"|"layer"="work"} → {name,path}"##,
+            params: r##"{"pathId":id? (saved path ID takes precedence),"name":str|"work"|"layer"="work"} → {name,path}"##,
             enabled: has_doc,
             run: |s, p| {
                 let name = p.get("name").and_then(Value::as_str);
-                let path = resolve_path(s, name)?;
-                Ok(json!({ "name": name.unwrap_or("work"), "path": path_json(&path) }))
+                let path = resolve_path_params(s, p)?;
+                let path_id = saved_path_id(p)?;
+                let name =
+                    path_id.and_then(|id| s.active()?.doc.paths.iter().find(|path| path.id == id).map(|path| path.name.as_str())).or(name).unwrap_or("work");
+                Ok(json!({ "pathId": path_id.map(|id| id.0), "pathIdString": path_id.map(|id| id.0.to_string()), "name": name, "path": path_json(&path) }))
             },
             journal: false,
         },
@@ -1313,17 +1132,17 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Path",
             [],
             leak(format!(
-                r##"{{"name":str|"work"="work","path":{{…}},"op":"combine|subtract|intersect|exclude"? (append to the existing path with this op instead of replacing)}}. {PATH_FORM}"##
+                r##"{{"pathId":id? (saved path ID takes precedence),"name":str|"work"="work","path":{{…}},"op":"combine|subtract|intersect|exclude"? (append to the existing path with this op instead of replacing),"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}}. {PATH_FORM}"##
             )),
             has_doc,
             path_set
         ),
-        spec!("path.delete", "Delete Path", [], r##"{"name":str|"work"="work"}"##, has_doc, path_delete),
+        spec!("path.delete", "Delete Path", [], r##"{"pathId":id? (saved path ID takes precedence),"name":str|"work"="work","documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_doc, path_delete),
         spec!(
             "path.transform",
             "Free Transform Path",
             [],
-            r##"{"name":str|"work"|"layer"="work","layer":id? (with layer target),"matrix":[a,b,c,d,e,f] | "translateX":px?,"translateY":px?,"scaleX":factor?,"scaleY":factor?,"angle":degrees?} (numeric transforms pivot on path bounds center)"##,
+            r##"{"pathId":id? (saved path ID takes precedence),"name":str|"work"|"layer"="work","layer":id? (with layer target),"matrix":[a,b,c,d,e,f] | "translateX":px?,"translateY":px?,"scaleX":factor?,"scaleY":factor?,"angle":degrees?,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (numeric transforms pivot on path bounds center)"##,
             has_doc,
             path_transform
         ),
@@ -1331,11 +1150,11 @@ pub fn specs() -> Vec<CommandSpec> {
             "path.clippingPath.set",
             "Clipping Path",
             [],
-            r##"{"name":savedPathName,"flatness":0..100=0} (PSD export clipping path)"##,
+            r##"{"name":savedPathName,"flatness":0..100=0,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (PSD export clipping path)"##,
             has_doc,
             clipping_path_set
         ),
-        spec!("path.clippingPath.clear", "Clear Clipping Path", [], r##"{}"##, has_doc, clipping_path_clear),
+        spec!("path.clippingPath.clear", "Clear Clipping Path", [], r##"{"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_doc, clipping_path_clear),
         spec!("path.style.copyFill", "Copy Fill", [], r##"{} (copies active shape layer fill)"##, has_shape_fill, copy_shape_fill),
         spec!("path.style.copyStroke", "Copy Complete Stroke", [], r##"{} (copies active shape layer stroke)"##, has_shape_stroke, copy_shape_stroke),
         spec!(
@@ -1354,24 +1173,31 @@ pub fn specs() -> Vec<CommandSpec> {
             can_paste_shape_stroke,
             paste_shape_stroke
         ),
-        spec!("path.rename", "Rename Path", [], r##"{"name":str|"work"="work","to":str} (renaming the work path saves it)"##, has_doc, path_rename),
+        spec!(
+            "path.rename",
+            "Rename Path",
+            [],
+            r##"{"pathId":id? (saved path ID takes precedence),"name":str|"work"="work","to":str,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (renaming the work path saves it)"##,
+            has_doc,
+            path_rename
+        ),
         // ⌘↩ / Ctrl+Enter, as in Photoshop (the UI loads the path selected in the Paths panel, #306).
         CommandSpec {
             id: "path.toSelection",
             label: "Make Selection from Path",
             menu: &[],
             shortcut: Some("Cmd+Enter"),
-            params: r##"{"name":str|"work"|"layer"="work","feather":px=0,"antiAlias":bool=true,"mode":"replace|add|subtract|intersect"="replace"}"##,
+            params: r##"{"pathId":id? (saved path ID takes precedence),"name":str|"work"|"layer"="work","feather":px=0,"antiAlias":bool=true,"mode":"replace|add|subtract|intersect"="replace","documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
             enabled: has_doc,
             run: path_to_selection,
             journal: true,
         },
-        spec!("select.toWorkPath", "Make Work Path", [], r##"{"tolerance":0.5..10 px=2} → {subpaths,knots}"##, has_selection, select_to_work_path),
+        spec!("select.toWorkPath", "Make Work Path", [], r##"{"tolerance":0.5..10 px=2,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} → {subpaths,knots}"##, has_selection, select_to_work_path),
         spec!(
             "path.fill",
             "Fill Path",
             [],
-            r##"{"name":str|"work"|"layer"="work","layer":id? (pixel layer, default active),"color":"#rrggbb"=foreground,"opacity":0..100=100,"mode":"normal|multiply|…"="normal","feather":px=0,"antiAlias":bool=true}"##,
+            r##"{"pathId":id? (saved path ID takes precedence),"name":str|"work"|"layer"="work","layer":id? (pixel layer, default active),"color":"#rrggbb"=foreground,"opacity":0..100=100,"mode":"normal|multiply|…"="normal","feather":px=0,"antiAlias":bool=true,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
             has_layer,
             path_fill
         ),
@@ -1379,7 +1205,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "path.stroke",
             "Stroke Path",
             [],
-            r##"{"name":str|"work"|"layer"="work","layer":id? (pixel layer),"tool":"brush|pencil|eraser"="brush","size":0.5..5000 px?,"hardness":0..1?,"opacity":0..100?,"color":"#rrggbb"=foreground} (current brush settings otherwise)"##,
+            r##"{"pathId":id? (saved path ID takes precedence),"name":str|"work"|"layer"="work","layer":id? (pixel layer),"tool":"brush|pencil|eraser"="brush","size":0.5..5000 px?,"hardness":0..1?,"opacity":0..100?,"color":"#rrggbb"=foreground,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (current brush settings otherwise)"##,
             has_layer,
             path_stroke
         ),
@@ -1395,7 +1221,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.vectorMask.fromPath",
             "Vector Mask from Current Path",
             ["Layer", "Vector Mask"],
-            r##"{"layer":id?,"name":str|"work"="work"}"##,
+            r##"{"layer":id?,"name":str|"work"="work","documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
             has_layer,
             |s, p| vector_mask_add(s, p, true)
         ),
@@ -1427,7 +1253,7 @@ pub fn specs() -> Vec<CommandSpec> {
             &with(p, "hide", json!(true)),
             false
         )),
-        spec!("layer.vectorMask.currentPath", "Vector Mask: Current Path", [], r##"{"layer":id?,"name":str|"work"="work"}"##, has_layer, |s, p| {
+        spec!("layer.vectorMask.currentPath", "Vector Mask: Current Path", [], r##"{"layer":id?,"name":str|"work"="work","documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_layer, |s, p| {
             vector_mask_add(s, p, true)
         }),
         spec!("layer.vectorMask.enabled", "Enable Vector Mask", [], r##"{"layer":id?,"enabled":bool? (default: toggle)}"##, has_layer, |s, p| {
@@ -1490,3 +1316,35 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod canonical_path_id_tests {
+    use super::*;
+    #[test]
+    fn saved_path_id_accepts_full_u64_and_rejects_noncanonical_values() {
+        for value in [json!(u64::MAX), json!(u64::MAX.to_string())] {
+            assert_eq!(saved_path_id(&json!({"pathId":value})).unwrap(), Some(photocraft_doc::item_identity::PathId(u64::MAX)));
+        }
+        for value in [json!("01"), json!("0"), json!("+1"), json!(" 1"), json!("18446744073709551616"), json!(1.0), json!(-1), json!(true), Value::Null] {
+            assert!(saved_path_id(&json!({"pathId":value})).is_err(), "{value}");
+        }
+        assert_eq!(saved_path_id(&json!({})).unwrap(), None);
+    }
+
+    #[test]
+    fn path_queries_expose_maximum_identity_as_decimal_string_without_retargeting() {
+        let mut document = Document::new("Own identities", photocraft_doc::Size::new(2, 2), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        let mut path = NamedPath::new("Exact maximum", Path::default());
+        path.id = photocraft_doc::item_identity::PathId(u64::MAX);
+        document.paths.push(path);
+        let mut session = Session::new();
+        session.open_document(document, None).unwrap();
+        let before = session.active().unwrap().doc.clone();
+        let listing = session.execute("path.list", json!({})).unwrap();
+        assert_eq!(listing["paths"][0]["pathIdString"], u64::MAX.to_string());
+        let details = session.execute("path.info", json!({"pathId":u64::MAX.to_string()})).unwrap();
+        assert_eq!(details["pathIdString"], u64::MAX.to_string());
+        assert_eq!(details["pathId"], u64::MAX);
+        assert_eq!(session.active().unwrap().doc, before);
+    }
+}

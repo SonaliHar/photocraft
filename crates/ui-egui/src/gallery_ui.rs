@@ -659,7 +659,7 @@ mod tests {
         let src = sample(&d.src, d.canvas, 1);
         let a = render(&src, &d.params());
         let mut s2 = photocraft_engine::Session::new();
-        s2.add_document(app.session.active().unwrap().doc.as_ref().clone(), None);
+        s2.add_document(app.session.active().unwrap().doc.as_ref().clone(), None).unwrap();
         s2.select_layer(d.layer).unwrap();
         s2.execute("filter.filterGallery", d.params()).unwrap();
         let st = s2.active().unwrap();

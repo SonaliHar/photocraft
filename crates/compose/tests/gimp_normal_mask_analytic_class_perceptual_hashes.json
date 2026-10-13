@@ -1,0 +1,32 @@
+{
+  "gamma": {
+    "batch-manifest.json": "5ed67fc6a44feba43601ee67eeb0b260a27515f8c0e43565e0ccdd614540be62",
+    "observations.json": "aca0816bdf7c1141a7f8c2d3e707beb58a4f324cd5935b23ce36eaeea2bc39a7",
+    "fresh/observations.json": "b69c46f4d9483fa05a8ade75a44576531faa878c2628856cc5d7517317eba3ac",
+    "faithful-observations.json": "998e1de78c8c96a02509b40be6fcbb6450aa99738df837bec322703846e38f4c",
+    "faithful-fresh/faithful-observations.json": "fd64c638c21e7d083af0c8e6b86b5bb4b22ed0f6c2f0faed7e37a47985c57bc1",
+    "VERIFICATION.json": "287ebf8aefcb939524bffdb5389112654f7eb4f8a79afe6ec7e320a1cbad44fc",
+    "own-rgb-parametric-trc.icc": "d4ddff2458010156aebea135bf7cb68b5f1b65a418f116f4783cf62287036feb",
+    "own-gray-parametric-trc.icc": "78efd53a209447804e9dad749bb56be82c10fbe17345b1f82cc272ef48473aaf"
+  },
+  "type3": {
+    "batch-manifest.json": "b0be92e4e45e9be7092ab8a87d1d30d5feb29ca8604848616ba6c6c6c1b12b4a",
+    "observations.json": "c3597ae003860464401d8b5389082866dfa8a2ff2da2e92e6f5e1ce7c534df1f",
+    "fresh/observations.json": "b3fa0abfb660769eb50170589d01734190c7a694d846922a4f6ed33b4855e838",
+    "faithful-observations.json": "e1169ae79fcfb39ef75db45b4543adee2cfb8709901ae1912459177f3e257c66",
+    "faithful-fresh/faithful-observations.json": "88bec7147479724f768d3c07d2414b5230fe2b212a38b24098fdc33eb4d0315e",
+    "VERIFICATION.json": "287ebf8aefcb939524bffdb5389112654f7eb4f8a79afe6ec7e320a1cbad44fc",
+    "own-rgb-parametric-trc.icc": "7ca9fc2ea8fdea205ab99e0f419d81ae907eaad965950217080cd4928b9d0f14",
+    "own-gray-parametric-trc.icc": "06fdcaba5617d516676f6665519f5b9a155957b3ec9c5895f572356ceabfea0a"
+  },
+  "type4": {
+    "batch-manifest.json": "edb0e73a9cb5f2ec0a7ab05a63053acd3c92988aa2a934de935c2a65e54a2cca",
+    "observations.json": "32357d7005a54cf7863314f286e51239648796d1eb63cad6e92b9b53acc79fd9",
+    "fresh/observations.json": "71c6be33b4a24de2fb99b0952cf19b1aaa6432c2fe05f428e5775c7267a9e952",
+    "faithful-observations.json": "59edca1f75749d6f32c908b46ec4c0c8cbc54a02a5b1359e11d118865edd7b2d",
+    "faithful-fresh/faithful-observations.json": "9514bdb6c2ae59673ceb17b0fb87a0aa6b17bc8b01b65e7928b97bcfd6a9c746",
+    "VERIFICATION.json": "287ebf8aefcb939524bffdb5389112654f7eb4f8a79afe6ec7e320a1cbad44fc",
+    "own-rgb-parametric-trc.icc": "049805cff7622dd9802d360a0a264d2c80608f6722cb755bfc428f6b4e03c106",
+    "own-gray-parametric-trc.icc": "28199b6e67495dc6bef06aa7ed5dbc56b33f61031e4786b700144b3718826afc"
+  }
+}

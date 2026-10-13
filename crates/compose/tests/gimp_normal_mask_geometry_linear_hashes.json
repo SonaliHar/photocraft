@@ -1,0 +1,24 @@
+{
+  "left-top": {
+    "batch-manifest.json": "78135ac5313c3c488eeac67559c731674254d74eb2745112c5e2f704e76743e1",
+    "observations.json": "80d017fc2897fd449b8386c98e73f1d6caaded57f74cd0aaec6d2eddb80822cc",
+    "fresh/observations.json": "d5683ace6c5e9e101d1fce16395bbd260d5b15cb64362a92d60c4fd764edb4be",
+    "faithful-observations.json": "8005aefec51160cfcb3857b9bffec2ad916cc960c5635e0e072bf00bd46cca82",
+    "faithful-fresh/faithful-observations.json": "ebb197bc1bc9474fd00d7e28297b7935b40ffd95c9c572cbeef216f5d8223a10",
+    "VERIFICATION.json": "bb00c920b5a73a3de327dcac8fa52a94c199ae9149301fa6f003a88b0210c439",
+    "assignment-controls.json": "95001ffdc953d53b4208e3704bcd7e91a46d08931e6ceaec462d1283aa0f6e85",
+    "own-rgb-parametric-trc.icc": "d4ddff2458010156aebea135bf7cb68b5f1b65a418f116f4783cf62287036feb",
+    "own-gray-parametric-trc.icc": "78efd53a209447804e9dad749bb56be82c10fbe17345b1f82cc272ef48473aaf"
+  },
+  "right-bottom": {
+    "batch-manifest.json": "cfca0caf3ed655962fb98814765dad3844fb893bc5f437553b47aeedd3772724",
+    "observations.json": "a4c12094204696a243d8136ebbda762681fe02ae68cea984b2beae1950364566",
+    "fresh/observations.json": "5f94d9d16e1c546bdb897917e07f98138682aa319e546d220538ee65484c2823",
+    "faithful-observations.json": "a2d98c53afa1ce98d7b8cddf56e34643118819f95d6be65ec9ab546451a1890b",
+    "faithful-fresh/faithful-observations.json": "9856e9a94b1465ff017611dab4ca00c690d1522b63e122d6a4ca84d32c30f7f9",
+    "VERIFICATION.json": "66a48a8a098a00a42b6c23697db58fee66287f71a3da297b27f0b7031b3725f9",
+    "assignment-controls.json": "c9eb99719254752c26fc7af58252bae09db60834634d32cbb17ccb8466152077",
+    "own-rgb-parametric-trc.icc": "d4ddff2458010156aebea135bf7cb68b5f1b65a418f116f4783cf62287036feb",
+    "own-gray-parametric-trc.icc": "78efd53a209447804e9dad749bb56be82c10fbe17345b1f82cc272ef48473aaf"
+  }
+}

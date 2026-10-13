@@ -51,7 +51,7 @@ mod tests {
     #[test]
     fn proxy_keeps_structure_and_ids() {
         let doc = Document::with_background("d", Size::new(4000, 3000), ColorMode::Rgb, SampleType::U8, Color::WHITE);
-        let p = proxy_document(&doc, 4);
+        let p = proxy_document(&doc, 4).unwrap();
         assert_eq!((p.size.width, p.size.height), (1000, 750));
         assert_eq!(p.layers[0].id, doc.layers[0].id);
         assert_eq!(p.layers[0].surface().unwrap().pixel(999, 749), vec![1.0; 4]);

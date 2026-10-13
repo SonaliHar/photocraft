@@ -191,6 +191,9 @@ pub fn apply_filter_to_surface_with_transfer(
         return crate::plugin_cmds::apply_to_surface(id, params, surf, selection, canvas);
     }
     let fp = params_for(id, params)?;
+    if matches!(surf.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64) && !matches!(fp, FilterParams::Invert) {
+        return None;
+    }
     let sel_bounds = selection.map(photocraft_raster::Surface::content_bounds);
     let content = surf.content_bounds();
     let area = algo::output_area(&fp, content, bounds, sel_bounds);
@@ -238,6 +241,11 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
         &label,
         move |doc, _, ctx| {
             let filter = |surf: &photocraft_raster::Surface, fp: &FilterParams, area, bounds, sel: Option<&photocraft_raster::Surface>, extent| {
+                if matches!(surf.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64) && !matches!(fp, FilterParams::Invert) {
+                    return Err(EngineError::Other(
+                        "this filter does not yet support authoritative U32/F64 samples; explicitly convert sample depth first".into(),
+                    ));
+                }
                 ctx.stage(0.0, 1.0, &msg, |ctl| algo::apply_in_with(surf, fp, area, bounds, sel, extent, ctl)).ok_or(EngineError::Cancelled)
             };
             let selection = doc.selection.clone();

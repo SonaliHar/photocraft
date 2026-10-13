@@ -203,7 +203,10 @@ pub fn pen_commit(app: &mut PhotocraftApp, closed: bool) {
         app.run("layer.vectorMask.edit", json!({"layer": id, "path": p}))
     } else {
         // The drawn work path is selected in the Paths panel, as in Photoshop.
-        app.run("path.set", json!({"name": "work", "path": path})).inspect(|_| app.ui.selected_path = Some("work".into()))
+        app.run("path.set", json!({"name": "work", "path": path})).inspect(|_| {
+            app.ui.selected_path = Some("work".into());
+            app.ui.selected_saved_path = None;
+        })
     };
     if let Err(e) = r {
         app.ui.status = e;
@@ -266,6 +269,7 @@ pub fn path_to_selection(app: &mut PhotocraftApp, params: Value) -> Result<Value
         let on_layer = app.ui.tool_options.vector_mode == "shape" || targeted_vector_mask(app).is_some();
         pen_commit(app, false);
         app.ui.selected_path = Some(if on_layer { "layer" } else { "work" }.into());
+        app.ui.selected_saved_path = None;
     }
     let name = active_path_name(app)
         .ok_or_else(|| tl!("No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.").to_string())?;
@@ -772,6 +776,8 @@ pub enum PathRow {
 /// A Paths panel row.
 #[derive(Clone, Debug)]
 pub struct PathEntry {
+    /// Canonical saved-path identity; absent for temporary work/layer rows.
+    pub id: Option<photocraft_doc::item_identity::PathId>,
     pub name: String,
     pub path: Path,
     pub kind: PathRow,
@@ -780,9 +786,9 @@ pub struct PathEntry {
 /// The Paths panel's rows, top to bottom: saved paths, the work path, then the selected layer's
 /// shape path ("<Layer> Shape Path") or vector mask ("<Layer> Vector Mask"), like Photoshop.
 pub fn path_rows(doc: &Document, active: Option<photocraft_doc::LayerId>) -> Vec<PathEntry> {
-    let mut rows: Vec<_> = doc.paths.iter().map(|p| PathEntry { name: p.name.clone(), path: p.path.clone(), kind: PathRow::Saved }).collect();
+    let mut rows: Vec<_> = doc.paths.iter().map(|p| PathEntry { id: Some(p.id), name: p.name.clone(), path: p.path.clone(), kind: PathRow::Saved }).collect();
     if let Some(wp) = &doc.work_path {
-        rows.push(PathEntry { name: "Work Path".into(), path: wp.clone(), kind: PathRow::Work });
+        rows.push(PathEntry { id: None, name: "Work Path".into(), path: wp.clone(), kind: PathRow::Work });
     }
     if let Some(l) = active.and_then(|id| doc.layer(id)) {
         let layer_path = match &l.content {
@@ -790,7 +796,7 @@ pub fn path_rows(doc: &Document, active: Option<photocraft_doc::LayerId>) -> Vec
             _ => l.vector_mask.as_ref().map(|v| (format!("{} Vector Mask", l.name), v.path.clone())),
         };
         if let Some((name, path)) = layer_path {
-            rows.push(PathEntry { name, path, kind: PathRow::Layer });
+            rows.push(PathEntry { id: None, name, path, kind: PathRow::Layer });
         }
     }
     rows
@@ -852,12 +858,27 @@ fn path_context_actions(entry: &PathEntry, doc: &Document) -> Vec<(&'static str,
 
 pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    // Typed selection cannot be inferred from restored legacy names. A changed
+    // legacy work/layer/name selection only invalidates this optional ID witness.
+    let consistent = app.ui.selected_saved_path.as_ref().is_none_or(|selected| app.session.active().is_some_and(|active| {
+        if active.doc.id.0 != selected.document || active.doc.paths.len() > 10_000 { return false; }
+        let mut paths = active.doc.paths.iter().filter(|path| path.id.0 == selected.path);
+        let Some(path) = paths.next() else { return false };
+        paths.next().is_none() && path.id.0 != 0 && app.ui.selected_path.as_deref() == Some(path.name.as_str())
+    }));
+    if !consistent { app.ui.selected_saved_path = None; }
+    let selected = app.ui.selected_saved_path.as_ref().and_then(|selected|
+        app.session.active().filter(|active| active.doc.id.0 == selected.document).map(|_| photocraft_doc::item_identity::PathId(selected.path)));
+    if let Some(path) = selected { crate::xcf_panels::path_name::properties(app, ui, path); }
     let Some(st) = app.session.active() else {
         ui.label(egui::RichText::new(tl!("No document")).color(t.text_faint));
         return;
     };
     let doc = st.doc.clone();
-    let rows = path_rows(&doc, st.active_layer);
+    let rows = match crate::vector_path_rows_cache::rows(ui.ctx(), &doc, st.revision, st.active_layer) {
+        Ok(rows) => rows,
+        Err(error) => { app.ui.status = error.to_string(); app.ui.status_error = true; ui.label(error.to_string()); return; }
+    };
     let has_layer_path = rows.iter().any(|r| r.kind == PathRow::Layer);
     let mut action: Option<(&str, Value)> = None;
     // The buttons sit in a footer at the panel's bottom, like Photoshop's.
@@ -870,7 +891,8 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if rows.is_empty() {
                 ui.label(egui::RichText::new(tl!("Draw with the Pen tool (P) or make a work path from a selection.")).color(t.text_faint).size(11.5));
             }
-            for PathEntry { name, path, kind } in &rows {
+            for entry in rows.iter() {
+                let PathEntry { id, name, path, kind } = entry;
                 let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::click());
                 let key = match kind {
                     PathRow::Work => "work".to_string(),
@@ -879,7 +901,9 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 };
                 // Rows are painted: name them for screen readers and UI tests.
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::SelectableLabel, true, name));
-                let sel = app.ui.selected_path.as_deref() == Some(key.as_str());
+                let sel = if let Some(selected) = app.ui.selected_saved_path.as_ref().filter(|selected| selected.document == doc.id.0) {
+                    *kind == PathRow::Saved && id.is_some_and(|id| id.0 == selected.path)
+                } else { app.ui.selected_path.as_deref() == Some(key.as_str()) };
                 if sel {
                     ui.painter().rect_filled(r, 0.0, t.row_selected);
                 } else if resp.hovered() {
@@ -898,6 +922,9 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ui.painter().galley(pos2(r.left() + 46.0, r.center().y - g.size().y / 2.0), g, t.text);
                 if resp.clicked() {
                     app.ui.selected_path = Some(key.clone());
+                    app.ui.selected_saved_path = if *kind == PathRow::Saved {
+                        id.filter(|id| id.0 != 0).map(|id| crate::state::XcfSavedPathSelection { document: doc.id.0, path: id.0 })
+                    } else { None };
                 }
                 // Double-clicking the Work Path saves it (Photoshop's "Save Path").
                 if resp.double_clicked() && *kind == PathRow::Work {
@@ -907,9 +934,8 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 resp.context_menu(|ui| {
                     crate::widgets::menu_scroll(ui, |ui| {
                         ui.set_min_width(190.0);
-                        let entry = PathEntry { name: name.clone(), path: path.clone(), kind: *kind };
                         let can_paint = app.session.active().and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id))).is_some_and(|l| l.surface().is_some());
-                        for (label, cmd, params) in path_context_actions(&entry, &doc) {
+                        for (label, cmd, params) in path_context_actions(entry, &doc) {
                             let enabled = !matches!(cmd, "path.fill" | "path.stroke") || can_paint;
                             if ui.add_enabled(enabled, egui::Button::new(tl!(label))).clicked() {
                                 action = Some((cmd, params));
@@ -926,6 +952,7 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let rest = rest.intersect(Rect::from_min_size(rest.min, vec2(rest.width(), rest.height().min(4000.0))));
             if rest.is_positive() && ui.interact(rest, ui.id().with("paths-empty"), Sense::click()).clicked() {
                 app.ui.selected_path = None;
+                app.ui.selected_saved_path = None;
             }
         },
     );

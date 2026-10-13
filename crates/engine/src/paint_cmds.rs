@@ -35,7 +35,260 @@ fn point(p: &Value, k: &str) -> Option<(f32, f32)> {
     Some((a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32))
 }
 
+pub(crate) fn wide_target(s: &Session, p: &Value) -> Result<Option<(Option<photocraft_doc::LayerId>, photocraft_color::PixelFormat)>> {
+    use crate::channel_cmds::Target;
+    if let Some(i) = p.get("target").and_then(|v| v.get("channel")) {
+        let index = i.as_u64().and_then(|v| usize::try_from(v).ok()).ok_or_else(|| wide_bad("channel index is out of range"))?;
+        if s.active().ok_or(EngineError::NoDocument)?.doc.channels.get(index).is_none() {
+            return Err(wide_bad("no such channel"));
+        }
+    }
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let target = crate::channel_cmds::target_of(p);
+    let id = if crate::channel_cmds::is_channel_target(p) { None } else { Some(crate::commands::layer_param(s, p)?) };
+    let surface = match target {
+        Target::Alpha(i) => st.doc.channels.get(i).map(|c| &c.surface),
+        Target::QuickMask => st.doc.quick_mask.as_ref().map(|c| &c.surface),
+        Target::Mask => id.and_then(|id| st.doc.layer(id)).and_then(|l| l.mask.as_ref()).map(|m| m.surface.as_ref()),
+        Target::Pixels => id.and_then(|id| st.doc.layer(id)).and_then(|l| l.surface()),
+    }
+    .ok_or_else(|| wide_bad("target has no editable pixels"))?;
+    let format = surface.format();
+    Ok(matches!(format.sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64).then_some((id, format)))
+}
+fn wide_bad(message: impl Into<String>) -> EngineError {
+    EngineError::Other(message.into())
+}
+pub(crate) fn wide_color(v: Option<&Value>, default: [f32; 4]) -> Result<[f64; 4]> {
+    let mut out = default.map(f64::from);
+    match v {
+        None | Some(Value::Null) => {}
+        Some(Value::Array(a)) if a.len() == 3 || a.len() == 4 => {
+            out = [0.0, 0.0, 0.0, 1.0];
+            for (dst, src) in out.iter_mut().zip(a) {
+                *dst = src.as_f64().filter(|v| v.is_finite()).ok_or_else(|| wide_bad("color components must be finite numbers"))?;
+            }
+        }
+        Some(Value::String(h)) => {
+            let h = h.trim_start_matches('#');
+            if h.len() != 6 && h.len() != 8 {
+                return Err(wide_bad("color must be #rrggbb or #rrggbbaa"));
+            }
+            out = [0.0, 0.0, 0.0, 1.0];
+            for (i, dst) in out.iter_mut().enumerate().take(h.len() / 2) {
+                let part = h.get(i * 2..i * 2 + 2).ok_or_else(|| wide_bad("invalid hexadecimal color"))?;
+                *dst = f64::from(u8::from_str_radix(part, 16).map_err(|_| wide_bad("invalid hexadecimal color"))?) / 255.0;
+            }
+        }
+        _ => return Err(wide_bad("color must be an RGB/RGBA array or hexadecimal string")),
+    }
+    if !out.iter().all(|v| v.is_finite()) || !(0.0..=1.0).contains(&out[3]) {
+        return Err(wide_bad("invalid color or alpha"));
+    }
+    Ok(out)
+}
+pub(crate) fn wide_opacity(p: &Value) -> Result<f64> {
+    let value = match p.get("opacity") {
+        None | Some(Value::Null) => 100.0,
+        Some(v) => v.as_f64().filter(|v| v.is_finite()).ok_or_else(|| wide_bad("opacity must be finite"))?,
+    };
+    Ok(value.clamp(0.0, 100.0) / 100.0)
+}
+fn wide_gradient(s: &mut Session, p: &Value, id: Option<photocraft_doc::LayerId>, format: photocraft_color::PixelFormat) -> Result<Value> {
+    if s.color_restrict.is_some() || p.get("mode").is_some_and(|v| v.as_str() != Some("normal")) || p.get("dither").and_then(Value::as_bool) != Some(false) {
+        return Err(wide_bad("wide gradients require Normal mode, all color channels and explicit dither:false"));
+    }
+    if p.get("transparency").is_some() {
+        return Err(wide_bad("wide transparency overrides are not yet qualified"));
+    }
+    let point = |key| -> Result<(f64, f64)> {
+        let a = p.get(key).and_then(Value::as_array).filter(|a| a.len() == 2).ok_or_else(|| wide_bad("gradient needs finite from/to pairs"))?;
+        let x = a.first().and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| wide_bad("invalid gradient coordinate"))?;
+        let y = a.get(1).and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| wide_bad("invalid gradient coordinate"))?;
+        Ok((x, y))
+    };
+    let from = point("from")?;
+    let to = point("to")?;
+    let shape = match p.get("style").and_then(Value::as_str).unwrap_or("linear") {
+        "linear" => GradientShape::Linear,
+        "radial" => GradientShape::Radial,
+        "angle" => GradientShape::Angle,
+        "reflected" => GradientShape::Reflected,
+        "diamond" => GradientShape::Diamond,
+        _ => return Err(wide_bad("unknown gradient style")),
+    };
+    let opacity = wide_opacity(p)?;
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let use_preset = p.get("colors").is_none() && (p.get("gradient").is_some() || p.get("stops").is_none());
+    let mut stops = if use_preset { wide_preset_stops(s, p, format)? } else { Vec::new() };
+    if !use_preset {
+        let values = p.get("stops").or_else(|| p.get("colors")).and_then(Value::as_array).ok_or_else(|| wide_bad("invalid gradient stops or colors"))?;
+        if values.is_empty() || values.len() > 4096 {
+            return Err(wide_bad("gradient requires 1..4096 stops"));
+        }
+        stops.try_reserve_exact(values.len()).map_err(|_| wide_bad("gradient stop allocation failed"))?;
+        for (i, v) in values.iter().enumerate() {
+            let (position, value) = if p.get("stops").is_some() {
+                let pair = v.as_array().filter(|a| a.len() == 2).ok_or_else(|| wide_bad("stop must be [position,color]"))?;
+                (pair.first().and_then(Value::as_f64).ok_or_else(|| wide_bad("invalid stop position"))?, pair.get(1))
+            } else {
+                (if values.len() > 1 { i as f64 / (values.len() - 1) as f64 } else { 0.0 }, Some(v))
+            };
+            let rgba = match value.and_then(Value::as_str) {
+                Some("foreground") => s.tools.foreground.map(f64::from),
+                Some("background") => s.tools.background.map(f64::from),
+                _ => wide_color(value, s.tools.foreground)?,
+            };
+            if !format.alpha && rgba[3] != 1.0 {
+                return Err(wide_bad("wide gradients with source alpha need an alpha target"));
+            }
+            stops.push(photocraft_algo::wide_paint::NativeStop { position, color: crate::brush_cmds::native_wide_color(&st.doc, format, p, rgba)? });
+        }
+    }
+    let area = crate::brush_cmds::wide_paint_extent(&st.doc, id, p).map_or(st.doc.bounds(), |r| r.intersect(&st.doc.bounds()));
+    let reverse = match p.get("reverse") {
+        None => false,
+        Some(v) => v.as_bool().ok_or_else(|| wide_bad("reverse must be boolean"))?,
+    };
+    s.edit("Gradient", |doc, _| {
+        let selection = doc.selection.clone();
+        let (target, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
+        photocraft_algo::wide_paint::try_paint_gradient(
+            target,
+            area,
+            photocraft_algo::wide_paint::GradientOptions { from, to, shape, reverse, opacity, lock_transparency: lock },
+            &stops,
+            selection.as_ref(),
+            Default::default(),
+            &photocraft_raster::Interrupt::NONE,
+        )
+        .map_err(|e| wide_bad(e.to_string()))
+    })?;
+    Ok(Value::Null)
+}
+
+/// Resolve original preset color data without the legacy sampled transparency approximation.
+/// Only an opaque or constant-opacity curve has an exact representation in this stop kernel.
+fn wide_preset_stops(s: &Session, p: &Value, format: photocraft_color::PixelFormat) -> Result<Vec<photocraft_algo::wide_paint::NativeStop>> {
+    let preset = match p.get("gradient") {
+        None => &s.presets.gradient,
+        Some(value) => {
+            let name = value.as_str().ok_or_else(|| wide_bad("gradient preset name must be a string"))?;
+            s.presets
+                .gradients
+                .iter()
+                .flat_map(|group| &group.items)
+                .find(|item| item.name == name)
+                .ok_or_else(|| wide_bad(format!("no gradient preset \"{name}\"")))?
+        }
+    };
+    if preset.stops.len() > 4096 || preset.opacity.len() > 4096 {
+        return Err(wide_bad("gradient requires at most4096 color/transparency stops"));
+    }
+    let alpha = preset.opacity.first().map_or(1.0, |(_, alpha)| f64::from(*alpha));
+    if !alpha.is_finite()
+        || !(0.0..=1.0).contains(&alpha)
+        || preset.opacity.iter().any(|(position, value)| !position.is_finite() || !(0.0..=1.0).contains(position) || f64::from(*value) != alpha)
+    {
+        return Err(wide_bad("wide preset gradients currently require finite constant opacity"));
+    }
+    if !format.alpha && alpha != 1.0 {
+        return Err(wide_bad("wide gradients with source alpha need an alpha target"));
+    }
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let mut stops = Vec::new();
+    stops.try_reserve_exact(preset.stops.len().max(2)).map_err(|_| wide_bad("gradient stop allocation failed"))?;
+    let mut push = |position: f64, rgb: [f32; 3]| -> Result<()> {
+        if !position.is_finite() || rgb.iter().any(|v| !v.is_finite()) {
+            return Err(wide_bad("invalid preset color stop"));
+        }
+        let rgba = [f64::from(rgb[0]), f64::from(rgb[1]), f64::from(rgb[2]), alpha];
+        stops.push(photocraft_algo::wide_paint::NativeStop {
+            position: position.clamp(0.0, 1.0),
+            color: crate::brush_cmds::native_wide_color(&st.doc, format, p, rgba)?,
+        });
+        Ok(())
+    };
+    if preset.stops.is_empty() {
+        push(0.0, [s.tools.foreground[0], s.tools.foreground[1], s.tools.foreground[2]])?;
+        push(1.0, [s.tools.background[0], s.tools.background[1], s.tools.background[2]])?;
+    } else {
+        for (position, color) in &preset.stops {
+            let rgb = match color {
+                gradients::StopColor::Foreground => [s.tools.foreground[0], s.tools.foreground[1], s.tools.foreground[2]],
+                gradients::StopColor::Background => [s.tools.background[0], s.tools.background[1], s.tools.background[2]],
+                gradients::StopColor::Rgb(rgb) => *rgb,
+            };
+            push(f64::from(*position), rgb)?;
+        }
+    }
+    stops.sort_by(|a, b| a.position.total_cmp(&b.position));
+    Ok(stops)
+}
+
+fn wide_bucket(s: &mut Session, p: &Value, id: Option<photocraft_doc::LayerId>, format: photocraft_color::PixelFormat) -> Result<Value> {
+    let flag = |key: &str, default| -> Result<bool> {
+        match p.get(key) {
+            None | Some(Value::Null) => Ok(default),
+            Some(v) => v.as_bool().ok_or_else(|| wide_bad(format!("{key} must be boolean"))),
+        }
+    };
+    if s.color_restrict.is_some() || flag("sampleAllLayers", false)? || flag("antiAlias", true)? || p.get("mode").is_some_and(|v| v.as_str() != Some("normal"))
+    {
+        return Err(wide_bad("wide bucket currently requires native target sampling, all color channels, Normal mode and antiAlias:false"));
+    }
+    let tolerance = match p.get("tolerance") {
+        None => 32.0,
+        Some(v) => v.as_f64().filter(|v| v.is_finite()).ok_or_else(|| wide_bad("invalid tolerance"))?,
+    };
+    if tolerance != 0.0 {
+        return Err(wide_bad("wide bucket currently supports exact native matching only; set tolerance:0"));
+    }
+    if p.get("contents").or_else(|| p.get("source")).is_some_and(|v| v.as_str() != Some("foreground")) {
+        return Err(wide_bad("wide bucket pattern sources are not yet qualified"));
+    }
+    let coordinate = |key| -> Result<i32> {
+        let value = match p.get(key) {
+            None => 0.0,
+            Some(v) => v.as_f64().filter(|v| v.is_finite()).ok_or_else(|| wide_bad("invalid bucket coordinate"))?,
+        }
+        .floor();
+        if value < f64::from(i32::MIN) || value > f64::from(i32::MAX) {
+            return Err(wide_bad("bucket coordinate is out of range"));
+        }
+        Ok(value as i32)
+    };
+    let seed = (coordinate("x")?, coordinate("y")?);
+    let contiguous = flag("contiguous", true)?;
+    let rgba = wide_color(p.get("color"), s.tools.foreground)?;
+    let mut opacity = wide_opacity(p)?;
+    if !format.alpha {
+        opacity *= rgba[3];
+    }
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let color = crate::brush_cmds::native_wide_color(&st.doc, format, p, rgba)?;
+    let area = crate::brush_cmds::wide_paint_extent(&st.doc, id, p).map_or(st.doc.bounds(), |r| r.intersect(&st.doc.bounds()));
+    let filled = s.edit("Paint Bucket", |doc, _| {
+        let selection = doc.selection.clone();
+        let (target, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
+        photocraft_algo::wide_paint::try_paint_bucket_exact(
+            target,
+            area,
+            photocraft_algo::wide_paint::BucketOptions { seed, contiguous, opacity, lock_transparency: lock },
+            color.get(..format.channels()).ok_or_else(|| wide_bad("invalid color layout"))?,
+            selection.as_ref(),
+            Default::default(),
+            &photocraft_raster::Interrupt::NONE,
+        )
+        .map_err(|e| wide_bad(e.to_string()))
+    })?;
+    Ok(json!({"filled":filled}))
+}
+
 fn bucket(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some((id, format)) = wide_target(s, p)? {
+        return wide_bucket(s, p, id, format);
+    }
     let fg = s.tools.foreground;
     let c = color(p.get("color"), fg);
     let (x, y) = (f(p, "x", 0.0).floor() as i32, f(p, "y", 0.0).floor() as i32);
@@ -92,6 +345,9 @@ fn bucket(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn gradient(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some((id, format)) = wide_target(s, p)? {
+        return wide_gradient(s, p, id, format);
+    }
     let from = point(p, "from").ok_or_else(|| EngineError::BadParams { cmd: "paint.gradient".into(), msg: "missing from".into() })?;
     let to = point(p, "to").ok_or_else(|| EngineError::BadParams { cmd: "paint.gradient".into(), msg: "missing to".into() })?;
     let shape = match p.get("style").and_then(Value::as_str).unwrap_or("linear") {

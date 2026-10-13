@@ -320,14 +320,29 @@ fn format_real(r: f64) -> String {
         s.pop();
     }
     if matches!(s.as_str(), "0." | "-0.") {
-        return "0.0".into();
+        s = "0.0".into();
     }
     if let Some(rest) = s.strip_prefix("0.") {
         s = format!(".{rest}");
     } else if let Some(rest) = s.strip_prefix("-0.") {
         s = format!("-.{rest}");
     }
-    s
+    // Preserve the established layout when it already encodes the exact number.
+    // Five fractional places otherwise discard small sizes and native precision.
+    if s.parse::<f64>().is_ok_and(|parsed| parsed.to_bits() == r.to_bits()) {
+        return s;
+    }
+    let mut exact = r.to_string();
+    // Keep real values distinguishable from integers, including large finite values.
+    if !exact.contains(['.', 'e', 'E']) {
+        exact.push_str(".0");
+    }
+    if let Some(rest) = exact.strip_prefix("0.") {
+        exact = format!(".{rest}");
+    } else if let Some(rest) = exact.strip_prefix("-0.") {
+        exact = format!("-.{rest}");
+    }
+    exact
 }
 
 #[cfg(test)]
@@ -358,6 +373,8 @@ mod tests {
 
     #[test]
     fn reals_format_like_photoshop() {
+        assert_eq!(format_real(0.0), "0.0");
+        assert_eq!(format_real(-0.0), "-0.0");
         assert_eq!(format_real(1.0), "1.0");
         assert_eq!(format_real(0.5), ".5");
         assert_eq!(format_real(-0.25), "-.25");
@@ -367,7 +384,6 @@ mod tests {
     #[test]
     fn tiny_reals_round_trip_as_numbers() {
         for value in [0.000004, -0.000004] {
-            assert_eq!(format_real(value), "0.0");
             let source = Value::Dict(vec![(
                 "EngineDict".into(),
                 Value::Dict(vec![("StyleRun".into(), Value::Array(vec![Value::Dict(vec![("BaselineShift".into(), Value::Real(value))])]))]),
@@ -380,8 +396,61 @@ mod tests {
                 .and_then(|runs| runs.first())
                 .and_then(|run| run.get("BaselineShift"))
                 .and_then(Value::as_f64);
-            assert_eq!(baseline_shift, Some(0.0));
+            assert_eq!(baseline_shift.map(f64::to_bits), Some(value.to_bits()));
         }
+    }
+
+    #[test]
+    fn finite_real_serialization_preserves_native_bits() {
+        for value in [
+            0.0,
+            -0.0,
+            1.0 / 3.0,
+            std::f64::consts::PI,
+            1e15,
+            1e16,
+            0.5 + 2f64.powi(-40),
+            -0.25 - 2f64.powi(-42),
+            f64::MIN_POSITIVE,
+            f64::from_bits(1),
+            -f64::from_bits(1),
+            f64::MAX,
+            -f64::MAX,
+        ] {
+            let source = Value::Dict(vec![("OriginalFiniteControl".into(), Value::Real(value))]);
+            let encoded = write(&source);
+            let parsed = parse(&encoded).unwrap();
+            let Some(Value::Real(actual)) = parsed.get("OriginalFiniteControl") else { panic!("real number kind was lost") };
+            assert_eq!(actual.to_bits(), value.to_bits(), "{value:?}: {}", String::from_utf8_lossy(&encoded));
+            assert_eq!(write(&parsed), encoded);
+        }
+    }
+
+    #[test]
+    fn nonfinite_real_fallback_stays_zero() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(format_real(value), "0.0");
+            assert_eq!(parse(&write(&Value::Real(value))).unwrap(), Value::Real(0.0));
+        }
+    }
+
+    #[test]
+    fn finite_real_bit_patterns_round_trip() {
+        let mut bits = 0x8b31_52de_470a_963fu64;
+        let mut tested = 0;
+        for _ in 0..1024 {
+            bits = bits.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            let value = f64::from_bits(bits);
+            if !value.is_finite() {
+                continue;
+            }
+            let source = Value::Real(value);
+            let bytes = write(&source);
+            let Value::Real(parsed) = parse(&bytes).unwrap() else { panic!("real kind changed") };
+            assert_eq!(parsed.to_bits(), bits, "{value:?}");
+            tested += 1;
+        }
+        assert!(tested > 1000);
     }
 
     #[test]

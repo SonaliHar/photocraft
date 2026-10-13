@@ -15,13 +15,20 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
 
 /// Layers with visible pixels at (x, y), topmost first (hidden layers and hidden groups skipped).
 pub fn layers_at(doc: &Document, x: i32, y: i32) -> Vec<LayerId> {
+    layers_at_checked(doc, x, y, &photocraft_raster::Interrupt::NONE).unwrap_or_default()
+}
+
+/// Checked source evaluation for callers that can report an invalid source or cancellation.
+pub fn layers_at_checked(doc: &Document, x: i32, y: i32, control: &photocraft_raster::Interrupt<'_>) -> Result<Vec<LayerId>> {
+    control.check().map_err(|_| EngineError::Cancelled)?;
     // A 1×1 read at i32::MAX would be an empty rect (huge `x` params saturate there).
     if x.checked_add(1).is_none() || y.checked_add(1).is_none() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let rows = doc.walk();
     let mut out = Vec::new();
     for (path, _, l) in rows.iter().rev() {
+        control.check().map_err(|_| EngineError::Cancelled)?;
         // The layer and every enclosing group must be visible.
         if !(1..=path.len()).all(|n| doc.layer_at(&path[..n]).is_some_and(|a| a.visible)) {
             continue;
@@ -40,17 +47,40 @@ pub fn layers_at(doc: &Document, x: i32, y: i32) -> Vec<LayerId> {
         if matches!(l.content, LayerContent::Group(_) | LayerContent::Adjustment(_)) {
             continue;
         }
-        let alpha = match &l.content {
-            // Fill layers cover the canvas (their mask limits them).
-            LayerContent::Fill(_) => 1.0,
-            _ => match l.surface() {
-                Some(s) => {
-                    let mut px = [[0.0f32; 4]; 1];
-                    s.read_rgba_into(Rect::from_xywh(x, y, 1, 1), &mut px);
-                    px[0][3]
+        let source = doc.xcf_state.as_ref().and_then(|state| {
+            state.source_items.iter().find(|source| {
+                source.owner == photocraft_doc::item_identity::ItemRef::Layer(l.id)
+                    && matches!(source.source, photocraft_doc::xcf_items::EditableSource::Text { .. })
+            })
+        });
+        let alpha = if let Some(source) = source {
+            let mut resident = 0_u64;
+            let mut charge = |bytes| {
+                resident = resident.checked_add(bytes).ok_or(photocraft_compose::gimp_composite::CompositionError::Invalid("text pick resident overflow"))?;
+                if resident > 8 << 20 {
+                    return Err(photocraft_compose::gimp_composite::CompositionError::Invalid("text pick resident limit"));
                 }
-                None => 0.0,
-            },
+                Ok(())
+            };
+            let rendered = photocraft_compose::gimp_text_items::render_source(doc, source, control, &mut charge).map_err(|error| {
+                if control.cancelled() { EngineError::Cancelled } else { EngineError::Other(format!("cannot pick imported text: {error}")) }
+            })?;
+            let mut pixel = [0.0; 4];
+            rendered.surface.try_read_pixel_f64(x, y, &mut pixel).map_err(|error| EngineError::Other(format!("cannot read current text: {error}")))?;
+            pixel.get(3).copied().unwrap_or(0.0) as f32
+        } else {
+            match &l.content {
+                // Fill layers cover the canvas (their mask limits them).
+                LayerContent::Fill(_) => 1.0,
+                _ => match l.surface() {
+                    Some(s) => {
+                        let mut px = [[0.0f32; 4]; 1];
+                        s.read_rgba_into(Rect::from_xywh(x, y, 1, 1), &mut px);
+                        px[0][3]
+                    }
+                    None => 0.0,
+                },
+            }
         };
         let mask = l.mask.as_ref().filter(|m| m.enabled).map_or(1.0, |m| {
             let mut v = [0.0f32];
@@ -61,7 +91,7 @@ pub fn layers_at(doc: &Document, x: i32, y: i32) -> Vec<LayerId> {
             out.push(l.id);
         }
     }
-    out
+    Ok(out)
 }
 
 /// The outermost group containing `id` (the layer itself when it isn't in a group). An artboard
@@ -76,7 +106,7 @@ fn pick(s: &mut Session, p: &Value) -> Result<Value> {
     let x = p.get("x").and_then(Value::as_f64).ok_or_else(|| EngineError::BadParams { cmd: "layer.pickAt".into(), msg: "missing `x`".into() })?.floor() as i32;
     let y = p.get("y").and_then(Value::as_f64).ok_or_else(|| EngineError::BadParams { cmd: "layer.pickAt".into(), msg: "missing `y`".into() })?.floor() as i32;
     let doc = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
-    let hits = layers_at(&doc, x, y);
+    let hits = layers_at_checked(&doc, x, y, &photocraft_raster::Interrupt::NONE)?;
     if p.get("list").and_then(Value::as_bool).unwrap_or(false) {
         let names: Vec<Value> = hits.iter().filter_map(|id| doc.layer(*id)).map(|l| json!({"layer": l.id.0, "name": l.name})).collect();
         return Ok(json!({ "layers": names }));
@@ -87,7 +117,7 @@ fn pick(s: &mut Session, p: &Value) -> Result<Value> {
         let mode = p.get("mode").and_then(Value::as_str).unwrap_or("replace");
         // Like Photoshop, a plain click on one of several selected layers keeps them all
         // selected, so the drag that follows moves the whole selection.
-        let keeps = mode == "replace" && s.active().is_some_and(|st| st.is_layer_selected(target) && st.selected_layers().len() > 1);
+        let keeps = mode == "replace" && s.active().is_some_and(|st| st.is_layer_selected(target) && st.selection_ids().len() > 1);
         if !keeps {
             s.execute("layer.select", json!({"layer": target.0, "mode": mode}))?;
         }
@@ -171,14 +201,14 @@ mod tests {
         let (mut s, a, b) = two_squares();
         s.execute("layer.select", json!({"layer": a.0})).unwrap();
         s.execute("layer.select", json!({"layer": b.0, "mode": "add"})).unwrap();
-        assert_eq!(s.active().unwrap().selected_layers().len(), 2);
+        assert_eq!(s.active().unwrap().selected_layers().unwrap().len(), 2);
         // Clicking A (selected) keeps both so the drag moves both.
         s.execute("layer.pickAt", json!({"x": 5, "y": 5})).unwrap();
         let st = s.active().unwrap();
         assert!(st.is_layer_selected(a) && st.is_layer_selected(b));
         // Clicking the Background (not selected) replaces the selection.
         s.execute("layer.pickAt", json!({"x": 35, "y": 5})).unwrap();
-        assert_eq!(s.active().unwrap().selected_layers().len(), 1);
+        assert_eq!(s.active().unwrap().selected_layers().unwrap().len(), 1);
         assert!(!s.active().unwrap().is_layer_selected(a));
         // Shift-click (add) builds a selection up again.
         s.execute("layer.pickAt", json!({"x": 5, "y": 5})).unwrap();

@@ -56,12 +56,13 @@ pub(crate) fn active_pixels(app: &PhotocraftApp) -> Result<(LayerId, Surface, bo
 }
 
 /// The document with layer `id` hidden (what shows behind a live preview of that layer).
-pub(crate) fn without_layer(doc: &Document, id: LayerId) -> Arc<Document> {
+pub(crate) fn without_layer(doc: &Document, id: LayerId) -> Result<Arc<Document>, String> {
+    if doc.has_backed_rasters().map_err(|error| error.to_string())? { return Err("Warp preview requires a resident document".into()); }
     let mut d = doc.clone();
     if let Some(l) = d.layer_mut(id) {
         l.visible = false;
     }
-    Arc::new(d)
+    Ok(Arc::new(d))
 }
 
 /// A texture image of `surf` over `r`, downsampled so the longer side is at most `max_side`.

@@ -220,7 +220,7 @@ fn proxy_mask(app: &PhotocraftApp, proxy: &Document, k: u32, params: &Value) -> 
                 surf.read_rgba_into(area, &mut px);
                 px
             }
-            _ => photocraft_compose::render(proxy, area).px,
+            _ => photocraft_compose::render(proxy, area).map_err(|e| e.to_string())?.px,
         };
         let invert = params.get("invert").and_then(Value::as_bool).unwrap_or(false);
         return Ok(query
@@ -260,7 +260,7 @@ fn proxy_mask(app: &PhotocraftApp, proxy: &Document, k: u32, params: &Value) -> 
     s.tools = app.session.tools.clone();
     let mut doc = proxy.clone();
     doc.selection = None;
-    s.add_document(doc, None);
+    s.add_document(doc, None).map_err(|error| error.to_string())?;
     if let Some(id) = app.session.active().and_then(|d| d.active_layer) {
         let _ = s.select_layer(id);
     }
@@ -290,7 +290,7 @@ fn preview(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Map<String, Value>)
     if !matches!(&app.color_range, Some(p) if p.doc == doc_id && p.revision == revision) {
         let side = doc.size.width.max(doc.size.height).max(1);
         let k = side.div_ceil(PREVIEW).max(1);
-        let proxy = Arc::new(crate::proxy::proxy_document(&doc, k));
+        let proxy = Arc::new(crate::proxy::proxy_document(&doc, k).map_err(|error| app.ui.status = error.to_string()).ok()?);
         app.color_range = Some(Preview {
             doc: doc_id,
             revision,
@@ -315,7 +315,13 @@ fn preview(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Map<String, Value>)
     let (w, h) = (proxy.size.width as usize, proxy.size.height as usize);
     if image_view {
         if app.color_range.as_ref().is_some_and(|p| p.image.is_none()) {
-            let buf = photocraft_compose::thumbnail_buffer(&proxy, proxy.size.width.max(proxy.size.height));
+            let buf = match photocraft_compose::thumbnail_buffer(&proxy, proxy.size.width.max(proxy.size.height)) {
+                Ok(buf) => buf,
+                Err(error) => {
+                    report(app, Some(error.to_string()));
+                    return None;
+                }
+            };
             let thumb = match app.session.color.canvas_display(&proxy) {
                 Ok(display) => display.to_rgba8(&buf),
                 Err(e) => {
@@ -580,7 +586,13 @@ pub(crate) fn paint_selection_preview(app: &mut PhotocraftApp, ctx: &egui::Conte
     if app.color_range.as_ref().is_some_and(|p| p.canvas_proxy.is_none()) {
         let Some(original) = app.session.active().map(|st| st.doc.clone()) else { return };
         let k = original.size.width.max(original.size.height).max(1).div_ceil(CANVAS_PREVIEW);
-        let proxy = Arc::new(crate::proxy::proxy_document(&original, k));
+        let proxy = match crate::proxy::proxy_document(&original, k) {
+            Ok(proxy) => Arc::new(proxy),
+            Err(error) => {
+                app.ui.status = error.to_string();
+                return;
+            }
+        };
         if let Some(p) = app.color_range.as_mut() {
             p.canvas_proxy = Some((k, proxy));
         }
@@ -740,7 +752,7 @@ mod tests {
         bg.fill_rect(GRect::new(20, 0, 40, 15), &[0.0, 0.0, 1.0, 1.0]);
         bg.fill_rect(GRect::new(0, 15, 20, 30), &[0.0, 0.0, 0.0, 1.0]);
         let mut s = photocraft_engine::Session::new();
-        s.add_document(doc, None);
+        s.add_document(doc, None).unwrap();
         PhotocraftApp::new(s, crate::Services::default())
     }
 
@@ -1126,16 +1138,16 @@ mod tests {
         surface.fill_rect(GRect::new(200, 0, 400, 4), &[0.0, 0.0, 1.0, 1.0]);
         surface.fill_rect(GRect::new(101, 0, 102, 4), &[0.0, 0.0, 1.0, 1.0]);
         let mut session = photocraft_engine::Session::new();
-        session.add_document(doc, None);
+        session.add_document(doc, None).unwrap();
         let mut app = PhotocraftApp::new(session, crate::Services::default());
         let id = open(&mut app);
         let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
         pick(&app, &mut fields, [101.0, 1.0], egui::Modifiers::NONE);
         fields.insert("fuzziness".into(), json!(0.0));
         let original = app.session.active().unwrap().doc.clone();
-        let proxy = crate::proxy::proxy_document(&original, 2);
+        let proxy = crate::proxy::proxy_document(&original, 2).unwrap();
         let mut old = photocraft_engine::Session::new();
-        old.add_document(proxy.clone(), None);
+        old.add_document(proxy.clone(), None).unwrap();
         old.execute(COMMAND, json!({"points": [[50, 0]], "fuzziness": 0})).unwrap();
         assert_eq!(
             old.active().unwrap().doc.selection.as_ref().unwrap().sample_channel(150, 0, 0),
@@ -1164,7 +1176,7 @@ mod tests {
             .unwrap();
         for all_layers in [false, true] {
             let p = json!({"select": "sampledColors", "points": [[5, 5]], "fuzziness": 0, "sampleAllLayers": all_layers});
-            let proxy = crate::proxy::proxy_document(&app.session.active().unwrap().doc, 1);
+            let proxy = crate::proxy::proxy_document(&app.session.active().unwrap().doc, 1).unwrap();
             let shown = proxy_mask(&app, &proxy, 1, &p).unwrap();
             app.run(COMMAND, p).unwrap();
             for (x, y) in [(5, 5), (30, 5), (5, 20), (30, 20)] {

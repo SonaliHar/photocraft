@@ -115,9 +115,11 @@ fn dim_field(ui: &mut egui::Ui, text: &str) {
 }
 
 pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    crate::xcf_notices::properties(app, ui);
     let t = Tokens::get(ui.ctx());
     let Some(st) = app.session.active() else { return };
-    let (w, h, mode, depth, dpi) = (st.doc.size.width, st.doc.size.height, st.doc.mode, st.doc.depth, st.doc.resolution_dpi);
+    let (w, h, mode, depth) = (st.doc.size.width, st.doc.size.height, st.doc.mode, st.doc.depth);
+    let dpi = crate::chrome_ui::resolution_label(&st.doc);
     let has_bg = st.doc.layers.first().is_some_and(|l| is_background(&st.doc, l));
     let mut run: Vec<(String, Value)> = Vec::new();
     ui.horizontal(|ui| {
@@ -174,7 +176,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.add_space(2.0);
         ui.horizontal(|ui| {
             ui.add_space(label_w + 6.0);
-            ui.label(RichText::new(crate::i18n::fmt(tl!("Resolution: {dpi} pixels/inch"), &[("dpi", &widgets::fmt_num(dpi as f64))])).color(t.text));
+            ui.label(RichText::new(crate::i18n::fmt(tl!("Resolution: {dpi} pixels/inch"), &[("dpi", &dpi)])).color(t.text));
         });
         ui.add_space(2.0);
         ui.horizontal(|ui| {
@@ -271,6 +273,44 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 mod tests {
     use super::*;
     use photocraft_doc::Document;
+
+    #[test]
+    fn document_resolution_paints_both_authoritative_axes_without_mutation() {
+        use egui_kittest::Harness;
+        fn collect(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(text) => out.push(text.galley.job.text.clone()),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, out)),
+                _ => {}
+            }
+        }
+        for (physical, expected) in [
+            (Some(photocraft_doc::PhysicalResolution { x_dpi: 144.25, y_dpi: 287.75, unit: photocraft_doc::PhysicalUnit::Inch }), "144.3 × 287.8"),
+            (None, "300"),
+        ] {
+            let mut app = PhotocraftApp::new(doc_with_background(), crate::Services::default());
+            let doc = app.session.active_mut().unwrap().doc.try_resident_mut().unwrap();
+            doc.resolution_dpi = 300.;
+            doc.physical_resolution = physical;
+            let before = doc.clone();
+            let mut h = Harness::builder().with_size(vec2(460., 800.)).build_ui_state(
+                |ui, app| {
+                    if ui.ctx().fonts(|fonts| fonts.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        properties(app, ui);
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
+            h.run_steps(3);
+            let mut painted = Vec::new();
+            for shape in &h.output().shapes {
+                collect(&shape.shape, &mut painted);
+            }
+            assert!(painted.iter().any(|text| text.contains(expected) && text.contains("pixels/inch")), "{painted:?}");
+            assert_eq!(*h.state().session.active().unwrap().doc, before);
+        }
+    }
 
     fn doc_with_background() -> photocraft_engine::Session {
         let mut s = photocraft_engine::Session::new();

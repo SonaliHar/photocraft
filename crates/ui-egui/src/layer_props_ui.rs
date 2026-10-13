@@ -97,39 +97,38 @@ const LINK_W: f32 = 20.0;
 pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     let t = Tokens::get(ui.ctx());
     let mut run: Vec<(String, Value)> = Vec::new();
-    if let Some(s) = layer.surface() {
-        let b = app.cached_bounds(layer.id.0, s);
-        if section(ui, "transform", tl!("Transform")) {
-            let link_key = egui::Id::new("layer-props-link");
-            let linked = ui.data(|d| d.get_temp::<bool>(link_key)).unwrap_or(true);
-            let bb = [b.x0, b.y0, b.x1, b.y1];
-            // Two label+field columns with the link toggle between them, filling the panel.
-            let w = ((ui.available_width() - 2.0 * (LABEL_W + LABEL_GAP) - LINK_W - 2.0 * LABEL_GAP) / 2.0).max(36.0);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = LABEL_GAP;
-                if let Some(v) = field(ui, "w", "W", b.width() as f32, w) {
-                    run.extend(transform_params(layer.id.0, bb, Some(v), None, linked).map(|p| ("edit.transform".to_string(), p)));
-                }
-                if crate::icons::button(ui, if linked { "link" } else { "unlink" }, LINK_W, linked, tl!("Link width and height")).clicked() {
-                    ui.data_mut(|d| d.insert_temp(link_key, !linked));
-                }
-                if let Some(v) = field(ui, "h", "H", b.height() as f32, w) {
-                    run.extend(transform_params(layer.id.0, bb, None, Some(v), linked).map(|p| ("edit.transform".to_string(), p)));
-                }
-            });
-            ui.add_space(ROW_GAP);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = LABEL_GAP;
-                if let Some(v) = field(ui, "x", "X", b.x0 as f32, w) {
-                    run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": (v - b.x0 as f32).round() as i32, "dy": 0})));
-                }
-                ui.add_space(LINK_W + LABEL_GAP);
-                if let Some(v) = field(ui, "y", "Y", b.y0 as f32, w) {
-                    run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": 0, "dy": (v - b.y0 as f32).round() as i32})));
-                }
-            });
-            ui.add_space(ROW_GAP);
-        }
+    if let Some(b) = app.cached_layer_bounds(layer)
+        && section(ui, "transform", tl!("Transform"))
+    {
+        let link_key = egui::Id::new("layer-props-link");
+        let linked = ui.data(|d| d.get_temp::<bool>(link_key)).unwrap_or(true);
+        let bb = [b.x0, b.y0, b.x1, b.y1];
+        // Two label+field columns with the link toggle between them, filling the panel.
+        let w = ((ui.available_width() - 2.0 * (LABEL_W + LABEL_GAP) - LINK_W - 2.0 * LABEL_GAP) / 2.0).max(36.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = LABEL_GAP;
+            if let Some(v) = field(ui, "w", "W", b.width() as f32, w) {
+                run.extend(transform_params(layer.id.0, bb, Some(v), None, linked).map(|p| ("edit.transform".to_string(), p)));
+            }
+            if crate::icons::button(ui, if linked { "link" } else { "unlink" }, LINK_W, linked, tl!("Link width and height")).clicked() {
+                ui.data_mut(|d| d.insert_temp(link_key, !linked));
+            }
+            if let Some(v) = field(ui, "h", "H", b.height() as f32, w) {
+                run.extend(transform_params(layer.id.0, bb, None, Some(v), linked).map(|p| ("edit.transform".to_string(), p)));
+            }
+        });
+        ui.add_space(ROW_GAP);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = LABEL_GAP;
+            if let Some(v) = field(ui, "x", "X", b.x0 as f32, w) {
+                run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": (v - b.x0 as f32).round() as i32, "dy": 0})));
+            }
+            ui.add_space(LINK_W + LABEL_GAP);
+            if let Some(v) = field(ui, "y", "Y", b.y0 as f32, w) {
+                run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": 0, "dy": (v - b.y0 as f32).round() as i32})));
+            }
+        });
+        ui.add_space(ROW_GAP);
     }
     // Gradient fills: their gradient first, as in Photoshop's Properties panel.
     if matches!(layer.content, LayerContent::Fill(photocraft_doc::Fill::Gradient { .. })) {

@@ -18,6 +18,8 @@ fi
 
 SITE="$ROOT/dist/web"
 [ -f "$SITE/index.html" ] || { echo "error: $SITE/index.html missing; run without --skip-build" >&2; exit 1; }
+# Compiled identities verify every payload range and license, including --skip-build.
+(cd "$ROOT" && cargo xtask web-assets --verify-package "$SITE/ui-assets")
 # Paths must be relative so the site works under any prefix (public_url = "./" in Trunk.toml).
 if grep -Eq '(src|href)="/[^/]' "$SITE/index.html"; then
   echo "error: $SITE/index.html has root-absolute URLs; it would break when served from a sub-path" >&2

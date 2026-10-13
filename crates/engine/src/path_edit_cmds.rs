@@ -46,8 +46,21 @@ fn knot(cmd: &str, p: &Value) -> Result<[usize; 2]> {
 
 /// Applies `f` to the targeted path in one undoable step labelled `label`.
 fn edit_path(s: &mut Session, cmd: &str, p: &Value, label: &str, f: impl FnOnce(&mut Path) -> std::result::Result<(), String>) -> Result<Value> {
-    let name = p.get("name").and_then(Value::as_str).unwrap_or("work").to_owned();
-    let layer = if name == "layer" { Some(layer_id(s, p)?) } else { None };
+    let saved_id = crate::vector_cmds::saved_path_id(p).map_err(|error| bad(cmd, error.to_string()))?;
+    let name = if let Some(id) = saved_id {
+        s.active()
+            .ok_or(crate::EngineError::NoDocument)?
+            .doc
+            .paths
+            .iter()
+            .find(|path| path.id == id)
+            .ok_or_else(|| bad(cmd, "no saved path with pathId"))?
+            .name
+            .clone()
+    } else {
+        p.get("name").and_then(Value::as_str).unwrap_or("work").to_owned()
+    };
+    let layer = if saved_id.is_none() && name == "layer" { Some(layer_id(s, p)?) } else { None };
     let shape = layer.filter(|id| s.active().and_then(|d| d.doc.layer(*id)).is_some_and(|l| matches!(l.content, LayerContent::Shape(_))));
     let path = match shape {
         Some(id) => with_shape(s, id, label, |sh, _| {
@@ -57,12 +70,16 @@ fn edit_path(s: &mut Session, cmd: &str, p: &Value, label: &str, f: impl FnOnce(
             Ok(path_json(&sh.path))
         })?,
         None => s.edit(label, |doc, _| {
-            let path = path_mut(doc, &name, layer)?;
+            let path = if let Some(id) = saved_id {
+                &mut doc.paths.iter_mut().find(|path| path.id == id).ok_or_else(|| bad(cmd, "no saved path with pathId"))?.path
+            } else {
+                path_mut(doc, &name, layer)?
+            };
             f(path).map_err(|e| bad(cmd, e))?;
             Ok(path_json(path))
         })?,
     };
-    Ok(json!({ "name": name, "path": path }))
+    Ok(json!({ "name": name, "pathId":saved_id.map(|id|id.0.to_string()), "path": path }))
 }
 
 fn move_anchors(s: &mut Session, p: &Value) -> Result<Value> {
@@ -110,13 +127,13 @@ fn convert_point(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    const TARGET: &str = r#""name":str|"work"|"layer"="work","layer":id? (with "layer": a shape layer's path or a vector mask)"#;
+    const TARGET: &str = r#""pathId":decimal string|u64? (saved path identity takes precedence),"name":str|"work"|"layer"="work","layer":id? (with "layer": a shape layer's path or a vector mask)"#;
     let spec = |id: &'static str, label: &'static str, params: String, run: fn(&mut Session, &Value) -> Result<Value>| CommandSpec {
         id,
         label,
         menu: &[],
         shortcut: None,
-        params: crate::vector_cmds::leak(format!("{{{TARGET},{params}}} → {{name,path}}")),
+        params: crate::vector_cmds::leak(format!("{{{TARGET},{params}}} → {{name,pathId:decimal string|null,path}}")),
         enabled: has_doc,
         run,
         journal: true,
@@ -185,11 +202,11 @@ mod tests {
     fn a_coalesced_drag_is_one_history_step() {
         let mut s = session();
         s.execute("path.set", json!({"path": square()})).unwrap();
-        let steps = s.active().unwrap().history.entries().len();
+        let steps = s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len();
         for _ in 0..3 {
             s.execute("path.moveAnchors", json!({"anchors": [[0, 0]], "move": [1, 0], "coalesce": "drag-1"})).unwrap();
         }
-        assert_eq!(s.active().unwrap().history.entries().len(), steps + 1);
+        assert_eq!(s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len(), steps + 1);
         assert_eq!(work(&s).subpaths[0].knots[0].anchor.x, 13.0);
     }
 
@@ -238,7 +255,7 @@ mod tests {
         let mut s = session();
         assert!(s.execute("path.moveAnchors", json!({"anchors": [[0, 0]], "move": [1, 1]})).is_err(), "no work path");
         s.execute("path.set", json!({"path": square()})).unwrap();
-        let steps = s.active().unwrap().history.entries().len();
+        let steps = s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len();
         for (id, p) in [
             ("path.moveAnchors", json!({"anchors": [[0, 9]], "move": [1, 1]})),
             ("path.moveAnchors", json!({"anchors": [], "move": [1, 1]})),
@@ -257,6 +274,6 @@ mod tests {
         ] {
             assert!(s.execute(id, p.clone()).is_err(), "{id} {p}");
         }
-        assert_eq!(s.active().unwrap().history.entries().len(), steps);
+        assert_eq!(s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len(), steps);
     }
 }

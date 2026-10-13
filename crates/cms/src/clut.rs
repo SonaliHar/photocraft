@@ -17,9 +17,141 @@ pub struct Clut {
     /// Normalised node values, `outputs` per node.
     pub data: Vec<f32>,
     strides: Vec<usize>,
+    wide_data: Option<Vec<f64>>,
 }
 
 impl Clut {
+    /// Maximum node visits per channel for the interpolation used by this table.
+    pub fn interpolation_taps(&self) -> Result<u64, crate::CmsError> {
+        if !(1..=MAX_CHANNELS).contains(&self.inputs) {
+            return Err(wide_invalid());
+        }
+        Ok(match self.inputs {
+            1 => 2,
+            3 => 4,
+            4 => 8,
+            n => 1_u64 << n,
+        })
+    }
+
+    /// Checked wide interpolation. Node entries retain their ICC precision, but sample
+    /// coordinates, weights and accumulators never narrow to f32. Output is atomic.
+    /// ICC CLUT coordinates clamp to the defined unit cube; nonfinite coordinates fail.
+    pub fn try_eval_f64(&self, input: &[f64], out: &mut [f64]) -> Result<(), crate::CmsError> {
+        if !(1..=MAX_CHANNELS).contains(&self.inputs)
+            || !(1..=MAX_CHANNELS).contains(&self.outputs)
+            || self.grid.len() != self.inputs
+            || input.len() != self.inputs
+            || out.len() != self.outputs
+            || input.iter().any(|v| !v.is_finite())
+        {
+            return Err(wide_invalid());
+        }
+        let mut strides = [0_usize; MAX_CHANNELS];
+        let mut length = self.outputs;
+        for d in (0..self.inputs).rev() {
+            let points = *self.grid.get(d).ok_or_else(wide_invalid)?;
+            if points == 0 {
+                return Err(wide_invalid());
+            }
+            *strides.get_mut(d).ok_or_else(wide_invalid)? = length;
+            length = length.checked_mul(points).ok_or_else(wide_invalid)?;
+        }
+        if length != self.data.len() {
+            return Err(wide_invalid());
+        }
+        let mut base = 0_usize;
+        let mut fractions = [0.0_f64; MAX_CHANNELS];
+        let mut steps = [0_usize; MAX_CHANNELS];
+        for (d, &value) in input.iter().enumerate() {
+            let points = *self.grid.get(d).ok_or_else(wide_invalid)?;
+            if points == 1 {
+                continue;
+            }
+            let position = value.clamp(0.0, 1.0) * (points - 1) as f64;
+            let index = (position as usize).min(points - 2);
+            let stride = *strides.get(d).ok_or_else(wide_invalid)?;
+            base = base.checked_add(index.checked_mul(stride).ok_or_else(wide_invalid)?).ok_or_else(wide_invalid)?;
+            *fractions.get_mut(d).ok_or_else(wide_invalid)? = position - index as f64;
+            *steps.get_mut(d).ok_or_else(wide_invalid)? = stride;
+        }
+        let mut result = [0.0_f64; MAX_CHANNELS];
+        match self.inputs {
+            3 => self.tetra64(base, &steps[..3], &fractions[..3], &mut result[..self.outputs])?,
+            4 => {
+                self.tetra64(base, &steps[1..4], &fractions[1..4], &mut result[..self.outputs])?;
+                let mut high = [0.0_f64; MAX_CHANNELS];
+                self.tetra64(base.checked_add(steps[0]).ok_or_else(wide_invalid)?, &steps[1..4], &fractions[1..4], &mut high[..self.outputs])?;
+                for (low, high) in result[..self.outputs].iter_mut().zip(high) {
+                    *low += (high - *low) * fractions[0];
+                }
+            }
+            _ => {
+                for corner in 0..(1_usize << self.inputs) {
+                    let mut weight = 1.0;
+                    let mut offset = base;
+                    for d in 0..self.inputs {
+                        let fraction = *fractions.get(d).ok_or_else(wide_invalid)?;
+                        if corner & (1 << d) != 0 {
+                            weight *= fraction;
+                            offset = offset.checked_add(*steps.get(d).ok_or_else(wide_invalid)?).ok_or_else(wide_invalid)?;
+                        } else {
+                            weight *= 1.0 - fraction;
+                        }
+                    }
+                    if weight == 0.0 {
+                        continue;
+                    }
+                    for (channel, value) in result[..self.outputs].iter_mut().enumerate() {
+                        *value += weight * self.node64(offset, channel)?;
+                    }
+                }
+            }
+        }
+        if result[..self.outputs].iter().any(|v| !v.is_finite()) {
+            return Err(wide_invalid());
+        }
+        out.copy_from_slice(&result[..self.outputs]);
+        Ok(())
+    }
+
+    fn node64(&self, offset: usize, channel: usize) -> Result<f64, crate::CmsError> {
+        let index = offset.checked_add(channel).ok_or_else(wide_invalid)?;
+        let preview = *self.data.get(index).ok_or_else(wide_invalid)?;
+        let exact = self.wide_data.as_ref().and_then(|data| data.get(index)).copied();
+        // Public data remains editable for existing clients. A changed preview entry overrides
+        // its original exact value rather than silently retaining a stale cached node.
+        let value = exact.filter(|value| (*value as f32).to_bits() == preview.to_bits()).unwrap_or(f64::from(preview));
+        if !value.is_finite() {
+            return Err(wide_invalid());
+        }
+        Ok(value)
+    }
+
+    fn tetra64(&self, base: usize, steps: &[usize], fractions: &[f64], out: &mut [f64]) -> Result<(), crate::CmsError> {
+        let mut order = [0_usize, 1, 2];
+        // Three-element insertion sort selects the same six tetrahedra as the reference path.
+        for i in 1..3 {
+            let mut j = i;
+            while j > 0 && fractions.get(order[j]).ok_or_else(wide_invalid)? > fractions.get(order[j - 1]).ok_or_else(wide_invalid)? {
+                order.swap(j, j - 1);
+                j -= 1;
+            }
+        }
+        for (channel, value) in out.iter_mut().enumerate() {
+            let mut offset = base;
+            let mut previous = self.node64(base, channel)?;
+            *value = previous;
+            for axis in order {
+                offset = offset.checked_add(*steps.get(axis).ok_or_else(wide_invalid)?).ok_or_else(wide_invalid)?;
+                let next = self.node64(offset, channel)?;
+                *value += (next - previous) * *fractions.get(axis).ok_or_else(wide_invalid)?;
+                previous = next;
+            }
+        }
+        Ok(())
+    }
+
     /// Builds a table from node data. Panics if `data` has the wrong length.
     pub fn new(grid: Vec<usize>, outputs: usize, data: Vec<f32>) -> Self {
         let inputs = grid.len();
@@ -31,7 +163,32 @@ impl Clut {
             s *= grid[i].max(1);
         }
         assert_eq!(data.len(), s, "CLUT data length");
-        Clut { inputs, outputs, grid, data, strides }
+        Clut { inputs, outputs, grid, data, strides, wide_data: None }
+    }
+
+    /// Checked construction preserving f64 node values (including exact decoded ICC u16/u8).
+    pub fn try_new_f64(grid: Vec<usize>, outputs: usize, values: Vec<f64>) -> Result<Self, crate::CmsError> {
+        let inputs = grid.len();
+        if !(1..=MAX_CHANNELS).contains(&inputs) || !(1..=MAX_CHANNELS).contains(&outputs) || values.iter().any(|v| !v.is_finite()) {
+            return Err(wide_invalid());
+        }
+        let mut length = outputs;
+        let mut strides = vec![0; inputs];
+        for d in (0..inputs).rev() {
+            let points = *grid.get(d).ok_or_else(wide_invalid)?;
+            if points == 0 {
+                return Err(wide_invalid());
+            }
+            *strides.get_mut(d).ok_or_else(wide_invalid)? = length;
+            length = length.checked_mul(points).ok_or_else(wide_invalid)?;
+        }
+        if values.len() != length {
+            return Err(wide_invalid());
+        }
+        let mut data = Vec::new();
+        data.try_reserve_exact(values.len()).map_err(|_| crate::CmsError::Invalid("wide ICC CLUT preview allocation denied".into()))?;
+        data.extend(values.iter().map(|v| *v as f32));
+        Ok(Self { inputs, outputs, grid, data, strides, wide_data: Some(values) })
     }
 
     /// Number of nodes.
@@ -191,6 +348,10 @@ impl Clut {
             }
         }
     }
+}
+
+fn wide_invalid() -> crate::CmsError {
+    crate::CmsError::Invalid("invalid wide ICC CLUT layout, coordinates or node values".into())
 }
 
 #[cfg(test)]

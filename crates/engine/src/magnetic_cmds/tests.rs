@@ -43,7 +43,7 @@ fn rough_points_select_the_shape_along_its_edges() {
         assert!(coverage(&s, x, y) < 0.01, "({x}, {y}) outside");
     }
     let st = s.active().unwrap();
-    assert_eq!(st.history.entries().last().map(String::as_str), Some("Magnetic Lasso"));
+    assert_eq!(st.history.entries(&crate::read_control_none()).unwrap().values().to_vec().last().map(String::as_str), Some("Magnetic Lasso"));
     // One step: Undo takes it all back.
     s.execute("edit.undo", json!({})).unwrap();
     assert!(s.active().unwrap().doc.selection.is_none());
@@ -71,13 +71,13 @@ fn edges_come_from_the_active_pixel_layer() {
     // An empty layer has no edges: the point stays where it is.
     let settings = Settings::default();
     let mut src = EdgeSource::new(&s).unwrap();
-    assert_eq!(src.snap([44.0, 50.0], settings), Some([44.0, 50.0]));
+    assert_eq!(src.snap([44.0, 50.0], settings).unwrap(), Some([44.0, 50.0]));
     let bg = s.active().unwrap().doc.layers[0].id;
     s.execute("layer.select", json!({"layer": bg.0})).unwrap();
     assert!(!src.is_current(&s), "another layer");
     let mut src = EdgeSource::new(&s).unwrap();
     assert!(src.is_current(&s));
-    let p = src.snap([44.0, 50.0], settings).unwrap();
+    let p = src.snap([44.0, 50.0], settings).unwrap().unwrap();
     assert!((p[0] - 40.0).abs() < 0.01 && (p[1] - 50.0).abs() <= 1.0, "on the square's edge: {p:?}");
     // A layer without pixels of its own (an Invert adjustment): the composite, its square white
     // on black but its edge where it was.
@@ -85,7 +85,7 @@ fn edges_come_from_the_active_pixel_layer() {
     let st = s.active().unwrap();
     assert!(st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.surface().is_none()));
     let mut src = EdgeSource::new(&s).unwrap();
-    let p = src.snap([44.0, 50.0], settings).unwrap();
+    let p = src.snap([44.0, 50.0], settings).unwrap().unwrap();
     assert!((p[0] - 40.0).abs() < 0.01, "{p:?}");
 }
 
@@ -138,4 +138,29 @@ fn bad_params_are_refused() {
     assert!(big.execute("select.magneticLasso", json!({"points": zigzag})).is_err());
     let mut none = Session::new();
     assert!(none.execute("select.magneticLasso", json!({"points": ROUGH})).is_err());
+}
+
+#[test]
+fn hostile_source_read_returns_an_error_without_committing_a_selection() {
+    use photocraft_geom::TileCoord;
+    use photocraft_raster::Surface;
+    let mut s = session();
+    let mut valid = Surface::new(photocraft_color::PixelFormat::RGBA8);
+    valid.try_write_pixel_f64(0, 0, &[1.0; 4]).unwrap();
+    let tile = valid.tiles().next().unwrap().1.clone();
+    let mut forged = Surface::new(valid.format());
+    forged.put_tiles([(TileCoord::new(i32::MAX, i32::MIN), tile)]);
+    let active = s.active_mut().unwrap();
+    let doc = active.doc.try_resident_mut().unwrap();
+    doc.layers[0].content = photocraft_doc::LayerContent::Raster(forged);
+    let before = s.active().unwrap().doc.clone();
+    let history = s.active().unwrap().history.past_len();
+    let mut source = EdgeSource::new(&s).unwrap();
+    assert!(source.snap([44.0, 50.0], Settings::default()).is_err());
+    assert_eq!(source.tracer.cached_pixels(), 0);
+    assert!(source.trace([44.0, 50.0], [70.0, 50.0], &[], Settings::default()).is_err());
+    assert_eq!(source.tracer.cached_pixels(), 0);
+    assert!(s.execute("select.magneticLasso", json!({"points": ROUGH})).is_err());
+    assert_eq!(s.active().unwrap().doc, before);
+    assert_eq!(s.active().unwrap().history.past_len(), history);
 }

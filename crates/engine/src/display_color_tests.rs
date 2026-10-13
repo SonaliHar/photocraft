@@ -48,7 +48,7 @@ fn test_cmyk() -> Profile {
 
 /// What the CPU canvas shows at the centre pixel (RGBA8).
 fn shown(s: &Session, d: &Document) -> [f32; 3] {
-    let buf = photocraft_compose::flatten(d);
+    let buf = photocraft_compose::flatten(d).unwrap();
     let img = s.color.canvas_display(d).unwrap().to_rgba8(&buf);
     let i = (4 * d.size.width as usize + 4) * 4;
     [0, 1, 2].map(|k| img.pixels[i + k] as f32)
@@ -162,12 +162,12 @@ fn linear_documents_are_encoded_for_the_texture() {
     let cd = s.color.canvas_display(&d).unwrap();
     assert!(cd.encode_srgb && cd.transform.is_none(), "linear sRGB = sRGB primaries: encoding is all it takes");
     assert!(close(shown(&s, &d), [123.5; 3], 1.0), "{:?}", shown(&s, &d));
-    let buf = photocraft_compose::flatten(&d);
+    let buf = photocraft_compose::flatten(&d).unwrap();
     let tex = cd.texture_buffer(&buf);
     assert!((tex.px[0][0] - 0.4845).abs() < 1e-3);
     // An sRGB document is passed through untouched.
     let srgb = rgb_doc(None, [0.2; 3], SampleType::F32);
-    let b2 = photocraft_compose::flatten(&srgb);
+    let b2 = photocraft_compose::flatten(&srgb).unwrap();
     assert!(matches!(s.color.canvas_display(&srgb).unwrap().texture_buffer(&b2), std::borrow::Cow::Borrowed(_)));
 }
 
@@ -185,7 +185,7 @@ fn exr_round_trip_is_linear() {
     assert!((v[0] - 0.214).abs() < 2e-3, "stored linear: {v:?}");
     assert!(close(shown(&s, &back), shown(&s, &d), 1.0));
     // Opening keeps it linear without a mismatch prompt.
-    let (_, report) = s.open_document(back, None);
+    let (_, report) = s.open_document(back, None).unwrap();
     assert_eq!(report["action"], "kept");
     assert!(report.get("ask").is_none());
 }

@@ -101,12 +101,21 @@ fn duplicate(app: &mut PhotocraftApp) -> Option<usize> {
 fn fold_history(app: &mut PhotocraftApp, from: usize) {
     let Some(st) = app.session.active_mut() else { return };
     while st.history.past_len() > from + 1 {
-        if !st.history.purge_last() {
-            break;
+        match st.history.purge_last(&photocraft_engine::read_control_none()) {
+            Ok(true) => {}
+            Ok(false) => break,
+            Err(error) => {
+                app.ui.status = error.to_string();
+                app.ui.status_error = true;
+                return;
+            }
         }
     }
-    if st.history.past_len() == from + 1 {
-        st.history.set_current_label(DUPLICATE_MOVE_LABEL);
+    if st.history.past_len() == from + 1
+        && let Err(error) = st.history.set_current_label(DUPLICATE_MOVE_LABEL, &photocraft_engine::read_control_none())
+    {
+        app.ui.status = error.to_string();
+        app.ui.status_error = true;
     }
 }
 

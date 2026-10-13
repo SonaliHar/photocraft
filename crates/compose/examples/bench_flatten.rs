@@ -17,7 +17,7 @@ pub fn bench_doc(n: u32) -> Document {
     };
     let mut a = Layer::new("masked", LayerContent::Raster(fill(3)));
     let mut m = LayerMask::reveal_all();
-    m.surface.fill_rect(Rect::new(0, 0, n as i32 / 2, n as i32), &[0.3]);
+    std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::new(0, 0, n as i32 / 2, n as i32), &[0.3]);
     a.mask = Some(m);
     d.layers.push(a);
     let mut b = Layer::new("multiply", LayerContent::Raster(fill(7)));
@@ -32,10 +32,14 @@ pub fn bench_doc(n: u32) -> Document {
     d
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let n: u32 = std::env::args().nth(1).and_then(|v| v.parse().ok()).unwrap_or(6016);
+    if n == 0 || n > 6016 {
+        return Err("benchmark size must be in 1..=6016".into());
+    }
     let d = bench_doc(n);
     let t = std::time::Instant::now();
-    let out = photocraft_compose::flatten(&d);
-    println!("flatten {n}x{n}, {} layers: {:.2?} (px0 {:?})", d.layers.len(), t.elapsed(), out.px[0]);
+    let out = photocraft_compose::flatten(&d)?;
+    println!("flatten {n}x{n}, {} layers: {:.2?} (px0 {:?})", d.layers.len(), t.elapsed(), out.px.first().ok_or("empty benchmark output")?);
+    Ok(())
 }

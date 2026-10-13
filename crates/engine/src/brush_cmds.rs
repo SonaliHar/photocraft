@@ -237,15 +237,210 @@ fn erase_locked(brush: &mut BrushSettings, lock: bool, bg: [f32; 4]) {
     }
 }
 
+#[derive(Clone)]
+struct WideStroke {
+    color: Surface,
+    clip: Option<Rect>,
+    budget: WideStrokeBudget,
+}
+
+#[derive(Clone, Default)]
+struct WideStrokeBudget {
+    last: Option<StrokePoint>,
+    bounds: Option<[f64; 4]>,
+    length: f64,
+    count: u64,
+}
+impl WideStrokeBudget {
+    // Conservative reservation/work check before the legacy geometry generator allocates.
+    // A failed extension leaves the prior live stroke budget and pixels unchanged.
+    fn extend(&mut self, brush: &BrushSettings, points: &[StrokePoint]) -> Result<()> {
+        let mut next = self.clone();
+        for point in points {
+            if !point.x.is_finite() || !point.y.is_finite() || point.x.abs() > 1_000_000.0 || point.y.abs() > 1_000_000.0 {
+                return Err(bad("paint.stroke", "wide stroke coordinates exceed the finite geometry limit"));
+            }
+            if let Some(last) = next.last {
+                next.length += (point.x - last.x).hypot(point.y - last.y);
+            }
+            let bounds = next.bounds.get_or_insert([point.x, point.y, point.x, point.y]);
+            bounds[0] = bounds[0].min(point.x);
+            bounds[1] = bounds[1].min(point.y);
+            bounds[2] = bounds[2].max(point.x);
+            bounds[3] = bounds[3].max(point.y);
+            next.last = Some(*point);
+            next.count = next.count.checked_add(1).ok_or_else(|| bad("paint.stroke", "wide stroke count overflow"))?;
+        }
+        let primary = f64::from(brush.size.max(1.0));
+        let dual = if brush.dual_brush.enabled { f64::from(brush.dual_brush.size.max(1.0)) } else { 0.0 };
+        let diameter = primary.max(dual);
+        let scatter = f64::from(if brush.scattering.enabled { brush.scattering.scatter.jitter.max(0.0) } else { 0.0 }).max(if brush.dual_brush.enabled {
+            f64::from(brush.dual_brush.scatter.max(0.0))
+        } else {
+            0.0
+        });
+        let margin = diameter * (std::f64::consts::SQRT_2 + scatter) + 128.0;
+        let bounds = next.bounds.unwrap_or([0.0; 4]);
+        let area = (bounds[2] - bounds[0] + margin) * (bounds[3] - bounds[1] + margin);
+        let reserve = area * if brush.dual_brush.enabled { 64.0 } else { 32.0 };
+        // Both walkers have a minimum half-pixel step; smoothing catch-up emits at
+        // most64 points/input and airbrush catch-up at most512 dabs/segment.
+        let smoothing = if brush.smoothing.catch_up { 64.0 } else { 1.0 };
+        let steps = next.length * 2.0 + next.count as f64 * smoothing * (if brush.build_up { 513.0 } else { 2.0 });
+        let copies = if brush.scattering.enabled { brush.scattering.count.clamp(1, 16) } else { 1 }
+            + if brush.dual_brush.enabled { brush.dual_brush.count.clamp(1, 16) } else { 0 };
+        let work = steps * f64::from(copies) * (diameter * std::f64::consts::SQRT_2 + 4.0).powi(2);
+        if !reserve.is_finite() || !work.is_finite() || reserve > photocraft_raster::MAX_CHECKED_RASTER_BYTES as f64 || work > 1_000_000_000.0 {
+            return Err(bad("paint.stroke", "wide stroke exceeds the bounded coverage/work budget; use smaller strokes"));
+        }
+        *self = next;
+        Ok(())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn wide_stroke_context(
+    doc: &photocraft_doc::Document,
+    layer: Option<photocraft_doc::LayerId>,
+    p: &Value,
+    brush: &BrushSettings,
+    format: photocraft_color::PixelFormat,
+    lock: bool,
+    restricted_color: bool,
+    auto_erase: bool,
+) -> Result<Option<WideStroke>> {
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    if !matches!(format.sample, SampleType::U32 | SampleType::F64) {
+        return Ok(None);
+    }
+    if restricted_color
+        || auto_erase
+        || brush.mode != photocraft_color::BlendMode::Normal
+        || brush.color_dynamics.enabled
+        || !matches!(format.mode, ColorMode::Rgb | ColorMode::Grayscale)
+        || (brush.erase && (!format.alpha || lock))
+    {
+        return Err(bad(
+            "paint.stroke",
+            "this wide stroke mode, color restriction, or background eraser is not qualified; use normal fixed-color painting or an unlocked alpha eraser",
+        ));
+    }
+    let clip = wide_paint_extent(doc, layer, p);
+    let values = if brush.erase { [0.0; 4] } else { native_wide_color(doc, format, p, crate::paint_cmds::wide_color(p.get("color"), brush.color)?)? };
+    let float_format = PixelFormat::new(format.mode, SampleType::F64, format.alpha);
+    let mut encoded = [0_u8; 32];
+    for (channel, value) in values.iter().enumerate().take(float_format.channels()) {
+        photocraft_color::try_write_sample_f64(&mut encoded, SampleType::F64, channel, *value).map_err(|e| bad("paint.stroke", e.to_string()))?;
+    }
+    let color = Surface::try_with_default_bytes(
+        float_format,
+        encoded.get(..float_format.bytes_per_pixel()).ok_or_else(|| bad("paint.stroke", "invalid native pixel size"))?,
+    )
+    .map_err(|e| bad("paint.stroke", e.to_string()))?;
+    Ok(Some(WideStroke { color, clip, budget: WideStrokeBudget::default() }))
+}
+
+/// Canonical finite extent for a layer, mask or channel; temporary targets have no imported extent.
+pub(crate) fn wide_paint_extent(doc: &photocraft_doc::Document, layer: Option<photocraft_doc::LayerId>, p: &Value) -> Option<Rect> {
+    use crate::channel_cmds::Target;
+    use photocraft_doc::item_identity::ItemRef;
+    let target = crate::channel_cmds::target_of(p);
+    let reference = match target {
+        Target::Pixels => layer.map(ItemRef::Layer),
+        Target::Alpha(i) => doc.channels.get(i).map(|channel| ItemRef::Channel(channel.id)),
+        Target::Mask => doc.xcf_state.as_ref().and_then(|state| {
+            state
+                .items
+                .iter()
+                .find(|item| {
+                    item.mask.as_ref().is_some_and(|mask| Some(mask.owner) == layer.map(ItemRef::Layer))
+                        && !state.filter_masks.iter().any(|mask| item.item == ItemRef::Mask(mask.id))
+                })
+                .map(|item| item.item)
+        }),
+        Target::QuickMask => None,
+    };
+    doc.xcf_state.as_ref().and_then(|state| {
+        reference.and_then(|reference| {
+            state.items.iter().find(|item| item.item == reference).and_then(|item| item.raster_bounds.or_else(|| item.mask.as_ref().map(|mask| mask.bounds)))
+        })
+    })
+}
+
+/// UI colors are sRGB; masks/channels use the existing numeric Rec.601 gray contract.
+/// Layer colors use their effective assigned profile and explicit transfer through checked f64 CMS.
+pub(crate) fn native_wide_color(doc: &photocraft_doc::Document, format: photocraft_color::PixelFormat, p: &Value, rgba: [f64; 4]) -> Result<[f64; 4]> {
+    use photocraft_cms::{Builtin, Intent, Transform};
+    use photocraft_color::ColorMode;
+    if !matches!(format.mode, ColorMode::Rgb | ColorMode::Grayscale) || !rgba.iter().all(|value| value.is_finite()) || !(0.0..=1.0).contains(&rgba[3]) {
+        return Err(bad("paint.stroke", "invalid or unsupported native wide paint color"));
+    }
+    let mut values = [0.0; 4];
+    let n = format.mode.color_channels();
+    if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
+        values[0] = 0.299 * rgba[0] + 0.587 * rgba[1] + 0.114 * rgba[2];
+    } else {
+        if let Some(bytes) = &doc.icc_profile {
+            let profile = crate::color_cmds::profile_from_bytes(bytes).map_err(|e| bad("paint.stroke", e.to_string()))?;
+            if profile.color_space != crate::color_cmds::mode_space(format.mode) {
+                return Err(bad("paint.stroke", "assigned profile does not match wide paint model"));
+            }
+        }
+        let profile = crate::color_cmds::try_document_profile(doc)?;
+        let transform =
+            Transform::new(Builtin::Srgb.profile(), &profile, Intent::RelativeColorimetric, true).map_err(|e| bad("paint.stroke", e.to_string()))?;
+        transform
+            .try_eval_f64(&[rgba[0], rgba[1], rgba[2]], values.get_mut(..n).ok_or_else(|| bad("paint.stroke", "invalid native channel count"))?)
+            .map_err(|e| bad("paint.stroke", format!("wide paint color conversion is unsupported: {e}")))?;
+    }
+    if format.alpha {
+        *values.get_mut(n).ok_or_else(|| bad("paint.stroke", "invalid alpha channel"))? = rgba[3];
+    }
+    if values.iter().take(format.channels()).any(|value| !value.is_finite()) {
+        return Err(bad("paint.stroke", "invalid converted wide color"));
+    }
+    Ok(values)
+}
+
 /// Stroke with a resolved brush onto the target layer (pixels or mask).
 fn stroke_with(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pts: Vec<StrokePoint>, auto_erase: bool) -> Result<Value> {
     let bg = s.tools.background;
     let fg = brush.color;
     let symmetry = s.active().and_then(|st| st.symmetry_path.clone());
     let (id, brush, zoom) = stroke_target(s, p, brush)?;
+    let restricted_color = s.color_restrict.is_some();
     let dmg = s.edit(label, |doc, _| {
         let sel = doc.selection.clone();
+        let (format, lock) = {
+            let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
+            (surf.format(), lock)
+        };
+        let wide = wide_stroke_context(doc, id, p, &brush, format, lock, restricted_color, auto_erase)?;
         let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
+        if let Some(mut wide) = wide {
+            wide.budget.extend(&brush, &pts)?;
+            if let Some(axis) = &symmetry {
+                wide.budget.extend(&brush, &axis.reflect_points(&pts))?;
+            }
+            let pre = surf.clone();
+            let mut renderer = StrokeRenderer::new(&brush, Some(format), zoom);
+            renderer.push(&pts);
+            renderer.finish();
+            let damage = if let Some(axis) = &symmetry {
+                let reflected = axis.reflect_points(&pts);
+                if crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, &reflected) {
+                    let mut mirror = StrokeRenderer::new(&brush, Some(format), zoom);
+                    mirror.push(&reflected);
+                    mirror.finish();
+                    renderer.try_composite_union_wide(&mirror, &pre, surf, &wide.color, sel.as_ref(), lock, wide.clip, &photocraft_raster::Interrupt::NONE)
+                } else {
+                    renderer.try_composite_wide(&pre, surf, &wide.color, sel.as_ref(), lock, wide.clip, &photocraft_raster::Interrupt::NONE)
+                }
+            } else {
+                renderer.try_composite_wide(&pre, surf, &wide.color, sel.as_ref(), lock, wide.clip, &photocraft_raster::Interrupt::NONE)
+            };
+            return damage.map_err(|e| bad("paint.stroke", e.to_string()));
+        }
         let mut brush = brush;
         erase_locked(&mut brush, lock, bg);
         if auto_erase {
@@ -321,7 +516,7 @@ pub fn paint_stroke(s: &mut Session, p: &Value) -> Result<Value> {
 /// `"seed": live.seed` gives the same pixels.
 pub struct LiveStroke {
     /// The active document with the stroke so far.
-    pub doc: std::sync::Arc<photocraft_doc::Document>,
+    pub doc: crate::document_snapshot::DocumentSnapshot,
     /// Jitter seed to pass to `paint.stroke`.
     pub seed: u64,
     renderer: StrokeRenderer,
@@ -334,6 +529,7 @@ pub struct LiveStroke {
     params: Value,
     /// Where the doc shows the stroke's end as finishing it would draw it (see `push`).
     tail: Rect,
+    wide: Option<WideStroke>,
 }
 
 impl LiveStroke {
@@ -355,8 +551,15 @@ impl LiveStroke {
         let brush = if pencil { pencil_brush(s, p)? } else { with_blend_mode(resolve_brush(s, p, cmd)?, p) };
         let (seed, fg) = (brush.seed, brush.color);
         let (layer, mut brush, zoom) = stroke_target(s, p, brush)?;
-        let mut doc = (*s.active().ok_or(EngineError::NoDocument)?.doc).clone();
+        let snapshot = &s.active().ok_or(EngineError::NoDocument)?.doc;
+        snapshot.validate_resident()?;
+        let mut doc = (**snapshot).clone();
         let sel = doc.selection.clone();
+        let (format, lock) = {
+            let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, layer, p)?;
+            (surf.format(), lock)
+        };
+        let wide = wide_stroke_context(&doc, layer, p, &brush, format, lock, s.color_restrict.is_some(), pencil && flag(p, "autoErase", false))?;
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, layer, p)?;
         erase_locked(&mut brush, lock, s.tools.background);
         if pencil && flag(p, "autoErase", false) {
@@ -365,8 +568,20 @@ impl LiveStroke {
         let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
         let mirror = s.active().and_then(|st| st.symmetry_path.clone()).map(|axis| (axis, StrokeRenderer::new(&brush, Some(surf.format()), zoom)));
         let pre = surf.clone();
-        let mut live =
-            Self { doc: std::sync::Arc::new(doc), seed, renderer, mirror, mirror_distinct: false, pre, sel, lock, layer, params: p.clone(), tail: Rect::EMPTY };
+        let mut live = Self {
+            doc: crate::document_snapshot::DocumentSnapshot::from_resident(std::sync::Arc::new(doc))?,
+            seed,
+            renderer,
+            mirror,
+            mirror_distinct: false,
+            pre,
+            sel,
+            lock,
+            layer,
+            params: p.clone(),
+            tail: Rect::EMPTY,
+            wide,
+        };
         live.push(&pts)?;
         Ok(live)
     }
@@ -382,13 +597,44 @@ impl LiveStroke {
     /// when the stroke ends, so that catch-up tail is drawn too (and redrawn on every step), and
     /// nothing new appears on release.
     pub fn push(&mut self, pts: &[StrokePoint]) -> Result<Rect> {
+        if let Some(wide) = &mut self.wide {
+            let mut budget = wide.budget.clone();
+            budget.extend(&self.renderer.ctx.brush, pts)?;
+            if let Some((axis, _)) = &self.mirror {
+                budget.extend(&self.renderer.ctx.brush, &axis.reflect_points(pts))?;
+            }
+            wide.budget = budget;
+        }
         self.renderer.push(pts);
         if let Some((axis, mirror)) = &mut self.mirror {
             let reflected = axis.reflect_points(pts);
             self.mirror_distinct |= crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(pts, &reflected);
             mirror.push(&reflected);
         }
-        let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
+        let (surf, _) = crate::channel_cmds::target_surface(self.doc.try_resident_mut()?, self.layer, &self.params)?;
+        if let Some(wide) = &self.wide {
+            let mut preview = self.renderer.clone();
+            preview.finish();
+            let damage = if let (true, Some((_, mirror))) = (self.mirror_distinct, &self.mirror) {
+                let mut mirrored = mirror.clone();
+                mirrored.finish();
+                preview.try_composite_union_wide(
+                    &mirrored,
+                    &self.pre,
+                    surf,
+                    &wide.color,
+                    self.sel.as_ref(),
+                    self.lock,
+                    wide.clip,
+                    &photocraft_raster::Interrupt::NONE,
+                )
+            } else {
+                preview.try_composite_wide(&self.pre, surf, &wide.color, self.sel.as_ref(), self.lock, wide.clip, &photocraft_raster::Interrupt::NONE)
+            }
+            .map_err(|e| bad("paint.stroke", e.to_string()))?;
+            let old = std::mem::replace(&mut self.tail, damage);
+            return Ok(old.union(&damage));
+        }
         if let (true, Some((_, mirror))) = (self.mirror_distinct, &mut self.mirror) {
             // Preview the finished strokes through one coverage buffer. Shared axis pixels
             // therefore receive the brush opacity once, exactly like the final commit.
@@ -433,8 +679,21 @@ fn pct(p: &Value, k: &str, d: f32) -> f32 {
     num(p, k).unwrap_or(d).clamp(0.0, 100.0) / 100.0
 }
 
+fn reject_legacy_wide_stroke(s: &Session, p: &Value, cmd: &str) -> Result<()> {
+    let snapshot = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    snapshot.validate_resident()?;
+    let mut doc = (**snapshot).clone();
+    let layer = if crate::channel_cmds::is_channel_target(p) { None } else { Some(layer_id(s, p)?) };
+    let (surface, _) = crate::channel_cmds::target_surface(&mut doc, layer, p)?;
+    if matches!(surface.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
+        return Err(bad(cmd, "this brush operation does not yet preserve wide authoritative samples"));
+    }
+    Ok(())
+}
+
 fn mixer_brush(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "paint.mixerBrush";
+    reject_legacy_wide_stroke(s, p, cmd)?;
     let pts = parse_points(p, cmd)?;
     let brush = resolve_brush(s, p, cmd)?;
     // The brush's Mixer Brush options, overridden by the scalar params.
@@ -460,7 +719,7 @@ fn mixer_brush(s: &mut Session, p: &Value) -> Result<Value> {
             let ds = photocraft_paint::dabs(&stroke);
             let ctx = photocraft_paint::BrushContext::new(&stroke.brush);
             let area = ds.iter().fold(Rect::EMPTY, |r, d| r.union(&ctx.dab_rect(d, false)));
-            let buf = photocraft_compose::render(doc, area);
+            let buf = photocraft_compose::render(doc, area)?;
             let mut surf = Surface::new(photocraft_color::PixelFormat::RGBA32F);
             let flat: Vec<f32> = buf.px.iter().flatten().copied().collect();
             if !area.is_empty() {
@@ -482,6 +741,7 @@ fn mixer_brush(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "paint.colorReplacement";
+    reject_legacy_wide_stroke(s, p, cmd)?;
     let pts = parse_points(p, cmd)?;
     let brush = resolve_brush(s, p, cmd)?;
     fn parse<T: serde::de::DeserializeOwned>(p: &Value, cmd: &str, k: &str) -> Result<Option<T>> {
@@ -500,7 +760,7 @@ fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
     let stroke = Stroke { brush, points: pts };
     let dmg = s.edit("Color Replacement", |doc, _| {
         let sel = doc.selection.clone();
-        let lock = doc.effective_locks(id).transparency;
+        let lock = crate::xcf_item_locks::transparency_locked(doc, id)?;
         let surf = paint_surface(doc, id, &json!({}))?;
         Ok(apply_color_replacement(surf, &stroke, &rs, sel.as_ref(), lock))
     })?;

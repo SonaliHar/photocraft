@@ -1,4 +1,4 @@
-//! Live canvas preview for the Image › Adjustments dialogs (`adjust_dialog`).
+//! Live canvas preview for the Image â€º Adjustments dialogs (`adjust_dialog`).
 //!
 //! While a dialog is open on a pixel layer the canvas shows the committed document with a
 //! temporary adjustment layer (the dialog's settings, the selection as its mask) clipped to the
@@ -9,7 +9,7 @@
 //! - over the target's area within the selection only (`switch_region`), and of that only what
 //!   the view shows; the rest catches up as the view moves (`uncovered`);
 //! - zoomed out on a large document, on a copy reduced to about the screen's resolution, built
-//!   once per session ([`gpu_proxy`]), unless Preferences › Performance › Low Resolution Previews
+//!   once per session ([`gpu_proxy`]), unless Preferences â€º Performance â€º Low Resolution Previews
 //!   is off.
 //!
 //! OK still runs the real command (one history step); Cancel just drops the preview. The base
@@ -94,6 +94,9 @@ fn keeps_gray(adj: &Adjustment) -> bool {
 /// mask): built once per dialog session, then [`with_settings`] per change. Errors when the target
 /// isn't eligible ([`unsupported`]).
 pub fn base_document(doc: &Document, target: LayerId) -> Result<Document, String> {
+    if doc.has_backed_rasters().map_err(|error| error.to_string())? {
+        return Err("Adjustment preview requires a resident document".into());
+    }
     if let Some(why) = unsupported(doc, target) {
         return Err(why.into());
     }
@@ -101,7 +104,7 @@ pub fn base_document(doc: &Document, target: LayerId) -> Result<Document, String
     l.id = PREVIEW_LAYER;
     l.clipped = true;
     if let Some(sel) = &doc.selection {
-        l.mask = Some(LayerMask { surface: sel.clone(), enabled: true, linked: false, density: 1.0, feather: 0.0 });
+        l.mask = Some(LayerMask { surface: Arc::new(sel.clone()), enabled: true, linked: false, density: 1.0, feather: 0.0 });
     }
     let mut out = doc.clone();
     out.insert_above(Some(target), l);
@@ -115,6 +118,9 @@ pub fn with_settings(base: &Document, kind: &str, params: &Value) -> Result<Docu
 }
 
 fn set_adjustment(base: &Document, layer: LayerId, kind: &str, params: &Value) -> Result<Document, String> {
+    if base.has_backed_rasters().map_err(|error| error.to_string())? {
+        return Err("Adjustment preview requires a resident document".into());
+    }
     let adj = photocraft_engine::adjust_params::from_params(kind, params, None, base.mode).map_err(|e| e.to_string())?;
     if base.mode == ColorMode::Grayscale && !keeps_gray(&adj) {
         return Err("colour result in a grayscale document".into());
@@ -232,7 +238,7 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&AdjustPreview> {
         return app.adjust_preview.as_ref();
     }
     if app.adjust_preview.as_ref().is_none_or(|p| (p.doc, p.session) != (doc_id, session)) {
-        let doc = st.doc.clone();
+        let doc = st.doc.resident_arc()?.clone();
         let base = if channel_target { None } else { base_document(&doc, target).ok().filter(|b| cheap(app, b)).map(Arc::new) };
         let region = if base.is_some() { region(&doc, target) } else { Rect::EMPTY };
         app.adjust_preview = Some(AdjustPreview {
@@ -360,11 +366,11 @@ pub fn proxy_factor(zoom: f32) -> u32 {
 
 /// A [`base_document`] scaled down by `k` with its own document and layer ids (so the GPU keeps
 /// its textures beside the full-size document's).
-pub fn proxy_base(base: &Document, k: u32) -> Document {
-    let mut d = photocraft_compose::proxy::proxy_document(base, k);
+pub fn proxy_base(base: &Document, k: u32) -> Result<Document, String> {
+    let mut d = photocraft_compose::proxy::proxy_document(base, k).map_err(|error| error.to_string())?;
     d.id = photocraft_doc::DocId(base.id.0 ^ PROXY_DOC_BIT);
     flip_ids(&mut d.layers);
-    d
+    Ok(d)
 }
 
 /// [`with_settings`] for a [`proxy_base`].
@@ -385,7 +391,7 @@ pub struct ProxyFrame {
 
 /// The zoomed-out preview for document `idx` at `zoom`, when the dialog previews through the layer
 /// and the view is far enough out that a reduced copy shows the same detail as the full-size
-/// composite: each change then composites ~1/k² of the pixels. Built once per session and factor.
+/// composite: each change then composites ~1/kÂ² of the pixels. Built once per session and factor.
 pub fn gpu_proxy(app: &mut PhotocraftApp, idx: usize, zoom: f32) -> Option<ProxyFrame> {
     if !crate::proxy::reduced_previews(app) {
         return None;
@@ -400,7 +406,7 @@ pub fn gpu_proxy(app: &mut PhotocraftApp, idx: usize, zoom: f32) -> Option<Proxy
         return None;
     }
     if p.proxy.as_ref().is_none_or(|g| g.k != k) {
-        let d = proxy_base(&base, k);
+        let d = proxy_base(&base, k).map_err(|error| app.ui.status = error).ok()?;
         if !gpu.supports(&d) {
             return None;
         }

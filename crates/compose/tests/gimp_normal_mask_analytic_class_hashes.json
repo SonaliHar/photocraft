@@ -1,0 +1,35 @@
+{
+  "gamma": {
+    "observations.json": "3cd25bfb70f8e9b44ad3bb009d48864dda8d1d0e90cf51da05a6f0fff9876c26",
+    "fresh/observations.json": "75f62018c16575a5b384138fd6759caec1a6963a7c54d5ad36ead44577604432",
+    "faithful-observations.json": "c259e5bbd2c513ff5f08956c29002c6f295156e7f391ecb87fb7906196e8eb9f",
+    "faithful-fresh/faithful-observations.json": "ca453f1a91c2517d57ee38d86a775bf2cf4a0c6e5e947a341987583fbff0acd1",
+    "VERIFICATION.json": "0291e73a5651b98340710410e775010effe82b1d796fe11960a55a14bb365846",
+    "batch-manifest.json": "5abe18449c60e8e8ea421c62d0f516dc2e1f05319c5b4f9a03c1b477b421645f",
+    "assignment-controls.json": "6b53951ce7ff7c14726be5070296f9696f0308a8f483a4eb5ce4af7853cfb3e2",
+    "own-rgb-parametric-trc.icc": "d4ddff2458010156aebea135bf7cb68b5f1b65a418f116f4783cf62287036feb",
+    "own-gray-parametric-trc.icc": "78efd53a209447804e9dad749bb56be82c10fbe17345b1f82cc272ef48473aaf"
+  },
+  "type3": {
+    "observations.json": "bc200063594ee22739d830f6ad6213f6c77618216f6d89a808618276c0ccfac4",
+    "fresh/observations.json": "c4745294be1924337e5004a037910dcf838131f6b04e9bf7e01a2366e4653020",
+    "faithful-observations.json": "58b7c225dee23b9f3c958caded5fe7fb88434c88951488bc727869f9a6110001",
+    "faithful-fresh/faithful-observations.json": "3f9b6cec5c3a2e58caafb4011b752beda70dc37f3230a947f08296f88393c801",
+    "VERIFICATION.json": "c99600a046572a677110f0f58a190e71bffcd537a8d5644b0a5078c5d8713566",
+    "batch-manifest.json": "c2e7441cf6e70c0a5ad760155798ff306ae03f30b529184fe3010f8a651fba62",
+    "assignment-controls.json": "e4ba710a33ebff64ddda47925aa39402bcf4a6b6cc9092f55161d5b209c346e6",
+    "own-rgb-parametric-trc.icc": "7ca9fc2ea8fdea205ab99e0f419d81ae907eaad965950217080cd4928b9d0f14",
+    "own-gray-parametric-trc.icc": "06fdcaba5617d516676f6665519f5b9a155957b3ec9c5895f572356ceabfea0a"
+  },
+  "type4": {
+    "observations.json": "a145ffffa4a7f96fd90813a3e67f07ebd5159b73d171edd3c3970cf4f68e592f",
+    "fresh/observations.json": "92b0e40a0187f8798d65831fbfa6782fb718f85115441808069871dd7029de9e",
+    "faithful-observations.json": "5a6e3044c54aeccf3861fc79e83a47fd898868ac97ac65724eba8fd2b061e3e8",
+    "faithful-fresh/faithful-observations.json": "3701e3865adb834277be3df60fadac83164333dfa13d77128fcbd1e981d8fa42",
+    "VERIFICATION.json": "0906063557452e14b5b9c3812d6647e925f31fb164578386b9c3c207591e41e8",
+    "batch-manifest.json": "845222b5bc50d57205fbe3a7432649079fd708043900c41b6b63f03116f46547",
+    "assignment-controls.json": "89c4587af4d9356da0efc01b0cca987b6d2d1227be6581c486b5eb1ef90272f5",
+    "own-rgb-parametric-trc.icc": "049805cff7622dd9802d360a0a264d2c80608f6722cb755bfc428f6b4e03c106",
+    "own-gray-parametric-trc.icc": "28199b6e67495dc6bef06aa7ed5dbc56b33f61031e4786b700144b3718826afc"
+  }
+}

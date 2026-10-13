@@ -215,7 +215,7 @@ fn script_events(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let changed = ev != s.prefs().script_events;
     if changed {
-        s.edit_prefs(|pr| pr.script_events = ev.clone());
+        s.edit_prefs(|pr| pr.script_events = ev.clone())?;
     }
     let events: Vec<Value> = EVENTS.iter().map(|(id, label)| json!({"id": id, "label": label})).collect();
     Ok(json!({"enabled": ev.enabled, "bindings": ev.bindings, "events": events}))
@@ -257,14 +257,15 @@ pub fn fire_event(s: &mut Session, event: &str) -> usize {
 
 /// Called by `Session::execute` after every successful command: keeps layer-based slices on
 /// their layers and fires the engine-side script events.
-pub(crate) fn after_command(s: &mut Session, id: &str) {
-    crate::slice_cmds::refresh(s);
+pub(crate) fn after_command(s: &mut Session, id: &str) -> Result<()> {
+    crate::slice_cmds::refresh(s)?;
     let event = match id {
         "file.new" => "newDocument",
         "file.close" | "file.closeAll" | "file.closeOthers" => "closeDocument",
-        _ => return,
+        _ => return Ok(()),
     };
     fire_event(s, event);
+    Ok(())
 }
 
 /// App shell hooks for the events only it sees.
@@ -449,7 +450,7 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
         s.execute("file.new", json!({"width": pw, "height": ph, "mode": mode, "depth": depth, "background": "white", "name": name}))?;
         let idx = s.active_index().ok_or(EngineError::NoDocument)?;
         if let Some(st) = s.active_mut() {
-            std::sync::Arc::make_mut(&mut st.doc).resolution_dpi = res as f32;
+            st.doc.try_resident_mut()?.resolution_dpi = res as f32;
         }
         let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
         for (k, path) in chunk.iter().enumerate() {
@@ -461,7 +462,7 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
                 let bytes = read_file(path)?;
                 let src = import(&file_name(path), &bytes)?;
                 let mut t = Session::new();
-                t.add_document(src, None);
+                t.add_document(src, None)?;
                 let (w, h) = t.active().map(|d| (f64::from(d.doc.size.width), f64::from(d.doc.size.height))).unwrap_or((1.0, 1.0));
                 let fit = |w: f64, h: f64| (cell_w / w).min(box_h / h);
                 if rotate && fit(h, w) > fit(w, h) * 1.001 {
@@ -472,7 +473,7 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
                 let (tw, th) = ((w * k).round().max(1.0), (h * k).round().max(1.0));
                 t.execute("image.imageSize", json!({"width": tw, "height": th, "resample": "bicubic"}))?;
                 let d = &t.active().ok_or(EngineError::NoDocument)?.doc;
-                let buf = photocraft_compose::flatten(d);
+                let buf = photocraft_compose::flatten(d)?;
                 let ox = (x0 + (cell_w - tw) / 2.0).round() as i32;
                 let oy = (y0 + (box_h - th) / 2.0).round() as i32;
                 let n = fmt.channels();

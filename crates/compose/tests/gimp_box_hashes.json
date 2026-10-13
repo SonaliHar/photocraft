@@ -1,0 +1,9 @@
+{
+  "operations/gegl-box-blur/operation-gegl-box-blur.source.0.native.bin": "43f6f4fc2d130f29652d05e5c1f251a3121bc249bee2844ff2bc0be3483a87b6",
+  "operations/gegl-box-blur/operation-gegl-box-blur.xcf": "0dddbdcee491ce0e24aea521ce7c1de4fa0e5304a2caa9021933917a1de63b15",
+  "operations/gegl-box-blur/operation-gegl-box-blur.edit.xcf": "160aa31fc554e77d8d5c1a802620547cbb1418bbc48b774a5e30371841af930f",
+  "operations/gegl-box-blur/operation-gegl-box-blur.reopened_state.json": "ff95fb93398b079c14cfb806d64a0396d7d2ec6a30442001c00e6b2315cdff89",
+  "operations/gegl-box-blur/operation-gegl-box-blur.edited_state.json": "53c40dd58130e9ac5aac60607cc3b496d8d15faa6d2840cbd049773062109b09",
+  "operations/gegl-box-blur/operation-gegl-box-blur.ref.png": "daf01583b1a5b3e53187eb7caa8aa849919f6d22e776b929450922adbd4235cb",
+  "operations/gegl-box-blur/operation-gegl-box-blur.edit.ref.png": "605312563a513235a395428add8aa5e9880613f2a9cfc565b4b91ca1fd1b9c50"
+}

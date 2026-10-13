@@ -46,6 +46,35 @@ fn new_app() -> PhotocraftApp {
     app
 }
 
+#[test]
+fn physical_type_layout_uses_authoritative_square_resolution() {
+    let mut app = new_app();
+    let id = LayerId(app.run("type.create", json!({"text": "Physical type", "size": 12})).unwrap()["layer"].as_u64().unwrap());
+    let doc = app.session.active_mut().unwrap().doc.try_resident_mut().unwrap();
+    doc.resolution_dpi = 72.;
+    doc.physical_resolution = Some(photocraft_doc::PhysicalResolution::square(144.));
+    let before = doc.clone();
+    let (actual, _, _) = layout(&mut app, id).unwrap();
+    assert_eq!(actual.px_per_pt, 2.);
+    assert_eq!(*app.session.active().unwrap().doc, before);
+}
+
+#[test]
+fn physical_type_layout_rejects_unsupported_axes_before_cached_layout() {
+    for y in [144., 0., f64::INFINITY, f64::NAN] {
+        let mut app = new_app();
+        let id = LayerId(app.run("type.create", json!({"text": "Physical type", "size": 12})).unwrap()["layer"].as_u64().unwrap());
+        let (cached, _, _) = layout(&mut app, id).unwrap();
+        let doc = app.session.active_mut().unwrap().doc.try_resident_mut().unwrap();
+        doc.physical_resolution = Some(photocraft_doc::PhysicalResolution { x_dpi: 72., y_dpi: y, unit: photocraft_doc::PhysicalUnit::Inch });
+        let cache_before = text_layer(doc, id).unwrap().cache.clone();
+        assert!(layout(&mut app, id).is_none(), "unsupported axis {y} must report an error");
+        assert!(app.ui.status_error && !app.ui.status.is_empty());
+        assert!(std::sync::Arc::ptr_eq(&cached, &app.type_layout.as_ref().unwrap().1));
+        assert_eq!(text_layer(&app.session.active().unwrap().doc, id).unwrap().cache, cache_before);
+    }
+}
+
 fn xf(app: &PhotocraftApp) -> ViewXform {
     let v = &app.ui.views[0];
     ViewXform {
@@ -184,30 +213,34 @@ fn editing_psd_type_shows_our_layout_and_cancel_restores_it() {
     if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
         t.cache = Some(moved.clone());
     }
-    st.doc = std::sync::Arc::new(doc);
+    st.doc = photocraft_engine::document_snapshot::DocumentSnapshot::from_resident(std::sync::Arc::new(doc)).unwrap();
     st.revision += 1;
-    let steps = app.session.active().unwrap().history.entries().len();
+    let steps = app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
     let mut h = harness(1.0, app);
     let p = glyph(&mut h, id, 2, 0.2);
     click(&mut h, p);
     assert_eq!(selection(&h), (2, 2));
     let ours = text(h.state(), id).cache.unwrap().content_bounds();
     assert_ne!(ours, moved.content_bounds(), "re-rendered where the caret is");
-    assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps + 1);
+    assert_eq!(h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), steps + 1);
     super::insert(h.state_mut(), "x");
-    assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps + 1, "one step for the session");
+    assert_eq!(
+        h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(),
+        steps + 1,
+        "one step for the session"
+    );
     super::cancel(h.state_mut());
     assert_eq!(text(h.state(), id).cache.unwrap().content_bounds(), moved.content_bounds());
     assert_eq!(text(h.state(), id).text, "HOHOHO");
     // A native layer shows our layout already: clicking into it records nothing.
     let mut app = new_app();
     let id = LayerId(app.run("type.create", json!({"text": "HOHOHO", "size": 120, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
-    let steps = app.session.active().unwrap().history.entries().len();
+    let steps = app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
     let mut h = harness(1.0, app);
     let p = glyph(&mut h, id, 3, 0.2);
     click(&mut h, p);
     assert_eq!(selection(&h), (3, 3));
-    assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps);
+    assert_eq!(h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), steps);
 }
 
 fn size_at(app: &PhotocraftApp, id: LayerId, ci: usize) -> f32 {
@@ -236,7 +269,7 @@ fn size_applies_at_layer_and_selection_scope() {
             let doc = (*app.session.active().unwrap().doc).clone();
             let out = photocraft_io::export(&doc, "t.psd", &Default::default()).unwrap();
             let back = photocraft_io::import("t.psd", &out.bytes).unwrap().document;
-            app.session.add_document(back, None);
+            app.session.add_document(back, None).unwrap();
             app.sync_views();
             let d = &app.session.active().unwrap().doc;
             let id = d.walk().into_iter().find(|(_, _, l)| matches!(l.content, LayerContent::Text(_))).map(|(_, _, l)| l.id).unwrap();
@@ -284,7 +317,7 @@ fn size_drag_is_live_and_one_history_step_per_drag() {
     );
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     h.run_steps(3);
-    let steps = h.state().session.active().unwrap().history.entries().len();
+    let steps = h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
     let mut last = 20.0;
     for d in 0..2 {
         let field = h.get_all_by_role(egui::accesskit::Role::SpinButton).next().expect("size field").rect().center();
@@ -302,7 +335,11 @@ fn size_drag_is_live_and_one_history_step_per_drag() {
         }
         press(&mut h, field + vec2(40.0, 0.0), false);
         h.run_steps(2);
-        assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps + d + 1, "one step per drag");
+        assert_eq!(
+            h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(),
+            steps + d + 1,
+            "one step per drag"
+        );
     }
     assert!(h.state_mut().session.undo());
     assert!(h.state_mut().session.undo());
@@ -414,14 +451,18 @@ fn foreground_colour_recolours_only_selected_type() {
     app.ui.text_edit = Some(edit(3, 3));
     super::foreground_changed(&mut app);
     assert_eq!(rgb_at(&app, id, 0), [0, 0, 0, 255], "a caret: unchanged");
-    let steps = app.session.active().unwrap().history.entries().len();
+    let steps = app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
     app.ui.text_edit = Some(edit(11, 6));
     super::foreground_changed(&mut app);
     app.run("tools.setColors", json!({"foreground": "#00ff00"})).unwrap();
     super::foreground_changed(&mut app);
     assert_eq!((rgb_at(&app, id, 0), rgb_at(&app, id, 5)), ([0, 0, 0, 255], [0, 0, 0, 255]));
     assert_eq!((rgb_at(&app, id, 6), rgb_at(&app, id, 10)), ([0, 255, 0, 255], [0, 255, 0, 255]));
-    assert_eq!(app.session.active().unwrap().history.entries().len(), steps + 1, "one step for the session");
+    assert_eq!(
+        app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(),
+        steps + 1,
+        "one step for the session"
+    );
 }
 
 #[test]
@@ -431,7 +472,7 @@ fn vertical_type_tool_creates_point_and_paragraph_text_with_one_undo() {
     for end in [[100.0, 100.0], [240.0, 230.0]] {
         let mut app = new_app();
         app.ui.tool = crate::state::Tool::VerticalType;
-        let before = app.session.active().unwrap().history.entries().len();
+        let before = app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
         tool_event(&mut app, ToolEvent::Down { x: 100.0, y: 100.0, pressure: 1.0 }, Modifiers::NONE);
         tool_event(&mut app, ToolEvent::Move { x: end[0], y: end[1], pressure: 1.0 }, Modifiers::NONE);
         tool_event(&mut app, ToolEvent::Up { x: end[0], y: end[1] }, Modifiers::NONE);
@@ -440,7 +481,7 @@ fn vertical_type_tool_creates_point_and_paragraph_text_with_one_undo() {
         let text = text_layer(&st.doc, id).unwrap();
         assert_eq!(text.orientation, Orientation::Vertical);
         assert_eq!(matches!(text.shape, TextShape::Box { .. }), end != [100.0, 100.0]);
-        assert_eq!(st.history.entries().len(), before + 1);
+        assert_eq!(st.history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), before + 1);
         super::commit(&mut app);
         app.run("edit.undo", json!({})).unwrap();
         assert!(app.session.active().unwrap().doc.layer(id).is_none());
@@ -480,13 +521,13 @@ fn text_color_dialog_edits_only_the_selected_range_and_cancel_is_inert() {
         preedit: None,
     });
     let foreground = app.session.tools.foreground;
-    let before = app.session.active().unwrap().history.entries().len();
+    let before = app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
     let selection = app.ui.text_edit.clone();
     let dialog = super::open_color_picker(&mut app, [0.0; 3]);
     app.ui.dialogs.last_mut().unwrap().fields.insert("color".into(), json!("#ff0000"));
     app.ui.close_dialog(dialog).unwrap();
     assert_eq!(rgb_at(&app, id, 6), [0, 0, 0, 255]);
-    assert_eq!(app.session.active().unwrap().history.entries().len(), before);
+    assert_eq!(app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), before);
     assert_eq!(app.ui.text_edit, selection);
     let dialog = super::open_color_picker(&mut app, [0.0; 3]);
     assert_eq!(app.ui.dialogs.last().unwrap().fields["__label"], "Color Picker (Text Color)");
@@ -498,11 +539,15 @@ fn text_color_dialog_edits_only_the_selected_range_and_cancel_is_inert() {
     assert_eq!(rgb_at(&app, id, 10), [0, 255, 0, 255]);
     assert_eq!(app.session.tools.foreground, foreground, "text-only picker leaves the foreground alone");
     assert_eq!(app.ui.text_edit, selection, "dialog preserves the caret and selection");
-    assert_eq!(app.session.active().unwrap().history.entries().len(), before + 1);
+    assert_eq!(app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), before + 1);
     let dialog = super::open_color_picker(&mut app, [0.0, 1.0, 0.0]);
     app.ui.dialogs.last_mut().unwrap().fields.insert("color".into(), json!("#0000ff"));
     crate::dialogs::confirm(&mut app, dialog).unwrap();
-    assert_eq!(app.session.active().unwrap().history.entries().len(), before + 1, "one editing-session undo step");
+    assert_eq!(
+        app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(),
+        before + 1,
+        "one editing-session undo step"
+    );
 }
 
 #[test]
@@ -605,7 +650,7 @@ fn assert_affine(a: Affine, b: Affine) {
 fn temporary_type_transform_visibility_and_cursors() {
     let (app, id) = transform_app(false, false, Affine::translate(500.0, 350.0));
     let mut h = harness(1.0, app);
-    let before = h.state().session.active().unwrap().history.entries().len();
+    let before = h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
     let original = text(h.state(), id);
     assert!(!crate::type_transform::visible(h.state(), Modifiers::NONE));
     hold(&mut h, type_command());
@@ -635,7 +680,7 @@ fn temporary_type_transform_visibility_and_cursors() {
     assert!(!crate::type_transform::visible(h.state(), Modifiers::NONE));
     assert_eq!(selection(&h), (3, 3));
     assert_eq!(text(h.state(), id).transform, original.transform);
-    assert_eq!(h.state().session.active().unwrap().history.entries().len(), before);
+    assert_eq!(h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), before);
     assert!(h.state().ui.transform.is_none());
     assert!(h.state().ui.type_transform.is_none());
     // macOS's real Control is not the logical Command modifier.
@@ -664,7 +709,7 @@ fn temporary_type_transform_scales_without_reflow_or_leaving_type() {
                 view.fit_pending = false;
                 h.run_steps(2);
                 let before = text(h.state(), id);
-                let count = h.state().session.active().unwrap().history.entries().len();
+                let count = h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
                 let (a, b) = (f.quad[2], [f.quad[0][0] + 1.25 * (f.quad[2][0] - f.quad[0][0]), f.quad[0][1] + 1.25 * (f.quad[2][1] - f.quad[0][1])]);
                 let (a, b) = (frame_point(h.state(), a), frame_point(h.state(), b));
                 assert!(xf(h.state()).rect.contains(a));
@@ -683,14 +728,18 @@ fn temporary_type_transform_scales_without_reflow_or_leaving_type() {
                 assert!(h.state().ui.tool.is_type());
                 assert!(h.state().ui.transform.is_none());
                 assert!(h.state().ui.type_transform.is_none());
-                assert_eq!(h.state().session.active().unwrap().history.entries().len(), count + 1);
+                assert_eq!(h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), count + 1);
                 h.event(egui::Event::Text("!".into()));
                 h.run_steps(2);
                 assert!(text(h.state(), id).text.starts_with("Hel!lo"));
                 h.key_press(if vertical { egui::Key::ArrowUp } else { egui::Key::ArrowLeft });
                 h.run_steps(1);
                 assert_eq!(selection(&h), (3, 3));
-                assert_eq!(h.state().session.active().unwrap().history.entries().len(), count + 1, "one edit session");
+                assert_eq!(
+                    h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(),
+                    count + 1,
+                    "one edit session"
+                );
                 h.state_mut().run("edit.undo", json!({})).unwrap();
                 assert_affine(text(h.state(), id).transform, before.transform);
                 assert_eq!(text(h.state(), id).text, before.text);
@@ -729,7 +778,7 @@ fn temporary_type_transform_free_scale_center_scale_move_skew_and_rotation() {
                 (a, [p.x, p.y], if gesture == "center" { type_command() | Modifiers::ALT } else { type_command() })
             }
         };
-        let count = app.session.active().unwrap().history.entries().len();
+        let count = app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
         tool_event(&mut app, ToolEvent::Down { x: a[0], y: a[1], pressure: 1.0 }, mods);
         for k in 1..=5 {
             let f = f64::from(k) / 5.0;
@@ -737,7 +786,7 @@ fn temporary_type_transform_free_scale_center_scale_move_skew_and_rotation() {
             assert!(crate::type_transform::display_doc(&mut app, 0).is_some());
             assert_eq!(text(&app, id).transform, initial, "preview leaves engine untouched");
         }
-        assert_eq!(app.session.active().unwrap().history.entries().len(), count);
+        assert_eq!(app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), count);
         tool_event(&mut app, ToolEvent::Up { x: b[0], y: b[1] }, mods);
         let after = text(&app, id);
         assert_ne!(after.transform, initial, "{gesture}");
@@ -779,7 +828,7 @@ fn temporary_type_transform_noop_cancel_and_stale_capture() {
         let mut h = harness(1.0, app);
         let f = crate::type_transform::frame(h.state_mut()).unwrap();
         let a = f.quad[2];
-        let count = h.state().session.active().unwrap().history.entries().len();
+        let count = h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
         tool_event(h.state_mut(), ToolEvent::Down { x: a[0], y: a[1], pressure: 1.0 }, type_command());
         tool_event(h.state_mut(), ToolEvent::Move { x: a[0] + 50.0, y: a[1] + 20.0, pressure: 1.0 }, type_command());
         let preview = {
@@ -818,7 +867,7 @@ fn temporary_type_transform_noop_cancel_and_stale_capture() {
         assert!(preview.upgrade().is_none(), "{stop}: release rendered preview without waiting for another frame");
         if ["noop", "escape", "focus", "tool"].contains(&stop) {
             assert_eq!(text(h.state(), id).transform, original);
-            assert_eq!(h.state().session.active().unwrap().history.entries().len(), count);
+            assert_eq!(h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), count);
         }
         if stop == "escape" {
             assert!(h.state().ui.text_edit.is_some());
@@ -842,7 +891,7 @@ fn temporary_type_transform_control_roundtrip_and_input_safety() {
         assert_eq!(result["ok"], true, "{result}");
     };
     call(&mut app, json!({"command": true, "events": [{"kind": "down", "x": a[0], "y": a[1]}]}));
-    let inspected = crate::control::inspect(&app, &ctx);
+    let inspected = crate::control::inspect(&app, &ctx).unwrap();
     assert_eq!(inspected["typeTransform"]["frame"]["layer"], id.0);
     call(&mut app, json!({"command": true, "events": [{"kind": "move", "x": a[0]+60.0, "y": a[1]+30.0}]}));
     call(&mut app, json!({"events": [{"kind": "up", "x": a[0]+60.0, "y": a[1]+30.0}]}));
@@ -907,12 +956,16 @@ fn temporary_type_transform_preserves_paragraph_resize_pivot_ime_and_shortcuts()
     assert_ne!(after.shape, before.shape);
     assert_eq!(after.transform, before.transform, "plain drag resizes the frame");
     let f = crate::type_transform::frame(h.state_mut()).unwrap();
-    let count = h.state().session.active().unwrap().history.entries().len();
+    let count = h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
     let pivot = [f.pivot[0] + 45.0, f.pivot[1] - 15.0];
     tool_event(h.state_mut(), ToolEvent::Down { x: f.pivot[0], y: f.pivot[1], pressure: 1.0 }, type_command());
     tool_event(h.state_mut(), ToolEvent::Up { x: pivot[0], y: pivot[1] }, type_command());
     assert_eq!(h.state().ui.type_transform_pivot, Some(pivot));
-    assert_eq!(h.state().session.active().unwrap().history.entries().len(), count, "moving the pivot is view state");
+    assert_eq!(
+        h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(),
+        count,
+        "moving the pivot is view state"
+    );
     h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
     h.run_steps(2);
     assert_eq!(selection(&h), (0, after.text.chars().count()));
@@ -1041,7 +1094,7 @@ fn temporary_type_transform_imported_psd_retains_editability_and_styles() {
     let exported = photocraft_io::export(&app.session.active().unwrap().doc, "type.psd", &Default::default()).unwrap();
     let imported = photocraft_io::import("type.psd", &exported.bytes).unwrap().document;
     let mut app = new_app();
-    app.session.add_document(imported, None);
+    app.session.add_document(imported, None).unwrap();
     app.sync_views();
     let id = app.session.active().unwrap().doc.walk().into_iter().find(|(_, _, l)| matches!(l.content, LayerContent::Text(_))).unwrap().2.id;
     app.session.select_layer(id).unwrap();
@@ -1082,7 +1135,7 @@ fn temporary_type_transform_large_document_preview() {
     let revision = app.session.active().unwrap().revision;
     let doc = app.session.active().unwrap().doc.id;
     let index = app.session.active_index().unwrap();
-    let count = app.session.active().unwrap().history.entries().len();
+    let count = app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
     let source = (*app.session.active().unwrap().doc).clone();
     let layer = app.ui.text_edit.as_ref().unwrap().layer;
     tool_event(&mut app, ToolEvent::Down { x: a[0], y: a[1], pressure: 1.0 }, type_command());
@@ -1102,7 +1155,7 @@ fn temporary_type_transform_large_document_preview() {
         before = after;
     }
     assert_eq!(app.session.active().unwrap().revision, revision);
-    assert_eq!(app.session.active().unwrap().history.entries().len(), count);
+    assert_eq!(app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), count);
     times.sort_by(f64::total_cmp);
     println!(
         "24 MP / 8 type layers / 60 previews: p50 {:.3} ms, p95 {:.3} ms, max {:.3} ms (render + gesture; composite excluded)",
@@ -1110,7 +1163,7 @@ fn temporary_type_transform_large_document_preview() {
     );
     // Compare the same matrices with the existing live-command path on the same document.
     let mut commands = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    commands.session.add_document(source, None);
+    commands.session.add_document(source, None).unwrap();
     let mut command_times = Vec::new();
     for transform in transforms {
         let started = std::time::Instant::now();

@@ -29,7 +29,7 @@ fn contents(doc: &Document, sm: &SmartObject, intent: Intent, bpc: bool) -> Resu
         }
     }
     if src.depth != doc.depth {
-        crate::image_cmds::convert_layers_depth(&mut src.layers, doc.depth);
+        crate::image_cmds::convert_layers_depth(&mut src.layers, doc.depth)?;
     }
     let mut layers = std::mem::take(&mut src.layers);
     for l in &mut layers {
@@ -71,14 +71,16 @@ fn place(doc: &Document, sm: &SmartObject, layers: &mut [Layer]) -> Result<()> {
     let whole = |v: f64| (v - v.round()).abs() < 1e-9;
     if sm.perspective.is_none() && [a - 1.0, b, c, d - 1.0].iter().all(|v| v.abs() < 1e-9) && whole(e) && whole(f) {
         // Saturating casts: a placement that far out moves the layers off any canvas either way.
-        layers.iter_mut().for_each(|l| shift_layer(l, e.round() as i32, f.round() as i32));
+        for layer in layers.iter_mut() {
+            shift_layer(layer, e.round() as i32, f.round() as i32)?;
+        }
         return Ok(());
     }
     let h = placement(sm);
     let affine = sm.perspective.is_none().then_some(sm.transform);
     for l in layers {
         released(l, |l| crate::transform_cmds::transform_layer(None, photocraft_doc::Locks::default(), l, &h, affine, Interp::Bicubic))?;
-        crate::transform_cmds::refresh_text(doc, l);
+        crate::transform_cmds::refresh_text(doc, l)?;
     }
     Ok(())
 }

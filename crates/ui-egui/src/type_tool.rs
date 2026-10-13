@@ -29,19 +29,48 @@ fn byte_of(text: &str, ci: usize) -> usize {
     photocraft_text::byte_index(text, ci)
 }
 
+fn empty_caret(layout: &TextLayout) -> (f32, f32, f32) {
+    let [x, y] = layout.px_per_pt_axes();
+    let cross_axis = if layout.vertical { x } else { y };
+    (0.0, -(12.0 * (cross_axis as f32).max(1.0)), 3.0)
+}
+
 /// Layout of a type layer (cached per document revision) and its text → document transform.
 pub fn layout(app: &mut PhotocraftApp, id: LayerId) -> Option<(Arc<TextLayout>, Affine, String)> {
     let st = app.session.active()?;
     let (doc, rev) = (st.doc.clone(), st.revision);
     let t = text_layer(&doc, id)?;
+    let resolution = match photocraft_engine::type_cmds::checked_layout_resolution(&doc) {
+        Ok(resolution) => resolution,
+        Err(error) => {
+            app.ui.status = error.to_string();
+            app.ui.status_error = true;
+            return None;
+        }
+    };
     let transform = crate::type_transform::current_transform(app, id).unwrap_or(t.transform);
+    let shared = match photocraft_text::try_shared() {
+        Ok(shared) => shared,
+        Err(error) => {
+            app.ui.status = error.to_string();
+            app.ui.status_error = true;
+            return None;
+        }
+    };
     let key = (doc.id.0, rev, id.0);
     if let Some((k, l)) = &app.type_layout
         && *k == key
     {
         return Some((l.clone(), transform, t.text.clone()));
     }
-    let l = Arc::new(photocraft_text::shared().lock().ok()?.layout(t, doc.resolution_dpi));
+    let l = match shared.lock().unwrap_or_else(PoisonError::into_inner).layout_with_resolution(t, &resolution) {
+        Ok(layout) => Arc::new(layout),
+        Err(error) => {
+            app.ui.status = error.to_string();
+            app.ui.status_error = true;
+            return None;
+        }
+    };
     app.type_layout = Some((key, l.clone()));
     Some((l, transform, t.text.clone()))
 }
@@ -74,12 +103,13 @@ fn hit_layer(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<LayerId> {
 /// True when the layer's pixels are what our engine draws for it. A PSD's type layer keeps
 /// Photoshop's pixels until it is edited, and with substituted fonts or a different line layout
 /// they sit somewhere else than the glyphs the caret and selection are placed on.
-fn shows_own_layout(doc: &Document, t: &TextLayer) -> bool {
-    let Some(cache) = &t.cache else { return false };
-    let mut eng = photocraft_text::shared().lock().unwrap_or_else(PoisonError::into_inner);
-    let ours = eng.render(t, doc.resolution_dpi, doc.pixel_format()).1.surface.content_bounds();
+fn shows_own_layout(doc: &Document, t: &TextLayer) -> Result<bool, String> {
+    let resolution = photocraft_engine::type_cmds::checked_layout_resolution(doc).map_err(|error| error.to_string())?;
+    let Some(cache) = &t.cache else { return Ok(false) };
+    let mut eng = photocraft_text::try_shared().map_err(|error| error.to_string())?.lock().unwrap_or_else(PoisonError::into_inner);
+    let ours = eng.render_with_resolution(t, &resolution, doc.pixel_format()).map_err(|error| error.to_string())?.1.surface.content_bounds();
     let have = cache.content_bounds();
-    [(ours.x0, have.x0), (ours.y0, have.y0), (ours.x1, have.x1), (ours.y1, have.y1)].iter().all(|(a, b)| (a - b).abs() <= 1)
+    Ok([(ours.x0, have.x0), (ours.y0, have.y0), (ours.x1, have.x1), (ours.y1, have.y1)].iter().all(|(a, b)| (a - b).abs() <= 1))
 }
 
 /// Start editing an existing type layer. Like Photoshop, editing shows the text as the type
@@ -89,7 +119,7 @@ fn begin_edit(app: &mut PhotocraftApp, id: LayerId, key: &str) -> Result<(), Str
     let st = app.session.active().ok_or("no document open")?;
     let doc = st.doc.clone();
     if let Some(t) = text_layer(&doc, id)
-        && !shows_own_layout(&doc, t)
+        && !shows_own_layout(&doc, t)?
     {
         app.run("type.edit", json!({"layer": id.0, "coalesce": key}))?;
     }
@@ -600,7 +630,7 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
     // Tell the OS where the caret is: this is what enables the IME and places its candidate window.
     {
         let (x, top, bot) = l.caret(byte_of(&text, ed.caret));
-        let (x, top, bot) = if l.lines.is_empty() { (0.0, -(12.0 * l.px_per_pt.max(1.0)), 3.0) } else { (x, top, bot) };
+        let (x, top, bot) = if l.lines.is_empty() { empty_caret(&l) } else { (x, top, bot) };
         let r = egui::Rect::from_two_pos(scr(x, top), scr(x, bot)).expand(1.0);
         painter.ctx().output_mut(|o| {
             o.ime = Some(egui::output::IMEOutput { purpose: egui::IMEPurpose::Normal, rect: r, cursor_rect: r, should_interrupt_composition: false });
@@ -668,7 +698,7 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
         let time = painter.ctx().input(|i| i.time);
         if ed.dragging || (time * 1000.0 / 530.0) as i64 % 2 == 0 {
             let (x, top, bot) = l.caret(a);
-            let (x, top, bot) = if l.lines.is_empty() { (0.0, -(12.0 * l.px_per_pt.max(1.0)), 3.0) } else { (x, top, bot) };
+            let (x, top, bot) = if l.lines.is_empty() { empty_caret(&l) } else { (x, top, bot) };
             let c = if crate::theme::Tokens::get(painter.ctx()).pro { Color32::WHITE } else { Color32::BLACK };
             painter.line_segment([scr(x, top), scr(x, bot)], Stroke::new(1.5, c));
             painter.line_segment([scr(x, top), scr(x, bot)], Stroke::new(0.75, Color32::BLACK));
@@ -677,9 +707,26 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
 }
 
 /// Font families (bundled + system), cached for the process.
+#[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
 pub fn families() -> &'static [String] {
     static FAMILIES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
     FAMILIES.get_or_init(|| photocraft_text::shared().lock().map(|mut e| e.fonts.families()).unwrap_or_default())
+}
+
+pub fn try_families() -> Result<&'static [String], photocraft_text::FontBootstrapError> {
+    let mut engine = photocraft_text::try_shared()?.lock().unwrap_or_else(PoisonError::into_inner);
+    static FAMILIES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    Ok(FAMILIES.get_or_init(|| engine.fonts.families()))
+}
+fn font_result<T>(app: &mut PhotocraftApp, result: Result<T, photocraft_text::FontBootstrapError>) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(error) => {
+            app.ui.status = error.to_string();
+            app.ui.status_error = true;
+            None
+        }
+    }
 }
 
 fn weight_name(w: f32) -> &'static str {
@@ -697,8 +744,15 @@ fn weight_name(w: f32) -> &'static str {
 }
 
 /// Style names ("Regular", "Bold Italic", …) available for a family.
+#[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
 pub fn styles(family: &str) -> Vec<String> {
-    let faces = photocraft_text::shared().lock().map(|mut e| e.fonts.faces(family)).unwrap_or_default();
+    styles_in(&mut photocraft_text::shared().lock().unwrap_or_else(PoisonError::into_inner), family)
+}
+pub fn try_styles(family: &str) -> Result<Vec<String>, photocraft_text::FontBootstrapError> {
+    Ok(styles_in(&mut photocraft_text::try_shared()?.lock().unwrap_or_else(PoisonError::into_inner), family))
+}
+fn styles_in(engine: &mut photocraft_text::TextEngine, family: &str) -> Vec<String> {
+    let faces = engine.fonts.faces(family);
     let mut v: Vec<(i32, bool, String)> = faces
         .iter()
         .map(|f| {
@@ -725,8 +779,9 @@ pub fn style_label(style: &str) -> String {
 }
 
 /// Searchable font-family combo box.
-fn font_picker(ui: &mut egui::Ui, current: &mut String, width: f32) -> bool {
-    font_picker_in(ui, current, width, families())
+fn font_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui, current: &mut String, width: f32) -> bool {
+    let Some(families) = font_result(app, try_families()) else { return false };
+    font_picker_in(ui, current, width, families)
 }
 
 /// Maximum height of the font menu.
@@ -882,14 +937,15 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             app.ui.status_error = true;
         }
     }
-    if font_picker(ui, &mut fam, 170.0) {
+    if font_picker(app, ui, &mut fam, 170.0) {
+        let Some(st) = font_result(app, try_styles(&fam)) else { return };
         app.ui.tool_options.type_font = fam.clone();
-        let st = styles(&fam);
         style = if st.contains(&style) { style } else { st.first().cloned().unwrap_or_else(|| "Regular".into()) };
         app.ui.tool_options.type_style = style.clone();
         apply(app, ui.ctx(), json!({"font": fam, "fontStyle": style}));
     }
-    let opts: Vec<(String, String)> = styles(&fam).into_iter().map(|s| (s.clone(), style_label(&s))).collect();
+    let Some(styles) = font_result(app, try_styles(&fam)) else { return };
+    let opts: Vec<(String, String)> = styles.into_iter().map(|s| (s.clone(), style_label(&s))).collect();
     let opts_ref: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
     if crate::widgets::dropdown(ui, "type-style", &mut style, &opts_ref, 110.0) {
         app.ui.tool_options.type_style = style.clone();
@@ -1184,16 +1240,17 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
         let w = field_width(full, 2, LABEL_W);
         let mut fam = c.font_family.clone();
         row(ui, &mut |ui| {
-            if font_picker(ui, &mut fam, full) {
+            if font_picker(app, ui, &mut fam, full) {
+                let Some(st) = font_result(app, try_styles(&fam)) else { return };
                 app.ui.tool_options.type_font = fam.clone();
-                let st = styles(&fam);
                 let style = if st.contains(&c.font_style) { c.font_style.clone() } else { st.first().cloned().unwrap_or_else(|| tl!("Regular").into()) };
                 apply(app, ui.ctx(), json!({"font": fam, "fontStyle": style}));
             }
         });
         row(ui, &mut |ui| {
             let mut style = if c.font_style.is_empty() { "Regular".to_string() } else { c.font_style.clone() };
-            let opts: Vec<(String, String)> = styles(&fam).into_iter().map(|s| (s.clone(), style_label(&s))).collect();
+            let Some(styles) = font_result(app, try_styles(&fam)) else { return };
+            let opts: Vec<(String, String)> = styles.into_iter().map(|s| (s.clone(), style_label(&s))).collect();
             let opts_ref: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
             if crate::widgets::dropdown(ui, "props-type-style", &mut style, &opts_ref, full) {
                 apply(app, ui.ctx(), json!({"fontStyle": style}));
@@ -1467,6 +1524,31 @@ mod tests {
     }
 
     #[test]
+    fn empty_caret_uses_physical_cross_axis_after_vertical_rotation() {
+        let mut layout = TextLayout { px_per_pt: 2.0, physical_scale: Some([0.5, 1.0]), ..Default::default() };
+        assert_eq!(empty_caret(&layout), (0.0, -24.0, 3.0));
+        layout.vertical = true;
+        assert_eq!(empty_caret(&layout), (0.0, -12.0, 3.0));
+    }
+
+    #[test]
+    fn physical_layout_errors_keep_last_successful_revision_cache() {
+        let mut app = app();
+        let result = app.session.execute("type.create", json!({"text":"AV","size":24,"x":30,"y":60})).unwrap();
+        let id = LayerId(result["layer"].as_u64().unwrap());
+        app.session.active_mut().unwrap().doc.try_resident_mut().unwrap().physical_resolution =
+            Some(photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: 72.0, unit: photocraft_doc::PhysicalUnit::Inch });
+        let first = layout(&mut app, id).unwrap().0;
+        let second = layout(&mut app, id).unwrap().0;
+        assert!(Arc::ptr_eq(&first, &second));
+        app.session.active_mut().unwrap().doc.try_resident_mut().unwrap().physical_resolution =
+            Some(photocraft_doc::PhysicalResolution { x_dpi: 0.0, y_dpi: 72.0, unit: photocraft_doc::PhysicalUnit::Inch });
+        assert!(layout(&mut app, id).is_none());
+        assert!(app.ui.status_error);
+        assert!(Arc::ptr_eq(&first, &app.type_layout.as_ref().unwrap().1));
+    }
+
+    #[test]
     fn click_creates_placeholder_selected_and_typing_replaces_it() {
         let mut app = app();
         assert!(!pointer_down(&mut app, 50.0, 100.0, false));
@@ -1477,7 +1559,7 @@ mod tests {
         insert(&mut app, " world");
         assert_eq!(layer_text(&app), "Héllo world");
         // Creating and typing share the session key: one step after the initial snapshot.
-        let steps = app.session.active().unwrap().history.entries();
+        let steps = app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().to_vec();
         assert_eq!(steps, ["Open", "New Type Layer"]);
         commit(&mut app);
         let doc = &app.session.active().unwrap().doc;
@@ -1504,7 +1586,7 @@ mod tests {
         let mut app = app();
         pointer_up(&mut app, [10.0, 10.0], [110.0, 60.0]);
         let id = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
-        let steps = app.session.active().unwrap().history.entries().len();
+        let steps = app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
         // Top-left corner: the box keeps its bottom-right corner.
         assert!(pointer_down(&mut app, 10.0, 10.0, false));
         assert_eq!(app.ui.text_edit.as_ref().unwrap().resize, Some(0));
@@ -1515,7 +1597,7 @@ mod tests {
         let aff = layout(&mut app, id).unwrap().1;
         assert_eq!((aff.m[4], aff.m[5]), (30.0, 30.0));
         // The whole drag is one history step, and the edit session survives it.
-        assert_eq!(app.session.active().unwrap().history.entries().len(), steps);
+        assert_eq!(app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), steps);
         assert!(app.ui.text_edit.is_some());
         // Right edge: only the width changes, and never below the minimum.
         assert!(pointer_down(&mut app, 110.0, 45.0, false));

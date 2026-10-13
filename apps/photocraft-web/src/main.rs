@@ -16,8 +16,16 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(any(test, target_arch = "wasm32"))]
+mod asset_paths;
+#[cfg(all(target_arch = "wasm32", feature = "web_boot_contract_tests"))]
+mod boot_contract_probe;
+#[cfg(target_arch = "wasm32")]
+mod bounded_resource_read;
 #[cfg(target_arch = "wasm32")]
 mod web;
+#[cfg(target_arch = "wasm32")]
+mod web_asset_loader;
 
 #[cfg(target_arch = "wasm32")]
 fn main() {

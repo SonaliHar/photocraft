@@ -298,7 +298,7 @@ fn curves_picker_samples_document_coordinates_through_the_view_transform() {
     press(&mut h, left, true);
     press(&mut h, left, false);
     h.run_steps(3);
-    assert!(std::sync::Arc::ptr_eq(&h.state().session.active().unwrap().doc, &committed));
+    assert!(std::ptr::eq((h.state().session.active().unwrap().doc).as_ref(), (committed).as_ref()));
     assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
     assert!(crate::adjust_preview::display_doc(h.state_mut(), 0).is_some(), "the new curve is visible only through the preview");
     let red = h
@@ -408,7 +408,7 @@ fn type_tool_alt_arrows_kern_the_pair() {
         let r = t.char_runs();
         (r[0].style.kerning, r[0].style.kern, r.len())
     };
-    let steps = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().history.entries().len();
+    let steps = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
     let metric = photocraft_text::shared().lock().unwrap().pair_kerning(&text(&h), 72.0, 0).unwrap().round();
     h.state_mut().ui.text_edit = Some(crate::state::TextEdit {
         layer: id,

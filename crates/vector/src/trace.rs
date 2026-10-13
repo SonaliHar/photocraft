@@ -17,6 +17,10 @@ use photocraft_geom::{Point, Rect};
 
 type P = (f64, f64);
 
+#[path = "trace_controlled.rs"]
+mod controlled;
+pub use controlled::{TraceError, TraceLimits, trace_mask_with_interrupt};
+
 /// Traces the 0.5 iso-contours of `values` (row-major over `rect`, values outside read as
 /// `outside`) and fits curves within `tolerance` px.
 pub fn trace_mask(values: &[f32], rect: Rect, outside: f32, tolerance: f64) -> Path {

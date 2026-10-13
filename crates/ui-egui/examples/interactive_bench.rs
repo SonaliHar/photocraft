@@ -107,13 +107,18 @@ impl Bench {
         let t = Instant::now();
         match &mut self.gpu {
             Some(g) => {
-                if g.comp.render(&g.device, &g.queue, doc, region, |_, _| {}).is_err() {
-                    std::hint::black_box(photocraft_compose::render(doc, region));
+                if g.comp.render(&g.device, &g.queue, doc, region, |_, _| {}).is_err()
+                    && let Err(error) = std::hint::black_box(photocraft_compose::render(doc, region))
+                {
+                    eprintln!("CPU benchmark refused: {error}");
+                    return f64::NAN;
                 }
                 let _ = g.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
             }
             None => {
-                std::hint::black_box(photocraft_compose::render(doc, region));
+                if let Err(error) = std::hint::black_box(photocraft_compose::render(doc, region)) {
+                    eprintln!("CPU benchmark refused: {error}");
+                };
             }
         }
         t.elapsed().as_secs_f64() * 1000.0
@@ -195,18 +200,23 @@ fn main() {
         let t = Instant::now();
         let doc = photocraft_io::import("photo.jpg", &jpeg).expect("import").document;
         s = Session::new();
-        s.open_document(doc, Some("photo.jpg".into()));
+        if let Err(error) = s.open_document(doc, Some("photo.jpg".into())) {
+            eprintln!("Open refused: {error}");
+            return f64::NAN;
+        }
         let t = ms(t);
         t + b.refresh(&s, true)
     });
     // A working document: the photo, a painting layer above it, an adjustment on top later.
     exec(&mut s, "layer.new.layer", json!({"name": "paint"}));
-    let doc = |s: &Session| -> std::sync::Arc<Document> { s.active().expect("doc").doc.clone() };
+    let doc = |s: &Session| -> photocraft_engine::document_snapshot::DocumentSnapshot { s.active().expect("doc").doc.clone() };
     b.time("full refresh (2 layers)", |b| b.refresh(&s, true));
     b.time("viewport 1920×1080 (CPU compose)", |_| {
         let d = doc(&s);
         let t = Instant::now();
-        std::hint::black_box(photocraft_compose::render(&d, Rect::from_xywh(w as i32 / 3, h as i32 / 3, 1920, 1080)));
+        if let Err(error) = std::hint::black_box(photocraft_compose::render(&d, Rect::from_xywh(w as i32 / 3, h as i32 / 3, 1920, 1080))) {
+            eprintln!("CPU benchmark refused: {error}");
+        };
         ms(t)
     });
 
@@ -255,7 +265,9 @@ fn main() {
             let t = Instant::now();
             let p = photocraft_ui_egui::filter_dialog::preview_document(&st.doc, st.active_layer, "filter.blur.gaussianBlur", &json!({"radius": radius}), k)
                 .expect("preview");
-            std::hint::black_box(photocraft_compose::flatten(&p));
+            if let Err(error) = std::hint::black_box(photocraft_compose::flatten(&p)) {
+                eprintln!("CPU benchmark refused: {error}");
+            };
             ms(t)
         });
     }
@@ -281,7 +293,9 @@ fn main() {
                 k,
             )
             .expect("preview");
-            std::hint::black_box(photocraft_compose::flatten(&p));
+            if let Err(error) = std::hint::black_box(photocraft_compose::flatten(&p)) {
+                eprintln!("CPU benchmark refused: {error}");
+            };
             ms(t)
         });
         // Once per dialog session (the app caches both per document revision).
@@ -303,13 +317,18 @@ fn main() {
             let t = Instant::now();
             match &mut b.gpu {
                 Some(g) => {
-                    if g.comp.render(&g.device, &g.queue, &p, region, |_, _| {}).is_err() {
-                        std::hint::black_box(photocraft_compose::render(&p, region));
+                    if g.comp.render(&g.device, &g.queue, &p, region, |_, _| {}).is_err()
+                        && let Err(error) = std::hint::black_box(photocraft_compose::render(&p, region))
+                    {
+                        eprintln!("CPU benchmark refused: {error}");
+                        return f64::NAN;
                     }
                     let _ = g.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
                 }
                 None => {
-                    std::hint::black_box(photocraft_compose::render(&p, region));
+                    if let Err(error) = std::hint::black_box(photocraft_compose::render(&p, region)) {
+                        eprintln!("CPU benchmark refused: {error}");
+                    };
                 }
             }
             build + ms(t)
@@ -324,13 +343,18 @@ fn main() {
                 photocraft_ui_egui::adjust_preview::with_settings(&base, "curves", &json!({"points": [[0, 0], [100, 100 + v], [255, 255]]})).expect("preview");
             match &mut b.gpu {
                 Some(g) => {
-                    if g.comp.render(&g.device, &g.queue, &p, view, |_, _| {}).is_err() {
-                        std::hint::black_box(photocraft_compose::render(&p, view));
+                    if g.comp.render(&g.device, &g.queue, &p, view, |_, _| {}).is_err()
+                        && let Err(error) = std::hint::black_box(photocraft_compose::render(&p, view))
+                    {
+                        eprintln!("CPU benchmark refused: {error}");
+                        return f64::NAN;
                     }
                     let _ = g.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
                 }
                 None => {
-                    std::hint::black_box(photocraft_compose::render(&p, view));
+                    if let Err(error) = std::hint::black_box(photocraft_compose::render(&p, view)) {
+                        eprintln!("CPU benchmark refused: {error}");
+                    };
                 }
             }
             ms(t)
@@ -340,7 +364,13 @@ fn main() {
         let zoom = 1600.0 / w as f32 * 2.0;
         let k = photocraft_ui_egui::adjust_preview::proxy_factor(zoom);
         let t = Instant::now();
-        let proxy = photocraft_ui_egui::adjust_preview::proxy_base(&base, k);
+        let proxy = match photocraft_ui_egui::adjust_preview::proxy_base(&base, k) {
+            Ok(proxy) => proxy,
+            Err(error) => {
+                eprintln!("Preview benchmark refused: {error}");
+                continue;
+            }
+        };
         println!("  (zoomed-out proxy k {k} setup: {:.1} ms)", ms(t));
         let kk = k as i32;
         let pregion = Rect::new(region.x0 / kk, region.y0 / kk, region.x1 / kk + 1, region.y1 / kk + 1).intersect(&proxy.bounds());
@@ -351,13 +381,18 @@ fn main() {
                 .expect("preview");
             match &mut b.gpu {
                 Some(g) => {
-                    if g.comp.render(&g.device, &g.queue, &p, pregion, |_, _| {}).is_err() {
-                        std::hint::black_box(photocraft_compose::render(&p, pregion));
+                    if g.comp.render(&g.device, &g.queue, &p, pregion, |_, _| {}).is_err()
+                        && let Err(error) = std::hint::black_box(photocraft_compose::render(&p, pregion))
+                    {
+                        eprintln!("CPU benchmark refused: {error}");
+                        return f64::NAN;
                     }
                     let _ = g.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
                 }
                 None => {
-                    std::hint::black_box(photocraft_compose::render(&p, pregion));
+                    if let Err(error) = std::hint::black_box(photocraft_compose::render(&p, pregion)) {
+                        eprintln!("CPU benchmark refused: {error}");
+                    };
                 }
             }
             ms(t)
@@ -407,13 +442,18 @@ fn main() {
         let t = Instant::now();
         let d = photocraft_io::import("x.psd", &psd).expect("psd").document;
         let mut s2 = Session::new();
-        s2.open_document(d, None);
+        if let Err(error) = s2.open_document(d, None) {
+            eprintln!("Open refused: {error}");
+            return f64::NAN;
+        }
         ms(t) + b.refresh(&s2, true)
     });
     b.time("flatten (CPU compositor, 3 layers)", |_| {
         let d = doc(&s);
         let t = Instant::now();
-        std::hint::black_box(photocraft_compose::flatten(&d));
+        if let Err(error) = std::hint::black_box(photocraft_compose::flatten(&d)) {
+            eprintln!("CPU benchmark refused: {error}");
+        };
         ms(t)
     });
     b.time("export PNG (flatten + encode)", |_| {

@@ -7,8 +7,15 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod backing;
+pub mod checked_view;
 mod interrupt;
+mod native_access;
+mod native_read;
 pub use interrupt::{Cancelled, Interrupt};
+mod snapshot;
+pub use snapshot::{OwnedRasterSnapshot, SnapshotSurface};
+pub mod staged;
 
 /// Invalid or unallocatable encoded raster input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,6 +25,8 @@ pub enum RasterInputError {
     LimitExceeded,
     AllocationFailed,
     Cancelled,
+    InvalidSample,
+    UnsupportedConversion,
 }
 
 impl std::fmt::Display for RasterInputError {
@@ -30,8 +39,43 @@ impl std::error::Error for RasterInputError {}
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use photocraft_color::{ColorMode, PixelFormat, SampleType, read_sample, write_sample};
+use photocraft_color::{ColorMode, PixelFormat, SampleType, read_sample, try_read_sample_f64, try_write_sample_f64, write_sample};
 use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
+
+/// Maximum resident bytes for one checked raster operation. Aggregate import/history
+/// reservations must additionally account for all simultaneously retained allocations.
+pub const MAX_CHECKED_RASTER_BYTES: u64 = if cfg!(target_arch = "wasm32") { 512_u64 << 20 } else { 2_u64 << 30 };
+
+fn pixel_rect(x: i32, y: i32) -> Result<Rect, RasterInputError> {
+    let x1 = x.checked_add(1).ok_or(RasterInputError::InvalidBounds)?;
+    let y1 = y.checked_add(1).ok_or(RasterInputError::InvalidBounds)?;
+    Ok(Rect::new(x, y, x1, y1))
+}
+
+/// Checked U64 region arithmetic shared by authoritative raw/wide access.
+fn checked_region_len(bounds: Rect, bytes_per_pixel: usize) -> Result<usize, RasterInputError> {
+    const COORD_LIMIT: i32 = 1 << 29;
+    if bounds.x1 < bounds.x0 || bounds.y1 < bounds.y0 || [bounds.x0, bounds.x1, bounds.y0, bounds.y1].iter().any(|v| !(-COORD_LIMIT..=COORD_LIMIT).contains(v))
+    {
+        return Err(RasterInputError::InvalidBounds);
+    }
+    let width = u64::try_from(i64::from(bounds.x1) - i64::from(bounds.x0)).map_err(|_| RasterInputError::InvalidBounds)?;
+    let height = u64::try_from(i64::from(bounds.y1) - i64::from(bounds.y0)).map_err(|_| RasterInputError::InvalidBounds)?;
+    if width > 262_144 || height > 262_144 {
+        return Err(RasterInputError::LimitExceeded);
+    }
+    let pixels = width.checked_mul(height).ok_or(RasterInputError::LimitExceeded)?;
+    let len = pixels.checked_mul(u64::try_from(bytes_per_pixel).map_err(|_| RasterInputError::LimitExceeded)?).ok_or(RasterInputError::LimitExceeded)?;
+    if pixels > (1 << 30) || len > MAX_CHECKED_RASTER_BYTES {
+        return Err(RasterInputError::LimitExceeded);
+    }
+    usize::try_from(len).map_err(|_| RasterInputError::LimitExceeded)
+}
+
+/// Validate encoded region bounds and checked U64 length without allocating or reading it.
+pub fn checked_region_byte_len(bounds: Rect, format: PixelFormat) -> Result<usize, RasterInputError> {
+    checked_region_len(bounds, format.bytes_per_pixel())
+}
 
 /// Pixel storage for one tile: `TILE_SIZE² × bytes_per_pixel`, row-major, interleaved channels.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,6 +116,147 @@ impl PartialEq for Surface {
 }
 
 impl Surface {
+    /// Exact encoded default pixel. No numerical conversion, including floating NaN payloads.
+    pub fn try_with_default_bytes(format: PixelFormat, pixel: &[u8]) -> Result<Self, RasterInputError> {
+        if pixel.len() != format.bytes_per_pixel() {
+            return Err(RasterInputError::LengthMismatch);
+        }
+        let mut data = Vec::new();
+        data.try_reserve_exact(pixel.len()).map_err(|_| RasterInputError::AllocationFailed)?;
+        data.extend_from_slice(pixel);
+        Ok(Self { format, default_pixel: data.into_boxed_slice(), tiles: BTreeMap::new() })
+    }
+
+    /// Checked encoded pixel access. Authoritative bytes never pass through f32.
+    pub fn try_read_pixel_bytes(&self, x: i32, y: i32, output: &mut [u8]) -> Result<(), RasterInputError> {
+        let r = pixel_rect(x, y)?;
+        checked_region_len(r, self.format.bytes_per_pixel())?;
+        if output.len() != self.format.bytes_per_pixel() {
+            return Err(RasterInputError::LengthMismatch);
+        }
+        let (coord, sample) = self.locate(x, y);
+        let data = if let Some(tile) = self.tiles.get(&coord) {
+            let expected = (TILE_SIZE as usize)
+                .checked_mul(TILE_SIZE as usize)
+                .and_then(|n| n.checked_mul(self.format.bytes_per_pixel()))
+                .ok_or(RasterInputError::LimitExceeded)?;
+            if tile.bytes().len() != expected {
+                return Err(RasterInputError::LengthMismatch);
+            }
+            let start = sample.checked_mul(self.format.sample.bytes()).ok_or(RasterInputError::LimitExceeded)?;
+            let end = start.checked_add(output.len()).ok_or(RasterInputError::LimitExceeded)?;
+            tile.bytes().get(start..end).ok_or(RasterInputError::LengthMismatch)?
+        } else {
+            self.default_bytes()
+        };
+        output.copy_from_slice(data);
+        Ok(())
+    }
+
+    pub fn try_read_pixel_f64(&self, x: i32, y: i32, output: &mut [f64]) -> Result<(), RasterInputError> {
+        if output.len() != self.channels() {
+            return Err(RasterInputError::LengthMismatch);
+        }
+        // Pixel formats have at most five channels × eight bytes; stack storage stays bounded.
+        let mut raw = [0_u8; 40];
+        let encoded = raw.get_mut(..self.format.bytes_per_pixel()).ok_or(RasterInputError::LengthMismatch)?;
+        self.try_read_pixel_bytes(x, y, encoded)?;
+        for (index, value) in output.iter_mut().enumerate() {
+            *value = try_read_sample_f64(encoded, self.format.sample, index).map_err(|_| RasterInputError::InvalidSample)?;
+        }
+        Ok(())
+    }
+
+    pub fn try_write_pixel_f64(&mut self, x: i32, y: i32, values: &[f64]) -> Result<(), RasterInputError> {
+        self.try_write_region_f64(pixel_rect(x, y)?, values)
+    }
+
+    pub fn try_read_interleaved(&self, bounds: Rect) -> Result<Vec<u8>, RasterInputError> {
+        self.try_read_interleaved_with(bounds, &Interrupt::NONE)
+    }
+
+    pub fn try_read_interleaved_with(&self, bounds: Rect, interrupt: &Interrupt<'_>) -> Result<Vec<u8>, RasterInputError> {
+        if interrupt.cancelled() {
+            return Err(RasterInputError::Cancelled);
+        }
+        let bpp = self.format.bytes_per_pixel();
+        let len = checked_region_len(bounds, bpp)?;
+        let mut data = Vec::new();
+        data.try_reserve_exact(len).map_err(|_| RasterInputError::AllocationFailed)?;
+        data.resize(len, 0);
+        let mut cursor = 0_usize;
+        for y in bounds.y0..bounds.y1 {
+            for x in bounds.x0..bounds.x1 {
+                if cursor.is_multiple_of(4096) && interrupt.cancelled() {
+                    return Err(RasterInputError::Cancelled);
+                }
+                let end = cursor.checked_add(bpp).ok_or(RasterInputError::LimitExceeded)?;
+                self.try_read_pixel_bytes(x, y, data.get_mut(cursor..end).ok_or(RasterInputError::LengthMismatch)?)?;
+                cursor = end;
+            }
+        }
+        if interrupt.cancelled() {
+            return Err(RasterInputError::Cancelled);
+        }
+        Ok(data)
+    }
+
+    pub fn try_read_region_f64(&self, bounds: Rect) -> Result<Vec<f64>, RasterInputError> {
+        self.try_read_region_f64_with(bounds, &Interrupt::NONE)
+    }
+
+    pub fn try_read_region_f64_with(&self, bounds: Rect, interrupt: &Interrupt<'_>) -> Result<Vec<f64>, RasterInputError> {
+        if interrupt.cancelled() {
+            return Err(RasterInputError::Cancelled);
+        }
+        let channels = self.channels();
+        let len = checked_region_len(bounds, channels.checked_mul(8).ok_or(RasterInputError::LimitExceeded)?)? / 8;
+        let mut data = Vec::new();
+        data.try_reserve_exact(len).map_err(|_| RasterInputError::AllocationFailed)?;
+        data.resize(len, 0.0);
+        let mut cursor = 0_usize;
+        for y in bounds.y0..bounds.y1 {
+            for x in bounds.x0..bounds.x1 {
+                if cursor.is_multiple_of(4096) && interrupt.cancelled() {
+                    return Err(RasterInputError::Cancelled);
+                }
+                let end = cursor.checked_add(channels).ok_or(RasterInputError::LimitExceeded)?;
+                self.try_read_pixel_f64(x, y, data.get_mut(cursor..end).ok_or(RasterInputError::LengthMismatch)?)?;
+                cursor = end;
+            }
+        }
+        if interrupt.cancelled() {
+            return Err(RasterInputError::Cancelled);
+        }
+        Ok(data)
+    }
+
+    pub fn try_write_region_f64(&mut self, bounds: Rect, values: &[f64]) -> Result<(), RasterInputError> {
+        self.try_write_region_f64_with(bounds, values, &Interrupt::NONE)
+    }
+
+    /// Fallible numerical edit staged before commit; untouched tile/default bytes remain exact.
+    pub fn try_write_region_f64_with(&mut self, bounds: Rect, values: &[f64], interrupt: &Interrupt<'_>) -> Result<(), RasterInputError> {
+        if interrupt.cancelled() {
+            return Err(RasterInputError::Cancelled);
+        }
+        let encoded_len = checked_region_len(bounds, self.format.bytes_per_pixel())?;
+        let sample_count = checked_region_len(bounds, self.channels())?;
+        if values.len() != sample_count {
+            return Err(RasterInputError::LengthMismatch);
+        }
+        let mut encoded = Vec::new();
+        encoded.try_reserve_exact(encoded_len).map_err(|_| RasterInputError::AllocationFailed)?;
+        encoded.resize(encoded_len, 0);
+        for (index, value) in values.iter().enumerate() {
+            if index % 4096 == 0 && interrupt.cancelled() {
+                return Err(RasterInputError::Cancelled);
+            }
+            try_write_sample_f64(&mut encoded, self.format.sample, index, *value).map_err(|_| RasterInputError::InvalidSample)?;
+        }
+        self.try_write_interleaved_with(bounds, &encoded, interrupt)
+    }
+
     /// Transparent/zero surface.
     pub fn new(format: PixelFormat) -> Self {
         Self { format, default_pixel: vec![0u8; format.bytes_per_pixel()].into_boxed_slice(), tiles: BTreeMap::new() }
@@ -87,14 +272,52 @@ impl Surface {
     pub fn format(&self) -> PixelFormat {
         self.format
     }
+    /// Empty surface in the same format with the exact encoded default pixel.
+    pub fn empty_like(&self) -> Self {
+        Self { format: self.format, default_pixel: self.default_pixel.clone(), tiles: BTreeMap::new() }
+    }
     pub fn channels(&self) -> usize {
         self.format.channels()
     }
     pub fn tile_count(&self) -> usize {
         self.tiles.len()
     }
+    /// Encoded tile/default payload retained by this surface. Shared history tiles
+    /// are conservatively counted in each surface; aggregate owners deduplicate by Arc identity.
+    pub fn resident_payload_bytes(&self) -> Result<u64, RasterInputError> {
+        self.tiles
+            .values()
+            .try_fold(self.default_bytes().len() as u64, |sum, tile| sum.checked_add(tile.bytes().len() as u64).ok_or(RasterInputError::LimitExceeded))
+    }
+    /// Conservative payload and sparse-map/Arc bookkeeping charge. Aggregate owners
+    /// may deduplicate shared payloads explicitly; this local charge never omits a tile.
+    pub fn resident_accounted_bytes(&self) -> Result<u64, RasterInputError> {
+        self.resident_payload_bytes()?
+            .checked_add((self.tiles.len() as u64).checked_mul(256).ok_or(RasterInputError::LimitExceeded)?)
+            .ok_or(RasterInputError::LimitExceeded)
+    }
     pub fn tiles(&self) -> impl Iterator<Item = (&TileCoord, &Arc<Tile>)> {
         self.tiles.iter()
+    }
+
+    /// Validate every retained tile origin before handing a forged surface to
+    /// consumers that form geometry rectangles. No pixel data is read or changed.
+    pub fn try_validate_tile_origins(&self) -> Result<(), RasterInputError> {
+        self.try_validate_tile_origins_with(&Interrupt::NONE)
+    }
+
+    pub fn try_validate_tile_origins_with(&self, interrupt: &Interrupt<'_>) -> Result<(), RasterInputError> {
+        for (index, coordinate) in self.tiles.keys().enumerate() {
+            if index.is_multiple_of(256) && interrupt.cancelled() {
+                return Err(RasterInputError::Cancelled);
+            }
+            coordinate.tx.checked_mul(photocraft_geom::TILE_SIZE).ok_or(RasterInputError::InvalidBounds)?;
+            coordinate.ty.checked_mul(photocraft_geom::TILE_SIZE).ok_or(RasterInputError::InvalidBounds)?;
+        }
+        if interrupt.cancelled() {
+            return Err(RasterInputError::Cancelled);
+        }
+        Ok(())
     }
     pub fn tile(&self, c: TileCoord) -> Option<&Arc<Tile>> {
         self.tiles.get(&c)
@@ -155,11 +378,92 @@ impl Surface {
         out
     }
 
+    /// Exact encoded occupancy with bounded cooperative cancellation. No sample
+    /// is narrowed/interpreted: NaNs, signed zero and wide integer low bits are
+    /// compared against the exact default bytes. This allocation-free traversal
+    /// uses sparse-map order, unlike the legacy outside-ring sorting optimization.
+    /// Work is conservatively admitted for both row endpoint scans; cancellation
+    /// polls before metadata visits, each tile/row, and before returning bounds.
+    pub fn try_content_bounds_with_interrupt(&self, control: &Interrupt<'_>) -> Result<Rect, RasterInputError> {
+        control.check().map_err(|_| RasterInputError::Cancelled)?;
+        const MAX_TILES: usize = 1_000_000;
+        const MAX_WORK: u64 = if cfg!(target_arch = "wasm32") { 1_u64 << 36 } else { 1_u64 << 40 };
+        if self.tiles.len() > MAX_TILES { return Err(RasterInputError::LimitExceeded); }
+        let ts = usize::try_from(TILE_SIZE).map_err(|_| RasterInputError::InvalidBounds)?;
+        let bpp = self.format.bytes_per_pixel();
+        if bpp == 0 || self.format.channels() == 0 || self.default_pixel.len() != bpp { return Err(RasterInputError::LengthMismatch); }
+        let row_bytes = ts.checked_mul(bpp).ok_or(RasterInputError::LimitExceeded)?;
+        let tile_bytes = ts.checked_mul(row_bytes).ok_or(RasterInputError::LimitExceeded)?;
+        let work = u64::try_from(self.tiles.len()).ok()
+            .and_then(|count|count.checked_mul(u64::try_from(ts).ok()?))
+            .and_then(|count|count.checked_mul(u64::try_from(ts).ok()?))
+            .and_then(|count|count.checked_mul(u64::try_from(self.format.channels()).ok()?))
+            .and_then(|count|count.checked_mul(2)).ok_or(RasterInputError::LimitExceeded)?;
+        if work > MAX_WORK { return Err(RasterInputError::LimitExceeded); }
+        // Validate every tile, even if the occupied rectangle later encloses it.
+        // In particular, checked origins alone do not prove exclusive upper edges.
+        for (coordinate,tile) in &self.tiles {
+            control.check().map_err(|_| RasterInputError::Cancelled)?;
+            let x = coordinate.tx.checked_mul(TILE_SIZE).ok_or(RasterInputError::InvalidBounds)?;
+            let y = coordinate.ty.checked_mul(TILE_SIZE).ok_or(RasterInputError::InvalidBounds)?;
+            x.checked_add(TILE_SIZE).ok_or(RasterInputError::InvalidBounds)?;
+            y.checked_add(TILE_SIZE).ok_or(RasterInputError::InvalidBounds)?;
+            if tile.data.len() != tile_bytes { return Err(RasterInputError::LengthMismatch); }
+        }
+        let mut out = Rect::EMPTY;
+        for (coordinate,tile) in &self.tiles {
+            control.check().map_err(|_| RasterInputError::Cancelled)?;
+            let ox = coordinate.tx.checked_mul(TILE_SIZE).ok_or(RasterInputError::InvalidBounds)?;
+            let oy = coordinate.ty.checked_mul(TILE_SIZE).ok_or(RasterInputError::InvalidBounds)?;
+            let origin = Rect::new(ox,oy,ox.checked_add(TILE_SIZE).ok_or(RasterInputError::InvalidBounds)?,oy.checked_add(TILE_SIZE).ok_or(RasterInputError::InvalidBounds)?);
+            if !out.is_empty() && out.contains_rect(&origin) { continue; }
+            let (mut x0,mut y0,mut x1,mut y1) = (usize::MAX,usize::MAX,0usize,0usize);
+            for (y,row) in tile.data.chunks_exact(row_bytes).enumerate() {
+                control.check().map_err(|_| RasterInputError::Cancelled)?;
+                let Some(first) = row.chunks_exact(bpp).position(|pixel|pixel != &*self.default_pixel) else { continue; };
+                let from_end = row.chunks_exact(bpp).rev().position(|pixel|pixel != &*self.default_pixel).ok_or(RasterInputError::LengthMismatch)?;
+                let end = ts.checked_sub(from_end).ok_or(RasterInputError::InvalidBounds)?;
+                x0=x0.min(first);x1=x1.max(end);y0=y0.min(y);y1=y.checked_add(1).ok_or(RasterInputError::InvalidBounds)?;
+            }
+            if x0 != usize::MAX {
+                let absolute = |local:usize,base:i32|i32::try_from(local).ok().and_then(|value|base.checked_add(value)).ok_or(RasterInputError::InvalidBounds);
+                out=out.union(&Rect::new(absolute(x0,ox)?,absolute(y0,oy)?,absolute(x1,ox)?,absolute(y1,oy)?));
+            }
+        }
+        control.check().map_err(|_| RasterInputError::Cancelled)?;
+        Ok(out)
+    }
+
     /// Drop tiles that are entirely the default pixel.
     pub fn prune(&mut self) {
         let dp = self.default_pixel.clone();
         let bpp = dp.len();
         self.tiles.retain(|_, t| t.data.chunks_exact(bpp).any(|px| px != &*dp));
+    }
+
+    /// Drop default tiles after a bounded cancellable census. A cancelled census
+    /// leaves the sparse map unchanged; no source samples are converted.
+    pub fn try_prune_with(&mut self, control: &Interrupt<'_>) -> Result<(), RasterInputError> {
+        control.check().map_err(|_| RasterInputError::Cancelled)?;
+        let bpp = self.default_pixel.len();
+        if bpp == 0 { return Err(RasterInputError::LengthMismatch); }
+        if self.tiles.len() > 1_000_000 { return Err(RasterInputError::LimitExceeded); }
+        let mut empty = Vec::new();
+        empty.try_reserve_exact(self.tiles.len()).map_err(|_| RasterInputError::LimitExceeded)?;
+        control.check().map_err(|_| RasterInputError::Cancelled)?;
+        for (coordinate, tile) in &self.tiles {
+            control.check().map_err(|_| RasterInputError::Cancelled)?;
+            if !tile.data.len().is_multiple_of(bpp) { return Err(RasterInputError::LengthMismatch); }
+            let mut default = true;
+            for (index, pixel) in tile.data.chunks_exact(bpp).enumerate() {
+                if index.is_multiple_of(4096) { control.check().map_err(|_| RasterInputError::Cancelled)?; }
+                if pixel != &*self.default_pixel { default = false; break; }
+            }
+            if default { empty.push(*coordinate); }
+        }
+        control.check().map_err(|_| RasterInputError::Cancelled)?;
+        for coordinate in empty { self.tiles.remove(&coordinate); }
+        Ok(())
     }
 
     #[inline]
@@ -512,14 +816,27 @@ impl Surface {
         let w = usize::try_from(r.width()).map_err(|_| RasterInputError::LimitExceeded)?;
         let h = usize::try_from(r.height()).map_err(|_| RasterInputError::LimitExceeded)?;
         let len = w.checked_mul(h).and_then(|v| v.checked_mul(bpp)).ok_or(RasterInputError::LimitExceeded)?;
-        if len > 2 * (1usize << 30) {
+        if len as u64 > MAX_CHECKED_RASTER_BYTES {
             return Err(RasterInputError::LimitExceeded);
         }
         if bytes.len() != len {
             return Err(RasterInputError::LengthMismatch);
         }
-        let mut staged = self.clone();
         let tile_len = (TILE_SIZE as usize).checked_mul(TILE_SIZE as usize).and_then(|v| v.checked_mul(bpp)).ok_or(RasterInputError::LimitExceeded)?;
+        let replacement_bytes = (r.tiles().count() as u64)
+            .checked_mul((tile_len as u64).checked_add(256).ok_or(RasterInputError::LimitExceeded)?)
+            .ok_or(RasterInputError::LimitExceeded)?;
+        let peak = self
+            .resident_accounted_bytes()?
+            .checked_add(replacement_bytes)
+            .and_then(|v| v.checked_add(bytes.len() as u64))
+            .and_then(|v| v.checked_add(self.default_bytes().len() as u64))
+            .and_then(|v| v.checked_add((self.tiles.len() as u64).checked_mul(256)?))
+            .ok_or(RasterInputError::LimitExceeded)?;
+        if peak > MAX_CHECKED_RASTER_BYTES {
+            return Err(RasterInputError::LimitExceeded);
+        }
+        let mut staged = self.clone();
         for tc in r.tiles() {
             if interrupt.cancelled() {
                 return Err(RasterInputError::Cancelled);
@@ -527,6 +844,9 @@ impl Surface {
             let mut data = Vec::new();
             data.try_reserve_exact(tile_len).map_err(|_| RasterInputError::AllocationFailed)?;
             if let Some(t) = self.tile(tc) {
+                if t.bytes().len() != tile_len {
+                    return Err(RasterInputError::LengthMismatch);
+                }
                 data.extend_from_slice(t.bytes());
             } else {
                 data.resize(tile_len, 0);
@@ -641,8 +961,15 @@ impl Surface {
         out
     }
 
-    /// Convert to another pixel format (depth and/or model; colour models via [`convert_pixel`]).
+    /// Legacy f32 presentation conversion (depth/model via [`convert_pixel`]).
+    /// Deprecated for authoritative document data: this may round U32/F64 before
+    /// destination quantization and cannot report allocation/conversion failures.
+    /// Use [`Surface::try_convert`] for same-model samples; model changes require
+    /// a checked document-profile CMS transform supplied by the caller.
     pub fn convert(&self, to: PixelFormat) -> Surface {
+        if self.format == to {
+            return self.clone();
+        }
         let mut out = Surface::with_default(to, &convert_pixel(&self.format, &to, &self.default_pixel()));
         let from_n = self.channels();
         let mut src = vec![0.0f32; from_n];
@@ -662,11 +989,106 @@ impl Surface {
         out
     }
 
+    /// Checked authoritative sample-depth/alpha conversion in the same color model.
+    /// Color-model changes require a document-profile CMS transform supplied by the caller.
+    /// Same-depth channels are copied verbatim, retaining NaN payloads and signed zero.
+    pub fn try_convert(&self, to: PixelFormat) -> Result<Surface, RasterInputError> {
+        self.try_convert_with(to, &Interrupt::NONE)
+    }
+
+    pub fn try_convert_with(&self, to: PixelFormat, interrupt: &Interrupt<'_>) -> Result<Surface, RasterInputError> {
+        if interrupt.cancelled() {
+            return Err(RasterInputError::Cancelled);
+        }
+        // Identity conversion also shares authoritative retained tiles; never
+        // publish hostile origins merely because no sample bytes must change.
+        self.try_validate_tile_origins_with(interrupt)?;
+        if self.format.mode != to.mode {
+            return Err(RasterInputError::UnsupportedConversion);
+        }
+        if self.format == to {
+            let retained = self
+                .resident_accounted_bytes()?
+                .checked_add((self.tiles.len() as u64).checked_mul(256).ok_or(RasterInputError::LimitExceeded)?)
+                .and_then(|n| n.checked_add(self.default_bytes().len() as u64))
+                .ok_or(RasterInputError::LimitExceeded)?;
+            if retained > MAX_CHECKED_RASTER_BYTES {
+                return Err(RasterInputError::LimitExceeded);
+            }
+            return Ok(self.clone());
+        }
+        let tile_side = u64::try_from(TILE_SIZE).map_err(|_| RasterInputError::LimitExceeded)?;
+        let tile_pixels = tile_side.checked_mul(tile_side).ok_or(RasterInputError::LimitExceeded)?;
+        let tile_len = tile_pixels.checked_mul(to.bytes_per_pixel() as u64).ok_or(RasterInputError::LimitExceeded)?;
+        let retained_len = tile_len.checked_mul(self.tiles.len() as u64).ok_or(RasterInputError::LimitExceeded)?;
+        if retained_len
+            .checked_add(self.resident_accounted_bytes()?)
+            .and_then(|n| n.checked_add((self.tiles.len() as u64).checked_mul(256)?))
+            .and_then(|n| n.checked_add(to.bytes_per_pixel() as u64))
+            .ok_or(RasterInputError::LimitExceeded)?
+            > MAX_CHECKED_RASTER_BYTES
+        {
+            return Err(RasterInputError::LimitExceeded);
+        }
+        let tile_len = usize::try_from(tile_len).map_err(|_| RasterInputError::LimitExceeded)?;
+        let mut default = [0_u8; 40];
+        let default = default.get_mut(..to.bytes_per_pixel()).ok_or(RasterInputError::LengthMismatch)?;
+        convert_encoded_pixel(self.format, to, self.default_bytes(), default)?;
+        let mut out = Surface::try_with_default_bytes(to, default)?;
+        for (coord, source) in &self.tiles {
+            let expected = usize::try_from(tile_pixels)
+                .map_err(|_| RasterInputError::LimitExceeded)?
+                .checked_mul(self.format.bytes_per_pixel())
+                .ok_or(RasterInputError::LimitExceeded)?;
+            if source.bytes().len() != expected {
+                return Err(RasterInputError::LengthMismatch);
+            }
+            let mut data = Vec::new();
+            data.try_reserve_exact(tile_len).map_err(|_| RasterInputError::AllocationFailed)?;
+            data.resize(tile_len, 0);
+            for (index, (src, dst)) in source.bytes().chunks_exact(self.format.bytes_per_pixel()).zip(data.chunks_exact_mut(to.bytes_per_pixel())).enumerate() {
+                if index.is_multiple_of(256) && interrupt.cancelled() {
+                    return Err(RasterInputError::Cancelled);
+                }
+                convert_encoded_pixel(self.format, to, src, dst)?;
+            }
+            out.tiles.insert(*coord, Arc::new(Tile { data: data.into_boxed_slice() }));
+        }
+        if interrupt.cancelled() {
+            return Err(RasterInputError::Cancelled);
+        }
+        Ok(out)
+    }
+
     /// Composite-friendly RGBA read (converts from the surface's model).
     pub fn rgba(&self, x: i32, y: i32) -> [f32; 4] {
         let p = self.pixel(x, y);
         to_rgba(&self.format, &p)
     }
+}
+
+fn convert_encoded_pixel(from: PixelFormat, to: PixelFormat, source: &[u8], output: &mut [u8]) -> Result<(), RasterInputError> {
+    if source.len() != from.bytes_per_pixel() || output.len() != to.bytes_per_pixel() {
+        return Err(RasterInputError::LengthMismatch);
+    }
+    for channel in 0..to.channels() {
+        if channel < from.channels() {
+            if from.sample == to.sample {
+                let range = photocraft_color::sample_byte_range(from.sample, channel, source.len()).map_err(|_| RasterInputError::InvalidSample)?;
+                let dst = output.get_mut(range.clone()).ok_or(RasterInputError::LengthMismatch)?;
+                dst.copy_from_slice(source.get(range).ok_or(RasterInputError::LengthMismatch)?);
+            } else {
+                let value = try_read_sample_f64(source, from.sample, channel).map_err(|_| RasterInputError::InvalidSample)?;
+                if !value.is_finite() {
+                    return Err(RasterInputError::InvalidSample);
+                }
+                try_write_sample_f64(output, to.sample, channel, value).map_err(|_| RasterInputError::InvalidSample)?;
+            }
+        } else {
+            try_write_sample_f64(output, to.sample, channel, 1.0).map_err(|_| RasterInputError::InvalidSample)?;
+        }
+    }
+    Ok(())
 }
 
 /// Encode normalised floats into one pixel's bytes.
@@ -772,7 +1194,7 @@ impl Rgba8Image {
 
 /// Is this sample type able to hold values above 1.0 (HDR)?
 pub fn is_hdr(sample: SampleType) -> bool {
-    matches!(sample, SampleType::F32)
+    matches!(sample, SampleType::F32 | SampleType::F64)
 }
 
 #[cfg(test)]
@@ -886,6 +1308,69 @@ mod tests {
         s.prune();
         assert_eq!(s.tile_count(), 1);
         assert_eq!(s.content_bounds(), Rect::new(300, 10, 310, 20));
+    }
+
+    #[test]
+    fn controlled_content_bounds_preserve_encoded_wide_defaults_and_low_bits() {
+        for (sample,default,changed) in [
+            (SampleType::U32,16_777_216_u32.to_ne_bytes().to_vec(),16_777_217_u32.to_ne_bytes().to_vec()),
+            (SampleType::F64,0x7ff8_0000_0000_0042_u64.to_ne_bytes().to_vec(),0x7ff8_0000_0000_0043_u64.to_ne_bytes().to_vec()),
+            (SampleType::F64,0_f64.to_bits().to_ne_bytes().to_vec(),(-0_f64).to_bits().to_ne_bytes().to_vec()),
+            (SampleType::F32,0_f32.to_bits().to_ne_bytes().to_vec(),f32::INFINITY.to_bits().to_ne_bytes().to_vec()),
+        ] {
+            let format=PixelFormat::new(ColorMode::Grayscale,sample,false);
+            let mut surface=Surface::try_with_default_bytes(format,&default).unwrap();
+            surface.tile_mut(TileCoord::new(0,0));
+            assert_eq!(surface.try_content_bounds_with_interrupt(&Interrupt::NONE).unwrap(),Rect::EMPTY);
+            surface.try_write_interleaved(Rect::new(-1,257,0,258),&changed).unwrap();
+            let before=surface.clone();
+            assert_eq!(surface.try_content_bounds_with_interrupt(&Interrupt::NONE).unwrap(),Rect::new(-1,257,0,258));
+            assert_eq!(surface.try_content_bounds_with_interrupt(&Interrupt::NONE).unwrap(),surface.content_bounds());
+            assert_eq!(surface,before);assert_eq!(surface.default_bytes(),default);
+        }
+    }
+    #[test]
+    fn controlled_content_bounds_cancel_and_reject_malformed_tiles_without_mutation() {
+        use std::sync::atomic::{AtomicUsize,Ordering};
+        let mut surface=Surface::new(PixelFormat::RGBA8);
+        surface.write_pixel(2,250,&[1.,1.,1.,1.]);
+        let before=surface.clone();let calls=AtomicUsize::new(0);
+        let stop=||calls.fetch_add(1,Ordering::Relaxed)>=8;
+        assert_eq!(surface.try_content_bounds_with_interrupt(&Interrupt::cancel_only(&stop)),Err(RasterInputError::Cancelled));
+        assert_eq!(surface,before);
+        assert_eq!(surface.try_content_bounds_with_interrupt(&Interrupt::cancel_only(&||true)),Err(RasterInputError::Cancelled));
+        for coordinate in [TileCoord::new(i32::MAX,0),TileCoord::new(i32::MAX/TILE_SIZE,0)] {
+            let mut malformed=surface.clone();
+            malformed.tiles.insert(coordinate,Arc::new(Tile {data:vec![0;256*256*4].into_boxed_slice()}));
+            let before=malformed.clone();
+            assert_eq!(malformed.try_content_bounds_with_interrupt(&Interrupt::NONE),Err(RasterInputError::InvalidBounds));
+            assert_eq!(malformed,before);
+        }
+        let mut malformed=surface.clone();
+        malformed.tiles.insert(TileCoord::new(0,0),Arc::new(Tile {data:vec![0;3].into_boxed_slice()}));
+        let before=malformed.clone();
+        assert_eq!(malformed.try_content_bounds_with_interrupt(&Interrupt::NONE),Err(RasterInputError::LengthMismatch));
+        assert_eq!(malformed,before);
+    }
+
+    #[test]
+    fn controlled_pruning_cancels_before_sparse_map_publication_and_preserves_raw_defaults() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let format = PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false);
+        let default = 0x7ff8_0000_0000_0042_u64.to_ne_bytes();
+        let mut surface = Surface::try_with_default_bytes(format, &default).unwrap();
+        surface.tile_mut(TileCoord::new(-1, 0));
+        surface.tile_mut(TileCoord::new(1, 0));
+        assert_eq!(surface.tile_count(), 2);
+        let before = surface.clone();
+        let calls = AtomicUsize::new(0);
+        let stop = || calls.fetch_add(1, Ordering::Relaxed) >= 4;
+        assert_eq!(surface.try_prune_with(&Interrupt::cancel_only(&stop)), Err(RasterInputError::Cancelled));
+        assert_eq!(surface, before);
+        surface.try_prune_with(&Interrupt::NONE).unwrap();
+        assert_eq!(surface.tile_count(), 0);
+        assert_eq!(surface.default_bytes(), default);
+        assert_eq!(before.tile_count(), 2);
     }
 
     #[test]
@@ -1058,5 +1543,46 @@ mod cancelled_ingestion_tests {
         let ctl = Interrupt::cancel_only(&cancel);
         assert_eq!(s.try_write_interleaved_with(Rect::new(0, 0, 257, 1), &vec![255; 257 * 4], &ctl), Err(RasterInputError::Cancelled));
         assert_eq!(s, original);
+    }
+}
+#[cfg(test)]
+mod authoritative_conversion_tests {
+    use super::*;
+    #[test]
+    fn checked_depth_quantization_uses_authoritative_f64_not_display_f32() {
+        let area = Rect::new(0, 0, 1, 1);
+        for (target, value, expected) in [
+            (SampleType::U8, (128.5 - 1e-8) / 255., 128u32),
+            (SampleType::U16, (32768.5 - 1e-7) / 65535., 32768),
+            (SampleType::U32, f64::from(0x80000001u32) / f64::from(u32::MAX), 0x80000001),
+        ] {
+            let format = PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false);
+            let source = Surface::try_from_interleaved(format, area, &value.to_ne_bytes()).unwrap();
+            let before = source.clone();
+            let converted = source.try_convert(format.with_sample(target)).unwrap();
+            let bytes = converted.try_read_interleaved(area).unwrap();
+            let got = match target {
+                SampleType::U8 => u32::from(bytes[0]),
+                SampleType::U16 => u32::from(u16::from_ne_bytes(bytes.try_into().unwrap())),
+                SampleType::U32 => u32::from_ne_bytes(bytes.try_into().unwrap()),
+                _ => 0,
+            };
+            assert_eq!(got, expected);
+            assert_eq!(source, before);
+        }
+    }
+    #[test]
+    fn identity_rejects_hostile_retained_origins_and_nonfinite_narrowing_is_atomic() {
+        let mut source = Surface::new(PixelFormat::RGBA64F);
+        source.tile_mut(TileCoord::new(i32::MAX, 0));
+        let before = source.clone();
+        assert_eq!(source.try_convert(PixelFormat::RGBA64F), Err(RasterInputError::InvalidBounds));
+        assert_eq!(source, before);
+        let format = PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false);
+        let source = Surface::try_from_interleaved(format, Rect::new(0, 0, 1, 1), &f64::from_bits(0x7ff8000000001234).to_ne_bytes()).unwrap();
+        let before = source.clone();
+        assert_eq!(source.try_convert(format).unwrap(), source);
+        assert_eq!(source.try_convert(format.with_sample(SampleType::F32)), Err(RasterInputError::InvalidSample));
+        assert_eq!(source, before);
     }
 }

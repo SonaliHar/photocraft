@@ -391,7 +391,7 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
             ui.add_enabled_ui(on, |ui| match kind {
                 "font" => {
                     let mut f = v.as_str().unwrap_or("").to_string();
-                    if family_picker(ui, &format!("style-font-{paragraph}-{id}"), &mut f) {
+                    if family_picker(app, ui, &format!("style-font-{paragraph}-{id}"), &mut f) {
                         set = Some(json!({ panel: f }));
                     }
                 }
@@ -494,7 +494,15 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
 }
 
 /// Searchable family combo box.
-fn family_picker(ui: &mut egui::Ui, salt: &str, current: &mut String) -> bool {
+fn family_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui, salt: &str, current: &mut String) -> bool {
+    let families = match crate::type_tool::try_families() {
+        Ok(families) => families,
+        Err(error) => {
+            app.ui.status = error.to_string();
+            app.ui.status_error = true;
+            return false;
+        }
+    };
     let mut changed = false;
     let search_id = egui::Id::new(("family-search", salt));
     let shown = if current.is_empty() { photocraft_text::fonts::DEFAULT_FAMILY.to_string() } else { current.clone() };
@@ -506,7 +514,7 @@ fn family_picker(ui: &mut egui::Ui, salt: &str, current: &mut String) -> bool {
         }
         ui.data_mut(|d| d.insert_temp(search_id, q.clone()));
         let ql = q.to_lowercase();
-        for f in crate::type_tool::families().iter().filter(|f| ql.is_empty() || f.to_lowercase().contains(&ql)) {
+        for f in families.iter().filter(|f| ql.is_empty() || f.to_lowercase().contains(&ql)) {
             if ui.selectable_label(*f == shown, f).clicked() {
                 *current = f.clone();
                 changed = true;
@@ -545,14 +553,14 @@ fn char_style_for(family: &str, style: &str) -> photocraft_doc::text::CharStyle 
     st
 }
 
-fn glyph_texture(ctx: &egui::Context, family: &str, style: &str, c: char, px: u32) -> TextureHandle {
+fn glyph_texture(shared: &std::sync::Mutex<photocraft_text::TextEngine>, ctx: &egui::Context, family: &str, style: &str, c: char, px: u32) -> TextureHandle {
     let id = egui::Id::new(("glyph-tex", family, style, c, px));
     if let Some(t) = ctx.data(|d| d.get_temp::<TextureHandle>(id)) {
         return t;
     }
     let st = char_style_for(family, style);
     let (n, alpha) = {
-        let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+        let mut eng = shared.lock().unwrap_or_else(|e| e.into_inner());
         photocraft_text::glyphs::preview(&mut eng, &st, c, px)
     };
     let img = egui::ColorImage::from_rgba_unmultiplied([n as usize, n as usize], &alpha.iter().flat_map(|a| [255, 255, 255, *a]).collect::<Vec<u8>>());
@@ -562,13 +570,13 @@ fn glyph_texture(ctx: &egui::Context, family: &str, style: &str, c: char, px: u3
 }
 
 /// Characters of a face, cached per (family, style).
-fn charmap(ctx: &egui::Context, family: &str, style: &str) -> std::sync::Arc<Vec<char>> {
+fn charmap(shared: &std::sync::Mutex<photocraft_text::TextEngine>, ctx: &egui::Context, family: &str, style: &str) -> std::sync::Arc<Vec<char>> {
     let id = egui::Id::new(("glyph-cmap", family, style));
     if let Some(v) = ctx.data(|d| d.get_temp::<std::sync::Arc<Vec<char>>>(id)) {
         return v;
     }
     let st = char_style_for(family, style);
-    let v = std::sync::Arc::new(photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner()).fonts.charmap(family, st.weight, st.italic));
+    let v = std::sync::Arc::new(shared.lock().unwrap_or_else(|e| e.into_inner()).fonts.charmap(family, st.weight, st.italic));
     ctx.data_mut(|d| d.insert_temp(id, v.clone()));
     v
 }
@@ -595,17 +603,32 @@ pub fn insert_glyph(app: &mut PhotocraftApp, g: &str) -> bool {
 }
 
 pub fn glyphs_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let shared = match photocraft_text::try_shared() {
+        Ok(shared) => shared,
+        Err(error) => {
+            app.ui.status = error.to_string();
+            app.ui.status_error = true;
+            return;
+        }
+    };
     let t = Tokens::get(ui.ctx());
     let ctx = ui.ctx().clone();
     let (family, style) = glyph_font(app);
     // Font family + style.
     ui.horizontal(|ui| {
         let mut f = family.clone();
-        if family_picker(ui, "glyph-family", &mut f) {
+        if family_picker(app, ui, "glyph-family", &mut f) {
             app.ui.type_panels.glyph_family = f;
             app.ui.type_panels.glyph_style = tl!("Regular").into();
         }
-        let styles = crate::type_tool::styles(&family);
+        let styles = match crate::type_tool::try_styles(&family) {
+            Ok(styles) => styles,
+            Err(error) => {
+                app.ui.status = error.to_string();
+                app.ui.status_error = true;
+                return;
+            }
+        };
         let mut s = style.clone();
         let opts: Vec<(String, &str)> = styles.iter().map(|x| (x.clone(), x.as_str())).collect();
         if crate::widgets::dropdown(ui, "glyph-style", &mut s, &opts, 110.0) {
@@ -643,7 +666,7 @@ pub fn glyphs_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ui.painter().rect_filled(cell, 2.0, t.hover);
         }
         if let Some(c) = g.chars().next() {
-            let tex = glyph_texture(&ctx, &family, &style, c, (20.0 * ppp) as u32);
+            let tex = glyph_texture(shared, &ctx, &family, &style, c, (20.0 * ppp) as u32);
             ui.painter().image(tex.id(), cell.shrink(2.0), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), t.text);
         }
         if resp.double_clicked() || resp.clicked() {
@@ -652,7 +675,7 @@ pub fn glyphs_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     ui.add_space(4.0);
     // Grid.
-    let cmap = charmap(&ctx, &family, &style);
+    let cmap = charmap(shared, &ctx, &family, &style);
     let chars: Vec<char> = cmap.iter().copied().filter(|c| photocraft_text::glyphs::in_category(*c, &cat)).collect();
     // Leave room for the scroll bar.
     let width = ui.available_width() - 12.0;
@@ -673,7 +696,7 @@ pub fn glyphs_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 } else if resp.hovered() {
                     ui.painter().rect_filled(cell.shrink(1.0), 0.0, t.hover);
                 }
-                let tex = glyph_texture(&ctx, &family, &style, c, px);
+                let tex = glyph_texture(shared, &ctx, &family, &style, c, px);
                 let tint = if is_sel { Color32::WHITE } else { t.text };
                 ui.painter().image(tex.id(), cell.shrink(3.0), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
                 let resp = resp.on_hover_text(format!("U+{:04X}", c as u32));

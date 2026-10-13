@@ -18,16 +18,16 @@ pub fn flattened_into(source: &Document, target: &Document) -> crate::Result<Sur
     if transform.inputs() != 3 || transform.outputs() != fmt.mode.color_channels() {
         return Err(crate::EngineError::Other("cannot place image: destination profile does not match its pixel model".into()));
     }
-    let float = photocraft_compose::flatten_to_surface(source, PixelFormat::new(ColorMode::Rgb, SampleType::F32, true), None);
-    let converted = crate::color_cmds::convert_surface(&float, ColorMode::Rgb, fmt, &transform);
-    Ok(converted.convert(fmt))
+    let float = photocraft_compose::flatten_to_surface(source, PixelFormat::new(ColorMode::Rgb, SampleType::F32, true), None)?;
+    let converted = crate::color_cmds::convert_surface(&float, ColorMode::Rgb, fmt, &transform)?;
+    converted.try_convert(fmt).map_err(|e| crate::EngineError::Other(e.to_string()))
 }
 /// Apply an adjustment destructively to a surface, weighted by an optional selection.
 /// Applies `adj` to a surface (any colour model and depth, via straight RGBA) through the
 /// selection; `mode` is the document's, for the tone transfer (e.g. Exposure in Grayscale).
-pub fn adjust_surface(s: &mut Surface, adj: &Adjustment, selection: Option<&Surface>, mode: photocraft_color::ColorMode) {
+pub fn adjust_surface(s: &mut Surface, adj: &Adjustment, selection: Option<&Surface>, mode: photocraft_color::ColorMode) -> crate::Result<()> {
     let transfer = adjust::Transfer::for_document(mode, s.format().sample);
-    adjust_surface_with_transfer(s, adj, selection, mode, transfer);
+    adjust_surface_with_transfer(s, adj, selection, mode, transfer)
 }
 
 pub fn adjust_surface_with_transfer(
@@ -36,19 +36,52 @@ pub fn adjust_surface_with_transfer(
     selection: Option<&Surface>,
     mode: photocraft_color::ColorMode,
     transfer: adjust::Transfer,
-) {
+) -> crate::Result<()> {
+    if matches!(s.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64) {
+        if !matches!(adj, Adjustment::Invert) {
+            return Err(crate::EngineError::Other(
+                "this adjustment does not yet support authoritative U32/F64 samples; explicitly convert sample depth first".into(),
+            ));
+        }
+        let area = s.content_bounds();
+        let converted = photocraft_algo::wide::try_invert(s, area, selection, &photocraft_raster::Interrupt::NONE)
+            .map_err(|e| crate::EngineError::Other(format!("wide inversion: {e}")))?;
+        *s = converted;
+        return Ok(());
+    }
     let r = s.content_bounds();
     if r.is_empty() {
-        return;
+        return Ok(());
     }
     let out = adjusted_with_transfer(s, r, adj, selection, mode, transfer);
     s.write_region(r, &out);
+    Ok(())
 }
 
 /// Applies `adj` to a layer mask through the selection. Untouched mask pixels count (they read as
 /// the mask's default value), and without a selection the default changes too, since a mask
 /// reaches past the canvas: Invert turns a reveal-all mask into a hide-all one (#780).
-pub fn adjust_mask(s: &mut Surface, adj: &Adjustment, selection: Option<&Surface>) {
+pub fn adjust_mask(s: &mut Surface, adj: &Adjustment, selection: Option<&Surface>) -> crate::Result<()> {
+    if matches!(s.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64) {
+        if !matches!(adj, Adjustment::Invert) {
+            return Err(crate::EngineError::Other("this mask adjustment does not yet support authoritative U32/F64 samples".into()));
+        }
+        let control = photocraft_raster::Interrupt::NONE;
+        let area = selection.map_or_else(|| s.tile_bounds(), Surface::content_bounds);
+        let edited = photocraft_algo::wide::try_invert(s, area, selection, &control).map_err(|e| crate::EngineError::Other(e.to_string()))?;
+        if selection.is_some() {
+            *s = edited;
+        } else {
+            let unit = Rect::new(0, 0, 1, 1);
+            let defaults = Surface::try_with_default_bytes(s.format(), s.default_bytes()).map_err(|e| crate::EngineError::Other(e.to_string()))?;
+            let defaults = photocraft_algo::wide::try_invert(&defaults, unit, None, &control).map_err(|e| crate::EngineError::Other(e.to_string()))?;
+            let raw = defaults.try_read_interleaved(unit).map_err(|e| crate::EngineError::Other(e.to_string()))?;
+            let mut output = Surface::try_with_default_bytes(s.format(), &raw).map_err(|e| crate::EngineError::Other(e.to_string()))?;
+            output.put_tiles(edited.tiles().map(|(coordinate, tile)| (*coordinate, tile.clone())));
+            *s = output;
+        }
+        return Ok(());
+    }
     let mode = photocraft_color::ColorMode::Grayscale;
     if let Some(sel) = selection {
         let r = sel.content_bounds();
@@ -57,7 +90,7 @@ pub fn adjust_mask(s: &mut Surface, adj: &Adjustment, selection: Option<&Surface
             s.write_region(r, &out);
             s.prune();
         }
-        return;
+        return Ok(());
     }
     let fmt = s.format();
     let unit = Rect::from_xywh(0, 0, 1, 1);
@@ -68,6 +101,7 @@ pub fn adjust_mask(s: &mut Surface, adj: &Adjustment, selection: Option<&Surface
     }
     out.prune();
     *s = out;
+    Ok(())
 }
 
 /// `s`'s pixels over `r` (untouched ones included) with `adj` applied through the selection, encoded.
@@ -155,23 +189,92 @@ pub fn clear_surface(s: &mut Surface, area: Rect, selection: Option<&Surface>) {
     s.prune();
 }
 
-/// Remap a surface through a pixel-coordinate mapping (used for flips/rotations).
-pub fn remap_surface(s: &Surface, map: impl Fn(i32, i32) -> (i32, i32)) -> Surface {
-    let r = s.content_bounds();
-    let mut out = Surface::with_default(s.format(), &s.default_pixel());
-    let n = s.channels();
-    let raw = s.read_region(r);
-    let w = r.width() as usize;
-    for (i, px) in raw.chunks_exact(n).enumerate() {
-        let (x, y) = (r.x0 + (i % w) as i32, r.y0 + (i / w) as i32);
-        let (nx, ny) = map(x, y);
-        out.write_pixel(nx, ny, px);
+fn clear_error(error: impl std::fmt::Display) -> crate::EngineError {
+    crate::EngineError::Other(format!("wide clear: {error}"))
+}
+
+fn boolean_clear_weight(selection: Option<&Surface>, x: i32, y: i32) -> crate::Result<bool> {
+    let Some(selection) = selection else { return Ok(true) };
+    let mut samples = [0.0_f64; 5];
+    let samples = samples.get_mut(..selection.channels()).ok_or_else(|| clear_error("invalid selection channels"))?;
+    selection.try_read_pixel_f64(x, y, samples).map_err(clear_error)?;
+    match samples.first().copied() {
+        Some(0.0) => Ok(false),
+        Some(1.0) => Ok(true),
+        _ => Err(clear_error("fractional or invalid selection coverage for authoritative U32/F64 samples is unsupported")),
     }
-    out
+}
+
+/// Validate wide selection semantics and conservative simultaneous raster storage
+/// before cloning private staging or entering a caller's document edit.
+pub fn preflight_clear_surface(s: &Surface, area: Rect, selection: Option<&Surface>, control: &photocraft_raster::Interrupt<'_>) -> crate::Result<()> {
+    control.check().map_err(|_| crate::EngineError::Cancelled)?;
+    if !matches!(s.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64) || !s.format().alpha {
+        return Ok(());
+    }
+    photocraft_raster::checked_region_byte_len(area, s.format()).map_err(clear_error)?;
+    s.try_validate_tile_origins_with(control).map_err(clear_error)?;
+    if let Some(selection) = selection { selection.try_validate_tile_origins_with(control).map_err(clear_error)?; }
+    let tile_pixels = (photocraft_geom::TILE_SIZE as u64).checked_mul(photocraft_geom::TILE_SIZE as u64).ok_or_else(|| clear_error("allocation overflow"))?;
+    let tile_bytes = tile_pixels.checked_mul(s.format().bytes_per_pixel() as u64).ok_or_else(|| clear_error("allocation overflow"))?;
+    let replacement = (area.tiles().count() as u64).checked_mul(tile_bytes.checked_add(512).ok_or_else(|| clear_error("allocation overflow"))?).ok_or_else(|| clear_error("allocation overflow"))?;
+    // Old source plus every replacement, source/staged map clones and the largest
+    // native read/write scratch tile. BTreeMap/Arc nodes are bounded/prepaid;
+    // their std allocation is not claimed to have a stable fallible allocator API.
+    let peak = s.resident_accounted_bytes().map_err(clear_error)?
+        .checked_add(selection.map_or(Ok(0), Surface::resident_accounted_bytes).map_err(clear_error)?)
+        .and_then(|bytes| bytes.checked_add(replacement))
+        .and_then(|bytes| bytes.checked_add((s.tile_count() as u64).checked_mul(512)?))
+        .and_then(|bytes| bytes.checked_add(tile_bytes.checked_mul(3)?))
+        .and_then(|bytes| bytes.checked_add(s.default_bytes().len() as u64))
+        .ok_or_else(|| clear_error("allocation overflow"))?;
+    if peak > photocraft_raster::MAX_CHECKED_RASTER_BYTES { return Err(clear_error("allocation limit exceeded")); }
+    if selection.is_some() {
+        for y in area.y0..area.y1 {
+            control.check().map_err(|_| crate::EngineError::Cancelled)?;
+            for x in area.x0..area.x1 {
+                if (i64::from(x) - i64::from(area.x0)) % 256 == 0 { control.check().map_err(|_| crate::EngineError::Cancelled)?; }
+                boolean_clear_weight(selection, x, y)?;
+            }
+        }
+    }
+    control.check().map_err(|_| crate::EngineError::Cancelled)
+}
+
+/// Checked Boolean wide clear; every unselected encoded bit stays untouched.
+/// Full clear retains legacy semantics: the whole pixel becomes canonical zero.
+pub fn try_clear_surface(s: &mut Surface, area: Rect, selection: Option<&Surface>, control: &photocraft_raster::Interrupt<'_>) -> crate::Result<()> {
+    control.check().map_err(|_| crate::EngineError::Cancelled)?;
+    if !matches!(s.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64) {
+        clear_surface(s, area, selection);
+        return Ok(());
+    }
+    preflight_clear_surface(s, area, selection, control)?;
+    if !s.format().alpha || area.is_empty() { return Ok(()); }
+    let mut staged = s.clone();
+    let bpp = s.format().bytes_per_pixel();
+    for tile in area.tiles() {
+        let rect = tile.rect().intersect(&area);
+        let mut bytes = s.try_read_interleaved_with(rect, control).map_err(clear_error)?;
+        let width = usize::try_from(rect.width()).map_err(clear_error)?;
+        if width == 0 { return Err(clear_error("invalid clear width")); }
+        let mut changed = false;
+        for (index, pixel) in bytes.chunks_exact_mut(bpp).enumerate() {
+            if index.is_multiple_of(256) { control.check().map_err(|_| crate::EngineError::Cancelled)?; }
+            let x = rect.x0.checked_add(i32::try_from(index % width).map_err(clear_error)?).ok_or_else(|| clear_error("coordinate overflow"))?;
+            let y = rect.y0.checked_add(i32::try_from(index / width).map_err(clear_error)?).ok_or_else(|| clear_error("coordinate overflow"))?;
+            if boolean_clear_weight(selection, x, y)? { pixel.fill(0); changed = true; }
+        }
+        if changed { staged.try_write_interleaved_with(rect, &bytes, control).map_err(clear_error)?; }
+    }
+    control.check().map_err(|_| crate::EngineError::Cancelled)?;
+    // No global prune: it can remove untouched explicit storage outside the edit.
+    *s = staged;
+    Ok(())
 }
 
 /// Merge `upper` onto `lower` producing a raster layer (Layer → Merge Down).
-pub fn merge_down(doc: &Document, lower: &Layer, upper: &Layer) -> Layer {
+pub fn merge_down(doc: &Document, lower: &Layer, upper: &Layer) -> crate::Result<Layer> {
     let doc_bounds = doc.bounds();
     let format = doc.pixel_format();
     let area = [lower, upper].iter().map(|l| l.surface().map(|s| s.content_bounds()).unwrap_or(doc_bounds)).fold(Rect::EMPTY, |a, b| a.union(&b));
@@ -181,7 +284,7 @@ pub fn merge_down(doc: &Document, lower: &Layer, upper: &Layer) -> Layer {
     tmp.sample_encoding = doc.sample_encoding;
     tmp.icc_profile = doc.icc_profile.clone();
     tmp.source_color_context = doc.source_color_context.clone();
-    let buf = photocraft_compose::render(&tmp, area);
+    let buf = photocraft_compose::render(&tmp, area)?;
     let mut s = Surface::new(format);
     let data: Vec<f32> = buf.px.iter().flat_map(|p| from_rgba(&format, *p)).collect();
     if !area.is_empty() {
@@ -192,7 +295,7 @@ pub fn merge_down(doc: &Document, lower: &Layer, upper: &Layer) -> Layer {
     merged.id = lower.id;
     merged.blend = lower.blend;
     merged.opacity = 1.0;
-    merged
+    Ok(merged)
 }
 
 #[cfg(test)]
@@ -245,7 +348,7 @@ mod imported_flatten_tests {
             layer.import_compositing =
                 Some(ImportCompositing { blend_encoding: SampleEncoding::Linear, composite_encoding: SampleEncoding::Linear, pass_through: false });
         }
-        let merged = merge_down(&doc, &lower, &upper);
+        let merged = merge_down(&doc, &lower, &upper).unwrap();
         assert!((merged.surface().unwrap().pixel(0, 0)[0] - 0.5).abs() < 2.0 / 65535.0);
         assert!(merged.import_compositing.is_none());
     }

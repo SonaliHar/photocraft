@@ -500,11 +500,13 @@ pub(crate) fn field(kind: FieldKind, reach: i32, shape: &[f32], region: Rect, ou
 }
 
 /// The layer's shape (`compose::layer_shape`) over `r`, in parallel bands.
-pub(crate) fn shape(doc: &photocraft_doc::Document, layer: &Layer, r: Rect) -> Vec<f32> {
+pub(crate) fn shape(doc: &photocraft_doc::Document, layer: &Layer, r: Rect) -> Result<Vec<f32>, photocraft_raster::RasterInputError> {
     if r.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    par_map(bands(r, BAND), |band| photocraft_compose::layer_shape(doc, layer, band)).concat()
+    let parts = par_map(bands(r, BAND), |band| photocraft_compose::layer_shape(doc, layer, band));
+    let parts = parts.into_iter().collect::<Result<Vec<_>, _>>()?;
+    Ok(parts.concat())
 }
 
 /// Write `v` (row-major over `r`) into the region-sized `shape`.
@@ -549,7 +551,7 @@ pub(crate) fn shape_sources(layer: &Layer) -> (Option<&Surface>, Option<&Surface
         LayerContent::Fill(f) => layer.fill_cache.as_ref().filter(|c| c.fill == *f).map(|c| &c.surface),
         _ => layer.surface(),
     };
-    let mask = layer.mask.as_ref().filter(|m| m.enabled).map(|m| &m.surface);
+    let mask = layer.mask.as_ref().filter(|m| m.enabled).map(|m| m.surface.as_ref());
     (content, mask)
 }
 

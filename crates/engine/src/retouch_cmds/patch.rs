@@ -223,6 +223,7 @@ pub fn preview(s: &Session, p: &Value, max_cells: u64, min_step: u32) -> Result<
     // Smallest step whose grid fits `max_cells`: step² · cells ≥ pixels.
     let need = (pixels as f64 / max_cells.max(1) as f64).sqrt().ceil() as usize;
     let step = need.max(min_step as usize).clamp(1, 64);
+    d.doc.validate_resident()?;
     let mut doc = (*d.doc).clone();
     let sel = d.doc.selection.as_ref().ok_or_else(|| bad(CMD, "select the area to patch first"))?;
     let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, plan.id, p)?;

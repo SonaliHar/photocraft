@@ -51,6 +51,8 @@ pub(crate) struct Ctx<'a> {
     pub warnings: Vec<String>,
     /// Document resolution (type sizes are converted to points with it).
     pub dpi: f32,
+    pub type_resolution: photocraft_doc::PhysicalResolution,
+    pub type_error: Option<String>,
     /// The parsed `Txt2` block (type settings EngineData lacks, e.g. optical kerning).
     pub txt2: Option<photocraft_text::engine_data::Value>,
     /// Smart-filter caches from the global `FEid`/`FXid` blocks (filter masks, by placed id).
@@ -174,7 +176,7 @@ impl Ctx<'_> {
         }
         let params = m.parameters;
         Some(LayerMask {
-            surface,
+            surface: std::sync::Arc::new(surface),
             enabled: flags & 2 == 0,
             linked: flags & 1 == 0,
             density: params.and_then(|p| p.user_density).map_or(1.0, |d| f32::from(d) / 255.0),
@@ -285,7 +287,15 @@ impl Ctx<'_> {
         } else if rec.block(b"TySh").is_some() {
             // Typed model from TySh/EngineData (photocraft-text); Photoshop's pixels stay the cache.
             let data = rec.block(b"TySh").map(|b| b.data.clone()).unwrap_or_default();
-            let mut t = photocraft_text::psd::text_layer_from_tysh(&data, self.dpi).unwrap_or_else(|| {
+            let parsed = match photocraft_text::psd::text_layer_from_tysh_with_resolution(&data, &self.type_resolution) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    self.type_error = Some(format!("PSD text resolution: {error}"));
+                    // Internal placeholder is discarded by the fallible outer importer.
+                    return Layer::raster("Unsupported physical type geometry", self.fmt);
+                }
+            };
+            let mut t = parsed.unwrap_or_else(|| {
                 let (text, transform) = blocks::parse_tysh(&data).unwrap_or_default();
                 TextLayer { text, transform, ..Default::default() }
             });
@@ -514,16 +524,29 @@ fn parse_guides(data: &[u8], doc: &mut Document) {
     }
 }
 
-/// Converts a parsed PSD into a document. Never fails: problems become warnings.
+/// Legacy infallible adapter. Production import uses the fallible API below.
 pub fn psd_to_document(file: &PsdFile) -> (Document, Vec<String>) {
-    // Never cancelled, so always `Some`; the fallback is unreachable.
-    psd_to_document_with(file, &photocraft_raster::Interrupt::NONE)
-        .unwrap_or_else(|| (Document::new("Untitled", Size::new(1, 1), ColorMode::Rgb, SampleType::U8), Vec::new()))
+    match try_psd_to_document_with(file, &photocraft_raster::Interrupt::NONE) {
+        Ok(Some(result)) => result,
+        outcome => {
+            let warning = match outcome {
+                Err(error) => format!("PSD import failed: {error}; legacy adapter returned an empty placeholder; use try_psd_to_document_with"),
+                _ => "PSD import was cancelled; legacy adapter returned an empty placeholder; use try_psd_to_document_with".into(),
+            };
+            (Document::new("Untitled", Size::new(1, 1), ColorMode::Rgb, SampleType::U8), vec![warning])
+        }
+    }
 }
 
 /// [`psd_to_document`] for a background open: checks `ctl` per layer record and reports
-/// progress. `None` when cancelled.
+/// progress. `None` when cancelled or physical geometry is unsupported. Use
+/// [`try_psd_to_document_with`] to distinguish rejection from cancellation.
 pub fn psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) -> Option<(Document, Vec<String>)> {
+    try_psd_to_document_with(file, ctl).ok().flatten()
+}
+
+/// Fallible physical type geometry, distinct from cooperative cancellation.
+pub fn try_psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) -> Result<Option<(Document, Vec<String>)>, crate::IoError> {
     let h = &file.header;
     let mut warnings = Vec::new();
     let mode = doc_mode(h.color_mode).unwrap_or_else(|| {
@@ -542,8 +565,11 @@ pub fn psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) 
                 if let Ok(ri) = photocraft_psd::ResolutionInfo::from_bytes(&r.data) {
                     let ppi = |res: f64, unit: u16| if unit == 2 { res * 2.54 } else { res };
                     let (x, y) = (ppi(ri.h_res(), ri.h_res_unit), ppi(ri.v_res(), ri.v_res_unit));
-                    doc.resolution_dpi = x as f32;
-                    warnings.extend(crate::unequal_resolution_warning(x, y));
+                    if let Err(error) =
+                        doc.set_physical_resolution(photocraft_doc::PhysicalResolution { x_dpi: x, y_dpi: y, unit: photocraft_doc::PhysicalUnit::Inch })
+                    {
+                        warnings.push(format!("Invalid PSD resolution was ignored: {error}"));
+                    }
                 }
             }
             ids::ICC_PROFILE => doc.icc_profile = Some(Arc::new(r.data.clone())),
@@ -562,6 +588,7 @@ pub fn psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) 
             }
             id if crate::vector_map::SAVED_PATHS.contains(&id) => match crate::vector_map::path_from_resource(&r.data, h.width, h.height) {
                 Some(path) => doc.paths.push(photocraft_doc::NamedPath {
+                    id: photocraft_doc::item_identity::PathId::fresh(),
                     name: String::from_utf8_lossy(&r.name).into_owned(),
                     path,
                     psd_raw: Some(Arc::new(r.data.clone())),
@@ -602,6 +629,8 @@ pub fn psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) 
         cmyk: fmt.mode == ColorMode::Cmyk,
         warnings,
         dpi: doc.resolution_dpi,
+        type_resolution: doc.physical_resolution.clone().unwrap_or_else(|| photocraft_doc::PhysicalResolution::square(f64::from(doc.resolution_dpi))),
+        type_error: None,
         txt2: file.global_blocks.iter().find(|b| &b.key == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.data)),
         filter_effects: Vec::new(),
         ctl: *ctl,
@@ -611,7 +640,7 @@ pub fn psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) 
     for b in file.global_blocks.iter().filter(|b| matches!(&b.key, b"FEid" | b"FXid")) {
         // Smart-filter caches can be large: a cancelled open stops between blocks.
         if ctl.cancelled() {
-            return None;
+            return Ok(None);
         }
         match photocraft_psd::filter_effects::FilterEffects::parse(&b.data) {
             Ok(fx) => cx.filter_effects.extend(fx.items),
@@ -619,7 +648,7 @@ pub fn psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) 
         }
     }
     if ctl.cancelled() {
-        return None;
+        return Ok(None);
     }
 
     let (w, hh) = (h.width as usize, h.height as usize);
@@ -633,7 +662,7 @@ pub fn psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) 
     let merged = if !layered || file.layers().is_empty() || extra {
         let m = file.decode_merged();
         if ctl.cancelled() {
-            return None;
+            return Ok(None);
         }
         ctl.progress(0.1);
         if let Err(e) = &m {
@@ -656,6 +685,9 @@ pub fn psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) 
     } else if layered {
         let tree = file.layer_tree();
         doc.layers = cx.build(&tree, 0);
+        if let Some(error) = cx.type_error.take() {
+            return Err(crate::IoError::Unsupported(error));
+        }
         // Layer › Link Layers: resource 1026 holds one group id per layer record (0 = unlinked).
         if let Some(Ok(photocraft_psd::resources::ResourceData::LayerGroupInfo(groups))) =
             file.resources.iter().find(|r| r.id == ids::LAYER_GROUP_INFO).and_then(photocraft_psd::resources::ImageResource::parsed)
@@ -797,8 +829,11 @@ pub fn psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) 
     cx.warnings.extend(crate::text_styles_map::import(&mut doc));
 
     if ctl.cancelled() {
-        return None;
+        return Ok(None);
     }
     ctl.progress(1.0);
-    Some((doc, cx.warnings))
+    if let Some(error) = cx.type_error {
+        return Err(crate::IoError::Unsupported(error));
+    }
+    Ok(Some((doc, cx.warnings)))
 }

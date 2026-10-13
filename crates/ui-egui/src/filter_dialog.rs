@@ -155,6 +155,10 @@ pub fn has_dialog(command: &str) -> bool {
         || matches!(
             command,
             "image.trim"
+                | "image.duplicate"
+                | "channel.duplicate"
+                | "channel.new"
+                | "channel.newSpot"
                 | "view.newGuide"
                 | "select.refineEdge"
                 | "edit.assignProfile"
@@ -167,6 +171,27 @@ pub fn has_dialog(command: &str) -> bool {
 }
 
 pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
+    if command == "view.newGuide" {
+        return crate::guide_dialog::open(app);
+    }
+    if matches!(command, "channel.new" | "channel.newSpot") {
+        return crate::channel_create_dialog::open(app, command);
+    }
+    if command == "channel.duplicate" {
+        return crate::channel_action_dialog::open(app, command, &Value::Null);
+    }
+    if matches!(command, "image.mode.indexedColor" | "image.mode.bitmap" | "image.mode.colorTable" | "image.mode.duotone") {
+        return crate::mode_conversion_dialog::open(app, command);
+    }
+    if matches!(command, "edit.assignProfile" | "edit.convertToProfile") {
+        return crate::profile_dialog::open(app, command);
+    }
+    if command == "image.duplicate" {
+        return crate::duplicate::open(app);
+    }
+    if command == "image.trim" {
+        return crate::trim::open(app);
+    }
     let spec = photocraft_engine::commands::find(command)?;
     let mut fields = Map::new();
     fields.insert("__command".into(), json!(command));
@@ -191,6 +216,28 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
             Kind::Json => continue,
         };
         fields.insert(p.key, v);
+    }
+    if command == "view.newGuide" {
+        let active=app.session.active()?;
+        let doc=&active.doc;
+        fields.insert("documentId".into(),json!(doc.id.0.to_string()));
+        fields.insert("expectedRevision".into(),json!(active.revision.to_string()));
+        let legacy=photocraft_doc::PhysicalResolution::square(f64::from(doc.resolution_dpi));
+        let resolution=doc.physical_resolution.as_ref().unwrap_or(&legacy);
+        resolution.validate().ok()?;
+        let factor=match &resolution.unit {
+            photocraft_doc::PhysicalUnit::Pixel=>None,
+            photocraft_doc::PhysicalUnit::Inch=>Some(1.0),
+            photocraft_doc::PhysicalUnit::Millimeter=>Some(25.4),
+            photocraft_doc::PhysicalUnit::Point=>Some(72.0),
+            photocraft_doc::PhysicalUnit::Pica=>Some(6.0),
+            photocraft_doc::PhysicalUnit::Custom(unit)=>Some(unit.factor),
+        };
+        fields.insert("position".into(),json!(0.0));
+        fields.insert("unit".into(),json!("px"));
+        fields.insert("__guideDpiX".into(),json!(resolution.x_dpi));
+        fields.insert("__guideDpiY".into(),json!(resolution.y_dpi));
+        fields.insert("__guideDocumentFactor".into(),json!(factor));
     }
     if command == "image.rotation.arbitrary" {
         straighten_defaults(app, &mut fields);
@@ -266,8 +313,82 @@ fn uses_logarithmic_slider(min: f32, max: f32) -> bool {
     min > 0.0 && max / min > 500.0
 }
 
+fn guide_position(text:&str)->Option<f64> {
+    if text.len()>64 { return None; }
+    let value=text.trim().parse::<f64>().ok()?;
+    value.is_finite().then_some(value)
+}
+// Captured axes are preview metadata only. The registered command revalidates
+// the current document and converts in f64 before deliberate native f32 storage.
+fn guide_preview(f:&Map<String,Value>)->Option<f64> {
+    let value=f.get("position")?.as_f64()?;
+    if !value.is_finite() { return None; }
+    let dpi=match f.get("orientation")?.as_str()? {
+        "vertical"=>f.get("__guideDpiX")?.as_f64()?,
+        "horizontal"=>f.get("__guideDpiY")?.as_f64()?,
+        _=>return None,
+    };
+    if !dpi.is_finite() || dpi<=0.0 { return None; }
+    let factor=match f.get("unit")?.as_str()? {
+        "px"=>None,"in"=>Some(1.0),"mm"=>Some(25.4),"pt"=>Some(72.0),"pc"=>Some(6.0),
+        "document"=>match f.get("__guideDocumentFactor")? { Value::Null=>None,value=>Some(value.as_f64()?) },
+        _=>return None,
+    };
+    let result=if let Some(factor)=factor {
+        if !factor.is_finite() || factor<=0.0 { return None; }
+        // The shared checked converter handles subnormal/extreme products.
+        let resolution=photocraft_doc::PhysicalResolution::square(dpi);
+        let unit=photocraft_doc::PhysicalUnit::Custom(photocraft_doc::CustomUnit {name:"Guide preview".into(),factor,digits:0,symbol:String::new(),abbreviation:String::new()});
+        let pixels=photocraft_doc::physical_size::units_to_pixels(value.abs(),&resolution,&unit,photocraft_doc::physical_size::Axis::X).ok()?;
+        pixels.copysign(value)
+    } else {value};
+    (result.is_finite() && result.abs()<=f64::from(1<<29)).then_some(result)
+}
+fn change_guide_unit(f:&mut Map<String,Value>,unit:&str)->Option<()> {
+    let pixels=guide_preview(f)?;
+    let dpi=match f.get("orientation")?.as_str()? {"vertical"=>f.get("__guideDpiX")?.as_f64()?,"horizontal"=>f.get("__guideDpiY")?.as_f64()?,_=>return None};
+    let factor=match unit {"px"=>None,"in"=>Some(1.0),"mm"=>Some(25.4),"pt"=>Some(72.0),"pc"=>Some(6.0),
+        "document"=>match f.get("__guideDocumentFactor")? {Value::Null=>None,value=>Some(value.as_f64()?)},_=>return None};
+    let position=if let Some(factor)=factor {
+        let resolution=photocraft_doc::PhysicalResolution::square(dpi);
+        let unit=photocraft_doc::PhysicalUnit::Custom(photocraft_doc::CustomUnit {name:"Guide preview".into(),factor,digits:0,symbol:String::new(),abbreviation:String::new()});
+        photocraft_doc::physical_size::pixels_to_units(pixels.abs(),&resolution,&unit,photocraft_doc::physical_size::Axis::X).ok()?.copysign(pixels)
+    } else {pixels};
+    if !position.is_finite() {return None;}
+    f.insert("position".into(),json!(position));
+    f.insert("unit".into(),json!(unit));
+    Some(())
+}
+fn new_guide_body(ui:&mut egui::Ui,f:&mut Map<String,Value>) {
+    let t=Tokens::get(ui.ctx());
+    let Some(mut orientation)=f.get("orientation").and_then(Value::as_str).map(str::to_owned) else { return; };
+    let mut unit=match f.get("unit") { None=>"px".to_owned(),Some(value)=>{ let Some(unit)=value.as_str() else { return; }; unit.to_owned() } };
+    let Some(mut position)=f.get("position").and_then(Value::as_f64) else { return; };
+    ui.horizontal(|ui| {
+        ui.label(tl!("Orientation"));
+        if crate::widgets::dropdown(ui,"new-guide-orientation",&mut orientation,&[("horizontal".into(),tl!("Horizontal")),("vertical".into(),tl!("Vertical"))],140.0) {
+            f.insert("orientation".into(),json!(orientation));
+        }
+    });
+    ui.horizontal(|ui| {
+        let label=ui.label(tl!("Position"));
+        let edited=ui.push_id("new-guide-position",|ui|ui.add_sized([110.0,22.0],egui::DragValue::new(&mut position)
+            .speed(0.5).clamp_existing_to_range(false).custom_parser(guide_position).custom_formatter(|value,_|value.to_string())
+            .update_while_editing(false)).labelled_by(label.id).changed()).inner;
+        if edited && position.is_finite() { f.insert("position".into(),json!(position)); }
+        let units=[("px".into(),tl!("Pixels")),("in".into(),tl!("Inches")),("mm".into(),tl!("Millimeters")),
+            ("pt".into(),tl!("Points")),("pc".into(),tl!("Picas")),("document".into(),tl!("Document"))];
+        if crate::widgets::dropdown(ui,"new-guide-unit",&mut unit,&units,140.0) { let _=change_guide_unit(f,&unit); }
+    });
+    if let Some(pixels)=guide_preview(f) { ui.label(egui::RichText::new(format!("{pixels} px")).color(t.text_dim)); }
+}
+
 /// Dialog body for filter commands.
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    if f.get("__command").and_then(Value::as_str)==Some("view.newGuide") {
+        new_guide_body(ui,f);
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     let cmd = f.get("__command").and_then(Value::as_str).unwrap_or_default().to_string();
     // Plug-in dialogs carry their own spec (from the plug-in's manifest).
@@ -400,12 +521,12 @@ pub fn params_of(f: &Map<String, Value>) -> Value {
 }
 
 /// Compute a preview document: run `command` with `params` on the proxy (scaled) copy of `doc`.
-pub fn preview_document(doc: &Document, active: Option<photocraft_doc::LayerId>, command: &str, params: &Value, k: u32) -> Option<Document> {
-    let proxy = crate::proxy::proxy_document(doc, k);
+pub fn preview_document(doc: &Document, active: Option<photocraft_doc::LayerId>, command: &str, params: &Value, k: u32) -> Result<Document, String> {
+    let proxy = crate::proxy::proxy_document(doc, k).map_err(|error| error.to_string())?;
     let mut s = photocraft_engine::Session::new();
-    s.add_document(proxy, None);
+    s.add_document(proxy, None).map_err(|error| error.to_string())?;
     if let Some(id) = active {
-        s.select_layer(id).ok()?;
+        s.select_layer(id).map_err(|error| error.to_string())?;
     }
     let mut p = params.clone();
     if k > 1
@@ -419,8 +540,8 @@ pub fn preview_document(doc: &Document, active: Option<photocraft_doc::LayerId>,
             }
         }
     }
-    s.execute(command, p).ok()?;
-    s.active().map(|d| (*d.doc).clone())
+    s.execute(command, p).map_err(|error| error.to_string())?;
+    s.active().and_then(|d| d.doc.resident_arc()).map(|d| d.as_ref().clone()).ok_or_else(|| "Preview command produced no document".into())
 }
 
 /// Cached preview state on the app.
@@ -571,4 +692,71 @@ mod tests {
             }
         }
     }
+}
+
+#[cfg(test)]
+mod guide_unit_tests {
+    use super::*;
+    #[test]
+    fn guide_f64_field_keeps_low_bits_and_axis_preview() {
+        let exact=f64::from_bits(1.25f64.to_bits()+1);
+        assert_ne!(exact,f64::from(exact as f32));
+        assert_eq!(guide_position(&exact.to_string()).unwrap().to_bits(),exact.to_bits());
+        let mut f=Map::new();
+        f.insert("position".into(),json!(1.0));
+        f.insert("unit".into(),json!("in"));
+        f.insert("orientation".into(),json!("vertical"));
+        f.insert("__guideDpiX".into(),json!(144.0));
+        f.insert("__guideDpiY".into(),json!(288.0));
+        f.insert("__guideDocumentFactor".into(),json!(2.0));
+        assert_eq!(guide_preview(&f),Some(144.0));
+        f.insert("orientation".into(),json!("horizontal"));
+        assert_eq!(guide_preview(&f),Some(288.0));
+        f.insert("unit".into(),json!("document"));
+        f.insert("position".into(),json!(-1.0));
+        assert_eq!(guide_preview(&f),Some(-144.0));
+        change_guide_unit(&mut f,"px").unwrap();
+        assert_eq!(f["position"],-144.0);
+        assert_eq!(guide_preview(&f),Some(-144.0));
+        change_guide_unit(&mut f,"in").unwrap();
+        assert_eq!(f["position"],-0.5);
+        assert!(guide_position("NaN").is_none());
+        assert!(guide_position(&"1".repeat(65)).is_none());
+    }
+    #[test]
+    fn guide_dialog_dispatches_per_axis_unit_without_mutating_resolution() {
+        let mut app=PhotocraftApp::new(photocraft_engine::Session::new(),Default::default());
+        app.session.execute("file.new",json!({"width":144,"height":288})).unwrap();
+        let resolution=photocraft_doc::PhysicalResolution {x_dpi:144.0,y_dpi:288.0,unit:photocraft_doc::PhysicalUnit::Inch};
+        app.session.active_mut().unwrap().doc.try_resident_mut().unwrap().set_physical_resolution(resolution.clone()).unwrap();
+        for orientation in ["vertical","horizontal"] {
+            let id=open(&mut app,"view.newGuide").unwrap();
+            let f=&mut app.ui.dialog_mut(id).unwrap().fields;
+            f.insert("orientation".into(),json!(orientation));
+            f.insert("position".into(),json!(1.0));
+            f.insert("unit".into(),json!("in"));
+            assert_eq!(params_of(f)["unit"],"in");
+            assert!(!params_of(f).as_object().unwrap().keys().any(|key|key.starts_with("__")));
+            crate::dialogs::confirm(&mut app,id).unwrap();
+        }
+        let doc=&app.session.active().unwrap().doc;
+        assert!(doc.guides.vertical.contains(&144.0));
+        assert!(doc.guides.horizontal.contains(&288.0));
+        assert_eq!(doc.effective_resolution(),resolution);
+    }
+    #[test]
+    fn revised_guide_dialog_target_refuses_without_adding_guide() {
+        let mut app=PhotocraftApp::new(photocraft_engine::Session::new(),Default::default());
+        app.session.execute("file.new",json!({"width":4,"height":4})).unwrap();
+        let id=open(&mut app,"view.newGuide").unwrap();
+        let initial=app.session.active().unwrap().doc.id.0.to_string();
+        assert_eq!(app.ui.dialog_mut(id).unwrap().fields["documentId"],initial);
+        app.session.execute("view.newGuide",json!({"orientation":"vertical","position":1.0})).unwrap();
+        let before=app.session.active().unwrap().doc.clone();
+        let revision=app.session.active().unwrap().revision;
+        assert!(crate::dialogs::confirm(&mut app,id).is_err());
+        assert!(app.session.active().unwrap().doc.shares_state(&before));
+        assert_eq!(app.session.active().unwrap().revision,revision);
+    }
+
 }

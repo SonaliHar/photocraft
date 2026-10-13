@@ -18,13 +18,13 @@ fn session() -> (Session, u64, u64) {
 
 /// The view as `document.inspect` reports it.
 fn view(s: &Session) -> Value {
-    crate::inspect::document(s.active().unwrap())["layerMaskView"].clone()
+    crate::inspect::document(s.active().unwrap()).unwrap()["layerMaskView"].clone()
 }
 
 #[test]
 fn modes_toggle_and_show_in_inspect_without_history() {
     let (mut s, masked, _) = session();
-    let steps = s.active().unwrap().history.entries().len();
+    let steps = s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len();
     assert_eq!(view(&s), Value::Null);
     assert_eq!(s.execute(ID, json!({})).unwrap()["mode"], "gray", "no mode: toggle the grayscale view");
     assert_eq!(view(&s), json!({"layer": masked, "mode": "gray"}));
@@ -36,7 +36,7 @@ fn modes_toggle_and_show_in_inspect_without_history() {
     assert_eq!(s.execute(ID, json!({"mode": "toggleGray"})).unwrap()["mode"], "gray", "overlay → gray");
     assert_eq!(s.execute(ID, json!({"mode": "off"})).unwrap()["mode"], "off");
     let st = s.active().unwrap();
-    assert_eq!(st.history.entries().len(), steps, "view changes are not history steps");
+    assert_eq!(st.history.entries(&crate::read_control_none()).unwrap().values().to_vec().len(), steps, "view changes are not history steps");
     assert!(!st.is_dirty(), "a clean document stays clean");
     assert_eq!(st.last_damage, Some(Rect::EMPTY), "no recomposite");
 }
@@ -45,11 +45,11 @@ fn modes_toggle_and_show_in_inspect_without_history() {
 fn a_mask_view_never_alters_pixels() {
     let (mut s, masked, _) = session();
     let before = s.active().unwrap().doc.clone();
-    let px = |s: &Session| photocraft_compose::render(&s.active().unwrap().doc, Rect::new(0, 0, 40, 20)).px;
+    let px = |s: &Session| photocraft_compose::render(&s.active().unwrap().doc, Rect::new(0, 0, 40, 20)).unwrap().px;
     let composite = px(&s);
     for mode in ["gray", "overlay", "toggleOverlay", "toggleGray", "off"] {
         s.execute(ID, json!({"layer": masked, "mode": mode})).unwrap();
-        assert!(std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc), "{mode}: the document is untouched");
+        assert!(before.shares_state(&s.active().unwrap().doc), "{mode}: the document is untouched");
         assert_eq!(px(&s), composite, "{mode}: same composite");
     }
 }

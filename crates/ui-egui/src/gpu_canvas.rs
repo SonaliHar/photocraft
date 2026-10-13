@@ -27,6 +27,10 @@
 
 use std::collections::HashMap;
 use std::num::NonZeroU64;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 use eframe::egui_wgpu::{self, CallbackResources, CallbackTrait, RenderState, ScreenDescriptor};
 use eframe::wgpu;
@@ -106,6 +110,27 @@ pub struct GpuCanvas {
     high: HighPolicy,
     health: photocraft_gpu::DeviceHealth,
 }
+
+/// A checked CPU-to-GPU canvas upload failed before completion.
+#[derive(Debug)]
+pub enum CanvasUploadError {
+    Raster(photocraft_raster::RasterInputError),
+    Unavailable,
+    Device(Fault),
+    LimitExceeded,
+}
+
+impl std::fmt::Display for CanvasUploadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Raster(error) => error.fmt(f),
+            Self::Unavailable => f.write_str("GPU canvas resources are unavailable"),
+            Self::Device(error) => error.fmt(f),
+            Self::LimitExceeded => f.write_str("GPU canvas upload exceeds its memory or dimension limit"),
+        }
+    }
+}
+impl std::error::Error for CanvasUploadError {}
 
 /// Can `adapter` use `Rgba16Float` as a sampled, filtered, render-target and copy texture?
 /// (Core WebGPU guarantees it; WebGL2 needs `EXT_color_buffer_float`, and some drivers lack it.)
@@ -250,6 +275,9 @@ impl GpuCanvas {
     /// Whether [`GpuCanvas::composite`] would draw `doc` with the wgpu compositor (rather than
     /// fall back to the CPU compositor).
     pub fn supports(&self, doc: &photocraft_doc::Document) -> bool {
+        if crate::canvas::checked_imported_canvas(doc) {
+            return false;
+        }
         if std::env::var_os("PHOTOCRAFT_CPU_COMPOSE").is_some() || doc.size.width == 0 || doc.size.height == 0 {
             return false;
         }
@@ -348,6 +376,9 @@ impl GpuCanvas {
         region: photocraft_geom::Rect,
         encode_srgb: bool,
     ) -> Result<photocraft_gpu::Stats, photocraft_gpu::Unsupported> {
+        if crate::canvas::checked_imported_canvas(doc) {
+            return Err(photocraft_gpu::Unsupported("imported composition requires checked CPU canvas".into()));
+        }
         let (device, queue) = (&self.rs.device, &self.rs.queue);
         let size = [doc.size.width, doc.size.height];
         if size[0] == 0 || size[1] == 0 {
@@ -484,6 +515,11 @@ impl GpuCanvas {
         damage: Option<photocraft_geom::Rect>,
         display: Option<&photocraft_engine::display_color::CanvasDisplay>,
     ) -> Refresh {
+        // Imported wide/profile semantics are uploaded by canvas::ensure_texture's
+        // checked CPU path. Never fall through to legacy CPU/GPU composition here.
+        if crate::canvas::checked_imported_canvas(doc) {
+            return Refresh { kind: "render-error", fallback: Some("imported composition requires checked CPU canvas".into()), ..Default::default() };
+        }
         if let Some(f) = self.fault() {
             // Nothing reaches the GPU any more; the app switches to the CPU canvas.
             return Refresh { kind: "lost", fallback: Some(f.to_string()), ..Default::default() };
@@ -517,7 +553,14 @@ impl GpuCanvas {
                 out.kind = "rect";
                 return out;
             }
-            let buf = photocraft_compose::render(doc, r);
+            let buf = match photocraft_compose::render_with_interrupt(doc, r, &photocraft_raster::Interrupt::NONE) {
+                Ok(buffer) => buffer,
+                Err(error) => {
+                    out.kind = "render-error";
+                    out.fallback = Some(error.to_string());
+                    return out;
+                }
+            };
             let t1 = now_ms();
             if self.upload_buffer_rect(key, &texture_buffer(display, &buf)) {
                 out.kind = "rect";
@@ -527,7 +570,11 @@ impl GpuCanvas {
                 return out;
             }
         }
-        self.upload_composite(key, doc, display);
+        if let Err(error) = self.upload_composite(key, doc, display) {
+            out.kind = "render-error";
+            out.fallback = Some(error.to_string());
+            return out;
+        }
         out.kind = "full";
         out.px = bounds.width() as u64 * bounds.height() as u64;
         out.composite_ms = now_ms() - t0;
@@ -537,45 +584,119 @@ impl GpuCanvas {
     /// Composite the whole of `doc` with the CPU compositor into document `key`'s texture, band by
     /// band (each band converted and uploaded before the next is rendered), so a huge document
     /// never needs a full-size float composite or texture-format copy in memory.
-    pub fn upload_composite(&self, key: u64, doc: &photocraft_doc::Document, display: Option<&photocraft_engine::display_color::CanvasDisplay>) {
+    pub fn upload_composite(
+        &self,
+        key: u64,
+        doc: &photocraft_doc::Document,
+        display: Option<&photocraft_engine::display_color::CanvasDisplay>,
+    ) -> Result<(), CanvasUploadError> {
+        self.upload_composite_with_interrupt(key, doc, display, &photocraft_raster::Interrupt::NONE)
+    }
+
+    /// Checked ordinary CPU composition with cancellation between preparations,
+    /// sample blocks and submitted bands. Progress follows actual band submission.
+    pub fn upload_composite_with_interrupt(
+        &self,
+        key: u64,
+        doc: &photocraft_doc::Document,
+        display: Option<&photocraft_engine::display_color::CanvasDisplay>,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<(), CanvasUploadError> {
+        self.upload_composite_bands(key, doc, display, control, 0)
+    }
+
+    fn upload_composite_bands(
+        &self,
+        key: u64,
+        doc: &photocraft_doc::Document,
+        display: Option<&photocraft_engine::display_color::CanvasDisplay>,
+        control: &photocraft_raster::Interrupt<'_>,
+        band_rows: i32,
+    ) -> Result<(), CanvasUploadError> {
+        use photocraft_raster::RasterInputError as E;
+        control.check().map_err(|_| CanvasUploadError::Raster(E::Cancelled))?;
+        if let Some(fault) = self.fault() {
+            return Err(CanvasUploadError::Device(fault));
+        }
         let size = [doc.size.width, doc.size.height];
-        if size[0] == 0 || size[1] == 0 || !self.health.is_ok() {
-            return;
+        if size[0] == 0 || size[1] == 0 {
+            return Err(CanvasUploadError::Raster(E::InvalidBounds));
         }
         let format = self.format_for(doc.depth, size);
         let (device, queue) = (&self.rs.device, &self.rs.queue);
-        {
-            let mut renderer = self.rs.renderer.write();
-            let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return };
-            if res.docs.get(&key).is_none_or(|d| d.size != size || d.format != format) {
-                let tex = DocTextures::new(device, res, size, self.tile, format);
-                res.docs.insert(key, tex);
-            }
+        if size.iter().any(|v| *v > i32::MAX as u32) {
+            return Err(CanvasUploadError::Raster(E::InvalidBounds));
         }
+        // Reserve old + replacement + all queued separate mip targets before creating GPU storage.
+        // This scoped census is texture payload/uniform bytes, not process-wide GPU residency.
+        let (lease, staged) = {
+            let renderer = self.rs.renderer.read();
+            let res = renderer.callback_resources.get::<Resources>().ok_or(CanvasUploadError::Unavailable)?;
+            let (fresh, scratch) = upload_footprint(size, self.tile, format, res.separate_mip_targets).ok_or(CanvasUploadError::LimitExceeded)?;
+            let retained = res
+                .docs
+                .values()
+                .try_fold(0u64, |sum, d| {
+                    let (bytes, _) = upload_footprint(d.size, self.tile, d.format, false)?;
+                    sum.checked_add(bytes)
+                })
+                .ok_or(CanvasUploadError::LimitExceeded)?;
+            let compositor = res.compositor.as_ref().map_or(0, |c| c.resident_bytes().saturating_add(u64::try_from(c.fx_cache_bytes()).unwrap_or(u64::MAX)));
+            let amount = fresh.checked_add(scratch).ok_or(CanvasUploadError::LimitExceeded)?;
+            let base = retained.checked_add(compositor).ok_or(CanvasUploadError::LimitExceeded)?;
+            let limit = res.compositor_budget.unwrap_or(MIN_GPU_BUDGET);
+            let counter = res.pending_upload_bytes.clone();
+            counter
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |pending| {
+                    let next = pending.checked_add(amount)?;
+                    (base.checked_add(next)? <= limit).then_some(next)
+                })
+                .map_err(|_| CanvasUploadError::LimitExceeded)?;
+            let lease = PendingUpload { counter, bytes: amount, device: device.clone(), queue: queue.clone(), health: self.health.clone() };
+            let staged = DocTextures::new(device, res, size, self.tile, format);
+            (lease, staged)
+        };
         let mut rgba = Vec::new();
-        let _ = photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| -> Result<(), ()> {
+        photocraft_compose::render_bands_with_interrupt(doc, doc.bounds(), band_rows, control, |band| {
             if !self.health.is_ok() {
-                return Err(());
+                return Err(E::UnsupportedConversion);
             }
             texels_into(format, &texture_buffer(display, &band).px, &mut rgba);
-            let renderer = self.rs.renderer.read();
-            let d = renderer.callback_resources.get::<Resources>().and_then(|r| r.docs.get(&key)).ok_or(())?;
-            d.write(queue, [0, band.rect.y0 as u32], [size[0], band.rect.height()], size[0], &rgba);
-            drop(renderer);
-            // Flush the staged band so its staging memory is reclaimed while the next renders.
+            staged.write(queue, [0, band.rect.y0 as u32], [size[0], band.rect.height()], size[0], &rgba);
             queue.submit(std::iter::empty::<wgpu::CommandBuffer>());
             self.health.poll(device);
+            control.progress(band.rect.y1 as f32 / size[1] as f32);
+            control.check().map_err(|_| E::Cancelled)?;
             Ok(())
-        });
-        if !self.health.is_ok() {
-            return;
+        })
+        .map_err(CanvasUploadError::Raster)?;
+        if let Some(fault) = self.fault() {
+            return Err(CanvasUploadError::Device(fault));
         }
-        let mut renderer = self.rs.renderer.write();
-        if let Some(res) = renderer.callback_resources.get_mut::<Resources>()
-            && let Some(d) = res.docs.get(&key)
         {
-            d.regenerate_mips(device, queue, res, [0, 0, size[0], size[1]]);
+            let renderer = self.rs.renderer.read();
+            let res = renderer.callback_resources.get::<Resources>().ok_or(CanvasUploadError::Unavailable)?;
+            if !std::ptr::eq((res.pending_upload_bytes).as_ref(), (lease.counter).as_ref()) {
+                return Err(CanvasUploadError::Unavailable);
+            }
+            staged.regenerate_mips(device, queue, res, [0, 0, size[0], size[1]]);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.health.wait(device, None);
+        self.health.poll(device);
+        if let Some(fault) = self.fault() {
+            return Err(CanvasUploadError::Device(fault));
+        }
+        control.check().map_err(|_| CanvasUploadError::Raster(E::Cancelled))?;
+        let mut renderer = self.rs.renderer.write();
+        let res = renderer.callback_resources.get_mut::<Resources>().ok_or(CanvasUploadError::Unavailable)?;
+        if !std::ptr::eq((res.pending_upload_bytes).as_ref(), (lease.counter).as_ref()) {
+            return Err(CanvasUploadError::Unavailable);
+        }
+        control.check().map_err(|_| CanvasUploadError::Raster(E::Cancelled))?;
+        res.docs.insert(key, staged);
+        drop(lease);
+        Ok(())
     }
 
     /// Free textures, display LUTs and their signatures for documents not in `live`.
@@ -1099,6 +1220,64 @@ fn detect_physical_memory() -> Option<u64> {
     None
 }
 
+/// A scoped pending GPU payload reservation. Declared before the staged texture so failure
+/// destroys that texture owner before returning its reservation.
+struct PendingUpload {
+    counter: Arc<AtomicU64>,
+    bytes: u64,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    health: DeviceHealth,
+}
+impl Drop for PendingUpload {
+    fn drop(&mut self) {
+        // Submitted commands may retain mip scratch after its Rust handle is dropped.
+        // Native waits before refund; web refunds from the completion callback.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.health.wait(&self.device, None);
+            self.counter.fetch_sub(self.bytes, Ordering::AcqRel);
+            let _ = &self.queue;
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let counter = self.counter.clone();
+            let bytes = self.bytes;
+            self.queue.on_submitted_work_done(move || {
+                counter.fetch_sub(bytes, Ordering::AcqRel);
+            });
+            self.health.poll(&self.device);
+        }
+    }
+}
+
+fn upload_footprint(size: [u32; 2], tile: u32, format: wgpu::TextureFormat, separate: bool) -> Option<(u64, u64)> {
+    if tile == 0 || size.contains(&0) || size.iter().any(|n| *n > i32::MAX as u32) {
+        return None;
+    }
+    let count = u64::from(size[0].div_ceil(tile)).checked_mul(u64::from(size[1].div_ceil(tile)))?;
+    // Bound the preflight itself before iteration; normal GPU budgets deny much earlier.
+    if count > 65536 {
+        return None;
+    }
+    let mut retained = 0u64;
+    let mut scratch = 0u64;
+    for y in (0..size[1]).step_by(tile as usize) {
+        for x in (0..size[0]).step_by(tile as usize) {
+            let (w, h) = (tile.min(size[0] - x), tile.min(size[1] - y));
+            retained = retained.checked_add(TILE_UNIFORM_SIZE)?;
+            for level in 0..mip_count(w, h) {
+                let bytes = u64::from((w >> level).max(1)).checked_mul(u64::from((h >> level).max(1)))?.checked_mul(texel_bytes(format))?;
+                retained = retained.checked_add(bytes)?;
+                if separate && level != 0 {
+                    scratch = scratch.checked_add(bytes)?;
+                }
+            }
+        }
+    }
+    Some((retained, scratch))
+}
+
 struct Resources {
     view_bgl: wgpu::BindGroupLayout,
     tile_bgl: wgpu::BindGroupLayout,
@@ -1112,6 +1291,7 @@ struct Resources {
     encode_pipeline_high: Option<wgpu::RenderPipeline>,
     mip_sampler: wgpu::Sampler,
     docs: HashMap<u64, DocTextures>,
+    pending_upload_bytes: Arc<AtomicU64>,
     views: HashMap<u64, ViewGpu>,
     out_linear: bool,
     /// Build each mip level in a scratch texture and copy it back instead of rendering into
@@ -1383,6 +1563,7 @@ impl Resources {
             encode_pipeline_high,
             mip_sampler,
             docs: HashMap::new(),
+            pending_upload_bytes: Arc::new(AtomicU64::new(0)),
             views: HashMap::new(),
             out_linear: target.is_srgb(),
             separate_mip_targets: false,
@@ -2007,6 +2188,10 @@ fn fs(in: V) -> @location(0) vec4<f32> {
 #[cfg(test)]
 #[path = "gpu_canvas_mip_tests.rs"]
 mod mip_tests;
+
+#[cfg(test)]
+#[path = "gpu_canvas_atomic_tests.rs"]
+mod atomic_upload_tests;
 
 #[cfg(test)]
 mod tests {

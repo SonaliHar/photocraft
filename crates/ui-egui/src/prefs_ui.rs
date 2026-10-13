@@ -118,7 +118,11 @@ pub fn load(app: &mut PhotocraftApp) {
         let docs = recover();
         let n = docs.len();
         for r in docs {
-            app.session.add_document(r.doc, r.path);
+            if let Err(error) = app.session.add_document(r.doc, r.path) {
+                app.ui.status = error.to_string();
+                app.ui.status_error = true;
+                continue;
+            }
             // Recovered documents are unsaved.
             let Some(st) = app.session.active_mut() else { continue };
             st.saved_revision = 0;
@@ -861,7 +865,13 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let mut section = f.get("section").and_then(Value::as_str).unwrap_or("general").to_string();
     let mut values = f.get("values").cloned().unwrap_or(Value::Null);
     // The dialog follows the language being edited, so a change shows before OK.
-    let lang = crate::i18n::Lang::from_pref(values.pointer("/interface/language").and_then(Value::as_str).unwrap_or("auto"));
+    let lang = match crate::i18n::Lang::try_from_pref(values.pointer("/interface/language").and_then(Value::as_str).unwrap_or("auto")) {
+        Ok(lang) => lang,
+        Err(error) => {
+            ui.label(error.to_string());
+            return;
+        }
+    };
     ui.horizontal_top(|ui| {
         // Section list.
         ui.vertical(|ui| {
@@ -1028,7 +1038,7 @@ fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>
                 Value::String(s) if path == "interface.language" => {
                     ui.label(RichText::new(tl!(&label)).color(t.text_dim));
                     let mut pairs: Vec<(String, &str)> = vec![("auto".into(), tl!("Auto"))];
-                    pairs.extend(crate::i18n::Lang::all().map(|l| (l.code().to_string(), l.name())));
+                    pairs.extend(crate::i18n::LANGUAGES.iter().map(|l| (l.code.to_string(), l.name)));
                     let mut cur = s.clone();
                     crate::widgets::dropdown(ui, &format!("pref-{path}"), &mut cur, &pairs, 220.0);
                     obj.insert(k, json!(cur));
@@ -2090,7 +2100,7 @@ mod tests {
         let saved: Saved = Arc::default();
         let s2 = saved.clone();
         let services = crate::Services {
-            autosave: Some(Box::new(move |doc: &Arc<photocraft_doc::Document>, rev: u64, _path: Option<&str>| {
+            autosave: Some(Box::new(move |doc: &photocraft_engine::document_snapshot::DocumentSnapshot, rev: u64, _path: Option<&str>| {
                 s2.lock().unwrap().push((doc.id.0, rev));
                 Ok(())
             })),
@@ -2114,7 +2124,7 @@ mod tests {
         // Loaded copies can have the same persisted identity and dirty revision.
         let original = app.session.active().unwrap().doc.clone();
         let original_id = original.id;
-        app.session.add_document(original.as_ref().clone(), None);
+        app.session.add_document(original.as_ref().clone(), None).unwrap();
         app.run("edit.fill", json!({"color": "#0000ff"})).unwrap();
         autosave_now(&mut app);
         tick(&mut app, &ctx);
@@ -2140,7 +2150,7 @@ mod tests {
         use photocraft_doc::{Color, ColorMode, Document, SampleType, Size};
         let doc = || Document::with_background("R", Size::new(4, 4), ColorMode::Rgb, SampleType::U8, Color::WHITE);
         let services = crate::Services {
-            autosave: Some(Box::new(move |d: &Arc<Document>, _: u64, _: Option<&str>| {
+            autosave: Some(Box::new(move |d: &photocraft_engine::document_snapshot::DocumentSnapshot, _: u64, _: Option<&str>| {
                 l1.lock().unwrap().push(format!("save {}", d.id.0));
                 Ok(())
             })),

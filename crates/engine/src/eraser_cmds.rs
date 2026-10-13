@@ -72,9 +72,29 @@ fn unlock_background(l: &mut Layer) {
     }
 }
 
-fn pixels_locked(doc: &Document, l: &Layer) -> Option<EngineError> {
-    let locks = doc.effective_locks(l.id);
-    (locks.pixels || locks.all).then(|| EngineError::Other(format!("Could not complete your request because the layer \"{}\" is locked", l.name)))
+fn preflight_pixels(doc: &Document, id: LayerId, cmd: &str) -> Result<()> {
+    crate::commands::check_pixels_unlocked(doc, id)?;
+    let surface = doc.layer(id).and_then(Layer::surface).ok_or(EngineError::NoLayer(id))?;
+    if matches!(surface.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64)
+        || doc.selection.as_ref().is_some_and(|selection| matches!(selection.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64))
+    {
+        return Err(bad(cmd, "eraser sampling/composition for authoritative U32/F64 samples is unsupported"));
+    }
+    Ok(())
+}
+
+/// Predict alpha permission after removing only the ordinary Background's own
+/// native lock. Imported alpha and inherited group locks are not unlocked.
+fn alpha_after_background_conversion(doc: &Document, layer: &Layer) -> Result<bool> {
+    let locked = crate::xcf_item_locks::transparency_locked(doc, layer.id)?;
+    if !is_background(layer) { return Ok(locked); }
+    let locks = crate::xcf_item_locks::effective_layer_locks(doc, layer.id)?;
+    if locks.imported.alpha {
+        return Err(EngineError::Other("eraser cannot promote a Background with imported alpha locks".into()));
+    }
+    let path = doc.path_of(layer.id).ok_or(EngineError::NoLayer(layer.id))?;
+    let (_, parent) = path.split_last().ok_or(EngineError::NoLayer(layer.id))?;
+    Ok(doc.locks_at(parent).transparency)
 }
 
 fn damage(s: &mut Session, dmg: Rect, erased: bool) -> Value {
@@ -97,16 +117,17 @@ fn magic_eraser(s: &mut Session, p: &Value) -> Result<Value> {
     let opacity = number(p, CMD, "opacity", 100.0, 1.0..=100.0)? as f32 / 100.0;
     let (anti_alias, contiguous, sample_all) = (flag(p, "antiAlias", true), flag(p, "contiguous", true), flag(p, "sampleAllLayers", false));
     let id = active_pixel_layer(s, CMD)?;
-    {
+    let alpha_locked = {
         let d = s.active().ok_or(EngineError::NoDocument)?;
-        if let Some(e) = d.doc.layer(id).and_then(|l| pixels_locked(&d.doc, l)) {
-            return Err(e);
-        }
+        preflight_pixels(&d.doc, id, CMD)?;
+        let layer = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+        let locked = alpha_after_background_conversion(&d.doc, layer)?;
         // Clicking off the canvas erases nothing (and records no history step).
         if !d.doc.bounds().contains(x, y) {
             return Ok(damage(s, Rect::EMPTY, false));
         }
-    }
+        locked
+    };
     let (area, img) = crate::selection_cmds::sample_rgba8(s, sample_all)?;
     let region = sel::wand_region(&img, area, (x, y), tolerance, contiguous, anti_alias);
     drop(img);
@@ -115,7 +136,7 @@ fn magic_eraser(s: &mut Session, p: &Value) -> Result<Value> {
     let dmg = s.edit("Magic Eraser", |doc, _| {
         let selection = doc.selection.clone();
         unlock_background(doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?);
-        let lock = doc.effective_locks(id).transparency;
+        let lock = alpha_locked;
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         let surf = l.surface_mut().ok_or_else(|| bad(CMD, "not a pixel layer"))?;
         let fmt = surf.format();
@@ -146,10 +167,8 @@ fn background_eraser(s: &mut Session, p: &Value) -> Result<Value> {
     {
         let d = s.active().ok_or(EngineError::NoDocument)?;
         let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-        if let Some(e) = pixels_locked(&d.doc, l) {
-            return Err(e);
-        }
-        if d.doc.effective_locks(id).transparency && !is_background(l) {
+        preflight_pixels(&d.doc, id, CMD)?;
+        if alpha_after_background_conversion(&d.doc, l)? {
             return Err(EngineError::Other(format!("Could not use the Background Eraser because the transparency of layer \"{}\" is locked", l.name)));
         }
     }

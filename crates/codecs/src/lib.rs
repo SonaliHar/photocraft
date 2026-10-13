@@ -20,6 +20,7 @@ mod format;
 mod image;
 mod options;
 pub mod orientation;
+mod png_density;
 pub mod web;
 
 pub use crate::codecs::png::encode_indexed as encode_png_indexed;
@@ -31,6 +32,7 @@ pub use crate::format::{ASYMMETRIC_EXCEPTIONS, Format, FormatCaps, caps, detect,
 pub use crate::image::{ChannelLayout, DecodeWarning, DeepChannel, DeepImage, Image, Metadata, SampleType};
 pub use crate::options::{DecodeOptions, EncodeOptions, ExrCompression, Limits, PngCompression, TiffCompression};
 pub use crate::orientation::{exif_orientation, upright_exif, upright_xmp};
+pub use crate::png_density::PngDensity;
 pub use half::f16;
 
 use crate::codecs::{exr, heif, jpeg, png, pnm, tiff, via_image, webp};
@@ -157,4 +159,15 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
         Format::Heif => Err(CodecError::unsupported(format, "encoding is not available in this build")),
         Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::encode(format, image, plan, opts),
     }
+}
+
+/// Encode PNG with checked physical density. Pixel layout/depth conversion follows
+/// the ordinary PNG fidelity plan. `embed_metadata=false` omits this override too.
+/// The standalone metadata model and all existing encoder entry points are unchanged.
+pub fn encode_png_with_density(image: &Image, opts: &EncodeOptions, density: PngDensity) -> Result<Vec<u8>, CodecError> {
+    if image.width() == 0 || image.height() == 0 {
+        return Err(CodecError::InvalidImage("cannot encode an empty image".into()));
+    }
+    let plan = fidelity::plan(image, Format::Png, opts);
+    png::encode_with_density(image, plan, opts, Some(density))
 }

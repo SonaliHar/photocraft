@@ -18,12 +18,15 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod checked_mask;
+pub use checked_mask::VectorPreparationLimits;
 pub mod edit;
 pub mod flatten;
 pub mod raster;
 pub mod shapes;
 pub mod stroke;
 pub mod trace;
+pub mod xcf;
 
 use photocraft_color::{ColorMode, PixelFormat};
 use photocraft_doc::{Fill, FillRule, GradientStyle, Path, PathOp, ShapeLayer, ShapeStroke, StrokeAlign, VectorMask};
@@ -31,6 +34,8 @@ use photocraft_geom::{Rect, TILE_SIZE};
 use photocraft_raster::Surface;
 
 pub use flatten::{Polyline, flatten_path, flatten_subpath};
+mod flatten_controlled;
+pub use flatten_controlled::flatten_path_with_interrupt;
 pub use raster::Rasterizer;
 pub use stroke::{StrokeStyle, stroke_polygons};
 

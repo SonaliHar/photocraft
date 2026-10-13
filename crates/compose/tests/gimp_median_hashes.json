@@ -1,0 +1,9 @@
+{
+  "operations/gegl-median-blur/operation-gegl-median-blur.source.0.native.bin": "43f6f4fc2d130f29652d05e5c1f251a3121bc249bee2844ff2bc0be3483a87b6",
+  "operations/gegl-median-blur/operation-gegl-median-blur.xcf": "31fcb8d83bb6e574a9dddb8b1e4222de1fa2642a34202696c29e3effa6cbe746",
+  "operations/gegl-median-blur/operation-gegl-median-blur.edit.xcf": "f068255e7aab6767755a8fba4e78b170dae7bb5b335704a3d0ea153ed6cd4eca",
+  "operations/gegl-median-blur/operation-gegl-median-blur.reopened_state.json": "f9ede0e9a4a3d375290e7d8bf7ded91dbfed86cdf1ec3958d89a76dd26254842",
+  "operations/gegl-median-blur/operation-gegl-median-blur.edited_state.json": "e7da0857dd5dd80d8348266fb5e71475950367f93fd6ecf24a3182d7739994f0",
+  "operations/gegl-median-blur/operation-gegl-median-blur.ref.png": "9c2068319a0ad4b06adf0a76782eef46bf5c9bc1565782261e57e630df0c5dba",
+  "operations/gegl-median-blur/operation-gegl-median-blur.edit.ref.png": "255ca925fb6666b0e3a4e5a0f652acc2c6cd7f2f6ab2571705373e2ac426c005"
+}

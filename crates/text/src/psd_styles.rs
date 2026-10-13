@@ -123,6 +123,28 @@ pub fn has_named_sheets(tysh: &[u8]) -> bool {
 
 /// Rewrites the style sheets of a `TySh` block from the document's styles and the layer's run
 /// references. The normal sheets are kept; other sheets are replaced by `styles`.
+/// Named sheets share the Y-DPI EngineData basis. The supplied TySh must have
+/// been built with `build_tysh_with_resolution`; this writer preserves that
+/// block's affine and box geometry rather than composing the axis scale again.
+pub fn write_style_sheets_with_resolution(
+    tysh: &[u8],
+    layer: &TextLayer,
+    styles: &TextStyles,
+    resolution: &photocraft_doc::PhysicalResolution,
+) -> Result<Option<Vec<u8>>, crate::PhysicalLayoutError> {
+    let axes = crate::physical_layout::Axes::checked(layer, resolution)?;
+    Ok(write_style_sheets(tysh, layer, styles, axes.dpi))
+}
+
+/// Read point-valued named-sheet styles from the same Y-DPI EngineData basis.
+pub fn read_style_sheets_with_resolution(
+    tysh: &[u8],
+    resolution: &photocraft_doc::PhysicalResolution,
+) -> Result<Option<PsdStyleSheets>, crate::PhysicalLayoutError> {
+    let axes = crate::physical_layout::Axes::checked(&TextLayer::default(), resolution)?;
+    Ok(read_style_sheets(tysh, axes.dpi))
+}
+
 pub fn write_style_sheets(tysh: &[u8], layer: &TextLayer, styles: &TextStyles, dpi: f32) -> Option<Vec<u8>> {
     let mut t = parse_tysh(tysh)?;
     let mut e = engine_data(&t.text)?;

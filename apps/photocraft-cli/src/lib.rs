@@ -11,7 +11,7 @@ use photocraft_io::ExportOptions;
 use serde_json::{Value, json};
 
 pub const USAGE: &str = "\
-photocraft-cli: headless Photocraft
+photocraft-cli: headless PhotoCraft
 
 USAGE:
   photocraft-cli convert <in> <out> [--format <ext>] [--quality <1-100>] [--tiff-layers]
@@ -39,8 +39,28 @@ USAGE:
       [--automation-read-root <dir>] [--automation-write-root <dir>]
       Keep one headless session open and answer JSON lines ({\"id\",\"method\",\"params\"}) on stdio,
       or on 127.0.0.1:<port>. Methods: engine.execute, jobs.list/cancel, engine.commands,
-      doc.open/new/save/inspect/render/select/close, session.list, batch, methods
+      doc.open/new/save/inspect/render/select/close, session.list, batch, methods,
+      xcf.link.substituteFromRoot and xcf.link.recoverFromRoot.
       (docs/control-protocol.md#headless-server).
+
+LINKED PNG REPLACEMENT / EXACT RECOVERY:
+  photocraft-cli serve --automation-read-root ./inputs --automation-write-root ./outputs
+      Send one JSON request per stdin line; replies provide the IDs and revision to use:
+      {\"id\":1,\"method\":\"doc.open\",\"params\":{\"path\":\"source.xcf\"}}
+      {\"id\":2,\"method\":\"doc.inspect\",\"params\":{}}
+      {\"id\":3,\"method\":\"engine.execute\",\"params\":{\"command\":\"xcf.inspect\",\"params\":{}}}
+      The replacement request has exactly six strings (replace these example IDs with inspected values):
+      {\"id\":4,\"method\":\"xcf.link.substituteFromRoot\",\"params\":{\"documentId\":\"1\",\"expectedRevision\":\"0\",\"layerId\":\"2\",\"resourceId\":\"3\",\"path\":\"replacement.png\",\"policy\":\"substitute\"}}
+      For retained-original-hash recovery use method xcf.link.recoverFromRoot and policy exact.
+      Copy expectedRevision verbatim from inspected revisionString, not numeric revision.
+      IDs are nonzero canonical decimal U64 strings; revision may be zero. The explicit
+      relative PNG path is beneath the held read root, never a stored locator or ambient path.
+      Input is at most 8 MiB; bytes/internal hex do not cross RPC and the 1 MiB request cap stays.
+      Both methods finish synchronously (no job polling); absent roots and active jobs refuse.
+      Substitution stays Reduced. Exact linked bytes are not whole-document Full: execute xcf.assess.
+      {\"id\":5,\"method\":\"doc.save\",\"params\":{\"path\":\"result.pcraft\"}}
+      Reopen result.pcraft through a granted read root; native saves do not retain file grants.
+      MCP names: xcf_link_substitute_from_root / xcf_link_recover_from_root, same six string keys.
 
   photocraft-cli <subcommand> --help (or -h) prints this text. A flag the subcommand doesn't take is
   an error.
@@ -246,6 +266,14 @@ fn info(a: &Args, out: &mut dyn Write) -> R {
         warnings.extend(missing_font_warnings(photocraft_engine::type_extra_cmds::missing_fonts(&st.doc)).into_iter().map(Value::String));
     }
     doc["warnings"] = Value::Array(warnings);
+    if let Some(assessment) = opened.get("assessment").filter(|value| !value.is_null()) {
+        doc["assessment"] = assessment.clone();
+    } else if h.session.active().is_some_and(|state| state.doc.xcf_state.as_ref().is_some_and(|xcf| xcf.provenance.format == "xcf")) {
+        match h.session.execute("xcf.assess", json!({})) {
+            Ok(assessment) => doc["assessment"] = assessment,
+            Err(error) => doc["assessmentError"] = json!({"code":"current_assessment_unavailable", "message":error.to_string().chars().take(512).collect::<String>()}),
+        }
+    }
     doc["file"] = json!(file);
     // Drop per-session noise.
     if let Value::Object(m) = &mut doc {
@@ -489,6 +517,9 @@ fn mcp(a: &Args) -> R {
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())?;
     rt.block_on(server.serve_stdio()).map_err(|e| e.to_string())
 }
+
+#[cfg(test)]
+mod xcf_assessment_tests;
 
 #[cfg(test)]
 mod missing_font_warning_tests {

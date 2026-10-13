@@ -1,6 +1,8 @@
 //! Native UI-language preferences, queried once without subprocesses or registry parsing.
 
-use super::{Lang, lang_from_tag};
+use super::Lang;
+#[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+use super::lang_from_tag;
 
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_SYSTEM_TAGS: usize = 64;
@@ -10,6 +12,7 @@ const MAX_SYSTEM_TAG_BYTES: usize = 128;
 /// Resolve Auto against the current registry. Cache the OS's tags, rather than a language,
 /// so matching remains separate from platform detection.
 /// Missing or unsupported system preferences always resolve to English.
+#[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
 pub fn system_lang() -> Lang {
     #[cfg(test)]
     {
@@ -22,6 +25,27 @@ pub fn system_lang() -> Lang {
     }
 }
 
+pub fn try_system_lang() -> Result<Lang, crate::web_ui_assets::UiAssetError> {
+    #[cfg(test)]
+    {
+        TEST_SYSTEM_TAGS.with(|tags| try_resolve(&tags.borrow()))
+    }
+    #[cfg(not(test))]
+    {
+        static SYSTEM: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+        try_resolve(SYSTEM.get_or_init(detect_system_tags))
+    }
+}
+fn try_resolve(tags: &[String]) -> Result<Lang, crate::web_ui_assets::UiAssetError> {
+    for tag in tags {
+        if let Some(lang) = super::try_lang_from_tag(tag)? {
+            return Ok(lang);
+        }
+    }
+    Ok(Lang::EN)
+}
+
+#[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
 fn resolve(tags: &[String]) -> Lang {
     tags.iter().find_map(|tag| lang_from_tag(tag)).unwrap_or(Lang::EN)
 }

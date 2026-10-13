@@ -5,8 +5,18 @@ use serde_json::{Value, json};
 
 use crate::{DocState, Session};
 
-pub fn session(s: &Session) -> Value {
-    json!({
+#[path = "inspect_linked.rs"]
+mod linked;
+#[path = "inspect_editing.rs"]
+mod editing;
+
+/// Resident JSON inspection. Accounted models require a charged JSON carrier and
+/// are refused before any strings or collections are copied.
+pub fn session(s: &Session) -> crate::Result<Value> {
+    for state in s.documents() {
+        state.doc.validate_resident()?;
+    }
+    Ok(json!({
         "active": s.active_index(),
         "documents": s.documents().iter().enumerate().map(|(i, d)| json!({
             "index": i,
@@ -16,32 +26,44 @@ pub fn session(s: &Session) -> Value {
             "height": d.doc.size.height,
             "dirty": d.is_dirty(),
             "revision": d.revision,
+            "revisionString": d.revision.to_string(),
+            "documentId": d.doc.id.0.to_string(),
         })).collect::<Vec<_>>(),
         "foreground": s.tools.foreground,
         "background": s.tools.background,
-    })
+    }))
 }
 
-pub fn document(d: &DocState) -> Value {
+/// Resident JSON inspection with borrowed history labels. Accounted models are
+/// refused before metadata allocation.
+pub fn document(d: &DocState) -> crate::Result<Value> {
+    d.doc.validate_resident()?;
     let doc = &d.doc;
-    let selected = d.selected_layers();
-    json!({
+    let selected = d.selection_ids();
+    let linked_dependencies = linked::dependencies(d)?;
+    Ok(json!({
+        "documentId": doc.id.0.to_string(),
         "name": doc.name,
         "width": doc.size.width,
         "height": doc.size.height,
         "mode": format!("{:?}", doc.mode),
         "depth": doc.depth.bits(),
+        "sampleType": format!("{:?}", doc.depth),
         "resolution": doc.resolution_dpi,
+        "physicalResolution": doc.effective_resolution(),
         "activeLayer": d.active_layer.map(|l| l.0),
         "selectedLayers": selected.iter().map(|l| l.0).collect::<Vec<_>>(),
         "isolatedLayers": d.isolated_layers.iter().map(|l| l.0).collect::<Vec<_>>(),
         "hasSelection": doc.selection.is_some(),
         "selectionBounds": doc.selection.as_ref().map(|s| { let r = s.content_bounds(); [r.x0, r.y0, r.width() as i32, r.height() as i32] }),
-        "layers": doc.layers.iter().rev().map(|l| layer_sel(l, &selected)).collect::<Vec<_>>(),
-        "history": d.history.entries(),
+        "layers": doc.layers.iter().rev().map(|l| layer_sel(l, selected)).collect::<Vec<_>>(),
+        "history": d.history.entry_labels().collect::<Vec<_>>(),
         "canUndo": d.history.can_undo(),
         "canRedo": d.history.can_redo(),
         "revision": d.revision,
+        "revisionString": d.revision.to_string(),
+        "xcfLinkedDependencies": linked_dependencies,
+        "xcfEditingState": editing::editing(d)?,
         "channels": crate::channel_cmds::channels_json(d),
         "quickMask": doc.quick_mask.is_some(),
         "layerMaskView": crate::mask_view_cmds::view_json(d),
@@ -55,7 +77,7 @@ pub fn document(d: &DocState) -> Value {
             "dataSets": doc.variables.data_sets.iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
             "active": doc.variables.active,
         })),
-    })
+    }))
 }
 
 /// Layer tree top-to-bottom (display order).

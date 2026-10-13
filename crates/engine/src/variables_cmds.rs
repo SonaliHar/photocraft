@@ -100,9 +100,10 @@ fn parse_value(v: &Value) -> Option<VarValue> {
 /// Mutate the document's variables without a history step (config, not a canvas edit).
 fn set_vars(s: &mut Session, f: impl FnOnce(&mut Variables)) -> Result<()> {
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
+    st.doc.validate_resident()?;
     let mut doc = (*st.doc).clone();
     f(&mut doc.variables);
-    st.doc = Arc::new(doc);
+    st.doc = crate::document_snapshot::DocumentSnapshot::from_resident(Arc::new(doc))?;
     st.revision += 1;
     Ok(())
 }
@@ -173,7 +174,7 @@ fn apply_to_doc(doc: &mut Document, vars: &Variables, set: &DataSet) -> Result<(
                     t.paragraphs.clear();
                     // The compositor draws a type layer from its cache: clearing it left the
                     // layer blank until some other edit re-rendered it (#990).
-                    crate::type_cmds::refresh(&snapshot, t);
+                    crate::type_cmds::try_refresh(&snapshot, t)?;
                 }
             }
             (VarKind::PixelReplacement { method, align, clip }, VarValue::Pixels(path)) => {
@@ -194,7 +195,7 @@ fn replace_pixels(doc: &mut Document, layer: LayerId, path: &str, method: PixelM
     let fmt = doc.pixel_format();
     let bytes = std::fs::read(path).map_err(|e| EngineError::Other(format!("read `{path}`: {e}")))?;
     let src = photocraft_io::import(path, &bytes).map_err(|e| EngineError::Other(format!("`{path}`: {e}")))?.document;
-    let img = crate::file_cmds::flattened(&src, fmt);
+    let img = crate::file_cmds::flattened(&src, fmt)?;
     let (iw, ih) = (src.size.width.max(1) as f64, src.size.height.max(1) as f64);
     let (tw, th) = (target.width() as f64, target.height() as f64);
     let (sx, sy) = match method {

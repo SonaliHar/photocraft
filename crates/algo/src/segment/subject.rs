@@ -34,12 +34,17 @@ const SIGMA_CLR: f32 = 10.0;
 const SIGMA_SPA: f32 = 0.25;
 
 /// Selects the most salient object on the canvas.
-pub fn select_subject(sampler: &dyn Sampler, canvas: Rect) -> Option<Region> {
+pub fn select_subject(sampler: &dyn Sampler, canvas: Rect) -> super::SamplingResult<Option<Region>> {
     if canvas.width() < 4 || canvas.height() < 4 {
-        return None;
+        return Ok(None);
     }
     let step = super::scale_for(canvas, WORK_PX);
-    let img = sampler.rgb_scaled(canvas, step);
+    let img = sampler.rgb_scaled(canvas, step)?;
+    super::check_image(
+        &img,
+        canvas.width() as usize / step + usize::from(!(canvas.width() as usize).is_multiple_of(step)),
+        canvas.height() as usize / step + usize::from(!(canvas.height() as usize).is_multiple_of(step)),
+    )?;
     let (w, h) = (img.w, img.h);
     let sal = saliency(&img);
     let t = otsu(&sal).clamp(0.15, 0.85);
@@ -60,13 +65,15 @@ pub fn select_subject(sampler: &dyn Sampler, canvas: Rect) -> Option<Region> {
         }
     }
     if !any_fg {
-        return None;
+        return Ok(None);
     }
-    let (fg, bg) = grabcut::grabcut(&img, &mut trimap, 6)?;
+    let Some((fg, bg)) = grabcut::grabcut(&img, &mut trimap, 6) else {
+        return Ok(None);
+    };
     let low: Vec<bool> = trimap.iter().map(|v| *v == PR_FG || *v == grabcut::FG).collect();
     let low = super::clean_mask(&low, w, h, 0.2, 0.05);
     if !low.iter().any(|v| *v) {
-        return None;
+        return Ok(None);
     }
     super::finish_region(sampler, canvas, step, &low, w, h, Some((&fg, &bg)))
 }

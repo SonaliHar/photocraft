@@ -42,7 +42,8 @@ fn layer_labels_psd_roundtrip_all_colors_and_depths() {
         let back = photocraft_io::import("labels.psd", &bytes).unwrap().document;
         let labels = |d: &Document| d.walk().into_iter().map(|(_, _, l)| (l.name.clone(), l.label)).collect::<Vec<_>>();
         assert_eq!(labels(&back), labels(&doc), "{depth:?}");
-        assert_eq!(back.depth, depth);
+        let expected_depth = if matches!(depth, SampleType::U32 | SampleType::F64) { SampleType::F32 } else { depth };
+        assert_eq!(back.depth, expected_depth);
     }
 }
 

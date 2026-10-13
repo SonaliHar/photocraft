@@ -415,15 +415,15 @@ pub(crate) fn prepare(s: &Session, id: &str, p: &Value) -> Value {
 }
 
 /// A flattened document (or one of its layers) as an RGBA map image.
-fn map_from_document(doc: &Document, layer: Option<u64>) -> Option<algo::Image> {
+fn map_from_document(doc: &Document, layer: Option<u64>) -> Result<Option<algo::Image>> {
     let buf = match layer.and_then(|l| doc.layer(photocraft_doc::LayerId(l))) {
-        Some(l) => photocraft_compose::render_layer(l, l.surface().map(|s| s.content_bounds()).filter(|r| !r.is_empty()).unwrap_or_else(|| doc.bounds())),
-        None => photocraft_compose::flatten(doc),
+        Some(l) => photocraft_compose::render_layer(l, l.surface().map(|s| s.content_bounds()).filter(|r| !r.is_empty()).unwrap_or_else(|| doc.bounds()))?,
+        None => photocraft_compose::flatten(doc)?,
     };
     if buf.rect.is_empty() {
-        return None;
+        return Ok(None);
     }
-    Some(algo::Image { rect: buf.rect, ch: 4, data: buf.px.iter().flatten().copied().collect() })
+    Ok(Some(algo::Image { rect: buf.rect, ch: 4, data: buf.px.iter().flatten().copied().collect() }))
 }
 
 /// Resolves inputs that live outside the target layer: Displace's map (`mapPath`, or
@@ -437,7 +437,7 @@ pub(crate) fn resolve(s: &Session, fp: &mut FilterParams, p: &Value) -> Result<(
     let img = if let Some(path) = p.get("mapPath").and_then(Value::as_str).filter(|p| !p.is_empty()) {
         let bytes = std::fs::read(path).map_err(|e| EngineError::Other(format!("cannot read displacement map `{path}`: {e}")))?;
         let imported = photocraft_io::import(path, &bytes).map_err(|e| EngineError::Other(format!("cannot open displacement map `{path}`: {e}")))?;
-        map_from_document(&imported.document, layer)
+        map_from_document(&imported.document, layer)?
     } else if let Some(d) = p.get("mapDocument") {
         let docs = s.documents();
         let found = match d {
@@ -445,7 +445,7 @@ pub(crate) fn resolve(s: &Session, fp: &mut FilterParams, p: &Value) -> Result<(
             other => other.as_u64().and_then(|k| docs.get(k as usize)),
         };
         let ds = found.ok_or_else(|| EngineError::Other("displacement map document not found".into()))?;
-        map_from_document(&ds.doc, layer)
+        map_from_document(&ds.doc, layer)?
     } else {
         return Err(EngineError::Other("Displace needs a displacement map: pass `mapPath` or `mapDocument`".into()));
     };

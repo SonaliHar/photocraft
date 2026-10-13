@@ -183,6 +183,97 @@ impl Pipeline {
         out[..self.outputs].copy_from_slice(&v[..self.outputs]);
     }
 
+    /// Checked wide evaluation. Matrix/TRC and analytic PCS stages never pass through f32.
+    /// Output is committed only after every stage succeeds and remains finite.
+    pub fn try_eval_f64(&self, input: &[f64], out: &mut [f64]) -> Result<(), crate::CmsError> {
+        use crate::CmsError;
+        let invalid = || CmsError::Invalid("invalid wide ICC pipeline dimensions or nonfinite samples".into());
+        if self.inputs == 0
+            || self.inputs > MAX
+            || self.outputs > MAX
+            || input.len() != self.inputs
+            || out.len() != self.outputs
+            || input.iter().any(|v| !v.is_finite())
+        {
+            return Err(invalid());
+        }
+        let mut v = [0.0_f64; MAX];
+        v.get_mut(..self.inputs).ok_or_else(invalid)?.copy_from_slice(input);
+        let mut n = self.inputs;
+        for stage in &self.stages {
+            match stage {
+                Stage::Curves(curves) | Stage::InvCurves(curves) => {
+                    if curves.len() != n {
+                        return Err(invalid());
+                    }
+                    for (sample, curve) in v.get_mut(..n).ok_or_else(invalid)?.iter_mut().zip(curves) {
+                        *sample = if matches!(stage, Stage::Curves(_)) { curve.eval64(*sample) } else { curve.eval_inverse64(*sample) };
+                    }
+                }
+                Stage::Matrix { rows, cols, m, offset } => {
+                    if *rows == 0 || *rows > MAX || *cols != n || m.len() != rows.checked_mul(*cols).ok_or_else(invalid)? || offset.len() != *rows {
+                        return Err(invalid());
+                    }
+                    let mut values = [0.0_f64; MAX];
+                    for (row, target) in values.get_mut(..*rows).ok_or_else(invalid)?.iter_mut().enumerate() {
+                        let mut value = *offset.get(row).ok_or_else(invalid)?;
+                        for (column, &sample) in v.get(..n).ok_or_else(invalid)?.iter().enumerate() {
+                            let i = row.checked_mul(*cols).and_then(|i| i.checked_add(column)).ok_or_else(invalid)?;
+                            value += *m.get(i).ok_or_else(invalid)? * sample;
+                        }
+                        *target = value;
+                    }
+                    v = values;
+                    n = *rows;
+                }
+                Stage::Clut(clut) => {
+                    if n != clut.inputs || clut.outputs > MAX {
+                        return Err(invalid());
+                    }
+                    let mut output = [0.0_f64; MAX];
+                    clut.try_eval_f64(v.get(..n).ok_or_else(invalid)?, output.get_mut(..clut.outputs).ok_or_else(invalid)?)?;
+                    v = output;
+                    n = clut.outputs;
+                }
+                Stage::Clamp01 => {
+                    for sample in v.get_mut(..n).ok_or_else(invalid)? {
+                        *sample = sample.clamp(0.0, 1.0);
+                    }
+                }
+                _ => {
+                    if n != 3 {
+                        return Err(invalid());
+                    }
+                    let first: [f64; 3] = v.get(..3).ok_or_else(invalid)?.try_into().map_err(|_| invalid())?;
+                    let [x, y, z] = first;
+                    let xyz_scale = 65535.0_f64 / 32768.0;
+                    let v2_l = 100.0_f64 * 65535.0 / 65280.0;
+                    let v2_ab = 255.0_f64 * 65535.0 / 65280.0;
+                    let result = match stage {
+                        Stage::LabToXyz => math::lab_to_xyz(first, math::D50),
+                        Stage::XyzToLab => math::xyz_to_lab([x.max(0.0), y.max(0.0), z.max(0.0)], math::D50),
+                        Stage::DecodeLabV4 => [x * 100.0, y * 255.0 - 128.0, z * 255.0 - 128.0],
+                        Stage::EncodeLabV4 => [(x / 100.0).clamp(0.0, 1.0), ((y + 128.0) / 255.0).clamp(0.0, 1.0), ((z + 128.0) / 255.0).clamp(0.0, 1.0)],
+                        Stage::DecodeLabV2 => [x * v2_l, y * v2_ab - 128.0, z * v2_ab - 128.0],
+                        Stage::EncodeLabV2 => [(x / v2_l).clamp(0.0, 1.0), ((y + 128.0) / v2_ab).clamp(0.0, 1.0), ((z + 128.0) / v2_ab).clamp(0.0, 1.0)],
+                        Stage::DecodeXyz => [x * xyz_scale, y * xyz_scale, z * xyz_scale],
+                        Stage::EncodeXyz => [(x / xyz_scale).clamp(0.0, 1.0), (y / xyz_scale).clamp(0.0, 1.0), (z / xyz_scale).clamp(0.0, 1.0)],
+                        _ => return Err(invalid()),
+                    };
+                    v.get_mut(..3).ok_or_else(invalid)?.copy_from_slice(&result);
+                }
+            }
+            if v.get(..n).ok_or_else(invalid)?.iter().any(|value| !value.is_finite()) {
+                return Err(invalid());
+            }
+        }
+        if n != self.outputs {
+            return Err(invalid());
+        }
+        out.copy_from_slice(v.get(..n).ok_or_else(invalid)?);
+        Ok(())
+    }
+
     /// Removes no-op stages and cancels adjacent inverse pairs (Lab↔XYZ, encode/decode).
     pub fn optimize(&mut self) {
         let mut out: Vec<Stage> = Vec::with_capacity(self.stages.len());

@@ -763,7 +763,20 @@ fn fs_lerp(in: VOut) -> @location(0) vec4<f32> {
     let a = textureLoad(tex_a, p, 0);
     let b = textureLoad(tex_b, p, 0);
     if ((op.flags & F_QUANT) != 0u) {
-        return floor(a * op.p0.x + 0.5) / op.p0.x;
+        let quantum = op.p0.x;
+        let numerator = floor(a * quantum + 0.5);
+        let quotient = numerator / quantum;
+        // GPU division may use an approximate reciprocal (even 255/255 can
+        // lose an ULP). Correct its residual without changing integer rounding
+        // or the quantum, matching the CPU's normalized integer samples.
+        let max_finite = bitcast<f32>(0x7f7fffffu);
+        // Residual arithmetic on exceptional values can turn an existing Inf
+        // into NaN. Preserve the original division for each such component.
+        if (!(abs(quantum) <= max_finite)) { return quotient; }
+        let corrected = quotient + fma(-quotient, vec4(quantum), numerator) / quantum;
+        let finite_numerator = abs(numerator) <= vec4(max_finite);
+        let finite_quotient = abs(quotient) <= vec4(max_finite);
+        return select(quotient, select(quotient, corrected, finite_numerator), finite_quotient);
     }
     if ((op.flags & F_CHANNELS) != 0u) {
         return a + (b - a) * op.p0;

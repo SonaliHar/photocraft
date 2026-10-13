@@ -27,7 +27,7 @@ fn authorized_control_opens_xcf_and_migrates_without_ambient_access() {
         automation_read: Some(Box::new(move |path| {
             if path == "renamed.psd" { Ok((path.to_owned(), bytes.clone())) } else { Err("outside granted read capability".into()) }
         })),
-        automation_write: Some(Box::new(move |path, bytes| {
+        automation_write: Some(Box::new(move |path, bytes, _protection| {
             writer.borrow_mut().push((path.to_owned(), bytes.to_vec()));
             Ok(())
         })),

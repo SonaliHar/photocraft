@@ -568,7 +568,7 @@ fn out_of_range_scatter_is_rejected_and_the_maximum_still_paints() {
             let (doc, revision) = (s.active().unwrap().doc.clone(), s.active().unwrap().revision);
             let err = paint_stroke(&mut s, &json!({"points": [[10, 10]], "brush": patch})).unwrap_err();
             assert!(matches!(err, EngineError::BadParams { .. }) && err.to_string().contains(shown), "{j}: {err}");
-            assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc) && s.active().unwrap().revision == revision);
+            assert!(doc.shares_state(&s.active().unwrap().doc) && s.active().unwrap().revision == revision);
         }
     }
     // The issue's repro, end to end: a stroke after the rejected update still paints normally.

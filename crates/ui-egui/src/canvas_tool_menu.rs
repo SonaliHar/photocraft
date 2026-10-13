@@ -238,13 +238,28 @@ fn spec_dialog(app: &mut PhotocraftApp, command: &str, label: &str, spec: &str, 
 }
 
 fn pen_dialog(app: &mut PhotocraftApp, command: &str, label: &str, name: &str) {
+    if command == "path.toSelection" {
+        crate::path_selection_dialog::open(app, &json!({"name":name}));
+        return;
+    }
+    if command == "path.transform" {
+        crate::path_transform_dialog::open(app, &json!({"name":name}));
+        return;
+    }
+    if command == "path.fill" {
+        crate::path_fill_dialog::open(app, &json!({"name":name}));
+        return;
+    }
+    if command == "path.clippingPath.set" {
+        crate::path_clipping_dialog::open(app, name);
+        return;
+    }
+    if command == "path.stroke" {
+        crate::path_stroke_dialog::open(app, &json!({"name":name}));
+        return;
+    }
     let spec = match command {
         "edit.defineCustomShape" => r##"{"name":text}"##,
-        "path.toSelection" => r##"{"feather":0..250=0,"antiAlias":bool=true,"mode":"replace|add|subtract|intersect"="replace"}"##,
-        "path.fill" => r##"{"color":text,"opacity":0..100=100,"feather":0..250=0,"antiAlias":bool=true}"##,
-        "path.stroke" => r##"{"tool":"brush|pencil|eraser"="brush","size":1..500=10,"color":text,"opacity":0..100=100}"##,
-        "path.clippingPath.set" => r##"{"flatness":0..100=0}"##,
-        "path.transform" => r##"{"translateX":-30000..30000=0,"translateY":-30000..30000=0,"scaleX":0.01..100=1,"scaleY":0.01..100=1,"angle":-360..360=0}"##,
         _ => "{}",
     };
     let mut fields = serde_json::Map::new();
@@ -253,16 +268,6 @@ fn pen_dialog(app: &mut PhotocraftApp, command: &str, label: &str, name: &str) {
         fields.insert("name".into(), json!(""));
     } else {
         fields.insert("name".into(), json!(name));
-    }
-    if matches!(command, "path.fill" | "path.stroke") {
-        let fg = app.session.tools.foreground;
-        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-        fields.insert("color".into(), json!(format!("#{:02x}{:02x}{:02x}", byte(fg[0]), byte(fg[1]), byte(fg[2]))));
-    }
-    if command == "path.transform" {
-        for (key, value) in [("translateX", 0.0), ("translateY", 0.0), ("scaleX", 1.0), ("scaleY", 1.0), ("angle", 0.0)] {
-            fields.insert(key.into(), json!(value));
-        }
     }
     spec_dialog(app, command, label, spec, fields);
 }

@@ -167,12 +167,30 @@ impl Path {
 }
 
 /// A document-level path (Paths panel entry).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct NamedPath {
+    pub id: crate::item_identity::PathId,
     pub name: String,
     pub path: Path,
     /// Original PSD path resource data; reused on export while it still decodes to `path`.
     pub psd_raw: Option<Arc<Vec<u8>>>,
+}
+
+impl NamedPath {
+    pub fn new(name: impl Into<String>, path: Path) -> Self {
+        Self { id: crate::item_identity::PathId::fresh(), name: name.into(), path, psd_raw: None }
+    }
+    /// A user-visible duplicate gets a new identity; ordinary Clone retains identity for history.
+    pub fn duplicate(&self) -> Self {
+        let mut copy = self.clone();
+        copy.id = crate::item_identity::PathId::fresh();
+        copy
+    }
+}
+impl Default for NamedPath {
+    fn default() -> Self {
+        Self::new(String::new(), Path::default())
+    }
 }
 
 /// The document's clipping path (PSD resource 2999): which saved path clips on export.

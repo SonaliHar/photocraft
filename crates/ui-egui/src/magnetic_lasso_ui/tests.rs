@@ -57,7 +57,7 @@ fn selected_area(app: &PhotocraftApp) -> f32 {
 }
 
 fn last_step(app: &PhotocraftApp) -> Option<String> {
-    app.session.active().unwrap().history.entries().last().cloned()
+    app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().to_vec().last().cloned()
 }
 
 /// Whether `p` lies on the square's outline (within `tol`).
@@ -186,7 +186,7 @@ fn agents_see_the_border_in_progress() {
     let ctx = egui::Context::default();
     click(&mut app, 52.0, 37.0, Modifiers::NONE);
     hover_along(&mut app, &[[52.0, 37.0], [133.0, 37.0]]);
-    let v = crate::control::inspect(&app, &ctx);
+    let v = crate::control::inspect(&app, &ctx).unwrap();
     let m = &v["magnetic"];
     assert_eq!(m["mode"], json!("replace"));
     assert_eq!(m["anchors"].as_array().map(Vec::len), Some(app.ui.magnetic.anchors.len()));

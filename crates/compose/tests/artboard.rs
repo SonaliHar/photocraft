@@ -30,7 +30,7 @@ fn contents_are_clipped_and_background_painted() {
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         for blend in [BlendMode::PassThrough, BlendMode::Normal] {
             let d = artboard_doc(depth, ArtboardBackground::White, blend);
-            let buf = render(&d, d.bounds());
+            let buf = render(&d, d.bounds()).unwrap();
             // Outside the board: nothing (the red layer is clipped away).
             assert!(close(buf.get(2, 2), [0.0; 4]), "{depth:?} {:?}", buf.get(2, 2));
             assert!(close(buf.get(35, 8), [0.0; 4]));
@@ -41,15 +41,15 @@ fn contents_are_clipped_and_background_painted() {
             assert!(close(buf.get(29, 14), [1.0, 1.0, 1.0, 1.0]));
             assert!(close(buf.get(30, 14), [0.0; 4]));
             // Tiled rendering agrees with one pass.
-            assert_eq!(render_tiled(&d, d.bounds(), 7).px, buf.px);
+            assert_eq!(render_tiled(&d, d.bounds(), 7).unwrap().px, buf.px);
         }
     }
 
     // Proxy pixel (x,y) samples (4*x,4*y); unaligned half-open artboard edges must agree.
     let original = artboard_doc(SampleType::F32, ArtboardBackground::White, BlendMode::PassThrough);
-    let source = render(&original, original.bounds());
-    let proxy = photocraft_compose::proxy::proxy_document(&original, 4);
-    let reduced = render(&proxy, proxy.bounds());
+    let source = render(&original, original.bounds()).unwrap();
+    let proxy = photocraft_compose::proxy::proxy_document(&original, 4).unwrap();
+    let reduced = render(&proxy, proxy.bounds()).unwrap();
     for y in 0..proxy.size.height as i32 {
         for x in 0..proxy.size.width as i32 {
             assert!(close(reduced.get(x, y), source.get(4 * x, 4 * y)), "proxy artboard differs at ({x}, {y})");
@@ -59,7 +59,7 @@ fn contents_are_clipped_and_background_painted() {
 
 #[test]
 fn background_kinds() {
-    let at = |bg| render(&artboard_doc(SampleType::U8, bg, BlendMode::PassThrough), Rect::from_xywh(20, 12, 1, 1)).px[0];
+    let at = |bg| render(&artboard_doc(SampleType::U8, bg, BlendMode::PassThrough), Rect::from_xywh(20, 12, 1, 1)).unwrap().px[0];
     assert!(close(at(ArtboardBackground::Black), [0.0, 0.0, 0.0, 1.0]));
     assert!(close(at(ArtboardBackground::Transparent), [0.0; 4]));
     assert!(close(at(ArtboardBackground::Custom(Color::rgb(0.0, 0.0, 1.0))), [0.0, 0.0, 1.0, 1.0]));
@@ -71,7 +71,7 @@ fn backdrop_outside_the_board_is_untouched() {
     let mut bg = Layer::raster("bg", d.pixel_format());
     bg.surface_mut().unwrap().fill_rect(d.bounds(), &[0.0, 1.0, 0.0, 1.0]);
     d.layers.insert(0, bg);
-    let buf = render(&d, d.bounds());
+    let buf = render(&d, d.bounds()).unwrap();
     assert!(close(buf.get(2, 2), [0.0, 1.0, 0.0, 1.0]));
     assert!(close(buf.get(15, 7), [1.0, 0.0, 0.0, 1.0]));
     assert!(close(buf.get(15, 12), [0.0, 1.0, 0.0, 1.0]));

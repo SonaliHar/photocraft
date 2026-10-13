@@ -14,6 +14,8 @@
 //! range (0–255 at 8 bits, 0–32768 at 16 bits, 0–1 at 32 bits), integrated density area × mean.
 //! Lengths and areas are scaled by the measurement scale.
 
+use crate::document_snapshot::DocumentSnapshot;
+use photocraft_raster::backing::ReadControl;
 use std::sync::Arc;
 
 use photocraft_color::{Color, SampleType};
@@ -151,7 +153,7 @@ fn xy(p: &Value) -> Option<[f64; 2]> {
     Some([p.get("x")?.as_f64()?, p.get("y")?.as_f64()?])
 }
 
-fn doc(s: &Session) -> Result<Arc<Document>> {
+fn doc(s: &Session) -> Result<DocumentSnapshot> {
     Ok(s.active().ok_or(EngineError::NoDocument)?.doc.clone())
 }
 
@@ -159,9 +161,10 @@ fn doc(s: &Session) -> Result<Arc<Document>> {
 /// with the document). A clean document stays clean.
 fn set_quiet(s: &mut Session, f: impl FnOnce(&mut Document)) -> Result<()> {
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
+    st.doc.validate_resident()?;
     let mut d = (*st.doc).clone();
     f(&mut d);
-    st.doc = Arc::new(d);
+    st.doc = DocumentSnapshot::from_resident(Arc::new(d))?;
     let clean = st.saved_revision == st.revision;
     st.revision += 1;
     if clean {
@@ -174,16 +177,18 @@ fn set_quiet(s: &mut Session, f: impl FnOnce(&mut Document)) -> Result<()> {
 /// Run several commands as one history step labelled `label`.
 fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Session) -> Result<R>) -> Result<R> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let (before, history, prior) = (st.doc.clone(), st.history.clone(), st.layer_target());
+    st.doc.validate_resident()?;
+    let (before, history, prior) = (st.doc.clone(), st.history.clone(), st.layer_target()?);
     let r = f(s);
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     st.history = history;
     match r {
         Ok(v) => {
             // As in `Session::edit`: undo targets what was selected just before the step (#1356).
-            st.history.set_current_layers(prior);
-            st.history.record(label, before, st.layer_target());
-            st.history.trim(&st.doc);
+            let control = ReadControl { interrupt: &photocraft_raster::Interrupt::NONE, work: &|_| Ok(()) };
+            st.history.set_current_layers(prior, &control)?;
+            st.history.record(label, before, st.layer_target()?, &control)?;
+            st.history.trim(&st.doc, &control)?;
             st.coalesce = None;
             Ok(v)
         }
@@ -528,9 +533,9 @@ fn selection_mask(d: &Document, r: Rect, n: usize) -> Vec<bool> {
     }
 }
 
-fn gray_image(d: &Document, r: Rect) -> Vec<f32> {
-    let buf = photocraft_compose::render(d, r);
-    buf.px.par_iter().map(|p| 0.30 * p[0] + 0.59 * p[1] + 0.11 * p[2]).collect()
+fn gray_image(d: &Document, r: Rect) -> Result<Vec<f32>> {
+    let buf = photocraft_compose::render(d, r)?;
+    Ok(buf.px.par_iter().map(|p| 0.30 * p[0] + 0.59 * p[1] + 0.11 * p[2]).collect())
 }
 
 fn selection_rows(d: &Document) -> Result<(Feature, Vec<Feature>)> {
@@ -554,7 +559,7 @@ fn selection_rows(d: &Document) -> Result<(Feature, Vec<Feature>)> {
     };
     let (w, h) = (r.width() as usize, r.height() as usize);
     let mask = selection_mask(d, r, n);
-    let gray = gray_image(d, r);
+    let gray = gray_image(d, r)?;
     let range = gray_range(d.depth);
     let feats = measure_features(&mask, &gray, w, h, (r.x0, r.y0), range);
     if feats.is_empty() {

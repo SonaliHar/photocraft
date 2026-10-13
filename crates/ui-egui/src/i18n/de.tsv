@@ -2287,3 +2287,109 @@ fontWeight	Italic	Kursiv
 	Rotate View Tool	Ansicht drehen-Werkzeug
 	Reset View	Ansicht zurücksetzen
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Ziehen Sie um die Mitte, um die Ansicht zu drehen  ·  Umschalt rastet auf 15° ein
+
+# XCF editable text and independently qualified GIMP filter controls.
+	Additional filters are available through command inspection	Weitere Filter sind über die Befehlsinspektion verfügbar
+	Alpha threshold	Alpha-Schwellenwert
+	An explicit resolution edit sets both axes.	Eine ausdrückliche Änderung der Auflösung legt beide Achsen fest.
+	Apply Text	Text anwenden
+	Blue frequency	Blaufrequenz
+	Blue phase shift	Blau-Phasenverschiebung
+	Blue weight	Blaugewichtung
+	CIE Lab	CIE Lab
+	CIE Yuv	CIE Yuv
+	Changing this imported GIMP mode is not supported yet.	Das Ändern dieses importierten GIMP-Modus wird noch nicht unterstützt.
+	Clip high	Obere Werte begrenzen
+	Clip low	Untere Werte begrenzen
+	Cyan / Red	Cyan / Rot
+	Decrease Levels	Stufen verringern
+	Desaturate mode	Entsättigungsmodus
+	Filter editing is unavailable	Filterbearbeitung ist nicht verfügbar
+	GIMP Filters	GIMP-Filter
+	GIMP Text	GIMP-Text
+	Green frequency	Grünfrequenz
+	Green phase shift	Grün-Phasenverschiebung
+	Green weight	Grüngewichtung
+	Histogram channel	Histogrammkanal
+	Hue frequency	Farbtonfrequenz
+	Hue phase shift	Farbton-Phasenverschiebung
+	Increase Levels	Stufen erhöhen
+	Intended temperature	Zieltemperatur
+	Keep blue	Blau beibehalten
+	Keep green	Grün beibehalten
+	Keep hue	Farbton beibehalten
+	Keep lightness	Helligkeit beibehalten
+	Keep red	Rot beibehalten
+	Keep saturation	Sättigung beibehalten
+	Layer content is locked	Ebeneninhalt ist gesperrt
+	Letter spacing	Zeichenabstand
+	Lightness frequency	Helligkeitsfrequenz
+	Lightness phase shift	Helligkeits-Phasenverschiebung
+	Line spacing	Zeilenabstand
+	Lower limit	Untere Grenze
+	Luma	Luma
+	Magenta / Green	Magenta / Grün
+	Move Down	Nach unten verschieben
+	Move Up	Nach oben verschieben
+	Native	Nativ
+	Original temperature	Ursprüngliche Temperatur
+	Preserve luminosity	Luminanz erhalten
+	Process in sRGB	In sRGB verarbeiten
+	Red frequency	Rotfrequenz
+	Red phase shift	Rot-Phasenverschiebung
+	Red weight	Rotgewichtung
+	Remove Filter	Filter entfernen
+	Reset Text	Text zurücksetzen
+	Saturation colorspace	Sättigungsfarbraum
+	Saturation frequency	Sättigungsfrequenz
+	Saturation phase shift	Sättigungs-Phasenverschiebung
+	Strength	Stärke
+	Text X	Text-X
+	Text Y	Text-Y
+	Text content	Textinhalt
+	Text editing is unavailable for this layer.	Textbearbeitung ist für diese Ebene nicht verfügbar.
+	Upper limit	Obere Grenze
+	Value	Wert
+	Yellow / Blue	Gelb / Blau
+	From color	Ausgangsfarbe
+	To color	Zielfarbe
+	Red threshold	Rot-Schwellenwert
+	Green threshold	Grün-Schwellenwert
+	Blue threshold	Blau-Schwellenwert
+	Underlined characters	Unterstrichene Zeichen
+	Start character	Startzeichen
+	End character (exclusive)	Endzeichen (ausschließlich)
+	Apply underline	Unterstreichung anwenden
+	Clear underline	Unterstreichung entfernen
+	Text content editing is unavailable for this layer.	Der Textinhalt dieser Ebene kann nicht bearbeitet werden.
+	Transparency threshold	Transparenzschwelle
+	Opacity threshold	Deckkraftschwelle
+	Component	Komponente
+	Y'CbCr Y'	Y'CbCr Y'
+	Y'CbCr Cb	Y'CbCr Cb
+	Y'CbCr Cr	Y'CbCr Cr
+
+	Destination start angle	Startwinkel des Ziels
+
+	Destination end angle	Endwinkel des Ziels
+	GIMP Linked Image	Verknüpftes GIMP-Bild
+	Original byte identity is unavailable. The selected PNG is a Reduced substitution (8 MiB limit).	Die Übereinstimmung mit den ursprünglichen Bytes ist nicht verfügbar. Das ausgewählte PNG ist ein Ersatz mit reduzierter Wiedergabetreue (Limit: 8 MiB).
+	Replace Linked Image (Reduced)…	Verknüpftes Bild ersetzen (reduzierte Wiedergabetreue)…
+	Resource picker unavailable.	Die Ressourcenauswahl ist nicht verfügbar.
+	The selected PNG must match the retained original byte identity (8 MiB limit). Exact recovery applies to this linked image only.	Die ausgewählte PNG-Datei muss mit der gespeicherten ursprünglichen Byte-Identität übereinstimmen (Limit: 8 MiB). Die exakte Wiederherstellung gilt nur für dieses verknüpfte Bild.
+	Recover Linked Image (Exact)…	Verknüpftes Bild wiederherstellen (exakt)…
+	Saved floating attachment	Gespeicherte schwebende Zuordnung
+	Attachment target	Zuordnungsziel
+	Detach the saved relationship without changing pixels.	Die gespeicherte Verknüpfung lösen, ohne Pixel zu ändern.
+	Detach Floating Layer	Schwebende Ebene lösen
+	Complete or cancel the pixel-move preview before detaching the saved relationship.	Schließen Sie die Pixelverschiebungsvorschau ab oder brechen Sie sie ab, bevor Sie die gespeicherte Verknüpfung lösen.
+	Saved named item sets	Gespeicherte benannte Elementsätze
+	Only sets containing this layer are shown; saved searches are not evaluated.	Nur Sätze mit dieser Ebene werden angezeigt; gespeicherte Suchen werden nicht ausgewertet.
+	Rename Saved Item Set…	Gespeicherten Elementsatz umbenennen…
+	Delete Saved Item Set	Gespeicherten Elementsatz löschen
+	Saved set name	Name des gespeicherten Satzes
+	Apply Saved Item Set Name	Namen des gespeicherten Elementsatzes anwenden
+	Enter a replacement name for this long saved name.	Geben Sie einen Ersatznamen für diesen langen gespeicherten Namen ein.
+	Only the first 64 matching sets are shown.	Nur die ersten 64 passenden Sätze werden angezeigt.
+	Complete or cancel the pixel-move preview before editing saved item sets.	Schließen Sie die Pixelverschiebungsvorschau ab oder brechen Sie sie ab, bevor Sie gespeicherte Elementsätze bearbeiten.
+	Remove this layer from set	Diese Ebene aus dem Satz entfernen

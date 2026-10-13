@@ -60,7 +60,7 @@ fn layer_color_context_menu_edits_the_clicked_layer_and_preserves_multi_selectio
         let at = h.get_by_label("Indigo").rect().center();
         click(&mut h, at, PointerButton::Primary, Modifiers::NONE);
         let st = h.state().session.active().unwrap();
-        assert_eq!(st.selected_layers().len(), 2);
+        assert_eq!(st.selection_ids().len(), 2);
         assert_eq!(st.doc.layer(red).unwrap().label, LabelColor::Indigo);
         assert_eq!(st.doc.layer(other).unwrap().label, LabelColor::Indigo);
         assert_eq!(common_color(h.state(), st.doc.layer(red).unwrap(), true), Some(LabelColor::Indigo));

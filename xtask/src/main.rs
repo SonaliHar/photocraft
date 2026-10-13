@@ -13,7 +13,11 @@ mod pinned;
 mod scorecard;
 mod sha256;
 mod stats;
+#[path = "../../crates/ui-egui/src/web_ui_assets/text_canonical.rs"]
+mod text_canonical;
 mod version;
+mod web_assets;
+mod xcf_inventory;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -36,6 +40,15 @@ commands:
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
   parity          Photoshop menu parity; rewrites docs/parity.md
   i18n-coverage   report stable UI translation coverage for registered languages
+  web-assets --prepare [--out PATH] [--check]
+                  prepare browser assets through exact locked Cargo font/cache discovery
+  web-assets --out PATH --font-crate PATH --font-archive PATH [--check]
+  web-assets --verify-package PATH
+                  build or verify pinned payload-only browser assets and nine exact licenses
+  xcf-inventory [--stage inventory|us1|us2|us4|us5|final] [--feature PATH] [--corpus PATH] [--artifacts-only]
+                  verify release-pinned complete XCF coverage and local evidence hashes
+  xcf-inventory --epoch-release EXACT_RELEASE_ID [--feature STAGED_PATH] [--corpus PATH]
+                  validate one complete release evidence proof; global qualification stays pending
   perf [--quick] [--update-baseline] [--threshold PCT] [--bench NAME]... [--skip-build] [--reuse]
                   run the release benches, merge them by scenario id into target/perf/results.json,
                   check perf/budgets.toml and perf/baseline.json (non-zero on a broken budget or regression)
@@ -59,6 +72,8 @@ fn main() -> ExitCode {
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
         Some("parity") => cmd_parity(),
         Some("i18n-coverage") => i18n_coverage::run(&root()),
+        Some("web-assets") => web_assets::run(&root(), &rest),
+        Some("xcf-inventory") => xcf_inventory::run(&root(), &rest),
         Some("perf") => perf::run(&root(), &rest),
         Some("scorecard") => scorecard::run(&root(), &rest),
         Some("version") => version::run(&root(), &rest),

@@ -68,7 +68,16 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut shown = Vec::new();
     for d in dialogs {
         let lang = if crate::prefs_ui::is_preferences(&d.fields) {
-            crate::i18n::Lang::from_pref(d.fields.get("values").and_then(|v| v.pointer("/interface/language")).and_then(Value::as_str).unwrap_or("auto"))
+            match crate::i18n::Lang::try_from_pref(
+                d.fields.get("values").and_then(|v| v.pointer("/interface/language")).and_then(Value::as_str).unwrap_or("auto"),
+            ) {
+                Ok(lang) => lang,
+                Err(error) => {
+                    app.ui.status = error.to_string();
+                    app.ui.status_error = true;
+                    continue;
+                }
+            }
         } else {
             crate::i18n::current()
         };
@@ -195,8 +204,27 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     if fields.get("__command").and_then(Value::as_str) == Some("edit.colorSettings") {
                         fields.insert("__note".into(), Value::String(crate::monitor_status::note(app)));
                     }
-                    crate::filter_dialog::body(ui, &mut fields)
+                    if crate::mode_conversion_dialog::owns(&fields) {
+                        crate::mode_conversion_dialog::body(ui, &mut fields)
+                    } else if crate::channel_create_dialog::owns(&fields) {
+                        crate::channel_create_dialog::body(ui, &mut fields)
+                    } else if crate::guide_dialog::owns(&fields) {
+                        crate::guide_dialog::body(ui, &mut fields)
+                    } else if crate::path_selection_dialog::owns(&fields) {
+                        crate::path_selection_dialog::body(ui, &mut fields)
+                    } else if crate::path_transform_dialog::owns(&fields) {
+                        crate::path_transform_dialog::body(ui, &mut fields)
+                    } else if crate::path_fill_dialog::owns(&fields) {
+                        crate::path_fill_dialog::body(ui, &mut fields)
+                    } else if crate::path_clipping_dialog::owns(&fields) {
+                        crate::path_clipping_dialog::body(ui, &mut fields)
+                    } else if crate::path_stroke_dialog::owns(&fields) {
+                        crate::path_stroke_dialog::body(ui, &mut fields)
+                    } else {
+                        crate::filter_dialog::body(ui, &mut fields)
+                    }
                 }
+                DialogKind::Command if crate::channel_action_dialog::owns(&fields) => crate::channel_action_dialog::body(ui, &mut fields),
                 DialogKind::Command if fields.contains_key("__form") => crate::view_cmds::form_body(ui, &mut fields),
                 DialogKind::Command => {}
                 DialogKind::LayerStyle => crate::layer_style::body(app, ui, &mut fields),
@@ -348,6 +376,19 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
         DialogKind::Command if crate::color_picker_ui::owns(&d.fields) => crate::color_picker_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::color_range_ui::owns(&d.fields) => crate::color_range_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::prefs_ui::owns(&d.fields) => crate::prefs_ui::confirm(app, &d.fields),
+        DialogKind::Command if crate::sizing::owns(&d.fields) => crate::sizing::confirm(app, id, &d.fields),
+        DialogKind::Command if crate::trim::owns(&d.fields) => crate::trim::confirm(app, id, &d.fields),
+        DialogKind::Command if crate::duplicate::owns(&d.fields) => crate::duplicate::confirm(app, id, &d.fields),
+        DialogKind::Command if crate::profile_dialog::owns(&d.fields) => crate::profile_dialog::confirm(app, id, &d.fields),
+        DialogKind::Command if crate::mode_conversion_dialog::owns(&d.fields) => crate::mode_conversion_dialog::confirm(app, id, &d.fields),
+        DialogKind::Command if crate::channel_action_dialog::owns(&d.fields) => crate::channel_action_dialog::confirm(app, id, &d.fields),
+        DialogKind::Command if crate::channel_create_dialog::owns(&d.fields) => crate::channel_create_dialog::confirm(app, id, &d.fields),
+        DialogKind::Command if crate::guide_dialog::owns(&d.fields) => crate::guide_dialog::confirm(app, id, &d.fields),
+        DialogKind::Command if crate::path_selection_dialog::owns(&d.fields) => crate::path_selection_dialog::confirm(app, id, &d.fields),
+        DialogKind::Command if crate::path_transform_dialog::owns(&d.fields) => crate::path_transform_dialog::confirm(app, id, &d.fields),
+        DialogKind::Command if crate::path_fill_dialog::owns(&d.fields) => crate::path_fill_dialog::confirm(app, id, &d.fields),
+        DialogKind::Command if crate::path_clipping_dialog::owns(&d.fields) => crate::path_clipping_dialog::confirm(app, id, &d.fields),
+        DialogKind::Command if crate::path_stroke_dialog::owns(&d.fields) => crate::path_stroke_dialog::confirm(app, id, &d.fields),
         DialogKind::Command if d.fields.contains_key("__export") => crate::export_dialog::confirm(app, &d.fields),
         DialogKind::Command => {
             app.filter_preview = None;

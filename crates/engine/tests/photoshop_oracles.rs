@@ -1,5 +1,5 @@
 //! Re-render oracle over the Photoshop corpus (`corpus/photoshop`): our own Photoshop-authored
-//! PSDs from https://github.com/storytold/photocraft-corpus, fetched at a pinned commit by
+//! PSDs from https://github.com/Terra854/photocraft-corpus, fetched at a pinned commit by
 //! `cargo xtask corpus --all`. Feature `corpus` (run with `cargo xtask test-corpus`); a missing
 //! corpus fails.
 //!
@@ -110,7 +110,7 @@ fn photoshop_oracles_rerendered() {
             }
         };
         let Ok(merged) = photocraft_io::merged_composite(&file) else { continue };
-        let ours = photocraft_compose::flatten(&doc).px;
+        let ours = photocraft_compose::flatten(&doc).unwrap().px;
         let (m, bad) = max_diff(&ours, &merged);
         let group = name.split(['/', '\\']).next().unwrap_or(".").to_string();
         let g = groups.entry(group).or_default();

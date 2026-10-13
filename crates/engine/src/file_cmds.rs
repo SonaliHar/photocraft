@@ -17,7 +17,7 @@ use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into};
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, layer_param};
+use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
 // ---------- predicates ----------
@@ -97,6 +97,44 @@ pub(crate) fn write_file(path: &str, _bytes: &[u8]) -> Result<()> {
     Err(EngineError::Other(format!("cannot write {path}: no file system on the web")))
 }
 
+/// Write encoded asset bytes while excluding the original document's sources.
+/// Runtime paths remain caller-granted; document metadata supplies fingerprints only.
+pub(crate) fn write_file_with_source(path: &str, bytes: &[u8], doc: &Document, source: Option<&crate::SourceIdentity>) -> Result<()> {
+    let fingerprints = photocraft_io::source_protection::document_fingerprints(doc).map_err(|error| EngineError::Other(error.to_string()))?;
+    write_file_with_exclusions(path, bytes, source, &fingerprints, &photocraft_raster::Interrupt::NONE)
+}
+
+fn write_file_with_exclusions(
+    path: &str,
+    bytes: &[u8],
+    source: Option<&crate::SourceIdentity>,
+    fingerprints: &[String],
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<()> {
+    validate_destination_with_fingerprints_and_interrupt(path, source, fingerprints, control)?;
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::io::Write;
+        photocraft_format::atomic::atomic_write_stream_guarded(
+            std::path::Path::new(path),
+            |file| file.write_all(bytes),
+            |target| {
+                control.check().map_err(|_| std::io::Error::other("cancelled"))?;
+                validate_destination_with_fingerprints_and_interrupt(path, source, fingerprints, control).map_err(|error| std::io::Error::other(error.to_string()))?;
+                let target = target.to_str().ok_or_else(|| std::io::Error::other("save target must be valid UTF-8"))?;
+                validate_destination_with_fingerprints_and_interrupt(target, source, fingerprints, control).map_err(|error| std::io::Error::other(error.to_string()))
+            },
+        )
+        .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { EngineError::Other(error.to_string()) })?;
+        Ok(())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = bytes;
+        Err(EngineError::Other(format!("cannot write {path}: no file system on the web")))
+    }
+}
 /// Files of a folder that look like images we can open, sorted by name.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn list_images(dir: &str) -> Result<Vec<String>> {
@@ -202,7 +240,22 @@ pub(crate) fn import_result(name: &str, bytes: &[u8]) -> Result<photocraft_io::I
 
 /// Validate before encoding, with only the ambient authority of this native engine route.
 pub(crate) fn validate_destination(path: &str, source: Option<&crate::SourceIdentity>) -> Result<()> {
-    if extension(path).as_deref() == Some("xcf") {
+    validate_destination_with_fingerprints(path, source, &[])
+}
+
+fn validate_destination_with_fingerprints(path: &str, source: Option<&crate::SourceIdentity>, fingerprints: &[String]) -> Result<()> {
+    validate_destination_with_fingerprints_and_interrupt(path, source, fingerprints, &photocraft_raster::Interrupt::NONE)
+}
+
+fn validate_destination_with_fingerprints_and_interrupt(
+    path: &str, source: Option<&crate::SourceIdentity>, fingerprints: &[String], control: &photocraft_raster::Interrupt<'_>,
+) -> Result<()> {
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    photocraft_io::source_protection::validate_fingerprints_with_interrupt(fingerprints, control)
+        .map_err(|error| if matches!(error, photocraft_io::source_protection::SourceProtectionError::Cancelled) {
+            EngineError::Cancelled
+        } else { EngineError::Other(error.to_string()) })?;
+    if photocraft_io::is_xcf_filename(path) {
         return Err(EngineError::Other("XCF is an import-only format; choose a writable destination such as .pcraft".into()));
     }
     if let Some(source) = source {
@@ -210,7 +263,6 @@ pub(crate) fn validate_destination(path: &str, source: Option<&crate::SourceIden
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        use std::io::Read;
         let target = std::path::Path::new(path);
         if let Some(original) = source.filter(|s| s.origin.is_read_only()).and_then(|s| s.path.as_deref())
             && target.exists()
@@ -226,27 +278,19 @@ pub(crate) fn validate_destination(path: &str, source: Option<&crate::SourceIden
         }
         match std::fs::File::open(target) {
             Ok(mut file) => {
-                let mut magic = [0u8; 9];
-                let mut read = 0;
-                while let Some(remaining) = magic.get_mut(read..) {
-                    if remaining.is_empty() {
-                        break;
-                    }
-                    let n = file.read(remaining).map_err(|e| EngineError::Other(format!("cannot inspect save destination: {e}")))?;
-                    if n == 0 {
-                        break;
-                    }
-                    read += n;
-                }
-                if &magic == b"gimp xcf " {
-                    return Err(EngineError::Other("the destination contains an XCF project and is protected".into()));
+                let metadata = file.metadata().map_err(|error| EngineError::Other(format!("cannot inspect save destination: {error}")))?;
+                if metadata.is_file() {
+                    photocraft_io::source_protection::check_reader_with_interrupt(&mut file, metadata.len(), fingerprints, control)
+                        .map_err(|error| if matches!(error, photocraft_io::source_protection::SourceProtectionError::Cancelled) {
+                            EngineError::Cancelled
+                        } else { EngineError::Other(error.to_string()) })?;
                 }
             }
             Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::IsADirectory) => {}
             Err(e) => return Err(EngineError::Other(format!("cannot validate save destination: {e}"))),
         }
     }
-    Ok(())
+    control.check().map_err(|_| EngineError::Cancelled)
 }
 
 /// What a headless save writes beyond the format: JPEG quality and TIFF layers.
@@ -278,6 +322,16 @@ impl From<Option<f64>> for SaveOpts {
 
 /// Encodes `doc` for `path`'s extension.
 pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> Result<(Vec<u8>, Vec<String>)> {
+    encode_with_interrupt(doc, path, save, &photocraft_raster::Interrupt::NONE)
+}
+/// Native memory output uses the same checked job ledger as native streamed saves.
+fn encode_with_interrupt(doc: &Document, path: &str, save: impl Into<SaveOpts>, control: &photocraft_raster::Interrupt<'_>) -> Result<(Vec<u8>, Vec<String>)> {
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    if path.rsplit('.').next().is_some_and(|extension| extension.eq_ignore_ascii_case(photocraft_format::EXTENSION)) {
+        return photocraft_io::save_native_bytes(doc, Default::default(), control).map(|(bytes, result)| (bytes, result.warnings)).map_err(|error| {
+            if matches!(error, photocraft_io::IoError::Cancelled) { EngineError::Cancelled } else { EngineError::Other(format!("{path}: {error}")) }
+        });
+    }
     let save = save.into();
     let mut opts = photocraft_io::ExportOptions { tiff_layers: save.tiff_layers, ..Default::default() };
     if let Some(q) = save.quality {
@@ -291,9 +345,90 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
 }
 
 pub(crate) fn save_doc(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> Result<Vec<String>> {
-    validate_destination(path, None)?;
+    save_doc_with_interrupt(doc, path, save, &photocraft_raster::Interrupt::NONE)
+}
+
+/// Stream native output using the caller's actual cancellation token.
+pub(crate) fn save_doc_with_interrupt(
+    doc: &Document,
+    path: &str,
+    save: impl Into<SaveOpts>,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<Vec<String>> {
+    save_doc_with_source_and_interrupt(doc, path, save, None, control)
+}
+
+pub(crate) fn save_doc_with_source(doc: &Document, path: &str, save: impl Into<SaveOpts>, source: Option<&crate::SourceIdentity>) -> Result<Vec<String>> {
+    match source {
+        None => save_doc(doc, path, save),
+        Some(source) => save_doc_with_source_and_interrupt(doc, path, save, Some(source), &photocraft_raster::Interrupt::NONE),
+    }
+}
+
+/// Preserve the captured runtime source through the final streamed commit.
+pub(crate) fn save_doc_with_source_and_interrupt(
+    doc: &Document,
+    path: &str,
+    save: impl Into<SaveOpts>,
+    source: Option<&crate::SourceIdentity>,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<Vec<String>> {
+    let fingerprints = photocraft_io::source_protection::document_fingerprints_with_interrupt(doc, control)
+        .map_err(|error| if matches!(error, photocraft_io::source_protection::SourceProtectionError::Cancelled) {
+            EngineError::Cancelled
+        } else { EngineError::Other(error.to_string()) })?;
+    save_doc_with_fingerprints(doc, path, save, source, &fingerprints, control)
+}
+
+/// Encode a derivative without grafting original editing state; retain both
+/// documents' inert destination exclusions through the final streamed commit.
+pub(crate) fn save_doc_with_protection_document(
+    doc: &Document,
+    path: &str,
+    save: impl Into<SaveOpts>,
+    original: &Document,
+    source: Option<&crate::SourceIdentity>,
+) -> Result<Vec<String>> {
+    let mut fingerprints = photocraft_io::source_protection::document_fingerprints(doc).map_err(|error| EngineError::Other(error.to_string()))?;
+    for fingerprint in photocraft_io::source_protection::document_fingerprints(original).map_err(|error| EngineError::Other(error.to_string()))? {
+        // Both collections already contain validated 64-digit hex fingerprints.
+        // Hex case equivalence preserves exact 256-bit identity.
+        if fingerprints.iter().any(|existing| existing.eq_ignore_ascii_case(&fingerprint)) {
+            continue;
+        }
+        fingerprints.try_reserve(1).map_err(|_| EngineError::Other("source protection fingerprint allocation denied".into()))?;
+        fingerprints.push(fingerprint);
+    }
+    photocraft_io::source_protection::validate_fingerprints(&fingerprints).map_err(|error| EngineError::Other(error.to_string()))?;
+    save_doc_with_fingerprints(doc, path, save, source, &fingerprints, &photocraft_raster::Interrupt::NONE)
+}
+
+fn save_doc_with_fingerprints(
+    doc: &Document,
+    path: &str,
+    save: impl Into<SaveOpts>,
+    source: Option<&crate::SourceIdentity>,
+    fingerprints: &[String],
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<Vec<String>> {
+    validate_destination_with_fingerprints_and_interrupt(path, source, fingerprints, control)?;
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    if extension(path).as_deref() == Some(photocraft_format::EXTENSION) {
+        let guard = |target: &std::path::Path| -> std::result::Result<(), photocraft_io::IoError> {
+            control.check().map_err(|_| photocraft_io::IoError::Cancelled)?;
+            let map = |error| if matches!(error, EngineError::Cancelled) { photocraft_io::IoError::Cancelled } else { photocraft_io::IoError::Unsupported(error.to_string()) };
+            validate_destination_with_fingerprints_and_interrupt(path, source, fingerprints, control).map_err(map)?;
+            let target = target.to_str().ok_or_else(|| photocraft_io::IoError::Unsupported("native save target must be valid UTF-8".into()))?;
+            validate_destination_with_fingerprints_and_interrupt(target, source, fingerprints, control).map_err(map)
+        };
+        return photocraft_io::save_native_path_guarded(doc, std::path::Path::new(path), Default::default(), control, &guard)
+            .map(|result| result.warnings)
+            .map_err(|e| if matches!(e, photocraft_io::IoError::Cancelled) { EngineError::Cancelled } else { EngineError::Other(format!("{path}: {e}")) });
+    }
     let (bytes, warnings) = encode(doc, path, save)?;
-    write_file(path, &bytes)?;
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    write_file_with_exclusions(path, &bytes, source, fingerprints, control)?;
     Ok(warnings)
 }
 
@@ -328,8 +463,8 @@ pub(crate) fn buffer_surface(buf: &photocraft_compose::Buffer, fmt: PixelFormat)
 }
 
 /// The flattened image of `doc` as a surface in `fmt`, placed at the origin.
-pub(crate) fn flattened(doc: &Document, fmt: PixelFormat) -> Surface {
-    photocraft_compose::flatten_to_surface(doc, fmt, None)
+pub(crate) fn flattened(doc: &Document, fmt: PixelFormat) -> Result<Surface> {
+    Ok(photocraft_compose::flatten_to_surface(doc, fmt, None)?)
 }
 
 // ---------- close / revert / save a copy / open as ----------
@@ -390,24 +525,55 @@ fn save_a_copy(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path", "file.saveACopy")?.to_string();
     let d = s.active().ok_or(EngineError::NoDocument)?;
     validate_destination(&path, d.source.as_ref())?;
+    if p.get("layers").and_then(Value::as_bool) != Some(false) {
+        let doc = d.doc.clone();
+        let source = d.source.clone();
+        let save = SaveOpts::from_params(p);
+        return crate::jobs::run(
+            s,
+            "Save a Copy",
+            true,
+            move |ctx| {
+                let warnings =
+                    ctx.stage(0.0, 1.0, "Saving document", |control| save_doc_with_source_and_interrupt(&doc, &path, save, source.as_ref(), control))?;
+                Ok((path, warnings))
+            },
+            |_, (path, warnings)| Ok(json!({"path": path, "warnings": warnings})),
+        );
+    }
+    d.doc.validate_resident()?;
     let mut doc = (*d.doc).clone();
     if p.get("layers").and_then(Value::as_bool) == Some(false) {
         // "Layers" unchecked in Save a Copy: write the flattened image.
         let fmt = doc.pixel_format();
-        let px = flattened(&doc, fmt);
+        let px = flattened(&doc, fmt)?;
         doc.layers = vec![Layer::new("Background", LayerContent::Raster(px))];
     }
-    let warnings = save_doc(&doc, &path, SaveOpts::from_params(p))?;
+    let warnings = save_doc_with_source(&doc, &path, SaveOpts::from_params(p), d.source.as_ref())?;
     Ok(json!({"path": path, "warnings": warnings}))
 }
 
 /// Open a file's bytes, decoding them as the format `as_ext` (Open As) when given.
 pub fn open_bytes_as(s: &mut Session, name: &str, bytes: &[u8], as_ext: Option<&str>, path: Option<String>) -> Result<Value> {
+    open_bytes_as_with(s, name, bytes, as_ext, path, &photocraft_raster::Interrupt::NONE)
+}
+
+/// Stage a cancellable byte import before installing its document in the session.
+pub fn open_bytes_as_with(
+    s: &mut Session,
+    name: &str,
+    bytes: &[u8],
+    as_ext: Option<&str>,
+    path: Option<String>,
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<Value> {
     let decode_name = match as_ext {
         Some(ext) => format!("{}.{}", stem(name), ext.trim_start_matches('.')),
         None => name.to_string(),
     };
-    let r = photocraft_io::import(&decode_name, bytes).map_err(|e| EngineError::Other(format!("{decode_name}: {e}")))?;
+    let r = photocraft_io::import_with(&decode_name, bytes, ctl)
+        .map_err(|e| if matches!(e, photocraft_io::IoError::Cancelled) { EngineError::Cancelled } else { EngineError::Other(format!("{decode_name}: {e}")) })?;
+    ctl.check().map_err(|_| EngineError::Cancelled)?;
     let mut doc = r.document;
     let path = match template_name(s, name) {
         Some(untitled) => {
@@ -420,7 +586,9 @@ pub fn open_bytes_as(s: &mut Session, name: &str, bytes: &[u8], as_ext: Option<&
         }
     };
     // Color Settings policies (preserve / convert / discard the embedded profile).
-    let (i, color) = s.open_document(doc, path.clone());
+    let color = s.color.open_policy(&mut doc);
+    ctl.check().map_err(|_| EngineError::Cancelled)?;
+    let i = s.add_document(doc, path.clone())?;
     if let Some(state) = s.active_mut() {
         state.set_import_origin(r.origin, name, path);
     }
@@ -775,14 +943,14 @@ pub(crate) fn process_files(inputs: &[String], output: &str, format: &str, save:
             }
             let source = crate::SourceIdentity::new(file_name(path), Some(path.clone()), imported.origin);
             warnings.extend(imported.warnings.into_iter().map(|warning| format!("{}: {warning}", file_name(path))));
-            scratch.add_document(imported.document, Some(path.clone()));
+            scratch.add_document(imported.document, Some(path.clone()))?;
             if let Some(state) = scratch.active_mut() {
                 state.set_import_origin(source.origin, &source.label, source.path.clone());
             }
             f(&mut scratch)?;
             let d = scratch.active().ok_or(EngineError::NoDocument)?;
             validate_destination(&out, Some(&source))?;
-            warnings.extend(save_doc(&d.doc, &out, save)?);
+            warnings.extend(save_doc_with_source(&d.doc, &out, save, Some(&source))?);
             Ok(())
         })();
         match r {
@@ -887,14 +1055,15 @@ fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value> {
     let w = docs.iter().map(|(_, d)| d.size.width).max().unwrap_or(1);
     let h = docs.iter().map(|(_, d)| d.size.height).max().unwrap_or(1);
     let mut stack = Document::new(stem(&paths[0]), photocraft_doc::Size::new(w, h), first.mode, first.depth);
-    stack.resolution_dpi = first.resolution_dpi;
+    stack.set_physical_resolution(first.effective_resolution()).map_err(|e| EngineError::Other(e.to_string()))?;
     stack.icc_profile = first.icc_profile.clone();
     stack.sample_encoding = first.sample_encoding;
+    stack.working_profile_interpretation = first.working_profile_interpretation.clone();
     stack.source_color_context = first.source_color_context.clone();
     let fmt = stack.pixel_format();
     // First file at the bottom, like Photoshop's script.
     for (name, d) in &docs {
-        stack.layers.push(Layer::new(name.clone(), LayerContent::Raster(flattened(d, fmt))));
+        stack.layers.push(Layer::new(name.clone(), LayerContent::Raster(flattened(d, fmt)?)));
     }
     let n = stack.layers.len();
     if p.get("createSmartObject").and_then(Value::as_bool).unwrap_or(false) {
@@ -905,7 +1074,7 @@ fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value> {
         let smart = crate::smart_cmds::layer_to_smart(&stack, &group)?;
         stack.layers = vec![smart];
     }
-    let i = s.add_document(stack, None);
+    let i = s.add_document(stack, None)?;
     Ok(json!({"document": i, "layers": n, "warnings": warnings}))
 }
 
@@ -916,7 +1085,7 @@ fn has_live_effects(l: &Layer) -> bool {
 }
 
 /// The layer rendered alone (keeping what `keep` says), as a surface in `fmt`.
-fn bake(l: &Layer, canvas: Rect, fmt: PixelFormat, keep_effects: bool) -> Surface {
+fn bake(l: &Layer, canvas: Rect, fmt: PixelFormat, keep_effects: bool) -> Result<Surface> {
     let mut tmp = l.clone();
     tmp.opacity = 1.0;
     tmp.blend = photocraft_color::BlendMode::Normal;
@@ -929,7 +1098,7 @@ fn bake(l: &Layer, canvas: Rect, fmt: PixelFormat, keep_effects: bool) -> Surfac
     // Render over the union of the canvas and the content so off-canvas pixels survive.
     let area = l.surface().map_or(canvas, |s| s.content_bounds().union(&canvas));
     let area = if keep_effects { area.inflate(256) } else { area };
-    buffer_surface(&photocraft_compose::render_layer(&tmp, area), fmt)
+    Ok(buffer_surface(&photocraft_compose::render_layer(&tmp, area)?, fmt))
 }
 
 fn walk_ids(doc: &Document) -> Vec<LayerId> {
@@ -946,7 +1115,7 @@ fn flatten_all_effects(s: &mut Session) -> Result<Value> {
             if !has_live_effects(l) || matches!(l.content, LayerContent::Group(_) | LayerContent::Adjustment(_)) {
                 continue;
             }
-            let px = bake(l, canvas, fmt, true);
+            let px = bake(l, canvas, fmt, true)?;
             let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
             l.content = LayerContent::Raster(px);
             l.effects = Default::default();
@@ -979,7 +1148,7 @@ fn flatten_all_masks(s: &mut Session) -> Result<Value> {
                 skipped += 1;
                 continue;
             }
-            let px = bake(l, canvas, fmt, false);
+            let px = bake(l, canvas, fmt, false)?;
             let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
             l.content = LayerContent::Raster(px);
             l.mask = None;
@@ -1016,7 +1185,7 @@ fn layers_to_files(s: &mut Session, p: &Value) -> Result<Value> {
         one.layers = vec![only];
         let path = join(&dir, &format!("{}_{:04}_{}.{format}", sanitize(&prefix), i, sanitize(&l.name)));
         validate_destination(&path, d.source.as_ref())?;
-        save_doc(&one, &path, SaveOpts::from_params(p))?;
+        save_doc_with_source(&one, &path, SaveOpts::from_params(p), d.source.as_ref())?;
         files.push(path);
     }
     Ok(json!({"files": files}))
@@ -1024,7 +1193,7 @@ fn layers_to_files(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// The document's visible top-level adjustment layers applied to an identity lattice, as a
 /// `.cube` 3D LUT (red fastest, values 0–1).
-pub fn bake_cube(doc: &Document, size: usize, title: &str) -> String {
+pub fn bake_cube(doc: &Document, size: usize, title: &str) -> Result<String> {
     let n = size.clamp(2, 256);
     let (w, h) = ((n * n) as u32, n as u32);
     let mut lattice = Document::new("lut", photocraft_doc::Size::new(w, h), ColorMode::Rgb, photocraft_color::SampleType::F32);
@@ -1051,7 +1220,7 @@ pub fn bake_cube(doc: &Document, size: usize, title: &str) -> String {
         a.clipped = false;
         lattice.layers.push(a);
     }
-    let out = photocraft_compose::flatten(&lattice);
+    let out = photocraft_compose::flatten(&lattice)?;
     let mut s = format!("TITLE \"{}\"\n# Created by Photocraft\nLUT_3D_SIZE {n}\nDOMAIN_MIN 0.0 0.0 0.0\nDOMAIN_MAX 1.0 1.0 1.0\n", title.replace('"', "'"));
     // .cube order: red changes fastest, then green, then blue.
     for b in 0..n {
@@ -1063,14 +1232,14 @@ pub fn bake_cube(doc: &Document, size: usize, title: &str) -> String {
             }
         }
     }
-    s
+    Ok(s)
 }
 
 fn color_lookup_tables(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let size = p.get("size").and_then(Value::as_u64).unwrap_or(33) as usize;
     let title = p.get("title").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
-    let cube = bake_cube(&d.doc, size, &title);
+    let cube = bake_cube(&d.doc, size, &title)?;
     match p.get("path").and_then(Value::as_str) {
         Some(path) => {
             write_file(path, cube.as_bytes())?;
@@ -1082,6 +1251,7 @@ fn color_lookup_tables(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------- guides ----------
 
+#[cfg(test)]
 fn push_unique(v: &mut Vec<f32>, x: f64) {
     let x = x as f32;
     if !v.iter().any(|g| (g - x).abs() < 0.01) {
@@ -1091,6 +1261,7 @@ fn push_unique(v: &mut Vec<f32>, x: f64) {
 
 /// Guide positions for `count` columns (or rows) across `[start, end]`, Photoshop-style: both
 /// edges of every column; a fixed `width` packs columns from `start` (or centres them).
+#[cfg(test)]
 fn layout_lines(start: f64, end: f64, count: u32, width: Option<f64>, gutter: f64, center: bool, out: &mut Vec<f32>) {
     let avail = (end - start).max(0.0);
     if count == 0 {
@@ -1107,97 +1278,28 @@ fn layout_lines(start: f64, end: f64, count: u32, width: Option<f64>, gutter: f6
     }
 }
 
+mod guide_layout_controlled;
+
+pub(crate) fn guide_layout_dispatch_preflight(s: &Session, p: &Value, shape: bool, background: bool) -> Result<()> {
+    guide_layout_controlled::dispatch_preflight(s, p, shape, background)
+}
+
 fn new_guide_layout(s: &mut Session, p: &Value) -> Result<Value> {
-    let d = s.active().ok_or(EngineError::NoDocument)?;
-    let (cw, ch) = (d.doc.size.width as f64, d.doc.size.height as f64);
-    let m = match p.get("margin") {
-        Some(Value::Array(a)) if a.len() == 4 => [0, 1, 2, 3].map(|i| a[i].as_f64().unwrap_or(0.0)),
-        Some(v) if v.is_number() => [v.as_f64().unwrap_or(0.0); 4],
-        _ => [0.0; 4],
-    };
-    let [top, left, bottom, right] = m;
-    let cols = p.get("columns").and_then(Value::as_u64).unwrap_or(0);
-    let rows = p.get("rows").and_then(Value::as_u64).unwrap_or(0);
-    // Each column/row costs a loop iteration plus a duplicate scan, so an
-    // absurd count from the caller would block the app for minutes (#704).
-    // Photoshop's own dialog caps at 32; 1000 is a generous ceiling that
-    // still finishes instantly.
-    const MAX_GUIDE_LINES: u64 = 1000;
-    for (n, what) in [(cols, "columns"), (rows, "rows")] {
-        if n > MAX_GUIDE_LINES {
-            return Err(EngineError::BadParams { cmd: "view.newGuideLayout".into(), msg: format!("{what} must be {MAX_GUIDE_LINES} or fewer (got {n})") });
-        }
-    }
-    let (cols, rows) = (cols as u32, rows as u32);
-    let mut v: Vec<f32> = Vec::new();
-    let mut h: Vec<f32> = Vec::new();
-    let has_margin = m.iter().any(|x| *x != 0.0);
-    if has_margin {
-        push_unique(&mut v, left);
-        push_unique(&mut v, cw - right);
-        push_unique(&mut h, top);
-        push_unique(&mut h, ch - bottom);
-    }
-    let center = p.get("centerColumns").and_then(Value::as_bool).unwrap_or(false);
-    layout_lines(left, cw - right, cols, size_param(p, "width"), f64_param(p, "gutter").unwrap_or(0.0), center, &mut v);
-    layout_lines(top, ch - bottom, rows, size_param(p, "height"), f64_param(p, "rowGutter").or_else(|| f64_param(p, "gutter")).unwrap_or(0.0), center, &mut h);
-    if v.is_empty() && h.is_empty() {
-        return Err(EngineError::BadParams { cmd: "view.newGuideLayout".into(), msg: "give \"columns\", \"rows\" or a \"margin\"".into() });
-    }
-    let clear = p.get("clearExisting").and_then(Value::as_bool).unwrap_or(false);
-    let (nv, nh) = (v.len(), h.len());
-    s.edit("New Guide Layout", |doc, _| {
-        if clear {
-            doc.guides.vertical.clear();
-            doc.guides.horizontal.clear();
-        }
-        for x in v {
-            push_unique(&mut doc.guides.vertical, x as f64);
-        }
-        for y in h {
-            push_unique(&mut doc.guides.horizontal, y as f64);
-        }
-        Ok(())
-    })?;
-    Ok(json!({"vertical": nv, "horizontal": nh}))
+    guide_layout_controlled::run(s, p, false)
 }
 
 fn guides_from_shape(s: &mut Session, p: &Value) -> Result<Value> {
-    let id = layer_param(s, p)?;
-    let d = s.active().ok_or(EngineError::NoDocument)?;
-    let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-    let LayerContent::Shape(sh) = &l.content else { return Err(EngineError::Other("the layer is not a shape layer".into())) };
-    let (x0, y0, x1, y1) = sh.path.control_bounds().ok_or(EngineError::Other("the shape has no path".into()))?;
-    s.edit("New Guides From Shape", |doc, _| {
-        for x in [x0, (x0 + x1) / 2.0, x1] {
-            push_unique(&mut doc.guides.vertical, x);
-        }
-        for y in [y0, (y0 + y1) / 2.0, y1] {
-            push_unique(&mut doc.guides.horizontal, y);
-        }
-        Ok(())
-    })?;
-    Ok(json!({"bounds": [x0, y0, x1, y1]}))
+    guide_layout_controlled::run(s, p, true)
 }
 
-fn clear_canvas_guides(s: &mut Session) -> Result<Value> {
-    let d = s.active().ok_or(EngineError::NoDocument)?;
-    // Guides inside an artboard belong to it (View › Clear Selected Artboard Guides); the rest
-    // are canvas guides. Without artboards every guide is a canvas guide.
-    let boards: Vec<Rect> = d.doc.artboards().iter().map(|b| b.2.rect).collect();
-    let in_x = move |x: f32| boards.iter().any(|r| f64::from(x) > f64::from(r.x0) && f64::from(x) < f64::from(r.x1));
-    let boards_y: Vec<Rect> = d.doc.artboards().iter().map(|b| b.2.rect).collect();
-    let in_y = move |y: f32| boards_y.iter().any(|r| f64::from(y) > f64::from(r.y0) && f64::from(y) < f64::from(r.y1));
-    let n = d.doc.guides.vertical.iter().filter(|x| !in_x(**x)).count() + d.doc.guides.horizontal.iter().filter(|y| !in_y(**y)).count();
-    if n == 0 {
-        return Ok(json!({"cleared": 0}));
-    }
-    s.edit("Clear Canvas Guides", |doc, _| {
-        doc.guides.vertical.retain(|x| in_x(*x));
-        doc.guides.horizontal.retain(|y| in_y(*y));
-        Ok(())
-    })?;
-    Ok(json!({"cleared": n}))
+mod guide_cleanup_controlled;
+
+pub(crate) fn guide_cleanup_dispatch_preflight(s: &Session, p: &Value, background: bool) -> Result<()> {
+    guide_cleanup_controlled::dispatch_preflight(s, p, background)
+}
+
+fn clear_canvas_guides(s: &mut Session, p: &Value) -> Result<Value> {
+    guide_cleanup_controlled::run(s, p)
 }
 
 // ---------- registry ----------
@@ -1337,15 +1439,47 @@ pub fn specs() -> Vec<CommandSpec> {
             "New Guide Layout…",
             &["View"],
             None,
-            r##"{"columns":n=0,"width":px?,"gutter":px=0,"rows":n=0,"height":px?,"rowGutter":px=gutter,"margin":px|[top,left,bottom,right]=0,"centerColumns":bool=false,"clearExisting":bool=false}"##,
+            r##"{"columns":n=0,"width":px?,"gutter":px=0,"rows":n=0,"height":px?,"rowGutter":px=gutter,"margin":px|[top,left,bottom,right]=0,"centerColumns":bool=false,"clearExisting":bool=false,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
             has_doc,
             new_guide_layout
         ),
-        spec!("view.newGuidesFromShape", "New Guides From Shape", &["View"], None, r##"{"layer":id?}"##, has_shape, guides_from_shape),
-        spec!("view.clearCanvasGuides", "Clear Canvas Guides", &["View"], None, "{}", has_doc, |s, _| clear_canvas_guides(s)),
+        spec!("view.newGuidesFromShape", "New Guides From Shape", &["View"], None, r##"{"layer":id?,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_shape, guides_from_shape),
+        spec!("view.clearCanvasGuides", "Clear Canvas Guides", &["View"], None, r##"{"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_doc, clear_canvas_guides),
     ]
 }
 
 #[cfg(test)]
 #[path = "file_cmds/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod physical_axes_tests {
+    use super::*;
+    #[test]
+    fn flattened_stack_preserves_custom_axes_from_native_source() {
+        let mut d = Document::new("axes", photocraft_doc::Size::new(2, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        let resolution = photocraft_doc::PhysicalResolution {
+            x_dpi: 144.0,
+            y_dpi: 288.0,
+            unit: photocraft_doc::PhysicalUnit::Custom(photocraft_doc::CustomUnit {
+                name: "Own unit".into(),
+                factor: 2.5,
+                digits: 3,
+                symbol: "u".into(),
+                abbreviation: "ou".into(),
+            }),
+        };
+        d.set_physical_resolution(resolution.clone()).unwrap();
+        d.layers.push(Layer::raster("solid", d.pixel_format()));
+        let bytes = photocraft_format::save_to_bytes(&d, &Default::default()).unwrap();
+        let path = std::env::temp_dir().join(format!("photocraft-physical-stack-{}.pcraft", std::process::id()));
+        std::fs::write(&path, bytes).unwrap();
+        let mut s = Session::new();
+        let result = load_files_into_stack(&mut s, &json!({"paths":[path.to_string_lossy()]}));
+        let _ = std::fs::remove_file(&path);
+        result.unwrap();
+        assert_eq!(s.active().unwrap().doc.effective_resolution(), resolution);
+        let saved = photocraft_format::save_to_bytes(&s.active().unwrap().doc, &Default::default()).unwrap();
+        assert_eq!(photocraft_format::load_from_bytes(&saved).unwrap().effective_resolution(), resolution);
+    }
+}

@@ -14,7 +14,7 @@ use photocraft_text::render::PathEl;
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, layer_param};
-use crate::type_cmds::{is_auto_named, layer_name, refresh, replace_text, style_paragraphs, style_range};
+use crate::type_cmds::{is_auto_named, layer_name, replace_text, style_paragraphs, style_range, try_refresh};
 use crate::{EngineError, Result, Session};
 
 /// Photoshop's Paste Lorem Ipsum filler.
@@ -75,7 +75,7 @@ fn with_text<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&mut Tex
             return Err(EngineError::Other(format!("layer {} is {} {} layer, not a type layer", id.0, l.content.article(), l.content.kind_name())));
         };
         let r = f(t, &snapshot)?;
-        refresh(&snapshot, t);
+        try_refresh(&snapshot, t)?;
         let name = auto_named.then(|| layer_name(&t.text));
         if let Some(n) = name {
             l.name = n;
@@ -84,8 +84,34 @@ fn with_text<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&mut Tex
     })
 }
 
-fn layout(doc: &Document, t: &TextLayer) -> photocraft_text::TextLayout {
-    photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner()).layout(t, doc.resolution_dpi)
+fn physical_axes(doc: &Document) -> Result<[f64; 2]> {
+    let legacy = photocraft_doc::PhysicalResolution::square(f64::from(doc.resolution_dpi));
+    let r = doc.physical_resolution.as_ref().unwrap_or(&legacy);
+    r.validate().map_err(|e| EngineError::Other(e.to_string()))?;
+    Ok([r.x_dpi, r.y_dpi])
+}
+fn points_to_axis_pixels(points: f32, dpi: f64) -> Result<f32> {
+    let pixels = f64::from(points) * dpi / 72.0;
+    if !pixels.is_finite() || pixels.abs() > f64::from(f32::MAX) {
+        return Err(EngineError::Other("physical type dimensions exceed checked layout bounds".into()));
+    }
+    Ok(pixels as f32)
+}
+
+pub(crate) fn scalar_layout_dpi(doc: &Document) -> Result<f32> {
+    let [x, y] = physical_axes(doc)?;
+    if x != y {
+        return Err(EngineError::Other("unequal-axis physical type layout is unsupported until checked anisotropic font geometry is available".into()));
+    }
+    let dpi = x as f32;
+    if !dpi.is_finite() || dpi <= 0.0 {
+        return Err(EngineError::Other("physical type resolution exceeds checked layout bounds".into()));
+    }
+    Ok(dpi)
+}
+fn layout(doc: &Document, t: &TextLayer) -> Result<photocraft_text::TextLayout> {
+    let resolution = crate::type_cmds::checked_layout_resolution(doc)?;
+    crate::type_cmds::text_engine()?.lock().unwrap_or_else(|e| e.into_inner()).layout_with_resolution(t, &resolution).map_err(|error| EngineError::Other(error.to_string()))
 }
 
 /// `m ∘ translate(tx, ty)`.
@@ -139,11 +165,15 @@ fn set_orientation(s: &mut Session, p: &Value, o: Orientation) -> Result<Value> 
 // ---------- point ⇄ paragraph ----------
 
 fn to_paragraph(s: &mut Session, p: &Value) -> Result<Value> {
+    crate::type_cmds::checked_layout_resolution(&s.active().ok_or(EngineError::NoDocument)?.doc)?;
     let r = with_text(s, p, "Convert to Paragraph Text", |t, doc| {
-        let l = layout(doc, t);
-        let size_px = t.char_runs().iter().map(|r| r.style.size_pt).fold(t.size_pt, f32::max) * doc.resolution_dpi / 72.0;
+        let l = layout(doc, t)?;
+        let [x_dpi, y_dpi] = physical_axes(doc)?;
+        // Font cross-axis size and paragraph along-axis indents are physical points.
+        let (cross_dpi, along_dpi) = if l.vertical { (x_dpi, y_dpi) } else { (y_dpi, x_dpi) };
+        let size_px = points_to_axis_pixels(t.char_runs().iter().map(|r| r.style.size_pt).fold(t.size_pt, f32::max), cross_dpi)?;
         let ps = t.paragraph_runs().first().map(|p| p.style.clone()).unwrap_or_default();
-        let indents = (ps.start_indent_pt + ps.end_indent_pt).max(0.0) * doc.resolution_dpi / 72.0;
+        let indents = points_to_axis_pixels((ps.start_indent_pt + ps.end_indent_pt).max(0.0), along_dpi)?;
         if l.vertical {
             // Line space: u along the columns, v across them (first column centred on v = 0).
             let [u0, v0, u1, v1] = l.line_bounds().unwrap_or([0.0, -size_px / 2.0, size_px, size_px / 2.0]);
@@ -173,7 +203,7 @@ fn to_paragraph(s: &mut Session, p: &Value) -> Result<Value> {
         probe.shape = TextShape::Box { x, y: y0, width, height };
         // Box text puts the first baseline at the box top plus the ascender height: measure it and
         // shift the box so that baseline stays at the point-text anchor (y = 0).
-        let b0 = layout(doc, &probe).lines.first().map_or(0.0, |ln| ln.baseline);
+        let b0 = layout(doc, &probe)?.lines.first().map_or(0.0, |ln| ln.baseline);
         let y = y0 - b0;
         t.shape = TextShape::Box { x: 0.0, y: 0.0, width, height };
         t.transform = then_translate(&t.transform, f64::from(x), f64::from(y));
@@ -183,9 +213,10 @@ fn to_paragraph(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn to_point(s: &mut Session, p: &Value) -> Result<Value> {
+    crate::type_cmds::checked_layout_resolution(&s.active().ok_or(EngineError::NoDocument)?.doc)?;
     let r = with_text(s, p, "Convert to Point Text", |t, doc| {
         let TextShape::Box { x, y, width, height } = t.shape else { return Err(EngineError::Other("already point text".into())) };
-        let l = layout(doc, t);
+        let l = layout(doc, t)?;
         // Vertical type: columns run along the box height.
         let (x, width) = if l.vertical { (y, height) } else { (x, width) };
         let baseline = l.lines.first().map_or(0.0, |ln| ln.baseline);
@@ -274,8 +305,8 @@ fn contours(els: &[PathEl]) -> Vec<Vec<Knot>> {
 /// The type layer's glyph outlines as a document-space path. Within each glyph, contours wound
 /// like its largest contour combine and the others (counters such as the hole in "o") subtract,
 /// which reproduces the nonzero fill under Photoshop's per-subpath path operations.
-pub fn text_path(doc: &Document, t: &TextLayer) -> Path {
-    let l = layout(doc, t);
+pub fn text_path(doc: &Document, t: &TextLayer) -> Result<Path> {
+    let l = layout(doc, t)?;
     let warp = photocraft_text::render::layout_warp(&l, t.warp.as_ref());
     let mut subpaths = Vec::new();
     for glyph in photocraft_text::render::outlines(&l, &t.transform, warp.as_ref()) {
@@ -285,14 +316,14 @@ pub fn text_path(doc: &Document, t: &TextLayer) -> Path {
         subpaths.extend(fills.into_iter().map(|knots| Subpath { closed: true, knots, op: PathOp::Combine }));
         subpaths.extend(holes.into_iter().map(|knots| Subpath { closed: true, knots, op: PathOp::Subtract }));
     }
-    Path::new(subpaths)
+    Ok(Path::new(subpaths))
 }
 
 fn create_work_path(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let Some(LayerContent::Text(t)) = d.doc.layer(id).map(|l| &l.content) else { return Err(EngineError::Other("not a type layer".into())) };
-    let path = text_path(&d.doc, t);
+    let path = text_path(&d.doc, t)?;
     let n = path.subpaths.len();
     s.edit("Create Work Path", |doc, _| {
         doc.work_path = Some(path);
@@ -302,13 +333,14 @@ fn create_work_path(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn convert_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
+    crate::type_cmds::checked_layout_resolution(&s.active().ok_or(EngineError::NoDocument)?.doc)?;
     let id = layer_param(s, p)?;
     let n = s.edit("Convert to Shape", |doc, _| {
         let snapshot = doc.clone();
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         let LayerContent::Text(t) = &l.content else { return Err(EngineError::Other("not a type layer".into())) };
         let color = t.char_runs().first().map_or(t.color, |r| r.style.color);
-        let mut sh = ShapeLayer { path: text_path(&snapshot, t), fill: Some(Fill::Solid(color)), ..Default::default() };
+        let mut sh = ShapeLayer { path: text_path(&snapshot, t)?, fill: Some(Fill::Solid(color)), ..Default::default() };
         crate::vector_cmds::refresh_shape(&snapshot, &mut sh);
         let n = sh.path.subpaths.len();
         l.content = LayerContent::Shape(sh);
@@ -393,7 +425,8 @@ fn paste_lorem(s: &mut Session, p: &Value) -> Result<Value> {
     // No type layer active: a paragraph text box over most of the canvas.
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (w, h) = (d.doc.size.width as f64, d.doc.size.height as f64);
-    let size = p.get("size").and_then(Value::as_f64).unwrap_or((h / 20.0 * 72.0 / f64::from(d.doc.resolution_dpi)).clamp(6.0, 72.0));
+    let [_, y_dpi] = physical_axes(&d.doc)?;
+    let size = p.get("size").and_then(Value::as_f64).unwrap_or((h / 20.0 * 72.0 / y_dpi).clamp(6.0, 72.0));
     let r = s.execute("type.create", json!({"box": [w * 0.1, h * 0.1, w * 0.8, h * 0.8], "text": LOREM_IPSUM, "size": size}))?;
     Ok(json!({"layer": r["layer"]}))
 }
@@ -405,7 +438,7 @@ fn update_all(s: &mut Session) -> Result<Value> {
         let ids: Vec<LayerId> = snapshot.walk().into_iter().filter(|(_, _, l)| matches!(l.content, LayerContent::Text(_))).map(|(_, _, l)| l.id).collect();
         for id in ids {
             if let Some(Layer { content: LayerContent::Text(t), .. }) = doc.layer_mut(id) {
-                refresh(&snapshot, t);
+                try_refresh(&snapshot, t)?;
                 n += 1;
             }
         }
@@ -414,13 +447,31 @@ fn update_all(s: &mut Session) -> Result<Value> {
     Ok(json!({"updated": n}))
 }
 
-fn installed_families() -> Vec<String> {
-    photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner()).fonts.families().into_iter().map(|f| f.to_lowercase()).collect()
+fn installed_families() -> Result<Vec<String>> {
+    Ok(crate::type_cmds::text_engine()?.lock().unwrap_or_else(|e| e.into_inner()).fonts.families().into_iter().map(|f| f.to_lowercase()).collect())
 }
 
 /// Font families used by type layers that the font database cannot supply.
+pub fn try_missing_fonts(doc: &Document) -> Result<Vec<String>> {
+    let have = installed_families()?;
+    let mut out: Vec<String> = Vec::new();
+    for (_, _, l) in doc.walk() {
+        if let LayerContent::Text(t) = &l.content {
+            for r in t.char_runs() {
+                let f = r.style.font_family;
+                if !f.is_empty() && !have.contains(&f.to_lowercase()) && !out.contains(&f) {
+                    out.push(f);
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Replace missing families per `map` (missing → installed; unmapped ones → the default family).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn missing_fonts(doc: &Document) -> Vec<String> {
-    let have = installed_families();
+    let have = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner()).fonts.families().into_iter().map(|f| f.to_lowercase()).collect::<Vec<_>>();
     let mut out: Vec<String> = Vec::new();
     for (_, _, l) in doc.walk() {
         if let LayerContent::Text(t) = &l.content {
@@ -438,7 +489,7 @@ pub fn missing_fonts(doc: &Document) -> Vec<String> {
 /// Replace missing families per `map` (missing → installed; unmapped ones → the default family).
 fn replace_fonts(s: &mut Session, map: &serde_json::Map<String, Value>, all: bool) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let missing = missing_fonts(&d.doc);
+    let missing = try_missing_fonts(&d.doc)?;
     let pick = |f: &str| -> Option<String> {
         if !missing.iter().any(|m| m == f) {
             return None;
@@ -468,7 +519,7 @@ fn replace_fonts(s: &mut Session, map: &serde_json::Map<String, Value>, all: boo
                     at += r.len;
                 }
                 if changed {
-                    refresh(&snapshot, t);
+                    try_refresh(&snapshot, t)?;
                     n += 1;
                 }
             }
@@ -481,7 +532,7 @@ fn replace_fonts(s: &mut Session, map: &serde_json::Map<String, Value>, all: boo
 fn resolve_missing(s: &mut Session, p: &Value) -> Result<Value> {
     match p.get("map").and_then(Value::as_object) {
         Some(m) => replace_fonts(s, &m.clone(), false),
-        None => Ok(json!({"missing": missing_fonts(&s.active().ok_or(EngineError::NoDocument)?.doc)})),
+        None => Ok(json!({"missing": try_missing_fonts(&s.active().ok_or(EngineError::NoDocument)?.doc)?})),
     }
 }
 
@@ -585,3 +636,104 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "type_extra_cmds/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod physical_axes_tests {
+    use super::*;
+    #[test]
+    fn physical_point_sizes_use_requested_axis_without_scalar_precedence() {
+        let mut d = Document::new("axes", photocraft_doc::Size::new(1, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        d.set_physical_resolution(photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: 288.0, unit: photocraft_doc::PhysicalUnit::Inch }).unwrap();
+        d.resolution_dpi = 999.0;
+        let [x, y] = physical_axes(&d).unwrap();
+        assert_eq!(points_to_axis_pixels(12.0, x).unwrap(), 24.0);
+        assert_eq!(points_to_axis_pixels(12.0, y).unwrap(), 48.0);
+        assert!(points_to_axis_pixels(f32::MAX, f64::MAX).is_err());
+        d.physical_resolution.as_mut().unwrap().y_dpi = f64::NAN;
+        assert!(physical_axes(&d).is_err());
+    }
+    #[test]
+    fn unequal_axes_type_geometry_commands_fail_before_history_or_source_changes() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":32,"height":24})).unwrap();
+        s.execute("type.create", json!({"text":"Own","size":12})).unwrap();
+        s.active_mut()
+            .unwrap()
+            .doc
+            .try_resident_mut()
+            .unwrap()
+            .set_physical_resolution(photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: 288.0, unit: photocraft_doc::PhysicalUnit::Inch })
+            .unwrap();
+        for cmd in ["type.convertToParagraphText", "type.createWorkPath", "type.convertToShape"] {
+            let before = s.active().unwrap().doc.clone();
+            let revision = s.active().unwrap().revision;
+            let history = s.active().unwrap().history.past_len();
+            let error = s.execute(cmd, json!({})).unwrap_err().to_string();
+            assert!(error.contains("unequal-axis"), "{cmd}: {error}");
+            assert_eq!(s.active().unwrap().doc, before);
+            assert_eq!(s.active().unwrap().revision, revision);
+            assert_eq!(s.active().unwrap().history.past_len(), history);
+        }
+    }
+    #[test]
+    fn unequal_axes_paragraph_to_point_is_atomic() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":32,"height":24})).unwrap();
+        s.execute("type.create", json!({"text":"Own","size":12,"box":[0,0,24,20]})).unwrap();
+        s.active_mut()
+            .unwrap()
+            .doc
+            .try_resident_mut()
+            .unwrap()
+            .set_physical_resolution(photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: 288.0, unit: photocraft_doc::PhysicalUnit::Inch })
+            .unwrap();
+        let before = s.active().unwrap().doc.clone();
+        let revision = s.active().unwrap().revision;
+        let history = s.active().unwrap().history.past_len();
+        assert!(s.execute("type.convertToPointText", json!({})).unwrap_err().to_string().contains("unequal-axis"));
+        assert_eq!(s.active().unwrap().doc, before);
+        assert_eq!(s.active().unwrap().revision, revision);
+        assert_eq!(s.active().unwrap().history.past_len(), history);
+    }
+}
+
+#[cfg(test)]
+mod physical_resolution_borrow_tests {
+    use super::*;
+    fn unit() -> photocraft_doc::PhysicalUnit {
+        photocraft_doc::PhysicalUnit::Custom(photocraft_doc::CustomUnit {
+            name: "Own".into(),
+            factor: 7.25,
+            digits: 4,
+            symbol: "u".into(),
+            abbreviation: "own".into(),
+        })
+    }
+    fn resolution(x: f64, y: f64) -> photocraft_doc::PhysicalResolution {
+        photocraft_doc::PhysicalResolution { x_dpi: x, y_dpi: y, unit: unit() }
+    }
+
+    #[test]
+    fn checked_scalar_dpi_custom_legacy_and_range_controls() {
+        let mut d = Document::new("borrow", photocraft_doc::Size::new(100, 60), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        d.resolution_dpi = 300.0;
+        d.physical_resolution = Some(resolution(144.0, 144.0));
+        let before = d.clone();
+        assert_eq!(scalar_layout_dpi(&d).unwrap(), 144.0);
+        assert_eq!(d, before);
+        d.physical_resolution = Some(resolution(144.0, 288.0));
+        assert!(scalar_layout_dpi(&d).unwrap_err().to_string().contains("unequal-axis"));
+        for dpi in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::MIN_POSITIVE, f64::MAX] {
+            d.physical_resolution = Some(resolution(dpi, dpi));
+            assert!(scalar_layout_dpi(&d).is_err());
+        }
+        let mut r = resolution(144.0, 144.0);
+        if let photocraft_doc::PhysicalUnit::Custom(u) = &mut r.unit {
+            u.name = "x".repeat((1 << 20) + 1);
+        }
+        d.physical_resolution = Some(r);
+        assert!(scalar_layout_dpi(&d).is_err());
+        d.physical_resolution = None;
+        assert_eq!(scalar_layout_dpi(&d).unwrap(), 300.0);
+    }
+}

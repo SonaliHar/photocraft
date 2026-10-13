@@ -24,8 +24,8 @@ fn clip_mask(rect: Rect) -> LayerMask {
     let mut mask = LayerMask::hide_all();
     let (w, h) = (rect.width() as usize, rect.height() as usize);
     if w > 0 && h > 0 {
-        mask.surface.write_region(rect, &vec![1.0f32; w * h]);
-        mask.surface.prune();
+        std::sync::Arc::make_mut(&mut mask.surface).write_region(rect, &vec![1.0f32; w * h]);
+        std::sync::Arc::make_mut(&mut mask.surface).prune();
     }
     // Default to GRAY8 like the other mask constructors.
     debug_assert_eq!(mask.surface.format(), PixelFormat::GRAY8);
@@ -44,7 +44,7 @@ fn frame_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(r) => {
             // Fold the grouping step into the frame step.
             if let Some(st) = s.active_mut() {
-                st.history.purge_last();
+                st.history.purge_last(&crate::read_control_none())?;
             }
             Ok(r)
         }
@@ -52,7 +52,7 @@ fn frame_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
             // The group couldn't be framed: take the grouping back, leaving nothing to redo.
             s.undo();
             if let Some(st) = s.active_mut() {
-                st.history.clear_redo();
+                st.history.clear_redo(&crate::read_control_none())?;
             }
             Err(e)
         }
@@ -128,14 +128,14 @@ mod tests {
         assert!(matches!(g.content, LayerContent::Group(_)), "it's a group");
         assert!(g.mask.is_some(), "the group has a clip mask");
         // Undoable (last step is the frame).
-        assert_eq!(st.history.entries().last().map(|e| e.as_str()), Some("Frame from Layers"));
+        assert_eq!(st.history.entries(&crate::read_control_none()).unwrap().values().to_vec().last().map(|e| e.as_str()), Some("Frame from Layers"));
     }
 
     #[test]
     fn frame_from_layers_is_one_history_step() {
         // #496: grouping and framing undo together.
         let (mut s, a, b) = session();
-        let entries = s.active().unwrap().history.entries();
+        let entries = s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec();
         let layers = |s: &Session| s.active().unwrap().doc.layers.iter().map(|l| l.id).collect::<Vec<_>>();
         let before = layers(&s);
         s.execute("layer.select", json!({"layer": a.0, "mode": "replace"})).unwrap();
@@ -143,9 +143,9 @@ mod tests {
         let gid = LayerId(s.execute("layer.new.frameFromLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
         let mut framed = entries.clone();
         framed.push("Frame from Layers".into());
-        assert_eq!(s.active().unwrap().history.entries(), framed);
+        assert_eq!(s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec(), framed);
         assert!(s.undo());
-        assert_eq!(s.active().unwrap().history.entries(), entries);
+        assert_eq!(s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec(), entries);
         assert_eq!(layers(&s), before, "one undo leaves no group behind");
         assert!(s.redo());
         assert!(s.active().unwrap().doc.layer(gid).is_some_and(|g| g.mask.is_some()), "redo brings back the framed group");

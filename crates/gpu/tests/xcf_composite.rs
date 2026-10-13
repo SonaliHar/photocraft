@@ -34,5 +34,5 @@ fn hardware_compositor_returns_fallback_before_imported_render() {
     d.layers.push(layer);
     assert!(compositor.supports(&d).unwrap_err().0.contains("CPU compositor"));
     assert!(photocraft_gpu::render_to_vec(&mut compositor, &device, &queue, &d, d.bounds()).unwrap_err().0.contains("CPU compositor"));
-    assert_eq!(photocraft_compose::render(&d, d.bounds()).px[0], [0.25, 0.5, 0.75, 1.0]);
+    assert_eq!(photocraft_compose::render(&d, d.bounds()).unwrap().px[0], [0.25, 0.5, 0.75, 1.0]);
 }

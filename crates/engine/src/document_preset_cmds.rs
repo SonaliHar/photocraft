@@ -334,7 +334,7 @@ mod tests {
     #[test]
     fn old_preferences_and_malformed_presets_keep_unrelated_settings() {
         let mut original = Session::new();
-        original.edit_prefs(|p| p.general.beep_when_done = true);
+        original.edit_prefs(|p| p.general.beep_when_done = true).unwrap();
         original.presets.tool_presets[0].name = "Unrelated tool preset".into();
         let valid = saved(&mut original, "Keep me", settings());
         for invalid in [json!("bad collection"), json!([false, {}, {"name":"broken","settings":{}}])] {

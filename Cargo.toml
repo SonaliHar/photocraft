@@ -1,7 +1,12 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
+exclude = ["vendor/xcf-bzip2", "vendor/xcf-xz", "vendor/xcf-gzip", "vendor/ruzstd"]
 default-members = ["crates/*", "apps/photocraft", "apps/photocraft-cli", "xtask"]
+
+[patch.crates-io]
+# Bound regenerated blocks before growth; safe initialized ring storage.
+ruzstd = { path = "vendor/ruzstd" }
 
 [workspace.package]
 version = "0.5.0"
@@ -32,9 +37,14 @@ photocraft-format = { path = "crates/format" }
 photocraft-automation = { path = "crates/automation" }
 photocraft-plugins = { path = "crates/plugins" }
 photocraft-engine = { path = "crates/engine" }
-photocraft-ui-egui = { path = "crates/ui-egui" }
+photocraft-ui-egui = { path = "crates/ui-egui", default-features = false }
 photocraft-testkit = { path = "crates/testkit" }
 photocraft-tablet = { path = "crates/tablet" }
+
+# Audited isolated compression dependencies; their raw inherited APIs are private.
+xcf-bzip2 = { path = "vendor/xcf-bzip2" }
+xcf-xz = { path = "vendor/xcf-xz", default-features = false, features = ["std", "xz"] }
+xcf-gzip = { path = "vendor/xcf-gzip" }
 
 # external
 thiserror = "2"
@@ -46,7 +56,7 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 image = { version = "0.25", default-features = false }
 proptest = "1"
 eframe = { version = "0.36", default-features = false }
-egui = "0.36"
+egui = { version = "0.36", default-features = false }
 egui_kittest = "0.36"
 rfd = "0.17"
 log = "0.4"

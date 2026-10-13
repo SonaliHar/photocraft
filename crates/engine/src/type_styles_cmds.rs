@@ -17,7 +17,7 @@ use photocraft_doc::{Document, LayerContent, LayerId, TextLayer, TextStyles};
 use serde_json::{Map, Value, json};
 
 use crate::commands::CommandSpec;
-use crate::type_cmds::{apply_char_props, apply_para_props, refresh};
+use crate::type_cmds::{apply_char_props, apply_para_props, try_refresh};
 use crate::{EngineError, Result, Session};
 
 const FAMILY: &str = photocraft_text::fonts::DEFAULT_FAMILY;
@@ -49,7 +49,7 @@ fn targets(s: &Session, p: &Value) -> Vec<LayerId> {
     } else if let Some(a) = p.get("layers").and_then(Value::as_array) {
         a.iter().filter_map(Value::as_u64).map(LayerId).collect()
     } else {
-        st.selected_layers()
+        st.selection_ids().iter().copied().filter(|id| text_of(&st.doc, *id).is_some()).collect()
     };
     ids.into_iter().filter(|id| text_of(&st.doc, *id).is_some()).collect()
 }
@@ -298,7 +298,7 @@ fn commit(s: &mut Session, label: &str, new: TextStyles, target: &[Target], op: 
                 None => restyle(t, &old, &new, Some((0, 0)), Op::default()),
             };
             if did {
-                refresh(&snapshot, t);
+                try_refresh(&snapshot, t)?;
                 changed += 1;
             }
         }
@@ -534,7 +534,7 @@ fn delete(s: &mut Session, p: &Value, paragraph: bool) -> Result<Value> {
                 }
             }
             if hit {
-                refresh(&snapshot, t);
+                try_refresh(&snapshot, t)?;
                 n += 1;
             }
         }

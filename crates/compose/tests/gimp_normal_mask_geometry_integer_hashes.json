@@ -1,0 +1,24 @@
+{
+  "left-top": {
+    "batch-manifest.json": "b3326de39604b4421d7d59fadd02201ad6dca04d5b9a04848ef8953eebeceb87",
+    "observations.json": "b55d75f1fe4b8fe47ff7eef87e2806bbf4d4c27401c392411f16297d29673884",
+    "fresh/observations.json": "9bf146e6f367c829fa8f57368a971c2a6130cdb27498ef29d177744005101124",
+    "faithful-observations.json": "7d7bb8726116dc12d24292860edd977194d19c4c15fa6ea72cc7f93f3fbd6691",
+    "faithful-fresh/faithful-observations.json": "e6f3547d741baf6e012ba0b0c5a1d0b288cf5aa2c682b5928203146bdb329e6d",
+    "VERIFICATION.json": "e7df4976635c3d5e18b5e9b4fc5b4e6baeb8b9ee52ab257bc198ede9b9b1881b",
+    "assignment-controls.json": "590ae38d79c2f4a8b1a7c59d265c0153ea167d14b63ff4d71e0c4d964626bcd9",
+    "own-rgb-parametric-trc.icc": "d4ddff2458010156aebea135bf7cb68b5f1b65a418f116f4783cf62287036feb",
+    "own-gray-parametric-trc.icc": "78efd53a209447804e9dad749bb56be82c10fbe17345b1f82cc272ef48473aaf"
+  },
+  "right-bottom": {
+    "batch-manifest.json": "4869d6a7bef292b690c41962eb9e6e0d8d2e3f18e7640f25683eed2538a8673a",
+    "observations.json": "1044b554b418b68f213e7c04ba055896255a937c55fd01fbcc114922ed039d4f",
+    "fresh/observations.json": "8bfb678c58827f4334f4d6965ccd803d980a2cf585aa6dcf873f0074c624f944",
+    "faithful-observations.json": "b0aeb8087e277b8fd86f20f6e7fa4ea3008ff82a73e0239aa886dfc39a52d3f4",
+    "faithful-fresh/faithful-observations.json": "000e9c289022932c30a00589c303ee6a28ea2fa208f6c3dd2b6b0f3cb5a6eac2",
+    "VERIFICATION.json": "8d4158da1a1325d208e10fa4ef122c503808fdd4508d02852961a15c557666b7",
+    "assignment-controls.json": "ef114548d940391959170869e79e98dbea559764a148a40f2fa9c3e000fc01a5",
+    "own-rgb-parametric-trc.icc": "d4ddff2458010156aebea135bf7cb68b5f1b65a418f116f4783cf62287036feb",
+    "own-gray-parametric-trc.icc": "78efd53a209447804e9dad749bb56be82c10fbe17345b1f82cc272ef48473aaf"
+  }
+}

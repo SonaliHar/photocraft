@@ -60,13 +60,13 @@ mod tests {
         b.write_region(Rect::new(0, 0, 4, 1), &[0.0, 0.0, 1.0, 1.0]);
         doc.channels.push(AlphaChannel { spot: Some((Color::rgb(0.0, 1.0, 1.0), 0.0)), ..AlphaChannel::new("Cyan", a) });
         doc.channels.push(AlphaChannel { spot: Some((Color::rgb(1.0, 0.0, 1.0), 0.0)), ..AlphaChannel::new("Magenta", b) });
-        let r = crate::flatten(&doc);
+        let r = crate::flatten(&doc).unwrap();
         assert_eq!(r.px[0], [1.0, 1.0, 1.0, 1.0]);
         assert_eq!(r.px[1], [0.0, 1.0, 1.0, 1.0]);
         assert_eq!(r.px[2], [0.0, 0.0, 1.0, 1.0]);
         assert_eq!(r.px[3], [1.0, 0.0, 1.0, 1.0]);
         // Alpha channels and other modes are not inks.
         doc.mode = ColorMode::Rgb;
-        assert_eq!(crate::flatten(&doc).px[1][3], 0.0);
+        assert_eq!(crate::flatten(&doc).unwrap().px[1][3], 0.0);
     }
 }

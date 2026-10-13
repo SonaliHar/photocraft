@@ -9,7 +9,7 @@
 //! what the Free Transform warp UI uses) or the active smart object's stored warp (a history step).
 
 use photocraft_algo::transform::{Homography, Interp};
-use photocraft_algo::warp::{warp_mesh_gray, warp_mesh_surface};
+use photocraft_algo::warp::try_warp_mesh_gray;
 use photocraft_doc::{Document, Layer, LayerContent, LayerId, Locks, Rect};
 use photocraft_geom::warp::{BezierMesh, Warp, WarpStyle};
 use photocraft_raster::Surface;
@@ -143,18 +143,18 @@ fn warp_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut Layer, w: &Warp, 
             sm.warp = src_warp.filter(|w| !w.is_identity());
             // Fallback appearance for sources that can't be re-rendered.
             if let Some(c) = &mut sm.cache {
-                *c = warp_mesh_surface(c, rect, &map, interp);
+                *c = photocraft_algo::warp::try_warp_mesh_surface(c, rect, &map, interp).map_err(|e| EngineError::Other(e.to_string()))?;
             }
             if let Some(m) = &mut sm.filter_mask {
-                m.surface = warp_mesh_gray(&m.surface, &map, interp);
+                m.surface = std::sync::Arc::new(try_warp_mesh_gray(&m.surface, &map, interp).map_err(|e| crate::EngineError::Other(e.to_string()))?);
             }
         }
         _ => {
             if let Some(surf) = l.surface_mut() {
                 *surf = match doc_sel {
                     Some(sel) => {
-                        let (lifted, mut rest) = crate::transform_cmds::split_selected(surf, sel);
-                        let moved = warp_mesh_surface(&lifted, rect, &map, interp);
+                        let (lifted, mut rest) = crate::transform_cmds::try_split_selected(surf, sel)?;
+                        let moved = photocraft_algo::warp::try_warp_mesh_surface(&lifted, rect, &map, interp).map_err(|e| EngineError::Other(e.to_string()))?;
                         crate::transform_cmds::composite_over(&mut rest, &moved);
                         rest.prune();
                         rest
@@ -162,9 +162,11 @@ fn warp_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut Layer, w: &Warp, 
                     None => {
                         // Content outside the warp box stays where it is.
                         let fmt = surf.format();
-                        let warped = warp_mesh_surface(surf, rect, &map, interp);
-                        let mut rest = surf.convert(photocraft_color::PixelFormat::new(fmt.mode, fmt.sample, true));
-                        crate::pixels::clear_surface(&mut rest, rect, None);
+                        let warped = photocraft_algo::warp::try_warp_mesh_surface(surf, rect, &map, interp).map_err(|e| EngineError::Other(e.to_string()))?;
+                        let mut rest = surf
+                            .try_convert(photocraft_color::PixelFormat::new(fmt.mode, fmt.sample, true))
+                            .map_err(|e| crate::EngineError::Other(format!("pixel conversion: {e}")))?;
+                        crate::pixels::try_clear_surface(&mut rest, rect, None, &photocraft_raster::Interrupt::NONE)?;
                         crate::transform_cmds::composite_over(&mut rest, &warped);
                         rest.prune();
                         rest
@@ -176,7 +178,36 @@ fn warp_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut Layer, w: &Warp, 
     if let Some(m) = l.mask.as_mut()
         && m.linked
     {
-        m.surface = warp_mesh_gray(&m.surface, &map, interp);
+        m.surface = std::sync::Arc::new(try_warp_mesh_gray(&m.surface, &map, interp).map_err(|e| crate::EngineError::Other(e.to_string()))?);
+    }
+    Ok(())
+}
+
+/// Mesh sampling and subsequent composite_over are currently f32 kernels.
+/// Refuse authoritative wide participants before Background conversion or edit.
+fn preflight_warp_samples(layer: &Layer) -> Result<()> {
+    let wide = |surface: &Surface| matches!(surface.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64);
+    let mut frames: [Option<std::slice::Iter<'_, Layer>>; photocraft_doc::MAX_GROUP_DEPTH + 1] = std::array::from_fn(|_| None);
+    *frames.first_mut().ok_or_else(|| EngineError::Other("warp layer depth limit".into()))? = Some(std::slice::from_ref(layer).iter());
+    let mut depth = 0usize;
+    let mut visits = 0usize;
+    loop {
+        let next = frames.get_mut(depth).and_then(Option::as_mut).and_then(Iterator::next);
+        let Some(layer) = next else {
+            if depth == 0 { break; }
+            depth = depth.checked_sub(1).ok_or_else(|| EngineError::Other("warp layer depth limit".into()))?;
+            continue;
+        };
+        visits = visits.checked_add(1).filter(|count| *count <= 10_000).ok_or_else(|| EngineError::Other("warp layer visit limit".into()))?;
+        if layer.surface().is_some_and(wide) || layer.mask.as_ref().is_some_and(|mask| mask.linked && wide(&mask.surface))
+            || matches!(&layer.content, LayerContent::Smart(smart) if smart.filter_mask.as_ref().is_some_and(|mask|wide(&mask.surface)))
+        {
+            return Err(EngineError::Other("warp interpolation/composition for authoritative U32/F64 samples is unsupported".into()));
+        }
+        if let LayerContent::Group(group) = &layer.content {
+            depth = depth.checked_add(1).filter(|depth| *depth <= photocraft_doc::MAX_GROUP_DEPTH).ok_or_else(|| EngineError::Other("warp layer depth limit".into()))?;
+            *frames.get_mut(depth).ok_or_else(|| EngineError::Other("warp layer depth limit".into()))? = Some(group.children.iter());
+        }
     }
     Ok(())
 }
@@ -215,19 +246,25 @@ fn apply(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     if w.is_identity() && !is_smart {
         return Ok(json!({"layer": id.0, "changed": false}));
     }
+    let state = s.active().ok_or(EngineError::NoDocument)?;
+    preflight_warp_samples(state.doc.layer(id).ok_or(EngineError::NoLayer(id))?)?;
+    if state.doc.selection.as_ref().is_some_and(|selection| matches!(selection.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64)) {
+        return Err(EngineError::Other("warp interpolation of an authoritative U32/F64 selection is unsupported".into()));
+    }
     let interp = Interp::parse(p.get("interpolation").and_then(Value::as_str).unwrap_or("bicubic"));
     s.edit("Warp", |doc, _| {
         let sel = doc.selection.clone();
         let is_group = doc.layer(id).is_some_and(Layer::is_group);
-        let group = crate::transform_cmds::group_locks(doc, id);
+        let group = crate::transform_cmds::group_locks(doc, id)?;
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         warp_layer(if is_group { None } else { sel.as_ref() }, group, l, &w, rect, interp)?;
         let snapshot = doc.clone();
         if let Some(l) = doc.layer_mut(id) {
-            crate::transform_cmds::refresh_text(&snapshot, l);
+            crate::transform_cmds::refresh_text(&snapshot, l)?;
         }
         if let Some(sel) = &doc.selection {
-            doc.selection = Some(warp_mesh_gray(sel, &|x, y| w.map(x, y), Interp::Bilinear)).filter(|s| !s.content_bounds().is_empty());
+            doc.selection = Some(try_warp_mesh_gray(sel, &|x, y| w.map(x, y), Interp::Bilinear).map_err(|e| crate::EngineError::Other(e.to_string()))?)
+                .filter(|s| !s.content_bounds().is_empty());
         }
         Ok(())
     })?;

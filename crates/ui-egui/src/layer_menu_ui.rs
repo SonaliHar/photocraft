@@ -132,7 +132,7 @@ fn common_color(app: &crate::PhotocraftApp, l: &Layer, on_set: bool) -> Option<L
         return Some(l.label);
     }
     let st = app.session.active()?;
-    let ids = st.selected_layers();
+    let ids = st.selection_ids();
     let mut labels = ids.iter().filter_map(|id| st.doc.layer(*id).map(|l| l.label));
     let first = labels.next()?;
     labels.all(|c| c == first).then_some(first)

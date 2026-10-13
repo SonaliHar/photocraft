@@ -15,7 +15,7 @@ fn bad(message: impl Into<String>) -> EngineError {
 
 fn enabled(s: &Session) -> std::result::Result<(), String> {
     let st = s.active().ok_or("no document open")?;
-    if st.selected_layers().is_empty() { Err("no layer selected".into()) } else { Ok(()) }
+    if st.selection_ids().is_empty() { Err("no layer selected".into()) } else { Ok(()) }
 }
 
 fn set_label(s: &mut Session, p: &Value) -> Result<Value> {
@@ -27,7 +27,7 @@ fn set_label(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let roots = match p.get("layer") {
         Some(v) => vec![LayerId(v.as_u64().ok_or_else(|| bad("`layer` must be an unsigned integer"))?)],
-        None => st.selected_layers(),
+        None => st.selected_layers()?,
     };
     if roots.is_empty() {
         return Err(bad("no layer selected"));

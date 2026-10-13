@@ -185,13 +185,15 @@ fn pattern_texture(ctx: &egui::Context, pat: &photocraft_doc::Pattern) -> Textur
     })
 }
 
-pub(crate) fn style_texture(app: &PhotocraftApp, ctx: &egui::Context, st: &photocraft_engine::presets::styles::StylePreset) -> TextureHandle {
+pub(crate) fn style_texture(app: &PhotocraftApp, ctx: &egui::Context, st: &photocraft_engine::presets::styles::StylePreset) -> Result<TextureHandle, String> {
     let key = ("style", st.name.clone(), st.effects.len(), format!("{:?}{:?}", st.blend, st.fill_opacity));
-    cached_texture(ctx, key, || {
-        const S: u32 = 64;
-        let px = photocraft_engine::presets::styles::thumbnail(&app.session, st, S);
-        ColorImage::from_rgba_unmultiplied([S as usize, S as usize], &px)
-    })
+    let id = egui::Id::new(("preset-tex", &key));
+    if let Some(texture) = ctx.data(|data| data.get_temp::<TextureHandle>(id)) {
+        return Ok(texture);
+    }
+    const S: u32 = 64;
+    let px = photocraft_engine::presets::styles::thumbnail(&app.session, st, S).map_err(|error| error.to_string())?;
+    Ok(cached_texture(ctx, key, || ColorImage::from_rgba_unmultiplied([S as usize, S as usize], &px)))
 }
 
 fn shape_texture(ctx: &egui::Context, sh: &photocraft_engine::presets::shapes::ShapePreset) -> TextureHandle {
@@ -641,7 +643,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let ctx = ui.ctx().clone();
     let t = Tokens::get(&ctx);
-    let mut texes: Vec<Vec<TextureHandle>> = Vec::new();
+    let mut texes: Vec<Vec<Result<TextureHandle, String>>> = Vec::new();
     for g in &src {
         texes.push(g.items.iter().map(|s| style_texture(app, &ctx, s)).collect());
     }
@@ -653,7 +655,14 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         Place { canvas, max_h: 300.0, new_tip: tl!("Create new style from the selected layer") },
         &mut |ui, r, gi, ii| {
             ui.painter().rect_filled(r, 2.0, t.field);
-            ui.painter().image(texes[gi][ii].id(), r, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+            match &texes[gi][ii] {
+                Ok(texture) => {
+                    ui.painter().image(texture.id(), r, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+                }
+                Err(error) => {
+                    ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, error, egui::FontId::proportional(10.0), t.text_dim);
+                }
+            }
         },
     );
     app.ui.presets_ui = st;

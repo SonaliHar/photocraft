@@ -87,6 +87,9 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     let contents = contents(p)?;
     let mode = mode(p)?;
     let opacity = opacity(p)?;
+    if let Some((id, format)) = crate::paint_cmds::wide_target(s, p)? {
+        return wide_fill(s, p, contents, mode, id, format);
+    }
     let preserve = flag(p, "preserveTransparency", false)?;
     let channel = crate::channel_cmds::is_channel_target(p);
     let id = if channel { None } else { Some(layer_param(s, p)?) };
@@ -120,9 +123,9 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
             let past = st.history.past_len();
             let source_doc = match explicit {
                 Some(i) if i == past => st.doc.clone(),
-                Some(i) => st.history.state(i).ok_or_else(|| bad(format!("no history state {i} (0..={past})")))?,
+                Some(i) => st.history.state(i)?.ok_or_else(|| bad(format!("no history state {i} (0..={past})")))?,
                 // The History Brush's default source: the oldest state still held.
-                None => st.history.state(0).unwrap_or_else(|| st.doc.clone()),
+                None => st.history.state(0)?.unwrap_or_else(|| st.doc.clone()),
             };
             let mut source_doc = (*source_doc).clone();
             let (src, _) = crate::channel_cmds::target_surface(&mut source_doc, id, p)
@@ -155,17 +158,56 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
+fn wide_fill(
+    s: &mut Session,
+    p: &Value,
+    contents: &str,
+    mode: BlendMode,
+    id: Option<photocraft_doc::LayerId>,
+    format: photocraft_color::PixelFormat,
+) -> Result<Value> {
+    if mode != BlendMode::Normal || s.color_restrict.is_some() {
+        return Err(bad("wide Fill requires Normal mode and all color channels"));
+    }
+    let rgba = match contents {
+        "foreground" => s.tools.foreground.map(f64::from),
+        "background" => s.tools.background.map(f64::from),
+        "color" => crate::paint_cmds::wide_color(p.get("color"), s.tools.foreground)?,
+        "black" => [0.0, 0.0, 0.0, 1.0],
+        "gray" => [128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0],
+        "white" => [1.0; 4],
+        _ => return Err(bad("wide pattern, history and Content-Aware fills are not yet qualified")),
+    };
+    let preserve = flag(p, "preserveTransparency", false)?;
+    let mut opacity = crate::paint_cmds::wide_opacity(p)?;
+    if !format.alpha {
+        opacity *= rgba[3];
+    }
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let color = crate::brush_cmds::native_wide_color(&st.doc, format, p, rgba)?;
+    let area = crate::brush_cmds::wide_paint_extent(&st.doc, id, p).map_or(st.doc.bounds(), |r| r.intersect(&st.doc.bounds()));
+    s.edit("Fill", |doc, _| {
+        let selection = doc.selection.clone();
+        let (target, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
+        photocraft_algo::wide_paint::try_paint_solid(
+            target,
+            area,
+            color.get(..format.channels()).ok_or_else(|| bad("invalid color layout"))?,
+            opacity,
+            selection.as_ref(),
+            preserve || lock,
+            Default::default(),
+            &photocraft_raster::Interrupt::NONE,
+        )
+        .map_err(|e| bad(e.to_string()))
+    })?;
+    Ok(json!({"contents":contents}))
+}
+
 fn read_rgba(src: &Surface, area: Rect) -> Vec<[f32; 4]> {
     let mut px = vec![[0.0f32; 4]; area.width() as usize * area.height() as usize];
     src.read_rgba_into(area, &mut px);
     px
-}
-
-/// `src` over `surf` across `area` (Normal, 100 %), each pixel weighted by `limit` when given:
-/// a paste into a layer mask or channel, which keeps the pasted pixels' luminosity (#1035).
-pub(crate) fn composite_over(surf: &mut Surface, src: &Surface, area: Rect, limit: Option<&Surface>) {
-    let source = Source::Pixels(area, read_rgba(src, area));
-    blend_into(surf, area, &source, limit, Blend { mode: BlendMode::Normal, opacity: 1.0, keep_alpha: false, restore: false });
 }
 
 /// The selection filled from its surroundings (`photocraft_algo::content_aware`), as straight
@@ -521,7 +563,7 @@ mod tests {
         let mut s = session();
         s.execute(CMD, json!({"contents": "color", "color": "#336699"})).unwrap();
         let st = s.active_mut().unwrap();
-        let doc = std::sync::Arc::make_mut(&mut st.doc);
+        let doc = st.doc.try_resident_mut().unwrap();
         doc.size = photocraft_geom::Size::new(size.0, size.1);
         let mut sel = Surface::new(photocraft_color::PixelFormat::GRAY8);
         for r in rects {
@@ -566,7 +608,7 @@ mod tests {
                 assert!(err.contains("too large for Content-Aware fill"), "{name}: {err}");
             }
             let st = s.active().unwrap();
-            assert!(std::sync::Arc::ptr_eq(&before, &st.doc), "{name}: the document changed");
+            assert!(before.shares_state(&st.doc), "{name}: the document changed");
             assert_eq!(st.history.past_len(), past, "{name}: a history step was recorded");
             assert!(close(px(&s, 5, 5), [0x33 as f32 / 255.0, 0x66 as f32 / 255.0, 0x99 as f32 / 255.0, 1.0]), "{name}");
         }

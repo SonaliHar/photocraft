@@ -32,6 +32,8 @@ pub struct FixtureOptions {
     pub name: Option<String>,
     pub image_properties: Vec<(u32, Vec<u8>)>,
     pub layer_properties: Vec<(u32, Vec<u8>)>,
+    pub effect_records: Vec<Vec<u8>>,
+    pub path_records: Vec<Vec<u8>>,
 }
 #[allow(clippy::too_many_arguments)]
 pub fn image_custom(version: u32, precision: u32, compression: u8, width: u32, height: u32, pixels: &[u8], options: &FixtureOptions) -> Vec<u8> {
@@ -51,7 +53,12 @@ pub fn image_custom(version: u32, precision: u32, compression: u8, width: u32, h
     pointer(&mut v, 0, version);
     pointer(&mut v, 0, version);
     pointer(&mut v, 0, version);
+    let mut path_pointers = Vec::new();
     if version >= 18 {
+        for _ in &options.path_records {
+            path_pointers.push(v.len());
+            pointer(&mut v, 0, version);
+        }
         pointer(&mut v, 0, version);
     }
     let layer = v.len();
@@ -71,14 +78,20 @@ pub fn image_custom(version: u32, precision: u32, compression: u8, width: u32, h
     let hp = v.len();
     pointer(&mut v, 0, version);
     pointer(&mut v, 0, version);
+    let mut effect_pointers = Vec::new();
     if version >= 20 {
+        for _ in &options.effect_records {
+            effect_pointers.push(v.len());
+            pointer(&mut v, 0, version);
+        }
         pointer(&mut v, 0, version);
     }
     let hierarchy = v.len();
     patch(&mut v, hp, hierarchy, version);
     let sample = match precision {
         200 | 250 | 275 | 500 | 550 | 575 => 2,
-        600 | 650 | 675 => 4,
+        300 | 350 | 375 | 600 | 650 | 675 => 4,
+        700 | 750 | 775 => 8,
         _ => 1,
     };
     let channels = match layer_type {
@@ -135,6 +148,16 @@ pub fn image_custom(version: u32, precision: u32, compression: u8, width: u32, h
                 _ => v.extend(tile),
             }
         }
+    }
+    for (ptr, record) in effect_pointers.into_iter().zip(&options.effect_records) {
+        let at = v.len();
+        patch(&mut v, ptr, at, version);
+        v.extend(record);
+    }
+    for (ptr, record) in path_pointers.into_iter().zip(&options.path_records) {
+        let at = v.len();
+        patch(&mut v, ptr, at, version);
+        v.extend(record);
     }
     v
 }

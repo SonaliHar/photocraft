@@ -121,7 +121,7 @@ fn list() {
   cargo xtask test-corpus       fetch, then run every corpus test (--release --features corpus)
 
   corpus/photoshop/  [{}] our Photoshop-authored oracles (MIT OR Apache-2.0), from
-                     https://github.com/storytold/photocraft-corpus at {PHOTOCRAFT_CORPUS_COMMIT}
+                     https://github.com/Terra854/photocraft-corpus at {PHOTOCRAFT_CORPUS_COMMIT}
                      manifest xtask/photoshop-corpus.sha256. Fetch: --photoshop
                      (--photoshop --local copies from ../photocraft-corpus or $PHOTOCRAFT_CORPUS_REPO)
   corpus/psd/        [{}] 170 small psd-tools + ag-psd files (MIT), psd-tools@{} and

@@ -140,6 +140,42 @@ pub struct RunParams {
     pub wait: Option<bool>,
 }
 
+/// Immediate substitution beneath the server/application's configured read root.
+/// A path is a request, never authority to open the MCP client's filesystem.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct XcfLinkSubstituteFromRootParams {
+    /// Canonical nonzero decimal document identity; must still be active.
+    pub document_id: String,
+    /// Canonical decimal current revision (zero is permitted).
+    pub expected_revision: String,
+    /// Canonical nonzero decimal linked layer identity.
+    pub layer_id: String,
+    /// Canonical nonzero decimal linked resource identity.
+    pub resource_id: String,
+    /// Explicit forward-slash relative path beneath the configured read root.
+    pub path: String,
+    /// Must be "substitute". This replacement remains Reduced, never Exact recovery.
+    pub policy: String,
+}
+
+/// Exact recovery uses the retained original hash, not the filename or locator.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct XcfLinkRecoverFromRootParams {
+    /// Canonical nonzero decimal document identity; must still be active.
+    pub document_id: String,
+    /// Canonical decimal current revision (zero is permitted).
+    pub expected_revision: String,
+    /// Canonical nonzero decimal linked layer identity.
+    pub layer_id: String,
+    /// Canonical nonzero decimal linked resource identity.
+    pub resource_id: String,
+    /// Explicit forward-slash relative path beneath the configured read root.
+    pub path: String,
+    /// Must be "exact". Requires a retained original hash matching the read bytes.
+    pub policy: String,
+}
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct JobCancelParams {
     /// The job id from `command_run` / `jobs_list` (omit to cancel every running job).
@@ -188,8 +224,15 @@ pub struct UiSetParams {
     /// vectorMaskTarget, selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
     /// studioLight, classic), brushSection, brushTab, brushesView, brushPicker ([x, y] opens the
     /// Brush Preset picker there, null closes it), brushPickerView, brushSize, gradientBlendMode
-    /// (a blend mode name, for the Gradient tool), gradientClassic (bool). Other fields are an
-    /// error.
+    /// (a blend mode name, for the Gradient tool), gradientClassic (bool), xcfUnderlineDraft
+    /// ({document, layer, revision, start, end, content, ranges} replaces the bounded character
+    /// selection draft; null clears it). The draft changes view state only; apply an edit through
+    /// `xcf.text.underline.set`. xcfColorRotateDraft ({document, revision, filter, from, to} or null)
+    /// replaces or clears the view-only paired Color Rotate destination draft. View drafts permit
+    /// from angles 30, 33.125, 207.5, 210 and to angles 210, 211.75, 330, 337.25;
+    /// the checked Apply command still requires the matching independently qualified source pair.
+    /// Applying the pair uses that command and does not grant resource authority. Other fields
+    /// are an error.
     pub fields: Value,
 }
 
@@ -245,7 +288,13 @@ fn png_result(png: &[u8], note: String) -> CallToolResult {
 fn to_result(r: Result<Value, AutomationError>) -> Result<CallToolResult, McpError> {
     Ok(match r {
         Ok(v) => ok_json(&v),
-        Err(e) => fail(e),
+        Err(e) => {
+            let mut result = fail(&e);
+            if let Some(details) = e.error_details() {
+                result.structured_content = Some(json!({"errorDetails":details}));
+            }
+            bounded_tool_result(result)
+        }
     })
 }
 
@@ -297,6 +346,26 @@ impl PhotocraftMcp {
                 // consistent: keep serving instead of failing every later call.
                 let mut g = h.lock().unwrap_or_else(PoisonError::into_inner);
                 g.sync_jobs();
+                f(&mut g)
+            })
+            .await
+            .unwrap_or_else(|e| Err(AutomationError::Other(format!("task failed: {e}")))),
+        )
+    }
+
+    /// Preserve the session until the operation itself validates pending jobs.
+    /// Linked recovery must refuse before a completed job can be applied.
+    async fn headless_op_without_sync<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&mut Headless) -> Result<T, AutomationError> + Send + 'static,
+    ) -> Option<Result<T, AutomationError>> {
+        let Backend::Headless(h) = &*self.backend else {
+            return None;
+        };
+        let h = h.clone();
+        Some(
+            tokio::task::spawn_blocking(move || {
+                let mut g = h.lock().unwrap_or_else(PoisonError::into_inner);
                 f(&mut g)
             })
             .await
@@ -377,7 +446,7 @@ fn downscale_png(png: &[u8], max_side: u32) -> Result<Option<Vec<u8>>, Automatio
 impl PhotocraftMcp {
     #[tool(description = "List open documents (index, name, size, dirty) and the active index.")]
     async fn session_list(&self) -> Result<CallToolResult, McpError> {
-        if let Some(r) = self.headless_op(|h| Ok(h.session_list())).await {
+        if let Some(r) = self.headless_op(|h| h.session_list()).await {
             return to_result(r);
         }
         let Some(b) = self.bridge_client() else {
@@ -519,6 +588,51 @@ impl PhotocraftMcp {
         self.run_command(p.id, p.params.unwrap_or_else(|| json!({})), p.wait.unwrap_or(true)).await
     }
 
+    #[tool(description = "Explicitly substitute a missing-identity linked PNG beneath the server/application's authorized read root. \
+        Send only the six string fields; bytes stay inside that application. The active document/revision is captured at request entry \
+        and rechecked after the bounded read. This is one undoable registered edit, always Reduced substitution, not Exact recovery. \
+        Pending jobs, stale targets and unauthorized paths are refused. No source locator, client-side file, network URL or serialized grant is read.")]
+    async fn xcf_link_substitute_from_root(&self, Parameters(p): Parameters<XcfLinkSubstituteFromRootParams>) -> Result<CallToolResult, McpError> {
+        let params = json!({
+            "documentId": p.document_id,
+            "expectedRevision": p.expected_revision,
+            "layerId": p.layer_id,
+            "resourceId": p.resource_id,
+            "path": p.path,
+            "policy": p.policy,
+        });
+        match &*self.backend {
+            Backend::Headless(_) => match self.headless_op_without_sync(move |h| h.handle("xcf.link.substituteFromRoot", params)).await {
+                Some(result) => to_result(result),
+                None => Ok(no_backend()),
+            },
+            Backend::Bridge(bridge) => to_result(bridge.call("xcf.link.substituteFromRoot", params).await),
+        }
+    }
+
+    #[tool(description = "Exactly recover a linked PNG beneath the server/application's authorized read root. \
+        Send only the six string fields with policy exact; the retained original hash must exist and match the bytes. \
+        Bytes stay inside the application, and the target snapshot/revision is rechecked after the bounded read. \
+        Resource bytes and current raster commit in one undoable registered edit. Exact byte identity does not declare \
+        whole-document Full support: call command_run with id xcf.assess to reevaluate the document. \
+        No client-side path, source locator, network URL or serialized grant supplies authority.")]
+    async fn xcf_link_recover_from_root(&self, Parameters(p): Parameters<XcfLinkRecoverFromRootParams>) -> Result<CallToolResult, McpError> {
+        let params = json!({
+            "documentId": p.document_id,
+            "expectedRevision": p.expected_revision,
+            "layerId": p.layer_id,
+            "resourceId": p.resource_id,
+            "path": p.path,
+            "policy": p.policy,
+        });
+        match &*self.backend {
+            Backend::Headless(_) => match self.headless_op_without_sync(move |h| h.handle("xcf.link.recoverFromRoot", params)).await {
+                Some(result) => to_result(result),
+                None => Ok(no_backend()),
+            },
+            Backend::Bridge(bridge) => to_result(bridge.call("xcf.link.recoverFromRoot", params).await),
+        }
+    }
     #[tool(description = "List background jobs: running ones with progress (0-1), message and elapsed time, then the last few \
         that ended (state done|failed|cancelled with their result or error). Finished jobs are applied first.")]
     async fn jobs_list(&self) -> Result<CallToolResult, McpError> {
@@ -646,6 +760,15 @@ fn bridge_only_headless(name: &str) -> Result<CallToolResult, McpError> {
 
 impl PhotocraftMcp {
     async fn run_command(&self, id: String, params: Value, wait: bool) -> Result<CallToolResult, McpError> {
+        if matches!(id.as_str(), "xcf.link.substitute" | "xcf.link.recover") {
+            return match &*self.backend {
+                Backend::Headless(_) => match self.headless_op_without_sync(move |h| h.command_start(&id, params, wait)).await {
+                    Some(result) => to_result(result),
+                    None => Ok(no_backend()),
+                },
+                Backend::Bridge(bridge) => to_result(bridge.call("engine.execute", json!({"command": id, "params": params, "wait": wait})).await),
+            };
+        }
         let (id2, params2) = (id.clone(), params.clone());
         if let Some(r) = self.headless_op(move |h| h.command_start(&id2, params2, wait)).await {
             return to_result(r);

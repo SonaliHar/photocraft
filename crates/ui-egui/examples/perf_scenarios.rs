@@ -67,7 +67,7 @@ fn open_photo(w: u32, h: u32) -> Res<Session> {
     let jpeg = photo_jpeg(w, h)?;
     let doc = photocraft_io::import("photo.jpg", &jpeg).map_err(|e| e.to_string())?.document;
     let mut s = Session::new();
-    s.open_document(doc, Some("photo.jpg".into()));
+    s.open_document(doc, Some("photo.jpg".into())).map_err(|error| error.to_string())?;
     Ok(s)
 }
 
@@ -120,7 +120,7 @@ impl Bench {
             None => {
                 let r = damage.unwrap_or(doc.bounds()).intersect(&doc.bounds());
                 if !r.is_empty() {
-                    std::hint::black_box(photocraft_compose::render(doc, r));
+                    std::hint::black_box(photocraft_compose::render(doc, r)).map_err(|error| error.to_string())?;
                 }
             }
         }
@@ -146,7 +146,9 @@ impl Bench {
                 let _ = rs.device.poll(eframe::wgpu::PollType::Wait { submission_index: None, timeout: None });
             }
             None => {
-                std::hint::black_box(photocraft_compose::render(&shown, damage));
+                if let Err(error) = std::hint::black_box(photocraft_compose::render(&shown, damage)) {
+                    eprintln!("CPU benchmark refused: {error}");
+                };
             }
         }
         Ok(ms(t))
@@ -586,7 +588,7 @@ fn job_scenarios(b: &mut Bench, sz: &Sizes) {
                     let t = Instant::now();
                     let d = photocraft_io::import("layered.psd", &psd).map_err(|e| e.to_string())?.document;
                     *s = Session::new();
-                    s.open_document(d, Some("layered.psd".into()));
+                    s.open_document(d, Some("layered.psd".into())).map_err(|error| error.to_string())?;
                     Ok(ms(t) + b.refresh(s, true)?)
                 });
             }

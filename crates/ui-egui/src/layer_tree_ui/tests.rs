@@ -88,14 +88,14 @@ fn clicking_a_triangle_toggles_its_group_at_every_ui_scale() {
     for ppp in [1.0, 1.5, 2.0] {
         let mut h = harness_with(layered(), ppp);
         let active = h.state().session.active().unwrap().active_layer;
-        let undo = h.state().session.active().unwrap().history.entries().len();
+        let undo = h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
         let p = triangle(&mut h, "inner").expect("inner's triangle shows");
         click(&mut h, p, Modifiers::NONE);
         assert!(!group(&h, "inner").1, "@{ppp}x: click collapses");
         assert!(group(&h, "outer").1, "@{ppp}x: only that group");
         // The click opened/closed the group; it didn't select it or start a drag-reorder.
         assert_eq!(h.state().session.active().unwrap().active_layer, active, "@{ppp}x: selection unchanged");
-        assert_eq!(h.state().session.active().unwrap().history.entries().len(), undo, "@{ppp}x: not an undo step");
+        assert_eq!(h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), undo, "@{ppp}x: not an undo step");
         let p = triangle(&mut h, "inner").expect("still shows, now pointing right");
         click(&mut h, p, Modifiers::NONE);
         assert!(group(&h, "inner").1, "@{ppp}x: click expands again");
@@ -128,7 +128,7 @@ fn state_survives_psd_export_and_import_and_imported_groups_toggle() {
     let bytes = photocraft_io::export(&doc, "groups.psd", &Default::default()).unwrap().bytes;
     let back = photocraft_io::import("groups.psd", &bytes).unwrap().document;
     let mut s = photocraft_engine::Session::new();
-    s.add_document(back, None);
+    s.add_document(back, None).unwrap();
     let mut h = harness_with(s, 2.0);
     assert!(group(&h, "outer").1 && !group(&h, "inner").1, "open/closed state round-trips through PSD");
     // A PSD-imported group toggles like any other.

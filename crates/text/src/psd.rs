@@ -191,6 +191,38 @@ pub fn apply_txt2(layer: &mut TextLayer, tysh: &[u8], txt2: &E) {
     layer.sync_summary();
 }
 
+/// Parse the scalar EngineData basis at Y DPI, retaining physical X/Y geometry.
+/// The incoming affine is composed with the inverse text-axis scale, so rendering
+/// this model through the two-axis API reproduces its original TySh coordinates.
+/// No font is loaded and no painted cache is regenerated.
+pub fn text_layer_from_tysh_with_resolution(
+    data: &[u8],
+    resolution: &photocraft_doc::PhysicalResolution,
+) -> Result<Option<TextLayer>, crate::PhysicalLayoutError> {
+    let axes = crate::physical_layout::Axes::checked(&TextLayer::default(), resolution)?;
+    let Some(mut layer) = text_layer_from_tysh(data, axes.dpi) else { return Ok(None) };
+    if axes.scale != [1.0, 1.0] {
+        layer.shape = physical_shape(layer.shape, axes.scale, false)?;
+        let [a, b, c, d, e, f] = layer.transform.m;
+        let matrix = [a / axes.scale[0], b / axes.scale[0], c / axes.scale[1], d / axes.scale[1], e, f];
+        if matrix.iter().any(|v| !v.is_finite()) {
+            return Err(crate::PhysicalLayoutError::Geometry);
+        }
+        layer.transform = Affine { m: matrix };
+    }
+    crate::physical_layout::Axes::checked(&layer, resolution)?;
+    Ok(Some(layer))
+}
+
+pub(crate) fn physical_shape(shape: TextShape, scale: [f64; 2], inverse: bool) -> Result<TextShape, crate::PhysicalLayoutError> {
+    let TextShape::Box { x, y, width, height } = shape else { return Ok(shape) };
+    let value = |n: f32, axis: usize| {
+        let factor = scale.get(axis).copied().ok_or(crate::PhysicalLayoutError::Geometry)?;
+        crate::physical_layout::bounded(if inverse { f64::from(n) / factor } else { f64::from(n) * factor })
+    };
+    Ok(TextShape::Box { x: value(x, 0)?, y: value(y, 1)?, width: value(width, 0)?, height: value(height, 1)? })
+}
+
 /// Builds a [`TextLayer`] (model, text and transform; no cache, no `psd_raw`) from `TySh` data.
 pub fn text_layer_from_tysh(data: &[u8], dpi: f32) -> Option<TextLayer> {
     let t = parse_tysh(data)?;
@@ -691,6 +723,23 @@ pub(crate) fn font_entry(name: &str) -> E {
 }
 
 /// Updates (or creates) an EngineData tree for `layer`.
+/// EngineData scalar-basis writer paired with the physical-axis TySh APIs.
+/// Point styles retain their values; physical pixel box coordinates are divided
+/// by the axis scale before serialization. No affine is written by EngineData.
+pub fn build_engine_data_with_resolution(
+    layer: &TextLayer,
+    template: Option<E>,
+    resolution: &photocraft_doc::PhysicalResolution,
+) -> Result<E, crate::PhysicalLayoutError> {
+    let axes = crate::physical_layout::Axes::checked(layer, resolution)?;
+    if axes.scale == [1.0, 1.0] {
+        return Ok(build_engine_data(layer, template, axes.dpi));
+    }
+    let mut scalar = layer.clone();
+    scalar.shape = physical_shape(layer.shape, axes.scale, true)?;
+    Ok(build_engine_data(&scalar, template, axes.dpi))
+}
+
 pub fn build_engine_data(layer: &TextLayer, template: Option<E>, dpi: f32) -> E {
     let k = 72.0 / if dpi > 0.0 { dpi } else { 72.0 };
     let fresh = || E::Dict(vec![("EngineDict".into(), E::dict()), ("ResourceDict".into(), E::dict())]);
@@ -851,6 +900,47 @@ pub fn build_engine_data(layer: &TextLayer, template: Option<E>, dpi: f32) -> E 
         }
     }
     e
+}
+
+/// Encode physical X/Y type geometry without flattening its point styles.
+/// EngineData retains the Y-DPI scalar basis; TySh writes A composed with S,
+/// where S scales text-space X/Y outlines before the layer affine. Box/ink
+/// coordinates are expressed in that scalar basis. Square output is unchanged.
+pub fn build_tysh_with_resolution(
+    layer: &TextLayer,
+    resolution: &photocraft_doc::PhysicalResolution,
+    ink: Option<[f32; 4]>,
+) -> Result<Vec<u8>, crate::PhysicalLayoutError> {
+    let axes = crate::physical_layout::Axes::checked(layer, resolution)?;
+    if layer.transform.m.iter().any(|v| !v.is_finite()) {
+        return Err(crate::PhysicalLayoutError::Geometry);
+    }
+    if let Some(rect) = ink {
+        for value in rect {
+            crate::physical_layout::bounded(f64::from(value))?;
+        }
+    }
+    if axes.scale == [1.0, 1.0] {
+        return Ok(build_tysh(layer, axes.dpi, ink));
+    }
+    let mut scalar = layer.clone();
+    scalar.shape = physical_shape(layer.shape, axes.scale, true)?;
+    let [a, b, c, d, e, f] = layer.transform.m;
+    let matrix = [a * axes.scale[0], b * axes.scale[0], c * axes.scale[1], d * axes.scale[1], e, f];
+    if matrix.iter().any(|v| !v.is_finite()) {
+        return Err(crate::PhysicalLayoutError::Geometry);
+    }
+    scalar.transform = Affine { m: matrix };
+    let ink = match ink {
+        Some([x0, y0, x1, y1]) => Some([
+            crate::physical_layout::bounded(f64::from(x0) / axes.scale[0])?,
+            crate::physical_layout::bounded(f64::from(y0) / axes.scale[1])?,
+            crate::physical_layout::bounded(f64::from(x1) / axes.scale[0])?,
+            crate::physical_layout::bounded(f64::from(y1) / axes.scale[1])?,
+        ]),
+        None => None,
+    };
+    Ok(build_tysh(&scalar, axes.dpi, ink))
 }
 
 /// Builds the `TySh` block for `layer`, patching its current `psd_raw` when present.

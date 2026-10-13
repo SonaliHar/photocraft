@@ -10,7 +10,7 @@ use photocraft_color::PixelFormat;
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let n: i32 = std::env::args().nth(1).and_then(|v| v.parse().ok()).unwrap_or(6016);
     let (c, rad) = (n as f32 / 2.0, n as f32 / 3.0);
     let canvas = Rect::new(0, 0, n, n);
@@ -63,7 +63,7 @@ fn main() {
     for size in [30.0f32, 300.0] {
         let x = c + rad - size * 2.0;
         let t = Instant::now();
-        let r = quick::quick_select(&sampler, canvas, &[(x, c - size), (x, c + size)], size, quick::WORK_PX).expect("region");
+        let r = quick::quick_select(&sampler, canvas, &[(x, c - size), (x, c + size)], size, quick::WORK_PX)?.ok_or("empty region")?;
         println!("quick selection stroke (brush {size} px): {:.2?}  (region {}x{})", t.elapsed(), r.bbox.width(), r.bbox.height());
     }
 
@@ -71,23 +71,24 @@ fn main() {
     let m = (rad * 1.15) as i32;
     let rect = Rect::new(c as i32 - m, c as i32 - m, c as i32 + m, c as i32 + m);
     let t = Instant::now();
-    let obj = grabcut::object_select(&sampler, canvas, rect, 160_000).expect("object");
+    let obj = grabcut::object_select(&sampler, canvas, rect, 160_000)?.ok_or("empty object")?;
     println!("object selection: {:.2?}  IoU {:.4}", t.elapsed(), truth_iou(&obj));
 
     // Select subject.
     let t = Instant::now();
-    let subj = subject::select_subject(&sampler, canvas).expect("subject");
+    let subj = subject::select_subject(&sampler, canvas)?.ok_or("empty subject")?;
     println!("select subject: {:.2?}  IoU {:.4}", t.elapsed(), truth_iou(&subj));
 
     // Refine edge on a 20 px band (selection = the object result as a surface).
-    let sel = combine_region(None, Some(&obj), SelectionMode::Replace).expect("selection");
+    let sel = combine_region(None, Some(&obj), SelectionMode::Replace).ok_or("empty selection")?;
     let content = sel.content_bounds();
     let p = RefineParams { radius: 20.0, smooth: 10.0, feather: 1.0, contrast: 10.0, ..Default::default() };
     let t = Instant::now();
-    let refined = matting::refine_mask(&sampler, &matting::surface_reader(&sel), content, canvas, &p).expect("refined");
+    let refined = matting::refine_mask(&sampler, &matting::surface_reader(&sel), content, canvas, &p)?.ok_or("empty refined")?;
     println!("refine edge (radius 20): {:.2?}", t.elapsed());
     let t = Instant::now();
-    let _ = matting::refine_mask(&sampler, &matting::surface_reader(&sel), content, canvas, &RefineParams { smart_radius: true, ..p }).expect("refined");
+    let _ =
+        matting::refine_mask(&sampler, &matting::surface_reader(&sel), content, canvas, &RefineParams { smart_radius: true, ..p })?.ok_or("empty refined")?;
     println!("refine edge (radius 20, smart): {:.2?}", t.elapsed());
     let t = Instant::now();
     let dec = matting::decontaminate(&s, &refined, 20.0, 100.0);
@@ -95,6 +96,7 @@ fn main() {
 
     // Focus area.
     let t = Instant::now();
-    let _ = focus::focus_area(&sampler, canvas, 0.5, 0.0);
+    let _ = focus::focus_area(&sampler, canvas, 0.5, 0.0)?;
     println!("focus area: {:.2?}", t.elapsed());
+    Ok(())
 }

@@ -26,7 +26,7 @@ pub fn kind_icon(content: &LayerContent) -> &'static str {
         LayerContent::Text(_) => "type",
         LayerContent::Shape(_) => "pentagon",
         LayerContent::Smart(_) => "app-window",
-        LayerContent::Raster(_) => "image",
+        LayerContent::Raster(_) | LayerContent::BackedRaster(_) => "image",
     }
 }
 
@@ -138,7 +138,7 @@ pub fn quick_actions(content: &LayerContent) -> &'static [(&'static str, &'stati
         ],
         LayerContent::Group(_) => &[("Ungroup Layers", "layer.ungroupLayers"), ("Convert to Smart Object", "layer.smartObjects.convertToSmartObject")],
         LayerContent::Fill(_) => &[("Rasterize Fill Content", "layer.rasterize.fillContent")],
-        LayerContent::Adjustment(_) => &[],
+        LayerContent::Adjustment(_) | LayerContent::BackedRaster(_) => &[],
     }
 }
 

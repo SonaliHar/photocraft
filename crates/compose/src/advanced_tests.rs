@@ -21,11 +21,11 @@ fn close(a: [f32; 4], b: [f32; 4]) -> bool {
 
 #[track_caller]
 fn check(d: &Document, x: i32, y: i32, want: [f32; 4], what: &str) {
-    let got = render(d, Rect::from_xywh(x, y, 1, 1)).px[0];
+    let got = render(d, Rect::from_xywh(x, y, 1, 1)).unwrap().px[0];
     assert!(close(got, want), "{what} ({:?}) at ({x},{y}): got {got:?}, want {want:?}", d.depth);
     // Tiled and whole-canvas renders agree (knockout targets are per tile).
-    let tiled = render_tiled(d, d.bounds(), 3);
-    let whole = render(d, d.bounds());
+    let tiled = render_tiled(d, d.bounds(), 3).unwrap();
+    let whole = render(d, d.bounds()).unwrap();
     assert!(tiled.px.iter().zip(&whole.px).all(|(a, b)| close(*a, *b)), "{what}: tiles differ from the whole render");
 }
 
@@ -168,7 +168,7 @@ fn knockout_follows_masks_and_transparency_shapes() {
         // A mask hiding x >= 3: only x < 3 knocks out.
         let mut m = photocraft_raster::Surface::new(PixelFormat::new(ColorMode::Grayscale, depth, false));
         m.fill_rect(Rect::new(0, 0, 3, 8), &photocraft_raster::from_rgba(&m.format(), [1.0; 4]));
-        k.mask = Some(LayerMask { surface: m, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+        k.mask = Some(LayerMask { surface: std::sync::Arc::new(m), enabled: true, linked: true, density: 1.0, feather: 0.0 });
         d.layers.push(k);
         check(&d, 1, 2, WHITE, "inside the mask");
         check(&d, 4, 2, GREEN, "masked out");
@@ -281,7 +281,7 @@ fn layer_mask_hides_effects() {
         // The mask shows x < 8.
         let mut m = photocraft_raster::Surface::new(PixelFormat::new(ColorMode::Grayscale, depth, false));
         m.fill_rect(Rect::new(0, 0, 8, 8), &photocraft_raster::from_rgba(&m.format(), [1.0; 4]));
-        l.mask = Some(LayerMask { surface: m, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+        l.mask = Some(LayerMask { surface: std::sync::Arc::new(m), enabled: true, linked: true, density: 1.0, feather: 0.0 });
         d.layers.push(l);
         // Default: the stroke follows the masked shape, so it runs along the mask's edge.
         check(&d, 7, 4, RED, "stroke along the mask edge");
@@ -346,6 +346,6 @@ fn a_knockout_background_does_not_recurse() {
     let mut d = doc(SampleType::U8, true);
     d.layers[0].advanced.knockout = Knockout::Deep;
     d.layers[0].fill_opacity = 0.0;
-    let got = render(&d, Rect::from_xywh(0, 0, 1, 1)).px[0];
+    let got = render(&d, Rect::from_xywh(0, 0, 1, 1)).unwrap().px[0];
     assert!(got[3] <= 1.0);
 }

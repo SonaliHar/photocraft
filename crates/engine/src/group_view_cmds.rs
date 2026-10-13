@@ -4,8 +4,6 @@
 //! section divider's open/closed folder type, saved in `.pcraft` too) but, as in Photoshop,
 //! toggling it is a view change: no history step, and a clean document stays clean.
 
-use std::sync::Arc;
-
 use photocraft_doc::{Layer, LayerContent, LayerId};
 use serde_json::{Value, json};
 
@@ -63,7 +61,7 @@ fn set_expanded(s: &mut Session, p: &Value) -> Result<Value> {
     let expanded = want.unwrap_or(!current);
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     // Copy-on-write: history snapshots keep their own state (layers share tiles, so this is cheap).
-    let doc = Arc::make_mut(&mut st.doc);
+    let doc = st.doc.try_resident_mut()?;
     let changed = if all {
         set_all(&mut doc.layers, expanded)
     } else {
@@ -114,11 +112,11 @@ mod tests {
         let (mut s, inner, outer) = session();
         let st = s.active_mut().unwrap();
         st.saved_revision = st.revision;
-        let undo_steps = s.active().unwrap().history.entries().len();
+        let undo_steps = s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len();
         assert!(expanded(&s, inner) && expanded(&s, outer));
         assert_eq!(s.execute(ID, json!({"layer": inner})).unwrap()["expanded"], false);
         assert!(!expanded(&s, inner) && expanded(&s, outer));
-        assert_eq!(s.active().unwrap().history.entries().len(), undo_steps, "no history step");
+        assert_eq!(s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len(), undo_steps, "no history step");
         assert_eq!(s.active().unwrap().saved_revision, s.active().unwrap().revision, "still clean");
         s.execute(ID, json!({"layer": inner, "expanded": true})).unwrap();
         assert!(expanded(&s, inner));

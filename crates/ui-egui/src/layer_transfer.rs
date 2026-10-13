@@ -44,7 +44,7 @@ fn clear(ctx: &egui::Context) {
 /// The layers `id` stands for: the selection when it is one of the selected layers, else itself.
 fn begin(app: &PhotocraftApp, ctx: &egui::Context, id: LayerId, grab: Option<[f64; 2]>) -> bool {
     let Some(st) = app.session.active() else { return false };
-    let layers = if st.is_layer_selected(id) { st.selected_layers() } else { vec![id] };
+    let layers = if st.is_layer_selected(id) { let Ok(layers) = st.selected_layers() else { return false }; layers } else { vec![id] };
     let label = match layers.as_slice() {
         [one] => st.doc.layer(*one).map_or_else(String::new, |l| l.name.clone()),
         many => crate::i18n::trn(crate::i18n::current(), many.len() as u64, "{n} layer", "{n} layers"),

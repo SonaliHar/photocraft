@@ -60,7 +60,7 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
     paint.label = LabelColor::Violet;
     paint.locks.pixels = true;
     let mut mask = LayerMask::hide_all();
-    scribble(&mut mask.surface, 2, false);
+    scribble(std::sync::Arc::make_mut(&mut mask.surface), 2, false);
     mask.density = 0.8;
     mask.feather = 3.5;
     mask.linked = false;
@@ -179,7 +179,7 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
             psd_raw: None,
             filters_enabled: false,
             filter_mask: Some(LayerMask {
-                surface: Surface::with_default(PixelFormat::GRAY8, &[1.0]),
+                surface: std::sync::Arc::new(Surface::with_default(PixelFormat::GRAY8, &[1.0])),
                 enabled: true,
                 linked: false,
                 density: 0.75,
@@ -234,8 +234,8 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
     d.metadata.psd_resources.push((1036, "thumb".into(), blob(16, 20)));
     d.metadata.psd_global_blocks.push((*b"8BIM", *b"Patt", blob(17, 50)));
     d.global_light = GlobalLight { angle: 120.0, altitude: 30.0 };
-    d.paths.push(NamedPath { name: "Path 1".into(), path: vector_path(), psd_raw: Some(blob(18, 52)) });
-    d.paths.push(NamedPath { name: "Empty".into(), path: Path::default(), psd_raw: None });
+    d.paths.push(NamedPath { id: photocraft_doc::item_identity::PathId::fresh(), name: "Path 1".into(), path: vector_path(), psd_raw: Some(blob(18, 52)) });
+    d.paths.push(NamedPath { id: photocraft_doc::item_identity::PathId::fresh(), name: "Empty".into(), path: Path::default(), psd_raw: None });
     let mut wp = vector_path();
     wp.fill_rule = FillRule::EvenOdd;
     d.work_path = Some(wp);

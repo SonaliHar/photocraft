@@ -35,7 +35,7 @@ pub mod slic;
 pub mod subject;
 
 use photocraft_geom::Rect;
-use photocraft_raster::Surface;
+use photocraft_raster::{RasterInputError, Surface};
 
 pub use crate::selection::Region;
 use gmm::Gmm;
@@ -106,46 +106,142 @@ impl RgbImage {
     }
 }
 
-/// Where the segmentation algorithms read colours from (a layer, the composite, a test image).
-pub trait Sampler: Sync {
-    /// Straight RGBA (`0..=1`) over `r` (document pixels), row-major.
-    fn rgba(&self, r: Rect) -> Vec<[f32; 4]>;
-
-    /// RGB over `r` at full resolution.
-    fn rgb(&self, r: Rect) -> RgbImage {
-        RgbImage::from_rgba(&self.rgba(r), r.width() as usize, r.height() as usize)
+/// A source read failure remains distinct from an empty semantic selection.
+pub type SamplingResult<T> = Result<T, RasterInputError>;
+const MAX_SAMPLE_BYTES: usize = 512 * 1024 * 1024;
+pub(crate) fn sample_shape(r: Rect, bytes_per_pixel: usize) -> SamplingResult<(usize, usize, usize)> {
+    if r.x1 < r.x0 || r.y1 < r.y0 || r.width() > i32::MAX as u32 || r.height() > i32::MAX as u32 {
+        return Err(RasterInputError::InvalidBounds);
     }
-
-    /// RGB over `r`, box-downsampled by `step`, read in horizontal strips (in parallel on native)
-    /// so the full-resolution area is never held in memory at once.
-    fn rgb_scaled(&self, r: Rect, step: usize) -> RgbImage {
-        if step <= 1 {
-            return self.rgb(r);
+    let w = usize::try_from(r.width()).map_err(|_| RasterInputError::LimitExceeded)?;
+    let h = usize::try_from(r.height()).map_err(|_| RasterInputError::LimitExceeded)?;
+    let n = w.checked_mul(h).ok_or(RasterInputError::LimitExceeded)?;
+    if n.checked_mul(bytes_per_pixel).ok_or(RasterInputError::LimitExceeded)? > MAX_SAMPLE_BYTES {
+        return Err(RasterInputError::LimitExceeded);
+    }
+    Ok((w, h, n))
+}
+pub(crate) fn filled<T: Clone>(len: usize, value: T) -> SamplingResult<Vec<T>> {
+    if len.checked_mul(std::mem::size_of::<T>()).ok_or(RasterInputError::LimitExceeded)? > MAX_SAMPLE_BYTES {
+        return Err(RasterInputError::LimitExceeded);
+    }
+    let mut out = Vec::new();
+    out.try_reserve_exact(len).map_err(|_| RasterInputError::AllocationFailed)?;
+    out.resize(len, value);
+    Ok(out)
+}
+pub(crate) fn check_image(img: &RgbImage, w: usize, h: usize) -> SamplingResult<()> {
+    if img.w != w || img.h != h || w.checked_mul(h) != Some(img.px.len()) {
+        return Err(RasterInputError::LengthMismatch);
+    }
+    if img.px.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(RasterInputError::InvalidSample);
+    }
+    Ok(())
+}
+fn checked_downsample(img: &RgbImage, step: usize) -> SamplingResult<RgbImage> {
+    check_image(img, img.w, img.h)?;
+    if step == 0 {
+        return Err(RasterInputError::InvalidBounds);
+    }
+    let (w, h) = (img.w.div_ceil(step), img.h.div_ceil(step));
+    let mut px = filled(w.checked_mul(h).ok_or(RasterInputError::LimitExceeded)?, [0.0; 3])?;
+    for oy in 0..h {
+        for ox in 0..w {
+            let mut acc = [0.0f32; 3];
+            let mut n = 0usize;
+            let sy = oy.checked_mul(step).ok_or(RasterInputError::LimitExceeded)?;
+            let sx = ox.checked_mul(step).ok_or(RasterInputError::LimitExceeded)?;
+            for y in sy..sy.saturating_add(step).min(img.h) {
+                for x in sx..sx.saturating_add(step).min(img.w) {
+                    let i = y.checked_mul(img.w).and_then(|v| v.checked_add(x)).ok_or(RasterInputError::LimitExceeded)?;
+                    let value = img.px.get(i).ok_or(RasterInputError::LengthMismatch)?;
+                    for (a, v) in acc.iter_mut().zip(value) {
+                        *a += v;
+                    }
+                    n += 1;
+                }
+            }
+            if n == 0 {
+                return Err(RasterInputError::LengthMismatch);
+            }
+            let dest = px.get_mut(oy * w + ox).ok_or(RasterInputError::LengthMismatch)?;
+            *dest = acc.map(|v| v / n as f32);
         }
-        let (w, h) = (r.width() as usize, r.height() as usize);
+    }
+    Ok(RgbImage { w, h, px })
+}
+pub trait Sampler: Sync {
+    /// Straight RGBA over the exact checked rectangle; never blank on a read error.
+    fn rgba(&self, r: Rect) -> SamplingResult<Vec<[f32; 4]>>;
+    fn rgb(&self, r: Rect) -> SamplingResult<RgbImage> {
+        let (w, h, n) = sample_shape(r, 16)?;
+        let source = self.rgba(r)?;
+        if source.len() != n {
+            return Err(RasterInputError::LengthMismatch);
+        }
+        let mut px = filled(n, [0.0; 3])?;
+        for (out, value) in px.iter_mut().zip(source) {
+            if value.iter().any(|v| !v.is_finite()) {
+                return Err(RasterInputError::InvalidSample);
+            }
+            let [red, green, blue, alpha] = value;
+            let a = alpha.clamp(0.0, 1.0);
+            *out = [red, green, blue].map(|v| v.clamp(0.0, 1.0) * a + 0.5 * (1.0 - a));
+        }
+        Ok(RgbImage { w, h, px })
+    }
+    /// Reads horizontal strips in parallel; full-resolution source pixels are not retained.
+    fn rgb_scaled(&self, r: Rect, step: usize) -> SamplingResult<RgbImage> {
+        if step == 0 {
+            return Err(RasterInputError::InvalidBounds);
+        }
+        if step == 1 {
+            let (w, h, _) = sample_shape(r, 12)?;
+            let image = self.rgb(r)?;
+            check_image(&image, w, h)?;
+            return Ok(image);
+        }
+        let (w, h, _) = sample_shape(r, 1)?;
         let (ow, oh) = (w.div_ceil(step), h.div_ceil(step));
-        let rows_per = (64usize.div_ceil(step)).max(1);
-        let strips: Vec<usize> = (0..oh.div_ceil(rows_per)).collect();
-        let run = |si: &usize| -> Vec<[f32; 3]> {
-            let oy0 = si * rows_per;
-            let oy1 = (oy0 + rows_per).min(oh);
-            let y0 = r.y0 + (oy0 * step) as i32;
-            let y1 = (r.y0 + (oy1 * step) as i32).min(r.y1);
-            let strip = self.rgb(Rect::new(r.x0, y0, r.x1, y1));
-            strip.downsample(step).px
+        let rows_per = 64usize.div_ceil(step).max(1);
+        let count = oh.div_ceil(rows_per);
+        let mut parts: Vec<SamplingResult<Vec<[f32; 3]>>> = filled(count, Err(RasterInputError::InvalidBounds))?;
+        let run = |si: usize| -> SamplingResult<Vec<[f32; 3]>> {
+            let oy0 = si.checked_mul(rows_per).ok_or(RasterInputError::LimitExceeded)?;
+            let oy1 = oy0.saturating_add(rows_per).min(oh);
+            let dy0 = oy0.checked_mul(step).ok_or(RasterInputError::LimitExceeded)?.min(h);
+            let dy1 = oy1.checked_mul(step).ok_or(RasterInputError::LimitExceeded)?.min(h);
+            let y0 = i32::try_from(i64::from(r.y0) + i64::try_from(dy0).map_err(|_| RasterInputError::InvalidBounds)?)
+                .map_err(|_| RasterInputError::InvalidBounds)?;
+            let y1 = i32::try_from(i64::from(r.y0) + i64::try_from(dy1).map_err(|_| RasterInputError::InvalidBounds)?)
+                .map_err(|_| RasterInputError::InvalidBounds)?;
+            let strip = self.rgb(Rect::new(r.x0, y0, r.x1, y1))?;
+            check_image(&strip, w, dy1 - dy0)?;
+            Ok(checked_downsample(&strip, step)?.px)
         };
         #[cfg(not(target_arch = "wasm32"))]
-        let parts: Vec<Vec<[f32; 3]>> = {
+        {
             use rayon::prelude::*;
-            strips.par_iter().map(run).collect()
-        };
-        #[cfg(target_arch = "wasm32")]
-        let parts: Vec<Vec<[f32; 3]>> = strips.iter().map(run).collect();
-        let mut px = Vec::with_capacity(ow * oh);
-        for p in parts {
-            px.extend(p);
+            parts.par_iter_mut().enumerate().for_each(|(si, out)| *out = run(si));
         }
-        RgbImage { w: ow, h: oh, px }
+        #[cfg(target_arch = "wasm32")]
+        for (si, out) in parts.iter_mut().enumerate() {
+            *out = run(si);
+        }
+        let len = ow.checked_mul(oh).ok_or(RasterInputError::LimitExceeded)?;
+        let mut px = filled(len, [0.0; 3])?;
+        let mut offset = 0usize;
+        for part in parts {
+            let part = part?;
+            let end = offset.checked_add(part.len()).ok_or(RasterInputError::LimitExceeded)?;
+            px.get_mut(offset..end).ok_or(RasterInputError::LengthMismatch)?.copy_from_slice(&part);
+            offset = end;
+        }
+        if offset != len {
+            return Err(RasterInputError::LengthMismatch);
+        }
+        Ok(RgbImage { w: ow, h: oh, px })
     }
 }
 
@@ -153,12 +249,36 @@ pub trait Sampler: Sync {
 pub struct SurfaceSampler<'a>(pub &'a Surface);
 
 impl Sampler for SurfaceSampler<'_> {
-    fn rgba(&self, r: Rect) -> Vec<[f32; 4]> {
-        let mut px = vec![[0.0f32; 4]; r.width() as usize * r.height() as usize];
-        if !r.is_empty() {
-            self.0.read_rgba_into(r, &mut px);
+    fn rgba(&self, r: Rect) -> SamplingResult<Vec<[f32; 4]>> {
+        let (_, _, n) = sample_shape(r, 16)?;
+        let channels = self.0.channels();
+        let required = match self.0.format().mode {
+            photocraft_color::ColorMode::Grayscale | photocraft_color::ColorMode::Bitmap | photocraft_color::ColorMode::Duotone => 1,
+            photocraft_color::ColorMode::Cmyk => 4,
+            _ => 3,
+        };
+        if channels < required + usize::from(self.0.format().alpha) {
+            return Err(RasterInputError::UnsupportedConversion);
         }
-        px
+        let raw = self.0.try_read_region_f64(r)?;
+        if channels == 0 || raw.len() != n.checked_mul(channels).ok_or(RasterInputError::LimitExceeded)? {
+            return Err(RasterInputError::LengthMismatch);
+        }
+        let mut out = filled(n, [0.0; 4])?;
+        let mut pixel = filled(channels, 0.0f32)?;
+        for (dest, values) in out.iter_mut().zip(raw.chunks_exact(channels)) {
+            for (v, input) in pixel.iter_mut().zip(values) {
+                *v = *input as f32;
+                if !v.is_finite() {
+                    return Err(RasterInputError::InvalidSample);
+                }
+            }
+            *dest = photocraft_raster::to_rgba(&self.0.format(), &pixel);
+            if dest.iter().any(|v| !v.is_finite()) {
+                return Err(RasterInputError::InvalidSample);
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -169,20 +289,32 @@ pub struct ImageSampler<'a> {
 }
 
 impl Sampler for ImageSampler<'_> {
-    fn rgba(&self, r: Rect) -> Vec<[f32; 4]> {
-        let mut out = Vec::with_capacity(r.width() as usize * r.height() as usize);
+    fn rgba(&self, r: Rect) -> SamplingResult<Vec<[f32; 4]>> {
+        let (_, _, n) = sample_shape(r, 16)?;
+        if self.img.w.checked_mul(self.img.h) != Some(self.img.px.len()) {
+            return Err(RasterInputError::LengthMismatch);
+        }
+        let mut out = filled(n, [0.0; 4])?;
+        let mut offset = 0usize;
         for y in r.y0..r.y1 {
             for x in r.x0..r.x1 {
-                let (ix, iy) = (x - self.origin.0, y - self.origin.1);
-                if ix < 0 || iy < 0 || ix as usize >= self.img.w || iy as usize >= self.img.h {
-                    out.push([0.0; 4]);
-                } else {
-                    let p = self.img.at(ix as usize, iy as usize);
-                    out.push([p[0], p[1], p[2], 1.0]);
+                let ix = i64::from(x) - i64::from(self.origin.0);
+                let iy = i64::from(y) - i64::from(self.origin.1);
+                if let (Ok(ix), Ok(iy)) = (usize::try_from(ix), usize::try_from(iy))
+                    && ix < self.img.w
+                    && iy < self.img.h
+                {
+                    let i = iy.checked_mul(self.img.w).and_then(|v| v.checked_add(ix)).ok_or(RasterInputError::LimitExceeded)?;
+                    let &[red, green, blue] = self.img.px.get(i).ok_or(RasterInputError::LengthMismatch)?;
+                    if [red, green, blue].iter().any(|v| !v.is_finite()) {
+                        return Err(RasterInputError::InvalidSample);
+                    }
+                    *out.get_mut(offset).ok_or(RasterInputError::LengthMismatch)? = [red, green, blue, 1.0];
                 }
+                offset += 1;
             }
         }
-        out
+        Ok(out)
     }
 }
 
@@ -478,16 +610,30 @@ pub fn trim_region(r: Region) -> Option<Region> {
 /// region. With `step > 1` the boundary is re-cut at full resolution in a band about `step`
 /// pixels wide around the upsampled boundary, using the given colour models, tile by tile.
 /// The result is anti-aliased by one pixel.
-pub fn finish_region(sampler: &dyn Sampler, window: Rect, step: usize, low: &[bool], lw: usize, lh: usize, models: Option<(&Gmm, &Gmm)>) -> Option<Region> {
-    let (w, h) = (window.width() as usize, window.height() as usize);
-    let mut mask = vec![0u8; w * h];
+pub fn finish_region(
+    sampler: &dyn Sampler,
+    window: Rect,
+    step: usize,
+    low: &[bool],
+    lw: usize,
+    lh: usize,
+    models: Option<(&Gmm, &Gmm)>,
+) -> SamplingResult<Option<Region>> {
+    let (w, h, n) = sample_shape(window, 1)?;
+    if window.is_empty() {
+        return Ok(None);
+    }
+    if step == 0 || lw != w.div_ceil(step) || lh != h.div_ceil(step) || lw.checked_mul(lh) != Some(low.len()) {
+        return Err(RasterInputError::LengthMismatch);
+    }
+    let mut mask = filled(n, 0u8)?;
     if step <= 1 {
         for (m, l) in mask.iter_mut().zip(low) {
             *m = if *l { 255 } else { 0 };
         }
     } else {
         // Band blocks: working pixels with a differently labelled pixel within one block.
-        let mut band = vec![false; lw * lh];
+        let mut band = filled(low.len(), false)?;
         for y in 0..lh {
             for x in 0..lw {
                 let v = low[y * lw + x];
@@ -516,16 +662,27 @@ pub fn finish_region(sampler: &dyn Sampler, window: Rect, step: usize, low: &[bo
         #[cfg(target_arch = "wasm32")]
         mask.chunks_mut(w).enumerate().for_each(|(y, r)| fill(y, r));
         if let Some((fg, bg)) = models {
-            refine_band(sampler, window, step, low, &band, lw, lh, fg, bg, &mut mask);
+            refine_band(sampler, window, step, low, &band, lw, lh, fg, bg, &mut mask)?;
         }
     }
     antialias_u8(&mut mask, w, h);
-    trim_region(Region { bbox: window, mask })
+    Ok(trim_region(Region { bbox: window, mask }))
 }
 
 /// Full-resolution graph cut restricted to the band blocks (see [`finish_region`]).
 #[allow(clippy::too_many_arguments)]
-fn refine_band(sampler: &dyn Sampler, window: Rect, step: usize, low: &[bool], band: &[bool], lw: usize, lh: usize, fg: &Gmm, bg: &Gmm, mask: &mut [u8]) {
+fn refine_band(
+    sampler: &dyn Sampler,
+    window: Rect,
+    step: usize,
+    low: &[bool],
+    band: &[bool],
+    lw: usize,
+    lh: usize,
+    fg: &Gmm,
+    bg: &Gmm,
+    mask: &mut [u8],
+) -> SamplingResult<()> {
     const T: i32 = 192;
     const HALO: i32 = 12;
     let w = window.width() as usize;
@@ -535,20 +692,21 @@ fn refine_band(sampler: &dyn Sampler, window: Rect, step: usize, low: &[bool], b
     while ty < window.y1 {
         let mut tx = window.x0;
         while tx < window.x1 {
-            let t = Rect::new(tx, ty, (tx + T).min(window.x1), (ty + T).min(window.y1));
+            let t = Rect::new(tx, ty, tx.saturating_add(T).min(window.x1), ty.saturating_add(T).min(window.y1));
             // Any band block overlapping the tile?
             let (bx0, by0) = ((t.x0 - window.x0) as usize / step, (t.y0 - window.y0) as usize / step);
             let (bx1, by1) = (((t.x1 - 1 - window.x0) as usize / step).min(lw - 1), ((t.y1 - 1 - window.y0) as usize / step).min(lh - 1));
             if (by0..=by1).any(|by| (bx0..=bx1).any(|bx| band[by * lw + bx])) {
                 tiles.push(t);
             }
-            tx += T;
+            tx = tx.saturating_add(T).min(window.x1);
         }
-        ty += T;
+        ty = ty.saturating_add(T).min(window.y1);
     }
-    let run = |t: &Rect| -> (Rect, Vec<bool>) {
+    let run = |t: &Rect| -> SamplingResult<(Rect, Vec<bool>)> {
         let r = t.inflate(HALO).intersect(&window);
-        let img = sampler.rgb(r);
+        let img = sampler.rgb(r)?;
+        check_image(&img, r.width() as usize, r.height() as usize)?;
         let (rw, rh) = (r.width() as usize, r.height() as usize);
         let mut fixed = vec![FREE; rw * rh];
         let mut cfg = vec![0.0f32; rw * rh];
@@ -577,15 +735,15 @@ fn refine_band(sampler: &dyn Sampler, window: Rect, step: usize, low: &[bool], b
             let sx = (t.x0 - r.x0) as usize;
             core.extend_from_slice(&cut[sy * rw + sx..sy * rw + sx + cw]);
         }
-        (*t, core)
+        Ok((*t, core))
     };
     #[cfg(not(target_arch = "wasm32"))]
     let results: Vec<(Rect, Vec<bool>)> = {
         use rayon::prelude::*;
-        tiles.par_iter().map(run).collect()
+        tiles.par_iter().map(run).collect::<SamplingResult<Vec<_>>>()?
     };
     #[cfg(target_arch = "wasm32")]
-    let results: Vec<(Rect, Vec<bool>)> = tiles.iter().map(run).collect();
+    let results: Vec<(Rect, Vec<bool>)> = tiles.iter().map(run).collect::<SamplingResult<Vec<_>>>()?;
     for (t, core) in results {
         let cw = t.width() as usize;
         for (yy, row) in core.chunks_exact(cw).enumerate() {
@@ -595,6 +753,7 @@ fn refine_band(sampler: &dyn Sampler, window: Rect, step: usize, low: &[bool], b
             }
         }
     }
+    Ok(())
 }
 
 /// Deterministic pseudo-random numbers (xorshift) for sampling and tests.

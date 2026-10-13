@@ -81,7 +81,7 @@ fn render(profile: &str, rgb: [f32; 3], reopen: bool) -> Option<([u8; 3], [u8; 3
         // No repaint between close and reopen: sync_views must release the old resource/signature.
         let reopened = photocraft_format::load_from_bytes(&bytes).expect("load native document");
         assert_eq!(reopened.id, id, "native loading preserves document ID");
-        harness.state_mut().session.add_document(reopened, None);
+        harness.state_mut().session.add_document(reopened, None).unwrap();
         harness.state_mut().sync_views();
         harness.run_steps(6);
         assert!(observer.has(preview, [512, 512]), "same-ID reopen uploads the still-open filter preview again");
@@ -93,7 +93,7 @@ fn render(profile: &str, rgb: [f32; 3], reopen: bool) -> Option<([u8; 3], [u8; 3
         photocraft_ui_egui::adjust_preview::display_doc(harness.state_mut(), 0).expect("adjustment preview");
         harness.state_mut().run("file.close", json!({})).expect("close adjustment owner");
         assert!(photocraft_ui_egui::adjust_preview::shown_key(harness.state()).is_none(), "close drops adjustment preview state before same-ID reopen");
-        harness.state_mut().session.add_document(photocraft_format::load_from_bytes(&bytes).expect("reopen adjustment owner"), None);
+        harness.state_mut().session.add_document(photocraft_format::load_from_bytes(&bytes).expect("reopen adjustment owner"), None).unwrap();
         harness.state_mut().sync_views();
         photocraft_ui_egui::adjust_preview::display_doc(harness.state_mut(), 0).expect("rebuilt adjustment preview");
         harness.state_mut().ui.dialogs.clear();

@@ -1,8 +1,36 @@
 //! Map imported sample interpretation to the PSD ICC equivalent without changing source pixels.
 use photocraft_doc::{ColorMode, Document, SampleEncoding};
 
+/// Exact active analytical interpretation; immutable source provenance does not
+/// select it after the current profile has changed.
+pub(crate) fn active_implicit_profile(doc: &Document) -> Result<Option<photocraft_cms::Profile>, photocraft_cms::CmsError> {
+    use photocraft_cms::{
+        CmsError, ColorSpace,
+        xcf_color::{Encoding, effective_implicit_profile},
+    };
+    if matches!(doc.working_profile_interpretation, photocraft_doc::WorkingProfileInterpretation::Icc) {
+        return Ok(None);
+    }
+    doc.working_profile_interpretation.validate_with(doc.icc_profile.as_deref().map(Vec::as_slice), doc.mode).map_err(|e| CmsError::Invalid(e.to_string()))?;
+    let bytes = doc.icc_profile.as_ref().ok_or_else(|| CmsError::Invalid("missing implicit working ICC".into()))?;
+    let space = match doc.mode {
+        ColorMode::Rgb | ColorMode::Indexed => ColorSpace::Rgb,
+        ColorMode::Grayscale => ColorSpace::Gray,
+        _ => return Err(CmsError::Unsupported("implicit working color model".into())),
+    };
+    let encoding = match doc.sample_encoding.unwrap_or(SampleEncoding::NonlinearProfile) {
+        SampleEncoding::Linear => Encoding::Linear,
+        SampleEncoding::NonlinearProfile => Encoding::NonlinearProfile,
+        SampleEncoding::Perceptual => Encoding::Perceptual,
+    };
+    effective_implicit_profile(bytes, space, encoding).map(Some)
+}
+
 pub(crate) fn effective_icc(doc: &Document) -> Result<Option<Vec<u8>>, photocraft_cms::CmsError> {
     use photocraft_cms::xcf_color::{Encoding, effective_profile};
+    if let Some(profile) = active_implicit_profile(doc)? {
+        return Ok(Some(profile.to_bytes().to_vec()));
+    }
     let Some(encoding) = doc.sample_encoding else { return Ok(doc.icc_profile.as_ref().map(|p| p.to_vec())) };
     // Nonlinear-profile explicitly delegates transfer to the effective document ICC, including
     // profiles/models resulting from a later user conversion outside XCF's original RGB/Gray.
@@ -37,7 +65,7 @@ mod tests {
             doc.layers.push(layer);
             let before = doc.clone();
             let original = doc.layers[0].surface().unwrap().pixel(0, 0);
-            let (psd, _) = crate::document_to_psd_with(&doc, &Default::default());
+            let (psd, _) = crate::document_to_psd_with(&doc, &Default::default()).unwrap();
             let resource = psd.resources.iter().find(|r| r.id == photocraft_psd::resources::ids::ICC_PROFILE).unwrap();
             let profile = Profile::parse(&resource.data).unwrap();
             let curve = &profile.trc.as_ref().unwrap()[0];

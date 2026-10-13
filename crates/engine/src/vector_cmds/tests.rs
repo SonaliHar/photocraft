@@ -81,7 +81,7 @@ fn shape_create_fill_stroke_and_composite() {
     assert_eq!(r["fill"], "#ff0000");
     assert_eq!(r["stroke"]["align"], "outside");
     assert_eq!(r["bounds"], json!([16, 16, 68, 68]));
-    let f = photocraft_compose::flatten(doc(&s));
+    let f = photocraft_compose::flatten(doc(&s)).unwrap();
     let px = |x: i32, y: i32| f.get(x, y);
     assert!(px(50, 50)[0] > 0.99 && px(50, 50)[2] < 0.01);
     assert!(px(18, 50)[2] > 0.99 && px(18, 50)[0] < 0.01);
@@ -156,12 +156,12 @@ fn shape_rasterize_keeps_pixels() {
     let mut s = session(64, 64, 16);
     let id = s.execute("shape.create", json!({"kind": "ellipse", "rect": [4, 4, 40, 30]})).unwrap()["layer"].as_u64().unwrap();
     let before = shape(&s, id).cache.unwrap();
-    let flat = photocraft_compose::flatten(doc(&s));
+    let flat = photocraft_compose::flatten(doc(&s)).unwrap();
     s.execute("layer.rasterize.shape", json!({"layer": id})).unwrap();
     let l = doc(&s).layer(LayerId(id)).unwrap();
     assert!(matches!(l.content, LayerContent::Raster(_)));
     assert_eq!(l.surface().unwrap(), &before);
-    assert_eq!(photocraft_compose::flatten(doc(&s)).px, flat.px);
+    assert_eq!(photocraft_compose::flatten(doc(&s)).unwrap().px, flat.px);
     assert!(s.execute("shape.rasterize", json!({"layer": id})).is_err());
 }
 
@@ -378,32 +378,32 @@ fn vector_mask_commands_and_compositing() {
     s.execute("path.fill", json!({"name": "all", "color": "#000000"})).unwrap();
     // Reveal All: nothing hidden.
     s.execute("layer.vectorMask.revealAll", json!({})).unwrap();
-    let f = photocraft_compose::flatten(doc(&s));
+    let f = photocraft_compose::flatten(doc(&s)).unwrap();
     assert!(f.get(80, 80)[0] < 0.01);
     // Current path → only the left half shows the black layer.
     s.execute("path.set", json!({"path": {"subpaths": [{"knots": [[0, 0], [50, 0], [50, 100], [0, 100]]}]}})).unwrap();
     s.execute("layer.vectorMask.currentPath", json!({})).unwrap();
-    let f = photocraft_compose::flatten(doc(&s));
+    let f = photocraft_compose::flatten(doc(&s)).unwrap();
     assert!(f.get(20, 50)[0] < 0.01 && f.get(80, 50)[0] > 0.99);
     // Disable → all black again; toggling re-enables.
     s.execute("layer.vectorMask.enabled", json!({})).unwrap();
-    assert!(photocraft_compose::flatten(doc(&s)).get(80, 50)[0] < 0.01);
+    assert!(photocraft_compose::flatten(doc(&s)).unwrap().get(80, 50)[0] < 0.01);
     s.execute("layer.vectorMask.enabled", json!({})).unwrap();
     // Density 50%: the hidden half shows half grey.
     let r = s.execute("layer.vectorMask.edit", json!({"density": 50})).unwrap();
     assert_eq!(r["density"], 50.0);
-    assert!((photocraft_compose::flatten(doc(&s)).get(80, 50)[0] - 0.5).abs() < 0.01);
+    assert!((photocraft_compose::flatten(doc(&s)).unwrap().get(80, 50)[0] - 0.5).abs() < 0.01);
     s.execute("layer.vectorMask.edit", json!({"density": 100})).unwrap();
     // Hide All.
     s.execute("layer.vectorMask.hideAll", json!({})).unwrap();
-    assert!(photocraft_compose::flatten(doc(&s)).get(20, 50)[0] > 0.99);
+    assert!(photocraft_compose::flatten(doc(&s)).unwrap().get(20, 50)[0] > 0.99);
     // Rasterize into the pixel mask: same composite, no vector mask left.
     s.execute("layer.vectorMask.currentPath", json!({})).unwrap();
-    let before = photocraft_compose::flatten(doc(&s));
+    let before = photocraft_compose::flatten(doc(&s)).unwrap();
     s.execute("layer.rasterize.vectorMask", json!({})).unwrap();
     let l = doc(&s).layer(LayerId(id)).unwrap();
     assert!(l.vector_mask.is_none() && l.mask.is_some());
-    assert_eq!(photocraft_compose::flatten(doc(&s)).px, before.px);
+    assert_eq!(photocraft_compose::flatten(doc(&s)).unwrap().px, before.px);
     // Delete / undo.
     s.undo();
     s.execute("layer.vectorMask.delete", json!({})).unwrap();
@@ -469,4 +469,41 @@ fn path_stroke_rejects_oversized_brush_before_rendering() {
     s.execute("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": false, "knots": [[2, 2], [20, 20]]}]}})).unwrap();
     let result = s.execute("path.stroke", json!({"size": 1e30}));
     assert!(result.is_err(), "path strokes share the bounded paint renderer");
+}
+
+#[test]
+fn saved_path_ids_target_duplicate_names_and_survive_native_undo() {
+    let mut s = session(16, 16, 8);
+    s.edit("Own saved paths", |document, _| {
+        document.paths.push(NamedPath::new("Same", vector::shapes::rect(1.0, 1.0, 3.0, 3.0)));
+        document.paths.push(NamedPath::new("Same", vector::shapes::rect(7.0, 7.0, 2.0, 2.0)));
+        document.xcf_state = Some(photocraft_doc::XcfState::default());
+        Ok(())
+    })
+    .unwrap();
+    let first = doc(&s).paths[0].id;
+    let second = doc(&s).paths[1].id;
+    let original = doc(&s).paths[0].path.clone();
+    s.execute("path.transform", json!({"pathId":second.0,"translateX":2})).unwrap();
+    assert_eq!(doc(&s).paths[0].path, original);
+    assert_eq!(doc(&s).paths[1].id, second);
+    s.execute("path.rename", json!({"pathId":second.0,"to":"Own renamed"})).unwrap();
+    assert_eq!(doc(&s).paths[0].name, "Same");
+    assert_eq!(doc(&s).paths[1].name, "Own renamed");
+    let info = s.execute("path.info", json!({"pathId":second.0})).unwrap();
+    assert_eq!(info["name"], "Own renamed");
+    assert_eq!(info["pathId"], second.0);
+    let listed = s.execute("path.list", json!({})).unwrap();
+    assert_eq!(listed["paths"][1]["pathId"], second.0);
+    let back = photocraft_format::load_from_bytes(&photocraft_format::save_to_bytes(doc(&s), &Default::default()).unwrap()).unwrap();
+    assert_eq!(back, *doc(&s));
+    s.execute("path.delete", json!({"pathId":first.0})).unwrap();
+    assert_eq!(doc(&s).paths[0].id, second);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(doc(&s).paths[0].id, first);
+    for id in [json!(0), json!("wrong"), json!(u64::MAX)] {
+        let before = doc(&s).clone();
+        assert!(s.execute("path.delete", json!({"pathId":id})).is_err());
+        assert_eq!(doc(&s), &before);
+    }
 }

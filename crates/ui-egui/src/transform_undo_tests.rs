@@ -82,7 +82,7 @@ fn quad(h: &Harness<'static, PhotocraftApp>) -> [[f64; 2]; 4] {
 }
 
 fn history(h: &Harness<'static, PhotocraftApp>) -> usize {
-    h.state().session.active().unwrap().history.entries().len()
+    h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len()
 }
 
 fn key(h: &mut Harness<'static, PhotocraftApp>, m: Modifiers, k: Key) {

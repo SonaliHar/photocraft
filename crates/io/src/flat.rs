@@ -96,14 +96,19 @@ pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult,
     doc.icc_profile = img.icc.clone().map(Arc::new);
     doc.metadata.exif = img.meta.exif.clone().map(Arc::new);
     doc.metadata.xmp = img.meta.xmp.clone();
-    if let Some((x, y)) = img.meta.dpi {
-        doc.resolution_dpi = x;
-        warnings.extend(crate::unequal_resolution_warning(f64::from(x), f64::from(y)));
+    if let Some((x, y)) = img.meta.dpi
+        && let Err(error) = doc.set_physical_resolution(photocraft_doc::PhysicalResolution {
+            x_dpi: f64::from(x),
+            y_dpi: f64::from(y),
+            unit: photocraft_doc::PhysicalUnit::Inch,
+        })
+    {
+        warnings.push(format!("Invalid image resolution was ignored: {error}"));
     }
     if !img.meta.text.is_empty() {
         warnings.push(format!("{} text metadata entries are not kept in the document", img.meta.text.len()));
     }
-    Ok(ImportResult { document: doc, warnings, origin: Default::default() })
+    Ok(ImportResult { document: doc, warnings, origin: Default::default(), assessment: None })
 }
 
 /// `Some(surface)` when the document is exactly one visible, unmasked,
@@ -118,6 +123,7 @@ pub(crate) fn single_layer(doc: &Document) -> Option<&Surface> {
         && l.vector_mask.as_ref().is_none_or(|mask| !mask.enabled)
         && l.effects.items.is_empty()
         && l.effects.psd_raw.is_none()
+        && !crate::has_enabled_xcf_filters(doc)
         && matches!(l.blend, BlendMode::Normal | BlendMode::PassThrough)
         && photocraft_compose::channel_weights(l, doc.mode).is_none()
         && !photocraft_compose::blend_if_active(l, doc.mode);
@@ -142,18 +148,33 @@ pub(crate) fn csample(s: SampleType) -> CSample {
     match s {
         SampleType::U8 => CSample::U8,
         SampleType::U16 => CSample::U16,
-        SampleType::F32 => CSample::F32,
+        SampleType::U32 | SampleType::F32 | SampleType::F64 => CSample::F32,
     }
 }
 
 /// Renders the document to a flat codec image (native pixels when possible).
 pub fn document_to_image(doc: &Document, warnings: &mut Vec<String>) -> Result<Image, IoError> {
+    if doc.has_backed_rasters()? {
+        return Err(IoError::Unsupported("backed raster requires a qualified streamed flat exporter".into()));
+    }
+    photocraft_compose::validate_resident_document(doc)?;
     let (w, h) = (doc.size.width, doc.size.height);
     let canvas = doc.bounds();
-    let fmt = doc.pixel_format();
+    let source_fmt = doc.pixel_format();
+    let wide = matches!(source_fmt.sample, SampleType::U32 | SampleType::F64);
+    let fmt = if wide { source_fmt.with_sample(SampleType::F32) } else { source_fmt };
     let n = (w as usize) * (h as usize);
     // Lab has no flat-format layout here: Lab documents always go through the composite.
-    let native = single_layer(doc).filter(|_| fmt.mode != ColorMode::Lab);
+    if wide {
+        warnings.push("Flat codec export converts U32/F64 samples to F32; save as .pcraft to retain exact source samples".into());
+    }
+    let source_surface = single_layer(doc).filter(|_| fmt.mode != ColorMode::Lab);
+    let converted = if wide {
+        source_surface.map(|s| s.try_convert(fmt)).transpose().map_err(|e| IoError::Unsupported(format!("wide flat-export conversion: {e}")))?
+    } else {
+        None
+    };
+    let native = converted.as_ref().or(source_surface);
     let mut icc = doc.icc_profile.as_ref().map(|i| i.to_vec());
     let img = if let Some(s) = native {
         // Native path: keep model and depth. The surface's encoded samples are the codec's raw
@@ -196,35 +217,39 @@ pub fn document_to_image(doc: &Document, warnings: &mut Vec<String>) -> Result<I
         // is dropped afterwards, in place, when every pixel turned out opaque.
         let mut data = try_buffer(n, (colors + 1) * cs.bytes())?;
         let mut opaque = true;
-        let _ = photocraft_compose::render_bands(doc, canvas, 0, |band| -> Result<(), ()> {
-            opaque &= band.px.iter().all(|p| p[3] >= 1.0);
-            let parts = crate::pixels::par_map(crate::pixels::bands(band.px.len()), |range| {
-                let mut out = Vec::with_capacity(range.len() * (colors + 1) * cs.bytes());
-                let mut put = |v: f32| {
-                    let v = if v.is_nan() { 0.0 } else { v };
-                    match cs {
-                        CSample::U8 => out.push((v.clamp(0.0, 1.0) * 255.0).round() as u8),
-                        CSample::U16 => out.extend_from_slice(&((v.clamp(0.0, 1.0) * 65535.0).round() as u16).to_ne_bytes()),
-                        CSample::F16 | CSample::F32 => out.extend_from_slice(&v.to_ne_bytes()),
+        if wide || (doc.sample_encoding.is_some() && matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale)) {
+            opaque = render_imported_bands(doc, canvas, cs, gray, &mut data)?;
+        } else {
+            photocraft_compose::render_bands(doc, canvas, 0, |band| -> Result<(), ()> {
+                opaque &= band.px.iter().all(|p| p[3] >= 1.0);
+                let parts = crate::pixels::par_map(crate::pixels::bands(band.px.len()), |range| {
+                    let mut out = Vec::with_capacity(range.len() * (colors + 1) * cs.bytes());
+                    let mut put = |v: f32| {
+                        let v = if v.is_nan() { 0.0 } else { v };
+                        match cs {
+                            CSample::U8 => out.push((v.clamp(0.0, 1.0) * 255.0).round() as u8),
+                            CSample::U16 => out.extend_from_slice(&((v.clamp(0.0, 1.0) * 65535.0).round() as u16).to_ne_bytes()),
+                            CSample::F16 | CSample::F32 => out.extend_from_slice(&v.to_ne_bytes()),
+                        }
+                    };
+                    for p in &band.px[range] {
+                        if gray {
+                            put(photocraft_color::convert::rgb_to_gray([p[0], p[1], p[2]]));
+                        } else {
+                            put(p[0]);
+                            put(p[1]);
+                            put(p[2]);
+                        }
+                        put(p[3]);
                     }
-                };
-                for p in &band.px[range] {
-                    if gray {
-                        put(photocraft_color::convert::rgb_to_gray([p[0], p[1], p[2]]));
-                    } else {
-                        put(p[0]);
-                        put(p[1]);
-                        put(p[2]);
-                    }
-                    put(p[3]);
+                    out
+                });
+                for part in parts {
+                    data.extend_from_slice(&part);
                 }
-                out
-            });
-            for part in parts {
-                data.extend_from_slice(&part);
-            }
-            Ok(())
-        });
+                Ok(())
+            })?;
+        }
         if opaque {
             drop_alpha(&mut data, colors * cs.bytes(), cs.bytes());
         }
@@ -234,10 +259,78 @@ pub fn document_to_image(doc: &Document, warnings: &mut Vec<String>) -> Result<I
     let meta = codecs::Metadata {
         exif: doc.metadata.exif.as_ref().map(|e| e.to_vec()),
         xmp: doc.metadata.xmp.clone(),
-        dpi: Some((doc.resolution_dpi, doc.resolution_dpi)),
+        dpi: Some({
+            let r = doc.effective_resolution();
+            (r.x_dpi as f32, r.y_dpi as f32)
+        }),
         ..Default::default()
     };
     Ok(img.with_icc(icc).with_meta(meta))
+}
+
+/// Imported composition stays in f64 until the explicitly lossy codec boundary.
+fn render_imported_bands(doc: &Document, canvas: Rect, sample: CSample, gray: bool, data: &mut Vec<u8>) -> Result<bool, IoError> {
+    let fail = |e| IoError::Unsupported(format!("cannot flatten imported composition: {e}"));
+    let bytes_per_sample = match sample {
+        CSample::U8 => 1,
+        CSample::U16 => 2,
+        CSample::F16 | CSample::F32 => 4,
+    };
+    let output_bytes = usize::try_from(canvas.width())
+        .ok()
+        .and_then(|width| usize::try_from(canvas.height()).ok().and_then(|height| width.checked_mul(height)))
+        .and_then(|pixels| pixels.checked_mul(if gray { 2 } else { 4 }))
+        .and_then(|samples| samples.checked_mul(bytes_per_sample))
+        .ok_or_else(|| IoError::Unsupported("flat export destination size overflow".into()))?;
+    if output_bytes > data.capacity().saturating_sub(data.len()) {
+        return Err(IoError::Unsupported("flat export destination was not fully reserved".into()));
+    }
+    let accounted = photocraft_compose::gimp_render::PreparedRenderer::requires_preparation_budget(doc);
+    let renderer = if accounted { None } else { Some(photocraft_compose::gimp_render::PreparedRenderer::new(doc).map_err(fail)?) };
+    let control = photocraft_raster::Interrupt::NONE;
+    let scene = if accounted {
+        Some(
+            photocraft_compose::gimp_render::scene_budget::prepare(
+                doc,
+                &control,
+                photocraft_compose::gimp_render::scene_budget::SceneLimits { resident_bytes: 512 << 20, work_units: 36_000_000 * 512 },
+            )
+            .map_err(fail)?,
+        )
+    } else {
+        None
+    };
+    // The caller already owns this reserved codec destination. Keep its full
+    // capacity charged alongside source, preparation and every render band.
+    let _destination = scene.as_ref().map(|scene| scene.budget().reserve_external_bytes(data.capacity() as u64)).transpose().map_err(fail)?;
+    let row_bytes =
+        usize::try_from(canvas.width()).ok().and_then(|w| w.checked_mul(32)).ok_or_else(|| IoError::Unsupported("composite row exceeds limits".into()))?;
+    let rows = i32::try_from((BAND_BYTES / row_bytes.max(1)).max(1)).map_err(|_| IoError::Unsupported("composite band exceeds limits".into()))?;
+    let mut opaque = true;
+    let mut y = canvas.y0;
+    while y < canvas.y1 {
+        let end = y.saturating_add(rows).min(canvas.y1);
+        let rect = Rect::new(canvas.x0, y, canvas.x1, end);
+        let charged = scene.as_ref().map(|scene| scene.render(rect, &control, &mut |_| Ok(()))).transpose().map_err(fail)?;
+        let plain = renderer.as_ref().map(|renderer| renderer.render(rect, &mut |_| Ok(()))).transpose().map_err(fail)?;
+        let band = charged.as_ref().map(|buffer| buffer.buffer()).or(plain.as_ref()).ok_or_else(|| IoError::Unsupported("missing imported renderer".into()))?;
+        for &pixel in &band.px {
+            opaque &= pixel[3] >= 1.0;
+            let channels: &[f64] = if gray { &[pixel[0], pixel[3]] } else { &pixel };
+            for &value in channels {
+                if !value.is_finite() || (matches!(sample, CSample::F16 | CSample::F32) && !(value as f32).is_finite()) {
+                    return Err(IoError::Unsupported("flat export sample exceeds codec range".into()));
+                }
+                match sample {
+                    CSample::U8 => data.push((value.clamp(0.0, 1.0) * 255.0).round() as u8),
+                    CSample::U16 => data.extend_from_slice(&((value.clamp(0.0, 1.0) * 65535.0).round() as u16).to_ne_bytes()),
+                    CSample::F16 | CSample::F32 => data.extend_from_slice(&(value as f32).to_ne_bytes()),
+                }
+            }
+        }
+        y = end;
+    }
+    Ok(opaque)
 }
 
 /// An empty buffer with room for `pixels × bytes_per_pixel` bytes, or an error (not an abort)
@@ -444,13 +537,13 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) ->
         ColorMode::Indexed if format == Format::Png => {
             let Some(table) = doc.color_table.as_ref().filter(|t| !t.colors.is_empty() && t.colors.len() <= 256) else { return Ok(None) };
             let mut idx = try_buffer(doc.size.area() as usize, 1)?;
-            let _ = photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| -> Result<(), ()> {
+            photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| -> Result<(), ()> {
                 idx.extend(band.px.iter().map(|p| match table.transparent {
                     Some(t) if p[3] < 0.5 => t,
                     _ => table.nearest([p[0], p[1], p[2]]) as u8,
                 }));
                 Ok(())
-            });
+            })?;
             let bytes = codecs::encode_png_indexed(doc.size.width, doc.size.height, &idx, &table.colors, table.transparent)?;
             Ok(Some(ExportResult { bytes, warnings: vec![format!("written as an 8-bit palette PNG ({} colours)", table.colors.len())] }))
         }

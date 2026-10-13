@@ -92,7 +92,7 @@ fn cancel_leaves_the_document_byte_identical() {
     // Nothing arrives later either.
     assert!(s.poll_jobs().is_empty());
     let st = s.active().unwrap();
-    assert!(Arc::ptr_eq(&st.doc, &doc_before), "the document snapshot was not replaced");
+    assert!(st.doc.shares_state(&doc_before), "the document snapshot was not replaced");
     assert_eq!((st.revision, st.history.past_len()), (rev, steps));
     assert_eq!(pixels(&s), before);
     assert!(matches!(s.wait_job(id), Err(EngineError::Cancelled)));
@@ -121,7 +121,7 @@ fn a_panic_in_the_worker_becomes_an_error_and_the_document_is_unchanged() {
     let e = wait_event(&mut s, id);
     let JobOutcome::Failed(msg) = &e.outcome else { panic!("{e:?}") };
     assert!(msg.contains("internal error"), "{msg}");
-    assert!(Arc::ptr_eq(&s.active().unwrap().doc, &doc_before));
+    assert!(s.active().unwrap().doc.shares_state(&doc_before));
     // The session still works.
     s.execute("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap();
 }
@@ -431,7 +431,7 @@ fn cancel_takes_effect_within_200_ms_on_24_mp() {
             eprintln!("{cmd}: cancelled after {after_ms} ms (at {:.0} %), latency {ms:.1} ms", at * 100.0);
             worst = worst.max(ms);
             assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Cancelled);
-            assert!(Arc::ptr_eq(&s.active().unwrap().doc, &doc_before));
+            assert!(s.active().unwrap().doc.shares_state(&doc_before));
         }
         eprintln!("{cmd}: worst cancel latency {worst:.1} ms");
         assert!(worst < 200.0, "{cmd}: cancel took {worst:.1} ms");

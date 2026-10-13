@@ -39,12 +39,17 @@ pub fn sharpness(img: &super::RgbImage, noise: f32) -> Vec<f32> {
 }
 
 /// Focus Area selection over `canvas`.
-pub fn focus_area(sampler: &dyn Sampler, canvas: Rect, range: f32, noise: f32) -> Option<Region> {
+pub fn focus_area(sampler: &dyn Sampler, canvas: Rect, range: f32, noise: f32) -> super::SamplingResult<Option<Region>> {
     if canvas.width() < 4 || canvas.height() < 4 {
-        return None;
+        return Ok(None);
     }
     let step = super::scale_for(canvas, WORK_PX);
-    let img = sampler.rgb_scaled(canvas, step);
+    let img = sampler.rgb_scaled(canvas, step)?;
+    super::check_image(
+        &img,
+        canvas.width() as usize / step + usize::from(!(canvas.width() as usize).is_multiple_of(step)),
+        canvas.height() as usize / step + usize::from(!(canvas.height() as usize).is_multiple_of(step)),
+    )?;
     let (w, h) = (img.w, img.h);
     let s = sharpness(&img, noise);
     let t = 0.05 + 0.9 * (1.0 - range.clamp(0.0, 1.0)).powi(2);
@@ -54,7 +59,7 @@ pub fn focus_area(sampler: &dyn Sampler, canvas: Rect, range: f32, noise: f32) -
     let mask: Vec<bool> = smooth.iter().map(|v| *v >= 0.5).collect();
     let mask = clean_mask(&mask, w, h, 0.05, 0.02);
     if !mask.iter().any(|v| *v) {
-        return None;
+        return Ok(None);
     }
     // Soft upsampling: bilinear field, steepened to about a working pixel of transition.
     let field: Vec<f32> = mask.iter().zip(&smooth).map(|(m, v)| if *m { v.clamp(0.5, 1.0) } else { v.clamp(0.0, 0.5) }).collect();
@@ -82,5 +87,5 @@ pub fn focus_area(sampler: &dyn Sampler, canvas: Rect, range: f32, noise: f32) -
     }
     #[cfg(target_arch = "wasm32")]
     out.chunks_mut(fw).enumerate().for_each(|(y, o)| row(y, o));
-    super::trim_region(Region { bbox: canvas, mask: out })
+    Ok(super::trim_region(Region { bbox: canvas, mask: out }))
 }

@@ -18,6 +18,8 @@ pub fn format_code(f: PixelFormat) -> u32 {
         SampleType::U8 => 8,
         SampleType::U16 => 16,
         SampleType::F32 => 32,
+        // Zero is an unsupported depth in ABI v1, never an alias for F32.
+        SampleType::U32 | SampleType::F64 => 0,
     };
     let mode = match f.mode {
         ColorMode::Bitmap => 0,
@@ -91,6 +93,9 @@ impl Plugin {
     /// returns the new surface. `canvas` is the document bounds; `selection` (coverage in
     /// channel 0) limits and feathers the result, as for built-in filters.
     pub fn apply(&self, surface: &Surface, canvas: Rect, selection: Option<&Surface>, params: &Value) -> Result<Surface> {
+        if matches!(surface.format().sample, SampleType::U32 | SampleType::F64) {
+            return Err(Error::Abi("ABI v1 plug-ins cannot edit U32/F64 samples; explicitly convert the document first".into()));
+        }
         let resolved = self.manifest().resolve_params(params)?;
         let area = self.output_area(surface, canvas, selection);
         let mut out = surface.clone();

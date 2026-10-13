@@ -54,10 +54,10 @@ pub fn quick_export_layer_png(app: &mut PhotocraftApp, layer: photocraft_doc::La
 }
 
 /// The document a dialog exports: the whole image, or one layer (`__layer`).
-fn source_document(app: &PhotocraftApp, f: &Map<String, Value>) -> Result<Arc<Document>, String> {
+fn source_document(app: &PhotocraftApp, f: &Map<String, Value>) -> Result<photocraft_engine::document_snapshot::DocumentSnapshot, String> {
     let st = app.session.active().ok_or("no document")?;
     match f.get("__layer").and_then(Value::as_u64) {
-        Some(id) => photocraft_engine::layer_menu_cmds::layer_document(&st.doc, photocraft_doc::LayerId(id)).map(Arc::new).map_err(|e| e.to_string()),
+        Some(id) => photocraft_engine::layer_menu_cmds::layer_document(&st.doc, photocraft_doc::LayerId(id)).map(Arc::new).map_err(|e| e.to_string()).and_then(|doc| photocraft_engine::document_snapshot::DocumentSnapshot::from_resident(doc).map_err(|error| error.to_string())),
         None => Ok(st.doc.clone()),
     }
 }
@@ -73,7 +73,8 @@ fn n(f: &Map<String, Value>, k: &str, d: f64) -> f64 {
 /// transparency is off or the format has no alpha.
 fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>) -> Result<Document, String> {
     let mut s = photocraft_engine::Session::new();
-    s.add_document(doc.clone(), None);
+    if doc.has_backed_rasters().map_err(|error| error.to_string())? { return Err("Export transformation of backed documents is unsupported".into()); }
+    s.add_document(doc.clone(), None).map_err(|error| error.to_string())?;
     let mut scale = n(f, "scale", 100.0) / 100.0;
     if let Some(m) = max_side {
         let long = doc.size.width.max(doc.size.height) as f64 * scale;
@@ -92,7 +93,7 @@ fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>
     if !f.get("transparency").and_then(Value::as_bool).unwrap_or(true) || fmt == "jpg" {
         s.execute("layer.flattenImage", json!({})).map_err(|e| e.to_string())?;
     }
-    s.active().map(|d| (*d.doc).clone()).ok_or_else(|| "export failed".into())
+    s.active().and_then(|d| d.doc.resident_arc()).map(|d| d.as_ref().clone()).ok_or_else(|| "export failed: resident document required".into())
 }
 
 /// The exported pixel size: each side scaled and rounded on its own, never below 1 px. The
@@ -221,7 +222,13 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 None => {
                     let src = source_document(app, f).unwrap_or_else(|_| doc.clone());
                     let size = estimate(app, &src, f);
-                    let img = photocraft_compose::thumbnail(&export_document(&src, f, Some(360)).unwrap_or_else(|_| (*src).clone()), 360);
+                    let img = match photocraft_compose::thumbnail(&export_document(&src, f, Some(360)).unwrap_or_else(|_| (*src).clone()), 360) {
+                        Ok(img) => img,
+                        Err(error) => {
+                            app.ui.status = error.to_string();
+                            return;
+                        }
+                    };
                     let color = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.pixels);
                     let tex = Arc::new(ui.ctx().load_texture("export-preview", color, egui::TextureOptions::LINEAR));
                     ui.data_mut(|d| d.insert_temp(key, (sig, size, tex.clone())));

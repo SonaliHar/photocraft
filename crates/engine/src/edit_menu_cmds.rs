@@ -55,15 +55,15 @@ fn fadeable(id: &str) -> bool {
 }
 
 /// Called after every successful command: remember a fadeable result.
-pub(crate) fn after_command(s: &mut Session, id: &str) {
+pub(crate) fn after_command(s: &mut Session, id: &str) -> Result<()> {
     if !fadeable(id) {
-        return;
+        return Ok(());
     }
-    let Some(st) = s.active() else { return };
-    let Some(layer) = st.active_layer else { return };
+    let Some(st) = s.active() else { return Ok(()) };
+    let Some(layer) = st.active_layer else { return Ok(()) };
     let label = st.history.undo_label().unwrap_or(id).to_string();
     let mask = st.doc.layer(layer).is_some_and(|l| l.mask.is_some())
-        && st.history.state(st.history.past_len().wrapping_sub(1)).is_some_and(|prev| {
+        && st.history.state(st.history.past_len().wrapping_sub(1))?.is_some_and(|prev| {
             // The mask changed and the pixels didn't: the command painted the mask.
             let now = st.doc.layer(layer);
             let was = prev.layer(layer);
@@ -73,9 +73,10 @@ pub(crate) fn after_command(s: &mut Session, id: &str) {
                 _ => false,
             };
             surf_eq(now.and_then(|l| l.surface()), was.and_then(|l| l.surface()))
-                && !surf_eq(now.and_then(|l| l.mask.as_ref().map(|m| &m.surface)), was.and_then(|l| l.mask.as_ref().map(|m| &m.surface)))
+                && !surf_eq(now.and_then(|l| l.mask.as_ref().map(|m| m.surface.as_ref())), was.and_then(|l| l.mask.as_ref().map(|m| m.surface.as_ref())))
         });
     s.edit_state.fade = Some(FadeSource { doc: st.doc.id, revision: st.revision, layer, mask, label });
+    Ok(())
 }
 
 /// Tile identity of a surface (pointer equality of its COW tiles).
@@ -146,7 +147,7 @@ fn can_fade(s: &Session) -> std::result::Result<(), String> {
 
 fn surface_of(doc: &Document, id: LayerId, mask: bool) -> Option<&Surface> {
     let l = doc.layer(id)?;
-    if mask { l.mask.as_ref().map(|m| &m.surface) } else { l.surface() }
+    if mask { l.mask.as_ref().map(|m| m.surface.as_ref()) } else { l.surface() }
 }
 
 /// Blend `after` back towards `before` over `area`: `before + opacity × (B(before, after) − before)`
@@ -201,7 +202,8 @@ fn fade(s: &mut Session, p: &Value) -> Result<Value> {
     let opacity = f32_or(p, "opacity", 100.0).clamp(0.0, 100.0) / 100.0;
     let mode = blend_from_str(str_or(p, "mode", "normal")).ok_or_else(|| bad(cmd, "unknown blend mode"))?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let prev = st.history.state(st.history.past_len() - 1).ok_or_else(|| bad(cmd, "no previous state"))?;
+    let prev =
+        st.history.state(st.history.past_len().checked_sub(1).ok_or_else(|| bad(cmd, "no previous state"))?)?.ok_or_else(|| bad(cmd, "no previous state"))?;
     let before = surface_of(&prev, src.layer, src.mask).cloned().ok_or_else(|| EngineError::Other("the layer did not exist before this step".into()))?;
     let now = surface_of(&st.doc, src.layer, src.mask).ok_or(EngineError::NoLayer(src.layer))?;
     if now.format() != before.format() {
@@ -211,7 +213,8 @@ fn fade(s: &mut Session, p: &Value) -> Result<Value> {
     let label = format!("Fade {}", src.label);
     s.edit(&label, |doc, _| {
         let l = doc.layer_mut(src.layer).ok_or(EngineError::NoLayer(src.layer))?;
-        let surf = if src.mask { l.mask.as_mut().map(|m| &mut m.surface) } else { l.surface_mut() }.ok_or(EngineError::NoLayer(src.layer))?;
+        let surf = if src.mask { l.mask.as_mut().map(|m| std::sync::Arc::make_mut(&mut m.surface)) } else { l.surface_mut() }
+            .ok_or(EngineError::NoLayer(src.layer))?;
         fade_surface(&before, surf, area, mode, opacity);
         surf.prune();
         Ok(())
@@ -221,9 +224,10 @@ fn fade(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ------------------------------------------------------------------ Purge
 
-fn history_bytes(s: &Session, all: bool) -> usize {
+fn history_bytes(s: &Session, all: bool) -> Result<usize> {
     let docs: Vec<&crate::DocState> = if all { s.documents().iter().collect() } else { s.active().into_iter().collect() };
-    docs.iter().map(|d| d.history.unique_bytes(&d.doc)).sum()
+    docs.iter()
+        .try_fold(0usize, |total, d| total.checked_add(d.history.unique_bytes(&d.doc)?).ok_or_else(|| EngineError::Other("history byte count overflow".into())))
 }
 
 fn clip_bytes(s: &Session) -> usize {
@@ -234,11 +238,11 @@ fn purge(s: &mut Session, what: &str) -> Result<Value> {
     let mut freed = 0usize;
     let mut items: Vec<&str> = Vec::new();
     if matches!(what, "undo" | "all") && s.active().is_some_and(|d| d.history.can_undo()) {
-        let before = history_bytes(s, false);
+        let before = history_bytes(s, false)?;
         if let Some(st) = s.active_mut() {
-            st.history.purge_last();
+            st.history.purge_last(&crate::read_control_none())?;
         }
-        freed += before.saturating_sub(history_bytes(s, false));
+        freed += before.saturating_sub(history_bytes(s, false)?);
         items.push("undo");
     }
     if matches!(what, "clipboard" | "all") && (s.clipboard.is_some() || s.style_clipboard.is_some()) {
@@ -248,10 +252,10 @@ fn purge(s: &mut Session, what: &str) -> Result<Value> {
         items.push("clipboard");
     }
     if matches!(what, "histories" | "all") {
-        let b = history_bytes(s, true);
+        let b = history_bytes(s, true)?;
         if s.documents().iter().any(|d| d.history.can_undo() || d.history.can_redo()) {
             for st in &mut s.docs {
-                st.history.clear();
+                st.history.clear(&crate::read_control_none())?;
                 st.coalesce = None;
             }
             freed += b;
@@ -489,6 +493,10 @@ fn content_aware_scale(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "edit.contentAwareScale";
     let id = pixel_layer(s).map_err(EngineError::Other)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
+    let source = st.doc.layer(id).and_then(|layer| layer.surface()).ok_or(EngineError::NoLayer(id))?;
+    if matches!(source.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64) {
+        return Err(bad(cmd, "content-aware scale interpolation for authoritative U32/F64 samples is unsupported"));
+    }
     let doc = st.doc.clone();
     let surf = doc.layer(id).and_then(|l| l.surface()).ok_or(EngineError::NoLayer(id))?;
     let region = match &doc.selection {
@@ -519,6 +527,9 @@ fn content_aware_scale(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) => Some(channel_mask(&doc, v).cloned().ok_or_else(|| bad(cmd, "`protect` must name an alpha channel (index or name) or \"none\""))?),
         None => None,
     };
+    if protect_mask.as_ref().is_some_and(|mask| matches!(mask.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64)) {
+        return Err(bad(cmd, "content-aware scale protection sampling for authoritative U32/F64 samples is unsupported"));
+    }
     let skin_tones = bool_or(p, "protectSkinTones", false);
     let dst = Rect::from_xywh(region.x0, region.y0, nw as u32, nh as u32);
     let label = "Content-Aware Scale";
@@ -558,7 +569,7 @@ fn content_aware_scale(s: &mut Session, p: &Value) -> Result<Value> {
         move |s, out| {
             s.edit(label, |doc, _| {
                 let surf = writable_surface(doc, id)?;
-                crate::pixels::clear_surface(surf, region, None);
+                crate::pixels::try_clear_surface(surf, region, None, &photocraft_raster::Interrupt::NONE)?;
                 surf.write_region(dst, &out);
                 surf.prune();
                 Ok(())
@@ -716,7 +727,7 @@ fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
                         for (a, b) in matches.iter().rev() {
                             crate::type_cmds::replace_text(t, *a, *b, &replace);
                         }
-                        crate::type_cmds::refresh(&snapshot, t);
+                        crate::type_cmds::try_refresh(&snapshot, t)?;
                     }
                 }
                 Ok(())
@@ -736,7 +747,7 @@ fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
                     let snapshot = doc.clone();
                     if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
                         crate::type_cmds::replace_text(t, a, b, &replace);
-                        crate::type_cmds::refresh(&snapshot, t);
+                        crate::type_cmds::try_refresh(&snapshot, t)?;
                     }
                     Ok(())
                 })?;

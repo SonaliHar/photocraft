@@ -40,11 +40,19 @@ fn independent_gimp_structure_samples_and_native_migration() {
     assert!(cases.len() >= 63, "XCF corpus case count fell below the verified floor of 63");
     let mut supported = 0;
     let mut rejected = 0;
+    let mut upgraded = 0;
     for case in cases {
         let name = case["input"].as_str().unwrap();
         let bytes = input(&root, name);
         let result = photocraft_io::import(name, &bytes);
-        if case["expected_status"] == "unsupported" {
+        // This pinned manifest predates exact wide samples/two-axis DPI and
+        // qualified Linear Invert. Keep
+        // its five historical boundary cases, and verify the newly supported
+        // ones against their original native oracles instead of requiring an
+        // obsolete rejection or a lossy f32 interpretation.
+        let newly_supported =
+            matches!(name, "unsupported-u32_non_linear.xcf" | "unsupported-double_linear.xcf" | "unsupported-unequal-dpi.xcf" | "unsupported-gegl-effect.xcf");
+        if case["expected_status"] == "unsupported" && !newly_supported {
             assert!(result.is_err(), "{name} should reject");
             rejected += 1;
             continue;
@@ -52,10 +60,15 @@ fn independent_gimp_structure_samples_and_native_migration() {
         let result = result.unwrap_or_else(|e| panic!("{name}: {e}"));
         let doc = &result.document;
         supported += 1;
+        if newly_supported {
+            upgraded += 1;
+        }
         assert!(result.origin.is_read_only());
         assert_eq!(doc.size.width, u32::try_from(case["width"].as_u64().unwrap()).unwrap());
         assert_eq!(doc.size.height, u32::try_from(case["height"].as_u64().unwrap()).unwrap());
         assert_eq!(doc.resolution_dpi, case["dpi"][0].as_f64().unwrap() as f32);
+        assert_eq!(doc.effective_resolution().x_dpi, case["dpi"][0].as_f64().unwrap());
+        assert_eq!(doc.effective_resolution().y_dpi, case["dpi"][1].as_f64().unwrap());
         let layers = flattened(&doc.layers);
         let expected = case["layers"].as_array().unwrap();
         assert_eq!(layers.len(), expected.len(), "{name}: layer count");
@@ -103,7 +116,9 @@ fn independent_gimp_structure_samples_and_native_migration() {
                 for (i, source) in original.chunks_exact(source_stride).enumerate() {
                     if is_half {
                         let actual = &actual[i * target_stride..i * target_stride + source_stride * 2];
-                        for (a, b) in source.chunks_exact(2).zip(actual.chunks_exact(4)) {
+                        for (a, b) in
+                            source.as_chunks::<2>().0.iter().map(|chunk| chunk.as_slice()).zip(actual.as_chunks::<4>().0.iter().map(|chunk| chunk.as_slice()))
+                        {
                             let expected = widen_half(u16::from_le_bytes(a.try_into().unwrap()));
                             assert_eq!(f32::from_ne_bytes(b.try_into().unwrap()).to_bits(), expected.to_bits(), "{name}: exact native F16/alpha {i}");
                         }
@@ -137,7 +152,7 @@ fn independent_gimp_structure_samples_and_native_migration() {
             }
             let format = oracle["sample_format"].as_str().unwrap();
             let channels = if format.starts_with("Y") { 1 } else { 3 };
-            let values: Vec<_> = raw.chunks_exact(4).map(|b| f32::from_ne_bytes(b.try_into().unwrap())).collect();
+            let values: Vec<_> = raw.as_chunks::<4>().0.iter().map(|chunk| chunk.as_slice()).map(|b| f32::from_ne_bytes(b.try_into().unwrap())).collect();
             let actual = s.to_interleaved(r);
             let n = s.format().channels();
             let bps = s.format().sample.bytes();
@@ -151,6 +166,9 @@ fn independent_gimp_structure_samples_and_native_migration() {
                             assert_eq!(u16::from_ne_bytes(bytes.try_into().unwrap()), (expected * 65535.0).round() as u16, "{name} sample {i}/{c}")
                         }
                         SampleType::F32 => assert_eq!(f32::from_ne_bytes(bytes.try_into().unwrap()).to_bits(), expected.to_bits(), "{name} sample {i}/{c}"),
+                        SampleType::U32 | SampleType::F64 => {
+                            panic!("{name}: this legacy f32 oracle cannot prove exact wide samples; supply a native U32/F64 oracle")
+                        }
                     }
                 }
             }
@@ -174,10 +192,13 @@ fn independent_gimp_structure_samples_and_native_migration() {
         assert_eq!(doc.selection, reopened.selection);
         assert_eq!(doc.channels, reopened.channels);
         assert_eq!(doc.guides, reopened.guides);
+        assert_eq!(doc.effective_resolution(), reopened.effective_resolution());
+        assert_eq!(doc.xcf_state, reopened.xcf_state);
     }
     eprintln!("GIMP XCF corpus: {supported} supported, {rejected} explicitly rejected");
-    assert!(supported >= 58, "supported XCF cases fell below the verified floor of 58");
-    assert!(rejected >= 5, "expected-rejection XCF cases fell below the verified floor of 5");
+    assert!(supported >= 62, "supported XCF cases fell below the verified floor of 62");
+    assert_eq!(upgraded, 4, "exact wide/DPI/Linear Invert boundary cases must remain supported");
+    assert!(rejected + upgraded >= 5, "historical XCF boundary case coverage fell below five");
 }
 fn widen_half(h: u16) -> f32 {
     let sign = u32::from(h & 0x8000) << 16;

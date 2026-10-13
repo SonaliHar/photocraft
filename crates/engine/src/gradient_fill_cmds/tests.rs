@@ -63,7 +63,7 @@ fn create_masks_the_layer_with_the_selection() {
     // Still laid out on the canvas, not the mask's bounds.
     assert_eq!(photocraft_compose::fill_frame(l, d.doc.bounds()), d.doc.bounds());
     // The composite outside the selection is the white background.
-    let flat = photocraft_compose::flatten(&d.doc);
+    let flat = photocraft_compose::flatten(&d.doc).unwrap();
     assert_eq!(flat.px[20 * 48 + 30], [1.0, 1.0, 1.0, 1.0]);
 }
 
@@ -92,7 +92,7 @@ fn parity(depth: u32, background: &str, extra: Value, select: bool, tol: f32) {
                     p["to"] = json!([to[0] + 0.5, to[1] + 0.5]);
                 }
                 s.execute(if live { CREATE } else { "paint.gradient" }, p).unwrap();
-                photocraft_compose::flatten(&s.active().unwrap().doc)
+                photocraft_compose::flatten(&s.active().unwrap().doc).unwrap()
             };
             let (classic, live) = (run(false), run(true));
             let mut worst = 0.0f32;

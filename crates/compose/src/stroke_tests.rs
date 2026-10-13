@@ -17,7 +17,7 @@ fn doc(w: u32, h: u32) -> Document {
 }
 
 fn px(doc: &Document, x: i32, y: i32) -> [f32; 4] {
-    render(doc, Rect::from_xywh(x, y, 1, 1)).px[0]
+    render(doc, Rect::from_xywh(x, y, 1, 1)).unwrap().px[0]
 }
 
 fn stroke(size: f32, position: StrokePosition, paint: FxPaint) -> Effect {
@@ -57,7 +57,7 @@ fn split_stroked_gradient_with_effect_keeps_document_precision() {
         let mut layer = Layer::new("gradient shape", LayerContent::Shape(sh));
         layer.effects.items = vec![stroke(1.0, StrokePosition::Outside, blue())];
         d.layers.push(layer);
-        let row = render(&d, Rect::from_xywh(0, 20, 4000, 1));
+        let row = render(&d, Rect::from_xywh(0, 20, 4000, 1)).unwrap();
         let mut levels: Vec<u32> = row.px.iter().map(|p| (p[0] * 65535.0).round() as u32).collect();
         levels.sort_unstable();
         levels.dedup();
@@ -156,7 +156,7 @@ fn a_stroked_shapes_mask_applies_to_fill_and_stroke_together() {
     let vs = ShapeStroke { width: 4.0, align: StrokeAlign::Inside, paint: Fill::Solid(Color::rgb(0.0, 1.0, 0.0)), ..ShapeStroke::default() };
     let mut l = shape(10.0, 30.0, Fill::Solid(Color::rgb(1.0, 0.0, 0.0)), Some(vs));
     let mut m = LayerMask::reveal_all();
-    m.surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[0.5]);
+    m.surface = std::sync::Arc::new(photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[0.5]));
     l.mask = Some(m);
     let mut clip = Layer::raster("clip", PixelFormat::RGBA8);
     clip.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 40, 40), &[0.0, 0.0, 1.0, 1.0]);

@@ -4,27 +4,47 @@
 //! compositing order and the PSD file order. UIs display the list reversed.
 //!
 //! Non-destructive kinds (adjustment, fill, text, shape, smart object) and colour modes beyond RGB are
-//! part of the model from day one, even where rendering support lands later (architecture §1.1).
+//! part of the model from day one, even where rendering support lands later (architecture Â§1.1).
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod accounted_document;
+pub mod resident_structure;
 pub mod adjust;
 pub mod advanced;
 pub mod analysis;
+pub mod backed_layer;
+pub mod backed_tiles;
 pub mod blend_if;
 pub mod comps;
+pub mod editable_indexed;
 pub mod effects;
 pub mod import_compositing;
 pub mod indexed_source;
+pub mod item_identity;
 pub mod mode;
 pub mod pattern;
+pub mod physical_resolution;
+pub mod physical_size;
 pub mod sample_encoding;
 pub mod slices;
+pub mod staged_text;
 pub mod text;
 pub mod text_styles;
 pub mod variables;
 pub mod vector;
 pub mod video;
+pub mod working_profile;
+pub mod xcf_editing;
+pub mod xcf_filter_masks;
+pub mod xcf_filters;
+pub mod xcf_items;
+pub mod source_cache_hash;
+pub mod xcf_precision;
+pub mod xcf_provenance;
+pub mod xcf_reconcile;
+pub mod xcf_resources;
+pub mod xcf_state;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,8 +52,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub use adjust::Adjustment;
 pub use advanced::{AdvancedBlending, Knockout};
 pub use analysis::{CountGroup, Measurement, MeasurementScale, Note, Ruler};
+pub use backed_layer::{BackedLayer, BackedLayerError};
 pub use blend_if::{BlendIf, BlendRange};
 pub use comps::{Artboard, ArtboardBackground, CompAppearance, CompLayerState, LayerComp};
+pub use editable_indexed::{EditableIndexedLayer, EditableIndexedRaster};
 pub use effects::{
     Bevel, BevelContour, BevelStyle, BevelTechnique, BevelTexture, Contour, Effect, FxCommon, FxPaint, GlobalLight, Glow, GlowSource, GlowTechnique, Gradient,
     GradientStyle, Satin, Shadow, StrokeFx, StrokePosition,
@@ -45,6 +67,7 @@ pub use pattern::Pattern;
 pub use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
 pub use photocraft_geom::{Affine, Rect, Size};
 pub use photocraft_raster::Surface;
+pub use physical_resolution::{CustomUnit, PhysicalResolution, PhysicalUnit};
 pub use sample_encoding::{SampleEncoding, SourceColorContext};
 use serde::{Deserialize, Serialize};
 pub use slices::{Slice, SliceKind, SliceOrigin, Slices};
@@ -54,6 +77,10 @@ pub use vector::{
     ClippingPath, FillRule, Knot, LineCap, LineJoin, LiveShape, NamedPath, Path, PathOp, ShapeLayer, ShapeStroke, StrokeAlign, Subpath, VectorMask,
 };
 pub use video::{Timeline, VideoData, VideoSource};
+pub use working_profile::WorkingProfileInterpretation;
+pub use xcf_filter_masks::FilterMask;
+pub use xcf_precision::FilterOutputPrecision;
+pub use xcf_state::{XcfState, XcfValidationError};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -204,7 +231,7 @@ mod label_color_tests {
             assert_eq!(LabelColor::from_id(c.id()), Some(c));
             assert_eq!(serde_json::from_value::<LabelColor>(serde_json::to_value(c).unwrap()).unwrap(), c);
         }
-        for id in ["", "Red", "0", "unknown", "🔴"] {
+        for id in ["", "Red", "0", "unknown", "ðŸ”´"] {
             assert_eq!(LabelColor::from_id(id), None);
         }
         assert!(serde_json::from_value::<LabelColor>(serde_json::json!("Unknown")).is_err());
@@ -213,8 +240,9 @@ mod label_color_tests {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayerMask {
-    /// Grayscale surface; untouched pixels read as `default` (0 = hide, 1 = reveal).
-    pub surface: Surface,
+    /// Immutable shared grayscale storage; untouched pixels read as the default.
+    /// Resident edits stage Arc::make_mut; accounted edits require a charged owner.
+    pub surface: Arc<Surface>,
     pub enabled: bool,
     pub linked: bool,
     pub density: f32,
@@ -223,10 +251,10 @@ pub struct LayerMask {
 
 impl LayerMask {
     pub fn reveal_all() -> Self {
-        Self { surface: Surface::with_default(PixelFormat::GRAY8, &[1.0]), enabled: true, linked: true, density: 1.0, feather: 0.0 }
+        Self { surface: Arc::new(Surface::with_default(PixelFormat::GRAY8, &[1.0])), enabled: true, linked: true, density: 1.0, feather: 0.0 }
     }
     pub fn hide_all() -> Self {
-        Self { surface: Surface::with_default(PixelFormat::GRAY8, &[0.0]), ..Self::reveal_all() }
+        Self { surface: Arc::new(Surface::with_default(PixelFormat::GRAY8, &[0.0])), ..Self::reveal_all() }
     }
     /// Effective mask value at a pixel, including density.
     pub fn value(&self, x: i32, y: i32) -> f32 {
@@ -452,7 +480,7 @@ fn normalize_runs<S: Clone>(text: &str, runs: Vec<(usize, S)>, base: S) -> Vec<(
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SmartObject {
-    /// Embedded source file bytes (PSD, PNG, …) or linked path.
+    /// Embedded source file bytes (PSD, PNG, â€¦) or linked path.
     pub source: SmartSource,
     pub transform: Affine,
     pub smart_filters: Vec<SmartFilter>,
@@ -461,20 +489,20 @@ pub struct SmartObject {
     /// Data of the PSD placed-layer block (`SoLd`, `PlLd` or `SoLE`). On export
     /// it replaces that entry in [`Layer::psd_blocks`].
     pub psd_raw: Option<Arc<Vec<u8>>>,
-    /// Layer › Smart Filter › Disable Smart Filters turns the whole stack off
+    /// Layer â€º Smart Filter â€º Disable Smart Filters turns the whole stack off
     /// without touching each filter's own visibility.
     pub filters_enabled: bool,
     /// The smart filter mask (one per smart object, as in Photoshop): where the
     /// filter stack's result shows over the unfiltered content.
     pub filter_mask: Option<LayerMask>,
-    /// Edit › Transform › Warp on the smart object, in source-image coordinates; applied before
+    /// Edit â€º Transform â€º Warp on the smart object, in source-image coordinates; applied before
     /// `transform` when re-rendering from the source, so warping stays lossless.
     pub warp: Option<photocraft_geom::warp::Warp>,
-    /// Layer › Smart Objects › Stack Mode: when set, the source's top-level layers are combined
+    /// Layer â€º Smart Objects â€º Stack Mode: when set, the source's top-level layers are combined
     /// per pixel with this statistic instead of composited.
     pub stack_mode: Option<StackMode>,
     /// Distort / Perspective (or an imported placement whose corners aren't a parallelogram): the
-    /// full projective map from source pixels to document pixels, row-major 3×3. It overrides
+    /// full projective map from source pixels to document pixels, row-major 3Ã—3. It overrides
     /// `transform`, which then holds its affine approximation at the source origin.
     pub perspective: Option<[f64; 9]>,
 }
@@ -529,6 +557,8 @@ pub struct FillCache {
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayerContent {
     Raster(Surface),
+    /// Immutable, quota-owned native pixels with fallible reads.
+    BackedRaster(BackedLayer),
     Group(Group),
     Adjustment(Adjustment),
     Fill(Fill),
@@ -540,7 +570,7 @@ pub enum LayerContent {
 impl LayerContent {
     pub fn kind_name(&self) -> &'static str {
         match self {
-            LayerContent::Raster(_) => "Pixel",
+            LayerContent::Raster(_) | LayerContent::BackedRaster(_) => "Pixel",
             LayerContent::Group(_) => "Group",
             LayerContent::Adjustment(_) => "Adjustment",
             LayerContent::Fill(_) => "Fill",
@@ -575,7 +605,7 @@ pub struct Layer {
     /// Clipped to the layer below (clipping mask).
     pub clipped: bool,
     pub mask: Option<LayerMask>,
-    /// Vector mask (Layer › Vector Mask), applied together with `mask`. Shape layers keep their
+    /// Vector mask (Layer â€º Vector Mask), applied together with `mask`. Shape layers keep their
     /// outline in [`ShapeLayer::path`] instead.
     pub vector_mask: Option<VectorMask>,
     pub effects: Effects,
@@ -594,24 +624,60 @@ pub struct Layer {
     pub psd_id: Option<u32>,
     /// Photoshop-rendered pixels for fill layers (see [`FillCache`]).
     pub fill_cache: Option<FillCache>,
-    /// Layer › Link Layers: layers sharing a link group move together. `None` = not linked.
+    /// Layer â€º Link Layers: layers sharing a link group move together. `None` = not linked.
     pub link_group: Option<u64>,
-    /// Blending Options › Advanced Blending › Channels: bit `i` set = colour channel `i` of the
+    /// Blending Options â€º Advanced Blending â€º Channels: bit `i` set = colour channel `i` of the
     /// document's mode (R, G, B / C, M, Y, K / L, a, b / Gray) is left out of blending, so the
     /// backdrop's value is kept there. 0 = every channel blends (the default). PSD `brst`.
     pub excluded_channels: u32,
-    /// Blending Options › Blend If: value ranges of this layer and of the layers beneath it
+    /// Blending Options â€º Blend If: value ranges of this layer and of the layers beneath it
     /// outside which the layer's pixels are hidden. Default = everything blends. PSD layer-record
     /// blending ranges.
     pub blend_if: BlendIf,
-    /// Blending Options › Advanced Blending: knockout, blend interior effects / clipped layers as
+    /// Blending Options â€º Advanced Blending: knockout, blend interior effects / clipped layers as
     /// group, transparency shapes layer, layer / vector mask hides effects. Default = Photoshop's.
     pub advanced: AdvancedBlending,
-    /// Layer › Video Layers frame stack (None for a normal layer).
+    /// Layer â€º Video Layers frame stack (None for a normal layer).
     pub video: Option<VideoData>,
 }
 
+/// True pixel storage; regenerated text/vector caches are not raster layers.
+#[derive(Clone, Copy, Debug)]
+pub enum PixelContentRef<'a> {
+    Resident(&'a Surface),
+    Backed(&'a BackedLayer),
+}
+
+fn layer_has_backed_rasters(layer: &Layer, depth: usize) -> Result<bool, photocraft_raster::RasterInputError> {
+    if depth > MAX_GROUP_DEPTH {
+        return Err(photocraft_raster::RasterInputError::LimitExceeded);
+    }
+    match &layer.content {
+        LayerContent::BackedRaster(_) => Ok(true),
+        LayerContent::Group(group) => {
+            for child in &group.children {
+                if layer_has_backed_rasters(child, depth + 1)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        _ => Ok(false),
+    }
+}
+
 impl Layer {
+    pub fn pixel_content(&self) -> Option<PixelContentRef<'_>> {
+        match &self.content {
+            LayerContent::Raster(surface) => Some(PixelContentRef::Resident(surface)),
+            LayerContent::BackedRaster(layer) => Some(PixelContentRef::Backed(layer)),
+            _ => None,
+        }
+    }
+    /// Includes invisible and nested layers; performs no pixel read.
+    pub fn has_backed_rasters(&self) -> Result<bool, photocraft_raster::RasterInputError> {
+        layer_has_backed_rasters(self, 0)
+    }
     pub fn new(name: impl Into<String>, content: LayerContent) -> Self {
         Layer {
             indexed_source: None,
@@ -700,7 +766,7 @@ pub struct Guides {
     pub vertical: Vec<f32>,
 }
 
-/// Which areas an alpha channel's overlay colour marks (Channel Options › Color Indicates).
+/// Which areas an alpha channel's overlay colour marks (Channel Options â€º Color Indicates).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ColorIndicates {
@@ -716,6 +782,7 @@ pub enum ColorIndicates {
 /// The surface is grayscale at the document depth; white = selected (1.0), black = masked.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AlphaChannel {
+    pub id: item_identity::ChannelId,
     pub name: String,
     pub surface: Surface,
     /// Spot colour channels carry their ink colour and solidity.
@@ -732,7 +799,15 @@ impl AlphaChannel {
     pub const DEFAULT_COLOR: Color = Color::rgb(1.0, 0.0, 0.0);
 
     pub fn new(name: impl Into<String>, surface: Surface) -> Self {
-        Self { name: name.into(), surface, spot: None, color: Self::DEFAULT_COLOR, opacity: 0.5, indicates: ColorIndicates::MaskedAreas }
+        Self {
+            id: item_identity::ChannelId::fresh(),
+            name: name.into(),
+            surface,
+            spot: None,
+            color: Self::DEFAULT_COLOR,
+            opacity: 0.5,
+            indicates: ColorIndicates::MaskedAreas,
+        }
     }
 
     /// Overlay coverage (0..1, before opacity) for channel value `v`: spot channels show ink
@@ -758,8 +833,13 @@ pub struct Metadata {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Document {
+    /// Exact imported physical metadata; None uses the compatible legacy scalar.
+    pub physical_resolution: Option<PhysicalResolution>,
+    /// Optional imported editable state. Locators and provenance never grant resource access.
+    pub xcf_state: Option<XcfState>,
     pub sample_encoding: Option<SampleEncoding>,
     pub source_color_context: Option<SourceColorContext>,
+    pub working_profile_interpretation: WorkingProfileInterpretation,
     pub id: DocId,
     pub name: String,
     pub size: Size,
@@ -773,6 +853,8 @@ pub struct Document {
     pub guides: Guides,
     /// Active selection as a grayscale coverage surface (None = no selection).
     pub selection: Option<Surface>,
+    /// Stable imported selection-channel identity; independent of whether mask pixels are present.
+    pub selection_channel_id: Option<item_identity::ChannelId>,
     pub metadata: Metadata,
     /// Global light used by layer effects (PSD resources 1037/1049).
     pub global_light: GlobalLight,
@@ -782,34 +864,34 @@ pub struct Document {
     pub work_path: Option<Path>,
     /// Clipping path used on export (names one of `paths`).
     pub clipping_path: Option<ClippingPath>,
-    /// Select › Edit in Quick Mask Mode: the temporary "Quick Mask" channel while the mode is on.
+    /// Select â€º Edit in Quick Mask Mode: the temporary "Quick Mask" channel while the mode is on.
     /// Part of the document so entering and leaving are history steps (as in Photoshop).
     pub quick_mask: Option<AlphaChannel>,
     /// Patterns stored with the document (PSD `Patt`/`Pat2`/`Pat3`): those its layers use, plus
     /// any imported with it.
     pub patterns: Vec<Pattern>,
-    /// Indexed Color palette (Image › Mode › Color Table). Set while `mode` is Indexed.
+    /// Indexed Color palette (Image â€º Mode â€º Color Table). Set while `mode` is Indexed.
     pub color_table: Option<ColorTable>,
     /// Duotone inks. Set while `mode` is Duotone.
     pub duotone: Option<Duotone>,
-    /// Window › Layer Comps, top to bottom as listed in the panel.
+    /// Window â€º Layer Comps, top to bottom as listed in the panel.
     pub layer_comps: Vec<LayerComp>,
     /// Id of the comp applied last (PSD `lastAppliedComp`); None = the document's own state.
     pub last_applied_comp: Option<u32>,
     /// "Last Document State": layer state saved when a comp is applied over the document's own
     /// state, restored by `layerComp.restoreLastDocumentState`. Its id is 0.
     pub last_document_state: Option<LayerComp>,
-    /// Image › Analysis: measurement scale, Count tool groups and the Ruler line.
+    /// Image â€º Analysis: measurement scale, Count tool groups and the Ruler line.
     pub measurement: Measurement,
     /// Note tool annotations (PSD `Anno`).
     pub notes: Vec<Note>,
-    /// Character and paragraph styles (Window › Character Styles / Paragraph Styles).
+    /// Character and paragraph styles (Window â€º Character Styles / Paragraph Styles).
     pub text_styles: TextStyles,
     /// Web slices (Slice tool, layer-based slices; PSD resource 1050). Auto slices are derived.
     pub slices: Slices,
-    /// Image › Variables and Data Sets (data-driven graphics).
+    /// Image â€º Variables and Data Sets (data-driven graphics).
     pub variables: Variables,
-    /// Window › Timeline (None until a video timeline is created).
+    /// Window â€º Timeline (None until a video timeline is created).
     pub timeline: Option<Timeline>,
 }
 
@@ -817,10 +899,68 @@ pub struct Document {
 pub type LayerPath = Vec<usize>;
 
 impl Document {
+    /// Structural storage membership, independent of imported provenance.
+    pub fn has_backed_rasters(&self) -> Result<bool, photocraft_raster::RasterInputError> {
+        for layer in &self.layers {
+            if layer_has_backed_rasters(layer, 0)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+    pub fn effective_resolution(&self) -> PhysicalResolution {
+        self.physical_resolution.clone().unwrap_or_else(|| PhysicalResolution::square(f64::from(self.resolution_dpi)))
+    }
+    pub fn set_physical_resolution(&mut self, resolution: PhysicalResolution) -> Result<(), XcfValidationError> {
+        resolution.validate()?;
+        let compatible = resolution.x_dpi as f32;
+        if compatible.is_finite() && compatible > 0.0 {
+            self.resolution_dpi = compatible;
+        }
+        self.physical_resolution = Some(resolution);
+        Ok(())
+    }
+    /// Foundation validation; runtime admission/accounting is supplied by the caller.
+    pub fn validate_xcf_state(&self) -> Result<(), XcfValidationError> {
+        self.validate_xcf_state_with(&photocraft_raster::Interrupt::NONE)
+    }
+    /// Interrupt-aware validation. Source payload hashes use bounded chunks.
+    pub fn validate_xcf_state_with(&self, control: &photocraft_raster::Interrupt<'_>) -> Result<(), XcfValidationError> {
+        if control.cancelled() {
+            return Err(XcfValidationError::new("cancelled", "document validation cancelled"));
+        }
+        self.working_profile_interpretation.validate_with_interrupt(self.icc_profile.as_deref().map(Vec::as_slice), self.mode, control)?;
+        self.effective_resolution().validate()?;
+        if self.channels.len() > 10000 {
+            return Err(XcfValidationError::new("channel_limit", "too many channels"));
+        }
+        let mut ids = std::collections::BTreeSet::new();
+        if let Some(id) = self.selection_channel_id
+            && (id.0 == 0 || !ids.insert(id))
+        {
+            return Err(XcfValidationError::new("channel_identity", "invalid selection-channel identity"));
+        }
+        for channel in self.channels.iter().chain(self.quick_mask.iter()) {
+            if channel.id.0 == 0 || !ids.insert(channel.id) {
+                return Err(XcfValidationError::new("channel_identity", "duplicate or zero channel identity"));
+            }
+        }
+        let mut path_ids = std::collections::BTreeSet::new();
+        if self.paths.len() > 10000 || self.paths.iter().any(|path| path.id.0 == 0 || !path_ids.insert(path.id)) {
+            return Err(XcfValidationError::new("path_identity", "invalid or duplicate saved path identity"));
+        }
+        if let Some(state) = &self.xcf_state {
+            state.validate_with(self, control)?;
+        }
+        Ok(())
+    }
     pub fn new(name: impl Into<String>, size: Size, mode: ColorMode, depth: SampleType) -> Self {
         Document {
+            physical_resolution: None,
+            xcf_state: None,
             sample_encoding: None,
             source_color_context: None,
+            working_profile_interpretation: WorkingProfileInterpretation::Icc,
             id: DocId::fresh(),
             name: name.into(),
             size,
@@ -832,6 +972,7 @@ impl Document {
             channels: Vec::new(),
             guides: Guides::default(),
             selection: None,
+            selection_channel_id: None,
             metadata: Metadata::default(),
             global_light: GlobalLight::default(),
             paths: Vec::new(),
@@ -853,7 +994,7 @@ impl Document {
         }
     }
 
-    /// New document with a filled "Background" layer (like File → New).
+    /// New document with a filled "Background" layer (like File â†’ New).
     pub fn with_background(name: impl Into<String>, size: Size, mode: ColorMode, depth: SampleType, fill: Color) -> Self {
         let mut d = Self::new(name, size, mode, depth);
         let mut bg = Layer::raster("Background", d.pixel_format());
@@ -1036,7 +1177,7 @@ impl Document {
     }
 
     /// Name for a copy of a layer named `name`, unique in the document: "Layer 1 copy", then
-    /// "Layer 1 copy 2", "Layer 1 copy 3"… A name that already ends in "copy" (or "copy N") is
+    /// "Layer 1 copy 2", "Layer 1 copy 3"â€¦ A name that already ends in "copy" (or "copy N") is
     /// numbered from its root rather than growing another "copy".
     pub fn copy_name(&self, name: &str) -> String {
         let root = match name.rsplit_once(" copy") {

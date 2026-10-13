@@ -120,6 +120,15 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
     color[3] *= (p.get("opacity").and_then(Value::as_f64).unwrap_or(100.0) as f32 / 100.0).clamp(0.0, 1.0);
     let location = p.get("location").and_then(Value::as_str).unwrap_or("center").to_string();
     let id = layer_param(s, p)?;
+    let state = s.active().ok_or(EngineError::NoDocument)?;
+    crate::commands::check_pixels_unlocked(&state.doc, id)?;
+    let layer = state.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    let wide = layer.surface().map_or(matches!(state.doc.depth, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64),
+        |surface| matches!(surface.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64));
+    if wide || state.doc.selection.as_ref().is_some_and(|selection| matches!(selection.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64)) {
+        return Err(EngineError::Other("Edit Stroke sampling/composition for authoritative U32/F64 samples is unsupported".into()));
+    }
+    let transparency_locked = crate::xcf_item_locks::transparency_locked(&state.doc, id)?;
     s.edit("Stroke", |doc, _| {
         let canvas = doc.bounds();
         let (w, h) = (canvas.width() as usize, canvas.height() as usize);
@@ -140,7 +149,7 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
         };
         let band: Vec<f32> = outer.iter().zip(&inner).map(|(o, i)| (o - i).clamp(0.0, 1.0)).collect();
         let band = sel::mask_to_surface(&band, canvas);
-        let lock = doc.effective_locks(id).transparency;
+        let lock = transparency_locked;
         let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
         let area = band.content_bounds().intersect(&canvas);
         if !area.is_empty() {
@@ -282,17 +291,25 @@ fn transform_preset(s: &mut Session, kind: &str) -> Result<Value> {
 
 // ---------- selection / clipboard ----------
 
-fn reselect_target(s: &Session) -> Option<photocraft_raster::Surface> {
-    let d = s.active()?;
+fn reselect_target(s: &Session) -> Result<Option<photocraft_raster::Surface>> {
+    let Some(d) = s.active() else { return Ok(None) };
+    d.doc.validate_resident()?;
     if d.doc.selection.is_some() {
-        return None;
+        return Ok(None);
     }
-    (0..d.history.past_len()).rev().find_map(|i| d.history.state(i).and_then(|doc| doc.selection.clone()))
+    for i in (0..d.history.past_len()).rev() {
+        if let Some(doc) = d.history.state(i)?
+            && let Some(selection) = &doc.selection
+        {
+            return Ok(Some(selection.clone()));
+        }
+    }
+    Ok(None)
 }
 
 fn can_reselect(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
-    reselect_target(s).map(|_| ()).ok_or_else(|| "there is no selection to restore".into())
+    reselect_target(s).map_err(|e| e.to_string())?.map(|_| ()).ok_or_else(|| "there is no selection to restore".into())
 }
 
 fn paste_into(s: &mut Session, p: &Value, outside: bool) -> Result<Value> {
@@ -330,7 +347,7 @@ fn paste_into(s: &mut Session, p: &Value, outside: bool) -> Result<Value> {
     s.coalesce_request = Some(key);
     let r2 = s.edit(label, |doc, _| {
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        l.mask = Some(LayerMask { surface: limit, linked: false, ..LayerMask::reveal_all() });
+        l.mask = Some(LayerMask { surface: std::sync::Arc::new(limit), linked: false, ..LayerMask::reveal_all() });
         Ok(())
     });
     s.coalesce_request = None;
@@ -371,6 +388,10 @@ pub(crate) fn background_to_layer_for_mask(doc: &mut photocraft_doc::Document, i
 }
 
 fn toggle_mask(s: &mut Session, p: &Value, key: &str) -> Result<Value> {
+    if key == "enabled"
+        && let Some(result) = crate::xcf_mask_cmds::legacy_enabled(s, p)? {
+        return Ok(result);
+    }
     let id = layer_param(s, p)?;
     let label = if key == "enabled" { "Enable/Disable Layer Mask" } else { "Link/Unlink Layer Mask" };
     let v = s.edit(label, |doc, _| {
@@ -515,7 +536,7 @@ fn show_only(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Pixels of a fill or smart-object layer's content alone (no mask, effects or opacity).
-fn content_pixels(doc: &Document, l: &Layer) -> photocraft_raster::Surface {
+fn content_pixels(doc: &Document, l: &Layer) -> Result<photocraft_raster::Surface> {
     let mut tmp = l.clone();
     tmp.mask = None;
     tmp.vector_mask = None;
@@ -526,7 +547,7 @@ fn content_pixels(doc: &Document, l: &Layer) -> photocraft_raster::Surface {
     tmp.clipped = false;
     tmp.visible = true;
     let canvas = doc.bounds();
-    let buf = photocraft_compose::render_layer(&tmp, canvas);
+    let buf = photocraft_compose::render_layer(&tmp, canvas)?;
     let fmt = doc.pixel_format();
     let n = fmt.channels();
     let mut data = vec![0.0f32; buf.px.len() * n];
@@ -536,7 +557,7 @@ fn content_pixels(doc: &Document, l: &Layer) -> photocraft_raster::Surface {
     let mut s = photocraft_raster::Surface::new(fmt);
     s.write_region(canvas, &data);
     s.prune();
-    s
+    Ok(s)
 }
 
 fn kind_of(s: &Session, id: LayerId) -> Option<&'static str> {
@@ -565,7 +586,7 @@ fn rasterize_one(s: &mut Session, id: LayerId, only: Option<&str>, key: &str) ->
             s.coalesce_request = Some(key.to_string());
             let r = s.edit(label, |doc, _| {
                 let snap = doc.layer(id).cloned().ok_or(EngineError::NoLayer(id))?;
-                let px = content_pixels(doc, &snap);
+                let px = content_pixels(doc, &snap)?;
                 let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
                 l.content = LayerContent::Raster(px);
                 l.fill_cache = None;
@@ -648,7 +669,7 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| paste_into(s, p, true)
         ),
         spec!("select.reselect", "Reselect", &["Select"], Some("Cmd+Shift+D"), "{}", can_reselect, |s, _| {
-            let m = reselect_target(s).ok_or(EngineError::Other("there is no selection to restore".into()))?;
+            let m = reselect_target(s)?.ok_or(EngineError::Other("there is no selection to restore".into()))?;
             s.edit("Reselect", |doc, _| {
                 doc.selection = Some(m);
                 Ok(())

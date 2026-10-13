@@ -15,12 +15,15 @@ pub enum ErrorKind {
 #[error("XCF {kind:?} at byte {offset}{item}: {message}")]
 pub struct XcfError {
     pub kind: ErrorKind,
-    pub offset: usize,
+    pub offset: u64,
     pub item: String,
     pub message: String,
 }
 impl XcfError {
-    pub(crate) fn new(kind: ErrorKind, offset: usize, message: impl Into<String>) -> Self {
+    pub(crate) fn at(kind: ErrorKind, offset: u64, message: impl Into<String>) -> Self {
         Self { kind, offset, item: String::new(), message: message.into() }
+    }
+    pub(crate) fn new(kind: ErrorKind, offset: usize, message: impl Into<String>) -> Self {
+        Self { kind, offset: offset as u64, item: String::new(), message: message.into() }
     }
 }

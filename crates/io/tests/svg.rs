@@ -13,7 +13,7 @@ fn open(svg: &str) -> ImportResult {
 }
 
 fn px(doc: &photocraft_doc::Document, x: i32, y: i32) -> [f32; 4] {
-    photocraft_compose::flatten(doc).get(x, y)
+    photocraft_compose::flatten(doc).unwrap().get(x, y)
 }
 
 fn close(a: [f32; 4], b: [f32; 4]) -> bool {

@@ -297,7 +297,7 @@ fn undo_and_redo_restore_the_targeted_layers() {
     let mut s = session_with_doc();
     let target = |s: &Session| {
         let st = s.active().unwrap();
-        (st.active_layer.unwrap(), st.selected_layers())
+        (st.active_layer.unwrap(), st.selected_layers().unwrap())
     };
     let select = |s: &mut Session, id: LayerId, mode: &str| {
         let steps = s.active().unwrap().history.past_len();
@@ -518,7 +518,7 @@ fn fill_layer_pixel_rewrites_refresh_the_effect_maps() {
     .unwrap();
     let render = |s: &Session| {
         let d = &s.active().unwrap().doc;
-        photocraft_compose::render(d, d.bounds()).px
+        photocraft_compose::render(d, d.bounds()).unwrap().px
     };
     // Give the layer the cached-pixels state a PSD import produces (the cache is what Image
     // › Transform & friends rewrite in place, without touching the Fill spec).
@@ -573,7 +573,7 @@ fn group_effect_maps_follow_child_visibility_and_opacity() {
     .unwrap();
     let render = |s: &Session| {
         let d = &s.active().unwrap().doc;
-        photocraft_compose::render(d, d.bounds()).px
+        photocraft_compose::render(d, d.bounds()).unwrap().px
     };
     let mut prev = render(&s); // populate the effect-map cache
     type Edit = (&'static str, fn(&mut photocraft_doc::Layer));
@@ -808,8 +808,8 @@ fn move_selected_layers_into_existing_group_preserves_order_selection_and_one_un
     assert_eq!(names, ["A", "C"]);
     assert_eq!(st.history.past_len(), past + 1, "one drag = one undo step");
     assert_eq!(st.active_layer, Some(LayerId(c)), "preserve the active member");
-    assert!(st.selected_layers().contains(&LayerId(a)));
-    assert!(st.selected_layers().contains(&LayerId(c)));
+    assert!(st.selected_layers().unwrap().contains(&LayerId(a)));
+    assert!(st.selected_layers().unwrap().contains(&LayerId(c)));
 
     s.execute("edit.undo", json!({})).unwrap();
     let root: Vec<_> = s.active().unwrap().doc.layers.iter().map(|l| l.name.as_str()).collect();
@@ -836,7 +836,7 @@ fn move_selected_layers_keeps_selected_group_children_and_supports_above_below()
     let target_children = s.active().unwrap().doc.layer(LayerId(target)).unwrap().children().unwrap();
     assert_eq!(target_children.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["A", "G"]);
     assert_eq!(target_children[1].children().unwrap()[0].id.0, b);
-    assert!(s.active().unwrap().selected_layers().contains(&LayerId(b)), "nested selected child is still selected");
+    assert!(s.active().unwrap().selected_layers().unwrap().contains(&LayerId(b)), "nested selected child is still selected");
 
     s.execute("layer.moveTo", json!({"layers": [group, a], "target": c, "position": "above"})).unwrap();
     assert_eq!(s.active().unwrap().doc.layers.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["Background", "C", "A", "G", "Target"]);
@@ -887,7 +887,7 @@ fn coalesced_edits_share_one_history_step() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 20, "height": 20})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
-    let steps = |s: &Session| s.active().unwrap().history.entries().len();
+    let steps = |s: &Session| s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len();
     let base = steps(&s);
     for o in [10, 20, 30] {
         s.execute("layer.setProps", json!({"opacity": o as f64 / 100.0, "coalesce": "drag-1"})).unwrap();

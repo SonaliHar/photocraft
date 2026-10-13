@@ -46,7 +46,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         "Remove Background",
         move |doc, _, ctx| {
             ctx.progress(0.1, "Finding subject");
-            let found = with_doc_sampler(doc, Some(id), sample_all, |smp, d| subject::select_subject(smp, d.bounds()));
+            let found = with_doc_sampler(doc, Some(id), sample_all, |smp, d| subject::select_subject(smp, d.bounds()))?;
             let mut region = found.ok_or_else(|| EngineError::Other("no subject found".into()))?;
             if ctx.cancelled() {
                 return Err(EngineError::Cancelled);
@@ -55,14 +55,15 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
                 ctx.progress(0.6, "Refining edge");
                 let refined = with_doc_sampler(doc, Some(id), sample_all, |smp, d| {
                     matting::refine_mask(smp, &matting::region_reader(&region), region.bbox, d.bounds(), &REFINE)
-                });
+                })?;
                 region = refined.unwrap_or(region);
                 if ctx.cancelled() {
                     return Err(EngineError::Cancelled);
                 }
             }
             crate::extra_cmds::background_to_layer_for_mask(doc, id);
-            doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = Some(LayerMask { surface: matting::region_surface(&region), ..LayerMask::reveal_all() });
+            doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask =
+                Some(LayerMask { surface: std::sync::Arc::new(matting::region_surface(&region)), ..LayerMask::reveal_all() });
             doc.selection = None;
             let b = region.bbox;
             Ok([b.x0, b.y0, b.width() as i32, b.height() as i32])
@@ -178,7 +179,7 @@ mod tests {
             assert!(mask_cov(&s, 100, 80) >= 0.8, "depth {depth}: disc centre hidden");
             // Non-destructive: the pixels are untouched, only masked.
             assert_eq!(layer(&s, id).surface().unwrap().read_region(Rect::new(0, 0, 200, 160)), pixels, "depth {depth}");
-            let corner = photocraft_compose::render(&s.active().unwrap().doc, Rect::new(0, 0, 1, 1)).px[0][3];
+            let corner = photocraft_compose::render(&s.active().unwrap().doc, Rect::new(0, 0, 1, 1)).unwrap().px[0][3];
             assert!(corner < 0.2, "depth {depth}: composite corner alpha {corner}");
             assert!(s.active().unwrap().doc.selection.is_none());
             s.execute("edit.undo", json!({})).unwrap();

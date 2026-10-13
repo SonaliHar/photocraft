@@ -77,7 +77,7 @@ mod tests {
     fn painting_or_moving_a_hidden_layer_is_refused() {
         let (mut s, id) = session();
         s.execute("layer.setProps", json!({"layer": id, "visible": false})).unwrap();
-        let steps = s.active().unwrap().history.entries().len();
+        let steps = s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len();
         for (cmd, p) in [
             ("paint.stroke", json!({"points": [[10, 10], [20, 20]], "color": "#ff0000"})),
             ("paint.bucket", json!({"x": 10, "y": 10})),
@@ -87,7 +87,7 @@ mod tests {
             let e = s.execute(cmd, p).unwrap_err().to_string();
             assert!(e.contains(HIDDEN), "{cmd}: {e}");
         }
-        assert_eq!(s.active().unwrap().history.entries().len(), steps, "nothing changed");
+        assert_eq!(s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len(), steps, "nothing changed");
         // Shown again, it paints.
         s.execute("layer.setProps", json!({"layer": id, "visible": true})).unwrap();
         s.execute("paint.stroke", json!({"points": [[10, 10], [12, 12]], "color": "#ff0000", "size": 9})).unwrap();

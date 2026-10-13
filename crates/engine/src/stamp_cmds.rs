@@ -45,7 +45,7 @@ fn with_alpha(doc: &Document) -> PixelFormat {
 fn stamp_layer(doc: &Document, name: String) -> Result<Layer> {
     let fmt = with_alpha(doc);
     let mut layer = Layer::raster(name, fmt);
-    *crate::pixels_mut(&mut layer)? = photocraft_compose::flatten_to_surface(doc, fmt, None);
+    *crate::pixels_mut(&mut layer)? = photocraft_compose::flatten_to_surface(doc, fmt, None)?;
     Ok(layer)
 }
 
@@ -76,7 +76,7 @@ fn stamp_visible(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn stamp_down(s: &mut Session, p: &Value) -> Result<Value> {
     object(p, "layer.stampDown")?;
-    let sel = crate::layer_multi_cmds::selected(s);
+    let sel = crate::layer_multi_cmds::selected(s)?;
     if sel.len() >= 2 {
         return stamp_selected(s, &sel);
     }
@@ -108,7 +108,7 @@ fn stamp_down(s: &mut Session, p: &Value) -> Result<Value> {
         tmp.layers = vec![base, upper];
         let fmt = doc.pixel_format();
         let fmt = if lower.locks.transparency { fmt } else { PixelFormat::new(fmt.mode, fmt.sample, true) };
-        let surf = photocraft_compose::flatten_to_surface(&tmp, fmt, None);
+        let surf = photocraft_compose::flatten_to_surface(&tmp, fmt, None)?;
         let mut merged = Layer::new(lower.name.clone(), LayerContent::Raster(surf));
         merged.id = lower.id;
         merged.blend = lower.blend;

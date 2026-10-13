@@ -572,8 +572,8 @@ fn shortcut(t: LiquifyTool) -> &'static str {
 
 fn load_backdrop(app: &PhotocraftApp, ctx: &egui::Context, layer: LayerId, canvas: Rect) -> Option<TextureHandle> {
     let st = app.session.active()?;
-    let doc = crate::distort_ui::without_layer(&st.doc, layer);
-    let buf = photocraft_compose::render(&doc, canvas);
+    let doc = crate::distort_ui::without_layer(&st.doc, layer).map_err(|error| log::warn!("Liquify backdrop: {error}")).ok()?;
+    let buf = photocraft_compose::render(&doc, canvas).map_err(|error| log::warn!("Liquify backdrop: {error}")).ok()?;
     let mut s = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
     let flat: Vec<f32> = buf.px.iter().flat_map(|p| *p).collect();
     s.write_region(canvas, &flat);

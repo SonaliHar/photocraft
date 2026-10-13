@@ -157,9 +157,9 @@ fn channel_management_and_view_state() {
     assert!(s.active().unwrap().channel_view.alpha_shown(1));
     assert!(!s.active().unwrap().channel_view.is_plain(doc(&s)));
     // Viewing state doesn't dirty or add history.
-    let hist = s.active().unwrap().history.entries().len();
+    let hist = s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len();
     s.execute("channel.target", json!({"channel": "green"})).unwrap();
-    assert_eq!(s.active().unwrap().history.entries().len(), hist);
+    assert_eq!(s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len(), hist);
     let j = s.execute("channel.list", json!({})).unwrap();
     assert_eq!(j["target"]["kind"], "color");
     assert_eq!(j["alpha"].as_array().unwrap().len(), 2);
@@ -263,7 +263,8 @@ fn quick_mask_enter_paint_exit() {
     assert_eq!(sel_at(&s, 30, 10), 1.0, "painted white: selected");
     assert_eq!(sel_at(&s, 35, 2), 0.0);
     // History: enter and exit are steps; undo goes back into Quick Mask with the paint.
-    let labels: Vec<String> = s.active().unwrap().history.entries().iter().map(|e| e.to_string()).collect();
+    let labels: Vec<String> =
+        s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().iter().map(|e| e.to_string()).collect();
     assert!(labels.iter().any(|l| l.contains("Edit in Quick Mask")) && labels.iter().any(|l| l.contains("Exit Quick Mask")), "{labels:?}");
     s.undo();
     assert!(doc(&s).quick_mask.is_some());
@@ -520,4 +521,205 @@ fn apply_image_and_calculations_fail_gracefully_never_panic() {
     }
     // A well-formed self-apply still works.
     assert!(s.execute("image.applyImage", json!({"source": {"channel": "composite"}})).is_ok());
+}
+
+#[test]
+fn stable_channel_ids_survive_index_changes_duplication_native_and_undo() {
+    let mut s = session();
+    s.edit("Own channels", |doc, _| {
+        doc.channels.push(AlphaChannel::new("duplicate name", Surface::new(PixelFormat::GRAY8)));
+        doc.channels.push(AlphaChannel::new("duplicate name", Surface::new(PixelFormat::GRAY8)));
+        doc.xcf_state = Some(photocraft_doc::XcfState::default());
+        Ok(())
+    })
+    .unwrap();
+    let first = doc(&s).channels[0].id;
+    let second = doc(&s).channels[1].id;
+    assert_eq!(parse_ref(&json!({"channelId":second.0}), doc(&s)), Some(ChanRef::Alpha(1)));
+    s.execute("channel.delete", json!({"channelId":first.0})).unwrap();
+    assert_eq!(parse_ref(&json!({"channelId":second.0}), doc(&s)), Some(ChanRef::Alpha(0)));
+    s.execute("channel.rename", json!({"channelId":second.0,"name":"Own renamed"})).unwrap();
+    assert_eq!(doc(&s).channels[0].name, "Own renamed");
+    s.execute("channel.duplicate", json!({"channel":{"channelId":second.0}})).unwrap();
+    assert_ne!(doc(&s).channels[1].id, second);
+    let back = photocraft_format::load_from_bytes(&photocraft_format::save_to_bytes(doc(&s), &Default::default()).unwrap()).unwrap();
+    assert_eq!(back, *doc(&s));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(doc(&s).channels.len(), 1);
+    assert_eq!(doc(&s).channels[0].id, second);
+    let before = doc(&s).clone();
+    assert!(s.execute("channel.delete", json!({"channelId":u64::MAX})).is_err());
+    assert_eq!(doc(&s), &before);
+}
+
+#[test]
+fn duplicated_imported_channel_keeps_ordered_filter_metadata_and_fresh_ids() {
+    use photocraft_doc::item_identity::{FilterId, ItemRef};
+    use photocraft_doc::xcf_filters::{FilterNode, FilterStack, OperationIdentity};
+    let mut s = session();
+    s.edit("Own channel", |doc, _| {
+        doc.channels.push(AlphaChannel::new("Own", Surface::new(PixelFormat::GRAY8)));
+        let id = doc.channels[0].id;
+        let mut state = photocraft_doc::XcfState::default();
+        state.reconcile_layers(doc).map_err(|e| bad("own", e.to_string()))?;
+        state.filter_stacks.push(FilterStack {
+            owner: ItemRef::Channel(id),
+            revision: 2,
+            nodes: vec![FilterNode {
+                id: FilterId(1),
+                operation: OperationIdentity { name: "own:filter".into(), stored_version: "1".into(), schema_epoch: "own".into() },
+                arguments: vec![],
+                enabled: false,
+                opacity_f64_bits: 1.0f64.to_bits(),
+                source_clipping: Some(0),
+                source_region: Some(0),
+                source_display_name: Some("Own".into()),
+                source_icon: None,
+                mask: Some(ItemRef::Mask(photocraft_doc::item_identity::MaskId(9))),
+                auxiliary: vec![("self".into(), ItemRef::Channel(id))],
+                composition: None,
+            }],
+        });
+        let bounds = Rect::new(0, 0, 1, 1);
+        let mut mask_item = state.items.iter().find(|item| item.item == ItemRef::Channel(id)).unwrap().clone();
+        mask_item.item = ItemRef::Mask(photocraft_doc::item_identity::MaskId(9));
+        mask_item.raster_bounds = Some(bounds);
+        mask_item.mask = Some(photocraft_doc::xcf_state::MaskState {
+            owner: ItemRef::Channel(id),
+            bounds,
+            offset: [0, 0],
+            outside_f64_bits: 0,
+            enabled: true,
+            shown: false,
+            editing: false,
+            linked: true,
+        });
+        state.items.push(mask_item);
+        state.filter_masks.push(
+            photocraft_doc::FilterMask::try_new(photocraft_doc::item_identity::MaskId(9), FilterId(1), Surface::new(PixelFormat::GRAY8), bounds).unwrap(),
+        );
+        doc.xcf_state = Some(state);
+        Ok(())
+    })
+    .unwrap();
+    let original = doc(&s).channels[0].id;
+    s.execute("channel.duplicate", json!({"channelId":original.0})).unwrap();
+    let target = doc(&s).channels[1].id;
+    let state = doc(&s).xcf_state.as_ref().unwrap();
+    let copy = state.filter_stacks.iter().find(|stack| stack.owner == ItemRef::Channel(target)).unwrap();
+    assert_ne!(copy.nodes[0].id, FilterId(1));
+    assert_eq!(copy.nodes[0].auxiliary[0].1, ItemRef::Channel(target));
+    assert_eq!(copy.nodes[0].source_clipping, Some(0));
+    let Some(ItemRef::Mask(mask_id)) = copy.nodes[0].mask else { panic!("fresh filter mask") };
+    assert_ne!(mask_id, photocraft_doc::item_identity::MaskId(9));
+    let mask = state.filter_masks.iter().find(|mask| mask.id == mask_id).unwrap();
+    assert_eq!(mask.owner, copy.nodes[0].id);
+    assert_eq!(mask.surface, state.filter_masks[0].surface);
+    assert_eq!(state.items.iter().find(|item| item.item == ItemRef::Mask(mask_id)).unwrap().mask.as_ref().unwrap().owner, ItemRef::Channel(target));
+    let back = photocraft_format::load_from_bytes(&photocraft_format::save_to_bytes(doc(&s), &Default::default()).unwrap()).unwrap();
+    assert_eq!(back, *doc(&s));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(doc(&s).xcf_state.as_ref().unwrap().filter_stacks.len(), 1);
+}
+
+#[test]
+fn imported_channel_view_uses_ids_visibility_and_single_active_target() {
+    use photocraft_doc::item_identity::ItemRef;
+    let mut d = Document::new("Own", photocraft_doc::Size::new(1, 1), ColorMode::Rgb, photocraft_doc::SampleType::U8);
+    d.channels.push(AlphaChannel::new("Same", Surface::new(PixelFormat::GRAY8)));
+    d.channels.push(AlphaChannel::new("Same", Surface::new(PixelFormat::GRAY8)));
+    let first = d.channels[0].id;
+    let second = d.channels[1].id;
+    let mut state = photocraft_doc::XcfState::default();
+    state.reconcile_layers(&d).unwrap();
+    state.items.iter_mut().find(|item| item.item == ItemRef::Channel(first)).unwrap().visible = false;
+    state.items.iter_mut().find(|item| item.item == ItemRef::Channel(second)).unwrap().visible = true;
+    state.selection.active = Some(ItemRef::Channel(second));
+    state.selection.selected = vec![ItemRef::Channel(second)];
+    d.xcf_state = Some(state);
+    let view = imported_view(&d);
+    assert_eq!(view.target, ChannelTarget::Alpha(1));
+    assert_eq!(view.alpha_visible, vec![false, true]);
+    d.channels.swap(0, 1);
+    assert_eq!(imported_view(&d).target, ChannelTarget::Alpha(0));
+    d.xcf_state.as_mut().unwrap().selection.selected.push(ItemRef::Channel(first));
+    assert_eq!(imported_view(&d).target, ChannelTarget::Composite);
+    let selection = photocraft_doc::item_identity::ChannelId::fresh();
+    d.selection_channel_id = Some(selection);
+    d.xcf_state.as_mut().unwrap().selection.active = Some(ItemRef::Channel(selection));
+    assert_eq!(imported_view(&d).target, ChannelTarget::Composite);
+}
+
+fn hidden_mask_document() -> Document {
+    use photocraft_doc::item_identity::{ItemRef, MaskId};
+    let mut document = Document::with_background("Own mask", photocraft_doc::Size::new(2, 1), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    let owner = document.layers[0].id;
+    document.layers[0].locks = Default::default();
+    document.layers[0].mask = Some(photocraft_doc::LayerMask::reveal_all());
+    document.layers.push(Layer::new("Other", LayerContent::Raster(Surface::new(PixelFormat::RGBA8))));
+    let mut selection = Surface::new(PixelFormat::GRAY8);
+    selection.write_pixel(0, 0, &[1.0]);
+    document.selection = Some(selection);
+    let mut state = photocraft_doc::XcfState::default();
+    state.reconcile_layers(&document).unwrap();
+    let mut metadata = state.items.iter().find(|item| item.item == ItemRef::Layer(owner)).unwrap().clone();
+    metadata.item = ItemRef::Mask(MaskId(71));
+    metadata.mask = Some(photocraft_doc::xcf_state::MaskState {
+        owner: ItemRef::Layer(owner),
+        bounds: Rect::new(0, 0, 2, 1),
+        offset: [0, 0],
+        outside_f64_bits: 1.0_f64.to_bits(),
+        enabled: true,
+        linked: true,
+        editing: true,
+        shown: false,
+    });
+    state.items.push(metadata);
+    state.selection.mask_target = Some(ItemRef::Mask(MaskId(71)));
+    document.xcf_state = Some(state);
+    document
+}
+
+#[test]
+fn imported_hidden_mask_native_reopen_routes_edits_undo_and_selection_without_showing() {
+    let source = hidden_mask_document();
+    let owner = source.layers[0].id;
+    let bytes = photocraft_format::save_to_bytes(&source, &Default::default()).unwrap();
+    let reopened = photocraft_format::load_from_bytes(&bytes).unwrap();
+    let mut session = Session::new();
+    session.add_document(reopened, None).unwrap();
+    assert_eq!(session.active().unwrap().active_layer, Some(owner));
+    assert_eq!(mask_editing_target(session.active().unwrap()), Some(owner));
+    assert!(session.active().unwrap().channel_view.layer_mask.is_none());
+    let before = doc(&session).clone();
+    session.execute("image.adjustments.invert", json!({})).unwrap();
+    let edited = doc(&session);
+    assert_eq!(edited.layers[0].surface(), before.layers[0].surface());
+    assert_eq!(edited.selection, before.selection);
+    assert_eq!(edited.layers[0].mask.as_ref().unwrap().surface.sample_channel(0, 0, 0), 0.0);
+    assert_eq!(edited.layers[0].mask.as_ref().unwrap().surface.sample_channel(1, 0, 0), 1.0);
+    assert!(session.active().unwrap().channel_view.layer_mask.is_none());
+    assert_eq!(photocraft_format::load_from_bytes(&photocraft_format::save_to_bytes(edited, &Default::default()).unwrap()).unwrap(), *edited);
+    session.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(doc(&session), &before);
+    assert_eq!(mask_editing_target(session.active().unwrap()), Some(owner));
+    session.execute("channel.target.composite", json!({})).unwrap();
+    assert_eq!(mask_editing_target(session.active().unwrap()), None);
+}
+
+#[test]
+fn imported_mask_flag_conflicts_and_deleted_masks_do_not_guess_a_target() {
+    use photocraft_doc::item_identity::{ItemRef, MaskId};
+    let mut document = hidden_mask_document();
+    let mut state = document.xcf_state.take().unwrap();
+    state.selection.mask_target = None;
+    let mut second = state.items.iter().find(|item| item.item == ItemRef::Mask(MaskId(71))).unwrap().clone();
+    second.item = ItemRef::Mask(MaskId(72));
+    state.items.push(second);
+    document.xcf_state = Some(state);
+    assert_eq!(imported_editing_mask(&document), None);
+    document.xcf_state.as_mut().unwrap().selection.mask_target = Some(ItemRef::Mask(MaskId(71)));
+    assert_eq!(imported_editing_mask(&document), Some(document.layers[0].id));
+    document.layers[0].mask = None;
+    assert_eq!(imported_editing_mask(&document), None);
 }

@@ -261,7 +261,13 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
             else {
                 return;
             };
-            let buf = photocraft_compose::flatten(&wd);
+            let buf = match photocraft_compose::flatten(&wd) {
+                Ok(buf) => buf,
+                Err(error) => {
+                    ui.label(error.to_string());
+                    return;
+                }
+            };
             let v = (Arc::new(buf.px), wd.size.width, wd.size.height, (fw * fh) / (f64::from(wd.size.width) * f64::from(wd.size.height)).max(1.0));
             ui.data_mut(|d| d.insert_temp(wkey, v.clone()));
             v
@@ -502,12 +508,21 @@ fn web_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     let html = b(f, "html", true);
     let st = WebSettings::from_params(&p, "file.export.saveForWebLegacy").map_err(|e| e.to_string())?;
     let base = photocraft_doc::slices::base_name(&doc);
-    let suggested = if has_slices && html { format!("{base}.html") } else { format!("{base}.{}", st.format.ext()) };
+    let suggested = if has_slices && app.session.has_web_export_delivery() {
+        format!("{base}.zip")
+    } else if has_slices && html {
+        format!("{base}.html")
+    } else {
+        format!("{base}.{}", st.format.ext())
+    };
     app.pick_save(&suggested, move |app, path| {
         app.refocus(doc.id)?;
         if has_slices {
             let dir = path.rfind(['/', '\\']).map(|i| path[..i].to_string()).unwrap_or_else(|| ".".into());
             p["dir"] = json!(dir);
+            if app.session.has_web_export_delivery() {
+                p["path"] = json!(path);
+            }
             p["html"] = json!(html);
         } else {
             p["path"] = json!(path);
@@ -581,13 +596,22 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
                     );
                     let key = egui::Id::new(("print-thumb", doc.id.0, app.session.active().map_or(0, |d| d.revision)));
                     let tex: Option<Arc<egui::TextureHandle>> = ui.data(|d| d.get_temp(key));
-                    let tex = tex.unwrap_or_else(|| {
-                        let th = photocraft_compose::thumbnail(&doc, 400);
-                        let ci = egui::ColorImage::from_rgba_unmultiplied([th.width as usize, th.height as usize], &th.pixels);
-                        let tx = Arc::new(ui.ctx().load_texture("print-thumb", ci, egui::TextureOptions::LINEAR));
-                        ui.data_mut(|d| d.insert_temp(key, tx.clone()));
-                        tx
-                    });
+                    let tex = match tex {
+                        Some(texture) => texture,
+                        None => {
+                            let th = match photocraft_compose::thumbnail(&doc, 400) {
+                                Ok(th) => th,
+                                Err(error) => {
+                                    app.ui.status = error.to_string();
+                                    return;
+                                }
+                            };
+                            let ci = egui::ColorImage::from_rgba_unmultiplied([th.width as usize, th.height as usize], &th.pixels);
+                            let tx = Arc::new(ui.ctx().load_texture("print-thumb", ci, egui::TextureOptions::LINEAR));
+                            ui.data_mut(|d| d.insert_temp(key, tx.clone()));
+                            tx
+                        }
+                    };
                     let clip = ui.painter().with_clip_rect(page);
                     clip.image(tex.id(), img, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
                     let mark = egui::Stroke::new(1.0, egui::Color32::BLACK);
@@ -778,6 +802,32 @@ mod tests {
         for id in ["file.automate.contactSheetII", "file.scripts.statistics", "file.scripts.scriptEventsManager", "file.package"] {
             let r = crate::menus::invoke(&mut app, &ctx, id, json!({})).unwrap();
             assert!(r["dialog"].is_u64(), "{id}");
+        }
+    }
+    #[test]
+    fn save_for_web_delivery_capability_changes_only_slice_save_suggestion() {
+        use std::sync::{Arc, Mutex, PoisonError};
+        fn deliver(_: &str, _: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        for delivery in [false, true] {
+            let (mut app, ctx) = app();
+            app.run("slice.new", json!({"rect":[2,3,18,20],"name":"Owned slice"})).unwrap();
+            if delivery {
+                app.session.set_web_export_delivery(Some(deliver));
+            }
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let capture = requests.clone();
+            app.services.file_dialog = Some(Box::new(move |request, _, reply| {
+                capture.lock().unwrap_or_else(PoisonError::into_inner).push(request);
+                reply.send(None);
+            }));
+            let result = web_confirm(&mut app, &json!({"format":"png24","html":true}).as_object().unwrap().clone()).unwrap();
+            assert_eq!(result["fileDialog"], "save");
+            app.poll_file_dialog(&ctx, None);
+            let requests = requests.lock().unwrap_or_else(PoisonError::into_inner);
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0], crate::FileDialogRequest::Save { suggested: if delivery { "web.zip" } else { "web.html" }.into() });
         }
     }
 }

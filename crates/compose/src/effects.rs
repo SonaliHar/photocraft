@@ -79,10 +79,11 @@ impl Map {
         let mut out = Map::new(self.w, self.h, 0.0);
         let (fx, fy) = (dx.floor(), dy.floor());
         let (ax, ay) = (dx - fx, dy - fy);
-        let s = |x: i64, y: i64| if x < 0 || y < 0 || x >= self.w as i64 || y >= self.h as i64 { outside } else { self.v[y as usize * self.w + x as usize] };
+        let s =
+            |x: i128, y: i128| if x < 0 || y < 0 || x >= self.w as i128 || y >= self.h as i128 { outside } else { self.v[y as usize * self.w + x as usize] };
         for y in 0..self.h as i64 {
             for x in 0..self.w as i64 {
-                let (sx, sy) = (x - fx as i64, y - fy as i64);
+                let (sx, sy) = (i128::from(x) - i128::from(fx as i64), i128::from(y) - i128::from(fy as i64));
                 let v00 = s(sx, sy);
                 let v10 = s(sx - 1, sy);
                 let v01 = s(sx, sy - 1);
@@ -417,7 +418,7 @@ fn noise(m: &mut Map, amount: f32, x0: i32, y0: i32) {
             if *v <= 0.0 {
                 continue;
             }
-            let n = hash_noise(i64::from(x0 + x as i32), i64::from(y0 + y as i32));
+            let n = hash_noise(i64::from(x0).wrapping_add(x as i64), i64::from(y0).wrapping_add(y as i64));
             *v = (*v + (n - 0.5) * 2.0 * amount).clamp(0.0, 1.0);
         }
     }
@@ -1086,6 +1087,23 @@ impl FxMaps {
 }
 
 impl FxMaps {
+    pub(crate) fn checked_payload_bytes(&self) -> Result<usize, photocraft_raster::RasterInputError> {
+        use photocraft_raster::RasterInputError as E;
+        let mut n = self.shape.v.capacity().checked_mul(4).ok_or(E::LimitExceeded)?;
+        for maps in &self.per {
+            n = n.checked_add(maps.capacity().checked_mul(std::mem::size_of::<Map>()).ok_or(E::LimitExceeded)?).ok_or(E::LimitExceeded)?;
+            for map in maps {
+                n = n.checked_add(map.v.capacity().checked_mul(4).ok_or(E::LimitExceeded)?).ok_or(E::LimitExceeded)?;
+            }
+        }
+        n = n.checked_add(self.per.capacity().checked_mul(std::mem::size_of::<Vec<Map>>()).ok_or(E::LimitExceeded)?).ok_or(E::LimitExceeded)?;
+        n = n.checked_add(self.bevel_paint.capacity().checked_mul(std::mem::size_of::<BevelPaint>()).ok_or(E::LimitExceeded)?).ok_or(E::LimitExceeded)?;
+        for values in [&self.din, &self.dout, &self.vdout].into_iter().flatten() {
+            n = n.checked_add(values.capacity().checked_mul(4).ok_or(E::LimitExceeded)?).ok_or(E::LimitExceeded)?;
+        }
+        n = n.checked_add(self.frames.capacity().checked_mul(std::mem::size_of::<(u32, Rect)>()).ok_or(E::LimitExceeded)?).ok_or(E::LimitExceeded)?;
+        Ok(n)
+    }
     /// Approximate heap size (for cache budgeting).
     pub fn bytes(&self) -> usize {
         let n = self.shape.v.len();
@@ -1950,4 +1968,429 @@ mod tests {
         let diff: f32 = plain.v.iter().zip(&noisy.v).map(|(a, b)| (a - b).abs()).sum();
         assert!(diff > 5.0, "glow noise changes the coverage: {diff}");
     }
+}
+
+// Additive checked preparation kernels; legacy rendering retains its existing API.
+mod checked_prepare {
+    use super::*;
+    use photocraft_raster::{Interrupt, RasterInputError};
+    fn poll(control: &Interrupt<'_>) -> Result<(), RasterInputError> {
+        control.check().map_err(|_| RasterInputError::Cancelled)
+    }
+    fn zeros<T: Default + Clone>(count: usize, control: &Interrupt<'_>) -> Result<Vec<T>, RasterInputError> {
+        let mut values = Vec::new();
+        values.try_reserve_exact(count).map_err(|_| RasterInputError::AllocationFailed)?;
+        if values.capacity() != count {
+            return Err(RasterInputError::LimitExceeded);
+        }
+        while values.len() < count {
+            poll(control)?;
+            values.resize(values.len().saturating_add(4096).min(count), T::default());
+        }
+        Ok(values)
+    }
+    fn checked_box(src: &[f64], x0: i64, dst: &mut [f64], size: f32, control: &Interrupt<'_>) -> Result<(), RasterInputError> {
+        let (r, f, norm) = box_geom(size);
+        let at = |i: i64| if i < 0 { 0.0 } else { src.get(i as usize).copied().unwrap_or(0.0) };
+        if r == 0 {
+            for (k, d) in dst.iter_mut().enumerate() {
+                if k % 1024 == 0 {
+                    poll(control)?;
+                }
+                *d = at(x0 + k as i64);
+            }
+            return Ok(());
+        }
+        let mut inner = 0.0;
+        for i in x0 - (r - 1)..=x0 + (r - 1) {
+            inner += at(i);
+        }
+        for (k, d) in dst.iter_mut().enumerate() {
+            if k % 1024 == 0 {
+                poll(control)?;
+            }
+            let x = x0 + k as i64;
+            *d = (inner + f * (at(x - r) + at(x + r))) * norm;
+            inner += at(x + r) - at(x - r + 1);
+        }
+        Ok(())
+    }
+    fn checked_line(src: &[f32], dst: &mut [f32], size: f32, control: &Interrupt<'_>) -> Result<(), RasterInputError> {
+        let (r, _, _) = box_geom(size);
+        let mut s = zeros::<f64>(src.len(), control)?;
+        for (i, (d, v)) in s.iter_mut().zip(src).enumerate() {
+            if i % 1024 == 0 {
+                poll(control)?;
+            }
+            *d = f64::from(*v);
+        }
+        let mut mid = zeros::<f64>(src.len().checked_add(2 * r as usize).ok_or(RasterInputError::LimitExceeded)?, control)?;
+        checked_box(&s, -r, &mut mid, size, control)?;
+        let mut out = zeros::<f64>(src.len(), control)?;
+        checked_box(&mid, r, &mut out, size, control)?;
+        for (i, (d, v)) in dst.iter_mut().zip(out).enumerate() {
+            if i % 1024 == 0 {
+                poll(control)?;
+            }
+            *d = v as f32;
+        }
+        Ok(())
+    }
+    fn transpose(src: &[f32], w: usize, h: usize, control: &Interrupt<'_>) -> Result<Vec<f32>, RasterInputError> {
+        let mut out = zeros(src.len(), control)?;
+        for y in 0..h {
+            for x in 0..w {
+                if x % 1024 == 0 {
+                    poll(control)?;
+                }
+                let value = src.get(y * w + x).copied().ok_or(RasterInputError::LengthMismatch)?;
+                *out.get_mut(x * h + y).ok_or(RasterInputError::LengthMismatch)? = value;
+            }
+        }
+        Ok(out)
+    }
+    fn try_tent(source: &Map, budget: usize, size: f32, control: &Interrupt<'_>) -> Result<Map, RasterInputError> {
+        use RasterInputError as E;
+        poll(control)?;
+        if !size.is_finite() {
+            return Err(E::UnsupportedConversion);
+        }
+        let count = source.w.checked_mul(source.h).ok_or(E::LimitExceeded)?;
+        if source.v.len() != count {
+            return Err(E::LengthMismatch);
+        }
+        let (r, _, _) = box_geom(size);
+        let line = source.w.max(source.h).checked_add(2 * r as usize).ok_or(E::LimitExceeded)?;
+        // Current input + four full maps and bounded double line temporaries.
+        let peak = source
+            .v
+            .capacity()
+            .checked_mul(4)
+            .and_then(|n| count.checked_mul(16).and_then(|v| n.checked_add(v)))
+            .and_then(|n| line.checked_mul(24).and_then(|v| n.checked_add(v)))
+            .ok_or(E::LimitExceeded)?;
+        if peak > budget || peak as u64 > photocraft_raster::MAX_CHECKED_RASTER_BYTES {
+            return Err(E::LimitExceeded);
+        }
+        if r == 0 || count == 0 {
+            let mut out = zeros(count, control)?;
+            for (d, s) in out.chunks_mut(4096).zip(source.v.chunks(4096)) {
+                poll(control)?;
+                d.copy_from_slice(s);
+            }
+            return Ok(Map { w: source.w, h: source.h, v: out });
+        }
+        let mut a = zeros(count, control)?;
+        for (d, s) in a.chunks_mut(source.w).zip(source.v.chunks(source.w)) {
+            poll(control)?;
+            checked_line(s, d, size, control)?;
+        }
+        let t = transpose(&a, source.w, source.h, control)?;
+        let mut b = zeros(count, control)?;
+        for (d, s) in b.chunks_mut(source.h).zip(t.chunks(source.h)) {
+            poll(control)?;
+            checked_line(s, d, size, control)?;
+        }
+        let v = transpose(&b, source.h, source.w, control)?;
+        poll(control)?;
+        Ok(Map { w: source.w, h: source.h, v })
+    }
+    fn checked_noise(map: &mut Map, amount: f32, origin: (i32, i32), control: &Interrupt<'_>) -> Result<(), RasterInputError> {
+        poll(control)?;
+        if !amount.is_finite() || !(0.0..=1.0).contains(&amount) {
+            return Err(RasterInputError::UnsupportedConversion);
+        }
+        if map.w.checked_mul(map.h) != Some(map.v.len()) {
+            return Err(RasterInputError::LengthMismatch);
+        }
+        if amount == 0.0 || map.v.is_empty() {
+            return Ok(());
+        }
+        for (index, value) in map.v.iter_mut().enumerate() {
+            if index.is_multiple_of(1024) {
+                poll(control)?;
+            }
+            if !value.is_finite() {
+                return Err(RasterInputError::UnsupportedConversion);
+            }
+            if *value <= 0.0 {
+                continue;
+            }
+            let x = i64::try_from(index % map.w).map_err(|_| RasterInputError::LimitExceeded)?;
+            let y = i64::try_from(index / map.w).map_err(|_| RasterInputError::LimitExceeded)?;
+            let x = i64::from(origin.0).checked_add(x).ok_or(RasterInputError::LimitExceeded)?;
+            let y = i64::from(origin.1).checked_add(y).ok_or(RasterInputError::LimitExceeded)?;
+            *value = (*value + (hash_noise(x, y) - 0.5) * 2.0 * amount).clamp(0.0, 1.0);
+        }
+        poll(control)
+    }
+    pub(super) fn validate(layer: &Layer) -> Result<usize, RasterInputError> {
+        let mut count = 0_usize;
+        for e in layer.effects.items.iter().filter(|e| e.enabled()) {
+            let shadow = match e {
+                Effect::DropShadow(s) | Effect::InnerShadow(s) => s,
+                _ => return Err(RasterInputError::UnsupportedConversion),
+            };
+            if shadow.spread != 0.0
+                || !shadow.noise.is_finite()
+                || !(0.0..=1.0).contains(&shadow.noise)
+                || !matches!(shadow.contour, Contour::Linear)
+                || !shadow.size.is_finite()
+                || !shadow.distance.is_finite()
+                || !shadow.angle.is_finite()
+            {
+                return Err(RasterInputError::UnsupportedConversion);
+            }
+            count = count.checked_add(1).ok_or(RasterInputError::LimitExceeded)?;
+            if count > 64 {
+                return Err(RasterInputError::LimitExceeded);
+            }
+        }
+        Ok(count)
+    }
+    pub(super) fn build(
+        layer: &Layer,
+        values: Vec<f32>,
+        rect: Rect,
+        light: &GlobalLight,
+        budget: usize,
+        control: &Interrupt<'_>,
+    ) -> Result<FxMaps, RasterInputError> {
+        use RasterInputError as E;
+        poll(control)?;
+        let count = validate(layer)?;
+        if !light.angle.is_finite() {
+            return Err(E::UnsupportedConversion);
+        }
+        let bytes = photocraft_raster::checked_region_byte_len(
+            rect,
+            photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Grayscale, photocraft_color::SampleType::F32, false),
+        )?;
+        if values.len() != bytes / 4 {
+            return Err(E::LengthMismatch);
+        }
+        let retained = bytes
+            .checked_mul(count + 1)
+            .and_then(|n| count.checked_mul(128).and_then(|v| v.checked_add(1024)).and_then(|v| n.checked_add(v)))
+            .ok_or(E::LimitExceeded)?;
+        // Every retained map plus conservative current shift/tent/line staging.
+        let peak = retained
+            .checked_add(bytes.checked_mul(8).ok_or(E::LimitExceeded)?)
+            .and_then(|n| (rect.width().max(rect.height()) as usize).checked_add(512).and_then(|v| v.checked_mul(24)).and_then(|v| n.checked_add(v)))
+            .ok_or(E::LimitExceeded)?;
+        if peak > budget {
+            return Err(E::LimitExceeded);
+        }
+        let shape = Map { w: rect.width() as usize, h: rect.height() as usize, v: values };
+        let mut per = Vec::new();
+        per.try_reserve_exact(count).map_err(|_| E::AllocationFailed)?;
+        for e in layer.effects.items.iter().filter(|e| e.enabled()) {
+            poll(control)?;
+            let (shadow, inner) = match e {
+                Effect::DropShadow(s) => (s, false),
+                Effect::InnerShadow(s) => (s, true),
+                _ => return Err(E::UnsupportedConversion),
+            };
+            let angle = if shadow.use_global_light { light.angle } else { shadow.angle };
+            let (dx, dy) = offset(angle, shadow.distance);
+            let (fx, fy) = (dx.floor(), dy.floor());
+            let (ax, ay) = (dx - fx, dy - fy);
+            let outside = if inner { 1.0 } else { 0.0 };
+            let at = |x: i128, y: i128| {
+                if x < 0 || y < 0 || x >= shape.w as i128 || y >= shape.h as i128 {
+                    outside
+                } else {
+                    let value = shape.v.get(y as usize * shape.w + x as usize).copied().unwrap_or(0.0);
+                    if inner { 1.0 - value } else { value }
+                }
+            };
+            let mut shift = Map { w: shape.w, h: shape.h, v: zeros(shape.v.len(), control)? };
+            for y in 0..shape.h {
+                for x in 0..shape.w {
+                    if x % 1024 == 0 {
+                        poll(control)?;
+                    }
+                    let (sx, sy) = (x as i128 - fx as i64 as i128, y as i128 - fy as i64 as i128);
+                    let top = at(sx, sy) * (1.0 - ax) + at(sx - 1, sy) * ax;
+                    let bot = at(sx, sy - 1) * (1.0 - ax) + at(sx - 1, sy - 1) * ax;
+                    *shift.v.get_mut(y * shape.w + x).ok_or(E::LengthMismatch)? = top * (1.0 - ay) + bot * ay;
+                }
+            }
+            let mut map = try_tent(&shift, budget.saturating_sub(retained), shadow.size, control)?;
+            checked_noise(&mut map, shadow.noise, (rect.x0, rect.y0), control)?;
+            if inner {
+                for (i, (v, a)) in map.v.iter_mut().zip(&shape.v).enumerate() {
+                    if i % 1024 == 0 {
+                        poll(control)?;
+                    }
+                    *v *= a;
+                }
+            }
+            let mut maps = Vec::new();
+            maps.try_reserve_exact(1).map_err(|_| E::AllocationFailed)?;
+            maps.push(map);
+            per.push(maps);
+        }
+        let mut bevel_paint = Vec::new();
+        bevel_paint.try_reserve_exact(count).map_err(|_| E::AllocationFailed)?;
+        bevel_paint.resize(count, BevelPaint::Inner);
+        poll(control)?;
+        Ok(FxMaps { rect, shape, per, bevel_paint, din: None, dout: None, vdout: None, outline: false, frames: Vec::new() })
+    }
+    #[cfg(test)]
+    #[test]
+    fn checked_tent_cancels_inside_actual_kernel() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let source = Map::new(1024, 256, 0.47);
+        let before = source.v.clone();
+        let polls = AtomicUsize::new(0);
+        let cancel = || polls.fetch_add(1, Ordering::Relaxed) >= 100;
+        assert!(matches!(try_tent(&source, 64 << 20, 17.25, &Interrupt::cancel_only(&cancel)), Err(RasterInputError::Cancelled)));
+        assert_eq!(source.v, before);
+    }
+    #[cfg(test)]
+    #[test]
+    fn checked_tent_matches_legacy_fractional_edges_and_budget_atomicity() {
+        for (w, h) in [(1, 1), (1, 37), (41, 1), (33, 27), (257, 93)] {
+            let mut source = Map::new(w, h, 0.0);
+            for (i, v) in source.v.iter_mut().enumerate() {
+                *v = ((i * 73 + 11) % 101) as f32 / 100.0;
+            }
+            let before = source.v.clone();
+            for size in [0.0, 0.9, 1.0, 2.5, 17.25, 512.0] {
+                let mut expected = source.clone();
+                tent(&mut expected, size);
+                let actual = try_tent(&source, 64 << 20, size, &Interrupt::NONE).unwrap();
+                assert_eq!(actual.v, expected.v, "{w}x{h} size{size}");
+                assert_eq!(source.v, before);
+            }
+            assert!(matches!(try_tent(&source, 0, 17.25, &Interrupt::NONE), Err(RasterInputError::LimitExceeded)));
+            assert_eq!(source.v, before);
+        }
+    }
+    #[cfg(test)]
+    #[test]
+    fn shadow_noise_coordinate_edges_do_not_overflow() {
+        let mut map = Map::new(3, 2, 0.5);
+        noise(&mut map, 0.3, i32::MAX, i32::MAX);
+        for y in 0..2 {
+            for x in 0..3 {
+                let expected = (0.5 + (hash_noise(i64::from(i32::MAX) + x as i64, i64::from(i32::MAX) + y as i64) - 0.5) * 2. * 0.3).clamp(0., 1.);
+                assert_eq!(map.v[y * 3 + x], expected);
+            }
+        }
+    }
+    #[cfg(test)]
+    #[test]
+    fn checked_noise_polls_inside_pixels_and_rejects_invalid_parameters() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let values = vec![0.5; 1024 * 1024];
+        let mut staging = Map { w: 1024, h: 1024, v: values.clone() };
+        let calls = AtomicUsize::new(0);
+        let cancel = || calls.fetch_add(1, Ordering::Relaxed) >= 5;
+        assert!(matches!(checked_noise(&mut staging, 0.27, (-3, 7), &Interrupt::cancel_only(&cancel)), Err(RasterInputError::Cancelled)));
+        assert!(calls.load(Ordering::Relaxed) >= 5);
+        assert_eq!(*staging.v.last().unwrap(), 0.5, "loop cancelled before processing tail");
+        assert!(values.iter().all(|v| *v == 0.5), "original input is unchanged");
+        for amount in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
+            let mut map = Map::new(3, 2, 0.5);
+            assert!(matches!(checked_noise(&mut map, amount, (0, 0), &Interrupt::NONE), Err(RasterInputError::UnsupportedConversion)));
+            assert_eq!(map.v, vec![0.5; 6]);
+        }
+        let mut malformed = Map { w: 0, h: 9, v: vec![0.5] };
+        assert!(matches!(checked_noise(&mut malformed, 0.3, (0, 0), &Interrupt::NONE), Err(RasterInputError::LengthMismatch)));
+    }
+    #[cfg(test)]
+    #[test]
+    fn checked_noisy_shadow_maps_match_legacy_without_source_changes() {
+        use photocraft_doc::{Color, LayerContent, Surface};
+        for amount in [0.17, 1.] {
+            let mut layer = Layer::new("Own noisy shadows", LayerContent::Raster(Surface::new(photocraft_color::PixelFormat::RGBA8)));
+            let mut outer = Effect::default_drop_shadow();
+            let Effect::DropShadow(shadow) = &mut outer else {
+                panic!("default shadow");
+            };
+            shadow.noise = amount;
+            shadow.spread = 0.;
+            shadow.size = 2.5;
+            shadow.contour = Contour::Linear;
+            shadow.color = Color::BLACK;
+            let inner = Effect::InnerShadow(shadow.clone());
+            layer.effects.items = vec![outer, inner];
+            let rect = Rect::new(-3, 7, 74, 52);
+            let values: Vec<f32> = (0..77 * 45).map(|i| ((i * 71 + 13) % 103) as f32 / 102.).collect();
+            let light = GlobalLight::default();
+            let tex = TextureCtx { rect, patterns: &[], anchor: (0., 0.) };
+            let expected = build_maps(&layer, values.clone(), rect, &light, &tex);
+            let actual = build(&layer, values.clone(), rect, &light, 64 << 20, &Interrupt::NONE).unwrap();
+            assert_eq!(actual.shape.v, values);
+            for (a, b) in actual.per.iter().zip(&expected.per) {
+                assert_eq!(a[0].v, b[0].v);
+            }
+        }
+    }
+    #[cfg(test)]
+    #[test]
+    fn extreme_finite_shadow_offsets_do_not_overflow() {
+        let source = Map::new(3, 2, 0.7);
+        let out = source.shifted(f32::MAX, -f32::MAX, 0.0);
+        assert!(out.v.iter().all(|v| *v == 0.0));
+        assert!(source.v.iter().all(|v| *v == 0.7));
+    }
+    #[cfg(test)]
+    #[test]
+    fn checked_shadow_maps_match_old_shift_blur_and_inner_alpha() {
+        use photocraft_doc::{Color, FxCommon, LayerContent, Surface};
+        for size in [0.0, 2.5, 17.25] {
+            let shadow = Shadow {
+                common: FxCommon::new(BlendMode::Multiply, 0.61),
+                color: Color::BLACK,
+                angle: 37.0,
+                use_global_light: false,
+                distance: 3.4,
+                spread: 0.0,
+                size,
+                contour: Contour::Linear,
+                anti_alias: true,
+                noise: 0.0,
+                knocks_out: true,
+            };
+            let mut layer = Layer::new("own checked shadow", LayerContent::Raster(Surface::new(photocraft_color::PixelFormat::RGBA8)));
+            layer.effects.items = vec![Effect::DropShadow(shadow.clone()), Effect::InnerShadow(shadow)];
+            let rect = Rect::new(-3, 7, 74, 52);
+            let shape: Vec<f32> = (0..77 * 45).map(|i| ((i * 71 + 13) % 103) as f32 / 102.0).collect();
+            let light = GlobalLight::default();
+            let tex = TextureCtx { rect, patterns: &[], anchor: (0.0, 0.0) };
+            let legacy = build_maps(&layer, shape.clone(), rect, &light, &tex);
+            let checked = build(&layer, shape.clone(), rect, &light, 64 << 20, &Interrupt::NONE).unwrap();
+            assert_eq!(checked.shape.v, shape);
+            assert_eq!(checked.per.len(), legacy.per.len());
+            for (a, b) in checked.per.iter().zip(&legacy.per) {
+                assert_eq!(a[0].v, b[0].v, "size{size}");
+            }
+            layer.effects.items.push(Effect::Stroke(photocraft_doc::StrokeFx {
+                common: FxCommon::new(BlendMode::Normal, 1.0),
+                size: 1.0,
+                position: StrokePosition::Outside,
+                paint: FxPaint::Color(Color::WHITE),
+            }));
+            assert!(matches!(build(&layer, shape, rect, &light, 64 << 20, &Interrupt::NONE), Err(RasterInputError::UnsupportedConversion)));
+        }
+    }
+}
+
+/// Checked zero-spread linear-contour shadow maps with finite noise0..=1. Other styles
+/// remain explicitly unsupported in this additive preparation path.
+pub(crate) fn try_build_shadow_maps(
+    layer: &Layer,
+    shape: Vec<f32>,
+    rect: Rect,
+    light: &GlobalLight,
+    budget: usize,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<FxMaps, photocraft_raster::RasterInputError> {
+    checked_prepare::build(layer, shape, rect, light, budget, control)
+}
+pub(crate) fn validate_checked_shadows(layer: &Layer) -> Result<usize, photocraft_raster::RasterInputError> {
+    checked_prepare::validate(layer)
 }

@@ -140,7 +140,7 @@ fn triangle(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32, m: Modifier
 }
 
 fn steps(h: &Harness<'static, PhotocraftApp>) -> usize {
-    h.state().session.active().unwrap().history.entries().len()
+    h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len()
 }
 
 /// A new polygon hides the selection it will replace; Esc brings it back untouched.

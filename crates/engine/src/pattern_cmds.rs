@@ -169,8 +169,8 @@ fn list(s: &mut Session, _: &Value) -> Result<Value> {
 }
 
 /// The visible composite over `r` as a surface in the document's pixel format (with alpha).
-fn composite_surface(doc: &Document, r: Rect) -> Surface {
-    let buf = photocraft_compose::render(doc, r);
+fn composite_surface(doc: &Document, r: Rect) -> Result<Surface> {
+    let buf = photocraft_compose::render(doc, r)?;
     let df = doc.pixel_format();
     let fmt = PixelFormat::new(df.mode, df.sample, true);
     let n = fmt.channels();
@@ -180,7 +180,7 @@ fn composite_surface(doc: &Document, r: Rect) -> Surface {
     }
     let mut s = Surface::new(fmt);
     s.write_region(Rect::new(0, 0, r.width() as i32, r.height() as i32), &px);
-    s
+    Ok(s)
 }
 
 fn define(s: &mut Session, p: &Value) -> Result<Value> {
@@ -201,12 +201,12 @@ fn define(s: &mut Session, p: &Value) -> Result<Value> {
     if r.width() > 4000 || r.height() > 4000 {
         return Err(bad(cmd, "patterns are limited to 4000 × 4000 px"));
     }
-    let mut surf = composite_surface(doc, r);
+    let mut surf = composite_surface(doc, r)?;
     // Opaque patterns drop their alpha channel (as Photoshop does).
     let fmt = surf.format();
     let px = surf.read_region(Rect::new(0, 0, r.width() as i32, r.height() as i32));
     if px.chunks_exact(fmt.channels()).all(|q| q[fmt.channels() - 1] >= 1.0) {
-        surf = surf.convert(PixelFormat::new(fmt.mode, fmt.sample, false));
+        surf = surf.try_convert(PixelFormat::new(fmt.mode, fmt.sample, false)).map_err(|e| crate::EngineError::Other(format!("pixel conversion: {e}")))?;
     }
     let name = match p.get("name").and_then(Value::as_str) {
         Some(n) if !n.trim().is_empty() => n.to_string(),
@@ -444,7 +444,7 @@ mod tests {
     }
 
     fn pixel(s: &Session, x: i32, y: i32) -> [f32; 4] {
-        let b = photocraft_compose::render(&s.active().unwrap().doc, Rect::new(x, y, x + 1, y + 1));
+        let b = photocraft_compose::render(&s.active().unwrap().doc, Rect::new(x, y, x + 1, y + 1)).unwrap();
         b.px[0]
     }
 

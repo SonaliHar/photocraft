@@ -68,6 +68,9 @@ pub mod hold_keys;
 pub mod i18n;
 mod icon_data;
 pub mod icons;
+mod import_assessment_ui;
+mod xcf_notices;
+mod vector_path_rows_cache;
 pub mod jobs_ui;
 pub mod lasso_ui;
 pub mod layer_menu_ui;
@@ -115,9 +118,22 @@ pub mod rotate_view;
 pub mod rulers;
 pub mod screen_picker;
 pub mod scrollbars;
+pub mod services;
 pub mod shortcut_dispatch;
 pub mod shortcuts;
 mod sizing;
+mod trim;
+mod duplicate;
+mod profile_dialog;
+mod mode_conversion_dialog;
+mod channel_action_dialog;
+mod channel_create_dialog;
+mod guide_dialog;
+mod path_selection_dialog;
+mod path_transform_dialog;
+mod path_fill_dialog;
+mod path_clipping_dialog;
+mod path_stroke_dialog;
 pub mod slice_ui;
 pub mod smart_ui;
 pub mod snap_ui;
@@ -142,11 +158,14 @@ mod type_transform;
 mod variables_ui;
 pub mod vector_ui;
 pub mod view_cmds;
+pub mod web_ui_assets;
 pub mod wheel_nav;
 pub mod wide_angle_ui;
 pub mod widgets;
 pub mod work_area;
 pub mod workspace_ui;
+mod xcf_labels;
+mod xcf_panels;
 pub mod zoom_tool;
 
 use std::collections::HashMap;
@@ -194,7 +213,9 @@ pub type ValidateWriteFn = Box<dyn Fn(&str, Option<&photocraft_engine::SourceIde
 /// Read bytes through the desktop control session's authorized read root.
 pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<(String, Vec<u8>), String>>;
 /// Write bytes through the desktop control session's authorized write root.
-pub type AutomationWriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
+pub type AutomationWriteFn = Box<dyn FnMut(&str, &[u8], &photocraft_engine::WriteProtection) -> Result<(), String>>;
+/// Capability writer validation carries persisted fingerprints as exclusions only.
+pub type AutomationValidateWriteFn = Box<dyn Fn(&str, &photocraft_engine::WriteProtection) -> Result<(), String>>;
 /// Reject engine commands which still perform ambient filesystem I/O.
 pub type AutomationCommandFn = Box<dyn Fn(&str, &Value) -> Result<(), String>>;
 /// Open a URL in the system browser (native) — reliable cross-platform, unlike `ctx.open_url`.
@@ -211,7 +232,7 @@ pub type LoadTextFn = Box<dyn FnMut() -> Option<String>>;
 /// Persist the preferences text.
 pub type SaveTextFn = Box<dyn FnMut(&str) -> Result<(), String>>;
 /// Autosave a document snapshot for crash recovery: (snapshot, revision, original path).
-pub type AutosaveFn = Box<dyn FnMut(&std::sync::Arc<Document>, u64, Option<&str>) -> Result<(), String>>;
+pub type AutosaveFn = Box<dyn FnMut(&photocraft_engine::document_snapshot::DocumentSnapshot, u64, Option<&str>) -> Result<(), String>>;
 /// Poll successful or failed background writes: (document id, revision, result).
 pub type AutosaveResultsFn = Box<dyn FnMut() -> Vec<(u64, u64, Result<(), String>)>>;
 /// Drop the recovery data of a document (by `DocId` value) once it is saved or closed.
@@ -250,16 +271,27 @@ pub struct Services {
     pub import: Option<ImportFn>,
     /// Encode a document for a file name (format chosen by extension).
     pub export: Option<ExportFn>,
+    /// Atomic streamed native saves with all open-document source exclusions.
+    pub native_save: Option<services::NativeSaveFn>,
     /// Show an Open or Save dialog without waiting for it (see `file_dialog`).
     pub file_dialog: Option<FileDialogFn>,
     /// Write bytes to a path (native) or trigger a download (web).
     pub write: Option<WriteFn>,
     pub validate_write: Option<ValidateWriteFn>,
+    /// Native interactive saves retain inert source exclusions through commit.
+    /// Browser downloads keep using `write`, which cannot replace source files.
+    pub write_protected: Option<AutomationWriteFn>,
+    pub validate_write_protected: Option<AutomationValidateWriteFn>,
     /// File access used only by control/MCP requests. Interactive dialogs keep
     /// using `file_dialog` and `write` with the user's authority.
     pub automation_read: Option<AutomationReadFn>,
+    /// Capped asynchronous linked-image read beneath the held automation root.
+    /// Stored document locators never supply authority to this service.
+    pub automation_read_xcf_linked_replacement: Option<file_dialog::AutomationReadXcfLinkedReplacementFn>,
     pub automation_write: Option<AutomationWriteFn>,
-    pub automation_validate_write: Option<ValidateWriteFn>,
+    /// Stream native output beneath the held automation write root only.
+    pub automation_native_save: Option<services::NativeSaveFn>,
+    pub automation_validate_write: Option<AutomationValidateWriteFn>,
     pub automation_command: Option<AutomationCommandFn>,
     /// Same policy as [`Self::automation_command`], as a function pointer the engine calls for
     /// each step of `actions.play`. Installed on the session only while a control request or
@@ -315,9 +347,12 @@ pub struct Services {
 
 /// A document histogram being computed off the UI thread: (document, revision, receiver of
 /// (document, compute ms, histograms)).
-pub(crate) type HistJob = (DocId, u64, std::sync::mpsc::Receiver<(DocId, f64, std::sync::Arc<tone::Histograms>)>);
+pub(crate) type HistogramDelivery = (DocId, f64, Result<std::sync::Arc<tone::Histograms>, String>);
+pub(crate) type HistJob = (DocId, u64, std::sync::mpsc::Receiver<HistogramDelivery>);
 
 pub struct PhotocraftApp {
+    #[cfg(all(target_arch = "wasm32", feature = "web_external_assets"))]
+    web_ui_assets: web_ui_assets::ReadyUiAssets,
     pub session: Session,
     pub ui: UiState,
     pub services: Services,
@@ -397,9 +432,11 @@ pub struct PhotocraftApp {
     last_frame_time: f64,
     thumbs: HashMap<(photocraft_doc::LayerId, u8), (u64, egui::TextureHandle)>,
     /// Snapshots whose live layer/mask keys were last used to prune thumbnail handles.
-    thumb_documents: Vec<(DocId, std::sync::Weak<Document>)>,
+    thumb_documents: Vec<(DocId, photocraft_engine::document_snapshot::WeakDocumentSnapshot)>,
     /// Content bounds cached per (key, revision): scanning a 36 MP layer every frame cost ~77 ms.
     bounds_cache: HashMap<u64, (u64, photocraft_geom::Rect)>,
+    /// Checked editable-source layout, including failed qualification, per revision.
+    source_bounds_cache: HashMap<(u64, u64, u64), Option<photocraft_geom::Rect>>,
     /// Downsampled proxy of the active document for live previews: (doc, revision, k, proxy).
     pub(crate) proxy: Option<(DocId, u64, u32, std::sync::Arc<Document>)>,
     /// Key of the preview currently uploaded to the GPU (doc, params hash).
@@ -463,7 +500,7 @@ pub struct PhotocraftApp {
     pub(crate) type_layout: Option<((u64, u64, u64), std::sync::Arc<photocraft_text::TextLayout>)>,
     pub(crate) type_transform_preview: Option<type_transform::Preview>,
     /// Channel thumbnails for one document snapshot; view-only revisions reuse their pixels.
-    channel_thumbs: Option<(DocId, std::sync::Weak<Document>, Vec<egui::TextureHandle>)>,
+    channel_thumbs: Option<(DocId, photocraft_engine::document_snapshot::WeakDocumentSnapshot, Vec<egui::TextureHandle>)>,
     /// Channels panel overlays / channel views drawn over the canvas, per document id.
     pub(crate) channel_views: HashMap<u64, channel_view::Cache>,
     /// Selection outline keyed by (document, mask identity × step × visible region).
@@ -498,8 +535,23 @@ pub struct PhotocraftApp {
 }
 
 impl PhotocraftApp {
+    #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
     pub fn new(session: Session, services: Services) -> Self {
+        Self::new_inner(session, services)
+    }
+    #[cfg(all(target_arch = "wasm32", feature = "web_external_assets"))]
+    pub fn new_ready(session: Session, services: Services, ready: web_ui_assets::ReadyUiAssets) -> Result<Self, web_ui_assets::UiAssetError> {
+        let _ = i18n::Lang::try_from_pref(&session.prefs().interface.language)?;
+        Ok(Self::new_inner(session, services, ready))
+    }
+    fn new_inner(
+        session: Session,
+        services: Services,
+        #[cfg(all(target_arch = "wasm32", feature = "web_external_assets"))] ready: web_ui_assets::ReadyUiAssets,
+    ) -> Self {
         let mut app = Self {
+            #[cfg(all(target_arch = "wasm32", feature = "web_external_assets"))]
+            web_ui_assets: ready,
             session,
             ui: UiState::default(),
             services,
@@ -543,6 +595,7 @@ impl PhotocraftApp {
             thumbs: HashMap::new(),
             thumb_documents: Vec::new(),
             bounds_cache: HashMap::new(),
+            source_bounds_cache: HashMap::new(),
             proxy: None,
             proxy_uploaded: None,
             outline_cache: None,
@@ -678,7 +731,7 @@ impl PhotocraftApp {
         }
         let suppress_events = self.automation_input && self.session.prefs().script_events.enabled;
         if suppress_events {
-            self.session.edit_prefs(|prefs| prefs.script_events.enabled = false);
+            self.session.edit_prefs(|prefs| prefs.script_events.enabled = false).map_err(|error| error.to_string())?;
         }
         let t0 = gpu_canvas::now_ms();
         // The OS clipboard is read only on an explicit paste, never in the background (privacy, CPU).
@@ -737,7 +790,7 @@ impl PhotocraftApp {
             }
         }
         if suppress_events {
-            self.session.edit_prefs(|prefs| prefs.script_events.enabled = true);
+            self.session.edit_prefs(|prefs| prefs.script_events.enabled = true).map_err(|error| error.to_string())?;
         }
         r
     }
@@ -827,30 +880,8 @@ impl PhotocraftApp {
             return Ok(Vec::new());
         }
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let photocraft_io::ImportResult { document: doc, warnings, origin } = import(name, bytes)?;
-        // Edit › Color Settings policies apply on open; mismatches can ask what to do.
-        // No path yet: a bare name isn't a location to save back to (`open_file` sets the path).
-        let (_, color) = self.session.open_document(doc, None);
-        if let Some(state) = self.session.active_mut() {
-            state.set_import_origin(origin, name, None);
-        }
-        self.sync_views();
-        self.ui.status = format!("Opened {name}");
-        self.ui.status_error = false;
-        if camera_raw_ui::wants_open_dialog(self, &warnings) {
-            camera_raw_ui::queue_open_dialog(self, name, None, Some(bytes));
-            notices::io_warnings(self, &format!("Opened {name}"), &camera_raw_ui::without_develop_note(&warnings));
-        } else {
-            notices::io_warnings(self, &format!("Opened {name}"), &warnings);
-        }
-        // Script events bound to "Open Document".
-        photocraft_engine::automate_cmds::document_opened(&mut self.session);
-        self.sync_views();
-        let ask = color.get("ask").and_then(Value::as_bool) == Some(true);
-        if ask && (color.get("mismatch").and_then(Value::as_bool) == Some(true) || color.get("missing").is_some()) {
-            prefs_ui::open_mismatch(self, &color);
-        }
-        Ok(warnings)
+        let imported = import(name, bytes)?;
+        self.finish_import(name, imported, Some(bytes))
     }
 
     /// Open bytes supplied by an authenticated automation client without
@@ -860,14 +891,14 @@ impl PhotocraftApp {
     pub fn open_automation_bytes(&mut self, name: &str, bytes: &[u8]) -> Result<Vec<String>, String> {
         let events_enabled = self.session.prefs().script_events.enabled;
         if events_enabled {
-            self.session.edit_prefs(|prefs| prefs.script_events.enabled = false);
+            self.session.edit_prefs(|prefs| prefs.script_events.enabled = false).map_err(|error| error.to_string())?;
         }
         let result = match preset_files_ui::open(self, name, bytes) {
             Some(r) => r.map(|()| Vec::new()),
             None => self.import_automation_document(name, bytes),
         };
         if events_enabled {
-            self.session.edit_prefs(|prefs| prefs.script_events.enabled = true);
+            self.session.edit_prefs(|prefs| prefs.script_events.enabled = true).map_err(|error| error.to_string())?;
         }
         result
     }
@@ -876,9 +907,10 @@ impl PhotocraftApp {
     /// events and no Color Settings policy (which may read user-configured profile paths).
     fn import_automation_document(&mut self, name: &str, bytes: &[u8]) -> Result<Vec<String>, String> {
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let photocraft_io::ImportResult { document: doc, warnings, origin } = import(name, bytes)?;
+        let photocraft_io::ImportResult { document: doc, mut warnings, origin, assessment } = import(name, bytes)?;
+        import_assessment_ui::append(&mut warnings, assessment.as_ref());
         // The caller records the path it read from.
-        self.session.add_document(doc, None);
+        self.session.add_document(doc, None).map_err(|error| error.to_string())?;
         if let Some(state) = self.session.active_mut() {
             state.set_import_origin(origin, name, None);
         }
@@ -902,14 +934,29 @@ impl PhotocraftApp {
             return self.save_to(path);
         }
         let st = self.session.active().ok_or("no document")?;
-        // Suggest the file's own name if Save As can write its format, otherwise switch to .psd.
+        // Preserve writable paths; prefer native saves for retained XCF state and keep owned display names.
         let ext = st.path.as_deref().and_then(|p| std::path::Path::new(p).extension()).map(|e| e.to_string_lossy().to_ascii_lowercase());
         let writable = ext.is_some_and(|e| {
             matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb") || photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write)
         });
-        let suggested_extension = if st.source.as_ref().is_some_and(|source| source.origin.is_read_only()) { "pcraft" } else { "psd" };
+        let suggested_extension = if st.doc.xcf_state.is_some()
+            || st.source.as_ref().is_some_and(|source| source.origin.is_read_only() || matches!(source.origin.format, photocraft_io::ImportFormat::Pcraft))
+        {
+            "pcraft"
+        } else {
+            "psd"
+        };
         let suggested = match &st.path {
             Some(p) if writable => p.clone(),
+            None if st.doc.xcf_state.is_some()
+                && st.source.as_ref().is_none_or(|source| matches!(source.origin.format, photocraft_io::ImportFormat::Pcraft)) =>
+            {
+                if st.doc.name.rsplit_once('.').is_some_and(|(base, ext)| !base.is_empty() && ext.eq_ignore_ascii_case(photocraft_format::EXTENSION)) {
+                    st.doc.name.clone()
+                } else {
+                    format!("{}.pcraft", st.doc.name)
+                }
+            }
             p => std::path::Path::new(p.as_deref().unwrap_or(&st.doc.name)).with_extension(suggested_extension).to_string_lossy().into_owned(),
         };
         let doc = st.doc.id;
@@ -919,6 +966,35 @@ impl PhotocraftApp {
         })
     }
 
+    /// Explicit native Save As for imported-project preservation controls.
+    /// The ordinary Save As menu retains its existing format choice policy.
+    pub fn save_native_as(&mut self, path: Option<String>) -> Result<Value, String> {
+        let active = self.session.active().ok_or("no document")?;
+        if self.ui.transform.is_some() || self.session.has_jobs() || active.floating.is_some() { return Err("Native Save As requires the current edit to finish".into()); }
+        if active.path.as_deref().unwrap_or(&active.doc.name).len() > 32768 { return Err("Native Save As suggestion exceeds the path limit".into()); }
+        let document = active.doc.id;
+        let revision = active.revision;
+        let snapshot = active.doc.downgrade();
+        let suggested = std::path::Path::new(active.path.as_deref().unwrap_or(&active.doc.name))
+            .with_extension(photocraft_format::EXTENSION).to_string_lossy().into_owned();
+        let save = move |app: &mut Self, path: String| {
+            if path.len() > 32768 || path.contains('\0') { return Err("Native Save As destination exceeds the path limit".into()); }
+            if !std::path::Path::new(&path).extension().and_then(|extension| extension.to_str()).is_some_and(|extension| extension.eq_ignore_ascii_case(photocraft_format::EXTENSION)) {
+                return Err("Native Save As requires a .pcraft destination".into());
+            }
+            if !snapshot.upgrade().is_some_and(|captured| app.session.active().is_some_and(|current|
+                current.doc.id == document && current.revision == revision && current.floating.is_none() && captured.shares_state(&current.doc)))
+                || app.ui.transform.is_some() || app.session.has_jobs() {
+                return Err("Native Save As target changed while choosing a destination".into());
+            }
+            app.save_to(path)
+        };
+        match path {
+            Some(path) => save(self, path),
+            None => self.pick_save(&suggested, save),
+        }
+    }
+
     /// [`Self::save_as`] once the path is known.
     fn save_to(&mut self, path: String) -> Result<Value, String> {
         // A layered TIFF asks about its layers first (Preferences › File Handling); the save
@@ -926,6 +1002,37 @@ impl PhotocraftApp {
         if tiff_options_ui::wants_prompt(self, &path) {
             tiff_options_ui::park(self, path.clone());
             return Ok(serde_json::json!({"path": path, "warnings": []}));
+        }
+        if photocraft_engine::file_cmds::extension(&path).as_deref() == Some("pcraft") && self.services.native_save.is_some() {
+            self.validate_document_destination(&path, false)?;
+            let mut protection = photocraft_engine::WriteProtection::default();
+            for document in self.session.documents() {
+                protection.add_document(&document.doc, document.source.as_ref())?;
+            }
+            if let Some(validate) = self.services.validate_write_protected.as_ref() {
+                validate(&path, &protection)?;
+            }
+            let captured = self.session.active().ok_or("no document")?.doc.clone();
+            let revision = self.session.active().ok_or("no document")?.revision;
+            let saved = self.services.native_save.as_mut().ok_or("no native writer configured")?(&captured, &path, &protection)?;
+            // The synchronous service receives no Session access. Still verify
+            // the exact target before updating saved-path bookkeeping.
+            let state = self.session.active_mut().ok_or("no document")?;
+            if state.revision != revision || !state.doc.shares_state(&captured) {
+                return Err("native-save.stale-target".into());
+            }
+            state.path = Some(path.clone());
+            state.saved_revision = state.revision;
+            self.ui.status = format!("Saved {path}");
+            if let Some(i) = self.session.active_index()
+                && let Some(result) = photocraft_engine::automate_cmds::document_saved(&mut self.session, i)
+            {
+                self.ui.status = format!("Saved {path}; {} image assets in {}", result["files"].as_array().map_or(0, Vec::len), result["dir"].as_str().unwrap_or(""));
+            }
+            self.ui.status_error = false;
+            notices::io_warnings(self, &format!("Saved {}", file_open::display_name(&path)), &saved.warnings);
+            self.sync_views();
+            return Ok(serde_json::json!({"path": path, "warnings": saved.warnings}));
         }
         let (path, warnings) = self.write_document(path, &ExportSettings::default())?;
         Ok(serde_json::json!({"path": path, "warnings": warnings}))
@@ -937,9 +1044,14 @@ impl PhotocraftApp {
         self.validate_document_destination(&path, false)?;
         let st = self.session.active().ok_or("no document")?;
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
+        let protection = self.open_document_write_protection()?;
         let (bytes, warnings) = export(&st.doc, &path, settings)?;
-        let write = self.services.write.as_mut().ok_or("no writer configured")?;
-        write(&path, &bytes)?;
+        if let Some(write) = self.services.write_protected.as_mut() {
+            write(&path, &bytes, &protection)?;
+        } else {
+            let write = self.services.write.as_mut().ok_or("no writer configured")?;
+            write(&path, &bytes)?;
+        }
         if let Some(st) = self.session.active_mut() {
             st.path = Some(path.clone());
             st.saved_revision = st.revision;
@@ -963,14 +1075,31 @@ impl PhotocraftApp {
         if photocraft_engine::file_cmds::extension(path).as_deref() == Some("xcf") {
             return Err("XCF is an import-only format; choose a writable destination such as .pcraft".into());
         }
-        if let Some(source) = state.source.as_ref() {
-            source.check_destination(path)?;
+        for document in self.session.documents() {
+            if let Some(source) = document.source.as_ref() {
+                source.check_destination(path)?;
+            }
         }
-        let validate = if automation { self.services.automation_validate_write.as_ref() } else { self.services.validate_write.as_ref() };
-        if let Some(validate) = validate {
+        if automation {
+            if let Some(validate) = self.services.automation_validate_write.as_ref() {
+                let protection = self.open_document_write_protection()?;
+                validate(path, &protection)?;
+            }
+        } else if let Some(validate) = self.services.validate_write_protected.as_ref() {
+            let protection = self.open_document_write_protection()?;
+            validate(path, &protection)?;
+        } else if let Some(validate) = self.services.validate_write.as_ref() {
             validate(path, state.source.as_ref())?;
         }
         Ok(())
+    }
+
+    fn open_document_write_protection(&self) -> Result<photocraft_engine::WriteProtection, String> {
+        let mut protection = photocraft_engine::WriteProtection::default();
+        for document in self.session.documents() {
+            protection.add_document(&document.doc, document.source.as_ref())?;
+        }
+        Ok(protection)
     }
 
     /// Save through the control session's capability-scoped writer. No file
@@ -983,10 +1112,29 @@ impl PhotocraftApp {
             .or_else(|| state.path.clone().filter(|p| photocraft_engine::file_cmds::saves_in_place(p)))
             .ok_or("pass `path`: a save without one writes back only to the document's own PSD, PSB or .pcraft file")?;
         self.validate_document_destination(&target, true)?;
+        let protection = self.open_document_write_protection()?;
+        if photocraft_engine::file_cmds::extension(&target).as_deref() == Some("pcraft")
+            && self.services.automation_native_save.is_some()
+        {
+            let captured = state.doc.clone();
+            let revision = state.revision;
+            let saved = self.services.automation_native_save.as_mut().ok_or("automation native write authority is not configured")?(&captured, &target, &protection)?;
+            let state = self.session.active_mut().ok_or("no document")?;
+            if state.revision != revision || !state.doc.shares_state(&captured) {
+                return Err("native-save.stale-target".into());
+            }
+            state.path = Some(target.clone());
+            state.saved_revision = state.revision;
+            self.ui.status = format!("Saved {target}");
+            self.ui.status_error = false;
+            notices::io_warnings(self, &format!("Saved {}", file_open::display_name(&target)), &saved.warnings);
+            self.sync_views();
+            return Ok((target, saved.warnings));
+        }
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&state.doc, &target, &ExportSettings::default())?;
         let write = self.services.automation_write.as_mut().ok_or("automation write authority is not configured")?;
-        write(&target, &bytes)?;
+        write(&target, &bytes, &protection)?;
         if let Some(state) = self.session.active_mut() {
             state.path = Some(target.clone());
             state.saved_revision = state.revision;
@@ -1011,6 +1159,7 @@ impl PhotocraftApp {
                     let _ = reply.send(v);
                 }
                 control::Outcome::AfterInput => self.input_waiters.push(reply),
+                control::Outcome::Deferred => {},
                 control::Outcome::AfterJob(job) => self.jobs.waiters.push((job, reply)),
                 control::Outcome::Screenshot { token, path } => {
                     // Wait out egui's fade animations (~83 ms) and a few rendered frames first.
@@ -1065,9 +1214,24 @@ impl PhotocraftApp {
 
 impl eframe::App for PhotocraftApp {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
+        match i18n::Lang::try_from_pref(&self.session.prefs().interface.language) {
+            Ok(lang) => i18n::set_current(lang),
+            Err(error) => {
+                self.ui.status = error.to_string();
+                self.ui.status_error = true;
+                return;
+            }
+        }
         if !self.styled {
-            Self::setup_context(ctx, self.ui.theme);
+            #[cfg(all(target_arch = "wasm32", feature = "web_external_assets"))]
+            let setup = Self::setup_context_ready(ctx, self.ui.theme, self.web_ui_assets);
+            #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+            let setup = Self::try_setup_context(ctx, self.ui.theme);
+            if let Err(error) = setup {
+                self.ui.status = error.to_string();
+                self.ui.status_error = true;
+                return;
+            }
             self.styled = true;
         } else {
             self.fonts_ready = true;
@@ -1099,7 +1263,11 @@ impl eframe::App for PhotocraftApp {
         prefs_ui::tick(self, ctx);
         monitor_status::poll(self, ctx);
         // Control requests and persisted preferences can change the language in this frame.
-        i18n::sync_context(ctx, &self.session.prefs().interface.language);
+        if let Err(error) = i18n::try_sync_context(ctx, &self.session.prefs().interface.language) {
+            self.ui.status = error.to_string();
+            self.ui.status_error = true;
+            return;
+        }
         // A window bigger than its display (1440 × 900 on 1366 × 768) runs under the taskbar:
         // maximize it into the work area once (#315).
         work_area::fit_window(ctx);
@@ -1153,7 +1321,14 @@ impl eframe::App for PhotocraftApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
+        match i18n::Lang::try_from_pref(&self.session.prefs().interface.language) {
+            Ok(lang) => i18n::set_current(lang),
+            Err(error) => {
+                self.ui.status = error.to_string();
+                self.ui.status_error = true;
+                return;
+            }
+        }
         // Fonts registered via set_fonts only take effect next frame; named families would panic now.
         if !self.fonts_ready {
             ctx.request_repaint();
@@ -1300,7 +1475,7 @@ impl PhotocraftApp {
     fn prune_thumbs(&mut self) {
         let documents = self.session.documents();
         if self.thumb_documents.len() == documents.len()
-            && self.thumb_documents.iter().zip(documents).all(|((id, snapshot), st)| *id == st.doc.id && snapshot.ptr_eq(&std::sync::Arc::downgrade(&st.doc)))
+            && self.thumb_documents.iter().zip(documents).all(|((id, snapshot), st)| *id == st.doc.id && snapshot.ptr_eq(&st.doc.downgrade()))
         {
             return;
         }
@@ -1325,7 +1500,7 @@ impl PhotocraftApp {
             // than deleting an ID just because one document containing it was closed.
             self.thumbs.retain(|key, _| live.contains(key));
         }
-        self.thumb_documents = documents.iter().map(|st| (st.doc.id, std::sync::Arc::downgrade(&st.doc))).collect();
+        self.thumb_documents = documents.iter().map(|st| (st.doc.id, st.doc.downgrade())).collect();
     }
 
     pub fn set_theme(&mut self, ctx: &egui::Context, kind: theme::ThemeKind) {
@@ -1335,7 +1510,13 @@ impl PhotocraftApp {
     }
 
     /// Cached 64px thumbnail of a pixel-ish layer, laid out in document space.
-    pub fn layer_thumb(&mut self, ctx: &egui::Context, doc: &Document, layer: &photocraft_doc::Layer) -> egui::TextureId {
+    pub fn layer_thumb(&mut self, ctx: &egui::Context, doc: &Document, layer: &photocraft_doc::Layer) -> Result<egui::TextureId, String> {
+        if matches!(layer.content, photocraft_doc::LayerContent::BackedRaster(_)) {
+            let error = "Native-backed layer thumbnail requires the checked CPU compositor".to_owned();
+            self.ui.status = error.clone();
+            self.ui.status_error = true;
+            return Err(error);
+        }
         // Key by content, not document revision: COW tiles change pointer only when their pixels
         // change, so unrelated edits (e.g. painting another layer) don't rebuild this thumbnail.
         let rev = layer.surface().map_or(0, surface_fingerprint) ^ (doc.size.width as u64) << 40;
@@ -1343,7 +1524,7 @@ impl PhotocraftApp {
         if let Some((r, tex)) = self.thumbs.get(&key)
             && *r == rev
         {
-            return tex.id();
+            return Ok(tex.id());
         }
         let mut px = [0.0f32; 8];
         let img = thumb_image(doc, 64, |x, y| {
@@ -1352,7 +1533,7 @@ impl PhotocraftApp {
             s.read_pixel(x, y, &mut px[..n]);
             photocraft_raster::to_rgba(&s.format(), &px[..n])
         });
-        self.store_thumb(ctx, key, rev, img)
+        Ok(self.store_thumb(ctx, key, rev, img))
     }
 
     pub fn mask_thumb(&mut self, ctx: &egui::Context, doc: &Document, id: photocraft_doc::LayerId, mask: &photocraft_doc::LayerMask) -> egui::TextureId {
@@ -1438,9 +1619,27 @@ impl PhotocraftApp {
 
     /// Install fonts, image loaders and the theme. Call from the app creator when possible so the
     /// very first frame renders; otherwise `logic` does it and the first frame is skipped.
+    #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
     pub fn setup_context(ctx: &egui::Context, kind: theme::ThemeKind) {
         ctx.add_plugin(tool_cursor::CursorLifecycle);
         theme::install_fonts(ctx);
+        Self::setup_context_after_fonts(ctx, kind);
+    }
+    #[cfg(all(target_arch = "wasm32", feature = "web_external_assets"))]
+    pub fn setup_context_ready(ctx: &egui::Context, kind: theme::ThemeKind, ready: web_ui_assets::ReadyUiAssets) -> Result<(), web_ui_assets::UiAssetError> {
+        ctx.add_plugin(tool_cursor::CursorLifecycle);
+        theme::try_install_fonts_ready(ctx, ready)?;
+        Self::setup_context_after_fonts(ctx, kind);
+        Ok(())
+    }
+    #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+    fn try_setup_context(ctx: &egui::Context, kind: theme::ThemeKind) -> Result<(), web_ui_assets::UiAssetError> {
+        ctx.add_plugin(tool_cursor::CursorLifecycle);
+        theme::try_install_fonts(ctx)?;
+        Self::setup_context_after_fonts(ctx, kind);
+        Ok(())
+    }
+    fn setup_context_after_fonts(ctx: &egui::Context, kind: theme::ThemeKind) {
         egui_extras::install_image_loaders(ctx);
         theme::apply(ctx, kind);
         // egui's own ⌘+ / ⌘- / ⌘0 scale the whole interface; PhotoCraft zooms the canvas instead
@@ -1452,6 +1651,50 @@ impl PhotocraftApp {
 }
 
 impl PhotocraftApp {
+    /// Properties use current editable source geometry when it is qualified.
+    pub fn cached_layer_bounds(&mut self, layer: &photocraft_doc::Layer) -> Option<photocraft_geom::Rect> {
+        if let Some((doc, revision)) = self.session.active().map(|state| (state.doc.clone(), state.revision)) {
+            return self.cached_document_layer_bounds(&doc, revision, layer);
+        }
+        layer.surface().map(|surface| self.cached_bounds(layer.id.0, surface))
+    }
+
+    /// Canvas views use their own document and revision, including secondary views.
+    pub fn cached_document_layer_bounds(
+        &mut self,
+        doc: &photocraft_doc::Document,
+        revision: u64,
+        layer: &photocraft_doc::Layer,
+    ) -> Option<photocraft_geom::Rect> {
+        if let Some(source) = doc.xcf_state.as_ref().and_then(|xcf| {
+            xcf.source_items.iter().find(|source| {
+                source.owner == photocraft_doc::item_identity::ItemRef::Layer(layer.id)
+                    && matches!(source.source, photocraft_doc::xcf_items::EditableSource::Text { .. })
+            })
+        }) {
+            let key = (doc.id.0, revision, layer.id.0);
+            if let Some(bounds) = self.source_bounds_cache.get(&key) {
+                return *bounds;
+            }
+            let mut resident = 0_u64;
+            let mut charge = |bytes| {
+                resident =
+                    resident.checked_add(bytes).ok_or(photocraft_compose::gimp_composite::CompositionError::Invalid("source layout resident overflow"))?;
+                if resident > 8 << 20 {
+                    return Err(photocraft_compose::gimp_composite::CompositionError::Invalid("source layout resident limit"));
+                }
+                Ok(())
+            };
+            let bounds = photocraft_compose::gimp_text_items::current_source_layout_bounds(doc, source, &photocraft_raster::Interrupt::NONE, &mut charge).ok();
+            if self.source_bounds_cache.len() > 256 {
+                self.source_bounds_cache.clear()
+            }
+            self.source_bounds_cache.insert(key, bounds);
+            return bounds;
+        }
+        layer.surface().map(|surface| self.cached_bounds(layer.id.0, surface))
+    }
+
     /// Cached `Surface::content_bounds` keyed by an id and the surface's tile identity.
     pub fn cached_bounds(&mut self, key: u64, surface: &photocraft_raster::Surface) -> photocraft_geom::Rect {
         let rev = surface_fingerprint(surface);
@@ -1487,9 +1730,15 @@ impl PhotocraftApp {
         let (id, doc) = (st.doc.id, st.doc.clone());
         // View-only commands bump revision without changing pixels. Keeping a Weak pins allocation
         // identity against address reuse without retaining the document's pixel data.
-        let snapshot = std::sync::Arc::downgrade(&doc);
+        let snapshot = doc.downgrade();
         if !matches!(&self.channel_thumbs, Some((d, old, _)) if *d == id && old.ptr_eq(&snapshot)) {
-            let comp = photocraft_compose::thumbnail(&doc, 56);
+            let comp = match photocraft_compose::thumbnail(&doc, 56) {
+                Ok(comp) => comp,
+                Err(error) => {
+                    self.ui.status = format!("Channel thumbnails: {error}");
+                    return self.channel_thumbs.as_ref().map_or_else(Vec::new, |(_, _, textures)| textures.iter().map(|t| t.id()).collect());
+                }
+            };
             let (w, h) = (comp.width as usize, comp.height as usize);
             let side = w.max(h);
             let make = |f: &dyn Fn(&[u8]) -> egui::Color32, name: &str| {
@@ -1583,17 +1832,20 @@ impl PhotocraftApp {
     pub(crate) fn import_os_clipboard(&mut self) -> bool {
         let Some(get) = self.services.clipboard_get_image.as_mut() else { return false };
         let Some((w, h, bytes)) = get() else { return false };
-        if w == 0 || h == 0 || bytes.len() != w as usize * h as usize * 4 {
+        let Some(expected) = u64::from(w).checked_mul(u64::from(h)).and_then(|n| n.checked_mul(4)).and_then(|n| usize::try_from(n).ok()) else { return false };
+        if w == 0 || h == 0 || bytes.len() != expected {
             return false;
         }
         let sig = clip_signature(w, h, &bytes);
         if self.os_clip_sig == Some(sig) && self.session.clipboard.is_some() {
             return false;
         }
-        let r = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);
-        let mut surface = photocraft_raster::Surface::from_interleaved(photocraft_color::PixelFormat::RGBA8, r, &bytes);
+        let (Ok(width), Ok(height)) = (i32::try_from(w), i32::try_from(h)) else { return false };
+        let r = photocraft_geom::Rect::new(0, 0, width, height);
+        let Ok(mut surface) = photocraft_raster::Surface::try_from_interleaved(photocraft_color::PixelFormat::RGBA8, r, &bytes) else { return false };
         surface.prune();
-        self.session.clipboard = Some(photocraft_engine::edit_cmds::Clip { surface, bounds: r });
+        let Ok(clip) = photocraft_engine::edit_cmds::Clip::from_external_srgb(surface, r) else { return false };
+        self.session.clipboard = Some(clip);
         self.os_clip_sig = Some(sig);
         self.clip_external = true;
         true

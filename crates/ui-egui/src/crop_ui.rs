@@ -329,7 +329,7 @@ mod tests {
     fn app(depth: SampleType) -> PhotocraftApp {
         let doc = Document::with_background("crop", Size::new(200, 100), ColorMode::Rgb, depth, Color::WHITE);
         let mut s = photocraft_engine::Session::new();
-        s.add_document(doc, None);
+        s.add_document(doc, None).unwrap();
         let mut app = PhotocraftApp::new(s, crate::Services::default());
         app.ui.tool = Tool::Crop;
         app.ui.extras.snap = false;

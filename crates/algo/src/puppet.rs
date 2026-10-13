@@ -758,6 +758,73 @@ pub fn deform(src: &Surface, bounds: Rect, w: &PuppetWarp, iterations: usize) ->
     (solver, v, order)
 }
 
+/// Checked mesh rendering rejects bad draw-order indices before allocation.
+pub fn try_render(
+    src: &Surface,
+    bounds: Rect,
+    mesh: &PuppetMesh,
+    deformed: &[[f64; 2]],
+    order: &[usize],
+    interp: Interp,
+) -> Result<Surface, photocraft_raster::RasterInputError> {
+    use photocraft_raster::RasterInputError;
+    if matches!(src.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
+        return Err(RasterInputError::UnsupportedConversion);
+    }
+    let allocation = (deformed.len() as u64)
+        .checked_mul(32)
+        .and_then(|bytes| bytes.checked_add((order.len() as u64).checked_mul(24)?))
+        .ok_or(RasterInputError::LimitExceeded)?;
+    if allocation > photocraft_raster::MAX_CHECKED_RASTER_BYTES {
+        return Err(RasterInputError::LimitExceeded);
+    }
+    if deformed.len() != mesh.verts.len() {
+        return Err(RasterInputError::InvalidBounds);
+    }
+    let mut verts = Vec::new();
+    verts.try_reserve_exact(deformed.len()).map_err(|_| RasterInputError::LimitExceeded)?;
+    verts.extend(deformed.iter().zip(&mesh.verts).map(|(d, s)| (*d, *s)));
+    let mut tris = Vec::new();
+    tris.try_reserve_exact(order.len()).map_err(|_| RasterInputError::LimitExceeded)?;
+    for index in order {
+        tris.push(*mesh.tris.get(*index).ok_or(RasterInputError::InvalidBounds)?);
+    }
+    crate::warp::try_warp_triangles(src, bounds, &verts, &tris, interp)
+}
+
+/// Checked puppet deformation: wide interpolation is explicitly unsupported.
+pub fn try_puppet_warp(src: &Surface, bounds: Rect, w: &PuppetWarp, interp: Interp) -> Result<Option<Surface>, photocraft_raster::RasterInputError> {
+    if matches!(src.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
+        return Err(photocraft_raster::RasterInputError::UnsupportedConversion);
+    }
+    if w.pins.len() > 4096
+        || !w.expansion.is_finite()
+        || w.expansion.abs() > 4096.0
+        || w.pins
+            .iter()
+            .any(|pin| pin.src.iter().chain(pin.dst.iter()).any(|v| !v.is_finite() || v.abs() > 1_000_000.0) || pin.rotate.is_some_and(|v| !v.is_finite()))
+    {
+        return Err(photocraft_raster::RasterInputError::InvalidBounds);
+    }
+    photocraft_raster::checked_region_byte_len(bounds, src.format())?;
+    let prepared = src.try_convert(src.format())?;
+    let (solver, v, order) = deform(&prepared, bounds, w, ITERATIONS);
+    if solver.mesh.tris.is_empty() {
+        return Ok(Some(prepared));
+    }
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for point in &v {
+        if point.iter().any(|x| !x.is_finite()) {
+            return Err(photocraft_raster::RasterInputError::InvalidBounds);
+        }
+        (x0, y0, x1, y1) = (x0.min(point[0]), y0.min(point[1]), x1.max(point[0]), y1.max(point[1]));
+    }
+    if (x1 - x0 + 1.0) * (y1 - y0 + 1.0) > MAX_WARP_PIXELS {
+        return Ok(None);
+    }
+    try_render(&prepared, bounds, &solver.mesh, &v, &order, interp).map(Some)
+}
+
 /// Rasterizes the mesh deformation of `src` (inside `bounds`): the deformed triangles only, so
 /// pixels outside the mesh are dropped.
 pub fn render(src: &Surface, bounds: Rect, mesh: &PuppetMesh, deformed: &[[f64; 2]], order: &[usize], interp: Interp) -> Surface {

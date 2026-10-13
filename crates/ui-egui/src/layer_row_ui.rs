@@ -103,12 +103,14 @@ pub fn truncated(painter: &Painter, text: &str, font: FontId, color: egui::Color
 /// Paint `l`'s right-hand indicators in `row` and handle the effects triangle. Returns the
 /// name's right limit, the indicator rects, and whether the triangle was clicked this frame (so
 /// the row doesn't also treat the click as a selection).
+#[allow(clippy::too_many_arguments)]
 pub fn indicators(
     ui: &egui::Ui,
     painter: &Painter,
     row: Rect,
     name_left: f32,
     l: &Layer,
+    source_blend_label: Option<&str>,
     fx_open: bool,
     actions: &mut Vec<(String, Value)>,
 ) -> (f32, Vec<(Indicator, Rect)>, bool) {
@@ -117,9 +119,9 @@ pub fn indicators(
     let fx_font = theme::semibold(11.0);
     let blend_font = FontId::proportional(10.5);
     let has_fx = !l.effects.items.is_empty();
-    let show_blend = l.blend != BlendMode::Normal && l.blend != BlendMode::PassThrough;
+    let show_blend = source_blend_label.is_some() || (l.blend != BlendMode::Normal && l.blend != BlendMode::PassThrough);
     let fx_galley = has_fx.then(|| painter.layout_no_wrap("fx".into(), fx_font, t.text_dim));
-    let blend_galley = show_blend.then(|| painter.layout_no_wrap(tl!(l.blend.label()).into(), blend_font, t.text_faint));
+    let blend_galley = show_blend.then(|| painter.layout_no_wrap(tl!(source_blend_label.unwrap_or(l.blend.label())).into(), blend_font, t.text_faint));
     let mut items = Vec::new();
     if locked {
         items.push((Indicator::Lock, ICON_W));
@@ -301,7 +303,7 @@ pub fn rename_field(ui: &mut egui::Ui, layer: u64, rect: Rect) -> Option<(String
     let ctx = ui.ctx().clone();
     let mut r = rename(&ctx).filter(|r| r.layer == layer)?;
     let id = egui::Id::new(("layer-rename-field", layer));
-    let te = ui.put(rect, egui::TextEdit::singleline(&mut r.text).id(id).font(FontId::proportional(12.5)));
+    let te = ui.put(rect, egui::TextEdit::singleline(&mut r.text).char_limit(4096).id(id).font(FontId::proportional(12.5)));
     r.pass = ctx.cumulative_pass_nr();
     if !r.focused {
         te.request_focus();
@@ -326,6 +328,74 @@ pub fn rename_field(ui: &mut egui::Ui, layer: u64, rect: Rect) -> Option<(String
         store(&ctx, Some(r));
         None
     }
+}
+
+#[derive(Clone)]
+struct RenameWitness {
+    document: photocraft_doc::DocId,
+    revision: u64,
+    layer: u64,
+    snapshot: photocraft_engine::document_snapshot::WeakDocumentSnapshot,
+}
+fn witness_id() -> egui::Id { egui::Id::new("layer-rename-current-witness") }
+fn witness(ctx: &egui::Context) -> Option<RenameWitness> { ctx.data(|data|data.get_temp::<RenameWitness>(witness_id())) }
+fn checked_rename_action(app: &mut crate::PhotocraftApp, target: Option<RenameWitness>, action: Option<(String,Value)>) -> Option<(String,Value)> {
+    let (_,mut params) = action?;
+    let result = (|| {
+        let target = target.ok_or("layer.rename.ui.stale-target")?;
+        let active = app.session.active().ok_or("layer.rename.ui.stale-target")?;
+        let snapshot = target.snapshot.upgrade().ok_or("layer.rename.ui.stale-target")?;
+        if active.doc.id != target.document || active.revision != target.revision || !active.doc.shares_state(&snapshot)
+            || params.get("layer").and_then(Value::as_u64) != Some(target.layer) { return Err("layer.rename.ui.stale-target"); }
+        if app.ui.transform.is_some() || app.session.has_jobs() || active.floating.is_some()
+            || active.doc.xcf_state.as_ref().is_some_and(|state|state.floating.is_some()) { return Err("layer.rename.ui.context"); }
+        let name = params.get("name").and_then(Value::as_str).ok_or("layer.rename.ui.invalid-name")?;
+        if name.len() > 4096 || name.contains('\0') { return Err("layer.rename.ui.invalid-name"); }
+        let object = params.as_object_mut().ok_or("layer.rename.ui.invalid-name")?;
+        object.remove("layer");
+        object.insert("layerId".into(),json!(target.layer.to_string()));
+        object.insert("documentId".into(),json!(target.document.0.to_string()));
+        object.insert("expectedRevision".into(),json!(target.revision.to_string()));
+        Ok(("layer.renameLayer".into(),params))
+    })();
+    match result { Ok(action)=>Some(action),Err(error)=>{app.ui.status=error.into();app.ui.status_error=true;None} }
+}
+/// Production entry point: retain a snapshot witness alongside the legacy edit
+/// field without changing its trim/focus/menu behavior or serialized document.
+pub fn start_rename_checked(app: &mut crate::PhotocraftApp, ctx: &egui::Context, layer: u64, name: &str) -> Option<(String,Value)> {
+    if renaming(ctx) == Some(layer) { return None; }
+    let old = witness(ctx);
+    let Some(active) = app.session.active() else { return None; };
+    if name.len() > 4096 || name.contains('\0') || active.doc.layer(photocraft_doc::LayerId(layer)).is_none() {
+        app.ui.status="layer.rename.ui.invalid-name".into();app.ui.status_error=true;return None;
+    }
+    let requested_document = active.doc.id;
+    let action = start_rename(ctx,layer,name);
+    // Commit the previous editor before capturing the next editor's revision.
+    // Otherwise that successful rename would invalidate the new target itself.
+    if let Some((command,params)) = checked_rename_action(app,old,action)
+        && let Err(error) = app.run(&command,params) { app.ui.status=error;app.ui.status_error=true; }
+    let Some(active) = app.session.active().filter(|active| active.doc.id == requested_document
+        && active.doc.layer(photocraft_doc::LayerId(layer)).is_some_and(|current|current.name == name)) else {
+        store(ctx,None);
+        ctx.data_mut(|data|data.remove::<RenameWitness>(witness_id()));
+        app.ui.status="layer.rename.ui.stale-target".into();app.ui.status_error=true;return None;
+    };
+    let target = RenameWitness {document:active.doc.id,revision:active.revision,layer,snapshot:active.doc.downgrade()};
+    ctx.data_mut(|data|data.insert_temp(witness_id(),target));
+    None
+}
+pub fn end_rename_checked(app: &mut crate::PhotocraftApp, ctx: &egui::Context, commit: bool) -> Option<(String,Value)> {
+    let target=witness(ctx);
+    let action=end_rename(ctx,commit);
+    ctx.data_mut(|data|data.remove::<RenameWitness>(witness_id()));
+    checked_rename_action(app,target,action)
+}
+pub fn rename_field_checked(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, layer:u64, rect:Rect) -> Option<(String,Value)> {
+    let target=witness(ui.ctx());
+    let action=rename_field(ui,layer,rect);
+    if renaming(ui.ctx()).is_none() {ui.data_mut(|data|data.remove::<RenameWitness>(witness_id()));}
+    checked_rename_action(app,target,action)
 }
 
 #[cfg(test)]

@@ -2231,3 +2231,110 @@ fontWeight	Italic	斜体
 	Rotate View Tool	表示回転ツール
 	Reset View	表示をリセット
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	中心の周りをドラッグして表示を回転  ·  Shift で 15° 単位
+
+# Imported GIMP text and filter controls
+	Additional filters are available through command inspection	コマンド情報から追加のフィルターを利用できます
+	Alpha	アルファ
+	Alpha threshold	アルファしきい値
+	An explicit resolution edit sets both axes.	解像度を明示的に変更すると、両軸に適用されます。
+	Apply Text	テキストを適用
+	Blue frequency	青の周波数
+	Blue phase shift	青の位相シフト
+	Blue weight	青の重み
+	CIE Lab	CIE Lab色空間
+	CIE Yuv	CIE Yuv色空間
+	Changing this imported GIMP mode is not supported yet.	読み込んだGIMPモードの変更にはまだ対応していません。
+	Clip high	上限をクリップ
+	Clip low	下限をクリップ
+	Cyan / Red	シアン / 赤
+	Decrease Levels	階調数を減らす
+	Desaturate mode	脱色モード
+	Filter editing is unavailable	フィルターを編集できません
+	GIMP Filters	GIMPフィルター
+	GIMP Text	GIMPテキスト
+	Green frequency	緑の周波数
+	Green phase shift	緑の位相シフト
+	Green weight	緑の重み
+	Histogram channel	ヒストグラムのチャンネル
+	Hue frequency	色相の周波数
+	Hue phase shift	色相の位相シフト
+	Increase Levels	階調数を増やす
+	Intended temperature	目標色温度
+	Keep blue	青を保持
+	Keep green	緑を保持
+	Keep hue	色相を保持
+	Keep lightness	明度を保持
+	Keep red	赤を保持
+	Keep saturation	彩度を保持
+	Layer content is locked	レイヤーの内容はロックされています
+	Letter spacing	文字間隔
+	Lightness frequency	明度の周波数
+	Lightness phase shift	明度の位相シフト
+	Line spacing	行間隔
+	Lower limit	下限
+	Luma	ルマ
+	Magenta / Green	マゼンタ / 緑
+	Move Down	下へ移動
+	Move Up	上へ移動
+	Native	固有
+	Original temperature	元の色温度
+	Preserve luminosity	輝度を保持
+	Process in sRGB	sRGBで処理
+	Red frequency	赤の周波数
+	Red phase shift	赤の位相シフト
+	Red weight	赤の重み
+	Remove Filter	フィルターを削除
+	Reset Text	テキストをリセット
+	Saturation colorspace	彩度の色空間
+	Saturation frequency	彩度の周波数
+	Saturation phase shift	彩度の位相シフト
+	Strength	強さ
+	Text X	テキストのX座標
+	Text Y	テキストのY座標
+	Text content	テキスト内容
+	Text editing is unavailable for this layer.	このレイヤーのテキストは編集できません。
+	Upper limit	上限
+	Value	明るさ
+	Yellow / Blue	黄 / 青
+	From color	元の色
+	To color	置換後の色
+	Red threshold	赤のしきい値
+	Green threshold	緑のしきい値
+	Blue threshold	青のしきい値
+	Underlined characters	下線付きの文字
+	Start character	開始文字
+	End character (exclusive)	終了文字（含まない）
+	Apply underline	下線を適用
+	Clear underline	下線を解除
+	Text content editing is unavailable for this layer.	このレイヤーではテキスト内容を編集できません。
+	Transparency threshold	透明度のしきい値
+	Opacity threshold	不透明度のしきい値
+	Component	成分
+	Y'CbCr Y'	Y'CbCr Y'
+	Y'CbCr Cb	Y'CbCr Cb
+	Y'CbCr Cr	Y'CbCr Cr
+
+	Destination start angle	変換先の開始角度
+
+	Destination end angle	変換先の終了角度
+	GIMP Linked Image	GIMP リンク画像
+	Original byte identity is unavailable. The selected PNG is a Reduced substitution (8 MiB limit).	元のバイト列との一致は確認できません。選択した PNG は忠実度を下げた代替です（上限 8 MiB）。
+	Replace Linked Image (Reduced)…	リンク画像を置き換え（忠実度を低下）…
+	Resource picker unavailable.	リソース選択を利用できません。
+	The selected PNG must match the retained original byte identity (8 MiB limit). Exact recovery applies to this linked image only.	選択したPNGは、保持された元のバイト識別情報と一致する必要があります（上限8 MiB）。完全一致の復元は、このリンク画像のみに適用されます。
+	Recover Linked Image (Exact)…	リンク画像を復元（完全一致）…
+	Saved floating attachment	保存されたフローティング関連付け
+	Attachment target	関連付け先
+	Detach the saved relationship without changing pixels.	ピクセルを変更せずに、保存された関連付けを解除します。
+	Detach Floating Layer	フローティングレイヤーの関連付けを解除
+	Complete or cancel the pixel-move preview before detaching the saved relationship.	保存された関連付けを解除する前に、ピクセル移動のプレビューを完了またはキャンセルしてください。
+	Saved named item sets	保存された名前付きアイテムセット
+	Only sets containing this layer are shown; saved searches are not evaluated.	このレイヤーを含むセットのみ表示します。保存された検索は評価しません。
+	Rename Saved Item Set…	保存されたアイテムセットの名前を変更…
+	Delete Saved Item Set	保存されたアイテムセットを削除
+	Saved set name	保存されたセット名
+	Apply Saved Item Set Name	保存されたアイテムセット名を適用
+	Enter a replacement name for this long saved name.	この長い保存名を置き換える名前を入力してください。
+	Only the first 64 matching sets are shown.	一致するセットのうち最初の64件のみ表示します。
+	Complete or cancel the pixel-move preview before editing saved item sets.	保存されたアイテムセットを編集する前に、ピクセル移動のプレビューを完了またはキャンセルしてください。
+	Remove this layer from set	このレイヤーをセットから削除

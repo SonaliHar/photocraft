@@ -128,13 +128,13 @@ fn smart_objects_and_filters_survive_psd() {
         assert!(name.ends_with(".psb"), "{name}");
         let inner = decode_source(&name, &src).unwrap();
         assert_eq!((inner.size, inner.layers.len(), inner.depth), (nested.size, nested.layers.len(), nested.depth));
-        assert!(max_diff(&photocraft_compose::flatten(&inner).px, &photocraft_compose::flatten(&nested).px) <= 1.0 / 255.0 + 1e-6);
+        assert!(max_diff(&photocraft_compose::flatten(&inner).unwrap().px, &photocraft_compose::flatten(&nested).unwrap().px) <= 1.0 / 255.0 + 1e-6);
         // And it re-renders from that source like the original did.
         let mut l = back.layer(photocraft_doc::LayerId(bid)).unwrap().clone();
         assert!(refresh_layer(&back, &mut l).unwrap());
         let mut rerendered = back.clone();
         *rerendered.layer_mut(photocraft_doc::LayerId(bid)).unwrap() = l;
-        let d = max_diff(&photocraft_compose::flatten(&rerendered).px, &photocraft_compose::flatten(&doc).px);
+        let d = max_diff(&photocraft_compose::flatten(&rerendered).unwrap().px, &photocraft_compose::flatten(&doc).unwrap().px);
         assert!(d <= 2.0 / 255.0, "depth {depth}: re-render differs by {d}");
 
         // Saving the re-imported file again keeps the same embedded file (no growth).
@@ -189,7 +189,7 @@ fn camera_raw_psd_filters_survive_re_editing_native_save_and_undo() {
         assert_eq!(actual, expected, "{depth}-bit");
         let template = imported.smart_filters[1].params["__cameraRawPsd"].clone();
         let mut edited = Session::new();
-        edited.add_document(back, None);
+        edited.add_document(back, None).unwrap();
         edited.execute("layer.smartFilter.setParams", json!({"layer": layer, "index": 1, "params": {"exposure": 0, "curveLights": 0}})).unwrap();
         assert_eq!(smart(&edited.active().unwrap().doc).1.smart_filters[1].params["__cameraRawPsd"], template);
         let changed = edited.active().unwrap().doc.clone();
@@ -250,7 +250,7 @@ fn camera_raw_psd_fixture() {
         return;
     }
     let mut s = Session::new();
-    s.add_document(back, None);
+    s.add_document(back, None).unwrap();
     s.execute("layer.smartFilter.setParams", json!({"layer": layer, "index": index, "params": {"exposure": 0.5}})).unwrap();
     let out = photocraft_io::export(&s.active().unwrap().doc, "psd", &Default::default()).unwrap();
     assert!(!out.warnings.iter().any(|w| w.contains("smart filter")), "{:?}", out.warnings);
@@ -387,7 +387,7 @@ fn edited_psd_smart_objects_drop_their_old_file() {
     let first = photocraft_io::export(&doc, "psd", &Default::default()).unwrap().bytes;
     // Re-open, edit the contents (a new embedded file), save: one embedded file, the new one.
     let mut s2 = Session::new();
-    s2.add_document(photocraft_io::import("a.psd", &first).unwrap().document, None);
+    s2.add_document(photocraft_io::import("a.psd", &first).unwrap().document, None).unwrap();
     let (id, _) = smart(&s2.active().unwrap().doc);
     s2.select_layer(photocraft_doc::LayerId(id)).unwrap();
     s2.execute("layer.smartObjects.editContents", json!({})).unwrap();

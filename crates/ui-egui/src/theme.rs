@@ -366,13 +366,17 @@ impl Tokens {
     }
 }
 
-/// Register Inter (UI) and JetBrains Mono (numbers) plus named weights.
+/// Register exact UI fonts. Native callers retain the original infallible path.
+#[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
 pub fn install_fonts(ctx: &egui::Context) {
     install_fonts_with(ctx, crate::cjk_fonts::Sources::system());
 }
-
-/// [`install_fonts`] with the CJK fallback fonts taken from `cjk` (tests swap the sources).
+#[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
 pub fn install_fonts_with(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources) {
+    finish_install_fonts(ctx, cjk, native_font_definitions());
+}
+#[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+pub(crate) fn native_font_definitions() -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| {
         fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_static(bytes)));
@@ -390,6 +394,25 @@ pub fn install_fonts_with(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources) {
         stack.extend(fallback.iter().cloned());
         fonts.families.insert(FontFamily::Name(fam.into()), stack);
     }
+    fonts
+}
+#[cfg(all(target_arch = "wasm32", feature = "web_external_assets"))]
+pub fn try_install_fonts_ready(ctx: &egui::Context, ready: crate::web_ui_assets::ReadyUiAssets) -> Result<(), crate::web_ui_assets::UiAssetError> {
+    finish_install_fonts(ctx, crate::cjk_fonts::Sources::system(), ready.font_definitions()?);
+    Ok(())
+}
+pub fn try_install_fonts(ctx: &egui::Context) -> Result<(), crate::web_ui_assets::UiAssetError> {
+    try_install_fonts_with(ctx, crate::cjk_fonts::Sources::system())
+}
+pub fn try_install_fonts_with(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources) -> Result<(), crate::web_ui_assets::UiAssetError> {
+    #[cfg(all(target_arch = "wasm32", feature = "web_external_assets"))]
+    let fonts = crate::web_ui_assets::ready()?.font_definitions()?;
+    #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+    let fonts = native_font_definitions();
+    finish_install_fonts(ctx, cjk, fonts);
+    Ok(())
+}
+fn finish_install_fonts(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources, mut fonts: FontDefinitions) {
     let size = ui_font_size(ctx);
     for (name, data) in &mut fonts.font_data {
         size_ui_font(ctx, name, Arc::make_mut(data));

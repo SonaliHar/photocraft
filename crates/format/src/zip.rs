@@ -3,9 +3,11 @@
 //! unzipped and re-zipped by another tool still loads). No ZIP64, no
 //! encryption, no multi-disk archives.
 
-use std::io::Read;
-
 use crate::FormatError;
+
+/// Bounded seekable ZIP/ZIP64 infrastructure for native streaming routes.
+#[path = "zip_stream.rs"]
+pub mod stream;
 
 const LOCAL_SIG: u32 = 0x0403_4b50;
 const CENTRAL_SIG: u32 = 0x0201_4b50;
@@ -13,8 +15,14 @@ const EOCD_SIG: u32 = 0x0605_4b50;
 
 /// CRC-32 (IEEE), table-driven.
 pub fn crc32(data: &[u8]) -> u32 {
+    let t = crc_table();
+    let mut c = 0xFFFF_FFFFu32;
+    for &b in data { c = t[((c ^ b as u32) & 0xFF) as usize] ^ (c >> 8); }
+    !c
+}
+fn crc_table() -> &'static [u32; 256] {
     static TABLE: std::sync::OnceLock<[u32; 256]> = std::sync::OnceLock::new();
-    let t = TABLE.get_or_init(|| {
+    TABLE.get_or_init(|| {
         let mut t = [0u32; 256];
         for (i, e) in t.iter_mut().enumerate() {
             let mut c = i as u32;
@@ -24,12 +32,17 @@ pub fn crc32(data: &[u8]) -> u32 {
             *e = c;
         }
         t
-    });
-    let mut c = 0xFFFF_FFFFu32;
-    for &b in data {
-        c = t[((c ^ b as u32) & 0xFF) as usize] ^ (c >> 8);
+    })
+}
+fn crc32_with_interrupt(data: &[u8], control: &photocraft_raster::Interrupt<'_>) -> Result<u32, FormatError> {
+    let table = crc_table();
+    let mut crc = u32::MAX;
+    for block in data.chunks(64 << 10) {
+        control.check().map_err(|_| FormatError::Cancelled)?;
+        for byte in block { crc = table.get(((crc ^ u32::from(*byte)) & 255) as usize).copied().ok_or_else(|| FormatError::corrupt("CRC table index"))? ^ (crc >> 8); }
     }
-    !c
+    control.check().map_err(|_| FormatError::Cancelled)?;
+    Ok(!crc)
 }
 
 /// Streaming writer for STORE entries.
@@ -203,36 +216,77 @@ impl<'a> ZipReader<'a> {
 
     /// Entry payload (decompressed), at most `max` bytes, CRC-checked.
     pub fn read(&self, e: &Entry, max: usize) -> Result<Vec<u8>, FormatError> {
+        self.read_with_interrupt(e, max, &photocraft_raster::Interrupt::NONE)
+    }
+
+    /// Bounded STORE/DEFLATE output and cooperative initialization/read/CRC.
+    /// Allocator calls cannot be interrupted. No growth beyond the declared
+    /// uncompressed payload occurs; an extra decoded byte is a named refusal.
+    pub fn read_with_interrupt(&self, e: &Entry, max: usize, control: &photocraft_raster::Interrupt<'_>) -> Result<Vec<u8>, FormatError> {
+        control.check().map_err(|_| FormatError::Cancelled)?;
         if e.uncompressed > max {
             return Err(FormatError::LimitExceeded(format!("zip entry `{}` is {} bytes (max {max})", e.name, e.uncompressed)));
         }
-        let raw = &self.bytes[e.data_offset..e.data_offset + e.compressed];
-        let data = match e.method {
-            0 => raw.to_vec(),
-            8 => {
-                let mut out = Vec::with_capacity(e.uncompressed);
-                flate2::read::DeflateDecoder::new(raw)
-                    .take(max as u64 + 1)
-                    .read_to_end(&mut out)
-                    .map_err(|err| FormatError::corrupt(format!("zip entry `{}`: {err}", e.name)))?;
-                out
-            }
+        let end = e.data_offset.checked_add(e.compressed).ok_or_else(|| FormatError::corrupt("zip payload offset overflow"))?;
+        let raw = self.bytes.get(e.data_offset..end).ok_or_else(|| FormatError::corrupt("truncated zip payload"))?;
+        if e.method == 0 && e.compressed != e.uncompressed { return Err(FormatError::corrupt("zip STORE size mismatch")); }
+        match e.method {
+            0 | 8 => {}
             m => {
                 return Err(FormatError::Unsupported(format!("zip compression method {m} for `{}`", e.name)));
             }
-        };
+        }
+        let envelope = e.uncompressed.checked_add(16).ok_or_else(|| FormatError::LimitExceeded("zip payload capacity overflow".into()))?;
+        let mut data = Vec::new();
+        data.try_reserve_exact(e.uncompressed).map_err(|_| FormatError::LimitExceeded("zip payload allocation".into()))?;
+        if data.capacity() > envelope { return Err(FormatError::LimitExceeded("zip payload allocator capacity".into())); }
+        if e.method == 0 {
+            for chunk in raw.chunks(64 << 10) { control.check().map_err(|_| FormatError::Cancelled)?; data.extend_from_slice(chunk); }
+        } else {
+            let mut decoder = flate2::Decompress::new(false);
+            let mut scratch = [0u8; 64 << 10];
+            let mut input_offset = 0usize;
+            loop {
+                control.check().map_err(|_| FormatError::Cancelled)?;
+                let remaining = e.uncompressed.checked_sub(data.len()).ok_or_else(|| FormatError::corrupt("zip decoded length overflow"))?;
+                let wanted = remaining.min(scratch.len()).max(1);
+                let block = scratch.get_mut(..wanted).ok_or_else(|| FormatError::corrupt("zip decode buffer range"))?;
+                let input_end = input_offset.checked_add(raw.len().checked_sub(input_offset).ok_or_else(|| FormatError::corrupt("zip input length"))?.min(64 << 10))
+                    .ok_or_else(|| FormatError::corrupt("zip input offset overflow"))?;
+                let input = raw.get(input_offset..input_end).ok_or_else(|| FormatError::corrupt("zip input range"))?;
+                let before_input = decoder.total_in();
+                let before_output = decoder.total_out();
+                let status = decoder.decompress(input, block, flate2::FlushDecompress::None)
+                    .map_err(|err| FormatError::corrupt(format!("zip entry `{}`: {err}", e.name)))?;
+                let consumed = usize::try_from(decoder.total_in().checked_sub(before_input).ok_or_else(|| FormatError::corrupt("zip input counter"))?).map_err(|_| FormatError::corrupt("zip input counter"))?;
+                let count = usize::try_from(decoder.total_out().checked_sub(before_output).ok_or_else(|| FormatError::corrupt("zip output counter"))?).map_err(|_| FormatError::corrupt("zip output counter"))?;
+                if consumed > input.len() { return Err(FormatError::corrupt("zip decoder input length")); }
+                input_offset = input_offset.checked_add(consumed).ok_or_else(|| FormatError::corrupt("zip input counter overflow"))?;
+                if count > remaining { return Err(FormatError::corrupt("zip DEFLATE exceeds declared size")); }
+                data.extend_from_slice(block.get(..count).ok_or_else(|| FormatError::corrupt("zip decoder length"))?);
+                if status == flate2::Status::StreamEnd { break; }
+                if count == 0 && consumed == 0 { return Err(FormatError::corrupt("truncated or stalled zip DEFLATE stream")); }
+            }
+            if input_offset != raw.len() { return Err(FormatError::corrupt("zip DEFLATE stream length")); }
+        }
         if data.len() != e.uncompressed || data.len() > max {
             return Err(FormatError::corrupt(format!("zip entry `{}` has wrong size", e.name)));
         }
-        if crc32(&data) != e.crc {
+        if crc32_with_interrupt(&data, control)? != e.crc {
             return Err(FormatError::corrupt(format!("zip entry `{}` failed its CRC check", e.name)));
         }
         Ok(data)
     }
 
     pub fn read_by_name(&self, name: &str, max: usize) -> Result<Vec<u8>, FormatError> {
-        let e = self.find(name).ok_or_else(|| FormatError::corrupt(format!("missing `{name}`")))?;
-        self.read(e, max)
+        self.read_by_name_with_interrupt(name, max, &photocraft_raster::Interrupt::NONE)
+    }
+    pub fn read_by_name_with_interrupt(&self, name: &str, max: usize, control: &photocraft_raster::Interrupt<'_>) -> Result<Vec<u8>, FormatError> {
+        for entry in &self.entries {
+            control.check().map_err(|_| FormatError::Cancelled)?;
+            if entry.name == name { return self.read_with_interrupt(entry, max, control); }
+        }
+        Err(FormatError::corrupt(format!("missing `{name}`")))
     }
 }
 
@@ -275,5 +329,47 @@ mod tests {
     fn offset_access_rejects_overflow() {
         assert!(u16_at(&[], usize::MAX).is_err());
         assert!(u32_at(&[], usize::MAX - 3).is_err());
+    }
+
+    #[test]
+    fn malformed_store_and_payload_offset_refuse_before_copy() {
+        let bytes = [7; 512];
+        let reader = ZipReader { bytes: &bytes, entries: Vec::new() };
+        let mut entry = Entry { name: "own".into(), method: 0, crc: 0, compressed: 512, uncompressed: 1, data_offset: 0 };
+        assert!(matches!(reader.read(&entry, 1), Err(FormatError::Corrupt(_))));
+        entry.compressed = 1; entry.data_offset = usize::MAX;
+        assert!(reader.read(&entry, usize::MAX).is_err());
+    }
+
+    #[test]
+    fn deflate_declared_size_and_max_usize_are_checked_without_growth() {
+        let input = vec![19; 200_000];
+        let mut encoder = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::fast());
+        std::io::Write::write_all(&mut encoder, &input).unwrap();
+        let encoded = encoder.finish().unwrap();
+        let reader = ZipReader { bytes: &encoded, entries: Vec::new() };
+        let mut entry = Entry { name: "own".into(), method: 8, crc: crc32(&input), compressed: encoded.len(), uncompressed: input.len(), data_offset: 0 };
+        assert_eq!(reader.read(&entry, usize::MAX).unwrap(), input);
+        entry.uncompressed -= 1;
+        assert!(reader.read(&entry, usize::MAX).is_err());
+        entry.uncompressed = input.len(); entry.compressed -= 1;
+        assert!(reader.read(&entry, usize::MAX).is_err());
+        let mut trailing = encoded.clone();
+        trailing.push(0);
+        let trailing_reader = ZipReader { bytes: &trailing, entries: Vec::new() };
+        entry.compressed = trailing.len();
+        assert!(trailing_reader.read(&entry, usize::MAX).is_err());
+    }
+
+    #[test]
+    fn store_copy_observes_late_cancellation() {
+        let input = vec![29; 200_000];
+        let reader = ZipReader { bytes: &input, entries: Vec::new() };
+        let entry = Entry { name: "own".into(), method: 0, crc: crc32(&input), compressed: input.len(), uncompressed: input.len(), data_offset: 0 };
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let cancel = || calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 2;
+        assert!(matches!(reader.read_with_interrupt(&entry, input.len(), &photocraft_raster::Interrupt::cancel_only(&cancel)), Err(FormatError::Cancelled)));
+        assert!(calls.load(std::sync::atomic::Ordering::Relaxed) >= 3);
+        assert_eq!(input, vec![29; 200_000]);
     }
 }

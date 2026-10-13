@@ -6,7 +6,7 @@
 //!   (manifest `xtask/psd-corpus.sha256`).
 //! - `corpus/psd-tools/**/*.{psd,psb}`: the complete psd-tools test set (MIT).
 //! - `corpus/photoshop/**/*.psd`: our own Photoshop-authored oracles from
-//!   https://github.com/storytold/photocraft-corpus (smart filters, layer-style effect shapes,
+//!   https://github.com/Terra854/photocraft-corpus (smart filters, layer-style effect shapes,
 //!   the text engine, adjustments in every mode and depth), reported per feature group. Smart
 //!   objects and type layers composite Photoshop's cached pixels here; the engine's
 //!   `photoshop_oracles` test re-renders them with our smart-filter stack and text engine.
@@ -154,7 +154,7 @@ const MIXED: Source = Source { label: "io corpus", dir: "corpus/psd", group_dept
 /// 226 vs the merged image + 10 vs the thumbnail (Advanced Blending knockouts: +7).
 const PSD_TOOLS: Source = Source { label: "psd-tools corpus", dir: "corpus/psd-tools", group_depth: 0, pass_floor: 236, roundtrip_floor: 307 };
 
-/// Our Photoshop-authored oracles (256 files; https://github.com/storytold/photocraft-corpus),
+/// Our Photoshop-authored oracles (256 files; https://github.com/Terra854/photocraft-corpus),
 /// grouped by feature (`smart-filters`, `effects`, `text`, `adjustments/<mode><bits>`).
 const PHOTOSHOP: Source = Source { label: "photoshop oracles", dir: "corpus/photoshop", group_depth: 2, pass_floor: 133, roundtrip_floor: 258 };
 
@@ -316,9 +316,9 @@ fn check_file(name: &str, bytes: &[u8]) -> (Outcome, Option<f32>) {
             return (Outcome::Error, None);
         }
     };
-    let ours = photocraft_compose::flatten(doc).px;
+    let ours = photocraft_compose::flatten(doc).unwrap().px;
     // Our own export must not change how the document renders.
-    let again = photocraft_compose::flatten(&reimported).px;
+    let again = photocraft_compose::flatten(&reimported).unwrap().px;
     let rt = if again.len() == ours.len() { common::max_diff(&ours, &again) } else { f32::INFINITY };
     let layers = doc.layer_count();
     // Oracle choice: the merged image (Photoshop's composite; for files without layers it is the
@@ -483,7 +483,7 @@ fn run_mutations(src: &Source) {
                 if let Ok(imp) = import(&name, &data) {
                     let b = imp.document.bounds();
                     if i64::from(b.width()) * i64::from(b.height()) <= 4_000_000 {
-                        let _ = photocraft_compose::flatten(&imp.document);
+                        let _ = photocraft_compose::flatten(&imp.document).unwrap();
                     }
                 }
             }));

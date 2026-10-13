@@ -3361,3 +3361,108 @@ fontWeight	Thin	Πολύ λεπτά
 # Saved New Document presets (#1516)
 	Preset Name	Όνομα προεπιλογής
 	No saved presets yet.	Δεν υπάρχουν ακόμη αποθηκευμένες προεπιλογές.
+
+# Imported GIMP properties and filters
+	Additional filters are available through command inspection	Πρόσθετα φίλτρα είναι διαθέσιμα μέσω επιθεώρησης εντολών
+	Alpha threshold	Κατώφλι άλφα
+	An explicit resolution edit sets both axes.	Η ρητή αλλαγή ανάλυσης ορίζει και τους δύο άξονες.
+	Apply Text	Εφαρμογή κειμένου
+	Blue frequency	Συχνότητα μπλε
+	Blue phase shift	Μετατόπιση φάσης μπλε
+	Blue weight	Βάρος μπλε
+	CIE Lab	CIE Lab
+	CIE Yuv	CIE Yuv
+	Changing this imported GIMP mode is not supported yet.	Η αλλαγή αυτής της εισαγόμενης λειτουργίας GIMP δεν υποστηρίζεται ακόμη.
+	Clip high	Αποκοπή υψηλών τιμών
+	Clip low	Αποκοπή χαμηλών τιμών
+	Cyan / Red	Κυανό / Κόκκινο
+	Decrease Levels	Μείωση επιπέδων
+	Desaturate mode	Λειτουργία αποκορεσμού
+	Filter editing is unavailable	Η επεξεργασία φίλτρου δεν είναι διαθέσιμη
+	GIMP Filters	Φίλτρα GIMP
+	GIMP Text	Κείμενο GIMP
+	Green frequency	Συχνότητα πράσινου
+	Green phase shift	Μετατόπιση φάσης πράσινου
+	Green weight	Βάρος πράσινου
+	Histogram channel	Κανάλι ιστογράμματος
+	Hue frequency	Συχνότητα απόχρωσης
+	Hue phase shift	Μετατόπιση φάσης απόχρωσης
+	Increase Levels	Αύξηση επιπέδων
+	Intended temperature	Επιθυμητή θερμοκρασία
+	Keep blue	Διατήρηση μπλε
+	Keep green	Διατήρηση πράσινου
+	Keep hue	Διατήρηση απόχρωσης
+	Keep lightness	Διατήρηση φωτεινότητας
+	Keep red	Διατήρηση κόκκινου
+	Keep saturation	Διατήρηση κορεσμού
+	Layer content is locked	Το περιεχόμενο του επιπέδου είναι κλειδωμένο
+	Letter spacing	Απόσταση χαρακτήρων
+	Lightness frequency	Συχνότητα φωτεινότητας
+	Lightness phase shift	Μετατόπιση φάσης φωτεινότητας
+	Line spacing	Διάστιχο
+	Lower limit	Κάτω όριο
+	Luma	Φωτεινότητα λούμα
+	Magenta / Green	Ματζέντα / Πράσινο
+	Move Down	Μετακίνηση κάτω
+	Move Up	Μετακίνηση πάνω
+	Native	Εγγενές
+	Original temperature	Αρχική θερμοκρασία
+	Preserve luminosity	Διατήρηση λαμπρότητας
+	Process in sRGB	Επεξεργασία σε sRGB
+	Red frequency	Συχνότητα κόκκινου
+	Red phase shift	Μετατόπιση φάσης κόκκινου
+	Red weight	Βάρος κόκκινου
+	Remove Filter	Αφαίρεση φίλτρου
+	Reset Text	Επαναφορά κειμένου
+	Saturation colorspace	Χρωματικός χώρος κορεσμού
+	Saturation frequency	Συχνότητα κορεσμού
+	Saturation phase shift	Μετατόπιση φάσης κορεσμού
+	Text X	Κείμενο X
+	Text Y	Κείμενο Y
+	Text content	Περιεχόμενο κειμένου
+	Text editing is unavailable for this layer.	Η επεξεργασία κειμένου δεν είναι διαθέσιμη για αυτό το επίπεδο.
+	Upper limit	Άνω όριο
+	Value	Τιμή
+	Yellow / Blue	Κίτρινο / Μπλε
+	From color	Αρχικό χρώμα
+	To color	Χρώμα αντικατάστασης
+	Red threshold	Κατώφλι κόκκινου
+	Green threshold	Κατώφλι πράσινου
+	Blue threshold	Κατώφλι μπλε
+	Underlined characters	Υπογραμμισμένοι χαρακτήρες
+	Start character	Αρχικός χαρακτήρας
+	End character (exclusive)	Τελικός χαρακτήρας (δεν περιλαμβάνεται)
+	Apply underline	Εφαρμογή υπογράμμισης
+	Clear underline	Αφαίρεση υπογράμμισης
+	Text content editing is unavailable for this layer.	Η επεξεργασία του περιεχομένου κειμένου δεν είναι διαθέσιμη για αυτό το επίπεδο.
+	Transparency threshold	Κατώφλι διαφάνειας
+	Opacity threshold	Κατώφλι αδιαφάνειας
+	Component	Συνιστώσα
+	Y'CbCr Y'	Y'CbCr Y'
+	Y'CbCr Cb	Y'CbCr Cb
+	Y'CbCr Cr	Y'CbCr Cr
+
+	Destination start angle	Αρχική γωνία προορισμού
+
+	Destination end angle	Τελική γωνία προορισμού
+	GIMP Linked Image	Συνδεδεμένη εικόνα GIMP
+	Original byte identity is unavailable. The selected PNG is a Reduced substitution (8 MiB limit).	Δεν είναι διαθέσιμη η ταύτιση με τα αρχικά byte. Το επιλεγμένο PNG είναι υποκατάστατο μειωμένης πιστότητας (όριο 8 MiB).
+	Replace Linked Image (Reduced)…	Αντικατάσταση συνδεδεμένης εικόνας (μειωμένη πιστότητα)…
+	Resource picker unavailable.	Η επιλογή πόρου δεν είναι διαθέσιμη.
+	The selected PNG must match the retained original byte identity (8 MiB limit). Exact recovery applies to this linked image only.	Το επιλεγμένο PNG πρέπει να αντιστοιχεί στην αποθηκευμένη αρχική ταυτότητα byte (όριο 8 MiB). Η ακριβής ανάκτηση ισχύει μόνο για αυτή τη συνδεδεμένη εικόνα.
+	Recover Linked Image (Exact)…	Ανάκτηση συνδεδεμένης εικόνας (ακριβής)…
+	Saved floating attachment	Αποθηκευμένη προσάρτηση αιωρούμενου επιπέδου
+	Attachment target	Στόχος προσάρτησης
+	Detach the saved relationship without changing pixels.	Αποσύνδεση της αποθηκευμένης σχέσης χωρίς αλλαγή των pixel.
+	Detach Floating Layer	Αποσύνδεση αιωρούμενου επιπέδου
+	Complete or cancel the pixel-move preview before detaching the saved relationship.	Ολοκληρώστε ή ακυρώστε την προεπισκόπηση μετακίνησης pixel πριν αποσυνδέσετε την αποθηκευμένη σχέση.
+	Saved named item sets	Αποθηκευμένα ονομασμένα σύνολα στοιχείων
+	Only sets containing this layer are shown; saved searches are not evaluated.	Εμφανίζονται μόνο σύνολα που περιέχουν αυτό το επίπεδο· οι αποθηκευμένες αναζητήσεις δεν αξιολογούνται.
+	Rename Saved Item Set…	Μετονομασία αποθηκευμένου συνόλου στοιχείων…
+	Delete Saved Item Set	Διαγραφή αποθηκευμένου συνόλου στοιχείων
+	Saved set name	Όνομα αποθηκευμένου συνόλου
+	Apply Saved Item Set Name	Εφαρμογή ονόματος αποθηκευμένου συνόλου στοιχείων
+	Enter a replacement name for this long saved name.	Εισαγάγετε ένα νέο όνομα για αυτό το μεγάλο αποθηκευμένο όνομα.
+	Only the first 64 matching sets are shown.	Εμφανίζονται μόνο τα πρώτα 64 αντίστοιχα σύνολα.
+	Complete or cancel the pixel-move preview before editing saved item sets.	Ολοκληρώστε ή ακυρώστε την προεπισκόπηση μετακίνησης pixel πριν επεξεργαστείτε αποθηκευμένα σύνολα στοιχείων.
+	Remove this layer from set	Αφαίρεση αυτής της στρώσης από το σύνολο

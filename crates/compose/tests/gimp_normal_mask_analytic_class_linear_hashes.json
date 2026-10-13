@@ -1,0 +1,32 @@
+{
+  "gamma": {
+    "batch-manifest.json": "e3ade93b5ae5bd3f0e157b8b82114e8a680ab27412f7886315cf8927004f587a",
+    "observations.json": "8eb2f59c443ef6af709db7b5ec3b37d1afd3f1b8d3d208a6fcf1599c25828197",
+    "fresh/observations.json": "14559a17a94b7a3c8a1b38292f77f32dbb79aaea74927479d694f6bebbad451d",
+    "faithful-observations.json": "a23d357a0f4865831e80293e9d0e6099a6a0d6ecb383ecd5dbb4a5b96fda30ba",
+    "faithful-fresh/faithful-observations.json": "46ef8a7ae6dc7dc0c7fd7422a053e7eeb06990615db82de09d53e5f68649b527",
+    "VERIFICATION.json": "287ebf8aefcb939524bffdb5389112654f7eb4f8a79afe6ec7e320a1cbad44fc",
+    "own-rgb-parametric-trc.icc": "d4ddff2458010156aebea135bf7cb68b5f1b65a418f116f4783cf62287036feb",
+    "own-gray-parametric-trc.icc": "78efd53a209447804e9dad749bb56be82c10fbe17345b1f82cc272ef48473aaf"
+  },
+  "type3": {
+    "batch-manifest.json": "846640921d7e01ff15edd26eeba42cf515278817d68acf2be29f3b1f2047546b",
+    "observations.json": "bdd95f20271d7d14104443162a394937fe08dc5b1e8a9bb06ad6fbf8988441d6",
+    "fresh/observations.json": "893cae913d81e213632445f07a7f94ac798bb952ec6e6cbce50c1f02d8a8999a",
+    "faithful-observations.json": "56eb36004cd5ac7c965735bd29b3c92c9a5ed4aa09165b844351458f95bef872",
+    "faithful-fresh/faithful-observations.json": "6a4bb76f0ce5ce71f38032908473347b6b650b8242ea3c552bae12e3c513e708",
+    "VERIFICATION.json": "287ebf8aefcb939524bffdb5389112654f7eb4f8a79afe6ec7e320a1cbad44fc",
+    "own-rgb-parametric-trc.icc": "7ca9fc2ea8fdea205ab99e0f419d81ae907eaad965950217080cd4928b9d0f14",
+    "own-gray-parametric-trc.icc": "06fdcaba5617d516676f6665519f5b9a155957b3ec9c5895f572356ceabfea0a"
+  },
+  "type4": {
+    "batch-manifest.json": "ac4fc3cd7416e7c7cb497b90ea07f50a7fdee287cc493e9f964acb582891c214",
+    "observations.json": "4cadcb4ebf7fbe46123fef8999b8874a55930756fda43184776b7c21ee791326",
+    "fresh/observations.json": "16c29fdb179be0c34fb45bbebc62c1831e6e18bf6d02611bf3f64e77b4fc7fbe",
+    "faithful-observations.json": "d6c54041fe5183a938bfde09786595ac9893ab8131decb2d947cb15ff2ec6230",
+    "faithful-fresh/faithful-observations.json": "9f403c64e79d5cb84995a79521ce922cee4242a3515692d44a8e4e3d9292bced",
+    "VERIFICATION.json": "287ebf8aefcb939524bffdb5389112654f7eb4f8a79afe6ec7e320a1cbad44fc",
+    "own-rgb-parametric-trc.icc": "049805cff7622dd9802d360a0a264d2c80608f6722cb755bfc428f6b4e03c106",
+    "own-gray-parametric-trc.icc": "28199b6e67495dc6bef06aa7ed5dbc56b33f61031e4786b700144b3718826afc"
+  }
+}

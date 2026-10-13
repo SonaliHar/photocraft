@@ -156,12 +156,12 @@ fn list(s: &mut Session, _: &Value) -> Result<Value> {
 }
 
 /// Target layers: `"layers": [ids]`, `"layer": id`, else every selected layer.
-fn targets(s: &Session, p: &Value) -> Vec<photocraft_doc::LayerId> {
+fn targets(s: &Session, p: &Value) -> Result<Vec<photocraft_doc::LayerId>> {
     if let Some(a) = p.get("layers").and_then(Value::as_array) {
-        return a.iter().filter_map(Value::as_u64).map(photocraft_doc::LayerId).collect();
+        return Ok(a.iter().filter_map(Value::as_u64).map(photocraft_doc::LayerId).collect());
     }
     if let Some(id) = p.get("layer").and_then(Value::as_u64) {
-        return vec![photocraft_doc::LayerId(id)];
+        return Ok(vec![photocraft_doc::LayerId(id)]);
     }
     crate::layer_multi_cmds::selected(s)
 }
@@ -170,7 +170,7 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "style.presets.apply";
     let style = find_style(s, p, CMD)?.clone();
     let add = p.get("add").and_then(Value::as_bool).unwrap_or(false);
-    let ids = targets(s, p);
+    let ids = targets(s, p)?;
     if ids.is_empty() {
         return Err(bad(CMD, "no target layers"));
     }
@@ -288,7 +288,7 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Swatch for the Styles panel: the style on a rounded square, `size`² RGBA8 (straight alpha,
 /// transparent around the square).
-pub fn thumbnail(s: &Session, style: &StylePreset, size: u32) -> Vec<u8> {
+pub fn thumbnail(s: &Session, style: &StylePreset, size: u32) -> crate::Result<Vec<u8>> {
     let size = size.clamp(8, 256);
     let mut doc = Document::new("style", Size::new(size, size), ColorMode::Rgb, SampleType::U8);
     let fmt = doc.pixel_format();
@@ -327,7 +327,7 @@ pub fn thumbnail(s: &Session, style: &StylePreset, size: u32) -> Vec<u8> {
         l.fill_opacity = f;
     }
     doc.layers.push(l);
-    photocraft_compose::render(&doc, doc.bounds()).to_rgba8().pixels
+    Ok(photocraft_compose::render(&doc, doc.bounds())?.to_rgba8().pixels)
 }
 
 pub fn specs() -> Vec<CommandSpec> {

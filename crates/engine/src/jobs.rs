@@ -20,14 +20,14 @@
 
 use std::any::Any;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use photocraft_doc::{DocId, Document, LayerId};
 use photocraft_raster::Interrupt;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::{EngineError, Result, Session};
+use crate::{EngineError, Result, Session, WeakDocumentSnapshot};
 
 /// Identifies one background job for the session's lifetime.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
@@ -177,7 +177,7 @@ struct Running {
     journal: bool,
     doc: Option<DocId>,
     /// The document as the job saw it: applying fails if it was edited meanwhile.
-    snapshot: Option<Weak<Document>>,
+    snapshot: Option<WeakDocumentSnapshot>,
     ctx: JobCtx,
     started_ms: f64,
     coalesce: Option<String>,
@@ -257,13 +257,44 @@ fn independent_of_document(id: &str) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn read_path(path: &str) -> Result<Vec<u8>> {
-    // Bounded reads, and a clear error for a file larger than memory (#375).
-    photocraft_format::read_file(std::path::Path::new(path)).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+fn read_path(name: &str, path: &str, ctx: &JobCtx) -> Result<photocraft_io::ImportResult> {
+    use std::io::{Seek, SeekFrom};
+    ctx.check()?;
+    // Only the already-authorized native OpenSource::Path lane reaches this
+    // ambient open. Keep this same handle for classification, native streaming
+    // and the content-first fallback; never reopen a stored resource locator.
+    let mut file = std::fs::File::open(path).map_err(|error| EngineError::Other(format!("{path}: {error}")))?;
+    ctx.check()?;
+    let candidate =
+        ctx.stage(0.0, 0.95, "Decoding", |control| photocraft_io::import_native_stream_candidate(name, &mut file, control)).map_err(|error| match error {
+            photocraft_io::IoError::Cancelled => EngineError::Cancelled,
+            error => EngineError::Other(error.to_string()),
+        })?;
+    if let Some(document) = candidate {
+        ctx.check()?;
+        return Ok(document);
+    }
+    ctx.check()?;
+    file.seek(SeekFrom::Start(0)).map_err(|error| EngineError::Other(format!("{path}: {error}")))?;
+    ctx.check()?;
+    // Legacy formats keep the same size-authority/allocation semantics, with
+    // cooperative per-chunk cancellation rather than a new small file cap.
+    let size_hint = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+    let bytes = ctx.stage(0.0, 0.02, "Reading", |control| {
+        photocraft_format::read::read_all_with_interrupt(&mut file, size_hint, control)
+            .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { EngineError::Other(format!("{path}: {error}")) })
+    })?;
+    ctx.check()?;
+    let imported = ctx.stage(0.02, 0.95, "Decoding", |control| photocraft_io::import_with(name, &bytes, control)).map_err(|error| match error {
+        photocraft_io::IoError::Cancelled => EngineError::Cancelled,
+        error => EngineError::Other(error.to_string()),
+    })?;
+    ctx.check()?;
+    Ok(imported)
 }
 
 #[cfg(target_arch = "wasm32")]
-fn read_path(path: &str) -> Result<Vec<u8>> {
+fn read_path(_name: &str, path: &str, _ctx: &JobCtx) -> Result<photocraft_io::ImportResult> {
     Err(EngineError::Other(format!("cannot open paths on the web: {path}")))
 }
 
@@ -290,7 +321,7 @@ pub fn run<T: Send + 'static>(
         return Err(EngineError::Other(format!("`{label}` started a second background job in one command")));
     }
     let (doc, snapshot) = match (lock_document, s.active()) {
-        (true, Some(st)) => (Some(st.doc.id), Some(Arc::downgrade(&st.doc))),
+        (true, Some(st)) => (Some(st.doc.id), Some(st.doc.downgrade())),
         (true, None) => return Err(EngineError::NoDocument),
         (false, _) => (None, None),
     };
@@ -300,8 +331,9 @@ pub fn run<T: Send + 'static>(
         let t = any.downcast::<T>().map_err(|_| EngineError::Other("internal error: job result type mismatch".into()))?;
         apply(s, *t)
     });
-    s.jobs.next += 1;
-    let id = JobId(s.jobs.next);
+    let next = s.jobs.next.checked_add(1).ok_or_else(|| EngineError::Other("background job identities exhausted".into()))?;
+    s.jobs.next = next;
+    let id = JobId(next);
     #[cfg(not(target_arch = "wasm32"))]
     let handle = {
         let wctx = ctx.clone();
@@ -357,6 +389,7 @@ pub fn edit_job<R: Send + 'static>(
         return Ok(finish(r));
     }
     let st = s.active().ok_or(EngineError::NoDocument)?;
+    st.doc.validate_resident()?;
     let (base, active) = (st.doc.clone(), st.active_layer);
     let label_owned = label.to_string();
     run(
@@ -402,7 +435,8 @@ impl Session {
     /// Open a file in the background: read (for a path) and decode on a worker, with progress
     /// (per layer for PSD/PSB) and cancellation, then add the document like
     /// [`Session::open_document`] (Color Settings policies apply). `name` names the document.
-    /// The job's result is `{document, name, warnings, color}`; on wasm it runs inline.
+    /// The job's result adds import-time `assessment` to
+    /// `{document, name, warnings, color}`; on wasm it runs inline.
     pub fn start_open(&mut self, name: &str, source: OpenSource) -> Result<Started> {
         let label = format!("Opening {name}");
         let source_path = match &source {
@@ -418,27 +452,30 @@ impl Session {
             false,
             move |ctx| {
                 ctx.progress(0.0, "Reading");
-                let bytes = match source {
-                    OpenSource::Bytes(b) => b,
-                    OpenSource::Path(p) => Arc::new(read_path(&p)?),
+                let imported = match source {
+                    OpenSource::Path(p) => read_path(&name_w, &p, ctx)?,
+                    OpenSource::Bytes(bytes) => {
+                        ctx.check()?;
+                        ctx.progress(0.02, "Decoding");
+                        ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_with(&name_w, &bytes, ctl)).map_err(|e| match e {
+                            photocraft_io::IoError::Cancelled => EngineError::Cancelled,
+                            e => EngineError::Other(e.to_string()),
+                        })?
+                    }
                 };
                 ctx.check()?;
-                ctx.progress(0.02, "Decoding");
-                ctx.stage(0.02, 1.0, "Decoding", |ctl| photocraft_io::import_with(&name_w, &bytes, ctl)).map_err(|e| match e {
-                    photocraft_io::IoError::Cancelled => EngineError::Cancelled,
-                    e => EngineError::Other(e.to_string()),
-                })
+                Ok((imported, ctx.clone()))
             },
-            move |s, r: photocraft_io::ImportResult| {
+            move |s, (r, ctx): (photocraft_io::ImportResult, JobCtx)| {
                 let origin = r.origin;
-                let (index, color) = s.open_document(r.document, None);
+                let (index, color) = ctx.stage(0.95, 1.0, "Preparing Document", |control| s.open_document_with_interrupt(r.document, None, control))?;
                 if let Some(state) = s.active_mut() {
                     state.set_import_origin(origin, &name_a, source_path.clone());
                     if source_path.as_deref().is_some_and(crate::file_cmds::is_template) {
                         state.path = None;
                     }
                 }
-                Ok(json!({"document": index, "name": name_a, "warnings": r.warnings, "color": color}))
+                Ok(json!({"document": index, "name": name_a, "warnings": r.warnings, "color": color, "assessment": r.assessment}))
             },
         )
     }
@@ -546,6 +583,22 @@ impl Session {
         !self.jobs.running.is_empty()
     }
 
+    /// Whether the current dispatch requested background edit preparation.
+    pub(crate) fn command_is_background(&self) -> bool {
+        self.jobs.spawn
+    }
+
+    /// Whether an enclosing dispatch has staged a job that is not published yet.
+    pub(crate) fn command_has_pending_job(&self) -> bool {
+        self.jobs.pending.is_some()
+    }
+
+    /// Source preparation only needs ownership, not an allocated JobInfo copy.
+    pub(crate) fn command_has_job_on(&self, document: DocId) -> bool {
+        self.jobs.pending.as_ref().is_some_and(|job| job.doc == Some(document))
+            || self.jobs.running.iter().any(|job| job.doc == Some(document))
+    }
+
     /// Running job `id`.
     pub fn job(&self, id: JobId) -> Option<JobInfo> {
         self.jobs.running.iter().find(|r| r.id == id).map(Running::info)
@@ -605,11 +658,264 @@ impl Session {
         if !(params.is_object() || params.is_null()) {
             return Err(EngineError::BadParams { cmd: id.to_string(), msg: "params must be a JSON object".into() });
         }
+        if id == "document.pixel.inspect" {
+            crate::inspect_pixel_cmds::dispatch_preflight(&params)?;
+        }
+        if id == "xcf.filter.graph.inspectPlan" {
+            crate::xcf_filter_graph_cmds::dispatch_preflight(&params)?;
+        }
+        let xcf_query = crate::xcf_query_preflight::dispatch_preflight(id, &params)?;
+        if id == "path.set" {
+            let path = params.get("path").ok_or_else(|| EngineError::BadParams { cmd: id.into(), msg: "missing path".into() })?;
+            crate::vector_cmds::preflight_path_value(path).map_err(|msg| EngineError::BadParams { cmd: id.into(), msg })?;
+        }
+        let params = if params.is_null() && (xcf_query || matches!(id, "document.pixel.inspect" | "image.imageSize" | "image.canvasSize" | "image.crop" | "image.trim" | "image.duplicate")) { json!({}) } else { params };
+        if id == "image.imageSize" {
+            crate::image_cmds::image_size_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "image.canvasSize" {
+            crate::image_cmds::canvas_size_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "image.crop" {
+            crate::image_cmds::crop_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        crate::image_cmds::depth_dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        crate::color_cmds::conversion_dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        let plate_target = match id {
+            "image.mode.multichannel" => Some(photocraft_doc::ColorMode::Multichannel),
+            "image.mode.rgb" => Some(photocraft_doc::ColorMode::Rgb),
+            "image.mode.grayscale" => Some(photocraft_doc::ColorMode::Grayscale),
+            "image.mode.cmyk" => Some(photocraft_doc::ColorMode::Cmyk),
+            "image.mode.lab" => Some(photocraft_doc::ColorMode::Lab),
+            _ => None,
+        };
+        if let Some(target) = plate_target
+            && (target == photocraft_doc::ColorMode::Multichannel
+                || self.active().is_some_and(|state| state.doc.mode == photocraft_doc::ColorMode::Multichannel))
+        {
+            crate::multichannel_cmds::dispatch_preflight(self, &params, target, background || self.jobs.spawn)?;
+        }
+        if id == "edit.assignProfile" {
+            crate::color_cmds::assignment_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "image.trim" {
+            crate::image_cmds::trim_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "image.duplicate" {
+            crate::image_cmds::duplicate_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "image.rotation.arbitrary" {
+            crate::mode_cmds::rotation_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "image.mode.indexedColor" {
+            crate::mode_cmds::indexed_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "image.mode.bitmap" {
+            crate::mode_cmds::bitmap_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "image.mode.duotone" {
+            crate::mode_cmds::duotone_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "image.mode.colorTable" {
+            crate::mode_cmds::color_table_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if matches!(id, "image.applyImage" | "image.calculations") {
+            crate::channel_cmds::calculation_dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        }
+        if id == "channel.duplicate" {
+            crate::channel_cmds::duplicate_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "select.editInQuickMaskMode" {
+            crate::channel_cmds::quick_mask_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "select.saveSelection" {
+            crate::channel_cmds::save_selection_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "select.loadSelection" {
+            crate::channel_cmds::load_selection_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if matches!(id, "channel.new" | "channel.newSpot") {
+            crate::channel_cmds::new_channel_dispatch_preflight(self, &params, id == "channel.newSpot")?;
+        }
+        if matches!(id, "channel.rename" | "channel.move" | "channel.delete") {
+            crate::channel_cmds::management_dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        }
+        let guide_operation = match id {
+            "view.newGuide" => Some("new"),
+            "view.moveGuide" => Some("move"),
+            "view.deleteGuide" => Some("delete"),
+            "view.clearGuides" => Some("clear"),
+            _ => None,
+        };
+        if let Some(operation) = guide_operation {
+            crate::edit_cmds::guide_dispatch_preflight(self, &params, operation, background || self.jobs.spawn)?;
+        }
+        if id == "path.rename" {
+            crate::vector_cmds::path_name_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if matches!(id, "view.newGuideLayout" | "view.newGuidesFromShape") {
+            crate::file_cmds::guide_layout_dispatch_preflight(self, &params, id == "view.newGuidesFromShape", background || self.jobs.spawn)?;
+        }
+        if matches!(id, "path.set" | "path.delete") {
+            crate::vector_cmds::path_storage_dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        }
+        if id == "channel.options" {
+            crate::channel_cmds::options_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "view.clearCanvasGuides" {
+            crate::file_cmds::guide_cleanup_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "path.toSelection" {
+            crate::vector_cmds::path_selection_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "channel.target" || id == "channel.setVisible" || id == "channel.target.composite" || id.starts_with("channel.target.slot") {
+            crate::channel_cmds::view_dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        }
+        if id == "layer.duplicate" {
+            crate::layer_duplicate_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if matches!(id, "path.clippingPath.set" | "path.clippingPath.clear") {
+            crate::vector_cmds::clipping_dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        }
+        if id == "path.transform" {
+            crate::vector_cmds::path_transform_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "select.toWorkPath" {
+            crate::vector_cmds::trace_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "path.fill" {
+            crate::vector_cmds::path_fill_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "path.stroke" {
+            crate::vector_cmds::path_stroke_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "layer.layerMask.revealSelection" {
+            crate::layer_mask_storage_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        crate::xcf_item_set_manage_cmds::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        crate::xcf_vector_guard::pre_dispatch(self, id, &params)?;
+        if id == "layer.renameLayer" {
+            crate::layer_multi_cmds::rename_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        crate::xcf_filter_cmds::pre_dispatch_stack_change_with_background(self, id, &params, background || self.jobs.spawn)?;
+        crate::xcf_filter_cmds::pre_dispatch_set_change(self, id, &params, background || self.jobs.spawn)?;
+        if id == "xcf.filter.mask.enabled.set" {
+            crate::xcf_filter_mask_cmds::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "xcf.mask.geometry.set" {
+            crate::xcf_mask_geometry_cmds::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "xcf.filter.insert" {
+            if background || self.jobs.spawn {
+                return Err(EngineError::BadParams { cmd: id.into(), msg: "filter insertion requires synchronous dispatch".into() });
+            }
+            crate::xcf_filter_insert_cmds::dispatch_preflight(self, &params)?;
+        }
+        if id == "xcf.indexed.pixel.set" {
+            crate::xcf_indexed_pixel_cmds::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "xcf.indexed.palette.set" {
+            crate::xcf_indexed_palette_cmds::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "xcf.text.name.set" {
+            crate::xcf_text_transform_cmds::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "xcf.channel.name.set" {
+            crate::xcf_channel_name_cmds::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "xcf.channel.locks.set" {
+            crate::xcf_channel_locks_cmds::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "xcf.channel.indicates.set" {
+            crate::xcf_channel_indicates_cmds::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "xcf.path.name.set" {
+            crate::xcf_path_state_cmds::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if matches!(id, "xcf.vector.fill.color.set" | "xcf.vector.stroke.color.set") {
+            if background || self.jobs.spawn {
+                return Err(EngineError::BadParams { cmd: id.into(), msg: "vector color edits require synchronous dispatch".into() });
+            }
+            crate::xcf_vector_style_cmds::dispatch_preflight(self, id, &params)?;
+        }
+        if matches!(id, "xcf.filter.move" | "xcf.filter.remove") && (background || self.jobs.spawn) {
+            return Err(EngineError::BadParams { cmd: id.into(), msg: "filter stack edits require synchronous dispatch".into() });
+        }
+        if id == "xcf.layer.affine.apply" {
+            crate::xcf_wide_point_cmds::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == crate::xcf_item_set_create_cmds::CREATE {
+            crate::xcf_item_set_create_cmds::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == crate::xcf_item_state_cmds::SET {
+            crate::xcf_item_state_cmds::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "xcf.items.select" {
+            crate::xcf_selection_cmds::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "xcf.items.visibility.set" {
+            crate::xcf_selection_cmds::visibility_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "xcf.channel.overlay.set" {
+            crate::xcf_channel_state_cmds::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "xcf.mask.enabled.set" {
+            crate::xcf_mask_cmds::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "layer.layerMask.enabled" {
+            crate::xcf_mask_cmds::legacy_enabled_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        let accounted_dispatch = self.active().is_some_and(|state| state.doc.accounted().is_some()) && crate::accounted_commands::supports(id);
+        // Validate immutable document identities once, before any enabled
+        // predicate, implicit floating drop or history damage calculation.
+        for state in self.documents() {
+            // The typed branch retains each accounted owner and validates its
+            // target through the paid snapshot API. Resident tabs still pass
+            // the ordinary raster validation before any command can mutate.
+            if !accounted_dispatch || state.doc.accounted().is_none() {
+                state.validate_retained_surfaces().map_err(EngineError::Other)?;
+            }
+            if let Some(floating) = &state.floating {
+                floating
+                    .parts
+                    .validate_retained_surfaces(&photocraft_raster::Interrupt::NONE)
+                    .map_err(|error| EngineError::Other(format!("invalid floating raster: {error}")))?;
+            }
+        }
+        if let Some(clipboard) = &self.clipboard {
+            clipboard.surface.try_validate_tile_origins().map_err(|error| EngineError::Other(format!("invalid clipboard raster: {error}")))?;
+        }
         // Untrusted sessions gate every command, including the ones a command runs on its own
         // behalf (`file.automate.conditionalModeChange` runs `image.mode.*`), before any side
         // effect.
         if let Some(gate) = self.authorize {
             gate(id, &params)?;
+        }
+        crate::xcf_link_cmds::dispatch_preflight_with_background(self, id, &params, background || self.jobs.spawn)?;
+        crate::xcf_composition_cmds::dispatch_preflight(self, id, &params)?;
+        if id == "xcf.link.substitute" {
+            crate::xcf_link_substitution_cmds::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "xcf.link.recover" {
+            crate::xcf_link_substitution_cmds::dispatch_recovery_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if accounted_dispatch {
+            if let Some(why) = crate::accounted_commands::disabled_reason(self, id, &params)? {
+                return Err(EngineError::Disabled(id.to_string(), why.into()));
+            }
+            if let Some(why) = self.job_conflict(id, spec.journal) {
+                return Err(EngineError::Disabled(id.to_string(), why));
+            }
+            let control = photocraft_raster::backing::ReadControl { interrupt: &photocraft_raster::Interrupt::NONE, work: &|_| Ok(()) };
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::accounted_commands::dispatch(self, id, &params, &control)))
+                .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` failed with an internal error (logged); the document is unchanged"))));
+            // The carrier publishes a prepaid journal with the successful
+            // typed edit. Its guarded contexts exclude the resident-only
+            // Fade, action, slice and preset callbacks in after_command.
+            return result.map(Started::Done);
+        }
+        if self.active().is_some_and(|state| state.doc.accounted().is_some()) {
+            return Err(EngineError::Disabled(id.to_string(), "this command has not yet been qualified for an accounted native document".into()));
         }
         // A floating selection drops before any other command (Undo puts it back instead).
         if let Some(v) = crate::float_cmds::before_command(self, id)? {
@@ -654,24 +960,48 @@ impl Session {
                 Ok(Started::Job(jid))
             }
             (Ok(v), None) => {
-                self.after_command(id, params, spec.journal);
+                // These commands inspect the currently installed snapshot.
+                // View repair, preset persistence and edit bookkeeping belong
+                // to an edit event, never to a read-only query.
+                if xcf_query || matches!(id, "document.pixel.inspect" | "xcf.filter.graph.inspectPlan") {
+                    return Ok(Started::Done(v));
+                }
+                self.after_command_result(id, params, spec.journal, &v)?;
                 Ok(Started::Done(v))
             }
         }
     }
 
     /// Bookkeeping after a command (or a job's apply) succeeded.
-    fn after_command(&mut self, id: &str, params: Value, journal: bool) {
+    fn after_command(&mut self, id: &str, params: Value, journal: bool) -> Result<()> {
         // A layer-mask view ends when another layer becomes active (#196).
         if let Some(st) = self.active_mut() {
             crate::mask_view_cmds::fix(st);
         }
-        crate::edit_menu_cmds::after_command(self, id);
-        crate::automate_cmds::after_command(self, id);
+        crate::edit_menu_cmds::after_command(self, id)?;
+        crate::automate_cmds::after_command(self, id)?;
         self.sync_preset_store();
         if journal && !crate::brush_cmds::coalesce_journal(self, id, &params) {
             self.journal.push((id.to_string(), params));
         }
+        Ok(())
+    }
+
+    /// Cross-document channel edits publish their destination without
+    /// switching tabs. Repair derived view/slice state on that destination.
+    fn after_command_result(&mut self, id: &str, params: Value, journal: bool, result: &Value) -> Result<()> {
+        if !matches!(id, "channel.duplicate" | "select.saveSelection") {
+            return self.after_command(id, params, journal);
+        }
+        let index = result.get("document").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok())
+            .filter(|i| self.docs.get(*i).is_some())
+            .ok_or_else(|| EngineError::Other(format!("`{id}` returned an invalid destination")))?;
+        let viewed = self.active;
+        self.active = Some(index);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.after_command(id, params, journal)))
+            .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` bookkeeping failed with an internal error"))));
+        self.active = viewed;
+        outcome
     }
 
     /// Apply (or report the failure of) a job whose worker has delivered `r`.
@@ -697,7 +1027,7 @@ impl Session {
             Some(d) => {
                 let i =
                     self.documents().iter().position(|st| st.doc.id == *d).ok_or_else(|| EngineError::Other(format!("`{label}`: the document was closed")))?;
-                let unchanged = snapshot.as_ref().is_some_and(|w| self.documents().get(i).is_some_and(|st| Weak::ptr_eq(w, &Arc::downgrade(&st.doc))));
+                let unchanged = snapshot.as_ref().is_some_and(|w| self.documents().get(i).is_some_and(|st| w.is_current(&st.doc)));
                 if !unchanged {
                     return Err(EngineError::Other(format!("`{label}`: the document changed while it ran; the result was discarded")));
                 }
@@ -718,14 +1048,31 @@ impl Session {
         // Finish successful command bookkeeping on the document the job edited.
         // Restoring the viewed document first would attribute Fade and slice updates
         // to that document instead, when the user switched tabs mid-job.
-        if r.is_ok() {
-            self.after_command(command, params.clone(), *journal);
-        }
+        let bookkeeping = if r.is_ok()
+            && !matches!(
+                command.as_str(),
+                "document.pixel.inspect"
+                    | "xcf.assess"
+                    | "xcf.inspect"
+                    | "xcf.composition.inspect"
+                    | "xcf.filter.inspect"
+                    | "xcf.resource.inspect"
+                    | "xcf.filter.graph.inspectPlan"
+            )
+        {
+            match &r {
+                Ok(value) => self.after_command_result(command, params.clone(), *journal, value),
+                Err(_) => Ok(()),
+            }
+        } else {
+            Ok(())
+        };
         // Keep the user's active document unless the job opened a new one.
         // This also restores the selection when the apply step returned an error.
         if target.is_some() && self.active == target {
             self.active = prev_active.filter(|i| *i < self.docs.len()).or(self.active);
         }
+        bookkeeping?;
         r
     }
 
@@ -789,5 +1136,64 @@ pub fn specs() -> Vec<crate::commands::CommandSpec> {
 }
 
 #[cfg(test)]
+mod destination_bookkeeping_tests {
+    use super::*;
+    use photocraft_doc::item_identity::LayerId;
+    use photocraft_doc::slices::{Slice, SliceOrigin};
+    use photocraft_geom::Rect;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn exhausted_job_identity_refuses_before_starting_worker() {
+        let mut session = Session::new();
+        session.jobs.next = u64::MAX;
+        let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_called = called.clone();
+        let outcome = session.start_job("own.identity.exhaustion", Value::Null, "Own exhausted job", false,
+            move |_| {
+                worker_called.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            },
+            |_, ()| Ok(Value::Null));
+        assert!(outcome.is_err());
+        assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(session.jobs.next, u64::MAX);
+        assert!(!session.has_jobs());
+    }
+
+    #[test]
+    fn duplicate_repairs_destination_slices_without_touching_source_or_focus() {
+        let mut session = Session::new();
+        for name in ["destination", "source"] {
+            session.execute("file.new", json!({"name":name,"width":2,"height":2})).unwrap();
+            session.active_mut().unwrap().doc.try_resident_mut().unwrap().slices.list.push(Slice {
+                id: 1,
+                origin: SliceOrigin::Layer,
+                layer: Some(LayerId(u64::MAX)),
+                rect: Rect::new(0, 0, 1, 1),
+                ..Slice::default()
+            });
+        }
+        let source = session.documents()[1].doc.clone();
+        session.after_command_result("channel.duplicate", json!({"document":0}), true, &json!({"document":0,"channel":0})).unwrap();
+        assert_eq!(session.active_index(), Some(1));
+        assert!(session.documents()[0].doc.slices.list.is_empty());
+        assert!(session.documents()[1].doc.shares_state(&source));
+        assert_eq!(session.journal.last().unwrap().0, "channel.duplicate");
+    }
+}
+
+#[cfg(test)]
 #[path = "jobs_tests.rs"]
 mod tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod native_path_stream_drafts {
+    use super::*;
+    #[test]
+    fn cancelled_path_worker_refuses_before_opening_any_file() {
+        let context = JobCtx::new();
+        context.cancel();
+        assert!(matches!(read_path("own.pcraft", "own-nonexistent-no-read-authority.pcraft", &context), Err(EngineError::Cancelled)));
+    }
+}

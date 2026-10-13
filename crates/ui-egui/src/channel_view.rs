@@ -47,8 +47,8 @@ fn sample(s: &Surface, r: Rect, factor: u32) -> Vec<f32> {
 }
 
 /// Composite RGBA (over white, like Photoshop's channel views) at `factor` stride.
-fn composite(doc: &Document, r: Rect, factor: u32) -> Vec<[f32; 4]> {
-    let buf = photocraft_compose::render(doc, r);
+fn composite(doc: &Document, r: Rect, factor: u32) -> Result<Vec<[f32; 4]>, String> {
+    let buf = photocraft_compose::render(doc, r).map_err(|error| error.to_string())?;
     let (w, h) = (r.width().div_ceil(factor), r.height().div_ceil(factor));
     let bw = r.width();
     let mut out = Vec::with_capacity((w * h) as usize);
@@ -59,15 +59,22 @@ fn composite(doc: &Document, r: Rect, factor: u32) -> Vec<[f32; 4]> {
             out.push([p[0] * a + 1.0 - a, p[1] * a + 1.0 - a, p[2] * a + 1.0 - a, 1.0]);
         }
     }
-    out
+    Ok(out)
 }
 
 /// The channel view of `r` (document pixels, sampled every `factor` px) as premultiplied pixels,
 /// or `None` when the plain composite is all there is to show. `in_color` shows single colour
 /// channels tinted instead of grayscale (Photoshop's "Show Channels in Color").
-pub fn render(doc: &Document, v: &ChannelView, r: Rect, factor: u32, in_color: bool) -> Option<Vec<Color32>> {
+pub fn render(doc: &Document, v: &ChannelView, r: Rect, factor: u32, in_color: bool) -> Result<Option<Vec<Color32>>, String> {
+    render_checked(doc, v, r, factor, in_color)
+}
+
+fn render_checked(doc: &Document, v: &ChannelView, r: Rect, factor: u32, in_color: bool) -> Result<Option<Vec<Color32>>, String> {
+    if factor == 0 {
+        return Err("Channel preview sampling stride must be positive".into());
+    }
     if v.is_plain(doc) || r.is_empty() {
-        return None;
+        return Ok(None);
     }
     let layer_mask = v.shown_layer_mask(doc);
     // ⌥-click mask view (#196): the layer mask alone, in grayscale (white reveals); ⇧⌥ with
@@ -75,13 +82,13 @@ pub fn render(doc: &Document, v: &ChannelView, r: Rect, factor: u32, in_color: b
     // switching the view on a 24 MP document takes one frame.
     let only_mask = ChannelView { layer_mask: None, ..v.clone() }.is_plain(doc);
     match layer_mask {
-        Some((m, MaskViewMode::Gray)) => return Some(mask_px(&m.surface, r, factor, |g| Color32::from_gray(q(g)))),
+        Some((m, MaskViewMode::Gray)) => return Ok(Some(mask_px(&m.surface, r, factor, |g| Color32::from_gray(q(g))))),
         Some((m, MaskViewMode::Overlay)) if only_mask => {
             let c = AlphaChannel::DEFAULT_COLOR.to_rgb();
-            return Some(mask_px(&m.surface, r, factor, |g| {
+            return Ok(Some(mask_px(&m.surface, r, factor, |g| {
                 let a = 0.5 * (1.0 - g.clamp(0.0, 1.0));
                 Color32::from_rgba_premultiplied(q(c[0] * a), q(c[1] * a), q(c[2] * a), q(a))
-            }));
+            })));
         }
         _ => {}
     }
@@ -93,13 +100,15 @@ pub fn render(doc: &Document, v: &ChannelView, r: Rect, factor: u32, in_color: b
     // Premultiplied RGBA accumulator.
     let mut out: Vec<[f32; 4]> = if vis == 0 {
         // No colour channel visible: the first visible alpha channel in grayscale.
-        let first = (!overlays.is_empty()).then(|| overlays.remove(0))?;
+        let Some(first) = (!overlays.is_empty()).then(|| overlays.remove(0)) else {
+            return Ok(None);
+        };
         sample(&first.surface, r, factor).into_iter().map(|g| [g, g, g, 1.0]).collect()
     } else if vis < colors {
         let fmt = doc.pixel_format();
         let mode = fmt.mode;
         let shown: Vec<usize> = (0..colors).filter(|k| v.color_visible(*k)).collect();
-        composite(doc, r, factor)
+        composite(doc, r, factor)?
             .into_iter()
             .map(|rgba| {
                 let mut native = from_rgba(&fmt, rgba);
@@ -147,7 +156,7 @@ pub fn render(doc: &Document, v: &ChannelView, r: Rect, factor: u32, in_color: b
     if let Some((m, MaskViewMode::Overlay)) = layer_mask {
         tint(sample(&m.surface, r, factor), AlphaChannel::DEFAULT_COLOR, 0.5, &|x| 1.0 - x);
     }
-    Some(out.into_iter().map(|p| Color32::from_rgba_premultiplied(q(p[0]), q(p[1]), q(p[2]), q(p[3]))).collect())
+    Ok(Some(out.into_iter().map(|p| Color32::from_rgba_premultiplied(q(p[0]), q(p[1]), q(p[2]), q(p[3]))).collect()))
 }
 
 /// `r` of a one-channel surface sampled every `factor` px, mapped to colours row by row (in
@@ -221,18 +230,34 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
             let f = factor as i32;
             let d = d.intersect(&doc.bounds());
             let r = Rect::new(d.x0.div_euclid(f) * f, d.y0.div_euclid(f) * f, d.x1, d.y1).intersect(&doc.bounds());
-            if !r.is_empty()
-                && let Some(px) = render(&doc, &view, r, factor, in_color)
-            {
-                let img = egui::ColorImage::new([r.width().div_ceil(factor) as usize, r.height().div_ceil(factor) as usize], px);
-                c.tex.set_partial([(r.x0 / f) as usize, (r.y0 / f) as usize], img, TextureOptions::LINEAR);
+            if !r.is_empty() {
+                match render_checked(&doc, &view, r, factor, in_color) {
+                    Ok(Some(px)) => {
+                        let img = egui::ColorImage::new([r.width().div_ceil(factor) as usize, r.height().div_ceil(factor) as usize], px);
+                        c.tex.set_partial([(r.x0 / f) as usize, (r.y0 / f) as usize], img, TextureOptions::LINEAR);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        app.ui.status = format!("Channel preview: {error}");
+                        app.ui.status_error = true;
+                        return Some(c.tex.id());
+                    }
+                }
             }
             c.revision = revision;
             return Some(c.tex.id());
         }
     }
     let b = doc.bounds();
-    let px = render(&doc, &view, b, factor, in_color)?;
+    let px = match render_checked(&doc, &view, b, factor, in_color) {
+        Ok(Some(px)) => px,
+        Ok(None) => return None,
+        Err(error) => {
+            app.ui.status = format!("Channel preview: {error}");
+            app.ui.status_error = true;
+            return app.channel_views.get(&id).map(|cache| cache.tex.id());
+        }
+    };
     let size = [b.width().div_ceil(factor) as usize, b.height().div_ceil(factor) as usize];
     let img = egui::ColorImage::new(size, px);
     match app.channel_views.get_mut(&id) {
@@ -268,7 +293,7 @@ mod tests {
     fn plain_composite_draws_nothing() {
         let s = session();
         let st = s.active().unwrap();
-        assert!(render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false).is_none());
+        assert!(render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false).unwrap().is_none());
     }
 
     #[test]
@@ -277,7 +302,7 @@ mod tests {
         s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
         s.execute("select.editInQuickMaskMode", json!({})).unwrap();
         let st = s.active().unwrap();
-        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false).unwrap();
+        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false).unwrap().unwrap();
         assert_eq!(px[0], Color32::TRANSPARENT, "selected: no overlay");
         assert_eq!(px[6], Color32::from_rgba_premultiplied(128, 0, 0, 128), "masked: 50% red");
     }
@@ -293,14 +318,14 @@ mod tests {
         s.execute("view.layerMask", json!({"mode": "gray"})).unwrap();
         let st = s.active().unwrap();
         let b = st.doc.bounds();
-        let full = render(&st.doc, &st.channel_view, b, 1, false).unwrap();
+        let full = render(&st.doc, &st.channel_view, b, 1, false).unwrap().unwrap();
         assert!(full[0].r() < 10 && full[36].r() > 245 && full[0].a() == 255, "opaque grayscale ramp");
         // A sub-rect starting on the factor grid matches the same pixels of the full render.
         for f in [1u32, 2, 3] {
-            let all = render(&st.doc, &st.channel_view, b, f, false).unwrap();
+            let all = render(&st.doc, &st.channel_view, b, f, false).unwrap().unwrap();
             let w = b.width().div_ceil(f) as usize;
             let r = Rect::new(3 * f as i32, 2 * f as i32, 30, 19);
-            let part = render(&st.doc, &st.channel_view, r, f, false).unwrap();
+            let part = render(&st.doc, &st.channel_view, r, f, false).unwrap().unwrap();
             let pw = r.width().div_ceil(f) as usize;
             for (i, p) in part.iter().enumerate() {
                 assert_eq!(*p, all[(i / pw + 2) * w + i % pw + 3], "factor {f}, pixel {i}");
@@ -308,7 +333,7 @@ mod tests {
         }
         s.execute("view.layerMask", json!({"mode": "overlay"})).unwrap();
         let st = s.active().unwrap();
-        let px = render(&st.doc, &st.channel_view, b, 1, false).unwrap();
+        let px = render(&st.doc, &st.channel_view, b, 1, false).unwrap().unwrap();
         assert!(px[0].r() >= 124 && px[0].g() == 0 && px[0].a() >= 124, "about 50% red over the hidden end: {:?}", px[0]);
         assert!(px[36].a() <= 4, "next to nothing over the revealed end: {:?}", px[36]);
     }
@@ -330,7 +355,7 @@ mod tests {
             let mut best = f64::MAX;
             for _ in 0..8 {
                 let t = std::time::Instant::now();
-                let px = render(&st.doc, &st.channel_view, st.doc.bounds(), factor, false).unwrap();
+                let px = render(&st.doc, &st.channel_view, st.doc.bounds(), factor, false).unwrap().unwrap();
                 let img = egui::ColorImage::new([3000, 2000], px);
                 std::hint::black_box(img);
                 best = best.min(t.elapsed().as_secs_f64() * 1000.0);
@@ -347,18 +372,44 @@ mod tests {
         s.execute("channel.new", json!({"fill": "selection"})).unwrap();
         let st = s.active().unwrap();
         assert_eq!(st.channel_view.target, ChannelTarget::Alpha(0));
-        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false).unwrap();
+        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false).unwrap().unwrap();
         assert_eq!((px[0], px[5]), (Color32::WHITE, Color32::BLACK));
         // Green alone: grayscale of the green channel; with blue hidden only.
         s.execute("channel.target", json!({"channel": "green"})).unwrap();
         let st = s.active().unwrap();
-        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false).unwrap();
+        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, false).unwrap().unwrap();
         assert_eq!(px[0], Color32::from_gray(128));
         s.execute("channel.target", json!({"channel": "composite"})).unwrap();
         s.execute("channel.setVisible", json!({"channel": "red", "visible": false})).unwrap();
         let st = s.active().unwrap();
-        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 2, false).unwrap();
+        let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 2, false).unwrap().unwrap();
         assert_eq!(px.len(), 4 * 2);
         assert_eq!(px[0], Color32::from_rgb(0, 128, 0));
+    }
+    #[test]
+    fn channel_preview_refusal_retains_last_good_texture_and_revision() {
+        let mut session = session();
+        session.execute("edit.fill", json!({"color": "#ff8000"})).unwrap();
+        session.execute("channel.target", json!({"channel": "green"})).unwrap();
+        let mut app = PhotocraftApp::new(session, Default::default());
+        let ctx = egui::Context::default();
+        let first = ensure(&mut app, &ctx, 0).unwrap();
+        ctx.tex_manager().write().take_delta().clear();
+        let id = app.session.active().unwrap().doc.id.0;
+        let revision = app.channel_views.get(&id).unwrap().revision;
+        {
+            let state = app.session.active_mut().unwrap();
+            let doc = state.doc.try_resident_mut().unwrap();
+            let surface = doc.layers[0].surface_mut().unwrap();
+            let tile = surface.tiles().next().unwrap().1.clone();
+            surface.put_tiles([(photocraft_geom::TileCoord::new(i32::MIN, i32::MAX), tile)]);
+            state.revision += 1;
+        }
+        let source = app.session.active().unwrap().doc.clone();
+        assert_eq!(ensure(&mut app, &ctx, 0), Some(first));
+        assert_eq!(app.channel_views.get(&id).unwrap().revision, revision);
+        assert!(app.ui.status.contains("Channel preview"));
+        assert!(ctx.tex_manager().write().take_delta().set.is_empty());
+        assert_eq!(app.session.active().unwrap().doc, source);
     }
 }

@@ -78,6 +78,7 @@ pub fn from_psd(p: &PsdPattern) -> Option<Pattern> {
 }
 
 /// A document pattern as a PSD pattern (its own depth and colour model; other models as RGB).
+/// Legacy compatibility adapter; authoritative exports use `try_to_psd`.
 pub fn to_psd(p: &Pattern) -> PsdPattern {
     let f = p.surface.format();
     let mode = match f.mode {
@@ -110,6 +111,42 @@ pub fn to_psd(p: &Pattern) -> PsdPattern {
     }
 }
 
+/// Checked exact-depth pattern serialization; model changes and unsupported wide PAT are errors.
+pub fn try_to_psd(p: &Pattern) -> Result<PsdPattern, String> {
+    if matches!(p.surface.format().sample, SampleType::U32 | SampleType::F64) {
+        return Err("PSD patterns cannot retain U32/F64; save as .pcraft".into());
+    }
+    let f = p.surface.format();
+    let mode = match f.mode {
+        ColorMode::Grayscale | ColorMode::Rgb | ColorMode::Cmyk | ColorMode::Lab => f.mode,
+        _ => ColorMode::Rgb,
+    };
+    let fmt = PixelFormat::new(mode, f.sample, f.alpha);
+    let surf = p.surface.try_convert(fmt).map_err(|e| format!("pattern pixel conversion: {e}"))?;
+    let mut bytes = surf.try_read_interleaved(p.rect()).map_err(|e| e.to_string())?;
+    let ch = fmt.channels();
+    if mode == ColorMode::Lab && fmt.sample == SampleType::U16 {
+        crate::pixels::lab16_chroma(&mut bytes, ch, false);
+    }
+    let mut invert = vec![mode == ColorMode::Cmyk; ch];
+    if fmt.alpha {
+        invert[ch - 1] = false;
+    }
+    let mut planes = deinterleave(&bytes, ch, fmt.sample, &invert);
+    let alpha = fmt.alpha.then(|| planes.pop()).flatten();
+    Ok(PsdPattern {
+        mode: psd_mode(mode),
+        width: p.width,
+        height: p.height,
+        name: p.name.clone(),
+        id: p.id.clone(),
+        palette: None,
+        depth: psd_depth(fmt.sample),
+        channels: planes,
+        alpha,
+    })
+}
+
 /// Patterns decoded from the document's raw pattern blocks (malformed blocks are skipped).
 pub fn from_global_blocks(doc: &Document) -> Vec<Pattern> {
     doc.metadata
@@ -124,6 +161,7 @@ pub fn from_global_blocks(doc: &Document) -> Vec<Pattern> {
 
 /// Global blocks to write: the raw ones while they still match [`Document::patterns`], else the
 /// raw pattern blocks replaced by one written from the document (at the first one's position).
+/// Legacy compatibility adapter; authoritative exports use `try_export_global_blocks`.
 pub fn export_global_blocks(doc: &Document) -> Vec<photocraft_doc::PsdGlobalBlock> {
     let raw = &doc.metadata.psd_global_blocks;
     if from_global_blocks(doc) == doc.patterns {
@@ -149,6 +187,33 @@ pub fn export_global_blocks(doc: &Document) -> Vec<photocraft_doc::PsdGlobalBloc
     out
 }
 
+/// Checked pattern global blocks; failures never drop requested patterns.
+pub fn try_export_global_blocks(doc: &Document) -> Result<Vec<photocraft_doc::PsdGlobalBlock>, String> {
+    let raw = &doc.metadata.psd_global_blocks;
+    if from_global_blocks(doc) == doc.patterns {
+        return Ok(raw.clone());
+    }
+    let key = block_key(psd_depth(doc.depth));
+    let patterns = doc.patterns.iter().map(try_to_psd).collect::<Result<Vec<_>, _>>()?;
+    let fresh = write_pattern_block(&patterns).map_err(|e| e.to_string())?;
+    let mut out = Vec::with_capacity(raw.len() + 1);
+    let mut placed = false;
+    for b in raw {
+        if PATTERN_KEYS.contains(&b.1) {
+            if !placed {
+                out.push((*b"8BIM", key, Arc::new(fresh.clone())));
+                placed = true;
+            }
+        } else {
+            out.push(b.clone());
+        }
+    }
+    if !placed && !doc.patterns.is_empty() {
+        out.push((*b"8BIM", key, Arc::new(fresh)));
+    }
+    Ok(out)
+}
+
 /// Reads a `.pat` pattern file.
 pub fn read_pat(bytes: &[u8]) -> Result<Vec<Pattern>, String> {
     let ps = photocraft_psd::patterns::parse_pat_file(bytes).map_err(|e| format!("not a readable .pat file: {e}"))?;
@@ -157,7 +222,8 @@ pub fn read_pat(bytes: &[u8]) -> Result<Vec<Pattern>, String> {
 
 /// Writes patterns as a `.pat` file.
 pub fn write_pat(patterns: &[Pattern]) -> Result<Vec<u8>, String> {
-    photocraft_psd::patterns::write_pat_file(&patterns.iter().map(to_psd).collect::<Vec<_>>()).map_err(|e| e.to_string())
+    let converted = patterns.iter().map(try_to_psd).collect::<Result<Vec<_>, _>>()?;
+    photocraft_psd::patterns::write_pat_file(&converted).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -176,6 +242,19 @@ mod tests {
             }
         }
         Pattern::new("P", surf, 5, 3)
+    }
+
+    #[test]
+    fn checked_pat_rejects_wide_and_unqualified_model_without_losing_source() {
+        let p = pattern(ColorMode::Rgb, SampleType::U32, true);
+        let before = p.clone();
+        assert!(write_pat(std::slice::from_ref(&p)).is_err());
+        assert_eq!(p, before);
+        let p = pattern(ColorMode::Indexed, SampleType::U8, true);
+        assert!(try_to_psd(&p).is_err());
+        let p = pattern(ColorMode::Rgb, SampleType::F32, true);
+        let psd = try_to_psd(&p).unwrap();
+        assert_eq!(from_psd(&psd).unwrap().surface.try_read_interleaved(p.rect()).unwrap(), p.surface.try_read_interleaved(p.rect()).unwrap());
     }
 
     #[test]

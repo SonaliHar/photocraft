@@ -352,7 +352,7 @@ pub fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>
         return None;
     }
     let st = app.session.active()?;
-    let (doc, revision) = (st.doc.clone(), st.revision);
+    let (doc, revision) = (st.doc.resident_arc()?.clone(), st.revision);
     let edit: Option<(LayerId, &'static str, Value)> = match &app.gradient.drag {
         Some(Drag::Draw { from, to, redraw }) if live_mode(app) && dist(*from, *to) >= 1.0 => match redraw {
             Some(id) => Some((*id, cmds::SET, json!({"from": from, "to": to}))),

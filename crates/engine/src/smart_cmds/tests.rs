@@ -33,7 +33,7 @@ fn paint(s: &mut Session) {
 }
 
 fn flat(s: &Session) -> Vec<[f32; 4]> {
-    photocraft_compose::flatten(&s.active().unwrap().doc).px
+    photocraft_compose::flatten(&s.active().unwrap().doc).unwrap().px
 }
 
 fn max_diff(a: &[[f32; 4]], b: &[[f32; 4]]) -> f32 {
@@ -98,7 +98,7 @@ fn masked_layer_and_group_convert_within_rounding() {
     s.edit("mask", |doc, active| {
         let l = doc.layer_mut(active.unwrap()).unwrap();
         let mut m = LayerMask::reveal_all();
-        m.surface.fill_rect(Rect::new(0, 0, 20, 20), &[0.3]);
+        std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::new(0, 0, 20, 20), &[0.3]);
         l.mask = Some(m);
         Ok(())
     })
@@ -382,7 +382,7 @@ fn pcraft_round_trip_keeps_live_smart_objects() {
         assert!(b.filter_mask.is_some());
         // Still live after loading: re-editing works and matches a fresh render.
         let mut s2 = Session::new();
-        s2.add_document(back, None);
+        s2.add_document(back, None).unwrap();
         s2.select_layer(id).unwrap();
         s2.execute("layer.smartFilter.setVisible", json!({"index": 1, "visible": false})).unwrap();
         s.execute("layer.smartFilter.setVisible", json!({"index": 1, "visible": false})).unwrap();
@@ -716,9 +716,9 @@ fn convert_to_layers_rejects_what_it_cannot_unpack() {
     }
     // A warp can't be applied to the unpacked layers: an error, and the document is unchanged.
     s.execute("edit.transform.warp", json!({"layer": id, "style": "arc", "bend": 30})).unwrap();
-    let steps = s.active().unwrap().history.entries().len();
+    let steps = s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len();
     assert!(s.execute("layer.smartObjects.convertToLayers", json!({})).is_err());
-    assert_eq!(s.active().unwrap().history.entries().len(), steps);
+    assert_eq!(s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len(), steps);
 }
 
 #[test]

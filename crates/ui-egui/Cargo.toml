@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["embedded_ui_fonts"]
+embedded_ui_fonts = ["egui/default_fonts", "eframe/default_fonts"]
+web_external_assets = ["photocraft-text/web_external_bundled_fonts", "dep:sha2"]
+
 [lints]
 workspace = true
 
@@ -29,18 +34,22 @@ photocraft-format = { workspace = true }
 photocraft-codecs = { workspace = true }
 egui = { workspace = true }
 egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit"] }
+eframe = { workspace = true, features = ["wgpu", "accesskit"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 base64 = "0.22"
+sha2 = { version = "0.10", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+egui = { workspace = true, features = ["default_fonts"] }
+eframe = { workspace = true, features = ["default_fonts"] }
 rayon = { workspace = true }
 # Safe native UI-language APIs (Windows/macOS); no subprocess or web dependency.
 sys-locale = "=0.3.2"
 
 [dev-dependencies]
+sha2 = "0.10"
 flate2 = { workspace = true }
 # Synthetic raw files for the open-time Camera Raw dialog tests.
 photocraft-raw = { workspace = true, features = ["testgen"] }

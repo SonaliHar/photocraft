@@ -43,7 +43,7 @@ fn shape_layer_without_stored_pixels_renders_from_its_path() {
             *ch = ChannelData::encode(ch.id, Compression::Raw, &[], 0, 0, bits, Version::Psd).unwrap();
         }
         let imp = reimport(&file);
-        let f = photocraft_compose::flatten(&imp.document);
+        let f = photocraft_compose::flatten(&imp.document).unwrap();
         assert!(f.get(16, 16)[0] < 0.01, "{depth:?}: shape interior renders black: {:?}", f.get(16, 16));
         assert!(f.get(2, 2)[0] > 0.99, "{depth:?}: outside stays white");
     }
@@ -140,7 +140,7 @@ fn shape_with_vector_mask_density_imports_as_fill_with_soft_mask() {
     let l = &imp.document.layers[1];
     assert!(matches!(l.content, LayerContent::Fill(_)), "{}", l.content.kind_name());
     assert_eq!(l.vector_mask.as_ref().map(|v| v.density), Some(204.0 / 255.0));
-    let f = photocraft_compose::flatten(&imp.document);
+    let f = photocraft_compose::flatten(&imp.document).unwrap();
     assert!(f.get(16, 16)[0] < 0.01, "inside the path: black");
     assert!((f.get(2, 2)[0] - 0.8).abs() < 0.01, "outside: 20% of the fill shows: {:?}", f.get(2, 2));
 }
@@ -162,6 +162,6 @@ fn shape_without_pixels_and_full_initial_fill_covers_the_canvas() {
     for ch in &mut rec.channels {
         *ch = ChannelData::encode(ch.id, Compression::Raw, &[], 0, 0, 8, Version::Psd).unwrap();
     }
-    let f = photocraft_compose::flatten(&reimport(&file).document);
+    let f = photocraft_compose::flatten(&reimport(&file).document).unwrap();
     assert!(f.get(0, 0)[0] < 0.01 && f.get(31, 31)[0] < 0.01, "covers everything: {:?}", f.get(0, 0));
 }

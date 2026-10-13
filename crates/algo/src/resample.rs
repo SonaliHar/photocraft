@@ -1,7 +1,7 @@
 //! High-quality separable resampling of surfaces (Image Size).
 
 use photocraft_geom::{Rect, TILE_SIZE};
-use photocraft_raster::Surface;
+use photocraft_raster::{Surface, Interrupt, RasterInputError, MAX_CHECKED_RASTER_BYTES, checked_region_byte_len};
 use serde::{Deserialize, Serialize};
 
 use crate::image::{premultiply, unpremultiply};
@@ -20,7 +20,7 @@ pub enum Resample {
 }
 
 impl Resample {
-    fn support(self) -> f64 {
+    pub(crate) fn support(self) -> f64 {
         match self {
             Resample::Nearest => 0.5,
             Resample::Bilinear => 1.0,
@@ -28,7 +28,7 @@ impl Resample {
             Resample::Lanczos | Resample::PreserveDetails => 3.0,
         }
     }
-    fn weight(self, x: f64) -> f64 {
+    pub(crate) fn weight(self, x: f64) -> f64 {
         let x = x.abs();
         match self {
             Resample::Nearest => {
@@ -120,6 +120,97 @@ fn taps(dst0: i32, dst1: i32, scale: f64, filter: Resample, edge: Option<(i32, i
             Taps { start: a, weights: folded.get(i0..i1).unwrap_or(&[]).to_vec(), outside }
         })
         .collect()
+}
+
+fn resize_poll(control: &Interrupt<'_>) -> Result<(), RasterInputError> {
+    control.check().map_err(|_| RasterInputError::Cancelled)
+}
+fn resize_vec<T: Clone>(length: usize, value: T, control: &Interrupt<'_>) -> Result<Vec<T>, RasterInputError> {
+    let bytes = length.checked_mul(std::mem::size_of::<T>()).ok_or(RasterInputError::LimitExceeded)?;
+    if bytes as u64 > MAX_CHECKED_RASTER_BYTES { return Err(RasterInputError::LimitExceeded); }
+    let mut result = Vec::new();
+    result.try_reserve_exact(length).map_err(|_| RasterInputError::AllocationFailed)?;
+    if result.capacity() != length || result.capacity().checked_mul(std::mem::size_of::<T>()).is_none_or(|size| size as u64 > MAX_CHECKED_RASTER_BYTES) {
+        return Err(RasterInputError::LimitExceeded);
+    }
+    while result.len() < length { resize_poll(control)?; result.resize(result.len().saturating_add(8192).min(length), value.clone()); }
+    Ok(result)
+}
+fn resize_count(width: i32, height: i32, channels: usize) -> Result<usize, RasterInputError> {
+    usize::try_from(width).ok().and_then(|w| usize::try_from(height).ok().and_then(|h| w.checked_mul(h)))
+        .and_then(|value| value.checked_mul(channels)).ok_or(RasterInputError::InvalidBounds)
+}
+fn tap_coordinate(value: f64) -> Result<i32, RasterInputError> {
+    if !value.is_finite() || value < f64::from(i32::MIN) || value > f64::from(i32::MAX) { return Err(RasterInputError::InvalidBounds); }
+    Ok(value as i32)
+}
+fn taps_with_interrupt(dst0: i32, dst1: i32, scale: f64, filter: Resample, edge: Option<(i32, i32)>, content: (i32, i32), control: &Interrupt<'_>, retained_limit: u64) -> Result<Vec<Taps>, RasterInputError> {
+    resize_poll(control)?;
+    if !scale.is_finite() || scale <= 0.0 || content.0 > content.1 || edge.is_some_and(|(a,b)| a > b) { return Err(RasterInputError::InvalidBounds); }
+    let stretch = if scale < 1.0 { 1.0 / scale } else { 1.0 };
+    let support = filter.support() * stretch;
+    if !support.is_finite() { return Err(RasterInputError::InvalidBounds); }
+    let clamp = |i: i32| edge.map_or(i, |(a,b)| i.clamp(a,b));
+    let length = usize::try_from(i64::from(dst1) - i64::from(dst0)).map_err(|_| RasterInputError::InvalidBounds)?;
+    if (length as u64).checked_mul(std::mem::size_of::<Taps>() as u64).is_none_or(|size| size > retained_limit) { return Err(RasterInputError::LimitExceeded); }
+    let mut result = Vec::new();
+    result.try_reserve_exact(length).map_err(|_| RasterInputError::AllocationFailed)?;
+    let mut retained = (result.capacity() as u64).checked_mul(std::mem::size_of::<Taps>() as u64).ok_or(RasterInputError::LimitExceeded)?;
+    if retained > retained_limit { return Err(RasterInputError::LimitExceeded); }
+    for o in dst0..dst1 {
+        resize_poll(control)?;
+        let u = (f64::from(o) + 0.5) / scale - 0.5;
+        let tap = if filter == Resample::Nearest {
+            let i = clamp(tap_coordinate((u + 0.5).floor())?);
+            if (content.0..=content.1).contains(&i) { Taps { start: i, weights: resize_vec(1,1.0,control)?, outside: 0.0 } }
+            else { Taps { start: content.0, weights: Vec::new(), outside: 1.0 } }
+        } else {
+            let lo = tap_coordinate((u-support).ceil())?; let hi = tap_coordinate((u+support).floor())?;
+            let count = usize::try_from(i64::from(hi)-i64::from(lo)+1).map_err(|_| RasterInputError::InvalidBounds)?;
+            let transient = (count as u64).checked_mul(12).and_then(|v| v.checked_add(retained)).ok_or(RasterInputError::LimitExceeded)?;
+            if transient > retained_limit { return Err(RasterInputError::LimitExceeded); }
+            let mut w = resize_vec(count,0.0f64,control)?;
+            for (index,v) in w.iter_mut().enumerate() { resize_poll(control)?; let i = i64::from(lo) + index as i64; *v = filter.weight((i as f64-u)/stretch); }
+            let mut sum = 0.0f64; for v in &w { resize_poll(control)?; sum += *v; }
+            if sum.abs() > 1e-12 { for v in &mut w { resize_poll(control)?; *v /= sum; } }
+            let start = clamp(lo);
+            let folded_len = usize::try_from((i64::from(clamp(hi))-i64::from(start)+1).max(1)).map_err(|_| RasterInputError::InvalidBounds)?;
+            let mut folded = resize_vec(folded_len,0.0f32,control)?;
+            for (index,v) in w.into_iter().enumerate() { resize_poll(control)?; let i = i32::try_from(i64::from(lo)+index as i64).map_err(|_| RasterInputError::InvalidBounds)?;
+                let slot = usize::try_from(i64::from(clamp(i))-i64::from(start)).map_err(|_| RasterInputError::InvalidBounds)?;
+                if let Some(value) = folded.get_mut(slot) { *value += v as f32; }
+            }
+            let a = start.max(content.0);
+            let end = i64::from(start) + i64::try_from(folded.len()).map_err(|_| RasterInputError::InvalidBounds)? - 1;
+            let b = end.min(i64::from(content.1));
+            if i64::from(a) > b { Taps { start: content.0, weights: Vec::new(), outside: { let mut sum=0.0f32; for v in &folded { resize_poll(control)?; sum += *v; } sum } } }
+            else {
+                let i0 = usize::try_from(i64::from(a)-i64::from(start)).map_err(|_| RasterInputError::InvalidBounds)?;
+                let i1 = usize::try_from(b-i64::from(start)+1).map_err(|_| RasterInputError::InvalidBounds)?;
+                let mut outside = 0.0f32; for v in folded.get(..i0).ok_or(RasterInputError::LengthMismatch)?.iter().chain(folded.get(i1..).ok_or(RasterInputError::LengthMismatch)?) { resize_poll(control)?; outside += *v; }
+                let values = folded.get(i0..i1).ok_or(RasterInputError::LengthMismatch)?;
+                let mut weights = resize_vec(values.len(),0.0f32,control)?;
+                for (value,input) in weights.iter_mut().zip(values) { resize_poll(control)?; *value = *input; }
+                Taps { start: a, weights, outside }
+            }
+        };
+        retained = retained.checked_add((tap.weights.capacity() as u64).checked_mul(4).ok_or(RasterInputError::LimitExceeded)?).ok_or(RasterInputError::LimitExceeded)?;
+        if retained > retained_limit { return Err(RasterInputError::LimitExceeded); }
+        result.push(tap);
+    }
+    Ok(result)
+}
+fn read_resize_rows(s: &Surface, r: Rect, control: &Interrupt<'_>) -> Result<Vec<f32>, RasterInputError> {
+    let raw = s.try_read_interleaved_with(r,control)?;
+    let mut values = resize_vec(resize_count(i32::try_from(r.width()).map_err(|_| RasterInputError::InvalidBounds)?,i32::try_from(r.height()).map_err(|_| RasterInputError::InvalidBounds)?,s.channels())?,0.0f32,control)?;
+    for (index,v) in values.iter_mut().enumerate() { if index % 1024 == 0 { resize_poll(control)?; } *v = photocraft_color::read_sample(&raw,s.format().sample,index); }
+    Ok(values)
+}
+fn write_resize_rows(s: &mut Surface, r: Rect, values: &[f32], control: &Interrupt<'_>) -> Result<(), RasterInputError> {
+    if values.len() != resize_count(i32::try_from(r.width()).map_err(|_| RasterInputError::InvalidBounds)?,i32::try_from(r.height()).map_err(|_| RasterInputError::InvalidBounds)?,s.channels())? { return Err(RasterInputError::LengthMismatch); }
+    let mut raw = resize_vec(checked_region_byte_len(r,s.format())?,0u8,control)?;
+    for (index,&v) in values.iter().enumerate() { if index % 1024 == 0 { resize_poll(control)?; } photocraft_color::write_sample(&mut raw,s.format().sample,index,v); }
+    s.try_write_interleaved_with(r,&raw,control)
 }
 
 /// Output rectangle for `r` scaled by `(sx, sy)` about the origin.
@@ -321,6 +412,192 @@ fn resize_with_budget(s: &Surface, sx: f64, sy: f64, filter: Resample, edge: Opt
     out
 }
 
+/// Controlled legacy resampling without canvas-edge repetition (warp pre-reduction).
+pub fn try_resize_surface_with_interrupt(s: &Surface, sx: f64, sy: f64, filter: Resample, control: &Interrupt<'_>) -> Result<Surface,RasterInputError> {
+    try_resize_with_budget(s,sx,sy,filter,None,READ_BUDGET,control)
+}
+/// Controlled legacy f32 resampling, with the same taps/edge/band arithmetic.
+pub fn try_resize_surface_in_canvas_with_interrupt(s: &Surface, sx: f64, sy: f64, filter: Resample, canvas: Rect, control: &Interrupt<'_>) -> Result<Surface,RasterInputError> {
+    resize_poll(control)?;
+    let area = s.try_content_bounds_with_interrupt(control)?.union(&canvas);
+    try_resize_with_budget(s,sx,sy,filter,(!area.is_empty()).then_some(area),READ_BUDGET,control)
+}
+fn try_resize_with_budget(s: &Surface, sx: f64, sy: f64, filter: Resample, edge: Option<Rect>, budget: usize, control: &Interrupt<'_>) -> Result<Surface,RasterInputError> {
+    resize_poll(control)?;
+    if !sx.is_finite() || !sy.is_finite() || sx <= 0.0 || sy <= 0.0 { return Err(RasterInputError::InvalidBounds); }
+    s.try_validate_tile_origins_with(control)?;
+    let fmt = s.format();
+    let mut default = resize_vec(fmt.bytes_per_pixel(),0u8,control)?;
+    for (index,value) in s.default_pixel().into_iter().enumerate() { photocraft_color::write_sample(&mut default,fmt.sample,index,value); }
+    let mut out = Surface::try_with_default_bytes(fmt,&default)?;
+    let src = s.try_content_bounds_with_interrupt(control)?;
+    checked_region_byte_len(src,fmt)?;
+    let dst = if src.is_empty() { Rect::EMPTY } else { Rect::new(tap_coordinate((f64::from(src.x0)*sx).floor())?,tap_coordinate((f64::from(src.y0)*sy).floor())?,tap_coordinate((f64::from(src.x1)*sx).ceil())?,tap_coordinate((f64::from(src.y1)*sy).ceil())?) };
+    checked_region_byte_len(dst,fmt)?;
+    if dst.is_empty() {
+        return Ok(out);
+    }
+    let n = fmt.channels();
+    let alpha = fmt.alpha;
+    // With `edge`, every tap is clamped into the edge area, which holds the content.
+    let area = edge.unwrap_or(src);
+    let mut source_retained = 0u64;
+    for (_,tile) in s.tiles() { resize_poll(control)?; source_retained = source_retained.checked_add(tile.bytes().len() as u64 + 512).ok_or(RasterInputError::LimitExceeded)?; }
+    let tap_allowance = MAX_CHECKED_RASTER_BYTES.checked_sub(source_retained).ok_or(RasterInputError::LimitExceeded)?;
+    let hx = taps_with_interrupt(dst.x0, dst.x1, sx, filter, edge.map(|r| (r.x0, r.x1 - 1)), (area.x0, area.x1 - 1),control,tap_allowance)?;
+    let hx_bytes = hx.iter().try_fold((hx.capacity() as u64)*(std::mem::size_of::<Taps>() as u64), |total,tap| total.checked_add((tap.weights.capacity() as u64)*4).ok_or(RasterInputError::LimitExceeded))?;
+    let vy = taps_with_interrupt(dst.y0, dst.y1, sy, filter, edge.map(|r| (r.y0, r.y1 - 1)), (area.y0, area.y1 - 1),control,tap_allowance.checked_sub(hx_bytes).ok_or(RasterInputError::LimitExceeded)?)?;
+    let x_lo = hx.iter().filter(|t| !t.weights.is_empty()).map(|t| t.start).min().unwrap_or(area.x0);
+    let x_hi = hx.iter().try_fold(area.x0,|maximum,t| { let end = t.start.checked_add(i32::try_from(t.weights.len()).map_err(|_|RasterInputError::InvalidBounds)?).ok_or(RasterInputError::InvalidBounds)?; Ok::<_,RasterInputError>(maximum.max(end)) })?.max(x_lo);
+    let mut def = s.default_pixel();
+    premultiply(&mut def, n, alpha);
+    let dw = dst.width() as usize;
+    const BAND: usize = 64;
+    
+    // Horizontal pass of one source row (`row` spans `x_lo..x_hi`) into `dw` samples.
+    let horizontal = |row: &[f32], out: &mut [f32]| -> Result<(),RasterInputError> {
+        for (tap,d) in hx.iter().zip(out.chunks_exact_mut(n)) {
+            resize_poll(control)?;
+            for (k,w) in tap.weights.iter().enumerate() {
+                if k % 1024 == 0 { resize_poll(control)?; }
+                let index = usize::try_from(i64::from(tap.start)+k as i64-i64::from(x_lo)).map_err(|_|RasterInputError::InvalidBounds)?;
+                let start = index.checked_mul(n).ok_or(RasterInputError::LimitExceeded)?;
+                if let Some(sp) = row.get(start..start.checked_add(n).ok_or(RasterInputError::LimitExceeded)?) {
+                    for (dv,sv) in d.iter_mut().zip(sp) { *dv += sv * w; }
+                }
+            }
+            for (index,dv) in d.iter_mut().enumerate() { *dv += def.get(index).copied().ok_or(RasterInputError::LengthMismatch)? * tap.outside; }
+        }
+        Ok(())
+    };
+    let rows_per_read = (budget / ((x_hi - x_lo).max(1) as usize * n).max(dw * n)).clamp(1, TILE_SIZE as usize) as i32;
+    #[cfg(not(target_arch = "wasm32"))]
+    let group = rayon::current_num_threads().max(1) * 2;
+    #[cfg(target_arch = "wasm32")]
+    let group = 1;
+    let mut retained = source_retained;
+    for tap in hx.iter().chain(&vy) { retained = retained.checked_add((tap.weights.capacity() as u64)*4 + std::mem::size_of::<Taps>() as u64).ok_or(RasterInputError::LimitExceeded)?; }
+    let tile_span = |a:i32,b:i32| -> Result<u64,RasterInputError> { u64::try_from(i64::from((b-1).div_euclid(TILE_SIZE))-i64::from(a.div_euclid(TILE_SIZE))+1).map_err(|_|RasterInputError::InvalidBounds) };
+    let output_tiles = tile_span(dst.x0,dst.x1)?.checked_mul(tile_span(dst.y0,dst.y1)?).ok_or(RasterInputError::LimitExceeded)?;
+    let output_charge = output_tiles.checked_mul((TILE_SIZE as u64)*(TILE_SIZE as u64)*(fmt.bytes_per_pixel() as u64)+512).ok_or(RasterInputError::LimitExceeded)?;
+    let band_bytes = (dw as u64).checked_mul(n as u64).and_then(|v|v.checked_mul(BAND as u64)).and_then(|v|v.checked_mul(24)).ok_or(RasterInputError::LimitExceeded)?;
+    let read_samples = resize_count(x_hi-x_lo,rows_per_read,n)? as u64;
+    let read_bytes = read_samples.checked_mul(16).ok_or(RasterInputError::LimitExceeded)?;
+    let group_peak = band_bytes.checked_add(read_bytes).and_then(|v|v.checked_mul(group as u64)).ok_or(RasterInputError::LimitExceeded)?;
+    if retained.checked_add(output_charge).and_then(|v|v.checked_add(group_peak)).is_none_or(|v|v > MAX_CHECKED_RASTER_BYTES) { return Err(RasterInputError::LimitExceeded); }
+    // A source row of nothing but the default pixel, after the horizontal pass.
+    let def_row = {
+        let mut row = resize_vec(resize_count(x_hi-x_lo,1,n)?,0.0f32,control)?;
+        for (index,value) in row.iter_mut().enumerate() { if index % 1024 == 0 { resize_poll(control)?; } *value = def.get(index%n).copied().ok_or(RasterInputError::LengthMismatch)?; }
+        let mut out = resize_vec(dw.checked_mul(n).ok_or(RasterInputError::LimitExceeded)?,0.0f32,control)?;
+        horizontal(&row, &mut out)?;
+        out
+    };
+    // At most one tile row per read anyway, so this always fits an `i32`.
+
+    let run = |&(b0, b1): &(usize, usize)| -> Result<(Rect, Vec<f32>),RasterInputError> {
+        resize_poll(control)?;
+        let band = vy.get(b0..b1).unwrap_or(&[]);
+        let y_lo = band.iter().filter(|t| !t.weights.is_empty()).map(|t| t.start).min().unwrap_or(area.y0);
+        let y_hi = band.iter().try_fold(area.y0,|maximum,t| { let end = t.start.checked_add(i32::try_from(t.weights.len()).map_err(|_|RasterInputError::InvalidBounds)?).ok_or(RasterInputError::InvalidBounds)?; Ok::<_,RasterInputError>(maximum.max(end)) })?.max(y_lo);
+        let mut res = resize_vec(band.len().checked_mul(dw).and_then(|v|v.checked_mul(n)).ok_or(RasterInputError::LimitExceeded)?,0.0f32,control)?;
+        // Source rows stream through in bounded reads and go straight into the output rows that
+        // use them, so memory is the read budget plus this band's output, whatever the scale or
+        // the source size (#713). In ascending row order, as one read of the whole window would.
+        let add = |res: &mut [f32], y: i32, row: &[f32]| -> Result<(),RasterInputError> {
+            for (t, d) in band.iter().zip(res.chunks_exact_mut(dw * n)) {
+                resize_poll(control)?;
+                if let Some(w) = t.weights.get(usize::try_from(i64::from(y)-i64::from(t.start)).unwrap_or(usize::MAX)).filter(|_| y >= t.start) {
+                    for (index,(dv, sv)) in d.iter_mut().zip(row).enumerate() {
+                        if index % 1024 == 0 { resize_poll(control)?; }
+                        *dv += sv * w;
+                    }
+                }
+            }
+            Ok(())
+        };
+        
+        
+        let mut y = y_lo;
+        while y < y_hi {
+            resize_poll(control)?;
+            let y1 = i32::try_from((i64::from(y).div_euclid(i64::from(TILE_SIZE))+1)*i64::from(TILE_SIZE)).map_err(|_|RasterInputError::InvalidBounds)?.min(y_hi);
+            if s.has_tiles_in(Rect::new(x_lo, y, x_hi, y1)) {
+                let mut c0 = y;
+                while c0 < y1 {
+                    resize_poll(control)?;
+                    let c1 = c0.checked_add(rows_per_read).ok_or(RasterInputError::InvalidBounds)?.min(y1);
+                    let read = Rect::new(x_lo, c0, x_hi, c1);
+                    let mut rows = read_resize_rows(s,read,control)?;
+                    for part in rows.chunks_mut(1024*n) { resize_poll(control)?; premultiply(part,n,alpha); }
+                    let mut hrows = resize_vec(usize::try_from(c1-c0).ok().and_then(|v|v.checked_mul(dw)).and_then(|v|v.checked_mul(n)).ok_or(RasterInputError::LimitExceeded)?,0.0f32,control)?;
+                    let rw = read.width() as usize * n;
+                    for (row, out) in rows.chunks_exact(rw.max(1)).zip(hrows.chunks_exact_mut(dw * n)) {
+                        resize_poll(control)?;
+                        horizontal(row, out)?;
+                    }
+                    for (r, h) in (c0..c1).zip(hrows.chunks_exact(dw * n)) {
+                        add(&mut res, r, h)?;
+                    }
+                    c0 = c1;
+                }
+            } else {
+                // Nothing stored in this tile row: every row in it is the default row, so each
+                // output row takes it once, with the summed weight of those rows.
+                for (t, d) in band.iter().zip(res.chunks_exact_mut(dw * n)) {
+                    resize_poll(control)?;
+                    let (a, b) = (usize::try_from((i64::from(y)-i64::from(t.start)).max(0)).map_err(|_|RasterInputError::InvalidBounds)?, usize::try_from((i64::from(y1)-i64::from(t.start)).max(0)).map_err(|_|RasterInputError::InvalidBounds)?);
+                    let mut w=0.0f32; for value in t.weights.get(a.min(t.weights.len())..b.min(t.weights.len())).unwrap_or(&[]) { resize_poll(control)?; w += *value; }
+                    if w != 0.0 {
+                        for (index,(dv, sv)) in d.iter_mut().zip(&def_row).enumerate() {
+                            if index % 1024 == 0 { resize_poll(control)?; }
+                            *dv += sv * w;
+                        }
+                    }
+                }
+            }
+            y = y1;
+        }
+        for (t, d) in band.iter().zip(res.chunks_exact_mut(dw * n)) {
+            for (index,(dv, sv)) in d.iter_mut().zip(&def_row).enumerate() {
+                if index % 1024 == 0 { resize_poll(control)?; }
+                *dv += sv * t.outside;
+            }
+        }
+        if alpha {
+            for (index,px) in res.chunks_exact_mut(n).enumerate() {
+                if index % 1024 == 0 { resize_poll(control)?; }
+                px[n - 1] = px[n - 1].clamp(0.0, 1.0);
+            }
+        }
+        for part in res.chunks_mut(1024*n) { resize_poll(control)?; unpremultiply(part,n,alpha); }
+        Ok((Rect::new(dst.x0, dst.y0 + b0 as i32, dst.x1, dst.y0 + b1 as i32), res))
+    };
+    // Bands go into the output a group at a time, so the `f32` rows held at once are bounded by
+    // the group, not by the whole destination (#1544).
+    let mut first = 0usize;
+    while first < vy.len() {
+        resize_poll(control)?;
+        let count = vy.len().saturating_sub(first).div_ceil(BAND).min(group);
+        let mut slots = resize_vec(count,None,control)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        { use rayon::prelude::*; slots.par_iter_mut().enumerate().for_each(|(index,slot)| {
+            let b0 = first + index * BAND; *slot = Some(run(&(b0,(b0+BAND).min(vy.len())))); }); }
+        #[cfg(target_arch = "wasm32")]
+        for (index,slot) in slots.iter_mut().enumerate() { let b0 = first + index * BAND; *slot = Some(run(&(b0,(b0+BAND).min(vy.len())))); }
+        for slot in slots { resize_poll(control)?; let (r,d) = slot.ok_or(RasterInputError::LengthMismatch)??; write_resize_rows(&mut out,r,&d,control)?; }
+        first = first.checked_add(count.checked_mul(BAND).ok_or(RasterInputError::LimitExceeded)?).ok_or(RasterInputError::LimitExceeded)?;
+    }
+    if filter == Resample::PreserveDetails && (sx > 1.0 || sy > 1.0) {
+        let p = crate::FilterParams::UnsharpMask { amount: 30.0, radius: 0.6 * sx.max(sy) as f32, threshold: 0.0 };
+        let area = crate::output_area(&p, out.try_content_bounds_with_interrupt(control)?, dst, None);
+        out = crate::apply_tiled_with(&out,&p,area,dst,None,crate::auto_tile(&p,dst),None,control).ok_or_else(|| if control.check().is_err() { RasterInputError::Cancelled } else { RasterInputError::AllocationFailed })?;
+    }
+    out.try_prune_with(control)?;
+    resize_poll(control)?;
+    Ok(out)
+}
+
 /// Moves a surface by whole pixels (default pixel kept).
 pub fn translate_surface(s: &Surface, dx: i32, dy: i32) -> Surface {
     s.translated(dx, dy, s.content_bounds())
@@ -328,7 +605,7 @@ pub fn translate_surface(s: &Surface, dx: i32, dy: i32) -> Surface {
 
 /// Keeps only the pixels inside `keep` (others become the default pixel).
 pub fn crop_surface(s: &Surface, keep: Rect) -> Surface {
-    let mut out = Surface::with_default(s.format(), &s.default_pixel());
+    let mut out = s.empty_like();
     let r = s.content_bounds().intersect(&keep);
     if !r.is_empty() {
         out.write_interleaved(r, &s.to_interleaved(r));
@@ -349,6 +626,25 @@ mod tests {
         s
     }
 
+    #[test]
+    fn controlled_legacy_resize_matches_native_quantization_and_cancel_refuses() {
+        for sample in [SampleType::U8,SampleType::U16,SampleType::F32] {
+            let source=ramp(sample); let before=source.clone(); let canvas=Rect::new(0,0,64,32);
+            for filter in [Resample::Nearest,Resample::Bilinear,Resample::Bicubic,Resample::Lanczos,Resample::PreserveDetails] {
+                for (sx,sy) in [(0.17,0.43),(1.0,1.0),(1.7,2.3)] {
+                    let old=resize_surface_in_canvas(&source,sx,sy,filter,canvas);
+                    let controlled=try_resize_surface_in_canvas_with_interrupt(&source,sx,sy,filter,canvas,&Interrupt::NONE).unwrap();
+                    assert_eq!(controlled,old,"{sample:?} {filter:?} {sx} {sy}");
+                }
+            }
+            let cancel=||true;
+            assert_eq!(try_resize_surface_in_canvas_with_interrupt(&source,2.0,2.0,Resample::Bicubic,canvas,&Interrupt::cancel_only(&cancel)),Err(RasterInputError::Cancelled));
+            for scale in [0.0,-1.0,f64::NAN,f64::INFINITY,1e100] {
+                assert!(try_resize_surface_in_canvas_with_interrupt(&source,scale,1.0,Resample::Bicubic,canvas,&Interrupt::NONE).is_err());
+            }
+            assert_eq!(source,before);
+        }
+    }
     #[test]
     fn fixed_channel_rows_match_dynamic_resampling() {
         fn check<const N: usize>() {

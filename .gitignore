@@ -21,3 +21,4 @@ target/
 Thumbs.db
 .idea/
 __pycache__/
+/generated/web-ui-assets/

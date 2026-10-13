@@ -40,7 +40,7 @@ fn a_hovered_mode_shows_on_the_canvas_until_the_pointer_leaves() {
     let (shown, key) = display_doc(&mut app, 0).expect("previewed");
     assert_eq!(shown.layer(top).unwrap().blend, BlendMode::Multiply);
     let (again, same) = display_doc(&mut app, 0).unwrap();
-    assert!(std::sync::Arc::ptr_eq(&shown, &again) && key == same, "one document per hovered mode, not one per frame");
+    assert!(std::ptr::eq((shown).as_ref(), (again).as_ref()) && key == same, "one document per hovered mode, not one per frame");
     assert_eq!((blend(&app, top), steps(&app)), (BlendMode::Normal, undo), "hovering records nothing");
     // From the document to the preview and between previews: only the layer's area redraws.
     let doc = app.session.active().unwrap().doc.id;

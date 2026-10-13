@@ -7,6 +7,9 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod accounted_commands;
+mod accounted_session;
+pub mod accounted_view;
 pub mod actions_cmds;
 pub mod adjust_cmds;
 pub mod adjust_params;
@@ -26,9 +29,12 @@ pub mod comps_cmds;
 pub mod cutout_cmds;
 pub mod display_color;
 pub mod distort_cmds;
+pub mod document_history;
 pub mod document_preset_cmds;
+pub mod document_snapshot;
 pub mod edit_cmds;
 pub mod edit_menu_cmds;
+mod edit_validation;
 pub mod eraser_cmds;
 pub mod extra_cmds;
 pub mod file_cmds;
@@ -45,11 +51,15 @@ pub mod group_view_cmds;
 pub mod hidden_target;
 pub mod image_cmds;
 pub mod inspect;
+pub mod inspect_pixel_cmds;
 pub mod jobs;
 pub mod layer_copy_cmds;
+pub mod layer_export_wide;
 pub mod layer_label_cmds;
 pub mod layer_menu_cmds;
 pub mod layer_multi_cmds;
+mod layer_duplicate_controlled;
+mod layer_mask_storage_controlled;
 pub mod layer_nav_cmds;
 pub mod layer_style;
 pub mod lens_cmds;
@@ -74,6 +84,7 @@ pub mod print_cmds;
 pub mod proof_sim;
 pub mod redeye_cmds;
 pub mod render_cmds;
+pub mod retained_surface_validation;
 pub mod retouch_cmds;
 pub mod select_extra_cmds;
 pub mod selection_cmds;
@@ -82,6 +93,8 @@ pub mod smart_cmds;
 pub mod smartselect_cmds;
 pub mod snap;
 mod source_policy;
+#[cfg(test)]
+mod session_target_edit_tests;
 pub mod stamp_cmds;
 pub mod swatch_cmds;
 pub mod symmetry_cmds;
@@ -99,16 +112,56 @@ mod video_cmds;
 pub mod vp_cmds;
 pub mod warp_cmds;
 pub mod web_cmds;
+mod web_export_delivery;
 mod wia_cmds;
-pub use source_policy::SourceIdentity;
+pub mod xcf_assessment_cmds;
+pub mod xcf_composition_cmds;
+pub mod xcf_editing;
+mod xcf_query_preflight;
+pub mod xcf_item_locks;
+pub mod xcf_item_state_cmds;
+pub mod xcf_item_set_create_cmds;
+pub mod xcf_item_set_manage_cmds;
+pub mod xcf_mask_cmds;
+pub mod xcf_mask_geometry_cmds;
+pub mod xcf_filter_mask_cmds;
+pub mod xcf_selection_cmds;
+pub mod xcf_channel_state_cmds;
+pub mod xcf_channel_name_cmds;
+pub mod xcf_channel_locks_cmds;
+pub mod xcf_channel_indicates_cmds;
+pub mod xcf_wide_point_cmds;
+pub mod xcf_filter_wire;
+pub mod xcf_filter_insert_cmds;
+pub mod xcf_indexed_pixel_cmds;
+pub mod xcf_indexed_palette_cmds;
+pub mod xcf_text_transform_cmds;
+pub mod xcf_vector_style_cmds;
+pub mod xcf_path_state_cmds;
+pub mod xcf_filter_graph_cmds;
+pub mod xcf_filter_cmds;
+pub mod xcf_floating;
+mod xcf_indexed_geometry;
+pub mod xcf_inspect_cmds;
+pub mod xcf_link_cmds;
+pub mod xcf_link_geometry_cmds;
+pub mod xcf_link_substitution_cmds;
+pub mod xcf_resource_cmds;
+pub mod xcf_resources;
+pub mod xcf_text_cmds;
+pub mod xcf_vector_cmds;
+mod xcf_vector_guard;
+pub use source_policy::{SourceIdentity, WriteProtection};
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use photocraft_doc::{Document, LayerId};
 use photocraft_ops::{History, LayerTarget};
 use serde_json::Value;
 
 pub use commands::{CommandSpec, command_specs};
+pub use document_history::DocumentHistory;
+pub use document_snapshot::{DocumentSnapshot, WeakDocumentSnapshot};
 pub use photocraft_doc as doc;
 pub use photocraft_paint as paint;
 pub use photocraft_paint::BrushSettings;
@@ -134,6 +187,24 @@ pub enum EngineError {
 
 pub type Result<T> = std::result::Result<T, EngineError>;
 
+/// Legacy synchronous callers have no job cancellation/work callback.
+/// Accounted operations still enforce their persistent quota and fixed bounds.
+pub fn read_control_none() -> photocraft_raster::backing::ReadControl<'static> {
+    photocraft_raster::backing::ReadControl { interrupt: &photocraft_raster::Interrupt::NONE, work: &|_| Ok(()) }
+}
+
+impl From<photocraft_raster::RasterInputError> for EngineError {
+    fn from(error: photocraft_raster::RasterInputError) -> Self {
+        if error == photocraft_raster::RasterInputError::Cancelled { Self::Cancelled } else { Self::Other(error.to_string()) }
+    }
+}
+
+impl From<photocraft_raster::backing::BackingError> for EngineError {
+    fn from(error: photocraft_raster::backing::BackingError) -> Self {
+        if error == photocraft_raster::backing::BackingError::Cancelled { Self::Cancelled } else { Self::Other(error.to_string()) }
+    }
+}
+
 /// The pixels of a raster layer (typically one a command just created), as an error instead
 /// of a panic if the layer has none.
 pub(crate) fn pixels_mut(l: &mut photocraft_doc::Layer) -> Result<&mut photocraft_raster::Surface> {
@@ -148,10 +219,13 @@ pub(crate) fn active_layer_of(s: &Session) -> std::result::Result<&photocraft_do
 }
 
 /// Per-document editing state.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct DocState {
-    pub doc: Arc<Document>,
-    pub history: History,
+    pub doc: DocumentSnapshot,
+    // A Weak keeps pointer identity trustworthy without retaining old pixels.
+    // Arc COW mutations dissociate weak references, invalidating this cache.
+    surface_validation: Arc<Mutex<WeakDocumentSnapshot>>,
+    pub history: DocumentHistory,
     /// The primary ("key") layer: what single-layer commands act on. Always a member of
     /// `selected_layers` when set.
     pub active_layer: Option<LayerId>,
@@ -186,24 +260,109 @@ pub struct DocState {
     /// A floating selection (`select.float`): the cut piece and where it floats, until dropped
     /// (view state: the document is unchanged until `select.drop`).
     pub floating: Option<float_cmds::Floating>,
+    accounted_view: Option<accounted_view::AccountedView>,
+    _accounted_metadata: Option<photocraft_raster::backing::quota::QuotaLease>,
 }
 
 impl DocState {
+    /// Whole editing-state copies are a resident-only compatibility operation.
+    /// Accounted models require typed staged view/history transactions.
+    pub fn try_clone_resident(&self) -> Result<Self> {
+        self.doc.validate_resident()?;
+        Ok(Self {
+            doc: self.doc.clone(),
+            surface_validation: self.surface_validation.clone(),
+            history: self.history.clone(),
+            active_layer: self.active_layer,
+            selected_layers: self.selected_layers.clone(),
+            layer_anchor: self.layer_anchor,
+            path: self.path.clone(),
+            source: self.source.clone(),
+            revision: self.revision,
+            saved_revision: self.saved_revision,
+            last_damage: self.last_damage,
+            coalesce: self.coalesce.clone(),
+            channel_view: self.channel_view.clone(),
+            isolated_layers: self.isolated_layers.clone(),
+            symmetry_path: self.symmetry_path.clone(),
+            fx_collapsed: self.fx_collapsed.clone(),
+            show_only: self.show_only.clone(),
+            floating: self.floating.clone(),
+            accounted_view: None,
+            _accounted_metadata: None,
+        })
+    }
     /// Record the detected policy without granting filesystem authority.
     pub fn set_import_origin(&mut self, origin: photocraft_io::ImportOrigin, label: impl Into<String>, path: Option<String>) {
         self.source = Some(SourceIdentity::new(label, path.clone(), origin));
         self.path = if origin.is_read_only() { None } else { path };
     }
 
-    pub fn new(doc: Document, path: Option<String>) -> Self {
-        let active_layer = doc.top_layer();
+    pub fn new(doc: Document, path: Option<String>) -> Result<Self> {
+        Self::new_with_interrupt(doc, path, &photocraft_raster::Interrupt::NONE)
+    }
+    /// Restore resident editing/history view with cooperative structural work.
+    /// Source decoders retain full model/sample validation responsibility.
+    pub fn new_with_interrupt(doc: Document, path: Option<String>, control: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
+        let poll = || control.check().map_err(|_| EngineError::Cancelled);
+        poll()?;
+        let doc = DocumentSnapshot::from_resident_with_interrupt(Arc::new(doc), control).map_err(|error| {
+            if matches!(error, photocraft_raster::backing::BackingError::Cancelled) { EngineError::Cancelled } else { EngineError::from(error) }
+        })?;
+        let mut actual = std::collections::HashSet::new();
+        photocraft_doc::resident_structure::visit_layers_with(&doc, control, |layer| {
+            actual.try_reserve(1).map_err(|_| photocraft_raster::RasterInputError::AllocationFailed)?;
+            actual.insert(layer.id);
+            Ok(true)
+        })
+        .map_err(|error| if error == photocraft_raster::RasterInputError::Cancelled { EngineError::Cancelled } else { EngineError::from(error) })?;
+        let selected = doc.xcf_state.as_ref().map_or(&[][..], |state| state.selection.selected.as_slice());
+        if selected.len() > 10_000 {
+            return Err(EngineError::Other("imported layer selection exceeds canonical limit".into()));
+        }
+        let mut selected_layers = Vec::new();
+        poll()?;
+        selected_layers
+            .try_reserve_exact(selected.len().checked_add(1).ok_or_else(|| EngineError::Other("selection allocation limit".into()))?)
+            .map_err(|_| EngineError::Other("selection allocation limit".into()))?;
+        poll()?;
+        for item in selected {
+            poll()?;
+            if let photocraft_doc::item_identity::ItemRef::Layer(id) = item
+                && actual.contains(id)
+            {
+                selected_layers.push(*id);
+            }
+        }
+        let stored_active = doc
+            .xcf_state
+            .as_ref()
+            .and_then(|state| state.selection.active)
+            .and_then(|item| if let photocraft_doc::item_identity::ItemRef::Layer(id) = item { actual.contains(&id).then_some(id) } else { None });
+        let channel_view = channel_cmds::imported_view_with_interrupt(&doc, control)?;
+        let active_layer = channel_view.editing_mask.or(stored_active).or_else(|| selected_layers.first().copied()).or_else(|| doc.top_layer());
+        if let Some(id) = active_layer
+            && !selected_layers.contains(&id)
+        {
+            selected_layers.push(id);
+        }
+        poll()?;
+        let mut history_selected = Vec::new();
+        history_selected.try_reserve_exact(selected_layers.len()).map_err(|_| EngineError::Other("history view allocation limit".into()))?;
+        poll()?;
+        for chunk in selected_layers.chunks(1024) {
+            poll()?;
+            history_selected.extend_from_slice(chunk);
+        }
         let mut history = History::default();
-        history.set_current_layers(LayerTarget { active: active_layer, selected: active_layer.into_iter().collect() });
-        Self {
-            doc: Arc::new(doc),
-            history,
+        history.set_current_layers(LayerTarget { active: active_layer, selected: history_selected });
+        poll()?;
+        let state = Self {
+            doc,
+            surface_validation: Arc::new(Mutex::new(WeakDocumentSnapshot::new())),
+            history: DocumentHistory::resident(history),
             active_layer,
-            selected_layers: active_layer.into_iter().collect(),
+            selected_layers,
             layer_anchor: active_layer,
             path,
             source: None,
@@ -211,31 +370,60 @@ impl DocState {
             saved_revision: 1,
             last_damage: None,
             coalesce: None,
-            channel_view: Default::default(),
+            channel_view,
             isolated_layers: Vec::new(),
             symmetry_path: None,
             fx_collapsed: Vec::new(),
             show_only: None,
             floating: None,
+            accounted_view: None,
+            _accounted_metadata: None,
+        };
+        poll()?;
+        Ok(state)
+    }
+    pub(crate) fn validate_retained_surfaces(&self) -> std::result::Result<(), String> {
+        self.validate_retained_surfaces_with(&photocraft_raster::Interrupt::NONE)
+    }
+    fn validate_retained_surfaces_with(&self, control: &photocraft_raster::Interrupt<'_>) -> std::result::Result<(), String> {
+        control.check().map_err(|error| error.to_string())?;
+        let key = self.doc.downgrade();
+        let cached = self.surface_validation.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if cached.ptr_eq(&key) {
+            return Ok(());
         }
+        drop(cached);
+        retained_surface_validation::validate_document(&self.doc, control).map_err(|error| format!("invalid retained raster: {error}"))?;
+        *self.surface_validation.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = key;
+        Ok(())
     }
     /// The selected layers in bottom-to-top document order, always including the active layer.
     /// Robust against stale state: ids no longer in the document are skipped, and if the active
     /// layer was changed without updating the set, the selection is just the active layer.
-    pub fn selected_layers(&self) -> Vec<LayerId> {
-        let Some(active) = self.active_layer else { return Vec::new() };
+    pub fn selection_ids(&self) -> &[LayerId] {
+        self.accounted_view.as_ref().map_or(&self.selected_layers, accounted_view::AccountedView::selected)
+    }
+    /// A frame/job may share the charged selection owner alongside its model
+    /// snapshot. Its borrowed IDs never detach from their physical allocation.
+    pub fn accounted_selection(&self) -> Option<&accounted_view::AccountedView> {
+        self.accounted_view.as_ref()
+    }
+    pub fn selected_layers(&self) -> Result<Vec<LayerId>> {
+        self.doc.validate_resident()?;
+        let Some(active) = self.active_layer else { return Ok(Vec::new()) };
         let set: &[LayerId] = if self.selected_layers.contains(&active) { &self.selected_layers } else { std::slice::from_ref(&active) };
-        self.doc.walk().into_iter().map(|(_, _, l)| l.id).filter(|id| set.contains(id)).collect()
+        Ok(self.doc.walk().into_iter().map(|(_, _, l)| l.id).filter(|id| set.contains(id)).collect())
     }
     pub fn is_layer_selected(&self, id: LayerId) -> bool {
-        self.active_layer == Some(id) || (self.active_layer.is_some_and(|a| self.selected_layers.contains(&a)) && self.selected_layers.contains(&id))
+        self.active_layer == Some(id) || (self.active_layer.is_some_and(|a| self.selection_ids().contains(&a)) && self.selection_ids().contains(&id))
     }
     pub fn is_dirty(&self) -> bool {
         self.revision != self.saved_revision
     }
     /// The targeted layers, as history stores them with each state.
-    fn layer_target(&self) -> LayerTarget {
-        LayerTarget { active: self.active_layer, selected: self.selected_layers.clone() }
+    fn layer_target(&self) -> Result<LayerTarget> {
+        self.doc.validate_resident()?;
+        Ok(LayerTarget { active: self.active_layer, selected: self.selected_layers.clone() })
     }
 }
 
@@ -277,7 +465,10 @@ impl Default for ToolState {
 
 #[derive(Default)]
 pub struct Session {
+    /// Explicit platform capability; only Save for Web may invoke it.
+    web_export_delivery: Option<web_export_delivery::Delivery>,
     docs: Vec<DocState>,
+    accounted_slots: Option<(photocraft_raster::backing::quota::BackingQuota, photocraft_raster::backing::quota::QuotaLease)>,
     active: Option<usize>,
     pub tools: ToolState,
     /// Log of executed commands (for action recording and debugging).
@@ -327,6 +518,8 @@ pub struct Session {
     pub authorize: Option<fn(&str, &serde_json::Value) -> Result<()>>,
     /// Background jobs (see [`jobs`]).
     jobs: jobs::Jobs,
+    // The public journal Vec is destroyed before its retained allocation lease.
+    accounted_journal: Option<photocraft_raster::backing::quota::QuotaLease>,
 }
 
 /// Move item `i` of `v` to position `to`, clamped to the end. Returns where it went; `None` when
@@ -342,8 +535,24 @@ pub fn move_item<T>(v: &mut Vec<T>, i: usize, to: usize) -> Option<usize> {
 }
 
 impl Session {
+    pub(crate) fn publish_accounted_journal(&mut self, journal: Vec<(String, Value)>, lease: photocraft_raster::backing::quota::QuotaLease) {
+        // Drop the previous allocation while its old charge is still retained.
+        self.journal = journal;
+        self.accounted_journal = Some(lease);
+    }
+
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Install explicit byte-delivery authority for Save for Web only.
+    /// Absent by default; does not grant other filesystem commands a writer.
+    pub fn set_web_export_delivery(&mut self, callback: Option<web_export_delivery::Deliver>) {
+        self.web_export_delivery = callback.map(web_export_delivery::Delivery::new);
+    }
+
+    pub fn has_web_export_delivery(&self) -> bool {
+        self.web_export_delivery.is_some()
     }
 
     pub fn documents(&self) -> &[DocState] {
@@ -379,18 +588,32 @@ impl Session {
     /// Add a document (from File → New, an import, etc.) and make it active.
     /// Preserve its identity unless another open document already owns it.
     /// Identity-dependent callers must read the admitted document at the returned index.
-    pub fn add_document(&mut self, mut doc: Document, path: Option<String>) -> usize {
+    pub fn add_document(&mut self, doc: Document, path: Option<String>) -> Result<usize> {
+        self.add_document_with_interrupt(doc, path, &photocraft_raster::Interrupt::NONE)
+    }
+
+    /// Prepare the incoming editing state privately, then publish it after the
+    /// final cancellation check. Failure leaves the existing tabs and focus intact.
+    pub fn add_document_with_interrupt(&mut self, mut doc: Document, path: Option<String>, control: &photocraft_raster::Interrupt<'_>) -> Result<usize> {
+        control.check().map_err(|_| EngineError::Cancelled)?;
         // Persisted IDs can overlap the allocator, so check every replacement too.
-        while self.docs.iter().any(|st| st.doc.id == doc.id) {
+        let mut attempts = 0usize;
+        loop {
+            let mut collision = false;
+            for state in &self.docs {
+                control.check().map_err(|_| EngineError::Cancelled)?;
+                if state.doc.id == doc.id { collision = true; break; }
+            }
+            if !collision { break; }
+            attempts = attempts.checked_add(1).filter(|count| *count <= self.docs.len().saturating_add(1))
+                .ok_or_else(|| EngineError::Other("document identity allocation exhausted".into()))?;
             doc.id = photocraft_doc::DocId::fresh();
         }
-        let mut st = DocState::new(doc, path);
+        let mut st = DocState::new_with_interrupt(doc, path, control)?;
         st.history.max_states = self.prefs.get().performance.history_states.max(1) as usize;
         st.history.max_bytes = self.prefs.get().performance.history_budget_bytes();
-        self.docs.push(st);
-        let i = self.docs.len() - 1;
-        self.active = Some(i);
-        i
+        let read_control = photocraft_raster::backing::ReadControl { interrupt: control, work: &|_| Ok(()) };
+        self.publish_document_state(st, &read_control)
     }
 
     pub fn close(&mut self, index: usize) -> Option<DocState> {
@@ -402,6 +625,10 @@ impl Session {
             self.cancel_jobs_on(id);
         }
         let d = self.docs.remove(index);
+        if self.docs.is_empty() {
+            drop(std::mem::take(&mut self.docs));
+            self.accounted_slots = None;
+        }
         self.active = if self.docs.is_empty() {
             None
         } else {
@@ -450,44 +677,149 @@ impl Session {
     /// [`Self::disabled_reason`] for a call with `params`.
     pub fn disabled_reason_with(&self, id: &str, params: &Value) -> Option<String> {
         let Some(s) = commands::find(id) else { return Some(format!("unknown command `{id}`")) };
+        if self.active().is_some_and(|state| state.doc.accounted().is_some()) && accounted_commands::supports(id) {
+            return match accounted_commands::disabled_reason(self, id, params) {
+                Ok(reason) => reason.map(str::to_string).or_else(|| self.job_conflict(id, s.journal)),
+                Err(error) => Some(error.to_string()),
+            };
+        }
+        if let Some(state) = self.active()
+            && let Err(error) = state.validate_retained_surfaces()
+        {
+            return Some(error);
+        }
         self.precondition(s, &channel_cmds::inject_target(self, id, params.clone())).err().or_else(|| self.job_conflict(id, s.journal))
     }
 
     /// The command's own precondition for a call with `params` (their target filled in).
     fn precondition(&self, spec: &commands::CommandSpec, params: &Value) -> std::result::Result<(), String> {
+        if self.active().is_some_and(|state| state.doc.accounted().is_some()) {
+            return Err("this command has not yet been qualified for an accounted native document".into());
+        }
         channel_cmds::mask_target_enabled(self, spec.id, params).unwrap_or_else(|| (spec.enabled)(self))
     }
 
     /// Apply an undoable edit to the active document.
     pub fn edit<R>(&mut self, label: &str, f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>) -> Result<R> {
+        self.edit_with_interrupt(label, &photocraft_raster::Interrupt::NONE, f)
+    }
+
+    /// Stage an undoable edit with cooperative validation and a cancellation
+    /// fence immediately before document installation and history recording.
+    /// The closure must pass the same control through its own expensive work.
+    pub fn edit_with_interrupt<R>(
+        &mut self,
+        label: &str,
+        control: &photocraft_raster::Interrupt<'_>,
+        f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>,
+    ) -> Result<R> {
+        let index = self.active.ok_or(EngineError::NoDocument)?;
+        self.edit_index_with_interrupt(index, label, control, None, f)
+    }
+
+    /// Commit to a caller-fenced resident document without changing tab focus.
+    /// The caller must fence identity/revision and destination jobs before entry.
+    pub(crate) fn edit_document_with_interrupt<R>(
+        &mut self,
+        index: usize,
+        label: &str,
+        control: &photocraft_raster::Interrupt<'_>,
+        f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>,
+    ) -> Result<R> {
+        control.check().map_err(|_| EngineError::Cancelled)?;
+        let target = self.docs.get(index).ok_or(EngineError::NoDocument)?;
+        if target.floating.is_some() || target.coalesce.is_some()
+            || target.doc.xcf_state.as_ref().is_some_and(|state| state.floating.is_some())
+            || self.coalesce_request.is_some() || self.color_restrict.is_some()
+        {
+            return Err(EngineError::Other("finish transient edits before editing this document".into()));
+        }
+        self.edit_index_with_interrupt(index, label, control, None, f)
+    }
+
+    /// Commit a prepared selection and its history target with the document.
+    /// No fallible reselection step runs after publication.
+    pub(crate) fn edit_with_layer_target_with_interrupt<R>(
+        &mut self,
+        label: &str,
+        control: &photocraft_raster::Interrupt<'_>,
+        target: LayerTarget,
+        anchor: Option<LayerId>,
+        f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>,
+    ) -> Result<R> {
+        let index = self.active.ok_or(EngineError::NoDocument)?;
+        if self.coalesce_request.is_some() || self.color_restrict.is_some() {
+            return Err(EngineError::Other("finish transient edits before replacing layer selection".into()));
+        }
+        self.edit_index_with_interrupt(index, label, control, Some((target, anchor)), f)
+    }
+
+    fn edit_index_with_interrupt<R>(
+        &mut self,
+        index: usize,
+        label: &str,
+        control: &photocraft_raster::Interrupt<'_>,
+        target: Option<(LayerTarget, Option<LayerId>)>,
+        f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>,
+    ) -> Result<R> {
+        control.check().map_err(|_| EngineError::Cancelled)?;
         let restrict = self.color_restrict;
-        let st = self.active_mut().ok_or(EngineError::NoDocument)?;
+        let st = self.docs.get_mut(index).ok_or(EngineError::NoDocument)?;
+        st.validate_retained_surfaces_with(control).map_err(|error| if control.cancelled() { EngineError::Cancelled } else { EngineError::Other(error) })?;
+        st.doc.validate_resident()?;
+        let revision = st.revision.checked_add(1).ok_or_else(|| EngineError::Other("document revision exhausted".into()))?;
         let before = st.doc.clone();
         // Selecting layers is not a step, so the state this edit leaves behind targets what was
         // selected just before it (#1356): undoing a stroke keeps the painted layer active.
-        let prior = st.layer_target();
+        let prior = st.layer_target()?;
         let mut doc = (*before).clone();
         let mut active = st.active_layer;
         let r = f(&mut doc, &mut active)?;
-        if let (Some(k), Some(id)) = (restrict, active) {
-            channel_cmds::restrict_to_color(&before, &mut doc, id, k);
-        }
-        st.doc = Arc::new(doc);
-        st.active_layer = active;
-        fix_selection(st);
-        channel_cmds::fix_view(st);
+        let (mut selected, mut anchor) = match target {
+            Some((target, anchor)) => {
+                if target.selected.len() > 10_000 {
+                    return Err(EngineError::Other("prepared layer selection exceeds limit".into()));
+                }
+                let mut seen = std::collections::HashSet::new();
+                seen.try_reserve(target.selected.len()).map_err(|_| EngineError::Other("prepared layer selection allocation".into()))?;
+                for id in &target.selected {
+                    control.check().map_err(|_| EngineError::Cancelled)?;
+                    if id.0 == 0 || !seen.insert(*id) || doc.layer(*id).is_none() {
+                        return Err(EngineError::Other("invalid prepared layer selection".into()));
+                    }
+                }
+                if target.active.is_some_and(|id| !seen.contains(&id)) || anchor.is_some_and(|id| doc.layer(id).is_none()) {
+                    return Err(EngineError::Other("invalid prepared active layer or anchor".into()));
+                }
+                active = target.active;
+                (target.selected, anchor)
+            }
+            None => (st.selected_layers.clone(), st.layer_anchor),
+        };
+        edit_validation::validate(&before, &mut doc, active, restrict, control)?;
+        let snapshot = DocumentSnapshot::from_resident(Arc::new(doc))?;
+        fix_selection_parts(&snapshot, active, &mut selected, &mut anchor);
+        let layers = LayerTarget { active, selected: selected.clone() };
         let key = self.coalesce_request.clone();
-        let st = self.active_mut().ok_or(EngineError::NoDocument)?;
-        let layers = st.layer_target();
-        if key.is_none() || st.coalesce != key || !st.history.can_undo() {
-            st.history.set_current_layers(prior);
-            st.history.record(label, before, layers);
-            st.history.trim(&st.doc);
+        let st = self.docs.get_mut(index).ok_or(EngineError::NoDocument)?;
+        let mut history = st.history.clone();
+        let history_control = photocraft_raster::backing::ReadControl { interrupt: control, work: &|_| Ok(()) };
+        if key.is_none() || st.coalesce != key || !history.can_undo() {
+            history.set_current_layers(prior, &history_control)?;
+            history.record(label, before, layers, &history_control)?;
+            history.trim(&snapshot, &history_control)?;
         } else {
-            st.history.set_current_layers(layers);
+            history.set_current_layers(layers, &history_control)?;
         }
+        control.check().map_err(|_| EngineError::Cancelled)?;
+        st.doc = snapshot;
+        st.history = history;
+        st.active_layer = active;
+        st.selected_layers = selected;
+        st.layer_anchor = anchor;
+        channel_cmds::fix_view(st);
         st.coalesce = key;
-        st.revision += 1;
+        st.revision = revision;
         st.last_damage = None;
         Ok(r)
     }
@@ -498,12 +830,18 @@ impl Session {
         if st.doc.layer(id).is_none() {
             return Err(EngineError::NoLayer(id));
         }
+        let revision = st.revision.checked_add(1).ok_or_else(|| EngineError::Other("document revision exhausted".into()))?;
+        if let (Some(owner), Some(view)) = (st.doc.accounted(), &st.accounted_view) {
+            let selection = view.try_replace(owner, Some(id), &[id], Some(id), &read_control_none())?;
+            st.accounted_view = Some(selection);
+        } else {
+            st.selected_layers = vec![id];
+        }
         st.active_layer = Some(id);
-        st.selected_layers = vec![id];
         st.layer_anchor = Some(id);
         // Selecting a layer is not an edit: keep a clean document clean.
         let clean = st.saved_revision == st.revision;
-        st.revision += 1;
+        st.revision = revision;
         if clean {
             st.saved_revision = st.revision;
         }
@@ -512,81 +850,95 @@ impl Session {
     }
 
     pub fn undo(&mut self) -> bool {
-        // A background job is computing from the current state: it must not move under it.
-        if self.active_job().is_some() {
-            return false;
-        }
-        let Some(st) = self.active_mut() else { return false };
-        st.coalesce = None;
-        match st.history.undo(st.doc.clone()) {
-            Some((d, layers)) => {
-                // Pixels this step can have touched, so the canvas recomposites only that
-                // (it recomposited everything before).
-                let damage = layer_multi_cmds::step_damage(&d, &st.doc);
-                st.doc = d;
-                restore_target(st, layers);
-                st.revision += 1;
-                st.last_damage = damage;
-                true
-            }
-            None => false,
-        }
+        self.undo_with_control(&read_control_none()).unwrap_or(false)
     }
 
     pub fn redo(&mut self) -> bool {
+        self.redo_with_control(&read_control_none()).unwrap_or(false)
+    }
+
+    pub fn undo_with_control(&mut self, control: &photocraft_raster::backing::ReadControl<'_>) -> Result<bool> {
+        self.travel_history(false, control)
+    }
+    pub fn redo_with_control(&mut self, control: &photocraft_raster::backing::ReadControl<'_>) -> Result<bool> {
+        self.travel_history(true, control)
+    }
+    fn travel_history(&mut self, redo: bool, control: &photocraft_raster::backing::ReadControl<'_>) -> Result<bool> {
+        control.check(1)?;
         if self.active_job().is_some() {
-            return false;
+            return Err(EngineError::Other("the document has an active background job".into()));
         }
-        let Some(st) = self.active_mut() else { return false };
+        let Some(st) = self.active_mut() else { return Ok(false) };
+        let mut history = st.history.clone();
+        let change = if redo { history.redo(&st.doc, control)? } else { history.undo(&st.doc, control)? };
+        let Some(change) = change else {
+            st.coalesce = None;
+            return Ok(false);
+        };
+        let (snapshot, target) = change.into_parts();
+        let revision = st.revision.checked_add(1).ok_or(photocraft_raster::backing::BackingError::Length)?;
+        if let Some(owner) = snapshot.accounted() {
+            let values = target.values();
+            let view = accounted_view::AccountedView::new(owner, values.active, &values.selected, values.active, control)?;
+            control.check(1)?;
+            st.active_layer = values.active;
+            st.layer_anchor = values.active;
+            st.accounted_view = Some(view);
+            st.doc = snapshot;
+            st.history = history;
+            st.revision = revision;
+            st.last_damage = None;
+            st.coalesce = None;
+            return Ok(true);
+        }
+        let (mut values, lease) = target.into_parts();
+        if lease.is_some() {
+            return Err(photocraft_raster::backing::BackingError::Integrity.into());
+        }
+        if values.active.is_none_or(|id| snapshot.layer(id).is_none()) {
+            values.active = snapshot.top_layer();
+        }
+        let mut anchor = st.layer_anchor;
+        fix_selection_parts(&snapshot, values.active, &mut values.selected, &mut anchor);
+        let damage = if redo { layer_multi_cmds::step_damage(&st.doc, &snapshot) } else { layer_multi_cmds::step_damage(&snapshot, &st.doc) };
+        control.check(1)?;
+        st.doc = snapshot;
+        st.history = history;
+        st.active_layer = values.active;
+        st.selected_layers = values.selected;
+        st.layer_anchor = anchor;
+        channel_cmds::fix_view(st);
         st.coalesce = None;
-        match st.history.redo(st.doc.clone()) {
-            Some((d, layers)) => {
-                let damage = layer_multi_cmds::step_damage(&st.doc, &d);
-                st.doc = d;
-                restore_target(st, layers);
-                st.revision += 1;
-                st.last_damage = damage;
-                true
-            }
-            None => false,
-        }
+        st.revision = revision;
+        st.last_damage = damage;
+        Ok(true)
     }
-}
-
-/// Undo / redo: target the layers the restored state targeted, as far as they still exist.
-fn restore_target(st: &mut DocState, layers: LayerTarget) {
-    if layers.active.is_some_and(|id| st.doc.layer(id).is_some()) {
-        st.active_layer = layers.active;
-        st.selected_layers = layers.selected;
-    }
-    fix_active(st);
-}
-
-fn fix_active(st: &mut DocState) {
-    if st.active_layer.is_none_or(|id| st.doc.layer(id).is_none()) {
-        st.active_layer = st.doc.top_layer();
-    }
-    fix_selection(st);
-    channel_cmds::fix_view(st);
 }
 
 /// Keep the layer selection valid after the document or the active layer changed: drop deleted
 /// layers, and collapse to the active layer when a command made a non-member active.
 pub(crate) fn fix_selection(st: &mut DocState) {
-    let Some(active) = st.active_layer else {
-        st.selected_layers.clear();
+    if st.accounted_view.is_some() {
+        return;
+    }
+    fix_selection_parts(&st.doc, st.active_layer, &mut st.selected_layers, &mut st.layer_anchor);
+}
+
+fn fix_selection_parts(doc: &Document, active: Option<LayerId>, selected: &mut Vec<LayerId>, anchor: &mut Option<LayerId>) {
+    let Some(active) = active else {
+        selected.clear();
         return;
     };
-    if !st.selected_layers.contains(&active) {
-        st.selected_layers = vec![active];
+    if !selected.contains(&active) {
+        *selected = vec![active];
     } else {
-        let live: std::collections::HashSet<LayerId> = st.doc.walk().into_iter().map(|(_, _, l)| l.id).collect();
-        st.selected_layers.retain(|id| live.contains(id));
+        let live: std::collections::HashSet<LayerId> = doc.walk().into_iter().map(|(_, _, l)| l.id).collect();
+        selected.retain(|id| live.contains(id));
         let mut seen = std::collections::HashSet::new();
-        st.selected_layers.retain(|id| seen.insert(*id));
+        selected.retain(|id| seen.insert(*id));
     }
-    if st.layer_anchor.is_some_and(|a| !st.selected_layers.contains(&a)) {
-        st.layer_anchor = Some(active);
+    if anchor.is_some_and(|a| !selected.contains(&a)) {
+        *anchor = Some(active);
     }
 }
 

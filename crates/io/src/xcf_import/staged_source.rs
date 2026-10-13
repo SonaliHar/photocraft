@@ -1,0 +1,521 @@
+//! Additive staged plain-raster source path; never a default loader retry.
+//! Rc/map publication uses bounded prepaid standard allocations, not a complete
+//! fallible allocator or process RSS guarantee. No consumed storage DTO escapes.
+use super::*;
+use photocraft_raster::staged::{StagedSurfaceBuilder, StagingBudget};
+use photocraft_xcf::{BudgetKind, PlaneDescriptor, PlaneRole, PlaneSink, PlaneSinkControl, Reservation};
+use std::{cell::RefCell, rc::Rc};
+
+type Token<'b, 'a> = Rc<LeaseToken<'b, 'a>>;
+struct LeaseToken<'b, 'a> {
+    _surface: Reservation<'b, 'a>,
+    _metadata: Reservation<'b, 'a>,
+    budget: &'b photocraft_xcf::Budget<'a>,
+}
+enum Storage {
+    Ready(Surface),
+    Transferred,
+}
+struct StagedPlane<'b, 'a> {
+    descriptor: PlaneDescriptor,
+    // Actual raster must die before its last reservation token.
+    storage: Storage,
+    _token: Token<'b, 'a>,
+}
+/// Parser widens finite Half exactly; all other native widths are unchanged.
+fn decoded_sample(source: Sample) -> Sample {
+    if source == Sample::F16 { Sample::F32 } else { source }
+}
+fn pixel_bytes(d: &PlaneDescriptor) -> Result<usize, XcfError> {
+    d.channels.checked_mul(d.sample.source_bytes()).filter(|n| (1..=32).contains(n)).ok_or_else(|| stage_error(ErrorKind::Structure, "staged pixel width"))
+}
+fn stage_error(kind: ErrorKind, message: impl Into<String>) -> XcfError {
+    XcfError { kind, offset: 0, item: String::new(), message: message.into() }
+}
+fn raster_error(error: photocraft_raster::RasterInputError) -> XcfError {
+    stage_error(
+        match error {
+            photocraft_raster::RasterInputError::Cancelled => ErrorKind::Cancelled,
+            photocraft_raster::RasterInputError::LimitExceeded | photocraft_raster::RasterInputError::AllocationFailed => ErrorKind::Limit,
+            photocraft_raster::RasterInputError::UnsupportedConversion => ErrorKind::Unsupported,
+            _ => ErrorKind::Structure,
+        },
+        format!("staged XCF raster: {error}"),
+    )
+}
+struct BuilderBudget<'b, 'a> {
+    budget: &'b photocraft_xcf::Budget<'a>,
+    failure: Option<XcfError>,
+}
+impl<'b, 'a> StagingBudget for BuilderBudget<'b, 'a> {
+    type Lease = Reservation<'b, 'a>;
+    fn reserve(&mut self, bytes: u64) -> Result<Self::Lease, photocraft_raster::RasterInputError> {
+        self.budget.reserve(BudgetKind::Resident, bytes, "staged XCF surface").map_err(|e| {
+            let error = if e.kind == ErrorKind::Cancelled {
+                photocraft_raster::RasterInputError::Cancelled
+            } else {
+                photocraft_raster::RasterInputError::LimitExceeded
+            };
+            self.failure = Some(e);
+            error
+        })
+    }
+    fn work(&mut self, units: u64) -> Result<(), photocraft_raster::RasterInputError> {
+        self.budget.consume_work(units, "staged XCF raster initialization/copy").map_err(|e| {
+            let error = if e.kind == ErrorKind::Cancelled {
+                photocraft_raster::RasterInputError::Cancelled
+            } else {
+                photocraft_raster::RasterInputError::LimitExceeded
+            };
+            self.failure = Some(e);
+            error
+        })
+    }
+}
+struct Sink<'b, 'a, 'c, 'i> {
+    // All completed storage returned to parser drops before this final registry.
+    active: Option<(PlaneDescriptor, StagedSurfaceBuilder<Reservation<'b, 'a>>)>,
+    tokens: Vec<Token<'b, 'a>>,
+    registry_lease: Option<Reservation<'b, 'a>>,
+    budget: &'b photocraft_xcf::Budget<'a>,
+    interrupt: &'c Interrupt<'i>,
+}
+impl<'b, 'a> PlaneSink for Sink<'b, 'a, '_, '_> {
+    type Plane = StagedPlane<'b, 'a>;
+    fn begin(&mut self, d: &PlaneDescriptor, control: &mut PlaneSinkControl<'_, '_, '_>) -> Result<(), XcfError> {
+        control.poll()?;
+        if self.active.is_some()
+            || d.role != PlaneRole::Raster
+            || d.sample != decoded_sample(d.source_sample)
+            || !d.alpha
+            || !matches!(d.model, Model::Rgb | Model::Gray)
+            || d.channels != if d.model == Model::Gray { 2 } else { 4 }
+        {
+            return Err(stage_error(ErrorKind::Unsupported, "staged endpoint requires alpha-bearing RGB/Gray native plain raster"));
+        }
+        let width = i32::try_from(d.width).map_err(|_| stage_error(ErrorKind::Limit, "staged width"))?;
+        let height = i32::try_from(d.height).map_err(|_| stage_error(ErrorKind::Limit, "staged height"))?;
+        let right = d.offset.0.checked_add(width).ok_or_else(|| stage_error(ErrorKind::Limit, "staged horizontal extent"))?;
+        let bottom = d.offset.1.checked_add(height).ok_or_else(|| stage_error(ErrorKind::Limit, "staged vertical extent"))?;
+        if width <= 0 || height <= 0 || [d.offset.0, d.offset.1, right, bottom].iter().any(|n| !(-(1 << 29)..=(1 << 29)).contains(n)) {
+            return Err(stage_error(ErrorKind::Limit, "staged extent"));
+        }
+        let format = PixelFormat::new(if d.model == Model::Gray { ColorMode::Grayscale } else { ColorMode::Rgb }, depth(d.sample), true);
+        let mut adapter = BuilderBudget { budget: self.budget, failure: None };
+        let default = [0u8; 32];
+        let builder = StagedSurfaceBuilder::new(
+            format,
+            default.get(..pixel_bytes(d)?).ok_or_else(|| stage_error(ErrorKind::Structure, "staged default descriptor"))?,
+            Rect::new(d.offset.0, d.offset.1, right, bottom),
+            &mut adapter,
+            self.interrupt,
+        )
+        .map_err(|e| adapter.failure.take().unwrap_or_else(|| raster_error(e)))?;
+        self.active = Some((d.clone(), builder));
+        Ok(())
+    }
+    fn tile(&mut self, x: u32, y: u32, width: u32, height: u32, bytes: &[u8], control: &mut PlaneSinkControl<'_, '_, '_>) -> Result<(), XcfError> {
+        control.poll()?;
+        let (descriptor, builder) = self.active.as_mut().ok_or_else(|| stage_error(ErrorKind::Structure, "staged tile without plane"))?;
+        let x = descriptor
+            .offset
+            .0
+            .checked_add(i32::try_from(x).map_err(|_| stage_error(ErrorKind::Limit, "staged cell x"))?)
+            .ok_or_else(|| stage_error(ErrorKind::Limit, "staged cell x"))?;
+        let y = descriptor
+            .offset
+            .1
+            .checked_add(i32::try_from(y).map_err(|_| stage_error(ErrorKind::Limit, "staged cell y"))?)
+            .ok_or_else(|| stage_error(ErrorKind::Limit, "staged cell y"))?;
+        let width = i32::try_from(width).map_err(|_| stage_error(ErrorKind::Limit, "staged cell width"))?;
+        let height = i32::try_from(height).map_err(|_| stage_error(ErrorKind::Limit, "staged cell height"))?;
+        let mut adapter = BuilderBudget { budget: self.budget, failure: None };
+        builder
+            .push_region(
+                Rect::new(
+                    x,
+                    y,
+                    x.checked_add(width).ok_or_else(|| stage_error(ErrorKind::Limit, "staged cell right"))?,
+                    y.checked_add(height).ok_or_else(|| stage_error(ErrorKind::Limit, "staged cell bottom"))?,
+                ),
+                bytes,
+                &mut adapter,
+                self.interrupt,
+            )
+            .map_err(|e| adapter.failure.take().unwrap_or_else(|| raster_error(e)))
+    }
+    fn finish(&mut self, control: &mut PlaneSinkControl<'_, '_, '_>) -> Result<Self::Plane, XcfError> {
+        control.poll()?;
+        let (descriptor, builder) = self.active.take().ok_or_else(|| stage_error(ErrorKind::Structure, "staged finish without plane"))?;
+        let mut adapter = BuilderBudget { budget: self.budget, failure: None };
+        let staged = builder.finalize(&mut adapter, self.interrupt).map_err(|e| adapter.failure.take().unwrap_or_else(|| raster_error(e)))?;
+        // Prepay bounded Rc bookkeeping before allocation. Standard Rc has no
+        // stable fallible constructor, matching the documented raster Arc limit.
+        let metadata = self.budget.reserve(BudgetKind::Resident, 128, "staged reservation token")?;
+        let count = self.tokens.len().checked_add(1).ok_or_else(|| stage_error(ErrorKind::Limit, "staged lease registry count"))?;
+        let requested = count
+            .checked_mul(std::mem::size_of::<Token<'b, 'a>>())
+            .and_then(|n| n.checked_mul(2))
+            .ok_or_else(|| stage_error(ErrorKind::Limit, "staged lease registry capacity"))?;
+        if let Some(lease) = &mut self.registry_lease {
+            lease.resize(requested as u64, "staged lease registry allocation")?;
+        } else {
+            self.registry_lease = Some(self.budget.reserve(BudgetKind::Resident, requested as u64, "staged lease registry allocation")?);
+        }
+        self.tokens.try_reserve_exact(1).map_err(|_| stage_error(ErrorKind::Limit, "staged lease registry allocation"))?;
+        let actual = self
+            .tokens
+            .capacity()
+            .checked_mul(std::mem::size_of::<Token<'b, 'a>>())
+            .ok_or_else(|| stage_error(ErrorKind::Limit, "staged lease registry capacity"))?;
+        if actual > requested {
+            return Err(stage_error(ErrorKind::Limit, "staged lease registry allocator capacity"));
+        }
+        if let Some(lease) = &mut self.registry_lease {
+            lease.resize(actual as u64, "staged lease registry retained capacity")?;
+        }
+        let (surface, lease) = staged.into_parts();
+        let token = Rc::new(LeaseToken { _surface: lease, _metadata: metadata, budget: self.budget });
+        self.tokens.push(Rc::clone(&token));
+        Ok(StagedPlane { descriptor, storage: Storage::Ready(surface), _token: token })
+    }
+    fn abort(&mut self) {
+        self.active.take();
+    }
+}
+impl StagedPlane<'_, '_> {
+    fn descriptor(&self) -> plane::ParsedPlaneDescriptor {
+        plane::ParsedPlaneDescriptor {
+            width: self.descriptor.width,
+            height: self.descriptor.height,
+            channels: self.descriptor.channels,
+            sample: self.descriptor.sample,
+        }
+    }
+    fn visit_blocks<const BYTES: usize>(&self, ctl: &Interrupt<'_>, visit: &mut dyn FnMut(&[u8]) -> Result<(), IoError>) -> Result<(), IoError> {
+        let Storage::Ready(surface) = &self.storage else { return Err(IoError::Unsupported("native access after staged Surface transfer".into())) };
+        let d = &self.descriptor;
+        if d.sample != decoded_sample(d.source_sample) || !(1..=4).contains(&d.channels) {
+            return Err(IoError::Unsupported("staged native descriptor".into()));
+        }
+        let bpp = pixel_bytes(d).map_err(accounting_error)?;
+        let _scratch = self._token.budget.reserve(BudgetKind::Resident, BYTES as u64, "staged exact visitor block").map_err(accounting_error)?;
+        let mut block = [0u8; BYTES];
+        let mut used = 0usize;
+        for y in 0..d.height {
+            let mut x = 0u32;
+            while x < d.width {
+                if used == 0 {
+                    ctl.check().map_err(|_| IoError::Cancelled)?;
+                    let completed = u64::from(y) * u64::from(d.width) + u64::from(x);
+                    let remaining = u64::from(d.width) * u64::from(d.height) - completed;
+                    self._token.budget.consume_work(remaining.min(64) * bpp as u64, "staged exact native visitor").map_err(accounting_error)?;
+                }
+                // Fill a single native block across row boundaries without
+                // changing callback order or its prepaid 64-pixel work charge.
+                let count = (d.width - x).min(u32::try_from(64 - used).map_err(|_| IoError::Unsupported("staged native count".into()))?);
+                let next = used.checked_add(count as usize).ok_or_else(|| IoError::Unsupported("staged native count".into()))?;
+                let at = used.checked_mul(bpp).ok_or_else(|| IoError::Unsupported("staged native block".into()))?;
+                let end = next.checked_mul(bpp).ok_or_else(|| IoError::Unsupported("staged native block".into()))?;
+                let output = block.get_mut(at..end).ok_or_else(|| IoError::Unsupported("staged native block".into()))?;
+                let left = d
+                    .offset
+                    .0
+                    .checked_add(i32::try_from(x).map_err(|_| IoError::Unsupported("staged native x".into()))?)
+                    .ok_or_else(|| IoError::Unsupported("staged native x".into()))?;
+                let top = d
+                    .offset
+                    .1
+                    .checked_add(i32::try_from(y).map_err(|_| IoError::Unsupported("staged native y".into()))?)
+                    .ok_or_else(|| IoError::Unsupported("staged native y".into()))?;
+                let right = left
+                    .checked_add(i32::try_from(count).map_err(|_| IoError::Unsupported("staged native width".into()))?)
+                    .ok_or_else(|| IoError::Unsupported("staged native right".into()))?;
+                let bottom = top.checked_add(1).ok_or_else(|| IoError::Unsupported("staged native bottom".into()))?;
+                surface.try_read_interleaved_into_with(Rect::new(left, top, right, bottom), output, ctl).map_err(|e| {
+                    if e == photocraft_raster::RasterInputError::Cancelled {
+                        IoError::Cancelled
+                    } else {
+                        IoError::Unsupported(format!("staged native read: {e}"))
+                    }
+                })?;
+                used = next;
+                x = x.checked_add(count).ok_or_else(|| IoError::Unsupported("staged native next x".into()))?;
+                if used == 64 {
+                    visit(
+                        block
+                            .get(..used.checked_mul(bpp).ok_or_else(|| IoError::Unsupported("staged visitor length".into()))?)
+                            .ok_or_else(|| IoError::Unsupported("staged visitor length".into()))?,
+                    )?;
+                    used = 0;
+                }
+            }
+        }
+        if used > 0 {
+            visit(
+                block
+                    .get(..used.checked_mul(bpp).ok_or_else(|| IoError::Unsupported("staged visitor length".into()))?)
+                    .ok_or_else(|| IoError::Unsupported("staged visitor length".into()))?,
+            )?;
+        }
+        Ok(())
+    }
+}
+impl ExactParsedPlane for StagedPlane<'_, '_> {
+    fn descriptor(&self) -> plane::ParsedPlaneDescriptor {
+        StagedPlane::descriptor(self)
+    }
+    fn visit_native(&self, ctl: &Interrupt<'_>, visit: &mut dyn FnMut(&[u8]) -> Result<(), IoError>) -> Result<(), IoError> {
+        match self.descriptor.sample {
+            Sample::U8 => self.visit_blocks::<256>(ctl, visit),
+            Sample::U16 => self.visit_blocks::<512>(ctl, visit),
+            Sample::U32 | Sample::F32 => self.visit_blocks::<1024>(ctl, visit),
+            Sample::F64 => self.visit_blocks::<2048>(ctl, visit),
+            Sample::F16 => Err(IoError::Unsupported("staged Half must be widened exactly by the decoder".into())),
+        }
+    }
+}
+impl MappingPlane for StagedPlane<'_, '_> {
+    fn admissions(file: &XcfFile<Self>, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<admission::AdmissionDomains, IoError> {
+        if file.encoding != Encoding::NonlinearProfile
+            || !matches!(file.model, Model::Rgb | Model::Gray)
+            || !file.icc.is_empty()
+            || !file.palette.is_empty()
+            || !file.channels.is_empty()
+            || !file.paths.is_empty()
+            || file.layers.is_empty()
+        {
+            return Err(IoError::Unsupported("staged endpoint only supports implicit nonlinear plain RGB/Gray layers".into()));
+        }
+        for d in &file.layers {
+            ctl.check().map_err(|_| IoError::Cancelled)?;
+            if d.group
+                || d.path.len() > 1
+                || d.model != file.model
+                || !d.alpha
+                || !matches!(d.mode, 0 | 28)
+                || d.mask.is_some()
+                || !d.effects.is_empty()
+                || d.text.is_some()
+                || d.vector.is_some()
+                || d.link.is_some()
+                || d.transform.is_some()
+                || d.floating_attachment.is_some()
+            {
+                return Err(unsupported(d, "staged endpoint unsupported owner family"));
+            }
+            let p = d.plane.as_ref().ok_or_else(|| unsupported(d, "staged owner missing pixels"))?;
+            if p.descriptor.width != d.width
+                || p.descriptor.height != d.height
+                || p.descriptor.offset != d.offset
+                || p.descriptor.model != d.model
+                || p.descriptor.source_sample != file.sample
+                || p.descriptor.sample != decoded_sample(file.sample)
+                || p.descriptor.channels != if d.model == Model::Gray { 2 } else { 4 }
+            {
+                return Err(unsupported(d, "staged owner descriptor mismatch"));
+            }
+            p.visit_native(ctl, &mut |bytes| {
+                if let Some(shared) = shared {
+                    shared.consume_work(bytes.len() as u64, "staged source native validation").map_err(accounting_error)?;
+                }
+                Ok(())
+            })?;
+            validate_drawable_alpha(d, false, false, ctl, 0)?;
+        }
+        Ok(admission::AdmissionDomains::default())
+    }
+    fn late_admissions(_: &XcfFile<Self>) -> admission::LateAdmissionDomains {
+        admission::LateAdmissionDomains::default()
+    }
+    fn eager_original(&self) -> Result<&Plane, IoError> {
+        Err(IoError::Unsupported("staged storage has no eager Plane".into()))
+    }
+    fn into_original(self) -> Result<Plane, IoError> {
+        Err(IoError::Unsupported("staged storage cannot become a source cache".into()))
+    }
+    fn retained_source_bytes(&self) -> usize {
+        0
+    }
+    fn current_owner(
+        mut owner: Drawable<Self>,
+        _: &[[u8; 3]],
+        _: &mut Budget<'_>,
+        ctl: &Interrupt<'_>,
+    ) -> Result<(Drawable<Self>, Layer, Option<IndexedSource>), IoError> {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        let p = owner.plane.as_mut().ok_or_else(|| IoError::Unsupported("staged owner missing pixels".into()))?;
+        let storage = std::mem::replace(&mut p.storage, Storage::Transferred);
+        let Storage::Ready(surface) = storage else { return Err(IoError::Unsupported("staged Surface transferred twice".into())) };
+        let layer = Layer::new(&owner.name, LayerContent::Raster(surface));
+        Ok((owner, layer, None))
+    }
+    fn legacy_point_candidate(owner: &Drawable<Self>, _: bool, _: bool, _: Size) -> Result<bool, IoError> {
+        if !owner.effects.is_empty() {
+            return Err(unsupported(owner, "staged effect evaluation unsupported"));
+        }
+        Ok(false)
+    }
+}
+
+/// Explicit opt-in plain source endpoint. This preserves original native bytes
+/// while constructing current COW tiles directly; other families return errors.
+/// CallerReserved accounting assertions are trusted contracts, not IO authority.
+pub fn import_staged_plain_source_with_budget(
+    name: &str,
+    source: &mut dyn photocraft_xcf::Source,
+    control: &Interrupt<'_>,
+    options: &DecodeOptions<'_>,
+    budget: &photocraft_xcf::Budget<'_>,
+    accounting: photocraft_xcf::PlainSourceAccounting,
+) -> Result<ImportResult, IoError> {
+    control.check().map_err(|_| IoError::Cancelled)?;
+    // Sink registry is declared before decoded/mapped storage so errors destroy
+    // actual Surfaces before their final token/registry refunds.
+    let mut sink = Sink { active: None, tokens: Vec::new(), registry_lease: None, budget, interrupt: control };
+    let strict = DecodeOptions { limits: options.limits.clone(), allow_finite_drawable_alpha: false, cancelled: options.cancelled, progress: options.progress };
+    let photocraft_xcf::BudgetDecodedImport { decoded, reservations } =
+        photocraft_xcf::decode_plain_source_into_sink_with_budget(source, &strict, budget, accounting, &mut sink).map_err(accounting_error)?;
+    let mut file = decoded.file;
+    let encoded = usize::try_from(decoded.encoded_bytes).map_err(|_| IoError::Unsupported("staged source address space".into()))?;
+    file.charged_bytes = file.charged_bytes.checked_sub(encoded).ok_or_else(|| IoError::Unsupported("staged source accounting mismatch".into()))?;
+    let previous = std::cell::Cell::new(file.charged_bytes);
+    let leases = RefCell::new(reservations);
+    let account = |used: usize| {
+        if used > previous.get() {
+            budget.consume_work((used - previous.get()) as u64, "staged mapping metadata").map_err(accounting_error)?;
+        }
+        leases
+            .try_borrow_mut()
+            .map_err(|_| IoError::Unsupported("staged accounting borrowed".into()))?
+            .resize_retained(used as u64, "staged mapping metadata")
+            .map_err(accounting_error)?;
+        previous.set(used);
+        Ok(())
+    };
+    let maximum = options
+        .limits
+        .resident_bytes
+        .min(usize::try_from(budget.limits().get(BudgetKind::Resident)).map_err(|_| IoError::Unsupported("staged resident address space".into()))?);
+    let (mut result, _) = map_accounted(name, file, control, maximum, Some(&account), Some((budget, &leases)))?;
+    provenance::stamp(&mut result, source, decoded.encoded_bytes, control, budget, previous.get(), &account)?;
+    // Ownership leaves transaction ledger only after complete validation/hash.
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::plane::fixture;
+    use super::*;
+    struct Bytes(Vec<u8>);
+    impl photocraft_xcf::Source for Bytes {
+        fn len(&self) -> u64 {
+            self.0.len() as u64
+        }
+        fn read_exact_at(&mut self, offset: u64, out: &mut [u8], _: &photocraft_xcf::Budget<'_>) -> Result<(), XcfError> {
+            let start = offset as usize;
+            out.copy_from_slice(&self.0[start..start + out.len()]);
+            Ok(())
+        }
+    }
+    #[test]
+    fn bulk_visitor_keeps_blocks_work_scratch_and_cancels_inside_short_block() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        for width in [3, 17, 65, 129] {
+            let bytes: Vec<_> = (0..width * 3).flat_map(|i| [i as u8, 19, 97, 0]).collect();
+            let encoded = fixture::image(12, 150, 0, width, 3, &bytes);
+            let eager = photocraft_xcf::decode(&encoded, &DecodeOptions::default()).unwrap();
+            let budget = photocraft_xcf::Budget::new(photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(), None);
+            let mut source = Bytes(encoded);
+            let mut sink = Sink { active: None, tokens: Vec::new(), registry_lease: None, budget: &budget, interrupt: &Interrupt::NONE };
+            let parsed = photocraft_xcf::decode_plain_source_into_sink_with_budget(
+                &mut source,
+                &DecodeOptions::default(),
+                &budget,
+                photocraft_xcf::PlainSourceAccounting::BorrowedMemory,
+                &mut sink,
+            )
+            .unwrap();
+            let p = parsed.decoded.file.layers[0].plane.as_ref().unwrap();
+            let resident = budget.used(BudgetKind::Resident);
+            let before_work = budget.used(BudgetKind::Work);
+            let mut expected = Vec::new();
+            let mut actual = Vec::new();
+            eager.layers[0]
+                .plane
+                .as_ref()
+                .unwrap()
+                .visit_native(&Interrupt::NONE, &mut |b| {
+                    expected.push(b.to_vec());
+                    Ok(())
+                })
+                .unwrap();
+            p.visit_native(&Interrupt::NONE, &mut |b| {
+                assert_eq!(budget.used(BudgetKind::Resident), resident + 256);
+                actual.push(b.to_vec());
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(actual, expected, "same row-major 64-pixel callbacks at width{width}");
+            assert_eq!(budget.used(BudgetKind::Work) - before_work, bytes.len() as u64);
+            assert_eq!(budget.used(BudgetKind::Resident), resident);
+            if width == 17 {
+                let calls = AtomicUsize::new(0);
+                let stop = || calls.fetch_add(1, Ordering::Relaxed) >= 3;
+                let mut callbacks = 0;
+                assert!(matches!(
+                    p.visit_native(&Interrupt::cancel_only(&stop), &mut |_| {
+                        callbacks += 1;
+                        Ok(())
+                    }),
+                    Err(IoError::Cancelled)
+                ));
+                assert_eq!(callbacks, 0, "incomplete canceled block is never delivered");
+                assert_eq!(budget.used(BudgetKind::Resident), resident);
+            }
+            drop(parsed);
+            drop(sink);
+            assert_eq!(budget.used(BudgetKind::Resident), 0);
+        }
+    }
+    #[test]
+    fn actual_surface_move_keeps_token_after_owner_drop_and_late_native_reads_fail() {
+        let budget = photocraft_xcf::Budget::new(photocraft_xcf::ResourceLimits::for_policy(photocraft_xcf::ResourcePolicy::NativeStandard).unwrap(), None);
+        let mut source = Bytes(fixture::image(12, 150, 0, 1, 1, &[11, 31, 97, 0]));
+        let mut sink = Sink { active: None, tokens: Vec::new(), registry_lease: None, budget: &budget, interrupt: &Interrupt::NONE };
+        let mut parsed = photocraft_xcf::decode_plain_source_into_sink_with_budget(
+            &mut source,
+            &DecodeOptions::default(),
+            &budget,
+            photocraft_xcf::PlainSourceAccounting::BorrowedMemory,
+            &mut sink,
+        )
+        .unwrap();
+        let owner = parsed.decoded.file.layers.remove(0);
+        let plane = owner.plane.as_ref().unwrap();
+        let Storage::Ready(before) = &plane.storage else { panic!() };
+        let pointer = Arc::as_ptr(before.tiles().next().unwrap().1);
+        let used = budget.used(BudgetKind::Resident);
+        let mut local = Budget { used: 0, max: usize::MAX, peak: 0, shared: None };
+        let (owner, layer, _) = StagedPlane::current_owner(owner, &[], &mut local, &Interrupt::NONE).unwrap();
+        let LayerContent::Raster(after) = &layer.content else { panic!() };
+        assert_eq!(Arc::as_ptr(after.tiles().next().unwrap().1), pointer, "authoritative tile Arc moved without publication clone");
+        let mut delivered = 0;
+        let error = owner.plane.as_ref().unwrap().visit_native(&Interrupt::NONE, &mut |_| {
+            delivered += 1;
+            Ok(())
+        });
+        assert!(error.is_err());
+        assert_eq!(delivered, 0);
+        assert_eq!(budget.used(BudgetKind::Resident), used);
+        drop(owner);
+        assert_eq!(budget.used(BudgetKind::Resident), used, "owner drop cannot refund a Surface now in Layer");
+        drop(layer);
+        assert_eq!(budget.used(BudgetKind::Resident), used, "endpoint registry retains charge through final hash even after late staging teardown");
+        drop(parsed);
+        assert!(budget.used(BudgetKind::Resident) >= 256 * 256 * 4);
+        drop(sink);
+        assert_eq!(budget.used(BudgetKind::Resident), 0);
+        assert_eq!(budget.used(BudgetKind::Encoded), 0);
+    }
+}

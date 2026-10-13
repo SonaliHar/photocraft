@@ -38,7 +38,7 @@ fn sample_pixels(s: &Session, all_layers: bool) -> Result<(Rect, Vec<[f32; 4]>)>
             surf.read_rgba_into(area, &mut px);
             Ok((area, px))
         }
-        _ => Ok((area, photocraft_compose::render(&d.doc, area).px)),
+        _ => Ok((area, photocraft_compose::render(&d.doc, area)?.px)),
     }
 }
 
@@ -64,7 +64,7 @@ pub(crate) fn sample_rgba8(s: &Session, all_layers: bool) -> Result<(Rect, Vec<[
         (false, Some(surf)) => Ok((area, sel::rgba8_image(surf, area))),
         _ => {
             let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-            Ok((area, photocraft_compose::render(&d.doc, area).px.iter().map(|p| p.map(q)).collect()))
+            Ok((area, photocraft_compose::render(&d.doc, area)?.px.iter().map(|p| p.map(q)).collect()))
         }
     }
 }
@@ -196,7 +196,7 @@ impl ColorRangeSamples {
                 };
                 let px = match pixel {
                     Some(px) => px,
-                    None => photocraft_compose::render(doc, r).px.first().copied().unwrap_or([0.0; 4]),
+                    None => photocraft_compose::render(doc, r)?.px.first().copied().unwrap_or([0.0; 4]),
                 };
                 samples.push(sel::RangeSample { color: [px[0], px[1], px[2]], at: Some(((x - area.x0) as f32, (y - area.y0) as f32)) });
             }
@@ -637,7 +637,7 @@ mod tests {
                 layer.fill_rect(Rect::new(0, 0, 8, 12), &[0.65, 0.3, 0.2, 1.0]);
                 layer.fill_rect(Rect::new(8, 0, 16, 12), &[0.2, 0.3, 0.65, 1.0]);
                 let mut s = Session::new();
-                s.add_document(doc, None);
+                s.add_document(doc, None).unwrap();
                 for p in [
                     json!({"points": [[2, 3]], "fuzziness": 0}),
                     json!({"points": [[2, 3], [10, 3]], "subtractPoints": [[10, 3]], "order": ["+", "+", "-"], "fuzziness": 40}),
@@ -645,7 +645,7 @@ mod tests {
                 ] {
                     let q = ColorRangeSamples::new(&s, &p).unwrap();
                     let doc = s.active().unwrap().doc.clone();
-                    let pixels = photocraft_compose::render(&doc, doc.bounds());
+                    let pixels = photocraft_compose::render(&doc, doc.bounds()).unwrap();
                     let preview = q.coverage(&pixels.px, 24, 1.0, [0.0, 0.0]);
                     s.execute("select.colorRange", p).unwrap();
                     let actual = current_mask(&s.active().unwrap().doc).1;

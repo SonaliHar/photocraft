@@ -20,41 +20,117 @@ pub fn hex(data: &[u8]) -> String {
     }
     msg.extend_from_slice(&bits.to_be_bytes());
     for block in msg.as_chunks::<64>().0 {
-        let mut w = [0u32; 64];
-        for (i, word) in block.as_chunks::<4>().0.iter().enumerate() {
-            w[i] = u32::from_be_bytes(*word);
-        }
-        for i in 16..64 {
-            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
-            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
-        }
-        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = h;
-        for i in 0..64 {
-            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
-            let ch = (e & f) ^ (!e & g);
-            let t1 = hh.wrapping_add(s1).wrapping_add(ch).wrapping_add(K[i]).wrapping_add(w[i]);
-            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
-            let maj = (a & b) ^ (a & c) ^ (b & c);
-            let t2 = s0.wrapping_add(maj);
-            hh = g;
-            g = f;
-            f = e;
-            e = d.wrapping_add(t1);
-            d = c;
-            c = b;
-            b = a;
-            a = t1.wrapping_add(t2);
-        }
-        for (x, v) in h.iter_mut().zip([a, b, c, d, e, f, g, hh]) {
-            *x = x.wrapping_add(v);
-        }
+        compress(&mut h, block);
     }
     h.iter().map(|v| format!("{v:08x}")).collect()
 }
 
+/// Hash a reader without retaining its contents (large corpus/native evidence).
+/// The cap is enforced even if the file grows after metadata inspection.
+pub fn reader_hex(mut reader: impl std::io::Read, max_bytes: u64) -> Result<String, String> {
+    let mut state: [u32; 8] = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+    let mut block = [0u8; 64];
+    let mut used = 0usize;
+    let mut total = 0u64;
+    let mut input = [0u8; 64 * 1024];
+    loop {
+        let n = match reader.read(&mut input) {
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => result.map_err(|e| format!("SHA256 read: {e}"))?,
+        };
+        if n == 0 {
+            break;
+        }
+        total = total.checked_add(n as u64).ok_or("SHA256 length overflow")?;
+        if total > max_bytes {
+            return Err(format!("evidence exceeds {max_bytes} byte limit"));
+        }
+        let mut chunk = input.get(..n).ok_or("invalid SHA256 reader length")?;
+        while !chunk.is_empty() {
+            let take = chunk.len().min(64usize.saturating_sub(used));
+            let end = used.checked_add(take).ok_or("SHA256 block length overflow")?;
+            block.get_mut(used..end).ok_or("invalid SHA256 block position")?.copy_from_slice(chunk.get(..take).ok_or("invalid SHA256 chunk")?);
+            chunk = chunk.get(take..).ok_or("invalid SHA256 remaining chunk")?;
+            used = end;
+            if used == 64 {
+                compress(&mut state, &block);
+                used = 0;
+            }
+        }
+    }
+    let bits = total.checked_mul(8).ok_or("SHA256 bit length overflow")?;
+    *block.get_mut(used).ok_or("invalid SHA256 final position")? = 0x80;
+    used += 1;
+    block.get_mut(used..).ok_or("invalid SHA256 padding")?.fill(0);
+    if used > 56 {
+        compress(&mut state, &block);
+        block.fill(0);
+    }
+    block.get_mut(56..).ok_or("invalid SHA256 length field")?.copy_from_slice(&bits.to_be_bytes());
+    compress(&mut state, &block);
+    Ok(state.iter().map(|v| format!("{v:08x}")).collect())
+}
+
+fn compress(h: &mut [u32; 8], block: &[u8; 64]) {
+    let mut w = [0u32; 64];
+    for (slot, word) in w.iter_mut().zip(block.as_chunks::<4>().0.iter()) {
+        *slot = u32::from_be_bytes(*word);
+    }
+    // All indices are bounded by the constant schedule/round lengths, never input data.
+    for i in 16..64 {
+        let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+        let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+        w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
+    }
+    let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = *h;
+    for (k, word) in K.iter().zip(w.iter()) {
+        let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+        let ch = (e & f) ^ (!e & g);
+        let t1 = hh.wrapping_add(s1).wrapping_add(ch).wrapping_add(*k).wrapping_add(*word);
+        let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+        let t2 = s0.wrapping_add((a & b) ^ (a & c) ^ (b & c));
+        hh = g;
+        g = f;
+        f = e;
+        e = d.wrapping_add(t1);
+        d = c;
+        c = b;
+        b = a;
+        a = t1.wrapping_add(t2);
+    }
+    for (x, value) in h.iter_mut().zip([a, b, c, d, e, f, g, hh]) {
+        *x = x.wrapping_add(value);
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn streaming_vectors_boundaries_and_reader_failures() {
+        use std::io::{self, Read};
+        struct Short<'a>(&'a [u8]);
+        impl Read for Short<'_> {
+            fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+                let n = out.len().min(self.0.len()).min(3);
+                out[..n].copy_from_slice(&self.0[..n]);
+                self.0 = &self.0[n..];
+                Ok(n)
+            }
+        }
+        for length in [0, 1, 55, 56, 63, 64, 65, 127, 128, 1000, 131_072] {
+            let bytes = vec![b'a'; length];
+            assert_eq!(super::reader_hex(Short(&bytes), length as u64).unwrap(), super::hex(&bytes));
+        }
+        assert!(super::reader_hex(&b"abc"[..], 2).is_err());
+        assert_eq!(super::reader_hex(&b""[..], 0).unwrap(), super::hex(b""));
+        struct Broken;
+        impl Read for Broken {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("failed"))
+            }
+        }
+        assert!(super::reader_hex(Broken, 64).is_err());
+    }
     #[test]
     fn known_vectors() {
         assert_eq!(super::hex(b""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");

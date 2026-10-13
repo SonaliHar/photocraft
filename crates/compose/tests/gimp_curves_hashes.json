@@ -1,0 +1,11 @@
+{
+  "curve-config-matrix/free256-rgb-u8.source.0.native.bin": "37980ff20783d6b0b7e715b535c984007f295d3604bec1a0ec13b24abc1b980d",
+  "curve-config-matrix/free256-rgb-u8.source.state.json": "3eff0b1c1882c5193c48a3ad7b64d9d47e29b34d4514da5a9bd44d4b35e984c7",
+  "curve-config-matrix/free256-rgb-u8.edit-source.state.json": "c5fa1b2675ceba14e399d47d0cf992422057edade7dca69c8ec55c3546ac14ef",
+  "curve-config-matrix/free256-rgb-u8.source.stored-config.txt": "d7f352cce8354c66fc60a1b6fb1e2e160b3c342257fe4bb00cf66c84f1839d55",
+  "curve-config-matrix/free256-rgb-u8.edit.stored-config.txt": "bff0f20cd9282df3181ad56fd44b550f80f3db686fabaeba6ade61576fb0b8ef",
+  "curve-config-matrix/free256-rgb-u8.xcf": "2b92c7013049ccef9618985b7b9af3e6a491b92e15c7946fe736010074d83ce4",
+  "curve-config-matrix/free256-rgb-u8.edit.xcf": "f6a75379e71668952f88104925834525e028952f019e2e83e055a7ab6388fba9",
+  "curve-config-matrix/free256-rgb-u8.ref.png": "56202e9f32a22ee1d43a48e6fbc13795cad283c68eb2007989fb871af7580f8f",
+  "curve-config-matrix/free256-rgb-u8.edit.ref.png": "299bc252a1bbe467da26299ca7ba1ac1749e17a0572fbc96c59691edf38b1d8e"
+}

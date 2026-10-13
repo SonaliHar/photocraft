@@ -34,6 +34,15 @@ pub struct CutParts {
 }
 
 impl CutParts {
+    /// Check both retained pieces before any geometry or floating-selection drop.
+    pub(crate) fn validate_retained_surfaces(
+        &self,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> std::result::Result<(), photocraft_raster::RasterInputError> {
+        self.rest.try_validate_tile_origins_with(control)?;
+        self.piece.try_validate_tile_origins_with(control)
+    }
+
     /// Split `layer` of `doc` by its selection. With `copy` the selected pixels stay in the layer
     /// too (the piece is a duplicate). Without, they leave a transparent hole, or on the Background,
     /// which can't hold transparency, one filled with `background` (Photoshop). Errors without a
@@ -46,7 +55,11 @@ impl CutParts {
         };
         let fmt = surf.format();
         let with_alpha = PixelFormat::new(fmt.mode, fmt.sample, true);
-        let mut rest = if fmt == with_alpha { surf.clone() } else { surf.convert(with_alpha) };
+        let mut rest = if fmt == with_alpha {
+            surf.clone()
+        } else {
+            surf.try_convert(with_alpha).map_err(|e| crate::EngineError::Other(format!("pixel conversion: {e}")))?
+        };
         let mut piece = Surface::new(with_alpha);
         let fill = !copy && crate::extra_cmds::is_background(l);
         let b = sel.content_bounds().intersect(&surf.content_bounds());
@@ -183,6 +196,21 @@ fn keeps_floating(id: &str) -> bool {
 /// Before any command (`Session::dispatch`): Undo puts a floating piece back (and is used up:
 /// returns its result); every other command but the floating ones drops it first.
 pub(crate) fn before_command(s: &mut Session, id: &str) -> Result<Option<Value>> {
+    // Precision inspection reads current persisted pixels without committing or
+    // normalizing a transient floating preview, including a stale preview.
+    if matches!(id, "document.pixel.inspect" | "xcf.assess" | "xcf.inspect" | "xcf.composition.inspect" | "xcf.filter.inspect" | "xcf.resource.inspect" | "xcf.filter.graph.inspectPlan") {
+        return Ok(None);
+    }
+    // Substitution refuses floating state in its own preflight. Preserve even a
+    // stale piece so a failed replacement cannot normalize or drop it first.
+    if matches!(id, "xcf.link.substitute" | "xcf.link.recover" | "xcf.link.refresh" | "xcf.link.setPlacement" | "xcf.link.setTransform" | "xcf.composition.set" | "xcf.item.locks.set" | "xcf.items.select") {
+        return Ok(None);
+    }
+    if matches!(id, "xcf.itemSet.rename" | "xcf.itemSet.delete" | "xcf.itemSet.setMembers" | "xcf.itemSet.create") {
+        return Ok(None);
+    }
+    if matches!(id, "xcf.mask.enabled.set" | "xcf.mask.geometry.set" | "xcf.channel.overlay.set" | "xcf.items.visibility.set" | "xcf.layer.affine.apply" | "xcf.filter.move" | "xcf.filter.remove" | "xcf.filter.insert" | "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.mask.enabled.set" | "xcf.indexed.pixel.set" | "xcf.indexed.palette.set" | "xcf.text.name.set" | "xcf.channel.name.set" | "xcf.channel.locks.set" | "xcf.channel.indicates.set" | "xcf.path.name.set" | "xcf.vector.fill.color.set" | "xcf.vector.stroke.color.set") { return Ok(None); }
+    if id == "layer.layerMask.enabled" && s.active().is_some_and(|state| state.doc.xcf_state.is_some()) { return Ok(None); }
     let Some(st) = s.active_mut() else { return Ok(None) };
     if floating(st).is_none() {
         st.floating = None;

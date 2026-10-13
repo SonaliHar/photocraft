@@ -472,3 +472,567 @@ Missing actions, recursive calls and nesting beyond 16 levels fail visibly; a ch
 the parent before its next step. Every nested command retains the normal automation permission check.
 Existing recordings containing expanded commands remain unchanged; remove those steps and record
 the named call again if desired.
+
+### Qualified XCF linked geometry
+
+`xcf.link.setPlacement` takes `layerId` as a canonical decimal U64 string and
+`originPx: [x, y]` as bounded integers. `xcf.link.setTransform` takes the same
+identity, `matrixF64Bits` as nine lower-case sixteen-digit hexadecimal strings,
+`interpolation: "none|linear|cubic|nohalo"`, and optional `originPx`. The matrix
+uses the original linked source's pre-offset. Query command metadata for the
+enabled state; these commands require a qualified resident linked image with
+explicitly recovered owned PNG material and unlocked content/position.
+
+Successful changes regenerate current pixels, update current bounds and support
+undo/redo and native save/reopen. Original source transform/cache/provenance and
+resource locators remain intact; the commands do not read a locator or grant
+resource access. Unsupported sampler/geometry/material contexts return an error
+before publication. `xcf.inspect` and changed-command responses expose current
+matrix bits in the same string form, preserving all 64 bits across JSON clients.
+
+
+## Atomic XCF linked-image substitution
+
+`xcf.link.substitute` is a registered engine command for an explicit Reduced
+replacement. Its params contain exactly six strings: `documentId`,
+`expectedRevision`, `layerId`, `resourceId`, `policy: "substitute"` and
+`payloadHex`. IDs are nonzero canonical decimal U64 strings; the revision is a
+canonical decimal U64 string that may be zero. No JSON numbers, leading zeros,
+extra keys or `coalesce` key are accepted. PNG input is capped at 8 MiB (16 MiB
+hex characters), but transport limits still apply: the encoded JSON request line
+remains capped at 1 MiB. Large replacement bytes should use the path interface.
+
+`xcf.link.substituteFromRoot` takes the same five identity/policy strings with
+`path` instead of `payloadHex`. The path is an explicit forward-slash relative
+request under the server/application's held `--automation-read-root` capability,
+not a source-stored locator or a client's filesystem grant. Absolute/traversing
+paths, unavailable roots and unsupported material fail closed. The reader caps
+input at 8 MiB before constructing internal hex; that hex does not cross the
+transport, so the 1 MiB request ceiling is unchanged.
+
+```json
+{"id":20,"method":"xcf.link.substituteFromRoot","params":{"documentId":"1","expectedRevision":"0","layerId":"2","resourceId":"3","path":"replacements/owned.png","policy":"substitute"}}
+```
+
+Use `documentId` and `revisionString` from inspection verbatim (`expectedRevision`
+is `revisionString`); never convert the compatible numeric `revision` field.
+Use inspected layer/resource IDs, not the illustrative values above.
+The target is checked before reading and again at commit. The command is
+synchronous, does not return a job, and requires no job polling. These new routes
+refuse pending/running jobs rather than synchronizing them before the target
+check; `engine.execute` with `wait: false` is refused for this command. Live UI
+control may defer its reply while the bounded root read completes; that is not
+an engine background job or a remote picker lease.
+
+The MCP tool is `xcf_link_substitute_from_root`, with the same six camelCase
+string fields. Headless MCP uses its own held root; bridge MCP forwards the
+small path request to the app and never reads a client-side path. Existing
+`command_run` can invoke the raw engine command for small hex payloads. Substitution
+updates retained material and the qualified current raster in one undoable edit,
+returning `byteIdentity: "Substituted"` and `assessment: "Reduced"`; it does not
+recover original byte identity or authorize Exact/font recovery. XCF is import
+only: save/reopen as `.pcraft`, using the configured write/read roots. Runtime
+grants are not serialized by a native save.
+
+The engine lane has scoped runtime evidence. The new small-path Headless/RPC,
+MCP and live-control joins are implementation-first work: validation and the
+remaining native callback joins are in progress. Their presence is not yet
+end-to-end transport or physical picker qualification. Discover the running
+methods/tools before use; a build lacking a route reports it unavailable.
+
+
+## Exact linked-image recovery
+
+`xcf.link.recover` uses exactly the six string params of the atomic replacement
+command, with `policy: "exact"` and `payloadHex`. The linked resource must already
+retain its original content hash, and the authorized PNG must match that hash.
+Names, locators, cached renders or current pixels cannot supply a missing original
+identity. The same 8 MiB carrier cap, canonical IDs/revision, current-target checks
+and one synchronous undoable transaction apply.
+
+For root-bound input, use `xcf.link.recoverFromRoot` or MCP
+`xcf_link_recover_from_root` with exactly `documentId`, `expectedRevision`,
+`layerId`, `resourceId`, `path`, `policy` as strings and `policy: "exact"`.
+`path` is an explicitly requested relative file beneath the held read-root
+capability. Unavailable authority fails closed; no retained locator is read
+implicitly. The path request stays small; bounded internal hex does not cross
+the unchanged 1 MiB transport frame. There is no job to poll. Live control can
+await the bounded read before its final reply.
+
+```json
+{"id":21,"method":"xcf.link.recoverFromRoot","params":{"documentId":"1","expectedRevision":"0","layerId":"2","resourceId":"3","path":"originals/linked.png","policy":"exact"}}
+```
+
+Use inspected current identities/revision. Success returns `byteIdentity:
+"Exact"` and `assessmentCommand: "xcf.assess"`; this describes the recovered
+linked bytes, not whole-document Full fidelity. Query `xcf.assess` for current
+dependencies and remaining limitations. Save/reopen as `.pcraft` under explicit
+write/read roots; runtime grants do not survive native serialization. Exact
+panel/control/root/MCP joins are implementation-first work with validation in
+progress; discover the running interfaces rather than infer availability from
+this contract. Complete XCF/US3 and physical picker acceptance remain separate.
+
+
+## Current imported editing state
+
+Document inspection now includes `xcfEditingState` for retained XCF state
+(`null` for documents without it). It exposes semantic selected items/paths,
+active item and mask target, runtime active/selected layers, saved item-set
+members and inert rule text, floating attachment, mask owner/bounds/offset/flags,
+and filter-mask identity/bounds. Item references are `{kind, id}` with canonical
+decimal string IDs; set IDs and floating-layer/filter IDs are strings too.
+
+Each page has `total`, `offset: 0`, `limit: 64`, `entries` and `truncated`.
+Names/rule expressions are capped at 256 characters with truncation flags.
+Mask discovery scans at most 10,000 item records: when that scan is truncated,
+`total` is null and `matchingInScan` is only the observed lower bound. The
+existing paginated `xcf.inspect` command remains available for further metadata.
+Rules are reported, not evaluated; semantic selections and runtime focus are
+shown separately. No resource bytes, locator lookup, permissions or grants are
+exposed or acquired by this view. Use exact current typed references for supported
+edits rather than infer identities from names, row positions or source tattoos.
+
+The exact/substitute root routes still use explicit held authority and stale
+revision checks. The view does not imply every inspected set/floating/mask edit
+has a command, or whole-document Full/native-runtime qualification. Two-axis
+text layout/caret/render callers are being migrated to checked physical X/Y
+resolution; unequal-DPI editing and PSD/text-cache fidelity remain implementation
+work until their acceptance results are available. No scalar fallback or testing
+claim follows from the new inspection fields.
+
+`image.imageSize` accepts independent `resolutionX` and `resolutionY` values in
+pixels per inch, each finite and in `(0, 10000]`. Omitted axes and the current
+physical unit are preserved. The existing scalar `resolution` sets both axes;
+combining it with either axis is an error before mutation. With `resample: "none"`,
+these edits change physical resolution while preserving pixel dimensions and
+samples. Undo/redo restores the complete pair and unit. Acceptance tests for this
+new interface remain deferred during the implementation pass.
+
+For Image Size dimensions, `sizeUnit` is `px` (default), `in`, `mm`, `pt`, `pc`,
+or `document` (the retained unit, including a custom unit). Width and height
+use their respective DPI axes, including explicit resolution changes in the same
+request. An omitted dimension keeps the pixel aspect ratio. Physical dimensions
+round to the nearest pixel and refuse values outside 1–300,000 pixels; they are
+never silently clipped. Unit selection applies to this request and preserves the
+document's retained unit definition.
+
+`xcf.item.locks.set` takes a canonical decimal-string `layerId` and at least one
+explicit boolean among `content`, `position`, `alpha`, and `visibility`. It edits
+that imported layer's current flags in one undo step; native pixel, position and
+transparency flags track the corresponding explicit changes. Parent locks, native
+Lock All and original source flags remain intact. It refuses transient previews,
+background dispatch and coalescing.
+
+`xcf.items.select` replaces persisted semantic selection with exactly four fields:
+`selected` (typed references), `active` (typed reference or null), `selectedPaths`
+(path references), and `maskTarget` (mask reference or null). References use
+`{kind, id}` with canonical decimal-string IDs. It validates current membership,
+duplicates and active/selected coherence and creates one undo step. Runtime
+layer/channel/path focus and resource authority remain unchanged. These new
+commands have drafted regression tests; acceptance execution is deferred.
+
+`xcf.itemSet.create` takes exactly `setId` (an unused canonical decimal-string ID),
+`name`, `family` (`layer`, `channel`, or `path`) and ordered `members` (`{kind,id}`
+references). It creates a Named set with at most 1,000 unique current members of
+that family. Existing set IDs are refused; no search rule is evaluated. Creation,
+rename, deletion and membership edits refuse transient pixel previews before any
+dispatcher normalization. Creation adds one undo step and preserves existing sets
+and source metadata. Its acceptance tests remain deferred.
+
+`xcf.mask.enabled.set` takes exactly `maskId` (canonical decimal string) and
+`enabled` (boolean). The current implementation handles an admitted canonical
+layer mask, synchronizes native/current enable flags in one undo step and keeps
+its samples, extent, defaults and source data intact. Filter/channel masks and
+unqualified mask pipelines refuse. Native Lock All and inherited imported content
+locks apply; native Pixels-only locking permits this mask operation. Transient
+previews, coalescing and background execution refuse before mutation. Validation
+of this new command remains deferred.
+
+The existing `layer.layerMask.enabled` menu command uses this checked path for a
+canonical imported layer mask and preserves its `{enabled: boolean}` reply.
+Ordinary non-XCF mask toggles and mask-link toggles retain their existing routes.
+
+`ui.set` accepts `xcfItemSetDraft` as a whole object with exactly five fields:
+`document`, `layer`, `revision`, `setId`, and `name`. Identity fields use canonical
+decimal strings (nonzero except revision); legacy u64 JSON integers remain
+accepted. Copy `revisionString` without converting it through a floating-point
+number. The replacement name is limited to 256 characters and 1,024 UTF-8 bytes,
+without NUL. `null` clears the draft; omitting it leaves the draft unchanged.
+`ui.inspect` returns its identities and revision as exact decimal strings.
+
+This is view state only: setting a draft grants no authority, retargets no
+document, and applies no engine edit. The saved-set panel shows at most 64 sets
+containing the current layer and does not evaluate saved searches. Its explicit
+actions use guarded engine commands; the new UI interfaces remain implementation
+work pending validation.
+
+
+## Precision pixel inspection
+
+Use `engine.execute` with `command: "document.pixel.inspect"` and params
+`{x?: i32 = 0, y?: i32 = 0, layerId?: canonical nonzero U64 string,
+view?: "composite" | "native" = "composite"}`. Unknown fields, wrong coordinate
+types, malformed explicit IDs and half-open pixel-coordinate overflow refuse.
+The existing `document.pixel` f32 array remains compatible.
+
+Composite view uses the currently qualified f64 compositor and returns finite
+`compositeRgbaF64` plus exact `compositeFloat64Bits` strings; it never falls back
+to f32. Unsupported domains, nonfinite composite output or bounded work exhaustion
+error. An optional explicit `layerId` also returns `nativeSample`: current
+resident raster `encodedHex`, model/sample type, channel count, sample encoding
+and native byte order, before composition. Text/shape caches and backed material
+are not raw raster targets. Sparse/off-canvas coordinates deliberately read that
+Surface's stored default when no tile exists.
+
+Explicit `view: "native"` requires `layerId` and skips the compositor, so stored
+F64 nonfinite/negative-zero bits can be inspected as bytes without false JSON
+numeric exactness. `compositeRequested: false` distinguishes this choice from
+fallback. Replies include `documentId` and `revisionString`; the query adds no
+history and preserves transient floating state. Only one output pixel is requested; source qualification/render work has explicit
+limits. This is not a display oracle, whole-document Full fidelity or completed
+XCF acceptance. Implementation validation remains pending. UI Info's
+legacy f32 readout is a separate consumer and has not been upgraded by this query.
+`xcf.items.visibility.set` takes `items` (1–1000 unique typed references with
+`kind: "layer" | "channel"` and canonical decimal-string `id`) and `visible`
+(boolean). Layer visibility updates the native layer and current imported state;
+channel visibility updates saved semantic state. Runtime channel-view choices
+remain separate. The entire batch honors inherited visibility locks and commits
+as one undo step.
+
+`xcf.channel.overlay.set` takes `channelId`, `colorF32Bits` (three lowercase
+eight-digit hexadecimal strings), and `opacityF32Bits` (one such string).
+Values must encode finite normalized f32 display metadata. It edits qualified
+saved-channel overlay metadata without altering channel samples or original
+source records. Spot and selection channels are currently refused.
+
+`view.newGuide` and `view.moveGuide` accept optional `unit` (`px`, `in`, `mm`,
+`pt`, `pc`, or `document`; default `px`). A vertical guide uses X DPI and a
+horizontal guide uses Y DPI. Conversion uses the retained physical unit;
+the current native guide model stores the resulting finite position as f32.
+An optional `documentId` / `expectedRevision` pair uses canonical decimal strings;
+the New Guide dialog captures it and refuses a changed target before editing.
+
+`xcf.layer.affine.apply` edits a qualified resident U32/F64 RGB/Gray raster in
+one undo step. Its exact envelope is `documentId`, `expectedRevision`, `layerId`
+(canonical decimal strings), `scaleF64Bits` and `offsetF64Bits` (lowercase
+16-digit hexadecimal), `domain` (`unit` or `hdr`), `overflow` (`clamp` or
+`reject`), `rounding` (`exact` or `nearest`), `identity` (`finite-only` or
+`preserve-raw`), and `roi` (`{x0,y0,x1,y1}` integer endpoints). It requires an
+explicit current encoding/profile, preserves raw alpha/outside pixels, and
+refuses editable text/vector/linked source carriers. It does not admit a new
+serialized GIMP evaluator. Validation execution remains deferred.
+
+`path.list` and `path.info` add `pathIdString` alongside the legacy numeric
+`pathId`, allowing clients to retain full U64 identities without float conversion.
+Bound-path edits check native/imported owner ancestry before transient preview
+normalization and during edit validation. Source records retain their original
+identities; native save/reopen uses `.pcraft`.
+`path.set` admits at most 10,000 subpaths and 100,000 total knots before parameter
+cloning. Points use exact `[x,y]` or `{x,y}` shapes and finite coordinates with
+magnitude at most 1,000,000; malformed explicitly supplied handles refuse.
+
+`xcf.indexed.pixel.set` takes exactly `documentId`, `expectedRevision`, `layerId`
+(canonical decimal strings), `x`/`y` (i32), and `index`/`alpha` (u8 integers).
+It changes a current indexed ordinal and independent alpha in one undo step,
+preserving duplicate palette entries and original `IndexedSource`. The current
+scope requires an ordinary resident Indexed/U8 RGB carrier with coherent declared
+bounds and palette; source-item/filter/effect carriers refuse. Content and
+effective alpha locks, cancellation and staging limits apply.
+
+`document.pixel.inspect` additionally returns `currentIndexed` for an explicit
+current indexed layer: exact ordinal, independent alpha, effective transparent
+index alpha and palette RGB bytes. Offbounds returns no invented ordinal default.
+Native carrier bytes remain separate in `nativeSample`.
+
+`xcf.filter.insert` requires `layerId`, an unused `filterId`, same-owner
+`templateFilterId` (canonical decimal strings), `index`, `operation`, `arguments`,
+and `enabled`. It inherits the explicit current envelope of an unmasked/no-aux
+qualified scalar template and requires the same exact operation identity and
+argument types. Arguments use bounded typed Number/Bool/String/Enum/Color
+records; integer and float-bit payloads accept canonical decimal strings without
+f64 normalization. The joint wire budget is 16 KiB, 1,024 value nodes and depth 8.
+Insertion validates operative rendering even when initially disabled and commits
+as one undo step. Novel schemas and nested/resource argument families refuse;
+source provenance and caches remain intact. Acceptance execution is deferred.
+
+
+`xcf.text.name.set` changes a current imported text layer's literal name and
+`customName` flag together. Supply exactly `documentId`, `expectedRevision`,
+`layerId` as canonical decimal strings, `name` as nonempty UTF-8 (at most 4096
+bytes, no NUL), and `customName` as a Boolean. The command preserves the text
+configuration, source cache and original provenance. Changing the flag never
+infers an automatic name. Content locks and captured-target checks apply.
+
+`xcf.vector.fill.color.set` and `xcf.vector.stroke.color.set` change the current
+opaque literal color of a renderer-qualified regenerated vector. Supply exactly
+`layerId` and `pathId` as canonical nonzero decimal strings and `rgbaF32Bits` as
+four lowercase eight-digit hexadecimal strings. RGB must be finite and in
+[0,1]; alpha must be exactly one. The current vector configuration, geometry,
+source bindings, working interpretation and renderer remain authoritative.
+These commands run synchronously, refuse floating selections and background
+jobs, and preserve inactive style fields and immutable source provenance.
+
+`xcf.filter.graph.inspectPlan` inspects the retained structure of one Graph
+argument without evaluating it. Supply a canonical `filterId` string, exact
+`argument` name (at most 128 bytes), optional `maxDepth` (1..4096, default 32),
+`offset` (0..16384, default 0), and `limit` (1..64, default 64). Pagination applies
+independently to declaration nodes, declaration edges and topological nodes;
+returned indexes remain absolute. Stored ports and version identities are
+reported unchanged. Structural validity does not qualify operation, argument,
+port or rendering semantics. Inspection preserves the installed snapshot and
+does not publish queued edits. Implementation acceptance remains deferred.
+`xcf.path.name.set` changes a current imported saved path's name and explicit
+custom-name flag. Supply exactly `documentId`, `expectedRevision`, `pathId` as
+canonical decimal strings, bounded nonempty `name` (4096 UTF-8 bytes, no NUL),
+and Boolean `customName`. Reserved work-path names, conflicts and ambiguous
+clipping-name associations are refused. Geometry, PSD raw records and immutable
+source data remain exact; current clipping-path name associations are updated.
+
+`xcf.filter.mask.enabled.set` accepts exactly canonical `maskId` string and
+Boolean `enabled`. It currently supports only the already qualified native
+all-zero empty-selection masks in three closed operation contexts. Disabling a
+mask still validates its native samples and metadata; nonzero coverage remains
+unsupported. The command checks operative ownership, inherited content locks,
+renderer qualification, cancellation and snapshot/revision before one undoable
+edit. This limited transition does not qualify arbitrary filter masks.
+
+Filter SET/ENABLE, MOVE/REMOVE, template insertion and mask edits require
+synchronous dispatch without floating attachments, background jobs or
+coalescing. Property editors show rejected-command errors and verify their
+captured snapshot before applying an edit. The Add menu duplicates a selected
+existing qualified scalar template; it preserves exact numeric wire values and
+uses a new bounded current filter identity. Tests and visual acceptance for
+these implementation additions remain deferred.
+`xcf.indexed.palette.set` accepts exactly `documentId`, `expectedRevision`,
+`layerId` as canonical decimal strings, integer `slot` (0..255), and `rgb` as
+three integer bytes. The palette is document-wide: every current indexed owner
+is validated and expanded privately before one transaction. Pixel ordinals,
+independent alpha planes, palette order/duplicate entries, transparent ordinal
+and immutable source palettes are preserved. There is no per-slot alpha field;
+this command edits RGB only. All affected owner content locks apply, including
+for carrier qualification of an otherwise equal request.
+
+Read-only XCF inspection and precision-pixel queries do not run edit bookkeeping
+or repair unrelated transient views. Background assessment completion also
+avoids edit bookkeeping; its result is tied to the original snapshot. Tests for
+these implementation changes remain unrun.
+`xcf.channel.name.set` accepts exactly canonical string `documentId`,
+`expectedRevision`, `channelId`, nonempty UTF-8 `name` (4096 bytes, no NUL), and
+Boolean `customName`. Native saved-channel and canonical item names/flags change
+together; samples, overlay, selection/focus and original source flags are
+preserved. The synthetic selection channel is excluded. Apply/Reset controls
+in the Channels panel use a serializable draft and one guarded application.
+
+The UI `file.saveAs` route additionally accepts `format:"pcraft"` with optional
+string `path`. This explicit native route suggests `.pcraft` even if the current
+writable destination is PSD, rejects other suffixes before encoding/writing,
+and checks the captured document/revision/snapshot when the picker completes.
+Original-source protection still applies. Without `format`, ordinary Save As
+keeps its existing destination policy. The imported-project preservation control
+uses the explicit native route; it never writes XCF.
+`xcf.channel.locks.set` accepts canonical `documentId`, `expectedRevision`,
+`channelId` strings plus at least one Boolean `content` or `visibility`.
+It changes only the saved channel's own current lock flags. Inherited locks
+remain effective; runtime channel visibility/target state is preserved.
+Position/alpha locks are unsupported by this command.
+
+`xcf.channel.indicates.set` accepts those three captured-target strings plus
+`indicates:"masked"|"selected"`. It changes the current alpha-channel overlay
+interpretation through the existing native consumer, preserving samples and
+color/opacity. Spot and synthetic selection channels are excluded.
+
+`xcf.mask.geometry.set` accepts canonical `documentId`, `expectedRevision`,
+`maskId` strings, `crop:[x0,y0,x1,y1]` integer coordinates wholly inside the
+current declared mask bounds, and `offset:[x,y]` integer placement. It copies
+same-depth native mask samples exactly into checked output bounds, synchronizes
+canonical bounds/offset metadata, and preserves native default bits. The current
+closed lane requires a layer-owned, unlinked mask with density one, feather zero
+and finite unit samples; filter/channel mask geometry is unsupported. Content
+and position locks, cancellation, working/storage limits and full current
+renderer qualification apply before one undoable installation.
+The Paths panel carries the current saved `PathId` separately from legacy name
+selection. Naming edits use that typed target and an Apply/Reset draft, and
+synchronize the legacy display selection only after a successful edit of that
+same path. Work/layer/empty selections clear the typed saved target. Derived
+row preparation is bounded and shared per document snapshot/revision; stale or
+oversized row data produces an error rather than a cloning fallback. This
+implementation has not yet undergone UI or performance acceptance.
+Retained source raster caches and owned resource payloads use shared immutable
+byte buffers in memory. Document snapshots and metadata/history clones share
+those buffers; native readers reuse authenticated cache blobs. This ownership
+change preserves the existing serialized byte arrays and native descriptors,
+and does not restore resource grants or change source protection. Existing
+logical expansion/work/resident limits remain conservative. Performance and
+native round-trip validation for the change are still pending.
+Native single-file `.pcraft` saves use a prepared bounded archive stream in
+headless, interactive desktop and desktop-control routes. Preparation occurs
+before private temporary output is created; protected-source and final rename
+checks still apply. Desktop control uses a separate held-root capability and
+cannot fall back to the interactive writer. Browser downloads retain the
+existing bounded byte-output route. All open documents contribute inert source
+exclusions to interactive export validation and final writes. This implementation
+does not enable the native_large profile or claim large-file acceptance.
+Saved item-set rename/delete/membership commands accept the compatible existing
+set selector plus an optional captured pair: canonical decimal-string
+`documentId` and `expectedRevision`. Supply both or neither; supplied identities
+must match before mutation. UI controls supply this pair and retain a live
+snapshot witness. These operations refuse conflicting previews/jobs, bound
+metadata/COW preparation and preserve unrelated selection and source records.
+Rename/delete preserve existing rule metadata behavior; explicit membership
+editing remains limited to Named sets.
+
+Linked-image properties expose Refresh, explicit current Position Apply/Reset
+and interpolation for an existing retained transform. The current matrix bits
+are preserved. All actions use registered owned-material commands; they neither
+read stored locators nor restore access grants. UI and headless synchronous
+routing precedes queued-job publication for these guarded operations.
+Native desktop, trusted-local headless and authorized Workspace opens now use a
+bounded seekable archive candidate for `.pcraft`. XCF and wrapper content takes
+precedence over misleading native suffixes. The same held file handle is reused
+for any non-native byte fallback; Workspace opens retain their held-root policy.
+Background open carries cancellation through decoding, private color-policy
+processing, source selection/view preparation and final document publication.
+Directory native loading uses the same controlled manifest/object decoder.
+These routes keep the standard admission ceilings and do not enable native_large.
+
+Retained graph arguments have explicit Inspect/Next/Previous property controls.
+They call `xcf.filter.graph.inspectPlan` on demand, fence the captured snapshot
+before and after the query, and display at most 64 node/edge metadata rows. The
+page cursor is view state; it supplies no authoring, evaluator or resource authority.
+`layer.renameLayer` additionally accepts lossless canonical `layerId` decimal
+strings. Existing numeric `layer` and active-layer fallback remain supported;
+passing both selectors is an error. Guarded in-place rename uses `layerId` plus
+captured `documentId`/`expectedRevision`, preventing transport rounding above
+2^53 while preserving existing trim and keyboard/menu behavior.
+
+Apply Image and Calculations validate supplied numeric and selector types before
+floating-state normalization or source preparation. They execute synchronously
+through UI/control routing; a nonwaiting control request receives the completed
+inline result. Controlled source/mask preparation rejects unsupported wide legacy
+arithmetic before converting to F32, and failed preparation leaves the target intact.
+
+`image.calculations` has an explicit native mathematical coverage mode:
+
+```json
+{
+  "nativeCoverage": true,
+  "coverageContext": "unit",
+  "documentId": "7",
+  "expectedRevision": "12",
+  "source1": {"channelId": "101"},
+  "source2": {"channelId": "102"},
+  "blending": "multiply",
+  "result": "newChannel",
+  "name": "Product"
+}
+```
+
+Use the current document, revision and saved-channel identities; the numbers
+above are illustrative. Both sources must be same-depth Gray channels without
+alpha or spot ink in that captured document. This mode supports multiply,
+darken, lighten and subtract with source2 as the base, opacity 100, scale 1,
+offset 0 and no mask or inversion. Integer multiplication uses nearest-half-up
+native arithmetic; F64 remains F64. Darken/lighten preserve the base native word
+on equal samples. It validates unit coverage, exact current
+geometry and imported rendering context, then creates one native channel as an
+undoable transaction. This is a caller-selected mathematical edit and does not
+qualify a stored GIMP operation or expand supported source contexts. Existing
+legacy/default parameter behavior remains available when nativeCoverage is absent.
+
+Sizing dialogs capture their originating document, revision and snapshot in
+runtime-only state. Confirm emits canonical documentId/expectedRevision pairs;
+a changed document, stale revision or restored dialog without its runtime witness
+refuses Apply. Dialog restoration does not provide editing authority.
+
+Canonical current Indexed U8 images support integer Canvas Size translation and
+nonempty Crop through their index/alpha planes. Duplicate palette entries retain
+their distinct ordinals; original XCF indexed snapshots remain provenance. An
+empty indexed owner, an indexed background extension needing new color entries,
+or an unqualified imported composition/filter context returns a named error.
+These paths require agreement between current planes, palette, bounds and RGBA8
+carriers; they do not reconstruct ordinals from RGB colors.
+
+The existing `image.mode.bits8`, `image.mode.bits16` and `image.mode.bits32`
+commands accept optional paired canonical-string `documentId` and
+`expectedRevision` selectors. Conversion prepares private native surfaces with
+cancellation and budget checks and commits one undo step. Same-depth canonical
+requests preserve redo. Indexed conversion requires a separately qualified
+ordinal policy and returns an error for a depth change.
+
+`image.trim` and `image.duplicate` also accept optional paired canonical-string
+document/revision selectors. Trim uses bounded rendered tiles for ordinary color
+comparisons and raw alpha occupancy for qualified plain wide rasters. Color-based
+indexed Trim and composited wide Trim return named unsupported errors. Duplicate
+prepares a separate document and remaps its references without changing source
+history. Its merged mode supports ordinary eligible depths; wide, indexed and
+unqualified imported merged contexts refuse before pixel conversion.
+
+The existing RGB/Gray/CMYK/Lab mode and `edit.convertToProfile` commands now
+prepare CMS conversions privately with bounded work and cancellation. Assign
+Profile changes metadata without converting pixel bytes. Both profile commands
+accept the same optional paired document/revision selectors; their dialogs
+capture a runtime origin and reject stale or restored Apply requests. Existing
+profile resolution and imported analytic-profile restrictions still apply.
+Multichannel uses its separate ordinary-depth plate-conversion path, with
+unsupported wide and imported contexts refused before F32 reads.
+
+`image.mode.indexedColor` preserves legacy conversion by default. The explicit
+`canonicalIndexed:true` option for ordinary RGB inputs retains the quantizer's
+actual indices, palette order and quantized alpha as editable current planes.
+Its RGBA8 carrier uses palette RGB even at alpha zero; this is a deliberate lossy
+conversion policy, rather than preservation of the old hidden RGB carrier.
+The dialog's “Keep editable palette indices” option defaults off. Imported XCF
+indexed planes continue to use their separate exact import/edit policy.
+Indexed Color, Bitmap and arbitrary rotation accept optional paired canonical
+document/revision selectors and prepare bounded, cancellable private output.
+
+Channel Duplicate (`channel.duplicate`) accepts a saved-channel selector or the
+existing composite/color/Quick Mask selectors, `name`, `invert`, and `document`
+(an open-tab index or `"new"`). Optional canonical decimal-string `documentId`
+and `expectedRevision` must be supplied together and identify the active source.
+The implementation captures both source and destination snapshots, prepares a
+private result, and commits to an existing destination without switching the
+viewed tab. The returned `document` index identifies the edited destination.
+Same-format saved native Gray channels retain their raw samples. Qualified
+finite-unit U32/F64 inversion uses native arithmetic; wide depth changes and
+unqualified interpreted wide sources fail before float32 extraction. Imported
+channel metadata duplication is limited to the same document and retains global
+source provenance. New-image publication creates a grayscale document and uses
+no source undo step.
+
+Quick Mask (`select.editInQuickMaskMode`) accepts optional `on` and the same
+captured target pair. Entry and exit prepare privately with cancellation and a
+final snapshot/revision fence. Same-depth native U32/F64 Gray coverage retains
+raw words after finite-unit validation. Ordinary entry and exit retain the
+existing coverage rules, including Gray8 exit quantization and the all-white
+sentinel. Presentation Color Indicates does not invert stored coverage. Current
+indexed/imported source contexts and wide depth mismatches remain explicit
+unsupported cases. These implementation changes have not completed runtime
+acceptance under the implementation-first execution order.
+Save Selection (`select.saveSelection`) and Load Selection
+(`select.loadSelection`) accept the captured target pair. Save captures the
+active selection source and the separately selected destination tab; both must
+remain unchanged through preparation. Same-depth native Gray/no-alpha selection
+copies retain raw words. An absent selection retains the existing zero-mask
+Save behavior. Ordinary supported combinations keep the existing float32
+arithmetic; unsupported wide combinations or depth changes fail before
+extraction. The result still contains `channel`, `name`, and `document`.
+
+Load Selection retains its default Gray8 selection quantization. Explicit
+`nativeCoverage:true` requires `coverageContext:"unit"` and qualified plain native
+saved-channel, Quick Mask, or raster layer-mask input with the same source/target
+sample depth. Replace copies raw words; add/intersect use native max/min;
+subtract and invert use checked unit arithmetic. Both native defaults and
+retained samples must satisfy the unit policy. Native raw zero/signed-zero
+selections stay stored (`selected:true`); the legacy zero result stays absent.
+No implicit CMS conversion or imported filtered-channel interpretation is
+introduced. Source and target snapshots/revisions/jobs are checked again before
+publication. The captured dialogs resolve saved alpha choices by canonical ID,
+so duplicate display names do not select a different channel.
+
+New Channel and New Spot Channel also accept the captured pair and prepare their
+native canvas coverage privately. Channel metadata management keeps raw samples
+shared; rename/reorder/delete now reject stale or malformed targets before
+normalization. Imported deletion with retained dependencies is unsupported.
+The integrated implementations above passed native and WASM compile-only
+checkpoint 73. Tests and runtime/source acceptance remain pending.

@@ -72,7 +72,11 @@ fn draw(layout: &TextLayout, transform: &Xform, sink: &mut impl LineSink, only_c
         let offsets: &[(f64, f64)] =
             if bold { &[(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (0.7, 0.7), (-0.7, -0.7), (0.7, -0.7), (-0.7, 0.7)] } else { &[(0.0, 0.0)] };
         for &(ox, oy) in offsets {
-            let local = Xform([1.0, 0.0, 0.0, 1.0, ox * r, oy * r]).mul(&glyph);
+            let (ox, oy) = match layout.physical_scale {
+                Some([sx, sy]) => (ox * r * sx, oy * r * sy),
+                None => (ox * r, oy * r),
+            };
+            let local = Xform([1.0, 0.0, 0.0, 1.0, ox, oy]).mul(&glyph);
             let settings = DrawSettings::unhinted(Size::new(face.size_px), LocationRef::new(&coords));
             match warp {
                 Some(w) => {
@@ -109,6 +113,13 @@ fn draw(layout: &TextLayout, transform: &Xform, sink: &mut impl LineSink, only_c
 /// Font units (scaled to px, y up) → text space for a placed glyph: scales, faux italic,
 /// baseline shift, and the vertical-type orientation.
 fn glyph_xform(layout: &TextLayout, g: &PlacedGlyph, face_skew_deg: f32) -> Xform {
+    let Some([sx, sy]) = layout.physical_scale else { return glyph_xform_scalar(layout, g, face_skew_deg) };
+    let local = PlacedGlyph { x: 0.0, y: 0.0, ..*g };
+    let glyph = glyph_xform_scalar(layout, &local, face_skew_deg);
+    Xform([1.0, 0.0, 0.0, 1.0, f64::from(g.x), f64::from(g.y)]).mul(&Xform([sx, 0.0, 0.0, sy, 0.0, 0.0]).mul(&glyph))
+}
+
+fn glyph_xform_scalar(layout: &TextLayout, g: &PlacedGlyph, face_skew_deg: f32) -> Xform {
     let Some(st) = layout.styles.get(g.style as usize) else { return Xform([1.0, 0.0, 0.0, -1.0, g.x as f64, g.y as f64]) };
     let hs = if st.horizontal_scale > 0.0 { st.horizontal_scale } else { 1.0 } as f64;
     let vs = if st.vertical_scale > 0.0 { st.vertical_scale } else { 1.0 } as f64;

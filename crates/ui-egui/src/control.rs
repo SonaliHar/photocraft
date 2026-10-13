@@ -10,6 +10,9 @@
 //!   tree is `ui.menu.list`
 //! - `ui.set {tool?, panels?, dock?, dockTabs?, dockWidth?, colorPanel?, maskTarget?, vectorMaskTarget?, selectionMode?, zoom?, center?, rotation?, fit?, theme?, brushSection?, brushTab?, brushesView?, brushPicker?, brushPickerView?, brushSize?}`:
 //!   change UI state; any other field is an error ([`UI_SET_FIELDS`])
+//! - `ui.set {xcfUnderlineDraft: {document, layer, revision, start, end, content, ranges} | null}`:
+//!   bounded whole-value character selection draft; inspection reports it as `xcfUnderlineDraft`.
+//!   View updates never apply underline or grant eligibility; dispatch `xcf.text.underline.set` to edit.
 //! - `ui.dialog.open {kind, fields?}` (kinds: newDocument, about, layerStyle {effect?}, colorPicker {target: foreground|background}, command {command}) / `ui.dialog.set {dialog, field, value}` / `ui.dialog.confirm {dialog, wait?}` / `ui.dialog.cancel {dialog}`
 //! - `ui.dialog.apply {dialog}`: commit Preferences changes without closing the dialog
 //! - `ui.window.open {document?}` / `ui.window.close {window}`: extra document windows
@@ -25,6 +28,10 @@
 //!   because occluded macOS windows stop rendering
 //! - `ui.focus`: bring the main window to the front
 //! - `app.open {path}` / `app.save {path}`: relative file I/O under the automation roots; reply with `warnings`
+//! - `xcf.link.substituteFromRoot {documentId, expectedRevision, layerId, resourceId, path, policy}`:
+//!   six exact strings; `policy: "substitute"`, dedicated bounded held-root read, final asynchronous reply.
+//! - `xcf.link.recoverFromRoot {documentId, expectedRevision, layerId, resourceId, path, policy}`:
+//!   the same bounded root read with `policy: "exact"` and a retained original identity.
 //! - `app.quit`
 //! - `jobs.list` / `jobs.cancel {job?}`: background jobs (#210) with progress; cancel one (or all).
 //!   `engine.execute`, `ui.menu.invoke` and `ui.dialog.confirm` wait for a command that runs as a
@@ -58,6 +65,8 @@ impl ControlRequest {
 
 pub enum Outcome {
     Done(Value),
+    /// A dedicated asynchronous resource continuation owns the final control reply.
+    Deferred,
     Screenshot {
         token: u64,
         path: Option<String>,
@@ -74,7 +83,7 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 22] = [
+pub const UI_SET_FIELDS: [&str; 25] = [
     "tool",
     "panels",
     "dock",
@@ -97,6 +106,9 @@ pub const UI_SET_FIELDS: [&str; 22] = [
     "brushSize",
     "gradientBlendMode",
     "gradientClassic",
+    "xcfUnderlineDraft",
+    "xcfColorRotateDraft",
+    "xcfItemSetDraft",
 ];
 
 /// Most clicks one `ui.click` may queue (#982). Each click is a press and a release that the app
@@ -171,6 +183,102 @@ fn whole_object<T: serde::Serialize + serde::de::DeserializeOwned>(current: &T, 
     }
     serde_json::from_value(v.clone()).map(Some).map_err(|e| format!("{field}: {e}"))
 }
+/// Scalar-only view draft; it cannot apply canonical filter changes.
+fn color_rotate_draft_field(p: &Value) -> std::result::Result<Option<Option<crate::state::XcfColorRotateDraft>>, String> {
+    let Some(value) = p.get("xcfColorRotateDraft") else { return Ok(None) };
+    if value.is_null() {
+        return Ok(Some(None));
+    }
+    let object = value.as_object().ok_or("xcfColorRotateDraft must be an object or null")?;
+    if object.len() != 5 || ["document", "revision", "filter", "from", "to"].iter().any(|name| !object.contains_key(*name)) {
+        return Err("Color Rotate draft requires exactly document, revision, filter, from and to".into());
+    }
+    for name in ["document", "revision", "filter"] {
+        if object.get(name).is_none_or(|v| v.as_u64().is_none()) {
+            return Err(format!("Color Rotate {name} must be an exact nonnegative integer"));
+        }
+    }
+    for (name, values) in [("from", [30.0_f64, 33.125, 207.5, 210.0]), ("to", [210.0_f64, 211.75, 330.0, 337.25])] {
+        if object.get(name).and_then(Value::as_f64).is_none_or(|v| !values.iter().any(|allowed| allowed.to_bits() == v.to_bits())) {
+            return Err(format!("Color Rotate {name} must be an exact witnessed angle"));
+        }
+    }
+    let draft = whole_object(&crate::state::XcfColorRotateDraft::default(), Some(value), "xcfColorRotateDraft")?.ok_or("missing Color Rotate draft")?;
+    Ok(Some(Some(draft)))
+}
+
+/// Whole-value view replacement, bounded before cloning/deserializing payloads.
+fn item_set_draft_field(p: &Value) -> std::result::Result<Option<Option<crate::state::XcfItemSetDraft>>, String> {
+    let Some(value) = p.get("xcfItemSetDraft") else { return Ok(None) };
+    if value.is_null() { return Ok(Some(None)); }
+    let object = value.as_object().ok_or("xcfItemSetDraft must be an object or null")?;
+    if object.len() != 5 || object.keys().any(|key| !matches!(key.as_str(), "document" | "layer" | "revision" | "setId" | "name")) {
+        return Err("xcfItemSetDraft requires document, layer, revision, setId and name".into());
+    }
+    let identity = |key: &str| -> Result<u64, String> {
+        let value = object.get(key).ok_or_else(|| format!("missing {key}"))?;
+        let number = if let Some(text) = value.as_str() {
+            if text.is_empty() || text.len() > 20 || (text.len() > 1 && text.starts_with('0')) || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(format!("{key} must be a canonical decimal U64"));
+            }
+            text.parse::<u64>().map_err(|_| format!("{key} exceeds U64"))?
+        } else {
+            value.as_u64().ok_or_else(|| format!("{key} must be an exact U64 or canonical decimal string"))?
+        };
+        if number == 0 && key != "revision" { return Err(format!("{key} must be nonzero")); }
+        Ok(number)
+    };
+    let name = object.get("name").and_then(Value::as_str).ok_or("name must be a string")?;
+    if name.len() > 1024 || name.chars().nth(256).is_some() || name.contains('\0') {
+        return Err("saved-set name exceeds the bounded draft or contains NUL".into());
+    }
+    let mut owned = String::new();
+    owned.try_reserve_exact(name.len()).map_err(|_| "saved-set draft allocation failed")?;
+    owned.push_str(name);
+    Ok(Some(Some(crate::state::XcfItemSetDraft {
+        document: identity("document")?, layer: identity("layer")?, revision: identity("revision")?, set_id: identity("setId")?, name: owned,
+    })))
+}
+
+fn underline_draft_field(p: &Value) -> std::result::Result<Option<Option<crate::state::XcfUnderlineDraft>>, String> {
+    let Some(value) = p.get("xcfUnderlineDraft") else { return Ok(None) };
+    if value.is_null() {
+        return Ok(Some(None));
+    }
+    let object = value.as_object().ok_or("xcfUnderlineDraft must be an object or null")?;
+    if let Some(content) = object.get("content")
+        && content.as_str().is_none_or(|text| text.len() > 256)
+    {
+        return Err("underline content must be a string of at most256 UTF8 bytes".into());
+    }
+    for key in ["document", "layer", "revision", "start", "end"] {
+        if object.get(key).is_some_and(|v| v.as_u64().is_none()) {
+            return Err(format!("underline {key} must be an exact nonnegative integer"));
+        }
+    }
+    if let Some(ranges) = object.get("ranges") {
+        let ranges = ranges.as_array().filter(|r| r.len() <= 8).ok_or("underline ranges must contain at most8 intervals")?;
+        for range in ranges {
+            let pair = range.as_array().filter(|p| p.len() == 2).ok_or("underline intervals require exactly2 integers")?;
+            if pair.iter().any(|v| v.as_u64().is_none_or(|n| n > 256)) {
+                return Err("underline intervals require exact integers bounded by256".into());
+            }
+        }
+    }
+    let draft = whole_object(&crate::state::XcfUnderlineDraft::default(), Some(value), "xcfUnderlineDraft")?.ok_or("missing underline draft")?;
+    let count = draft.content.chars().count();
+    if draft.start > draft.end || draft.end > count {
+        return Err("underline character positions must be ordered and inside content".into());
+    }
+    let mut previous = 0;
+    for [start, end] in &draft.ranges {
+        if start >= end || *start < previous || !draft.content.is_char_boundary(*start) || !draft.content.is_char_boundary(*end) {
+            return Err("underline ranges must be sorted UTF8 intervals inside content".into());
+        }
+        previous = *end;
+    }
+    Ok(Some(Some(draft)))
+}
 fn wrap(r: Result<Value, String>) -> Outcome {
     match r {
         Ok(v) => ok(v),
@@ -183,13 +291,13 @@ fn wrap(r: Result<Value, String>) -> Outcome {
 /// `wait` false it is `{job, pending: true}` at once.
 fn run_waiting(app: &mut PhotocraftApp, wait: bool, run: impl FnOnce(&mut PhotocraftApp) -> Result<Value, String>) -> Outcome {
     let events_enabled = app.session.prefs().script_events.enabled;
-    if events_enabled {
-        app.session.edit_prefs(|prefs| prefs.script_events.enabled = false);
+    if events_enabled && let Err(error) = app.session.edit_prefs(|prefs| prefs.script_events.enabled = false) {
+        return err(error.to_string());
     }
     app.jobs.last_started = None;
     let result = run(app);
-    if events_enabled {
-        app.session.edit_prefs(|prefs| prefs.script_events.enabled = true);
+    if events_enabled && let Err(error) = app.session.edit_prefs(|prefs| prefs.script_events.enabled = true) {
+        return err(error.to_string());
     }
     match (result, app.jobs.last_started.take()) {
         (Ok(_), Some(job)) if wait => Outcome::AfterJob(job),
@@ -217,12 +325,110 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
     outcome
 }
 
+fn linked_image_from_root(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
+    use photocraft_doc::{LayerId, item_identity::ResourceId};
+    enum Target {
+        Substitute(photocraft_engine::xcf_link_substitution_cmds::LinkedSubstitutionTarget),
+        Exact(photocraft_engine::xcf_link_substitution_cmds::LinkedRecoveryTarget),
+    }
+    let exact = req.method == "xcf.link.recoverFromRoot";
+    let code = if exact { "xcf.link.recoverFromRoot" } else { "xcf.link.substituteFromRoot" };
+    let command = if exact { "xcf.link.recover" } else { "xcf.link.substitute" };
+    let prepare = || -> Result<_, String> {
+        let p = req.params.as_object().ok_or_else(|| format!("{code}.parameters"))?;
+        let keys = ["documentId", "expectedRevision", "layerId", "resourceId", "path", "policy"];
+        if p.len() != keys.len() || keys.iter().any(|key| !p.get(*key).is_some_and(Value::is_string)) {
+            return Err(format!("{code}.parameters"));
+        }
+        let string = |key: &str| p.get(key).and_then(Value::as_str).ok_or_else(|| format!("{code}.parameters"));
+        let decimal = |key: &str, zero: bool| -> Result<u64, String> {
+            let text = string(key)?;
+            if text.is_empty() || text.len() > 20 || !text.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(format!("{code}.parameters"));
+            }
+            let value = text.parse::<u64>().map_err(|_| format!("{code}.parameters"))?;
+            if (!zero && value == 0) || value.to_string() != text {
+                return Err(format!("{code}.parameters"));
+            }
+            Ok(value)
+        };
+        if string("policy")? != if exact { "exact" } else { "substitute" } {
+            return Err(format!("{code}.policy"));
+        }
+        let path = string("path")?;
+        if path.is_empty() || path.len() > 4096 || path.contains('\0') {
+            return Err(format!("{code}.path"));
+        }
+        let document = decimal("documentId", false)?;
+        let revision = decimal("expectedRevision", true)?;
+        let owner = LayerId(decimal("layerId", false)?);
+        let resource = ResourceId(decimal("resourceId", false)?);
+        let state = app.session.active().ok_or_else(|| format!("{code}.stale-target"))?;
+        if state.doc.id.0 != document || state.revision != revision {
+            return Err(format!("{code}.stale-target"));
+        }
+        let target = if exact {
+            Target::Exact(photocraft_engine::xcf_link_substitution_cmds::capture_recovery_target(&app.session, owner, resource).map_err(|e| e.to_string())?)
+        } else {
+            Target::Substitute(photocraft_engine::xcf_link_substitution_cmds::capture_target(&app.session, owner, resource).map_err(|e| e.to_string())?)
+        };
+        Ok((target, path))
+    };
+    let (target, path) = match prepare() {
+        Ok(value) => value,
+        Err(error) => return err(error),
+    };
+    let reply = req.reply.clone();
+    let deadline = req.deadline;
+    let queued = app.read_automation_xcf_linked_replacement(ctx, code, path, move |app, answer| {
+        let result = (|| -> Result<Value, String> {
+            if deadline.is_some_and(|at| std::time::Instant::now() >= at) {
+                return Err(format!("{code}.timeout"));
+            }
+            let bytes = match answer {
+                Some(crate::file_dialog::FileDialogAnswer::Contents(_, bytes)) if bytes.is_empty() => return Err("xcf.resource.empty".into()),
+                Some(crate::file_dialog::FileDialogAnswer::Contents(_, bytes)) if bytes.len() <= 8 << 20 => bytes,
+                Some(crate::file_dialog::FileDialogAnswer::Contents(_, _)) => return Err("xcf.resource.too-large".into()),
+                Some(crate::file_dialog::FileDialogAnswer::Failed(error)) if error == "xcf.resource.picker-unavailable" => {
+                    return Err(format!("{code}.read-unavailable"));
+                }
+                Some(crate::file_dialog::FileDialogAnswer::Failed(error)) => return Err(error),
+                _ => return Err(format!("{code}.read-unavailable")),
+            };
+            let params = match &target {
+                Target::Substitute(target) => photocraft_engine::xcf_link_substitution_cmds::request_for_target(&app.session, target, &bytes),
+                Target::Exact(target) => photocraft_engine::xcf_link_substitution_cmds::request_for_recovery_target(&app.session, target, &bytes),
+            }
+            .map_err(|e| e.to_string())?;
+            if deadline.is_some_and(|at| std::time::Instant::now() >= at) {
+                return Err(format!("{code}.timeout"));
+            }
+            let saved_input = app.automation_input;
+            app.automation_input = true;
+            let result = app.run(command, params);
+            app.automation_input = saved_input;
+            result
+        })();
+        let value = match &result {
+            Ok(value) => json!({"ok":true,"result":value}),
+            Err(error) => json!({"ok":false,"error":error}),
+        };
+        let _ = reply.send(value);
+        result
+    });
+    match queued {
+        Ok(()) => Outcome::Deferred,
+        Err(error) => err(error),
+    }
+}
+
 fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
     let s = |k: &str| p.get(k).and_then(Value::as_str);
     let u = |k: &str| p.get(k).and_then(Value::as_u64);
     let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(true);
     match req.method.as_str() {
+        "xcf.link.substituteFromRoot" | "xcf.link.recoverFromRoot" => linked_image_from_root(app, ctx, req),
         "ui.context.choose" => {
             let Some(id) = s("id") else { return err("missing `id`") };
             let Some(menu) = app.ui.canvas_tool_menu.as_ref() else { return err("no canvas context menu is open") };
@@ -239,6 +445,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         }
         "engine.execute" | "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
+            if req.method == "engine.execute" && matches!(id, "xcf.link.substitute" | "xcf.link.recover") && !wait {
+                return err(format!("{id}.context"));
+            }
             let params = p.get("params").cloned().unwrap_or(json!({}));
             if let Some(authorize) = app.services.automation_command.as_ref()
                 && let Err(error) = authorize(id, &params)
@@ -275,7 +484,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             }
         }
         "ui.menu.list" => ok(serde_json::to_value(crate::menus::menu_items(app)).unwrap_or_default()),
-        "ui.inspect" => ok(inspect(app, ctx)),
+        "ui.inspect" => wrap(inspect(app, ctx)),
         "ui.set" => {
             if let Some(field) = p.as_object().and_then(|o| o.keys().find(|k| !UI_SET_FIELDS.contains(&k.as_str()))) {
                 return err(format!("unknown field `{field}` (fields: {})", UI_SET_FIELDS.join(", ")));
@@ -298,6 +507,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     None => None,
                 };
                 let gradient_classic = bool_field(p, "gradientClassic")?;
+                let underline_draft = underline_draft_field(p)?;
+                let color_rotate_draft = color_rotate_draft_field(p)?;
+                let item_set_draft = item_set_draft_field(p)?;
                 let panels = merged_object(&app.ui.panels, p.get("panels"), "panels")?;
                 let mask_target = bool_field(p, "maskTarget")?;
                 let vector_mask_target = bool_field(p, "vectorMaskTarget")?;
@@ -373,6 +585,15 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 };
 
                 // Apply (nothing below can fail).
+                if let Some(draft) = color_rotate_draft {
+                    app.ui.xcf_color_rotate_draft = draft;
+                }
+                if let Some(draft) = item_set_draft {
+                    app.ui.xcf_item_set_draft = draft;
+                }
+                if let Some(draft) = underline_draft {
+                    app.ui.xcf_underline_draft = draft;
+                }
                 if let Some(t) = tool {
                     app.ui.tool = t;
                     // Each tool keeps its own brush (#218), so switch it in before `brushSize`
@@ -750,16 +971,22 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
 }
 
 /// Snapshot of everything on screen, addressable by id.
-pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
+pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Result<Value, String> {
     let screen = ctx.content_rect();
     let dialogs: Vec<Value> =
         app.ui.dialogs.iter().map(|d| json!({"id": d.id, "kind": d.kind, "title": crate::dialogs::title(d), "fields": d.fields})).collect();
-    json!({
+    Ok(json!({
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
         "tool": app.ui.tool,
         "toolOptions": app.ui.tool_options,
         "magnetic": app.ui.magnetic,
         "textEdit": app.ui.text_edit,
+        "xcfUnderlineDraft": app.ui.xcf_underline_draft,
+        "xcfColorRotateDraft": app.ui.xcf_color_rotate_draft,
+        "xcfItemSetDraft": app.ui.xcf_item_set_draft.as_ref().map(|draft| json!({
+            "document": draft.document.to_string(), "layer": draft.layer.to_string(), "revision": draft.revision.to_string(),
+            "setId": draft.set_id.to_string(), "name": draft.name.chars().take(256).collect::<String>(),
+        })),
         "typeTransform": app.ui.type_transform,
         "layerMenu": app.ui.layer_menu,
         "canvasToolMenu": app.ui.canvas_tool_menu.as_ref().map(|menu| {
@@ -782,14 +1009,14 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "notices": app.ui.notices,
         "gpuFallbackNotice": app.ui.gpu_fallback_notice,
         "frame": app.frame,
-        "session": photocraft_engine::inspect::session(&app.session),
-        "document": app.session.active().map(photocraft_engine::inspect::document),
+        "session": photocraft_engine::inspect::session(&app.session).map_err(|error| error.to_string())?,
+        "document": app.session.active().map(photocraft_engine::inspect::document).transpose().map_err(|error| error.to_string())?,
         "perf": {"fps": app.fps, "timings": app.perf},
         "brush": {"size": app.session.tools.brush.size, "hardness": app.session.tools.brush.hardness, "opacity": app.session.tools.brush.opacity},
         "distort": app.distort.describe(),
         "jobs": crate::jobs_ui::inspect(app),
         "cameraRaw": app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)),
-    })
+    }))
 }
 
 pub fn save_screenshot(app: &mut PhotocraftApp, image: &egui::ColorImage, path: Option<&str>) -> Value {
@@ -813,9 +1040,15 @@ pub fn save_screenshot(app: &mut PhotocraftApp, image: &egui::ColorImage, path: 
             Err(error) => json!({"ok": false, "error": error}),
         };
     };
-    let result = png.and_then(|bytes| match app.services.automation_write.as_mut() {
-        Some(write) => write(path, &bytes),
-        None => Err("automation write authority is not configured".into()),
+    let result = png.and_then(|bytes| {
+        let mut protection = photocraft_engine::WriteProtection::default();
+        for state in app.session.documents() {
+            protection.add_document(&state.doc, state.source.as_ref())?;
+        }
+        match app.services.automation_write.as_mut() {
+            Some(write) => write(path, &bytes, &protection),
+            None => Err("automation write authority is not configured".into()),
+        }
     });
     match result {
         Ok(()) => json!({"ok": true, "result": {"path": path, "width": w, "height": h}}),
@@ -961,6 +1194,49 @@ mod tests {
             assert!(!r.to_string().contains("unknown field"), "{field}: {r}");
         }
         assert_eq!(call(&mut app, &ctx, "ui.set", Value::Null)["ok"], true);
+    }
+
+    #[test]
+    fn color_rotate_view_draft_refuses_rounding_unknown_fields_and_partial_updates() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let draft = json!({"document":1,"revision":2,"filter":3,"from":210,"to":210});
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"xcfColorRotateDraft":draft}))["ok"], true);
+        let retained = app.ui.clone();
+        for value in [
+            json!({"document":1,"revision":2,"filter":3,"from":30.00000001,"to":210}),
+            json!({"document":1,"revision":2,"filter":3,"from":30,"to":330,"extra":1}),
+            json!({"document":1,"revision":2,"filter":3,"from":30,"to":360}),
+            json!({"document":1,"revision":2,"filter":3,"from":30}),
+        ] {
+            assert_eq!(call(&mut app, &ctx, "ui.set", json!({"tool":"move","xcfColorRotateDraft":value}))["ok"], false);
+            assert_eq!(app.ui, retained);
+        }
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"xcfColorRotateDraft":null}))["ok"], true);
+        assert!(app.ui.xcf_color_rotate_draft.is_none());
+    }
+
+    #[test]
+    fn color_rotate_boundary_view_draft_exact_bits_and_atomicity() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        for (from, to) in [(33.125f32, 211.75f32), (207.5, 337.25)] {
+            let draft = json!({"document":1,"revision":2,"filter":3,"from":from,"to":to});
+            assert_eq!(call(&mut app, &ctx, "ui.set", json!({"xcfColorRotateDraft":draft}))["ok"], true);
+            let current = app.ui.xcf_color_rotate_draft.as_ref().unwrap();
+            assert_eq!(current.from.to_bits(), from.to_bits());
+            assert_eq!(current.to.to_bits(), to.to_bits());
+        }
+        let retained = app.ui.clone();
+        for value in [
+            json!({"document":1,"revision":2,"filter":3,"from":33.125000001,"to":211.75}),
+            json!({"document":1,"revision":2,"filter":3,"from":207.5,"to":337.250000001}),
+            json!({"document":1,"revision":2,"filter":3,"from":33.125,"to":211.75,"extra":1}),
+            json!({"document":1,"revision":2,"filter":3,"from":33.125}),
+        ] {
+            assert_eq!(call(&mut app, &ctx, "ui.set", json!({"tool":"move","xcfColorRotateDraft":value}))["ok"], false);
+            assert_eq!(app.ui, retained);
+        }
     }
 
     #[test]
@@ -1191,11 +1467,12 @@ mod tests {
                     document: Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8),
                     warnings: vec!["Adjustment layer flattened".to_string()],
                     origin: Default::default(),
+                    assessment: None,
                 })
             })),
             export: Some(Box::new(|_d: &Document, _p: &str, _s: &crate::ExportSettings| Ok((b"out".to_vec(), vec!["Layers were flattened".to_string()])))),
             automation_read: Some(Box::new(|path: &str| Ok((path.rsplit('/').next().unwrap_or(path).to_string(), b"x".to_vec())))),
-            automation_write: Some(Box::new(move |path: &str, _b: &[u8]| {
+            automation_write: Some(Box::new(move |path: &str, _b: &[u8], _protection: &photocraft_engine::WriteProtection| {
                 w.borrow_mut().push(path.to_string());
                 Ok(())
             })),
@@ -1297,5 +1574,35 @@ mod tests {
             assert_eq!(app.synthetic.len(), events);
             app.synthetic.clear();
         }
+    }
+}
+
+
+#[cfg(test)]
+mod item_set_draft_tests {
+    use super::*;
+    #[test]
+    fn exact_string_identity_and_bounded_unicode_names() {
+        let valid = json!({"xcfItemSetDraft":{"document":"18446744073709551615","layer":"9007199254740993","revision":"0","setId":"7","name":"Own set"}});
+        let draft = item_set_draft_field(&valid).unwrap().unwrap().unwrap();
+        assert_eq!(draft.document, u64::MAX);
+        assert_eq!(draft.layer, 9_007_199_254_740_993);
+        let mut malformed = valid.clone();
+        for value in [json!("01"), json!("0"), json!(true), json!(1.5), json!("18446744073709551616")] {
+            malformed["xcfItemSetDraft"]["setId"] = value;
+            assert!(item_set_draft_field(&malformed).is_err());
+        }
+        malformed = valid;
+        malformed["xcfItemSetDraft"]["name"] = json!("🙂".repeat(257));
+        assert!(item_set_draft_field(&malformed).is_err());
+    }
+    #[test]
+    fn rejected_draft_does_not_apply_other_ui_fields() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let before = app.ui.clone();
+        let (request, _) = ControlRequest::new("ui.set", json!({"gradientClassic":!before.gradient_classic,"xcfItemSetDraft":{"document":"1","layer":"2","revision":"0","setId":"03","name":"Own set"}}));
+        let Outcome::Done(value) = handle(&mut app, &egui::Context::default(), &request) else { panic!("expected immediate refusal") };
+        assert_eq!(value["ok"], false);
+        assert_eq!(app.ui, before);
     }
 }

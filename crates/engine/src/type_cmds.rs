@@ -400,19 +400,50 @@ pub fn replace_text(t: &mut TextLayer, a: usize, b: usize, new: &str) {
     t.sync_summary();
 }
 
+pub(crate) fn text_engine() -> Result<&'static std::sync::Mutex<photocraft_text::TextEngine>> {
+    photocraft_text::try_shared().map_err(|error| EngineError::Other(error.to_string()))
+}
+
+/// Authoritative physical axes for checked text geometry.
+pub fn checked_layout_resolution(doc: &Document) -> Result<photocraft_doc::PhysicalResolution> {
+    let resolution = doc.physical_resolution.clone().unwrap_or_else(|| photocraft_doc::PhysicalResolution::square(f64::from(doc.resolution_dpi)));
+    resolution.validate().map_err(|error| EngineError::Other(error.to_string()))?;
+    for dpi in [resolution.x_dpi, resolution.y_dpi] {
+        if !(dpi as f32).is_finite() || (dpi as f32) <= 0.0 {
+            return Err(EngineError::Other("physical type resolution exceeds checked layout bounds".into()));
+        }
+    }
+    Ok(resolution)
+}
+
+/// Authoritative physical DPI for callers which still require a square resolution.
+/// Unequal axes remain unsupported; custom display units do not change point sizes.
+pub fn checked_layout_dpi(doc: &Document) -> Result<f32> {
+    crate::type_extra_cmds::scalar_layout_dpi(doc)
+}
+
 /// Re-renders the layer's pixels and regenerates its PSD `TySh` data.
-pub fn refresh(doc: &Document, t: &mut TextLayer) {
-    let dpi = doc.resolution_dpi;
-    let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
-    let (layout, r) = eng.render(t, dpi, doc.pixel_format());
+pub fn try_refresh(doc: &Document, t: &mut TextLayer) -> Result<()> {
+    let resolution = checked_layout_resolution(doc)?;
+    let mut eng = text_engine()?.lock().unwrap_or_else(|e| e.into_inner());
+    let (layout, r) = eng.render_with_resolution(t, &resolution, doc.pixel_format()).map_err(|error| EngineError::Other(error.to_string()))?;
+    let raw = photocraft_text::psd::build_tysh_with_resolution(t, &resolution, layout.bounds()).map_err(|error| EngineError::Other(error.to_string()))?;
     t.cache = Some(r.surface);
-    t.psd_raw = Some(Arc::new(photocraft_text::psd::build_tysh(t, dpi, layout.bounds())));
+    t.psd_raw = Some(Arc::new(raw));
+    Ok(())
+}
+
+/// Re-renders the layer's pixels and regenerates its PSD `TySh` data.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn refresh(doc: &Document, t: &mut TextLayer) {
+    let _ = try_refresh(doc, t);
 }
 
 /// Runs `f` on a type layer as one undo step. `f` may set an explicit layer name (`type.edit`'s
 /// `name`), which is applied in the same step; otherwise an auto-named layer follows its text.
 fn with_text_layer<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&mut TextLayer, &Document, &mut Option<String>) -> Result<R>) -> Result<R> {
     let id = layer_id(s, p)?;
+    checked_layout_resolution(&s.active().ok_or(EngineError::NoDocument)?.doc)?;
     let (r, damage) = s.edit(label, |doc, _| {
         let snapshot = doc.clone();
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
@@ -423,7 +454,7 @@ fn with_text_layer<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&m
         let before = t.cache.as_ref().map(|c| c.tile_bounds());
         let mut rename = None;
         let r = f(t, &snapshot, &mut rename)?;
-        refresh(&snapshot, t);
+        try_refresh(&snapshot, t)?;
         // Only this layer's pixels changed: the canvas recomposites their old and new area
         // instead of the whole document (#124). Unknown old pixels mean a full refresh.
         let damage = before.zip(t.cache.as_ref().map(|c| c.tile_bounds())).map(|(a, b)| a.union(&b));
@@ -481,7 +512,8 @@ fn info(s: &Session, p: &Value) -> Result<Value> {
             v
         })
         .collect();
-    let layout = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner()).layout(t, d.doc.resolution_dpi);
+    let resolution = checked_layout_resolution(&d.doc)?;
+    let layout = text_engine()?.lock().unwrap_or_else(|e| e.into_inner()).layout_with_resolution(t, &resolution).map_err(|error| EngineError::Other(error.to_string()))?;
     let lines: Vec<Value> = layout
         .lines
         .iter()
@@ -501,6 +533,7 @@ fn info(s: &Session, p: &Value) -> Result<Value> {
         "lines": lines,
         "bounds": bounds,
         "pxPerPt": layout.px_per_pt,
+        "pxPerPtAxes": layout.px_per_pt_axes(),
     }))
 }
 
@@ -555,7 +588,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 t.sync_summary();
                 let name = p.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| layer_name(&t.text));
                 let id = s.edit("New Type Layer", |doc, active| {
-                    refresh(doc, &mut t);
+                    try_refresh(doc, &mut t)?;
                     let id = doc.insert_above(*active, Layer::new(name, LayerContent::Text(t)));
                     *active = Some(id);
                     Ok(id)
@@ -614,8 +647,8 @@ pub fn specs() -> Vec<CommandSpec> {
                         let a = byte_at(&t.text, at - 1);
                         let b = byte_at(&t.text, at);
                         let now = {
-                            let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
-                            eng.pair_kerning(t, doc.resolution_dpi, a)
+                            let mut eng = text_engine()?.lock().unwrap_or_else(|e| e.into_inner());
+                            eng.pair_kerning_with_resolution(t, &checked_layout_resolution(doc)?, a).map_err(|error| EngineError::Other(error.to_string()))?
                         }
                         .ok_or_else(|| bad("type.edit", "no kerning pair at the caret (line break or line end)"))?;
                         let value = (f64::from(now.round()) + by).clamp(KERN_MIN, KERN_MAX) as f32;
@@ -735,10 +768,10 @@ pub fn specs() -> Vec<CommandSpec> {
                         return Err(EngineError::Other(format!("layer {} is not a type layer", id.0)));
                     };
                     if t.cache.is_none() {
-                        refresh(&snapshot, t);
+                        try_refresh(&snapshot, t)?;
                     }
                     let surface = t.cache.take().unwrap_or_else(|| photocraft_raster::Surface::new(snapshot.pixel_format()));
-                    let surface = if surface.format() == snapshot.pixel_format() { surface } else { surface.convert(snapshot.pixel_format()) };
+                    let surface = if surface.format() == snapshot.pixel_format() { surface } else { surface.try_convert(snapshot.pixel_format()).map_err(|e| crate::EngineError::Other(format!("pixel conversion: {e}")))? };
                     l.content = LayerContent::Raster(surface);
                     l.psd_blocks.retain(|(k, _)| k != b"TySh");
                     Ok(())
@@ -765,7 +798,7 @@ pub fn specs() -> Vec<CommandSpec> {
             enabled: |_| Ok(()),
             journal: false,
             run: |_, p| {
-                let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
+                let mut eng = text_engine()?.lock().unwrap_or_else(|e| e.into_inner());
                 match p.get("family").and_then(Value::as_str) {
                     Some(f) => {
                         let faces: Vec<Value> = eng.fonts.faces(f).into_iter().map(|x| json!({ "family": x.family, "weight": x.weight, "italic": x.italic, "axes": x.axes })).collect();
@@ -793,6 +826,94 @@ mod tests {
             LayerContent::Text(t) => t.clone(),
             other => panic!("{}", other.kind_name()),
         }
+    }
+
+    #[test]
+    fn physical_square_resolution_is_authoritative_for_type_info_and_tysh() {
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width":200,"height":100,"depth":depth,"background":"transparent"})).unwrap();
+            s.edit("Physical source metadata", |doc, _| {
+                doc.physical_resolution = Some(photocraft_doc::PhysicalResolution::square(144.0));
+                doc.resolution_dpi = 72.0; // finite legacy compatibility value is not authority
+                Ok(())
+            })
+            .unwrap();
+            let id = s.execute("type.create", json!({"text":"AV","size":24,"x":8,"y":60})).unwrap()["layer"].as_u64().unwrap();
+            let info = s.execute("type.info", json!({"layer":id})).unwrap();
+            assert_eq!(info["pxPerPt"], 2.0, "authoritative physical DPI at depth {depth}");
+            let t = text_layer(&s, id);
+            let parsed = photocraft_text::psd::text_layer_from_tysh(t.psd_raw.as_ref().unwrap(), 144.0).unwrap();
+            assert_eq!(parsed.char_runs()[0].style.size_pt, 24.0);
+            let doc = &s.active().unwrap().doc;
+            let bytes = photocraft_format::save_to_bytes(doc, &Default::default()).unwrap();
+            assert_eq!(photocraft_format::load_from_bytes(&bytes).unwrap(), **doc);
+        }
+    }
+
+    #[test]
+    fn physical_unequal_type_commands_refuse_without_replacing_history_or_cache() {
+        for (x, y) in [(144.0, 72.0), (72.0, 144.0)] {
+            let mut baseline = session();
+            let id = baseline.execute("type.create", json!({"text":"AV","size":24,"y":50})).unwrap()["layer"].as_u64().unwrap();
+            let mut source = (*baseline.active().unwrap().doc).clone();
+            source.physical_resolution = Some(photocraft_doc::PhysicalResolution { x_dpi: x, y_dpi: y, unit: photocraft_doc::PhysicalUnit::Inch });
+            for (command, params) in [
+                ("type.info", json!({"layer":id})),
+                ("type.create", json!({"text":"Extra","size":24})),
+                ("type.edit", json!({"layer":id,"text":"AV!"})),
+                ("type.setStyle", json!({"layer":id,"size":30})),
+                ("type.edit", json!({"layer":id,"kernPair":{"at":1,"by":10}})),
+            ] {
+                let mut s = Session::new();
+                s.add_document(source.clone(), None).unwrap();
+                s.edit("Retained redo", |doc, _| {
+                    doc.name.push_str(" redo");
+                    Ok(())
+                })
+                .unwrap();
+                let redo_doc = s.active().unwrap().doc.clone();
+                s.execute("edit.undo", json!({})).unwrap();
+                let revision = s.active().unwrap().revision;
+                let redo = s.active().unwrap().history.redo_labels().map(str::to_owned).collect::<Vec<_>>();
+                let result = s.execute(command, params);
+                assert!(result.is_err(), "{command} silently collapsed physical axes {x}/{y}");
+                assert!(result.unwrap_err().to_string().contains("unequal-axis physical type layout"));
+                assert_eq!(*s.active().unwrap().doc, source);
+                assert_eq!(s.active().unwrap().revision, revision);
+                assert_eq!(s.active().unwrap().history.redo_labels().map(str::to_owned).collect::<Vec<_>>(), redo);
+                s.execute("edit.redo", json!({})).unwrap();
+                assert_eq!(s.active().unwrap().doc, redo_doc);
+            }
+        }
+    }
+
+    #[test]
+    fn physical_refresh_refusal_leaves_native_cache_and_psd_data_untouched() {
+        let mut s = session();
+        let id = s.execute("type.create", json!({"text":"AV","size":24,"y":50})).unwrap()["layer"].as_u64().unwrap();
+        let before = text_layer(&s, id);
+        let mut doc = (*s.active().unwrap().doc).clone();
+        doc.physical_resolution = Some(photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: 72.0, unit: photocraft_doc::PhysicalUnit::Inch });
+        doc.resolution_dpi = 96.0;
+        let mut fallible = before.clone();
+        let result = try_refresh(&doc, &mut fallible);
+        assert!(result.is_err(), "unsupported physical layout replaced the source cache");
+        assert_eq!(fallible, before);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut native = before.clone();
+            refresh(&doc, &mut native);
+            assert_eq!(native, before, "native compatibility wrapper must retain unsupported cache and TySh");
+        }
+        doc.physical_resolution = Some(photocraft_doc::PhysicalResolution::square(144.0));
+        let expected = text_engine().unwrap().lock().unwrap_or_else(|error| error.into_inner()).render(&before, 144.0, doc.pixel_format()).1.surface;
+        try_refresh(&doc, &mut fallible).unwrap();
+        assert_eq!(fallible.cache.as_ref().unwrap(), &expected, "successful refresh uses authoritative physical DPI");
+        assert_ne!(fallible.cache, before.cache);
+        assert_eq!(fallible.text, before.text);
+        assert_eq!(fallible.char_runs(), before.char_runs());
+        assert_eq!(photocraft_text::psd::text_layer_from_tysh(fallible.psd_raw.as_ref().unwrap(), 144.0).unwrap().char_runs()[0].style.size_pt, 24.0);
     }
 
     #[test]
@@ -906,7 +1027,7 @@ mod tests {
         let layer = s.active().unwrap().doc.layer(LayerId(id)).unwrap();
         let before_bounds = text_layer(&s, id).cache.unwrap().content_bounds();
         assert_eq!(layer.name, "Original");
-        let steps = s.active().unwrap().history.entries().len();
+        let steps = s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len();
 
         s.execute("type.edit", json!({"layer": id, "text": "A much longer edited title that wraps", "box": [10, 10, 50, 60], "name": "Renamed"})).unwrap();
 
@@ -915,7 +1036,7 @@ mod tests {
         assert_eq!(edited.name, "Renamed");
         assert_eq!(text_layer(&s, id).text, "A much longer edited title that wraps");
         assert_ne!(edited_bounds, before_bounds);
-        assert_eq!(s.active().unwrap().history.entries().len(), steps + 1);
+        assert_eq!(s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len(), steps + 1);
 
         assert!(s.undo());
         let restored = s.active().unwrap().doc.layer(LayerId(id)).unwrap();
@@ -998,14 +1119,14 @@ mod tests {
         let mut s = Session::new();
         s.execute("file.new", json!({"width": 3000, "height": 2000})).unwrap();
         let id = s.execute("type.create", json!({"x": 100, "y": 100, "text": "Hi", "size": 20})).unwrap()["layer"].as_u64().unwrap();
-        let steps = s.active().unwrap().history.entries().len();
+        let steps = s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len();
         for k in 0..5 {
             s.execute("type.setStyle", json!({"layer": id, "size": 30 + k * 10, "coalesce": "drag"})).unwrap();
             let d = s.active().unwrap().last_damage.expect("damage rect");
             let r = text_layer(&s, id).cache.unwrap().content_bounds();
             assert!(d.intersect(&r) == r && d.width() <= 512 && d.height() <= 512, "{d:?} {r:?}");
         }
-        assert_eq!(s.active().unwrap().history.entries().len(), steps + 1);
+        assert_eq!(s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len(), steps + 1);
         assert!(s.undo());
         assert_eq!(text_layer(&s, id).runs[0].style.size_pt, 20.0);
     }
@@ -1015,7 +1136,7 @@ mod tests {
         let mut s = session();
         let id = s.execute("type.create", json!({"x": 0, "y": 40, "text": "Hello world", "size": 20})).unwrap()["layer"].as_u64().unwrap();
         let before = text_layer(&s, id).char_runs();
-        let steps = s.active().unwrap().history.entries().len();
+        let steps = s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len();
         for runs in [
             json!([{"start": 5, "end": 2, "fauxBold": true}]),
             json!([{"start": 0, "end": 3, "fauxBold": true}, {"start": 8, "end": 7}]),
@@ -1026,7 +1147,7 @@ mod tests {
         }
         // Nothing changed and nothing was recorded, not even the valid run before the bad one.
         assert_eq!(text_layer(&s, id).char_runs(), before);
-        assert_eq!(s.active().unwrap().history.entries().len(), steps);
+        assert_eq!(s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len(), steps);
         // The same range the right way round still styles it.
         s.execute("type.edit", json!({"layer": id, "runs": [{"start": 2, "end": 5, "fauxBold": true}]})).unwrap();
         let runs = text_layer(&s, id).char_runs();
@@ -1173,7 +1294,7 @@ mod tests {
             photocraft_text::shared().lock().unwrap().pair_kerning(&t, 72.0, 0).unwrap()
         };
         assert!(metric < -10.0, "Inter kerns AV: {metric}");
-        let steps = s.active().unwrap().history.entries().len();
+        let steps = s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len();
         s.execute("type.edit", json!({"layer": id, "kernPair": {"at": 1, "by": 20}})).unwrap();
         let k0 = kerning_of(&s, id)[0];
         assert_eq!(k0, (Kerning::Off, metric.round() + 20.0));
@@ -1183,7 +1304,7 @@ mod tests {
         assert_eq!(kerning_of(&s, id)[0].1, metric.round() + 100.0);
         // Other characters are untouched; each press is its own undoable step.
         assert_eq!(&kerning_of(&s, id)[1..], &[(Kerning::Metrics, 0.0), (Kerning::Metrics, 0.0)]);
-        assert_eq!(s.active().unwrap().history.entries().len(), steps + 3);
+        assert_eq!(s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len(), steps + 3);
         assert!(s.undo());
         assert_eq!(kerning_of(&s, id)[0].1, metric.round() + 120.0);
         assert!(s.undo() && s.undo());
@@ -1193,10 +1314,10 @@ mod tests {
     fn create_vertical_type_is_atomic_and_invalid_orientation_is_rejected() {
         for boxed in [false, true] {
             let mut s = session();
-            let before = s.active().unwrap().history.entries().len();
+            let before = s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len();
             for orientation in [json!("diagonal"), json!(null), json!(true)] {
                 assert!(s.execute("type.create", json!({"text": "test", "orientation": orientation})).is_err());
-                assert_eq!(s.active().unwrap().history.entries().len(), before);
+                assert_eq!(s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len(), before);
             }
             let mut p = json!({"text": "test", "orientation": "vertical", "x": 20, "y": 20});
             if boxed {

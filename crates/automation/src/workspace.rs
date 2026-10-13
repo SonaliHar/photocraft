@@ -1,15 +1,16 @@
 //! Capability-based filesystem policy for untrusted automation paths.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use cap_std::ambient_authority;
-use cap_std::fs::{Dir, OpenOptions};
-use photocraft_format::atomic::RenameRetry;
+use cap_std::fs::Dir;
 use serde_json::Value;
 
 use crate::AutomationError;
+
+mod linked_read;
+mod source_write;
 
 const DENIED: &str = "automation filesystem access is not granted";
 
@@ -32,49 +33,113 @@ pub struct AuthorizedWorkspace {
 }
 
 impl AuthorizedWorkspace {
+    /// Read explicitly requested linked material below the held read-root capability.
+    /// The caller captures the engine target before I/O, then constructs and
+    /// immediately executes the registered substitution request after reading.
+    /// No stored locator, resource kind, document or grant is consulted here.
+    pub fn read_xcf_linked_replacement(&self, path: &str, control: &photocraft_raster::Interrupt<'_>) -> Result<Vec<u8>, AutomationError> {
+        control.check().map_err(|_| AutomationError::Engine(photocraft_engine::EngineError::Cancelled))?;
+        if path.len() > 4096 {
+            return Err(AutomationError::BadRequest("xcf.link.substituteFromRoot.path-limit".into()));
+        }
+        let relative = relative_path(path)?;
+        let root = self.read.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: read authority is absent")))?;
+        linked_read::read(&root.dir, &relative, control)
+    }
+
+    /// Explicit request path below the held read root, never a source-stored locator.
+    /// Bytes and grants are separate: only ordinary resolved document data is saved.
+    pub fn recover_xcf_resource(
+        &self,
+        session: &mut photocraft_engine::Session,
+        resource: photocraft_doc::item_identity::ResourceId,
+        path: &str,
+        policy: photocraft_engine::xcf_resources::RecoveryPolicy,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<photocraft_doc::xcf_resources::ResourceFidelity, AutomationError> {
+        use std::io::Read;
+        let relative = relative_path(path)?;
+        let root = self.read.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: read authority is absent")))?;
+        let kind = session
+            .active()
+            .and_then(|active| active.doc.xcf_state.as_ref())
+            .and_then(|state| state.resources.iter().find(|entry| entry.id == resource))
+            .map(|entry| entry.kind.clone())
+            .ok_or_else(|| AutomationError::BadRequest("unknown XCF resource identity".into()))?;
+        if kind == photocraft_doc::xcf_resources::ResourceKind::Font {
+            return Err(AutomationError::BadRequest("font recovery requires an installed-font identity service".into()));
+        }
+        control.check().map_err(|_| AutomationError::BadRequest("XCF resource recovery cancelled".into()))?;
+        let mut file = root.dir.open(&relative).map_err(|e| file_error("resource read", path, e))?;
+        let metadata = file.metadata().map_err(|e| file_error("resource inspect", path, e))?;
+        if !metadata.is_file() || metadata.len() > 64 << 20 {
+            return Err(AutomationError::BadRequest("XCF resource is not a bounded regular file".into()));
+        }
+        let mut bytes = Vec::new();
+        let mut chunk = [0u8; 32 << 10];
+        loop {
+            control.check().map_err(|_| AutomationError::BadRequest("XCF resource recovery cancelled".into()))?;
+            let count = file.read(&mut chunk).map_err(|e| file_error("resource read", path, e))?;
+            if count == 0 {
+                break;
+            }
+            if bytes.len().checked_add(count).is_none_or(|size| size > 64 << 20) {
+                return Err(AutomationError::BadRequest("XCF resource read limit exceeded".into()));
+            }
+            bytes.try_reserve(count).map_err(|_| AutomationError::BadRequest("XCF resource allocation denied".into()))?;
+            bytes.extend_from_slice(chunk.get(..count).ok_or_else(|| AutomationError::BadRequest("invalid resource read count".into()))?);
+        }
+        let input = photocraft_engine::xcf_resources::ServiceResourceBytes::from_authorized_service(kind, bytes, true)
+            .map_err(|e| AutomationError::BadRequest(e.to_string()))?;
+        photocraft_engine::xcf_resources::recover_authorized_bytes(session, resource, input, policy, control)
+            .map_err(|e| AutomationError::BadRequest(e.to_string()))
+    }
     /// Check an output through the write capability without obtaining ambient authority.
     /// Existing XCF contents remain protected even when renamed or hard-linked.
     pub fn guard_write(&self, path: &str, protected_source: Option<&str>) -> Result<(), AutomationError> {
-        use std::io::Read;
-        crate::files::validate_write_name(Path::new(path), None)?;
-        let relative = relative_path(path)?;
-        let root = self.write.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: write authority is absent")))?;
-        if let (Some(source), Some(read)) = (protected_source, &self.read) {
-            let source = relative_path(source)?;
-            let same_root = read.identity == root.identity;
-            if same_root && source == relative {
-                return Err(AutomationError::BadRequest("the original XCF source is protected; choose a different destination".into()));
-            }
-        }
-        match root.dir.open(&relative) {
-            Ok(mut file) => {
-                #[cfg(not(target_arch = "wasm32"))]
-                if let Some(source) = protected_source {
-                    let read =
-                        self.read.as_ref().ok_or_else(|| AutomationError::BadRequest("cannot establish source identity without read authority".into()))?;
-                    let original = read.dir.open(relative_path(source)?).map_err(|e| file_error("identify source", source, e))?;
-                    let destination = file.try_clone().map_err(|e| file_error("identify destination", path, e))?;
-                    let a = same_file::Handle::from_file(original.into_std()).map_err(|e| file_error("identify source", source, e))?;
-                    let b = same_file::Handle::from_file(destination.into_std()).map_err(|e| file_error("identify destination", path, e))?;
-                    if a == b {
-                        return Err(AutomationError::BadRequest("an alias of the original XCF source is protected; choose a different destination".into()));
-                    }
-                }
-                let mut prefix = [0; 9];
-                let full = match file.read_exact(&mut prefix) {
-                    Ok(()) => true,
-                    Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => false,
-                    Err(e) => return Err(file_error("validate write", path, e)),
-                };
-                if full && &prefix == b"gimp xcf " {
-                    return Err(AutomationError::BadRequest("an existing XCF destination is protected; choose a different destination".into()));
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(file_error("validate write", path, e)),
-        }
-        Ok(())
+        source_write::check(self, path, source_write::Sources::one(protected_source), &[])
     }
+    /// Check inert native fingerprint evidence without reading any metadata locator.
+    pub fn guard_write_document(&self, path: &str, source: Option<&str>, document: &photocraft_doc::Document) -> Result<(), AutomationError> {
+        let fingerprints = photocraft_io::source_protection::document_fingerprints(document)
+            .map_err(|error| AutomationError::BadRequest(format!("automation source protection: {error}")))?;
+        source_write::check(self, path, source_write::Sources::one(source), &fingerprints)
+    }
+
+    /// Protect all caller-supplied runtime identities and inert source fingerprints.
+    pub fn guard_write_protected(&self, path: &str, sources: &[String], fingerprints: &[String]) -> Result<(), AutomationError> {
+        source_write::check(self, path, source_write::Sources::many(sources), fingerprints)
+    }
+    /// Controlled protection check using only the existing held read/write roots.
+    pub fn guard_write_with_interrupt(&self, path: &str, source: Option<&str>, control: &photocraft_raster::Interrupt<'_>) -> Result<(), AutomationError> {
+        source_write::check_with_interrupt(self, path, source_write::Sources::one(source), &[], control)
+    }
+    pub fn guard_write_document_with_interrupt(
+        &self,
+        path: &str,
+        source: Option<&str>,
+        document: &photocraft_doc::Document,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<(), AutomationError> {
+        let fingerprints = photocraft_io::source_protection::document_fingerprints_with_interrupt(document, control).map_err(|error| {
+            if matches!(error, photocraft_io::source_protection::SourceProtectionError::Cancelled) {
+                AutomationError::Engine(photocraft_engine::EngineError::Cancelled)
+            } else {
+                AutomationError::BadRequest(format!("automation source protection: {error}"))
+            }
+        })?;
+        source_write::check_with_interrupt(self, path, source_write::Sources::one(source), &fingerprints, control)
+    }
+    pub fn guard_write_protected_with_interrupt(
+        &self,
+        path: &str,
+        sources: &[String],
+        fingerprints: &[String],
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<(), AutomationError> {
+        source_write::check_with_interrupt(self, path, source_write::Sources::many(sources), fingerprints, control)
+    }
+
     /// Open the configured roots as capabilities. Either authority may be
     /// omitted; omitted authority fails closed.
     pub fn new(read_root: Option<&Path>, write_root: Option<&Path>) -> Result<Self, AutomationError> {
@@ -94,6 +159,43 @@ impl AuthorizedWorkspace {
         photocraft_format::read::read_all(&mut file, metadata.len()).map_err(|e| file_error("read", path, e))
     }
 
+    /// Open a document through the existing held read root. Native archives
+    /// decode from this file handle without retaining the complete archive;
+    /// other formats use the same handle and the legacy authorized-size policy.
+    /// This grants no source locator access or serialized filesystem authority.
+    pub fn open_document_with_interrupt(&self, path: &str, control: &photocraft_raster::Interrupt<'_>) -> Result<crate::files::Opened, AutomationError> {
+        use std::io::{Seek, SeekFrom};
+        let relative = relative_path(path)?;
+        let root = self.read.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: read authority is absent")))?;
+        let cancelled = || AutomationError::Engine(photocraft_engine::EngineError::Cancelled);
+        control.check().map_err(|_| cancelled())?;
+        let mut file = root.dir.open(&relative).map_err(|error| file_error("read", path, error))?;
+        let metadata = file.metadata().map_err(|error| file_error("read", path, error))?;
+        if !metadata.is_file() {
+            return Err(AutomationError::BadRequest(format!("automation read path is not a regular file: `{path}`")));
+        }
+        let name = path.rsplit('/').next().unwrap_or(path);
+        let candidate = photocraft_io::import_native_stream_candidate(name, &mut file, control)
+            .map_err(|error| if matches!(error, photocraft_io::IoError::Cancelled) { cancelled() } else { AutomationError::Import(error) })?;
+        control.check().map_err(|_| cancelled())?;
+        if let Some(imported) = candidate {
+            return Ok(crate::files::Opened {
+                document: imported.document,
+                warnings: imported.warnings,
+                origin: imported.origin,
+                assessment: imported.assessment,
+            });
+        }
+        // Probe fallback must rewind this held handle, never reopen an ambient path.
+        file.seek(SeekFrom::Start(0)).map_err(|error| file_error("read rewind", path, error))?;
+        control.check().map_err(|_| cancelled())?;
+        let bytes = photocraft_format::read::read_all_with_interrupt(&mut file, metadata.len(), control)
+            .map_err(|error| if control.cancelled() { cancelled() } else { file_error("read", path, error) })?;
+        let opened = crate::files::open_bytes_with_interrupt(name, &bytes, control)?;
+        control.check().map_err(|_| cancelled())?;
+        Ok(opened)
+    }
+
     /// Create or replace one file below the configured write root, crash-safely: the bytes go to
     /// a temporary file beside the target, which is synced and renamed over it (the same steps
     /// as [`photocraft_format::atomic_write`], through the directory capability). On failure
@@ -103,32 +205,103 @@ impl AuthorizedWorkspace {
     /// resolution and file creation relative to the held directory handle, so
     /// a non-existent final target is supported without ambient path access.
     pub fn write(&self, path: &str, bytes: &[u8]) -> Result<(), AutomationError> {
-        self.guard_write(path, None)?;
-        let relative = relative_path(path)?;
-        let root = self.write.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: write authority is absent")))?;
-        let leaf = relative.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let parent = relative.parent().map(Path::to_path_buf).unwrap_or_default();
-        let tmp = parent.join(photocraft_format::atomic::temp_name(&leaf));
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        let written = root.dir.open_with(&tmp, &options).and_then(|mut file| {
-            file.write_all(bytes)?;
-            file.sync_all()
-        });
-        let renamed = written.and_then(|()| photocraft_format::atomic::retry_rename(RenameRetry::platform(), || root.dir.rename(&tmp, &root.dir, &relative)));
-        if let Err(e) = renamed {
-            let _ = root.dir.remove_file(&tmp);
-            return Err(file_error("write", path, e));
-        }
-        // Flush the directory entry (Unix); best effort, the new bytes are already in place.
-        #[cfg(unix)]
-        {
-            let dir = if parent.as_os_str().is_empty() { PathBuf::from(".") } else { parent };
-            if let Ok(d) = root.dir.open(&dir) {
-                let _ = d.sync_all();
+        self.write_with_source(path, bytes, None)
+    }
+
+    /// Retain an authorized runtime source identity through final destination checks.
+    /// The source path is resolved only beneath the separately held read root.
+    pub fn write_with_source(&self, path: &str, bytes: &[u8], protected_source: Option<&str>) -> Result<(), AutomationError> {
+        source_write::write(self, path, bytes, source_write::Sources::one(protected_source), &[])
+    }
+    /// Carry the same document fingerprints through initial and final held-parent checks.
+    pub fn write_document(&self, path: &str, bytes: &[u8], source: Option<&str>, document: &photocraft_doc::Document) -> Result<(), AutomationError> {
+        let fingerprints = photocraft_io::source_protection::document_fingerprints(document)
+            .map_err(|error| AutomationError::BadRequest(format!("automation source protection: {error}")))?;
+        source_write::write(self, path, bytes, source_write::Sources::one(source), &fingerprints)
+    }
+
+    /// Retain all open-document protection evidence through every final rename attempt.
+    pub fn write_protected(&self, path: &str, bytes: &[u8], sources: &[String], fingerprints: &[String]) -> Result<(), AutomationError> {
+        source_write::write(self, path, bytes, source_write::Sources::many(sources), fingerprints)
+    }
+
+    /// Poll during protection/read/write/sync and before each held-parent rename.
+    /// Blocking syscalls cannot be interrupted. Successful rename commits the write;
+    /// later cancellation cannot turn an already-published replacement into failure.
+    pub fn write_with_interrupt(&self, path: &str, bytes: &[u8], control: &photocraft_raster::Interrupt<'_>) -> Result<(), AutomationError> {
+        self.write_with_source_and_interrupt(path, bytes, None, control)
+    }
+    pub fn write_with_source_and_interrupt(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        source: Option<&str>,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<(), AutomationError> {
+        source_write::write_with_interrupt(self, path, bytes, source_write::Sources::one(source), &[], control)
+    }
+    pub fn write_document_with_interrupt(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        source: Option<&str>,
+        document: &photocraft_doc::Document,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<(), AutomationError> {
+        let fingerprints = photocraft_io::source_protection::document_fingerprints_with_interrupt(document, control).map_err(|error| {
+            if matches!(error, photocraft_io::source_protection::SourceProtectionError::Cancelled) {
+                AutomationError::Engine(photocraft_engine::EngineError::Cancelled)
+            } else {
+                AutomationError::BadRequest(format!("automation source protection: {error}"))
             }
-        }
-        Ok(())
+        })?;
+        source_write::write_with_interrupt(self, path, bytes, source_write::Sources::one(source), &fingerprints, control)
+    }
+    pub fn write_protected_with_interrupt(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        sources: &[String],
+        fingerprints: &[String],
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<(), AutomationError> {
+        source_write::write_with_interrupt(self, path, bytes, source_write::Sources::many(sources), fingerprints, control)
+    }
+    /// Internal prepared serializer writes through the existing held-root capability.
+    /// Preparation/caps belong to the caller and precede any temp-file creation.
+    pub(crate) fn write_protected_stream_with_interrupt<R>(
+        &self,
+        path: &str,
+        sources: &[String],
+        fingerprints: &[String],
+        control: &photocraft_raster::Interrupt<'_>,
+        write: impl FnOnce(&mut cap_std::fs::File) -> Result<R, AutomationError>,
+    ) -> Result<R, AutomationError> {
+        source_write::write_stream_with_interrupt(self, path, source_write::Sources::many(sources), fingerprints, control, write)
+    }
+    /// Prepared native save under this held write root, with caller-captured
+    /// all-open source protection. No ambient paths or complete archive Vec.
+    pub fn save_native_with_interrupt(
+        &self,
+        document: &photocraft_doc::Document,
+        path: &str,
+        protection: &photocraft_engine::WriteProtection,
+        limits: photocraft_io::NativeSaveLimits,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<photocraft_io::NativeSaveResult, AutomationError> {
+        let error = |error: photocraft_io::IoError| {
+            if matches!(error, photocraft_io::IoError::Cancelled) {
+                AutomationError::Engine(photocraft_engine::EngineError::Cancelled)
+            } else {
+                AutomationError::Import(error)
+            }
+        };
+        self.guard_write_protected_with_interrupt(path, &protection.sources, &protection.fingerprints, control)?;
+        let prepared = photocraft_io::prepare_native_stream(document, limits, control).map_err(error)?;
+        self.write_protected_stream_with_interrupt(path, &protection.sources, &protection.fingerprints, control, move |file| {
+            let (_, result) = prepared.write(file).map_err(error)?;
+            Ok(result)
+        })
     }
 }
 
@@ -343,12 +516,100 @@ mod tests {
     }
 
     #[test]
+    fn controlled_write_late_cancel_preserves_destination_and_cleans_only_owned_temp() {
+        let (inside, _, workspace) = roots("controlled-late-cancel");
+        let output = inside.join("output.pcraft");
+        std::fs::write(&output, b"original destination").unwrap();
+        // Cancel only after the actual private temp has received a write chunk.
+        let cancel = || {
+            std::fs::read_dir(&inside).ok().is_some_and(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .any(|entry| entry.file_name() != std::ffi::OsStr::new("output.pcraft") && entry.metadata().is_ok_and(|meta| meta.len() > 0))
+            })
+        };
+        let control = photocraft_raster::Interrupt::cancel_only(&cancel);
+        let error = workspace.write_with_interrupt("output.pcraft", &vec![b'n'; 192 << 10], &control).unwrap_err();
+        assert!(matches!(error, AutomationError::Engine(photocraft_engine::EngineError::Cancelled)));
+        assert_eq!(std::fs::read(&output).unwrap(), b"original destination");
+        assert_eq!(std::fs::read_dir(&inside).unwrap().count(), 1);
+    }
+    #[test]
+    fn controlled_guard_cancel_preserves_existing_destination() {
+        let (inside, _, workspace) = roots("controlled-guard-cancel");
+        let output = inside.join("output.pcraft");
+        std::fs::write(&output, b"existing content").unwrap();
+        let cancel = || true;
+        let control = photocraft_raster::Interrupt::cancel_only(&cancel);
+        let error = workspace.guard_write_protected_with_interrupt("output.pcraft", &[], &[], &control).unwrap_err();
+        assert!(matches!(error, AutomationError::Engine(photocraft_engine::EngineError::Cancelled)));
+        assert_eq!(std::fs::read(&output).unwrap(), b"existing content");
+    }
+
+    #[test]
     fn valid_read_and_nonexistent_output_write_stay_in_root() {
         let (inside, _, workspace) = roots("valid");
         std::fs::write(inside.join("read.txt"), b"canary").unwrap();
         assert_eq!(workspace.read("read.txt").unwrap(), b"canary");
         workspace.write("new-output.txt", b"created").unwrap();
         assert_eq!(std::fs::read(inside.join("new-output.txt")).unwrap(), b"created");
+    }
+
+    // Unrun held-root streaming-open drafts. They do not install a Session
+    // document or acquire a runtime source grant.
+    #[test]
+    fn controlled_open_native_and_flat_fallback_use_held_root() {
+        let (inside, _, workspace) = roots("stream-open");
+        let document =
+            photocraft_doc::Document::new("retained native", photocraft_geom::Size::new(8, 6), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        let native = photocraft_format::save_to_bytes(&document, &Default::default()).unwrap();
+        std::fs::write(inside.join("document.pcraft"), &native).unwrap();
+        let opened = workspace.open_document_with_interrupt("document.pcraft", &photocraft_raster::Interrupt::NONE).unwrap();
+        assert_eq!(opened.document, document);
+        assert_eq!(opened.origin.format, photocraft_io::ImportFormat::Pcraft);
+        assert_eq!(std::fs::read(inside.join("document.pcraft")).unwrap(), native);
+        let image = photocraft_codecs::Image::from_u8(1, 1, photocraft_codecs::ChannelLayout::Rgba, vec![13, 29, 47, 255]).unwrap();
+        let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+        std::fs::write(inside.join("image.png"), &png).unwrap();
+        let expected = crate::files::open_bytes("image.png", &png).unwrap();
+        let actual = workspace.open_document_with_interrupt("image.png", &photocraft_raster::Interrupt::NONE).unwrap();
+        assert_eq!(actual.document.size, expected.document.size);
+        assert_eq!(actual.origin, expected.origin);
+        assert!(workspace.open_document_with_interrupt("../outside/image.png", &photocraft_raster::Interrupt::NONE).is_err());
+        assert!(AuthorizedWorkspace::default().open_document_with_interrupt("image.png", &photocraft_raster::Interrupt::NONE).is_err());
+    }
+    #[test]
+    fn controlled_open_cancel_and_truncated_native_never_return_document() {
+        let (inside, _, workspace) = roots("stream-open-refusal");
+        let document =
+            photocraft_doc::Document::new("native refusal", photocraft_geom::Size::new(8, 6), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        let native = photocraft_format::save_to_bytes(&document, &Default::default()).unwrap();
+        std::fs::write(inside.join("document.pcraft"), &native).unwrap();
+        let cancel = || true;
+        assert!(matches!(
+            workspace.open_document_with_interrupt("document.pcraft", &photocraft_raster::Interrupt::cancel_only(&cancel)),
+            Err(AutomationError::Engine(photocraft_engine::EngineError::Cancelled))
+        ));
+        let truncated = native.get(..native.len().saturating_sub(7)).unwrap();
+        std::fs::write(inside.join("truncated.pcraft"), truncated).unwrap();
+        assert!(workspace.open_document_with_interrupt("truncated.pcraft", &photocraft_raster::Interrupt::NONE).is_err());
+        assert_eq!(std::fs::read(inside.join("document.pcraft")).unwrap(), native);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn controlled_open_keeps_original_held_root_after_launch_path_replacement() {
+        let (inside,_,workspace)=roots("stream-open-held-root");
+        let document=photocraft_doc::Document::new("held identity",photocraft_geom::Size::new(8,6),photocraft_doc::ColorMode::Rgb,photocraft_doc::SampleType::U8);
+        let native=photocraft_format::save_to_bytes(&document,&Default::default()).unwrap();
+        std::fs::write(inside.join("document.pcraft"),&native).unwrap();
+        let renamed=inside.with_file_name("renamed-inside");
+        std::fs::rename(&inside,&renamed).unwrap();
+        std::fs::create_dir(&inside).unwrap();
+        std::fs::write(inside.join("document.pcraft"),b"ambient impostor").unwrap();
+        let opened=workspace.open_document_with_interrupt("document.pcraft",&photocraft_raster::Interrupt::NONE).unwrap();
+        assert_eq!(opened.document,document);
+        assert_eq!(std::fs::read(inside.join("document.pcraft")).unwrap(),b"ambient impostor");
     }
 
     fn temp_files(dir: &Path) -> Vec<String> {
@@ -368,6 +629,83 @@ mod tests {
         assert!(workspace.write("adir", b"x").is_err());
         assert!(inside.join("adir").is_dir());
         assert!(temp_files(&inside).is_empty());
+    }
+    // Unrun prepared-sink regression drafts; no full archive buffer is supplied.
+    #[test]
+    fn prepared_sink_can_seek_and_returns_only_after_guarded_publication() {
+        use std::io::{Seek, SeekFrom, Write};
+        let (inside, _, workspace) = roots("stream-seek");
+        std::fs::write(inside.join("out.pcraft"), b"old").unwrap();
+        let returned = workspace
+            .write_protected_stream_with_interrupt("out.pcraft", &[], &[], &photocraft_raster::Interrupt::NONE, |file| {
+                file.write_all(b"0000body").unwrap();
+                file.seek(SeekFrom::Start(0)).unwrap();
+                file.write_all(b"head").unwrap();
+                Ok(7)
+            })
+            .unwrap();
+        assert_eq!(returned, 7);
+        assert_eq!(std::fs::read(inside.join("out.pcraft")).unwrap(), b"headbody");
+        assert!(temp_files(&inside).is_empty());
+    }
+    #[test]
+    fn prepared_sink_failure_or_late_cancel_preserves_destination_and_cleans_only_owned_temp() {
+        use std::io::Write;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (inside, _, workspace) = roots("stream-cancel");
+        std::fs::write(inside.join("out.pcraft"), b"original").unwrap();
+        let cancelled = AtomicBool::new(false);
+        let stop = || cancelled.load(Ordering::Relaxed);
+        let control = photocraft_raster::Interrupt::cancel_only(&stop);
+        let result = workspace.write_protected_stream_with_interrupt("out.pcraft", &[], &[], &control, |file| {
+            file.write_all(b"private").unwrap();
+            cancelled.store(true, Ordering::Relaxed);
+            Ok(())
+        });
+        assert!(matches!(result, Err(AutomationError::Engine(photocraft_engine::EngineError::Cancelled))));
+        cancelled.store(false, Ordering::Relaxed);
+        let result: Result<(), AutomationError> = workspace.write_protected_stream_with_interrupt("out.pcraft", &[], &[], &control, |file| {
+            file.write_all(b"partial bounded serializer output").unwrap();
+            Err(AutomationError::BadRequest("synthetic serializer cap refusal".into()))
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(inside.join("out.pcraft")).unwrap(), b"original");
+        assert!(temp_files(&inside).is_empty());
+    }
+    #[test]
+    fn alias_introduced_during_streaming_is_refused_at_final_guard() {
+        use std::io::Write;
+        let (inside, _, workspace) = roots("stream-source-alias");
+        std::fs::write(inside.join("source.bin"), b"protected original").unwrap();
+        std::fs::write(inside.join("out.pcraft"), b"unrelated old destination").unwrap();
+        let result = workspace.write_protected_stream_with_interrupt("out.pcraft", &["source.bin".into()], &[], &photocraft_raster::Interrupt::NONE, |file| {
+            file.write_all(b"private archive").unwrap();
+            std::fs::remove_file(inside.join("out.pcraft")).unwrap();
+            std::fs::hard_link(inside.join("source.bin"), inside.join("out.pcraft")).unwrap();
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(inside.join("source.bin")).unwrap(), b"protected original");
+        assert_eq!(std::fs::read(inside.join("out.pcraft")).unwrap(), b"protected original");
+        assert!(temp_files(&inside).is_empty());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn retargeted_parent_during_streaming_is_refused_using_held_root_identity() {
+        use std::io::Write;
+        let (inside, _, workspace) = roots("stream-parent-change");
+        std::fs::create_dir(inside.join("sub")).unwrap();
+        std::fs::write(inside.join("sub/out.pcraft"), b"original").unwrap();
+        let result = workspace.write_protected_stream_with_interrupt("sub/out.pcraft", &[], &[], &photocraft_raster::Interrupt::NONE, |file| {
+            file.write_all(b"private archive").unwrap();
+            std::fs::rename(inside.join("sub"), inside.join("old-sub")).unwrap();
+            std::fs::create_dir(inside.join("sub")).unwrap();
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(inside.join("old-sub/out.pcraft")).unwrap(), b"original");
+        assert!(!inside.join("sub/out.pcraft").exists());
+        assert!(temp_files(&inside.join("old-sub")).is_empty());
     }
 
     #[cfg(unix)]
@@ -642,6 +980,12 @@ mod tests {
                 | "path.convertPoint"
                 | "path.clippingPath.set"
                 | "path.rename"
+                | "path.delete"
+                | "path.toSelection"
+                | "path.fill"
+                | "path.stroke"
+                | "xcf.itemSet.setMembers"
+                | "xcf.vector.stroke.width.set"
                 | "select.toWorkPath"
                 | "layer.vectorMask.add"
                 | "layer.vectorMask.edit"

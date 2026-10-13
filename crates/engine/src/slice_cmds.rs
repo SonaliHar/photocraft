@@ -8,8 +8,6 @@
 //! without a history step of their own (the change is implied by the edit that moved the layer).
 //! Slices are addressed by stored id (`"slice"`) or by their displayed number (`"number"`).
 
-use std::sync::Arc;
-
 use photocraft_doc::slices::{self, ResolvedSlice, Slice, SliceKind, SliceOrigin};
 use photocraft_doc::{Document, Layer, LayerContent};
 use photocraft_geom::Rect;
@@ -93,10 +91,10 @@ fn layer_slice_rect(doc: &Document, s: &Slice) -> Option<Rect> {
 
 /// Re-fits layer-based slices of the active document to their layers; drops slices whose layer
 /// was deleted (as Photoshop does). Not a history step.
-pub(crate) fn refresh(s: &mut Session) {
-    let Some(st) = s.active_mut() else { return };
+pub(crate) fn refresh(s: &mut Session) -> Result<()> {
+    let Some(st) = s.active_mut() else { return Ok(()) };
     if !st.doc.slices.list.iter().any(|sl| sl.origin == SliceOrigin::Layer) {
-        return;
+        return Ok(());
     }
     let doc = &st.doc;
     let mut changes: Vec<(u32, Option<Rect>)> = Vec::new();
@@ -107,9 +105,9 @@ pub(crate) fn refresh(s: &mut Session) {
         }
     }
     if changes.is_empty() {
-        return;
+        return Ok(());
     }
-    let doc = Arc::make_mut(&mut st.doc);
+    let doc = st.doc.try_resident_mut()?;
     for (id, r) in changes {
         match r {
             Some(r) => {
@@ -120,6 +118,7 @@ pub(crate) fn refresh(s: &mut Session) {
             None => doc.slices.list.retain(|sl| sl.id != id),
         }
     }
+    Ok(())
 }
 
 // ---------- params ----------

@@ -67,6 +67,14 @@ fn curve_elem(c: &Curve) -> Vec<u8> {
             }
             o
         }
+        Curve::Table64(t) => {
+            let mut o = b"curv\0\0\0\0".to_vec();
+            o.extend_from_slice(&(t.len() as u32).to_be_bytes());
+            for v in t {
+                o.extend_from_slice(&((v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16).to_be_bytes());
+            }
+            o
+        }
     }
 }
 
@@ -87,6 +95,7 @@ fn table_len(cs: &[Curve]) -> usize {
     cs.iter()
         .map(|c| match c {
             Curve::Table(t) => t.len(),
+            Curve::Table64(t) => t.len(),
             Curve::Identity => 2,
             _ => 1024,
         })

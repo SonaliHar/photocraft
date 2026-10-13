@@ -74,15 +74,16 @@ pub fn grabcut(img: &RgbImage, trimap: &mut [u8], iters: usize) -> Option<(Gmm, 
 /// Object Selection (rectangle mode): GrabCut initialised from `rect` (outside = background,
 /// inside = probable foreground). Runs on a working copy of about `work_px` pixels, then re-cuts
 /// the boundary at full resolution. `canvas` bounds the analysis.
-pub fn object_select(sampler: &dyn Sampler, canvas: Rect, rect: Rect, work_px: usize) -> Option<Region> {
+pub fn object_select(sampler: &dyn Sampler, canvas: Rect, rect: Rect, work_px: usize) -> super::SamplingResult<Option<Region>> {
     let rect = rect.intersect(&canvas);
     if rect.width() < 2 || rect.height() < 2 {
-        return None;
+        return Ok(None);
     }
     let margin = ((rect.width().max(rect.height()) as f32 * 0.15).ceil() as i32).max(8);
     let window = rect.inflate(margin).intersect(&canvas);
     let step = super::scale_for(window, work_px);
-    let img = sampler.rgb_scaled(window, step);
+    let img = sampler.rgb_scaled(window, step)?;
+    super::check_image(&img, (window.width() as usize).div_ceil(step), (window.height() as usize).div_ceil(step))?;
     let (lw, lh) = (img.w, img.h);
     let mut trimap = vec![BG; lw * lh];
     // Working pixel (x, y) covers doc pixels [x0 + x·step, …); its centre decides inside/outside.
@@ -111,7 +112,9 @@ pub fn object_select(sampler: &dyn Sampler, canvas: Rect, rect: Rect, work_px: u
             }
         }
     }
-    let (fg, bg) = grabcut(&img, &mut trimap, 8)?;
+    let Some((fg, bg)) = grabcut(&img, &mut trimap, 8) else {
+        return Ok(None);
+    };
     let low: Vec<bool> = trimap.iter().map(|t| is_fg(*t)).collect();
     let low = super::clean_mask(&low, lw, lh, 0.1, 0.002);
     super::finish_region(sampler, window, step, &low, lw, lh, Some((&fg, &bg)))

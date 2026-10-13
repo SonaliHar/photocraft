@@ -1,0 +1,12 @@
+{
+  "observations.json": "ddb0aedebd978906dec33c6ca9874a4f906a0b9d95803cd98876df8f03b434ce",
+  "fresh/observations.json": "b0987a8a45880fee8cf8d7a53cfdbdc64b263545ab2785930c603bfc297e8333",
+  "faithful-observations.json": "3d68059c75934a9248bef4006c94256eb3737a970961c1163be3847a09063115",
+  "faithful-fresh/faithful-observations.json": "0de192b618d71e330dc3a5088a7d85931e823fed72c6159facf3066047f5bf91",
+  "VERIFICATION.json": "4167865e67f5b20aa3ef2d94e653dd49f59e2ea793a31186756c1c49bd30b42f",
+  "batch-manifest.json": "289f517f01787684e29f2ce82b42a1cee1a02e702d9dd6d808d4d3da845e9ecd",
+  "assignment-controls.json": "a4193e798fa2be17f3be766bb47e0e9c38f64033b929208d39a4cba86c6a2a18",
+  "own-rgb-table-trc.icc": "ab0a24758bb69a0c7ce48b5d839bef08db281993702071bd166fda8c8ae611fe",
+  "own-gray-table-trc.icc": "1a75b66356442d03f841b4489b9904db67cb97ddc5f6bb77465b39c8a1ae7a7f",
+  "CONSUMER-DIAGNOSTIC.json": "f9dbf894ff85e47b75cf74dcca34dafe2dfedb6fcdb8b1f1207703de61f6819b"
+}

@@ -189,8 +189,14 @@ impl Profile {
         Ok(p)
     }
 
-    /// The ICC bytes of this profile: the original bytes when it was parsed, otherwise a fresh
-    /// ICC v4 encoding.
+    /// Returns only the retained original/cached encoding, without generating or
+    /// allocating a new ICC profile. `None` means the caller must explicitly
+    /// account for an encoding operation before using [`Self::to_bytes`].
+    pub fn encoded_bytes(&self) -> Option<&[u8]> {
+        self.bytes.as_deref().map(Vec::as_slice)
+    }
+
+    /// The ICC bytes of this profile, encoding it when no encoding is retained.
     pub fn to_bytes(&self) -> Arc<Vec<u8>> {
         match &self.bytes {
             Some(b) => b.clone(),
@@ -570,8 +576,8 @@ fn parse_curve(d: &[u8]) -> Result<(Curve, usize), CmsError> {
                         return Err(CmsError::Invalid("curve too long".into()));
                     }
                     let s = r.slice(12, n * 2)?;
-                    let t = s.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]]) as f32 / 65535.0).collect();
-                    Ok((Curve::Table(t), len))
+                    let t = s.as_chunks::<2>().0.iter().map(|c| f64::from(u16::from_be_bytes([c[0], c[1]])) / 65535.0).collect();
+                    Ok((Curve::Table64(t), len))
                 }
             }
         }
@@ -630,13 +636,13 @@ fn parse_lut(d: &[u8], a2b: bool) -> Result<Lut, CmsError> {
                 let mut v = Vec::with_capacity(count);
                 for _ in 0..count {
                     let s = r.slice(*off, len * bps)?;
-                    let t: Vec<f32> = if wide {
-                        s.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]]) as f32 / 65535.0).collect()
+                    let t: Vec<f64> = if wide {
+                        s.as_chunks::<2>().0.iter().map(|c| f64::from(u16::from_be_bytes([c[0], c[1]])) / 65535.0).collect()
                     } else {
-                        s.iter().map(|b| *b as f32 / 255.0).collect()
+                        s.iter().map(|b| f64::from(*b) / 255.0).collect()
                     };
                     *off += len * bps;
-                    v.push(Curve::Table(t));
+                    v.push(Curve::Table64(t));
                 }
                 Ok(v)
             };
@@ -647,10 +653,10 @@ fn parse_lut(d: &[u8], a2b: bool) -> Result<Lut, CmsError> {
             }
             let total = nodes as usize * o;
             let s = r.slice(off, total * bps)?;
-            let data: Vec<f32> = if wide {
-                s.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]]) as f32 / 65535.0).collect()
+            let data: Vec<f64> = if wide {
+                s.as_chunks::<2>().0.iter().map(|c| f64::from(u16::from_be_bytes([c[0], c[1]])) / 65535.0).collect()
             } else {
-                s.iter().map(|b| *b as f32 / 255.0).collect()
+                s.iter().map(|b| f64::from(*b) / 255.0).collect()
             };
             off += total * bps;
             let out_curves = read_tables(&mut off, o, n_out)?;
@@ -663,7 +669,7 @@ fn parse_lut(d: &[u8], a2b: bool) -> Result<Lut, CmsError> {
                 stages.push(Stage::matrix3(&m));
             }
             stages.push(Stage::Curves(in_curves));
-            stages.push(Stage::Clut(Clut::new(vec![g; i], o, data)));
+            stages.push(Stage::Clut(Clut::try_new_f64(vec![g; i], o, data)?));
             stages.push(Stage::Curves(out_curves));
             Ok(Lut { kind: if wide { LutKind::Lut16 } else { LutKind::Lut8 }, inputs: i, outputs: o, stages })
         }
@@ -696,12 +702,12 @@ fn parse_lut(d: &[u8], a2b: bool) -> Result<Lut, CmsError> {
                     return Err(CmsError::Invalid("CLUT too large".into()));
                 }
                 let total = nodes as usize * cout;
-                let data: Vec<f32> = match prec {
-                    1 => r.slice(off + 20, total)?.iter().map(|b| *b as f32 / 255.0).collect(),
-                    2 => r.slice(off + 20, total * 2)?.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]]) as f32 / 65535.0).collect(),
+                let data: Vec<f64> = match prec {
+                    1 => r.slice(off + 20, total)?.iter().map(|b| f64::from(*b) / 255.0).collect(),
+                    2 => r.slice(off + 20, total * 2)?.as_chunks::<2>().0.iter().map(|c| f64::from(u16::from_be_bytes([c[0], c[1]])) / 65535.0).collect(),
                     _ => return Err(CmsError::Invalid(format!("CLUT precision {prec}"))),
                 };
-                Ok(Stage::Clut(Clut::new(grid, cout, data)))
+                Ok(Stage::Clut(Clut::try_new_f64(grid, cout, data)?))
             };
             let mut stages = Vec::new();
             if ty == b"mAB " {
@@ -779,5 +785,23 @@ fn parse_text(d: &[u8]) -> String {
             String::from_utf16_lossy(&units).trim_end_matches('\0').trim().to_string()
         }
         _ => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod retained_encoding_tests {
+    use super::*;
+    #[test]
+    fn retained_encoding_borrows_exact_original_bytes_and_never_encodes_an_uncached_model() {
+        let bytes = crate::Builtin::Srgb.profile().to_bytes();
+        let parsed = Profile::parse(&bytes).unwrap();
+        let retained = parsed.encoded_bytes().unwrap();
+        assert_eq!(retained, bytes.as_slice());
+        assert_eq!(retained.as_ptr(), parsed.bytes.as_ref().unwrap().as_ptr());
+        let mut uncached = parsed.clone();
+        uncached.bytes = None;
+        assert!(uncached.encoded_bytes().is_none());
+        assert!(uncached.bytes.is_none());
+        assert_eq!(parsed.encoded_bytes(), Some(bytes.as_slice()));
     }
 }

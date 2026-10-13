@@ -41,6 +41,8 @@ pub struct OpenTab {
 /// The shell's job bookkeeping.
 #[derive(Default)]
 pub struct JobsUi {
+    /// At most one manually requested current-XCF assessment display target.
+    pub(crate) xcf_assessment: Option<(JobId, crate::xcf_notices::Target)>,
     /// Control replies waiting for a job to end.
     pub(crate) waiters: Vec<(JobId, Sender<ControlResponse>)>,
     /// Background opens, in tab order.
@@ -55,7 +57,15 @@ pub struct JobsUi {
 /// (the result is then `{"job": id, "pending": true}` and the edit lands when [`tick`] applies
 /// it), else synchronously like [`photocraft_engine::Session::execute`].
 pub fn run(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, String> {
-    if !app.background_jobs {
+    // This registered operation prepares and publishes one synchronous transaction.
+    // The engine deliberately refuses background/start callers.
+    if !app.background_jobs || matches!(id,
+        "xcf.link.substitute" | "xcf.link.recover" | "xcf.item.locks.set" |
+        "xcf.items.select" | "xcf.items.visibility.set" | "xcf.channel.overlay.set" |
+        "xcf.mask.enabled.set" | "xcf.mask.geometry.set" | "layer.layerMask.enabled" | "xcf.layer.affine.apply" | "xcf.filter.move" | "xcf.filter.remove" | "xcf.filter.insert" | "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.mask.enabled.set" | "xcf.indexed.pixel.set" | "xcf.indexed.palette.set" | "xcf.text.name.set" | "xcf.channel.name.set" | "xcf.channel.locks.set" | "xcf.channel.indicates.set" | "xcf.path.name.set" | "xcf.vector.fill.color.set" | "xcf.vector.stroke.color.set" |
+        "xcf.itemSet.create" | "xcf.itemSet.rename" | "xcf.itemSet.delete" | "xcf.itemSet.setMembers" |
+        "xcf.link.refresh" | "xcf.link.setPlacement" | "xcf.link.setTransform" | "layer.renameLayer" | "xcf.filter.graph.inspectPlan" |
+        "image.applyImage" | "image.calculations") {
         return app.session.execute(id, params).map_err(|e| e.to_string());
     }
     match app.session.start(id, params).map_err(|e| e.to_string())? {
@@ -168,6 +178,7 @@ fn on_event(app: &mut PhotocraftApp, e: JobEvent) {
         }
         return;
     }
+    if crate::xcf_notices::on_job(app, &e) { return; }
     match e.outcome {
         JobOutcome::Done(v) if e.command == "brush.presets.importAbr" => {
             let n = v.get("count").and_then(Value::as_u64).unwrap_or(0);
@@ -206,8 +217,9 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     {
         index = moved.get("document").and_then(Value::as_u64).map_or(index, |i| i as usize);
     }
-    let warnings: Vec<String> =
+    let mut warnings: Vec<String> =
         v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    crate::import_assessment_ui::append_json(&mut warnings, v.get("assessment"));
     app.session.set_active(index);
     if let Some(p) = path {
         app.opened_from(p);

@@ -24,6 +24,7 @@ mod app_dirs;
 mod app_icon;
 #[cfg(target_os = "macos")]
 mod apple_events;
+mod bounded_resource_read;
 mod control_server;
 mod crash_guard;
 mod cursor;

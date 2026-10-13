@@ -9,7 +9,7 @@ fn invoke(h: &mut Harness<'_, PhotocraftApp>, params: Value) -> Value {
     let (request, _) = control::ControlRequest::new("ui.menu.invoke", json!({"id": "filter.cameraRaw", "params": params}));
     let outcome = control::handle(h.state_mut(), &ctx, &request);
     assert!(matches!(outcome, control::Outcome::Done(_)), "dialog control failed");
-    control::inspect(h.state(), &ctx)["cameraRaw"].clone()
+    control::inspect(h.state(), &ctx).unwrap()["cameraRaw"].clone()
 }
 
 #[test]
@@ -38,7 +38,7 @@ fn header_stays_fixed_and_resize_hover_scroll_before_do_not_rebuild_the_proxy() 
         h.run_steps(3);
         let before = invoke(&mut h, json!({"ui": {"before": true}}));
         h.run_steps(3);
-        let inspected = control::inspect(h.state(), &h.ctx);
+        let inspected = control::inspect(h.state(), &h.ctx).unwrap();
         assert_eq!(before["previewRevision"], original["previewRevision"]);
         assert_eq!(inspected["cameraRaw"]["previewRevision"], original["previewRevision"]);
         assert_eq!(before["histogram"]["red"], original["histogram"]["red"]);
@@ -63,11 +63,11 @@ fn histogram_matches_visible_preview_at_all_supported_depths_and_cancel_commit_a
             assert_ne!(changed["histogram"]["red"], initial["histogram"]["red"]);
             assert_eq!(app.session.active().unwrap().history.past_len(), steps);
             camera_raw_ui::menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"cancel": true}})).unwrap().unwrap();
-            assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &original));
+            assert!(std::ptr::eq((app.session.active().unwrap().doc).as_ref(), (original).as_ref()));
             camera_raw_ui::menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}, "commit": true}})).unwrap().unwrap();
             assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
             app.run("edit.undo", json!({})).unwrap();
-            assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &original));
+            assert!(std::ptr::eq((app.session.active().unwrap().doc).as_ref(), (original).as_ref()));
             app.run("edit.redo", json!({})).unwrap();
             let committed = camera_raw_ui::menu(&mut app, &ctx, "filter.cameraRaw", &json!({})).unwrap().unwrap();
             assert_eq!(committed["histogram"]["red"], changed["histogram"]["red"], "{mode}/{depth}: graph and committed pixels disagree");
@@ -120,9 +120,9 @@ fn settings_sections_group_existing_controls_without_rendering_or_document_edits
         for label in ["Texture", "Clarity", "Dehaze", "Vignetting", "Grain"] {
             assert!(h.query_by_label(tr(label)).is_some(), "effects control: {label}");
         }
-        let after = control::inspect(h.state(), &h.ctx);
+        let after = control::inspect(h.state(), &h.ctx).unwrap();
         assert_eq!(after["cameraRaw"]["params"], before["params"]);
         assert_eq!(after["cameraRaw"]["previewRevision"], before["previewRevision"]);
-        assert!(std::sync::Arc::ptr_eq(&doc, &h.state().session.active().unwrap().doc));
+        assert!(std::ptr::eq((doc).as_ref(), (h.state().session.active().unwrap().doc).as_ref()));
     }
 }

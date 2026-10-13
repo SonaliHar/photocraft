@@ -699,7 +699,7 @@ pub fn mask_from_item(item: &FilterEffectsItem, sample: SampleType, stack: &Filt
     if surface.content_bounds().is_empty() {
         return Ok(None);
     }
-    Ok(Some(LayerMask { surface, enabled: stack.mask_enabled, linked: stack.mask_linked, density: 1.0, feather: 0.0 }))
+    Ok(Some(LayerMask { surface: std::sync::Arc::new(surface), enabled: stack.mask_enabled, linked: stack.mask_linked, density: 1.0, feather: 0.0 }))
 }
 
 /// An `FEid` item for a smart object with filters: the unfiltered placed pixels Photoshop
@@ -707,6 +707,7 @@ pub fn mask_from_item(item: &FilterEffectsItem, sample: SampleType, stack: &Filt
 /// pixel format, CMYK inverted as in layer channels) and the filter mask over `bounds` (white
 /// when `mask` is `None`). Photoshop needs the planes: re-rendering the filters of an item
 /// without them crashes it. `None` when there are no unfiltered pixels.
+/// Legacy compatibility adapter; authoritative exports use `try_feid_item`.
 pub fn feid_item(placed: &str, unfiltered: &Surface, mask: Option<&LayerMask>, bounds: GeomRect, doc_fmt: PixelFormat) -> Option<FilterEffectsItem> {
     let sample = doc_fmt.sample;
     let px = if unfiltered.format() == doc_fmt { unfiltered.clone() } else { unfiltered.convert(doc_fmt) };
@@ -759,6 +760,67 @@ pub fn feid_item(placed: &str, unfiltered: &Surface, mask: Option<&LayerMask>, b
     Some(item)
 }
 
+/// Checked exact-native cache construction; errors cannot be mistaken for an absent cache.
+pub fn try_feid_item(
+    placed: &str,
+    unfiltered: &Surface,
+    mask: Option<&LayerMask>,
+    bounds: GeomRect,
+    doc_fmt: PixelFormat,
+) -> Result<Option<FilterEffectsItem>, String> {
+    let sample = doc_fmt.sample;
+    let px = unfiltered.try_convert(doc_fmt).map_err(|e| format!("smart cache pixel conversion: {e}"))?;
+    let content = px.content_bounds();
+    if content.is_empty() {
+        return Ok(None);
+    }
+    // Over the whole area the filters may draw into: Photoshop clips the filtered result to these
+    // planes, so the content bounds alone would cut blurs off at the source's edge.
+    let r = content.union(&bounds);
+    let cc = doc_fmt.mode.color_channels();
+    let depth = crate::pixels::psd_depth(sample);
+    let compression = if sample == SampleType::F32 { Compression::ZipPrediction } else { Compression::Rle };
+    let encode = |plane: &[u8], w: usize, h: usize| {
+        EffectsPlane::encode(compression, plane, w, h, depth)
+            .or_else(|_| EffectsPlane::encode(Compression::Raw, plane, w, h, depth))
+            .unwrap_or(EffectsPlane { compression: Compression::Raw, data: plane.to_vec() })
+    };
+    let mut invert = vec![doc_fmt.mode == ColorMode::Cmyk; cc];
+    invert.push(false);
+    // Fully transparent pixels carry white, as in Photoshop's own cache: filters that look at
+    // colour regardless of alpha (Shadows/Highlights) read it.
+    let mut bytes = px.try_read_interleaved(r).map_err(|e| e.to_string())?;
+    let white = photocraft_raster::from_rgba(&doc_fmt, [1.0, 1.0, 1.0, 1.0]);
+    let white = Surface::with_default(doc_fmt, &white);
+    let color_bytes = cc.checked_mul(sample.bytes()).ok_or("smart cache color size overflow")?;
+    for pixel in bytes.chunks_exact_mut(doc_fmt.bytes_per_pixel()) {
+        let alpha = photocraft_color::try_read_sample_f64(pixel, sample, cc).map_err(|e| e.to_string())?;
+        if alpha <= 0.0 {
+            pixel
+                .get_mut(..color_bytes)
+                .ok_or("smart cache pixel length")?
+                .copy_from_slice(white.default_bytes().get(..color_bytes).ok_or("smart cache white length")?);
+        }
+    }
+    if doc_fmt.mode == ColorMode::Lab && sample == SampleType::U16 {
+        // 16-bit Lab a*/b* in Photoshop's scale, as in layer channels.
+        crate::pixels::lab16_chroma(&mut bytes, cc + 1, false);
+    }
+    let planes = crate::pixels::deinterleave(&bytes, cc + 1, sample, &invert);
+    let (w, h) = (r.width() as usize, r.height() as usize);
+    let mut slots = vec![None; 26];
+    for (i, p) in planes.iter().enumerate() {
+        let slot = if i == cc { 25 } else { i };
+        if let Some(s) = slots.get_mut(slot) {
+            *s = Some(encode(p, w, h));
+        }
+    }
+    let mut item = try_filter_mask_item(placed, mask, bounds, sample)?;
+    item.rect = PsdRect { top: r.y0, left: r.x0, bottom: r.y1, right: r.x1 };
+    item.slots = slots;
+    Ok(Some(item))
+}
+
 fn filter_mask_item(placed: &str, mask: Option<&LayerMask>, bounds: GeomRect, sample: SampleType) -> FilterEffectsItem {
     let fmt = PixelFormat::new(ColorMode::Grayscale, sample, false);
     let area = match mask {
@@ -770,7 +832,8 @@ fn filter_mask_item(placed: &str, mask: Option<&LayerMask>, bounds: GeomRect, sa
     let (w, h) = (area.width() as usize, area.height() as usize);
     let plane = match mask {
         Some(m) => {
-            let s = if m.surface.format() == fmt { m.surface.clone() } else { m.surface.convert(fmt) };
+            let converted = (m.surface.format() != fmt).then(|| m.surface.convert(fmt));
+            let s = converted.as_ref().unwrap_or(m.surface.as_ref());
             crate::pixels::deinterleave(&s.to_interleaved(area), 1, sample, &[false]).into_iter().next().unwrap_or_default()
         }
         None => {
@@ -788,6 +851,49 @@ fn filter_mask_item(placed: &str, mask: Option<&LayerMask>, bounds: GeomRect, sa
         .unwrap_or(EffectsPlane { compression: Compression::Raw, data: plane });
     FilterEffectsItem { id: placed.to_string(), version: 1, rect, depth: u32::from(depth), max_channels: 24, slots: vec![None; 26], mask: Some((rect, plane)) }
 }
+fn try_filter_mask_item(placed: &str, mask: Option<&LayerMask>, bounds: GeomRect, sample: SampleType) -> Result<FilterEffectsItem, String> {
+    let fmt = PixelFormat::new(ColorMode::Grayscale, sample, false);
+    let area = match mask {
+        Some(m) => m.surface.content_bounds().union(&bounds),
+        None => bounds,
+    };
+    let area = if area.is_empty() { GeomRect::new(0, 0, 1, 1) } else { area };
+    let rect = PsdRect { top: area.y0, left: area.x0, bottom: area.y1, right: area.x1 };
+    let (w, h) = (area.width() as usize, area.height() as usize);
+    let plane = match mask {
+        Some(m) => {
+            let s = m.surface.try_convert(fmt).map_err(|e| format!("smart filter mask conversion: {e}"))?;
+            crate::pixels::deinterleave(&s.try_read_interleaved(area).map_err(|e| e.to_string())?, 1, sample, &[false]).into_iter().next().unwrap_or_default()
+        }
+        None => {
+            let count = w.checked_mul(h).ok_or("smart filter mask area overflow")?;
+            let len = count.checked_mul(sample.bytes()).ok_or("smart filter mask size overflow")?;
+            if len as u64 > photocraft_raster::MAX_CHECKED_RASTER_BYTES {
+                return Err("smart filter mask size exceeds limit".into());
+            }
+            let mut white = Vec::new();
+            white.try_reserve_exact(len).map_err(|e| e.to_string())?;
+            for _ in 0..count {
+                crate::pixels::encode_be(1.0, sample, &mut white);
+            }
+            white
+        }
+    };
+    let depth = crate::pixels::psd_depth(sample);
+    let compression = if sample == SampleType::F32 { Compression::ZipPrediction } else { Compression::Rle };
+    let plane = EffectsPlane::encode(compression, &plane, w, h, depth)
+        .or_else(|_| EffectsPlane::encode(Compression::Raw, &plane, w, h, depth))
+        .unwrap_or(EffectsPlane { compression: Compression::Raw, data: plane });
+    Ok(FilterEffectsItem {
+        id: placed.to_string(),
+        version: 1,
+        rect,
+        depth: u32::from(depth),
+        max_channels: 24,
+        slots: vec![None; 26],
+        mask: Some((rect, plane)),
+    })
+}
 
 /// A uuid-shaped id (8-4-4-4-12 hex digits) derived from `seed`: equal contents get equal ids, so
 /// identical smart objects share one embedded file, as Photoshop's instances do.
@@ -803,6 +909,33 @@ mod tests {
 
     fn sf(command: &str, params: J) -> SmartFilter {
         SmartFilter { command: command.into(), params, blend: BlendMode::Normal, opacity: 1.0, visible: true }
+    }
+
+    #[test]
+    fn checked_feid_uses_exact_depth_conversion_and_raw_positive_alpha_bytes() {
+        let area = GeomRect::new(0, 0, 1, 1);
+        let value = (128.5_f64 - 1e-8) / 255.0;
+        let raw: Vec<_> = [value, 0.25, 0.5, 1.0].iter().flat_map(|v| v.to_ne_bytes()).collect();
+        let source = Surface::try_from_interleaved(PixelFormat::RGBA64F, area, &raw).unwrap();
+        let mask = LayerMask {
+            surface: std::sync::Arc::new(Surface::try_from_interleaved(PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false), area, &value.to_ne_bytes()).unwrap()),
+            ..LayerMask::reveal_all()
+        };
+        let item = try_feid_item("own", &source, Some(&mask), area, PixelFormat::RGBA8).unwrap().unwrap();
+        let width = (item.rect.right - item.rect.left) as usize;
+        let height = (item.rect.bottom - item.rect.top) as usize;
+        assert_eq!(item.slots[0].as_ref().unwrap().decode(width, height, 8).unwrap()[0], 128);
+        let (rect, plane) = item.mask.unwrap();
+        assert_eq!(plane.decode((rect.right - rect.left) as usize, (rect.bottom - rect.top) as usize, 8).unwrap()[0], 128);
+        let bits = [0x3eaaaaabu32, 0x80000000, 0x3f000001, 0x3f800000];
+        let bytes: Vec<_> = bits.iter().flat_map(|v| v.to_ne_bytes()).collect();
+        let source = Surface::try_from_interleaved(PixelFormat::RGBA32F, area, &bytes).unwrap();
+        let item = try_feid_item("own", &source, None, area, PixelFormat::RGBA32F).unwrap().unwrap();
+        for (i, bit) in bits.iter().take(3).enumerate() {
+            let bytes = item.slots[i].as_ref().unwrap().decode(width, height, 32).unwrap();
+            assert_eq!(&bytes[..4], &bit.to_be_bytes());
+        }
+        assert!(try_feid_item("own", &Surface::new(PixelFormat::GRAYA8), None, area, PixelFormat::RGBA8).is_err());
     }
 
     #[test]

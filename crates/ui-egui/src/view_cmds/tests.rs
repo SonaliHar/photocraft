@@ -224,3 +224,276 @@ fn new_guide_layout_does_not_remember_a_failed_command() {
     assert!(crate::dialogs::confirm(&mut app, id).is_err());
     assert_eq!(app.ui.view.guide_layout["columns"], 8);
 }
+
+// Actual public-menu malformed camera regressions; no physical-DPI policy change.
+fn missing_preset_view(id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    for documents in [1, 2] {
+        let (mut app, ctx) = app_with(documents);
+        app.session.edit("View redo witness", |d, _| {
+            d.name.push_str(" redo");
+            Ok(())
+        })?;
+        app.session.execute("edit.undo", json!({}))?;
+        // Empty vector with index0, or short vector with active index1.
+        app.ui.views.truncate(documents - 1);
+        let before_ui = serde_json::to_value(&app.ui)?;
+        let before = app.session.active().ok_or("missing source")?.doc.clone();
+        let before_native = photocraft_format::save_to_bytes(&before, &Default::default())?;
+        let state = app.session.active().ok_or("missing source")?;
+        let revision = state.revision;
+        let saved = state.saved_revision;
+        let history = state.history.entry_labels().map(str::to_owned).collect::<Vec<_>>();
+        let redo = state.history.redo_labels().map(str::to_owned).collect::<Vec<_>>();
+        let result = menu(&mut app, &ctx, id, json!({}));
+        if result != Err("missing document view".into()) {
+            return Err(format!("missing view {id} returned {result:?}").into());
+        }
+        let after = app.session.active().ok_or("lost source")?;
+        if !after.doc.shares_state(&before)
+            || after.revision != revision
+            || after.saved_revision != saved
+            || after.history.entry_labels().map(str::to_owned).collect::<Vec<_>>() != history
+            || after.history.redo_labels().map(str::to_owned).collect::<Vec<_>>() != redo
+            || serde_json::to_value(&app.ui)? != before_ui
+            || photocraft_format::save_to_bytes(&after.doc, &Default::default())? != before_native
+        {
+            return Err(format!("missing view {id} changed source/view/native/history/redo").into());
+        }
+    }
+    Ok(())
+}
+#[test]
+fn missing_view_print_size_returns_error_without_mutation() {
+    missing_preset_view("view.printSize").unwrap();
+}
+#[test]
+fn missing_view_two_hundred_percent_returns_error_without_mutation() {
+    missing_preset_view("view.twoHundredPercent").unwrap();
+}
+// T018 Print Size uses the authoritative square model; no unequal-axis author policy.
+type PrintTestResult<T> = Result<T, Box<dyn std::error::Error>>;
+fn print_unit() -> photocraft_doc::PhysicalUnit {
+    photocraft_doc::PhysicalUnit::Custom(photocraft_doc::CustomUnit {
+        name: "Own print unit".into(),
+        factor: 7.25,
+        digits: 4,
+        symbol: "pu".into(),
+        abbreviation: "print".into(),
+    })
+}
+fn print_app(depth: u32, physical: Option<photocraft_doc::PhysicalResolution>, legacy: f32, archive: &str) -> PrintTestResult<(PhotocraftApp, egui::Context)> {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width":200,"height":100,"depth":depth,"background":"transparent"}))?;
+    s.edit("Print physical source", |d, _| {
+        d.physical_resolution = physical.clone();
+        d.resolution_dpi = legacy;
+        d.layers
+            .first_mut()
+            .and_then(|l| l.surface_mut())
+            .ok_or_else(|| photocraft_engine::EngineError::Other("missing print raster".into()))?
+            .fill_rect(photocraft_geom::Rect::new(0, 0, 200, 100), &[0.0, 0.8, 0.2, 1.0]);
+        Ok(())
+    })?;
+    if archive != "none" {
+        let doc = &s.active().ok_or("missing native source")?.doc;
+        let restored = if archive == "legacy" {
+            photocraft_format::load_from_bytes(&photocraft_format::save_to_bytes(doc, &Default::default())?)?
+        } else {
+            let (bytes, _) = photocraft_format::PcraftWriter::new().save_zip_stream(
+                doc,
+                &Default::default(),
+                std::io::Cursor::new(Vec::new()),
+                Default::default(),
+                64 << 20,
+                &photocraft_raster::Interrupt::NONE,
+            )?;
+            photocraft_format::load_from_stream(
+                std::io::Cursor::new(bytes.into_inner()),
+                &Default::default(),
+                Default::default(),
+                &photocraft_raster::Interrupt::NONE,
+            )?
+        };
+        if restored != **doc {
+            return Err("native custom print source changed".into());
+        }
+        s = photocraft_engine::Session::new();
+        s.add_document(restored, None)?;
+    }
+    s.edit("Print redo witness", |d, _| {
+        d.name.push_str(" redo");
+        Ok(())
+    })?;
+    s.execute("edit.undo", json!({}))?;
+    let mut app = PhotocraftApp::new(s, Default::default());
+    app.sync_views();
+    let v = app.ui.views.first_mut().ok_or("missing print view")?;
+    v.zoom = 0.777;
+    v.fit_pending = false;
+    v.center = [100.0, 50.0];
+    v.rotation = 0.0;
+    Ok((app, egui::Context::default()))
+}
+fn print_menu_exact(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, expected: Result<f32, &str>) -> PrintTestResult<()> {
+    let before = app.session.active().ok_or("source")?.doc.clone();
+    let s = app.session.active().ok_or("source")?;
+    let state = (
+        s.revision,
+        s.saved_revision,
+        s.history.entry_labels().map(str::to_owned).collect::<Vec<_>>(),
+        s.history.redo_labels().map(str::to_owned).collect::<Vec<_>>(),
+    );
+    let native = photocraft_format::save_to_bytes(&before, &Default::default()).ok();
+    let ui = serde_json::to_value(&app.ui)?;
+    let result = menu(app, ctx, id, json!({}));
+    match expected {
+        Ok(zoom) => {
+            let reply = result.map_err(|e| format!("expected zoom{zoom}: {e}"))?;
+            let actual = app.ui.views.first().ok_or("lost view")?.zoom;
+            if actual.to_bits() != zoom.to_bits() || reply["zoom"].as_f64() != Some(f64::from(actual)) {
+                return Err(format!("expected zoom{zoom}, got{actual}").into());
+            }
+        }
+        Err(prefix) => match result {
+            Err(e) if e.starts_with(prefix) => {}
+            other => return Err(format!("expected {prefix}, got{other:?}").into()),
+        },
+    }
+    let s = app.session.active().ok_or("lost source")?;
+    if !s.doc.shares_state(&before)
+        || state
+            != (
+                s.revision,
+                s.saved_revision,
+                s.history.entry_labels().map(str::to_owned).collect::<Vec<_>>(),
+                s.history.redo_labels().map(str::to_owned).collect::<Vec<_>>(),
+            )
+        || native != photocraft_format::save_to_bytes(&s.doc, &Default::default()).ok()
+    {
+        return Err("Print menu changed source/native/revision/history/redo".into());
+    }
+    let mut after_ui = serde_json::to_value(&app.ui)?;
+    if expected.is_ok() {
+        *after_ui
+            .get_mut("views")
+            .and_then(serde_json::Value::as_array_mut)
+            .and_then(|v| v.first_mut())
+            .and_then(|v| v.get_mut("zoom"))
+            .ok_or("after zoom")? = ui["views"][0]["zoom"].clone();
+    }
+    if after_ui != ui {
+        return Err("Print menu changed shell state beyond permitted zoom".into());
+    }
+    Ok(())
+}
+#[test]
+fn print_size_canonical_native_square_overrides_stale_legacy() {
+    for depth in [8, 16, 32] {
+        for archive in ["none", "legacy", "zip64"] {
+            let (mut app, ctx) =
+                print_app(depth, Some(photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: 144.0, unit: print_unit() }), 300.0, archive).unwrap();
+            print_menu_exact(&mut app, &ctx, "view.printSize", Ok(0.5)).unwrap();
+        }
+    }
+}
+#[test]
+fn print_size_legacy_default_and_valid_zoom_bounds() {
+    for (physical, legacy, expected) in [
+        (None, 144.0, 0.5),
+        (None, 72.0, 1.0),
+        (Some(photocraft_doc::PhysicalResolution::square(f64::MIN_POSITIVE)), 300.0, 64.0),
+        (Some(photocraft_doc::PhysicalResolution::square(1.125)), 300.0, 64.0),
+        (Some(photocraft_doc::PhysicalResolution::square(144.0)), 300.0, 0.5),
+        (Some(photocraft_doc::PhysicalResolution::square(7200.0)), 300.0, 0.01),
+        (Some(photocraft_doc::PhysicalResolution::square(f64::MAX)), 300.0, 0.01),
+    ] {
+        let (mut app, ctx) = print_app(8, physical, legacy, "none").unwrap();
+        print_menu_exact(&mut app, &ctx, "view.printSize", Ok(expected)).unwrap();
+        print_menu_exact(&mut app, &ctx, "view.twoHundredPercent", Ok(2.0)).unwrap();
+    }
+}
+#[test]
+fn print_size_threshold_neighbors_are_bounded() {
+    for threshold in [1.125_f64, 7200.0] {
+        for bits in [threshold.to_bits() - 1, threshold.to_bits() + 1] {
+            let dpi = f64::from_bits(bits);
+            let (mut app, ctx) = print_app(8, Some(photocraft_doc::PhysicalResolution::square(dpi)), 300.0, "none").unwrap();
+            print_menu_exact(&mut app, &ctx, "view.printSize", Ok((72.0 / dpi).clamp(0.01, 64.0) as f32)).unwrap();
+        }
+    }
+}
+
+#[test]
+fn print_size_invalid_and_unequal_metadata_refuses_atomically() {
+    for (x, y) in [(0.0, 144.0), (-1.0, 144.0), (f64::NAN, 144.0), (144.0, f64::INFINITY), (144.0, 288.0), (288.0, 144.0)] {
+        let (mut app, ctx) = print_app(8, Some(photocraft_doc::PhysicalResolution { x_dpi: x, y_dpi: y, unit: print_unit() }), 300.0, "none").unwrap();
+        print_menu_exact(
+            &mut app,
+            &ctx,
+            "view.printSize",
+            Err(if x > 0.0 && x.is_finite() && y > 0.0 && y.is_finite() {
+                "unsupported unequal-axis Print Size view"
+            } else {
+                "invalid Print Size resolution"
+            }),
+        )
+        .unwrap();
+        print_menu_exact(&mut app, &ctx, "view.twoHundredPercent", Ok(2.0)).unwrap();
+    }
+    for legacy in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        let (mut app, ctx) = print_app(8, None, legacy, "none").unwrap();
+        print_menu_exact(&mut app, &ctx, "view.printSize", Err("invalid Print Size resolution")).unwrap();
+        print_menu_exact(&mut app, &ctx, "view.twoHundredPercent", Ok(2.0)).unwrap();
+    }
+    for (factor, name) in [
+        (0.0, "bad".to_string()),
+        (f64::NAN, "bad".into()),
+        (f64::INFINITY, "bad".into()),
+        (7.25, String::new()),
+        (7.25, "bad\0name".into()),
+        (7.25, "x".repeat((1 << 20) + 1)),
+    ] {
+        let mut unit = print_unit();
+        if let photocraft_doc::PhysicalUnit::Custom(u) = &mut unit {
+            u.factor = factor;
+            u.name = name;
+        }
+        let (mut app, ctx) = print_app(8, Some(photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: 144.0, unit }), 300.0, "none").unwrap();
+        print_menu_exact(&mut app, &ctx, "view.printSize", Err("invalid Print Size resolution")).unwrap();
+        print_menu_exact(&mut app, &ctx, "view.twoHundredPercent", Ok(2.0)).unwrap();
+    }
+}
+#[test]
+#[ignore = "explicit offscreen Vulkan Print Size zoom evidence"]
+fn print_size_actual_render_matches_legacy_control() {
+    for (name, physical, legacy) in
+        [("canonical", Some(photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: 144.0, unit: print_unit() }), 300.0), ("legacy", None, 144.0)]
+    {
+        let (mut app, _) = print_app(8, physical, legacy, "none").unwrap();
+        app.perf.gpu_info.selected = "cpu".into();
+        app.perf.gpu_info.canvas = "cpu".into();
+        let mut setup = egui_kittest::wgpu::default_wgpu_setup();
+        if let eframe::egui_wgpu::WgpuSetup::CreateNew(create) = &mut setup {
+            create.instance_descriptor.backends = eframe::wgpu::Backends::VULKAN;
+        }
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200., 800.)).with_pixels_per_point(1.).wgpu_setup(setup).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            app
+        });
+        h.run_steps(4);
+        let ctx = h.ctx.clone();
+        menu(h.state_mut(), &ctx, "view.printSize", json!({})).unwrap();
+        h.run_steps(4);
+        assert_eq!(h.state().ui.views[0].zoom, 0.5);
+        let xf = crate::canvas::ViewXform::active(h.state()).unwrap();
+        let p = xf.to_screen(0., 0.);
+        let q = xf.to_screen(200., 100.);
+        assert_eq!((q.x - p.x, q.y - p.y), (100., 50.));
+        let image = h.render().unwrap();
+        let center = xf.to_screen(100., 50.);
+        let sample = image.get_pixel(center.x.round() as u32, center.y.round() as u32).0;
+        assert!(sample[0] < 4 && sample[1] >= 200 && sample[1] <= 208 && sample[2] >= 47 && sample[2] <= 55, "actual canvas pixel{sample:?}");
+        let output = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../temp/sol3-print-size-feature-20261012");
+        image.save(output.join(format!("{name}-print-size.png"))).unwrap();
+    }
+}

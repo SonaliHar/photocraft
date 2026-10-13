@@ -1,0 +1,20 @@
+{
+  "mode-luma-darken-only.xcf": "82168822453034ad39ba38bbdc2b161c05062757e22744cb5cf6ce0a5a114f5a",
+  "mode-luma-darken-only.edit.xcf": "2f2a65180e2e9e6f918c02b5892d7cc2528c7de6a8f5d0cb1770b407deecc918",
+  "mode-luma-darken-only.fresh-source_state.json": "da73e62690818e01c13bf198a9666a805457936fcfb4d17e565dee00cfc33674",
+  "mode-luma-darken-only.fresh-edit_state.json": "a1d92f291164eb5d2d1bb11af9cbe6df412b1c1729cf455fb723fdfd6861699f",
+  "mode-luma-darken-only.fresh-source.ref.png": "d11dc25412daf8c58810e25a6ba1c5b1d13db89ad5be8e0253c2d3a432d961c2",
+  "mode-luma-darken-only.fresh-edit.ref.png": "bc41c9a06e67f0cecc692102b1310aba182116de652489fd0ca4143a5e6170f4",
+  "mode-luma-lighten-only.xcf": "d987678275e33745283f2914543fda48c037f96a7da6781a58e5e5ba387ab21c",
+  "mode-luma-lighten-only.edit.xcf": "394fd6f196f67a6d5ad4ff6299042383c6b392c4591685eb8f7f32b5cf02e76c",
+  "mode-luma-lighten-only.fresh-source_state.json": "c81e5b95403d47bf25aa1b96ae5423811880c958ee3d9f2d3e6968faaa9792f4",
+  "mode-luma-lighten-only.fresh-edit_state.json": "75b096a282b3f58e2ee63c1ae5e5440c6738df28dd9e18800e60f6419a8ef359",
+  "mode-luma-lighten-only.fresh-source.ref.png": "85322201fe96570dbee25be7b58e9407947ab9b4b9cdeba236003e9f5fe2c987",
+  "mode-luma-lighten-only.fresh-edit.ref.png": "576ef3d476d22eda0d7140a85573d70a65bc4accc9291edf66fafabfe5be5e9a",
+  "mode-luminance.xcf": "df61e7f07f9a15200cedca0e4ec620786ea6fe9b65f56529e2ed6388976a312b",
+  "mode-luminance.edit.xcf": "110603b2ee7c17aac0cfb944fd1e8123d51da61c80b55a88f115b8ec9b1dbd11",
+  "mode-luminance.fresh-source_state.json": "9e7802c0c72eb07ba5f541560e43916b95e602e9387116afac6097ac00c63ba5",
+  "mode-luminance.fresh-edit_state.json": "47b15efb5404595f5c4b2b54e7f2930f9acbfa63bf2a07c68e2115463bb3d51c",
+  "mode-luminance.fresh-source.ref.png": "5ddbfb2bf180ebfc307c8fd8181fc24b09c687714584f5f772590aa2cb303f94",
+  "mode-luminance.fresh-edit.ref.png": "c9a9e0f1f36c5712dbe1ea9760a9f4131a7c4b3e98303ba39b6477df3154fa77"
+}

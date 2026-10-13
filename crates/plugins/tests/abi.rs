@@ -11,6 +11,19 @@ use serde_json::json;
 
 const INVERT: &[u8] = include_bytes!("fixtures/invert.wasm");
 
+#[test]
+fn abi_v1_rejects_wide_samples_before_narrowing() {
+    let plugin = Plugin::load(INVERT, Limits::default()).unwrap();
+    for sample in [SampleType::U32, SampleType::F64] {
+        let format = PixelFormat::RGBA8.with_sample(sample);
+        let surface = Surface::with_default(format, &[0.25, 0.5, 0.75, 1.0]);
+        let before = surface.default_bytes().to_vec();
+        assert_eq!(photocraft_plugins::format_code(format) & 255, 0);
+        assert!(matches!(plugin.apply(&surface, Rect::new(0, 0, 1, 1), None, &json!({})), Err(Error::Abi(_))));
+        assert_eq!(surface.default_bytes(), before);
+    }
+}
+
 /// A module implementing the ABI whose pieces can be swapped: `manifest` JSON, `version`,
 /// `filter` body (params `$buf $len $w $h $ch $fmt $pp $pl`, result i32) and extra items.
 fn module(manifest: &str, version: i32, filter: &str, extra: &str) -> Vec<u8> {
@@ -76,9 +89,9 @@ fn example_invert_loads_and_reports_its_manifest() {
 }
 
 #[test]
-fn example_invert_inverts_colour_at_every_depth() {
+fn example_invert_inverts_colour_at_every_abi_v1_depth() {
     let p = Plugin::load(INVERT, Limits::default()).unwrap();
-    for sample in SampleType::ALL {
+    for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
         let fmt = PixelFormat { sample, ..PixelFormat::RGBA8 };
         let s = surface(fmt, 40, 30);
         let out = p.apply(&s, Rect::new(0, 0, 40, 30), None, &json!({})).unwrap();

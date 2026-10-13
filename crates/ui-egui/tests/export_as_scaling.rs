@@ -3,7 +3,6 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use egui_kittest::kittest::Queryable;
 use photocraft_ui_egui::{FileDialogAnswer, FileDialogRequest, PhotocraftApp, Services, menus};
@@ -25,6 +24,7 @@ fn harness() -> Option<(Harness, Writes)> {
                         reply.send(match request {
                             FileDialogRequest::Save { suggested } => Some(FileDialogAnswer::SaveTo(suggested)),
                             FileDialogRequest::Open { .. } => None,
+                            FileDialogRequest::XcfLinkedImage => Some(FileDialogAnswer::Failed("xcf.resource.picker-unavailable".into())),
                         })
                     })),
                     export: Some(Box::new(|doc, path, settings| {
@@ -82,7 +82,7 @@ fn export_as_scales_a_narrow_image_without_editing_the_source() {
         }
         let st = h.state().session.active().expect("document");
         let source = st.doc.clone();
-        let history = st.history.entries();
+        let history = st.history.entries(&photocraft_engine::read_control_none()).unwrap().values().to_vec();
         let revision = st.revision;
 
         let ctx = h.ctx.clone();
@@ -121,9 +121,9 @@ fn export_as_scales_a_narrow_image_without_editing_the_source() {
         assert_eq!(png.dimensions(), (1, 50), "{depth}-bit: written dimensions match the dialog");
 
         let st = h.state().session.active().expect("source remains open");
-        assert!(Arc::ptr_eq(&st.doc, &source), "{depth}-bit: source document is unchanged");
+        assert!(std::ptr::eq((st.doc).as_ref(), (source).as_ref()), "{depth}-bit: source document is unchanged");
         assert_eq!((st.doc.size.width, st.doc.size.height), (1, 100));
-        assert_eq!(st.history.entries(), history, "export must not add source history");
+        assert_eq!(st.history.entries(&photocraft_engine::read_control_none()).unwrap().values().to_vec(), history, "export must not add source history");
         assert_eq!(st.revision, revision, "export must not change source revision");
     }
 }

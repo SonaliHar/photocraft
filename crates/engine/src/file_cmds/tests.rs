@@ -27,7 +27,7 @@ fn png(dir: &str, name: &str, w: u32, h: u32, color: &str) -> String {
 }
 
 fn composite(s: &Session, x: i32, y: i32) -> [f32; 4] {
-    let b = photocraft_compose::render(doc(s), Rect::new(x, y, x + 1, y + 1));
+    let b = photocraft_compose::render(doc(s), Rect::new(x, y, x + 1, y + 1)).unwrap();
     b.px[0]
 }
 
@@ -340,7 +340,7 @@ fn load_files_into_stack_and_image_processor_and_batch() {
     assert_eq!(r["files"].as_array().unwrap().len(), 2, "{r}");
     assert!(r["errors"].as_array().unwrap().is_empty());
     let inv = photocraft_io::import("a.png", &std::fs::read(join(&out, "a.png")).unwrap()).unwrap().document;
-    let px = photocraft_compose::render(&inv, Rect::new(1, 1, 2, 2)).px[0];
+    let px = photocraft_compose::render(&inv, Rect::new(1, 1, 2, 2)).unwrap().px[0];
     assert!(px[0] < 0.01 && px[1] > 0.99 && px[2] > 0.99, "red inverted to cyan: {px:?}");
     assert!(s.execute("file.automate.batch", json!({"steps": [["no.such.command", {}]], "input": input, "output": out})).is_err());
 }
@@ -465,6 +465,43 @@ fn batch_reports_inputs_that_share_an_output_name() {
     let r = s.execute("file.automate.runDroplet", json!({"droplet": droplet, "input": [join(&input, "a.png"), other], "output": out})).unwrap();
     assert_eq!((r["files"].as_array().unwrap().len(), r["errors"].as_array().unwrap().len()), (1, 1), "{r}");
     let kept = photocraft_io::import("a.png", &std::fs::read(join(&out, "a.png")).unwrap()).unwrap().document;
-    let px = photocraft_compose::render(&kept, Rect::new(1, 1, 2, 2)).px[0];
+    let px = photocraft_compose::render(&kept, Rect::new(1, 1, 2, 2)).unwrap().px[0];
     assert!(px[0] > 0.99 && px[1] < 0.01, "the first input's result is kept: {px:?}");
+}
+
+#[test]
+fn native_save_copy_keeps_document_and_history_exact() {
+    let mut s = session(3, 2, 16);
+    let before = s.active().unwrap().doc.clone();
+    let past = s.active().unwrap().history.past_len();
+    let dir = tmp("controlled-native");
+    let path = join(&dir, "copy.pcraft");
+    s.execute("file.saveACopy", json!({"path":path})).unwrap();
+    let loaded = photocraft_format::load_from_bytes(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(loaded, *before);
+    assert_eq!(*s.active().unwrap().doc, *before);
+    assert_eq!(s.active().unwrap().history.past_len(), past);
+}
+#[test]
+fn cancelled_native_save_does_not_replace_destination() {
+    let s = session(2, 2, 8);
+    let dir = tmp("controlled-native-cancel");
+    let path = join(&dir, "copy.pcraft");
+    std::fs::write(&path, b"old").unwrap();
+    assert!(save_doc_with_interrupt(doc(&s), &path, None, &photocraft_raster::Interrupt::cancel_only(&|| true)).is_err());
+    assert_eq!(std::fs::read(path).unwrap(), b"old");
+}
+
+#[test]
+fn native_encode_token_cancels_without_returning_buffer_or_changing_source() {
+    let doc =
+        photocraft_doc::Document::new("own cancelled memory", photocraft_doc::Size::new(1, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::F64);
+    let before = doc.clone();
+    assert!(matches!(
+        super::encode_with_interrupt(&doc, "own.pcraft", None, &photocraft_raster::Interrupt::cancel_only(&|| true)),
+        Err(crate::EngineError::Cancelled)
+    ));
+    assert_eq!(doc, before);
+    let (bytes, _) = super::encode(&doc, "own.pcraft", None).unwrap();
+    assert_eq!(photocraft_format::load_from_bytes(&bytes).unwrap(), before);
 }

@@ -12,8 +12,9 @@
 //! OS config directory; the web shell: browser storage) and restore it with
 //! [`Session::load_prefs_json`].
 //!
-//! Engine-side values are applied by [`Session::apply_prefs`]: the history state limit (every
-//! open document), the effect-cache memory budget, and units for commands that report lengths.
+//! Engine-side values are applied by [`Session::apply_prefs`]: resident history limits,
+//! the effect-cache memory budget, and units for commands that report lengths. Accounted
+//! histories retain their prepaid cap; changing that preference while one is open is refused.
 //! Colour settings (`colorSettings`) are stored with the colour state
 //! ([`crate::color_cmds::ColorSettings`]) and persisted in the same document.
 
@@ -1266,26 +1267,48 @@ impl Session {
         self.prefs.get()
     }
 
-    /// Change preferences and apply the engine-side ones.
-    pub fn edit_prefs<R>(&mut self, f: impl FnOnce(&mut Preferences) -> R) -> R {
-        let r = self.prefs.edit(f);
-        self.apply_prefs();
-        r
+    /// Stage preferences and apply engine settings. An accounted history-cap
+    /// change is refused before preferences or history are published.
+    pub fn edit_prefs<R>(&mut self, f: impl FnOnce(&mut Preferences) -> R) -> Result<R> {
+        let mut next = self.prefs().clone();
+        let r = f(&mut next);
+        self.validate_history_preferences(&next)?;
+        self.prefs.edit(|p| *p = next);
+        self.apply_prefs()?;
+        Ok(r)
     }
 
-    /// Push engine-relevant preferences into live state: every document's history limit and
-    /// the layer-effect cache budget.
-    pub fn apply_prefs(&mut self) {
+    fn validate_history_preferences(&self, next: &Preferences) -> Result<()> {
+        if next.performance.history_states != self.prefs().performance.history_states && self.docs.iter().any(|st| st.doc.accounted().is_some()) {
+            return Err(photocraft_raster::backing::BackingError::Unsupported.into());
+        }
+        for st in &self.docs {
+            if st.doc.accounted().is_none() {
+                st.doc.validate_resident()?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Push resident history limits and the layer-effect cache budget into live
+    /// state. Accounted histories keep their separately prepaid cap and quota.
+    pub fn apply_prefs(&mut self) -> Result<()> {
+        self.validate_history_preferences(self.prefs())?;
         let n = self.prefs().performance.history_states.max(1) as usize;
         let bytes = self.prefs().performance.history_budget_bytes();
         let budget = self.prefs().performance.effect_cache_mb as usize;
         for st in &mut self.docs {
+            // Accounted history keeps its prepaid state cap and persistent quota.
+            if st.doc.accounted().is_some() {
+                continue;
+            }
             st.history.max_states = n;
             st.history.max_bytes = bytes;
-            st.history.trim(&st.doc);
+            st.history.trim(&st.doc, &crate::read_control_none())?;
         }
         photocraft_compose::set_effect_cache_budget(budget << 20);
         crate::plugin_cmds::sync_prefs(self);
+        Ok(())
     }
 
     /// Everything persisted as one JSON document: the preferences plus `colorSettings`.
@@ -1311,6 +1334,7 @@ impl Session {
         let color = v.as_object_mut().and_then(|m| m.remove("colorSettings"));
         let presets = v.as_object_mut().and_then(|m| m.remove("presets"));
         let prefs: Preferences = serde_json::from_value(v).map_err(|e| format!("preferences: {e}"))?;
+        self.validate_history_preferences(&prefs).map_err(|e| e.to_string())?;
         if let Some(c) = color {
             self.color.settings = serde_json::from_value(c).unwrap_or_default();
             photocraft_compose::psblend::set_text_gamma(self.color.settings.blend_text_gamma);
@@ -1319,7 +1343,7 @@ impl Session {
         if let Some(v) = presets {
             self.load_presets_json(v);
         }
-        self.apply_prefs();
+        self.apply_prefs().map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -1368,6 +1392,7 @@ impl Session {
         } else {
             next.set(path, value)?;
         }
+        self.validate_history_preferences(&next).map_err(|e| e.to_string())?;
         self.prefs.edit(|p| *p = next);
         Ok(())
     }
@@ -1402,15 +1427,25 @@ fn prefs_set(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "give `path` and `value`, or `values: {path: value, …}`"));
     }
     // All or nothing: validate against a scratch copy first.
-    let (saved_prefs, saved_color) = (s.prefs().clone(), s.color.settings.clone());
+    let (saved_prefs, saved_color) = (s.prefs.clone(), s.color.settings.clone());
     for (path, v) in &changes {
         if let Err(e) = s.set_pref(path, v.clone()) {
-            s.prefs.edit(|p| *p = saved_prefs);
+            s.prefs = saved_prefs;
             s.color.settings = saved_color;
             return Err(bad(cmd, e));
         }
     }
-    s.apply_prefs();
+    if s.prefs().performance.history_states != saved_prefs.get().performance.history_states && s.docs.iter().any(|st| st.doc.accounted().is_some()) {
+        s.prefs = saved_prefs;
+        s.color.settings = saved_color;
+        return Err(photocraft_raster::backing::BackingError::Unsupported.into());
+    }
+    if let Err(e) = s.validate_history_preferences(&s.prefs().clone()) {
+        s.prefs = saved_prefs;
+        s.color.settings = saved_color;
+        return Err(e);
+    }
+    s.apply_prefs()?;
     let view = s.prefs_view();
     let out: Map<String, Value> = changes.iter().map(|(k, _)| (k.clone(), get_path(&view, k).cloned().unwrap_or(Value::Null))).collect();
     Ok(Value::Object(out))
@@ -1429,17 +1464,17 @@ fn prefs_reset(s: &mut Session, p: &Value) -> Result<Value> {
             s.set_pref(path, def).map_err(|e| bad("prefs.reset", e))?;
         }
         None => {
+            s.edit_prefs(|p| p.reset(None))?.map_err(|e| bad("prefs.reset", e))?;
             s.color.settings = Default::default();
-            s.edit_prefs(|p| p.reset(None)).map_err(|e| bad("prefs.reset", e))?;
         }
         Some(path) => {
             let mut next = s.prefs().clone();
             next.reset(Some(path)).map_err(|e| bad("prefs.reset", e))?;
-            s.edit_prefs(|p| *p = next);
+            s.edit_prefs(|p| *p = next)?;
         }
     }
     s.prefs.edit(|_| ());
-    s.apply_prefs();
+    s.apply_prefs()?;
     if path.is_some_and(|path| keyed(path).is_some()) {
         // The removed override is absent, so reading its old path would report an error.
         Ok(Value::Null)
@@ -1461,12 +1496,14 @@ fn keyboard_shortcuts(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "edit.keyboardShortcuts";
     if let Some(r) = p.get("reset") {
         match r {
-            Value::Bool(true) => s.edit_prefs(|p| p.shortcuts.clear()),
+            Value::Bool(true) => {
+                s.edit_prefs(|p| p.shortcuts.clear())?;
+            }
             Value::Array(ids) => s.edit_prefs(|p| {
                 for id in ids.iter().filter_map(Value::as_str) {
                     p.shortcuts.remove(id);
                 }
-            }),
+            })?,
             _ => {}
         }
     }
@@ -1496,7 +1533,7 @@ fn keyboard_shortcuts(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
         }
-        s.edit_prefs(|p| *p = next);
+        s.edit_prefs(|p| *p = next)?;
     }
     let prefs = s.prefs();
     let filter = p.get("filter").and_then(Value::as_str).map(str::to_ascii_lowercase);
@@ -1556,7 +1593,7 @@ fn menus(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
         }
-    });
+    })?;
     Ok(serde_json::to_value(&s.prefs().menus).unwrap_or_default())
 }
 
@@ -1573,7 +1610,7 @@ fn toolbar(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(o) = ids("order") {
             pr.toolbar.order = o;
         }
-    });
+    })?;
     Ok(serde_json::to_value(&s.prefs().toolbar).unwrap_or_default())
 }
 

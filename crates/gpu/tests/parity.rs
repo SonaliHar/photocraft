@@ -9,6 +9,131 @@ use photocraft_gpu::{Compositor, render_to_vec};
 
 const TOL: f32 = 1.0 / 255.0;
 
+/// Exercise the production quantizer itself, including values outside the normalized
+/// integer domain. Compare exceptional results with the former expression on the same
+/// device: GPU NaN payloads and exceptional arithmetic need not match the CPU's bits.
+#[test]
+fn integer_quantization_preserves_exceptional_quotient_classification() {
+    use wgpu::util::DeviceExt;
+    let Some((adapter, device, queue, _lock)) = any_device() else { return };
+    eprintln!("quantization adapter: {:?}", adapter.get_info());
+    let mut inputs = Vec::<[f32; 4]>::new();
+    for quantum in [255.0, 32768.0, 0.0, f32::MIN_POSITIVE, f32::INFINITY, f32::NAN] {
+        for value in [f32::INFINITY, f32::NEG_INFINITY, f32::NAN, f32::MAX, -f32::MAX, 0.0, 1.0] {
+            inputs.push([value, value, value, quantum]);
+        }
+    }
+    for sample in 0..=255 {
+        let value = sample as f32 / 255.0;
+        inputs.push([value, value, value, 255.0]);
+    }
+    inputs.push([f32::INFINITY, 119.0 / 255.0, f32::NAN, 255.0]);
+    inputs.push([f32::NEG_INFINITY, 229.0 / 255.0, 1.0, 255.0]);
+    let source = include_str!("../src/compose.wgsl").replace("\r\n", "\n");
+    let production = source.split("if ((op.flags & F_QUANT) != 0u) {").nth(1).unwrap().split("\n    }\n    if").next().unwrap();
+    let shader = format!(
+        r#"
+struct Op {{ p0: vec4<f32> }}
+var<private> op: Op;
+@group(0) @binding(0) var<storage, read> inputs: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read_write> outputs: array<vec4<f32>>;
+fn actual(a: vec4<f32>) -> vec4<f32> {{ {production} }}
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {{
+    if (id.x >= arrayLength(&inputs)) {{ return; }}
+    let sample = inputs[id.x];
+    let a = vec4(sample.x, sample.y, sample.z, sample.x);
+    op.p0 = vec4(sample.w);
+    outputs[id.x * 2u] = floor(a * sample.w + 0.5) / sample.w;
+    outputs[id.x * 2u + 1u] = actual(a);
+}}
+"#
+    );
+    let bytes: Vec<u8> = inputs.iter().flatten().flat_map(|value| value.to_ne_bytes()).collect();
+    let input = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("quantizer exceptional inputs"),
+        contents: &bytes,
+        usage: wgpu::BufferUsages::STORAGE,
+    });
+    let size = (inputs.len() * 32) as u64;
+    let output = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
+    });
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("production quantizer exceptional regression"),
+        source: wgpu::ShaderSource::Wgsl(shader.into()),
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: None,
+        layout: None,
+        module: &module,
+        entry_point: Some("main"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &pipeline.get_bind_group_layout(0),
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: input.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: output.as_entire_binding() },
+        ],
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &bind, &[]);
+        pass.dispatch_workgroups((inputs.len() as u32).div_ceil(64), 1, 1);
+    }
+    encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, size);
+    queue.submit([encoder.finish()]);
+    let (tx, rx) = std::sync::mpsc::channel();
+    readback.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+        let _ = tx.send(result);
+    });
+    device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).unwrap();
+    rx.recv().unwrap().unwrap();
+    let mapped = readback.slice(..).get_mapped_range().unwrap();
+    let rows: Vec<[f32; 4]> = mapped
+        .as_chunks::<16>()
+        .0
+        .iter()
+        .map(|bytes| {
+            let channels = bytes.as_chunks::<4>().0;
+            std::array::from_fn(|i| f32::from_ne_bytes(channels[i]))
+        })
+        .collect();
+    for (sample, pair) in inputs.iter().zip(rows.as_chunks::<2>().0) {
+        for (channel, (old, actual)) in pair[0].iter().zip(pair[1]).enumerate() {
+            let value = sample[if channel == 3 { 0 } else { channel }];
+            let numerator = (value * sample[3] + 0.5).floor();
+            let quotient = numerator / sample[3];
+            if !numerator.is_finite() || !quotient.is_finite() || !sample[3].is_finite() {
+                assert!(
+                    if old.is_nan() { actual.is_nan() } else { old.to_bits() == actual.to_bits() },
+                    "sample={sample:?} original={old:?}/{:08x} actual={actual:?}/{:08x}",
+                    old.to_bits(),
+                    actual.to_bits()
+                );
+            } else if sample[3] == 255.0 && (0.0..=1.0).contains(&value) {
+                assert_eq!(actual.to_bits(), quotient.to_bits(), "normalized sample={sample:?}");
+            }
+        }
+    }
+    drop(mapped);
+    readback.unmap();
+}
+
 /// Concurrent wgpu instances in one process segfault on some drivers (RADV), so the GPU tests
 /// take this lock and hold it until their device is dropped.
 static GPU_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -91,9 +216,9 @@ fn noise_layer(name: &str, fmt: PixelFormat, rect: Rect, seed: u32, min_alpha: f
 
 fn mask(rect: Rect, seed: u32, default: f32) -> LayerMask {
     let mut m = LayerMask::reveal_all();
-    m.surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[default]);
+    m.surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[default]).into();
     let data: Vec<f32> = (0..rect.width() * rect.height()).map(|i| rnd(seed, i)).collect();
-    m.surface.write_region(rect, &data);
+    std::sync::Arc::make_mut(&mut m.surface).write_region(rect, &data);
     m.density = 0.8;
     m
 }
@@ -123,7 +248,7 @@ fn worst_diff(cpu: &[[f32; 4]], gpu: &[[f32; 4]]) -> (f32, usize) {
 /// GPU (whole textures, then pages) vs CPU over `rect`: Err with the worst pixel if over the
 /// tolerance, else the stats of the unpaged render.
 fn diff_rect(g: &mut Gpu, doc: &Document, rect: Rect, what: &str) -> Result<photocraft_gpu::Stats, String> {
-    let cpu = photocraft_compose::render(doc, rect);
+    let cpu = photocraft_compose::render(doc, rect).unwrap();
     let mut first = None;
     for (label, comp) in [("", &mut g.comp), (" (paged)", &mut g.paged)] {
         let (out, stats) = photocraft_gpu::render_to_vec_stats(comp, &g.device, &g.queue, doc, rect).map_err(|e| format!("{what}{label}: {e}"))?;
@@ -270,6 +395,41 @@ fn adjustment_layers() {
             }
             d.layers.push(a);
             check(&mut g, &d, &format!("{} {mode:?}", adj.label()));
+        }
+    }
+}
+
+#[test]
+fn integer_adjustment_quantization_preserves_normalized_samples_and_opaque_alpha() {
+    let Some(mut g) = gpu() else { return };
+    for (depth, steps, quantum) in [(SampleType::U8, 256u32, 255f32), (SampleType::U16, 257, 32768.)] {
+        let mut doc = Document::new("quantized gray levels", Size::new(steps, 1), ColorMode::Rgb, depth);
+        let mut layer = Layer::raster("gray levels", doc.pixel_format());
+        let values: Vec<_> = (0..steps)
+            .flat_map(|i| {
+                let numerator = if depth == SampleType::U8 { i } else { i * 128 };
+                let value = numerator as f32 / quantum;
+                [value, value, value, 1.]
+            })
+            .collect();
+        layer.surface_mut().unwrap().write_region(doc.bounds(), &values);
+        doc.layers.push(layer);
+        // A neutral gray Hue/Saturation edit exercises integer adjustment
+        // quantization without hue-sector or half-level boundary differences.
+        doc.layers.push(Layer::new(
+            "neutral",
+            LayerContent::Adjustment(Adjustment::HueSaturation { hue: 0., saturation: 0., lightness: 0., colorize: false, ranges: HueRange::defaults() }),
+        ));
+        let cpu = photocraft_compose::render(&doc, doc.bounds()).unwrap();
+        for (label, comp) in [("whole", &mut g.comp), ("paged", &mut g.paged)] {
+            let output = render_to_vec(comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+            assert_eq!(output.len(), cpu.px.len());
+            for (i, (actual, expected)) in output.iter().zip(&cpu.px).enumerate() {
+                assert_eq!(actual[3].to_bits(), 1f32.to_bits(), "{depth:?} {label} opaque sample {i}");
+                for c in 0..4 {
+                    assert_eq!(actual[c].to_bits(), expected[c].to_bits(), "{depth:?} {label} sample {i} channel {c}");
+                }
+            }
         }
     }
 }
@@ -943,8 +1103,8 @@ fn layer_effects_on_groups_clipping_and_fills() {
     let mut d = fx_doc(90, 70, SampleType::U8);
     let mut solid = Layer::new("solid", LayerContent::Fill(Fill::Solid(Color::rgb(0.2, 0.5, 0.8))));
     let mut m = LayerMask::reveal_all();
-    m.surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[0.0]);
-    m.surface.fill_rect(Rect::new(20, 15, 60, 50), &[1.0]);
+    m.surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[0.0]).into();
+    std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::new(20, 15, 60, 50), &[1.0]);
     solid.mask = Some(m);
     solid.effects.items = vec![ds.clone(), st.clone(), bv];
     d.layers.push(solid);
@@ -1132,8 +1292,8 @@ fn channel_restrictions() {
     l.excluded_channels = 1;
     d.layers.push(l);
     check(&mut g, &d, "gray channels");
-    let flat = photocraft_compose::flatten(&d);
-    let bg = photocraft_compose::render_layer(&d.layers[0], d.bounds());
+    let flat = photocraft_compose::flatten(&d).unwrap();
+    let bg = photocraft_compose::render_layer(&d.layers[0], d.bounds()).unwrap();
     assert!(flat.px.iter().zip(&bg.px).all(|(a, b)| (a[0] - b[0]).abs() < 1e-6));
 }
 
@@ -1202,7 +1362,7 @@ fn type_layers_blend_with_text_gamma() {
     e.layers.push(c);
     fx_check(&mut g, &e, "clipped text emboss");
     // The gamma changes edge pixels against a linear mix.
-    let flat = photocraft_compose::flatten(&d);
+    let flat = photocraft_compose::flatten(&d).unwrap();
     let mut lin = d.clone();
     let raster = {
         let LayerContent::Text(t) = &lin.layers[1].content else { unreachable!() };
@@ -1211,7 +1371,7 @@ fn type_layers_blend_with_text_gamma() {
         r
     };
     lin.layers[1] = raster;
-    let flat_lin = photocraft_compose::flatten(&lin);
+    let flat_lin = photocraft_compose::flatten(&lin).unwrap();
     assert!(flat.px.iter().zip(&flat_lin.px).any(|(a, b)| (a[0] - b[0]).abs() > 0.02));
 }
 
@@ -1365,15 +1525,15 @@ fn lab_documents_mix_in_lab() {
     let mut b = Layer::raster("b", fmt);
     b.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 2, 1), &photocraft_raster::from_rgba(&fmt, [1.0, 1.0, 0.0, 0.5]));
     d.layers = vec![a, b];
-    let p = photocraft_compose::flatten(&d).px[0];
+    let p = photocraft_compose::flatten(&d).unwrap().px[0];
     assert!((p[0] - 0.5).abs() > 0.05 || (p[2] - 0.5).abs() > 0.05, "{p:?}");
 }
 
 #[test]
 fn rgba16f_fallback_path_renders() {
     // Issue #7 / #4: on adapters that can't render Rgba32Float the compositor falls back to
-    // Rgba16Float. Force that path here (even on a 32f-capable GPU) to prove it works end to end —
-    // pipeline creation, the accumulation texture, and the half-float readback — within display
+    // Rgba16Float. Force that path here (even on a 32f-capable GPU) to prove it works end to end â€”
+    // pipeline creation, the accumulation texture, and the half-float readback â€” within display
     // tolerance of the CPU reference. This is the path Intel-Vulkan / limited GPUs take.
     let Some((adapter, device, queue, _lock)) = any_device() else { return };
     let mut comp = match Compositor::try_new_with_format(&device, wgpu::TextureFormat::Rgba16Float) {
@@ -1386,7 +1546,7 @@ fn rgba16f_fallback_path_renders() {
     top.opacity = 0.8;
     d.layers.push(top);
     d.layers.push(Layer::new("adj", LayerContent::Adjustment(Adjustment::BrightnessContrast { brightness: 30.0, contrast: 40.0, legacy: false })));
-    let cpu = photocraft_compose::flatten(&d);
+    let cpu = photocraft_compose::flatten(&d).unwrap();
     let out = render_to_vec(&mut comp, &device, &queue, &d, d.bounds()).expect("16f render");
     let mut worst = 0.0f32;
     for (c, o) in cpu.px.iter().zip(&out) {
@@ -1394,7 +1554,7 @@ fn rgba16f_fallback_path_renders() {
             worst = worst.max((c[k] * c[3] - o[k] * o[3]).abs());
         }
     }
-    // Half-float display precision — looser than the exact 1/255 parity bar, but proves the path works.
+    // Half-float display precision â€” looser than the exact 1/255 parity bar, but proves the path works.
     assert!(worst <= 3.0 / 255.0, "16f fallback max diff {:.2}/255", worst * 255.0);
     // preferred_acc_format returns a renderable format for this adapter.
     let f = Compositor::preferred_acc_format(&adapter);
@@ -1490,7 +1650,7 @@ fn pages_are_evicted_under_the_budget() {
     let page = u64::from(g.paged.page_size()).pow(2) * 4;
     g.paged.set_resident_budget(page);
     for round in 0..3 {
-        let cpu = photocraft_compose::flatten(&d);
+        let cpu = photocraft_compose::flatten(&d).unwrap();
         let (out, s) = photocraft_gpu::render_to_vec_stats(&mut g.paged, &g.device, &g.queue, &d, d.bounds()).unwrap();
         let worst = worst_diff(&cpu.px, &out);
         assert!(worst.0 <= TOL, "round {round}: max diff {:.2}/255 at {}", worst.0 * 255.0, worst.1);
@@ -1525,7 +1685,7 @@ fn the_focused_view_stays_resident_after_a_full_refresh() {
         assert!(s.evicted > 0, "{s:?}");
         let (out, s) = photocraft_gpu::render_to_vec_stats(&mut comp, &g.device, &g.queue, &d, view).unwrap();
         assert_eq!(s.tiles_uploaded, 0, "{s:?}");
-        let cpu = photocraft_compose::render(&d, view);
+        let cpu = photocraft_compose::render(&d, view).unwrap();
         assert!(worst_diff(&cpu.px, &out).0 <= TOL);
     }
 }

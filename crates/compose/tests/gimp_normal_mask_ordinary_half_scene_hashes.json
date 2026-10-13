@@ -1,0 +1,14 @@
+{
+  "medium": {
+    "assignment-controls.json": "163836f5d4a7a6ff88dcba95a8c545fe186de1f7eff2e4dd07d9f3a1fd8752d8",
+    "batch-manifest.json": "dd3a1c6f535fba3e75a14d2e8143c6804508a9a7710401e99872f5d2c53b5745",
+    "faithful-observations.json": "a8a9b03889935a5221d54eb45c9a29fd0d0ceea4c9bfc6b1831a23b627446b58",
+    "FAITHFUL-REPEAT-DIAGNOSTIC.json": "b9839474d05d8fdb832f989c8b33a36dc7df43c941939ba2153172fb629d17ab",
+    "observations.json": "b9a723585a0de4e0e6563c9fc01dfe01b5759d2bb8da0f6c36865e63b2446a18",
+    "SOURCE-VERIFICATION.json": "97f8d0d7c24b5fa869d15b73e3a6928889d0995a7abe05e3dfb2674c67e8cb52",
+    "STRICT-REPEAT-DIAGNOSTIC.json": "9b0ad829ed68eef87c0e0bc20efe0230c88c4442cd9c51097e4bb03eed50b303",
+    "VERIFICATION.json": "2d96f22973c3576b46552d403d401f6bbe789fb99fbc31a46ebeb68c083a75bd",
+    "faithful-fresh/faithful-observations.json": "96c1ea6fdc9260c7d201d73dc9d98284e8546792f7947fbe9ca428eab287788e",
+    "fresh/observations.json": "f3bab5728b82dd27ba2caa22c199883a8277514f8a3f3d263a6ee195376e6901"
+  }
+}

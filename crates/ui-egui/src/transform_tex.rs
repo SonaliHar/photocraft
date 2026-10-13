@@ -2,12 +2,12 @@
 //!
 //! The moving pixels are uploaded at full resolution (up to the GPU's texture limit) and drawn on
 //! a mesh through the box's homography. What the preview samples depends on how big a source
-//! pixel ends up on screen (view zoom × transform scale):
+//! pixel ends up on screen (view zoom Ã— transform scale):
 //!
-//! - shrinking (< ½ screen px per source px): a box-filtered level of a lazily built mip chain, so
+//! - shrinking (< Â½ screen px per source px): a box-filtered level of a lazily built mip chain, so
 //!   zoomed-out previews neither shimmer nor alias;
 //! - around 1:1 or enlarging: the full-resolution level, bilinear;
-//! - Nearest Neighbor interpolation, or a view zoomed in to ≥ 200% on pixels that aren't
+//! - Nearest Neighbor interpolation, or a view zoomed in to â‰¥ 200% on pixels that aren't
 //!   enlarged by the transform: the full-resolution level with nearest filtering, so pixels stay
 //!   crisp like the canvas around them.
 //!
@@ -59,7 +59,7 @@ impl PreviewTextures {
             return (0, false);
         }
         if s < 0.5 {
-            // log2(1/s) levels down, at most 12 (4096× smaller).
+            // log2(1/s) levels down, at most 12 (4096Ã— smaller).
             return ((1.0 / s).log2().floor().clamp(0.0, 12.0) as u32, nearest_interpolation);
         }
         let crisp = nearest_interpolation || (zoom >= CRISP_ZOOM && scale <= 1.05);
@@ -84,7 +84,7 @@ impl PreviewTextures {
         (id, uv)
     }
 
-    /// Level `n` of the mip chain (built on demand by 2×2 box filtering) and its uv extent.
+    /// Level `n` of the mip chain (built on demand by 2Ã—2 box filtering) and its uv extent.
     fn level_image(&self, n: u32) -> Option<(Arc<ColorImage>, [f32; 2])> {
         let mut imgs = self.images.lock().unwrap_or_else(PoisonError::into_inner);
         while imgs.len() <= n as usize {
@@ -98,14 +98,14 @@ impl PreviewTextures {
         let k = (imgs.len() - 1).min(n as usize);
         let img = imgs.get(k)?.clone();
         let base = imgs.first()?.size;
-        // Level k covers size·2^k base texels (the last row/column may be padding).
+        // Level k covers sizeÂ·2^k base texels (the last row/column may be padding).
         let f = (1u64 << k) as f32;
         let uv = [self.base_uv[0] * base[0] as f32 / (img.size[0] as f32 * f).max(1.0), self.base_uv[1] * base[1] as f32 / (img.size[1] as f32 * f).max(1.0)];
         Some((img, [uv[0].min(1.0), uv[1].min(1.0)]))
     }
 }
 
-/// 2×2 box filter of a premultiplied image (odd edges repeat the last row/column).
+/// 2Ã—2 box filter of a premultiplied image (odd edges repeat the last row/column).
 fn halve(img: &ColorImage) -> ColorImage {
     let [w, h] = img.size;
     let (nw, nh) = (w.div_ceil(2).max(1), h.div_ceil(2).max(1));
@@ -125,9 +125,9 @@ fn halve(img: &ColorImage) -> ColorImage {
 /// (else box-filtered down by the smallest integer factor that fits). Returns the image and the
 /// uv extent of it that covers `b`.
 /// A layer mask applied to the preview texels: the texel's alpha is scaled by
-/// `1 − density × (1 − value)`, as the compositor applies a pixel mask.
+/// `1 âˆ’ density Ã— (1 âˆ’ value)`, as the compositor applies a pixel mask.
 pub struct PreviewMask {
-    pub surface: photocraft_raster::Surface,
+    pub surface: Arc<photocraft_raster::Surface>,
     pub density: f32,
 }
 
@@ -243,13 +243,13 @@ mod tests {
         let t = PreviewTextures::new(&ctx, "t".into(), img, [1.0, 1.0]);
         assert_eq!(t.size(), [5, 3]);
         let (_, uv) = t.pick(&ctx, 0.5, 0.5, false);
-        // Level 2 is 2×1 texels covering 8×4 base texels.
+        // Level 2 is 2Ã—1 texels covering 8Ã—4 base texels.
         assert!((uv[0] - 5.0 / 8.0).abs() < 1e-6 && (uv[1] - 3.0 / 4.0).abs() < 1e-6, "{uv:?}");
         let (a, _) = t.pick(&ctx, 1.0, 1.0, false);
         let (b, _) = t.pick(&ctx, 4.0, 1.0, false);
         assert_ne!(a, b, "a nearest-filtered copy for zoomed-in views");
         assert_eq!(t.pick(&ctx, 4.0, 1.0, false).0, b, "cached");
-        // Asking for more levels than exist stops at 1×1.
+        // Asking for more levels than exist stops at 1Ã—1.
         let _ = t.pick(&ctx, 1e-6, 1.0, false);
     }
 }

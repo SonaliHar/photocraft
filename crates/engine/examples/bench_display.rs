@@ -37,12 +37,25 @@ fn time(reps: usize, mut f: impl FnMut()) -> f64 {
     )
 }
 
-fn main() {
+fn time_checked(reps: usize, mut f: impl FnMut() -> Result<(), Box<dyn std::error::Error>>) -> Result<f64, Box<dyn std::error::Error>> {
+    let values = (0..reps).map(|_| {
+        let started = Instant::now();
+        f()?;
+        Ok(started.elapsed().as_secs_f64() * 1000.0)
+    }).collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+    Ok(median(values))
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let (w, h) =
         arg(&args, "--size").and_then(|s| s.split_once('x').map(|(a, b)| (a.parse().unwrap_or(7360), b.parse().unwrap_or(4912)))).unwrap_or((7360, 4912));
     let reps: usize = arg(&args, "--reps").and_then(|v| v.parse().ok()).unwrap_or(5).max(1);
-    println!("document {w}×{h} ({:.1} MP), median of {reps}", (w * h) as f64 / 1e6);
+    let pixels = u64::from(w) * u64::from(h);
+    if w == 0 || h == 0 || w > 65536 || h > 65536 || pixels.saturating_mul(16) > photocraft_raster::MAX_CHECKED_RASTER_BYTES {
+        return Err("benchmark dimensions exceed the checked renderer limit".into());
+    }
+    println!("document {w}×{h} ({:.1} MP), median of {reps}", pixels as f64 / 1e6);
     println!("{:<22} {:>10} {:>14} {:>14} {:>12} {:>10}", "profile", "composite", "CPU before", "CPU after", "per frame", "LUT build");
     for (name, profile, depth) in [
         ("sRGB (untagged)", None, SampleType::U8),
@@ -54,23 +67,26 @@ fn main() {
         d.icc_profile = profile.map(|b| b.profile().to_bytes());
         let s = Session::new();
         let mut buf = None;
-        let composite = time(reps, || buf = Some(photocraft_compose::flatten(&d)));
-        let buf = buf.expect("composited");
+        let composite = time_checked(reps, || { buf = Some(photocraft_compose::flatten(&d)?); Ok(()) })?;
+        let buf = buf.ok_or("benchmark produced no composite")?;
         let before = time(reps, || {
             std::hint::black_box(buf.to_rgba8());
         });
-        let display = s.color.canvas_display(&d).expect("display");
-        let after = time(reps, || {
-            let d = s.color.canvas_display(&d).expect("display");
+        let display = s.color.canvas_display(&d)?;
+        let after = time_checked(reps, || {
+            let d = s.color.canvas_display(&d)?;
             std::hint::black_box(if d.is_identity() { buf.to_rgba8() } else { d.to_rgba8(&buf) });
-        });
+            Ok(())
+        })?;
         let frame = time(reps * 200, || {
             std::hint::black_box(s.color.display_signature(&d));
         });
-        let lut = time(reps, || {
-            std::hint::black_box(s.color.canvas_lut(&d, 33).expect("lut"));
-        });
+        let lut = time_checked(reps, || {
+            std::hint::black_box(s.color.canvas_lut(&d, 33)?);
+            Ok(())
+        })?;
         let tag = if display.is_identity() { " (identity)" } else { "" };
         println!("{:<22} {composite:>8.1}ms {before:>12.1}ms {after:>12.1}ms {:>10.1}µs {lut:>8.1}ms{tag}", name, frame * 1000.0);
     }
+    Ok(())
 }

@@ -12,8 +12,8 @@ use photocraft_algo::hdr::{self, MergeOptions, ToneMethod};
 use photocraft_algo::panorama::{self, AlignOptions, Alignment, Layout, Placement, RoiImage};
 use photocraft_algo::scancrop;
 use photocraft_algo::tone::HdrToning;
-use photocraft_algo::transform::{Homography, Interp, warp_surface};
-use photocraft_algo::warp::warp_mesh_surface;
+use photocraft_algo::transform::{Homography, Interp, try_warp_surface};
+use photocraft_algo::warp::try_warp_mesh_surface;
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent, LayerMask, Size};
 use photocraft_geom::Rect;
@@ -68,6 +68,7 @@ fn load_sources(s: &Session, p: &Value, cmd: &str) -> Result<Loaded> {
     let mut docs: Vec<(String, Document)> = Vec::new();
     if p.get("useOpenDocuments").and_then(Value::as_bool).unwrap_or(false) {
         for d in s.documents() {
+            d.doc.validate_resident()?;
             docs.push((d.doc.name.clone(), (*d.doc).clone()));
         }
     }
@@ -83,6 +84,13 @@ fn load_sources(s: &Session, p: &Value, cmd: &str) -> Result<Loaded> {
     if docs.is_empty() {
         return Err(bad(cmd, "pass \"paths\" (files or a folder) or \"useOpenDocuments\": true"));
     }
+    for (_, doc) in &docs {
+        if matches!(doc.depth, SampleType::U32 | SampleType::F64)
+            || doc.layers.iter().any(|l| l.surface().is_some_and(|x| matches!(x.format().sample, SampleType::U32 | SampleType::F64)))
+        {
+            return Err(bad(cmd, "wide photo registration/blending arithmetic is not qualified; sources were kept unchanged"));
+        }
+    }
     let first = &docs[0].1;
     let mut fmt = first.pixel_format();
     if matches!(fmt.mode, ColorMode::Cmyk | ColorMode::Lab | ColorMode::Multichannel) {
@@ -94,9 +102,9 @@ fn load_sources(s: &Session, p: &Value, cmd: &str) -> Result<Loaded> {
         .into_iter()
         .map(|(name, d)| {
             let info = d.metadata.exif.as_ref().map(|e| exif::read(e)).unwrap_or_default();
-            Source { name, surf: flattened(&d, fmt), w: d.size.width as usize, h: d.size.height as usize, exif: info }
+            Ok(Source { name, surf: flattened(&d, fmt)?, w: d.size.width as usize, h: d.size.height as usize, exif: info })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     Ok((out, fmt, icc))
 }
 
@@ -156,12 +164,12 @@ fn exif_focal(srcs: &[Source]) -> Option<f64> {
 
 /// Warps the content of `surf` inside `rect` by a placement shifted by `offset`; image
 /// coordinates are surface coordinates minus `origin`.
-pub(crate) fn warp_placed(surf: &Surface, rect: Rect, origin: (f64, f64), pl: &Placement, offset: (f64, f64), interp: Interp) -> Surface {
+pub(crate) fn warp_placed(surf: &Surface, rect: Rect, origin: (f64, f64), pl: &Placement, offset: (f64, f64), interp: Interp) -> Result<Surface> {
     let pl = pl.translated(offset.0, offset.1);
     if let Some(h) = plane_matrix(&pl, origin) {
-        return warp_surface(surf, rect, &h, interp);
+        return try_warp_surface(surf, rect, &h, interp).map_err(|e| EngineError::Other(format!("warp: {e}")));
     }
-    warp_mesh_surface(surf, rect, &|x, y| pl.forward(x - origin.0, y - origin.1), interp)
+    try_warp_mesh_surface(surf, rect, &|x, y| pl.forward(x - origin.0, y - origin.1), interp).map_err(|e| EngineError::Other(format!("warp: {e}")))
 }
 
 /// The projective matrix of a planar, distortion-free placement (surface px → panorama px).
@@ -447,7 +455,7 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
                     .map(|(k, (&i, pl))| {
                         ctx.check()?;
                         ctx.progress(0.35 + 0.25 * k as f32 / placed.len().max(1) as f32, "");
-                        Ok(warp_placed(&srcs[i].surf, Rect::new(0, 0, srcs[i].w as i32, srcs[i].h as i32), (0.0, 0.0), pl, offset, Interp::Bicubic))
+                        warp_placed(&srcs[i].surf, Rect::new(0, 0, srcs[i].w as i32, srcs[i].h as i32), (0.0, 0.0), pl, offset, Interp::Bicubic)
                     })
                     .collect::<Result<Vec<Surface>>>()?
             };
@@ -467,7 +475,7 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
                 for (k, (px, mask)) in b.layers.into_iter().enumerate() {
                     let mut l = Layer::new(srcs[placed[k]].name.clone(), LayerContent::Raster(px));
                     let mut m = LayerMask::hide_all();
-                    m.surface = mask;
+                    m.surface = std::sync::Arc::new(mask);
                     l.mask = Some(m);
                     doc.layers.push(l);
                 }
@@ -507,7 +515,7 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
             ))
         },
         |s, (doc, mut info): (Document, Value)| {
-            info["document"] = json!(s.add_document(doc, None));
+            info["document"] = json!(s.add_document(doc, None)?);
             Ok(info)
         },
     )
@@ -713,7 +721,7 @@ fn merge_to_hdr(s: &mut Session, p: &Value) -> Result<Value> {
     let mut surf = Surface::new(fmt);
     surf.write_region(area, &data);
     doc.layers.push(Layer::new("Background", LayerContent::Raster(surf)));
-    let idx = s.add_document(doc, None);
+    let idx = s.add_document(doc, None)?;
     let ev0 = exposures[order[0]];
     Ok(json!({
         "document": idx,
@@ -733,8 +741,14 @@ fn merge_to_hdr(s: &mut Session, p: &Value) -> Result<Value> {
 fn crop_and_straighten(s: &mut Session, _p: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc = st.doc.clone();
+    doc.effective_resolution().validate().map_err(|error| bad("file.automate.cropAndStraightenPhotos", error.to_string()))?;
+    if matches!(doc.depth, SampleType::U32 | SampleType::F64)
+        || doc.layers.iter().any(|l| l.surface().is_some_and(|x| matches!(x.format().sample, SampleType::U32 | SampleType::F64)))
+    {
+        return Err(bad("file.automate.cropAndStraightenPhotos", "wide crop/straighten interpolation is not qualified"));
+    }
     let fmt = doc.pixel_format();
-    let flat = flattened(&doc, fmt);
+    let flat = flattened(&doc, fmt)?;
     let area = doc.bounds();
     let (w, h) = (area.width() as usize, area.height() as usize);
     let mut rgba = vec![[0.0f32; 4]; w * h];
@@ -758,7 +772,7 @@ fn crop_and_straighten(s: &mut Session, _p: &Value) -> Result<Value> {
         let corners = f.corners();
         let hq = Homography::rect_to_quad([0.0, 0.0, pw as f64, ph as f64], corners).and_then(|h| h.inverse());
         let Some(hm) = hq else { continue };
-        let warped = warp_surface(&flat, area, &hm, Interp::Bicubic);
+        let warped = try_warp_surface(&flat, area, &hm, Interp::Bicubic).map_err(|e| EngineError::Other(format!("warp: {e}")))?;
         let keep = Rect::new(0, 0, pw as i32, ph as i32);
         let mut px = Surface::new(fmt);
         px.write_region(keep, &warped.read_region(keep));
@@ -771,12 +785,16 @@ fn crop_and_straighten(s: &mut Session, _p: &Value) -> Result<Value> {
         px.write_region(keep, &data);
         let mut nd = Document::new(format!("{} copy {}", doc.name, k + 1), Size::new(pw, ph), doc.mode, doc.depth);
         nd.icc_profile = doc.icc_profile.clone();
+        nd.sample_encoding = doc.sample_encoding;
+        nd.working_profile_interpretation = doc.working_profile_interpretation.clone();
+        nd.source_color_context = doc.source_color_context.clone();
         nd.resolution_dpi = doc.resolution_dpi;
+        nd.physical_resolution = doc.physical_resolution.clone();
         let mut bg = Layer::new("Background", LayerContent::Raster(px));
         bg.locks.transparency = true;
         bg.locks.position = true;
         nd.layers.push(bg);
-        let idx = s.add_document(nd, None);
+        let idx = s.add_document(nd, None)?;
         out.push(json!({"document": idx, "width": pw, "height": ph, "angle": f.angle, "center": f.center}));
     }
     Ok(json!({"photos": out}))
@@ -889,7 +907,7 @@ mod tests {
             let mut s = Session::new();
             // Three overlapping crops, the middle one 15 % brighter (gain compensation).
             for (k, (x0, g)) in [(0usize, 1.0f32), (130, 1.15), (260, 1.0)].into_iter().enumerate() {
-                s.add_document(doc_from(&format!("img{k}"), &crop(&sc, sw, x0, 10, 220, 200, g), 220, 200, depth), None);
+                s.add_document(doc_from(&format!("img{k}"), &crop(&sc, sw, x0, 10, 220, 200, g), 220, 200, depth), None).unwrap();
             }
             let r = s.execute("file.automate.photomerge", json!({"useOpenDocuments": true, "layout": "reposition"})).unwrap();
             assert_eq!(r["placed"].as_array().unwrap().len(), 3, "{r}");
@@ -904,7 +922,7 @@ mod tests {
                 assert!((shown - 1.0).abs() < 0.01, "({x},{y}) {shown}");
             }
             // The composite matches the scene up to the global gain.
-            let comp = photocraft_compose::flatten(d);
+            let comp = photocraft_compose::flatten(d).unwrap();
             let at = |x: i32, y: i32| comp.px[(y * comp.rect.width() as i32 + x) as usize];
             let gains = r["photometric"]["gains"].as_array().unwrap();
             assert!(gains[1][0].as_f64().unwrap() > gains[0][0].as_f64().unwrap() * 1.05, "{r}");
@@ -917,7 +935,7 @@ mod tests {
         let sc = scene(sw, sh, 8);
         let mut s = Session::new();
         for (k, x0) in [0usize, 180].into_iter().enumerate() {
-            s.add_document(doc_from(&format!("p{k}"), &crop(&sc, sw, x0, 10, 260, 200, 1.0), 260, 200, SampleType::U8), None);
+            s.add_document(doc_from(&format!("p{k}"), &crop(&sc, sw, x0, 10, 260, 200, 1.0), 260, 200, SampleType::U8), None).unwrap();
         }
         let r = s.execute("file.automate.photomerge", json!({"useOpenDocuments": true, "layout": "perspective", "blend": false})).unwrap();
         assert_eq!(r["layout"], "perspective");
@@ -944,7 +962,7 @@ mod tests {
                     sc[(v.round().clamp(0.0, sh as f64 - 1.0) as usize) * sw + u.round().clamp(0.0, sw as f64 - 1.0) as usize]
                 })
                 .collect();
-            s.add_document(doc_from(&format!("c{k}"), &px, tw, th, SampleType::U8), None);
+            s.add_document(doc_from(&format!("c{k}"), &px, tw, th, SampleType::U8), None).unwrap();
         }
         let r = s.execute("file.automate.photomerge", json!({"useOpenDocuments": true, "layout": "cylindrical", "contentAwareFill": true})).unwrap();
         assert_eq!(r["layout"], "cylindrical");
@@ -985,7 +1003,7 @@ mod tests {
                 iso: Some(100.0),
                 ..Default::default()
             })));
-            s.add_document(d, None);
+            s.add_document(d, None).unwrap();
         }
         let r = s.execute("file.automate.mergeToHdrPro", json!({"useOpenDocuments": true})).unwrap();
         assert_eq!(r["exposureSource"], "exif");
@@ -1019,8 +1037,7 @@ mod tests {
         if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }
     }
 
-    #[test]
-    fn crop_and_straighten_makes_documents() {
+    fn two_photo_scan() -> (Vec<[f32; 4]>, usize, usize) {
         let (w, h) = (500usize, 360usize);
         let mut px = vec![[0.98f32, 0.98, 0.98, 1.0]; w * h];
         let photos = [([140.0f64, 120.0f64], 160.0f64, 110.0f64, 6.0f64), ([360.0, 240.0], 150.0, 120.0, -9.0)];
@@ -1036,8 +1053,121 @@ mod tests {
                 }
             }
         }
+        (px, w, h)
+    }
+
+    #[test]
+    fn crop_and_straighten_preserves_physical_axes_and_custom_unit() {
+        use photocraft_doc::{CustomUnit, PhysicalResolution, PhysicalUnit};
+        let (px, w, h) = two_photo_scan();
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut source = doc_from("scan metadata", &px, w, h, depth);
+            source
+                .set_physical_resolution(PhysicalResolution {
+                    x_dpi: 123.4567890123,
+                    y_dpi: 298.7654321098,
+                    unit: PhysicalUnit::Custom(CustomUnit {
+                        name: "Own scan unit".into(),
+                        factor: 7.25,
+                        digits: 4,
+                        symbol: "su".into(),
+                        abbreviation: "scan".into(),
+                    }),
+                })
+                .unwrap();
+            let mut session = Session::new();
+            session.add_document(source.clone(), None).unwrap();
+            session
+                .edit("Source redo witness", |doc, _| {
+                    doc.name.push_str(" redo");
+                    Ok(())
+                })
+                .unwrap();
+            session.execute("edit.undo", json!({})).unwrap();
+            let revision = session.documents()[0].revision;
+            let redo = session.documents()[0].history.redo_labels().map(str::to_owned).collect::<Vec<_>>();
+            let result = session.execute("file.automate.cropAndStraightenPhotos", json!({})).unwrap();
+            assert_eq!(result["photos"].as_array().unwrap().len(), 2);
+            assert_eq!(session.documents().len(), 3);
+            assert_eq!(*session.documents()[0].doc, source);
+            assert_eq!(session.documents()[0].revision, revision);
+            assert_eq!(session.documents()[0].history.redo_labels().map(str::to_owned).collect::<Vec<_>>(), redo);
+            for output in &session.documents()[1..] {
+                assert_eq!(output.doc.physical_resolution, source.physical_resolution, "crop metadata depth {depth:?}");
+                assert_eq!(output.doc.resolution_dpi.to_bits(), source.resolution_dpi.to_bits());
+                let bytes = photocraft_format::save_to_bytes(&output.doc, &Default::default()).unwrap();
+                assert_eq!(photocraft_format::load_from_bytes(&bytes).unwrap(), *output.doc);
+                let (stream, _) = photocraft_format::PcraftWriter::new()
+                    .save_zip_stream(
+                        &output.doc,
+                        &Default::default(),
+                        std::io::Cursor::new(Vec::new()),
+                        Default::default(),
+                        64 << 20,
+                        &photocraft_raster::Interrupt::NONE,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    photocraft_format::load_from_stream(stream, &Default::default(), Default::default(), &photocraft_raster::Interrupt::NONE).unwrap(),
+                    *output.doc
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn crop_and_straighten_invalid_resolution_refuses_before_any_output() {
+        use photocraft_doc::{CustomUnit, PhysicalResolution, PhysicalUnit};
+        let (px, w, h) = two_photo_scan();
+        for invalid in 0..4 {
+            let mut session = Session::new();
+            session.add_document(doc_from("invalid scan metadata", &px, w, h, SampleType::U16), None).unwrap();
+            session
+                .edit("Retained redo", |doc, _| {
+                    doc.name.push_str(" redo");
+                    Ok(())
+                })
+                .unwrap();
+            session.execute("edit.undo", json!({})).unwrap();
+            let doc = session.active_mut().unwrap().doc.try_resident_mut().unwrap();
+            match invalid {
+                0 => doc.physical_resolution = Some(PhysicalResolution { x_dpi: 144.0, y_dpi: 0.0, unit: PhysicalUnit::Inch }),
+                1 => doc.physical_resolution = Some(PhysicalResolution { x_dpi: f64::INFINITY, y_dpi: 300.0, unit: PhysicalUnit::Inch }),
+                2 => {
+                    doc.physical_resolution = Some(PhysicalResolution {
+                        x_dpi: 144.0,
+                        y_dpi: 300.0,
+                        unit: PhysicalUnit::Custom(CustomUnit {
+                            name: "Invalid own unit".into(),
+                            factor: 0.0,
+                            digits: 1,
+                            symbol: "iu".into(),
+                            abbreviation: "iu".into(),
+                        }),
+                    })
+                }
+                _ => doc.resolution_dpi = 0.0,
+            }
+            let source = session.active().unwrap().doc.clone();
+            let revision = session.active().unwrap().revision;
+            let saved_revision = session.active().unwrap().saved_revision;
+            let history = session.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>();
+            let redo = session.active().unwrap().history.redo_labels().map(str::to_owned).collect::<Vec<_>>();
+            assert!(session.execute("file.automate.cropAndStraightenPhotos", json!({})).is_err(), "invalid physical resolution {invalid}");
+            assert_eq!(session.documents().len(), 1);
+            assert_eq!(session.active().unwrap().doc, source);
+            assert_eq!(session.active().unwrap().revision, revision);
+            assert_eq!(session.active().unwrap().saved_revision, saved_revision);
+            assert_eq!(session.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>(), history);
+            assert_eq!(session.active().unwrap().history.redo_labels().map(str::to_owned).collect::<Vec<_>>(), redo);
+        }
+    }
+
+    #[test]
+    fn crop_and_straighten_makes_documents() {
+        let (px, w, h) = two_photo_scan();
         let mut s = Session::new();
-        s.add_document(doc_from("scan", &px, w, h, SampleType::U16), None);
+        s.add_document(doc_from("scan", &px, w, h, SampleType::U16), None).unwrap();
         assert!(s.is_enabled("file.automate.cropAndStraightenPhotos"));
         let r = s.execute("file.automate.cropAndStraightenPhotos", json!({})).unwrap();
         let found = r["photos"].as_array().unwrap();
@@ -1047,11 +1177,195 @@ mod tests {
         let d = &s.documents()[1].doc;
         assert!((d.size.width as i64 - 158).abs() <= 4 && (d.size.height as i64 - 108).abs() <= 4, "{:?}", d.size);
         assert_eq!(d.depth, SampleType::U16);
+        assert!(d.physical_resolution.is_none());
+        assert_eq!(d.resolution_dpi.to_bits(), s.documents()[0].doc.resolution_dpi.to_bits());
         // Upright: the photo's horizontal gradient runs along x.
         let l = d.layers[0].surface().unwrap();
         let (a, b) = (l.rgba(10, d.size.height as i32 / 2)[0], l.rgba(d.size.width as i32 - 10, d.size.height as i32 / 2)[0]);
         assert!(b > a + 0.15, "{a} {b}");
         let (c, e) = (l.rgba(d.size.width as i32 / 2, 6)[0], l.rgba(d.size.width as i32 / 2, d.size.height as i32 - 6)[0]);
         assert!((c - e).abs() < 0.05);
+    }
+
+    mod crop_current_color_tests {
+        use super::*;
+        use photocraft_cms::{
+            ColorSpace,
+            xcf_color::{Encoding, effective_implicit_profile, effective_profile},
+        };
+        use photocraft_doc::{CustomUnit, PhysicalResolution, PhysicalUnit, SampleEncoding, SourceColorContext, WorkingProfileInterpretation};
+
+        fn check(depth: SampleType, encoding: Option<SampleEncoding>, implicit: bool, context: u8, partial: bool) {
+            let (mut px, w, h) = two_photo_scan();
+            if partial {
+                for q in &mut px {
+                    if q[0] < 0.9 {
+                        q[3] = 0.75;
+                    }
+                }
+            }
+            let mut source = doc_from("Own current-color scan", &px, w, h, depth);
+            if let Some(enc) = encoding {
+                let cms_enc = match enc {
+                    SampleEncoding::Linear => Encoding::Linear,
+                    SampleEncoding::NonlinearProfile => Encoding::NonlinearProfile,
+                    SampleEncoding::Perceptual => Encoding::Perceptual,
+                };
+                let icc = effective_profile(None, ColorSpace::Rgb, cms_enc).unwrap().to_bytes();
+                effective_implicit_profile(&icc, ColorSpace::Rgb, cms_enc).unwrap();
+                source.icc_profile = Some(icc.clone());
+                source.sample_encoding = Some(enc);
+                source.working_profile_interpretation =
+                    if implicit { WorkingProfileInterpretation::implicit_srgb(&icc) } else { WorkingProfileInterpretation::Icc };
+                if context > 0 {
+                    let base = match depth {
+                        SampleType::U8 => 100,
+                        SampleType::U16 => 200,
+                        _ => 600,
+                    };
+                    let offset = match enc {
+                        SampleEncoding::Linear => 0,
+                        SampleEncoding::NonlinearProfile => 50,
+                        SampleEncoding::Perceptual => 75,
+                    };
+                    source.source_color_context = Some(SourceColorContext {
+                        original_icc: if context == 2 {
+                            Some(effective_profile(None, ColorSpace::Rgb, Encoding::NonlinearProfile).unwrap().to_bytes())
+                        } else {
+                            None
+                        },
+                        source_precision: if context == 2 { 650 } else { base + offset },
+                    });
+                }
+            }
+            source
+                .set_physical_resolution(PhysicalResolution {
+                    x_dpi: 123.4567890123,
+                    y_dpi: 298.7654321098,
+                    unit: PhysicalUnit::Custom(CustomUnit {
+                        name: "Own scan unit".into(),
+                        factor: 7.25,
+                        digits: 4,
+                        symbol: "su".into(),
+                        abbreviation: "scan".into(),
+                    }),
+                })
+                .unwrap();
+            source.validate_xcf_state().unwrap();
+            if context == 2 {
+                assert_ne!(source.source_color_context.as_ref().unwrap().original_icc, source.icc_profile);
+            }
+            let dir = std::path::PathBuf::from("target/agent-sol3/crop-current-color-native");
+            std::fs::create_dir_all(&dir).unwrap();
+            let name = format!("{depth:?}-{encoding:?}-{implicit}-{context}-{partial}");
+            let path = dir.join(format!("{name}.pcraft"));
+            let original = photocraft_format::save_to_bytes(&source, &Default::default()).unwrap();
+            std::fs::write(&path, &original).unwrap();
+            let source = photocraft_format::load_from_bytes(&original).unwrap();
+            let flat = crate::file_cmds::flattened(&source, source.pixel_format()).unwrap();
+            let mut session = Session::new();
+            session.add_document(source.clone(), Some(path.to_string_lossy().into_owned())).unwrap();
+            session
+                .edit("Source real redo", |doc, _| {
+                    doc.name.push_str(" redo");
+                    Ok(())
+                })
+                .unwrap();
+            session.execute("edit.undo", json!({})).unwrap();
+            let state = &session.documents()[0];
+            let snapshot = state.doc.clone();
+            let before = (
+                state.revision,
+                state.saved_revision,
+                state.source.clone(),
+                state.history.entry_labels().map(str::to_owned).collect::<Vec<_>>(),
+                state.history.redo_labels().map(str::to_owned).collect::<Vec<_>>(),
+            );
+            assert_eq!(before.4.len(), 1);
+            let result = session.execute("file.automate.cropAndStraightenPhotos", json!({})).unwrap();
+            assert_eq!(result["photos"].as_array().unwrap().len(), 2);
+            let retained = &session.documents()[0];
+            assert!(retained.doc.shares_state(&snapshot));
+            assert_eq!(
+                (
+                    retained.revision,
+                    retained.saved_revision,
+                    retained.source.clone(),
+                    retained.history.entry_labels().map(str::to_owned).collect::<Vec<_>>(),
+                    retained.history.redo_labels().map(str::to_owned).collect::<Vec<_>>()
+                ),
+                before
+            );
+            assert_eq!(photocraft_format::save_to_bytes(&retained.doc, &Default::default()).unwrap(), original);
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+            for out in &session.documents()[1..] {
+                assert_eq!(out.doc.sample_encoding, source.sample_encoding, "CURRENT encoding {depth:?}/{encoding:?}");
+                assert_eq!(out.doc.working_profile_interpretation, source.working_profile_interpretation, "CURRENT interpretation");
+                assert_eq!(out.doc.source_color_context, source.source_color_context, "original color description");
+                assert_eq!(out.doc.icc_profile, source.icc_profile);
+                assert_eq!((out.doc.mode, out.doc.depth), (source.mode, source.depth));
+                assert_eq!(out.doc.physical_resolution, source.physical_resolution);
+                assert_eq!(out.doc.resolution_dpi.to_bits(), source.resolution_dpi.to_bits());
+                assert!(out.doc.xcf_state.is_none());
+                out.doc.validate_xcf_state().unwrap();
+                if encoding.is_some() {
+                    photocraft_compose::gimp_render::try_render(&out.doc, out.doc.bounds(), &mut |_| Ok(())).unwrap();
+                }
+                let surface = out.doc.layers[0].surface().unwrap();
+                let words = surface.read_region(out.doc.bounds());
+                assert!(words.as_chunks::<4>().0.iter().all(|q| q[3].to_bits() == 1_f32.to_bits()));
+                let center = surface.rgba(out.doc.size.width as i32 / 2, out.doc.size.height as i32 / 2);
+                let tolerance = match depth {
+                    SampleType::U8 => 1.0 / 255.0,
+                    SampleType::U16 => 1.0 / 65535.0,
+                    _ => 0.000001,
+                };
+                assert!((center[1] - 0.3).abs() <= tolerance, "raw storage interpolation must not become a profile conversion");
+                let legacy = photocraft_format::save_to_bytes(&out.doc, &Default::default()).unwrap();
+                assert_eq!(photocraft_format::load_from_bytes(&legacy).unwrap(), *out.doc);
+                let (zip, _) = photocraft_format::PcraftWriter::new()
+                    .save_zip_stream(
+                        &out.doc,
+                        &Default::default(),
+                        std::io::Cursor::new(Vec::new()),
+                        Default::default(),
+                        64 << 20,
+                        &photocraft_raster::Interrupt::NONE,
+                    )
+                    .unwrap();
+                assert_eq!(
+                    photocraft_format::load_from_stream(zip, &Default::default(), Default::default(), &photocraft_raster::Interrupt::NONE).unwrap(),
+                    *out.doc
+                );
+            }
+            // Source flatten/storage remains independent of newly inherited metadata.
+            assert_eq!(flat.format(), source.pixel_format());
+        }
+        fn depth_cases(depth: SampleType) {
+            for enc in [SampleEncoding::Linear, SampleEncoding::NonlinearProfile, SampleEncoding::Perceptual] {
+                for implicit in [true, false] {
+                    check(depth, Some(enc), implicit, 1, false);
+                }
+            }
+        }
+        #[test]
+        fn crop_current_color_u8() {
+            depth_cases(SampleType::U8);
+        }
+        #[test]
+        fn crop_current_color_u16() {
+            depth_cases(SampleType::U16);
+        }
+        #[test]
+        fn crop_current_color_f32() {
+            depth_cases(SampleType::F32);
+        }
+        #[test]
+        fn crop_current_color_context_alpha_and_legacy_controls() {
+            check(SampleType::F32, Some(SampleEncoding::Linear), false, 2, false);
+            check(SampleType::F32, Some(SampleEncoding::Linear), true, 1, true);
+            check(SampleType::F32, Some(SampleEncoding::NonlinearProfile), true, 0, false);
+            check(SampleType::U8, None, false, 0, false);
+        }
     }
 }

@@ -38,7 +38,7 @@ fn open_and_drop_detect_content_and_preserve_work_on_failure() {
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(app.session.active().unwrap().doc, original);
     app.run("layer.setProps", json!({"name":"Unsaved"})).unwrap();
-    let dirty = app.session.active().unwrap().clone();
+    let dirty = app.session.active().unwrap().try_clone_resident().unwrap();
     assert!(app.open_file("broken.xcf", b"gimp xcf bad").is_err());
     let after = app.session.active().unwrap();
     assert_eq!(after.doc, dirty.doc);

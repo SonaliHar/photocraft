@@ -1,0 +1,12 @@
+{
+  "observations.json": "ea9a4b283c8b040cc6d505234fac2ee73a4f59c6ebb5b3a944612056af523f39",
+  "fresh/observations.json": "e0fb5c71b8a6550957a2522682328aa415b810d4bbd210578b2124a9195acff1",
+  "faithful-observations.json": "9e3e32dec3660d61e21c416c1fe291a5ee844f1edf78cb5f819eb73a503a4305",
+  "faithful-fresh/faithful-observations.json": "a3eda7352fbbae954c7d60dd9dbe0f8f11dedb96cdefd5e321db9e0e43d5ccf9",
+  "VERIFICATION.json": "285dc861100435bbf97b345d2edb5e2da3f0bd0a333f18be6f404f5d68356f00",
+  "batch-manifest.json": "d519d4d0a644b04ef18b7cb74304b9017851888e44af85d95efb948c729366b3",
+  "assignment-controls.json": "b11b83fb1beb32698b396caa154277b7789473d1315f31ecc081901a4b436150",
+  "own-rgb-channel-trc.icc": "e91745f1a980336f8cb455803f5e099078767434a0f530437d9b8418042b7f0b",
+  "own-gray-channel-trc.icc": "bf9a63de8a19258de96e4db1fdc2c92e7f3de5a7b7fd32dd3fabef62fe3cce40",
+  "CONSUMER-ACCEPTANCE.json": "881d3d5ac6273e1797b34a5ca9e6e82566d116fb160738a9be4c91e4ab193b88"
+}

@@ -94,7 +94,10 @@ pub(crate) fn frame(app: &mut PhotocraftApp) -> Option<TransformSession> {
     let rect = match shape {
         TextShape::Box { x, y, width, height } => [x, y, x + width, y + height].map(f64::from),
         _ => {
-            let mut r = layout.bounds().unwrap_or([0.0, -size * layout.px_per_pt, 1.0, 0.0]).map(f64::from);
+            let mut r = layout.bounds().map(|bounds| bounds.map(f64::from)).unwrap_or_else(|| {
+                let [x, y] = layout.px_per_pt_axes();
+                if layout.vertical { [-f64::from(size) * x, 0.0, 0.0, 1.0] } else { [0.0, -f64::from(size) * y, 1.0, 0.0] }
+            });
             // Empty lines still have a caret and can be moved/scaled, without inventing glyphs.
             r[2] = r[2].max(r[0] + 1.0);
             r[3] = r[3].max(r[1] + 1.0);
@@ -282,7 +285,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     if transform == t.original {
         return None;
     }
-    let (id, revision, source, layer) = (st.doc.id, st.revision, st.doc.clone(), LayerId(t.frame.layer));
+    let (id, revision, source, layer) = (st.doc.id, st.revision, st.doc.resident_arc()?.clone(), LayerId(t.frame.layer));
     if let Some(p) = &app.type_transform_preview
         && p.document == id
         && p.revision == revision
@@ -296,7 +299,11 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     let LayerContent::Text(text) = &mut shown.layer_mut(layer)?.content else { return None };
     text.transform = transform;
     let started = crate::gpu_canvas::now_ms();
-    photocraft_engine::type_cmds::refresh(&source, text);
+    if let Err(error) = photocraft_engine::type_cmds::try_refresh(&source, text) {
+        app.ui.status = error.to_string();
+        app.ui.status_error = true;
+        return None;
+    }
     let area = text.cache.as_ref().map_or(Rect::EMPTY, |s| s.tile_bounds());
     let shown = Arc::new(photocraft_engine::mode_cmds::display_document(&shown).unwrap_or(shown));
     let key = PREVIEW_BASE | (app.ui.alloc_id() & (PREVIEW_BASE - 1));

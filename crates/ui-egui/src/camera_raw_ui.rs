@@ -314,8 +314,9 @@ fn replace_raw_document(
     let index =
         s.documents().iter().position(|st| st.doc.id == doc_id).ok_or_else(|| photocraft_engine::EngineError::Other("the raw document was closed".into()))?;
     let path = s.documents().get(index).and_then(|st| st.path.clone());
+    let (opened, _) = s.open_document(r.document, path)?;
     s.close(index);
-    let (opened, _) = s.open_document(r.document, path);
+    let opened = opened.saturating_sub(1);
     let index = match s.execute("document.move", json!({"document": opened, "to": index})) {
         Ok(moved) => moved.get("document").and_then(Value::as_u64).map_or(opened, |i| i as usize),
         Err(_) => opened,

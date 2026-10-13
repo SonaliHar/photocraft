@@ -52,12 +52,12 @@ fn alt_click_between_two_layers_clips_and_releases_the_upper_one() {
     let below = rows.iter().find(|r| r.layer == a.0).unwrap().row;
     // On the line between `b` and `a`, right of the eye column.
     let line = pos2(below.left() + 80.0, below.top());
-    let undo = h.state().session.active().unwrap().history.entries().len();
+    let undo = h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
     click(&mut h, line, Modifiers::ALT);
     assert!(clipped(&h, b), "⌥-click clips the upper layer to the one below");
     assert!(!clipped(&h, a));
     let st = h.state().session.active().unwrap();
-    assert_eq!(st.history.entries().len(), undo + 1, "one history step");
+    assert_eq!(st.history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), undo + 1, "one history step");
     assert_eq!(st.active_layer, Some(b), "the layer selection is unchanged");
     click(&mut h, line, Modifiers::ALT);
     assert!(!clipped(&h, b), "⌥-click on a clipped layer's line releases it");
@@ -167,7 +167,7 @@ fn active(h: &Harness<'_, PhotocraftApp>) -> Option<LayerId> {
 }
 
 fn steps(h: &Harness<'_, PhotocraftApp>) -> usize {
-    h.state().session.active().unwrap().history.entries().len()
+    h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len()
 }
 
 #[test]

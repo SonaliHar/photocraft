@@ -313,7 +313,7 @@ Security architecture, threat modeling, parser hardening, fuzzing, and vulnerabi
 ## Test corpora
 
 PhotoCraft is tested against real files: our own Photoshop-authored oracle PSDs in
-[photocraft-corpus](https://github.com/storytold/photocraft-corpus) plus the psd-tools, ag-psd and PngSuite sets, pinned and
+[photocraft-corpus](https://github.com/Terra854/photocraft-corpus) plus the psd-tools, ag-psd and PngSuite sets, pinned and
 sha256-verified. Fetch them with `cargo xtask corpus --all` and run the tests with
 `cargo xtask test-corpus` (details in [docs/development.md](docs/development.md#test-corpora)).
 

@@ -17,7 +17,7 @@ fn roundtrip(doc: &Document) -> Document {
 }
 
 fn max_diff(a: &Document, b: &Document) -> f32 {
-    let (x, y) = (photocraft_compose::flatten(a).px, photocraft_compose::flatten(b).px);
+    let (x, y) = (photocraft_compose::flatten(a).unwrap().px, photocraft_compose::flatten(b).unwrap().px);
     assert_eq!(x.len(), y.len());
     x.iter().zip(&y).flat_map(|(p, q)| (0..4).map(move |c| (p[c] * p[3] - q[c] * q[3]).abs())).fold(0.0, f32::max)
 }
@@ -71,7 +71,7 @@ fn joined_shape_components_roundtrip() {
     l.effects.items = vec![stroke(2.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(1.0, 0.0, 0.0)), 1.0)];
     d.layers.push(l);
     // The hole is stroked too (the outline is the joined component).
-    let px = |doc: &Document, x: i32, y: i32| photocraft_compose::render(doc, Rect::from_xywh(x, y, 1, 1)).px[0];
+    let px = |doc: &Document, x: i32, y: i32| photocraft_compose::render(doc, Rect::from_xywh(x, y, 1, 1)).unwrap().px[0];
     assert!(px(&d, 20, 20)[1] > 0.9, "hole shows the background");
     assert!(px(&d, 20, 13)[0] > 0.9 && px(&d, 20, 13)[1] < 0.1, "stroke inside the hole: {:?}", px(&d, 20, 13));
     let back = roundtrip(&d);

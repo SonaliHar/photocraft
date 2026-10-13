@@ -264,7 +264,7 @@ fn object_select_disc_full_resolution() {
     let (img, truth) = disc_scene(200, 160, 100.0, 80.0, 50.0, 2);
     let s = ImageSampler { img: &img, origin: (0, 0) };
     let canvas = Rect::new(0, 0, 200, 160);
-    let reg = grabcut::object_select(&s, canvas, Rect::new(40, 20, 160, 140), 1_000_000).unwrap();
+    let reg = grabcut::object_select(&s, canvas, Rect::new(40, 20, 160, 140), 1_000_000).unwrap().unwrap();
     let v = iou(&reg, &truth, 200, 160);
     assert!(v > 0.95, "IoU {v}");
 }
@@ -275,7 +275,7 @@ fn object_select_downsampled_with_band_refinement() {
     let s = ImageSampler { img: &img, origin: (0, 0) };
     let canvas = Rect::new(0, 0, 640, 480);
     // A small working budget forces step > 1 and the full-resolution band re-cut.
-    let reg = grabcut::object_select(&s, canvas, Rect::new(160, 80, 500, 420), 20_000).unwrap();
+    let reg = grabcut::object_select(&s, canvas, Rect::new(160, 80, 500, 420), 20_000).unwrap().unwrap();
     let v = iou(&reg, &truth, 640, 480);
     assert!(v > 0.95, "IoU {v}");
     // Boundary accuracy: few pixels wrong far (> 2 px) from the true edge.
@@ -311,7 +311,7 @@ fn quick_select_with_points_far_off_canvas_selects_nothing() {
     let s = ImageSampler { img: &img, origin: (0, 0) };
     let canvas = Rect::new(0, 0, 140, 100);
     for p in [(3e9, 0.0), (0.0, 3e9), (f32::MAX, f32::MAX)] {
-        assert!(quick::quick_select(&s, canvas, &[p], 8.0, quick::WORK_PX).is_none(), "{p:?}");
+        assert!(quick::quick_select(&s, canvas, &[p], 8.0, quick::WORK_PX).unwrap().is_none(), "{p:?}");
     }
 }
 
@@ -320,7 +320,7 @@ fn quick_select_grows_without_leaking() {
     let img = two_regions(140, 100);
     let s = ImageSampler { img: &img, origin: (0, 0) };
     let canvas = Rect::new(0, 0, 140, 100);
-    let reg = quick::quick_select(&s, canvas, &[(20.0, 50.0), (35.0, 50.0)], 8.0, quick::WORK_PX).unwrap();
+    let reg = quick::quick_select(&s, canvas, &[(20.0, 50.0), (35.0, 50.0)], 8.0, quick::WORK_PX).unwrap().unwrap();
     let mut inside = 0;
     for y in 0..100 {
         for x in 0..140 {
@@ -346,7 +346,7 @@ fn quick_select_stops_at_thin_line() {
         if x == 60 || x == 61 { [0.05, 0.05, 0.05] } else { [0.6 + n, 0.6 + n, 0.55 + n] }
     });
     let s = ImageSampler { img: &img, origin: (0, 0) };
-    let reg = quick::quick_select(&s, Rect::new(0, 0, 120, 80), &[(30.0, 40.0)], 6.0, quick::WORK_PX).unwrap();
+    let reg = quick::quick_select(&s, Rect::new(0, 0, 120, 80), &[(30.0, 40.0)], 6.0, quick::WORK_PX).unwrap().unwrap();
     assert!(reg.at(10, 10) >= 0.5 && reg.at(50, 70) >= 0.5);
     for y in 0..80 {
         for x in 63..120 {
@@ -360,7 +360,7 @@ fn quick_select_downsampled_window() {
     // A larger image with a small working budget: step > 1 plus band refinement.
     let (img, truth) = disc_scene(600, 500, 300.0, 250.0, 180.0, 4);
     let s = ImageSampler { img: &img, origin: (0, 0) };
-    let reg = quick::quick_select(&s, Rect::new(0, 0, 600, 500), &[(260.0, 250.0), (340.0, 250.0)], 30.0, 15_000).unwrap();
+    let reg = quick::quick_select(&s, Rect::new(0, 0, 600, 500), &[(260.0, 250.0), (340.0, 250.0)], 30.0, 15_000).unwrap().unwrap();
     let v = iou(&reg, &truth, 600, 500);
     assert!(v > 0.93, "IoU {v}");
 }
@@ -371,7 +371,7 @@ fn quick_select_downsampled_window() {
 fn select_subject_finds_centred_object() {
     let (img, truth) = disc_scene(200, 150, 100.0, 75.0, 40.0, 6);
     let s = ImageSampler { img: &img, origin: (0, 0) };
-    let reg = subject::select_subject(&s, Rect::new(0, 0, 200, 150)).unwrap();
+    let reg = subject::select_subject(&s, Rect::new(0, 0, 200, 150)).unwrap().unwrap();
     let v = iou(&reg, &truth, 200, 150);
     assert!(v > 0.9, "IoU {v}");
 }
@@ -407,7 +407,7 @@ fn focus_area_selects_sharp_half() {
         [v, v * 0.8, 0.3]
     });
     let s = ImageSampler { img: &img, origin: (0, 0) };
-    let reg = focus::focus_area(&s, Rect::new(0, 0, w as i32, h as i32), 0.5, 0.0).unwrap();
+    let reg = focus::focus_area(&s, Rect::new(0, 0, w as i32, h as i32), 0.5, 0.0).unwrap().unwrap();
     let (mut l, mut r) = (0usize, 0usize);
     for y in 0..h as i32 {
         for x in 0..w as i32 {
@@ -426,7 +426,7 @@ fn focus_area_selects_sharp_half() {
 fn sampler_downsampling_matches_image_downsample() {
     let img = RgbImage::from_fn(37, 29, |x, y| [x as f32 / 37.0, y as f32 / 29.0, ((x * y) % 7) as f32 / 7.0]);
     let s = ImageSampler { img: &img, origin: (5, 3) };
-    let a = s.rgb_scaled(Rect::new(5, 3, 42, 32), 4);
+    let a = s.rgb_scaled(Rect::new(5, 3, 42, 32), 4).unwrap();
     let b = img.downsample(4);
     assert_eq!((a.w, a.h), (b.w, b.h));
     for (p, q) in a.px.iter().zip(&b.px) {
@@ -473,4 +473,73 @@ fn geodesic_barrier_blocks_oblique_crossings() {
     for y in (0..372).step_by(31) {
         assert!(d[y * 352 + 291] > 0.1, "row {y}: {}", d[y * 352 + 291]);
     }
+}
+#[test]
+fn malformed_image_sampler_never_panics() {
+    let image = RgbImage { w: 3, h: 3, px: Vec::new() };
+    let result = std::panic::catch_unwind(|| ImageSampler { img: &image, origin: (0, 0) }.rgba(Rect::new(0, 0, 3, 3)));
+    assert_eq!(result.unwrap().unwrap_err(), RasterInputError::LengthMismatch);
+}
+
+struct FailedSampler;
+impl Sampler for FailedSampler {
+    fn rgba(&self, _: Rect) -> SamplingResult<Vec<[f32; 4]>> {
+        Err(RasterInputError::Cancelled)
+    }
+}
+#[test]
+fn source_errors_reach_every_selection_entry_without_empty_fallback() {
+    let s = FailedSampler;
+    let r = Rect::new(0, 0, 32, 32);
+    assert_eq!(s.rgb(r).unwrap_err(), RasterInputError::Cancelled);
+    assert_eq!(s.rgb_scaled(r, 2).unwrap_err(), RasterInputError::Cancelled);
+    assert_eq!(subject::select_subject(&s, r).unwrap_err(), RasterInputError::Cancelled);
+    assert_eq!(focus::focus_area(&s, r, 50.0, 10.0).unwrap_err(), RasterInputError::Cancelled);
+    assert_eq!(sky::select_sky(&s, r, sky::SkyParams::default()).unwrap_err(), RasterInputError::Cancelled);
+    assert_eq!(quick::quick_select(&s, r, &[(8.0, 8.0)], 4.0, 1024).unwrap_err(), RasterInputError::Cancelled);
+    assert_eq!(grabcut::object_select(&s, r, Rect::new(4, 4, 28, 28), 1024).unwrap_err(), RasterInputError::Cancelled);
+    let mask = |r: Rect| vec![0.5; r.width() as usize * r.height() as usize];
+    let p = crate::matting::RefineParams { radius: 2.0, ..Default::default() };
+    assert_eq!(crate::matting::refine_mask(&s, &mask, r, r, &p).unwrap_err(), RasterInputError::Cancelled);
+    assert!(subject::select_subject(&s, Rect::new(0, 0, 0, 0)).unwrap().is_none());
+}
+struct StripSampler;
+impl Sampler for StripSampler {
+    fn rgba(&self, r: Rect) -> SamplingResult<Vec<[f32; 4]>> {
+        if r.y0 >= 64 {
+            return Err(RasterInputError::UnsupportedConversion);
+        }
+        Ok(vec![[0.2, 0.3, 0.4, 1.0]; r.width() as usize * r.height() as usize])
+    }
+}
+#[test]
+fn later_parallel_strip_error_cannot_publish_partial_downsample() {
+    assert_eq!(StripSampler.rgb_scaled(Rect::new(0, 0, 16, 192), 2).unwrap_err(), RasterInputError::UnsupportedConversion);
+    assert_eq!(StripSampler.rgb_scaled(Rect::new(0, 0, 1, 1), 0).unwrap_err(), RasterInputError::InvalidBounds);
+    assert_eq!(sample_shape(Rect::new(i32::MIN, 0, i32::MAX, 1), 16).unwrap_err(), RasterInputError::InvalidBounds);
+    assert_eq!(sample_shape(Rect::new(0, 0, 1_000_000, 1_000_000), 16).unwrap_err(), RasterInputError::LimitExceeded);
+}
+#[test]
+fn strip_downsampling_preserves_negative_origin_and_partial_edges() {
+    let img = two_regions(17, 139);
+    let s = ImageSampler { img: &img, origin: (-9, -13) };
+    let r = Rect::new(-9, -13, 8, 126);
+    let expected = checked_downsample(&s.rgb(r).unwrap(), 3).unwrap();
+    let actual = s.rgb_scaled(r, 3).unwrap();
+    assert_eq!((actual.w, actual.h), (expected.w, expected.h));
+    assert_eq!(actual.px, expected.px);
+}
+
+struct ShortSampler;
+impl Sampler for ShortSampler {
+    fn rgba(&self, _: Rect) -> SamplingResult<Vec<[f32; 4]>> {
+        Ok(Vec::new())
+    }
+}
+#[test]
+fn malformed_source_sample_count_returns_error_not_blank_pixels() {
+    let r = Rect::new(-2, -3, 6, 7);
+    assert_eq!(ShortSampler.rgb(r).unwrap_err(), RasterInputError::LengthMismatch);
+    assert_eq!(ShortSampler.rgb_scaled(r, 3).unwrap_err(), RasterInputError::LengthMismatch);
+    assert_eq!(subject::select_subject(&ShortSampler, r).unwrap_err(), RasterInputError::LengthMismatch);
 }

@@ -41,6 +41,8 @@ pub enum AutomationError {
     #[error(transparent)]
     Import(#[from] photocraft_io::IoError),
     #[error(transparent)]
+    XcfImport(Box<photocraft_io::xcf_assessment::ImportFailure>),
+    #[error(transparent)]
     Format(#[from] photocraft_format::FormatError),
     #[error("bridge: {0}")]
     Bridge(String),
@@ -48,4 +50,20 @@ pub enum AutomationError {
     App(String),
     #[error("{0}")]
     Other(String),
+}
+impl AutomationError {
+    /// Additive machine-readable details accompany the existing error string.
+    pub fn error_details(&self) -> Option<&photocraft_io::xcf_assessment::FailureReport> {
+        match self {
+            Self::XcfImport(failure) => Some(&failure.details),
+            _ => None,
+        }
+    }
+    pub fn error_reply(&self) -> serde_json::Value {
+        let mut reply = serde_json::json!({"ok":false,"error":self.to_string()});
+        if let Some(details) = self.error_details() {
+            reply["errorDetails"] = serde_json::json!(details);
+        }
+        reply
+    }
 }

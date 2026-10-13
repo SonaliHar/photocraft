@@ -279,7 +279,7 @@ fn styles_apply_to_selected_layers_and_new_from_layer() {
     assert!(s.execute("style.presets.apply", json!({"preset": "nope"})).is_err());
     // Thumbnails render the effect around the swatch.
     let st = s.presets.styles[0].items.iter().find(|x| x.name == "Outer Glow").unwrap().clone();
-    let px = super::styles::thumbnail(&s, &st, 48);
+    let px = super::styles::thumbnail(&s, &st, 48).unwrap();
     assert_eq!(px.len(), 48 * 48 * 4);
     assert!(px[(4 * 48 + 24) * 4 + 3] == 0 || px[(7 * 48 + 24) * 4 + 3] > 0, "glow reaches outside the square");
     assert!(px[(24 * 48 + 24) * 4 + 3] == 255);

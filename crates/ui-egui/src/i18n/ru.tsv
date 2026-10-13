@@ -2519,3 +2519,110 @@ fontWeight	Italic	Курсив
 	Rotate View Tool	Инструмент поворота вида
 	Reset View	Сбросить вид
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Перетащите вокруг центра, чтобы повернуть вид  ·  Shift фиксирует шаг 15°
+
+# Imported GIMP properties and filters
+	Font size	Размер шрифта
+	Additional filters are available through command inspection	Дополнительные фильтры доступны через просмотр команд
+	Alpha threshold	Порог альфа
+	An explicit resolution edit sets both axes.	Явное изменение разрешения задаёт обе оси.
+	Apply Text	Применить текст
+	Blue frequency	Частота синего
+	Blue phase shift	Фазовый сдвиг синего
+	Blue weight	Вес синего
+	CIE Lab	CIE Lab
+	CIE Yuv	CIE Yuv
+	Changing this imported GIMP mode is not supported yet.	Изменение этого импортированного режима GIMP пока не поддерживается.
+	Clip high	Обрезать высокие значения
+	Clip low	Обрезать низкие значения
+	Cyan / Red	Голубой / Красный
+	Decrease Levels	Уменьшить число уровней
+	Desaturate mode	Режим обесцвечивания
+	Filter editing is unavailable	Редактирование фильтра недоступно
+	GIMP Filters	Фильтры GIMP
+	GIMP Text	Текст GIMP
+	Green frequency	Частота зелёного
+	Green phase shift	Фазовый сдвиг зелёного
+	Green weight	Вес зелёного
+	Histogram channel	Канал гистограммы
+	Hue frequency	Частота цветового тона
+	Hue phase shift	Фазовый сдвиг цветового тона
+	Increase Levels	Увеличить число уровней
+	Intended temperature	Целевая температура
+	Keep blue	Сохранить синий
+	Keep green	Сохранить зелёный
+	Keep hue	Сохранить цветовой тон
+	Keep lightness	Сохранить светлоту
+	Keep red	Сохранить красный
+	Keep saturation	Сохранить насыщенность
+	Layer content is locked	Содержимое слоя заблокировано
+	Letter spacing	Межбуквенный интервал
+	Lightness frequency	Частота светлоты
+	Lightness phase shift	Фазовый сдвиг светлоты
+	Line spacing	Межстрочный интервал
+	Lower limit	Нижний предел
+	Luma	Лума
+	Magenta / Green	Пурпурный / Зелёный
+	Move Down	Переместить вниз
+	Move Up	Переместить вверх
+	Native	Исходный
+	Original temperature	Исходная температура
+	Preserve luminosity	Сохранить яркость
+	Process in sRGB	Обрабатывать в sRGB
+	Red frequency	Частота красного
+	Red phase shift	Фазовый сдвиг красного
+	Red weight	Вес красного
+	Remove Filter	Удалить фильтр
+	Reset Text	Сбросить текст
+	Saturation colorspace	Цветовое пространство насыщенности
+	Saturation frequency	Частота насыщенности
+	Saturation phase shift	Фазовый сдвиг насыщенности
+	Strength	Интенсивность
+	Text X	Текст X
+	Text Y	Текст Y
+	Text content	Содержимое текста
+	Text editing is unavailable for this layer.	Редактирование текста для этого слоя недоступно.
+	Upper limit	Верхний предел
+	Value	Значение
+	Yellow / Blue	Жёлтый / Синий
+	From color	Исходный цвет
+	To color	Цвет замены
+	Red threshold	Порог красного
+	Green threshold	Порог зелёного
+	Blue threshold	Порог синего
+	Underlined characters	Подчёркнутые символы
+	Start character	Начальный символ
+	End character (exclusive)	Конечный символ (не включается)
+	Apply underline	Применить подчёркивание
+	Clear underline	Убрать подчёркивание
+	Text content editing is unavailable for this layer.	Редактирование содержимого текста недоступно для этого слоя.
+	Transparency threshold	Порог прозрачности
+	Opacity threshold	Порог непрозрачности
+	Component	Компонент
+	Y'CbCr Y'	Y'CbCr Y'
+	Y'CbCr Cb	Y'CbCr Cb
+	Y'CbCr Cr	Y'CbCr Cr
+
+	Destination start angle	Начальный угол назначения
+
+	Destination end angle	Конечный угол назначения
+	GIMP Linked Image	Связанное изображение GIMP
+	Original byte identity is unavailable. The selected PNG is a Reduced substitution (8 MiB limit).	Идентичность исходным байтам недоступна. Выбранный PNG — замена с пониженной точностью воспроизведения (ограничение 8 MiB).
+	Replace Linked Image (Reduced)…	Заменить связанное изображение (пониженная точность)…
+	Resource picker unavailable.	Выбор ресурса недоступен.
+	The selected PNG must match the retained original byte identity (8 MiB limit). Exact recovery applies to this linked image only.	Выбранный PNG должен совпадать с сохранённой исходной идентичностью байтов (предел 8 MiB). Точное восстановление применяется только к этому связанному изображению.
+	Recover Linked Image (Exact)…	Восстановить связанное изображение (точно)…
+	Saved floating attachment	Сохранённое прикрепление плавающего слоя
+	Attachment target	Цель прикрепления
+	Detach the saved relationship without changing pixels.	Отсоединить сохранённую связь без изменения пикселей.
+	Detach Floating Layer	Отсоединить плавающий слой
+	Complete or cancel the pixel-move preview before detaching the saved relationship.	Завершите или отмените предпросмотр перемещения пикселей перед отсоединением сохранённой связи.
+	Saved named item sets	Сохранённые именованные наборы элементов
+	Only sets containing this layer are shown; saved searches are not evaluated.	Показаны только наборы, содержащие этот слой; сохранённые поисковые запросы не вычисляются.
+	Rename Saved Item Set…	Переименовать сохранённый набор элементов…
+	Delete Saved Item Set	Удалить сохранённый набор элементов
+	Saved set name	Имя сохранённого набора
+	Apply Saved Item Set Name	Применить имя сохранённого набора элементов
+	Enter a replacement name for this long saved name.	Введите новое имя вместо этого длинного сохранённого имени.
+	Only the first 64 matching sets are shown.	Показаны только первые 64 подходящих набора.
+	Complete or cancel the pixel-move preview before editing saved item sets.	Завершите или отмените предпросмотр перемещения пикселей перед редактированием сохранённых наборов элементов.
+	Remove this layer from set	Удалить этот слой из набора

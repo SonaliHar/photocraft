@@ -196,7 +196,7 @@ fn main() {
     let pixels: u64 = doc
         .walk()
         .iter()
-        .flat_map(|(_, _, l)| l.surface().into_iter().chain(l.mask.as_ref().map(|m| &m.surface)))
+        .flat_map(|(_, _, l)| l.surface().into_iter().chain(l.mask.as_ref().map(|m| m.surface.as_ref())))
         .map(|s| s.tiles().map(|(_, t)| t.bytes().len() as u64).sum::<u64>())
         .sum();
     let ram = photocraft_ui_egui::gpu_canvas::physical_memory();

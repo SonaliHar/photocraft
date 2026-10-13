@@ -11,14 +11,14 @@
 use std::sync::Arc;
 
 use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType as CSample};
-use photocraft_color::ColorMode;
+use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::Document;
 use photocraft_psd::resources::ids;
 use photocraft_psd::tiff::{ByteOrder, ImageSourceData, resources_from_bytes, resources_to_bytes};
 use photocraft_psd::{ColorMode as PsdMode, Compression, Header, ImageData, ImageResource, ResolutionInfo};
 
 use crate::flat::{csample, encode_image, image_to_document, layout_for, single_layer, try_buffer};
-use crate::psd_export::{PsdExportOptions, document_to_psd_with};
+use crate::psd_export::{PsdExportOptions, try_document_to_psd_with};
 use crate::psd_import::psd_to_document;
 use crate::{ExportOptions, ExportResult, ImportResult, IoError};
 
@@ -71,7 +71,7 @@ pub(crate) fn import_layered(name: &str, img: &Image, layers: &[u8]) -> Result<I
     // in the resources.
     set_resource(&mut resources, ids::ICC_PROFILE, img.icc.clone());
     if let Some((x, y)) = img.meta.dpi.filter(|d| d.0 > 0.0) {
-        // Both axes, so the PSD import notes a vertical resolution the document can't keep.
+        // Both axes are authoritative; the shared PSD adapter preserves the pair.
         let ri = ResolutionInfo { v_res_fixed: ResolutionInfo::from_dpi(f64::from(y)).v_res_fixed, ..ResolutionInfo::from_dpi(f64::from(x)) };
         set_resource(&mut resources, ids::RESOLUTION_INFO, Some(ri.to_bytes()));
     }
@@ -114,7 +114,7 @@ pub(crate) fn import_layered(name: &str, img: &Image, layers: &[u8]) -> Result<I
     if !img.meta.text.is_empty() {
         warnings.push(format!("{} text metadata entries are not kept in the document", img.meta.text.len()));
     }
-    Ok(ImportResult { document: doc, warnings, origin: crate::ImportOrigin::writable(crate::ImportFormat::Flat(photocraft_codecs::Format::Tiff)) })
+    Ok(ImportResult { document: doc, warnings, origin: crate::ImportOrigin::writable(crate::ImportFormat::Flat(photocraft_codecs::Format::Tiff)), assessment: None })
 }
 
 /// Interleaved native-endian samples → planar big-endian planes (PSD merged-image order),
@@ -182,6 +182,9 @@ fn interleave(planes: &[u8], w: u32, h: u32, channels: usize, color_channels: us
 /// Saves `doc` as a layered TIFF. Documents whose colour mode a TIFF cannot hold in our
 /// codec (Lab) are saved flat, with a warning.
 pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions) -> Result<ExportResult, IoError> {
+    if matches!(doc.depth, SampleType::U32 | SampleType::F64) {
+        return Err(IoError::Unsupported("Layered TIFF cannot retain U32/F64 layer samples; choose .pcraft or a flat TIFF export".into()));
+    }
     if !layered_mode(doc) {
         let mut r = crate::flat::export_flat(doc, Format::Tiff, opts)?;
         if !doc.layers.is_empty() {
@@ -194,7 +197,7 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions) -> Result<Exp
     // The PSD exporter renders the composite we need for the TIFF itself: unmatted (the TIFF
     // keeps straight alpha) and uncompressed (its planes are interleaved below).
     let psd_opts = PsdExportOptions { force_psb: opts.force_psb || big, merged_matte: false, merged_compression: Compression::Raw };
-    let (file, w) = document_to_psd_with(doc, &psd_opts);
+    let (file, w) = try_document_to_psd_with(doc, &psd_opts)?;
     warnings.extend(w);
     let order = if codecs::tiff_writes_little_endian() { ByteOrder::Little } else { ByteOrder::Big };
     let (layers, w) = ImageSourceData::from_psd(&file).to_bytes(order)?;
@@ -225,7 +228,10 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions) -> Result<Exp
         // codec a second copy in `meta.exif` bought nothing and made the export claim it would
         // drop metadata it had in fact kept (#1545).
         xmp: doc.metadata.xmp.clone().filter(|_| opts.xmp == crate::XmpEmbed::All),
-        dpi: Some((doc.resolution_dpi, doc.resolution_dpi)),
+        dpi: Some({
+            let r = doc.effective_resolution();
+            (r.x_dpi as f32, r.y_dpi as f32)
+        }),
         photoshop_resources: Some(resources),
         photoshop_layers: Some(layers),
         ..Default::default()

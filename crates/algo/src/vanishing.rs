@@ -228,6 +228,53 @@ fn quad_mask(h: &Homography, area: Rect) -> Vec<f32> {
 /// Pastes `src` (content in `src_rect`) onto plane `i` with its top-left at plane coordinates
 /// `at` (0..1) and its width `width` (fraction of the plane's width), aspect preserved in the
 /// plane's metric. Returns the warped image clipped to the plane (transparent elsewhere).
+/// Checked paste facade. The legacy plane-mask compositor is f32; wide data
+/// is rejected before deformation rather than silently quantized.
+pub fn try_paste(
+    scene: &Scene,
+    i: usize,
+    src: &Surface,
+    src_rect: Rect,
+    at: [f64; 2],
+    width: f64,
+) -> Result<Option<Surface>, photocraft_raster::RasterInputError> {
+    if matches!(src.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
+        return Err(photocraft_raster::RasterInputError::UnsupportedConversion);
+    }
+    if at.iter().any(|v| !v.is_finite()) || !width.is_finite() || width <= 0.0 {
+        return Err(photocraft_raster::RasterInputError::InvalidBounds);
+    }
+    let mut format = src.format();
+    format.alpha = true;
+    let prepared = src.try_convert(format)?;
+    let Some((h, lu, lv)) = scene.frame(i) else {
+        return Ok(None);
+    };
+    let sw = f64::from(src_rect.width());
+    let sh = f64::from(src_rect.height());
+    if sw <= 0.0 || sh <= 0.0 {
+        return Ok(None);
+    }
+    let su = width / sw;
+    let sv = width * lu / lv / sw;
+    let full = h.mul(&Homography([su, 0.0, at[0] - f64::from(src_rect.x0) * su, 0.0, sv, at[1] - f64::from(src_rect.y0) * sv, 0.0, 0.0, 1.0]));
+    let mut out = crate::transform::try_warp_surface(&prepared, src_rect, &full, Interp::Bicubic)?;
+    let bounds = out.content_bounds();
+    if !bounds.is_empty() {
+        let mask = quad_mask(&h, bounds);
+        let n = out.channels();
+        let mut pixels = out.read_region(bounds);
+        for (pixel, coverage) in pixels.chunks_exact_mut(n).zip(&mask) {
+            if let Some(alpha) = pixel.last_mut() {
+                *alpha *= coverage;
+            }
+        }
+        out.write_region(bounds, &pixels);
+        out.prune();
+    }
+    Ok(Some(out))
+}
+
 pub fn paste(scene: &Scene, i: usize, src: &Surface, src_rect: Rect, at: [f64; 2], width: f64) -> Option<Surface> {
     let (h, lu, lv) = scene.frame(i)?;
     let (sw, sh) = (src_rect.width() as f64, src_rect.height() as f64);

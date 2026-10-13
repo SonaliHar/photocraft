@@ -18,7 +18,7 @@ use photocraft_doc::{Document, LayerContent, SmartSource};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::file_cmds::{file_name, join, native_doc, read_file, stem, write_file};
+use crate::file_cmds::{file_name, join, native_doc, read_file, stem, write_file_with_source};
 use crate::{EngineError, Result, Session};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -207,7 +207,7 @@ pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
 /// The flattened, colour-handled document as 8-bit samples in its print colour space.
 fn print_image(doc: &Document, p: &Value, cmd: &str) -> Result<(PrintImage, Value)> {
     let mut t = Session::new();
-    t.add_document(doc.clone(), None);
+    t.add_document(doc.clone(), None)?;
     let handling = p.get("colorHandling").and_then(Value::as_str).unwrap_or("printerManages");
     let mut info = json!({"colorHandling": handling});
     if !matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale | ColorMode::Cmyk) {
@@ -232,7 +232,7 @@ fn print_image(doc: &Document, p: &Value, cmd: &str) -> Result<(PrintImage, Valu
     // RGB and Grayscale: the composite over white is the print image (no layer flatten).
     if matches!(d.mode, ColorMode::Rgb | ColorMode::Grayscale) {
         let gray = d.mode == ColorMode::Grayscale;
-        let buf = photocraft_compose::flatten(d).over_background([1.0, 1.0, 1.0]);
+        let buf = photocraft_compose::flatten(d)?.over_background([1.0, 1.0, 1.0]);
         let to8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
         let data: Vec<u8> =
             if gray { buf.px.iter().map(|p| to8(p[0])).collect() } else { buf.px.iter().flat_map(|p| [to8(p[0]), to8(p[1]), to8(p[2])]).collect() };
@@ -265,8 +265,8 @@ fn paper(p: &Value, cmd: &str) -> Result<(f64, f64)> {
         Some(Value::Array(a)) if a.len() == 2 => (a[0].as_f64().unwrap_or(0.0), a[1].as_f64().unwrap_or(0.0)),
         _ => return Err(bad(cmd, "paper is a name or [width, height] in points")),
     };
-    if !(w > 36.0 && h > 36.0) {
-        return Err(bad(cmd, "paper is too small"));
+    if !w.is_finite() || !h.is_finite() || !(w > 36.0 && h > 36.0) {
+        return Err(bad(cmd, "paper must have finite dimensions greater than 36 points"));
     }
     Ok(if p.get("orientation").and_then(Value::as_str) == Some("landscape") { (h.max(w), w.min(h)) } else { (w, h) })
 }
@@ -286,8 +286,11 @@ pub struct PrintLayout {
 /// The print layout for `doc` with Print parameters `p` (used by the dialog's preview too).
 pub fn layout(doc: &Document, p: &Value, cmd: &str) -> Result<PrintLayout> {
     let (pw, ph) = paper(p, cmd)?;
-    let dpi = f64::from(doc.resolution_dpi.max(1.0));
-    let (iw, ih) = (f64::from(doc.size.width) * 72.0 / dpi, f64::from(doc.size.height) * 72.0 / dpi);
+    let (width_inches, height_inches) = doc.effective_resolution().inches(doc.size.width, doc.size.height).map_err(|e| bad(cmd, e.to_string()))?;
+    let (iw, ih) = (width_inches * 72.0, height_inches * 72.0);
+    if !iw.is_finite() || !ih.is_finite() || iw <= 0.0 || ih <= 0.0 {
+        return Err(bad(cmd, "physical image size exceeds checked print bounds"));
+    }
     let marks = Marks {
         corner_crop: p.get("cornerCropMarks").and_then(Value::as_bool).unwrap_or(false),
         center_crop: p.get("centerCropMarks").and_then(Value::as_bool).unwrap_or(false),
@@ -310,12 +313,19 @@ pub fn layout(doc: &Document, p: &Value, cmd: &str) -> Result<PrintLayout> {
         let left = p.get("left").and_then(Value::as_f64).unwrap_or(0.0) * 72.0;
         (left, ph - top - h)
     };
+    // Valid canonical axes do not guarantee that subsequent paper, scale and
+    // position arithmetic remains representable. Refuse before rendering or
+    // writing any PDF; never emit nonfinite PDF coordinates or a flipped fit.
+    if [scale, x, y, w, h, x + w, y + h, scale * 100.0].iter().any(|value| !value.is_finite()) || scale <= 0.0 || w <= 0.0 || h <= 0.0 {
+        return Err(bad(cmd, "physical print layout exceeds checked finite bounds"));
+    }
     Ok(PrintLayout { paper: (pw, ph), rect: (x, y, w, h), scale, marks })
 }
 
 /// Lays out, renders and (unless dry-run) spools a print. Shared by Print and Print One Copy.
 fn do_print(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
+    let source = d.source.clone();
     let doc = d.doc.clone();
     let PrintLayout { paper: (pw, ph), rect: (x, y, w, h), scale, marks } = layout(&doc, p, cmd)?;
     let (img, color) = print_image(&doc, p, cmd)?;
@@ -339,7 +349,7 @@ fn do_print(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
             join(&tmp, &format!("{}-print-{}-{n}.pdf", crate::file_cmds::sanitize(&stem(&doc.name)), std::process::id()))
         }
     };
-    write_file(&pdf_path, &pdf)?;
+    write_file_with_source(&pdf_path, &pdf, &doc, source.as_ref())?;
     let copies = crate::commands::int(p, "copies").unwrap_or(1).clamp(1, 999);
     let mut argv: Vec<String> = vec!["lp".into()];
     if let Some(pr) = p.get("printer").and_then(Value::as_str).filter(|v| !v.is_empty()) {
@@ -402,6 +412,9 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.package";
     let dir = p.get("dir").and_then(Value::as_str).filter(|v| !v.is_empty()).ok_or_else(|| bad(cmd, "missing \"dir\" (where to create the package folder)"))?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
+    d.doc.validate_resident()?;
+    let source = d.source.clone();
+    let protection_doc = d.doc.clone();
     let doc = (*d.doc).clone();
     let name = stem(&d.path.clone().unwrap_or_else(|| doc.name.clone()));
     // The native format keeps external links; our PSD writer has no `lnkE` (external linked
@@ -430,7 +443,7 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
                 let t = join(&links_dir, &fname);
                 match read_file(path) {
                     Ok(bytes) => {
-                        write_file(&t, &bytes)?;
+                        write_file_with_source(&t, &bytes, &protection_doc, source.as_ref())?;
                         copied.push((path.clone(), t.clone()));
                         t
                     }
@@ -444,13 +457,13 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
         relinks.push((l.id, target));
     }
     let mut t = Session::new();
-    t.add_document(doc, None);
+    t.add_document(doc, None)?;
     for (id, path) in &relinks {
         t.execute("layer.smartObjects.relinkToFile", json!({"layer": id.0, "path": path}))?;
     }
     let out = join(&folder, &format!("{}.{ext}", crate::file_cmds::sanitize(&name)));
     let pdoc = t.active().ok_or(EngineError::NoDocument)?.doc.clone();
-    let warnings = crate::file_cmds::save_doc(&pdoc, &out, None)?;
+    let warnings = crate::file_cmds::save_doc_with_protection_document(&pdoc, &out, None, &protection_doc, source.as_ref())?;
     Ok(json!({"folder": folder, "document": out, "links": copied.iter().map(|(_, t)| t).collect::<Vec<_>>(), "missing": missing, "warnings": warnings}))
 }
 
@@ -459,9 +472,13 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
 /// The document's paths as an Illustrator 3 PostScript file. `which`: "all", "work" or a path
 /// name. Coordinates are points (pixels at the document resolution), y up.
 pub fn paths_to_ai(doc: &Document, which: &str) -> Result<(String, usize)> {
-    let dpi = f64::from(doc.resolution_dpi.max(1.0));
-    let k = 72.0 / dpi;
-    let (w, h) = (f64::from(doc.size.width) * k, f64::from(doc.size.height) * k);
+    let resolution = doc.effective_resolution();
+    resolution.validate().map_err(|e| bad("file.export.pathsToIllustrator", e.to_string()))?;
+    let (kx, ky) = (72.0 / resolution.x_dpi, 72.0 / resolution.y_dpi);
+    let (w, h) = (f64::from(doc.size.width) * kx, f64::from(doc.size.height) * ky);
+    if [kx, ky, w, h].iter().any(|v| !v.is_finite()) {
+        return Err(bad("file.export.pathsToIllustrator", "physical coordinates exceed checked export bounds"));
+    }
     let mut chosen: Vec<(String, &photocraft_doc::Path)> = Vec::new();
     match which {
         "all" => {
@@ -482,7 +499,13 @@ pub fn paths_to_ai(doc: &Document, which: &str) -> Result<(String, usize)> {
         h.ceil() as i64
     ));
     s.push_str("%%DocumentProcessColors: Black\n%%EndComments\n%%EndProlog\n%%BeginSetup\n%%EndSetup\n");
-    let pt = |x: f64, y: f64| (x * k, h - y * k);
+    let pt = |x: f64, y: f64| -> Result<(f64, f64)> {
+        let point = (x * kx, h - y * ky);
+        if !point.0.is_finite() || !point.1.is_finite() {
+            return Err(bad("file.export.pathsToIllustrator", "physical path coordinate is nonfinite or overflowing"));
+        }
+        Ok(point)
+    };
     let mut n = 0;
     for (name, path) in &chosen {
         let subs: Vec<_> = path.subpaths.iter().filter(|sp| !sp.knots.is_empty()).collect();
@@ -496,17 +519,17 @@ pub fn paths_to_ai(doc: &Document, which: &str) -> Result<(String, usize)> {
             s.push_str("*u\n");
         }
         for sp in subs {
-            let (x, y) = pt(sp.knots[0].anchor.x, sp.knots[0].anchor.y);
+            let (x, y) = pt(sp.knots[0].anchor.x, sp.knots[0].anchor.y)?;
             s.push_str(&format!("{x:.4} {y:.4} m\n"));
             for seg in sp.segments() {
                 let [a, c1, c2, b] = seg;
                 let straight = c1 == a && c2 == b;
-                let (bx, by) = pt(b.x, b.y);
+                let (bx, by) = pt(b.x, b.y)?;
                 if straight {
                     s.push_str(&format!("{bx:.4} {by:.4} L\n"));
                 } else {
-                    let (x1, y1) = pt(c1.x, c1.y);
-                    let (x2, y2) = pt(c2.x, c2.y);
+                    let (x1, y1) = pt(c1.x, c1.y)?;
+                    let (x2, y2) = pt(c2.x, c2.y)?;
                     s.push_str(&format!("{x1:.4} {y1:.4} {x2:.4} {y2:.4} {bx:.4} {by:.4} C\n"));
                 }
             }
@@ -531,7 +554,7 @@ fn paths_to_illustrator(s: &mut Session, p: &Value) -> Result<Value> {
     }
     match p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty()) {
         Some(path) => {
-            write_file(path, text.as_bytes())?;
+            write_file_with_source(path, text.as_bytes(), &d.doc, d.source.as_ref())?;
             Ok(json!({"path": path, "paths": n}))
         }
         None => Ok(json!({"ai": text, "paths": n})),
@@ -585,3 +608,78 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "print_cmds/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod physical_axes_tests {
+    use super::*;
+    #[test]
+    fn print_uses_distinct_physical_axes_and_rejects_invalid_axes() {
+        let mut d = Document::new("axes", photocraft_doc::Size::new(288, 288), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        let resolution = photocraft_doc::PhysicalResolution {
+            x_dpi: 144.0,
+            y_dpi: 288.0,
+            unit: photocraft_doc::PhysicalUnit::Custom(photocraft_doc::CustomUnit {
+                name: "Own unit \u{03a9}".into(),
+                factor: 2.5,
+                digits: 3,
+                symbol: "u".into(),
+                abbreviation: "ou".into(),
+            }),
+        };
+        d.set_physical_resolution(resolution.clone()).unwrap();
+        let printed = layout(&d, &json!({"paper":"letter","scale":100}), "file.print").unwrap();
+        assert_eq!((printed.rect.2, printed.rect.3), (144.0, 72.0));
+        assert_eq!(d.effective_resolution(), resolution);
+        d.physical_resolution.as_mut().unwrap().y_dpi = f64::MIN_POSITIVE / 1024.0;
+        assert!(layout(&d, &json!({}), "file.print").is_err());
+        d.physical_resolution.as_mut().unwrap().y_dpi = f64::NAN;
+        assert!(layout(&d, &json!({}), "file.print").is_err());
+    }
+    #[test]
+    fn illustrator_export_scales_coordinates_per_axis() {
+        let mut d = Document::new("axes", photocraft_doc::Size::new(288, 288), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        d.set_physical_resolution(photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: 288.0, unit: photocraft_doc::PhysicalUnit::Inch }).unwrap();
+        let path = photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polyline(&[(144.0, 144.0), (288.0, 288.0)])]);
+        d.paths.push(photocraft_doc::NamedPath::new("own", path));
+        let (ai, count) = paths_to_ai(&d, "all").unwrap();
+        assert_eq!(count, 1);
+        assert!(ai.contains("%%HiResBoundingBox: 0 0 144.0000 72.0000"));
+        assert!(ai.contains("72.0000 36.0000 m"));
+        assert!(ai.contains("144.0000 0.0000 L"));
+    }
+    #[test]
+    fn illustrator_physical_overflow_is_explicit_error() {
+        let mut d = Document::new("tiny dpi", photocraft_doc::Size::new(1, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        d.set_physical_resolution(photocraft_doc::PhysicalResolution {
+            x_dpi: f64::MIN_POSITIVE / 1024.0,
+            y_dpi: 72.0,
+            unit: photocraft_doc::PhysicalUnit::Inch,
+        })
+        .unwrap();
+        assert!(paths_to_ai(&d, "all").is_err());
+    }
+    #[test]
+    fn unequal_axes_fit_and_position_keep_physical_aspect_not_legacy_dpi() {
+        let mut d = Document::new("axes", photocraft_doc::Size::new(288, 288), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        d.set_physical_resolution(photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: 288.0, unit: photocraft_doc::PhysicalUnit::Inch }).unwrap();
+        d.resolution_dpi = 72.0;
+        let fitted = layout(&d, &json!({"paper":[324,180],"scaleToFit":true}), "file.print").unwrap();
+        assert_eq!(fitted.rect, (18.0, 18.0, 288.0, 144.0));
+        let positioned = layout(&d, &json!({"center":false,"left":1.0,"top":2.0,"scale":50}), "file.print").unwrap();
+        assert_eq!(positioned.rect, (72.0, 612.0, 72.0, 36.0));
+        assert_eq!(d.resolution_dpi, 72.0);
+    }
+    #[test]
+    fn hostile_print_geometry_is_refused_before_render_or_write() {
+        let d = Document::new("bounds", photocraft_doc::Size::new(288, 288), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        for params in [
+            json!({"scale":f64::MAX}),
+            json!({"center":false,"top":f64::MAX}),
+            json!({"center":false,"left":f64::MAX}),
+            json!({"paper":[40,40],"scaleToFit":true,"cornerCropMarks":true}),
+            json!({"paper":[72,72],"scaleToFit":true,"registrationMarks":true}),
+        ] {
+            assert!(layout(&d, &params, "file.print").is_err(), "{params}");
+        }
+    }
+}

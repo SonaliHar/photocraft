@@ -25,7 +25,7 @@ struct CacheEntry {
     tick: u64,
     // The key contains input tile addresses. Keep those tiles alive until eviction:
     // edits must copy them, and the allocator cannot reuse their addresses for new tiles.
-    _pixel_input: Option<Surface>,
+    _pixel_input: Option<Arc<Surface>>,
 }
 
 fn cache() -> &'static Mutex<Cache> {
@@ -193,8 +193,8 @@ mod tests {
         for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
             let mut layer = Layer::raster("edited mask", PixelFormat::RGBA8);
             let mut mask = LayerMask::hide_all();
-            mask.surface = Surface::new(PixelFormat { sample, ..FORMAT });
-            mask.surface.fill_rect(canvas, &[1.0]);
+            mask.surface = std::sync::Arc::new(Surface::new(PixelFormat { sample, ..FORMAT }));
+            std::sync::Arc::make_mut(&mut mask.surface).fill_rect(canvas, &[1.0]);
             mask.feather = 4.0;
             layer.mask = Some(mask);
 
@@ -203,11 +203,11 @@ mod tests {
             drop(first);
             // No document/undo snapshot shares the input. Previously this write could
             // reuse the original tile address and return the old cached white mask.
-            layer.mask.as_mut().unwrap().surface.fill_rect(canvas, &[0.0]);
+            std::sync::Arc::make_mut(&mut layer.mask.as_mut().unwrap().surface).fill_rect(canvas, &[0.0]);
             let edited = combined_mask(&layer, canvas).unwrap();
             assert_eq!(edited.sample_channel(32, 32, 0), 0.0, "{sample:?}");
 
-            layer.mask.as_mut().unwrap().surface.fill_rect(canvas, &[0.5]);
+            std::sync::Arc::make_mut(&mut layer.mask.as_mut().unwrap().surface).fill_rect(canvas, &[0.5]);
             let repainted = combined_mask(&layer, canvas).unwrap();
             assert!((repainted.sample_channel(32, 32, 0) - 0.5).abs() < 0.005, "{sample:?}");
             let warm = combined_mask(&layer, canvas).unwrap();

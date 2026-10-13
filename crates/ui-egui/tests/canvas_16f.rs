@@ -60,7 +60,7 @@ fn levels(texels: &[[f32; 4]], w: u32, y: u32) -> usize {
 
 /// The stored texels of a document's canvas texture against its CPU composite (premultiplied).
 fn max_error(doc: &Document, texels: &[[f32; 4]]) -> f32 {
-    let buf = photocraft_compose::render(doc, doc.bounds());
+    let buf = photocraft_compose::render(doc, doc.bounds()).unwrap();
     buf.px.iter().zip(texels).map(|(c, t)| (0..4).map(|i| ((if i < 3 { c[i] * c[3] } else { c[3] }) - t[i]).abs()).fold(0.0, f32::max)).fold(0.0, f32::max)
 }
 
@@ -81,7 +81,7 @@ fn sixteen_bit_gradient_keeps_more_than_256_levels() {
     assert!(max_error(&doc, &texels) < 2e-3, "texels differ from the composite");
     // The CPU compositor's banded upload.
     let doc2 = gradient(SampleType::U16, 4096, 4, 0.0, 1.0);
-    g.upload_composite(doc2.id.0, &doc2, None);
+    g.upload_composite(doc2.id.0, &doc2, None).unwrap();
     let (format, _, texels) = g.read_texels(doc2.id.0).expect("read back");
     assert_eq!(format, TextureFormat::Rgba16Float);
     let n = levels(&texels, 4096, 3);
@@ -98,7 +98,7 @@ fn damage_rect_uploads_into_the_float_texture() {
     let Some((g, _rs)) = canvas() else { return };
     let mut doc = gradient(SampleType::U16, 512, 64, 0.0, 1.0);
     let key = doc.id.0;
-    g.upload_composite(key, &doc, None);
+    g.upload_composite(key, &doc, None).unwrap();
     // Repaint a patch and upload only it, as the CPU path does after a brush stroke.
     if let LayerContent::Raster(s) = &mut doc.layers[0].content {
         s.fill_rect(Rect::new(100, 10, 140, 30), &[0.123_45, 0.5, 0.987_65, 1.0]);
@@ -117,10 +117,10 @@ fn eight_bit_documents_keep_their_rgba8_texture() {
     let Some((g, _rs)) = canvas() else { return };
     let doc = gradient(SampleType::U8, 1024, 4, 0.0, 1.0);
     // CPU path: exactly the premultiplied RGBA8 of the composite, as before.
-    g.upload_composite(doc.id.0, &doc, None);
+    g.upload_composite(doc.id.0, &doc, None).unwrap();
     let (format, _, texels) = g.read_texels(doc.id.0).expect("read back");
     assert_eq!(format, TextureFormat::Rgba8Unorm);
-    let want = gpu_canvas::premultiply_rgba8(&photocraft_compose::render(&doc, doc.bounds()).px);
+    let want = gpu_canvas::premultiply_rgba8(&photocraft_compose::render(&doc, doc.bounds()).unwrap().px);
     let got: Vec<u8> = texels.iter().flat_map(|p| p.map(|v| (v * 255.0).round() as u8)).collect();
     assert!(got == want, "8-bit texels changed");
     assert!(levels(&texels, 1024, 0) <= 256);
@@ -162,7 +162,7 @@ fn thirty_two_bit_values_above_one_are_kept() {
     let last = texels[255][0];
     assert!((last - 4.0).abs() < 0.01, "{last}");
     let doc2 = gradient(SampleType::F32, 256, 2, 0.0, 4.0);
-    g.upload_composite(doc2.id.0, &doc2, None);
+    g.upload_composite(doc2.id.0, &doc2, None).unwrap();
     let (_, _, texels) = g.read_texels(doc2.id.0).expect("read back");
     assert!((texels[255][0] - 4.0).abs() < 0.01, "CPU path {}", texels[255][0]);
 }
@@ -194,7 +194,7 @@ fn screen(doc: Document, setup: &[(&str, serde_json::Value)], name: &str) -> Opt
                 ok2.store(gpu_canvas::supports_f16_canvas(&rs.adapter) && std::env::var("PHOTOCRAFT_CANVAS_F16").as_deref() != Ok("0"), Ordering::SeqCst);
                 app.set_wgpu(rs.clone());
             }
-            app.session.open_document(doc, None);
+            app.session.open_document(doc, None).unwrap();
             app
         })
     }));

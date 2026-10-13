@@ -1,0 +1,24 @@
+{
+  "edge-gamma": {
+    "batch-manifest.json": "65f7a17a4f159c2fa7deba5f688ee75ff15f59a7f34c6140996f4d6486808ad1",
+    "observations.json": "504d548fb912c9243243cc716414df8f15727686002be129964b6121b6b5eb79",
+    "faithful-observations.json": "c8b8c34eba90c64d26fd058283a7da99b03849dd2964745c307e18154d32ffdd",
+    "fresh/observations.json": "2e6b942b64b095d99059690117cdb822abf7f86d6dee4d812a2b9fc9ea323d4f",
+    "faithful-fresh/faithful-observations.json": "f614908e4436154e201b66987903db4b24b7301955f1d9b32bf31e5f38077f6a",
+    "VERIFICATION.json": "c82784d51b47ec0a6834facf613697d8b7e1ef00b90c7543ac3c4beb9fa15b3a",
+    "own-rgb-parametric-trc.icc": "b4e4fb7cea5715553a3436f8f2f866b37e6d50578c3e93ef9a5d6d19d9580f2a",
+    "own-gray-parametric-trc.icc": "f43c7827697a5ab94229a3c89b3ab70633b3628d8917960323790a9808f26170",
+    "NEGATIVE-DIAGNOSTICS.json": "d08298689bd61d0ff5e2373f36c4f003ed294386b09c267e6101ba0cd89a8016"
+  },
+  "edge-piecewise": {
+    "batch-manifest.json": "ba667b41c823a25d15ca607a3e22f3aea783f11ab2463de59f932b4a764cf753",
+    "observations.json": "29d67b2170e27756b029ea3debe2216702804044a10edfda8a91b9f48ae9142f",
+    "faithful-observations.json": "eeb965d1abbf9c48de7f8bc6eae76f239bbecb44b1863d23ddd9a67c573c5c64",
+    "fresh/observations.json": "f6ca8885df998a837fc88666b86f238ff0a21f9b482757db3d44e5c8579f54aa",
+    "faithful-fresh/faithful-observations.json": "02f4f142d3d3b35878cc32a1c574a4ac5e40e5de96bf9f9347212c1948a6ef40",
+    "VERIFICATION.json": "7b533071963c0a2a258c723ef301946ebffdbce81bcf1c5ac51dbf757c454440",
+    "own-rgb-parametric-trc.icc": "ceaaceff6944d11c7cf7bdbde1a4df851edea22e8aaf9aeec398cfed75cb0ce7",
+    "own-gray-parametric-trc.icc": "2c98a35c3a2ba3e99aa39c8ecccdde52500d7cc1acc33d3e171c34f08acfd81d",
+    "NEGATIVE-DIAGNOSTICS.json": "dfb711b5505f5cdec5015876a749db0b0af495539a9935be935b88ebbe6c2fc6"
+  }
+}

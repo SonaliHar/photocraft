@@ -144,13 +144,19 @@ fn point_on(h: &H, id: LayerId) -> Option<[f64; 2]> {
     None
 }
 
-fn main() {
-    reexec_with_gpu_sync();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    reexec_with_gpu_sync()?;
     let args: Vec<String> = std::env::args().collect();
     let reps: usize = arg(&args, "--reps").and_then(|v| v.parse().ok()).unwrap_or(9).max(3);
+    if reps > 100 {
+        return Err("layout benchmark repetitions must not exceed 100".into());
+    }
     let mut spec = layout_doc::Spec::full();
     if let Some((w, hh)) = arg(&args, "--size").and_then(|s| s.split_once('x').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?)))) {
         (spec.width, spec.height) = (w, hh);
+    }
+    if spec.width == 0 || spec.height == 0 || spec.width > 32768 || spec.height > 32768 || u64::from(spec.width) * u64::from(spec.height) > 64_000_000 {
+        return Err("layout benchmark dimensions must be positive, at most 32768 per axis and 64 MP total".into());
     }
     let t = Instant::now();
     let (doc, _) = layout_doc::build(spec);
@@ -160,37 +166,38 @@ fn main() {
         doc
     } else {
         let t = Instant::now();
-        let psd = photocraft_io::export(&doc, "layout.psd", &Default::default()).expect("psd export").bytes;
+        let psd = photocraft_io::export(&doc, "layout.psd", &Default::default())?.bytes;
         let t_save = ms(t);
         let t = Instant::now();
-        let r = photocraft_io::import("layout.psd", &psd).expect("psd import");
+        let r = photocraft_io::import("layout.psd", &psd)?;
         println!("PSD: {:.1} MB, save {t_save:.0} ms, open {:.0} ms ({} warnings)", psd.len() as f64 / 1e6, ms(t), r.warnings.len());
         // PSD export writes engine-made smart objects as pixels (no SoLd yet): convert them back,
         // as a Photoshop-made file would have them.
         let mut s = photocraft_engine::Session::new();
-        s.open_document(r.document, None);
+        s.open_document(r.document, None)?;
         let smart = |l: &photocraft_doc::Layer| l.name == "Logo" || (l.name.starts_with("Product ") && !l.name.contains('—') && !l.is_group());
         let ids: Vec<u64> = s.active().map(|st| st.doc.walk().iter().filter(|(_, _, l)| smart(l)).map(|(_, _, l)| l.id.0).collect()).unwrap_or_default();
         for id in ids {
-            s.execute("layer.smartObjects.convertToSmartObject", json!({"layer": id})).expect("convert");
+            s.execute("layer.smartObjects.convertToSmartObject", json!({"layer": id}))?;
         }
-        (*s.active().expect("doc").doc).clone()
+        (*s.active().ok_or("layout fixture document disappeared")?.doc).clone()
     };
     // Layer ids change through the PSD round trip: find the layers by name and kind.
-    let find = |name: &str, pred: &dyn Fn(&LayerContent) -> bool| -> LayerId {
-        doc.walk().iter().find(|(_, _, l)| l.name == name && pred(&l.content)).map(|(_, _, l)| l.id).unwrap_or_else(|| panic!("no layer {name}"))
-    };
-    let pixel = find("Tile 1", &|c| matches!(c, LayerContent::Raster(_)));
-    let text = find("Product 1 — Oak", &|c| matches!(c, LayerContent::Text(_)));
-    let shape = find("Badge", &|c| matches!(c, LayerContent::Shape(_)));
-    let group = find("Card 1", &|c| matches!(c, LayerContent::Group(_)));
-    let smart = find("Product 1", &|c| matches!(c, LayerContent::Smart(_)));
-    let hero = find("Hero", &|c| matches!(c, LayerContent::Group(_)));
-    let headline = find("Make things that last", &|c| matches!(c, LayerContent::Text(_)));
-    let products = find("Products", &|c| matches!(c, LayerContent::Group(_)));
+    let find = |name: &str, pred: &dyn Fn(&LayerContent) -> bool| layout_doc::find_named(&doc, name, pred);
+    let pixel = find("Tile 1", &|c| matches!(c, LayerContent::Raster(_)))?;
+    let text = find("Product 1 \u{2014} Oak", &|c| matches!(c, LayerContent::Text(_)))?;
+    let shape = find("Badge", &|c| matches!(c, LayerContent::Shape(_)))?;
+    let group = find("Card 1", &|c| matches!(c, LayerContent::Group(_)))?;
+    let smart = find("Product 1", &|c| matches!(c, LayerContent::Smart(_)))?;
+    let hero = find("Hero", &|c| matches!(c, LayerContent::Group(_)))?;
+    let headline = find("Make things that last", &|c| matches!(c, LayerContent::Text(_)))?;
+    let products = find("Products", &|c| matches!(c, LayerContent::Group(_)))?;
 
     let navigator = args.iter().any(|a| a == "--navigator");
     let ppp: f32 = arg(&args, "--ppp").and_then(|v| v.parse().ok()).unwrap_or(1.0);
+    if !ppp.is_finite() || !(0.25..=8.0).contains(&ppp) {
+        return Err("layout benchmark pixel scale must be finite and between 0.25 and 8".into());
+    }
     let t = Instant::now();
     let builder = egui_kittest::Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).with_pixels_per_point(ppp);
     let mut h: H = builder.wgpu_setup(photocraft_ui_egui::gpu_canvas::wgpu_setup()).build_eframe(move |cc| {
@@ -200,7 +207,10 @@ fn main() {
             rs.device.set_device_lost_callback(|r, m| eprintln!("GPU device lost ({r:?}): {m}"));
             app.set_wgpu(rs.clone());
         }
-        app.session.open_document(doc, Some("layout.psd".into()));
+        if let Err(error) = app.session.open_document(doc, Some("layout.psd".into())) {
+            app.ui.status = error.to_string();
+            app.ui.status_error = true;
+        }
         app.sync_views();
         app.ui.panels.navigator = navigator;
         app
@@ -221,11 +231,11 @@ fn main() {
 
     if let Some(dir) = arg(&args, "--shots") {
         shots(&mut h, &dir, ppp, [group, headline]);
-        return;
+        return Ok(());
     }
     if let Some(what) = arg(&args, "--spin") {
         spin(&mut h, &what, [pixel, text, shape, group, smart, headline]);
-        return;
+        return Ok(());
     }
     let mut rows = Rows { reps, rows: Vec::new() };
     rows.time("idle frame", || frame(&mut h));
@@ -349,8 +359,9 @@ fn main() {
     if let Some(out) = arg(&args, "--json") {
         let r: Vec<Value> = rows.rows.iter().map(|(n, med, p90, max)| json!({"name": n, "median_ms": med, "p90_ms": p90, "max_ms": max})).collect();
         let report = json!({"width": spec.width, "height": spec.height, "layers": n, "text_layers": texts, "rows": r});
-        std::fs::write(&out, serde_json::to_string_pretty(&report).expect("json")).expect("write json");
+        std::fs::write(&out, serde_json::to_string_pretty(&report)?)?;
     }
+    Ok(())
 }
 
 /// `--shots DIR`: screenshots of the whole app while a Move drag is under way and after the
@@ -462,11 +473,11 @@ fn spin(h: &mut H, what: &str, [pixel, text, shape, group, smart, headline]: [La
 
 /// Run again with `PHOTOCRAFT_GPU_SYNC=1` unless it is set (the workspace forbids the `unsafe`
 /// that setting it in-process needs).
-fn reexec_with_gpu_sync() {
+fn reexec_with_gpu_sync() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::var_os("PHOTOCRAFT_GPU_SYNC").is_some() {
-        return;
+        return Ok(());
     }
-    let exe = std::env::current_exe().expect("exe");
-    let status = std::process::Command::new(exe).args(std::env::args().skip(1)).env("PHOTOCRAFT_GPU_SYNC", "1").status().expect("re-exec");
+    let exe = std::env::current_exe()?;
+    let status = std::process::Command::new(exe).args(std::env::args().skip(1)).env("PHOTOCRAFT_GPU_SYNC", "1").status()?;
     std::process::exit(status.code().unwrap_or(1));
 }

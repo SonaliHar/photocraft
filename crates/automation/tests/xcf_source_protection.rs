@@ -65,3 +65,29 @@ fn capability_guards_keep_authority_and_protect_hardlinks() {
     assert!(workspace.guard_write("alias.png", Some("project.psd")).is_err());
     assert!(files::validate_write_name(Path::new("safe.pcraft"), None).is_ok());
 }
+
+#[test]
+fn saving_another_document_keeps_all_open_runtime_xcf_sources_protected_after_external_header_change() {
+    let temp = Temp::new();
+    let original = temp.0.join("renamed-source.psd");
+    let alias = temp.0.join("alias.pcraft");
+    std::fs::write(&original, b"externally replaced bytes, no XCF magic").unwrap();
+    std::fs::hard_link(&original, &alias).unwrap();
+    for rooted in [false, true] {
+        let mut headless = if rooted { Headless::with_workspace(AuthorizedWorkspace::new(Some(&temp.0), Some(&temp.0)).unwrap()) } else { Headless::trusted_local() };
+        headless.command_run("file.new", serde_json::json!({"width":2,"height":2})).unwrap();
+        let source_path = if rooted { "renamed-source.psd".into() } else { original.to_string_lossy().into_owned() };
+        headless.session.active_mut().unwrap().set_import_origin(ImportOrigin::xcf(), "own imported source", Some(source_path));
+        headless.command_run("file.new", serde_json::json!({"width":2,"height":2})).unwrap();
+        let before = headless.session.active().unwrap().doc.clone();
+        for target in [
+            if rooted { Path::new("alias.pcraft") } else { alias.as_path() },
+            if rooted { Path::new("renamed-source.psd") } else { original.as_path() },
+        ] {
+            assert!(headless.save(None, Some(target), Some("pcraft"), &Default::default()).is_err());
+        }
+        assert_eq!(headless.session.active().unwrap().doc, before);
+        assert_eq!(std::fs::read(&original).unwrap(), b"externally replaced bytes, no XCF magic");
+        assert_eq!(std::fs::read(&alias).unwrap(), b"externally replaced bytes, no XCF magic");
+    }
+}

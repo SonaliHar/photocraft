@@ -59,13 +59,13 @@ pub struct SnapOptions {
     pub layers: bool,
     pub document: bool,
     pub selection: bool,
-    /// Grid spacing (document px) used when `grid` is on: the subdivision step.
-    pub grid_step: f64,
+    /// Grid subdivision spacing in document pixels, independently for X and Y.
+    pub grid_step: [f64; 2],
 }
 
 impl Default for SnapOptions {
     fn default() -> Self {
-        Self { guides: true, grid: false, layers: true, document: true, selection: true, grid_step: 18.0 }
+        Self { guides: true, grid: false, layers: true, document: true, selection: true, grid_step: [18.0; 2] }
     }
 }
 
@@ -76,8 +76,8 @@ pub struct SnapTargets {
     pub x: Vec<Target>,
     /// Horizontal lines (y positions).
     pub y: Vec<Target>,
-    /// Regular grid step (document px), when snapping to the grid.
-    pub grid: Option<f64>,
+    /// Regular grid subdivision spacing in document pixels for X and Y.
+    pub grid: Option<[f64; 2]>,
     /// Extent used for grid lines and guides ([x0, y0, x1, y1]).
     pub extent: [f64; 4],
 }
@@ -113,7 +113,7 @@ impl SnapTargets {
                 t.y.push(Target { pos: *g as f64, kind: SnapKind::Guide, span: (0.0, w) });
             }
         }
-        if opts.grid && opts.grid_step > 0.0 {
+        if opts.grid && opts.grid_step.iter().all(|step| step.is_finite() && *step > 0.0) {
             t.grid = Some(opts.grid_step);
         }
         if opts.layers {
@@ -166,14 +166,25 @@ impl SnapTargets {
         self.x.is_empty() && self.y.is_empty() && self.grid.is_none()
     }
 
+    fn grid_axis(&self, vertical: bool) -> Option<f64> {
+        let [x, y] = self.grid?;
+        if ![x, y].iter().all(|step| step.is_finite() && *step > 0.0) {
+            return None;
+        }
+        Some(if vertical { x } else { y })
+    }
+
     /// The closest target to `v` within `tol` on one axis (`vertical` = x positions). Guides win
     /// ties over other kinds, as in Photoshop.
     pub fn nearest(&self, vertical: bool, v: f64, tol: f64) -> Option<Target> {
+        if !v.is_finite() || !tol.is_finite() || tol < 0.0 {
+            return None;
+        }
         let list = if vertical { &self.x } else { &self.y };
         let mut best: Option<(f64, Target)> = None;
         let mut consider = |t: Target| {
             let d = (t.pos - v).abs();
-            if d > tol {
+            if !d.is_finite() || d > tol {
                 return;
             }
             let better = match best {
@@ -185,7 +196,7 @@ impl SnapTargets {
             }
         };
         list.iter().copied().for_each(&mut consider);
-        if let Some(step) = self.grid {
+        if let Some(step) = self.grid_axis(vertical) {
             let g = (v / step).round() * step;
             let span = if vertical { (self.extent[1], self.extent[3]) } else { (self.extent[0], self.extent[2]) };
             consider(Target { pos: g, kind: SnapKind::Grid, span });
@@ -234,7 +245,11 @@ impl SnapTargets {
                 let list = if vertical { &self.x } else { &self.y };
                 let hit = list.iter().copied().filter(|t| (t.pos - moved).abs() < 1e-6).min_by_key(|t| u8::from(t.kind != SnapKind::Guide));
                 let hit = hit.or_else(|| {
-                    self.grid.filter(|s| ((moved / s).round() * s - moved).abs() < 1e-6).map(|_| Target { pos: moved, kind: SnapKind::Grid, span: other })
+                    self.grid_axis(vertical).filter(|s| ((moved / s).round() * s - moved).abs() < 1e-6).map(|_| Target {
+                        pos: moved,
+                        kind: SnapKind::Grid,
+                        span: other,
+                    })
                 });
                 if let Some(t) = hit {
                     lines.push(line(vertical, t, other.0, other.1));
@@ -297,9 +312,44 @@ mod tests {
 
     #[test]
     fn grid_snaps_to_nearest_line() {
-        let t = SnapTargets { grid: Some(25.0), extent: [0.0, 0.0, 100.0, 100.0], ..Default::default() };
+        let t = SnapTargets { grid: Some([25.0; 2]), extent: [0.0, 0.0, 100.0, 100.0], ..Default::default() };
         assert_eq!(t.snap_point([48.0, 61.0], 3.0).0, [50.0, 61.0]);
         assert_eq!(t.nearest(false, 74.0, 3.0).unwrap().kind, SnapKind::Grid);
+    }
+
+    #[test]
+    fn non_square_grid_snaps_each_point_and_rect_axis() {
+        let t = SnapTargets { grid: Some([36.0, 72.0]), extent: [0.0, 0.0, 400.0, 300.0], ..Default::default() };
+        assert_eq!(t.snap_point([106.0, 34.0], 4.0).0, [108.0, 34.0]);
+        assert_eq!(t.snap_point([106.0, 70.0], 4.0).0, [108.0, 72.0]);
+        let (offset, lines) = t.snap_rect([106.0, 34.0, 130.0, 58.0], 4.0);
+        assert_eq!(offset, [2.0, 0.0]);
+        assert!(lines.iter().all(|line| line.vertical && line.pos == 108.0));
+        let (offset, lines) = t.snap_rect([106.0, 70.0, 130.0, 94.0], 4.0);
+        assert_eq!(offset, [2.0, 2.0]);
+        assert!(lines.iter().any(|line| !line.vertical && line.pos == 72.0));
+    }
+
+    #[test]
+    fn hostile_grid_spacing_and_nonfinite_queries_never_snap() {
+        let doc = Document::new("axes", Size::new(400, 300), ColorMode::Rgb, SampleType::U8);
+        for step in [[f64::NAN, 72.0], [36.0, f64::INFINITY], [0.0, 72.0], [36.0, -72.0]] {
+            let opts = SnapOptions { grid: true, grid_step: step, document: false, ..Default::default() };
+            assert!(SnapTargets::from_document(&doc, &opts, &[]).grid.is_none());
+            let t = SnapTargets { grid: Some(step), ..Default::default() };
+            assert_eq!(t.snap_point([106.0, 70.0], 4.0).0, [106.0, 70.0]);
+            assert_eq!(t.snap_rect([106.0, 70.0, 130.0, 94.0], 4.0).0, [0.0; 2]);
+        }
+        let mut t = targets();
+        t.x.push(Target { pos: f64::NAN, kind: SnapKind::Guide, span: (0.0, 300.0) });
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(t.nearest(true, value, 4.0).is_none());
+            assert!(t.nearest(true, 120.0, value).is_none());
+        }
+        assert!(t.nearest(true, 120.0, -1.0).is_none());
+        assert_eq!(t.nearest(true, 123.0, 4.0).map(|target| target.pos), Some(120.0));
+        let tiny = SnapTargets { grid: Some([f64::MIN_POSITIVE; 2]), ..Default::default() };
+        assert!(tiny.nearest(true, f64::MAX, 4.0).is_none());
     }
 
     #[test]

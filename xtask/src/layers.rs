@@ -229,9 +229,11 @@ pub fn check(crates: &[Crate]) -> Vec<Violation> {
 /// Build the model from `cargo metadata --format-version 1 --no-deps`.
 pub fn from_metadata(meta: &Value) -> Result<Vec<Crate>, String> {
     let pkgs = meta["packages"].as_array().ok_or("metadata: no packages array")?;
-    let members: Vec<&str> = pkgs.iter().filter_map(|p| p["name"].as_str()).collect();
+    let member_ids = meta["workspace_members"].as_array().ok_or("metadata: no workspace_members array")?;
+    let member_pkgs: Vec<&Value> = pkgs.iter().filter(|p| member_ids.contains(&p["id"])).collect();
+    let members: Vec<&str> = member_pkgs.iter().filter_map(|p| p["name"].as_str()).collect();
     let mut out = Vec::new();
-    for p in pkgs {
+    for p in member_pkgs {
         let name = p["name"].as_str().ok_or("package without name")?.to_owned();
         let mut deps = Vec::new();
         for d in p["dependencies"].as_array().into_iter().flatten() {
@@ -241,7 +243,10 @@ pub fn from_metadata(meta: &Value) -> Result<Vec<Crate>, String> {
                 Some("build") => DepKind::Build,
                 _ => DepKind::Normal,
             };
-            let workspace = members.contains(&dname.as_str()) || d["path"].is_string();
+            // An excluded vendored dependency can have a path without being a workspace
+            // member. Keep actual members subject to the rules; do not infer membership
+            // from dependency syntax or from entries in workspace.dependencies.
+            let workspace = members.contains(&dname.as_str());
             deps.push(Dep { name: dname, kind, workspace });
         }
         out.push(Crate { name, deps });
@@ -379,12 +384,12 @@ mod tests {
     #[test]
     fn metadata_parsing() {
         let meta: Value = serde_json::from_str(
-            r#"{"packages":[
-                {"name":"photocraft-doc","dependencies":[
+            r#"{"workspace_members":["doc-id","geom-id"],"packages":[
+                {"id":"doc-id","name":"photocraft-doc","dependencies":[
                     {"name":"photocraft-geom","kind":null,"path":"/x/crates/geom"},
                     {"name":"serde","kind":null},
                     {"name":"proptest","kind":"dev"}]},
-                {"name":"photocraft-geom","dependencies":[]}
+                {"id":"geom-id","name":"photocraft-geom","dependencies":[]}
             ]}"#,
         )
         .unwrap();
@@ -394,5 +399,26 @@ mod tests {
         assert!(doc.deps[0].workspace && !doc.deps[1].workspace);
         assert_eq!(doc.deps[2].kind, Dev);
         assert!(check(&g).is_empty());
+    }
+
+    #[test]
+    fn excluded_path_dependencies_are_external_but_workspace_paths_remain_checked() {
+        let meta = serde_json::json!({
+            "workspace_members": ["xcf-id", "geom-id"],
+            "packages": [
+                {"id":"xcf-id", "name":"photocraft-xcf", "dependencies":[
+                    {"name":"xcf-bzip2", "path":"/repo/vendor/xcf-bzip2", "kind":null},
+                    {"name":"photocraft-geom", "path":"/repo/crates/geom", "kind":null}
+                ]},
+                {"id":"geom-id", "name":"photocraft-geom", "dependencies":[]},
+                {"id":"vendor-id", "name":"xcf-bzip2", "dependencies":[]}
+            ]
+        });
+        let graph = from_metadata(&meta).expect("valid metadata");
+        assert_eq!(graph.len(), 2, "excluded packages are not workspace entries");
+        let xcf = graph.iter().find(|c| c.name == "photocraft-xcf").expect("xcf entry");
+        assert!(!xcf.deps[0].workspace);
+        assert!(xcf.deps[1].workspace);
+        assert!(matches!(check(&graph).as_slice(), [Violation::StandaloneHasWorkspaceDep { dep, .. }] if dep == "photocraft-geom"));
     }
 }

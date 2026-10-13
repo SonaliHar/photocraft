@@ -130,6 +130,11 @@ impl IndexedSource {
     pub fn alpha(&self) -> &Option<Arc<Vec<u8>>> {
         &self.alpha
     }
+    /// Retained palette allocation capacity, without cloning or interpreting palette entries.
+    pub fn palette_capacity_bytes(&self) -> usize {
+        self.palette.capacity().saturating_mul(std::mem::size_of::<[u8; 3]>())
+    }
+
     pub fn palette(&self) -> &[[u8; 3]] {
         &self.palette
     }
@@ -139,6 +144,9 @@ impl IndexedSource {
     pub fn expanded_fingerprint(&self) -> [u8; 32] {
         self.fingerprint
     }
+    /// Compare expanded storage, palette and bounds with the original snapshot.
+    /// Duplicate palette colors can expand identically after index edits. Callers proving
+    /// current index identity must also compare the editable index and alpha planes.
     pub fn current_matches(&self, surface: &Surface, palette: &[[u8; 3]], bounds: Rect) -> bool {
         self.bounds == bounds
             && self.palette == palette
@@ -163,9 +171,14 @@ impl IndexedSource {
                     h.update(&u16::from_ne_bytes(*c).to_le_bytes());
                 }
             }
-            crate::SampleType::F32 => {
+            crate::SampleType::U32 | crate::SampleType::F32 => {
                 for c in data.as_chunks::<4>().0 {
                     h.update(&u32::from_ne_bytes(*c).to_le_bytes());
+                }
+            }
+            crate::SampleType::F64 => {
+                for c in data.as_chunks::<8>().0 {
+                    h.update(&u64::from_ne_bytes(*c).to_le_bytes());
                 }
             }
         };
@@ -179,5 +192,21 @@ impl IndexedSource {
             update(&mut h, tile.bytes());
         }
         Ok(*h.finalize().as_bytes())
+    }
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::*;
+    #[test]
+    fn palette_capacity_reports_spare_owned_allocation() {
+        let mut palette = Vec::with_capacity(1024);
+        palette.extend([[0, 0, 0], [255, 255, 255]]);
+        let capacity = palette.capacity() * std::mem::size_of::<[u8; 3]>();
+        let bounds = Rect::from_xywh(0, 0, 1, 1);
+        let expanded = Surface::try_from_interleaved(crate::PixelFormat::RGBA8, bounds, &[0, 0, 0, 255]).unwrap();
+        let value = IndexedSource::new(std::sync::Arc::new(vec![0]), None, palette, bounds, &expanded).unwrap();
+        assert_eq!(value.palette_capacity_bytes(), capacity);
+        assert_eq!(value.palette().len(), 2);
     }
 }

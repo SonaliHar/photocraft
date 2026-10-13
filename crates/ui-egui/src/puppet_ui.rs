@@ -141,7 +141,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context, command: &str) -> Res
         return Err("Could not use Puppet Warp: the layer is empty".into());
     }
     let opacity = l.opacity * l.fill_opacity;
-    let preview_doc = crate::distort_ui::without_layer(&st.doc, layer);
+    let preview_doc = crate::distort_ui::without_layer(&st.doc, layer)?;
     let img = crate::distort_ui::surface_image(&surface, bounds, 2048);
     let key = app.ui.alloc_id();
     let texture = ctx.load_texture(format!("puppet-{key}"), img, egui::TextureOptions::LINEAR);

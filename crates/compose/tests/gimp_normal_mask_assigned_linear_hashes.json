@@ -1,0 +1,12 @@
+{
+  "observations.json": "cc28a0ee597452b48a2cd9d6f8d06815a28926f18a6ee362a408a9b45dd4ae73",
+  "fresh/observations.json": "c840ef74316e9764d31b233490354f51fda77f8976d003f5a5f23aa6ef9db157",
+  "faithful-observations.json": "fc3b0a9f2730acc26b01ffc699bf19b872b65ad6a912f46692078dd38eb6db8b",
+  "faithful-fresh/faithful-observations.json": "a24b0d7a4766be7cea02a1824b0cec1d55304d762d9b8c381f60d926d16eeaad",
+  "VERIFICATION.json": "46da17a85999a451af99e0891ca1d713c8b1fb7fbfcbc17c2c929aa2d4533706",
+  "batch-manifest.json": "c817addce1f7c067e7b888a69ebe710cef1493f7d572e4b78cc5ced1262a3394",
+  "assignment-controls.json": "0e11dcc29c85b23cd0f95602038c29473939ae2f314dd67f053ec434b6095a69",
+  "own-rgb-gamma22.icc": "6410d31c58e117ceb14712a3bda220b04756634df0ea11b3710697984bcf086f",
+  "own-gray-gamma22.icc": "559e533e64a98e62b87af7ee3d9a1fd64db6065f4657ae7d62ef292f99785514",
+  "CONSUMER-ACCEPTANCE.json": "dbff5e582f02b1c2a8f11ea007228b7f5f3d3119da4a11f3e44575bc9f331a64"
+}

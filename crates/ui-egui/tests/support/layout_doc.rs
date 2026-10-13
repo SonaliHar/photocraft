@@ -4,7 +4,7 @@
 //! adjustment layers and layer masks. Shared by `examples/layout_bench.rs` and the
 //! `layout_perf` tests (`#[path]`-included; deterministic, no files).
 //!
-//! [`Spec::full`] is a 4000×3000 document with 174 layers (60 of them type); the tests use a small
+//! [`Spec::full`] is a 4000x3000 document with 174 layers (60 of them type); the tests use a small
 //! one (`cards` sets how many product cards, the bulk of the layer count).
 
 #![allow(dead_code)]
@@ -27,7 +27,7 @@ pub struct Spec {
 }
 
 impl Spec {
-    /// The benchmark document: 4000×3000, 174 layers, 60 text layers.
+    /// The benchmark document: 4000x3000, 174 layers, 60 text layers.
     pub fn full() -> Self {
         Spec { width: 4000, height: 3000, cards: 16, tiles: 24 }
     }
@@ -47,6 +47,15 @@ pub struct Handles {
     pub smart: LayerId,
     /// A closed group (collapsed in the Layers panel).
     pub closed_group: LayerId,
+}
+
+/// Resolve a benchmark target after serialization changes its layer identity.
+pub fn find_named(doc: &Document, name: &str, kind: &dyn Fn(&LayerContent) -> bool) -> Result<LayerId, String> {
+    doc.walk()
+        .iter()
+        .find(|(_, _, layer)| layer.name == name && kind(&layer.content))
+        .map(|(_, _, layer)| layer.id)
+        .ok_or_else(|| format!("layout fixture has no requested layer {name}"))
 }
 
 fn exec(s: &mut Session, id: &str, p: Value) -> Value {
@@ -134,7 +143,7 @@ pub fn build(spec: Spec) -> (Document, Handles) {
     let doc = Document::with_background("Layout", Size::new(spec.width, spec.height), ColorMode::Rgb, SampleType::U8, Color::rgb(0.97, 0.97, 0.96));
     let fmt = doc.pixel_format();
     let mut s = Session::new();
-    s.add_document(doc, None);
+    s.add_document(doc, None).unwrap();
     let fonts = ["Inter", "JetBrains Mono", "Helvetica", "Georgia", "Arial"];
     let text = |s: &mut Session, x: i32, y: i32, t: &str, font: &str, size: f32, color: [f32; 3], extra: Value| -> LayerId {
         let mut p = json!({"x": x, "y": y, "text": t, "font": font, "size": size, "color": hex(color)});
@@ -156,7 +165,7 @@ pub fn build(spec: Spec) -> (Document, Handles) {
         let mut doc = (*st.doc).clone();
         let l = photo_layer(name, fmt, r, seed);
         let id = doc.insert_above(None, l);
-        st.doc = std::sync::Arc::new(doc);
+        st.doc = photocraft_engine::document_snapshot::DocumentSnapshot::from_resident(std::sync::Arc::new(doc)).unwrap();
         exec(s, "layer.select", json!({"layer": id.0}));
         id_of(&exec(s, "layer.smartObjects.convertToSmartObject", json!({"layer": id.0})))
     };
@@ -179,11 +188,11 @@ pub fn build(spec: Spec) -> (Document, Handles) {
         let mut doc = (*st.doc).clone();
         let mut l = hero_img;
         let mut m = LayerMask::reveal_all();
-        m.surface.fill_rect(Rect::new(0, px(1300.0), w, px(1500.0)), &[0.4]);
+        std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::new(0, px(1300.0), w, px(1500.0)), &[0.4]);
         l.mask = Some(m);
         l.effects.items = vec![gradient_overlay([0.1, 0.1, 0.3], [0.9, 0.5, 0.2])];
         let id = doc.insert_above(None, l);
-        st.doc = std::sync::Arc::new(doc);
+        st.doc = photocraft_engine::document_snapshot::DocumentSnapshot::from_resident(std::sync::Arc::new(doc)).unwrap();
         id
     };
     let headline = text(&mut s, px(240.0), px(800.0), "Make things that last", fonts[3], pt(160.0), [1.0, 1.0, 1.0], json!({}));
@@ -209,7 +218,8 @@ pub fn build(spec: Spec) -> (Document, Handles) {
         let (cx, cy) = (px(160.0) + (i % cols) as i32 * px(940.0), px(1600.0) + (i / cols) as i32 * (ch / 4));
         let bg = shape(&mut s, "roundedRect", [cx, cy, cw, ch / 5], [1.0, 1.0, 1.0], Some((pt(3.0), [0.8, 0.8, 0.82])), "Card");
         let img = smart(&mut s, &format!("Product {}", i + 1), Rect::new(cx + px(20.0), cy + px(20.0), cx + cw - px(20.0), cy + ch / 9), 100 + i as u64);
-        let title = text(&mut s, cx + px(30.0), cy + ch / 9 + px(50.0), &format!("Product {} — Oak", i + 1), fonts[i % fonts.len()], pt(34.0), ink, json!({}));
+        let title =
+            text(&mut s, cx + px(30.0), cy + ch / 9 + px(50.0), &format!("Product {} \u{2014} Oak", i + 1), fonts[i % fonts.len()], pt(34.0), ink, json!({}));
         let body = text(
             &mut s,
             0,
@@ -287,7 +297,7 @@ pub fn build(spec: Spec) -> (Document, Handles) {
         // Image masked to the card's top (layer mask).
         let b = photocraft_compose::layer_bounds(&img, Rect::new(0, 0, w, h));
         let mut m = LayerMask::reveal_all();
-        m.surface.fill_rect(Rect::new(b.x0, b.y1 - (b.height() as i32 / 6), b.x1, b.y1), &[0.0]);
+        std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::new(b.x0, b.y1 - (b.height() as i32 / 6), b.x1, b.y1), &[0.0]);
         img.mask = Some(m);
         let mut title = t(c[2]);
         if i % 3 == 0 {
@@ -318,7 +328,7 @@ pub fn build(spec: Spec) -> (Document, Handles) {
     for (i, mut l) in tiles.into_iter().enumerate() {
         let b = photocraft_compose::layer_bounds(&l, Rect::new(0, 0, w, h));
         let mut m = LayerMask::reveal_all();
-        m.surface.fill_rect(Rect::new(b.x0, b.y0, b.x0 + b.width() as i32 / 8, b.y1), &[0.0]);
+        std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::new(b.x0, b.y0, b.x0 + b.width() as i32 / 8, b.y1), &[0.0]);
         l.mask = Some(m);
         if i == 0 {
             handles.pixel = l.id;

@@ -37,7 +37,7 @@ fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2]) {
 }
 
 fn steps(app: &PhotocraftApp) -> usize {
-    app.session.active().unwrap().history.entries().len()
+    app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len()
 }
 
 fn bounds(app: &PhotocraftApp, id: LayerId) -> Rect {

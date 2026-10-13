@@ -2658,3 +2658,109 @@ fontWeight	Italic	Miring
 	Rotate View Tool	Alat Putar Tampilan
 	Reset View	Atur Ulang Tampilan
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Seret di sekitar pusat untuk memutar tampilan  ·  Shift membatasi ke 15°
+
+# XCF import and retained editing controls
+	Additional filters are available through command inspection	Filter tambahan tersedia melalui inspeksi perintah
+	Alpha threshold	Ambang alfa
+	An explicit resolution edit sets both axes.	Perubahan resolusi secara eksplisit mengatur kedua sumbu.
+	Apply Text	Terapkan teks
+	Blue frequency	Frekuensi biru
+	Blue phase shift	Pergeseran fase biru
+	Blue weight	Bobot biru
+	CIE Lab	CIE Lab
+	CIE Yuv	CIE Yuv
+	Changing this imported GIMP mode is not supported yet.	Perubahan mode GIMP yang diimpor ini belum didukung.
+	Clip high	Batasi nilai tinggi
+	Clip low	Batasi nilai rendah
+	Cyan / Red	Sian / Merah
+	Decrease Levels	Kurangi tingkat
+	Desaturate mode	Mode desaturasi
+	Filter editing is unavailable	Penyuntingan filter tidak tersedia
+	GIMP Filters	Filter GIMP
+	GIMP Text	Teks GIMP
+	Green frequency	Frekuensi hijau
+	Green phase shift	Pergeseran fase hijau
+	Green weight	Bobot hijau
+	Histogram channel	Kanal histogram
+	Hue frequency	Frekuensi rona
+	Hue phase shift	Pergeseran fase rona
+	Increase Levels	Tambah tingkat
+	Intended temperature	Suhu tujuan
+	Keep blue	Pertahankan biru
+	Keep green	Pertahankan hijau
+	Keep hue	Pertahankan rona
+	Keep lightness	Pertahankan kecerahan
+	Keep red	Pertahankan merah
+	Keep saturation	Pertahankan saturasi
+	Layer content is locked	Konten lapisan terkunci
+	Letter spacing	Jarak huruf
+	Lightness frequency	Frekuensi kecerahan
+	Lightness phase shift	Pergeseran fase kecerahan
+	Line spacing	Jarak baris
+	Lower limit	Batas bawah
+	Luma	Luma
+	Magenta / Green	Magenta / Hijau
+	Move Down	Pindahkan ke bawah
+	Move Up	Pindahkan ke atas
+	Native	Asli
+	Original temperature	Suhu asal
+	Preserve luminosity	Pertahankan luminansi
+	Process in sRGB	Proses dalam sRGB
+	Red frequency	Frekuensi merah
+	Red phase shift	Pergeseran fase merah
+	Red weight	Bobot merah
+	Remove Filter	Hapus filter
+	Reset Text	Atur ulang teks
+	Saturation colorspace	Ruang warna saturasi
+	Saturation frequency	Frekuensi saturasi
+	Saturation phase shift	Pergeseran fase saturasi
+	Strength	Kekuatan
+	Text X	X teks
+	Text Y	Y teks
+	Text content	Konten teks
+	Text editing is unavailable for this layer.	Penyuntingan teks tidak tersedia untuk lapisan ini.
+	Upper limit	Batas atas
+	Value	Nilai
+	Yellow / Blue	Kuning / Biru
+	From color	Warna sumber
+	To color	Warna pengganti
+	Red threshold	Ambang merah
+	Green threshold	Ambang hijau
+	Blue threshold	Ambang biru
+	Underlined characters	Karakter bergaris bawah
+	Start character	Karakter awal
+	End character (exclusive)	Karakter akhir (tidak termasuk)
+	Apply underline	Terapkan garis bawah
+	Clear underline	Hapus garis bawah
+	Text content editing is unavailable for this layer.	Pengeditan isi teks tidak tersedia untuk lapisan ini.
+	Transparency threshold	Ambang transparansi
+	Opacity threshold	Ambang opasitas
+	Component	Komponen
+	Y'CbCr Y'	Y'CbCr Y'
+	Y'CbCr Cb	Y'CbCr Cb
+	Y'CbCr Cr	Y'CbCr Cr
+
+	Destination start angle	Sudut awal tujuan
+
+	Destination end angle	Sudut akhir tujuan
+	GIMP Linked Image	Gambar Tertaut GIMP
+	Original byte identity is unavailable. The selected PNG is a Reduced substitution (8 MiB limit).	Kesamaan dengan byte asli tidak dapat dipastikan. PNG yang dipilih adalah pengganti dengan kesetiaan berkurang (batas 8 MiB).
+	Replace Linked Image (Reduced)…	Ganti Gambar Tertaut (Kesetiaan Berkurang)…
+	Resource picker unavailable.	Pemilih sumber daya tidak tersedia.
+	The selected PNG must match the retained original byte identity (8 MiB limit). Exact recovery applies to this linked image only.	PNG yang dipilih harus cocok dengan identitas byte asli yang tersimpan (batas 8 MiB). Pemulihan persis hanya berlaku untuk gambar tertaut ini.
+	Recover Linked Image (Exact)…	Pulihkan gambar tertaut (persis)…
+	Saved floating attachment	Kaitan lapisan mengambang tersimpan
+	Attachment target	Target kaitan
+	Detach the saved relationship without changing pixels.	Lepaskan hubungan tersimpan tanpa mengubah piksel.
+	Detach Floating Layer	Lepaskan lapisan mengambang
+	Complete or cancel the pixel-move preview before detaching the saved relationship.	Selesaikan atau batalkan pratinjau pemindahan piksel sebelum melepaskan hubungan tersimpan.
+	Saved named item sets	Kumpulan item bernama tersimpan
+	Only sets containing this layer are shown; saved searches are not evaluated.	Hanya kumpulan yang memuat lapisan ini yang ditampilkan; pencarian tersimpan tidak dievaluasi.
+	Rename Saved Item Set…	Ganti nama kumpulan item tersimpan…
+	Delete Saved Item Set	Hapus kumpulan item tersimpan
+	Saved set name	Nama kumpulan tersimpan
+	Apply Saved Item Set Name	Terapkan nama kumpulan item tersimpan
+	Enter a replacement name for this long saved name.	Masukkan nama pengganti untuk nama tersimpan yang panjang ini.
+	Only the first 64 matching sets are shown.	Hanya 64 kumpulan cocok pertama yang ditampilkan.
+	Complete or cancel the pixel-move preview before editing saved item sets.	Selesaikan atau batalkan pratinjau pemindahan piksel sebelum mengedit kumpulan item tersimpan.
+	Remove this layer from set	Hapus lapisan ini dari set

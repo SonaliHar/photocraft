@@ -1,6 +1,49 @@
 //! Runtime source provenance, separate from editable pixels and writable save destinations.
 use photocraft_io::ImportOrigin;
 
+/// Inert destination exclusions; these values confer no file-read authority.
+#[derive(Debug, Clone, Default)]
+pub struct WriteProtection {
+    pub sources: Vec<String>,
+    pub fingerprints: Vec<String>,
+}
+impl WriteProtection {
+    pub fn add_document(&mut self, document: &photocraft_doc::Document, source: Option<&SourceIdentity>) -> Result<(), String> {
+        self.add_document_with_interrupt(document, source, &photocraft_raster::Interrupt::NONE).map_err(|error| error.to_string())
+    }
+
+    /// Collect inert exclusions with the caller's token before publishing either list.
+    pub fn add_document_with_interrupt(&mut self, document: &photocraft_doc::Document, source: Option<&SourceIdentity>, control: &photocraft_raster::Interrupt<'_>) -> crate::Result<()> {
+        let poll = || control.check().map_err(|_| crate::EngineError::Cancelled);
+        let denied = |message: &str| crate::EngineError::Other(message.into());
+        poll()?;
+        let fingerprints = photocraft_io::source_protection::document_fingerprints_with_interrupt(document, control)
+            .map_err(|error| if matches!(error, photocraft_io::source_protection::SourceProtectionError::Cancelled) {
+                crate::EngineError::Cancelled
+            } else { crate::EngineError::Other(error.to_string()) })?;
+        let path = source.filter(|s| s.origin.is_read_only()).and_then(|s| s.path.as_ref());
+        if path.is_some_and(|p| p.len() > 4096)
+            || self.sources.len().saturating_add(usize::from(path.is_some())) > 4096
+            || self.fingerprints.len().saturating_add(fingerprints.len()) > photocraft_io::source_protection::MAX_FINGERPRINTS
+        {
+            return Err(denied("xcf.source-protection.limit: too many protected source identities"));
+        }
+        self.sources.try_reserve(usize::from(path.is_some())).map_err(|_| denied("xcf.source-protection.limit: source allocation failed"))?;
+        self.fingerprints.try_reserve(fingerprints.len()).map_err(|_| denied("xcf.source-protection.limit: fingerprint allocation failed"))?;
+        poll()?;
+        let owned = if let Some(path) = path {
+            let mut owned = String::new();
+            owned.try_reserve_exact(path.len()).map_err(|_| denied("xcf.source-protection.limit: path allocation failed"))?;
+            owned.push_str(path);
+            Some(owned)
+        } else { None };
+        poll()?;
+        if let Some(owned) = owned { self.sources.push(owned); }
+        self.fingerprints.extend(fingerprints);
+        Ok(())
+    }
+}
+
 /// A source label and a path supplied by an authorized open service, never persisted authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceIdentity {
@@ -15,7 +58,7 @@ impl SourceIdentity {
     /// Pre-encoding checks without filesystem access. Services additionally check aliases
     /// and destination content within their existing filesystem authority.
     pub fn check_destination(&self, path: &str) -> Result<(), String> {
-        if crate::file_cmds::extension(path).as_deref() == Some("xcf") {
+        if photocraft_io::is_xcf_filename(path) {
             return Err("XCF is an import-only format; choose a writable destination such as .pcraft".into());
         }
         if self.origin.is_read_only() && self.path.as_ref().is_some_and(|source| same_name(source, path)) {
@@ -37,7 +80,7 @@ mod tests {
     #[test]
     fn renamed_xcf_source_is_retained_after_save_as() {
         let doc = Document::new("source.psd", Size::new(2, 2), ColorMode::Rgb, SampleType::U8);
-        let mut state = crate::DocState::new(doc, Some("source.psd".into()));
+        let mut state = crate::DocState::new(doc, Some("source.psd".into())).unwrap();
         state.set_import_origin(ImportOrigin::xcf(), "source.psd", Some("source.psd".into()));
         assert!(state.path.is_none());
         state.path = Some("edited.pcraft".into());
@@ -49,7 +92,7 @@ mod tests {
     #[test]
     fn writable_import_keeps_path_and_byte_only_import_grants_none() {
         let doc = Document::new("input.psd", Size::new(2, 2), ColorMode::Rgb, SampleType::U8);
-        let mut state = crate::DocState::new(doc, None);
+        let mut state = crate::DocState::new(doc, None).unwrap();
         state.set_import_origin(ImportOrigin::writable(photocraft_io::ImportFormat::Psd), "input.psd", Some("input.psd".into()));
         assert_eq!(state.path.as_deref(), Some("input.psd"));
         state.set_import_origin(ImportOrigin::xcf(), "bytes", None);

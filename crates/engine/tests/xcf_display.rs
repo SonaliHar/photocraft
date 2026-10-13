@@ -27,7 +27,7 @@ fn gimp_projection_matches_imported_cpu_display() {
         };
         let d = imported.document;
         let before = d.clone();
-        let buffer = photocraft_compose::render(&d, d.bounds());
+        let buffer = photocraft_compose::render(&d, d.bounds()).unwrap();
         let reference = photocraft_codecs::decode(&std::fs::read(root.join(case["reference"].as_str().unwrap())).unwrap()).unwrap();
         let rp = reference.icc.as_ref().map(|p| Profile::parse(p).unwrap()).unwrap_or_else(|| Builtin::Srgb.profile().clone());
         let rt = Transform::new(&rgb_profile(rp), Builtin::Srgb.profile(), Intent::RelativeColorimetric, true).unwrap();
@@ -37,7 +37,7 @@ fn gimp_projection_matches_imported_cpu_display() {
         assert_eq!(reference_pixels.len(), buffer.px.len() * 4);
         let mut max = 0.0f32;
         let mut detail = String::new();
-        for (a, r) in buffer.px.iter().zip(reference_pixels.chunks_exact(4)) {
+        for (a, r) in buffer.px.iter().zip(reference_pixels.as_chunks::<4>().0.iter()) {
             let mut ac = [0.0; 3];
             let mut rc = [0.0; 3];
             at.eval(&a[..3], &mut ac);

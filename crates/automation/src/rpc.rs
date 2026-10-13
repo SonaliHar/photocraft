@@ -31,6 +31,9 @@ use crate::{AutomationError, Headless};
 
 /// Method names served by [`Headless::handle`].
 pub const METHODS: &[&str] = &[
+    "xcf.link.substituteFromRoot",
+    "xcf.link.recoverFromRoot",
+    "xcf.resource.recover",
     "engine.execute",
     "jobs.list",
     "jobs.cancel",
@@ -62,9 +65,31 @@ fn str_of<'a>(p: &'a Value, k: &str) -> Option<&'a str> {
 impl Headless {
     /// Dispatch one request. Unknown methods and bad params are errors, never panics.
     pub fn handle(&mut self, method: &str, params: Value) -> Result<Value, AutomationError> {
+        if method == "xcf.link.substituteFromRoot" {
+            return self.substitute_xcf_link_from_root(&params);
+        }
+        if method == "xcf.link.recoverFromRoot" {
+            return self.recover_xcf_link_from_root(&params);
+        }
+        if method == "engine.execute" && params.get("command").and_then(Value::as_str).is_some_and(|id| matches!(id, "xcf.link.substitute" | "xcf.link.recover")) {
+            let wait = params.get("wait").and_then(Value::as_bool).unwrap_or(true);
+            let id = params.get("command").and_then(Value::as_str).ok_or_else(|| bad("missing linked-image command"))?;
+            return self.command_start(id, params.get("params").cloned().unwrap_or(Value::Null), wait);
+        }
         self.sync_jobs();
         let p = if params.is_null() { json!({}) } else { params };
         match method {
+            "xcf.resource.recover" => {
+                let object = p.as_object().ok_or_else(|| bad("XCF resource recovery requires an object"))?;
+                if object.keys().any(|key| !["resource", "path", "policy"].contains(&key.as_str())) {
+                    return Err(bad("unknown XCF resource recovery parameter"));
+                }
+                self.recover_xcf_resource(
+                    str_of(&p, "resource").ok_or_else(|| bad("resource recovery requires an exact string identity"))?,
+                    str_of(&p, "path").ok_or_else(|| bad("resource recovery requires an explicit request path"))?,
+                    str_of(&p, "policy").ok_or_else(|| bad("resource recovery requires an explicit policy"))?,
+                )
+            }
             "engine.execute" => {
                 let id = str_of(&p, "command").ok_or_else(|| bad("engine.execute needs `command`"))?;
                 let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(true);
@@ -90,7 +115,7 @@ impl Headless {
                     ),
                 })
             }
-            "session.list" => Ok(self.session_list()),
+            "session.list" => self.session_list(),
             "doc.open" => {
                 let path = str_of(&p, "path").ok_or_else(|| bad("doc.open needs `path`"))?;
                 self.open(&PathBuf::from(path))
@@ -169,7 +194,7 @@ impl Headless {
             let was_error = r.is_err();
             let result = match r {
                 Ok(v) => json!({"ok": true, "result": v}),
-                Err(e) => json!({"ok": false, "error": e.to_string()}),
+                Err(e) => e.error_reply(),
             };
             if let Err(error) = reply_budget.charge(&result) {
                 failed += 1;
@@ -207,7 +232,11 @@ pub fn respond(h: &Mutex<Headless>, line: &str) -> Value {
         .unwrap_or_else(|_| Err(AutomationError::Other(format!("internal error: `{method}` panicked"))));
     match r {
         Ok(v) => json!({"id": id, "ok": true, "result": v}),
-        Err(e) => json!({"id": id, "ok": false, "error": e.to_string()}),
+        Err(e) => {
+            let mut reply = e.error_reply();
+            reply["id"] = id;
+            reply
+        }
     }
 }
 
@@ -429,7 +458,7 @@ mod tests {
         assert!(h.handle("jobs.cancel", json!({"job": "nope"})).is_err());
         let l = h.handle("jobs.list", json!({})).unwrap();
         assert_eq!(l["jobs"].as_array().unwrap().iter().find(|j| j["id"] == job).unwrap()["state"], "cancelled");
-        assert!(std::sync::Arc::ptr_eq(&h.session.active().unwrap().doc, &before));
+        assert!(h.session.active().unwrap().doc.shares_state(&before));
     }
 
     #[test]

@@ -871,7 +871,7 @@ impl Compositor {
         let aprons: Vec<i32> = plan.fx.iter().zip(&paged).map(|(f, &pg)| if pg { Self::fx_apron(doc, f) } else { 0 }).collect();
         for (f, &pg) in plan.fx.iter().zip(&paged) {
             if !pg {
-                self.sync_fx(device, queue, encoder, doc, f, (f.layer.id, None), f.region, &mut stats);
+                self.sync_fx(device, queue, encoder, doc, f, (f.layer.id, None), f.region, &mut stats)?;
             }
         }
         let fr = self.frame_res(device, queue, canvas, &plan);
@@ -906,7 +906,7 @@ impl Compositor {
                     continue;
                 }
                 let window = pf.inflate(aprons.get(i).copied().unwrap_or(0)).intersect(&f.region);
-                self.sync_fx(device, queue, encoder, doc, f, (f.layer.id, Some(cell)), window, &mut stats);
+                self.sync_fx(device, queue, encoder, doc, f, (f.layer.id, Some(cell)), window, &mut stats)?;
             }
             let chunks = grid_rects(part, self.chunk);
             stats.chunks += chunks.len();
@@ -1403,7 +1403,7 @@ impl Compositor {
         key: FxKey,
         region: Rect,
         stats: &mut Stats,
-    ) {
+    ) -> Result<(), Unsupported> {
         let layer = f.layer;
         let canvas = doc.bounds();
         let is_group = matches!(layer.content, LayerContent::Group(_));
@@ -1437,7 +1437,7 @@ impl Compositor {
         {
             // Moved by whole pixels: maps are computed relative to the region, so if the shape
             // moved unchanged with it, every map is still exact.
-            let v = fx::shape(doc, layer, region);
+            let v = fx::shape(doc, layer, region).map_err(|error| Unsupported(error.to_string()))?;
             if let Some(e) = self.fx.get_mut(&key)
                 && v == e.shape_cpu
             {
@@ -1468,13 +1468,13 @@ impl Compositor {
         }
         // Present: kept or (re)inserted above.
         let stamp = self.stamp;
-        let Some(e) = self.fx.get_mut(&key) else { return };
+        let Some(e) = self.fx.get_mut(&key) else { return Err(Unsupported("Missing prepared effect cache".into())) };
         e.last_used = frame;
         e.stamp = stamp;
         e.doc = doc.id;
         e.tiles = [content_src.map(fx::snapshot), mask_src.map(fx::snapshot)];
         if region.is_empty() {
-            return;
+            return Ok(());
         }
 
         let t_trace = web_time_now();
@@ -1482,7 +1482,7 @@ impl Compositor {
         // Shape over the damage (compose's own alpha).
         if !damage.is_empty() {
             stats.fx_shapes += 1;
-            let v = fx::shape(doc, layer, damage);
+            let v = fx::shape(doc, layer, damage).map_err(|error| Unsupported(error.to_string()))?;
             fx::paste(&mut e.shape_cpu, region, damage, &v);
             e.shape.write_r32(queue, region, damage, &v);
             staged += v.len() as u64 * 4;
@@ -1531,7 +1531,7 @@ impl Compositor {
             if prog.maps == 0 {
                 continue;
             }
-            let Some(e) = self.fx.get_mut(&key) else { return };
+            let Some(e) = self.fx.get_mut(&key) else { return Err(Unsupported("Missing prepared effect cache".into())) };
             let same = e.progs[i].key == prog.key && e.progs[i].maps.len() == prog.maps;
             let d = if same { damage } else { region };
             if d.is_empty() {
@@ -1546,6 +1546,7 @@ impl Compositor {
             stats.fx_programs += 1;
             self.run_program(device, queue, encoder, key, i, prog, d, stats);
         }
+        Ok(())
     }
 
     /// Record the passes of `prog` (maps of item `item` of `layer`) recomputing damage `d`.

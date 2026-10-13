@@ -24,6 +24,184 @@ pub(crate) use paste_target;
 pub struct Clip {
     pub surface: Surface,
     pub bounds: Rect,
+    pub color: ClipColorContext,
+    pub composition: Vec<photocraft_doc::import_compositing::GimpComposition>,
+}
+
+impl Clip {
+    /// The OS image-clipboard service supplies encoded sRGB RGBA8 without profile metadata.
+    pub fn from_external_srgb(surface: Surface, bounds: Rect) -> Result<Self> {
+        if surface.format() != PixelFormat::RGBA8 {
+            return Err(pixel_error("external image clipboard must be sRGB RGBA8"));
+        }
+        surface.try_validate_tile_origins().map_err(pixel_error)?;
+        Ok(Self {
+            surface,
+            bounds,
+            composition: Vec::new(),
+            color: ClipColorContext {
+                mode: photocraft_doc::ColorMode::Rgb,
+                icc_profile: Some(photocraft_cms::Builtin::Srgb.profile().to_bytes()),
+                sample_encoding: Some(photocraft_doc::SampleEncoding::NonlinearProfile),
+                interpretation: photocraft_doc::WorkingProfileInterpretation::Icc,
+            },
+        })
+    }
+}
+
+/// Clipboard samples retain their current working interpretation independently of source documents.
+#[derive(Clone, Debug)]
+pub struct ClipColorContext {
+    pub mode: photocraft_doc::ColorMode,
+    pub icc_profile: Option<std::sync::Arc<Vec<u8>>>,
+    pub sample_encoding: Option<photocraft_doc::SampleEncoding>,
+    pub interpretation: photocraft_doc::WorkingProfileInterpretation,
+}
+impl ClipColorContext {
+    fn from_document(doc: &Document) -> Result<Self> {
+        crate::color_cmds::try_document_profile(doc)?;
+        Ok(Self {
+            mode: doc.mode,
+            icc_profile: doc.icc_profile.clone(),
+            sample_encoding: doc.sample_encoding,
+            interpretation: doc.working_profile_interpretation.clone(),
+        })
+    }
+    fn profile(&self, mode: photocraft_doc::ColorMode) -> Result<std::sync::Arc<photocraft_cms::Profile>> {
+        if mode != self.mode {
+            return Err(EngineError::Other("clipboard color context does not match its samples".into()));
+        }
+        let mut doc = Document::new("Clipboard", photocraft_geom::Size::new(1, 1), mode, photocraft_color::SampleType::F64);
+        self.apply(&mut doc);
+        crate::color_cmds::try_document_profile(&doc)
+    }
+    fn apply(&self, doc: &mut Document) {
+        doc.icc_profile = self.icc_profile.clone();
+        doc.sample_encoding = self.sample_encoding;
+        doc.working_profile_interpretation = self.interpretation.clone();
+    }
+}
+/// Ordinary pasted layers cannot install the bounded finite-source-alpha behavior yet.
+fn require_ordinary_clip(clip: &Clip) -> Result<()> {
+    if clip.composition.iter().any(|policy| policy.compatibility_epoch == photocraft_doc::import_compositing::XCF12_FINITE_NORMAL_SOURCE_EPOCH) {
+        return Err(pixel_error("this clipboard retains a finite-alpha composition policy; pasting it as an ordinary layer is not supported yet"));
+    }
+    let format = clip.surface.format();
+    clip.surface.try_validate_tile_origins().map_err(pixel_error)?;
+    if !format.alpha {
+        return Ok(());
+    }
+    let validate = |pixel: &[u8]| -> Result<()> {
+        let alpha = photocraft_color::try_read_sample_f64(pixel, format.sample, format.mode.color_channels()).map_err(pixel_error)?;
+        if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
+            return Err(pixel_error("ordinary clipboard layers require finite alpha between zero and one"));
+        }
+        Ok(())
+    };
+    validate(clip.surface.default_bytes())?;
+    for (_, tile) in clip.surface.tiles() {
+        for pixel in tile.bytes().chunks_exact(format.bytes_per_pixel()) {
+            validate(pixel)?;
+        }
+    }
+    Ok(())
+}
+fn pixel_error(error: impl std::fmt::Display) -> EngineError {
+    EngineError::Other(format!("clipboard pixel conversion: {error}"))
+}
+fn convert_clip(surface: &Surface, context: &ClipColorContext, target: PixelFormat, profile: &photocraft_cms::Profile) -> Result<Surface> {
+    convert_clip_with(surface, context, target, profile, &photocraft_raster::Interrupt::NONE)
+}
+fn convert_clip_with(
+    surface: &Surface,
+    context: &ClipColorContext,
+    target: PixelFormat,
+    profile: &photocraft_cms::Profile,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<Surface> {
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    surface.try_validate_tile_origins_with(control).map_err(pixel_error)?;
+    let source = context.profile(surface.format().mode)?;
+    let transform = photocraft_cms::Transform::new(&source, profile, photocraft_cms::Intent::RelativeColorimetric, false).map_err(pixel_error)?;
+    if transform.is_identity() && surface.format().mode == target.mode {
+        return surface.try_convert_with(target, control).map_err(pixel_error);
+    }
+    let format = surface.format();
+    if transform.inputs() != format.mode.color_channels()
+        || transform.outputs() != target.mode.color_channels()
+        || transform.inputs() > 16
+        || transform.outputs() > 16
+    {
+        return Err(pixel_error("clipboard profile channels do not match sample models"));
+    }
+    let intermediate = PixelFormat::new(target.mode, format.sample, true);
+    let convert = |input: &[u8], output: &mut [u8]| -> Result<()> {
+        let mut colors = [0.0_f64; 16];
+        let mut result = [0.0_f64; 16];
+        for (index, value) in colors.get_mut(..transform.inputs()).ok_or_else(|| pixel_error("source channel range"))?.iter_mut().enumerate() {
+            *value = photocraft_color::try_read_sample_f64(input, format.sample, index).map_err(pixel_error)?;
+        }
+        transform
+            .try_eval_f64(
+                colors.get(..transform.inputs()).ok_or_else(|| pixel_error("source color channels"))?,
+                result.get_mut(..transform.outputs()).ok_or_else(|| pixel_error("destination color channels"))?,
+            )
+            .map_err(pixel_error)?;
+        for (index, value) in result.get(..transform.outputs()).ok_or_else(|| pixel_error("destination channel range"))?.iter().enumerate() {
+            photocraft_color::try_write_sample_f64(output, format.sample, index, *value).map_err(pixel_error)?;
+        }
+        let destination = transform.outputs().checked_mul(format.sample.bytes()).ok_or_else(|| pixel_error("clipboard alpha offset overflow"))?;
+        if format.alpha {
+            let source = transform.inputs().checked_mul(format.sample.bytes()).ok_or_else(|| pixel_error("clipboard alpha offset overflow"))?;
+            let end = source.checked_add(format.sample.bytes()).ok_or_else(|| pixel_error("clipboard alpha range overflow"))?;
+            let destination_end = destination.checked_add(format.sample.bytes()).ok_or_else(|| pixel_error("clipboard alpha range overflow"))?;
+            output
+                .get_mut(destination..destination_end)
+                .ok_or_else(|| pixel_error("destination alpha range"))?
+                .copy_from_slice(input.get(source..end).ok_or_else(|| pixel_error("source alpha range"))?);
+        } else {
+            photocraft_color::try_write_sample_f64(output, format.sample, transform.outputs(), 1.0).map_err(pixel_error)?;
+        }
+        Ok(())
+    };
+    let count = surface.tiles().count();
+    let tile_pixels =
+        usize::try_from(photocraft_geom::TILE_SIZE).ok().and_then(|n| n.checked_mul(n)).ok_or_else(|| pixel_error("clipboard tile size overflow"))?;
+    let length = tile_pixels.checked_mul(intermediate.bytes_per_pixel()).ok_or_else(|| pixel_error("clipboard tile length overflow"))?;
+    let output_bytes = (count as u64)
+        .checked_mul(length as u64)
+        .and_then(|n| n.checked_add((count as u64).checked_mul(256)?))
+        .ok_or_else(|| pixel_error("clipboard retained allocation overflow"))?;
+    let peak = output_bytes
+        .checked_add(surface.resident_payload_bytes().map_err(pixel_error)?)
+        .and_then(|n| n.checked_add((length as u64).checked_mul(2)?))
+        .ok_or_else(|| pixel_error("clipboard resident size overflow"))?;
+    if peak > photocraft_raster::MAX_CHECKED_RASTER_BYTES {
+        return Err(pixel_error("clipboard conversion exceeds resident memory limit"));
+    }
+    let mut default = [0_u8; 136];
+    let default = default.get_mut(..intermediate.bytes_per_pixel()).ok_or_else(|| pixel_error("clipboard default channels"))?;
+    convert(surface.default_bytes(), default)?;
+    let mut staged = Surface::try_with_default_bytes(intermediate, default).map_err(pixel_error)?;
+    for (coordinate, tile) in surface.tiles() {
+        control.check().map_err(|_| EngineError::Cancelled)?;
+        if tile.bytes().len() != tile_pixels.checked_mul(format.bytes_per_pixel()).ok_or_else(|| pixel_error("clipboard source tile length overflow"))? {
+            return Err(pixel_error("malformed clipboard tile length"));
+        }
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(length).map_err(pixel_error)?;
+        bytes.resize(length, 0);
+        for (index, (input, output)) in
+            tile.bytes().chunks_exact(format.bytes_per_pixel()).zip(bytes.chunks_exact_mut(intermediate.bytes_per_pixel())).enumerate()
+        {
+            if index % 1024 == 0 {
+                control.check().map_err(|_| EngineError::Cancelled)?;
+            }
+            convert(input, output)?;
+        }
+        staged.try_write_interleaved_with(coordinate.rect(), &bytes, control).map_err(pixel_error)?;
+    }
+    staged.try_convert_with(target, control).map_err(pixel_error)
 }
 
 fn has_doc(s: &Session) -> std::result::Result<(), String> {
@@ -65,64 +243,132 @@ fn active_id(s: &Session) -> Result<LayerId> {
 }
 
 /// The pixels of `src` inside the selection (or all of them), as a straight-alpha surface.
-fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Clip {
+fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect, color: ClipColorContext) -> Result<Clip> {
     let fmt = src.format();
+    if fmt.channels() == 0 || fmt.bytes_per_pixel() == 0 {
+        return Err(pixel_error("clipboard source has no channels"));
+    }
+    src.try_validate_tile_origins().map_err(pixel_error)?;
+    if let Some(mask) = sel {
+        mask.try_validate_tile_origins().map_err(pixel_error)?;
+    }
     let with_alpha = PixelFormat::new(fmt.mode, fmt.sample, true);
-    let area = match sel {
-        Some(m) => m.content_bounds().intersect(&canvas),
-        None => src.content_bounds().intersect(&canvas),
-    };
+    let area = sel.map_or_else(|| src.content_bounds().intersect(&canvas), |mask| mask.content_bounds().intersect(&canvas));
     let mut out = Surface::new(with_alpha);
     if area.is_empty() {
-        return Clip { surface: out, bounds: Rect::EMPTY };
+        return Ok(Clip { surface: out, bounds: Rect::EMPTY, color, composition: Vec::new() });
     }
-    // Only the selected area is read: converting the whole layer (a 24 MP Background gaining
-    // alpha) cost about a second per Layer via Copy (#668).
-    let n = with_alpha.channels();
-    let mut px = if fmt.alpha {
-        src.read_region(area)
-    } else {
-        let opaque = src.read_region(area);
-        let k = fmt.channels();
-        let mut v = Vec::with_capacity(opaque.len() / k.max(1) * n);
-        for p in opaque.chunks_exact(k.max(1)) {
-            v.extend_from_slice(p);
-            v.push(1.0);
+    for tile in area.tiles() {
+        let rect = tile.rect().intersect(&area);
+        let source = src.try_read_interleaved(rect).map_err(pixel_error)?;
+        let mut bytes = if fmt.alpha {
+            source
+        } else {
+            let length =
+                (source.len() / fmt.bytes_per_pixel()).checked_mul(with_alpha.bytes_per_pixel()).ok_or_else(|| pixel_error("clipboard alpha size overflow"))?;
+            let mut output = Vec::new();
+            output.try_reserve_exact(length).map_err(pixel_error)?;
+            for pixel in source.chunks_exact(fmt.bytes_per_pixel()) {
+                let start = output.len();
+                output.extend_from_slice(pixel);
+                let length = output.len().checked_add(fmt.sample.bytes()).ok_or_else(|| pixel_error("clipboard alpha length overflow"))?;
+                output.resize(length, 0);
+                photocraft_color::try_write_sample_f64(
+                    output.get_mut(start..).ok_or_else(|| pixel_error("clipboard alpha pixel range"))?,
+                    fmt.sample,
+                    fmt.channels(),
+                    1.0,
+                )
+                .map_err(pixel_error)?;
+            }
+            output
+        };
+        if let Some(mask) = sel {
+            let values = mask.try_read_region_f64(rect).map_err(pixel_error)?;
+            for (pixel, coverage) in bytes.chunks_exact_mut(with_alpha.bytes_per_pixel()).zip(values.chunks_exact(mask.channels())) {
+                let coverage = *coverage.first().ok_or_else(|| pixel_error("missing mask sample"))?;
+                if !coverage.is_finite() || !(0.0..=1.0).contains(&coverage) {
+                    return Err(pixel_error("invalid selection coverage"));
+                }
+                // Boolean coverage is an encoded identity/zero-alpha operation,
+                // not sample arithmetic: retain F64 NaN payloads, signed zero
+                // and U32 low bits without decoding/re-encoding source alpha.
+                if coverage == 1.0 {
+                    continue;
+                }
+                let index = with_alpha.channels() - 1;
+                if coverage == 0.0 {
+                    let range = photocraft_color::pixel_channel_byte_range(with_alpha, 0, index, pixel.len()).map_err(pixel_error)?;
+                    pixel.get_mut(range).ok_or_else(|| pixel_error("clipboard alpha pixel range"))?.fill(0);
+                    continue;
+                }
+                if matches!(fmt.sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
+                    return Err(pixel_error("fractional selection copy for authoritative U32/F64 samples is unsupported"));
+                }
+                let value = photocraft_color::try_read_sample_f64(pixel, fmt.sample, index).map_err(pixel_error)?;
+                photocraft_color::try_write_sample_f64(pixel, fmt.sample, index, value * coverage).map_err(pixel_error)?;
+            }
         }
-        v
-    };
-    if let Some(m) = sel {
-        let mask = m.read_region(area);
-        let mk = m.format().channels().max(1);
-        for (p, a) in px.chunks_exact_mut(n).zip(mask.chunks_exact(mk)) {
-            p[n - 1] *= a[0];
-        }
+        out.try_write_interleaved(rect, &bytes).map_err(pixel_error)?;
     }
-    out.write_region(area, &px);
     out.prune();
     let bounds = out.content_bounds();
-    Clip { surface: out, bounds }
+    Ok(Clip { surface: out, bounds, color, composition: Vec::new() })
 }
 
 /// Merged composite of the visible document as a surface in the document's format.
-fn merged_surface(doc: &Document) -> Surface {
+fn merged_surface(doc: &Document) -> Result<Surface> {
     let fmt = doc.pixel_format();
-    photocraft_compose::flatten_to_surface(doc, PixelFormat::new(fmt.mode, fmt.sample, true), None)
+    if doc.xcf_state.is_some() || matches!(fmt.sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
+        let renderer = photocraft_compose::gimp_render::PreparedRenderer::new(doc).map_err(pixel_error)?;
+        let mut surface = Surface::new(PixelFormat::new(fmt.mode, fmt.sample, true));
+        for tile in doc.bounds().tiles() {
+            let rect = tile.rect().intersect(&doc.bounds());
+            let buffer = renderer.render(rect, &mut |_| Ok(())).map_err(pixel_error)?;
+            let mut samples = Vec::new();
+            let count = buffer.px.len().checked_mul(surface.channels()).ok_or_else(|| pixel_error("merged sample count overflow"))?;
+            samples.try_reserve_exact(count).map_err(pixel_error)?;
+            for pixel in buffer.px {
+                if fmt.mode == photocraft_doc::ColorMode::Grayscale {
+                    samples.extend_from_slice(&[pixel[0], pixel[3]]);
+                } else {
+                    samples.extend_from_slice(&pixel);
+                }
+            }
+            surface.try_write_region_f64(rect, &samples).map_err(pixel_error)?;
+        }
+        return Ok(surface);
+    }
+    Ok(photocraft_compose::flatten_to_surface(doc, PixelFormat::new(fmt.mode, fmt.sample, true), None)?)
 }
 
-fn copy(s: &mut Session, merged: bool) -> Result<Value> {
+fn prepare_copy(s: &Session, merged: bool) -> Result<Clip> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = d.doc.bounds();
-    let clip = if merged {
-        lift(&merged_surface(&d.doc), d.doc.selection.as_ref(), canvas)
+    let color = ClipColorContext::from_document(&d.doc)?;
+    let mut clip = if merged {
+        lift(&merged_surface(&d.doc)?, d.doc.selection.as_ref(), canvas, color)?
     } else {
         let id = d.active_layer.ok_or(EngineError::Other("no active layer".into()))?;
         let surf = d.doc.layer(id).and_then(Layer::surface).ok_or(EngineError::Other("the active layer has no pixels".into()))?;
-        lift(surf, d.doc.selection.as_ref(), canvas)
+        lift(surf, d.doc.selection.as_ref(), canvas, color)?
     };
+    if let Some(state) = &d.doc.xcf_state {
+        clip.composition = state
+            .items
+            .iter()
+            .filter(|item| merged || Some(item.item) == d.active_layer.map(photocraft_doc::item_identity::ItemRef::Layer))
+            .filter_map(|item| item.composition.clone())
+            .collect();
+    }
     if clip.bounds.is_empty() {
         return Err(EngineError::Other("Could not copy: the selected area is empty".into()));
     }
+    Ok(clip)
+}
+
+fn copy(s: &mut Session, merged: bool) -> Result<Value> {
+    let clip = prepare_copy(s, merged)?;
     let b = clip.bounds;
     s.clipboard = Some(clip);
     Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()]}))
@@ -135,17 +381,38 @@ fn clear_selected(doc: &mut Document, id: LayerId, background: [f32; 4]) -> Resu
     clear_area(doc, id, area, sel.as_ref(), background)
 }
 
+/// Caller join before a document edit or Cut clipboard preparation.
+pub(crate) fn preflight_clear_selected(doc: &Document, id: LayerId) -> Result<()> {
+    let area = doc.selection.as_ref().map_or(doc.bounds(), |mask| mask.content_bounds().intersect(&doc.bounds()));
+    preflight_clear_area(doc, id, area)
+}
+
+/// Validate the caller's actual chosen extent (Clear may extend off canvas).
+pub(crate) fn preflight_clear_area(doc: &Document, id: LayerId, area: Rect) -> Result<()> {
+    let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    let Some(surface) = layer.surface() else { return Ok(()) };
+    if matches!(surface.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
+        if crate::extra_cmds::is_background(layer) { return Err(pixel_error("authoritative U32/F64 Background fill-clear is unsupported")); }
+        crate::pixels::preflight_clear_surface(surface, area, doc.selection.as_ref(), &photocraft_raster::Interrupt::NONE)?;
+    }
+    Ok(())
+}
+
 /// Cut / Clear on a layer: makes the selected pixels transparent. The Background can't hold
 /// transparency, so there the area is filled with the background colour instead (Photoshop).
 pub(crate) fn clear_area(doc: &mut Document, id: LayerId, area: Rect, sel: Option<&Surface>, background: [f32; 4]) -> Result<()> {
     let bg = crate::extra_cmds::is_background(doc.layer(id).ok_or(EngineError::NoLayer(id))?);
+    let source = doc.layer(id).and_then(Layer::surface);
+    let wide = source.is_some_and(|surface| matches!(surface.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64));
+    if wide && bg { return Err(pixel_error("authoritative U32/F64 Background fill-clear is unsupported")); }
+    if wide && let Some(source) = source { crate::pixels::preflight_clear_surface(source, area, sel, &photocraft_raster::Interrupt::NONE)?; }
     let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
     if bg {
         crate::pixels::fill_surface(surf, area, background, sel, true);
     } else {
-        crate::pixels::clear_surface(surf, area, sel);
+        crate::pixels::try_clear_surface(surf, area, sel, &photocraft_raster::Interrupt::NONE)?;
     }
-    surf.prune();
+    if !wide { surf.prune(); }
     Ok(())
 }
 
@@ -153,6 +420,7 @@ pub(crate) fn clear_area(doc: &mut Document, id: LayerId, area: Rect, sel: Optio
 /// on `center` (the view centre from the UI) or the canvas, unless they already overlap the canvas.
 fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
     let clip = s.clipboard.clone().ok_or(EngineError::Other("the clipboard is empty".into()))?;
+    require_ordinary_clip(&clip)?;
     let Some(d) = s.active() else {
         // Nothing open to paste into: the clipboard becomes a document of its own (#368).
         return new_from_clipboard(s);
@@ -162,10 +430,11 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
     }
     let canvas = d.doc.bounds();
     let fmt = d.doc.pixel_format();
-    let (dx, dy) = paste_offset(&clip, canvas, p, in_place);
-    let moved = shifted(&clip.surface, dx, dy);
+    let (dx, dy) = paste_offset(&clip, canvas, p, in_place)?;
+    let moved = shifted(&clip.surface, dx, dy)?;
     let target = PixelFormat::new(fmt.mode, fmt.sample, true);
-    let surf = if moved.format() == target { moved } else { moved.convert(target) };
+    let target_profile = crate::color_cmds::try_document_profile(&d.doc)?;
+    let surf = convert_clip(&moved, &clip.color, target, &target_profile)?;
     let id = s.edit("Paste", |doc, active| {
         let mut l = Layer::raster(doc.next_layer_name("Layer"), target);
         *crate::pixels_mut(&mut l)? = surf;
@@ -180,18 +449,34 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
 /// How far a paste moves the clipboard pixels: not at all in place (or when they lie on the
 /// canvas and no `center` is given), else onto `center` (the view centre from the UI) or the
 /// canvas centre.
-fn paste_offset(clip: &Clip, canvas: Rect, p: &Value, in_place: bool) -> (i32, i32) {
+fn paste_offset(clip: &Clip, canvas: Rect, p: &Value, in_place: bool) -> Result<(i32, i32)> {
     if in_place || (clip.bounds.intersect(&canvas) == clip.bounds && p.get("center").is_none()) {
-        return (0, 0);
+        return Ok((0, 0));
     }
-    let c = p.get("center").and_then(Value::as_array).filter(|a| a.len() >= 2).map(|a| (a[0].as_f64().unwrap_or(0.0), a[1].as_f64().unwrap_or(0.0)));
-    let (cx, cy) = c.unwrap_or(((canvas.x0 + canvas.x1) as f64 / 2.0, (canvas.y0 + canvas.y1) as f64 / 2.0));
+    let center = p.get("center").and_then(Value::as_array).filter(|values| values.len() >= 2).map(|values| {
+        (
+            values.first().and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0),
+            values.get(1).and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.0),
+        )
+    });
+    let (cx, cy) = center.unwrap_or(((f64::from(canvas.x0) + f64::from(canvas.x1)) / 2.0, (f64::from(canvas.y0) + f64::from(canvas.y1)) / 2.0));
     let b = clip.bounds;
-    ((cx - (b.x0 + b.x1) as f64 / 2.0).round() as i32, (cy - (b.y0 + b.y1) as f64 / 2.0).round() as i32)
+    let dx = (cx - (f64::from(b.x0) + f64::from(b.x1)) / 2.0).round();
+    let dy = (cy - (f64::from(b.y0) + f64::from(b.y1)) / 2.0).round();
+    if !dx.is_finite() || !dy.is_finite() || dx < f64::from(i32::MIN) || dx > f64::from(i32::MAX) || dy < f64::from(i32::MIN) || dy > f64::from(i32::MAX) {
+        return Err(pixel_error("paste offset exceeds supported integer coordinates"));
+    }
+    Ok((dx as i32, dy as i32))
 }
 
-fn shifted(surface: &Surface, dx: i32, dy: i32) -> Surface {
-    if dx == 0 && dy == 0 { surface.clone() } else { photocraft_algo::resample::translate_surface(surface, dx, dy) }
+fn shifted(surface: &Surface, dx: i32, dy: i32) -> Result<Surface> {
+    surface.try_validate_tile_origins().map_err(pixel_error)?;
+    if dx == 0 && dy == 0 {
+        surface.try_validate_tile_origins().map_err(pixel_error)?;
+        Ok(surface.clone())
+    } else {
+        photocraft_algo::wide::try_translate(surface, surface.content_bounds(), dx, dy, &photocraft_raster::Interrupt::NONE).map_err(pixel_error)
+    }
 }
 
 /// Paste into the targeted layer mask, alpha channel or Quick Mask (`"target"`) instead of as a
@@ -200,16 +485,61 @@ fn shifted(surface: &Surface, dx: i32, dy: i32) -> Surface {
 /// through. One history step.
 pub(crate) fn paste_to_target(s: &mut Session, p: &Value, in_place: bool, limit: Option<&Surface>, label: &str) -> Result<Value> {
     let clip = s.clipboard.clone().ok_or(EngineError::Other("the clipboard is empty".into()))?;
+    require_ordinary_clip(&clip)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = d.doc.bounds();
     let layer = d.active_layer;
-    let (dx, dy) = paste_offset(&clip, canvas, p, in_place);
-    let src = shifted(&clip.surface, dx, dy);
+    let (dx, dy) = paste_offset(&clip, canvas, p, in_place)?;
+    let moved = shifted(&clip.surface, dx, dy)?;
+    let document_profile = crate::color_cmds::try_document_profile(&d.doc)?;
+    let gray_profile = if d.doc.mode == photocraft_doc::ColorMode::Grayscale {
+        document_profile
+    } else {
+        std::sync::Arc::new(photocraft_cms::Builtin::SGray.profile().clone())
+    };
+    let target = PixelFormat::new(photocraft_doc::ColorMode::Grayscale, moved.format().sample, true);
+    let src = convert_clip(&moved, &clip.color, target, &gray_profile)?;
     let area = src.content_bounds().intersect(&canvas);
     s.edit(label, |doc, _| {
         let (surf, _) = crate::channel_cmds::target_surface(doc, layer, p)?;
-        crate::fill_cmds::composite_over(surf, &src, area, limit);
-        surf.prune();
+        if surf.format().mode != photocraft_doc::ColorMode::Grayscale || surf.channels() != 1 {
+            return Err(pixel_error("luminosity target must be a single coverage channel"));
+        }
+        let mut staged = surf.clone();
+        for tile in area.tiles() {
+            let rect = tile.rect().intersect(&area);
+            let samples = src.try_read_region_f64(rect).map_err(pixel_error)?;
+            let selection = limit.map(|mask| mask.try_read_region_f64(rect)).transpose().map_err(pixel_error)?;
+            let mut raw = staged.try_read_interleaved(rect).map_err(pixel_error)?;
+            let channels = limit.map_or(1, Surface::channels);
+            for (index, (pixel, destination)) in samples.as_chunks::<2>().0.iter().zip(raw.chunks_exact_mut(surf.format().bytes_per_pixel())).enumerate() {
+                let selection = if let Some(values) = &selection {
+                    *values
+                        .get(index.checked_mul(channels).ok_or_else(|| pixel_error("selection offset overflow"))?)
+                        .ok_or_else(|| pixel_error("missing selection coverage"))?
+                } else {
+                    1.0
+                };
+                let alpha = pixel[1];
+                if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) || !selection.is_finite() || !(0.0..=1.0).contains(&selection) {
+                    return Err(pixel_error("invalid paste coverage"));
+                }
+                let coverage = alpha * selection;
+                if coverage == 0.0 {
+                    continue;
+                }
+                let previous = photocraft_color::try_read_sample_f64(destination, surf.format().sample, 0).map_err(pixel_error)?;
+                let luminosity = pixel[0].clamp(0.0, 1.0);
+                let value = previous * (1.0 - coverage) + luminosity * coverage;
+                if !value.is_finite() {
+                    return Err(pixel_error("nonfinite pasted luminosity"));
+                }
+                photocraft_color::try_write_sample_f64(destination, surf.format().sample, 0, value).map_err(pixel_error)?;
+            }
+            staged.try_write_interleaved(rect, &raw).map_err(pixel_error)?;
+        }
+        staged.prune();
+        *surf = staged;
         doc.selection = None;
         Ok(())
     })?;
@@ -220,6 +550,7 @@ pub(crate) fn paste_to_target(s: &mut Session, p: &Value, in_place: bool, limit:
 /// format it was copied in (#368).
 fn new_from_clipboard(s: &mut Session) -> Result<Value> {
     let clip = s.clipboard.clone().ok_or(EngineError::Other("the clipboard is empty".into()))?;
+    require_ordinary_clip(&clip)?;
     let b = clip.bounds;
     let (w, h) = (b.width(), b.height());
     if w == 0 || h == 0 {
@@ -227,12 +558,19 @@ fn new_from_clipboard(s: &mut Session) -> Result<Value> {
     }
     let fmt = clip.surface.format();
     let target = PixelFormat::new(fmt.mode, fmt.sample, true);
-    let moved = if b.x0 == 0 && b.y0 == 0 { clip.surface } else { photocraft_algo::resample::translate_surface(&clip.surface, -b.x0, -b.y0) };
+    let moved = shifted(
+        &clip.surface,
+        b.x0.checked_neg().ok_or_else(|| pixel_error("clipboard offset overflow"))?,
+        b.y0.checked_neg().ok_or_else(|| pixel_error("clipboard offset overflow"))?,
+    )?;
+    clip.color.profile(fmt.mode)?;
     let mut doc = Document::new("Untitled", photocraft_geom::Size::new(w, h), fmt.mode, fmt.sample);
+    clip.color.apply(&mut doc);
     let mut l = Layer::raster(doc.next_layer_name("Layer"), target);
-    *crate::pixels_mut(&mut l)? = if moved.format() == target { moved } else { moved.convert(target) };
+    *crate::pixels_mut(&mut l)? =
+        if moved.format() == target { moved } else { moved.try_convert(target).map_err(|e| crate::EngineError::Other(format!("pixel conversion: {e}")))? };
     doc.layers.push(l);
-    let i = s.add_document(doc, None);
+    let i = s.add_document(doc, None)?;
     Ok(json!({"document": i, "width": w, "height": h}))
 }
 
@@ -254,7 +592,7 @@ fn layer_via(s: &mut Session, cut: bool) -> Result<Value> {
         return Ok(json!({"layer": nid.0}));
     }
     let surf = d.doc.layer(id).and_then(Layer::surface).ok_or(EngineError::Other("the active layer has no pixels".into()))?;
-    let clip = lift(surf, d.doc.selection.as_ref(), d.doc.bounds());
+    let clip = lift(surf, d.doc.selection.as_ref(), d.doc.bounds(), ClipColorContext::from_document(&d.doc)?)?;
     if clip.bounds.is_empty() {
         return Err(EngineError::Other("Could not complete the command: the selected area is empty".into()));
     }
@@ -285,7 +623,7 @@ fn merge_visible(s: &mut Session) -> Result<Value> {
         // Composite of visible layers only (hidden ones stay where they are).
         let mut solo = doc.clone();
         solo.layers.retain(|l| l.visible);
-        let buf = photocraft_compose::flatten(&solo);
+        let buf = photocraft_compose::flatten(&solo)?;
         let buf = if is_background { buf.over_background([1.0, 1.0, 1.0]) } else { buf };
         let fmt = doc.pixel_format();
         let fmt = if is_background { fmt } else { PixelFormat::new(fmt.mode, fmt.sample, true) };
@@ -413,7 +751,7 @@ fn auto_adjust(s: &mut Session, kind: &str) -> Result<Value> {
         let mode = doc.mode;
         let transfer = photocraft_compose::adjust::Transfer::for_doc(doc);
         let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
-        crate::pixels::adjust_surface_with_transfer(surf, &adj, sel.as_ref(), mode, transfer);
+        crate::pixels::adjust_surface_with_transfer(surf, &adj, sel.as_ref(), mode, transfer)?;
         Ok(())
     })?;
     Ok(Value::Null)
@@ -441,8 +779,8 @@ fn transform_again_copy(s: &mut Session) -> Result<Value> {
     match s.execute("edit.transform", p) {
         Ok(r) => {
             let st = s.active_mut().ok_or(EngineError::NoDocument)?;
-            st.history.purge_last();
-            st.history.set_current_label("Transform Again");
+            st.history.purge_last(&crate::read_control_none())?;
+            st.history.set_current_label("Transform Again", &crate::read_control_none())?;
             Ok(r)
         }
         Err(e) => {
@@ -450,7 +788,7 @@ fn transform_again_copy(s: &mut Session) -> Result<Value> {
             // it back, leaving nothing to redo.
             s.undo();
             if let Some(st) = s.active_mut() {
-                st.history.clear_redo();
+                st.history.clear_redo(&crate::read_control_none())?;
             }
             Err(e)
         }
@@ -497,36 +835,14 @@ fn transform_again_params(s: &Session) -> Result<Value> {
 }
 
 /// View › New Guide / guide moves (undoable, like Photoshop's "New Guide"/"Move Guide" states).
+mod guide_controlled;
+
+pub(crate) fn guide_dispatch_preflight(s: &Session, p: &Value, op: &str, background: bool) -> Result<()> {
+    guide_controlled::dispatch_preflight(s, p, op, background)
+}
+
 fn guide_cmd(s: &mut Session, p: &Value, op: &str) -> Result<Value> {
-    let vertical = p.get("orientation").and_then(Value::as_str).unwrap_or("horizontal") == "vertical";
-    let pos = p.get("position").and_then(Value::as_f64).map(|v| v as f32);
-    let index = p.get("index").and_then(Value::as_u64).map(|v| v as usize);
-    let label = match op {
-        "new" => "New Guide",
-        "move" => "Move Guide",
-        "delete" => "Delete Guide",
-        _ => "Clear Guides",
-    };
-    s.edit(label, |doc, _| {
-        let g = if vertical { &mut doc.guides.vertical } else { &mut doc.guides.horizontal };
-        match op {
-            "new" => g.push(pos.ok_or(EngineError::Other("missing `position`".into()))?),
-            "move" => {
-                let i = index.filter(|i| *i < g.len()).ok_or(EngineError::Other("no such guide".into()))?;
-                g[i] = pos.ok_or(EngineError::Other("missing `position`".into()))?;
-            }
-            "delete" => {
-                let i = index.filter(|i| *i < g.len()).ok_or(EngineError::Other("no such guide".into()))?;
-                g.remove(i);
-            }
-            _ => {
-                doc.guides.horizontal.clear();
-                doc.guides.vertical.clear();
-            }
-        }
-        Ok(())
-    })?;
-    Ok(Value::Null)
+    guide_controlled::run(s, p, op)
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -540,9 +856,13 @@ pub fn specs() -> Vec<CommandSpec> {
             // Refuse a locked layer before copying, so a refused Cut leaves the clipboard alone.
             let id = active_id(s)?;
             crate::commands::check_pixels_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
-            let r = copy(s, false)?;
+            preflight_clear_selected(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
+            let clip = prepare_copy(s, false)?;
+            let b = clip.bounds;
+            let r = json!({"bounds": [b.x0, b.y0, b.width(), b.height()]});
             let bg = s.tools.background;
             s.edit("Cut Pixels", |doc, _| clear_selected(doc, id, bg))?;
+            s.clipboard = Some(clip);
             Ok(r)
         }),
         spec!("edit.copy", "Copy", &["Edit"], Some("Cmd+C"), "{}", has_layer_pixels, |s, _| copy(s, false)),
@@ -595,14 +915,14 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             |s, _| transform_again_copy(s)
         ),
-        spec!("view.newGuide", "New Guide…", &["View"], None, r##"{"orientation":"horizontal|vertical","position":px}"##, has_doc, |s, p| guide_cmd(
+        spec!("view.newGuide", "New Guide…", &["View"], None, r##"{"orientation":"horizontal|vertical","position":finite number,"unit":"px|in|mm|pt|pc|document"="px","documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (vertical uses X DPI; horizontal uses Y DPI; native f32 position storage)"##, has_doc, |s, p| guide_cmd(
             s, p, "new"
         )),
-        spec!("view.moveGuide", "Move Guide", &[], None, r##"{"orientation":"horizontal|vertical","index":n,"position":px}"##, has_doc, |s, p| guide_cmd(
+        spec!("view.moveGuide", "Move Guide", &[], None, r##"{"orientation":"horizontal|vertical","index":n,"position":finite number,"unit":"px|in|mm|pt|pc|document"="px","documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (per-axis DPI; native f32 position storage)"##, has_doc, |s, p| guide_cmd(
             s, p, "move"
         )),
-        spec!("view.deleteGuide", "Delete Guide", &[], None, r##"{"orientation":"horizontal|vertical","index":n}"##, has_doc, |s, p| guide_cmd(s, p, "delete")),
-        spec!("view.clearGuides", "Clear Guides", &["View"], None, "{}", has_doc, |s, p| guide_cmd(s, p, "clear")),
+        spec!("view.deleteGuide", "Delete Guide", &[], None, r##"{"orientation":"horizontal|vertical","index":n,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_doc, |s, p| guide_cmd(s, p, "delete")),
+        spec!("view.clearGuides", "Clear Guides", &["View"], None, r##"{"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_doc, |s, p| guide_cmd(s, p, "clear")),
     ]
 }
 
@@ -611,7 +931,7 @@ mod tests {
     use super::*;
 
     fn session() -> Session {
-        let mut s = Session::new();
+        let mut s = Session::default();
         s.execute("file.new", json!({"width": 100, "height": 100})).unwrap();
         s.execute("layer.new.layer", json!({})).unwrap();
         s.edit("paint", |doc, a| {
@@ -629,10 +949,202 @@ mod tests {
 
     /// #368: the clipboard as a document of its own, from New from Clipboard or a Paste with
     /// nothing open, at every depth.
+    fn clipboard_float_document(mode: photocraft_doc::ColorMode, profile: photocraft_cms::Builtin, samples: &[f64]) -> Document {
+        let mut doc = Document::new("Own clipboard", photocraft_geom::Size::new(2, 2), mode, photocraft_color::SampleType::F64);
+        doc.icc_profile = Some(profile.profile().to_bytes());
+        doc.sample_encoding = Some(photocraft_doc::SampleEncoding::NonlinearProfile);
+        let mut layer = Layer::raster("Literal pixels", doc.pixel_format());
+        layer.surface_mut().unwrap().try_write_region_f64(Rect::new(0, 0, 1, 1), samples).unwrap();
+        doc.layers.push(layer);
+        doc
+    }
+    #[test]
+    fn clipboard_retains_assigned_profile_and_converts_crossmode_and_same_mode() {
+        use photocraft_cms::{Builtin, Intent, Transform};
+        use photocraft_doc::ColorMode;
+        let mut s = Session::default();
+        let samples = [0.5 + 2.0_f64.powi(-40), 0.2, 0.7, 1.0];
+        s.add_document(clipboard_float_document(ColorMode::Rgb, Builtin::DisplayP3, &samples), None).unwrap();
+        copy(&mut s, false).unwrap();
+        let context = s.clipboard.as_ref().unwrap().color.clone();
+        let raw = s.clipboard.as_ref().unwrap().surface.try_read_interleaved(Rect::new(0, 0, 1, 1)).unwrap();
+        assert_eq!(raw, samples.iter().flat_map(|v| v.to_ne_bytes()).collect::<Vec<_>>());
+        for (mode, destination) in [(ColorMode::Grayscale, Builtin::GrayGamma22), (ColorMode::Rgb, Builtin::AdobeRgbCompat)] {
+            let doc = clipboard_float_document(mode, destination, if mode == ColorMode::Grayscale { &[0.0, 1.0] } else { &[0.0, 0.0, 0.0, 1.0] });
+            let target = crate::color_cmds::try_document_profile(&doc).unwrap();
+            let source = context.profile(ColorMode::Rgb).unwrap();
+            let transform = Transform::new(&source, &target, Intent::RelativeColorimetric, false).unwrap();
+            let mut expected = [0.0; 3];
+            transform.try_eval_f64(&samples[..3], &mut expected[..mode.color_channels()]).unwrap();
+            s.add_document(doc, None).unwrap();
+            paste(&mut s, &json!({}), true).unwrap();
+            let st = s.active().unwrap();
+            let surface = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap();
+            let actual = surface.try_read_region_f64(Rect::new(0, 0, 1, 1)).unwrap();
+            for (a, b) in actual[..mode.color_channels()].iter().zip(expected) {
+                assert!((*a - b).abs() < 1e-12);
+            }
+            assert_eq!(actual.last(), Some(&1.0));
+        }
+        let before = s.active().unwrap().doc.as_ref().clone();
+        let history = s.active().unwrap().history.past_len();
+        s.clipboard.as_mut().unwrap().color.icc_profile = Some(std::sync::Arc::new(vec![0; 128]));
+        assert!(paste(&mut s, &json!({}), true).is_err());
+        assert_eq!(*s.active().unwrap().doc, before);
+        assert_eq!(s.active().unwrap().history.past_len(), history);
+    }
+    #[test]
+    #[ignore = "24MP release clipboard benchmark"]
+    fn clipboard_checked_24mp() {
+        let area = Rect::new(0, 0, 6000, 4000);
+        let mut doc = Document::new("Own24MP", photocraft_geom::Size::new(6000, 4000), photocraft_doc::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        let raw: Vec<_> = [128_u8, 64, 32, 255].repeat(24_000_000);
+        let mut layer = Layer::raster("Own uniform pixels", doc.pixel_format());
+        *layer.surface_mut().unwrap() = Surface::try_from_interleaved(doc.pixel_format(), area, &raw).unwrap();
+        doc.layers.push(layer);
+        drop(raw);
+        let mut s = Session::new();
+        s.add_document(doc, None).unwrap();
+        let start = std::time::Instant::now();
+        copy(&mut s, false).unwrap();
+        println!("24MP checked exact-native copy {:?}", start.elapsed());
+        s.add_document(
+            Document::new("Gray target", photocraft_geom::Size::new(6000, 4000), photocraft_doc::ColorMode::Grayscale, photocraft_color::SampleType::U8),
+            None,
+        )
+        .unwrap();
+        let start = std::time::Instant::now();
+        paste(&mut s, &json!({}), true).unwrap();
+        println!("24MP checked RGB-to-Gray CMS paste {:?}", start.elapsed());
+    }
+    #[test]
+    fn clipboard_checked_conversion_rejects_nonfinite_narrowing_and_cancels_atomically() {
+        use photocraft_cms::Builtin;
+        use photocraft_doc::{ColorMode, SampleType};
+        let area = Rect::new(0, 0, 1, 1);
+        let doc = Document::new("Float32 source", photocraft_geom::Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
+        let color = ClipColorContext::from_document(&doc).unwrap();
+        for first in [f32::MAX, f32::NAN] {
+            let raw: Vec<_> = [first, 0.2, 0.7, 1.0].iter().flat_map(|v| v.to_ne_bytes()).collect();
+            let source = Surface::try_from_interleaved(PixelFormat::RGBA32F, area, &raw).unwrap();
+            let before = source.clone();
+            assert!(convert_clip(&source, &color, PixelFormat::RGBA32F, Builtin::LinearSrgb.profile()).is_err());
+            assert_eq!(source, before);
+        }
+        let doc = clipboard_float_document(ColorMode::Rgb, Builtin::Srgb, &[0.5, 0.2, 0.7, 1.0]);
+        let color = ClipColorContext::from_document(&doc).unwrap();
+        let payload = f64::from_bits(0x7ff8_0000_0000_1234);
+        let raw: Vec<_> = [0.5, 0.2, 0.7, payload].iter().flat_map(|v| v.to_ne_bytes()).collect();
+        let source = Surface::try_from_interleaved(PixelFormat::RGBA64F, area, &raw).unwrap();
+        let before = source.clone();
+        let gray = PixelFormat::new(ColorMode::Grayscale, SampleType::F64, true);
+        let converted = convert_clip(&source, &color, gray, Builtin::GrayGamma22.profile()).unwrap();
+        assert_eq!(converted.try_read_interleaved(area).unwrap().get(8..16).unwrap(), payload.to_ne_bytes());
+        let cancelled = photocraft_raster::Interrupt::cancel_only(&|| true);
+        assert!(matches!(convert_clip_with(&source, &color, gray, Builtin::GrayGamma22.profile(), &cancelled), Err(EngineError::Cancelled)));
+        let polls = std::sync::atomic::AtomicUsize::new(0);
+        let cancel = || polls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 10;
+        assert!(convert_clip_with(&source, &color, gray, Builtin::GrayGamma22.profile(), &photocraft_raster::Interrupt::cancel_only(&cancel)).is_err());
+        assert!(polls.load(std::sync::atomic::Ordering::Relaxed) > 10);
+        assert_eq!(source, before);
+    }
+    #[test]
+    fn clipboard_integer_codes_and_selection_keep_color_samples_exact() {
+        use photocraft_doc::{ColorMode, SampleType};
+        let area = Rect::new(0, 0, 1, 1);
+        let mut doc = Document::new("U32 clipboard", photocraft_geom::Size::new(2, 2), ColorMode::Rgb, SampleType::U32);
+        let codes = [2_147_483_648_u32, 1_610_612_736, 4_294_967_294, u32::MAX];
+        let raw: Vec<_> = codes.iter().flat_map(|v| v.to_ne_bytes()).collect();
+        let mut layer = Layer::raster("Own integer markers", doc.pixel_format());
+        *layer.surface_mut().unwrap() = Surface::try_from_interleaved(doc.pixel_format(), area, &raw).unwrap();
+        doc.layers.push(layer);
+        let mut s = Session::new();
+        s.add_document(doc, None).unwrap();
+        copy(&mut s, false).unwrap();
+        assert_eq!(s.clipboard.as_ref().unwrap().surface.try_read_interleaved(area).unwrap(), raw);
+        paste(&mut s, &json!({}), true).unwrap();
+        let st = s.active().unwrap();
+        assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().try_read_interleaved(area).unwrap(), raw);
+        let colors = [0.5 + 2.0_f64.powi(-40), -0.0, 0.7, 1.0];
+        let mut doc = clipboard_float_document(ColorMode::Rgb, photocraft_cms::Builtin::Srgb, &colors);
+        let mut selection = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false));
+        let coverage = 0.375 + 2.0_f64.powi(-40);
+        selection.try_write_region_f64(area, &[coverage]).unwrap();
+        doc.selection = Some(selection);
+        s.add_document(doc, None).unwrap();
+        copy(&mut s, false).unwrap();
+        let raw = s.clipboard.as_ref().unwrap().surface.try_read_interleaved(area).unwrap();
+        let expected: Vec<_> = [colors[0], colors[1], colors[2], coverage].iter().flat_map(|v| v.to_ne_bytes()).collect();
+        assert_eq!(raw, expected);
+    }
+    #[test]
+    fn clipboard_implicit_encoding_new_document_and_merged_lowbits_are_retained() {
+        use photocraft_cms::Builtin;
+        use photocraft_doc::{ColorMode, SampleEncoding, WorkingProfileInterpretation};
+        let samples = [0.5 + 2.0_f64.powi(-40), -0.0, 0.7, 1.0];
+        let mut doc = clipboard_float_document(ColorMode::Rgb, Builtin::LinearSrgb, &samples);
+        doc.sample_encoding = Some(SampleEncoding::Linear);
+        doc.icc_profile = Some(
+            photocraft_cms::xcf_color::effective_profile(None, photocraft_cms::ColorSpace::Rgb, photocraft_cms::xcf_color::Encoding::Linear)
+                .unwrap()
+                .to_bytes(),
+        );
+        doc.working_profile_interpretation = WorkingProfileInterpretation::implicit_srgb(doc.icc_profile.as_ref().unwrap());
+        let mut s = Session::default();
+        s.add_document(doc, None).unwrap();
+        for merged in [false, true] {
+            copy(&mut s, merged).unwrap();
+            let clip = s.clipboard.as_ref().unwrap();
+            assert_eq!(clip.surface.try_read_interleaved(Rect::new(0, 0, 1, 1)).unwrap(), samples.iter().flat_map(|v| v.to_ne_bytes()).collect::<Vec<_>>());
+            assert_eq!(clip.color.sample_encoding, Some(SampleEncoding::Linear));
+        }
+        let color = s.clipboard.as_ref().unwrap().color.clone();
+        new_from_clipboard(&mut s).unwrap();
+        let doc = &s.active().unwrap().doc;
+        assert_eq!(doc.icc_profile, color.icc_profile);
+        assert_eq!(doc.sample_encoding, color.sample_encoding);
+        assert_eq!(doc.working_profile_interpretation, color.interpretation);
+        assert_eq!(
+            doc.layers[0].surface().unwrap().try_read_interleaved(doc.bounds()).unwrap(),
+            samples.iter().flat_map(|v| v.to_ne_bytes()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn checked_paste_quantization_and_model_error_preserve_history() {
+        let mut s = session();
+        let value = (128.5_f64 - 1e-8) / 255.0;
+        let raw: Vec<_> = [value, 0.25, 0.5, 1.0].iter().flat_map(|v| v.to_ne_bytes()).collect();
+        let area = Rect::new(0, 0, 1, 1);
+        s.clipboard = Some(Clip {
+            surface: Surface::try_from_interleaved(PixelFormat::RGBA64F, area, &raw).unwrap(),
+            bounds: area,
+            composition: Vec::new(),
+            color: ClipColorContext::from_document(&s.active().unwrap().doc).unwrap(),
+        });
+        let before = s.active().unwrap().doc.as_ref().clone();
+        s.execute("edit.pasteSpecial.pasteInPlace", json!({})).unwrap();
+        let st = s.active().unwrap();
+        let surface = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap();
+        assert_eq!(surface.try_read_interleaved(area).unwrap()[0], 128);
+        s.undo();
+        assert_eq!(*s.active().unwrap().doc, before);
+        s.clipboard = Some(Clip {
+            surface: Surface::new(PixelFormat::GRAYA8),
+            bounds: area,
+            composition: Vec::new(),
+            color: ClipColorContext::from_document(&s.active().unwrap().doc).unwrap(),
+        });
+        let history = s.active().unwrap().history.past_len();
+        assert!(s.execute("edit.pasteSpecial.pasteInPlace", json!({})).is_err());
+        assert_eq!(*s.active().unwrap().doc, before);
+        assert_eq!(s.active().unwrap().history.past_len(), history);
+    }
+
     #[test]
     fn new_from_clipboard_and_paste_with_no_document() {
         for depth in [8, 16, 32] {
-            let mut s = Session::new();
+            let mut s = Session::default();
             assert!(!s.is_enabled("file.newFromClipboard") && !s.is_enabled("edit.paste"), "nothing copied yet");
             assert!(s.execute("file.newFromClipboard", json!({})).is_err());
             s.execute("file.new", json!({"width": 100, "height": 100, "depth": depth})).unwrap();
@@ -711,7 +1223,7 @@ mod tests {
     /// #1035: a `depth`-bit document with a blue-grey square copied from layer `src` (at
     /// (5,5)-(15,15)) and an active layer `m` above it with a hide-all mask.
     fn mask_target_session(depth: u32) -> (Session, LayerId, LayerId) {
-        let mut s = Session::new();
+        let mut s = Session::default();
         s.execute("file.new", json!({"width": 40, "height": 40, "depth": depth})).unwrap();
         let src = LayerId(s.execute("layer.new.layer", json!({"name": "src"})).unwrap()["layer"].as_u64().unwrap());
         s.execute("select.rect", json!({"x": 5, "y": 5, "width": 10, "height": 10})).unwrap();
@@ -726,7 +1238,11 @@ mod tests {
     /// The luminosity of `src`'s pixel at (`x`, `y`): what a paste into a mask writes there.
     fn luminosity(s: &Session, src: LayerId, x: i32, y: i32) -> f32 {
         let p = s.active().unwrap().doc.layer(src).unwrap().surface().unwrap().rgba(x, y);
-        photocraft_color::convert::rgb_to_gray([p[0], p[1], p[2]])
+        let source = crate::color_cmds::try_document_profile(&s.active().unwrap().doc).unwrap();
+        let t = photocraft_cms::Transform::new(&source, photocraft_cms::Builtin::SGray.profile(), photocraft_cms::Intent::RelativeColorimetric, false).unwrap();
+        let mut output = [0.0_f64];
+        t.try_eval_f64(&[f64::from(p[0]), f64::from(p[1]), f64::from(p[2])], &mut output).unwrap();
+        output[0] as f32
     }
 
     fn mask_at(s: &Session, id: LayerId, x: i32, y: i32) -> f32 {
@@ -843,7 +1359,7 @@ mod tests {
     fn cut_and_clear_on_the_background_fill_with_the_background_colour() {
         // The Background keeps its transparency lock: cutting fills with the background colour.
         let fresh = || {
-            let mut s = Session::new();
+            let mut s = Session::default();
             s.execute("file.new", json!({"width": 40, "height": 30})).unwrap();
             s.tools.background = [1.0, 0.0, 0.0, 1.0];
             s.execute("select.rect", json!({"x": 5, "y": 5, "width": 10, "height": 10})).unwrap();
@@ -874,7 +1390,7 @@ mod tests {
         // #668: lift reads only the selected area now; the result must be what converting the
         // whole layer gave: the colour, with the selection's coverage as alpha.
         for depth in [8, 16, 32] {
-            let mut s = Session::new();
+            let mut s = Session::default();
             s.execute("file.new", json!({"width": 40, "height": 30, "depth": depth, "background": "#336699"})).unwrap();
             s.edit("partial selection", |doc, _| {
                 let mut m = photocraft_raster::Surface::new(PixelFormat::GRAY8);
@@ -980,7 +1496,7 @@ mod tests {
 
     #[test]
     fn auto_tone_stretches_a_low_contrast_layer() {
-        let mut s = Session::new();
+        let mut s = Session::default();
         s.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
         s.edit("grey ramp", |doc, _| {
             let surf = doc.layers[0].surface_mut().unwrap();
@@ -1062,5 +1578,48 @@ mod tests {
         s.execute("view.clearGuides", json!({})).unwrap();
         assert!(s.active().unwrap().doc.guides.vertical.is_empty());
         assert!(s.execute("view.moveGuide", json!({"orientation": "vertical", "index": 3, "position": 1})).is_err());
+    }
+
+    #[test]
+    fn guide_physical_units_use_independent_axes_and_preserve_redo_on_refusal() {
+        let mut s = session();
+        s.edit("Own axes", |document, _| {
+            document.set_physical_resolution(photocraft_doc::PhysicalResolution {
+                x_dpi: 144.0, y_dpi: 288.0, unit: photocraft_doc::PhysicalUnit::Inch,
+            }).map_err(|error| EngineError::Other(error.to_string()))?;
+            Ok(())
+        }).unwrap();
+        s.execute("view.newGuide", json!({"orientation":"vertical","position":1.0,"unit":"in"})).unwrap();
+        s.execute("view.newGuide", json!({"orientation":"horizontal","position":25.4,"unit":"mm"})).unwrap();
+        assert_eq!(s.active().unwrap().doc.guides.vertical, vec![144.0]);
+        assert_eq!(s.active().unwrap().doc.guides.horizontal, vec![288.0]);
+        s.execute("view.moveGuide", json!({"orientation":"vertical","index":0,"position":72.0,"unit":"pt"})).unwrap();
+        assert_eq!(s.active().unwrap().doc.guides.vertical, vec![144.0]);
+        s.execute("view.moveGuide", json!({"orientation":"horizontal","index":0,"position":-0.5,"unit":"document"})).unwrap();
+        assert_eq!(s.active().unwrap().doc.guides.horizontal, vec![-144.0]);
+        assert!(s.undo());
+        let before = s.active().unwrap().doc.clone();
+        let revision = s.active().unwrap().revision;
+        for parameters in [json!({"position":f64::MAX}), json!({"position":"wrong"}), json!({"position":1.0,"unit":"unknown"})] {
+            assert!(s.execute("view.newGuide", parameters).is_err());
+            assert_eq!(s.active().unwrap().doc, before);
+            assert_eq!(s.active().unwrap().revision, revision);
+        }
+        assert!(s.redo());
+        assert_eq!(s.active().unwrap().doc.guides.horizontal, vec![-144.0]);
+    }
+
+    #[test]
+    fn captured_guide_target_refuses_an_intervening_edit_without_touching_guides_or_redo() {
+        let mut s = session();
+        let document = s.active().unwrap().doc.id.0.to_string();
+        let revision = s.active().unwrap().revision.to_string();
+        s.edit("Own intervening edit", |document, _| { document.name = "Changed name".into(); Ok(()) }).unwrap();
+        assert!(s.undo());
+        let before = s.active().unwrap().doc.clone();
+        assert!(s.execute("view.newGuide", json!({"documentId":document,"expectedRevision":revision,"orientation":"vertical","position":1,"unit":"in"})).is_err());
+        assert_eq!(s.active().unwrap().doc, before);
+        assert!(s.redo());
+        assert_eq!(s.active().unwrap().doc.name, "Changed name");
     }
 }

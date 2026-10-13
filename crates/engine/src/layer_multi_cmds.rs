@@ -20,8 +20,8 @@ fn doc_state(s: &Session) -> std::result::Result<&DocState, String> {
 }
 
 /// Selected layers of the active document, bottom-to-top.
-pub fn selected(s: &Session) -> Vec<LayerId> {
-    s.active().map(DocState::selected_layers).unwrap_or_default()
+pub fn selected(s: &Session) -> Result<Vec<LayerId>> {
+    s.active().map_or_else(|| Ok(Vec::new()), DocState::selected_layers)
 }
 
 /// Ids in `ids` that have no ancestor also in `ids` (a selected group already carries its
@@ -35,6 +35,7 @@ pub(crate) fn top_level(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
 /// Replace the layer selection without a history step (like [`Session::select_layer`]).
 pub fn set_selection(s: &mut Session, ids: Vec<LayerId>, active: Option<LayerId>, anchor: Option<LayerId>) -> Result<()> {
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
+    st.doc.validate_resident()?;
     if let Some(bad) = ids.iter().chain(active.iter()).find(|id| st.doc.layer(**id).is_none()) {
         return Err(EngineError::NoLayer(*bad));
     }
@@ -60,17 +61,19 @@ pub fn set_selection(s: &mut Session, ids: Vec<LayerId>, active: Option<LayerId>
 
 /// After a structural edit, make `ids` the selection (dropping any that no longer exist), which
 /// is also what the edit's history state targets.
-pub(crate) fn reselect(s: &mut Session, ids: Vec<LayerId>, active: Option<LayerId>) {
+pub(crate) fn reselect(s: &mut Session, ids: Vec<LayerId>, active: Option<LayerId>) -> Result<()> {
     if let Some(st) = s.active_mut() {
+        st.doc.validate_resident()?;
         st.selected_layers = ids;
         if let Some(a) = active {
             st.active_layer = Some(a);
             st.layer_anchor = Some(a);
         }
         crate::fix_selection(st);
-        let layers = st.layer_target();
-        st.history.set_current_layers(layers);
+        let layers = st.layer_target()?;
+        st.history.set_current_layers(layers, &crate::read_control_none())?;
     }
+    Ok(())
 }
 
 /// `layer.select`: `{"layer": id, "mode": "replace|toggle|range|add"}`.
@@ -81,7 +84,7 @@ pub fn select(s: &mut Session, p: &Value) -> Result<Value> {
     if st.doc.layer(id).is_none() {
         return Err(EngineError::NoLayer(id));
     }
-    let mut sel = st.selected_layers();
+    let mut sel = st.selected_layers()?;
     match mode {
         "replace" => s.select_layer(id)?,
         "add" => {
@@ -113,7 +116,7 @@ pub fn select(s: &mut Session, p: &Value) -> Result<Value> {
         }
         other => return Err(bad("layer.select", format!("unknown mode `{other}`"))),
     }
-    Ok(json!({"selected": selected(s).iter().map(|l| l.0).collect::<Vec<_>>()}))
+    Ok(json!({"selected": selected(s)?.iter().map(|l| l.0).collect::<Vec<_>>()}))
 }
 
 fn is_locked_background(l: &Layer) -> bool {
@@ -146,7 +149,7 @@ fn find_layers(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn select_linked(s: &mut Session) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let groups = link_groups(&d.doc, &d.selected_layers());
+    let groups = link_groups(&d.doc, d.selection_ids());
     let ids: Vec<LayerId> = d.doc.walk().into_iter().filter(|(_, _, l)| l.link_group.is_some_and(|g| groups.contains(&g))).map(|(_, _, l)| l.id).collect();
     let active = d.active_layer.filter(|a| ids.contains(a)).or(ids.last().copied());
     let n = ids.len();
@@ -157,28 +160,28 @@ fn select_linked(s: &mut Session) -> Result<Value> {
 // ---------- enabled predicates ----------
 
 fn has_layer(s: &Session) -> std::result::Result<(), String> {
-    if selected(s).is_empty() { Err("no layer selected".into()) } else { Ok(()) }
+    if s.active().map_or(&[][..], DocState::selection_ids).is_empty() { Err("no layer selected".into()) } else { Ok(()) }
 }
 fn has_doc(s: &Session) -> std::result::Result<(), String> {
     doc_state(s).map(|_| ())
 }
 fn two_plus(s: &Session) -> std::result::Result<(), String> {
-    if selected(s).len() >= 2 { Ok(()) } else { Err("select two or more layers".into()) }
+    if s.active().map_or(&[][..], DocState::selection_ids).len() >= 2 { Ok(()) } else { Err("select two or more layers".into()) }
 }
 fn can_align(s: &Session) -> std::result::Result<(), String> {
     let d = doc_state(s)?;
-    match d.selected_layers().len() {
+    match d.selection_ids().len() {
         0 => Err("no layer selected".into()),
         // Photoshop aligns a single layer to the canvas (or to an active selection); 2+ align to each other.
         _ => Ok(()),
     }
 }
 fn can_distribute(s: &Session) -> std::result::Result<(), String> {
-    if selected(s).len() >= 3 { Ok(()) } else { Err("select three or more layers to distribute".into()) }
+    if s.active().map_or(&[][..], DocState::selection_ids).len() >= 3 { Ok(()) } else { Err("select three or more layers to distribute".into()) }
 }
 fn can_link(s: &Session) -> std::result::Result<(), String> {
     let d = doc_state(s)?;
-    let sel = d.selected_layers();
+    let sel = d.selection_ids();
     match sel.len() {
         0 => Err("no layer selected".into()),
         1 if d.doc.layer(sel[0]).is_none_or(|l| l.link_group.is_none()) => Err("select two or more layers to link".into()),
@@ -187,7 +190,7 @@ fn can_link(s: &Session) -> std::result::Result<(), String> {
 }
 fn has_linked(s: &Session) -> std::result::Result<(), String> {
     let d = doc_state(s)?;
-    if link_groups(&d.doc, &d.selected_layers()).is_empty() { Err("the selected layers are not linked".into()) } else { Ok(()) }
+    if link_groups(&d.doc, d.selection_ids()).is_empty() { Err("the selected layers are not linked".into()) } else { Ok(()) }
 }
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -226,11 +229,12 @@ pub(crate) fn move_layers(doc: &mut Document, moves: &[(LayerId, i32, i32)]) -> 
             continue;
         }
         let locks = doc.effective_locks(id);
+        crate::xcf_editing::translate_indexed(doc, id, dx, dy)?;
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         if locks.position || locks.all {
             return Err(EngineError::Other(format!("layer \"{}\" is position-locked", l.name)));
         }
-        crate::commands::translate_layer(&snapshot, l, dx, dy);
+        crate::commands::try_translate_layer(&snapshot, l, dx, dy)?;
         crate::vector_cmds::translate_vectors(&snapshot, l, dx as f64, dy as f64);
     }
     Ok(())
@@ -245,7 +249,7 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let roots = match p.get("layer").and_then(Value::as_u64) {
         Some(id) => vec![LayerId(id)],
-        None => selected(s),
+        None => selected(s)?,
     };
     if roots.is_empty() {
         return Err(EngineError::Other("no active layer".into()));
@@ -286,7 +290,7 @@ pub fn moved(doc: &Document, ids: &[LayerId], dx: i32, dy: i32) -> Result<Docume
         if locks.position || locks.all {
             return Err(EngineError::Other(format!("layer \"{}\" is position-locked", l.name)));
         }
-        shift_shown(doc, l, dx, dy);
+        shift_shown(doc, l, dx, dy)?;
     }
     Ok(out)
 }
@@ -298,19 +302,20 @@ pub(crate) fn shift_surface(s: &photocraft_raster::Surface, dx: i32, dy: i32) ->
 }
 
 /// [`crate::commands::translate_layer`] plus the vector side, without re-rendering anything.
-fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
+fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32) -> Result<()> {
     use self::shift_surface as translate_surface;
     let a = photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy));
     if let Some(r) = &mut l.effects.reference {
         *r = (r.0 + f64::from(dx), r.1 + f64::from(dy));
     }
     if let Some(m) = l.mask.as_mut().filter(|m| m.linked) {
-        m.surface = translate_surface(&m.surface, dx, dy);
+        m.surface = std::sync::Arc::new(translate_surface(&m.surface, dx, dy));
     }
     if let Some(vm) = l.vector_mask.as_mut().filter(|v| v.linked) {
         vm.path = vm.path.transform(&a);
     }
     match &mut l.content {
+        LayerContent::BackedRaster(_) => return Err(EngineError::Other("backed layer translation requires an accounted command".into())),
         LayerContent::Raster(s) => *s = translate_surface(s, dx, dy),
         LayerContent::Text(t) => {
             t.transform = a.mul(&t.transform);
@@ -336,10 +341,13 @@ fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
             if let Some(ab) = &mut g.artboard {
                 ab.rect = ab.rect.translate(dx, dy);
             }
-            g.children.iter_mut().for_each(|c| shift_shown(doc, c, dx, dy));
+            for child in &mut g.children {
+                shift_shown(doc, child, dx, dy)?;
+            }
         }
         LayerContent::Adjustment(_) | LayerContent::Fill(_) => {}
     }
+    Ok(())
 }
 
 /// The document pixels an edit of the layers `ids` (moved, shown, hidden or restyled; contents
@@ -527,16 +535,20 @@ fn doc_pixels_equal(a: &Document, b: &Document) -> bool {
         name: _,
         size,
         resolution_dpi,
+        physical_resolution,
+        xcf_state,
         mode,
         depth,
         icc_profile,
+        working_profile_interpretation,
         layers: _,
         channels,
         guides: _,
         selection: _,
+        selection_channel_id,
         metadata: _,
         global_light,
-        paths: _,
+        paths,
         work_path: _,
         clipping_path: _,
         quick_mask,
@@ -557,9 +569,18 @@ fn doc_pixels_equal(a: &Document, b: &Document) -> bool {
     } = a;
     *size == b.size
         && resolution_dpi.to_bits() == b.resolution_dpi.to_bits()
+        && *physical_resolution == b.physical_resolution
+        && *xcf_state == b.xcf_state
+        // Imported vector items retain live saved-path identities. A path edit
+        // changes their appearance without replacing a layer's raster/cache.
+        // Conservatively invalidate the composite rather than reporting empty
+        // damage from the otherwise unchanged layer walk.
+        && (!has_bound_source_paths(a) && !has_bound_source_paths(b) || *paths == b.paths)
+        && *selection_channel_id == b.selection_channel_id
         && *mode == b.mode
         && *depth == b.depth
         && icc_profile.as_deref() == b.icc_profile.as_deref()
+        && *working_profile_interpretation == b.working_profile_interpretation
         && *sample_encoding == b.sample_encoding
         && *source_color_context == b.source_color_context
         && channels.len() == b.channels.len()
@@ -573,6 +594,12 @@ fn doc_pixels_equal(a: &Document, b: &Document) -> bool {
         && *patterns == b.patterns
         && *color_table == b.color_table
         && *duotone == b.duotone
+}
+
+fn has_bound_source_paths(document: &Document) -> bool {
+    document.xcf_state.as_ref().is_some_and(|state| {
+        state.source_items.iter().any(|item| matches!(item.source, photocraft_doc::xcf_items::EditableSource::Vector { .. }))
+    })
 }
 
 /// Pixels a single history step can have changed between `a` and `b` (the documents on either
@@ -681,7 +708,7 @@ fn bounded_selection(doc: &Document, sel: &[LayerId]) -> Vec<(LayerId, Rect)> {
 fn align(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
     let cmd = format!("layer.align.{kind}");
     let edge = Edge::parse(kind).ok_or_else(|| bad(&cmd, "unknown edge"))?;
-    let sel = selected(s);
+    let sel = selected(s)?;
     let to = p.get("to").and_then(Value::as_str).unwrap_or("auto").to_string();
     let moved = s.edit("Align", |doc, _| {
         let items = bounded_selection(doc, &sel);
@@ -735,7 +762,7 @@ fn dedup_moves(doc: &Document, moves: Vec<(LayerId, i32, i32)>) -> Vec<(LayerId,
 }
 
 fn distribute(s: &mut Session, kind: &str) -> Result<Value> {
-    let sel = selected(s);
+    let sel = selected(s)?;
     let kind = kind.to_string();
     let moved = s.edit("Distribute", |doc, _| {
         let mut items = bounded_selection(doc, &sel);
@@ -877,14 +904,14 @@ pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
         let ids: Vec<u64> = copies.iter().map(|id| id.0).collect();
         if batch.is_some() {
             let active = copies.last().copied();
-            reselect(s, copies, active);
+            reselect(s, copies, active)?;
             return Ok(json!({"moved": count, "layers": ids}));
         }
         return Ok(json!({"layer": ids.first()}));
     }
     if batch.is_some() {
         let active = original_active.filter(|id| requested.contains(id)).or_else(|| requested.last().copied());
-        reselect(s, requested, active);
+        reselect(s, requested, active)?;
         Ok(json!({"moved": count}))
     } else {
         Ok(Value::Null)
@@ -894,7 +921,7 @@ pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
 // ---------- structural commands ----------
 
 fn link_layers(s: &mut Session) -> Result<Value> {
-    let sel = selected(s);
+    let sel = selected(s)?;
     let linked = s.edit("Link Layers", |doc, _| {
         let groups: Vec<Option<u64>> = sel.iter().map(|id| doc.layer(*id).and_then(|l| l.link_group)).collect();
         // Already one link group (or a single linked layer): unlink, like Photoshop's toggle.
@@ -927,7 +954,7 @@ fn link_layers(s: &mut Session) -> Result<Value> {
 }
 
 fn lock_layers(s: &mut Session, p: &Value) -> Result<Value> {
-    let sel = selected(s);
+    let sel = selected(s)?;
     let keys = ["transparency", "pixels", "position", "artboard", "all"];
     let given: Vec<(&str, bool)> = keys.iter().filter_map(|k| Some((*k, p.get(*k)?.as_bool()?))).collect();
     s.edit("Lock Layers", |doc, _| {
@@ -951,19 +978,153 @@ fn lock_layers(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"layers": sel.len()}))
 }
 
-fn rename_layer(s: &mut Session, p: &Value) -> Result<Value> {
-    let name =
-        p.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad("layer.renameLayer", "missing `name`"))?.to_string();
-    let id = crate::commands::layer_param(s, p)?;
-    s.edit("Rename Layer", |doc, _| {
+/// Borrowed local selector: canonical string alias without changing legacy numeric APIs.
+fn rename_layer_selector(s: &Session, p: &Value) -> Result<LayerId> {
+    const CMD: &str = "layer.renameLayer";
+    match (p.get("layer"), p.get("layerId")) {
+        (Some(_), Some(_)) => Err(bad(CMD, "supply only one of layer and layerId")),
+        (Some(value), None) => value.as_u64().map(LayerId).ok_or_else(|| bad(CMD, "layer must be an integer identity")),
+        (None, Some(value)) => {
+            let text = value.as_str().ok_or_else(|| bad(CMD, "layerId must be a canonical decimal string"))?;
+            if text.is_empty() || text.len() > 20 || text.starts_with('0') || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(bad(CMD, "layerId must be a nonzero canonical decimal string"));
+            }
+            text.parse::<u64>().map(LayerId).map_err(|_| bad(CMD, "layerId overflow"))
+        }
+        (None, None) => s.active().and_then(|active| active.active_layer).ok_or_else(|| EngineError::Other("no active layer".into())),
+    }
+}
+
+/// Root dispatch invokes this before floating normalization, job setup and params cloning.
+pub(crate) fn rename_dispatch_preflight(s: &Session, p: &Value, background: bool) -> Result<()> {
+    const CMD: &str = "layer.renameLayer";
+    let object = p.as_object().ok_or_else(|| bad(CMD, "rename parameters must be an object"))?;
+    if object.len() > 5 || object.keys().any(|key| !matches!(key.as_str(), "layer" | "layerId" | "name" | "documentId" | "expectedRevision")) {
+        return Err(bad(CMD, "unknown rename parameter"));
+    }
+    let raw = p.get("name").and_then(Value::as_str).ok_or_else(|| bad(CMD, "missing `name`"))?;
+    if raw.len() > 1 << 20 || raw.contains('\0') || raw.trim().is_empty() {
+        return Err(bad(CMD, "name must be bounded nonempty UTF-8 without NUL"));
+    }
+    let id = rename_layer_selector(s, p)?;
+    if object.len() > 4 {
+        return Err(bad(CMD, "too many rename parameters"));
+    }
+    if background || s.command_is_background() || s.command_has_pending_job() || s.has_jobs() || s.coalesce_request.is_some() || s.color_restrict.is_some() {
+        return Err(bad(CMD, "rename requires synchronous idle uncoalesced context"));
+    }
+    let active = s.active().ok_or(EngineError::NoDocument)?;
+    if active.floating.is_some() || active.coalesce.is_some() || active.doc.xcf_state.as_ref().is_some_and(|state| state.floating.is_some()) {
+        return Err(bad(CMD, "finish floating or coalesced editing before renaming"));
+    }
+    active.doc.validate_resident()?;
+    if active.revision == u64::MAX {
+        return Err(bad(CMD, "revision headroom exhausted"));
+    }
+    match (p.get("documentId"), p.get("expectedRevision")) {
+        (None, None) => {}
+        (Some(document), Some(revision)) => {
+            let parse = |value: &Value, zero: bool| -> Result<u64> {
+                let text = value.as_str().ok_or_else(|| bad(CMD, "captured selectors must be canonical decimal strings"))?;
+                if text.is_empty() || text.len() > 20 || !text.bytes().all(|byte| byte.is_ascii_digit()) || text.len() > 1 && text.starts_with('0') {
+                    return Err(bad(CMD, "noncanonical captured identity"));
+                }
+                let value = text.parse::<u64>().map_err(|_| bad(CMD, "captured identity overflow"))?;
+                if value == 0 && !zero {
+                    return Err(bad(CMD, "zero document identity"));
+                }
+                Ok(value)
+            };
+            if active.doc.id.0 != parse(document, false)? || active.revision != parse(revision, true)? {
+                return Err(bad(CMD, "stale captured target"));
+            }
+        }
+        _ => return Err(bad(CMD, "documentId and expectedRevision must be supplied together")),
+    }
+    // Bound and validate actual ancestry before native recursive lookup. Ordinary
+    // naming remains allowed through native pixel/all locks, as before. XCF
+    // naming honors the explicit inherited content policy, matching text.name.
+    let locks = crate::xcf_item_locks::effective_layer_locks(&active.doc, id)?;
+    if active.doc.xcf_state.is_some() {
+        locks.require(crate::xcf_item_locks::EditKind::Content)?;
+    }
+    active.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    Ok(())
+}
+/// Bounded compatible ordinary rename; generic reconciliation updates canonical
+/// name/custom_name without modifying source ASTs, caches, raw flags or selection.
+pub fn rename_layer_with_interrupt(s: &mut Session, p: &Value, control: &photocraft_raster::Interrupt<'_>) -> Result<Value> {
+    const CMD: &str = "layer.renameLayer";
+    rename_dispatch_preflight(s, p, false)?;
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    let requested = p.get("name").and_then(Value::as_str).map(str::trim).ok_or_else(|| bad(CMD, "missing `name`"))?;
+    let id = rename_layer_selector(s, p)?;
+    fn source_admission(doc: &Document, id: LayerId, name_bytes: usize, control: &photocraft_raster::Interrupt<'_>) -> Result<()> {
+        control.check().map_err(|_| EngineError::Cancelled)?;
+        if let Some(state) = &doc.xcf_state {
+            let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+            let mut items = state.items.iter().filter(|item| item.item == photocraft_doc::item_identity::ItemRef::Layer(id));
+            let item = items.next().ok_or_else(|| bad("layer.renameLayer", "missing canonical layer metadata"))?;
+            if items.next().is_some() || item.name != layer.name {
+                return Err(bad("layer.renameLayer", "ambiguous or disagreeing current name metadata"));
+            }
+            let footprint = crate::DocumentSnapshot::resident_raster_footprint_of(doc, control)?;
+            let peak = footprint
+                .retained_bytes
+                .checked_add(footprint.clone_metadata_bytes.checked_mul(2).ok_or_else(|| bad("layer.renameLayer", "source COW limit"))?)
+                .and_then(|n| n.checked_add((name_bytes as u64).checked_mul(3)?))
+                .and_then(|n| n.checked_add(layer.name.capacity() as u64))
+                .ok_or_else(|| bad("layer.renameLayer", "source COW limit"))?;
+            if peak > photocraft_raster::MAX_CHECKED_RASTER_BYTES {
+                return Err(bad("layer.renameLayer", "source raster/COW/name limit"));
+            }
+            doc.validate_xcf_state_with(control)
+                .map_err(|error| if error.code == "cancelled" { EngineError::Cancelled } else { bad("layer.renameLayer", error.to_string()) })?;
+        }
+        control.check().map_err(|_| EngineError::Cancelled)?;
+        Ok(())
+    }
+    let active = s.active().ok_or(EngineError::NoDocument)?;
+    source_admission(&active.doc, id, requested.len(), control)?;
+    if active.doc.layer(id).ok_or(EngineError::NoLayer(id))?.name == requested {
+        control.check().map_err(|_| EngineError::Cancelled)?;
+        return Ok(Value::Null);
+    }
+    let mut name = String::new();
+    name.try_reserve_exact(requested.len()).map_err(|_| bad(CMD, "name allocation limit"))?;
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    name.push_str(requested);
+    source_admission(&active.doc, id, name.capacity(), control)?;
+    let baseline = active.doc.clone();
+    let revision = active.revision;
+    let document = active.doc.id;
+    let fence = baseline.downgrade();
+    rename_dispatch_preflight(s, p, false)?;
+    let active = s.active().ok_or(EngineError::NoDocument)?;
+    if active.doc.id != document || active.revision != revision || !fence.is_current(&active.doc) {
+        return Err(bad(CMD, "stale layer snapshot"));
+    }
+    s.edit_with_interrupt("Rename Layer", control, move |doc, _| {
+        if doc.id != document || doc.layer(id).map(|layer| layer.name.as_str()) != baseline.layer(id).map(|layer| layer.name.as_str()) {
+            return Err(bad(CMD, "stale layer target"));
+        }
+        if doc.xcf_state.is_some() {
+            crate::xcf_item_locks::effective_layer_locks(doc, id)?.require(crate::xcf_item_locks::EditKind::Content)?;
+        }
+        source_admission(doc, id, name.capacity(), control)?;
+        control.check().map_err(|_| EngineError::Cancelled)?;
         doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.name = name;
+        control.check().map_err(|_| EngineError::Cancelled)?;
         Ok(())
     })?;
     Ok(Value::Null)
 }
+fn rename_layer(s: &mut Session, p: &Value) -> Result<Value> {
+    rename_layer_with_interrupt(s, p, &photocraft_raster::Interrupt::NONE)
+}
 
 fn reverse(s: &mut Session) -> Result<Value> {
-    let sel = selected(s);
+    let sel = selected(s)?;
     s.edit("Reverse", |doc, _| {
         let ids = top_level(doc, &sel);
         if ids.len() < 2 {
@@ -996,7 +1157,7 @@ pub(crate) fn check_group_depth(doc: &Document, what: &str) -> Result<()> {
 pub fn group_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = match p.get("layer").and_then(Value::as_u64) {
         Some(id) => vec![LayerId(id)],
-        None => selected(s),
+        None => selected(s)?,
     };
     if ids.is_empty() {
         return Err(EngineError::Other("no layer selected".into()));
@@ -1016,12 +1177,12 @@ pub fn group_layers(s: &mut Session, p: &Value) -> Result<Value> {
         *active = Some(gid);
         Ok(gid)
     })?;
-    reselect(s, vec![gid], Some(gid));
+    reselect(s, vec![gid], Some(gid))?;
     Ok(json!({ "layer": gid.0 }))
 }
 
 fn merge_layers(s: &mut Session) -> Result<Value> {
-    let sel = selected(s);
+    let sel = selected(s)?;
     if sel.len() < 2 {
         return s.execute("layer.mergeDown", json!({}));
     }
@@ -1034,7 +1195,7 @@ fn merge_layers(s: &mut Session) -> Result<Value> {
         if solo.layers.is_empty() {
             return Err(EngineError::Other("the selected layers are all hidden".into()));
         }
-        let buf = photocraft_compose::flatten(&solo);
+        let buf = photocraft_compose::flatten(&solo)?;
         let fmt = doc.pixel_format();
         let fmt = PixelFormat::new(fmt.mode, fmt.sample, true);
         let data: Vec<f32> = buf.px.iter().flat_map(|p| photocraft_raster::from_rgba(&fmt, *p)).collect();
@@ -1052,13 +1213,13 @@ fn merge_layers(s: &mut Session) -> Result<Value> {
         *active = Some(mid);
         Ok(mid)
     })?;
-    reselect(s, vec![mid], Some(mid));
+    reselect(s, vec![mid], Some(mid))?;
     Ok(json!({ "layer": mid.0 }))
 }
 
 /// Delete Layer with several layers selected.
 pub fn delete_selected(s: &mut Session) -> Result<Value> {
-    let sel = selected(s);
+    let sel = selected(s)?;
     s.edit("Delete Layers", |doc, active| {
         let ids = top_level(doc, &sel);
         let below = ids.first().and_then(|id| {
@@ -1082,7 +1243,7 @@ pub fn delete_selected(s: &mut Session) -> Result<Value> {
 /// copies become the selection. Artboard copies go beside their boards unless `in_place`
 /// ([`crate::artboard_cmds::place_copy`]).
 pub fn duplicate_selected(s: &mut Session, in_place: bool) -> Result<Value> {
-    let sel = selected(s);
+    let sel = selected(s)?;
     let old_active = s.active().and_then(|d| d.active_layer);
     let (copies, active) = s.edit("Duplicate Layers", |doc, active| {
         let mut copies = Vec::new();
@@ -1091,6 +1252,7 @@ pub fn duplicate_selected(s: &mut Session, in_place: bool) -> Result<Value> {
             let mut dup = doc.layer(id).ok_or(EngineError::NoLayer(id))?.duplicate();
             dup.name = doc.copy_name(&dup.name);
             let nid = doc.insert_above(Some(id), dup);
+            crate::xcf_editing::clone_duplicate_with_interrupt(doc, id, nid, &photocraft_raster::Interrupt::NONE)?;
             if !in_place {
                 crate::artboard_cmds::place_copy(doc, nid)?;
             }
@@ -1104,13 +1266,13 @@ pub fn duplicate_selected(s: &mut Session, in_place: bool) -> Result<Value> {
         Ok((copies, a))
     })?;
     let out = copies.iter().map(|l| l.0).collect::<Vec<_>>();
-    reselect(s, copies, active);
+    reselect(s, copies, active)?;
     Ok(json!({"layers": out}))
 }
 
 /// Show/hide every selected layer in one step.
 pub fn set_visible_selected(s: &mut Session, visible: bool) -> Result<Value> {
-    let sel = selected(s);
+    let sel = selected(s)?;
     s.edit(if visible { "Show Layers" } else { "Hide Layers" }, |doc, _| {
         for id in &sel {
             doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?.visible = visible;
@@ -1122,7 +1284,7 @@ pub fn set_visible_selected(s: &mut Session, visible: bool) -> Result<Value> {
 
 /// Is more than one layer selected (so single-layer commands should act on the whole set)?
 pub fn multi(s: &Session, p: &Value) -> bool {
-    p.get("layer").is_none() && selected(s).len() > 1
+    p.get("layer").is_none() && s.active().map_or(&[][..], DocState::selection_ids).len() > 1
 }
 
 // ---------- registry ----------
@@ -1192,7 +1354,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_layer,
             lock_layers
         ),
-        spec!("layer.renameLayer", "Rename Layer", &["Layer"], None, r##"{"layer":id?,"name":str}"##, has_layer, rename_layer),
+        spec!("layer.renameLayer", "Rename Layer", &["Layer"], None, r##"{"layer":numeric id? OR "layerId":canonical string?,"name":bounded str,"documentId":canonical string?,"expectedRevision":canonical string?} (one layer selector; captured fields supplied together)"##, has_layer, rename_layer),
     ]
 }
 
@@ -1249,7 +1411,7 @@ mod tests {
     }
 
     fn sel(s: &Session) -> Vec<LayerId> {
-        selected(s)
+        selected(s).unwrap()
     }
 
     fn damage(s: &Session) -> Option<Rect> {
@@ -1334,12 +1496,12 @@ mod tests {
         assert_eq!(sel(&s), vec![a, b]);
         assert!(s.execute("layer.select", json!({"layer": b.0, "mode": "bogus"})).is_err());
         // Selection changes are not edits.
-        let history = s.active().unwrap().history.entries().len();
+        let history = s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len();
         s.execute("select.allLayers", json!({})).unwrap();
         assert_eq!(sel(&s), vec![a, b, c, d], "Select All Layers skips the locked Background");
         s.execute("select.deselectLayers", json!({})).unwrap();
         assert!(sel(&s).is_empty());
-        assert_eq!(s.active().unwrap().history.entries().len(), history);
+        assert_eq!(s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().len(), history);
         assert!(!s.is_enabled("layer.align.topEdges"));
     }
 
@@ -1695,7 +1857,7 @@ mod tests {
         // A stored document can carry any id; `max + 1` once overflowed here.
         let st = s.active_mut().unwrap();
         for id in [c, d] {
-            std::sync::Arc::make_mut(&mut st.doc).layer_mut(id).unwrap().link_group = Some(u64::MAX);
+            st.doc.try_resident_mut().unwrap().layer_mut(id).unwrap().link_group = Some(u64::MAX);
         }
         select_all(&mut s, &[a, b]);
         assert_eq!(s.execute("layer.linkLayers", json!({})).unwrap()["linked"], true);
@@ -1973,7 +2135,7 @@ mod tests {
         select_all(&mut s, &[a, b, c]);
         s.execute("layer.arrange.reverse", json!({})).unwrap();
         assert_eq!(doc(&s).layers.iter().skip(1).map(|l| l.id).collect::<Vec<_>>(), vec![c, b, a]);
-        assert_eq!(s.active().unwrap().history.entries().last().map(|e| e.as_str()), Some("Reverse"));
+        assert_eq!(s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().to_vec().last().map(|e| e.as_str()), Some("Reverse"));
     }
 
     #[test]
@@ -2022,6 +2184,10 @@ mod xcf_damage_tests {
             Some(SourceColorContext { original_icc: Some(photocraft_cms::Builtin::DisplayP3.profile().to_bytes()), source_precision: 100 });
         assert_eq!(step_damage(&before, &profile_changed), None);
         assert_eq!(step_damage(&profile_changed, &before), None);
+        let mut interpretation_changed = before.clone();
+        interpretation_changed.working_profile_interpretation = photocraft_doc::WorkingProfileInterpretation::implicit_srgb(b"own active identity");
+        assert_eq!(step_damage(&before, &interpretation_changed), None);
+        assert_eq!(step_damage(&interpretation_changed, &before), None);
     }
     #[test]
     fn original_index_provenance_alone_does_not_damage_rendered_pixels() {
@@ -2032,5 +2198,32 @@ mod xcf_damage_tests {
                 .unwrap(),
         );
         assert_eq!(step_damage(&before, &after), Some(Rect::EMPTY));
+    }
+
+    #[test]
+    fn live_imported_vector_path_change_invalidates_undo_and_redo_composites() {
+        use photocraft_doc::{NamedPath, Path, XcfState, item_identity::ItemRef, xcf_items::{EditableSource, SourceItem}};
+        let mut before = document();
+        let path = NamedPath::new("bound path", Path::default());
+        let identity = path.id;
+        before.paths.push(path);
+        let mut imported = XcfState::default();
+        imported.reconcile_layers(&before).unwrap();
+        imported.source_items.push(SourceItem {
+            owner: ItemRef::Layer(before.layers[0].id),
+            source: EditableSource::Vector { path: identity, source_modified: false, configuration: Vec::new() },
+            transform: None, cache: None,
+        });
+        before.xcf_state = Some(imported);
+        let mut after = before.clone();
+        after.paths[0].name = "renamed bound path".into();
+        assert_eq!(step_damage(&before, &after), None);
+        assert_eq!(step_damage(&after, &before), None);
+        assert_eq!(step_damage(&before, &before), Some(Rect::EMPTY));
+        let mut ordinary = before.clone();
+        ordinary.xcf_state = None;
+        let mut ordinary_after = ordinary.clone();
+        ordinary_after.paths[0].name = "ordinary metadata".into();
+        assert_eq!(step_damage(&ordinary, &ordinary_after), Some(Rect::EMPTY));
     }
 }

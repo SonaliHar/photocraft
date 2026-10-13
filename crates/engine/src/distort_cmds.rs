@@ -14,7 +14,7 @@ use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, apply_liquify, auto_
 use photocraft_algo::perspective::{PerspectiveMap, Plane, Straighten, straighten};
 use photocraft_algo::puppet::{PuppetDensity, PuppetMode, PuppetPin, PuppetWarp, puppet_warp};
 use photocraft_algo::transform::Interp;
-use photocraft_algo::warp::{warp_mesh_gray, warp_mesh_surface};
+use photocraft_algo::warp::{try_warp_mesh_gray, warp_mesh_surface};
 use photocraft_color::PixelFormat;
 use photocraft_doc::{Document, Layer, LayerContent, LayerId, Locks, SmartFilter};
 use photocraft_geom::Rect;
@@ -161,6 +161,32 @@ pub fn puppet_surface(surf: &Surface, w: &PuppetWarp, interp: Interp) -> Option<
     puppet_warp(surf, b, w, interp)
 }
 
+/// Checked authoritative puppet path; no cache fallback after a conversion error.
+pub fn try_puppet_surface(surf: &Surface, w: &PuppetWarp, interp: Interp) -> Result<Option<Surface>> {
+    surf.try_validate_tile_origins().map_err(|e| bad(PUPPET, e.to_string()))?;
+    let b = surf.content_bounds();
+    if w.is_identity() || b.is_empty() {
+        return Ok(Some(surf.clone()));
+    }
+    photocraft_algo::puppet::try_puppet_warp(surf, b, w, interp).map_err(|e| {
+        if e == photocraft_raster::RasterInputError::InvalidBounds {
+            bad(PUPPET, "invalid geometry or the pins stretch the content too far")
+        } else {
+            bad(PUPPET, e.to_string())
+        }
+    })
+}
+
+pub fn try_perspective_surface(surf: &Surface, planes: &[Plane], interp: Interp) -> Result<Surface> {
+    surf.try_validate_tile_origins().map_err(|e| bad(PERSPECTIVE, e.to_string()))?;
+    let b = surf.content_bounds();
+    if PerspectiveMap::is_identity(planes) || b.is_empty() {
+        return Ok(surf.clone());
+    }
+    let m = PerspectiveMap::new(planes).ok_or_else(|| bad(PERSPECTIVE, "invalid perspective planes"))?;
+    photocraft_algo::warp::try_warp_mesh_surface(surf, b, &|x, y| m.map(x, y), interp).map_err(|e| bad(PERSPECTIVE, e.to_string()))
+}
+
 /// Perspective-warps a surface's content.
 pub fn perspective_surface(surf: &Surface, planes: &[Plane], interp: Interp) -> Surface {
     let b = surf.content_bounds();
@@ -232,7 +258,7 @@ fn check_locks(l: &Layer, group: Locks, position: bool) -> Result<()> {
 
 /// Shared driver: a smart object records `cmd` as a smart filter; a pixel layer is edited in
 /// place by `f(surface, selection)`.
-type MaskFn<'a> = Option<&'a dyn Fn(&Surface) -> Surface>;
+type MaskFn<'a> = Option<&'a dyn Fn(&Surface) -> Result<Surface>>;
 /// Deforms a layer's pixels (with the selection and canvas); an `Err` leaves the layer as it was.
 type LayerFn<'a> = &'a dyn Fn(&Surface, Option<&Surface>, Rect) -> Result<Surface>;
 
@@ -245,7 +271,10 @@ fn run_on_layer(s: &mut Session, cmd: &str, label: &str, p: &Value, moves: bool,
     s.edit(label, |doc: &mut Document, _| {
         let canvas = doc.bounds();
         let selection = doc.selection.clone();
-        let group = crate::transform_cmds::group_locks(doc, id);
+        if selection.as_ref().is_some_and(|mask| matches!(mask.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64)) {
+            return Err(bad(cmd, "wide selected distortion arithmetic is not qualified"));
+        }
+        let group = crate::transform_cmds::group_locks(doc, id)?;
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         if let LayerContent::Smart(_) = l.content {
             let sf = SmartFilter { command: cmd.to_string(), params: params.clone(), blend: photocraft_color::BlendMode::Normal, opacity: 1.0, visible: true };
@@ -258,12 +287,17 @@ fn run_on_layer(s: &mut Session, cmd: &str, label: &str, p: &Value, moves: bool,
         let LayerContent::Raster(surf) = &mut l.content else {
             return Err(EngineError::Other(format!("{label} needs a pixel layer (rasterize it first)")));
         };
+        if matches!(surf.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64)
+            || selection.as_ref().is_some_and(|sel| matches!(sel.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64))
+        {
+            return Err(bad(cmd, "wide distortion/selected arithmetic is not qualified; pixels were kept unchanged"));
+        }
         *surf = f(surf, selection.as_ref(), canvas)?;
         // A linked layer mask follows a geometric warp.
         if let (Some(mf), Some(m)) = (mask, l.mask.as_mut())
             && m.linked
         {
-            m.surface = mf(&m.surface);
+            m.surface = std::sync::Arc::new(mf(&m.surface)?);
         }
         Ok(())
     })?;
@@ -309,7 +343,7 @@ fn liquify(s: &mut Session, p: &Value) -> Result<Value> {
 fn deform_selected(surf: &Surface, sel: Option<&Surface>, f: &dyn Fn(&Surface) -> Result<Surface>) -> Result<Surface> {
     match sel {
         Some(sel) => {
-            let (lifted, mut rest) = crate::transform_cmds::split_selected(surf, sel);
+            let (lifted, mut rest) = crate::transform_cmds::try_split_selected(surf, sel)?;
             let moved = f(&lifted)?;
             crate::transform_cmds::composite_over(&mut rest, &moved);
             rest.prune();
@@ -317,7 +351,11 @@ fn deform_selected(surf: &Surface, sel: Option<&Surface>, f: &dyn Fn(&Surface) -
         }
         None => {
             let fmt = surf.format();
-            let src = if fmt.alpha { surf.clone() } else { surf.convert(PixelFormat::new(fmt.mode, fmt.sample, true)) };
+            let src = if fmt.alpha {
+                surf.clone()
+            } else {
+                surf.try_convert(PixelFormat::new(fmt.mode, fmt.sample, true)).map_err(|e| crate::EngineError::Other(format!("pixel conversion: {e}")))?
+            };
             f(&src)
         }
     }
@@ -332,7 +370,7 @@ fn puppet(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     }
     let it = interp(p);
     let too_far = || bad(cmd, "the pins stretch the content too far: the result would cover more than 2^30 pixels");
-    run_on_layer(s, cmd, "Puppet Warp", p, true, &|surf, sel, _| deform_selected(surf, sel, &|x| puppet_surface(x, &w, it).ok_or_else(too_far)), None)
+    run_on_layer(s, cmd, "Puppet Warp", p, true, &|surf, sel, _| deform_selected(surf, sel, &|x| try_puppet_surface(x, &w, it)?.ok_or_else(too_far)), None)
 }
 
 fn perspective(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
@@ -345,8 +383,8 @@ fn perspective(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let it = interp(p);
     let map = PerspectiveMap::new(&planes);
     let mask_fn = |m: &Surface| match &map {
-        Some(map) => warp_mesh_gray(m, &|x, y| map.map(x, y), Interp::Bilinear),
-        None => m.clone(),
+        Some(map) => try_warp_mesh_gray(m, &|x, y| map.map(x, y), Interp::Bilinear).map_err(|e| bad(cmd, e.to_string())),
+        None => Ok(m.clone()),
     };
     let mut r = run_on_layer(
         s,
@@ -354,7 +392,7 @@ fn perspective(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         "Perspective Warp",
         p,
         true,
-        &|surf, sel, _| deform_selected(surf, sel, &|x| Ok(perspective_surface(x, &planes, it))),
+        &|surf, sel, _| deform_selected(surf, sel, &|x| try_perspective_surface(x, &planes, it)),
         Some(&mask_fn),
     )?;
     r["planes"] = json!(planes);

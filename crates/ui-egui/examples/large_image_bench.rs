@@ -80,7 +80,9 @@ fn refresh(gpu: Option<&(GpuCanvas, RenderState)>, s: &Session, full: bool) -> &
         }
         None => {
             let r = damage.unwrap_or(st.doc.bounds()).intersect(&st.doc.bounds());
-            std::hint::black_box(photocraft_compose::render(&st.doc, r));
+            if let Err(error) = std::hint::black_box(photocraft_compose::render(&st.doc, r)) {
+                eprintln!("CPU benchmark refused: {error}");
+            };
             "cpu"
         }
     }
@@ -113,7 +115,10 @@ fn main() {
     let doc = photocraft_io::import("photo.jpg", &bytes).expect("import").document;
     drop(bytes);
     let mut s = Session::new();
-    s.open_document(doc, Some("photo.jpg".into()));
+    if let Err(error) = s.open_document(doc, Some("photo.jpg".into())) {
+        eprintln!("Open refused: {error}");
+        return;
+    }
     match arg(&args, "--depth").as_deref() {
         Some("16") => exec(&mut s, "image.mode.bits16", json!({})),
         Some("32") => exec(&mut s, "image.mode.bits32", json!({})),
@@ -157,13 +162,19 @@ fn main() {
         "thumbs" => {
             let d = doc();
             let t = Instant::now();
-            std::hint::black_box(photocraft_compose::thumbnail(&d, 512));
+            if let Err(error) = std::hint::black_box(photocraft_compose::thumbnail(&d, 512)) {
+                eprintln!("CPU benchmark refused: {error}");
+            };
             println!("navigator thumbnail (512)     {:>9.0} ms", ms(t));
             let t = Instant::now();
-            std::hint::black_box(photocraft_compose::thumbnail(&d, 56));
+            if let Err(error) = std::hint::black_box(photocraft_compose::thumbnail(&d, 56)) {
+                eprintln!("CPU benchmark refused: {error}");
+            };
             println!("channel thumbnails (56)       {:>9.0} ms", ms(t));
             let t = Instant::now();
-            std::hint::black_box(photocraft_compose::thumbnail(&d, 384));
+            if let Err(error) = std::hint::black_box(photocraft_compose::thumbnail(&d, 384)) {
+                eprintln!("CPU benchmark refused: {error}");
+            };
             println!("histogram source (384)        {:>9.0} ms", ms(t));
         }
         "filter" => {

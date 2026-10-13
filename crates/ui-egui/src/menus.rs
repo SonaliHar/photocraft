@@ -214,7 +214,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             let id = params.get("layer").and_then(Value::as_u64).or(st.active_layer.map(|l| l.0)).ok_or("no active layer")?;
             let name = st.doc.layer(photocraft_doc::LayerId(id)).map(|l| l.name.clone()).ok_or("no such layer")?;
             // Another rename in progress is committed first (#314).
-            if let Some((cmd, p)) = crate::layer_row_ui::start_rename(ctx, id, &name) {
+            if let Some((cmd, p)) = crate::layer_row_ui::start_rename_checked(app, ctx, id, &name) {
                 app.run(&cmd, p)?;
             }
             Ok(Value::Null)
@@ -262,7 +262,16 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
                 Err("Open Recent is unavailable on the web".to_string())
             }
         }
-        "file.saveAs" => app.save_as(params.get("path").and_then(Value::as_str).map(str::to_string)),
+        "file.saveAs" => {
+            if let Some(format) = params.get("format") {
+                if format.as_str() != Some("pcraft") { return Err("unsupported Save As format".into()); }
+                if params.as_object().is_none_or(|fields| fields.len() > 2 || fields.keys().any(|key| !matches!(key.as_str(), "path" | "format")))
+                    || params.get("path").is_some_and(|path| !path.is_string()) { return Err("invalid native Save As parameters".into()); }
+                app.save_native_as(params.get("path").and_then(Value::as_str).map(str::to_string))
+            } else {
+                app.save_as(params.get("path").and_then(Value::as_str).map(str::to_string))
+            }
+        },
         "view.zoomIn" | "view.zoomOut" | "view.fitOnScreen" | "view.actualPixels" => app.run(id, params),
         "window.newWindowForDocument" => {
             let doc = app.session.active_index().ok_or("no document")?;
@@ -284,9 +293,10 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         // The macOS app menu's Language (`native_menu::language_node`).
         i if i.starts_with(crate::native_menu::LANGUAGE_PREFIX) => {
             let code = &i[crate::native_menu::LANGUAGE_PREFIX.len()..];
-            if code != "auto" && !crate::i18n::Lang::all().any(|l| l.code() == code) {
+            if code != "auto" && !crate::i18n::LANGUAGES.iter().any(|l| l.code == code) {
                 return Err(format!("unknown UI language `{code}`"));
             }
+            let _ = crate::i18n::Lang::try_from_pref(code).map_err(|error| error.to_string())?;
             app.run("prefs.set", json!({"values": {"interface.language": code}}))
         }
         "edit.search" => {
@@ -1574,6 +1584,7 @@ mod open_recent_tests {
                     document: photocraft_doc::Document::new("t", Size::new(4, 4), ColorMode::Rgb, SampleType::U8),
                     warnings: Vec::new(),
                     origin: Default::default(),
+                    assessment: None,
                 })
             })),
             ..Default::default()

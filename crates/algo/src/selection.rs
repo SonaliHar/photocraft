@@ -803,6 +803,17 @@ pub fn feather(m: &[f32], w: usize, h: usize, radius: f32) -> Vec<f32> {
     crate::selection_blur::feather(m, w, h, radius)
 }
 
+mod feather_controlled;
+
+/// Existing feather passes with checked allocation and per-pass cancellation.
+/// Inputs must match the dimensions and contain finite coverage samples.
+pub fn try_feather_with_interrupt(
+    m: &[f32], w: usize, h: usize, radius: f32,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<Vec<f32>, photocraft_raster::RasterInputError> {
+    feather_controlled::try_feather(m, w, h, radius, control)
+}
+
 /// Anti-aliased polygon (even-odd) coverage over `area`: exact horizontal
 /// coverage, 4 sub-rows per pixel row (or 1 when not anti-aliased).
 pub fn polygon(points: &[(f32, f32)], area: Rect, anti_alias: bool) -> Vec<f32> {

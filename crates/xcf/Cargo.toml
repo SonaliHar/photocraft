@@ -13,7 +13,12 @@ testgen = []
 
 [dependencies]
 thiserror.workspace = true
+web-time = "1.1"
+quick-xml = { version = "=0.41.0", default-features = false }
 flate2.workspace = true
+xcf-bzip2.workspace = true
+xcf-xz.workspace = true
+xcf-gzip.workspace = true
 half = { version = "2", default-features = false, features = ["std"] }
 
 [dev-dependencies]

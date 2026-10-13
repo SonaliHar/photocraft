@@ -63,7 +63,7 @@ fn point_and_paragraph_conversion_keep_the_text_in_place() {
         assert!((after.x0 - before.x0).abs() <= 2 && (after.y0 - before.y0).abs() <= 2, "{align}: {before:?} → {after:?}");
         let lines = |s: &Session| {
             let st = s.active().unwrap();
-            layout(&st.doc, text(s, id)).lines.len()
+            layout(&st.doc, text(s, id)).unwrap().lines.len()
         };
         assert_eq!(lines(&s), 1, "{align}: no new wraps");
         s.execute("type.convertToPointText", json!({})).unwrap();
@@ -104,7 +104,7 @@ fn vertical_orientation_renders_columns_inside_the_canvas() {
     let two = LayerId(r["layer"].as_u64().unwrap());
     s.execute("type.orientation.vertical", json!({"layer": two.0})).unwrap();
     let st = s.active().unwrap();
-    let l = layout(&st.doc, text(&s, two));
+    let l = layout(&st.doc, text(&s, two)).unwrap();
     assert!(l.vertical && l.lines.len() == 2);
     let [x0, y0, x1, y1] = l.bounds().unwrap();
     assert!(x1 > 0.0 && x0 < -40.0 && y0 >= -1e-3 && y1 > 60.0, "{:?}", l.bounds());
@@ -121,7 +121,7 @@ fn vertical_point_and_paragraph_conversion_keep_the_columns_in_place() {
         let id = LayerId(r["layer"].as_u64().unwrap());
         s.execute("type.orientation.vertical", json!({})).unwrap();
         let st = s.active().unwrap();
-        let before = layout(&st.doc, text(&s, id)).bounds().unwrap();
+        let before = layout(&st.doc, text(&s, id)).unwrap().bounds().unwrap();
         let before_tf = text(&s, id).transform;
         let map = |t: &photocraft_geom::Affine, b: [f32; 4]| {
             let p = t.apply(photocraft_geom::Point::new(f64::from(b[0]), f64::from(b[1])));
@@ -131,7 +131,7 @@ fn vertical_point_and_paragraph_conversion_keep_the_columns_in_place() {
         s.execute("type.convertToParagraphText", json!({})).unwrap();
         let TextShape::Box { height, .. } = text(&s, id).shape else { panic!("box expected") };
         let st = s.active().unwrap();
-        let l = layout(&st.doc, text(&s, id));
+        let l = layout(&st.doc, text(&s, id)).unwrap();
         assert_eq!(l.lines.len(), 1, "{align}: no new wraps");
         assert!(height > 0.0);
         // The column's first glyph stays where it was (glyph positions in document space).
@@ -140,7 +140,7 @@ fn vertical_point_and_paragraph_conversion_keep_the_columns_in_place() {
         let p_after = tf.apply(photocraft_geom::Point::new(f64::from(g_after.x), f64::from(g_after.y)));
         s.execute("type.convertToPointText", json!({})).unwrap();
         let st = s.active().unwrap();
-        let back = layout(&st.doc, text(&s, id));
+        let back = layout(&st.doc, text(&s, id)).unwrap();
         let g_back = back.glyphs[0];
         let p_back = text(&s, id).transform.apply(photocraft_geom::Point::new(f64::from(g_back.x), f64::from(g_back.y)));
         assert!((p_after.x - p_back.x).abs() < 1.5 && (p_after.y - p_back.y).abs() < 1.5, "{align}: {p_after:?} → {p_back:?}");
@@ -155,7 +155,7 @@ fn paragraph_to_point_hardens_soft_wraps() {
     let r = s.execute("type.create", json!({"box": [10, 10, 120, 100], "text": "one two three four five six", "size": 18})).unwrap();
     let id = LayerId(r["layer"].as_u64().unwrap());
     let st = s.active().unwrap();
-    let soft = layout(&st.doc, text(&s, id)).lines.len();
+    let soft = layout(&st.doc, text(&s, id)).unwrap().lines.len();
     assert!(soft >= 2);
     let r = s.execute("type.convertToPointText", json!({})).unwrap();
     assert_eq!(r["inserted"], soft - 1);
@@ -163,7 +163,7 @@ fn paragraph_to_point_hardens_soft_wraps() {
     assert_eq!(t.text.matches('\n').count(), soft - 1);
     assert_eq!(t.text.replace('\n', ""), "one two three four five six");
     let st = s.active().unwrap();
-    assert_eq!(layout(&st.doc, text(&s, id)).lines.len(), soft);
+    assert_eq!(layout(&st.doc, text(&s, id)).unwrap().lines.len(), soft);
 }
 
 #[test]
@@ -181,12 +181,12 @@ fn work_path_and_shape_follow_the_glyphs() {
         assert!((x0 - before.x0 as f64).abs() < 3.0 && (x1 - before.x1 as f64).abs() < 3.0, "{x0},{x1} vs {before:?}");
         assert!((y0 - before.y0 as f64).abs() < 3.0 && (y1 - before.y1 as f64).abs() < 3.0);
         // Convert to Shape renders the same pixels (the counter of the 'o' stays open).
-        let comp_before = photocraft_compose::flatten(&s.active().unwrap().doc);
+        let comp_before = photocraft_compose::flatten(&s.active().unwrap().doc).unwrap();
         s.execute("type.convertToShape", json!({})).unwrap();
         let l = s.active().unwrap().doc.layer(id).unwrap();
         assert!(matches!(l.content, LayerContent::Shape(_)));
         assert!(!l.psd_blocks.iter().any(|(k, _)| k == b"TySh"));
-        let comp_after = photocraft_compose::flatten(&s.active().unwrap().doc);
+        let comp_after = photocraft_compose::flatten(&s.active().unwrap().doc).unwrap();
         let diff: f32 = comp_before.px.iter().zip(&comp_after.px).map(|(a, b)| (a[0] - b[0]).abs()).sum::<f32>() / comp_before.px.len() as f32;
         assert!(diff < 0.01, "depth {depth}: mean diff {diff}");
         // The middle of the 'o' counter is background (white).

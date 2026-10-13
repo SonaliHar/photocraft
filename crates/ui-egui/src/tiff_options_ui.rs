@@ -63,8 +63,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     p.dont_ask_again = dont_ask;
     if ok || ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
         let Some(p) = app.tiff_options.take() else { return };
-        if p.dont_ask_again {
-            app.session.edit_prefs(|prefs| prefs.file_handling.ask_before_saving_layered_tiff = false);
+        if p.dont_ask_again
+            && let Err(error) = app.session.edit_prefs(|prefs| prefs.file_handling.ask_before_saving_layered_tiff = false)
+        {
+            app.ui.status = error.to_string();
+            app.ui.status_error = true;
+            return;
         }
         let settings = ExportSettings { tiff_layers: !p.discard_layers, ..Default::default() };
         if let Err(e) = app.write_document(p.path.clone(), &settings) {

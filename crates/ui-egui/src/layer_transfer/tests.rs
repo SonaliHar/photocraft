@@ -103,7 +103,7 @@ fn a_move_tool_drag_onto_a_tab_copies_the_layer_under_the_pointer_and_leaves_the
     h.state_mut().ui.tool = Tool::Move;
     h.run_steps(2);
     let before = source_square(&h, paint);
-    let steps = h.state().session.documents()[0].history.entries().len();
+    let steps = h.state().session.documents()[0].history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
     let grab = ViewXform::active(h.state()).unwrap().to_screen(9.0, 11.0);
     let grab_doc = ViewXform::active(h.state()).unwrap().to_doc(grab);
     let over_tab = tab(&h, "dest-doc");
@@ -116,7 +116,7 @@ fn a_move_tool_drag_onto_a_tab_copies_the_layer_under_the_pointer_and_leaves_the
     let want = egui::pos2((9.0 + at[0] - grab_doc[0]) as f32, (11.0 + at[1] - grab_doc[1]) as f32);
     assert!((r.center() - want).length() <= 1.5, "{r:?} around {want:?}");
     assert_eq!(source_square(&h, paint), before, "the source layer did not move");
-    assert_eq!(h.state().session.documents()[0].history.entries().len(), steps, "no Move step in the source");
+    assert_eq!(h.state().session.documents()[0].history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), steps, "no Move step in the source");
 }
 
 #[test]

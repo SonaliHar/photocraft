@@ -21,7 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let image =
         photocraft_codecs::Image::from_raw(width as u32, height as u32, photocraft_codecs::ChannelLayout::Rgb, photocraft_codecs::SampleType::U8, bytes)?;
     let encoded = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default())?;
-    app.session.open_document(photocraft_io::import("scope.png", &encoded)?.document, None);
+    app.session.open_document(photocraft_io::import("scope.png", &encoded)?.document, None)?;
     camera_raw_ui::menu(&mut app, &ctx, "filter.cameraRaw", &json!({})).ok_or("no dialog entry point")??;
     let mut samples = Vec::new();
     let mut histogram_samples = Vec::new();

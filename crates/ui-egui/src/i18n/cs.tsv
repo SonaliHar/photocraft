@@ -2248,3 +2248,110 @@ fontWeight	Italic	Kurzíva
 	Rotate View Tool	Nástroj otočení zobrazení
 	Reset View	Obnovit zobrazení
 	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Tažením kolem středu otočíte zobrazení  ·  Shift omezí na 15°
+
+# Imported GIMP properties and filters
+	Additional filters are available through command inspection	Další filtry jsou dostupné přes přehled příkazů
+	Alpha	Alfa
+	Alpha threshold	Práh alfa
+	An explicit resolution edit sets both axes.	Výslovná změna rozlišení nastaví obě osy.
+	Apply Text	Použít text
+	Blue frequency	Frekvence modré
+	Blue phase shift	Fázový posun modré
+	Blue weight	Váha modré
+	CIE Lab	CIE Lab
+	CIE Yuv	CIE Yuv
+	Changing this imported GIMP mode is not supported yet.	Změna tohoto importovaného režimu GIMP zatím není podporována.
+	Clip high	Oříznout vysoké hodnoty
+	Clip low	Oříznout nízké hodnoty
+	Cyan / Red	Azurová / Červená
+	Decrease Levels	Snížit počet úrovní
+	Desaturate mode	Režim odbarvení
+	Filter editing is unavailable	Úprava filtru není dostupná
+	GIMP Filters	Filtry GIMP
+	GIMP Text	Text GIMP
+	Green frequency	Frekvence zelené
+	Green phase shift	Fázový posun zelené
+	Green weight	Váha zelené
+	Histogram channel	Kanál histogramu
+	Hue frequency	Frekvence odstínu
+	Hue phase shift	Fázový posun odstínu
+	Increase Levels	Zvýšit počet úrovní
+	Intended temperature	Cílová teplota
+	Keep blue	Zachovat modrou
+	Keep green	Zachovat zelenou
+	Keep hue	Zachovat odstín
+	Keep lightness	Zachovat světlost
+	Keep red	Zachovat červenou
+	Keep saturation	Zachovat sytost
+	Layer content is locked	Obsah vrstvy je zamčený
+	Letter spacing	Prostrkání znaků
+	Lightness frequency	Frekvence světlosti
+	Lightness phase shift	Fázový posun světlosti
+	Line spacing	Řádkování
+	Lower limit	Dolní mez
+	Luma	Luma
+	Magenta / Green	Purpurová / Zelená
+	Move Down	Posunout dolů
+	Move Up	Posunout nahoru
+	Native	Nativní
+	Original temperature	Původní teplota
+	Preserve luminosity	Zachovat jas
+	Process in sRGB	Zpracovat v sRGB
+	Red frequency	Frekvence červené
+	Red phase shift	Fázový posun červené
+	Red weight	Váha červené
+	Remove Filter	Odstranit filtr
+	Reset Text	Obnovit text
+	Saturation colorspace	Barevný prostor sytosti
+	Saturation frequency	Frekvence sytosti
+	Saturation phase shift	Fázový posun sytosti
+	Strength	Síla
+	Text X	Text X
+	Text Y	Text Y
+	Text content	Obsah textu
+	Text editing is unavailable for this layer.	Úprava textu není pro tuto vrstvu dostupná.
+	Upper limit	Horní mez
+	Value	Hodnota
+	Yellow / Blue	Žlutá / Modrá
+	From color	Původní barva
+	To color	Náhradní barva
+	Red threshold	Práh červené
+	Green threshold	Práh zelené
+	Blue threshold	Práh modré
+	Underlined characters	Podtržené znaky
+	Start character	Počáteční znak
+	End character (exclusive)	Koncový znak (nezahrnutý)
+	Apply underline	Použít podtržení
+	Clear underline	Zrušit podtržení
+	Text content editing is unavailable for this layer.	Úpravy textového obsahu nejsou pro tuto vrstvu dostupné.
+	Transparency threshold	Práh průhlednosti
+	Opacity threshold	Práh krytí
+	Component	Složka
+	Y'CbCr Y'	Y'CbCr Y'
+	Y'CbCr Cb	Y'CbCr Cb
+	Y'CbCr Cr	Y'CbCr Cr
+
+	Destination start angle	Počáteční úhel cíle
+
+	Destination end angle	Koncový úhel cíle
+	GIMP Linked Image	Propojený obrázek GIMP
+	Original byte identity is unavailable. The selected PNG is a Reduced substitution (8 MiB limit).	Shoda s původními bajty není dostupná. Vybraný PNG je náhrada se sníženou věrností (limit 8 MiB).
+	Replace Linked Image (Reduced)…	Nahradit propojený obrázek (snížená věrnost)…
+	Resource picker unavailable.	Výběr prostředku není dostupný.
+	The selected PNG must match the retained original byte identity (8 MiB limit). Exact recovery applies to this linked image only.	Vybraný soubor PNG musí odpovídat zachované původní identitě bajtů (limit 8 MiB). Přesné obnovení se vztahuje pouze na tento propojený obrázek.
+	Recover Linked Image (Exact)…	Obnovit propojený obrázek (přesně)…
+	Saved floating attachment	Uložené připojení plovoucího výběru
+	Attachment target	Cíl připojení
+	Detach the saved relationship without changing pixels.	Odpojit uloženou vazbu bez změny pixelů.
+	Detach Floating Layer	Odpojit plovoucí vrstvu
+	Complete or cancel the pixel-move preview before detaching the saved relationship.	Před odpojením uložené vazby dokončete nebo zrušte náhled přesunu pixelů.
+	Saved named item sets	Uložené pojmenované sady položek
+	Only sets containing this layer are shown; saved searches are not evaluated.	Zobrazeny jsou pouze sady obsahující tuto vrstvu; uložená hledání se nevyhodnocují.
+	Rename Saved Item Set…	Přejmenovat uloženou sadu položek…
+	Delete Saved Item Set	Odstranit uloženou sadu položek
+	Saved set name	Název uložené sady
+	Apply Saved Item Set Name	Použít název uložené sady položek
+	Enter a replacement name for this long saved name.	Zadejte náhradní název pro tento dlouhý uložený název.
+	Only the first 64 matching sets are shown.	Zobrazeno je pouze prvních 64 odpovídajících sad.
+	Complete or cancel the pixel-move preview before editing saved item sets.	Před úpravou uložených sad položek dokončete nebo zrušte náhled přesunu pixelů.
+	Remove this layer from set	Odebrat tuto vrstvu ze sady

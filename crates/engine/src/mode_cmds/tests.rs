@@ -200,7 +200,7 @@ fn duotone_inks_and_display() {
     assert_eq!(inks[1].curve.last().unwrap().output, 0.8);
     // Display: warm midtones (red > blue) where the gray image is neutral.
     let shown = display_document(d).unwrap();
-    let px = photocraft_compose::render(&shown, Rect::from_xywh(8, 4, 1, 1)).px[0];
+    let px = photocraft_compose::render(&shown, Rect::from_xywh(8, 4, 1, 1)).unwrap().px[0];
     assert!(px[0] > px[2] + 0.05, "{px:?}");
     assert!(display_document(&Document::new("x", Size::new(1, 1), ColorMode::Grayscale, SampleType::U8)).is_none());
     // Tritone defaults and leaving the mode.
@@ -220,4 +220,176 @@ fn modes_round_trip_through_pcraft() {
     let back = photocraft_format::load_from_bytes(&bytes).unwrap();
     assert_eq!(back.color_table, doc(&s).color_table);
     assert_eq!(back.mode, ColorMode::Indexed);
+}
+#[test]
+fn indexed_channel_quantization_reads_f64_once_and_undo_restores_bits() {
+    let mut s = session(2, 2, 8, "rgb");
+    let value: f64 = (128.5 - 1e-8) / 255.;
+    let format = PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false);
+    s.edit("wide channel setup", |d, _| {
+        d.channels.push(photocraft_doc::AlphaChannel::new(
+            "Own exact channel",
+            Surface::try_from_interleaved(format, Rect::new(0, 0, 1, 1), &value.to_ne_bytes()).unwrap(),
+        ));
+        Ok(())
+    })
+    .unwrap();
+    let before = doc(&s).clone();
+    s.execute("image.mode.indexedColor", json!({"colors":4,"forced":"none","dither":"none"})).unwrap();
+    assert_eq!(doc(&s).channels[0].surface.try_read_interleaved(Rect::new(0, 0, 1, 1)).unwrap(), vec![128]);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(doc(&s), &before);
+}
+#[test]
+fn unsupported_wide_mode_and_auxiliary_model_changes_are_atomic() {
+    let mut s = session(2, 2, 8, "rgb");
+    s.edit("invalid channel model", |d, _| {
+        d.channels.push(photocraft_doc::AlphaChannel::new("RGB auxiliary", Surface::new(PixelFormat::RGBA64F)));
+        Ok(())
+    })
+    .unwrap();
+    let before = doc(&s).clone();
+    let history = s.active().unwrap().history.past_len();
+    assert!(s.execute("image.mode.indexedColor", json!({"colors":4})).is_err());
+    assert_eq!(doc(&s), &before);
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+    let mut s = session(2, 2, 8, "rgb");
+    s.edit("wide source", |d, _| {
+        d.depth = SampleType::F64;
+        d.layers[0].content = LayerContent::Raster(Surface::new(PixelFormat::RGBA64F));
+        Ok(())
+    })
+    .unwrap();
+    let before = doc(&s).clone();
+    let history = s.active().unwrap().history.past_len();
+    assert!(s.execute("image.mode.indexedColor", json!({"colors":4})).is_err());
+    assert_eq!(doc(&s), &before);
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+}
+
+fn bitmap_physical_fixture(legacy: f32, physical: Option<photocraft_doc::PhysicalResolution>) -> Session {
+    let mut d = Document::with_background(
+        "Physical halftone",
+        Size::new(64, 64),
+        ColorMode::Grayscale,
+        SampleType::U8,
+        photocraft_color::Color::rgba(0.5, 0.5, 0.5, 1.0),
+    );
+    d.resolution_dpi = legacy;
+    d.physical_resolution = physical;
+    let bytes = photocraft_format::save_to_bytes(&d, &Default::default()).unwrap();
+    let mut s = Session::new();
+    s.add_document(photocraft_format::load_from_bytes(&bytes).unwrap(), None).unwrap();
+    s
+}
+fn bitmap_physical_samples(s: &Session) -> Vec<f32> {
+    doc(s).layers[0].surface().unwrap().read_region(doc(s).bounds())
+}
+fn bitmap_physical_run(s: &mut Session) {
+    s.execute("image.mode.bitmap", json!({"method":"halftone","frequency":36,"angle":0,"shape":"round"})).unwrap();
+}
+#[test]
+fn bitmap_physical_canonical_square_native_and_history() {
+    use photocraft_doc::{CustomUnit, PhysicalResolution, PhysicalUnit};
+    for dpi in [144.0, 144.25] {
+        let mut legacy = bitmap_physical_fixture(dpi as f32, None);
+        bitmap_physical_run(&mut legacy);
+        let expected = bitmap_physical_samples(&legacy);
+        let resolution = PhysicalResolution {
+            x_dpi: dpi,
+            y_dpi: dpi,
+            unit: PhysicalUnit::Custom(CustomUnit { name: "Quarter inch".into(), factor: 4.0, digits: 3, symbol: "qi".into(), abbreviation: "qi".into() }),
+        };
+        let mut canonical = bitmap_physical_fixture(300.0, Some(resolution.clone()));
+        bitmap_physical_run(&mut canonical);
+        let actual = bitmap_physical_samples(&canonical);
+        assert_eq!(actual.iter().zip(&expected).filter(|(a, b)| a != b).count(), 0, "canonical square DPI controls lines/inch, not stale scalar");
+        assert_eq!(doc(&canonical).physical_resolution, Some(resolution.clone()));
+        assert_eq!(doc(&canonical).resolution_dpi.to_bits(), 300.0f32.to_bits());
+        let bytes = photocraft_format::save_to_bytes(doc(&canonical), &Default::default()).unwrap();
+        let reopened = photocraft_format::load_from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.physical_resolution, Some(resolution.clone()));
+        assert_eq!(reopened.layers[0].surface().unwrap().read_region(reopened.bounds()), actual);
+        assert!(canonical.undo());
+        assert_eq!(doc(&canonical).mode, ColorMode::Grayscale);
+        assert_eq!(doc(&canonical).physical_resolution, Some(resolution.clone()));
+        assert!(canonical.redo());
+        assert_eq!(bitmap_physical_samples(&canonical), actual);
+        assert_eq!(doc(&canonical).physical_resolution, Some(resolution));
+    }
+    let mut default = Session::new();
+    default.execute("file.new", json!({"width":64,"height":64,"mode":"gray","background":"#808080"})).unwrap();
+    assert_eq!(doc(&default).effective_resolution(), PhysicalResolution::square(72.0));
+    bitmap_physical_run(&mut default);
+    assert_eq!(doc(&default).mode, ColorMode::Bitmap);
+}
+#[test]
+fn bitmap_physical_invalid_and_unequal_are_atomic() {
+    use photocraft_doc::{CustomUnit, PhysicalResolution, PhysicalUnit};
+    let mut cases = vec![PhysicalResolution { x_dpi: 144.0, y_dpi: 288.0, unit: PhysicalUnit::Inch }];
+    for invalid in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::MAX] {
+        cases.push(PhysicalResolution::square(invalid));
+    }
+    cases.push(PhysicalResolution {
+        x_dpi: 144.0,
+        y_dpi: 144.0,
+        unit: PhysicalUnit::Custom(CustomUnit { name: "bad".into(), factor: 0.0, digits: 1, symbol: "x".into(), abbreviation: "x".into() }),
+    });
+    for resolution in cases {
+        let mut s = bitmap_physical_fixture(300.0, None);
+        s.active_mut().unwrap().doc.try_resident_mut().unwrap().physical_resolution = Some(resolution);
+        let before = format!("{:?}", doc(&s));
+        let history = s.active().unwrap().history.past_len();
+        assert!(s.execute("image.mode.bitmap", json!({"method":"halftone","frequency":36})).is_err());
+        assert_eq!(format!("{:?}", doc(&s)), before);
+        assert_eq!(s.active().unwrap().history.past_len(), history);
+    }
+}
+#[test]
+fn bitmap_physical_non_halftone_accepts_valid_unequal_axes() {
+    for method in ["threshold", "pattern", "diffusion"] {
+        let mut s =
+            bitmap_physical_fixture(300.0, Some(photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: 288.0, unit: photocraft_doc::PhysicalUnit::Inch }));
+        s.execute("image.mode.bitmap", json!({"method":method})).unwrap();
+        assert_eq!(doc(&s).mode, ColorMode::Bitmap);
+        assert_eq!(doc(&s).effective_resolution().y_dpi, 288.0);
+    }
+}
+
+#[test]
+fn bitmap_physical_oversized_custom_units_are_refused_atomically() {
+    use photocraft_doc::{CustomUnit, PhysicalResolution, PhysicalUnit};
+    for field in 0..3 {
+        let mut s = bitmap_physical_fixture(300.0, None);
+        let mut unit = CustomUnit { name: "Quarter inch".into(), factor: 4.0, digits: 3, symbol: "qi".into(), abbreviation: "qi".into() };
+        let oversized = "x".repeat((1 << 20) + 1);
+        match field {
+            0 => unit.name = oversized,
+            1 => unit.symbol = oversized,
+            _ => unit.abbreviation = oversized,
+        }
+        s.active_mut().unwrap().doc.try_resident_mut().unwrap().physical_resolution =
+            Some(PhysicalResolution { x_dpi: 144.25, y_dpi: 144.25, unit: PhysicalUnit::Custom(unit) });
+        let before = bitmap_physical_samples(&s);
+        let state = s.active().unwrap();
+        let history = state.history.past_len();
+        let revision = state.revision;
+        let id = state.doc.id;
+        let error = s.execute("image.mode.bitmap", json!({"method":"halftone","frequency":36})).unwrap_err().to_string();
+        assert!(error.contains("invalid physical resolution"), "{error}");
+        assert_eq!(bitmap_physical_samples(&s), before);
+        let state = s.active().unwrap();
+        assert_eq!(state.doc.id, id);
+        assert_eq!(state.doc.mode, ColorMode::Grayscale);
+        assert_eq!(state.history.past_len(), history);
+        assert_eq!(state.revision, revision);
+        let PhysicalUnit::Custom(unit) = &state.doc.physical_resolution.as_ref().unwrap().unit else { panic!("custom unit was lost") };
+        let retained = match field {
+            0 => &unit.name,
+            1 => &unit.symbol,
+            _ => &unit.abbreviation,
+        };
+        assert_eq!(retained.len(), (1 << 20) + 1);
+        assert!(retained.bytes().all(|byte| byte == b'x'));
+    }
 }

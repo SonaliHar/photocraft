@@ -153,7 +153,7 @@ fn paths_export_as_illustrator_postscript() {
         let tri = Subpath::polygon(&[(10.0, 10.0), (100.0, 10.0), (50.0, 90.0)]);
         let mut curve = Subpath::polyline(&[(0.0, 0.0), (300.0, 150.0)]);
         curve.knots[0] = Knot::smooth(photocraft_geom::Point::new(0.0, 0.0), photocraft_geom::Point::new(0.0, 0.0), photocraft_geom::Point::new(50.0, 0.0));
-        d.paths.push(NamedPath { name: "Shapes".into(), path: Path::new(vec![tri, curve]), psd_raw: None });
+        d.paths.push(NamedPath::new("Shapes", Path::new(vec![tri, curve])));
         Ok(())
     })
     .unwrap();

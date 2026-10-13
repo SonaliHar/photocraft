@@ -12,7 +12,7 @@ use photocraft_algo::segment::sky::{self, SkyParams};
 use photocraft_algo::segment::{Sampler, SurfaceSampler};
 use photocraft_algo::selection::{SelectionMode, combine_region};
 use photocraft_algo::transform::{Homography, Interp};
-use photocraft_algo::warp::warp_mesh_gray;
+use photocraft_algo::warp::try_warp_mesh_gray;
 use photocraft_doc::{Document, LayerId};
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
@@ -39,8 +39,8 @@ fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
 struct CompositeSampler<'a>(&'a Document);
 
 impl Sampler for CompositeSampler<'_> {
-    fn rgba(&self, r: Rect) -> Vec<[f32; 4]> {
-        photocraft_compose::render(self.0, r).px
+    fn rgba(&self, r: Rect) -> std::result::Result<Vec<[f32; 4]>, photocraft_raster::RasterInputError> {
+        Ok(photocraft_compose::render(self.0, r)?.px)
     }
 }
 
@@ -56,7 +56,7 @@ fn select_sky(s: &mut Session, p: &Value) -> Result<Value> {
     let region = match (all, layer) {
         (false, Some(surf)) => sky::select_sky(&SurfaceSampler(surf), canvas, params),
         _ => sky::select_sky(&CompositeSampler(&doc), canvas, params),
-    };
+    }?;
     let m = p.get("mode").and_then(Value::as_str).unwrap_or("replace");
     let m = SelectionMode::parse(if m == "new" { "replace" } else { m });
     let Some(region) = region else {
@@ -78,7 +78,7 @@ fn select_sky(s: &mut Session, p: &Value) -> Result<Value> {
 fn isolate_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     let on = p.get("on").and_then(Value::as_bool).unwrap_or(st.isolated_layers.is_empty());
-    st.isolated_layers = if on { st.selected_layers() } else { Vec::new() };
+    st.isolated_layers = if on { st.selected_layers()? } else { Vec::new() };
     st.revision += 1;
     Ok(json!({ "isolated": !st.isolated_layers.is_empty(), "layers": st.isolated_layers.iter().map(|l| l.0).collect::<Vec<_>>() }))
 }
@@ -170,7 +170,8 @@ fn transform_selection(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let selected = s.edit("Transform Selection", |doc, _| {
             if let Some(sel) = &doc.selection {
-                doc.selection = Some(warp_mesh_gray(sel, &|x, y| w.map(x, y), interp)).filter(|s| !s.content_bounds().is_empty());
+                doc.selection = Some(try_warp_mesh_gray(sel, &|x, y| w.map(x, y), interp).map_err(|e| crate::EngineError::Other(e.to_string()))?)
+                    .filter(|s| !s.content_bounds().is_empty());
             }
             Ok(doc.selection.is_some())
         })?;
@@ -195,7 +196,7 @@ fn transform_selection(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let selected = s.edit("Transform Selection", |doc, _| {
         if let Some(sel) = &doc.selection {
-            doc.selection = Some(crate::transform_cmds::warp_gray(sel, &h, interp)).filter(|s| !s.content_bounds().is_empty());
+            doc.selection = Some(crate::transform_cmds::try_warp_gray(sel, &h, interp)?).filter(|s| !s.content_bounds().is_empty());
         }
         Ok(doc.selection.is_some())
     })?;
@@ -323,7 +324,7 @@ mod tests {
         let bg = d.doc.layers[0].id;
         assert!(isolation_shows(&d.doc, &d.isolated_layers, active));
         assert!(!isolation_shows(&d.doc, &d.isolated_layers, bg));
-        assert_eq!(crate::inspect::document(d)["isolatedLayers"], json!([active.0]));
+        assert_eq!(crate::inspect::document(d).unwrap()["isolatedLayers"], json!([active.0]));
         let r = s.execute("select.isolateLayers", json!({})).unwrap();
         assert_eq!(r["isolated"], json!(false));
         assert!(s.active().unwrap().isolated_layers.is_empty());

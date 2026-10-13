@@ -1,7 +1,6 @@
 //! Object storage (ZIP or directory), incremental writer and loader.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 use std::time::SystemTime;
@@ -12,7 +11,7 @@ use photocraft_raster::{Rgba8Image, Tile};
 
 use crate::convert::{self, Fetch, Loader, Sink, is_valid_hash, swap_to_le};
 use crate::manifest::{ContentM, FORMAT_VERSION, Hash, LayerM, Manifest};
-use crate::zip::{ZipReader, ZipWriter};
+use crate::zip::ZipWriter;
 use crate::{FormatError, LoadOptions, Result, SaveOptions};
 
 pub(crate) const MANIFEST: &str = "manifest.json";
@@ -31,9 +30,15 @@ fn compress(data: &[u8]) -> Vec<u8> {
 }
 
 fn decompress(data: &[u8], expected: usize, what: &str) -> Result<Vec<u8>> {
+    decompress_with(data, expected, what, &photocraft_raster::Interrupt::NONE)
+}
+fn decompress_with(data: &[u8], expected: usize, what: &str, control: &photocraft_raster::Interrupt<'_>) -> Result<Vec<u8>> {
+    if control.cancelled() {
+        return Err(FormatError::Cancelled);
+    }
     let mut dec = ruzstd::decoding::StreamingDecoder::new(data).map_err(|e| FormatError::corrupt(format!("{what}: zstd: {e}")))?;
-    let mut out = Vec::with_capacity(expected.min(64 << 20));
-    (&mut dec).take(expected as u64 + 1).read_to_end(&mut out).map_err(|e| FormatError::corrupt(format!("{what}: zstd: {e}")))?;
+    let out = crate::read::read_all_bounded(&mut dec, expected as u64, expected, control)
+        .map_err(|error| if control.cancelled() { FormatError::Cancelled } else { FormatError::corrupt(format!("{what}: zstd: {error}")) })?;
     if out.len() != expected {
         return Err(FormatError::corrupt(format!("{what}: expected {expected} bytes, got {}", out.len())));
     }
@@ -56,21 +61,68 @@ fn png(img: &Rgba8Image) -> Result<Vec<u8>> {
 
 pub(crate) trait Source {
     fn get(&self, path: &str, max: usize) -> Result<Vec<u8>>;
+    fn get_with_interrupt(&self, path: &str, max: usize, control: &photocraft_raster::Interrupt<'_>) -> Result<Vec<u8>> {
+        if control.cancelled() {
+            return Err(FormatError::Cancelled);
+        }
+        let bytes = self.get(path, max)?;
+        if control.cancelled() {
+            return Err(FormatError::Cancelled);
+        }
+        Ok(bytes)
+    }
+    fn model_control(&self) -> Option<&photocraft_raster::backing::ReadControl<'_>> {
+        None
+    }
 }
 
 pub(crate) struct ZipSource<'a> {
-    zip: ZipReader<'a>,
+    zip: std::cell::RefCell<crate::zip::stream::Reader<std::io::Cursor<&'a [u8]>>>,
 }
 
 impl<'a> ZipSource<'a> {
     pub fn new(bytes: &'a [u8]) -> Result<Self> {
-        Ok(ZipSource { zip: ZipReader::new(bytes)? })
+        Ok(ZipSource {
+            zip: std::cell::RefCell::new(crate::zip::stream::Reader::new(
+                std::io::Cursor::new(bytes),
+                Default::default(),
+                &photocraft_raster::Interrupt::NONE,
+            )?),
+        })
     }
 }
 
 impl Source for ZipSource<'_> {
     fn get(&self, path: &str, max: usize) -> Result<Vec<u8>> {
-        self.zip.read_by_name(path, max)
+        self.get_with_interrupt(path, max, &photocraft_raster::Interrupt::NONE)
+    }
+    fn get_with_interrupt(&self, path: &str, max: usize, control: &photocraft_raster::Interrupt<'_>) -> Result<Vec<u8>> {
+        self.zip.try_borrow_mut().map_err(|_| FormatError::corrupt("recursive zip access"))?.read_by_name(path, max, control)
+    }
+}
+
+pub(crate) struct StreamSource<'a, R> {
+    zip: std::cell::RefCell<crate::zip::stream::Reader<R>>,
+    control: photocraft_raster::Interrupt<'a>,
+}
+impl<'a, R: std::io::Read + std::io::Seek> StreamSource<'a, R> {
+    pub(crate) fn new(input: R, limits: crate::zip::stream::Limits, control: photocraft_raster::Interrupt<'a>) -> Result<Self> {
+        Ok(Self { zip: std::cell::RefCell::new(crate::zip::stream::Reader::new(input, limits, &control)?), control })
+    }
+}
+impl<R: std::io::Read + std::io::Seek> Source for StreamSource<'_, R> {
+    fn get(&self, path: &str, max: usize) -> Result<Vec<u8>> {
+        self.get_with_interrupt(path, max, &self.control)
+    }
+    fn get_with_interrupt(&self, path: &str, max: usize, control: &photocraft_raster::Interrupt<'_>) -> Result<Vec<u8>> {
+        let own = self.control;
+        let cancel = || own.cancelled() || control.cancelled();
+        let progress = |fraction| {
+            own.progress(fraction);
+            control.progress(fraction);
+        };
+        let combined = photocraft_raster::Interrupt::new(&cancel, &progress);
+        self.zip.try_borrow_mut().map_err(|_| FormatError::corrupt("recursive streaming zip access"))?.read_by_name(path, max, &combined)
     }
 }
 
@@ -80,12 +132,19 @@ pub(crate) struct DirSource {
 
 impl Source for DirSource {
     fn get(&self, path: &str, max: usize) -> Result<Vec<u8>> {
-        let p = self.root.join(path);
-        let len = std::fs::metadata(&p).map_err(|_| FormatError::corrupt(format!("missing `{path}`")))?.len();
+        self.get_with_interrupt(path, max, &photocraft_raster::Interrupt::NONE)
+    }
+    fn get_with_interrupt(&self, path: &str, max: usize, control: &photocraft_raster::Interrupt<'_>) -> Result<Vec<u8>> {
+        if control.cancelled() {
+            return Err(FormatError::Cancelled);
+        }
+        let mut file = std::fs::File::open(self.root.join(path))?;
+        let len = file.metadata()?.len();
         if len > max as u64 {
             return Err(FormatError::LimitExceeded(format!("`{path}` is {len} bytes (max {max})")));
         }
-        Ok(std::fs::read(p)?)
+        crate::read::read_all_bounded(&mut file, len, max, control)
+            .map_err(|error| if control.cancelled() { FormatError::Cancelled } else { FormatError::Io(error) })
     }
 }
 
@@ -101,8 +160,14 @@ const MAX_MANIFEST_DEPTH: usize = 3 * (convert::MAX_GROUP_DEPTH + 1) + 64;
 /// Rejects JSON nested deeper than [`MAX_MANIFEST_DEPTH`] with a linear scan (no recursion), so
 /// parsing with serde_json's recursion limit disabled can't exhaust the stack on hostile input.
 fn check_manifest_depth(json: &[u8]) -> Result<()> {
+    check_manifest_depth_with(json, photocraft_raster::Interrupt::NONE)
+}
+fn check_manifest_depth_with(json: &[u8], control: photocraft_raster::Interrupt<'_>) -> Result<()> {
     let (mut depth, mut in_str, mut escaped) = (0usize, false, false);
-    for &b in json {
+    for (index, &b) in json.iter().enumerate() {
+        if index.is_multiple_of(8192) && control.cancelled() {
+            return Err(FormatError::Cancelled);
+        }
         if in_str {
             match b {
                 _ if escaped => escaped = false,
@@ -128,20 +193,109 @@ fn check_manifest_depth(json: &[u8]) -> Result<()> {
 }
 
 pub(crate) fn read_manifest(src: &dyn Source, opts: &LoadOptions) -> Result<Manifest> {
-    let raw = src.get(MANIFEST, opts.max_manifest_bytes)?;
+    read_manifest_with_interrupt(src, opts, &photocraft_raster::Interrupt::NONE)
+}
+fn read_manifest_with_interrupt(src: &dyn Source, opts: &LoadOptions, interrupt: &photocraft_raster::Interrupt<'_>) -> Result<Manifest> {
+    let raw = src.get_with_interrupt(MANIFEST, opts.max_manifest_bytes, interrupt)?;
+    if interrupt.cancelled() {
+        return Err(FormatError::Cancelled);
+    }
+    check_manifest_depth_with(&raw, *interrupt)?;
     // serde_json stops at 128 levels (about 40 nested groups); the bounded check replaces that limit.
-    check_manifest_depth(&raw)?;
-    let mut de = serde_json::Deserializer::from_slice(&raw);
-    de.disable_recursion_limit();
-    let mut v = <serde_json::Value as serde::Deserialize>::deserialize(&mut de)?;
-    de.end()?;
+    let mut v = if let Some(control) = src.model_control() {
+        check_manifest_depth_with(&raw, *control.interrupt)?;
+        struct Checked<'a, 'c> {
+            raw: &'a [u8],
+            position: usize,
+            control: &'a photocraft_raster::backing::ReadControl<'c>,
+            failure: Option<photocraft_raster::backing::BackingError>,
+        }
+        impl std::io::Read for Checked<'_, '_> {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                let left = self.raw.len().checked_sub(self.position).ok_or_else(|| std::io::Error::other("manifest read position"))?;
+                let count = left.min(out.len()).min(4096);
+                if let Err(error) = self.control.check(count as u64) {
+                    self.failure = Some(error);
+                    return Err(std::io::Error::other(error));
+                }
+                let next = self.position.checked_add(count).ok_or_else(|| std::io::Error::other("manifest read position"))?;
+                out.get_mut(..count)
+                    .ok_or_else(|| std::io::Error::other("manifest read length"))?
+                    .copy_from_slice(self.raw.get(self.position..next).ok_or_else(|| std::io::Error::other("manifest read length"))?);
+                self.position = next;
+                Ok(count)
+            }
+        }
+        let mut checked = Checked { raw: &raw, position: 0, control, failure: None };
+        let result = {
+            let mut de = serde_json::Deserializer::from_reader(&mut checked);
+            de.disable_recursion_limit();
+            <serde_json::Value as serde::Deserialize>::deserialize(&mut de).and_then(|v| {
+                de.end()?;
+                Ok(v)
+            })
+        };
+        if let Some(error) = checked.failure {
+            return Err(crate::owned_document::error(error));
+        }
+        result?
+    } else {
+        check_manifest_depth(&raw)?;
+        let mut de = serde_json::Deserializer::from_slice(&raw);
+        de.disable_recursion_limit();
+        let value = <serde_json::Value as serde::Deserialize>::deserialize(&mut de)?;
+        de.end()?;
+        value
+    };
+    if let Some(minimum) = v.get("minimum_reader_version") {
+        let found = minimum.as_u64().and_then(|n| u32::try_from(n).ok()).ok_or_else(|| FormatError::corrupt("invalid minimum_reader_version"))?;
+        if found == 0 {
+            return Err(FormatError::corrupt("minimum_reader_version 0 is invalid"));
+        }
+        if found > FORMAT_VERSION {
+            return Err(FormatError::TooNew { found, supported: FORMAT_VERSION });
+        }
+    }
     crate::migrate::migrate(&mut v)?;
     let layers = take_array(&mut v, "/document/layers");
     let mut m: Manifest = serde_json::from_value(v)?;
+    if m.minimum_reader_version == 0 {
+        return Err(FormatError::corrupt("minimum_reader_version 0 is invalid"));
+    }
+    if m.minimum_reader_version > FORMAT_VERSION {
+        return Err(FormatError::TooNew { found: m.minimum_reader_version, supported: FORMAT_VERSION });
+    }
+    if (m.document.physical_resolution.is_some() || m.document.xcf_state.is_some() || !m.document.xcf_filter_masks.is_empty()) && m.minimum_reader_version < 2 {
+        return Err(FormatError::corrupt("imported state requires minimum reader version 2"));
+    }
+    if (!m.document.xcf_source_caches.is_empty() || m.document.working_profile_interpretation != photocraft_doc::WorkingProfileInterpretation::Icc)
+        && m.minimum_reader_version < 3
+    {
+        return Err(FormatError::corrupt("source cache blobs or working profile interpretation require minimum reader version 3"));
+    }
     m.document.layers = layers_from_json(layers)?;
+    if manifest_has_finite(&m.document.layers, 0, src.model_control())? && m.minimum_reader_version < 5 {
+        return Err(FormatError::corrupt("finite raster requires minimum reader version 5"));
+    }
     Ok(m)
 }
 
+fn manifest_has_finite(layers: &[LayerM], depth: usize, control: Option<&photocraft_raster::backing::ReadControl<'_>>) -> Result<bool> {
+    if depth > convert::MAX_GROUP_DEPTH {
+        return Err(FormatError::LimitExceeded("native layer nesting".into()));
+    }
+    for layer in layers {
+        if let Some(control) = control {
+            control.check(1).map_err(crate::owned_document::error)?;
+        }
+        match &layer.content {
+            ContentM::FiniteRaster { .. } => return Ok(true),
+            ContentM::Group { children, .. } if manifest_has_finite(children, depth + 1, control)? => return Ok(true),
+            _ => {}
+        }
+    }
+    Ok(false)
+}
 /// Decodes layers one at a time, group children first. Decoding the whole tree in one go costs
 /// kilobytes of stack per nesting level; here each level only holds a few pointers.
 fn layers_from_json(values: Vec<serde_json::Value>) -> Result<Vec<LayerM>> {
@@ -171,57 +325,144 @@ fn take_array(v: &mut serde_json::Value, pointer: &str) -> Vec<serde_json::Value
     }
 }
 
-struct LoadFetch<'a> {
+struct LoadFetch<'a, 'c> {
     src: &'a dyn Source,
     opts: LoadOptions,
     total: u64,
+    retained_capacity: u64,
+    control: photocraft_raster::Interrupt<'c>,
     blobs: HashMap<String, Arc<Vec<u8>>>,
+    source_cache_hashes: std::collections::HashSet<String>,
 }
 
-impl LoadFetch<'_> {
+impl LoadFetch<'_, '_> {
     fn account(&mut self, n: usize) -> Result<()> {
-        self.total += n as u64;
+        self.total = self.total.checked_add(n as u64).ok_or_else(|| FormatError::LimitExceeded("bundle expansion overflow".into()))?;
         if self.total > self.opts.max_total_bytes {
             return Err(FormatError::LimitExceeded(format!("bundle expands beyond {} bytes", self.opts.max_total_bytes)));
         }
         Ok(())
     }
+    fn capacity(&mut self, n: usize) -> Result<()> {
+        self.retained_capacity = self
+            .retained_capacity
+            .checked_add(n as u64)
+            .filter(|total| *total <= self.opts.max_total_bytes)
+            .ok_or_else(|| FormatError::LimitExceeded("bundle retained Vec capacity".into()))?;
+        Ok(())
+    }
 }
 
-impl Fetch for LoadFetch<'_> {
+impl Fetch for LoadFetch<'_, '_> {
+    fn source_cache_bytes(&mut self, hash: &str, max: usize, control: &photocraft_raster::Interrupt<'_>) -> Result<Arc<Vec<u8>>> {
+        let bytes = self.blob_bounded_with(hash, max, control)?;
+        // Keep authenticated blob sharing, while retaining the old logical
+        // repeated-descriptor expansion charge (formerly caused by eviction).
+        if self.source_cache_hashes.contains(hash) {
+            self.account(bytes.len())?;
+        } else {
+            if self.source_cache_hashes.len() >= 10_000 {
+                return Err(FormatError::LimitExceeded("source caches".into()));
+            }
+            self.source_cache_hashes.try_reserve(1).map_err(|_| FormatError::LimitExceeded("source cache identity allocation".into()))?;
+            let mut key = String::new();
+            key.try_reserve_exact(hash.len()).map_err(|_| FormatError::LimitExceeded("source cache identity allocation".into()))?;
+            key.push_str(hash);
+            self.source_cache_hashes.insert(key);
+        }
+        if control.cancelled() {
+            return Err(FormatError::Cancelled);
+        }
+        Ok(bytes)
+    }
     fn tile(&mut self, hash: &str, len: usize) -> Result<Vec<u8>> {
         if !is_valid_hash(hash) {
             return Err(FormatError::corrupt(format!("invalid tile hash `{hash}`")));
         }
         self.account(len)?;
         let path = tile_path(hash);
-        let z = self.src.get(&path, len + len / 8 + 4096)?;
-        let data = decompress(&z, len, &path)?;
-        if hash_bytes(&data) != hash {
+        let encoded_limit =
+            len.checked_add(len / 8).and_then(|n| n.checked_add(4096)).ok_or_else(|| FormatError::LimitExceeded("tile encoded length overflow".into()))?;
+        let z = self.src.get_with_interrupt(&path, encoded_limit, &self.control)?;
+        let remaining =
+            self.opts.max_total_bytes.checked_sub(self.retained_capacity).ok_or_else(|| FormatError::LimitExceeded("tile retained capacity".into()))?;
+        if (z.capacity() as u64).checked_add(len as u64).and_then(|n| n.checked_add(16)).is_none_or(|n| n > remaining) {
+            return Err(FormatError::LimitExceeded("tile decode buffer envelope".into()));
+        }
+        let data = decompress_with(&z, len, &path, &self.control)?;
+        self.capacity(data.capacity())?;
+        let mut observed = blake3::Hasher::new();
+        for chunk in data.chunks(128 << 10) {
+            if self.control.cancelled() {
+                return Err(FormatError::Cancelled);
+            }
+            observed.update(chunk);
+        }
+        if self.control.cancelled() {
+            return Err(FormatError::Cancelled);
+        }
+        if observed.finalize().to_hex().as_str() != hash {
             return Err(FormatError::corrupt(format!("{path}: content does not match its hash")));
         }
         Ok(data)
     }
 
     fn blob(&mut self, hash: &str) -> Result<Arc<Vec<u8>>> {
+        self.blob_bounded(hash, self.opts.max_blob_bytes)
+    }
+    fn blob_bounded(&mut self, hash: &str, max: usize) -> Result<Arc<Vec<u8>>> {
+        let control = self.control;
+        self.blob_bounded_with(hash, max, &control)
+    }
+    fn blob_bounded_with(&mut self, hash: &str, max: usize, control: &photocraft_raster::Interrupt<'_>) -> Result<Arc<Vec<u8>>> {
+        if control.cancelled() {
+            return Err(FormatError::Cancelled);
+        }
+        let max = max.min(self.opts.max_blob_bytes);
         if let Some(b) = self.blobs.get(hash) {
+            if b.len() > max {
+                return Err(FormatError::LimitExceeded("bounded source cache blob".into()));
+            }
             return Ok(b.clone());
         }
         if !is_valid_hash(hash) {
             return Err(FormatError::corrupt(format!("invalid blob hash `{hash}`")));
         }
         let path = blob_path(hash);
-        let z = self.src.get(&path, self.opts.max_blob_bytes)?;
+        let encoded_limit = max.saturating_mul(2).saturating_add(64 << 10).min(self.opts.max_blob_bytes);
+        let z = self.src.get_with_interrupt(&path, encoded_limit, control)?;
         // Blob length is not in the manifest; the frame header bounds it and
         // we cap at max_blob_bytes.
+        let remaining = self
+            .opts
+            .max_total_bytes
+            .checked_sub(self.retained_capacity)
+            .and_then(|n| n.checked_sub(z.capacity() as u64))
+            .and_then(|n| n.checked_sub(16))
+            .ok_or_else(|| FormatError::LimitExceeded("blob decode buffer envelope".into()))?;
+        let decoded_limit = max.min(usize::try_from(remaining).unwrap_or(usize::MAX));
+        // Keep the existing decoder window ceiling: lowering it to the output
+        // size would reject valid small objects encoded with a larger window.
         let mut dec = ruzstd::decoding::StreamingDecoder::new(&z[..]).map_err(|e| FormatError::corrupt(format!("{path}: zstd: {e}")))?;
-        let mut data = Vec::new();
-        (&mut dec).take(self.opts.max_blob_bytes as u64 + 1).read_to_end(&mut data).map_err(|e| FormatError::corrupt(format!("{path}: zstd: {e}")))?;
-        if data.len() > self.opts.max_blob_bytes {
-            return Err(FormatError::LimitExceeded(format!("{path} exceeds max_blob_bytes")));
-        }
+        let data = crate::read::read_all_bounded(&mut dec, 0, decoded_limit, control).map_err(|error| {
+            if control.cancelled() {
+                FormatError::Cancelled
+            } else if crate::read::is_bounded_read_limit(&error) {
+                FormatError::LimitExceeded(format!("{path}: {error}"))
+            } else {
+                FormatError::corrupt(format!("{path}: zstd: {error}"))
+            }
+        })?;
+        self.capacity(data.capacity())?;
         self.account(data.len())?;
-        if hash_bytes(&data) != hash {
+        let mut observed = blake3::Hasher::new();
+        for chunk in data.chunks(128 << 10) {
+            if control.cancelled() {
+                return Err(FormatError::Cancelled);
+            }
+            observed.update(chunk);
+        }
+        if observed.finalize().to_hex().as_str() != hash {
             return Err(FormatError::corrupt(format!("{path}: content does not match its hash")));
         }
         let data = Arc::new(data);
@@ -231,14 +472,41 @@ impl Fetch for LoadFetch<'_> {
 }
 
 pub(crate) fn load(src: &dyn Source, opts: &LoadOptions) -> Result<Document> {
-    let m = read_manifest(src, opts)?;
-    let mut fetch = LoadFetch { src, opts: *opts, total: 0, blobs: HashMap::new() };
-    let mut loader = Loader { fetch: &mut fetch, preserve_ids: opts.preserve_ids, max_id: 0, id_map: HashMap::new() };
-    let doc = loader.document(&m.document)?;
+    load_with_interrupt(src, opts, &photocraft_raster::Interrupt::NONE)
+}
+pub(crate) fn load_with_interrupt(src: &dyn Source, opts: &LoadOptions, control: &photocraft_raster::Interrupt<'_>) -> Result<Document> {
+    if control.cancelled() {
+        return Err(FormatError::Cancelled);
+    }
+    let m = read_manifest_with_interrupt(src, opts, control)?;
+    let mut fetch = LoadFetch {
+        src,
+        opts: *opts,
+        total: 0,
+        retained_capacity: 0,
+        control: *control,
+        blobs: HashMap::new(),
+        source_cache_hashes: std::collections::HashSet::new(),
+    };
+    let mut loader =
+        Loader { fetch: &mut fetch, preserve_ids: opts.preserve_ids, max_id: 0, id_map: HashMap::new(), channel_map: HashMap::new(), path_map: HashMap::new() };
+    let doc = loader.document_with_interrupt(&m.document, control)?;
+    if convert::requires_reader_v3_state(&doc) && m.minimum_reader_version < 3 {
+        return Err(FormatError::corrupt("required source/working state requires minimum reader version 3"));
+    }
+    if convert::requires_reader_v4_state_with(&doc, *control)? && m.minimum_reader_version < 4 {
+        return Err(FormatError::corrupt("operative text placement requires minimum reader version 4"));
+    }
+    if convert::requires_reader_v6_state_with(&doc, *control)? && m.minimum_reader_version < 6 {
+        return Err(FormatError::corrupt("current resource resolution requires minimum reader version 6"));
+    }
+    if convert::requires_reader_v7_state_with(&doc, *control)? && m.minimum_reader_version < 7 {
+        return Err(FormatError::corrupt("current linked geometry requires minimum reader version 7"));
+    }
     if opts.preserve_ids && !convert::reserve_ids_through(loader.max_id) {
         // Ids far beyond our counter: remap instead of risking collisions.
         let fresh = LoadOptions { preserve_ids: false, ..*opts };
-        return load(src, &fresh);
+        return load_with_interrupt(src, &fresh, control);
     }
     Ok(doc)
 }
@@ -264,42 +532,186 @@ pub struct SaveStats {
     pub manifest_bytes: usize,
 }
 
-#[derive(Default)]
-struct Collect<'c> {
-    tiles: BTreeMap<Hash, (Arc<Tile>, SampleType)>,
-    blobs: BTreeMap<Hash, Arc<Vec<u8>>>,
-    hash_cache: Option<&'c mut HashMap<usize, (Weak<Tile>, Hash)>>,
+/// Lowerable limits for additional allocations during save preparation.
+/// Existing input document residency must be accounted by the caller; these are
+/// sub-budgets, not permission to exceed the selected transaction profile.
+/// Complex cloned elements currently have a separate 64 KiB measurement cap.
+#[derive(Clone, Copy, Debug)]
+pub struct PreparationLimits {
+    pub resident_bytes: usize,
+    /// Conservative index allowance for new object/cache bookkeeping.
+    pub index_bytes: usize,
+    pub manifest_bytes: usize,
+    pub object_bytes: usize,
 }
-
-impl Sink for Collect<'_> {
-    fn tile(&mut self, format: PixelFormat, tile: &Arc<Tile>) -> Hash {
-        let key = Arc::as_ptr(tile) as usize;
-        if let Some(cache) = self.hash_cache.as_deref_mut()
-            && let Some((w, h)) = cache.get(&key)
-            && w.upgrade().is_some_and(|t| Arc::ptr_eq(&t, tile))
-        {
-            let h = h.clone();
-            self.tiles.entry(h.clone()).or_insert_with(|| (tile.clone(), format.sample));
-            return h;
+impl Default for PreparationLimits {
+    fn default() -> Self {
+        Self {
+            resident_bytes: if cfg!(target_arch = "wasm32") { 512 << 20 } else { 2usize << 30 },
+            index_bytes: if cfg!(target_arch = "wasm32") { 16 << 20 } else { 64 << 20 },
+            manifest_bytes: 256 << 20,
+            object_bytes: if cfg!(target_arch = "wasm32") { 256 << 20 } else { 1 << 30 },
         }
-        let h = if cfg!(target_endian = "big") {
-            let mut b = tile.bytes().to_vec();
-            swap_to_le(&mut b, format.sample);
-            hash_bytes(&b)
-        } else {
-            hash_bytes(tile.bytes())
+    }
+}
+impl PreparationLimits {
+    fn validate(self) -> Result<()> {
+        let ceiling = Self::default();
+        if self.resident_bytes > ceiling.resident_bytes
+            || self.index_bytes > ceiling.index_bytes
+            || self.manifest_bytes > ceiling.manifest_bytes
+            || self.object_bytes > ceiling.object_bytes
+        {
+            return Err(FormatError::LimitExceeded("native preparation limits exceed platform ceiling".into()));
+        }
+        Ok(())
+    }
+}
+/// Optional shared job ledger. Reservations are conservative requested capacities;
+/// release must not fail. The observed fresh-writer API retains them through writing.
+pub trait PreparationObserver {
+    fn reserve(&self, bytes: usize) -> Result<()>;
+    fn release(&self, bytes: usize);
+}
+struct ReservationScope<'a> {
+    observer: &'a dyn PreparationObserver,
+    live: std::cell::Cell<usize>,
+}
+impl PreparationObserver for ReservationScope<'_> {
+    fn reserve(&self, bytes: usize) -> Result<()> {
+        let next = self.live.get().checked_add(bytes).ok_or_else(|| FormatError::LimitExceeded("native shared reservation overflow".into()))?;
+        self.observer.reserve(bytes)?;
+        self.live.set(next);
+        Ok(())
+    }
+    fn release(&self, bytes: usize) {
+        let released = bytes.min(self.live.get());
+        self.live.set(self.live.get() - released);
+        self.observer.release(released);
+    }
+}
+impl Drop for ReservationScope<'_> {
+    fn drop(&mut self) {
+        self.observer.release(self.live.get());
+    }
+}
+type TileHashCache = HashMap<(usize, SampleType), (Weak<Tile>, Hash)>;
+struct Collect<'doc, 'c, 'i, 'o> {
+    tiles: BTreeMap<Hash, (Arc<Tile>, SampleType)>,
+    blobs: BTreeMap<Hash, Object<'doc>>,
+    hash_cache: Option<&'c mut TileHashCache>,
+    observer: Option<&'o dyn PreparationObserver>,
+    control: photocraft_raster::Interrupt<'i>,
+    limits: PreparationLimits,
+    resident: usize,
+    index: usize,
+}
+impl Collect<'_, '_, '_, '_> {
+    fn reserve_index(&mut self, bytes: usize) -> Result<()> {
+        let next = self.index.checked_add(bytes).ok_or_else(|| FormatError::LimitExceeded("native preparation index overflow".into()))?;
+        if next > self.limits.index_bytes {
+            return Err(FormatError::LimitExceeded("native preparation index bytes".into()));
+        }
+        self.reserve(bytes)?;
+        self.index = next;
+        Ok(())
+    }
+    fn hash(&self, data: &[u8], sample: Option<SampleType>) -> Result<Hash> {
+        self.poll()?;
+        if data.len() > self.limits.object_bytes {
+            return Err(FormatError::LimitExceeded("native preparation object bytes".into()));
+        }
+        let mut hasher = blake3::Hasher::new();
+        let mut scratch = [0u8; 8192];
+        for chunk in data.chunks(8192) {
+            self.poll()?;
+            if cfg!(target_endian = "big")
+                && let Some(sample) = sample
+            {
+                let target = scratch.get_mut(..chunk.len()).ok_or_else(|| FormatError::LimitExceeded("native hash chunk".into()))?;
+                target.copy_from_slice(chunk);
+                swap_to_le(target, sample);
+                hasher.update(target);
+            } else {
+                hasher.update(chunk);
+            }
+        }
+        Ok(hasher.finalize().to_hex().to_string())
+    }
+}
+impl<'doc> Sink<'doc> for Collect<'doc, '_, '_, '_> {
+    fn poll(&self) -> Result<()> {
+        if self.control.cancelled() { Err(FormatError::Cancelled) } else { Ok(()) }
+    }
+    fn reserve(&mut self, bytes: usize) -> Result<()> {
+        self.poll()?;
+        let next = self.resident.checked_add(bytes).ok_or_else(|| FormatError::LimitExceeded("native preparation resident overflow".into()))?;
+        if next > self.limits.resident_bytes {
+            return Err(FormatError::LimitExceeded("native preparation resident bytes".into()));
+        }
+        if let Some(observer) = self.observer {
+            observer.reserve(bytes)?;
+        }
+        self.resident = next;
+        Ok(())
+    }
+    fn release(&mut self, bytes: usize) {
+        let released = bytes.min(self.resident);
+        self.resident -= released;
+        if let Some(observer) = self.observer {
+            observer.release(released);
+        }
+    }
+    fn max_manifest_bytes(&self) -> usize {
+        self.limits.manifest_bytes
+    }
+    fn control(&self) -> photocraft_raster::Interrupt<'_> {
+        self.control
+    }
+    fn tile(&mut self, format: PixelFormat, tile: &Arc<Tile>) -> Result<Hash> {
+        self.poll()?;
+        if tile.bytes().len() > self.limits.object_bytes {
+            return Err(FormatError::LimitExceeded("native preparation object bytes".into()));
+        }
+        let key = (Arc::as_ptr(tile) as usize, format.sample);
+        let cached = self
+            .hash_cache
+            .as_deref()
+            .and_then(|cache| cache.get(&key))
+            .filter(|(w, _)| w.upgrade().is_some_and(|t| Arc::ptr_eq(&t, tile)))
+            .map(|(_, h)| h.clone());
+        let h = match cached {
+            Some(h) => h,
+            None => self.hash(tile.bytes(), Some(format.sample))?,
         };
+        if !self.tiles.contains_key(&h) {
+            self.reserve_index(1024)?;
+            self.tiles.insert(h.clone(), (tile.clone(), format.sample));
+        }
+        if self.hash_cache.as_deref().is_some_and(|cache| !cache.contains_key(&key)) {
+            self.reserve_index(256)?;
+        }
         if let Some(cache) = self.hash_cache.as_deref_mut() {
+            cache.try_reserve(1).map_err(|_| FormatError::LimitExceeded("native hash cache allocation".into()))?;
             cache.insert(key, (Arc::downgrade(tile), h.clone()));
         }
-        self.tiles.entry(h.clone()).or_insert_with(|| (tile.clone(), format.sample));
-        h
+        Ok(h)
     }
-
-    fn blob(&mut self, data: &Arc<Vec<u8>>) -> Hash {
-        let h = hash_bytes(data);
-        self.blobs.entry(h.clone()).or_insert_with(|| data.clone());
-        h
+    fn blob(&mut self, data: &Arc<Vec<u8>>) -> Result<Hash> {
+        let h = self.hash(data, None)?;
+        if !self.blobs.contains_key(&h) {
+            self.reserve_index(1024)?;
+            self.blobs.insert(h.clone(), Object::Blob(data.clone()));
+        }
+        Ok(h)
+    }
+    fn borrowed_blob(&mut self, data: &'doc [u8]) -> Result<Hash> {
+        let h = self.hash(data, None)?;
+        if !self.blobs.contains_key(&h) {
+            self.reserve_index(1024)?;
+            self.blobs.insert(h.clone(), Object::BorrowedBlob(data));
+        }
+        Ok(h)
     }
 }
 
@@ -331,16 +743,23 @@ pub const DEFAULT_REVERIFY_BUDGET: u64 = 16 * 1024 * 1024;
 /// [`Self::set_reverify_budget`]). Over enough saves every object is read again, and a damaged
 /// one is rewritten.
 pub struct PcraftWriter {
-    hash_cache: HashMap<usize, (Weak<Tile>, Hash)>,
+    hash_cache: TileHashCache,
     /// Compressed objects by bundle path (ZIP mode).
     compressed: HashMap<String, Arc<Vec<u8>>>,
     verified_directory: Option<DirectoryVerificationCache>,
     reverify_budget: u64,
+    preparation_limits: PreparationLimits,
 }
 
 impl Default for PcraftWriter {
     fn default() -> Self {
-        Self { hash_cache: HashMap::new(), compressed: HashMap::new(), verified_directory: None, reverify_budget: DEFAULT_REVERIFY_BUDGET }
+        Self {
+            hash_cache: HashMap::new(),
+            compressed: HashMap::new(),
+            verified_directory: None,
+            reverify_budget: DEFAULT_REVERIFY_BUDGET,
+            preparation_limits: PreparationLimits::default(),
+        }
     }
 }
 
@@ -369,23 +788,25 @@ struct FileSignature {
     unix: (u64, u64, i64, i64),
 }
 
-struct Prepared {
+struct Prepared<'doc> {
     manifest: Vec<u8>,
-    objects: BTreeMap<String, Object>,
+    objects: BTreeMap<String, Object<'doc>>,
     previews: Vec<(&'static str, Vec<u8>)>,
     stats: SaveStats,
 }
 
-enum Object {
+enum Object<'doc> {
     Tile(Arc<Tile>, SampleType),
     Blob(Arc<Vec<u8>>),
+    BorrowedBlob(&'doc [u8]),
 }
 
-impl Object {
+impl Object<'_> {
     fn compressed(&self) -> Vec<u8> {
         match self {
             Object::Tile(t, s) => compress(&tile_le(t, *s)),
             Object::Blob(b) => compress(b),
+            Object::BorrowedBlob(b) => compress(b),
         }
     }
 
@@ -393,6 +814,7 @@ impl Object {
         let expected = match self {
             Object::Tile(tile, sample) => tile_le(tile, *sample),
             Object::Blob(blob) => std::borrow::Cow::Borrowed(blob.as_slice()),
+            Object::BorrowedBlob(blob) => std::borrow::Cow::Borrowed(*blob),
         };
         decompress(compressed, expected.len(), what).is_ok_and(|actual| hash_bytes(&actual) == hash_bytes(&expected))
     }
@@ -436,6 +858,7 @@ fn existing_object_is_valid(path: &Path, object: &Object, what: &str) -> Result<
     let expected_len = match object {
         Object::Tile(tile, sample) => tile_le(tile, *sample).len(),
         Object::Blob(blob) => blob.len(),
+        Object::BorrowedBlob(blob) => blob.len(),
     };
     // This is the same bound used by the tile loader. It comfortably includes
     // zstd framing overhead while keeping damaged files bounded when inspected.
@@ -445,11 +868,11 @@ fn existing_object_is_valid(path: &Path, object: &Object, what: &str) -> Result<
         return Ok((false, None));
     }
 
-    let mut compressed = Vec::new();
-    (&mut file).take(max_compressed_len_u64.saturating_add(1)).read_to_end(&mut compressed)?;
-    if compressed.len() > max_compressed_len {
-        return Ok((false, None));
-    }
+    let compressed = match crate::read::read_all_bounded(&mut file, metadata.len(), max_compressed_len, &photocraft_raster::Interrupt::NONE) {
+        Ok(bytes) => bytes,
+        Err(error) if crate::read::is_bounded_read_limit(&error) => return Ok((false, None)),
+        Err(error) => return Err(error.into()),
+    };
     Ok((object.matches_content_hash(&compressed, what), signature))
 }
 
@@ -489,6 +912,18 @@ fn par_compress<'a>(objects: &[(&'a String, &'a Object)]) -> Result<Vec<Compress
 }
 
 impl PcraftWriter {
+    /// Lower preparation ceilings; zero denies any phase requiring that budget.
+    /// Existing input residency and preview codec work remain caller/backend responsibilities.
+    /// Current lower-only preparation limits (requested capacities, not allocator RSS).
+    pub fn preparation_limits(&self) -> PreparationLimits {
+        self.preparation_limits
+    }
+    pub fn set_preparation_limits(&mut self, limits: PreparationLimits) -> Result<()> {
+        limits.validate()?;
+        self.preparation_limits = limits;
+        Ok(())
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -500,20 +935,67 @@ impl PcraftWriter {
         self.reverify_budget = bytes;
     }
 
-    fn prepare(&mut self, doc: &Document, opts: &SaveOptions) -> Result<Prepared> {
-        self.hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
-        convert::check_nesting(&doc.layers)?;
-        let mut c = Collect { hash_cache: Some(&mut self.hash_cache), ..Default::default() };
-        let document = convert::doc_m(doc, &mut c);
+    fn prepare<'doc>(
+        &mut self,
+        doc: &'doc Document,
+        opts: &SaveOptions,
+        control: photocraft_raster::Interrupt<'_>,
+        object_limit: Option<usize>,
+        observer: Option<&dyn PreparationObserver>,
+    ) -> Result<Prepared<'doc>> {
+        let mut cancelled = false;
+        self.hash_cache.retain(|_, (w, _)| {
+            cancelled |= control.cancelled();
+            w.strong_count() > 0
+        });
+        if cancelled {
+            return Err(FormatError::Cancelled);
+        }
+        convert::check_nesting(&doc.layers, control)?;
+        self.preparation_limits.validate()?;
+        let mut c = Collect {
+            hash_cache: Some(&mut self.hash_cache),
+            observer,
+            tiles: BTreeMap::new(),
+            blobs: BTreeMap::new(),
+            control,
+            limits: PreparationLimits {
+                object_bytes: object_limit.unwrap_or(self.preparation_limits.object_bytes).min(self.preparation_limits.object_bytes),
+                ..self.preparation_limits
+            },
+            resident: 0,
+            index: 0,
+        };
+        let document = convert::doc_m(doc, &mut c)?;
         let mut previews = Vec::new();
         if let Some(t) = &opts.thumbnail {
+            c.poll()?;
+            c.reserve(t.pixels.len().checked_mul(8).ok_or_else(|| FormatError::LimitExceeded("native preview resident overflow".into()))?)?;
             previews.push((THUMB, png(t)?));
+            c.poll()?;
         }
         if let Some(t) = &opts.composite {
+            c.poll()?;
+            c.reserve(t.pixels.len().checked_mul(8).ok_or_else(|| FormatError::LimitExceeded("native preview resident overflow".into()))?)?;
             previews.push((COMPOSITE, png(t)?));
+            c.poll()?;
         }
+        let required_version = if convert::requires_reader_v7_state_with(doc, control)? {
+            7
+        } else if convert::requires_reader_v6_state_with(doc, control)? {
+            6
+        } else if doc.has_backed_rasters().map_err(|_| FormatError::LimitExceeded("native layer nesting".into()))? {
+            5
+        } else if convert::requires_reader_v4_state_with(doc, control)? {
+            4
+        } else if document.xcf_source_caches.is_empty() && !convert::requires_reader_v3_state_with(doc, control)? {
+            2
+        } else {
+            3
+        };
         let manifest = Manifest {
-            format_version: FORMAT_VERSION,
+            format_version: required_version,
+            minimum_reader_version: required_version,
             generator: format!("photocraft-format {}", env!("CARGO_PKG_VERSION")),
             document,
             thumbnail: opts.thumbnail.as_ref().map(|_| THUMB.to_owned()),
@@ -521,26 +1003,34 @@ impl PcraftWriter {
         };
         // serde_json writes NaN and the infinities as `null`, which the manifest's float fields
         // refuse on load (issue #1101): refuse the save instead, naming the value.
-        crate::finite::check(&manifest).map_err(|e| match e {
+        crate::finite::check_with_interrupt(&manifest, control).map_err(|e| match e {
             crate::finite::Problem::NonFinite { path } => FormatError::NonFinite { path },
+            crate::finite::Problem::Cancelled => FormatError::Cancelled,
             crate::finite::Problem::Other(m) => FormatError::Unsupported(format!("manifest: {m}")),
         })?;
-        let manifest = serde_json::to_vec_pretty(&manifest)?;
-        check_manifest_depth(&manifest)?;
+        let maximum = c.max_manifest_bytes();
+        let manifest = convert::json_bytes(&manifest, &mut c, maximum, true)?;
+        check_manifest_depth_with(&manifest, control)?;
         let stats = SaveStats { tiles_total: c.tiles.len(), blobs_total: c.blobs.len(), manifest_bytes: manifest.len(), ..Default::default() };
         let mut objects = BTreeMap::new();
         for (h, (t, s)) in c.tiles {
+            if control.cancelled() {
+                return Err(FormatError::Cancelled);
+            }
             objects.insert(tile_path(&h), Object::Tile(t, s));
         }
         for (h, b) in c.blobs {
-            objects.insert(blob_path(&h), Object::Blob(b));
+            if control.cancelled() {
+                return Err(FormatError::Cancelled);
+            }
+            objects.insert(blob_path(&h), b);
         }
         Ok(Prepared { manifest, objects, previews, stats })
     }
 
     /// Save as a ZIP bundle in memory.
     pub fn save_zip(&mut self, doc: &Document, opts: &SaveOptions) -> Result<(Vec<u8>, SaveStats)> {
-        let p = self.prepare(doc, opts)?;
+        let p = self.prepare(doc, opts, photocraft_raster::Interrupt::NONE, None, None)?;
         let mut stats = p.stats;
         let mut z = ZipWriter::new();
         z.add(MANIFEST, &p.manifest)?;
@@ -562,7 +1052,7 @@ impl PcraftWriter {
                 None => {
                     match obj {
                         Object::Tile(..) => stats.tiles_written += 1,
-                        Object::Blob(_) => stats.blobs_written += 1,
+                        Object::Blob(_) | Object::BorrowedBlob(_) => stats.blobs_written += 1,
                     }
                     fresh.remove(path).unwrap_or_else(|| Arc::new(obj.compressed()))
                 }
@@ -574,11 +1064,122 @@ impl PcraftWriter {
         Ok((z.finish()?, stats))
     }
 
+    /// Write ZIP64 entries directly to an empty seekable output. Objects use
+    /// Zstandard raw blocks, trading compression for bounded, cancellable copying
+    /// without retaining another object-sized buffer or a complete archive.
+    /// Existing manifest/object preparation is in-memory; this API alone does
+    /// not qualify native_large source residency. Preparation uses bounded interruptible
+    /// metadata and hash passes; preview codec calls retain their own backend limits.
+    pub fn save_zip_stream<W: std::io::Write + std::io::Seek>(
+        &mut self,
+        doc: &Document,
+        opts: &SaveOptions,
+        output: W,
+        limits: crate::zip::stream::Limits,
+        max_object_bytes: usize,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<(W, SaveStats)> {
+        self.save_zip_stream_inner(doc, opts, output, limits, control, (max_object_bytes, None))
+    }
+
+    /// Fresh writer with shared accounting. Preparation reservations remain live until
+    /// Prepared data and the temporary tile hash cache have both been dropped.
+    pub fn save_zip_stream_observed<W: std::io::Write + std::io::Seek>(
+        doc: &Document,
+        opts: &SaveOptions,
+        output: W,
+        limits: crate::zip::stream::Limits,
+        preparation: PreparationLimits,
+        control: &photocraft_raster::Interrupt<'_>,
+        observer: &dyn PreparationObserver,
+    ) -> Result<(W, SaveStats)> {
+        let scope = ReservationScope { observer, live: std::cell::Cell::new(0) };
+        let mut writer = Self::new();
+        writer.set_preparation_limits(preparation)?;
+        // writer drops before scope, including on error; no live cache is refunded.
+        writer.save_zip_stream_inner(doc, opts, output, limits, control, (preparation.object_bytes, Some(&scope)))
+    }
+    fn save_zip_stream_inner<W: std::io::Write + std::io::Seek>(
+        &mut self,
+        doc: &Document,
+        opts: &SaveOptions,
+        output: W,
+        limits: crate::zip::stream::Limits,
+        control: &photocraft_raster::Interrupt<'_>,
+        (max_object_bytes, observer): (usize, Option<&dyn PreparationObserver>),
+    ) -> Result<(W, SaveStats)> {
+        if control.cancelled() {
+            return Err(FormatError::Cancelled);
+        }
+        let prepared = self.prepare(doc, opts, *control, Some(max_object_bytes), observer)?;
+        if control.cancelled() {
+            return Err(FormatError::Cancelled);
+        }
+        if prepared.manifest.len() > max_object_bytes || prepared.previews.iter().any(|(_, bytes)| bytes.len() > max_object_bytes) {
+            return Err(FormatError::LimitExceeded("streaming native object bytes".into()));
+        }
+        let mut writer = crate::zip::stream::Writer::new(output, limits)?;
+        let write = |writer: &mut crate::zip::stream::Writer<W>, name: &str, data: &[u8]| -> Result<()> {
+            if data.len() > max_object_bytes {
+                return Err(FormatError::LimitExceeded("streaming native object bytes".into()));
+            }
+            writer.add(name, data.len() as u64, &mut std::io::Cursor::new(data), control)
+        };
+        write(&mut writer, MANIFEST, &prepared.manifest)?;
+        for (name, data) in &prepared.previews {
+            write(&mut writer, name, data)?;
+        }
+        let mut stats = prepared.stats;
+        for (name, object) in &prepared.objects {
+            if control.cancelled() {
+                return Err(FormatError::Cancelled);
+            }
+            let raw = match object {
+                Object::Tile(tile, sample) => tile_le(tile, *sample),
+                Object::Blob(bytes) => std::borrow::Cow::Borrowed(bytes.as_slice()),
+                Object::BorrowedBlob(bytes) => std::borrow::Cow::Borrowed(*bytes),
+            };
+            if raw.len() > max_object_bytes {
+                return Err(FormatError::LimitExceeded("streaming native expanded object bytes".into()));
+            }
+            let size = crate::zstd_stream::encoded_len(u64::try_from(raw.len()).map_err(|_| FormatError::LimitExceeded("native object length".into()))?)?;
+            if size > max_object_bytes as u64 {
+                return Err(FormatError::LimitExceeded("streaming native framed object bytes".into()));
+            }
+            writer.add(name, size, &mut crate::zstd_stream::RawFrame::new(&raw)?, control)?;
+            match object {
+                Object::Tile(..) => stats.tiles_written += 1,
+                Object::Blob(..) | Object::BorrowedBlob(..) => stats.blobs_written += 1,
+            }
+        }
+        Ok((writer.finish(control)?, stats))
+    }
+
+    /// Stream a ZIP64 bundle into a sibling temporary file, flush it and replace
+    /// the destination only after all writes and the final cancellation check.
+    /// This does not change the default incremental save cache or qualify the
+    /// separately gated native_large input policy.
+    pub fn save_path_stream(
+        &mut self,
+        doc: &Document,
+        opts: &SaveOptions,
+        path: &Path,
+        limits: crate::zip::stream::Limits,
+        max_object_bytes: usize,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<SaveStats> {
+        crate::atomic::atomic_write_stream(
+            path,
+            |file| self.save_zip_stream(doc, opts, file, limits, max_object_bytes, control).map(|(_, stats)| stats),
+            || if control.cancelled() { Err(FormatError::Cancelled) } else { Ok(()) },
+        )
+    }
+
     /// Save into a directory bundle: reuses only valid existing objects,
     /// rewrites missing or damaged objects, then writes the manifest
     /// atomically and removes unreferenced objects.
     pub fn save_dir(&mut self, doc: &Document, dir: &Path, opts: &SaveOptions) -> Result<SaveStats> {
-        let p = self.prepare(doc, opts)?;
+        let p = self.prepare(doc, opts, photocraft_raster::Interrupt::NONE, None, None)?;
         let mut stats = p.stats;
         for sub in ["tiles", "blobs", "composite"] {
             std::fs::create_dir_all(dir.join(sub))?;
@@ -625,7 +1226,7 @@ impl PcraftWriter {
             }
             match obj {
                 Object::Tile(..) => stats.tiles_written += 1,
-                Object::Blob(_) => stats.blobs_written += 1,
+                Object::Blob(_) | Object::BorrowedBlob(_) => stats.blobs_written += 1,
             }
             write_atomic(&object_path, &obj.compressed())?;
             let written = path_signature(&object_path)?;
@@ -717,4 +1318,86 @@ fn list_objects(dir: &Path) -> Result<HashSet<String>> {
 pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
     crate::atomic::atomic_write(path, data)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod preparation_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    fn collect(control: photocraft_raster::Interrupt<'_>, limits: PreparationLimits) -> Collect<'static, 'static, '_, 'static> {
+        Collect { tiles: BTreeMap::new(), blobs: BTreeMap::new(), hash_cache: None, observer: None, control, limits, resident: 0, index: 0 }
+    }
+    #[test]
+    fn blob_hash_is_chunked_interruptible_and_identical() {
+        let bytes = Arc::new((0..200000).map(|i| (i * 37) as u8).collect::<Vec<_>>());
+        let mut sink = collect(photocraft_raster::Interrupt::NONE, Default::default());
+        assert_eq!(sink.blob(&bytes).unwrap(), hash_bytes(&bytes));
+        let polls = AtomicUsize::new(0);
+        let cancelled = || polls.fetch_add(1, Ordering::Relaxed) >= 3;
+        let mut sink = collect(photocraft_raster::Interrupt::cancel_only(&cancelled), Default::default());
+        assert!(matches!(sink.blob(&bytes), Err(FormatError::Cancelled)));
+        assert!(sink.blobs.is_empty());
+    }
+    #[test]
+    fn borrowed_source_registration_retains_exact_input_slice() {
+        let bytes = [1u8, 2, 3, 4];
+        let mut sink = Collect {
+            tiles: BTreeMap::new(),
+            blobs: BTreeMap::new(),
+            hash_cache: None,
+            observer: None,
+            control: photocraft_raster::Interrupt::NONE,
+            limits: Default::default(),
+            resident: 0,
+            index: 0,
+        };
+        let hash = sink.borrowed_blob(&bytes).unwrap();
+        match sink.blobs.get(&hash).unwrap() {
+            Object::BorrowedBlob(retained) => assert_eq!(retained.as_ptr(), bytes.as_ptr()),
+            _ => panic!("source cache was duplicated"),
+        }
+        assert_eq!(sink.resident, 1024);
+    }
+    #[test]
+    fn json_cancellation_occurs_inside_large_string_and_opaque_bytes() {
+        let text = "literal Ω".repeat(100000);
+        let opaque = vec![73u8; 100000];
+        for value in [serde_json::json!(text), serde_json::json!(opaque)] {
+            let polls = AtomicUsize::new(0);
+            let cancelled = || polls.fetch_add(1, Ordering::Relaxed) >= 4;
+            let mut sink = collect(photocraft_raster::Interrupt::cancel_only(&cancelled), Default::default());
+            assert!(matches!(convert::json_bytes(&value, &mut sink, 4 << 20, false), Err(FormatError::Cancelled)));
+        }
+    }
+    #[test]
+    fn json_output_matches_existing_pretty_serialization_and_caps_before_growth() {
+        let value = serde_json::json!({"literal":"Ω\n", "bits":[-0.0,1.5],"opaque":[1,2,3]});
+        let mut sink = collect(photocraft_raster::Interrupt::NONE, Default::default());
+        assert_eq!(convert::json_bytes(&value, &mut sink, 1 << 20, true).unwrap(), serde_json::to_vec_pretty(&value).unwrap());
+        let mut sink = collect(photocraft_raster::Interrupt::NONE, PreparationLimits { resident_bytes: 0, ..Default::default() });
+        assert!(matches!(convert::json_bytes(&value, &mut sink, 1 << 20, true), Err(FormatError::LimitExceeded(_))));
+        assert_eq!(sink.resident, 0);
+        let mut sink = collect(photocraft_raster::Interrupt::NONE, Default::default());
+        assert!(matches!(convert::json_bytes(&value, &mut sink, 1, true), Err(FormatError::LimitExceeded(_))));
+    }
+}
+
+#[cfg(test)]
+mod bounded_decode_drafts {
+    use super::*;
+    #[test]
+    fn decoded_size_ceiling_and_corruption_are_refused() {
+        let encoded = compress(&vec![7; 32769]);
+        assert!(decompress_with(&encoded, 32768, "fixture", &photocraft_raster::Interrupt::NONE).is_err());
+        assert_eq!(decompress_with(&encoded, 32769, "fixture", &photocraft_raster::Interrupt::NONE).unwrap(), vec![7; 32769]);
+        let truncated = encoded.get(..encoded.len().saturating_sub(1)).unwrap();
+        assert!(decompress_with(truncated, 32769, "fixture", &photocraft_raster::Interrupt::NONE).is_err());
+    }
+    #[test]
+    fn interrupted_decode_reports_cancelled_not_io() {
+        let encoded = compress(&vec![11; 65536]);
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let cancel = || calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) > 3;
+        assert!(matches!(decompress_with(&encoded, 65536, "fixture", &photocraft_raster::Interrupt::cancel_only(&cancel)), Err(FormatError::Cancelled)));
+    }
 }

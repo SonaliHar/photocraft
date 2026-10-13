@@ -367,6 +367,25 @@ pub fn solve(p: &WideAngle, frame: Rect) -> WideMesh {
     mesh
 }
 
+/// Checked authoritative Adaptive Wide Angle entry point.
+pub fn try_apply(src: &Surface, frame: Rect, p: &WideAngle, interp: Interp) -> Result<Surface, photocraft_raster::RasterInputError> {
+    let mut format = src.format();
+    format.alpha = true;
+    if matches!(format.sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
+        return Err(photocraft_raster::RasterInputError::UnsupportedConversion);
+    }
+    photocraft_raster::checked_region_byte_len(frame, format)?;
+    if p.constraints.len() > 4096
+        || [p.focal_length, p.crop_factor, p.scale].iter().any(|x| !x.is_finite())
+        || p.constraints.iter().any(|c| c.a.iter().chain(c.b.iter()).any(|x| !x.is_finite() || x.abs() > 1_000_000.0))
+    {
+        return Err(photocraft_raster::RasterInputError::InvalidBounds);
+    }
+    let prepared = src.try_convert(format)?;
+    let mesh = solve(p, frame);
+    crate::warp::try_warp_triangles(&prepared, frame, &mesh.verts, &mesh.triangles(), interp)
+}
+
 /// Applies Adaptive Wide Angle to `src` over `frame` (pixels outside the warped image become
 /// transparent).
 pub fn apply(src: &Surface, frame: Rect, p: &WideAngle, interp: Interp) -> Surface {

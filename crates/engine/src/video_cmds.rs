@@ -208,7 +208,7 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat) -> Result<Vec<Sur
         let bytes = std::fs::read(f).map_err(|e| EngineError::Other(format!("read `{}`: {e}", f.display())))?;
         let name = f.to_string_lossy();
         let doc = photocraft_io::import(&name, &bytes).map_err(|e| EngineError::Other(format!("`{}`: {e}", f.display())))?.document;
-        frames.push(crate::file_cmds::flattened(&doc, fmt));
+        frames.push(crate::file_cmds::flattened(&doc, fmt)?);
     }
     Ok(frames)
 }
@@ -323,6 +323,7 @@ fn render_video(s: &mut Session, p: &Value) -> Result<Value> {
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png");
     std::fs::create_dir_all(dir).map_err(|e| EngineError::Other(format!("mkdir `{dir}`: {e}")))?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
+    st.doc.validate_resident()?;
     let mut base = (*st.doc).clone();
     store(&mut base);
     let frames = base.timeline.as_ref().map_or(1, |t| t.duration).max(1);
@@ -343,7 +344,7 @@ fn render_video(s: &mut Session, p: &Value) -> Result<Value> {
                 t.current = f;
             }
             sync(&mut doc);
-            let surf = crate::file_cmds::flattened(&doc, fmt);
+            let surf = crate::file_cmds::flattened(&doc, fmt)?;
             let mut px = vec![[0.0f32; 4]; w * h];
             surf.read_rgba_into(bounds, &mut px);
             let pal = quantize::build_palette(&px, PaletteKind::Adaptive, 256, Forced::None).map_err(EngineError::Other)?;

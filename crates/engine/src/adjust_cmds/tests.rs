@@ -165,7 +165,7 @@ fn color_lookup_builtin_data_and_errors() {
     let mut s = session(8, "rgb");
     let r = s.execute("layer.newAdjustmentLayer.colorLookup", json!({"lut": "dayForNight"})).unwrap();
     let id = photocraft_doc::LayerId(r["layer"].as_u64().unwrap());
-    let px = photocraft_compose::render(doc(&s), Rect::from_xywh(40, 30, 1, 1)).px[0];
+    let px = photocraft_compose::render(doc(&s), Rect::from_xywh(40, 30, 1, 1)).unwrap().px[0];
     assert!(px[2] > px[0], "night is blue: {px:?}");
     // Switching interpolation keeps the table.
     s.execute("layer.setAdjustment", json!({"layer": id.0, "interpolation": "tetrahedral", "dither": true})).unwrap();

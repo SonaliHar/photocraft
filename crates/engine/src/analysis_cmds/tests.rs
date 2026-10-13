@@ -7,7 +7,7 @@ fn session(w: u32, h: u32, depth: u32) -> Session {
     s
 }
 
-fn d(s: &Session) -> Arc<Document> {
+fn d(s: &Session) -> crate::document_snapshot::DocumentSnapshot {
     s.active().unwrap().doc.clone()
 }
 

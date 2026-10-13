@@ -1,0 +1,8 @@
+Synthetic PhotoCraft boot contract PSD
+Author: PhotoCraft contributors (generated for this diagnostic by Sol 3).
+Source: crates/io/examples/boot_contract_fixture.rs in this candidate overlay.
+
+This original synthetic fixture is dedicated to the public domain under
+CC0 1.0 Universal: https://creativecommons.org/publicdomain/zero/1.0/
+It contains generated document metadata and blank raster planes. It embeds
+no fonts, third-party profiles, personal data, or third-party artwork.

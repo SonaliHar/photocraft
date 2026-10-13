@@ -195,7 +195,7 @@ pub fn source_image(file_name: &str, bytes: &[u8], fmt: PixelFormat) -> Result<S
         return Ok(img);
     }
     let doc = decode_source(file_name, bytes)?;
-    let buf = photocraft_compose::flatten(&doc);
+    let buf = photocraft_compose::flatten(&doc)?;
     let img = SourceImage { surface: Arc::new(buffer_to_surface(&buf, fmt)), bounds: doc.bounds() };
     cache_put_with_interpretation(key, img.clone(), doc.sample_encoding.is_some());
     Ok(img)
@@ -227,7 +227,7 @@ pub fn source_image_for_document(file_name: &str, bytes: &[u8], target: &Documen
     }
     let source = decode_source(file_name, bytes)?;
     if source.sample_encoding.is_none() && target.sample_encoding.is_none() {
-        let buffer = photocraft_compose::flatten(&source);
+        let buffer = photocraft_compose::flatten(&source)?;
         let image = SourceImage { surface: Arc::new(buffer_to_surface(&buffer, target.pixel_format())), bounds: source.bounds() };
         cache_put(ordinary, image.clone());
         return Ok(image);
@@ -261,9 +261,9 @@ pub fn stack_image(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photoc
             let mut one = l.clone();
             one.blend = BlendMode::Normal;
             one.clipped = false;
-            photocraft_compose::render_layer(&one, bounds).px
+            Ok(photocraft_compose::render_layer(&one, bounds)?.px)
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     if frames.is_empty() {
         return Err(EngineError::Other("the smart object's contents have no visible layers".into()));
     }
@@ -368,6 +368,10 @@ fn apply_smart_filters_with_transfer(placed: &Surface, sm: &SmartObject, canvas:
 /// Renders a smart object from its source. `Ok(None)` when the source is unavailable (a missing
 /// linked file, or a PSD placed layer without embedded data): callers keep the existing cache.
 pub fn render(doc: &Document, sm: &SmartObject) -> Result<Option<Surface>> {
+    if matches!(doc.depth, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) && sm.smart_filters.iter().any(|f| f.visible) {
+        return Err(other("wide legacy smart-filter arithmetic is not qualified; source and cache were kept unchanged"));
+    }
+
     let Some((name, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return Ok(None) };
     // A vector source is rendered at the placement's scale, and the placement is divided by
     // that scale so the rendered pixels land where the source units would.
@@ -378,14 +382,15 @@ pub fn render(doc: &Document, sm: &SmartObject) -> Result<Option<Surface>> {
             Some(p) => {
                 let [h0, h1, h2, h3, h4, h5, h6, h7, h8] = *p;
                 let h = Homography([h0 / k, h1 / k, h2, h3 / k, h4 / k, h5, h6 / k, h7 / k, h8]);
-                photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &h, None)
+                photocraft_algo::warp::try_place_source_projective(&img.surface, img.bounds, &h, None)
             }
             None => {
                 let [a, b, c, d, e, f] = sm.transform.m;
                 let t = Affine { m: [a / k, b / k, c / k, d / k, e, f] };
-                photocraft_algo::warp::place_source(&img.surface, img.bounds, &t, None)
+                photocraft_algo::warp::try_place_source(&img.surface, img.bounds, &t, None)
             }
-        };
+        }
+        .map_err(|e| other(format!("smart-object placement: {e}")))?;
         return Ok(Some(apply_smart_filters(&placed, sm, doc.bounds())));
     }
     let img = match sm.stack_mode {
@@ -397,9 +402,10 @@ pub fn render(doc: &Document, sm: &SmartObject) -> Result<Option<Surface>> {
     };
     // Through the warp (source space) and the transform in one pass; whole-pixel moves are exact.
     let placed = match &sm.perspective {
-        Some(p) => photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &Homography(*p), sm.warp.as_ref()),
-        None => photocraft_algo::warp::place_source(&img.surface, img.bounds, &sm.transform, sm.warp.as_ref()),
-    };
+        Some(p) => photocraft_algo::warp::try_place_source_projective(&img.surface, img.bounds, &Homography(*p), sm.warp.as_ref()),
+        None => photocraft_algo::warp::try_place_source(&img.surface, img.bounds, &sm.transform, sm.warp.as_ref()),
+    }
+    .map_err(|e| other(format!("smart-object placement: {e}")))?;
     Ok(Some(apply_smart_filters_with_transfer(&placed, sm, doc.bounds(), Some(photocraft_compose::adjust::Transfer::for_doc(doc)))))
 }
 
@@ -458,7 +464,7 @@ fn smart_mut(doc: &mut Document, id: LayerId) -> Result<&mut SmartObject> {
 }
 
 fn mask_from_selection(sel: &Surface) -> LayerMask {
-    LayerMask { surface: sel.clone(), enabled: true, linked: true, density: 1.0, feather: 0.0 }
+    LayerMask { surface: std::sync::Arc::new(sel.clone()), enabled: true, linked: true, density: 1.0, feather: 0.0 }
 }
 
 /// Appends a smart filter (from a `filter.*` command) and re-renders. A selection becomes the
@@ -536,7 +542,7 @@ pub(crate) fn shift_smart(sm: &mut SmartObject, dx: i32, dy: i32) {
         *c = crate::layer_multi_cmds::shift_surface(c, dx, dy);
     }
     if let Some(m) = &mut sm.filter_mask {
-        m.surface = crate::layer_multi_cmds::shift_surface(&m.surface, dx, dy);
+        m.surface = std::sync::Arc::new(crate::layer_multi_cmds::shift_surface(&m.surface, dx, dy));
     }
 }
 
@@ -552,14 +558,14 @@ fn detach_psd(l: &mut Layer) {
 // ---------- conversion ----------
 
 /// Moves a layer (any kind) by whole pixels without re-rendering anything.
-fn shift_layer(l: &mut Layer, dx: i32, dy: i32) {
+fn shift_layer(l: &mut Layer, dx: i32, dy: i32) -> Result<()> {
     if dx == 0 && dy == 0 {
-        return;
+        return Ok(());
     }
     let a = Affine::translate(dx as f64, dy as f64);
     let mv = |s: &Surface| translate_surface(s, dx, dy);
     if let Some(m) = &mut l.mask {
-        m.surface = mv(&m.surface);
+        m.surface = std::sync::Arc::new(mv(&m.surface));
     }
     if let Some(vm) = &mut l.vector_mask {
         vm.path = vm.path.transform(&a);
@@ -568,6 +574,7 @@ fn shift_layer(l: &mut Layer, dx: i32, dy: i32) {
         fc.surface = mv(&fc.surface);
     }
     match &mut l.content {
+        LayerContent::BackedRaster(_) => return Err(EngineError::Other("backed layer placement requires an accounted command".into())),
         LayerContent::Raster(s) => *s = mv(s),
         LayerContent::Text(t) => {
             t.transform = a.mul(&t.transform);
@@ -582,9 +589,14 @@ fn shift_layer(l: &mut Layer, dx: i32, dy: i32) {
             }
         }
         LayerContent::Smart(sm) => shift_smart(sm, dx, dy),
-        LayerContent::Group(g) => g.children.iter_mut().for_each(|c| shift_layer(c, dx, dy)),
+        LayerContent::Group(g) => {
+            for child in &mut g.children {
+                shift_layer(child, dx, dy)?;
+            }
+        }
         LayerContent::Adjustment(_) | LayerContent::Fill(_) => {}
     }
+    Ok(())
 }
 
 fn subtree_bounds(l: &Layer, canvas: Rect) -> Rect {
@@ -618,8 +630,9 @@ pub fn layer_to_smart(doc: &Document, l: &Layer) -> Result<Layer> {
         inner.name = "Layer 0".into();
     }
     let mut sub = Document::new(format!("{}.pcraft", l.name), doc.size, doc.mode, doc.depth);
-    sub.resolution_dpi = doc.resolution_dpi;
+    sub.set_physical_resolution(doc.effective_resolution()).map_err(|e| EngineError::Other(e.to_string()))?;
     sub.icc_profile = doc.icc_profile.clone();
+    sub.working_profile_interpretation = doc.working_profile_interpretation.clone();
     sub.sample_encoding = doc.sample_encoding;
     sub.source_color_context = doc.source_color_context.clone();
     sub.global_light = doc.global_light;
@@ -631,7 +644,7 @@ pub fn layer_to_smart(doc: &Document, l: &Layer) -> Result<Layer> {
 
     let has_fx = any_layer(l, &|x| x.effects.enabled && !x.effects.items.is_empty());
     let region = subtree_bounds(l, canvas).union(&canvas).inflate(if has_fx { 256 } else { 0 });
-    let buf = photocraft_compose::render(&sub, region);
+    let buf = photocraft_compose::render(&sub, region)?;
     let w = region.width() as usize;
     let mut b = Rect::EMPTY;
     for (i, p) in buf.px.iter().enumerate() {
@@ -648,7 +661,7 @@ pub fn layer_to_smart(doc: &Document, l: &Layer) -> Result<Layer> {
     cache = photocraft_algo::resample::crop_surface(&cache, b);
     cache.prune();
 
-    shift_layer(&mut sub.layers[0], -b.x0, -b.y0);
+    shift_layer(&mut sub.layers[0], -b.x0, -b.y0)?;
     sub.size = Size::new(b.width(), b.height());
     let bytes = encode_source(&sub)?;
     // Seed the decode cache with the composite we already have.
@@ -760,7 +773,7 @@ fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     // Bundles keep their document id; each open copy needs its own.
     child.id = DocId::fresh();
     child.name = name;
-    let index = s.add_document(child, None);
+    let index = s.add_document(child, None)?;
     // Admission may replace an ID already owned by another open document.
     let child_id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;
     s.smart_links.retain(|l| l.child != child_id);
@@ -1178,6 +1191,185 @@ mod imported_adjustment_filter_tests {
             let LayerContent::Smart(updated) = &doc.layers[0].content else { panic!("expected smart object") };
             assert!((updated.cache.as_ref().unwrap().pixel(0, 0)[0] - expected).abs() < 2.0 / 65535.0);
             assert_eq!(layer.surface().unwrap(), &samples);
+        }
+    }
+}
+
+#[cfg(test)]
+mod physical_axes_tests {
+    use super::*;
+    #[test]
+    fn embedded_flattened_source_preserves_custom_axes() {
+        let mut d = Document::new("axes", Size::new(2, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        let resolution = photocraft_doc::PhysicalResolution {
+            x_dpi: 144.0,
+            y_dpi: 288.0,
+            unit: photocraft_doc::PhysicalUnit::Custom(photocraft_doc::CustomUnit {
+                name: "Own unit \u{03a9}".into(),
+                factor: 2.5,
+                digits: 3,
+                symbol: "u".into(),
+                abbreviation: "ou".into(),
+            }),
+        };
+        d.set_physical_resolution(resolution.clone()).unwrap();
+        let mut layer = Layer::raster("solid", d.pixel_format());
+        layer.surface_mut().unwrap().write_pixel(0, 0, &[0.25, 0.5, 0.75, 1.0]);
+        let converted = layer_to_smart(&d, &layer).unwrap();
+        let LayerContent::Smart(smart) = converted.content else { panic!("expected smart") };
+        let SmartSource::Embedded { bytes, .. } = smart.source else { panic!("expected embedded") };
+        assert_eq!(photocraft_format::load_from_bytes(&bytes).unwrap().effective_resolution(), resolution);
+    }
+}
+
+#[cfg(test)]
+mod current_profile_preservation_tests {
+    use crate::Session;
+    use photocraft_cms::{
+        ColorSpace,
+        xcf_color::{Encoding, effective_implicit_profile, effective_profile},
+    };
+    use photocraft_doc::{
+        ColorMode, Document, Layer, LayerContent, PhysicalResolution, SampleEncoding, SampleType, Size, SmartSource, WorkingProfileInterpretation,
+    };
+    use serde_json::json;
+    use std::error::Error;
+    type R<T> = Result<T, Box<dyn Error>>;
+    fn run(depth: SampleType, implicit: bool) -> R<serde_json::Value> {
+        let mut doc = Document::new("Own marker smart source", Size::new(8, 6), ColorMode::Rgb, depth);
+        doc.sample_encoding = Some(SampleEncoding::NonlinearProfile);
+        doc.set_physical_resolution(PhysicalResolution { x_dpi: 144.0, y_dpi: 288.0, unit: Default::default() })?;
+        let bytes = effective_profile(None, ColorSpace::Rgb, Encoding::NonlinearProfile)?.to_bytes();
+        doc.working_profile_interpretation = if implicit { WorkingProfileInterpretation::implicit_srgb(&bytes) } else { WorkingProfileInterpretation::Icc };
+        doc.icc_profile = Some(bytes.clone());
+        doc.working_profile_interpretation.validate_with(Some(&bytes), doc.mode)?;
+        effective_implicit_profile(&bytes, ColorSpace::Rgb, Encoding::NonlinearProfile)?;
+        let mut lower = Layer::raster("Own lower", doc.pixel_format());
+        lower.surface_mut().ok_or("lower")?.fill_rect(doc.bounds(), &[0.02, 0.03, 0.04, 1.0]);
+        let mut upper = Layer::raster("Own upper", doc.pixel_format());
+        upper.surface_mut().ok_or("upper")?.fill_rect(doc.bounds(), &[0.5, 0.2, 0.7, 1.0]);
+        upper.opacity = 0.35;
+        let group = Layer::group("Own group", vec![lower, upper]);
+        let id = group.id;
+        doc.layers.push(group);
+        let native_before = photocraft_format::save_to_bytes(&doc, &Default::default())?;
+        let source = photocraft_format::load_from_bytes(&native_before)?;
+        if source != doc {
+            return Err("native source changed".into());
+        }
+        let reference = photocraft_compose::render(&doc, doc.bounds())?;
+        let mut session = Session::new();
+        session.add_document(doc.clone(), None)?;
+        let revision = session.active().ok_or("source")?.revision;
+        let result = session.execute("layer.smartObjects.convertToSmartObject", json!({"layer":id.0}))?;
+        let converted = &session.active().ok_or("converted")?.doc;
+        let layer = converted.layers.first().ok_or("smart")?;
+        let LayerContent::Smart(smart) = &layer.content else {
+            return Err("not smart".into());
+        };
+        let SmartSource::Embedded { bytes: embedded, .. } = &smart.source else {
+            return Err("not embedded".into());
+        };
+        let sub = photocraft_format::load_from_bytes(embedded)?;
+        if sub.working_profile_interpretation != doc.working_profile_interpretation {
+            return Err(format!(
+                "{depth:?}: embedded current marker {:?}, expected {:?}",
+                sub.working_profile_interpretation, doc.working_profile_interpretation
+            )
+            .into());
+        }
+        if sub.icc_profile != doc.icc_profile
+            || sub.sample_encoding != doc.sample_encoding
+            || sub.source_color_context != doc.source_color_context
+            || sub.physical_resolution != doc.physical_resolution
+        {
+            return Err("smart subdocument changed currentcolor/physical metadata".into());
+        }
+        let actual = photocraft_compose::render(&sub, sub.bounds())?;
+        let max = reference.px.iter().zip(&actual.px).flat_map(|(a, b)| a.iter().zip(b).map(|(a, b)| (*a - *b).abs())).fold(0.0_f32, f32::max);
+        let checked_cpu = match (
+            photocraft_compose::gimp_render::try_render(&doc, doc.bounds(), &mut |_| Ok(())),
+            photocraft_compose::gimp_render::try_render(&sub, sub.bounds(), &mut |_| Ok(())),
+        ) {
+            (Ok(a), Ok(b)) => {
+                json!({"ok":true,"max_absolute":a.px.iter().zip(&b.px).flat_map(|(a,b)|a.iter().zip(b).map(|(a,b)|(*a-*b).abs())).fold(0.0_f64,f64::max),"source_first":a.px.first(),"sub_first":b.px.first()})
+            }
+            (a, b) => json!({"ok":false,"source_error":a.err().map(|e|e.to_string()),"sub_error":b.err().map(|e|e.to_string())}),
+        };
+        let parent = photocraft_compose::render(converted, converted.bounds())?;
+        let parent_max = reference.px.iter().zip(&parent.px).flat_map(|(a, b)| a.iter().zip(b).map(|(a, b)| (*a - *b).abs())).fold(0.0_f32, f32::max);
+        let native = photocraft_format::save_to_bytes(converted, &Default::default())?;
+        let reopened = photocraft_format::load_from_bytes(&native)?;
+        if reopened != **converted {
+            return Err("parent reopen changed".into());
+        }
+        let (zip, _) = photocraft_format::PcraftWriter::new().save_zip_stream(
+            converted,
+            &Default::default(),
+            std::io::Cursor::new(Vec::new()),
+            Default::default(),
+            64 << 20,
+            &photocraft_raster::Interrupt::NONE,
+        )?;
+        let zip = photocraft_format::load_from_stream(
+            std::io::Cursor::new(zip.into_inner()),
+            &Default::default(),
+            Default::default(),
+            &photocraft_raster::Interrupt::NONE,
+        )?;
+        if zip != **converted {
+            return Err("zip changed".into());
+        }
+        let source_marker = serde_json::to_value(&doc.working_profile_interpretation)?;
+        let child_marker = serde_json::to_value(&sub.working_profile_interpretation)?;
+        let child_pixels = sub.layers.first().and_then(|l| l.children()).ok_or("child group")?;
+        let original_pixels = doc.layers.first().and_then(|l| l.children()).ok_or("source group")?;
+        if child_pixels.len() != 2 || original_pixels.len() != 2 {
+            return Err("child count changed".into());
+        }
+        let native_same = child_pixels.iter().zip(original_pixels).all(|(a, b)| {
+            a.surface().and_then(|s| s.try_read_interleaved(sub.bounds()).ok()) == b.surface().and_then(|s| s.try_read_interleaved(doc.bounds()).ok())
+        });
+        if !native_same {
+            return Err("smart child native samples changed".into());
+        }
+        if converted.working_profile_interpretation != doc.working_profile_interpretation {
+            return Err("parent marker changed".into());
+        }
+        let history = session.active().ok_or("history")?.history.entry_labels().map(str::to_owned).collect::<Vec<_>>();
+        let after_revision = session.active().ok_or("revision")?.revision;
+        session.execute("edit.undo", json!({}))?;
+        if *session.active().ok_or("undo")?.doc != doc {
+            return Err("undo did not restore source".into());
+        }
+        if photocraft_format::save_to_bytes(&session.active().ok_or("undo native")?.doc, &Default::default())? != native_before {
+            return Err("undo native source changed".into());
+        }
+        session.execute("edit.redo", json!({}))?;
+        if photocraft_format::save_to_bytes(&session.active().ok_or("redo")?.doc, &Default::default())? != native {
+            return Err("redo changed output".into());
+        }
+        Ok(
+            json!({"depth":format!("{depth:?}"),"registered_command":result,"source_marker":source_marker,"embedded_marker":child_marker,"marker_lost":sub.working_profile_interpretation!=doc.working_profile_interpretation,"ICC_exact":sub.icc_profile==doc.icc_profile,"encoding_exact":sub.sample_encoding==doc.sample_encoding,"source_provenance_absent_both":doc.source_color_context.is_none()&&sub.source_color_context.is_none(),"native_child_samples_exact":native_same,"physical_axes":sub.physical_resolution,"source_valid_CURRENT_checked":true,"generic_CPU_subdoc_max_absolute_difference":max,"checked_CURRENT_CPU":checked_cpu,"generic_CPU_parent_cached_max_absolute_difference":parent_max,"legacy_and_zip64_reopened_parent_exact":true,"revision_before":revision,"revision_after":after_revision,"history":history,"undo_redo_exact":true}),
+        )
+    }
+
+    #[test]
+    fn registered_smart_convert_retains_current_marker_u8() {
+        run(SampleType::U8, true).unwrap();
+    }
+    #[test]
+    fn registered_smart_convert_retains_current_marker_u16() {
+        run(SampleType::U16, true).unwrap();
+    }
+    #[test]
+    fn registered_smart_convert_retains_current_marker_f32() {
+        run(SampleType::F32, true).unwrap();
+    }
+    #[test]
+    fn registered_smart_convert_keeps_icc_interpretation() {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            run(depth, false).unwrap();
         }
     }
 }

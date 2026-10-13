@@ -69,7 +69,7 @@ fn effects() -> Vec<Effect> {
     ]
 }
 
-fn synthetic(w: u32, h: u32) -> Document {
+fn synthetic(w: u32, h: u32) -> Result<Document, String> {
     let mut d = Document::with_background("fx", Size::new(w, h), ColorMode::Rgb, SampleType::U8, Color::rgb(0.82, 0.86, 0.9));
     // Some colour blocks on the background.
     for i in 0..12 {
@@ -92,7 +92,7 @@ fn synthetic(w: u32, h: u32) -> Document {
 
     // Text layers through the engine (real glyph rasterization).
     let mut s = photocraft_engine::Session::new();
-    s.add_document(d, None);
+    s.add_document(d, None).map_err(|error| error.to_string())?;
     let lines = ["Photocraft", "Layer Effects", "on the GPU", "Drop Shadow", "Stroke", "Bevel & Emboss", "36 megapixels", "interactive"];
     let rows = lines.len() as u32;
     for (i, t) in lines.iter().enumerate() {
@@ -123,7 +123,7 @@ fn synthetic(w: u32, h: u32) -> Document {
     );
     adj.opacity = 0.9;
     doc.layers.push(adj);
-    doc
+    Ok(doc)
 }
 
 struct Gpu {
@@ -153,11 +153,11 @@ fn gpu_time(g: &mut Gpu, doc: &Document, region: Rect) -> Result<f64, String> {
     Ok(t.elapsed().as_secs_f64() * 1000.0)
 }
 
-fn cpu_time(doc: &Document, region: Rect) -> f64 {
+fn cpu_time(doc: &Document, region: Rect) -> Result<f64, String> {
     let t = Instant::now();
-    let b = photocraft_compose::render(doc, region);
+    let b = photocraft_compose::render(doc, region).map_err(|error| error.to_string())?;
     std::hint::black_box(&b);
-    t.elapsed().as_secs_f64() * 1000.0
+    Ok(t.elapsed().as_secs_f64() * 1000.0)
 }
 
 /// `--compare a.psd b.psd …`: GPU vs CPU max difference (premultiplied, /255) per file.
@@ -172,7 +172,13 @@ fn compare(files: &[String]) {
         };
         let doc = r.document;
         let fx = doc.walk().iter().filter(|(_, _, l)| photocraft_compose::effects::has_effects(l)).count();
-        let cpu = photocraft_compose::flatten(&doc);
+        let cpu = match photocraft_compose::flatten(&doc) {
+            Ok(cpu) => cpu,
+            Err(error) => {
+                println!("{p}: CPU render failed: {error}");
+                continue;
+            }
+        };
         match photocraft_gpu::render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()) {
             Ok(out) => {
                 let mut worst = (0.0f32, 0usize);
@@ -223,7 +229,13 @@ fn main() {
         photocraft_io::import(&p, &bytes).expect("import").document
     } else {
         let (w, h) = arg(&args, "--size").and_then(|s| s.split_once('x').and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?)))).unwrap_or((7360, 4912));
-        synthetic(w, h)
+        match synthetic(w, h) {
+            Ok(doc) => doc,
+            Err(error) => {
+                eprintln!("Build refused: {error}");
+                return;
+            }
+        }
     };
     let full = doc.bounds();
     println!("document {}x{} ({} layers)", doc.size.width, doc.size.height, doc.walk().len());
@@ -260,7 +272,10 @@ fn main() {
         for i in 0..n {
             region = edit(doc, i).intersect(&full);
             if cpu_too && !no_cpu {
-                cs.push(cpu_time(doc, region));
+                match cpu_time(doc, region) {
+                    Ok(ms) => cs.push(ms),
+                    Err(error) => eprintln!("CPU benchmark refused: {error}"),
+                };
             }
             match gt(doc, region) {
                 Ok(v) => gs.push(v),

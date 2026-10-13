@@ -767,6 +767,146 @@ pub struct ColorPanelState {
     pub background: bool,
 }
 
+/// A bounded Properties draft; applying it still requires engine validation.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct XcfTextDraft {
+    pub document: u64,
+    pub layer: u64,
+    pub revision: u64,
+    pub content: String,
+    #[serde(skip)]
+    pub validated: bool,
+    #[serde(skip)]
+    pub editable: bool,
+    #[serde(skip)]
+    pub font_size: Option<u32>,
+}
+
+/// Current-name editor draft; restored values carry no document authority.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct XcfTextNameDraft {
+    pub document: u64,
+    pub layer: u64,
+    pub revision: u64,
+    pub name: String,
+    pub custom_name: bool,
+}
+
+/// Saved-channel naming draft; the engine validates every application.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
+pub struct XcfChannelNameDraft {
+    pub document: u64,
+    pub revision: u64,
+    pub channel: u64,
+    pub name: String,
+    pub custom_name: bool,
+}
+
+/// Exact indexed RGB slot draft; current planes remain engine-owned.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct XcfIndexedPaletteDraft {
+    pub document: u64,
+    pub layer: u64,
+    pub revision: u64,
+    pub slot: u8,
+    pub rgb: [u8; 3],
+}
+
+/// Typed saved-path view selection; it grants no mutation authority.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct XcfSavedPathSelection {
+    pub document: u64,
+    pub path: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct XcfPathNameDraft {
+    pub document: u64,
+    pub path: u64,
+    pub revision: u64,
+    pub name: String,
+    pub custom_name: bool,
+}
+
+/// Graph page cursor only; retained graphs and query results confer no authority.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct XcfGraphPageDraft {
+    pub document: u64,
+    pub revision: u64,
+    pub filter: u64,
+    pub argument: String,
+    pub offset: u32,
+}
+
+/// View-only linked placement/interpolation proposal; never source authority.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct XcfLinkedGeometryDraft {
+    pub document: u64,
+    pub layer: u64,
+    pub revision: u64,
+    pub origin: [i32; 2],
+    pub interpolation: i32,
+}
+
+/// Layer-mask geometry proposal; current pixels and authority stay in the engine.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct XcfMaskGeometryDraft {
+    pub document: u64,
+    pub revision: u64,
+    pub layer: u64,
+    pub mask: u64,
+    pub crop: [i32; 4],
+    pub offset: [i32; 2],
+}
+
+/// Destination pair draft; applying it still requires a checked engine command.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct XcfColorRotateDraft {
+    pub document: u64,
+    pub revision: u64,
+    pub filter: u64,
+    pub from: f32,
+    pub to: f32,
+}
+
+/// View-only saved-set rename draft. Engine commands validate every application.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct XcfItemSetDraft {
+    pub document: u64,
+    pub layer: u64,
+    pub revision: u64,
+    pub set_id: u64,
+    pub name: String,
+}
+
+/// Character-range draft exposed to automation; it carries no source authority.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct XcfUnderlineDraft {
+    pub document: u64,
+    pub layer: u64,
+    pub revision: u64,
+    pub start: usize,
+    pub end: usize,
+    pub content: String,
+    pub ranges: Vec<[usize; 2]>,
+    #[serde(skip)]
+    pub validated: bool,
+    #[serde(skip)]
+    pub editable: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UiState {
     pub tool: Tool,
@@ -776,6 +916,31 @@ pub struct UiState {
     /// Inline type editing session, if any.
     #[serde(default)]
     pub text_edit: Option<TextEdit>,
+    /// Imported GIMP text Properties draft, separate from canonical content/history.
+    #[serde(default)]
+    pub xcf_text_draft: Option<XcfTextDraft>,
+    #[serde(default)]
+    pub xcf_text_name_draft: Option<XcfTextNameDraft>,
+    #[serde(default)]
+    pub xcf_channel_name_draft: Option<XcfChannelNameDraft>,
+    #[serde(default)]
+    pub xcf_indexed_palette_draft: Option<XcfIndexedPaletteDraft>,
+    #[serde(default)]
+    pub xcf_path_name_draft: Option<XcfPathNameDraft>,
+    #[serde(default)]
+    pub xcf_link_geometry_draft: Option<XcfLinkedGeometryDraft>,
+    #[serde(default)]
+    pub xcf_graph_page_draft: Option<XcfGraphPageDraft>,
+    #[serde(default)]
+    pub xcf_mask_geometry_draft: Option<XcfMaskGeometryDraft>,
+    /// Imported underline selection draft; only the engine can apply it.
+    #[serde(default)]
+    pub xcf_underline_draft: Option<XcfUnderlineDraft>,
+    /// View-only paired destination angles; never canonical filter authority.
+    #[serde(default)]
+    pub xcf_color_rotate_draft: Option<XcfColorRotateDraft>,
+    #[serde(default)]
+    pub xcf_item_set_draft: Option<XcfItemSetDraft>,
     /// Ctrl/Cmd Type-tool gesture, exposed to automation but never restored as a held pointer.
     #[serde(default, skip_deserializing)]
     pub type_transform: Option<TypeTransform>,
@@ -830,6 +995,8 @@ pub struct UiState {
     /// Selected row in the Paths panel ("work" or a saved path name).
     #[serde(default)]
     pub selected_path: Option<String>,
+    #[serde(default)]
+    pub selected_saved_path: Option<XcfSavedPathSelection>,
     /// Layers panel kind filter ("pixel", "adjustment", "type", "shape", "smart"); empty = all.
     #[serde(default)]
     pub layer_filter: Vec<String>,
@@ -865,6 +1032,33 @@ pub struct UiState {
     /// Views per open document (index-aligned with the session's documents).
     pub views: Vec<View>,
     pub dialogs: Vec<Dialog>,
+    /// Explicit-open sizing authority is runtime-only; restored fields cannot authorize edits.
+    #[serde(skip)]
+    pub(crate) sizing_witness: Option<crate::sizing::SizingWitness>,
+    #[serde(skip)]
+    pub(crate) trim_origin: Option<crate::trim::TrimOrigin>,
+    #[serde(skip)]
+    pub(crate) duplicate_origin: Option<crate::duplicate::DuplicateOrigin>,
+    #[serde(skip)]
+    pub(crate) profile_origin: Option<crate::profile_dialog::ProfileOrigin>,
+    #[serde(skip)]
+    pub(crate) mode_conversion_origin: Option<crate::mode_conversion_dialog::ModeConversionOrigin>,
+    #[serde(skip)]
+    pub(crate) channel_action_origin: Option<crate::channel_action_dialog::ChannelActionOrigin>,
+    #[serde(skip)]
+    pub(crate) channel_create_origin: Option<crate::channel_create_dialog::ChannelCreateOrigin>,
+    #[serde(skip)]
+    pub(crate) guide_origin: Option<crate::guide_dialog::GuideOrigin>,
+    #[serde(skip)]
+    pub(crate) path_selection_origin: Option<crate::path_selection_dialog::PathSelectionOrigin>,
+    #[serde(skip)]
+    pub(crate) path_transform_origin: Option<crate::path_transform_dialog::PathTransformOrigin>,
+    #[serde(skip)]
+    pub(crate) path_fill_origin: Option<crate::path_fill_dialog::PathFillOrigin>,
+    #[serde(skip)]
+    pub(crate) path_clipping_origin: Option<crate::path_clipping_dialog::PathClippingOrigin>,
+    #[serde(skip)]
+    pub(crate) path_stroke_origin: Option<crate::path_stroke_dialog::PathStrokeOrigin>,
     pub windows: Vec<DocWindow>,
     pub theme: crate::theme::ThemeKind,
     pub workspace: String,
@@ -932,6 +1126,17 @@ impl Default for UiState {
             tool: Tool::Brush,
             recent_files: Vec::new(),
             text_edit: None,
+            xcf_text_draft: None,
+            xcf_text_name_draft: None,
+            xcf_channel_name_draft: None,
+            xcf_indexed_palette_draft: None,
+            xcf_path_name_draft: None,
+            xcf_link_geometry_draft: None,
+            xcf_graph_page_draft: None,
+            xcf_mask_geometry_draft: None,
+            xcf_underline_draft: None,
+            xcf_color_rotate_draft: None,
+            xcf_item_set_draft: None,
             type_transform: None,
             type_transform_pivot: None,
             transform: None,
@@ -960,9 +1165,23 @@ impl Default for UiState {
             pen: None,
             direct_selection: Default::default(),
             selected_path: None,
+            selected_saved_path: None,
             panels: Panels::default(),
             views: Vec::new(),
             dialogs: Vec::new(),
+            sizing_witness: None,
+            trim_origin: None,
+            duplicate_origin: None,
+            profile_origin: None,
+            mode_conversion_origin: None,
+            channel_action_origin: None,
+            channel_create_origin: None,
+            guide_origin: None,
+            path_selection_origin: None,
+            path_transform_origin: None,
+            path_fill_origin: None,
+            path_clipping_origin: None,
+            path_stroke_origin: None,
             windows: Vec::new(),
             theme: crate::theme::ThemeKind::ProMedium,
             workspace: "Essentials".into(),

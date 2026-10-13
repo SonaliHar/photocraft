@@ -618,9 +618,10 @@ pub fn preview_document(
 ) -> Result<photocraft_doc::Document, String> {
     let mut s = photocraft_engine::Session::new();
     s.patterns = patterns.clone();
-    s.add_document(doc.clone(), None);
+    if doc.has_backed_rasters().map_err(|error| error.to_string())? { return Err("Layer Style preview requires a resident document".into()); }
+    s.add_document(doc.clone(), None).map_err(|error| error.to_string())?;
     apply(f, |id, p| s.execute(id, p).map_err(|e| e.to_string()))?;
-    s.active().map(|d| (*d.doc).clone()).ok_or_else(|| "no preview document".into())
+    s.active().and_then(|d| d.doc.resident_arc()).map(|d| d.as_ref().clone()).ok_or_else(|| "no preview document".into())
 }
 
 /// Applies a style preset to the dialog fields in-place without touching the document.
@@ -826,7 +827,19 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                             for st in &group.items {
                                 let tex = crate::preset_panels::style_texture(app, &ctx, st);
                                 let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
-                                ui.painter().image(tex.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                                match tex {
+                                    Ok(texture) => {
+                                        ui.painter().image(
+                                            texture.id(),
+                                            rect,
+                                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                                            Color32::WHITE,
+                                        );
+                                    }
+                                    Err(error) => {
+                                        ui.label(error);
+                                    }
+                                }
                                 let (stroke, kind) = if resp.hovered() {
                                     (Stroke::new(1.5, t.accent), egui::StrokeKind::Outside)
                                 } else {
@@ -1830,7 +1843,7 @@ mod tests {
         set_param(&mut f, "fx1", "opacity", json!(100.0));
         let pixel = |f: &Map<String, Value>, x, y| {
             let preview = preview_document(&st.doc, &s.patterns, f).unwrap();
-            photocraft_compose::flatten(&preview).get(x, y)
+            photocraft_compose::flatten(&preview).unwrap().get(x, y)
         };
         set_param(&mut f, "fx1", "angle", json!(0.0));
         assert!(pixel(&f, 14, 28)[0] < 0.01, "light from right casts shadow left");
