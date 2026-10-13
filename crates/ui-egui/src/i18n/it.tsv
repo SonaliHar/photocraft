@@ -4176,6 +4176,60 @@ navigator	Zoom	Zoom
 	red	rosso
 	violet	viola
 	yellow	giallo
+# Shortcut commands, find and replace, profile prompts and metadata labels the German, Hungarian and Serbian catalogs added
+	Export As: {name}	Esporta come: {name}
+	Color Sampler Tool	Strumento Campionatore colore
+	Proof Setup…	Configurazione prova…
+	Toggle Layer Mask Overlay	Mostra/nascondi sovrapposizione maschera di livello
+	Increase Type Size	Aumenta dimensione testo
+	Decrease Type Size	Riduci dimensione testo
+	Increase Type Size by 10	Aumenta dimensione testo di 10
+	Decrease Type Size by 10	Riduci dimensione testo di 10
+	Make Selection from Path	Crea selezione dal tracciato
+	Target Composite Channel	Seleziona canale composito
+	Target Channel 3	Seleziona canale 3
+	Target Channel 4	Seleziona canale 4
+	Target Channel 5	Seleziona canale 5
+	Target Channel 6	Seleziona canale 6
+	Target Channel 7	Seleziona canale 7
+	Target Channel 8	Seleziona canale 8
+	Target Channel 9	Seleziona canale 9
+	Fill with Foreground Color	Riempi con colore primo piano
+	Fill with Background Color	Riempi con colore sfondo
+	Fill with Foreground Color, Preserve Transparency	Riempi con colore primo piano, conserva trasparenza
+	Fill with Background Color, Preserve Transparency	Riempi con colore sfondo, conserva trasparenza
+	Decrease Brush Size	Riduci dimensione pennello
+	Increase Brush Size	Aumenta dimensione pennello
+	Decrease Brush Hardness	Riduci durezza pennello
+	Increase Brush Hardness	Aumenta durezza pennello
+	Space	Barra spaziatrice
+	Hand Tool (hold)	Strumento Mano (tieni premuto)
+	Zoom In (hold, drag to scrub)	Ingrandisci (tieni premuto, trascina per lo zoom continuo)
+	Zoom Out (hold)	Riduci (tieni premuto)
+	Erase with Brush or Pencil (hold)	Cancella con Pennello o Matita (tieni premuto)
+	Author Title	Qualifica autore
+	Copyright Url	URL copyright
+	Title	Titolo
+	Working-cmyk	CMYK di lavoro
+	Simulate Paper	Simula carta
+	Warming Filter (85)	Filtro caldo (85)
+	Cw	Orario
+	Ccw	Antiorario
+	Nearest	Vicino più prossimo
+	R G B	RGB
+	W:	L:
+	A:	A:
+	Pattern Fill…	Riempimento pattern…
+	Any	Qualsiasi
+	Cmyk	CMYK
+	Dont Enlarge	Non ingrandire
+	Change Find	Cambia e trova
+	Case Sensitive	Maiuscole/minuscole
+	Whole Word	Parola intera
+	Forward	Avanti
+	Checkerboard	Scacchiera
+	The document does not have an embedded colour profile. Working space: {working}.	Il documento non ha un profilo colore incorporato. Spazio di lavoro: {working}.
+	The document has an embedded colour profile that does not match the working space.\nEmbedded: {embedded}\nWorking: {working}	Il documento ha un profilo colore incorporato che non corrisponde allo spazio di lavoro.\nIncorporato: {embedded}\nDi lavoro: {working}
 @id	edit.clear	Cancella
 @id	file.close	Chiudi
 @id	layer.layerMask.apply	Applica
