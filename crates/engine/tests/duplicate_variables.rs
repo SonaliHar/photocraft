@@ -26,7 +26,13 @@ fn scene() -> (Session, LayerId, LayerId, LayerId) {
 }
 
 fn red_png(dir: &str) -> String {
-    let doc = Document::with_background("red", Size::new(4, 4), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8, photocraft_doc::Color::rgb(1.0, 0.0, 0.0));
+    let doc = Document::with_background(
+        "red",
+        Size::new(4, 4),
+        photocraft_doc::ColorMode::Rgb,
+        photocraft_doc::SampleType::U8,
+        photocraft_doc::Color::rgb(1.0, 0.0, 0.0),
+    );
     let bytes = photocraft_io::export(&doc, "png", &photocraft_io::ExportOptions::default()).unwrap().bytes;
     let path = format!("{dir}/replacement.png");
     std::fs::write(&path, bytes).unwrap();
