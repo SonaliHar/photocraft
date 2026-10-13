@@ -14,7 +14,7 @@ fn cells(bounds:Rect)->Result<u64>{
     mul(u64::try_from(columns).map_err(|_|StrokeError::Limit)?,u64::try_from(rows).map_err(|_|StrokeError::Limit)?)
 }
 impl StrokeRenderer{
-    fn pending_admission(&self,held:u64,used_work:u64,limits:StrokeLimits,control:&Interrupt<'_>)->Result<()>{
+    pub(super) fn pending_admission(&self,held:u64,used_work:u64,limits:StrokeLimits,control:&Interrupt<'_>)->Result<()>{
         poll(control)?;self.dabs_done.checked_add(self.dab_buf.len()).ok_or(StrokeError::Limit)?;
         let recorded=self.all_dabs.as_ref().map_or(0,Vec::len);
         if recorded.checked_add(self.dab_buf.len()).is_none_or(|n|n>1_000_000){return Err(StrokeError::Limit);}

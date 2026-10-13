@@ -490,7 +490,7 @@ impl Session {
                 let raw = r.warnings.iter().any(|warning| warning.contains(photocraft_io::raw::DEVELOPED_NOTE));
                 if let Some(question) = s.color.open_question(&r.document).filter(|_| !raw) {
                     ctx.check()?;
-                    let held = s.hold_open_import(r.document, read_only, origin)?;
+                    let held = ctx.stage(0.95, 1.0, "Preparing Profile Question", |control| s.hold_open_import(r.document, read_only, origin, control))?;
                     return Ok(json!({"held":held,"name":name_a,"warnings":r.warnings,"color":question,"assessment":r.assessment,"previewOnly":r.preview_only}));
                 }
                 let (index, color) = ctx.stage(0.95, 1.0, "Preparing Document", |control| s.open_document_with_interrupt(r.document, None, control))?;
@@ -805,6 +805,9 @@ impl Session {
         if id == "layer.duplicate" {
             crate::layer_duplicate_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
         }
+        if id == "layer.new.layer" {
+            crate::new_layer::captured_preflight(self, &params)?;
+        }
         if matches!(id, "paint.stroke" | "paint.pencil") {
             crate::brush_cmds::stroke_dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         }
@@ -854,6 +857,10 @@ impl Session {
         crate::native_raster_invert_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         crate::native_gray_threshold_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         crate::native_gray_posterize_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        crate::native_raster_threshold_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        crate::native_raster_posterize_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        crate::native_raster_levels_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        crate::native_raster_curves_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         if matches!(id, "xcf.floating.anchor" | "xcf.floating.toLayer" | "xcf.floating.delete") {
             crate::xcf_floating::controlled::dispatch_preflight(self, id, &params)?;
         }

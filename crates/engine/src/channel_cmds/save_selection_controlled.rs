@@ -28,12 +28,15 @@ struct Request<'a> {
     existing: Option<usize>,
     operation: &'a str,
     name: Option<&'a str>,
+    raw_storage: bool,
 }
 fn request<'a>(session: &Session, p: &'a Value, early: bool) -> Result<Request<'a>> {
     if !p.is_null()
         && !p.as_object().is_some_and(|p| {
-            p.len() <= 7
-                && p.keys().all(|k| matches!(k.as_str(), "name" | "channel" | "channelId" | "document" | "operation" | "documentId" | "expectedRevision"))
+            p.len() <= 8
+                && p.keys().all(|k| {
+                    matches!(k.as_str(), "name" | "channel" | "channelId" | "document" | "operation" | "documentId" | "expectedRevision" | "rawStorage")
+                })
         })
     {
         return Err(error("expected bounded Save Selection parameters"));
@@ -52,6 +55,13 @@ fn request<'a>(session: &Session, p: &'a Value, early: bool) -> Result<Request<'
             (!s.is_empty()).then_some(s)
         }
     };
+    let raw_storage = match p.get("rawStorage") {
+        None => false,
+        Some(value) => value.as_bool().ok_or_else(|| error("rawStorage must be boolean"))?,
+    };
+    if raw_storage && !matches!(op, "new" | "replace") {
+        return Err(error("rawStorage does not support combining selections"));
+    }
     let source = session.active().ok_or(EngineError::NoDocument)?;
     match (p.get("documentId"), p.get("expectedRevision")) {
         (None, None) => {}
@@ -70,7 +80,7 @@ fn request<'a>(session: &Session, p: &'a Value, early: bool) -> Result<Request<'
         }
     };
     let target = session.documents().get(destination).ok_or_else(|| error("destination document missing"))?;
-    let legacy_source_float = early && p.get("documentId").is_none();
+    let legacy_source_float = early && p.get("documentId").is_none() && !raw_storage;
     for state in [source, target] {
         let allow_float = legacy_source_float && state.doc.id == source.doc.id;
         if (state.floating.is_some() && !allow_float)
@@ -112,7 +122,23 @@ fn request<'a>(session: &Session, p: &'a Value, early: bool) -> Result<Request<'
             }
         }
     };
-    Ok(Request { destination, existing, operation: op, name })
+    if raw_storage {
+        let selection = source.doc.selection.as_ref().ok_or_else(|| error("rawStorage requires a stored selection"))?;
+        if selection.format() != channel_format(&target.doc) {
+            return Err(error("rawStorage source/destination depth mismatch"));
+        }
+        if source.doc.xcf_state.is_some()
+            || target.doc.xcf_state.is_some()
+            || source.doc.source_color_context.is_some()
+            || target.doc.source_color_context.is_some()
+        {
+            return Err(error("rawStorage source-carrier context is not qualified"));
+        }
+        if existing.and_then(|index| target.doc.channels.get(index)).is_some_and(|channel| channel.spot.is_some()) {
+            return Err(error("rawStorage target cannot be spot ink"));
+        }
+    }
+    Ok(Request { destination, existing, operation: op, name, raw_storage })
 }
 pub(super) fn dispatch_preflight(session: &Session, id: &str, p: &Value, _background: bool) -> Result<bool> {
     if id != ID {
@@ -296,6 +322,7 @@ fn ordinary_plane(source: &Document, target: &Document, existing: Option<usize>,
 }
 pub(super) fn save_selection(session: &mut Session, p: &Value) -> Result<Value> {
     let parsed = request(session, p, false)?;
+    let raw_storage = parsed.raw_storage;
     let di = parsed.destination;
     let existing = parsed.existing;
     let operation = string_copy(parsed.operation)?;
@@ -317,7 +344,12 @@ pub(super) fn save_selection(session: &mut Session, p: &Value) -> Result<Value> 
         move |ctx| {
             ctx.stage(0.0, 0.95, "Save Selection", |control| {
                 let raw = prepare(&work_source, &work_target, existing, &operation, control)?;
-                let surface = plane(&work_source, &work_target, existing, &operation, raw, control)?;
+                let surface = if raw_storage {
+                    let selection = work_source.selection.as_ref().ok_or_else(|| error("rawStorage selection disappeared"))?;
+                    super::selection_storage_controlled::copy(&work_source, &work_target, selection, channel_format(&work_target), ID, control)?
+                } else {
+                    plane(&work_source, &work_target, existing, &operation, raw, control)?
+                };
                 poll(control)?;
                 let mut document = (*work_target).clone();
                 let index = if existing.is_none() || operation == "new" {

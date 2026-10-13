@@ -1,9 +1,12 @@
 //! Controlled existing Feather consumer. Other Modify kernels retain upstream
-//! ordinary callers; this module provides their pre-dispatch native-wide fence.
-//! No native Gaussian/EDT precision schedule or source admission is inferred.
+//! callers retain their ordinary equations. Wide input is Boolean U32 or exactly f32-representable finite unit F64.
+//! This does not qualify fractional native math or imported source operations.
+pub(crate) mod native_boolean;
 use crate::{DocumentSnapshot, EngineError, Result, Session};
 use photocraft_algo::selection as sel;
-use photocraft_color::{ColorMode, PixelFormat, SampleType, read_sample};
+#[cfg(test)]
+use photocraft_color::SampleType;
+use photocraft_color::{ColorMode, PixelFormat, read_sample};
 use photocraft_doc::Document;
 use photocraft_geom::{Rect, TILE_SIZE};
 use photocraft_raster::{
@@ -75,12 +78,10 @@ fn request(session: &Session, command: &str, p: &Value) -> Result<Request> {
         return Err(bad(command, "selection target is not idle"));
     }
     let source = state.doc.selection.as_ref().ok_or_else(|| bad(command, "no selection"))?;
-    if matches!(source.format().sample, SampleType::U32 | SampleType::F64) {
-        return Err(bad(command, "native-wide Modify arithmetic is not qualified; no f32 conversion performed"));
-    }
     if source.format().mode != ColorMode::Grayscale || source.format().alpha {
         return Err(bad(command, "selection must be Gray without alpha"));
     }
+    native_boolean::validate_default(source, command)?;
     Ok(Request { radius, at_bounds })
 }
 /// Join before generic floating/async normalization for all five Modify IDs.
@@ -99,6 +100,9 @@ struct Plan {
     stage_work: u64,
 }
 fn edge_sample(source: &Surface, x: i32, y: i32, ctl: &Interrupt<'_>) -> Result<f32> {
+    if native_boolean::is_wide(source) {
+        return native_boolean::sample(source, x, y, "select.modify.feather", ctl);
+    }
     poll(ctl)?;
     let mut word = [0u8; 4];
     let sample = source.format().sample;
@@ -148,12 +152,10 @@ fn admission(doc: &Document, r: Request, ctl: &Interrupt<'_>) -> Result<Plan> {
         .filter(|n| *n <= MAX_CHECKED_RASTER_BYTES)
         .ok_or_else(|| bad(CMD, "retained model/raster limit"))?;
     let source = doc.selection.as_ref().ok_or_else(|| bad(CMD, "no selection"))?;
-    if matches!(source.format().sample, SampleType::U32 | SampleType::F64) {
-        return Err(bad(CMD, "native-wide Feather math is not qualified"));
-    }
     if source.format().mode != ColorMode::Grayscale || source.format().alpha {
         return Err(bad(CMD, "selection must be Gray without alpha"));
     }
+    native_boolean::validate(source, CMD, ctl)?;
     source.try_validate_tile_origins_with(ctl).map_err(|e| failure(CMD, ctl, e))?;
     let radius = (r.radius * 3.0).ceil() as usize;
     let pad = if touches_edge(doc, ctl)? { radius.checked_add(2).ok_or_else(|| bad(CMD, "padding overflow"))? } else { 0 };
@@ -161,8 +163,13 @@ fn admission(doc: &Document, r: Request, ctl: &Interrupt<'_>) -> Result<Plan> {
     let ph = pad.checked_mul(2).and_then(|n| height.checked_add(n)).ok_or_else(|| bad(CMD, "padded height"))?;
     let padded = pw.checked_mul(ph).filter(|n| *n <= 1 << 30).ok_or_else(|| bad(CMD, "padded pixel limit"))?;
     let tiles = (width as u64).div_ceil(TILE_SIZE as u64).checked_mul((height as u64).div_ceil(TILE_SIZE as u64)).ok_or_else(|| bad(CMD, "tile count"))?;
-    let stage_bytes = tiles.checked_mul((TILE_SIZE as u64) * (TILE_SIZE as u64) * 4 + 4096).ok_or_else(|| bad(CMD, "output capacity"))?;
-    let stage_work = tiles.checked_mul((TILE_SIZE as u64) * (TILE_SIZE as u64) * 9 + 8192).ok_or_else(|| bad(CMD, "output work"))?;
+    let stage_bytes = tiles
+        .checked_mul((TILE_SIZE as u64) * (TILE_SIZE as u64) * (if native_boolean::is_wide(source) { 16 } else { 4 }) + 4096)
+        .ok_or_else(|| bad(CMD, "output capacity"))?;
+    let stage_work = tiles
+        .checked_mul((TILE_SIZE as u64) * (TILE_SIZE as u64) * (if native_boolean::is_wide(source) { 32 } else { 9 }) + 8192)
+        .ok_or_else(|| bad(CMD, "output work"))?;
+    let stage_work = stage_work.checked_add(native_boolean::validation_work(source, CMD, ctl)?).ok_or_else(|| bad(CMD, "Boolean aggregate work"))?;
     // Matches the lower kernel's conservative live-plane envelope, plus input,
     // padding/crop ownership and the final native output simultaneously retained.
     let temporary = (padded as u64)
@@ -251,6 +258,9 @@ fn prepare(doc: &Document, r: Request, ctl: &Interrupt<'_>) -> Result<Option<Sur
         padded
     };
     let blurred = sel::try_feather_with_interrupt(&padded, plan.pw, plan.ph, r.radius, ctl).map_err(|e| failure(CMD, ctl, e))?;
+    if native_boolean::is_wide(source) {
+        return native_boolean::output(source, doc.bounds(), &blurred, plan.pw, plan.pad, plan.stage_bytes, plan.stage_work, CMD, ctl);
+    }
     let mut output = Surface::try_with_default_bytes(PixelFormat::GRAY8, &[0]).map_err(|e| failure(CMD, ctl, e))?;
     let mut budget = Budget { bytes: plan.stage_bytes, work: plan.stage_work };
     let mut positive = false;

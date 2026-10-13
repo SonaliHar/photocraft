@@ -7,12 +7,18 @@ const SPOT:&str="channel.newSpot";
 const ALPHA_SPEC:&str=r#"{"name":text,"fill":"black|white|selection"="black","color":text,"opacity":0..100=50,"indicates":"masked|selected"="masked"}"#;
 const SPOT_SPEC:&str=r#"{"name":text,"color":text,"solidity":0..100=0,"fromSelection":bool=true}"#;
 #[derive(Clone,Debug)]
-pub(crate) struct ChannelCreateOrigin {dialog:u64,command:String,document:photocraft_doc::DocId,revision:u64,snapshot:WeakDocumentSnapshot}
+pub(crate) struct ChannelCreateOrigin {dialog:u64,command:String,document:photocraft_doc::DocId,revision:u64,snapshot:WeakDocumentSnapshot,raw_storage:bool}
 impl PartialEq for ChannelCreateOrigin {
     fn eq(&self,other:&Self)->bool {
-        self.dialog==other.dialog && self.command==other.command && self.document==other.document && self.revision==other.revision
+        self.dialog==other.dialog && self.command==other.command && self.document==other.document && self.revision==other.revision && self.raw_storage==other.raw_storage
             && match (self.snapshot.upgrade(),other.snapshot.upgrade()) {(Some(a),Some(b))=>a.shares_state(&b),(None,None)=>true,_=>false}
     }
+}
+/// A bounded format/context hint, never payload or source qualification.
+fn raw_storage_hint(document:&photocraft_engine::DocumentSnapshot)->bool {
+    document.resident_arc().is_some() && document.xcf_state.is_none() && document.source_color_context.is_none()
+        && document.mode!=photocraft_doc::ColorMode::Indexed && document.color_table.is_none()
+        && document.selection.as_ref().is_some_and(|selection|selection.format()==photocraft_engine::channel_cmds::channel_format(document))
 }
 fn supported(command:&str)->bool {matches!(command,ALPHA|SPOT)}
 fn idle(app:&PhotocraftApp)->Result<(),String> {
@@ -29,7 +35,7 @@ pub(crate) fn open(app:&mut PhotocraftApp,command:&str)->Option<u64> {
         idle(app)?;
         let spec=photocraft_engine::commands::find(command).ok_or(tl!("This channel action is unavailable."))?;
         let active=app.session.active().ok_or(tl!("Open a document before creating a channel."))?;
-        Ok::<_,String>((ChannelCreateOrigin{dialog:0,command:command.into(),document:active.doc.id,revision:active.revision,snapshot:active.doc.downgrade()},spec.label))
+        Ok::<_,String>((ChannelCreateOrigin{dialog:0,command:command.into(),document:active.doc.id,revision:active.revision,snapshot:active.doc.downgrade(),raw_storage:command==ALPHA && raw_storage_hint(&active.doc)},spec.label))
     })();
     let (mut target,label)=match prepared {Ok(value)=>value,Err(error)=>{app.ui.status=error;app.ui.status_error=true;return None;}};
     if command==SPOT {
@@ -37,6 +43,7 @@ pub(crate) fn open(app:&mut PhotocraftApp,command:&str)->Option<u64> {
         target.dialog=id;app.ui.channel_create_origin=Some(target);return Some(id);
     }
     let mut fixed=Map::new();fixed.insert("__channelCreate".into(),json!(true));fixed.insert("name".into(),json!(""));fixed.insert("color".into(),json!("#ff0000"));
+    if command==ALPHA {fixed.insert("rawStorage".into(),json!(false));fixed.insert("__rawStorageHint".into(),json!(target.raw_storage));}
     let id=crate::filter_dialog::open_with_spec(app,command,label,if command==ALPHA {ALPHA_SPEC}else {SPOT_SPEC},fixed);
     if let Some(dialog)=app.ui.dialog_mut(id) {dialog.fields.remove("__preview");}
     target.dialog=id;app.ui.channel_create_origin=Some(target);Some(id)
@@ -44,12 +51,22 @@ pub(crate) fn open(app:&mut PhotocraftApp,command:&str)->Option<u64> {
 pub(crate) fn capture_spot(app:&mut PhotocraftApp,id:u64) {
     app.ui.channel_create_origin=None;
     if idle(app).is_err(){return;}
-    if let Some(active)=app.session.active(){app.ui.channel_create_origin=Some(ChannelCreateOrigin{dialog:id,command:SPOT.into(),document:active.doc.id,revision:active.revision,snapshot:active.doc.downgrade()});}
+    if let Some(active)=app.session.active(){app.ui.channel_create_origin=Some(ChannelCreateOrigin{dialog:id,command:SPOT.into(),document:active.doc.id,revision:active.revision,snapshot:active.doc.downgrade(),raw_storage:false});}
 }
 pub(crate) fn owns(fields:&Map<String,Value>)->bool {
     fields.get("__command").and_then(Value::as_str).is_some_and(supported) || fields.get("__channelCreate").and_then(Value::as_bool)==Some(true)
 }
-pub(crate) fn body(ui:&mut egui::Ui,fields:&mut Map<String,Value>) {if crate::channel_options_ui::owns_new_spot(fields) {crate::channel_options_ui::new_spot_body(ui,fields);}else {crate::filter_dialog::body(ui,fields);}}
+pub(crate) fn body(ui:&mut egui::Ui,fields:&mut Map<String,Value>) {
+    if crate::channel_options_ui::owns_new_spot(fields) {crate::channel_options_ui::new_spot_body(ui,fields);}else {crate::filter_dialog::body(ui,fields);}
+    if fields.get("__command").and_then(Value::as_str)==Some(ALPHA) {
+        let compatible=fields.get("fill").and_then(Value::as_str)==Some("selection") && fields.get("__rawStorageHint").and_then(Value::as_bool)==Some(true);
+        let mut raw=fields.get("rawStorage").and_then(Value::as_bool).unwrap_or(false);
+        let response=ui.add_enabled_ui(compatible || raw,|ui|crate::widgets::checkbox(ui,&mut raw,tl!("Preserve stored values and off-canvas data"))).inner;
+        if response.changed() {fields.insert("rawStorage".into(),json!(raw));}
+        if !compatible {response.on_hover_text(tl!("Turn this option off to use the current fill."))
+            .on_disabled_hover_text(tl!("Requires Selection fill with stored Gray values at the document depth."));}
+    }
+}
 fn invalid()->String {tl!("Check the channel settings and try again.").into()}
 pub(crate) fn confirm(app:&mut PhotocraftApp,id:u64,fields:&Map<String,Value>)->Result<Value,String> {
     let target=app.ui.channel_create_origin.take().ok_or(tl!("The document changed. Reopen the channel dialog."))?;idle(app)?;
@@ -68,7 +85,7 @@ pub(crate) fn confirm(app:&mut PhotocraftApp,id:u64,fields:&Map<String,Value>)->
         fields.insert("documentId".into(),json!(target.document.0.to_string()));fields.insert("expectedRevision".into(),json!(target.revision.to_string()));
         return crate::channel_options_ui::confirm_new_spot(app,&fields);
     }
-    let allowed=|key:&str|matches!(key,"name"|"color"|"documentId"|"expectedRevision") || if target.command==ALPHA {matches!(key,"fill"|"opacity"|"indicates")}else {matches!(key,"solidity"|"fromSelection")};
+    let allowed=|key:&str|matches!(key,"name"|"color"|"documentId"|"expectedRevision") || if target.command==ALPHA {matches!(key,"fill"|"opacity"|"indicates"|"rawStorage")}else {matches!(key,"solidity"|"fromSelection")};
     if fields.len()>16 || fields.keys().any(|key|!key.starts_with("__") && !allowed(key)) {return Err(invalid());}
     let name=fields.get("name").and_then(Value::as_str).filter(|name|name.len()<=2048 && !name.contains('\0')).ok_or_else(invalid)?;
     let color=fields.get("color").ok_or_else(invalid)?;
@@ -85,6 +102,11 @@ pub(crate) fn confirm(app:&mut PhotocraftApp,id:u64,fields:&Map<String,Value>)->
         let fill=fields.get("fill").and_then(Value::as_str).filter(|fill|matches!(*fill,"black"|"white"|"selection")).ok_or_else(invalid)?;
         let indicates=fields.get("indicates").and_then(Value::as_str).filter(|indicates|matches!(*indicates,"masked"|"selected")).ok_or_else(invalid)?;
         params.insert("fill".into(),json!(fill));params.insert("indicates".into(),json!(indicates));
+        let raw=match fields.get("rawStorage") {None=>false,Some(value)=>value.as_bool().ok_or_else(invalid)?};
+        if raw {
+            if fill!="selection" || !target.raw_storage || !raw_storage_hint(&active.doc) {return Err(tl!("Stored-value transfer requires Selection fill with compatible ordinary Gray storage.").into());}
+            params.insert("rawStorage".into(),json!(true));
+        }
     }else {params.insert("fromSelection".into(),json!(fields.get("fromSelection").and_then(Value::as_bool).ok_or_else(invalid)?));}
     params.insert("documentId".into(),json!(target.document.0.to_string()));params.insert("expectedRevision".into(),json!(target.revision.to_string()));
     app.run(&target.command,Value::Object(params))
@@ -117,4 +139,31 @@ mod tests {
         confirm(&mut app,id,&fields).unwrap();assert_eq!(app.session.active().unwrap().doc.channels.len(),1);assert_eq!(app.session.active().unwrap().doc.id.0,9_007_199_254_740_995);
         let id=open(&mut app,SPOT).unwrap();let mut fields=app.ui.dialog_mut(id).unwrap().fields.clone();fields.insert("color".into(),json!([0.,1.]));let before=app.session.active().unwrap().doc.clone();assert!(confirm(&mut app,id,&fields).is_err());assert!(app.session.active().unwrap().doc.shares_state(&before));
     }
+    #[test]
+    fn explicit_selection_storage_creation_preserves_default_and_off_canvas_words() {
+        let mut app=app();
+        let mut selection=photocraft_raster::Surface::try_with_default_bytes(photocraft_doc::PixelFormat::GRAY8,&[17]).unwrap();
+        selection.try_write_interleaved(photocraft_geom::Rect::new(-2,-1,-1,0),&[93]).unwrap();
+        app.session.active_mut().unwrap().doc.try_resident_mut().unwrap().selection=Some(selection.clone());
+        let id=open(&mut app,ALPHA).unwrap();
+        let mut fields=app.ui.dialog_mut(id).unwrap().fields.clone();
+        assert_eq!(fields["rawStorage"],false);
+        fields.insert("fill".into(),json!("selection"));fields.insert("rawStorage".into(),json!(true));
+        confirm(&mut app,id,&fields).unwrap();
+        let doc=&app.session.active().unwrap().doc;
+        assert_eq!(doc.selection.as_ref().unwrap(),&selection);
+        assert_eq!(doc.channels.last().unwrap().surface,selection);
+    }
+    #[test]
+    fn presentation_hint_cannot_authorize_missing_selection_or_spot_storage_opt_in() {
+        let mut app=app();let id=open(&mut app,ALPHA).unwrap();
+        let mut fields=app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.insert("fill".into(),json!("selection"));fields.insert("rawStorage".into(),json!(true));fields.insert("__rawStorageHint".into(),json!(true));
+        let before=app.session.active().unwrap().doc.clone();
+        assert!(confirm(&mut app,id,&fields).is_err());assert!(app.session.active().unwrap().doc.shares_state(&before));
+        let id=open(&mut app,SPOT).unwrap();let mut fields=app.ui.dialog_mut(id).unwrap().fields.clone();
+        assert!(!fields.contains_key("rawStorage"));fields.insert("rawStorage".into(),json!(true));
+        assert!(confirm(&mut app,id,&fields).is_err());assert!(app.session.active().unwrap().doc.shares_state(&before));
+    }
+
 }

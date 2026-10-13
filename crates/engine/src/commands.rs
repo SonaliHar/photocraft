@@ -544,7 +544,7 @@ fn build() -> Vec<CommandSpec> {
             "Layer…",
             ["Layer", "New"],
             Some("Cmd+Shift+N"),
-            r##"{"name":str?,"clipToPrevious":bool=false (Use Previous Layer to Create Clipping Mask; inside a clip group the layer joins it anyway),"color":"none|red|orange|yellow|green|seafoam|blue|indigo|magenta|fuchsia|violet|gray"="none","mode":"Normal|Multiply|…"="Normal","opacity":0..1=1,"fillNeutral":bool=false (fill with the mode's neutral color: modes without one are an error),"position":"above|below"="above" (below: the Layers panel's Cmd/Ctrl-click; never under the Background)}"##,
+            r##"{"name":str?,"clipToPrevious":bool=false (Use Previous Layer to Create Clipping Mask; inside a clip group the layer joins it anyway),"color":"none|red|orange|yellow|green|seafoam|blue|indigo|magenta|fuchsia|violet|gray"="none","mode":"Normal|Multiply|…"="Normal","opacity":0..1=1,"fillNeutral":bool=false (fill with the mode's neutral color: modes without one are an error),"position":"above|below"="above" (below: the Layers panel's Cmd/Ctrl-click; never under the Background),"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
             has_doc,
             crate::new_layer::run
         ),
@@ -1115,18 +1115,6 @@ fn build() -> Vec<CommandSpec> {
             enabled: has_doc,
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
-                if kind == "invert" && let Some(value) = crate::native_gray_invert_controlled::try_run(s, p)? {
-                    return Ok(value);
-                }
-                if kind == "invert" && let Some(value) = crate::native_raster_invert_controlled::try_run(s, p)? {
-                    return Ok(value);
-                }
-                if kind == "threshold" && let Some(value) = crate::native_gray_threshold_controlled::try_run(s, p)? {
-                    return Ok(value);
-                }
-                if kind == "posterize" && let Some(value) = crate::native_gray_posterize_controlled::try_run(s, p)? {
-                    return Ok(value);
-                }
                 let eyedropped = if matches!(kind.as_str(), "levels" | "curves") { crate::adjust_params::eyedropper_from_params(s, &kind, p)? } else { None };
                 let adj = match eyedropped {
                     Some(adj) => adj,
@@ -1153,6 +1141,30 @@ fn build() -> Vec<CommandSpec> {
             enabled: crate::adjust_cmds::has_adjustable,
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
+                if kind == "invert" && let Some(value) = crate::native_gray_invert_controlled::try_run(s, p)? {
+                    return Ok(value);
+                }
+                if kind == "invert" && let Some(value) = crate::native_raster_invert_controlled::try_run(s, p)? {
+                    return Ok(value);
+                }
+                if kind == "threshold" && let Some(value) = crate::native_gray_threshold_controlled::try_run(s, p)? {
+                    return Ok(value);
+                }
+                if kind == "posterize" && let Some(value) = crate::native_gray_posterize_controlled::try_run(s, p)? {
+                    return Ok(value);
+                }
+                if kind == "threshold" && let Some(value) = crate::native_raster_threshold_controlled::try_run(s, p)? {
+                    return Ok(value);
+                }
+                if kind == "posterize" && let Some(value) = crate::native_raster_posterize_controlled::try_run(s, p)? {
+                    return Ok(value);
+                }
+                if kind == "levels" && let Some(value) = crate::native_raster_levels_controlled::try_run(s, p)? {
+                    return Ok(value);
+                }
+                if kind == "curves" && let Some(value) = crate::native_raster_curves_controlled::try_run(s, p)? {
+                    return Ok(value);
+                }
                 let eyedropped = if matches!(kind.as_str(), "levels" | "curves") { crate::adjust_params::eyedropper_from_params(s, &kind, p)? } else { None };
                 // A smart filter re-runs its params, so it records what an eyedropper resolved
                 // to, not the sample (#3127).

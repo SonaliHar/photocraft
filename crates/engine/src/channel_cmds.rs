@@ -1615,6 +1615,7 @@ fn can_merge(s: &Session) -> std::result::Result<(), String> {
 // ---------------------------------------------------------------------------------------------
 // Save / Load Selection
 
+mod selection_storage_controlled;
 mod save_selection_controlled;
 
 pub(crate) fn save_selection_dispatch_preflight(s: &Session, p: &Value, background: bool) -> Result<()> {
@@ -2553,7 +2554,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Save Selection…",
             ["Select"],
             None,
-            r##"{"name":str?,"channel":"new"|index|name="new","document":index?,"operation":"new|replace|add|subtract|intersect"="new","documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
+            r##"{"name":str?,"channel":"new"|index|name="new","document":index?,"operation":"new|replace|add|subtract|intersect"="new","rawStorage":bool=false (same-depth Gray new/replace; preserve default and all off-canvas raw tiles, no arithmetic/source-carrier contexts),"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
             has_selection,
             save_selection
         ),
@@ -2562,7 +2563,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Load Selection…",
             ["Select"],
             None,
-            r##"{"channel":index|name|"composite"|"red|green|blue|…"|"transparency"|"mask"|"vectorMask"|"quickMask"|"selection"|"targeted" (the Channels panel's target),"layer":id?,"document":index?,"invert":bool=false,"operation":"new|add|subtract|intersect"="new"}"##,
+            r##"{"channel":index|name|"composite"|"red|green|blue|…"|"transparency"|"mask"|"vectorMask"|"quickMask"|"selection"|"targeted" (the Channels panel's target),"layer":id?,"document":index?,"invert":bool=false,"operation":"new|add|subtract|intersect"="new","rawStorage":bool=false (plain same-depth saved Gray channel; replace without invert; preserve all raw storage),"nativeCoverage":bool=false,"coverageContext":"unit"?}"##,
             has_doc,
             load_selection
         ),
@@ -2598,7 +2599,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "New Channel…",
             [],
             None,
-            r##"{"name":str?,"fill":"black|white|selection"="black","color":"#rrggbb"="#ff0000","opacity":0..100=50,"indicates":"masked|selected"="masked","documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
+            r##"{"name":str?,"fill":"black|white|selection"="black","rawStorage":bool=false (fill selection only; identical native Gray depth; preserve default/all off-canvas raw tiles without arithmetic),"color":"#rrggbb"="#ff0000","opacity":0..100=50,"indicates":"masked|selected"="masked","documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
             has_doc,
             new_channel
         ),

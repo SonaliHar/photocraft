@@ -86,3 +86,25 @@ mod tests{
         assert!(state.doc.shares_state(&before));
     }
 }
+
+/// Reserve the complete existing document and planned constructor set, then
+/// partition remaining storage among all renderers and final output. Actual
+/// generated dabs/coverage remain guarded by each controlled renderer stage.
+pub(super) fn one_shot_limits(doc:&Document,brush:&BrushSettings,format:PixelFormat,zoom:f32,mirror_count:usize,control:&Interrupt<'_>)->Result<StrokeLimits>{
+    poll(control)?;
+    let count=mirror_count.checked_add(1).filter(|count|*count<=4).ok_or_else(||bad("mirror count limit"))?;
+    let standard=StrokeLimits::default();
+    let set=StrokeRenderer::renderer_set_requirements(brush,Some(format),zoom,count,standard,control).map_err(paint)?;
+    let native=photocraft_io::NativeSaveLimits::default().preparation;
+    let input=photocraft_io::retained_native_input_bytes(doc,native,control).map_err(io)? as u64;
+    let raster=DocumentSnapshot::resident_raster_footprint_of(doc,control)?;
+    let fixed=add(input,add(mul(raster.clone_metadata_bytes,3)?,1024)?)?;
+    if add(fixed,add(set.retained_bytes,set.staged_bytes)?)?>standard.resident_bytes||set.work_units>standard.work_units{return Err(bad("aggregate one-shot painter limit"));}
+    let share=standard.resident_bytes.checked_sub(fixed).ok_or_else(||bad("one-shot storage headroom"))?/((count+1) as u64);
+    let constructor=add(set.per_renderer.retained_bytes,set.per_renderer.staged_bytes)?;
+    if constructor>share{return Err(bad("one-shot constructor partition"));}
+    let work=standard.work_units.checked_sub(set.work_units).ok_or_else(||bad("one-shot construction work"))?/(2*count as u64+1);
+    if set.per_renderer.work_units>work{return Err(bad("one-shot constructor work partition"));}
+    poll(control)?;
+    Ok(StrokeLimits{resident_bytes:share,work_units:work})
+}

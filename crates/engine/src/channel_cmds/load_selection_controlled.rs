@@ -17,16 +17,19 @@ fn exact(value:&Value,nonzero:bool)->Result<u64>{
     let value=text.parse::<u64>().map_err(|_|bad(CMD,"ID exceeds range"))?;if nonzero&&value==0{return Err(bad(CMD,"ID must be nonzero"));}Ok(value)
 }
 #[derive(Clone,Copy)]
-struct Request{source_index:usize,source:SnapshotSource,mode:SelectionMode,native:bool}
+struct Request{source_index:usize,source:SnapshotSource,mode:SelectionMode,native:bool,raw_storage:bool}
 fn request(session:&Session,value:&Value,allow_normalize:bool)->Result<Request>{
-    let object=value.as_object().filter(|p|p.len()<=10&&p.keys().all(|k|matches!(k.as_str(),"document"|"layer"|"channel"|"channelId"|"invert"|"operation"|"documentId"|"expectedRevision"|"nativeCoverage"|"coverageContext"))).ok_or_else(||bad(CMD,"expected bounded Load Selection parameters"))?;
+    let object=value.as_object().filter(|p|p.len()<=11&&p.keys().all(|k|matches!(k.as_str(),"document"|"layer"|"channel"|"channelId"|"invert"|"operation"|"documentId"|"expectedRevision"|"nativeCoverage"|"coverageContext"|"rawStorage"))).ok_or_else(||bad(CMD,"expected bounded Load Selection parameters"))?;
     let target=session.active().ok_or(EngineError::NoDocument)?;
     if session.documents().len()>4096{return Err(bad(CMD,"document count limit"));}
     match(value.get("documentId"),value.get("expectedRevision")){
         (None,None)=>{},(Some(id),Some(rev)) if exact(id,true)?==target.doc.id.0&&exact(rev,false)?==target.revision=>{},_=>return Err(bad(CMD,"captured target changed or incomplete")),
     }
-    let native=match value.get("nativeCoverage"){None=>false,Some(v)=>v.as_bool().ok_or_else(||bad(CMD,"nativeCoverage must be boolean"))?};
-    match(value.get("coverageContext"),native){(Some(Value::String(s)),true)if s=="unit"=>{},(None,false)=>{},_=>return Err(bad(CMD,"nativeCoverage requires explicit coverageContext unit")),}
+    let raw_storage=match value.get("rawStorage"){None=>false,Some(v)=>v.as_bool().ok_or_else(||bad(CMD,"rawStorage must be boolean"))?};
+    let numeric_native=match value.get("nativeCoverage"){None=>false,Some(v)=>v.as_bool().ok_or_else(||bad(CMD,"nativeCoverage must be boolean"))?};
+    match(value.get("coverageContext"),numeric_native){(Some(Value::String(s)),true)if s=="unit"=>{},(None,false)=>{},_=>return Err(bad(CMD,"nativeCoverage requires explicit coverageContext unit")),}
+    if raw_storage&&numeric_native{return Err(bad(CMD,"rawStorage and nativeCoverage are distinct policies"));}
+    let native=numeric_native||raw_storage;
     let mode=match value.get("operation"){None|Some(Value::Null)=>SelectionMode::Replace,Some(Value::String(s))=>match s.as_str(){"new"|"replace"=>SelectionMode::Replace,"add"=>SelectionMode::Add,"subtract"=>SelectionMode::Subtract,"intersect"=>SelectionMode::Intersect,_=>return Err(bad(CMD,"unknown selection operation"))},_=>return Err(bad(CMD,"operation must be a name")),};
     let source_index=match value.get("document"){
         None|Some(Value::Null)=>session.active_index().ok_or(EngineError::NoDocument)?,
@@ -46,6 +49,7 @@ fn request(session:&Session,value:&Value,allow_normalize:bool)->Result<Request>{
         Some(v)=>Some(LayerId(v.as_u64().filter(|n|*n!=0).ok_or_else(||bad(CMD,"source layer must be nonzero ID or merged"))?)),
     };
     let invert=match value.get("invert"){None|Some(Value::Null)=>false,Some(v)=>v.as_bool().ok_or_else(||bad(CMD,"invert must be boolean"))?};
+    if raw_storage&&(!matches!(channel,ChanRef::Alpha(_))||invert||mode!=SelectionMode::Replace){return Err(bad(CMD,"rawStorage requires saved Gray replace without invert"));}
     source_dimensions(&source.doc,CMD)?;source_dimensions(&target.doc,CMD)?;
     if source.doc.size!=target.doc.size{return Err(bad(CMD,"source dimensions must match the active target"));}
     let normalizes=allow_normalize&&value.get("documentId").is_none()&&!native&&target.doc.xcf_state.is_none()&&matches!(target.doc.depth,SampleType::U8|SampleType::U16|SampleType::F32);
@@ -61,7 +65,7 @@ fn request(session:&Session,value:&Value,allow_normalize:bool)->Result<Request>{
         ||target.doc.selection.as_ref().is_some_and(|s|matches!(s.format().sample,SampleType::U32|SampleType::F64)){
         return Err(bad(CMD,"wide coverage requires explicit nativeCoverage unit context"));
     }
-    Ok(Request{source_index,source:SnapshotSource{layer,channel,gray:true,invert},mode,native})
+    Ok(Request{source_index,source:SnapshotSource{layer,channel,gray:true,invert},mode,native,raw_storage})
 }
 pub(super) fn dispatch_preflight(session:&Session,value:&Value,_background:bool)->Result<()>{request(session,value,true).map(|_|())}
 fn native_source<'a>(doc:&'a Document,active:Option<LayerId>,request:Request,ctl:&Interrupt<'_>)->Result<&'a Surface>{
@@ -102,7 +106,7 @@ fn prepare(source:&DocumentSnapshot,target:&DocumentSnapshot,active:Option<Layer
         peak=peak.checked_add(payload).and_then(|n|n.checked_add(model.checked_mul(4)?)).and_then(|n|n.checked_add(raster.clone_metadata_bytes.checked_mul(4)?)).ok_or_else(||bad(CMD,"source/target model headroom overflow"))?;
     }
     let format=if request.native{let source=native_source(source,active,request,ctl)?;let format=source.format();if format.sample!=target.depth{return Err(bad(CMD,"native source and target depth must match"));}
-        if let Some(old)=&target.selection{if old.format()!=format{return Err(bad(CMD,"native current selection format must match source"));}}
+        if let Some(old)=target.selection.as_ref().filter(|_|!request.raw_storage){if old.format()!=format{return Err(bad(CMD,"native current selection format must match source"));}}
         format
     }else{PixelFormat::GRAY8};
     let tiles=tile_count(area)?;let payload=(TILE_SIZE as u64).checked_mul(TILE_SIZE as u64).and_then(|n|n.checked_mul(format.bytes_per_pixel() as u64)).ok_or_else(||bad(CMD,"coverage tile charge overflow"))?;
@@ -111,7 +115,7 @@ fn prepare(source:&DocumentSnapshot,target:&DocumentSnapshot,active:Option<Layer
     for surface in target.selection.iter(){work=work.checked_add((surface.tile_count() as u64).checked_mul((TILE_SIZE as u64)*(TILE_SIZE as u64)).and_then(|n|n.checked_mul(16)).ok_or_else(||bad(CMD,"selection validation work overflow"))?).ok_or_else(||bad(CMD,"selection validation work overflow"))?;}
     if request.native{let surface=native_source(source,active,request,ctl)?;work=work.checked_add((surface.tile_count() as u64).checked_mul((TILE_SIZE as u64)*(TILE_SIZE as u64)).and_then(|n|n.checked_mul(16)).ok_or_else(||bad(CMD,"source coverage validation work overflow"))?).ok_or_else(||bad(CMD,"source coverage work overflow"))?;}
     if peak>MAX_CHECKED_RASTER_BYTES||work>8_000_000_000{return Err(bad(CMD,"aggregate coverage work/resident limit"));}
-    if request.native{plain(native_source(source,active,request,ctl)?,ctl)?;if let Some(old)=&target.selection{plain(old,ctl)?;}}
+    if request.native&&!request.raw_storage{plain(native_source(source,active,request,ctl)?,ctl)?;if let Some(old)=&target.selection{plain(old,ctl)?;}}
     poll(ctl)
 }
 fn operation(mode:SelectionMode)->Operation{match mode{SelectionMode::Add=>Operation::UnionMax,SelectionMode::Subtract=>Operation::SubtractSaturating,_=>Operation::IntersectionMin}}
@@ -158,7 +162,8 @@ fn legacy_result(old:Option<&Surface>,plane:&[f32],area:Rect,mode:SelectionMode,
 }
 fn stage(source:&DocumentSnapshot,target:&DocumentSnapshot,active:Option<LayerId>,request:Request,ctl:&Interrupt<'_>)->Result<Option<Surface>>{
     prepare(source,target,active,request,ctl)?;let area=target.bounds();
-    if request.native{Ok(Some(native_result(native_source(source,active,request,ctl)?,target.selection.as_ref(),area,request,ctl)?))}
+    if request.raw_storage{let surface=native_source(source,active,request,ctl)?;Ok(Some(super::selection_storage_controlled::copy(source,target,surface,surface.format(),CMD,ctl)?))}
+    else if request.native{Ok(Some(native_result(native_source(source,active,request,ctl)?,target.selection.as_ref(),area,request,ctl)?))}
     else{let mut planes=source_from_snapshot_with_interrupt(source,active,request.source,CMD,ctl)?;if planes.len()!=1{return Err(bad(CMD,"source must yield one coverage plane"));}let plane=planes.pop().ok_or_else(||bad(CMD,"missing source plane"))?;legacy_result(target.selection.as_ref(),&plane,area,request.mode,ctl)}
 }
 pub(super) fn run(session:&mut Session,value:&Value)->Result<Value>{
@@ -182,7 +187,7 @@ pub(super) fn run(session:&mut Session,value:&Value)->Result<Value>{
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn req(mode:SelectionMode)->Request {Request{source_index:0,source:SnapshotSource{layer:None,channel:ChanRef::Alpha(0),gray:true,invert:false},mode,native:true}}
+    fn req(mode:SelectionMode)->Request {Request{source_index:0,source:SnapshotSource{layer:None,channel:ChanRef::Alpha(0),gray:true,invert:false},mode,native:true,raw_storage:false}}
     #[test]
     fn native_f64_low_words_and_signed_default_survive_replace_and_ties() {
         let format=PixelFormat::new(ColorMode::Grayscale,SampleType::F64,false);let area=Rect::new(0,0,2,1);

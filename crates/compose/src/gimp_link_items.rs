@@ -7,6 +7,9 @@ use photocraft_doc::{
 };
 use photocraft_raster::{Interrupt, Surface};
 
+#[path = "gimp_link_items_controlled.rs"]
+mod controlled;
+
 fn unsupported() -> CompositionError {
     CompositionError::Unsupported("unqualified linked image profile, precision or transform")
 }
@@ -59,21 +62,21 @@ fn convert_owned_pixels(
     doc.working_profile_interpretation
         .validate_with_interrupt(Some(active_icc), doc.mode, ctl)
         .map_err(|error| if error.code == "cancelled" { photocraft_raster::RasterInputError::Cancelled.into() } else { unsupported() })?;
-    let source = photocraft_cms::xcf_color::parse_bounded_profile(source_icc, space)?;
+    let source = controlled::prepare(ctl, || Ok(photocraft_cms::xcf_color::parse_bounded_profile(source_icc, space)?))?;
     let working = if matches!(doc.working_profile_interpretation, photocraft_doc::WorkingProfileInterpretation::Icc) {
-        photocraft_cms::xcf_color::parse_bounded_profile(active_icc, space)?
+        controlled::prepare(ctl, || Ok(photocraft_cms::xcf_color::parse_bounded_profile(active_icc, space)?))?
     } else {
-        photocraft_cms::xcf_color::implicit_source_profile(active_icc, space, photocraft_cms::xcf_color::Encoding::NonlinearProfile)?
+        controlled::prepare(ctl, || {
+            Ok(photocraft_cms::xcf_color::implicit_source_profile(active_icc, space, photocraft_cms::xcf_color::Encoding::NonlinearProfile)?)
+        })?
     };
-    photocraft_cms::xcf_color::qualify_analytic_profile(&source)?;
-    photocraft_cms::xcf_color::qualify_analytic_profile(&working)?;
-    let mut output = Vec::new();
-    output.try_reserve_exact(bytes.len()).map_err(|_| photocraft_raster::RasterInputError::AllocationFailed)?;
-    output.extend_from_slice(bytes);
+    controlled::prepare(ctl, || Ok(photocraft_cms::xcf_color::qualify_analytic_profile(&source)?))?;
+    controlled::prepare(ctl, || Ok(photocraft_cms::xcf_color::qualify_analytic_profile(&working)?))?;
+    let mut output = controlled::copy_pixels(bytes, ctl)?;
     if source_icc == active_icc && matches!(doc.working_profile_interpretation, photocraft_doc::WorkingProfileInterpretation::Icc) {
         return Ok((output, working));
     }
-    let transform = Transform::new(&source, &working, Intent::RelativeColorimetric, false)?;
+    let transform = controlled::prepare(ctl, || Ok(Transform::new(&source, &working, Intent::RelativeColorimetric, false)?))?;
     let channels = if space == ColorSpace::Rgb { 3 } else { 1 };
     let width = match doc.depth {
         photocraft_doc::SampleType::U8 => 1,
@@ -115,6 +118,7 @@ fn convert_owned_pixels(
             }
         }
     }
+    controlled::checkpoint(ctl)?;
     Ok((output, working))
 }
 

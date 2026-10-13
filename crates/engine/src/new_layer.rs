@@ -12,6 +12,32 @@ fn bad(msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: CMD.into(), msg: msg.into() }
 }
 
+/// Captured selectors are checked before dispatch preparation and again at the run boundary.
+pub(crate) fn captured_preflight(s: &Session, p: &Value) -> Result<()> {
+    let decimal = |value: &Value| {
+        let text = value.as_str()?;
+        if text.is_empty() || text.len() > 20 || (text.len() > 1 && text.starts_with('0')) || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        text.parse::<u64>().ok()
+    };
+    match (p.get("documentId"), p.get("expectedRevision")) {
+        (None, None) => Ok(()),
+        (Some(document), Some(revision)) => {
+            let state = s.active().ok_or(EngineError::NoDocument)?;
+            if state.doc.id.0 == 0 || decimal(document) != Some(state.doc.id.0) || decimal(revision) != Some(state.revision) {
+                return Err(bad("captured new-layer document changed"));
+            }
+            if state.revision == u64::MAX || state.floating.is_some() || state.coalesce.is_some() || s.has_jobs() || s.command_has_pending_job()
+                || state.doc.xcf_state.as_ref().is_some_and(|xcf| xcf.floating.is_some()) {
+                return Err(bad("finish pending edits before creating the captured layer"));
+            }
+            Ok(())
+        }
+        _ => Err(bad("documentId and expectedRevision must be supplied together as canonical decimal strings")),
+    }
+}
+
 /// The color that leaves everything below unchanged in `mode` (Photoshop's "Fill with
 /// Multiply-neutral color (white)"), as RGB, and its name. `None` for modes that have none.
 pub fn neutral_color(mode: BlendMode) -> Option<([f32; 3], &'static str)> {
@@ -27,6 +53,7 @@ pub fn neutral_color(mode: BlendMode) -> Option<([f32; 3], &'static str)> {
 /// `layer.new.layer`: a pixel layer above the active one (below it with `position: below`, the
 /// Layers panel's ⌘/Ctrl-click), joining the clip group it lands in.
 pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
+    captured_preflight(s, p)?;
     let flag = |k: &str| match p.get(k) {
         None | Some(Value::Null) => Ok(false),
         Some(v) => v.as_bool().ok_or_else(|| bad(format!("`{k}` must be true or false"))),
@@ -216,4 +243,26 @@ mod tests {
         s.execute("layer.new.layer", json!({"opacity": 7})).unwrap();
         assert_eq!(s.active().unwrap().doc.layers.last().unwrap().opacity, 1.0);
     }
+    #[test]
+    fn captured_new_layer_refuses_stale_or_partial_pair_without_history() {
+        let mut s = busy("rgb", 8);
+        let document = s.active().unwrap().doc.id.0.to_string();
+        let revision = s.active().unwrap().revision.to_string();
+        s.execute("layer.new.layer", json!({"name":"Captured", "documentId":document, "expectedRevision":revision})).unwrap();
+        let before = s.active().unwrap().doc.clone();
+        let history = s.active().unwrap().history.past_len();
+        for params in [
+            json!({"documentId":document,"expectedRevision":revision}),
+            json!({"documentId":document}),
+            json!({"documentId":document,"expectedRevision":0}),
+            json!({"documentId":"01","expectedRevision":"0"}),
+        ] {
+            assert!(s.execute("layer.new.layer", params).is_err());
+            assert!(s.active().unwrap().doc.shares_state(&before));
+            assert_eq!(s.active().unwrap().history.past_len(), history);
+        }
+        s.execute("layer.new.layer", json!({"name":"Uncaptured defaults"})).unwrap();
+        assert_eq!(s.active().unwrap().doc.layers.len(), before.layers.len() + 1);
+    }
+
 }

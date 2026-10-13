@@ -8,7 +8,7 @@ fn poll(control:&Interrupt<'_>)->Result<()>{control.check().map_err(|_|StrokeErr
 fn add(a:u64,b:u64)->Result<u64>{a.checked_add(b).ok_or(StrokeError::Limit)}
 fn mul(a:u64,b:u64)->Result<u64>{a.checked_mul(b).ok_or(StrokeError::Limit)}
 fn raster<T>(value:std::result::Result<T,photocraft_raster::RasterInputError>)->Result<T>{value.map_err(|error|match error{photocraft_raster::RasterInputError::Cancelled=>StrokeError::Cancelled,photocraft_raster::RasterInputError::AllocationFailed=>StrokeError::Allocation,photocraft_raster::RasterInputError::LimitExceeded=>StrokeError::Limit,_=>StrokeError::Raster})}
-fn retained(surface:&Surface,limit:u64,control:&Interrupt<'_>)->Result<u64>{
+pub(super) fn retained(surface:&Surface,limit:u64,control:&Interrupt<'_>)->Result<u64>{
     poll(control)?;let mut bytes=add(surface.default_bytes().len() as u64,mul(surface.tile_count() as u64,256)?)?;
     if bytes>limit{return Err(StrokeError::Limit);}raster(surface.try_validate_tile_origins_with(control))?;
     for(_,tile)in surface.tiles(){poll(control)?;bytes=add(bytes,tile.bytes().len() as u64)?;if bytes>limit{return Err(StrokeError::Limit);}}Ok(bytes)

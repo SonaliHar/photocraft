@@ -136,79 +136,98 @@ pub fn render_source_candidate_with_sample_policy(
     let bound = bind_source_node_with_sample_policy(node, binding, sampling, control)?;
     let preparation_limits = Limits { resident_bytes: preparation, work_units: 16384 };
     bound.with_prepared(actual, preparation_limits, control, |prepared| {
-        let mut prepaid = Prepaid { bytes: output, work: limits.work_units.checked_sub(16384).ok_or(RasterInputError::LimitExceeded)? };
-        let mut builder = StagedSurfaceBuilder::new(format, source.default_bytes(), roi, &mut prepaid, control)?;
-        // Fixed64px cells are the builder's coverage unit; intersect edge cells.
-        for coordinate in roi.tiles() {
-            let x0 = coordinate.tx.checked_mul(TILE_SIZE).ok_or(RasterInputError::InvalidBounds)?;
-            let y0 = coordinate.ty.checked_mul(TILE_SIZE).ok_or(RasterInputError::InvalidBounds)?;
-            for cy in (0..TILE_SIZE).step_by(64) {
-                for cx in (0..TILE_SIZE).step_by(64) {
-                    poll(control)?;
-                    let x = x0.checked_add(cx).ok_or(RasterInputError::InvalidBounds)?;
-                    let y = y0.checked_add(cy).ok_or(RasterInputError::InvalidBounds)?;
-                    let part =
-                        Rect::new(x, y, x.checked_add(64).ok_or(RasterInputError::InvalidBounds)?, y.checked_add(64).ok_or(RasterInputError::InvalidBounds)?)
-                            .intersect(&roi);
-                    if part.is_empty() {
-                        continue;
-                    }
-                    let mut raw = source.try_read_interleaved_with(part, control)?;
-                    if raw.capacity() as u64 > scratch {
-                        return Err(RasterInputError::LimitExceeded);
-                    }
-                    for native in raw.chunks_exact_mut(bpp) {
-                        poll(control)?;
-                        prepaid.work(4096)?;
-                        let mut input = [0.0; 4];
-                        let mut output = [0.0; 4];
-                        for (index, sample) in input.iter_mut().take(format.channels()).enumerate() {
-                            *sample = checked_arithmetic::decode_finite(
-                                Operand { bytes: native, storage: Storage::Native(format.sample), index },
-                                if index == colors { Domain::Unit } else { Domain::FloatHdr },
-                            )
-                            .map_err(|_| RasterInputError::InvalidSample)?;
-                        }
-                        prepared.try_eval_pixel(
-                            input.get(..format.channels()).ok_or(RasterInputError::LengthMismatch)?,
-                            output.get_mut(..format.channels()).ok_or(RasterInputError::LengthMismatch)?,
-                            actual,
-                            control,
-                        )?;
-                        let mut encoded = [0u8; 32];
-                        let encoded = encoded.get_mut(..bpp).ok_or(RasterInputError::LengthMismatch)?;
-                        encoded.copy_from_slice(native);
-                        for (index, sample) in output.iter().take(colors).enumerate() {
-                            checked_arithmetic::encode_finite(
-                                *sample,
-                                Destination { bytes: encoded, storage: Storage::Native(format.sample), index },
-                                policy.colors,
-                            )
-                            .map_err(|_| RasterInputError::InvalidSample)?;
-                        }
-                        if format.alpha && !matches!(policy.coverage, CoveragePolicy::PreserveSource) {
-                            let mut alpha = *output.get(colors).ok_or(RasterInputError::LengthMismatch)?;
-                            match policy.coverage {
-                                CoveragePolicy::EvaluatedRejectUnit if !(0.0..=1.0).contains(&alpha) => return Err(RasterInputError::InvalidSample),
-                                CoveragePolicy::EvaluatedClampUnit => alpha = alpha.clamp(0.0, 1.0),
-                                _ => {}
-                            }
-                            checked_arithmetic::encode_finite(
-                                alpha,
-                                Destination { bytes: encoded, storage: Storage::Native(format.sample), index: colors },
-                                policy.alpha,
-                            )
-                            .map_err(|_| RasterInputError::InvalidSample)?;
-                        }
-                        native.copy_from_slice(encoded);
-                    }
-                    builder.push_region(part, &raw, &mut prepaid, control)?;
+        render_prepared_window(prepared, source, roi, actual, policy, output, scratch, limits.work_units.checked_sub(16384).ok_or(RasterInputError::LimitExceeded)?, control)
+    })
+}
+
+// Shared numerical/staging consumer. Callers must preadmit output, scratch and
+// work and validate exact source/context/ROI before entering this private seam.
+pub(crate) fn render_prepared_window(
+    prepared: &photocraft_algo::gimp::configured::PreparedConfiguration<'_>,
+    source: &Surface,
+    roi: Rect,
+    actual: WorkingContext,
+    policy: OutputPolicy,
+    output_bytes: u64,
+    scratch: u64,
+    work_units: u64,
+    control: &Interrupt<'_>,
+) -> Result<RenderedCandidate, RasterInputError> {
+    let format = source.format();
+    let bpp = format.bytes_per_pixel();
+    let colors = actual.color_channels;
+    let mut prepaid = Prepaid { bytes: output_bytes, work: work_units };
+    let mut builder = StagedSurfaceBuilder::new(format, source.default_bytes(), roi, &mut prepaid, control)?;
+    // Fixed64px cells are the builder's coverage unit; intersect edge cells.
+    for coordinate in roi.tiles() {
+        let x0 = coordinate.tx.checked_mul(TILE_SIZE).ok_or(RasterInputError::InvalidBounds)?;
+        let y0 = coordinate.ty.checked_mul(TILE_SIZE).ok_or(RasterInputError::InvalidBounds)?;
+        for cy in (0..TILE_SIZE).step_by(64) {
+            for cx in (0..TILE_SIZE).step_by(64) {
+                poll(control)?;
+                let x = x0.checked_add(cx).ok_or(RasterInputError::InvalidBounds)?;
+                let y = y0.checked_add(cy).ok_or(RasterInputError::InvalidBounds)?;
+                let part =
+                    Rect::new(x, y, x.checked_add(64).ok_or(RasterInputError::InvalidBounds)?, y.checked_add(64).ok_or(RasterInputError::InvalidBounds)?)
+                        .intersect(&roi);
+                if part.is_empty() {
+                    continue;
                 }
+                let mut raw = source.try_read_interleaved_with(part, control)?;
+                if raw.capacity() as u64 > scratch {
+                    return Err(RasterInputError::LimitExceeded);
+                }
+                for native in raw.chunks_exact_mut(bpp) {
+                    poll(control)?;
+                    prepaid.work(4096)?;
+                    let mut input = [0.0; 4];
+                    let mut output = [0.0; 4];
+                    for (index, sample) in input.iter_mut().take(format.channels()).enumerate() {
+                        *sample = checked_arithmetic::decode_finite(
+                            Operand { bytes: native, storage: Storage::Native(format.sample), index },
+                            if index == colors { Domain::Unit } else { Domain::FloatHdr },
+                        )
+                        .map_err(|_| RasterInputError::InvalidSample)?;
+                    }
+                    prepared.try_eval_pixel(
+                        input.get(..format.channels()).ok_or(RasterInputError::LengthMismatch)?,
+                        output.get_mut(..format.channels()).ok_or(RasterInputError::LengthMismatch)?,
+                        actual,
+                        control,
+                    )?;
+                    let mut encoded = [0u8; 32];
+                    let encoded = encoded.get_mut(..bpp).ok_or(RasterInputError::LengthMismatch)?;
+                    encoded.copy_from_slice(native);
+                    for (index, sample) in output.iter().take(colors).enumerate() {
+                        checked_arithmetic::encode_finite(
+                            *sample,
+                            Destination { bytes: encoded, storage: Storage::Native(format.sample), index },
+                            policy.colors,
+                        )
+                        .map_err(|_| RasterInputError::InvalidSample)?;
+                    }
+                    if format.alpha && !matches!(policy.coverage, CoveragePolicy::PreserveSource) {
+                        let mut alpha = *output.get(colors).ok_or(RasterInputError::LengthMismatch)?;
+                        match policy.coverage {
+                            CoveragePolicy::EvaluatedRejectUnit if !(0.0..=1.0).contains(&alpha) => return Err(RasterInputError::InvalidSample),
+                            CoveragePolicy::EvaluatedClampUnit => alpha = alpha.clamp(0.0, 1.0),
+                            _ => {}
+                        }
+                        checked_arithmetic::encode_finite(
+                            alpha,
+                            Destination { bytes: encoded, storage: Storage::Native(format.sample), index: colors },
+                            policy.alpha,
+                        )
+                        .map_err(|_| RasterInputError::InvalidSample)?;
+                    }
+                    native.copy_from_slice(encoded);
+                }
+                builder.push_region(part, &raw, &mut prepaid, control)?;
             }
         }
-        let staged = builder.finalize(&mut prepaid, control)?;
-        let (surface, ()) = staged.into_parts();
-        poll(control)?;
-        Ok(RenderedCandidate { surface, roi })
-    })
+    }
+    let staged = builder.finalize(&mut prepaid, control)?;
+    let (surface, ()) = staged.into_parts();
+    poll(control)?;
+    Ok(RenderedCandidate { surface, roi })
 }

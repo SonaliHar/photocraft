@@ -1368,6 +1368,10 @@ pub struct UiState {
     #[serde(skip)]
     pub(crate) native_gray_adjustment_origin: Option<crate::native_gray_adjustment_origin::Origin>,
     #[serde(skip)]
+    pub(crate) duplicate_layer_origin: Option<crate::duplicate_layer_origin::Origin>,
+    #[serde(skip)]
+    pub(crate) new_layer_origin: Option<crate::new_layer_origin::Origin>,
+    #[serde(skip)]
     pub(crate) duplicate_origin: Option<crate::duplicate::DuplicateOrigin>,
     #[serde(skip)]
     pub(crate) profile_origin: Option<crate::profile_dialog::ProfileOrigin>,
@@ -1544,6 +1548,8 @@ impl Default for UiState {
             fill_origin: None,
             selection_modify_origin: None,
             native_gray_adjustment_origin: None,
+            duplicate_layer_origin: None,
+            new_layer_origin: None,
             duplicate_origin: None,
             profile_origin: None,
             mode_conversion_origin: None,

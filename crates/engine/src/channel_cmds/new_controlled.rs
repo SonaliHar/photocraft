@@ -26,6 +26,7 @@ enum Fill {
 #[derive(Clone, Copy)]
 struct Settings {
     fill: Fill,
+    raw_storage: bool,
     color: Color,
     opacity: Option<f32>,
     solidity: f32,
@@ -55,7 +56,7 @@ fn settings(params: &Value, spot: bool) -> Result<Settings> {
             if spot {
                 matches!(key.as_str(), "name" | "color" | "solidity" | "fromSelection" | "documentId" | "expectedRevision")
             } else {
-                matches!(key.as_str(), "name" | "fill" | "color" | "opacity" | "indicates" | "documentId" | "expectedRevision")
+                matches!(key.as_str(), "name" | "fill" | "color" | "opacity" | "indicates" | "documentId" | "expectedRevision" | "rawStorage")
             }
         }) {
             return Err(bad(cmd(spot), "unknown channel parameter"));
@@ -112,8 +113,16 @@ fn settings(params: &Value, spot: bool) -> Result<Settings> {
     } else {
         None
     };
+    let raw_storage = match params.get("rawStorage") {
+        None => false,
+        Some(value) => value.as_bool().ok_or_else(|| bad(cmd(spot), "rawStorage must be boolean"))?,
+    };
+    if raw_storage && (spot || !matches!(fill, Fill::Selection)) {
+        return Err(bad(cmd(spot), "rawStorage requires ordinary channel.new fill selection"));
+    }
     Ok(Settings {
         fill,
+        raw_storage,
         color,
         opacity: if params.get("opacity").is_some() { Some(percentage(params, "opacity", 0.5, spot)?) } else { None },
         solidity: percentage(params, "solidity", 0., spot)?,
@@ -171,6 +180,12 @@ pub(super) fn dispatch_preflight(session: &Session, params: &Value, spot: bool) 
             || (format != target && (matches!(format.sample, SampleType::U32 | SampleType::F64) || matches!(target.sample, SampleType::U32 | SampleType::F64)))
         {
             return Err(bad(cmd(spot), "selection format conversion is not qualified"));
+        }
+    }
+    if config.raw_storage {
+        let selection = state.doc.selection.as_ref().ok_or_else(|| bad(cmd(spot), "rawStorage requires a stored selection"))?;
+        if selection.format() != channel_format(&state.doc) {
+            return Err(bad(cmd(spot), "rawStorage requires identical Gray depth without alpha"));
         }
     }
     Ok(())
@@ -367,7 +382,13 @@ pub(super) fn run(session: &mut Session, params: &Value, spot: bool) -> Result<V
             ctx.stage(0., 0.95, label, |control| {
                 admission(&worker, spot, control)?;
                 let channel_name = name(&worker, explicit.as_deref(), spot, control)?;
-                let mut channel = AlphaChannel::new(channel_name, surface(&worker, config, spot, control)?);
+                let channel_surface = if config.raw_storage {
+                    let selection = worker.selection.as_ref().ok_or_else(|| bad(cmd(spot), "rawStorage selection disappeared"))?;
+                    super::selection_storage_controlled::copy(&worker, &worker, selection, channel_format(&worker), cmd(spot), control)?
+                } else {
+                    surface(&worker, config, spot, control)?
+                };
+                let mut channel = AlphaChannel::new(channel_name, channel_surface);
                 channel.id = fresh(&worker, spot, control)?;
                 if spot {
                     channel.spot = Some((config.color, config.solidity));
@@ -550,5 +571,32 @@ mod tests {
                 assert_eq!(session.active().unwrap().channel_view.target, target);
             }
         }
+    }
+
+    #[test]
+    fn explicit_raw_selection_creation_preserves_default_offcanvas_and_metadata() {
+        let format = photocraft_color::PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false);
+        let mut doc = Document::new("Raw new channel", photocraft_geom::Size::new(2, 2), ColorMode::Rgb, SampleType::F64);
+        let mut selection = Surface::try_with_default_bytes(format, &(-0.0f64).to_ne_bytes()).unwrap();
+        let nan = 0x7ff8000000000042u64.to_ne_bytes();
+        selection.try_write_interleaved(photocraft_geom::Rect::new(-7, 9, -6, 10), &nan).unwrap();
+        doc.selection = Some(selection.clone());
+        let mut session = Session::new();
+        session.add_document(doc, None).unwrap();
+        run(&mut session, &json!({"fill":"selection","rawStorage":true,"name":"Raw copy","opacity":25}), false).unwrap();
+        let state = session.active().unwrap();
+        let channel = &state.doc.channels[0];
+        assert_eq!(channel.surface.default_bytes(), selection.default_bytes());
+        assert_eq!(channel.surface.try_read_interleaved(photocraft_geom::Rect::new(-7, 9, -6, 10)).unwrap(), nan);
+        assert!(selection.tiles().zip(channel.surface.tiles()).all(|((a, b), (c, d))| a == c && std::sync::Arc::ptr_eq(b, d)));
+        assert_eq!(channel.name, "Raw copy");
+        assert_eq!(channel.opacity, 0.25);
+        assert!(session.undo());
+        assert!(session.active().unwrap().doc.channels.is_empty());
+        assert!(session.redo());
+        for params in [json!({"fill":"white","rawStorage":true}), json!({"fill":"selection","rawStorage":1})] {
+            assert!(dispatch_preflight(&session, &params, false).is_err());
+        }
+        assert!(dispatch_preflight(&session, &json!({"fromSelection":true,"rawStorage":true}), true).is_err());
     }
 }

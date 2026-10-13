@@ -205,7 +205,7 @@ impl PhotocraftApp {
     }
 
     /// Log `msg` and show it as an error (status bar + notice).
-    fn failed(&mut self, msg: String) {
+    pub(crate) fn failed(&mut self, msg: String) {
         log::warn!("{msg}");
         notices::error(self, msg);
     }

@@ -11,6 +11,9 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 
+#[path = "open_prompt_control.rs"]
+mod control;
+
 /// The field that marks a prompt as this module's.
 const FIELD: &str = "__heldOpen";
 
@@ -43,19 +46,30 @@ pub fn waiting(app: &PhotocraftApp) -> bool {
 
 /// Opens `held` now, or queues it behind the file whose prompt is up.
 pub fn arrive(app: &mut PhotocraftApp, held: Held) {
-    app.held_opens.push_back(held);
-    advance(app);
+    if let Err(error) = arrive_with_interrupt(app, held, &photocraft_raster::Interrupt::NONE) {
+        app.failed(error);
+    }
 }
 
 /// Fallible immediate arrival for prepared native imports. A queued prompt is
 /// accepted without publication; its eventual answer retains the existing Result.
 pub(crate) fn arrive_checked(app: &mut PhotocraftApp, held: Held) -> Result<(), String> {
     if waiting(app) || held.question.is_some() {
-        arrive(app, held);
-        Ok(())
+        arrive_with_interrupt(app, held, &photocraft_raster::Interrupt::NONE)
     } else {
+        control::prepare(&app.held_opens, &held, &photocraft_raster::Interrupt::NONE)?;
         open(app, held, None).map(|_| ())
     }
+}
+
+/// Controlled queue preparation; cancellation/refusal never publishes a new held file.
+pub(crate) fn arrive_with_interrupt(app: &mut PhotocraftApp, held: Held, interrupt: &photocraft_raster::Interrupt<'_>) -> Result<(), String> {
+    let admission = control::prepare(&app.held_opens, &held, interrupt)?;
+    app.held_opens.try_reserve_exact(1).map_err(|_| "pending import queue allocation failed".to_string())?;
+    admission.check_capacity(app.held_opens.capacity(), interrupt)?;
+    app.held_opens.push_back(held);
+    advance(app);
+    Ok(())
 }
 
 /// Opens queued files in order until one needs its prompt, which is shown if it isn't yet.
@@ -113,10 +127,13 @@ pub fn owns(fields: &serde_json::Map<String, Value>) -> bool {
 pub fn answer(app: &mut PhotocraftApp, action: Option<&str>) -> Result<Value, String> {
     let Some(action) = action else {
         let dropped = app.held_opens.len();
-        let name = app.held_opens.front().map(|h| h.name.clone()).unwrap_or_default();
+        let name = match app.held_opens.front() {
+            Some(held) => control::string(&held.name, &photocraft_raster::Interrupt::NONE)?,
+            None => String::new(),
+        };
         app.held_opens.clear();
-        for job in app.jobs.opens.iter().map(|o| o.job).collect::<Vec<_>>() {
-            app.session.cancel_job(job);
+        for open in &app.jobs.opens {
+            app.session.cancel_job(open.job);
         }
         app.ui.status = crate::i18n::fmt(tl!("Cancelled opening {name}"), &[("name", &name)]);
         app.ui.status_error = false;
@@ -132,6 +149,10 @@ pub fn answer(app: &mut PhotocraftApp, action: Option<&str>) -> Result<Value, St
 /// policy, then does what any open does afterwards.
 fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Value, String> {
     let Held { mut doc, origin, read_only, name, path, warnings, bytes, slot, question, policy_applied } = held;
+    let source_path = match &path {
+        Some(path) => Some(control::string(path, &photocraft_raster::Interrupt::NONE)?),
+        None => None,
+    };
     let index = if question.is_some() || policy_applied {
         if let Some(action) = action
             && let Err(e) = app.session.color.resolve_open(&mut doc, action)
@@ -146,7 +167,7 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
     if let Some(st) = app.session.active_mut() {
         st.source_read_only = read_only;
         if let Some(origin) = origin {
-            st.set_import_origin(origin, &name, path.clone());
+            st.set_import_origin(origin, &name, source_path);
         }
     }
     let index = match slot {

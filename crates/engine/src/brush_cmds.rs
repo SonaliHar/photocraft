@@ -12,7 +12,7 @@ use photocraft_paint::mixer::{MixerSettings, apply_mixer_stroke};
 use photocraft_paint::replace::{Limits, ReplaceMode, ReplaceSettings, Sampling, apply_color_replacement, color_replacement_effect};
 use photocraft_paint::tile::PREVIEW_SIDE;
 use photocraft_paint::{
-    BrushPreset, BrushSettings, GrayTile, Pattern, PresetCaptures, StoredTile, Stroke, StrokePoint, StrokeRenderer, TipShape, render_stroke,
+    BrushPreset, BrushSettings, GrayTile, Pattern, PresetCaptures, StoredTile, Stroke, StrokePoint, StrokeRenderer, TipShape,
 };
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -432,6 +432,7 @@ pub(crate) fn stroke_dispatch_preflight(session: &Session, command: &str, params
 /// Stroke with a resolved brush onto the target layer (pixels or mask).
 fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushSettings, pts: Vec<StrokePoint>, auto_erase: bool) -> Result<Value> {
     if let Some(result) = stroke_controlled::try_run(s, cmd, p, label, &brush, &pts, auto_erase)? {
+        s.live_commit = None;
         return Ok(result);
     }
     let bg = s.tools.background;
@@ -465,21 +466,23 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
             let wide = wide_stroke_context(doc, id, p, &brush, format, lock, restricted_color, auto_erase)?;
 
             if let Some(mut wide) = wide {
+                let limits = live_begin_controlled::one_shot_limits(doc, &brush, format, zoom, reflected.len(), &photocraft_raster::Interrupt::NONE)?;
                 let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
                 wide.budget.extend(&brush, &pts)?;
                 for pass in &reflected {
                     wide.budget.extend(&brush, pass)?;
                 }
                 let pre = surf.clone();
-                let mut renderer = StrokeRenderer::new(&brush, Some(format), zoom);
-                let limits = photocraft_paint::stroke_controlled::StrokeLimits::default();
+                let mut renderer = StrokeRenderer::try_new_with_interrupt(&brush, Some(format), zoom, limits, &photocraft_raster::Interrupt::NONE)
+                    .map_err(|error| bad(cmd, error.to_string()))?;
                 renderer.push_with_interrupt(&pts, limits, &photocraft_raster::Interrupt::NONE).map_err(|error| bad(cmd, error.to_string()))?;
                 renderer.finish_with_interrupt(limits, &photocraft_raster::Interrupt::NONE).map_err(|error| bad(cmd, error.to_string()))?;
                 let mut mirrors = Vec::new();
                 mirrors.try_reserve_exact(reflected.len()).map_err(|_| bad(cmd, "mirror renderer allocation"))?;
                 for pass in &reflected {
                     if !crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, pass) { continue; }
-                    let mut mirror = StrokeRenderer::new(&brush, Some(format), zoom);
+                    let mut mirror = StrokeRenderer::try_new_with_interrupt(&brush, Some(format), zoom, limits, &photocraft_raster::Interrupt::NONE)
+                        .map_err(|error| bad(cmd, error.to_string()))?;
                     mirror.push_with_interrupt(pass, limits, &photocraft_raster::Interrupt::NONE).map_err(|error| bad(cmd, error.to_string()))?;
                     mirror.finish_with_interrupt(limits, &photocraft_raster::Interrupt::NONE).map_err(|error| bad(cmd, error.to_string()))?;
                     mirrors.push(mirror);
@@ -499,29 +502,33 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
             if auto_erase {
                 apply_auto_erase(&mut brush, surf, pts.first(), fg, bg);
             }
-            let damage = if let Some(axis) = &symmetry {
-                let reflected = axis.reflected_passes(&pts);
-                let copies: Vec<_> = reflected
-                    .iter()
-                    .filter(|p| crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, p))
-                    .map(|p| {
-                        let mut renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
-                        renderer.push(p);
-                        renderer.finish();
-                        renderer
-                    })
-                    .collect();
-                if copies.is_empty() {
-                    render_stroke(surf, &brush, &pts, sel.as_ref(), lock, zoom)
-                } else {
-                    let pre = surf.clone();
-                    let mut original = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
-                    original.push(&pts);
-                    original.finish();
-                    original.composite_union_many(&copies, &pre, surf, sel.as_ref(), lock)
-                }
+            let limits = photocraft_paint::stroke_controlled::StrokeLimits::default();
+            let control = &photocraft_raster::Interrupt::NONE;
+            let paint_error = |error: photocraft_paint::stroke_controlled::StrokeError| bad(cmd, error.to_string());
+            let mut copies = Vec::new();
+            copies.try_reserve_exact(reflected.len()).map_err(|_| bad(cmd, "mirror renderer allocation"))?;
+            let construction = photocraft_paint::stroke_controlled::StrokeLimits {
+                resident_bytes: limits.resident_bytes / 5,
+                work_units: limits.work_units / 4,
+            };
+            for pass in &reflected {
+                if !crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, pass) { continue; }
+                let mut renderer = StrokeRenderer::try_new_with_interrupt(&brush, Some(surf.format()), zoom, construction, control).map_err(paint_error)?;
+                renderer.push_with_interrupt(pass, construction, control).map_err(paint_error)?;
+                renderer.finish_with_interrupt(construction, control).map_err(paint_error)?;
+                copies.push(renderer);
+            }
+            let damage = if copies.is_empty() {
+                photocraft_paint::stroke_controlled::render_stroke_with_interrupt(surf, &brush, &pts, sel.as_ref(), lock, zoom, limits, control).map_err(paint_error)?
             } else {
-                render_stroke(surf, &brush, &pts, sel.as_ref(), lock, zoom)
+                let pre = surf.clone();
+                let mut original = StrokeRenderer::try_new_with_interrupt(&brush, Some(surf.format()), zoom, construction, control).map_err(paint_error)?;
+                original.push_with_interrupt(&pts, construction, control).map_err(paint_error)?;
+                original.finish_with_interrupt(construction, control).map_err(paint_error)?;
+                let mut references = Vec::new();
+                references.try_reserve_exact(copies.len()).map_err(|_| bad(cmd, "mirror references allocation"))?;
+                references.extend(copies.iter());
+                original.try_composite_union_many_with_interrupt(&references, &pre, surf, sel.as_ref(), lock, limits, control).map_err(paint_error)?
             };
             Ok(damage)
         })
@@ -861,15 +868,18 @@ impl LiveStroke {
                     None => {
                         // Leaving the single-pass preview: take its smoothing tail back first.
                         if !old.is_empty() {
-                            surf.write_region(old, &self.pre.read_region(old));
+                            StrokeRenderer::try_restore_preview_with_interrupt(&self.pre, surf, old, limits, control)
+                                .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;
                         }
                         (photocraft_paint::UnionLive::default(), true, old)
                     }
                 };
-                let mut renderers: Vec<&mut StrokeRenderer> = std::iter::once(&mut self.renderer)
-                    .chain(self.mirrors.iter_mut().zip(&self.mirror_distinct).filter(|(_, d)| **d).map(|(r, _)| r))
-                    .collect();
-                dmg = dmg.union(&StrokeRenderer::composite_union_live(&mut renderers, &mut live, full, &self.pre, surf, self.sel.as_ref(), self.lock));
+                let mut renderers: Vec<&mut StrokeRenderer> = Vec::new();
+                renderers.try_reserve_exact(passes).map_err(|_| bad(&self.cmd, "mirror references allocation"))?;
+                renderers.push(&mut self.renderer);
+                renderers.extend(self.mirrors.iter_mut().zip(&self.mirror_distinct).filter(|(_, distinct)| **distinct).map(|(renderer, _)| renderer));
+                dmg = dmg.union(&StrokeRenderer::try_composite_union_live_with_interrupt(&mut renderers, &mut live, full, &self.pre, surf, self.sel.as_ref(), self.lock, limits, control)
+                    .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?);
                 self.tail = old.union(&live.bounds());
                 self.union_live = Some((live, passes));
                 return Ok(dmg);
@@ -878,14 +888,16 @@ impl LiveStroke {
             let old = std::mem::replace(&mut self.tail, Rect::EMPTY);
             if !old.is_empty() {
                 // Back to the stroke without the previous tail.
-                surf.write_region(old, &self.pre.read_region(old));
+                StrokeRenderer::try_restore_preview_with_interrupt(&self.pre, surf, old, limits, control)
+                                .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;
                 self.renderer.mark_dirty(old);
                 dmg = old;
             }
             dmg = dmg.union(&self.renderer.try_composite_with_interrupt(&self.pre, surf, self.sel.as_ref(), self.lock, false, limits, control)
                 .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?);
             control.check().map_err(|_| EngineError::Cancelled)?;
-            if let Some(mut tail) = self.renderer.tail_preview() {
+            if let Some(mut tail) = self.renderer.try_tail_preview_with_interrupt(limits, control)
+                .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })? {
                 control.check().map_err(|_| EngineError::Cancelled)?;
                 self.tail = tail.try_composite_with_interrupt(&self.pre, surf, self.sel.as_ref(), self.lock, false, limits, control)
                     .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;

@@ -19,12 +19,15 @@ pub fn owns(fields: &Map<String, Value>) -> bool {
 
 /// Open the dialog for the active document, with the name the layer would get.
 pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
+    let mut origin=crate::new_layer_origin::capture(app)?;
     let name = app.session.active().ok_or("no document open")?.doc.next_layer_name("Layer");
     let fields = json!({
         MARK: true, "__command": COMMAND, "__label": "New Layer",
         "name": name, "clipToPrevious": false, "color": "none", "mode": "Normal", "opacity": 100.0, "fillNeutral": false,
     });
-    Ok(app.ui.open_dialog(DialogKind::Command, fields.as_object().cloned().unwrap_or_default()))
+    let id=app.ui.open_dialog(DialogKind::Command,fields.as_object().cloned().unwrap_or_default());
+    origin.dialog=id;app.ui.new_layer_origin=Some(origin);
+    Ok(id)
 }
 
 fn mode(f: &Map<String, Value>) -> BlendMode {
@@ -128,8 +131,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     });
 }
 
-pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    app.run(COMMAND, params(f))
+pub(crate) fn confirm_for_dialog(app:&mut PhotocraftApp,id:u64,f:&Map<String,Value>)->Result<Value,String> {
+    crate::new_layer_origin::validate(app,id,f)?;
+    let request=crate::new_layer_origin::prepare(app,id,f,params(f))?;
+    app.run(COMMAND,request)
 }
 
 #[cfg(test)]
@@ -212,4 +217,27 @@ mod tests {
         h.run_steps(2);
         assert_eq!(h.state().ui.dialogs[0].fields["name"], "Shade");
     }
+    #[test]
+    fn new_layer_origin_refuses_changed_insertion_layer_and_restored_dialog() {
+        let mut app=app();let id=open(&mut app).unwrap();
+        let fields=app.ui.dialog_mut(id).unwrap().fields.clone();
+        let before=app.session.active().unwrap().doc.clone();
+        let request=crate::new_layer_origin::prepare(&app,id,&fields,params(&fields)).unwrap();
+        assert_eq!(request["documentId"],json!(before.id.0.to_string()));
+        app.session.active_mut().unwrap().active_layer=None;
+        assert!(confirm_for_dialog(&mut app,id,&fields).is_err());
+        assert!(app.session.active().unwrap().doc.shares_state(&before));
+        app.ui.new_layer_origin=None;
+        assert!(confirm_for_dialog(&mut app,id,&fields).is_err());
+    }
+    #[test]
+    fn new_layer_source_snapshot_change_refuses_without_creating_a_layer() {
+        let mut app=app();let id=open(&mut app).unwrap();
+        let fields=app.ui.dialog_mut(id).unwrap().fields.clone();
+        app.session.active_mut().unwrap().doc.try_resident_mut().unwrap().metadata.xmp=Some("Own changed source".into());
+        let changed=app.session.active().unwrap().doc.clone();
+        assert!(confirm_for_dialog(&mut app,id,&fields).is_err());
+        assert!(app.session.active().unwrap().doc.shares_state(&changed));
+    }
+
 }

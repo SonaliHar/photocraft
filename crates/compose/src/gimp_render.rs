@@ -303,15 +303,20 @@ fn prepare<'a>(
             let extent = item.and_then(|item| item.raster_bounds).ok_or(CompositionError::Invalid("finite source extent"))?;
             let surface = layer.surface().ok_or(CompositionError::Invalid("finite source surface"))?;
             let channels = surface.channels();
-            let raw = surface.try_read_interleaved(extent)?;
-            if surface.format() != doc.pixel_format()
-                || !raw.as_chunks::<8>().0.iter().enumerate().all(|(index, raw)| {
-                    let value = f64::from_ne_bytes(*raw);
-                    value.is_finite() && (index % channels == channels - 1 || (0.0..=1.0).contains(&value))
-                })
-            {
+            let raw = surface.try_read_interleaved_with(extent, interrupt)?;
+            if surface.format() != doc.pixel_format() || channels == 0 {
                 return Err(CompositionError::Unsupported("finite Normal source colour domain"));
             }
+            for (index, word) in raw.as_chunks::<8>().0.iter().enumerate() {
+                if index.is_multiple_of(256) {
+                    prepare_control::checkpoint(interrupt)?;
+                }
+                let value = f64::from_ne_bytes(*word);
+                if !value.is_finite() || (index % channels != channels - 1 && !(0.0..=1.0).contains(&value)) {
+                    return Err(CompositionError::Unsupported("finite Normal source colour domain"));
+                }
+            }
+            prepare_control::checkpoint(interrupt)?;
         }
         if pass_through && operator != GimpOperator::Union {
             return Err(CompositionError::Unsupported("pass-through group composite operator"));
@@ -324,7 +329,7 @@ fn prepare<'a>(
         let index = if let Some(index) = spaces.iter().position(|(kind, _)| *kind == working) {
             index
         } else {
-            spaces.push((working, WorkingSpace::new(profile, stored, working)?));
+            spaces.push((working, WorkingSpace::new_with_interrupt(profile, stored, working, interrupt)?));
             spaces.len() - 1
         };
         let blend_working = if mode != crate::gimp_blend::GimpBlendMode::Normal {
@@ -342,7 +347,7 @@ fn prepare<'a>(
             if let Some(index) = spaces.iter().position(|(kind, _)| *kind == blend_space) {
                 index
             } else {
-                spaces.push((blend_space, WorkingSpace::new(profile, stored, blend_space)?));
+                spaces.push((blend_space, WorkingSpace::new_with_interrupt(profile, stored, blend_space, interrupt)?));
                 spaces.len() - 1
             }
         } else {
@@ -1276,7 +1281,7 @@ fn qualify_generic_point_context(
     } else {
         GimpSpace::ProfileRgb
     };
-    let working = if literal_working { Some(WorkingSpace::new(profile, stored, working_space)?) } else { None };
+    let working = if literal_working { Some(WorkingSpace::new_with_interrupt(profile, stored, working_space, interrupt)?) } else { None };
     let channel = if channel_mixer {
         let node = stack.nodes.first().ok_or(CompositionError::Invalid("Channel Mixer node"))?;
         Some(crate::gimp_channel_mixer::ChannelMixerCandidate::new(profile, stored, crate::gimp_channel_mixer::typed_arguments(&node.arguments)?)?)

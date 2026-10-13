@@ -43,6 +43,7 @@ pub mod gimp_configured_color_graph_candidate;
 pub mod gimp_link_cached_affine_candidate;
 pub mod gimp_configured_render_candidate;
 pub mod gimp_configured_graph_candidate;
+pub mod gimp_configured_prepared_graph_candidate;
 mod gimp_filters;
 mod gimp_levels;
 pub mod gimp_link_items;

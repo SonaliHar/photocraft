@@ -2,6 +2,9 @@
 //! Operators select union/backdrop/layer/intersection coverage; alpha is never gamma encoded.
 use photocraft_cms::xcf_color::{Encoding, effective_profile_from_definition};
 use photocraft_cms::{CmsError, Intent, Profile, Transform};
+
+#[path = "gimp_composite_controlled.rs"]
+mod controlled;
 use photocraft_doc::{
     SampleEncoding,
     import_compositing::{GimpOperator, GimpSpace},
@@ -58,24 +61,26 @@ pub struct WorkingSpace {
     forward: Option<Transform>,
     reverse: Option<Transform>,
     channels: usize,
-    transfer: Option<(Profile, Encoding, Encoding)>,
+    transfer: Option<([Option<photocraft_cms::curve::Curve>; 3], Encoding, Encoding)>,
     luminance: Option<[f64; 3]>,
     physical_lab: Option<(photocraft_cms::pipeline::Pipeline, photocraft_cms::pipeline::Pipeline)>,
 }
 impl WorkingSpace {
     pub fn new(profile: &Profile, stored: SampleEncoding, working: GimpSpace) -> Result<Self> {
-        let source = effective_profile_from_definition(profile, encoding(stored))?;
+        Self::new_with_interrupt(profile, stored, working, &photocraft_raster::Interrupt::NONE)
+    }
+    /// Same color equations and admission as `new`, with preparation fences and
+    /// fallible retained curve storage. CMS internals remain boundary-polled.
+    pub fn new_with_interrupt(profile: &Profile, stored: SampleEncoding, working: GimpSpace, control: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
+        controlled::prepare(control, || Self::prepare_with_interrupt(profile, stored, working, control))
+    }
+    fn prepare_with_interrupt(profile: &Profile, stored: SampleEncoding, working: GimpSpace, control: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
+        controlled::validate_interpretation(profile, encoding(stored), control)?;
         let luminance = crate::gimp_blend::luminance_coefficients(profile);
         let same = working == space(stored);
         if same {
             return Ok(Self { kind: working, forward: None, reverse: None, channels: profile.channels(), transfer: None, physical_lab: None, luminance });
         }
-        let target = match working {
-            GimpSpace::LinearRgb => effective_profile_from_definition(profile, Encoding::Linear)?,
-            GimpSpace::ProfileRgb => effective_profile_from_definition(profile, Encoding::NonlinearProfile)?,
-            GimpSpace::PerceptualRgb => effective_profile_from_definition(profile, Encoding::Perceptual)?,
-            GimpSpace::Lab => photocraft_cms::Builtin::LabD50.profile().clone(),
-        };
         if working != GimpSpace::Lab {
             let to = match working {
                 GimpSpace::LinearRgb => Encoding::Linear,
@@ -83,6 +88,7 @@ impl WorkingSpace {
                 GimpSpace::PerceptualRgb => Encoding::Perceptual,
                 GimpSpace::Lab => return Err(CompositionError::Invalid("working transfer")),
             };
+            controlled::validate_interpretation(profile, to, control)?;
             // Exact curve-definition equality proves this cross-encoding
             // transfer is an identity. Parsed/quantized/table profiles are not
             // approximated to sRGB, and the resolved working-space kind remains.
@@ -102,11 +108,13 @@ impl WorkingSpace {
                 forward: None,
                 reverse: None,
                 channels: profile.channels(),
-                transfer: Some((profile.clone(), encoding(stored), to)),
+                transfer: Some((controlled::transfer_curves(profile, control)?, encoding(stored), to)),
                 physical_lab: None,
                 luminance,
             });
         }
+        let source = controlled::prepare(control, || Ok(effective_profile_from_definition(profile, encoding(stored))?))?;
+        let target = controlled::prepare(control, || Ok(photocraft_cms::Builtin::LabD50.profile().clone()))?;
         // Physical Lab bypasses ICC v4 normalized Lab output clipping. Only
         // matrix/TRC RGB definitions are qualified for these component modes.
         let physical_lab = if source.channels() == 3
@@ -119,14 +127,21 @@ impl WorkingSpace {
                 pipeline::{Pipeline, Stage},
                 profile::Pcs,
             };
-            let (mut forward, fp) = source.device_to_pcs(Intent::RelativeColorimetric)?;
-            let (reverse, rp) = source.pcs_to_device(Intent::RelativeColorimetric)?;
+            let (mut forward, fp) = controlled::prepare(control, || Ok(source.device_to_pcs(Intent::RelativeColorimetric)?))?;
+            let (reverse, rp) = controlled::prepare(control, || Ok(source.pcs_to_device(Intent::RelativeColorimetric)?))?;
             if fp != Pcs::Xyz || rp != Pcs::Xyz {
                 None
             } else {
+                forward.try_reserve_exact(1).map_err(|_| photocraft_raster::RasterInputError::AllocationFailed)?;
                 forward.push(Stage::XyzToLab);
-                let mut backward = vec![Stage::LabToXyz];
-                backward.extend(reverse);
+                let count = reverse.len().checked_add(1).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
+                let mut backward = Vec::new();
+                backward.try_reserve_exact(count).map_err(|_| photocraft_raster::RasterInputError::AllocationFailed)?;
+                backward.push(Stage::LabToXyz);
+                for stage in reverse {
+                    controlled::checkpoint(control)?;
+                    backward.push(stage);
+                }
                 Some((Pipeline::new(3, forward), Pipeline::new(3, backward)))
             }
         } else {
@@ -134,8 +149,8 @@ impl WorkingSpace {
         };
         Ok(Self {
             kind: working,
-            forward: Some(Transform::new(&source, &target, Intent::RelativeColorimetric, false)?),
-            reverse: Some(Transform::new(&target, &source, Intent::RelativeColorimetric, false)?),
+            forward: Some(controlled::prepare(control, || Ok(Transform::new(&source, &target, Intent::RelativeColorimetric, false)?))?),
+            reverse: Some(controlled::prepare(control, || Ok(Transform::new(&target, &source, Intent::RelativeColorimetric, false)?))?),
             channels: profile.channels(),
             transfer: None,
             physical_lab,
@@ -149,7 +164,7 @@ impl WorkingSpace {
         Ok(output)
     }
     pub(crate) fn convert(&self, rgb: [f64; 3], forward: bool) -> Result<[f64; 3]> {
-        if let Some((profile, from, to)) = &self.transfer {
+        if let Some((curves, from, to)) = &self.transfer {
             let mut out = [0.0; 3];
             let (from, to) = if forward { (*from, *to) } else { (*to, *from) };
             for (channel, (&input, output)) in rgb
@@ -159,12 +174,7 @@ impl WorkingSpace {
                 .zip(out.get_mut(..self.channels).ok_or(CompositionError::Invalid("transfer channels"))?)
                 .enumerate()
             {
-                let profile_curve = match profile.color_space {
-                    photocraft_cms::ColorSpace::Rgb => profile.trc.as_ref().and_then(|curves| curves.get(channel)),
-                    photocraft_cms::ColorSpace::Gray => profile.gray_trc.as_ref(),
-                    _ => None,
-                }
-                .ok_or(CompositionError::Invalid("missing prepared transfer curve"))?;
+                let profile_curve = curves.get(channel).and_then(Option::as_ref).ok_or(CompositionError::Invalid("missing prepared transfer curve"))?;
                 let perceptual = photocraft_cms::curve::srgb_trc();
                 let curve = |encoding| match encoding {
                     Encoding::Linear => None,

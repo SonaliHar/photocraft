@@ -10,9 +10,10 @@ pub fn owns(fields: &Map<String, Value>) -> bool {
 }
 
 pub fn open(app: &mut PhotocraftApp) -> Result<Value, String> {
+    let mut origin=crate::duplicate_layer_origin::capture(app)?;
     let index = app.session.active_index().ok_or("no document")?;
     let st = app.session.active().ok_or("no document")?;
-    let selected = st.selected_layers().map_err(|error| error.to_string())?;
+    let selected=origin.selected();
     let layer = st.active_layer.and_then(|id| st.doc.layer(id)).ok_or("no active layer")?;
     let mut fields = Map::new();
     fields.insert(MARK.into(), json!(true));
@@ -33,6 +34,7 @@ pub fn open(app: &mut PhotocraftApp) -> Result<Value, String> {
         fields.insert("name".into(), json!(st.doc.copy_name(&layer.name)));
     }
     let id = app.ui.open_dialog(DialogKind::Command, fields);
+    origin.dialog=id;app.ui.duplicate_layer_origin=Some(origin);
     Ok(json!({"dialog": id}))
 }
 
@@ -74,15 +76,9 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Val
     }
 }
 
-pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
+pub(crate) fn confirm_for_dialog(app: &mut PhotocraftApp,id:u64, fields: &Map<String, Value>) -> Result<Value, String> {
+    crate::duplicate_layer_origin::validate(app,id,fields)?;
     let index = app.session.active_index().ok_or("The document is closed")?;
-    let st = app.session.active().ok_or("The document is closed")?;
-    let selected = st.selected_layers().map_err(|error| error.to_string())?;
-    if fields.get("document").and_then(Value::as_u64) != Some(st.doc.id.0)
-        || fields.get("selected") != Some(&json!(selected.iter().map(|id| id.0).collect::<Vec<_>>()))
-    {
-        return Err("The document or selected layers changed. Choose Duplicate Layer again.".into());
-    }
     let mut params = Map::new();
     if let Some(name) = fields.get("name").and_then(Value::as_str) {
         params.insert("name".into(), json!(name));
@@ -93,15 +89,18 @@ pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<V
                 params.insert("documentName".into(), json!(doc_name));
             }
             params.insert("document".into(), json!("new"));
+            crate::duplicate_layer_origin::source_pair(app,id,fields,&mut params)?;
             app.run_command("layer.duplicate", Value::Object(params))
         }
         Some(Value::Number(n)) => {
             let destination =
                 n.as_u64().and_then(|i| usize::try_from(i).ok()).filter(|i| *i < app.session.documents().len()).ok_or("no destination document")?;
             if destination == index {
+                crate::duplicate_layer_origin::source_pair(app,id,fields,&mut params)?;
                 app.run_command("layer.duplicate", Value::Object(params))
             } else {
                 params.insert("document".into(), json!(destination));
+                crate::duplicate_layer_origin::validate(app,id,fields)?;
                 app.run_command("layer.copyToDocument", Value::Object(params))
             }
         }
@@ -198,4 +197,51 @@ mod tests {
         assert!(app.ui.dialogs.is_empty());
         assert_eq!(app.session.active().unwrap().doc.layer_count(), 4);
     }
+    #[test]
+    fn changed_destination_and_restored_origin_refuse_without_installing_a_copy() {
+        let mut app=make_app();
+        app.session.execute("file.new",json!({"width":8,"height":8,"name":"Card"})).unwrap();
+        app.session.set_active(0);
+        let dialog=invoke(&mut app);
+        app.ui.dialog_mut(dialog).unwrap().fields.insert("destination".into(),json!(1));
+        let fields=app.ui.dialog_mut(dialog).unwrap().fields.clone();
+        let source=app.session.active().unwrap().doc.clone();
+        app.session.set_active(1);
+        app.session.execute("layer.new.layer",json!({"name":"Destination changed"})).unwrap();
+        let destination=app.session.active().unwrap().doc.clone();
+        app.session.set_active(0);
+        assert!(confirm_for_dialog(&mut app,dialog,&fields).is_err());
+        assert!(app.session.documents()[0].doc.shares_state(&source));
+        assert!(app.session.documents()[1].doc.shares_state(&destination));
+        app.ui.duplicate_layer_origin=None;
+        assert!(confirm_for_dialog(&mut app,dialog,&fields).is_err());
+    }
+    #[test]
+    fn source_revision_and_view_change_refuse_even_when_selected_ids_stay_equal() {
+        let mut app=make_app();let dialog=invoke(&mut app);
+        let fields=app.ui.dialog_mut(dialog).unwrap().fields.clone();
+        let source=app.session.active().unwrap().doc.clone();
+        app.session.active_mut().unwrap().channel_view.target=photocraft_engine::channel_cmds::ChannelTarget::Color(0);
+        assert!(confirm_for_dialog(&mut app,dialog,&fields).is_err());
+        app.session.active_mut().unwrap().channel_view.target=photocraft_engine::channel_cmds::ChannelTarget::Composite;
+        app.session.active_mut().unwrap().revision+=1;
+        assert!(confirm_for_dialog(&mut app,dialog,&fields).is_err());
+        assert!(app.session.active().unwrap().doc.shares_state(&source));
+    }
+
+    #[test]
+    fn new_document_destination_cannot_bypass_weak_origin_when_revision_is_equal() {
+        let mut app=make_app();let dialog=invoke(&mut app);
+        app.ui.dialog_mut(dialog).unwrap().fields.insert("destination".into(),json!("new"));
+        let fields=app.ui.dialog_mut(dialog).unwrap().fields.clone();
+        let revision=app.session.active().unwrap().revision;
+        app.session.active_mut().unwrap().doc.try_resident_mut().unwrap().metadata.xmp=Some("Own replacement snapshot".into());
+        let source=app.session.active().unwrap().doc.clone();
+        let count=app.session.documents().len();
+        assert_eq!(app.session.active().unwrap().revision,revision);
+        assert!(confirm_for_dialog(&mut app,dialog,&fields).is_err());
+        assert_eq!(app.session.documents().len(),count);
+        assert!(app.session.active().unwrap().doc.shares_state(&source));
+    }
+
 }

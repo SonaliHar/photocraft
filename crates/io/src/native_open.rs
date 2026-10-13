@@ -28,11 +28,7 @@ fn restore_none<R: Seek>(input: &mut R, position: u64, control: &Interrupt<'_>) 
 /// Standard archive/object limits remain unchanged; this does not enable
 /// `native_large`. Successful results have the same profile admission, warnings
 /// and assessment as the existing byte-native import lane.
-pub fn import_native_stream_candidate<R: Read + Seek>(
-    name: &str,
-    input: &mut R,
-    control: &Interrupt<'_>,
-) -> Result<Option<ImportResult>, IoError> {
+pub fn import_native_stream_candidate<R: Read + Seek>(name: &str, input: &mut R, control: &Interrupt<'_>) -> Result<Option<ImportResult>, IoError> {
     poll(control)?;
     let original = input.stream_position().map_err(FormatError::from)?;
     input.seek(SeekFrom::Start(0)).map_err(FormatError::from)?;
@@ -45,8 +41,12 @@ pub fn import_native_stream_candidate<R: Read + Seek>(
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             other => other.map_err(FormatError::from)?,
         };
-        if read == 0 { break; }
-        if read > target.len() { return Err(FormatError::Corrupt("native prefix read count".into()).into()); }
+        if read == 0 {
+            break;
+        }
+        if read > target.len() {
+            return Err(FormatError::Corrupt("native prefix read count".into()).into());
+        }
         filled = filled.checked_add(read).ok_or_else(|| FormatError::Corrupt("native prefix overflow".into()))?;
     }
     let prefix = prefix.get(..filled).ok_or_else(|| FormatError::Corrupt("native prefix range".into()))?;
@@ -69,7 +69,9 @@ pub fn import_native_stream_candidate<R: Read + Seek>(
             Err(_) => false,
         };
         poll(control)?;
-        if !native { return restore_none(input, original, control); }
+        if !native {
+            return restore_none(input, original, control);
+        }
     }
     poll(control)?;
     input.seek(SeekFrom::Start(0)).map_err(FormatError::from)?;
@@ -78,7 +80,15 @@ pub fn import_native_stream_candidate<R: Read + Seek>(
     crate::xcf_export::active_implicit_profile(&document).map_err(|error| IoError::Unsupported(format!("native working profile: {error}")))?;
     poll(control)?;
     control.progress(1.0);
-    Ok(Some(ImportResult { document, warnings: Vec::new(), origin: ImportOrigin::writable(ImportFormat::Pcraft), assessment: None , source_read_only: (ImportOrigin::writable(ImportFormat::Pcraft)).is_read_only(), preview_only: false}))
+    poll(control)?;
+    Ok(Some(ImportResult {
+        document,
+        warnings: Vec::new(),
+        origin: ImportOrigin::writable(ImportFormat::Pcraft),
+        assessment: None,
+        source_read_only: (ImportOrigin::writable(ImportFormat::Pcraft)).is_read_only(),
+        preview_only: false,
+    }))
 }
 
 #[cfg(test)]
@@ -105,6 +115,25 @@ mod tests {
         input.set_position(2);
         assert!(matches!(import_native_stream_candidate("own.png", &mut input, &Interrupt::cancel_only(&|| true)), Err(IoError::Cancelled)));
         assert_eq!(input.position(), 2);
+    }
+
+    #[test]
+    fn completion_callback_cancellation_refuses_document_handoff() {
+        let doc = photocraft_doc::Document::new("own", photocraft_doc::Size::new(1, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        let native = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
+        let mut input = Cursor::new(native);
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        let completion = std::sync::atomic::AtomicBool::new(false);
+        let check = || cancelled.load(std::sync::atomic::Ordering::Relaxed);
+        let progress = |value: f32| {
+            if value >= 1.0 {
+                completion.store(true, std::sync::atomic::Ordering::Relaxed);
+                cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        };
+        let result = import_native_stream_candidate("own.pcraft", &mut input, &Interrupt::new(&check, &progress));
+        assert!(completion.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(matches!(result, Err(IoError::Cancelled)));
     }
 
     #[test]

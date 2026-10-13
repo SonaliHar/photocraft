@@ -387,6 +387,43 @@ pub(super) fn composite_existing_with_interrupt(ctx:&BrushContext,cov:&CoverageM
     composite_keys(ctx,cov,dual,keys,pre,&mut output,selection,lock_transparency,&mut budget)?;
     budget.poll()?;Ok(output)
 }
+/// Restore the previous smoothing tail and composite the replacement union on
+/// one private native surface. Equations mirror legacy read_region/write_region.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn composite_existing_with_restore_with_interrupt(ctx:&BrushContext,cov:&CoverageMap,dual:Option<&CoverageMap>,keys:&[(i32,i32)],before:Rect,pre:&Surface,target:&Surface,selection:Option<&Surface>,lock_transparency:bool,limits:StrokeLimits,control:&Interrupt<'_>)->Result<Surface>{
+    let mut budget=Budget{control,limits,work:0};budget.poll()?;
+    let standard=StrokeLimits::default();let format=target.format();
+    if limits.resident_bytes>standard.resident_bytes||limits.work_units>standard.work_units{return Err(StrokeError::Limit);}
+    if pre.format()!=format||!matches!(format.sample,SampleType::U8|SampleType::U16|SampleType::F32)||format.channels()==0||format.channels()>8{return Err(StrokeError::Unsupported("ordinary union native format"));}
+    if selection.is_some_and(|s|!matches!(s.format().sample,SampleType::U8|SampleType::U16|SampleType::F32)||s.channels()==0||s.channels()>8){return Err(StrokeError::Unsupported("ordinary union selection format"));}
+    let cells=(COV_TILE*COV_TILE) as u64;let native_tile=mul_checked((photocraft_geom::TILE_SIZE*photocraft_geom::TILE_SIZE) as u64,format.bytes_per_pixel() as u64)?;
+    let maps=(target.tile_count() as u64).checked_mul(512).ok_or(StrokeError::Limit)?;
+    let output=(keys.len() as u64).checked_mul(4).and_then(|n|n.checked_mul(native_tile.checked_add(512)?)).and_then(|n|n.checked_add(maps)).and_then(|n|n.checked_add(target.default_bytes().len() as u64)).ok_or(StrokeError::Limit)?;
+    let sample= (format.bytes_per_pixel() as u64).checked_add((format.channels() as u64).checked_mul(4).ok_or(StrokeError::Limit)?).and_then(|n|n.checked_add(selection.map_or(0,|s|s.format().bytes_per_pixel() as u64+s.channels() as u64*4))).ok_or(StrokeError::Limit)?;
+    // Both restoration and compositor scratch coexist through final publication.
+    let scratch=cells.checked_mul(sample).and_then(|n|n.checked_mul(2)).ok_or(StrokeError::Limit)?;
+    let work=(keys.len() as u64).checked_mul(cells).and_then(|n|n.checked_mul(4096)).and_then(|n|n.checked_add((keys.len() as u64).checked_mul((target.tile_count() as u64).checked_add((keys.len() as u64).checked_mul(4)?)?)?.checked_mul(512)?)).ok_or(StrokeError::Limit)?;
+    if output.checked_add(scratch).is_none_or(|n|n>limits.resident_bytes)||work>limits.work_units{return Err(StrokeError::Limit);}
+    let mut output=clone_surface(target,&mut budget)?;
+    let n=format.channels();let count=(COV_TILE*COV_TILE) as usize;
+    let length=count.checked_mul(format.bytes_per_pixel()).ok_or(StrokeError::Limit)?;
+    let mut raw=budget.vector(length)?;raw.resize(length,0);
+    let mut values=budget.vector(count.checked_mul(n).ok_or(StrokeError::Limit)?)?;
+    for &(tx,ty)in keys{
+        budget.poll()?;let x=tx.checked_mul(COV_TILE).ok_or(StrokeError::Limit)?;let y=ty.checked_mul(COV_TILE).ok_or(StrokeError::Limit)?;
+        let rect=Rect::new(x,y,x.checked_add(COV_TILE).ok_or(StrokeError::Limit)?,y.checked_add(COV_TILE).ok_or(StrokeError::Limit)?).intersect(&before);
+        if rect.is_empty(){continue;}let pixels=area(rect)?;
+        let bytes=pixels.checked_mul(format.bytes_per_pixel()).ok_or(StrokeError::Limit)?;
+        budget.raster(pre.try_read_interleaved_into_with(rect,raw.get_mut(..bytes).ok_or(StrokeError::Limit)?,control))?;
+        values.clear();let samples=pixels.checked_mul(n).ok_or(StrokeError::Limit)?;
+        for sample in 0..samples{budget.tick(1)?;values.push(read_sample(raw.get(..bytes).ok_or(StrokeError::Limit)?,format.sample,sample));}
+        for(sample,value)in values.iter().enumerate(){budget.tick(1)?;write_sample(raw.get_mut(..bytes).ok_or(StrokeError::Limit)?,format.sample,sample,*value);}
+        budget.raster(output.try_write_interleaved_with(rect,raw.get(..bytes).ok_or(StrokeError::Limit)?,control))?;
+    }
+    composite_keys(ctx,cov,dual,keys,pre,&mut output,selection,lock_transparency,&mut budget)?;
+    budget.poll()?;Ok(output)
+}
+fn mul_checked(a:u64,b:u64)->Result<u64>{a.checked_mul(b).ok_or(StrokeError::Limit)}
 pub fn apply_stroke_with_interrupt(target:&mut Surface,stroke:&Stroke,selection:Option<&Surface>,lock_transparency:bool,limits:StrokeLimits,control:&Interrupt<'_>)->Result<Rect>{render_stroke_with_interrupt(target,&stroke.brush,&stroke.points,selection,lock_transparency,1.0,limits,control)}
 /// Fixed straight preset reflection, preserving upstream pass order and stylus fields.
 /// Path-based engine symmetry is a separate caller-owned geometry policy.

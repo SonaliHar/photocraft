@@ -61,6 +61,13 @@ mod sampled_tip_controlled;
 mod incremental_new_controlled;
 #[path = "incremental_composite_controlled.rs"]
 mod incremental_composite_controlled;
+#[path = "union_live_controlled.rs"]
+mod union_live_controlled;
+#[path = "preview_restore_controlled.rs"]
+mod preview_restore_controlled;
+#[path = "renderer_set_requirements.rs"]
+mod renderer_set_requirements;
+pub use renderer_set_requirements::RendererSetRequirements;
 pub use sampled_tip_controlled::SampledTipRequirements;
 pub use incremental_clone_controlled::{IncrementalCloneRequirements, IncrementalStrokeState, incremental_state_requirements, clone_incremental_state_with_interrupt};
 pub use controlled::{StrokeError,StrokeLimits,apply_stroke_with_interrupt,render_stroke_with_interrupt,reflected_passes_with_interrupt,render_stroke_passes_with_interrupt};

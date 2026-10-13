@@ -83,6 +83,11 @@ mod selection_smooth_controlled;
 pub(crate) mod native_gray_fill_controlled;
 pub(crate) mod native_gray_invert_controlled;
 mod native_raster_invert_controlled;
+mod native_raster_threshold_controlled;
+mod native_raster_posterize_controlled;
+mod native_raster_levels_controlled;
+mod native_raster_curves_controlled;
+mod held_import_controlled;
 pub(crate) mod native_gray_threshold_controlled;
 pub(crate) mod native_gray_posterize_controlled;
 pub mod layer_nav_cmds;
@@ -802,9 +807,11 @@ impl Session {
     }
 
     /// Holds a decoded document back from opening (see `held_opens`); returns its id.
-    pub(crate) fn hold_open_import(&mut self, doc: Document, source_read_only: bool, origin: photocraft_io::ImportOrigin) -> Result<u64> {
+    pub(crate) fn hold_open_import(&mut self, doc: Document, source_read_only: bool, origin: photocraft_io::ImportOrigin, control: &photocraft_raster::Interrupt<'_>) -> Result<u64> {
         let next = self.next_held_open.checked_add(1).ok_or_else(|| EngineError::Other("held-open identity exhausted".into()))?;
-        self.held_opens.try_reserve(1).map_err(|_| EngineError::Other("could not reserve held-open storage".into()))?;
+        let admission = held_import_controlled::preflight(&self.held_opens, self.held_opens.capacity(), &doc, control)?;
+        self.held_opens.try_reserve_exact(1).map_err(|_| EngineError::Other("could not reserve held-open storage".into()))?;
+        admission.check_capacity(self.held_opens.capacity(), control)?;
         self.held_opens.push((next, doc, source_read_only, Some(origin)));
         self.next_held_open = next;
         Ok(next)

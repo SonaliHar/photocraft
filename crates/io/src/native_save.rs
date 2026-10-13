@@ -319,6 +319,9 @@ impl photocraft_format::PreparationObserver for ByteLedger {
         self.live.set(self.live.get().saturating_sub(bytes));
     }
 }
+#[path = "native_output_control.rs"]
+mod output_control;
+
 struct MemoryOutput<'a, 'i> {
     bytes: Vec<u8>,
     position: usize,
@@ -352,10 +355,7 @@ impl MemoryOutput<'_, '_> {
             self.ledger.release(reservation - actual);
             self.ledger.release(old);
         }
-        if end > self.bytes.len() {
-            self.bytes.resize(end, 0);
-        }
-        Ok(())
+        output_control::zero_extend(&mut self.bytes, end, self.control)
     }
 }
 impl Write for MemoryOutput<'_, '_> {
@@ -363,7 +363,7 @@ impl Write for MemoryOutput<'_, '_> {
         let end = self.position.checked_add(input.len()).ok_or_else(|| self.error("native output offset overflow"))?;
         self.grow(end)?;
         let destination = self.bytes.get_mut(self.position..end).ok_or_else(|| std::io::Error::other("native output bounds"))?;
-        destination.copy_from_slice(input);
+        output_control::copy(destination, input, self.control)?;
         self.position = end;
         Ok(input.len())
     }

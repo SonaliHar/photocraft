@@ -323,6 +323,7 @@ pub fn import_with_svg_group_depth_and_interrupt(
     if r.source_read_only {r.origin.source_policy=SourcePolicy::ReadOnlySource;}
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(1.0);
+    ctl.check().map_err(|_| IoError::Cancelled)?;
     Ok(r)
 }
 
@@ -436,6 +437,7 @@ pub fn export_with(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl:
     let r = export_stages(doc, name_or_ext, opts, ctl)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(1.0);
+    ctl.check().map_err(|_| IoError::Cancelled)?;
     Ok(r)
 }
 

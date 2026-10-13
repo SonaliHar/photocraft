@@ -205,7 +205,7 @@ pub(super) fn try_run_with_interrupt(
 ) -> Result<Option<Value>> {
     poll(control)?;
     let state = session.active().ok_or(EngineError::NoDocument)?;
-    if session.live_commit.is_some() {
+    if session.live_commit.as_ref().is_some_and(|commit| commit.matches(session, cmd, params, points)) {
         return Ok(None);
     }
     let (preset, path_axis) = match state.symmetry.as_ref() {
@@ -497,6 +497,32 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn unrelated_live_commit_does_not_bypass_controlled_stroke() {
+        use photocraft_doc::{ColorMode, Document, Layer, SampleType, Size};
+        use photocraft_geom::Rect;
+        let mut doc = Document::new("Stale live", Size::new(16, 16), ColorMode::Rgb, SampleType::U8);
+        let layer = Layer::raster("Pixels", doc.pixel_format());
+        let id = layer.id;
+        let source = layer.surface().unwrap().clone();
+        doc.layers.push(layer);
+        let mut session = Session::new();
+        session.add_document(doc, None).unwrap();
+        session.active_mut().unwrap().active_layer = Some(id);
+        let state = session.active().unwrap();
+        session.live_commit = Some(super::super::LiveCommit {
+            cmd: "paint.pencil".into(), base: (state.doc.id, state.revision), params: json!({}), seed: None,
+            points: vec![], surface: source.clone(), bounds: Rect::EMPTY,
+        });
+        let brush = BrushSettings { size: 3.0, pressure_size: false, color: [0.8,0.1,0.3,1.0], ..Default::default() };
+        let points = [StrokePoint::new(3.0,3.0,1.0)];
+        let history = session.active().unwrap().history.past_len();
+        let result = try_run(&mut session, "paint.stroke", &json!({"points":[[3,3,1]]}), "Brush", &brush, &points, false).unwrap();
+        assert!(result.is_some());
+        assert_eq!(session.active().unwrap().history.past_len(), history + 1);
+        assert_ne!(session.active().unwrap().doc.layer(id).unwrap().surface().unwrap(), &source);
     }
 
 }

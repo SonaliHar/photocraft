@@ -11,9 +11,9 @@ impl PartialEq for Target {
     fn eq(&self,b:&Self)->bool {self.document==b.document && self.revision==b.revision && match(self.snapshot.upgrade(),b.snapshot.upgrade()){(Some(a),Some(b))=>a.shares_state(&b),(None,None)=>true,_=>false}}
 }
 #[derive(Clone,Debug,PartialEq)]
-struct Choice {key:String,label:String,selector:Value}
+struct Choice {key:String,label:String,selector:Value,raw_storage:bool}
 #[derive(Clone,Debug,PartialEq)]
-pub(crate) struct ChannelActionOrigin {dialog:u64,command:String,source:Target,choices:Vec<Choice>,fixed:Option<(String,Value)>,layer:Option<Value>,destinations:Vec<Target>}
+pub(crate) struct ChannelActionOrigin {dialog:u64,command:String,source:Target,choices:Vec<Choice>,fixed:Option<(String,Value)>,fixed_raw_storage:bool,layer:Option<Value>,destinations:Vec<Target>}
 fn supported(command:&str)->bool {matches!(command,DUPLICATE|LOAD|SAVE)}
 fn stale()->String {tl!("The document changed. Reopen the channel dialog.").into()}
 fn invalid()->String {tl!("Check the channel settings and try again.").into()}
@@ -33,6 +33,20 @@ fn identity(value:&Value)->bool {
     if value.as_u64().is_some_and(|id|id!=0) {return true;}
     value.as_str().is_some_and(|s|!s.is_empty() && s.len()<=20 && !s.starts_with('0') && s.bytes().all(|b|b.is_ascii_digit()) && s.parse::<u64>().is_ok())
 }
+/// Cheap ordinary-storage hint only. No tile words, hashes or renderer qualification.
+fn raw_hint(document:&photocraft_engine::DocumentSnapshot,command:&str,key:&str,value:&Value)->bool {
+    if !matches!(command,LOAD|SAVE) || document.resident_arc().is_none() || document.xcf_state.is_some() || document.source_color_context.is_some() || document.channels.len()>10_000 {return false;}
+    let format=photocraft_engine::channel_cmds::channel_format(document);
+    if command==SAVE && document.selection.as_ref().is_none_or(|selection|selection.format()!=format) {return false;}
+    if command==SAVE && value.as_str()==Some("new") {return true;}
+    if key!="channelId" && (value.as_u64().is_some_and(|index|usize::try_from(index).is_err())
+        || value.get("alpha").and_then(Value::as_u64).is_some_and(|index|usize::try_from(index).is_err())) {return false;}
+    let selector=if key=="channelId" {json!({"channelId":value})}else {value.clone()};
+    let Some(photocraft_engine::channel_cmds::ChanRef::Alpha(index))=photocraft_engine::channel_cmds::parse_ref(&selector,document) else {return false;};
+    let Some(channel)=document.channels.get(index) else {return false;};
+    channel.id.0!=0 && channel.spot.is_none() && channel.surface.format()==format
+        && document.channels.iter().filter(|entry|entry.id==channel.id).count()==1
+}
 fn bounded_label(text:&str,total:&mut usize)->Result<(),String> {
     if text.len()>4096 || text.contains('\0') {return Err(invalid());}
     *total=total.checked_add(text.len()).filter(|n|*n<=4<<20).ok_or_else(invalid)?;Ok(())
@@ -49,20 +63,36 @@ pub(crate) fn open(app:&mut PhotocraftApp,command:&str,initial:&Value)->Option<u
         let doc=&active.doc;let count=doc.channels.len();
         if count>10000 || app.session.documents().len()>4096 {return Err(invalid());}
         let mut total=0usize;let mut choices=Vec::new();choices.try_reserve_exact(count.checked_add(12).ok_or_else(invalid)?).map_err(|_|invalid())?;
+        let format=photocraft_engine::channel_cmds::channel_format(doc);
+        let raw_base=matches!(command,LOAD|SAVE) && doc.resident_arc().is_some() && doc.xcf_state.is_none() && doc.source_color_context.is_none()
+            && (command!=SAVE || doc.selection.as_ref().is_some_and(|selection|selection.format()==format));
+        let mut raw_channels=std::collections::HashSet::new();let mut seen=std::collections::HashSet::new();let mut unique=true;
+        if raw_base {
+            raw_channels.try_reserve(count).map_err(|_|invalid())?;seen.try_reserve(count).map_err(|_|invalid())?;
+            for channel in &doc.channels {
+                unique &= channel.id.0!=0 && seen.insert(channel.id);
+                if channel.spot.is_none() && channel.surface.format()==format {raw_channels.insert(channel.id.0);}
+            }
+        }
         let mode=doc.pixel_format().mode;
         let composite=photocraft_engine::channel_cmds::composite_name(mode);
-        let mut add=|key:String,label:&str,selector:Value|->Result<(),String>{bounded_label(label,&mut total)?;choices.push(Choice{key,label:label.into(),selector});Ok(())};
+        let mut add=|key:String,label:&str,selector:Value|->Result<(),String>{bounded_label(label,&mut total)?;
+            // One bounded ID census avoids a channel scan for each displayed choice.
+            let raw_storage=raw_base && unique && ((command==SAVE && selector.as_str()==Some("new"))
+                || selector.get("channelId").and_then(Value::as_str).and_then(|id|id.parse::<u64>().ok()).is_some_and(|id|raw_channels.contains(&id)));
+            choices.push(Choice{key,label:label.into(),selector,raw_storage});Ok(())};
         if command==SAVE {add("new".into(),"new",json!("new"))?;}else {
             add("composite".into(),composite,json!("composite"))?;
             if mode.color_channels()>1 {for name in photocraft_engine::channel_cmds::color_names(mode) {add((*name).into(),name,json!(name.to_lowercase()))?;}}
         }
         for channel in &doc.channels {if channel.id.0==0 {return Err(invalid());}add(format!("alpha:{}",channel.id.0),&channel.name,json!({"channelId":channel.id.0.to_string()}))?;}
         for name in if command==LOAD {&["transparency","mask","selection"][..]}else if command==DUPLICATE {&["quickMask"][..]}else {&[][..]} {add((*name).into(),name,json!(name))?;}
-        let fixed=if let Some(params)=initial {
+        let fixed:Option<(String,Value)>=if let Some(params)=initial {
             if params.contains_key("channel") && params.contains_key("channelId") {return Err(invalid());}
             if let Some(value)=params.get("channelId") {if !identity(value) {return Err(invalid());}Some(("channelId".into(),value.clone()))}
             else if let Some(value)=params.get("channel") {if !selector(value) {return Err(invalid());}Some(("channel".into(),value.clone()))}else {None}
         }else {None};
+        let fixed_raw_storage=fixed.as_ref().is_some_and(|(key,value)|raw_hint(doc,command,key,value));
         let layer=initial.and_then(|p|p.get("layer")).map(|value|if identity(value) {Ok(value.clone())}else {Err(invalid())}).transpose()?;
         let source=Target{document:doc.id,revision:active.revision,snapshot:doc.downgrade()};
         let selected=if command==SAVE {"new".into()}else if command==LOAD {doc.channels.first().map(|channel|format!("alpha:{}",channel.id.0)).unwrap_or_else(||"composite".into())}else {"composite".into()};
@@ -70,8 +100,9 @@ pub(crate) fn open(app:&mut PhotocraftApp,command:&str,initial:&Value)->Option<u
         fields.insert("channel".into(),json!(selected));if command!=SAVE {fields.insert("invert".into(),json!(initial.and_then(|p|p.get("invert")).and_then(Value::as_bool).unwrap_or(false)));}
         if initial.and_then(|p|p.get("invert")).is_some_and(|v|!v.is_boolean()) {return Err(invalid());}
         let mut display=Vec::new();display.try_reserve_exact(choices.len()).map_err(|_|invalid())?;
-        for choice in &choices {display.push(json!({"key":choice.key,"label":choice.label}));}
+        for choice in &choices {display.push(json!({"key":choice.key,"label":choice.label,"rawStorage":choice.raw_storage}));}
         fields.insert("__channels".into(),Value::Array(display));fields.insert("__fixedChannel".into(),json!(fixed.is_some()));
+        if matches!(command,LOAD|SAVE) {fields.insert("rawStorage".into(),json!(false));fields.insert("__fixedRawStorage".into(),json!(fixed_raw_storage));}
         let mut destinations=Vec::new();
         if command==DUPLICATE {
             let name=initial.and_then(|p|p.get("name")).and_then(Value::as_str).unwrap_or("");
@@ -95,7 +126,7 @@ pub(crate) fn open(app:&mut PhotocraftApp,command:&str,initial:&Value)->Option<u
                 fields.insert("name".into(),json!(name));
             }
         }
-        Ok::<_,String>((ChannelActionOrigin{dialog:0,command:command.into(),source,choices,fixed,layer,destinations},fields))
+        Ok::<_,String>((ChannelActionOrigin{dialog:0,command:command.into(),source,choices,fixed,fixed_raw_storage,layer,destinations},fields))
     })();
     let (mut origin,fields)=match prepared {Ok(value)=>value,Err(error)=>{app.ui.status=error;app.ui.status_error=true;return None;}};
     let id=app.ui.open_dialog(DialogKind::Command,fields);origin.dialog=id;app.ui.channel_action_origin=Some(origin);Some(id)
@@ -130,6 +161,23 @@ pub(crate) fn body(ui:&mut egui::Ui,fields:&mut Map<String,Value>) {
         ui.horizontal(|ui|{ui.label(tl!("Operation"));if crate::widgets::dropdown(ui,"channel-selection-operation",&mut operation,&options,200.) {fields.insert("operation".into(),json!(operation));}});
     }
     if command!=SAVE {let mut invert=fields.get("invert").and_then(Value::as_bool).unwrap_or(false);if crate::widgets::checkbox(ui,&mut invert,tl!("Invert")).changed(){fields.insert("invert".into(),json!(invert));}}
+    if matches!(command.as_str(),LOAD|SAVE) {
+        let hint=if fields.get("__fixedChannel").and_then(Value::as_bool)==Some(true) {fields.get("__fixedRawStorage").and_then(Value::as_bool)==Some(true)}else {
+            let key=fields.get("channel").and_then(Value::as_str);
+            fields.get("__channels").and_then(Value::as_array).filter(|rows|rows.len()<=10012).is_some_and(|rows|rows.iter().find(|row|row.get("key").and_then(Value::as_str)==key).is_some_and(|row|row.get("rawStorage").and_then(Value::as_bool)==Some(true)))
+        };
+        let operation=fields.get("operation").and_then(Value::as_str);
+        let compatible=matches!(operation,Some("new")) || (command==SAVE && operation==Some("replace"));
+        let compatible=compatible && (command==SAVE || fields.get("invert").and_then(Value::as_bool)==Some(false));
+        let mut raw=fields.get("rawStorage").and_then(Value::as_bool).unwrap_or(false);
+        let response=ui.add_enabled_ui((hint && compatible) || raw,|ui|crate::widgets::checkbox(ui,&mut raw,tl!("Preserve stored values and off-canvas data"))).inner;
+        if response.changed() {fields.insert("rawStorage".into(),json!(raw));}
+        if !hint || !compatible {
+            response.on_hover_text(tl!("Turn this option off to use the current channel or operation."))
+                .on_disabled_hover_text(tl!("Requires plain saved Gray storage at the document depth, with New or Replace and no Invert."));
+        }
+    }
+
 }
 fn matches_target(target:&Target,state:&photocraft_engine::DocState)->bool {
     target.document==state.doc.id && target.revision==state.revision && target.snapshot.upgrade().is_some_and(|snapshot|state.doc.shares_state(&snapshot))
@@ -139,7 +187,7 @@ pub(crate) fn confirm(app:&mut PhotocraftApp,id:u64,fields:&Map<String,Value>)->
     let active=app.session.active().ok_or_else(stale)?;
     if origin.dialog!=id || fields.get("__command").and_then(Value::as_str)!=Some(origin.command.as_str()) || !matches_target(&origin.source,active) {return Err(stale());}
     let allowed=|key:&str|matches!(key,"channel"|"documentId"|"expectedRevision") || match origin.command.as_str() {
-        DUPLICATE=>matches!(key,"name"|"document"|"invert"),LOAD=>matches!(key,"invert"|"operation"),SAVE=>matches!(key,"name"|"operation"),_=>false,
+        DUPLICATE=>matches!(key,"name"|"document"|"invert"),LOAD=>matches!(key,"invert"|"operation"|"rawStorage"),SAVE=>matches!(key,"name"|"operation"|"rawStorage"),_=>false,
     };
     if fields.len()>16 || fields.keys().any(|key|!key.starts_with("__") && !allowed(key)) {return Err(invalid());}
     let mut params=Map::new();
@@ -162,6 +210,17 @@ pub(crate) fn confirm(app:&mut PhotocraftApp,id:u64,fields:&Map<String,Value>)->
     }else {
         let operation=fields.get("operation").and_then(Value::as_str).filter(|op|matches!(*op,"new"|"add"|"subtract"|"intersect") || (origin.command==SAVE && *op=="replace")).ok_or_else(invalid)?;params.insert("operation".into(),json!(operation));
         if origin.command==SAVE {let name=fields.get("name").and_then(Value::as_str).filter(|name|name.len()<=4096 && !name.contains('\0')).ok_or_else(invalid)?;params.insert("name".into(),json!(name));}
+    }
+    if matches!(origin.command.as_str(),LOAD|SAVE) {
+        let raw=match fields.get("rawStorage") {None=>false,Some(value)=>value.as_bool().ok_or_else(invalid)?};
+        if raw {
+            let hint=if origin.fixed.is_some() {origin.fixed_raw_storage}else {
+                fields.get("channel").and_then(Value::as_str).and_then(|key|origin.choices.iter().find(|choice|choice.key==key)).is_some_and(|choice|choice.raw_storage)
+            };
+            let operation=params.get("operation").and_then(Value::as_str);
+            if !hint || !(operation==Some("new") || (origin.command==SAVE && operation==Some("replace"))) || params.get("invert").and_then(Value::as_bool)==Some(true) {return Err(tl!("Stored-value transfer requires a compatible Gray target, New or Replace, and no Invert.").into());}
+            params.insert("rawStorage".into(),json!(true));
+        }
     }
     params.insert("documentId".into(),json!(origin.source.document.0.to_string()));params.insert("expectedRevision".into(),json!(origin.source.revision.to_string()));
     app.run(&origin.command,Value::Object(params))
@@ -208,6 +267,35 @@ mod tests {
         assert_eq!(fields["channel"],"new");assert_eq!(fields["name"],"");assert_eq!(fields["operation"],"new");assert!(!fields.contains_key("document"));assert!(!fields.contains_key("invert"));assert!(!fields.contains_key("nativeCoverage"));
         fields.insert("channel".into(),json!(format!("alpha:{}",second.0)));fields.insert("operation".into(),json!("replace"));
         let count=app.session.active().unwrap().doc.channels.len();confirm(&mut app,id,&fields).unwrap();assert_eq!(app.session.active().unwrap().doc.channels.len(),count);assert_eq!(app.session.active().unwrap().doc.channels[1].id,second);
+    }
+
+    #[test]
+    fn raw_storage_control_defaults_off_and_imported_context_never_offers_opt_in() {
+        let mut app=app();
+        app.session.execute("select.all",json!({})).unwrap();
+        app.session.execute("channel.new",json!({"name":"Own ordinary alpha"})).unwrap();
+        for command in [LOAD,SAVE] {
+            let id=open(&mut app,command,&Value::Null).unwrap();
+            assert_eq!(app.ui.dialog_mut(id).unwrap().fields["rawStorage"],false);
+        }
+        app.session.active_mut().unwrap().doc.try_resident_mut().unwrap().xcf_state=Some(Default::default());
+        let id=open(&mut app,LOAD,&Value::Null).unwrap();
+        let fields=&app.ui.dialog_mut(id).unwrap().fields;
+        assert!(fields["__channels"].as_array().unwrap().iter().all(|row|row["rawStorage"]==false));
+    }
+    #[test]
+    fn forged_raw_storage_hint_cannot_authorize_imported_source_transfer() {
+        let mut app=app();
+        app.session.execute("select.all",json!({})).unwrap();
+        app.session.active_mut().unwrap().doc.try_resident_mut().unwrap().xcf_state=Some(Default::default());
+        let id=open(&mut app,SAVE,&Value::Null).unwrap();
+        let mut fields=app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.insert("rawStorage".into(),json!(true));
+        fields.insert("__fixedRawStorage".into(),json!(true));
+        for row in fields.get_mut("__channels").unwrap().as_array_mut().unwrap() {row["rawStorage"]=json!(true);}
+        let before=app.session.active().unwrap().doc.clone();
+        assert!(confirm(&mut app,id,&fields).is_err());
+        assert!(app.session.active().unwrap().doc.shares_state(&before));
     }
 
 }
