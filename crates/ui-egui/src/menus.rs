@@ -1548,7 +1548,6 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
     p.history = history;
     p.properties = props;
     p.character = app.ui.workspace == "Graphic and Web";
-    p.brushes = true; // Show brushes panel by default in all workspaces
     // Timeline is a floating panel, not a dock group. Showing it does not create or edit
     // a document timeline; changing away from Motion closes it just like its Close button.
     app.ui.timeline.open = app.ui.workspace == "Motion";

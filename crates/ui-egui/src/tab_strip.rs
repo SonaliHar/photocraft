@@ -225,7 +225,13 @@ pub fn pro_tabs(ui: &mut Ui, id: egui::Id, strip: Rect, menu_left: f32, tabs: &[
             } else if resp.hovered() {
                 ui.painter().rect_filled(r, 0.0, t.hover.gamma_multiply(0.4));
             }
-            let color = if active { t.text } else if resp.hovered() { t.text_dim } else { t.text_faint };
+            let color = if active {
+                t.text
+            } else if resp.hovered() {
+                t.text_dim
+            } else {
+                t.text_faint
+            };
             ui.painter().with_clip_rect(r.intersect(ui.clip_rect())).galley_with_override_text_color(r.center() - galley.size() / 2.0, galley, color);
         },
     )

@@ -17,9 +17,7 @@ use egui::{Color32, RichText, Sense, Stroke, pos2, vec2};
 use photocraft_engine::paint::{BrushPreset, MAX_BRUSH_SIZE};
 use serde_json::json;
 
-use crate::brush_panel::{
-    BrushesPanelState, BrushesView, Renaming, UNGROUPED, commit_gesture, full_uv, grouped_presets, new_preset_name, run_or_status,
-};
+use crate::brush_panel::{BrushesPanelState, BrushesView, Renaming, UNGROUPED, commit_gesture, full_uv, grouped_presets, run_or_status};
 use crate::brush_preview;
 use crate::theme::{self, Tokens};
 use crate::{PhotocraftApp, icons, widgets};
