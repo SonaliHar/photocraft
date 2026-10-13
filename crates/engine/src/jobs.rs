@@ -702,6 +702,10 @@ impl Session {
         if id == "document.pixel.inspect" {
             crate::inspect_pixel_cmds::dispatch_preflight(&params)?;
         }
+        crate::brush_cmds::advanced_dispatch_preflight(self, id, &params)?;
+        if id == "channel.split" {
+            crate::channel_cmds::split_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
         if id == "xcf.filter.graph.inspectPlan" {
             crate::xcf_filter_graph_cmds::dispatch_preflight(&params)?;
         }
@@ -871,6 +875,10 @@ impl Session {
         crate::native_raster_posterize_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         crate::native_gray_levels_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         crate::native_gray_curves_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        crate::native_gray_legacy_brightness_contrast_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        crate::native_raster_legacy_brightness_contrast_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        crate::native_raster_desaturate_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        crate::native_gray_desaturate_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         crate::native_raster_levels_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         crate::native_raster_curves_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         crate::native_raster_exposure_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;

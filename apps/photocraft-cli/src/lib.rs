@@ -267,9 +267,11 @@ fn convert(a: &Args, _out: &mut dyn Write, err: &mut dyn Write) -> R {
     let o = files::open(Path::new(input)).map_err(|e| e.to_string())?;
     warn_all(err, &o.warnings);
     let source = photocraft_engine::SourceIdentity::new(input, Some(input.to_string()), o.origin);
-    files::validate_destination(Path::new(output), Some(&source), a.get("--format")).map_err(|e| e.to_string())?;
+    let mut protection = photocraft_engine::WriteProtection::default();
+    protection.add_document(&o.document, Some(&source))?;
+    files::validate_destination_protected(Path::new(output), &protection, a.get("--format")).map_err(|e| e.to_string())?;
     warn_all(err, &photocraft_engine::type_extra_cmds::missing_font_warnings(&o.document));
-    let ws = files::save(&o.document, Path::new(output), a.get("--format"), &opts, None).map_err(|e| e.to_string())?;
+    let ws = files::save_protected(&o.document, Path::new(output), a.get("--format"), &opts, &protection).map_err(|e| e.to_string())?;
     warn_all(err, &ws);
     Ok(())
 }

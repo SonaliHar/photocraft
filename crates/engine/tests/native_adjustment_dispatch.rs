@@ -71,6 +71,28 @@ fn destructive_noop_and_stale_capture_keep_real_redo_and_layer_count(){
     }
 }
 
+#[test]
+fn registered_desaturate_keeps_captured_params_and_gray_identity_redo(){
+    for mode in [ColorMode::Rgb,ColorMode::Grayscale]{for depth in [SampleType::U32,SampleType::F64]{
+        let(mut session,id,before_bytes)=fixture(mode,depth);
+        session.edit("Seed",|doc,_|{doc.name="Seed".into();Ok(())}).unwrap();
+        session.execute("edit.undo",Value::Null).unwrap();
+        let st=session.active().unwrap();let before=st.doc.clone();let revision=st.revision;
+        let captured=json!({"documentId":before.id.0.to_string(),"expectedRevision":(revision+1).to_string()});
+        assert!(session.execute("image.adjustments.desaturate",captured).is_err());
+        assert!(session.active().unwrap().doc.shares_state(&before));
+        assert_eq!(raw(&session,id),before_bytes);assert!(session.active().unwrap().history.can_redo());
+        session.execute("image.adjustments.desaturate",json!({"opacity":0})).unwrap();
+        assert!(session.active().unwrap().doc.shares_state(&before));
+        assert_eq!(session.active().unwrap().revision,revision);assert!(session.active().unwrap().history.can_redo());
+        if mode==ColorMode::Grayscale {
+            session.execute("image.adjustments.desaturate",Value::Null).unwrap();
+            assert!(session.active().unwrap().doc.shares_state(&before));
+            assert_eq!(session.active().unwrap().revision,revision);assert!(session.active().unwrap().history.can_redo());
+        }
+    }}
+}
+
 fn hidden_fixture(sample:SampleType,hidden_alpha:u64,hidden_nonfinite:bool,edges_visible:bool)->(Session,LayerId,Vec<u8>){
     let mut doc=Document::new("Hidden native adjustment words",Size::new(3,1),ColorMode::Rgb,sample);
     doc.sample_encoding=Some(photocraft_doc::SampleEncoding::Linear);doc.icc_profile=Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes());
@@ -88,7 +110,7 @@ fn hidden_fixture(sample:SampleType,hidden_alpha:u64,hidden_nonfinite:bool,edges
     let mut layer=Layer::raster("Pixels",doc.pixel_format());let id=layer.id;layer.content=LayerContent::Raster(Surface::try_from_interleaved_with(doc.pixel_format(),Rect::new(0,0,3,1),&bytes,&Interrupt::NONE).unwrap());doc.layers.push(layer);
     let mut session=Session::new();session.add_document(doc,None).unwrap();(session,id,bytes)
 }
-fn native_cases()->[(&'static str,Value);6]{[("invert",json!({})),("threshold",json!({"level":128})),("posterize",json!({"levels":4})),("levels",json!({"outWhite":128})),("curves",json!({"points":[[0,255],[255,0]]})),("exposure",json!({"exposure":1}))]}
+fn native_cases()->[(&'static str,Value);8]{[("invert",json!({})),("threshold",json!({"level":128})),("posterize",json!({"levels":4})),("levels",json!({"outWhite":128})),("curves",json!({"points":[[0,255],[255,0]]})),("exposure",json!({"exposure":1})),("brightnessContrast",json!({"brightness":1,"contrast":1,"legacy":true})),("desaturate",json!({}))]}
 #[test]
 fn registered_native_adjustments_skip_hidden_color_words_inside_visible_extent(){
     for sample in [SampleType::U32,SampleType::F64]{for(kind,params)in native_cases(){

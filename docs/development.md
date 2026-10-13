@@ -547,6 +547,34 @@ their own modes, an upper stroke covering lower ones.
 
 ### GIMP XCF oracle authoring
 
+The `xcf-support` implementation also contains controlled U32/F64 editing routes.
+These are separate from source-file qualification: native sample preservation or
+a successful build does not establish complete XCF compatibility. The current
+feature plan is `specs/002-full-xcf-import/tasks.md`; its implementation table
+records code present while its checkboxes retain the full acceptance criteria.
+Test execution is deferred during the user-requested implementation pass.
+
+Image Adjustments now have native RGB/Gray routes for Invert, Threshold,
+Posterize, Levels, Curves, and explicit legacy Brightness/Contrast. Numeric Gray
+mask/channel/Quick Mask targets have corresponding routes. They retain original
+typed parameter recipes, raw untouched/default samples, current target metadata,
+and one history transaction. Each route has explicit numerical and source
+restrictions; unsupported combinations return errors. Native pixel Exposure
+additionally requires explicit Linear encoding and validated profile context.
+Native Multiply/Screen brush strokes use that same explicit color context;
+Normal painting retains its existing policy. Native Desaturate retains the
+existing RGB min/max midpoint formula, with Gray remaining an identity operation.
+Legacy Mixer Brush and Color Replacement currently refuse native-wide input
+before changing the document; their native arithmetic remains unfinished.
+
+Selection Load/Save/New Channel offer default-off raw storage transfer for
+eligible same-depth Gray surfaces. This copies stored defaults and off-canvas
+tiles without interpreting their sample values. Imported targets require typed
+identity, bounds, lock and provenance checks; a UI option is not authorization.
+The profile-question import queue also admits pending documents before ownership
+transfer. Its explicit Cancel Failed Opens action releases unopened imports
+without changing an open document's history.
+
 `cargo xtask corpus --xcf --local --update-manifest` copies the original GIMP corpus from
 `../photocraft-corpus/xcf` and hashes inputs, independently exported PNG projections,
 GIMP buffer samples and the per-case assertions. Binary inputs remain outside this repository.

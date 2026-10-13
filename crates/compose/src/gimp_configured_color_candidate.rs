@@ -2,7 +2,9 @@
 //! Transforms are borrowed caller authority, not inferred profile/TRC defaults.
 use super::{
     gimp_configured_candidate::SourceBinding,
-    gimp_configured_render_candidate::{CoveragePolicy, OutputPolicy, RenderedCandidate, native_cells::NativeCells, render_source_candidate_with_sample_policy},
+    gimp_configured_render_candidate::{
+        CoveragePolicy, OutputPolicy, RenderedCandidate, native_cells::NativeCells, render_source_candidate_with_sample_policy,
+    },
 };
 use photocraft_algo::gimp::configured::{CurveSamplePolicy, Limits, WorkingContext};
 use photocraft_cms::{Transform, curve::Curve, pipeline::Stage};
@@ -246,11 +248,96 @@ pub fn render_color_candidate(
     limits: Limits,
     control: &Interrupt<'_>,
 ) -> Result<RenderedCandidate, RasterInputError> {
+    render_color_execution(
+        source,
+        extent,
+        roi,
+        actual_source,
+        binding.working,
+        pair,
+        working_default,
+        policy,
+        limits,
+        control,
+        || {
+            let configured = super::gimp_configured_candidate::bind_source_node_with_sample_policy(node, binding, sampling, control)?;
+            configured.with_prepared(pair.working, Limits { resident_bytes: 65536, work_units: 16384 }, control, |_| Ok(()))
+        },
+        |working, output_policy, middle_limits, _charge| {
+            render_source_candidate_with_sample_policy(node, binding, sampling, working, extent, roi, pair.working, output_policy, middle_limits, control)
+        },
+    )
+}
+
+/// Reuse one caller-prepared exact typed configuration across CMS graph cells.
+/// Preparation authority and original configuration remain borrowed; no source
+/// identity is inferred and the same paired transform/default policies apply.
+pub fn render_prepared_color_candidate(
+    prepared: &photocraft_algo::gimp::configured::PreparedConfiguration<'_>,
+    source: &Surface,
+    extent: Rect,
+    roi: Rect,
+    actual_source: WorkingContext,
+    pair: &TransformPair<'_>,
+    working_default: &[u8],
+    policy: OutputPolicy,
+    limits: Limits,
+    control: &Interrupt<'_>,
+) -> Result<RenderedCandidate, RasterInputError> {
+    poll(control)?;
+    if limits.resident_bytes == 0 || limits.resident_bytes > MAX_CHECKED_RASTER_BYTES {
+        return Err(RasterInputError::LimitExceeded);
+    }
+    let remaining = limits.resident_bytes.checked_sub(prepared.retained_bytes()).ok_or(RasterInputError::LimitExceeded)?;
+    render_color_execution(
+        source,
+        extent,
+        roi,
+        actual_source,
+        prepared.working_context(),
+        pair,
+        working_default,
+        policy,
+        Limits { resident_bytes: remaining, work_units: limits.work_units },
+        control,
+        || poll(control),
+        |working, output_policy, middle_limits, charge| {
+            super::gimp_configured_render_candidate::render_prepared_window(
+                prepared,
+                working,
+                roi,
+                pair.working,
+                output_policy,
+                charge,
+                mul(4096, working.format().bytes_per_pixel() as u64)?,
+                middle_limits.work_units,
+                control,
+            )
+        },
+    )
+}
+
+// The retained-source and prepared entry points share all CMS and final-native
+// numerical/staging code; only explicit configuration preparation differs.
+fn render_color_execution(
+    source: &Surface,
+    extent: Rect,
+    roi: Rect,
+    actual_source: WorkingContext,
+    configured_working: WorkingContext,
+    pair: &TransformPair<'_>,
+    working_default: &[u8],
+    policy: OutputPolicy,
+    limits: Limits,
+    control: &Interrupt<'_>,
+    validate_configuration: impl FnOnce() -> Result<(), RasterInputError>,
+    evaluate_working: impl FnOnce(&Surface, OutputPolicy, Limits, u64) -> Result<RenderedCandidate, RasterInputError>,
+) -> Result<RenderedCandidate, RasterInputError> {
     poll(control)?;
     let source_format = source.format();
     if !matches!(source_format.mode, ColorMode::Rgb | ColorMode::Grayscale)
         || actual_source != pair.source
-        || pair.working != binding.working
+        || pair.working != configured_working
         || pair.source.color_channels != source_format.mode.color_channels()
         || pair.source.alpha != source_format.alpha
         || pair.working.alpha != source_format.alpha
@@ -283,8 +370,7 @@ pub fn render_color_candidate(
     }
     source.try_validate_tile_origins_with(control)?;
     // Refuse malformed/unsupported retained config before any raster allocation.
-    let configured = super::gimp_configured_candidate::bind_source_node_with_sample_policy(node, binding, sampling, control)?;
-    configured.with_prepared(pair.working, Limits { resident_bytes: 65536, work_units: 16384 }, control, |_| Ok(()))?;
+    validate_configuration()?;
     let mut prepaid = Prepaid { bytes: work_charge, work };
     let mut forward = StagedSurfaceBuilder::new(working_format, working_default, roi, &mut prepaid, control)?;
     let mut source_cells = NativeCells::new(mul(4096, source_format.bytes_per_pixel() as u64)?, control)?;
@@ -325,17 +411,11 @@ pub fn render_color_candidate(
     let (working, ()) = forward.finalize(&mut prepaid, control)?.into_parts();
     drop(source_cells);
     let lossless = Policy { domain: Domain::FloatHdr, unit_overflow: UnitOverflow::Reject, rounding: Rounding::Exact };
-    let evaluated = render_source_candidate_with_sample_policy(
-        node,
-        binding,
-        sampling,
+    let evaluated = evaluate_working(
         &working,
-        extent,
-        roi,
-        pair.working,
         OutputPolicy { colors: lossless, alpha: lossless, coverage: policy.coverage },
         Limits { resident_bytes: peak, work_units: work },
-        control,
+        work_charge,
     )?;
     drop(working);
     let mut prepaid = Prepaid { bytes: native_charge, work };

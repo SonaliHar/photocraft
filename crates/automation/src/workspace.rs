@@ -476,6 +476,7 @@ pub fn authorize_engine_command(id: &str, params: &Value) -> Result<(), Automati
     let safe_file_command = matches!(
         id,
         "file.new"
+            | "file.open.discardPending"
             | "file.newFromClipboard"
             | "file.close"
             | "file.closeAll"
@@ -1143,6 +1144,16 @@ mod tests {
             .map(|spec| spec.id)
             .collect();
         assert!(unclassified.is_empty(), "filesystem path parameters in the command registry need an automation policy: {unclassified:?}");
+    }
+
+    #[test]
+    fn pending_import_cancel_is_available_without_granting_file_access() {
+        let mut headless=crate::Headless::new();
+        assert_eq!(headless.command_run("file.open.discardPending",serde_json::json!({})).unwrap()["discarded"],0);
+        assert!(headless.command_run("file.open.discardPending",serde_json::json!({"path":"/outside/source.xcf"})).is_err());
+        assert!(headless.command_run("file.open.discardPending",serde_json::json!({"heldId":"0"})).is_err());
+        assert!(headless.command_run("file.open",serde_json::json!({"path":"/outside/source.xcf"})).is_err());
+        assert!(headless.session.documents().is_empty());
     }
 
     fn documents_filesystem_path_params(id: &str, params: &str) -> bool {

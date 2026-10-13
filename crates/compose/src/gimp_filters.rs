@@ -122,20 +122,27 @@ pub(crate) fn scalar_preparation_bytes(nodes: usize, max_args: usize) -> Result<
     u64::try_from(bytes).map_err(|_| CompositionError::Invalid("scalar preparation size overflow"))
 }
 impl PointStack {
+    #[cfg(test)]
     pub(crate) fn from_nodes_at(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32, owner: photocraft_geom::Rect) -> Result<Self> {
-        if source.iter().any(crate::gimp_red_eye::claims_geometry) {
+        Self::from_nodes_at_with_interrupt(source, profile, stored, version, owner, &photocraft_raster::Interrupt::NONE)
+    }
+    pub(crate) fn from_nodes_at_with_interrupt(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32, owner: photocraft_geom::Rect, control: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
+        controlled::preparation(control, |control| Self::prepare_nodes_at(source, profile, stored, version, owner, control))
+    }
+    fn prepare_nodes_at(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32, owner: photocraft_geom::Rect, control: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
+        if controlled::iter(source, control).any(crate::gimp_red_eye::claims_geometry) {
             let [node] = source else { return Err(CompositionError::Unsupported("Red Eye owner geometry singleton")); };
             crate::gimp_red_eye::canonical_geometry(node, profile, stored, version)?;
             if !matches!(owner, photocraft_geom::Rect { x0: -7, y0: 5, x1: 12, y1: 18 } | photocraft_geom::Rect { x0: -3, y0: -4, x1: 259, y1: 5 }) {
                 return Err(CompositionError::Unsupported("Red Eye owner geometry point extent"));
             }
         }
-        if source.iter().any(|node| node.operation.name == "gegl:unpremultiply") {
+        if controlled::iter(source, control).any(|node| node.operation.name == "gegl:unpremultiply") {
             let [node] = source else { return Err(CompositionError::Unsupported("Unpremultiply singleton")); };
             let candidate = crate::gimp_unpremultiply::canonical_candidate(node, profile, stored, owner, version)?;
             return Ok(Self { unpremultiply: Some((candidate, node.enabled)), video: None, current_sample: None, nodes: Vec::new(), channels: 3, integer_gray_temperature_clamp: false });
         }
-        if source.iter().any(crate::gimp_video_degradation::claims_video) {
+        if controlled::iter(source, control).any(crate::gimp_video_degradation::claims_video) {
             let [node] = source else {
                 return Err(CompositionError::Unsupported("Video Degradation singleton"));
             };
@@ -149,7 +156,7 @@ impl PointStack {
                 integer_gray_temperature_clamp: false,
             });
         }
-        Self::from_nodes(source, profile, stored, version)
+        Self::from_nodes_with_interrupt(source, profile, stored, version, control)
     }
     /// Actual retained node capacity plus fixed analytic profile envelopes,
     /// including Color Overlay's bounded nested profile/transform preparation.
@@ -167,24 +174,31 @@ impl PointStack {
     pub(crate) fn new(stack: &photocraft_doc::xcf_filters::FilterStack, profile: &Profile, stored: SampleEncoding, version: u32) -> Result<Self> {
         Self::from_nodes(&stack.nodes, profile, stored, version)
     }
+    #[cfg(test)]
     pub(crate) fn from_nodes(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32) -> Result<Self> {
-        if source.iter().any(crate::gimp_red_eye::claims_geometry) {
+        Self::from_nodes_with_interrupt(source, profile, stored, version, &photocraft_raster::Interrupt::NONE)
+    }
+    pub(crate) fn from_nodes_with_interrupt(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32, control: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
+        controlled::preparation(control, |control| Self::prepare_nodes(source, profile, stored, version, control))
+    }
+    fn prepare_nodes(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32, control: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
+        if controlled::iter(source, control).any(crate::gimp_red_eye::claims_geometry) {
             let [node] = source else { return Err(CompositionError::Unsupported("Red Eye owner geometry singleton")); };
             crate::gimp_red_eye::canonical_geometry(node, profile, stored, version)?;
         }
-        if source.iter().any(|node| node.operation.name == "gegl:unpremultiply") {
+        if controlled::iter(source, control).any(|node| node.operation.name == "gegl:unpremultiply") {
             return Err(CompositionError::Unsupported("Unpremultiply requires operative owner extent"));
         }
         if source.len() > 256 {
             return Err(CompositionError::Invalid("point filter stack limit"));
         }
         let replace_fields =
-            source.iter().any(|node| node.composition.as_ref().is_some_and(|policy| {
+            controlled::iter(source, control).any(|node| node.composition.as_ref().is_some_and(|policy| {
                 policy.compatibility_epoch == POINT_REPLACE_COMPATIBILITY_EPOCH || policy.compatibility_epoch == crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH
             }));
         if replace_fields
             && (source.len() != 1
-                || source.iter().any(|node| {
+                || controlled::iter(source, control).any(|node| {
                     let known_schema = match node.operation.name.as_str() {
                         "gegl:absolute" => node.operation.schema_epoch == ABSOLUTE_LINEAR_PRECISION_EPOCH && node.arguments.is_empty(),
                         "gegl:invert-linear" => node.operation.schema_epoch == INVERT_LINEAR_PRECISION_EPOCH && node.arguments.is_empty(),
@@ -228,65 +242,66 @@ impl PointStack {
         // singleton Replace families above, never inferred for older epochs.
         let qualified_point_encoding =
             matches!(stored, SampleEncoding::Linear | SampleEncoding::NonlinearProfile) || (replace_fields && stored == SampleEncoding::Perceptual);
+        controlled::checkpoint(control)?;
         let mut nodes = Vec::new();
         nodes.try_reserve_exact(source.len()).map_err(|_| CompositionError::Invalid("point preparation allocation denied"))?;
-        let color_rotate = source.iter().any(|node| node.operation.name == "gegl:color-rotate");
+        let color_rotate = controlled::iter(source, control).any(|node| node.operation.name == "gegl:color-rotate");
         if color_rotate && (!replace_fields || source.len() != 1 || stored != SampleEncoding::Perceptual || !matches!(profile.channels(), 1 | 3)) {
             return Err(CompositionError::Unsupported("Color Rotate Perceptual singleton"));
         }
-        let absolute = source.iter().any(|node| node.operation.name == "gegl:absolute");
+        let absolute = controlled::iter(source, control).any(|node| node.operation.name == "gegl:absolute");
         if absolute
             && (!replace_fields
                 || source.len() != 1
                 || stored != SampleEncoding::Linear
                 || !matches!(profile.channels(), 1 | 3)
-                || source.iter().any(|node| node.operation.schema_epoch != ABSOLUTE_LINEAR_PRECISION_EPOCH))
+                || controlled::iter(source, control).any(|node| node.operation.schema_epoch != ABSOLUTE_LINEAR_PRECISION_EPOCH))
         {
             return Err(CompositionError::Unsupported("Absolute Linear singleton typed epoch"));
         }
-        let channel_mixer = source.iter().any(|node| node.operation.name == "gegl:channel-mixer");
+        let channel_mixer = controlled::iter(source, control).any(|node| node.operation.name == "gegl:channel-mixer");
         if channel_mixer
             && (!replace_fields
                 || source.len() != 1
                 || !qualified_point_encoding
                 || !matches!(profile.channels(), 1 | 3)
-                || source.iter().any(|node| node.operation.schema_epoch != CHANNEL_MIXER_PRECISION_EPOCH))
+                || controlled::iter(source, control).any(|node| node.operation.schema_epoch != CHANNEL_MIXER_PRECISION_EPOCH))
         {
             return Err(CompositionError::Unsupported("Channel Mixer singleton typed epoch"));
         }
-        let mono_signed = source.iter().any(|node| node.operation.schema_epoch == MONO_MIXER_SIGNED_PRECISION_EPOCH);
+        let mono_signed = controlled::iter(source, control).any(|node| node.operation.schema_epoch == MONO_MIXER_SIGNED_PRECISION_EPOCH);
         if mono_signed
             && (!replace_fields
                 || source.len() != 1
                 || !qualified_point_encoding
                 || !matches!(profile.channels(), 1 | 3)
-                || source.iter().any(|node| node.operation.name != "gegl:mono-mixer" || node.operation.schema_epoch != MONO_MIXER_SIGNED_PRECISION_EPOCH))
+                || controlled::iter(source, control).any(|node| node.operation.name != "gegl:mono-mixer" || node.operation.schema_epoch != MONO_MIXER_SIGNED_PRECISION_EPOCH))
         {
             return Err(CompositionError::Unsupported("unqualified expanded Mono Mixer domain"));
         }
-        let color_overlay = source.iter().any(|node| node.operation.name == "gegl:color-overlay");
+        let color_overlay = controlled::iter(source, control).any(|node| node.operation.name == "gegl:color-overlay");
         if color_overlay
             && (!replace_fields
                 || source.len() != 1
                 || !qualified_point_encoding
                 || !matches!(profile.channels(), 1 | 3)
-                || source.iter().any(|n| n.operation.schema_epoch != COLOR_OVERLAY_PRECISION_EPOCH))
+                || controlled::iter(source, control).any(|n| n.operation.schema_epoch != COLOR_OVERLAY_PRECISION_EPOCH))
         {
             return Err(CompositionError::Unsupported("unqualified typed Color Overlay domain"));
         }
-        let color_to_alpha = source.iter().any(|node| node.operation.name == "gegl:color-to-alpha");
-        let component_extract = source.iter().any(|node| node.operation.name == "gegl:component-extract");
-        let alpha_clip = source.iter().any(|node| node.operation.name == "gegl:alpha-clip");
+        let color_to_alpha = controlled::iter(source, control).any(|node| node.operation.name == "gegl:color-to-alpha");
+        let component_extract = controlled::iter(source, control).any(|node| node.operation.name == "gegl:component-extract");
+        let alpha_clip = controlled::iter(source, control).any(|node| node.operation.name == "gegl:alpha-clip");
         if alpha_clip
             && (!replace_fields
                 || source.len() != 1
                 || !qualified_point_encoding
                 || !matches!(profile.channels(), 1 | 3)
-                || source.iter().any(|n| !matches!(n.operation.schema_epoch.as_str(), ALPHA_CLIP_PRECISION_EPOCH | ALPHA_CLIP_FINITE_PRECISION_EPOCH)))
+                || controlled::iter(source, control).any(|n| !matches!(n.operation.schema_epoch.as_str(), ALPHA_CLIP_PRECISION_EPOCH | ALPHA_CLIP_FINITE_PRECISION_EPOCH)))
         {
             return Err(CompositionError::Unsupported("unqualified typed Alpha Clip domain"));
         }
-        if source.iter().any(|node| node.operation.schema_epoch == COMPONENT_EXTRACT_GEOMETRY_EPOCH) && stored != SampleEncoding::NonlinearProfile {
+        if controlled::iter(source, control).any(|node| node.operation.schema_epoch == COMPONENT_EXTRACT_GEOMETRY_EPOCH) && stored != SampleEncoding::NonlinearProfile {
             return Err(CompositionError::Unsupported("Component Extract geometry requires current nonlinear storage"));
         }
         if component_extract
@@ -294,7 +309,7 @@ impl PointStack {
                 || source.len() != 1
                 || !qualified_point_encoding
                 || !matches!(profile.channels(), 1 | 3)
-                || source.iter().any(|node| !component_extract::qualified_epoch(&node.operation.schema_epoch)))
+                || controlled::iter(source, control).any(|node| !component_extract::qualified_epoch(&node.operation.schema_epoch)))
         {
             return Err(CompositionError::Unsupported("unqualified typed Component Extract domain"));
         }
@@ -303,29 +318,29 @@ impl PointStack {
                 || source.len() != 1
                 || !qualified_point_encoding
                 || !matches!(profile.channels(), 1 | 3)
-                || source.iter().any(|node| node.operation.schema_epoch != COLOR_TO_ALPHA_PRECISION_EPOCH))
+                || controlled::iter(source, control).any(|node| node.operation.schema_epoch != COLOR_TO_ALPHA_PRECISION_EPOCH))
         {
             return Err(CompositionError::Unsupported("unqualified typed Color to Alpha domain"));
         }
-        let color_exchange = source.iter().any(|node| node.operation.name == "gegl:color-exchange");
+        let color_exchange = controlled::iter(source, control).any(|node| node.operation.name == "gegl:color-exchange");
         if color_exchange
             && (!replace_fields
                 || source.len() != 1
                 || !qualified_point_encoding
                 || !matches!(profile.channels(), 1 | 3)
-                || source.iter().any(|node| node.operation.schema_epoch != COLOR_EXCHANGE_PRECISION_EPOCH))
+                || controlled::iter(source, control).any(|node| node.operation.schema_epoch != COLOR_EXCHANGE_PRECISION_EPOCH))
         {
             return Err(CompositionError::Unsupported("unqualified typed Color Exchange domain"));
         }
-        let alien_hsl = source.iter().any(|node| node.operation.schema_epoch == ALIEN_MAP_HSL_PRECISION_EPOCH);
+        let alien_hsl = controlled::iter(source, control).any(|node| node.operation.schema_epoch == ALIEN_MAP_HSL_PRECISION_EPOCH);
         let alien_epoch = if alien_hsl { ALIEN_MAP_HSL_PRECISION_EPOCH } else { ALIEN_MAP_PRECISION_EPOCH };
-        let alien_map = alien_hsl || source.iter().any(|node| node.operation.schema_epoch == ALIEN_MAP_PRECISION_EPOCH);
-        if source.iter().any(|node| node.operation.name == "gegl:alien-map")
+        let alien_map = alien_hsl || controlled::iter(source, control).any(|node| node.operation.schema_epoch == ALIEN_MAP_PRECISION_EPOCH);
+        if controlled::iter(source, control).any(|node| node.operation.name == "gegl:alien-map")
             && (!alien_map
                 || source.len() != 1
                 || profile.channels() != 3
                 || !qualified_point_encoding
-                || source.iter().any(|n| {
+                || controlled::iter(source, control).any(|n| {
                     n.operation.name != "gegl:alien-map"
                         || n.operation.stored_version != "0:0"
                         || n.operation.schema_epoch != alien_epoch
@@ -334,48 +349,48 @@ impl PointStack {
         {
             return Err(CompositionError::Unsupported("unqualified witnessed RGB Alien Map typed precision domain"));
         }
-        let sepia = source.iter().any(|node| node.operation.schema_epoch == SEPIA_PRECISION_EPOCH);
-        if source.iter().any(|node| node.operation.name == "gegl:sepia")
+        let sepia = controlled::iter(source, control).any(|node| node.operation.schema_epoch == SEPIA_PRECISION_EPOCH);
+        if controlled::iter(source, control).any(|node| node.operation.name == "gegl:sepia")
             && (!sepia
                 || source.len() != 1
                 || profile.channels() != 3
                 || !qualified_point_encoding
-                || source.iter().any(|node| node.operation.schema_epoch != SEPIA_PRECISION_EPOCH || node.operation.name != "gegl:sepia"))
+                || controlled::iter(source, control).any(|node| node.operation.schema_epoch != SEPIA_PRECISION_EPOCH || node.operation.name != "gegl:sepia"))
         {
             return Err(CompositionError::Unsupported("unqualified witnessed Sepia precision domain"));
         }
-        if sepia && source.iter().any(|node| {
-            node.arguments.len()!=2 || node.arguments.iter().filter(|arg|arg.name=="srgb" && matches!(arg.value,FilterValue::Bool(_))).count()!=1 || node.arguments.iter().filter(|arg|arg.name=="scale" && matches!(arg.value,FilterValue::Number(ExactNumber::Float32Bits(bits)) if f32::from_bits(bits).is_finite() && (0.0..=1.0).contains(&f32::from_bits(bits)))).count()!=1
+        if sepia && controlled::iter(source, control).any(|node| {
+            node.arguments.len()!=2 || controlled::iter(&node.arguments, control).filter(|arg|arg.name=="srgb" && matches!(arg.value,FilterValue::Bool(_))).count()!=1 || controlled::iter(&node.arguments, control).filter(|arg|arg.name=="scale" && matches!(arg.value,FilterValue::Number(ExactNumber::Float32Bits(bits)) if f32::from_bits(bits).is_finite() && (0.0..=1.0).contains(&f32::from_bits(bits)))).count()!=1
         }) { return Err(CompositionError::Unsupported("unqualified typed Sepia arguments")); }
-        let threshold_alpha = source.iter().any(|node| node.operation.schema_epoch == THRESHOLD_ALPHA_PRECISION_EPOCH);
-        if source.iter().any(|node| node.operation.name == "gimp:threshold-alpha")
+        let threshold_alpha = controlled::iter(source, control).any(|node| node.operation.schema_epoch == THRESHOLD_ALPHA_PRECISION_EPOCH);
+        if controlled::iter(source, control).any(|node| node.operation.name == "gimp:threshold-alpha")
             && (!threshold_alpha
                 || source.len() != 1
                 || !matches!(profile.channels(), 1 | 3)
                 || !qualified_point_encoding
-                || source.iter().any(|node| node.operation.schema_epoch != THRESHOLD_ALPHA_PRECISION_EPOCH || node.operation.name != "gimp:threshold-alpha"))
+                || controlled::iter(source, control).any(|node| node.operation.schema_epoch != THRESHOLD_ALPHA_PRECISION_EPOCH || node.operation.name != "gimp:threshold-alpha"))
         {
             return Err(CompositionError::Unsupported("unqualified witnessed Alpha Threshold precision domain"));
         }
-        let threshold = source.iter().any(|node| node.operation.schema_epoch == THRESHOLD_PRECISION_EPOCH);
-        if source.iter().any(|node| node.operation.name == "gimp:threshold")
+        let threshold = controlled::iter(source, control).any(|node| node.operation.schema_epoch == THRESHOLD_PRECISION_EPOCH);
+        if controlled::iter(source, control).any(|node| node.operation.name == "gimp:threshold")
             && (!threshold
                 || source.len() != 1
                 || profile.channels() != 3
                 || !qualified_point_encoding
-                || source.iter().any(|node| node.operation.schema_epoch != THRESHOLD_PRECISION_EPOCH || node.operation.name != "gimp:threshold"))
+                || controlled::iter(source, control).any(|node| node.operation.schema_epoch != THRESHOLD_PRECISION_EPOCH || node.operation.name != "gimp:threshold"))
         {
             return Err(CompositionError::Unsupported("unqualified witnessed RGB Threshold precision domain"));
         }
-        let saturation_gray = source.iter().any(|node| node.operation.schema_epoch == SATURATION_GRAY_PRECISION_EPOCH);
-        let saturation_yuv = source.iter().any(|node| node.operation.schema_epoch == SATURATION_RGB_YUV_PRECISION_EPOCH);
-        let saturation = saturation_gray || saturation_yuv || source.iter().any(|node| node.operation.schema_epoch == SATURATION_PRECISION_EPOCH);
-        if source.iter().any(|node| node.operation.name == "gegl:saturation")
+        let saturation_gray = controlled::iter(source, control).any(|node| node.operation.schema_epoch == SATURATION_GRAY_PRECISION_EPOCH);
+        let saturation_yuv = controlled::iter(source, control).any(|node| node.operation.schema_epoch == SATURATION_RGB_YUV_PRECISION_EPOCH);
+        let saturation = saturation_gray || saturation_yuv || controlled::iter(source, control).any(|node| node.operation.schema_epoch == SATURATION_PRECISION_EPOCH);
+        if controlled::iter(source, control).any(|node| node.operation.name == "gegl:saturation")
             && (!saturation
                 || source.len() != 1
                 || profile.channels() != if saturation_gray { 1 } else { 3 }
                 || !qualified_point_encoding
-                || source.iter().any(|node| {
+                || controlled::iter(source, control).any(|node| {
                     node.operation.schema_epoch
                         != if saturation_gray {
                             SATURATION_GRAY_PRECISION_EPOCH
@@ -389,33 +404,33 @@ impl PointStack {
         {
             return Err(CompositionError::Unsupported("unqualified witnessed Saturation precision domain"));
         }
-        let desaturate = source.iter().any(|node| node.operation.schema_epoch == DESATURATE_PRECISION_EPOCH);
-        if source.iter().any(|node| node.operation.name == "gimp:desaturate")
+        let desaturate = controlled::iter(source, control).any(|node| node.operation.schema_epoch == DESATURATE_PRECISION_EPOCH);
+        if controlled::iter(source, control).any(|node| node.operation.name == "gimp:desaturate")
             && (!desaturate
                 || source.len() != 1
                 || profile.channels() != 3
                 || !qualified_point_encoding
-                || source.iter().any(|node| node.operation.schema_epoch != DESATURATE_PRECISION_EPOCH || node.operation.name != "gimp:desaturate"))
+                || controlled::iter(source, control).any(|node| node.operation.schema_epoch != DESATURATE_PRECISION_EPOCH || node.operation.name != "gimp:desaturate"))
         {
             return Err(CompositionError::Unsupported("unqualified witnessed Desaturate precision domain"));
         }
-        let witnessed = source.iter().any(|node| node.operation.schema_epoch == STACK_EDITS_EPOCH);
-        let mono_edits = source.iter().any(|node| node.operation.schema_epoch == MONO_MIXER_EDITS_EPOCH);
-        let value_precision = source.iter().any(|node| node.operation.schema_epoch == VALUE_INVERT_PRECISION_EPOCH);
-        let brightness_precision = source.iter().any(|node| node.operation.schema_epoch == BRIGHTNESS_CONTRAST_PRECISION_EPOCH);
-        let levels_precision = source.iter().any(|node| node.operation.schema_epoch == GEGL_LEVELS_PRECISION_EPOCH);
-        let exposure_geometry = source.iter().any(|node| node.operation.schema_epoch == EXPOSURE_GEOMETRY_EPOCH);
-        let exposure_black = exposure_geometry || source.iter().any(|node| node.operation.schema_epoch == EXPOSURE_BLACK_PRECISION_EPOCH);
-        let temperature_offgrid = source.iter().any(|node| node.operation.schema_epoch == COLOR_TEMPERATURE_OFFGRID_EPOCH);
-        let temperature = temperature_offgrid || source.iter().any(|node| node.operation.schema_epoch == COLOR_TEMPERATURE_PRECISION_EPOCH);
-        if !temperature && source.iter().any(|node| node.operation.name == "gegl:color-temperature") {
+        let witnessed = controlled::iter(source, control).any(|node| node.operation.schema_epoch == STACK_EDITS_EPOCH);
+        let mono_edits = controlled::iter(source, control).any(|node| node.operation.schema_epoch == MONO_MIXER_EDITS_EPOCH);
+        let value_precision = controlled::iter(source, control).any(|node| node.operation.schema_epoch == VALUE_INVERT_PRECISION_EPOCH);
+        let brightness_precision = controlled::iter(source, control).any(|node| node.operation.schema_epoch == BRIGHTNESS_CONTRAST_PRECISION_EPOCH);
+        let levels_precision = controlled::iter(source, control).any(|node| node.operation.schema_epoch == GEGL_LEVELS_PRECISION_EPOCH);
+        let exposure_geometry = controlled::iter(source, control).any(|node| node.operation.schema_epoch == EXPOSURE_GEOMETRY_EPOCH);
+        let exposure_black = exposure_geometry || controlled::iter(source, control).any(|node| node.operation.schema_epoch == EXPOSURE_BLACK_PRECISION_EPOCH);
+        let temperature_offgrid = controlled::iter(source, control).any(|node| node.operation.schema_epoch == COLOR_TEMPERATURE_OFFGRID_EPOCH);
+        let temperature = temperature_offgrid || controlled::iter(source, control).any(|node| node.operation.schema_epoch == COLOR_TEMPERATURE_PRECISION_EPOCH);
+        if !temperature && controlled::iter(source, control).any(|node| node.operation.name == "gegl:color-temperature") {
             return Err(CompositionError::Unsupported("Color Temperature requires independently witnessed precision epoch"));
         }
         if temperature
             && (source.len() != 1
                 || !matches!(profile.channels(), 1 | 3)
                 || !qualified_point_encoding
-                || source.iter().any(|node| {
+                || controlled::iter(source, control).any(|node| {
                     !matches!(node.operation.schema_epoch.as_str(), COLOR_TEMPERATURE_PRECISION_EPOCH | COLOR_TEMPERATURE_OFFGRID_EPOCH)
                         || node.operation.name != "gegl:color-temperature"
                 }))
@@ -427,7 +442,7 @@ impl PointStack {
             && (source.len() != 1
                 || !matches!(profile.channels(), 1 | 3)
                 || !qualified_point_encoding
-                || source.iter().any(|node| {
+                || controlled::iter(source, control).any(|node| {
                     !matches!(node.operation.schema_epoch.as_str(), EXPOSURE_BLACK_PRECISION_EPOCH | EXPOSURE_GEOMETRY_EPOCH)
                         || node.operation.name != "gegl:exposure"
                 }))
@@ -438,7 +453,7 @@ impl PointStack {
             && (source.len() != 1
                 || !matches!(profile.channels(), 1 | 3)
                 || !qualified_point_encoding
-                || source.iter().any(|node| node.operation.schema_epoch != GEGL_LEVELS_PRECISION_EPOCH || node.operation.name != "gegl:levels"))
+                || controlled::iter(source, control).any(|node| node.operation.schema_epoch != GEGL_LEVELS_PRECISION_EPOCH || node.operation.name != "gegl:levels"))
         {
             return Err(CompositionError::Unsupported("unqualified witnessed GEGL Levels precision domain"));
         }
@@ -456,16 +471,16 @@ impl PointStack {
             && (source.len() != 1
                 || profile.channels() != 3
                 || !qualified_point_encoding
-                || source.iter().any(|node| node.operation.schema_epoch != VALUE_INVERT_PRECISION_EPOCH || node.operation.name != "gegl:value-invert"))
+                || controlled::iter(source, control).any(|node| node.operation.schema_epoch != VALUE_INVERT_PRECISION_EPOCH || node.operation.name != "gegl:value-invert"))
         {
             return Err(CompositionError::Unsupported("unqualified witnessed Value Invert precision domain"));
         }
-        let rgb_clip = source.iter().any(|node| node.operation.schema_epoch == RGB_CLIP_HDR_EPOCH || node.operation.name == "gegl:rgb-clip");
+        let rgb_clip = controlled::iter(source, control).any(|node| node.operation.schema_epoch == RGB_CLIP_HDR_EPOCH || node.operation.name == "gegl:rgb-clip");
         if rgb_clip
             && (source.len() != 1
                 || profile.channels() != 3
                 || stored != SampleEncoding::Linear
-                || source.iter().any(|node| node.operation.schema_epoch != RGB_CLIP_HDR_EPOCH || node.operation.name != "gegl:rgb-clip"))
+                || controlled::iter(source, control).any(|node| node.operation.schema_epoch != RGB_CLIP_HDR_EPOCH || node.operation.name != "gegl:rgb-clip"))
         {
             return Err(CompositionError::Unsupported("unqualified witnessed RGB Clip domain"));
         }
@@ -473,7 +488,7 @@ impl PointStack {
             && (source.len() != 1
                 || profile.channels() != 3
                 || stored != SampleEncoding::NonlinearProfile
-                || source.iter().any(|node| node.operation.schema_epoch != MONO_MIXER_EDITS_EPOCH || node.operation.name != "gegl:mono-mixer"))
+                || controlled::iter(source, control).any(|node| node.operation.schema_epoch != MONO_MIXER_EDITS_EPOCH || node.operation.name != "gegl:mono-mixer"))
         {
             return Err(CompositionError::Unsupported("unqualified witnessed Mono Mixer domain"));
         }
@@ -481,11 +496,12 @@ impl PointStack {
             && (source.len() > 2
                 || profile.channels() != 3
                 || stored != SampleEncoding::NonlinearProfile
-                || source.iter().any(|node| node.operation.schema_epoch != STACK_EDITS_EPOCH))
+                || controlled::iter(source, control).any(|node| node.operation.schema_epoch != STACK_EDITS_EPOCH))
         {
             return Err(CompositionError::Unsupported("unqualified witnessed point stack domain"));
         }
-        for node in source.iter().filter(|node| node.enabled || replace_fields) {
+        for node in controlled::iter(source, control).filter(|node| node.enabled || replace_fields) {
+            controlled::checkpoint(control)?;
             let policy = node.composition.as_ref().ok_or(CompositionError::Unsupported("missing point effect policy"))?;
             // Exact v022 originals have these malformed raw fields. They are preserved,
             // never normalized into a general enum or used to infer another operator.
@@ -641,11 +657,13 @@ impl PointStack {
             {
                 return Err(CompositionError::Unsupported("point arguments"));
             }
+            controlled::checkpoint(control)?;
             let mut args = Vec::new();
             args.try_reserve_exact(node.arguments.len()).map_err(|_| CompositionError::Invalid("point argument allocation denied"))?;
-            for arg in node.arguments.iter().filter(|_| {
+            for arg in controlled::iter(&node.arguments, control).filter(|_| {
                 !color_rotate && !channel_mixer && !mono_signed && !color_overlay && !color_exchange && !color_to_alpha && !component_extract && !alpha_clip
             }) {
+                controlled::checkpoint(control)?;
                 let value = match &arg.value {
                     FilterValue::Enum { domain, value } if alien_map && arg.name == "color-model" && domain == "gegl:alien-map/color-model" => {
                         f64::from(*value)
@@ -807,7 +825,7 @@ impl PointStack {
                 } else {
                     None
                 },
-                working: WorkingSpace::new(profile, stored, working)?,
+                working: WorkingSpace::new_with_interrupt(profile, stored, working, control)?,
                 operation,
                 prepared: operation.prepare()?,
                 opacity: f64::from_bits(node.opacity_f64_bits),
@@ -835,6 +853,7 @@ impl PointStack {
         }
         // Public get_filters and saved effect order is top-to-bottom. The scoped
         // independent stack witnesses prove the bottom effect evaluates first.
+        controlled::checkpoint(control)?;
         if witnessed {
             nodes.reverse();
         }

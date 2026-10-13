@@ -874,7 +874,13 @@ fn build() -> Vec<CommandSpec> {
         cmd!("image.imageRotation.90ccw", "90° Counter Clockwise", ["Image", "Image Rotation"], None, "{}", has_doc, |s, _| {
             turn(s, "Rotate Canvas", crate::canvas_geom::Turn::Ccw90)
         }),
-        cmd!("image.adjustments.desaturate", "Desaturate", ["Image", "Adjustments"], Some("Cmd+Shift+U"), "{}", has_pixel_layer, |s, _| {
+        cmd!("image.adjustments.desaturate", "Desaturate", ["Image", "Adjustments"], Some("Cmd+Shift+U"), "{}", has_pixel_layer, |s, p| {
+            if let Some(value) = crate::native_gray_desaturate_controlled::try_run(s, p)? {
+                return Ok(value);
+            }
+            if let Some(value) = crate::native_raster_desaturate_controlled::try_run(s, p)? {
+                return Ok(value);
+            }
             destructive_adjust(
                 s,
                 "Desaturate",
@@ -885,7 +891,7 @@ fn build() -> Vec<CommandSpec> {
                     colorize: false,
                     ranges: photocraft_doc::adjust::HueRange::defaults(),
                 },
-                &Value::Null,
+                p,
             )
         }),
         // Paint
@@ -1163,6 +1169,12 @@ fn build() -> Vec<CommandSpec> {
                     return Ok(value);
                 }
                 if kind == "curves" && let Some(value) = crate::native_gray_curves_controlled::try_run(s, p)? {
+                    return Ok(value);
+                }
+                if kind == "brightnessContrast" && let Some(value) = crate::native_gray_legacy_brightness_contrast_controlled::try_run(s, p)? {
+                    return Ok(value);
+                }
+                if kind == "brightnessContrast" && let Some(value) = crate::native_raster_legacy_brightness_contrast_controlled::try_run(s, p)? {
                     return Ok(value);
                 }
                 if kind == "levels" && let Some(value) = crate::native_raster_levels_controlled::try_run(s, p)? {

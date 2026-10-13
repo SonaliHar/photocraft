@@ -24,6 +24,10 @@ use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
 use crate::{DocState, EngineError, Result, Session};
+mod split_controlled;
+pub(crate) fn split_dispatch_preflight(session: &Session, params: &Value, background: bool) -> Result<bool> {
+    split_controlled::dispatch_preflight(session, params, background)
+}
 
 #[cfg(test)]
 mod tests;
@@ -1880,6 +1884,7 @@ fn merge_spot(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Split Channels: one grayscale document per colour and alpha channel; closes the original.
 fn split(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(value) = split_controlled::try_run(s, p)? { return Ok(value); }
     let idx = s.active_index().ok_or(EngineError::NoDocument)?;
     let doc = s.documents()[idx].doc.clone();
     let area = doc.bounds();
@@ -2696,7 +2701,7 @@ pub fn specs() -> Vec<CommandSpec> {
             options
         ),
         spec!("channel.mergeSpot", "Merge Spot Channel", [], None, r##"{"channel":index|name|{channelId:id}?=targeted or first spot}"##, has_spot, merge_spot),
-        spec!("channel.split", "Split Channels", [], None, r##"{"closeOriginal":bool=true}"##, can_split, split),
+        spec!("channel.split", "Split Channels", [], None, r##"{"closeOriginal":bool=true,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (native routes validate the captured pair)"##, can_split, split),
         spec!(
             "channel.merge",
             "Merge Channels…",

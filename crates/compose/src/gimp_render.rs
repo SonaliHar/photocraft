@@ -820,7 +820,7 @@ fn prepare<'a>(
                         && profile.to_bytes() == photocraft_cms::Builtin::Srgb.profile().to_bytes()
                         && layer.surface().is_some_and(|surface| surface.format() == photocraft_color::PixelFormat::RGBA32F);
                     Some(
-                        crate::gimp_neighborhood::OrderedStack::new(
+                        crate::gimp_neighborhood::OrderedStack::new_with_interrupt(
                             stack,
                             profile,
                             stored,
@@ -838,6 +838,7 @@ fn prepare<'a>(
                                 curves_qualified,
                                 levels_qualified,
                             ],
+                            interrupt,
                         )?
                         .with_current_point_storage(if generic_point { Some(doc.depth) } else { None })
                         .with_filter_output_precision(

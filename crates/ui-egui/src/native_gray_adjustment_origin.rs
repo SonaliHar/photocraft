@@ -1,4 +1,4 @@
-//! Runtime-only target fencing for existing Threshold, Posterize, Levels, Curves and Exposure dialogs.
+//! Runtime-only target fencing for existing Threshold, Posterize, Levels, Curves, Exposure and Brightness/Contrast dialogs.
 //! This does not qualify source metadata or replace the registered engine's native checks.
 use crate::PhotocraftApp;
 use photocraft_doc::{DocId,LayerId};
@@ -13,7 +13,7 @@ impl PartialEq for Origin {
             && match(self.snapshot.upgrade(),other.snapshot.upgrade()) {(Some(a),Some(b))=>a.shares_state(&b),(None,None)=>true,_=>false}
     }
 }
-pub(crate) fn handles(command:&str)->bool {matches!(command,"image.adjustments.threshold"|"image.adjustments.posterize"|"image.adjustments.levels"|"image.adjustments.curves"|"image.adjustments.exposure")}
+pub(crate) fn handles(command:&str)->bool {matches!(command,"image.adjustments.threshold"|"image.adjustments.posterize"|"image.adjustments.levels"|"image.adjustments.curves"|"image.adjustments.exposure"|"image.adjustments.brightnessContrast")}
 fn idle(app:&PhotocraftApp)->Result<(),String> {
     let active=app.session.active().ok_or_else(||tl!("Open a document before adjusting pixels.").to_owned())?;
     if active.doc.id.0==0 || active.revision==u64::MAX || app.ui.transform.is_some() || app.session.has_jobs() || active.floating.is_some() || active.coalesce.is_some()
@@ -72,7 +72,8 @@ pub(crate) fn validate(app:&PhotocraftApp,dialog:u64,fields:&Map<String,Value>)-
     let levels=command=="image.adjustments.levels";
     let curves=command=="image.adjustments.curves";
     let exposure=command=="image.adjustments.exposure";
-    if fields.len()>32 || fields.iter().any(|(key,value)|key.len()>128 || (!key.starts_with("__") && (!(matches!(key.as_str(),"opacity"|"target"|"layer"|"documentId"|"expectedRevision") || if levels {levels_number(key)||levels_channel(key)} else if curves {matches!(key.as_str(),"points"|"pencil"|"smooth")||levels_channel(key)} else if exposure {matches!(key.as_str(),"exposure"|"offset"|"gamma")} else {matches!(key.as_str(),"level"|"levels")}) || matches!(value,Value::String(text) if text.len()>128)))) {return Err(invalid());}
+    let brightness_contrast=command=="image.adjustments.brightnessContrast";
+    if fields.len()>32 || fields.iter().any(|(key,value)|key.len()>128 || (!key.starts_with("__") && (!(matches!(key.as_str(),"opacity"|"target"|"layer"|"documentId"|"expectedRevision") || if levels {levels_number(key)||levels_channel(key)} else if curves {matches!(key.as_str(),"points"|"pencil"|"smooth")||levels_channel(key)} else if exposure {matches!(key.as_str(),"exposure"|"offset"|"gamma")} else if brightness_contrast {matches!(key.as_str(),"brightness"|"contrast"|"legacy")} else {matches!(key.as_str(),"level"|"levels")}) || matches!(value,Value::String(text) if text.len()>128)))) {return Err(invalid());}
     if levels {
         for (key,value) in fields {
             if (levels_number(key) && value.as_f64().is_none_or(|n|!n.is_finite())) || (levels_channel(key) && !levels_record(value)) {return Err(invalid());}
@@ -92,6 +93,12 @@ pub(crate) fn validate(app:&PhotocraftApp,dialog:u64,fields:&Map<String,Value>)-
         for key in ["exposure","offset","gamma"] {
             if fields.get(key).is_some_and(|value|value.as_f64().is_none_or(|number|!number.is_finite())) {return Err(invalid());}
         }
+    }
+    if brightness_contrast {
+        for key in ["brightness","contrast"] {
+            if fields.get(key).is_some_and(|value|value.as_f64().is_none_or(|number|!number.is_finite())) {return Err(invalid());}
+        }
+        if fields.get("legacy").is_some_and(|value|!value.is_boolean()) {return Err(invalid());}
     }
     for key in ["level","levels","opacity"] {if fields.get(key).is_some_and(|value|value.as_f64().is_none_or(|n|!n.is_finite())) {return Err(invalid());}}
     if fields.get("__kind").is_some_and(|value|value.as_str()!=command.strip_prefix("image.adjustments.")) {return Err(invalid());}
@@ -118,6 +125,11 @@ pub(crate) fn prepare(app:&PhotocraftApp,dialog:u64,fields:&Map<String,Value>,mu
     let active=app.session.active().ok_or_else(||tl!("Open a document before adjusting pixels.").to_owned())?;
     // Follow the existing shell mask injection and registered native target precedence.
     let mask=||origin.layer.and_then(|id|active.doc.layer(id)).and_then(|layer|layer.mask.as_ref()).map(|mask|mask.surface.as_ref());
+    let plain_pixels=match params.get("target") {
+        Some(Value::String(target))=>target=="pixels",
+        None=>!origin.shell_mask && origin.channel==ChannelTarget::Composite && active.doc.quick_mask.is_none() && photocraft_engine::mask_view_cmds::current(active).is_none(),
+        _=>false,
+    };
     let pixels=||params.get("layer").and_then(Value::as_u64).map(LayerId).or(origin.layer)
         .and_then(|id|active.doc.layer(id)).and_then(|layer|match &layer.content {
             photocraft_doc::LayerContent::Raster(surface) if matches!(surface.format().mode,photocraft_doc::ColorMode::Rgb|photocraft_doc::ColorMode::Grayscale)=>Some(surface),
@@ -139,7 +151,8 @@ pub(crate) fn prepare(app:&PhotocraftApp,dialog:u64,fields:&Map<String,Value>,mu
             _=>None,
         },
     };
-    if surface.is_some_and(|surface|matches!(surface.format().sample,photocraft_doc::SampleType::U32|photocraft_doc::SampleType::F64)) {
+    if surface.is_some_and(|surface|matches!(surface.format().sample,photocraft_doc::SampleType::U32|photocraft_doc::SampleType::F64)
+        && (command!="image.adjustments.brightnessContrast" || (params.get("legacy").and_then(Value::as_bool)==Some(true) && (plain_pixels || (surface.format().mode==photocraft_doc::ColorMode::Grayscale && !surface.format().alpha))))) {
         let object=params.as_object_mut().filter(|object|object.len()<=if matches!(command,"image.adjustments.levels"|"image.adjustments.curves") {18} else {8}).ok_or_else(||tl!("Check the adjustment settings and try again.").to_owned())?;
         object.insert("documentId".into(),Value::String(origin.document.0.to_string()));
         object.insert("expectedRevision".into(),Value::String(origin.revision.to_string()));
@@ -250,6 +263,59 @@ mod tests {
             assert!(validate(&app,15,&malformed).is_err());
         }
         fields.insert("unknown".into(),json!(1));assert!(validate(&app,15,&fields).is_err());
+    }
+
+    #[test]
+    fn legacy_brightness_gray_mask_stamps_pair_and_narrow_raster_stays_ordinary() {
+        let mut app=PhotocraftApp::new(photocraft_engine::Session::new(),Default::default());
+        app.session.execute("file.new",json!({"width":2,"height":2})).unwrap();
+        let layer=app.session.active().unwrap().active_layer.unwrap();
+        let params=json!({"brightness":20,"contrast":-10,"legacy":true});
+        let mut fields=params.as_object().unwrap().clone();fields.insert("__command".into(),json!("image.adjustments.brightnessContrast"));
+        capture_open(&mut app,16,"image.adjustments.brightnessContrast");
+        assert_eq!(prepare(&app,16,&fields,params.clone()).unwrap(),params);
+        let mut mask=photocraft_doc::LayerMask::hide_all();
+        mask.surface=std::sync::Arc::new(photocraft_raster::Surface::new(photocraft_doc::PixelFormat::new(photocraft_doc::ColorMode::Grayscale,photocraft_doc::SampleType::F64,false)));
+        app.session.active_mut().unwrap().doc.try_resident_mut().unwrap().layer_mut(layer).unwrap().mask=Some(mask);
+        app.ui.mask_target=true;capture_open(&mut app,17,"image.adjustments.brightnessContrast");
+        let prepared=prepare(&app,17,&fields,params.clone()).unwrap();
+        assert_eq!(prepared["documentId"],json!(app.session.active().unwrap().doc.id.0.to_string()));
+        assert_eq!(prepared["legacy"],true);
+        let modern=json!({"brightness":20,"contrast":-10,"legacy":false});
+        assert_eq!(prepare(&app,17,&fields,modern.clone()).unwrap(),modern);
+        let mut smart=fields.clone();smart.insert("__smartFilter".into(),json!({"layer":layer.0,"index":0}));
+        assert_eq!(prepare(&app,17,&smart,params.clone()).unwrap(),params);
+        for key in ["brightness","contrast","legacy"] {
+            let mut malformed=fields.clone();malformed.insert(key.into(),json!([1,2]));assert!(validate(&app,17,&malformed).is_err());
+        }
+        app.session.active_mut().unwrap().revision+=1;assert!(prepare(&app,17,&fields,params).is_err());
+    }
+
+    #[test]
+    fn legacy_brightness_plain_native_pixels_get_pair_without_modern_or_smart_changes() {
+        for mode in [photocraft_doc::ColorMode::Rgb,photocraft_doc::ColorMode::Grayscale] {
+            for sample in [photocraft_doc::SampleType::U32,photocraft_doc::SampleType::F64] {
+                let mut app=PhotocraftApp::new(photocraft_engine::Session::new(),Default::default());
+                app.session.execute("file.new",json!({"width":2,"height":2})).unwrap();
+                let layer=app.session.active().unwrap().active_layer.unwrap();
+                let doc=app.session.active_mut().unwrap().doc.try_resident_mut().unwrap();doc.mode=mode;doc.depth=sample;
+                doc.layer_mut(layer).unwrap().content=photocraft_doc::LayerContent::Raster(photocraft_raster::Surface::new(photocraft_doc::PixelFormat::new(mode,sample,true)));
+                let params=json!({"brightness":20,"contrast":-10,"legacy":true});
+                let mut fields=params.as_object().unwrap().clone();fields.insert("__command".into(),json!("image.adjustments.brightnessContrast"));
+                capture_open(&mut app,18,"image.adjustments.brightnessContrast");
+                for explicit in [false,true] {
+                    let mut request=params.clone();if explicit {request["target"]=json!("pixels");}
+                    let prepared=prepare(&app,18,&fields,request).unwrap();
+                    assert_eq!(prepared["documentId"],json!(app.session.active().unwrap().doc.id.0.to_string()));
+                    assert_eq!(prepared["expectedRevision"],json!(app.session.active().unwrap().revision.to_string()));
+                }
+                let modern=json!({"brightness":20,"contrast":-10,"legacy":false});
+                assert_eq!(prepare(&app,18,&fields,modern.clone()).unwrap(),modern);
+                let mut smart=fields.clone();smart.insert("__smartFilter".into(),json!({"layer":layer.0,"index":0}));
+                assert_eq!(prepare(&app,18,&smart,params.clone()).unwrap(),params);
+                app.session.active_mut().unwrap().revision+=1;assert!(prepare(&app,18,&fields,params).is_err());
+            }
+        }
     }
 
 }

@@ -81,7 +81,17 @@ impl OrderedStack {
         }
         Ok(bytes)
     }
+    #[cfg(test)]
     pub(crate) fn new(source: &FilterStack, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, qualified: [bool; 3]) -> Result<Self> {
+        Self::new_with_interrupt(source, profile, stored, version, extent, qualified, &Interrupt::NONE)
+    }
+    pub(crate) fn new_with_interrupt(source: &FilterStack, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, qualified: [bool; 3], control: &Interrupt<'_>) -> Result<Self> {
+        control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
+        let result = Self::prepare_with_interrupt(source, profile, stored, version, extent, qualified, control);
+        control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
+        result
+    }
+    fn prepare_with_interrupt(source: &FilterStack, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, qualified: [bool; 3], control: &Interrupt<'_>) -> Result<Self> {
         if source.nodes.len() > 256 {
             return Err(CompositionError::Invalid("ordered filter stack limit"));
         }
@@ -92,6 +102,7 @@ impl OrderedStack {
         {
             return Err(CompositionError::Unsupported("structured Levels intermediate Alpha boundary needs a stack witness"));
         }
+        control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
         let mut stages = Vec::new();
         let mut output_extent = extent;
         let mut spaces = Vec::new();
@@ -107,7 +118,7 @@ impl OrderedStack {
         {
             // Disabled current nodes still require their closed typed schema;
             // activation must not be an escape from source-state validation.
-            stages.push(Stage::Point(PointStack::from_nodes_at(&source.nodes, profile, stored, version, extent)?));
+            stages.push(Stage::Point(PointStack::from_nodes_at_with_interrupt(&source.nodes, profile, stored, version, extent, control)?));
             return Ok(Self {
                 stages,
                 extent,
@@ -125,7 +136,7 @@ impl OrderedStack {
             // This source order is one qualified point pipeline, not independent
             // singleton stages. Its caller validates every canonical node/mask;
             // PointStack validates the exact epoch/envelope and schedules bottom first.
-            stages.push(Stage::Point(PointStack::from_nodes_at(&source.nodes, profile, stored, version, extent)?));
+            stages.push(Stage::Point(PointStack::from_nodes_at_with_interrupt(&source.nodes, profile, stored, version, extent, control)?));
             return Ok(Self {
                 stages,
                 extent,
@@ -137,6 +148,7 @@ impl OrderedStack {
             });
         }
         for node in source.nodes.iter().filter(|n| n.enabled) {
+            control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
             if node.operation.name == "gegl:gaussian-blur" {
                 if !qualified[0] {
                     return Err(CompositionError::Unsupported("Gaussian source color/extent domain"));
@@ -150,12 +162,12 @@ impl OrderedStack {
                         return Err(CompositionError::Unsupported("finite Gaussian raster source context"));
                     }
                     let (params, filter) = raster_gaussian::parameters(node, version)?;
-                    spaces.push(WorkingSpace::new(profile, stored, GimpSpace::LinearRgb)?);
+                    spaces.push(WorkingSpace::new_with_interrupt(profile, stored, GimpSpace::LinearRgb, control)?);
                     stages.push(Stage::GaussianFinite { working: spaces.len() - 1, params, filter });
                     continue;
                 }
                 let params = gaussian(node, version)?;
-                spaces.push(WorkingSpace::new(profile, stored, GimpSpace::LinearRgb)?);
+                spaces.push(WorkingSpace::new_with_interrupt(profile, stored, GimpSpace::LinearRgb, control)?);
                 stages.push(Stage::Gaussian { working: spaces.len() - 1, params });
             } else if node.operation.name == "gegl:box-blur" {
                 if !qualified[0] || profile.channels() != 3 || stored != SampleEncoding::NonlinearProfile || source.nodes.len() != 1 {
@@ -163,7 +175,7 @@ impl OrderedStack {
                 }
                 let radius = box_blur::radius(node, version, extent)?;
                 output_extent = photocraft_algo::gimp::neighborhood::box_blur_extent(extent, radius)?;
-                spaces.push(WorkingSpace::new(profile, stored, GimpSpace::LinearRgb)?);
+                spaces.push(WorkingSpace::new_with_interrupt(profile, stored, GimpSpace::LinearRgb, control)?);
                 stages.push(Stage::BoxBlur { working: spaces.len() - 1, radius });
             } else if node.operation.name == "gegl:motion-blur-linear" {
                 if !qualified[0] || profile.channels() != 3 || stored != SampleEncoding::NonlinearProfile || source.nodes.len() != 1 {
@@ -171,14 +183,14 @@ impl OrderedStack {
                 }
                 let params = motion_blur::parameters(node, version, extent)?;
                 output_extent = photocraft_algo::gimp::neighborhood::motion_blur_extent(extent, params)?;
-                spaces.push(WorkingSpace::new(profile, stored, GimpSpace::LinearRgb)?);
+                spaces.push(WorkingSpace::new_with_interrupt(profile, stored, GimpSpace::LinearRgb, control)?);
                 stages.push(Stage::MotionBlur { working: spaces.len() - 1, params });
             } else if node.operation.name == "gegl:pixelize" {
                 if !qualified[0] || profile.channels() != 3 || stored != SampleEncoding::NonlinearProfile || source.nodes.len() != 1 {
                     return Err(CompositionError::Unsupported("Pixelize source context"));
                 }
                 let params = pixelize::parameters(node, version, extent)?;
-                spaces.push(WorkingSpace::new(profile, stored, GimpSpace::LinearRgb)?);
+                spaces.push(WorkingSpace::new_with_interrupt(profile, stored, GimpSpace::LinearRgb, control)?);
                 stages.push(Stage::Pixelize { working: spaces.len() - 1, params });
             } else if node.operation.name == "gegl:median-blur" {
                 let gray = node.operation.schema_epoch == MEDIAN_GRAY_EPOCH;
@@ -206,7 +218,7 @@ impl OrderedStack {
                 }
                 stages.push(Stage::Levels(Box::new(crate::gimp_levels::LevelsNode::new(node, profile, stored, version)?)));
             } else {
-                stages.push(Stage::Point(PointStack::from_nodes_at(std::slice::from_ref(node), profile, stored, version, extent)?));
+                stages.push(Stage::Point(PointStack::from_nodes_at_with_interrupt(std::slice::from_ref(node), profile, stored, version, extent, control)?));
             }
         }
         Ok(Self {

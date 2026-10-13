@@ -1129,6 +1129,16 @@ pub struct XcfSourcePageDraft {
     pub offset: u32,
 }
 
+/// View-only filter stack cursor; persisted pages grant no edit authority.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct XcfFilterStackPage {
+    pub document: u64,
+    pub revision: u64,
+    pub layer: u64,
+    pub offset: usize,
+}
+
 /// View-only linked placement/interpolation proposal; never source authority.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -1225,6 +1235,8 @@ pub struct UiState {
     pub xcf_graph_page_draft: Option<XcfGraphPageDraft>,
     #[serde(default)]
     pub xcf_source_page_draft: Option<XcfSourcePageDraft>,
+    #[serde(default)]
+    pub xcf_filter_stack_page: Option<XcfFilterStackPage>,
     #[serde(default)]
     pub xcf_mask_geometry_draft: Option<XcfMaskGeometryDraft>,
     /// Imported underline selection draft; only the engine can apply it.
@@ -1498,6 +1510,7 @@ impl Default for UiState {
             xcf_link_geometry_draft: None,
             xcf_graph_page_draft: None,
             xcf_source_page_draft: None,
+            xcf_filter_stack_page: None,
             xcf_mask_geometry_draft: None,
             xcf_underline_draft: None,
             xcf_color_rotate_draft: None,

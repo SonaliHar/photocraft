@@ -9,6 +9,10 @@ use photocraft_io::ExportOptions;
 
 use crate::AutomationError;
 
+#[path = "files/protected_save.rs"]
+mod protected_save;
+pub use protected_save::{save_protected, save_protected_with_interrupt};
+
 /// Result of opening a file.
 pub struct Opened {
     pub document: Document,

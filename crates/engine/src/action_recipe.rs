@@ -8,7 +8,7 @@ fn relative(id:&str)->bool {
         |"layer.layerMask.revealAll"|"layer.layerMask.hideAll"|"layer.layerMask.revealSelection"
         |"layer.layerMask.hideSelection"|"layer.layerMask.fromTransparency"|"layer.layerMask.delete"|"layer.layerMask.apply"
         |"xcf.floating.anchor"|"xcf.floating.toLayer"|"xcf.floating.delete"
-        |"image.adjustments.threshold"|"image.adjustments.posterize"|"image.adjustments.invert"|"image.adjustments.levels"|"image.adjustments.curves"|"image.adjustments.exposure"|"layer.new.layer"|"layer.duplicate"
+        |"image.adjustments.threshold"|"image.adjustments.posterize"|"image.adjustments.invert"|"image.adjustments.levels"|"image.adjustments.curves"|"image.adjustments.exposure"|"image.adjustments.brightnessContrast"|"image.adjustments.desaturate"|"layer.new.layer"|"layer.duplicate"
         |"select.modify.feather"|"select.modify.expand"|"select.modify.contract"|"select.modify.border"|"select.modify.smooth")
 }
 fn canonical(value:&Value,nonzero:bool)->bool {

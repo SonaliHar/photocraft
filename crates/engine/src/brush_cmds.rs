@@ -441,6 +441,10 @@ pub(crate) fn doc_cmyk_space(s: &Session) -> Option<std::sync::Arc<photocraft_co
 
 mod stroke_controlled;
 mod live_begin_controlled;
+mod advanced_native_admission;
+pub(crate) fn advanced_dispatch_preflight(session: &Session, command: &str, params: &Value) -> Result<()> {
+    advanced_native_admission::dispatch_preflight(session, command, params, &photocraft_raster::Interrupt::NONE)
+}
 /// Borrowed validation before dispatcher normalization or parameter cloning.
 pub(crate) fn stroke_dispatch_preflight(session: &Session, command: &str, params: &Value, background: bool) -> Result<()> {
     stroke_controlled::dispatch_preflight(session, command, params, background)
@@ -938,6 +942,7 @@ fn pct(p: &Value, k: &str, d: f32) -> f32 {
 
 fn mixer_brush(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "paint.mixerBrush";
+    advanced_native_admission::target_preflight(s, cmd, p, &photocraft_raster::Interrupt::NONE)?;
     let pts = parse_points(p, cmd)?;
     let brush = resolve_brush(s, p, cmd)?;
     // The brush's Mixer Brush options, overridden by the scalar params.
@@ -950,6 +955,7 @@ fn mixer_brush(s: &mut Session, p: &Value) -> Result<Value> {
         sample_all_layers: flag(p, "sampleAllLayers", bm.sample_all_layers),
     };
     let sample_all = m.sample_all_layers;
+    advanced_native_admission::mixer_source_preflight(&s.active().ok_or(EngineError::NoDocument)?.doc, sample_all, &photocraft_raster::Interrupt::NONE)?;
     let (clean, load_after) = (flag(p, "cleanAfterStroke", true), flag(p, "loadAfterStroke", true));
     let mut state = s.tools.mixer.clone();
     if load_after || state.reservoir.is_none() {
@@ -988,6 +994,7 @@ fn mixer_brush(s: &mut Session, p: &Value) -> Result<Value> {
 /// channel or Quick Mask `target` is refused rather than recolouring the layer instead.
 fn color_replacement_setup(s: &Session, p: &Value) -> Result<(Stroke, ReplaceSettings, photocraft_doc::LayerId)> {
     let cmd = "paint.colorReplacement";
+    advanced_native_admission::target_preflight(s, cmd, p, &photocraft_raster::Interrupt::NONE)?;
     if let Some(t) = p.get("target").filter(|t| t.as_str() != Some("pixels")) {
         return Err(bad(cmd, format!("Color Replacement paints layer pixels only (`target` {t} is not \"pixels\")")));
     }

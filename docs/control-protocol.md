@@ -577,6 +577,26 @@ before publication. `xcf.inspect` and changed-command responses expose current
 matrix bits in the same string form, preserving all 64 bits across JSON clients.
 
 
+## Pending import recovery
+
+The GIMP Filters panel exposes stacks in pages of 64 rows. `ui.set` accepts
+`xcfFilterStackPage` with exactly `document`, `layer`, `revision`, and `offset`;
+identities accept exact U64 values or canonical decimal strings, and `offset`
+must be a multiple of 64 from 0 through 960. `null` clears the cursor.
+`ui.inspect` returns its identities as decimal strings. A restored or stale page
+resets when the panel resolves the current stack; row actions still capture and
+validate their own current document, filter identity and revision.
+
+Pending decoded imports that could not enter the profile-question queue can be
+released with the registered engine command `file.open.discardPending`.
+It accepts an empty object to discard all private pending imports, or
+`{"heldId":"7"}` to discard one canonical nonzero decimal-string identity.
+The result contains `discarded` and, for a single import, `heldId`. Unknown
+identities and malformed fields fail before removal. The command uses the normal
+authorization gate, needs no filesystem grant of its own, and preserves open
+tabs, document views and Undo/Redo. It does not clear the shell's visible profile
+question queue; the UI's Cancel action coordinates that queue separately.
+
 ## Atomic XCF linked-image substitution
 
 `xcf.link.substitute` is a registered engine command for an explicit Reduced

@@ -54,3 +54,54 @@ pub(crate) fn finish_pixel(pixel: [f64; 4], poll: &mut impl FnMut(WideWork) -> R
     poll(WideWork::SampleUnits(0))?;
     Ok(pixel)
 }
+
+
+pub(super) fn checkpoint(control: &Interrupt<'_>) -> Result<()> {
+    control.check().map_err(|_| RasterInputError::Cancelled.into())
+}
+pub(super) fn preparation<T>(control: &Interrupt<'_>, operation: impl FnOnce(&Interrupt<'_>) -> Result<T>) -> Result<T> {
+    let stopped = AtomicBool::new(false);
+    let cancel = || {
+        if control.cancelled() { stopped.store(true, Ordering::Relaxed); }
+        stopped.load(Ordering::Relaxed)
+    };
+    let latched = Interrupt::cancel_only(&cancel);
+    checkpoint(&latched)?;
+    let result = operation(&latched);
+    checkpoint(&latched)?;
+    result
+}
+/// Stop borrowed envelope scans as soon as cancellation is observed. Every
+/// preparation entry is fenced, so a stopped scan cannot publish a plan or
+/// substitute a policy refusal for the caller's cancellation.
+pub(super) fn iter<'a, T>(values: &'a [T], control: &'a Interrupt<'_>) -> impl Iterator<Item = &'a T> {
+    let mut values = values.iter();
+    std::iter::from_fn(move || if control.cancelled() { None } else { values.next() })
+}
+
+#[cfg(test)]
+mod preparation_tests {
+    use super::*;
+    #[test]
+    fn cancelled_point_preparation_refuses_before_empty_stack_publication() {
+        let cancel = || true;
+        let result = crate::gimp_filters::PointStack::from_nodes_with_interrupt(
+            &[], photocraft_cms::Builtin::Srgb.profile(), photocraft_doc::SampleEncoding::NonlinearProfile, 22,
+            &Interrupt::cancel_only(&cancel),
+        );
+        assert!(matches!(result, Err(CompositionError::Raster(RasterInputError::Cancelled))));
+    }
+    #[test]
+    fn envelope_scan_stops_and_fence_preserves_cancellation() {
+        let polls = std::sync::atomic::AtomicUsize::new(0);
+        let cancel = || polls.fetch_add(1, Ordering::Relaxed) >= 3;
+        let control = Interrupt::cancel_only(&cancel);
+        let count = std::cell::Cell::new(0);
+        let result = preparation(&control, |control| {
+            for _ in iter(&[0u8; 1024], control) { count.set(count.get() + 1); }
+            Ok(())
+        });
+        assert!(count.get() < 1024);
+        assert!(matches!(result, Err(CompositionError::Raster(RasterInputError::Cancelled))));
+    }
+}

@@ -140,7 +140,7 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 38] = [
+pub const UI_SET_FIELDS: [&str; 39] = [
     "tool",
     "panels",
     "dock",
@@ -168,6 +168,7 @@ pub const UI_SET_FIELDS: [&str; 38] = [
     "gradientClassic",
     "xcfUnderlineDraft",
     "xcfColorRotateDraft",
+    "xcfFilterStackPage",
     "xcfItemSetDraft",
     "eyedropperSampleSize",
     "eyedropperSample",
@@ -278,6 +279,28 @@ fn color_rotate_draft_field(p: &Value) -> std::result::Result<Option<Option<crat
 }
 
 /// Whole-value view replacement, bounded before cloning/deserializing payloads.
+fn filter_stack_page_field(p: &Value) -> std::result::Result<Option<Option<crate::state::XcfFilterStackPage>>, String> {
+    let Some(value) = p.get("xcfFilterStackPage") else { return Ok(None) };
+    if value.is_null() { return Ok(Some(None)); }
+    let object = value.as_object().ok_or("xcfFilterStackPage must be an object or null")?;
+    if object.len() != 4 || object.keys().any(|key| !matches!(key.as_str(), "document" | "layer" | "revision" | "offset")) {
+        return Err("filter stack page requires exactly document, layer, revision and offset".into());
+    }
+    let identity = |key: &str| -> Result<u64, String> {
+        let value = object.get(key).ok_or_else(|| format!("missing {key}"))?;
+        let number = if let Some(text) = value.as_str() {
+            if text.is_empty() || text.len()>20 || (text.len()>1 && text.starts_with('0')) || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(format!("{key} must be a canonical decimal U64"));
+            }
+            text.parse::<u64>().map_err(|_| format!("{key} exceeds U64"))?
+        } else { value.as_u64().ok_or_else(|| format!("{key} must be an exact U64 or decimal string"))? };
+        if number==0 && key!="revision" { return Err(format!("{key} must be nonzero")); }
+        Ok(number)
+    };
+    let offset=object.get("offset").and_then(Value::as_u64).filter(|value| *value<=960 && *value%64==0).ok_or("filter stack offset must be a multiple of 64 from 0 through 960")?;
+    Ok(Some(Some(crate::state::XcfFilterStackPage {document:identity("document")?,layer:identity("layer")?,revision:identity("revision")?,offset:offset as usize})))
+}
+
 fn item_set_draft_field(p: &Value) -> std::result::Result<Option<Option<crate::state::XcfItemSetDraft>>, String> {
     let Some(value) = p.get("xcfItemSetDraft") else { return Ok(None) };
     if value.is_null() { return Ok(Some(None)); }
@@ -701,6 +724,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 let gradient_classic = bool_field(p, "gradientClassic")?;
                 let underline_draft = underline_draft_field(p)?;
                 let color_rotate_draft = color_rotate_draft_field(p)?;
+                let filter_stack_page = filter_stack_page_field(p)?;
                 let item_set_draft = item_set_draft_field(p)?;
                 // The Eyedropper's options bar (#1649): Sample Size, Sample, Show Sampling Ring.
                 let eyedropper_size = match p.get("eyedropperSampleSize") {
@@ -847,6 +871,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 // Apply (nothing below can fail).
                 if let Some(draft) = color_rotate_draft {
                     app.ui.xcf_color_rotate_draft = draft;
+                }
+                if let Some(page) = filter_stack_page {
+                    app.ui.xcf_filter_stack_page = page;
                 }
                 if let Some(draft) = item_set_draft {
                     app.ui.xcf_item_set_draft = draft;
@@ -1492,6 +1519,9 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Result<Value, String
         "textEdit": app.ui.text_edit,
         "xcfUnderlineDraft": app.ui.xcf_underline_draft,
         "xcfColorRotateDraft": app.ui.xcf_color_rotate_draft,
+        "xcfFilterStackPage": app.ui.xcf_filter_stack_page.as_ref().map(|page|json!({
+            "document":page.document.to_string(),"layer":page.layer.to_string(),"revision":page.revision.to_string(),"offset":page.offset,
+        })),
         "xcfItemSetDraft": app.ui.xcf_item_set_draft.as_ref().map(|draft| json!({
             "document": draft.document.to_string(), "layer": draft.layer.to_string(), "revision": draft.revision.to_string(),
             "setId": draft.set_id.to_string(), "name": draft.name.chars().take(256).collect::<String>(),
@@ -3289,5 +3319,31 @@ mod item_set_draft_tests {
         let Outcome::Done(value) = handle(&mut app, &egui::Context::default(), &request) else { panic!("expected immediate refusal") };
         assert_eq!(value["ok"], false);
         assert_eq!(app.ui, before);
+    }
+}
+
+#[cfg(test)]
+mod filter_stack_page_tests {
+    use super::*;
+    #[test]
+    fn exact_cursor_round_trip_and_malformed_mixed_request_is_atomic() {
+        let mut app=PhotocraftApp::new(photocraft_engine::Session::new(),crate::Services::default());
+        let ctx=egui::Context::default();
+        let page=json!({"document":"18446744073709551615","layer":"9007199254740993","revision":"0","offset":960});
+        let (request,_)=ControlRequest::new("ui.set",json!({"xcfFilterStackPage":page}));
+        let Outcome::Done(result)=handle(&mut app,&ctx,&request) else {panic!("expected immediate view update")};
+        assert_eq!(result["ok"],true);
+        let stored=app.ui.xcf_filter_stack_page.as_ref().unwrap();
+        assert_eq!(stored.document,u64::MAX);assert_eq!(stored.layer,9_007_199_254_740_993);assert_eq!(stored.offset,960);
+        for offset in [json!(63),json!(1024),json!(-64),json!(64.5),json!("64")] {
+            let before=app.ui.clone();
+            let (request,_)=ControlRequest::new("ui.set",json!({"gradientClassic":!before.gradient_classic,"xcfFilterStackPage":{"document":"1","layer":"2","revision":"0","offset":offset}}));
+            let Outcome::Done(result)=handle(&mut app,&ctx,&request) else {panic!("expected immediate refusal")};
+            assert_eq!(result["ok"],false);assert_eq!(app.ui,before);
+        }
+        assert!(filter_stack_page_field(&json!({"xcfFilterStackPage":{"document":"01","layer":"2","revision":"0","offset":0}})).is_err());
+        let (request,_)=ControlRequest::new("ui.set",json!({"xcfFilterStackPage":null}));
+        let Outcome::Done(result)=handle(&mut app,&ctx,&request) else {panic!("expected immediate view clear")};
+        assert_eq!(result["ok"],true);assert!(app.ui.xcf_filter_stack_page.is_none());
     }
 }

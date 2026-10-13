@@ -12,7 +12,7 @@ const STALE:&str="xcf.filter.stack.ui.stale-target";
 const CONTEXT:&str="xcf.filter.stack.ui.context";
 struct Target {document:DocId,revision:u64,owner:LayerId,filter:FilterId,index:usize,stack_revision:u64,snapshot:WeakDocumentSnapshot}
 struct Row {target:Target,caption:String,candidate:bool}
-struct View {rows:Vec<Row>,len:usize,unlocked:bool}
+struct View {rows:Vec<Row>,len:usize,unlocked:bool,page:crate::state::XcfFilterStackPage}
 #[derive(Clone,Copy)]
 enum Action {Move(usize),Remove}
 
@@ -47,6 +47,11 @@ fn metadata_candidate(node:&photocraft_doc::xcf_filters::FilterNode)->bool {
     node.operation.name.len()<=256 && node.operation.stored_version.len()<=64 && node.operation.schema_epoch.len()<=256
         && node.arguments.len()<=64 && photocraft_engine::xcf_filter_cmds::scalar_edit_candidate(node)
 }
+const PAGE_SIZE:usize=64;
+fn page_offset(page:Option<&crate::state::XcfFilterStackPage>,document:DocId,revision:u64,owner:LayerId,count:usize)->usize {
+    page.filter(|page|page.document==document.0 && page.revision==revision && page.layer==owner.0
+        && page.offset<1024 && page.offset<count && page.offset%PAGE_SIZE==0).map_or(0,|page|page.offset)
+}
 fn view(app:&PhotocraftApp,owner:LayerId)->Result<Option<View>,String> {
     let Some(active)=app.session.active() else {return Ok(None)};
     let Some(state)=active.doc.xcf_state.as_ref() else {return Ok(None)};
@@ -56,13 +61,15 @@ fn view(app:&PhotocraftApp,owner:LayerId)->Result<Option<View>,String> {
     if !state.filter_stacks.iter().any(|stack|stack.owner==ItemRef::Layer(owner)) {return Ok(None);}
     let stack=stack(&active.doc,owner)?;if stack.nodes.is_empty() {return Ok(None);}
     let unlocked=unlocked(&active.doc,owner)?;
-    let mut rows=Vec::new();rows.try_reserve_exact(stack.nodes.len().min(64)).map_err(|_|LIMIT)?;
+    let offset=page_offset(app.ui.xcf_filter_stack_page.as_ref(),active.doc.id,active.revision,owner,stack.nodes.len());
+    let page=crate::state::XcfFilterStackPage {document:active.doc.id.0,revision:active.revision,layer:owner.0,offset};
+    let mut rows=Vec::new();rows.try_reserve_exact(stack.nodes.len().saturating_sub(offset).min(PAGE_SIZE)).map_err(|_|LIMIT)?;
     let snapshot=active.doc.downgrade();
-    for (index,node) in stack.nodes.iter().take(64).enumerate() {
+    for (index,node) in stack.nodes.iter().enumerate().skip(offset).take(PAGE_SIZE) {
         rows.push(Row {target:Target {document:active.doc.id,revision:active.revision,owner,filter:node.id,index,stack_revision:stack.revision,snapshot:snapshot.clone()},
             caption:caption(node)?,candidate:metadata_candidate(node)});
     }
-    Ok(Some(View {rows,len:stack.nodes.len(),unlocked}))
+    Ok(Some(View {rows,len:stack.nodes.len(),unlocked,page}))
 }
 fn validate(app:&PhotocraftApp,target:&Target)->Result<usize,String> {
     let active=app.session.active().ok_or(STALE)?;
@@ -89,7 +96,9 @@ fn run(app:&mut PhotocraftApp,target:&Target,action:Action)->Result<Value,String
     app.run(command,params)
 }
 pub(crate) fn properties(app:&mut PhotocraftApp,ui:&mut egui::Ui,owner:LayerId) {
-    let view=match view(app,owner) {Ok(Some(view))=>view,Ok(None)=>return,Err(error)=>{ui.label(error);return;}};
+    let view=match view(app,owner) {Ok(Some(view))=>view,Ok(None)=>{app.ui.xcf_filter_stack_page=None;return;},Err(error)=>{ui.label(error);return;}};
+    // Restored offsets are presentation only. Fresh row targets always capture the live snapshot.
+    app.ui.xcf_filter_stack_page=Some(view.page.clone());
     let context=app.ui.transform.is_none() && !app.session.has_jobs() && app.session.active().is_some_and(|state|
         state.floating.is_none() && state.revision<u64::MAX && state.doc.xcf_state.as_ref().is_none_or(|xcf|xcf.floating.is_none()));
     let move_enabled=context && photocraft_engine::commands::find(MOVE).is_some_and(|command|(command.enabled)(&app.session).is_ok());
@@ -109,7 +118,17 @@ pub(crate) fn properties(app:&mut PhotocraftApp,ui:&mut egui::Ui,owner:LayerId) 
             if !view.unlocked {ui.label(tl!("Layer content is locked"));}else if !row.candidate {ui.label(tl!("Filter editing is unavailable"));}
         });
     }
-    if view.len>view.rows.len() {ui.label(format!("{}: {}/{}",tl!("GIMP Filters"),view.rows.len(),view.len));}
+    if view.len>PAGE_SIZE {
+        ui.horizontal(|ui| {
+            let previous=view.page.offset.checked_sub(PAGE_SIZE);
+            let next=view.page.offset.checked_add(PAGE_SIZE).filter(|offset|*offset<view.len && *offset<1024);
+            let mut offset=None;
+            if ui.add_enabled(previous.is_some(),egui::Button::new(tl!("Previous"))).clicked() {offset=previous;}
+            ui.label(format!("{}–{} / {}",view.page.offset+1,view.page.offset+view.rows.len(),view.len));
+            if ui.add_enabled(next.is_some(),egui::Button::new(tl!("Next"))).clicked() {offset=next;}
+            if let Some(offset)=offset {let mut page=view.page.clone();page.offset=offset;app.ui.xcf_filter_stack_page=Some(page);}
+        });
+    }
     if let Some((index,action))=action {
         let result=view.rows.get(index).ok_or_else(||LIMIT.to_string()).and_then(|row|run(app,&row.target,action));
         if let Err(error)=result {app.ui.status=error;app.ui.status_error=true;}
@@ -195,4 +214,35 @@ mod tests {
             let retained=state.floating.as_ref().unwrap();assert_eq!((retained.layer,retained.offset,retained.revision),(preview.layer,preview.offset,preview.revision));assert!(std::sync::Arc::ptr_eq(&retained.parts,&preview.parts));
         }
     }
+    #[test]
+    fn later_pages_keep_absolute_indices_and_last_page_has_bounded_rows() {
+        let (mut app,owner)=fixture();
+        let doc=app.session.active_mut().unwrap().doc.try_resident_mut().unwrap();
+        let stack=&mut doc.xcf_state.as_mut().unwrap().filter_stacks[0];
+        let template=stack.nodes[0].clone();stack.nodes.clear();
+        for index in 0..1024 {let mut node=template.clone();node.id=FilterId(1000+index as u64);stack.nodes.push(node);}
+        let active=app.session.active().unwrap();
+        app.ui.xcf_filter_stack_page=Some(crate::state::XcfFilterStackPage {document:active.doc.id.0,revision:active.revision,layer:owner.0,offset:64});
+        let second=view(&app,owner).unwrap().unwrap();assert_eq!(second.rows.len(),64);
+        assert_eq!(second.rows[0].target.index,64);assert_eq!(second.rows[0].target.filter,FilterId(1064));
+        app.ui.xcf_filter_stack_page.as_mut().unwrap().offset=960;
+        let mut last=view(&app,owner).unwrap().unwrap();assert_eq!(last.rows.len(),64);assert_eq!(last.rows.last().unwrap().target.index,1023);
+        let target=last.rows.remove(0).target;
+        app.session.active_mut().unwrap().revision+=1;assert!(run(&mut app,&target,Action::Remove).is_err());
+        assert_eq!(view(&app,owner).unwrap().unwrap().page.offset,0);
+    }
+    #[test]
+    fn restored_invalid_offsets_and_other_target_pages_reset_to_first_page() {
+        let page=crate::state::XcfFilterStackPage {document:7,revision:3,layer:9,offset:64};
+        assert_eq!(page_offset(Some(&page),DocId(7),3,LayerId(9),65),64);
+        for offset in [1,65,1024,usize::MAX] {
+            let mut invalid=page.clone();invalid.offset=offset;
+            assert_eq!(page_offset(Some(&invalid),DocId(7),3,LayerId(9),1024),0);
+        }
+        assert_eq!(page_offset(Some(&page),DocId(8),3,LayerId(9),1024),0);
+        assert_eq!(page_offset(Some(&page),DocId(7),4,LayerId(9),1024),0);
+        assert_eq!(page_offset(Some(&page),DocId(7),3,LayerId(10),1024),0);
+        assert_eq!(page_offset(Some(&page),DocId(7),3,LayerId(9),64),0);
+    }
+
 }
