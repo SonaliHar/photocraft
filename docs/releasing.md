@@ -9,6 +9,12 @@ This is PhotoCraft's implementation of the shared
 [release playbook](release-playbook.md). User-facing names say **PhotoCraft**. Files, binaries
 and ids stay lowercase (`photocraft-<version>-<platform>-<arch>.<ext>`, `ai.storyteller.photocraft`).
 
+For local, unpublished Windows/Linux x64 installers from a working tree, see
+[development installers](../packaging/development/README.md). This route uses an Ubuntu 22.04
+container and unsigned MinGW/NSIS Windows packages; it does not invoke or replace the official
+release workflow. AppImages retain bundled licenses; set `PHOTOCRAFT_APPIMAGE_UPDATE_INFO=''`
+when packaging an unpublished build to omit the release update feed.
+
 ## Cutting a release
 
 1. **Bump the version** on `main`. The only place it lives is `[workspace.package] version`

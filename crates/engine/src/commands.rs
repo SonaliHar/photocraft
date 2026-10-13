@@ -1197,6 +1197,9 @@ fn build() -> Vec<CommandSpec> {
     // The dispatch guard's unit test needs a command that panics on purpose (REL-3).
     #[cfg(test)]
     v.push(test_panic_command());
+    v.extend(crate::ai_cmds::specs());
+    v.extend(crate::ai_runtime_cmds::specs());
+    v.extend(crate::ai_upscale_cmds::specs());
     v
 }
 

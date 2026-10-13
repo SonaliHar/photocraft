@@ -51,7 +51,7 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
   - `ui.dialog.open {kind:"colorPicker", textStyle:{kind:"character"|"paragraph", id:u32}}` opens the shared Color Picker for an explicitly enabled Color attribute in Style Options. It opens the matching style panel/editor after validation; inherited colors must first be enabled through the existing style command. The picker reports its bound document/revision/style under `__textStyleColor` in `ui.inspect`. Changes preview in an isolated document; OK runs the existing style `set` command once, Cancel changes nothing. Document edits/switches or closed/changed Style Options discard the picker. `textStyle` cannot be combined with `parent`, `effect`, `field` or `target`.
   - The shell's own dialogs (Window › Workspace › New Workspace / Delete Workspace, View › Pixel Aspect Ratio › Custom Pixel Aspect Ratio…, View › Show › Show Extras Options…, View › 32-bit Preview Options…) are listed in `ui.inspect`'s `dialogs` with the id `"shell"` (at most one is open). `ui.dialog.set`, `ui.dialog.confirm` and `ui.dialog.cancel` take `{"dialog": "shell"}`; OK runs the dialog's command and keeps the dialog open if it fails
   - Layer Style (`layerStyle {effect?}` opens on that effect kind): the fields hold the dialog's whole state, so agents read and drive it like a user. `effects` lists every effect instance in the layer's order as `{id, kind, on, params, fx}` (`fx` is the effect snapshot the dialog loaded; OK edits that snapshot with `params`, so anything the dialog doesn't model survives). `selected` picks the page (`blendingOptions` or an instance id), `preview` (default on) gates the live canvas preview, `p:blendingOptions` edits blend mode/opacity/fill opacity, and `patternList` names the usable patterns. OK replaces the layer's effects in one step (`layer.layerStyle.replace`); Cancel discards. "New Style…" saves the pending state via `style.presets.new {effects}`, a swatch click applies a style preset, and Make/Reset Default use `layer.layerStyle.makeDefault` / `layer.layerStyle.defaultFor`
-  - Preferences (`ui.menu.invoke {id: "edit.preferences.interface"}`) exposes the sections in its `values` field. Apply (`ui.dialog.apply`) and OK (`ui.dialog.confirm`) on Preferences are refused over control because automation denies whole-preferences updates and filesystem-bearing preference sections. A refused `ui.dialog.apply` returns an error and keeps the dialog open; a refused `ui.dialog.confirm` returns an error but closes and removes the dialog. `ui.dialog.cancel` closes the dialog without saving. Individual safe preferences can instead be changed with `engine.execute` using `prefs.set` (e.g. `{"command": "prefs.set", "params": {"path": "interface.showTooltips", "value": false}}`). Settings marked for the next launch still require a restart.
+  - Preferences (`ui.menu.invoke {id: "edit.preferences.interface"}`) exposes the sections in its `values` field. Apply (`ui.dialog.apply`) and OK (`ui.dialog.confirm`) on Preferences are refused over control because automation denies whole-preferences updates and filesystem-bearing preference sections. A refused `ui.dialog.apply` returns an error and keeps the dialog open; a refused `ui.dialog.confirm` returns an error and keeps the draft open. `ui.dialog.cancel` closes the dialog without saving. Individual safe preferences can instead be changed with `engine.execute` using `prefs.set` (e.g. `{"command": "prefs.set", "params": {"path": "interface.showTooltips", "value": false}}`). Settings marked for the next launch still require a restart.
   - Edit › Fill… (`ui.menu.invoke {id: "edit.fill"}`, Shift+F5, Shift+Backspace) opens the Fill dialog; its fields are `edit.fill`'s params (`contents`, `color`, `pattern`, `colorAdaptation`, `mode`, `opacity`, `preserveTransparency`), and OK remembers them in the preferences (`dialogs["edit.fill"]`).
   - A pixel tool pressed on a type, shape, Smart Object or fill layer (e.g. through `ui.pointer`) opens the "Rasterize?" prompt instead of painting: a dialog with `__rasterize` (`type|shape|smartObject|fill`), `message`, `layer`, `tool` and `at`. `ui.dialog.confirm` runs the `layer.rasterize.*` command and then paints at `at` (two history states, `{"rasterized", "painted"}`); `ui.dialog.cancel` does nothing.
 - `ui.window.open {document?}` / `ui.window.close {window}`: extra document windows
@@ -70,6 +70,18 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
 - `app.quit`
 
 ## Engine commands
+
+Native AI commands use the same engine registry as desktop menus.
+`edit.generateImage` defaults to direct requested resolution; optional
+`resolutionMode: "reduced"` selects a bounded working copy and `samplingSteps`
+sets ComfyUI steps (1–100, generation default25). `image.aiUpscale` accepts
+`scale` or aspect-preserving `outputSize` and reads the original visible pixels.
+Both return a preview through a worker job. Poll `jobs.list` and `ai.result.list`;
+`ai.result.apply` changes the captured document explicitly, while
+`ai.result.openDocument` copies the captured source/result into a fresh document,
+including a stale result. See [AI workflows](ai-usage.md) for parameters,
+provider requirements and hardware limits. Browser AI commands are disabled.
+
 
 Change the UI language without restarting with `prefs.set`:
 `{"path":"interface.language","value":"fr"}`. Supported codes and preview/apply behaviour

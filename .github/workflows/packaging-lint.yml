@@ -37,6 +37,8 @@ jobs:
         run: shellcheck packaging/*.sh packaging/*/*.sh packaging/linux/AppRun
       - name: AppImage AppRun desktop integration
         run: bash packaging/linux/apprun-test.sh
+      - name: AppImage licenses and update feeds
+        run: bash packaging/linux/package-test.sh
       - name: PowerShell
         shell: pwsh
         run: |
