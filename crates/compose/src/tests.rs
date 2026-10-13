@@ -1727,6 +1727,22 @@ fn modern_brightness_matches_photoshop() {
         let got = adjust::modern_contrast(adjust::modern_brightness(x as f32 / 255.0, 25.0), 30.0) * 255.0;
         assert!((got - want as f32).abs() <= 1.0, "+25/+30 x={x}: got {got:.2} want {want}");
     }
+    // psd-tools' brightnesscontrast_rgb.psd masks four layers to their own columns: the brightness
+    // each applies, read back through its (exact) contrast curve.
+    // (brightness, tolerance in levels, [(input level, Photoshop's output level)])
+    type Measured = (f32, f32, &'static [(u32, f32)]);
+    let measured: [Measured; 4] = [
+        (-95.0, 1.5, &[(24, 13.3), (64, 35.1), (96, 52.9), (128, 69.7), (160, 89.6), (192, 114.4), (224, 151.6)]),
+        (-31.0, 1.5, &[(24, 20.3), (64, 53.4), (96, 79.0), (128, 105.6), (160, 132.3), (192, 161.8), (224, 197.4)]),
+        (23.0, 1.5, &[(24, 27.9), (64, 74.0), (96, 110.9), (128, 147.7), (160, 182.9), (192, 213.7), (224, 239.6)]),
+        (150.0, 6.0, &[(24, 60.3), (64, 162.1), (96, 214.5), (128, 238.4), (160, 248.9)]),
+    ];
+    for (b, tol, points) in measured {
+        for &(x, want) in points {
+            let got = adjust::modern_brightness(x as f32 / 255.0, b) * 255.0;
+            assert!((got - want).abs() <= tol, "brightness {b} x={x}: got {got:.1} want {want}");
+        }
+    }
     // Endpoints and the zero slider are exact.
     assert_eq!(adjust::modern_brightness(0.0, 120.0), 0.0);
     assert_eq!(adjust::modern_brightness(1.0, -120.0), 1.0);
