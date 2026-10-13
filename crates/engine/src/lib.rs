@@ -11,6 +11,7 @@ pub mod actions_cmds;
 pub mod actions_edit_cmds;
 pub mod adjust_cmds;
 pub mod adjust_params;
+pub mod ai;
 pub mod align_cmds;
 mod allocation;
 pub mod analysis_cmds;
@@ -390,6 +391,8 @@ impl Default for ToolState {
 
 #[derive(Default)]
 pub struct Session {
+    /// Optional AI backend, injected by the host. Absent by default, including on wasm.
+    ai_provider: Option<Arc<dyn ai::AiProvider>>,
     docs: Vec<DocState>,
     active: Option<usize>,
     pub tools: ToolState,
@@ -479,6 +482,16 @@ pub fn move_item<T>(v: &mut Vec<T>, i: usize, to: usize) -> Option<usize> {
 }
 
 impl Session {
+    /// Install or remove the AI backend. Existing worker clones keep their provider.
+    pub fn set_ai_provider(&mut self, p: Option<Arc<dyn ai::AiProvider>>) {
+        self.ai_provider = p;
+    }
+
+    /// Clone the backend handle for a job worker without borrowing the session.
+    pub fn ai_provider(&self) -> Option<Arc<dyn ai::AiProvider>> {
+        self.ai_provider.clone()
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
