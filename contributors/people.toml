@@ -155,5 +155,6 @@ sync_github_name = true
 display_name = "VanTan"
 sync_github_name = false
 
-[people.Higgs32584]
+[people.yeniufuklar-com]
+real_name = "Ufuk Efe"
 sync_github_name = true
