@@ -890,7 +890,9 @@ fn unusable_says_why_a_result_is_rejected() {
     let (w, h) = (20u32, 10u32);
     let n = (w * h) as usize;
     let inside = |i: usize| i % w as usize >= 10;
-    let reference = Reference { original: vec![0.5; n * 3], coverage: (0..n).map(|i| if inside(i) { 1.0 } else { 0.0 }).collect(), w, h };
+    // Textured around the selection (0.3/0.7 checkerboard, mean 0.5), so "unchanged" is judged.
+    let original: Vec<f32> = (0..n).flat_map(|i| if (i % w as usize + i / w as usize).is_multiple_of(2) { [0.3; 3] } else { [0.7; 3] }).collect();
+    let reference = Reference { original, coverage: (0..n).map(|i| if inside(i) { 1.0 } else { 0.0 }).collect(), w, h };
     let textured = |i: usize, base: f32| {
         let v = base + if (i % w as usize + i / w as usize).is_multiple_of(2) { 0.1 } else { -0.1 };
         [v, v, v, 1.0]
@@ -943,4 +945,34 @@ fn flat_is_judged_against_the_ring_around_the_selection() {
     // Nothing outside the selection: the flat rule can't be judged.
     let all = Reference { coverage: vec![1.0; n], original: vec![0.5; n * 3], w, h };
     assert_eq!(unusable(&flat(0.0), Some(&sent), &all), None);
+}
+
+#[test]
+fn an_exact_plain_fill_on_a_plain_backdrop_is_kept() {
+    // Object removal on pure white: the model answers exactly the white sent. On a plain backdrop
+    // echoing the smooth placeholder is the right answer, not an unchanged one.
+    let mut s = session(120, 120);
+    s.execute("select.rect", json!({"x": 30, "y": 30, "width": 60, "height": 60})).unwrap();
+    let fake = Arc::new(Fake { solid: true, ..Arc::into_inner(Fake::new([255, 255, 255])).unwrap() });
+    s.set_image_provider(Some(fake));
+    let layers = doc(&s).layers.len();
+    let r = s.execute(FILL, json!({"variations": 1})).unwrap();
+    assert_eq!(r["variations"].as_array().unwrap().len(), 1);
+    assert_eq!(doc(&s).layers.len(), layers + 1);
+}
+
+#[test]
+fn unchanged_is_only_judged_on_textured_surroundings() {
+    // 30×10, the middle third selected; the result is exactly what was sent.
+    let (w, h) = (30u32, 10u32);
+    let n = (w * h) as usize;
+    let x = |i: usize| i % w as usize;
+    let coverage: Vec<f32> = (0..n).map(|i| if (10..20).contains(&x(i)) { 1.0 } else { 0.0 }).collect();
+    let sent: Vec<f32> = (0..n).flat_map(|i| if i.is_multiple_of(2) { [0.4, 0.4, 0.4, 1.0] } else { [0.6, 0.6, 0.6, 1.0] }).collect();
+    let plain = Reference { original: vec![0.5; n * 3], coverage: coverage.clone(), w, h };
+    assert_eq!(unusable(&sent, Some(&sent), &plain), None, "plain surroundings: kept");
+    let textured = Reference { original: (0..n).flat_map(|i| if i.is_multiple_of(2) { [0.2; 3] } else { [0.8; 3] }).collect(), coverage, w, h };
+    assert!(unusable(&sent, Some(&sent), &textured).unwrap().contains("unchanged"), "textured surroundings: rejected");
+    let all = Reference { original: vec![0.5; n * 3], coverage: vec![1.0; n], w, h };
+    assert_eq!(unusable(&sent, Some(&sent), &all), None, "nothing outside: not judged");
 }
