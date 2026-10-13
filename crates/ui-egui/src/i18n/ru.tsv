@@ -3103,3 +3103,5 @@ curves	Smooth	Сгладить
 	Gray Value (Median)	Уровень серого (медиана)
 	Integrated Density	Интегральная плотность
 	Length	Длина
+	GPU memory mb	Память GPU (МБ)
+	Memory usage percent	Использование памяти (%)

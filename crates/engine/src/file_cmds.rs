@@ -331,10 +331,7 @@ pub fn dpx_bits_param(p: &Value, cmd: &str) -> Result<Option<photocraft_io::DpxB
     }
 }
 
-/// Encodes `doc` for `path`'s extension.
-pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> Result<(Vec<u8>, Vec<String>)> {
-    crate::allocation::checkpoint("saving document")?;
-    let save = save.into();
+fn save_options(doc: &Document, save: SaveOpts) -> photocraft_io::ExportOptions {
     let mut opts = photocraft_io::ExportOptions {
         tiff_layers: save.tiff_layers,
         tga_bits: save.tga_bits,
@@ -353,13 +350,30 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
         opts.encode.webp_quality = q;
         opts.encode.webp_lossless = false;
     }
+    opts
+}
+
+/// Encodes `doc` for `path`'s extension.
+pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> Result<(Vec<u8>, Vec<String>)> {
+    crate::allocation::checkpoint("saving document")?;
+    let opts = save_options(doc, save.into());
     photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| EngineError::Other(format!("{path}: {e}")))
 }
 
 pub(crate) fn save_doc(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> Result<Vec<String>> {
-    let (bytes, warnings) = encode(doc, path, save)?;
-    write_file(path, &bytes)?;
-    Ok(warnings)
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::allocation::checkpoint("saving document")?;
+        let opts = save_options(doc, save.into());
+        photocraft_io::export_path_with(doc, std::path::Path::new(path), &opts, &photocraft_raster::Interrupt::NONE)
+            .map_err(|e| EngineError::Other(format!("{path}: {e}")))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let (bytes, warnings) = encode(doc, path, save)?;
+        write_file(path, &bytes)?;
+        Ok(warnings)
+    }
 }
 
 pub(crate) fn str_param<'a>(p: &'a Value, key: &str, cmd: &str) -> Result<&'a str> {
@@ -426,8 +440,12 @@ fn close_others(s: &mut Session, p: &Value) -> Result<Value> {
 /// "Revert" history state); the document is clean afterwards.
 fn revert(s: &mut Session) -> Result<Value> {
     let path = s.active().and_then(|d| d.path.clone()).ok_or(EngineError::Other("the document has never been saved".into()))?;
-    let bytes = read_file(&path)?;
-    let fresh = import(&file_name(&path), &bytes)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    let fresh = photocraft_io::import_path_with(&file_name(&path), std::path::Path::new(&path), &photocraft_raster::Interrupt::NONE)
+        .map_err(|e| EngineError::Other(e.to_string()))?
+        .document;
+    #[cfg(target_arch = "wasm32")]
+    let fresh = import(&file_name(&path), &read_file(&path)?)?;
     s.edit("Revert", |doc, active| {
         let (id, name) = (doc.id, doc.name.clone());
         *doc = fresh;

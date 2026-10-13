@@ -273,13 +273,60 @@ fn save_through(
     Ok(r.warnings)
 }
 
+/// A save on a worker thread (`Services::save_file`, #2017): encode, then write atomically.
+/// Encoding writes an owned temporary, leaving the destination untouched. After the final
+/// flush, `commit` makes atomic publication uncancellable.
 fn save_file(
     doc: &Document,
     path: &str,
     settings: &photocraft_ui_egui::ExportSettings,
     ctl: &photocraft_ui_egui::jobs_ui::SaveCtl,
 ) -> Result<Vec<String>, String> {
-    save_through(doc, path, settings, ctl, |p, b, progress| write_atomic_progress(Path::new(p), b, progress))
+    if !photocraft_io::needs_psb_stream(doc, path, &export_options(settings)) {
+        return save_through(doc, path, settings, ctl, |p, b, progress| write_atomic_progress(Path::new(p), b, progress));
+    }
+    ctl.progress(0.0, "Encoding");
+    let opts = export_options(settings);
+    let cancelled = || ctl.check().is_err();
+    let progress = |fraction| ctl.progress(fraction * 0.95, "Encoding");
+    let interrupt = photocraft_raster::Interrupt::new(&cancelled, &progress);
+    crate::crash_guard::guard("Save", || {
+        photocraft_io::export_path_with_commit(doc, Path::new(path), &opts, &interrupt, || {
+            ctl.commit().map_err(photocraft_io::IoError::Unsupported)?;
+            ctl.progress(0.97, "Writing");
+            Ok(())
+        })
+        .map_err(|e| e.to_string())
+    })
+    .inspect(|_| {
+        ctl.progress(1.0, "");
+    })
+}
+
+fn export_authorized(
+    workspace: &photocraft_automation::AuthorizedWorkspace,
+    doc: &Document,
+    path: &str,
+    settings: &photocraft_ui_egui::ExportSettings,
+) -> Result<Vec<String>, String> {
+    let opts = export_options(settings);
+    crate::crash_guard::guard("Save", || {
+        if photocraft_io::needs_psb_stream(doc, path, &opts) {
+            let mut warnings = Vec::new();
+            workspace
+                .write_stream(path, |out| {
+                    warnings = photocraft_io::export_psb_into_with_options(doc, out, &opts, &photocraft_raster::Interrupt::NONE)
+                        .map_err(|e| std::io::Error::other(e.to_string()))?;
+                    Ok(())
+                })
+                .map_err(|e| e.to_string())?;
+            Ok(warnings)
+        } else {
+            let result = photocraft_io::export(doc, path, &opts).map_err(|e| e.to_string())?;
+            workspace.write(path, &result.bytes).map_err(|e| e.to_string())?;
+            Ok(result.warnings)
+        }
+    })
 }
 
 type SharedRecovery = Rc<RefCell<Option<RecoveryStore>>>;
@@ -406,6 +453,15 @@ fn shell_word(s: &str) -> String {
 
 pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) -> Services {
     let clip: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
+    let automation_import_path = automation.clone().map(|workspace| {
+        std::sync::Arc::new(move |path: &str, ctl: &photocraft_raster::Interrupt<'_>| {
+            crate::crash_guard::guard("Open", || workspace.read_document(path, ctl).map_err(|e| e.to_string()))
+        }) as photocraft_ui_egui::AutomationImportPathFn
+    });
+    let automation_export_path = automation.clone().map(|workspace| {
+        Box::new(move |doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings| export_authorized(&workspace, doc, path, settings))
+            as photocraft_ui_egui::ExportPathFn
+    });
     let automation_read = automation.clone().map(|workspace| {
         Box::new(move |path: &str| {
             let bytes = workspace.read(path).map_err(|error| error.to_string())?;
@@ -425,7 +481,32 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     });
     let automation_save = automation.clone().map(|workspace| {
         std::sync::Arc::new(move |doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings, ctl: &photocraft_ui_egui::jobs_ui::SaveCtl| {
-            save_through(doc, path, settings, ctl, |p, b, _| workspace.write(p, b).map_err(|e| e.to_string()))
+            if !photocraft_io::needs_psb_stream(doc, path, &export_options(settings)) {
+                return save_through(doc, path, settings, ctl, |p, b, _| workspace.write(p, b).map_err(|e| e.to_string()));
+            }
+            let cancelled = || ctl.check().is_err();
+            let progress = |p| ctl.progress(p * 0.95, "Encoding");
+            let interrupt = photocraft_raster::Interrupt::new(&cancelled, &progress);
+            crate::crash_guard::guard("Save", || {
+                let mut warnings = Vec::new();
+                workspace
+                    .write_stream_with_commit(
+                        path,
+                        |out| {
+                            warnings = photocraft_io::export_psb_into_with_options(doc, out, &export_options(settings), &interrupt)
+                                .map_err(|e| std::io::Error::other(e.to_string()))?;
+                            Ok(())
+                        },
+                        || {
+                            ctl.commit().map_err(std::io::Error::other)?;
+                            ctl.progress(0.97, "Writing");
+                            Ok(())
+                        },
+                    )
+                    .map_err(|e| e.to_string())?;
+                ctl.progress(1.0, "");
+                Ok(warnings)
+            })
         }) as photocraft_ui_egui::SaveFileFn
     });
     let step: fn(&str, &serde_json::Value) -> photocraft_engine::Result<()> = photocraft_automation::workspace::authorize_desktop_engine_step;
@@ -445,13 +526,20 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             let opts = export_options(settings);
             crate::crash_guard::guard("Export", || photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string()))
         })),
+        export_path: Some(Box::new(|doc, path, settings| {
+            crate::crash_guard::guard("Save", || {
+                photocraft_io::export_path_with(doc, Path::new(path), &export_options(settings), &photocraft_raster::Interrupt::NONE).map_err(|e| e.to_string())
+            })
+        })),
         save_file: Some(Arc::new(save_file)),
         file_dialog: Some(Box::new(show_file_dialog)),
         write: Some(Box::new(|path: &str, bytes: &[u8]| write_atomic(Path::new(path), bytes))),
         automation_read,
+        automation_import_path,
         automation_write,
         automation_open_pcraft,
         automation_save,
+        automation_export_path,
         automation_command,
         automation_authorize,
         encode_png: Some(Box::new(|w, h, rgba| {
@@ -596,6 +684,59 @@ mod tests {
     use photocraft_format::list_recovery;
     use photocraft_ui_egui::{PhotocraftApp, prefs_ui};
     use serde_json::{Value, json};
+
+    #[test]
+    fn native_streamed_save_finishes_the_original_document_after_a_tab_switch() {
+        let dir = temp("streamed-save-job");
+        let path = dir.join("original.psb").to_string_lossy().into_owned();
+        let mut session = Session::new();
+        session.execute("file.new", json!({"width":32,"height":16,"depth":16})).unwrap();
+        session.execute("layer.new.layer", json!({})).unwrap();
+        session.execute("edit.fill", json!({"color":"#336699"})).unwrap();
+        let original = session.active().unwrap().doc.id;
+        let revision = session.active().unwrap().revision;
+        let services = Services { save_file: Some(Arc::new(save_file)), ..Default::default() };
+        let mut app = PhotocraftApp::new(session, services);
+        app.background_jobs = true;
+        let reply = app.save_as(Some(path.clone())).unwrap();
+        assert_eq!(reply["pending"], true);
+        assert!(app.session.execute("edit.fill", json!({"color":"#ffffff"})).is_err(), "upstream save lock is retained");
+        app.session.execute("file.new", json!({"width":4,"height":4})).unwrap();
+        let current = app.session.active().unwrap().doc.id;
+        let context = egui::Context::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while app.session.has_jobs() && std::time::Instant::now() < deadline {
+            photocraft_ui_egui::jobs_ui::tick(&mut app, &context);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(!app.session.has_jobs());
+        assert_eq!(app.session.active().unwrap().doc.id, current);
+        let saved = app.session.documents().iter().find(|s| s.doc.id == original).unwrap();
+        assert_eq!(saved.path.as_deref(), Some(path.as_str()));
+        assert_eq!(saved.saved_revision, revision);
+        let reopened = photocraft_io::import_path_with("saved", Path::new(&path), &photocraft_raster::Interrupt::NONE).unwrap();
+        assert_eq!(reopened.document.size, saved.doc.size);
+        assert_eq!(reopened.document.depth, saved.doc.depth);
+        assert_eq!(photocraft_compose::flatten(&reopened.document).px, photocraft_compose::flatten(&saved.doc).px);
+    }
+
+    #[test]
+    fn native_authorized_stream_save_rejects_ambient_and_parent_paths() {
+        let dir = temp("streamed-save-authority");
+        let workspace = photocraft_automation::AuthorizedWorkspace::new(Some(&dir), Some(&dir)).unwrap();
+        let mut session = Session::new();
+        session.execute("file.new", json!({"width":4,"height":4})).unwrap();
+        let doc = &session.active().unwrap().doc;
+        let settings = photocraft_ui_egui::ExportSettings::default();
+        assert!(export_authorized(&workspace, doc, "../outside.psb", &settings).is_err());
+        let absolute = dir.join("absolute.psb");
+        export_authorized(&workspace, doc, &absolute.to_string_lossy(), &settings).unwrap();
+        assert!(export_authorized(&workspace, doc, &dir.parent().unwrap().join("outside.psb").to_string_lossy(), &settings).is_err());
+        export_authorized(&workspace, doc, "allowed.psb", &settings).unwrap();
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+        let reopened = workspace.read_document("allowed.psb", &photocraft_raster::Interrupt::NONE).unwrap();
+        assert_eq!(reopened.document.size, doc.size);
+    }
 
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]

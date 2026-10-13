@@ -46,6 +46,7 @@ pub mod camera_raw_ui;
 pub mod canvas;
 pub mod canvas_autoscroll;
 mod canvas_popup;
+pub mod canvas_stream;
 pub mod canvas_tool_menu;
 pub mod cas_transform;
 pub mod channel_options_ui;
@@ -311,10 +312,13 @@ pub(crate) fn plain_raster(doc: &Document) -> Option<&photocraft_doc::Layer> {
 
 /// Encode a document: (file bytes, warnings about anything approximated or dropped).
 pub type ExportFn = Box<dyn Fn(&Document, &str, &ExportSettings) -> Result<(Vec<u8>, Vec<String>), String>>;
+/// Synchronous native path encoder, with bounded PSB output and owned atomic publication.
+pub type ExportPathFn = Box<dyn Fn(&Document, &str, &ExportSettings) -> Result<Vec<String>, String>>;
 pub type WriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
 /// Encode a document and write it to a path, reporting the stage to the job; returns the export
 /// warnings. Runs on a worker thread (see [`Services::save_file`]). It must call
-/// [`jobs_ui::SaveCtl::commit`] right before replacing the file, and write nothing if that fails.
+/// [`jobs_ui::SaveCtl::commit`] right before replacing the file. A rejected commit must retain
+/// the destination and remove any temporary created during encoding.
 pub type SaveFileFn = std::sync::Arc<dyn Fn(&Document, &str, &ExportSettings, &jobs_ui::SaveCtl) -> Result<Vec<String>, String> + Send + Sync>;
 
 /// Who a finished save serves.
@@ -325,6 +329,8 @@ pub(crate) enum SaveKind {
     /// Automation: flat formats stay copies (#2579) and hooks never fire.
     Automation,
 }
+/// Decode a document through handles beneath the desktop control session's authorized root.
+pub type AutomationImportPathFn = std::sync::Arc<dyn Fn(&str, &photocraft_raster::Interrupt<'_>) -> Result<photocraft_io::ImportResult, String> + Send + Sync>;
 /// Read bytes through the desktop control session's authorized read root.
 pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<(String, Vec<u8>), String>>;
 /// Write bytes through the desktop control session's authorized write root.
@@ -405,6 +411,7 @@ pub struct Services {
     /// Background save over the automation write authority (`app.save`, #2017): same worker
     /// contract as `save_file`, but the bytes go through the capability-scoped workspace.
     pub automation_save: Option<SaveFileFn>,
+    pub export_path: Option<ExportPathFn>,
     /// Show an Open or Save dialog without waiting for it (see `file_dialog`).
     pub file_dialog: Option<FileDialogFn>,
     /// Write bytes to a path (native) or trigger a download (web).
@@ -415,8 +422,10 @@ pub struct Services {
     /// File access used only by control/MCP requests. Interactive dialogs keep
     /// using `file_dialog` and `write` with the user's authority.
     pub automation_read: Option<AutomationReadFn>,
+    pub automation_import_path: Option<AutomationImportPathFn>,
     pub automation_write: Option<AutomationWriteFn>,
     pub automation_open_pcraft: Option<AutomationOpenPcraftFn>,
+    pub automation_export_path: Option<ExportPathFn>,
     pub automation_command: Option<AutomationCommandFn>,
     /// Same policy as [`Self::automation_command`], as a function pointer the engine calls for
     /// each step of `actions.play`. Installed on the session only while a control request or
@@ -501,6 +510,7 @@ pub struct PhotocraftApp {
     /// Canvas caches per (document, display): CPU textures hold monitor values; the GPU
     /// canvas state is shared (`canvas::GPU_OUTPUT`).
     canvases: HashMap<(DocId, u32), canvas::CanvasCache>,
+    streams: HashMap<(DocId, u64), canvas_stream::Stream>,
     /// Navigator textures belong to open documents, not the lifetime of the egui context.
     navigator_textures: HashMap<DocId, canvas::NavigatorCache>,
     /// `canvas::display_doc`'s live-adjust and Duotone documents per document: (snapshot,
@@ -767,6 +777,7 @@ impl PhotocraftApp {
             ui: UiState::default(),
             services,
             canvases: HashMap::new(),
+            streams: HashMap::new(),
             navigator_textures: HashMap::new(),
             display_memo: HashMap::new(),
             navigator_gpu: HashMap::new(),
@@ -1482,10 +1493,15 @@ impl PhotocraftApp {
         }
         let st = self.session.active().ok_or("no document")?;
         let (doc, revision) = (st.doc.id, st.revision);
-        let export = self.services.export.as_ref().ok_or("no exporter configured")?;
-        let (bytes, warnings) = export(&st.doc, &path, settings)?;
-        let write = self.services.write.as_mut().ok_or("no writer configured")?;
-        write(&path, &bytes)?;
+        let warnings = if let Some(export) = self.services.export_path.as_ref() {
+            export(&st.doc, &path, settings)?
+        } else {
+            let export = self.services.export.as_ref().ok_or("no exporter configured")?;
+            let (bytes, warnings) = export(&st.doc, &path, settings)?;
+            let write = self.services.write.as_mut().ok_or("no writer configured")?;
+            write(&path, &bytes)?;
+            warnings
+        };
         self.saved(doc, revision, &path, &warnings, copy);
         Ok(Some((path, warnings)))
     }
@@ -1596,10 +1612,15 @@ impl PhotocraftApp {
         let state = self.session.active().ok_or("no document")?;
         let (doc, revision) = (state.doc.id, state.revision);
         let settings = ExportSettings { tga_bits, ..self.save_settings() };
-        let export = self.services.export.as_ref().ok_or("no exporter configured")?;
-        let (bytes, warnings) = export(&state.doc, &target, &settings)?;
-        let write = self.services.automation_write.as_mut().ok_or("automation write authority is not configured")?;
-        write(&target, &bytes)?;
+        let warnings = if let Some(export) = self.services.automation_export_path.as_ref() {
+            export(&state.doc, &target, &settings)?
+        } else {
+            let export = self.services.export.as_ref().ok_or("no exporter configured")?;
+            let (bytes, warnings) = export(&state.doc, &target, &settings)?;
+            let write = self.services.automation_write.as_mut().ok_or("automation write authority is not configured")?;
+            write(&target, &bytes)?;
+            warnings
+        };
         self.saved_automation(doc, revision, &target, &warnings, false);
         Ok(reply(&target, &warnings))
     }
@@ -1782,6 +1803,14 @@ impl eframe::App for PhotocraftApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        photocraft_compose::discard_unreadable_pixel_caches();
+        if let Err(error) = photocraft_raster::spill::check_integrity() {
+            self.ui.status = error;
+            self.ui.status_error = true;
+        } else if let Some(error) = photocraft_raster::spill::last_error() {
+            self.ui.status = error;
+            self.ui.status_error = true;
+        }
         let ctx = ui.ctx().clone();
         self.hover_layer = None;
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));

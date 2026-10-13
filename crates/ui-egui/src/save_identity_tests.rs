@@ -31,6 +31,43 @@ fn identity(app: &PhotocraftApp) -> (String, Option<String>, u64, u64) {
 }
 
 #[test]
+fn synchronous_path_save_records_identity_only_after_success() {
+    let mut app = app();
+    let before = identity(&app);
+    app.background_jobs = false;
+    app.services.export = Some(Box::new(|_, _, _| panic!("path save must not use the byte exporter")));
+    app.services.write = Some(Box::new(|_, _| panic!("path save owns its atomic writer")));
+    app.services.export_path = Some(Box::new(|_, _, _| Err("cancelled before publication".into())));
+    assert!(app.save_as(Some("saved.psb".into())).is_err());
+    assert_eq!(identity(&app), before);
+    app.services.export_path = Some(Box::new(|_, path, _| {
+        assert_eq!(path, "saved.psb");
+        Ok(Vec::new())
+    }));
+    app.save_as(Some("saved.psb".into())).unwrap();
+    let st = app.session.active().unwrap();
+    assert_eq!(st.path.as_deref(), Some("saved.psb"));
+    assert!(!st.is_dirty());
+}
+
+#[test]
+fn automation_path_save_is_synchronous_and_uses_only_its_authorized_service() {
+    let mut app = app();
+    app.background_jobs = true;
+    app.services.export = Some(Box::new(|_, _, _| panic!("must not materialize output bytes")));
+    app.services.export_path = Some(Box::new(|_, _, _| panic!("automation must not use ambient output authority")));
+    app.services.automation_write = Some(Box::new(|_, _| panic!("authorized stream owns publication")));
+    app.services.automation_export_path = Some(Box::new(|_, path, _| {
+        assert_eq!(path, "agent.psb");
+        Ok(Vec::new())
+    }));
+    let result = app.save_automation(Some("agent.psb".into())).unwrap();
+    assert_eq!(result["path"], "agent.psb");
+    assert!(!app.session.has_jobs());
+    assert!(!app.session.active().unwrap().is_dirty());
+}
+
+#[test]
 fn new_document_psd_and_subsequent_save_as_adopt_the_written_file_name() {
     for depth in [8, 16, 32] {
         let mut app = app();

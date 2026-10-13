@@ -18,6 +18,140 @@ use photocraft_ui_egui::gpu_canvas::{self, GpuCanvas};
 use serde_json::json;
 
 use photocraft_testkit::gpu_lock;
+#[test]
+fn native_float_pages_composite_after_reduced_pages_without_losing_the_device() {
+    let _lock = gpu_lock();
+    let Some((g, rs)) = canvas() else { return };
+    let mut doc = Document::new("16K EXR dimensions", Size::new(16384, 8192), ColorMode::Rgb, SampleType::F32);
+    // A native viewport page with its filtering apron straddles four 2048-square input
+    // cells. The previous staging policy exhausted the mapped-buffer heap on AMD Vulkan
+    // here, then egui's next index-buffer upload panicked on the same device.
+    let r = Rect::new(8191, 3583, 8705, 4097);
+    let mut surface = Surface::with_default(doc.pixel_format(), &[0.25, 0.5, 0.75, 1.0]);
+    surface.fill_rect(Rect::new(0, 0, 1, 1), &[1.0; 4]);
+    surface.fill_rect(Rect::new(16383, 8191, 16384, 8192), &[1.0; 4]);
+    surface.fill_rect(r, &[2.0, 0.5, 0.25, 1.0]);
+    doc.layers.push(Layer::new("Background", LayerContent::Raster(surface)));
+    let reduced = photocraft_compose::Buffer::transparent(Rect::new(4096, 1792, 4353, 2049));
+    let native = photocraft_compose::Buffer::transparent(r);
+    for (page, factor, buffer) in [(1, 2, &reduced), (2, 1, &native)] {
+        assert!(
+            g.upload_page(gpu_canvas::PageUpload { key: doc.id.0, page, size: [16384, 8192], factor, depth: doc.depth, limit: 128 << 20, core: r }, buffer)
+        );
+    }
+    g.set_memory_budget(665 << 20);
+    g.composite_resident(&doc, r, true).expect("native float regional composite");
+    // Separate regional renders must not accumulate each other's pending staging buffers.
+    for page in 3..40 {
+        let r = Rect::from_xywh(6655 + (page % 6) * 512, 2559 + (page % 4) * 512, 514, 514);
+        let buffer = photocraft_compose::Buffer::transparent(r);
+        assert!(g.upload_page(
+            gpu_canvas::PageUpload {
+                key: doc.id.0,
+                page: u64::try_from(page).unwrap(),
+                size: [16384, 8192],
+                factor: 1,
+                depth: doc.depth,
+                limit: 128 << 20,
+                core: r
+            },
+            &buffer
+        ));
+        g.composite_resident(&doc, r, true).expect("repeated native float composite");
+    }
+    assert!(g.health().wait(&rs.device, None), "{:?}", g.fault());
+    let indices = rs.device.create_buffer(&eframe::wgpu::BufferDescriptor {
+        label: Some("regression egui index buffer"),
+        size: 184392,
+        usage: eframe::wgpu::BufferUsages::INDEX | eframe::wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    assert!(rs.queue.write_buffer_with(&indices, 0, std::num::NonZeroU64::new(114888).unwrap()).is_some(), "{:?}", g.fault());
+}
+
+#[test]
+fn huge_document_stream_pages_have_bounded_residency_and_exact_texels() {
+    let _lock = gpu_lock();
+    let Some((g, _rs)) = canvas() else { return };
+    let r = Rect::new(64000, 22000, 64512, 22512);
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let d = Document::new("Earth dimensions", Size::new(86400, 43200), ColorMode::Rgb, depth);
+        let b = photocraft_compose::Buffer { rect: r, px: vec![[0.25, 0.5, 0.75, 0.5]; 512 * 512] };
+        let cap = 512 * 512 * 8;
+        assert!(g.upload_page(gpu_canvas::PageUpload { key: d.id.0, page: 1, size: [86400, 43200], factor: 1, depth, limit: cap, core: r }, &b));
+        let (f, size, px) = g.read_page(d.id.0, 1).expect("page readback");
+        assert_eq!(size, [512, 512]);
+        assert_eq!(f, if depth == SampleType::U8 { TextureFormat::Rgba8Unorm } else { TextureFormat::Rgba16Float });
+        for (a, b) in px[0].iter().zip([0.125, 0.25, 0.375, 0.5]) {
+            assert!((*a - b).abs() < 1.0 / 255.0);
+        }
+        assert!(g.texture_info(d.id.0).unwrap().1 <= cap);
+        assert!(g.read_texels(d.id.0).is_none());
+        assert!(g.upload_page(gpu_canvas::PageUpload { key: d.id.0, page: 2, size: [86400, 43200], factor: 1, depth, limit: cap, core: r }, &b));
+        assert!(g.upload_page(gpu_canvas::PageUpload { key: d.id.0, page: 3, size: [86400, 43200], factor: 1, depth, limit: cap, core: r }, &b));
+        assert!(!g.has_page(d.id.0, 1));
+        assert!(g.texture_info(d.id.0).unwrap().1 <= cap);
+        g.retain(&[]);
+    }
+}
+
+#[test]
+fn native_gpu_composite_does_not_write_into_reduced_stream_pages() {
+    let _lock = gpu_lock();
+    let Some((g, _rs)) = canvas() else { return };
+    let mut d = Document::new("large", Size::new(86400, 43200), ColorMode::Rgb, SampleType::U16);
+    let r = Rect::new(64000, 22000, 64512, 22512);
+    let mut s = Surface::new(d.pixel_format());
+    s.fill_rect(r, &[0.25, 0.5, 0.75, 0.5]);
+    d.layers.push(Layer::new("region", LayerContent::Raster(s)));
+    let small = photocraft_compose::Buffer { rect: Rect::new(32000, 11000, 32256, 11256), px: vec![[0.0; 4]; 256 * 256] };
+    let native = photocraft_compose::Buffer::transparent(r);
+    for (page, factor, b) in [(1, 2, &small), (2, 1, &native)] {
+        assert!(g.upload_page(gpu_canvas::PageUpload { key: d.id.0, page, size: [86400, 43200], factor, depth: d.depth, limit: 8 << 20, core: r }, b));
+    }
+    g.composite_resident(&d, r, false).expect("regional GPU composition");
+    let (_, _, px) = g.read_page(d.id.0, 2).expect("native page");
+    let reference = photocraft_compose::render(&d, r);
+    for (p, q) in px.iter().zip(reference.px.iter()) {
+        for c in 0..4 {
+            let want = if c < 3 { q[c] * q[3] } else { q[c] };
+            assert!((p[c] - want).abs() < 0.002);
+        }
+    }
+    assert!(g.read_page(d.id.0, 1).expect("reduced page").2.iter().all(|p| *p == [0.0; 4]));
+    assert!(g.fault().is_none());
+}
+
+#[test]
+fn background_redraw_replaces_stream_pages_with_a_full_canvas() {
+    let _lock = gpu_lock();
+    let Some((g, _rs)) = canvas() else { return };
+    let doc = gradient(SampleType::U8, 32, 32, 0.0, 1.0);
+    let b = photocraft_compose::render(&doc, doc.bounds());
+    assert!(
+        g.upload_page(gpu_canvas::PageUpload { key: doc.id.0, page: 1, size: [32, 32], factor: 1, depth: doc.depth, limit: 1 << 20, core: doc.bounds() }, &b)
+    );
+    assert!(!g.has(doc.id.0, [32, 32]), "stream pages are not a complete redraw texture");
+    assert!(g.prepare_texture(doc.id.0, &doc).is_some());
+    assert!(g.has(doc.id.0, [32, 32]));
+    assert!(!g.has_page(doc.id.0, 1));
+    assert!(g.fault().is_none());
+}
+
+#[test]
+fn stream_budget_includes_full_canvas_entries_of_other_documents() {
+    let _lock = gpu_lock();
+    let Some((g, _rs)) = canvas() else { return };
+    let old = gradient(SampleType::U8, 512, 512, 0.0, 1.0);
+    g.upload_composite(old.id.0, &old, None);
+    assert!(g.has(old.id.0, [512, 512]));
+    let doc = Document::new("large", Size::new(86400, 43200), ColorMode::Rgb, SampleType::U8);
+    let r = Rect::new(64000, 22000, 64512, 22512);
+    let b = photocraft_compose::Buffer::transparent(r);
+    assert!(g.upload_page(gpu_canvas::PageUpload { key: doc.id.0, page: 1, size: [86400, 43200], factor: 1, depth: doc.depth, limit: 2 << 20, core: r }, &b));
+    assert!(!g.has(old.id.0, [512, 512]), "the older full canvas must count against the shared cap");
+    assert!(g.fault().is_none());
+}
 
 /// A headless GPU canvas on a device created like the app's, if the adapter has a float canvas.
 fn canvas() -> Option<(GpuCanvas, RenderState)> {
@@ -31,6 +165,7 @@ fn canvas() -> Option<(GpuCanvas, RenderState)> {
         eprintln!("skipping: adapter can't render/filter Rgba16Float");
         return None;
     }
+    eprintln!("adapter: {:?}", rs.adapter.get_info());
     Some((GpuCanvas::new(&rs), rs))
 }
 
