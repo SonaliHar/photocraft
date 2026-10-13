@@ -2,7 +2,7 @@
 //! Sony compressed ARW (cRAW), Panasonic RW2 (RawFormat 5) and uncompressed
 //! Olympus ORF (with its maker-note preview).
 
-use photocraft_raw::testgen::{craw_block, mosaic, orf, rw2, scene, sony_craw};
+use photocraft_raw::testgen::{craw_block, mosaic, orf, rw2, rw2_format4, scene, sony_craw};
 use photocraft_raw::*;
 
 const CURVE: [u16; 4] = [8000, 10400, 12900, 14100];
@@ -101,6 +101,45 @@ fn craw_unusual_variants_are_unsupported() {
     assert!(decode(cut, &Limits::default()).is_err());
 }
 
+/// Renames a tag of the raw SubIFD (tag 330 of IFD0), hiding it from the
+/// decoder: the first cRAW bodies write no BlackLevel tag at all.
+fn hide_raw_sub_ifd_tag(b: &mut [u8], tag: u16) {
+    let ifd = u32::from_le_bytes(b[4..8].try_into().unwrap()) as usize;
+    let n = u16::from_le_bytes([b[ifd], b[ifd + 1]]) as usize;
+    for i in 0..n {
+        let e = ifd + 2 + 12 * i;
+        if u16::from_le_bytes([b[e], b[e + 1]]) == 330 {
+            let sub = u32::from_le_bytes(b[e + 8..e + 12].try_into().unwrap()) as usize;
+            let sn = u16::from_le_bytes([b[sub], b[sub + 1]]) as usize;
+            for j in 0..sn {
+                let se = sub + 2 + 12 * j;
+                if u16::from_le_bytes([b[se], b[se + 1]]) == tag {
+                    b[se..se + 2].copy_from_slice(&0xFFFEu16.to_le_bytes());
+                    return;
+                }
+            }
+        }
+    }
+    panic!("tag {tag:#x} not found in the raw SubIFD");
+}
+
+#[test]
+fn craw_without_a_black_level_tag_reads_black_from_the_tone_curve() {
+    // An ILCE-7 cRAW carries no BlackLevel tag (0x7310): the tone curve maps
+    // the black code (256) to 512, so the decoded data has a 512 black level.
+    let (w, h) = (64, 4);
+    let codes = vec![1024u16; w * h];
+    let mut b = sony_craw(w, h, &codes, CURVE);
+    hide_raw_sub_ifd_tag(&mut b, 0x7310);
+    let s = decode(&b, &Limits::default()).unwrap();
+    assert_eq!(s.black.values, vec![512.0]);
+    assert!(!s.warnings.iter().any(|w| w.contains("black level")), "{:?}", s.warnings);
+    // With the tag present the level is the same: 512 either way.
+    let b = sony_craw(w, h, &codes, CURVE);
+    let s = decode(&b, &Limits::default()).unwrap();
+    assert_eq!(s.black.values, vec![512.0; 4]);
+}
+
 #[test]
 fn rw2_round_trip_12_and_14_bit() {
     for (bits, w, h) in [(12u32, 120usize, 300usize), (14, 117, 260)] {
@@ -137,13 +176,63 @@ fn patch_ifd0_short(b: &mut [u8], tag: u16, v: u16) {
 }
 
 #[test]
-fn rw2_compressed_formats_fall_back() {
+fn rw2_format4_round_trip_is_exact() {
+    let (w, h) = (42, 6);
+    let mut data = Vec::with_capacity(w * h);
+    for y in 0..h {
+        for x in 0..w {
+            data.push(200 + 4 * (y as u16) + 3 * (x as u16));
+        }
+    }
+    let b = rw2_format4(w, h, &data);
+    assert_eq!(identify(&b), Some(RawFormat::Rw2));
+    let s = decode(&b, &Limits::default()).unwrap();
+    assert_eq!((s.width, s.height), (w, h));
+    assert_eq!(s.data, data);
+    assert_eq!(s.cfa.as_ref().unwrap().phase(0, 0), [0, 1, 1, 2]);
+    // The compressed variants record a black level 15 counts below the black
+    // of the decoded samples.
+    assert_eq!(s.black.values, vec![143.0, 144.0, 144.0, 145.0]);
+    assert_eq!(s.white, [4095.0; 3]);
+    assert_eq!(s.camera_wb, Some([2.0, 1.0, 1.5]));
+    assert_eq!(s.crop, Rect::new(2, 2, w - 4, h - 4));
+    assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+    let d = develop_sensor(&s, &DevelopOptions::default()).unwrap();
+    assert_eq!((d.width as usize, d.height as usize), (w - 4, h - 4));
+}
+
+#[test]
+fn rw2_format4_crosses_pages() {
+    // 16 bytes a row: 1100 rows walk past several 0x4000-byte page boundaries.
+    let (w, h) = (14, 1100);
+    let mut data = Vec::with_capacity(w * h);
+    for y in 0..h {
+        for x in 0..w {
+            data.push(300 + 16 * ((y % 8) as u16) + 3 * (x as u16));
+        }
+    }
+    let b = rw2_format4(w, h, &data);
+    let s = decode(&b, &Limits::default()).unwrap();
+    assert_eq!(s.data, data);
+}
+
+#[test]
+fn rw2_format4_rejects_other_block_widths() {
+    let (w, h) = (42, 2);
+    let data: Vec<u16> = (0..w * h).map(|i| 200 + (i % 14) as u16 * 3).collect();
+    let mut b = rw2_format4(w, h, &data);
+    patch_ifd0_short(&mut b, 0x0002, 41);
+    assert!(matches!(decode(&b, &Limits::default()), Err(RawError::Unsupported(_))));
+}
+
+#[test]
+fn rw2_undecoded_formats_fall_back() {
     let data = vec![200u16; 20 * 4];
     let mut b = rw2(20, 4, &data, 12);
     assert!(decode(&b, &Limits::default()).is_ok());
-    patch_ifd0_short(&mut b, 0x002D, 4);
+    patch_ifd0_short(&mut b, 0x002D, 6);
     match decode(&b, &Limits::default()) {
-        Err(RawError::Unsupported(m)) => assert!(m.contains("raw format 4"), "{m}"),
+        Err(RawError::Unsupported(m)) => assert!(m.contains("raw format 6"), "{m}"),
         other => panic!("expected unsupported, got {other:?}"),
     }
     // Width not made of whole blocks.
