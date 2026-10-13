@@ -603,3 +603,103 @@ mod tests {
         assert!((0..4).all(|i| (expected[i] - actual[i]).abs() < 0.02), "commit matches preview: {actual:?} vs {expected:?}");
     }
 }
+
+#[cfg(test)]
+mod retouch_tests {
+    use super::super::retouch_cmds::{LiveDab, LiveRetouch};
+    use super::*;
+    use photocraft_geom::Rect;
+    use serde_json::json;
+
+    fn session() -> Session {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 100, "height": 100, "background": "white"})).unwrap();
+        s
+    }
+
+    fn px(s: &Session, x: i32, y: i32) -> Vec<f32> {
+        let st = s.active().unwrap();
+        st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().pixel(x, y)
+    }
+
+    fn paint_red_left(s: &mut Session) {
+        s.edit("setup", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 50, 100), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    fn paint_gray(s: &mut Session) {
+        s.edit("setup", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 100, 100), &[0.5, 0.5, 0.5, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    fn add_horizontal(s: &mut Session, y: f64) {
+        s.execute("assist.addStraightLine", json!({"anchor": [50.0, y], "angleDeg": 0.0})).unwrap();
+    }
+
+    #[test]
+    fn clone_stamp_snaps_to_guide_and_samples_snapped_offset() {
+        let mut s = session();
+        paint_red_left(&mut s);
+        add_horizontal(&mut s, 50.0);
+        let r = s.execute("paint.cloneStamp", json!({"points": [[60, 53], [80, 53]], "source": [10, 50], "size": 8, "hardness": 100})).unwrap();
+        assert_eq!(r["offset"], json!([-50, 0]), "the source mapping follows the snapped first point");
+        let p = px(&s, 70, 50);
+        assert!(p[0] > 0.99 && p[1] < 0.01 && p[3] > 0.99, "cloned red onto the guide: {p:?}");
+        assert_eq!(px(&s, 70, 80), vec![1.0; 4], "far from the guide untouched");
+    }
+
+    #[test]
+    fn dodge_snaps_to_guide() {
+        let mut s = session();
+        paint_gray(&mut s);
+        add_horizontal(&mut s, 50.0);
+        s.execute("paint.dodge", json!({"points": [[10, 53], [90, 53]], "size": 4, "hardness": 100})).unwrap();
+        assert!(px(&s, 50, 50)[0] > 0.53, "the guide row dodges: {:?}", px(&s, 50, 50));
+        assert!((px(&s, 50, 80)[0] - 0.5).abs() < 0.01, "far from the guide untouched");
+    }
+
+    #[test]
+    fn live_retouch_preview_snaps() {
+        let mut s = session();
+        paint_red_left(&mut s);
+        add_horizontal(&mut s, 50.0);
+        let mut live = LiveRetouch::begin(&s, "paint.cloneStamp", &json!({"points": [[60, 53]], "source": [10, 50], "size": 8, "hardness": 100})).unwrap();
+        live.push(&[StrokePoint::new(80.0, 53.0, 1.0)]).unwrap();
+        assert_eq!(live.points().iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), vec![[60.0, 50.0], [80.0, 50.0]]);
+        let st = s.active().unwrap();
+        let p = live.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().rgba(70, 50);
+        assert!(p[0] > 0.99 && p[1] < 0.01, "preview clones onto the guide: {p:?}");
+    }
+
+    #[test]
+    fn live_dab_preview_snaps() {
+        let mut s = session();
+        paint_gray(&mut s);
+        add_horizontal(&mut s, 50.0);
+        let mut live = LiveDab::begin(&s, "paint.dodge", &json!({"points": [[50, 53]], "size": 4, "hardness": 100})).unwrap();
+        live.push(&[StrokePoint::new(70.0, 53.0, 1.0)]).unwrap();
+        let st = s.active().unwrap();
+        let surf = live.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap();
+        assert!(surf.rgba(50, 50)[0] > 0.53, "preview dodges the guide");
+        assert!((surf.rgba(50, 80)[0] - 0.5).abs() < 0.01, "far from the guide untouched");
+    }
+
+    #[test]
+    fn retouch_snapping_off_leaves_points_unadjusted() {
+        let mut s = session();
+        paint_red_left(&mut s);
+        add_horizontal(&mut s, 50.0);
+        s.execute("assist.setSnap", json!({"enabled": false})).unwrap();
+        // A small brush (radius 2): the raw y = 53 samples leave the y = 50 row untouched.
+        let r = s.execute("paint.cloneStamp", json!({"points": [[60, 53], [80, 53]], "source": [10, 50], "size": 4, "hardness": 100})).unwrap();
+        assert_eq!(r["offset"], json!([-50, -3]), "the raw first point maps the source");
+        let p = px(&s, 70, 53);
+        assert!(p[0] > 0.99 && p[1] < 0.01, "the raw row paints instead: {p:?}");
+    }
+}
