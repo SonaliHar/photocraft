@@ -593,12 +593,36 @@ fn request_all(ctx: &crate::jobs::JobCtx, provider: &dyn ImageProvider, request:
 /// Below this spread of brightness (standard deviation, 0..1) inside the selection a result is
 /// flat: OpenAI sometimes answers with the masked area solid black.
 const FLAT: f64 = 0.015;
+/// A flat result is only empty when its brightness is further than this (0..1) from the
+/// original just around the selection: a plain fill on a plain backdrop (object removal on a
+/// white wall) is a real fill.
+const FLAT_MISMATCH: f64 = 0.25;
+/// How far (request pixels) outside the selection its surroundings are measured.
+const RING: f32 = 8.0;
+
+/// Mean brightness (0..1) of the original just outside the selection: within [`RING`] of it,
+/// else anywhere outside it, `None` when nothing is outside it.
+fn surroundings_luma(r: &Reference) -> Option<f64> {
+    let (w, h) = (r.w as usize, r.h as usize);
+    let (original, _) = r.original.as_chunks::<3>();
+    if original.len() != r.coverage.len() {
+        return None;
+    }
+    let inside: Vec<bool> = r.coverage.iter().map(|c| *c > 0.5).collect();
+    let near = sel_algo::edt(&inside, w, h);
+    let mean = |pick: &dyn Fn(usize) -> bool| -> Option<f64> {
+        let (sum, n) = original.iter().enumerate().filter(|(i, _)| pick(*i)).fold((0.0f64, 0usize), |(s, n), (_, p)| (s + f64::from(luma(p)), n + 1));
+        (n > 0).then(|| sum / n as f64)
+    };
+    let outside = |i: usize| !inside.get(i).copied().unwrap_or(true);
+    mean(&|i| outside(i) && near.get(i).is_some_and(|d| *d <= RING)).or_else(|| mean(&outside))
+}
 /// Below this mean difference (0..1) from the image sent, inside the selection, a result is
 /// unchanged: the model gave back what it was sent.
 const UNCHANGED: f64 = 0.02;
 
-/// Why a result (`px`, RGBA 0..1 at the request size) is no use as a fill, if it isn't: flat, or
-/// unchanged from the image sent (`sent`, RGBA 0..1 at the request size), inside the selection
+/// Why a result (`px`, RGBA 0..1 at the request size) is no use as a fill, if it isn't: flat and
+/// unlike the original around the selection (a solid black answer), or unchanged from the image sent (`sent`, RGBA 0..1 at the request size), inside the selection
 /// (coverage over half). With nothing to judge by (no pixels inside, sizes that don't match) the
 /// result is kept.
 fn unusable(px: &[f32], sent: Option<&[f32]>, r: &Reference) -> Option<String> {
@@ -614,8 +638,11 @@ fn unusable(px: &[f32], sent: Option<&[f32]>, r: &Reference) -> Option<String> {
     let count = inside.len() as f64;
     let mean = inside.iter().map(|p| f64::from(luma(*p))).sum::<f64>() / count;
     let spread = (inside.iter().map(|p| (f64::from(luma(*p)) - mean).powi(2)).sum::<f64>() / count).sqrt();
-    if spread < FLAT {
-        return Some(format!("rejected: flat (brightness spread inside the selection {spread:.4} < {FLAT})"));
+    if spread < FLAT
+        && let Some(around) = surroundings_luma(r)
+        && (mean - around).abs() > FLAT_MISMATCH
+    {
+        return Some(format!("rejected: flat (brightness spread inside the selection {spread:.4} < {FLAT}, brightness {mean:.3} vs {around:.3} around it)"));
     }
     let sent4 = sent.map(|s| s.as_chunks::<4>().0).filter(|s| s.len() == n)?;
     let diff = px4

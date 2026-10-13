@@ -909,3 +909,38 @@ fn unusable_says_why_a_result_is_rejected() {
     let none = Reference { coverage: vec![0.0; n], ..reference };
     assert_eq!(unusable(&black, Some(&sent), &none), None);
 }
+
+#[test]
+fn a_plain_fill_that_matches_its_surroundings_is_kept() {
+    // Object removal on a white backdrop: the model answers a flat near-white. Flat, but it
+    // matches what is around the selection, so it is a fill, not an empty answer. (Near-white,
+    // not exactly the white sent: an exact copy of the image sent is rejected as unchanged.)
+    let mut s = session(120, 120);
+    s.execute("select.rect", json!({"x": 30, "y": 30, "width": 60, "height": 60})).unwrap();
+    let fake = Arc::new(Fake { solid: true, ..Arc::into_inner(Fake::new([245, 245, 245])).unwrap() });
+    s.set_image_provider(Some(fake));
+    let layers = doc(&s).layers.len();
+    let r = s.execute(FILL, json!({"prompt": "", "variations": 2})).unwrap();
+    assert_eq!(r["variations"].as_array().unwrap().len(), 2);
+    assert_eq!(doc(&s).layers.len(), layers + 1);
+}
+
+#[test]
+fn flat_is_judged_against_the_ring_around_the_selection() {
+    // 30×10: the middle third selected. The ring just outside is grey (0.5); beyond 8 px, far
+    // left and right, it is black.
+    let (w, h) = (30u32, 10u32);
+    let n = (w * h) as usize;
+    let x = |i: usize| i % w as usize;
+    let coverage: Vec<f32> = (0..n).map(|i| if (10..20).contains(&x(i)) { 1.0 } else { 0.0 }).collect();
+    let original: Vec<f32> = (0..n).flat_map(|i| if (2..28).contains(&x(i)) { [0.5; 3] } else { [0.0; 3] }).collect();
+    let reference = Reference { original, coverage, w, h };
+    let flat = |v: f32| -> Vec<f32> { (0..n).flat_map(|_| [v, v, v, 1.0]).collect() };
+    let sent = flat(0.9);
+    assert_eq!(unusable(&flat(0.55), Some(&sent), &reference), None, "flat but like the ring");
+    assert!(unusable(&flat(0.0), Some(&sent), &reference).unwrap().contains("flat"), "black against grey");
+    assert!(unusable(&flat(1.0), Some(&sent), &reference).unwrap().contains("flat"), "white against grey");
+    // Nothing outside the selection: the flat rule can't be judged.
+    let all = Reference { coverage: vec![1.0; n], original: vec![0.5; n * 3], w, h };
+    assert_eq!(unusable(&flat(0.0), Some(&sent), &all), None);
+}
