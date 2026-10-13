@@ -13,6 +13,9 @@ pub const ID: &str = "openai";
 const NAME: &str = "OpenAI GPT Image";
 const HOST: &str = "api.openai.com";
 pub(crate) const ENDPOINT: &str = "https://api.openai.com/v1/images/edits";
+/// Added to a prompt: GPT Image otherwise changes the image outside the mask too (6/9/3 % of it in
+/// one test, 1/3/4 % with this). Never say "transparent": it drew a transparency checkerboard.
+const INSIDE_HINT: &str = "Keep all new content entirely inside the masked area and leave everything outside it unchanged.";
 const MODELS: &[(&str, &str)] = &[
     ("gpt-image-2", "GPT Image 2"),
     ("gpt-image-2.5-flare", "GPT Image 2.5 Flare"),
@@ -78,6 +81,13 @@ pub fn output_size(model: &str, w: u32, h: u32) -> (u32, u32) {
     (sw, sh)
 }
 
+/// The prompt sent: the user's with [`INSIDE_HINT`] after it, or with none the request to
+/// continue the surroundings.
+fn prompt(p: &str) -> String {
+    let p = p.trim();
+    if p.is_empty() { prompt_or_continue(p).to_owned() } else { format!("{p} {INSIDE_HINT}") }
+}
+
 /// The reply: inline base64 PNG, or the service's error.
 pub fn parse(r: &HttpResponse, creds: &Credentials) -> Result<GeneratedImage> {
     if !r.is_success() {
@@ -112,11 +122,7 @@ impl ImageProvider for OpenAi {
         let hole = mask::alpha_hole(&r.image, &r.mask)?;
         let (ow, oh) = output_size(self.model, w, h);
         let mut form = Form::new();
-        form.text("model", self.model)
-            .text("prompt", prompt_or_continue(&r.prompt))
-            .text("size", &format!("{ow}x{oh}"))
-            .text("n", "1")
-            .text("output_format", "png");
+        form.text("model", self.model).text("prompt", &prompt(&r.prompt)).text("size", &format!("{ow}x{oh}")).text("n", "1").text("output_format", "png");
         if matches!(self.model, "gpt-image-1" | "gpt-image-1.5") {
             form.text("input_fidelity", "high");
         }
@@ -163,7 +169,7 @@ mod tests {
         assert!(!r.url.contains(SECRET));
         assert_eq!(header(r, "authorization"), Some(format!("Bearer {SECRET}").as_str()));
         assert_eq!(part(r, "model").unwrap(), b"gpt-image-2");
-        assert_eq!(part(r, "prompt").unwrap(), b"a kayak");
+        assert_eq!(part(r, "prompt").unwrap(), format!("a kayak {INSIDE_HINT}").as_bytes());
         assert_eq!(part(r, "output_format").unwrap(), b"png");
         assert!(part(r, "input_fidelity").is_none(), "gpt-image-2 rejects input_fidelity");
         let (w, h, px) = crate::mask::decode_rgba8(&part(r, "mask").unwrap()).unwrap();
@@ -200,6 +206,22 @@ mod tests {
         assert_eq!(part(&http.requests()[0], "prompt").unwrap(), common::CONTINUE_PROMPT.as_bytes());
         assert!(!p.needs_prompt());
         assert_eq!(p.min_side(), 1024);
+    }
+
+    #[test]
+    fn a_prompt_is_sent_with_the_hint_to_stay_inside_the_mask() {
+        let (p, http) = provider("", vec![ok()]);
+        p.edit(&edit_request("  a red kite ", 32, 32)).unwrap();
+        let sent = String::from_utf8(part(&http.requests()[0], "prompt").unwrap()).unwrap();
+        assert!(sent.starts_with("a red kite "), "{sent}");
+        assert!(sent.ends_with(INSIDE_HINT), "{sent}");
+    }
+
+    #[test]
+    fn the_inside_hint_never_says_transparent() {
+        // "transparent" made OpenAI draw a transparency checkerboard into the fill.
+        assert!(!INSIDE_HINT.to_lowercase().contains("transparent"));
+        assert!(!INSIDE_HINT.is_empty());
     }
 
     #[test]
