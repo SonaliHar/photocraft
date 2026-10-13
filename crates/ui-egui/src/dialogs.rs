@@ -620,8 +620,31 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
                 app.filter_preview = None;
                 return Err("dialog has no command".into());
             };
-            let (cmd, params) = crate::smart_ui::confirm_command(&d.fields, cmd, crate::filter_dialog::params_of(&d.fields));
-            let result = app.run(&cmd, params.clone());
+            let mut cmd = cmd;
+            let preparation: Result<Value, String> = (|| {
+                if crate::selection_modify_origin::handles(&cmd) {
+                    crate::selection_modify_origin::validate(app, id, &d.fields)?;
+                }
+                if crate::native_gray_adjustment_origin::handles(&cmd) {
+                    crate::native_gray_adjustment_origin::validate(app, id, &d.fields)?;
+                }
+                let params = crate::filter_dialog::params_of(&d.fields);
+                let params = if crate::native_gray_adjustment_origin::handles(&cmd) {
+                    crate::native_gray_adjustment_origin::prepare(app, id, &d.fields, params)?
+                } else { params };
+                let (confirmed, params) = crate::smart_ui::confirm_command(&d.fields, cmd.clone(), params);
+                cmd = confirmed;
+                if crate::selection_modify_origin::handles(&cmd) {
+                    crate::selection_modify_origin::prepare(app, id, &d.fields, params)
+                } else { Ok(params) }
+            })();
+            let (params, result) = match preparation {
+                Ok(params) => {
+                    let result = app.run(&cmd, params.clone());
+                    (params, result)
+                }
+                Err(error) => (Value::Null, Err(error)),
+            };
             // A filter that runs as a background job keeps its preview on screen until the job
             // lands (`canvas::committed_filter_preview`) instead of flashing the unfiltered image.
             let running = app

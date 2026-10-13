@@ -4,6 +4,9 @@
 use super::*;
 use photocraft_raster::{Interrupt, RasterInputError, MAX_CHECKED_RASTER_BYTES};
 use std::mem::size_of;
+#[path = "wide_brush_match_controlled.rs"]
+mod brush_match;
+
 type Result<T> = std::result::Result<T, RasterInputError>;
 fn poll(control:&Interrupt<'_>)->Result<()>{control.check().map_err(|_|RasterInputError::Cancelled)}
 fn add(a:u64,b:u64)->Result<u64>{a.checked_add(b).ok_or(RasterInputError::LimitExceeded)}
@@ -89,10 +92,11 @@ impl StrokeRenderer{
             // equality scans. It does not clone or reconstruct the brush.
             let req=pass.incremental_clone_requirements(StrokeLimits{resident_bytes:limits.resident_bytes,work_units:limits.work_units},control)
                 .map_err(|error|match error{StrokeError::Cancelled=>RasterInputError::Cancelled,_=>RasterInputError::LimitExceeded})?;
-            admitted_work=add(admitted_work,req.work_units)?;
+            let comparison_work=add(req.work_units,256)?;
+            admitted_work=add(admitted_work,add(req.work_units,comparison_work)?)?;
             if admitted_work>limits.work_units{return Err(RasterInputError::LimitExceeded);}
             retained=add(retained,req.retained_bytes)?;
-            if pass.per_dab_color||pass.fmt!=self.fmt||pass.ctx.brush!=*brush{return Err(RasterInputError::UnsupportedConversion);}
+            if pass.per_dab_color||pass.fmt!=self.fmt||!brush_match::equal(&pass.ctx.brush,brush,comparison_work,control)?{return Err(RasterInputError::UnsupportedConversion);}
             retained=add(retained,map_bytes(&pass.cov,limits.resident_bytes,control)?)?;
             if let Some(dual)=&pass.dual{retained=add(retained,map_bytes(dual,limits.resident_bytes,control)?)?;}
             if retained>limits.resident_bytes{return Err(RasterInputError::LimitExceeded);}
@@ -102,7 +106,13 @@ impl StrokeRenderer{
         let tile_scratch=mul((256*256) as u64,mul(format.bytes_per_pixel() as u64,3)?)?;
         let copy_maps=mul(pre.tile_count() as u64,(size_of::<(photocraft_geom::TileCoord,Arc<photocraft_raster::Tile>)>()+512) as u64)?;
         if add(retained,add(add(scratch,output_headroom)?,add(tile_scratch,copy_maps)?)?)?>limits.resident_bytes{return Err(RasterInputError::LimitExceeded);}
-        poll(control)?;let mut staged=sparse_copy(pre,limits.resident_bytes.checked_sub(retained).ok_or(RasterInputError::LimitExceeded)?,control)?;
+        // One scratch allocation for the complete transaction, before any
+        // output map staging; tile scans reuse it without growth.
+        poll(control)?;let mut coverage=Vec::new();
+        coverage.try_reserve_exact((COV_TILE*COV_TILE) as usize).map_err(|_|RasterInputError::AllocationFailed)?;
+        let actual_scratch=mul(coverage.capacity() as u64,size_of::<f64>() as u64)?;
+        if add(retained,add(add(actual_scratch,output_headroom)?,add(tile_scratch,copy_maps)?)?)?>limits.resident_bytes{return Err(RasterInputError::LimitExceeded);}
+        let mut staged=sparse_copy(pre,limits.resident_bytes.checked_sub(add(retained,actual_scratch)?).ok_or(RasterInputError::LimitExceeded)?,control)?;
         // No allocated key set: visit each key in primary/mirror order, skipping
         // keys already seen in an earlier pass, and write each native tile once.
         for(index,pass)in passes.iter().enumerate(){
@@ -113,8 +123,8 @@ impl StrokeRenderer{
                 let area=Rect::new(x0,y0,x0.checked_add(COV_TILE).ok_or(RasterInputError::InvalidBounds)?,y0.checked_add(COV_TILE).ok_or(RasterInputError::InvalidBounds)?).intersect(&bounds);
                 if area.is_empty(){continue;}
                 let pixels=usize::try_from(area.width()).ok().and_then(|w|usize::try_from(area.height()).ok().and_then(|h|w.checked_mul(h))).ok_or(RasterInputError::InvalidBounds)?;
-                let mut coverage=Vec::new();coverage.try_reserve_exact(pixels).map_err(|_|RasterInputError::AllocationFailed)?;
-                if mul(coverage.capacity() as u64,size_of::<f64>() as u64)?>scratch{return Err(RasterInputError::LimitExceeded);}
+                if pixels>coverage.capacity(){return Err(RasterInputError::LimitExceeded);}
+                coverage.clear();
                 for y in area.y0..area.y1{poll(control)?;for x in area.x0..area.x1{
                     let mut primary=self.cov.get(x,y);let mut depth=self.cov.depth(x,y);let mut dual=self.dual.as_ref().map(|map|map.get(x,y));
                     for other in others{

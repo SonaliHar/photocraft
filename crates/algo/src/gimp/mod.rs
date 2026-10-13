@@ -7,6 +7,10 @@ pub mod curves;
 /// Typed configured candidates; stored-source admission remains separately qualified.
 pub mod configured;
 pub mod box_mean_graph;
+pub mod histogram_distribution_graph;
+pub mod alpha_association_graph;
+pub mod coverage_graph;
+pub mod extrema_graph;
 /// Standalone candidate kernel; import qualification remains a separate gate.
 pub mod global_stretch_contrast;
 pub mod global_normalize;

@@ -3,10 +3,13 @@
 use crate::{EngineError,Result};
 use serde_json::Value;
 fn relative(id:&str)->bool {
-    matches!(id,"select.all"|"select.deselect"|"select.inverse"|"edit.fill"|"edit.clear"|"edit.copy"|"edit.cut"|"edit.paste"
+    matches!(id,"select.all"|"select.deselect"|"select.inverse"|"select.rect"|"edit.fill"|"edit.clear"|"edit.copy"|"edit.cut"|"edit.paste"
         |"edit.pasteSpecial.pasteInPlace"|"edit.pasteSpecial.pasteInto"|"edit.pasteSpecial.pasteOutside"
         |"layer.layerMask.revealAll"|"layer.layerMask.hideAll"|"layer.layerMask.revealSelection"
-        |"layer.layerMask.hideSelection"|"layer.layerMask.fromTransparency"|"layer.layerMask.delete"|"layer.layerMask.apply")
+        |"layer.layerMask.hideSelection"|"layer.layerMask.fromTransparency"|"layer.layerMask.delete"|"layer.layerMask.apply"
+        |"xcf.floating.anchor"|"xcf.floating.toLayer"|"xcf.floating.delete"
+        |"image.adjustments.threshold"|"image.adjustments.posterize"
+        |"select.modify.feather"|"select.modify.expand"|"select.modify.contract"|"select.modify.border"|"select.modify.smooth")
 }
 fn canonical(value:&Value,nonzero:bool)->bool {
     let Some(text)=value.as_str() else {return false};
@@ -37,6 +40,7 @@ mod tests {
         assert_eq!(journal["documentId"],json!("18446744073709551615"));
         assert_eq!(normalize("xcf.link.substitute",journal.clone()).unwrap(),journal);
         assert_eq!(normalize("select.inverse",json!({"documentId":"7","expectedRevision":"9"})).unwrap(),json!({}));
+        assert_eq!(normalize("select.rect",json!({"x":3,"y":4,"width":5,"height":6,"ellipse":true,"documentId":"7","expectedRevision":"9"})).unwrap(),json!({"x":3,"y":4,"width":5,"height":6,"ellipse":true}));
         for command in ["edit.fill","edit.clear"] {
             assert_eq!(normalize(command,json!({"target":"mask","contents":"background","documentId":"7","expectedRevision":"9"})).unwrap(),json!({"target":"mask","contents":"background"}));
         }

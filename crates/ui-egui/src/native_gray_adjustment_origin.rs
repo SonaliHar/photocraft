@@ -1,0 +1,113 @@
+//! Runtime-only target fencing for existing Threshold and Posterize dialogs.
+//! This does not qualify source metadata or replace the registered engine's native checks.
+use crate::PhotocraftApp;
+use photocraft_doc::{DocId,LayerId};
+use photocraft_engine::{WeakDocumentSnapshot,channel_cmds::ChannelTarget,mask_view_cmds::LayerMaskView};
+use serde_json::{Map,Value};
+#[derive(Clone,Debug)]
+pub(crate) struct Origin {dialog:u64,command:String,document:DocId,revision:u64,snapshot:WeakDocumentSnapshot,layer:Option<LayerId>,channel:ChannelTarget,editing_mask:Option<LayerId>,shown_mask:Option<LayerMaskView>,shell_mask:bool}
+impl PartialEq for Origin {
+    fn eq(&self,other:&Self)->bool {
+        self.dialog==other.dialog && self.command==other.command && self.document==other.document && self.revision==other.revision
+            && self.layer==other.layer && self.channel==other.channel && self.editing_mask==other.editing_mask && self.shown_mask==other.shown_mask && self.shell_mask==other.shell_mask
+            && match(self.snapshot.upgrade(),other.snapshot.upgrade()) {(Some(a),Some(b))=>a.shares_state(&b),(None,None)=>true,_=>false}
+    }
+}
+pub(crate) fn handles(command:&str)->bool {matches!(command,"image.adjustments.threshold"|"image.adjustments.posterize")}
+fn idle(app:&PhotocraftApp)->Result<(),String> {
+    let active=app.session.active().ok_or_else(||tl!("Open a document before adjusting pixels.").to_owned())?;
+    if active.doc.id.0==0 || active.revision==u64::MAX || app.ui.transform.is_some() || app.session.has_jobs() || active.floating.is_some() || active.coalesce.is_some()
+        || active.doc.xcf_state.as_ref().is_some_and(|state|state.floating.is_some()) {return Err(tl!("Finish pending edits before adjusting pixels.").into());}
+    Ok(())
+}
+pub(crate) fn capture_open(app:&mut PhotocraftApp,dialog:u64,command:&str) {
+    if !handles(command) {return;}
+    app.ui.native_gray_adjustment_origin=None;
+    if let Err(error)=idle(app) {app.ui.status=error;app.ui.status_error=true;return;}
+    if let Some(active)=app.session.active() {
+        app.ui.native_gray_adjustment_origin=Some(Origin {dialog,command:command.into(),document:active.doc.id,revision:active.revision,snapshot:active.doc.downgrade(),layer:active.active_layer,channel:active.channel_view.target,editing_mask:active.channel_view.editing_mask,shown_mask:active.channel_view.layer_mask,shell_mask:app.layer_mask_targeted()});
+    }
+}
+/// Borrowed validation before generic parameter cloning or remembered preferences.
+pub(crate) fn validate(app:&PhotocraftApp,dialog:u64,fields:&Map<String,Value>)->Result<(),String> {
+    let command=fields.get("__command").and_then(Value::as_str).ok_or_else(||tl!("Reopen the adjustment dialog before applying.").to_owned())?;
+    if !handles(command) {return Ok(());}
+    idle(app)?;
+    let stale=||tl!("The adjustment target changed. Reopen the dialog.").to_owned();
+    let origin=app.ui.native_gray_adjustment_origin.as_ref().ok_or_else(stale)?;
+    let active=app.session.active().ok_or_else(stale)?;
+    let snapshot=origin.snapshot.upgrade().ok_or_else(stale)?;
+    if origin.dialog!=dialog || origin.command!=command || active.doc.id!=origin.document || active.revision!=origin.revision || !active.doc.shares_state(&snapshot)
+        || active.active_layer!=origin.layer || active.channel_view.target!=origin.channel || active.channel_view.editing_mask!=origin.editing_mask || active.channel_view.layer_mask!=origin.shown_mask || app.layer_mask_targeted()!=origin.shell_mask {return Err(stale());}
+    let invalid=||tl!("Check the adjustment settings and try again.").to_owned();
+    if fields.len()>32 || fields.iter().any(|(key,value)|key.len()>128 || (!key.starts_with("__") && (!matches!(key.as_str(),"level"|"levels"|"opacity"|"target"|"layer"|"documentId"|"expectedRevision") || matches!(value,Value::String(text) if text.len()>128)))) {return Err(invalid());}
+    for key in ["level","levels","opacity"] {if fields.get(key).is_some_and(|value|value.as_f64().is_none_or(|n|!n.is_finite())) {return Err(invalid());}}
+    if fields.get("__kind").is_some_and(|value|value.as_str()!=command.strip_prefix("image.adjustments.")) {return Err(invalid());}
+    if fields.get("__smartFilter").is_some_and(|value|value.as_object().is_none_or(|object|object.len()!=2 || object.get("layer").and_then(Value::as_u64).is_none() || object.get("index").and_then(Value::as_u64).is_none())) {return Err(invalid());}
+    if fields.get("target").is_some_and(|value|match value {
+        Value::String(text)=>!matches!(text.as_str(),"mask"|"pixels"|"quickMask"),
+        Value::Object(object)=>object.len()!=1 || object.get("channel").and_then(Value::as_u64).is_none(),
+        _=>true,
+    }) || fields.get("layer").is_some_and(|value|value.as_u64().is_none_or(|id|id==0)) {
+        return Err(invalid());
+    }
+    for key in ["documentId","expectedRevision"] {
+        if fields.get(key).is_some_and(|value|value.as_str().is_none_or(|text|text.is_empty() || text.len()>20 || !text.bytes().all(|b|b.is_ascii_digit()) || (text.len()>1 && text.starts_with('0')) || text.parse::<u64>().is_err())) {return Err(invalid());}
+    }
+    if fields.contains_key("documentId")!=fields.contains_key("expectedRevision") {return Err(invalid());}
+    Ok(())
+}
+/// Preserve ordinary dialog/Smart Filter parameters. Only the native wide lane adds selectors.
+pub(crate) fn prepare(app:&PhotocraftApp,dialog:u64,fields:&Map<String,Value>,mut params:Value)->Result<Value,String> {
+    validate(app,dialog,fields)?;
+    let command=fields.get("__command").and_then(Value::as_str).ok_or_else(||tl!("Reopen the adjustment dialog before applying.").to_owned())?;
+    if !handles(command) || fields.contains_key("__smartFilter") {return Ok(params);}
+    let origin=app.ui.native_gray_adjustment_origin.as_ref().ok_or_else(||tl!("Reopen the adjustment dialog before applying.").to_owned())?;
+    let active=app.session.active().ok_or_else(||tl!("Open a document before adjusting pixels.").to_owned())?;
+    // Follow the existing shell mask injection and registered native target precedence.
+    let mask=||origin.layer.and_then(|id|active.doc.layer(id)).and_then(|layer|layer.mask.as_ref()).map(|mask|mask.surface.as_ref());
+    let surface=match params.get("target") {
+        Some(Value::String(target)) if target=="mask"=>mask(),
+        Some(Value::String(target)) if target=="quickMask"=>active.doc.quick_mask.as_ref().map(|channel|&channel.surface),
+        Some(Value::Object(object))=>object.get("channel").and_then(Value::as_u64).and_then(|index|usize::try_from(index).ok()).and_then(|index|active.doc.channels.get(index)).map(|channel|&channel.surface),
+        Some(_)=>None,
+        None if origin.shell_mask=>mask(),
+        None=>match origin.channel {
+            ChannelTarget::Alpha(index)=>active.doc.channels.get(index).map(|channel|&channel.surface),
+            ChannelTarget::LayerMask=>mask(),
+            ChannelTarget::Composite if active.doc.quick_mask.is_some()=>active.doc.quick_mask.as_ref().map(|channel|&channel.surface),
+            ChannelTarget::Composite if photocraft_engine::mask_view_cmds::current(active).is_some()=>mask(),
+            _=>None,
+        },
+    };
+    if surface.is_some_and(|surface|matches!(surface.format().sample,photocraft_doc::SampleType::U32|photocraft_doc::SampleType::F64)) {
+        let object=params.as_object_mut().filter(|object|object.len()<=8).ok_or_else(||tl!("Check the adjustment settings and try again.").to_owned())?;
+        object.insert("documentId".into(),Value::String(origin.document.0.to_string()));
+        object.insert("expectedRevision".into(),Value::String(origin.revision.to_string()));
+    }
+    Ok(params)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn threshold_target_switch_and_restored_posterize_fields_have_no_authority() {
+        let mut app=PhotocraftApp::new(photocraft_engine::Session::new(),Default::default());
+        app.session.execute("file.new",json!({"width":4,"height":4})).unwrap();
+        for (command,key) in [("image.adjustments.threshold","level"),("image.adjustments.posterize","levels")] {
+            capture_open(&mut app,9,command);
+            let fields=json!({"__command":command,key:3}).as_object().unwrap().clone();
+            assert!(validate(&app,9,&fields).is_ok());
+            let before=app.session.active().unwrap().doc.clone();
+            app.session.active_mut().unwrap().channel_view.target=ChannelTarget::Color(0);
+            assert!(validate(&app,9,&fields).is_err());
+            assert!(app.session.active().unwrap().doc.shares_state(&before));
+            app.session.active_mut().unwrap().channel_view.target=ChannelTarget::Composite;
+            app.ui.native_gray_adjustment_origin=None;
+            assert!(prepare(&app,9,&fields,json!({key:3})).is_err());
+        }
+        assert!(!handles("image.adjustments.invert"));
+    }
+}

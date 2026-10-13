@@ -7,7 +7,7 @@ use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
 use photocraft_color::{ColorMode, SampleType, BlendMode};
 use serde_json::{Value,json};
 use std::sync::Arc;
-mod unit_math;
+pub(crate) mod unit_math;
 use unit_math::Blend;
 fn bad(message:impl Into<String>)->EngineError{EngineError::Other(format!("native Gray Fill/Clear: {}",message.into()))}
 fn poll(control:&Interrupt<'_>)->Result<()>{control.check().map_err(|_|EngineError::Cancelled)}

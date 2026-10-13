@@ -57,12 +57,12 @@ fn asset_pixels(b:&BrushSettings)->Result<u64>{
     Ok(n)
 }
 fn mips(tip:&TipShape,budget:&mut Budget<'_,'_>)->Result<Option<Arc<Mips>>>{
-    let Some(tile)=tip.bitmap() else{return Ok(None);};let mut levels:Vec<(usize,usize,Vec<f32>)>=budget.vector(33)?;let mut first:Vec<f32>=budget.vector(tile.data.len())?;
-    for value in &tile.data{budget.tick(1)?;first.push(f32::from(*value)/65535.0);}levels.push((tile.width as usize,tile.height as usize,first));
-    while let Some((w,h,values))=levels.last(){budget.poll()?;if *w<=1&&*h<=1{break;}let(nw,nh)=((*w).div_ceil(2),(*h).div_ceil(2));let mut next=budget.vector(nw.checked_mul(nh).ok_or(StrokeError::Limit)?)?;
-        for y in 0..nh{budget.poll()?;for x in 0..nw{budget.tick(1)?;let(mut sum,mut count)=(0.0,0.0);for dy in 0..2{for dx in 0..2{let(sx,sy)=(x*2+dx,y*2+dy);if sx<*w&&sy<*h{sum+=at(values,sy*w+sx)?;count+=1.0;}}}next.push(sum/count);}}
-        if levels.len()>=levels.capacity(){return Err(StrokeError::Limit);}levels.push((nw,nh,next));
-    }budget.poll()?;Ok(Some(Arc::new(Mips{levels})))
+    let Some(tile)=tip.bitmap() else{return Ok(None);};budget.poll()?;
+    let limits=StrokeLimits{resident_bytes:budget.limits.resident_bytes,work_units:budget.limits.work_units.checked_sub(budget.work).ok_or(StrokeError::Limit)?};
+    let requirements=Mips::controlled_requirements(tile,limits,budget.control)?;
+    budget.tick(requirements.work_units)?;
+    let mip=Mips::try_new_with_interrupt(tile,limits,budget.control)?;
+    budget.poll()?;Ok(Some(Arc::new(mip)))
 }
 
 #[inline]
@@ -357,9 +357,13 @@ fn sort_keys(keys:&mut[(i32,i32)],budget:&mut Budget<'_,'_>)->Result<()>{
 }
 fn composite(ctx:&BrushContext,cov:&CoverageMap,dual:Option<&CoverageMap>,pre:&Surface,target:&mut Surface,selection:Option<&Surface>,lock_transparency:bool,budget:&mut Budget<'_,'_>)->Result<Rect>{
     let mut keys=budget.vector(cov.tiles.len())?;for key in cov.tiles.keys(){budget.tick(1)?;keys.push(*key);}sort_keys(&mut keys,budget)?;
+    composite_keys(ctx,cov,dual,&keys,pre,target,selection,lock_transparency,budget)
+}
+#[allow(clippy::too_many_arguments)]
+fn composite_keys(ctx:&BrushContext,cov:&CoverageMap,dual:Option<&CoverageMap>,keys:&[(i32,i32)],pre:&Surface,target:&mut Surface,selection:Option<&Surface>,lock_transparency:bool,budget:&mut Budget<'_,'_>)->Result<Rect>{
     let bounds=cov.bounds;let fmt=target.format();let n=fmt.channels();let a_idx=alpha_index(&fmt);let nc=fmt.mode.color_channels();let b=&ctx.brush;let opacity=b.opacity.clamp(0.0,1.0);let mut src=[0.0f32;8];from_rgba_into(&fmt,b.color,&mut src);if let (photocraft_color::ColorMode::Cmyk,Some((rgb,inks)))=(fmt.mode,b.color_cmyk){if rgb==[b.color[0],b.color[1],b.color[2]]{src.get_mut(..4).ok_or(StrokeError::InvalidInput("CMYK inks"))?.copy_from_slice(&inks);}}if let Some(a)=a_idx{*src.get_mut(a).ok_or(StrokeError::InvalidInput("alpha index"))?=b.color[3];}
     let count=(COV_TILE*COV_TILE) as usize;let mut raw=budget.vector(count*fmt.bytes_per_pixel())?;raw.resize(count*fmt.bytes_per_pixel(),0);let mut region=budget.vector(count*n)?;let mut selected_raw=budget.vector(count*selection.map_or(0,|surface|surface.format().bytes_per_pixel()))?;selected_raw.resize(selected_raw.capacity(),0);let mut selected=budget.vector(count*selection.map_or(0,Surface::channels))?;
-    for(tx,ty)in keys{budget.poll()?;let Some(tile)=cov.tiles.get(&(tx,ty))else{continue;};let tr=Rect::new(tx*COV_TILE,ty*COV_TILE,(tx+1)*COV_TILE,(ty+1)*COV_TILE).intersect(&bounds);if tr.is_empty(){continue;}let pixels=area(tr)?;let raw_length=pixels.checked_mul(fmt.bytes_per_pixel()).ok_or(StrokeError::Limit)?;
+    for &(tx,ty)in keys{budget.poll()?;let Some(tile)=cov.tiles.get(&(tx,ty))else{continue;};let tr=Rect::new(tx*COV_TILE,ty*COV_TILE,(tx+1)*COV_TILE,(ty+1)*COV_TILE).intersect(&bounds);if tr.is_empty(){continue;}let pixels=area(tr)?;let raw_length=pixels.checked_mul(fmt.bytes_per_pixel()).ok_or(StrokeError::Limit)?;
         budget.raster(pre.try_read_interleaved_into_with(tr,raw.get_mut(..raw_length).ok_or(StrokeError::Limit)?,budget.control))?;region.clear();for sample in 0..pixels*n{budget.tick(1)?;region.push(read_sample(raw.get(..raw_length).ok_or(StrokeError::Limit)?,fmt.sample,sample));}
         selected.clear();if let Some(selection)=selection{let format=selection.format();let length=pixels.checked_mul(format.bytes_per_pixel()).ok_or(StrokeError::Limit)?;budget.raster(selection.try_read_interleaved_into_with(tr,selected_raw.get_mut(..length).ok_or(StrokeError::Limit)?,budget.control))?;for sample in 0..pixels*selection.channels(){budget.tick(1)?;selected.push(read_sample(selected_raw.get(..length).ok_or(StrokeError::Limit)?,format.sample,sample));}}
         let w=tr.width() as usize;
@@ -373,6 +377,15 @@ fn composite(ctx:&BrushContext,cov:&CoverageMap,dual:Option<&CoverageMap>,pre:&S
         for(sample,value)in region.iter().enumerate(){budget.tick(1)?;write_sample(raw.get_mut(..raw_length).ok_or(StrokeError::Limit)?,fmt.sample,sample,*value);}
         budget.raster(target.try_write_interleaved_with(tr,raw.get(..raw_length).ok_or(StrokeError::Limit)?,budget.control))?;
     }budget.poll()?;Ok(bounds)
+}
+/// Private output only: the caller owns admission, sorted key selection and
+/// dirty-set publication. Both ordinary one-shot and live routes share math.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn composite_existing_with_interrupt(ctx:&BrushContext,cov:&CoverageMap,dual:Option<&CoverageMap>,keys:&[(i32,i32)],pre:&Surface,target:&Surface,selection:Option<&Surface>,lock_transparency:bool,limits:StrokeLimits,control:&Interrupt<'_>)->Result<Surface>{
+    let mut budget=Budget{control,limits,work:0};budget.poll()?;
+    let mut output=clone_surface(target,&mut budget)?;
+    composite_keys(ctx,cov,dual,keys,pre,&mut output,selection,lock_transparency,&mut budget)?;
+    budget.poll()?;Ok(output)
 }
 pub fn apply_stroke_with_interrupt(target:&mut Surface,stroke:&Stroke,selection:Option<&Surface>,lock_transparency:bool,limits:StrokeLimits,control:&Interrupt<'_>)->Result<Rect>{render_stroke_with_interrupt(target,&stroke.brush,&stroke.points,selection,lock_transparency,1.0,limits,control)}
 /// Fixed straight preset reflection, preserving upstream pass order and stylus fields.

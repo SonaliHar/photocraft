@@ -338,7 +338,7 @@ pub(crate) fn filter_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, laye
                 }
             });
             if color_rotate {
-                color_rotate::controls(app, ui, document.id.0, revision, node, editable);
+                color_rotate::controls(app, ui, &document, revision, node, editable);
                 if !editable {
                     ui.label(if unlocked { tl!("Filter editing is unavailable") } else { tl!("Layer content is locked") });
                 }

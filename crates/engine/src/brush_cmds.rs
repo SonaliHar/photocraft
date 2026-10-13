@@ -420,6 +420,7 @@ pub(crate) fn doc_cmyk_space(s: &Session) -> Option<std::sync::Arc<photocraft_co
 }
 
 mod stroke_controlled;
+mod live_begin_controlled;
 /// Borrowed validation before dispatcher normalization or parameter cloning.
 pub(crate) fn stroke_dispatch_preflight(session: &Session, command: &str, params: &Value, background: bool) -> Result<()> {
     stroke_controlled::dispatch_preflight(session, command, params, background)
@@ -700,6 +701,15 @@ impl LiveStroke {
     /// Start a live stroke of `cmd`: `paint.stroke` (the Brush and Eraser) or `paint.pencil`.
     /// Committing `cmd` with the same params and `"seed": live.seed` gives the same pixels.
     pub fn begin_with(s: &Session, cmd: &str, p: &Value) -> Result<Self> {
+        Self::begin_with_interrupt(s, cmd, p, &photocraft_raster::Interrupt::NONE)
+    }
+
+    /// Prepare privately, retaining the upstream target/color/symmetry rules.
+    /// Parameter/model copies remain bounded legacy preparation boundaries;
+    /// renderer construction and incremental rendering carry this token.
+    pub fn begin_with_interrupt(s: &Session, cmd: &str, p: &Value, control: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
+        control.check().map_err(|_| EngineError::Cancelled)?;
+        stroke_controlled::dispatch_preflight(s, cmd, p, false)?;
         has_paintable(s).map_err(EngineError::Other)?;
         let pts = parse_points(p, cmd)?;
         let pencil = match cmd {
@@ -723,11 +733,13 @@ impl LiveStroke {
         if pencil && flag(p, "autoErase", false) {
             apply_auto_erase(&mut brush, surf, pts.first(), fg, s.tools.background);
         }
-        let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
+        let render_format = surf.format();
         let symmetry = s.active().and_then(|st| st.symmetry.clone());
-        let mirrors: Vec<_> = (0..symmetry.as_ref().map_or(0, |s| s.mirror_count())).map(|_| StrokeRenderer::new(&brush, Some(surf.format()), zoom)).collect();
-        let mirror_distinct = vec![false; mirrors.len()];
-        let pre = surf.clone();
+        let (renderer, mirrors, mirror_distinct) = live_begin_controlled::prepare_renderers(
+            &doc, &brush, render_format, zoom, symmetry.as_ref().map_or(0, |s| s.mirror_count()), control,
+        )?;
+        control.check().map_err(|_| EngineError::Cancelled)?;
+        let pre = crate::channel_cmds::target_surface(&mut doc, layer, p)?.0.clone();
         let mut live = Self {
             doc: crate::DocumentSnapshot::from_resident(std::sync::Arc::new(doc))?,
             seed,
@@ -749,7 +761,7 @@ impl LiveStroke {
             point_ledger: Default::default(),
             base,
         };
-        live.push(&pts)?;
+        live.push_with_interrupt(&pts, control)?;
         Ok(live)
     }
 
@@ -867,9 +879,13 @@ impl LiveStroke {
                 self.renderer.mark_dirty(old);
                 dmg = old;
             }
-            dmg = dmg.union(&self.renderer.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false));
+            dmg = dmg.union(&self.renderer.try_composite_with_interrupt(&self.pre, surf, self.sel.as_ref(), self.lock, false, limits, control)
+                .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?);
+            control.check().map_err(|_| EngineError::Cancelled)?;
             if let Some(mut tail) = self.renderer.tail_preview() {
-                self.tail = tail.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false);
+                control.check().map_err(|_| EngineError::Cancelled)?;
+                self.tail = tail.try_composite_with_interrupt(&self.pre, surf, self.sel.as_ref(), self.lock, false, limits, control)
+                    .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;
                 dmg = dmg.union(&self.tail);
             }
             Ok(dmg)

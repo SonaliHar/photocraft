@@ -186,6 +186,9 @@ fn ordinary_preview(
     result.map(ImportedPreviewBuffer::Plain).map_err(|error| format!("Canvas: {error}"))
 }
 
+#[path = "marquee_origin.rs"]
+mod marquee_origin;
+
 /// An in-progress pointer gesture on the canvas.
 #[derive(Clone, Debug)]
 pub struct Drag {
@@ -213,6 +216,7 @@ pub struct Drag {
     /// every Move-tool drag with a selection does (`move_ui::moves_selected_pixels_with`).
     pub sel_move: Option<bool>,
     pub lasso: Option<crate::lasso_ui::Lasso>,
+    selection_origin: Option<marquee_origin::Origin>,
 }
 
 impl Drag {
@@ -230,6 +234,7 @@ impl Drag {
             reposition: false,
             sel_move: None,
             lasso: None,
+            selection_origin: None,
         }
     }
 
@@ -5318,7 +5323,13 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             }
             // ⌥ flips Dodge/Burn and Blur/Sharpen for this stroke.
             let tool = crate::retouch_ui::alt_flipped(tool, mods.alt);
-            app.drag = Some(Drag { clear, ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) });
+            let selection_origin=if matches!(tool,Tool::RectMarquee|Tool::EllipseMarquee|Tool::SingleRowMarquee|Tool::SingleColumnMarquee) {
+                match marquee_origin::capture(app) {
+                    Ok(origin)=>Some(origin),
+                    Err(error)=>{app.ui.status=error;app.ui.status_error=true;return;},
+                }
+            } else {None};
+            app.drag = Some(Drag { clear, selection_origin, ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) });
             app.trail = None;
             app.stylus.begin_stroke();
             if from.is_some() {
@@ -5609,6 +5620,10 @@ fn snap_aliased_tip(app: &PhotocraftApp, tool: Tool, x: f64, y: f64) -> (f64, f6
 }
 
 pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
+    if d.sel_move.is_none() && matches!(d.tool,Tool::RectMarquee|Tool::EllipseMarquee|Tool::SingleRowMarquee|Tool::SingleColumnMarquee)
+        && let Err(error)=marquee_origin::validate(app,d.selection_origin.as_ref()) {
+        app.ui.status=error;app.ui.status_error=true;return;
+    }
     let mut end = d.points.last().copied().unwrap_or([d.start[0], d.start[1], 1.0]);
     let (sx, sy) = snap_aliased_tip(app, d.tool, end[0], end[1]);
     end[0] = sx;
@@ -5649,13 +5664,15 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
             // Exactly what the drag showed (`marquee_preview_px`); a click deselects.
             let Some([x0, y0, x1, y1]) = marquee_preview_px(&app.ui.tool_options, &d, app.point_zoom()) else {
                 if app.session.is_enabled("select.deselect") {
-                    let _ = app.run("select.deselect", json!({}));
+                    if let Err(error)=app.run("select.deselect",json!({})) {app.ui.status=error;app.ui.status_error=true;}
                 }
                 return;
             };
             let mode = selection_mode(app, d.modifiers);
             let (aa, feather) = (app.ui.tool_options.anti_alias, app.ui.tool_options.feather);
-            let _ = app.run("select.rect", json!({"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0, "mode": mode, "ellipse": d.tool == Tool::EllipseMarquee, "antiAlias": aa, "feather": feather}));
+            if let Err(error)=marquee_origin::dispatch(app,d.selection_origin.as_ref(),json!({"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0, "mode": mode, "ellipse": d.tool == Tool::EllipseMarquee, "antiAlias": aa, "feather": feather})) {
+                app.ui.status=error;app.ui.status_error=true;
+            }
         }
         // A click (or the end of a drag) selects the line under the pointer, never deselects.
         Tool::SingleRowMarquee | Tool::SingleColumnMarquee => {
@@ -5664,10 +5681,10 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
             let feather = app.ui.tool_options.feather;
             // `line` names the History step after the tool (Single Row / Single Column Marquee).
             let line = if d.tool == Tool::SingleRowMarquee { "row" } else { "column" };
-            let _ = app.run(
-                "select.rect",
-                json!({"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0, "mode": mode, "line": line, "antiAlias": false, "feather": feather}),
-            );
+            if let Err(error)=marquee_origin::dispatch(app,d.selection_origin.as_ref(),
+                json!({"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0, "mode": mode, "line": line, "antiAlias": false, "feather": feather})) {
+                app.ui.status=error;app.ui.status_error=true;
+            }
         }
         Tool::Patch if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => crate::retouch_ui::finish_patch(app, d.start, [end[0], end[1]]),
         Tool::ContentAwareMove if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => {

@@ -1,6 +1,8 @@
 //! One strict transport wrapper; decoded bytes are still untrusted XCF syntax.
 use crate::*;
 use std::{borrow::Cow, cell::RefCell, io};
+#[path = "decode_control.rs"]
+mod decode_control;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SourceContainer {
@@ -249,11 +251,7 @@ pub fn decode_candidate_with_budget<'b, 'a>(
         ("residentBytes", limits.get(BudgetKind::Resident).min(options.limits.resident_bytes as u64)),
     ])?;
     let limits = &effective;
-    budget.poll("import entry")?;
-    if options.cancelled.is_some_and(|poll| poll()) {
-        budget.mark_cancelled();
-        return Err(XcfError::new(ErrorKind::Cancelled, 0, "cancelled at import entry"));
-    }
+    decode_control::poll(budget, options.cancelled, "import entry")?;
     let Some(kind) = classify_container(bytes) else {
         return Ok(None);
     };
@@ -321,7 +319,7 @@ pub fn decode_candidate_with_budget<'b, 'a>(
     };
     let logical_bytes = logical.len() as u64;
     let result = crate::reader::decode(&logical, &local, budget, true);
-    budget.poll("import completion")?;
+    decode_control::poll(budget, options.cancelled, "import completion")?;
     let mut file = result?;
     // Parsed records own their retained bytes; the logical transport buffer is freed.
     drop(logical);
@@ -342,6 +340,7 @@ pub fn decode_candidate_with_budget<'b, 'a>(
         (file.charged_bytes as u64).checked_sub(size).ok_or_else(|| XcfError::new(ErrorKind::Limit, 0, "retained source accounting"))?,
         "parsed state handoff",
     )?;
+    decode_control::poll(budget, options.cancelled, "parsed state handoff")?;
     Ok(Some(BudgetDecodedImport {
         decoded: DecodedImport { file, container: kind, encoded_bytes: size, logical_bytes },
         reservations: DecodeReservations { source_encoded, source_resident, retained },
@@ -367,7 +366,7 @@ pub fn decode_plain_source_into_sink_with_budget<'b, 'a, S: PlaneSink>(
     accounting: PlainSourceAccounting,
     sink: &mut S,
 ) -> Result<BudgetDecodedImport<'b, 'a, S::Plane>, XcfError> {
-    budget.poll("plain source admission")?;
+    decode_control::poll(budget, options.cancelled, "plain source admission")?;
     let size = source.len();
     let limits = budget.limits();
     budget.check(BudgetKind::Encoded, size, "plain encoded source")?;
@@ -417,7 +416,7 @@ pub fn decode_plain_source_into_sink_with_budget<'b, 'a, S: PlaneSink>(
         progress: options.progress,
     };
     let mut file = crate::reader::decode_source(source, &local, budget, sink)?;
-    budget.poll("plain parsed handoff")?;
+    decode_control::poll(budget, options.cancelled, "plain parsed handoff")?;
     let parsed = file.charged_bytes as u64;
     let retained = budget.reserve(BudgetKind::Resident, parsed, "plain parsed state handoff")?;
     // Keep the existing decoded accounting convention for downstream mapping.
@@ -425,6 +424,7 @@ pub fn decode_plain_source_into_sink_with_budget<'b, 'a, S: PlaneSink>(
         .charged_bytes
         .checked_add(usize::try_from(size).map_err(|_| XcfError::new(ErrorKind::Limit, 0, "plain accounting address space"))?)
         .ok_or_else(|| XcfError::new(ErrorKind::Limit, 0, "plain handoff accounting overflow"))?;
+    decode_control::poll(budget, options.cancelled, "plain parsed state handoff")?;
     Ok(BudgetDecodedImport {
         decoded: DecodedImport { file, container: SourceContainer::Plain, encoded_bytes: size, logical_bytes: size },
         reservations: DecodeReservations { source_encoded, source_resident, retained },

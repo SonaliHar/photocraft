@@ -27,6 +27,8 @@ mod saturation_yuv_tests;
 #[path = "gimp_sepia_tests.rs"]
 mod sepia_tests;
 use crate::gimp_composite::{CompositionError, Result, WorkingSpace};
+#[path = "gimp_filters_controlled.rs"]
+mod controlled;
 #[path = "gimp_alpha_clip.rs"]
 mod alpha_clip;
 #[path = "gimp_alpha_clip_finite.rs"]
@@ -887,7 +889,7 @@ impl PointStack {
             }
             poll(WideWork::SampleUnits(128))?;
             let mut output = [0.; 4];
-            video.try_eval_at(position, &pixel, &mut output, *enabled, &photocraft_raster::Interrupt::NONE)?;
+            controlled::run(poll, |control, _work| video.try_eval_at(position, &pixel, &mut output, *enabled, control))?;
             poll(WideWork::SampleUnits(0))?;
             return Ok(output);
         }
@@ -897,7 +899,7 @@ impl PointStack {
         if let Some((candidate, enabled)) = &self.unpremultiply {
             if self.current_sample != Some(photocraft_color::SampleType::F32) { return Err(CompositionError::Unsupported("Unpremultiply current native Float storage")); }
             poll(WideWork::SampleUnits(128))?;
-            let output = candidate.apply_with(&pixel, *enabled, &photocraft_raster::Interrupt::NONE, &|_| Ok(()))?;
+            let output = controlled::run(poll, |control, work| candidate.apply_with(&pixel, *enabled, control, work))?;
             poll(WideWork::SampleUnits(0))?;
             return Ok(output);
         }
@@ -908,42 +910,42 @@ impl PointStack {
             poll(WideWork::SampleUnits(128))?;
             if let Some(absolute) = &node.absolute {
                 pixel = if self.channels == 1 {
-                    absolute.apply_with(&[pixel[0], pixel[3]], true, &photocraft_raster::Interrupt::NONE, &|_| Ok(()))?
+                    controlled::run(poll, |control, work| absolute.apply_with(&[pixel[0], pixel[3]], true, control, work))?
                 } else {
-                    absolute.apply_with(&pixel, true, &photocraft_raster::Interrupt::NONE, &|_| Ok(()))?
+                    controlled::run(poll, |control, work| absolute.apply_with(&pixel, true, control, work))?
                 };
                 continue;
             }
             if let Some(rotate) = &node.color_rotate {
                 pixel = if self.channels == 1 {
-                    rotate.apply_with(&[pixel[0], pixel[3]], true, &photocraft_raster::Interrupt::NONE, &|_| Ok(()))?
+                    controlled::run(poll, |control, work| rotate.apply_with(&[pixel[0], pixel[3]], true, control, work))?
                 } else {
-                    rotate.apply_with(&pixel, true, &photocraft_raster::Interrupt::NONE, &|_| Ok(()))?
+                    controlled::run(poll, |control, work| rotate.apply_with(&pixel, true, control, work))?
                 };
                 continue;
             }
             if let Some(red_eye) = &node.red_eye {
                 pixel = if self.channels == 1 {
-                    red_eye.apply_with(&[pixel[0], pixel[3]], true, &photocraft_raster::Interrupt::NONE, &|_| Ok(()))?
+                    controlled::run(poll, |control, work| red_eye.apply_with(&[pixel[0], pixel[3]], true, control, work))?
                 } else {
-                    red_eye.apply_with(&pixel, true, &photocraft_raster::Interrupt::NONE, &|_| Ok(()))?
+                    controlled::run(poll, |control, work| red_eye.apply_with(&pixel, true, control, work))?
                 };
                 continue;
             }
             if let Some(channel) = &node.channel_mixer {
                 let sample = self.current_sample.ok_or(CompositionError::Unsupported("Channel Mixer requires mutable current storage"))?;
                 pixel = if self.channels == 1 {
-                    channel.apply_with_current_storage(&[pixel[0], pixel[3]], true, sample, &photocraft_raster::Interrupt::NONE, &|_| Ok(()))?
+                    controlled::run(poll, |control, work| channel.apply_with_current_storage(&[pixel[0], pixel[3]], true, sample, control, work))?
                 } else {
-                    channel.apply_with_current_storage(&pixel, true, sample, &photocraft_raster::Interrupt::NONE, &|_| Ok(()))?
+                    controlled::run(poll, |control, work| channel.apply_with_current_storage(&pixel, true, sample, control, work))?
                 };
                 continue;
             }
             if let Some(mono) = &node.mono_mixer_signed {
                 pixel = if self.channels == 1 {
-                    mono.apply_with(&[pixel[0], pixel[3]], true, &photocraft_raster::Interrupt::NONE, &|_| Ok(()))?
+                    controlled::run(poll, |control, work| mono.apply_with(&[pixel[0], pixel[3]], true, control, work))?
                 } else {
-                    mono.apply_with(&pixel, true, &photocraft_raster::Interrupt::NONE, &|_| Ok(()))?
+                    controlled::run(poll, |control, work| mono.apply_with(&pixel, true, control, work))?
                 };
                 continue;
             }
@@ -1057,7 +1059,7 @@ impl PointStack {
             let stored = node.working.convert(color, false)?;
             pixel = [stored[0], stored[1], stored[2], pixel[3]];
         }
-        Ok(pixel)
+        controlled::finish_pixel(pixel, poll)
     }
 }
 

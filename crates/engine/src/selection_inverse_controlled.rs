@@ -69,6 +69,10 @@ fn canvas(doc: &Document) -> Result<Rect> {
     }
     Ok(doc.bounds())
 }
+pub(crate) fn selection_write_authority(doc: &Document, ctl: &Interrupt<'_>) -> Result<()> {
+    authority(doc, ctl)
+}
+
 fn authority(doc: &Document, ctl: &Interrupt<'_>) -> Result<()> {
     poll(ctl)?;
     let Some(state) = &doc.xcf_state else {

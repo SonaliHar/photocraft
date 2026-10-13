@@ -1,6 +1,6 @@
 //! Controlled incremental generation joined to the unchanged raster equations.
-//! The legacy raster_pending call has entry/exit polling; its inner raster/map
-//! allocations are conservatively admitted here, not all replaced as fallible.
+//! Pending rasterization uses bounded row spans with fallible buffer/table
+//! reservations. Standard hash allocator internals remain library-managed.
 use super::*;
 use photocraft_raster::Interrupt;
 type Result<T>=std::result::Result<T,StrokeError>;
@@ -48,7 +48,8 @@ impl StrokeRenderer{
         else{candidate.generator.push_with_interrupt(points,&mut candidate.dab_buf,&mut candidate.dual_buf,remaining,control)?;}
         candidate.pending_admission(add(held,add(generated.retained_bytes,generated.staged_bytes)?)?,add(clone.work_units,generated.work_units)?,limits,control)?;
         poll(control)?;
-        candidate.raster_pending();
+        let raster_limits=StrokeLimits{resident_bytes:limits.resident_bytes.checked_sub(add(held,add(generated.retained_bytes,generated.staged_bytes)?)?).ok_or(StrokeError::Limit)?,work_units:limits.work_units.checked_sub(add(clone.work_units,generated.work_units)?).ok_or(StrokeError::Limit)?};
+        candidate.raster_pending_with_interrupt(raster_limits,control)?;
         poll(control)?;
         // Publication only after the complete generated/rasterized state passes
         // the same bounded retained-state census used by live transactions.

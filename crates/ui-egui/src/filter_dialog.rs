@@ -459,6 +459,8 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
         fields.insert("__docs".into(), json!(names));
     }
     let id = app.ui.open_dialog(crate::state::DialogKind::Command, fields);
+    crate::selection_modify_origin::capture_open(app, id, command);
+    crate::native_gray_adjustment_origin::capture_open(app, id, command);
     Some(id)
 }
 
@@ -536,7 +538,10 @@ pub fn open_with_spec(app: &mut PhotocraftApp, command: &str, label: &str, spec:
         };
         fields.insert(p.key, v);
     }
-    app.ui.open_dialog(crate::state::DialogKind::Command, fields)
+    let id = app.ui.open_dialog(crate::state::DialogKind::Command, fields);
+    crate::selection_modify_origin::capture_open(app, id, command);
+    crate::native_gray_adjustment_origin::capture_open(app, id, command);
+    id
 }
 
 pub(crate) fn label(key: &str) -> String {

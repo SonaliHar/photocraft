@@ -53,6 +53,15 @@ pub(crate) mod incremental_clone_controlled;
 mod wide_union_controlled;
 #[path = "incremental_generator_render.rs"]
 mod incremental_generator_render;
+#[path = "incremental_raster_controlled.rs"]
+mod incremental_raster_controlled;
+#[path = "sampled_tip_controlled.rs"]
+mod sampled_tip_controlled;
+#[path = "incremental_new_controlled.rs"]
+mod incremental_new_controlled;
+#[path = "incremental_composite_controlled.rs"]
+mod incremental_composite_controlled;
+pub use sampled_tip_controlled::SampledTipRequirements;
 pub use incremental_clone_controlled::{IncrementalCloneRequirements, IncrementalStrokeState, incremental_state_requirements, clone_incremental_state_with_interrupt};
 pub use controlled::{StrokeError,StrokeLimits,apply_stroke_with_interrupt,render_stroke_with_interrupt,reflected_passes_with_interrupt,render_stroke_passes_with_interrupt};
 

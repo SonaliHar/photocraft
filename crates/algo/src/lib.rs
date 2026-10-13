@@ -70,6 +70,8 @@ pub mod scancrop;
 pub mod seam;
 pub mod segment;
 pub mod selection;
+pub mod selection_modify_controlled;
+pub mod selection_smooth_controlled;
 mod selection_blur;
 mod shape_blur;
 mod sharpen;

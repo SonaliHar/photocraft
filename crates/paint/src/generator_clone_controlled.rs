@@ -7,6 +7,17 @@ use crate::render::{StrokeError, StrokeLimits};
 use photocraft_raster::Interrupt;
 type Result<T> = std::result::Result<T, StrokeError>;
 impl DabGenerator {
+    /// The caller supplies the already bounded brush and a shared admitted ledger.
+    pub(crate) fn new_with_budget(brush:&BrushSettings,zoom:f32,budget:&mut CloneBudget<'_,'_>)->Result<Self>{
+        budget.poll()?;budget.charge(std::mem::size_of::<Self>() as u64)?;
+        let interval=brush.build_up.then(||1000.0/f64::from(brush.build_up_rate.clamp(0.1,1000.0)));
+        let mut walker=if brush.spacing_enabled{PathWalker::new(interval)}else{PathWalker::new(interval).speed_spacing(SPEED_SPACING_MS)};
+        if brush.aliased&&brush.size*brush.spacing.max(0.01)<=1.0{walker=walker.pixel_grid(f64::from(crate::render::grid_center(0.0,0.0,brush.size).0));}
+        let builder=DabBuilder{brush:copy_brush(brush,budget)?,seed:brush.seed,stroke_color:None,next_index:0};
+        let dual=if brush.dual_brush.enabled{Some(DualBuilder{brush:copy_brush(brush,budget)?,next_index:0})}else{None};
+        budget.poll()?;Ok(Self{smoother:Smoother::new(&brush.smoothing,zoom),walker,dual_walker:brush.dual_brush.enabled.then(||PathWalker::new(None)),builder,dual,scratch:Vec::new()})
+    }
+
     pub(crate) fn incremental_clone_requirements(&self, limits: StrokeLimits, control: &Interrupt<'_>) -> Result<IncrementalCloneRequirements> {
         control.check().map_err(|_| StrokeError::Cancelled)?;
         let mut req = fixed::<Self>();

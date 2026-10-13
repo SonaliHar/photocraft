@@ -1,7 +1,7 @@
 //! Closed native unit blend equations; no profile or encoded-color interpretation.
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub(super) enum Blend{Normal,Multiply,Screen}
-pub(super) fn u32_blend(destination:u32,source:u32,blend:Blend,percent:u8,selection:u32,selection_max:u32)->Result<u32,&'static str>{
+pub(crate) enum Blend{Normal,Multiply,Screen}
+pub(crate) fn u32_blend(destination:u32,source:u32,blend:Blend,percent:u8,selection:u32,selection_max:u32)->Result<u32,&'static str>{
     if percent>100||selection_max==0||selection>selection_max{return Err("invalid native unit blend weight");}
     if percent==0||selection==0{return Ok(destination);}
     let max=i128::from(u32::MAX);let d=i128::from(destination);let s=i128::from(source);
@@ -18,7 +18,7 @@ pub(super) fn u32_blend(destination:u32,source:u32,blend:Blend,percent:u8,select
     let rounded=numerator.checked_add(denominator/2).ok_or("unit blend overflow")?/denominator;
     u32::try_from(rounded).map_err(|_|"native blend escaped unit range")
 }
-pub(super) fn f64_blend(destination:f64,source:f64,blend:Blend,opacity:f64,selection:f64)->Result<f64,&'static str>{
+pub(crate) fn f64_blend(destination:f64,source:f64,blend:Blend,opacity:f64,selection:f64)->Result<f64,&'static str>{
     if [destination,source,opacity,selection].iter().any(|v|!v.is_finite()||!(0.0..=1.0).contains(v)){return Err("native blend requires finite unit samples");}
     let weight=opacity*selection;
     if weight==0.0{return Ok(destination);}

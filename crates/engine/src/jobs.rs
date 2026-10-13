@@ -826,8 +826,27 @@ impl Session {
         if matches!(id, "select.all" | "select.deselect") {
             crate::selection_inverse_controlled::storage_dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         }
+        if id == "select.rect" {
+            crate::selection_shapes_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if matches!(id, "select.modify.expand" | "select.modify.contract" | "select.modify.border" | "select.modify.smooth" | "select.modify.feather") {
+            crate::selection_modify_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        }
+        if matches!(id, "select.modify.expand" | "select.modify.contract" | "select.modify.border") {
+            crate::selection_morphology_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        }
+        if id == "select.modify.smooth" {
+            crate::selection_smooth_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        }
         if matches!(id, "edit.fill" | "edit.clear") {
             crate::native_gray_fill_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        }
+        crate::native_gray_invert_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        crate::native_raster_invert_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        crate::native_gray_threshold_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        crate::native_gray_posterize_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        if matches!(id, "xcf.floating.anchor" | "xcf.floating.toLayer" | "xcf.floating.delete") {
+            crate::xcf_floating::controlled::dispatch_preflight(self, id, &params)?;
         }
         crate::layer_mask_storage_controlled::actions_dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         if matches!(id, "edit.copy" | "edit.cut" | "edit.paste" | "edit.pasteSpecial.pasteInPlace" | "edit.pasteSpecial.pasteInto" | "edit.pasteSpecial.pasteOutside") {

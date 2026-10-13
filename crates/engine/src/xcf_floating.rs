@@ -7,6 +7,7 @@ use photocraft_doc::{import_compositing::GimpOperator, item_identity::ItemRef};
 use photocraft_raster::{Interrupt, Surface};
 
 const CMD: &str = "xcf.floating.anchor";
+pub(crate) mod controlled;
 fn error(message: impl std::fmt::Display) -> EngineError {
     EngineError::Other(format!("cannot edit floating layer: {message}"))
 }
@@ -197,30 +198,14 @@ fn enabled(s: &Session) -> std::result::Result<(), String> {
     s.active().and_then(|s| s.doc.xcf_state.as_ref()).and_then(|s| s.floating.as_ref()).map(|_| ()).ok_or_else(|| "no saved floating attachment".into())
 }
 fn anchor(s: &mut Session, params: &serde_json::Value) -> Result<serde_json::Value> {
-    if !params.as_object().is_some_and(|object| object.is_empty()) {
-        return Err(EngineError::BadParams { cmd: CMD.into(), msg: "expected an empty object".into() });
-    }
-    let target = s.edit("Anchor Floating Layer", |doc, active| {
-        let plan = prepare(doc, &Interrupt::NONE)?;
-        *doc.layer_mut(plan.target).and_then(Layer::surface_mut).ok_or_else(|| error("missing target raster"))? = plan.surface;
-        let state = doc.xcf_state.as_mut().ok_or_else(|| error("missing imported state"))?;
-        state.floating = None;
-        state.selection.selected = vec![ItemRef::Layer(plan.target)];
-        state.selection.active = Some(ItemRef::Layer(plan.target));
-        doc.remove(plan.source).ok_or_else(|| error("missing floating layer"))?;
-        *active = Some(plan.target);
-        Ok(plan.target)
-    })?;
-    Ok(serde_json::json!({"anchored":true,"target":target.0}))
+    controlled::anchor(s, params)
 }
 /// Clear a qualified raster attachment without changing either pixel plane.
 fn release_attachment(s: &mut Session, params: &serde_json::Value, delete: bool) -> Result<serde_json::Value> {
-    let command = if delete { "xcf.floating.delete" } else { "xcf.floating.toLayer" };
-    if !params.as_object().is_some_and(|object| object.is_empty()) {
-        return Err(EngineError::BadParams { cmd: command.into(), msg: "expected an empty object".into() });
-    }
-    let selected = s.edit(if delete { "Delete Floating Layer" } else { "Floating Selection to Layer" }, |doc, active| {
-        doc.validate_xcf_state().map_err(error)?;
+    controlled::release(s, params, delete)
+}
+fn release_on_document(doc: &mut Document, active: &mut Option<LayerId>, delete: bool, ctl: &Interrupt<'_>) -> Result<LayerId> {
+        doc.validate_xcf_state_with(ctl).map_err(error)?;
         let state = doc.xcf_state.as_ref().ok_or_else(|| error("missing imported state"))?;
         let attachment = state.floating.as_ref().ok_or_else(|| error("no saved floating attachment"))?;
         let source = attachment.layer;
@@ -256,20 +241,21 @@ fn release_attachment(s: &mut Session, params: &serde_json::Value, delete: bool)
         let selected = if delete { target } else { source };
         let state = doc.xcf_state.as_mut().ok_or_else(|| error("missing imported state"))?;
         state.floating = None;
-        state.selection.selected = vec![ItemRef::Layer(selected)];
+        state.selection.selected.clear();
+        state.selection.selected.try_reserve(1).map_err(|_| error("selection allocation"))?;
+        state.selection.selected.push(ItemRef::Layer(selected));
         state.selection.active = Some(ItemRef::Layer(selected));
         if delete {
             doc.remove(source).ok_or_else(|| error("missing floating layer"))?;
         }
         // Reconcile on this private transaction before asking the renderer to validate it.
         let mut state = doc.xcf_state.take().ok_or_else(|| error("missing imported state"))?;
-        state.reconcile_layers(doc).map_err(error)?;
+        state.reconcile_layers_with_interrupt(doc, ctl).map_err(error)?;
         doc.xcf_state = Some(state);
-        photocraft_compose::gimp_render::PreparedRenderer::new(doc).map_err(error)?;
+        photocraft_compose::gimp_render::PreparedRenderer::new_with_interrupt(doc, ctl).map_err(error)?;
         *active = Some(selected);
+        ctl.check().map_err(|_| EngineError::Cancelled)?;
         Ok(selected)
-    })?;
-    Ok(serde_json::json!({"deleted":delete,"layer":selected.0}))
 }
 fn to_layer(s: &mut Session, params: &serde_json::Value) -> Result<serde_json::Value> {
     release_attachment(s, params, false)
@@ -282,19 +268,19 @@ pub fn specs() -> Vec<CommandSpec> {
         (
             CMD,
             "Anchor Floating Layer",
-            "{} -> {anchored,target} (qualified Normal RGB/Gray raster attachments only)",
+            "{documentId:canonical-decimal-str?,expectedRevision:canonical-decimal-str?} -> {anchored,target} (qualified Normal RGB/Gray raster attachments only)",
             anchor as fn(&mut Session, &serde_json::Value) -> Result<serde_json::Value>,
         ),
         (
             "xcf.floating.toLayer",
             "Floating Selection to Layer",
-            "{} -> {deleted,layer} (qualified raster layer target)",
+            "{documentId:canonical-decimal-str?,expectedRevision:canonical-decimal-str?} -> {deleted,layer} (qualified raster layer target)",
             to_layer as fn(&mut Session, &serde_json::Value) -> Result<serde_json::Value>,
         ),
         (
             "xcf.floating.delete",
             "Delete Floating Layer",
-            "{} -> {deleted,layer} (qualified raster layer target)",
+            "{documentId:canonical-decimal-str?,expectedRevision:canonical-decimal-str?} -> {deleted,layer} (qualified raster layer target)",
             delete as fn(&mut Session, &serde_json::Value) -> Result<serde_json::Value>,
         ),
     ]

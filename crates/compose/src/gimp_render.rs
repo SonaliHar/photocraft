@@ -30,6 +30,8 @@ mod plain_motion;
 mod plain_normal;
 #[path = "gimp_plain_point.rs"]
 mod plain_point;
+#[path = "gimp_prepare_control.rs"]
+mod prepare_control;
 #[path = "gimp_scene_budget.rs"]
 pub mod scene_budget;
 
@@ -173,15 +175,13 @@ fn prepare<'a>(
     depth: usize,
     interrupt: &photocraft_raster::Interrupt<'_>,
 ) -> Result<Vec<Prepared<'a>>> {
+    prepare_control::checkpoint(interrupt)?;
     if depth == 0 {
         normal_geometry::validate(doc, interrupt)?;
     }
-    if depth > photocraft_doc::MAX_GROUP_DEPTH || layers.len() > 10000 {
-        return Err(CompositionError::Invalid("layer tree limit"));
-    }
-    let mut prepared = Vec::new();
-    prepared.try_reserve_exact(layers.len()).map_err(|_| CompositionError::Invalid("composition preparation allocation denied"))?;
+    let mut prepared = prepare_control::reserve(layers.len(), depth, interrupt)?;
     for layer in layers {
+        prepare_control::checkpoint(interrupt)?;
         if layer.clipped
             || layer.vector_mask.is_some()
             || crate::effects::has_effects(layer)
@@ -436,7 +436,10 @@ fn prepare<'a>(
                         node.operation.name == "gegl:unpremultiply"
                             || crate::gimp_video_degradation::claims_video(node)
                             || crate::gimp_red_eye::claims_geometry(node)
-                            || node.composition.as_ref().is_some_and(|policy| policy.compatibility_epoch == crate::gimp_filters::POINT_REPLACE_COMPATIBILITY_EPOCH)
+                            || node
+                                .composition
+                                .as_ref()
+                                .is_some_and(|policy| policy.compatibility_epoch == crate::gimp_filters::POINT_REPLACE_COMPATIBILITY_EPOCH)
                     });
                     if generic_point {
                         qualify_generic_point_context(doc, layer, state, stack, (extent, profile, stored), interrupt)?;
@@ -849,6 +852,7 @@ fn prepare<'a>(
         } else {
             None
         };
+        prepare_control::checkpoint(interrupt)?;
         prepared.push(Prepared {
             layer,
             working: index,
@@ -867,6 +871,7 @@ fn prepare<'a>(
             finite_normal_source,
         });
     }
+    prepare_control::checkpoint(interrupt)?;
     Ok(prepared)
 }
 
@@ -1096,9 +1101,14 @@ fn qualify_generic_point_context(
         return Err(CompositionError::Unsupported("Video options canonical current output precision"));
     }
     let unpremultiply = stack.nodes.iter().any(|node| node.operation.name == "gegl:unpremultiply");
-    if unpremultiply && (doc.mode != ColorMode::Rgb || doc.depth != photocraft_color::SampleType::F32 || stored != SampleEncoding::Linear
-        || doc.size != photocraft_doc::Size::new(8, 6) || extent != Rect::new(0, 0, 8, 6)
-        || state.current_filter_output_precision != photocraft_doc::FilterOutputPrecision::Canonical) {
+    if unpremultiply
+        && (doc.mode != ColorMode::Rgb
+            || doc.depth != photocraft_color::SampleType::F32
+            || stored != SampleEncoding::Linear
+            || doc.size != photocraft_doc::Size::new(8, 6)
+            || extent != Rect::new(0, 0, 8, 6)
+            || state.current_filter_output_precision != photocraft_doc::FilterOutputPrecision::Canonical)
+    {
         return Err(CompositionError::Unsupported("Unpremultiply exact current RGB Float Linear extent/output"));
     }
     if video
@@ -1133,17 +1143,22 @@ fn qualify_generic_point_context(
     });
     if red_eye {
         let node = stack.nodes.first().ok_or(CompositionError::Invalid("Red Eye current node"))?;
-        let dimensions = i64::from(extent.x1).checked_sub(i64::from(extent.x0)).and_then(|width| u32::try_from(width).ok())
+        let dimensions = i64::from(extent.x1)
+            .checked_sub(i64::from(extent.x0))
+            .and_then(|width| u32::try_from(width).ok())
             .zip(i64::from(extent.y1).checked_sub(i64::from(extent.y0)).and_then(|height| u32::try_from(height).ok()));
-        if !dimensions.is_some_and(|owner| crate::gimp_red_eye::qualified_owner_geometry(&node.operation.schema_epoch,
-            (doc.size.width, doc.size.height), owner, (extent.x0, extent.y0))) {
+        if !dimensions.is_some_and(|owner| {
+            crate::gimp_red_eye::qualified_owner_geometry(&node.operation.schema_epoch, (doc.size.width, doc.size.height), owner, (extent.x0, extent.y0))
+        }) {
             return Err(CompositionError::Unsupported("unqualified Red Eye current extent"));
         }
         if crate::gimp_red_eye::claims_geometry(node) {
             crate::gimp_red_eye::canonical_geometry(node, profile, stored, state.provenance.format_version)?;
-            if doc.mode != ColorMode::Rgb || doc.depth != photocraft_color::SampleType::F32
+            if doc.mode != ColorMode::Rgb
+                || doc.depth != photocraft_color::SampleType::F32
                 || state.current_filter_output_precision != photocraft_doc::FilterOutputPrecision::Canonical
-                || item.is_none_or(|item| item.source_flags != 0) {
+                || item.is_none_or(|item| item.source_flags != 0)
+            {
                 return Err(CompositionError::Unsupported("Red Eye owner geometry RGB Float current precision"));
             }
         }
@@ -1251,12 +1266,16 @@ fn qualify_generic_point_context(
     // boundary. Gray uses linear RGB at every stored encoding; RGB uses
     // nonlinear RGB only for nonlinear storage. Other measured literal-color
     // operations retain their nonlinear RGB boundary.
-    let working_space =
-        if absolute || unpremultiply || channel_mixer || mono_signed || alpha_clip && (doc.mode == ColorMode::Grayscale || stored != SampleEncoding::NonlinearProfile) {
-            GimpSpace::LinearRgb
-        } else {
-            GimpSpace::ProfileRgb
-        };
+    let working_space = if absolute
+        || unpremultiply
+        || channel_mixer
+        || mono_signed
+        || alpha_clip && (doc.mode == ColorMode::Grayscale || stored != SampleEncoding::NonlinearProfile)
+    {
+        GimpSpace::LinearRgb
+    } else {
+        GimpSpace::ProfileRgb
+    };
     let working = if literal_working { Some(WorkingSpace::new(profile, stored, working_space)?) } else { None };
     let channel = if channel_mixer {
         let node = stack.nodes.first().ok_or(CompositionError::Invalid("Channel Mixer node"))?;
@@ -1286,9 +1305,13 @@ fn qualify_generic_point_context(
     let absolute = if absolute { Some(crate::gimp_absolute::AbsoluteCandidate::new(profile, stored)?) } else { None };
     let unpremultiply = if unpremultiply {
         let node = stack.nodes.first().ok_or(CompositionError::Invalid("Unpremultiply node"))?;
-        if stack.nodes.len() != 1 { return Err(CompositionError::Unsupported("Unpremultiply singleton current context")); }
+        if stack.nodes.len() != 1 {
+            return Err(CompositionError::Unsupported("Unpremultiply singleton current context"));
+        }
         Some((crate::gimp_unpremultiply::canonical_candidate(node, profile, stored, extent, state.provenance.format_version)?, node.enabled))
-    } else { None };
+    } else {
+        None
+    };
     let red_eye = if red_eye {
         let node = stack.nodes.first().ok_or(CompositionError::Invalid("Red Eye node"))?;
         Some(crate::gimp_red_eye::RedEyeCandidate::new(profile, stored, crate::gimp_red_eye::typed_threshold(&node.arguments)?)?)
@@ -1826,6 +1849,7 @@ impl<'a> PreparedRenderer<'a> {
         };
         let mut spaces = Vec::new();
         let layers = prepare(doc, &doc.layers, &profile, stored, &mut spaces, 0, interrupt)?;
+        prepare_control::checkpoint(interrupt)?;
         Ok(Self { doc, layers, spaces })
     }
     pub fn render(&self, rect: Rect, poll: &mut impl FnMut(WideWork) -> Result<()>) -> Result<WideBuffer> {

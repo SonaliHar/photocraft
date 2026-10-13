@@ -5,6 +5,9 @@ use photocraft_engine::document_snapshot::WeakDocumentSnapshot;
 use serde_json::json;
 
 const DETACH: &str = "xcf.floating.detach";
+const ANCHOR: &str = "xcf.floating.anchor";
+const TO_LAYER:&str="xcf.floating.toLayer";
+const DELETE:&str="xcf.floating.delete";
 const PREVIEW: &str = "Complete or cancel the pixel-move preview before detaching the saved relationship.";
 struct Target {
     document: DocId,
@@ -12,7 +15,16 @@ struct Target {
     snapshot: WeakDocumentSnapshot,
     attachment: FloatingAttachment,
 }
+fn idle(app:&PhotocraftApp)->Result<(),String> {
+    let state=app.session.active().ok_or_else(||tl!("Open a document before editing a floating attachment.").to_owned())?;
+    if state.floating.is_some() {return Err(tl!(PREVIEW).into());}
+    if app.ui.transform.is_some() || app.session.has_jobs() || state.coalesce.is_some() {
+        return Err(tl!("Finish pending edits before editing a floating attachment.").into());
+    }
+    Ok(())
+}
 fn capture(app: &PhotocraftApp, layer: LayerId) -> Result<Target, String> {
+    idle(app)?;
     let state = app.session.active().ok_or("xcf.floating.detach.stale-target")?;
     // Any retained preview is refused, including one whose revision is stale.
     // Calling app.run would otherwise drop or clear it before this command.
@@ -26,7 +38,8 @@ fn capture(app: &PhotocraftApp, layer: LayerId) -> Result<Target, String> {
     let attachment = imported.floating.as_ref().filter(|value| value.layer == layer).ok_or("xcf.floating.detach.stale-target")?;
     Ok(Target { document: state.doc.id, revision: state.revision, snapshot: state.doc.downgrade(), attachment: attachment.clone() })
 }
-fn detach(app: &mut PhotocraftApp, target: &Target) -> Result<serde_json::Value, String> {
+fn validate(app:&PhotocraftApp,target:&Target)->Result<(),String> {
+    idle(app)?;
     let state = app.session.active().ok_or("xcf.floating.detach.stale-target")?;
     // Any retained preview is refused, including one whose revision is stale.
     // Calling app.run would otherwise drop or clear it before this command.
@@ -41,9 +54,19 @@ fn detach(app: &mut PhotocraftApp, target: &Target) -> Result<serde_json::Value,
     {
         return Err("xcf.floating.detach.stale-target".into());
     }
-    // No UI selection or source-cache edits: the existing registered command
-    // validates locks and removes only this saved relationship in one edit.
-    app.run(DETACH, json!({}))
+    Ok(())
+}
+fn detach(app:&mut PhotocraftApp,target:&Target)->Result<serde_json::Value,String> {
+    validate(app,target)?;
+    // Detach preserves its existing no-pixel-edit semantics and parameter contract.
+    app.run(DETACH,json!({}))
+}
+fn controlled(app:&mut PhotocraftApp,target:&Target,id:&str)->Result<serde_json::Value,String> {
+    if !matches!(id,ANCHOR|TO_LAYER|DELETE) {return Err(tl!("This floating attachment action is unavailable.").into());}
+    validate(app,target)?;
+    let command=photocraft_engine::commands::find(id).ok_or_else(||tl!("This floating attachment action is unavailable.").to_owned())?;
+    (command.enabled)(&app.session)?;
+    app.run(id,json!({"documentId":target.document.0.to_string(),"expectedRevision":target.revision.to_string()}))
 }
 
 pub(crate) fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: LayerId) {
@@ -68,12 +91,27 @@ pub(crate) fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: Laye
     if preview {
         ui.label(tl!("Complete or cancel the pixel-move preview before detaching the saved relationship."));
     }
-    let enabled = !preview && photocraft_engine::commands::find(DETACH).is_some_and(|command| (command.enabled)(&app.session).is_ok());
-    if ui.add_enabled(enabled, egui::Button::new(tl!("Detach Floating Layer"))).clicked() {
-        let result = capture(app, layer).and_then(|target| detach(app, &target));
-        if let Err(error) = result {
-            app.ui.status = error;
-            app.ui.status_error = true;
+    let captured=capture(app,layer);
+    let enabled = captured.is_ok() && photocraft_engine::commands::find(DETACH).is_some_and(|command| (command.enabled)(&app.session).is_ok());
+    let detach_button=ui.add_enabled(enabled, egui::Button::new(tl!("Detach Floating Layer")));
+    if let Err(error)=&captured {detach_button.clone().on_disabled_hover_text(error);}
+    if detach_button.clicked() {
+        let result = captured.as_ref().map_err(Clone::clone).and_then(|target| detach(app,target));
+        if let Err(error) = result {app.ui.status = error;app.ui.status_error = true;}
+    }
+    for (id,label,description) in [
+        (ANCHOR,tl!("Anchor Floating Layer"),tl!("Anchor the floating pixels onto their saved target.")),
+        (TO_LAYER,tl!("To Layer"),tl!("Keep the floating pixels as a separate layer.")),
+        (DELETE,tl!("Delete Floating Layer"),tl!("Delete the floating layer without changing its saved target.")),
+    ] {
+        let Some(command)=photocraft_engine::commands::find(id) else {continue};
+        ui.label(description);
+        let permission=captured.as_ref().map_err(Clone::clone).and_then(|_|(command.enabled)(&app.session));
+        let button=ui.add_enabled(permission.is_ok(),egui::Button::new(label));
+        if let Err(error)=&permission {button.clone().on_disabled_hover_text(error);}
+        if button.clicked() {
+            let result=captured.as_ref().map_err(Clone::clone).and_then(|target|controlled(app,target,id));
+            if let Err(error)=result {app.ui.status=error;app.ui.status_error=true;}
         }
     }
 }
@@ -102,6 +140,26 @@ mod tests {
         session.open_document(document, None).unwrap();
         session.select_layer(source).unwrap();
         (PhotocraftApp::new(session, Services::default()), source, owner)
+    }
+    #[test]
+    fn anchor_and_detach_refuse_new_coalescing_context_before_dispatch() {
+        let (mut app,source,_)=fixture();
+        let target=capture(&app,source).unwrap();
+        let before=app.session.active().unwrap().doc.clone();
+        let journal=app.session.journal.clone();
+        app.session.active_mut().unwrap().coalesce=Some("Own unfinished gesture".into());
+        let error=tl!("Finish pending edits before editing a floating attachment.");
+        assert_eq!(controlled(&mut app,&target,ANCHOR).unwrap_err(),error);
+        assert_eq!(controlled(&mut app,&target,TO_LAYER).unwrap_err(),error);
+        assert_eq!(controlled(&mut app,&target,DELETE).unwrap_err(),error);
+        assert_eq!(detach(&mut app,&target).unwrap_err(),error);
+        assert!(app.session.active().unwrap().doc.shares_state(&before));
+        assert_eq!(app.session.journal,journal);
+        assert!(app.session.active().unwrap().coalesce.is_some());
+        app.session.active_mut().unwrap().coalesce=None;
+        app.session.active_mut().unwrap().revision+=1;
+        assert!(controlled(&mut app,&target,ANCHOR).is_err());
+        assert!(app.session.active().unwrap().doc.shares_state(&before));
     }
     #[test]
     fn widget_detaches_only_saved_relationship_and_preserves_semantic_selection_and_focus() {

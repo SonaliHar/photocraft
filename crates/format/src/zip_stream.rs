@@ -12,6 +12,8 @@ use std::{
 mod accounted;
 #[path = "zip_stream/accounted_writer.rs"]
 mod accounted_writer;
+#[path = "zip_stream/io_control.rs"]
+mod io_control;
 use accounted::{Accounting, OwnedVec};
 
 const LOCAL: u32 = 0x0403_4b50;
@@ -351,7 +353,7 @@ fn read_at(
     input.seek(SeekFrom::Start(offset))?;
     for block in bytes.chunks_mut(BLOCK) {
         accounted::charge(accounting, control, block.len() as u64)?;
-        input.read_exact(block)?;
+        io_control::read_exact(input, block, control)?;
         accounted::charge(accounting, control, 0)?;
     }
     Ok(bytes)
@@ -652,7 +654,7 @@ impl<R: Read + Seek> Reader<R> {
             loop {
                 poll(control)?;
                 if input_start == input_end {
-                    input_end = compressed.read(&mut input_buffer)?;
+                    input_end = io_control::read(&mut compressed, &mut input_buffer, control)?;
                     if input_end > input_buffer.len() {
                         return Err(FormatError::corrupt("zip reader returned invalid count"));
                     }
@@ -679,7 +681,7 @@ impl<R: Read + Seek> Reader<R> {
                 let block = buffer.get(..produced_size).ok_or_else(|| FormatError::corrupt("zip DEFLATE output count"))?;
                 poll(control)?;
                 crc.update(block)?;
-                output.write_all(block)?;
+                io_control::write_all(output, block, control)?;
                 if status == flate2::Status::StreamEnd {
                     if decoder.total_in() != entry.compressed || input_start != input_end || compressed.limit() != 0 {
                         return Err(FormatError::corrupt("zip DEFLATE stream length"));
@@ -717,7 +719,7 @@ fn copy_checked(input: &mut impl Read, output: &mut impl Write, expected: u64, c
     let mut count = 0u64;
     loop {
         poll(control)?;
-        let read = input.read(&mut buffer)?;
+        let read = io_control::read(input, &mut buffer, control)?;
         if read == 0 {
             break;
         }
@@ -727,7 +729,7 @@ fn copy_checked(input: &mut impl Read, output: &mut impl Write, expected: u64, c
         }
         let block = buffer.get(..read).ok_or_else(|| FormatError::corrupt("zip reader returned invalid count"))?;
         crc.update(block)?;
-        output.write_all(block)?;
+        io_control::write_all(output, block, control)?;
     }
     Ok(count)
 }
