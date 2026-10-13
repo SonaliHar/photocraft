@@ -894,11 +894,15 @@ fn hsv_hue(c: [f32; 3], mx: f32, mn: f32) -> f32 {
 
 /// Modern Brightness curve (one channel, `brightness` in [-150, 150]); pins pure black and white,
 /// and `b = 0` is the identity. Raised, it is a line of slope `s = 1.375^(b/50)` from the origin
-/// to a knee at input 80/255, then a cubic Hermite to (1, 1) whose end slope is `s^-6.6`; lowered,
-/// it is the inverse of the curve raised by as much. Fit to Photoshop ground truth: its ±50
-/// samples (see `modern_brightness_matches_photoshop`) and the photoshop corpus's
-/// brightness-contrast.psd (+25 with contrast +30), every point within about a level. The knee
-/// moves down for strong values so the roll-off never overshoots white.
+/// up to a knee at output 126/255, then a cubic Hermite to (1, 1) whose end slope is
+/// `1 / (1 + 0.084 b)`; past about +110, where no such cubic stays below white, the roll-off is
+/// `1 - (1 - y0)(1 - u)^α` instead (continuous slope `α` at the knee, flat at white). Lowered, it
+/// is the inverse of the curve raised by as much.
+///
+/// Fit to every Photoshop measurement we have, all within about a level and a half: its ±50
+/// samples (`modern_brightness_matches_photoshop`), the photoshop corpus's brightness-contrast.psd
+/// (+25 with contrast +30) and psd-tools' brightnesscontrast_rgb.psd, whose masked layers give
+/// +23, -31 and -95 (+150 within 6 levels there, where every curve family tried bottoms out).
 pub fn modern_brightness(v: f32, brightness: f32) -> f32 {
     if brightness == 0.0 || !brightness.is_finite() {
         return v;
@@ -912,17 +916,24 @@ struct Brightness {
     s: f32,
     e: f32,
     x0: f32,
+    /// The knee's slope over the roll-off's secant (`α` of Fritsch–Carlson); a power roll-off
+    /// replaces the Hermite when α² + β² > 9.
+    alpha: f32,
+    hermite: bool,
 }
+
+/// Output level of the Brightness curve's knee.
+const BRIGHTNESS_KNEE: f32 = 126.0 / 255.0;
 
 impl Brightness {
     fn new(brightness: f32) -> Self {
-        let s = 1.375f32.powf(brightness.abs() / 50.0);
-        let e = s.powf(-6.6);
-        // Knee at 80/255, moved down when needed so the Hermite's slopes stay within the monotone
-        // region (Fritsch–Carlson: α² + β² ≤ 9, with α = s/Δ and β = e/Δ over the segment's secant Δ).
-        let a = (9.0 - (e * e).min(8.0)).sqrt() * 0.98;
-        let x0 = if s >= a { 0.0 } else { (80.0 / 255.0f32).min((a - s) / (s * (a - 1.0))) };
-        Brightness { raise: brightness > 0.0, s, e, x0 }
+        let b = brightness.abs();
+        let s = 1.375f32.powf(b / 50.0);
+        let e = 1.0 / (1.0 + 0.084 * b);
+        let x0 = (BRIGHTNESS_KNEE / s).min(1.0);
+        let secant = (1.0 - BRIGHTNESS_KNEE) / (1.0 - x0).max(1e-6);
+        let (alpha, beta) = (s / secant, e / secant);
+        Brightness { raise: brightness > 0.0, s, e, x0, alpha, hermite: alpha * alpha + beta * beta <= 9.0 }
     }
 
     fn eval(&self, v: f32) -> f32 {
@@ -946,17 +957,21 @@ impl Brightness {
         0.5 * (lo + hi)
     }
 
-    /// The curve raised: the line, then a monotone cubic Hermite to (1, 1).
+    /// The curve raised: the line, then a monotone roll-off to (1, 1).
     fn raised(&self, x: f32) -> f32 {
-        let Brightness { s, e, x0, .. } = *self;
-        let y0 = s * x0;
+        let Brightness { s, e, x0, alpha, hermite, .. } = *self;
+        let y0 = BRIGHTNESS_KNEE;
         if x <= x0 {
             return y0.min(s * x);
         }
-        let h = 1.0 - x0;
-        let t = (x - x0) / h;
-        let (t2, t3) = (t * t, t * t * t);
-        let y = (2.0 * t3 - 3.0 * t2 + 1.0) * y0 + (t3 - 2.0 * t2 + t) * h * s + (-2.0 * t3 + 3.0 * t2) + (t3 - t2) * h * e;
+        let h = (1.0 - x0).max(1e-6);
+        let t = ((x - x0) / h).clamp(0.0, 1.0);
+        let y = if hermite {
+            let (t2, t3) = (t * t, t * t * t);
+            (2.0 * t3 - 3.0 * t2 + 1.0) * y0 + (t3 - 2.0 * t2 + t) * h * s + (-2.0 * t3 + 3.0 * t2) + (t3 - t2) * h * e
+        } else {
+            1.0 - (1.0 - y0) * (1.0 - t).powf(alpha)
+        };
         y.clamp(0.0, 1.0)
     }
 }
