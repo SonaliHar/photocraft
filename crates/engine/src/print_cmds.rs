@@ -34,7 +34,7 @@ fn other(e: impl std::fmt::Display) -> EngineError {
 // ---------- PDF ----------
 
 /// Paper sizes in points (portrait).
-pub const PAPERS: [(&str, f64, f64); 8] = [
+pub const PAPERS: [(&str, f64, f64); 9] = [
     ("letter", 612.0, 792.0),
     ("legal", 612.0, 1008.0),
     ("tabloid", 792.0, 1224.0),
@@ -43,7 +43,38 @@ pub const PAPERS: [(&str, f64, f64); 8] = [
     ("a5", 419.53, 595.28),
     ("4x6", 288.0, 432.0),
     ("5x7", 360.0, 504.0),
+    ("c5", 459.21, 649.13),
 ];
+
+/// The system printers available to the desktop print dialog.
+pub fn print_dialog_printers() -> Value {
+    json!(
+        craft_print::printers()
+            .into_iter()
+            .map(|printer| json!({"name": printer.name, "default": printer.default, "twoSided": printer.two_sided}))
+            .collect::<Vec<_>>()
+    )
+}
+
+/// Driver-provided print choices for a selected system printer.
+pub fn system_printer_options(printer: &str) -> Value {
+    json!(
+        craft_print::printer_options(printer)
+            .into_iter()
+            .map(|option| json!({"key": option.key, "label": option.label, "group": option.group, "choices": option.choices, "default": option.default}))
+            .collect::<Vec<_>>()
+    )
+}
+
+/// Open the selected Windows printer's saved driver preferences.
+pub fn open_system_printer_preferences(printer: &str) -> std::result::Result<(), String> {
+    craft_print::open_printer_preferences(printer).map_err(|error| error.to_string())
+}
+
+/// Whether the platform backend can open a printer driver's saved preferences window.
+pub const fn has_system_printer_preferences() -> bool {
+    craft_print::HAS_PRINTER_PREFERENCES
+}
 
 /// The image placed on a print page.
 pub struct PrintImage {
@@ -69,6 +100,7 @@ pub struct PrintPage {
     pub image: PrintImage,
     pub rect: (f64, f64, f64, f64),
     pub marks: Marks,
+    pub rotate_image: bool,
     pub description: Option<String>,
     pub label: Option<String>,
     /// Photoshop's Functions › Emulsion Down: the whole page mirrored left to right, for transfer
@@ -163,7 +195,11 @@ pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
     if page.emulsion_down {
         content.push_str(&format!("q -1 0 0 1 {pw:.2} 0 cm\n"));
     }
-    content.push_str(&format!("q {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /Im0 Do Q\n"));
+    if page.rotate_image {
+        content.push_str(&format!("q 0 {h:.3} -{w:.3} 0 {:.3} {y:.3} cm /Im0 Do Q\n", x + w));
+    } else {
+        content.push_str(&format!("q {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /Im0 Do Q\n"));
+    }
     content.push_str(&marks_ops(page.marks, page.rect));
     let any_marks = page.marks.corner_crop || page.marks.center_crop || page.marks.registration;
     let pad = if any_marks { 30.0 } else { 6.0 };
@@ -294,6 +330,7 @@ pub struct PrintLayout {
     /// Print scale (1.0 = 100 %).
     pub scale: f64,
     pub marks: Marks,
+    pub rotate_image: bool,
     /// Emulsion Down: the page prints mirrored (`rect` is where the image is before mirroring).
     pub emulsion_down: bool,
 }
@@ -302,7 +339,11 @@ pub struct PrintLayout {
 pub fn layout(doc: &Document, p: &Value, cmd: &str) -> Result<PrintLayout> {
     let (pw, ph) = paper(p, cmd)?;
     let dpi = f64::from(doc.resolution_dpi.max(1.0));
-    let (iw, ih) = (f64::from(doc.size.width) * 72.0 / dpi, f64::from(doc.size.height) * 72.0 / dpi);
+    let (mut iw, mut ih) = (f64::from(doc.size.width) * 72.0 / dpi, f64::from(doc.size.height) * 72.0 / dpi);
+    let rotate_image = p.get("autoRotate").and_then(Value::as_bool).unwrap_or(true) && ((iw > ih && pw < ph) || (iw < ih && pw > ph));
+    if rotate_image {
+        std::mem::swap(&mut iw, &mut ih);
+    }
     let marks = Marks {
         corner_crop: p.get("cornerCropMarks").and_then(Value::as_bool).unwrap_or(false),
         center_crop: p.get("centerCropMarks").and_then(Value::as_bool).unwrap_or(false),
@@ -326,7 +367,7 @@ pub fn layout(doc: &Document, p: &Value, cmd: &str) -> Result<PrintLayout> {
         (left, ph - top - h)
     };
     let emulsion_down = p.get("emulsionDown").and_then(Value::as_bool).unwrap_or(false);
-    Ok(PrintLayout { paper: (pw, ph), rect: (x, y, w, h), scale, marks, emulsion_down })
+    Ok(PrintLayout { paper: (pw, ph), rect: (x, y, w, h), scale, marks, rotate_image, emulsion_down })
 }
 
 /// Lays out, renders and (unless dry-run) spools a print. Shared by Print and Print One Copy.
@@ -377,7 +418,7 @@ fn do_print(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
 }
 
 fn render_and_spool(doc: &Document, p: &Value, cmd: &str) -> Result<Value> {
-    let PrintLayout { paper: (pw, ph), rect: (x, y, w, h), scale, marks, emulsion_down } = layout(doc, p, cmd)?;
+    let PrintLayout { paper: (pw, ph), rect: (x, y, w, h), scale, marks, rotate_image, emulsion_down } = layout(doc, p, cmd)?;
     let (img, color) = print_image(doc, p, cmd)?;
     let description = p
         .get("description")
@@ -385,7 +426,7 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str) -> Result<Value> {
         .unwrap_or(false)
         .then(|| crate::file_cmds::read_file_info(doc.metadata.xmp.as_deref())["description"].as_str().unwrap_or_default().to_string());
     let label = p.get("labels").and_then(Value::as_bool).unwrap_or(false).then(|| doc.name.clone());
-    let page = PrintPage { paper: (pw, ph), image: img, rect: (x, y, w, h), marks, description, label, emulsion_down };
+    let page = PrintPage { paper: (pw, ph), image: img, rect: (x, y, w, h), marks, rotate_image, description, label, emulsion_down };
     let output = p.get("output").and_then(Value::as_str).filter(|v| !v.is_empty()).map(str::to_string);
     let send = p.get("send").and_then(Value::as_bool).unwrap_or(output.is_none());
     let copies = crate::commands::int(p, "copies").unwrap_or(1).clamp(1, 999) as u32;
@@ -406,14 +447,34 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str) -> Result<Value> {
         return Err(other("the selected color profile or page text requires PDF printing. Save as PDF, or clear Print Settings to use PDF printing."));
     }
     let pdf = print_pdf(&page);
+    let duplex = match p.get("duplex").and_then(Value::as_str) {
+        Some("simplex") => Some(craft_print::Duplex::Off),
+        Some("longEdge") => Some(craft_print::Duplex::LongEdge),
+        Some("shortEdge") => Some(craft_print::Duplex::ShortEdge),
+        _ => None,
+    };
+    let mut options: Vec<(String, String)> = p
+        .get("driverOptions")
+        .and_then(Value::as_object)
+        .map(|options| options.iter().filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_string()))).collect())
+        .unwrap_or_default();
+    if p.get("paper").and_then(Value::as_str).is_some_and(|paper| paper.eq_ignore_ascii_case("c5")) {
+        options.retain(|(key, _)| key != "media");
+        options.push(("media".into(), "iso_c5_162x229mm".into()));
+    }
+    options.retain(|(key, _)| key != "orientation-requested");
+    options.push(("orientation-requested".into(), if p.get("orientation").and_then(Value::as_str) == Some("landscape") { "4" } else { "3" }.into()));
     let job = craft_print::Job {
         printer: p.get("printer").and_then(Value::as_str).filter(|v| !v.is_empty()).map(str::to_string),
         copies,
+        collate: p.get("collate").and_then(Value::as_bool).unwrap_or(true),
+        duplex,
         title: doc.name.clone(),
         // PhotoCraft already placed and scaled the image on its physical sheet. Scaling again
         // in the driver would change the preview, print resolution and crop-mark positions.
         scaling: craft_print::Scaling::Exact,
-        ..Default::default()
+        grayscale: p.get("grayscale").and_then(Value::as_bool).unwrap_or(false),
+        options,
     };
     let command = if send { json!(craft_print::command_preview(&job).map_err(other)?) } else { Value::Null };
     let pdf_path = match output {
@@ -430,9 +491,31 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str) -> Result<Value> {
         spool = json!(craft_print::submit(&pdf, &job).map_err(other)?);
         sent = true;
     }
-    Ok(
-        json!({"pdf": pdf_path, "bytes": pdf.len(), "paper": [pw, ph], "imageRect": [x, y, w, h], "emulsionDown": emulsion_down, "scale": scale * 100.0, "copies": copies, "command": command, "sent": sent, "spooler": spool, "color": color}),
-    )
+    let duplex_name = match job.duplex {
+        None => "printerDefault",
+        Some(craft_print::Duplex::Off) => "simplex",
+        Some(craft_print::Duplex::LongEdge) => "longEdge",
+        Some(craft_print::Duplex::ShortEdge) => "shortEdge",
+    };
+    Ok(json!({
+        "pdf": pdf_path,
+        "bytes": pdf.len(),
+        "paper": [pw, ph],
+        "imageRect": [x, y, w, h],
+        "emulsionDown": emulsion_down,
+        "rotateImage": rotate_image,
+        "scale": scale * 100.0,
+        "printer": job.printer,
+        "copies": copies,
+        "collate": job.collate,
+        "duplex": duplex_name,
+        "grayscale": job.grayscale,
+        "driverOptions": job.options.iter().map(|(key, value)| json!([key, value])).collect::<Vec<_>>(),
+        "command": command,
+        "sent": sent,
+        "spooler": spool,
+        "color": color
+    }))
 }
 
 /// Keep CMYK output profiles and page text on the existing PDF composition path. GDI currently

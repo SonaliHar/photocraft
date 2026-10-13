@@ -737,6 +737,7 @@ pub fn open_print(app: &mut PhotocraftApp) -> u64 {
         ("copies", json!(1)),
         ("paper", json!("letter")),
         ("orientation", json!("portrait")),
+        ("autoRotate", json!(true)),
         ("colorHandling", json!("printerManages")),
         ("printerProfile", json!("coated-cmyk")),
         ("intent", json!("relative")),
@@ -831,7 +832,8 @@ fn print_paper_controls(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let previous = f.get("paper").cloned();
     let mut selected = if previous.as_ref().is_some_and(Value::is_array) { "custom".to_string() } else { s(f, "paper", "letter") };
     ui.horizontal(|ui| {
-        let mut papers: Vec<_> = photocraft_engine::print_cmds::PAPERS.iter().map(|p| (p.0.to_string(), p.0)).collect();
+        let mut papers: Vec<_> =
+            photocraft_engine::print_cmds::PAPERS.iter().map(|p| (p.0.to_string(), if p.0 == "c5" { tl!("C5 Envelope") } else { p.0 })).collect();
         papers.push(("custom".to_string(), tl!("Custom")));
         if crate::widgets::dropdown(ui, "print-paper", &mut selected, &papers, 110.0) {
             if selected == "custom" {
@@ -846,6 +848,7 @@ fn print_paper_controls(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
         dropdown_str(ui, "print-orient", f, "orientation", &[("portrait", tl!("Portrait")), ("landscape", tl!("Landscape"))], 110.0);
     });
+    check(ui, f, "autoRotate", tl!("Auto-Rotate Image"), true);
     if f.get("paper").is_some_and(Value::is_array) {
         let (mut w, mut h) = print_paper_size(f.get("paper"));
         let units = s(f, "units", "cm");
@@ -913,12 +916,20 @@ fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Va
                         tx
                     });
                     let clip = ui.painter().with_clip_rect(page);
-                    let uv = if l.emulsion_down {
-                        egui::Rect::from_min_max(egui::pos2(1.0, 0.0), egui::pos2(0.0, 1.0))
+                    let mut uvs = if l.rotate_image {
+                        [egui::pos2(1.0, 0.0), egui::pos2(1.0, 1.0), egui::pos2(0.0, 1.0), egui::pos2(0.0, 0.0)]
                     } else {
-                        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0))
+                        [egui::Pos2::ZERO, egui::pos2(1.0, 0.0), egui::pos2(1.0, 1.0), egui::pos2(0.0, 1.0)]
                     };
-                    clip.image(tex.id(), img, uv, egui::Color32::WHITE);
+                    if l.emulsion_down {
+                        uvs = [uvs[1], uvs[0], uvs[3], uvs[2]];
+                    }
+                    let mut mesh = egui::Mesh::with_texture(tex.id());
+                    for (pos, uv) in [img.left_top(), img.right_top(), img.right_bottom(), img.left_bottom()].into_iter().zip(uvs) {
+                        mesh.vertices.push(egui::epaint::Vertex { pos, uv, color: egui::Color32::WHITE });
+                    }
+                    mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+                    clip.add(egui::Shape::mesh(mesh));
                     let mark = egui::Stroke::new(1.0, egui::Color32::BLACK);
                     if l.marks.corner_crop {
                         for (c, dx, dy) in
