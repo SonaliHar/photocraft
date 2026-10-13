@@ -131,7 +131,7 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 34] = [
+pub const UI_SET_FIELDS: [&str; 35] = [
     "tool",
     "panels",
     "dock",
@@ -166,6 +166,7 @@ pub const UI_SET_FIELDS: [&str; 34] = [
     "cropShield",
     "shapeStroke",
     "camTransformOnDrop",
+    "tileGrid",
 ];
 
 /// Most clicks one `ui.click` may queue (#982). Each click is a press and a release that the app
@@ -365,6 +366,22 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest
     outcome
 }
 
+/// The open canvas context menu's rows for `ui.state`: the spelling suggestions first (type edit
+/// menu over a misspelled word), then the menu's own rows.
+fn context_entries(app: &PhotocraftApp, menu: &crate::canvas_tool_menu::CanvasToolMenu) -> Vec<Value> {
+    use crate::canvas_tool_menu::{entry_enabled, rows, spelling_rows};
+    let spelling = spelling_rows(menu);
+    let mut entries: Vec<Value> = spelling.iter().map(|(label, id)| json!({"label": label, "id": id, "enabled": entry_enabled(app, menu, id)})).collect();
+    if !spelling.is_empty() {
+        entries.push(json!({"separator": true}));
+    }
+    entries.extend(rows(menu).iter().map(|row| match row {
+        Some((label, id)) => json!({"label": label, "id": id, "enabled": entry_enabled(app, menu, id)}),
+        None => json!({"separator": true}),
+    }));
+    entries
+}
+
 fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
     let s = |k: &str| p.get(k).and_then(Value::as_str);
@@ -492,6 +509,8 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 let eyedropper_ring = bool_field(p, "eyedropperRing")?;
                 // Content-Aware Move's Transform On Drop checkbox.
                 let cam_transform_on_drop = bool_field(p, "camTransformOnDrop")?;
+                // Developer overlay of the active layer's storage tiles (tile_overlay.rs).
+                let tile_grid = bool_field(p, "tileGrid")?;
                 // The Crop tool's overlay menu (#1919).
                 let crop_overlay = match p.get("cropOverlay") {
                     Some(v) => Some(v.as_str().and_then(crate::crop_overlay::CropOverlay::from_id).ok_or_else(|| {
@@ -649,6 +668,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 }
                 if let Some(on) = cam_transform_on_drop {
                     app.ui.tool_options.cam_transform_on_drop = on;
+                }
+                if let Some(on) = tile_grid {
+                    app.ui.view.tile_grid = on;
                 }
                 if let Some(k) = crop_overlay {
                     app.ui.tool_options.crop_overlay = k;
@@ -850,6 +872,23 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             wrap(crate::workspace_ui::confirm(app, ctx))
         }
         "ui.dialog.apply" if s("dialog") == Some(SHELL_DIALOG) => err("`ui.dialog.apply` is for Preferences; use `ui.dialog.confirm`"),
+        // The unsaved-changes prompt (closing, Revert, quitting), listed by ui.inspect with the
+        // id "discard" (#4920): confirm takes a `choice` (save, dontSave, cancel; default save).
+        "ui.dialog.confirm" if s("dialog") == Some(crate::discard_ui::CONTROL_ID) => {
+            let choice = s("choice").unwrap_or("save");
+            if choice != "cancel"
+                && let Some((command, params)) = crate::discard_ui::pending_command(app)
+                && let Some(authorize) = app.services.automation_command.as_ref()
+                && let Err(error) = authorize(&command, &params)
+            {
+                return err(error);
+            }
+            wrap(crate::discard_ui::answer_control(app, ctx, choice))
+        }
+        "ui.dialog.cancel" if s("dialog") == Some(crate::discard_ui::CONTROL_ID) => wrap(crate::discard_ui::answer_control(app, ctx, "cancel")),
+        "ui.dialog.set" | "ui.dialog.apply" if s("dialog") == Some(crate::discard_ui::CONTROL_ID) => {
+            err("the unsaved-changes prompt has no fields; use `ui.dialog.confirm` with a `choice`")
+        }
         "ui.dialog.cancel" if s("dialog") == Some(SHELL_DIALOG) => match app.ui.shell.dialog.take() {
             Some(_) => ok(Value::Null),
             None => err("no such dialog"),
@@ -1021,7 +1060,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     }
                     if crate::canvas_tool_menu::applies(app.ui.tool) || crate::canvas_tool_menu::editing_text(app, app.ui.tool) {
                         if down {
-                            crate::canvas_tool_menu::open(app, ctx, app.ui.tool, screen_point(app, x, y));
+                            crate::canvas_tool_menu::open_at(app, ctx, app.ui.tool, screen_point(app, x, y), Some([x, y]));
                         }
                         continue;
                     }
@@ -1220,6 +1259,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
     if let Some((kind, fields)) = &app.ui.shell.dialog {
         dialogs.push(json!({"id": SHELL_DIALOG, "kind": kind, "title": crate::workspace_ui::title(kind), "fields": fields}));
     }
+    dialogs.extend(crate::discard_ui::inspect(app));
     json!({
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
         "tool": app.ui.tool,
@@ -1253,10 +1293,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
                 "pos": menu.pos,
                 "tool": menu.tool,
                 "pasteboard": menu.pasteboard,
-                "entries": crate::canvas_tool_menu::rows(menu).iter().map(|row| match row {
-                    Some((label, id)) => json!({"label": label, "id": id, "enabled": crate::canvas_tool_menu::entry_enabled(app, menu, id)}),
-                    None => json!({"separator": true}),
-                }).collect::<Vec<_>>()
+                "entries": context_entries(app, menu)
             })
         }),
         "panels": app.ui.panels,
@@ -1349,20 +1386,10 @@ mod tests {
             app.open_bytes("control.dng", &dng).unwrap();
             ctx.run_ui(Default::default(), |ui| crate::camera_raw_ui::show(&mut app, ui.ctx())).textures_delta.clear();
             assert!(app.camera_raw.is_some());
-            // The raw develops in ProPhoto, so opening it also asks about the working-space
-            // mismatch. Answer that prompt through the same control path before editing.
-            assert_eq!(app.ui.dialogs.len(), 1);
-            let mismatch = app.ui.dialogs.first().unwrap();
-            assert_eq!(mismatch.fields["__prefsui"], "mismatch");
-            assert_eq!(mismatch.fields["action"], "preserve");
-            assert_eq!(mismatch.fields["applied"], "preserve");
-            let mismatch_id = mismatch.id;
-            let update = json!({"id":"filter.cameraRaw","params":{"ui":{"set":{"exposure":0.5}}}});
-            assert_eq!(call(&mut app, &ctx, "ui.menu.invoke", update.clone())["ok"], false);
-            let confirmed = call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog":mismatch_id}));
-            assert_eq!(confirmed["ok"], true, "{confirmed}");
-            assert_eq!(confirmed["result"]["action"], "preserve");
+            // A developed raw has no embedded profile to ask about (`open_prompt`), so no profile
+            // prompt stands between the open and the Camera Raw dialog.
             assert!(app.ui.dialogs.is_empty());
+            let update = json!({"id":"filter.cameraRaw","params":{"ui":{"set":{"exposure":0.5}}}});
             let original = app.session.active().unwrap().doc.clone();
             let changed = call(&mut app, &ctx, "ui.menu.invoke", update);
             assert_eq!(changed["ok"], true, "{changed}");
@@ -1533,6 +1560,47 @@ mod tests {
         assert_eq!(call(&mut app, &ctx, "ui.set", json!({"shapeStroke":{"colour":"#ff0000"}}))["ok"], false);
         assert_eq!(call(&mut app, &ctx, "ui.set", json!({"shapeStroke":null}))["ok"], true);
         assert_eq!(app.ui.tool_options.stroke_width, 0.0);
+    }
+
+    #[test]
+    fn the_unsaved_changes_prompt_is_listed_and_answered_through_ui_dialog() {
+        // #4920: the prompt shown on quit or close with unsaved changes wasn't in ui.inspect, and a
+        // control client couldn't answer it.
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        for _ in 0..2 {
+            app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+            app.run("layer.new.layer", json!({})).unwrap();
+        }
+        let prompt = |app: &mut PhotocraftApp| {
+            let v = call(app, &ctx, "ui.inspect", json!({}));
+            v["result"]["dialogs"].as_array().unwrap().iter().find(|d| d["id"] == "discard").cloned()
+        };
+        assert!(prompt(&mut app).is_none());
+        // Closing a dirty document: listed with its choices; a bad choice and Cancel keep the document.
+        crate::menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
+        let d = prompt(&mut app).expect("the prompt is listed");
+        assert_eq!(d["fields"]["command"], "file.close");
+        assert_eq!(d["fields"]["choices"], json!(["save", "dontSave", "cancel"]));
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog": "discard", "choice": "maybe"}))["ok"], false);
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.set", json!({"dialog": "discard", "field": "x", "value": 1}))["ok"], false);
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": "discard"}))["ok"], true);
+        assert!(prompt(&mut app).is_none() && app.session.documents().len() == 2);
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": "discard"}))["ok"], false, "nothing left to answer");
+        // Don't Save closes it.
+        crate::menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog": "discard", "choice": "dontSave"}))["ok"], true);
+        assert_eq!(app.session.documents().len(), 1);
+        // Quitting asks about each dirty document, then lets the window close.
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        assert!(crate::discard_ui::intercept(&mut app, "file.exit", &Value::Null));
+        let d = prompt(&mut app).expect("the quit prompt is listed");
+        assert_eq!((d["fields"]["command"].as_str(), d["fields"]["remaining"].as_u64()), (Some("file.exit"), Some(2)));
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog": "discard", "choice": "dontSave"}))["result"]["open"], true);
+        assert_eq!(prompt(&mut app).unwrap()["fields"]["remaining"], 1);
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog": "discard", "choice": "dontSave"}))["result"]["open"], false);
+        assert!(app.allow_close && app.session.documents().is_empty());
     }
 
     #[test]
@@ -1856,6 +1924,25 @@ mod tests {
         let bad = call(&mut app, &ctx, "ui.set", json!({"gradientBlendMode": "nonsense", "gradientClassic": false}));
         assert_eq!(bad["ok"], false, "{bad}");
         assert!(app.ui.tool_options.gradient_classic, "invalid mode must not change options");
+    }
+
+    #[test]
+    fn ui_set_toggles_the_developer_tile_grid() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        assert!(!app.ui.view.tile_grid, "off by default");
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"tileGrid": true}))["ok"], true);
+        assert!(app.ui.view.tile_grid);
+        assert_eq!(call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["view"]["tile_grid"], true);
+        // Not a View › Show item: Extras doesn't hide it, and Show Extras Options doesn't list it.
+        crate::menus::invoke(&mut app, &ctx, "view.extras", json!({})).unwrap();
+        assert!(!app.ui.view.extras && app.ui.view.tile_grid);
+        assert!(serde_json::to_value(app.ui.view.show).unwrap().get("tile_grid").is_none());
+        let bad = call(&mut app, &ctx, "ui.set", json!({"tileGrid": "yes"}));
+        assert_eq!(bad["ok"], false, "{bad}");
+        assert!(app.ui.view.tile_grid, "a rejected value changes nothing");
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"tileGrid": false}))["ok"], true);
+        assert!(!app.ui.view.tile_grid);
     }
 
     #[test]
