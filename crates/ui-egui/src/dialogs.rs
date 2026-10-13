@@ -227,6 +227,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 }
                 DialogKind::Command if crate::guide_layout_ui::owns(&fields) => outcome = crate::guide_layout_ui::body(app, ui, &mut fields, interactive),
                 DialogKind::Command if crate::fill_ui::owns(&fields) => crate::fill_ui::body(app, ui, &mut fields),
+                DialogKind::Command if crate::genfill_ui::owns(&fields) => crate::genfill_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::pattern_fill_ui::owns(&fields) => crate::pattern_fill_ui::body(app, ui, &mut fields),
                 DialogKind::Command if crate::stroke_ui::owns(&fields) => crate::stroke_ui::body(ui, &mut fields),
                 DialogKind::Command if crate::shape_dialog::owns(&fields) => crate::shape_dialog::body(app, ui, &mut fields),
@@ -303,6 +304,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                             tl!("Delete")
                         } else if d.fields.contains_key("__export") {
                             tl!("Export")
+                        } else if crate::genfill_ui::owns(&d.fields) {
+                            tl!("Generate")
                         } else {
                             crate::file_ui::ok_label(&d.fields).unwrap_or(tl!("OK"))
                         };
@@ -484,6 +487,7 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
         }
         DialogKind::Command if crate::guide_layout_ui::owns(&d.fields) => crate::guide_layout_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::fill_ui::owns(&d.fields) => crate::fill_ui::confirm(app, &d.fields),
+        DialogKind::Command if crate::genfill_ui::owns(&d.fields) => crate::genfill_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::pattern_fill_ui::owns(&d.fields) => crate::pattern_fill_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::stroke_ui::owns(&d.fields) => crate::stroke_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::shape_dialog::owns(&d.fields) => crate::shape_dialog::confirm(app, &d.fields),

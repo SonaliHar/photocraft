@@ -1,0 +1,25 @@
+[package]
+name = "photocraft-ml"
+description = "Local ONNX models (Select Subject) and remote image-generation providers (Generative Fill)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+png = "0.18"
+base64 = "0.22"
+sha2 = "0.10"
+
+# Network access and the ONNX runtime are native-only: the web build reports "unsupported"
+# (tract pulls a getrandom that has no wasm backend configured in this workspace).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tract-onnx = "0.23"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+tract-linalg = { version = "0.23", features = ["multithread-mm"] }

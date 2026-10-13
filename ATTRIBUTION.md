@@ -6,6 +6,12 @@ code and original assets are MIT OR Apache-2.0 (see [`LICENSE-MIT`](LICENSE-MIT)
 in the same change; third-party assets must be permissively licensed and keep their license file
 next to them.
 
+## Downloaded on demand (not in the repository)
+
+| Path (in the user's model cache) | Title | Author | Source | License |
+|---|---|---|---|---|
+| `isnet-general-use.onnx` | IS-Net "general use" salient-object model (Select Subject) | Xuebin Qin et al. (DIS, ECCV 2022); ONNX export by the rembg project | <https://github.com/xuebinqin/DIS>, <https://github.com/danielgatis/rembg/releases/tag/v0.0.0> | Apache-2.0 (model), MIT (rembg export). SHA-256 pinned in `crates/ml/src/models.rs` |
+
 ## Bundled in the app
 
 | Path | Title | Author | Source | License |

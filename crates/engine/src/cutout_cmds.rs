@@ -4,7 +4,6 @@
 //! the Background layer into a normal layer first and has no menu item.
 
 use photocraft_algo::matting::{self, RefineParams};
-use photocraft_algo::segment::subject;
 use photocraft_doc::{Document, Layer, LayerContent, LayerMask};
 use serde_json::{Value, json};
 
@@ -41,17 +40,19 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     check(doc, doc.layer(id).ok_or(EngineError::NoLayer(id))?).map_err(EngineError::Other)?;
     let sample_all = p.get("sampleAllLayers").and_then(Value::as_bool).unwrap_or(false);
     let refine = p.get("refine").and_then(Value::as_bool).unwrap_or(true);
+    let engine = crate::subject_model::Engine::from_params(CMD, p)?;
     crate::jobs::edit_job(
         s,
         "Remove Background",
         move |doc, _, ctx| {
             ctx.progress(0.1, "Finding subject");
-            let found = with_doc_sampler(doc, Some(id), sample_all, |smp, d| subject::select_subject(smp, d.bounds()));
-            let mut region = found.ok_or_else(|| EngineError::Other("no subject found".into()))?;
+            let found = crate::subject_model::find(doc, Some(id), sample_all, engine, ctx)?;
+            let mut region = found.region.ok_or_else(|| EngineError::Other("no subject found".into()))?;
             if ctx.cancelled() {
                 return Err(EngineError::Cancelled);
             }
-            if refine {
+            // The model's matte already has soft, accurate edges; the classical result needs help.
+            if refine && found.engine == "classic" {
                 ctx.progress(0.6, "Refining edge");
                 let refined = with_doc_sampler(doc, Some(id), sample_all, |smp, d| {
                     matting::refine_mask(smp, &matting::region_reader(&region), region.bbox, d.bounds(), &REFINE)
@@ -78,7 +79,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Remove Background",
         menu: &[],
         shortcut: None,
-        params: r##"{"layer":id?,"sampleAllLayers":bool=false,"refine":bool=true} → {layer,bounds} (adds a layer mask from Select Subject; the Background becomes a normal layer)"##,
+        params: r##"{"layer":id?,"sampleAllLayers":bool=false,"refine":bool=true,"engine":"auto|classic|model"="auto"} → {layer,bounds} (adds a layer mask from Select Subject; the Background becomes a normal layer)"##,
         enabled,
         run,
         journal: true,
