@@ -205,28 +205,84 @@ fn blocks_agree_with_one_pass() {
 }
 
 #[test]
-fn radix2_matches_rustfft() {
-    use crate::sharpen::radix2::Radix2;
+fn the_small_fft_matches_rustfft() {
+    use crate::sharpen::smallfft::SmallFft;
     use rustfft::FftPlanner;
-    for n in [2usize, 4, 8, 64, 256, 1024] {
+    // Every radix alone, mixed, and with and without a leading radix-4 pass.
+    for n in [1usize, 2, 3, 4, 5, 6, 8, 10, 12, 15, 18, 20, 25, 27, 30, 32, 45, 60, 64, 75, 100, 120, 128, 135, 240, 250, 384, 405, 600, 1024, 1152] {
         let input: Vec<C> = (0..n).map(|i| C::new(((i * 7 + 3) % 11) as f32 / 10.0, ((i * 5) % 13) as f32 / 12.0)).collect();
         let mut expected = input.clone();
         FftPlanner::<f32>::new().plan_fft_forward(n).process(&mut expected);
+        let fft = SmallFft::new(n).unwrap();
         let mut got = input.clone();
-        Radix2::new(n).process(&mut got, false);
+        fft.process(&mut got, false);
         for (a, b) in got.iter().zip(&expected) {
             assert!((a - b).norm() < 1e-3 * (n as f32).sqrt(), "n={n}: {a} vs {b}");
         }
         // The inverse (unnormalised) returns n times the input.
-        Radix2::new(n).process(&mut got, true);
+        fft.process(&mut got, true);
         for (a, b) in got.iter().zip(&input) {
             assert!((a / n as f32 - b).norm() < 1e-4, "n={n} round trip: {a} vs {b}");
         }
     }
-    let one = Radix2::new(1);
-    let mut single = [C::new(3.0, 1.0)];
-    one.process(&mut single, false);
-    assert_eq!(single[0], C::new(3.0, 1.0));
+    for n in [7usize, 14, 22, 2 * 3 * 5 * 13] {
+        assert!(SmallFft::new(n).is_none(), "{n} has a factor the small transform doesn't handle");
+    }
+    // A slice of the wrong length is left alone.
+    let mut short = [C::new(3.0, 1.0); 3];
+    SmallFft::new(8).unwrap().process(&mut short, false);
+    assert_eq!(short, [C::new(3.0, 1.0); 3]);
+}
+
+/// The real-input transform against a full complex one, for both engines and for widths whose
+/// half is odd, even, and 1.
+#[test]
+fn the_half_spectrum_matches_a_full_transform_and_inverts() {
+    use rustfft::FftPlanner;
+    for small in [false, true] {
+        for (w, h) in [(2usize, 1usize), (4, 3), (6, 4), (8, 5), (10, 6), (12, 8), (30, 9), (64, 20), (90, 16)] {
+            let plans = Plans::new(w, h, small).unwrap();
+            let plane: Vec<f32> = (0..w * h).map(|i| ((i * 37 + 11) % 101) as f32 / 100.0 - 0.3).collect();
+            let mut full: Vec<C> = plane.iter().map(|&v| C::new(v, 0.0)).collect();
+            let mut planner = FftPlanner::<f32>::new();
+            let (rows, cols) = (planner.plan_fft_forward(w), planner.plan_fft_forward(h));
+            full.chunks_exact_mut(w).for_each(|r| rows.process(r));
+            let mut turned = vec![C::default(); w * h];
+            transpose(&full, &mut turned, h, w);
+            turned.chunks_exact_mut(h).for_each(|c| cols.process(c));
+
+            let (mut a, mut b) = (vec![C::default(); plans.len()], vec![C::default(); plans.len()]);
+            plans.pack(&plane, &mut a, |p, _| C::new(p[0], p[1]));
+            plans.forward(&mut a, &mut b);
+            for (got, want) in b.iter().zip(&turned) {
+                assert!((got - want).norm() < 2e-4 * (w * h) as f32, "{w}x{h} small={small}: {got} vs {want}");
+            }
+            plans.inverse(&mut b, &mut a);
+            let norm = 1.0 / (w * h) as f32;
+            for (row, line) in a.chunks_exact(plans.stride()).zip(plane.chunks_exact(w)) {
+                for (z, p) in row.iter().zip(line.as_chunks::<2>().0) {
+                    assert!((z.re * norm - p[0]).abs() < 1e-4 && (z.im * norm - p[1]).abs() < 1e-4, "{w}x{h} small={small} round trip");
+                }
+            }
+        }
+    }
+    assert!(Plans::new(7, 4, true).is_none() && Plans::new(0, 4, false).is_none() && Plans::new(4, 0, true).is_none());
+    // The small engine declines lengths it has no butterflies for.
+    assert!(Plans::new(28, 4, true).is_none() && Plans::new(4, 7, true).is_none());
+}
+
+#[test]
+fn transform_lengths_are_smooth_and_close() {
+    for n in [1usize, 2, 3, 7, 97, 593, 1186, 2047, 2305, 3000] {
+        let len = fft_len(n);
+        let mut rest = len;
+        for p in [2, 3, 5] {
+            while rest.is_multiple_of(p) {
+                rest /= p;
+            }
+        }
+        assert!(len >= n.max(2) && rest == 1 && len * 10 <= n.max(2) * 13, "{n} -> {len}");
+    }
 }
 
 #[test]
@@ -238,15 +294,8 @@ fn the_browser_engine_gives_the_same_picture() {
     let fast = deconvolve_with(&img, img.rect, &c, &taps, 8, false);
     let small = deconvolve_with(&img, img.rect, &c, &taps, 8, true);
     let worst = fast.iter().zip(&small).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
-    // Different padded sizes treat the borders differently; the interior must agree closely.
-    let margin = 2 * 8 * 4;
-    let mut interior = 0.0f32;
-    for y in margin..h - margin {
-        for x in margin..w - margin {
-            interior = interior.max((fast[y * w + x] - small[y * w + x]).abs());
-        }
-    }
-    assert!(interior < 5e-3, "interior difference {interior} (whole image {worst})");
+    // Both engines transform the same window, so the whole picture agrees, borders included.
+    assert!(worst < 2e-3, "difference {worst}");
     let truth = scene(w, h);
-    assert!(mse(&small, &truth) < mse(img.data.as_slice(), &truth), "the radix-2 engine must also sharpen");
+    assert!(mse(&small, &truth) < mse(img.data.as_slice(), &truth), "the small engine must also sharpen");
 }

@@ -7,7 +7,7 @@ use crate::image::Image;
 use crate::{Ctx, SharpenRemove};
 
 pub(crate) mod deconv;
-mod radix2;
+mod smallfft;
 
 pub(crate) mod exact;
 
