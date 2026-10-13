@@ -188,7 +188,7 @@ fn field(h: &Harness<'_, PhotocraftApp>, id: u64, key: &str) -> Value {
     h.state().ui.dialogs.iter().find(|d| d.id == id).and_then(|d| d.fields.get(key).cloned()).unwrap_or(Value::Null)
 }
 
-/// Contents › Color… opens PhotoCraft's Color Picker on the dialog's colour (as Photoshop's Fill
+/// Contents â€º Colorâ€¦ opens PhotoCraft's Color Picker on the dialog's colour (as Photoshop's Fill
 /// does), and its OK sets the Fill colour, not the foreground; Fill then fills with it.
 #[test]
 fn choosing_color_opens_the_color_picker() {
@@ -198,15 +198,15 @@ fn choosing_color_opens_the_color_picker() {
     let ctx = h.ctx.clone();
     crate::menus::invoke(h.state_mut(), &ctx, COMMAND, json!({})).unwrap();
     h.run_steps(3);
-    assert_eq!(fill_and_picker(&h).1, None, "no picker before Color… is chosen");
+    assert_eq!(fill_and_picker(&h).1, None, "no picker before Colorâ€¦ is chosen");
     // The Contents dropdown shows its choice as the combo box's value.
     h.get_by_value("Foreground Color").click();
     h.run_steps(3);
-    h.get_by_label("Color…").click();
+    h.get_by_label("Colorâ€¦").click();
     h.run_steps(4);
     let (fill, picker) = fill_and_picker(&h);
     assert_eq!(field(&h, fill, "contents"), json!("color"));
-    let picker = picker.expect("Color… opens the Color Picker");
+    let picker = picker.expect("Colorâ€¦ opens the Color Picker");
     assert_eq!(field(&h, picker, "color"), json!("#ff0000"), "on the dialog's colour (the foreground at first)");
     assert_eq!(field(&h, picker, "__label"), json!("Color Picker (Fill Color)"));
     // OK sets the Fill colour; the Fill dialog stays open and the tool colours are untouched.
@@ -223,7 +223,7 @@ fn choosing_color_opens_the_color_picker() {
 }
 
 /// The Fill dialog keeps its colour swatch (Photoshop shows none), and clicking it opens the real
-/// Color Picker, not a small popup. Cancel keeps Contents on Color… and the colour unchanged.
+/// Color Picker, not a small popup. Cancel keeps Contents on Colorâ€¦ and the colour unchanged.
 #[test]
 fn the_color_swatch_opens_the_color_picker() {
     use egui_kittest::kittest::Queryable;
@@ -279,4 +279,28 @@ fn the_pattern_is_picked_from_its_swatches() {
     h.run_steps(3);
     assert_eq!(pattern(&h), json!(sky));
     assert!(h.query_by_label("Brick").is_none(), "the grid closes after a pick");
+}
+
+#[test]
+fn captured_fill_refuses_changed_target_and_restored_fields_before_remembering() {
+    let mut app=app();
+    let id=open(&mut app);
+    let f=app.ui.dialog_mut(id).unwrap().fields.clone();
+    let before=app.session.prefs().dialogs.clone();
+    app.session.active_mut().unwrap().revision+=1;
+    assert!(confirm_for_dialog(&mut app,id,&f).is_err());
+    assert_eq!(app.session.prefs().dialogs,before);
+    app.ui.fill_origin=None;
+    assert!(confirm_for_dialog(&mut app,id,&f).is_err());
+    assert_eq!(app.session.prefs().dialogs,before);
+}
+#[test]
+fn fill_origin_tracks_channel_view_even_when_document_revision_is_unchanged() {
+    let mut app=app();
+    let id=open(&mut app);
+    let f=app.ui.dialog_mut(id).unwrap().fields.clone();
+    let before=app.session.active().unwrap().doc.clone();
+    app.session.active_mut().unwrap().channel_view.target=photocraft_engine::channel_cmds::ChannelTarget::Color(0);
+    assert!(confirm_for_dialog(&mut app,id,&f).is_err());
+    assert!(app.session.active().unwrap().doc.shares_state(&before));
 }

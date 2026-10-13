@@ -51,6 +51,8 @@ mod controlled;
 pub(crate) mod incremental_clone_controlled;
 #[path = "wide_union_controlled.rs"]
 mod wide_union_controlled;
+#[path = "incremental_generator_render.rs"]
+mod incremental_generator_render;
 pub use incremental_clone_controlled::{IncrementalCloneRequirements, IncrementalStrokeState, incremental_state_requirements, clone_incremental_state_with_interrupt};
 pub use controlled::{StrokeError,StrokeLimits,apply_stroke_with_interrupt,render_stroke_with_interrupt,reflected_passes_with_interrupt,render_stroke_passes_with_interrupt};
 

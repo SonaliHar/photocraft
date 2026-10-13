@@ -12,6 +12,9 @@ use crate::{Dab, StrokePoint};
 
 #[path = "generator_clone_controlled.rs"]
 mod clone_controlled;
+#[path = "generator_push_controlled.rs"]
+mod push_controlled;
+pub use push_controlled::IncrementalGeneratorRequirements;
 
 /// Maximum pulled-string length at 100 % smoothing, in screen pixels.
 pub const MAX_STRING_PX: f64 = 100.0;

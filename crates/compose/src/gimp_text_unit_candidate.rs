@@ -6,7 +6,10 @@ use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{FillRule, Knot, Path, PathOp, SampleEncoding, Subpath, VectorMask};
 use photocraft_geom::{Point, Rect};
 use photocraft_raster::{Interrupt, RasterInputError, Surface};
-use photocraft_text::xcf::unit_outline::{Command, PreparedUnitOutline};
+use photocraft_text::xcf::{
+    unit_outline::{Command, PreparedUnitOutline},
+    unit_raster_policy::CoveragePolicy,
+};
 use photocraft_vector::{CompiledVectorMask, VectorPreparationLimits};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WorkingContext {
@@ -139,9 +142,59 @@ fn path(outline: &PreparedUnitOutline, control: &Interrupt<'_>) -> Result<Path> 
     }
     Ok(Path { subpaths, fill_rule: FillRule::NonZero, inverted: false })
 }
+fn binary_coverage(lines: &[photocraft_vector::Polyline], path: &Path, tile: Rect, control: &Interrupt<'_>) -> Result<Vec<f32>> {
+    if lines.len() != path.subpaths.len() {
+        return Err(Error::Unsupported("binary path component binding"));
+    }
+    let count = usize::try_from(tile.width()).ok().and_then(|w| usize::try_from(tile.height()).ok().and_then(|h| w.checked_mul(h))).ok_or(Error::Budget)?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(count).map_err(|_| Error::Allocation)?;
+    if out.capacity() > count {
+        return Err(Error::Budget);
+    }
+    for y in tile.y0..tile.y1 {
+        poll(control)?;
+        for x in tile.x0..tile.x1 {
+            let cx = f64::from(x) + 0.5;
+            let cy = f64::from(y) + 0.5;
+            let mut inside = false;
+            let mut component = 0i64;
+            for (line, subpath) in lines.iter().zip(&path.subpaths) {
+                poll(control)?;
+                if !line.closed {
+                    return Err(Error::Unsupported("open binary text contour"));
+                }
+                if subpath.op == PathOp::Combine {
+                    inside |= component != 0;
+                    component = 0;
+                } else if subpath.op != PathOp::Join {
+                    return Err(Error::Unsupported("binary text component operator"));
+                }
+                for (index, a) in line.pts.iter().enumerate() {
+                    if index % 256 == 0 {
+                        poll(control)?;
+                    }
+                    let b = line.pts.get(if index + 1 == line.pts.len() { 0 } else { index + 1 }).ok_or(Error::Budget)?;
+                    let side = (b.0 - a.0) * (cy - a.1) - (b.1 - a.1) * (cx - a.0);
+                    if !side.is_finite() {
+                        return Err(Error::Unsupported("binary text winding domain"));
+                    }
+                    if a.1 <= cy && b.1 > cy && side > 0.0 {
+                        component = component.checked_add(1).ok_or(Error::Budget)?;
+                    } else if a.1 > cy && b.1 <= cy && side < 0.0 {
+                        component = component.checked_sub(1).ok_or(Error::Budget)?;
+                    }
+                }
+            }
+            inside |= component != 0;
+            out.push(if inside { 1.0 } else { 0.0 });
+        }
+    }
+    Ok(out)
+}
 /// Render private sparse native tiles over ROI. Outline coordinates already contain
 /// the explicitly selected baseline; no extra placement is inferred here.
-/// Fixed policy: non-zero ordinary vector area coverage, straight color, alpha
+/// Explicit source policy: non-zero vector area or half-open pixel-center coverage, straight color, alpha
 /// multiplied by coverage; outside ROI/default remain native transparent zero.
 /// Final integer/float storage quantization is the checked raster writer's policy.
 #[allow(clippy::too_many_arguments)]
@@ -228,7 +281,23 @@ pub fn render(
         return Ok(Surface::new(format));
     }
     let mask = VectorMask::new(path);
-    let compiled = CompiledVectorMask::try_new_with_interrupt(&mask, limits.vector, control)?;
+    let coverage_policy = outline.raster_policy.coverage();
+    let compiled =
+        if coverage_policy == CoveragePolicy::Area { Some(CompiledVectorMask::try_new_with_interrupt(&mask, limits.vector, control)?) } else { None };
+    let lines = if coverage_policy == CoveragePolicy::PixelCenterNonZero {
+        let lines = photocraft_vector::flatten_path_with_interrupt(&mask.path, photocraft_vector::DEFAULT_TOLERANCE, limits.vector, control)?;
+        let mut edges = 0usize;
+        for line in &lines {
+            poll(control)?;
+            edges = edges.checked_add(line.pts.len()).ok_or(Error::Budget)?;
+        }
+        if edges > limits.vector.max_edges {
+            return Err(Error::Budget);
+        }
+        Some(lines)
+    } else {
+        None
+    };
     let mut native = Vec::new();
     native.try_reserve_exact(65536 * channels).map_err(|_| Error::Allocation)?;
     if native.capacity() > 65536 * channels {
@@ -246,7 +315,11 @@ pub fn render(
                 x.checked_add(256).ok_or(Error::Budget)?.min(roi.x1),
                 y.checked_add(256).ok_or(Error::Budget)?.min(roi.y1),
             );
-            let coverage = compiled.try_render_with_interrupt(tile, limits.vector, control)?;
+            let coverage = match (&compiled, &lines) {
+                (Some(compiled), None) => compiled.try_render_with_interrupt(tile, limits.vector, control)?,
+                (None, Some(lines)) => binary_coverage(lines, &mask.path, tile, control)?,
+                _ => return Err(Error::Unsupported("candidate text coverage policy binding")),
+            };
             native.clear();
             for (i, c) in coverage.into_iter().enumerate() {
                 if i % 256 == 0 {
@@ -273,7 +346,60 @@ mod tests {
     use photocraft_text::xcf::unit_outline::GlyphSpan;
     fn rectangle() -> PreparedUnitOutline {
         let commands = vec![Command::Move([0.0, 0.0]), Command::Line([2.0, 0.0]), Command::Line([2.0, 2.0]), Command::Line([0.0, 2.0]), Command::Close];
-        PreparedUnitOutline { commands, glyphs: vec![GlyphSpan { glyph_id: 1, start: 0, end: 5 }], retained_bytes: 0 }
+        let raster_policy = photocraft_text::xcf::unit_raster_policy::SourceRasterPolicyDetails {
+            switches: photocraft_text::xcf::unit_raster_policy::SourceRasterPolicy { hinting: false, antialias: true },
+            hint_style: Some("none"),
+            raw_hinting: Some("no"),
+            raw_antialias: Some("yes"),
+        }
+        .require_unhinted()
+        .unwrap();
+        PreparedUnitOutline { raster_policy, commands, glyphs: vec![GlyphSpan { glyph_id: 1, start: 0, end: 5 }], retained_bytes: 0 }
+    }
+    #[test]
+    fn binary_is_center_winding_not_thresholded_area() {
+        let context = WorkingContext { encoding: SampleEncoding::Linear, profile_identity: [1; 32] };
+        let mut outline = rectangle();
+        outline.commands = vec![Command::Move([0.6, 0.6]), Command::Line([1.6, 0.6]), Command::Line([1.6, 1.6]), Command::Line([0.6, 1.6]), Command::Close];
+        let area = render(
+            &outline,
+            Rect::new(0, 0, 2, 2),
+            PixelFormat::RGBA64F,
+            NativeColor::Rgb([0.25, 0.5, 0.75, 1.0]),
+            context,
+            context,
+            Limits::default(),
+            &Interrupt::NONE,
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+        outline.raster_policy = photocraft_text::xcf::unit_raster_policy::SourceRasterPolicyDetails {
+            switches: photocraft_text::xcf::unit_raster_policy::SourceRasterPolicy { hinting: false, antialias: false },
+            hint_style: Some("none"),
+            raw_hinting: Some("no"),
+            raw_antialias: Some("no"),
+        }
+        .require_unhinted()
+        .unwrap();
+        let binary = render(
+            &outline,
+            Rect::new(0, 0, 2, 2),
+            PixelFormat::RGBA64F,
+            NativeColor::Rgb([0.25, 0.5, 0.75, 1.0]),
+            context,
+            context,
+            Limits::default(),
+            &Interrupt::NONE,
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+        let mut pixel = [0.0; 4];
+        area.try_read_pixel_f64(0, 0, &mut pixel).unwrap();
+        assert!(pixel[3] > 0.0 && pixel[3] < 1.0);
+        binary.try_read_pixel_f64(0, 0, &mut pixel).unwrap();
+        assert_eq!(pixel[3], 0.0);
+        binary.try_read_pixel_f64(1, 1, &mut pixel).unwrap();
+        assert_eq!(pixel, [0.25, 0.5, 0.75, 1.0]);
     }
     #[test]
     fn explicit_f64_hdr_straight_color_and_roi_default() {

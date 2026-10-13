@@ -18,6 +18,21 @@ pub struct SourceRasterPolicy {
 pub struct UnhintedAreaPolicy {
     _private: (),
 }
+/// Closed candidate coverage algorithm selected from complete validated source policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CoveragePolicy {
+    Area,
+    PixelCenterNonZero,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct UnhintedRasterPolicy {
+    coverage: CoveragePolicy,
+}
+impl UnhintedRasterPolicy {
+    pub fn coverage(self) -> CoveragePolicy {
+        self.coverage
+    }
+}
 impl SourceRasterPolicy {
     pub fn require_unhinted_area(self) -> Result<UnhintedAreaPolicy> {
         if self.hinting {
@@ -71,7 +86,7 @@ pub struct SourceRasterPolicyDetails<'a> {
     pub raw_antialias: Option<&'a str>,
 }
 impl SourceRasterPolicyDetails<'_> {
-    pub fn require_unhinted_area(self) -> Result<UnhintedAreaPolicy> {
+    pub fn require_unhinted(self) -> Result<UnhintedRasterPolicy> {
         if self.hint_style != Some("none") {
             return Err(TextSourceError::Unsupported("missing or unsupported retained hint-style policy"));
         }
@@ -80,7 +95,17 @@ impl SourceRasterPolicyDetails<'_> {
                 return Err(TextSourceError::Unsupported("incomplete or contradictory retained raster switches"));
             }
         }
-        self.switches.require_unhinted_area()
+        if self.switches.hinting {
+            return Err(TextSourceError::Unsupported("hinted source requires explicit engine, target, metrics and two-axis grid policy"));
+        }
+        Ok(UnhintedRasterPolicy { coverage: if self.switches.antialias { CoveragePolicy::Area } else { CoveragePolicy::PixelCenterNonZero } })
+    }
+    pub fn require_unhinted_area(self) -> Result<UnhintedAreaPolicy> {
+        let policy = self.require_unhinted()?;
+        if policy.coverage() != CoveragePolicy::Area {
+            return Err(TextSourceError::Unsupported("source selects binary coverage rather than area"));
+        }
+        Ok(UnhintedAreaPolicy { _private: () })
     }
 }
 fn raw_policy<'a>(raw: &'a [FilterArgument], control: &Interrupt<'_>) -> Result<(Option<&'a str>, Option<&'a str>, Option<&'a str>)> {

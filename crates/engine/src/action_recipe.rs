@@ -3,7 +3,7 @@
 use crate::{EngineError,Result};
 use serde_json::Value;
 fn relative(id:&str)->bool {
-    matches!(id,"select.inverse"|"edit.fill"|"edit.clear"|"edit.copy"|"edit.cut"|"edit.paste"
+    matches!(id,"select.all"|"select.deselect"|"select.inverse"|"edit.fill"|"edit.clear"|"edit.copy"|"edit.cut"|"edit.paste"
         |"edit.pasteSpecial.pasteInPlace"|"edit.pasteSpecial.pasteInto"|"edit.pasteSpecial.pasteOutside"
         |"layer.layerMask.revealAll"|"layer.layerMask.hideAll"|"layer.layerMask.revealSelection"
         |"layer.layerMask.hideSelection"|"layer.layerMask.fromTransparency"|"layer.layerMask.delete"|"layer.layerMask.apply")

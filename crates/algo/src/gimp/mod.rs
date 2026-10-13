@@ -6,6 +6,7 @@ pub mod color_to_alpha;
 pub mod curves;
 /// Typed configured candidates; stored-source admission remains separately qualified.
 pub mod configured;
+pub mod box_mean_graph;
 /// Standalone candidate kernel; import qualification remains a separate gate.
 pub mod global_stretch_contrast;
 pub mod global_normalize;

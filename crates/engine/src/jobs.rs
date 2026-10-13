@@ -823,6 +823,9 @@ impl Session {
         if id == "select.inverse" {
             crate::selection_inverse_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
         }
+        if matches!(id, "select.all" | "select.deselect") {
+            crate::selection_inverse_controlled::storage_dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        }
         if matches!(id, "edit.fill" | "edit.clear") {
             crate::native_gray_fill_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         }

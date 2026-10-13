@@ -7,6 +7,8 @@ use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
 use photocraft_color::{ColorMode, SampleType, BlendMode};
 use serde_json::{Value,json};
 use std::sync::Arc;
+mod unit_math;
+use unit_math::Blend;
 fn bad(message:impl Into<String>)->EngineError{EngineError::Other(format!("native Gray Fill/Clear: {}",message.into()))}
 fn poll(control:&Interrupt<'_>)->Result<()>{control.check().map_err(|_|EngineError::Cancelled)}
 fn error(control:&Interrupt<'_>,e:impl std::fmt::Display)->EngineError{if control.cancelled(){EngineError::Cancelled}else{bad(e.to_string())}}
@@ -59,7 +61,7 @@ fn locks(doc:&Document,t:Target)->Result<()>{match t{
 fn context(session:&Session)->Result<()>{let st=session.active().ok_or(EngineError::NoDocument)?;
     if st.revision==u64::MAX||st.doc.accounted().is_some()||st.floating.is_some()||st.coalesce.is_some()||session.has_jobs()||session.command_has_pending_job()||session.coalesce_request.is_some()||session.color_restrict.is_some()
         ||st.doc.xcf_state.as_ref().is_some_and(|s|s.floating.is_some()){return Err(bad("finish transient work before native Gray editing"));}Ok(())}
-struct Request{target:Target,value:f64,opacity:f64,contents:&'static str,clear:bool}
+struct Request{target:Target,value:f64,opacity:f64,blend:Blend,u32_percent:Option<u8>,contents:&'static str,clear:bool}
 fn request(session:&Session,id:&str,p:&Value)->Result<Option<Request>>{
     if !matches!(id,"edit.fill"|"edit.clear"){return Ok(None);}
     let Some(target)=resolve(session,p)? else{return Ok(None)};
@@ -81,10 +83,12 @@ fn request(session:&Session,id:&str,p:&Value)->Result<Option<Request>>{
     let contents=if clear{"background"}else{match p.get("contents"){
         None|Some(Value::Null)=>"color",Some(Value::String(s))if s.len()<=32=>crate::fill_cmds::CONTENTS.iter().copied().find(|v|v.eq_ignore_ascii_case(s)).ok_or_else(||bad("unknown Fill contents"))?,_=>return Err(bad("contents must be a bounded string")),
     }};
-    if !clear{
-        match p.get("mode"){None|Some(Value::Null)=>{},Some(Value::String(s))if s.len()<=32&&crate::commands::blend_from_str(s)==Some(BlendMode::Normal)=>{},_=>return Err(bad("native Gray Fill supports Normal mode only"))}
-        if p.get("preserveTransparency").is_some_and(|v|!v.is_null()&&!v.is_boolean()){return Err(bad("preserveTransparency must be Boolean"));}
-    }
+    let blend=if clear{Blend::Normal}else{match p.get("mode"){
+        None|Some(Value::Null)=>Blend::Normal,
+        Some(Value::String(s))if s.len()<=32=>match crate::commands::blend_from_str(s){Some(BlendMode::Normal)=>Blend::Normal,Some(BlendMode::Multiply)=>Blend::Multiply,Some(BlendMode::Screen)=>Blend::Screen,_=>return Err(bad("native Gray Fill supports Normal, Multiply or Screen only"))},
+        _=>return Err(bad("bounded blend mode required")),
+    }};
+    if !clear && p.get("preserveTransparency").is_some_and(|v|!v.is_null()&&!v.is_boolean()){return Err(bad("preserveTransparency must be Boolean"));}
     let rgba=match contents{
         "foreground"=>session.tools.foreground.map(f64::from),"background"=>session.tools.background.map(f64::from),
         "color"=>{if let Some(v)=p.get("color"){match v{Value::Null=>{},Value::String(s)if s.len()<=9=>{},Value::Array(a)if matches!(a.len(),3|4)=>{},_=>return Err(bad("bounded color required"))}}crate::paint_cmds::wide_color(p.get("color"),session.tools.foreground)?},
@@ -98,7 +102,11 @@ fn request(session:&Session,id:&str,p:&Value)->Result<Option<Request>>{
     let value=values.first().copied().ok_or_else(||bad("Gray constant width"))?;
     if !(0.0..=1.0).contains(&value){return Err(bad("Gray constant must be finite unit"));}
     let opacity=if clear{1.0}else{crate::paint_cmds::wide_opacity(p)?*rgba[3]};
-    Ok(Some(Request{target,value,opacity,contents,clear}))
+    let u32_percent=if format.sample==SampleType::U32&&blend!=Blend::Normal{
+        let percent=match p.get("opacity"){None|Some(Value::Null)=>100.0,Some(v)=>v.as_f64().filter(|v|v.is_finite()).ok_or_else(||bad("opacity must be finite"))?.clamp(0.0,100.0)};
+        if percent.fract()!=0.0||rgba[3]!=1.0{return Err(bad("U32 Multiply/Screen require whole-percent opacity and opaque solid color"));}Some(percent as u8)
+    }else{None};
+    Ok(Some(Request{target,value,opacity,blend,u32_percent,contents,clear}))
 }
 pub(crate) fn dispatch_preflight(session:&Session,id:&str,p:&Value,_background:bool)->Result<bool>{request(session,id,p).map(|r|r.is_some())}
 fn cells(area:Rect)->Result<u64>{if area.is_empty(){return Ok(0)}let first=TileCoord::containing(area.x0,area.y0);let last=TileCoord::containing(area.x1.checked_sub(1).ok_or_else(||bad("extent"))?,area.y1.checked_sub(1).ok_or_else(||bad("extent"))?);
@@ -129,8 +137,46 @@ fn prepare(doc:&Document,r:&Request,ctl:&Interrupt<'_>)->Result<Option<Surface>>
     if area.is_empty()||r.opacity==0.0{return Ok(None);}
     let mut output=Surface::try_with_default_bytes(source.format(),source.default_bytes()).map_err(|e|error(ctl,e))?;
     for (cell,tile) in source.tiles(){poll(ctl)?;output.put_tiles(std::iter::once((*cell,Arc::clone(tile))));}
+    if r.blend==Blend::Normal {
     photocraft_algo::wide_paint::try_paint_solid(&mut output,area,&[r.value],r.opacity,doc.selection.as_ref(),false,photocraft_algo::wide_paint::PaintLimits{resident_bytes:MAX_CHECKED_RASTER_BYTES,work_units:8_000_000_000-work.min(8_000_000_000)},ctl).map_err(|e|error(ctl,e))?;
+    }else{blend_units(&mut output,source,area,doc.selection.as_ref(),r,ctl)?;}
     poll(ctl)?;Ok((output!=*source).then_some(output))
+}
+fn selection_ratio(selection:Option<&Surface>,x:i32,y:i32)->Result<(u32,u32)> {
+    let Some(selection)=selection else{return Ok((1,1))};
+    let sample=selection.format().sample;let mut raw=[0u8;8];let bytes=raw.get_mut(..sample.bytes()).ok_or_else(||bad("selection sample width"))?;
+    selection.try_read_pixel_bytes(x,y,bytes).map_err(|e|bad(e.to_string()))?;
+    Ok(match sample{
+        SampleType::U8=>(*bytes.first().ok_or_else(||bad("selection sample width"))? as u32,255),
+        SampleType::U16=>(u32::from(u16::from_ne_bytes((&*bytes).try_into().map_err(|_|bad("selection sample width"))?)),65_535),
+        SampleType::U32=>(u32::from_ne_bytes((&*bytes).try_into().map_err(|_|bad("selection sample width"))?),u32::MAX),
+        SampleType::F32|SampleType::F64=>match photocraft_color::try_read_sample_f64(bytes,sample,0).map_err(|e|bad(e.to_string()))?{0.0=>(0,1),1.0=>(1,1),_=>return Err(bad("U32 Multiply/Screen support integer selections or Boolean floating selection only"))},
+    })
+}
+fn blend_units(output:&mut Surface,source:&Surface,area:Rect,selection:Option<&Surface>,r:&Request,ctl:&Interrupt<'_>)->Result<()> {
+    let sample=source.format().sample;let mut color=[0u8;4];
+    let code=if sample==SampleType::U32{photocraft_color::try_write_sample_f64(&mut color,sample,0,r.value).map_err(|e|bad(e.to_string()))?;u32::from_ne_bytes(color)}else{0};
+    for cell in area.tiles(){poll(ctl)?;let part=cell.rect().intersect(&area);if part.is_empty(){continue;}
+        let mut raw=source.try_read_interleaved_with(part,ctl).map_err(|e|error(ctl,e))?;let width=usize::try_from(part.width()).map_err(|_|bad("blend row width"))?;
+        let mut changed=false;
+        for (i,pixel) in raw.chunks_exact_mut(sample.bytes()).enumerate(){if i%256==0{poll(ctl)?;}
+            let x=i32::try_from(i64::from(part.x0)+(i%width) as i64).map_err(|_|bad("blend coordinate"))?;
+            let y=i32::try_from(i64::from(part.y0)+(i/width) as i64).map_err(|_|bad("blend coordinate"))?;
+            match sample{
+                SampleType::U32=>{let original=u32::from_ne_bytes((&*pixel).try_into().map_err(|_|bad("blend sample width"))?);let (num,den)=selection_ratio(selection,x,y)?;
+                    let result=unit_math::u32_blend(original,code,r.blend,r.u32_percent.ok_or_else(||bad("U32 blend opacity domain"))?,num,den).map_err(bad)?;
+                    if result!=original{pixel.copy_from_slice(&result.to_ne_bytes());changed=true;}
+                },
+                SampleType::F64=>{let original=f64::from_ne_bytes((&*pixel).try_into().map_err(|_|bad("blend sample width"))?);
+                    let weight=if let Some(selection)=selection{let mut value=[0f64];selection.try_read_pixel_f64(x,y,&mut value).map_err(|e|error(ctl,e))?;value[0]}else{1.0};
+                    let result=unit_math::f64_blend(original,r.value,r.blend,r.opacity,weight).map_err(bad)?;
+                    if result.to_bits()!=original.to_bits(){pixel.copy_from_slice(&result.to_ne_bytes());changed=true;}
+                },
+                _=>return Err(bad("native unit blend depth")),
+            }
+        }
+        if changed{output.try_write_interleaved_with(part,&raw,ctl).map_err(|e|error(ctl,e))?;}
+    }poll(ctl)
 }
 fn install(doc:&mut Document,t:Target,value:Surface)->Result<()>{locks(doc,t)?;match t{
     Target::Mask(id)=>{doc.layer_mut(id).and_then(|l|l.mask.as_mut()).ok_or_else(||bad("mask disappeared"))?.surface=Arc::new(value);},
@@ -169,7 +215,7 @@ mod tests {
         let (mut doc,id)=fixture();let mask=surface(&doc,Target::Mask(id)).unwrap().clone();
         let format=photocraft_color::PixelFormat::new(ColorMode::Grayscale,SampleType::U32,false);
         doc.selection=Some(Surface::try_from_interleaved_with(format,doc.bounds(),&[u32::MAX,0].into_iter().flat_map(u32::to_ne_bytes).collect::<Vec<_>>(),&Interrupt::NONE).unwrap());
-        let before=doc.clone();let request=Request{target:Target::Mask(id),value:0.75,opacity:1.0,contents:"color",clear:false};
+        let before=doc.clone();let request=Request{target:Target::Mask(id),value:0.75,opacity:1.0,blend:Blend::Normal,u32_percent:None,contents:"color",clear:false};
         let result=prepare(&doc,&request,&Interrupt::NONE).unwrap().unwrap();
         let expected=[0.75f64.to_bits(),0.5f64.to_bits()+1].into_iter().flat_map(u64::to_ne_bytes).collect::<Vec<_>>();
         assert_eq!(result.to_interleaved(doc.bounds()),expected);assert_eq!(result.default_bytes(),mask.default_bytes());assert_eq!(doc,before);
@@ -179,11 +225,11 @@ mod tests {
     }
     #[test]
     fn cancellation_stale_and_unsupported_blend_leave_native_mask_and_real_redo() {
-        let (doc,id)=fixture();let request=Request{target:Target::Mask(id),value:1.0,opacity:1.0,contents:"white",clear:false};let before=doc.clone();let cancelled=||true;
+        let (doc,id)=fixture();let request=Request{target:Target::Mask(id),value:1.0,opacity:1.0,blend:Blend::Normal,u32_percent:None,contents:"white",clear:false};let before=doc.clone();let cancelled=||true;
         assert!(matches!(prepare(&doc,&request,&Interrupt::cancel_only(&cancelled)),Err(EngineError::Cancelled)));assert_eq!(doc,before);
         let mut session=Session::new();session.add_document(doc,None).unwrap();session.edit("Seed",|d,_|{d.name="Seed".into();Ok(())}).unwrap();session.execute("edit.undo",Value::Null).unwrap();
         let st=session.active().unwrap();let before=st.doc.clone();let revision=st.revision;
-        for params in [json!({"layer":id.0,"target":"mask","mode":"multiply"}),json!({"layer":id.0,"target":"mask","documentId":before.id.0.to_string(),"expectedRevision":(revision+1).to_string()})]{
+        for params in [json!({"layer":id.0,"target":"mask","mode":"overlay"}),json!({"layer":id.0,"target":"mask","documentId":before.id.0.to_string(),"expectedRevision":(revision+1).to_string()})]{
             assert!(try_run(&mut session,"edit.fill",&params).is_err());assert!(session.active().unwrap().doc.shares_state(&before));assert!(session.active().unwrap().history.can_redo());
         }
         let params=json!({"layer":id.0,"target":"mask","opacity":0});try_run(&mut session,"edit.fill",&params).unwrap();

@@ -12,6 +12,10 @@ use serde_json::{Map, Value, json};
 use crate::PhotocraftApp;
 use crate::theme::Tokens;
 
+#[path = "fill_origin.rs"]
+mod origin;
+pub(crate) use origin::FillOrigin;
+
 pub const COMMAND: &str = "edit.fill";
 const MARK: &str = "__fill";
 
@@ -100,7 +104,12 @@ pub fn reset(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
 /// Open the Fill dialog; returns its id.
 pub fn open(app: &mut PhotocraftApp) -> u64 {
     let f = fields(app);
-    app.ui.open_dialog(crate::state::DialogKind::Command, f)
+    let id=app.ui.open_dialog(crate::state::DialogKind::Command, f);
+    app.ui.fill_origin=match origin::capture(app,id) {
+        Ok(origin)=>Some(origin),
+        Err(error)=>{app.ui.status=error;app.ui.status_error=true;None},
+    };
+    id
 }
 
 /// The `edit.fill` params of the dialog's fields: only the options of the chosen contents.
@@ -127,10 +136,11 @@ pub fn params(f: &Map<String, Value>) -> Value {
 }
 
 /// OK: remember the choices, then fill.
-pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+pub(crate) fn confirm_for_dialog(app:&mut PhotocraftApp,id:u64,f:&Map<String,Value>)->Result<Value,String> {
+    let request=origin::validate(app,id,f)?;
     let remembered: Map<String, Value> = KEYS.iter().filter_map(|k| f.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
     app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), Value::Object(remembered)));
-    app.run(COMMAND, params(f))
+    app.run(COMMAND, request)
 }
 
 fn label(ui: &mut egui::Ui, text: &str) {

@@ -28,6 +28,7 @@ pub struct GlyphSpan {
     pub end: usize,
 }
 pub struct PreparedUnitOutline {
+    pub raster_policy: super::unit_raster_policy::UnhintedRasterPolicy,
     pub commands: Vec<Command>,
     pub glyphs: Vec<GlyphSpan>,
     pub retained_bytes: u64,
@@ -180,5 +181,10 @@ pub fn prepare(
         glyphs.push(GlyphSpan { glyph_id: g.glyph_id, start, end: commands.len() });
     }
     poll(control)?;
-    Ok(PreparedUnitOutline { commands, glyphs, retained_bytes: actual_commands.checked_add(actual_spans).ok_or(TextSourceError::Budget)? })
+    Ok(PreparedUnitOutline {
+        raster_policy: layout.raster_policy,
+        commands,
+        glyphs,
+        retained_bytes: actual_commands.checked_add(actual_spans).ok_or(TextSourceError::Budget)?,
+    })
 }

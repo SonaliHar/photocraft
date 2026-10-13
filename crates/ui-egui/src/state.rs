@@ -1362,6 +1362,8 @@ pub struct UiState {
     #[serde(skip)]
     pub(crate) trim_origin: Option<crate::trim::TrimOrigin>,
     #[serde(skip)]
+    pub(crate) fill_origin: Option<crate::fill_ui::FillOrigin>,
+    #[serde(skip)]
     pub(crate) duplicate_origin: Option<crate::duplicate::DuplicateOrigin>,
     #[serde(skip)]
     pub(crate) profile_origin: Option<crate::profile_dialog::ProfileOrigin>,
@@ -1531,6 +1533,7 @@ impl Default for UiState {
             dialogs: Vec::new(),
             sizing_witness: None,
             trim_origin: None,
+            fill_origin: None,
             duplicate_origin: None,
             profile_origin: None,
             mode_conversion_origin: None,

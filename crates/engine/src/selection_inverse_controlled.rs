@@ -1,4 +1,4 @@
-//! Controlled canvas selection inversion. Narrow storage follows upstream f32
+//! Controlled All, Deselect and canvas selection inversion. Narrow storage follows upstream f32
 //! arithmetic and GRAY8 encoding; U32/F64 are explicit native unit coverage.
 use crate::{DocumentSnapshot, EngineError, Result, Session};
 use photocraft_color::{ColorMode, PixelFormat, SampleType, read_sample, try_read_sample_f64, write_sample};
@@ -27,7 +27,7 @@ fn decimal(value: &Value) -> Result<u64> {
         .ok_or_else(|| bad("captured IDs must be canonical decimal strings"))?;
     text.parse().map_err(|_| bad("identity overflow"))
 }
-fn parameters(session: &Session, p: &Value) -> Result<()> {
+fn parameters_for(session: &Session, p: &Value, needs_selection: bool) -> Result<()> {
     if !p.is_null() {
         let object = p
             .as_object()
@@ -52,10 +52,13 @@ fn parameters(session: &Session, p: &Value) -> Result<()> {
     {
         return Err(bad("selection target is not idle"));
     }
-    if state.doc.selection.is_none() {
+    if needs_selection && state.doc.selection.is_none() {
         return Err(bad("no selection"));
     }
     Ok(())
+}
+fn parameters(session: &Session, p: &Value) -> Result<()> {
+    parameters_for(session, p, true)
 }
 pub(crate) fn dispatch_preflight(session: &Session, p: &Value, _background: bool) -> Result<()> {
     parameters(session, p)
@@ -117,8 +120,11 @@ fn authority(doc: &Document, ctl: &Interrupt<'_>) -> Result<()> {
                 return Err(bad("opaque selection inversion is not qualified"));
             }
         }
-        let source = doc.selection.as_ref().ok_or_else(|| bad("missing selection"))?;
-        if matches!(source.format().sample, SampleType::U32 | SampleType::F64) && source.format().sample != doc.depth {
+        if doc
+            .selection
+            .as_ref()
+            .is_some_and(|source| matches!(source.format().sample, SampleType::U32 | SampleType::F64) && source.format().sample != doc.depth)
+        {
             return Err(bad("canonical selection depth mismatch"));
         }
     }
@@ -133,16 +139,29 @@ struct Plan {
 }
 fn admission(doc: &Document, ctl: &Interrupt<'_>) -> Result<Plan> {
     poll(ctl)?;
-    let area = canvas(doc)?;
+    canvas(doc)?;
     let source = doc.selection.as_ref().ok_or_else(|| bad("no selection"))?;
     let input = source.format();
     if input.mode != ColorMode::Grayscale || input.alpha {
         return Err(bad("selection must be Gray without alpha"));
     }
     let format = if matches!(input.sample, SampleType::U32 | SampleType::F64) { input } else { PixelFormat::GRAY8 };
+    let plan = storage_plan(doc, format, true, ctl)?;
+    source.try_validate_tile_origins_with(ctl).map_err(|e| error(ctl, e))?;
+    authority(doc, ctl)?;
+    poll(ctl)?;
+    Ok(plan)
+}
+fn storage_plan(doc: &Document, format: PixelFormat, with_output: bool, ctl: &Interrupt<'_>) -> Result<Plan> {
+    poll(ctl)?;
+    canvas(doc)?;
     let width = u64::from(doc.size.width);
     let height = u64::from(doc.size.height);
-    let tiles = width.div_ceil(TILE_SIZE as u64).checked_mul(height.div_ceil(TILE_SIZE as u64)).ok_or_else(|| bad("tile count overflow"))?;
+    let tiles = if with_output {
+        width.div_ceil(TILE_SIZE as u64).checked_mul(height.div_ceil(TILE_SIZE as u64)).ok_or_else(|| bad("tile count overflow"))?
+    } else {
+        0
+    };
     let tile_bytes = (TILE_SIZE as u64) * (TILE_SIZE as u64) * format.bytes_per_pixel() as u64;
     let stage_bytes = tiles
         .checked_mul(tile_bytes.checked_mul(4).and_then(|n| n.checked_add(4096)).ok_or_else(|| bad("stage capacity"))?)
@@ -165,7 +184,7 @@ fn admission(doc: &Document, ctl: &Interrupt<'_>) -> Result<Plan> {
         .filter(|n| *n <= MAX_CHECKED_RASTER_BYTES)
         .ok_or_else(|| bad("aggregate resident limit"))?;
     let _ = peak;
-    let work = width
+    let work = (if with_output { width } else { 0 })
         .checked_mul(height)
         .and_then(|n| n.checked_mul(16))
         .and_then(|n| n.checked_add(stage_work))
@@ -173,11 +192,37 @@ fn admission(doc: &Document, ctl: &Interrupt<'_>) -> Result<Plan> {
         .filter(|n| *n <= MAX_WORK)
         .ok_or_else(|| bad("aggregate work limit"))?;
     let _ = work;
-    let _ = area;
-    source.try_validate_tile_origins_with(ctl).map_err(|e| error(ctl, e))?;
-    authority(doc, ctl)?;
     poll(ctl)?;
     Ok(Plan { format, tiles, stage_bytes, stage_work })
+}
+fn all_format(doc: &Document) -> Result<PixelFormat> {
+    if let Some(source) = &doc.selection {
+        if source.format().mode != ColorMode::Grayscale || source.format().alpha {
+            return Err(bad("selection must be Gray without alpha"));
+        }
+        if matches!(source.format().sample, SampleType::U32 | SampleType::F64) {
+            return Ok(source.format());
+        }
+    }
+    if doc.selection_channel_id.is_some() && matches!(doc.depth, SampleType::U32 | SampleType::F64) {
+        return Ok(PixelFormat::new(ColorMode::Grayscale, doc.depth, false));
+    }
+    Ok(PixelFormat::GRAY8)
+}
+fn admission_all(doc: &Document, ctl: &Interrupt<'_>) -> Result<Plan> {
+    let plan = storage_plan(doc, all_format(doc)?, true, ctl)?;
+    authority(doc, ctl)?;
+    poll(ctl)?;
+    Ok(plan)
+}
+fn clear_authority(doc: &Document, ctl: &Interrupt<'_>) -> Result<()> {
+    // Removing current coverage does not edit its stored channel/source record,
+    // change canonical identity, or reinterpret any source bytes.
+    poll(ctl)?;
+    if doc.xcf_state.is_some() {
+        doc.validate_xcf_state_with(ctl).map_err(|e| error(ctl, e))?;
+    }
+    poll(ctl)
 }
 struct Prepaid {
     bytes: u64,
@@ -224,11 +269,14 @@ fn invert_sample(source: &[u8], sample: SampleType, output: &mut [u8]) -> Result
     Ok(())
 }
 fn prepare(doc: &Document, ctl: &Interrupt<'_>) -> Result<Surface> {
-    let plan = admission(doc, ctl)?;
-    let source = doc.selection.as_ref().ok_or_else(|| bad("no selection"))?;
+    prepare_mode(doc, false, ctl)
+}
+fn prepare_mode(doc: &Document, all: bool, ctl: &Interrupt<'_>) -> Result<Surface> {
+    let plan = if all { admission_all(doc, ctl)? } else { admission(doc, ctl)? };
+    let source = doc.selection.as_ref();
     let bounds = canvas(doc)?;
     let bpp = plan.format.bytes_per_pixel();
-    let input_width = source.format().bytes_per_pixel();
+    let input_width = source.map_or(0, |source| source.format().bytes_per_pixel());
     let zero = [0u8; 8];
     let mut output = Surface::try_with_default_bytes(plan.format, zero.get(..bpp).ok_or_else(|| bad("default width"))?).map_err(|e| error(ctl, e))?;
     let mut budget = Prepaid { bytes: plan.stage_bytes, work: plan.stage_work };
@@ -257,18 +305,26 @@ fn prepare(doc: &Document, ctl: &Interrupt<'_>) -> Result<Surface> {
             for x in part.x0..part.x1 {
                 poll(ctl)?;
                 let input = input.get_mut(..input_width).ok_or_else(|| bad("input word width"))?;
-                source.try_read_pixel_bytes(x, y, input).map_err(|e| error(ctl, e))?;
+                if !all {
+                    source.ok_or_else(|| bad("missing selection"))?.try_read_pixel_bytes(x, y, input).map_err(|e| error(ctl, e))?;
+                }
                 let offset = usize::try_from(i64::from(y) - i64::from(tile.y0))
                     .ok()
                     .and_then(|row| row.checked_mul(TILE_SIZE as usize))
                     .and_then(|row| usize::try_from(i64::from(x) - i64::from(tile.x0)).ok().and_then(|col| row.checked_add(col)))
                     .and_then(|n| n.checked_mul(bpp))
                     .ok_or_else(|| bad("tile offset"))?;
-                invert_sample(
-                    input,
-                    source.format().sample,
-                    scratch.get_mut(offset..offset.checked_add(bpp).ok_or_else(|| bad("tile offset"))?).ok_or_else(|| bad("tile sample"))?,
-                )?;
+                let destination = scratch.get_mut(offset..offset.checked_add(bpp).ok_or_else(|| bad("tile offset"))?).ok_or_else(|| bad("tile sample"))?;
+                if all {
+                    match plan.format.sample {
+                        SampleType::U32 => destination.copy_from_slice(&u32::MAX.to_ne_bytes()),
+                        SampleType::F64 => destination.copy_from_slice(&1f64.to_ne_bytes()),
+                        SampleType::U8 => destination.copy_from_slice(&[255]),
+                        _ => return Err(bad("unsupported Select All output")),
+                    }
+                } else {
+                    invert_sample(input, source.ok_or_else(|| bad("missing selection"))?.format().sample, destination)?;
+                }
             }
         }
         let mut builder =
@@ -294,21 +350,65 @@ fn prepare(doc: &Document, ctl: &Interrupt<'_>) -> Result<Surface> {
     poll(ctl)?;
     Ok(output)
 }
+#[derive(Clone, Copy)]
+enum Action {
+    Inverse,
+    All,
+    Deselect,
+}
+impl Action {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Inverse => "Inverse",
+            Self::All => "Select All",
+            Self::Deselect => "Deselect",
+        }
+    }
+}
+/// Existing inverse routing remains compatible with its original entry point.
 pub(crate) fn run(session: &mut Session, p: &Value) -> Result<Value> {
-    parameters(session, p)?;
+    run_action(session, p, Action::Inverse)
+}
+pub(crate) fn run_all(session: &mut Session, p: &Value) -> Result<Value> {
+    run_action(session, p, Action::All)
+}
+pub(crate) fn run_deselect(session: &mut Session, p: &Value) -> Result<Value> {
+    run_action(session, p, Action::Deselect)
+}
+pub(crate) fn storage_dispatch_preflight(session: &Session, command: &str, p: &Value, _background: bool) -> Result<()> {
+    match command {
+        "select.all" => parameters_for(session, p, false),
+        "select.deselect" => parameters_for(session, p, true),
+        _ => Err(bad("unsupported storage command")),
+    }
+}
+fn run_action(session: &mut Session, p: &Value, action: Action) -> Result<Value> {
+    parameters_for(session, p, !matches!(action, Action::All))?;
     let state = session.active().ok_or(EngineError::NoDocument)?;
     state.doc.validate_resident()?;
-    // These are shared snapshot handles, not deep Document/raster copies.
-    // Worker admission is token-controlled and precedes every output allocation;
-    // the same admission remains live through final history/model COW publication.
     let baseline = state.doc.clone();
     let revision = state.revision;
     let worker = baseline.clone();
+    let label = action.label();
     crate::jobs::run(
         session,
-        "Inverse",
+        label,
         true,
-        move |ctx| ctx.stage(0.0, 0.95, "Invert Selection", |ctl| Ok((prepare(&worker, ctl)?, ctx.clone()))),
+        move |ctx| {
+            ctx.stage(0.0, 0.95, label, |ctl| {
+                let output = match action {
+                    Action::Inverse => Some(prepare(&worker, ctl)?),
+                    Action::All => Some(prepare_mode(&worker, true, ctl)?),
+                    Action::Deselect => {
+                        storage_plan(&worker, PixelFormat::GRAY8, false, ctl)?;
+                        clear_authority(&worker, ctl)?;
+                        None
+                    }
+                };
+                poll(ctl)?;
+                Ok((output, ctx.clone()))
+            })
+        },
         move |session, (selection, ctx)| {
             let state = session.active().ok_or(EngineError::NoDocument)?;
             if state.doc.id != baseline.id
@@ -323,12 +423,20 @@ pub(crate) fn run(session: &mut Session, p: &Value) -> Result<Value> {
             {
                 return Err(bad("selection target changed during preparation"));
             }
-            ctx.stage(0.95, 1.0, "Invert Selection", |ctl| {
+            ctx.stage(0.95, 1.0, label, |ctl| {
                 poll(ctl)?;
-                session.edit_with_interrupt("Inverse", ctl, move |doc, _| {
-                    authority(doc, ctl)?;
-                    doc.selection = Some(selection);
-                    authority(doc, ctl)?;
+                session.edit_with_interrupt(label, ctl, move |doc, _| {
+                    if matches!(action, Action::Deselect) {
+                        clear_authority(doc, ctl)?;
+                    } else {
+                        authority(doc, ctl)?;
+                    }
+                    doc.selection = selection;
+                    if matches!(action, Action::Deselect) {
+                        clear_authority(doc, ctl)?;
+                    } else {
+                        authority(doc, ctl)?;
+                    }
                     poll(ctl)
                 })?;
                 Ok(Value::Null)
@@ -365,6 +473,50 @@ mod tests {
                 assert_eq!(actual, expected);
             }
         }
+    }
+    #[test]
+    fn select_all_preserves_upstream_narrow_storage_and_existing_wide_storage() {
+        for sample in [SampleType::U8, SampleType::U16, SampleType::F32, SampleType::U32, SampleType::F64] {
+            let mut doc = Document::new("All draft", photocraft_geom::Size::new(257, 1), ColorMode::Rgb, sample);
+            doc.selection = Some(Surface::new(PixelFormat::new(ColorMode::Grayscale, sample, false)));
+            let before = doc.clone();
+            let output = prepare_mode(&doc, true, &Interrupt::NONE).unwrap();
+            let expected = if matches!(sample, SampleType::U32 | SampleType::F64) { sample } else { SampleType::U8 };
+            assert_eq!(output.format(), PixelFormat::new(ColorMode::Grayscale, expected, false));
+            assert_eq!(output.default_bytes(), vec![0; expected.bytes()]);
+            let mut raw = vec![0; expected.bytes()];
+            output.try_read_pixel_bytes(256, 0, &mut raw).unwrap();
+            assert_eq!(try_read_sample_f64(&raw, expected, 0).unwrap(), 1.0);
+            output.try_read_pixel_bytes(257, 0, &mut raw).unwrap();
+            assert_eq!(raw, vec![0; expected.bytes()]);
+            assert_eq!(doc, before);
+        }
+    }
+    #[test]
+    fn deselect_keeps_current_identity_and_original_storage_in_undo() {
+        let mut doc = Document::new("Deselect draft", photocraft_geom::Size::new(2, 1), ColorMode::Rgb, SampleType::U32);
+        doc.selection =
+            Some(Surface::try_with_default_bytes(PixelFormat::new(ColorMode::Grayscale, SampleType::U32, false), &0x80000001u32.to_ne_bytes()).unwrap());
+        let mut session = Session::new();
+        session.add_document(doc, None).unwrap();
+        let before = session.active().unwrap().doc.clone();
+        run_deselect(&mut session, &Value::Null).unwrap();
+        assert!(session.active().unwrap().doc.selection.is_none());
+        assert_eq!(session.active().unwrap().doc.selection_channel_id, before.selection_channel_id);
+        assert!(session.undo());
+        assert_eq!(session.active().unwrap().doc, before);
+    }
+    #[test]
+    fn select_all_without_prior_selection_uses_legacy_gray8_and_stale_pair_refuses() {
+        let doc = Document::new("All draft", photocraft_geom::Size::new(2, 1), ColorMode::Rgb, SampleType::F64);
+        assert_eq!(prepare_mode(&doc, true, &Interrupt::NONE).unwrap().format(), PixelFormat::GRAY8);
+        let mut session = Session::new();
+        session.add_document(doc, None).unwrap();
+        let before = session.active().unwrap().doc.clone();
+        let revision = session.active().unwrap().revision;
+        assert!(run_all(&mut session, &serde_json::json!({"documentId":before.id.0.to_string(),"expectedRevision":(revision+1).to_string()})).is_err());
+        assert!(before.downgrade().is_current(&session.active().unwrap().doc));
+        assert_eq!(session.active().unwrap().revision, revision);
     }
     #[test]
     fn prepare_preserves_original_and_cancellation_publishes_nothing() {

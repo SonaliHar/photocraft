@@ -98,6 +98,7 @@ pub struct LinePlacement {
     pub script: LtrScript,
 }
 pub struct PreparedUnitLayout {
+    pub(super) raster_policy: super::unit_raster_policy::UnhintedRasterPolicy,
     pub(super) font_resource: photocraft_doc::item_identity::ResourceId,
     pub(super) font_sha256: [u8; 32],
     pub(super) font_index: u32,
@@ -221,8 +222,8 @@ pub fn prepare_external_positioned(
         }
     }
     // Serialized booleans are exact DTO data, not a choice of hinter/grid.
-    // The current candidate's raster consumer implements only unhinted area coverage.
-    super::unit_raster_policy::read_source(item, ctl)?.require_unhinted_area()?;
+    // The candidate consumer selects only validated unhinted area or binary coverage.
+    let raster_policy = super::unit_raster_policy::read_source(item, ctl)?.require_unhinted()?;
     // Closed candidate style lane: spacing, transforms, outlines and box layout
     // must have dedicated implementations, rather than being silently ignored.
     for (index, f) in layout.iter().enumerate() {
@@ -321,6 +322,7 @@ pub fn prepare_external_positioned(
     }
     poll(ctl)?;
     Ok(PreparedUnitLayout {
+        raster_policy,
         font_resource: font.resource,
         font_sha256: font.sha256,
         font_index: font.index,

@@ -32,7 +32,7 @@ pub(crate) fn fixed<T>() -> IncrementalCloneRequirements { IncrementalCloneRequi
 
 pub(crate) struct CloneBudget<'a,'b> { control: &'a Interrupt<'b>, remaining: u64, work: u64 }
 impl<'a,'b> CloneBudget<'a,'b> {
-    fn new(requirements: IncrementalCloneRequirements, limits: StrokeLimits, control: &'a Interrupt<'b>) -> Result<Self> {
+    pub(crate) fn new(requirements: IncrementalCloneRequirements, limits: StrokeLimits, control: &'a Interrupt<'b>) -> Result<Self> {
         poll(control)?; self::limits(limits)?;
         if requirements.work_units>limits.work_units { return Err(StrokeError::Limit); }
         let remaining=limits.resident_bytes.checked_sub(requirements.retained_bytes).ok_or(StrokeError::Limit)?;
@@ -40,8 +40,9 @@ impl<'a,'b> CloneBudget<'a,'b> {
         Ok(Self { control, remaining, work: limits.work_units })
     }
     pub(crate) fn poll(&self)->Result<()> { poll(self.control) }
+    pub(crate) fn admit(&self, bytes:u64)->Result<()> { self.poll()?; if bytes>self.remaining { Err(StrokeError::Limit) } else { Ok(()) } }
     pub(crate) fn charge(&mut self, bytes:u64)->Result<()> { self.poll()?; self.remaining=self.remaining.checked_sub(bytes).ok_or(StrokeError::Limit)?;Ok(()) }
-    fn work(&mut self,n:u64)->Result<()> { self.poll()?;self.work=self.work.checked_sub(n).ok_or(StrokeError::Limit)?;Ok(()) }
+    pub(crate) fn work(&mut self,n:u64)->Result<()> { self.poll()?;self.work=self.work.checked_sub(n).ok_or(StrokeError::Limit)?;Ok(()) }
     pub(crate) fn copy<T:Copy>(&mut self,source:&[T])->Result<Vec<T>> {
         self.poll()?;let requested=scaled(source.len(),size_of::<T>())?;
         if requested>self.remaining {return Err(StrokeError::Limit);}

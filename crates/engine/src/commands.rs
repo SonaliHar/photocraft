@@ -527,22 +527,8 @@ fn build() -> Vec<CommandSpec> {
             Ok(Value::Null)
         }),
         // Select
-        cmd!("select.all", "All", ["Select"], Some("Cmd+A"), "{}", has_doc, |s, _| {
-            s.edit("Select All", |doc, _| {
-                let mut m = Surface::new(photocraft_color::PixelFormat::GRAY8);
-                m.fill_rect(doc.bounds(), &[1.0]);
-                doc.selection = Some(m);
-                Ok(())
-            })?;
-            Ok(Value::Null)
-        }),
-        cmd!("select.deselect", "Deselect", ["Select"], Some("Cmd+D"), "{}", has_selection, |s, _| {
-            s.edit("Deselect", |doc, _| {
-                doc.selection = None;
-                Ok(())
-            })?;
-            Ok(Value::Null)
-        }),
+        cmd!("select.all", "All", ["Select"], Some("Cmd+A"), r##"{"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_doc, crate::selection_inverse_controlled::run_all),
+        cmd!("select.deselect", "Deselect", ["Select"], Some("Cmd+D"), r##"{"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_selection, crate::selection_inverse_controlled::run_deselect),
         cmd!("select.inverse", "Inverse", ["Select"], Some("Cmd+Shift+I"), r##"{"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_selection, crate::selection_inverse_controlled::run),
         cmd!(
             "select.rect",

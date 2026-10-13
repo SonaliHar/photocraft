@@ -468,15 +468,16 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
                 }
                 let pre = surf.clone();
                 let mut renderer = StrokeRenderer::new(&brush, Some(format), zoom);
-                renderer.push(&pts);
-                renderer.finish();
+                let limits = photocraft_paint::stroke_controlled::StrokeLimits::default();
+                renderer.push_with_interrupt(&pts, limits, &photocraft_raster::Interrupt::NONE).map_err(|error| bad(cmd, error.to_string()))?;
+                renderer.finish_with_interrupt(limits, &photocraft_raster::Interrupt::NONE).map_err(|error| bad(cmd, error.to_string()))?;
                 let mut mirrors = Vec::new();
                 mirrors.try_reserve_exact(reflected.len()).map_err(|_| bad(cmd, "mirror renderer allocation"))?;
                 for pass in &reflected {
                     if !crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, pass) { continue; }
                     let mut mirror = StrokeRenderer::new(&brush, Some(format), zoom);
-                    mirror.push(pass);
-                    mirror.finish();
+                    mirror.push_with_interrupt(pass, limits, &photocraft_raster::Interrupt::NONE).map_err(|error| bad(cmd, error.to_string()))?;
+                    mirror.finish_with_interrupt(limits, &photocraft_raster::Interrupt::NONE).map_err(|error| bad(cmd, error.to_string()))?;
                     mirrors.push(mirror);
                 }
                 let mut references = Vec::new();
@@ -806,19 +807,24 @@ impl LiveStroke {
         self.point_ledger = ledger;
         let cmyk = self.cmyk.clone();
         photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
-            self.renderer.push(pts);
+            let limits = photocraft_paint::stroke_controlled::StrokeLimits::default();
+            self.renderer.push_with_interrupt(pts, limits, control)
+                .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;
             for (mirror, reflected) in self.mirrors.iter_mut().zip(&reflected) {
-                mirror.push(reflected);
+                mirror.push_with_interrupt(reflected, limits, control)
+                    .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;
             }
             let (surf, _) = crate::channel_cmds::target_surface(self.doc.try_resident_mut()?, self.layer, &self.params)?;
             if let Some(wide) = &self.wide {
                 let limits = photocraft_paint::stroke_controlled::StrokeLimits::default();
                 let mut preview = photocraft_paint::render::clone_incremental_state_with_interrupt(&self.renderer, &self.mirrors, None, limits, control)
                     .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;
-                preview.renderer.finish();
+                preview.renderer.finish_with_interrupt(limits, control)
+                    .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;
                 for mirror in &mut preview.mirrors {
                     control.check().map_err(|_| EngineError::Cancelled)?;
-                    mirror.finish();
+                    mirror.finish_with_interrupt(limits, control)
+                        .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;
                 }
                 control.check().map_err(|_| EngineError::Cancelled)?;
                 let mut mirrors = Vec::new();
