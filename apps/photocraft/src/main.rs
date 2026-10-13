@@ -337,6 +337,11 @@ fn main() -> eframe::Result {
             builder.with_x11();
         }));
     }
+    // eframe restores the saved window layout before our code runs; drop values that would crash it.
+    ui_state::sanitize(options.persistence_path.as_deref());
+    // Centre only the first window: eframe centres after restoring the saved position, so a
+    // window closed on another monitor reopened in the middle of the main one (#4826).
+    options.centered = !ui_state::has_saved_position(options.persistence_path.as_deref());
     if hosted {
         // The owner embeds and shows the native child only after it is ready.
         // Restoring standalone geometry/visibility must not flash a top-level window.
@@ -350,15 +355,12 @@ fn main() -> eframe::Result {
             .with_taskbar(false)
             .with_position([-32000.0, -32000.0])
             .with_inner_size([640.0, 480.0]);
+        // After the standalone window's restore-or-centre decision above: a hosted editor is never centred (centred, its
+        // first frame showed on the desktop as a window of its own).
         options.centered = false;
         options.persist_window = false;
         options.persistence_path = None;
     }
-    // eframe restores the saved window layout before our code runs; drop values that would crash it.
-    ui_state::sanitize(options.persistence_path.as_deref());
-    // Centre only the first window: eframe centres after restoring the saved position, so a
-    // window closed on another monitor reopened in the middle of the main one (#4826).
-    options.centered = !ui_state::has_saved_position(options.persistence_path.as_deref());
     // Crash-safe GPU startup (#4): pick the backend (a marker left by a start that died in the
     // driver moves to a safer one), and lock this start's marker until the first frames render.
     let t_sentinel = std::time::Instant::now();
