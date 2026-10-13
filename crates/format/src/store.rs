@@ -333,13 +333,32 @@ impl Sink for Collect<'_> {
     }
 }
 
-fn tile_le(t: &Tile, sample: SampleType) -> std::borrow::Cow<'_, [u8]> {
+/// A tile's bytes in little-endian order: the tile itself (kept in memory while this lives), or
+/// a byte-swapped copy on big-endian machines.
+enum LeBytes<'a> {
+    Native(photocraft_raster::TileBytes<'a>),
+    Swapped(Vec<u8>),
+    Borrowed(&'a [u8]),
+}
+
+impl std::ops::Deref for LeBytes<'_> {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            LeBytes::Native(b) => b,
+            LeBytes::Swapped(b) => b,
+            LeBytes::Borrowed(b) => b,
+        }
+    }
+}
+
+fn tile_le(t: &Tile, sample: SampleType) -> LeBytes<'_> {
     if cfg!(target_endian = "big") {
         let mut b = t.bytes().to_vec();
         swap_to_le(&mut b, sample);
-        std::borrow::Cow::Owned(b)
+        LeBytes::Swapped(b)
     } else {
-        std::borrow::Cow::Borrowed(t.bytes())
+        LeBytes::Native(t.bytes())
     }
 }
 
@@ -417,10 +436,10 @@ impl Object {
     }
 
     /// The bytes this object stores (tiles little-endian).
-    fn content(&self) -> std::borrow::Cow<'_, [u8]> {
+    fn content(&self) -> LeBytes<'_> {
         match self {
             Object::Tile(tile, sample) => tile_le(tile, *sample),
-            Object::Blob(blob) => std::borrow::Cow::Borrowed(blob.as_slice()),
+            Object::Blob(blob) => LeBytes::Borrowed(blob.as_slice()),
         }
     }
 }
@@ -726,6 +745,19 @@ impl PcraftWriter {
     }
 
     fn prepare(&mut self, doc: &Document, opts: &SaveOptions) -> Result<Prepared> {
+        photocraft_raster::spill::check_integrity().map_err(FormatError::corrupt)?;
+        let generation = photocraft_raster::spill::read_error_generation();
+        let prepared = self.prepare_inner(doc, opts);
+        if let Err(error) = photocraft_raster::spill::check_since(generation) {
+            // Failed reads may have hashed display placeholders. Never reuse those hashes
+            // when the original backing becomes readable and the same writer retries.
+            self.hash_cache.clear();
+            return Err(FormatError::corrupt(error));
+        }
+        prepared
+    }
+
+    fn prepare_inner(&mut self, doc: &Document, opts: &SaveOptions) -> Result<Prepared> {
         self.hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
         convert::check_nesting(&doc.layers)?;
         let mut c = Collect { hash_cache: Some(&mut self.hash_cache), ..Default::default() };
@@ -760,6 +792,7 @@ impl PcraftWriter {
         for (h, b) in c.blobs {
             objects.insert(blob_path(&h), Object::Blob(b));
         }
+        photocraft_raster::spill::check_integrity().map_err(FormatError::corrupt)?;
         Ok(Prepared { manifest, objects, previews, stats })
     }
 
@@ -795,6 +828,7 @@ impl PcraftWriter {
             z.add(path, &data)?;
             next.insert(path.clone(), data);
         }
+        photocraft_raster::spill::check_integrity().map_err(FormatError::corrupt)?;
         self.compressed = next;
         Ok((z.finish()?, stats))
     }
@@ -858,7 +892,9 @@ impl PcraftWriter {
                 Object::Tile(..) => stats.tiles_written += 1,
                 Object::Blob(_) => stats.blobs_written += 1,
             }
-            write_bundle_file(dir, &object_path, &obj.compressed())?;
+            let compressed = obj.compressed();
+            photocraft_raster::spill::check_integrity().map_err(FormatError::corrupt)?;
+            write_bundle_file(dir, &object_path, &compressed)?;
             let written = path_signature(&object_path)?;
             if let Some(cache) = &mut self.verified_directory {
                 match written {
@@ -887,6 +923,7 @@ impl PcraftWriter {
                 }
             }
         }
+        photocraft_raster::spill::check_integrity().map_err(FormatError::corrupt)?;
         write_bundle_file(dir, &dir.join(MANIFEST), &p.manifest)?;
         // The manifest is committed: the save has succeeded. Removing objects it no longer
         // references is best-effort housekeeping (a vanished or locked file must not turn a

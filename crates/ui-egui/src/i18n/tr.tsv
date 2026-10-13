@@ -3869,3 +3869,5 @@ cameraData	Lens	Lens
 	Ink Characteristics	Mürekkep Özellikleri
 	Solidity:	Doluluk:
 	Redrawing	Yeniden çiziliyor
+	GPU memory mb	GPU belleği MB
+	Memory usage percent	Bellek kullanım yüzdesi
