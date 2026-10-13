@@ -3120,3 +3120,23 @@ curves	Smooth	Сгладить
 	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	Файлы, отправленные из PhotoCraft, и десять новых файлов этому боту. Щелчок открывает один в PhotoCraft.
 	No files yet. Send one from here, or send the bot a file, then try again.	Файлов пока нет. Отправьте один отсюда или боту и попробуйте снова.
 	Telegram did not return a link for this chat.	Telegram не вернул ссылку на этот чат.
+
+# Dynamic selection context menu and appearance favorites
+	Select Inverse	Инвертировать выделение
+	Pro (Light)	Pro (светлая)
+	Pro (Light Gray)	Pro (светло-серая)
+
+# Measurement Log column headers (analysis_cmds::COLUMNS)
+	Label	Метка
+	Date and Time	Дата и время
+	Scale Units	Единицы масштаба
+	Scale Factor	Коэффициент масштаба
+	Area	Площадь
+	Perimeter	Периметр
+	Circularity	Круглость
+	Gray Value (Minimum)	Уровень серого (минимум)
+	Gray Value (Maximum)	Уровень серого (максимум)
+	Gray Value (Mean)	Уровень серого (среднее)
+	Gray Value (Median)	Уровень серого (медиана)
+	Integrated Density	Интегральная плотность
+	Length	Длина
