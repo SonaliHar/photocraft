@@ -30,6 +30,8 @@ const FIELDS: &[CredentialField] = &[CredentialField { name: CLIENT_ID, label: "
 const MODELS: &[(&str, &str)] = &[("firefly-fill", "Firefly Fill")];
 /// Renew this long before the token's stated expiry.
 const EARLY: u64 = 300;
+/// IMS tokens last about a day; never trust a longer lifetime.
+const MAX_LIFETIME: u64 = 86_400;
 
 pub struct Firefly {
     creds: Credentials,
@@ -67,7 +69,7 @@ pub fn parse_token(r: &HttpResponse, creds: &Credentials) -> Result<(ApiKey, u64
     }
     let v = common::json(r)?;
     let token = v.get("access_token").and_then(Value::as_str).and_then(ApiKey::new).ok_or(GenError::BadResponse("no token in the reply"))?;
-    Ok((token, v.get("expires_in").and_then(Value::as_u64).unwrap_or(3600)))
+    Ok((token, v.get("expires_in").and_then(Value::as_u64).unwrap_or(3600).min(MAX_LIFETIME)))
 }
 
 pub fn parse_upload(r: &HttpResponse, creds: &Credentials) -> Result<String> {
@@ -131,7 +133,7 @@ impl Firefly {
         ]);
         let r = self.http.send(HttpRequest::post(IMS, body.into_bytes()).header("content-type", "application/x-www-form-urlencoded"))?;
         let (token, expires) = parse_token(&r, &self.creds)?;
-        *slot = Some((token.clone(), now + Duration::from_secs(expires.saturating_sub(EARLY))));
+        *slot = now.checked_add(Duration::from_secs(expires.saturating_sub(EARLY))).map(|until| (token.clone(), until));
         Ok(token)
     }
 
@@ -318,5 +320,31 @@ mod tests {
         assert_eq!(p.edit(&r), Err(GenError::Cancelled));
         let last = http.requests().pop().unwrap();
         assert_eq!((last.method, last.url.as_str()), (Method::Put, CANCEL));
+    }
+
+    fn with_clock(replies: Vec<Result<HttpResponse>>) -> (Firefly, Arc<FakeHttp>, Arc<FakeClock>) {
+        let http = FakeHttp::new(replies);
+        let clock = Arc::new(FakeClock::default());
+        (Firefly { creds: creds(), http: http.clone(), clock: clock.clone(), token: Mutex::new(None) }, http, clock)
+    }
+
+    #[test]
+    fn a_huge_expires_in_cannot_overflow_the_expiry() {
+        let mut replies = vec![json_reply(200, json!({"access_token": "tok-1", "expires_in": u64::MAX}))];
+        replies.extend(happy().into_iter().skip(1));
+        let (p, _, clock) = with_clock(replies);
+        crate::poll::Clock::sleep(&*clock, Duration::from_secs(1000));
+        p.edit(&edit_request("x", 8, 8)).unwrap();
+    }
+
+    #[test]
+    fn an_expired_token_is_replaced() {
+        let mut replies = happy();
+        replies.extend(happy());
+        let (p, http, clock) = with_clock(replies);
+        p.edit(&edit_request("x", 8, 8)).unwrap();
+        crate::poll::Clock::sleep(&*clock, Duration::from_secs(86399 - 300 + 1));
+        p.edit(&edit_request("x", 8, 8)).unwrap();
+        assert_eq!(http.requests().iter().filter(|r| r.url == IMS).count(), 2);
     }
 }
