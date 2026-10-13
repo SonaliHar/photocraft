@@ -45,6 +45,10 @@ pub(super) fn dispatch_preflight(s:&Session,p:&Value,c:&Interrupt<'_>)->Result<b
 pub(super) fn refuse_native_preview(s:&Session,p:&Value,c:&Interrupt<'_>)->Result<()> {
     poll(c)?;let (_,sample)=target(s,p)?;if matches!(sample,SampleType::U32|SampleType::F64){return Err(bad("native Color Replacement live preview is unsupported"));}Ok(())
 }
+#[path="native_replace_preview.rs"]
+mod preview;
+pub use preview::{NativeLuminosityPreview,NativeLuminosityCommit,try_native_color_replacement_preview};
+#[derive(Clone)]
 struct Capture {
     snapshot:DocumentSnapshot,weak:WeakDocumentSnapshot,revision:u64,
     active:Option<LayerId>,id:LayerId,format:photocraft_color::PixelFormat,
@@ -98,14 +102,18 @@ fn prepare(mut input:Input,c:&Interrupt<'_>)->Result<Candidate> {
     let response=if damage.is_empty(){json!({"damage":[0,0,0,0],"nativeLuminosity":true})}else{json!({"damage":[damage.x0,damage.y0,damage.width(),damage.height()],"nativeLuminosity":true})};
     poll(c)?;Ok(Candidate{capture:input.capture,output,damage,response})
 }
-fn apply(s:&mut Session,candidate:Candidate,c:&Interrupt<'_>)->Result<Value> {
-    poll(c)?;let captured=&candidate.capture;let state=s.active().ok_or(EngineError::NoDocument)?;
+fn validate_capture(s:&Session,captured:&Capture,c:&Interrupt<'_>)->Result<()> {
+    poll(c)?;let state=s.active().ok_or(EngineError::NoDocument)?;
     if state.doc.id!=captured.snapshot.id||state.revision!=captured.revision||state.active_layer!=captured.active
         ||!captured.weak.is_current(&state.doc)||!state.doc.shares_state(&captured.snapshot)||state.channel_view!=captured.view
         ||state.floating.is_some()||state.coalesce.is_some()||s.coalesce_request.is_some()||s.color_restrict.is_some(){return Err(bad("captured native replacement document/view changed"));}
     crate::commands::check_pixels_unlocked(&state.doc,captured.id)?;
     if state.doc.effective_locks(captured.id).transparency!=captured.lock{return Err(bad("native target alpha lock changed"));}
     crate::native_linear_context::validate(&state.doc,c).map_err(|message|if c.cancelled(){EngineError::Cancelled}else{bad(message)})?;
+    poll(c)
+}
+fn apply(s:&mut Session,candidate:Candidate,c:&Interrupt<'_>)->Result<Value> {
+    validate_capture(s,&candidate.capture,c)?;let captured=&candidate.capture;
     poll(c)?;if candidate.damage.is_empty(){return Ok(candidate.response);}
     let id=captured.id;let format=captured.format;let lock=captured.lock;let damage=candidate.damage;
     // Response is owned from worker preparation. Publication is followed only
@@ -122,6 +130,11 @@ fn apply(s:&mut Session,candidate:Candidate,c:&Interrupt<'_>)->Result<Value> {
 /// Registered entry: jobs::run executes inline/wasm with its inline token, or
 /// on the native worker when Session::start is used. No Session enters work.
 pub(super) fn try_run_job(s:&mut Session,p:&Value)->Result<Option<Value>> {
+    if let Some(commit)=s.native_replace_commit.take(){
+        let candidate=commit.into_candidate_for_command(s,p,&Interrupt::NONE)?;
+        let value=crate::jobs::run(s,"Color Replacement",true,move|ctx|{ctx.stage(0.0,0.1,"Captured native preview",poll)?;Ok((candidate,ctx.clone()))},move|session,(candidate,ctx)|ctx.stage(0.1,1.0,"Apply native preview",|control|apply(session,candidate,control)))?;
+        return Ok(Some(value));
+    }
     let Some(input)=capture(s,p,&Interrupt::NONE)?else{return Ok(None);};
     let response=crate::jobs::run(s,"Color Replacement",true,move|ctx|{
         ctx.stage(0.0,0.95,"Native Luminosity",|control|prepare(input,control)).map(|candidate|(candidate,ctx.clone()))

@@ -330,11 +330,12 @@ fn reject_named_source(
     Ok(())
 }
 
-fn check_native_file(
+fn check_native_file_with_limit(
     file: &mut std::fs::File,
     path: &Path,
     protection: &photocraft_engine::WriteProtection,
     control: &photocraft_raster::Interrupt<'_>,
+    resident_limit: Option<u64>,
 ) -> Result<(), AutomationError> {
     poll(control)?;
     let metadata = file.metadata().map_err(|error| AutomationError::Io(format!("inspect destination {}: {error}", path.display())))?;
@@ -353,7 +354,11 @@ fn check_native_file(
             return Err(AutomationError::BadRequest("an alias of the original XCF source is protected; choose a different destination".into()));
         }
     }
-    photocraft_io::source_protection::check_reader_with_interrupt(file, metadata.len(), &protection.fingerprints, control).map_err(protection_error)?;
+    if let Some(limit) = resident_limit {
+        photocraft_io::source_protection::check_reader_with_resident_limit(file, metadata.len(), &protection.fingerprints, limit, control).map_err(protection_error)?;
+    } else {
+        photocraft_io::source_protection::check_reader_with_interrupt(file, metadata.len(), &protection.fingerprints, control).map_err(protection_error)?;
+    }
     if file.metadata().map_err(|error| AutomationError::Io(error.to_string()))?.len() != metadata.len() {
         return Err(AutomationError::BadRequest("native destination changed during protection check".into()));
     }
@@ -379,6 +384,16 @@ pub fn validate_destination_protected_with_interrupt(
     format_override: Option<&str>,
     control: &photocraft_raster::Interrupt<'_>,
 ) -> Result<(), AutomationError> {
+    validate_destination_protected_with_limit(path, protection, format_override, control, None)
+}
+
+fn validate_destination_protected_with_limit(
+    path: &Path,
+    protection: &photocraft_engine::WriteProtection,
+    format_override: Option<&str>,
+    control: &photocraft_raster::Interrupt<'_>,
+    resident_limit: Option<u64>,
+) -> Result<(), AutomationError> {
     poll(control)?;
     validate_write_name(path, format_override)?;
     validate_protection(protection, control)?;
@@ -393,7 +408,7 @@ pub fn validate_destination_protected_with_interrupt(
     let opened = std::fs::File::open(path);
     poll(control)?;
     let result = match opened {
-        Ok(mut file) => check_native_file(&mut file, path, protection, control),
+        Ok(mut file) => check_native_file_with_limit(&mut file, path, protection, control, resident_limit),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(AutomationError::Io(format!("cannot validate destination {}: {error}", path.display()))),
     };
@@ -476,7 +491,7 @@ pub(crate) fn write_protected_stream_with_interrupt<R>(
     control: &photocraft_raster::Interrupt<'_>,
     write: impl FnOnce(&mut cap_std::fs::File) -> Result<R, AutomationError>,
 ) -> Result<R, AutomationError> {
-    write_protected_stream_with_guard(path, protection, control, &|| Ok(()), None, write)
+    write_protected_stream_with_guard(path, protection, control, &|| Ok(()), None, None, write)
 }
 pub(crate) fn write_protected_stream_with_guard<R>(
     path: &Path,
@@ -484,20 +499,21 @@ pub(crate) fn write_protected_stream_with_guard<R>(
     control: &photocraft_raster::Interrupt<'_>,
     extra_check: &dyn Fn() -> Result<(), AutomationError>,
     held_parent: Option<&cap_std::fs::Dir>,
+    source_resident_limit: Option<u64>,
     write: impl FnOnce(&mut cap_std::fs::File) -> Result<R, AutomationError>,
 ) -> Result<R, AutomationError> {
     poll(control)?;
     extra_check()?;
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (path, write, protection, extra_check, held_parent);
+        let _ = (path, write, protection, extra_check, held_parent, source_resident_limit);
         Err(AutomationError::BadRequest("native protected writes are unavailable in the browser".into()))
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        validate_destination_protected_with_interrupt(path, protection, None, control)?;
+        validate_destination_protected_with_limit(path, protection, None, control, source_resident_limit)?;
         let target = native_target_path(path)?;
-        validate_destination_protected_with_interrupt(&target, protection, None, control)?;
+        validate_destination_protected_with_limit(&target, protection, None, control, source_resident_limit)?;
         let leaf = target.file_name().ok_or_else(|| AutomationError::BadRequest("native destination has no filename".into()))?;
         let parent_path = target.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
         poll(control)?;
@@ -531,7 +547,7 @@ pub(crate) fn write_protected_stream_with_guard<R>(
             let opened = parent.open(leaf);
             poll(control)?;
             let result = match opened {
-                Ok(file) => check_native_file(&mut file.into_std(), &target, protection, control),
+                Ok(file) => check_native_file_with_limit(&mut file.into_std(), &target, protection, control, source_resident_limit),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
                 Err(error) => Err(AutomationError::Io(format!("cannot recheck native destination: {error}"))),
             };

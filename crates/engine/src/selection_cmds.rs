@@ -5,7 +5,6 @@
 use photocraft_algo::selection::{self as sel, SelectionMode};
 use photocraft_doc::Document;
 use photocraft_geom::Rect;
-use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -48,6 +47,7 @@ fn scope_color_range(mask: &mut [f32], doc: &Document, area: Rect, m: SelectionM
 
 /// RGBA pixels the tools sample: the composite, or the active layer.
 fn sample_pixels(s: &Session, all_layers: bool) -> Result<(Rect, Vec<[f32; 4]>)> {
+    crate::selection_sample_policy::sampled_pixels(s, "selection.sample", all_layers, &photocraft_raster::Interrupt::NONE)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let area = d.doc.bounds();
     let layer = d.active_layer.and_then(|id| d.doc.layer(id)).and_then(|l| l.surface());
@@ -75,35 +75,18 @@ fn current_mask(doc: &Document) -> (Rect, Vec<f32>) {
 }
 
 /// Grayscale the canvas is actually showing, as opaque RGBA, when that is not the colour
-/// composite: a gray layer-mask view, or — with every colour channel hidden — the first
+/// composite: a gray layer-mask view, or â€” with every colour channel hidden â€” the first
 /// visible alpha, Quick Mask, or the active layer's mask. The Magic Wand selects from this
 /// so a white alpha stays one region instead of breaking up along the RGB underneath.
-fn shown_gray(s: &Session) -> Option<(Rect, Vec<[u8; 4]>)> {
-    let st = s.active()?;
-    let doc = &st.doc;
-    let area = doc.bounds();
-    let v = &st.channel_view;
-    let colors_off = v.visible_colors(crate::channel_cmds::color_count(doc)) == 0;
-    let surf = if let Some((mask, crate::mask_view_cmds::MaskViewMode::Gray)) = v.shown_layer_mask(doc) {
-        &mask.surface
-    } else if colors_off {
-        if let Some(i) = (0..doc.channels.len()).find(|i| v.alpha_shown(*i)) {
-            &doc.channels[i].surface
-        } else if let Some(q) = doc.quick_mask.as_ref().filter(|_| !v.quick_mask_hidden) {
-            &q.surface
-        } else if let Some((mask, _)) = v.shown_layer_mask(doc) {
-            &mask.surface
-        } else {
-            &st.active_layer.and_then(|id| doc.layer(id))?.mask.as_ref()?.surface
-        }
-    } else {
-        return None;
-    };
-    Some((area, sel::rgba8_image(surf, area)))
+fn shown_gray(s: &Session) -> Result<Option<(Rect, Vec<[u8; 4]>)>> {
+    let Some(surface) = crate::selection_sample_policy::shown_gray_surface(s, "select.magicWand", &photocraft_raster::Interrupt::NONE)? else { return Ok(None) };
+    let area = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
+    Ok(Some((area, sel::rgba8_image(surface, area))))
 }
 
 /// 8-bit RGBA of the active layer (or the composite with `all_layers`) over the canvas.
 pub(crate) fn sample_rgba8(s: &Session, all_layers: bool) -> Result<(Rect, Vec<[u8; 4]>)> {
+    crate::selection_sample_policy::sampled_pixels(s, "selection.sample", all_layers, &photocraft_raster::Interrupt::NONE)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let area = d.doc.bounds();
     let layer = d.active_layer.and_then(|id| d.doc.layer(id)).and_then(|l| l.surface());
@@ -117,8 +100,9 @@ pub(crate) fn sample_rgba8(s: &Session, all_layers: bool) -> Result<(Rect, Vec<[
 }
 
 fn magic_wand(s: &mut Session, p: &Value) -> Result<Value> {
+    crate::selection_sample_policy::dispatch_preflight(s, "select.magicWand", p, false)?;
     let (x, y) = (f(p, "x", 0.0).floor() as i32, f(p, "y", 0.0).floor() as i32);
-    let (area, img) = match shown_gray(s) {
+    let (area, img) = match shown_gray(s)? {
         Some(plane) => plane,
         None => sample_rgba8(s, b(p, "sampleAllLayers", false))?,
     };
@@ -144,7 +128,7 @@ fn parse_color(p: &Value) -> [f32; 3] {
     }
 }
 
-/// Eyedropper samples from `key` (`[[x, y], …]` in document pixels): the colour under each point
+/// Eyedropper samples from `key` (`[[x, y], â€¦]` in document pixels): the colour under each point
 /// and where it was picked (area-local, for Localized Color Clusters).
 fn eyedropper_samples(
     p: &Value,
@@ -155,7 +139,7 @@ fn eyedropper_samples(
     bad: &impl Fn(String) -> EngineError,
 ) -> Result<Vec<sel::RangeSample>> {
     let Some(pts) = p.get(key) else { return Ok(Vec::new()) };
-    let pts = pts.as_array().ok_or_else(|| bad(format!("`{key}` must be [[x, y], …]")))?;
+    let pts = pts.as_array().ok_or_else(|| bad(format!("`{key}` must be [[x, y], â€¦]")))?;
     let w = area.width() as usize;
     let mut out = Vec::with_capacity(pts.len().min(4096));
     for pt in pts {
@@ -179,7 +163,7 @@ fn eyedropper_samples(
     Ok(out)
 }
 
-/// Composite RGB (the compositor's output profile for the document) → CIE Lab D50.
+/// Composite RGB (the compositor's output profile for the document) â†’ CIE Lab D50.
 fn lab_transform(s: &Session) -> Result<std::sync::Arc<photocraft_cms::Transform>> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let src = crate::color_cmds::composite_profile(&d.doc);
@@ -187,7 +171,7 @@ fn lab_transform(s: &Session) -> Result<std::sync::Arc<photocraft_cms::Transform
         .map_err(|e| EngineError::Other(format!("colour management: {e}")))
 }
 
-/// The Lab profile's normalised encoding (ICC v4) → L 0–100, a and b −128–127.
+/// The Lab profile's normalised encoding (ICC v4) â†’ L 0â€“100, a and b âˆ’128â€“127.
 fn decode_lab(v: [f32; 3]) -> [f32; 3] {
     [v[0] * 100.0, v[1] * 255.0 - 128.0, v[2] * 255.0 - 128.0]
 }
@@ -198,7 +182,7 @@ fn colour_to_lab(t: &photocraft_cms::Transform, rgb: [f32; 3]) -> [f32; 3] {
     decode_lab(out)
 }
 
-/// RGBA pixels → Lab + alpha (L, a, b, alpha).
+/// RGBA pixels â†’ Lab + alpha (L, a, b, alpha).
 fn pixels_to_lab(t: &photocraft_cms::Transform, px: &[[f32; 4]]) -> Vec<[f32; 4]> {
     let src: Vec<[f32; 4]> = px.iter().map(|p| [p[0].clamp(0.0, 1.0), p[1].clamp(0.0, 1.0), p[2].clamp(0.0, 1.0), p[3]]).collect();
     let mut out = vec![[0.0f32; 4]; px.len()];
@@ -225,12 +209,13 @@ impl ColorRangeSamples {
     /// Prepare the query without allocating a full-resolution composite. Point samples use
     /// exactly the same compositor/profile as the final selection.
     pub fn new(s: &Session, p: &Value) -> Result<Self> {
+        crate::selection_sample_policy::color_range_preview(s, p, &photocraft_raster::Interrupt::NONE)?;
         let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
         let area = doc.bounds();
         let bad = |msg: String| EngineError::BadParams { cmd: "select.colorRange".into(), msg };
         let sample = |key: &str| -> Result<Vec<sel::RangeSample>> {
             let Some(pts) = p.get(key) else { return Ok(Vec::new()) };
-            let pts = pts.as_array().ok_or_else(|| bad(format!("`{key}` must be [[x, y], …]")))?;
+            let pts = pts.as_array().ok_or_else(|| bad(format!("`{key}` must be [[x, y], â€¦]")))?;
             let mut samples = Vec::new();
             for point in pts {
                 let q = point.as_array().and_then(|v| match v.as_slice() {
@@ -356,6 +341,7 @@ impl ColorRangeSamples {
 
 fn color_range(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "select.colorRange";
+    crate::selection_sample_policy::dispatch_preflight(s, CMD, p, false)?;
     let bad = |msg: String| EngineError::BadParams { cmd: CMD.into(), msg };
     let preset = p.get("select").map_or(Some("sampledColors"), Value::as_str).ok_or_else(|| bad("`select` must be a string".into()))?;
     let invert = b(p, "invert", false);
@@ -418,7 +404,7 @@ fn color_range(s: &mut Session, p: &Value) -> Result<Value> {
             (area, sel::tone_range(&px, lo, hi, fuzz(20.0).min(100.0) / 100.0 * 255.0))
         }
         "outOfGamut" => {
-            // Pixels the current proof setup (View › Proof Setup) can't reproduce, as the gamut
+            // Pixels the current proof setup (View â€º Proof Setup) can't reproduce, as the gamut
             // warning shows them: judged on the composite.
             let d = s.active().ok_or(EngineError::NoDocument)?;
             let pv = s.color.proof(d.doc.id);
@@ -442,7 +428,7 @@ fn color_range(s: &mut Session, p: &Value) -> Result<Value> {
     set_selection(s, "Color Range", area, mask, selection_mode)
 }
 
-/// `m` (`w`×`h`) with a `pad`-pixel margin: unselected when `outside_empty`, else the nearest
+/// `m` (`w`Ã—`h`) with a `pad`-pixel margin: unselected when `outside_empty`, else the nearest
 /// edge pixel repeated (the selection continues past the canvas).
 #[cfg(test)]
 fn pad_mask(m: &[f32], w: usize, h: usize, pad: usize, outside_empty: bool) -> Vec<f32> {
@@ -468,7 +454,7 @@ fn pad_mask(m: &[f32], w: usize, h: usize, pad: usize, outside_empty: bool) -> V
     out
 }
 
-/// The `w`×`h` centre of a mask padded by `pad_mask`.
+/// The `w`Ã—`h` centre of a mask padded by `pad_mask`.
 #[cfg(test)]
 fn crop_mask(m: &[f32], pw: usize, pad: usize, w: usize, h: usize) -> Vec<f32> {
     let mut out = Vec::with_capacity(w.saturating_mul(h));
@@ -481,6 +467,7 @@ fn crop_mask(m: &[f32], pw: usize, pad: usize, w: usize, h: usize) -> Vec<f32> {
 /// Grow (contiguous) / Similar (anywhere): pixels whose colour lies within
 /// the selected pixels' colour range widened by the tolerance.
 fn grow_similar(s: &mut Session, p: &Value, contiguous: bool) -> Result<Value> {
+    crate::selection_sample_policy::dispatch_preflight(s, if contiguous { "select.grow" } else { "select.similar" }, p, false)?;
     let tol = f(p, "tolerance", 32.0) / 255.0;
     let (area, px) = sample_pixels(s, b(p, "sampleAllLayers", false))?;
     let (_, m) = current_mask(&s.active().ok_or(EngineError::NoDocument)?.doc);
@@ -522,71 +509,13 @@ fn grow_similar(s: &mut Session, p: &Value, contiguous: bool) -> Result<Value> {
 }
 
 fn lasso(s: &mut Session, p: &Value) -> Result<Value> {
-    let pts: Vec<(f32, f32)> = p
-        .get("points")
-        .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(|q| Some((q.get(0)?.as_f64()? as f32, q.get(1)?.as_f64()? as f32))).collect())
-        .unwrap_or_default();
-    if pts.len() < 3 {
-        return Err(EngineError::BadParams { cmd: "select.lasso".into(), msg: "needs at least 3 points".into() });
-    }
-    polygon_selection(s, "select.lasso", "Lasso", &pts, p)
+    crate::selection_polygon_controlled::run(s, p)
 }
 
 /// Selects the polygon `pts` with the lasso tools' `mode`, `antiAlias` and `feather` params, as
 /// one history step called `label`.
 pub(crate) fn polygon_selection(s: &mut Session, cmd: &str, label: &str, pts: &[(f32, f32)], p: &Value) -> Result<Value> {
-    let feather = f(p, "feather", 0.0);
-    // Select › Modify › Feather's range.
-    if !(0.0..=1000.0).contains(&feather) {
-        return Err(EngineError::BadParams { cmd: cmd.into(), msg: "feather must be a number in 0..1000".into() });
-    }
-    let area = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
-    if feather > 0.0 {
-        // The blur spreads past the polygon and isn't bit-identical over a smaller window.
-        let mut mask = sel::polygon(pts, area, b(p, "antiAlias", true));
-        mask = sel::feather(&mask, area.width() as usize, area.height() as usize, feather);
-        return set_selection(s, label, area, mask, mode(p));
-    }
-    // Only the rows the polygon spans (#4532): rows outside it are empty, and full-width rows
-    // keep `polygon`'s coverage bit-identical (its x arithmetic is relative to the area's left
-    // edge; its y samples are whole rows plus the same sub-row fractions).
-    let band = polygon_rows(pts, area);
-    let mask = sel::polygon(pts, band, b(p, "antiAlias", true));
-    let m = mode(p);
-    let selected = s.edit(label, |doc, _| {
-        doc.selection = combine_band(doc.selection.as_ref(), &mask, band, m);
-        Ok(doc.selection.is_some())
-    })?;
-    Ok(json!({ "selected": selected }))
-}
-
-/// The full-width rows of `area` that points `pts` span (empty when none are finite).
-fn polygon_rows(pts: &[(f32, f32)], area: Rect) -> Rect {
-    let ys = pts.iter().map(|p| p.1).filter(|y| y.is_finite());
-    let (lo, hi) = ys.fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), y| (lo.min(y), hi.max(y)));
-    if lo > hi {
-        return Rect::EMPTY;
-    }
-    let clamp = |v: f32| v.clamp(area.y0 as f32, area.y1 as f32) as i32;
-    let (y0, y1) = (clamp(lo.floor()), clamp(hi.ceil() + 1.0));
-    if y0 >= y1 { Rect::EMPTY } else { Rect::new(area.x0, y0, area.x1, y1) }
-}
-
-/// [`sel::combine`] of a mask covering only `band` (zero elsewhere), giving exactly what the
-/// whole-canvas combine gives: Replace and Intersect are empty outside the band, and Add and
-/// Subtract keep the old selection there.
-fn combine_band(old: Option<&Surface>, mask: &[f32], band: Rect, m: SelectionMode) -> Option<Surface> {
-    let inside = sel::combine(old, mask, band, m);
-    let Some(old) = old.filter(|_| matches!(m, SelectionMode::Add | SelectionMode::Subtract)) else { return inside };
-    if band.is_empty() {
-        return Some(old.clone());
-    }
-    let values = inside.map_or_else(|| vec![0.0; band.width() as usize * band.height() as usize], |w| w.read_region(band));
-    let mut s = old.clone();
-    s.write_region(band, &values);
-    s.prune();
-    (s.tile_count() > 0).then_some(s)
+    crate::selection_polygon_controlled::run_points(s, cmd, label, pts, p)
 }
 
 macro_rules! spec {
@@ -608,22 +537,22 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!(
             "select.colorRange",
-            "Color Range…",
+            "Color Rangeâ€¦",
             ["Select"],
-            r##"{"select":"sampledColors|reds|yellows|greens|cyans|blues|magentas|highlights|midtones|shadows|skinTones|outOfGamut"="sampledColors","color":"#rrggbb"=foreground,"colors":["#rrggbb",…]?,"points":[[x,y],…]? (eyedropper samples),"subtractPoints":[[x,y],…]? (minus eyedropper),"order":["+"|"-",…]? (click order of points and subtractPoints; default all points first),"fuzziness":0..200=40 (tones: 0..100 %=20),"detectFaces":bool=false (not available yet: refused),"localized":bool=false,"range":0..100=100 (% of the longer side),"tonalRange":level|[lo,hi] (shadows 65, highlights 190, midtones [105,150]),"invert":bool=false,"sampleAllLayers":bool=true,"mode":"replace|add|subtract|intersect"="replace"}"##,
+            r##"{"select":"sampledColors|reds|yellows|greens|cyans|blues|magentas|highlights|midtones|shadows|skinTones|outOfGamut"="sampledColors","color":"#rrggbb"=foreground,"colors":["#rrggbb",â€¦]?,"points":[[x,y],â€¦]? (eyedropper samples),"subtractPoints":[[x,y],â€¦]? (minus eyedropper),"order":["+"|"-",â€¦]? (click order of points and subtractPoints; default all points first),"fuzziness":0..200=40 (tones: 0..100 %=20),"detectFaces":bool=false (not available yet: refused),"localized":bool=false,"range":0..100=100 (% of the longer side),"tonalRange":level|[lo,hi] (shadows 65, highlights 190, midtones [105,150]),"invert":bool=false,"sampleAllLayers":bool=true,"mode":"replace|add|subtract|intersect"="replace"}"##,
             has_doc,
             color_range
         ),
-        spec!("select.modify.border", "Border…", ["Select", "Modify"], r##"{"radius":1..200=1}"##, has_selection, |s, p| crate::selection_morphology_controlled::run(s, "select.modify.border", p)),
-        spec!("select.modify.smooth", "Smooth…", ["Select", "Modify"], r##"{"radius":1..500=1,"applyAtCanvasBounds":bool=false}"##, has_selection, |s, p| {
+        spec!("select.modify.border", "Borderâ€¦", ["Select", "Modify"], r##"{"radius":1..200=1}"##, has_selection, |s, p| crate::selection_morphology_controlled::run(s, "select.modify.border", p)),
+        spec!("select.modify.smooth", "Smoothâ€¦", ["Select", "Modify"], r##"{"radius":1..500=1,"applyAtCanvasBounds":bool=false}"##, has_selection, |s, p| {
             crate::selection_smooth_controlled::run(s, p)
         }),
-        spec!("select.modify.expand", "Expand…", ["Select", "Modify"], r##"{"radius":1..500=1,"applyAtCanvasBounds":bool=false}"##, has_selection, |s, p| {
+        spec!("select.modify.expand", "Expandâ€¦", ["Select", "Modify"], r##"{"radius":1..500=1,"applyAtCanvasBounds":bool=false}"##, has_selection, |s, p| {
             crate::selection_morphology_controlled::run(s, "select.modify.expand", p)
         }),
         spec!(
             "select.modify.contract",
-            "Contract…",
+            "Contractâ€¦",
             ["Select", "Modify"],
             r##"{"radius":1..500=1,"applyAtCanvasBounds":bool=false}"##,
             has_selection,
@@ -631,7 +560,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!(
             "select.modify.feather",
-            "Feather…",
+            "Featherâ€¦",
             ["Select", "Modify"],
             r##"{"radius":0.1..1000=1,"applyAtCanvasBounds":bool=false}"##,
             has_selection,
@@ -645,7 +574,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.lasso",
             "Lasso",
             [],
-            r##"{"points":[[x,y],…],"mode":"replace|add|subtract|intersect"="replace","antiAlias":bool=true,"feather":px=0}"##,
+            r##"{"points":[[x,y],â€¦],"mode":"replace|add|subtract|intersect"="replace","antiAlias":bool=true,"feather":px=0,"documentId":canonical-decimal-string?,"expectedRevision":canonical-decimal-string? (supply captured pair together)}"##,
             has_doc,
             lasso
         ),
@@ -654,6 +583,7 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests {
+    use photocraft_raster::Surface;
     use super::*;
 
     fn session() -> Session {

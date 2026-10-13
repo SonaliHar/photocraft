@@ -741,7 +741,7 @@ fn prepare<'a>(
                         }
                     }
                     for node in stack.nodes.iter().filter(|node| node.enabled || generic_point) {
-                        crate::gimp_neighborhood::qualify_selection_mask(state, node, layer.id, if generic_point { doc.bounds() } else { extent })?;
+                        crate::gimp_neighborhood::qualify_selection_mask_with_interrupt(state, node, layer.id, if generic_point { doc.bounds() } else { extent }, interrupt)?;
                     }
                     let qualified = extent == Rect::new(0, 0, 96, 80)
                         && doc.mode == ColorMode::Rgb

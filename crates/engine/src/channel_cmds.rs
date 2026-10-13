@@ -26,6 +26,10 @@ use crate::commands::CommandSpec;
 use crate::{DocState, EngineError, Result, Session};
 mod split_controlled;
 mod merge_controlled;
+mod merge_spot_controlled;
+pub(crate) fn merge_spot_dispatch_preflight(session: &Session, params: &Value, background: bool) -> Result<()> {
+    merge_spot_controlled::dispatch_preflight(session, params, background)
+}
 pub(crate) fn split_dispatch_preflight(session: &Session, params: &Value, background: bool) -> Result<bool> {
     split_controlled::dispatch_preflight(session, params, background)
 }
@@ -1837,55 +1841,8 @@ fn options(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Merge Spot Channel: flattens the image and prints the spot ink into the colour channels.
 fn merge_spot(s: &mut Session, p: &Value) -> Result<Value> {
-    let cmd = "channel.mergeSpot";
-    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
-    let i = match parameter_ref(p, "channel") {
-        Some(_) => alpha_index(doc, p, "channel", cmd)?,
-        None => match s.active().ok_or(EngineError::NoDocument)?.channel_view.target {
-            ChannelTarget::Alpha(i) => i,
-            _ => doc.channels.iter().position(|c| c.spot.is_some()).ok_or_else(|| bad(cmd, "no spot channel"))?,
-        },
-    };
-    let (ink, solidity) = doc.channels[i].spot.ok_or_else(|| bad(cmd, "not a spot channel"))?;
-    s.edit("Merge Spot Channel", |doc, active| {
-        let area = doc.bounds();
-        let fmt = doc.pixel_format();
-        let comp = photocraft_compose::render(doc, area)?;
-        let k = read_plane(&doc.channels[i].surface, area);
-        let ink = ink.to_rgb();
-        // Ink over the image: opaque at 100% solidity, multiplied (transparent ink) at 0%.
-        let data: Vec<f32> = comp
-            .px
-            .iter()
-            .zip(&k)
-            .flat_map(|(c, &v)| {
-                let rgb: [f32; 3] = std::array::from_fn(|j| {
-                    let over = solidity * ink[j] + (1.0 - solidity) * c[j] * ink[j];
-                    c[j] + (over - c[j]) * v.clamp(0.0, 1.0)
-                });
-                from_rgba(&fmt, [rgb[0], rgb[1], rgb[2], 1.0])
-            })
-            .collect();
-        let mut bg = Layer::raster("Background", fmt);
-        bg.locks.transparency = true;
-        bg.locks.position = true;
-        if let Some(sf) = bg.surface_mut() {
-            sf.write_region(area, &data);
-            sf.prune();
-        }
-        let id = bg.id;
-        doc.layers = vec![bg];
-        doc.channels.remove(i);
-        *active = Some(id);
-        Ok(())
-    })?;
-    if let Some(st) = s.active_mut() {
-        st.channel_view = ChannelView::default();
-        fix_view_now(st);
-    }
-    Ok(Value::Null)
+    merge_spot_controlled::run(s, p)
 }
-
 /// Split Channels: one grayscale document per colour and alpha channel; closes the original.
 fn split(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(value) = split_controlled::try_run(s, p)? { return Ok(value); }
@@ -2705,7 +2662,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             options
         ),
-        spec!("channel.mergeSpot", "Merge Spot Channel", [], None, r##"{"channel":index|name|{channelId:id}?=targeted or first spot}"##, has_spot, merge_spot),
+        spec!("channel.mergeSpot", "Merge Spot Channel", [], None, r##"{"channel":index|name|{channelId:id}?=targeted or first spot,"documentId":decimal-string?,"expectedRevision":decimal-string? (captured pair)}"##, has_spot, merge_spot),
         spec!("channel.split", "Split Channels", [], None, r##"{"closeOriginal":bool=true,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (native routes validate the captured pair)"##, can_split, split),
         spec!(
             "channel.merge",

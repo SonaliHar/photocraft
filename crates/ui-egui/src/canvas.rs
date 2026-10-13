@@ -223,6 +223,8 @@ pub struct Drag {
     pub sel_move: Option<bool>,
     pub lasso: Option<crate::lasso_ui::Lasso>,
     selection_origin: Option<marquee_origin::Origin>,
+    /// A native preview refusal must not become an implicit one-shot fallback.
+    native_replacement_failed: bool,
 }
 
 impl Drag {
@@ -241,6 +243,7 @@ impl Drag {
             sel_move: None,
             lasso: None,
             selection_origin: None,
+            native_replacement_failed: false,
         }
     }
 
@@ -456,6 +459,7 @@ enum EngineStroke {
     Brush(Box<photocraft_engine::brush_cmds::LiveStroke>),
     Retouch(photocraft_engine::retouch_cmds::LiveRetouch),
     Dab(photocraft_engine::retouch_cmds::LiveDab),
+    NativeReplace(Box<photocraft_engine::brush_cmds::NativeLuminosityPreview>),
 }
 
 impl EngineStroke {
@@ -464,7 +468,7 @@ impl EngineStroke {
     fn wants_time(&self) -> bool {
         match self {
             EngineStroke::Brush(l) => l.wants_time(),
-            EngineStroke::Retouch(_) | EngineStroke::Dab(_) => false,
+            EngineStroke::Retouch(_) | EngineStroke::Dab(_) | EngineStroke::NativeReplace(_) => false,
         }
     }
 
@@ -473,6 +477,7 @@ impl EngineStroke {
             Self::Brush(s) => &s.doc,
             Self::Retouch(s) => &s.doc,
             Self::Dab(s) => &s.doc,
+            Self::NativeReplace(s) => &s.doc,
         }
     }
     fn bounds(&self) -> DRect {
@@ -480,13 +485,15 @@ impl EngineStroke {
             Self::Brush(s) => s.bounds(),
             Self::Retouch(s) => s.bounds(),
             Self::Dab(s) => s.bounds(),
+            Self::NativeReplace(s) => s.bounds(),
         }
     }
-    fn push(&mut self, pts: &[photocraft_engine::paint::StrokePoint]) -> photocraft_engine::Result<DRect> {
+    fn push(&mut self, session:&photocraft_engine::Session, pts: &[photocraft_engine::paint::StrokePoint]) -> photocraft_engine::Result<DRect> {
         match self {
             Self::Brush(s) => s.push(pts),
             Self::Retouch(s) => s.push(pts),
             Self::Dab(s) => s.push(pts),
+            Self::NativeReplace(s) => s.push_for_session_with_interrupt(session,pts,photocraft_engine::paint::StrokeLimits::default(),&photocraft_raster::Interrupt::NONE),
         }
     }
     /// The jitter seed the commit must reuse (the Clone Stamp's comes from the session brush).
@@ -495,6 +502,7 @@ impl EngineStroke {
             Self::Brush(s) => Some(s.seed),
             Self::Retouch(_) => None,
             Self::Dab(_) => None,
+            Self::NativeReplace(s) => Some(s.seed),
         }
     }
 }
@@ -700,15 +708,23 @@ fn eyedropper_ring(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXf
     Some(egui::CursorIcon::None)
 }
 
-fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
+fn begin_live_stroke(app: &mut PhotocraftApp) -> Option<LiveStroke> {
     static STROKES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let st = app.session.active()?;
     let d = app.drag.as_ref()?;
+    let (document,revision,fed)=(st.doc.id,st.revision,d.points.len());
     let stroke = if d.tool == Tool::ColorReplacement {
         // The params `retouch_ui::finish_stroke` commits.
         let mut p = crate::retouch_ui::color_replacement_params(app);
-        p["points"] = json!(d.points);
-        EngineStroke::Dab(photocraft_engine::brush_cmds::live_color_replacement(&app.session, &p).ok()?)
+        p["points"] = json!(app.stylus.stroke_points(&d.points));
+        match photocraft_engine::brush_cmds::try_native_color_replacement_preview(&app.session,&p,&photocraft_raster::Interrupt::NONE) {
+            Ok(Some(preview))=>EngineStroke::NativeReplace(Box::new(preview)),
+            Ok(None)=>{p["points"]=json!(d.points);EngineStroke::Dab(photocraft_engine::brush_cmds::live_color_replacement(&app.session,&p).ok()?)},
+            Err(error)=>{
+                if let Some(drag)=app.drag.as_mut(){drag.native_replacement_failed=true;}
+                app.ui.status=error.to_string();app.ui.status_error=true;return None;
+            },
+        }
     } else if let Some((cmd, mut p)) = crate::retouch_ui::dab_params(app, d.tool) {
         // The params `retouch_ui::finish_stroke` commits; Sample All Layers isn't previewed.
         p["points"] = json!(d.points);
@@ -726,7 +742,7 @@ fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
     };
     let n = STROKES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xff_ffff;
     let damage = vec![stroke.bounds()];
-    Some(LiveStroke { stroke, doc: st.doc.id, revision: st.revision, key: (1 << 44) | (n << 20), damage, fed: d.points.len() })
+    Some(LiveStroke { stroke, doc: document, revision, key: (1 << 44) | (n << 20), damage, fed })
 }
 
 /// Render the drag points the live stroke hasn't seen yet, with the pen pressure, tilt and
@@ -755,9 +771,16 @@ fn feed_live_stroke(app: &mut PhotocraftApp) {
         return;
     }
     l.fed = d.points.len();
-    match l.stroke.push(&pts) {
+    let native=matches!(l.stroke,EngineStroke::NativeReplace(_));
+    match l.stroke.push(&app.session,&pts) {
         Ok(r) => l.damage.push(r),
-        Err(_) => app.live_stroke = None,
+        Err(error) => {
+            app.live_stroke=None;
+            if native {
+                if let Some(drag)=app.drag.as_mut(){drag.native_replacement_failed=true;}
+                app.session.clear_native_color_replacement();app.ui.status=error.to_string();app.ui.status_error=true;
+            }
+        },
     }
 }
 
@@ -5473,7 +5496,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             }
             // ⌥ flips Dodge/Burn and Blur/Sharpen for this stroke.
             let tool = crate::retouch_ui::alt_flipped(tool, mods.alt);
-            let selection_origin=if matches!(tool,Tool::RectMarquee|Tool::EllipseMarquee|Tool::SingleRowMarquee|Tool::SingleColumnMarquee) {
+            let selection_origin=if matches!(tool,Tool::RectMarquee|Tool::EllipseMarquee|Tool::SingleRowMarquee|Tool::SingleColumnMarquee|Tool::Lasso) {
                 match marquee_origin::capture(app) {
                     Ok(origin)=>Some(origin),
                     Err(error)=>{app.ui.status=error;app.ui.status_error=true;return;},
@@ -5727,7 +5750,7 @@ fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
         })
         .collect();
     if !rest.is_empty() {
-        match l.stroke.push(&rest) {
+        match l.stroke.push(&app.session,&rest) {
             Ok(r) => l.damage.push(r),
             // The live stroke can't show these points: the commit renders the stroke itself.
             Err(_) => {
@@ -5758,6 +5781,39 @@ fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
     }
 }
 
+/// Native release offers only an opaque, captured ticket to the registered command.
+/// Failed begin/push/finish never falls through to a one-shot or legacy renderer.
+fn finish_native_color_replacement(app:&mut PhotocraftApp,d:&Drag)->bool {
+    if d.tool!=Tool::ColorReplacement {return false;}
+    if d.native_replacement_failed {
+        app.live_stroke=None;app.session.clear_native_color_replacement();return true;
+    }
+    if !app.live_stroke.as_ref().is_some_and(|live|matches!(live.stroke,EngineStroke::NativeReplace(_))) {return false;}
+    let Some(LiveStroke {stroke:EngineStroke::NativeReplace(mut preview),fed,..})=app.live_stroke.take() else {return true;};
+    let result=(|| {
+        if d.points.len()>100_000 {return Err(photocraft_engine::EngineError::Other(tl!("This stroke has too many points.").into()));}
+        let mut params=crate::retouch_ui::color_replacement_params(app);
+        params["points"]=json!(app.stylus.stroke_points(&d.points));params["seed"]=json!(preview.seed);
+        // Peak-pressure taps rebuild from captured PRE/brush/settings, never a new target.
+        let all=photocraft_engine::brush_cmds::parse_points(&params,"paint.colorReplacement")?;
+        if all.len()==1 {
+            let point=all.first().copied().ok_or_else(||photocraft_engine::EngineError::Other(tl!("The stroke target changed. Start the stroke again.").into()))?;
+            preview.replace_single_point_for_session_with_interrupt(&app.session,point,photocraft_engine::paint::StrokeLimits::default(),&photocraft_raster::Interrupt::NONE)?;
+        } else if fed<d.points.len() {
+            let tail=all.get(fed..).ok_or_else(||photocraft_engine::EngineError::Other(tl!("The stroke target changed. Start the stroke again.").into()))?;
+            preview.push_for_session_with_interrupt(&app.session,tail,photocraft_engine::paint::StrokeLimits::default(),&photocraft_raster::Interrupt::NONE)?;
+        }
+        let commit=(*preview).finish_for_session(&app.session,photocraft_engine::paint::StrokeLimits::default(),&photocraft_raster::Interrupt::NONE)?;
+        app.session.offer_native_color_replacement(commit)?;
+        Ok::<_,photocraft_engine::EngineError>(params)
+    })();
+    match result {
+        Ok(params)=>{if let Err(error)=app.run("paint.colorReplacement",params){app.ui.status=error;app.ui.status_error=true;}},
+        Err(error)=>{app.ui.status=error.to_string();app.ui.status_error=true;},
+    }
+    app.session.clear_native_color_replacement();true
+}
+
 /// Pencil (and a Pencil-mode Eraser) dabs sit on the pixel grid. Clicks anywhere inside one
 /// pixel must produce the same point, or a ⇧-click line changes with the sub-pixel position.
 fn snap_aliased_tip(app: &PhotocraftApp, tool: Tool, x: f64, y: f64) -> (f64, f64) {
@@ -5770,7 +5826,7 @@ fn snap_aliased_tip(app: &PhotocraftApp, tool: Tool, x: f64, y: f64) -> (f64, f6
 }
 
 pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
-    if d.sel_move.is_none() && matches!(d.tool,Tool::RectMarquee|Tool::EllipseMarquee|Tool::SingleRowMarquee|Tool::SingleColumnMarquee)
+    if d.sel_move.is_none() && matches!(d.tool,Tool::RectMarquee|Tool::EllipseMarquee|Tool::SingleRowMarquee|Tool::SingleColumnMarquee|Tool::Lasso)
         && let Err(error)=marquee_origin::validate(app,d.selection_origin.as_ref()) {
         app.ui.status=error;app.ui.status_error=true;return;
     }
@@ -5788,6 +5844,7 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
     {
         app.last_stroke_end = Some((st.doc.id, end));
     }
+    if finish_native_color_replacement(app,&d) {return;}
     // A live Clone Stamp preview ends here; the commit below replaces it (the Clone Stamp's and
     // History Brush's with the pixels it already drew).
     offer_live_retouch(app, &d);
@@ -5841,13 +5898,18 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
             crate::retouch_ui::finish_content_aware_move(app, d.start, [end[0], end[1]])
         }
         Tool::Lasso | Tool::Patch | Tool::ContentAwareMove => {
-            let pts: Vec<[f64; 2]> = d.points.iter().map(|p| [p[0], p[1]]).collect();
+            if d.points.len()>100_000 {app.ui.status=tl!("This selection has too many points.").into();app.ui.status_error=true;return;}
+            let mut pts=Vec::new();
+            if pts.try_reserve_exact(d.points.len()).is_err() {app.ui.status=tl!("Could not prepare this selection.").into();app.ui.status_error=true;return;}
+            pts.extend(d.points.iter().map(|p| [p[0], p[1]]));
             if pts.len() >= 3 {
                 let mode = selection_mode(app, d.modifiers);
                 let o = &app.ui.tool_options;
                 // The Patch and Content-Aware Move tools have no Feather in their options bar.
                 let feather = if d.tool == Tool::Lasso { o.feather } else { 0.0 };
-                let made = app.run("select.lasso", json!({"points": pts, "mode": mode, "antiAlias": o.anti_alias, "feather": feather}));
+                let params=json!({"points": pts, "mode": mode, "antiAlias": o.anti_alias, "feather": feather});
+                let made = if d.tool==Tool::Lasso {marquee_origin::dispatch_for(app,d.selection_origin.as_ref(),"select.lasso",params)} else {app.run("select.lasso",params)};
+                if let Err(error)=&made {app.ui.status=error.clone();app.ui.status_error=true;}
                 // The lasso only outlines the patch; say that it is dragged next (#1715).
                 if made.is_ok() && d.tool != Tool::Lasso {
                     crate::retouch_ui::patch_hint(app);
@@ -8375,3 +8437,38 @@ mod rotation_preview_isolation_tests {
 #[cfg(test)]
 #[path = "canvas_display_memo_tests.rs"]
 mod display_memo_tests;
+
+#[cfg(test)]
+mod native_replacement_ui_drafts {
+    use super::*;
+    fn app(sample:photocraft_doc::SampleType)->PhotocraftApp {
+        let mut doc=photocraft_doc::Document::with_background("Own native UI draft",photocraft_doc::Size::new(4,4),photocraft_doc::ColorMode::Rgb,sample,photocraft_doc::Color::WHITE);
+        doc.sample_encoding=Some(photocraft_doc::SampleEncoding::Linear);
+        doc.icc_profile=Some(photocraft_cms::Builtin::Srgb.profile().to_bytes());
+        let mut session=photocraft_engine::Session::new();session.add_document(doc,None).unwrap();
+        let mut app=PhotocraftApp::new(session,Default::default());app.ui.tool_options.cr_mode="luminosity".into();
+        app.drag=Some(Drag::new(Tool::ColorReplacement,[1.,1.],vec![[1.,1.,1.]],egui::Modifiers::NONE,false));
+        app
+    }
+    #[test]
+    fn native_refusal_marks_gesture_and_release_never_falls_back() {
+        let mut app=app(photocraft_doc::SampleType::F64);app.ui.tool_options.cr_mode="color".into();
+        let before=app.session.active().unwrap().doc.clone();let revision=app.session.active().unwrap().revision;
+        assert!(begin_live_stroke(&mut app).is_none());assert!(app.ui.status_error);
+        let drag=app.drag.take().unwrap();assert!(drag.native_replacement_failed);
+        assert!(finish_native_color_replacement(&mut app,&drag));
+        assert!(app.session.active().unwrap().doc.shares_state(&before));assert_eq!(app.session.active().unwrap().revision,revision);
+    }
+    #[test]
+    fn native_preview_has_captured_seed_and_stale_release_refuses() {
+        for sample in [photocraft_doc::SampleType::U32,photocraft_doc::SampleType::F64] {
+            let mut app=app(sample);let before=app.session.active().unwrap().doc.clone();
+            let live=begin_live_stroke(&mut app).unwrap();assert!(matches!(live.stroke,EngineStroke::NativeReplace(_)));
+            assert!(live.stroke.seed().is_some());assert!(!live.stroke.wants_time());
+            assert!(app.session.active().unwrap().doc.shares_state(&before));app.live_stroke=Some(live);
+            app.session.active_mut().unwrap().revision+=1;
+            let drag=app.drag.take().unwrap();assert!(finish_native_color_replacement(&mut app,&drag));assert!(app.ui.status_error);
+            assert!(app.session.active().unwrap().doc.shares_state(&before));
+        }
+    }
+}

@@ -13,6 +13,9 @@ use photocraft_doc::{
 };
 use photocraft_geom::{Rect, TileCoord};
 use photocraft_raster::{Interrupt, Surface};
+
+#[path = "gimp_neighborhood_mask_controlled.rs"]
+mod mask_controlled;
 #[path = "gimp_gaussian_raster.rs"]
 mod raster_gaussian;
 pub(crate) use raster_gaussian::EPOCH as FINITE_GAUSSIAN_EPOCH;
@@ -573,50 +576,57 @@ fn gaussian(node: &FilterNode, version: u32) -> Result<GaussianParams> {
     }
     Ok(GaussianParams { std_dev_x: x, std_dev_y: y, abyss: GaussianAbyss::Clamp, clip_extent: true })
 }
+#[cfg(test)]
 pub(crate) fn qualify_selection_mask(state: &photocraft_doc::XcfState, node: &FilterNode, owner: photocraft_doc::LayerId, extent: Rect) -> Result<()> {
+    qualify_selection_mask_with_interrupt(state, node, owner, extent, &Interrupt::NONE)
+}
+pub(crate) fn qualify_selection_mask_with_interrupt(state: &photocraft_doc::XcfState, node: &FilterNode, owner: photocraft_doc::LayerId, extent: Rect, control: &Interrupt<'_>) -> Result<()> {
+    mask_controlled::prepare(control, |control| qualify_selection_mask_controlled(state, node, owner, extent, control))
+}
+fn qualify_selection_mask_controlled(state: &photocraft_doc::XcfState, node: &FilterNode, owner: photocraft_doc::LayerId, extent: Rect, control: &Interrupt<'_>) -> Result<()> {
     if crate::gimp_red_eye::claims_geometry(node) {
         let mask = node.mask.and_then(|reference| match reference {
-            photocraft_doc::item_identity::ItemRef::Mask(id) => state.filter_masks.iter().find(|mask| mask.id == id),
+            photocraft_doc::item_identity::ItemRef::Mask(id) => mask_controlled::iter(&state.filter_masks, control).find(|mask| mask.id == id),
             _ => None,
         }).ok_or(CompositionError::Unsupported("Red Eye owner geometry requires its saved canvas mask"))?;
         if node.operation.name != "gegl:red-eye-removal" || node.operation.schema_epoch != crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH
             || !node.composition.as_ref().is_some_and(|policy| policy.compatibility_epoch == crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH)
             || !matches!(extent, Rect { x0: 0, y0: 0, x1: 37, y1: 29 } | Rect { x0: 0, y0: 0, x1: 259, y1: 17 })
             || mask.surface.format() != PixelFormat::new(photocraft_color::ColorMode::Grayscale, photocraft_color::SampleType::F32, false)
-            || state.items.iter().any(|item| item.item == photocraft_doc::item_identity::ItemRef::Mask(mask.id) && (item.composition.is_some() || item.source_flags != 0)) {
+            || mask_controlled::iter(&state.items, control).any(|item| item.item == photocraft_doc::item_identity::ItemRef::Mask(mask.id) && (item.composition.is_some() || item.source_flags != 0)) {
             return Err(CompositionError::Unsupported("Red Eye owner geometry exact canvas mask context"));
         }
-        return qualify_point_canvas_mask(state, node, owner, extent);
+        return qualify_point_canvas_mask(state, node, owner, extent, control);
     }
     if crate::gimp_video_degradation::claims_options_epoch(node) {
         let mask = node.mask.and_then(|reference| match reference {
-            photocraft_doc::item_identity::ItemRef::Mask(id) => state.filter_masks.iter().find(|mask| mask.id == id),
+            photocraft_doc::item_identity::ItemRef::Mask(id) => mask_controlled::iter(&state.filter_masks, control).find(|mask| mask.id == id),
             _ => None,
         }).ok_or(CompositionError::Unsupported("Video options requires its saved canvas selection mask"))?;
         if extent != Rect::new(0, 0, 16, 16)
             || mask.surface.format() != PixelFormat::new(photocraft_color::ColorMode::Grayscale, photocraft_color::SampleType::F32, false)
-            || state.items.iter().any(|item| item.item == photocraft_doc::item_identity::ItemRef::Mask(mask.id) && item.composition.is_some())
+            || mask_controlled::iter(&state.items, control).any(|item| item.item == photocraft_doc::item_identity::ItemRef::Mask(mask.id) && item.composition.is_some())
         {
             return Err(CompositionError::Unsupported("Video options exact Float canvas mask context"));
         }
-        return qualify_point_canvas_mask(state, node, owner, extent);
+        return qualify_point_canvas_mask(state, node, owner, extent, control);
     }
     if node.operation.name == "gegl:unpremultiply" {
-        let mask = node.mask.and_then(|reference| match reference { photocraft_doc::item_identity::ItemRef::Mask(id) => state.filter_masks.iter().find(|mask| mask.id == id), _ => None })
+        let mask = node.mask.and_then(|reference| match reference { photocraft_doc::item_identity::ItemRef::Mask(id) => mask_controlled::iter(&state.filter_masks, control).find(|mask| mask.id == id), _ => None })
             .ok_or(CompositionError::Unsupported("Unpremultiply requires its saved selection mask"))?;
         if extent != Rect::new(0, 0, 8, 6) || mask.surface.format() != PixelFormat::new(photocraft_color::ColorMode::Grayscale, photocraft_color::SampleType::F32, false) {
             return Err(CompositionError::Unsupported("Unpremultiply exact Float mask extent"));
         }
-        if state.items.iter().any(|item| item.item == photocraft_doc::item_identity::ItemRef::Mask(mask.id) && item.composition.is_some()) {
+        if mask_controlled::iter(&state.items, control).any(|item| item.item == photocraft_doc::item_identity::ItemRef::Mask(mask.id) && item.composition.is_some()) {
             return Err(CompositionError::Unsupported("Unpremultiply mask current composition"));
         }
-        return qualify_point_canvas_mask(state, node, owner, extent);
+        return qualify_point_canvas_mask(state, node, owner, extent, control);
     }
     if node.operation.schema_epoch == crate::gimp_filters::COMPONENT_EXTRACT_GEOMETRY_EPOCH {
         let mask = node
             .mask
             .and_then(|reference| match reference {
-                photocraft_doc::item_identity::ItemRef::Mask(id) => state.filter_masks.iter().find(|mask| mask.id == id),
+                photocraft_doc::item_identity::ItemRef::Mask(id) => mask_controlled::iter(&state.filter_masks, control).find(|mask| mask.id == id),
                 _ => None,
             })
             .ok_or(CompositionError::Unsupported("Component Extract geometry requires canvas mask"))?;
@@ -627,17 +637,17 @@ pub(crate) fn qualify_selection_mask(state: &photocraft_doc::XcfState, node: &Fi
         }
     }
     if node.composition.as_ref().is_some_and(|policy| policy.compatibility_epoch == crate::gimp_filters::POINT_REPLACE_COMPATIBILITY_EPOCH) {
-        return qualify_point_canvas_mask(state, node, owner, extent);
+        return qualify_point_canvas_mask(state, node, owner, extent, control);
     }
     if node.operation.schema_epoch == crate::gimp_filters::EXPOSURE_GEOMETRY_EPOCH {
-        return qualify_exposure_canvas_mask(state, node, owner);
+        return qualify_exposure_canvas_mask(state, node, owner, control);
     }
     let id = match node.mask {
         None => return Ok(()),
         Some(photocraft_doc::item_identity::ItemRef::Mask(id)) => id,
         _ => return Err(CompositionError::Invalid("filter mask reference type")),
     };
-    let mut masks = state.filter_masks.iter().filter(|m| m.id == id);
+    let mut masks = mask_controlled::iter(&state.filter_masks, control).filter(|m| m.id == id);
     let mask = masks.next().ok_or(CompositionError::Invalid("filter mask missing"))?;
     let format = mask.surface.format();
     let rgb_clip_mask = node.operation.name == "gegl:rgb-clip"
@@ -723,7 +733,7 @@ pub(crate) fn qualify_selection_mask(state: &photocraft_doc::XcfState, node: &Fi
         || color_temperature_precision_mask
         || saturation_yuv_mask
         || color_balance_mask)
-        && (mask.surface.default_bytes().iter().any(|byte| *byte != 0) || mask.surface.try_read_interleaved(extent)?.iter().any(|byte| *byte != 0))
+        && (!mask_controlled::bytes_zero(mask.surface.default_bytes(), control)? || !mask_controlled::region_zero(&mask.surface, extent, control)?)
     {
         return Err(CompositionError::Unsupported("unqualified precision point selection mask bits"));
     }
@@ -769,7 +779,7 @@ pub(crate) fn qualify_selection_mask(state: &photocraft_doc::XcfState, node: &Fi
     {
         return Err(CompositionError::Unsupported("unqualified selection filter mask domain"));
     }
-    let mut items = state.items.iter().filter(|item| item.item == photocraft_doc::item_identity::ItemRef::Mask(id));
+    let mut items = mask_controlled::iter(&state.items, control).filter(|item| item.item == photocraft_doc::item_identity::ItemRef::Mask(id));
     let item = items.next().ok_or(CompositionError::Invalid("filter mask registry missing"))?;
     let metadata = item.mask.as_ref().ok_or(CompositionError::Invalid("filter mask metadata missing"))?;
     if items.next().is_some()
@@ -791,13 +801,13 @@ pub(crate) fn qualify_selection_mask(state: &photocraft_doc::XcfState, node: &Fi
     {
         return Err(CompositionError::Invalid("filter mask relation or bounds"));
     }
-    consume_empty_selection_state(state, node, owner, mask.bounds, mask.surface.format())
+    consume_empty_selection_state(state, node, owner, mask.bounds, mask.surface.format(), control)
 }
 /// For the measured Replace compatibility epoch, `canvas` is the document
 /// canvas rather than the drawable extent. The caller validates operation,
 /// source model/precision/profile and matching mask sample depth separately.
 /// No absent mask or nonzero selection is inferred as unrestricted filtering.
-fn qualify_point_canvas_mask(state: &photocraft_doc::XcfState, node: &FilterNode, owner: photocraft_doc::LayerId, canvas: Rect) -> Result<()> {
+fn qualify_point_canvas_mask(state: &photocraft_doc::XcfState, node: &FilterNode, owner: photocraft_doc::LayerId, canvas: Rect, control: &Interrupt<'_>) -> Result<()> {
     use photocraft_doc::item_identity::ItemRef;
     let Some(ItemRef::Mask(id)) = node.mask else {
         return Err(CompositionError::Unsupported("point Replace requires its saved canvas selection mask"));
@@ -805,7 +815,7 @@ fn qualify_point_canvas_mask(state: &photocraft_doc::XcfState, node: &FilterNode
     if canvas.x0 != 0 || canvas.y0 != 0 || canvas.is_empty() || canvas.width() > 262144 || canvas.height() > 262144 {
         return Err(CompositionError::Invalid("point Replace canvas bounds"));
     }
-    let mut masks = state.filter_masks.iter().filter(|mask| mask.id == id);
+    let mut masks = mask_controlled::iter(&state.filter_masks, control).filter(|mask| mask.id == id);
     let mask = masks.next().ok_or(CompositionError::Invalid("point Replace canvas mask missing"))?;
     let format = mask.surface.format();
     if masks.next().is_some()
@@ -823,12 +833,12 @@ fn qualify_point_canvas_mask(state: &photocraft_doc::XcfState, node: &FilterNode
                 | photocraft_color::SampleType::F64
         )
         || mask.surface.resident_payload_bytes()? > CACHE_BYTES
-        || mask.surface.default_bytes().iter().any(|byte| *byte != 0)
-        || mask.surface.tiles().any(|(_, tile)| tile.bytes().iter().any(|byte| *byte != 0))
+        || !mask_controlled::bytes_zero(mask.surface.default_bytes(), control)?
+        || !mask_controlled::tiles_zero(&mask.surface, control)?
     {
         return Err(CompositionError::Unsupported("unqualified point Replace canvas selection mask"));
     }
-    let mut items = state.items.iter().filter(|item| item.item == ItemRef::Mask(id));
+    let mut items = mask_controlled::iter(&state.items, control).filter(|item| item.item == ItemRef::Mask(id));
     let item = items.next().ok_or(CompositionError::Invalid("point Replace canvas mask registry missing"))?;
     let metadata = item.mask.as_ref().ok_or(CompositionError::Invalid("point Replace canvas mask metadata missing"))?;
     if items.next().is_some()
@@ -843,18 +853,18 @@ fn qualify_point_canvas_mask(state: &photocraft_doc::XcfState, node: &FilterNode
     {
         return Err(CompositionError::Invalid("point Replace canvas mask relationship"));
     }
-    consume_empty_selection_state(state, node, owner, mask.bounds, mask.surface.format())
+    consume_empty_selection_state(state, node, owner, mask.bounds, mask.surface.format(), control)
 }
 /// The witnessed offset Exposure mask is canvas-relative, not drawable-relative.
 /// The caller separately qualifies the document canvas, owner extent and sample
 /// depth. This checks the exact saved zero-selection mask without allocating a
 /// contiguous copy or inferring an absent source offset from the layer offset.
-fn qualify_exposure_canvas_mask(state: &photocraft_doc::XcfState, node: &FilterNode, owner: photocraft_doc::LayerId) -> Result<()> {
+fn qualify_exposure_canvas_mask(state: &photocraft_doc::XcfState, node: &FilterNode, owner: photocraft_doc::LayerId, control: &Interrupt<'_>) -> Result<()> {
     use photocraft_doc::item_identity::ItemRef;
     let Some(ItemRef::Mask(id)) = node.mask else {
         return Err(CompositionError::Unsupported("Exposure geometry requires its saved canvas mask"));
     };
-    let mut masks = state.filter_masks.iter().filter(|mask| mask.id == id);
+    let mut masks = mask_controlled::iter(&state.filter_masks, control).filter(|mask| mask.id == id);
     let mask = masks.next().ok_or(CompositionError::Invalid("Exposure canvas mask missing"))?;
     let format = mask.surface.format();
     if masks.next().is_some()
@@ -868,12 +878,12 @@ fn qualify_exposure_canvas_mask(state: &photocraft_doc::XcfState, node: &FilterN
         // Two complete 256Ãƒâ€šÃ‚Â² tiles plus a default sample, bounded before scanning.
         || mask.surface.resident_payload_bytes()? > 2 * 65536 * 8 + 8
         || mask.surface.tiles().any(|(coord, _)| !matches!(coord.tx, 0 | 1) || coord.ty != 0)
-        || mask.surface.default_bytes().iter().any(|byte| *byte != 0)
-        || mask.surface.tiles().any(|(_, tile)| tile.bytes().iter().any(|byte| *byte != 0))
+        || !mask_controlled::bytes_zero(mask.surface.default_bytes(), control)?
+        || !mask_controlled::tiles_zero(&mask.surface, control)?
     {
         return Err(CompositionError::Unsupported("unqualified Exposure canvas selection mask"));
     }
-    let mut items = state.items.iter().filter(|item| item.item == ItemRef::Mask(id));
+    let mut items = mask_controlled::iter(&state.items, control).filter(|item| item.item == ItemRef::Mask(id));
     let item = items.next().ok_or(CompositionError::Invalid("Exposure canvas mask registry missing"))?;
     let metadata = item.mask.as_ref().ok_or(CompositionError::Invalid("Exposure canvas mask metadata missing"))?;
     if items.next().is_some()
@@ -888,13 +898,13 @@ fn qualify_exposure_canvas_mask(state: &photocraft_doc::XcfState, node: &FilterN
     {
         return Err(CompositionError::Invalid("Exposure canvas mask relationship"));
     }
-    consume_empty_selection_state(state, node, owner, mask.bounds, mask.surface.format())
+    consume_empty_selection_state(state, node, owner, mask.bounds, mask.surface.format(), control)
 }
-fn consume_empty_selection_state(state: &photocraft_doc::XcfState, node: &FilterNode, owner: photocraft_doc::LayerId, bounds: Rect, format: PixelFormat) -> Result<()> {
+fn consume_empty_selection_state(state: &photocraft_doc::XcfState, node: &FilterNode, owner: photocraft_doc::LayerId, bounds: Rect, format: PixelFormat, control: &Interrupt<'_>) -> Result<()> {
     let prepared = crate::gimp_filter_mask_state::prepare_empty_selection(
         state, node, owner, bounds, format,
         crate::gimp_filter_mask_state::MaskStateLimits { resident_bytes: CACHE_BYTES, work_units: CACHE_BYTES },
-        &Interrupt::NONE,
+        control,
     )?;
     if !prepared.permits_unrestricted_support() {
         return Err(CompositionError::Unsupported("filter mask support disposition"));

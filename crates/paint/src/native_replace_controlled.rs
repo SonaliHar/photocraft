@@ -7,6 +7,9 @@ use photocraft_color::{ColorMode,SampleType,try_write_sample_f64};
 use photocraft_geom::{Rect,TILE_SIZE};
 use photocraft_raster::{Interrupt,Surface,RasterInputError};
 use std::{mem::size_of,sync::Arc};
+#[path="native_replace_incremental.rs"]
+mod incremental;
+pub use incremental::NativeLuminosityState;
 type Result<T>=std::result::Result<T,StrokeError>;
 #[derive(Clone,Copy,Debug)]
 pub struct NativeLuminositySettings {

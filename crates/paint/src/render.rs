@@ -45,6 +45,9 @@ const SMALL_TIP_RADIUS: f32 = 3.0;
 const SUBPIXEL: [f32; 4] = [-0.375, -0.125, 0.125, 0.375];
 const NOISE_SALT: u64 = 0x006E_6F69_7365;
 
+#[path = "native_replace_generator.rs"]
+mod native_replace_generator;
+pub use native_replace_generator::NativeReplacementGenerator;
 #[path = "stroke_controlled.rs"]
 mod controlled;
 #[path = "incremental_clone_controlled.rs"]

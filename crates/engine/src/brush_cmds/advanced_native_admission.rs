@@ -1,6 +1,6 @@
 //! Closed admission for legacy f32 advanced brush equations.
-//! This rejects silent native-wide narrowing; it does not implement native Mixer
-//! Brush or Color Replacement, reinterpret source profiles, or read resources.
+//! This rejects silent native-wide narrowing and delegates only the explicit
+//! native Mixer/Color Replacement lanes without adding resource authority.
 use crate::{EngineError,Result,Session};
 use photocraft_color::SampleType;
 use photocraft_doc::{Document,Layer,LayerContent};
@@ -50,6 +50,7 @@ pub(super) fn target_preflight(session:&Session,command:&str,params:&Value,contr
     }.ok_or_else(||super::bad(command,"target has no editable pixels"))?;
     if wide(surface.format().sample) {
         if command=="paint.colorReplacement" && super::native_replace_controlled::dispatch_preflight(session,params,control)? {return Ok(());}
+        if command=="paint.mixerBrush" && super::native_mixer_controlled::dispatch_preflight(session,params,control)? {return Ok(());}
         return Err(unsupported(command));
     }
     poll(control)

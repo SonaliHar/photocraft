@@ -30,6 +30,15 @@ pub(crate) fn contains_xcf_with_retained_capacity(
     retained_capacity: usize,
     interrupt: &photocraft_raster::Interrupt<'_>,
 ) -> Result<bool, XcfError> {
+    contains_xcf_with_retained_capacity_and_resident_limit(bytes, retained_capacity, photocraft_xcf::Limits::default().resident_bytes as u64, interrupt)
+}
+
+/// Caller-reserved shared retention envelope, including the encoded Vec capacity.
+/// No source/decoder component limit is raised and unknown wrappers fail closed.
+pub(crate) fn contains_xcf_with_retained_capacity_and_resident_limit(
+    bytes: &[u8], retained_capacity: usize, resident_limit: u64,
+    interrupt: &photocraft_raster::Interrupt<'_>,
+) -> Result<bool, XcfError> {
     let poll = || interrupt.check().map_err(|_| error(ErrorKind::Cancelled, "source classification cancelled"));
     poll()?;
     let additional = retained_capacity.checked_sub(bytes.len()).ok_or_else(|| error(ErrorKind::Limit, "source retained capacity is smaller than length"))?;
@@ -38,8 +47,10 @@ pub(crate) fn contains_xcf_with_retained_capacity(
         return Ok(true);
     }
     let limits = photocraft_xcf::ResourceLimits::for_policy(photocraft_xcf::ResourcePolicy::default())?;
-    let resident = limits
-        .get(BudgetKind::Resident)
+    if resident_limit > limits.get(BudgetKind::Resident) || retained_capacity as u64 > resident_limit {
+        return Err(error(ErrorKind::Limit, "source inspection exceeds admitted resident envelope"));
+    }
+    let resident = resident_limit
         .checked_sub(additional as u64)
         .ok_or_else(|| error(ErrorKind::Limit, "source retained capacity exceeds resident ceiling"))?;
     let limits = limits.lowered(&[("residentBytes", resident)])?;

@@ -683,6 +683,18 @@ impl Session {
 
     /// Run the command `id`: inline, or (with `background`) as a job when it is one.
     pub(crate) fn dispatch(&mut self, id: &str, params: Value, background: bool) -> Result<Started> {
+        if id != "paint.colorReplacement" {
+            self.clear_native_color_replacement();
+        }
+        let result = self.dispatch_inner(id, params, background);
+        // Offers belong to one dispatch attempt, including a refusal before
+        // the command handler runs. Failed authorization cannot retain pixels
+        // for a later command to adopt.
+        self.clear_native_color_replacement();
+        result
+    }
+
+    fn dispatch_inner(&mut self, id: &str, params: Value, background: bool) -> Result<Started> {
         let spec = crate::commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         // Params are named fields: anything but an object (or null, meaning none) is a caller
         // mistake, not "use every default".
@@ -703,11 +715,17 @@ impl Session {
             crate::inspect_pixel_cmds::dispatch_preflight(&params)?;
         }
         crate::brush_cmds::advanced_dispatch_preflight(self, id, &params)?;
+        if matches!(id, "select.magicWand" | "select.colorRange" | "select.grow" | "select.similar") {
+            crate::selection_sample_policy::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        }
         if id == "channel.split" {
             crate::channel_cmds::split_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
         }
         if id == "channel.merge" {
             crate::channel_cmds::merge_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "channel.mergeSpot" {
+            crate::channel_cmds::merge_spot_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
         }
         if id == "xcf.filter.graph.inspectPlan" {
             crate::xcf_filter_graph_cmds::dispatch_preflight(&params)?;
@@ -857,6 +875,12 @@ impl Session {
         }
         if id == "select.rect" {
             crate::selection_shapes_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "select.lasso" {
+            crate::selection_polygon_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "select.transformSelection" {
+            crate::selection_transform_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
         }
         if matches!(id, "select.modify.expand" | "select.modify.contract" | "select.modify.border" | "select.modify.smooth" | "select.modify.feather") {
             crate::selection_modify_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;

@@ -86,11 +86,41 @@ pub struct TransformPreview {
     /// A layer's session keeps `doc` and `opacity` up to date with edits made while the box is
     /// open ([`follow_edits`]); `None` for a lone mask or channel and Transform Selection.
     follow: Option<Follow>,
+    /// Selection transforms retain private runtime authority, never serialized box fields.
+    selection_origin: Option<SelectionOrigin>,
     /// The commit running as a background job (#1015): the moving pixels stay on screen, without
     /// the box, until it lands; Esc cancels it. The session ends with the job.
     committing: Option<JobId>,
     /// Content-Aware Scale's live preview (cas_transform.rs).
     pub(crate) content_aware: Option<crate::cas_transform::Live>,
+}
+
+struct SelectionOrigin {
+    document:DocId,revision:u64,snapshot:photocraft_engine::DocumentSnapshot,
+    weak:photocraft_engine::WeakDocumentSnapshot,view:photocraft_engine::channel_cmds::ChannelView,
+    shell_mask:bool,
+}
+fn selection_idle(app:&PhotocraftApp)->Result<(),String> {
+    let active=app.session.active().ok_or_else(||tl!("Open a document before transforming a selection.").to_owned())?;
+    if active.doc.id.0==0 || active.revision==u64::MAX || app.session.has_jobs() || active.floating.is_some() || active.coalesce.is_some()
+        || active.doc.xcf_state.as_ref().is_some_and(|state|state.floating.is_some()) {
+        return Err(tl!("Finish pending edits before transforming the selection.").into());
+    }
+    Ok(())
+}
+fn selection_origin(app:&PhotocraftApp)->Result<SelectionOrigin,String> {
+    selection_idle(app)?;
+    let active=app.session.active().ok_or_else(||tl!("Open a document before transforming a selection.").to_owned())?;
+    if active.channel_view.color_hidden.len()>16 || active.channel_view.alpha_visible.len()>10_000 {return Err(tl!("The channel view is too large for this selection preview.").into());}
+    Ok(SelectionOrigin {document:active.doc.id,revision:active.revision,snapshot:active.doc.clone(),weak:active.doc.downgrade(),view:active.channel_view.clone(),shell_mask:app.layer_mask_targeted()})
+}
+fn validate_selection_origin(app:&PhotocraftApp,origin:Option<&SelectionOrigin>)->Result<(),String> {
+    selection_idle(app)?;
+    let stale=||tl!("The selection changed. Cancel and reopen Transform Selection.").to_owned();
+    let origin=origin.ok_or_else(stale)?;let active=app.session.active().ok_or_else(stale)?;
+    if active.doc.id!=origin.document || active.revision!=origin.revision || !active.doc.shares_state(&origin.snapshot)
+        || !origin.weak.is_current(&active.doc) || active.channel_view!=origin.view || app.layer_mask_targeted()!=origin.shell_mask {return Err(stale());}
+    Ok(())
 }
 
 /// What [`follow_edits`] needs to rebuild the preview document.
@@ -236,6 +266,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         opacity: layer.opacity * layer.fill_opacity,
         above: Some(above),
         styled: styled.then(|| crate::transform_fx::StyledPreview::new(format!("transform-{session}-styled"))),
+        selection_origin: None,
         follow: Some(Follow { revision, hidden: lifted.is_none() }),
         committing: None,
         gesture: None,
@@ -336,6 +367,7 @@ pub(crate) fn begin_content_aware(
         texture,
         opacity: layer.opacity * layer.fill_opacity,
         above: Some(above),
+        selection_origin: None,
         follow: Some(Follow { revision, hidden: false }),
         committing: None,
         gesture: None,
@@ -485,6 +517,7 @@ fn begin_lone(
         above: None,
         styled: None,
         follow: None,
+        selection_origin: None,
         committing: None,
         gesture: None,
         warp_drag: None,
@@ -548,6 +581,7 @@ fn begin_path(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde_json::
         content_aware: None,
         above: None,
         follow: None,
+        selection_origin: None,
         committing: None,
     });
     app.ui.transform = Some(TransformSession {
@@ -590,28 +624,43 @@ fn rect_to_quad_affine(r: [f64; 4], q: [[f64; 2]; 4]) -> Option<photocraft_geom:
 /// Start Select › Transform Selection: the same box over the selection's bounds, previewing the
 /// selection mask (the marching ants are hidden meanwhile); commits `select.transformSelection`.
 pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
+    selection_idle(app)?;
+    if app.ui.transform.is_some() {return Err(tl!("Finish the current transform before transforming the selection.").into());}
+    let selection=app.session.active().and_then(|state|state.doc.selection.as_ref()).ok_or(tl!("Select an area before transforming the selection."))?;
+    if selection.format().mode!=photocraft_doc::ColorMode::Grayscale || selection.format().alpha {return Err(tl!("The selection preview requires Gray coverage without alpha.").into());}
+    // This preview samples coverage through the existing f32 display path. Wide raw
+    // selection transforms remain engine-only until an exact UI preview is available.
+    if matches!(selection.format().sample,photocraft_doc::SampleType::U32|photocraft_doc::SampleType::F64) {
+        return Err(tl!("Transform Selection preview is unavailable for this stored precision.").into());
+    }
+    crate::type_tool::commit(app);
+    let origin=selection_origin(app)?;
     let st = app.session.active().ok_or("no document")?;
     let doc = st.doc.resident_arc().cloned().ok_or("Free Transform requires a resident document")?;
-    let sel = doc.selection.clone().ok_or("no selection")?;
-    let b = sel.content_bounds();
+    let selected=doc.selection.as_ref().ok_or("no selection")?;
+    if selected.format().mode!=photocraft_doc::ColorMode::Grayscale || selected.format().alpha || matches!(selected.format().sample,photocraft_doc::SampleType::U32|photocraft_doc::SampleType::F64) {return Err(tl!("Transform Selection preview is unavailable for this stored precision.").into());}
+    let sel=selected.clone();
+    let b = sel.try_content_bounds_with_interrupt(&photocraft_raster::Interrupt::NONE).map_err(|error|error.to_string())?;
     if b.is_empty() {
         return Err("no selection".into());
     }
     let layer = st.active_layer.or_else(|| doc.layers.first().map(|l| l.id)).ok_or("no layer")?;
-    crate::type_tool::commit(app);
     let rect = [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64];
     let session = app.ui.alloc_id();
-    let (w, h) = (b.width() as usize, b.height() as usize);
+    let (w,h)=(usize::try_from(b.width()).map_err(|_|tl!("The selection preview is too large."))?,usize::try_from(b.height()).map_err(|_|tl!("The selection preview is too large."))?);
     let k = w.max(h).div_ceil(2048).max(1);
     let (tw, th) = (w.div_ceil(k), h.div_ceil(k));
-    let mut px = vec![Color32::TRANSPARENT; tw * th];
+    let count=tw.checked_mul(th).filter(|count|*count<=2048*2048).ok_or(tl!("The selection preview is too large."))?;
+    let mut px=Vec::new();px.try_reserve_exact(count).map_err(|_|tl!("There is not enough memory for the selection preview."))?;
     for ty in 0..th {
         for tx in 0..tw {
-            let m = sel.sample_channel(b.x0 + (tx * k) as i32, b.y0 + (ty * k) as i32, 0).clamp(0.0, 1.0);
-            px[ty * tw + tx] = Color32::from_rgba_unmultiplied(120, 170, 255, (m * 110.0) as u8);
+            let x=i32::try_from(i64::from(b.x0)+i64::try_from(tx.checked_mul(k).ok_or(tl!("The selection preview is too large."))?).map_err(|_|tl!("The selection preview is too large."))?).map_err(|_|tl!("The selection preview is too large."))?;
+            let y=i32::try_from(i64::from(b.y0)+i64::try_from(ty.checked_mul(k).ok_or(tl!("The selection preview is too large."))?).map_err(|_|tl!("The selection preview is too large."))?).map_err(|_|tl!("The selection preview is too large."))?;
+            let m=sel.sample_channel(x,y,0).clamp(0.0,1.0);
+            px.push(Color32::from_rgba_unmultiplied(120,170,255,(m*110.0) as u8));
         }
     }
-    let uv = [w as f32 / (tw * k) as f32, h as f32 / (th * k) as f32];
+    let uv=[w as f32/tw.checked_mul(k).ok_or(tl!("The selection preview is too large."))? as f32,h as f32/th.checked_mul(k).ok_or(tl!("The selection preview is too large."))? as f32];
     let texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), egui::ColorImage::new([tw, th], px), uv);
     let mut pd = (*doc).clone();
     pd.selection = None;
@@ -623,6 +672,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
         above: None,
         styled: None,
         follow: None,
+        selection_origin: Some(origin),
         committing: None,
         gesture: None,
         warp_drag: None,
@@ -1019,7 +1069,7 @@ pub fn commit(app: &mut PhotocraftApp) {
         return;
     }
     let document = app.transform_preview.as_ref().map(|pv| pv.doc.id);
-    if document.is_some_and(|id| app.session.active().is_none_or(|st| st.doc.id != id)) {
+    if !app.ui.transform.as_ref().is_some_and(|transform|transform.selection) && document.is_some_and(|id| app.session.active().is_none_or(|st| st.doc.id != id)) {
         cancel(app);
         return;
     }
@@ -1031,6 +1081,10 @@ pub fn commit(app: &mut PhotocraftApp) {
         return;
     }
     if t.selection {
+        if let Err(error)=validate_selection_origin(app,preview.as_ref().filter(|preview|preview.session==t.session).and_then(|preview|preview.selection_origin.as_ref())) {
+            keep_open(app,t,preview,error);return;
+        }
+        let origin=preview.as_ref().and_then(|preview|preview.selection_origin.as_ref());
         let mut p = json!({"rect": t.rect, "interpolation": t.interpolation});
         match &t.warp {
             Some(w) if !w.is_identity() => p["warp"] = json!(w),
@@ -1038,6 +1092,7 @@ pub fn commit(app: &mut PhotocraftApp) {
             None if t.quad == corners(t.rect) => return,
             None => p["quad"] = json!(t.quad),
         }
+        if let Some(origin)=origin {p["documentId"]=json!(origin.document.0.to_string());p["expectedRevision"]=json!(origin.revision.to_string());}
         if let Err(e) = app.run("select.transformSelection", p) {
             keep_open(app, t, preview, e);
         }
@@ -5053,5 +5108,48 @@ mod tests {
         let st = app.session.active().unwrap();
         assert!(matches!(&st.doc.layer(st.active_layer.unwrap()).unwrap().content, LayerContent::Text(t) if t.warp.is_none()));
         assert_eq!(past(&app), before + 2);
+    }
+}
+
+#[cfg(test)]
+mod selection_origin_drafts {
+    use super::*;
+    fn app()->PhotocraftApp {
+        let mut app=PhotocraftApp::new(photocraft_engine::Session::new(),Default::default());
+        app.session.execute("file.new",json!({"width":4,"height":4})).unwrap();
+        app.session.execute("select.all",json!({})).unwrap();app
+    }
+    #[test]
+    fn selection_transform_stale_and_restored_boxes_have_no_commit_authority() {
+        for restored in [false,true] {
+            let mut app=app();begin_selection(&mut app,&egui::Context::default()).unwrap();
+            let before=app.session.active().unwrap().doc.clone();let history=app.session.active().unwrap().history.entry_labels().count();
+            app.ui.transform.as_mut().unwrap().quad[0][0]+=1.;
+            if restored {app.transform_preview=None;}else {app.session.active_mut().unwrap().revision+=1;}
+            commit(&mut app);assert!(app.ui.status_error);assert!(app.ui.transform.is_some());
+            assert!(app.session.active().unwrap().doc.shares_state(&before));assert_eq!(app.session.active().unwrap().history.entry_labels().count(),history);
+        }
+    }
+    #[test]
+    fn wide_selection_refuses_before_f32_preview_and_preserves_native_storage() {
+        for sample in [photocraft_doc::SampleType::U32,photocraft_doc::SampleType::F64] {
+            let mut app=app();let format=photocraft_doc::PixelFormat::new(photocraft_doc::ColorMode::Grayscale,sample,false);
+            let mut selected=photocraft_raster::Surface::new(format);
+            let raw=if sample==photocraft_doc::SampleType::U32 {1u32.to_ne_bytes().to_vec()}else {1e-300f64.to_ne_bytes().to_vec()};
+            selected.try_write_interleaved(photocraft_geom::Rect::new(0,0,1,1),&raw).unwrap();
+            app.session.active_mut().unwrap().doc.try_resident_mut().unwrap().selection=Some(selected);
+            let before=app.session.active().unwrap().doc.clone();
+            assert!(begin_selection(&mut app,&egui::Context::default()).is_err());
+            assert!(app.ui.transform.is_none());assert!(app.transform_preview.is_none());assert!(app.session.active().unwrap().doc.shares_state(&before));
+        }
+    }
+    #[test]
+    fn selection_view_changes_are_fenced_but_active_layer_focus_remains_independent() {
+        let mut app=app();let origin=selection_origin(&app).unwrap();
+        app.session.active_mut().unwrap().active_layer=None;
+        assert!(validate_selection_origin(&app,Some(&origin)).is_ok());
+        app.session.active_mut().unwrap().channel_view.target=photocraft_engine::channel_cmds::ChannelTarget::Color(0);
+        assert!(validate_selection_origin(&app,Some(&origin)).is_err());
+        assert!(validate_selection_origin(&app,None).is_err());
     }
 }

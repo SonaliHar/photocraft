@@ -129,7 +129,7 @@ impl<'a> Sink<'a> {
                 Err(error) => Err(AutomationError::Io(error.to_string())),
             }
         };
-        super::write_protected_stream_with_guard(&target, self.protection, control, &check, Some(&parent), |file| {
+        super::write_protected_stream_with_guard(&target, self.protection, control, &check, Some(&parent), Some(128 << 20), |file| {
             photocraft_format::copy_directory_entry_stream(&entry, input, file, control).map_err(automation_error)
         })?;
         Ok(DirectoryEntryDisposition::Written)

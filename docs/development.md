@@ -564,15 +564,29 @@ additionally requires explicit Linear encoding and validated profile context.
 Native Multiply/Screen brush strokes use that same explicit color context;
 Normal painting retains its existing policy. Native Desaturate retains the
 existing RGB min/max midpoint formula, with Gray remaining an identity operation.
-Native RGB Luminosity Color Replacement has a controlled one-shot route under
-that same explicit color context, preserving sequential sampling and one final
-native quantization. Native preview, Gray/HDR/imported targets, other replacement
-modes and Mixer Brush remain unfinished; unsupported routes refuse before editing.
+Native RGB Luminosity Color Replacement has controlled one-shot and incremental
+preview routes under that same explicit color context. Private native work preserves
+sequential sampling; speculative tail display does not become authoritative work.
+Release offers the captured result to the registered command for one history edit
+and final native quantization. Gray/HDR/imported targets, other replacement modes
+remain unfinished; unsupported routes refuse before editing. Native Mixer Brush
+has a closed current-layer RGB route with full load, auto-load, clean-after and
+empty initial pickup. It keeps pickup/deposition work in f64 and returns only
+the exact original parameter color to the legacy well. General native carry
+and Sample All Layers remain unfinished.
 
 Native Split/Merge uses exact component storage within its closed plain-raster
 scope. Protected native directory saves stream through held-root source checks,
 reuse verified content and commit the manifest last, without garbage collection.
 Individual entries publish atomically; the directory as a whole is not swapped.
+Wrapped existing entries share the reserved source-inspection memory envelope;
+an oversized candidate is refused before collecting its body.
+
+Lasso and Transform Selection have bounded controlled preparation using the
+existing upstream geometric calculations. Freehand Lasso and selection-transform
+boxes carry private target captures. Wide nonidentity selection interpolation
+remains unsupported. Legacy color-based selections check both the actual sampled
+owner and old coverage before any unsupported native-to-f32 sample path.
 
 Selection Load/Save/New Channel offer default-off raw storage transfer for
 eligible same-depth Gray surfaces. This copies stored defaults and off-canvas

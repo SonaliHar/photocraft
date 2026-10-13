@@ -241,6 +241,24 @@ fn encoding(e: Encoding) -> SampleEncoding {
         Encoding::Perceptual => SampleEncoding::Perceptual,
     }
 }
+// GimpColorTag numeric order from the retained public GIMP 3.2.6
+// libgimpbase/gimpbaseenums.h. Brown has no exact current LabelColor equivalent.
+fn layer_color_tag(tag: Option<u32>) -> std::result::Result<photocraft_doc::LabelColor, &'static str> {
+    use photocraft_doc::LabelColor;
+    match tag {
+        None | Some(0) => Ok(LabelColor::None),
+        Some(1) => Ok(LabelColor::Blue),
+        Some(2) => Ok(LabelColor::Green),
+        Some(3) => Ok(LabelColor::Yellow),
+        Some(4) => Ok(LabelColor::Orange),
+        Some(5) => Err("Brown has no exact PhotoCraft layer label"),
+        Some(6) => Ok(LabelColor::Red),
+        Some(7) => Ok(LabelColor::Violet),
+        Some(8) => Ok(LabelColor::Gray),
+        Some(_) => Err("unknown stored color tag has no exact PhotoCraft layer label"),
+    }
+}
+
 fn physical_unit(unit: &photocraft_xcf::Unit) -> photocraft_doc::PhysicalUnit {
     use photocraft_doc::{CustomUnit, PhysicalUnit};
     match unit {
@@ -1849,6 +1867,13 @@ fn map_accounted<P: MappingPlane, S>(
         l.indexed_source = side;
         l.opacity = d.opacity;
         l.visible = d.visible;
+        match layer_color_tag(d.color_tag) {
+            Ok(label) => l.label = label,
+            Err(reason) => warnings.push(format!(
+                "XCF layer color tag {}: {reason}; original source tag retained, current label unavailable",
+                d.color_tag.unwrap_or_default()
+            )),
+        }
         l.locks.transparency = d.lock_alpha;
         l.locks.pixels = d.lock_content;
         l.locks.position = d.lock_position;
@@ -2616,6 +2641,56 @@ mod unit_tests {
             unit: Unit::Inch, palette: Vec::new(), layers: vec![owner, backdrop],
             channels: Vec::new(), guides: Vec::new(), diagnostics: Vec::new(),
             charged_bytes: 0, raw_properties: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn layer_color_tags_map_exact_shared_labels_and_retain_unmapped_source_tags_in_native() {
+        use photocraft_doc::{LabelColor, item_identity::ItemRef};
+        use photocraft_raster::Interrupt;
+        use photocraft_xcf::RawProperty;
+        assert_eq!(super::layer_color_tag(None), Ok(LabelColor::None));
+        for (tag, expected, limitation) in [
+            (0, LabelColor::None, None),
+            (1, LabelColor::Blue, None),
+            (2, LabelColor::Green, None),
+            (3, LabelColor::Yellow, None),
+            (4, LabelColor::Orange, None),
+            (5, LabelColor::None, Some("Brown")),
+            (6, LabelColor::Red, None),
+            (7, LabelColor::Violet, None),
+            (8, LabelColor::Gray, None),
+            (u32::MAX, LabelColor::None, Some("unknown stored color tag")),
+        ] {
+            let mut file = mask_lock_fixture(0);
+            file.layers[0].color_tag = Some(tag);
+            let payload = tag.to_be_bytes().to_vec();
+            file.layers[0].raw_properties.push(RawProperty {
+                tag: 34, offset: 123, declared_bytes: 4, payload: payload.clone(),
+            });
+            let original_pixels = file.layers[0].plane.as_ref().unwrap().bytes.clone();
+            assert!(super::qualified_normal_mask(&file));
+            let mapped = super::map("color tags", file.clone(), &Interrupt::NONE, 128 << 20).unwrap().0;
+            assert_eq!(mapped.document.layers[0].label, expected);
+            assert_eq!(mapped.document.layers[1].label, LabelColor::None);
+            if let Some(reason) = limitation {
+                assert!(mapped.warnings.iter().any(|warning| warning.contains(reason) && warning.contains("original source tag retained")));
+            } else {
+                assert!(!mapped.warnings.iter().any(|warning| warning.contains("current label unavailable")));
+            }
+            let state = mapped.document.xcf_state.as_ref().unwrap();
+            let record = state.opaque.iter().find(|record| {
+                record.owner == Some(ItemRef::Layer(mapped.document.layers[0].id)) && record.identity == "34@123:4"
+            }).unwrap();
+            assert_eq!(record.bytes.as_slice(), payload.as_slice());
+            assert_eq!(record.blake3, blake3::hash(&payload).to_hex().as_str());
+            assert_eq!(file.layers[0].plane.as_ref().unwrap().bytes, original_pixels);
+            let before = mapped.document.clone();
+            let bytes = photocraft_format::save_to_bytes(&before, &Default::default()).unwrap();
+            let reopened = photocraft_format::load_from_bytes(&bytes).unwrap();
+            assert_eq!(reopened.layers, before.layers);
+            assert_eq!(reopened.xcf_state, before.xcf_state);
+            assert_eq!(mapped.document, before);
         }
     }
 

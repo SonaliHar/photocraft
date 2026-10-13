@@ -11,8 +11,6 @@
 use photocraft_algo::segment::sky::{self, SkyParams};
 use photocraft_algo::segment::{Sampler, SurfaceSampler};
 use photocraft_algo::selection::{SelectionMode, combine_region};
-use photocraft_algo::transform::{Homography, Interp};
-use photocraft_algo::warp::try_warp_mesh_gray;
 use photocraft_doc::{Document, LayerId};
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
@@ -31,9 +29,6 @@ fn has_layer(s: &Session) -> std::result::Result<(), String> {
 }
 fn f(p: &Value, k: &str, d: f64) -> f64 {
     p.get(k).and_then(Value::as_f64).unwrap_or(d)
-}
-fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
-    EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
 
 struct CompositeSampler<'a>(&'a Document);
@@ -100,116 +95,9 @@ pub fn isolation_shows(doc: &Document, isolated: &[LayerId], id: LayerId) -> boo
 
 // ---------------------------------------------------------------- Transform Selection
 
-fn reference_point(p: &Value, r: [f64; 4]) -> [f64; 2] {
-    let (x0, y0, x1, y1) = (r[0], r[1], r[2], r[3]);
-    let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
-    match p.get("reference") {
-        Some(Value::Array(a)) if a.len() >= 2 => [a[0].as_f64().unwrap_or(cx), a[1].as_f64().unwrap_or(cy)],
-        Some(Value::String(k)) => match k.as_str() {
-            "topLeft" => [x0, y0],
-            "top" => [cx, y0],
-            "topRight" => [x1, y0],
-            "left" => [x0, cy],
-            "right" => [x1, cy],
-            "bottomLeft" => [x0, y1],
-            "bottom" => [cx, y1],
-            "bottomRight" => [x1, y1],
-            _ => [cx, cy],
-        },
-        _ => [cx, cy],
-    }
-}
-
-fn quad(p: &Value) -> Option<[[f64; 2]; 4]> {
-    let a = p.get("quad").or_else(|| p.get("corners"))?.as_array()?;
-    if a.len() != 4 {
-        return None;
-    }
-    let mut q = [[0.0; 2]; 4];
-    for (i, v) in a.iter().enumerate() {
-        let c = v.as_array()?;
-        q[i] = [c.first()?.as_f64()?, c.get(1)?.as_f64()?];
-    }
-    Some(q)
-}
-
-/// The homography of the scale / rotate / skew / move params about the reference point.
-fn affine_params(p: &Value, r: [f64; 4]) -> Homography {
-    let [px, py] = reference_point(p, r);
-    let (sx, sy) = (f(p, "scaleX", 100.0) / 100.0, f(p, "scaleY", 100.0) / 100.0);
-    let a = f(p, "rotate", 0.0).to_radians();
-    let (kx, ky) = (f(p, "skewX", 0.0).to_radians().tan(), f(p, "skewY", 0.0).to_radians().tan());
-    let (dx, dy) = (f(p, "dx", f(p, "x", 0.0)), f(p, "dy", f(p, "y", 0.0)));
-    let t = |x: f64, y: f64| Homography([1.0, 0.0, x, 0.0, 1.0, y, 0.0, 0.0, 1.0]);
-    let (sa, ca) = a.sin_cos();
-    let rot = Homography([ca, -sa, 0.0, sa, ca, 0.0, 0.0, 0.0, 1.0]);
-    let skew = Homography([1.0, kx, 0.0, ky, 1.0, 0.0, 0.0, 0.0, 1.0]);
-    let scale = Homography([sx, 0.0, 0.0, 0.0, sy, 0.0, 0.0, 0.0, 1.0]);
-    t(px + dx, py + dy).mul(&rot).mul(&skew).mul(&scale).mul(&t(-px, -py))
-}
-
 fn transform_selection(s: &mut Session, p: &Value) -> Result<Value> {
-    const CMD: &str = "select.transformSelection";
-    let d = s.active().ok_or(EngineError::NoDocument)?;
-    let sel = d.doc.selection.as_ref().ok_or_else(|| EngineError::Other("no selection".into()))?;
-    let b = sel.content_bounds();
-    let rect = match p.get("rect").and_then(Value::as_array) {
-        Some(a) if a.len() == 4 => {
-            let v: Vec<f64> = a.iter().map(|x| x.as_f64().unwrap_or(0.0)).collect();
-            [v[0], v[1], v[2], v[3]]
-        }
-        _ => [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64],
-    };
-    let interp = Interp::parse(p.get("interpolation").and_then(Value::as_str).unwrap_or("bilinear"));
-    let is_warp = ["warp", "style", "mesh", "grid"].iter().any(|k| p.get(*k).is_some());
-    if is_warp {
-        let r = Rect::new(rect[0].floor() as i32, rect[1].floor() as i32, rect[2].ceil() as i32, rect[3].ceil() as i32);
-        let w = crate::warp_cmds::warp_from_params(CMD, p, [r.x0 as f64, r.y0 as f64, r.x1 as f64, r.y1 as f64])?;
-        if w.is_identity() {
-            return Ok(json!({"changed": false}));
-        }
-        let selected = s.edit("Transform Selection", |doc, _| {
-            if let Some(sel) = &doc.selection {
-                doc.selection = Some(try_warp_mesh_gray(sel, &|x, y| w.map(x, y), interp).map_err(|e| crate::EngineError::Other(e.to_string()))?)
-                    .filter(|s| !s.content_bounds().is_empty());
-            }
-            Ok(doc.selection.is_some())
-        })?;
-        return Ok(json!({"changed": true, "selected": selected, "bounds": bounds_json(s)}));
-    }
-    let h = if let Some(q) = quad(p) {
-        Homography::rect_to_quad(rect, q).ok_or_else(|| bad(CMD, "degenerate quad"))?
-    } else if let Some(m) = p.get("matrix").and_then(Value::as_array) {
-        let v: Vec<f64> = m.iter().filter_map(Value::as_f64).collect();
-        if v.len() != 6 {
-            return Err(bad(CMD, "matrix must be [a, b, c, d, e, f]"));
-        }
-        Homography([v[0], v[2], v[4], v[1], v[3], v[5], 0.0, 0.0, 1.0])
-    } else {
-        affine_params(p, rect)
-    };
-    if h.inverse().is_none() {
-        return Err(bad(CMD, "the transform collapses the selection"));
-    }
-    if h.0.iter().zip(Homography::IDENTITY.0).all(|(a, b)| (a - b).abs() < 1e-12) {
-        return Ok(json!({"changed": false, "selected": true}));
-    }
-    let selected = s.edit("Transform Selection", |doc, _| {
-        if let Some(sel) = &doc.selection {
-            doc.selection = Some(crate::transform_cmds::try_warp_gray(sel, &h, interp)?).filter(|s| !s.content_bounds().is_empty());
-        }
-        Ok(doc.selection.is_some())
-    })?;
-    Ok(json!({"changed": true, "selected": selected, "bounds": bounds_json(s)}))
+    crate::selection_transform_controlled::run(s, p)
 }
-
-fn bounds_json(s: &Session) -> Value {
-    match s.active().and_then(|d| d.doc.selection.as_ref()).map(|s| s.content_bounds()) {
-        Some(r) => json!([r.x0, r.y0, r.width() as i32, r.height() as i32]),
-        None => Value::Null,
-    }
-}
-
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
@@ -237,7 +125,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Transform Selection",
             menu: &["Select"],
             shortcut: None,
-            params: r##"{"rect":[x0,y0,x1,y1]? (frame; default = selection bounds),"quad"|"corners":[[x,y]×4]? (where the frame's corners go: distort/perspective),"matrix":[a,b,c,d,e,f]?,"scaleX":%=100,"scaleY":%=100,"rotate":deg=0,"skewX":deg=0,"skewY":deg=0,"dx":px=0,"dy":px=0,"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center","style"|"mesh"|"grid"|"warp":… (warp, as edit.transform.warp),"interpolation":"bilinear|bicubic|nearest"="bilinear"}"##,
+            params: r##"{"rect":[x0,y0,x1,y1]? (frame; default = selection bounds),"quad"|"corners":[[x,y]×4]? (where the frame's corners go: distort/perspective),"matrix":[a,b,c,d,e,f]?,"scaleX":%=100,"scaleY":%=100,"rotate":deg=0,"skewX":deg=0,"skewY":deg=0,"dx":px=0,"dy":px=0,"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center","style"|"mesh"|"grid"|"warp":… (warp, as edit.transform.warp),"interpolation":"bilinear|bicubic|nearest"="bilinear","documentId":decimal-string?,"expectedRevision":decimal-string? (captured pair)}"##,
             enabled: has_selection,
             run: transform_selection,
             journal: true,

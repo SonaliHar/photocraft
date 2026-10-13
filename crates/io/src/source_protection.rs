@@ -14,6 +14,7 @@ pub enum SourceProtectionError {
     FingerprintLimit,
     InvalidFingerprint,
     ByteLimit,
+    ResidentLimit,
     Allocation,
     Read(io::Error),
     InterruptedLimit,
@@ -31,6 +32,9 @@ impl std::fmt::Display for SourceProtectionError {
             Self::FingerprintLimit => "source-protection.fingerprint-limit",
             Self::InvalidFingerprint => "source-protection.invalid-fingerprint",
             Self::ByteLimit => "source-protection.byte-limit",
+            Self::ResidentLimit => {
+                "source-protection.resident-limit: choose another destination; protected-content inspection exceeds the admitted save memory"
+            }
             Self::Allocation => "source-protection.allocation",
             Self::Read(_) => "source-protection.read-failed",
             Self::InterruptedLimit => "source-protection.interrupted-limit",
@@ -123,6 +127,12 @@ fn append(buffer: &mut Vec<u8>, bytes: &[u8], cap: u64, interrupt: &photocraft_r
     Ok(())
 }
 
+/// Conservative fixed reader/hash/bookkeeping scratch, separate from wrapped
+/// encoded capacity and the existing decoder's declared retention budget.
+/// Allocator/private decoder overhead remains outside an RSS guarantee.
+pub const SOURCE_PROTECTION_FIXED_BYTES: u64 =
+    (CHUNK_BYTES + HEADER_BYTES + std::mem::size_of::<blake3::Hasher>() + std::mem::size_of::<Reads>()) as u64 + 4096;
+
 /// Reader begins at byte zero and is owned/authorized by the caller. Full reads
 /// reject length drift and use the existing XCF encoded cap. With no fingerprints,
 /// a noncandidate may return after a bounded prefix without scanning the full file.
@@ -137,6 +147,33 @@ pub fn check_reader_with_interrupt<R: Read>(
     reader: &mut R,
     expected_len: u64,
     protected_fingerprints: &[String],
+    interrupt: &photocraft_raster::Interrupt<'_>,
+) -> Result<(), SourceProtectionError> {
+    check_reader_core(reader, expected_len, protected_fingerprints, None, interrupt)
+}
+
+/// Lower-only shared save-envelope admission. Reader authority is still entirely
+/// caller-owned. A too-large wrapped destination is refused before collection,
+/// not treated as safe or inspected with an independent full default budget.
+pub fn check_reader_with_resident_limit<R: Read>(
+    reader: &mut R,
+    expected_len: u64,
+    protected_fingerprints: &[String],
+    resident_limit: u64,
+    interrupt: &photocraft_raster::Interrupt<'_>,
+) -> Result<(), SourceProtectionError> {
+    poll(interrupt)?;
+    if resident_limit > photocraft_xcf::Limits::default().resident_bytes as u64 {
+        return Err(SourceProtectionError::ResidentLimit);
+    }
+    let remaining = resident_limit.checked_sub(SOURCE_PROTECTION_FIXED_BYTES).ok_or(SourceProtectionError::ResidentLimit)?;
+    check_reader_core(reader, expected_len, protected_fingerprints, Some(remaining), interrupt)
+}
+fn check_reader_core<R: Read>(
+    reader: &mut R,
+    expected_len: u64,
+    protected_fingerprints: &[String],
+    resident_limit: Option<u64>,
     interrupt: &photocraft_raster::Interrupt<'_>,
 ) -> Result<(), SourceProtectionError> {
     validate_fingerprints_with_interrupt(protected_fingerprints, interrupt)?;
@@ -168,12 +205,27 @@ pub fn check_reader_with_interrupt<R: Read>(
         poll(interrupt)?;
         return Ok(());
     }
-    let cap = crate::xcf_source::encoded_limit();
-    if expected_len > cap {
+    let default_cap = crate::xcf_source::encoded_limit();
+    if expected_len > default_cap {
         return Err(SourceProtectionError::ByteLimit);
+    }
+    let cap = if candidate { resident_limit.map_or(default_cap, |remaining| remaining.min(default_cap)) } else { default_cap };
+    if candidate && expected_len > cap {
+        return Err(SourceProtectionError::ResidentLimit);
     }
     let mut candidate_bytes = Vec::new();
     if candidate {
+        if resident_limit.is_some() {
+            // One admitted allocation, avoiding old+new growth allocations while
+            // the prepared document and native output plan remain retained.
+            let requested = usize::try_from(expected_len).map_err(|_| SourceProtectionError::ResidentLimit)?;
+            poll(interrupt)?;
+            candidate_bytes.try_reserve_exact(requested).map_err(|_| SourceProtectionError::Allocation)?;
+            if candidate_bytes.capacity() as u64 > cap {
+                return Err(SourceProtectionError::ResidentLimit);
+            }
+            poll(interrupt)?;
+        }
         append(&mut candidate_bytes, prefix, cap, interrupt)?;
     }
     let mut hasher = blake3::Hasher::new();
@@ -212,12 +264,25 @@ pub fn check_reader_with_interrupt<R: Read>(
         }
     }
     poll(interrupt)?;
-    if candidate
-        && crate::xcf_source::contains_xcf_with_retained_capacity(&candidate_bytes, candidate_bytes.capacity(), interrupt).map_err(|error| {
-            if error.kind == photocraft_xcf::ErrorKind::Cancelled { SourceProtectionError::Cancelled } else { SourceProtectionError::MalformedCandidate }
-        })?
-    {
-        return Err(SourceProtectionError::XcfDestination);
+    if candidate {
+        let checked = match resident_limit {
+            Some(remaining) => {
+                crate::xcf_source::contains_xcf_with_retained_capacity_and_resident_limit(&candidate_bytes, candidate_bytes.capacity(), remaining, interrupt)
+            }
+            None => crate::xcf_source::contains_xcf_with_retained_capacity(&candidate_bytes, candidate_bytes.capacity(), interrupt),
+        };
+        let contains = checked.map_err(|error| {
+            if error.kind == photocraft_xcf::ErrorKind::Cancelled {
+                SourceProtectionError::Cancelled
+            } else if resident_limit.is_some() && error.kind == photocraft_xcf::ErrorKind::Limit {
+                SourceProtectionError::ResidentLimit
+            } else {
+                SourceProtectionError::MalformedCandidate
+            }
+        })?;
+        if contains {
+            return Err(SourceProtectionError::XcfDestination);
+        }
     }
     if !protected_fingerprints.is_empty() {
         poll(interrupt)?;
@@ -365,5 +430,76 @@ mod fingerprint_collector_tests {
         assert_eq!(document_fingerprints(&document).unwrap().len(), MAX_FINGERPRINTS);
         document.xcf_state.as_mut().unwrap().provenance.protected_source_fingerprints.push(format!("{:064x}", MAX_FINGERPRINTS));
         assert!(matches!(document_fingerprints(&document), Err(SourceProtectionError::FingerprintLimit)));
+    }
+}
+
+#[cfg(test)]
+mod bounded_reader_drafts {
+    use super::*;
+    use std::io::Write;
+    #[test]
+    fn wrapped_encoded_admission_refuses_before_collecting_body() {
+        struct Count {
+            calls: usize,
+            bytes: io::Cursor<Vec<u8>>,
+        }
+        impl Read for Count {
+            fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+                self.calls += 1;
+                self.bytes.read(out)
+            }
+        }
+        let mut bytes = vec![0u8; HEADER_BYTES];
+        bytes[..4].copy_from_slice(&[0x28, 0xb5, 0x2f, 0xfd]);
+        let mut reader = Count { calls: 0, bytes: io::Cursor::new(bytes.clone()) };
+        let result = check_reader_with_resident_limit(&mut reader, 1 << 20, &[], SOURCE_PROTECTION_FIXED_BYTES + 16, &photocraft_raster::Interrupt::NONE);
+        assert!(matches!(result, Err(SourceProtectionError::ResidentLimit)));
+        assert_eq!(reader.calls, 1);
+        assert_eq!(reader.bytes.get_ref(), &bytes);
+    }
+    #[test]
+    fn native_fingerprint_and_plain_source_refusals_do_not_need_wrapper_heap() {
+        let bytes = b"ordinary immutable bytes";
+        let fingerprint = blake3::hash(bytes).to_hex().to_string();
+        assert!(matches!(
+            check_reader_with_resident_limit(
+                &mut bytes.as_slice(),
+                bytes.len() as u64,
+                &[fingerprint],
+                SOURCE_PROTECTION_FIXED_BYTES + 1,
+                &photocraft_raster::Interrupt::NONE
+            ),
+            Err(SourceProtectionError::ProtectedFingerprint)
+        ));
+        let plain = b"gimp xcf v013\0";
+        assert!(matches!(
+            check_reader_with_resident_limit(
+                &mut plain.as_slice(),
+                plain.len() as u64,
+                &[],
+                SOURCE_PROTECTION_FIXED_BYTES + 1,
+                &photocraft_raster::Interrupt::NONE
+            ),
+            Err(SourceProtectionError::XcfDestination)
+        ));
+    }
+    #[test]
+    fn decoder_retention_is_lowered_while_default_guard_stays_compatible() {
+        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gzip.write_all(&b"ordinary owned data".repeat(10000)).unwrap();
+        let bytes = gzip.finish().unwrap();
+        let mut original = bytes.as_slice();
+        check_reader_with_interrupt(&mut original, bytes.len() as u64, &[], &photocraft_raster::Interrupt::NONE).unwrap();
+        let mut limited = bytes.as_slice();
+        assert!(matches!(
+            check_reader_with_resident_limit(
+                &mut limited,
+                bytes.len() as u64,
+                &[],
+                SOURCE_PROTECTION_FIXED_BYTES + bytes.len() as u64 + 256,
+                &photocraft_raster::Interrupt::NONE
+            ),
+            Err(SourceProtectionError::ResidentLimit)
+        ));
     }
 }

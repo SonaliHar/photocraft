@@ -2,7 +2,10 @@
 //! dispatcher, ICC default, locator lookup, or runtime filesystem authority.
 use super::{
     gimp_configured_candidate::{SourceBinding, bind_source_node_with_sample_policy},
-    gimp_configured_color_candidate::{TransformPair, render_color_candidate, render_prepared_color_candidate, requirements_color_candidate},
+    gimp_configured_color_candidate::{
+        TransformPair, render_color_candidate_with_requirements, render_prepared_color_candidate_with_requirements, requirements_color_candidate,
+        requirements_preparation_work,
+    },
     gimp_configured_render_candidate::OutputPolicy,
 };
 use photocraft_algo::gimp::{
@@ -117,6 +120,7 @@ pub fn evaluate(binding: &Binding<'_>, request: NodeRequest<'_>, budget: &mut No
             return Err(GraphExecuteError::Roi);
         }
     }
+    budget.charge_work(requirements_preparation_work(input.surface, transforms).map_err(raster)?)?;
     let required = requirements_color_candidate(input.surface, request.roi, transforms, budget.interrupt()).map_err(raster)?;
     if binding.working_default.len() != required.working_format.bytes_per_pixel() {
         return Err(GraphExecuteError::Domain);
@@ -129,7 +133,7 @@ pub fn evaluate(binding: &Binding<'_>, request: NodeRequest<'_>, budget: &mut No
     budget.reserve_index(required.index_bytes)?;
     budget.reserve_scratch(scratch)?;
     budget.charge_work(required.work_units)?;
-    let rendered = render_color_candidate(
+    let rendered = render_color_candidate_with_requirements(
         binding.source_node,
         binding.source_binding,
         binding.sampling,
@@ -142,6 +146,7 @@ pub fn evaluate(binding: &Binding<'_>, request: NodeRequest<'_>, budget: &mut No
         binding.output_policy,
         Limits { resident_bytes: required.peak_resident_bytes, work_units: required.work_units },
         budget.interrupt(),
+        Some(required),
     )
     .map_err(raster)?;
     budget.poll()?;
@@ -258,6 +263,7 @@ pub fn evaluate_prepared(
             return Err(GraphExecuteError::Roi);
         }
     }
+    budget.charge_work(requirements_preparation_work(input.surface, transforms).map_err(raster)?)?;
     let required = requirements_color_candidate(input.surface, request.roi, transforms, budget.interrupt()).map_err(raster)?;
     if binding.working_default.len() != required.working_format.bytes_per_pixel() {
         return Err(GraphExecuteError::Domain);
@@ -274,7 +280,7 @@ pub fn evaluate_prepared(
     if total_peak.checked_add(binding.validation_bytes).is_none_or(|n| n > photocraft_raster::MAX_CHECKED_RASTER_BYTES) {
         return Err(GraphExecuteError::ResidentLimit);
     }
-    let rendered = render_prepared_color_candidate(
+    let rendered = render_prepared_color_candidate_with_requirements(
         binding.prepared,
         input.surface,
         binding.source_extent,
@@ -285,6 +291,7 @@ pub fn evaluate_prepared(
         binding.output_policy,
         Limits { resident_bytes: total_peak, work_units: required.work_units },
         budget.interrupt(),
+        Some(required),
     )
     .map_err(raster)?;
     budget.poll()?;

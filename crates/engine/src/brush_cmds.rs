@@ -443,6 +443,8 @@ mod stroke_controlled;
 mod live_begin_controlled;
 mod advanced_native_admission;
 mod native_replace_controlled;
+mod native_mixer_controlled;
+pub use native_replace_controlled::{NativeLuminosityCommit, NativeLuminosityPreview, try_native_color_replacement_preview};
 pub(crate) fn advanced_dispatch_preflight(session: &Session, command: &str, params: &Value) -> Result<()> {
     advanced_native_admission::dispatch_preflight(session, command, params, &photocraft_raster::Interrupt::NONE)
 }
@@ -942,6 +944,7 @@ fn pct(p: &Value, k: &str, d: f32) -> f32 {
 }
 
 fn mixer_brush(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(value) = native_mixer_controlled::try_run_job(s, p)? { return Ok(value); }
     let cmd = "paint.mixerBrush";
     advanced_native_admission::target_preflight(s, cmd, p, &photocraft_raster::Interrupt::NONE)?;
     let pts = parse_points(p, cmd)?;

@@ -174,6 +174,22 @@ pub struct ColorRequirements {
     pub peak_resident_bytes: u64,
     pub work_units: u64,
 }
+/// Allocation-free conservative work charge before detailed pipeline/table
+/// and source-resident traversal. Existing admitted maxima are unchanged.
+pub(crate) fn requirements_preparation_work(source: &Surface, pair: &TransformPair<'_>) -> Result<u64, RasterInputError> {
+    let mut work = 256u64;
+    for transform in [pair.forward, pair.inverse] {
+        let pipeline = transform.pipeline();
+        if pipeline.stages.len() > 32 || !matches!(pipeline.inputs, 1 | 3) || !matches!(pipeline.outputs, 1 | 3) {
+            return Err(RasterInputError::UnsupportedConversion);
+        }
+        // At most three curves of <=4096 values per admitted stage, plus
+        // bounded matrix/channel checks. No table values are read here.
+        work = add(work, mul(pipeline.stages.len() as u64, 3 * 4096 + 256)?)?;
+    }
+    let tiles = u64::try_from(source.tile_count()).map_err(|_| RasterInputError::LimitExceeded)?;
+    add(work, mul(tiles, 16)?)
+}
 pub fn requirements_color_candidate(
     source: &Surface,
     roi: Rect,
@@ -248,6 +264,24 @@ pub fn render_color_candidate(
     limits: Limits,
     control: &Interrupt<'_>,
 ) -> Result<RenderedCandidate, RasterInputError> {
+    render_color_candidate_with_requirements(node, binding, sampling, source, extent, roi, actual_source, pair, working_default, policy, limits, control, None)
+}
+
+pub(crate) fn render_color_candidate_with_requirements(
+    node: &FilterNode,
+    binding: SourceBinding<'_>,
+    sampling: CurveSamplePolicy,
+    source: &Surface,
+    extent: Rect,
+    roi: Rect,
+    actual_source: WorkingContext,
+    pair: &TransformPair<'_>,
+    working_default: &[u8],
+    policy: OutputPolicy,
+    limits: Limits,
+    control: &Interrupt<'_>,
+    requirements: Option<ColorRequirements>,
+) -> Result<RenderedCandidate, RasterInputError> {
     render_color_execution(
         source,
         extent,
@@ -259,6 +293,7 @@ pub fn render_color_candidate(
         policy,
         limits,
         control,
+        requirements,
         || {
             let configured = super::gimp_configured_candidate::bind_source_node_with_sample_policy(node, binding, sampling, control)?;
             configured.with_prepared(pair.working, Limits { resident_bytes: 65536, work_units: 16384 }, control, |_| Ok(()))
@@ -284,6 +319,22 @@ pub fn render_prepared_color_candidate(
     limits: Limits,
     control: &Interrupt<'_>,
 ) -> Result<RenderedCandidate, RasterInputError> {
+    render_prepared_color_candidate_with_requirements(prepared, source, extent, roi, actual_source, pair, working_default, policy, limits, control, None)
+}
+
+pub(crate) fn render_prepared_color_candidate_with_requirements(
+    prepared: &photocraft_algo::gimp::configured::PreparedConfiguration<'_>,
+    source: &Surface,
+    extent: Rect,
+    roi: Rect,
+    actual_source: WorkingContext,
+    pair: &TransformPair<'_>,
+    working_default: &[u8],
+    policy: OutputPolicy,
+    limits: Limits,
+    control: &Interrupt<'_>,
+    requirements: Option<ColorRequirements>,
+) -> Result<RenderedCandidate, RasterInputError> {
     poll(control)?;
     if limits.resident_bytes == 0 || limits.resident_bytes > MAX_CHECKED_RASTER_BYTES {
         return Err(RasterInputError::LimitExceeded);
@@ -300,6 +351,7 @@ pub fn render_prepared_color_candidate(
         policy,
         Limits { resident_bytes: remaining, work_units: limits.work_units },
         control,
+        requirements,
         || poll(control),
         |working, output_policy, middle_limits, charge| {
             super::gimp_configured_render_candidate::render_prepared_window(
@@ -330,6 +382,7 @@ fn render_color_execution(
     policy: OutputPolicy,
     limits: Limits,
     control: &Interrupt<'_>,
+    requirements: Option<ColorRequirements>,
     validate_configuration: impl FnOnce() -> Result<(), RasterInputError>,
     evaluate_working: impl FnOnce(&Surface, OutputPolicy, Limits, u64) -> Result<RenderedCandidate, RasterInputError>,
 ) -> Result<RenderedCandidate, RasterInputError> {
@@ -350,7 +403,10 @@ fn render_color_execution(
     {
         return Err(RasterInputError::UnsupportedConversion);
     }
-    let required = requirements_color_candidate(source, roi, pair, control)?;
+    let required = match requirements {
+        Some(required) => required,
+        None => requirements_color_candidate(source, roi, pair, control)?,
+    };
     let working_format = required.working_format;
     if working_default.len() != working_format.bytes_per_pixel() {
         return Err(RasterInputError::LengthMismatch);

@@ -77,6 +77,9 @@ mod layer_duplicate_controlled;
 mod layer_mask_storage_controlled;
 mod selection_inverse_controlled;
 mod selection_shapes_controlled;
+mod selection_polygon_controlled;
+mod selection_transform_controlled;
+mod selection_sample_policy;
 mod selection_modify_controlled;
 mod selection_morphology_controlled;
 mod selection_smooth_controlled;
@@ -698,6 +701,8 @@ pub struct Session {
     /// A finished live stroke offered to the `paint.stroke` / `paint.pencil` that commits it
     /// ([`Session::offer_live_stroke`]).
     pub(crate) live_commit: Option<brush_cmds::LiveCommit>,
+    /// Finished native Luminosity preview, consumed only by its matching command.
+    pub(crate) native_replace_commit: Option<brush_cmds::NativeLuminosityCommit>,
     /// Documents a background open decoded but held back until the user answers the profile
     /// prompt ([`ColorState::open_question`](color_cmds::ColorState::open_question)): `(id,
     /// document, source read-only, import origin)`. The shell takes them with
@@ -934,6 +939,21 @@ impl Session {
         self.live_commit = None;
     }
 
+    /// Offer a privately completed native Luminosity preview to the registered
+    /// `paint.colorReplacement` command. The command still validates its captured
+    /// target, settings and points before publishing one history entry.
+    pub fn offer_native_color_replacement(&mut self, commit: brush_cmds::NativeLuminosityCommit) -> Result<()> {
+        self.native_replace_commit = None;
+        commit.validate_for_session(self)?;
+        self.native_replace_commit = Some(commit);
+        Ok(())
+    }
+
+    /// Withdraw a native preview offer without changing the document or history.
+    pub fn clear_native_color_replacement(&mut self) {
+        self.native_replace_commit = None;
+    }
+
     /// Is the command currently runnable? (drives menu enablement)
     pub fn is_enabled(&self, id: &str) -> bool {
         self.is_enabled_with(id, &Value::Null)
@@ -1025,7 +1045,7 @@ impl Session {
         f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>,
     ) -> Result<R> {
         let index = self.active.ok_or(EngineError::NoDocument)?;
-        self.edit_index_with_interrupt(index, label, control, None, f)
+        self.edit_index_with_interrupt(index, label, control, None, false, f)
     }
 
     /// Commit to a caller-fenced resident document without changing tab focus.
@@ -1045,7 +1065,7 @@ impl Session {
         {
             return Err(EngineError::Other("finish transient edits before editing this document".into()));
         }
-        self.edit_index_with_interrupt(index, label, control, None, f)
+        self.edit_index_with_interrupt(index, label, control, None, false, f)
     }
 
     /// Commit a prepared selection and its history target with the document.
@@ -1062,7 +1082,24 @@ impl Session {
         if self.coalesce_request.is_some() || self.color_restrict.is_some() {
             return Err(EngineError::Other("finish transient edits before replacing layer selection".into()));
         }
-        self.edit_index_with_interrupt(index, label, control, Some((target, anchor)), f)
+        self.edit_index_with_interrupt(index, label, control, Some((target, anchor)), false, f)
+    }
+
+    /// Publish a prepared layer target and reset the channel view at the same
+    /// document/history fence. A cancelled flatten must retain the old view.
+    pub(crate) fn edit_with_layer_target_and_channel_reset_with_interrupt<R>(
+        &mut self,
+        label: &str,
+        control: &photocraft_raster::Interrupt<'_>,
+        target: LayerTarget,
+        anchor: Option<LayerId>,
+        f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>,
+    ) -> Result<R> {
+        let index = self.active.ok_or(EngineError::NoDocument)?;
+        if self.coalesce_request.is_some() || self.color_restrict.is_some() {
+            return Err(EngineError::Other("finish transient edits before replacing layer and channel selection".into()));
+        }
+        self.edit_index_with_interrupt(index, label, control, Some((target, anchor)), true, f)
     }
 
     fn edit_index_with_interrupt<R>(
@@ -1071,6 +1108,7 @@ impl Session {
         label: &str,
         control: &photocraft_raster::Interrupt<'_>,
         target: Option<(LayerTarget, Option<LayerId>)>,
+        reset_channel_view: bool,
         f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>,
     ) -> Result<R> {
         control.check().map_err(|_| EngineError::Cancelled)?;
@@ -1154,6 +1192,9 @@ impl Session {
         st.active_layer = active;
         st.selected_layers = selected;
         st.layer_anchor = anchor;
+        if reset_channel_view {
+            st.channel_view = channel_cmds::ChannelView::default();
+        }
         channel_cmds::fix_view(st);
         st.coalesce = key;
         st.revision = revision;
