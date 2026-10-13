@@ -15,6 +15,38 @@ use crate::PhotocraftApp;
 use crate::canvas::ViewXform;
 
 #[test]
+fn focused_font_search_does_not_type_into_the_canvas_layer() {
+    let mut app = new_app();
+    let id = app.run("type.create", json!({"text": "Sample", "size": 24})).unwrap()["layer"].as_u64().unwrap();
+    app.ui.text_edit = Some(crate::state::TextEdit {
+        layer: id,
+        caret: 6,
+        anchor: 6,
+        session: "s".into(),
+        created: false,
+        mask: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+    });
+    let mut h = Harness::builder().build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            let search_id = egui::Id::new("font-search-regression");
+            let mut query = ui.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
+            ui.add(egui::TextEdit::singleline(&mut query).id(search_id)).request_focus();
+            ui.data_mut(|d| d.insert_temp(search_id, query));
+            super::handle_keys(app, ui.ctx());
+        },
+        app,
+    );
+    h.run_steps(2);
+    h.event(egui::Event::Text("Ins".into()));
+    h.run();
+    assert_eq!(h.ctx.data(|d| d.get_temp::<String>(egui::Id::new("font-search-regression"))).as_deref(), Some("Ins"));
+    assert_eq!(super::current_text(h.state_mut(), LayerId(id)).as_deref(), Some("Sample"));
+}
+
+#[test]
 fn numeric_type_fields_have_localized_accessible_names() {
     let pt = crate::i18n::Lang::from_code("pt-br").unwrap();
     let mut h = Harness::builder().build_ui_state(
@@ -1426,6 +1458,33 @@ mod multi_layer_formatting {
         }
         assert_eq!(text(h.state(), ids[2]).orientation, Orientation::Horizontal);
         assert_ne!(text(h.state(), ids[2]).antialias, AntiAlias::Sharp);
+    }
+
+    /// Other engines registering fonts and the served catalog growing (tests running in parallel)
+    /// used to move the key of the font menu's preview cache, so its samples re-rendered and asked
+    /// for a repaint every pass and `Harness::run` never settled (a flaky `exceeded max_steps`).
+    /// Here both happen on every pass.
+    #[test]
+    fn the_font_menu_settles_while_other_engines_register_fonts() {
+        let (app, _) = fixture();
+        let mut pass = 0u32;
+        let mut h = Harness::builder().with_size(vec2(1100.0, 800.0)).build_ui_state(
+            move |ui, app| {
+                photocraft_text::TextEngine::new();
+                // The served catalog is process-wide: names that sort last.
+                photocraft_text::served::add_families([format!("zz Churn Test {pass:03}")]);
+                pass = pass.saturating_add(1);
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    ui.horizontal(|ui| super::super::options_bar(app, ui));
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(4);
+        h.get_all_by_role(Role::ComboBox).next().unwrap().click();
+        h.run();
+        h.run();
     }
 
     #[test]
