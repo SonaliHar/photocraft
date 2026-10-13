@@ -1208,9 +1208,7 @@ mod tests {
         s.execute("layer.setEffectsVisible", json!({"visible": false})).unwrap();
         let hidden = pixel(&mut s);
         assert_ne!(hidden, shown, "the eye really hides the style");
-        let r = s
-            .execute("layer.layerStyle.replace", json!({"effects": [{"kind": "colorOverlay", "params": {"color": "#00ff00"}}]}))
-            .unwrap();
+        let r = s.execute("layer.layerStyle.replace", json!({"effects": [{"kind": "colorOverlay", "params": {"color": "#00ff00"}}]})).unwrap();
         assert_eq!(r["effects"], 1, "the list itself is updated");
         assert!(!list_enabled(&s), "the whole-list switch survives the edit");
         assert!(effects(&s)[0].enabled(), "the effect's own state is updated");
