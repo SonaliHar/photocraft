@@ -150,13 +150,49 @@ mod tests {
         assert!(build("other", "", creds()).is_err());
     }
 
+    /// A non-blank `PHOTOCRAFT_LIVE_SECRET` value.
+    fn live_secret(env_secret: Option<String>) -> Option<String> {
+        env_secret.filter(|v| !v.trim().is_empty())
+    }
+
+    /// Credentials for the live harness: `PHOTOCRAFT_LIVE_SECRET` when set, else the saved ones.
+    /// Errors never include the secret.
+    fn live_credentials(id: &str, env_secret: Option<String>) -> Result<photocraft_genai::Credentials, String> {
+        match live_secret(env_secret) {
+            Some(secret) => photocraft_genai::Credentials::from_secret(&secret).ok_or_else(|| "PHOTOCRAFT_LIVE_SECRET is not a usable secret".to_string()),
+            None => {
+                let secret = store::load(id)?.ok_or_else(|| format!("no credentials saved for {id} in Generative AI Settings"))?;
+                photocraft_genai::Credentials::from_secret(&secret).ok_or_else(|| "unreadable saved credentials".to_string())
+            }
+        }
+    }
+
+    #[test]
+    fn live_credentials_prefer_the_env_secret_and_never_leak_it() {
+        // Only the env branch is exercised: the id has nothing saved and the store is not read.
+        assert!(live_credentials("no-such-provider", Some("plain-key".into())).is_ok());
+        let json = r#"{"client_id":"abc","client_secret":"def"}"#;
+        assert!(live_credentials("no-such-provider", Some(json.into())).is_ok());
+        // A blank value counts as unset.
+        assert_eq!(live_secret(Some("  ".into())), None);
+        assert_eq!(live_secret(Some(String::new())), None);
+        assert_eq!(live_secret(None), None);
+        assert_eq!(live_secret(Some("k".into())).as_deref(), Some("k"));
+        // An unusable value is an error that does not repeat it.
+        let bad = "{not-json-SECRETVALUE";
+        let err = live_credentials("no-such-provider", Some(bad.into())).unwrap_err();
+        assert!(!err.contains("SECRETVALUE"), "{err}");
+    }
+
     /// Developer harness for tuning Generative Fill against the real service: runs one fill with
-    /// the key saved in Generative AI Settings and writes what was sent, the raw results and the
+    /// the key saved in Generative AI Settings (or `PHOTOCRAFT_LIVE_SECRET`) and writes what was sent, the raw results and the
     /// finished picture for each variation to a folder. Each run is billed to that key, so it is
     /// ignored unless asked for:
     ///
     /// PHOTOCRAFT_LIVE_IMAGE=photo.png PHOTOCRAFT_LIVE_RECT=x,y,w,h PHOTOCRAFT_GENAI_DUMP=dir
     /// [PHOTOCRAFT_LIVE_PROMPT=…] [PHOTOCRAFT_LIVE_COUNT=1] [PHOTOCRAFT_LIVE_MODEL=…]
+    /// [PHOTOCRAFT_LIVE_PROVIDER=<id>]
+    /// [PHOTOCRAFT_LIVE_SECRET=<key or JSON> (instead of the saved credentials)]
     /// [PHOTOCRAFT_LIVE_REPLAY=result-1.jpg,… (no request: reuse saved results)]
     /// cargo test -p photocraft --release live_fill -- --ignored --nocapture
     #[test]
@@ -175,8 +211,7 @@ mod tests {
             Some(files) => Arc::new(Replay { results: files.split(',').map(|f| std::fs::read(f.trim()).unwrap()).collect(), next: Default::default() }),
             None => {
                 let id = var("PHOTOCRAFT_LIVE_PROVIDER").unwrap_or_else(|| photocraft_genai::gemini::ID.into());
-                let secret = store::load(&id).unwrap().unwrap_or_else(|| panic!("no credentials saved for {id} in Generative AI Settings"));
-                let creds = photocraft_genai::Credentials::from_secret(&secret).expect("unreadable saved credentials");
+                let creds = live_credentials(&id, std::env::var("PHOTOCRAFT_LIVE_SECRET").ok()).unwrap();
                 build(&id, &var("PHOTOCRAFT_LIVE_MODEL").unwrap_or_default(), creds).unwrap()
             }
         };
