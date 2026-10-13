@@ -21,6 +21,8 @@ pub struct Prompt {
     /// The document the command was aimed at (`document` param, else the active one), if it has one.
     target: Option<DocId>,
     docs: Vec<DocId>,
+    /// Focus only when the document or its presentation changes, never on every modal frame.
+    last_focus: Option<(DocId, egui::ViewportId)>,
 }
 
 fn index_of(app: &PhotocraftApp, id: DocId) -> Option<usize> {
@@ -69,7 +71,7 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bool {
     if docs.is_empty() {
         return false;
     }
-    let prompt = Prompt { id: id.to_string(), params: params.clone(), target, docs };
+    let prompt = Prompt { id: id.to_string(), params: params.clone(), target, docs, last_focus: None };
     match &app.discard {
         None => ask(app, prompt),
         // Quitting overrides whatever is pending: it covers every document, so nothing is lost.
@@ -158,7 +160,7 @@ fn advance(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(Prompt { id, mut params, target, .. }) = app.discard.take() else { return };
     if id == EXIT {
         app.allow_close = true;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
         return;
     }
     if let Some(target) = target {
@@ -221,10 +223,43 @@ fn couldnt_save(e: String) -> String {
     if e == crate::file_dialog::CANCELLED { e } else { format!("Couldn't save: {e}") }
 }
 
+fn prompt_viewport(app: &PhotocraftApp, ctx: &egui::Context, doc: DocId) -> egui::ViewportId {
+    if !ctx.embed_viewports()
+        && let Some(window) = index_of(app, doc).and_then(|index| crate::document_windows::primary_window(app, index))
+        && ctx.input(|input| input.raw.viewports.get(&crate::document_windows::viewport(window)).is_some_and(|info| info.native_pixels_per_point.is_some()))
+    {
+        crate::document_windows::viewport(window)
+    } else {
+        egui::ViewportId::ROOT
+    }
+}
+
+/// Bring forward the window that actually contains the confirmation, once per pending document.
+pub(crate) fn focus_prompt(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if app.file_dialog_open() || app.save_options_open() || app.saving() {
+        if let Some(prompt) = app.discard.as_mut() {
+            prompt.last_focus = None;
+        }
+        return;
+    }
+    let Some(doc) = app.discard.as_ref().and_then(|prompt| prompt.docs.first().copied()) else { return };
+    let viewport = prompt_viewport(app, ctx, doc);
+    if let Some(prompt) = app.discard.as_mut()
+        && prompt.last_focus != Some((doc, viewport))
+    {
+        prompt.last_focus = Some((doc, viewport));
+        ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Focus);
+        ctx.request_repaint_of(viewport);
+    }
+}
+
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Save can ask for a path and then TIFF or Targa Options, and then write in the background.
     // Wait for all three; cancellation or a failed save brings us back.
     if app.file_dialog_open() || app.save_options_open() || app.saving() {
+        if let Some(prompt) = app.discard.as_mut() {
+            prompt.last_focus = None;
+        }
         return;
     }
     let Some(p) = &app.discard else { return };
@@ -235,6 +270,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         advance(app, ctx);
         return;
     };
+    let viewport = prompt_viewport(app, ctx, doc);
+    let prompt_here = ctx.viewport_id() == viewport;
+    if !prompt_here && ctx.viewport_id() != egui::ViewportId::ROOT {
+        return;
+    }
+    focus_prompt(app, ctx);
     let (title, message) = if reverts {
         ("Revert", crate::i18n::fmt(tl!("Revert “{name}” to the last saved version? Your changes will be lost."), &[("name", &name)]))
     } else {
@@ -266,34 +307,105 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut answer = ctx.input_mut(|i| buttons.iter().find(|b| b.2.is_some_and(|k| i.consume_key(egui::Modifiers::NONE, k))).map(|b| b.4));
     let labels: Vec<String> = buttons.iter().map(|b| button_label(mac, b.1, b.2)).collect();
     let row: Vec<DialogButton> = buttons.iter().zip(&labels).map(|(b, label)| DialogButton::new(b.0, label, b.3)).collect();
-    let modal = egui::Modal::new(egui::Id::new("discard-prompt")).show(ctx, |ui| {
-        ui.set_max_width(420.0);
-        ui.label(egui::RichText::new(tl!(&title)).font(crate::theme::semibold(15.0)));
-        ui.add_space(4.0);
-        crate::widgets::hairline(ui);
-        ui.add_space(8.0);
-        ui.label(message);
-        ui.add_space(12.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 10.0;
-            if let Some(role) = crate::widgets::dialog_buttons(ui, &row) {
-                answer = buttons.iter().find(|b| b.0 == role).map(|b| b.4);
-            }
-        });
-    });
-    if modal.should_close() {
+    let modal = if prompt_here {
+        egui::Modal::new(egui::Id::new("discard-prompt")).show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.label(egui::RichText::new(tl!(&title)).font(crate::theme::semibold(15.0)));
+            ui.add_space(4.0);
+            crate::widgets::hairline(ui);
+            ui.add_space(8.0);
+            ui.label(message);
+            ui.add_space(12.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                if let Some(role) = crate::widgets::dialog_buttons(ui, &row) {
+                    answer = buttons.iter().find(|b| b.0 == role).map(|b| b.4);
+                }
+            });
+        })
+    } else {
+        // Keep root panels and canvases behind the same modal input layer. Its visible buttons
+        // are in the affected native document; root accelerators still answer that same DocId.
+        egui::Modal::new(egui::Id::new("discard-prompt")).frame(egui::Frame::NONE).show(ctx, |_| {})
+    };
+    if !prompt_here && modal.backdrop_response.clicked() {
+        ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Focus);
+    }
+    let dismissed = if prompt_here {
+        modal.should_close()
+    } else {
+        // Clicking the root backdrop focuses the child instead of dismissing its prompt.
+        modal.is_top_modal && !modal.any_popup_open && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape))
+    };
+    if dismissed {
         answer = Some(Answer::Cancel);
     }
     // Enter takes the default answer, unless Tab focused a button: that one took the Enter as a click.
     if answer.is_none() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter)) {
         answer = buttons.iter().find(|b| b.0 == ButtonRole::Default).map(|b| b.4);
     }
-    match answer {
-        Some(Answer::Cancel) => app.discard = None,
-        Some(Answer::Discard) => advance(app, ctx),
-        Some(Answer::Save) if save(app, ctx, doc) => advance(app, ctx),
-        _ => {}
+    if let Some(answer) = answer {
+        apply(app, ctx, doc, answer);
     }
+}
+
+/// Acts on the answer about `doc`, the document the prompt is asking about.
+fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId, answer: Answer) {
+    match answer {
+        Answer::Cancel => app.discard = None,
+        Answer::Discard => advance(app, ctx),
+        Answer::Save if save(app, ctx, doc) => advance(app, ctx),
+        Answer::Save => {}
+    }
+}
+
+/// The id `ui.inspect` lists the prompt under; `ui.dialog.confirm` and `ui.dialog.cancel` answer
+/// it by this id, so a control client can see and answer it like the window's buttons (#4920).
+pub const CONTROL_ID: &str = "discard";
+
+/// The prompt as `ui.inspect` lists it among the dialogs: the command waiting on it, the document
+/// it asks about, how many are still to answer, and the choices `ui.dialog.confirm` takes.
+pub fn inspect(app: &PhotocraftApp) -> Option<Value> {
+    let p = app.discard.as_ref()?;
+    let doc = *p.docs.first()?;
+    let name = index_of(app, doc).and_then(|i| app.session.documents().get(i)).map(|d| d.doc.name.clone())?;
+    let reverts = p.id == "file.revert";
+    let (choices, default): (&[&str], _) = if reverts { (&["dontSave", "cancel"], "dontSave") } else { (&["save", "dontSave", "cancel"], "save") };
+    Some(json!({
+        "id": CONTROL_ID,
+        "kind": "unsavedChanges",
+        "title": if reverts { "Revert" } else { "Unsaved changes" },
+        "fields": {"command": p.id, "document": name, "remaining": p.docs.len(), "choices": choices, "default": default},
+    }))
+}
+
+/// The command the prompt holds back and its params, for the automation policy to see before a
+/// control client answers it.
+pub fn pending_command(app: &PhotocraftApp) -> Option<(String, Value)> {
+    app.discard.as_ref().map(|p| (p.id.clone(), p.params.clone()))
+}
+
+/// Answers the prompt for a control client: `save`, `dontSave` or `cancel` (Revert takes
+/// `dontSave` or `cancel`). Like the buttons, Save may first ask for a path in the save dialog.
+pub fn answer_control(app: &mut PhotocraftApp, ctx: &egui::Context, choice: &str) -> Result<Value, String> {
+    let Some(doc) = app.discard.as_ref().and_then(|p| p.docs.first().copied()) else {
+        return Err("no unsaved-changes prompt is open".into());
+    };
+    if app.file_dialog_open() || app.save_options_open() || app.saving() {
+        return Err("the unsaved-changes prompt is waiting for a save to finish".into());
+    }
+    let reverts = app.discard.as_ref().is_some_and(|p| p.id == "file.revert");
+    let answer = match choice {
+        "save" if !reverts => Answer::Save,
+        "dontSave" => Answer::Discard,
+        "cancel" => Answer::Cancel,
+        other => {
+            let choices = if reverts { "dontSave or cancel" } else { "save, dontSave or cancel" };
+            return Err(format!("unknown choice `{other}`: {choices}"));
+        }
+    };
+    apply(app, ctx, doc, answer);
+    Ok(json!({"open": app.discard.is_some(), "fileDialog": app.file_dialog_open()}))
 }
 
 #[derive(Clone, Copy)]
