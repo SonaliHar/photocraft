@@ -265,6 +265,8 @@ pub struct Interface {
     /// Command ids and the control protocol stay English.
     pub language: String,
     pub ui_font_size: UiFontSize,
+    /// Use PhotoCraft glyphs instead of gradient thumbnails in style controls.
+    pub native_gradient_icons: bool,
     pub show_channels_in_color: bool,
     pub dynamic_color_sliders: bool,
     /// Draw menu item colours set with Edit › Menus.
@@ -302,6 +304,7 @@ impl Default for Interface {
             ui_scale: UiScale::Auto,
             language: "auto".into(),
             ui_font_size: UiFontSize::Small,
+            native_gradient_icons: false,
             show_channels_in_color: false,
             dynamic_color_sliders: true,
             show_menu_colors: true,
