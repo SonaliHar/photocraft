@@ -1,6 +1,6 @@
 # Where PhotoCraft falls short of Photoshop
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (G7: Field Blur's on-canvas pins, #3373; G4: Hue Jitter amount track, #3825 partial; G4: minimum field interaction, #3825 partial; G1: CMYK Invert, Posterize and Threshold on the inks, 16-bit Lab Invert; Photoshop-oracle floor 145/258; G11: `.atn` import maps 112 events: Select and Mask, Filter Gallery Spatter, Ripple, Crystallize, Pattern Fill layers, mask targeting, Step Backward, nudges in points, Bitmap mode; G5: Free Transform H/V skew fields; G9: toolbar tool shortcut editing; refreshed against main: G2, G5, G7, G9, G10, G13, G14, G17 items that landed; G10: DPX read and write, #1049; G4: checkbox-only Brush Settings rows; G11: Load/Save Actions `.atn` landed, AUTO-219-2 partial; G5: hold-a-key spring-loaded tools landed, #2672; G1: #2465 fixed) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (G4: live Mixer Brush and same-frame live painting, #5196; G7: Field Blur's on-canvas pins, #3373; G4: Hue Jitter amount track, #3825 partial; G4: minimum field interaction, #3825 partial; G1: CMYK Invert, Posterize and Threshold on the inks, 16-bit Lab Invert; Photoshop-oracle floor 145/258; G11: `.atn` import maps 112 events: Select and Mask, Filter Gallery Spatter, Ripple, Crystallize, Pattern Fill layers, mask targeting, Step Backward, nudges in points, Bitmap mode; G5: Free Transform H/V skew fields; G9: toolbar tool shortcut editing; refreshed against main: G2, G5, G7, G9, G10, G13, G14, G17 items that landed; G10: DPX read and write, #1049; G4: checkbox-only Brush Settings rows; G11: Load/Save Actions `.atn` landed, AUTO-219-2 partial; G5: hold-a-key spring-loaded tools landed, #2672; G1: #2465 fixed) · **Target:** Adobe Photoshop 2026
 
 Every known shortfall against Photoshop 2026 (27.11.0), one entry each, ranked by user impact
 on the way to beta. This is the work list agents pick from: take the highest-ranked entry that
@@ -169,10 +169,16 @@ what an agent can't finish alone.
   pressure on Windows (#2046) and tap sensitivity (#1933); stair-stepped line weights (#1776),
   interpolation and smoothing problems (#2138), edge falloff (#2149), pixelated cursor vs
   Photoshop (#1433), brush rotation not driven by pen rotation (#1301); live preview only for
-  Brush and Eraser (TOOL-213-7); no image file as a brush tip (TOOL-213-12); per-control pressure
+  some retouch tools (Spot Healing, Background Eraser, Pattern Stamp; TOOL-213-7); no image file as a brush tip (TOOL-213-12); per-control pressure
   curves (TOOL-213-11); 4 of Photoshop's symmetry modes.
 - **Detail:** [`brush-parity.md`](brush-parity.md).
 - **Estimate:** 100–180 h. **Human:** checking feel on real tablets.
+
+- **2026-10-13 (#5196):** Mixer Brush now renders incremental blended pixels, including Sample All
+  Layers, and reuses them on release. Live brush canvas preparation follows the current frame's
+  pointer samples, removing an extra frame of latency. Synthetic tests cover pixels, carried paint,
+  undo/redo and same-frame texture freshness. Pigment mixing, tablet feel and existing performance
+  budgets remain open; the G4 estimate is unchanged.
 
 ### G5. Transform, handles and modifiers
 - **Missing:** the full interpolation list; blend mode/opacity edits during
@@ -263,6 +269,7 @@ what an agent can't finish alone.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | G4: #5196 live Mixer Brush and removal of the extra frame in live brush rendering. Estimates unchanged. |
 | 2026-10-13 | minor | G4: Hue Jitter amount-track appearance (#3825, partial); no readiness percentage or estimate changed |
 | 2026-10-13 | minor | G4: minimum inputs in Shape Dynamics and Transfer follow their Control (#3825, partial); no readiness percentage or estimate changed |
 | 2026-10-12 | minor | G5: Free Transform options bar H/V skew fields done |
