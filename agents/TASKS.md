@@ -20,19 +20,19 @@ Every PhotoCraft task also passes the AGENTS.md §5 gate for the crates it touch
 
 | ID | Status | Task | Check |
 |---|---|---|---|
-| S1 | ? | Visual Studio Build Tools (C++ workload) | `cargo build -p photocraft` links in CraftML |
+| S1 | done | Visual Studio Build Tools (C++ workload) | `cargo build -p photocraft` links in CraftML |
 | S2 | ? | `ConsentPromptBehaviorUser = 0` (auto-deny elevation) | `reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v ConsentPromptBehaviorUser` shows `0x0` |
 | S3 | ? | D: drive: deny CraftML if it holds anything personal | `dir D:\Users` as CraftML → Access denied |
 | S4 | partial | Fork `erikerikerik/photocraft` exists and is cloned in `E:\CraftML\work\photocraft` (done). Still: fine-grained token limited to the fork, branch protection on `main`. | `git push origin HEAD:main` from CraftML is refused |
-| S5 | doing | Strata: `--vram-reserve-mib` set to 1728 in `strata-iq3_s.json` (Claude, Oct 13; backup `strata-iq3_s.json.bak-1200`). Erik: restart Strata | No `WARNING: only … MiB of VRAM free` in `strata-iq3_s.log` after 5 agent turns |
-| S6 | todo | Rust ≥ 1.95 in CraftML (workspace `rust-version`) | `rustc --version` |
+| S5 | doing | Strata `--vram-reserve-mib`: 1200 → 1728 helped (idle free 662 → 1311 MiB; lowest during requests 0 → 875 MiB) but still dipped under 1024 twice, so Claude set **1920** (backup `strata-iq3_s.json.bak-1200`). Erik: restart Strata once more. | No `WARNING: only … MiB of VRAM free` in `strata-iq3_s.log` after 5 agent turns |
+| S6 | done | Rust ≥ 1.95 in CraftML (workspace `rust-version`): 1.99.0 (PC-00) | `rustc --version` |
 | S7 | todo | Turn on GitHub Actions for the fork (Settings › Actions), so PRs get CI runs that receipts can link | A PR shows checks |
 
 ## PhotoCraft fork (`erikerikerik/photocraft`)
 
 | ID | Status | Owner | Task | Depends | Test that must pass |
 |---|---|---|---|---|---|
-| PC-00 | todo | local | Baseline: build and test the fork unchanged. Record build time, test time and any failures in `agents/HANDOFF.md`. No code changes. | S1, S6 | `cargo build -p photocraft -p photocraft-cli`; `cargo xtask layers`; `cargo test -p photocraft-engine --lib --tests` |
+| PC-00 | done | local | Baseline: build and test the fork unchanged. Record build time, test time and any failures in `agents/HANDOFF.md`. No code changes. | S1, S6 | `cargo build -p photocraft -p photocraft-cli`; `cargo xtask layers`; `cargo test -p photocraft-engine --lib --tests` |
 | PC-01 | todo | Codex | `crates/engine/src/ai.rs`: `AiProvider` trait (`tasks`, `submit`, `poll`, `result`, `cancel`), request/result types (task, window RGBA f32 + `PixelFormat`, coverage mask, region, prompt), `AiError`. `Session::set_ai_provider(Option<Arc<dyn AiProvider + Send + Sync>>)`. A `FakeProvider` for tests (fills with a solid colour, can be told to fail, stall or report progress). | PC-00 | `cargo test -p photocraft-engine --lib ai`; `cargo xtask wasm` |
 | PC-02 | todo | Codex | Command `edit.generativeFill`: refactor `content_aware_fill_as` / `apply_content_aware_fill` so the fill step is pluggable, then add the AI variant that calls the provider inside `jobs::run` (poll loop checks `ctx.cancelled()` and calls `cancel`). Always writes a new layer. Catalog entry under Edit. Tests: new layer named per D1; original pixels unchanged; one undo removes it; no selection → `Err`; no provider → `Err` with "Craft AI Manager isn't running"; cancel → document unchanged; non-RGB → `Err`; provider returns wrong size → `Err`. | PC-01, D1 | `cargo test -p photocraft-engine --lib generative`; `cargo xtask parity` (commit `docs/parity-checklist.md`); `cargo test -p photocraft-engine --test panic_hunt -- --ignored` |
 | PC-03 | todo | Codex (tests: local) | New crate `crates/ai-client` (`photocraft-ai-client`, L6, native only): read `%LOCALAPPDATA%\CraftAI\endpoint.json`; HTTP/1.1 over `std::net::TcpStream` to 127.0.0.1 only; bearer token; multipart upload of `job.json` + `image.png` + `mask.png`; poll, result, DELETE on cancel; timeouts; response size caps. Register in `xtask/src/layers.rs`. Tests against an in-process fake server (`std::net::TcpListener`). | PC-01 | `cargo test -p photocraft-ai-client`; `cargo xtask layers`. Tests cover: token sent; 401 → clear error; manager absent → "not running"; oversize/malformed reply → `Err`; non-loopback address in endpoint.json → refused |
