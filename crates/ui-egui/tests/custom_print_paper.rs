@@ -100,7 +100,7 @@ fn custom_paper_ui_edits_reach_preview_and_pdf_and_restore_when_reopened() {
     assert_eq!(preview.paper, (666.0, 522.0));
     click(&mut h, "Print");
     let pdf = std::fs::read(&output).unwrap();
-    assert!(String::from_utf8_lossy(&pdf).contains("/MediaBox [0 0 666.00 522.00]"));
+    assert!(String::from_utf8_lossy(&pdf).contains("/MediaBox [0 0 666.000000 522.000000]"));
     assert_eq!(h.state().session.file_menu.last_print.as_ref().unwrap()["paper"], json!([522.0, 666.0]));
     let id = open_print(h.state_mut());
     h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("dryRun".into(), json!(true));

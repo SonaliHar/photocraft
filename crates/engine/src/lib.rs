@@ -81,6 +81,7 @@ mod param_check;
 mod path_edit_cmds;
 pub mod pattern_cmds;
 pub mod pattern_fill_cmds;
+pub mod pdf_export_cmds;
 pub mod perspective_crop_cmds;
 pub mod photo_cmds;
 pub mod pick_cmds;

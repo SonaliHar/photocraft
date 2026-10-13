@@ -900,6 +900,9 @@ mod tests {
         const SAME_AS_SOURCE: &[(&str, &str)] = &[("tr", "8 bit"), ("tr", "16 bit"), ("it", "8 bit"), ("it", "16 bit")];
         for lang in crate::i18n::Lang::all().filter(|lang| lang.code() != "en") {
             for (_, label, tooltip) in DEPTH_OPTIONS {
+                assert!(crate::i18n::has(lang, label), "{}: missing {label}", lang.code());
+                assert!(crate::i18n::has(lang, tooltip), "{}: missing {tooltip}", lang.code());
+                assert!(!crate::i18n::tr(lang, label).is_empty(), "{}: empty {label}", lang.code());
                 if SAME_AS_SOURCE.contains(&(lang.code(), *label)) {
                     assert!(crate::i18n::has(lang, label), "{}: {label}", lang.code());
                 } else {
