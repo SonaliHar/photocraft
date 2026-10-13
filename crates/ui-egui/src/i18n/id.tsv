@@ -12,6 +12,12 @@
 # Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...) stay in Latin
 # letters; the trailing "…" of dialog commands is kept.
 
+# Channel Options and New Spot Channel (#3761)
+	Channel Color	Warna Saluran
+	Color Indicates:	Warna Menunjukkan:
+	Solidity:	Soliditas:
+	Ink Characteristics	Karakteristik Tinta
+
 # Guide layout dialog
 
 # Custom print paper (#3820)
@@ -3111,3 +3117,4 @@ curves	Smooth	Haluskan
 	Step {step} is waiting for its dialog	Langkah {step} menunggu dialognya
 @plural	{n} action|{n} actions	{n} tindakan
 	Auto Add/Delete	Tambah/Hapus Otomatis
+	ICO is limited to 256 × 256 pixels	ICO dibatasi hingga 256 × 256 piksel

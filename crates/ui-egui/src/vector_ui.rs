@@ -178,14 +178,36 @@ fn pen_to_json(pen: &PenPath, closed: bool) -> Value {
     json!({"subpaths": [{"closed": closed, "knots": pen.knots.iter().enumerate().map(|(i, k)| json!({"anchor": k[0], "in": k[1], "out": k[2], "smooth": !pen.unlinked.contains(&i) && (k[1] != k[0] || k[2] != k[0])})).collect::<Vec<_>>()}]})
 }
 
+/// Is `(x, y)` on the first anchor of a Pen path that a click there would close (two anchors or
+/// more)? Its hit radius is six logical screen points under the current view transform.
+fn on_closing_anchor(pen: &PenPath, x: f64, y: f64, metric: crate::canvas::ScreenMetric) -> bool {
+    pen.knots.len() >= 2 && pen.knots.first().is_some_and(|k| metric.distance(k[0], [x, y]) < 6.0)
+}
+
+/// Would a click at `(x, y)` with `tool` close the path being drawn: the Pen over the first
+/// anchor, or the Curvature Pen over the first of three anchors or more? The canvas shows the
+/// close-path pointer there, as Photoshop does (#4596).
+pub fn closes_path_at(app: &PhotocraftApp, tool: Tool, x: f64, y: f64) -> bool {
+    let Some(pen) = app.ui.pen.as_ref().filter(|p| !p.dragging && p.moving.is_none()) else { return false };
+    match tool {
+        Tool::Pen => !pen.curvature && on_closing_anchor(pen, x, y, crate::canvas::ScreenMetric::active(app)),
+        Tool::CurvaturePen => pen.curvature && pen.knots.len() >= 3 && curvature_hit(app, x, y) == Some(0),
+        _ => false,
+    }
+}
+
 /// Pen press: close on the first anchor, reshape the last anchor's outgoing handle,
 /// or add a new anchor (dragging a new anchor pulls symmetrical handles).
 pub fn pen_down(app: &mut PhotocraftApp, x: f64, y: f64) {
+    pen_down_with_hit(app, [x, y], [x, y]);
+}
+
+/// Pick existing anchors at the raw pointer, while new anchors keep snapped placement.
+pub(crate) fn pen_down_with_hit(app: &mut PhotocraftApp, hit: [f64; 2], [x, y]: [f64; 2]) {
     let metric = crate::canvas::ScreenMetric::active(app);
     let pen = app.ui.pen.get_or_insert_with(PenPath::default);
     if let Some(first) = pen.knots.first().map(|k| k[0])
-        && pen.knots.len() >= 2
-        && metric.distance(first, [x, y]) < 6.0
+        && on_closing_anchor(pen, hit[0], hit[1], metric)
     {
         // Pressing the first anchor closes the path on release. Until then a stand-in for it
         // takes the drag, which pulls out that anchor's handles (close-drag, #3306).
@@ -198,7 +220,7 @@ pub fn pen_down(app: &mut PhotocraftApp, x: f64, y: f64) {
     // curve. Dragging from that anchor then sets the outgoing handle independently (#1482).
     // This must precede adding a point, or a re-click creates a zero-length segment.
     if let Some((i, last)) = pen.knots.len().checked_sub(1).zip(pen.knots.last_mut())
-        && metric.distance(last[0], [x, y]) < 6.0
+        && metric.distance(last[0], hit) < 6.0
     {
         last[2] = last[0];
         if !pen.unlinked.contains(&i) {
@@ -469,10 +491,15 @@ fn curvature_hit(app: &PhotocraftApp, x: f64, y: f64) -> Option<usize> {
 /// Curvature Pen press: clicking the first anchor closes the path, pressing another anchor
 /// grabs it to move, anywhere else adds a smooth anchor (still draggable until the release).
 pub fn curvature_down(app: &mut PhotocraftApp, x: f64, y: f64) {
+    curvature_down_with_hit(app, [x, y], [x, y]);
+}
+
+/// Share the raw anchor hit with the pointer cue; only newly placed geometry is snapped.
+pub(crate) fn curvature_down_with_hit(app: &mut PhotocraftApp, hit: [f64; 2], [x, y]: [f64; 2]) {
     if app.ui.pen.as_ref().is_some_and(|p| !p.curvature) {
         pen_commit(app, false);
     }
-    let hit = curvature_hit(app, x, y);
+    let hit = curvature_hit(app, hit[0], hit[1]);
     if hit == Some(0) && app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 3) {
         pen_commit(app, true);
         return;
@@ -532,6 +559,18 @@ pub fn takes_path_mask(id: &str) -> bool {
     id.starts_with("layer.newFillLayer.") || id.starts_with("layer.newAdjustmentLayer.")
 }
 
+/// The work or saved path explicitly selected in the Paths panel (not a layer's own path).
+pub fn selected_document_path(app: &PhotocraftApp) -> Option<String> {
+    let st = app.session.active()?;
+    let sel = app.ui.selected_path.as_deref()?;
+    let listed = path_rows(&st.doc, st.active_layer).iter().any(|r| match r.kind {
+        PathRow::Work => sel == "work",
+        PathRow::Saved => r.name == sel,
+        PathRow::Layer => false,
+    });
+    listed.then(|| sel.to_string())
+}
+
 /// New fill and adjustment layers take the path selected in the Paths panel as their vector mask,
 /// as in Photoshop (#1419): the command gets it as `"path"` unless the caller set one (`null`
 /// opts out). Only an explicitly selected work or saved path counts; deselect it by clicking the
@@ -540,16 +579,7 @@ pub fn with_active_path(app: &PhotocraftApp, id: &str, params: Value) -> Value {
     if !takes_path_mask(id) || params.get("path").is_some() {
         return params;
     }
-    let Some(st) = app.session.active() else { return params };
-    let Some(sel) = app.ui.selected_path.as_deref() else { return params };
-    let listed = path_rows(&st.doc, st.active_layer).iter().any(|r| match r.kind {
-        PathRow::Work => sel == "work",
-        PathRow::Saved => r.name == sel,
-        PathRow::Layer => false,
-    });
-    if !listed {
-        return params;
-    }
+    let Some(sel) = selected_document_path(app) else { return params };
     match params {
         Value::Object(mut m) => {
             m.insert("path".into(), json!(sel));
@@ -2013,6 +2043,39 @@ mod tests {
         assert_eq!((wp.subpaths[0].knots[0].anchor.x, wp.subpaths[0].knots[0].anchor.y), (30.0, 25.0));
     }
 
+    /// #4596: the close-path pointer shows where a click would close the path, and only there:
+    /// over the first anchor once the Pen has two anchors (the Curvature Pen three), not while an
+    /// anchor is being dragged.
+    #[test]
+    fn close_path_pointer_shows_where_a_click_closes() {
+        let mut app = app();
+        app.ui.tool = Tool::Pen;
+        assert!(!closes_path_at(&app, Tool::Pen, 20.0, 20.0), "no path yet");
+        pen_down(&mut app, 20.0, 20.0);
+        pen_up(&mut app);
+        assert!(!closes_path_at(&app, Tool::Pen, 20.0, 20.0), "one anchor: a click there doesn't close");
+        pen_down(&mut app, 120.0, 20.0);
+        assert!(!closes_path_at(&app, Tool::Pen, 20.0, 20.0), "not while dragging the new anchor");
+        pen_up(&mut app);
+        assert!(closes_path_at(&app, Tool::Pen, 21.0, 22.0), "over the first anchor");
+        assert!(!closes_path_at(&app, Tool::Pen, 120.0, 20.0) && !closes_path_at(&app, Tool::Pen, 60.0, 60.0), "the last anchor and empty canvas");
+        assert!(!closes_path_at(&app, Tool::CurvaturePen, 20.0, 20.0), "a Pen path isn't the Curvature Pen's");
+        pen_down(&mut app, 21.0, 22.0);
+        pen_up(&mut app);
+        assert!(app.ui.pen.is_none() && !closes_path_at(&app, Tool::Pen, 20.0, 20.0), "the click closed it");
+
+        app.ui.tool = Tool::CurvaturePen;
+        for (x, y) in [(20.0, 20.0), (120.0, 20.0)] {
+            curvature_down(&mut app, x, y);
+            curvature_up(&mut app);
+        }
+        assert!(!closes_path_at(&app, Tool::CurvaturePen, 20.0, 20.0), "two anchors: the Curvature Pen moves the first");
+        curvature_down(&mut app, 120.0, 120.0);
+        curvature_up(&mut app);
+        assert!(closes_path_at(&app, Tool::CurvaturePen, 20.0, 20.0));
+        assert!(!closes_path_at(&app, Tool::CurvaturePen, 120.0, 120.0));
+    }
+
     #[test]
     fn pen_point_undo_preserves_earlier_knots_and_document_history() {
         let mut app = app();
@@ -2183,6 +2246,203 @@ mod tests {
         let legacy: PenPath = serde_json::from_value(json!({"knots": [[[10, 10], [10, 10], [10, 10]]]})).unwrap();
         assert!(legacy.unlinked.is_empty());
         assert!(!legacy.dragging && !legacy.adjusting_last);
+    }
+
+    /// The close-path pointer and the actual canvas tool route share a six-point radius,
+    /// including corrected wide/narrow pixels, rotation and the unchanged square view.
+    #[test]
+    fn close_path_pointer_and_press_share_pixel_aspect_screen_radius() {
+        for tool in [Tool::Pen, Tool::CurvaturePen] {
+            for (preset, correction, rotation) in [
+                ("anamorphic2To1", true, 0.0),
+                ("anamorphic2To1", true, 90.0),
+                ("custom:0.5:Half", true, 0.0),
+                ("custom:0.5:Half", true, 90.0),
+                ("square", true, 0.0),
+                ("anamorphic2To1", false, 90.0),
+            ] {
+                for zoom in [0.5, 1.0, 2.0] {
+                    for direction in [egui::vec2(1.0, 0.0), egui::vec2(0.0, 1.0)] {
+                        for (distance, closes) in [(5.0, true), (7.0, false)] {
+                            let mut app = app();
+                            app.ui.tool = tool;
+                            app.ui.tool_options.vector_mode = "path".into();
+                            app.ui.extras.rulers = false;
+                            app.ui.view.pixel_aspect = preset.into();
+                            app.ui.view.pixel_aspect_correction = correction;
+                            app.ui.views[0].zoom = zoom;
+                            app.ui.views[0].rotation = rotation;
+                            app.ui.views[0].fit_pending = false;
+                            app.last_canvas_rect = egui::Rect::from_min_size(egui::pos2(20.0, 30.0), egui::vec2(640.0, 480.0));
+                            let press = |app: &mut PhotocraftApp, [x, y]: [f64; 2]| {
+                                let before_pen = app.ui.pen.clone();
+                                crate::canvas::tool_event(app, crate::canvas::ToolEvent::Down { x, y, pressure: 1.0 }, egui::Modifiers::NONE);
+                                let down_pen = app.ui.pen.clone();
+                                crate::canvas::tool_event(app, crate::canvas::ToolEvent::Up { x, y }, egui::Modifiers::NONE);
+                                (before_pen, down_pen, app.ui.pen.clone())
+                            };
+                            let anchors = [[20.0, 20.0], [120.0, 20.0], [120.0, 120.0]];
+                            let count = if tool == Tool::Pen { 2 } else { 3 };
+                            for at in anchors[..count].iter().copied() {
+                                press(&mut app, at);
+                            }
+                            let xf = crate::canvas::ViewXform::active(&app).unwrap();
+                            let [x, y] = xf.to_doc(xf.to_screen(anchors[0][0] as f32, anchors[0][1] as f32) + direction * distance);
+                            let case = format!(
+                                "[DEBUG-close-v3] {tool:?}, {preset}, correction={correction}, rotation={rotation}, zoom={zoom}, direction={direction:?}, distance={distance}, rawxy=[{x:?}, {y:?}], snap={}, pixel_grid={}, active_tool={:?}",
+                                app.ui.extras.snap,
+                                app.session.prefs().tools.snap_vector_tools_and_transforms_to_pixel_grid,
+                                app.active_tool()
+                            );
+                            assert_eq!(closes_path_at(&app, tool, x, y), closes, "{case}, before_pen={:?}", app.ui.pen);
+                            let (before_pen, down_pen, up_pen) = press(&mut app, [x, y]);
+                            assert_eq!(
+                                app.ui.pen.is_none(),
+                                closes,
+                                "the actual press/release must agree with its close pointer: {case}, before_pen={before_pen:?}, down_pen={down_pen:?}, up_pen={up_pen:?}"
+                            );
+                            let path = app.session.active().unwrap().doc.work_path.as_ref();
+                            assert_eq!(
+                                path.is_some_and(|p| p.subpaths.len() == 1 && p.subpaths[0].closed),
+                                closes,
+                                "a hit commits one closed work path; a miss keeps drawing: {case}, before_pen={before_pen:?}, down_pen={down_pen:?}, up_pen={up_pen:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn canvas_anchor_hits_use_raw_positions_when_pixel_rounding_crosses_the_radius() {
+        use crate::canvas::{ToolEvent, tool_event};
+        for tool in [Tool::Pen, Tool::CurvaturePen] {
+            for first in [true, false] {
+                for (distance, hits) in [(5.0, true), (7.0, false)] {
+                    let mut app = app();
+                    app.ui.tool = tool;
+                    app.ui.tool_options.vector_mode = "path".into();
+                    app.ui.extras.rulers = false;
+                    app.ui.view.pixel_aspect = "anamorphic2To1".into();
+                    app.ui.view.pixel_aspect_correction = true;
+                    app.ui.views[0].zoom = 2.5;
+                    app.ui.views[0].fit_pending = false;
+                    app.last_canvas_rect = Rect::from_min_size(pos2(20.0, 30.0), vec2(640.0, 480.0));
+                    assert!(app.ui.extras.snap && app.session.prefs().tools.snap_vector_tools_and_transforms_to_pixel_grid);
+                    let anchors = [[20.0, 20.0], [120.0, 20.0], [120.0, 120.0]];
+                    let count = if tool == Tool::Pen { 2 } else { 3 };
+                    for [x, y] in anchors[..count].iter().copied() {
+                        tool_event(&mut app, ToolEvent::Down { x, y, pressure: 1.0 }, egui::Modifiers::NONE);
+                        tool_event(&mut app, ToolEvent::Up { x, y }, egui::Modifiers::NONE);
+                    }
+                    let index = if first { 0 } else { count - 1 };
+                    let [ax, ay] = anchors[index];
+                    let x = ax + distance / 5.0;
+                    let metric = crate::canvas::ScreenMetric::active(&app);
+                    assert!((metric.distance([ax, ay], [x, ay]) - distance).abs() < 1e-10);
+                    // Both raw positions round to one native pixel from the anchor: five
+                    // screen points. The seven-point miss must still add a snapped anchor.
+                    assert!((metric.distance([ax, ay], [ax + 1.0, ay]) - 5.0).abs() < 1e-10);
+                    assert_eq!(closes_path_at(&app, tool, x, ay), first && hits);
+                    let history = app.session.active().unwrap().history.past_len();
+                    tool_event(&mut app, ToolEvent::Down { x, y: ay, pressure: 1.0 }, egui::Modifiers::NONE);
+                    if !first && hits {
+                        let pen = app.ui.pen.as_ref().unwrap();
+                        assert_eq!(pen.knots.len(), count);
+                        assert_eq!(pen.knots[index][0], [ax, ay]);
+                        if tool == Tool::Pen {
+                            assert!(pen.adjusting_last, "the raw last-anchor hit reshapes its handle");
+                        } else {
+                            assert_eq!(pen.moving, Some(index), "the raw nearest-anchor hit grabs it");
+                        }
+                    }
+                    tool_event(&mut app, ToolEvent::Up { x, y: ay }, egui::Modifiers::NONE);
+                    if first && hits {
+                        assert!(app.ui.pen.is_none(), "{tool:?}: the raw first-anchor hit closes");
+                        assert!(app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths[0].closed);
+                    } else {
+                        let pen = app.ui.pen.as_ref().unwrap();
+                        assert_eq!(pen.knots.len(), count + usize::from(!hits), "{tool:?}, first={first}, distance={distance}");
+                        if !hits {
+                            assert_eq!(pen.knots.last().unwrap()[0], [ax + 1.0, ay], "an outside hit still places snapped geometry");
+                        }
+                        assert!(app.session.active().unwrap().doc.work_path.is_none());
+                        assert_eq!(app.session.active().unwrap().history.past_len(), history, "draft edits do not enter document history");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn canvas_new_pen_anchors_and_drag_moves_keep_view_snap_and_pixel_rounding() {
+        use crate::canvas::{ToolEvent, tool_event};
+        for tool in [Tool::Pen, Tool::CurvaturePen] {
+            for snap in [true, false] {
+                let mut app = app();
+                app.ui.tool = tool;
+                app.ui.tool_options.vector_mode = "path".into();
+                app.ui.extras.snap = snap;
+                app.ui.views[0].zoom = 1.0;
+                app.ui.views[0].fit_pending = false;
+                let prefs = serde_json::to_value(app.session.prefs()).unwrap();
+                assert!(app.session.prefs().tools.snap_vector_tools_and_transforms_to_pixel_grid);
+                let history = app.session.active().unwrap().history.past_len();
+                let expected_x = if snap { 0.0 } else { 4.0 };
+                tool_event(&mut app, ToolEvent::Down { x: 4.4, y: 40.6, pressure: 1.0 }, egui::Modifiers::NONE);
+                assert_eq!(
+                    app.ui.pen.as_ref().unwrap().knots[0][0],
+                    [expected_x, 41.0],
+                    "{tool:?}, snap={snap}: placement keeps existing document-edge snap and pixel rounding"
+                );
+                tool_event(&mut app, ToolEvent::Move { x: 4.4, y: 50.6, pressure: 1.0 }, egui::Modifiers::NONE);
+                tool_event(&mut app, ToolEvent::Up { x: 4.4, y: 50.6 }, egui::Modifiers::NONE);
+                let pen = app.ui.pen.as_ref().unwrap();
+                assert_eq!(pen.knots.len(), 1);
+                if tool == Tool::Pen {
+                    assert_eq!(pen.knots[0], [[expected_x, 41.0], [expected_x, 31.0], [expected_x, 51.0]], "snapped drag geometry retains symmetric handles");
+                } else {
+                    assert_eq!(pen.knots[0][0], [expected_x, 51.0], "the moving Curvature anchor remains snapped");
+                    assert!(pen.moving.is_none());
+                }
+                assert!(app.session.active().unwrap().doc.work_path.is_none());
+                assert_eq!(app.session.active().unwrap().history.past_len(), history);
+                assert_eq!(serde_json::to_value(app.session.prefs()).unwrap(), prefs);
+                assert_eq!(app.ui.extras.snap, snap);
+                assert!(app.prefs_rt.snap.is_none(), "the original release clears the snap gesture");
+            }
+        }
+    }
+
+    #[test]
+    fn canvas_pen_close_drag_keeps_snapped_handles_after_a_raw_anchor_hit() {
+        use crate::canvas::{ToolEvent, tool_event};
+        let mut app = app();
+        app.ui.tool = Tool::Pen;
+        app.ui.tool_options.vector_mode = "path".into();
+        app.ui.view.pixel_aspect = "anamorphic2To1".into();
+        app.ui.view.pixel_aspect_correction = true;
+        app.ui.views[0].zoom = 1.0;
+        app.ui.views[0].fit_pending = false;
+        app.last_canvas_rect = Rect::from_min_size(pos2(20.0, 30.0), vec2(640.0, 480.0));
+        for (x, y) in [(20.0, 20.0), (120.0, 20.0)] {
+            tool_event(&mut app, ToolEvent::Down { x, y, pressure: 1.0 }, egui::Modifiers::NONE);
+            tool_event(&mut app, ToolEvent::Up { x, y }, egui::Modifiers::NONE);
+        }
+        tool_event(&mut app, ToolEvent::Down { x: 22.5, y: 20.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        assert_eq!(app.ui.pen.as_ref().unwrap().knots.last().unwrap()[0], [20.0, 20.0], "the raw hit creates the existing first-anchor stand-in");
+        tool_event(&mut app, ToolEvent::Move { x: 30.4, y: 40.6, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Up { x: 30.4, y: 40.6 }, egui::Modifiers::NONE);
+        assert!(app.ui.pen.is_none());
+        let path = app.session.active().unwrap().doc.work_path.as_ref().unwrap();
+        assert_eq!(path.subpaths.len(), 1);
+        assert!(path.subpaths[0].closed);
+        assert_eq!(path.subpaths[0].knots.len(), 2);
+        let first = &path.subpaths[0].knots[0];
+        assert_eq!([first.anchor.x, first.anchor.y], [20.0, 20.0]);
+        assert_eq!([first.in_ctrl.x, first.in_ctrl.y], [10.0, -1.0]);
+        assert_eq!([first.out_ctrl.x, first.out_ctrl.y], [30.0, 41.0]);
     }
 
     /// #1520: changing one corner through the Properties command must keep the other three
