@@ -1,4 +1,5 @@
 //! Private controlled Save Selection; raw same-depth coverage is not color math.
+use super::load_selection_controlled::canonical_selection_storage;
 use super::{ChanRef, channel_format, parameter_ref, parse_ref};
 use crate::{DocumentSnapshot, EngineError, Result, Session};
 use photocraft_color::SampleType;
@@ -127,11 +128,17 @@ fn request<'a>(session: &Session, p: &'a Value, early: bool) -> Result<Request<'
         if selection.format() != channel_format(&target.doc) {
             return Err(error("rawStorage source/destination depth mismatch"));
         }
-        if source.doc.xcf_state.is_some()
-            || target.doc.xcf_state.is_some()
-            || source.doc.source_color_context.is_some()
-            || target.doc.source_color_context.is_some()
-        {
+        if source.doc.xcf_state.is_some() || target.doc.xcf_state.is_some() {
+            if op != "replace" {
+                return Err(error("canonical rawStorage Save supports existing channel replacement only"));
+            }
+            let index = existing.ok_or_else(|| error("canonical rawStorage Save cannot create imported channels"))?;
+            let channel = target.doc.channels.get(index).ok_or_else(|| error("canonical target disappeared"))?;
+            if name.is_some_and(|name| name != channel.name) {
+                return Err(error("canonical rawStorage replacement preserves the target name"));
+            }
+            canonical_selection_storage::prepare_save(&source.doc, &target.doc, channel.id, &Interrupt::NONE)?;
+        } else if source.doc.source_color_context.is_some() || target.doc.source_color_context.is_some() {
             return Err(error("rawStorage source-carrier context is not qualified"));
         }
         if existing.and_then(|index| target.doc.channels.get(index)).is_some_and(|channel| channel.spot.is_some()) {
@@ -343,12 +350,41 @@ pub(super) fn save_selection(session: &mut Session, p: &Value) -> Result<Value> 
         true,
         move |ctx| {
             ctx.stage(0.0, 0.95, "Save Selection", |control| {
-                let raw = prepare(&work_source, &work_target, existing, &operation, control)?;
-                let surface = if raw_storage {
-                    let selection = work_source.selection.as_ref().ok_or_else(|| error("rawStorage selection disappeared"))?;
-                    super::selection_storage_controlled::copy(&work_source, &work_target, selection, channel_format(&work_target), ID, control)?
+                let proof = if raw_storage && (work_source.xcf_state.is_some() || work_target.xcf_state.is_some()) {
+                    if operation != "replace" {
+                        return Err(error("canonical rawStorage Save supports replacement only"));
+                    }
+                    let index = existing.ok_or_else(|| error("canonical saved target missing"))?;
+                    let channel = work_target.channels.get(index).ok_or_else(|| error("canonical saved target disappeared"))?;
+                    Some(canonical_selection_storage::prepare_save(&work_source, &work_target, channel.id, control)?)
                 } else {
-                    plane(&work_source, &work_target, existing, &operation, raw, control)?
+                    None
+                };
+                let surface = if let Some(proof) = &proof {
+                    let selection = work_source.selection.as_ref().ok_or_else(|| error("canonical source selection disappeared"))?;
+                    super::selection_storage_controlled::copy_canonical_save(
+                        &work_source,
+                        &work_target,
+                        selection,
+                        channel_format(&work_target),
+                        proof,
+                        ID,
+                        control,
+                    )?
+                } else {
+                    let raw = prepare(&work_source, &work_target, existing, &operation, control)?;
+                    if raw_storage {
+                        let selection = work_source.selection.as_ref().ok_or_else(|| error("rawStorage selection disappeared"))?;
+                        super::selection_storage_controlled::copy(&work_source, &work_target, selection, channel_format(&work_target), ID, control)?
+                    } else {
+                        plane(&work_source, &work_target, existing, &operation, raw, control)?
+                    }
+                };
+                let canonical_noop = if proof.as_ref().is_some_and(|proof| !proof.changes_bounds()) {
+                    let channel = existing.and_then(|index| work_target.channels.get(index)).ok_or_else(|| error("canonical no-op target disappeared"))?;
+                    super::selection_storage_controlled::equal_storage(&channel.surface, &surface, control)?
+                } else {
+                    false
                 };
                 poll(control)?;
                 let mut document = (*work_target).clone();
@@ -371,10 +407,10 @@ pub(super) fn save_selection(session: &mut Session, p: &Value) -> Result<Value> 
                 };
                 let result = json!({"channel":index,"name":document.channels.get(index).ok_or_else(||error("channel missing"))?.name,"document":di});
                 poll(control)?;
-                Ok((document, result, ctx.clone()))
+                Ok((document, result, proof, canonical_noop, ctx.clone()))
             })
         },
-        move |session, (document, result, ctx)| {
+        move |session, (document, result, proof, canonical_noop, ctx)| {
             let source = session.active().ok_or(EngineError::NoDocument)?;
             let target = session.documents().get(di).ok_or(EngineError::NoDocument)?;
             for (state, expected, revision, weak) in
@@ -397,9 +433,15 @@ pub(super) fn save_selection(session: &mut Session, p: &Value) -> Result<Value> 
             }
             ctx.stage(0.95, 1.0, "Save Selection", |control| {
                 poll(control)?;
+                if canonical_noop {
+                    return Ok(result);
+                }
                 session.edit_document_with_interrupt(di, "Save Selection", control, move |current, _| {
                     poll(control)?;
                     *current = document;
+                    if let Some(proof) = proof {
+                        proof.apply_bounds(current, control)?;
+                    }
                     Ok(())
                 })?;
                 Ok(result)

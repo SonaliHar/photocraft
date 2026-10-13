@@ -53,7 +53,7 @@ fn request(s:&Session,p:&Value)->Result<Option<Request>>{
     if sample==SampleType::U32&&percent.fract()!=0.0{return Err(bad("U32 native Levels requires whole-percent opacity"));}
     let parsed=crate::adjust_params::from_params("levels",p,None,st.doc.mode)?;
     let photocraft_doc::Adjustment::Levels{master,per_channel,space,..}=parsed else{return Err(bad("Levels parameter mismatch"))};
-    if space!=photocraft_doc::adjust::ToneSpace::Rgb||master.gamma!=1.0||per_channel.iter().any(|channel|channel.gamma!=1.0){return Err(bad("native Levels supports RGB tone space and gamma exactly one"));}
+    if space!=photocraft_doc::adjust::ToneSpace::Rgb{return Err(bad("native Levels supports RGB tone space only"));}
     if st.doc.mode==ColorMode::Grayscale&&per_channel.iter().any(|channel|*channel!=photocraft_doc::adjust::LevelsChannel::default()){return Err(bad("native Gray Levels supports the master record only; RGB channel remapping is unsupported"));}
     let request=Request{layer,opacity:percent/100.0,percent:(sample==SampleType::U32).then_some(percent as u8),master,per_channel};
     // Verify every typed table word has the proven exact rational domain before allocation.
@@ -66,8 +66,9 @@ fn cells(r:Rect)->Result<u64>{if r.is_empty(){return Ok(0)}let a=TileCoord::cont
 fn ratio(s:Option<&Surface>,x:i32,y:i32)->Result<(u32,u32)>{let Some(s)=s else{return Ok((1,1))};let sample=s.format().sample;let mut raw=[0u8;8];let bytes=raw.get_mut(..sample.bytes()).ok_or_else(||bad("selection width"))?;s.try_read_pixel_bytes(x,y,bytes).map_err(|e|bad(e.to_string()))?;
     Ok(match sample{SampleType::U8=>(*bytes.first().ok_or_else(||bad("selection width"))? as u32,255),SampleType::U16=>(u32::from(u16::from_ne_bytes((&*bytes).try_into().map_err(|_|bad("selection width"))?)),65535),SampleType::U32=>(u32::from_ne_bytes((&*bytes).try_into().map_err(|_|bad("selection width"))?),u32::MAX),SampleType::F32|SampleType::F64=>match photocraft_color::try_read_sample_f64(bytes,sample,0).map_err(|e|bad(e.to_string()))?{0.0=>(0,1),1.0=>(1,1),_=>return Err(bad("U32 Levels requires integer selection or Boolean floating coverage"))}})
 }
-const TABLE_LEN:usize=4096;
-const TABLE_SCALE:i128=1i128<<52;
+use crate::native_tone_lut::TABLE_LEN;
+#[cfg(test)]
+use crate::native_tone_lut::TABLE_SCALE;
 fn envelope(params:&Value)->Result<()>{
     if params.is_null(){return Ok(())}
     let object=params.as_object().filter(|object|object.len()<=15).ok_or_else(||bad("bounded Levels parameters required"))?;
@@ -92,9 +93,7 @@ fn visit_tables(request:&Request,control:&Interrupt<'_>,mut accept:impl FnMut(us
             // not evaluation of native source words through f32.
             let x=index as f32/(TABLE_LEN-1) as f32;
             let output=photocraft_compose::adjust::levels_q(&request.master,photocraft_compose::adjust::levels_q(record,x,None),None);
-            let exact=f64::from(output)*TABLE_SCALE as f64;
-            if !output.is_finite()||!(0.0..=1.0).contains(&output)||exact.fract()!=0.0{return Err(bad("Levels LUT word lies outside the exact 2^-52 rational domain"));}
-            accept(channel,exact as u64)?;
+            accept(channel,crate::native_tone_lut::exact_word(output).map_err(bad)?)?;
         }
     }
     poll(control)
@@ -107,33 +106,8 @@ fn tables(request:&Request,control:&Interrupt<'_>)->Result<[Vec<u64>;3]>{
     if allocated>1<<20{return Err(bad("Levels table allocator capacity exceeded admitted scratch"));}
     Ok(tables)
 }
-fn table_pair(table:&[u64],index:usize)->Result<(i128,i128)>{
-    let next=index.checked_add(1).ok_or_else(||bad("Levels table index"))?.min(TABLE_LEN-1);
-    Ok((i128::from(*table.get(index).ok_or_else(||bad("Levels table index"))?),i128::from(*table.get(next).ok_or_else(||bad("Levels table index"))?)))
-}
-fn interpolate_u32(table:&[u64],before:u32,percent:u8,selection:u32,selection_max:u32)->Result<u32>{
-    if percent>100||selection_max==0||selection>selection_max{return Err(bad("Levels coverage domain"));}
-    let max=i128::from(u32::MAX);let position=i128::from(before)*(TABLE_LEN-1) as i128;
-    let index=usize::try_from(position/max).map_err(|_|bad("Levels table index"))?;let remainder=position%max;
-    let(lower,upper)=table_pair(table,index)?;
-    // Every table word <=2^52; native position <=2^44. The final blend
-    // numerator is <2^125 even with maximum U32 coverage and percent 100.
-    let mapped=lower*(max-remainder)+upper*remainder;
-    let coverage=i128::from(percent)*i128::from(selection);let total=100*i128::from(selection_max);
-    let numerator=i128::from(before)*TABLE_SCALE*(total-coverage)+mapped*coverage;
-    let denominator=TABLE_SCALE*total;
-    let rounded=(numerator+denominator/2)/denominator;
-    u32::try_from(rounded).map_err(|_|bad("Levels native result domain"))
-}
-fn interpolate_f64(table:&[u64],before:f64,weight:f64)->Result<f64>{
-    if !before.is_finite()||!(0.0..=1.0).contains(&before)||!weight.is_finite()||!(0.0..=1.0).contains(&weight){return Err(bad("native Levels requires finite unit samples and coverage"));}
-    let position=before*(TABLE_LEN-1) as f64;let index=position.floor() as usize;let fraction=position-index as f64;
-    let(lower,upper)=table_pair(table,index)?;
-    let lower=lower as f64/TABLE_SCALE as f64;let upper=upper as f64/TABLE_SCALE as f64;
-    let left=lower*(1.0-fraction);let right=upper*fraction;let mapped=left+right;
-    let output=if weight==1.0{mapped}else{let original=before*(1.0-weight);let edited=mapped*weight;original+edited};
-    if !output.is_finite(){return Err(bad("Levels native result is nonfinite"));}Ok(output)
-}
+fn interpolate_u32(table:&[u64],before:u32,percent:u8,selection:u32,selection_max:u32)->Result<u32>{crate::native_tone_lut::interpolate_u32(table,before,percent,selection,selection_max).map_err(bad)}
+fn interpolate_f64(table:&[u64],before:f64,weight:f64)->Result<f64>{crate::native_tone_lut::interpolate_f64(table,before,weight).map_err(bad)}
 fn prepare(doc:&Document,r:&Request,c:&Interrupt<'_>)->Result<Option<Surface>>{
     let(source,area)=target(doc,r.layer,c)?;let fmt=source.format();let bpp=fmt.bytes_per_pixel();let colors=fmt.mode.color_channels();
     let limits=photocraft_io::NativeSaveLimits::default().preparation;
@@ -217,9 +191,31 @@ mod tests {
     fn native_transaction_keeps_alpha_default_source_and_real_redo_on_refusal(){
         let(mut session,id,raw)=fixture();session.edit("Seed",|doc,_|{doc.name="Seed".into();Ok(())}).unwrap();session.execute("edit.undo",Value::Null).unwrap();
         let before=session.active().unwrap().doc.clone();let revision=session.active().unwrap().revision;
-        for params in [json!({"gamma":2}),json!({"eyedropper":"black"}),json!({"documentId":before.id.0.to_string(),"expectedRevision":(revision+1).to_string()})]{assert!(try_run(&mut session,&params).is_err());assert!(session.active().unwrap().doc.shares_state(&before));assert!(session.active().unwrap().history.can_redo());}
+        for params in [json!({"outBlack":1e-20}),json!({"eyedropper":"black"}),json!({"documentId":before.id.0.to_string(),"expectedRevision":(revision+1).to_string()})]{assert!(try_run(&mut session,&params).is_err());assert!(session.active().unwrap().doc.shares_state(&before));assert!(session.active().unwrap().history.can_redo());}
         let r=request(&session,&json!({"outWhite":128})).unwrap().unwrap();let out=prepare(&before,&r,&Interrupt::NONE).unwrap().unwrap();
         let changed=out.to_interleaved(Rect::new(-1,0,0,1));assert_ne!(changed,raw);assert_eq!(changed.get(12..),raw.get(12..));assert_eq!(out.default_bytes(),before.layer(id).unwrap().surface().unwrap().default_bytes());
         let cancel=||true;assert!(matches!(prepare(&before,&r,&Interrupt::cancel_only(&cancel)),Err(EngineError::Cancelled)));
     }
+    #[test]
+    fn nonlinear_gamma_uses_original_typed_recipe_and_exact_native_interpolation(){
+        let(session,_,_)=fixture();
+        let r=request(&session,&json!({"gamma":1.75,"red":{"gamma":1.2}})).unwrap().unwrap();
+        let actual=tables(&r,&Interrupt::NONE).unwrap();
+        let adjustment=photocraft_doc::Adjustment::Levels{master:r.master.clone(),per_channel:r.per_channel.clone(),space:photocraft_doc::adjust::ToneSpace::Rgb,black:Default::default()};
+        let expected=photocraft_compose::adjust::tone_luts(&adjustment);
+        for(channel,row)in actual.iter().enumerate(){for(index,word)in row.iter().enumerate(){assert_eq!(*word as f64/TABLE_SCALE as f64,f64::from(expected[channel][index]));}}
+        let input=0.375f64;let position=input*(TABLE_LEN-1) as f64;let index=position.floor() as usize;let fraction=position-index as f64;
+        let left=f64::from(expected[0][index])*(1.0-fraction);let right=f64::from(expected[0][index+1])*fraction;
+        assert_eq!(interpolate_f64(&actual[0],input,1.0).unwrap().to_bits(),(left+right).to_bits());
+        let value=123456789u32;assert_eq!(interpolate_u32(&actual[0],value,0,u32::MAX,u32::MAX).unwrap(),value);
+    }
+    #[test]
+    fn parser_valid_nonlinear_or_tiny_table_words_can_still_refuse_exact_domain(){
+        let(session,_,_)=fixture();
+        assert!(crate::adjust_params::from_params("levels",&json!({"gamma":0.25}),None,ColorMode::Rgb).is_ok());
+        assert!(request(&session,&json!({"gamma":0.25})).is_err());
+        assert!(request(&session,&json!({"outBlack":1e-20})).is_err());
+        assert!(request(&session,&json!({"gamma":"wrong type"})).is_err());
+    }
+
 }

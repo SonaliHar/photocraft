@@ -689,6 +689,16 @@ impl Session {
         if !(params.is_object() || params.is_null()) {
             return Err(EngineError::BadParams { cmd: id.to_string(), msg: "params must be a JSON object".into() });
         }
+        // Explicit cancellation owns only unpublished imports. It must remain
+        // usable without inspecting, anchoring or repairing unrelated documents.
+        if id == "file.open.discardPending" {
+            crate::pending_open_cmds::dispatch_preflight(&params)?;
+            if let Some(gate) = self.authorize { gate(id, &params)?; }
+            self.precondition(spec, &params).map_err(|why| EngineError::Disabled(id.to_string(), why))?;
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &params)))
+                .unwrap_or_else(|_| Err(EngineError::Other("pending-open cancellation failed with an internal error".into())));
+            return result.map(Started::Done);
+        }
         if id == "document.pixel.inspect" {
             crate::inspect_pixel_cmds::dispatch_preflight(&params)?;
         }
@@ -859,6 +869,8 @@ impl Session {
         crate::native_gray_posterize_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         crate::native_raster_threshold_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         crate::native_raster_posterize_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        crate::native_gray_levels_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        crate::native_gray_curves_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         crate::native_raster_levels_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         crate::native_raster_curves_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         if matches!(id, "xcf.floating.anchor" | "xcf.floating.toLayer" | "xcf.floating.delete") {

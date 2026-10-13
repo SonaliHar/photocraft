@@ -21,6 +21,40 @@ pub(super) fn copy(
     if source.xcf_state.is_some() || target.xcf_state.is_some() || source.source_color_context.is_some() || target.source_color_context.is_some() {
         return Err(error(cmd, "rawStorage source-carrier context is not qualified"));
     }
+    copy_admitted(source, target, surface, format, cmd, ctl)
+}
+pub(super) fn copy_canonical_load(
+    source: &DocumentSnapshot,
+    target: &DocumentSnapshot,
+    surface: &Surface,
+    format: PixelFormat,
+    proof: &super::load_selection_controlled::canonical_selection_storage::LoadProof,
+    cmd: &str,
+    ctl: &Interrupt<'_>,
+) -> Result<Surface> {
+    proof.check_copy(source, target, surface, format, ctl)?;
+    copy_admitted(source, target, surface, format, cmd, ctl)
+}
+pub(super) fn copy_canonical_save(
+    source: &DocumentSnapshot,
+    target: &DocumentSnapshot,
+    surface: &Surface,
+    format: PixelFormat,
+    proof: &super::load_selection_controlled::canonical_selection_storage::SaveProof,
+    cmd: &str,
+    ctl: &Interrupt<'_>,
+) -> Result<Surface> {
+    proof.check_copy(source, target, surface, format, ctl)?;
+    copy_admitted(source, target, surface, format, cmd, ctl)
+}
+fn copy_admitted(
+    source: &DocumentSnapshot,
+    target: &DocumentSnapshot,
+    surface: &Surface,
+    format: PixelFormat,
+    cmd: &str,
+    ctl: &Interrupt<'_>,
+) -> Result<Surface> {
     if surface.format() != format || format.mode != ColorMode::Grayscale || format.alpha {
         return Err(error(cmd, "rawStorage requires identical Gray depth without alpha"));
     }
@@ -68,6 +102,37 @@ pub(super) fn copy(
     }
     poll(ctl)?;
     Ok(output)
+}
+/// Controlled exact storage equality for raw replacement no-ops, not sampled equality.
+pub(super) fn equal_storage(a: &Surface, b: &Surface, ctl: &Interrupt<'_>) -> Result<bool> {
+    poll(ctl)?;
+    let work = a
+        .resident_payload_bytes()?
+        .checked_add(b.resident_payload_bytes()?)
+        .filter(|n| *n <= 1 << 32)
+        .ok_or_else(|| error("select.saveSelection", "raw equality work limit"))?;
+    let _ = work;
+    if a.format() != b.format() || a.default_bytes() != b.default_bytes() || a.tile_count() != b.tile_count() {
+        poll(ctl)?;
+        return Ok(false);
+    }
+    for ((ap, at), (bp, bt)) in a.tiles().zip(b.tiles()) {
+        poll(ctl)?;
+        if ap != bp || at.bytes().len() != bt.bytes().len() {
+            return Ok(false);
+        }
+        if std::sync::Arc::ptr_eq(at, bt) {
+            continue;
+        }
+        for (left, right) in at.bytes().chunks(32768).zip(bt.bytes().chunks(32768)) {
+            poll(ctl)?;
+            if left != right {
+                return Ok(false);
+            }
+        }
+    }
+    poll(ctl)?;
+    Ok(true)
 }
 #[cfg(test)]
 mod tests {

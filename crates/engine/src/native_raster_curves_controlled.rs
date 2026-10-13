@@ -65,8 +65,9 @@ fn cells(r:Rect)->Result<u64>{if r.is_empty(){return Ok(0)}let a=TileCoord::cont
 fn ratio(s:Option<&Surface>,x:i32,y:i32)->Result<(u32,u32)>{let Some(s)=s else{return Ok((1,1))};let sample=s.format().sample;let mut raw=[0u8;8];let bytes=raw.get_mut(..sample.bytes()).ok_or_else(||bad("selection width"))?;s.try_read_pixel_bytes(x,y,bytes).map_err(|e|bad(e.to_string()))?;
     Ok(match sample{SampleType::U8=>(*bytes.first().ok_or_else(||bad("selection width"))? as u32,255),SampleType::U16=>(u32::from(u16::from_ne_bytes((&*bytes).try_into().map_err(|_|bad("selection width"))?)),65535),SampleType::U32=>(u32::from_ne_bytes((&*bytes).try_into().map_err(|_|bad("selection width"))?),u32::MAX),SampleType::F32|SampleType::F64=>match photocraft_color::try_read_sample_f64(bytes,sample,0).map_err(|e|bad(e.to_string()))?{0.0=>(0,1),1.0=>(1,1),_=>return Err(bad("U32 Curves requires integer selection or Boolean floating coverage"))}})
 }
-const TABLE_LEN:usize=4096;
-const TABLE_SCALE:i128=1i128<<52;
+use crate::native_tone_lut::TABLE_LEN;
+#[cfg(test)]
+use crate::native_tone_lut::TABLE_SCALE;
 fn identity(points:&[photocraft_doc::adjust::CurvePoint],pencil:bool)->bool{
     if pencil{points.len()==256&&points.iter().enumerate().all(|(index,point)|point.output==index as f32/255.0)}else{photocraft_doc::adjust::is_identity_curve(points)}
 }
@@ -106,44 +107,18 @@ fn tables(request:&Request,control:&Interrupt<'_>)->Result<[Vec<u64>;3]>{
     if original_capacity>1<<20||original.iter().any(|table|table.len()!=TABLE_LEN){return Err(bad("Curves table construction capacity exceeded fixed envelope"));}
     // Check the entire rational word domain before allocating converted tables.
     for table in original.iter().take(3){for(index,output)in table.iter().enumerate(){if index%128==0{poll(control)?;}
-        let exact=f64::from(*output)*TABLE_SCALE as f64;
-        if !output.is_finite()||!(0.0..=1.0).contains(output)||exact.fract()!=0.0{return Err(bad("Curves LUT word lies outside the exact2^-52 rational domain"));}
+        crate::native_tone_lut::exact_word(*output).map_err(bad)?;
     }}
     let mut tables:[Vec<u64>;3]=std::array::from_fn(|_|Vec::new());
     for table in &mut tables{table.try_reserve_exact(TABLE_LEN).map_err(|_|bad("Curves table allocation denied"))?;}
     for(channel,table)in original.iter().take(3).enumerate(){let destination=tables.get_mut(channel).ok_or_else(||bad("Curves table channel"))?;
-        for(index,value)in table.iter().enumerate(){if index%128==0{poll(control)?;}destination.push((f64::from(*value)*TABLE_SCALE as f64) as u64);}}
+        for(index,value)in table.iter().enumerate(){if index%128==0{poll(control)?;}destination.push(crate::native_tone_lut::exact_word(*value).map_err(bad)?);}}
     let allocated=tables.iter().try_fold(0usize,|sum,table|sum.checked_add(table.capacity().checked_mul(std::mem::size_of::<u64>())?)).ok_or_else(||bad("Curves table capacity overflow"))?;
     if allocated>1<<20{return Err(bad("Curves table allocator capacity exceeded admitted scratch"));}
     poll(control)?;Ok(tables)
 }
-fn table_pair(table:&[u64],index:usize)->Result<(i128,i128)>{
-    let next=index.checked_add(1).ok_or_else(||bad("Curves table index"))?.min(TABLE_LEN-1);
-    Ok((i128::from(*table.get(index).ok_or_else(||bad("Curves table index"))?),i128::from(*table.get(next).ok_or_else(||bad("Curves table index"))?)))
-}
-fn interpolate_u32(table:&[u64],before:u32,percent:u8,selection:u32,selection_max:u32)->Result<u32>{
-    if percent>100||selection_max==0||selection>selection_max{return Err(bad("Curves coverage domain"));}
-    let max=i128::from(u32::MAX);let position=i128::from(before)*(TABLE_LEN-1) as i128;
-    let index=usize::try_from(position/max).map_err(|_|bad("Curves table index"))?;let remainder=position%max;
-    let(lower,upper)=table_pair(table,index)?;
-    // Every table word <=2^52; native position <=2^44. The final blend
-    // numerator is <2^125 even with maximum U32 coverage and percent 100.
-    let mapped=lower*(max-remainder)+upper*remainder;
-    let coverage=i128::from(percent)*i128::from(selection);let total=100*i128::from(selection_max);
-    let numerator=i128::from(before)*TABLE_SCALE*(total-coverage)+mapped*coverage;
-    let denominator=TABLE_SCALE*total;
-    let rounded=(numerator+denominator/2)/denominator;
-    u32::try_from(rounded).map_err(|_|bad("Curves native result domain"))
-}
-fn interpolate_f64(table:&[u64],before:f64,weight:f64)->Result<f64>{
-    if !before.is_finite()||!(0.0..=1.0).contains(&before)||!weight.is_finite()||!(0.0..=1.0).contains(&weight){return Err(bad("native Curves requires finite unit samples and coverage"));}
-    let position=before*(TABLE_LEN-1) as f64;let index=position.floor() as usize;let fraction=position-index as f64;
-    let(lower,upper)=table_pair(table,index)?;
-    let lower=lower as f64/TABLE_SCALE as f64;let upper=upper as f64/TABLE_SCALE as f64;
-    let left=lower*(1.0-fraction);let right=upper*fraction;let mapped=left+right;
-    let output=if weight==1.0{mapped}else{let original=before*(1.0-weight);let edited=mapped*weight;original+edited};
-    if !output.is_finite(){return Err(bad("Curves native result is nonfinite"));}Ok(output)
-}
+fn interpolate_u32(table:&[u64],before:u32,percent:u8,selection:u32,selection_max:u32)->Result<u32>{crate::native_tone_lut::interpolate_u32(table,before,percent,selection,selection_max).map_err(bad)}
+fn interpolate_f64(table:&[u64],before:f64,weight:f64)->Result<f64>{crate::native_tone_lut::interpolate_f64(table,before,weight).map_err(bad)}
 fn prepare(doc:&Document,r:&Request,c:&Interrupt<'_>)->Result<Option<Surface>>{
     let(source,area)=target(doc,r.layer,c)?;let fmt=source.format();let bpp=fmt.bytes_per_pixel();let colors=fmt.mode.color_channels();
     let limits=photocraft_io::NativeSaveLimits::default().preparation;

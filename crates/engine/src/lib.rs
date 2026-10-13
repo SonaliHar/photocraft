@@ -87,7 +87,11 @@ mod native_raster_threshold_controlled;
 mod native_raster_posterize_controlled;
 mod native_raster_levels_controlled;
 mod native_raster_curves_controlled;
+mod native_tone_lut;
+mod native_gray_levels_controlled;
+mod native_gray_curves_controlled;
 mod held_import_controlled;
+mod pending_open_cmds;
 pub(crate) mod native_gray_threshold_controlled;
 pub(crate) mod native_gray_posterize_controlled;
 pub mod layer_nav_cmds;
@@ -821,6 +825,31 @@ impl Session {
     /// whether its source is read-only. `None` when there is no such document (already taken).
     pub fn take_held_open(&mut self, id: u64) -> Option<(Document, bool)> {
         self.take_held_open_with_origin(id).map(|(doc, read_only, _)| (doc, read_only))
+    }
+
+    /// Borrow a held import for fallible destination admission before transferring ownership.
+    pub fn held_open_with_origin(&self, id: u64) -> Option<(&Document, bool, Option<photocraft_io::ImportOrigin>)> {
+        let (_, doc, read_only, origin) = self.held_opens.iter().find(|(held, _, _, _)| *held == id)?;
+        Some((doc, *read_only, *origin))
+    }
+
+    /// Decoded imports that have not transferred to a document or UI profile queue.
+    pub fn held_open_count(&self) -> usize {
+        self.held_opens.len()
+    }
+
+    /// Discard only the private unopened import the user explicitly cancelled.
+    pub fn discard_held_open(&mut self, id: u64) -> bool {
+        let Some(index) = self.held_opens.iter().position(|(held, _, _, _)| *held == id) else { return false };
+        self.held_opens.remove(index);
+        true
+    }
+
+    /// Cancel private pending imports; existing document tabs/history are untouched.
+    pub fn discard_held_opens(&mut self) -> usize {
+        let count = self.held_opens.len();
+        self.held_opens.clear();
+        count
     }
 
     /// Import identity accompanies the private document through the profile queue.

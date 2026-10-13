@@ -1159,6 +1159,12 @@ fn build() -> Vec<CommandSpec> {
                 if kind == "posterize" && let Some(value) = crate::native_raster_posterize_controlled::try_run(s, p)? {
                     return Ok(value);
                 }
+                if kind == "levels" && let Some(value) = crate::native_gray_levels_controlled::try_run(s, p)? {
+                    return Ok(value);
+                }
+                if kind == "curves" && let Some(value) = crate::native_gray_curves_controlled::try_run(s, p)? {
+                    return Ok(value);
+                }
                 if kind == "levels" && let Some(value) = crate::native_raster_levels_controlled::try_run(s, p)? {
                     return Ok(value);
                 }
@@ -1228,6 +1234,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::extra_cmds::specs());
     v.extend(crate::background_cmds::specs());
     v.extend(crate::file_cmds::specs());
+    v.extend(crate::pending_open_cmds::specs());
     v.extend(crate::exr_cmds::specs());
     v.extend(crate::type_extra_cmds::specs());
     v.extend(crate::type_styles_cmds::specs());

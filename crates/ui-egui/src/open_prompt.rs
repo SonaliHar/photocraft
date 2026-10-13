@@ -39,6 +39,96 @@ pub struct Held {
     pub policy_applied: bool,
 }
 
+/// Prepared metadata separated from document ownership for atomic queue transfer.
+pub(crate) struct HeldMetadata {
+    pub origin: Option<photocraft_io::ImportOrigin>,
+    pub read_only: bool,
+    pub name: String,
+    pub path: Option<String>,
+    pub warnings: Vec<String>,
+    pub bytes: Option<Arc<Vec<u8>>>,
+    pub slot: Option<usize>,
+    pub question: Option<Value>,
+    pub policy_applied: bool,
+}
+impl HeldMetadata {
+    fn with_document(self, doc: Document) -> Held {
+        Held {
+            doc,
+            origin: self.origin,
+            read_only: self.read_only,
+            name: self.name,
+            path: self.path,
+            warnings: self.warnings,
+            bytes: self.bytes,
+            slot: self.slot,
+            question: self.question,
+            policy_applied: self.policy_applied,
+        }
+    }
+}
+/// An already-admitted reserved queue slot. Internal callers must transfer the
+/// exact borrowed candidate immediately, without intervening queue changes.
+pub(crate) struct PreparedArrival {
+    admission: control::Admission,
+    count: usize,
+}
+pub(crate) fn prepare_arrival(
+    queue: &mut std::collections::VecDeque<Held>,
+    doc: &Document,
+    metadata: &HeldMetadata,
+    clone_candidate: bool,
+    interrupt: &photocraft_raster::Interrupt<'_>,
+) -> Result<PreparedArrival, String> {
+    let admission = control::prepare(queue, control::Entry::metadata(doc, metadata), clone_candidate, interrupt)?;
+    queue.try_reserve_exact(1).map_err(|_| "could not prepare this file for opening".to_string())?;
+    admission.check_capacity(queue.capacity(), interrupt)?;
+    Ok(PreparedArrival { admission, count: queue.len() })
+}
+impl PreparedArrival {
+    pub(crate) fn recheck(&self, queue: &std::collections::VecDeque<Held>, interrupt: &photocraft_raster::Interrupt<'_>) -> Result<(), String> {
+        if queue.len() != self.count {
+            return Err("pending files changed before opening".into());
+        }
+        self.admission.check_capacity(queue.capacity(), interrupt)
+    }
+    /// Ownership moves only after the final preparation fence. No second
+    /// admission/serialization/clone can fail between transfer and queue push.
+    pub(crate) fn commit(self, app: &mut PhotocraftApp, doc: Document, metadata: HeldMetadata) {
+        app.held_opens.push_back(metadata.with_document(doc));
+        advance(app);
+    }
+}
+pub(crate) fn copy_string(source: &str) -> Result<String, String> {
+    control::string(source, &photocraft_raster::Interrupt::NONE)
+}
+pub(crate) fn copy_question(question: Option<&Value>) -> Result<Option<Value>, String> {
+    control::question(question, &photocraft_raster::Interrupt::NONE)
+}
+pub(crate) fn copy_warnings(value: Option<&Value>) -> Result<Vec<String>, String> {
+    let Some(items) = value.and_then(Value::as_array) else { return Ok(Vec::new()) };
+    if items.len() > 100_000 {
+        return Err("pending import warnings exceed model census limits".into());
+    }
+    let mut total = (items.len() as u64).checked_mul(std::mem::size_of::<String>() as u64).ok_or("pending import warning size overflow")?;
+    for item in items {
+        if let Some(text) = item.as_str() {
+            total = total
+                .checked_add(text.len() as u64)
+                .filter(|bytes| *bytes <= photocraft_raster::MAX_CHECKED_RASTER_BYTES)
+                .ok_or("pending import warnings exceed resident limits")?;
+        }
+    }
+    let mut warnings = Vec::new();
+    warnings.try_reserve_exact(items.len()).map_err(|_| "pending import warning allocation failed".to_string())?;
+    for item in items {
+        if let Some(text) = item.as_str() {
+            warnings.push(copy_string(text)?);
+        }
+    }
+    Ok(warnings)
+}
+
 /// Whether a file that just finished reading has to wait: one earlier in the queue does.
 pub fn waiting(app: &PhotocraftApp) -> bool {
     !app.held_opens.is_empty()
@@ -57,15 +147,15 @@ pub(crate) fn arrive_checked(app: &mut PhotocraftApp, held: Held) -> Result<(), 
     if waiting(app) || held.question.is_some() {
         arrive_with_interrupt(app, held, &photocraft_raster::Interrupt::NONE)
     } else {
-        control::prepare(&app.held_opens, &held, &photocraft_raster::Interrupt::NONE)?;
+        control::prepare(&app.held_opens, control::Entry::held(&held), false, &photocraft_raster::Interrupt::NONE)?;
         open(app, held, None).map(|_| ())
     }
 }
 
 /// Controlled queue preparation; cancellation/refusal never publishes a new held file.
 pub(crate) fn arrive_with_interrupt(app: &mut PhotocraftApp, held: Held, interrupt: &photocraft_raster::Interrupt<'_>) -> Result<(), String> {
-    let admission = control::prepare(&app.held_opens, &held, interrupt)?;
-    app.held_opens.try_reserve_exact(1).map_err(|_| "pending import queue allocation failed".to_string())?;
+    let admission = control::prepare(&app.held_opens, control::Entry::held(&held), false, interrupt)?;
+    app.held_opens.try_reserve_exact(1).map_err(|_| "could not prepare this file for opening".to_string())?;
     admission.check_capacity(app.held_opens.capacity(), interrupt)?;
     app.held_opens.push_back(held);
     advance(app);
@@ -126,18 +216,20 @@ pub fn owns(fields: &serde_json::Map<String, Value>) -> bool {
 /// the next; `None` (Cancel) drops every queued file and stops the reads still running.
 pub fn answer(app: &mut PhotocraftApp, action: Option<&str>) -> Result<Value, String> {
     let Some(action) = action else {
-        let dropped = app.held_opens.len();
+        let dropped = app.held_opens.len().checked_add(app.session.held_open_count()).ok_or("pending import cancellation count overflow")?;
+        let response = json!({"cancelled": dropped});
         let name = match app.held_opens.front() {
             Some(held) => control::string(&held.name, &photocraft_raster::Interrupt::NONE)?,
             None => String::new(),
         };
+        app.run("file.open.discardPending", json!({}))?;
         app.held_opens.clear();
         for open in &app.jobs.opens {
             app.session.cancel_job(open.job);
         }
         app.ui.status = crate::i18n::fmt(tl!("Cancelled opening {name}"), &[("name", &name)]);
         app.ui.status_error = false;
-        return Ok(json!({"cancelled": dropped}));
+        return Ok(response);
     };
     let Some(held) = app.held_opens.pop_front() else { return Err("no file is waiting to open".into()) };
     let r = open(app, held, Some(action));

@@ -1,4 +1,6 @@
 //! Frozen Load Selection. Explicit native unit coverage is separate from legacy GRAY8.
+#[path="canonical_selection_storage.rs"]
+pub(super) mod canonical_selection_storage;
 use super::{ChanRef,SnapshotSource,bad,source_dimensions,source_reference,source_owner,source_from_snapshot_with_interrupt};
 use crate::{DocumentSnapshot,EngineError,Result,Session};
 use photocraft_algo::selection::SelectionMode;
@@ -60,7 +62,12 @@ fn request(session:&Session,value:&Value,allow_normalize:bool)->Result<Request>{
     if target.revision==u64::MAX||session.has_jobs()||session.command_has_pending_job()||session.coalesce_request.is_some()||session.color_restrict.is_some(){return Err(bad(CMD,"finish jobs/coalescing before Load Selection"));}
     if native{
         if !matches!(channel,ChanRef::Alpha(_)|ChanRef::QuickMask|ChanRef::LayerMask){return Err(bad(CMD,"nativeCoverage supports only plain saved Gray channels or native layer masks"));}
-        if source.doc.xcf_state.is_some()||target.doc.xcf_state.is_some(){return Err(bad(CMD,"retained source coverage context is not qualified"));}
+        if source.doc.xcf_state.is_some()||target.doc.xcf_state.is_some(){
+            if !raw_storage{return Err(bad(CMD,"retained source coverage context is not qualified"));}
+            let ChanRef::Alpha(index)=channel else{return Err(bad(CMD,"canonical raw transfer requires a saved channel"));};
+            let id=source.doc.channels.get(index).ok_or_else(||bad(CMD,"missing source channel"))?.id;
+            canonical_selection_storage::prepare(&source.doc,&target.doc,id,&Interrupt::NONE)?;
+        }
     }else if matches!(source.doc.depth,SampleType::U32|SampleType::F64)||matches!(target.doc.depth,SampleType::U32|SampleType::F64)
         ||target.doc.selection.as_ref().is_some_and(|s|matches!(s.format().sample,SampleType::U32|SampleType::F64)){
         return Err(bad(CMD,"wide coverage requires explicit nativeCoverage unit context"));
@@ -160,17 +167,26 @@ fn legacy_result(old:Option<&Surface>,plane:&[f32],area:Rect,mode:SelectionMode,
         }}output.try_write_interleaved_with(part,&encoded,ctl).map_err(|e|failure(e,ctl))?;
     }output.try_prune_with(ctl).map_err(|e|failure(e,ctl))?;poll(ctl)?;Ok(if nonzero{Some(output)}else{None})
 }
-fn stage(source:&DocumentSnapshot,target:&DocumentSnapshot,active:Option<LayerId>,request:Request,ctl:&Interrupt<'_>)->Result<Option<Surface>>{
+fn stage(source:&DocumentSnapshot,target:&DocumentSnapshot,active:Option<LayerId>,request:Request,ctl:&Interrupt<'_>)->Result<(Option<Surface>,Option<canonical_selection_storage::LoadProof>)>{
     prepare(source,target,active,request,ctl)?;let area=target.bounds();
-    if request.raw_storage{let surface=native_source(source,active,request,ctl)?;Ok(Some(super::selection_storage_controlled::copy(source,target,surface,surface.format(),CMD,ctl)?))}
-    else if request.native{Ok(Some(native_result(native_source(source,active,request,ctl)?,target.selection.as_ref(),area,request,ctl)?))}
-    else{let mut planes=source_from_snapshot_with_interrupt(source,active,request.source,CMD,ctl)?;if planes.len()!=1{return Err(bad(CMD,"source must yield one coverage plane"));}let plane=planes.pop().ok_or_else(||bad(CMD,"missing source plane"))?;legacy_result(target.selection.as_ref(),&plane,area,request.mode,ctl)}
+    if request.raw_storage{
+        let surface=native_source(source,active,request,ctl)?;
+        if source.xcf_state.is_some()||target.xcf_state.is_some(){
+            let ChanRef::Alpha(index)=request.source.channel else{return Err(bad(CMD,"canonical raw source must be saved channel"));};
+            let id=source.channels.get(index).ok_or_else(||bad(CMD,"source channel disappeared"))?.id;
+            let proof=canonical_selection_storage::prepare(source,target,id,ctl)?;
+            let output=super::selection_storage_controlled::copy_canonical_load(source,target,surface,surface.format(),&proof,CMD,ctl)?;
+            Ok((Some(output),Some(proof)))
+        }else{Ok((Some(super::selection_storage_controlled::copy(source,target,surface,surface.format(),CMD,ctl)?),None))}
+    }
+    else if request.native{Ok((Some(native_result(native_source(source,active,request,ctl)?,target.selection.as_ref(),area,request,ctl)?),None))}
+    else{let mut planes=source_from_snapshot_with_interrupt(source,active,request.source,CMD,ctl)?;if planes.len()!=1{return Err(bad(CMD,"source must yield one coverage plane"));}let plane=planes.pop().ok_or_else(||bad(CMD,"missing source plane"))?;legacy_result(target.selection.as_ref(),&plane,area,request.mode,ctl).map(|selection|(selection,None))}
 }
 pub(super) fn run(session:&mut Session,value:&Value)->Result<Value>{
     let request=request(session,value,false)?;let target=session.active().ok_or(EngineError::NoDocument)?;let original=target.doc.clone();let revision=target.revision;let weak=original.downgrade();
     let source_state=session.documents().get(request.source_index).ok_or_else(||bad(CMD,"source disappeared"))?;let source=source_state.doc.clone();let source_revision=source_state.revision;let source_weak=source.downgrade();let active=source_state.active_layer;
     let target_work=original.clone();let source_work=source.clone();let label=match request.source.channel{ChanRef::Transparency=>"Load Transparency",ChanRef::LayerMask=>"Load Layer Mask",_=>"Load Selection"};
-    crate::jobs::run(session,label,true,move|ctx|ctx.stage(0.0,0.95,label,|ctl|{let selection=stage(&source_work,&target_work,active,request,ctl)?;Ok((selection,ctx.clone()))}),move|session,(selection,ctx)|{
+    crate::jobs::run(session,label,true,move|ctx|ctx.stage(0.0,0.95,label,|ctl|{let selection=stage(&source_work,&target_work,active,request,ctl)?;Ok((selection,ctx.clone()))}),move|session,((selection,proof),ctx)|{
         let current=session.active().ok_or(EngineError::NoDocument)?;
         let source_current=session.documents().iter().find(|state|state.doc.id==source.id).ok_or_else(||bad(CMD,"source closed while preparing selection"))?;
         if current.doc.id!=original.id||current.revision!=revision||!weak.is_current(&current.doc)||!current.doc.shares_state(&original)||current.floating.is_some()||current.coalesce.is_some()
@@ -178,8 +194,8 @@ pub(super) fn run(session:&mut Session,value:&Value)->Result<Value>{
             ||(request.source.layer.is_none()&&matches!(request.source.channel,ChanRef::LayerMask|ChanRef::Transparency|ChanRef::VectorMask)&&source_current.active_layer!=active)
             ||session.command_has_job_on(current.doc.id)||session.command_has_job_on(source_current.doc.id)
             ||session.coalesce_request.is_some()||session.color_restrict.is_some(){return Err(bad(CMD,"source or target changed while preparing selection"));}
-        ctx.stage(0.95,1.0,label,|ctl|{poll(ctl)?;let selected=selection.is_some();if original.selection.as_ref()==selection.as_ref(){return Ok(json!({"selected":selected}));}
-            session.edit_with_interrupt(label,ctl,move|doc,_|{poll(ctl)?;doc.selection=selection;Ok(())})?;Ok(json!({"selected":selected}))
+        ctx.stage(0.95,1.0,label,|ctl|{poll(ctl)?;let selected=selection.is_some();if proof.as_ref().is_none_or(|proof|!proof.changes_bounds())&&original.selection.as_ref()==selection.as_ref(){return Ok(json!({"selected":selected}));}
+            session.edit_with_interrupt(label,ctl,move|doc,_|{poll(ctl)?;doc.selection=selection;if let Some(proof)=proof{proof.apply_bounds(doc,ctl)?;}Ok(())})?;Ok(json!({"selected":selected}))
         })
     })
 }

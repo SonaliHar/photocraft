@@ -1628,6 +1628,20 @@ fn save_selection(s: &mut Session, p: &Value) -> Result<Value> {
 
 mod load_selection_controlled;
 
+/// Conservative metadata-only raw Load candidates for one captured same-document dialog.
+/// Dispatch still validates actual canonical storage/locks and captured revision; these IDs
+/// provide no source qualification, mutation permission, profile alias, or resource grant.
+pub fn raw_load_storage_hints(document:&crate::DocumentSnapshot,control:&photocraft_raster::Interrupt<'_>)->Result<Vec<photocraft_doc::item_identity::ChannelId>> {
+    load_selection_controlled::canonical_selection_storage::hints(document,control)
+}
+
+/// Conservative same-document raw Save replacement candidates, computed only from metadata.
+/// The existing canonical selection is the source; returned saved IDs grant neither imported
+/// creation nor renaming, and dispatch still validates storage/locks/revision independently.
+pub fn raw_save_storage_hints(document:&crate::DocumentSnapshot,control:&photocraft_raster::Interrupt<'_>)->Result<Vec<photocraft_doc::item_identity::ChannelId>> {
+    load_selection_controlled::canonical_selection_storage::save_hints(document,control)
+}
+
 pub(crate) fn load_selection_dispatch_preflight(s: &Session, p: &Value, background: bool) -> Result<()> {
     load_selection_controlled::dispatch_preflight(s, p, background)
 }

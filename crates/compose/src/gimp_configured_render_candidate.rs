@@ -1,6 +1,9 @@
 //! Explicit native ROI candidate. Not wired into qualified/default rendering.
 //! Source pixels must already be in the caller's exact working profile/transfer.
 use super::gimp_configured_candidate::{SourceBinding, bind_source_node_with_sample_policy};
+
+#[path = "gimp_configured_native_cells.rs"]
+mod native_cells;
 use photocraft_algo::gimp::configured::{CurveSamplePolicy, Limits, WorkingContext};
 use photocraft_color::{
     ColorMode,
@@ -156,6 +159,7 @@ pub(crate) fn render_prepared_window(
     let format = source.format();
     let bpp = format.bytes_per_pixel();
     let colors = actual.color_channels;
+    let mut native_cells = native_cells::NativeCells::new(scratch, control)?;
     let mut prepaid = Prepaid { bytes: output_bytes, work: work_units };
     let mut builder = StagedSurfaceBuilder::new(format, source.default_bytes(), roi, &mut prepaid, control)?;
     // Fixed64px cells are the builder's coverage unit; intersect edge cells.
@@ -173,10 +177,7 @@ pub(crate) fn render_prepared_window(
                 if part.is_empty() {
                     continue;
                 }
-                let mut raw = source.try_read_interleaved_with(part, control)?;
-                if raw.capacity() as u64 > scratch {
-                    return Err(RasterInputError::LimitExceeded);
-                }
+                let raw = native_cells.read(source, part, control)?;
                 for native in raw.chunks_exact_mut(bpp) {
                     poll(control)?;
                     prepaid.work(4096)?;
@@ -222,7 +223,7 @@ pub(crate) fn render_prepared_window(
                     }
                     native.copy_from_slice(encoded);
                 }
-                builder.push_region(part, &raw, &mut prepaid, control)?;
+                builder.push_region(part, raw, &mut prepaid, control)?;
             }
         }
     }

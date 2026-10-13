@@ -545,41 +545,53 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
 /// What [`crate::PhotocraftApp::open_bytes`] does after decoding, for a background open's result
 /// (`{document, warnings, color}`).
 fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Value, slot: Option<usize>) -> Result<(), String> {
-    let mut warnings: Vec<String> =
-        v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    let mut warnings = crate::open_prompt::copy_warnings(v.get("warnings"))?;
     crate::import_assessment_ui::append_json(&mut warnings, v.get("assessment"));
-    let held = |doc, read_only, question, policy_applied, origin| crate::open_prompt::Held {
-        doc,
-        origin,
-        read_only,
-        name: name.to_string(),
-        path: path.map(str::to_string),
-        warnings: warnings.clone(),
-        bytes: None,
-        slot,
-        question,
-        policy_applied,
-    };
-    // Held back for the profile prompt (Ask When Opening).
+    // Admission and metadata preparation precede any ownership removal. A
+    // refusal leaves the engine-held import or live tab/history/source intact.
     if let Some(id) = v.get("held").and_then(Value::as_u64) {
-        let (doc, read_only, origin) = app.session.take_held_open_with_origin(id).ok_or("the open job's document is gone")?;
-        crate::open_prompt::arrive(app, held(doc, read_only, v.get("color").cloned(), false, origin));
+        let (doc, read_only, origin) = app.session.held_open_with_origin(id).ok_or("the open job's document is gone")?;
+        let metadata = crate::open_prompt::HeldMetadata {
+            origin,
+            read_only,
+            name: crate::open_prompt::copy_string(name)?,
+            path: path.map(crate::open_prompt::copy_string).transpose()?,
+            warnings,
+            bytes: None,
+            slot,
+            question: crate::open_prompt::copy_question(v.get("color"))?,
+            policy_applied: false,
+        };
+        let ticket = crate::open_prompt::prepare_arrival(&mut app.held_opens, doc, &metadata, false, &photocraft_raster::Interrupt::NONE)?;
+        ticket.recheck(&app.held_opens, &photocraft_raster::Interrupt::NONE)?;
+        let (doc, _, _) = app.session.take_held_open_with_origin(id).ok_or("the open job's document is gone")?;
+        ticket.commit(app, doc, metadata);
         return Ok(());
     }
-    let mut index = v.get("document").and_then(Value::as_u64).ok_or("the open job returned no document")? as usize;
-    // An earlier file is waiting on its prompt: this one opens after it, in order.
+    let mut index = v.get("document").and_then(Value::as_u64).and_then(|id| usize::try_from(id).ok()).ok_or("the open job returned no document")?;
     if crate::open_prompt::waiting(app)
         && let Some(st) = app.session.documents().get(index)
     {
-        // Do not detach accounted authority or close the tab before the legacy
-        // profile queue can own a resident document successfully.
-        let doc = st.doc.resident_arc().ok_or("profile prompt queue requires a resident document")?.as_ref().clone();
-        let read_only = st.source_read_only;
-        let origin = st.source.as_ref().map(|source| source.origin);
-        if app.session.close(index).is_some() {
-            crate::open_prompt::arrive(app, held(doc, read_only, None, true, origin));
-            return Ok(());
-        }
+        let original = st.doc.resident_arc().ok_or("profile prompt queue requires a resident document")?;
+        let metadata = crate::open_prompt::HeldMetadata {
+            origin: st.source.as_ref().map(|source| source.origin),
+            read_only: st.source_read_only,
+            name: crate::open_prompt::copy_string(name)?,
+            path: path.map(crate::open_prompt::copy_string).transpose()?,
+            warnings,
+            bytes: None,
+            slot,
+            question: None,
+            policy_applied: true,
+        };
+        // Generic Document clone still uses its legacy allocator, but the
+        // model/payload/map census and simultaneous clone headroom come first.
+        let ticket = crate::open_prompt::prepare_arrival(&mut app.held_opens, original, &metadata, true, &photocraft_raster::Interrupt::NONE)?;
+        let doc = original.as_ref().clone();
+        ticket.recheck(&app.held_opens, &photocraft_raster::Interrupt::NONE)?;
+        app.session.close(index).ok_or("the open job's document is gone")?;
+        ticket.commit(app, doc, metadata);
+        return Ok(());
     }
     if let Some(slot) = slot
         && let Ok(moved) = app.run("document.move", json!({"document": index, "to": slot}))
@@ -689,7 +701,15 @@ pub fn save_progress(app: &PhotocraftApp, doc: DocId) -> Option<String> {
 /// The status bar's job readout: "Gaussian Blur ▬▬▬▭▭ 45 %  ×", and for a save "Saving 45% ▬▬▬▭▭  ×"
 /// (the file name on hover). Draws nothing when no job runs.
 pub fn status_progress(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let Some(j) = job_in_view(app) else { return };
+    let Some(j) = job_in_view(app) else {
+        if app.session.held_open_count() > 0 && !app.session.has_jobs()
+            && crate::widgets::secondary_button(ui, tl!("Cancel Failed Opens"), 180.0).clicked()
+        {
+            // Explicit cancellation only; failed admission never discards data.
+            let _ = app.run("file.open.discardPending", json!({}));
+        }
+        return;
+    };
     let saving = app.jobs.saves.iter().any(|s| s.job == j.id);
     let t = Tokens::get(ui.ctx());
     let (bar_w, bar_h) = if t.pro { (120.0, 6.0) } else { (140.0, 6.0) };
