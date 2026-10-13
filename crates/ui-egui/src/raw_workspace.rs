@@ -214,6 +214,8 @@ pub struct Prefetch {
     /// What the host asked for last (path, signature); anything else that finishes is thrown away.
     want: Option<(String, String)>,
     ready: Option<Prepared>,
+    /// What the prefetch thread is developing right now (path, signature).
+    in_flight: Option<(String, String)>,
 }
 
 pub type SharedPrefetch = std::sync::Arc<std::sync::Mutex<Prefetch>>;
@@ -224,6 +226,29 @@ pub fn take_prepared(shared: &SharedPrefetch, path: &str, signature: Option<&str
     let mut slot = shared.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let ready = slot.ready.take()?;
     (ready.path == path && signature == Some(ready.signature.as_str())).then_some(ready)
+}
+
+/// For an `app.open` that found nothing ready: if this very photo is being developed ahead of time right now, wait for
+/// that instead of developing it a second time beside it (the two then fought over the cores, and an open that arrived
+/// half a second after the prefetch started took longer than with no prefetch at all). `None` when nothing is in flight
+/// for it, the prefetch came to nothing, or `give_up` says to stop.
+pub fn wait_prepared(shared: &SharedPrefetch, path: &str, signature: &str, give_up: impl Fn() -> bool) -> Option<Prepared> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        {
+            let mut slot = shared.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if slot.ready.as_ref().is_some_and(|ready| ready.path == path && ready.signature == signature) {
+                return slot.ready.take();
+            }
+            if !slot.in_flight.as_ref().is_some_and(|(p, s)| p == path && s == signature) {
+                return None;
+            }
+        }
+        if give_up() || std::time::Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 }
 
 /// `app.prefetch {path, signature}`: develop `path` for Camera Raw in the background, at low priority, so the next
@@ -257,6 +282,15 @@ pub fn request_prefetch(app: &mut PhotocraftApp, path: &str, signature: &str) ->
             if !still_wanted(&shared) {
                 return;
             }
+            // From here until this thread is done, an open of the same photo waits for it (see `wait_prepared`).
+            struct InFlight(SharedPrefetch);
+            impl Drop for InFlight {
+                fn drop(&mut self) {
+                    self.0.lock().unwrap_or_else(PoisonError::into_inner).in_flight = None;
+                }
+            }
+            shared.lock().unwrap_or_else(PoisonError::into_inner).in_flight = Some((path.clone(), signature.clone()));
+            let _in_flight = InFlight(shared.clone());
             let Ok((name, bytes)) = read(&path) else { return };
             if !photocraft_io::raw::is_raw(&bytes) || !still_wanted(&shared) {
                 return;
@@ -267,11 +301,12 @@ pub fn request_prefetch(app: &mut PhotocraftApp, path: &str, signature: &str) ->
                 Some(pool) => pool.install(|| develop_for_browsing(&name, &bytes)),
                 None => develop_for_browsing(&name, &bytes),
             };
-            let Ok((imported, full_size)) = imported else { return };
+            let Ok(Browsed { imported, full_size, curve }) = imported else { return };
             let proxy = match pool {
                 Some(pool) => pool.install(|| camera_raw_ui::proxy_for(&imported.document)),
                 None => camera_raw_ui::proxy_for(&imported.document),
-            };
+            }
+            .map(|proxy| proxy.with_curve(curve));
             let mut slot = shared.lock().unwrap_or_else(PoisonError::into_inner);
             if slot.want.as_ref().is_some_and(|(p, s)| *p == path && *s == signature) {
                 slot.ready = Some(Prepared { path, signature, name, bytes: std::sync::Arc::new(bytes), imported, full_size, proxy });
@@ -289,13 +324,23 @@ pub fn request_prefetch(app: &mut PhotocraftApp, path: &str, signature: &str) ->
     }
 }
 
+/// A raw developed for browsing in Camera Raw (see [`develop_for_browsing`]).
+pub(crate) struct Browsed {
+    pub(crate) imported: photocraft_io::ImportResult,
+    /// The size of the full development a reduced one stands in for.
+    pub(crate) full_size: Option<(u32, u32)>,
+    /// The file's default tone curve, for the dialog's raw-stage previews: worked out here, on the worker, because the dialog
+    /// would otherwise decode the raw again on the editor's own thread when it opens (half a second for 45 MP).
+    pub(crate) curve: Vec<[f32; 2]>,
+}
+
 /// Develops a raw for browsing in Camera Raw: reduced in size when the file allows (a second for 45 MP rather than three),
-/// else in full. The second value is the size of the full development a reduced one stands in for.
-pub(crate) fn develop_for_browsing(name: &str, bytes: &[u8]) -> Result<(photocraft_io::ImportResult, Option<(u32, u32)>), photocraft_io::IoError> {
+/// else in full.
+pub(crate) fn develop_for_browsing(name: &str, bytes: &[u8]) -> Result<Browsed, photocraft_io::IoError> {
     if let Some(reduced) = photocraft_io::raw::import_raw_browse_reduced(name, bytes)? {
-        return Ok((reduced.import, Some(reduced.full_size)));
+        return Ok(Browsed { imported: reduced.import, full_size: Some(reduced.full_size), curve: reduced.tone_curve });
     }
-    Ok((photocraft_io::raw::import_raw(name, bytes)?, None))
+    Ok(Browsed { imported: photocraft_io::raw::import_raw(name, bytes)?, full_size: None, curve: photocraft_io::raw::tone_curve(bytes) })
 }
 
 /// A document the host opened for the Camera Raw workspace: for a raw developed from its sensor data, its bytes
@@ -1171,6 +1216,42 @@ mod tests {
         assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1, "the open used what was prepared");
         assert!(ready_path(&app).is_none(), "the slot is emptied by the open");
         assert_eq!(app.session.documents().len(), 1);
+    }
+
+    #[test]
+    fn an_open_that_arrives_while_the_photo_is_being_prepared_waits_for_it() {
+        let (mut app, _writes) = host_app(vec![("IMG.dng", synthetic_raw())]);
+        let reads = count_reads(&mut app);
+        request_prefetch(&mut app, "IMG.dng", "10:1").unwrap();
+        // Under way or already done, but not picked up: either way the open must not read and develop the file again.
+        wait_until("the prefetch to start", || {
+            let slot = app.jobs.workspace_prefetch.lock().unwrap();
+            slot.in_flight.is_some() || slot.ready.is_some()
+        });
+        let result = open_with(&mut app, "IMG.dng", Some("10:1"));
+        assert_eq!(result["cameraRaw"]["dialog"], true, "{result}");
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1, "the open used the prefetch that was in flight");
+        assert_eq!(app.session.documents().len(), 1);
+    }
+
+    #[test]
+    fn waiting_for_a_prefetch_gives_up_at_once_when_none_is_in_flight_for_the_photo() {
+        let shared = SharedPrefetch::default();
+        assert!(wait_prepared(&shared, "A.dng", "1:1", || false).is_none(), "nothing in flight");
+        shared.lock().unwrap().in_flight = Some(("B.dng".into(), "1:1".into()));
+        assert!(wait_prepared(&shared, "A.dng", "1:1", || false).is_none(), "another photo");
+        shared.lock().unwrap().in_flight = Some(("A.dng".into(), "2:2".into()));
+        assert!(wait_prepared(&shared, "A.dng", "1:1", || false).is_none(), "the same photo, changed since");
+        shared.lock().unwrap().in_flight = Some(("A.dng".into(), "1:1".into()));
+        assert!(wait_prepared(&shared, "A.dng", "1:1", || true).is_none(), "the open was cancelled");
+        // A prefetch that ends without a result (an unreadable file) releases the open.
+        let ending = shared.clone();
+        let ended = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            ending.lock().unwrap().in_flight = None;
+        });
+        assert!(wait_prepared(&shared, "A.dng", "1:1", || false).is_none());
+        ended.join().unwrap();
     }
 
     #[test]

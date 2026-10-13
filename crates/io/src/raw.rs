@@ -252,6 +252,9 @@ pub struct ReducedImport {
     pub import: ImportResult,
     /// Width and height of the full-resolution development (after orientation).
     pub full_size: (u32, u32),
+    /// What [`tone_curve`] gives for this file, from the sensor already decoded here: asking for it again decodes the raw a
+    /// second time (half a second for 45 MP).
+    pub tone_curve: Vec<[f32; 2]>,
 }
 
 /// Develops a raw for browsing in Camera Raw (the hosted raw workspace): at a fraction of its size, so the photo is ready
@@ -272,12 +275,16 @@ pub fn import_raw_browse_reduced_to(name: &str, bytes: &[u8], target_long_edge: 
         Err(e) => return Err(IoError::Raw(e)),
     };
     let opts = DevelopOptions { limits: limits(), camera_look: default_look(bytes, &sensor), ..Default::default() };
+    let tone_curve = match &opts.camera_look {
+        Some(look) => look.tone.as_ref().map(look_knots).unwrap_or_default(),
+        None => sensor.tone_curve.clone(),
+    };
     match photocraft_raw::develop_reduced(&sensor, &opts, target_long_edge) {
         Ok(reduced) => {
             let format = photocraft_raw::identify(bytes).map(|f| f.name()).unwrap_or("camera raw");
             let summary = format!("{DEVELOPED_NOTE} (reduced resolution for browsing, as-shot white balance)");
             let import = developed_document(name, format, reduced.developed, &summary)?;
-            Ok(Some(ReducedImport { import, full_size: (reduced.full_width, reduced.full_height) }))
+            Ok(Some(ReducedImport { import, full_size: (reduced.full_width, reduced.full_height), tone_curve }))
         }
         Err(RawError::Unsupported(_)) => Ok(None),
         Err(e) => Err(IoError::Raw(e)),

@@ -322,6 +322,23 @@ fn a_browsed_raw_is_reduced_in_size_but_not_in_colour() {
     }
 }
 
+/// The curve handed over with a browsed raw is the one the dialog would otherwise work out by decoding the file again.
+#[test]
+fn a_browsed_raw_carries_the_tone_curve_the_dialog_asks_for() {
+    let (w, h) = (480, 320);
+    let cam = patches(w, h);
+    let fitted_file = nef_uncompressed(&cam, w, h, Some(camera_rendering(&cam, w, h)));
+    let reduced = photocraft_io::raw::import_raw_browse_reduced_to("DSC_0012.NEF", &fitted_file, 100).unwrap().expect("a Bayer raw reduces");
+    assert!(reduced.tone_curve.len() > 2, "a fitted look has a curve: {:?}", reduced.tone_curve.len());
+    assert_eq!(reduced.tone_curve, photocraft_io::raw::tone_curve(&fitted_file));
+
+    let mut spec = DngSpec::cfa(96, 64, mosaic(&scene(96, 64), 96, [0, 1, 1, 2], 0, 65535));
+    spec.as_shot_neutral = Some([0.6, 1.0, 0.8]);
+    let calibrated = spec.build();
+    let reduced = photocraft_io::raw::import_raw_browse_reduced_to("shot.dng", &calibrated, 20).unwrap().expect("a DNG reduces");
+    assert_eq!(reduced.tone_curve, photocraft_io::raw::tone_curve(&calibrated));
+}
+
 #[test]
 fn a_calibrated_dng_reduces_with_its_own_colour() {
     let (w, h) = (96, 64);

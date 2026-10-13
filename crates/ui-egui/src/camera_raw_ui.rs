@@ -37,6 +37,15 @@ pub(crate) struct ProxyData {
     pw: usize,
     ph: usize,
     pixels: std::sync::Arc<Vec<[f32; 4]>>,
+    /// The raw's default tone curve, when the worker that built this also worked it out (see `raw_workspace::Browsed`).
+    curve: Option<Vec<[f32; 2]>>,
+}
+
+impl ProxyData {
+    pub(crate) fn with_curve(mut self, curve: Vec<[f32; 2]>) -> Self {
+        self.curve = Some(curve);
+        self
+    }
 }
 
 impl std::fmt::Debug for ProxyData {
@@ -117,7 +126,7 @@ pub(crate) fn proxy_for(document: &photocraft_doc::Document) -> Option<ProxyData
     })?;
     let geometry = proxy_geometry(document.bounds(), &surf).ok()?;
     let pixels = proxy_pixels(&surf, &geometry);
-    Some(ProxyData { area: geometry.area, k: geometry.k, pw: geometry.pw, ph: geometry.ph, pixels: std::sync::Arc::new(pixels) })
+    Some(ProxyData { area: geometry.area, k: geometry.k, pw: geometry.pw, ph: geometry.ph, pixels: std::sync::Arc::new(pixels), curve: None })
 }
 const PANEL_W: f32 = 330.0;
 const BANDS: [&str; 8] = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"];
@@ -352,11 +361,15 @@ pub(crate) fn open_raw(app: &mut PhotocraftApp, ctx: &egui::Context, mut raw: Ra
     app.session.set_active(index);
     let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
     let initial = raw.initial.clone().unwrap_or_default();
+    // The worker that developed the photo for browsing worked the curve out too (decoding the raw again here, on the
+    // editor's own thread, held every frame and control answer for half a second on a 45 MP file).
+    let prepared_curve = prepared.as_ref().and_then(|p| p.curve.clone());
     open_pixels(app, ctx, layer, surf, initial, OpenAs { coverage: Coverage::None, target: Target::OpenRaw, prepared, full_size })?;
-    let curve = match (&raw.bytes, &raw.path) {
-        (Some(b), _) => Some(photocraft_io::raw::tone_curve(b)),
+    let curve = match (prepared_curve, &raw.bytes, &raw.path) {
+        (Some(curve), _, _) => Some(curve),
+        (None, Some(b), _) => Some(photocraft_io::raw::tone_curve(b)),
         #[cfg(not(target_arch = "wasm32"))]
-        (None, Some(p)) => std::fs::read(p).ok().map(|b| photocraft_io::raw::tone_curve(&b)),
+        (None, None, Some(p)) => std::fs::read(p).ok().map(|b| photocraft_io::raw::tone_curve(&b)),
         _ => None,
     };
     if let Some(d) = app.camera_raw.as_mut() {

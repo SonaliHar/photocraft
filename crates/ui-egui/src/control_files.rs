@@ -65,6 +65,9 @@ pub fn open_with_camera_raw(app: &mut PhotocraftApp, path: &str, replace: bool, 
     }
     // A raw the host asked to have ready already is developed: opening it is then just adding the document.
     let prepared = camera_raw.as_ref().and_then(|spec| crate::raw_workspace::take_prepared(&app.jobs.workspace_prefetch, &path, spec.signature.as_deref()));
+    // Not ready yet, but perhaps on its way: the worker waits for a prefetch of this photo that is in flight.
+    let prefetch = app.jobs.workspace_prefetch.clone();
+    let signature = camera_raw.as_ref().and_then(|spec| spec.signature.clone());
     app.session
         .start_job(
             "app.open",
@@ -73,18 +76,23 @@ pub fn open_with_camera_raw(app: &mut PhotocraftApp, path: &str, replace: bool, 
             false,
             move |ctx| {
                 ctx.check()?;
+                let prepared =
+                    prepared.or_else(|| signature.as_deref().and_then(|s| crate::raw_workspace::wait_prepared(&prefetch, &path, s, || ctx.cancelled())));
+                ctx.check()?;
                 if let Some(ready) = prepared {
                     return Ok((ready.name, ready.imported, Some(ready.bytes), ready.proxy, ready.full_size));
                 }
                 let (name, bytes) = read(&path).map_err(EngineError::Other)?;
                 let camera_raw_import = wants_dialog && photocraft_io::raw::is_raw(&bytes);
                 let mut full_size = None;
+                let mut curve = None;
                 let imported = if camera_raw_import {
                     // Browsing in Camera Raw: reduced in size when the file allows, so the photo is ready after little more than
                     // reading it (see `develop_for_browsing`).
-                    crate::raw_workspace::develop_for_browsing(&name, &bytes).map(|(imported, size)| {
-                        full_size = size;
-                        imported
+                    crate::raw_workspace::develop_for_browsing(&name, &bytes).map(|browsed| {
+                        full_size = browsed.full_size;
+                        curve = Some(browsed.curve);
+                        browsed.imported
                     })
                 } else {
                     photocraft_io::import(&name, &bytes)
@@ -93,6 +101,10 @@ pub fn open_with_camera_raw(app: &mut PhotocraftApp, path: &str, replace: bool, 
                 ctx.check()?;
                 // The dialog's proxy is built here, on the worker, not by the editor's own thread when the dialog opens.
                 let proxy = if camera_raw_import { crate::camera_raw_ui::proxy_for(&imported.document) } else { None };
+                let proxy = match (proxy, curve) {
+                    (Some(proxy), Some(curve)) => Some(proxy.with_curve(curve)),
+                    (proxy, _) => proxy,
+                };
                 let kept = camera_raw_import.then(|| std::sync::Arc::new(bytes));
                 Ok((name, imported, kept, proxy, full_size))
             },
