@@ -55,6 +55,106 @@ fn click(app: &mut PhotocraftApp, at: [f64; 2], mods: Modifiers) {
     drag(app, at, at, mods);
 }
 
+/// The unfinished Pen precheck and actual Direct Selection press must use the same screen reach.
+/// Leave the ordinary View Snap and pixel-grid preference enabled for this canvas-input control.
+#[test]
+fn aspect_review_unfinished_pen_hit_and_miss_share_direct_selection_screen_reach() {
+    eprintln!("VIEW_BE7_MATRIX_PLANNED hit-miss 32");
+    for tool in [Tool::Pen, Tool::CurvaturePen] {
+        for aspect in [0.1, 10.0] {
+            for ppp in [1.0, 2.0] {
+                for rotation in [0.0, 37.0] {
+                    for (distance, hit) in [(2.0, true), (25.0, false)] {
+                        let mut a = app(tool);
+                        for p in [[30.0, 30.0], [90.0, 30.0], [150.0, 60.0]] {
+                            click(&mut a, p, Modifiers::NONE);
+                        }
+                        assert!(a.ui.extras.snap && a.session.prefs().tools.snap_vector_tools_and_transforms_to_pixel_grid);
+                        let before = a.ui.pen.clone().unwrap();
+                        let n = steps(&a);
+                        assert!(a.session.active().unwrap().doc.work_path.is_none());
+                        a.ui.view.pixel_aspect = format!("custom:{aspect}");
+                        a.ui.view.pixel_aspect_correction = true;
+                        a.ui.views[0].zoom = ppp;
+                        a.ppp = ppp;
+                        a.ui.views[0].rotation = rotation;
+                        let xf = crate::canvas::ViewXform::active(&a).unwrap();
+                        let at = xf.to_screen(30.0, 30.0);
+                        let p = xf.to_doc(at - egui::vec2(distance, 0.0));
+                        let case = format!("{tool:?}, aspect={aspect}, ppp={ppp}, rotation={rotation}, distance={distance}, raw={p:?}");
+                        eprintln!("VIEW_BE7_CASE_BEGIN hit-miss {case}");
+                        tool_event(&mut a, ToolEvent::Down { x: p[0], y: p[1], pressure: 1.0 }, Modifiers::COMMAND);
+                        assert_eq!(a.ui.pen.is_some(), hit, "{case}: only an off-path press finishes the path");
+                        if hit {
+                            assert!(matches!(&a.ui.direct_selection.drag, Some(Drag::Edit { target: PathRef::Pen, .. })), "{case}");
+                            assert_eq!(a.ui.pen.as_ref().unwrap().knots, before.knots, "{case}: no edit before release");
+                            assert!(a.session.active().unwrap().doc.work_path.is_none(), "{case}: still outside the document");
+                            assert_eq!(steps(&a), n, "{case}: no history step while the Pen path is unfinished");
+                        } else {
+                            let committed = work(&a);
+                            assert_eq!(committed.subpaths[0].knots.len(), before.knots.len(), "{case}");
+                            for (k, old) in committed.subpaths[0].knots.iter().zip(&before.knots) {
+                                assert_eq!(k.anchor, Point::new(old[0][0], old[0][1]), "{case}: off-path commit keeps the anchors");
+                            }
+                            assert_eq!(steps(&a), n + 1, "{case}: one ordinary path commit");
+                        }
+                        tool_event(&mut a, ToolEvent::Up { x: p[0], y: p[1] }, Modifiers::COMMAND);
+                        assert_eq!(a.ui.pen.is_some(), hit, "{case}: release keeps the selected flow");
+                        eprintln!("VIEW_BE7_CASE_DONE hit-miss {case}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// An explicit no-Snap fixture isolates the existing one-logical-point release threshold.
+/// The default-Snap hit/miss matrix above and all original pointer oracles stay unchanged.
+#[test]
+fn aspect_review_unfinished_pen_release_uses_screen_movement_threshold() {
+    eprintln!("VIEW_BE7_MATRIX_PLANNED release 8");
+    for tool in [Tool::Pen, Tool::CurvaturePen] {
+        for aspect in [0.1, 10.0] {
+            for distance in [0.5, 2.0] {
+                let mut a = app(tool);
+                for p in [[30.0, 30.0], [90.0, 30.0], [150.0, 60.0]] {
+                    click(&mut a, p, Modifiers::NONE);
+                }
+                a.run("prefs.set", json!({"path": "tools.snapVectorToolsAndTransformsToPixelGrid", "value": false})).unwrap();
+                a.ui.extras.snap = false;
+                assert!(!a.session.prefs().tools.snap_vector_tools_and_transforms_to_pixel_grid);
+                a.ui.view.pixel_aspect = format!("custom:{aspect}");
+                a.ui.view.pixel_aspect_correction = true;
+                a.ui.views[0].zoom = 1.0;
+                a.ppp = 1.0;
+                let before = a.ui.pen.clone().unwrap();
+                let n = steps(&a);
+                let from = before.knots[0][0];
+                let to = [from[0] + distance / aspect, from[1]];
+                // ViewXform scales are f32; this fixture precondition allows their precision.
+                let measured = crate::canvas::ScreenMetric::active(&a).distance(from, to);
+                let precision = 4.0 * f64::from(f32::EPSILON) * distance.abs().max(1.0);
+                assert!((measured - distance).abs() < precision, "{tool:?}, aspect={aspect}, distance={distance}, measured={measured}");
+                let case = format!("{tool:?}, aspect={aspect}, distance={distance}, from={from:?}, to={to:?}");
+                eprintln!("VIEW_BE7_CASE_BEGIN release {case}");
+                tool_event(&mut a, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Modifiers::COMMAND);
+                assert!(matches!(&a.ui.direct_selection.drag, Some(Drag::Edit { target: PathRef::Pen, .. })), "{case}");
+                tool_event(&mut a, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, Modifiers::COMMAND);
+                tool_event(&mut a, ToolEvent::Up { x: to[0], y: to[1] }, Modifiers::COMMAND);
+                let pen = a.ui.pen.as_ref().expect("the path stays unfinished");
+                let expected = if distance >= 1.0 { to } else { from };
+                assert!((pen.knots[0][0][0] - expected[0]).abs() < 1e-9, "{case}: {:?}", pen.knots[0][0]);
+                assert_eq!(pen.knots[0][0][1], expected[1], "{case}");
+                assert_eq!(pen.knots.len(), before.knots.len(), "{case}");
+                assert_eq!(pen.knots[1][0], before.knots[1][0], "{case}: only the selected anchor moves");
+                assert!(a.session.active().unwrap().doc.work_path.is_none(), "{case}");
+                assert_eq!(steps(&a), n, "{case}: unfinished edits do not enter document history");
+                eprintln!("VIEW_BE7_CASE_DONE release {case}");
+            }
+        }
+    }
+}
+
 #[test]
 fn aspect_review_path_anchor_gestures_match_screen_size() {
     for aspect in [0.1, 10.0] {
@@ -146,21 +246,85 @@ fn marquee_shift_and_empty_clicks_select_like_photoshop() {
 }
 
 #[test]
-fn pen_with_command_edits_paths_and_ends_the_one_being_drawn() {
+fn pen_with_command_ends_the_path_being_drawn_when_pressed_off_it() {
     let mut app = app(Tool::Pen);
     for p in [[30.0, 30.0], [90.0, 30.0]] {
         click(&mut app, p, Modifiers::NONE);
     }
     assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.len()), Some(2));
-    // ⌘-drag (Ctrl-drag off the Mac) on the second anchor: the path is finished and edited.
-    drag(&mut app, [90.0, 30.0], [90.0, 70.0], Modifiers::COMMAND);
+    // ⌘-click (Ctrl-click off the Mac) on empty canvas: the path is finished, open.
+    click(&mut app, [170.0, 170.0], Modifiers::COMMAND);
     assert!(app.ui.pen.is_none());
     assert_eq!(app.ui.tool, Tool::Pen, "the Pen stays the tool");
-    let wp = work(&app);
-    assert_eq!((wp.subpaths[0].closed, wp.subpaths[0].knots[1].anchor), (false, Point::new(90.0, 70.0)));
+    assert!(!work(&app).subpaths[0].closed);
+    // ⌘-drag then edits the finished path.
+    drag(&mut app, [90.0, 30.0], [90.0, 70.0], Modifiers::COMMAND);
+    assert_eq!(anchor(&app, 1), Point::new(90.0, 70.0));
     // Without ⌘ the Pen draws again.
     click(&mut app, [150.0, 150.0], Modifiers::NONE);
     assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.len()), Some(1));
+}
+
+/// #4022: ⌘/Ctrl-dragging an anchor of the path being drawn moves it in place; the path stays
+/// unfinished, outside the document and its history, and the Pen carries on from its last anchor.
+#[test]
+fn pen_with_command_edits_the_path_being_drawn_in_place() {
+    let mut app = app(Tool::Pen);
+    for p in [[30.0, 30.0], [90.0, 30.0]] {
+        click(&mut app, p, Modifiers::NONE);
+    }
+    let before = steps(&app);
+    drag(&mut app, [90.0, 30.0], [90.0, 70.0], Modifiers::COMMAND);
+    let pen = app.ui.pen.clone().expect("still drawing");
+    assert_eq!(pen.knots.len(), 2);
+    assert_eq!(pen.knots[1][0], [90.0, 70.0], "the anchor moved");
+    assert_eq!(pen.knots[0][0], [30.0, 30.0]);
+    assert!(app.session.active().unwrap().doc.work_path.is_none(), "not committed");
+    assert_eq!(steps(&app), before, "no history step until the path is finished");
+    // Let go of ⌘: the next click adds an anchor after the moved one.
+    click(&mut app, [150.0, 150.0], Modifiers::NONE);
+    assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.len()), Some(3));
+    crate::vector_ui::pen_commit(&mut app, false);
+    let wp = work(&app);
+    assert_eq!(wp.subpaths[0].knots.len(), 3);
+    assert_eq!(wp.subpaths[0].knots[1].anchor, Point::new(90.0, 70.0));
+    assert_eq!(app.ui.direct_selection.target, None, "the Pen selection is gone with the Pen path");
+}
+
+/// ⌘/Ctrl-click selects an anchor of the path being drawn, showing its handles; ⌘-dragging one
+/// turns it and the other follows (a smooth point), still without committing.
+#[test]
+fn pen_with_command_turns_a_handle_of_the_path_being_drawn() {
+    let mut app = app(Tool::Pen);
+    click(&mut app, [30.0, 30.0], Modifiers::NONE);
+    drag(&mut app, [90.0, 30.0], [110.0, 30.0], Modifiers::NONE);
+    assert_eq!(app.ui.pen.as_ref().unwrap().knots[1], [[90.0, 30.0], [70.0, 30.0], [110.0, 30.0]]);
+    click(&mut app, [90.0, 30.0], Modifiers::COMMAND);
+    assert_eq!(app.ui.direct_selection.target, Some(PathRef::Pen));
+    assert_eq!(app.ui.direct_selection.anchors, vec![[0, 1]]);
+    drag(&mut app, [110.0, 30.0], [110.0, 50.0], Modifiers::COMMAND);
+    let k = app.ui.pen.as_ref().expect("still drawing").knots[1];
+    assert_eq!(k[2], [110.0, 50.0], "the outgoing handle turned");
+    let (o, i) = ([k[2][0] - k[0][0], k[2][1] - k[0][1]], [k[1][0] - k[0][0], k[1][1] - k[0][1]]);
+    assert!((o[0] * i[1] - o[1] * i[0]).abs() < 1e-6 && o[0] * i[0] + o[1] * i[1] < 0.0, "the incoming handle stays opposite: {k:?}");
+    assert!(app.session.active().unwrap().doc.work_path.is_none());
+}
+
+/// The Curvature Pen too: ⌘/Ctrl-dragging an anchor of its path in progress moves it, and the
+/// curve through the anchors follows.
+#[test]
+fn curvature_pen_with_command_moves_an_anchor_of_the_path_being_drawn() {
+    let mut app = app(Tool::CurvaturePen);
+    for p in [[30.0, 30.0], [90.0, 30.0], [150.0, 60.0]] {
+        click(&mut app, p, Modifiers::NONE);
+    }
+    let before = app.ui.pen.clone().unwrap();
+    drag(&mut app, [90.0, 30.0], [90.0, 10.0], Modifiers::COMMAND);
+    let pen = app.ui.pen.clone().expect("still drawing");
+    assert!(pen.curvature && pen.knots.len() == 3);
+    assert_eq!(pen.knots[1][0], [90.0, 10.0]);
+    assert_ne!(pen.knots[1][1], before.knots[1][1], "the handles follow the moved anchor");
+    assert!(app.session.active().unwrap().doc.work_path.is_none());
 }
 
 #[test]
@@ -252,4 +416,40 @@ fn the_convert_point_tool_shows_the_path_overlay() {
     app.ui.tool = Tool::Pen;
     assert!(!super::shows(&app, Modifiers::NONE));
     assert!(super::shows(&app, Modifiers::COMMAND));
+}
+
+/// One key press through the canvas arrow keys, as egui delivers it.
+fn press(app: &mut PhotocraftApp, key: egui::Key, mods: Modifiers) -> bool {
+    let ctx = egui::Context::default();
+    ctx.input_mut(|i| {
+        i.modifiers = mods;
+        i.events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: mods });
+    });
+    crate::move_mods::arrow_keys(app, &ctx)
+}
+
+/// #4486: the arrow keys nudge the selected anchors 1 px (⇧ 10 px), one history step per press,
+/// as in Photoshop. With no anchor selected they leave the path alone.
+#[test]
+fn arrow_keys_nudge_the_selected_anchors() {
+    let mut app = app(Tool::DirectSelection);
+    with_path(&mut app);
+    // The path stays targeted after a click on empty canvas, but no anchor is selected.
+    click(&mut app, [40.0, 120.0], Modifiers::NONE);
+    click(&mut app, [80.0, 80.0], Modifiers::NONE);
+    assert_eq!(app.ui.direct_selection.target, Some(PathRef::Work));
+    let n = steps(&app);
+    assert!(!press(&mut app, egui::Key::ArrowRight, Modifiers::NONE), "no anchor selected: not Direct Selection's key");
+    assert_eq!(steps(&app), n);
+    click(&mut app, [40.0, 120.0], Modifiers::NONE);
+    click(&mut app, [120.0, 120.0], Modifiers::SHIFT);
+    let (before, n) = (work(&app), steps(&app));
+    assert!(press(&mut app, egui::Key::ArrowRight, Modifiers::NONE));
+    assert_eq!((anchor(&app, 2), anchor(&app, 3)), (Point::new(121.0, 120.0), Point::new(41.0, 120.0)));
+    assert!(press(&mut app, egui::Key::ArrowDown, Modifiers::SHIFT));
+    assert_eq!((anchor(&app, 2), anchor(&app, 3)), (Point::new(121.0, 130.0), Point::new(41.0, 130.0)), "⇧ nudges 10 px");
+    assert_eq!(anchor(&app, 0), Point::new(40.0, 40.0), "unselected anchors stay");
+    assert_eq!(steps(&app), n + 2, "one history step per press");
+    assert!(app.session.undo() && app.session.undo());
+    assert_eq!(work(&app), before);
 }
