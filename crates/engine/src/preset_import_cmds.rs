@@ -109,6 +109,7 @@ fn add_abr_presets(s: &mut Session, p: &Value, group: String, imp: photocraft_io
         let mut b = pr.brush.clone().picked_over(&s.tools.brush);
         s.load_brush_tips(&mut b).map_err(|e| bad("brush.presets.importAbr", e))?;
         s.tools.brush = b;
+        s.tools.brush_changed();
     }
     // Distinct folder paths the file brought (its Photoshop folders, nested inside `group`).
     let folders: std::collections::BTreeSet<&[String]> =
@@ -181,11 +182,19 @@ fn import_image(s: &mut Session, p: &Value) -> Result<Value> {
     let (brush, tw, th) = crate::brush_cmds::sampled_brush(cmd, &v, w, h)?;
     let taken: Vec<String> = s.tools.presets.iter().map(|x| x.name.clone()).collect();
     let name = unique(&name, &taken);
-    s.tools.presets.push(photocraft_paint::BrushPreset { name: name.clone(), brush: brush.clone(), builtin: false, group: String::new(), folder: Vec::new() });
+    s.tools.presets.push(photocraft_paint::BrushPreset {
+        name: name.clone(),
+        brush: brush.clone(),
+        builtin: false,
+        group: String::new(),
+        folder: Vec::new(),
+        captures: Default::default(),
+    });
     s.brush_presets_changed();
     if p.get("select").and_then(Value::as_bool).unwrap_or(true) {
         s.tools.brush = brush;
         s.tools.current_preset = Some(name.clone());
+        s.tools.brush_changed();
     }
     Ok(json!({ "name": name, "width": tw, "height": th }))
 }
