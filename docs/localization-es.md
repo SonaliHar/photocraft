@@ -19,8 +19,9 @@ written from the meaning of PhotoCraft's own English label.
 
 ## Dynamic UI coverage
 
-The catalog now has 3,932 entries and covers the same complete runtime key set as the Italian
-reference catalog. The additional labels include filter and adjustment parameters and choices,
+After merging the newer upstream catalog rows, the catalog has 4,010 entries. It covers the
+complete Italian runtime key set and retains two Spanish profile-prompt labels that other
+catalogs also use. The additional labels include filter and adjustment parameters and choices,
 Filter Gallery names, Camera Raw, Lighting Effects, History and Layers controls, metadata,
 dialogs, status wrappers and System Info labels. Before this pass, those controls fell back to
 English because many are assembled dynamically and cannot be found by the static coverage scan.
