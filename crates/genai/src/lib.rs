@@ -40,7 +40,7 @@ pub enum GenError {
     Invalid(String),
     #[error("the API key was rejected; check it in Generative AI Settings")]
     Auth,
-    #[error("the image service's quota or rate limit was reached; try again later")]
+    #[error("the image service account is out of quota or credits; check your plan")]
     Quota,
     #[error("the image service's rate limit was reached; try again {}", retry_text(.0))]
     RateLimited(Option<u64>),
@@ -444,5 +444,7 @@ mod tests {
         assert!(GenError::RateLimited(None).to_string().contains("later"));
         assert!(GenError::Moderated("nope".into()).to_string().contains("nope"));
         assert!(GenError::Timeout.to_string().contains("in time"));
+        let quota = GenError::Quota.to_string();
+        assert!(quota.contains("out of quota or credits") && !quota.contains("rate limit"), "429 is RateLimited now: {quota}");
     }
 }
