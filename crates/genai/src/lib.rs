@@ -124,6 +124,7 @@ pub enum Method {
     Get,
     Post,
     Put,
+    Delete,
 }
 
 /// One HTTPS request. Header values may hold a credential, so a transport must not log them (and
@@ -148,6 +149,9 @@ impl HttpRequest {
     }
     pub fn put(url: impl Into<String>) -> Self {
         Self::new(Method::Put, url)
+    }
+    pub fn delete(url: impl Into<String>) -> Self {
+        Self::new(Method::Delete, url)
     }
     pub fn header(mut self, name: &'static str, value: impl Into<String>) -> Self {
         self.headers.push((name, value.into()));
@@ -355,6 +359,8 @@ mod tests {
         assert_eq!(r.body, br#"{"a":1}"#);
         assert_eq!(HttpRequest::get("https://h.example/").method, Method::Get);
         assert_eq!(HttpRequest::put("https://h.example/").method, Method::Put);
+        let d = HttpRequest::delete("https://h.example/f");
+        assert_eq!((d.method, d.url.as_str(), d.body.is_empty()), (Method::Delete, "https://h.example/f", true));
     }
 
     #[test]

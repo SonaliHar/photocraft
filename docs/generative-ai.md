@@ -40,7 +40,7 @@ entered. Gemini (the Nano Banana image models, default `gemini-nano-banana-2.1`)
 | Google Gemini (`gemini`) | API key | generativelanguage.googleapis.com | inline | optional | per Google's terms |
 | FLUX.1 Fill [pro] · Black Forest Labs (`flux-fill.bfl`) | API key | `api.bfl.ai`, regional `*.bfl.ai` polling hosts | `*.bfl.ai` | optional (FLUX Erase without) | result URLs expire after 10 min |
 | FLUX.1 Fill [pro] · fal (`flux-fill.fal`) | API key | queue.fal.run | `fal.media`, `*.fal.media` | optional | per the account's media-expiry setting |
-| FLUX.1 Fill [pro] · Replicate (`flux-fill.replicate`) | API token | api.replicate.com | `replicate.delivery`, `*.replicate.delivery` | optional | inputs and outputs deleted after 1 h |
+| FLUX.1 Fill [pro] · Replicate (`flux-fill.replicate`) | API token | api.replicate.com | `replicate.delivery`, `*.replicate.delivery` | optional | uploaded inputs deleted by PhotoCraft after each fill; prediction data per Replicate's policy (1 h) |
 | Adobe Firefly Fill (`firefly`) | client ID + secret | ims-na1.adobelogin.com, firefly-api.adobe.io | *.amazonaws.com (pre-signed) | required | uploads kept 7 days |
 | Ideogram 3.0 Inpaint (`ideogram-v3`) | API key | api.ideogram.ai | ideogram.ai | required | temporary URLs |
 | Bria Gen Fill and Erase (`bria`) | API token | engine.prod.bria-api.com | `*.bria-api.com` / `*.bria.ai` | optional (Erase without) | temporary URLs |

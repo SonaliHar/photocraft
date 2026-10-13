@@ -54,6 +54,13 @@ impl HttpTransport for Https {
                 }
                 call.send(&request.body[..])
             }
+            Method::Delete => {
+                let mut call = self.agent.delete(url);
+                for (name, value) in &request.headers {
+                    call = call.header(*name, value.as_str());
+                }
+                call.call()
+            }
         };
         let mut response = sent.map_err(|e| GenError::Network(e.to_string()))?;
         let status = response.status().as_u16();

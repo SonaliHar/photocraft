@@ -99,22 +99,23 @@ impl Replicate {
         fetch::check_host(&url, API_HOSTS)?;
         Ok(url)
     }
-}
 
-impl ImageProvider for Replicate {
-    fn info(&self) -> ProviderInfo {
-        ProviderInfo { id: ID, name: NAME, model: "flux-pro-1.0-fill".into(), host: HOST }
+    /// Best-effort removal of uploaded inputs (Replicate keeps files until deleted). The URLs
+    /// passed [`fetch::check_host`] when uploaded; failures are ignored.
+    fn delete_uploads(&self, urls: &[String]) {
+        let Ok(bearer) = self.bearer() else { return };
+        for url in urls {
+            let _ = self.http.send(HttpRequest::delete(url.clone()).header("authorization", bearer.clone()));
+        }
     }
-    fn capabilities(&self) -> Capabilities {
-        Capabilities { generate: false, edit: true, variations: false }
-    }
-    fn edit(&self, r: &EditRequest) -> Result<GeneratedImage> {
-        check_prompt(&r.prompt, false)?;
-        same_size(&r.image, &r.mask)?;
-        r.cancel.check()?;
-        let fill = mask::white_fill(&r.mask)?;
+
+    /// Upload, predict and download; each uploaded file's URL goes in `uploaded` as soon as it
+    /// exists, so the caller can delete it however this ends.
+    fn fill(&self, r: &EditRequest, fill: &[u8], uploaded: &mut Vec<String>) -> Result<GeneratedImage> {
         let image_url = self.upload(&r.image, "image.png")?;
-        let mask_url = self.upload(&fill, "mask.png")?;
+        uploaded.push(image_url.clone());
+        let mask_url = self.upload(fill, "mask.png")?;
+        uploaded.push(mask_url.clone());
         r.cancel.check()?;
         let mut input = flux_fill::params(&r.prompt);
         input.insert("image".into(), json!(image_url));
@@ -148,6 +149,25 @@ impl ImageProvider for Replicate {
         };
         r.cancel.check()?;
         common::image(fetch::result(&*self.http, &output, RESULT_HOSTS, Some(("authorization", bearer)))?)
+    }
+}
+
+impl ImageProvider for Replicate {
+    fn info(&self) -> ProviderInfo {
+        ProviderInfo { id: ID, name: NAME, model: "flux-pro-1.0-fill".into(), host: HOST }
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities { generate: false, edit: true, variations: false }
+    }
+    fn edit(&self, r: &EditRequest) -> Result<GeneratedImage> {
+        check_prompt(&r.prompt, false)?;
+        same_size(&r.image, &r.mask)?;
+        r.cancel.check()?;
+        let fill = mask::white_fill(&r.mask)?;
+        let mut uploaded = Vec::new();
+        let result = self.fill(r, &fill, &mut uploaded);
+        self.delete_uploads(&uploaded);
+        result
     }
 }
 
@@ -190,6 +210,38 @@ mod tests {
         assert_eq!(b["input"]["prompt"], "a pier");
         assert_eq!((sent[3].method, sent[3].url.as_str()), (Method::Get, OUT));
         assert_eq!(header(&sent[3], "authorization"), Some(format!("Bearer {SECRET}").as_str()), "Replicate's files need the token");
+        assert_deleted(&sent[4..], &["img", "msk"]);
+    }
+
+    /// `sent` is exactly one DELETE, with the token, for each uploaded file.
+    fn assert_deleted(sent: &[HttpRequest], ids: &[&str]) {
+        let urls: Vec<_> = sent.iter().map(|r| (r.method, r.url.clone())).collect();
+        let want: Vec<_> = ids.iter().map(|id| (Method::Delete, format!("https://api.replicate.com/v1/files/{id}"))).collect();
+        assert_eq!(urls, want);
+        for r in sent {
+            assert_eq!(header(r, "authorization"), Some(format!("Bearer {SECRET}").as_str()));
+        }
+    }
+
+    #[test]
+    fn uploads_are_deleted_after_a_failure_and_delete_errors_are_ignored() {
+        let failed = json_reply(201, json!({"id": "p1", "status": "failed", "error": "CUDA out of memory", "urls": {"get": GET}}));
+        let (p, http) = provider(vec![uploaded("img"), uploaded("msk"), failed, json_reply(500, json!({})), json_reply(404, json!({}))]);
+        assert!(matches!(p.edit(&edit_request("x", 8, 8)), Err(GenError::Refused(_))), "the prediction's error, not the delete's");
+        assert_deleted(&http.requests()[3..], &["img", "msk"]);
+        // The mask upload fails: the image already uploaded is still deleted.
+        let (p, http) = provider(vec![uploaded("img"), json_reply(401, json!({}))]);
+        assert_eq!(p.edit(&edit_request("x", 8, 8)), Err(GenError::Auth));
+        assert_deleted(&http.requests()[2..], &["img"]);
+        // A successful fill whose deletes fail (the script has no replies left) still succeeds.
+        let (p, http) = provider(vec![
+            uploaded("img"),
+            uploaded("msk"),
+            json_reply(201, json!({"id": "p1", "status": "succeeded", "output": OUT})),
+            bytes_reply(200, "image/png", png(4, 4)),
+        ]);
+        assert!(p.edit(&edit_request("x", 8, 8)).is_ok());
+        assert_deleted(&http.requests()[4..], &["img", "msk"]);
     }
 
     #[test]
@@ -213,8 +265,10 @@ mod tests {
         let mut r = edit_request("x", 8, 8);
         r.cancel = crate::CancelToken::new(move || sent.requests().len() >= 4);
         assert_eq!(p.edit(&r), Err(GenError::Cancelled));
-        let last = http.requests().pop().unwrap();
-        assert_eq!((last.method, last.url.as_str()), (Method::Post, format!("{GET}/cancel").as_str()));
+        let sent = http.requests();
+        let cancel = &sent[sent.len() - 3];
+        assert_eq!((cancel.method, cancel.url.as_str()), (Method::Post, format!("{GET}/cancel").as_str()));
+        assert_deleted(&sent[sent.len() - 2..], &["img", "msk"]);
     }
 
     #[test]
@@ -225,7 +279,8 @@ mod tests {
             json_reply(201, json!({"id": "p1", "status": "starting", "urls": {"get": "https://evil.example/p1"}})),
         ]);
         assert!(matches!(p.edit(&edit_request("x", 8, 8)), Err(GenError::BadResponse(_))));
-        assert_eq!(http.requests().len(), 3);
+        assert_eq!(http.requests().len(), 5);
+        assert_deleted(&http.requests()[3..], &["img", "msk"]);
         let (p, http) = provider(vec![json_reply(201, json!({"urls": {"get": "https://evil.example/f"}}))]);
         assert!(matches!(p.edit(&edit_request("x", 8, 8)), Err(GenError::BadResponse(_))));
         assert_eq!(http.requests().len(), 1);
