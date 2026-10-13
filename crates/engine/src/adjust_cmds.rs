@@ -11,7 +11,7 @@
 
 use photocraft_algo::tone::{self, HdrToning, MatchColor, ShadowsHighlights};
 use photocraft_doc::{Adjustment, Document, Layer, LayerContent, Rect};
-use photocraft_raster::{Surface, from_rgba_into, to_rgba};
+use photocraft_raster::{Surface, to_rgba};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -202,17 +202,8 @@ fn process_surface(surf: &mut Surface, selection: Option<&Surface>, f: &mut dyn 
     let raw = surf.read_region(r);
     let mut px: Vec<[f32; 4]> = raw.chunks_exact(n).map(|q| to_rgba(&fmt, q)).collect();
     let orig = px.clone();
-    let w = r.width() as usize;
     f(&mut px, r);
-    let mut out = Vec::with_capacity(raw.len());
-    for (i, (a, o)) in px.iter().zip(&orig).enumerate() {
-        let k = selection.map_or(1.0, |sel| sel.sample_channel(r.x0 + (i % w) as i32, r.y0 + (i / w) as i32, 0));
-        let mixed: [f32; 4] = std::array::from_fn(|c| o[c] + (a[c] - o[c]) * k);
-        let mut enc = [0.0f32; 8];
-        let m = from_rgba_into(&fmt, mixed, &mut enc);
-        out.extend_from_slice(&enc[..m]);
-    }
-    surf.write_region(r, &out);
+    surf.write_region(r, &crate::pixels::mix_through_selection(&fmt, r, &orig, &px, selection));
 }
 
 /// One history step running `f` on the active pixel layer (or targeted channel or layer mask).
@@ -250,6 +241,52 @@ fn has_pixels(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+/// Image › Adjustments targets: a pixel layer, a smart object (the adjustment is recorded as a
+/// smart filter, as in Photoshop), or a targeted alpha channel / Quick Mask.
+pub(crate) fn has_adjustable(s: &Session) -> std::result::Result<(), String> {
+    if crate::channel_cmds::edits_channel(s) {
+        return Ok(());
+    }
+    let d = s.active().ok_or("no document open")?;
+    let l = d.active_layer.and_then(|id| d.doc.layer(id)).ok_or("no active layer")?;
+    match &l.content {
+        LayerContent::Raster(_) => Ok(()),
+        LayerContent::Smart(sm) if sm.cache.is_some() => Ok(()),
+        other => Err(format!("active layer is {} {} layer, not a pixel layer", other.article(), other.kind_name())),
+    }
+}
+
+/// Image › Adjustments on a smart object record `image.adjustments.<kind>` as a smart filter
+/// (Photoshop): the adjustment re-runs from the source whenever the object re-renders, through
+/// [`adjust_as_filter`]. `Ok(true)` when it was recorded (one history step, the selection becomes
+/// the filter mask); `Ok(false)` when the command should edit pixels instead (a mask or channel
+/// target, or the active layer is not a smart object).
+pub(crate) fn adjust_as_smart_filter(s: &mut Session, kind: &str, label: &str, p: &Value) -> Result<bool> {
+    if crate::commands::is_mask_target(p) || crate::channel_cmds::is_channel_target(p) {
+        return Ok(false);
+    }
+    let Some(id) = s.active().and_then(|d| d.active_layer) else { return Ok(false) };
+    let smart = s.active().is_some_and(|d| matches!(d.doc.layer(id).map(|l| &l.content), Some(LayerContent::Smart(_))));
+    if !smart {
+        return Ok(false);
+    }
+    // The recorded params are the command's own, minus the engine's private `__kind` key.
+    let mut params = p.clone();
+    if let Value::Object(m) = &mut params {
+        m.remove("__kind");
+    }
+    let sf = photocraft_doc::SmartFilter {
+        command: format!("image.adjustments.{kind}"),
+        params,
+        blend: photocraft_color::BlendMode::Normal,
+        opacity: 1.0,
+        visible: true,
+    };
+    let sel = s.active().and_then(|d| d.doc.selection.clone());
+    s.edit(label, |doc, _| crate::smart_cmds::add_smart_filter(doc, id, sf, sel.as_ref()))?;
+    Ok(true)
+}
+
 fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
 }
@@ -273,6 +310,9 @@ pub(crate) fn adjust_as_filter(kind: &str, p: &Value, surf: &Surface) -> Option<
 }
 
 fn shadows_highlights(s: &mut Session, p: &Value) -> Result<Value> {
+    if adjust_as_smart_filter(s, "shadowsHighlights", "Shadows/Highlights", p)? {
+        return Ok(Value::Null);
+    }
     let sh = shadows_highlights_params(p);
     rgba_edit(s, "Shadows/Highlights", p, |px, r| tone::shadows_highlights(px, r.width() as usize, r.height() as usize, &sh))
 }
@@ -294,12 +334,52 @@ fn shadows_highlights_params(p: &Value) -> ShadowsHighlights {
 }
 
 fn replace_color(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "image.adjustments.replaceColor";
     let c = crate::commands::color_param(p, "color", s.tools.foreground);
     let fuzz = num(p, "fuzziness", 40.0).clamp(0.0, 200.0);
     let (h, sat, l) = (num(p, "hue", 0.0).clamp(-180.0, 180.0), num(p, "saturation", 0.0).clamp(-100.0, 100.0), num(p, "lightness", 0.0).clamp(-100.0, 100.0));
-    rgba_edit(s, "Replace Color", p, |px, _| {
-        tone::replace_color(px, [c[0], c[1], c[2]], fuzz, h, sat, l);
+    // Localized Color Clusters, as in Select › Color Range: the colour only matches within Range
+    // (a percentage of the canvas's longer side) of where it was picked.
+    let points = sample_points(p).map_err(|m| bad(CMD, m))?;
+    let localized = if p.get("localized").and_then(Value::as_bool).unwrap_or(false) {
+        if points.is_empty() {
+            return Err(bad(CMD, "localized clusters need eyedropper `points` (where the colour was picked)"));
+        }
+        let canvas = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
+        Some(num(p, "range", 100.0).clamp(0.0, 100.0) / 100.0 * canvas.width().max(canvas.height()) as f32)
+    } else {
+        None
+    };
+    rgba_edit(s, "Replace Color", p, |px, r| match localized {
+        Some(radius) => {
+            let samples: Vec<_> = points
+                .iter()
+                .map(|&(x, y)| photocraft_algo::selection::RangeSample { color: [c[0], c[1], c[2]], at: Some((x - r.x0 as f32, y - r.y0 as f32)) })
+                .collect();
+            let mask = photocraft_algo::selection::color_range_samples(px, r.width() as usize, &samples, fuzz, Some(radius));
+            tone::replace_color_masked(px, &mask, h, sat, l);
+        }
+        None => {
+            tone::replace_color(px, [c[0], c[1], c[2]], fuzz, h, sat, l);
+        }
     })
+}
+
+/// The `points` of a command (`[[x, y], …]` in document pixels), or a message saying what is wrong.
+fn sample_points(p: &Value) -> std::result::Result<Vec<(f32, f32)>, String> {
+    let Some(pts) = p.get("points") else { return Ok(Vec::new()) };
+    let pts = pts.as_array().ok_or("`points` must be [[x, y], …]")?;
+    pts.iter()
+        .map(|pt| {
+            pt.as_array()
+                .and_then(|a| match a.as_slice() {
+                    [x, y] => Some((x.as_f64()? as f32, y.as_f64()? as f32)),
+                    _ => None,
+                })
+                .filter(|(x, y)| x.is_finite() && y.is_finite())
+                .ok_or_else(|| format!("bad point {pt} in `points` (want [x, y])"))
+        })
+        .collect()
 }
 
 /// Straight RGBA pixels and an optional coverage mask for a document's layer (or its composite).
@@ -379,6 +459,7 @@ fn hdr_toning(s: &mut Session, p: &Value) -> Result<Value> {
         let data: Vec<f32> = px.iter().flat_map(|q| photocraft_raster::from_rgba(&fmt, *q)).collect();
         let mut bg = Layer::raster("Background", fmt);
         bg.locks.transparency = true;
+        bg.locks.position = true;
         crate::pixels_mut(&mut bg)?.write_region(doc.bounds(), &data);
         *active = Some(bg.id);
         doc.layers = vec![bg];
@@ -406,14 +487,14 @@ pub fn specs() -> Vec<CommandSpec> {
             "Shadows/Highlights…",
             ["Image", "Adjustments"],
             r##"{"shadowAmount":0..100=35,"shadowTone":0..100=50,"shadowRadius":0..2500=30,"highlightAmount":0..100=0,"highlightTone":0..100=50,"highlightRadius":0..2500=30,"color":-100..100=20,"midtone":-100..100=0,"blackClip":0..50=0.01,"whiteClip":0..50=0.01}"##,
-            has_pixels,
+            has_adjustable,
             shadows_highlights
         ),
         spec!(
             "image.adjustments.replaceColor",
             "Replace Color…",
             ["Image", "Adjustments"],
-            r##"{"color":json,"fuzziness":0..200=40,"hue":-180..180=0,"saturation":-100..100=0,"lightness":-100..100=0} (color: "#rrggbb", default the foreground colour)"##,
+            r##"{"localized":bool=false,"color":color,"fuzziness":0..200=40,"range":0..100=100,"hue":-180..180=0,"saturation":-100..100=0,"lightness":-100..100=0,"points":[[x,y],…]?} (color: "#rrggbb", default the foreground colour; Localized Color Clusters: "points" where the colour was picked, "range" % of the longer side)"##,
             has_pixels,
             replace_color
         ),

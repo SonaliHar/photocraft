@@ -22,6 +22,9 @@
 //!   handed to a caller-supplied sink, e.g. to encode it straight into a display texture — no
 //!   readback. Documents of any size composite on the GPU; a huge refresh submits as it goes, so
 //!   staged uploads and evicted pages stay bounded.
+//! - **Stack reuse.** A complete root stack unit can checkpoint its backdrop into bounded chunk
+//!   textures. Exact COW snapshots invalidate the lower prefix; edits above it restore those
+//!   pixels and execute only the remaining passes. Groups and clipping units stay indivisible.
 //!
 //! Vector masks (rasterised once per mask state into a combined mask texture), layers clipped to
 //! pass-through groups, stroked shapes with clipped layers (fill and stroke split once per shape
@@ -36,6 +39,7 @@ pub mod bounds;
 mod fx;
 pub mod health;
 pub mod plan;
+mod prefix;
 
 use std::collections::HashMap;
 use std::num::NonZeroU64;
@@ -78,6 +82,12 @@ const FLUSH_BYTES: u64 = 512 << 20;
 /// command buffer holding a whole huge refresh can run for seconds, long enough for the OS to
 /// reset the GPU.
 const FLUSH_WORK: u64 = 1 << 30;
+/// Copies and render passes [`Compositor::render`] records before submitting. wgpu opens up to
+/// two backend command buffers for each (a render pass and its barrier pre-pass), and Metal
+/// treats more than 4096 outstanding ones as a lost device: a refresh of a document with a few
+/// hundred layers reached that inside a single page cell (P12, "pc_compose_uniforms is
+/// invalid"), where the work and byte limits above never trigger.
+const FLUSH_OPS: u32 = 1000;
 
 /// A finished chunk: straight-alpha RGBA32F pixels of `rect` (document coordinates) at the
 /// texture's origin.
@@ -95,6 +105,9 @@ pub struct Stats {
     pub slots: u32,
     pub tiles_uploaded: usize,
     pub bytes_uploaded: usize,
+    /// Tiles a new layer texture took from another layer's texture by a GPU copy (a duplicate
+    /// shares its source's tiles) instead of uploading them.
+    pub tiles_shared: usize,
     /// Effect layers whose shape was (re)rendered, fully or partially.
     pub fx_shapes: usize,
     /// Effect map programs run (one per effect whose maps were rebuilt).
@@ -107,6 +120,10 @@ pub struct Stats {
     pub evicted: usize,
     /// Intermediate submits of a huge refresh (to bound staging and evicted memory).
     pub flushes: usize,
+    /// Chunks restored from an unchanged lower-stack composite.
+    pub prefix_hits: usize,
+    /// Planned prefix passes skipped, summed over the reused chunks.
+    pub prefix_passes_skipped: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -161,6 +178,13 @@ type ResKey = (LayerId, Role, Cell);
 /// larger than the texture limit.
 type FxKey = (LayerId, Option<Cell>);
 
+struct CachedPattern {
+    fingerprint: u64,
+    format: PixelFormat,
+    default_bits: Vec<u32>,
+    texture: Tex,
+}
+
 struct Resident {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
@@ -170,12 +194,19 @@ struct Resident {
     format: PixelFormat,
     tiles: HashMap<TileCoord, Arc<Tile>>,
     default_nonzero: bool,
+    /// Bit pattern of the surface's default pixel when the texture was filled. Tiles the surface
+    /// doesn't store hold it, so a changed default (Invert, Fill) makes the texture stale.
+    default_bits: Vec<u32>,
     doc: DocId,
     last_used: u64,
     /// Cell visit that last used it (least recently used pages are evicted first).
     stamp: u64,
     /// CMYK profile the texels were converted with (`CmykSpace::id`, 0 = built-in / not CMYK).
     cmyk: u64,
+    /// Its texels were copied to or from another layer texture by the encoder, so every write
+    /// to it goes through the encoder too: a queued write lands before the encoder runs, and
+    /// would be overwritten by the copy, or leak into it.
+    ordered: bool,
 }
 
 impl Resident {
@@ -385,9 +416,13 @@ pub struct Compositor {
     pool: Vec<(wgpu::Texture, wgpu::TextureView)>,
     residents: HashMap<ResKey, Resident>,
     fx: HashMap<FxKey, FxEntry>,
+    prefix: prefix::Prefix,
     /// Effect temporaries (R32F, region sized) and the frame they were last used.
     temps: Vec<(Tex, u64)>,
-    patterns: HashMap<String, (u64, Tex)>,
+    patterns: HashMap<String, CachedPattern>,
+    /// The colour mode of the document being encoded: patterns paint in it
+    /// (`photocraft_compose::pattern::pattern_rgba`).
+    pattern_mode: photocraft_color::ColorMode,
     /// Texture side limit the paging is planned for (the device's, or smaller in tests).
     max_dim: u32,
     /// The device's real texture side limit.
@@ -407,6 +442,8 @@ pub struct Compositor {
     stamp: u64,
     /// Bytes staged by uploads since the last submit.
     staged: u64,
+    /// Copies and render passes recorded since the last submit.
+    recorded: u32,
     acc_format: wgpu::TextureFormat,
     /// Whether the effect-map pipelines could be built (else documents with layer effects are
     /// [`Unsupported`] and use the CPU compositor).
@@ -480,6 +517,31 @@ fn grid_rects(r: Rect, step: u32) -> Vec<Rect> {
     out
 }
 
+/// Number of rectangles `grid_rects` would produce, without allocating them during preflight.
+fn grid_rect_count(r: Rect, step: u32) -> Result<usize, Unsupported> {
+    if r.is_empty() {
+        return Ok(0);
+    }
+    let s = i64::from(step.max(1));
+    let axis = |lo: i32, hi: i32| usize::try_from((i64::from(hi) - 1).div_euclid(s) - i64::from(lo).div_euclid(s) + 1).ok();
+    axis(r.x0, r.x1).and_then(|x| axis(r.y0, r.y1).and_then(|y| x.checked_mul(y))).ok_or_else(|| Unsupported("GPU compositor chunk count is too large".into()))
+}
+
+/// Host length and GPU capacity for the chunk/pass uniform records, including their u32
+/// dynamic binding offsets. Decline unsupported stacks before an invalid buffer faults the device.
+fn uniform_buffer_len(chunks: usize, passes: usize, limit: u64) -> Result<usize, Unsupported> {
+    let too_large = || Unsupported("GPU compositor uniform buffer is too large".into());
+    let records = chunks.checked_add(passes).and_then(|n| u64::try_from(n).ok()).ok_or_else(too_large)?;
+    let bytes = records.checked_mul(STRIDE).ok_or_else(too_large)?;
+    if bytes > limit {
+        return Err(Unsupported(format!("GPU compositor uniform buffer requires {bytes} bytes; device limit is {limit}")));
+    }
+    if bytes.saturating_sub(STRIDE) > u64::from(u32::MAX) {
+        return Err(Unsupported("GPU compositor uniform offsets exceed u32".into()));
+    }
+    usize::try_from(bytes).map_err(|_| too_large())
+}
+
 /// The reach up to which each distance field must be exact (the largest any program asks for).
 fn field_reaches(progs: &[fx::MapProgram]) -> HashMap<FieldKind, i32> {
     let mut want: HashMap<FieldKind, i32> = HashMap::new();
@@ -490,22 +552,38 @@ fn field_reaches(progs: &[fx::MapProgram]) -> HashMap<FieldKind, i32> {
     want
 }
 
-/// Runs `f` inside validation and internal-error scopes and returns the first error raised.
+/// Runs `f` inside GPU error scopes and returns the first error raised.
 /// Native wgpu reports errors synchronously; where they only arrive asynchronously (WebGPU) none
 /// is reported.
 fn first_error<T>(device: &wgpu::Device, f: impl FnOnce() -> T) -> (T, Option<wgpu::Error>) {
     let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+    let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
     let out = f();
     let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
     let mut error = None;
     // Scopes pop in reverse order.
-    for pop in [internal.pop(), validation.pop()] {
+    for pop in [memory.pop(), internal.pop(), validation.pop()] {
         if let std::task::Poll::Ready(Some(e)) = std::pin::pin!(pop).poll(&mut cx) {
             error.get_or_insert(e);
         }
     }
     (out, error)
+}
+
+/// Unwatched native callers need GPU errors to become `Unsupported` instead of reaching wgpu's
+/// default panic handler. Watched callers keep their fault callbacks, which stop work promptly
+/// and update the health flag shared with the canvas.
+fn scoped_work<T>(device: &wgpu::Device, watched: bool, f: impl FnOnce() -> Result<T, Unsupported>) -> Result<T, Unsupported> {
+    // WebGPU errors arrive asynchronously; its callers still use the health callbacks.
+    if watched || cfg!(target_arch = "wasm32") {
+        return f();
+    }
+    let (result, error) = first_error(device, f);
+    match error {
+        Some(error) => Err(Unsupported(format!("GPU work failed: {error}"))),
+        None => result,
+    }
 }
 
 impl Compositor {
@@ -588,18 +666,21 @@ impl Compositor {
             pool: Vec::new(),
             residents: HashMap::new(),
             fx: HashMap::new(),
+            prefix: prefix::Prefix::default(),
             temps: Vec::new(),
             patterns: HashMap::new(),
+            pattern_mode: photocraft_color::ColorMode::Rgb,
             max_dim: 0,
             device_max: device.limits().max_texture_dimension_2d,
             page: PAGE,
             chunk: CHUNK,
             resident_budget: RESIDENT_BUDGET,
-            fx_budget: FX_BUDGET as u64,
+            fx_budget: (FX_BUDGET as u64).saturating_sub(prefix::MAX_BYTES),
             focus: None,
             frame: 0,
             stamp: 0,
             staged: 0,
+            recorded: 0,
             acc_format,
             effect_maps: map_error.is_none(),
             cmyk: 0,
@@ -625,10 +706,12 @@ impl Compositor {
         }
         self.page = page;
         self.chunk = CHUNK.min(page);
+        self.prefix.set_step(self.chunk);
         self.pool.clear();
         self.residents.clear();
         self.fx.clear();
         self.temps.clear();
+        self.prefix.clear();
     }
 
     /// The page side layer surfaces are stored in.
@@ -641,17 +724,32 @@ impl Compositor {
         self.resident_budget = bytes;
     }
 
-    /// Set the GPU memory the compositor may hold for layer pages and effect maps together
-    /// (a quarter of it, at most [`FX_BUDGET`], for effect maps). Uploads and evicted pages in
+    /// Set the GPU memory the compositor may hold for layer pages and caches together
+    /// (a quarter of it, at most [`FX_BUDGET`], for effect maps and lower-stack chunks). Uploads and evicted pages in
     /// flight during a refresh stay within about a quarter more.
     pub fn set_memory_budget(&mut self, bytes: u64) {
-        self.fx_budget = (FX_BUDGET as u64).min(bytes / 4);
-        self.resident_budget = bytes.saturating_sub(self.fx_budget);
+        let caches = (FX_BUDGET as u64).min(bytes / 4);
+        self.prefix.set_budget((caches / 2).min(prefix::MAX_BYTES));
+        self.fx_budget = caches.saturating_sub(self.prefix.budget());
+        self.resident_budget = bytes.saturating_sub(caches);
     }
 
-    /// The budget of layer pages plus effect maps (bytes).
+    /// The budget of layer pages, effect maps and lower-stack chunks (bytes).
     pub fn memory_budget(&self) -> u64 {
-        self.resident_budget.saturating_add(self.fx_budget)
+        self.resident_budget.saturating_add(self.fx_budget).saturating_add(self.prefix.budget())
+    }
+
+    /// Bytes held by reusable lower-stack chunks, within the overall cache allowance.
+    pub fn composite_cache_bytes(&self) -> u64 {
+        self.prefix.bytes()
+    }
+
+    /// Cap lower-stack reuse (default at most 512 MiB); zero disables it. The released allowance
+    /// goes back to effect maps, preserving the total budget and layer-page allowance.
+    pub fn set_composite_cache_budget(&mut self, bytes: u64) {
+        let caches = self.fx_budget.saturating_add(self.prefix.budget());
+        self.prefix.set_budget(bytes.min(caches));
+        self.fx_budget = caches.saturating_sub(self.prefix.budget());
     }
 
     /// Bytes of the layer pages a render of `region` needs resident (each layer and mask
@@ -767,6 +865,27 @@ impl Compositor {
     pub fn forget_doc(&mut self, doc: DocId) {
         self.residents.retain(|_, r| r.doc != doc);
         self.fx.retain(|_, e| e.doc != doc);
+        self.prefix.forget(doc);
+    }
+
+    /// [`Self::forget_doc`] for every document `keep` rejects: what the compositor holds for
+    /// documents that were closed, however their canvas entry went (#4529).
+    pub fn retain_docs(&mut self, keep: impl Fn(DocId) -> bool) {
+        let mut gone: Vec<DocId> =
+            self.residents.values().map(|r| r.doc).chain(self.fx.values().map(|e| e.doc)).chain(self.prefix.doc()).filter(|d| !keep(*d)).collect();
+        gone.sort_by_key(|d| d.0);
+        gone.dedup();
+        for d in gone {
+            self.forget_doc(d);
+        }
+    }
+
+    /// Documents the compositor holds pages, effect maps or a lower-stack composite for.
+    pub fn held_docs(&self) -> Vec<DocId> {
+        let mut docs: Vec<DocId> = self.residents.values().map(|r| r.doc).chain(self.fx.values().map(|e| e.doc)).chain(self.prefix.doc()).collect();
+        docs.sort_by_key(|d| d.0);
+        docs.dedup();
+        docs
     }
 
     /// GPU memory held by cached effect maps (bytes).
@@ -799,10 +918,16 @@ impl Compositor {
         region: Rect,
         mut sink: impl FnMut(&mut wgpu::CommandEncoder, ChunkOut<'_>),
     ) -> Result<Stats, Unsupported> {
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_compose") });
-        let stats = self.encode_inner(device, queue, &mut encoder, doc, region, &mut sink, true)?;
-        queue.submit([encoder.finish()]);
-        Ok(stats)
+        let result = scoped_work(device, self.health.is_some(), || {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_compose") });
+            let stats = self.encode_inner(device, queue, &mut encoder, doc, region, &mut sink, true)?;
+            queue.submit([encoder.finish()]);
+            Ok(stats)
+        });
+        if result.is_err() {
+            self.discard_failed_work();
+        }
+        result
     }
 
     /// Like [`Self::render`] but records into `encoder` without submitting.
@@ -815,7 +940,22 @@ impl Compositor {
         region: Rect,
         sink: &mut dyn FnMut(&mut wgpu::CommandEncoder, ChunkOut<'_>),
     ) -> Result<Stats, Unsupported> {
-        self.encode_inner(device, queue, encoder, doc, region, sink, false)
+        let result = scoped_work(device, self.health.is_some(), || self.encode_inner(device, queue, encoder, doc, region, sink, false));
+        if result.is_err() {
+            self.discard_failed_work();
+        }
+        result
+    }
+
+    fn discard_failed_work(&mut self) {
+        // Cache metadata advances while recording. A failed encoder may never execute its
+        // texture uploads or effect maps, so none of those cached pixels can be trusted.
+        self.prefix.clear();
+        self.residents.clear();
+        self.fx.clear();
+        self.patterns.clear();
+        self.temps.clear();
+        self.pool.clear();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -853,9 +993,18 @@ impl Compositor {
         let region = region.intersect(&canvas);
         let plan = plan(doc)?;
         self.check_fx(doc, &plan)?;
+        self.pattern_mode = doc.pixel_format().mode;
         let mut stats = Stats { passes: plan.passes.len(), slots: plan.slots, ..Default::default() };
         if region.is_empty() {
             return Ok(stats);
+        }
+        let page = self.page;
+        let mut cells = grid_rects(region, page);
+        // Check every actual page cell before uploads, submissions or sink output. A later
+        // cell can need more chunk records than the first; a failure must leave the device healthy.
+        let buffer_limit = device.limits().max_buffer_size;
+        for part in &cells {
+            uniform_buffer_len(grid_rect_count(*part, self.chunk)?, plan.passes.len(), buffer_limit)?;
         }
         if self.frame == 0 {
             // The first submission after device creation is dropped on some drivers (RADV),
@@ -865,6 +1014,11 @@ impl Compositor {
         self.frame += 1;
         self.stamp += 1;
         self.staged = 0;
+        self.recorded = 0;
+
+        // Only render owns submission. A caller may discard encode's command buffer, so it
+        // cannot establish (or consume) a checkpoint whose GPU copy might never execute.
+        let checkpoint = if flush { self.prefix.prepare(doc, &plan) } else { None };
 
         // Effect maps of whole regions first (they may render group shapes through sub-plans);
         // regions larger than the limit are built per cell below.
@@ -879,8 +1033,6 @@ impl Compositor {
 
         // Page cells; every other frame in reverse, so a repeated full refresh of a document
         // larger than the budget starts with the pages still resident.
-        let page = self.page;
-        let mut cells = grid_rects(region, page);
         if self.frame.is_multiple_of(2) {
             cells.reverse();
         }
@@ -891,9 +1043,7 @@ impl Compositor {
         }
         let flush_bytes = FLUSH_BYTES.min(self.memory_budget() / 8).max(16 << 20);
         stats.cells = cells.len();
-        // The previous intermediate submit (waited for before the next is queued; the web has
-        // no blocking wait and relies on the browser's own scheduling).
-        #[cfg(not(target_arch = "wasm32"))]
+        // The previous intermediate submit (see `submit_batch`).
         let mut last_submit: Option<wgpu::SubmissionIndex> = None;
         // Work recorded and bytes evicted since the last submit.
         let (mut work, mut freed) = (0u64, 0u64);
@@ -912,29 +1062,19 @@ impl Compositor {
             let chunks = grid_rects(part, self.chunk);
             stats.chunks += chunks.len();
             work += part.width() as u64 * part.height() as u64 * plan.passes.len() as u64;
-            self.run_cell(device, queue, encoder, doc.id, &plan, &paged, cell, &fr, &chunks, &mut stats, sink);
+            let mut batch = flush.then_some(&mut last_submit);
+            self.run_cell(device, queue, encoder, doc.id, &plan, &paged, cell, &fr, &chunks, checkpoint, &mut stats, sink, &mut batch);
+            // The device was lost in a submit inside the cell: issue no more work.
+            if let Some(f) = self.fault() {
+                return Err(Unsupported(f.to_string()));
+            }
             let (evicted, bytes) = self.evict();
             stats.evicted += evicted;
             freed += bytes;
-            if flush && (self.staged >= flush_bytes || work >= FLUSH_WORK || freed >= flush_bytes) {
-                // Submit what's recorded, and wait for the previous submit, so at most two
-                // batches of uploads and evicted pages are in flight.
-                let done = std::mem::replace(encoder, device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_compose") }));
-                let index = queue.submit([done.finish()]);
-                #[cfg(not(target_arch = "wasm32"))]
-                if let Some(prev) = last_submit.replace(index) {
-                    match &self.health {
-                        Some(h) => {
-                            h.wait(device, Some(prev));
-                        }
-                        None => {
-                            let _ = device.poll(wgpu::PollType::Wait { submission_index: Some(prev), timeout: None });
-                        }
-                    }
-                }
-                #[cfg(target_arch = "wasm32")]
-                let _ = index;
+            if flush && (self.staged >= flush_bytes || work >= FLUSH_WORK || freed >= flush_bytes || self.recorded >= FLUSH_OPS) {
+                submit_batch(device, queue, encoder, self.health.as_ref(), &mut last_submit);
                 self.staged = 0;
+                self.recorded = 0;
                 work = 0;
                 freed = 0;
                 stats.flushes += 1;
@@ -1028,6 +1168,7 @@ impl Compositor {
         paged: &[bool],
         cell: Cell,
         fr: &FrameRes,
+        first_pass: usize,
         stats: &mut Stats,
     ) -> Bound {
         let cr = cell_rect(cell, self.page);
@@ -1035,6 +1176,11 @@ impl Compositor {
         let mut keys: Vec<ResKey> = Vec::new();
         let mut maps = Vec::with_capacity(plan.passes.len());
         for (i, p) in plan.passes.iter().enumerate() {
+            if i < first_pass {
+                views.push((None, None));
+                maps.push(None);
+                continue;
+            }
             let (ta, ma) = fr.areas.get(i).copied().unwrap_or((Rect::EMPTY, Rect::EMPTY));
             let tex =
                 p.tex.as_ref().and_then(|t| self.sync(device, queue, encoder, doc, (t.layer, t.role, cell), t.surface.get(), ta.intersect(&cr), stats)).map(
@@ -1080,13 +1226,17 @@ impl Compositor {
         cell: Cell,
         fr: &FrameRes,
         chunks: &[Rect],
+        checkpoint: Option<plan::Checkpoint>,
         stats: &mut Stats,
         sink: &mut dyn FnMut(&mut wgpu::CommandEncoder, ChunkOut<'_>),
+        // The previous intermediate submit, when this refresh may submit in between.
+        batch: &mut Option<&mut Option<wgpu::SubmissionIndex>>,
     ) {
         if chunks.is_empty() {
             return;
         }
-        let bound = self.bind_cell(device, queue, encoder, doc, plan, paged, cell, fr, stats);
+        let first_pass = checkpoint.filter(|_| chunks.iter().all(|c| self.prefix.contains(*c))).map_or(0, |c| c.pass_end);
+        let bound = self.bind_cell(device, queue, encoder, doc, plan, paged, cell, fr, first_pass, stats);
 
         // Chunk pool.
         while self.pool.len() < plan.slots as usize {
@@ -1107,7 +1257,8 @@ impl Compositor {
             self.pool.push((t, v));
         }
 
-        // Uniforms: chunk records, then one record per pass.
+        // Uniforms: chunk records, then one record per pass. encode_scoped preflight checked
+        // the length, device capacity and dynamic offsets before any GPU work for this frame.
         let op_base = chunks.len() as u64 * STRIDE;
         let mut data = vec![0u8; (op_base + plan.passes.len() as u64 * STRIDE) as usize];
         for (i, c) in chunks.iter().enumerate() {
@@ -1115,6 +1266,9 @@ impl Compositor {
             data[i * STRIDE as usize..][..w.len()].copy_from_slice(&w);
         }
         for (i, p) in plan.passes.iter().enumerate() {
+            if i < first_pass {
+                continue;
+            }
             let (tex, mask) = bound.views[i];
             let map = bound.maps[i].as_ref().map(|(_, r)| *r);
             let w = op_words(p, tex.map(|t| t.1), mask.map(|m| m.1), map);
@@ -1135,7 +1289,7 @@ impl Compositor {
         let resident_views: Vec<&wgpu::TextureView> = bound.keys.iter().map(|k| self.residents.get(k).map_or(dummy, |r| &r.view)).collect();
         let mut bg1 = Vec::with_capacity(plan.passes.len());
         for (i, p) in plan.passes.iter().enumerate() {
-            if p.kernel.entry().is_none() {
+            if i < first_pass || p.kernel.entry().is_none() {
                 bg1.push(None);
                 continue;
             }
@@ -1150,7 +1304,38 @@ impl Compositor {
         }
 
         for (ci, c) in chunks.iter().enumerate() {
+            let mut resume = 0;
+            if let Some(cp) = checkpoint
+                && let Some((dst, _)) = self.pool.get(cp.slot as usize)
+                && self.prefix.copy_out(encoder, *c, dst)
+            {
+                resume = cp.pass_end;
+                stats.prefix_hits = stats.prefix_hits.saturating_add(1);
+                stats.prefix_passes_skipped = stats.prefix_passes_skipped.saturating_add(resume);
+            }
             for (i, p) in plan.passes.iter().enumerate() {
+                if i < resume {
+                    continue;
+                }
+                // Chunk textures, uniforms and bind groups outlive the submit, and the queue
+                // keeps the order, so a chunk may continue in the next command buffer.
+                if self.recorded >= FLUSH_OPS
+                    && let Some(last) = batch.as_deref_mut()
+                {
+                    submit_batch(device, queue, encoder, self.health.as_ref(), last);
+                    self.staged = 0;
+                    self.recorded = 0;
+                    stats.flushes += 1;
+                    if self.fault().is_some() {
+                        return;
+                    }
+                }
+                if resume == 0
+                    && let Some(cp) = checkpoint.filter(|cp| cp.pass_end == i)
+                    && let Some((src, _)) = self.pool.get(cp.slot as usize)
+                {
+                    self.prefix.capture(device, encoder, *c, src);
+                }
                 let scissor = match p.clip {
                     Some(clip) => {
                         let r = clip.intersect(c);
@@ -1182,10 +1367,12 @@ impl Compositor {
                             },
                             wgpu::Extent3d { width: scissor.width(), height: scissor.height(), depth_or_array_layers: 1 },
                         );
+                        self.recorded += 1;
                         continue;
                     }
                     _ => {}
                 }
+                self.recorded += 1;
                 let target = &self.pool[p.dst as usize].1;
                 let clear = p.kernel == Kernel::Clear;
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1213,6 +1400,12 @@ impl Compositor {
                 pass.set_bind_group(1, bg1[i].as_ref(), &[]);
                 pass.draw(0..3, 0..1);
             }
+            if resume == 0
+                && let Some(cp) = checkpoint.filter(|cp| cp.pass_end == plan.passes.len())
+                && let Some((src, _)) = self.pool.get(cp.slot as usize)
+            {
+                self.prefix.capture(device, encoder, *c, src);
+            }
             let (t, v) = &self.pool[plan.root as usize];
             sink(encoder, ChunkOut { rect: *c, texture: t, view: v });
         }
@@ -1238,7 +1431,12 @@ impl Compositor {
         let format = surface.format();
         let kind = TexKind::for_surface(key.1, format);
         let cmyk = if format.mode == photocraft_color::ColorMode::Cmyk { self.cmyk } else { 0 };
-        let stale = self.residents.get(&key).is_none_or(|r| r.region != region || r.kind != kind || r.format != format || r.cmyk != cmyk);
+        let default_pixel = surface.default_pixel();
+        let default_bits: Vec<u32> = default_pixel.iter().map(|v| v.to_bits()).collect();
+        let stale = self
+            .residents
+            .get(&key)
+            .is_none_or(|r| r.region != region || r.kind != kind || r.format != format || r.cmyk != cmyk || r.default_bits != default_bits);
         if stale {
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("pc_compose_layer"),
@@ -1247,37 +1445,85 @@ impl Compositor {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: kind.format(),
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
             let view = texture.create_view(&Default::default());
-            let default_nonzero = surface.default_pixel().iter().any(|v| *v != 0.0);
-            let mut r = Resident { texture, view, region, kind, format, tiles: HashMap::new(), default_nonzero, doc, last_used: 0, stamp: 0, cmyk };
-            // A new texture starts zeroed: write the tiles that are present, and the default pixel
-            // where they are missing if it isn't zero. Coordinates sharing a tile (a solid fill,
-            // the default) take one upload and GPU copies (#1774).
-            let mut present = Vec::new();
-            let mut missing = Vec::new();
-            for c in region.tiles() {
-                match surface.tile(c) {
-                    Some(t) => present.push((c, t.clone())),
-                    None if default_nonzero => missing.push(c),
-                    None => {}
+            let default_nonzero = default_pixel.iter().any(|v| *v != 0.0);
+            let mut r = Resident {
+                texture,
+                view,
+                region,
+                kind,
+                format,
+                tiles: HashMap::new(),
+                default_nonzero,
+                default_bits: default_bits.clone(),
+                doc,
+                last_used: 0,
+                stamp: 0,
+                cmyk,
+                ordered: false,
+            };
+            // Only the region moved (painting past a layer's tiles grows it): keep the texels the
+            // old texture already holds instead of converting and uploading every tile again.
+            let kept = self.residents.remove(&key).map_or(Rect::EMPTY, |old| keep_overlap(device, queue, &old, &mut r));
+            // A new layer whose tiles another resident already holds (a duplicate shares its
+            // source's tiles) starts as a GPU copy of that texture. Duplicating a 20 MP photo
+            // converted and uploaded every tile again.
+            let shares =
+                |o: &Resident| region.tiles().filter(|c| surface.tile(*c).is_some_and(|t| o.tiles.get(c).is_some_and(|ot| Arc::ptr_eq(ot, t)))).count();
+            let donor = self
+                .residents
+                .iter()
+                .filter(|(k, o)| k.1 == key.1 && o.region == region && o.kind == kind && o.format == format && o.cmyk == cmyk && o.default_bits == default_bits)
+                .map(|(k, o)| (shares(o), *k))
+                .filter(|(n, _)| *n > 0)
+                .max_by_key(|(n, _)| *n);
+            if kept.is_empty()
+                && let Some((n, o)) = donor.and_then(|(n, k)| Some((n, self.residents.get_mut(&k)?)))
+            {
+                // Recorded in the frame's encoder, after the writes and copies that brought the
+                // donor up to date ([`keep_overlap`]'s own submission would run before those).
+                o.ordered = true;
+                encoder.copy_texture_to_texture(
+                    o.texture.as_image_copy(),
+                    r.texture.as_image_copy(),
+                    wgpu::Extent3d { width: region.width(), height: region.height(), depth_or_array_layers: 1 },
+                );
+                r.tiles = o.tiles.clone();
+                r.ordered = true;
+                stats.tiles_shared += n;
+            } else {
+                // A new texture starts zeroed: write the tiles that are present, and the default
+                // pixel where they are missing if it isn't zero. Coordinates sharing a tile (a
+                // solid fill, the default) take one upload and GPU copies (#1774). Kept tiles are
+                // brought up to date below, like those of a resident that didn't move.
+                let mut present = Vec::new();
+                let mut missing = Vec::new();
+                for c in region.tiles().filter(|c| !kept.contains_rect(&c.rect())) {
+                    match surface.tile(c) {
+                        Some(t) => present.push((c, t.clone())),
+                        None if default_nonzero => missing.push(c),
+                        None => {}
+                    }
                 }
-            }
-            if !missing.is_empty() {
-                let bytes = convert_tile(surface, None, kind, TileCoord::new(0, 0));
-                self.staged += put_tiles(device, queue, encoder, &r, &missing, &bytes);
-            }
-            let staged = &mut self.staged;
-            convert_tiles(surface, present, kind, |t, cs, bytes| {
-                *staged += put_tiles(device, queue, encoder, &r, cs, bytes);
-                for &c in cs {
-                    stats.tiles_uploaded += 1;
-                    stats.bytes_uploaded += bytes.len();
-                    r.tiles.insert(c, t.clone());
+                if !missing.is_empty() {
+                    let bytes = convert_tile(surface, None, kind, TileCoord::new(0, 0));
+                    self.staged += put_tiles(device, queue, encoder, &r, &missing, &bytes);
                 }
-            });
+                let staged = &mut self.staged;
+                convert_tiles(surface, present, kind, |t, cs, bytes| {
+                    *staged += put_tiles(device, queue, encoder, &r, cs, bytes);
+                    for &c in cs {
+                        stats.tiles_uploaded += 1;
+                        stats.bytes_uploaded += bytes.len();
+                        r.tiles.insert(c, t.clone());
+                    }
+                });
+            }
+            // Tiles the donor held that this surface doesn't, or holds differently, are fixed up
+            // by the pass over the region below.
             self.residents.insert(key, r);
         }
         // Present: inserted above when it was missing or stale.
@@ -1322,20 +1568,26 @@ impl Compositor {
         Some((key, [region.x0, region.y0, region.width() as i32, region.height() as i32]))
     }
 
-    /// Premultiplied RGBA32F texture of a pattern (cached by pixel identity).
+    /// Premultiplied RGBA32F texture of a pattern as it paints in the document's mode (cached by
+    /// pixel identity and mode).
     fn pattern_view(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, pat: &Pattern) -> wgpu::TextureView {
         let fp = pat.surface.tiles().fold((pat.width as u64) << 32 | pat.height as u64, |acc, (c, t)| {
             acc.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (Arc::as_ptr(t) as usize as u64) ^ ((c.tx as u64) << 20) ^ c.ty as u64
         });
-        let key = format!("{}\u{0}{}", pat.id, pat.name);
-        if let Some((f, t)) = self.patterns.get(&key)
-            && *f == fp
+        let mode = self.pattern_mode;
+        let key = format!("{}\u{0}{}\u{0}{mode:?}", pat.id, pat.name);
+        let format = pat.surface.format();
+        // Unstored tiles read the default pixel, interpreted in the source format.
+        let default_bits: Vec<u32> = pat.surface.default_pixel().iter().map(|v| v.to_bits()).collect();
+        if let Some(cached) = self.patterns.get(&key)
+            && cached.fingerprint == fp
+            && cached.format == format
+            && cached.default_bits == default_bits
         {
-            return t.view.clone();
+            return cached.texture.view.clone();
         }
         let (w, h) = (pat.width, pat.height);
-        let mut px = vec![[0.0f32; 4]; w as usize * h as usize];
-        pat.surface.read_rgba_into(pat.rect(), &mut px);
+        let px = photocraft_compose::pattern::pattern_rgba(pat, mode);
         let bytes: Vec<u8> = px.iter().flat_map(|q| [q[0] * q[3], q[1] * q[3], q[2] * q[3], q[3]]).flat_map(f32::to_le_bytes).collect();
         let t = Tex::new(device, "pc_pattern", w, h, wgpu::TextureFormat::Rgba32Float, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
         queue.write_texture(
@@ -1345,7 +1597,7 @@ impl Compositor {
             wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
         );
         let v = t.view.clone();
-        self.patterns.insert(key, (fp, t));
+        self.patterns.insert(key, CachedPattern { fingerprint: fp, format, default_bits, texture: t });
         v
     }
 
@@ -1645,7 +1897,7 @@ fn op_words(p: &plan::Pass<'_>, tex: Option<[i32; 4]>, mask: Option<[i32; 4]>, m
         F(p.opacity),
         F(density),
         F(mdefault),
-        F(0.0),
+        F(p.fill),
         I(to[0]),
         I(to[1]),
         I(ts[0]),
@@ -1686,6 +1938,33 @@ fn write_tile(queue: &wgpu::Queue, r: &Resident, c: TileCoord, bytes: &[u8]) {
     );
 }
 
+/// Submit what `encoder` recorded and continue in a fresh one, then wait for the previous
+/// intermediate submit (`last`), so at most two batches of uploads and evicted pages are in
+/// flight. The web has no blocking wait and relies on the browser's own scheduling.
+fn submit_batch(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    encoder: &mut wgpu::CommandEncoder,
+    health: Option<&DeviceHealth>,
+    last: &mut Option<wgpu::SubmissionIndex>,
+) {
+    let done = std::mem::replace(encoder, device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_compose") }));
+    let prev = last.replace(queue.submit([done.finish()]));
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(prev) = prev {
+        match health {
+            Some(h) => {
+                h.wait(device, Some(prev));
+            }
+            None => {
+                let _ = device.poll(wgpu::PollType::Wait { submission_index: Some(prev), timeout: None });
+            }
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = (prev, health);
+}
+
 /// Distinct tiles converted per parallel batch: bounds the converted bytes held at once (64 tiles
 /// of a 16-bit page are 32 MiB).
 const CONVERT_BATCH: usize = 64;
@@ -1695,7 +1974,9 @@ const CONVERT_BATCH: usize = 64;
 /// a scratch tile and GPU copies from it: writing each one from the CPU sent 387 MB per refresh
 /// of a filled 50 MP 16-bit page (#1774).
 fn put_tiles(device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, r: &Resident, cs: &[TileCoord], bytes: &[u8]) -> u64 {
-    if let [c] = cs {
+    if let [c] = cs
+        && !r.ordered
+    {
         write_tile(queue, r, *c, bytes);
         return bytes.len() as u64;
     }
@@ -1741,6 +2022,40 @@ fn put_tiles(device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::Com
     bytes.len() as u64
 }
 
+/// Copy the texels `old` holds inside the region of its replacement `new` (same texel kind,
+/// format and default pixel; only the region moved) and carry over the tiles they show, so only
+/// tiles outside the overlap or changed since need uploading. Returns the kept (tile-aligned)
+/// rect; empty when nothing can be kept.
+fn keep_overlap(device: &wgpu::Device, queue: &wgpu::Queue, old: &Resident, new: &mut Resident) -> Rect {
+    let same = old.kind == new.kind && old.format == new.format && old.cmyk == new.cmyk && old.default_bits == new.default_bits;
+    let k = old.region.intersect(&new.region);
+    if !same || k.is_empty() {
+        return Rect::EMPTY;
+    }
+    // Its own submission: tile writes go through the queue and land at the start of the next
+    // submit, before anything in the frame's encoder, so a copy recorded there would overwrite
+    // the tiles written after it with the old texels.
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_compose_keep") });
+    encoder.copy_texture_to_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &old.texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d { x: (k.x0 - old.region.x0) as u32, y: (k.y0 - old.region.y0) as u32, z: 0 },
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyTextureInfo {
+            texture: &new.texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d { x: (k.x0 - new.region.x0) as u32, y: (k.y0 - new.region.y0) as u32, z: 0 },
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::Extent3d { width: k.width(), height: k.height(), depth_or_array_layers: 1 },
+    );
+    queue.submit([encoder.finish()]);
+    new.tiles = old.tiles.iter().filter(|(c, _)| k.contains_rect(&c.rect())).map(|(c, t)| (*c, t.clone())).collect();
+    k
+}
+
 /// Convert `tiles` of `surface` to `kind` texels and hand each distinct tile, the coordinates
 /// sharing it and its bytes to `put`. Each distinct tile is converted once (a solid fill shares
 /// one `Arc` across every coordinate it covers), in parallel batches. Converting every tile one
@@ -1778,7 +2093,7 @@ fn convert_tile(surface: &Surface, tile: Option<&Arc<Tile>>, kind: TexKind, c: T
     let fmt = surface.format();
     let ch = fmt.channels();
     if let (Some(t), TexKind::Rgba16F) = (tile, kind)
-        && let Some(out) = rgb_gray16_to_f16(&fmt, t.bytes())
+        && let Some(out) = rgb_gray16_to_f16(&fmt, t.bytes()).or_else(|| rgb_gray32_to_f16(&fmt, t.bytes()))
     {
         return out;
     }
@@ -1830,6 +2145,43 @@ fn rgb_gray16_to_f16(fmt: &PixelFormat, bytes: &[u8]) -> Option<Vec<u8>> {
             half.get(v as usize).copied().unwrap_or(0).to_le_bytes()
         };
         let (r, g, b) = if gray { (h(0), h(0), h(0)) } else { (h(0), h(1), h(2)) };
+        let a = if fmt.alpha { h(ch - 1) } else { one };
+        out.extend_from_slice(&r);
+        out.extend_from_slice(&g);
+        out.extend_from_slice(&b);
+        out.extend_from_slice(&a);
+    }
+    Some(out)
+}
+
+/// RGBA16F texels of a 32-bit float RGB or grayscale tile, straight from its samples: the same
+/// bytes as the general path without decoding the tile into a float buffer and converting it
+/// pixel by pixel (a brush dab on a 32-bit layer re-uploads the tiles it touched). `None` for
+/// other formats.
+fn rgb_gray32_to_f16(fmt: &PixelFormat, bytes: &[u8]) -> Option<Vec<u8>> {
+    use photocraft_color::ColorMode;
+    if fmt.sample != SampleType::F32 {
+        return None;
+    }
+    let gray = match fmt.mode {
+        ColorMode::Rgb => false,
+        ColorMode::Grayscale | ColorMode::Bitmap | ColorMode::Duotone => true,
+        _ => return None,
+    };
+    let one = f32_to_f16(1.0).to_le_bytes();
+    let ch = fmt.channels();
+    let mut out = Vec::with_capacity((TILE_SIZE * TILE_SIZE) as usize * 8);
+    for px in bytes.chunks_exact(ch * 4) {
+        let h = |i: usize| -> [u8; 2] {
+            let v = px.get(i * 4..i * 4 + 4).map_or(0.0, |b| f32::from_ne_bytes([b[0], b[1], b[2], b[3]]));
+            f32_to_f16(v).to_le_bytes()
+        };
+        let (r, g, b) = if gray {
+            let v = h(0);
+            (v, v, v)
+        } else {
+            (h(0), h(1), h(2))
+        };
         let a = if fmt.alpha { h(ch - 1) } else { one };
         out.extend_from_slice(&r);
         out.extend_from_slice(&g);
@@ -2001,6 +2353,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn uniform_buffer_sizes_are_checked_before_allocation() {
+        assert_eq!(uniform_buffer_len(1, 255, 65_536).unwrap(), 65_536);
+        assert!(uniform_buffer_len(1, 255, 65_535).is_err());
+        assert!(uniform_buffer_len(usize::MAX, 1, u64::MAX).is_err());
+        assert!(uniform_buffer_len(usize::MAX, 0, u64::MAX).is_err());
+        assert!(uniform_buffer_len(1, 16_777_216, u64::MAX).is_err(), "the last record offset cannot be represented by u32");
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(uniform_buffer_len(1, 16_777_215, u64::MAX).unwrap(), 4_294_967_296, "the last valid u32 dynamic offset is accepted");
+    }
+
+    #[test]
     fn half_roundtrip() {
         for v in [0.0f32, 1.0, 0.5, 0.25, 1.0 / 255.0, 0.333, 65504.0, -2.5, 1e-6] {
             let r = f16_to_f32(f32_to_f16(v));
@@ -2135,22 +2498,28 @@ mod tests {
         assert_eq!((converted, n), (CONVERT_BATCH + 5, CONVERT_BATCH + 5));
     }
 
-    /// The 16-bit RGB/gray fast path gives exactly the general path's half floats.
+    /// The 16-bit and 32-bit float RGB/gray fast paths give exactly the general path's half
+    /// floats (32-bit samples above 1 and below 0 included).
     #[test]
-    fn sixteen_bit_fast_path_matches_the_general_one() {
+    fn sixteen_and_thirty_two_bit_fast_paths_match_the_general_one() {
         for fmt in [
             PixelFormat::RGBA16,
             PixelFormat { alpha: false, ..PixelFormat::RGBA16 },
             PixelFormat { sample: SampleType::U16, ..PixelFormat::GRAY8 },
             PixelFormat { sample: SampleType::U16, alpha: true, ..PixelFormat::GRAY8 },
+            PixelFormat::RGBA32F,
+            PixelFormat { alpha: false, ..PixelFormat::RGBA32F },
+            PixelFormat { sample: SampleType::F32, ..PixelFormat::GRAY8 },
+            PixelFormat { sample: SampleType::F32, alpha: true, ..PixelFormat::GRAY8 },
         ] {
             let mut s = Surface::new(fmt);
             let r = Rect::new(0, 0, TILE_SIZE, TILE_SIZE);
             let n = (TILE_SIZE * TILE_SIZE) as usize * fmt.channels();
-            let data: Vec<f32> = (0..n).map(|i| (i as u32).wrapping_mul(2_654_435_761) as f32 / u32::MAX as f32).collect();
+            let hdr = if fmt.sample == SampleType::F32 { 4.0 } else { 1.0 };
+            let data: Vec<f32> = (0..n).map(|i| (i as u32).wrapping_mul(2_654_435_761) as f32 / u32::MAX as f32 * hdr - (hdr - 1.0) / 4.0).collect();
             s.write_region(r, &data);
             let t = s.tile(TileCoord::new(0, 0)).expect("written").clone();
-            let fast = rgb_gray16_to_f16(&fmt, t.bytes()).expect("fast path");
+            let fast = rgb_gray16_to_f16(&fmt, t.bytes()).or_else(|| rgb_gray32_to_f16(&fmt, t.bytes())).expect("fast path");
             let raw = s.read_region(r);
             let general: Vec<u8> =
                 raw.chunks_exact(fmt.channels()).flat_map(|px| photocraft_raster::to_rgba(&fmt, px).map(|x| f32_to_f16(x).to_le_bytes())).flatten().collect();
@@ -2159,6 +2528,8 @@ mod tests {
         }
         assert!(rgb_gray16_to_f16(&PixelFormat::RGBA8, &[]).is_none());
         assert!(rgb_gray16_to_f16(&PixelFormat { sample: SampleType::U16, ..PixelFormat::CMYKA8 }, &[]).is_none());
+        assert!(rgb_gray32_to_f16(&PixelFormat::RGBA16, &[]).is_none());
+        assert!(rgb_gray32_to_f16(&PixelFormat { sample: SampleType::F32, ..PixelFormat::CMYKA8 }, &[]).is_none());
     }
 
     #[test]
