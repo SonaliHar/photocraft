@@ -432,3 +432,28 @@ fn generate_more_names_the_provider_that_made_the_layer() {
     let tip = more_tooltip(&app, group);
     assert!(tip.contains("OpenAI") && tip.contains("no longer set up"), "{tip}");
 }
+
+#[test]
+fn saving_one_provider_succeeds_when_another_cannot_load() {
+    let store = Store::default();
+    store.borrow_mut().insert("openai".into(), "{corrupt".into());
+    let (mut app, restored) = configured(&store, &["gemini", "openai"]);
+    assert!(restored.is_err());
+    let id = open_provider(&mut app, "gemini").unwrap();
+    let fields = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+    app.genai.key_inputs.insert("api_key", "AIza-another-secret".into());
+    let r = confirm(&mut app, &fields).expect("the save itself worked");
+    assert_eq!(r["ready"], true);
+    assert!(app.session.image_provider_by_id("gemini").is_some());
+    assert!(app.ui.status.contains("openai"), "{}", app.ui.status);
+    // The settings OK reports the same way.
+    app.ui.status.clear();
+    let id = open_settings(&mut app);
+    let fields = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+    confirm(&mut app, &fields).expect("saving the default worked");
+    assert!(app.ui.status.contains("openai"), "{}", app.ui.status);
+    let saved = saved(&app);
+    assert_eq!(row_status(&app, &saved, "gemini"), "Set up");
+    assert_eq!(row_status(&app, &saved, "openai"), "Needs credentials");
+    assert_eq!(row_status(&app, &saved, "stability"), "Not set up");
+}

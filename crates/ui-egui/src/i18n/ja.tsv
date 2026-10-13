@@ -3611,6 +3611,7 @@ cameraData	Lens	レンズ
 	Default for Generative Fill	生成塗りつぶしの既定
 	Set up	設定済み
 	Not set up	未設定
+	Needs credentials	認証情報が必要
 	Set Up…	設定…
 	Edit…	編集…
 	Client ID	クライアント ID

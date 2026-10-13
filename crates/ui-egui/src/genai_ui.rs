@@ -130,6 +130,27 @@ pub fn restore(app: &mut PhotocraftApp) -> Result<(), String> {
     if problems.is_empty() { Ok(()) } else { Err(problems.join(" ")) }
 }
 
+/// [`restore`] after a settings change that itself succeeded: the providers that can't be
+/// installed (another provider's credentials unreadable, say) are reported in the status line
+/// rather than turning the save into an error.
+fn restore_after_save(app: &mut PhotocraftApp) {
+    if let Err(e) = restore(app) {
+        app.ui.status = e;
+    }
+}
+
+/// A provider's status in Generative AI Settings: installed, configured but not installed (its
+/// credentials are missing or unreadable), or not configured.
+pub(crate) fn row_status(app: &PhotocraftApp, saved: &Saved, id: &str) -> &'static str {
+    if !saved.configured.iter().any(|c| c == id) {
+        tl!("Not set up")
+    } else if app.session.image_provider_by_id(id).is_some() {
+        tl!("Set up")
+    } else {
+        tl!("Needs credentials")
+    }
+}
+
 /// Menu, palette and shortcut entry points. Clicking Generative Fill asks for a prompt; with
 /// `prompt` already in the params (scripted use) it runs directly.
 pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
@@ -320,7 +341,7 @@ fn settings_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String,
                 ui.add(egui::Label::new(egui::RichText::new(spec.name).color(t.text)).extend());
                 ui.add(egui::Label::new(egui::RichText::new(spec.host).color(t.text_faint).size(12.0)).extend());
             });
-            let status = if configured { tl!("Set up") } else { tl!("Not set up") };
+            let status = row_status(app, &saved, spec.id);
             ui.add(egui::Label::new(egui::RichText::new(status).color(t.text_faint).size(12.0)).extend());
             ui.horizontal(|ui| {
                 let label = if configured { tl!("Edit…") } else { tl!("Set Up…") };
@@ -426,7 +447,7 @@ fn confirm_provider(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<V
         saved.default = spec.id.to_owned();
     }
     store_saved(app, &saved);
-    restore(app)?;
+    restore_after_save(app);
     Ok(json!({"provider": spec.id, "model": model, "ready": app.session.image_provider_by_id(spec.id).is_some()}))
 }
 
@@ -469,7 +490,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         saved.default = d.to_owned();
     }
     store_saved(app, &saved);
-    restore(app)?;
+    restore_after_save(app);
     Ok(json!({"default": saved.default, "configured": saved.configured}))
 }
 
