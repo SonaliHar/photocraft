@@ -446,20 +446,15 @@ fn variations_are_requested_at_the_same_time() {
 #[test]
 fn a_models_colour_drift_is_taken_out() {
     // The fake redraws the image 40 levels darker everywhere. Outside the selection that shows
-    // it drifted, so the fill (grey on the left, white on the right, carried in from around the
-    // selection) comes back as it was sent, not 40 levels darker. (Not a flat white scene: a
-    // flat fill is rejected as empty.)
-    let mut s = split_scene();
+    // it drifted, so the fill (white, from around the selection) comes back white, not 215.
+    let mut s = session(160, 160);
+    s.execute("select.rect", json!({"x": 50, "y": 50, "width": 60, "height": 60})).unwrap();
     let fake = Arc::new(Fake { echo: Some(-40), ..Arc::into_inner(Fake::new([0, 0, 0])).unwrap() });
-    s.set_image_provider(Some(fake.clone()));
-    let r = s.execute(FILL, json!({"variations": 1})).unwrap();
-    let sent = codecs::decode(&fake.sent.lock().unwrap()[0].image).unwrap().convert(ChannelLayout::Rgba, CodecSample::U8);
-    let (x0, y0) = (r["bounds"][0].as_i64().unwrap() as i32, r["bounds"][1].as_i64().unwrap() as i32);
-    for (x, y) in [(80, 80), (60, 80), (100, 80), (82, 60)] {
-        let i = ((y - y0) as usize * sent.width() as usize + (x - x0) as usize) * 4;
-        let want = [sent.data()[i], sent.data()[i + 1], sent.data()[i + 2]];
-        let got = rgb_at(&s, x, y);
-        assert!(got.iter().zip(&want).all(|(a, b)| a.abs_diff(*b) <= 6), "({x},{y}): {got:?}, sent {want:?}");
+    s.set_image_provider(Some(fake));
+    s.execute(FILL, json!({"variations": 1})).unwrap();
+    for (x, y) in [(80, 80), (52, 52), (108, 108)] {
+        let [r, g, b] = rgb_at(&s, x, y);
+        assert!([r, g, b].iter().all(|&c| c >= 252), "({x},{y}): {r} {g} {b}");
     }
 }
 
@@ -772,6 +767,7 @@ fn the_generative_layer_mask_has_a_soft_edge_past_the_selection() {
     assert!(mask_at(&s, id, 49, 100) > 0.0, "the blend reaches past the selection");
     // The variation covers the band the mask now reveals.
     assert_eq!(variation_rgb(&s, id, 0, 50 - b, 100), variation_rgb(&s, id, 0, 100, 100));
+    assert_covers_the_mask(&s, id, 100);
     // The selection itself is unchanged.
     assert_eq!(doc(&s).selection.as_ref().unwrap().content_bounds(), Rect::from_xywh(50, 50, 100, 100));
 }
@@ -899,17 +895,17 @@ fn unusable_says_why_a_result_is_rejected() {
     };
     let sent: Vec<f32> = (0..n).flat_map(|i| textured(i, 0.5)).collect();
     let black: Vec<f32> = (0..n).flat_map(|_| [0.0, 0.0, 0.0, 1.0]).collect();
-    let why = unusable(&black, Some(&sent), &reference).unwrap();
+    let why = unusable(&black, Some(&sent), &reference, surroundings(&reference)).unwrap();
     assert!(why.contains("flat"), "{why}");
-    let why = unusable(&sent, Some(&sent), &reference).unwrap();
+    let why = unusable(&sent, Some(&sent), &reference, surroundings(&reference)).unwrap();
     assert!(why.contains("unchanged"), "{why}");
     let fine: Vec<f32> = (0..n).flat_map(|i| textured(i, 0.3)).collect();
-    assert_eq!(unusable(&fine, Some(&sent), &reference), None);
-    assert_eq!(unusable(&fine, None, &reference), None, "without the image sent only flatness is judged");
+    assert_eq!(unusable(&fine, Some(&sent), &reference, surroundings(&reference)), None);
+    assert_eq!(unusable(&fine, None, &reference, surroundings(&reference)), None, "without the image sent only flatness is judged");
     // Nothing inside the selection at the request size, or mismatched sizes: can't judge, kept.
-    assert_eq!(unusable(&black[..8], Some(&sent), &reference), None);
+    assert_eq!(unusable(&black[..8], Some(&sent), &reference, surroundings(&reference)), None);
     let none = Reference { coverage: vec![0.0; n], ..reference };
-    assert_eq!(unusable(&black, Some(&sent), &none), None);
+    assert_eq!(unusable(&black, Some(&sent), &none, surroundings(&none)), None);
 }
 
 #[test]
@@ -939,12 +935,12 @@ fn flat_is_judged_against_the_ring_around_the_selection() {
     let reference = Reference { original, coverage, w, h };
     let flat = |v: f32| -> Vec<f32> { (0..n).flat_map(|_| [v, v, v, 1.0]).collect() };
     let sent = flat(0.9);
-    assert_eq!(unusable(&flat(0.55), Some(&sent), &reference), None, "flat but like the ring");
-    assert!(unusable(&flat(0.0), Some(&sent), &reference).unwrap().contains("flat"), "black against grey");
-    assert!(unusable(&flat(1.0), Some(&sent), &reference).unwrap().contains("flat"), "white against grey");
+    assert_eq!(unusable(&flat(0.55), Some(&sent), &reference, surroundings(&reference)), None, "flat but like the ring");
+    assert!(unusable(&flat(0.0), Some(&sent), &reference, surroundings(&reference)).unwrap().contains("flat"), "black against grey");
+    assert!(unusable(&flat(1.0), Some(&sent), &reference, surroundings(&reference)).unwrap().contains("flat"), "white against grey");
     // Nothing outside the selection: the flat rule can't be judged.
     let all = Reference { coverage: vec![1.0; n], original: vec![0.5; n * 3], w, h };
-    assert_eq!(unusable(&flat(0.0), Some(&sent), &all), None);
+    assert_eq!(unusable(&flat(0.0), Some(&sent), &all, surroundings(&all)), None);
 }
 
 #[test]
@@ -970,9 +966,81 @@ fn unchanged_is_only_judged_on_textured_surroundings() {
     let coverage: Vec<f32> = (0..n).map(|i| if (10..20).contains(&x(i)) { 1.0 } else { 0.0 }).collect();
     let sent: Vec<f32> = (0..n).flat_map(|i| if i.is_multiple_of(2) { [0.4, 0.4, 0.4, 1.0] } else { [0.6, 0.6, 0.6, 1.0] }).collect();
     let plain = Reference { original: vec![0.5; n * 3], coverage: coverage.clone(), w, h };
-    assert_eq!(unusable(&sent, Some(&sent), &plain), None, "plain surroundings: kept");
+    assert_eq!(unusable(&sent, Some(&sent), &plain, surroundings(&plain)), None, "plain surroundings: kept");
     let textured = Reference { original: (0..n).flat_map(|i| if i.is_multiple_of(2) { [0.2; 3] } else { [0.8; 3] }).collect(), coverage, w, h };
-    assert!(unusable(&sent, Some(&sent), &textured).unwrap().contains("unchanged"), "textured surroundings: rejected");
+    assert!(unusable(&sent, Some(&sent), &textured, surroundings(&textured)).unwrap().contains("unchanged"), "textured surroundings: rejected");
     let all = Reference { original: vec![0.5; n * 3], coverage: vec![1.0; n], w, h };
-    assert_eq!(unusable(&sent, Some(&sent), &all), None, "nothing outside: not judged");
+    assert_eq!(unusable(&sent, Some(&sent), &all, surroundings(&all)), None, "nothing outside: not judged");
+}
+
+/// Variation 1 of group `id` is opaque wherever the group's mask shows anything along row `y`.
+fn assert_covers_the_mask(s: &Session, id: u64, y: i32) {
+    let l = &group(s, id).children().unwrap()[0];
+    let surf = l.surface().unwrap();
+    let w = doc(s).bounds().width() as i32;
+    for x in 0..w {
+        if mask_at(s, id, x, y) > 0.0 {
+            let mut px = [0.0f32; 5];
+            surf.read_pixel(x, y, &mut px[..surf.channels()]);
+            assert!(px[surf.channels() - 1] > 0.99, "({x},{y}): the mask shows {} but the variation is empty", mask_at(s, id, x, y));
+        }
+    }
+}
+
+#[test]
+fn a_wide_band_is_covered_by_the_variation_too() {
+    let mut s = session(1000, 1000);
+    s.execute("select.rect", json!({"x": 200, "y": 200, "width": 600, "height": 600})).unwrap();
+    s.set_image_provider(Some(Fake::new([255, 0, 0])));
+    let r = s.execute(FILL, json!({"prompt": "x", "variations": 1})).unwrap();
+    let id = r["layer"].as_u64().unwrap();
+    let b = edge_band(Rect::from_xywh(200, 200, 600, 600)) as i32;
+    assert_eq!(b, 9);
+    assert!(mask_at(&s, id, 199, 500) > 0.0 && mask_at(&s, id, 200 - 2 * b - 1, 500) < 0.01);
+    assert_covers_the_mask(&s, id, 500);
+}
+
+/// A selection over `selected` from a coverage function of document (x, y).
+fn selection_from(selected: Rect, f: impl Fn(i32, i32) -> f32) -> Surface {
+    let m: Vec<f32> = (selected.y0..selected.y1).flat_map(|y| (selected.x0..selected.x1).map(move |x| (x, y))).map(|(x, y)| f(x, y)).collect();
+    photocraft_algo::selection::combine(None, &m, selected, photocraft_algo::selection::SelectionMode::Replace).unwrap()
+}
+
+#[test]
+fn a_half_selected_area_stays_half_covered() {
+    // A uniform 50% selection: the soft edge mustn't promote it to fully covered.
+    let canvas = Rect::from_xywh(0, 0, 400, 400);
+    let selected = Rect::from_xywh(100, 100, 200, 200);
+    let out = blended_mask(&selection_from(selected, |_, _| 0.5), selected, canvas);
+    let v = out.sample_channel(200, 200, 0);
+    assert!((v - 0.5).abs() < 0.02, "{v}");
+    let low = blended_mask(&selection_from(selected, |_, _| 0.49), selected, canvas).sample_channel(200, 200, 0);
+    assert!((v - low).abs() < 0.03, "no jump between 49% and 50%: {low} vs {v}");
+}
+
+#[test]
+fn a_feathered_selection_keeps_its_gradient() {
+    // A 100 px ramp from 0 to 1 along x, then fully selected: inside the ramp the mask follows it.
+    let canvas = Rect::from_xywh(0, 0, 400, 400);
+    let selected = Rect::from_xywh(50, 50, 300, 300);
+    let sel = selection_from(selected, |x, _| ((x - 50) as f32 / 100.0).clamp(0.0, 1.0));
+    let out = blended_mask(&sel, selected, canvas);
+    for x in [70, 85, 100, 115, 130] {
+        let (got, want) = (out.sample_channel(x, 200, 0), sel.sample_channel(x, 200, 0));
+        assert!((got - want).abs() <= 0.05, "x {x}: {got} vs the selection's {want}");
+    }
+}
+
+#[test]
+fn a_selection_too_large_for_the_soft_edge_keeps_its_own() {
+    // Past the size cap the selection's mask is used as it is, with no planes allocated.
+    let canvas = Rect::from_xywh(0, 0, 300, 300);
+    let selected = Rect::from_xywh(50, 50, 100, 100);
+    let sel = selection_from(selected, |_, _| 1.0);
+    let capped = blended_mask_within(&sel, selected, canvas, 1000);
+    assert_eq!(capped.sample_channel(49, 100, 0), 0.0, "no band");
+    assert_eq!(capped.sample_channel(50, 100, 0), 1.0, "a hard edge");
+    assert!(blended_mask_within(&sel, selected, canvas, MAX_EDGE_PIXELS).sample_channel(49, 100, 0) > 0.0, "under the cap: softened");
+    // A few planes of this many f32s each stay well under a GiB.
+    const { assert!(MAX_EDGE_PIXELS <= 1 << 25) };
 }

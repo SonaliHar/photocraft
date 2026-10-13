@@ -634,7 +634,7 @@ const UNCHANGED: f64 = 0.02;
 /// (a solid black answer), or, around a textured selection, unchanged from the image sent
 /// (`sent`, RGBA 0..1 at the request size). With nothing to judge by (no pixels inside, sizes
 /// that don't match, nothing outside the selection) the result is kept.
-fn unusable(px: &[f32], sent: Option<&[f32]>, r: &Reference) -> Option<String> {
+fn unusable(px: &[f32], sent: Option<&[f32]>, r: &Reference, around: Option<(f64, f64)>) -> Option<String> {
     let n = r.w as usize * r.h as usize;
     let (px4, _) = px.as_chunks::<4>();
     if px4.len() != n || r.coverage.len() != n {
@@ -648,12 +648,12 @@ fn unusable(px: &[f32], sent: Option<&[f32]>, r: &Reference) -> Option<String> {
     let mean = inside.iter().map(|p| f64::from(luma(*p))).sum::<f64>() / count;
     let spread = (inside.iter().map(|p| (f64::from(luma(*p)) - mean).powi(2)).sum::<f64>() / count).sqrt();
     if spread < FLAT
-        && let Some((around, _)) = surroundings(r)
+        && let Some((around, _)) = around
         && (mean - around).abs() > FLAT_MISMATCH
     {
         return Some(format!("rejected: flat (brightness spread inside the selection {spread:.4} < {FLAT}, brightness {mean:.3} vs {around:.3} around it)"));
     }
-    let (_, around_spread) = surroundings(r)?;
+    let (_, around_spread) = around?;
     if around_spread < FLAT {
         return None;
     }
@@ -718,12 +718,14 @@ fn dump(request: &EditRequest, results: &[Vec<u8>], stats: &[String]) {
 fn place_all(request: &EditRequest, results: &[Vec<u8>], area: Rect, reference: &Reference) -> Result<Vec<Surface>> {
     let full = Rect::from_xywh(0, 0, reference.w, reference.h);
     let sent = decode(&request.image).ok().map(|(s, r)| scaled(&s, r, reference.w, reference.h).read_region(full));
+    // The original around the selection, worked out once for every result.
+    let around = surroundings(reference);
     let mut placed = Vec::new();
     let mut stats = Vec::new();
     for bytes in results {
         let at_request = at_request_size(bytes, reference)?;
         let px = at_request.read_region(full);
-        match unusable(&px, sent.as_deref(), reference) {
+        match unusable(&px, sent.as_deref(), reference, around) {
             Some(why) => stats.push(why),
             None => {
                 let (p, s) = place(at_request, px, area, reference);
@@ -744,8 +746,9 @@ const SOFT_EDGE_MIN_SIDE: u32 = 64;
 /// Widest edge band, in document pixels.
 const MAX_EDGE_BAND: u32 = 32;
 /// Largest area (pixels) the soft edge is worked out over; past it the selection's own edge is
-/// used rather than allocating several more full-size planes.
-const MAX_EDGE_PIXELS: usize = 1 << 28;
+/// used rather than allocating several more full-size planes (at this size each f32 plane is
+/// 128 MiB, and at most three are alive at once, plus the distance transform's working storage).
+const MAX_EDGE_PIXELS: usize = 1 << 25;
 
 /// How wide (document pixels) the blend between a fill and the image around it is: 1.5% of the
 /// selection's long side, at most [`MAX_EDGE_BAND`], none for small selections. Model output
@@ -765,8 +768,15 @@ fn edge_band(selected: Rect) -> u32 {
 /// fill fades into the image across a band centred just outside the selection's edge. Worked out
 /// over the selection's bounds plus the band's reach only; past the canvas the selection is taken
 /// to continue (as Select › Modify does by default), so a selection running off the canvas isn't
-/// faded at the canvas edge. Partial (feathered) selections work: both steps take coverage.
+/// faded at the canvas edge. Partial (feathered) selections keep their coverage: growing never
+/// goes past the largest coverage within reach, so 50% stays 50% and a feather's ramp is kept.
 fn blended_mask(sel: &Surface, selected: Rect, canvas: Rect) -> Surface {
+    blended_mask_within(sel, selected, canvas, MAX_EDGE_PIXELS)
+}
+
+/// [`blended_mask`], falling back to the selection as it is when the area worked over would be
+/// larger than `cap` pixels.
+fn blended_mask_within(sel: &Surface, selected: Rect, canvas: Rect, cap: usize) -> Surface {
     let b = edge_band(selected);
     if b == 0 {
         return sel.clone();
@@ -782,7 +792,7 @@ fn blended_mask(sel: &Surface, selected: Rect, canvas: Rect) -> Surface {
     );
     let inner = outer.intersect(&canvas);
     let (ow, oh, iw, ih) = (outer.width() as usize, outer.height() as usize, inner.width() as usize, inner.height() as usize);
-    if inner.is_empty() || ow.checked_mul(oh).is_none_or(|n| n > MAX_EDGE_PIXELS) {
+    if inner.is_empty() || ow.checked_mul(oh).is_none_or(|n| n > cap) {
         return sel.clone();
     }
     let known = sel_algo::mask_from_surface(Some(sel), inner);
@@ -796,7 +806,17 @@ fn blended_mask(sel: &Surface, selected: Rect, canvas: Rect) -> Surface {
     for y in outer.y0..outer.y1 {
         m.extend((outer.x0..outer.x1).map(|x| at(x, y)));
     }
-    let soft = sel_algo::feather(&sel_algo::expand(&m, ow, oh, half), ow, oh, half);
+    drop(known);
+    // Grown, but never past the coverage nearby: Expand treats 50% as selected and grows it to
+    // 100%, which would make a half-selected area fully opaque and cut a feathered selection's
+    // ramp at its 50% contour.
+    let mut grown = sel_algo::expand(&m, ow, oh, half);
+    let nearby = max_filter(&m, ow, oh, half.ceil() as usize);
+    drop(m);
+    grown.iter_mut().zip(&nearby).for_each(|(g, n)| *g = g.min(*n));
+    drop(nearby);
+    let soft = sel_algo::feather(&grown, ow, oh, half);
+    drop(grown);
     let (dx, dy) = ((inner.x0 - outer.x0) as usize, (inner.y0 - outer.y0) as usize);
     let mut cropped = Vec::with_capacity(iw * ih);
     for row in soft.chunks_exact(ow).skip(dy).take(ih) {
@@ -806,6 +826,38 @@ fn blended_mask(sel: &Surface, selected: Rect, canvas: Rect) -> Surface {
         return sel.clone();
     }
     sel_algo::combine(None, &cropped, inner, sel_algo::SelectionMode::Replace).unwrap_or_else(|| sel.clone())
+}
+
+/// The largest value within `r` pixels (a square, edges clamped) of each pixel of a `w`×`h`
+/// plane: separable, a row pass then a column pass.
+fn max_filter(m: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
+    if m.len() != w * h || w == 0 || h == 0 {
+        return m.to_vec();
+    }
+    let pass = |line: &[f32], out: &mut Vec<f32>| {
+        out.clear();
+        let n = line.len();
+        out.extend((0..n).map(|i| line.get(i.saturating_sub(r)..(i + r + 1).min(n)).map_or(0.0, |s| s.iter().copied().fold(0.0f32, f32::max))));
+    };
+    let mut rows = Vec::with_capacity(m.len());
+    let mut out = Vec::new();
+    for row in m.chunks_exact(w) {
+        pass(row, &mut out);
+        rows.extend_from_slice(&out);
+    }
+    let mut col = vec![0.0f32; h];
+    for x in 0..w {
+        for (y, c) in col.iter_mut().enumerate() {
+            *c = rows.get(y * w + x).copied().unwrap_or(0.0);
+        }
+        pass(&col, &mut out);
+        for (y, v) in out.iter().enumerate() {
+            if let Some(d) = rows.get_mut(y * w + x) {
+                *d = *v;
+            }
+        }
+    }
+    rows
 }
 
 fn variation_layer(doc: &Document, pixels: &Surface, n: usize, visible: bool) -> Result<Layer> {
@@ -850,6 +902,7 @@ fn fill(s: &mut Session, p: &Value) -> Result<Value> {
             let results = request_all(ctx, provider.as_ref(), &request, count)?;
             ctx.progress(0.9, "Placing the results");
             let placed = place_all(&request, &results, area, &reference)?;
+            ctx.check()?;
             let mask = blended_mask(&selection, selected, canvas);
             let source = Source { prompt: request.prompt.clone(), area, request, reference, provider: provider_id };
             Ok((placed, mask, source))
