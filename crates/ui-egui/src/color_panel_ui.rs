@@ -811,6 +811,7 @@ fn slider_modes(app: &mut PhotocraftApp, ui: &mut egui::Ui, sp: &Spaces, rects: 
     let show_spectrum = room >= ROW_MIN * n + SPECTRUM + 6.0;
     let row_h = ((room - if show_spectrum { SPECTRUM + 6.0 } else { 0.0 }) / n).floor().clamp(ROW_MIN, ROW_MAX);
     let rows_h = (row_h * n).max(36.0);
+    let dynamic = app.session.prefs().interface.dynamic_color_sliders;
     let mut edited: Option<Vec<f32>> = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
@@ -821,7 +822,9 @@ fn slider_modes(app: &mut PhotocraftApp, ui: &mut egui::Ui, sp: &Spaces, rects: 
             ui.spacing_mut().interact_size.y = row_h;
             for (i, comp) in comps_spec.iter().enumerate() {
                 let mut v = comps.get(i).copied().unwrap_or(comp.min);
-                let stops: Vec<Color32> = (0..=16)
+                // Preferences ▸ Interface ▸ Dynamic Color Sliders off: plain tracks (no stops).
+                let steps = if dynamic { 17 } else { 0 };
+                let stops: Vec<Color32> = (0..steps)
                     .map(|k| {
                         let mut c = comps.clone();
                         if let Some(slot) = c.get_mut(i) {
@@ -869,7 +872,11 @@ fn ramp_row(ui: &mut egui::Ui, mode: ColorPanelMode, comp: &Component, v: &mut f
         let top = area.center().y - 7.0;
         let track = Rect::from_min_max(pos2(area.left() + 4.0, top), pos2(area.right() - 4.0, top + 8.0));
         let p = ui.painter();
-        ramp_mesh(p, track, stops);
+        if stops.len() >= 2 {
+            ramp_mesh(p, track, stops);
+        } else {
+            p.rect_filled(track, 0.0, t.field_border);
+        }
         p.rect_stroke(track, 0.0, Stroke::new(1.0, t.separator), StrokeKind::Outside);
         let span = (comp.max - comp.min).max(f32::EPSILON);
         let f = ((*v - comp.min) / span).clamp(0.0, 1.0);

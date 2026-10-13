@@ -466,6 +466,40 @@ fn each_chip_keeps_its_own_hue_on_black() {
     assert!(g > 200 && r < 64 && b < 64, "the foreground's green, not the background's blue: {:?}", [r, g, b]);
 }
 
+/// HSB is Photoshop's, on the sRGB-encoded values, not linear light: a 50% grey has Brightness
+/// 50% (#3323).
+#[test]
+fn hsb_brightness_of_a_mid_grey_is_fifty_percent() {
+    let hsb = rgb_to_hsb([128.0 / 255.0; 3]);
+    assert!(hsb[1] < 1e-3 && (hsb[2] - 128.0 / 2.55).abs() < 0.01, "{hsb:?}");
+    assert!(hsb_to_rgb([108.0, 0.0, 50.0]).iter().all(|v| (v - 0.5).abs() < 1e-6));
+}
+
+/// Picking black in the Hue Cube's bottom-right corner keeps the knob there: black reads back as
+/// no saturation, so the field keeps the components it was dragged to (#3228).
+#[test]
+fn black_from_the_bottom_right_corner_keeps_its_saturation() {
+    let mut h = harness(ColorPanelMode::HueCube);
+    let field = last_rects(&h.ctx).field.unwrap();
+    click(&mut h, Pos2::new(field.right() - 0.5, field.bottom() - 0.5));
+    assert!(bytes(&h).iter().all(|v| *v <= 2), "black: {:?}", bytes(&h));
+    h.run_steps(2);
+    let shown = components(h.state(), &h.ctx, &sp());
+    assert!(shown[1] > 95.0 && shown[2] < 1.0, "the knob stays at the right edge: {shown:?}");
+}
+
+/// Preferences ▸ Interface ▸ Dynamic Color Sliders off: the slider tracks are plain, and the
+/// sliders still work.
+#[test]
+fn dynamic_color_sliders_off_still_edit() {
+    let mut h = harness(ColorPanelMode::Rgb);
+    h.state_mut().session.prefs.edit(|p| p.interface.dynamic_color_sliders = false);
+    h.run_steps(2);
+    let r = last_rects(&h.ctx).ramps[0];
+    click(&mut h, Pos2::new(r.right() - 0.5, r.center().y));
+    assert!(bytes(&h)[0] >= 253, "{:?}", bytes(&h));
+}
+
 /// Drawing never rewrites the colour: a round trip through HSB, CMYK or Lab isn't exact for every
 /// colour (#D8452E isn't), and a rewrite every frame would recolour selected type the moment it
 /// was selected. An edit does recolour it.
@@ -478,8 +512,17 @@ fn idle_modes_leave_selected_type_alone_and_edits_recolour_it() {
         app.run("tools.setColors", json!({"foreground": "#d8452e"})).unwrap();
         let before = app.session.tools.foreground;
         app.ui.tool = crate::state::Tool::Type;
-        app.ui.text_edit =
-            Some(crate::state::TextEdit { layer: id, caret: 0, anchor: 5, session: "s".into(), created: false, dragging: false, resize: None, preedit: None });
+        app.ui.text_edit = Some(crate::state::TextEdit {
+            layer: id,
+            caret: 0,
+            anchor: 5,
+            session: "s".into(),
+            created: false,
+            mask: false,
+            dragging: false,
+            resize: None,
+            preedit: None,
+        });
         app.ui.color_panel.mode = mode;
         let mut h = Harness::builder().with_size(vec2(300.0, 220.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel(app, ui), app);
         h.run_steps(4);
