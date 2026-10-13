@@ -5,12 +5,21 @@ use serde_json::Value;
 
 use crate::{Credentials, GenError, GeneratedImage, HttpResponse, MAX_RESPONSE, Result, png_size};
 
-/// Sent when the user leaves the prompt empty and the service requires one.
+/// Sent to instruction-following models (OpenAI) when the user leaves the prompt empty.
 pub const CONTINUE_PROMPT: &str = "Remove the masked content and continue the surrounding image naturally.";
 
 pub fn prompt_or_continue(prompt: &str) -> &str {
     let p = prompt.trim();
     if p.is_empty() { CONTINUE_PROMPT } else { p }
+}
+
+/// Sent to diffusion fill models (they draw what the prompt describes) when the prompt is empty:
+/// a description of plain continuation, never an instruction they could render as text.
+pub const CONTINUE_DESCRIPTION: &str = "seamless continuation of the surrounding background, same style and texture";
+
+pub fn prompt_or_description(prompt: &str) -> &str {
+    let p = prompt.trim();
+    if p.is_empty() { CONTINUE_DESCRIPTION } else { p }
 }
 
 pub fn b64(bytes: &[u8]) -> String {
@@ -170,6 +179,8 @@ mod tests {
         assert!(same_size(b"jpeg", &mask_png(4, 4)).is_err());
         assert_eq!(prompt_or_continue("  "), CONTINUE_PROMPT);
         assert_eq!(prompt_or_continue(" a boat "), "a boat");
+        assert_eq!(prompt_or_description("  "), CONTINUE_DESCRIPTION);
+        assert_eq!(prompt_or_description(" a boat "), "a boat");
         assert_eq!(form_urlencode(&[("a", "x y"), ("scope", "openid,AdobeID")]), "a=x%20y&scope=openid%2CAdobeID");
     }
 

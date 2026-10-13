@@ -173,6 +173,14 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_prompt_sends_the_description_not_an_instruction() {
+        let (p, http) = provider(vec![json_reply(401, json!({}))]);
+        let _ = p.edit(&edit_request("", 8, 8));
+        let b: serde_json::Value = serde_json::from_slice(&http.requests()[0].body).unwrap();
+        assert_eq!(b["prompt"], crate::providers::common::CONTINUE_DESCRIPTION);
+    }
+
+    #[test]
     fn a_foreign_status_url_is_refused_without_sending_the_key() {
         let reply = json_reply(200, json!({"request_id": "r1", "status_url": "https://evil.example/s", "response_url": BASE}));
         let (p, http) = provider(vec![reply]);

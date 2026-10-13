@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use crate::providers::common::{self, http_error, pick_model, prompt_or_continue, same_size};
+use crate::providers::common::{self, http_error, pick_model, prompt_or_description, same_size};
 use crate::{
     API_KEY, API_KEY_FIELD, Capabilities, Credentials, EditRequest, GenError, GeneratedImage, HttpRequest, HttpResponse, HttpTransport, ImageProvider,
     ProviderInfo, ProviderSpec, Result, check_prompt, mask, multipart::Form,
@@ -52,6 +52,10 @@ pub fn parse(r: &HttpResponse, creds: &Credentials) -> Result<GeneratedImage> {
     }
 }
 
+/// With no prompt the model only sees a description of the background; this keeps it from
+/// painting lettering into the selection.
+const NO_TEXT: &str = "text, letters, words, caption, watermark, logo";
+
 impl ImageProvider for Stability {
     fn info(&self) -> ProviderInfo {
         ProviderInfo { id: ID, name: NAME, model: self.model.into(), host: HOST }
@@ -72,12 +76,11 @@ impl ImageProvider for Stability {
         let image = mask::opaque_rgb(&r.image)?;
         let fill = mask::white_fill(&r.mask)?;
         let mut form = Form::new();
-        form.text("prompt", prompt_or_continue(&r.prompt)).text("output_format", "png").file("image", "image.png", "image/png", &image).file(
-            "mask",
-            "mask.png",
-            "image/png",
-            &fill,
-        );
+        form.text("prompt", prompt_or_description(&r.prompt)).text("output_format", "png");
+        if r.prompt.trim().is_empty() {
+            form.text("negative_prompt", NO_TEXT);
+        }
+        form.file("image", "image.png", "image/png", &image).file("mask", "mask.png", "image/png", &fill);
         let (content_type, body) = form.finish();
         let key = self.creds.require(API_KEY)?;
         let reply = self.http.send(
@@ -141,9 +144,18 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_prompt_asks_to_continue() {
+    fn an_empty_prompt_describes_the_background_and_rules_out_text() {
         let (p, http) = provider(vec![bytes_reply(200, "image/png", png(2, 2))]);
         p.edit(&edit_request("", 8, 8)).unwrap();
-        assert_eq!(part(&http.requests()[0], "prompt").unwrap(), common::CONTINUE_PROMPT.as_bytes());
+        let r = &http.requests()[0];
+        assert_eq!(part(r, "prompt").unwrap(), common::CONTINUE_DESCRIPTION.as_bytes());
+        assert_eq!(part(r, "negative_prompt").unwrap(), b"text, letters, words, caption, watermark, logo");
+    }
+
+    #[test]
+    fn a_real_prompt_sends_no_negative_prompt() {
+        let (p, http) = provider(vec![bytes_reply(200, "image/png", png(2, 2))]);
+        p.edit(&edit_request("a fern", 8, 8)).unwrap();
+        assert!(part(&http.requests()[0], "negative_prompt").is_none());
     }
 }

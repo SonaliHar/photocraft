@@ -193,6 +193,14 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_prompt_sends_the_description_not_an_instruction() {
+        let (p, http) = provider(vec![uploaded("img"), uploaded("msk"), json_reply(401, json!({}))]);
+        let _ = p.edit(&edit_request("", 8, 8));
+        let b: serde_json::Value = serde_json::from_slice(&http.requests()[2].body).unwrap();
+        assert_eq!(b["input"]["prompt"], crate::providers::common::CONTINUE_DESCRIPTION);
+    }
+
+    #[test]
     fn a_slow_prediction_is_polled_and_can_be_cancelled() {
         let (p, http) = provider(vec![
             uploaded("img"),
