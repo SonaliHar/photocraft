@@ -1391,7 +1391,7 @@ fn appearance_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, system: Opti
     let light_active = mode == "light" || (mode == "auto" && system == Some(egui::Theme::Light));
     obj.insert("appearanceMode".into(), json!(mode));
     let mut light = obj.get("lightTheme").and_then(Value::as_str).unwrap_or("studioLight").to_string();
-    let mut dark = obj.get("darkTheme").and_then(Value::as_str).unwrap_or("proMedium").to_string();
+    let mut dark = obj.get("darkTheme").and_then(Value::as_str).unwrap_or("pro").to_string();
     let mut favorites: Vec<SavedTheme> = obj.get("favoriteThemes").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
     if rows.light {
         theme_row(ui, "Light Theme", light_active, &mut light, &mut favorites, LIGHT_THEME_OPTIONS);
@@ -2105,7 +2105,7 @@ mod tests {
     #[test]
     fn appearance_resolves_both_saved_themes_and_follows_system() {
         let mut interface = prefs::Interface { appearance_mode: AppearanceMode::Auto, ..prefs::Interface::default() };
-        assert_eq!(selected_theme(&interface, Some(egui::Theme::Dark)), ThemeKind::ProMedium);
+        assert_eq!(selected_theme(&interface, Some(egui::Theme::Dark)), ThemeKind::Pro);
         assert_eq!(selected_theme(&interface, Some(egui::Theme::Light)), ThemeKind::ProLight);
         interface.dark_theme = DarkTheme::Studio;
         interface.light_theme = LightTheme::Classic;
@@ -2268,7 +2268,7 @@ mod tests {
         assert_eq!(ctx.options(|o| o.theme_preference), egui::ThemePreference::System);
         assert_palette(&ctx, ThemeKind::ProLight);
         appearance_frame(&mut app, &ctx, Some(egui::Theme::Dark));
-        assert_palette(&ctx, ThemeKind::ProMedium);
+        assert_palette(&ctx, ThemeKind::Pro);
         assert_eq!(app.session.prefs().interface.appearance_mode, AppearanceMode::Auto);
     }
 
