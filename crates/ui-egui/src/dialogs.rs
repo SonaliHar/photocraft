@@ -221,6 +221,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.set_min_width(w);
                 ui.set_max_width(w);
             }
+            // Duplicate Layer… is a fixed small grid (labels + 260 pt fields ≈ 352 pt):
+            // the generic 380 pt minimum left a dead strip on its right.
+            if crate::duplicate_layer_ui::owns(&d.fields) {
+                ui.set_min_width(360.0);
+                ui.set_max_width(360.0);
+            }
             if color_picker {
                 ui.set_width(crate::color_picker_ui::CONTENT_WIDTH);
             }
@@ -623,6 +629,10 @@ pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     crate::actions::stopped(app, &closed.fields);
     if crate::guide_layout_ui::owns(&closed.fields) {
         app.ui.dialogs.retain(|child| child.fields.get("__dialog").and_then(Value::as_u64) != Some(id));
+    }
+    // Cancel on a profile prompt opens neither its file nor the ones still to come.
+    if crate::open_prompt::owns(&closed.fields) {
+        crate::open_prompt::answer(app, None)?;
     }
     app.ui.dialogs.retain(|d| !crate::layer_style::color_picker::child_of(&d.fields, id));
     app.filter_preview = None;
