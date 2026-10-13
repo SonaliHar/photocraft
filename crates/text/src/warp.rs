@@ -6,7 +6,8 @@
 //! formulas), the identity at `bend = 0` and continuous in `bend`. The mapping is evaluated per
 //! point; the renderer subdivides long segments so straight edges bend.
 
-use photocraft_doc::text::{TextWarp, TypeDistortion, TypeDistortionKind};
+use photocraft_doc::text::{TextShape, TextWarp, TypeDistortion, TypeDistortionKind};
+use photocraft_doc::vector::Subpath;
 use photocraft_geom::warp::{StyleWarp, WarpStyle};
 use photocraft_geom::{Affine, Point};
 
@@ -46,13 +47,32 @@ pub fn short_style(psd: &str) -> Option<&'static str> {
     STYLES.iter().find(|(p, _)| *p == psd).map(|(_, short)| *short)
 }
 
+/// Where a glyph goes when the layout is bent: see [`Warp::place_glyph`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Placement {
+    /// Not path text: bend the outline point by point with [`Warp::apply`].
+    Bend,
+    /// Beyond either end of the path: the glyph is not drawn.
+    Hidden,
+    /// Path text: the glyph keeps its shape and is moved rigidly by this text-space map
+    /// (`[a, b, c, d, e, f]`, applied to text-space points).
+    Frame([f64; 6]),
+}
+
 /// A warp prepared for one layout: the shared style math of
 /// [`photocraft_geom::warp::StyleWarp`] (also used by Edit › Transform › Warp) over the text box,
-/// then the layer's free transforms ([`TypeDistortion`]: custom mesh, Distort, Perspective).
+/// or a path the type runs along; then the layer's free transforms ([`TypeDistortion`]: custom
+/// mesh, Distort, Perspective).
 #[derive(Clone, Debug)]
 pub struct Warp {
-    style: Option<StyleWarp>,
+    base: Option<Kind>,
     ops: Vec<Op>,
+}
+
+#[derive(Clone, Debug)]
+enum Kind {
+    Style(Box<StyleWarp>),
+    Path(PathFrame),
 }
 
 /// One free transform, ready to map text-space points.
@@ -88,33 +108,138 @@ impl Warp {
     /// Prepares `w` for text whose bounds are `[x0, y0, x1, y1]` (text space). `None` for
     /// `warpNone`, unknown styles, an all-zero warp or empty bounds.
     pub fn new(w: &TextWarp, bounds: [f32; 4]) -> Option<Warp> {
-        Some(Warp { style: Some(style_warp(w, bounds)?), ops: Vec::new() })
+        Some(Warp { base: Some(Kind::Style(Box::new(style_warp(w, bounds)?))), ops: Vec::new() })
     }
 
-    /// The Warp Text style `w` (if any) followed by the free transforms `distortions` (invalid
-    /// ones are skipped). `None` when nothing bends the outlines.
-    pub fn with_distortions(w: Option<&TextWarp>, bounds: Option<[f32; 4]>, distortions: &[TypeDistortion]) -> Option<Warp> {
-        let style = w.zip(bounds).and_then(|(w, b)| style_warp(w, b));
+    /// The deformation of type on a path (`None` for any other shape, or a path without length).
+    pub fn on_path(shape: &TextShape) -> Option<Warp> {
+        let TextShape::Path { path, start, flip } = shape else { return None };
+        PathFrame::new(path, *start, *flip).map(|f| Warp { base: Some(Kind::Path(f)), ops: Vec::new() })
+    }
+
+    /// `base` (a Warp Text style or a type path, if any) followed by the free transforms
+    /// `distortions` (invalid ones are skipped). `None` when nothing bends the outlines.
+    pub fn with_distortions(base: Option<Warp>, distortions: &[TypeDistortion]) -> Option<Warp> {
+        let base = base.and_then(|w| w.base);
         let ops: Vec<Op> = distortions.iter().take(photocraft_doc::text::MAX_TYPE_DISTORTIONS).filter_map(Op::new).collect();
-        (style.is_some() || !ops.is_empty()).then_some(Warp { style, ops })
+        (base.is_some() || !ops.is_empty()).then_some(Warp { base, ops })
+    }
+
+    /// Only the free transforms, for glyphs a type path has already placed rigidly
+    /// ([`Placement::Frame`]). `None` when there are none.
+    pub fn after_frame(&self) -> Option<Warp> {
+        (!self.ops.is_empty()).then(|| Warp { base: None, ops: self.ops.clone() })
     }
 
     /// Longest segment (text-space px) worth sending through [`Warp::apply`] unsplit.
     pub fn max_segment(&self) -> f64 {
-        let s = self.style.map_or(f64::MAX, |s| s.max_segment());
+        let s = match &self.base {
+            Some(Kind::Style(s)) => s.max_segment(),
+            Some(Kind::Path(_)) => 2.0,
+            None => f64::MAX,
+        };
         self.ops.iter().fold(s, |m, o| m.min(o.segment)).clamp(0.05, 1e6)
     }
 
     /// Maps a text-space point.
     pub fn apply(&self, x: f64, y: f64) -> (f64, f64) {
-        let (mut x, mut y) = match &self.style {
-            Some(s) => s.apply(x, y),
+        let (mut x, mut y) = match &self.base {
+            Some(Kind::Style(s)) => s.apply(x, y),
+            Some(Kind::Path(p)) => p.apply(x, y),
             None => (x, y),
         };
         for o in &self.ops {
             (x, y) = o.apply(x, y);
         }
         (x, y)
+    }
+
+    /// How to place a glyph whose horizontal centre is at text-space `cx`.
+    pub fn place_glyph(&self, cx: f64) -> Placement {
+        match &self.base {
+            Some(Kind::Path(p)) => p.frame(cx).map_or(Placement::Hidden, Placement::Frame),
+            _ => Placement::Bend,
+        }
+    }
+}
+
+/// Most cubic segments of a type path that are followed (a hostile file cannot make this large).
+const MAX_PATH_SEGMENTS: usize = 4096;
+
+/// A flattened path with arc lengths: text-space `x` is arc length from `start`, `y` the
+/// distance to the left of the direction of travel (the side the glyph tops point to).
+#[derive(Clone, Debug)]
+struct PathFrame {
+    pts: Vec<(f64, f64)>,
+    /// Arc length at each point.
+    cum: Vec<f64>,
+    start: f64,
+}
+
+impl PathFrame {
+    fn new(path: &Subpath, start: f32, flip: bool) -> Option<PathFrame> {
+        let mut pts: Vec<(f64, f64)> = Vec::new();
+        for seg in path.segments().iter().take(MAX_PATH_SEGMENTS) {
+            let p = seg.map(|q| (q.x, q.y));
+            if p.iter().any(|q| !q.0.is_finite() || !q.1.is_finite()) {
+                return None;
+            }
+            let poly = (p[1].0 - p[0].0).hypot(p[1].1 - p[0].1) + (p[2].0 - p[1].0).hypot(p[2].1 - p[1].1) + (p[3].0 - p[2].0).hypot(p[3].1 - p[2].1);
+            let n = ((poly / 2.0).ceil() as usize).clamp(4, 128);
+            if pts.is_empty() {
+                pts.push(p[0]);
+            }
+            for i in 1..=n {
+                let t = i as f64 / n as f64;
+                let u = 1.0 - t;
+                let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+                pts.push((a * p[0].0 + b * p[1].0 + c * p[2].0 + d * p[3].0, a * p[0].1 + b * p[1].1 + c * p[2].1 + d * p[3].1));
+            }
+        }
+        // Drop repeated points so every piece has a direction.
+        pts.dedup_by(|b, a| (b.0 - a.0).abs() < 1e-9 && (b.1 - a.1).abs() < 1e-9);
+        if flip {
+            pts.reverse();
+        }
+        let mut cum = Vec::with_capacity(pts.len());
+        let mut acc = 0.0;
+        for (i, p) in pts.iter().enumerate() {
+            if let Some(q) = i.checked_sub(1).and_then(|j| pts.get(j)) {
+                acc += (p.0 - q.0).hypot(p.1 - q.1);
+            }
+            cum.push(acc);
+        }
+        (pts.len() >= 2 && acc.is_finite() && acc > 1e-6 && start.is_finite()).then(|| PathFrame { pts, cum, start: f64::from(start) })
+    }
+
+    fn length(&self) -> f64 {
+        self.cum.last().copied().unwrap_or(0.0)
+    }
+
+    /// Point and unit tangent at arc length `s`; past either end the end tangent continues straight.
+    fn at(&self, s: f64) -> ((f64, f64), (f64, f64)) {
+        let last = self.pts.len() - 1;
+        let i = self.cum.partition_point(|&c| c < s).clamp(1, last);
+        let (a, b) = (self.pts[i - 1], self.pts[i]);
+        let len = (b.0 - a.0).hypot(b.1 - a.1).max(1e-12);
+        let t = ((b.0 - a.0) / len, (b.1 - a.1) / len);
+        let along = s - self.cum[i - 1];
+        ((a.0 + t.0 * along, a.1 + t.1 * along), t)
+    }
+
+    fn apply(&self, x: f64, y: f64) -> (f64, f64) {
+        let (p, t) = self.at(self.start + x);
+        (p.0 - t.1 * y, p.1 + t.0 * y)
+    }
+
+    /// The rigid map for a glyph centred at text-space `cx`; `None` outside the path.
+    fn frame(&self, cx: f64) -> Option<[f64; 6]> {
+        let s = self.start + cx;
+        if !(0.0..=self.length()).contains(&s) {
+            return None;
+        }
+        let (p, t) = self.at(s);
+        Some([t.0, t.1, -t.1, t.0, p.0 - t.0 * cx, p.1 - t.1 * cx])
     }
 }
 
