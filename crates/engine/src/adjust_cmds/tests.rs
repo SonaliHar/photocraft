@@ -528,7 +528,6 @@ fn desaturate_equalize_and_replace_color_record_smart_filters() {
 }
 
 #[test]
-#[test]
 fn replace_color_localized_clusters_only_change_the_colour_near_the_sample() {
     // The same cream on the left (x < 8) and the right (x ≥ 40), grey between.
     let cream = [0.9, 0.88, 0.79, 1.0];
