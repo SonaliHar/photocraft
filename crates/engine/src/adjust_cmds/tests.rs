@@ -526,3 +526,39 @@ fn desaturate_equalize_and_replace_color_record_smart_filters() {
         assert!(smart_filters_of(&s).is_empty(), "{id}: undo removes the filter");
     }
 }
+
+#[test]
+#[test]
+fn replace_color_localized_clusters_only_change_the_colour_near_the_sample() {
+    // The same cream on the left (x < 8) and the right (x ≥ 40), grey between.
+    let cream = [0.9, 0.88, 0.79, 1.0];
+    let mut s = session(8, "rgb");
+    paint(&mut s, |x, _| if !(8..40).contains(&x) { cream } else { [0.5, 0.5, 0.5, 1.0] });
+    let base = |s: &Session| (rgba(s, 3, 16), rgba(s, 44, 16), rgba(s, 20, 16));
+    let (left, right, grey) = base(&s);
+    let shift = json!({"color": "#e6e0c9", "fuzziness": 20, "hue": 180, "saturation": 60});
+    // Without clusters the colour is replaced everywhere (unchanged behaviour).
+    s.execute("image.adjustments.replaceColor", shift.clone()).unwrap();
+    assert!(changed(rgba(&s, 3, 16), left) > 0.05 && changed(rgba(&s, 44, 16), right) > 0.05);
+    s.execute("edit.undo", json!({})).unwrap();
+    // Picked on the left with Range 50 % (24 px): only the left cream changes.
+    let mut local = shift.clone();
+    local["points"] = json!([[2, 16]]);
+    local["localized"] = json!(true);
+    local["range"] = json!(50);
+    s.execute("image.adjustments.replaceColor", local.clone()).unwrap();
+    assert!(changed(rgba(&s, 3, 16), left) > 0.05, "near the sample");
+    assert_eq!(rgba(&s, 44, 16), right, "the same colour far from the sample");
+    assert_eq!(rgba(&s, 20, 16), grey);
+    s.execute("edit.undo", json!({})).unwrap();
+    // Inside a selection that doesn't start at the origin the sample stays where it was picked.
+    s.execute("select.rect", json!({"x": 1, "y": 4, "width": 46, "height": 24})).unwrap();
+    s.execute("image.adjustments.replaceColor", local).unwrap();
+    assert!(changed(rgba(&s, 3, 16), left) > 0.05);
+    assert_eq!(rgba(&s, 44, 16), right);
+    // Clusters need a place to be near.
+    let err = s.execute("image.adjustments.replaceColor", json!({"localized": true})).unwrap_err();
+    assert!(err.to_string().contains("points"), "{err}");
+    let err = s.execute("image.adjustments.replaceColor", json!({"points": [[1]]})).unwrap_err();
+    assert!(err.to_string().contains("bad point"), "{err}");
+}
