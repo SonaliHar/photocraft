@@ -39,7 +39,9 @@ They don't chat directly. **GitHub is the message board:**
 ## Saving tokens
 
 - **No AI while idle.** The conductor polls; models run only for a task or a review.
-- **Strata first.** Size-S tasks, test writing, lint fixes and retries after a red build go to the local model when possible. Cloud Codex gets the hard code.
+- **Local first (Erik, Oct 13).** Every task goes to the local agent (Codex + Strata) unless it's on the short list below. Cloud tokens are limited, so cloud Codex is the fallback, not the default:
+  - **Cloud Codex** only when the local agent has failed the same task twice (`ai:red` after its retries, or Claude's review finds it can't converge), or for a change Erik marks "cloud".
+  - **Claude** for planning, reviews, and **UI design** (layout, interaction, look; FEATURES §3). Claude writes the UI spec and checks the snapshots; the local agent writes the code.
 - **Claude reviews green PRs only**, and sees only the diff plus the rules that apply, not the whole repo.
 - **Daily budgets** in `conductor.json`: `codex_cloud_runs_per_day`, `claude_reviews_per_day`, `max_retries`. When a budget runs out, work waits (or moves to Strata if it's size S) instead of spending more.
 - **Limit detection:** when a CLI reports a usage limit, that agent is marked "cooling" until the reset time it gives, and the conductor routes around it.

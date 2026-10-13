@@ -2,6 +2,20 @@
 
 Update this at the end of every session: newest entry on top, keep it short.
 
+## 2026-10-13: Claude (PC-01 review, routing, PC-02 prompt)
+
+- PC-01 reviewed and approved (notes in `agents/receipts/PC-01.md`); two follow-ups go into PC-02.
+- Routing is now **local first** (TASKS › Routing): the local agent codes, cloud Codex only after two local failures, Claude plans, reviews and designs the UI.
+- Next: PC-02 on the local agent. Start it in its own worktree:
+  ```
+  cd E:\CraftML\work\photocraft
+  git pull
+  git worktree add ..\wt\pc-02 -b ai/pc-02-generative-fill origin/main
+  cd ..\wt\pc-02
+  codex --profile strata
+  ```
+  then: `Read agents/prompts/local-pc-02.md and carry out the task below the "---" line exactly.`
+
 ## 2026-10-13: local agent (PC-01 finish)
 
 PC-01's implementation was left **uncommitted** in this worktree (`E:\CraftML\work\wt\pc-01`, branch `ai/pc-01-provider-trait`): the
