@@ -399,6 +399,11 @@ fn blend_into(surf: &mut Surface, area: Rect, source: &Source, sel: Option<&Surf
             done.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((tc, s.clone()));
             return Ok(());
         }
+        // Nothing to paint here: keep the shared tile rather than copying it into history (#4517).
+        if b.opacity <= 0.0 || mask.as_ref().is_some_and(|m| m.empty(tr)) {
+            done.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((tc, tile));
+            return Ok(());
+        }
         let mut tile = match std::sync::Arc::try_unwrap(tile) {
             Ok(tile) => tile,
             Err(tile) => tile
@@ -435,6 +440,10 @@ impl<'a> Mask<'a> {
     /// Fully selected over `r`?
     pub(crate) fn full(&self, r: Rect) -> bool {
         (r.y0..r.y1).all(|y| (r.x0..r.x1).all(|x| self.at(x, y) >= 1.0))
+    }
+    /// Not selected at all over `r`?
+    pub(crate) fn empty(&self, r: Rect) -> bool {
+        (r.y0..r.y1).all(|y| (r.x0..r.x1).all(|x| self.at(x, y) <= 0.0))
     }
 }
 
@@ -745,5 +754,22 @@ mod tests {
         s.execute(CMD, json!({"contents": "white"})).unwrap();
         s.execute(CMD, json!({"contents": "contentAware", "colorAdaptation": false})).unwrap();
         assert!(close(px(&s, 17, 12), [0x33 as f32 / 255.0, 0x66 as f32 / 255.0, 0x99 as f32 / 255.0, 1.0]), "{:?}", px(&s, 17, 12));
+    }
+
+    #[test]
+    fn tiles_outside_the_selection_stay_shared() {
+        // #4517: a tile the selection doesn't reach keeps history's tile instead of a copy.
+        let ts = TILE_SIZE;
+        let mut surf = Surface::new(photocraft_color::PixelFormat::RGBA8);
+        surf.fill_rect(Rect::new(0, 0, 2 * ts, ts), &[0.5, 0.5, 0.5, 1.0]);
+        let mut sel = Surface::new(photocraft_color::PixelFormat::GRAY8);
+        sel.fill_rect(Rect::new(0, 0, 10, 10), &[1.0]);
+        let history = surf.clone();
+        let (a, b) = (photocraft_geom::TileCoord::new(0, 0), photocraft_geom::TileCoord::new(1, 0));
+        blend_color_mask(&mut surf, Rect::new(0, 0, 2 * ts, ts), [1.0, 0.0, 0.0, 1.0], None, &sel, BlendMode::Multiply, 0.5, false).unwrap();
+        assert!(std::sync::Arc::ptr_eq(surf.tile(b).unwrap(), history.tile(b).unwrap()), "unselected tile was copied");
+        assert!(!std::sync::Arc::ptr_eq(surf.tile(a).unwrap(), history.tile(a).unwrap()), "selected tile was not painted");
+        assert_ne!(surf.rgba(5, 5), history.rgba(5, 5));
+        assert_eq!(surf.rgba(20, 20), history.rgba(20, 20));
     }
 }
