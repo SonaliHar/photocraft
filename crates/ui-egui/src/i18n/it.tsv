@@ -2688,4 +2688,5 @@ cameraData	Lens	Obiettivo
 	Variations	Varianti
 	No prompt: continues the image	Nessuna descrizione: prosegue l'immagine
 	Sends the same area and prompt to {name} again for three more.	Invia di nuovo la stessa area e la stessa descrizione a {name} per altre tre.
+	{name}, which made this layer, is no longer set up.	{name}, che ha creato questo livello, non è più configurato.
 	Generate More	Genera altre

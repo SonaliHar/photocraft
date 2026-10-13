@@ -3632,4 +3632,5 @@ cameraData	Lens	Obiektyw
 	Variations	Warianty
 	No prompt: continues the image	Bez opisu: kontynuuje obraz
 	Sends the same area and prompt to {name} again for three more.	Wysyła ten sam obszar i opis ponownie do {name}, aby uzyskać trzy kolejne.
+	{name}, which made this layer, is no longer set up.	{name}, który utworzył tę warstwę, nie jest już skonfigurowany.
 	Generate More	Generuj więcej

@@ -3034,4 +3034,5 @@ cameraData	Lens	Objectif
 	Variations	Variantes
 	No prompt: continues the image	Sans description : prolonge l'image
 	Sends the same area and prompt to {name} again for three more.	Renvoie la même zone et la même description à {name} pour trois de plus.
+	{name}, which made this layer, is no longer set up.	{name}, qui a créé ce calque, n'est plus configuré.
 	Generate More	En générer plus

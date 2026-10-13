@@ -622,6 +622,9 @@ fn generate_more_uses_the_provider_that_made_the_layer() {
     s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
     let (red, blue) = two_providers(&mut s);
     let r = s.execute(FILL, json!({"prompt": "x", "variations": 1, "provider": "blue"})).unwrap();
+    let layer = photocraft_doc::LayerId(r["layer"].as_u64().unwrap());
+    assert_eq!(s.generative_provider(layer), Some("blue"), "the provider recorded on the layer, not the default");
+    assert_eq!(s.generative_provider(photocraft_doc::LayerId(u64::MAX)), None);
     s.execute(MORE, json!({"layer": r["layer"], "count": 1})).unwrap();
     assert_eq!(blue.sent.lock().unwrap().len(), 2, "more went to blue, not the default");
     assert!(red.sent.lock().unwrap().is_empty());

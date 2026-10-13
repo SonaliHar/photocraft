@@ -416,3 +416,19 @@ fn restore_skips_a_half_saved_two_field_provider() {
     assert!(restored.unwrap_err().contains("firefly"));
     assert_eq!(app.session.image_provider_ids(), vec!["gemini".to_owned()]);
 }
+
+#[test]
+fn generate_more_names_the_provider_that_made_the_layer() {
+    let store = Store::default();
+    let (mut app, restored) = configured(&store, &["gemini", "openai"]);
+    restored.unwrap();
+    assert_eq!(app.session.image_provider().unwrap().info().id, "gemini");
+    let r = app.run(FILL, json!({"prompt": "a kite", "variations": 1, "provider": "openai"})).unwrap();
+    let group = LayerId(r["layer"].as_u64().unwrap());
+    let tip = more_tooltip(&app, group);
+    assert!(tip.contains("openai") && !tip.contains("gemini"), "{tip}");
+    // OpenAI is removed: the tooltip says so instead of naming the default.
+    remove_provider(&mut app, "openai").unwrap();
+    let tip = more_tooltip(&app, group);
+    assert!(tip.contains("OpenAI") && tip.contains("no longer set up"), "{tip}");
+}

@@ -3811,4 +3811,5 @@ layerLabel	No Color	Sem cor
 	Variations	Variações
 	No prompt: continues the image	Sem descrição: continua a imagem
 	Sends the same area and prompt to {name} again for three more.	Envia a mesma área e descrição para {name} de novo para mais três.
+	{name}, which made this layer, is no longer set up.	{name}, que criou esta camada, não está mais configurado.
 	Generate More	Gerar mais

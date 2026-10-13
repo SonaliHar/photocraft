@@ -3021,4 +3021,5 @@ cameraData	Lens	Lensa
 	Variations	Variasi
 	No prompt: continues the image	Tanpa deskripsi: melanjutkan gambar
 	Sends the same area and prompt to {name} again for three more.	Mengirim area dan deskripsi yang sama ke {name} lagi untuk tiga lagi.
+	{name}, which made this layer, is no longer set up.	{name}, yang membuat lapisan ini, tidak lagi disiapkan.
 	Generate More	Buat Lagi

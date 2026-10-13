@@ -2632,4 +2632,5 @@ cameraData	Lens	镜头
 	Variations	变体
 	No prompt: continues the image	无描述：延续图像
 	Sends the same area and prompt to {name} again for three more.	再次将相同区域和描述发送到 {name}，再生成三个。
+	{name}, which made this layer, is no longer set up.	创建此图层的 {name} 已不再设置。
 	Generate More	生成更多

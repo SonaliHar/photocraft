@@ -3631,4 +3631,5 @@ cameraData	Lens	レンズ
 	Variations	バリエーション
 	No prompt: continues the image	説明文なし：画像を続けます
 	Sends the same area and prompt to {name} again for three more.	同じ範囲と説明文を {name} にもう一度送り、さらに 3 つ生成します。
+	{name}, which made this layer, is no longer set up.	このレイヤーを作成した {name} はもう設定されていません。
 	Generate More	さらに生成

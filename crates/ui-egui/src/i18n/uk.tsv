@@ -3719,4 +3719,5 @@ cameraData	Lens	Об'єктив
 	Variations	Варіанти
 	No prompt: continues the image	Без опису: продовжує зображення
 	Sends the same area and prompt to {name} again for three more.	Знову надсилає ту саму область і опис до {name}, щоб отримати ще три.
+	{name}, which made this layer, is no longer set up.	{name}, за допомогою якого створено цей шар, більше не налаштовано.
 	Generate More	Створити ще

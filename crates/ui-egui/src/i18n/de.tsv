@@ -2656,4 +2656,5 @@ cameraData	Lens	Objektiv
 	Variations	Varianten
 	No prompt: continues the image	Keine Beschreibung: setzt das Bild fort
 	Sends the same area and prompt to {name} again for three more.	Sendet denselben Bereich und dieselbe Beschreibung erneut an {name}, für drei weitere.
+	{name}, which made this layer, is no longer set up.	{name}, mit dem diese Ebene erstellt wurde, ist nicht mehr eingerichtet.
 	Generate More	Weitere generieren

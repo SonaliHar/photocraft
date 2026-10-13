@@ -3200,4 +3200,5 @@ cameraData	Lens	렌즈
 	Variations	변형
 	No prompt: continues the image	설명 없음: 이미지를 이어 채움
 	Sends the same area and prompt to {name} again for three more.	같은 영역과 설명을 {name}에 다시 보내 세 개를 더 만듭니다.
+	{name}, which made this layer, is no longer set up.	이 레이어를 만든 {name}이(가) 더 이상 설정되어 있지 않습니다.
 	Generate More	더 생성

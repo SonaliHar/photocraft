@@ -565,6 +565,19 @@ fn variation_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, variation: &Lay
     Some(id)
 }
 
+/// Generate More's tooltip: the provider that made `group` (which Generate More sends to), why
+/// it can't run, or that the provider has since been removed.
+pub(crate) fn more_tooltip(app: &PhotocraftApp, group: LayerId) -> String {
+    if let Some(why) = app.session.disabled_reason(MORE) {
+        return why;
+    }
+    let Some(id) = app.session.generative_provider(group) else { return String::new() };
+    match app.session.image_provider_by_id(id) {
+        Some(p) => crate::i18n::fmt(tl!("Sends the same area and prompt to {name} again for three more."), &[("name", p.info().name)]),
+        None => crate::i18n::fmt(tl!("{name}, which made this layer, is no longer set up."), &[("name", provider_name(id))]),
+    }
+}
+
 /// Properties › Variations, for the active generative layer (or one of its variations): a row of
 /// thumbnails, one per variation (click one to show it), and Generate More, as Photoshop's
 /// Properties panel offers for a generative layer. Compact, since the dock can be short.
@@ -577,10 +590,7 @@ pub fn variations_section(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.genai.thumbs.retain(|id, _| st.doc.layer(*id).is_some());
     }
     let prompt = app.session.generative_prompt(group_id).unwrap_or("").to_owned();
-    let tip = match app.session.image_provider().map(|p| p.info()) {
-        Some(info) => crate::i18n::fmt(tl!("Sends the same area and prompt to {name} again for three more."), &[("name", info.name)]),
-        None => app.session.disabled_reason(MORE).unwrap_or_default(),
-    };
+    let tip = more_tooltip(app, group_id);
     let enabled = app.session.is_enabled(MORE);
     let mut more = false;
     ui.add_space(2.0);

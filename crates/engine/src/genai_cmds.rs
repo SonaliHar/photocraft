@@ -727,6 +727,11 @@ impl Session {
     pub fn generative_prompt(&self, id: LayerId) -> Option<&str> {
         self.genai_sources.get(&id).map(|s| s.prompt.as_str())
     }
+
+    /// The id of the provider a generative layer was made with, which Generate More sends to.
+    pub fn generative_provider(&self, id: LayerId) -> Option<&str> {
+        self.genai_sources.get(&id).map(|s| s.provider.as_str())
+    }
 }
 
 fn select_enabled(s: &Session) -> std::result::Result<(), String> {

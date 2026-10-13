@@ -2963,4 +2963,5 @@ cameraData	Lens	Объектив
 	Variations	Варианты
 	No prompt: continues the image	Без описания: продолжает изображение
 	Sends the same area and prompt to {name} again for three more.	Снова отправляет ту же область и описание в {name}, чтобы получить ещё три.
+	{name}, which made this layer, is no longer set up.	{name}, с помощью которого создан этот слой, больше не настроен.
 	Generate More	Создать ещё

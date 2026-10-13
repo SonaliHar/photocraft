@@ -2625,4 +2625,5 @@ cameraData	Lens	Objektiv
 	Variations	Varianty
 	No prompt: continues the image	Bez popisu: pokračuje v obrázku
 	Sends the same area and prompt to {name} again for three more.	Odešle stejnou oblast a popis znovu do {name} pro tři další.
+	{name}, which made this layer, is no longer set up.	{name}, který tuto vrstvu vytvořil, už není nastaven.
 	Generate More	Generovat další
