@@ -172,6 +172,7 @@ impl ImageProvider for Firefly {
         };
         let mask_id = self.upload(&token, &fill)?;
         r.cancel.check()?;
+        // Adobe's v3 fill tutorial (2026-10-12) nests the mask as `image.mask.uploadId`, beside `image.source`.
         let body = json!({"prompt": r.prompt.trim(), "numVariations": 1, "image": {"source": {"uploadId": image_id}, "mask": {"uploadId": mask_id}}});
         let submitted = self.http.send(self.authed(HttpRequest::new(Method::Post, FILL).json(&body), &token)?)?;
         let job = parse_submit(&submitted, &self.creds)?;
