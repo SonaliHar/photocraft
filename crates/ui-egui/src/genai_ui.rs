@@ -314,6 +314,12 @@ fn prompt_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
     }
 }
 
+/// The settings' Default dropdown value: the dialog's choice, or the saved default when there is
+/// none (the dialog was opened before any provider was set up, so its choice is empty).
+pub(crate) fn default_choice(f: &Map<String, Value>, saved: &Saved) -> String {
+    f.get("default").and_then(Value::as_str).filter(|d| !d.is_empty()).unwrap_or(saved.default.as_str()).to_owned()
+}
+
 fn settings_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = crate::theme::Tokens::get(ui.ctx());
     if app.services.genai.is_none() {
@@ -323,7 +329,7 @@ fn settings_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String,
     let saved = saved(app);
     if saved.configured.len() > 1 {
         let opts: Vec<(String, &str)> = saved.configured.iter().map(|id| (id.clone(), provider_name(id))).collect();
-        let mut chosen = f.get("default").and_then(Value::as_str).unwrap_or(saved.default.as_str()).to_owned();
+        let mut chosen = default_choice(f, &saved);
         ui.horizontal(|ui| {
             ui.label(tl!("Default for Generative Fill"));
             if crate::widgets::dropdown(ui, "genai-default", &mut chosen, &opts, 260.0) {

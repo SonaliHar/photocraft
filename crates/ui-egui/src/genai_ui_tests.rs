@@ -457,3 +457,18 @@ fn saving_one_provider_succeeds_when_another_cannot_load() {
     assert_eq!(row_status(&app, &saved, "openai"), "Needs credentials");
     assert_eq!(row_status(&app, &saved, "stability"), "Not set up");
 }
+
+#[test]
+fn the_settings_default_ignores_an_empty_choice() {
+    let store = Store::default();
+    let (app, restored) = configured(&store, &["gemini", "openai"]);
+    restored.unwrap();
+    let mut fields = Map::new();
+    fields.insert(SETTINGS_MARK.into(), json!(true));
+    fields.insert("default".into(), json!(""));
+    assert_eq!(default_choice(&fields, &saved(&app)), "gemini", "an empty default (dialog opened before any provider) falls back");
+    fields.insert("default".into(), json!("openai"));
+    assert_eq!(default_choice(&fields, &saved(&app)), "openai");
+    fields.remove("default");
+    assert_eq!(default_choice(&fields, &saved(&app)), "gemini");
+}
