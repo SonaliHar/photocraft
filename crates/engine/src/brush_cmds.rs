@@ -11,7 +11,9 @@ use photocraft_geom::Rect;
 use photocraft_paint::mixer::{MixerSettings, apply_mixer_stroke};
 use photocraft_paint::replace::{Limits, ReplaceMode, ReplaceSettings, Sampling, apply_color_replacement, color_replacement_effect};
 use photocraft_paint::tile::PREVIEW_SIDE;
-use photocraft_paint::{BrushPreset, BrushSettings, GrayTile, Pattern, PresetCaptures, StoredTile, Stroke, StrokePoint, StrokeRenderer, TipShape, render_stroke};
+use photocraft_paint::{
+    BrushPreset, BrushSettings, GrayTile, Pattern, PresetCaptures, StoredTile, Stroke, StrokePoint, StrokeRenderer, TipShape, render_stroke,
+};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
