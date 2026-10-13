@@ -203,3 +203,50 @@ fn blocks_agree_with_one_pass() {
         (0..h).flat_map(|y| (margin..w - margin).map(move |x| (x, y))).map(|(x, y)| (blocked[y * w + x] - direct[y * w + x]).abs()).fold(0.0f32, f32::max);
     assert!(worst < 5e-3, "worst block-seam difference {worst}");
 }
+
+#[test]
+fn radix2_matches_rustfft() {
+    use crate::sharpen::radix2::Radix2;
+    use rustfft::FftPlanner;
+    for n in [2usize, 4, 8, 64, 256, 1024] {
+        let input: Vec<C> = (0..n).map(|i| C::new(((i * 7 + 3) % 11) as f32 / 10.0, ((i * 5) % 13) as f32 / 12.0)).collect();
+        let mut expected = input.clone();
+        FftPlanner::<f32>::new().plan_fft_forward(n).process(&mut expected);
+        let mut got = input.clone();
+        Radix2::new(n).process(&mut got, false);
+        for (a, b) in got.iter().zip(&expected) {
+            assert!((a - b).norm() < 1e-3 * (n as f32).sqrt(), "n={n}: {a} vs {b}");
+        }
+        // The inverse (unnormalised) returns n times the input.
+        Radix2::new(n).process(&mut got, true);
+        for (a, b) in got.iter().zip(&input) {
+            assert!((a / n as f32 - b).norm() < 1e-4, "n={n} round trip: {a} vs {b}");
+        }
+    }
+    let one = Radix2::new(1);
+    let mut single = [C::new(3.0, 1.0)];
+    one.process(&mut single, false);
+    assert_eq!(single[0], C::new(3.0, 1.0));
+}
+
+#[test]
+fn the_browser_engine_gives_the_same_picture() {
+    let (w, h) = (150usize, 100usize);
+    let taps = kernel(SharpenRemove::Lens, 2.5, 0.0);
+    let img = image(blurred(&scene(w, h), w, h, &taps), w, h, 1);
+    let c = ctx(img.rect, false);
+    let fast = deconvolve_with(&img, img.rect, &c, &taps, 8, false);
+    let small = deconvolve_with(&img, img.rect, &c, &taps, 8, true);
+    let worst = fast.iter().zip(&small).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+    // Different padded sizes treat the borders differently; the interior must agree closely.
+    let margin = 2 * 8 * 4;
+    let mut interior = 0.0f32;
+    for y in margin..h - margin {
+        for x in margin..w - margin {
+            interior = interior.max((fast[y * w + x] - small[y * w + x]).abs());
+        }
+    }
+    assert!(interior < 5e-3, "interior difference {interior} (whole image {worst})");
+    let truth = scene(w, h);
+    assert!(mse(&small, &truth) < mse(img.data.as_slice(), &truth), "the radix-2 engine must also sharpen");
+}

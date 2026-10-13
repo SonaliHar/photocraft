@@ -11,14 +11,16 @@
 //! layer is processed in blocks of at most [`MAX_SIDE`] px with that apron, so memory stays bounded
 //! on large layers. Within the apron a tile agrees with a whole-layer run.
 
-use std::sync::Arc;
-
 use photocraft_geom::Rect;
 use rustfft::num_complex::Complex;
+#[cfg(not(target_arch = "wasm32"))]
 use rustfft::{Fft, FftPlanner};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Arc;
 
 use crate::image::{Image, premultiply, unpremultiply};
 use crate::photo_util::par_rows;
+use crate::sharpen::radix2::Radix2;
 use crate::{Ctx, SharpenRemove};
 
 /// Largest point-spread radius in pixels (Smart Sharpen's own range).
@@ -123,8 +125,12 @@ fn line(r: f32, angle: f32) -> Vec<Tap> {
     taps
 }
 
-/// Smallest FFT-friendly length (2, 3 and 5 only) that is at least `n`.
-fn smooth(n: usize) -> usize {
+/// Smallest transform length that is at least `n`: a power of two for the radix-2 transform,
+/// otherwise the smallest length with only the factors 2, 3 and 5.
+fn fft_len(n: usize, radix2: bool) -> usize {
+    if radix2 {
+        return n.next_power_of_two().max(2);
+    }
     let mut best = n.next_power_of_two().max(2);
     let mut a = 1usize;
     while a < best {
@@ -164,37 +170,66 @@ fn transpose(src: &[C], dst: &mut [C], rows: usize, cols: usize) {
 struct Plans {
     w: usize,
     h: usize,
-    row_fwd: Arc<dyn Fft<f32>>,
-    row_inv: Arc<dyn Fft<f32>>,
-    col_fwd: Arc<dyn Fft<f32>>,
-    col_inv: Arc<dyn Fft<f32>>,
+    engine: Engine,
+}
+
+enum Engine {
+    /// `rustfft`: SIMD, any 2-3-5-smooth length. Not built for the browser.
+    #[cfg(not(target_arch = "wasm32"))]
+    Fast { row_fwd: Arc<dyn Fft<f32>>, row_inv: Arc<dyn Fft<f32>>, col_fwd: Arc<dyn Fft<f32>>, col_inv: Arc<dyn Fft<f32>> },
+    /// The small radix-2 transform (power-of-two sizes).
+    Radix2 { row: Radix2, col: Radix2 },
 }
 
 impl Plans {
-    fn new(w: usize, h: usize) -> Self {
-        let mut planner = FftPlanner::<f32>::new();
-        Plans {
-            w,
-            h,
-            row_fwd: planner.plan_fft_forward(w),
-            row_inv: planner.plan_fft_inverse(w),
-            col_fwd: planner.plan_fft_forward(h),
-            col_inv: planner.plan_fft_inverse(h),
+    /// `radix2` is forced on in the browser build; natively it picks the engine (tests use both).
+    fn new(w: usize, h: usize, radix2: bool) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        if !radix2 {
+            let mut planner = FftPlanner::<f32>::new();
+            let engine = Engine::Fast {
+                row_fwd: planner.plan_fft_forward(w),
+                row_inv: planner.plan_fft_inverse(w),
+                col_fwd: planner.plan_fft_forward(h),
+                col_inv: planner.plan_fft_inverse(h),
+            };
+            return Plans { w, h, engine };
+        }
+        let _ = radix2;
+        Plans { w, h, engine: Engine::Radix2 { row: Radix2::new(w), col: Radix2::new(h) } }
+    }
+
+    fn rows(&self, buf: &mut [C], len: usize, columns: bool, inverse: bool) {
+        match &self.engine {
+            #[cfg(not(target_arch = "wasm32"))]
+            Engine::Fast { row_fwd, row_inv, col_fwd, col_inv } => {
+                let plan = match (columns, inverse) {
+                    (false, false) => row_fwd,
+                    (false, true) => row_inv,
+                    (true, false) => col_fwd,
+                    (true, true) => col_inv,
+                };
+                par_rows(buf, len, 1, |_, row| plan.process(row));
+            }
+            Engine::Radix2 { row, col } => {
+                let t = if columns { col } else { row };
+                par_rows(buf, len, 1, |_, r| t.process(r, inverse));
+            }
         }
     }
 
     /// `a` (`h × w`) to its spectrum in `b` (`w × h`); `a` is left as scratch.
     fn forward(&self, a: &mut [C], b: &mut [C]) {
-        par_rows(a, self.w, 1, |_, row| self.row_fwd.process(row));
+        self.rows(a, self.w, false, false);
         transpose(a, b, self.h, self.w);
-        par_rows(b, self.h, 1, |_, row| self.col_fwd.process(row));
+        self.rows(b, self.h, true, false);
     }
 
     /// Spectrum `b` back to `a`, unnormalised (scale by `1 / (w × h)`); `b` is left as scratch.
     fn inverse(&self, b: &mut [C], a: &mut [C]) {
-        par_rows(b, self.h, 1, |_, row| self.col_inv.process(row));
+        self.rows(b, self.h, true, true);
         transpose(b, a, self.w, self.h);
-        par_rows(a, self.w, 1, |_, row| self.row_inv.process(row));
+        self.rows(a, self.w, false, true);
     }
 }
 
@@ -229,6 +264,12 @@ fn richardson_lucy(obs: &[f32], plans: &Plans, kernel_spectrum: &[C], iters: usi
 /// The deconvolved colour of `out` (alpha unchanged), reading `src` (which covers `out` grown by
 /// [`reach`]; samples beyond it repeat the edge).
 pub(crate) fn deconvolve(src: &Image, out: Rect, ctx: &Ctx, taps: &[Tap], iters: usize) -> Vec<f32> {
+    deconvolve_with(src, out, ctx, taps, iters, cfg!(target_arch = "wasm32"))
+}
+
+/// [`deconvolve`] with the transform engine chosen: `radix2` runs the small power-of-two FFT
+/// the browser build uses, otherwise `rustfft`.
+pub(super) fn deconvolve_with(src: &Image, out: Rect, ctx: &Ctx, taps: &[Tap], iters: usize, radix2: bool) -> Vec<f32> {
     let n = src.ch;
     let cc = if ctx.alpha { n - 1 } else { n };
     let mut data = src.data.clone();
@@ -244,15 +285,18 @@ pub(crate) fn deconvolve(src: &Image, out: Rect, ctx: &Ctx, taps: &[Tap], iters:
     // The kernel's extent sets the apron; the layer is cut into blocks that fit the transform.
     let radius = taps.iter().map(|t| t.0.abs().max(t.1.abs())).max().unwrap_or(0);
     let apron = (2 * iters as i32 * (radius + 1) + 1).min(MAX_APRON).max(radius + 1) as usize;
-    let block = MAX_SIDE.saturating_sub(2 * apron).clamp(64, 2048);
+    // Powers of two round a window up by up to 2x, so the radix-2 engine (the browser, with
+    // less memory to spare) keeps its windows at 2048 px.
+    let max_side = if radix2 { 2048 } else { MAX_SIDE };
+    let block = max_side.saturating_sub(2 * apron).clamp(64, 2048);
     for by in (0..oh).step_by(block) {
         for bx in (0..ow).step_by(block) {
             let (bw, bh) = (block.min(ow - bx), block.min(oh - by));
             // The window is the block plus its apron, rounded up to a fast transform size; the
             // extra rows and columns read real (or edge-repeated) pixels.
-            let (pw, ph) = (smooth(bw + 2 * apron), smooth(bh + 2 * apron));
+            let (pw, ph) = (fft_len(bw + 2 * apron, radix2), fft_len(bh + 2 * apron, radix2));
             let (wx, wy) = (out.x0 + bx as i32 - apron as i32, out.y0 + by as i32 - apron as i32);
-            let plans = Plans::new(pw, ph);
+            let plans = Plans::new(pw, ph, radix2);
             let mut a = vec![C::new(0.0, 0.0); pw * ph];
             let mut b = vec![C::new(0.0, 0.0); pw * ph];
             // Kernel spectrum: the point-spread function wrapped onto the grid, origin at (0, 0).
