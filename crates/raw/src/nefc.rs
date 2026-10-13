@@ -32,8 +32,15 @@
 //!   of the same parity, starting at the seeds of maker note `0x0096`.
 //! * Lossless (`0x0096` version `0x46`): the decoded values are the samples.
 //!   Lossy (`0x44`): they index a curve. Type 1 (`0x44 0x10`) stores the whole
-//!   curve, type 2 (`0x44 0x20` / `0x44 0x40`) stores `n` points spaced
-//!   `2^bits / (n - 1)` codes apart, linearly interpolated.
+//!   curve, type 2 (`0x44 0x20` / `0x44 0x40`) stores `n` points, linearly
+//!   interpolated. In `0x44 0x20` the points are `2^bits / (n - 1)` codes
+//!   apart. In `0x44 0x40` (Z 7, Z 7II) the codes span two bits fewer than the
+//!   samples, so the points are `2^(bits - 2) / (n - 1)` apart: 14-bit files
+//!   carry 0, 16, 32, … (codes 0..=4096 for samples up to 16383) and 12-bit
+//!   files 0, 4, 8, …. Read with the `0x20` spacing every sample came out a
+//!   quarter of its value, below the black level: a black picture. With this
+//!   spacing a Z 7 14-bit and a Z 7II 12-bit lossy file decode sample for
+//!   sample like LibRaw's output (compared as pixels, black box).
 //! * Values in the maker note are in the maker note's byte order.
 //!
 //! Not decoded (reported as unsupported; the embedded preview is used
@@ -216,7 +223,8 @@ pub(crate) fn parse_table(t: &[u8], le: bool, bits: u32) -> Result<DecodeTable> 
                 if split != 0 {
                     return Err(RawError::unsupported(format!("Nikon \"lossy after split\" compressed NEF (split at row {split})")));
                 }
-                let range = 1usize << bits;
+                // `0x40` codes two bits fewer than the sample depth (see the module comment).
+                let range = if v1 == 0x40 { 1usize << (bits - 2) } else { 1usize << bits };
                 if n - 1 > range || !range.is_multiple_of(n - 1) {
                     return Err(RawError::unsupported(format!("Nikon compressed NEF: {n}-point curve for {bits}-bit data")));
                 }
@@ -470,6 +478,42 @@ mod tests {
                 let out = decode(&encode(&img, w, &t, table.seeds), w, h, bits, &table).unwrap();
                 assert_eq!(out, img.iter().map(|&v| curve[v as usize]).collect::<Vec<_>>());
             }
+        }
+    }
+
+    /// Maker note `0x0096` version `0x44 0x40` as a Z 7 writes it: 257 points that start 0, 16, 32, … for 14 bits
+    /// (0, 4, 8, … for 12) and steepen towards the white level.
+    fn lossy_table_0x40(bits: u32) -> Vec<u8> {
+        let mut t = vec![0x44, 0x40];
+        for _ in 0..4 {
+            t.extend_from_slice(&300u16.to_le_bytes());
+        }
+        t.extend_from_slice(&257u16.to_le_bytes());
+        let (step, max) = (1u32 << (bits - 10), (1u32 << bits) - 1);
+        for i in 0..257u32 {
+            // Slope 1 for the first three quarters, then up to the white level.
+            let v = if i <= 192 { i * step } else { 192 * step + (max - 192 * step) * (i - 192) / 64 };
+            t.extend_from_slice(&(v as u16).to_le_bytes());
+        }
+        t.resize(624, 0);
+        t
+    }
+
+    #[test]
+    fn lossy_0x40_points_are_a_quarter_as_far_apart() {
+        for (bits, t) in [(12u32, LOSSY_12), (14, LOSSY_14)] {
+            let table = parse_table(&lossy_table_0x40(bits), true, bits).unwrap();
+            let Encoding::Lossy(curve) = &table.encoding else { panic!() };
+            let codes = 1usize << (bits - 2);
+            assert_eq!(curve.len(), codes + 1, "{bits}-bit: codes span two bits fewer than the samples");
+            // Where the points rise by one step per point, a code is its own sample: not a quarter of it.
+            assert!((0..=codes * 3 / 4).all(|code| usize::from(curve[code]) == code), "{bits}-bit");
+            assert_eq!(usize::from(curve[codes]), (1 << bits) - 1, "the last code is the white level");
+            assert!(curve.windows(2).all(|p| p[0] <= p[1]));
+            let (w, h) = (48, 7);
+            let img = image(w, h, codes as i32 - 1, 7);
+            let out = decode(&encode(&img, w, &t, table.seeds), w, h, bits, &table).unwrap();
+            assert_eq!(out, img.iter().map(|&v| curve[v as usize]).collect::<Vec<_>>());
         }
     }
 
