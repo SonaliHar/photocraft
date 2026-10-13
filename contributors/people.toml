@@ -21,6 +21,10 @@
 display_name = "jonathnwxh"
 sync_github_name = false
 
+[people.modularkarma112]
+real_name = "Juan Diego Gonzalez Garcia"
+sync_github_name = true
+
 [people.Skyfuller1303]
 display_name = "Skyfuller"
 sync_github_name = true

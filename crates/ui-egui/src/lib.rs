@@ -243,6 +243,8 @@ pub use file_dialog::{FileDialogAnswer, FileDialogFn, FileDialogReply, FileDialo
 pub use file_open::OsEvent;
 pub use state::{Tool, UiState};
 
+mod pdf_import_ui;
+
 /// Decode a file: (document, warnings about anything approximated or dropped).
 pub type ImportFn = Box<dyn Fn(&str, &[u8], usize) -> Result<(Document, Vec<String>), String>>;
 /// Encoder settings chosen in Export As (the file format comes from the name's extension).
@@ -676,6 +678,7 @@ pub struct PhotocraftApp {
     /// A raw file just opened interactively, waiting for the open-time Camera Raw dialog (shown
     /// on the next frame, which has the egui context).
     pub(crate) pending_raw_open: Option<camera_raw_ui::RawOpen>,
+    pub(crate) pdf_pickers: std::collections::VecDeque<pdf_import_ui::Picker>,
     /// The open-time re-develop (or its Camera Raw step) running in the background.
     pub(crate) raw_redevelop: Option<camera_raw_ui::Redevelop>,
     /// Filter › Adaptive Wide Angle dialog (wide_angle_ui).
@@ -865,6 +868,7 @@ impl PhotocraftApp {
             gradient: Default::default(),
             camera_raw: None,
             pending_raw_open: None,
+            pdf_pickers: Default::default(),
             raw_redevelop: None,
             wide_angle: None,
             dialog_edits: Default::default(),
@@ -1227,6 +1231,10 @@ impl PhotocraftApp {
     /// [`Self::open_bytes`] for a file read from `path` (File › Save writes back there; it goes
     /// to Open Recent), when known.
     pub(crate) fn open_bytes_from(&mut self, name: &str, bytes: &[u8], path: Option<&str>) -> Result<Vec<String>, String> {
+        if pdf_import_ui::is_pdf(name, bytes) {
+            pdf_import_ui::queue(self, name, path.map(str::to_string), bytes)?;
+            return Ok(Vec::new());
+        }
         if let Some(r) = preset_files_ui::open(self, name, bytes) {
             return r.map(|()| Vec::new());
         }
@@ -1252,7 +1260,7 @@ impl PhotocraftApp {
             self,
             open_prompt::Held {
                 doc,
-                read_only: photocraft_io::affinity::is_affinity(bytes),
+                read_only: photocraft_io::affinity::is_affinity(bytes) || bytes.starts_with(b"%PDF-") || name.to_ascii_lowercase().ends_with(".pdf"),
                 name: name.to_string(),
                 path: path.map(str::to_string),
                 warnings: warnings.clone(),
@@ -1336,10 +1344,15 @@ impl PhotocraftApp {
         let writable = ext.is_some_and(|e| {
             matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb" | "tif" | "tiff")
                 || (e == "ora" && holds_ora)
+                || e == "pdf"
                 || (flat && photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
         });
         let suggested = match &st.path {
             Some(p) if writable => p.clone(),
+            None if st.source_read_only && st.doc.name.to_ascii_lowercase().ends_with(".pdf") => {
+                let stem = std::path::Path::new(&st.doc.name).file_stem().unwrap_or_default().to_string_lossy();
+                format!("{stem}-edited.pdf")
+            }
             p => {
                 let source = p.as_deref().unwrap_or(&st.doc.name);
                 let ext = match photocraft_engine::file_cmds::extension(source).as_deref() {
@@ -1857,6 +1870,7 @@ impl eframe::App for PhotocraftApp {
         jobs_ui::dialog(self, &ctx);
         discard_ui::show(self, &ctx);
         tiff_options_ui::show(self, &ctx);
+        pdf_import_ui::show(self, &ctx);
         targa_options_ui::show(self, &ctx);
         distort_ui::show(self, &ctx);
         camera_raw_ui::show(self, &ctx);

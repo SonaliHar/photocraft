@@ -778,7 +778,34 @@ fn background_open_warns_about_missing_fonts() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     // What the open job leaves behind: the decoded document in the session, then its result.
     let (index, _) = app.session.open_document(doc, None);
-    super::finish_open(&mut app, "poster.psd", None, &json!({"document": index, "warnings": []}), None).unwrap();
+    super::finish_open(&mut app, "poster.psd", None, &json!({"document": index, "warnings": []}), None, None).unwrap();
     let want = vec!["font 'NoSuchFamily4559' is not installed; text may render using a fallback face".to_string()];
     assert!(app.ui.notices.last().is_some_and(|n| n.title.contains("poster.psd") && n.lines == want), "{:?}", app.ui.notices);
+}
+
+/// A PDF's pages that finish opening while an earlier file waits on its profile prompt queue
+/// behind it, every page in page order, instead of opening ahead of it.
+#[test]
+fn pdf_pages_wait_behind_a_held_profile_prompt() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let page = |w| photocraft_doc::Document::new("page", photocraft_doc::Size::new(w, 10), photocraft_doc::ColorMode::Rgb, photocraft_color::SampleType::U8);
+    app.held_opens.push_back(crate::open_prompt::Held {
+        doc: page(5),
+        read_only: false,
+        name: "first.psd".into(),
+        path: None,
+        warnings: Vec::new(),
+        bytes: None,
+        slot: None,
+        question: Some(json!({"missing": true, "working": "sRGB"})),
+        policy_applied: false,
+    });
+    // What the PDF open job leaves behind: its pages appended to the session, then its result.
+    let first = app.session.open_document(page(11), None).0;
+    let second = app.session.open_document(page(12), None).0;
+    let v = json!({"document": first, "documents": [first, second], "warnings": []});
+    super::finish_open(&mut app, "pages.pdf", None, &v, None, None).unwrap();
+    assert!(app.session.documents().is_empty(), "the pages wait instead of opening ahead");
+    let queued: Vec<_> = app.held_opens.iter().map(|h| (h.name.as_str(), h.doc.size.width, h.question.is_some())).collect();
+    assert_eq!(queued, [("first.psd", 5, true), ("pages.pdf", 11, false), ("pages.pdf", 12, false)]);
 }
