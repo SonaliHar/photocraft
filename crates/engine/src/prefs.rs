@@ -582,6 +582,11 @@ pub struct Performance {
     /// Memory PhotoCraft may use, in MB: bounds each document's pixels plus its History (the
     /// oldest states are dropped beyond it).
     pub memory_usage_mb: u32,
+    /// Percent of physical RAM for the complete process; None preserves the legacy MB limit.
+    #[serde(default)]
+    pub memory_usage_percent: Option<u8>,
+    /// Independent graphics budget, including canvas pages and compositor working sets.
+    pub gpu_memory_mb: u32,
     /// Undo steps kept per document (History panel states).
     pub history_states: u32,
     /// Display cache levels (mip levels kept for zoomed-out views).
@@ -612,9 +617,25 @@ impl Performance {
     }
 
     /// Pixel memory a document and its History may hold (Memory Usage), in bytes: beyond it
-    /// the oldest history states are dropped.
+    /// the oldest history states are dropped. 0 (no byte limit, only History States) while the
+    /// scratch disk is on: tiles only History holds go to disk instead.
     pub fn history_budget_bytes(&self) -> usize {
+        if photocraft_raster::spill::enabled() {
+            return 0;
+        }
         (self.memory_usage_mb as usize).saturating_mul(1 << 20)
+    }
+
+    /// Pixel bytes kept in memory before tiles move to the scratch disk: half of Memory Usage
+    /// (the rest is for the GPU canvas, caches and the app). `PHOTOCRAFT_TILE_BUDGET_MB`
+    /// overrides it (tests, stress runs).
+    pub fn tile_budget_bytes(&self) -> usize {
+        let bytes = std::env::var("PHOTOCRAFT_TILE_BUDGET_MB")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .map(|mb| mb.saturating_mul(1 << 20))
+            .unwrap_or_else(|| u64::from(self.memory_usage_mb).saturating_mul(1 << 20) / 2);
+        usize::try_from(bytes).unwrap_or(usize::MAX)
     }
 }
 
@@ -622,6 +643,8 @@ impl Default for Performance {
     fn default() -> Self {
         Self {
             memory_usage_mb: 8192,
+            memory_usage_percent: Some(70),
+            gpu_memory_mb: 1024,
             history_states: 50,
             cache_levels: 4,
             cache_tile_size: 8192,
@@ -1061,7 +1084,6 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "performance.cacheLevels",
     "performance.effectCacheMb",
     "performance.legacyCompositing",
-    "scratchDisks.disks",
     "unitsAndRulers.columnWidth",
     "unitsAndRulers.gutter",
     "plugIns.showExtensionPanels",
@@ -1141,6 +1163,8 @@ pub fn range(path: &str) -> Option<(f64, f64)> {
         "interface.notificationDurationSeconds" => (1.0, 120.0),
         "export.jpegQuality" | "export.webpQuality" => (1.0, 100.0),
         "performance.memoryUsageMb" => (256.0, 1_048_576.0),
+        "performance.memoryUsagePercent" => (1.0, 95.0),
+        "performance.gpuMemoryMb" => (64.0, 65536.0),
         "performance.historyStates" => (1.0, 1000.0),
         "performance.cacheLevels" => (1.0, 8.0),
         "performance.cacheTileSize" => (256.0, 16384.0),
@@ -1248,7 +1272,7 @@ fn check_value(path: &str, v: &Value) -> std::result::Result<(), String> {
             seen.push(theme);
         }
     }
-    if path == "performance.renderingMode" && v.is_null() {
+    if matches!(path, "performance.renderingMode" | "performance.memoryUsagePercent") && v.is_null() {
         return Ok(()); // Legacy policy, resolved from useGpu and gpuBackend.
     }
     if let Some(c) = choices(path) {
@@ -1504,6 +1528,8 @@ impl Session {
     /// Push engine-relevant preferences into live state: every document's history limit, the
     /// layer-effect cache budget and the text engine's missing-glyph protection.
     pub fn apply_prefs(&mut self) {
+        self.scratch_runtime.get_or_insert_with(crate::scratch::Runtime::default);
+        crate::scratch::configure(self.prefs());
         let n = self.prefs().performance.history_states.max(1) as usize;
         let bytes = self.prefs().performance.history_budget_bytes();
         let budget = self.prefs().performance.effect_cache_mb as usize;

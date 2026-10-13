@@ -260,10 +260,14 @@ pub fn import_with_svg_group_depth_and_interrupt(
     max_group_depth: usize,
     ctl: &photocraft_raster::Interrupt,
 ) -> Result<ImportResult, IoError> {
+    photocraft_compose::discard_unreadable_pixel_caches();
+    photocraft_raster::spill::check_integrity().map_err(IoError::Unsupported)?;
+    let scratch_generation = photocraft_raster::spill::read_error_generation();
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let r = import_stages(name, bytes, ctl, max_group_depth)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(1.0);
+    photocraft_raster::spill::check_since(scratch_generation).map_err(IoError::Unsupported)?;
     Ok(r)
 }
 
@@ -355,7 +359,11 @@ pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result
 /// export fails with [`IoError::Cancelled`]; otherwise the bytes are exactly [`export`]'s.
 pub fn export_with(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ExportResult, IoError> {
     ctl.check().map_err(|_| IoError::Cancelled)?;
+    photocraft_compose::discard_unreadable_pixel_caches();
+    photocraft_raster::spill::check_integrity().map_err(IoError::Unsupported)?;
+    let scratch_generation = photocraft_raster::spill::read_error_generation();
     let r = export_stages(doc, name_or_ext, opts, ctl)?;
+    photocraft_raster::spill::check_since(scratch_generation).map_err(IoError::Unsupported)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(1.0);
     Ok(r)
