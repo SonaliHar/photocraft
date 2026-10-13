@@ -107,7 +107,9 @@ pub(crate) fn native_scale(ctx: &egui::Context) -> f32 {
 }
 
 /// The resize arrow for a handle that resizes along document direction `d`, as the view shows it
-/// (its rotation, flip and pixel aspect): the nearest of the four arrows.
+/// (its rotation, flip and pixel aspect): the nearest of the four arrows. Free Transform (handles
+/// and Warp splits), the type box, Content-Aware Move's box, the Artboard tool and guides pick
+/// their arrows here.
 pub(crate) fn resize(d: [f64; 2], xf: &ViewXform) -> CursorIcon {
     let s = xf.map_vec(vec2(d[0] as f32, d[1] as f32));
     let angle = f64::from(s.y).atan2(f64::from(s.x)).rem_euclid(std::f64::consts::PI);
