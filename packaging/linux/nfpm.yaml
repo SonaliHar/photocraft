@@ -1,13 +1,15 @@
-# .deb and .rpm packages (nfpm: https://nfpm.goreleaser.com). Run by package.sh, which stages
-# the file tree, substitutes its path for ${STAGE} (nfpm doesn't expand env vars in `src`) and
-# exports VERSION and NFPM_ARCH.
+# .deb, .rpm and Arch Linux (.pkg.tar.zst) packages (nfpm: https://nfpm.goreleaser.com). Run by
+# package.sh, which stages the file tree, substitutes its path for ${STAGE} and the Arch file
+# list for ${ARCH_CONTENTS} (nfpm doesn't expand env vars in `src`) and exports VERSION and
+# NFPM_ARCH.
 #
 #   nfpm package -f packaging/linux/nfpm.yaml -p deb -t dist/release/
 name: photocraft
 arch: ${NFPM_ARCH}
 platform: linux
 version: ${VERSION}
-# semver: 0.2.0-rc.1 becomes 0.2.0~rc.1 in deb/rpm, so pre-releases sort before the release.
+# semver: 0.2.0-rc.1 becomes 0.2.0~rc.1 in deb/rpm and 0.2.0rc.1 in Arch, so pre-releases sort
+# before the release.
 version_schema: semver
 release: 1
 section: graphics
@@ -48,6 +50,11 @@ overrides:
       - mesa-vulkan-drivers
       - libegl-mesa0
       - xdg-desktop-portal
+    # The cache refresh is per format: on Arch, pacman hooks (desktop-file-utils,
+    # shared-mime-info, gtk-update-icon-cache) do it, so that package has no install script.
+    scripts:
+      postinstall: packaging/linux/postinst.sh
+      postremove: packaging/linux/postinst.sh
   rpm:
     # Soname provides rather than package names, so the same requirements resolve on Fedora/RHEL
     # (libxkbcommon-x11, libX11-xcb, ...) and openSUSE (libxkbcommon-x11-0, libX11-xcb1, ...).
@@ -64,6 +71,30 @@ overrides:
     recommends:
       - mesa-vulkan-drivers
       - xdg-desktop-portal
+    scripts:
+      postinstall: packaging/linux/postinst.sh
+      postremove: packaging/linux/postinst.sh
+  archlinux:
+    # pacman has no alternative dependencies, so both GPU loaders are required (vulkan-icd-loader
+    # for libvulkan, libglvnd for libEGL); the driver behind them comes from the system. nfpm
+    # can't write optdepends, so xdg-desktop-portal isn't listed. libx11 holds libX11-xcb too.
+    depends:
+      - glibc
+      - libgcc
+      - libxkbcommon
+      - libxkbcommon-x11
+      - wayland
+      - libx11
+      - libxcb
+      - libxcursor
+      - libxi
+      - vulkan-icd-loader
+      - libglvnd
+    # Replaces the `contents` list below. package.sh writes one entry per staged file, plus the
+    # licences again under /usr/share/licenses/photocraft, where Arch wants them. Not
+    # `type: tree`: nfpm 2.47 gives the directories of a tree a mode with Go's directory bit
+    # (20000000755), and pacman then warns "directory permissions differ" for each on install.
+    contents: [${ARCH_CONTENTS}]
 
 contents:
   - src: ${STAGE}/usr/bin/photocraft
@@ -76,6 +107,6 @@ contents:
     dst: /usr/share/
     type: tree
 
-scripts:
-  postinstall: packaging/linux/postinst.sh
-  postremove: packaging/linux/postinst.sh
+# nfpm doesn't expand env vars here either: package.sh substitutes ${PACKAGER}.
+archlinux:
+  packager: ${PACKAGER}

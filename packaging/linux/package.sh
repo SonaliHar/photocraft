@@ -5,11 +5,12 @@
 #   $DIST/photocraft-<version>-linux-<arch>.AppImage.zsync  delta updates (needs zsyncmake)
 #   $DIST/photocraft-<version>-linux-<arch>.deb       Debian, Ubuntu, Mint, Pop!_OS, ...
 #   $DIST/photocraft-<version>-linux-<arch>.rpm       Fedora, openSUSE, RHEL, ...
+#   $DIST/photocraft-<version>-linux-<arch>.pkg.tar.zst   Arch Linux, Manjaro, EndeavourOS, ...
 #   $DIST/photocraft-<version>-linux-<arch>.tar.gz    plain FHS-style tree (bin/, share/)
 #
-# Usage: packaging/linux/package.sh [--skip-build] [--formats "appimage deb rpm tar"]
+# Usage: packaging/linux/package.sh [--skip-build] [--formats "appimage deb rpm arch tar"]
 #
-# Needs: cargo; nfpm for deb/rpm (https://nfpm.goreleaser.com). By default AppImage tooling
+# Needs: cargo; nfpm for deb/rpm/arch (https://nfpm.goreleaser.com). By default AppImage tooling
 # is downloaded at verified pins into $CARGO_TARGET_DIR. Build on an old distro (CI: Ubuntu 22.04,
 # glibc 2.35) so the binaries run on newer ones. Optional: desktop-file-validate, appstreamcli,
 # zsyncmake (the zsync package) for the AppImage's .zsync.
@@ -26,12 +27,12 @@ HERE="$ROOT/packaging/linux"
 APP_ID=ai.storyteller.photocraft
 
 SKIP_BUILD=0
-FORMATS="appimage deb rpm tar"
+FORMATS="appimage deb rpm arch tar"
 while [ $# -gt 0 ]; do
   case "$1" in
     --skip-build) SKIP_BUILD=1; shift ;;
     --formats) FORMATS="$2"; shift 2 ;;
-    -h | --help) sed -n '2,19p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -91,16 +92,39 @@ if has tar; then
   echo "wrote $DIST/$BASENAME.tar.gz"
 fi
 
-# ---- .deb / .rpm --------------------------------------------------------------------------------
-if has deb || has rpm; then
+# ---- .deb / .rpm / Arch .pkg.tar.zst ------------------------------------------------------------
+if has deb || has rpm || has arch; then
   command -v nfpm >/dev/null || { echo "error: nfpm not found (https://nfpm.goreleaser.com/install/)" >&2; exit 1; }
   export VERSION
   export NFPM_ARCH="$DEB_ARCH"
   # nfpm expands env vars in fields like `version` and `arch`, but not in `contents[].src`.
-  sed "s|\${STAGE}|$STAGE|g" "$HERE/nfpm.yaml" >"$WORK/nfpm.yaml"
+  # The Arch package lists every staged file (why: nfpm.yaml), as one YAML flow sequence so sed
+  # can put it on a single line.
+  ARCH_CONTENTS=""
+  if has arch; then
+    # Whole-second mtimes: nfpm rounds them in the archive but truncates them in .MTREE, and
+    # `pacman -Qkk` reports each file where the two differ.
+    find "$STAGE" -exec touch -h -d "@${SOURCE_DATE_EPOCH:-$(date +%s)}" {} +
+    while IFS= read -r f; do
+      mode=0644
+      if [ -x "$STAGE/$f" ]; then mode=0755; fi
+      ARCH_CONTENTS+="{src: \"$STAGE/$f\", dst: \"/$f\", file_info: {mode: $mode}}, "
+      case "$f" in
+        usr/share/doc/photocraft/LICENSE* | usr/share/doc/photocraft/OFL-*)
+          ARCH_CONTENTS+="{src: \"$STAGE/$f\", dst: \"/usr/share/licenses/photocraft/${f##*/}\", file_info: {mode: 0644}}, "
+          ;;
+      esac
+    done < <(cd "$STAGE" && find usr ! -type d | LC_ALL=C sort)
+  fi
+  sed -e "s|\${STAGE}|$STAGE|g" -e "s|\${ARCH_CONTENTS}|$ARCH_CONTENTS|g" \
+    -e "s|\${PACKAGER}|$PHOTOCRAFT_MAINTAINER|g" "$HERE/nfpm.yaml" >"$WORK/nfpm.yaml"
   for fmt in deb rpm; do
     if has "$fmt"; then (cd "$ROOT" && nfpm package -f "$WORK/nfpm.yaml" -p "$fmt" -t "$DIST/$BASENAME.$fmt"); fi
   done
+  # nfpm names the packager `archlinux` and maps the Debian arch names to pacman's.
+  if has arch; then
+    (cd "$ROOT" && nfpm package -f "$WORK/nfpm.yaml" -p archlinux -t "$DIST/$BASENAME.pkg.tar.zst")
+  fi
 fi
 
 # ---- AppImage -----------------------------------------------------------------------------------

@@ -51,8 +51,8 @@ in the dialog.
 | macOS 11+ (universal: Apple silicon + Intel) | `photocraft-<v>-macos-universal.dmg`, `photocraft-cli-<v>-macos-universal.zip` | `macos-15` |
 | Windows 10+ x64 | `photocraft-<v>-windows-x64.msi`, `photocraft-<v>-windows-x64-portable.zip` | `windows-latest` |
 | Windows 10+ x86 (32-bit) | `photocraft-<v>-windows-x86.msi`, `photocraft-<v>-windows-x86-portable.zip` | `windows-latest` |
-| Linux x86_64 | `photocraft-<v>-linux-x86_64.{AppImage,AppImage.zsync,deb,rpm,tar.gz,flatpak}` | `ubuntu-22.04` (Flatpak: `ubuntu-24.04`) |
-| Linux aarch64 | `photocraft-<v>-linux-aarch64.{AppImage,AppImage.zsync,deb,rpm,tar.gz,flatpak}` | `ubuntu-22.04-arm` (Flatpak: `ubuntu-24.04-arm`) |
+| Linux x86_64 | `photocraft-<v>-linux-x86_64.{AppImage,AppImage.zsync,deb,rpm,pkg.tar.zst,tar.gz,flatpak}` | `ubuntu-22.04` (Flatpak: `ubuntu-24.04`) |
+| Linux aarch64 | `photocraft-<v>-linux-aarch64.{AppImage,AppImage.zsync,deb,rpm,pkg.tar.zst,tar.gz,flatpak}` | `ubuntu-22.04-arm` (Flatpak: `ubuntu-24.04-arm`) |
 | Linux riscv64 (glibc 2.39+) | `photocraft-<v>-linux-riscv64.tar.gz` | cross-compiled on `ubuntu-24.04` (ports.ubuntu.com riscv64 libs); CLI smoke-tested under QEMU |
 | FreeBSD 14 x86_64 | `photocraft-<v>-freebsd-x86_64.tar.gz` | FreeBSD 14.3 VM on `ubuntu-latest` |
 | Web | `photocraft-web-<v>.zip` (static site; see [`packaging/web/README.md`](../packaging/web/README.md)) | `ubuntu-latest` |
@@ -210,6 +210,17 @@ Why these formats:
   [nfpm](https://nfpm.goreleaser.com/): one maintained, dependency-free tool and one config
   (`nfpm.yaml`). It doesn't need cargo-deb and cargo-generate-rpm metadata in our crates, and
   it can build both formats on Ubuntu.
+- **.pkg.tar.zst** covers Arch Linux and its derivatives (Manjaro, EndeavourOS, CachyOS), and
+  Arch Linux ARM for aarch64. It's the same nfpm config with the `archlinux` packager, so it
+  needs no Arch container, `makepkg` or `PKGBUILD` and is built on Ubuntu next to the others.
+  Install it with `sudo pacman -U <file>`; `pacman -R photocraft` removes it. It has no install
+  script, because pacman's hooks refresh the desktop, MIME and icon caches, and it puts the
+  licences in `/usr/share/licenses/photocraft` as well. A pre-release such as `0.2.0-rc.1`
+  becomes `0.2.0rc.1`, which pacman sorts before `0.2.0`. Two limits of nfpm 2.47: it can't
+  write `optdepends`, and pacman has no alternative dependencies, so the package requires both
+  `vulkan-icd-loader` and `libglvnd` where the .deb asks for one of them. The package isn't
+  signed and isn't in a repository or the AUR, so pacman doesn't update it: install the next
+  release's file the same way.
 - **.tar.gz** is for people who manage their own `/opt` or `~/.local`.
 - **Flatpak bundle** (`.flatpak`) is a single file that installs into Flatpak, sandboxed and
   updatable by installing a newer bundle, for people who prefer Flatpak to AppImage.
@@ -243,7 +254,7 @@ Why these formats:
 All Linux binaries are built on Ubuntu 22.04 and need **glibc ≥ 2.35**: Ubuntu 22.04+,
 Debian 12+, Fedora 36+, RHEL 10, openSUSE Tumbleweed. They link only glibc and libgcc_s. X11,
 Wayland, xkbcommon, Vulkan and EGL are loaded at runtime from the system, which is also where
-the GPU driver has to come from. That's why the .deb and .rpm declare them as dependencies
+the GPU driver has to come from. That's why the .deb, .rpm and Arch package declare them as dependencies
 (the full list, and why each is there, is in `packaging/linux/nfpm.yaml`) and the AppImage
 doesn't bundle them. The Flatpak gets them from the freedesktop runtime. Because the AppImage
 and the tarball can't declare dependencies, `photocraft` checks for the libraries its session
@@ -252,7 +263,7 @@ one is missing, prints the package to install and exits with status 1 instead of
 `PHOTOCRAFT_SKIP_LIB_CHECK=1` skips the check.
 
 Locally (on Linux): install [nfpm](https://nfpm.goreleaser.com/install/), then
-`packaging/linux/package.sh` (or `--formats "deb tar"`).
+`packaging/linux/package.sh` (or `--formats "deb tar"`, or `--formats arch` for the Arch package).
 
 ### FreeBSD
 

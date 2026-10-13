@@ -1,5 +1,6 @@
 #!/bin/sh
-# deb/rpm post-install and post-remove: refresh the desktop, MIME and icon caches.
+# deb/rpm post-install and post-remove: refresh the desktop, MIME and icon caches. (The Arch
+# package has no script: pacman hooks do this.)
 # Every tool is optional; missing ones are skipped.
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database -q /usr/share/applications || true
