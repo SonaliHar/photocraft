@@ -5,12 +5,17 @@ use photocraft_genai::{Capabilities, EditRequest, GenError, GeneratedImage, Prov
 
 use super::*;
 
-/// Answers every edit with a solid colour at the request's size (or `size` when set), and keeps
-/// what it was sent. With `vary` each call's colour differs; with `flaky` every second call fails.
+/// Answers every edit with a colour at the request's size (or `size` when set), and keeps what it
+/// was sent. The colour has a coarse checkerboard of ±[`TEXTURE`] levels over it, as a real fill
+/// has detail (a perfectly flat result is rejected as empty); `solid` leaves it out. With `vary`
+/// each call's colour differs; with `flaky` every second call fails; `blank` makes that call
+/// (counting from 0) answer solid black, as OpenAI sometimes does.
 struct Fake {
     color: [u8; 3],
     vary: bool,
     flaky: bool,
+    solid: bool,
+    blank: Option<usize>,
     /// How long each call takes.
     delay: std::time::Duration,
     /// Answer with the image sent, every channel moved by this much (a model's colour drift).
@@ -29,6 +34,8 @@ impl Fake {
             color,
             vary: false,
             flaky: false,
+            solid: false,
+            blank: None,
             delay: std::time::Duration::ZERO,
             echo: None,
             calls: AtomicUsize::new(0),
@@ -68,8 +75,22 @@ impl ImageProvider for Fake {
             return Ok(GeneratedImage { bytes: codecs::encode(&out, Format::Png, &Default::default()).unwrap(), mime: "image/png".into() });
         }
         let color = if self.vary { [self.color[0].wrapping_add(n as u8 * 60), self.color[1], self.color[2]] } else { self.color };
+        let (color, solid) = if self.blank == Some(n) { ([0, 0, 0], true) } else { (color, self.solid) };
         let (w, h) = self.size.or_else(|| photocraft_genai::png_size(&r.image)).unwrap();
-        let px: Vec<u8> = (0..w * h).flat_map(|_| [color[0], color[1], color[2], 255]).collect();
+        let block = (w.max(h) / 16).max(1);
+        let px: Vec<u8> = (0..w * h)
+            .flat_map(|i| {
+                let d = if solid {
+                    0
+                } else if ((i % w) / block + (i / w) / block).is_multiple_of(2) {
+                    TEXTURE
+                } else {
+                    -TEXTURE
+                };
+                let c = color.map(|v| (i16::from(v) + d).clamp(0, 255) as u8);
+                [c[0], c[1], c[2], 255]
+            })
+            .collect();
         let img = Image::from_u8(w, h, ChannelLayout::Rgba, px).unwrap();
         if self.jpeg {
             let rgb = img.convert(ChannelLayout::Rgb, CodecSample::U8);
@@ -77,6 +98,14 @@ impl ImageProvider for Fake {
         }
         Ok(GeneratedImage { bytes: codecs::encode(&img, Format::Png, &Default::default()).unwrap(), mime: "image/png".into() })
     }
+}
+
+/// The detail [`Fake`] puts over its colour, in 8-bit levels.
+const TEXTURE: i16 = 16;
+
+/// Whether two colours are within [`Fake`]'s texture of each other.
+fn near(a: [u8; 3], b: [u8; 3]) -> bool {
+    a.iter().zip(&b).all(|(x, y)| x.abs_diff(*y) <= TEXTURE as u8)
 }
 
 fn session(w: u32, h: u32) -> Session {
@@ -127,7 +156,7 @@ fn the_results_land_in_a_new_group_masked_by_the_selection_and_undo_in_one_step(
     assert!(layer.is_group());
     assert!(layer.mask.is_some(), "masked by the selection, like Photoshop's generative layer");
     assert_eq!(s.active().unwrap().active_layer, Some(layer.id));
-    assert_eq!(rgb_at(&s, 100, 50), [255, 0, 0], "inside the selection: the result");
+    assert!(near(rgb_at(&s, 100, 50), [255, 0, 0]), "inside the selection: the result, {:?}", rgb_at(&s, 100, 50));
     assert_eq!(rgb_at(&s, 70, 50), [255, 255, 255], "outside it: untouched, though the result covers it");
     assert_eq!(rgb_at(&s, 5, 5), [255, 255, 255]);
     assert_eq!(s.active().unwrap().history.past_len(), history + 1);
@@ -169,9 +198,9 @@ fn a_result_of_another_size_is_scaled_to_the_area() {
     let fake = Arc::new(Fake { size: Some((1024, 1024)), ..Arc::into_inner(Fake::new([0, 255, 0])).unwrap() });
     s.set_image_provider(Some(fake));
     s.execute(FILL, json!({"prompt": "grass"})).unwrap();
-    assert_eq!(rgb_at(&s, 150, 150), [0, 255, 0]);
+    assert!(near(rgb_at(&s, 150, 150), [0, 255, 0]), "{:?}", rgb_at(&s, 150, 150));
     // Just inside the corner, clear of the softened edge (a 2 px band on a 100 px selection).
-    assert_eq!(rgb_at(&s, 104, 104), [0, 255, 0]);
+    assert!(near(rgb_at(&s, 104, 104), [0, 255, 0]), "{:?}", rgb_at(&s, 104, 104));
 }
 
 #[test]
@@ -182,7 +211,7 @@ fn a_jpeg_result_is_read_too() {
     s.set_image_provider(Some(fake));
     s.execute(FILL, json!({"prompt": "blue"})).unwrap();
     let [r, g, b] = rgb_at(&s, 60, 60);
-    assert!(r < 10 && g < 10 && b > 245, "{r} {g} {b}");
+    assert!(near([r, g, b], [0, 0, 255]), "{r} {g} {b}");
     assert_eq!(rgb_at(&s, 10, 10), [255, 255, 255]);
 }
 
@@ -362,7 +391,7 @@ fn a_failed_variation_is_dropped_when_others_succeed() {
     s.set_image_provider(Some(fake));
     let r = s.execute(FILL, json!({"prompt": "x", "variations": 3})).unwrap();
     assert_eq!(r["variations"].as_array().unwrap().len(), 2);
-    assert_eq!(rgb_at(&s, 16, 16), [0, 200, 0]);
+    assert!(near(rgb_at(&s, 16, 16), [0, 200, 0]), "{:?}", rgb_at(&s, 16, 16));
 }
 
 #[test]
@@ -417,16 +446,31 @@ fn variations_are_requested_at_the_same_time() {
 #[test]
 fn a_models_colour_drift_is_taken_out() {
     // The fake redraws the image 40 levels darker everywhere. Outside the selection that shows
-    // it drifted, so the fill (white, from around the selection) comes back white, not 215.
-    let mut s = session(160, 160);
-    s.execute("select.rect", json!({"x": 50, "y": 50, "width": 60, "height": 60})).unwrap();
+    // it drifted, so the fill (grey on the left, white on the right, carried in from around the
+    // selection) comes back as it was sent, not 40 levels darker. (Not a flat white scene: a
+    // flat fill is rejected as empty.)
+    let mut s = split_scene();
     let fake = Arc::new(Fake { echo: Some(-40), ..Arc::into_inner(Fake::new([0, 0, 0])).unwrap() });
-    s.set_image_provider(Some(fake));
-    s.execute(FILL, json!({"variations": 1})).unwrap();
-    for (x, y) in [(80, 80), (52, 52), (108, 108)] {
-        let [r, g, b] = rgb_at(&s, x, y);
-        assert!([r, g, b].iter().all(|&c| c >= 252), "({x},{y}): {r} {g} {b}");
+    s.set_image_provider(Some(fake.clone()));
+    let r = s.execute(FILL, json!({"variations": 1})).unwrap();
+    let sent = codecs::decode(&fake.sent.lock().unwrap()[0].image).unwrap().convert(ChannelLayout::Rgba, CodecSample::U8);
+    let (x0, y0) = (r["bounds"][0].as_i64().unwrap() as i32, r["bounds"][1].as_i64().unwrap() as i32);
+    for (x, y) in [(80, 80), (60, 80), (100, 80), (82, 60)] {
+        let i = ((y - y0) as usize * sent.width() as usize + (x - x0) as usize) * 4;
+        let want = [sent.data()[i], sent.data()[i + 1], sent.data()[i + 2]];
+        let got = rgb_at(&s, x, y);
+        assert!(got.iter().zip(&want).all(|(a, b)| a.abs_diff(*b) <= 6), "({x},{y}): {got:?}, sent {want:?}");
     }
+}
+
+/// A 160² document, grey on its left half and white on its right, with a 60² selection across
+/// the middle: what is sent for the selection isn't flat.
+fn split_scene() -> Session {
+    let mut s = session(160, 160);
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 80, "height": 160})).unwrap();
+    s.execute("edit.fill", json!({"color": "#808080"})).unwrap();
+    s.execute("select.rect", json!({"x": 50, "y": 50, "width": 60, "height": 60})).unwrap();
+    s
 }
 
 #[test]
@@ -533,7 +577,7 @@ fn a_tiny_selection_is_upscaled_to_the_providers_minimum() {
     let sent = fake.sent.lock().unwrap();
     let (w, h) = photocraft_genai::png_size(&sent[0].image).unwrap();
     assert_eq!(w.max(h), 512, "the upload's long side reaches min_side");
-    assert_eq!(rgb_at(&s, 100, 100), [255, 0, 0], "and the result still lands in the selection");
+    assert!(near(rgb_at(&s, 100, 100), [255, 0, 0]), "and the result still lands in the selection");
 }
 
 #[test]
@@ -775,4 +819,93 @@ fn blended_mask_softens_partial_selections_too() {
         let a = v(x, 200);
         assert!((0.0..=1.0).contains(&a), "{x}: {a}");
     }
+}
+
+#[test]
+fn a_fill_that_comes_back_empty_is_refused_and_leaves_no_history() {
+    let mut s = session(120, 120);
+    s.execute("select.rect", json!({"x": 30, "y": 30, "width": 60, "height": 60})).unwrap();
+    let fake = Arc::new(Fake { solid: true, ..Arc::into_inner(Fake::new([0, 0, 0])).unwrap() });
+    s.set_image_provider(Some(fake.clone()));
+    let (layers, history) = (doc(&s).layers.len(), s.active().unwrap().history.past_len());
+    let e = s.execute(FILL, json!({"prompt": "a cat"})).unwrap_err().to_string();
+    assert!(e.contains("no usable fill"), "{e}");
+    assert_eq!(fake.sent.lock().unwrap().len(), 3, "every variation was asked for");
+    assert_eq!(doc(&s).layers.len(), layers);
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+}
+
+#[test]
+fn an_empty_variation_is_dropped_and_the_rest_kept() {
+    let mut s = session(120, 120);
+    s.execute("select.rect", json!({"x": 30, "y": 30, "width": 60, "height": 60})).unwrap();
+    let fake = Arc::new(Fake { vary: true, blank: Some(1), ..Arc::into_inner(Fake::new([0, 0, 255])).unwrap() });
+    s.set_image_provider(Some(fake));
+    let r = s.execute(FILL, json!({"prompt": "a boat", "variations": 3})).unwrap();
+    let id = r["layer"].as_u64().unwrap();
+    assert_eq!(r["variations"].as_array().unwrap().len(), 2);
+    let names: Vec<_> = group(&s, id).children().unwrap().iter().map(|l| l.name.clone()).collect();
+    assert_eq!(names, ["Variation 1", "Variation 2"], "numbered among the ones kept");
+    for i in 0..2 {
+        assert_ne!(variation_rgb(&s, id, i, 60, 60), [0, 0, 0], "variation {i} isn't the black one");
+    }
+}
+
+#[test]
+fn a_result_that_only_echoes_what_was_sent_is_refused() {
+    let mut s = split_scene();
+    let history = s.active().unwrap().history.past_len();
+    let fake = Arc::new(Fake { echo: Some(0), ..Arc::into_inner(Fake::new([0, 0, 0])).unwrap() });
+    s.set_image_provider(Some(fake));
+    let e = s.execute(FILL, json!({"variations": 2})).unwrap_err().to_string();
+    assert!(e.contains("no usable fill"), "{e}");
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+}
+
+#[test]
+fn generate_more_drops_empty_variations_too() {
+    let mut s = session(120, 120);
+    s.execute("select.rect", json!({"x": 30, "y": 30, "width": 60, "height": 60})).unwrap();
+    // Calls 0-2 make the layer; of Generate More's two, the second (call 4) comes back black.
+    let fake = Arc::new(Fake { vary: true, blank: Some(4), ..Arc::into_inner(Fake::new([0, 0, 255])).unwrap() });
+    s.set_image_provider(Some(fake.clone()));
+    let r = s.execute(FILL, json!({"prompt": "a boat"})).unwrap();
+    let id = r["layer"].as_u64().unwrap();
+    let more = s.execute(MORE, json!({"count": 2})).unwrap();
+    assert_eq!(more["variations"].as_array().unwrap().len(), 1);
+    assert_eq!(group(&s, id).children().unwrap().len(), 4);
+    // All of them black: nothing is added and there is no undo step.
+    let blank = Arc::new(Fake { solid: true, ..Arc::into_inner(Fake::new([0, 0, 0])).unwrap() });
+    s.set_image_provider(Some(blank));
+    let history = s.active().unwrap().history.past_len();
+    let e = s.execute(MORE, json!({"count": 2, "provider": "fake"})).unwrap_err().to_string();
+    assert!(e.contains("no usable fill"), "{e}");
+    assert_eq!(group(&s, id).children().unwrap().len(), 4);
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+}
+
+#[test]
+fn unusable_says_why_a_result_is_rejected() {
+    // 20×10, the right half selected; RGBA results against the RGBA image sent.
+    let (w, h) = (20u32, 10u32);
+    let n = (w * h) as usize;
+    let inside = |i: usize| i % w as usize >= 10;
+    let reference = Reference { original: vec![0.5; n * 3], coverage: (0..n).map(|i| if inside(i) { 1.0 } else { 0.0 }).collect(), w, h };
+    let textured = |i: usize, base: f32| {
+        let v = base + if (i % w as usize + i / w as usize).is_multiple_of(2) { 0.1 } else { -0.1 };
+        [v, v, v, 1.0]
+    };
+    let sent: Vec<f32> = (0..n).flat_map(|i| textured(i, 0.5)).collect();
+    let black: Vec<f32> = (0..n).flat_map(|_| [0.0, 0.0, 0.0, 1.0]).collect();
+    let why = unusable(&black, Some(&sent), &reference).unwrap();
+    assert!(why.contains("flat"), "{why}");
+    let why = unusable(&sent, Some(&sent), &reference).unwrap();
+    assert!(why.contains("unchanged"), "{why}");
+    let fine: Vec<f32> = (0..n).flat_map(|i| textured(i, 0.3)).collect();
+    assert_eq!(unusable(&fine, Some(&sent), &reference), None);
+    assert_eq!(unusable(&fine, None, &reference), None, "without the image sent only flatness is judged");
+    // Nothing inside the selection at the request size, or mismatched sizes: can't judge, kept.
+    assert_eq!(unusable(&black[..8], Some(&sent), &reference), None);
+    let none = Reference { coverage: vec![0.0; n], ..reference };
+    assert_eq!(unusable(&black, Some(&sent), &none), None);
 }

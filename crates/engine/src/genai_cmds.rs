@@ -590,19 +590,61 @@ fn request_all(ctx: &crate::jobs::JobCtx, provider: &dyn ImageProvider, request:
     }
 }
 
-/// A provider's image, colour-matched to the original around the selection, scaled into `area`
-/// in document coordinates.
-fn place(bytes: &[u8], area: Rect, reference: &Reference) -> Result<(Surface, String)> {
+/// Below this spread of brightness (standard deviation, 0..1) inside the selection a result is
+/// flat: OpenAI sometimes answers with the masked area solid black.
+const FLAT: f64 = 0.015;
+/// Below this mean difference (0..1) from the image sent, inside the selection, a result is
+/// unchanged: the model gave back what it was sent.
+const UNCHANGED: f64 = 0.02;
+
+/// Why a result (`px`, RGBA 0..1 at the request size) is no use as a fill, if it isn't: flat, or
+/// unchanged from the image sent (`sent`, RGBA 0..1 at the request size), inside the selection
+/// (coverage over half). With nothing to judge by (no pixels inside, sizes that don't match) the
+/// result is kept.
+fn unusable(px: &[f32], sent: Option<&[f32]>, r: &Reference) -> Option<String> {
+    let n = r.w as usize * r.h as usize;
+    let (px4, _) = px.as_chunks::<4>();
+    if px4.len() != n || r.coverage.len() != n {
+        return None;
+    }
+    let inside: Vec<&[f32; 4]> = px4.iter().zip(&r.coverage).filter(|(_, c)| **c > 0.5).map(|(p, _)| p).collect();
+    if inside.is_empty() {
+        return None;
+    }
+    let count = inside.len() as f64;
+    let mean = inside.iter().map(|p| f64::from(luma(*p))).sum::<f64>() / count;
+    let spread = (inside.iter().map(|p| (f64::from(luma(*p)) - mean).powi(2)).sum::<f64>() / count).sqrt();
+    if spread < FLAT {
+        return Some(format!("rejected: flat (brightness spread inside the selection {spread:.4} < {FLAT})"));
+    }
+    let sent4 = sent.map(|s| s.as_chunks::<4>().0).filter(|s| s.len() == n)?;
+    let diff = px4
+        .iter()
+        .zip(sent4)
+        .zip(&r.coverage)
+        .filter(|(_, c)| **c > 0.5)
+        .map(|((p, q), _)| (0..3).map(|c| f64::from((p[c] - q[c]).abs())).sum::<f64>())
+        .sum::<f64>()
+        / (count * 3.0);
+    (diff < UNCHANGED).then(|| format!("rejected: unchanged (mean difference from the image sent inside the selection {diff:.4} < {UNCHANGED})"))
+}
+
+/// A provider's image at the request size.
+fn at_request_size(bytes: &[u8], reference: &Reference) -> Result<Surface> {
     let (got, full) = decode(bytes)?;
+    Ok(scaled(&got, full, reference.w, reference.h))
+}
+
+/// A result at the request size (`at_request`, whose pixels are `px`), colour-matched to the
+/// original around the selection, scaled into `area` in document coordinates.
+fn place(mut at_request: Surface, mut px: Vec<f32>, area: Rect, reference: &Reference) -> (Surface, String) {
     let r = Rect::from_xywh(0, 0, reference.w, reference.h);
-    let mut at_request = scaled(&got, full, reference.w, reference.h);
-    let mut px = at_request.read_region(r);
     let stats = match_surroundings(&mut px, reference);
     at_request.write_region(r, &px);
     let fitted = scaled(&at_request, r, area.width(), area.height());
     let mut placed = Surface::new(fitted.format());
     placed.write_region(area, &fitted.read_region(Rect::from_xywh(0, 0, area.width(), area.height())));
-    Ok((placed, stats))
+    (placed, stats)
 }
 
 /// Debugging aid: with `PHOTOCRAFT_GENAI_DUMP` set to a folder, each request's image, mask, raw
@@ -630,12 +672,31 @@ fn dump(request: &EditRequest, results: &[Vec<u8>], stats: &[String]) {
     let _ = (request, results, stats);
 }
 
-/// Place every result, then (when asked) dump the request and results for debugging.
+/// Place every usable result (see [`unusable`]), then (when asked) dump the request and all the
+/// raw results for debugging, noting which were rejected and why. When none is usable, an error
+/// and nothing placed.
 fn place_all(request: &EditRequest, results: &[Vec<u8>], area: Rect, reference: &Reference) -> Result<Vec<Surface>> {
-    let placed = results.iter().map(|b| place(b, area, reference)).collect::<Result<Vec<_>>>()?;
-    let stats: Vec<String> = placed.iter().map(|(_, s)| s.clone()).collect();
+    let full = Rect::from_xywh(0, 0, reference.w, reference.h);
+    let sent = decode(&request.image).ok().map(|(s, r)| scaled(&s, r, reference.w, reference.h).read_region(full));
+    let mut placed = Vec::new();
+    let mut stats = Vec::new();
+    for bytes in results {
+        let at_request = at_request_size(bytes, reference)?;
+        let px = at_request.read_region(full);
+        match unusable(&px, sent.as_deref(), reference) {
+            Some(why) => stats.push(why),
+            None => {
+                let (p, s) = place(at_request, px, area, reference);
+                placed.push(p);
+                stats.push(s);
+            }
+        }
+    }
     dump(request, results, &stats);
-    Ok(placed.into_iter().map(|(p, _)| p).collect())
+    if placed.is_empty() {
+        return Err(other("the image service returned no usable fill; try again"));
+    }
+    Ok(placed)
 }
 
 /// Selections whose long side is shorter than this keep a hard edge.

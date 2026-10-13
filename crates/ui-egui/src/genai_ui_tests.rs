@@ -31,7 +31,10 @@ impl ImageProvider for Fake {
     }
     fn edit(&self, r: &EditRequest) -> photocraft_genai::Result<GeneratedImage> {
         let (w, h) = photocraft_genai::png_size(&r.image).unwrap();
-        let px: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 0, 255]).collect();
+        // Red with a coarse checkerboard of detail: a flat result is rejected as an empty fill.
+        let block = (w.max(h) / 16).max(1);
+        let px: Vec<u8> =
+            (0..w * h).flat_map(|i| if ((i % w) / block + (i / w) / block).is_multiple_of(2) { [255u8, 0, 0, 255] } else { [192, 0, 0, 255] }).collect();
         let img = photocraft_codecs::Image::from_u8(w, h, photocraft_codecs::ChannelLayout::Rgba, px).unwrap();
         let bytes = photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap();
         Ok(GeneratedImage { bytes, mime: "image/png".into() })
