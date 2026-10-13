@@ -46,6 +46,7 @@ pub mod camera_raw_ui;
 pub mod canvas;
 pub mod canvas_autoscroll;
 mod canvas_popup;
+pub mod canvas_stream;
 pub mod canvas_tool_menu;
 pub mod cas_transform;
 pub mod channel_options_ui;
@@ -325,6 +326,8 @@ pub(crate) enum SaveKind {
     /// Automation: flat formats stay copies (#2579) and hooks never fire.
     Automation,
 }
+/// Decode a document through handles beneath the desktop control session's authorized root.
+pub type AutomationImportPathFn = std::sync::Arc<dyn Fn(&str, &photocraft_raster::Interrupt<'_>) -> Result<photocraft_io::ImportResult, String> + Send + Sync>;
 /// Read bytes through the desktop control session's authorized read root.
 pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<(String, Vec<u8>), String>>;
 /// Write bytes through the desktop control session's authorized write root.
@@ -415,6 +418,7 @@ pub struct Services {
     /// File access used only by control/MCP requests. Interactive dialogs keep
     /// using `file_dialog` and `write` with the user's authority.
     pub automation_read: Option<AutomationReadFn>,
+    pub automation_import_path: Option<AutomationImportPathFn>,
     pub automation_write: Option<AutomationWriteFn>,
     pub automation_open_pcraft: Option<AutomationOpenPcraftFn>,
     pub automation_command: Option<AutomationCommandFn>,
@@ -501,6 +505,7 @@ pub struct PhotocraftApp {
     /// Canvas caches per (document, display): CPU textures hold monitor values; the GPU
     /// canvas state is shared (`canvas::GPU_OUTPUT`).
     canvases: HashMap<(DocId, u32), canvas::CanvasCache>,
+    streams: HashMap<(DocId, u64), canvas_stream::Stream>,
     /// Navigator textures belong to open documents, not the lifetime of the egui context.
     navigator_textures: HashMap<DocId, canvas::NavigatorCache>,
     /// `canvas::display_doc`'s live-adjust and Duotone documents per document: (snapshot,
@@ -767,6 +772,7 @@ impl PhotocraftApp {
             ui: UiState::default(),
             services,
             canvases: HashMap::new(),
+            streams: HashMap::new(),
             navigator_textures: HashMap::new(),
             display_memo: HashMap::new(),
             navigator_gpu: HashMap::new(),
@@ -1782,6 +1788,14 @@ impl eframe::App for PhotocraftApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        photocraft_compose::discard_unreadable_pixel_caches();
+        if let Err(error) = photocraft_raster::spill::check_integrity() {
+            self.ui.status = error;
+            self.ui.status_error = true;
+        } else if let Some(error) = photocraft_raster::spill::last_error() {
+            self.ui.status = error;
+            self.ui.status_error = true;
+        }
         let ctx = ui.ctx().clone();
         self.hover_layer = None;
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));

@@ -20,6 +20,10 @@ fn cache() -> &'static Mutex<(HashMap<u64, Entry>, u64)> {
     C.get_or_init(|| Mutex::new((HashMap::new(), 0)))
 }
 
+pub(crate) fn purge() {
+    cache().lock().unwrap_or_else(|e| e.into_inner()).0.clear();
+}
+
 const CAPACITY: usize = 32;
 /// Most pixel bytes the split parts may hold (#4530): each entry is two canvas-sized surfaces,
 /// so 32 of them at 24 MP could hold several GB outside every memory budget.
@@ -48,6 +52,7 @@ pub fn purge_cache() -> usize {
 /// (Photoshop's rendering, `sh.cache`) reach past our fill, the part the fill doesn't explain is
 /// stroke: the stroke follows Photoshop's coverage (psd-tools double-stroke-effects).
 pub fn split(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> Option<(Surface, Surface)> {
+    let generation = photocraft_raster::spill::read_error_generation();
     sh.stroke.as_ref()?;
     let mut h = std::collections::hash_map::DefaultHasher::new();
     (canvas.x0, canvas.y0, canvas.x1, canvas.y1).hash(&mut h);
@@ -75,6 +80,9 @@ pub fn split(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> Option<(Surfac
     let mut parts = (photocraft_vector::render_shape(&fill_only, fmt, canvas), photocraft_vector::render_shape(&stroke_only, fmt, canvas));
     if let Some(cache) = &sh.cache {
         fit_stroke(&parts.0, &mut parts.1, cache, canvas);
+    }
+    if photocraft_raster::spill::check_since(generation).is_err() {
+        return Some(parts);
     }
     let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
     // Least recently used first, until the new entry fits both the count and the byte budget.

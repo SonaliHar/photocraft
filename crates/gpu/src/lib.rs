@@ -76,8 +76,9 @@ pub const PAGE: u32 = 2048;
 /// GPU memory resident layer pages may hold before the least recently used are evicted.
 pub const RESIDENT_BUDGET: u64 = 4 << 30;
 /// Uploads (bytes) [`Compositor::render`] stages before submitting the work recorded so far, so
-/// a refresh of a huge document never holds all its uploads in staging memory at once.
-const FLUSH_BYTES: u64 = 512 << 20;
+/// mapped buffers stay bounded separately from VRAM residency: some discrete GPUs have a
+/// small host-visible heap. Two batches can be in flight; one RGBA16F page is already 32 MiB.
+const FLUSH_BYTES: u64 = 32 << 20;
 /// Pass pixels (chunk pixels × passes) [`Compositor::render`] records before submitting: one
 /// command buffer holding a whole huge refresh can run for seconds, long enough for the OS to
 /// reset the GPU.
@@ -909,7 +910,9 @@ impl Compositor {
     /// still open; the chunk texture is reused afterwards, so the sink must record any copies
     /// or passes that read it into the given encoder. Submits the work before returning; a
     /// refresh of a huge document also submits in between (the sink may be handed a new
-    /// encoder), so its uploads and evicted pages never pile up in memory.
+    /// encoder), so its uploads and evicted pages never pile up in memory. Native renders that
+    /// uploaded data drain their final batch before returning: consecutive regional renders
+    /// must share the same bound as one large refresh. Cached renders remain asynchronous.
     pub fn render(
         &mut self,
         device: &wgpu::Device,
@@ -921,13 +924,37 @@ impl Compositor {
         let result = scoped_work(device, self.health.is_some(), || {
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("pc_compose") });
             let stats = self.encode_inner(device, queue, &mut encoder, doc, region, &mut sink, true)?;
-            queue.submit([encoder.finish()]);
+            let index = queue.submit([encoder.finish()]);
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.staged > 0 || stats.flushes > 0 {
+                self.wait_uploads(device, index)?;
+            }
+            #[cfg(target_arch = "wasm32")]
+            let _ = index;
             Ok(stats)
         });
         if result.is_err() {
             self.discard_failed_work();
         }
         result
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn wait_uploads(&self, device: &wgpu::Device, index: wgpu::SubmissionIndex) -> Result<(), Unsupported> {
+        if let Some(health) = &self.health {
+            if !health.wait(device, Some(index)) {
+                return Err(Unsupported(health.fault().map_or_else(|| "GPU upload failed".into(), |f| f.to_string())));
+            }
+        } else {
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| device.poll(wgpu::PollType::Wait { submission_index: Some(index), timeout: None })));
+            match result {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => return Err(Unsupported(format!("GPU upload wait failed: {e}"))),
+                Err(_) => return Err(Unsupported("the GPU stopped responding during upload".into())),
+            }
+        }
+        Ok(())
     }
 
     /// Like [`Self::render`] but records into `encoder` without submitting.
@@ -2093,7 +2120,7 @@ fn convert_tile(surface: &Surface, tile: Option<&Arc<Tile>>, kind: TexKind, c: T
     let fmt = surface.format();
     let ch = fmt.channels();
     if let (Some(t), TexKind::Rgba16F) = (tile, kind)
-        && let Some(out) = rgb_gray16_to_f16(&fmt, t.bytes()).or_else(|| rgb_gray32_to_f16(&fmt, t.bytes()))
+        && let Some(out) = rgb_gray16_to_f16(&fmt, &t.bytes()).or_else(|| rgb_gray32_to_f16(&fmt, &t.bytes()))
     {
         return out;
     }
@@ -2231,7 +2258,7 @@ fn words(v: &[W]) -> Vec<u8> {
         .collect()
 }
 
-/// IEEE half from f32 (round to nearest even; overflow → inf).
+/// IEEE half from f32 (round to nearest even; overflow â†’ inf).
 pub fn f32_to_f16(x: f32) -> u16 {
     let b = x.to_bits();
     let sign = ((b >> 16) & 0x8000) as u16;
@@ -2519,7 +2546,7 @@ mod tests {
             let data: Vec<f32> = (0..n).map(|i| (i as u32).wrapping_mul(2_654_435_761) as f32 / u32::MAX as f32 * hdr - (hdr - 1.0) / 4.0).collect();
             s.write_region(r, &data);
             let t = s.tile(TileCoord::new(0, 0)).expect("written").clone();
-            let fast = rgb_gray16_to_f16(&fmt, t.bytes()).or_else(|| rgb_gray32_to_f16(&fmt, t.bytes())).expect("fast path");
+            let fast = rgb_gray16_to_f16(&fmt, &t.bytes()).or_else(|| rgb_gray32_to_f16(&fmt, &t.bytes())).expect("fast path");
             let raw = s.read_region(r);
             let general: Vec<u8> =
                 raw.chunks_exact(fmt.channels()).flat_map(|px| photocraft_raster::to_rgba(&fmt, px).map(|x| f32_to_f16(x).to_le_bytes())).flatten().collect();
