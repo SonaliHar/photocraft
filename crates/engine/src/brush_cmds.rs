@@ -442,6 +442,7 @@ pub(crate) fn doc_cmyk_space(s: &Session) -> Option<std::sync::Arc<photocraft_co
 mod stroke_controlled;
 mod live_begin_controlled;
 mod advanced_native_admission;
+mod native_replace_controlled;
 pub(crate) fn advanced_dispatch_preflight(session: &Session, command: &str, params: &Value) -> Result<()> {
     advanced_native_admission::dispatch_preflight(session, command, params, &photocraft_raster::Interrupt::NONE)
 }
@@ -1017,6 +1018,7 @@ fn color_replacement_setup(s: &Session, p: &Value) -> Result<(Stroke, ReplaceSet
 }
 
 fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(result) = native_replace_controlled::try_run_job(s, p)? { return Ok(result); }
     let (stroke, rs, id) = color_replacement_setup(s, p)?;
     let dmg = s.edit("Color Replacement", |doc, _| {
         let sel = doc.selection.clone();
@@ -1030,6 +1032,7 @@ fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
 /// A `paint.colorReplacement` stroke shown while it is drawn: the same params, and the same
 /// recolouring per dab as the commit, so the preview at the last point is the committed result.
 pub fn live_color_replacement(s: &Session, p: &Value) -> Result<crate::retouch_cmds::LiveDab> {
+    native_replace_controlled::refuse_native_preview(s, p, &photocraft_raster::Interrupt::NONE)?;
     let (stroke, rs, id) = color_replacement_setup(s, p)?;
     crate::retouch_cmds::LiveDab::with_effect(s, "paint.colorReplacement", &json!({}), stroke, Some(id), 0, |pre| {
         Box::new(color_replacement_effect(pre.clone(), rs))

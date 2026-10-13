@@ -2167,7 +2167,12 @@ fn map_accounted<P: MappingPlane, S>(
                 name: mask.name.clone(),
                 custom_name: false,
                 visible: mask.visible,
-                locks: photocraft_doc::xcf_state::ItemLocks::default(),
+                locks: photocraft_doc::xcf_state::ItemLocks {
+                    content: mask.lock_content,
+                    position: mask.lock_position,
+                    alpha: mask.lock_alpha,
+                    visibility: mask.lock_visibility,
+                },
                 parent: None,
                 source_tattoo: mask.tattoo,
                 source_flags: 0,
@@ -2552,6 +2557,107 @@ fn record_memberships(
 
 #[cfg(test)]
 mod unit_tests {
+    // Synthetic decoded state in the existing Normal-mask admission envelope.
+    // It tests mapping/serialization only, not a new source rendering domain.
+    fn mask_lock_fixture(bits: u8) -> photocraft_xcf::XcfFile {
+        use photocraft_xcf::{Compression, Drawable, Encoding, Model, Plane, RawProperty, Sample, Unit, XcfFile};
+        let flags = [bits & 1 != 0, bits & 2 != 0, bits & 4 != 0, bits & 8 != 0];
+        let mask = Drawable {
+            name: "retained mask".into(),
+            width: 10,
+            height: 9,
+            model: Model::Gray,
+            lock_content: flags[0],
+            lock_position: flags[1],
+            lock_alpha: flags[2],
+            lock_visibility: flags[3],
+            tattoo: Some(91),
+            raw_properties: [28, 32, 10, 42].into_iter().zip(flags).map(|(tag, flag)| RawProperty {
+                tag,
+                offset: u64::from(tag),
+                declared_bytes: 4,
+                payload: u32::from(flag).to_be_bytes().to_vec(),
+            }).collect(),
+            plane: Some(Plane { width: 10, height: 9, channels: 1, sample: Sample::U8, bytes: vec![127; 90] }),
+            ..Default::default()
+        };
+        let owner = Drawable {
+            name: "owner".into(),
+            width: 10,
+            height: 9,
+            alpha: true,
+            offset: (-2, -1),
+            opacity: 0.7125,
+            mode: 28,
+            blend_space: 0,
+            composite_space: 1,
+            composite_mode: 1,
+            mask: Some(Box::new(mask)),
+            plane: Some(Plane { width: 10, height: 9, channels: 4, sample: Sample::U8, bytes: [12, 34, 56, 255].repeat(90) }),
+            ..Default::default()
+        };
+        let backdrop = Drawable {
+            name: "backdrop".into(),
+            width: 16,
+            height: 12,
+            alpha: true,
+            mode: 28,
+            blend_space: 0,
+            composite_space: -1,
+            composite_mode: -1,
+            plane: Some(Plane { width: 16, height: 12, channels: 4, sample: Sample::U8, bytes: [78, 90, 123, 255].repeat(192) }),
+            ..Default::default()
+        };
+        XcfFile {
+            paths: Vec::new(), tattoo: None, item_sets: Vec::new(),
+            version: 11, width: 16, height: 12, model: Model::Rgb,
+            precision: 150, sample: Sample::U8, encoding: Encoding::NonlinearProfile,
+            compression: Compression::None, icc: Vec::new(), dpi: (72.0, 72.0),
+            unit: Unit::Inch, palette: Vec::new(), layers: vec![owner, backdrop],
+            channels: Vec::new(), guides: Vec::new(), diagnostics: Vec::new(),
+            charged_bytes: 0, raw_properties: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn layer_mask_mapping_preserves_each_decoded_lock_without_changing_owner_or_samples() {
+        use photocraft_doc::{item_identity::{ItemRef, MaskId}, xcf_state::ItemLocks};
+        use photocraft_raster::Interrupt;
+        let baseline = super::map("locks", mask_lock_fixture(0), &Interrupt::NONE, 128 << 20).unwrap().0.document;
+        for bits in 0..16 {
+            let file = mask_lock_fixture(bits);
+            let original_payloads = file.layers[0].mask.as_ref().unwrap().raw_properties.clone();
+            assert!(super::qualified_normal_mask(&file));
+            let mapped = super::map("locks", file.clone(), &Interrupt::NONE, 128 << 20).unwrap().0.document;
+            let state = mapped.xcf_state.as_ref().unwrap();
+            let mask = state.items.iter().find(|item| item.item == ItemRef::Mask(MaskId(1))).unwrap();
+            assert_eq!(mask.locks, ItemLocks {
+                content: bits & 1 != 0, position: bits & 2 != 0,
+                alpha: bits & 4 != 0, visibility: bits & 8 != 0,
+            });
+            assert_eq!(mask.mask.as_ref().unwrap().owner, ItemRef::Layer(mapped.layers[0].id));
+            assert_eq!(mask.source_tattoo, Some(91));
+            for (layer, original) in mapped.layers.iter().zip(&baseline.layers) {
+                assert_eq!(layer.surface(), original.surface());
+                assert_eq!(layer.mask, original.mask);
+            }
+            for (order, property) in original_payloads.iter().enumerate() {
+                let record = state.opaque.iter().find(|record| {
+                    record.owner == Some(mask.item) && record.order == order as u32
+                }).unwrap();
+                assert_eq!(record.identity, format!("{}@{}:{}", property.tag, property.offset, property.declared_bytes));
+                assert_eq!(record.bytes.as_slice(), property.payload.as_slice());
+                assert_eq!(record.blake3, blake3::hash(&property.payload).to_hex().as_str());
+            }
+            let before = mapped.clone();
+            let bytes = photocraft_format::save_to_bytes(&mapped, &Default::default()).unwrap();
+            let reopened = photocraft_format::load_from_bytes(&bytes).unwrap();
+            assert_eq!(reopened.xcf_state, before.xcf_state);
+            assert_eq!(reopened.layers, before.layers);
+            assert_eq!(mapped, before);
+        }
+    }
+
     #[test]
     fn half_unit_domain_accepts_exact_widening_and_rejects_unrepresentable_floats() {
         for code in 0..=u16::MAX {

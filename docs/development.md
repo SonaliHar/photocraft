@@ -564,8 +564,15 @@ additionally requires explicit Linear encoding and validated profile context.
 Native Multiply/Screen brush strokes use that same explicit color context;
 Normal painting retains its existing policy. Native Desaturate retains the
 existing RGB min/max midpoint formula, with Gray remaining an identity operation.
-Legacy Mixer Brush and Color Replacement currently refuse native-wide input
-before changing the document; their native arithmetic remains unfinished.
+Native RGB Luminosity Color Replacement has a controlled one-shot route under
+that same explicit color context, preserving sequential sampling and one final
+native quantization. Native preview, Gray/HDR/imported targets, other replacement
+modes and Mixer Brush remain unfinished; unsupported routes refuse before editing.
+
+Native Split/Merge uses exact component storage within its closed plain-raster
+scope. Protected native directory saves stream through held-root source checks,
+reuse verified content and commit the manifest last, without garbage collection.
+Individual entries publish atomically; the directory as a whole is not swapped.
 
 Selection Load/Save/New Channel offer default-off raw storage transfer for
 eligible same-depth Gray surfaces. This copies stored defaults and off-canvas
@@ -573,7 +580,8 @@ tiles without interpreting their sample values. Imported targets require typed
 identity, bounds, lock and provenance checks; a UI option is not authorization.
 The profile-question import queue also admits pending documents before ownership
 transfer. Its explicit Cancel Failed Opens action releases unopened imports
-without changing an open document's history.
+without changing an open document's history. Filter stacks and matching Named
+Layer item sets expose later supported entries through bounded pages.
 
 `cargo xtask corpus --xcf --local --update-manifest` copies the original GIMP corpus from
 `../photocraft-corpus/xcf` and hashes inputs, independently exported PNG projections,

@@ -1138,6 +1138,8 @@ pub struct XcfFilterStackPage {
     pub layer: u64,
     pub offset: usize,
 }
+/// Independent view-only cursor for matching Named Layer item sets.
+pub type XcfItemSetPage = XcfFilterStackPage;
 
 /// View-only linked placement/interpolation proposal; never source authority.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1237,6 +1239,8 @@ pub struct UiState {
     pub xcf_source_page_draft: Option<XcfSourcePageDraft>,
     #[serde(default)]
     pub xcf_filter_stack_page: Option<XcfFilterStackPage>,
+    #[serde(default)]
+    pub xcf_item_set_page: Option<XcfItemSetPage>,
     #[serde(default)]
     pub xcf_mask_geometry_draft: Option<XcfMaskGeometryDraft>,
     /// Imported underline selection draft; only the engine can apply it.
@@ -1511,6 +1515,7 @@ impl Default for UiState {
             xcf_graph_page_draft: None,
             xcf_source_page_draft: None,
             xcf_filter_stack_page: None,
+            xcf_item_set_page: None,
             xcf_mask_geometry_draft: None,
             xcf_underline_draft: None,
             xcf_color_rotate_draft: None,

@@ -27,6 +27,8 @@ struct View {
     snapshot: WeakDocumentSnapshot,
     rows: Vec<Row>,
     more: bool,
+    total: usize,
+    page: crate::state::XcfItemSetPage,
 }
 struct Target {
     document: DocId,
@@ -130,6 +132,14 @@ fn matching_set(document: &Document, layer: LayerId, id: u64) -> Result<&ItemSet
     }
     Ok(set)
 }
+const PAGE_SIZE:usize=64;
+fn matching(set:&ItemSet,layer:LayerId)->bool {
+    set.id.0!=0 && set.family==ItemFamily::Layer && set.rule==ItemSetRule::Named && set.members.contains(&ItemRef::Layer(layer))
+}
+fn page_offset(page:Option<&crate::state::XcfItemSetPage>,document:DocId,revision:u64,layer:LayerId,count:usize)->usize {
+    page.filter(|page|page.document==document.0 && page.revision==revision && page.layer==layer.0
+        && page.offset<10_000 && page.offset<count && page.offset%PAGE_SIZE==0).map_or(0,|page|page.offset)
+}
 fn view(app: &PhotocraftApp, layer: LayerId) -> Result<Option<View>, String> {
     let Some(active) = app.session.active() else { return Ok(None) };
     if active.doc.xcf_state.is_none() {
@@ -137,24 +147,20 @@ fn view(app: &PhotocraftApp, layer: LayerId) -> Result<Option<View>, String> {
     }
     let state = bounded_state(&active.doc)?;
     if !has_creation(&active.doc,layer) {return Ok(None);}
+    let total=state.item_sets.iter().filter(|set|matching(set,layer)).count();
+    let offset=page_offset(app.ui.xcf_item_set_page.as_ref(),active.doc.id,active.revision,layer,total);
+    let page=crate::state::XcfItemSetPage {document:active.doc.id.0,revision:active.revision,layer:layer.0,offset};
     let mut rows = Vec::new();
-    rows.try_reserve_exact(64).map_err(|_| LIMIT)?;
-    let mut more = false;
-    for set in &state.item_sets {
-        if set.id.0 == 0 || set.family != ItemFamily::Layer || set.rule != ItemSetRule::Named || !set.members.contains(&ItemRef::Layer(layer)) {
-            continue;
-        }
-        if rows.len() == 64 {
-            more = true;
-            break;
-        }
+    rows.try_reserve_exact(total.saturating_sub(offset).min(PAGE_SIZE)).map_err(|_| LIMIT)?;
+    let more=offset.checked_add(PAGE_SIZE).is_some_and(|next|next<total);
+    for set in state.item_sets.iter().filter(|set|matching(set,layer)).skip(offset).take(PAGE_SIZE) {
         let mut display: String = set.name.chars().take(64).map(|c| if c.is_control() { ' ' } else { c }).collect();
         if set.name.chars().nth(64).is_some() {
             display.push('…');
         }
         rows.push(Row { id: set.id.0, member_count: set.members.len(), display, editor_name: name_bounded(&set.name).then(|| set.name.clone()) });
     }
-    Ok(Some(View { document: active.doc.id, revision: active.revision, snapshot: active.doc.downgrade(), rows, more }))
+    Ok(Some(View { document: active.doc.id, revision: active.revision, snapshot: active.doc.downgrade(), rows, more, total, page }))
 }
 fn capture(app: &PhotocraftApp, layer: LayerId, set: u64, document: DocId, revision: u64) -> Result<Target, String> {
     live_context(app)?;
@@ -225,12 +231,14 @@ enum Action {
 pub(crate) fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: LayerId) {
     let view = match view(app, layer) {
         Ok(Some(view)) => view,
-        Ok(None) => return,
+        Ok(None) => {app.ui.xcf_item_set_page=None;return;},
         Err(error) => {
             ui.label(error);
             return;
         }
     };
+    // Serialized paging is view state only; row actions still use live typed target witnesses.
+    app.ui.xcf_item_set_page=Some(view.page.clone());
     if app.ui.xcf_item_set_draft.as_ref().is_some_and(|draft| {
         draft.document != view.document.0
             || draft.layer != layer.0
@@ -309,8 +317,16 @@ pub(crate) fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: Laye
             }
         });
     }
-    if view.more {
-        ui.label(tl!("Only the first 64 matching sets are shown."));
+    if view.total>PAGE_SIZE {
+        ui.horizontal(|ui| {
+            let previous=view.page.offset.checked_sub(PAGE_SIZE);
+            let next=view.page.offset.checked_add(PAGE_SIZE).filter(|offset|view.more && *offset<view.total && *offset<10_000);
+            let mut offset=None;
+            if ui.add_enabled(previous.is_some(),egui::Button::new(tl!("Previous"))).clicked() {offset=previous;}
+            ui.label(format!("{}–{} / {}",view.page.offset+1,view.page.offset+view.rows.len(),view.total));
+            if ui.add_enabled(next.is_some(),egui::Button::new(tl!("Next"))).clicked() {offset=next;}
+            if let Some(offset)=offset {let mut page=view.page.clone();page.offset=offset;app.ui.xcf_item_set_page=Some(page);}
+        });
     }
     let Some(action) = action else { return };
     // Bind the action to the exact snapshot which produced these rows, not a
@@ -476,6 +492,15 @@ mod tests {
         let rows = view(&app, layer).unwrap().unwrap();
         assert_eq!(rows.rows.len(), 64);
         assert!(rows.more);
+        app.ui.xcf_item_set_page=Some(crate::state::XcfItemSetPage {document:before.id.0,revision:app.session.active().unwrap().revision,layer:layer.0,offset:64});
+        let later=view(&app,layer).unwrap().unwrap();
+        let expected=before.xcf_state.as_ref().unwrap().item_sets.iter().filter(|set|matching(set,layer)).skip(64).map(|set|set.id.0).collect::<Vec<_>>();
+        assert_eq!(later.rows.iter().map(|row|row.id).collect::<Vec<_>>(),expected);
+        assert!(!later.more);assert!(later.rows.len()<=PAGE_SIZE);
+        let target=capture(&app,layer,later.rows[0].id,later.document,later.revision).unwrap();
+        app.session.active_mut().unwrap().revision+=1;
+        assert!(run(&mut app,&target,None).is_err());
+        assert_eq!(view(&app,layer).unwrap().unwrap().page.offset,0);
         assert_eq!(*app.session.active().unwrap().doc, *before);
     }
 
@@ -542,6 +567,20 @@ mod tests {
         assert!(name_bounded(&"Ω".repeat(256)));
         assert!(!name_bounded(&"Ω".repeat(257)));
         assert!(!name_bounded("Own\0name"));
+    }
+
+    #[test]
+    fn page_cursor_resets_wrong_identity_revision_and_invalid_matching_offsets() {
+        let page=crate::state::XcfItemSetPage {document:7,revision:3,layer:9,offset:64};
+        assert_eq!(page_offset(Some(&page),DocId(7),3,LayerId(9),65),64);
+        for offset in [1,65,10_000,usize::MAX] {
+            let mut bad=page.clone();bad.offset=offset;
+            assert_eq!(page_offset(Some(&bad),DocId(7),3,LayerId(9),10_000),0);
+        }
+        assert_eq!(page_offset(Some(&page),DocId(8),3,LayerId(9),100),0);
+        assert_eq!(page_offset(Some(&page),DocId(7),4,LayerId(9),100),0);
+        assert_eq!(page_offset(Some(&page),DocId(7),3,LayerId(10),100),0);
+        assert_eq!(page_offset(Some(&page),DocId(7),3,LayerId(9),64),0);
     }
 
 }

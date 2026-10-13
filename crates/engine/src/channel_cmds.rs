@@ -25,8 +25,12 @@ use serde_json::{Value, json};
 use crate::commands::CommandSpec;
 use crate::{DocState, EngineError, Result, Session};
 mod split_controlled;
+mod merge_controlled;
 pub(crate) fn split_dispatch_preflight(session: &Session, params: &Value, background: bool) -> Result<bool> {
     split_controlled::dispatch_preflight(session, params, background)
+}
+pub(crate) fn merge_dispatch_preflight(session: &Session, params: &Value, background: bool) -> Result<bool> {
+    merge_controlled::dispatch_preflight(session, params, background)
 }
 
 #[cfg(test)]
@@ -1919,6 +1923,7 @@ fn mergeable(s: &Session) -> Vec<usize> {
 /// Merge Channels: grayscale documents of one size become the channels of an RGB, CMYK or Lab
 /// document (extra documents become alpha channels); the sources close.
 fn merge(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(value) = merge_controlled::try_run(s, p)? { return Ok(value); }
     let cmd = "channel.merge";
     let mode = match p.get("mode").and_then(Value::as_str).unwrap_or("rgb") {
         "rgb" => ColorMode::Rgb,
@@ -2707,7 +2712,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Merge Channels…",
             [],
             None,
-            r##"{"mode":"rgb|cmyk|lab"="rgb","documents":[index,…]?=open grayscale docs of the active size,"name":str?}"##,
+            r##"{"mode":"rgb|cmyk|lab"="rgb","documents":[index,…]?=open grayscale docs of the active size,"name":str?,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (native routes validate the captured pair)"##,
             can_merge,
             merge
         ),

@@ -48,7 +48,10 @@ pub(super) fn target_preflight(session:&Session,command:&str,params:&Value,contr
             state.doc.layer(id).and_then(|layer|if target==Target::Mask {layer.mask.as_ref().map(|mask|mask.surface.as_ref())} else {layer.surface()})
         },
     }.ok_or_else(||super::bad(command,"target has no editable pixels"))?;
-    if wide(surface.format().sample) {return Err(unsupported(command));}
+    if wide(surface.format().sample) {
+        if command=="paint.colorReplacement" && super::native_replace_controlled::dispatch_preflight(session,params,control)? {return Ok(());}
+        return Err(unsupported(command));
+    }
     poll(control)
 }
 /// Complete early command admission, before float normalization. Resolves only

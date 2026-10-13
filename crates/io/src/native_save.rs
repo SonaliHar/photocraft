@@ -444,6 +444,26 @@ impl PreparedNativeStream<'_, '_, '_> {
         poll(self.control)?;
         Ok((output, NativeSaveResult { warnings: self.warnings, stats, retained_payload_bytes: self.retained_payload_bytes, retained_model_slice_bytes: self.retained_model_slice_bytes }))
     }
+
+    /// Consume the same admitted document/previews into a caller-owned native
+    /// directory sink. The sink alone owns entry identity, exclusions, temporary
+    /// writes and manifest-last publication; IO acquires no file authority.
+    pub fn write_directory(mut self, sink: &mut impl photocraft_format::DirectoryEntrySink) -> Result<NativeSaveResult, IoError> {
+        poll(self.control)?;
+        let previous = self.writer.preparation_limits();
+        let scratch = usize::try_from(sink.resident_scratch_bytes()).map_err(|_| limit("native directory sink scratch"))?;
+        let remaining = previous.resident_bytes.checked_sub(scratch).ok_or_else(|| limit("native directory sink resident envelope"))?;
+        self.writer.set_preparation_limits(PreparationLimits { resident_bytes: remaining, ..previous })?;
+        let plan = self.writer.prepare_directory_stream(
+            self.document, &self.previews, self.limits.preparation.object_bytes, self.control,
+        );
+        self.writer.set_preparation_limits(previous)?;
+        let plan = plan.map_err(|error| if matches!(error, FormatError::Cancelled) { IoError::Cancelled } else { error.into() })?;
+        let stats = plan.write(sink)
+            .map_err(|error| if matches!(error, FormatError::Cancelled) { IoError::Cancelled } else { error.into() })?;
+        // Manifest commit is success. No cancellation/error work follows it.
+        Ok(NativeSaveResult { warnings: self.warnings, stats, retained_payload_bytes: self.retained_payload_bytes, retained_model_slice_bytes: self.retained_model_slice_bytes })
+    }
 }
 
 pub fn save_native_stream<W: Write + Seek>(

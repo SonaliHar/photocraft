@@ -98,6 +98,7 @@ mod native_raster_legacy_brightness_contrast_controlled;
 mod native_raster_desaturate_controlled;
 mod native_gray_desaturate_controlled;
 mod split_publication_controlled;
+mod merge_publication_controlled;
 mod held_import_controlled;
 mod pending_open_cmds;
 pub(crate) mod native_gray_threshold_controlled;

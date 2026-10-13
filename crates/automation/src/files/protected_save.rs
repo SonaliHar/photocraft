@@ -66,7 +66,44 @@ pub fn save_protected_with_interrupt(
             }
         })?;
         if !protection.sources.is_empty() || !protection.fingerprints.is_empty() || !original.is_empty() {
-            return Err(AutomationError::BadRequest("protected directory-bundle saves are unavailable; choose a native archive file destination".into()));
+            let extension = format_override
+                .map(|f| f.trim_start_matches('.').to_ascii_lowercase())
+                .or_else(|| path.extension().map(|f| f.to_string_lossy().to_ascii_lowercase()));
+            if extension.as_deref() != Some(photocraft_format::EXTENSION) {
+                return Err(AutomationError::BadRequest("directory bundles require the native .pcraft format".into()));
+            }
+            let mut known = std::collections::HashSet::new();
+            known.try_reserve(protection.fingerprints.len()).map_err(|_| denied())?;
+            for fingerprint in &protection.fingerprints {
+                poll(control)?;
+                known.insert(fingerprint.as_str());
+            }
+            for fingerprint in &original {
+                poll(control)?;
+                if !known.contains(fingerprint.as_str()) {
+                    return Err(AutomationError::BadRequest("native directory caller must retain document source fingerprints".into()));
+                }
+            }
+            drop(known);
+            drop(original);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                admit_snapshot(document, control)?;
+                let mut named = document.clone();
+                if let Some(filename) = path.file_name() {
+                    let filename = filename.to_string_lossy();
+                    let mut name = String::new();
+                    name.try_reserve_exact(filename.len()).map_err(|_| denied())?;
+                    name.push_str(&filename);
+                    named.name = name;
+                }
+                poll(control)?;
+                let prepared = photocraft_io::prepare_native_stream(&named, Default::default(), control).map_err(io_error)?;
+                let mut sink = super::protected_directory::Sink::new(path, protection, control)?;
+                return Ok(prepared.write_directory(&mut sink).map_err(io_error)?.warnings);
+            }
+            #[cfg(target_arch = "wasm32")]
+            return Err(AutomationError::BadRequest("protected native directory saves are unavailable in the browser".into()));
         }
         admit_snapshot(document, control)?;
         poll(control)?;
@@ -135,7 +172,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
-    fn native_title_and_original_model_preserved_directory_refuses_explicitly() {
+    fn native_title_and_original_model_preserved_with_protected_directory_reuse() {
         let root = root();
         let path = root.join("Result.pcraft");
         let doc = document();
@@ -146,24 +183,31 @@ mod tests {
         assert_eq!(photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap(), before);
         let directory = root.join("bundle.pcraft");
         std::fs::create_dir(&directory).unwrap();
-        assert!(
-            save_protected_with_interrupt(
-                &doc,
-                &directory,
-                None,
-                &Default::default(),
-                &WriteProtection { sources: Vec::new(), fingerprints: vec!["11".repeat(32)] },
-                &Interrupt::NONE
-            )
-            .unwrap_err()
-            .to_string()
-            .contains("directory-bundle")
-        );
-        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
+        let protection = WriteProtection { sources: Vec::new(), fingerprints: vec!["11".repeat(32)] };
+        for _ in 0..2 {
+            save_protected_with_interrupt(&doc, &directory, None, &Default::default(), &protection, &Interrupt::NONE).unwrap();
+            assert_eq!(photocraft_format::load_path(&directory).unwrap().name, "bundle.pcraft");
+        }
         save_protected(&doc, &directory, None, &Default::default(), &WriteProtection::default()).unwrap();
         let reopened = photocraft_format::load_path(&directory).unwrap();
         assert_eq!(reopened.name, "bundle.pcraft");
         assert_eq!(photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap(), before);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn protected_directory_manifest_alias_preserves_original_source() {
+        let root = root();
+        let directory = root.join("Alias.pcraft");
+        std::fs::create_dir(&directory).unwrap();
+        let source = root.join("owned-original.xcf");
+        let bytes = b"gimp xcf v001\0own synthetic protected source";
+        std::fs::write(&source, bytes).unwrap();
+        std::fs::hard_link(&source, directory.join("manifest.json")).unwrap();
+        let protection = WriteProtection { sources: vec![source.to_string_lossy().into_owned()], fingerprints: vec![] };
+        assert!(save_protected(&document(), &directory, None, &Default::default(), &protection).is_err());
+        assert_eq!(std::fs::read(&source).unwrap(), bytes);
+        assert_eq!(std::fs::read(directory.join("manifest.json")).unwrap(), bytes);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -140,7 +140,7 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 39] = [
+pub const UI_SET_FIELDS: [&str; 40] = [
     "tool",
     "panels",
     "dock",
@@ -169,6 +169,7 @@ pub const UI_SET_FIELDS: [&str; 39] = [
     "xcfUnderlineDraft",
     "xcfColorRotateDraft",
     "xcfFilterStackPage",
+    "xcfItemSetPage",
     "xcfItemSetDraft",
     "eyedropperSampleSize",
     "eyedropperSample",
@@ -280,11 +281,14 @@ fn color_rotate_draft_field(p: &Value) -> std::result::Result<Option<Option<crat
 
 /// Whole-value view replacement, bounded before cloning/deserializing payloads.
 fn filter_stack_page_field(p: &Value) -> std::result::Result<Option<Option<crate::state::XcfFilterStackPage>>, String> {
-    let Some(value) = p.get("xcfFilterStackPage") else { return Ok(None) };
+    layer_page_field(p,"xcfFilterStackPage",960)
+}
+fn layer_page_field(p: &Value,key: &str,max_offset: u64) -> std::result::Result<Option<Option<crate::state::XcfFilterStackPage>>, String> {
+    let Some(value) = p.get(key) else { return Ok(None) };
     if value.is_null() { return Ok(Some(None)); }
-    let object = value.as_object().ok_or("xcfFilterStackPage must be an object or null")?;
+    let object = value.as_object().ok_or_else(||format!("{key} must be an object or null"))?;
     if object.len() != 4 || object.keys().any(|key| !matches!(key.as_str(), "document" | "layer" | "revision" | "offset")) {
-        return Err("filter stack page requires exactly document, layer, revision and offset".into());
+        return Err(format!("{key} requires exactly document, layer, revision and offset"));
     }
     let identity = |key: &str| -> Result<u64, String> {
         let value = object.get(key).ok_or_else(|| format!("missing {key}"))?;
@@ -297,7 +301,7 @@ fn filter_stack_page_field(p: &Value) -> std::result::Result<Option<Option<crate
         if number==0 && key!="revision" { return Err(format!("{key} must be nonzero")); }
         Ok(number)
     };
-    let offset=object.get("offset").and_then(Value::as_u64).filter(|value| *value<=960 && *value%64==0).ok_or("filter stack offset must be a multiple of 64 from 0 through 960")?;
+    let offset=object.get("offset").and_then(Value::as_u64).filter(|value| *value<=max_offset && *value%64==0).ok_or_else(||format!("{key} offset must be a multiple of 64 from 0 through {max_offset}"))?;
     Ok(Some(Some(crate::state::XcfFilterStackPage {document:identity("document")?,layer:identity("layer")?,revision:identity("revision")?,offset:offset as usize})))
 }
 
@@ -725,6 +729,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 let underline_draft = underline_draft_field(p)?;
                 let color_rotate_draft = color_rotate_draft_field(p)?;
                 let filter_stack_page = filter_stack_page_field(p)?;
+                let item_set_page = layer_page_field(p,"xcfItemSetPage",9984)?;
                 let item_set_draft = item_set_draft_field(p)?;
                 // The Eyedropper's options bar (#1649): Sample Size, Sample, Show Sampling Ring.
                 let eyedropper_size = match p.get("eyedropperSampleSize") {
@@ -874,6 +879,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 }
                 if let Some(page) = filter_stack_page {
                     app.ui.xcf_filter_stack_page = page;
+                }
+                if let Some(page) = item_set_page {
+                    app.ui.xcf_item_set_page = page;
                 }
                 if let Some(draft) = item_set_draft {
                     app.ui.xcf_item_set_draft = draft;
@@ -1509,7 +1517,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Result<Value, String
         dialogs.push(json!({"id": SHELL_DIALOG, "kind": kind, "title": crate::workspace_ui::title(kind), "fields": fields}));
     }
     dialogs.extend(crate::discard_ui::inspect(app));
-    Ok(json!({
+    let mut result=json!({
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
         "tool": app.ui.tool,
         "toolOptions": app.ui.tool_options,
@@ -1519,9 +1527,6 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Result<Value, String
         "textEdit": app.ui.text_edit,
         "xcfUnderlineDraft": app.ui.xcf_underline_draft,
         "xcfColorRotateDraft": app.ui.xcf_color_rotate_draft,
-        "xcfFilterStackPage": app.ui.xcf_filter_stack_page.as_ref().map(|page|json!({
-            "document":page.document.to_string(),"layer":page.layer.to_string(),"revision":page.revision.to_string(),"offset":page.offset,
-        })),
         "xcfItemSetDraft": app.ui.xcf_item_set_draft.as_ref().map(|draft| json!({
             "document": draft.document.to_string(), "layer": draft.layer.to_string(), "revision": draft.revision.to_string(),
             "setId": draft.set_id.to_string(), "name": draft.name.chars().take(256).collect::<String>(),
@@ -1578,7 +1583,14 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Result<Value, String
         "distort": app.distort.describe(),
         "jobs": crate::jobs_ui::inspect(app),
         "cameraRaw": app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)),
-    }))
+    });
+    let fields=result.as_object_mut().ok_or_else(||"UI inspection object could not be prepared".to_owned())?;
+    for (key,page) in [("xcfFilterStackPage",app.ui.xcf_filter_stack_page.as_ref()),("xcfItemSetPage",app.ui.xcf_item_set_page.as_ref())] {
+        fields.insert(key.into(),page.map_or(Value::Null,|page|json!({
+            "document":page.document.to_string(),"layer":page.layer.to_string(),"revision":page.revision.to_string(),"offset":page.offset,
+        })));
+    }
+    Ok(result)
 }
 
 pub fn save_screenshot(app: &mut PhotocraftApp, image: &egui::ColorImage, path: Option<&str>) -> Value {

@@ -15,6 +15,9 @@ use crate::manifest::{ContentM, FORMAT_VERSION, Hash, LayerM, Manifest};
 use crate::zip::ZipWriter;
 use crate::{FormatError, LoadOptions, Result, SaveOptions};
 
+#[path = "store/directory_stream.rs"]
+pub mod directory_stream;
+
 pub(crate) const MANIFEST: &str = "manifest.json";
 pub(crate) const THUMB: &str = "thumb.png";
 pub(crate) const COMPOSITE: &str = "composite/preview.png";

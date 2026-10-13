@@ -706,6 +706,9 @@ impl Session {
         if id == "channel.split" {
             crate::channel_cmds::split_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
         }
+        if id == "channel.merge" {
+            crate::channel_cmds::merge_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
         if id == "xcf.filter.graph.inspectPlan" {
             crate::xcf_filter_graph_cmds::dispatch_preflight(&params)?;
         }

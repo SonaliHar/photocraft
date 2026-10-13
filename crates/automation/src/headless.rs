@@ -569,8 +569,12 @@ impl Headless {
                 files::validate_destination_protected_with_interrupt(&target, &protection, format, control)?;
                 if target.is_dir() {
                     control.check().map_err(|_| photocraft_engine::EngineError::Cancelled)?;
-                    let writer = self.writers.entry(doc.id.0).or_default();
-                    files::save(&doc, &target, format, opts, Some(writer))?
+                    if !protection.sources.is_empty() || !protection.fingerprints.is_empty() {
+                        files::save_protected_with_interrupt(&doc, &target, format, opts, &protection, control)?
+                    } else {
+                        let writer = self.writers.entry(doc.id.0).or_default();
+                        files::save(&doc, &target, format, opts, Some(writer))?
+                    }
                 } else if native_save_requested(target_text, format) {
                     // Source identities and target checks precede preparation; all
                     // preview/model admission completes before opening the temp.

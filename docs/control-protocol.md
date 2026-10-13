@@ -587,6 +587,11 @@ must be a multiple of 64 from 0 through 960. `null` clears the cursor.
 resets when the panel resolves the current stack; row actions still capture and
 validate their own current document, filter identity and revision.
 
+Matching Named Layer item sets have an independent `xcfItemSetPage` cursor with
+the same identity fields. Its offset ranges from 0 through 9984 in multiples of
+64 and counts matching sets in their original order. `ui.inspect` returns exact
+decimal-string identities; stale/restored pages reset without granting an edit.
+
 Pending decoded imports that could not enter the profile-question queue can be
 released with the registered engine command `file.open.discardPending`.
 It accepts an empty object to discard all private pending imports, or

@@ -27,6 +27,7 @@ pub mod presets;
 pub mod procedural;
 pub mod render;
 pub mod replace;
+pub mod native_replace_controlled;
 pub mod retouch;
 pub mod rng;
 pub mod symmetry;

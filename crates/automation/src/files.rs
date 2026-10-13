@@ -11,6 +11,9 @@ use crate::AutomationError;
 
 #[path = "files/protected_save.rs"]
 mod protected_save;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "files/protected_directory.rs"]
+mod protected_directory;
 pub use protected_save::{save_protected, save_protected_with_interrupt};
 
 /// Result of opening a file.
@@ -473,10 +476,21 @@ pub(crate) fn write_protected_stream_with_interrupt<R>(
     control: &photocraft_raster::Interrupt<'_>,
     write: impl FnOnce(&mut cap_std::fs::File) -> Result<R, AutomationError>,
 ) -> Result<R, AutomationError> {
+    write_protected_stream_with_guard(path, protection, control, &|| Ok(()), None, write)
+}
+pub(crate) fn write_protected_stream_with_guard<R>(
+    path: &Path,
+    protection: &photocraft_engine::WriteProtection,
+    control: &photocraft_raster::Interrupt<'_>,
+    extra_check: &dyn Fn() -> Result<(), AutomationError>,
+    held_parent: Option<&cap_std::fs::Dir>,
+    write: impl FnOnce(&mut cap_std::fs::File) -> Result<R, AutomationError>,
+) -> Result<R, AutomationError> {
     poll(control)?;
+    extra_check()?;
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (path, write, protection);
+        let _ = (path, write, protection, extra_check, held_parent);
         Err(AutomationError::BadRequest("native protected writes are unavailable in the browser".into()))
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -487,11 +501,16 @@ pub(crate) fn write_protected_stream_with_interrupt<R>(
         let leaf = target.file_name().ok_or_else(|| AutomationError::BadRequest("native destination has no filename".into()))?;
         let parent_path = target.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
         poll(control)?;
-        std::fs::create_dir_all(parent_path).map_err(|error| AutomationError::Io(format!("cannot create destination parent: {error}")))?;
-        let parent = cap_std::fs::Dir::open_ambient_dir(parent_path, cap_std::ambient_authority())
-            .map_err(|error| AutomationError::Io(format!("cannot hold destination parent: {error}")))?;
+        let parent=if let Some(parent)=held_parent {
+            parent.try_clone().map_err(|error|AutomationError::Io(format!("cannot retain native entry parent: {error}")))?
+        } else {
+            std::fs::create_dir_all(parent_path).map_err(|error| AutomationError::Io(format!("cannot create destination parent: {error}")))?;
+            cap_std::fs::Dir::open_ambient_dir(parent_path, cap_std::ambient_authority())
+                .map_err(|error| AutomationError::Io(format!("cannot hold destination parent: {error}")))?
+        };
         let check = || -> Result<(), AutomationError> {
             poll(control)?;
+            extra_check()?;
             reject_named_source(path, protection, control)?;
             reject_named_source(&target, protection, control)?;
             if native_target_path(path)? != target {
