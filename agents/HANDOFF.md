@@ -2,6 +2,34 @@
 
 Update this at the end of every session: newest entry on top, keep it short.
 
+## 2026-10-13: local agent (PC-01 finish)
+
+PC-01's implementation was left **uncommitted** in this worktree (`E:\CraftML\work\wt\pc-01`, branch `ai/pc-01-provider-trait`): the
+previous session validated it but never committed, so PR #3 held only the claim commits. The local agent reviewed the module,
+re-ran every gate green, then committed and pushed it. TASKS.md owner is now `local`; status stays `review`.
+
+Re-ran with `CARGO_TARGET_DIR=target/agent-codex`: `cargo test -p photocraft-engine --lib ai` 140 passed / 0 failed / 1 pre-existing
+ignored (14 `ai::tests`); `cargo clippy -p photocraft-engine --all-targets -- -D warnings` clean; `cargo xtask layers` 29 crates OK;
+`cargo xtask wasm` all checks OK; BASE guards (`cargo build -p photocraft -p photocraft-cli`, `cargo test -p photocraft-engine --lib --tests`)
+pass; `rustfmt --check` and `git diff --check` clean. Branch rebased onto `origin/main` for the MG-03 docs.
+
+Next: PC-02 (command integration) and PC-03 (transport). No capability boxes ticked; no changes to main.
+
+## 2026-10-13: Codex (PC-01)
+
+Provider interface and test fake added in engine/ai.rs; Session defaults to no provider and
+supports Arc injection. The helper validates request/result layout, reports progress, forwards
+cancellation and preserves errors. No commands, UI, network code or dependencies added.
+
+PR: https://github.com/erikerikerik/photocraft/pull/3 (ai/pc-01-provider-trait), ready for independent
+review, not merged. Receipt: agents/receipts/PC-01.md. All four guards pass. Engine tests:
+1785 passed, 0 failed, 19 existing opt-in ignored; 14 new AI tests pass. Clippy and layering pass;
+all 24 wasm checks pass after installing the missing target. Build directory: target/agent-codex.
+Erik requested public-profile contributor credit; their sync_github_name opt-in is committed as
+their GitHub account, without changing generated statistics.
+
+Next: review PC-01, then PC-02 command integration and PC-03 transport. Shared craftrules checkout
+was absent locally. No capability boxes ticked; no changes to main.
 ## 2026-10-13: local agent (MG-03), written up by Claude
 
 - LaMa ONNX verified: SHA-256 matches, tensors and value conventions found by experiment, CPU median 1,217 ms per 512×512 on the 7950X. Details: `agents/models/lama.md`; raw output in `E:\CraftML\work\lama-check\report.txt`.

@@ -8,3 +8,6 @@
 BASE | photocraft | cargo xtask layers
 BASE | photocraft | cargo build -p photocraft -p photocraft-cli
 BASE | photocraft | cargo test -p photocraft-engine --lib --tests
+
+# PC-01 provider contract: progress, cancellation, validation and optional backend.
+PC-01 | photocraft | cargo test -p photocraft-engine --lib ai::tests
