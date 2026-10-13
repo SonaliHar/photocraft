@@ -16,10 +16,10 @@
 # stay as they are; the trailing "…" of dialog commands is kept.
 
 # Guide layout dialog
-# Unavailable View overlays
-	Bristle brush previews are not implemented	As visualizações de pincéis de cerdas ainda não foram implementadas
-	Artboard-specific guides are not implemented	As guias específicas das pranchetas ainda não foram implementadas
 
+# Custom print paper (#3820)
+	Paper Width	Largura do papel
+	Paper Height	Altura do papel
 	Rows	Linhas
 	Number	Número
 	Margin	Margem
@@ -75,6 +75,8 @@
 	Save	Salvar
 	Save As…	Salvar como…
 	Save a Copy…	Salvar uma cópia…
+	{name} can't keep everything in this document	{name} não consegue manter tudo o que há neste documento
+	Choose a format that keeps it, such as Photoshop (PSD), or save a copy.	Escolha um formato que mantenha tudo, como Photoshop (PSD), ou salve uma cópia.
 	Revert	Reverter
 	Export	Exportar
 	Quick Export as PNG	Exportação rápida como PNG
@@ -112,6 +114,13 @@
 	Script Events Manager…	Gerenciador de eventos de scripts…
 	Import	Importar
 	Browse…	Procurar…
+	Source Files	Arquivos de origem
+	Use:	Usar:
+	Files	Arquivos
+	Add Open Files	Adicionar arquivos abertos
+	Sort By Name	Classificar por nome
+	Attempt to Automatically Align Source Images	Tentar alinhar automaticamente as imagens de origem
+	Create Smart Object after Loading Layers	Criar objeto inteligente após carregar as camadas
 	Reveal in Finder	Mostrar no Finder
 	Show in Explorer	Mostrar no Explorador
 	Show in Folder	Mostrar na pasta
@@ -150,6 +159,8 @@
 	Again	Novamente
 	Scale	Escala
 	Rotate	Girar
+	Set horizontal skew	Definir inclinação horizontal
+	Set vertical skew	Definir inclinação vertical
 	Skew	Inclinar
 	Distort	Distorcer
 	Perspective	Perspectiva
@@ -623,6 +634,10 @@
 	300%	300%
 	Print Size	Tamanho de impressão
 	Pixel Aspect Ratio	Proporção de pixels
+# Unavailable View overlays
+	Bristle brush previews are not implemented	As visualizações de pincéis de cerdas ainda não foram implementadas
+	Artboard-specific guides are not implemented	As guias específicas das pranchetas ainda não foram implementadas
+
 	Pixel Aspect Ratio Correction	Correção da proporção de pixels
 	Custom Pixel Aspect Ratio…	Proporção de pixels personalizada…
 	Square	Quadrado
@@ -819,6 +834,9 @@
 	Appearance	Aparência
 	Appearance (Layer Style)	Aparência (estilo de camada)
 	Apply Layer Mask	Aplicar máscara de camada
+	Add Mask to Selection	Adicionar máscara à seleção
+	Subtract Mask from Selection	Subtrair máscara da seleção
+	Intersect Mask with Selection	Fazer interseção da máscara com a seleção
 	Apply Per Tip	Aplicar por ponta
 	Apply next selected layer comp	Aplicar a próxima composição de camadas selecionada
 	Apply previous selected layer comp	Aplicar a composição de camadas selecionada anterior
@@ -2066,6 +2084,11 @@
 	Rename Brush…	Renomear pincel…
 	Delete Brush	Excluir pincel
 	New Brush Preset…	Nova predefinição de pincel…
+	Capture Brush Size in Preset	Capturar tamanho do pincel na predefinição
+	Include Tool Settings	Incluir configurações da ferramenta
+	Include Color	Incluir cor
+	Enter a name for the brush preset	Digite um nome para a predefinição de pincel
+	A brush preset with this name already exists	Já existe uma predefinição de pincel com este nome
 	Brush Preset Options	Opções de predefinições de pincel
 	Group name	Nome do grupo
 	Brush name	Nome do pincel

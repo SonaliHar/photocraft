@@ -20,10 +20,10 @@
 # Menus
 
 # Guide layout dialog
-# Unavailable View overlays
-	Bristle brush previews are not implemented	Предпросмотр щетинных кистей пока не реализован
-	Artboard-specific guides are not implemented	Направляющие отдельных монтажных областей пока не реализованы
 
+# Custom print paper (#3820)
+	Paper Width	Ширина бумаги
+	Paper Height	Высота бумаги
 	Rows	Строки
 	Number	Количество
 	Margin	Поля
@@ -83,6 +83,8 @@
 	Save	Сохранить
 	Save As…	Сохранить как…
 	Save a Copy…	Сохранить копию…
+	{name} can't keep everything in this document	{name} не может сохранить все содержимое этого документа
+	Choose a format that keeps it, such as Photoshop (PSD), or save a copy.	Выберите формат, который сохранит все, например Photoshop (PSD), или сохраните копию.
 	Save…	Сохранить…
 	Revert	Восстановить
 	Import	Импорт
@@ -206,6 +208,9 @@
 	Enable Layer Mask	Включить маску слоя
 	Disable Layer Mask	Отключить маску слоя
 	Apply Layer Mask	Применить маску слоя
+	Add Mask to Selection	Добавить маску к выделению
+	Subtract Mask from Selection	Вычесть маску из выделения
+	Intersect Mask with Selection	Пересечь маску с выделением
 	Link Layer Mask	Связать маску слоя
 	Unlink Layer Mask	Отвязать маску слоя
 	Vector Mask	Векторная маска
@@ -420,6 +425,10 @@
 	Proof Setup	Настройка цветопробы
 	Proof Colors	Цветопроба
 	Pixel Aspect Ratio	Пиксельное соотношение сторон
+# Unavailable View overlays
+	Bristle brush previews are not implemented	Предпросмотр щетинных кистей пока не реализован
+	Artboard-specific guides are not implemented	Направляющие отдельных монтажных областей пока не реализованы
+
 	Pixel Aspect Ratio Correction	Коррекция пиксельного соотношения
 	Zoom In	Увеличить
 	Zoom Out	Уменьшить
@@ -1030,6 +1039,11 @@
 	Brush Name	Имя кисти
 	Brush Stroke	Мазок кисти
 	New Brush Preset…	Новый набор параметров кисти…
+	Capture Brush Size in Preset	Сохранить размер кисти в наборе
+	Include Tool Settings	Включить настройки инструмента
+	Include Color	Включить цвет
+	Enter a name for the brush preset	Введите имя набора параметров кисти
+	A brush preset with this name already exists	Набор параметров кисти с таким именем уже существует
 	Brush Preset Options	Параметры наборов кистей
 	New Brush	Новая кисть
 	Create new brush from these settings	Создать новую кисть из этих параметров
@@ -1191,6 +1205,8 @@
 	Offset	Смещение
 	Reset Transform	Сбросить трансформацию
 	Rotate	Повернуть
+	Set horizontal skew	Задать наклон по горизонтали
+	Set vertical skew	Задать наклон по вертикали
 	Flip Horizontal	Отразить по горизонтали
 	Flip Vertical	Отразить по вертикали
 	Frame Sync	Синхронизация кадров
@@ -1850,6 +1866,14 @@
 	Border…	Граница…
 	Bottom Edges	Нижние края
 	Browse…	Обзор…
+	Source Files	Исходные файлы
+	Use:	Использовать:
+	Files	Файлы
+	Folder	Папка
+	Add Open Files	Добавить открытые файлы
+	Sort By Name	Сортировать по имени
+	Attempt to Automatically Align Source Images	Попытаться автоматически выровнять исходные изображения
+	Create Smart Object after Loading Layers	Создать смарт-объект после загрузки слоёв
 	Canvas Guides	Направляющие холста
 	Character Styles Panel	Панель «Стили символов»
 	Clear Canvas Guides	Удалить направляющие холста
