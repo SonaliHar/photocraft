@@ -1030,7 +1030,6 @@
 	Choose…	Επιλογή…
 	Select Folder…	Επιλογή φακέλου…
 	Override Action "Save" Commands	Παράκαμψη εντολών αποθήκευσης της ενέργειας
-	File Naming	Ονομασία αρχείων
 	Compatibility	Συμβατότητα
 	Include ICC Profile	Συμπερίληψη προφίλ ICC
 	Error File	Αρχείο σφαλμάτων
@@ -1850,6 +1849,7 @@
 	Update Modified Content	Ενημέρωση τροποποιημένου περιεχομένου
 	Update All Modified Content	Ενημέρωση όλων των τροποποιημένων περιεχομένων
 	Stack Mode	Λειτουργία στοίβας
+	Choose Stack Mode:	Επιλογή λειτουργίας στοίβας:
 	Entropy	Εντροπία
 	Kurtosis	Κύρτωση
 	Maximum	Μέγιστο
@@ -2089,6 +2089,7 @@
 	Avoid Widows/Orphans	Αποφυγή μονών γραμμών στην αρχή ή στο τέλος σελίδας
 	BLANK DOCUMENT PRESETS ({n})	ΠΡΟΕΠΙΛΟΓΕΣ ΚΕΝΟΥ ΕΓΓΡΑΦΟΥ ({n})
 	Background Contents	Περιεχόμενα φόντου
+	Custom background color	Προσαρμοσμένο χρώμα φόντου
 	Background from Layer	Φόντο από επίπεδο
 	Baseline	Γραμμή βάσης
 	Baseline shift	Μετατόπιση γραμμής βάσης
@@ -3437,6 +3438,7 @@ cameraRaw	Yellow	Κίτρινο
 	Its layers don't fit the GPU memory budget. Raising Memory usage in Preferences › Performance raises the budget, up to a quarter of this computer's memory.	Τα επίπεδά του δεν χωρούν στο όριο μνήμης της GPU. Αυξάνοντας τη Χρήση μνήμης στις Προτιμήσεις › Επιδόσεις αυξάνεται το όριο, έως το ένα τέταρτο της μνήμης αυτού του υπολογιστή.
 	Knockout	Διάτρηση
 	Large document: redrawing on the CPU	Μεγάλο έγγραφο: επανασχεδίαση στη CPU
+	Redrawing	Επανασχεδίαση
 	Median…	Διάμεσος…
 	Move	Μετακίνηση
 	New Swatch Group…	Νέα ομάδα δειγμάτων χρωμάτων…
@@ -3763,6 +3765,7 @@ curves	Smooth	Εξομάλυνση
 	Paint over hair or fur on the image; Alt paints the other mode	Βάψτε πάνω σε μαλλιά ή γούνα στην εικόνα· το Alt βάφει με την άλλη λειτουργία
 	Clear Brush Strokes	Απαλοιφή πινελιών
 	Show rulers	Εμφάνιση χαράκων
+	Presentation	Παρουσίαση
 
 # Color Sampler (added with the i18n coverage repair)
 	Click to place · Alt-click or drag off-canvas to remove	Κλικ για τοποθέτηση · Alt-κλικ ή σύρσιμο εκτός καμβά για αφαίρεση
@@ -3818,6 +3821,8 @@ curves	Smooth	Εξομάλυνση
 @plural	Saved {n} action to {file}|Saved {n} actions to {file}	Αποθηκεύτηκε {n} ενέργεια στο {file}|Αποθηκεύτηκαν {n} ενέργειες στο {file}
 @plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	Παραλείφθηκε {n} βήμα χωρίς αντίστοιχο στο Photoshop|Παραλείφθηκαν {n} βήματα χωρίς αντίστοιχο στο Photoshop
 
+	File Naming	Ονομασία αρχείων
+	Starting serial	Αρχικός αριθμός σειράς
 # Actions panel: set folders, dialog toggle, Insert Stop
 	Insert Stop…	Εισαγωγή διακοπής…
 	Save Set…	Αποθήκευση συνόλου…

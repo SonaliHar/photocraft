@@ -25,6 +25,7 @@ pub mod anchor_tools;
 pub mod artboard_tool;
 pub mod artboard_ui;
 pub mod assistants_ui;
+pub(crate) mod background_redraw;
 mod blend_keys;
 pub(crate) mod blend_preview;
 mod brand;
@@ -106,6 +107,7 @@ pub mod icons;
 pub mod jobs_ui;
 pub mod kys_import;
 pub mod lasso_ui;
+pub(crate) mod last_brush;
 pub mod layer_menu_ui;
 pub mod layer_pick_ui;
 pub mod layer_picker;
@@ -503,6 +505,11 @@ pub struct PhotocraftApp {
     /// `canvas::display_doc`'s live-adjust and Duotone documents per document: (snapshot,
     /// preview key, the document shown).
     display_memo: HashMap<DocId, (std::sync::Weak<Document>, u64, std::sync::Arc<Document>)>,
+    /// The main canvas's last GPU view of each document while it shows the plain document on
+    /// the GPU canvas: the Navigator draws the same texture at its own size (#4518).
+    navigator_gpu: HashMap<DocId, crate::gpu_canvas::ViewParams>,
+    /// Documents whose GPU canvas texture holds the plain document (`canvas::ensure_gpu`).
+    navigator_plain: std::collections::HashSet<DocId>,
     /// Display profile readings (#569).
     monitors: monitor_status::State,
     checker: Option<egui::TextureHandle>,
@@ -628,6 +635,8 @@ pub struct PhotocraftApp {
     pub(crate) filter_preview: Option<filter_dialog::FilterPreview>,
     #[cfg(not(target_arch = "wasm32"))]
     filter_preview_worker: filter_preview_worker::Worker,
+    /// Full CPU canvas redraws running in the background, by document (#4024).
+    pub(crate) redraws: std::collections::HashMap<photocraft_doc::DocId, background_redraw::Redraw>,
     /// Select › Color Range dialog preview (proxy document + mask / image textures).
     pub(crate) color_range: Option<color_range_ui::Preview>,
     /// Image › Adjustments dialog preview through a temporary clipped adjustment layer.
@@ -756,6 +765,8 @@ impl PhotocraftApp {
             canvases: HashMap::new(),
             navigator_textures: HashMap::new(),
             display_memo: HashMap::new(),
+            navigator_gpu: HashMap::new(),
+            navigator_plain: std::collections::HashSet::new(),
             monitors: Default::default(),
             checker: None,
             drag: None,
@@ -816,6 +827,7 @@ impl PhotocraftApp {
             filter_preview: None,
             #[cfg(not(target_arch = "wasm32"))]
             filter_preview_worker: Default::default(),
+            redraws: Default::default(),
             color_range: None,
             adjust_preview: None,
             synthetic: Vec::new(),
@@ -1117,6 +1129,8 @@ impl PhotocraftApp {
             self.ui.polygon.clear();
             self.ui.polygon_mode.clear();
         }
+        // ... and to the document it was started on.
+        crate::canvas::polygon_cancel_stale(self);
         crate::crop_ui::cancel_stale(self);
         let ids: Vec<DocId> = self.session.documents().iter().map(|d| d.doc.id).collect();
         // Where the document of view `i` is now. Views not tracked yet keep their index.
@@ -1841,6 +1855,9 @@ impl eframe::App for PhotocraftApp {
         notices::show(self, &ctx);
         gpu_status::show_fallback(self, &ctx);
         kys_import::show_offer(self, &ctx);
+        if chrome && self.ui.panels.menu_bar && self.custom_titlebar && !self.ui.dialogs.is_empty() {
+            titlebar::modal_drag_overlay(&ctx);
+        }
         if self.custom_titlebar {
             titlebar::resize_zones(ui);
         }
@@ -1850,6 +1867,10 @@ impl eframe::App for PhotocraftApp {
         // remembered once the pointer is up. Here, after every panel, rather than in the
         // picker's own code: the control channel can set it while the picker is closed.
         brush_picker::persist(self, &ctx);
+        // The tool's brush (settings and tip references) is remembered the same way. Like the
+        // picker's view, in the frame loop, so the control channel can set it with the panels
+        // closed; the engine's revision counter keeps an unchanged brush free.
+        last_brush::persist(self, &ctx);
         // Tool options are remembered between launches the same way (#2814).
         tool_memory::persist(self, &ctx);
         // So are View › Extras, Show and Snap To (#3762).
@@ -2432,6 +2453,9 @@ impl PhotocraftApp {
         true
     }
 }
+
+#[cfg(test)]
+mod navigator_gpu_tests;
 
 #[cfg(test)]
 mod color_swatch_tests;
