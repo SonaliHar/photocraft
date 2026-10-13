@@ -4363,6 +4363,7 @@ dependencies = [
  "craft-print",
  "exr",
  "flate2",
+ "libc",
  "photocraft-affinity",
  "photocraft-algo",
  "photocraft-cms",

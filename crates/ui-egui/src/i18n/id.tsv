@@ -3126,3 +3126,20 @@ curves	Smooth	Haluskan
 @plural	{n} action|{n} actions	{n} tindakan
 	Auto Add/Delete	Tambah/Hapus Otomatis
 	ICO is limited to 256 × 256 pixels	ICO dibatasi hingga 256 × 256 piksel
+
+# Monitor profile chooser (#575)
+	All displays (default)	Semua monitor (default)
+	Applying monitor profiles…	Menerapkan profil monitor…
+	Choose ICC File…	Pilih Berkas ICC…
+	Currently applied:	Sedang diterapkan:
+	Disconnected display	Monitor terputus
+	Display:	Monitor:
+	Displays without a unique identity use the default.	Monitor tanpa identitas unik menggunakan default.
+	Monitor Profiles…	Profil Monitor…
+	Profile search reached its limit.	Pencarian profil mencapai batasnya.
+	Profile:	Profil:
+	Reading profiles…	Membaca profil…
+	Reconnect this display to change its profile. Use default removes the saved choice.	Sambungkan kembali monitor ini untuk mengubah profilnya. Gunakan default menghapus pilihan yang disimpan.
+	Refresh	Segarkan
+	Search covers standard profile folders. Other profiles can be chosen as ICC files.	Pencarian mencakup folder profil standar. Profil lain dapat dipilih sebagai berkas ICC.
+	Use default	Gunakan default

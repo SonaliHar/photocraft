@@ -73,6 +73,7 @@ pub mod magnetic_cmds;
 pub mod mask_view_cmds;
 mod migrate_cmds;
 pub mod mode_cmds;
+pub mod monitor_cmds;
 pub mod multichannel_cmds;
 pub mod new_layer;
 pub mod notes_cmds;
