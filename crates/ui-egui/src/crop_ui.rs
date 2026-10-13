@@ -991,7 +991,7 @@ pub fn draw_turn_cursor(ctx: &egui::Context, p: egui::Pos2, toward: egui::Vec2) 
 fn resize_icon(hx: i8, hy: i8, deg: f64, xf: Option<crate::canvas::ViewXform>) -> CursorIcon {
     let mut d = turn([f64::from(hx), f64::from(hy)], [0.0, 0.0], deg);
     if let Some(xf) = xf {
-        let screen = xf.map_vec(egui::vec2(d[0] as f32, d[1] as f32));
+        let screen = xf.map_vec_unscaled(egui::vec2(d[0] as f32, d[1] as f32));
         d = [f64::from(screen.x), f64::from(screen.y)];
     }
     let a = d[1].atan2(d[0]).rem_euclid(std::f64::consts::PI);

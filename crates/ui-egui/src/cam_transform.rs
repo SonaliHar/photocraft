@@ -245,7 +245,7 @@ mod tests {
                         let xf = ViewXform::active(&app).unwrap();
                         let at = xf.to_screen(100.0, 100.0);
                         // Point away from the box so overlapping handle grab areas stay irrelevant.
-                        let outward = xf.map_vec(egui::vec2(-1.0, 0.0)).normalized();
+                        let outward = xf.map_vec_unscaled(egui::vec2(-1.0, 0.0)).normalized();
                         let ctx = egui::Context::default();
                         let corner_cursor = cursor(&app, &ctx, &xf, at).unwrap();
                         for (distance, grabs_corner) in [(7.0, true), (20.0, false)] {

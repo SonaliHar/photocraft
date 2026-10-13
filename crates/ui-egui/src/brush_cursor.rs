@@ -44,11 +44,34 @@ impl Key {
     }
 }
 
-/// The brush cursor at `at`. `radius` is size / 2 at the view's logical zoom, before aspect;
-/// `normal` is Preferences › Cursors "Normal Brush Tip" (the 50 % contour, not the full tip).
-pub(crate) fn cursor(painter: &Painter, at: Pos2, brush: &BrushSettings, radius: f32, xf: &ViewXform, normal: bool, centre: bool) -> CursorIcon {
+/// The screen vectors of one tip radius (`size / 2` document pixels) along the document's x and
+/// y axes: the view's zoom, rotation, flip and pixel aspect, which the outline follows as the
+/// stroke does.
+pub(crate) fn tip_axes(xf: &crate::canvas::ViewXform, size: f32) -> [Vec2; 2] {
+    let r = if size.is_finite() { size.max(0.0) / 2.0 } else { 0.0 };
+    [xf.map_vec(Vec2::new(r, 0.0)), xf.map_vec(Vec2::new(0.0, r))]
+}
+
+/// Rings in radius units (document orientation) on screen, through [`tip_axes`].
+fn on_screen(rings: &[Vec<[f32; 2]>], axes: [Vec2; 2]) -> Vec<Vec<Vec2>> {
+    rings.iter().map(|r| r.iter().map(|p| axes[0] * p[0] + axes[1] * p[1]).collect()).collect()
+}
+
+/// The brush cursor at `at`. `radius` is the tip's screen radius (size / 2 at the current zoom),
+/// for the plain circle; `axes` comes from [`tip_axes`], for a traced outline. `normal` is
+/// Preferences › Cursors "Normal Brush Tip" (the 50 % contour, not the full tip).
+pub(crate) fn cursor(
+    painter: &Painter,
+    at: Pos2,
+    brush: &BrushSettings,
+    radius: f32,
+    projection: (&ViewXform, [Vec2; 2]),
+    normal: bool,
+    centre: bool,
+) -> CursorIcon {
+    let (xf, axes) = projection;
     if let Some(rings) = rings(painter.ctx(), brush, !normal) {
-        let pts = mapped_rings(&rings, radius, xf);
+        let pts = on_screen(&rings, axes);
         let extent = pts.iter().flatten().fold(0.0f32, |m, p| m.max(p.length()));
         if extent < MIN_RADIUS {
             return crate::tool_cursor::crosshair(painter, at, 4.0, 0.0);
@@ -61,13 +84,6 @@ pub(crate) fn cursor(painter: &Painter, at: Pos2, brush: &BrushSettings, radius:
     } else {
         crate::tool_cursor::ellipse(painter, at, Vec2::new(r * xf.aspect, r), xf.rotation.to_radians() * if xf.flip { -1.0 } else { 1.0 }, centre)
     }
-}
-
-/// The cached contour stays in native radius units; only its presentation follows the view.
-fn mapped_rings(rings: &[Vec<[f32; 2]>], radius: f32, xf: &ViewXform) -> Vec<Vec<Vec2>> {
-    let x = xf.map_vec(Vec2::new(radius, 0.0));
-    let y = xf.map_vec(Vec2::new(0.0, radius));
-    rings.iter().map(|r| r.iter().map(|p| x * p[0] + y * p[1]).collect()).collect()
 }
 
 /// The tip outline in radius units, cached across frames; `None` when the plain circle says it all
@@ -89,6 +105,70 @@ fn rings(ctx: &egui::Context, brush: &BrushSettings, full: bool) -> Option<Arc<V
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::canvas::ViewXform;
+    use egui::{Rect, pos2};
+
+    fn view(rotation: f32, flip: bool, aspect: f32) -> ViewXform {
+        ViewXform { rect: Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(400.0, 300.0)), zoom: 2.0, center: [50.0, 40.0], flip, rotation, aspect }
+    }
+
+    fn close(a: Vec2, b: Vec2) -> bool {
+        (a - b).length() < 1e-4
+    }
+
+    /// The axes are the screen offsets of the document points one radius right of and below the
+    /// pointer, whatever the view does.
+    #[test]
+    fn tip_axes_follow_the_view_like_to_screen() {
+        for (rotation, flip, aspect) in [(0.0, false, 1.0), (30.0, false, 1.0), (-90.0, true, 1.0), (45.0, true, 2.0), (200.0, false, 0.5)] {
+            let xf = view(rotation, flip, aspect);
+            let [ex, ey] = tip_axes(&xf, 20.0);
+            let o = xf.to_screen(60.0, 30.0);
+            assert!(close(ex, xf.to_screen(70.0, 30.0) - o), "x axis at {rotation}°, flip {flip}, aspect {aspect}");
+            assert!(close(ey, xf.to_screen(60.0, 40.0) - o), "y axis at {rotation}°, flip {flip}, aspect {aspect}");
+        }
+    }
+
+    /// An unrotated, unflipped view gives what upstream's radius scaling gave.
+    #[test]
+    fn a_plain_view_scales_the_outline_by_the_screen_radius() {
+        let rings = vec![vec![[1.0, 0.0], [0.0, 0.5], [-1.0, 0.0]]];
+        let pts = on_screen(&rings, tip_axes(&view(0.0, false, 1.0), 20.0));
+        let want = [Vec2::new(20.0, 0.0), Vec2::new(0.0, 10.0), Vec2::new(-20.0, 0.0)];
+        assert!(pts[0].iter().zip(want).all(|(a, b)| close(*a, b)), "{pts:?}");
+    }
+
+    /// A tip pointing along the document's x axis points down the screen in a view turned 90°,
+    /// and left in a flipped one.
+    #[test]
+    fn the_outline_turns_and_flips_with_the_view() {
+        let rings = vec![vec![[1.0, 0.0]]];
+        let turned = on_screen(&rings, tip_axes(&view(90.0, false, 1.0), 20.0));
+        assert!(close(turned[0][0], Vec2::new(0.0, 20.0)), "{turned:?}");
+        let flipped = on_screen(&rings, tip_axes(&view(0.0, true, 1.0), 20.0));
+        assert!(close(flipped[0][0], Vec2::new(-20.0, 0.0)), "{flipped:?}");
+    }
+
+    #[test]
+    fn hostile_sizes_give_finite_axes() {
+        for size in [f32::NAN, f32::INFINITY, -5.0, 0.0] {
+            let [ex, ey] = tip_axes(&view(30.0, true, 1.0), size);
+            assert!(ex.x.is_finite() && ex.y.is_finite() && ey.x.is_finite() && ey.y.is_finite(), "size {size}");
+        }
+    }
+}
+
+/// The owned projected-radius oracle keeps the old unscaled mapping contract.
+#[cfg(test)]
+fn mapped_rings(rings: &[Vec<[f32; 2]>], radius: f32, xf: &ViewXform) -> Vec<Vec<Vec2>> {
+    let x = xf.map_vec_unscaled(Vec2::new(radius, 0.0));
+    let y = xf.map_vec_unscaled(Vec2::new(0.0, radius));
+    on_screen(rings, [x, y])
+}
+
+#[cfg(test)]
+mod aspect_tests {
     use super::*;
     use egui::{Rect, pos2, vec2};
     use photocraft_paint::tile::GrayTile;
@@ -164,7 +244,7 @@ mod tests {
                             let mut input = egui::RawInput::default();
                             input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().native_pixels_per_point = Some(ppp);
                             let mut output = ctx.run_ui(input, |ui| {
-                                let icon = cursor(ui.painter(), pos2(200.0, 200.0), brush, 8.0 * xf.zoom, &xf, false, false);
+                                let icon = cursor(ui.painter(), pos2(200.0, 200.0), brush, 8.0 * xf.zoom, (&xf, tip_axes(&xf, 16.0)), false, false);
                                 ui.ctx().set_cursor_icon(icon);
                             });
                             output.textures_delta.clear();
@@ -219,7 +299,7 @@ mod tests {
                 let mut input = egui::RawInput::default();
                 input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().native_pixels_per_point = Some(ppp);
                 let mut output = ctx.run_ui(input.clone(), |ui| {
-                    let icon = cursor(ui.painter(), at, &brush, radius, &xf, false, false);
+                    let icon = cursor(ui.painter(), at, &brush, radius, (&xf, tip_axes(&xf, brush.size)), false, false);
                     ui.ctx().set_cursor_icon(icon);
                 });
                 output.textures_delta.clear();
