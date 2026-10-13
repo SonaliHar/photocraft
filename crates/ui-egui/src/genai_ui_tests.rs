@@ -391,3 +391,28 @@ fn ok_is_off_for_an_empty_prompt_on_a_provider_that_needs_one() {
     f.insert("prompt".into(), json!("a lighthouse"));
     assert!(can_confirm(&app, &f));
 }
+
+#[test]
+fn editing_keeps_saved_fields_left_empty_and_requires_every_field() {
+    let store = Store::default();
+    store.borrow_mut().insert("firefly".into(), secret(&[("client_id", "cid")]));
+    let mut app = app_with(&store);
+    let id = open_provider(&mut app, "firefly").unwrap();
+    let fields = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+    let e = confirm(&mut app, &fields).unwrap_err();
+    assert!(e.contains("Adobe Firefly"), "{e}");
+    app.genai.key_inputs.insert("client_secret", "csecret".into());
+    confirm(&mut app, &fields).unwrap();
+    let saved = photocraft_genai::Credentials::from_secret(&store.borrow()["firefly"]).unwrap();
+    assert_eq!(saved.require("client_id").unwrap().expose(), "cid", "kept");
+    assert_eq!(saved.require("client_secret").unwrap().expose(), "csecret", "added");
+}
+
+#[test]
+fn restore_skips_a_half_saved_two_field_provider() {
+    let store = Store::default();
+    store.borrow_mut().insert("firefly".into(), secret(&[("client_id", "only-half")]));
+    let (app, restored) = configured(&store, &["firefly", "gemini"]);
+    assert!(restored.unwrap_err().contains("firefly"));
+    assert_eq!(app.session.image_provider_ids(), vec!["gemini".to_owned()]);
+}

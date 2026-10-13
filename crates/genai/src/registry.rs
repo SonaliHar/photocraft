@@ -36,6 +36,7 @@ static PROVIDERS: &[ProviderSpec] = &[
     crate::providers::bfl::SPEC,
     crate::providers::fal::SPEC,
     crate::providers::replicate::SPEC,
+    crate::providers::firefly::SPEC,
 ];
 
 pub fn providers() -> &'static [ProviderSpec] {
