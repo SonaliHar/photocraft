@@ -692,10 +692,21 @@ fn parse_guides(data: &[u8], doc: &mut Document) {
 /// Background (Photoshop 27.11 opens psd-tools' flat Bitmap and Indexed files that way), so it is
 /// written back as one.
 fn flat_background(s: Surface) -> Layer {
+    // A band of tile rows at a time (no full-size float copy), stopping at the first
+    // transparent pixel.
     let opaque = {
         let r = s.content_bounds();
         let n = s.channels();
-        !r.is_empty() && s.read_region(r).chunks_exact(n).all(|p| p.last().is_some_and(|a| *a >= 1.0))
+        let mut vals = Vec::new();
+        let mut y = r.y0;
+        let mut opaque = !r.is_empty();
+        while opaque && y < r.y1 {
+            let band = Rect::new(r.x0, y, r.x1, y.saturating_add(TILE_SIZE).min(r.y1));
+            s.read_region_into(band, &mut vals);
+            opaque = vals.chunks_exact(n).all(|p| p.last().is_some_and(|a| *a >= 1.0));
+            y = band.y1;
+        }
+        opaque
     };
     let mut l = Layer::new("Background", LayerContent::Raster(s));
     l.locks.transparency = opaque;
@@ -957,6 +968,7 @@ pub fn psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) 
             Ok(img) => {
                 let mut s = Surface::new(fmt);
                 write_rgba8(&mut s, canvas, &img.data);
+                drop(img);
                 s.prune();
                 doc.layers.push(flat_background(s));
             }
