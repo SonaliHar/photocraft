@@ -47,6 +47,17 @@ pub(super) fn copy_canonical_save(
     proof.check_copy(source, target, surface, format, ctl)?;
     copy_admitted(source, target, surface, format, cmd, ctl)
 }
+pub(super) fn copy_canonical_new(
+    document: &DocumentSnapshot,
+    surface: &Surface,
+    format: PixelFormat,
+    proof: &super::load_selection_controlled::canonical_selection_storage::NewProof,
+    cmd: &str,
+    ctl: &Interrupt<'_>,
+) -> Result<Surface> {
+    proof.check_copy(document, surface, format, ctl)?;
+    copy_admitted(document, document, surface, format, cmd, ctl)
+}
 fn copy_admitted(
     source: &DocumentSnapshot,
     target: &DocumentSnapshot,

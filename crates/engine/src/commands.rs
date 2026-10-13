@@ -1171,6 +1171,9 @@ fn build() -> Vec<CommandSpec> {
                 if kind == "curves" && let Some(value) = crate::native_raster_curves_controlled::try_run(s, p)? {
                     return Ok(value);
                 }
+                if kind == "exposure" && let Some(value) = crate::native_raster_exposure_controlled::try_run(s, p)? {
+                    return Ok(value);
+                }
                 let eyedropped = if matches!(kind.as_str(), "levels" | "curves") { crate::adjust_params::eyedropper_from_params(s, &kind, p)? } else { None };
                 // A smart filter re-runs its params, so it records what an eyedropper resolved
                 // to, not the sample (#3127).

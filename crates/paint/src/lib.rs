@@ -32,6 +32,7 @@ pub mod rng;
 pub mod symmetry;
 pub mod tile;
 pub mod wide;
+pub mod wide_blend_controlled;
 pub mod wide_erase;
 
 pub use brush::{

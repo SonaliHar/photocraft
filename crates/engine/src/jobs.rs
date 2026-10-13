@@ -873,6 +873,7 @@ impl Session {
         crate::native_gray_curves_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         crate::native_raster_levels_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         crate::native_raster_curves_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        crate::native_raster_exposure_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         if matches!(id, "xcf.floating.anchor" | "xcf.floating.toLayer" | "xcf.floating.delete") {
             crate::xcf_floating::controlled::dispatch_preflight(self, id, &params)?;
         }

@@ -1,4 +1,4 @@
-//! Runtime-only target fencing for existing Threshold, Posterize, Levels and Curves dialogs.
+//! Runtime-only target fencing for existing Threshold, Posterize, Levels, Curves and Exposure dialogs.
 //! This does not qualify source metadata or replace the registered engine's native checks.
 use crate::PhotocraftApp;
 use photocraft_doc::{DocId,LayerId};
@@ -13,7 +13,7 @@ impl PartialEq for Origin {
             && match(self.snapshot.upgrade(),other.snapshot.upgrade()) {(Some(a),Some(b))=>a.shares_state(&b),(None,None)=>true,_=>false}
     }
 }
-pub(crate) fn handles(command:&str)->bool {matches!(command,"image.adjustments.threshold"|"image.adjustments.posterize"|"image.adjustments.levels"|"image.adjustments.curves")}
+pub(crate) fn handles(command:&str)->bool {matches!(command,"image.adjustments.threshold"|"image.adjustments.posterize"|"image.adjustments.levels"|"image.adjustments.curves"|"image.adjustments.exposure")}
 fn idle(app:&PhotocraftApp)->Result<(),String> {
     let active=app.session.active().ok_or_else(||tl!("Open a document before adjusting pixels.").to_owned())?;
     if active.doc.id.0==0 || active.revision==u64::MAX || app.ui.transform.is_some() || app.session.has_jobs() || active.floating.is_some() || active.coalesce.is_some()
@@ -71,7 +71,8 @@ pub(crate) fn validate(app:&PhotocraftApp,dialog:u64,fields:&Map<String,Value>)-
     let invalid=||tl!("Check the adjustment settings and try again.").to_owned();
     let levels=command=="image.adjustments.levels";
     let curves=command=="image.adjustments.curves";
-    if fields.len()>32 || fields.iter().any(|(key,value)|key.len()>128 || (!key.starts_with("__") && (!(matches!(key.as_str(),"opacity"|"target"|"layer"|"documentId"|"expectedRevision") || if levels {levels_number(key)||levels_channel(key)} else if curves {matches!(key.as_str(),"points"|"pencil"|"smooth")||levels_channel(key)} else {matches!(key.as_str(),"level"|"levels")}) || matches!(value,Value::String(text) if text.len()>128)))) {return Err(invalid());}
+    let exposure=command=="image.adjustments.exposure";
+    if fields.len()>32 || fields.iter().any(|(key,value)|key.len()>128 || (!key.starts_with("__") && (!(matches!(key.as_str(),"opacity"|"target"|"layer"|"documentId"|"expectedRevision") || if levels {levels_number(key)||levels_channel(key)} else if curves {matches!(key.as_str(),"points"|"pencil"|"smooth")||levels_channel(key)} else if exposure {matches!(key.as_str(),"exposure"|"offset"|"gamma")} else {matches!(key.as_str(),"level"|"levels")}) || matches!(value,Value::String(text) if text.len()>128)))) {return Err(invalid());}
     if levels {
         for (key,value) in fields {
             if (levels_number(key) && value.as_f64().is_none_or(|n|!n.is_finite())) || (levels_channel(key) && !levels_record(value)) {return Err(invalid());}
@@ -86,6 +87,11 @@ pub(crate) fn validate(app:&PhotocraftApp,dialog:u64,fields:&Map<String,Value>)-
                 || (key=="smooth" && value.as_f64().is_none_or(|number|!number.is_finite())) {return Err(invalid());}
         }
         if fields.get("__curvePickerBase").is_some_and(|value|value.as_object().is_none_or(|base|!curves_settings(base))) {return Err(invalid());}
+    }
+    if exposure {
+        for key in ["exposure","offset","gamma"] {
+            if fields.get(key).is_some_and(|value|value.as_f64().is_none_or(|number|!number.is_finite())) {return Err(invalid());}
+        }
     }
     for key in ["level","levels","opacity"] {if fields.get(key).is_some_and(|value|value.as_f64().is_none_or(|n|!n.is_finite())) {return Err(invalid());}}
     if fields.get("__kind").is_some_and(|value|value.as_str()!=command.strip_prefix("image.adjustments.")) {return Err(invalid());}
@@ -173,7 +179,7 @@ mod tests {
                 let doc=app.session.active_mut().unwrap().doc.try_resident_mut().unwrap();
                 doc.mode=mode;doc.depth=sample;
                 doc.layer_mut(layer).unwrap().content=photocraft_doc::LayerContent::Raster(photocraft_raster::Surface::new(photocraft_doc::PixelFormat {mode,sample,alpha:true}));
-                for kind in ["levels","curves"] {
+                for kind in ["levels","curves","exposure"] {
                 let command=format!("image.adjustments.{kind}");
                 let params=photocraft_engine::adjust_params::to_params(&photocraft_engine::adjust_params::default_for(kind,mode).unwrap());
                 let mut fields=params.as_object().unwrap().clone();fields.insert("__command".into(),json!(command));
@@ -228,6 +234,22 @@ mod tests {
     }
     fn filter_params_without_private(fields:&Map<String,Value>)->Value {
         Value::Object(fields.iter().filter(|(key,_)|!key.starts_with("__")).map(|(key,value)|(key.clone(),value.clone())).collect())
+    }
+
+    #[test]
+    fn exposure_scalars_are_bounded_and_smart_filter_params_stay_unchanged() {
+        let mut app=PhotocraftApp::new(photocraft_engine::Session::new(),Default::default());
+        app.session.execute("file.new",json!({"width":2,"height":2})).unwrap();
+        let params=json!({"exposure":1.25,"offset":-0.1,"gamma":1.1});
+        let mut fields=params.as_object().unwrap().clone();fields.insert("__command".into(),json!("image.adjustments.exposure"));
+        fields.insert("__smartFilter".into(),json!({"layer":1,"index":0}));
+        capture_open(&mut app,15,"image.adjustments.exposure");
+        assert_eq!(prepare(&app,15,&fields,params.clone()).unwrap(),params);
+        for key in ["exposure","offset","gamma"] {
+            let mut malformed=fields.clone();malformed.insert(key.into(),json!([1,2]));
+            assert!(validate(&app,15,&malformed).is_err());
+        }
+        fields.insert("unknown".into(),json!(1));assert!(validate(&app,15,&fields).is_err());
     }
 
 }

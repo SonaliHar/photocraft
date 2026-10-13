@@ -1,6 +1,6 @@
 //! Max-union of up to four upstream coverage passes with native wide painting.
 //! Geometry stays the renderer's f32 coverage; native color/alpha equations are
-//! delegated unchanged to the existing checked normal/erase primitives.
+//! delegated to checked normal/erase primitives or explicit native unit blends.
 use super::*;
 use photocraft_raster::{Interrupt, RasterInputError, MAX_CHECKED_RASTER_BYTES};
 use std::mem::size_of;
@@ -54,12 +54,23 @@ impl StrokeRenderer{
         &self,others:&[&Self],pre:&Surface,target:&mut Surface,native_color:&Surface,
         selection:Option<&Surface>,lock_transparency:bool,clip:Option<Rect>,limits:StrokeLimits,control:&Interrupt<'_>,
     )->Result<Rect>{
+        self.try_composite_union_many_wide_with_blend(others,pre,target,native_color,selection,lock_transparency,clip,None,limits,control)
+    }
+    /// Caller explicitly selects a qualified native unit blend. This is not a
+    /// source-operation/profile inference; None retains the existing Normal API.
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_composite_union_many_wide_with_blend(
+        &self,others:&[&Self],pre:&Surface,target:&mut Surface,native_color:&Surface,
+        selection:Option<&Surface>,lock_transparency:bool,clip:Option<Rect>,
+        blend:Option<crate::wide_blend_controlled::NativeUnitBlend>,limits:StrokeLimits,control:&Interrupt<'_>,
+    )->Result<Rect>{
         poll(control)?;let standard=StrokeLimits::default();let format=pre.format();
         if others.len()>3||limits.resident_bytes>MAX_CHECKED_RASTER_BYTES||limits.work_units>standard.work_units{return Err(RasterInputError::LimitExceeded);}
         let brush=&self.ctx.brush;
+        let expected_mode=match blend{None=>BlendMode::Normal,Some(crate::wide_blend_controlled::NativeUnitBlend::Multiply)=>BlendMode::Multiply,Some(crate::wide_blend_controlled::NativeUnitBlend::Screen)=>BlendMode::Screen};
         if !matches!(format.sample,SampleType::U32|SampleType::F64)||!matches!(format.mode,ColorMode::Rgb|ColorMode::Grayscale)
             ||format!=target.format()||format.mode!=native_color.format().mode||format.alpha!=native_color.format().alpha
-            ||self.fmt!=Some(format)||self.per_dab_color||brush.mode!=BlendMode::Normal||(brush.erase&&(!format.alpha||lock_transparency)){
+            ||self.fmt!=Some(format)||self.per_dab_color||brush.mode!=expected_mode||(blend.is_some()&&brush.erase)||(brush.erase&&(!format.alpha||lock_transparency)){
             return Err(RasterInputError::UnsupportedConversion);
         }
         let mut passes=[self;4];for(index,other)in others.iter().enumerate(){*passes.get_mut(index+1).ok_or(RasterInputError::LimitExceeded)?=*other;}
@@ -137,6 +148,7 @@ impl StrokeRenderer{
                     coverage.push(f64::from(value));
                 }}
                 if brush.erase{crate::wide_erase::try_erase_coverage(&mut staged,area,&coverage,f64::from(brush.opacity),selection,false,crate::wide_erase::EraseColorPolicy::Preserve,crate::wide_erase::EraseLimits::default(),control)?;}
+                else if let Some(blend)=blend{crate::wide_blend_controlled::try_apply_unit_blend_coverage(&mut staged,native_color,area,&coverage,f64::from(brush.opacity),selection,lock_transparency,blend,limits,control)?;}
                 else{crate::wide::try_apply_normal_coverage(&mut staged,native_color,area,&coverage,f64::from(brush.opacity),selection,lock_transparency,control)?;}
             }
         }
@@ -176,5 +188,21 @@ mod tests{
         assert!(renderer.try_composite_union_many_wide(&[&renderer,&renderer,&renderer,&renderer],&pre,&mut target,&color,None,false,None,StrokeLimits::default(),&Interrupt::NONE).is_err());
         assert!(renderer.try_composite_union_many_wide(&[],&pre,&mut target,&color,None,false,None,StrokeLimits{resident_bytes:1,..Default::default()},&Interrupt::NONE).is_err());
         assert_eq!(target,pre);
+    }
+    #[test]
+    fn explicit_blend_mapping_and_duplicate_union_keep_opacity_once(){
+        let format=PixelFormat::new(ColorMode::Grayscale,SampleType::F64,true);
+        let pre=Surface::try_with_default_bytes(format,&[0.25_f64,1.0].into_iter().flat_map(f64::to_le_bytes).collect::<Vec<_>>()).unwrap();
+        let color=Surface::try_with_default_bytes(format,&[0.5_f64,1.0].into_iter().flat_map(f64::to_le_bytes).collect::<Vec<_>>()).unwrap();
+        for (mode,blend) in [(BlendMode::Multiply,crate::wide_blend_controlled::NativeUnitBlend::Multiply),(BlendMode::Screen,crate::wide_blend_controlled::NativeUnitBlend::Screen)]{
+            let brush=BrushSettings{mode,size:4.0,pressure_size:false,flow:1.0,opacity:0.5,..Default::default()};
+            let mut renderer=StrokeRenderer::new(&brush,Some(format),1.0);renderer.push(&[StrokePoint::new(2.0,2.0,1.0)]);renderer.finish();
+            let mut single=pre.clone();let mut many=pre.clone();
+            assert!(renderer.try_composite_union_many_wide(&[],&pre,&mut single,&color,None,false,None,StrokeLimits::default(),&Interrupt::NONE).is_err());
+            assert_eq!(single,pre);
+            renderer.try_composite_union_many_wide_with_blend(&[],&pre,&mut single,&color,None,false,None,Some(blend),StrokeLimits::default(),&Interrupt::NONE).unwrap();
+            renderer.try_composite_union_many_wide_with_blend(&[&renderer,&renderer,&renderer],&pre,&mut many,&color,None,false,None,Some(blend),StrokeLimits::default(),&Interrupt::NONE).unwrap();
+            assert_eq!(single,many);assert_ne!(single,pre);
+        }
     }
 }

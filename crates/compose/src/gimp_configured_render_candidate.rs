@@ -3,7 +3,7 @@
 use super::gimp_configured_candidate::{SourceBinding, bind_source_node_with_sample_policy};
 
 #[path = "gimp_configured_native_cells.rs"]
-mod native_cells;
+pub(crate) mod native_cells;
 use photocraft_algo::gimp::configured::{CurveSamplePolicy, Limits, WorkingContext};
 use photocraft_color::{
     ColorMode,

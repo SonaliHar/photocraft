@@ -2,7 +2,7 @@
 //! Transforms are borrowed caller authority, not inferred profile/TRC defaults.
 use super::{
     gimp_configured_candidate::SourceBinding,
-    gimp_configured_render_candidate::{CoveragePolicy, OutputPolicy, RenderedCandidate, render_source_candidate_with_sample_policy},
+    gimp_configured_render_candidate::{CoveragePolicy, OutputPolicy, RenderedCandidate, native_cells::NativeCells, render_source_candidate_with_sample_policy},
 };
 use photocraft_algo::gimp::configured::{CurveSamplePolicy, Limits, WorkingContext};
 use photocraft_cms::{Transform, curve::Curve, pipeline::Stage};
@@ -287,12 +287,10 @@ pub fn render_color_candidate(
     configured.with_prepared(pair.working, Limits { resident_bytes: 65536, work_units: 16384 }, control, |_| Ok(()))?;
     let mut prepaid = Prepaid { bytes: work_charge, work };
     let mut forward = StagedSurfaceBuilder::new(working_format, working_default, roi, &mut prepaid, control)?;
+    let mut source_cells = NativeCells::new(mul(4096, source_format.bytes_per_pixel() as u64)?, control)?;
     cells(roi, |part| {
         poll(control)?;
-        let native = source.try_read_interleaved_with(part, control)?;
-        if native.capacity() as u64 > mul(4096, source_format.bytes_per_pixel() as u64)? {
-            return Err(RasterInputError::LimitExceeded);
-        }
+        let native = source_cells.read(source, part, control)?;
         let len = (native.len() / source_format.bytes_per_pixel()).checked_mul(working_format.bytes_per_pixel()).ok_or(RasterInputError::LimitExceeded)?;
         let mut encoded = scratch(len, mul(4096, working_format.bytes_per_pixel() as u64)?, control)?;
         for (src, dst) in native.chunks_exact(source_format.bytes_per_pixel()).zip(encoded.chunks_exact_mut(working_format.bytes_per_pixel())) {
@@ -325,6 +323,7 @@ pub fn render_color_candidate(
         forward.push_region(part, &encoded, &mut prepaid, control)
     })?;
     let (working, ()) = forward.finalize(&mut prepaid, control)?.into_parts();
+    drop(source_cells);
     let lossless = Policy { domain: Domain::FloatHdr, unit_overflow: UnitOverflow::Reject, rounding: Rounding::Exact };
     let evaluated = render_source_candidate_with_sample_policy(
         node,
@@ -341,15 +340,12 @@ pub fn render_color_candidate(
     drop(working);
     let mut prepaid = Prepaid { bytes: native_charge, work };
     let mut result = StagedSurfaceBuilder::new(source_format, source.default_bytes(), roi, &mut prepaid, control)?;
+    let mut filtered_cells = NativeCells::new(mul(4096, working_format.bytes_per_pixel() as u64)?, control)?;
+    let mut source_cells = NativeCells::new(mul(4096, source_format.bytes_per_pixel() as u64)?, control)?;
     cells(roi, |part| {
         poll(control)?;
-        let filtered = evaluated.surface.try_read_interleaved_with(part, control)?;
-        let mut native = source.try_read_interleaved_with(part, control)?;
-        if filtered.capacity() as u64 > mul(4096, working_format.bytes_per_pixel() as u64)?
-            || native.capacity() as u64 > mul(4096, source_format.bytes_per_pixel() as u64)?
-        {
-            return Err(RasterInputError::LimitExceeded);
-        }
+        let filtered = filtered_cells.read(&evaluated.surface, part, control)?;
+        let native = source_cells.read(source, part, control)?;
         for (src, dst) in filtered.chunks_exact(working_format.bytes_per_pixel()).zip(native.chunks_exact_mut(source_format.bytes_per_pixel())) {
             poll(control)?;
             let mut input = [0.0; 3];
@@ -378,7 +374,7 @@ pub fn render_color_candidate(
                 .map_err(|_| RasterInputError::InvalidSample)?;
             }
         }
-        result.push_region(part, &native, &mut prepaid, control)
+        result.push_region(part, native, &mut prepaid, control)
     })?;
     let (surface, ()) = result.finalize(&mut prepaid, control)?.into_parts();
     poll(control)?;

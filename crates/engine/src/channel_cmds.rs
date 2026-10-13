@@ -1642,6 +1642,12 @@ pub fn raw_save_storage_hints(document:&crate::DocumentSnapshot,control:&photocr
     load_selection_controlled::canonical_selection_storage::save_hints(document,control)
 }
 
+/// Once-per-dialog metadata hint for explicit ordinary New Channel raw selection storage.
+/// This allocates no identity and reads no samples; full frozen command admission still applies.
+pub fn raw_new_selection_storage_hint(document:&crate::DocumentSnapshot,control:&photocraft_raster::Interrupt<'_>)->Result<bool> {
+    load_selection_controlled::canonical_selection_storage::new_hint(document,control)
+}
+
 pub(crate) fn load_selection_dispatch_preflight(s: &Session, p: &Value, background: bool) -> Result<()> {
     load_selection_controlled::dispatch_preflight(s, p, background)
 }

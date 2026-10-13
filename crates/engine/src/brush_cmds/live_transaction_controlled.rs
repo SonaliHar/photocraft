@@ -100,7 +100,7 @@ pub(crate) fn push_transaction(
     let cmd=budget.string(&live.cmd)?;let params=budget.json(&live.params)?;let cloned_points=budget.copy(&live.points)?;
     let symmetry=budget.symmetry(live.symmetry.as_ref())?;let distinct=budget.copy(&live.mirror_distinct)?;
     let pre=budget.surface(&live.pre)?;let sel=live.sel.as_ref().map(|surface|budget.surface(surface)).transpose()?;
-    let wide=live.wide.as_ref().map(|wide|->Result<_>{Ok(WideStroke{color:budget.surface(&wide.color)?,clip:wide.clip,budget:wide.budget.clone()})}).transpose()?;
+    let wide=live.wide.as_ref().map(|wide|->Result<_>{Ok(WideStroke{blend:wide.blend,color:budget.surface(&wide.color)?,clip:wide.clip,budget:wide.budget.clone()})}).transpose()?;
     let painter_limits=StrokeLimits{resident_bytes:add(painter.retained_bytes,painter.staged_bytes)?,work_units:painter.work_units};
     let cloned=clone_incremental_state_with_interrupt(&live.renderer,&live.mirrors,live.union_live.as_ref().map(|(union,_)|union),painter_limits,control).map_err(paint)?;
     let union_live=cloned.union.map(|union|(union,live.union_live.as_ref().map_or(0,|(_,count)|*count)));

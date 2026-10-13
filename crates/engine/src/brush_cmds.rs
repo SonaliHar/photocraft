@@ -252,6 +252,7 @@ fn erase_locked(brush: &mut BrushSettings, lock: bool, bg: [f32; 4]) {
 
 #[derive(Clone)]
 struct WideStroke {
+    blend: Option<photocraft_paint::wide_blend_controlled::NativeUnitBlend>,
     color: Surface,
     clip: Option<Rect>,
     budget: WideStrokeBudget,
@@ -326,9 +327,25 @@ fn wide_stroke_context(
     if !matches!(format.sample, SampleType::U32 | SampleType::F64) {
         return Ok(None);
     }
+    let blend = match brush.mode {
+        photocraft_color::BlendMode::Normal => None,
+        photocraft_color::BlendMode::Multiply => Some(photocraft_paint::wide_blend_controlled::NativeUnitBlend::Multiply),
+        photocraft_color::BlendMode::Screen => Some(photocraft_paint::wide_blend_controlled::NativeUnitBlend::Screen),
+        _ => return Err(bad("paint.stroke", "this native stroke blend mode is unsupported")),
+    };
+    if blend.is_some() {
+        if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels
+            || doc.xcf_state.is_some() || doc.source_color_context.is_some() || doc.color_table.is_some() {
+            return Err(bad("paint.stroke", "native Multiply/Screen requires a plain pixel target with explicit Linear working context"));
+        }
+        let current = layer.and_then(|id| doc.layer(id)).ok_or_else(|| bad("paint.stroke", "native blend pixel owner is missing"))?;
+        if !matches!(current.content, LayerContent::Raster(_)) || current.indexed_source.is_some() || current.video.is_some() || current.import_compositing.is_some() {
+            return Err(bad("paint.stroke", "native blend source carrier is unsupported"));
+        }
+        crate::native_linear_context::validate(doc, &photocraft_raster::Interrupt::NONE).map_err(|message| bad("paint.stroke", message))?;
+    }
     if restricted_color
         || auto_erase
-        || brush.mode != photocraft_color::BlendMode::Normal
         || brush.color_dynamics.enabled
         || !matches!(format.mode, ColorMode::Rgb | ColorMode::Grayscale)
         || (brush.erase && (!format.alpha || lock))
@@ -350,7 +367,7 @@ fn wide_stroke_context(
         encoded.get(..float_format.bytes_per_pixel()).ok_or_else(|| bad("paint.stroke", "invalid native pixel size"))?,
     )
     .map_err(|e| bad("paint.stroke", e.to_string()))?;
-    Ok(Some(WideStroke { color, clip, budget: WideStrokeBudget::default() }))
+    Ok(Some(WideStroke { blend, color, clip, budget: WideStrokeBudget::default() }))
 }
 
 /// Canonical finite extent for a layer, mask or channel; temporary targets have no imported extent.
@@ -490,8 +507,8 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
                 let mut references = Vec::new();
                 references.try_reserve_exact(mirrors.len()).map_err(|_| bad(cmd, "mirror references allocation"))?;
                 references.extend(mirrors.iter());
-                let damage = renderer.try_composite_union_many_wide(
-                    &references, &pre, surf, &wide.color, sel.as_ref(), lock, wide.clip,
+                let damage = renderer.try_composite_union_many_wide_with_blend(
+                    &references, &pre, surf, &wide.color, sel.as_ref(), lock, wide.clip, wide.blend,
                     photocraft_paint::stroke_controlled::StrokeLimits::default(), &photocraft_raster::Interrupt::NONE,
                 );
                 return damage.map_err(|e| bad("paint.stroke", e.to_string()));
@@ -852,8 +869,8 @@ impl LiveStroke {
                 let mut mirrors = Vec::new();
                 mirrors.try_reserve_exact(preview.mirrors.len()).map_err(|_| bad(&self.cmd, "mirror references allocation"))?;
                 mirrors.extend(preview.mirrors.iter().zip(&self.mirror_distinct).filter(|(_, distinct)| **distinct).map(|(mirror, _)| mirror));
-                let damage = preview.renderer.try_composite_union_many_wide(
-                    &mirrors, &self.pre, surf, &wide.color, self.sel.as_ref(), self.lock, wide.clip, limits, control,
+                let damage = preview.renderer.try_composite_union_many_wide_with_blend(
+                    &mirrors, &self.pre, surf, &wide.color, self.sel.as_ref(), self.lock, wide.clip, wide.blend, limits, control,
                 ).map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;
                 let old = std::mem::replace(&mut self.tail, damage);
                 return Ok(old.union(&damage));

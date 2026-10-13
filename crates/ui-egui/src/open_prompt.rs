@@ -223,7 +223,7 @@ pub fn answer(app: &mut PhotocraftApp, action: Option<&str>) -> Result<Value, St
             None => String::new(),
         };
         app.run("file.open.discardPending", json!({}))?;
-        app.held_opens.clear();
+        drop(std::mem::take(&mut app.held_opens));
         for open in &app.jobs.opens {
             app.session.cancel_job(open.job);
         }

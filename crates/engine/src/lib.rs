@@ -87,6 +87,9 @@ mod native_raster_threshold_controlled;
 mod native_raster_posterize_controlled;
 mod native_raster_levels_controlled;
 mod native_raster_curves_controlled;
+mod native_raster_exposure_controlled;
+mod native_linear_context;
+mod native_adjustment_alpha;
 mod native_tone_lut;
 mod native_gray_levels_controlled;
 mod native_gray_curves_controlled;
@@ -848,7 +851,7 @@ impl Session {
     /// Cancel private pending imports; existing document tabs/history are untouched.
     pub fn discard_held_opens(&mut self) -> usize {
         let count = self.held_opens.len();
-        self.held_opens.clear();
+        drop(std::mem::take(&mut self.held_opens));
         count
     }
 

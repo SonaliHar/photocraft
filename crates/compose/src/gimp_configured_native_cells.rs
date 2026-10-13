@@ -3,7 +3,7 @@
 use photocraft_geom::Rect;
 use photocraft_raster::{Interrupt, MAX_CHECKED_RASTER_BYTES, RasterInputError, Surface, checked_region_byte_len};
 
-pub(super) struct NativeCells {
+pub(crate) struct NativeCells {
     bytes: Vec<u8>,
     envelope: usize,
 }
@@ -11,7 +11,7 @@ fn poll(control: &Interrupt<'_>) -> Result<(), RasterInputError> {
     control.check().map_err(|_| RasterInputError::Cancelled)
 }
 impl NativeCells {
-    pub(super) fn new(envelope: u64, control: &Interrupt<'_>) -> Result<Self, RasterInputError> {
+    pub(crate) fn new(envelope: u64, control: &Interrupt<'_>) -> Result<Self, RasterInputError> {
         poll(control)?;
         if envelope == 0 || envelope > MAX_CHECKED_RASTER_BYTES {
             return Err(RasterInputError::LimitExceeded);
@@ -26,7 +26,7 @@ impl NativeCells {
         poll(control)?;
         Ok(Self { bytes, envelope })
     }
-    pub(super) fn read<'a>(&'a mut self, source: &Surface, cell: Rect, control: &Interrupt<'_>) -> Result<&'a mut [u8], RasterInputError> {
+    pub(crate) fn read<'a>(&'a mut self, source: &Surface, cell: Rect, control: &Interrupt<'_>) -> Result<&'a mut [u8], RasterInputError> {
         poll(control)?;
         let length = checked_region_byte_len(cell, source.format())?;
         if length > self.envelope || length > self.bytes.capacity() {

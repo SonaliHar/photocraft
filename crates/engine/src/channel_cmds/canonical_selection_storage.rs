@@ -344,6 +344,297 @@ impl SaveProof {
     }
 }
 
+fn new_error(error: EngineError) -> EngineError {
+    match error {
+        EngineError::BadParams { msg, .. } => EngineError::BadParams { cmd: "channel.new".into(), msg },
+        other => other,
+    }
+}
+#[derive(Clone, Copy)]
+pub(in crate::channel_cmds) struct NewProof {
+    document: photocraft_doc::DocId,
+    source: ChannelId,
+    bounds: Rect,
+    format: PixelFormat,
+}
+fn channel_namespace(doc: &Document, ctl: &Interrupt<'_>) -> Result<std::collections::HashSet<ChannelId>> {
+    let state = doc.xcf_state.as_ref().ok_or_else(|| bad("missing canonical channel namespace"))?;
+    let mut visits = doc
+        .channels
+        .len()
+        .checked_add(state.items.len())
+        .and_then(|n| n.checked_add(state.source_items.len()))
+        .and_then(|n| n.checked_add(state.filter_stacks.len()))
+        .and_then(|n| n.checked_add(state.item_sets.len()))
+        .and_then(|n| n.checked_add(state.opaque.len()))
+        .and_then(|n| n.checked_add(state.selection.selected.len()))
+        .and_then(|n| n.checked_add(state.selection.selected_paths.len()))
+        .filter(|n| *n <= 100000)
+        .ok_or_else(|| bad("channel namespace container limit"))?;
+    let mut identities = std::collections::HashSet::new();
+    identities.try_reserve(10000).map_err(|_| EngineError::Other("channel.new: channel namespace allocation failed".into()))?;
+    let mut record = |visits: &mut usize, reference: ItemRef| -> Result<()> {
+        poll(ctl)?;
+        *visits = visits.checked_add(1).filter(|n| *n <= 100000).ok_or_else(|| bad("channel namespace work limit"))?;
+        if let ItemRef::Channel(id) = reference {
+            if id.0 == 0 {
+                return Err(bad("zero canonical channel reference"));
+            }
+            if !identities.contains(&id) && identities.len() >= 10000 {
+                return Err(bad("channel namespace identity limit"));
+            }
+            identities.insert(id);
+        }
+        Ok(())
+    };
+    for channel in &doc.channels {
+        record(&mut visits, ItemRef::Channel(channel.id))?;
+    }
+    if let Some(id) = doc.selection_channel_id {
+        record(&mut visits, ItemRef::Channel(id))?;
+    }
+    if let Some(channel) = &doc.quick_mask {
+        record(&mut visits, ItemRef::Channel(channel.id))?;
+    }
+    for metadata in &state.items {
+        record(&mut visits, metadata.item)?;
+    }
+    for source in &state.source_items {
+        record(&mut visits, source.owner)?;
+    }
+    for stack in &state.filter_stacks {
+        record(&mut visits, stack.owner)?;
+        visits = visits.checked_add(stack.nodes.len()).filter(|n| *n <= 100000).ok_or_else(|| bad("channel namespace node limit"))?;
+        for node in &stack.nodes {
+            poll(ctl)?;
+            if let Some(mask) = node.mask {
+                record(&mut visits, mask)?;
+            }
+            for (_, reference) in &node.auxiliary {
+                record(&mut visits, *reference)?;
+            }
+        }
+    }
+    for set in &state.item_sets {
+        poll(ctl)?;
+        for reference in &set.members {
+            record(&mut visits, *reference)?;
+        }
+    }
+    for reference in state.selection.selected.iter().chain(&state.selection.selected_paths) {
+        record(&mut visits, *reference)?;
+    }
+    for reference in [state.selection.active, state.selection.mask_target].into_iter().flatten() {
+        record(&mut visits, reference)?;
+    }
+    if let Some(floating) = &state.floating {
+        record(&mut visits, ItemRef::Layer(floating.layer))?;
+        record(&mut visits, floating.target)?;
+    }
+    for opaque in &state.opaque {
+        poll(ctl)?;
+        if let Some(owner) = opaque.owner {
+            record(&mut visits, owner)?;
+        }
+    }
+    poll(ctl)?;
+    Ok(identities)
+}
+pub(in crate::channel_cmds) fn prepare_new(doc: &Document, ctl: &Interrupt<'_>) -> Result<NewProof> {
+    (|| {
+        poll(ctl)?;
+        if doc.channels.len() >= 10000 || doc.mode == ColorMode::Indexed || doc.color_table.is_some() {
+            return Err(bad("raw canonical new channel context/count limit"));
+        }
+        let id = doc.selection_channel_id.ok_or_else(|| bad("raw canonical New needs a current selection identity"))?;
+        if doc.quick_mask.as_ref().is_some_and(|channel| channel.id == id) {
+            return Err(bad("selection identity aliases Quick Mask"));
+        }
+        for channel in &doc.channels {
+            poll(ctl)?;
+            if channel.id == id {
+                return Err(bad("selection identity aliases saved channel"));
+            }
+        }
+        let selection = doc.selection.as_ref().ok_or_else(|| bad("raw canonical New needs stored selection"))?;
+        let format = selection.format();
+        if format.mode != ColorMode::Grayscale || format.alpha || format.sample != doc.depth {
+            return Err(bad("raw canonical New Gray depth mismatch"));
+        }
+        let source = item(doc, id, false, ctl)?;
+        let bounds = source.raster_bounds.ok_or_else(|| bad("missing selection extent"))?;
+        if channel_namespace(doc, ctl)?.len() >= 10000 {
+            return Err(bad("new channel namespace headroom"));
+        }
+        let state = doc.xcf_state.as_ref().ok_or_else(|| bad("missing canonical New state"))?;
+        state
+            .items
+            .len()
+            .checked_add(state.source_items.len())
+            .and_then(|n| n.checked_add(state.filter_stacks.len()))
+            .and_then(|n| n.checked_add(state.filter_masks.len()))
+            .and_then(|n| n.checked_add(state.opaque.len()))
+            .and_then(|n| n.checked_add(1))
+            .filter(|n| *n <= 100000)
+            .ok_or_else(|| bad("new canonical item headroom"))?;
+        doc.validate_xcf_state_with(ctl).map_err(|e| if ctl.cancelled() { EngineError::Cancelled } else { EngineError::Other(e.to_string()) })?;
+        poll(ctl)?;
+        Ok(NewProof { document: doc.id, source: id, bounds, format })
+    })()
+    .map_err(new_error)
+}
+impl NewProof {
+    pub(in crate::channel_cmds) fn check_copy(&self, doc: &DocumentSnapshot, surface: &Surface, format: PixelFormat, ctl: &Interrupt<'_>) -> Result<()> {
+        (|| {
+            poll(ctl)?;
+            if doc.id != self.document
+                || doc.selection_channel_id != Some(self.source)
+                || format != self.format
+                || !doc.selection.as_ref().is_some_and(|stored| std::ptr::eq(stored, surface))
+            {
+                return Err(bad("canonical New proof source mismatch"));
+            }
+            poll(ctl)
+        })()
+        .map_err(new_error)
+    }
+    pub(in crate::channel_cmds) fn fresh_id(&self, doc: &Document, ctl: &Interrupt<'_>) -> Result<ChannelId> {
+        (|| {
+            poll(ctl)?;
+            if doc.id != self.document {
+                return Err(bad("canonical New identity document mismatch"));
+            }
+            let occupied = channel_namespace(doc, ctl)?;
+            for _ in 0..occupied.len() + 4 {
+                poll(ctl)?;
+                let id = ChannelId::fresh();
+                if id.0 != 0 && !occupied.contains(&id) {
+                    return Ok(id);
+                }
+            }
+            Err(bad("canonical new channel identity exhausted"))
+        })()
+        .map_err(new_error)
+    }
+    /// Reserves all new containers/name privately, then appends only a fresh ordinary item.
+    pub(in crate::channel_cmds) fn install(self, doc: &mut Document, channel: photocraft_doc::AlphaChannel, ctl: &Interrupt<'_>) -> Result<usize> {
+        (|| {
+            poll(ctl)?;
+            if doc.id != self.document
+                || doc.selection_channel_id != Some(self.source)
+                || channel.surface.format() != self.format
+                || channel.spot.is_some()
+                || channel.name.len() > 2048
+            {
+                return Err(bad("canonical New publication mismatch"));
+            }
+            let source = item(doc, self.source, false, ctl)?;
+            if source.raster_bounds != Some(self.bounds) {
+                return Err(bad("selection geometry changed before New publication"));
+            }
+            if channel_namespace(doc, ctl)?.contains(&channel.id) {
+                return Err(bad("new channel identity collision"));
+            }
+            let mut name = String::new();
+            name.try_reserve_exact(channel.name.len()).map_err(|_| bad("new channel metadata name allocation"))?;
+            name.push_str(&channel.name);
+            let metadata = ItemState {
+                item: ItemRef::Channel(channel.id),
+                name,
+                custom_name: true,
+                visible: false,
+                locks: Default::default(),
+                parent: None,
+                source_tattoo: None,
+                source_flags: 0,
+                raster_bounds: Some(self.bounds),
+                mask: None,
+                composition: None,
+            };
+            doc.channels.try_reserve_exact(1).map_err(|_| bad("new channel allocation"))?;
+            let state = doc.xcf_state.as_mut().ok_or_else(|| bad("new channel canonical state disappeared"))?;
+            state.items.try_reserve_exact(1).map_err(|_| bad("new channel metadata allocation"))?;
+            poll(ctl)?;
+            let index = doc.channels.len();
+            state.items.push(metadata);
+            doc.channels.push(channel);
+            poll(ctl)?;
+            Ok(index)
+        })()
+        .map_err(new_error)
+    }
+}
+
+/// A once-per-dialog metadata hint, not source/storage validation or a new ID allocation.
+pub(in crate::channel_cmds) fn new_hint(doc: &DocumentSnapshot, ctl: &Interrupt<'_>) -> Result<bool> {
+    (|| {
+        poll(ctl)?;
+        if doc.channels.len() >= 10000 || doc.accounted().is_some() || doc.mode == ColorMode::Indexed || doc.color_table.is_some() {
+            return Ok(false);
+        }
+        let Some(selection) = &doc.selection else { return Ok(false) };
+        let format = selection.format();
+        if format.mode != ColorMode::Grayscale || format.alpha || format.sample != doc.depth {
+            return Ok(false);
+        }
+        // Mirrors the existing creation context and conservatively excludes resident-ineligible owners.
+        match photocraft_doc::resident_structure::visit_layers_with(doc, ctl, |layer| {
+            if layer.indexed_source.is_some() || matches!(layer.content, photocraft_doc::LayerContent::BackedRaster(_)) {
+                return Err(photocraft_raster::RasterInputError::UnsupportedConversion);
+            }
+            Ok(true)
+        }) {
+            Ok(()) => {}
+            Err(photocraft_raster::RasterInputError::Cancelled) => return Err(EngineError::Cancelled),
+            Err(photocraft_raster::RasterInputError::AllocationFailed) => {
+                return Err(EngineError::Other("channel.new: raw storage hint allocation failed".into()));
+            }
+            Err(_) => return Ok(false),
+        }
+        let Some(state) = &doc.xcf_state else {
+            poll(ctl)?;
+            return Ok(doc.source_color_context.is_none() && doc.selection_channel_id.is_none());
+        };
+        let Some(id) = doc.selection_channel_id else { return Ok(false) };
+        if id.0 == 0 || state.floating.is_some() || doc.quick_mask.as_ref().is_some_and(|channel| channel.id == id) {
+            return Ok(false);
+        }
+        for channel in &doc.channels {
+            poll(ctl)?;
+            if channel.id == id {
+                return Ok(false);
+            }
+        }
+        if state
+            .items
+            .len()
+            .checked_add(state.source_items.len())
+            .and_then(|n| n.checked_add(state.filter_stacks.len()))
+            .and_then(|n| n.checked_add(state.filter_masks.len()))
+            .and_then(|n| n.checked_add(state.opaque.len()))
+            .and_then(|n| n.checked_add(1))
+            .is_none_or(|n| n > 100000)
+        {
+            return Ok(false);
+        }
+        // Read-only owner predicates do not treat selection content/position locks as a write grant.
+        match item(doc, id, false, ctl) {
+            Ok(_) => {}
+            Err(EngineError::Cancelled) => return Err(EngineError::Cancelled),
+            Err(_) => return Ok(false),
+        }
+        let occupied = match channel_namespace(doc, ctl) {
+            Ok(ids) => ids,
+            Err(EngineError::Cancelled) => return Err(EngineError::Cancelled),
+            Err(error @ EngineError::Other(_)) => return Err(error),
+            Err(_) => return Ok(false),
+        };
+        poll(ctl)?;
+        Ok(occupied.len() < 10000)
+    })()
+    .map_err(new_error)
+}
+
 /// Metadata-only, same-document presentation hints. Never scans/hash/renders sample storage.
 /// This is deliberately conservative and does not replace `prepare` at dispatch/commit.
 pub(in crate::channel_cmds) fn hints(doc: &DocumentSnapshot, ctl: &Interrupt<'_>) -> Result<Vec<ChannelId>> {
@@ -606,5 +897,31 @@ mod tests {
         let snapshot = DocumentSnapshot::from_resident(std::sync::Arc::new(doc)).unwrap();
         assert!(save_hints(&snapshot, &Interrupt::NONE).unwrap().is_empty());
         assert!(matches!(save_hints(&snapshot, &Interrupt::cancel_only(&|| true)), Err(EngineError::Cancelled)));
+    }
+
+    #[test]
+    fn canonical_new_is_fresh_ordinary_metadata_and_preserves_existing_state() {
+        let (mut doc, _) = fixture();
+        let old = doc.xcf_state.clone().unwrap();
+        let proof = prepare_new(&doc, &Interrupt::NONE).unwrap();
+        let id = proof.fresh_id(&doc, &Interrupt::NONE).unwrap();
+        let mut channel = AlphaChannel::new("Independent new", doc.selection.clone().unwrap());
+        channel.id = id;
+        let index = proof.install(&mut doc, channel, &Interrupt::NONE).unwrap();
+        assert_eq!(doc.channels[index].id, id);
+        let state = doc.xcf_state.as_ref().unwrap();
+        assert_eq!(&state.items[..old.items.len()], old.items.as_slice());
+        let created = state.items.last().unwrap();
+        assert_eq!(created.item, ItemRef::Channel(id));
+        assert_eq!(created.name, "Independent new");
+        assert_eq!(created.raster_bounds, Some(doc.bounds()));
+        assert!(created.source_tattoo.is_none());
+        assert_eq!(created.source_flags, 0);
+        assert_eq!(created.locks, Default::default());
+        assert!(created.parent.is_none() && created.mask.is_none() && created.composition.is_none());
+        assert_eq!(state.provenance, old.provenance);
+        assert_eq!(state.item_sets, old.item_sets);
+        assert_eq!(state.selection, old.selection);
+        assert!(matches!(prepare_new(&doc, &Interrupt::cancel_only(&|| true)), Err(EngineError::Cancelled)));
     }
 }

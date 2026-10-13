@@ -109,9 +109,10 @@ fn prepare(doc:&Document,r:&Request,c:&Interrupt<'_>)->Result<Option<Surface>>{
             let selection=doc.selection.as_ref();let fraction=if fmt.sample==SampleType::U32{Some(ratio(selection,x,y)?)}else{None};
             let weight=if fmt.sample==SampleType::F64{let selected=if let Some(s)=selection{let mut value=[0f64];s.try_read_pixel_f64(x,y,&mut value).map_err(|e|error(c,e))?;value[0]}else{1.0};if !selected.is_finite()||!(0.0..=1.0).contains(&selected){return Err(bad("selection is not finite unit"));}selected*r.opacity}else{1.0};
             if weight==0.0||fraction.is_some_and(|(num,_)|num==0){continue;}
+            if crate::native_adjustment_alpha::skips(pixel,fmt).map_err(bad)?{continue;}
             let threshold_integer=if fmt.sample==SampleType::U32{Some(threshold_u32(pixel,colors,r.level)?)}else{None};
             let threshold_float=if fmt.sample==SampleType::F64{Some(threshold_f64(pixel,colors,r.level)?)}else{None};
-            // Alpha is never decoded, validated as coverage, or rewritten.
+            // Alpha is only read by the raw nonpositive skip gate; never rewritten.
             for color in 0..colors{
                 let start=color.checked_mul(fmt.sample.bytes()).ok_or_else(||bad("color offset"))?;let end=start.checked_add(fmt.sample.bytes()).ok_or_else(||bad("color offset"))?;let sample=pixel.get_mut(start..end).ok_or_else(||bad("color sample width"))?;
                 match fmt.sample{

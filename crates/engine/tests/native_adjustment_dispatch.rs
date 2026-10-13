@@ -70,3 +70,56 @@ fn destructive_noop_and_stale_capture_keep_real_redo_and_layer_count(){
         let st=session.active().unwrap();assert!(st.doc.shares_state(&before));assert_eq!(st.revision,revision);assert!(st.history.can_redo());assert_eq!(raw(&session,id),bytes);
     }
 }
+
+fn hidden_fixture(sample:SampleType,hidden_alpha:u64,hidden_nonfinite:bool,edges_visible:bool)->(Session,LayerId,Vec<u8>){
+    let mut doc=Document::new("Hidden native adjustment words",Size::new(3,1),ColorMode::Rgb,sample);
+    doc.sample_encoding=Some(photocraft_doc::SampleEncoding::Linear);doc.icc_profile=Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes());
+    let mut bytes=Vec::new();
+    for index in 0..3{
+        if sample==SampleType::F64{
+            let colors=if index==1&&hidden_nonfinite{[0x7ff8_0000_0000_0073u64,f64::INFINITY.to_bits(),(-0.0f64).to_bits()]}else{[0.25f64.to_bits(),0.5f64.to_bits(),0.75f64.to_bits()]};
+            for word in colors{bytes.extend_from_slice(&word.to_ne_bytes());}
+            let alpha=if index==1{hidden_alpha}else if edges_visible{1.0f64.to_bits()}else{0.0f64.to_bits()};bytes.extend_from_slice(&alpha.to_ne_bytes());
+        }else{
+            for word in [u32::MAX/4,u32::MAX/2,u32::MAX-1]{bytes.extend_from_slice(&word.to_ne_bytes());}
+            let alpha=if index==1{hidden_alpha as u32}else if edges_visible{u32::MAX}else{0};bytes.extend_from_slice(&alpha.to_ne_bytes());
+        }
+    }
+    let mut layer=Layer::raster("Pixels",doc.pixel_format());let id=layer.id;layer.content=LayerContent::Raster(Surface::try_from_interleaved_with(doc.pixel_format(),Rect::new(0,0,3,1),&bytes,&Interrupt::NONE).unwrap());doc.layers.push(layer);
+    let mut session=Session::new();session.add_document(doc,None).unwrap();(session,id,bytes)
+}
+fn native_cases()->[(&'static str,Value);6]{[("invert",json!({})),("threshold",json!({"level":128})),("posterize",json!({"levels":4})),("levels",json!({"outWhite":128})),("curves",json!({"points":[[0,255],[255,0]]})),("exposure",json!({"exposure":1}))]}
+#[test]
+fn registered_native_adjustments_skip_hidden_color_words_inside_visible_extent(){
+    for sample in [SampleType::U32,SampleType::F64]{for(kind,params)in native_cases(){
+        let alpha=if sample==SampleType::F64{(-0.0f64).to_bits()}else{0};
+        let(mut session,id,before)=hidden_fixture(sample,alpha,true,true);let steps=session.active().unwrap().history.past_len();
+        session.execute(&format!("image.adjustments.{kind}"),params).unwrap();
+        let source=session.active().unwrap().doc.layer(id).unwrap().surface().unwrap();let after=source.to_interleaved(Rect::new(0,0,3,1));let bpp=source.format().bytes_per_pixel();
+        assert_eq!(after.get(bpp..2*bpp),before.get(bpp..2*bpp),"{kind}/{sample:?}: complete hidden native pixel remains raw");
+        assert_ne!(after.get(..bpp),before.get(..bpp),"visible neighbors still transform");
+        assert_eq!(session.active().unwrap().history.past_len(),steps+1);
+    }}
+}
+#[test]
+fn registered_native_adjustments_do_not_treat_nan_alpha_as_transparent(){
+    let alpha=0x7ff8_0000_0000_0042u64;
+    for(kind,params)in native_cases(){
+        let(mut session,id,before)=hidden_fixture(SampleType::F64,alpha,false,true);
+        session.execute(&format!("image.adjustments.{kind}"),params).unwrap();
+        let after=session.active().unwrap().doc.layer(id).unwrap().surface().unwrap().to_interleaved(Rect::new(0,0,3,1));
+        assert_ne!(after.get(32..56),before.get(32..56),"{kind}: NaN <=0 is false, finite colors transform");
+        assert_eq!(after.get(56..64),before.get(56..64),"NaN alpha payload remains raw");
+    }
+}
+#[test]
+fn hidden_only_registered_native_noops_keep_real_redo(){
+    for(kind,params)in native_cases(){
+        let(mut session,id,before_bytes)=hidden_fixture(SampleType::F64,(-0.0f64).to_bits(),true,false);
+        session.edit("Seed",|doc,_|{doc.name="Seed".into();Ok(())}).unwrap();session.execute("edit.undo",Value::Null).unwrap();
+        let before=session.active().unwrap().doc.clone();let revision=session.active().unwrap().revision;
+        session.execute(&format!("image.adjustments.{kind}"),params).unwrap();
+        let state=session.active().unwrap();assert!(state.doc.shares_state(&before),"{kind}");assert_eq!(state.revision,revision);assert!(state.history.can_redo());
+        assert_eq!(state.doc.layer(id).unwrap().surface().unwrap().to_interleaved(Rect::new(0,0,3,1)),before_bytes);
+    }
+}

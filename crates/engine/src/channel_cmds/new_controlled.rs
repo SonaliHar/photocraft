@@ -1,4 +1,5 @@
 //! Controlled creation of ordinary saved coverage channels. No source admission.
+use super::load_selection_controlled::canonical_selection_storage;
 use super::{ChannelTarget, bad, channel_format, indicates_param, target, touch};
 use crate::{EngineError, Result, Session};
 use photocraft_color::{Color, ColorMode, SampleType};
@@ -141,10 +142,10 @@ pub(super) fn dispatch_preflight(session: &Session, params: &Value, spot: bool) 
     }
     if state.doc.channels.len() >= 10000
         || state.doc.accounted().is_some()
-        || state.doc.xcf_state.is_some()
+        || (state.doc.xcf_state.is_some() && !config.raw_storage)
         || state.doc.mode == ColorMode::Indexed
         || state.doc.color_table.is_some()
-        || state.doc.source_color_context.is_some()
+        || (state.doc.source_color_context.is_some() && (!config.raw_storage || state.doc.xcf_state.is_none()))
     {
         return Err(bad(cmd(spot), "channel creation requires ordinary current resident context"));
     }
@@ -183,6 +184,9 @@ pub(super) fn dispatch_preflight(session: &Session, params: &Value, spot: bool) 
         }
     }
     if config.raw_storage {
+        if state.doc.xcf_state.is_some() {
+            canonical_selection_storage::prepare_new(&state.doc, &Interrupt::NONE)?;
+        }
         let selection = state.doc.selection.as_ref().ok_or_else(|| bad(cmd(spot), "rawStorage requires a stored selection"))?;
         if selection.format() != channel_format(&state.doc) {
             return Err(bad(cmd(spot), "rawStorage requires identical Gray depth without alpha"));
@@ -381,15 +385,20 @@ pub(super) fn run(session: &mut Session, params: &Value, spot: bool) -> Result<V
         move |ctx| {
             ctx.stage(0., 0.95, label, |control| {
                 admission(&worker, spot, control)?;
+                let proof =
+                    if config.raw_storage && worker.xcf_state.is_some() { Some(canonical_selection_storage::prepare_new(&worker, control)?) } else { None };
                 let channel_name = name(&worker, explicit.as_deref(), spot, control)?;
-                let channel_surface = if config.raw_storage {
+                let channel_surface = if let Some(proof) = &proof {
+                    let selection = worker.selection.as_ref().ok_or_else(|| bad(cmd(spot), "canonical New source selection disappeared"))?;
+                    super::selection_storage_controlled::copy_canonical_new(&worker, selection, channel_format(&worker), proof, cmd(spot), control)?
+                } else if config.raw_storage {
                     let selection = worker.selection.as_ref().ok_or_else(|| bad(cmd(spot), "rawStorage selection disappeared"))?;
                     super::selection_storage_controlled::copy(&worker, &worker, selection, channel_format(&worker), cmd(spot), control)?
                 } else {
                     surface(&worker, config, spot, control)?
                 };
                 let mut channel = AlphaChannel::new(channel_name, channel_surface);
-                channel.id = fresh(&worker, spot, control)?;
+                channel.id = if let Some(proof) = &proof { proof.fresh_id(&worker, control)? } else { fresh(&worker, spot, control)? };
                 if spot {
                     channel.spot = Some((config.color, config.solidity));
                 } else {
@@ -402,10 +411,10 @@ pub(super) fn run(session: &mut Session, params: &Value, spot: bool) -> Result<V
                     }
                 }
                 poll(control)?;
-                Ok((channel, ctx.clone()))
+                Ok((channel, proof, ctx.clone()))
             })
         },
-        move |session, (channel, ctx)| {
+        move |session, (channel, proof, ctx)| {
             ctx.stage(0.95, 1., label, |control| {
                 poll(control)?;
                 let state = session.active().ok_or(EngineError::NoDocument)?;
@@ -424,6 +433,9 @@ pub(super) fn run(session: &mut Session, params: &Value, spot: bool) -> Result<V
                 }
                 let index = session.edit_with_interrupt(label, control, move |doc, _| {
                     poll(control)?;
+                    if let Some(proof) = proof {
+                        return proof.install(doc, channel, control);
+                    }
                     doc.channels.try_reserve_exact(1).map_err(|_| bad(cmd(spot), "channel allocation"))?;
                     let index = doc.channels.len();
                     doc.channels.push(channel);
