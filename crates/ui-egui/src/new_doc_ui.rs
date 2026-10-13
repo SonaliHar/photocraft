@@ -1050,6 +1050,20 @@ mod tests {
             assert!((px[0] * 255.0 - 51.0).abs() < 1.0 && (px[1] * 255.0 - 102.0).abs() < 1.0 && (px[2] * 255.0 - 153.0).abs() < 1.0, "{px:?}");
         }
 
+        /// #4789: the swatch shows what each Background Contents choice paints, Background Color included.
+        #[test]
+        fn the_swatch_shows_each_background_choice() {
+            let mut h = harness_with_store(&Arc::new(Mutex::new(None)));
+            h.state_mut().run("tools.setColors", serde_json::json!({"foreground": "#000000", "background": "#336699"})).unwrap();
+            let rgb = |bg: &str| super::super::background_rgb(h.state(), serde_json::json!({ "background": bg }).as_object().unwrap());
+            assert_eq!(rgb("white"), Some([1.0; 3]));
+            assert_eq!(rgb("black"), Some([0.0; 3]));
+            assert_eq!(rgb("transparent"), None);
+            assert_eq!(rgb("#ff0000"), Some([1.0, 0.0, 0.0]));
+            let c = rgb("backgroundColor").expect("Background Color shows the toolbox colour");
+            assert!((c[0] * 255.0 - 51.0).abs() < 1.0 && (c[1] * 255.0 - 102.0).abs() < 1.0 && (c[2] * 255.0 - 153.0).abs() < 1.0, "{c:?}");
+        }
+
         fn name_preset(h: &mut Harness<'static, PhotocraftApp>, name: &str) {
             h.get_by_label("Save Preset…").click();
             h.run_steps(2);
