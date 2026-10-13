@@ -18,6 +18,9 @@ pub trait Clock: Send + Sync {
     fn sleep(&self, d: Duration);
 }
 
+/// The real clock. `std::time::Instant` is unavailable on wasm32-unknown-unknown (it panics
+/// there), which is fine: providers, and so this clock, are only built where a transport exists
+/// (the desktop app).
 pub struct SystemClock {
     start: std::time::Instant,
 }

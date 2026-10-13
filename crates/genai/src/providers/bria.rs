@@ -19,7 +19,8 @@ const HOST: &str = "engine.prod.bria-api.com";
 pub(crate) const FILL: &str = "https://engine.prod.bria-api.com/v2/image/edit/gen_fill";
 pub(crate) const ERASE: &str = "https://engine.prod.bria-api.com/v2/image/edit/erase";
 const API_HOSTS: &[&str] = &["engine.prod.bria-api.com"];
-/// Provisional until the live check (Task 15) records where results really come from.
+/// Where results are downloaded from. The live check (2026-10-12) downloaded a result within this
+/// allowlist.
 pub const RESULT_HOSTS: &[&str] = &[".bria-api.com", ".bria.ai"];
 const MODELS: &[(&str, &str)] = &[("v2", "Bria v2")];
 
