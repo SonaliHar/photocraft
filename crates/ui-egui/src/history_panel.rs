@@ -110,6 +110,11 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         return;
     };
     let document = active.doc.clone();
+    let snapshots = active.snapshots.clone();
+    let snapshot_count = snapshots.len();
+    let live_snapshots: Vec<_> = snapshots.iter().map(|snapshot| snapshot.id).collect();
+    let snapshot_names: std::collections::HashSet<_> = active.snapshots.iter().map(|snapshot| snapshot.name.clone()).collect();
+    let mut snapshot_command = None;
     let stamp = (document.id, active.history.timeline_stamp());
     app.history_previews.poll(ui.ctx());
     if app.history_previews.stamp != Some(stamp) {
@@ -142,7 +147,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // the adapter's returned offset so historical scrollbar drags count too.
     if let Some(previous) = app.history_previews.scroll
         && previous.document == document.id
-        && count > previous.rows
+        && app.history_previews.rows.len() > previous.rows
         && previous.max - previous.offset <= 1.0
     {
         let spacing = ui.spacing().item_spacing.y;
@@ -150,7 +155,13 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         area = area.vertical_scroll_offset((total - previous.visible).max(0.0));
     }
     let scroll = area.show_rows(ui, ROW_HEIGHT, count, |ui, range| {
-        for index in range {
+        for row_index in range {
+            if row_index < snapshot_count {
+                snapshot_command = crate::panels::snapshot_row(app, ui, document.id, &snapshots, &live_snapshots, row_index).or(snapshot_command.take());
+                ui.add_space(ROW_HEIGHT - 38.0);
+                continue;
+            }
+            let index = row_index - snapshot_count;
             let Some(entry) = app.history_previews.rows.get(index).cloned() else { continue };
             let key = Key(document.id, entry.identity.id, entry.identity.revision);
             if !app.history_previews.textures.contains_key(&key)
@@ -160,7 +171,8 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 app.history_previews.request(key, state, ui.ctx());
             }
             let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click_and_drag());
-            response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, enabled, entry.current, &entry.label));
+            let accessible_name = if snapshot_names.contains(&entry.label) { format!("{}: {}", tl!("History"), entry.label) } else { entry.label.clone() };
+            response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, enabled, entry.current, &accessible_name));
             let color = branch_color(t.accent, entry.identity.branch);
             let rail_x = rect.left() + 9.0 + if entry.identity.branch == 0 { 0.0 } else { 5.0 };
             if let Some(parent_index) = entry.identity.parent.and_then(|id| app.history_previews.indices.get(&id)).copied()
@@ -231,7 +243,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     });
     app.history_previews.scroll = Some(ScrollPosition {
         document: document.id,
-        rows: count,
+        rows: app.history_previews.rows.len(),
         offset: scroll.state.offset.y,
         max: (scroll.content_size.y - scroll.inner_rect.height()).max(0.0),
         visible: scroll.inner_rect.height(),
@@ -247,6 +259,21 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     if let Some(id) = destination {
         let _ = app.run("history.jump", serde_json::json!({"state":id}));
+    }
+    if let Some((command, params)) = snapshot_command.filter(|(command, _)| *command != "history.selectSnapshot" || enabled) {
+        match app.run(command, params) {
+            Ok(_) => {
+                // Restoring a snapshot appends a state, but the clicked row must stay in reach.
+                // Clear only the follow hint; the scroll area's own offset remains unchanged.
+                if command == "history.selectSnapshot" {
+                    app.history_previews.scroll = None;
+                }
+            }
+            Err(error) => {
+                app.ui.status = error;
+                app.ui.status_error = true;
+            }
+        }
     }
 }
 
@@ -293,6 +320,9 @@ mod tests {
                 photocraft_doc::Document::new("Scroll demo", photocraft_doc::Size::new(2, 2), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8),
                 None,
             );
+            // A user may name a snapshot after an ordinary action. Its name must not disable
+            // following later actions with the same label.
+            session.execute("history.newSnapshot", serde_json::json!({"name": "Brush paint 15"})).unwrap();
             let app = PhotocraftApp::new(session, crate::Services::default());
             let mut h = Harness::builder().with_size(vec2(310.0, 400.0)).build_ui_state(|ui, app| show(app, ui), app);
             PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
