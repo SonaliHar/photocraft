@@ -120,7 +120,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
     if drag_of(app).is_none() {
         // Not dragging: only a press on a handle starts one.
         let ToolEvent::Down { x, y, .. } = ev else { return false };
-        if !shown(app) {
+        if !shown(app) || !app.active_tool().is_brushlike() {
             return false;
         }
         let Some(xf) = ViewXform::active(app) else { return false };

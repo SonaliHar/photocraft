@@ -6,6 +6,7 @@
 //! before dab generation, keeping pressure, tilt, rotation, wheel and time untouched. The canvas
 //! overlay reads the same set through [`photocraft_doc::DrawingAssistant::overlay_primitives`].
 
+use photocraft_doc::assistants::is_valid_snap_radius;
 use photocraft_doc::{AssistantId, DrawingAssistantItem, DrawingAssistantKind, MAX_ASSISTANTS, MAX_SNAP_RADIUS, PerspectiveAssistant, StraightLineAssistant};
 use photocraft_paint::StrokePoint;
 use serde_json::{Value, json};
@@ -214,7 +215,7 @@ fn set_snap(s: &mut Session, p: &Value) -> Result<Value> {
         None => None,
         Some(v) => {
             let r = v.as_f64().ok_or_else(|| bad(CMD, "`radius` must be a number (document pixels)"))?;
-            if !r.is_finite() || r < 0.0 || r > MAX_SNAP_RADIUS {
+            if !is_valid_snap_radius(r) {
                 return Err(bad(CMD, format!("`radius` must be between 0 and {MAX_SNAP_RADIUS}")));
             }
             Some(r)
@@ -550,6 +551,18 @@ mod tests {
     }
 
     #[test]
+    fn snap_radius_boundaries_are_accepted_and_undoable() {
+        let mut s = session();
+        for radius in [0.0, MAX_SNAP_RADIUS] {
+            let before = s.active().unwrap().doc.assistants.snap_radius;
+            s.execute("assist.setSnap", json!({"radius": radius})).unwrap();
+            assert_eq!(s.active().unwrap().doc.assistants.snap_radius, radius);
+            assert!(s.undo());
+            assert_eq!(s.active().unwrap().doc.assistants.snap_radius, before);
+        }
+    }
+
+    #[test]
     fn bad_params_fail_without_history_steps() {
         let mut s = session();
         let steps = s.active().unwrap().history.past_len();
@@ -563,6 +576,8 @@ mod tests {
             ("assist.remove", json!({"id": 999})),
             ("assist.setVisible", json!({"id": 1})),
             ("assist.setSnap", json!({})),
+            ("assist.setSnap", json!({"radius": -1.0})),
+            ("assist.setSnap", json!({"radius": MAX_SNAP_RADIUS + 1.0})),
             ("assist.setSnap", json!({"radius": 600.0})),
             ("assist.setSnap", json!({"radius": f64::NAN})),
             ("assist.moveAnchor", json!({"id": 1})),

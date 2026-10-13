@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use photocraft_color::{PixelFormat, SampleType};
+use photocraft_doc::assistants::is_valid_snap_radius;
 use photocraft_doc::{
     AlphaChannel, AssistantId, CompAppearance, CompLayerState, DocId, Document, DrawingAssistantItem, DrawingAssistants, Effects, FillCache, Group, Layer,
     LayerComp, LayerContent, LayerId, LayerMask, Metadata, NamedPath, Pattern, ShapeLayer, SmartContentsId, SmartObject, SmartSource, TextLayer,
@@ -672,7 +673,7 @@ impl Loader<'_> {
         }
         Ok(DrawingAssistants {
             enabled: m.enabled,
-            snap_radius: m.snap_radius,
+            snap_radius: if is_valid_snap_radius(m.snap_radius) { m.snap_radius } else { photocraft_doc::DEFAULT_SNAP_RADIUS },
             items: m
                 .items
                 .iter()

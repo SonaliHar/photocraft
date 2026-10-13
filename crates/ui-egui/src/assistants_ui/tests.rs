@@ -77,6 +77,34 @@ fn overlay_draws_guides_and_handles_and_respects_show_flags() {
 }
 
 #[test]
+fn handle_grabs_require_an_active_brushlike_tool() {
+    let mut app = app();
+    app.run("assist.addStraightLine", json!({"anchor": [50.0, 60.0], "angleDeg": 0.0})).unwrap();
+    let press = ToolEvent::Down { x: 50.0, y: 60.0, pressure: 1.0 };
+    for tool in [Tool::Move, Tool::RectMarquee, Tool::Lasso, Tool::Pen, Tool::Type, Tool::Crop] {
+        app.ui.tool = tool;
+        assert!(!pointer(&mut app, press, egui::Modifiers::NONE), "{tool:?}");
+        assert!(app.ui.assistant_drag.is_none());
+    }
+    app.ui.tool = Tool::Brush;
+    app.tool_override = Some(Tool::Move);
+    assert!(!pointer(&mut app, press, egui::Modifiers::NONE), "temporary Move tool owns the pointer");
+    app.ui.tool = Tool::Move;
+    app.tool_override = Some(Tool::Brush);
+    assert!(pointer(&mut app, press, egui::Modifiers::NONE), "temporary Brush can grab handles");
+    assert!(app.ui.assistant_drag.is_some());
+    assert!(pointer(&mut app, ToolEvent::Up { x: 50.0, y: 60.0 }, egui::Modifiers::NONE));
+    assert!(app.ui.assistant_drag.is_none());
+    for tool in [Tool::Brush, Tool::Pencil, Tool::Eraser, Tool::CloneStamp] {
+        app.tool_override = None;
+        app.ui.tool = tool;
+        assert!(pointer(&mut app, press, egui::Modifiers::NONE), "{tool:?}");
+        assert!(app.ui.assistant_drag.is_some());
+        assert!(pointer(&mut app, ToolEvent::Up { x: 50.0, y: 60.0 }, egui::Modifiers::NONE));
+    }
+}
+
+#[test]
 fn anchor_drag_moves_the_line_in_one_undo_step_without_painting() {
     let mut app = app();
     let id = app.run("assist.addStraightLine", json!({"anchor": [50.0, 60.0], "angleDeg": 0.0})).unwrap()["id"].as_u64().unwrap();

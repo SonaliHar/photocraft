@@ -40,6 +40,11 @@ pub const DEFAULT_SNAP_RADIUS: f64 = 8.0;
 /// Largest snapping radius accepted (a whole-canvas magnet is meaningless and hides mistakes).
 pub const MAX_SNAP_RADIUS: f64 = 500.0;
 
+/// Whether a stored snapping radius is finite and within the command and bundle limits.
+pub fn is_valid_snap_radius(radius: f64) -> bool {
+    radius.is_finite() && (0.0..=MAX_SNAP_RADIUS).contains(&radius)
+}
+
 fn finite2(p: [f64; 2]) -> bool {
     p[0].is_finite() && p[1].is_finite()
 }
@@ -312,7 +317,7 @@ impl DrawingAssistant for PerspectiveAssistant {
             }
         }
         let [x0, _, x1, _] = viewport;
-        if let Some(h) = self.horizon_y.filter(|h| h.is_finite()) {
+        if let Some(h) = self.horizon_y.filter(|h| h.is_finite() && h.abs() <= MAX_COORDINATE) {
             let [_, y0, _, y1] = viewport;
             if h >= y0 && h <= y1 && x0 < x1 {
                 out.push(GuidePrimitive::Segment { a: [x0, h], b: [x1, h] });
@@ -438,6 +443,31 @@ impl DrawingAssistants {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stored_snap_radius_limits() {
+        for radius in [0.0, DEFAULT_SNAP_RADIUS, MAX_SNAP_RADIUS] {
+            assert!(is_valid_snap_radius(radius), "{radius}");
+        }
+        for radius in [-1.0, MAX_SNAP_RADIUS + 1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(!is_valid_snap_radius(radius), "{radius}");
+        }
+    }
+
+    #[test]
+    fn perspective_horizon_overlay_matches_coordinate_limits() {
+        let viewport = [0.0, -MAX_COORDINATE - 1.0, 100.0, MAX_COORDINATE + 1.0];
+        for horizon in [-MAX_COORDINATE, 0.0, MAX_COORDINATE] {
+            let p = PerspectiveAssistant { horizon_y: Some(horizon), ..Default::default() };
+            assert_eq!(p.overlay_primitives(viewport), vec![GuidePrimitive::Segment { a: [0.0, horizon], b: [100.0, horizon] }]);
+            assert_eq!(p.snap_point([50.0, horizon], 0.0), Some([50.0, horizon]));
+        }
+        for horizon in [-MAX_COORDINATE - 1.0, MAX_COORDINATE + 1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let p = PerspectiveAssistant { horizon_y: Some(horizon), ..Default::default() };
+            assert!(p.overlay_primitives(viewport).is_empty(), "{horizon}");
+            assert_eq!(p.snap_point([50.0, horizon], 0.0), None);
+        }
+    }
 
     fn straight() -> StraightLineAssistant {
         StraightLineAssistant::new([100.0, 100.0], 0.0).expect("valid horizontal line")

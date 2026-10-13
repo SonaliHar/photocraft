@@ -757,6 +757,28 @@ fn drawing_assistants_roundtrip_with_ids_stable() {
     assert_eq!(hit.point, [150.0, 140.0]);
 }
 
+/// Invalid stored radii fall back to the default; inclusive boundaries remain unchanged.
+#[test]
+fn drawing_assistants_loaded_snap_radius_is_bounded() {
+    use photocraft_doc::{DEFAULT_SNAP_RADIUS, MAX_SNAP_RADIUS};
+    let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    for (radius, expected) in [
+        (-1.0, DEFAULT_SNAP_RADIUS),
+        (MAX_SNAP_RADIUS + 1.0, DEFAULT_SNAP_RADIUS),
+        (f64::MAX, DEFAULT_SNAP_RADIUS),
+        (0.0, 0.0),
+        (MAX_SNAP_RADIUS, MAX_SNAP_RADIUS),
+    ] {
+        doc.assistants.snap_radius = radius;
+        let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+        let back = load_from_bytes(&bytes).unwrap();
+        assert_eq!(back.assistants.snap_radius, expected, "stored radius {radius}");
+        let mut expected_doc = doc.clone();
+        expected_doc.assistants.snap_radius = expected;
+        assert_eq!(back, expected_doc);
+    }
+}
+
 /// Bundles written before assistants existed (no `assistants` key) load with the default set.
 #[test]
 fn drawing_assistants_missing_in_old_bundles_loads_default() {
