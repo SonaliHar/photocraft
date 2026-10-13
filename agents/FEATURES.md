@@ -10,15 +10,16 @@ The source of truth for what PhotoCraft AI does, how it behaves and how it looks
 2. **Done means all four:** merged to `main`; a receipt in `agents/receipts/<ID>.md`; its tests added to `agents/guards.txt`; reviewed by someone other than the author. **Only the reviewer ticks the box.**
 3. **Receipts come from CI when possible.** Link the GitHub Actions run. An agent's own report of a local run counts, but name the machine and paste the command output summary.
 4. **Guards protect what already works.** Before any PR merges, every line in `agents/guards.txt` must pass, plus the `AGENTS.md` §5 gate. A guard that goes red sets that feature to `broken` and unticks it; the PR that broke it fixes it or is reverted.
-5. **ETA = size + target**, not a date. Size: **S** ≤ half a day of agent work, **M** 1–3 days, **L** a week or more. Target: M1, S1.5, S2, S2b, S3, S4, Later (milestones in `SPEC.md`). Calendar dates come only from Erik, because agents run when their usage limits allow.
-6. **Blockers name something:** a decision (D1), a setup item (S5), another feature ID, or an outside party. Never just "waiting".
-7. **Status values:** `todo`, `doing` (draft PR open), `review`, `done`, `broken`, `parked`.
+5. **Owners follow "local first"** (`TASKS.md` › Routing): the local agent codes, cloud Codex is the fallback, Claude designs the UI rows in §3 and reviews.
+6. **ETA = size + target**, not a date. Size: **S** ≤ half a day of agent work, **M** 1–3 days, **L** a week or more. Target: M1, S1.5, S2, S2b, S3, S4, Later (milestones in `SPEC.md`). Calendar dates come only from Erik, because agents run when their usage limits allow.
+7. **Blockers name something:** a decision (D1), a setup item (S5), another feature ID, or an outside party. Never just "waiting".
+8. **Status values:** `todo`, `doing` (draft PR open), `review`, `done`, `broken`, `parked`.
 
 ## 1. What it can do
 
 | ✓ | ID | Feature | Photoshop equivalent | Target | Size | Owner | Blockers | Status | Receipt |
 |---|---|---|---|---|---|---|---|---|---|
-| [ ] | AI-C01 | Fill a selection with no prompt (remove an object): LaMa on the CPU | Edit › Generative Fill, empty prompt | M1 | L | Codex | | todo | |
+| [ ] | AI-C01 | Fill a selection with no prompt (remove an object): LaMa on the CPU | Edit › Generative Fill, empty prompt | M1 | L | local | | todo | |
 | [ ] | AI-C02 | Remove tool "Generative AI" mode: brush over lines, wires, blemishes and the AI fills them. Today's Remove tool is classical (scorecard TOOL-213-19 lists AI mode as missing). | Remove tool › Generative AI | S1.5 | M | | AI-C01 | todo | |
 | [ ] | AI-C03 | Select Subject with an ML model, offered next to the classical one | Select › Subject (Device / Cloud) | S2 | M | | CAIM-02 | todo | |
 | [ ] | AI-C04 | Select Object by click or box (SAM2 / MobileSAM) | Object Selection tool | S2 | M | | AI-C03 | todo | |
@@ -59,9 +60,9 @@ Every UI row also passes U10.
 
 | ✓ | ID | UI element | Target | Size | Owner | Blockers | Status | Receipt |
 |---|---|---|---|---|---|---|---|---|
-| [ ] | U01 | Edit › Generative Fill… menu item, enabled when there's a selection | M1 | S | Codex | | todo | |
+| [ ] | U01 | Edit › Generative Fill… menu item, enabled when there's a selection | M1 | S | local (Claude designs) | | todo | |
 | [ ] | U02 | Generative Fill runs straight away in M1 (no prompt). From S3: a small prompt bar under the selection (prompt field, Generate, Cancel); empty prompt = remove | M1 / S3 | S / M | | AI-C07 | todo | |
-| [ ] | U03 | Progress and Cancel in the existing jobs UI (`crates/ui-egui/src/jobs_ui.rs`) | M1 | S | Codex | AI-C01 | todo | |
+| [ ] | U03 | Progress and Cancel in the existing jobs UI (`crates/ui-egui/src/jobs_ui.rs`) | M1 | S | local (Claude designs) | AI-C01 | todo | |
 | [ ] | U04 | Result layer named "Generative Fill"; Properties panel shows prompt, model, device and time | S2 | M | | AI-C01 | todo | |
 | [ ] | U05 | Variations: ‹ 1 / 3 › with thumbnails in Properties | S3 | M | | AI-C07 | todo | |
 | [ ] | U06 | Contextual Task Bar under a selection (Generative Fill, Select Subject, Remove Background). PhotoCraft has none yet (`docs/ui-parity.md` lists it missing), so this is a general feature worth offering upstream on its own | S2 | L | | D4 | todo | |
@@ -69,15 +70,15 @@ Every UI row also passes U10.
 | [ ] | U08 | Select Subject options: Classical / AI (device) / Cloud | S2 | S | | AI-C03 | todo | |
 | [ ] | U09 | AI status in Preferences › Integrations: manager connected or not, models installed, "Open Craft AI Manager" button (follow the `prefs_usage` rule in `prefs.rs`) | S2 | M | | CAIM-02 | todo | |
 | [ ] | U10 | **Every UI row:** strings through the localisation catalog (English keys), colours from `theme::Tokens`, checked with an offscreen snapshot (`cargo run -p photocraft-ui-egui --example snapshot`) and the PNG attached to the receipt | all | – | | | todo | |
-| [ ] | U11 | Messages (no manager, unsupported, failed) are one plain sentence plus at most one action button | M1 | S | Codex | | todo | |
+| [ ] | U11 | Messages (no manager, unsupported, failed) are one plain sentence plus at most one action button | M1 | S | local (Claude designs) | | todo | |
 
 ## 4. Craft AI Manager (CAIM, separate app and repo)
 
 | ✓ | ID | Feature | Target | Size | Owner | Blockers | Status | Receipt |
 |---|---|---|---|---|---|---|---|---|
-| [ ] | CAIM-01 | Loopback server with a token, `endpoint.json`, job API | M1 | M | Codex | | todo | |
+| [ ] | CAIM-01 | Loopback server with a token, `endpoint.json`, job API | M1 | M | local | | todo | |
 | [ ] | CAIM-02 | Model list: name, task, size, licence, installed or not, download / delete | S2 | M | | CAIM-01 | todo | |
-| [ ] | CAIM-03 | Downloads with progress, SHA-256 check and resume (M1: basic download and check) | M1 / S2 | M | Codex | | todo | |
+| [ ] | CAIM-03 | Downloads with progress, SHA-256 check and resume (M1: basic download and check) | M1 / S2 | M | local | | todo | |
 | [ ] | CAIM-04 | Device setting per task (Auto / CUDA / CPU); shows the GPU and free VRAM | S2b | M | | CAIM-02 | todo | |
 | [ ] | CAIM-05 | Disk usage and model folder location | S2 | S | | CAIM-02 | todo | |
 | [ ] | CAIM-06 | Update check for the catalog and the app | S2 | S | | CAIM-02 | todo | |
@@ -90,6 +91,7 @@ Every UI row also passes U10.
 
 | Date | Change |
 |---|---|
+| 2026-10-13 | Owners switched to "local first"; Claude owns UI design |
 | 2026-10-13 | D1 (Photoshop names) and D2 (accept big-lama for now) decided; blockers cleared |
 | 2026-10-13 | Manager named Craft AI Manager (CAIM); IDs AI-M01–10 renamed CAIM-01–10 |
 | 2026-10-13 | First version (Claude): 12 capabilities, 15 behaviour rules, 11 UI items, 10 manager items |
