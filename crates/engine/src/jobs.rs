@@ -182,6 +182,8 @@ struct Running {
     started_ms: f64,
     coalesce: Option<String>,
     color_restrict: Option<usize>,
+    /// The document before the command, for the events it produces when it lands.
+    snapshot_events: crate::events::Snapshot,
     rx: std::sync::mpsc::Receiver<Result<Payload>>,
     apply: Option<Apply>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -335,6 +337,7 @@ pub fn run<T: Send + 'static>(
         started_ms: now_ms(),
         coalesce: s.coalesce_request.clone(),
         color_restrict: s.color_restrict,
+        snapshot_events: Default::default(),
         rx,
         apply: Some(erased),
         #[cfg(not(target_arch = "wasm32"))]
@@ -669,6 +672,8 @@ impl Session {
         // action it plays (a script step) must not flush the steps it ran so far into the action
         // being recorded, nor move the recording mark past the entries it is about to replace.
         let recording = if spec.journal && crate::actions_cmds::replayable(id) { self.actions.recording.take() } else { None };
+        // What the active document looked like, so the events log what the command changed.
+        let snapshot = crate::events::Snapshot::of(self.active());
         // Last-resort guard (AGENTS.md, Never crash): a command that panics anyway fails with an
         // error instead of taking the app down. `edit` only commits a document after its closure
         // returns, so the documents are unchanged.
@@ -691,15 +696,25 @@ impl Session {
                 job.command = id.to_string();
                 job.params = params;
                 job.journal = spec.journal;
+                job.snapshot_events = snapshot;
                 let jid = job.id;
                 self.jobs.running.push(job);
                 Ok(Started::Job(jid))
             }
             (Ok(v), None) => {
                 self.after_command(id, params, spec.journal, Some(nested_from));
+                self.emit_events(id, &snapshot);
                 Ok(Started::Done(v))
             }
         }
+    }
+
+    /// Log the events a successful command produced (#4939), from `before` to the document now.
+    fn emit_events(&mut self, id: &str, before: &crate::events::Snapshot) {
+        let st = before.document.and_then(|d| self.docs.iter().find(|st| st.doc.id.0 == d));
+        let mut log = std::mem::take(&mut self.events);
+        crate::events::after_command(&mut log, id, before, st);
+        self.events = log;
     }
 
     /// Bookkeeping after a command (or a job's apply) succeeded.
@@ -745,7 +760,7 @@ impl Session {
     }
 
     fn apply_job(&mut self, job: &Running, apply: Option<Apply>, payload: Payload) -> Result<Value> {
-        let Running { label, doc, snapshot, coalesce, color_restrict, command, params, journal, .. } = job;
+        let Running { label, doc, snapshot, coalesce, color_restrict, command, params, journal, snapshot_events, .. } = job;
         let prev_active = self.active;
         let target = match doc {
             Some(d) => {
@@ -781,6 +796,7 @@ impl Session {
         // to that document instead, when the user switched tabs mid-job.
         if r.is_ok() {
             self.after_command(command, params.clone(), *journal, Some(nested_from));
+            self.emit_events(command, snapshot_events);
         }
         // Keep the user's active document unless the job opened a new one.
         // This also restores the selection when the apply step returned an error.

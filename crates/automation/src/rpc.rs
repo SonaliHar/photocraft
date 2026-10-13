@@ -39,6 +39,7 @@ pub const METHODS: &[&str] = &[
     "engine.execute",
     "jobs.list",
     "jobs.cancel",
+    "events.poll",
     "engine.commands",
     "session.list",
     "doc.open",
@@ -87,6 +88,8 @@ impl Headless {
             // Background jobs (#210): list (applying any that finished) and cancel.
             "jobs.list" => self.command_start("jobs.list", json!({}), true),
             "jobs.cancel" => self.command_start("jobs.cancel", p, true),
+            // Events (#4939): what changed since a cursor. No subscriptions on this transport.
+            "events.poll" => photocraft_engine::events::poll(&self.session.events, &p).map(|b| serde_json::to_value(b).unwrap_or(Value::Null)).map_err(bad),
             "engine.commands" => {
                 let all = self.command_list();
                 Ok(match str_of(&p, "filter").map(str::to_lowercase) {
@@ -395,6 +398,22 @@ mod tests {
         let new = all.as_array().unwrap().iter().find(|c| c["id"] == "file.new").unwrap();
         assert_eq!((&new["menu"], &new["shortcut"], &new["enabled"]), (&json!(["File"]), &json!("Cmd+N"), &json!(true)), "{new}");
         assert_eq!((&new["disabledReason"], &new["needsDocument"]), (&Value::Null, &json!(false)), "{new}");
+    }
+
+    #[test]
+    fn events_poll_reports_what_changed() {
+        let h = session();
+        let r = h.lock().unwrap().handle("events.poll", json!({})).unwrap();
+        let cursor = r["next"].as_u64().unwrap();
+        h.lock().unwrap().handle("doc.new", json!({"width": 8, "height": 8})).unwrap();
+        h.lock().unwrap().handle("engine.execute", json!({"command": "layer.new.layer"})).unwrap();
+        let r = h.lock().unwrap().handle("events.poll", json!({"since": cursor})).unwrap();
+        let kinds: Vec<&str> = r["events"].as_array().unwrap().iter().map(|e| e["event"].as_str().unwrap()).collect();
+        assert!(kinds.starts_with(&["document.opened", "document.changed"]), "{kinds:?}");
+        assert!(r["next"].as_u64().unwrap() > cursor);
+        assert_eq!(r["gap"], false);
+        assert!(h.lock().unwrap().handle("events.poll", json!({"since": "x"})).is_err());
+        assert!(METHODS.contains(&"events.poll"));
     }
 
     #[test]

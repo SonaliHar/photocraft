@@ -266,14 +266,7 @@ impl Headless {
             format.map(|f| f.trim_start_matches('.').to_ascii_lowercase()).or_else(|| target.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()));
         if ext.as_deref().is_some_and(|e| file_cmds::holds(&doc, e)) {
             // Saving by index must not retarget the next automation command.
-            let previously_active = self.session.active_index();
-            self.session.set_active(i);
-            if let Some(st) = self.session.active_mut() {
-                st.saved_to(target.to_string_lossy().into_owned());
-            }
-            if let Some(active) = previously_active {
-                self.session.set_active(active);
-            }
+            self.session.document_saved(i, target.to_string_lossy().into_owned(), None);
         }
         Ok(json!({ "path": target.to_string_lossy(), "warnings": warnings }))
     }

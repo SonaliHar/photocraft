@@ -74,13 +74,103 @@ pub struct ControlRequest {
     pub deadline: Option<std::time::Instant>,
     /// Shared with the transport, so that when it stops waiting it knows whether the command ran.
     pub dispatch: Dispatch,
+    /// `events.subscribe` only: where the app pushes the subscriber's event lines (JSON, one per
+    /// line, no `id`). The transport writes them to its connection; dropping the receiver ends
+    /// the subscription. Bounded: a transport that stops reading loses events, not frames.
+    pub push: Option<std::sync::mpsc::SyncSender<String>>,
 }
 
 impl ControlRequest {
     pub fn new(method: impl Into<String>, params: Value) -> (Self, std::sync::mpsc::Receiver<ControlResponse>) {
         let (tx, rx) = std::sync::mpsc::channel();
-        (Self { method: method.into(), params, reply: tx, deadline: None, dispatch: Dispatch::default() }, rx)
+        (Self { method: method.into(), params, reply: tx, deadline: None, dispatch: Dispatch::default(), push: None }, rx)
     }
+}
+
+/// Events a subscriber's transport may have waiting before it loses some (`gap`).
+pub const PUSH_QUEUE: usize = 1024;
+
+/// A transport subscribed to events (#4939): its queue, what it wants, and where it has read to.
+pub struct Subscriber {
+    tx: std::sync::mpsc::SyncSender<String>,
+    filter: photocraft_engine::events::Filter,
+    cursor: u64,
+    /// Events its queue had no room for since the last one it took.
+    dropped: u64,
+}
+
+/// `events.poll`: the events since a cursor.
+fn events_poll(app: &PhotocraftApp, p: &Value) -> Outcome {
+    match photocraft_engine::events::poll(&app.session.events, p) {
+        Ok(batch) => ok(serde_json::to_value(batch).unwrap_or(Value::Null)),
+        Err(e) => err(e),
+    }
+}
+
+/// `events.subscribe {events?, documents?, since?}`: from now on (or from `since`), matching
+/// events are pushed to this transport as they happen.
+fn events_subscribe(app: &mut PhotocraftApp, req: &ControlRequest) -> Outcome {
+    let Some(tx) = req.push.clone() else { return err("events.subscribe needs a transport that can receive pushed events (the TCP control channel)") };
+    let filter = match photocraft_engine::events::Filter::parse(&req.params) {
+        Ok(f) => f,
+        Err(e) => return err(e),
+    };
+    let last = app.session.events.last();
+    let cursor = match req.params.get("since") {
+        None | Some(Value::Null) => last,
+        Some(v) => match v.as_u64() {
+            Some(n) => n.min(last),
+            None => return err("`since` must be a sequence number (an integer from `next`)"),
+        },
+    };
+    let kinds = filter.kinds.clone().unwrap_or_else(|| photocraft_engine::events::KINDS.iter().map(|k| k.to_string()).collect());
+    app.event_subscribers.push(Subscriber { tx, filter, cursor, dropped: 0 });
+    ok(json!({"subscribed": true, "next": cursor, "events": kinds, "subscribers": app.event_subscribers.len()}))
+}
+
+/// Push new events to every subscriber (once a frame, after the control requests ran), and log
+/// a tool change the shell made. A subscriber whose transport went away is dropped; one whose
+/// queue is full keeps its place and is told how many it missed once there is room again.
+pub fn flush_events(app: &mut PhotocraftApp) {
+    if app.last_tool_event != Some(app.ui.tool) {
+        let tool = serde_json::to_value(app.ui.tool).unwrap_or(Value::Null);
+        app.session.events.push("tool.changed", None, Some("ui"), json!({"tool": tool}));
+        app.last_tool_event = Some(app.ui.tool);
+    }
+    let log = &app.session.events;
+    app.event_subscribers.retain_mut(|sub| {
+        use std::sync::mpsc::TrySendError;
+        loop {
+            let batch = log.since(sub.cursor, &sub.filter, 64);
+            if batch.gap {
+                sub.dropped = sub.dropped.saturating_add(batch.next.saturating_sub(sub.cursor).saturating_sub(batch.events.len() as u64));
+            }
+            if sub.dropped > 0 {
+                match sub.tx.try_send(json!({"event": "gap", "dropped": sub.dropped}).to_string()) {
+                    Ok(()) => sub.dropped = 0,
+                    Err(TrySendError::Full(_)) => return true,
+                    Err(TrySendError::Disconnected(_)) => return false,
+                }
+            }
+            for e in &batch.events {
+                let line = serde_json::to_string(e).unwrap_or_default();
+                match sub.tx.try_send(line) {
+                    Ok(()) => sub.cursor = e.seq,
+                    Err(TrySendError::Full(_)) => {
+                        // Lost: it will be counted into the next gap notice.
+                        sub.dropped = sub.dropped.saturating_add(1);
+                        sub.cursor = e.seq;
+                    }
+                    Err(TrySendError::Disconnected(_)) => return false,
+                }
+            }
+            if batch.next <= sub.cursor || batch.events.is_empty() {
+                sub.cursor = batch.next.max(sub.cursor);
+                return true;
+            }
+            sub.cursor = batch.next;
+        }
+    });
 }
 
 /// Whether a request was dispatched, settled once between the UI thread (about to run it) and
@@ -434,6 +524,10 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             run_waiting(app, wait, |app| crate::menus::invoke(app, ctx, id, params))
         }
         "engine.commands" => wrap(app.run("command.list", json!({}))),
+        // Events (#4939): poll since a cursor, or subscribe for pushed lines.
+        "events.poll" => events_poll(app, p),
+        "events.subscribe" => events_subscribe(app, req),
+        "events.unsubscribe" => ok(json!({"subscribed": false})),
         // Background jobs (#210): running ones with progress, then the last few that ended.
         "jobs.list" => wrap(app.session.execute("jobs.list", json!({})).map_err(|e| e.to_string())),
         "jobs.cancel" => {
@@ -2778,6 +2872,68 @@ mod tests {
     }
 
     /// #2449: the error of a rejected synthetic input call, after checking it changed nothing.
+    /// `events.poll` reads the session's log; `events.subscribe` pushes lines into the transport's
+    /// queue every frame, with a gap notice once the queue overflowed (#4939).
+    #[test]
+    fn events_poll_and_subscribe() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let r = call(&mut app, &ctx, "events.poll", json!({}));
+        assert_eq!(r["ok"], true, "{r}");
+        let cursor = r["result"]["next"].as_u64().unwrap();
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        let r = call(&mut app, &ctx, "events.poll", json!({"since": cursor, "events": ["document.opened", "document.changed"]}));
+        let events = r["result"]["events"].as_array().unwrap();
+        assert_eq!(events.len(), 2, "{r}");
+        assert_eq!(events[0]["event"], "document.opened");
+        assert_eq!(events[1]["data"]["command"], "layer.new.layer");
+        assert!(call(&mut app, &ctx, "events.poll", json!({"since": 0, "events": ["nope"]}))["error"].as_str().unwrap().contains("unknown event"));
+        // Subscribe: the transport gives a queue; frames push into it.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<String>(4);
+        let (mut req, _rrx) = ControlRequest::new("events.subscribe", json!({"events": ["document.changed", "tool.changed", "history.changed"]}));
+        req.push = Some(tx);
+        let Outcome::Done(r) = handle(&mut app, &ctx, &req) else { panic!("subscribe replies at once") };
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(app.event_subscribers.len(), 1);
+        let (req, _rrx) = ControlRequest::new("events.subscribe", json!({}));
+        let Outcome::Done(r) = handle(&mut app, &ctx, &req) else { panic!() };
+        assert_eq!(r["ok"], false, "a transport without a queue can't subscribe: {r}");
+        flush_events(&mut app);
+        let first: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+        assert_eq!(first["event"], "tool.changed", "the shell's tool is announced on the first frame: {first}");
+        assert!(rx.try_recv().is_err(), "nothing else yet");
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        flush_events(&mut app);
+        let lines: Vec<Value> = std::iter::from_fn(|| rx.try_recv().ok()).map(|l| serde_json::from_str(&l).unwrap()).collect();
+        let kinds: Vec<&str> = lines.iter().map(|l| l["event"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["document.changed", "history.changed"], "{lines:?}");
+        assert!(lines[0].get("id").is_none(), "pushed lines carry no id");
+        // Overflow: more events than the queue holds, read later, come with a gap notice.
+        for _ in 0..6 {
+            app.run("edit.fill", json!({"color": "#00ff00"})).unwrap();
+        }
+        flush_events(&mut app);
+        let lines: Vec<Value> = std::iter::from_fn(|| rx.try_recv().ok()).map(|l| serde_json::from_str(&l).unwrap()).collect();
+        assert_eq!(lines.len(), 4, "the queue's size: {lines:?}");
+        flush_events(&mut app);
+        let notice: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+        assert_eq!(notice["event"], "gap");
+        assert_eq!(notice["dropped"], 8, "{notice}");
+        assert_ne!(app.ui.tool, crate::state::Tool::Eraser);
+        app.ui.tool = crate::state::Tool::Eraser;
+        flush_events(&mut app);
+        let t: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+        assert_eq!((t["event"].as_str(), t["data"]["tool"].clone()), (Some("tool.changed"), serde_json::to_value(crate::state::Tool::Eraser).unwrap()), "{t}");
+        flush_events(&mut app);
+        assert!(rx.try_recv().is_err(), "the same tool again is not a change");
+        // The transport dropping its queue ends the subscription.
+        drop(rx);
+        app.run("edit.fill", json!({"color": "#0000ff"})).unwrap();
+        flush_events(&mut app);
+        assert!(app.event_subscribers.is_empty());
+    }
+
     fn rejected(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Value, names: &str) -> String {
         let (tool, revision) = (app.ui.tool, app.session.active().map(|d| d.revision));
         let r = call(app, ctx, method, params.clone());

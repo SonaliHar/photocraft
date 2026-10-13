@@ -37,6 +37,7 @@ pub mod document_preset_cmds;
 pub mod edit_cmds;
 pub mod edit_menu_cmds;
 pub mod eraser_cmds;
+pub mod events;
 pub mod exr_cmds;
 pub mod extra_cmds;
 pub mod file_cmds;
@@ -395,6 +396,8 @@ pub struct Session {
     pub tools: ToolState,
     /// Log of executed commands (for action recording and debugging).
     pub journal: Vec<(String, Value)>,
+    /// What changed, for subscribers (#4939): see [`events`].
+    pub events: events::EventLog,
     /// Coalescing key of the command being executed.
     coalesce_request: Option<String>,
     /// Pixels copied with Edit › Copy / Cut (shared by all documents, like Photoshop).
@@ -497,8 +500,14 @@ impl Session {
     }
     pub fn set_active(&mut self, index: usize) -> bool {
         if index < self.docs.len() {
+            let was = self.active;
             self.active = Some(index);
             self.sync_tools_mask_target();
+            if was != Some(index)
+                && let Some(st) = self.docs.get(index)
+            {
+                self.events.push("document.activated", Some(st.doc.id.0), Some("ui"), serde_json::json!({"index": index, "name": st.doc.name}));
+            }
             true
         } else {
             false
@@ -543,10 +552,26 @@ impl Session {
         let mut st = DocState::new(doc, path);
         st.history.max_states = self.prefs.get().performance.history_states.max(1) as usize;
         st.history.max_bytes = self.prefs.get().performance.history_budget_bytes();
+        let (id, name, path) = (st.doc.id.0, st.doc.name.clone(), st.path.clone());
         self.docs.push(st);
         let i = self.docs.len() - 1;
         self.active = Some(i);
+        self.events.push("document.opened", Some(id), Some("ui"), serde_json::json!({"index": i, "name": name, "path": path}));
         i
+    }
+
+    /// Record that document `index` was written to `path` (its identity and unsaved state follow
+    /// the file), and log `document.saved`. `revision` is the revision that was written when a
+    /// background save finished after further edits; default the current one.
+    pub fn document_saved(&mut self, index: usize, path: String, revision: Option<u64>) -> bool {
+        let Some(st) = self.docs.get_mut(index) else { return false };
+        st.saved_to(path.clone());
+        if let Some(r) = revision {
+            st.saved_revision = r;
+        }
+        let (id, rev) = (st.doc.id.0, st.saved_revision);
+        self.events.push("document.saved", Some(id), Some("ui"), serde_json::json!({"path": path, "revision": rev}));
+        true
     }
 
     /// Holds a decoded document back from opening (see `held_opens`); returns its id.
@@ -575,6 +600,12 @@ impl Session {
             self.object_finder.forget_doc(id);
         }
         let d = self.docs.remove(index);
+        self.events.push(
+            "document.closed",
+            Some(d.doc.id.0),
+            Some("ui"),
+            serde_json::json!({"name": d.doc.name, "path": d.path, "unsaved": d.revision != d.saved_revision}),
+        );
         self.active = if self.docs.is_empty() {
             None
         } else {
