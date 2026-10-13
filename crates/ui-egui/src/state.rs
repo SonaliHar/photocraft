@@ -919,6 +919,10 @@ pub struct TransformSession {
     /// `edit.contentAwareScale` with these options instead of `edit.transform`.
     #[serde(default)]
     pub content_aware: Option<ContentAwareOptions>,
+    /// The options bar's V (vertical skew, degrees) last typed. Any box can be read as scale,
+    /// skew and rotation with any vertical skew, so the bar keeps showing the typed one.
+    #[serde(default)]
+    pub skew_v: f64,
 }
 
 /// Content-Aware Scale's options bar: Amount, Protect and Protect Skin Tones.
@@ -1218,6 +1222,10 @@ pub struct UiState {
     /// modifiers held at its first click.
     #[serde(default)]
     pub polygon_mode: String,
+    /// The document the polygon is drawn on (set at its first click): another document becoming
+    /// active drops it (`canvas::polygon_cancel_stale`).
+    #[serde(default)]
+    pub polygon_doc: Option<photocraft_doc::DocId>,
     /// Magnetic Lasso border in progress (`magnetic_lasso_ui`).
     #[serde(default)]
     pub magnetic: crate::magnetic_lasso_ui::MagneticLasso,
@@ -1325,6 +1333,7 @@ impl Default for UiState {
             tool_options: ToolOptions::default(),
             polygon: Vec::new(),
             polygon_mode: String::new(),
+            polygon_doc: None,
             magnetic: Default::default(),
             crop_rect: None,
             crop_angle: 0.0,
