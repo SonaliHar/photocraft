@@ -180,6 +180,11 @@ pub(crate) fn deselect(ctx: &egui::Context, doc: photocraft_doc::DocId) {
     ctx.data_mut(|d| d.remove::<FilterDrag>(selected_key(doc)));
 }
 
+/// The smart-filter row selected in the Layers panel, if any.
+pub(crate) fn selected_filter(ctx: &egui::Context, doc: photocraft_doc::DocId) -> Option<FilterDrag> {
+    ctx.data(|d| d.get_temp::<FilterDrag>(selected_key(doc)))
+}
+
 /// While smart filters are dragged: their name by the pointer, and the copy cursor while ⌥ is held.
 pub(crate) fn drag_feedback(ctx: &egui::Context, doc: &Document) {
     let Some((from, filter)) = ctx.data(|d| d.get_temp::<FilterDrag>(drag_key())) else { return };

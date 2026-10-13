@@ -116,6 +116,35 @@ fn a_pixel_layer_does_not_take_smart_filters() {
     assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
 }
 
+/// #4751: the footer trash deletes the selected smart filter. The layer stays.
+#[test]
+fn clicking_delete_removes_the_selected_smart_filter() {
+    let (mut h, a, _, _) = panel();
+    h.get_by_role_and_label(Role::Button, "Offset").click();
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::Button, "Delete filter").click();
+    h.run_steps(4);
+    assert_eq!(filters(&h, a), ["filter.blur.gaussianBlur"]);
+    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 4);
+}
+
+#[test]
+fn double_clicking_a_smart_filter_reopens_its_dialog() {
+    let (mut h, _, _, _) = panel();
+    let at_blur = at(&h, "Gaussian Blur");
+    for _ in 0..2 {
+        h.hover_at(at_blur);
+        h.drag_at(at_blur);
+        h.run_steps(1);
+        h.drop_at(at_blur);
+        h.run_steps(1);
+    }
+    h.run_steps(3);
+    let dialog = h.state().ui.dialogs.last().expect("the filter dialog reopened");
+    assert_eq!(dialog.fields.get("__command").and_then(|v| v.as_str()), Some("filter.blur.gaussianBlur"));
+    assert!(dialog.fields.get("__smartFilter").is_some(), "OK edits this filter instead of stacking another");
+}
+
 #[test]
 fn dragging_filters_onto_delete_removes_them() {
     let (mut h, a, _, _) = panel();
@@ -206,11 +235,12 @@ fn clicking_delete_removes_the_selected_filter() {
     let (mut h, a, _, _) = panel();
     let blur = at(&h, "Gaussian Blur");
     click_at(&mut h, blur);
-    let trash = at(&h, "Delete layer");
+    let trash = at(&h, "Delete filter");
     click_at(&mut h, trash);
     assert_eq!(filters(&h, a), ["filter.other.offset"]);
     assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 4, "no layer was deleted");
     // The deleted row's selection doesn't carry over to Offset, now at its index.
+    let trash = at(&h, "Delete layer");
     click_at(&mut h, trash);
     assert_eq!(filters(&h, a), ["filter.other.offset"]);
 }
