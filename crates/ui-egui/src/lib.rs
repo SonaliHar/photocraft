@@ -59,6 +59,7 @@ pub mod color_range_ui;
 pub mod comps_ui;
 pub mod control;
 mod control_files;
+mod control_render;
 pub mod credits;
 pub mod crop_mode;
 pub mod crop_overlay;

@@ -389,7 +389,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
     let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(true);
     match req.method.as_str() {
         "app.handoff" => ok(
-            json!({"version": 2, "replace": true, "hiddenStart": true, "cameraRaw": 1, "cameraRawPrefetch": 1, "cameraRawSwitch": 1, "stashWithoutPreview": 1, "renderManifest": 1}),
+            json!({"version": 2, "replace": true, "hiddenStart": true, "cameraRaw": 1, "cameraRawPrefetch": 1, "cameraRawSwitch": 1, "stashWithoutPreview": 1, "renderManifest": 1, "fullRender": 1}),
         ),
         "ui.cameraRaw" => run_waiting(app, wait, |app| crate::raw_workspace::control(app, ctx, p)),
         "app.prefetch" => match (s("path"), s("signature")) {
@@ -1280,6 +1280,12 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 }
             }
             _ => err("bind requires an open document, .pcraft path and .png preview"),
+        },
+        "app.render" => match crate::control_render::start(app, p) {
+            Ok(photocraft_engine::jobs::Started::Job(job)) if !wait => ok(json!({"job": job.0, "pending": true})),
+            Ok(photocraft_engine::jobs::Started::Job(job)) => Outcome::AfterJob(job),
+            Ok(photocraft_engine::jobs::Started::Done(result)) => ok(result),
+            Err(error) => err(error),
         },
         "app.stash" => match s("path") {
             Some(path) if s("preview").is_some() || s("display").is_some() => {

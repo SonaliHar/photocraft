@@ -44,8 +44,12 @@ fn recipe_bytes(params: &CameraRaw) -> Result<Vec<u8>, String> {
 }
 
 /// The recipe file's content for `params`: only the settings that differ from the defaults.
+///
+/// `identity` says whether the settings change the photo at all (some, such as a sharpening radius with no amount, do
+/// not on their own), so a host can tell an edited photo from one whose recipe is only the defaults without knowing
+/// the settings' rules. Readers of this version that do not know it ignore it.
 pub fn to_json(params: &CameraRaw) -> Value {
-    json!({"version": VERSION, "cameraRaw": crate::camera_raw_ui::non_defaults(params)})
+    json!({"version": VERSION, "cameraRaw": crate::camera_raw_ui::non_defaults(params), "identity": params.is_identity()})
 }
 
 /// The settings in a recipe file's content. Unknown versions, wrong types and out-of-range values are
@@ -63,6 +67,38 @@ pub fn from_json(value: &Value) -> Result<CameraRaw, String> {
     let params: CameraRaw = serde_json::from_value(settings.clone()).map_err(|e| format!("Camera Raw recipe: {e}"))?;
     params.validate_changes(&CameraRaw::default())?;
     Ok(params)
+}
+
+/// The settings of `params` that act on the sensor data while a raw is developed (Open's develop, and
+/// `app.render`'s).
+pub fn tuning(params: &CameraRaw) -> photocraft_io::raw::RawTuning {
+    photocraft_io::raw::RawTuning {
+        temperature: params.temperature,
+        tint: params.tint,
+        exposure: params.exposure,
+        shadows: params.shadows,
+        highlights: params.highlights,
+        clarity: params.clarity,
+        texture: params.texture,
+        dehaze: params.dehaze,
+    }
+}
+
+/// What is left of `params` to apply as one Camera Raw step once the raw was developed with [`tuning`]: everything but the
+/// settings the develop applied (white balance among them only when the develop could apply it, `white_balanced`).
+pub fn after_develop(params: &CameraRaw, white_balanced: bool) -> CameraRaw {
+    let mut rest = params.clone();
+    rest.exposure = 0.0;
+    rest.shadows = 0.0;
+    rest.highlights = 0.0;
+    rest.clarity = 0.0;
+    rest.texture = 0.0;
+    rest.dehaze = 0.0;
+    if white_balanced {
+        rest.temperature = 0.0;
+        rest.tint = 0.0;
+    }
+    rest
 }
 
 /// How the photo under a recipe was developed: what the dialog's picture of the recipe depends on besides the settings.
@@ -239,8 +275,12 @@ mod tests {
         let json = to_json(&params);
         assert_eq!(json["version"], 1);
         assert_eq!(json["cameraRaw"].as_object().unwrap().len(), 2, "defaults are not stored: {json}");
+        assert_eq!(json["identity"], false);
         assert_eq!(from_json(&json).unwrap(), params);
         assert_eq!(from_json(&to_json(&CameraRaw::default())).unwrap(), CameraRaw::default());
+        assert_eq!(to_json(&CameraRaw::default())["identity"], true);
+        let inert = CameraRaw { sharpen_radius: 2.0, ..Default::default() };
+        assert_eq!(to_json(&inert)["identity"], true, "a stored setting that changes nothing on its own: {}", to_json(&inert));
     }
 
     #[test]

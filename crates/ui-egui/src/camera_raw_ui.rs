@@ -431,16 +431,7 @@ pub(crate) fn raw_stage(p: &CameraRaw) -> photocraft_io::raw::Tone {
 /// (tests, the web) it runs inline.
 fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen) -> Result<Value, String> {
     let index = document_index(app, raw.document).ok_or("the raw document was closed")?;
-    let tuning = photocraft_io::raw::RawTuning {
-        temperature: params.temperature,
-        tint: params.tint,
-        exposure: params.exposure,
-        shadows: params.shadows,
-        highlights: params.highlights,
-        clarity: params.clarity,
-        texture: params.texture,
-        dehaze: params.dehaze,
-    };
+    let tuning = crate::raw_recipe::tuning(params);
     // Without the file the raw-stage settings stay RGB adjustments, like the filter's.
     let source = match (&raw.bytes, &raw.path) {
         (Some(b), _) => Some(photocraft_engine::jobs::OpenSource::Bytes(b.clone())),
@@ -527,17 +518,7 @@ fn finish_redevelop(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen, 
     let warnings: Vec<String> =
         v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
     crate::notices::io_warnings(app, &format!("Opened {}", raw.name), &without_develop_note(&warnings));
-    let mut rest = params.clone();
-    rest.exposure = 0.0;
-    rest.shadows = 0.0;
-    rest.highlights = 0.0;
-    rest.clarity = 0.0;
-    rest.texture = 0.0;
-    rest.dehaze = 0.0;
-    if v.get("wb").and_then(Value::as_bool) == Some(true) {
-        rest.temperature = 0.0;
-        rest.tint = 0.0;
-    }
+    let rest = crate::raw_recipe::after_develop(params, v.get("wb").and_then(Value::as_bool) == Some(true));
     finish_open_raw(app, index, rest, Some(true), Some(raw))
 }
 
