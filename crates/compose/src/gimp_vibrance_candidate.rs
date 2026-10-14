@@ -74,7 +74,9 @@ impl<'a> BoundSource<'a>{
   // its own prospective storage. Converter requirements must be borrowed/polled.
   if add(add(input_bytes,output_bytes)?,point_vibrance::POINT_SCRATCH)?>limits.resident_bytes{return Err(E::LimitExceeded);}
   let conversion=conversions.requirements(c)?;let scratch_bytes=add(conversion.scratch_bytes,point_vibrance::POINT_SCRATCH)?;let peak_bytes=add(add(add(input_bytes,output_bytes)?,conversion.retained_bytes)?,scratch_bytes)?;
-  let work_units=add(mul(u64::try_from(count(roi)?).map_err(|_|E::LimitExceeded)?,add(add(point_vibrance::POINT_WORK,conversion.work_units)?,SAMPLE_VALIDATION_WORK)?)?,BIND_WORK)?;
+  // Preparation remains charged once for this evaluation; repeating it per
+  // pixel would conflate constructor work with the steady paired conversion.
+  let work_units=add(add(mul(u64::try_from(count(roi)?).map_err(|_|E::LimitExceeded)?,add(add(point_vibrance::POINT_WORK,conversion.work_units)?,SAMPLE_VALIDATION_WORK)?)?,conversion.preparation_work_units)?,BIND_WORK)?;
   if peak_bytes>limits.resident_bytes||work_units>limits.work_units{return Err(E::LimitExceeded);}poll(c)?;
   Ok((Requirements{borrowed_source_bytes:input_bytes,output_bytes,retained_conversion_bytes:conversion.retained_bytes,scratch_bytes,peak_bytes,work_units},conversion))
  }
@@ -103,9 +105,16 @@ mod tests {
  struct Stages{calls:AtomicUsize}
  impl FloatConversions for Stages{
   fn context(&self)->Context{context()}
-  fn requirements(&self,_:&Interrupt<'_>)->Result<ConversionRequirements,E>{Ok(ConversionRequirements{retained_bytes:0,scratch_bytes:0,work_units:1})}
+  fn requirements(&self,_:&Interrupt<'_>)->Result<ConversionRequirements,E>{Ok(ConversionRequirements{retained_bytes:0,scratch_bytes:0,preparation_work_units:0,work_units:1})}
   fn rgb_to_lch(&self,p:[f32;4],_:&Interrupt<'_>)->Result<[f32;4],E>{self.calls.fetch_add(1,Ordering::Relaxed);assert_eq!(p[0].to_bits(),p[1].to_bits());assert_eq!(p[1].to_bits(),p[2].to_bits());Ok([50.,40.,60.,p[3]])}
   fn lch_to_rgb(&self,p:[f32;4],_:&Interrupt<'_>)->Result<[f32;4],E>{assert_eq!(p[..3],[50.,45.,60.]);Ok([-0.25,1.25,0.5,p[3]])}
+ }
+ struct PreparedStages<'a>{inner:&'a Stages,preparation:u64}
+ impl FloatConversions for PreparedStages<'_>{
+  fn context(&self)->Context{self.inner.context()}
+  fn requirements(&self,c:&Interrupt<'_>)->Result<ConversionRequirements,E>{let mut required=self.inner.requirements(c)?;required.preparation_work_units=self.preparation;Ok(required)}
+  fn rgb_to_lch(&self,p:[f32;4],c:&Interrupt<'_>)->Result<[f32;4],E>{self.inner.rgb_to_lch(p,c)}
+  fn lch_to_rgb(&self,p:[f32;4],c:&Interrupt<'_>)->Result<[f32;4],E>{self.inner.lch_to_rgb(p,c)}
  }
  #[test]
  fn exact_stored_scalar_binding_preserves_disabled_outer_metadata_and_raw_input(){
@@ -145,5 +154,14 @@ mod tests {
   let polls=AtomicUsize::new(0);let stop=||polls.fetch_add(1,Ordering::Relaxed)>=2;
   assert_eq!(validate_selected(view,view.extent,&Interrupt::cancel_only(&stop)),Err(E::Cancelled));
   assert_eq!(converters.calls.load(Ordering::Relaxed),0);
+ }
+ #[test]
+ fn converter_preparation_is_debited_once_not_per_pixel_and_cannot_overflow(){
+  let node=node();let bound=bind_source_node(&node,binding(),&Interrupt::NONE).unwrap();let data=[[0.25,0.5,0.75,1.0];2];
+  let view=RgbFloatView{extent:Rect::new(0,0,2,1),pixels:&data,context:context()};let stages=Stages{calls:AtomicUsize::new(0)};let prepared=PreparedStages{inner:&stages,preparation:7};
+  let one=bound.requirements(view,Rect::new(0,0,1,1),&prepared,Limits::default(),&Interrupt::NONE).unwrap();let two=bound.requirements(view,view.extent,&prepared,Limits::default(),&Interrupt::NONE).unwrap();
+  assert_eq!(one.work_units,184);assert_eq!(two.work_units,329);assert_eq!(two.work_units-one.work_units,145);
+  assert!(matches!(bound.evaluate(view,view.extent,&prepared,Limits{resident_bytes:two.peak_bytes,work_units:328},&Interrupt::NONE),Err(E::LimitExceeded)));assert_eq!(stages.calls.load(Ordering::Relaxed),0);
+  let overflow=PreparedStages{inner:&stages,preparation:u64::MAX};assert!(matches!(bound.requirements(view,view.extent,&overflow,Limits::default(),&Interrupt::NONE),Err(E::LimitExceeded)));
  }
 }

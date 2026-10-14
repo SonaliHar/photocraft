@@ -113,7 +113,7 @@ pub struct PreparedRgb<'a> {
 fn poll(c: &Interrupt<'_>) -> Result<(), E> {
     c.check().map_err(|_| E::Cancelled)
 }
-fn cms_error(error: control::Error) -> E {
+pub(crate) fn cms_error(error: control::Error) -> E {
     match error {
         control::Error::Cancelled => E::Cancelled,
         control::Error::Allocation => E::AllocationFailed,
@@ -244,7 +244,7 @@ pub fn preparation_requirements_with_trc_policy(
         work_units,
     })
 }
-fn pipeline_bytes(p: &Pipeline, policy: TrcPolicy) -> Result<u64, E> {
+pub(crate) fn pipeline_bytes(p: &Pipeline, policy: TrcPolicy) -> Result<u64, E> {
     let mut result = bytes(p.stages.capacity(), size_of::<Stage>())?;
     if p.inputs != 3 || p.outputs != 3 || p.stages.len() != 2 {
         return Err(E::UnsupportedConversion);
@@ -291,7 +291,7 @@ fn unit_pixel(input: [f32; 4]) -> Result<(), E> {
     }
     Ok(())
 }
-fn narrow(value: f64) -> Result<f32, E> {
+pub(crate) fn narrow(value: f64) -> Result<f32, E> {
     if !value.is_finite() || value.abs() > f64::from(f32::MAX) {
         return Err(E::InvalidSample);
     }
@@ -302,7 +302,7 @@ fn narrow(value: f64) -> Result<f32, E> {
     Ok(out)
 }
 /// CIE polar equations in f64, then a single final Float component rounding.
-fn lab_to_lch_float(lab: [f64; 3], alpha: f32) -> Result<[f32; 4], E> {
+pub(crate) fn lab_to_lch_float(lab: [f64; 3], alpha: f32) -> Result<[f32; 4], E> {
     if lab.iter().any(|v| !v.is_finite()) {
         return Err(E::InvalidSample);
     }
@@ -311,7 +311,7 @@ fn lab_to_lch_float(lab: [f64; 3], alpha: f32) -> Result<[f32; 4], E> {
     let hue = if chroma == 0.0 { 0.0 } else { b.atan2(a).to_degrees().rem_euclid(360.0) };
     Ok([narrow(lightness)?, narrow(chroma)?, narrow(hue)?, alpha])
 }
-fn lch_to_lab(input: [f32; 4]) -> Result<[f64; 3], E> {
+pub(crate) fn lch_to_lab(input: [f32; 4]) -> Result<[f64; 3], E> {
     let [lightness, chroma, hue, _] = input;
     let angle = f64::from(hue).to_radians();
     let output = [f64::from(lightness), f64::from(chroma) * angle.cos(), f64::from(chroma) * angle.sin()];

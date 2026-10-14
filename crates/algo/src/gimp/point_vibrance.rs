@@ -16,7 +16,14 @@ pub struct Context {pub rgb:WorkingContext,pub lch:LchFloatContext}
 /// Prospective known converter storage/work, supplied by its actual implementation.
 /// The cooperative callback boundary cannot constrain hidden provider allocations.
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub struct ConversionRequirements {pub retained_bytes:u64,pub scratch_bytes:u64,pub work_units:u64}
+pub struct ConversionRequirements {
+ pub retained_bytes:u64,
+ pub scratch_bytes:u64,
+ /// Conservatively retained construction/preparation work, debited once per ROI.
+ pub preparation_work_units:u64,
+ /// Steady work for the paired RGB-to-LCh and LCh-to-RGB conversion of one pixel.
+ pub work_units:u64,
+}
 /// The caller must implement a proven, explicit same-profile conversion recipe.
 /// No format string, default ICC or working matrix is inferred by this interface.
 pub trait FloatConversions {
@@ -57,7 +64,7 @@ mod tests {
  struct StageWitness {context:Context}
  impl FloatConversions for StageWitness {
   fn context(&self)->Context{self.context}
-  fn requirements(&self,_:&Interrupt<'_>)->Result<ConversionRequirements,E>{Ok(ConversionRequirements{retained_bytes:0,scratch_bytes:0,work_units:1})}
+  fn requirements(&self,_:&Interrupt<'_>)->Result<ConversionRequirements,E>{Ok(ConversionRequirements{retained_bytes:0,scratch_bytes:0,preparation_work_units:0,work_units:1})}
   fn rgb_to_lch(&self,p:[f32;4],_:&Interrupt<'_>)->Result<[f32;4],E>{assert_eq!(p[0].to_bits(),p[1].to_bits());assert_eq!(p[1].to_bits(),p[2].to_bits());assert_ne!(p[0],0.25);Ok([50.0,20.0,10.0,p[3]])}
   fn lch_to_rgb(&self,p:[f32;4],_:&Interrupt<'_>)->Result<[f32;4],E>{assert_eq!(p[..3],[50.0,25.0,10.0]);Ok([0.1,0.2,0.3,p[3]])}
  }

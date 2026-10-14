@@ -43,6 +43,7 @@ pub mod gimp_hue_chroma_candidate;
 pub mod gimp_hue_chroma_color_candidate;
 pub mod gimp_hue_chroma_rgb_binding_candidate;
 pub mod gimp_vibrance_candidate;
+pub mod gimp_vibrance_color_candidate;
 pub mod gimp_channel_gaussian_candidate;
 pub mod gimp_link_native_precision_candidate;
 pub mod gimp_threshold_alpha_composition_candidate;
