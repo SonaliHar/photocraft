@@ -10,7 +10,7 @@
 
 use egui::{Align2, Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
 use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, LiquifyTool, ProxyImage, auto_cell};
-use photocraft_doc::LayerId;
+use photocraft_doc::{DocId, LayerId};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -120,6 +120,8 @@ impl LiquifyOpts {
 }
 
 pub struct LiquifyDialog {
+    /// Document this dialog belongs to (#5115).
+    pub document: DocId,
     pub layer: LayerId,
     layer_name: String,
     canvas: Rect,
@@ -183,6 +185,7 @@ fn union_rect(a: Option<Rect>, b: Rect) -> Option<Rect> {
 impl LiquifyDialog {
     pub fn describe(&self) -> Value {
         json!({
+            "document": self.document.0,
             "layer": self.layer.0,
             "tool": self.opts.tool,
             "size": self.opts.size,
@@ -458,6 +461,7 @@ pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> 
     let out = vec![[0u8; 4]; proxy.w * proxy.h];
     let center = [f64::from(canvas.x0 + canvas.x1) / 2.0, f64::from(canvas.y0 + canvas.y1) / 2.0];
     let mut d = LiquifyDialog {
+        document: st.doc.id,
         layer,
         layer_name: name,
         canvas,
