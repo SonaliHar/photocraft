@@ -50,6 +50,30 @@ fn flip_horizontal_keeps_the_image_centre_in_place_for_rotated_views() {
 }
 
 #[test]
+fn flip_horizontal_command_preserves_the_active_canvas_position() {
+    use crate::canvas::ViewXform;
+    use egui::{Rect, pos2, vec2};
+
+    let (mut app, ctx) = app_with(1);
+    app.last_canvas_rect = Rect::from_min_size(pos2(17.0, 31.0), vec2(900.0, 640.0));
+    app.ui.views[0].center = [35.0, 91.0];
+    app.ui.views[0].zoom = 2.4;
+    app.ui.views[0].rotation = 27.0;
+    app.ui.view.pixel_aspect_correction = true;
+
+    let before_xf = ViewXform::active(&app).unwrap();
+    let doc = app.session.active().unwrap();
+    let image_center = [doc.doc.size.width as f32 * 0.5, doc.doc.size.height as f32 * 0.5];
+    let before = before_xf.to_screen(image_center[0], image_center[1]);
+
+    menu(&mut app, &ctx, "view.flipHorizontal", json!({})).unwrap();
+
+    let after_xf = ViewXform::active(&app).unwrap();
+    let after = after_xf.to_screen(image_center[0], image_center[1]);
+    assert!(before.distance(after) < 1e-3, "{before:?} -> {after:?}");
+}
+
+#[test]
 fn flip_horizontal_does_not_change_document_history() {
     let (mut app, ctx) = app_with(1);
     let history = app.session.active().unwrap().history.past_len();
