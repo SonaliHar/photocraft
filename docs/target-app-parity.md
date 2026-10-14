@@ -1,6 +1,6 @@
 # PhotoCraft vs Adobe Photoshop: target-app parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (`.atn` import maps 112 events; Free Transform H/V skew fields; stale rows corrected against `main` and the scorecard, estimates unchanged; Photoshop Actions `.atn` load and save; 2026-10-10: Tilt-Shift measurements added; earlier the same day: major, full re-measure against Photoshop 2026 27.11.0; merged `parity-estimate.md` and the roadmap's honest assessment) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-13 · **Change:** minor (beta row: one missing tool, not 15; `.atn` import maps 112 events; Free Transform H/V skew fields; stale rows corrected against `main` and the scorecard, estimates unchanged; Photoshop Actions `.atn` load and save; 2026-10-10: Tilt-Shift measurements added; earlier the same day: major, full re-measure against Photoshop 2026 27.11.0; merged `parity-estimate.md` and the roadmap's honest assessment) · **Target:** Adobe Photoshop 2026
 
 The authoritative answer to "how close is PhotoCraft to Photoshop, and how much work is left". The
 one-page summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work list is [`gaps.md`](gaps.md);
@@ -214,7 +214,7 @@ than the work already done.
 
 | Milestone | Scope | Opus 5.5 agent-hours |
 |---|---|---:|
-| **Beta** (~75% ready, PSD reliable) | PSD fidelity and Photoshop re-open check, the performance budgets, the user bug backlog, the 15 missing tools, Select and Mask / Content-Aware Fill workspaces, type depth, UI feel (brush, transform, panels), JPEG/PDF/AVIF/JXL formats, Hindi/Arabic/Vietnamese and RTL | **1,100–1,800** |
+| **Beta** (~75% ready, PSD reliable) | PSD fidelity and Photoshop re-open check, the performance budgets, the user bug backlog, the last missing tool (Art History Brush), Select and Mask / Content-Aware Fill workspaces, type depth, UI feel (brush, transform, panels), JPEG/PDF/AVIF/JXL formats, Hindi/Arabic/Vietnamese and RTL | **1,100–1,800** |
 | **Full parity** | the above plus the AI tier, plug-in/scripting ecosystem, video depth, long-tail fidelity | **2,300–4,100** |
 
 **Parallelism.** About 80% parallelizes: areas are independent crates and command modules, and
@@ -565,6 +565,7 @@ See [method, raw measurements and reproduction](five-algorithm-performance.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | Beta row named 15 missing tools; one remains (Art History Brush). Percentages and hours unchanged |
 | 2026-10-12 | minor | Free Transform options bar H/V skew fields; percentages unchanged |
 | 2026-10-12 | minor | `.atn` import: 112 events mapped (TrueGrit Texture Supply sets play end to end); percentages unchanged |
 | 2026-10-12 | minor | Photoshop Actions `.atn` load and save (90 events mapped both ways); percentages unchanged |
