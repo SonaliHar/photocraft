@@ -102,6 +102,8 @@ pub use xcf_filters::{
     HueSaturationSourceIdentity, MappedHueSaturationSource, map_retained_hue_saturation_source,
     SceneChannelBinding, SceneChannelLimits, SceneChannelRequirements, SceneChannelStorage,
     StoredSceneChannel, StoredSceneEffect, assemble_scene_channel_storage,
+    ConfiguredEffectBinding, ConfiguredEffectIdentity, ConfiguredSceneStacks,
+    SceneConfiguredLimits, SceneConfiguredRequirements, map_scene_channel_configured,
 };
 #[cfg(test)]
 #[path = "../tests/common/xcf.rs"]

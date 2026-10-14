@@ -48,6 +48,7 @@ pub mod generator_roi_graph;
 pub mod brightness_contrast_candidate;
 pub mod hue_saturation_candidate;
 pub mod mixed_hue_saturation_candidate;
+pub mod sector_hue_saturation_candidate;
 pub mod native_point_graph;
 pub mod graph_bindings;
 pub mod typed_schema;

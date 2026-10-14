@@ -56,6 +56,10 @@ impl<'a, P> MappedCurvesSource<'a, P> {
     pub fn node(&self) -> &FilterNode {
         &self.node
     }
+    /// Move the already-admitted node without another deep configuration copy.
+    pub(super) fn into_node(self) -> FilterNode {
+        self.node
+    }
     pub fn identity(&self) -> RetainedSourceIdentity<'a> {
         self.identity
     }

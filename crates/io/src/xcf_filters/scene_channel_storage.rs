@@ -86,8 +86,47 @@ pub struct SceneChannelStorage<'s, 'd, 'b, 'a> {
     _decoder_extra: Option<Reservation<'b, 'a>>,
     _output: Reservation<'b, 'a>,
     _index: Reservation<'b, 'a>,
+    shared: &'b Budget<'a>,
+    original_limits: SceneChannelLimits,
+    configured_claimed: bool,
 }
 impl SceneChannelStorage<'_, '_, '_, '_> {
+    /// One attempt consumes held headroom, including failure. No lease is reset,
+    /// shrunk or reconstructed from an asserted total. The configured result
+    /// retains an exclusive borrow of this owner until all nodes are dropped.
+    pub(super) fn claim_configured(&mut self, resident: u64, index: u64, work: u64, shared: &Budget<'_>, ctl: &Interrupt<'_>) -> Result<(), IoError> {
+        if self.configured_claimed {
+            return Err(bad("configured scene attempt already consumed"));
+        }
+        self.configured_claimed = true;
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        if !std::ptr::eq(self.shared, shared) {
+            return Err(bad("configured scene requires the same shared budget"));
+        }
+        let held_index = add(self.current.known_index_reservation_bytes() as u64, self.current.known_map_reservation_bytes() as u64)?;
+        let own_index = self.requirements.index_bytes.checked_sub(held_index).ok_or_else(|| bad("scene index categories"))?;
+        let new_output = add(self.requirements.output_bytes, resident)?;
+        let new_own_index = add(own_index, index)?;
+        let new_work = add(self.requirements.work_units, work)?;
+        let full_resident = add(
+            add(self.requirements.decoder_retained_bytes, self.requirements.source_retained_bytes)?,
+            add(self.requirements.current_retained_bytes, new_output)?,
+        )?;
+        let full_index = add(held_index, new_own_index)?;
+        if new_output > self._output.bytes()
+            || new_own_index > self._index.bytes()
+            || full_resident > self.original_limits.resident_bytes
+            || full_index > self.original_limits.index_bytes
+            || new_work > self.original_limits.work_units
+        {
+            return Err(bad("configured scene held aggregate headroom"));
+        }
+        self.shared.consume_work(work, "configured scene prepaid mapping").map_err(accounting)?;
+        self.requirements.output_bytes = new_output;
+        self.requirements.index_bytes = full_index;
+        self.requirements.work_units = new_work;
+        Ok(())
+    }
     pub fn file(&self) -> &XcfFile {
         &self.owner.decoded.file
     }
@@ -1005,6 +1044,9 @@ pub fn assemble_scene_channel_storage<'s, 'd, 'b, 'a>(
         _decoder_extra: decoder_extra,
         _output: output,
         _index: index,
+        shared,
+        original_limits: limits,
+        configured_claimed: false,
     })
 }
 

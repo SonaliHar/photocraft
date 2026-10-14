@@ -249,6 +249,12 @@ pub use scene_channel_storage::{
     SceneChannelBinding, SceneChannelLimits, SceneChannelRequirements, SceneChannelStorage,
     StoredSceneChannel, StoredSceneEffect, assemble_scene_channel_storage,
 };
+#[path = "xcf_filters/scene_channel_configured.rs"]
+mod scene_channel_configured;
+pub use scene_channel_configured::{
+    ConfiguredEffectBinding, ConfiguredEffectIdentity, ConfiguredSceneStacks,
+    SceneConfiguredLimits, SceneConfiguredRequirements, map_scene_channel_configured,
+};
 
 fn color_to_alpha_arguments<P>(effect: &Effect<P>) -> Result<Vec<FilterArgument>, IoError> {
     if effect.version.as_deref() != Some("0:0") || effect.arguments.len() != 3 {
