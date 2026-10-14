@@ -444,6 +444,9 @@ pub struct Services {
     pub system_theme: Option<SystemThemeFn>,
     /// The native window is connected directly to a Wayland compositor.
     pub is_wayland: bool,
+    /// The native compositor ignores the viewport destination of custom cursor surfaces
+    /// (Hyprland 0.56). At a scaled display, paint tool cursors on the canvas instead.
+    pub cursor_bitmap_ignores_viewport: bool,
     /// On Wayland, the shell command that starts this install under XWayland, where native file
     /// drops work (#386); `None` when there is no X server to run it on.
     pub xwayland_command: Option<String>,
@@ -1793,6 +1796,7 @@ impl eframe::App for PhotocraftApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        tool_cursor::set_bitmap_viewport_unreliable(&ctx, self.services.cursor_bitmap_ignores_viewport);
         self.hover_layer = None;
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
         // Fonts registered via set_fonts only take effect next frame; named families would panic now.

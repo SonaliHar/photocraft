@@ -18,6 +18,36 @@ fn frame(ctx: &egui::Context, draw: impl FnMut(&mut egui::Ui)) -> egui::FullOutp
 }
 
 #[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn scaled_compositors_without_cursor_viewports_paint_the_tip_at_the_pointer() {
+    let ctx = egui::Context::default();
+    set_bitmap_viewport_unreliable(&ctx, true);
+    // The native scale follows the window between monitors. UI zoom is independent.
+    ctx.set_zoom_factor(1.25);
+    for display_scale in [1.6, 2.0, 1.0, 1.6] {
+        let mut input = egui::RawInput::default();
+        input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(display_scale);
+        let at = egui::pos2(123.0, 94.0);
+        let radius = 20.0 / (display_scale * 1.25);
+        let mut output = ctx.run_ui(input, |ui| {
+            ui.ctx().set_cursor_icon(circle(ui.painter(), at, radius, true));
+        });
+        output.textures_delta.clear();
+        if display_scale == 1.0 {
+            assert!(output.platform_output.cursor_image.is_some(), "UI zoom alone keeps the native cursor");
+        } else {
+            assert!(output.platform_output.cursor_image.is_none(), "a scaled Hyprland window must not upload the misplaced bitmap");
+            assert!(output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Circle(c) if c.center == at && c.radius == radius)));
+        }
+    }
+    set_bitmap_viewport_unreliable(&ctx, false);
+    let output = frame(&ctx, |ui| {
+        ui.ctx().set_cursor_icon(circle(ui.painter(), egui::pos2(123.0, 94.0), 20.0, true));
+    });
+    assert!(output.platform_output.cursor_image.is_some(), "other compositors retain the native cursor at 160%");
+}
+
+#[test]
 fn bitmap_has_a_transparent_hotspot_and_the_correct_radius_at_each_dpi() {
     for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
         let radius = 20.0;

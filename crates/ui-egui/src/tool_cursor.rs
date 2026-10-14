@@ -1,8 +1,10 @@
 //! Canvas cursors must move with the OS pointer, independently of the canvas frame rate: the brush
 //! outline and crosshairs are OS cursor bitmaps on every desktop platform (Windows, macOS, X11 and
 //! Wayland), so they track the hardware pointer instead of trailing it by the app's render,
-//! present and compositor latency. A painted outline lagged the pointer by several refreshes on
-//! Linux and macOS and "jumped to catch up" on slow frames (#1343). Windows' stock crosshair
+//! present and compositor latency. Scaled native Hyprland windows use a painted outline because
+//! their compositor ignores custom cursor viewport sizing (see [`native`]). A painted outline
+//! lagged the pointer by several refreshes on Linux and macOS and "jumped to catch up" on slow
+//! frames (#1343). Windows' stock crosshair
 //! inverts grey into grey, so the crosshairs are our black/white bitmap there too.
 
 use std::sync::Arc;
@@ -93,7 +95,18 @@ fn close_ring() -> Vec<Vec2> {
 /// Can this pass show an OS cursor bitmap? eframe's immediate viewports and its web integration
 /// don't upload cursor images; every desktop root viewport does (winit custom cursors).
 fn native(ctx: &egui::Context) -> bool {
-    cfg!(not(target_arch = "wasm32")) && ctx.viewport_id() == egui::ViewportId::ROOT
+    let ignores_viewport = ctx.data(|d| d.get_temp::<bool>(egui::Id::new("photocraft-cursor-viewport-unreliable"))).unwrap_or(false);
+    // winit sets a viewport destination and divides the hotspot by the display scale.
+    // Hyprland 0.56 draws the buffer using only wl_surface.buffer_scale, ignoring that
+    // destination: a 160% display enlarges the tip and moves its centre below/right of
+    // the actual pointer. The canvas painter shares the stroke's transform and avoids
+    // that mismatch. UI zoom alone is safe; this is the native display scale only.
+    let scaled_display = ctx.input(|i| i.viewport().native_pixels_per_point.unwrap_or(1.0)) != 1.0;
+    cfg!(not(target_arch = "wasm32")) && ctx.viewport_id() == egui::ViewportId::ROOT && !(ignores_viewport && scaled_display)
+}
+
+pub(crate) fn set_bitmap_viewport_unreliable(ctx: &egui::Context, unreliable: bool) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("photocraft-cursor-viewport-unreliable"), unreliable));
 }
 
 /// Bitmap pixels per egui point. winit takes an `NSCursor` image's dimensions as logical points on

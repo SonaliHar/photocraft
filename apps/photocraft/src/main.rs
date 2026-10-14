@@ -382,6 +382,9 @@ fn main() -> eframe::Result {
             #[cfg(target_os = "linux")]
             {
                 services.is_wayland = display == Some(tablet::DisplayKind::Wayland);
+                // Hyprland's cursor surfaces ignore winit's viewport sizing at display scales
+                // other than 1; let the canvas draw the outline at the stroke's own position.
+                services.cursor_bitmap_ignores_viewport = services.is_wayland && std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some();
                 file_dialog_probe::start();
                 if services.is_wayland {
                     let var = |name| std::env::var(name).ok();
