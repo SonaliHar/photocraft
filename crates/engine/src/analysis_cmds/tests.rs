@@ -28,11 +28,14 @@ fn failed_compound_restores_layer_target_history_and_journal() {
     let prior_doc = st.doc.clone();
     let prior_history = st.history.past_len();
     let prior_channel_view = st.channel_view.clone();
+    let prior_mask_targeted = s.tools.mask_targeted;
     let prior_journal = s.journal.len();
     let error = compound(&mut s, "Place Scale Marker", |s| -> Result<()> {
         // Mirrors a scale-bar creation followed by a failed type.create: the
         // inner command selects a new layer, which rollback must remove.
         s.execute("layer.new.layer", json!({"name": "Temporary Scale Bar"}))?;
+        s.active_mut().unwrap().channel_view.target = crate::channel_cmds::ChannelTarget::LayerMask;
+        s.sync_tools_mask_target();
         Err(bad("test", "synthetic second step failed"))
     })
     .unwrap_err();
@@ -46,6 +49,7 @@ fn failed_compound_restores_layer_target_history_and_journal() {
     assert_eq!(st.selected_layers, vec![background, selected]);
     assert_eq!(st.layer_anchor, Some(background));
     assert_eq!(st.channel_view, prior_channel_view);
+    assert_eq!(s.tools.mask_targeted, prior_mask_targeted, "tool mask target follows the restored channel");
     assert_eq!(st.coalesce.as_deref(), Some("previous-gesture"));
     assert!(st.doc.layer(selected).is_some());
 
