@@ -310,8 +310,9 @@ pub(crate) fn presets(ui: &mut Ui, d: &mut CameraRawDialog) -> bool {
     changed
 }
 
-/// The More (…) menu. Returns whether settings changed.
-pub(crate) fn more_menu(ui: &mut Ui, d: &mut CameraRawDialog, previous: Option<CameraRaw>) -> bool {
+/// The More (…) menu. Returns whether settings changed; Load / Save Settings set `action`
+/// ("load" / "save", run by the dialog after the frame).
+pub(crate) fn more_menu(ui: &mut Ui, d: &mut CameraRawDialog, previous: Option<CameraRaw>, action: &mut Option<&'static str>) -> bool {
     ui.set_min_width(240.0);
     let mut changed = false;
     let item = |ui: &mut Ui, label: &str, shortcut: &str, enabled: bool| -> bool {
@@ -355,8 +356,14 @@ pub(crate) fn more_menu(ui: &mut Ui, d: &mut CameraRawDialog, previous: Option<C
         changed = true;
     }
     ui.separator();
-    item(ui, tr("Load Settings..."), "", false);
-    item(ui, tr("Save Settings..."), "", false);
+    if item(ui, tr("Load Settings..."), "", true) {
+        *action = Some("load");
+        ui.close();
+    }
+    if item(ui, tr("Save Settings..."), "", true) {
+        *action = Some("save");
+        ui.close();
+    }
     if changed {
         ui.close();
     }
