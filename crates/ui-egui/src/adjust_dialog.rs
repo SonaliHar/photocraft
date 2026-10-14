@@ -199,6 +199,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
         Some(id) if adjust_editors::needs_histogram(&kind) => Some(tone::histograms(app, HistSource::Layer(id), adjust_editors::space_of(&values))),
         _ => None,
     };
+    let isolated_curve = app.session.active().and_then(photocraft_engine::channel_cmds::isolated_curve_channel);
     let cx = EditorCx {
         mem: dialog_mem(&kind),
         hist,
@@ -207,6 +208,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
         gradients: adjust_editors::gradient_presets(app, &kind),
         dialog: true,
         dynamic_color_sliders: app.session.prefs().interface.dynamic_color_sliders,
+        isolated_curve,
     };
     let e = adjust_editors::editor(ui, &kind, &mut values, &cx);
     if e.import_gradients {
@@ -737,5 +739,26 @@ mod tests {
         let _ = crate::control::handle(&mut app, &context, &request);
         assert_eq!(channel_points(&app, "red"), red, "pointer up does not sample again");
         assert!(picker_armed(&app));
+    }
+
+    /// #5335: a targeted mask, saved channel or colour component is the only Channel popup entry.
+    #[test]
+    fn curves_channel_popup_lists_only_the_targeted_channel() {
+        let mut app = app_with_image();
+        app.run("layer.layerMask.revealAll", json!({})).unwrap();
+        app.run("channel.target", json!({"channel": "mask"})).unwrap();
+        let id = open(&mut app, "image.adjustments.curves").unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(4);
+        let _ = id;
+        let combo = h.get_by_role(egui::accesskit::Role::ComboBox);
+        let name = combo.value().unwrap_or_default();
+        assert!(name.contains("Mask"), "{name}");
+        combo.click();
+        h.run_steps(2);
+        let labels: Vec<String> = h.query_all_by_role(egui::accesskit::Role::Button).iter().filter_map(|n| n.label()).collect();
+        assert!(labels.iter().any(|l| l.contains("Mask")), "{labels:?}");
+        assert!(!labels.iter().any(|l| l == "Red" || l == "Green" || l == "Blue" || l == "RGB"), "{labels:?}");
     }
 }

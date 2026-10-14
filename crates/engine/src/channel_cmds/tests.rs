@@ -867,3 +867,30 @@ fn thumbnail_selection_shape_without_pixel_cache_uses_its_transparency() {
         assert_eq!((b.x0, b.y0, b.width(), b.height()), (20, 10, 40, 30));
     }
 }
+
+/// #5335: a single targeted channel is the only Curves popup entry, named as in the Channels panel.
+#[test]
+fn isolated_curve_channel_matches_the_channels_panel() {
+    let mut s = session();
+    assert!(isolated_curve_channel(s.active().unwrap()).is_none(), "composite lists every colour channel");
+    s.execute("channel.target", json!({"channel": {"color": 1}})).unwrap();
+    let green = isolated_curve_channel(s.active().unwrap()).expect("green");
+    assert_eq!((green.name.as_str(), green.key, green.tint), ("Green", "green", true));
+
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    s.execute("channel.target", json!({"channel": "mask"})).unwrap();
+    let mask = isolated_curve_channel(s.active().unwrap()).expect("mask");
+    assert_eq!(mask.key, "");
+    assert!(!mask.tint);
+    assert_eq!(mask.name, format!("{} Mask", doc(&s).layer(s.active().unwrap().active_layer.unwrap()).unwrap().name));
+
+    s.execute("channel.new", json!({"name": "Sky sel", "fill": "white"})).unwrap();
+    s.execute("channel.target", json!({"channel": 0})).unwrap();
+    let alpha = isolated_curve_channel(s.active().unwrap()).expect("alpha");
+    assert_eq!((alpha.name.as_str(), alpha.key, alpha.tint), ("Sky sel", "", false));
+
+    let mut qm = session();
+    qm.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+    let row = isolated_curve_channel(qm.active().unwrap()).expect("quick mask");
+    assert_eq!((row.name.as_str(), row.tint), ("Quick Mask", false));
+}

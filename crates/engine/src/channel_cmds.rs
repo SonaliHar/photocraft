@@ -182,6 +182,46 @@ pub fn composite_name(mode: ColorMode) -> &'static str {
     }
 }
 
+/// The Curves dialog's Channel popup lists only this channel when the Channels panel has a
+/// single non-composite target (a colour component, layer mask, saved channel or Quick Mask).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IsolatedCurveChannel {
+    /// Channels-panel name, including a custom alpha name or "{layer} Mask".
+    pub name: String,
+    /// Curves param key: empty = composite `points`; otherwise `red`/`green`/…
+    pub key: &'static str,
+    /// Index into the tone-space histograms (composite = 0 for RGB/CMYK).
+    pub hist: usize,
+    /// Colour components keep their curve tint; masks and alphas do not.
+    pub tint: bool,
+}
+
+/// Isolated Curves channel for the active document, matching [`inject_target`].
+pub fn isolated_curve_channel(st: &DocState) -> Option<IsolatedCurveChannel> {
+    let doc = &st.doc;
+    let mode = edit_mode(doc);
+    match st.channel_view.target {
+        ChannelTarget::Color(k) => {
+            let names = color_names(mode);
+            let keys = crate::adjust_params::channel_keys(crate::adjust_params::default_space(mode));
+            let name = names.get(k)?.to_string();
+            let key = *keys.get(k)?;
+            let hist = if matches!(mode, ColorMode::Lab) { k } else { k.saturating_add(1) };
+            Some(IsolatedCurveChannel { name, key, hist, tint: true })
+        }
+        ChannelTarget::Alpha(i) => doc.channels.get(i).map(|c| IsolatedCurveChannel { name: c.name.clone(), key: "", hist: 0, tint: false }),
+        ChannelTarget::Composite if doc.quick_mask.is_some() => Some(IsolatedCurveChannel { name: "Quick Mask".into(), key: "", hist: 0, tint: false }),
+        ChannelTarget::LayerMask => layer_mask_curve_channel(st),
+        ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some() => layer_mask_curve_channel(st),
+        _ => None,
+    }
+}
+
+fn layer_mask_curve_channel(st: &DocState) -> Option<IsolatedCurveChannel> {
+    let name = st.active_layer.and_then(|id| st.doc.layer(id)).map(|l| format!("{} Mask", l.name))?;
+    Some(IsolatedCurveChannel { name, key: "", hist: 0, tint: false })
+}
+
 fn edit_mode(doc: &Document) -> ColorMode {
     doc.pixel_format().mode
 }
