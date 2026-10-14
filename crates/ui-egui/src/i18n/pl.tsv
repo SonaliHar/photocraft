@@ -3742,3 +3742,10 @@ curves	Smooth	Wygładź
 	Sent to {printer}	Wysłano do {printer}
 	set in Print Settings…	ustawiane w ustawieniach druku…
 	ICO is limited to 256 × 256 pixels	ICO jest ograniczony do 256 × 256 pikseli
+# Bevel & Emboss shading controls.
+	Highlight Mode	Tryb świateł
+	Highlight Color	Kolor świateł
+	Highlight Opacity	Krycie świateł
+	Shadow Mode	Tryb cieni
+	Shadow Color	Kolor cieni
+	Shadow Opacity	Krycie cieni

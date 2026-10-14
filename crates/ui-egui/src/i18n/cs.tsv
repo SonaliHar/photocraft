@@ -3752,3 +3752,10 @@ navigator	Zoom	Zvětšení
 	Sent to {printer}	Odesláno do {printer}
 	set in Print Settings…	nastavuje se v nastavení tisku…
 	ICO is limited to 256 × 256 pixels	ICO je omezen na 256 × 256 pixelů
+# Bevel & Emboss shading controls.
+	Highlight Mode	Režim světel
+	Highlight Color	Barva světel
+	Highlight Opacity	Krytí světel
+	Shadow Mode	Režim stínů
+	Shadow Color	Barva stínů
+	Shadow Opacity	Krytí stínů

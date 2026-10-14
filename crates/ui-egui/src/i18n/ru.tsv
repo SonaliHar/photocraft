@@ -3110,3 +3110,10 @@ curves	Smooth	Сгладить
 	Gray Value (Median)	Уровень серого (медиана)
 	Integrated Density	Интегральная плотность
 	Length	Длина
+# Bevel & Emboss shading controls.
+	Highlight Mode	Режим светлых тонов
+	Highlight Color	Цвет светлых тонов
+	Highlight Opacity	Непрозрачность светлых тонов
+	Shadow Mode	Режим теней
+	Shadow Color	Цвет теней
+	Shadow Opacity	Непрозрачность теней

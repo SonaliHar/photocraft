@@ -3142,3 +3142,10 @@ curves	Smooth	Glätten
 	Sent to {printer}	An {printer} gesendet
 	set in Print Settings…	in den Druckeinstellungen festlegen…
 	ICO is limited to 256 × 256 pixels	ICO ist auf 256 × 256 Pixel begrenzt
+# Bevel & Emboss shading controls.
+	Highlight Mode	Lichtermodus
+	Highlight Color	Lichterfarbe
+	Highlight Opacity	Lichterdeckkraft
+	Shadow Mode	Schattenmodus
+	Shadow Color	Schattenfarbe
+	Shadow Opacity	Schattendeckkraft

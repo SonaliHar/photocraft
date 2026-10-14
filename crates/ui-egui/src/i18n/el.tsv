@@ -3842,3 +3842,10 @@ curves	Smooth	Εξομάλυνση
 	Sent to {printer}	Στάλθηκε στον {printer}
 	set in Print Settings…	ορίζεται στις ρυθμίσεις εκτύπωσης…
 	ICO is limited to 256 × 256 pixels	Το ICO περιορίζεται σε 256 × 256 εικονοστοιχεία
+# Bevel & Emboss shading controls.
+	Highlight Mode	Λειτουργία φωτεινών τόνων
+	Highlight Color	Χρώμα φωτεινών τόνων
+	Highlight Opacity	Αδιαφάνεια φωτεινών τόνων
+	Shadow Mode	Λειτουργία σκιών
+	Shadow Color	Χρώμα σκιών
+	Shadow Opacity	Αδιαφάνεια σκιών

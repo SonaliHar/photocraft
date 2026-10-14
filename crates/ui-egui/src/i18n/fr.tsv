@@ -3146,3 +3146,10 @@ curves	Smooth	Lisser
 	Sent to {printer}	Envoyé à {printer}
 	set in Print Settings…	défini dans les paramètres d’impression…
 	ICO is limited to 256 × 256 pixels	Le format ICO est limité à 256 × 256 pixels
+# Bevel & Emboss shading controls.
+	Highlight Mode	Mode des tons clairs
+	Highlight Color	Couleur des tons clairs
+	Highlight Opacity	Opacité des tons clairs
+	Shadow Mode	Mode des ombres
+	Shadow Color	Couleur des ombres
+	Shadow Opacity	Opacité des ombres

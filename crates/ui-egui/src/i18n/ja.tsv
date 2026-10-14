@@ -3821,3 +3821,10 @@ curves	Smooth	スムーズ
 	Reset All Locked Settings	ロックされた設定をすべて初期化
 	Copy Texture to Other Tools	テクスチャを他のツールにコピー
 	ICO is limited to 256 × 256 pixels	ICO は 256 × 256 ピクセルまでです
+# Bevel & Emboss shading controls.
+	Highlight Mode	ハイライトモード
+	Highlight Color	ハイライトカラー
+	Highlight Opacity	ハイライト不透明度
+	Shadow Mode	シャドウモード
+	Shadow Color	シャドウカラー
+	Shadow Opacity	シャドウ不透明度

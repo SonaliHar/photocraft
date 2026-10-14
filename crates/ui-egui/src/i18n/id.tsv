@@ -3133,3 +3133,10 @@ curves	Smooth	Haluskan
 	Sent to {printer}	Dikirim ke {printer}
 	set in Print Settings…	diatur di Pengaturan Cetak…
 	ICO is limited to 256 × 256 pixels	ICO dibatasi hingga 256 × 256 piksel
+# Bevel & Emboss shading controls.
+	Highlight Mode	Mode Sorotan
+	Highlight Color	Warna Sorotan
+	Highlight Opacity	Opasitas Sorotan
+	Shadow Mode	Mode Bayangan
+	Shadow Color	Warna Bayangan
+	Shadow Opacity	Opasitas Bayangan

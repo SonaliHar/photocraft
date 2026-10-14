@@ -2754,3 +2754,10 @@ curves	Smooth	平滑
 	Sent to {printer}	已发送到 {printer}
 	set in Print Settings…	在打印设置中设置…
 	ICO is limited to 256 × 256 pixels	ICO 最大为 256 × 256 像素
+# Bevel & Emboss shading controls.
+	Highlight Mode	高光模式
+	Highlight Color	高光颜色
+	Highlight Opacity	高光不透明度
+	Shadow Mode	阴影模式
+	Shadow Color	阴影颜色
+	Shadow Opacity	阴影不透明度

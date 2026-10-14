@@ -3934,3 +3934,10 @@ layerLabel	No Color	Sem cor
 	Sent to {printer}	Enviado para {printer}
 	set in Print Settings…	definido nas configurações de impressão…
 	ICO is limited to 256 × 256 pixels	ICO é limitado a 256 × 256 pixels
+# Bevel & Emboss shading controls.
+	Highlight Mode	Modo de realces
+	Highlight Color	Cor dos realces
+	Highlight Opacity	Opacidade dos realces
+	Shadow Mode	Modo de sombras
+	Shadow Color	Cor das sombras
+	Shadow Opacity	Opacidade das sombras

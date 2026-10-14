@@ -2829,3 +2829,10 @@ curves	Smooth	Suavizar
 	Sent to {printer}	Enviado a {printer}
 	set in Print Settings…	se establece en Ajustes de impresión…
 	ICO is limited to 256 × 256 pixels	ICO está limitado a 256 × 256 píxeles
+# Bevel & Emboss shading controls.
+	Highlight Mode	Modo de luces
+	Highlight Color	Color de luces
+	Highlight Opacity	Opacidad de luces
+	Shadow Mode	Modo de sombras
+	Shadow Color	Color de sombras
+	Shadow Opacity	Opacidad de sombras
