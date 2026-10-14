@@ -13,6 +13,17 @@ use crate::{EngineError, Result, Session};
 /// reliable face).
 pub const MIN_SCORE: f32 = 0.5;
 
+/// Why there are no faces in the browser build (see [`photocraft_algo::faces`]).
+const UNAVAILABLE: &str = "face detection isn't available in the browser version of PhotoCraft; use the desktop app";
+
+/// The faces in `px` (`w × h` straight RGBA), as [`faces::detect`] finds them.
+pub fn detect(px: &[[f32; 4]], w: usize, h: usize, min_score: f32) -> Result<Vec<Face>> {
+    if !faces::AVAILABLE {
+        return Err(EngineError::Other(UNAVAILABLE.into()));
+    }
+    faces::detect(px, w, h, min_score).ok_or_else(|| EngineError::Other("face detection failed".into()))
+}
+
 /// The faces in `doc`, best first: in the composite, or in the active layer's pixels when
 /// `all_layers` is off. Coordinates are document pixels.
 pub fn faces_in(doc: &Document, active: Option<LayerId>, all_layers: bool, min_score: f32) -> Result<Vec<Face>> {
@@ -27,7 +38,7 @@ pub fn faces_in(doc: &Document, active: Option<LayerId>, all_layers: bool, min_s
         }
         None => photocraft_compose::render(doc, area).px,
     };
-    let found = faces::detect(&px, w, h, min_score).ok_or_else(|| EngineError::Other("face detection failed".into()))?;
+    let found = detect(&px, w, h, min_score)?;
     let (x0, y0) = (area.x0 as f32, area.y0 as f32);
     Ok(found
         .into_iter()
@@ -67,7 +78,12 @@ pub fn specs() -> Vec<CommandSpec> {
         menu: &[],
         shortcut: None,
         params: r##"{"minScore":0..1=0.5,"sampleAllLayers":bool=true} → {"faces":[{"score","rect":[x,y,w,h],"landmarks":{"rightEye","leftEye","nose","mouthRight","mouthLeft"}: [x,y] each},…]} (best first; "rightEye" is the one on the image's left)"##,
-        enabled: |s| s.active().map(|_| ()).ok_or_else(|| "no document open".into()),
+        enabled: |s| {
+            if !faces::AVAILABLE {
+                return Err(UNAVAILABLE.into());
+            }
+            s.active().map(|_| ()).ok_or_else(|| "no document open".into())
+        },
         run: detect_faces,
         journal: false,
     }]
