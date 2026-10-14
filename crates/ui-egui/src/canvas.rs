@@ -4947,7 +4947,9 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     if let ToolEvent::Down { x, y, .. } = raw
         && let Some((vertical, i)) = command_guide_at(app, app.active_tool(), [x, y], mods)
     {
-        app.guide_drag = Some(crate::rulers::GuideDrag { vertical, index: Some(i), pos: if vertical { x } else { y } });
+        let mut g = crate::rulers::GuideDrag { vertical, index: Some(i), ..Default::default() };
+        g.track([x, y], mods.alt);
+        app.guide_drag = Some(g);
         crate::snap_ui::begin_guide(app, [x, y]);
         return;
     }
@@ -4991,7 +4993,10 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     match ev {
         ToolEvent::Down { x, y, pressure } if tool == Tool::Move => {
             if let Some((vertical, i)) = crate::rulers::guide_at(app, x, y) {
-                app.guide_drag = Some(crate::rulers::GuideDrag { vertical, index: Some(i), pos: if vertical { x } else { y } });
+                // ⌥ as you press or drag turns the guide, as in Photoshop (#5034).
+                let mut g = crate::rulers::GuideDrag { vertical, index: Some(i), ..Default::default() };
+                g.track([x, y], mods.alt);
+                app.guide_drag = Some(g);
                 return;
             }
             // Auto-Select (or ⌘-click while it is off) picks the layer under the pointer first
@@ -5050,14 +5055,14 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
         }
         ToolEvent::Move { x, y, .. } => {
             if let Some(d) = app.guide_drag.as_mut().filter(|d| d.index.is_some()) {
-                d.pos = if d.vertical { x } else { y };
+                d.track([x, y], mods.alt);
                 return;
             }
         }
         ToolEvent::Up { x, y } => {
             if let Some(mut d) = app.guide_drag.filter(|d| d.index.is_some()) {
                 app.guide_drag = None;
-                d.pos = if d.vertical { x } else { y };
+                d.track([x, y], mods.alt);
                 crate::rulers::finish_drag(app, d);
                 return;
             }

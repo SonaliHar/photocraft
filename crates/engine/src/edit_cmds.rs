@@ -838,7 +838,18 @@ fn guide_color(p: &Value) -> Result<Option<[u8; 3]>> {
 /// View › New Guide / guide moves (undoable, like Photoshop's "New Guide"/"Move Guide" states).
 fn guide_cmd(s: &mut Session, p: &Value, op: &str) -> Result<Value> {
     let vertical = p.get("orientation").and_then(Value::as_str).unwrap_or("horizontal") == "vertical";
-    let pos = guide_position(s, p, vertical)?;
+    // Move Guide can turn the guide (⌥ while dragging it, as in Photoshop): `toOrientation`.
+    let to_vertical = match p.get("toOrientation").map(|v| v.as_str()) {
+        None => vertical,
+        Some(Some("vertical")) => true,
+        Some(Some("horizontal")) => false,
+        Some(_) => return Err(EngineError::Other("`toOrientation` must be \"horizontal\" or \"vertical\"".into())),
+    };
+    if to_vertical != vertical && op != "move" {
+        return Err(EngineError::Other("`toOrientation` applies to view.moveGuide only".into()));
+    }
+    // A % position is of the axis the guide ends up on.
+    let pos = guide_position(s, p, to_vertical)?;
     let color = if op == "new" { guide_color(p)? } else { None };
     let index = p.get("index").and_then(Value::as_u64).map(|v| v as usize);
     let label = match op {
@@ -861,10 +872,20 @@ fn guide_cmd(s: &mut Session, p: &Value, op: &str) -> Result<Value> {
             "move" => {
                 let i = index.filter(|i| *i < g.len()).ok_or(EngineError::Other("no such guide".into()))?;
                 let to = pos.ok_or(EngineError::Other("missing `position`".into()))?;
-                let from = std::mem::replace(&mut g[i], to);
+                let from = if to_vertical == vertical {
+                    std::mem::replace(&mut g[i], to)
+                } else {
+                    let from = g.remove(i);
+                    if to_vertical {
+                        guides.vertical.push(to)
+                    } else {
+                        guides.horizontal.push(to)
+                    }
+                    from
+                };
                 // The guide takes its colour along; another guide left at the old position keeps it.
                 if let Some(rgb) = guides.color(vertical, from) {
-                    guides.set_color(vertical, to, Some(rgb));
+                    guides.set_color(to_vertical, to, Some(rgb));
                 }
                 guides.prune_colors();
             }
@@ -1010,7 +1031,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Move Guide",
             &[],
             None,
-            r##"{"orientation":"horizontal|vertical","index":n,"position":px or "<number><unit>"} (units as for view.newGuide)"##,
+            r##"{"orientation":"horizontal|vertical","index":n,"position":px or "<number><unit>","toOrientation":"horizontal|vertical"?} (units as for view.newGuide; toOrientation turns the guide, its position then on the new axis)"##,
             has_doc,
             |s, p| guide_cmd(s, p, "move")
         ),
@@ -1967,6 +1988,35 @@ mod tests {
         s.execute("view.clearGuides", json!({})).unwrap();
         assert!(s.active().unwrap().doc.guides.vertical.is_empty());
         assert!(s.execute("view.moveGuide", json!({"orientation": "vertical", "index": 3, "position": 1})).is_err());
+    }
+
+    /// #5034: Move Guide turns a guide with `toOrientation` (⌥ while dragging it), in one undo
+    /// step, taking its colour along; a % position is of the new axis.
+    #[test]
+    fn move_guide_turns_a_guide() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+        s.execute("view.newGuide", json!({"orientation": "horizontal", "position": 30, "color": "magenta"})).unwrap();
+        s.execute("view.newGuide", json!({"orientation": "horizontal", "position": 70})).unwrap();
+        s.execute("view.moveGuide", json!({"orientation": "horizontal", "index": 0, "position": "50%", "toOrientation": "vertical"})).unwrap();
+        let g = &s.active().unwrap().doc.guides;
+        assert_eq!((g.horizontal.clone(), g.vertical.clone()), (vec![70.0], vec![100.0]), "50% of the width");
+        assert_eq!(g.color(true, 100.0), Some([255, 0, 255]), "the colour moves with the guide");
+        assert_eq!(g.color(false, 30.0), None);
+        // The same orientation is a plain move.
+        s.execute("view.moveGuide", json!({"orientation": "vertical", "index": 0, "position": 20, "toOrientation": "vertical"})).unwrap();
+        assert_eq!(s.active().unwrap().doc.guides.vertical, vec![20.0]);
+        s.undo();
+        s.undo();
+        let g = &s.active().unwrap().doc.guides;
+        assert_eq!((g.horizontal.clone(), g.vertical.clone()), (vec![30.0, 70.0], vec![]), "one undo step per move");
+        // Bad params are refused and leave the guides alone.
+        assert!(s.execute("view.moveGuide", json!({"orientation": "horizontal", "index": 0, "position": 5, "toOrientation": "diagonal"})).is_err());
+        assert!(s.execute("view.moveGuide", json!({"orientation": "horizontal", "index": 0, "position": 5, "toOrientation": 1})).is_err());
+        assert!(s.execute("view.newGuide", json!({"orientation": "horizontal", "position": 5, "toOrientation": "vertical"})).is_err());
+        assert!(s.execute("view.moveGuide", json!({"orientation": "horizontal", "index": 9, "position": 5, "toOrientation": "vertical"})).is_err());
+        let g = &s.active().unwrap().doc.guides;
+        assert_eq!((g.horizontal.clone(), g.vertical.clone()), (vec![30.0, 70.0], vec![]));
     }
 
     /// #2955: the rulers' zero point is set and reset by command, undoable, and bad params are

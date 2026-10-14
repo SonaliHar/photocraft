@@ -1,6 +1,6 @@
 # UI parity: tools, handles, modifiers and feel
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (smart filter reordering by drag; smart object perspective row corrected to done, #426; Free Transform H/V skew fields; toolbar tool shortcuts can be reassigned; ⇧-dragged guides land on ruler ticks; layer and selection keys; tool keys; spring-loaded tool letters; type formatting keys; Pen Auto Add/Delete, #4144; smart filter rows; stale missing-tool rows corrected: Color Replacement, Red Eye and the Add/Delete Anchor Point pair are live toolbar tools, Frame landed; no percentage changed) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (⌥ turns a dragged guide and either ruler deletes one, #5034; earlier: smart filter reordering by drag; smart object perspective row corrected to done, #426; Free Transform H/V skew fields; toolbar tool shortcuts can be reassigned; ⇧-dragged guides land on ruler ticks; layer and selection keys; tool keys; spring-loaded tool letters; type formatting keys; Pen Auto Add/Delete, #4144; smart filter rows; stale missing-tool rows corrected: Color Replacement, Red Eye and the Add/Delete Anchor Point pair are live toolbar tools, Frame landed; no percentage changed) · **Target:** Adobe Photoshop 2026
 
 How PhotoCraft's direct manipulation compares with Photoshop 2026 (27.11.0): the toolbox, the
 handles and modifier keys of each gesture, nudging, snapping, numeric precision, navigation,
@@ -151,6 +151,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Smart guide distance and spacing labels | missing | |
 | Ruler units px/in/cm/mm/pt/pica/% | done | |
 | ⇧-drag a guide out of a ruler: it lands on the nearest ruler tick | done | `rulers.rs` `snap_to_tick` (#3770) |
+| ⌥ while dragging a guide (out of a ruler, or with the Move tool) turns it; a guide dropped on either ruler is deleted | done | `rulers.rs` `GuideDrag::track`, `view.moveGuide` `toOrientation` (#5034) |
 | Status bar follows the ruler unit | partial | #2602 |
 | Ruler corner and gaps drawn as Photoshop | partial | #2600, #2601, #2551 |
 | Guides stored as f64 | missing | `Vec<f32>` (UI-217-20) |
@@ -217,6 +218,7 @@ Paragraph; the rest open as in-app floating windows.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | ⌥ while dragging a guide turns it horizontal ↔ vertical, as in Photoshop; a guide dropped on either ruler is deleted (#5034) |
 | 2026-10-13 | minor | Stale "missing tool" rows corrected against main: Color Replacement (`paint.colorReplacement`), Red Eye (`paint.redEye`) and Add/Delete Anchor Point (the P flyout cycle) are live toolbar tools, so only Art History Brush is missing; no percentage or estimate changed |
 | 2026-10-13 | minor | Smart object perspective (non-affine) corrected to done: #426 landed four-corner placements with PSD round trip; scorecard FILE-215-6 flipped |
 | 2026-10-10 | major | First version, from a source audit against Photoshop 2026 27.11.0's shortcuts file and the open issues |
