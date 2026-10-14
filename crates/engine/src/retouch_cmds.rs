@@ -1063,7 +1063,10 @@ pub struct LiveDab {
     /// The active document with the stroke so far.
     pub doc: std::sync::Arc<Document>,
     cmd: String,
-    renderer: photocraft_paint::StrokeRenderer,
+    /// The stroke's dabs and tip. Not a `StrokeRenderer`: that would also rasterise every dab,
+    /// unclipped, into a coverage map nothing here reads (about 0.5 GB for one soft 5000 px dab).
+    dabs: photocraft_paint::dynamics::DabGenerator,
+    ctx: photocraft_paint::BrushContext,
     done: usize,
     effect: DabEffect,
     halo: i32,
@@ -1114,11 +1117,12 @@ impl LiveDab {
         let pre_surf = surf.clone();
         let effect = effect(&pre_surf);
         // `apply_dab_stroke` generates the same dabs (`dabs`: zoom 1, no smoothing scale).
-        let renderer = photocraft_paint::StrokeRenderer::new(&stroke.brush, None, 1.0).record_dabs();
+        let (dabs, ctx) = (photocraft_paint::dynamics::DabGenerator::new(&stroke.brush, 1.0), photocraft_paint::BrushContext::new(&stroke.brush));
         let mut live = Self {
             doc: std::sync::Arc::new(doc),
             cmd: cmd.into(),
-            renderer,
+            dabs,
+            ctx,
             done: 0,
             effect,
             halo,
@@ -1153,12 +1157,12 @@ impl LiveDab {
     /// Invalid coordinates reject the whole batch without changing the preview.
     pub fn push(&mut self, pts: &[StrokePoint]) -> Result<Rect> {
         crate::brush_cmds::check_coords(pts, &self.cmd)?;
-        self.renderer.push(pts);
-        let ctx = self.renderer.ctx.clone();
+        let mut new = Vec::new();
+        self.dabs.push(pts, &mut new, &mut Vec::new());
+        let ctx = self.ctx.clone();
         // As on release (`apply_dab_stroke_clipped`): only the canvas changes, and each dab copies
         // only its part of the canvas plus the halo the effect reads (#5633).
         let canvas = self.doc.bounds();
-        let new: Vec<_> = self.renderer.dabs().get(self.done..).unwrap_or_default().to_vec();
         let mut dmg = Rect::EMPTY;
         for (k, d) in new.iter().enumerate() {
             let r = ctx.dab_rect(d, false).intersect(&canvas);
@@ -1175,7 +1179,8 @@ impl LiveDab {
         // The finishing dabs, run on a scratch copy of the working pixels.
         let mut tail = None;
         if self.preview_tail {
-            let ds = self.renderer.tail_dabs();
+            let mut ds = Vec::new();
+            self.dabs.clone().finish(&mut ds, &mut Vec::new());
             let r = ds.iter().fold(Rect::EMPTY, |a, d| a.union(&ctx.dab_rect(d, false))).intersect(&canvas);
             if !r.is_empty() {
                 let read = r.inflate(self.halo);
