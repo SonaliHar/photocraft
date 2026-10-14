@@ -3232,6 +3232,7 @@ mod tests {
 }
 
 mod controlled_distance;
+mod controlled_glow;
 
 // Additive checked preparation kernels; legacy rendering retains its existing API.
 mod checked_prepare {
@@ -3312,7 +3313,7 @@ mod checked_prepare {
         }
         Ok(out)
     }
-    fn try_tent(source: &Map, budget: usize, size: f32, control: &Interrupt<'_>) -> Result<Map, RasterInputError> {
+    pub(super) fn try_tent(source: &Map, budget: usize, size: f32, control: &Interrupt<'_>) -> Result<Map, RasterInputError> {
         use RasterInputError as E;
         poll(control)?;
         if !size.is_finite() {
@@ -3358,7 +3359,7 @@ mod checked_prepare {
         poll(control)?;
         Ok(Map { w: source.w, h: source.h, v })
     }
-    fn checked_noise(map: &mut Map, amount: f32, origin: (i32, i32), control: &Interrupt<'_>) -> Result<(), RasterInputError> {
+    pub(super) fn checked_noise(map: &mut Map, amount: f32, origin: (i32, i32), control: &Interrupt<'_>) -> Result<(), RasterInputError> {
         poll(control)?;
         if !amount.is_finite() || !(0.0..=1.0).contains(&amount) {
             return Err(RasterInputError::UnsupportedConversion);
@@ -3401,22 +3402,24 @@ mod checked_prepare {
             if !e.enabled() {
                 continue;
             }
-            let shadow = match e {
-                Effect::DropShadow(s) | Effect::InnerShadow(s) => s,
+            match e {
+                Effect::DropShadow(shadow) | Effect::InnerShadow(shadow) => {
+                    let (radius, blur) = spread_split(shadow.size, shadow.spread);
+                    if !shadow.spread.is_finite()
+                        || !radius.is_finite()
+                        || !blur.is_finite()
+                        || !shadow.noise.is_finite()
+                        || !(0.0..=1.0).contains(&shadow.noise)
+                        || !matches!(shadow.contour, Contour::Linear)
+                        || !shadow.size.is_finite()
+                        || !shadow.distance.is_finite()
+                        || !shadow.angle.is_finite()
+                    {
+                        return Err(RasterInputError::UnsupportedConversion);
+                    }
+                }
+                Effect::OuterGlow(glow) | Effect::InnerGlow(glow) => super::controlled_glow::validate(glow)?,
                 _ => return Err(RasterInputError::UnsupportedConversion),
-            };
-            let (radius, blur) = spread_split(shadow.size, shadow.spread);
-            if !shadow.spread.is_finite()
-                || !radius.is_finite()
-                || !blur.is_finite()
-                || !shadow.noise.is_finite()
-                || !(0.0..=1.0).contains(&shadow.noise)
-                || !matches!(shadow.contour, Contour::Linear)
-                || !shadow.size.is_finite()
-                || !shadow.distance.is_finite()
-                || !shadow.angle.is_finite()
-            {
-                return Err(RasterInputError::UnsupportedConversion);
             }
             count = count.checked_add(1).ok_or(RasterInputError::LimitExceeded)?;
             if count > 64 {
@@ -3455,22 +3458,33 @@ mod checked_prepare {
             .and_then(|n| count.checked_mul(128).and_then(|v| v.checked_add(1024)).and_then(|v| n.checked_add(v)))
             .ok_or(E::LimitExceeded)?;
         // Every retained map plus conservative current shift/tent/line staging.
-        let peak = retained
-            .checked_add(bytes.checked_mul(8).ok_or(E::LimitExceeded)?)
-            .and_then(|n| (rect.width().max(rect.height()) as usize).checked_add(512).and_then(|v| v.checked_mul(24)).and_then(|v| n.checked_add(v)))
-            .ok_or(E::LimitExceeded)?;
+        let scratch = super::checked_effect_map_scratch_bytes(layer, rect, control)?;
+        let peak = retained.checked_add(scratch).ok_or(E::LimitExceeded)?;
         if peak > budget {
             return Err(E::LimitExceeded);
         }
         // Charge each repeated shift/distance/blur pass before private owners.
         // This is a lower-only preparation work ceiling, not a global RSS claim.
         let pixels = (bytes / 4) as u64;
-        let mut work = (layer.effects.items.len() as u64).checked_mul(3).ok_or(E::LimitExceeded)?;
+        let mut work = (layer.effects.items.len() as u64).checked_mul(5).ok_or(E::LimitExceeded)?;
+        if work > 8_000_000_000 {
+            return Err(E::LimitExceeded);
+        }
         for e in &layer.effects.items {
             poll(control)?;
+            if !e.enabled() {
+                continue;
+            }
             let shadow = match e {
-                Effect::DropShadow(s) | Effect::InnerShadow(s) if e.enabled() => s,
-                _ => continue,
+                Effect::DropShadow(s) | Effect::InnerShadow(s) => s,
+                Effect::OuterGlow(g) | Effect::InnerGlow(g) => {
+                    work = work.checked_add(super::controlled_glow::work_units(rect.width() as usize, rect.height() as usize, g)?).ok_or(E::LimitExceeded)?;
+                    if work > 8_000_000_000 {
+                        return Err(E::LimitExceeded);
+                    }
+                    continue;
+                }
+                _ => return Err(E::UnsupportedConversion),
             };
             let (radius, blur) = spread_split(shadow.size, shadow.spread);
             let (tent_radius, _, _) = box_geom(blur);
@@ -3493,54 +3507,58 @@ mod checked_prepare {
             if !e.enabled() {
                 continue;
             }
-            let (shadow, inner) = match e {
-                Effect::DropShadow(s) => (s, false),
-                Effect::InnerShadow(s) => (s, true),
+            let map = match e {
+                Effect::OuterGlow(g) => super::controlled_glow::build(&shape, g, false, (rect.x0, rect.y0), budget.saturating_sub(retained), control)?,
+                Effect::InnerGlow(g) => super::controlled_glow::build(&shape, g, true, (rect.x0, rect.y0), budget.saturating_sub(retained), control)?,
+                Effect::DropShadow(shadow) | Effect::InnerShadow(shadow) => {
+                    let inner = matches!(e, Effect::InnerShadow(_));
+                    let angle = if shadow.use_global_light { light.angle } else { shadow.angle };
+                    let (dx, dy) = offset(angle, shadow.distance);
+                    let (fx, fy) = (dx.floor(), dy.floor());
+                    let (ax, ay) = (dx - fx, dy - fy);
+                    let outside = if inner { 1.0 } else { 0.0 };
+                    let at = |x: i128, y: i128| {
+                        if x < 0 || y < 0 || x >= shape.w as i128 || y >= shape.h as i128 {
+                            outside
+                        } else {
+                            let value = shape.v.get(y as usize * shape.w + x as usize).copied().unwrap_or(0.0);
+                            if inner { 1.0 - value } else { value }
+                        }
+                    };
+                    let mut shift = Map { w: shape.w, h: shape.h, v: zeros(shape.v.len(), control)? };
+                    for y in 0..shape.h {
+                        for x in 0..shape.w {
+                            if x % 1024 == 0 {
+                                poll(control)?;
+                            }
+                            let (sx, sy) = (x as i128 - fx as i64 as i128, y as i128 - fy as i64 as i128);
+                            let top = at(sx, sy) * (1.0 - ax) + at(sx - 1, sy) * ax;
+                            let bot = at(sx, sy - 1) * (1.0 - ax) + at(sx - 1, sy - 1) * ax;
+                            *shift.v.get_mut(y * shape.w + x).ok_or(E::LengthMismatch)? = top * (1.0 - ay) + bot * ay;
+                        }
+                    }
+                    let (radius, blur) = spread_split(shadow.size, shadow.spread);
+                    let source = if radius > 0.0 {
+                        let grown = super::controlled_distance::dilate(&shift, radius, budget.saturating_sub(retained), control)?;
+                        drop(shift);
+                        grown
+                    } else {
+                        shift
+                    };
+                    let mut map = try_tent(&source, budget.saturating_sub(retained), blur, control)?;
+                    checked_noise(&mut map, shadow.noise, (rect.x0, rect.y0), control)?;
+                    if inner {
+                        for (i, (v, a)) in map.v.iter_mut().zip(&shape.v).enumerate() {
+                            if i % 1024 == 0 {
+                                poll(control)?;
+                            }
+                            *v *= a;
+                        }
+                    }
+                    map
+                }
                 _ => return Err(E::UnsupportedConversion),
             };
-            let angle = if shadow.use_global_light { light.angle } else { shadow.angle };
-            let (dx, dy) = offset(angle, shadow.distance);
-            let (fx, fy) = (dx.floor(), dy.floor());
-            let (ax, ay) = (dx - fx, dy - fy);
-            let outside = if inner { 1.0 } else { 0.0 };
-            let at = |x: i128, y: i128| {
-                if x < 0 || y < 0 || x >= shape.w as i128 || y >= shape.h as i128 {
-                    outside
-                } else {
-                    let value = shape.v.get(y as usize * shape.w + x as usize).copied().unwrap_or(0.0);
-                    if inner { 1.0 - value } else { value }
-                }
-            };
-            let mut shift = Map { w: shape.w, h: shape.h, v: zeros(shape.v.len(), control)? };
-            for y in 0..shape.h {
-                for x in 0..shape.w {
-                    if x % 1024 == 0 {
-                        poll(control)?;
-                    }
-                    let (sx, sy) = (x as i128 - fx as i64 as i128, y as i128 - fy as i64 as i128);
-                    let top = at(sx, sy) * (1.0 - ax) + at(sx - 1, sy) * ax;
-                    let bot = at(sx, sy - 1) * (1.0 - ax) + at(sx - 1, sy - 1) * ax;
-                    *shift.v.get_mut(y * shape.w + x).ok_or(E::LengthMismatch)? = top * (1.0 - ay) + bot * ay;
-                }
-            }
-            let (radius, blur) = spread_split(shadow.size, shadow.spread);
-            let source = if radius > 0.0 {
-                let grown = super::controlled_distance::dilate(&shift, radius, budget.saturating_sub(retained), control)?;
-                drop(shift);
-                grown
-            } else {
-                shift
-            };
-            let mut map = try_tent(&source, budget.saturating_sub(retained), blur, control)?;
-            checked_noise(&mut map, shadow.noise, (rect.x0, rect.y0), control)?;
-            if inner {
-                for (i, (v, a)) in map.v.iter_mut().zip(&shape.v).enumerate() {
-                    if i % 1024 == 0 {
-                        poll(control)?;
-                    }
-                    *v *= a;
-                }
-            }
             let mut maps = Vec::new();
             maps.try_reserve_exact(1).map_err(|_| E::AllocationFailed)?;
             if maps.capacity() != 1 {
@@ -3557,6 +3575,42 @@ mod checked_prepare {
         bevel_paint.resize(count, BevelPaint::Inner);
         poll(control)?;
         Ok(FxMaps { rect, shape, per, bevel_paint, din: None, dout: None, dout_exact: None, vdout: None, vdout_exact: None, outline: false, frames: Vec::new() })
+    }
+    #[cfg(test)]
+    #[test]
+    fn mixed_checked_shadow_glow_stack_keeps_order_and_maps() {
+        let glow = Glow {
+            common: photocraft_doc::FxCommon::new(BlendMode::Screen, 1.0),
+            paint: FxPaint::Color(photocraft_doc::Color::WHITE),
+            technique: GlowTechnique::Softer,
+            spread: 0.3,
+            size: 7.25,
+            contour: Contour::Linear,
+            anti_alias: false,
+            range: 0.5,
+            jitter: 0.0,
+            noise: 0.17,
+            source: GlowSource::Center,
+        };
+        let mut layer = Layer::new("Mixed glow draft", photocraft_doc::LayerContent::Raster(photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8)));
+        layer.effects.items = vec![Effect::default_drop_shadow(), Effect::OuterGlow(glow.clone()), Effect::InnerGlow(glow)];
+        let original = layer.clone();
+        let rect = Rect::new(-3, 7, 30, 34);
+        let input = (0..33 * 27).map(|i| ((i * 73) % 101) as f32 / 100.0).collect::<Vec<_>>();
+        let light = GlobalLight::default();
+        let tex = TextureCtx { rect, patterns: &[], anchor: (0.0, 0.0) };
+        let expected = build_maps(&layer, input.clone(), rect, &light, &tex);
+        let got = build(&layer, input.clone(), rect, &light, 64 << 20, &Interrupt::NONE).unwrap();
+        assert_eq!(got.per.len(), 3);
+        for (a, b) in got.per.iter().zip(&expected.per) {
+            assert_eq!(a[0].v.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), b[0].v.iter().map(|v| v.to_bits()).collect::<Vec<_>>());
+        }
+        assert_eq!(layer, original);
+        let Effect::InnerGlow(g) = &mut layer.effects.items[2] else {
+            panic!("inner glow");
+        };
+        g.technique = GlowTechnique::Precise;
+        assert!(matches!(build(&layer, input, rect, &light, 64 << 20, &Interrupt::NONE), Err(RasterInputError::UnsupportedConversion)));
     }
     #[cfg(test)]
     #[test]
@@ -3733,7 +3787,7 @@ mod checked_prepare {
     }
 }
 
-/// Checked finite-spread linear-contour shadow maps with finite noise0..=1. Other styles
+/// Checked finite-spread shadows and Softer Glows with Linear contours and finite noise0..=1. Other styles
 /// remain explicitly unsupported in this additive preparation path.
 pub(crate) fn try_build_shadow_maps(
     layer: &Layer,
@@ -3754,4 +3808,34 @@ pub(crate) fn validate_checked_shadows_with_interrupt(
     layer: &Layer, control: &photocraft_raster::Interrupt<'_>,
 ) -> Result<usize, photocraft_raster::RasterInputError> {
     checked_prepare::validate_with_interrupt(layer, control)
+}
+
+/// Known scratch for the currently checked ordinary shadow/Softer Glow maps.
+/// Retained shape/result maps are charged separately by the caller.
+pub(crate) fn checked_effect_map_scratch_bytes(
+    layer: &Layer,
+    rect: Rect,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<usize, photocraft_raster::RasterInputError> {
+    use photocraft_raster::RasterInputError as E;
+    checked_prepare::validate_with_interrupt(layer, control)?;
+    let bytes = photocraft_raster::checked_region_byte_len(
+        rect,
+        photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Grayscale, photocraft_color::SampleType::F32, false),
+    )?;
+    let mut lut = 0usize;
+    for e in &layer.effects.items {
+        control.check().map_err(|_| E::Cancelled)?;
+        if !e.enabled() {
+            continue;
+        }
+        if let Effect::OuterGlow(g) | Effect::InnerGlow(g) = e {
+            lut = lut.max(controlled_glow::lut_bytes(g));
+        }
+    }
+    bytes
+        .checked_mul(8)
+        .and_then(|n| (rect.width().max(rect.height()) as usize).checked_add(512).and_then(|v| v.checked_mul(24)).and_then(|v| n.checked_add(v)))
+        .and_then(|n| n.checked_add(lut))
+        .ok_or(E::LimitExceeded)
 }

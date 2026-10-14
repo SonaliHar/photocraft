@@ -592,6 +592,17 @@ the same identity fields. Its offset ranges from 0 through 9984 in multiples of
 64 and counts matching sets in their original order. `ui.inspect` returns exact
 decimal-string identities; stale/restored pages reset without granting an edit.
 
+Source Details uses `xcfSourcePageDraft`: `document` and `revision` are canonical
+decimal strings, `owner` is `{kind: "layer|channel|mask|path", id: "…"}`, and
+`offset` is a multiple of 32 from 0 through 100000. Legacy layer cursors may use
+`layer` instead of `owner`; a supplied legacy layer must match the typed owner.
+Resource Details uses `xcfResourcePageDraft` with exactly `document`, `revision`,
+`offset` (multiples of 64 from 0 through 960), and boolean `open`. These identities
+also use canonical decimal strings. Both fields accept `null` to clear the view;
+`ui.inspect` returns their lossless wire forms. Navigation alone performs no query
+or recovery. Resource reports require explicit Inspect, and stale targets reset
+their cached reports. Filter insertion choices use the same 64-row stack pages.
+
 Pending decoded imports that could not enter the profile-question queue can be
 released with the registered engine command `file.open.discardPending`.
 It accepts an empty object to discard all private pending imports, or

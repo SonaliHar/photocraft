@@ -83,7 +83,17 @@ const TIP_MAGIC: &[u8; 6] = b"PCTIP1";
 const TIP_HEADER: usize = 6 + 1 + 4 + 4;
 
 /// Where the store's files live. File names are relative (`name.pcbrushes`, `tips/x.pctip`).
+#[path = "preset_store/controlled.rs"]
+mod controlled;
+pub(crate) use controlled::{PreparedTip,TipPreparationLimits,TipStoreWitness};
+pub use controlled::PreparedPresetRead;
+
 pub trait PresetBackend: Send {
+    /// Capture an authorized input for cancellable worker decoding. Custom
+    /// backends must opt in; the legacy read route remains unchanged.
+    fn prepared_read(&self, _name: &str, _max: u64, _control: &photocraft_raster::Interrupt<'_>) -> Result<(Box<dyn PreparedPresetRead>,u64), String> {
+        Err("this preset backend does not support controlled held inputs".into())
+    }
     /// Every file in the store with its size in bytes (the top level plus [`TIPS_DIR`]).
     /// A missing store is empty, not an error.
     fn list(&self) -> Result<Vec<(String, u64)>, String>;
@@ -115,6 +125,14 @@ impl MemBackend {
 }
 
 impl PresetBackend for MemBackend {
+    fn prepared_read(&self,name:&str,max:u64,control:&photocraft_raster::Interrupt<'_>)->Result<(Box<dyn PreparedPresetRead>,u64),String>{
+        if !valid_name(name){return Err("invalid store file name".into());}
+        control.check().map_err(|_|"preset input cancelled".to_string())?;
+        let files=self.lock()?;let bytes=files.get(name).ok_or_else(||format!("{name}: not found"))?;
+        if bytes.len() as u64>max{return Err("preset input size limit".into());}
+        let length=bytes.len() as u64;let mut owned_name=String::new();owned_name.try_reserve_exact(name.len()).map_err(|_|"preset input name allocation".to_string())?;owned_name.push_str(name);
+        Ok((Box::new(controlled::HeldMemory{backend:self.clone(),name:owned_name,max:length,snapshot:None}),length))
+    }
     fn list(&self) -> Result<Vec<(String, u64)>, String> {
         Ok(self.lock()?.iter().map(|(k, v)| (k.clone(), v.len() as u64)).collect())
     }
@@ -183,6 +201,13 @@ impl DirBackend {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl PresetBackend for DirBackend {
+    fn prepared_read(&self,name:&str,max:u64,control:&photocraft_raster::Interrupt<'_>)->Result<(Box<dyn PreparedPresetRead>,u64),String>{
+        control.check().map_err(|_|"preset input cancelled".to_string())?;
+        let file=std::fs::File::open(self.path(name)?).map_err(|e|e.to_string())?;
+        let meta=file.metadata().map_err(|e|e.to_string())?;
+        if !meta.is_file()||meta.len()>max{return Err("preset input size/type limit".into());}
+        control.check().map_err(|_|"preset input cancelled".to_string())?;Ok((Box::new(controlled::HeldFile(file)),meta.len()))
+    }
     fn list(&self) -> Result<Vec<(String, u64)>, String> {
         let mut out = Vec::new();
         self.list_dir("", &mut out)?;
@@ -552,7 +577,7 @@ pub struct PresetStore {
     actions_skipped: bool,
     warnings: Vec<String>,
     /// Full tips loaded for brushes in use (behind a lock so `&Session` paths can load).
-    cache: Mutex<TipCache>,
+    cache: Arc<Mutex<TipCache>>,
 }
 
 /// A loaded store: the presets on disk plus what the session should hide.
@@ -654,7 +679,7 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
         actions_rev: 0,
         actions_skipped,
         warnings: Vec::new(),
-        cache: Mutex::new(TipCache { limit: TIP_CACHE_BYTES, ..Default::default() }),
+        cache: Arc::new(Mutex::new(TipCache { limit: TIP_CACHE_BYTES, ..Default::default() })),
     };
     let mut presets = Vec::new();
     for (file, size, g) in parsed {

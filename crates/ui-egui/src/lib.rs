@@ -57,6 +57,7 @@ pub mod clip_line_ui;
 pub mod color_picker_ui;
 pub mod color_range_ui;
 mod color_range_origin;
+mod control_xcf_pages;
 pub mod comps_ui;
 pub mod control;
 pub mod credits;

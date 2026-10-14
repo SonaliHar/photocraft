@@ -672,6 +672,7 @@ fn cms_error(e: photocraft_cms::control::Error) -> EngineError {
 }
 enum CompositeProfile {
     Shared(std::sync::Arc<photocraft_cms::Profile>),
+    SharedPrepared { profile: std::sync::Arc<photocraft_cms::Profile>, source_bytes: usize, source_work: u64 },
     Owned { profile: photocraft_cms::Profile, source_bytes: usize, source_work: u64 },
     Builtin(&'static photocraft_cms::Profile),
     BuiltinPrepared { profile: &'static photocraft_cms::Profile, source_work: u64 },
@@ -681,12 +682,25 @@ impl CompositeProfile {
         match self {
             Self::Owned { source_bytes, source_work, .. } => (*source_bytes, *source_work),
             Self::BuiltinPrepared { source_work, .. } => (0, *source_work),
+            Self::SharedPrepared { source_bytes, source_work, .. } => (*source_bytes, *source_work),
             _ => (0, 0),
         }
+    }
+
+    fn add_work(self, additional: u64) -> Result<Self> {
+        let prior = self.provider_cost().1;
+        let work = prior.checked_add(additional).ok_or_else(|| failure("source profile preparation work"))?;
+        Ok(match self {
+            Self::Shared(profile) => Self::SharedPrepared { profile, source_bytes: 0, source_work: work },
+            Self::SharedPrepared { profile, source_bytes, .. } => Self::SharedPrepared { profile, source_bytes, source_work: work },
+            Self::Owned { profile, source_bytes, .. } => Self::Owned { profile, source_bytes, source_work: work },
+            Self::Builtin(profile) | Self::BuiltinPrepared { profile, .. } => Self::BuiltinPrepared { profile, source_work: work },
+        })
     }
     fn get(&self) -> &photocraft_cms::Profile {
         match self {
             Self::Shared(p) => p,
+            Self::SharedPrepared { profile, .. } => profile,
             Self::Owned { profile, .. } => profile,
             Self::Builtin(p) => p,
             Self::BuiltinPrepared { profile, .. } => profile,
@@ -694,16 +708,9 @@ impl CompositeProfile {
     }
 }
 
-fn gamut_eligibility(document: &Document, control: &Interrupt<'_>) -> Result<()> {
-    poll(control)?;
-    let mode = crate::color_cmds::mode_space(document.mode);
-    if matches!(mode, photocraft_cms::ColorSpace::Rgb | photocraft_cms::ColorSpace::Gray) {
-        if !matches!(document.working_profile_interpretation, photocraft_doc::WorkingProfileInterpretation::Icc)
-            || document.sample_encoding.is_some_and(|encoding| encoding != photocraft_doc::SampleEncoding::NonlinearProfile)
-        {
-            return Err(failure("controlled gamut effective/implicit profile preparation is not available"));
-        }
-    }
+fn gamut_eligibility(_document: &Document, control: &Interrupt<'_>) -> Result<()> {
+    // Marker validity belongs to the worker's exact binding validation. Invalid
+    // retained markers take the existing compatibility fallback, not a new gate.
     poll(control)
 }
 
@@ -734,6 +741,320 @@ fn cold_profile(document: &Document, bytes: &[u8], control: &Interrupt<'_>) -> R
         Err(error) => Err(cms_error(error)),
     }
 }
+
+fn encoding(value: photocraft_doc::SampleEncoding) -> photocraft_cms::xcf_color::Encoding {
+    match value {
+        photocraft_doc::SampleEncoding::Linear => photocraft_cms::xcf_color::Encoding::Linear,
+        photocraft_doc::SampleEncoding::Perceptual => photocraft_cms::xcf_color::Encoding::Perceptual,
+        photocraft_doc::SampleEncoding::NonlinearProfile => photocraft_cms::xcf_color::Encoding::NonlinearProfile,
+    }
+}
+fn implicit_source(document: &Document, space: photocraft_cms::ColorSpace, control: &Interrupt<'_>) -> Result<(Option<CompositeProfile>, u64)> {
+    if matches!(document.working_profile_interpretation, photocraft_doc::WorkingProfileInterpretation::Icc) {
+        return Ok((None, 0));
+    }
+    let bound = document.icc_profile.as_deref().map(Vec::as_slice);
+    let hash_work = bound.map_or(0, |bytes| bytes.len() as u64);
+    admission_extra(document, 0, 0, false, 0, hash_work, control)?;
+    if let Err(error) = document.working_profile_interpretation.validate_with_interrupt(bound, document.mode, control) {
+        if error.code == "cancelled" {
+            return Err(EngineError::Cancelled);
+        }
+        poll(control)?;
+        return Ok((None, hash_work));
+    }
+    let bytes = bound.ok_or_else(|| failure("validated implicit ICC missing"))?;
+    let original = match space {
+        photocraft_cms::ColorSpace::Rgb => photocraft_cms::Builtin::Srgb.profile(),
+        photocraft_cms::ColorSpace::Gray => photocraft_cms::Builtin::SGray.profile(),
+        _ => return Ok((None, hash_work)),
+    };
+    poll(control)?;
+    let limits = photocraft_cms::control::Limits::default();
+    let cancel = || control.cancelled();
+    let interpretation = encoding(document.sample_encoding.unwrap_or(photocraft_doc::SampleEncoding::NonlinearProfile));
+    let required = match photocraft_cms::xcf_color::effective_profile_requirements_with_control(original, interpretation, limits, &cancel) {
+        Ok(required) => required,
+        Err(photocraft_cms::control::Error::Cms(_)) => return Ok((None, limits.work_units.checked_add(hash_work).ok_or_else(|| failure("implicit work"))?)),
+        Err(e) => return Err(cms_error(e)),
+    };
+    let work = required.work_units.checked_add(hash_work).and_then(|n| n.checked_add(bytes.len() as u64)).ok_or_else(|| failure("implicit proof work"))?;
+    let peak = required.peak_resident_bytes.checked_add(bytes.len()).ok_or_else(|| failure("implicit proof residency"))?;
+    admission_extra(document, 0, 0, false, peak as u64, work, control)?;
+    match photocraft_cms::xcf_color::effective_implicit_profile_with_control(bytes, space, interpretation, limits, &cancel) {
+        Ok(profile) => {
+            poll(control)?;
+            Ok((
+                Some(CompositeProfile::Owned {
+                    profile,
+                    source_bytes: required.retained_bytes.checked_add(bytes.len()).ok_or_else(|| failure("implicit retention"))?,
+                    source_work: work,
+                }),
+                0,
+            ))
+        }
+        Err(photocraft_cms::control::Error::Cms(_)) => {
+            poll(control)?;
+            Ok((None, work))
+        }
+        Err(e) => Err(cms_error(e)),
+    }
+}
+/// Exactly the legacy shortcut, including its existing tolerance. This is not a
+/// general curve equivalence, source qualification, or HDR identity assertion.
+fn shortcut_curve(curve: &photocraft_cms::curve::Curve, interpretation: photocraft_doc::SampleEncoding, control: &Interrupt<'_>) -> Result<(bool, u64)> {
+    use photocraft_cms::curve::Curve;
+    poll(control)?;
+    if interpretation == photocraft_doc::SampleEncoding::Perceptual {
+        let reference = photocraft_cms::curve::srgb_trc();
+        for i in 0..=32 {
+            poll(control)?;
+            let v = i as f32 / 32.;
+            let difference = (curve.eval(v) - reference.eval(v)).abs();
+            if !(difference < 0.0001) {
+                return Ok((false, 33 * 128));
+            }
+        }
+        return Ok((true, 33 * 128));
+    }
+    if interpretation != photocraft_doc::SampleEncoding::Linear {
+        return Ok((true, 1));
+    }
+    let result = match curve {
+        Curve::Identity => true,
+        Curve::Gamma(g) => (*g - 1.).abs() < 1e-9,
+        Curve::Parametric { kind: 0, p } => (p.first().copied().ok_or_else(|| failure("parametric width"))? - 1.).abs() < 1e-9,
+        Curve::Table(t) => {
+            if t.len() < 2 {
+                return Ok((true, 1));
+            }
+            if t.len() as u64 > photocraft_cms::control::Limits::default().work_units {
+                return Err(failure("legacy curve shortcut work limit"));
+            }
+            for (i, v) in t.iter().enumerate() {
+                if i % 256 == 0 {
+                    poll(control)?;
+                }
+                if !((*v as f64 - i as f64 / (t.len() - 1) as f64).abs() < 1. / 65535.) {
+                    return Ok((false, t.len() as u64));
+                }
+            }
+            true
+        }
+        Curve::Table64(t) => {
+            if t.len() < 2 {
+                return Ok((true, 1));
+            }
+            if t.len() as u64 > photocraft_cms::control::Limits::default().work_units {
+                return Err(failure("legacy curve shortcut work limit"));
+            }
+            for (i, v) in t.iter().enumerate() {
+                if i % 256 == 0 {
+                    poll(control)?;
+                }
+                if !((*v - i as f64 / (t.len() - 1) as f64).abs() < 1. / 65535.) {
+                    return Ok((false, t.len() as u64));
+                }
+            }
+            true
+        }
+        _ => false,
+    };
+    let work = match curve {
+        Curve::Table(t) => t.len() as u64,
+        Curve::Table64(t) => t.len() as u64,
+        _ => 1,
+    };
+    poll(control)?;
+    Ok((result, work))
+}
+fn compatibility_transfer(document: &Document, base: CompositeProfile, control: &Interrupt<'_>) -> Result<CompositeProfile> {
+    let Some(interpretation) = document.sample_encoding else {
+        return Ok(base);
+    };
+    if interpretation == photocraft_doc::SampleEncoding::NonlinearProfile {
+        return Ok(base);
+    }
+    let (prior_bytes, prior_work) = base.provider_cost();
+    let limits = photocraft_cms::control::Limits::default();
+    let cancel = || control.cancelled();
+    let clone = base.get().clone_requirements_with_control(limits, &cancel).map_err(cms_error)?;
+    // All table shortcuts are admitted prospectively rather than scanned first.
+    let curve_work = |curve: &photocraft_cms::curve::Curve| -> u64 {
+        match curve {
+            photocraft_cms::curve::Curve::Table(v) if interpretation == photocraft_doc::SampleEncoding::Linear => v.len() as u64,
+            photocraft_cms::curve::Curve::Table64(v) if interpretation == photocraft_doc::SampleEncoding::Linear => v.len() as u64,
+            _ => 33 * 128,
+        }
+    };
+    let scan = base
+        .get()
+        .gray_trc
+        .iter()
+        .chain(base.get().trc.iter().flatten())
+        .try_fold(0u64, |n, c| n.checked_add(curve_work(c)).ok_or_else(|| failure("shortcut work")))?;
+    let scan = scan.checked_add(clone.work_units).ok_or_else(|| failure("shortcut census work"))?;
+    let mut work = prior_work.checked_add(scan).ok_or_else(|| failure("transfer preparation work"))?;
+    admission_extra(
+        document,
+        0,
+        0,
+        false,
+        (clone.retained_bytes as u64).checked_add(prior_bytes as u64).ok_or_else(|| failure("transfer source retention"))?,
+        work,
+        control,
+    )?;
+    let mut matches = false;
+    if let Some(curve) = &base.get().gray_trc {
+        matches = shortcut_curve(curve, interpretation, control)?.0;
+    }
+    if !matches && let Some(curves) = &base.get().trc {
+        matches = true;
+        for curve in curves {
+            if !shortcut_curve(curve, interpretation, control)?.0 {
+                matches = false;
+                break;
+            }
+        }
+    }
+    if matches {
+        return base.add_work(scan);
+    }
+    // Reproduce the old to_bytes -> effective_profile(Some(bytes)) parse. In
+    // particular, builtin fixed-point ICC matrix quantization must not disappear.
+    // Cached bytes are borrowed; the controlled writer returns its shared owner.
+    // Never duplicate a potentially large encoded profile merely to reparse it.
+    let generated = if base.get().encoded_bytes().is_some() {
+        None
+    } else {
+        let required = match base.get().encode_requirements_with_control(limits, &cancel) {
+            Ok(r) => r,
+            Err(photocraft_cms::control::Error::Cms(_)) => {
+                return base.add_work(scan.checked_add(limits.work_units).ok_or_else(|| failure("writer fallback work"))?);
+            }
+            Err(e) => return Err(cms_error(e)),
+        };
+        work = work.checked_add(required.work_units).ok_or_else(|| failure("encoding work"))?;
+        admission_extra(
+            document,
+            0,
+            0,
+            false,
+            (required.peak_resident_bytes as u64).checked_add(prior_bytes as u64).ok_or_else(|| failure("encoding residency"))?,
+            work,
+            control,
+        )?;
+        match base.get().to_bytes_with_control(limits, &cancel) {
+            Ok(bytes) => Some(bytes),
+            Err(photocraft_cms::control::Error::Cms(_)) => return base.add_work(work.checked_sub(prior_work).ok_or_else(|| failure("fallback work"))?),
+            Err(e) => return Err(cms_error(e)),
+        }
+    };
+    let encoded = base
+        .get()
+        .encoded_bytes()
+        .or_else(|| generated.as_ref().map(|bytes| bytes.as_slice()))
+        .ok_or_else(|| failure("controlled ICC encoding unavailable"))?;
+    // This is the existing effective_profile schema gate, not a new allocation cap.
+    if encoded.len() > 16 << 20 {
+        return base.add_work(work.checked_sub(prior_work).ok_or_else(|| failure("schema fallback work"))?);
+    }
+    // Keep effective_profile's strict serialized header/tag policy distinct
+    // from the general ICC parser's deliberately tolerant compatibility policy.
+    let gate = match photocraft_cms::xcf_color::encoded_profile_gate_requirements_with_control(encoded, limits, &cancel) {
+        Ok(required) => required,
+        Err(photocraft_cms::control::Error::Cms(_)) => {
+            return base
+                .add_work(work.checked_sub(prior_work).and_then(|n| n.checked_add(limits.work_units)).ok_or_else(|| failure("encoded gate fallback work"))?);
+        }
+        Err(e) => return Err(cms_error(e)),
+    };
+    work = work.checked_add(gate.work_units).ok_or_else(|| failure("encoded gate work"))?;
+    admission_extra(
+        document,
+        0,
+        0,
+        false,
+        (clone.retained_bytes as u64)
+            .checked_add(gate.retained_bytes as u64)
+            .and_then(|n| n.checked_add(prior_bytes as u64))
+            .ok_or_else(|| failure("encoded gate retention"))?,
+        work,
+        control,
+    )?;
+    match photocraft_cms::xcf_color::validate_encoded_profile_with_control(encoded, limits, &cancel) {
+        Ok(()) => (),
+        Err(photocraft_cms::control::Error::Cms(_)) => {
+            return base.add_work(work.checked_sub(prior_work).ok_or_else(|| failure("encoded gate fallback work"))?);
+        }
+        Err(e) => return Err(cms_error(e)),
+    }
+    let parsed_req = match photocraft_cms::Profile::parse_requirements_with_control(encoded, limits, &cancel) {
+        Ok(r) => r,
+        Err(photocraft_cms::control::Error::Cms(_)) => {
+            return base.add_work(work.checked_sub(prior_work).and_then(|n| n.checked_add(limits.work_units)).ok_or_else(|| failure("parse fallback work"))?);
+        }
+        Err(e) => return Err(cms_error(e)),
+    };
+    work = work.checked_add(parsed_req.work_units).ok_or_else(|| failure("transfer parse work"))?;
+    admission_extra(
+        document,
+        0,
+        0,
+        false,
+        (clone.retained_bytes as u64)
+            .checked_add(parsed_req.peak_resident_bytes as u64)
+            .and_then(|n| n.checked_add(prior_bytes as u64))
+            .ok_or_else(|| failure("transfer parse residency"))?,
+        work,
+        control,
+    )?;
+    let parsed = match photocraft_cms::Profile::parse_with_control(encoded, limits, &cancel) {
+        Ok(p) => p,
+        Err(photocraft_cms::control::Error::Cms(_)) => return base.add_work(work.checked_sub(prior_work).ok_or_else(|| failure("parse fallback work"))?),
+        Err(e) => return Err(cms_error(e)),
+    };
+    if parsed.color_space != base.get().color_space {
+        return base.add_work(work.checked_sub(prior_work).ok_or_else(|| failure("profile-space fallback work"))?);
+    }
+    let required = match photocraft_cms::xcf_color::effective_profile_requirements_with_control(&parsed, encoding(interpretation), limits, &cancel) {
+        Ok(r) => r,
+        Err(photocraft_cms::control::Error::Cms(_)) => {
+            return base.add_work(
+                work.checked_sub(prior_work)
+                    .ok_or_else(|| failure("effective fallback work"))?
+                    .checked_add(limits.work_units)
+                    .ok_or_else(|| failure("effective fallback work"))?,
+            );
+        }
+        Err(e) => return Err(cms_error(e)),
+    };
+    work = work.checked_add(required.work_units).ok_or_else(|| failure("effective reconstruction work"))?;
+    let held = prior_bytes
+        .checked_add(clone.retained_bytes)
+        .and_then(|n| n.checked_add(generated.as_ref().map_or(0, |bytes| bytes.capacity())))
+        .ok_or_else(|| failure("effective source retention"))?;
+    admission_extra(
+        document,
+        0,
+        0,
+        false,
+        (held as u64).checked_add(required.peak_resident_bytes as u64).ok_or_else(|| failure("effective reconstruction residency"))?,
+        work,
+        control,
+    )?;
+    match photocraft_cms::xcf_color::effective_profile_from_definition_with_control(&parsed, encoding(interpretation), limits, &cancel) {
+        Ok(profile) => {
+            poll(control)?;
+            Ok(CompositeProfile::Owned { profile, source_bytes: held, source_work: work })
+        }
+        Err(photocraft_cms::control::Error::Cms(_)) => {
+            poll(control)?;
+            base.add_work(work.checked_sub(prior_work).ok_or_else(|| failure("effective fallback work"))?)
+        }
+        Err(e) => Err(cms_error(e)),
+    }
+}
 fn gamut_source(document: &Document, control: &Interrupt<'_>) -> Result<CompositeProfile> {
     gamut_eligibility(document, control)?;
     let mode = crate::color_cmds::mode_space(document.mode);
@@ -742,14 +1063,12 @@ fn gamut_source(document: &Document, control: &Interrupt<'_>) -> Result<Composit
         poll(control)?;
         return Ok(CompositeProfile::Builtin(profile));
     }
-    if !matches!(document.working_profile_interpretation, photocraft_doc::WorkingProfileInterpretation::Icc)
-        || document.sample_encoding.is_some_and(|encoding| encoding != photocraft_doc::SampleEncoding::NonlinearProfile)
-    {
-        return Err(failure("controlled gamut effective/implicit profile preparation is not available"));
-    }
-
     let working = || photocraft_cms::builtin::default_for(mode).ok_or_else(|| failure("working gamut profile is unavailable"));
-    let base = if let Some(bytes) = &document.icc_profile {
+    let (implicit, implicit_work) = implicit_source(document, mode, control)?;
+    let implicit_success = implicit.is_some();
+    let base = if let Some(profile) = implicit {
+        profile
+    } else if let Some(bytes) = &document.icc_profile {
         if let Some(profile) = crate::color_cmds::cached_profile_from_bytes(bytes) {
             if profile.color_space == mode { CompositeProfile::Shared(profile) } else { CompositeProfile::Builtin(working()?) }
         } else {
@@ -762,6 +1081,9 @@ fn gamut_source(document: &Document, control: &Interrupt<'_>) -> Result<Composit
     } else {
         CompositeProfile::Builtin(working()?)
     };
+    let base = if implicit_work == 0 { base } else { base.add_work(implicit_work)? };
+    // A successful implicit definition is already the final analytical interpretation.
+    let base = if !implicit_success { compatibility_transfer(document, base, control)? } else { base };
     poll(control)?;
     if mode == photocraft_cms::ColorSpace::Gray {
         let defaults = photocraft_cms::control::Limits::default();
@@ -902,8 +1224,9 @@ impl ProofSnapshot {
 fn prepare_gamut(document: &Document, count: usize, proof: &ProofSnapshot, control: &Interrupt<'_>) -> Result<photocraft_cms::gamut::GamutCheck> {
     poll(control)?;
     let limits = photocraft_cms::control::Limits::default();
-    // Reserve the lower ceiling before source/default proof provider access. Parsed cache
-    // Cache Arcs are shared, cold assigned profiles parsed privately, effective/implicit routes refuse.
+    // Reserve the lower ceiling before source/default proof provider access. Cache
+    // Arcs are shared; cold/transfer/implicit preparation is local and controlled.
+    // Builtin OnceLock initialization remains an outer-polled provider boundary.
     let render = render_charge(document, None, true, count, 0, control)?;
     admission_extra(
         document,
@@ -1372,13 +1695,111 @@ mod tests {
         }
     }
     #[test]
-    fn malformed_cold_uses_legacy_builtin_but_effective_provider_refuses() {
+    fn malformed_cold_uses_legacy_builtin_and_effective_provider_matches() {
         let mut doc = Document::new("Cold", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
         doc.icc_profile = Some(std::sync::Arc::new(vec![1, 2, 3, 4]));
         assert!(gamut_eligibility(&doc, &Interrupt::NONE).is_ok());
         assert_eq!(gamut_source(&doc, &Interrupt::NONE).unwrap().get(), photocraft_cms::Builtin::Srgb.profile());
         doc.icc_profile = None;
         doc.sample_encoding = Some(photocraft_doc::SampleEncoding::Linear);
-        assert!(gamut_eligibility(&doc, &Interrupt::NONE).is_err());
+        assert!(gamut_eligibility(&doc, &Interrupt::NONE).is_ok());
+        assert_eq!(gamut_source(&doc, &Interrupt::NONE).unwrap().get(), crate::color_cmds::composite_profile(&doc).as_ref());
+    }
+    #[test]
+    fn controlled_compatibility_profiles_match_legacy_transfer_and_gray_views() {
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
+            for interpretation in [
+                None,
+                Some(photocraft_doc::SampleEncoding::NonlinearProfile),
+                Some(photocraft_doc::SampleEncoding::Linear),
+                Some(photocraft_doc::SampleEncoding::Perceptual),
+            ] {
+                for assigned in [false, true] {
+                    let mut doc = Document::new("Profile", Size::new(1, 1), mode, SampleType::U16);
+                    doc.sample_encoding = interpretation;
+                    if assigned {
+                        let builtin = if mode == ColorMode::Rgb { photocraft_cms::Builtin::DisplayP3 } else { photocraft_cms::Builtin::SGray };
+                        doc.icc_profile = Some(builtin.profile().to_bytes());
+                    }
+                    let before = doc.clone();
+                    let expected = crate::color_cmds::composite_profile(&doc);
+                    let actual = gamut_source(&doc, &Interrupt::NONE).unwrap();
+                    assert_eq!(actual.get().content_hash(), expected.content_hash());
+                    assert_eq!(actual.get(), expected.as_ref());
+                    assert_eq!(doc, before);
+                    assert!(matches!(gamut_source(&doc, &Interrupt::cancel_only(&|| true)), Err(EngineError::Cancelled)));
+                }
+            }
+        }
+    }
+    #[test]
+    fn implicit_bindings_are_exact_and_stale_bindings_use_legacy_fallback() {
+        use photocraft_doc::{SampleEncoding, WorkingProfileInterpretation};
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
+            for sample in [SampleEncoding::Linear, SampleEncoding::Perceptual, SampleEncoding::NonlinearProfile] {
+                let mut doc = Document::new("Implicit", Size::new(1, 1), mode, SampleType::U8);
+                doc.sample_encoding = Some(sample);
+                let space = crate::color_cmds::mode_space(mode);
+                let bound = photocraft_cms::xcf_color::effective_profile(None, space, encoding(sample)).unwrap().to_bytes();
+                let hash = blake3::hash(&bound).to_hex().to_string();
+                doc.icc_profile = Some(bound);
+                doc.working_profile_interpretation = if mode == ColorMode::Rgb {
+                    WorkingProfileInterpretation::ImplicitSrgb { icc_blake3: hash }
+                } else {
+                    WorkingProfileInterpretation::ImplicitSGray { icc_blake3: hash }
+                };
+                for stale in [false, true] {
+                    if stale {
+                        match &mut doc.working_profile_interpretation {
+                            WorkingProfileInterpretation::ImplicitSrgb { icc_blake3 } | WorkingProfileInterpretation::ImplicitSGray { icc_blake3 } => {
+                                *icc_blake3 = "0".repeat(64)
+                            }
+                            _ => panic!("implicit marker"),
+                        }
+                    }
+                    let before = doc.clone();
+                    assert_eq!(gamut_source(&doc, &Interrupt::NONE).unwrap().get(), crate::color_cmds::composite_profile(&doc).as_ref());
+                    assert_eq!(doc, before);
+                }
+            }
+        }
+    }
+    #[test]
+    fn invalid_strict_header_keeps_assigned_compatibility_profile() {
+        let mut doc = Document::new("Intent", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+        let mut bytes = photocraft_cms::Builtin::AdobeRgbCompat.profile().to_bytes().as_ref().clone();
+        // The general legacy parser masks this intent; effective_profile's
+        // strict serialized-source gate rejects it and keeps the assigned model.
+        bytes[64..68].copy_from_slice(&5u32.to_be_bytes());
+        doc.icc_profile = Some(std::sync::Arc::new(bytes));
+        doc.sample_encoding = Some(photocraft_doc::SampleEncoding::Linear);
+        let before = doc.clone();
+        let expected = crate::color_cmds::composite_profile(&doc);
+        let actual = gamut_source(&doc, &Interrupt::NONE).unwrap();
+        assert_eq!(actual.get().content_hash(), expected.content_hash());
+        assert_eq!(actual.get(), expected.as_ref());
+        assert_eq!(doc, before);
+    }
+    #[test]
+    fn controlled_legacy_shortcut_matches_original_predicates() {
+        use photocraft_cms::curve::{Curve, srgb_trc};
+        use photocraft_doc::SampleEncoding;
+        for curve in [
+            Curve::Identity,
+            Curve::Gamma(1.),
+            Curve::Gamma(2.2),
+            srgb_trc(),
+            Curve::Table(vec![0., 0.5, 1.]),
+            Curve::Table64(vec![0., 0.5, 1.]),
+            Curve::Table(vec![0., f32::NAN, 1.]),
+        ] {
+            assert_eq!(shortcut_curve(&curve, SampleEncoding::Linear, &Interrupt::NONE).unwrap().0, curve.is_identity());
+            let old = (0..=32).all(|i| {
+                let value = i as f32 / 32.;
+                (curve.eval(value) - srgb_trc().eval(value)).abs() < 0.0001
+            });
+            assert_eq!(shortcut_curve(&curve, SampleEncoding::Perceptual, &Interrupt::NONE).unwrap().0, old);
+            assert!(matches!(shortcut_curve(&curve, SampleEncoding::Linear, &Interrupt::cancel_only(&|| true)), Err(EngineError::Cancelled)));
+        }
     }
 }

@@ -1698,7 +1698,10 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if !consistent { app.ui.selected_saved_path = None; }
     let selected = app.ui.selected_saved_path.as_ref().and_then(|selected|
         app.session.active().filter(|active| active.doc.id.0 == selected.document).map(|_| photocraft_doc::item_identity::PathId(selected.path)));
-    if let Some(path) = selected { crate::xcf_panels::path_name::properties(app, ui, path); }
+    if let Some(path) = selected {
+        crate::xcf_panels::path_name::properties(app, ui, path);
+        crate::xcf_panels::source_inspect::owner_properties(app, ui, photocraft_doc::item_identity::ItemRef::Path(path));
+    }
     let Some(st) = app.session.active() else {
         ui.label(egui::RichText::new(tl!("No document")).color(t.text_faint));
         return;

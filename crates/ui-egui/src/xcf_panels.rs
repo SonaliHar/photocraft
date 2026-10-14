@@ -18,7 +18,7 @@ mod filter_stack;
 mod filter_insert;
 mod filter_mask;
 mod graph_inspect;
-mod source_inspect;
+pub(crate) mod source_inspect;
 mod item_sets;
 mod indexed_palette;
 mod linked_image;

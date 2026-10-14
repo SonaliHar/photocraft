@@ -21,6 +21,7 @@ fn json_bytes(v:&Value,depth:usize,n:&mut usize)->Result<u64>{
     match v{Value::String(s)=>b=add(b,s.len() as u64)?,Value::Array(a)=>{b=add(b,mul(a.capacity() as u64,size_of::<Value>() as u64)?)?;for v in a{b=add(b,json_bytes(v,depth+1,n)?)?;}},Value::Object(o)=>for(k,v)in o{b=add(b,add(k.len() as u64+256,json_bytes(v,depth+1,n)?)?)?;},_=>{}}
     if b>64<<20{return Err(fail("wide parameter capacity"));}Ok(b)
 }
+pub(super) fn parameter_bytes(v:&Value)->Result<u64>{json_bytes(v,0,&mut 0)}
 fn axis_copy(axis:Option<&crate::symmetry_cmds::PaintingSymmetry>)->Result<Option<crate::symmetry_cmds::PaintingSymmetry>>{
     use crate::symmetry_cmds::{PaintingSymmetry,SymmetryAxis};
     Ok(match axis{None=>None,Some(PaintingSymmetry::Preset(p))=>Some(PaintingSymmetry::Preset(*p)),Some(PaintingSymmetry::Path(a))=>{
@@ -35,7 +36,7 @@ pub(super) fn eligible(s:&Session,cmd:&str,p:&Value,b:&BrushSettings,pts:&[Strok
     let state=s.active().ok_or(EngineError::NoDocument)?;
     Ok(matches!(crate::channel_cmds::read_target_surface(&state.doc,id,p)?.format().sample,photocraft_color::SampleType::U32|photocraft_color::SampleType::F64))
 }
-struct Input{snapshot:DocumentSnapshot,weak:WeakDocumentSnapshot,revision:u64,active:Option<photocraft_doc::LayerId>,view:crate::channel_cmds::ChannelView,axis:Option<crate::symmetry_cmds::PaintingSymmetry>,id:Option<photocraft_doc::LayerId>,params:Value,brush:BrushSettings,points:Vec<StrokePoint>,zoom:f32,label:String,restricted:bool,auto_erase:bool,coalesce:Option<String>,request:Option<String>,tool_brush:BrushSettings,foreground:[f32;4],background:[f32;4],capture_bytes:u64}
+struct Input{snapshot:DocumentSnapshot,weak:WeakDocumentSnapshot,revision:u64,active:Option<photocraft_doc::LayerId>,view:crate::channel_cmds::ChannelView,axis:Option<crate::symmetry_cmds::PaintingSymmetry>,id:Option<photocraft_doc::LayerId>,params:Value,brush:BrushSettings,points:Vec<StrokePoint>,zoom:f32,label:String,restricted:bool,auto_erase:bool,coalesce:Option<String>,request:Option<String>,tool_brush:BrushSettings,foreground:[f32;4],background:[f32;4],capture_bytes:u64,recipe:Option<super::brush_recipe_controlled::Recipe>,stores:Vec<crate::preset_store::TipStoreWitness>,presets_revision:u64}
 struct Candidate{input:Input,output:Surface,damage:Rect,response:Value,lock:bool,changed:bool}
 fn equal(a:&Surface,b:&Surface,c:&Interrupt<'_>)->Result<bool>{
     if a.format()!=b.format()||a.default_bytes()!=b.default_bytes(){return Ok(false);}
@@ -43,9 +44,18 @@ fn equal(a:&Surface,b:&Surface,c:&Interrupt<'_>)->Result<bool>{
     for(coordinate,tile)in b.tiles(){poll(c)?;if a.tile(*coordinate).is_none(){for chunk in tile.bytes().chunks(b.default_bytes().len()*256){poll(c)?;if chunk.chunks_exact(b.default_bytes().len()).any(|p|p!=b.default_bytes()){return Ok(false);}}}}
     poll(c)?;Ok(true)
 }
-fn prepare(input:Input,c:&Interrupt<'_>)->Result<Candidate>{
+fn prepare(mut input:Input,c:&Interrupt<'_>)->Result<Candidate>{
     poll(c)?;let doc=&input.snapshot;
     DocumentSnapshot::resident_raster_footprint_of(doc,c)?;
+    let native=photocraft_io::NativeSaveLimits::default().preparation;
+    let held=photocraft_io::retained_native_input_bytes(doc,native,c).map_err(|e|if c.cancelled(){EngineError::Cancelled}else{fail(e.to_string())})? as u64;
+    if let Some(recipe)=input.recipe.take(){
+        let available=StrokeLimits::default().resident_bytes.checked_sub(add(held,input.capture_bytes)?).ok_or_else(||fail("brush recipe document headroom"))?;
+        let (mut brush,points)=recipe.resolve(&input.params,StrokeLimits{resident_bytes:available/2,work_units:StrokeLimits::default().work_units/8},c)?;
+        input.label=if brush.erase&&!clear_mode(&input.params){"Eraser".into()}else{"Brush Tool".into()};
+        if (crate::commands::is_mask_target(&input.params)||crate::channel_cmds::is_channel_target(&input.params))&&brush.erase{brush.erase=false;brush.color=input.background;}
+        input.brush=brush;input.points=points;
+    }
     // Source validation and current profile/selection context remain the same
     // frozen document as the old route. The checked constructor/composite scan
     // native origins and samples with the actual token.
@@ -86,14 +96,14 @@ fn prepare(input:Input,c:&Interrupt<'_>)->Result<Candidate>{
 }
 fn apply(s:&mut Session,candidate:Candidate,c:&Interrupt<'_>)->Result<Value>{
     poll(c)?;let i=&candidate.input;let state=s.active().ok_or(EngineError::NoDocument)?;
-    if state.doc.id!=i.snapshot.id||state.revision!=i.revision||state.active_layer!=i.active||!i.weak.is_current(&state.doc)||!state.doc.shares_state(&i.snapshot)||state.channel_view!=i.view||state.symmetry!=i.axis||state.floating.is_some()||state.coalesce!=i.coalesce||s.coalesce_request!=i.request||s.tools.brush!=i.tool_brush||s.tools.foreground!=i.foreground||s.tools.background!=i.background||s.color_restrict.is_some()!=i.restricted{return Err(fail("captured native stroke context changed"));}
+    if state.doc.id!=i.snapshot.id||state.revision!=i.revision||state.active_layer!=i.active||!i.weak.is_current(&state.doc)||!state.doc.shares_state(&i.snapshot)||state.channel_view!=i.view||state.symmetry!=i.axis||state.floating.is_some()||state.coalesce!=i.coalesce||s.coalesce_request!=i.request||s.tools.brush!=i.tool_brush||s.tools.foreground!=i.foreground||s.tools.background!=i.background||s.color_restrict.is_some()!=i.restricted||i.stores.iter().any(|w|!w.matches(s))||s.tools.presets_rev!=i.presets_revision{return Err(fail("captured native stroke context changed"));}
     let source=crate::channel_cmds::read_target_surface(&state.doc,i.id,&i.params)?;if source.format()!=candidate.output.format(){return Err(fail("native stroke format changed"));}
     let id=i.id;let params=&i.params;let lock=candidate.lock;let damage=candidate.damage;
     if candidate.changed{s.edit_with_interrupt(&i.label,c,|doc,_|{poll(c)?;let(target,current_lock)=crate::channel_cmds::target_surface(doc,id,params)?;if current_lock!=lock{return Err(fail("native stroke lock changed"));}*target=candidate.output;Ok(damage)})?;}
     // Scalar damage and prebuilt response only after the one document commit.
     if let Some(state)=s.active_mut(){state.last_damage=Some(damage);}Ok(candidate.response)
 }
-pub(super) fn run(s:&mut Session,cmd:&str,p:&Value,label:&str,brush:BrushSettings,points:Vec<StrokePoint>,id:Option<photocraft_doc::LayerId>,zoom:f32,auto_erase:bool)->Result<Value>{
+fn capture_input(s:&Session,cmd:&str,p:&Value,label:&str,brush:BrushSettings,points:Vec<StrokePoint>,id:Option<photocraft_doc::LayerId>,zoom:f32,auto_erase:bool,recipe:Option<super::brush_recipe_controlled::Recipe>,stores:Vec<crate::preset_store::TipStoreWitness>)->Result<Input>{
     stroke_controlled::dispatch_preflight(s,cmd,p,false)?;check_coords(&points,cmd)?;
     let state=s.active().ok_or(EngineError::NoDocument)?;
     if state.floating.is_some()||state.channel_view.color_hidden.len()>16||state.channel_view.alpha_visible.len()>10_000{return Err(fail("native stroke capture context limit"));}
@@ -101,11 +111,37 @@ pub(super) fn run(s:&mut Session,cmd:&str,p:&Value,label:&str,brush:BrushSetting
     let tool=StrokeRenderer::new_requirements(&s.tools.brush,None,zoom,StrokeLimits::default(),&Interrupt::NONE).map_err(paint)?;
     if state.coalesce.as_ref().is_some_and(|v|v.len()>4096)||s.coalesce_request.as_ref().is_some_and(|v|v.len()>4096)||cmd.len()>256||label.len()>4096{return Err(fail("wide scalar capture limit"));}
     let axis_bytes=match &state.symmetry{Some(crate::symmetry_cmds::PaintingSymmetry::Path(a))=>add(a.source.capacity() as u64,mul(a.segments.capacity() as u64,size_of::<[[f64;2];2]>() as u64)?)?,_=>64};
-    let capture_bytes=add(add(tool.retained_bytes,tool.staged_bytes)?,add(mul(params_bytes,2)?,add(mul(points.capacity() as u64,size_of::<StrokePoint>() as u64)?,add(mul(axis_bytes,2)?,add(state.channel_view.color_hidden.capacity() as u64,state.channel_view.alpha_visible.capacity() as u64+16_384)?)?)?)?)?;
+    let mut capture_bytes=add(add(tool.retained_bytes,tool.staged_bytes)?,add(mul(params_bytes,2)?,add(mul(points.capacity() as u64,size_of::<StrokePoint>() as u64)?,add(mul(axis_bytes,2)?,add(state.channel_view.color_hidden.capacity() as u64,state.channel_view.alpha_visible.capacity() as u64+16_384)?)?)?)?)?;
+    capture_bytes=add(capture_bytes,recipe.as_ref().map_or(0,|r|r.retained_bytes))?;
     if capture_bytes>StrokeLimits::default().resident_bytes/4{return Err(fail("wide capture budget"));}
     let axis=axis_copy(state.symmetry.as_ref())?;let snapshot=state.doc.clone();let weak=snapshot.downgrade();
-    let input=Input{snapshot,weak,revision:state.revision,active:state.active_layer,view:state.channel_view.clone(),axis,id,params:p.clone(),brush,points,zoom,label:label.into(),restricted:s.color_restrict.is_some(),auto_erase,coalesce:state.coalesce.clone(),request:s.coalesce_request.clone(),tool_brush:s.tools.brush.clone(),foreground:s.tools.foreground,background:s.tools.background,capture_bytes};
+    let input=Input{snapshot,weak,revision:state.revision,active:state.active_layer,view:state.channel_view.clone(),axis,id,params:p.clone(),brush,points,zoom,label:label.into(),restricted:s.color_restrict.is_some(),auto_erase,coalesce:state.coalesce.clone(),request:s.coalesce_request.clone(),tool_brush:s.tools.brush.clone(),foreground:s.tools.foreground,background:s.tools.background,capture_bytes,recipe,stores,presets_revision:s.tools.presets_rev};
+    Ok(input)
+}
+fn launch(s:&mut Session,input:Input,label:&str)->Result<Value>{
     crate::jobs::run(s,label,true,move|ctx|ctx.stage(0.0,0.95,"Native fixed-color stroke",|c|prepare(input,c)).map(|candidate|(candidate,ctx.clone())),move|session,(candidate,ctx)|ctx.stage(0.95,1.0,"Apply native stroke",|c|apply(session,candidate,c)))
+}
+pub(super) fn run(s:&mut Session,cmd:&str,p:&Value,label:&str,brush:BrushSettings,points:Vec<StrokePoint>,id:Option<photocraft_doc::LayerId>,zoom:f32,auto_erase:bool)->Result<Value>{
+    let input=capture_input(s,cmd,p,label,brush,points,id,zoom,auto_erase,None,Vec::new())?;launch(s,input,label)
+}
+pub(super) fn try_run_recipe(s:&mut Session,p:&Value)->Result<Option<Value>>{
+    // Valid live preview commits retain their genuine upstream reuse route.
+    if s.live_commit.is_some(){return Ok(None);}
+    let state=s.active().ok_or(EngineError::NoDocument)?;
+    let id=if crate::channel_cmds::is_channel_target(p){None}else{Some(layer_id(s,p)?)};
+    let source=crate::channel_cmds::read_target_surface(&state.doc,id,p)?;
+    if !matches!(source.format().sample,photocraft_color::SampleType::U32|photocraft_color::SampleType::F64){return Ok(None);}
+    match crate::channel_cmds::target_of(p){
+        crate::channel_cmds::Target::Pixels=>crate::commands::check_pixels_unlocked(&state.doc,id.ok_or_else(||fail("pixel target missing"))?)?,
+        crate::channel_cmds::Target::Mask=>crate::xcf_item_locks::require_layer_mask_content(&state.doc,id.ok_or_else(||fail("mask target missing"))?)?,
+        crate::channel_cmds::Target::Alpha(index)=>crate::xcf_item_locks::require_channel_content(&state.doc,state.doc.channels.get(index).ok_or_else(||fail("channel target missing"))?.id)?,
+        crate::channel_cmds::Target::QuickMask=>{},
+    }
+    let mut recipe=super::brush_recipe_controlled::Recipe::capture(s,p,&Interrupt::NONE)?;
+    if !recipe.effective_normal(p){return Ok(None);}
+    let stores=std::mem::take(&mut recipe.witnesses);
+    let input=capture_input(s,"paint.stroke",p,"Brush Tool",BrushSettings::default(),Vec::new(),id,num(p,"zoom").unwrap_or(1.0),false,Some(recipe),stores)?;
+    let value=launch(s,input,"Brush Tool")?;s.live_commit=None;Ok(Some(value))
 }
 
 #[cfg(test)]

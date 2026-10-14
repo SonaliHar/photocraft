@@ -6,6 +6,10 @@ use photocraft_doc::{DocId, xcf_items::EditableSource, xcf_resources::ResourceFi
 use photocraft_engine::{document_snapshot::WeakDocumentSnapshot, jobs::{JobEvent, JobId, JobOutcome}};
 use serde_json::{Value, json};
 
+#[path = "xcf_panels/resource_details.rs"]
+mod resource_details;
+pub(crate) use resource_details::ResourcePageDraft;
+
 const ASSESS: &str = "xcf.assess";
 const LIMIT: &str = "xcf.assess.ui.limit";
 const STALE: &str = "xcf.assess.ui.stale-target";
@@ -177,6 +181,7 @@ pub(crate) fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if view.modified_text != 0 { ui.horizontal(|ui| { ui.label(tl!("Type")); ui.label(tl!("modified")); ui.label(view.modified_text.to_string()); }); }
     if view.modified_vector != 0 { ui.horizontal(|ui| { ui.label(tl!("Shape")); ui.label(tl!("modified")); ui.label(view.modified_vector.to_string()); }); }
     ui.label(tl!("Recorded import metadata. Details checks the current project."));
+    resource_details::properties(app, ui);
     ui.horizontal(|ui| { ui.label(tl!("Native")); ui.label(".pcraft"); });
     let details = ui.add_enabled(interactive, egui::Button::new(tl!("Details"))).clicked();
     let save = ui.add_enabled(interactive, egui::Button::new(tl!("Save As…"))).clicked();

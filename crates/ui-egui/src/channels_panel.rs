@@ -98,6 +98,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         channel_overlay::show(app, ui, channel.id);
         channel_name::show(app, ui, channel.id);
         channel_locks::show(app, ui, channel.id);
+        crate::xcf_panels::source_inspect::owner_properties(app, ui, photocraft_doc::item_identity::ItemRef::Channel(channel.id));
     }
     // The buttons sit in a footer at the panel's bottom, like Photoshop's.
     let footer = widgets::footer_height(ui) + ui.spacing().item_spacing.y;

@@ -25,6 +25,25 @@ use crate::{EngineError, Result, Session};
 
 mod assign_controlled;
 mod convert_controlled;
+mod controlled_profile;
+pub use controlled_profile::DocumentProfileRequirements;
+/// Strict controlled current-profile admission, with no compatibility fallback.
+pub fn document_profile_requirements_with_interrupt(doc:&Document,control:&photocraft_raster::Interrupt<'_>)->Result<DocumentProfileRequirements> {
+    controlled_profile::requirements(doc,photocraft_cms::control::Limits::default(),control)
+}
+/// Lower-only caller envelope for aggregate transform/renderer preparation.
+pub fn document_profile_requirements_with_limits(doc:&Document,limits:photocraft_cms::control::Limits,control:&photocraft_raster::Interrupt<'_>)->Result<DocumentProfileRequirements> {
+    controlled_profile::requirements(doc,limits,control)
+}
+/// Exact strict provider with private cold parsing and no global cache insertion.
+pub fn try_document_profile_with_interrupt(doc:&Document,control:&photocraft_raster::Interrupt<'_>)->Result<Arc<Profile>> {
+    controlled_profile::prepare(doc,photocraft_cms::control::Limits::default(),control)
+}
+/// Exact provider under a lower-only aggregate caller envelope.
+pub fn try_document_profile_with_limits(doc:&Document,limits:photocraft_cms::control::Limits,control:&photocraft_raster::Interrupt<'_>)->Result<Arc<Profile>> {
+    controlled_profile::prepare(doc,limits,control)
+}
+
 pub(crate) fn assignment_dispatch_preflight(s: &Session, p: &Value, background: bool) -> Result<()> {
     assign_controlled::dispatch_preflight(s, p, background)
 }

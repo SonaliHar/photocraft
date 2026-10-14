@@ -820,3 +820,73 @@ mod controlled_effective_tests {
   assert!(matches!(effective_profile_from_definition_with_control(Builtin::Srgb.profile(),Encoding::Linear,Limits{resident_bytes:1,work_units:1},&||false),Err(Error::Limit(_))));
  }
 }
+
+/// Borrowed strict-header gate cost. This does not parse or qualify a profile.
+#[derive(Clone,Copy,Debug)]
+pub struct EncodedProfileGateRequirements {pub retained_bytes:usize,pub work_units:u64}
+fn encoded_gate_header(bytes:&[u8])->crate::control::Result<(usize,usize,usize)> {
+ use crate::control::invalid;
+ if bytes.len()>16<<20{return Err(invalid("XCF ICC exceeds 16 MiB"));}
+ let declared=usize::try_from(encoded_gate_u32(bytes,0)?).map_err(|_|CmsError::Truncated)?;
+ if declared<132||declared>bytes.len(){return Err(invalid("invalid XCF ICC declared size"));}
+ if !matches!(bytes.get(8),Some(2|4))||!matches!(bytes.get(20..24),Some(b"XYZ "|b"Lab ")){return Err(CmsError::Unsupported("XCF ICC version or PCS".into()).into());}
+ if encoded_gate_u32(bytes,64)?>3{return Err(invalid("invalid XCF ICC rendering intent"));}
+ let count=usize::try_from(encoded_gate_u32(bytes,128)?).map_err(|_|CmsError::Truncated)?;
+ if count>1024{return Err(invalid("too many XCF ICC tags"));}
+ let end=132usize.checked_add(count.checked_mul(12).ok_or(CmsError::Truncated)?).ok_or(CmsError::Truncated)?;
+ if end>declared{return Err(CmsError::Truncated.into());}Ok((declared,count,end))
+}
+fn encoded_gate_u32(bytes:&[u8],offset:usize)->crate::control::Result<u32>{
+ let end=offset.checked_add(4).ok_or(CmsError::Truncated)?;let word:[u8;4]=bytes.get(offset..end).ok_or(CmsError::Truncated)?.try_into().map_err(|_|CmsError::Truncated)?;Ok(u32::from_be_bytes(word))
+}
+fn encoded_gate_record(bytes:&[u8],index:usize)->crate::control::Result<(u32,usize,usize,usize)>{
+ let offset=132usize.checked_add(index.checked_mul(12).ok_or(CmsError::Truncated)?).ok_or(CmsError::Truncated)?;
+ let signature=encoded_gate_u32(bytes,offset)?;let start=usize::try_from(encoded_gate_u32(bytes,offset.checked_add(4).ok_or(CmsError::Truncated)?)?).map_err(|_|CmsError::Truncated)?;
+ let size=usize::try_from(encoded_gate_u32(bytes,offset.checked_add(8).ok_or(CmsError::Truncated)?)?).map_err(|_|CmsError::Truncated)?;let end=start.checked_add(size).ok_or(CmsError::Truncated)?;Ok((signature,start,size,end))
+}
+/// Checks the same bounded header as parse_bounded_profile and admits the
+/// complete prospective duplicate/overlap work before visiting tag pairs.
+pub fn encoded_profile_gate_requirements_with_control(bytes:&[u8],limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<EncodedProfileGateRequirements>{
+ use crate::control::{Budget,Error};let budget=Budget::new(limits,cancelled)?;let(_,count,_)=encoded_gate_header(bytes)?;
+ let pairs=count.checked_mul(count.saturating_sub(1)).and_then(|v|v.checked_div(2)).ok_or(Error::Limit("ICC gate pair work"))?;
+ let work=count.checked_add(pairs).and_then(|v|v.checked_mul(64)).and_then(|v|v.checked_add(128)).ok_or(Error::Limit("ICC gate work"))? as u64;
+ budget.admit(bytes.len(),work)?;Ok(EncodedProfileGateRequirements{retained_bytes:bytes.len(),work_units:work})
+}
+/// Exact borrowed companion to the pre-parse gate in parse_bounded_profile.
+/// Preserves declaration tolerance, tag order, shared complete payloads and
+/// optional-tag rejection. General parsing and profile validation remain separate.
+pub fn validate_encoded_profile_with_control(bytes:&[u8],limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<()> {
+ use crate::control::{Budget,invalid};let required=encoded_profile_gate_requirements_with_control(bytes,limits,cancelled)?;let mut budget=Budget::new(limits,cancelled)?;budget.retained(required.retained_bytes)?;budget.work(128)?;let(declared,count,table_end)=encoded_gate_header(bytes)?;
+ for i in 0..count{budget.work(64)?;let(signature,start,size,end)=encoded_gate_record(bytes,i)?;
+  if start<table_end||end>declared{return Err(invalid("XCF ICC tag lies outside profile data"));}
+  for previous in 0..i{budget.work(64)?;let(ps,begin,length,finish)=encoded_gate_record(bytes,previous)?;
+   if signature==ps{return Err(invalid("duplicate XCF ICC tag definition"));}
+   if start<finish&&begin<end&&(start!=begin||size!=length){return Err(invalid("partially overlapping XCF ICC tag data"));}
+  }
+  let data=bytes.get(start..end).ok_or(CmsError::Truncated)?;
+  if signature==u32::from_be_bytes(*b"bkpt")&&(size!=20||data.get(..4)!=Some(b"XYZ ".as_slice())){return Err(invalid("invalid XCF ICC black-point tag"));}
+  if signature==u32::from_be_bytes(*b"chad")&&(size!=44||data.get(..4)!=Some(b"sf32".as_slice())){return Err(invalid("invalid XCF ICC chromatic-adaptation tag"));}
+ }budget.poll()?;Ok(())
+}
+#[cfg(test)]
+mod controlled_encoded_gate_tests {
+ use super::*;
+ use crate::control::{Limits,Error};
+ use std::cell::Cell;
+ #[test]
+ fn strict_intent_gate_preserves_compatibility_fallback() {
+  let mut bytes=Builtin::Srgb.profile().to_bytes().as_ref().clone();bytes.get_mut(64..68).unwrap().copy_from_slice(&5u32.to_be_bytes());
+  assert!(Profile::parse(&bytes).is_ok());assert!(parse_bounded_profile(&bytes,ColorSpace::Rgb).is_err());assert!(matches!(validate_encoded_profile_with_control(&bytes,Limits::default(),&||false),Err(Error::Cms(_))));
+ }
+ #[test]
+ fn exact_shared_payloads_duplicate_and_partial_overlap() {
+  let bytes=Builtin::Srgb.profile().to_bytes();validate_encoded_profile_with_control(&bytes,Limits::default(),&||false).unwrap();assert!(parse_bounded_profile(&bytes,ColorSpace::Rgb).is_ok());
+  let mut duplicate=bytes.as_ref().clone();let sig:Vec<u8>=duplicate.get(132..136).unwrap().into();duplicate.get_mut(144..148).unwrap().copy_from_slice(&sig);assert!(parse_bounded_profile(&duplicate,ColorSpace::Rgb).is_err());assert!(validate_encoded_profile_with_control(&duplicate,Limits::default(),&||false).is_err());
+  let mut overlap=bytes.as_ref().clone();let first=encoded_gate_u32(&overlap,136).unwrap();overlap.get_mut(148..152).unwrap().copy_from_slice(&(first+1).to_be_bytes());assert!(parse_bounded_profile(&overlap,ColorSpace::Rgb).is_err());assert!(validate_encoded_profile_with_control(&overlap,Limits::default(),&||false).is_err());
+ }
+ #[test]
+ fn borrowed_gate_cancel_resource_and_raw_tail_unchanged() {
+  let mut bytes=Builtin::DisplayP3.profile().to_bytes().as_ref().clone();bytes.extend_from_slice(b"retained undeclared tail");let before=bytes.clone();validate_encoded_profile_with_control(&bytes,Limits::default(),&||false).unwrap();assert!(parse_bounded_profile(&bytes,ColorSpace::Rgb).is_ok());
+  assert!(matches!(validate_encoded_profile_with_control(&bytes,Limits{resident_bytes:1,work_units:1},&||false),Err(Error::Limit(_))));let visits=Cell::new(0);assert!(matches!(validate_encoded_profile_with_control(&bytes,Limits::default(),&||{visits.set(visits.get()+1);visits.get()>12}),Err(Error::Cancelled)));assert_eq!(bytes,before);
+ }
+}

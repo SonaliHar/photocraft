@@ -442,6 +442,7 @@ pub(crate) fn doc_cmyk_space(s: &Session) -> Option<std::sync::Arc<photocraft_co
 mod stroke_controlled;
 mod live_begin_controlled;
 mod wide_one_shot_controlled;
+mod brush_recipe_controlled;
 mod advanced_native_admission;
 mod native_replace_controlled;
 mod native_mixer_controlled;
@@ -656,6 +657,7 @@ fn with_blend_mode(mut b: BrushSettings, p: &Value) -> BrushSettings {
 
 /// `paint.stroke`: the Brush (and Eraser) tool.
 pub fn paint_stroke(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(value) = wide_one_shot_controlled::try_run_recipe(s, p)? { return Ok(value); }
     let pts = parse_points(p, "paint.stroke")?;
     let brush = with_blend_mode(resolve_brush(s, p, "paint.stroke")?, p);
     let label = if brush.erase && !clear_mode(p) { "Eraser" } else { "Brush Tool" };

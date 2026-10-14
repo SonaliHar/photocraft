@@ -592,11 +592,15 @@ Ordinary Grow/Similar, Magic Wand and Color Range sampled, hue and tone presets
 use bounded workers and captured publication. Color Range dialogs retain a private
 document origin, and malformed field payloads are refused before frame cloning.
 Scoped Out of Gamut uses controlled builtin/cached/cold ordinary RGB/Gray profile
-preparation; effective/implicit profiles and synchronous model/provider boundaries
-remain open. Named previews avoid scratch sessions/history. Focus Area and Sky
+preparation, including exact effective/implicit reconstruction; builtin initialization
+and inherited renderer/provider boundaries remain explicit. Named previews avoid scratch sessions/history. Focus Area and Sky
 have controlled workers, and explicitly generated Focus Area/Sky
 forms carry private origins without changing immediate menu routing. These paths
 have not yet passed the deferred runtime checks.
+Refine Edge's six ordinary outputs have bounded preparation when decontamination
+is off and brush strokes are empty. Source Details includes saved channels,
+masks and paths; XCF notices provide explicit paged resource inspection. Filter
+insertion templates use the same stack pages, including choices after node 64.
 
 XCF Brown layer tags map to the current Brown label. Such documents require native
 reader version 8; existing label identities and other reader floors are preserved.

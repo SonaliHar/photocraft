@@ -49,18 +49,27 @@ fn apply(app: &mut PhotocraftApp, target: &Target, template_id: FilterId) -> Res
     app.run("xcf.filter.insert", params)
 }
 
+const PAGE_SIZE:usize=64;
+fn page_offset(cursor:Option<&crate::state::XcfFilterStackPage>,document:DocId,revision:u64,owner:LayerId,count:usize)->usize {
+    cursor.filter(|cursor|cursor.document==document.0 && cursor.revision==revision && cursor.layer==owner.0
+        && cursor.offset<count && cursor.offset<1024 && cursor.offset%PAGE_SIZE==0).map_or(0,|cursor|cursor.offset)
+}
 /// Existing localized Add control; choosing a caption inserts the complete
 /// closed current configuration immediately after that explicit template.
 pub(crate) fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, owner: LayerId) {
     let Some(active) = app.session.active() else { return };
     let Some(stack) = current_templates(&active.doc, owner) else { return };
     let target = Target { document: active.doc.id, revision: active.revision, owner, stack_revision: stack.revision, snapshot: active.doc.downgrade() };
-    let mut chosen = None;
+    let offset=page_offset(app.ui.xcf_filter_stack_page.as_ref(),active.doc.id,active.revision,owner,stack.nodes.len());
+    let page=crate::state::XcfFilterStackPage {document:active.doc.id.0,revision:active.revision,layer:owner.0,offset};
+    let mut chosen = None;let mut next_page=None;
     let editable = context(app);
     ui.push_id(("xcf_filter_insert", owner.0), |ui| {
         ui.add_enabled_ui(editable, |ui| {
             ui.menu_button(tl!("Add"), |ui| {
-                for node in stack.nodes.iter().take(64).filter(|node| template_candidate(node)) {
+                let mut displayed=false;
+                for node in stack.nodes.iter().skip(offset).take(PAGE_SIZE).filter(|node| template_candidate(node)) {
+                    displayed=true;
                     let caption: String =
                         node.source_display_name.as_deref().filter(|text| !text.is_empty()).unwrap_or(&node.operation.name).chars().take(128).collect();
                     if ui.button(caption).clicked() {
@@ -68,9 +77,19 @@ pub(crate) fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, owner: Laye
                         ui.close();
                     }
                 }
+                if !displayed {ui.label(tl!("No editable filter templates on this page."));}
+                if stack.nodes.len()>PAGE_SIZE {
+                    ui.separator();ui.horizontal(|ui| {
+                        let previous=offset.checked_sub(PAGE_SIZE);let next=offset.checked_add(PAGE_SIZE).filter(|offset|*offset<stack.nodes.len());
+                        if ui.add_enabled(previous.is_some(),egui::Button::new(tl!("Previous"))).clicked() {next_page=previous;}
+                        ui.label(format!("{}–{} / {}",offset+1,offset.saturating_add(PAGE_SIZE).min(stack.nodes.len()),stack.nodes.len()));
+                        if ui.add_enabled(next.is_some(),egui::Button::new(tl!("Next"))).clicked() {next_page=next;}
+                    });
+                }
             });
         });
     });
+    let mut page=page;if let Some(offset)=next_page {page.offset=offset;}app.ui.xcf_filter_stack_page=Some(page);
     if let Some(template) = chosen
         && let Err(error) = apply(app, &target, template)
     {
@@ -101,4 +120,13 @@ mod tests {
         harness.run();
         assert!(harness.query_all_by_label("Add").next().is_none());
     }
+    #[test]
+    fn template_window_uses_absolute_stack_page_and_refuses_stale_or_invalid_cursors() {
+        let page=crate::state::XcfFilterStackPage {document:7,revision:3,layer:9,offset:64};
+        assert_eq!(page_offset(Some(&page),DocId(7),3,LayerId(9),65),64);
+        assert_eq!(page_offset(Some(&page),DocId(8),3,LayerId(9),65),0);
+        assert_eq!(page_offset(Some(&page),DocId(7),4,LayerId(9),65),0);
+        for offset in [1,65,1024,usize::MAX] {let mut invalid=page.clone();invalid.offset=offset;assert_eq!(page_offset(Some(&invalid),DocId(7),3,LayerId(9),1023),0);}
+    }
+
 }

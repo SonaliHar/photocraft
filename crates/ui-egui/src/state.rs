@@ -1120,14 +1120,7 @@ pub struct XcfGraphPageDraft {
 }
 
 /// View-only source configuration cursor; it carries no source or query authority.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct XcfSourcePageDraft {
-    pub document: u64,
-    pub revision: u64,
-    pub layer: u64,
-    pub offset: u32,
-}
+pub type XcfSourcePageDraft = crate::xcf_panels::source_inspect::SourcePageDraft;
 
 /// View-only filter stack cursor; persisted pages grant no edit authority.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1237,6 +1230,8 @@ pub struct UiState {
     pub xcf_graph_page_draft: Option<XcfGraphPageDraft>,
     #[serde(default)]
     pub xcf_source_page_draft: Option<XcfSourcePageDraft>,
+    #[serde(default)]
+    pub xcf_resource_page_draft: Option<crate::xcf_notices::ResourcePageDraft>,
     #[serde(default)]
     pub xcf_filter_stack_page: Option<XcfFilterStackPage>,
     #[serde(default)]
@@ -1518,6 +1513,7 @@ impl Default for UiState {
             xcf_link_geometry_draft: None,
             xcf_graph_page_draft: None,
             xcf_source_page_draft: None,
+            xcf_resource_page_draft: None,
             xcf_filter_stack_page: None,
             xcf_item_set_page: None,
             xcf_mask_geometry_draft: None,

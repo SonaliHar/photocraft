@@ -100,6 +100,7 @@ pub(crate) fn run_action(app:&mut PhotocraftApp,target:&ActionTarget,command:&st
 }
 pub(crate) fn properties(app:&mut PhotocraftApp,ui:&mut egui::Ui,layer:LayerId) {
     let Some(target)=capture(app,layer) else {return;};
+    super::source_inspect::owner_properties(app,ui,photocraft_doc::item_identity::ItemRef::Mask(target.mask));
     let tokens=Tokens::get(ui.ctx());
     let editable=permitted(app,&target);
     let mut enabled=target.enabled;

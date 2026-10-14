@@ -591,3 +591,168 @@ mod tile_tests {
         ));
     }
 }
+
+/// Known native output and tile-scratch envelope of the existing masked-copy
+/// equation. This is narrow native arithmetic, not a wide conversion policy.
+pub fn masked_copy_requirements(src: &photocraft_raster::Surface, bbox: Rect) -> Result<(u64, u64), E> {
+    let fmt = src.format();
+    if matches!(fmt.sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) || fmt.channels() == 0 || fmt.channels() > 5 {
+        return Err(E::UnsupportedConversion);
+    }
+    if bbox.is_empty() {
+        return Ok((4096, 4096));
+    }
+    if bbox.width() > 300000 || bbox.height() > 300000 || [bbox.x0, bbox.x1, bbox.y0, bbox.y1].iter().any(|v| !(-(1 << 29)..=1 << 29).contains(v)) {
+        return Err(E::InvalidBounds);
+    }
+    let out = photocraft_color::PixelFormat { alpha: true, ..fmt };
+    let bpp = out.bytes_per_pixel() as u64;
+    let first = photocraft_geom::TileCoord::containing(bbox.x0, bbox.y0);
+    let last = photocraft_geom::TileCoord::containing(bbox.x1 - 1, bbox.y1 - 1);
+    let tiles = u64::try_from(i64::from(last.tx) - i64::from(first.tx) + 1)
+        .map_err(|_| E::InvalidBounds)?
+        .checked_mul(u64::try_from(i64::from(last.ty) - i64::from(first.ty) + 1).map_err(|_| E::InvalidBounds)?)
+        .ok_or(E::LimitExceeded)?;
+    let padded = tiles.checked_mul(65536).ok_or(E::LimitExceeded)?;
+    let retained = padded.checked_mul(bpp).and_then(|v| v.checked_add(tiles.checked_mul(1024)?)).ok_or(E::LimitExceeded)?;
+    let bytes = retained.checked_add(65536 * bpp).and_then(|v| v.checked_add(4096 * bpp)).and_then(|v| v.checked_add(1 << 20)).ok_or(E::LimitExceeded)?;
+    let work = padded.checked_mul(bpp).and_then(|v| v.checked_mul(32)).ok_or(E::LimitExceeded)?;
+    if bytes > MAX_CHECKED_RASTER_BYTES || work > MAX_WORK {
+        return Err(E::LimitExceeded);
+    }
+    Ok((bytes, work))
+}
+/// Same per-channel f32 read, alpha multiply and native encoding as masked_copy.
+/// The original 256-pixel core's any-visible-alpha omission is retained, including
+/// hidden RGB in other samples of an accepted core. No source color conversion.
+pub fn masked_copy_with_interrupt(
+    src: &photocraft_raster::Surface,
+    alpha: &Region,
+    l: MattingLimits,
+    c: &Interrupt<'_>,
+) -> Result<photocraft_raster::Surface, E> {
+    use photocraft_color::{PixelFormat, read_sample, write_sample};
+    use photocraft_raster::staged::{StagedSurfaceBuilder, StagingBudget};
+    struct Prepaid {
+        bytes: u64,
+        work: u64,
+    }
+    impl StagingBudget for Prepaid {
+        type Lease = ();
+        fn reserve(&mut self, n: u64) -> Result<(), E> {
+            self.bytes = self.bytes.checked_sub(n).ok_or(E::LimitExceeded)?;
+            Ok(())
+        }
+        fn work(&mut self, n: u64) -> Result<(), E> {
+            self.work = self.work.checked_sub(n).ok_or(E::LimitExceeded)?;
+            Ok(())
+        }
+    }
+    poll(c)?;
+    let (budget, work) = masked_copy_requirements(src, alpha.bbox)?;
+    if budget > l.resident_bytes.min(MAX_CHECKED_RASTER_BYTES) || work > l.work_units.min(MAX_WORK) {
+        return Err(E::LimitExceeded);
+    }
+    let bbox = alpha.bbox;
+    let fmt = src.format();
+    let outfmt = PixelFormat { alpha: true, ..fmt };
+    if alpha.mask.len() != u64::from(bbox.width()).checked_mul(u64::from(bbox.height())).and_then(|v| usize::try_from(v).ok()).ok_or(E::LimitExceeded)? {
+        return Err(E::LengthMismatch);
+    }
+    if bbox.is_empty() {
+        return Ok(photocraft_raster::Surface::new(outfmt));
+    }
+    let zero = [0u8; 40];
+    let default = zero.get(..outfmt.bytes_per_pixel()).ok_or(E::UnsupportedConversion)?;
+    let mut prepaid = Prepaid { bytes: budget, work };
+    let mut builder = StagedSurfaceBuilder::new(outfmt, default, bbox, &mut prepaid, c)?;
+    let n = fmt.channels();
+    let m = outfmt.channels();
+    let bpp = outfmt.bytes_per_pixel();
+    let mut input = [0u8; 40];
+    for ty in (bbox.y0..bbox.y1).step_by(256) {
+        for tx in (bbox.x0..bbox.x1).step_by(256) {
+            poll(c)?;
+            let core = Rect::new(tx, ty, (tx + 256).min(bbox.x1), (ty + 256).min(bbox.y1));
+            let cw = core.width() as usize;
+            let mut bytes = filled(cw.checked_mul(core.height() as usize).and_then(|v| v.checked_mul(bpp)).ok_or(E::LimitExceeded)?, 0u8, c)?;
+            let mut any = false;
+            for y in core.y0..core.y1 {
+                poll(c)?;
+                for x in core.x0..core.x1 {
+                    if x.rem_euclid(64) == 0 {
+                        poll(c)?;
+                    }
+                    let raw = input.get_mut(..fmt.bytes_per_pixel()).ok_or(E::LengthMismatch)?;
+                    src.try_read_pixel_bytes(x, y, raw)?;
+                    let base = ((y - core.y0) as usize * cw + (x - core.x0) as usize).checked_mul(bpp).ok_or(E::LimitExceeded)?;
+                    let pixel = bytes.get_mut(base..base + bpp).ok_or(E::LengthMismatch)?;
+                    for channel in 0..m - 1 {
+                        let v = read_sample(raw, fmt.sample, channel);
+                        if !v.is_finite() {
+                            return Err(E::InvalidSample);
+                        }
+                        write_sample(pixel, fmt.sample, channel, v);
+                    }
+                    let sa = if fmt.alpha { read_sample(raw, fmt.sample, n - 1) } else { 1. };
+                    let value = sa * alpha.at(x, y);
+                    if !value.is_finite() {
+                        return Err(E::InvalidSample);
+                    }
+                    write_sample(pixel, fmt.sample, m - 1, value);
+                    any |= value > 0.;
+                }
+            }
+            for y in (core.y0..core.y1).step_by(64) {
+                for x in (core.x0..core.x1).step_by(64) {
+                    poll(c)?;
+                    let cell = Rect::new(x, y, (x + 64).min(core.x1), (y + 64).min(core.y1));
+                    let mut raw =
+                        filled((cell.width() as usize).checked_mul(cell.height() as usize).and_then(|v| v.checked_mul(bpp)).ok_or(E::LimitExceeded)?, 0u8, c)?;
+                    if any {
+                        for yy in cell.y0..cell.y1 {
+                            poll(c)?;
+                            let a = ((yy - core.y0) as usize * cw + (cell.x0 - core.x0) as usize) * bpp;
+                            let dst = (yy - cell.y0) as usize * cell.width() as usize * bpp;
+                            let len = cell.width() as usize * bpp;
+                            raw.get_mut(dst..dst + len).ok_or(E::LengthMismatch)?.copy_from_slice(bytes.get(a..a + len).ok_or(E::LengthMismatch)?);
+                        }
+                    }
+                    builder.push_region(cell, &raw, &mut prepaid, c)?;
+                }
+            }
+        }
+    }
+    let (mut out, _) = builder.finalize(&mut prepaid, c)?.into_parts();
+    out.try_prune_with(c)?;
+    poll(c)?;
+    Ok(out)
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::*;
+    #[test]
+    fn masked_copy_preserves_old_hidden_rgb_core_and_native_codes() {
+        use photocraft_color::{ColorMode, PixelFormat, SampleType};
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut source = photocraft_raster::Surface::new(PixelFormat::new(ColorMode::Rgb, depth, true));
+            let area = Rect::new(-7, 3, 263, 8);
+            let mut values = Vec::new();
+            for y in 0..5 {
+                for x in 0..270 {
+                    values.extend_from_slice(&[0.23, 0.37, 0.91, if x == 5 && y == 2 { 0.4 } else { 0. }]);
+                }
+            }
+            source.write_region(area, &values);
+            let region = Region { bbox: area, mask: vec![127; 270 * 5] };
+            let old = super::super::masked_copy(&source, &region);
+            let actual = masked_copy_with_interrupt(&source, &region, MattingLimits::default(), &Interrupt::NONE).unwrap();
+            assert_eq!(actual.format(), old.format());
+            assert_eq!(actual.default_bytes(), old.default_bytes());
+            assert_eq!(actual.try_read_interleaved_with(area, &Interrupt::NONE).unwrap(), old.try_read_interleaved_with(area, &Interrupt::NONE).unwrap());
+            assert_eq!(actual.tile_count(), old.tile_count());
+            assert!(matches!(masked_copy_with_interrupt(&source, &region, MattingLimits::default(), &Interrupt::cancel_only(&|| true)), Err(E::Cancelled)));
+        }
+    }
+}

@@ -140,7 +140,7 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 40] = [
+pub const UI_SET_FIELDS: [&str; 42] = [
     "tool",
     "panels",
     "dock",
@@ -170,6 +170,8 @@ pub const UI_SET_FIELDS: [&str; 40] = [
     "xcfColorRotateDraft",
     "xcfFilterStackPage",
     "xcfItemSetPage",
+    "xcfSourcePageDraft",
+    "xcfResourcePageDraft",
     "xcfItemSetDraft",
     "eyedropperSampleSize",
     "eyedropperSample",
@@ -730,6 +732,8 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 let color_rotate_draft = color_rotate_draft_field(p)?;
                 let filter_stack_page = filter_stack_page_field(p)?;
                 let item_set_page = layer_page_field(p,"xcfItemSetPage",9984)?;
+                let source_page = crate::control_xcf_pages::source(p)?;
+                let resource_page = crate::control_xcf_pages::resource(p)?;
                 let item_set_draft = item_set_draft_field(p)?;
                 // The Eyedropper's options bar (#1649): Sample Size, Sample, Show Sampling Ring.
                 let eyedropper_size = match p.get("eyedropperSampleSize") {
@@ -883,6 +887,8 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 if let Some(page) = item_set_page {
                     app.ui.xcf_item_set_page = page;
                 }
+                if let Some(page) = source_page { app.ui.xcf_source_page_draft = page; }
+                if let Some(page) = resource_page { app.ui.xcf_resource_page_draft = page; }
                 if let Some(draft) = item_set_draft {
                     app.ui.xcf_item_set_draft = draft;
                 }
@@ -1585,6 +1591,8 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Result<Value, String
         "cameraRaw": app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)),
     });
     let fields=result.as_object_mut().ok_or_else(||"UI inspection object could not be prepared".to_owned())?;
+    fields.insert("xcfSourcePageDraft".into(),crate::control_xcf_pages::source_wire(app.ui.xcf_source_page_draft.as_ref()));
+    fields.insert("xcfResourcePageDraft".into(),crate::control_xcf_pages::resource_wire(app.ui.xcf_resource_page_draft.as_ref()));
     for (key,page) in [("xcfFilterStackPage",app.ui.xcf_filter_stack_page.as_ref()),("xcfItemSetPage",app.ui.xcf_item_set_page.as_ref())] {
         fields.insert(key.into(),page.map_or(Value::Null,|page|json!({
             "document":page.document.to_string(),"layer":page.layer.to_string(),"revision":page.revision.to_string(),"offset":page.offset,
@@ -3337,6 +3345,32 @@ mod item_set_draft_tests {
 #[cfg(test)]
 mod filter_stack_page_tests {
     use super::*;
+    #[test]
+    fn source_resource_view_cursors_keep_u64_ids_and_reject_partial_updates() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let source = json!({"document":"18446744073709551615","revision":"0","owner":{"kind":"path","id":"9007199254740993"},"offset":32});
+        let resources = json!({"document":"18446744073709551615","revision":"0","offset":960,"open":true});
+        let (request, _) = ControlRequest::new("ui.set", json!({"xcfSourcePageDraft":source,"xcfResourcePageDraft":resources}));
+        let Outcome::Done(result) = handle(&mut app, &ctx, &request) else { panic!("expected a view update") };
+        assert_eq!(result["ok"], true);
+        assert_eq!(app.session.documents().len(), 0, "view navigation neither opens a document nor inspects resources");
+        let source = crate::control_xcf_pages::source_wire(app.ui.xcf_source_page_draft.as_ref());
+        assert_eq!(source["owner"]["id"], "9007199254740993");
+        assert_eq!(source["document"], "18446744073709551615");
+        for bad in [
+            json!({"xcfSourcePageDraft":{"document":"1","revision":"0","owner":{"kind":"path","id":"01"},"offset":0}}),
+            json!({"xcfResourcePageDraft":{"document":"1","revision":"0","offset":1024,"open":true}}),
+        ] {
+            let before = app.ui.clone();
+            let mut params = bad.as_object().unwrap().clone();
+            params.insert("gradientClassic".into(), json!(!before.gradient_classic));
+            let (request, _) = ControlRequest::new("ui.set", Value::Object(params));
+            let Outcome::Done(result) = handle(&mut app, &ctx, &request) else { panic!("expected a cursor refusal") };
+            assert_eq!(result["ok"], false);
+            assert_eq!(app.ui, before);
+        }
+    }
     #[test]
     fn exact_cursor_round_trip_and_malformed_mixed_request_is_atomic() {
         let mut app=PhotocraftApp::new(photocraft_engine::Session::new(),crate::Services::default());
