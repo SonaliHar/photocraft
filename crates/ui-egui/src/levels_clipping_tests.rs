@@ -51,15 +51,19 @@ fn clipping_matches_the_levels_result() {
     }
 }
 
-/// Gamma and the output levels don't change what the input levels clip. Gamma above 1 keeps the
-/// result just under white at the top (Photoshop's soft toe), which an "is it 1" test would miss.
+/// Gamma and the output levels don't change what the input levels clip, so the display tests the
+/// input-range clamps rather than the final value. Narrowed output levels never reach black or
+/// white, and gamma below 1 rounds the 8-bit levels just above the black point to black although
+/// the slider keeps them. (Gamma above 1 reaches white at the top: its toe is at black.)
 #[test]
 fn gamma_and_output_levels_do_not_hide_clipping() {
     let q = Some(255.0);
     let master = LevelsChannel { gamma: 1.5, ..lv(20.0, 1.0, 200.0) };
-    assert!(levels_q(&master, 210.0 / 255.0, q) < 1.0, "the soft toe stays under white");
     let plain = lv(20.0, 1.0, 200.0);
     let outputs = LevelsChannel { out_black: 25.0 / 255.0, out_white: 230.0 / 255.0, gamma: 0.6, ..lv(20.0, 1.0, 200.0) };
+    let crushed = LevelsChannel { gamma: 0.5, ..lv(20.0, 1.0, 200.0) };
+    assert!(levels_q(&outputs, 0.0, q) > 0.0 && levels_q(&outputs, 1.0, q) < 1.0, "narrowed outputs never reach black or white");
+    assert_eq!(levels_q(&crushed, 21.0 / 255.0, q), 0.0, "gamma 0.5 rounds level 21 to black");
     for n in 0..=255 {
         let v = n as f32 / 255.0;
         let id = LevelsChannel::default();
@@ -67,6 +71,7 @@ fn gamma_and_output_levels_do_not_hide_clipping() {
         assert_eq!(classify(&master, &id, v, q), want, "gamma 1.5 composite, level {n}");
         assert_eq!(classify(&plain, &id, v, q), want, "level {n}");
         assert_eq!(classify(&outputs, &id, v, q), want, "outputs and gamma 0.6, level {n}");
+        assert_eq!(classify(&crushed, &id, v, q), want, "gamma 0.5 composite, level {n}");
         assert_eq!(classify(&id, &master, v, q), want, "gamma 1.5 channel, level {n}");
     }
 }
