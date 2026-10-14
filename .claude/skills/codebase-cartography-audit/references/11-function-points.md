@@ -33,8 +33,9 @@ order — control each:
   generated/vendored/config files), the equivalent FP is inflated 1:1. **Fix LOC
   first** (Module 9 reconciliation + exclusions) before backfiring.
 - **Data-function granularity:** count **ILF/EIF as logical files (aggregate
-  roots / logical groups), NOT one-per-table**. A 40-table ShoWorks schema is a
-  handful of logical files, not 40. Over-counting ILF/EIF is the #1 IFPUG inflator.
+  roots / logical groups), NOT one-per-table**. In PhotoCraft the
+  document model's many structs are one ILF (the document) and ~20 raster codecs
+  are a few EIF groups, not 20. Over-counting ILF/EIF is the #1 IFPUG inflator.
 - **GSC subjectivity:** ΣGSC swings the VAF from 0.65 to 1.35. Rate conservatively,
   show every rating with a justification, and default mid-range (2–3) unless the
   characteristic is clearly high — don't stack 4s and 5s.
@@ -110,21 +111,23 @@ analysts. Note: IFPUG CPM 4.3+/ISO 20926 make VAF **optional** and benchmark on
 **UFP**; if you carry AFP into Module 12, say so and keep it consistent.
 
 **Deriving the counts from code (estimate-grade heuristics):**
-- **EI** ← state-changing command handlers (CQRS `*Command`, POST/PUT endpoints,
-  form submits). Count the *business transaction*, not every method overload.
-- **EQ** ← retrieval queries/lookups (`*Query`, GET endpoints returning stored
-  data with no derivation).
+- **EI** ← state-changing transactions. In PhotoCraft: engine commands that modify
+  the document/session (registry: `photocraft-cli commands --json`). Count the
+  *business transaction*, not every variant: collapse families that differ only by
+  a parameter and say how.
+- **EQ** ← retrieval queries/lookups (read-only commands, info/histogram/layer-list
+  reads, MCP read tools).
 - **EO** ← outputs with **derived/calculated** content only (reports, statements,
   exports, dashboards). A plain list/grid of stored rows is an EQ, not an EO —
   don't double-file the same read as both.
 - **ILF** ← logical data groups the app **maintains**, counted as **aggregate
-  roots / logical files, emphatically NOT one-per-database-table**. A 40-table
-  ShoWorks schema is a handful of ILFs (Auction, Buyer, Payment, …), not 40.
+  roots / logical files, emphatically NOT one-per-struct**. PhotoCraft: the document
+  (`.pcraft`), preferences, preset libraries, actions, workspaces - a handful.
   This is the single biggest IFPUG inflator — if your ILF count approaches the
   table count, you are counting wrong.
-- **EIF** ← logical groups of data owned by **another** app that this one reads
-  (integration feeds, another product's DB, third-party master data) — again
-  grouped logically, not per table.
+- **EIF** ← logical groups of data owned by **another** app that this one reads,
+  grouped logically: PSD/PSB, flat raster codecs, camera raw, HEIF, Affinity,
+  Krita/OpenRaster, ICC profiles, fonts, plug-ins. See Module 0.3.
 
 **Sanity bounds (flag if exceeded):** ILF+EIF together are usually a small
 multiple of the number of aggregate roots, and total data-function FP (ILF+EIF)
@@ -145,9 +148,10 @@ Backfiring converts measured LOC to FP using Jones/SPR empirical median
 | Java | 53 | SPR table | | Python | ~42 | analyst-assumed* |
 | C++ | 55 | SPR table | | SQL | 13–21 | SPR (varies) |
 | Markup (Razor/HTML) | ~40 | analyst-assumed* | | Go | ~45 | analyst-assumed* |
+| **Rust** | **~55** | analyst-assumed* (peers C++ 55, Java 53) | | WGSL shaders | ~50 | analyst-assumed* |
 
 *Ratios marked analyst-assumed do not trace to a specific SPR/QSM edition (Python/
-Go post-date the classic SPR table; QSM medians differ) — cite the exact table you
+Go/Rust post-date the classic SPR table; QSM medians differ) — cite the exact table you
 use and widen the sensitivity band for these.
 
 ```
@@ -155,7 +159,7 @@ FP_backfired = Σ over languages ( LOC_lang / LOCperFP_lang )
 ```
 
 **Physical vs logical LOC.** The SPR ratios are calibrated to *logical statements*;
-scc counts *physical* code lines, which for C# run ~1.2–1.5× logical — so raw
+scc counts *physical* code lines, which for Rust (rustfmt, one chained call per line) run ~1.2–1.5× logical — so raw
 backfiring from scc over-states FP by 20–50%. Either apply a documented physical→
 logical factor or use physical-LOC-calibrated ratios (QSM), and say which; keep it
 consistent across categories. Always report a sensitivity band, not a single
@@ -180,15 +184,14 @@ size) separately; exclude only generated/vendored code from both.
 
 ## 11.5 Implementation
 
-Compute this in a **single-file C# script** (`metrics/functionpoints.csx`, run
-with `dotnet-script`) — the weight tables, GSC list, and per-language ratios are
-exactly the kind of multi-variable logic C# handles cleanly. Take the function-
-type counts and the per-category LOC (Module 9.3b) as inputs, print the IFPUG
-table, the per-category backfiring tables + sensitivity band, the System
-reconciliation, and the **two subtotals + total** (§11.0). Commit the `.csx` and
-its captured output. **The `.csx` must print the four required tables (§11.0-pre)
-as ready-to-paste Markdown; the README embeds that output verbatim — do not
-re-summarize it in prose.** State which figure feeds Module 12 — modern IFPUG (CPM 4.3+)
+Computed by **`scripts/sizing.rs`** (std-only Rust, compiled by `setup-tools.sh`).
+Inputs: the analyst's counts, GSCs, ratios and salaries in
+`metrics/sizing-inputs.txt` (template: `templates/sizing-inputs.txt`) and the
+per-category, per-language LOC that `metrics` wrote to `metrics/category-language.tsv`.
+It prints the IFPUG table, the GSC table + VAF, the per-category backfiring tables +
+sensitivity band, the System reconciliation, the **two subtotals + total** (§11.0)
+and the Module 12 valuation, all as ready-to-paste Markdown in `metrics/sizing.md`;
+**the README embeds that output verbatim — do not re-summarize it in prose.** State which figure feeds Module 12 — modern IFPUG (CPM 4.3+)
 and ISO 20926 treat VAF/AFP as optional and often benchmark on **UFP**; if you
 carry AFP through, say so consistently.
 
@@ -201,5 +204,4 @@ carry AFP through, say so consistently.
 > IFPUG); DevOps/Test LOC → **equivalent FP** (its primary size), with a
 > sensitivity band and the physical-vs-logical caveat. Report: System
 > reconciliation (% divergence, agree within ±30%?), then **System FP + DevOps/Test
-> FP + Total** and the System LOC-per-FP ratio. Implement as a single-file C# `.csx`
-> and cite it.
+> FP + Total** and the System LOC-per-FP ratio. Run `sizing` and cite it.

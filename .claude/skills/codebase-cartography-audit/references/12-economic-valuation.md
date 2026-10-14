@@ -105,10 +105,9 @@ re-check. A plausible team shape validates the whole valuation.
 
 ## 12.4 Implementation & honesty
 
-- Compute in a **single-file C# script** (`metrics/valuation.csx`, `dotnet-script`)
-  — the salary/burden/productivity matrix is exactly multi-variable logic C#
-  suits. Take FP (from Module 11), the productivity band, the salary figures, and
-  the burden band as inputs; print the effort table and a **per-band cost table
+- Computed by **`scripts/sizing.rs`** together with Module 11 (same run, same
+  `metrics/sizing.md`). It takes FP (from Module 11), the salary lines (`salary.<source>`,
+  blended as their median), and the burden band from `sizing-inputs.txt`; it prints the effort table and a **per-band cost table
   with System / DevOps-Test / Total columns** (not a single trio), the two anchors,
   and the schedule check — as **ready-to-paste Markdown that the README embeds
   verbatim** (do not re-summarize in prose).
@@ -137,5 +136,5 @@ re-check. A plausible team shape validates the whole valuation.
 > 11.0 FP subtotals). (3) Two anchors: full-lifecycle (Jones baseline, recommended
 > headline = System figure) vs coding-centric best case; single headline range across
 > all bands. (4) Schedule check: calendar months ≈ FP^0.4 and implied team size.
-> Implement as a single-file C# `.csx`; state the replacement-cost (not market-
+> Run `sizing`; state the replacement-cost (not market-
 > value) caveat.

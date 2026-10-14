@@ -9,19 +9,23 @@ in the architecture map (Modules 2–3), the dependency graph, and the metrics
 ## 10.1 The five required views
 
 1. **Logical (C4 Component)** — the domain/application/infrastructure components
-   and their responsibilities and relationships. This is the diagram that gets
+   and their responsibilities and relationships. For PhotoCraft: one box per crate
+   (or per crate group for L0), grouped by layer L0-L6, with `engine` as the
+   application core every client goes through. This is the diagram that gets
    **annotated with LOC + cyclomatic complexity** (see 10.4).
 2. **Runtime (C4 Container / dynamic)** — the processes/containers that actually
-   run (web app, API, worker/job, desktop client, database, message broker,
-   blob storage, external SaaS) and the calls between them at run time.
-3. **Dependencies** — the build-time dependency graph between
-   modules/projects/packages, with arrow direction. This is where you visualize
+   run and the calls between them at run time. For PhotoCraft: the desktop app
+   (eframe/wgpu, rayon pool, GPU), its TCP control server, the headless CLI, the MCP
+   server, the browser build (WASM), sandboxed WASM plug-ins, the file system,
+   fonts/ICC profiles, and the agents/users driving them.
+3. **Dependencies** — the build-time crate graph (from `metrics/cargo-metadata.json`),
+   with arrow direction and L0-L6 bands. This is where you visualize
    onion/clean violations (an arrow pointing the wrong way) and any cycles.
 4. **Testing** — test projects/suites mapped to what they exercise, labelled by
    layer (unit / integration / full-system) and count; shows the pyramid shape.
-5. **Build / DevOps / Deploy** — source → CI pipeline → artifacts → environments,
-   including registries, IaC, and deployment targets discovered from
-   pipeline/compose/IaC files.
+5. **Build / DevOps / Deploy** — source -> CI pipeline -> artifacts -> environments,
+   from `.github/workflows/*.yml`, `xtask`, `packaging/`, `Dockerfile` and
+   `docs/releasing.md` (platform builds, signing, installers, the web build).
 
 **Use the C4-PlantUML template library by default** for visual quality. Recent
 PlantUML ships it in the bundled stdlib, so `!include <C4/C4_Container>` (and
@@ -58,9 +62,18 @@ visible at a glance in the logical, dependency, testing, and deploy views.
 ## 10.3 Rendering + the mandatory legibility inspection
 
 ```bash
-java -jar plantuml.jar -tpng -o ../report/images diagrams/*.puml   # PNG
-java -jar plantuml.jar -tsvg -o ../report/images diagrams/*.puml   # optional SVG
+J=~/.local/share/plantuml/plantuml.jar          # installed by scripts/setup-tools.sh
+cd codebase-audit-report
+java -jar $J -tpng -o ../images diagrams/*.puml   # PNG (path is relative to each .puml)
+java -jar $J -tsvg -o ../images diagrams/*.puml   # optional SVG
 ```
+
+Verified on this container: PlantUML 1.2025.4 with the bundled `<C4/...>` stdlib and
+Graphviz 2.43 render offline. PhotoCraft has ~25 crates; a single 25-box component
+diagram is usually too wide - group L0 crates into one box per role or split the
+dependency view into "core" and "delivery" halves if the PNG fails inspection.
+Known cosmetic quirk here: the two symbol glyphs in `SHOW_LEGEND()` render as small
+empty boxes (extra font packages don't fix it); that does not fail inspection.
 
 **Inspect every rendered PNG — this step is not optional.** A `.puml` that
 "compiles" can still be unreadable. After rendering, **Read each PNG image** and
@@ -98,14 +111,14 @@ AddElementTag("warm", $bgColor="#F9E79F", $legendText="medium complexity")
 AddElementTag("devops",$bgColor="#D5D8DC", $legendText="DevOps/Test asset")
 
 System_Boundary(sys, "SYSTEM code - 45,386 LOC (46%)") {
-  Component(core, "Core (Domain)", "C#", "LOC 11,959 / CC 1,117", $tags="hot")
-  Component(data, "DataAccess", "EF/Dapper", "LOC 5,889 / CC 367", $tags="warm")
+  Component(ui, "ui-egui (L6)", "Rust, egui", "LOC 61,000 / CC 14,000", $tags="hot")
+  Component(eng, "engine (L5)", "Rust", "LOC 48,000 / CC 9,500", $tags="warm")
 }
 System_Boundary(dev, "DEVOPS/TEST code - 52,589 LOC (54%)") {
-  Component(itest, "IntegrationTests", "NUnit", "LOC 30,872 / CC 1,227 / 991 tests", $tags="devops")
+  Component(etest, "engine (tests)", "cargo test", "LOC 30,872 / CC 1,227 / 991 tests", $tags="devops")
 }
-Rel(data, core, "depends on")
-Rel(itest, data, "tests")
+Rel(ui, eng, "dispatches commands")
+Rel(etest, eng, "tests")
 SHOW_LEGEND()
 @enduml
 ```
