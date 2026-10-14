@@ -1456,8 +1456,8 @@ fn round_to_pixel_grid(app: &mut PhotocraftApp) {
     if t.selection || t.warp.is_some() || t.content_aware.is_some() || t.target.is_some() {
         return;
     }
-    let vector = t.path.is_some()
-        || app.session.active().and_then(|st| st.doc.layer(LayerId(t.layer))).is_some_and(|l| matches!(l.content, LayerContent::Shape(_)));
+    let vector =
+        t.path.is_some() || app.session.active().and_then(|st| st.doc.layer(LayerId(t.layer))).is_some_and(|l| matches!(l.content, LayerContent::Shape(_)));
     if !vector || !upright(&t.quad) {
         return;
     }
