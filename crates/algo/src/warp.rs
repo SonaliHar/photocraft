@@ -4,8 +4,10 @@
 //! The source rectangle is subdivided into a fine grid whose vertices are mapped forward; each
 //! cell's two triangles are rasterized in destination space with the source position
 //! interpolated barycentrically, then the source is sampled there (premultiplied, nearest /
-//! bilinear / Photoshop's Keys bicubic, like Free Transform). Cells are a few source pixels across, so
-//! the piecewise-affine inverse is within a small fraction of a pixel of the true one; affine
+//! bilinear / Photoshop's Keys bicubic, like Free Transform). Cells are a few pixels across in
+//! both the source and the destination (a thin layer stretched far gets as many cells as its
+//! warped size needs), so the piecewise-affine inverse is within a small fraction of a pixel of
+//! the true one; affine
 //! maps (the identity included) are reproduced exactly. Where the warp shrinks the source, each
 //! pixel instead averages a grid of bilinear subsamples over its source footprint (about one per
 //! source pixel), so thin lines don't alias. Where the warp folds over itself the
