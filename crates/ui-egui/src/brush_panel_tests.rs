@@ -278,6 +278,7 @@ fn section_locks_are_always_visible_and_toggle_on_click() {
 /// A harness that shows the options bar with `tool` in the Studio (non-pro) theme.
 fn options_bar_harness(tool: crate::state::Tool) -> Harness<'static, PhotocraftApp> {
     let mut app = app();
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.ui.tool = tool;
     let mut h = Harness::builder().with_size(vec2(1400.0, 60.0)).build_ui_state(
         |ui, app: &mut PhotocraftApp| {
@@ -1014,6 +1015,7 @@ fn app_harness() -> Harness<'static, PhotocraftApp> {
 
 fn app_harness_with_language(lang: crate::i18n::Lang) -> Harness<'static, PhotocraftApp> {
     let mut app = app();
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.ui.tool = crate::state::Tool::Brush;
     let mut h = Harness::builder().with_size(vec2(1400.0, 900.0)).build_ui_state(
         move |ui, app: &mut PhotocraftApp| {
