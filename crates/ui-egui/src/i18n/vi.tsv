@@ -3636,3 +3636,8 @@ curves	Smooth	Làm mượt
 # Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
 	Darken Interface	Làm tối giao diện
 	Lighten Interface	Làm sáng giao diện
+# Bevel & Emboss Technique.
+	Technique	Kỹ thuật
+	Chisel Hard	Đục cứng
+	Chisel Soft	Đục mềm
+	Open color-less EXR as ACEScg	Mở EXR không khai báo màu sắc dưới dạng ACEScg

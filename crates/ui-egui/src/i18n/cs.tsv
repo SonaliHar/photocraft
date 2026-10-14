@@ -3757,3 +3757,8 @@ navigator	Zoom	Zvětšení
 # Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
 	Darken Interface	Ztmavit rozhraní
 	Lighten Interface	Zesvětlit rozhraní
+# Bevel & Emboss Technique.
+	Technique	Technika
+	Chisel Hard	Tvrdé tesání
+	Chisel Soft	Měkké tesání
+	Open color-less EXR as ACEScg	Otevřít EXR bez údaje o barevném prostoru jako ACEScg

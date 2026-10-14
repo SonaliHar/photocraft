@@ -4111,6 +4111,11 @@ navigator	Zoom	Zoom
 # Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
 	Darken Interface	Scurisci interfaccia
 	Lighten Interface	Schiarisci interfaccia
+# Bevel & Emboss Technique.
+	Technique	Tecnica
+	Chisel Hard	Cesello duro
+	Chisel Soft	Cesello morbido
+	Open color-less EXR as ACEScg	Apri gli EXR senza spazio colore come ACEScg
 
 # Color management, Liquify, glyph group, warp and Camera Raw labels the Serbian, Vietnamese and Japanese catalogs added
 	Adobe-rgb-compat	Adobe RGB (compatibile)

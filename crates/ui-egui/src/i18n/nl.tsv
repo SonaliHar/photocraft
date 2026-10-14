@@ -3909,3 +3909,8 @@ curves	Smooth	Vloeiend maken
 # Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
 	Darken Interface	Interface donkerder maken
 	Lighten Interface	Interface lichter maken
+# Bevel & Emboss Technique.
+	Technique	Techniek
+	Chisel Hard	Beitel hard
+	Chisel Soft	Beitel zacht
+	Open color-less EXR as ACEScg	EXR zonder kleurruimte als ACEScg openen

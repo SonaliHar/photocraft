@@ -2834,3 +2834,8 @@ curves	Smooth	Suavizar
 # Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
 	Darken Interface	Oscurecer interfaz
 	Lighten Interface	Aclarar interfaz
+# Bevel & Emboss Technique.
+	Technique	Técnica
+	Chisel Hard	Cincelar duro
+	Chisel Soft	Cincelar suave
+	Open color-less EXR as ACEScg	Abrir EXR sin espacio de color como ACEScg

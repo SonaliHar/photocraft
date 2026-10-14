@@ -3881,3 +3881,8 @@ cameraData	Lens	Lens
 # Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
 	Darken Interface	Arayüzü koyulaştır
 	Lighten Interface	Arayüzü açıklaştır
+# Bevel & Emboss Technique.
+	Technique	Teknik
+	Chisel Hard	Sert Keski
+	Chisel Soft	Yumuşak Keski
+	Open color-less EXR as ACEScg	Renk bilgisi olmayan EXR'yi ACEScg olarak aç

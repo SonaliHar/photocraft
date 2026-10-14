@@ -4070,3 +4070,8 @@ cameraRaw	Yellow	Sárga
 # Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
 	Darken Interface	Felület sötétítése
 	Lighten Interface	Felület világosítása
+# Bevel & Emboss Technique.
+	Technique	Technika
+	Chisel Hard	Kemény vésés
+	Chisel Soft	Lágy vésés
+	Open color-less EXR as ACEScg	Színinformáció nélküli EXR megnyitása ACEScg-ként

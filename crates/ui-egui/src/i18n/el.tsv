@@ -3847,3 +3847,8 @@ curves	Smooth	Εξομάλυνση
 # Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
 	Darken Interface	Σκουρότερο περιβάλλον
 	Lighten Interface	Φωτεινότερο περιβάλλον
+# Bevel & Emboss Technique.
+	Technique	Τεχνική
+	Chisel Hard	Σκληρή σμίλευση
+	Chisel Soft	Μαλακή σμίλευση
+	Open color-less EXR as ACEScg	Άνοιγμα EXR χωρίς χρωματική δήλωση ως ACEScg

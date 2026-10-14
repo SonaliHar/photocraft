@@ -3825,3 +3825,8 @@ curves	Smooth	スムーズ
 # Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
 	Darken Interface	インターフェイスを暗くする
 	Lighten Interface	インターフェイスを明るくする
+# Bevel & Emboss Technique.
+	Technique	テクニック
+	Chisel Hard	チゼルハード
+	Chisel Soft	チゼルソフト
+	Open color-less EXR as ACEScg	色空間のないEXRをACEScgとして開く

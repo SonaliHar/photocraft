@@ -3848,3 +3848,8 @@ curves	Smooth	Згладити
 # Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
 	Darken Interface	Зробити інтерфейс темнішим
 	Lighten Interface	Зробити інтерфейс світлішим
+# Bevel & Emboss Technique.
+	Technique	Метод
+	Chisel Hard	Жорстке різьблення
+	Chisel Soft	М'яке різьблення
+	Open color-less EXR as ACEScg	Відкривати EXR без колірного профілю як ACEScg
