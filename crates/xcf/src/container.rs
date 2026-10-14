@@ -220,6 +220,17 @@ pub struct DecodeReservations<'b, 'a> {
     retained: Reservation<'b, 'a>,
 }
 impl DecodeReservations<'_, '_> {
+    /// Atomically own the actual encoded/source/model charges. On any error,
+    /// every borrowed receipt remains unchanged. This does not census mutable
+    /// decoded fields or grant source/pixel correspondence.
+    pub fn detach_owned(&mut self) -> Result<crate::OwnedReservationBatch, XcfError> {
+        match (&mut self.source_encoded, &mut self.source_resident) {
+            (Some(encoded), Some(resident)) => Reservation::detach_owned_batch(&mut [encoded, resident, &mut self.retained]),
+            (Some(encoded), None) => Reservation::detach_owned_batch(&mut [encoded, &mut self.retained]),
+            (None, Some(resident)) => Reservation::detach_owned_batch(&mut [resident, &mut self.retained]),
+            (None, None) => Reservation::detach_owned_batch(&mut [&mut self.retained]),
+        }
+    }
     pub fn retained_bytes(&self) -> u64 {
         self.retained.bytes()
     }
@@ -430,3 +441,7 @@ pub fn decode_plain_source_into_sink_with_budget<'b, 'a, S: PlaneSink>(
         reservations: DecodeReservations { source_encoded, source_resident, retained },
     })
 }
+
+#[cfg(test)]
+#[path = "container_owned_reservation_tests.rs"]
+mod owned_reservation_tests;

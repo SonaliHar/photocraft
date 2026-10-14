@@ -4,7 +4,7 @@ use std::cell::Cell;
 use web_time::Instant;
 #[path = "source/persistent.rs"]
 mod persistent;
-pub use persistent::OwnedReservation;
+pub use persistent::{OwnedLedgerHeader, OwnedReservation, OwnedReservationBatch, PhysicalUsage};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResourcePolicy {

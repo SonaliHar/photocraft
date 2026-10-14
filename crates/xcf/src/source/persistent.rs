@@ -5,6 +5,9 @@
 use super::{BUDGET_COUNT, Budget, BudgetKind, ResourceLimits};
 use crate::{ErrorKind, XcfError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+#[path = "persistent/batch.rs"]
+mod batch;
+pub use batch::{OwnedLedgerHeader, OwnedReservationBatch, PhysicalUsage};
 
 struct State {
     limits: ResourceLimits,
@@ -15,6 +18,8 @@ struct State {
 #[derive(Clone)]
 pub(super) struct SharedLedger {
     state: Arc<Mutex<State>>,
+    // Exact fixed baseline actually charged by new(), not mutable usage stats.
+    header_bytes: u64,
 }
 fn failure(message: &str, phase: &str) -> XcfError {
     XcfError::new(ErrorKind::Limit, 0, format!("persistent XCF budget {message}; {phase}"))
@@ -43,7 +48,7 @@ impl SharedLedger {
         let mut state = State { limits: limits.clone(), used: [0; BUDGET_COUNT], peak: [0; BUDGET_COUNT], failed: false };
         set(&mut state, BudgetKind::Index, header)?;
         set(&mut state, BudgetKind::Resident, header)?;
-        Ok(Self { state: Arc::new(Mutex::new(state)) })
+        Ok(Self { state: Arc::new(Mutex::new(state)), header_bytes: header })
     }
     fn lock(&self, phase: &str) -> Result<MutexGuard<'_, State>, XcfError> {
         let state = self.state.lock().map_err(|_| failure("ledger poisoned", phase))?;
@@ -157,6 +162,17 @@ impl OwnedReservation {
     pub fn kind(&self) -> BudgetKind {
         self.kind
     }
+    /// Actual physical contribution of this receipt. Encoded/logical and other
+    /// nonresident counters are not silently counted as resident storage.
+    pub fn physical_usage(&self) -> PhysicalUsage {
+        batch::physical(self.kind, self.bytes, self.resident)
+    }
+    /// Retains this actual ledger's already-paid fixed header. Deduplicate tokens
+    /// using shares_ledger when retaining several owners from one ledger.
+    pub fn ledger_header(&self) -> OwnedLedgerHeader {
+        OwnedLedgerHeader::new(&self.ledger)
+    }
+
     pub fn shares_ledger(&self, other: &Self) -> bool {
         self.ledger.same(&other.ledger)
     }
