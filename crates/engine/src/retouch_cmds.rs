@@ -1013,14 +1013,46 @@ fn dab_cmd(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         let mut effect = tool.effect(fmt, stroke.brush.spacing);
         let mut sampler = all.then(|| AllLayers::new(pre, fmt));
         // Only the canvas changes, and only it (plus the halo the effect reads) is copied, so a
-        // brush far larger than the image costs what the image does (#5633).
-        let admit = |_: Rect| Ok(());
+        // brush far larger than the image costs what the image does (#5633). The copy is priced
+        // before it is made.
+        let what = format!("the {label} stroke");
+        let admit = |area: Rect| {
+            check_dab_area(area, &what)?;
+            crate::allocation::checkpoint(&what)
+        };
         apply_dab_stroke_clipped(surf, &stroke, sel, lock, tool.halo(), pre.bounds(), admit, |work, fp| match &mut sampler {
             Some(all) => all.dab(work, fp, |w, f| effect(w, f)),
             None => effect(work, fp),
         })
     })?;
     Ok(json!({ "damage": damage_json(dmg) }))
+}
+
+/// Tests use a far lower budget, so proving a refusal never comes near allocating the real one.
+#[cfg(not(test))]
+const DAB_BUDGET: u64 = crate::transform_cmds::MAX_TRANSFORM_PIXELS;
+#[cfg(test)]
+const DAB_BUDGET: u64 = 1 << 20;
+
+/// Refuse a sequential-dab working copy over the engine's per-operation pixel budget (Free
+/// Transform's and Puppet Warp's), before it is allocated. Clipped to the canvas, a single dab stays
+/// far below it (a soft 5000 px tip covers about 75 megapixels), so only a stroke across a huge
+/// canvas reaches it.
+fn check_dab_area(area: Rect, what: &str) -> Result<()> {
+    let (w, h) = (u64::from(area.width()), u64::from(area.height()));
+    if w.saturating_mul(h) > DAB_BUDGET {
+        let detail = format!("it would work on {w} x {h} px at once, more than the {DAB_BUDGET} px limit");
+        return Err(crate::allocation::error(what, &detail));
+    }
+    Ok(())
+}
+
+/// A live dab stroke's copy of `rect` of `s`: refused over the pixel budget, and an error rather
+/// than an abort when the allocator can't supply it.
+fn dab_region(s: &Surface, rect: Rect) -> Result<Region> {
+    const WHAT: &str = "a live stroke preview";
+    check_dab_area(rect, WHAT)?;
+    Ok(Region { rect, ch: s.channels(), data: crate::allocation::read_region(s, rect, WHAT)? })
 }
 
 /// A Dodge, Burn, Sponge, Blur, Sharpen or Smudge stroke shown while it is drawn: each new dab
@@ -1134,7 +1166,7 @@ impl LiveDab {
                 continue;
             }
             let read = r.inflate(self.halo);
-            let mut region = Region::read(&self.work, read);
+            let mut region = dab_region(&self.work, read)?;
             (self.effect)(&mut region, &footprint_within(&ctx, d, self.done + k, read));
             region.crop(r).write(&mut self.work);
             dmg = dmg.union(&r);
@@ -1147,7 +1179,7 @@ impl LiveDab {
             let r = ds.iter().fold(Rect::EMPTY, |a, d| a.union(&ctx.dab_rect(d, false))).intersect(&canvas);
             if !r.is_empty() {
                 let read = r.inflate(self.halo);
-                let mut region = Region::read(&self.work, read);
+                let mut region = dab_region(&self.work, read)?;
                 for (k, d) in ds.iter().enumerate() {
                     (self.effect)(&mut region, &footprint_within(&ctx, d, self.done + k, read));
                 }
@@ -1164,11 +1196,11 @@ impl LiveDab {
         self.bounds = self.bounds.union(&dmg).union(&tail_rect);
         let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
         if !shown.is_empty() {
-            let (orig, work) = (Region::read(&self.pre_surf, shown), Region::read(&self.work, shown));
+            let (orig, work) = (dab_region(&self.pre_surf, shown)?, dab_region(&self.work, shown)?);
             photocraft_paint::retouch::mix_back(surf, &orig, &work, shown, self.opacity, self.sel.as_ref(), self.lock);
         }
         if let Some((r, work)) = tail {
-            photocraft_paint::retouch::mix_back(surf, &Region::read(&self.pre_surf, r), &work, r, self.opacity, self.sel.as_ref(), self.lock);
+            photocraft_paint::retouch::mix_back(surf, &dab_region(&self.pre_surf, r)?, &work, r, self.opacity, self.sel.as_ref(), self.lock);
             self.tail = r;
         }
         Ok(shown.union(&tail_rect))

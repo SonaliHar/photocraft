@@ -2152,6 +2152,34 @@ fn live_dab_regions_stay_within_the_canvas_plus_halo() {
 }
 
 #[test]
+fn dab_stroke_over_the_pixel_budget_is_refused_and_leaves_the_document() {
+    // Tests use a 2²⁰ px budget (the real one is Free Transform's 2³⁰). A stroke across this canvas
+    // needs a working copy of the whole 1500 × 1000 canvas; the preview's first step, which brush
+    // smoothing holds a few dabs short of the end, still shows well over the budget.
+    let mut s = session(1500, 1000, 8, "rgb");
+    let p = json!({"points": [[0, 0], [1500, 1000]], "size": 100, "hardness": 100, "exposure": 80});
+    let before = (s.active().unwrap().revision, rgba(&s, 750, 500));
+    let err = s.execute("paint.dodge", p.clone()).unwrap_err().to_string();
+    assert!(err.contains("Dodge Tool") && err.contains("the document was not changed"), "{err}");
+    assert_eq!((s.active().unwrap().revision, rgba(&s, 750, 500)), before);
+    assert!(LiveDab::begin(&s, "paint.dodge", &p).is_err(), "the live preview is refused too");
+}
+
+#[test]
+fn dab_stroke_allocation_failure_is_an_error_not_an_abort() {
+    let mut s = session(40, 30, 8, "rgb");
+    paint_layer(&mut s, texture);
+    let p = json!({"points": [[5, 15], [35, 15]], "size": 12});
+    let before = (s.active().unwrap().revision, rgba(&s, 20, 15));
+    crate::allocation::fail_next_for_test();
+    let err = s.execute("paint.blur", p.clone()).unwrap_err().to_string();
+    assert!(err.contains("not enough memory"), "{err}");
+    assert_eq!((s.active().unwrap().revision, rgba(&s, 20, 15)), before);
+    crate::allocation::fail_next_for_test();
+    assert!(LiveDab::begin(&s, "paint.blur", &p).is_err(), "the live preview fails the same way");
+}
+
+#[test]
 fn dab_tools_paint_as_before_away_from_the_canvas_edge() {
     // The dabs (about 13 px reach) and Blur's 4 px halo stay inside the canvas, so clipping must
     // change nothing at all, at any depth.
