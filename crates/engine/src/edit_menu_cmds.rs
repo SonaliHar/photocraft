@@ -107,7 +107,7 @@ fn always(_: &Session) -> std::result::Result<(), String> {
     Ok(())
 }
 
-fn pixel_layer(s: &Session) -> std::result::Result<LayerId, String> {
+pub(crate) fn pixel_layer(s: &Session) -> std::result::Result<LayerId, String> {
     let d = s.active().ok_or("no document open")?;
     let id = d.active_layer.ok_or("no active layer")?;
     let l = d.doc.layer(id).ok_or("no active layer")?;
@@ -307,7 +307,9 @@ fn can_purge_all(s: &Session) -> std::result::Result<(), String> {
 
 // ------------------------------------------------------------------ Content-Aware Fill
 
-fn can_caf(s: &Session) -> std::result::Result<(), String> {
+/// Enabled when there is an unlocked pixel layer and a non-empty selection: what Content-Aware
+/// Fill needs, and what Generative Fill needs before it reaches the provider.
+pub(crate) fn can_fill(s: &Session) -> std::result::Result<(), String> {
     pixel_layer(s)?;
     let d = s.active().ok_or("no document open")?;
     if d.doc.selection.as_ref().is_none_or(|m| m.content_bounds().is_empty()) {
@@ -416,23 +418,10 @@ fn content_aware_fill_as(s: &mut Session, p: &Value, cmd: &'static str, label: &
         move |ctx| {
             use rayon::prelude::*;
 
-            use crate::fill_cmds::{read_window, read_window_cover, read_window_mask};
+            use crate::fill_cmds::read_window_mask;
             ctx.progress(0.0, label);
             let cancel = || ctx.cancelled();
-            let surf = doc.layer(id).and_then(|l| l.surface()).ok_or(EngineError::NoLayer(id))?;
-            let img = if sample_all {
-                if cancel() {
-                    return Err(EngineError::Cancelled);
-                }
-                let region = crate::retouch_cmds::composite_region(&doc, None, crate::retouch_cmds::SampleLayers::All, window, fmt);
-                if cancel() {
-                    return Err(EngineError::Cancelled);
-                }
-                region.data
-            } else {
-                read_window(surf, window, &cancel).ok_or(EngineError::Cancelled)?
-            };
-            let hole = read_window_cover(&sel, window, &cancel).ok_or(EngineError::Cancelled)?;
+            let FillWindow { img, hole, bounds, original, cover, n_hole } = read_fill_window(&doc, id, &sel, window, sample_all, fmt, ctx)?;
             let mut source = match (sampling.as_str(), custom_rect, custom_mask.as_ref()) {
                 ("custom", Some(r), _) => (0..w * h).into_par_iter().map(|i| r.contains(window.x0 + (i % w) as i32, window.y0 + (i / w) as i32)).collect(),
                 ("custom", None, Some(m)) => read_window_mask(m, window, &cancel).ok_or(EngineError::Cancelled)?.par_iter().map(|v| *v > 0.5).collect(),
@@ -444,30 +433,91 @@ fn content_aware_fill_as(s: &mut Session, p: &Value, cmd: &'static str, label: &
                 source = auto_sampling_with(w, h, n, &img, &hole, &photocraft_raster::Interrupt::cancel_only(&cancel)).map_err(|_| EngineError::Cancelled)?;
             }
             ctx.check()?;
-            // The fill changes only the selected pixels: keep the original and the coverage over
-            // their bounds for the apply step, and fill the window's pixels themselves.
-            let (bx0, by0, bx1, by1) = mask_bounds(w, h, &hole);
-            let original: Vec<f32> = (by0..by1).flat_map(|y| img[(y * w + bx0) * n..(y * w + bx1) * n].iter().copied()).collect();
-            let at = |x: usize, y: usize| (window.x0 + x as i32, window.y0 + y as i32);
-            let ((x0, y0), (x1, y1)) = (at(bx0, by0), at(bx1, by1));
-            let cover = read_window_mask(&sel, Rect::new(x0, y0, x1, y1), &cancel).ok_or(EngineError::Cancelled)?;
-            let n_hole = cover.iter().filter(|c| **c > 0.0).count();
+            // The fill changes only the selected pixels; the window's own pixels are what changes.
             let filled = ctx.stage(0.05, 1.0, label, |ctl| fill_owned(w, h, n, img, &hole, &source, &opts, ctl)).map_err(|_| EngineError::Cancelled)?;
-            Ok(FilledWindow { filled, bounds: (bx0, by0, bx1, by1), original, cover, n_hole })
+            Ok(FilledWindow { filled, bounds, original, cover, n_hole })
         },
-        move |s, done| apply_content_aware_fill(s, label, id, &output, fmt, window, done),
+        move |s, done| {
+            let name = s.active().map_or_else(|| "Content-Aware Fill".to_string(), |st| st.doc.next_layer_name("Content-Aware Fill"));
+            apply_content_aware_fill(s, label, id, &output, fmt, window, done, &name)
+        },
     )
+}
+
+/// The window a content-aware-style fill works on: the pixels it sampled, which of them are the
+/// hole, and (over the hole's bounds, in window coordinates) the layer's original pixels and the
+/// selection's soft coverage.
+pub(crate) struct FillWindow {
+    pub(crate) img: Vec<f32>,
+    pub(crate) hole: Vec<bool>,
+    pub(crate) bounds: (usize, usize, usize, usize),
+    pub(crate) original: Vec<f32>,
+    pub(crate) cover: Vec<f32>,
+    pub(crate) n_hole: usize,
+}
+
+/// Read a fill's sampling window on a job worker: the pixels to sample (the layer, or the visible
+/// composite when `sample_all`), which of them the selection covers, and the original pixels and
+/// soft coverage over the selected pixels' bounds. Cancellable at every step. Content-Aware Fill
+/// and Generative Fill both read their input this way.
+pub(crate) fn read_fill_window(
+    doc: &Document,
+    id: LayerId,
+    sel: &Surface,
+    window: Rect,
+    sample_all: bool,
+    fmt: PixelFormat,
+    ctx: &crate::jobs::JobCtx,
+) -> Result<FillWindow> {
+    use crate::fill_cmds::{read_window, read_window_cover, read_window_mask};
+
+    let cancel = || ctx.cancelled();
+    let (w, h) = (window.width() as usize, window.height() as usize);
+    let n = fmt.channels();
+    let surf = doc.layer(id).and_then(|l| l.surface()).ok_or(EngineError::NoLayer(id))?;
+    let img = if sample_all {
+        if cancel() {
+            return Err(EngineError::Cancelled);
+        }
+        let region = crate::retouch_cmds::composite_region(doc, None, crate::retouch_cmds::SampleLayers::All, window, fmt);
+        if cancel() {
+            return Err(EngineError::Cancelled);
+        }
+        region.data
+    } else {
+        read_window(surf, window, &cancel).ok_or(EngineError::Cancelled)?
+    };
+    let hole = read_window_cover(sel, window, &cancel).ok_or(EngineError::Cancelled)?;
+    ctx.check()?;
+    let (bx0, by0, bx1, by1) = mask_bounds(w, h, &hole);
+    let original: Vec<f32> = (by0..by1).flat_map(|y| img[(y * w + bx0) * n..(y * w + bx1) * n].iter().copied()).collect();
+    let at = |x: usize, y: usize| (window.x0 + x as i32, window.y0 + y as i32);
+    let ((x0, y0), (x1, y1)) = (at(bx0, by0), at(bx1, by1));
+    let cover = read_window_mask(sel, Rect::new(x0, y0, x1, y1), &cancel).ok_or(EngineError::Cancelled)?;
+    let n_hole = cover.iter().filter(|c| **c > 0.0).count();
+    Ok(FillWindow { img, hole, bounds: (bx0, by0, bx1, by1), original, cover, n_hole })
+}
+
+/// Name for a new fill layer: `base` while the document doesn't use it, then `base 2`, `base 3`…
+/// (`Document::next_layer_name` always appends a number, so it can't hand out the bare name).
+pub(crate) fn fill_layer_name(doc: &Document, base: &str) -> String {
+    let names: std::collections::HashSet<&str> = doc.walk().into_iter().map(|(_, _, l)| l.name.as_str()).collect();
+    if !names.contains(base) {
+        return base.to_string();
+    }
+    // At most `names.len() + 1` candidates are needed, so the search always succeeds.
+    (2..=names.len() + 2).map(|n| format!("{base} {n}")).find(|n| !names.contains(&n.as_str())).unwrap_or_else(|| base.to_string())
 }
 
 /// A Content-Aware Fill's result for its apply step: the filled window (the same as the
 /// original outside the selected pixels) and, over the bounds of the selected pixels (in window
 /// coordinates), the original pixels and the selection's coverage.
-struct FilledWindow {
-    filled: Vec<f32>,
-    bounds: (usize, usize, usize, usize),
-    original: Vec<f32>,
-    cover: Vec<f32>,
-    n_hole: usize,
+pub(crate) struct FilledWindow {
+    pub(crate) filled: Vec<f32>,
+    pub(crate) bounds: (usize, usize, usize, usize),
+    pub(crate) original: Vec<f32>,
+    pub(crate) cover: Vec<f32>,
+    pub(crate) n_hole: usize,
 }
 
 /// `f(window index, index over the bounds, coverage)` for each selected pixel of a
@@ -505,14 +555,24 @@ fn mask_bounds(w: usize, h: usize, m: &[bool]) -> (usize, usize, usize, usize) {
 
 /// Write a Content-Aware Fill result (the job's apply step): into the layer, a new layer or a
 /// duplicate, as one undo step.
-fn apply_content_aware_fill(s: &mut Session, label: &str, id: LayerId, output: &str, fmt: PixelFormat, window: Rect, done: FilledWindow) -> Result<Value> {
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn apply_content_aware_fill(
+    s: &mut Session,
+    label: &str,
+    id: LayerId,
+    output: &str,
+    fmt: PixelFormat,
+    window: Rect,
+    done: FilledWindow,
+    layer_name: &str,
+) -> Result<Value> {
     let n = fmt.channels();
     let (w, h) = (window.width() as usize, window.height() as usize);
     let FilledWindow { mut filled, bounds, original, cover, n_hole } = done;
     let layer = s.edit(label, |doc, active| {
         let target = match output {
             "new" => {
-                let mut l = Layer::raster(doc.next_layer_name("Content-Aware Fill"), PixelFormat { alpha: true, ..fmt });
+                let mut l = Layer::raster(layer_name.to_string(), PixelFormat { alpha: true, ..fmt });
                 let mut px = vec![0.0f32; w * h * n.max(1)];
                 let lf = l.surface().map(|s| s.format()).unwrap_or(fmt);
                 let ln = lf.channels();
@@ -1164,10 +1224,10 @@ pub fn specs() -> Vec<CommandSpec> {
             ["Edit"],
             None,
             r##"{"sampling":"auto|rectangular|custom","margin":px?,"area":[x,y,w,h]?,"channel":index|name?,"colorAdaptation":"default|none|high|veryHigh","rotationAdaptation":"none|low|medium|high|full","scale":bool=false,"mirror":bool=false,"sampleAllLayers":bool=false,"output":"current|new|duplicate","seed":u64=1}"##,
-            can_caf,
+            can_fill,
             content_aware_fill
         ),
-        spec!("edit.deleteAndFillSelection", "Delete and Fill Selection", [], None, "{}", can_caf, delete_and_fill),
+        spec!("edit.deleteAndFillSelection", "Delete and Fill Selection", [], None, "{}", can_fill, delete_and_fill),
         spec!(
             "edit.contentAwareScale",
             "Content-Aware Scale",

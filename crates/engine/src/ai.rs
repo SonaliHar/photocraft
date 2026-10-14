@@ -181,5 +181,8 @@ fn check_cancel(provider: &dyn AiProvider, id: &AiJobId, ctx: &crate::jobs::JobC
 }
 
 #[cfg(test)]
+#[path = "ai_testing.rs"]
+pub(crate) mod testing;
+#[cfg(test)]
 #[path = "ai_tests.rs"]
 mod tests;
