@@ -95,7 +95,8 @@ pub fn truncated(painter: &Painter, text: &str, font: FontId, color: egui::Color
         return None;
     }
     let mut job = egui::text::LayoutJob::default();
-    job.append(text, 0.0, egui::TextFormat { font_id: font, color, italics, ..Default::default() });
+    // Right-to-left names (Arabic, Hebrew) in display order: egui lays words out left to right.
+    job.append(&crate::bidi_text::visual(text), 0.0, egui::TextFormat { font_id: font, color, italics, ..Default::default() });
     job.wrap = egui::text::TextWrapping { max_width, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
     Some(painter.layout_job(job))
 }

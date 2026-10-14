@@ -707,6 +707,8 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if system {
                 return;
             }
+            // A right-to-left document name in display order (the OS title keeps the logical text).
+            let title = crate::bidi_text::visual(&title).into_owned();
             let font = theme::medium(13.0);
             let galley = ui.painter().layout_no_wrap(title.clone(), font.clone(), t.text_dim);
             if let Some(x) = title_x(full.center().x, free.0, free.1, galley.size().x) {
