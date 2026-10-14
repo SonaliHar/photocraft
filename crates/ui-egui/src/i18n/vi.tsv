@@ -3624,3 +3624,20 @@ curves	Smooth	Làm mượt
 	Choose a gradient file (.grd).	Chọn tệp chuyển sắc (.grd).
 	Auto Add/Delete	Tự động thêm/xóa
 	ICO is limited to 256 × 256 pixels	ICO giới hạn ở 256 × 256 pixel
+
+# Color panel modes (#2569)
+	Grayscale Slider	Thanh trượt thang xám
+	RGB Sliders	Thanh trượt RGB
+	HSB Sliders	Thanh trượt HSB
+	CMYK Sliders	Thanh trượt CMYK
+	Lab Sliders	Thanh trượt Lab
+	Web Color Sliders	Thanh trượt màu web
+	Copy Color's Hex Code	Sao chép mã hex của màu
+	Copy Color as HTML	Sao chép màu dạng HTML
+	Hue Cube	Khối sắc độ
+	Brightness Cube	Khối độ sáng
+	Color Wheel	Bánh xe màu
+	RGB Spectrum	Phổ RGB
+	CMYK Spectrum	Phổ CMYK
+	Grayscale Ramp	Dải thang xám
+	Current Colors	Màu hiện tại

@@ -3836,3 +3836,19 @@ curves	Smooth	Згладити
 @plural	{n} action|{n} actions	{n} операція|{n} операції|{n} операцій
 	Auto Add/Delete	Автододавання/видалення
 	ICO is limited to 256 × 256 pixels	ICO обмежено розміром 256 × 256 пікселів
+
+# Color panel modes (#2569)
+	RGB Sliders	Повзунки RGB
+	HSB Sliders	Повзунки HSB
+	CMYK Sliders	Повзунки CMYK
+	Lab Sliders	Повзунки Lab
+	Web Color Sliders	Повзунки веб-кольорів
+	Copy Color's Hex Code	Копіювати шістнадцятковий код кольору
+	Copy Color as HTML	Копіювати колір як HTML
+	Hue Cube	Куб відтінку
+	Brightness Cube	Куб яскравості
+	Color Wheel	Колірне коло
+	RGB Spectrum	Спектр RGB
+	CMYK Spectrum	Спектр CMYK
+	Grayscale Ramp	Шкала відтінків сірого
+	Current Colors	Поточні кольори

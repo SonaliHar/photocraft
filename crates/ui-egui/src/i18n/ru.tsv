@@ -3103,3 +3103,19 @@ curves	Smooth	Сгладить
 	Gray Value (Median)	Уровень серого (медиана)
 	Integrated Density	Интегральная плотность
 	Length	Длина
+
+# Color panel modes (#2569)
+	RGB Sliders	Ползунки RGB
+	HSB Sliders	Ползунки HSB
+	CMYK Sliders	Ползунки CMYK
+	Lab Sliders	Ползунки Lab
+	Web Color Sliders	Ползунки веб-цветов
+	Copy Color's Hex Code	Копировать шестнадцатеричный код цвета
+	Copy Color as HTML	Копировать цвет как HTML
+	Hue Cube	Куб цветового тона
+	Brightness Cube	Куб яркости
+	Color Wheel	Цветовой круг
+	RGB Spectrum	Спектр RGB
+	CMYK Spectrum	Спектр CMYK
+	Grayscale Ramp	Шкала градаций серого
+	Current Colors	Текущие цвета

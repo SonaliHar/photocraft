@@ -1033,12 +1033,54 @@ pub struct DockTabs {
     pub character: usize,
 }
 
+/// How the Color panel shows the colour (its panel menu, #2569): a field with a strip, a wheel,
+/// or sliders in one colour model.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ColorPanelMode {
+    /// A saturation/brightness field beside a hue strip (Photoshop's default).
+    #[default]
+    HueCube,
+    /// A hue/saturation field beside a brightness strip.
+    BrightnessCube,
+    /// A hue ring around a saturation/brightness square.
+    Wheel,
+    /// One K slider (0 white … 100 black).
+    Grayscale,
+    /// R, G, B 0..255.
+    Rgb,
+    /// H 0..360, S and B in percent.
+    Hsb,
+    /// C, M, Y, K in percent, through the working CMYK profile.
+    Cmyk,
+    /// L 0..100, a and b -128..127.
+    Lab,
+    /// R, G, B as two-digit hex fields with web-safe ticks.
+    Web,
+}
+
+/// The colour ramp under the Color panel's sliders.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ColorRamp {
+    #[default]
+    RgbSpectrum,
+    CmykSpectrum,
+    Grayscale,
+    /// From the foreground to the background colour.
+    CurrentColors,
+}
+
 /// Color panel state.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ColorPanelState {
     /// The panel edits the background colour (its chip was clicked), not the foreground.
     pub background: bool,
+    /// How the colour is shown and edited (the panel menu).
+    pub mode: ColorPanelMode,
+    /// The ramp under the sliders (the panel menu).
+    pub ramp: ColorRamp,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -4100,3 +4100,19 @@ navigator	Zoom	Zoom
 @plural	{n} action|{n} actions	{n} azione|{n} azioni
 	Auto Add/Delete	Aggiungi/elimina automaticamente
 	ICO is limited to 256 × 256 pixels	ICO è limitato a 256 × 256 pixel
+
+# Color panel modes (#2569)
+	RGB Sliders	Cursori RGB
+	HSB Sliders	Cursori HSB
+	CMYK Sliders	Cursori CMYK
+	Lab Sliders	Cursori Lab
+	Web Color Sliders	Cursori colori Web
+	Copy Color's Hex Code	Copia codice esadecimale del colore
+	Copy Color as HTML	Copia colore come HTML
+	Hue Cube	Cubo tonalità
+	Brightness Cube	Cubo luminosità
+	Color Wheel	Ruota dei colori
+	RGB Spectrum	Spettro RGB
+	CMYK Spectrum	Spettro CMYK
+	Grayscale Ramp	Rampa scala di grigio
+	Current Colors	Colori correnti

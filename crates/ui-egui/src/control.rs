@@ -1264,6 +1264,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
         "tool": app.ui.tool,
         "toolOptions": app.ui.tool_options,
+        "colorPanel": app.ui.color_panel,
         "perspectiveCrop": app.ui.perspective_crop,
         "strokeEditor": app.ui.stroke_editor,
         "magnetic": app.ui.magnetic,
@@ -2165,6 +2166,24 @@ mod tests {
         assert!(app.ui.color_panel.background);
         assert_eq!(call(&mut app, &ctx, "ui.set", json!({"colorPanel": {"background": "yes"}}))["ok"], false);
         assert!(app.ui.color_panel.background, "a bad value changes nothing");
+    }
+
+    /// The Color panel's mode and ramp (#2569) are set and reported by their menu names.
+    #[test]
+    fn ui_set_color_panel_mode_and_ramp() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let r = call(&mut app, &ctx, "ui.set", json!({"colorPanel": {"background": false, "mode": "lab", "ramp": "grayscale"}}));
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!((app.ui.color_panel.mode, app.ui.color_panel.ramp), (crate::state::ColorPanelMode::Lab, crate::state::ColorRamp::Grayscale));
+        let seen = call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["colorPanel"].clone();
+        assert_eq!(seen, json!({"background": false, "mode": "lab", "ramp": "grayscale"}), "{seen}");
+        let r = call(&mut app, &ctx, "ui.set", json!({"colorPanel": {"mode": "triangle"}}));
+        assert_eq!(r["ok"], false, "{r}");
+        assert_eq!(app.ui.color_panel.mode, crate::state::ColorPanelMode::Lab, "a bad mode changes nothing");
+        for mode in ["hueCube", "brightnessCube", "wheel", "grayscale", "rgb", "hsb", "cmyk", "lab", "web"] {
+            assert_eq!(call(&mut app, &ctx, "ui.set", json!({"colorPanel": {"mode": mode}}))["ok"], true, "{mode}");
+        }
     }
 
     #[test]

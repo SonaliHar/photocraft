@@ -3869,3 +3869,19 @@ cameraData	Lens	Lens
 	Ink Characteristics	Mürekkep Özellikleri
 	Solidity:	Doluluk:
 	Redrawing	Yeniden çiziliyor
+
+# Color panel modes (#2569)
+	RGB Sliders	RGB Kaydırıcıları
+	HSB Sliders	HSB Kaydırıcıları
+	CMYK Sliders	CMYK Kaydırıcıları
+	Lab Sliders	Lab Kaydırıcıları
+	Web Color Sliders	Web Rengi Kaydırıcıları
+	Copy Color's Hex Code	Rengin Onaltılık Kodunu Kopyala
+	Copy Color as HTML	Rengi HTML Olarak Kopyala
+	Hue Cube	Ton Küpü
+	Brightness Cube	Parlaklık Küpü
+	Color Wheel	Renk Tekerleği
+	RGB Spectrum	RGB Spektrumu
+	CMYK Spectrum	CMYK Spektrumu
+	Grayscale Ramp	Gri Tonlama Rampası
+	Current Colors	Geçerli Renkler

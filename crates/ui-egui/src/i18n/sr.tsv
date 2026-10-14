@@ -4211,3 +4211,19 @@ shape	Appearance	Izgled
 	Ink Characteristics	Karakteristike mastila
 	Solidity:	Punoća:
 	Redrawing	Ponovno iscrtavanje
+
+# Color panel modes (#2569)
+	RGB Sliders	RGB klizači
+	HSB Sliders	HSB klizači
+	CMYK Sliders	CMYK klizači
+	Lab Sliders	Lab klizači
+	Web Color Sliders	Klizači veb boja
+	Copy Color's Hex Code	Kopiraj heksadecimalni kod boje
+	Copy Color as HTML	Kopiraj boju kao HTML
+	Hue Cube	Kocka nijanse
+	Brightness Cube	Kocka osvetljenosti
+	Color Wheel	Točak boja
+	RGB Spectrum	RGB spektar
+	CMYK Spectrum	CMYK spektar
+	Grayscale Ramp	Prelaz sivih tonova
+	Current Colors	Trenutne boje

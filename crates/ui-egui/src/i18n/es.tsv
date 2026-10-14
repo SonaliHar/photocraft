@@ -2822,3 +2822,20 @@ curves	Smooth	Suavizar
 @plural	{n} action|{n} actions	{n} acción|{n} acciones
 	Auto Add/Delete	Añadir/eliminar automáticamente
 	ICO is limited to 256 × 256 pixels	ICO está limitado a 256 × 256 píxeles
+
+# Color panel modes (#2569)
+	Grayscale Slider	Regulador de escala de grises
+	RGB Sliders	Reguladores RGB
+	HSB Sliders	Reguladores HSB
+	CMYK Sliders	Reguladores CMYK
+	Lab Sliders	Reguladores Lab
+	Web Color Sliders	Reguladores de colores web
+	Copy Color's Hex Code	Copiar código hexadecimal del color
+	Copy Color as HTML	Copiar color como HTML
+	Hue Cube	Cubo de tono
+	Brightness Cube	Cubo de brillo
+	Color Wheel	Rueda de color
+	RGB Spectrum	Espectro RGB
+	CMYK Spectrum	Espectro CMYK
+	Grayscale Ramp	Rampa de escala de grises
+	Current Colors	Colores actuales

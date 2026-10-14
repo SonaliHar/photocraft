@@ -3927,3 +3927,19 @@ layerLabel	No Color	Sem cor
 @plural	{n} action|{n} actions	{n} ação|{n} ações
 	Auto Add/Delete	Adicionar/excluir automaticamente
 	ICO is limited to 256 × 256 pixels	ICO é limitado a 256 × 256 pixels
+
+# Color panel modes (#2569)
+	RGB Sliders	Controles deslizantes RGB
+	HSB Sliders	Controles deslizantes HSB
+	CMYK Sliders	Controles deslizantes CMYK
+	Lab Sliders	Controles deslizantes Lab
+	Web Color Sliders	Controles deslizantes de cores da Web
+	Copy Color's Hex Code	Copiar código hexadecimal da cor
+	Copy Color as HTML	Copiar cor como HTML
+	Hue Cube	Cubo de matiz
+	Brightness Cube	Cubo de brilho
+	Color Wheel	Roda de cores
+	RGB Spectrum	Espectro RGB
+	CMYK Spectrum	Espectro CMYK
+	Grayscale Ramp	Rampa de tons de cinza
+	Current Colors	Cores atuais

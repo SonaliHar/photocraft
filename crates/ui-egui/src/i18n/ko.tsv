@@ -3312,3 +3312,20 @@ curves	Smooth	매끄럽게
 @plural	{n} action|{n} actions	액션 {n}개
 	Auto Add/Delete	자동 추가/삭제
 	ICO is limited to 256 × 256 pixels	ICO는 256 × 256픽셀로 제한됩니다
+
+# Color panel modes (#2569)
+	Grayscale Slider	회색 음영 슬라이더
+	RGB Sliders	RGB 슬라이더
+	HSB Sliders	HSB 슬라이더
+	CMYK Sliders	CMYK 슬라이더
+	Lab Sliders	Lab 슬라이더
+	Web Color Sliders	웹 색상 슬라이더
+	Copy Color's Hex Code	색상의 16진수 코드 복사
+	Copy Color as HTML	색상을 HTML로 복사
+	Hue Cube	색조 큐브
+	Brightness Cube	명도 큐브
+	Color Wheel	색상환
+	RGB Spectrum	RGB 스펙트럼
+	CMYK Spectrum	CMYK 스펙트럼
+	Grayscale Ramp	회색 음영 램프
+	Current Colors	현재 색상

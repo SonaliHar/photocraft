@@ -2732,3 +2732,20 @@ curves	Smooth	平滑
 @plural	{n} action|{n} actions	{n} 個動作
 	Auto Add/Delete	自動增加/刪除
 	ICO is limited to 256 × 256 pixels	ICO 最大為 256 × 256 像素
+
+# Color panel modes (#2569)
+	Grayscale Slider	灰階滑桿
+	RGB Sliders	RGB 滑桿
+	HSB Sliders	HSB 滑桿
+	CMYK Sliders	CMYK 滑桿
+	Lab Sliders	Lab 滑桿
+	Web Color Sliders	Web 色彩滑桿
+	Copy Color's Hex Code	拷貝顏色的十六進位代碼
+	Copy Color as HTML	將顏色拷貝為 HTML
+	Hue Cube	色相立方體
+	Brightness Cube	亮度立方體
+	Color Wheel	色輪
+	RGB Spectrum	RGB 色譜
+	CMYK Spectrum	CMYK 色譜
+	Grayscale Ramp	灰階色譜
+	Current Colors	目前顏色

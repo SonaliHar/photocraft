@@ -3139,3 +3139,19 @@ curves	Smooth	Lisser
 @plural	{n} action|{n} actions	{n} action|{n} actions
 	Auto Add/Delete	Ajout/suppr. auto
 	ICO is limited to 256 × 256 pixels	Le format ICO est limité à 256 × 256 pixels
+
+# Color panel modes (#2569)
+	RGB Sliders	Curseurs RVB
+	HSB Sliders	Curseurs TSL
+	CMYK Sliders	Curseurs CMJN
+	Lab Sliders	Curseurs Lab
+	Web Color Sliders	Curseurs de couleurs Web
+	Copy Color's Hex Code	Copier le code hexadécimal de la couleur
+	Copy Color as HTML	Copier la couleur au format HTML
+	Hue Cube	Cube de teinte
+	Brightness Cube	Cube de luminosité
+	Color Wheel	Roue chromatique
+	RGB Spectrum	Spectre RVB
+	CMYK Spectrum	Spectre CMJN
+	Grayscale Ramp	Rampe de niveaux de gris
+	Current Colors	Couleurs actuelles

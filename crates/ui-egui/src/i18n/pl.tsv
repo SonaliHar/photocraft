@@ -3735,3 +3735,19 @@ curves	Smooth	Wygładź
 @plural	{n} action|{n} actions	{n} operacja|{n} operacje|{n} operacji
 	Auto Add/Delete	Automatyczne dodawanie/usuwanie
 	ICO is limited to 256 × 256 pixels	ICO jest ograniczony do 256 × 256 pikseli
+
+# Color panel modes (#2569)
+	RGB Sliders	Suwaki RGB
+	HSB Sliders	Suwaki HSB
+	CMYK Sliders	Suwaki CMYK
+	Lab Sliders	Suwaki Lab
+	Web Color Sliders	Suwaki kolorów internetowych
+	Copy Color's Hex Code	Kopiuj kod szesnastkowy koloru
+	Copy Color as HTML	Kopiuj kolor jako HTML
+	Hue Cube	Sześcian barwy
+	Brightness Cube	Sześcian jasności
+	Color Wheel	Koło kolorów
+	RGB Spectrum	Widmo RGB
+	CMYK Spectrum	Widmo CMYK
+	Grayscale Ramp	Gradient skali szarości
+	Current Colors	Bieżące kolory

@@ -3745,3 +3745,20 @@ navigator	Zoom	Zvětšení
 @plural	{n} action|{n} actions	{n} akce|{n} akce|{n} akcí
 	Auto Add/Delete	Automaticky přidat/odstranit
 	ICO is limited to 256 × 256 pixels	ICO je omezen na 256 × 256 pixelů
+
+# Color panel modes (#2569)
+	Grayscale Slider	Posuvník stupňů šedi
+	RGB Sliders	Posuvníky RGB
+	HSB Sliders	Posuvníky HSB
+	CMYK Sliders	Posuvníky CMYK
+	Lab Sliders	Posuvníky Lab
+	Web Color Sliders	Posuvníky webových barev
+	Copy Color's Hex Code	Kopírovat hexadecimální kód barvy
+	Copy Color as HTML	Kopírovat barvu jako HTML
+	Hue Cube	Krychle odstínu
+	Brightness Cube	Krychle jasu
+	Color Wheel	Barevné kolo
+	RGB Spectrum	Spektrum RGB
+	CMYK Spectrum	Spektrum CMYK
+	Grayscale Ramp	Přechod stupňů šedi
+	Current Colors	Aktuální barvy

@@ -3815,3 +3815,19 @@ curves	Smooth	スムーズ
 	Reset All Locked Settings	ロックされた設定をすべて初期化
 	Copy Texture to Other Tools	テクスチャを他のツールにコピー
 	ICO is limited to 256 × 256 pixels	ICO は 256 × 256 ピクセルまでです
+
+# Color panel modes (#2569)
+	RGB Sliders	RGB スライダー
+	HSB Sliders	HSB スライダー
+	CMYK Sliders	CMYK スライダー
+	Lab Sliders	Lab スライダー
+	Web Color Sliders	Web カラースライダー
+	Copy Color's Hex Code	カラーの 16 進コードをコピー
+	Copy Color as HTML	カラーを HTML としてコピー
+	Hue Cube	色相キューブ
+	Brightness Cube	明るさキューブ
+	Color Wheel	カラーホイール
+	RGB Spectrum	RGB スペクトル
+	CMYK Spectrum	CMYK スペクトル
+	Grayscale Ramp	グレースケールランプ
+	Current Colors	現在のカラー

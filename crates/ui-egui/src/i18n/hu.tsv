@@ -4058,3 +4058,19 @@ cameraRaw	Yellow	Sárga
 	Ink Characteristics	Festék jellemzői
 	Solidity:	Fedőképesség:
 	Redrawing	Újrarajzolás
+
+# Color panel modes (#2569)
+	RGB Sliders	RGB csúszkák
+	HSB Sliders	HSB csúszkák
+	CMYK Sliders	CMYK csúszkák
+	Lab Sliders	Lab csúszkák
+	Web Color Sliders	Webszín csúszkák
+	Copy Color's Hex Code	Szín hexadecimális kódjának másolása
+	Copy Color as HTML	Szín másolása HTML-ként
+	Hue Cube	Színezetkocka
+	Brightness Cube	Fényerőkocka
+	Color Wheel	Színkerék
+	RGB Spectrum	RGB spektrum
+	CMYK Spectrum	CMYK spektrum
+	Grayscale Ramp	Szürkeárnyalatos átmenet
+	Current Colors	Aktuális színek
