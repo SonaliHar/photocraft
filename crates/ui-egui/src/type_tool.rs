@@ -110,6 +110,7 @@ pub fn edit_active(app: &mut PhotocraftApp) -> Result<(), String> {
     let st = app.session.active().ok_or("no document open")?;
     let id = st.active_layer.ok_or("no active layer")?;
     let n = text_layer(&st.doc, id).ok_or("active layer is not a type layer")?.text.chars().count();
+    let previous_tool = app.ui.tool;
     if app.ui.text_edit.as_ref().is_none_or(|ed| ed.layer != id.0) {
         commit(app);
         let key = session_key(app);
@@ -121,6 +122,9 @@ pub fn edit_active(app: &mut PhotocraftApp) -> Result<(), String> {
         ed.caret = n;
     }
     let vertical = app.session.active().and_then(|st| text_layer(&st.doc, id)).is_some_and(|t| t.orientation == photocraft_doc::text::Orientation::Vertical);
+    if !previous_tool.is_type() {
+        app.ui.text_edit_return_tool = Some(previous_tool);
+    }
     app.ui.tool = if vertical { crate::state::Tool::VerticalType } else { crate::state::Tool::Type };
     app.ui.mask_target = false;
     app.ui.vector_mask_target = false;
@@ -132,6 +136,7 @@ pub fn edit_active(app: &mut PhotocraftApp) -> Result<(), String> {
 /// type is there.
 pub fn edit_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
     let Some(id) = hit_layer(app, x, y) else { return false };
+    let previous_tool = app.ui.tool;
     commit(app);
     if app.session.select_layer(id).is_err() {
         return false;
@@ -144,6 +149,9 @@ pub fn edit_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
     app.ui.text_edit =
         Some(TextEdit { layer: id.0, caret: off, anchor: off, session: key, created: false, mask: false, dragging: false, resize: None, preedit: None });
     let vertical = app.session.active().and_then(|st| text_layer(&st.doc, id)).is_some_and(|t| t.orientation == photocraft_doc::text::Orientation::Vertical);
+    if !previous_tool.is_type() {
+        app.ui.text_edit_return_tool = Some(previous_tool);
+    }
     app.ui.tool = if vertical { crate::state::Tool::VerticalType } else { crate::state::Tool::Type };
     app.ui.mask_target = false;
     app.ui.vector_mask_target = false;
@@ -271,6 +279,7 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
         let off = hit_offset(app, id, x, y);
         app.ui.text_edit =
             Some(TextEdit { layer: id.0, caret: off, anchor: off, session: key, created: false, mask: false, dragging: true, resize: None, preedit: None });
+        app.ui.text_edit_return_tool = None;
         return true;
     }
     false
@@ -335,6 +344,7 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
         // Like Photoshop: the placeholder is selected, so typing replaces it.
         let n = text.chars().count();
         app.ui.text_edit = Some(TextEdit { layer: id, caret: n, anchor: 0, session: key, created: true, mask, dragging: false, resize: None, preedit: None });
+        app.ui.text_edit_return_tool = None;
     }
 }
 
@@ -960,6 +970,9 @@ pub fn commit_with(app: &mut PhotocraftApp, mods: egui::Modifiers) {
     }
     crate::type_transform::reset(app);
     let Some(ed) = app.ui.text_edit.take() else { return };
+    if let Some(tool) = app.ui.text_edit_return_tool.take() {
+        app.ui.tool = tool;
+    }
     let Some(text) = current_text(app, LayerId(ed.layer)) else { return };
     if ed.mask {
         // Type Mask: the text's glyphs become (or combine with) the selection and the working
@@ -2359,6 +2372,9 @@ fn type_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 pub fn cancel(app: &mut PhotocraftApp) {
     crate::type_transform::reset(app);
     let Some(ed) = app.ui.text_edit.take() else { return };
+    if let Some(tool) = app.ui.text_edit_return_tool.take() {
+        app.ui.tool = tool;
+    }
     undo_session(app, &ed);
 }
 
@@ -2648,5 +2664,24 @@ mod tests {
         assert_eq!(word_boundary("hello big world", 0, true), 5);
         assert_eq!(word_boundary("hello big world", 7, false), 6);
         assert_eq!(word_boundary("hello big world", 15, false), 10);
+    }
+    #[test]
+    fn double_click_from_move_tool_restores_move_tool_on_commit_and_cancel() {
+        let (mut app, _) = variants();
+        app.ui.tool = crate::state::Tool::Move;
+        assert!(edit_at(&mut app, ON_TEXT.0, ON_TEXT.1));
+        assert_eq!(app.ui.tool, crate::state::Tool::Type);
+        assert_eq!(app.ui.text_edit_return_tool, Some(crate::state::Tool::Move));
+        commit(&mut app);
+        assert_eq!(app.ui.tool, crate::state::Tool::Move, "commit restores the Move tool");
+        assert_eq!(app.ui.text_edit_return_tool, None);
+
+        // Also test cancel
+        app.ui.tool = crate::state::Tool::Move;
+        assert!(edit_at(&mut app, ON_TEXT.0, ON_TEXT.1));
+        assert_eq!(app.ui.tool, crate::state::Tool::Type);
+        cancel(&mut app);
+        assert_eq!(app.ui.tool, crate::state::Tool::Move, "cancel restores the Move tool");
+        assert_eq!(app.ui.text_edit_return_tool, None);
     }
 }
