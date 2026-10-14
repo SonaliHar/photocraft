@@ -38,21 +38,21 @@ Rules every capability must pass. A capability isn't done until each rule that a
 
 | ✓ | ID | Rule | How it's checked | Target | Status |
 |---|---|---|---|---|---|
-| [ ] | B01 | **Non-destructive:** the result is a new layer or a mask; the source pixels never change | Engine test: source layer identical before and after | M1 | todo |
-| [ ] | B02 | **One undo step** removes the result | Engine test | M1 | todo |
-| [ ] | B03 | **Background job:** progress shown, Esc cancels, document locked while it runs; cancel leaves the document unchanged | Engine test with `FakeProvider` | M1 | todo |
+| [x] | B01 | **Non-destructive:** the result is a new layer or a mask; the source pixels never change | Engine test: source layer identical before and after | M1 | done (PC-02) |
+| [x] | B02 | **One undo step** removes the result | Engine test | M1 | done (PC-02) |
+| [x] | B03 | **Background job:** progress shown, Esc cancels, document locked while it runs; cancel leaves the document unchanged | Engine test with `FakeProvider` | M1 | done (PC-02) |
 | [ ] | B04 | **No manager, no problem:** PhotoCraft works as today; AI commands say "Craft AI Manager isn't running" with a way to open it | Client test + manual check | M1 | todo |
-| [ ] | B05 | **Never crashes:** any params or document state gives an error, never a panic | `cargo test -p photocraft-engine --test panic_hunt -- --ignored` | M1 | todo |
+| [x] | B05 | **Never crashes:** any params or document state gives an error, never a panic | `cargo test -p photocraft-engine --test panic_hunt -- --ignored` | M1 | done (PC-02) |
 | [ ] | B06 | **Every action is a command**, drivable over MCP and the control channel | Automation test | M1 | todo |
 | [ ] | B07 | **Offline after first use:** models SHA-256 checked, unknown files refused, ONNX / safetensors only | Manager tests | M1 | todo |
 | [ ] | B08 | **Says where it ran:** model, device, local or cloud, time taken | Result JSON test; shown by U04 | M1 | todo |
 | [ ] | B09 | **Nothing leaves the PC without consent:** web jobs show "uploads to X" first | Manager test + manual | S4 | todo |
-| [ ] | B10 | **Colour:** RGB at 8/16/32-bit; Gray, CMYK, Lab and indexed give a clear "not supported yet" | Engine test at three bit depths | M1 | todo |
-| [ ] | B11 | **Soft selections respected:** blended by selection coverage; pixels outside the selection identical | Golden test | M1 | todo |
+| [x] | B10 | **Colour:** RGB at 8/16/32-bit; Gray, CMYK, Lab and indexed give a clear "not supported yet" | Engine test at three bit depths | M1 | done (PC-02) |
+| [x] | B11 | **Soft selections respected:** blended by selection coverage; pixels outside the selection identical | Golden test | M1 | done (PC-02) |
 | [ ] | B12 | **Big images:** a 24–36 MP document works (only the window around the selection is sent); time recorded | Timing in the receipt | M1 | todo |
 | [ ] | B13 | **GPU optional:** Auto picks CUDA, then DirectML, then CPU; any GPU failure or low VRAM falls back to the CPU | Manager tests on the 4090 | S2b | todo |
 | [ ] | B14 | **Licences:** each model's licence recorded and shown; commercial-safe only | Catalog test | M1 | todo |
-| [ ] | B15 | **Web build unaffected:** wasm still compiles; AI commands report "not available" there | `cargo xtask wasm` | M1 | todo |
+| [x] | B15 | **Web build unaffected:** wasm still compiles; AI commands report "not available" there | `cargo xtask wasm` | M1 | done (PC-02) |
 
 ## 3. How it looks
 
@@ -91,6 +91,7 @@ Every UI row also passes U10.
 
 | Date | Change |
 |---|---|
+| 2026-10-13 | B01, B02, B03, B05, B10, B11, B15 ticked (PC-02, reviewed by Claude) |
 | 2026-10-13 | Owners switched to "local first"; Claude owns UI design |
 | 2026-10-13 | D1 (Photoshop names) and D2 (accept big-lama for now) decided; blockers cleared |
 | 2026-10-13 | Manager named Craft AI Manager (CAIM); IDs AI-M01–10 renamed CAIM-01–10 |

@@ -185,6 +185,7 @@ Excluded by the commercial-safe rule: RMBG (non-commercial), FLUX.1-dev (non-com
 - No pickle formats. ONNX and safetensors only.
 - PhotoCraft never talks to the internet for AI. Only the manager does, and only for catalog downloads or explicitly allowed web jobs.
 - Agents run in the CraftML account. They don't get admin rights or secrets, and never push to `main` (branch protection, PRs only).
+- Agents never read stored credentials (`git credential fill`, Windows Credential Manager, browser stores, token files) and never pass them to other tools. GitHub work goes through `gh` signed in with the fine-grained token (TASKS CN-00). If a step needs a credential the agent doesn't have, it stops and says so.
 
 ## How the agents work
 
