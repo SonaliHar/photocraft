@@ -979,7 +979,6 @@
 	Contiguous	Benachbart
 	Contrast	Kontrast
 	Control:	Steuerung:
-	Convert document's colors to the working space	Farben des Dokuments in den Arbeitsfarbraum konvertieren
 	Convert to sRGB	In sRGB konvertieren
 	Copies	Kopien
 	Copper	Kupfer
@@ -1563,7 +1562,6 @@
 	Use Default	Standard verwenden
 	Use Legacy	Legacy verwenden
 	Use Measurement Scale	Messskala verwenden
-	Use the embedded profile (instead of the working space)	Eingebettetes Profil verwenden (statt des Arbeitsfarbraums)
 	Variables bind a layer's visibility, text or pixels to a named data slot.	Variablen binden Sichtbarkeit, Text oder Pixel einer Ebene an einen benannten Datenslot.
 	Vertical scale	Vertikale Skalierung
 	Vibrance	Dynamik
@@ -1884,6 +1882,8 @@
 	Camera Raw Defaults	Camera-Raw-Standardeinstellungen
 	Canvas border	Zeichenflächenrand
 	Show canvas dots	Punkte der Zeichenfläche anzeigen
+	Clip thumbnails to layer bounds	Miniaturbilder auf Ebenenbegrenzung beschneiden
+	Clip Thumbnails to Layer Bounds	Miniaturbilder auf Ebenenbegrenzung beschneiden
 	Canvas color	Zeichenflächenfarbe
 	Canvas custom color	Benutzerdefinierte Zeichenflächenfarbe
 	Color picker	Farbwähler
@@ -2072,7 +2072,8 @@
 	Expand group  ({key}-click: all groups)	Gruppe ausklappen  ({key}-Klick: alle Gruppen)
 	Fade steps	Verblassen-Schritte
 	Hide the layer's effects  ({key}-click: all layers)	Effekte der Ebene ausblenden  ({key}-Klick: alle Ebenen)
-	Import Brushes… (.abr)	Pinsel importieren… (.abr)
+	Import Brushes… (.abr or image)	Pinsel importieren… (.abr oder Bild)
+	Import Brush from Image…	Pinsel aus Bild importieren…
 	Move Group Down	Gruppe nach unten
 	Move Group Up	Gruppe nach oben
 	Reset the brush to the defaults	Pinsel auf Standardwerte zurücksetzen
@@ -2185,7 +2186,6 @@
 	Cancelled opening {name}	Öffnen von {name} abgebrochen
 	The document “{name}” does not have an embedded {mode} profile.	Das Dokument „{name}“ hat kein eingebettetes {mode}-Profil.
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Das Dokument „{name}“ hat ein eingebettetes Farbprofil, das nicht zum aktuellen {mode}-Arbeitsfarbraum passt.
-	Embedded: {embedded}	Eingebettet: {embedded}
 	Working: {working}	Arbeitsfarbraum: {working}
 	Developing {name}	{name} wird entwickelt
 	Cancelled {label}	{label} abgebrochen
@@ -2672,6 +2672,7 @@ cameraData	Lens	Objektiv
 	Search settings…	Einstellungen durchsuchen…
 	No matching settings	Keine passenden Einstellungen
 	Loading fonts…	Schriften werden geladen…
+	Response curve	Reaktionskurve
 	Tool	Werkzeug
 	Simulate Pressure	Druck simulieren
 	Stroke Path…	Pfad nachziehen…
@@ -3108,6 +3109,7 @@ curves	Smooth	Glätten
 	Remove after each stroke	Nach jedem Strich entfernen
 	Apply the removal ({key})	Entfernen anwenden ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Striche zum Entfernen: {n} (Eingabe wendet an, Esc bricht ab)
+	Show home recent files	Zuletzt geöffnete Dateien auf dem Startbildschirm anzeigen
 	Clear Brush Controls	Pinselsteuerungen löschen
 	Reset All Locked Settings	Alle gesperrten Einstellungen zurücksetzen
 	Copy Texture to Other Tools	Struktur auf andere Werkzeuge kopieren
@@ -3134,5 +3136,30 @@ curves	Smooth	Glätten
 	Action playback stopped	Aktionswiedergabe angehalten
 	Step {step} is waiting for its dialog	Schritt {step} wartet auf seinen Dialog
 @plural	{n} action|{n} actions	{n} Aktion|{n} Aktionen
+# Batch / Image Processor
+	Include All Subfolders	Alle Unterordner einschließen
 	Auto Add/Delete	Autom. hinzuf./löschen
+
+# Native Windows printing qualification
+	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Aktiviere nicht zusätzlich das Spiegelbild in den Druckeinstellungen: Die beiden Spiegelungen heben sich auf.
+	Print Settings…	Druckeinstellungen…
+	Remember to turn off the printer's own colour management in Print Settings…	Denke daran, die eigene Farbverwaltung des Druckers in den Druckeinstellungen auszuschalten…
+	Sent to {printer}	An {printer} gesendet
+	set in Print Settings…	in den Druckeinstellungen festlegen…
 	ICO is limited to 256 × 256 pixels	ICO ist auf 256 × 256 Pixel begrenzt
+# Embedded Profile Mismatch: profile names beside the choices, Remember this choice
+	Use the embedded profile ({profile})	Eingebettetes Profil verwenden ({profile})
+	Convert to the working space ({profile})	In den Arbeitsfarbraum konvertieren ({profile})
+	Remember this choice for future images	Diese Auswahl für künftige Bilder merken
+	Turn the prompt back on with Ask On Mismatch in Edit › Color Settings.	Die Abfrage lässt sich mit „Ask On Mismatch“ unter Bearbeiten › Farbeinstellungen wieder einschalten.
+	Button Mode	Schaltflächenmodus
+	Button Mode On	Schaltflächenmodus an
+
+# Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
+	Darken Interface	Benutzeroberfläche abdunkeln
+	Lighten Interface	Benutzeroberfläche aufhellen
+# Bevel & Emboss Technique.
+	Technique	Technik
+	Chisel Hard	Meißeln hart
+	Chisel Soft	Meißeln weich
+	Open color-less EXR as ACEScg	Farbangabenloses EXR als ACEScg öffnen
