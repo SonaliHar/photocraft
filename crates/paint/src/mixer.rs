@@ -257,7 +257,7 @@ fn apply_wet_blending_stroke(
         for (c, dst) in next.iter_mut().take(nc).enumerate() {
             let sampled_premul = sampled[c] / weight_sum;
             let diluted = sampled_premul + (straight_sample[c] - sampled_premul) * dilution;
-            let source_premul = mixed_alpha * source_native.get(c).copied().unwrap_or(0.0);
+            let source_premul = mixed_alpha * source_alpha * source_native.get(c).copied().unwrap_or(0.0);
             *dst = diluted + (source_premul - diluted) * blend;
         }
         next[nc] = mixed_alpha + (mixed_alpha * source_alpha - mixed_alpha) * blend;
@@ -401,6 +401,38 @@ mod tests {
         let mut diluted = Surface::new(PixelFormat::RGBA8);
         apply_mixer_stroke(&mut diluted, None, &make_stroke(), &settings(1.0), &mut state, None, false);
         assert!(diluted.rgba(4, 10)[3] < 0.05, "full Dilution should follow transparent sample alpha: {:?}", diluted.rgba(4, 10));
+    }
+
+    #[test]
+    fn wet_blending_keeps_straight_source_color_when_paint_alpha_changes() {
+        for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+            let tolerance = match fmt {
+                PixelFormat::RGBA8 => 1.0 / 255.0 + 1e-4,
+                PixelFormat::RGBA16 => 1.0 / 65535.0 + 1e-4,
+                _ => 1e-5,
+            };
+            for (paint_alpha, pressure, expected_alpha) in [(0.25, 1.0, 0.25), (1.0, 0.5, 0.5), (0.25, 0.5, 0.125)] {
+                let mut target = Surface::new(fmt);
+                let mut k = stroke(10.0);
+                k.brush.color = [0.2, 0.2, 0.2, paint_alpha];
+                k.points.truncate(1);
+                k.points[0].pressure = pressure;
+                if pressure < 1.0 {
+                    k.brush.transfer = crate::Transfer {
+                        enabled: true,
+                        opacity: crate::Dynamic::controlled(crate::Control::PenPressure),
+                        ..Default::default()
+                    };
+                }
+                let settings = MixerSettings { wet_blending: true, blending: 0.0, dilution: 0.0, persistence: 0.0, flow: 1.0, ..Default::default() };
+                apply_mixer_stroke(&mut target, None, &k, &settings, &mut MixerState::default(), None, false);
+                let pixel = target.rgba(4, 10);
+                assert!((pixel[0] - 0.2).abs() <= tolerance, "{fmt:?}, alpha={paint_alpha}, pressure={pressure}: {pixel:?}");
+                assert!((pixel[1] - 0.2).abs() <= tolerance, "{fmt:?}, alpha={paint_alpha}, pressure={pressure}: {pixel:?}");
+                assert!((pixel[2] - 0.2).abs() <= tolerance, "{fmt:?}, alpha={paint_alpha}, pressure={pressure}: {pixel:?}");
+                assert!((pixel[3] - expected_alpha).abs() <= tolerance, "{fmt:?}, alpha={paint_alpha}, pressure={pressure}: {pixel:?}");
+            }
+        }
     }
 
     #[test]
