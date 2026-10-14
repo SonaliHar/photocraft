@@ -1132,6 +1132,118 @@ mod tests {
         }
     }
 
+    #[test]
+    fn document_patterns_count_as_document_pixels() {
+        use photocraft_doc::{Pattern, Surface};
+        for depth in SampleType::ALL {
+            let tile = 4 * 256 * 256 * depth.bytes();
+            let mut cur = Arc::new(Document::new("patterns", Size::new(64, 64), ColorMode::Rgb, depth));
+            let mut h = History { max_bytes: usize::MAX, ..History::default() };
+            for name in ["A", "B"] {
+                edit(&mut h, &mut cur, "Rename", |doc| doc.name = name.into());
+                h.trim(&cur);
+            }
+            let mut surface = Surface::new(cur.pixel_format());
+            surface.write_pixel(1, 1, &[0.0, 0.0, 1.0, 1.0]);
+            let pattern = Pattern::new("Pattern", surface, 4, 4);
+            edit(&mut h, &mut cur, "Pattern Fill", |doc| doc.patterns.push(pattern));
+            assert_eq!(h.pixel_bytes(&cur), tile, "the document's pattern");
+            assert_eq!(h.unique_bytes(&cur), 0);
+            assert_counter(&h, &cur);
+            edit(&mut h, &mut cur, "Rename", |doc| doc.name = "C".into());
+            assert_eq!(h.pixel_bytes(&cur), tile, "shared with history, it counts once");
+            assert_counter(&h, &cur);
+            for _ in 0..2 {
+                cur = h.undo(cur).unwrap().0;
+                assert_counter(&h, &cur);
+            }
+            assert!(cur.patterns.is_empty());
+            assert_eq!(h.unique_bytes(&cur), tile, "only the redo states hold the pattern");
+            assert_eq!(h.pixel_bytes(&cur), tile);
+            cur = h.redo(cur).unwrap().0;
+            assert_eq!(h.unique_bytes(&cur), 0);
+            assert_counter(&h, &cur);
+            h.clear();
+            assert_eq!(h.pixel_bytes(&cur), tile);
+        }
+    }
+
+    #[test]
+    fn shared_masks_channels_and_repeated_snapshot_references_count_once() {
+        use photocraft_doc::{AlphaChannel, LayerMask, PixelFormat, Surface};
+        let mut doc = base();
+        let mut gray = Surface::new(PixelFormat::GRAY8);
+        gray.write_pixel(1, 1, &[1.0]);
+        doc.layers[0].mask = Some(LayerMask { surface: gray.clone(), ..LayerMask::reveal_all() });
+        doc.channels.push(AlphaChannel::new("alpha", gray.clone()));
+        doc.selection = Some(gray.clone());
+        doc.quick_mask = Some(AlphaChannel::new("quick", gray));
+        doc.layers.push(doc.layers[0].clone());
+        let mut cur = Arc::new(doc);
+        let bytes = document_bytes(&cur, &mut HashSet::new());
+        let mut h = History::new(50);
+        // Counting current separately would double count its tiles; the exact union fits.
+        h.max_bytes = bytes;
+        for _ in 0..6 {
+            h.record("Same", cur.clone(), LayerTarget::default());
+            assert_eq!(h.trim(&cur), 0);
+        }
+        assert_counter(&h, &cur);
+        for _ in 0..3 {
+            cur = h.undo(cur).unwrap().0;
+            assert_counter(&h, &cur);
+        }
+        h.clear_redo();
+        h.purge_last();
+        assert_counter(&h, &cur);
+        assert_eq!(h.pixel_bytes(&cur), bytes);
+    }
+
+    #[test]
+    fn threshold_rechecks_coalesced_current_and_changed_budget() {
+        let mut h = History::new(50);
+        let mut cur = Arc::new(base());
+        h.max_bytes = usize::MAX;
+        for i in 0..6 {
+            edit(&mut h, &mut cur, "Paint", |doc| {
+                doc.layers[0].surface_mut().unwrap().write_pixel(1, 1, &[i as f32 / 10.0, 0.0, 0.0, 1.0]);
+            });
+            h.trim(&cur);
+        }
+        // A coalesced edit may change current without recording another history state.
+        Arc::make_mut(&mut cur).layers[0].surface_mut().unwrap().write_pixel(300, 1, &[1.0; 4]);
+        let tile = 256 * 256 * 4;
+        h.max_bytes = 4 * tile;
+        assert_eq!(h.trim(&cur), 4);
+        assert_eq!(h.past_len(), 2);
+        assert_counter(&h, &cur);
+        cur = h.undo(cur).unwrap().0;
+        assert_counter(&h, &cur);
+        h.max_bytes = 0;
+        edit(&mut h, &mut cur, "Unlimited", |doc| doc.name = "u".into());
+        assert_counter(&h, &cur);
+        h.max_bytes = 1;
+        h.trim(&cur);
+        assert_eq!(h.past_len(), 1, "always retain the most recent undo");
+        assert_counter(&h, &cur);
+    }
+
+    #[test]
+    fn transferred_tiles_cannot_make_the_budget_check_underestimate_current() {
+        use photocraft_doc::{PixelFormat, Surface};
+        let before = Arc::new(base());
+        let mut current = (*before).clone();
+        let mut large = Surface::new(PixelFormat::new(ColorMode::Cmyk, SampleType::F32, true));
+        large.write_pixel(256, 0, &[1.0; 5]);
+        current.layers[0].surface_mut().unwrap().put_tiles(large.take_tiles(photocraft_doc::Rect::from_xywh(256, 0, 1, 1)));
+        let mut h = History::new(50);
+        h.max_bytes = document_bytes(&current, &mut HashSet::new()) - 1;
+        h.record("A", before.clone(), LayerTarget::default());
+        h.record("B", before, LayerTarget::default());
+        assert_eq!(h.trim(&current), 1, "current alone exceeds the budget; only the mandatory undo survives");
+        assert_counter(&h, &current);
+    }
+
     fn assert_counter(h: &History, current: &Document) {
         let own = document_bytes(current, &mut HashSet::new());
         let total = own.saturating_add(h.unique_bytes(current));

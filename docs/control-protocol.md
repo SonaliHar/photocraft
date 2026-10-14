@@ -629,3 +629,14 @@ dock target. The panel menu and icon rail remain
 available in custom workspaces. `window.panel.<id> {show:true}` always reveals, selects
 and expands the panel, including when another tab is selected. Workspace snapshots
 retain custom collapse settings and Timeline visibility.
+
+### Branching history
+
+`history.inspect` exposes stable state IDs, parents, branch IDs, action labels and
+the current cursor. `history.jump {"state":id}` restores one destination, returning
+a job handle for a cold background load. Poll/cancel jobs through the existing job
+commands; failed or cancelled loads preserve the current document and cursor.
+`history.retryStorage` retries a blocked scratch cache. Explicit numeric
+`performance.historyStates` and `scratchDisks.budgetMb` preferences select bounded
+retention; unlimited history and available-space scratch retention are defaults.
+The existing index-based `history.selectState` remains available for compatibility.

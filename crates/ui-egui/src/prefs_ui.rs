@@ -335,7 +335,6 @@ fn start_next_recovery(app: &mut PhotocraftApp) {
                     st.selected_layers = context.selected_layers.into_iter().filter(|id| st.doc.layer(*id).is_some()).collect();
                     st.layer_anchor = context.layer_anchor.filter(|id| st.doc.layer(*id).is_some());
                 }
-                let state_limit = if s.prefs().performance.unlimited_history { 0 } else { s.prefs().performance.history_states.max(1) as usize };
                 let st = s.active_mut().ok_or(photocraft_engine::EngineError::NoDocument)?;
                 st.saved_revision = 0;
                 let (id, revision) = (st.doc.id, st.revision);
@@ -370,10 +369,9 @@ fn finish_recovery(app: &mut PhotocraftApp, key: &str, v: &Value) {
         let context: RecoveryContext = serde_json::from_value(v.get("context").cloned().unwrap_or(Value::Null)).unwrap_or_default();
         if let Some(view) =
             context.view.filter(|view| view.zoom.is_finite() && view.zoom > 0.0 && view.zoom <= 64.0 && view.center.iter().all(|n| n.is_finite()))
+            && let Some(target) = app.ui.views.get_mut(index)
         {
-            if let Some(target) = app.ui.views.get_mut(index) {
-                *target = view;
-            }
+            *target = view;
         }
         if context.active {
             app.session.set_active(index);
@@ -536,9 +534,11 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     link_updates(app, ctx);
     if let Some(error) = &app.prefs_rt.recovery_error {
         app.ui.status.clone_from(error);
+        app.ui.status_error = true;
     }
     if let Some(error) = app.prefs_rt.autosave_errors.values().next() {
         app.ui.status.clone_from(error);
+        app.ui.status_error = true;
     }
     if app.services.autosave.is_some() {
         let delay = if app.prefs_rt.pending_autosaves.is_empty() && app.prefs_rt.retiring.is_empty() { 1_000 } else { 100 };
@@ -796,6 +796,7 @@ fn autosave(app: &mut PhotocraftApp) {
                             && app.ui.status == error
                         {
                             app.ui.status = "Recovery checkpoint saved".into();
+                            app.ui.status_error = false;
                         }
                     }
                     Err(e) => {
@@ -1195,10 +1196,8 @@ fn humanize(key: &str) -> String {
         "appearanceMode" => return "Appearance Mode".into(),
         "darkTheme" => return "Dark Theme".into(),
         "lightTheme" => return "Light Theme".into(),
+        "useAvailableSpace" => return "Use available disk space".into(),
         _ => {}
-    if key == "useAvailableSpace" {
-        return "Use available disk space".into();
-    }
     }
     // These controls appear only for WebP, so reuse the existing translated labels.
     if key == "webpLossless" {
@@ -1682,9 +1681,11 @@ fn section_fields(
         #[cfg(target_arch = "wasm32")]
         ui.label(tl!("This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app."));
     }
-    keys.retain(|k| field_visible(section, obj, k, &query)
-        && !(section == "performance" && k == "historyStates" && obj.get("unlimitedHistory").and_then(Value::as_bool) == Some(true))
-        && !(section == "scratchDisks" && k == "budgetMb" && obj.get("useAvailableSpace").and_then(Value::as_bool) == Some(true)));
+    keys.retain(|k| {
+        field_visible(section, obj, k, &query)
+            && !(section == "performance" && k == "historyStates" && obj.get("unlimitedHistory").and_then(Value::as_bool) == Some(true))
+            && !(section == "scratchDisks" && k == "budgetMb" && obj.get("useAvailableSpace").and_then(Value::as_bool) == Some(true))
+    });
     egui::Grid::new(("prefs-grid", section)).num_columns(2).spacing([14.0, 7.0]).show(ui, |ui| field_rows(ui, section, obj, keys, lang));
 }
 
@@ -3053,9 +3054,7 @@ mod tests {
         assert!(has_visible_fields(&values, "general"));
         assert!(has_visible_fields(&values, "fileHandling"));
         // Every setting of these sections is still unimplemented.
-        for section in ["integrations"] {
-            assert!(!has_visible_fields(&values, section), "{section}");
-        }
+        assert!(!has_visible_fields(&values, "integrations"), "integrations");
         // "Fill new type layers with placeholder text" and "Use Escape to Commit" are live; other Type rows stay hidden.
         assert!(has_visible_fields(&values, "type"));
         assert!(!prefs::is_hidden("type.fillNewTypeLayersWithPlaceholder"));
@@ -3686,6 +3685,17 @@ mod unlimited_recovery_tests {
             ..Default::default()
         };
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.session.active().is_none() && std::time::Instant::now() < deadline {
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                tick(&mut app, ui.ctx());
+                crate::jobs_ui::tick(&mut app, ui.ctx());
+            })
+            .textures_delta
+            .clear();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         assert_eq!(app.session.active().unwrap().history.max_states, 0);
         assert_eq!(app.session.active().unwrap().history.max_bytes, 0);
         for name in ["Erase", "Move", "Opacity"] {

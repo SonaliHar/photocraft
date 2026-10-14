@@ -1,10 +1,10 @@
 //! Real narrow history UI acceptance using original synthetic artwork; no server or user settings.
-use egui::{Color32, vec2};
+use egui::vec2;
 use egui_kittest::{Harness, kittest::Queryable};
 use photocraft_color::PixelFormat;
 use photocraft_doc::{ColorMode, Document, Layer, LayerContent, SampleType, Size, Surface};
 use photocraft_engine::Session;
-use photocraft_ui_egui::{PhotocraftApp, Services, history_panel, theme};
+use photocraft_ui_egui::{PhotocraftApp, Services, panels, theme};
 use serde_json::json;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -60,19 +60,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = PhotocraftApp::new(session, Services::default());
     let mut h = Harness::builder().with_size(vec2(310.0, 820.0)).wgpu().build_ui_state(
         |ui, app: &mut PhotocraftApp| {
-            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(Color32::from_gray(36)).inner_margin(10)).show(ui, |ui| {
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(theme::Tokens::get(ui.ctx()).dock).inner_margin(10)).show(ui, |ui| {
                 ui.heading("History");
                 ui.add_space(8.0);
-                history_panel::show(app, ui);
+                panels::history(app, ui);
             });
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, theme::ThemeKind::Pro);
+    let kind = match std::env::args().nth(2).as_deref() {
+        Some("light") => theme::ThemeKind::ProLight,
+        Some("classic") => theme::ThemeKind::Classic,
+        _ => theme::ThemeKind::Pro,
+    };
+    PhotocraftApp::setup_context(&h.ctx, kind);
+    h.state_mut().ui.theme = kind;
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(2) {
         h.step();
         std::thread::sleep(Duration::from_millis(2));
+    }
+    if theme::Tokens::get(&h.ctx).pro {
+        let view = h.ctx.input(|input| input.viewport_rect());
+        let buttons: Vec<_> = h.ctx.viewport(|viewport| {
+            viewport
+                .prev_pass
+                .widgets
+                .layers()
+                .flat_map(|(_, widgets)| widgets.iter())
+                .filter(|widget| widget.rect.size() == vec2(26.0, 26.0))
+                .map(|widget| widget.rect)
+                .collect()
+        });
+        if buttons.len() != 3 || buttons.iter().any(|rect| !view.contains_rect(*rect)) {
+            return Err(format!("History footer must remain visible: {buttons:?} in {view:?}").into());
+        }
     }
     h.render()?.save(&out)?;
     let current = h.state().session.active().ok_or("active document")?.doc.clone();

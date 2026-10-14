@@ -3146,49 +3146,15 @@ curves	Smooth	Lisser
 	Sent to {printer}	Envoyé à {printer}
 	set in Print Settings…	défini dans les paramètres d’impression…
 	ICO is limited to 256 × 256 pixels	Le format ICO est limité à 256 × 256 pixels
-# Runtime and historical themes
-	Apply Theme	Appliquer le thème
-	Cancel Theme Preview	Annuler l’aperçu du thème
-	Duplicate Theme	Dupliquer le thème
-	Edit Theme Definition	Modifier la définition du thème
-	Export Theme…	Exporter le thème…
-	Import Theme…	Importer un thème…
-	List Themes	Lister les thèmes
-	Mac OS 9.1 Platinum Theme	Thème Mac OS 9.1 Platinum
-	Macintosh System 6 Theme	Thème Macintosh System 6
-	Preview Theme	Afficher l’aperçu du thème
-	Remove Theme	Supprimer le thème
-	Reset Theme	Réinitialiser le thème
-	Select Theme	Sélectionner un thème
-	Theme Details	Détails du thème
-	Theme Manager…	Gestionnaire de thèmes…
-	Windows 98 SE Theme	Thème Windows 98 SE
-	Caption font	Police des titres
-	Copy JSON	Copier le JSON
-	Draft: {name}	Brouillon : {name}
-	Edit the definition below. Duplicate a built-in theme before changing it.	Modifiez la définition ci-dessous. Dupliquez un thème intégré avant de le modifier.
-	Font {requested} is unavailable; using {actual}.	La police {requested} est indisponible ; utilisation de {actual}.
-	Preview is active. Cancel restores your saved theme.	L’aperçu est actif. Annuler rétablit votre thème enregistré.
-	Reset Changes	Réinitialiser les modifications
-	Saved theme	Thème enregistré
-	Scroll down	Défiler vers le bas
-	Scroll left	Défiler vers la gauche
-	Scroll right	Défiler vers la droite
-	Scroll up	Défiler vers le haut
-	Theme Manager	Gestionnaire de thèmes
-	Theme definition exceeds 64 KiB	La définition du thème dépasse 64 Kio
-	Theme id	Identifiant du thème
 
+# History cache and branching navigation
 	Return to Original	Revenir à l’original
-
 	Branch	Branche
-
 	Retry storage	Réessayer le stockage
-
 	Unlimited history	Historique illimité
-
 	Use available disk space	Utiliser l’espace disque disponible
-
 	Undo disk space grows only when needed. Unlimited history retains states until storage is full. Scratch paths apply to the next cache session.	Le stockage d’annulation grandit selon les besoins. L’historique illimité conserve les états jusqu’à saturation. Les chemins s’appliquent à la prochaine session du cache.
-
-	Change opacity	Modifier l’opacité
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	Le budget mémoire est partagé entre les pixels du document, les données intégrées et l’historique d’annulation. Il augmente selon les besoins ; les autres usages mémoire de l’application s’y ajoutent.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Cette version pour navigateur conserve l’historique d’annulation en mémoire. Les réglages du disque de travail s’appliquent à l’application de bureau.
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	L’espace disque pour l’annulation augmente uniquement si nécessaire, jusqu’à cette limite. Zéro désactive le cache disque. Les chemins de travail s’appliquent à la prochaine session de cache.
+	Budget mb	Limite (Mio)

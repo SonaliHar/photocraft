@@ -32,6 +32,9 @@ pub(crate) struct RecoveryManager {
 
 impl RecoveryManager {
     pub(crate) fn new(dir: Option<PathBuf>) -> Self {
+        if let Some(root) = &dir {
+            photocraft_format::sweep_recovery_orphans(root);
+        }
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
         let serial = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
         Self { dir, prefix: format!("session-{}-{stamp}-{serial}", std::process::id()), next_key: 0, owned: HashMap::new(), locks: HashMap::new() }

@@ -3904,3 +3904,15 @@ curves	Smooth	Vloeiend maken
 	Sent to {printer}	Verzonden naar {printer}
 	set in Print Settings…	instellen in de afdrukinstellingen…
 	ICO is limited to 256 × 256 pixels	ICO is beperkt tot 256 × 256 pixels
+
+# History cache and branching navigation
+	Branch	Tak
+	Budget mb	Limiet MB
+	Retry storage	Opslaan opnieuw proberen
+	Return to Original	Terug naar origineel
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	De geheugenlimiet wordt gedeeld door documentpixels, ingesloten gegevens en de geschiedenis. Het gebruik groeit naar behoefte; overig appgeheugen komt daarbovenop.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Deze browserversie bewaart de geschiedenis in het geheugen. Werkschijfinstellingen gelden voor de desktopapp.
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	De schijfruimte voor de geschiedenis groeit alleen naar behoefte, tot deze limiet. Nul schakelt schijfcaching uit. Werkschijfpaden gelden voor de volgende cachesessie.
+	Undo disk space grows only when needed. Unlimited history retains states until storage is full. Scratch paths apply to the next cache session.	De schijfruimte voor de geschiedenis groeit alleen naar behoefte. Een onbeperkte geschiedenis bewaart toestanden totdat de opslag vol is. Werkschijfpaden gelden voor de volgende cachesessie.
+	Unlimited history	Onbeperkte geschiedenis
+	Use available disk space	Beschikbare schijfruimte gebruiken

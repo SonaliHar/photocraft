@@ -3742,3 +3742,15 @@ curves	Smooth	Wygładź
 	Sent to {printer}	Wysłano do {printer}
 	set in Print Settings…	ustawiane w ustawieniach druku…
 	ICO is limited to 256 × 256 pixels	ICO jest ograniczony do 256 × 256 pikseli
+
+# History cache and branching navigation
+	Branch	Gałąź
+	Budget mb	Limit MB
+	Retry storage	Ponów zapis
+	Return to Original	Przywróć oryginał
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	Limit pamięci jest wspólny dla pikseli dokumentu, osadzonych danych i historii cofania. Wykorzystanie rośnie w razie potrzeby; pozostała pamięć aplikacji jest dodatkowa.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Ta wersja przeglądarkowa przechowuje historię cofania w pamięci. Ustawienia dysku roboczego dotyczą aplikacji komputerowej.
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	Miejsce na dysku dla cofania rośnie tylko w razie potrzeby, do tego limitu. Zero wyłącza pamięć podręczną na dysku. Ścieżki dysków roboczych obowiązują od następnej sesji buforowania.
+	Undo disk space grows only when needed. Unlimited history retains states until storage is full. Scratch paths apply to the next cache session.	Miejsce na dysku dla cofania rośnie tylko w razie potrzeby. Nieograniczona historia zachowuje stany do zapełnienia pamięci. Ścieżki dysków roboczych obowiązują od następnej sesji buforowania.
+	Unlimited history	Nieograniczona historia
+	Use available disk space	Użyj dostępnego miejsca na dysku

@@ -81,9 +81,6 @@ The other built-in ICC profiles and the generated LUT looks are produced by code
 | `docs/images/photocraft-*.jpg` | PhotoCraft screenshots | PhotoCraft contributors (UI) | Rendered offscreen with the `snapshot` example | MIT OR Apache-2.0 (UI); the artwork in each is public domain, listed below |
 | `docs/images/preferences-apply-*.png` | Preferences before and after adding Apply (no artwork) | PhotoCraft contributors | PhotoCraft control-channel capture and offscreen `snapshot` example | MIT OR Apache-2.0 |
 
-| `docs/images/undo-*-preferences.png` | Undo cache memory and scratch preferences | PhotoCraft contributors | Original offscreen app captures, blank document workspace | MIT OR Apache-2.0, adjacent `docs/images/LICENSE-MIT` and `LICENSE-APACHE` |
-| `docs/images/recovery/*.png` | PhotoCraft recovery validation screenshots (synthetic document) | PhotoCraft contributors | Original offscreen rendering, `snapshot` example | MIT OR Apache-2.0, adjacent license files |
-
 Artwork shown in the screenshots (all public domain, via Wikimedia Commons; details in
 [`docs/images/SOURCES.md`](docs/images/SOURCES.md)):
 
@@ -118,16 +115,12 @@ next to the files:
 | `corpus/pixls/` (7 files, 226 MB) | Real camera raws, one per decode path: Canon PowerShot SX50 HS (CR2 and its DNG conversion), Nikon D3 uncompressed NEF, Sony DSC-RX0 cRAW ARW, Panasonic DC-G9 high-res RW2, Olympus E-1 GRBG ORF, plus the E-5 packed ORF as the documented known-unsupported case. Per file (each CC0, per its database entry): [IMG_4059.CR2](https://raw.pixls.us/data/Canon/PowerShot%20SX50%20HS/IMG_4059.CR2), [CRW_4061.DNG](https://raw.pixls.us/data/Canon/PowerShot%20SX50%20HS/CRW_4061.DNG), [JD1_8203.NEF](https://raw.pixls.us/data/Nikon/D3/JD1_8203.NEF), [DSC00009.ARW](https://raw.pixls.us/data/Sony/DSC-RX0/DSC00009.ARW), [P1000475.RW2](https://raw.pixls.us/data/Panasonic/DC-G9/P1000475.RW2), [E_1__C106743_gredos.ORF](https://raw.pixls.us/data/Olympus/E-1/E_1__C106743_gredos.ORF), [_7061961_copy.ORF](https://raw.pixls.us/data/Olympus/E-5/_7061961_copy.ORF) | The photographers of the pixls.us raw samples database | [raw.pixls.us](https://raw.pixls.us) `data/`, fetched per [xtask/src/corpus_pins.rs](xtask/src/corpus_pins.rs) | CC0 / public domain, per file as linked |
 
 Files copied into `corpus/` by hand (tiff, exr, raw) must be MIT, BSD or CC0.
-
+| `docs/images/undo-*-preferences.png` | Undo cache memory and scratch preferences | PhotoCraft contributors | Original offscreen app captures, blank document workspace | MIT OR Apache-2.0, adjacent `docs/images/LICENSE-MIT` and `LICENSE-APACHE` |
+| `docs/images/recovery/*.png` | PhotoCraft recovery validation screenshots (synthetic document) | PhotoCraft contributors | Original offscreen rendering, `snapshot` example | MIT OR Apache-2.0, adjacent license files |
 | `docs/evidence/hdr-workbench/` | Original synthetic HDR chart and PhotoCraft validation captures | PhotoCraft contributors | Generated locally with `hdr_fixture` and `hdr_snapshot`; native control screenshots | MIT (see adjacent `LICENSE`) |
-
 | `docs/images/theme-main-integration/*.png` | PhotoCraft runtime theme integration captures (synthetic document) | PhotoCraft contributors | Original offscreen app captures; native Theme Manager storage acceptance | MIT OR Apache-2.0, adjacent license files |
-
 ## Optional external historical theme fonts
-
 | External path | Title | Author | Source | License |
-|---|---|---|---|---|
 | `craft-fonts/fonts/chicago-kare/ChicagoKare-Regular.ttf` (optional external build input; no font files committed here) | Chicago Kare Regular, historical Chicago recreation | Duane King | [Chicago-Kare@dca7a9e](https://github.com/KingDuane/Chicago-Kare/tree/dca7a9e4f2b971e39cf3a5e8a3f9309d4293d56d) | MIT; license beside the font in `craft-fonts/fonts/chicago-kare/LICENSE` |
 | `craft-fonts/fonts/w95fa/W95FA-Regular.otf` (optional external build input; no font files committed here) | W95FA Regular, historical MS Sans Serif recreation | Alina Sava / FontsArena.com | [publisher release](https://fontsarena.com/wp-content/uploads/2020/01/W95FA.zip), SHA-256 `9e1ad53708307b2b68e06d43799b2267f6aec620dda972bc62753ad16ba50f2b` | OFL-1.1; external craft-fonts license and provenance accompany the font |
-
 | `docs/images/history-scrubber/*.png` | PhotoCraft vertical history scrubber capture | PhotoCraft contributors | Original synthetic landscape and native offscreen UI | MIT OR Apache-2.0, adjacent license files |

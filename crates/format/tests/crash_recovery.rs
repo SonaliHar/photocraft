@@ -66,11 +66,11 @@ fn abrupt_process_exit_restores_exact_current_undo_and_redo_at_every_depth() {
         assert_eq!(current, expected("current"));
         let mut history = History::from_checkpoint(checkpoint).unwrap();
         let current = Arc::new(current);
-        let before = history.try_undo(current.clone()).unwrap().unwrap().0;
+        let before = history.try_undo(current.clone()).unwrap().unwrap();
         assert_eq!(*before, expected("before"));
-        let current_again = history.try_redo(before).unwrap().unwrap().0;
+        let current_again = history.try_redo(before).unwrap().unwrap();
         assert_eq!(*current_again, *current);
-        let after = history.try_redo(current_again).unwrap().unwrap().0;
+        let after = history.try_redo(current_again).unwrap().unwrap();
         assert_eq!(*after, expected("after"));
         // Restarting recovery twice must never consume the durable descriptor.
         assert_eq!(recover_checkpoint(&entries[0]).unwrap().0, *current);

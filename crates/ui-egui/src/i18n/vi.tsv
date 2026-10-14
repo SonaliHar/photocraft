@@ -3631,3 +3631,13 @@ curves	Smooth	Làm mượt
 	Sent to {printer}	Đã gửi tới {printer}
 	set in Print Settings…	đặt trong thiết lập in…
 	ICO is limited to 256 × 256 pixels	ICO giới hạn ở 256 × 256 pixel
+
+# History cache and branching navigation
+	Branch	Nhánh
+	Retry storage	Thử lại lưu trữ
+	Return to Original	Trở về bản gốc
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	Ngân sách bộ nhớ được chia sẻ giữa điểm ảnh tài liệu, dữ liệu nhúng và lịch sử hoàn tác. Ngân sách tăng khi cần; bộ nhớ khác của ứng dụng được tính thêm.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Bản trình duyệt này giữ lịch sử hoàn tác trong bộ nhớ. Cài đặt đĩa tạm áp dụng cho ứng dụng máy tính.
+	Budget mb	Ngân sách (MB)
+	Unlimited history	Lịch sử không giới hạn
+	Use available disk space	Dùng dung lượng đĩa còn trống

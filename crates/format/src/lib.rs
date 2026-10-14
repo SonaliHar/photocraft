@@ -42,11 +42,13 @@ use photocraft_doc::Document;
 use photocraft_raster::Rgba8Image;
 
 pub use atomic::{atomic_write, atomic_write_progress};
-pub use convert::MAX_GROUP_DEPTH;
 pub use autosave::{
     AutosaveCompletion, Autosaver, RecoveryEntry, discard_recovery, list_recovery, list_recovery_checked, recover, recover_checkpoint,
     recover_checkpoint_with_context,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use autosave::{RecoveryStore, sweep_recovery_orphans};
+pub use convert::MAX_GROUP_DEPTH;
 pub use manifest::{FORMAT_VERSION, Manifest};
 pub use read::read_file;
 pub use store::{ByteSource, DEFAULT_REVERIFY_BUDGET, PcraftWriter, SaveStats, read_entry};

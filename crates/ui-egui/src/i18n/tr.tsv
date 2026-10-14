@@ -3876,3 +3876,13 @@ cameraData	Lens	Lens
 	Ink Characteristics	Mürekkep Özellikleri
 	Solidity:	Doluluk:
 	Redrawing	Yeniden çiziliyor
+
+# History cache and branching navigation
+	Branch	Dal
+	Retry storage	Depolamayı yeniden dene
+	Return to Original	Özgün hâle dön
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	Bellek bütçesi belge pikselleri, gömülü veriler ve geri alma geçmişi arasında paylaşılır. Gerektikçe büyür; uygulamanın diğer bellek kullanımı buna eklenir.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Bu tarayıcı sürümü geri alma geçmişini bellekte tutar. Çalışma diski ayarları masaüstü uygulamasına uygulanır.
+	Budget mb	Bütçe (MB)
+	Unlimited history	Sınırsız geçmiş
+	Use available disk space	Kullanılabilir disk alanını kullan

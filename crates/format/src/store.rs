@@ -293,7 +293,8 @@ pub(crate) fn load(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Document>
     load_cached(src, opts, None, None)
 }
 pub(crate) fn load_cached(
-    src: &dyn ByteSource, opts: &LoadOptions,
+    src: &dyn ByteSource,
+    opts: &LoadOptions,
     tile_cache: Option<&mut HashMap<String, Weak<Tile>>>,
     blob_cache: Option<&mut HashMap<String, Weak<Vec<u8>>>>,
 ) -> Result<Document> {

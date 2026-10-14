@@ -9,7 +9,7 @@ use photocraft_ops::LayerTarget;
 use serde_json::{Value, json};
 
 fn enabled(s: &Session) -> std::result::Result<(), String> {
-    let state = s.active().ok_or("no document open")?;
+    s.active().ok_or("no document open")?;
     Ok(())
 }
 
@@ -242,7 +242,7 @@ pub fn specs() -> Vec<CommandSpec> {
             shortcut: None,
             params: "{} (the same action as `edit.undo`)",
             enabled: can_undo,
-            run: |s, _| Ok(json!(s.undo())),
+            run: |s, _| step(s, false),
             journal: false,
         },
         CommandSpec {
@@ -252,7 +252,7 @@ pub fn specs() -> Vec<CommandSpec> {
             shortcut: None,
             params: "{} (the same action as `edit.redo`)",
             enabled: can_redo,
-            run: |s, _| Ok(json!(s.redo())),
+            run: |s, _| step(s, true),
             journal: false,
         },
         CommandSpec {

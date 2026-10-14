@@ -316,7 +316,7 @@ pub enum LayerContent {
 - **Brush strokes** accumulate into one transaction per stroke. Tiles are published incrementally with damage regions, so the viewport updates live.
 - **Snapshots for readers.** After each committed op the engine publishes a new `Arc<DocSnapshot>` through `arc-swap`. The UI, background jobs (filters, AI inference, export) and autosave read snapshots without locks.
 - **Background jobs** compute from snapshot N and commit as a transaction. If the doc changed meanwhile, the job rebases, meaning it re-targets the same layer id if it still exists, or reports a conflict.
-- **History features:** the History panel and History Brush read complete COW document states. A shared 4 GiB managed-RAM target and demand-grown 8 GiB disk tier retain cold history; bounded workers write/clean compressed immutable objects, and fallible restores complete before history cursors move. Oldest chronological states expire on count/quota/backpressure limits. See [undo-cache.md](undo-cache.md) for limits and measurements.
+- **History features:** the History panel and History Brush read complete COW document states. A shared 4 GiB managed-RAM target and demand-grown scratch tier retain cold history. Unlimited retention and available-space disk use are defaults; bounded workers write/clean compressed immutable objects, and fallible restores complete before history cursors move. Alternate branches and stable identities survive recovery. Storage failure preserves existing unlimited history and can pause edits; explicit bounded preferences permit oldest-state retirement. See [undo-cache.md](undo-cache.md) for limits and measurements.
 
 ---
 

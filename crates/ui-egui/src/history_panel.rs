@@ -138,11 +138,8 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Virtualize rows: an unlimited document must not paint thousands of widgets each frame.
     let count = snapshot_count + app.history_previews.rows.len();
     let max_height = (ui.available_height() - if t.pro { widgets::footer_height(ui) + ui.spacing().item_spacing.y } else { 0.0 }).max(0.0);
-    let mut area = crate::scroll_area::ScrollArea::vertical()
-        .id_salt(("history-rows", document.id.0))
-        .max_height(max_height)
-        .min_scrolled_height(0.0)
-        .auto_shrink([false, false]);
+    let mut area =
+        egui::ScrollArea::vertical().id_salt(("history-rows", document.id.0)).max_height(max_height).min_scrolled_height(0.0).auto_shrink([false, false]);
     // Follow appended actions only if the previous viewport was at the end. Use
     // the adapter's returned offset so historical scrollbar drags count too.
     if let Some(previous) = app.history_previews.scroll
@@ -213,7 +210,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             ui.painter().rect_stroke(thumb, t.radius_sm, Stroke::new(1.0, t.separator), StrokeKind::Inside);
             let name = if entry.identity.parent.is_none() { tl!("Original").to_string() } else { tl!(&entry.label).to_string() };
-            let text_color = if entry.current { t.row_selected_text } else { t.text };
+            let text_color = if entry.current && t.bevel { t.accent_text } else { t.text };
             if let Some(galley) = crate::layer_row_ui::truncated(
                 ui.painter(),
                 &name,
@@ -225,7 +222,14 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ui.painter().galley(pos2(thumb.right() + 8.0, rect.top() + 12.0), galley, text_color);
             }
             let branch = format!("{} {}{}", tl!("Branch"), entry.identity.branch, if entry.current { format!(" · {}", tl!("Current")) } else { String::new() });
-            ui.painter().text(pos2(thumb.right() + 8.0, rect.top() + 38.0), Align2::LEFT_TOP, branch, egui::FontId::proportional(11.0), color);
+            let branch_text = if entry.current && t.bevel {
+                t.accent_text
+            } else if ui.visuals().dark_mode {
+                color
+            } else {
+                t.text_dim
+            };
+            ui.painter().text(pos2(thumb.right() + 8.0, rect.top() + 38.0), Align2::LEFT_TOP, branch, egui::FontId::proportional(11.0), branch_text);
             response.clone().on_hover_text(&entry.label);
             if enabled && response.drag_started() {
                 app.history_previews.scrubbing = true;
@@ -314,7 +318,7 @@ mod tests {
     }
     #[test]
     fn follows_new_actions_only_while_already_at_the_bottom() {
-        for preset in ["builtin.pro", "builtin.system-6"] {
+        for preset in ["builtin.pro", "builtin.classic"] {
             let mut session = photocraft_engine::Session::new();
             session.add_document(
                 photocraft_doc::Document::new("Scroll demo", photocraft_doc::Size::new(2, 2), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8),
@@ -326,8 +330,8 @@ mod tests {
             let app = PhotocraftApp::new(session, crate::Services::default());
             let mut h = Harness::builder().with_size(vec2(310.0, 400.0)).build_ui_state(|ui, app| show(app, ui), app);
             PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
-            if preset == "builtin.system-6" {
-                crate::historical::preset(preset).unwrap().resolve().unwrap().apply(&h.ctx);
+            if preset == "builtin.classic" {
+                PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Classic);
             }
             h.run_steps(3);
             for i in 0..16 {

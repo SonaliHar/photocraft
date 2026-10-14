@@ -4901,6 +4901,7 @@ name = "photocraft-ops"
 version = "0.8.2"
 dependencies = [
  "photocraft-doc",
+ "serde",
 ]
 
 [[package]]

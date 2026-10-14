@@ -3082,25 +3082,54 @@ fn channels(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::channels_panel::show(app, ui);
 }
 
-fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+/// Draw the complete History dock, including snapshot and document controls.
+pub fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::history_panel::show(app, ui);
+    if Tokens::get(ui.ctx()).pro {
+        let enabled = app.ui.transform.is_none() && app.session.active_job().is_none();
+        let can_delete = enabled && app.session.is_enabled("history.deleteState");
+        let can_new = enabled && app.session.is_enabled("history.newDocument");
+        let mut command = None;
+        widgets::panel_footer(ui, |ui| {
+            if ui.add_enabled_ui(can_delete, |ui| icons::button(ui, "trash", 26.0, false, tl!("Delete current state"))).inner.clicked() {
+                command = Some("history.deleteState");
+            }
+            let can_snap = enabled && app.session.is_enabled("history.newSnapshot");
+            if ui.add_enabled_ui(can_snap, |ui| icons::button(ui, "scan", 26.0, false, tl!("Create new snapshot"))).inner.clicked() {
+                command = Some("history.newSnapshot");
+            }
+            if ui.add_enabled_ui(can_new, |ui| icons::button(ui, "file-plus", 26.0, false, tl!("Create new document from current state"))).inner.clicked() {
+                command = Some("history.newDocument");
+            }
+        });
+        if let Some(command) = command
+            && let Err(error) = app.run(command, json!({}))
+        {
+            app.ui.status = error;
+            app.ui.status_error = true;
+        }
+    }
 }
 
 /// The History panel's snapshot rows (#2966), under the opening row, each with its thumbnail and
 /// name: a click returns to the snapshot (a new state), a double-click or right-click › Rename…
 /// edits the name in place (Enter or a click elsewhere keeps it, Escape cancels), and
 /// right-click › Delete removes it. Returns the command a row asks for.
-fn snapshot_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> Option<(&'static str, Value)> {
+pub(crate) fn snapshot_row(
+    app: &mut PhotocraftApp,
+    ui: &mut egui::Ui,
+    doc_id: photocraft_doc::DocId,
+    snaps: &[photocraft_engine::history_cmds::Snapshot],
+    live: &[u64],
+    index: usize,
+) -> Option<(&'static str, Value)> {
     let t = Tokens::get(ui.ctx());
-    let st = app.session.active()?;
-    let (doc_id, snaps) = (st.doc.id, st.snapshots.clone());
-    let live: Vec<u64> = snaps.iter().map(|s| s.id).collect();
     // Per document: snapshot ids restart in each, and a tab switch must not carry the edit over.
     let rename_id = egui::Id::new(("history-snapshot-rename", doc_id));
     let mut renaming: Option<(u64, String)> = ui.data(|d| d.get_temp(rename_id)).flatten();
     let mut cmd = None;
     let ctx = ui.ctx().clone();
-    for snap in &snaps {
+    for snap in snaps.iter().skip(index).take(1) {
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &snap.name));
         if resp.hovered() {
@@ -3108,7 +3137,7 @@ fn snapshot_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> Option<(&'static
         }
         let thumb = Rect::from_min_size(pos2(rect.left() + 28.0, rect.center().y - 14.0), vec2(28.0, 28.0));
         widgets::checker(ui.painter(), thumb, 4.0);
-        let tex = app.snapshot_thumb(&ctx, doc_id, snap, &live);
+        let tex = app.snapshot_thumb(&ctx, doc_id, snap, live);
         ui.painter().image(tex, thumb, Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
         ui.painter().rect_stroke(thumb, 0.0, Stroke::new(1.0, t.separator), StrokeKind::Outside);
         match renaming.as_mut().filter(|(id, _)| *id == snap.id) {
@@ -3151,7 +3180,7 @@ fn snapshot_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> Option<(&'static
             }
         });
     }
-    if !snaps.is_empty() {
+    if index + 1 == snaps.len() {
         let y = ui.cursor().top();
         ui.painter().hline(ui.max_rect().x_range(), y, Stroke::new(1.0, t.separator));
     }

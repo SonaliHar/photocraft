@@ -3842,3 +3842,15 @@ curves	Smooth	Εξομάλυνση
 	Sent to {printer}	Στάλθηκε στον {printer}
 	set in Print Settings…	ορίζεται στις ρυθμίσεις εκτύπωσης…
 	ICO is limited to 256 × 256 pixels	Το ICO περιορίζεται σε 256 × 256 εικονοστοιχεία
+
+# History cache and branching navigation
+	Branch	Κλάδος
+	Budget mb	Όριο MB
+	Retry storage	Επανάληψη αποθήκευσης
+	Return to Original	Επιστροφή στο πρωτότυπο
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	Το όριο μνήμης μοιράζεται στα εικονοστοιχεία του εγγράφου, τα ενσωματωμένα δεδομένα και το ιστορικό αναίρεσης. Η χρήση αυξάνεται όσο χρειάζεται· η υπόλοιπη μνήμη της εφαρμογής είναι επιπλέον.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Αυτή η έκδοση για πρόγραμμα περιήγησης διατηρεί το ιστορικό αναίρεσης στη μνήμη. Οι ρυθμίσεις δίσκου εργασίας αφορούν την εφαρμογή υπολογιστή.
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	Ο χώρος δίσκου για αναίρεση αυξάνεται μόνο όσο χρειάζεται, μέχρι αυτό το όριο. Το μηδέν απενεργοποιεί την προσωρινή αποθήκευση στον δίσκο. Οι διαδρομές δίσκων εργασίας ισχύουν στην επόμενη περίοδο προσωρινής αποθήκευσης.
+	Undo disk space grows only when needed. Unlimited history retains states until storage is full. Scratch paths apply to the next cache session.	Ο χώρος δίσκου για αναίρεση αυξάνεται μόνο όσο χρειάζεται. Το απεριόριστο ιστορικό διατηρεί τις καταστάσεις μέχρι να γεμίσει ο αποθηκευτικός χώρος. Οι διαδρομές δίσκων εργασίας ισχύουν στην επόμενη περίοδο προσωρινής αποθήκευσης.
+	Unlimited history	Απεριόριστο ιστορικό
+	Use available disk space	Χρήση διαθέσιμου χώρου δίσκου

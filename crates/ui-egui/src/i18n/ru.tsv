@@ -3111,72 +3111,16 @@ curves	Smooth	Сгладить
 	Integrated Density	Интегральная плотность
 	Length	Длина
 
-# Undo cache budgets
+# History cache and branching navigation
 	Memory budget (MiB)	Лимит памяти (МиБ)
 	Undo disk budget (MiB)	Лимит диска для отмены (МиБ)
 	Budget mb	Лимит (МиБ)
 	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	Лимит памяти общий для пикселей документа, встроенных данных и истории отмены. Память выделяется по мере необходимости; остальные нужды приложения требуют дополнительной памяти.
 	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	Место на диске для отмены используется только по мере необходимости, до этого лимита. Ноль отключает дисковый кэш. Пути рабочих дисков применяются со следующего сеанса кэша.
 	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Версия для браузера хранит историю отмены в памяти. Настройки рабочих дисков применяются к настольному приложению.
-
-	HDR Output	Вывод HDR
-	HDR Workbench	Панель HDR
-	Export SDR Preview…	Экспортировать предпросмотр SDR…
-
-# Integrated controls and HDR
-	Click to change columns; drag the title bar to move	Нажмите, чтобы изменить число столбцов; перетащите строку заголовка для перемещения
-	Click to change columns; drag to detach Tools	Нажмите, чтобы изменить число столбцов; перетащите, чтобы открепить инструменты
-	Dock Tools on the left	Закрепить инструменты слева
-	Use trackpad pressure	Использовать давление на трекпаде
-	Apply At Canvas Bounds	Применить эффект на границах холста
-
-	Collaboration…	Совместная работа…
-	Collaboration View Settings	Настройки вида совместной работы
-# Runtime theme library
-	List Themes	Список тем
-	Theme Details	Сведения о теме
-	Select Theme	Выбрать тему
-	Import Theme…	Импортировать тему…
-	Export Theme…	Экспортировать тему…
-	Remove Theme	Удалить тему
-	Theme id	ID темы
-# Theme Manager
-	Theme Manager…	Менеджер тем…
-	Preview Theme	Предпросмотр темы
-	Apply Theme	Применить тему
-	Cancel Theme Preview	Отменить предпросмотр темы
-	Edit Theme Definition	Изменить определение темы
-	Duplicate Theme	Дублировать тему
-	Reset Theme	Сбросить тему
-	Theme Manager	Менеджер тем
-	Reset Changes	Сбросить изменения
-	Copy JSON	Копировать JSON
-	Edit the definition below. Duplicate a built-in theme before changing it.	Измените определение ниже. Перед изменением встроенной темы создайте её копию.
-	Theme definition exceeds 64 KiB	Определение темы превышает 64 КиБ
-	Preview is active. Cancel restores your saved theme.	Предпросмотр активен. Отмена восстановит сохранённую тему.
-	Saved theme	Сохранённая тема
-	Draft: {name}	Черновик: {name}
-# Historical appearance profiles
-	Windows 98 SE Theme	Тема Windows 98 SE
-	Mac OS 9.1 Platinum Theme	Тема Mac OS 9.1 Platinum
-	Macintosh System 6 Theme	Тема Macintosh System 6
-	Font {requested} is unavailable; using {actual}.	Шрифт {requested} недоступен; используется {actual}.
-	Scroll left	Прокрутить влево
-	Scroll right	Прокрутить вправо
-	Scroll up	Прокрутить вверх
-	Scroll down	Прокрутить вниз
-	Caption font	Шрифт заголовка
-
 	Return to Original	Вернуться к оригиналу
-
 	Branch	Ветка
-
 	Retry storage	Повторить сохранение
-
 	Unlimited history	Неограниченная история
-
 	Use available disk space	Использовать свободное место на диске
-
 	Undo disk space grows only when needed. Unlimited history retains states until storage is full. Scratch paths apply to the next cache session.	Место для отмены растёт по необходимости. Неограниченная история хранится до заполнения диска. Пути применяются со следующего сеанса кэша.
-
-	Change opacity	Изменить непрозрачность

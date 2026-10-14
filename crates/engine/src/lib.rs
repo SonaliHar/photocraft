@@ -703,9 +703,9 @@ impl Session {
     }
 
     pub(crate) fn edit_with_cache<R>(&mut self, label: &str, poll: bool, f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>) -> Result<R> {
-        self.admit_history_edit()?;
         let restrict = self.color_restrict;
         let sampler_map = self.sampler_map.take();
+        self.admit_history_edit()?;
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
         let before = st.doc.clone();
         // Selecting layers is not a step, so the state this edit leaves behind targets what was
@@ -870,7 +870,8 @@ impl Session {
         }
         let Some(st) = self.active_mut() else { return Ok(false) };
         let restored = if redo { st.history.try_redo(st.doc.clone()) } else { st.history.try_undo(st.doc.clone()) }.map_err(EngineError::Other)?;
-        let Some((mut doc, layers)) = restored else { return Ok(false) };
+        let Some(mut doc) = restored else { return Ok(false) };
+        let layers = st.history.current_layers().clone();
         if doc.name != st.doc.name {
             Arc::make_mut(&mut doc).name.clone_from(&st.doc.name);
         }
@@ -885,14 +886,20 @@ impl Session {
         Ok(true)
     }
 
-    pub(crate) fn apply_history_destination(&mut self, id: u64, doc: Arc<Document>, branch: Option<u64>) -> Result<()> {
+    pub(crate) fn apply_history_destination(&mut self, id: u64, mut doc: Arc<Document>, branch: Option<u64>) -> Result<()> {
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
+        // Save As updates file identity outside history; returning to pixels must
+        // keep the current saved filename, just as the imperative undo API does.
+        if st.path.is_some() && doc.name != st.doc.name {
+            Arc::make_mut(&mut doc).name.clone_from(&st.doc.name);
+        }
+        let damage = layer_multi_cmds::step_damage(&st.doc, &doc);
         st.history.jump_loaded_on_path(st.doc.clone(), id, doc.clone(), branch).map_err(EngineError::Other)?;
         st.doc = doc;
         st.coalesce = None;
         restore_target(st, st.history.current_layers().clone());
         st.revision = st.revision.saturating_add(1);
-        st.last_damage = None;
+        st.last_damage = damage;
         self.history_cache.dirty = true;
         self.poll_history_cache();
         Ok(())

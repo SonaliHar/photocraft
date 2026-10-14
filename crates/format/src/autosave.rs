@@ -716,6 +716,13 @@ impl RecoveryStore {
 #[cfg(not(target_arch = "wasm32"))]
 const ORPHAN_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
+/// Preserve upstream startup cleanup for abandoned first-save bundles and foreign
+/// atomic-write temporary files. Published checkpoints and symlinks are retained.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn sweep_recovery_orphans(recovery_dir: &Path) {
+    sweep_orphans(recovery_dir, ORPHAN_AGE);
+}
+
 /// Best-effort removal of recovery data nothing can ever load or clean up:
 /// - `<key>.pcraft` bundle folders with no `<key>.json` sidecar (a crash during a document's
 ///   first autosave: the sidecar is written after the bundle, and `list_recovery` skips them);

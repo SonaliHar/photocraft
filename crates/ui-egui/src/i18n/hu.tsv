@@ -4065,3 +4065,13 @@ cameraRaw	Yellow	Sárga
 	Ink Characteristics	Festék jellemzői
 	Solidity:	Fedőképesség:
 	Redrawing	Újrarajzolás
+
+# History cache and branching navigation
+	Branch	Ág
+	Retry storage	Tárolás újrapróbálása
+	Return to Original	Visszatérés az eredetihez
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	A memóriakereten a dokumentum képpontjai, a beágyazott adatok és a visszavonási előzmények osztoznak. Szükség szerint növekszik; az alkalmazás további memóriát is használ.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Ez a böngészős verzió a memóriában tárolja a visszavonási előzményeket. A munkalemez beállításai az asztali alkalmazásra vonatkoznak.
+	Budget mb	Keret (MB)
+	Unlimited history	Korlátlan előzmények
+	Use available disk space	Elérhető lemezterület használata

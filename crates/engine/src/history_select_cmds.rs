@@ -32,41 +32,37 @@ fn select_state(s: &mut Session, p: &Value) -> Result<Value> {
     if s.active_job().is_some() {
         return Err(EngineError::Other("the history can't move while a command is still running on this document".into()));
     }
-    let st = s.active_mut().ok_or(EngineError::NoDocument)?;
+    let st = s.active().ok_or(EngineError::NoDocument)?;
     if target == past {
         return Ok(json!({ "state": target, "changed": false }));
     }
-    st.coalesce = None;
-    // Step the history itself (pointer moves, no pixels touched), then make the reached state
-    // current once: one revision, one damage rect for the canvas.
-    let start = st.doc.clone();
-    let mut doc = start.clone();
-    let mut layers = None;
-    let mut at = past;
-    while at != target {
-        let step = if target < at { st.history.undo(doc.clone()) } else { st.history.redo(doc.clone()) };
-        let Some((d, l)) = step else { break };
-        doc = d;
-        layers = Some(l);
-        at = if target < at { at - 1 } else { at + 1 };
-    }
-    let Some(layers) = layers else {
-        return Err(EngineError::Other("the history can't step right now".into()));
-    };
-    // Save As changes file identity outside history, as Edit › Undo keeps it.
-    if doc.name != start.name {
-        std::sync::Arc::make_mut(&mut doc).name.clone_from(&start.name);
-    }
-    let damage = crate::layer_multi_cmds::step_damage(&start, &doc);
-    st.doc = doc;
-    crate::restore_target(st, layers);
-    st.revision += 1;
-    st.last_damage = damage;
-    if at != target {
-        // Not reached (the bounds were checked): the document is consistent at the state reached.
-        return Err(EngineError::Other(format!("the history stopped at state {at}")));
-    }
-    Ok(json!({ "state": target, "changed": true, "current": st.history.entries().last() }))
+    let checkpoint = st.history.checkpoint();
+    let destination =
+        if target < past { checkpoint.undo.get(target) } else { checkpoint.redo.len().checked_sub(target - past).and_then(|index| checkpoint.redo.get(index)) }
+            .cloned()
+            .ok_or_else(|| bad("the selected history state is unavailable"))?;
+    let id = destination.identity.id;
+    let branch = st.history.navigation_branch();
+    let name = st.doc.name.clone();
+    crate::jobs::run(
+        s,
+        "Loading history state",
+        true,
+        move |ctx| {
+            ctx.check()?;
+            let mut document = destination.load_document().map_err(EngineError::Other)?;
+            ctx.check()?;
+            // Save As changes file identity outside history, as Edit > Undo keeps it.
+            if document.name != name {
+                std::sync::Arc::make_mut(&mut document).name = name;
+            }
+            Ok(document)
+        },
+        move |session, document| {
+            session.apply_history_destination(id, document, Some(branch))?;
+            Ok(json!({ "state": target, "changed": true, "current": session.active().and_then(|st| st.history.entries().last().cloned()) }))
+        },
+    )
 }
 
 fn can_select(s: &Session) -> std::result::Result<(), String> {

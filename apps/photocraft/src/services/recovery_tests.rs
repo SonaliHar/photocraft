@@ -66,6 +66,12 @@ fn deferred_recovery_preserves_pixels_and_metadata_until_the_adopted_entry_is_di
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     drop(restored);
+    // Releasing the last recovered-history lease queues native storage cleanup.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while entry.bundle.exists() && std::time::Instant::now() < deadline {
+        services.poll_autosave.as_mut().unwrap()();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
     assert!(list_recovery(&dir).is_empty());
     assert!(!entry.bundle.exists());
     assert!(!dir.join(format!("{}.json", pending.key)).exists());

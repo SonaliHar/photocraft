@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         layer.surface_mut().ok_or("background pixels missing")?.write_pixel(i, i, &[i as f32 / 5.0, 0.0, 0.0, 1.0]);
         history.record(format!("Paint {i}"), before, photocraft_ops::LayerTarget::default());
     }
-    doc = history.try_undo(doc)?.ok_or("undo state missing")?.0;
+    doc = history.try_undo(doc)?.ok_or("undo state missing")?;
     for (key, include_history) in [("document-only", false), ("with-history", true)] {
         let saver = Autosaver::new(root.path(), key);
         let mut samples = Vec::new();

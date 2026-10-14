@@ -915,7 +915,9 @@ mod tests {
         std::fs::create_dir(&recovery).unwrap();
         autosave(&mut app, &ctx);
         let mut recovered = Vec::new();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        // A repaired disk retries the unchanged revision after the 30-second backoff;
+        // leave time for the background writer to publish its completed checkpoint.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
         while std::time::Instant::now() < deadline {
             prefs_ui::tick(&mut app, &ctx);
             recovered = list_recovery(&recovery);

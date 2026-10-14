@@ -359,6 +359,7 @@ impl Loader<'_> {
                 continue;
             }
             if let Some(tile) = self.fetch.shared_tile(&t.hash, len)? {
+                self.tiles.entry(f.sample).or_default().insert(t.hash.clone(), tile.clone());
                 s.put_tiles(std::iter::once((c, tile)));
                 continue;
             }

@@ -324,3 +324,34 @@ fn unlimited_storage_failure_retains_original_and_refuses_the_next_edit_atomical
     assert_eq!(s.active().unwrap().history.timeline().len(), 3);
     std::fs::remove_file(sentinel).unwrap();
 }
+
+#[test]
+fn rejected_geometry_edit_does_not_move_samplers_on_the_next_edit() {
+    let mut session = Session::new();
+    session.add_document(document("samplers", SampleType::U8), None);
+    session.active_mut().unwrap().color_samplers.push([1.0, 1.0]);
+    let before = session.active().unwrap().doc.clone();
+    session.set_sampler_map(photocraft_geom::Affine::translate(8.0, 8.0));
+    session.history_cache.failed = true;
+    session.history_cache.error = Some("disk full".into());
+    let mut ran = false;
+    assert!(
+        session
+            .edit("Rejected resize", |_, _| {
+                ran = true;
+                Ok(())
+            })
+            .is_err()
+    );
+    assert!(!ran, "storage admission must precede document mutation");
+    assert!(Arc::ptr_eq(&session.active().unwrap().doc, &before));
+    session.history_cache.failed = false;
+    session.history_cache.error = None;
+    session
+        .edit("Metadata edit", |doc, _| {
+            doc.name = "renamed".into();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(session.active().unwrap().color_samplers, vec![[1.0, 1.0]], "a rejected resize must not leave its affine map for a later edit");
+}

@@ -3934,49 +3934,15 @@ layerLabel	No Color	Sem cor
 	Sent to {printer}	Enviado para {printer}
 	set in Print Settings…	definido nas configurações de impressão…
 	ICO is limited to 256 × 256 pixels	ICO é limitado a 256 × 256 pixels
-# Runtime and historical themes
-	Apply Theme	Aplicar tema
-	Cancel Theme Preview	Cancelar prévia do tema
-	Duplicate Theme	Duplicar tema
-	Edit Theme Definition	Editar definição do tema
-	Export Theme…	Exportar tema…
-	Import Theme…	Importar tema…
-	List Themes	Listar temas
-	Mac OS 9.1 Platinum Theme	Tema Mac OS 9.1 Platinum
-	Macintosh System 6 Theme	Tema Macintosh System 6
-	Preview Theme	Visualizar tema
-	Remove Theme	Remover tema
-	Reset Theme	Redefinir tema
-	Select Theme	Selecionar tema
-	Theme Details	Detalhes do tema
-	Theme Manager…	Gerenciador de temas…
-	Windows 98 SE Theme	Tema Windows 98 SE
-	Caption font	Fonte do título
-	Copy JSON	Copiar JSON
-	Draft: {name}	Rascunho: {name}
-	Edit the definition below. Duplicate a built-in theme before changing it.	Edite a definição abaixo. Duplique um tema integrado antes de alterá-lo.
-	Font {requested} is unavailable; using {actual}.	A fonte {requested} está indisponível; usando {actual}.
-	Preview is active. Cancel restores your saved theme.	A prévia está ativa. Cancelar restaura seu tema salvo.
-	Reset Changes	Redefinir alterações
-	Saved theme	Tema salvo
-	Scroll down	Rolar para baixo
-	Scroll left	Rolar para a esquerda
-	Scroll right	Rolar para a direita
-	Scroll up	Rolar para cima
-	Theme Manager	Gerenciador de temas
-	Theme definition exceeds 64 KiB	A definição do tema excede 64 KiB
-	Theme id	ID do tema
 
+# History cache and branching navigation
 	Return to Original	Voltar ao original
-
 	Branch	Ramo
-
 	Retry storage	Tentar armazenamento novamente
-
 	Unlimited history	Histórico ilimitado
-
 	Use available disk space	Usar espaço disponível em disco
-
 	Undo disk space grows only when needed. Unlimited history retains states until storage is full. Scratch paths apply to the next cache session.	O espaço para desfazer cresce conforme necessário. O histórico ilimitado mantém estados até o armazenamento ficar cheio. Os caminhos valem para a próxima sessão de cache.
-
-	Change opacity	Alterar opacidade
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	O limite de memória é compartilhado pelos pixels do documento, dados incorporados e histórico de desfazer. Ele cresce conforme necessário; o restante da memória do aplicativo é adicional.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Esta versão para navegador mantém o histórico de desfazer na memória. As configurações do disco de trabalho se aplicam ao aplicativo de desktop.
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	O espaço em disco para desfazer cresce apenas quando necessário, até este limite. Zero desativa o cache em disco. Os caminhos do disco de trabalho valem para a próxima sessão de cache.
+	Budget mb	Limite (MiB)

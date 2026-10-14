@@ -3822,76 +3822,16 @@ curves	Smooth	スムーズ
 	Copy Texture to Other Tools	テクスチャを他のツールにコピー
 	ICO is limited to 256 × 256 pixels	ICO は 256 × 256 ピクセルまでです
 
-# Undo cache budgets
+# History cache and branching navigation
 	Memory budget (MiB)	メモリ上限 (MiB)
 	Undo disk budget (MiB)	取り消し用ディスク上限 (MiB)
 	Budget mb	容量上限 (MiB)
 	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	メモリ上限はドキュメントの画素、埋め込みデータ、取り消し履歴で共有します。必要に応じて増加し、アプリのその他のメモリは別途使用されます。
 	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	取り消し用ディスク容量は必要なときだけ、この上限まで増加します。0 にするとディスクキャッシュを無効にします。保存先は次のキャッシュセッションから適用されます。
 	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	ブラウザー版では取り消し履歴をメモリに保持します。スクラッチディスク設定はデスクトップ版に適用されます。
-
-	HDR Output	HDR 出力
-	HDR Workbench	HDR ワークベンチ
-	Export SDR Preview…	SDR プレビューを書き出し…
-
-# Integrated controls and HDR
-	Click to change columns; drag the title bar to move	列数を変更するにはクリックし、タイトルバーをドラッグして移動
-	Click to change columns; drag to detach Tools	クリックして列数を変更、ドラッグしてツールを切り離す
-	Dock Tools on the left	ツールを左側にドッキング
-	Use trackpad pressure	トラックパッドの筆圧を使用
-	Apply At Canvas Bounds	カンバスの境界に効果を適用
-
-	Collaboration…	共同編集…
-	Collaboration View Settings	共同編集の表示設定
-# Runtime theme library
-	List Themes	テーマ一覧
-	Theme Details	テーマの詳細
-	Select Theme	テーマを選択
-	Import Theme…	テーマを読み込み…
-	Export Theme…	テーマを書き出し…
-	Remove Theme	テーマを削除
-	Theme id	テーマID
-# Theme Manager
-	Theme Manager…	テーママネージャー…
-	Preview Theme	テーマをプレビュー
-	Apply Theme	テーマを適用
-	Cancel Theme Preview	テーマのプレビューをキャンセル
-	Edit Theme Definition	テーマ定義を編集
-	Duplicate Theme	テーマを複製
-	Reset Theme	テーマをリセット
-	Theme Manager	テーママネージャー
-	Reset Changes	変更をリセット
-	Copy JSON	JSON をコピー
-	Edit the definition below. Duplicate a built-in theme before changing it.	以下の定義を編集します。組み込みテーマを変更する前に複製してください。
-	Theme definition exceeds 64 KiB	テーマ定義が 64 KiB を超えています
-	Preview is active. Cancel restores your saved theme.	プレビュー中です。キャンセルすると保存済みのテーマに戻ります。
-	Saved theme	保存済みのテーマ
-	Draft: {name}	下書き: {name}
-	Duplicate	複製
-	Import…	読み込み…
-# Historical appearance profiles
-	Windows 98 SE Theme	Windows 98 SE テーマ
-	Mac OS 9.1 Platinum Theme	Mac OS 9.1 Platinum テーマ
-	Macintosh System 6 Theme	Macintosh System 6 テーマ
-	Font {requested} is unavailable; using {actual}.	フォント {requested} がないため、{actual} を使用します。
-	Scroll left	左にスクロール
-	Scroll right	右にスクロール
-	Scroll up	上にスクロール
-	Scroll down	下にスクロール
-	Caption font	タイトルのフォント
-
 	Return to Original	元の状態に戻る
-
-	Current	現在
-
 	Branch	分岐
-
 	Retry storage	保存を再試行
-
 	Unlimited history	履歴を無制限に保持
-
 	Use available disk space	空きディスク容量を使用
-
 	Undo disk space grows only when needed. Unlimited history retains states until storage is full. Scratch paths apply to the next cache session.	取り消し用ディスク容量は必要に応じて増加します。無制限の履歴は容量がいっぱいになるまで保持されます。パスは次のキャッシュセッションに適用されます。
-
-	Change opacity	不透明度を変更

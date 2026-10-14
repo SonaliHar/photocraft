@@ -163,8 +163,8 @@ independently undoable: this does not group separate keypresses into one step.
 Undo and redo materialize the selected position from the source. Pixel storage
 therefore depends on the source and current drawing rather than the number of
 nudges. Descriptor storage still grows with the number of steps; `session.inspect`
-reports it separately as `historyCache.metadataBytes`. The history-count preference
-allows up to 10,000 states; its default remains 50.
+reports it separately as `historyCache.metadataBytes`. In bounded mode, the history-count preference
+allows up to 10,000 states. Unlimited retention is enabled by default.
 
 Masks, vector content, effect reference positions, and moves near coordinate
 saturation retain ordinary exact snapshots. The replay source is resident and

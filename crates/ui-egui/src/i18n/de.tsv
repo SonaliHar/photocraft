@@ -3142,21 +3142,16 @@ curves	Smooth	Glätten
 	Sent to {printer}	An {printer} gesendet
 	set in Print Settings…	in den Druckeinstellungen festlegen…
 	ICO is limited to 256 × 256 pixels	ICO ist auf 256 × 256 Pixel begrenzt
-	Duplicate	Duplizieren
-	Import…	Importieren…
 
+# History cache and branching navigation
 	Return to Original	Zum Original zurück
-
-	Current	Aktuell
-
 	Branch	Zweig
-
 	Retry storage	Speicher erneut versuchen
-
 	Unlimited history	Unbegrenzter Verlauf
-
 	Use available disk space	Verfügbaren Speicherplatz nutzen
-
 	Undo disk space grows only when needed. Unlimited history retains states until storage is full. Scratch paths apply to the next cache session.	Speicher für Rückgängig wächst nach Bedarf. Unbegrenzter Verlauf behält Zustände bis der Speicher voll ist. Pfade gelten für die nächste Cache-Sitzung.
-
-	Change opacity	Deckkraft ändern
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	Das Speicherbudget wird von Dokumentpixeln, eingebetteten Daten und dem Rückgängig-Verlauf gemeinsam genutzt. Es wächst bei Bedarf; anderer App-Speicher kommt hinzu.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Diese Browserversion hält den Rückgängig-Verlauf im Arbeitsspeicher. Arbeitsvolume-Einstellungen gelten für die Desktop-App.
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	Der Speicherplatz für Rückgängig-Daten wächst nur bei Bedarf bis zu diesem Grenzwert. Null deaktiviert den Festplatten-Cache. Arbeitsvolume-Pfade gelten ab der nächsten Cache-Sitzung.
+	Budget mb	Grenzwert (MiB)
+	Current	Aktuell

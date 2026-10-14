@@ -3319,20 +3319,16 @@ curves	Smooth	매끄럽게
 	Sent to {printer}	{printer}(으)로 전송됨
 	set in Print Settings…	인쇄 설정에서 지정…
 	ICO is limited to 256 × 256 pixels	ICO는 256 × 256픽셀로 제한됩니다
-	Import…	가져오기…
 
+# History cache and branching navigation
 	Return to Original	원본으로 돌아가기
-
-	Current	현재
-
 	Branch	분기
-
 	Retry storage	저장 다시 시도
-
 	Unlimited history	무제한 기록
-
 	Use available disk space	사용 가능한 디스크 공간 사용
-
 	Undo disk space grows only when needed. Unlimited history retains states until storage is full. Scratch paths apply to the next cache session.	실행 취소 공간은 필요에 따라 늘어납니다. 무제한 기록은 저장 공간이 가득 찰 때까지 유지됩니다. 경로는 다음 캐시 세션에 적용됩니다.
-
-	Change opacity	불투명도 변경
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	메모리 예산은 문서 픽셀, 포함된 데이터 및 실행 취소 기록이 공유합니다. 필요에 따라 증가하며 앱의 다른 메모리 사용량은 별도입니다.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	이 브라우저 버전은 실행 취소 기록을 메모리에 보관합니다. 스크래치 디스크 설정은 데스크톱 앱에 적용됩니다.
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	실행 취소 디스크 공간은 필요할 때만 이 한도까지 증가합니다. 0은 디스크 캐시를 비활성화합니다. 스크래치 경로는 다음 캐시 세션부터 적용됩니다.
+	Budget mb	한도 (MiB)
+	Current	현재
