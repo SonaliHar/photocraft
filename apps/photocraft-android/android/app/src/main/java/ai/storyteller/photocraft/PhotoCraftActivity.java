@@ -131,7 +131,8 @@ public final class PhotoCraftActivity extends NativeActivity {
 
     @Override
     public boolean dispatchTouchEvent(MotionEvent event) {
-        trackTwoFingerTap(event);
+        // Two-finger taps are recognized from Rust's native input queue, which also receives
+        // touches when NativeActivity bypasses Java dispatchTouchEvent.
         trackStylusBarrel(event);
         return super.dispatchTouchEvent(event);
     }

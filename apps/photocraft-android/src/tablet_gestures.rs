@@ -19,10 +19,54 @@ pub(crate) enum TabletAction {
 pub(crate) struct TabletGestureRouter {
     barrel_down: bool,
     barrel_released: bool,
+    touches: Vec<(egui::TouchDeviceId, egui::TouchId, Pos2)>,
+    tap_start: Option<f64>,
+    tap_center: Option<Pos2>,
+    tap_invalid: bool,
 }
 
 impl TabletGestureRouter {
     pub(crate) fn apply(&mut self, raw: &mut RawInput, actions: impl IntoIterator<Item = TabletAction>) {
+        let now = raw.time.unwrap_or(0.0);
+        let mut touch_tap = None;
+        for event in &raw.events {
+            let Event::Touch { device_id, id, phase, pos, .. } = event else { continue };
+            match phase {
+                egui::TouchPhase::Start => {
+                    if self.touches.is_empty() {
+                        self.tap_start = Some(now);
+                        self.tap_center = None;
+                        self.tap_invalid = false;
+                    }
+                    self.touches.push((*device_id, *id, *pos));
+                    if let [(_, _, first), (_, _, second)] = self.touches.as_slice() {
+                        self.tap_center = Some(first.lerp(*second, 0.5));
+                    } else if self.touches.len() > 2 {
+                        self.tap_invalid = true;
+                    }
+                }
+                egui::TouchPhase::Move => {
+                    if let Some((_, _, start)) = self.touches.iter().find(|(device, touch, _)| device == device_id && touch == id)
+                        && start.distance(*pos) > 20.0
+                    {
+                        self.tap_invalid = true;
+                    }
+                }
+                egui::TouchPhase::End | egui::TouchPhase::Cancel => {
+                    if *phase == egui::TouchPhase::Cancel {
+                        self.tap_invalid = true;
+                    }
+                    self.touches.retain(|(device, touch, _)| device != device_id || touch != id);
+                    if self.touches.is_empty() {
+                        if !self.tap_invalid && self.tap_start.is_some_and(|start| now - start <= 0.35) {
+                            touch_tap = self.tap_center;
+                        }
+                        self.tap_start = None;
+                        self.tap_center = None;
+                    }
+                }
+            }
+        }
         let mut secondary_taps = Vec::new();
         let mut barrel_press = None;
         let mut barrel_release = None;
@@ -69,6 +113,12 @@ impl TabletGestureRouter {
             push_button(raw, x, y, true);
             push_button(raw, x, y, false);
         }
+        if let Some(pos) = touch_tap {
+            raw.events.push(Event::PointerMoved(pos));
+            for pressed in [true, false] {
+                raw.events.push(Event::PointerButton { pos, button: PointerButton::Secondary, pressed, modifiers: Default::default() });
+            }
+        }
     }
 }
 
@@ -94,6 +144,27 @@ mod tests {
 
     fn input(events: Vec<Event>) -> RawInput {
         RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 500.0))), events, ..Default::default() }
+    }
+
+    #[test]
+    fn native_two_finger_tap_clicks_but_pinch_does_not() {
+        let touch = |id, phase, x| Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(id), phase, pos: pos2(x, 100.0), force: None };
+        for moved in [false, true] {
+            let mut router = TabletGestureRouter::default();
+            let mut raw = input(vec![touch(1, egui::TouchPhase::Start, 100.0), touch(2, egui::TouchPhase::Start, 200.0)]);
+            raw.time = Some(1.0);
+            router.apply(&mut raw, []);
+            let mut events = Vec::new();
+            if moved {
+                events.push(touch(2, egui::TouchPhase::Move, 250.0));
+            }
+            events.extend([touch(2, egui::TouchPhase::End, 200.0), touch(1, egui::TouchPhase::End, 100.0)]);
+            let mut raw = input(events);
+            raw.time = Some(1.1);
+            router.apply(&mut raw, []);
+            let clicks = raw.events.iter().filter(|event| matches!(event, Event::PointerButton { button: PointerButton::Secondary, .. })).count();
+            assert_eq!(clicks, if moved { 0 } else { 2 });
+        }
     }
 
     #[test]
