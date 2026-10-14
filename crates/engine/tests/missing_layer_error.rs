@@ -55,3 +55,14 @@ fn an_exact_name_wins_over_a_case_insensitive_one() {
     assert!(!doc.layer(photocraft_doc::LayerId(lower)).unwrap().visible);
     assert!(doc.layer(photocraft_doc::LayerId(upper)).unwrap().visible);
 }
+
+#[test]
+fn a_long_layer_name_is_shortened_in_the_listing() {
+    let (mut s, _) = session();
+    let long = "é".repeat(500);
+    let layer = s.execute("layer.new.layer", json!({"name": long})).unwrap()["layer"].as_u64().unwrap();
+    let err = s.execute("layer.setProps", json!({"layer": "Nope", "visible": false})).unwrap_err().to_string();
+    let shown = format!("{layer} \"{}…\"", "é".repeat(64));
+    assert!(err.contains(&shown), "the name is cut at 64 characters: {err}");
+    assert!(err.chars().count() < 300, "{err}");
+}

@@ -287,7 +287,13 @@ pub(crate) fn layer_listing(doc: &Document) -> String {
     if layers.is_empty() {
         return "the document has no layers".into();
     }
-    let mut list: Vec<String> = layers.iter().rev().take(MAX).map(|(_, _, l)| format!("{} {:?}", l.id.0, l.name)).collect();
+    // Names are unbounded input: each one is cut at NAME characters so the error stays short.
+    const NAME: usize = 64;
+    let name = |n: &str| match n.char_indices().nth(NAME) {
+        Some((cut, _)) => format!("{}…", &n[..cut]),
+        None => n.to_string(),
+    };
+    let mut list: Vec<String> = layers.iter().rev().take(MAX).map(|(_, _, l)| format!("{} {:?}", l.id.0, name(&l.name))).collect();
     if layers.len() > MAX {
         list.push(format!("… {} more (see `document.inspect`)", layers.len() - MAX));
     }
