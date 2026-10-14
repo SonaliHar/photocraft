@@ -169,6 +169,74 @@ mod tests {
     static GPU_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
+    fn gpu_pixel_stretch_matches_native_channel_commit_across_tile_edges() {
+        let _gpu_test = GPU_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Ok(rs) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
+        })) else {
+            eprintln!("no GPU adapter for channel preview readback");
+            return;
+        };
+        let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            for selected in [false, true] {
+                let mut doc = Document::with_background("channel pixel stretch", Size::new(320, 24), ColorMode::Rgb, depth, Color::WHITE);
+                doc.layers[0].surface_mut().unwrap().fill_rect(Rect::new(250, 4, 251, 20), &[0.2, 0.6, 0.8, 0.75]);
+                if selected {
+                    let mut selection = photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8);
+                    selection.fill_rect(Rect::new(250, 4, 251, 20), &[1.0]);
+                    doc.selection = Some(selection);
+                }
+                let mut a = app();
+                a.session.add_document(doc, None);
+                a.run("channel.target", json!({"channel":"red"})).unwrap();
+                a.run("channel.setVisible", json!({"channel":"composite","visible":true})).unwrap();
+                crate::transform_tool::begin(&mut a, &egui::Context::default()).unwrap();
+                let st = a.session.active().unwrap();
+                let doc = &st.doc;
+                let mut fast = crate::channel_transform_gpu::Preview::new(&gpu, doc, st.active_layer, [1.0; 4]).unwrap();
+                for interpolation in ["bilinear", "bicubic"] {
+                    for perspective in [false, true] {
+                        let mut t = a.ui.transform.clone().unwrap();
+                        t.interpolation = interpolation.into();
+                        t.quad = t.quad.map(|[x, y]| [250.0 + (x - 250.0) * 16.0, y]);
+                        if perspective {
+                            t.quad[2][0] += 0.75;
+                            t.quad[2][1] += 2.0;
+                        }
+                        assert!(fast.texture(&t, &st.channel_view, false, false, 1).is_some(), "stretch stays on the cached GPU path");
+                        let actual = fast.readback();
+                        let mut oracle = Preview::new(doc, st.active_layer, [1.0; 4], false);
+                        oracle.update(&t).unwrap();
+                        let expected = oracle.image(&st.channel_view, false, None);
+                        let max = actual
+                            .iter()
+                            .zip(&expected.pixels)
+                            .flat_map(|(a, b)| a.to_array().into_iter().zip(b.to_array()).map(|(a, b)| a.abs_diff(b)))
+                            .max()
+                            .unwrap();
+                        assert!(max <= 2, "{depth:?} selected={selected} {interpolation} perspective={perspective}: {max}");
+                        let before = doc.layers[0].surface().unwrap();
+                        let after = oracle.shown.layers[0].surface().unwrap();
+                        for y in 0..24 {
+                            for x in 0..320 {
+                                for channel in [1, 2, 3] {
+                                    assert_eq!(after.sample_channel(x, y, channel), before.sample_channel(x, y, channel));
+                                }
+                            }
+                        }
+                        if !perspective {
+                            for x in 250..266 {
+                                assert!((after.sample_channel(x, 12, 0) - 0.2).abs() < 0.005, "stretched column stays solid at {x}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn gpu_sparse_and_high_frequency_channels_match_the_cpu_or_fall_back() {
         let _gpu_test = GPU_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let Ok(rs) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

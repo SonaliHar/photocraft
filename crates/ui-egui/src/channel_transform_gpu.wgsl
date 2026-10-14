@@ -1,7 +1,7 @@
 // Native samples stay immutable. A transformed scalar is merged into just one component.
 struct Params {
     h0: vec4<f32>, h1: vec4<f32>, h2: vec4<f32>,
-    size: vec4<f32>, rect: vec4<f32>, view: vec4<f32>, opts: vec4<f32>,
+    size: vec4<f32>, rect: vec4<f32>, view: vec4<f32>, opts: vec4<f32>, bounds: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> p: Params;
 @group(0) @binding(1) var source: texture_2d<f32>;
@@ -19,7 +19,9 @@ fn quant(x: f32) -> f32 {
     if p.opts.z == 0.0 { return x; }
     return floor(clamp(x, 0.0, 1.0) * p.opts.z + 0.5) / p.opts.z;
 }
-fn lifted(at: vec2<i32>) -> vec2<f32> {
+fn lifted(pos: vec2<i32>, repeat_edge: bool) -> vec2<f32> {
+    var at = pos;
+    if repeat_edge { at = clamp(at, vec2<i32>(p.rect.xy), vec2<i32>(p.rect.zw) - vec2(1)); }
     let xy = vec2<f32>(at);
     if any(at < vec2(0)) || any(at >= vec2<i32>(p.size.xy)) || any(xy < p.rect.xy) || any(xy >= p.rect.zw) { return vec2(0.0); }
     let alpha = quant(textureLoad(selection, at, 0).r);
@@ -30,17 +32,26 @@ fn cubic(t: f32) -> vec4<f32> {
     // Match transform::bicubic: Keys a = -0.75, including Warp's scalar sampler.
     return vec4(-0.75*t3+1.5*t2-0.75*t, 1.25*t3-2.25*t2+1.0, -1.25*t3+1.5*t2+0.75*t, 0.75*t3-0.75*t2);
 }
-fn sample_at(at: vec2<f32>) -> vec2<f32> {
-    if p.opts.x == 0.0 { return lifted(vec2<i32>(floor(at + 0.5))); }
+fn sample_at(at: vec2<f32>, footprint: vec2<f32>, repeat_edge: bool) -> vec2<f32> {
+    if any(p.rect.zw <= p.rect.xy) { return vec2(0.0); }
+    if p.opts.x == 0.0 { return lifted(vec2<i32>(floor(at + 0.5)), false); }
+    if repeat_edge && (any(at < p.rect.xy - vec2(1.0)) || any(at > p.rect.zw)) { return vec2(0.0); }
     let pos = vec2<i32>(floor(at)); let frac = fract(at);
     var value = vec2(0.0);
     if p.opts.x == 1.0 {
-        value = mix(mix(lifted(pos), lifted(pos + vec2(1,0)), frac.x), mix(lifted(pos + vec2(0,1)), lifted(pos + vec2(1,1)), frac.x), frac.y);
+        value = mix(mix(lifted(pos, repeat_edge), lifted(pos + vec2(1,0), repeat_edge), frac.x), mix(lifted(pos + vec2(0,1), repeat_edge), lifted(pos + vec2(1,1), repeat_edge), frac.x), frac.y);
     } else {
         let wx = cubic(frac.x); let wy = cubic(frac.y);
         for (var j = 0; j < 4; j++) {
-            for (var i = 0; i < 4; i++) { value += lifted(pos + vec2(i-1,j-1)) * wx[u32(i)] * wy[u32(j)]; }
+            for (var i = 0; i < 4; i++) { value += lifted(pos + vec2(i-1,j-1), repeat_edge) * wx[u32(i)] * wy[u32(j)]; }
         }
+    }
+    if repeat_edge {
+        // Free Transform repeats the source edge; only its geometric outline is antialiased.
+        // Warp's mesh sampler keeps its own transparent-border and triangle-coverage semantics.
+        let distance = min(at + 0.5 - p.rect.xy, p.rect.zw - (at + 0.5));
+        let covered = clamp(distance / footprint + 0.5, vec2(0.0), vec2(1.0));
+        value *= covered.x * covered.y;
     }
     let coverage = clamp(value.y, 0.0, 1.0);
     let a = quant(coverage);
@@ -73,12 +84,34 @@ fn finish(at: vec2<i32>, transformed: vec2<f32>) -> vec4<f32> {
     return vec4(rgba.rgb * rgba.a, rgba.a);
 }
 @fragment fn fs_affine(v: Vertex) -> @location(0) vec4<f32> {
+    if any(v.position.xy < p.bounds.xy) || any(v.position.xy >= p.bounds.zw) { return finish(vec2<i32>(v.position.xy), vec2(0.0)); }
     let dst = vec3(v.position.xy, 1.0);
     let denom = dot(p.h2.xyz, dst);
     let src = vec2(dot(p.h0.xyz, dst), dot(p.h1.xyz, dst)) / denom - 0.5;
-    return finish(vec2<i32>(v.position.xy), sample_at(src));
+    var footprint = vec2(1.0);
+    if p.opts.x != 0.0 {
+        if p.h2.x == 0.0 && p.h2.y == 0.0 {
+            footprint = vec2(dot(abs(p.h0.xy / p.h2.z), vec2(1.0)), dot(abs(p.h1.xy / p.h2.z), vec2(1.0)));
+        } else {
+            // Match transform::warp: inverse steps at the midpoint of the bounded CPU tile.
+            let tile = floor(v.position.xy / p.h0.w) * p.h0.w;
+            let middle = (max(tile, p.bounds.xy) + min(tile + p.h0.w, p.bounds.zw)) * 0.5;
+            let o = inverse_at(middle);
+            footprint = abs(inverse_at(middle + vec2(1.0, 0.0)) - o) + abs(inverse_at(middle + vec2(0.0, 1.0)) - o);
+        }
+        footprint = vec2(valid_extent(footprint.x), valid_extent(footprint.y));
+    }
+    return finish(vec2<i32>(v.position.xy), sample_at(src, footprint, true));
 }
-@fragment fn fs_warp(v: Vertex) -> @location(0) vec4<f32> { return vec4(sample_at(v.src - 0.5), 0.0, 0.0); }
+fn inverse_at(at: vec2<f32>) -> vec2<f32> {
+    let dst = vec3(at, 1.0);
+    return vec2(dot(p.h0.xyz, dst), dot(p.h1.xyz, dst)) / dot(p.h2.xyz, dst);
+}
+fn valid_extent(value: f32) -> f32 {
+    if value > 0.000000000001 && value <= 3.4e38 { return value; }
+    return 1.0;
+}
+@fragment fn fs_warp(v: Vertex) -> @location(0) vec4<f32> { return vec4(sample_at(v.src - 0.5, vec2(1.0), false), 0.0, 0.0); }
 @fragment fn fs_finish(v: Vertex) -> @location(0) vec4<f32> {
     let at = vec2<i32>(v.position.xy);
     return finish(at, textureLoad(moved, at, 0).xy);

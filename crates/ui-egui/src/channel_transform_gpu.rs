@@ -12,7 +12,7 @@ use crate::state::TransformSession;
 
 const OUTPUT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const FLOAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
-const UNIFORM_BYTES: u64 = 112;
+const UNIFORM_BYTES: u64 = 128;
 
 struct Pipelines {
     inputs: wgpu::BindGroupLayout,
@@ -290,10 +290,10 @@ impl Preview {
         if integer_translation {
             interp = 0.0;
         }
-        let mut data = Vec::with_capacity(28);
-        for row in inv.0.as_chunks::<3>().0 {
+        let mut data = Vec::with_capacity(32);
+        for (i, row) in inv.0.as_chunks::<3>().0.iter().enumerate() {
             data.extend(row.iter().map(|v| *v as f32));
-            data.push(0.0);
+            data.push(if i == 0 { photocraft_geom::TILE_SIZE as f32 } else { 0.0 });
         }
         data.extend([self.size[0] as f32, self.size[1] as f32, component as f32, *self.fill.get(component as usize)?]);
         data.extend(source_rect.map(|v| v as f32));
@@ -301,6 +301,9 @@ impl Preview {
         data.extend([visible as f32, f32::from(in_color), self.opacity, f32::from(encode)]);
         let identity = t.warp.as_ref().map_or_else(|| h.is_identity(), photocraft_geom::warp::Warp::is_identity);
         data.extend([interp, f32::from(self.selected), self.steps, f32::from(identity)]);
+        // Perspective edge coverage uses the CPU sampler's destination-tile midpoint.
+        let output = photocraft_algo::transform::warp_output_bounds(source_bounds, &h).unwrap_or(photocraft_geom::Rect::EMPTY);
+        data.extend([output.x0, output.y0, output.x1, output.y1].map(|v| v as f32));
         if data.iter().any(|v| !v.is_finite()) {
             return None;
         }
