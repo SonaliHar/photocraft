@@ -177,24 +177,25 @@ impl Ctx<'_> {
         }
         let (w, h) = r.size().unwrap_or((0, 0));
         let s = self.fmt.sample;
-        let ids: Vec<i16> = (0..self.cc as i16).chain([CHANNEL_TRANSPARENCY]).collect();
-        let planes: Vec<Option<Vec<u8>>> = if cfg!(target_arch = "wasm32") {
-            ids.iter().map(|&id| self.channel_plane(rec, id, name)).collect()
+        let ids: Vec<_> = (0..self.cc as i16).chain([CHANNEL_TRANSPARENCY]).collect();
+        let planes = if w.saturating_mul(h) >= 65536 && !cfg!(target_arch = "wasm32") {
+            // A layer's channels are independent streams. Keep warnings in channel order,
+            // while decoding the small bounded set of channels concurrently on native.
+            let header = &self.file.header;
+            crate::pixels::par_map(ids.clone(), |id| rec.channel(id).map(|_| rec.decode_channel(id, header.depth, header.version)))
+                .into_iter()
+                .zip(&ids)
+                .map(|(plane, id)| match plane {
+                    Some(Ok(p)) => Some(p),
+                    Some(Err(e)) => {
+                        self.warn(format!("layer \"{name}\": channel {id} could not be decoded ({e}); treated as empty"));
+                        None
+                    }
+                    None => None,
+                })
+                .collect::<Vec<_>>()
         } else {
-            // The channels decode independently; their RLE rows are the bulk of the open
-            // time for full-canvas layers, so they run side by side and the warnings land
-            // in the same order afterwards.
-            // par_map reuses the crate's worker pool (one OS thread per channel per layer
-            // would spawn thousands on a file with many layers).
-            let decoded: Vec<Option<Vec<u8>>> = crate::pixels::par_map(ids.to_vec(), |id| self.channel_plane_decoded(rec, id));
-            let mut planes: Vec<Option<Vec<u8>>> = Vec::with_capacity(decoded.len());
-            for (&id, p) in ids.iter().zip(decoded) {
-                if p.is_none() && rec.channel(id).is_some() {
-                    self.warn(format!("layer \"{name}\": channel {id} could not be decoded; treated as empty"));
-                }
-                planes.push(p);
-            }
-            planes
+            ids.iter().map(|&id| self.channel_plane(rec, id, name)).collect()
         };
         // A channel that is in the file but could not be decoded leaves the layer empty, as the
         // warning says. Filling in for it would paint an opaque black layer over the document.
@@ -208,6 +209,11 @@ impl Ctx<'_> {
             return Surface::new(self.fmt);
         }
         let refs: Vec<Option<&[u8]>> = planes.iter().map(|p| p.as_deref()).collect();
+        if self.fmt == PixelFormat::RGBA8
+            && let Some(surface) = crate::pixels::rgba8_surface(&refs, Rect::new(r.left, r.top, r.right, r.bottom))
+        {
+            return surface;
+        }
         let mut fill: Vec<Vec<u8>> = vec![zero_sample(s); self.cc];
         fill.push(max_sample(s));
         let mut invert = vec![self.cmyk; self.cc];
