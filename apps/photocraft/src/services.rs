@@ -655,6 +655,11 @@ mod tests {
 
     /// Combined All Formats must stay a short spec so native pickers (Windows IFileDialog via rfd)
     /// can open the type dropdown without hanging (#5126).
+    #[test]
+    fn all_formats_filter_is_short_enough_for_native_pickers() {
+        assert_all_formats_filter_is_short();
+    }
+
     fn assert_all_formats_filter_is_short() {
         let (name, exts) = open_filters().into_iter().next().expect("All Formats first");
         assert_eq!(name, "All Formats");
