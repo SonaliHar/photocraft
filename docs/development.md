@@ -492,10 +492,12 @@ against committed **sha256 manifests**. All pins are in one place:
 | `corpus/exr/` | the 5 deep OpenEXR test images (scanline deep data with half colour and u32 ID channels; 2.3 MB), checked against the ID manifests of their upstream sidecars | OpenEXR upstream at v3.5.2 (BSD-3-Clause) | `xtask/exr-corpus.sha256` |
 | `corpus/affinity/` | 21 public Affinity documents and the 18 Affinity 3 samples for #1606, with exported PNG references | vector-art and affinity-samples (CC0), AFDesignLoad, Jac21/Branding and AssetStoreTemplate (MIT) upstreams | `xtask/affinity-corpus.sha256` |
 | `corpus/pngsuite/` | PngSuite | schaik.com release archive (public domain) | (fixed archive) |
+| `corpus/cr3/` | 48 camera originals / 25 models: DSLR, mirrorless, PowerShot, RAW/C-RAW, Dual Pixel / crop and HEVC PQ; 48 exact full-sensor oracles (12 legacy and ten adaptive C-RAW), native imports and forced unsupported-version preview checks | raw.pixls.us (CC0); [coverage](cr3.md) and `xtask/cr3-corpus.tsv` | `xtask/cr3.sha256` |
 
 ```sh
 cargo xtask corpus                 # where each corpus lives, its pin, present or missing
-cargo xtask corpus --all           # fetch everything missing or stale (cold: about 15 s; verified copies are left alone)
+cargo xtask corpus --all           # fetch missing/stale corpora (CR3 adds ~1.18 GiB); verified copies are left alone
+cargo xtask corpus --cr3           # fetch just the 48 CC0 CR3 originals (about 1.18 GiB)
 cargo xtask test-corpus            # fetch, then cargo test --release --features corpus (+ heif on codecs, io) on psd, codecs, io, engine
 cargo xtask test-corpus -p io      # narrow to one crate (repeat -p for more)
 cargo xtask test-corpus --changed  # only if psd, io, codecs, compose, gpu, text, format or affinity changed vs origin/main

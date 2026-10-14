@@ -34,7 +34,7 @@ const CRITICAL: &[&str] = &[
     "crates/affinity/",
     "crates/raw/",
 ];
-/// `cargo xtask corpus [--all | --pngsuite | --download | --psd | --psd-tools | --heif | --exr | --pixls | --affinity | --photoshop [--local]] [--update-manifest]`
+/// `cargo xtask corpus [--all | --pngsuite | --download | --psd | --psd-tools | --heif | --exr | --pixls | --cr3 | --affinity | --photoshop [--local]] [--update-manifest]`
 pub fn cmd(args: &[&str]) -> Result<(), String> {
     let update = args.contains(&"--update-manifest");
     let mut did = false;
@@ -63,6 +63,10 @@ pub fn cmd(args: &[&str]) -> Result<(), String> {
     }
     if args.contains(&"--exr") {
         corpus_pins::EXR.fetch(update)?;
+        did = true;
+    }
+    if args.contains(&"--cr3") {
+        fetch_cr3()?;
         did = true;
     }
     if args.contains(&"--affinity") {
@@ -100,6 +104,7 @@ fn local_clone() -> Result<PathBuf, String> {
 pub fn fetch_all(local: bool, update: bool) -> Result<(), String> {
     fetch_pngsuite()?;
     fetch_pinned(local, update, fetch_one)?;
+    fetch_cr3()?;
     println!("all corpora present and verified under {}", root().join("corpus").display());
     Ok(())
 }
@@ -119,6 +124,45 @@ fn fetch_one(c: &PinnedCorpus, from_clone: bool, update: bool) -> Result<(), Str
 
 fn status(present: bool) -> &'static str {
     if present { "present" } else { "missing" }
+}
+
+fn fetch_cr3() -> Result<(), String> {
+    let dest = root().join("corpus/cr3");
+    std::fs::create_dir_all(&dest).map_err(|e| format!("create CR3 corpus: {e}"))?;
+    let manifest = std::fs::read_to_string(root().join("xtask/cr3.sha256")).map_err(|e| format!("read CR3 manifest: {e}"))?;
+    for (id, name) in corpus_pins::CR3_FILES {
+        let hash = manifest
+            .lines()
+            .find_map(|line| line.split_once("  ").filter(|(_, file)| file == name).map(|(hash, _)| hash))
+            .ok_or_else(|| format!("CR3 manifest is missing {name}"))?;
+        let path = dest.join(name);
+        if std::fs::read(&path).is_ok_and(|bytes| crate::sha256::hex(&bytes) == hash) {
+            continue;
+        }
+        let temporary = dest.join(format!("{name}.download"));
+        let url = format!("https://raw.pixls.us/getfile.php/{id}/nice/{name}");
+        let mut curl = Command::new("curl");
+        curl.args(["-fsSL", "--retry", "3", "-A", USER_AGENT, "-o"]).arg(&temporary).arg(&url);
+        run(curl, &format!("fetch CR3 sample {id}"))?;
+        let bytes = std::fs::read(&temporary).map_err(|e| format!("read downloaded {name}: {e}"))?;
+        if crate::sha256::hex(&bytes) != hash {
+            return Err(format!("CR3 sample {id}: SHA-256 mismatch"));
+        }
+        // Windows rename cannot replace a stale destination. Remove it only
+        // after the replacement has passed its committed checksum.
+        if path.is_file() {
+            std::fs::remove_file(&path).map_err(|e| format!("replace stale CR3 sample {id}: {e}"))?;
+        }
+        std::fs::rename(&temporary, &path).map_err(|e| format!("install CR3 sample {id}: {e}"))?;
+    }
+    let mut sources="# CR3 camera originals\n\nCC0-1.0, from https://raw.pixls.us/; licence: https://creativecommons.org/publicdomain/zero/1.0/. Input SHA-256 hashes: xtask/cr3.sha256. Photos are gitignored and never committed.\n\n".to_string();
+    for (id, name) in corpus_pins::CR3_FILES {
+        sources.push_str(&format!("- {name}: https://raw.pixls.us/getfile.php/{id}/nice/{name}\n"));
+    }
+    std::fs::write(dest.join("SOURCES.md"), sources).map_err(|e| format!("write CR3 sources: {e}"))?;
+    std::fs::copy(root().join("xtask/CR3-LICENSE-CC0.txt"), dest.join("LICENSE-CC0.txt")).map_err(|e| format!("copy CR3 licence: {e}"))?;
+    println!("cr3: {} CC0 originals present and SHA-256 verified", corpus_pins::CR3_FILES.len());
+    Ok(())
 }
 
 fn list() {
@@ -147,6 +191,7 @@ fn list() {
   corpus/affinity/   [{}] public Affinity documents and #1606 samples (CC0, MIT), with PNG references;
                      manifest xtask/affinity-corpus.sha256. Fetch: --affinity
   corpus/pngsuite/   [{}] PngSuite (public domain), {PNGSUITE_URL}. Fetch: --pngsuite
+  corpus/cr3/       CC0 Canon RAW/C-RAW originals, manifest xtask/cr3.sha256. Fetch: --cr3
   corpus/pixls/      [opt-in] real camera raws from raw.pixls.us (public domain), one per decode
                      path plus the known-unsupported packed ORF. Fetch: --pixls (opt-in)
 

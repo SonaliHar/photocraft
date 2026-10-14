@@ -122,3 +122,7 @@ Each milestone has a **definition of done (DoD)** and must leave `main` green on
 | 2026-10-10 | major | Progress-docs standard: honest assessment and dated measurements moved to `target-app-parity.md`, Affinity notes to `file-format-parity.md`; new Current focus and estimates; `parity.md` renamed `parity-checklist.md` |
 | 2026-10-08 | minor | Tools, Affinity import and performance measurements added |
 | 2026-10-05 | major | Honest parity assessment added |
+
+## Canon CR3 sensor development (2026-10-14)
+
+Native lossless, legacy C-RAW and single-tile adaptive C-RAW decoding is covered by 48 pinned CC0 originals across 25 models. Exact reference checks cover for all 1,342,361,776 full-sensor samples and eight original single-illuminant response fits. Unsupported modes retain labelled camera-preview fallback; multi-tile adaptive geometry and broader camera calibration remain open. See [CR3 scope and reproduction](cr3.md).

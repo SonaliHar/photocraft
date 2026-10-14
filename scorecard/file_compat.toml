@@ -78,9 +78,9 @@ note = "Only print_cmds.rs:133 print_pdf (raster print page)"
 [[item]]
 id = "FILE-215-11"
 target = "RAW: lossy DNG, highlight modes, .xmp sidecars, RAW prefs wired, per-camera corpus"
-status = "missing"
+status = "partial"
 issue = 215
-note = "raw sensor.rs:210 lossy DNG unsupported; raw_defaults unread; no xmp"
+note = "All 48 pinned CC0 CR3 files / 25 bodies develop natively in CI: 48 exact full-sensor reference hashes including 12 legacy and ten adaptive C-RAW; unsupported-version JPEG/HEVC PQ fallback retained. Eight original colour calibrations and ICC-managed dialog previews; EXIF/CTMD/XMP preserved. Broader CR3 coding/geometry and camera calibration remain open; this does not complete every RAW workflow; docs/cr3.md"
 
 [[item]]
 id = "FILE-215-12"
@@ -171,7 +171,7 @@ id = "FILE-216-3"
 target = "TIFF, RAW and EXR corpora read by tests; per-camera RAW coverage reported"
 status = "partial"
 issue = 216
-note = "EXR: corpus/exr (the OpenEXR deep test images, pinned) is read by codecs tests/deep_exr.rs in the CI corpus job, against the ID manifests of the upstream sidecars. corpus/tiff and corpus/raw are still copied in by hand and no test reads them; no per-camera RAW report"
+note = "EXR: corpus/exr (pinned OpenEXR deep test images) runs against upstream ID sidecars. RAW: 48 SHA-256-pinned CC0 CR3 files / 25 bodies run in raw/io corpus tests; all 48 exact sensor oracles / 1,342,361,776 samples including adaptive C-RAW, with unsupported-version fallback coverage; per-camera coverage in xtask/cr3-corpus.tsv and docs/cr3.md. Broader RAW and TIFF camera/format coverage remains open"
 
 [[item]]
 id = "FILE-216-4"

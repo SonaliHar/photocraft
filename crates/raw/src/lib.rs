@@ -34,7 +34,7 @@
 //! Nikon compressed NEF (lossless and lossy), Sony compressed ARW (cRAW),
 //! Panasonic RW2 (RawFormat 5 packed and RawFormat 3/4 vendor-compressed),
 //! uncompressed Olympus ORF and uncompressed Fujifilm RAF (Bayer and
-//! X-Trans). Everything else reports [`RawError::Unsupported`].
+//! X-Trans), and lossless/C-RAW CR3. Everything else reports [`RawError::Unsupported`].
 //!
 //! The crate is standalone (no workspace dependencies), does no I/O, builds for
 //! `wasm32-unknown-unknown` and never panics on hostile input: sizes are
@@ -46,7 +46,7 @@
 mod cameras;
 mod color;
 mod cr2;
-mod cr3;
+pub mod cr3;
 mod demosaic;
 mod develop;
 mod dng;
@@ -238,7 +238,7 @@ pub fn is_raw(bytes: &[u8]) -> bool {
 pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Sensor, RawError> {
     let format = identify(bytes).ok_or(RawError::NotRaw)?;
     match format {
-        RawFormat::Cr3 => Err(RawError::unsupported("Canon CR3 (ISO BMFF / CRX) is not decoded yet")),
+        RawFormat::Cr3 => cr3::decode(bytes, limits),
         RawFormat::Raf => raf::decode(bytes, limits),
         _ => {
             let t = Tiff::new(bytes).ok_or(RawError::NotRaw)?;

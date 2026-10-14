@@ -1,6 +1,6 @@
 [package]
 name = "photocraft-raw"
-description = "Clean-room, pure-Rust camera raw decoder and developer (DNG, CR2, TIFF/EP raws)"
+description = "Clean-room, pure-Rust camera raw decoder and developer (DNG, CR2, CR3 RAW/C-RAW, TIFF/EP raws)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

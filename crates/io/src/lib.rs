@@ -10,9 +10,9 @@
 //!   and smart-object data) and re-export writes them back; text, shape and
 //!   smart-object layers also keep their pixels as the cached raster, and fill
 //!   layers keep Photoshop's rendering in `Layer::fill_cache`.
-//! * Camera raws (DNG, CR2, uncompressed / lossless TIFF-EP raws) via
+//! * Camera raws (DNG, CR2, lossless/C-RAW CR3, uncompressed / lossless TIFF-EP raws) via
 //!   `photocraft-raw`, developed into a 16-bit ProPhoto RGB "Background"
-//!   layer; unsupported raw variants fall back to the embedded JPEG preview.
+//!   layer; unsupported raw variants fall back to a JPEG or optional CR3 HEVC preview.
 //! * Layered TIFFs (Photoshop layer data in tags 37724 and 34377) open with their
 //!   layers through the PSD path and are written back the same way; see `tiff_layers`.
 //! * Paint.NET PDN3 documents open as editable bitmap layers (import only).
@@ -40,6 +40,7 @@ pub mod blocks;
 pub mod camera_raw_xmp;
 mod channel_map;
 pub mod comps_map;
+mod cr3;
 pub mod effects_map;
 pub mod exr_parts;
 mod flat;

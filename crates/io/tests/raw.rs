@@ -90,7 +90,7 @@ fn unsupported_raw_without_preview_is_a_clear_error() {
     match import("IMG_0001.CR3", &cr3) {
         Err(e @ IoError::Raw(_)) => assert!(e.to_string().contains("CR3"), "{e}"),
         Err(e) => panic!("expected a raw error, got {e}"),
-        Ok(_) => panic!("CR3 must not decode yet"),
+        Ok(_) => panic!("CR3 without sensor or preview data must not decode"),
     }
 }
 
@@ -102,8 +102,7 @@ fn cr3_opens_its_upright_camera_jpeg_with_explicit_preview_warning() {
     let r = import("shot.cr3", &raw).unwrap();
     assert_eq!((r.document.size.width, r.document.size.height), (20, 32));
     assert_eq!(r.document.depth, SampleType::U8);
-    assert!(r.warnings[0].contains("8-bit, not the raw sensor data"));
-    assert!(r.warnings[0].contains("CR3"));
+    assert!(r.warnings.iter().any(|w| w.contains("CR3") && w.contains("preview") && w.contains("not the RAW sensor data")), "{:?}", r.warnings);
 }
 
 #[test]
@@ -323,4 +322,66 @@ fn a_re_develop_keeps_the_fitted_look() {
     // The camera's brightening curve: mid-grey comes out lighter.
     let mid = curve.iter().find(|k| k[0] >= 0.18).unwrap();
     assert!(mid[1] > mid[0], "{mid:?}");
+}
+
+#[test]
+fn cr3_preview_preserves_container_metadata_and_rotates_once() {
+    let image = Image::from_u8(32, 20, ChannelLayout::Rgb, vec![180; 32 * 20 * 3]).unwrap();
+    let jpeg = photocraft_codecs::encode(&image, Format::Jpeg, &EncodeOptions::default()).unwrap();
+    let bytes = photocraft_raw::testgen::cr3::with_metadata(&jpeg, 6, 2, "<xmp custom='retained'/>");
+    let result = import("camera.CR3", &bytes).unwrap();
+    assert_eq!((result.document.size.width, result.document.size.height), (20, 32));
+    assert_eq!(result.document.depth, SampleType::U8);
+    assert_eq!(result.document.icc_profile.as_ref().unwrap().as_slice(), photocraft_cms::Builtin::AdobeRgbCompat.profile().to_bytes().as_slice());
+    assert_eq!(photocraft_codecs::exif_orientation(result.document.metadata.exif.as_ref().unwrap()), 1);
+    assert!(result.document.metadata.xmp.as_ref().unwrap().contains("custom='retained'"));
+    assert!(result.warnings.iter().any(|w| w.contains("preview") && w.contains("not the RAW sensor data")));
+}
+#[test]
+fn native_cr3_rotates_once_and_round_trips_depth_pixels_and_metadata() {
+    let bytes = photocraft_raw::testgen::cr3::lossless(6);
+    let r = import("sensor.CR3", &bytes).unwrap();
+    assert_eq!((r.document.size.width, r.document.size.height), (4, 8));
+    assert_eq!(r.document.depth, SampleType::U16);
+    assert_eq!(photocraft_codecs::exif_orientation(r.document.metadata.exif.as_ref().unwrap()), 1);
+    let saved = photocraft_format::save_to_bytes(&r.document, &Default::default()).unwrap();
+    let back = photocraft_format::load_from_bytes(&saved).unwrap();
+    assert_eq!(back.depth, r.document.depth);
+    assert_eq!(back.metadata.exif, r.document.metadata.exif);
+    assert_eq!(back.icc_profile, r.document.icc_profile);
+    let opts = photocraft_io::ExportOptions::default();
+    let before = photocraft_io::export(&r.document, "a.png", &opts).unwrap();
+    let after = photocraft_io::export(&back, "b.png", &opts).unwrap();
+    assert_eq!(before.bytes, after.bytes);
+    let png = photocraft_codecs::decode(&before.bytes).unwrap();
+    assert_eq!(png.sample_type(), photocraft_codecs::SampleType::U16);
+    assert!(png.to_u16_samples().unwrap().iter().any(|v| v % 257 != 0), "RAW precision must survive import and native save");
+    let (tuned, applied) =
+        photocraft_io::raw::import_raw_tuned("sensor.CR3", &bytes, &photocraft_io::raw::RawTuning { exposure: 1., ..Default::default() }).unwrap();
+    assert!(applied);
+    let exposed = photocraft_io::export(&tuned.document, "exposed.png", &opts).unwrap();
+    assert_ne!(photocraft_codecs::decode(&exposed.bytes).unwrap().data(), png.data());
+    let r = photocraft_io::raw::import_raw_with("sensor.CR3", &bytes, &photocraft_raw::DevelopOptions { orient: false, ..Default::default() }).unwrap();
+    assert_eq!((r.document.size.width, r.document.size.height), (8, 4));
+    assert_eq!(photocraft_codecs::exif_orientation(r.document.metadata.exif.as_ref().unwrap()), 6);
+}
+
+#[test]
+fn craw_tuning_rotates_and_preserves_native_depth() {
+    for bytes in [photocraft_raw::testgen::cr3::craw(6), photocraft_raw::testgen::cr3::adaptive(6)] {
+        let r = import("craw.CR3", &bytes).unwrap();
+        assert_eq!((r.document.size.width, r.document.size.height), (48, 64));
+        assert_eq!(r.document.depth, SampleType::U16);
+        assert!(!r.warnings.iter().any(|w| w.contains("preview")));
+        let (tuned, applied) =
+            photocraft_io::raw::import_raw_tuned("craw.CR3", &bytes, &photocraft_io::raw::RawTuning { exposure: -1., ..Default::default() }).unwrap();
+        assert!(applied);
+        let opts = Default::default();
+        assert_ne!(photocraft_io::export(&r.document, "a.png", &opts).unwrap().bytes, photocraft_io::export(&tuned.document, "b.png", &opts).unwrap().bytes);
+        let saved = photocraft_format::save_to_bytes(&tuned.document, &Default::default()).unwrap();
+        let back = photocraft_format::load_from_bytes(&saved).unwrap();
+        assert_eq!(back.depth, SampleType::U16);
+        assert_eq!(back.metadata.exif, tuned.document.metadata.exif);
+        assert_eq!(back.icc_profile, tuned.document.icc_profile);
+    }
 }

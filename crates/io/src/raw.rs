@@ -34,7 +34,8 @@ fn limits() -> Limits {
 /// A raw file's embedded JPEG preview, turned upright. Its own EXIF orientation wins when it
 /// has one; otherwise the raw's IFD0 orientation applies (TIFF-based raws record it there, and
 /// their previews are usually stored as the sensor reads out). Developed raws are oriented by
-/// `photocraft-raw` and carry no EXIF, so nothing is turned twice.
+/// `photocraft-raw`; CR3's preserved EXIF is normalised when it is attached,
+/// so nothing is turned twice.
 fn upright_preview(raw: &[u8], jpeg: &[u8]) -> Result<Image, IoError> {
     let img = codecs::decode_as_with(Format::Jpeg, jpeg, &codecs::DecodeOptions { keep_orientation: true, ..Default::default() })?;
     let own = img.meta.exif.as_deref().map_or(1, codecs::exif_orientation);
@@ -111,7 +112,11 @@ pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<
         .map(|(k, v)| format!(", {k} {v:+.0}"))
         .collect::<String>();
     let summary = format!("developed in Camera Raw (exposure {:+.2} EV{tone}, {wb})", tuning.exposure);
-    Ok((developed_document(name, format, dev, &summary)?, wb_applied))
+    let mut result = developed_document(name, format, dev, &summary)?;
+    if sensor.format == photocraft_raw::RawFormat::Cr3 {
+        crate::cr3::attach_metadata(&mut result, bytes, &opts.limits, opts.orient);
+    }
+    Ok((result, wb_applied))
 }
 
 /// The tone curve `bytes` develop with by default: the fitted look's for a file without colour
@@ -249,11 +254,21 @@ pub const DEVELOPED_NOTE: &str = "developed with default settings";
 /// Develops a raw file with explicit settings. Without `opts.camera_look`, a file without
 /// colour calibration gets one fitted to its embedded JPEG when that clearly helps.
 pub fn import_raw_with(name: &str, bytes: &[u8], opts: &DevelopOptions) -> Result<ImportResult, IoError> {
+    let cr3 = photocraft_raw::identify(bytes) == Some(photocraft_raw::RawFormat::Cr3);
     let format = photocraft_raw::identify(bytes).map(|f| f.name()).unwrap_or("camera raw");
     match develop_fitted(bytes, opts) {
         Ok(dev) => {
             let summary = format!("{DEVELOPED_NOTE} ({} demosaic, as-shot white balance)", opts.demosaic.id());
-            developed_document(name, format, dev, &summary)
+            let mut result = developed_document(name, format, dev, &summary)?;
+            if cr3 {
+                crate::cr3::attach_metadata(&mut result, bytes, &opts.limits, opts.orient);
+            }
+            Ok(result)
+        }
+        Err(RawError::Unsupported(reason)) if cr3 => {
+            let mut result = crate::cr3::import(name, bytes, &opts.limits)?;
+            result.warnings.push(format!("CR3 sensor variant unsupported: {reason}"));
+            Ok(result)
         }
         Err(RawError::Unsupported(reason)) => match photocraft_raw::embedded_preview(bytes) {
             Some(p) => {

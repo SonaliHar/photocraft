@@ -5,6 +5,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
+pub mod cr3;
+
 // ---------------------------------------------------------------- lossless JPEG
 
 /// A CR3 container holding one JPEG track and CMT1 orientation. It deliberately
