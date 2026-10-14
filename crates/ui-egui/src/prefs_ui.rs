@@ -2239,7 +2239,8 @@ mod tests {
             appearance_frame(&mut app, &ctx, Some(egui::Theme::Dark));
             let interface = app.session.prefs().interface.clone();
             let revision = app.session.prefs.rev();
-            let saved = store.lock().unwrap().clone().unwrap();
+            // Selecting the current default is a no-op and need not write a preference file.
+            let saved = store.lock().unwrap().clone();
             assert_eq!(interface.appearance_mode, if Tokens::for_kind(kind).dark() { AppearanceMode::Dark } else { AppearanceMode::Light });
             for appearance in [Some(egui::Theme::Dark), Some(egui::Theme::Light), Some(egui::Theme::Dark), None] {
                 appearance_frame(&mut app, &ctx, appearance);
@@ -2248,7 +2249,7 @@ mod tests {
                 assert_eq!(app.ui.theme, kind);
                 assert_eq!(app.session.prefs().interface, interface);
                 assert_eq!(app.session.prefs.rev(), revision);
-                assert_eq!(store.lock().unwrap().as_ref(), Some(&saved));
+                assert_eq!(store.lock().unwrap().as_ref(), saved.as_ref());
             }
         }
     }
