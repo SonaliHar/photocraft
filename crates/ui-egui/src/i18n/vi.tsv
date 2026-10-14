@@ -3728,3 +3728,19 @@ curves	Smooth	Làm mượt
 	Replace	Thay thế
 	{name} was changed by another app after it was opened or saved here.	{name} đã bị một ứng dụng khác thay đổi sau khi được mở hoặc lưu ở đây.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Thay thế bằng tài liệu này, hoặc hủy và dùng Tệp › Lưu thành để giữ cả hai.
+# Generative Fill: Edit mode and reference images
+	Fill selection	Tô vùng chọn
+	Edit selection	Sửa vùng chọn
+	Generate new content in the selection, or remove what is there	Tạo nội dung mới trong vùng chọn hoặc xóa những gì đang có
+	Keep what is in the selection and change only what you ask for	Giữ nội dung trong vùng chọn và chỉ thay đổi phần bạn yêu cầu
+	Describe what to change in the selection: what is there is kept, except what you ask to change (a colour, a text, a material).	Mô tả điều cần thay đổi trong vùng chọn: nội dung hiện có được giữ nguyên, trừ phần bạn yêu cầu thay đổi (màu sắc, chữ, chất liệu).
+	What to change	Điều cần thay đổi
+	Empty: removes what is selected and continues the image through it.	Để trống: xóa nội dung được chọn và tiếp nối hình ảnh qua vùng chọn.
+	Empty: places what the reference images show in the selection.	Để trống: đặt nội dung trong ảnh tham chiếu vào vùng chọn.
+	Reference images	Ảnh tham chiếu
+	Optional: an object or product to show, or a design, colour or look to match.	Không bắt buộc: một vật thể hoặc sản phẩm cần hiển thị, hoặc một thiết kế, màu sắc hay phong cách cần theo.
+	Add Reference…	Thêm tham chiếu…
+	Image File…	Tệp hình ảnh…
+	Open Documents	Tài liệu đang mở
+	The reference images are sent too, at most 1024 pixels on their long side.	Ảnh tham chiếu cũng được gửi đi, cạnh dài tối đa 1024 pixel.
+	In Edit mode the selected area is sent as it is. Reference images you add are sent too.	Ở chế độ Sửa vùng chọn, vùng được chọn được gửi nguyên trạng. Ảnh tham chiếu bạn thêm cũng được gửi đi.
