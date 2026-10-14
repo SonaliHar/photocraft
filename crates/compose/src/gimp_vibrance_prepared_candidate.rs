@@ -2,13 +2,14 @@
 //! No source/default dispatcher admission or original outer filter compositing.
 //! Native source conversion into the declared Linear Float stage is caller-owned.
 use crate::{gimp_vibrance_candidate as source, gimp_vibrance_color_candidate as color};
-use photocraft_algo::gimp::point_vibrance::{Context, FloatConversions, Parameters};
+use photocraft_algo::gimp::point_vibrance::{self, Context, FloatConversions, Parameters};
 use photocraft_cms::Profile;
 use photocraft_doc::xcf_filters::FilterNode;
 use photocraft_geom::Rect;
 use photocraft_raster::{Interrupt, RasterInputError as E};
 pub use source::{EvaluationScope, RgbFloatView, RgbFloatWindow, SourceBinding};
 use std::mem::size_of;
+use std::sync::atomic::{AtomicU64, Ordering};
 const BIND_WORK: u64 = 32;
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
@@ -34,6 +35,18 @@ pub struct PreparedSource<'a> {
     conversions: color::PreparedLinearConversions<'a>,
     ceiling: Limits,
     provider_ceiling: color::Limits,
+    graph_work: AtomicU64,
+    graph_pair_work: AtomicU64,
+}
+/// Preparation/retention remains enclosing-owner charged once. Steady graph work
+/// has immutable consumer and provider ceilings; no constructor reset per ROI.
+#[derive(Clone, Copy, Debug)]
+pub struct GraphPointRequirements {
+    pub retained_bytes: u64,
+    pub scratch_bytes: u64,
+    pub preparation_work_units: u64,
+    pub pixel_work_units: u64,
+    pub remaining_work_units: u64,
 }
 fn poll(c: &Interrupt<'_>) -> Result<(), E> {
     c.check().map_err(|_| E::Cancelled)
@@ -95,7 +108,14 @@ impl<'a> PreparedSource<'a> {
             return Err(E::LimitExceeded);
         }
         poll(c)?;
-        Ok(Self { bound, conversions, ceiling: limits, provider_ceiling })
+        Ok(Self {
+            bound,
+            conversions,
+            ceiling: limits,
+            provider_ceiling,
+            graph_work: AtomicU64::new(plan.work_units),
+            graph_pair_work: AtomicU64::new(retained.preparation_work_units),
+        })
     }
     pub fn original_node(&self) -> &'a FilterNode {
         self.bound.original_node()
@@ -111,6 +131,41 @@ impl<'a> PreparedSource<'a> {
     }
     pub fn scope(&self) -> EvaluationScope {
         self.bound.scope()
+    }
+    pub fn graph_point_requirements(&self, c: &Interrupt<'_>) -> Result<GraphPointRequirements, E> {
+        poll(c)?;
+        self.evaluation_limits(self.ceiling, c)?;
+        let conversion = self.conversions.requirements(c)?;
+        let pixel = add(point_vibrance::POINT_WORK, conversion.work_units)?;
+        let consumer_left = self.ceiling.work_units.saturating_sub(self.graph_work.load(Ordering::Relaxed));
+        let provider_left = self.provider_ceiling.work_units.saturating_sub(self.graph_pair_work.load(Ordering::Relaxed));
+        let calls = consumer_left.checked_div(pixel).ok_or(E::LimitExceeded)?.min(provider_left.checked_div(conversion.work_units).ok_or(E::LimitExceeded)?);
+        let remaining_work_units = calls.checked_mul(pixel).ok_or(E::LimitExceeded)?;
+        Ok(GraphPointRequirements {
+            retained_bytes: add(conversion.retained_bytes, consumer_bytes()?)?,
+            scratch_bytes: add(conversion.scratch_bytes, point_vibrance::POINT_SCRATCH)?,
+            preparation_work_units: add(conversion.preparation_work_units, BIND_WORK)?,
+            pixel_work_units: pixel,
+            remaining_work_units,
+        })
+    }
+    /// Consumer must prepay the genuine steady pixel work/scratch in its active
+    /// graph ledger before calling. Prospective remaining-work reads can race;
+    /// these atomic admissions still refuse privately, with no refunds on failure.
+    pub fn evaluate_graph_pixel_with_interrupt(&self, input: [f32; 4], actual: Context, c: &Interrupt<'_>) -> Result<[f32; 4], E> {
+        poll(c)?;
+        if actual != self.context() {
+            return Err(E::UnsupportedConversion);
+        }
+        let conversion = self.conversions.requirements(c)?;
+        let pixel = add(point_vibrance::POINT_WORK, conversion.work_units)?;
+        self.graph_work
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(pixel).filter(|n| *n <= self.ceiling.work_units))
+            .map_err(|_| E::LimitExceeded)?;
+        self.graph_pair_work
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(conversion.work_units).filter(|n| *n <= self.provider_ceiling.work_units))
+            .map_err(|_| E::LimitExceeded)?;
+        point_vibrance::evaluate(input, self.parameters(), actual, &self.conversions, c)
     }
     fn evaluation_limits(&self, limits: Limits, c: &Interrupt<'_>) -> Result<source::Limits, E> {
         poll(c)?;
@@ -257,5 +312,41 @@ mod tests {
             Err(E::LimitExceeded)
         ));
         assert_eq!(original.to_bytes().as_slice(), before.as_slice());
+    }
+    #[test]
+    fn graph_pixels_reuse_prepared_math_preserve_raw_alpha_and_originals() {
+        let node = node();
+        let before = node.clone();
+        let original = photocraft_cms::Builtin::AdobeRgbCompat.profile();
+        let prepared = PreparedSource::prepare(&node, binding(), original, Limits::default(), &Interrupt::NONE).unwrap();
+        let pixels = [[0.25, 0.5, 0.75, -0.0], [0.5, 0.25, 0.75, 1.0]];
+        let view = RgbFloatView { extent: Rect::new(-1, 2, 1, 3), pixels: &pixels, context: context() };
+        let array = prepared.evaluate(view, view.extent, Limits::default(), &Interrupt::NONE).unwrap();
+        let before_work = prepared.graph_point_requirements(&Interrupt::NONE).unwrap();
+        for (pixel, expected) in pixels.into_iter().zip(array.pixels) {
+            let actual = prepared.evaluate_graph_pixel_with_interrupt(pixel, context(), &Interrupt::NONE).unwrap();
+            assert_eq!(actual.map(f32::to_bits), expected.map(f32::to_bits));
+            assert_eq!(actual[3].to_bits(), pixel[3].to_bits());
+        }
+        let after = prepared.graph_point_requirements(&Interrupt::NONE).unwrap();
+        assert_eq!(before_work.remaining_work_units - after.remaining_work_units, 2 * before_work.pixel_work_units);
+        assert_eq!(before_work.preparation_work_units, after.preparation_work_units);
+        assert_eq!(prepared.original_node(), &before);
+    }
+    #[test]
+    fn graph_cumulative_quota_has_no_per_roi_reset_and_cancel_has_no_refund() {
+        let node = node();
+        let original = photocraft_cms::Builtin::AdobeRgbCompat.profile();
+        let constructor = preparation_requirements(&node, binding(), original, Limits::default(), &Interrupt::NONE).unwrap();
+        let limits = Limits { work_units: constructor.work_units + 384, ..Limits::default() };
+        let prepared = PreparedSource::prepare(&node, binding(), original, limits, &Interrupt::NONE).unwrap();
+        let before = prepared.graph_point_requirements(&Interrupt::NONE).unwrap();
+        assert_eq!(before.remaining_work_units, 384);
+        let pixel = [0.25, 0.5, 0.75, -0.0];
+        assert_eq!(prepared.evaluate_graph_pixel_with_interrupt(pixel, context(), &Interrupt::cancel_only(&|| true)), Err(E::Cancelled));
+        assert_eq!(prepared.graph_point_requirements(&Interrupt::NONE).unwrap().remaining_work_units, 384);
+        prepared.evaluate_graph_pixel_with_interrupt(pixel, context(), &Interrupt::NONE).unwrap();
+        assert_eq!(prepared.graph_point_requirements(&Interrupt::NONE).unwrap().remaining_work_units, 0);
+        assert_eq!(prepared.evaluate_graph_pixel_with_interrupt(pixel, context(), &Interrupt::NONE), Err(E::LimitExceeded));
     }
 }

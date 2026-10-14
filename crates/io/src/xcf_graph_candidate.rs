@@ -34,6 +34,120 @@ fn unsupported(message:impl std::fmt::Display)->IoError{IoError::Unsupported(for
 fn poll(c:&Interrupt<'_>)->Result<(),IoError>{c.check().map_err(|_|IoError::Cancelled)}
 fn add(a:u64,b:u64)->Result<u64,IoError>{a.checked_add(b).ok_or_else(||unsupported("accounting overflow"))}
 fn mul(a:u64,b:u64)->Result<u64,IoError>{a.checked_mul(b).ok_or_else(||unsupported("accounting overflow"))}
+/// Prospective owned mapper/topology/planner index reservation. Counts come from
+/// the borrowed AST; this is a conservative private-map reserve, not heap/RSS.
+/// Resolver-returned nested argument buffers and opaque validator captures must
+/// be admitted by their provider before its callback; they are not inferred here.
+#[derive(Clone, Copy, Debug)]
+pub struct GraphIndexRequirements {
+    pub known_index_bytes: u64,
+    pub work_units: u64,
+    pub requires_provider_index_admission: bool,
+}
+/// Allocation-free preparation used by explicit aggregate callers. Legacy
+/// map_with_schemas remains unchanged. Caller prepays work before this traversal.
+pub fn prospective_index_requirements(
+    source: &StoredGraph,
+    schemas: &PreparedSchemaIndex<'_, '_>,
+    limits: Limits,
+    control: &Interrupt<'_>,
+) -> Result<GraphIndexRequirements, IoError> {
+    use photocraft_xcf::{GraphEntry, GraphValue};
+    let max = Limits::default();
+    let m = limits.mapping;
+    let d = max.mapping;
+    if m.nodes > d.nodes
+        || m.edges > d.edges
+        || m.depth > d.depth
+        || m.entries > d.entries
+        || m.resident_bytes > d.resident_bytes
+        || limits.work_units > max.work_units
+    {
+        return Err(unsupported("index limits may only be lowered"));
+    }
+    fn walk(
+        entries: &[GraphEntry],
+        depth: usize,
+        limits: GraphMappingLimits,
+        count: &mut [u64; 5],
+        used: &mut u64,
+        remaining: &mut u64,
+        control: &Interrupt<'_>,
+    ) -> Result<(), IoError> {
+        poll(control)?;
+        if depth > limits.depth {
+            return Err(unsupported("index source depth"));
+        }
+        for entry in entries {
+            poll(control)?;
+            // Constant-time enum/name shape inspection determines the exact
+            // entry + node + derived-edge debit BEFORE its count/child traversal.
+            let debit = match entry {
+                GraphEntry::Operation { .. } => 128,
+                GraphEntry::Property { value: GraphValue::Chain(_), .. } => 96,
+                GraphEntry::Property { name, .. } if name == "ref" => 96,
+                _ => 64,
+            };
+            *remaining = remaining.checked_sub(debit).ok_or_else(|| unsupported("index preparation work"))?;
+            *used = add(*used, debit)?;
+            count[0] = add(count[0], 1)?;
+            if count[0] > limits.entries as u64 {
+                return Err(unsupported("index source entries"));
+            }
+            match entry {
+                GraphEntry::Operation { .. } => count[1] = add(count[1], 1)?,
+                GraphEntry::Property { name, value, .. } => match value {
+                    GraphValue::Literal { .. } => {
+                        if name == "id" {
+                            count[3] = add(count[3], 1)?;
+                        } else if name == "ref" {
+                            count[4] = add(count[4], 1)?;
+                        } else {
+                            count[2] = add(count[2], 1)?;
+                        }
+                    }
+                    GraphValue::Chain(children) => {
+                        count[4] = add(count[4], 1)?;
+                        walk(children, depth + 1, limits, count, used, remaining, control)?;
+                    }
+                },
+            }
+        }
+        Ok(())
+    }
+    let mut count = [0; 5];
+    let mut used = 0;
+    let mut remaining = limits.work_units;
+    walk(&source.entries, 0, m, &mut count, &mut used, &mut remaining, control)?;
+    let [entries, nodes, properties, aliases, connections] = count;
+    if nodes != source.nodes || nodes > m.nodes as u64 || source.edges > m.edges as u64 {
+        return Err(unsupported("index source node/edge declaration"));
+    }
+    // Each operation/aux/ref can create at most one edge in the existing mapper.
+    // Use this counted upper even before the later exact topology proof.
+    let edges = add(nodes, connections)?;
+    let node_slots =
+        mul(nodes, (std::mem::size_of::<(GraphNodeId, &str, Vec<crate::xcf_graphs::GraphLiteral<'_>>)>() + std::mem::size_of::<GraphNode>()) as u64)?;
+    let property_slots = mul(
+        properties,
+        (std::mem::size_of::<crate::xcf_graphs::GraphLiteral<'_>>() + std::mem::size_of::<photocraft_doc::xcf_filters::FilterArgument>()) as u64,
+    )?;
+    let alias_slots = mul(aliases, std::mem::size_of::<(&str, GraphNodeId)>() as u64)?;
+    // Pending enum endpoints, final edges and simultaneous topology pair vectors.
+    let edge_slots = mul(edges, 128)?;
+    let queues = mul(add(nodes, 1)?, (2 * std::mem::size_of::<usize>()) as u64)?;
+    // Reuses the bridge's existing planner/hash/index envelope verbatim.
+    let planner = add(mul(add(add(nodes, edges)?, 1)?, 512)?, 2 << 20)?;
+    let schema = schemas.requirements();
+    let held = add(schema.owned_index_bytes, schema.held_schema_index_bytes)?;
+    let known = add(add(add(add(add(node_slots, property_slots)?, alias_slots)?, edge_slots)?, queues)?, add(planner, held)?)?;
+    let work = add(mul(entries, 64)?, add(mul(nodes, 32)?, mul(edges, 32)?)?)?;
+    if work != used {
+        return Err(unsupported("index preparation debit differs from counted formula"));
+    }
+    poll(control)?;
+    Ok(GraphIndexRequirements { known_index_bytes: known, work_units: work, requires_provider_index_admission: true })
+}
 fn port(graph:&FilterGraph,id:GraphNodeId,direction:PortDirection,name:&str,allowed:&mut PortValidator<'_>)->bool{
     if graph.input==Some(id){return direction==PortDirection::Output&&allowed(None,direction,name);}
     graph.nodes.iter().find(|node|node.id==id).is_some_and(|node|allowed(Some(node),direction,name))
@@ -101,6 +215,22 @@ mod tests {
     use photocraft_doc::xcf_filters::{OperationIdentity,GraphVersionOrigin};
     use photocraft_algo::gimp::typed_schema::{PreparedSchema,Schema,Limits as SchemaLimits};
     fn source()->StoredGraph{StoredGraph{entries:vec![photocraft_xcf::GraphEntry::Operation{identity:"gegl:nop".into(),start:0,end:8}],nodes:1,edges:1}}
+    #[test]
+    fn prospective_index_uses_counted_structures_not_full_resident_quota() {
+        let index=PreparedSchemaIndex::prepare(&[],SchemaLimits::default(),&Interrupt::NONE).unwrap();
+        let req=prospective_index_requirements(&source(),&index,Limits::default(),&Interrupt::NONE).unwrap();
+        assert!(req.known_index_bytes<16<<20);
+        assert!(req.requires_provider_index_admission);
+        assert_eq!(req.work_units,128);
+        let mut low=Limits::default();low.work_units=127;
+        assert!(prospective_index_requirements(&source(),&index,low,&Interrupt::NONE).is_err());
+        low.work_units=0;
+        assert!(prospective_index_requirements(&source(),&index,low,&Interrupt::NONE).is_err());
+        let stop=||true;
+        assert!(matches!(prospective_index_requirements(&source(),&index,Limits::default(),&Interrupt::cancel_only(&stop)),Err(IoError::Cancelled)));
+        let mut false_count=source();false_count.nodes=2;
+        assert!(prospective_index_requirements(&false_count,&index,Limits::default(),&Interrupt::NONE).is_err());
+    }
     #[test]
     fn explicit_schema_and_ports_preserve_pipeline_spans_and_native_graph_value() {
         let identity=OperationIdentity{name:"gegl:nop".into(),stored_version:"caller-version".into(),schema_epoch:"caller-epoch".into()};

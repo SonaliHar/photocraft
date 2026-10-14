@@ -225,6 +225,12 @@ pub use configured_source_candidate::{
 #[path = "xcf_filters/levels_source_candidate.rs"]
 mod levels_source_candidate;
 pub use levels_source_candidate::{LevelsMappingLimits, LevelsMappingRequirements, MappedLevelsSource, map_retained_levels_source};
+#[path = "xcf_filters/graph_source_candidate.rs"]
+mod graph_source_candidate;
+pub use graph_source_candidate::{
+    ExceptionalGraphProvenance, GraphOuterMetadata, GraphSourceAuthority, GraphSourceLimits, GraphSourceRequirements,
+    MappedGraphSource, map_exceptional_graph_source,
+};
 
 fn color_to_alpha_arguments<P>(effect: &Effect<P>) -> Result<Vec<FilterArgument>, IoError> {
     if effect.version.as_deref() != Some("0:0") || effect.arguments.len() != 3 {

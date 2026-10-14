@@ -124,64 +124,210 @@ pub fn try_stretch_contrast(
     if peak > limits.resident_bytes.min(MAX_CHECKED_RASTER_BYTES) {
         return Err(RasterInputError::LimitExceeded);
     }
-    source.try_validate_tile_origins_with(interrupt)?;
-    let scratch_size = usize::try_from(tile_bytes).map_err(|_| RasterInputError::LimitExceeded)?;
-    let mut scratch = Vec::new();
-    scratch.try_reserve_exact(scratch_size).map_err(|_| RasterInputError::AllocationFailed)?;
-    scratch.resize(scratch_size, 0);
-    let mut minima = [f64::INFINITY; 3];
-    let mut maxima = [f64::NEG_INFINITY; 3];
-    for tile in input_extent.tiles() {
+    let prepared = PreparedStretch::prepare_internal(source, input_extent, _configuration, limits, interrupt)?;
+    prepared.apply_with_limits(output, limits, interrupt)
+}
+
+/// Conservative known native payload/map/header and producer tile capacities.
+/// Borrowed whole-owner/provider backing beyond these surfaces is caller-held.
+#[derive(Clone, Copy, Debug)]
+pub struct StretchRequirements {
+    pub retained_bytes: u64,
+    pub peak_resident_bytes: u64,
+    pub index_bytes: u64,
+    pub work_units: u64,
+}
+pub struct PreparedStretch<'source> {
+    source: &'source Surface,
+    extent: Rect,
+    minima: [f64; 3],
+    spans: [f64; 3],
+    limits: GlobalLimits,
+    remaining_work: std::sync::atomic::AtomicU64,
+    preparation: StretchRequirements,
+}
+fn checked_add(a: u64, b: u64) -> Result<u64, RasterInputError> {
+    a.checked_add(b).ok_or(RasterInputError::LimitExceeded)
+}
+fn checked_mul(a: u64, b: u64) -> Result<u64, RasterInputError> {
+    a.checked_mul(b).ok_or(RasterInputError::LimitExceeded)
+}
+fn source_charge(source: &Surface) -> Result<u64, RasterInputError> {
+    if source.format() != PixelFormat::RGBA32F || source.default_bytes().len() != 16 {
+        return Err(RasterInputError::UnsupportedConversion);
+    }
+    checked_add(checked_mul(source.tile_count() as u64, 65536 * 16 + 256)?, 16)
+}
+/// O(1) prospective admission; source words are validated only after reservation.
+pub fn preparation_requirements(source: &Surface, extent: Rect) -> Result<StretchRequirements, RasterInputError> {
+    if extent.is_empty() {
+        return Err(RasterInputError::InvalidBounds);
+    }
+    checked_region_byte_len(extent, source.format())?;
+    tile_count(extent)?;
+    let source_bytes = source_charge(source)?;
+    let header = std::mem::size_of::<PreparedStretch<'_>>() as u64;
+    let work = checked_add(checked_mul(extent.size().area(), 64)?, checked_mul(source.tile_count() as u64, 256)?)?;
+    Ok(StretchRequirements {
+        retained_bytes: checked_add(source_bytes, header)?,
+        peak_resident_bytes: checked_add(source_bytes, 65536 * 16 * 2 + 4096)?,
+        index_bytes: checked_add(checked_mul(source.tile_count() as u64, 256)?, header)?,
+        work_units: work,
+    })
+}
+impl<'source> PreparedStretch<'source> {
+    pub fn source(&self) -> &'source Surface {
+        self.source
+    }
+    pub fn extent(&self) -> Rect {
+        self.extent
+    }
+    pub fn requirements(&self) -> StretchRequirements {
+        self.preparation
+    }
+    pub fn remaining_work(&self) -> u64 {
+        self.remaining_work.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    /// One complete ordered global reduction. All later ROIs borrow this same
+    /// immutable source. Caller limits may only lower the standard ceilings.
+    pub fn prepare(
+        source: &'source Surface,
+        extent: Rect,
+        config: StretchContrast,
+        limits: GlobalLimits,
+        interrupt: &Interrupt<'_>,
+    ) -> Result<Self, RasterInputError> {
+        let standard = GlobalLimits::default();
+        if limits.resident_bytes == 0 || limits.resident_bytes > standard.resident_bytes || limits.work_units > standard.work_units {
+            return Err(RasterInputError::LimitExceeded);
+        }
+        Self::prepare_internal(source, extent, config, limits, interrupt)
+    }
+    fn prepare_internal(
+        source: &'source Surface,
+        input_extent: Rect,
+        _config: StretchContrast,
+        limits: GlobalLimits,
+        interrupt: &Interrupt<'_>,
+    ) -> Result<Self, RasterInputError> {
         poll(interrupt)?;
-        let part = tile.rect().intersect(&input_extent);
-        let length = checked_region_byte_len(part, source.format())?;
-        let bytes = scratch.get_mut(..length).ok_or(RasterInputError::LengthMismatch)?;
-        source.try_read_interleaved_into_with(part, bytes, interrupt)?;
-        for (index, pixel) in bytes.as_chunks::<16>().0.iter().enumerate() {
-            if index.is_multiple_of(4096) {
-                poll(interrupt)?;
-            }
-            validate_pixel(pixel)?;
-            for ((sample, minimum), maximum) in pixel.as_chunks::<4>().0.iter().take(3).zip(&mut minima).zip(&mut maxima) {
-                let value = f64::from(f32::from_ne_bytes(*sample));
-                *minimum = minimum.min(value);
-                *maximum = maximum.max(value);
+        let preparation = preparation_requirements(source, input_extent)?;
+        let remaining = limits.work_units.checked_sub(preparation.work_units).ok_or(RasterInputError::LimitExceeded)?;
+        if preparation.peak_resident_bytes > limits.resident_bytes.min(MAX_CHECKED_RASTER_BYTES) {
+            return Err(RasterInputError::LimitExceeded);
+        }
+        source.try_validate_tile_origins_with(interrupt)?;
+        for (_, tile) in source.tiles() {
+            poll(interrupt)?;
+            if tile.bytes().len() != 65536 * 16 {
+                return Err(RasterInputError::LengthMismatch);
             }
         }
-    }
-    let mut spans = [0.0; 3];
-    for ((span, maximum), minimum) in spans.iter_mut().zip(maxima).zip(minima) {
-        *span = maximum - minimum;
-        if !span.is_finite() || *span <= 0.0 {
-            return Err(RasterInputError::UnsupportedConversion);
+        let scratch_size = 65536 * 16;
+        let mut scratch = Vec::new();
+        scratch.try_reserve_exact(scratch_size).map_err(|_| RasterInputError::AllocationFailed)?;
+        if scratch.capacity() as u64 > 65536 * 16 * 2 {
+            return Err(RasterInputError::LimitExceeded);
         }
-    }
-    poll(interrupt)?;
-    let mut result = source.clone();
-    for tile in output.tiles() {
-        poll(interrupt)?;
-        let part = tile.rect().intersect(&output);
-        let length = checked_region_byte_len(part, source.format())?;
-        let bytes = scratch.get_mut(..length).ok_or(RasterInputError::LengthMismatch)?;
-        source.try_read_interleaved_into_with(part, bytes, interrupt)?;
-        for (index, pixel) in bytes.as_chunks_mut::<16>().0.iter_mut().enumerate() {
-            if index.is_multiple_of(4096) {
-                poll(interrupt)?;
-            }
-            // All input samples were checked in the immutable first pass.
-            for (channel, (minimum, span)) in minima.iter().zip(spans).enumerate() {
-                let sample = pixel.as_chunks::<4>().0.get(channel).ok_or(RasterInputError::LengthMismatch)?;
-                let value = (f64::from(f32::from_ne_bytes(*sample)) - minimum) / span;
-                if !value.is_finite() || !(0.0..=1.0).contains(&value) {
-                    return Err(RasterInputError::InvalidSample);
+        scratch.resize(scratch_size, 0);
+        let mut minima = [f64::INFINITY; 3];
+        let mut maxima = [f64::NEG_INFINITY; 3];
+        for tile in input_extent.tiles() {
+            poll(interrupt)?;
+            let part = tile.rect().intersect(&input_extent);
+            let length = checked_region_byte_len(part, source.format())?;
+            let bytes = scratch.get_mut(..length).ok_or(RasterInputError::LengthMismatch)?;
+            source.try_read_interleaved_into_with(part, bytes, interrupt)?;
+            for (index, pixel) in bytes.as_chunks::<16>().0.iter().enumerate() {
+                if index.is_multiple_of(4096) {
+                    poll(interrupt)?;
                 }
-                try_write_sample_f64(pixel, SampleType::F32, channel, value).map_err(|_| RasterInputError::InvalidSample)?;
+                validate_pixel(pixel)?;
+                for ((sample, minimum), maximum) in pixel.as_chunks::<4>().0.iter().take(3).zip(&mut minima).zip(&mut maxima) {
+                    let value = f64::from(f32::from_ne_bytes(*sample));
+                    *minimum = minimum.min(value);
+                    *maximum = maximum.max(value);
+                }
             }
         }
-        result.try_write_interleaved_with(part, bytes, interrupt)?;
+        let mut spans = [0.0; 3];
+        for ((span, maximum), minimum) in spans.iter_mut().zip(maxima).zip(minima) {
+            *span = maximum - minimum;
+            if !span.is_finite() || *span <= 0.0 {
+                return Err(RasterInputError::UnsupportedConversion);
+            }
+        }
+        poll(interrupt)?;
+        Ok(Self { source, extent: input_extent, minima, spans, limits, remaining_work: std::sync::atomic::AtomicU64::new(remaining), preparation })
     }
-    poll(interrupt)?;
-    Ok(result)
+    /// Reads and writes only the contained ROI; no repeated extrema pass.
+    pub fn application_requirements(&self, output: Rect) -> Result<StretchRequirements, RasterInputError> {
+        if output.is_empty() || !self.extent.contains_rect(&output) {
+            return Err(RasterInputError::InvalidBounds);
+        }
+        checked_region_byte_len(output, self.source.format())?;
+        let output_tiles = tile_count(output)?;
+        let source_tiles = self.source.tile_count() as u64;
+        let source_bytes = source_charge(self.source)?;
+        let peak = checked_add(checked_add(checked_mul(source_bytes, 2)?, checked_mul(output_tiles, 65536 * 16 + 256)?)?, 65536 * 16 * 3 + 4096)?;
+        let work =
+            checked_add(checked_mul(output.size().area(), 64)?, checked_mul(checked_mul(output_tiles, checked_add(source_tiles, output_tiles)?)?, 256)?)?;
+        Ok(StretchRequirements {
+            retained_bytes: checked_add(source_bytes, checked_mul(output_tiles, 65536 * 16 + 256)?)?,
+            peak_resident_bytes: peak,
+            index_bytes: checked_mul(checked_add(source_tiles, output_tiles)?, 512)?,
+            work_units: work,
+        })
+    }
+    pub fn apply_with_limits(&self, output: Rect, limits: GlobalLimits, interrupt: &Interrupt<'_>) -> Result<Surface, RasterInputError> {
+        poll(interrupt)?;
+        if limits.resident_bytes > self.limits.resident_bytes || limits.work_units > self.limits.work_units {
+            return Err(RasterInputError::LimitExceeded);
+        }
+        let needs = self.application_requirements(output)?;
+        if needs.peak_resident_bytes > limits.resident_bytes.min(MAX_CHECKED_RASTER_BYTES) || needs.work_units > limits.work_units {
+            return Err(RasterInputError::LimitExceeded);
+        }
+        self.remaining_work
+            .try_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |left| left.checked_sub(needs.work_units))
+            .map_err(|_| RasterInputError::LimitExceeded)?;
+        // No reset/refund on cancellation or failure; concurrent ROI debits cannot overdraw.
+        let source = self.source;
+        let minima = self.minima;
+        let spans = self.spans;
+        let scratch_size = 65536 * 16;
+        let mut scratch = Vec::new();
+        scratch.try_reserve_exact(scratch_size).map_err(|_| RasterInputError::AllocationFailed)?;
+        if scratch.capacity() as u64 > 65536 * 16 * 2 {
+            return Err(RasterInputError::LimitExceeded);
+        }
+        scratch.resize(scratch_size, 0);
+        let mut result = source.clone();
+        for tile in output.tiles() {
+            poll(interrupt)?;
+            let part = tile.rect().intersect(&output);
+            let length = checked_region_byte_len(part, source.format())?;
+            let bytes = scratch.get_mut(..length).ok_or(RasterInputError::LengthMismatch)?;
+            source.try_read_interleaved_into_with(part, bytes, interrupt)?;
+            for (index, pixel) in bytes.as_chunks_mut::<16>().0.iter_mut().enumerate() {
+                if index.is_multiple_of(4096) {
+                    poll(interrupt)?;
+                }
+                // All input samples were checked in the immutable first pass.
+                for (channel, (minimum, span)) in minima.iter().zip(spans).enumerate() {
+                    let sample = pixel.as_chunks::<4>().0.get(channel).ok_or(RasterInputError::LengthMismatch)?;
+                    let value = (f64::from(f32::from_ne_bytes(*sample)) - minimum) / span;
+                    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                        return Err(RasterInputError::InvalidSample);
+                    }
+                    try_write_sample_f64(pixel, SampleType::F32, channel, value).map_err(|_| RasterInputError::InvalidSample)?;
+                }
+            }
+            result.try_write_interleaved_with(part, bytes, interrupt)?;
+        }
+        poll(interrupt)?;
+        Ok(result)
+    }
 }
 
 fn validate_pixel(pixel: &[u8; 16]) -> Result<(), RasterInputError> {
@@ -227,6 +373,40 @@ mod tests {
         let bytes: Vec<_> = values.iter().flatten().flat_map(|value| value.to_ne_bytes()).collect();
         surface.try_write_interleaved_with(Rect::new(0, 0, values.len() as i32, 1), &bytes, &Interrupt::NONE).unwrap();
         surface
+    }
+
+    #[test]
+    fn split_preparation_two_rois_equal_legacy_and_cumulative_quota_cannot_reset() {
+        let input = source(&[[0., 0.125, 0.25, 1.], [0.25, 0.5, 0.5, 1.], [0.5, 0.875, 0.75, 1.]]);
+        let extent = Rect::new(0, 0, 3, 1);
+        let roi = Rect::new(1, 0, 2, 1);
+        let before = input.clone();
+        let prep = preparation_requirements(&input, extent).unwrap();
+        let repeated = tile_count(roi).unwrap() * (input.tile_count() as u64 + tile_count(roi).unwrap()) * 256;
+        let apply_work = roi.size().area() * 64 + repeated;
+        let limits = GlobalLimits { resident_bytes: GlobalLimits::default().resident_bytes, work_units: prep.work_units + apply_work };
+        let prepared = PreparedStretch::prepare(&input, extent, configuration(), limits, &Interrupt::NONE).unwrap();
+        let result = prepared.apply_with_limits(roi, limits, &Interrupt::NONE).unwrap();
+        let legacy = try_stretch_contrast(&input, roi, extent, configuration(), limits, &Interrupt::NONE).unwrap();
+        assert_eq!(result, legacy);
+        assert_eq!(result.try_read_interleaved(roi).unwrap(), [0.5f32, 0.5, 0.5, 1.].into_iter().flat_map(f32::to_ne_bytes).collect::<Vec<_>>());
+        assert_eq!(prepared.remaining_work(), 0);
+        assert!(matches!(prepared.apply_with_limits(roi, limits, &Interrupt::NONE), Err(RasterInputError::LimitExceeded)));
+        assert_eq!(input, before);
+    }
+    #[test]
+    fn late_roi_cancellation_keeps_source_and_consumes_prepaid_work() {
+        let input = source(&[[0., 0., 0., 1.], [1., 1., 1., 1.]]);
+        let before = input.clone();
+        let extent = Rect::new(0, 0, 2, 1);
+        let limits = GlobalLimits::default();
+        let prepared = PreparedStretch::prepare(&input, extent, configuration(), limits, &Interrupt::NONE).unwrap();
+        let initial = prepared.remaining_work();
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let cancelled = || calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 1;
+        assert!(matches!(prepared.apply_with_limits(extent, limits, &Interrupt::cancel_only(&cancelled)), Err(RasterInputError::Cancelled)));
+        assert!(prepared.remaining_work() < initial);
+        assert_eq!(input, before);
     }
 
     #[test]
