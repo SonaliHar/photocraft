@@ -3151,3 +3151,4 @@ curves	Smooth	Lisser
 	Technique	Technique
 	Chisel Hard	Ciselage dur
 	Chisel Soft	Ciselage doux
+	Open color-less EXR as ACEScg	Ouvrir les EXR sans espace colorimétrique en ACEScg

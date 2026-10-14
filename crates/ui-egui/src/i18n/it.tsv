@@ -4112,6 +4112,7 @@ navigator	Zoom	Zoom
 	Technique	Tecnica
 	Chisel Hard	Cesello duro
 	Chisel Soft	Cesello morbido
+	Open color-less EXR as ACEScg	Apri gli EXR senza spazio colore come ACEScg
 
 # Color management, Liquify, glyph group, warp and Camera Raw labels the Serbian, Vietnamese and Japanese catalogs added
 	Adobe-rgb-compat	Adobe RGB (compatibile)
