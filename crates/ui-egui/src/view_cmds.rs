@@ -640,10 +640,11 @@ fn flip_horizontal(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> 
     let index = app.session.active_index();
     app.ui.view.flip_horizontal = next;
 
-    if let (Some(xf), Some(size), Some(index)) = (xf, size, index) {
-        if xf.zoom.is_finite() && xf.zoom.abs() > f32::EPSILON {
-            app.ui.views[index].center = center_for_flipped_view(xf, size, next);
-        }
+    if let (Some(xf), Some(size), Some(index)) = (xf, size, index)
+        && xf.zoom.is_finite()
+        && xf.zoom.abs() > f32::EPSILON
+    {
+        app.ui.views[index].center = center_for_flipped_view(xf, size, next);
     }
     Ok(json!(next))
 }
