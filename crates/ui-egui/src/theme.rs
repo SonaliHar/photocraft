@@ -212,7 +212,7 @@ impl Tokens {
         if kind == ThemeKind::Pro {
             // Shared ArtCraft standard-dark roles, adapted after preset selection so
             // measured brightness levels and named themes retain their own palettes.
-            let roles = craft_ui::theme::SuiteDarkPalette::ARTCRAFT;
+            let roles = craft_ui::theme::SuitePalette::ARTCRAFT_DARK;
             t.chrome = roles.chrome;
             t.dock = roles.window;
             t.card = roles.panel;
@@ -1114,7 +1114,7 @@ mod tests {
 
     #[test]
     fn pro_adapter_reads_shared_roles_and_preserves_document_and_semantic_colors() {
-        let roles = craft_ui::theme::SuiteDarkPalette::ARTCRAFT;
+        let roles = craft_ui::theme::SuitePalette::ARTCRAFT_DARK;
         let dark = Tokens::for_kind(ThemeKind::Pro);
         assert_eq!(dark.chrome, roles.chrome);
         assert_eq!(dark.dock, roles.window);
