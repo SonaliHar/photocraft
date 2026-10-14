@@ -6,6 +6,7 @@ mod cr3;
 mod development_limits;
 mod dng;
 mod hostile;
+mod nef_packed;
 mod raf;
 mod raw_corpus;
 mod vendor_codecs;
