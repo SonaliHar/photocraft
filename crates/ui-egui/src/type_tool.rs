@@ -2668,13 +2668,7 @@ mod tests {
         let ctx = egui::Context::default();
         ctx.begin_pass(egui::RawInput {
             time: Some(10.5),
-            events: vec![egui::Event::Key {
-                key: egui::Key::ArrowRight,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: egui::Modifiers::NONE,
-            }],
+            events: vec![egui::Event::Key { key: egui::Key::ArrowRight, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }],
             ..Default::default()
         });
         handle_keys(&mut app, &ctx);
