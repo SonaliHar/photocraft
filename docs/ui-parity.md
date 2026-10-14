@@ -1,6 +1,6 @@
 # UI parity: tools, handles, modifiers and feel
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (current background transform jobs and Bicubic sampling; isolated channel transforms, cached native GPU previews and coverage/linked-mask Warp fixes; menu bar from the keyboard, #4988; Crop tool Content-Aware Fill; on-canvas corner radius widgets, TOOL-214-12; Curvature Pen edits the active path; Clip Thumbnails to Layer Bounds; Pen ⇧ 45°; last selected tool restored at launch; Layers panel filter-type dropdown with Kind, Name and Mode, #5048; Free Transform box and marching ants follow the selection, #5297; History: the trash deletes the selected snapshot, rows drag onto the trash, #5324; smart filter reordering by drag; smart object perspective row corrected to done, #426; Free Transform H/V skew fields; toolbar tool shortcuts can be reassigned; ⇧-dragged guides land on ruler ticks; layer and selection keys; tool keys; spring-loaded tool letters; type formatting keys; Pen Auto Add/Delete, #4144; smart filter rows; stale missing-tool rows corrected: Color Replacement, Red Eye and the Add/Delete Anchor Point pair are live toolbar tools, Frame landed; no percentage changed) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (guide keys and clicks; menu bar from the keyboard, #4988; Crop tool Content-Aware Fill; on-canvas corner radius widgets, TOOL-214-12; Curvature Pen edits the active path; Clip Thumbnails to Layer Bounds; Pen ⇧ 45°; last selected tool restored at launch; Layers panel filter-type dropdown with Kind, Name and Mode, #5048; Free Transform box and marching ants follow the selection, #5297; History: the trash deletes the selected snapshot, rows drag onto the trash, #5324; smart filter reordering by drag; smart object perspective row corrected to done, #426; Free Transform H/V skew fields; toolbar tool shortcuts can be reassigned; ⇧-dragged guides land on ruler ticks; layer and selection keys; tool keys; spring-loaded tool letters; type formatting keys; Pen Auto Add/Delete, #4144; smart filter rows; stale missing-tool rows corrected: Color Replacement, Red Eye and the Add/Delete Anchor Point pair are live toolbar tools, Frame landed; no percentage changed) · **Target:** Adobe Photoshop 2026
 
 How PhotoCraft's direct manipulation compares with Photoshop 2026 (27.11.0): the toolbox, the
 handles and modifier keys of each gesture, nudging, snapping, numeric precision, navigation,
@@ -56,6 +56,8 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Last selected tool restored after quitting and relaunching; temporary tool switches excluded | done | `tool_memory.rs`; `prefs_ui::tests::selected_tool_survives_a_restart_without_option_changes`, `selected_tool_excludes_temporary_switches` |
 
 ## Free Transform (⌘T) and transform handles
+
+> **Channel transform update · 2026-10-14 · minor:** captured targets remain locked while every channel eye stays usable, including during background commits. Native-depth previews, Warp coverage and linked masks have regression coverage; aggregate estimates are unchanged.
 
 `transform_tool.rs` (3,158 lines), behaviour summary in [`ui-design.md`](ui-design.md#interaction-models-match-photoshop-cc).
 
@@ -232,6 +234,9 @@ Paragraph; the rest open as in-app floating windows.
 | 2026-10-13 | minor | Stale "missing tool" rows corrected against main: Color Replacement (`paint.colorReplacement`), Red Eye (`paint.redEye`) and Add/Delete Anchor Point (the P flyout cycle) are live toolbar tools, so only Art History Brush is missing; no percentage or estimate changed |
 | 2026-10-13 | minor | Smart object perspective (non-affine) corrected to done: #426 landed four-corner placements with PSD round trip; scorecard FILE-215-6 flipped |
 | 2026-10-10 | major | First version, from a source audit against Photoshop 2026 27.11.0's shortcuts file and the open issues |
+| 2026-10-12 | minor | Isolated colour, alpha/spot, Quick Mask and linked/unlinked raster-mask transforms; captured target, live eyes, native-depth preview/commit and undo regressions |
+| 2026-10-13 | minor | Cached GPU previews for isolated RGB transforms; scoped CPU fallback and reproducible 24 MP hardware benchmark; reviewed scalar coverage, curved Warp/footprint filtering and linked-mask frame regressions; aggregate percentages unchanged |
+| 2026-10-13 | minor | Integrated upstream Bicubic weights/reduction prefilter, background Free Transform commit/cancel and channel caches; isolated target remains locked while the job runs, with eyes usable; regression coverage expanded. Aggregate percentages unchanged. |
 | 2026-10-12 | minor | Closed #3632: Distort and Ctrl/Cmd corner drags snap actual corners to guides and intersections; shared guide snapping respects Extras and Canvas Guides visibility, with offset, visibility and constrained-alignment regressions |
 | 2026-10-10 | minor | Fixed Crop live resize snapping feedback and outdated-camera rendering, applied ratios immediately to centred inscribed previews, and removed two-point options-bar overflow; added pointer, rendering, dropdown/Enter, Swap/X and scrolling regressions |
 | 2026-10-11 | minor | Flick panning done: releasing a moving Hand drag (tool, Space or middle button) glides and decays, gated by Enable Flick Panning |
@@ -255,6 +260,3 @@ Paragraph; the rest open as in-app floating windows.
 | 2026-10-11 | minor | Pen ⇧ 45° done: ⇧-click puts the next anchor on the nearest 45° ray, ⇧-drag turns its handles in 45° steps (TOOL-214-10 done, #3751) |
 | 2026-10-14 | minor | Last selected tool restored across launches; temporary overrides excluded, explicit Eraser choices retained, and final selection flushed on normal exit |
 | 2026-10-13 | minor | Free Transform with a selection: the box is the selection's rectangle, and the marching ants follow it while it is transformed (#5297) |
-| 2026-10-12 | minor | Isolated colour, alpha/spot, Quick Mask and linked/unlinked raster-mask transforms; captured target, live eyes, native-depth preview/commit and undo regressions |
-| 2026-10-13 | minor | Cached GPU previews for isolated RGB transforms; scoped CPU fallback and reproducible 24 MP hardware benchmark; reviewed scalar coverage, curved Warp/footprint filtering and linked-mask frame regressions; aggregate percentages unchanged |
-| 2026-10-13 | minor | Integrated upstream Bicubic weights/reduction prefilter, background Free Transform commit/cancel and channel caches; isolated target remains locked while the job runs, with eyes usable; regression coverage expanded. Aggregate percentages unchanged. |

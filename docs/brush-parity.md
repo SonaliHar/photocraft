@@ -1,6 +1,6 @@
 # Brush and painting parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (native colour-channel live painting and cache agreement; dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed) · **Target:** Adobe Photoshop 2026
 
 Painting is where Photoshop users notice differences first, so it gets its own checklist: the
 brush engine (`crates/paint/src/brush.rs`), the Brush Settings UI
@@ -49,6 +49,8 @@ tablets against Photoshop side by side.
 | Eraser end of the pen switches to Eraser | partial | macOS; flipped Wacom on Windows not (#2285) |
 
 ## Stroke quality and feel
+
+> **Channel painting update · 2026-10-14 · minor:** live Brush/Pencil previews and committed pixels agree for the targeted native colour component; untargeted samples remain unchanged. Brush-feel estimates are unchanged.
 
 | Behaviour | Status | Evidence |
 |---|---|---|
@@ -120,9 +122,9 @@ tablets against Photoshop side by side.
 | 2026-10-13 | minor | Stale "missing tool" row corrected against main: Color Replacement (`paint.colorReplacement`) is a live toolbar tool; no brush-feel estimate changed |
 | 2026-10-10 | major | First version, from a source audit and the open issues |
 | 2026-10-11 | minor | `~` held with the Brush or Pencil erases with that tool's brush, and Clear joins their Mode menus (#3439) |
+| 2026-10-12 | minor | Restrict live Brush/Pencil updates to the captured colour component; preview and commit preserve untargeted native samples and agree with the canvas cache |
 | 2026-10-12 | minor | Five Brush Settings switch rows toggle without selecting a properties pane; Smoothing has a default-on switch and retains its settings while disabled (#4283). No brush-feel estimate changed. |
 | 2026-10-12 | minor | A shaped tip's cursor outline turns and flips with a rotated or flipped view, and follows pixel aspect correction |
 | 2026-10-13 | minor | Shape Dynamics and Transfer minimum inputs follow their Control and retain their values while disabled (#3825, partial). No brush-feel estimate changed. |
 | 2026-10-13 | minor | Hue Jitter uses the same themed amount slider as other jitter controls (#3825, partial). No brush-feel estimate changed. |
 | 2026-10-13 | minor | Dragging a brush preset shows its cached tip thumbnail and name in the Brushes panel and preset picker (#4225, partial). No brush-feel estimate changed. |
-| 2026-10-12 | minor | Restrict live Brush/Pencil updates to the captured colour component; preview and commit preserve untargeted native samples and agree with the canvas cache |
