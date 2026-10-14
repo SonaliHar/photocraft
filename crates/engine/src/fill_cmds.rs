@@ -127,9 +127,9 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
             let past = st.history.past_len();
             let source_doc = match explicit {
                 Some(i) if i == past => st.doc.clone(),
-                Some(i) => st.history.state(i).ok_or_else(|| bad(format!("no history state {i} (0..={past})")))?,
+                Some(i) => st.history.try_state(i).map_err(EngineError::Other)?.ok_or_else(|| bad(format!("no history state {i} (0..={past})")))?,
                 // The History Brush's default source: the oldest state still held.
-                None => st.history.state(0).unwrap_or_else(|| st.doc.clone()),
+                None => st.history.try_state(0).map_err(EngineError::Other)?.unwrap_or_else(|| st.doc.clone()),
             };
             let src = crate::channel_cmds::read_target_surface(source_doc.as_ref(), id, p)
                 .map_err(|_| EngineError::Other("the target did not exist (as pixels, a mask or a channel) in that history state".into()))?;

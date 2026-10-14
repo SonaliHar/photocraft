@@ -8,6 +8,17 @@ use crate::{DocState, Session};
 pub fn session(s: &Session) -> Value {
     json!({
         "active": s.active_index(),
+        "historyCache": {
+            "residentBytes": s.history_resident_bytes(),
+            "metadataBytes": s.history_metadata_bytes(),
+            "diskBytes": s.history_disk_bytes(),
+            "busy": s.history_cache_busy(),
+            "memoryBudgetMiB": s.prefs().performance.memory_usage_mb,
+            "diskBudgetMiB": if s.prefs().scratch_disks.use_available_space { None } else { Some(s.prefs().scratch_disks.budget_mb) },
+            "unlimitedHistory": s.prefs().performance.unlimited_history,
+            "useAvailableDiskSpace": s.prefs().scratch_disks.use_available_space,
+            "storageError": s.history_storage_error(),
+        },
         "documents": s.documents().iter().enumerate().map(|(i, d)| json!({
             "index": i,
             "name": d.doc.name,

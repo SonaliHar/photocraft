@@ -3934,3 +3934,15 @@ layerLabel	No Color	Sem cor
 	Sent to {printer}	Enviado para {printer}
 	set in Print Settings…	definido nas configurações de impressão…
 	ICO is limited to 256 × 256 pixels	ICO é limitado a 256 × 256 pixels
+
+# History cache and branching navigation
+	Return to Original	Voltar ao original
+	Branch	Ramo
+	Retry storage	Tentar armazenamento novamente
+	Unlimited history	Histórico ilimitado
+	Use available disk space	Usar espaço disponível em disco
+	Undo disk space grows only when needed. Unlimited history retains states until storage is full. Scratch paths apply to the next cache session.	O espaço para desfazer cresce conforme necessário. O histórico ilimitado mantém estados até o armazenamento ficar cheio. Os caminhos valem para a próxima sessão de cache.
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	O limite de memória é compartilhado pelos pixels do documento, dados incorporados e histórico de desfazer. Ele cresce conforme necessário; o restante da memória do aplicativo é adicional.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Esta versão para navegador mantém o histórico de desfazer na memória. As configurações do disco de trabalho se aplicam ao aplicativo de desktop.
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	O espaço em disco para desfazer cresce apenas quando necessário, até este limite. Zero desativa o cache em disco. Os caminhos do disco de trabalho valem para a próxima sessão de cache.
+	Budget mb	Limite (MiB)

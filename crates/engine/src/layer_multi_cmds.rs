@@ -96,7 +96,7 @@ pub(crate) fn reselect(s: &mut Session, ids: Vec<LayerId>, active: Option<LayerI
         }
         crate::fix_selection(st);
         let layers = st.layer_target();
-        st.history.set_current_layers(layers);
+        st.history.set_current_target(layers);
     }
 }
 
@@ -330,7 +330,29 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mask_target = p.get("target").and_then(Value::as_str) == Some("mask");
     let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
-    let ids = s.edit("Move", |doc, _| {
+    for id in move_targets(&before, &roots) {
+        if let Some(layer) = before.layer(id) {
+            for surface in layer.surface().into_iter().chain(layer.mask.as_ref().filter(|mask| mask.linked).map(|mask| &mask.surface)) {
+                let invalid_tiles = surface.tiles().any(|(coord, _)| {
+                    [i64::from(coord.tx) * i64::from(photocraft_geom::TILE_SIZE), i64::from(coord.ty) * i64::from(photocraft_geom::TILE_SIZE)]
+                        .into_iter()
+                        .any(|value| i32::try_from(value).is_err())
+                });
+                if invalid_tiles {
+                    return Err(EngineError::BadParams { cmd: "layer.translate".into(), msg: "invalid tile coordinates".into() });
+                }
+                let bounds = photocraft_compose::bounds::content_bounds(surface);
+                if !bounds.is_empty()
+                    && [bounds.x0.checked_add(dx), bounds.x1.checked_add(dx), bounds.y0.checked_add(dy), bounds.y1.checked_add(dy)]
+                        .into_iter()
+                        .any(|value| value.is_none())
+                {
+                    return Err(EngineError::BadParams { cmd: "layer.translate".into(), msg: "move exceeds supported pixel coordinates".into() });
+                }
+            }
+        }
+    }
+    let result = s.edit_with_cache("Move", false, |doc, _| {
         let (alone, rest): (Vec<LayerId>, Vec<LayerId>) = roots.iter().partition(|id| mask_target && doc.layer(**id).is_some_and(moves_mask_alone));
         let mut ids = move_targets(doc, &rest);
         if ids.is_empty() && alone.is_empty() {
@@ -354,7 +376,10 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
             crate::artboard_cmds::fit_canvas(doc);
         }
         Ok(ids)
-    })?;
+    });
+    let ids = result?;
+    s.compact_translation(&before, &ids, dx, dy);
+    s.poll_history_cache();
     note_damage(s, &before, &ids);
     Ok(Value::Null)
 }

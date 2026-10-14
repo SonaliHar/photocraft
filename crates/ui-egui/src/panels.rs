@@ -3082,104 +3082,32 @@ fn channels(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::channels_panel::show(app, ui);
 }
 
-fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
-    let Some(st) = app.session.active() else {
-        empty(ui, tl!("No document"));
-        return;
-    };
-    let doc = st.doc.clone();
-    let entries = st.history.entries();
-    let current = entries.len() - 1;
-    let redo: Vec<String> = st.history.redo_labels().map(str::to_string).collect();
-    // Snapshot row (Photoshop shows the document's opening state with a thumbnail).
-    {
-        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::hover());
-        let thumb = Rect::from_min_size(pos2(rect.left() + 28.0, rect.center().y - 14.0), vec2(28.0, 28.0));
-        let ctx = ui.ctx().clone();
-        if let Some(layer) = doc.layers.first() {
-            widgets::checker(ui.painter(), thumb, 4.0);
-            let tex = app.layer_thumb(&ctx, &doc, layer);
-            ui.painter().image(tex, thumb, Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
-        }
-        ui.painter().rect_stroke(thumb, 0.0, Stroke::new(1.0, t.separator), StrokeKind::Outside);
-        ui.painter().text(pos2(thumb.right() + 8.0, rect.center().y), Align2::LEFT_CENTER, &doc.name, egui::FontId::proportional(12.0), t.text);
-        ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.0, t.separator));
-    }
-    let mut snap_cmd = None;
-    let mut target: Option<usize> = None;
-    let all = entries.iter().map(|e| (e.clone(), false)).chain(redo.iter().map(|e| (e.clone(), true)));
-    // The dock gives History a fixed height: the rows scroll above the footer.
-    let footer = if t.pro { widgets::footer_height(ui) + ui.spacing().item_spacing.y } else { 0.0 };
-    let max_h = (ui.available_height() - footer).max(40.0);
-    egui::ScrollArea::vertical().id_salt("history-rows").max_height(max_h).auto_shrink([false, false]).show(ui, |ui| {
-        // Snapshots head the list and scroll with the states, so many of them never push the
-        // footer out of a short dock.
-        snap_cmd = snapshot_rows(app, ui);
-        for (i, (e, is_redo)) in all.enumerate() {
-            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, i == current, &e));
-            if i == current {
-                ui.painter().rect_filled(rect, if t.pro { 0.0 } else { t.radius_sm }, if t.pro { t.row_selected } else { t.accent_soft });
-            } else if resp.hovered() {
-                ui.painter().rect_filled(rect, 0.0, t.hover.gamma_multiply(0.5));
-            }
-            let icon = match e.as_str() {
-                s if s.contains("Brush") || s.contains("Eraser") => "brush",
-                s if s.contains("Layer") => "layers",
-                s if s.contains("Select") || s.contains("Marquee") || s.contains("Deselect") || s.contains("Lasso") => "square-dashed",
-                s if s.contains("Fill") => "paint-bucket",
-                "Open" => "image",
-                _ => "sliders-horizontal",
-            };
-            let color = if is_redo { t.text_faint } else { t.text };
-            icons::paint(
-                ui,
-                Rect::from_center_size(pos2(rect.left() + 42.0, rect.center().y), vec2(16.0, 16.0)),
-                icon,
-                12.0,
-                if is_redo { t.text_faint } else { t.icon },
-            );
-            ui.painter().text(pos2(rect.left() + 58.0, rect.center().y), Align2::LEFT_CENTER, &e, egui::FontId::proportional(12.0), color);
-            if resp.clicked() && i != current {
-                target = Some(i);
-            }
-        }
-    });
-    let mut footer_cmd: Option<&str> = None;
-    if t.pro {
-        let can_delete = app.session.is_enabled("history.deleteState");
-        let can_new = app.session.is_enabled("history.newDocument");
+/// Draw the complete History dock, including snapshot and document controls.
+pub fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    crate::history_panel::show(app, ui);
+    if Tokens::get(ui.ctx()).pro {
+        let enabled = app.ui.transform.is_none() && app.session.active_job().is_none();
+        let can_delete = enabled && app.session.is_enabled("history.deleteState");
+        let can_new = enabled && app.session.is_enabled("history.newDocument");
+        let mut command = None;
         widgets::panel_footer(ui, |ui| {
             if ui.add_enabled_ui(can_delete, |ui| icons::button(ui, "trash", 26.0, false, tl!("Delete current state"))).inner.clicked() {
-                footer_cmd = Some("history.deleteState");
+                command = Some("history.deleteState");
             }
-            let can_snap = app.session.is_enabled("history.newSnapshot");
+            let can_snap = enabled && app.session.is_enabled("history.newSnapshot");
             if ui.add_enabled_ui(can_snap, |ui| icons::button(ui, "scan", 26.0, false, tl!("Create new snapshot"))).inner.clicked() {
-                footer_cmd = Some("history.newSnapshot");
+                command = Some("history.newSnapshot");
             }
             if ui.add_enabled_ui(can_new, |ui| icons::button(ui, "file-plus", 26.0, false, tl!("Create new document from current state"))).inner.clicked() {
-                footer_cmd = Some("history.newDocument");
+                command = Some("history.newDocument");
             }
         });
-    }
-    // An open Free Transform owns Undo (transform_tool::intercept): stepping the document's history under
-    // its box would leave it transforming pixels that changed.
-    // Selecting a snapshot changes the document, so it waits for an open transform like the rows.
-    let snap_cmd = snap_cmd.filter(|(cmd, _)| *cmd != "history.selectSnapshot" || app.ui.transform.is_none());
-    if let Some((cmd, p)) = footer_cmd.map(|c| (c, json!({}))).filter(|_| app.ui.transform.is_none()).or(snap_cmd)
-        && let Err(e) = app.run(cmd, p)
-    {
-        app.ui.status = e;
-        app.ui.status_error = true;
-    }
-    // One command per click (#2966): stepping with Undo/Redo once per state made the canvas
-    // recomposite the whole document.
-    if let Some(state) = target.filter(|_| app.ui.transform.is_none())
-        && let Err(e) = app.run("history.selectState", json!({ "state": state }))
-    {
-        app.ui.status = e;
-        app.ui.status_error = true;
+        if let Some(command) = command
+            && let Err(error) = app.run(command, json!({}))
+        {
+            app.ui.status = error;
+            app.ui.status_error = true;
+        }
     }
 }
 
@@ -3187,17 +3115,21 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// name: a click returns to the snapshot (a new state), a double-click or right-click › Rename…
 /// edits the name in place (Enter or a click elsewhere keeps it, Escape cancels), and
 /// right-click › Delete removes it. Returns the command a row asks for.
-fn snapshot_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> Option<(&'static str, Value)> {
+pub(crate) fn snapshot_row(
+    app: &mut PhotocraftApp,
+    ui: &mut egui::Ui,
+    doc_id: photocraft_doc::DocId,
+    snaps: &[photocraft_engine::history_cmds::Snapshot],
+    live: &[u64],
+    index: usize,
+) -> Option<(&'static str, Value)> {
     let t = Tokens::get(ui.ctx());
-    let st = app.session.active()?;
-    let (doc_id, snaps) = (st.doc.id, st.snapshots.clone());
-    let live: Vec<u64> = snaps.iter().map(|s| s.id).collect();
     // Per document: snapshot ids restart in each, and a tab switch must not carry the edit over.
     let rename_id = egui::Id::new(("history-snapshot-rename", doc_id));
     let mut renaming: Option<(u64, String)> = ui.data(|d| d.get_temp(rename_id)).flatten();
     let mut cmd = None;
     let ctx = ui.ctx().clone();
-    for snap in &snaps {
+    for snap in snaps.iter().skip(index).take(1) {
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &snap.name));
         if resp.hovered() {
@@ -3205,7 +3137,7 @@ fn snapshot_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> Option<(&'static
         }
         let thumb = Rect::from_min_size(pos2(rect.left() + 28.0, rect.center().y - 14.0), vec2(28.0, 28.0));
         widgets::checker(ui.painter(), thumb, 4.0);
-        let tex = app.snapshot_thumb(&ctx, doc_id, snap, &live);
+        let tex = app.snapshot_thumb(&ctx, doc_id, snap, live);
         ui.painter().image(tex, thumb, Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
         ui.painter().rect_stroke(thumb, 0.0, Stroke::new(1.0, t.separator), StrokeKind::Outside);
         match renaming.as_mut().filter(|(id, _)| *id == snap.id) {
@@ -3248,7 +3180,7 @@ fn snapshot_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> Option<(&'static
             }
         });
     }
-    if !snaps.is_empty() {
+    if index + 1 == snaps.len() {
         let y = ui.cursor().top();
         ui.painter().hline(ui.max_rect().x_range(), y, Stroke::new(1.0, t.separator));
     }
@@ -4679,21 +4611,23 @@ mod snapshot_row_tests {
     /// its camera button in view.
     #[test]
     fn many_snapshots_keep_the_footer_in_a_short_panel() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
-        for _ in 0..6 {
-            app.run("history.newSnapshot", json!({})).unwrap();
+        for height in [100.0, 250.0] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
+            for _ in 0..6 {
+                app.run("history.newSnapshot", json!({})).unwrap();
+            }
+            let mut h = Harness::builder().with_size(vec2(300.0, height)).build_ui_state(|ui, app: &mut PhotocraftApp| history(app, ui), app);
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+            h.state_mut().ui.theme = crate::theme::ThemeKind::ProMedium;
+            h.run_steps(3);
+            let view = h.ctx.input(|i| i.viewport_rect());
+            let buttons: Vec<Rect> = h
+                .ctx
+                .viewport(|v| v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.rect.size() == vec2(26.0, 26.0)).map(|w| w.rect).collect());
+            assert_eq!(buttons.len(), 3, "{buttons:?}");
+            assert!(buttons.iter().all(|b| view.contains_rect(*b)), "footer in view: {buttons:?} in {view:?}");
         }
-        let mut h = Harness::builder().with_size(vec2(300.0, 250.0)).build_ui_state(|ui, app: &mut PhotocraftApp| history(app, ui), app);
-        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
-        h.state_mut().ui.theme = crate::theme::ThemeKind::ProMedium;
-        h.run_steps(3);
-        let view = h.ctx.input(|i| i.viewport_rect());
-        let buttons: Vec<Rect> = h
-            .ctx
-            .viewport(|v| v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.rect.size() == vec2(26.0, 26.0)).map(|w| w.rect).collect());
-        assert_eq!(buttons.len(), 3, "{buttons:?}");
-        assert!(buttons.iter().all(|b| view.contains_rect(*b)), "footer in view: {buttons:?} in {view:?}");
     }
 
     /// Renaming belongs to one document: snapshot ids restart in each, so switching tabs must not

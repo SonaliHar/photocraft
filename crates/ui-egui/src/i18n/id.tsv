@@ -3133,3 +3133,15 @@ curves	Smooth	Haluskan
 	Sent to {printer}	Dikirim ke {printer}
 	set in Print Settings…	diatur di Pengaturan Cetak…
 	ICO is limited to 256 × 256 pixels	ICO dibatasi hingga 256 × 256 piksel
+
+# History cache and branching navigation
+	Return to Original	Kembali ke asli
+	Branch	Cabang
+	Retry storage	Coba penyimpanan lagi
+	Unlimited history	Riwayat tanpa batas
+	Use available disk space	Gunakan ruang disk tersedia
+	Undo disk space grows only when needed. Unlimited history retains states until storage is full. Scratch paths apply to the next cache session.	Ruang pembatalan bertambah sesuai kebutuhan. Riwayat tanpa batas menyimpan keadaan hingga penyimpanan penuh. Jalur berlaku pada sesi cache berikutnya.
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	Anggaran memori dipakai bersama oleh piksel dokumen, data tertanam, dan riwayat urungkan. Anggaran bertambah saat diperlukan; memori aplikasi lainnya terpisah.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Versi browser ini menyimpan riwayat urungkan di memori. Pengaturan disk kerja berlaku untuk aplikasi desktop.
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	Ruang disk untuk urungkan bertambah hanya bila diperlukan, hingga batas ini. Nol menonaktifkan cache disk. Jalur disk kerja berlaku pada sesi cache berikutnya.
+	Budget mb	Batas (MiB)

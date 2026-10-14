@@ -10,6 +10,7 @@ license = "MIT OR Apache-2.0"
 rust-version = "1.95"
 
 [workspace.dependencies]
+craft-history = { git = "https://github.com/storytold/craft-libs", rev = "4d001e6b32a73017b3f99377b98b97d13090318f" }
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "5c874d51eeb3de70e735c8ce87a59a7dedd47675", features = ["serde"] }
 # internal
 photocraft-geom = { path = "crates/geom" }

@@ -3843,3 +3843,15 @@ curves	Smooth	Згладити
 	Sent to {printer}	Надіслано на {printer}
 	set in Print Settings…	задається в параметрах друку…
 	ICO is limited to 256 × 256 pixels	ICO обмежено розміром 256 × 256 пікселів
+
+# History cache and branching navigation
+	Branch	Гілка
+	Budget mb	Ліміт МБ
+	Retry storage	Повторити збереження
+	Return to Original	Повернутися до оригіналу
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	Ліміт пам’яті спільний для пікселів документа, вбудованих даних та історії скасувань. Використання зростає за потреби; інша пам’ять програми враховується окремо.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Ця браузерна збірка зберігає історію скасувань у пам’яті. Параметри робочого диска стосуються настільної програми.
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	Дисковий простір для скасувань зростає лише за потреби, до цього ліміту. Нуль вимикає дисковий кеш. Шляхи робочих дисків застосовуються до наступного сеансу кешування.
+	Undo disk space grows only when needed. Unlimited history retains states until storage is full. Scratch paths apply to the next cache session.	Дисковий простір для скасувань зростає лише за потреби. Необмежена історія зберігає стани, доки сховище не заповниться. Шляхи робочих дисків застосовуються до наступного сеансу кешування.
+	Unlimited history	Необмежена історія
+	Use available disk space	Використовувати доступний дисковий простір

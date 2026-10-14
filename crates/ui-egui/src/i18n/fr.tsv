@@ -3146,3 +3146,15 @@ curves	Smooth	Lisser
 	Sent to {printer}	Envoyé à {printer}
 	set in Print Settings…	défini dans les paramètres d’impression…
 	ICO is limited to 256 × 256 pixels	Le format ICO est limité à 256 × 256 pixels
+
+# History cache and branching navigation
+	Return to Original	Revenir à l’original
+	Branch	Branche
+	Retry storage	Réessayer le stockage
+	Unlimited history	Historique illimité
+	Use available disk space	Utiliser l’espace disque disponible
+	Undo disk space grows only when needed. Unlimited history retains states until storage is full. Scratch paths apply to the next cache session.	Le stockage d’annulation grandit selon les besoins. L’historique illimité conserve les états jusqu’à saturation. Les chemins s’appliquent à la prochaine session du cache.
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	Le budget mémoire est partagé entre les pixels du document, les données intégrées et l’historique d’annulation. Il augmente selon les besoins ; les autres usages mémoire de l’application s’y ajoutent.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Cette version pour navigateur conserve l’historique d’annulation en mémoire. Les réglages du disque de travail s’appliquent à l’application de bureau.
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	L’espace disque pour l’annulation augmente uniquement si nécessaire, jusqu’à cette limite. Zéro désactive le cache disque. Les chemins de travail s’appliquent à la prochaine session de cache.
+	Budget mb	Limite (Mio)

@@ -1,25 +1,17 @@
-//! History panel actions beyond stepping (#1117): Delete (the trash button) and New Document (the
-//! "Create new document from current state" button). Stepping to a state is Edit › Undo / Redo.
-//!
-//! States are indexed like [`photocraft_ops::History::entries`]: 0 is the oldest state still
-//! held, the last index is the current document.
-//!
-//! Snapshots (#2966, the camera button) are named copies of the document that outlive the
-//! states: `history.newSnapshot` takes one, `history.selectSnapshot` brings it back as a new,
-//! undoable state. They live on [`crate::DocState::snapshots`] for the session only, as in
-//! Photoshop, and are addressed by an id that is never reused. Their tiles are shared
-//! copy-on-write with the document and its history, and are not counted in the history's pixel
-//! budget.
-
+//! Direct, fallible history navigation. Only the selected state is hydrated.
+use crate::commands::int;
+use crate::image_cmds::reidentify_copied_layers;
+use crate::{CommandSpec, EngineError, Result, Session};
 use std::sync::Arc;
 
 use photocraft_doc::{Document, Layer, LayerContent};
 use photocraft_ops::LayerTarget;
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, int};
-use crate::image_cmds::reidentify_copied_layers;
-use crate::{EngineError, Result, Session};
+fn enabled(s: &Session) -> std::result::Result<(), String> {
+    s.active().ok_or("no document open")?;
+    Ok(())
+}
 
 /// A History panel snapshot: the document as it was when taken, and the layers it targeted.
 #[derive(Clone, Debug)]
@@ -54,20 +46,33 @@ fn state_index(s: &Session, cmd: &str, p: &Value) -> Result<(usize, usize)> {
 /// The oldest state (the document as opened) can't be deleted.
 fn delete_state(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "history.deleteState";
-    let (i, current) = state_index(s, CMD, p)?;
+    let (i, _current) = state_index(s, CMD, p)?;
     if i == 0 {
         return Err(bad(CMD, "the oldest state can't be deleted"));
     }
-    // Step back to the state before `i`; the steps from `i` on are then redo states.
-    for _ in i..=current {
-        if !s.undo() {
-            return Err(EngineError::Other("the history can't step back right now".into()));
-        }
-    }
-    let st = s.active_mut().ok_or(EngineError::NoDocument)?;
-    st.history.clear_redo();
-    let entries = st.history.entries();
-    Ok(json!({ "states": entries.len(), "current": entries.last() }))
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let checkpoint = st.history.checkpoint();
+    let deleted = checkpoint.undo.get(i).map(|state| state.identity.id).unwrap_or_else(|| st.history.current_id());
+    let destination = checkpoint.undo.get(i - 1).cloned().ok_or_else(|| bad(CMD, "the previous state is unavailable"))?;
+    let destination_id = destination.identity.id;
+    crate::jobs::run(
+        s,
+        "Loading history state",
+        true,
+        move |ctx| {
+            ctx.check()?;
+            let document = destination.load_document().map_err(EngineError::Other)?;
+            ctx.check()?;
+            Ok(document)
+        },
+        move |session, document| {
+            session.apply_history_destination(destination_id, document, None)?;
+            let st = session.active_mut().ok_or(EngineError::NoDocument)?;
+            st.history.prune_descendants(deleted);
+            let entries = st.history.entries();
+            Ok(json!({ "states": entries.len(), "current": entries.last() }))
+        },
+    )
 }
 
 /// History panel › New Document: a new untitled document holding the document as it was at a
@@ -76,20 +81,37 @@ fn new_document(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "history.newDocument";
     let (i, current) = state_index(s, CMD, p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let src = if i == current { Some(st.doc.clone()) } else { st.history.state(i) };
-    let src = src.ok_or_else(|| bad(CMD, format!("state {i} is not held")))?;
-    let label = st.history.entries().get(i).cloned().unwrap_or_default();
-    let mut doc = (*src).clone();
-    doc.id = photocraft_doc::DocId::fresh();
-    doc.name = match p.get("name").and_then(Value::as_str) {
-        Some(n) if !n.trim().is_empty() => n.to_string(),
-        _ if !label.trim().is_empty() => label,
-        _ => format!("{} copy", doc.name),
+    let source = if i == current {
+        photocraft_ops::HistoryState::from_document(st.history.entries().get(i).cloned().unwrap_or_default(), st.doc.clone())
+    } else {
+        st.history.checkpoint().undo.get(i).cloned().ok_or_else(|| bad(CMD, format!("state {i} is not held")))?
     };
-    reidentify_copied_layers(&mut doc);
-    let name = doc.name.clone();
-    let index = s.add_document(doc, None);
-    Ok(json!({ "document": index, "name": name }))
+    let label = st.history.entries().get(i).cloned().unwrap_or_default();
+    let requested_name = p.get("name").and_then(Value::as_str).map(str::to_owned);
+    crate::jobs::run(
+        s,
+        "Loading history state",
+        true,
+        move |ctx| {
+            ctx.check()?;
+            let document = source.load_document().map_err(EngineError::Other)?;
+            ctx.check()?;
+            Ok(document)
+        },
+        move |session, source| {
+            let mut doc = (*source).clone();
+            doc.id = photocraft_doc::DocId::fresh();
+            doc.name = match requested_name.as_deref() {
+                Some(name) if !name.trim().is_empty() => name.to_owned(),
+                _ if !label.trim().is_empty() => label,
+                _ => format!("{} copy", doc.name),
+            };
+            reidentify_copied_layers(&mut doc);
+            let name = doc.name.clone();
+            let index = session.add_document(doc, None);
+            Ok(json!({ "document": index, "name": name }))
+        },
+    )
 }
 
 /// The `snapshot` param: the index of the active document's snapshot with that id.
@@ -192,6 +214,7 @@ fn delete_snapshot(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn can_delete(s: &Session) -> std::result::Result<(), String> {
+    enabled(s)?;
     s.active().filter(|d| d.history.can_undo()).map(|_| ()).ok_or_else(|| "the oldest state can't be deleted".into())
 }
 
@@ -219,7 +242,7 @@ pub fn specs() -> Vec<CommandSpec> {
             shortcut: None,
             params: "{} (the same action as `edit.undo`)",
             enabled: can_undo,
-            run: |s, _| Ok(json!(s.undo())),
+            run: |s, _| step(s, false),
             journal: false,
         },
         CommandSpec {
@@ -229,7 +252,7 @@ pub fn specs() -> Vec<CommandSpec> {
             shortcut: None,
             params: "{} (the same action as `edit.redo`)",
             enabled: can_redo,
-            run: |s, _| Ok(json!(s.redo())),
+            run: |s, _| step(s, true),
             journal: false,
         },
         CommandSpec {
@@ -251,6 +274,30 @@ pub fn specs() -> Vec<CommandSpec> {
             enabled: has_doc,
             run: new_document,
             journal: true,
+        },
+        CommandSpec {
+            id: "history.jump",
+            label: "Jump to History State",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"state":stable_state_id}"#,
+            enabled,
+            run: jump,
+            journal: true,
+        },
+        CommandSpec { id: "history.inspect", label: "Inspect History", menu: &[], shortcut: None, params: "{}", enabled, run: inspect, journal: false },
+        CommandSpec {
+            id: "history.retryStorage",
+            label: "Retry History Storage",
+            menu: &[],
+            shortcut: None,
+            params: "{}",
+            enabled,
+            run: |s, _| {
+                s.configure_history_cache();
+                Ok(json!({"ok":true}))
+            },
+            journal: false,
         },
         CommandSpec {
             id: "history.newSnapshot",
@@ -295,8 +342,193 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+fn inspect(s: &mut Session, _: &Value) -> Result<Value> {
+    let state = s.active().ok_or(EngineError::NoDocument)?;
+    Ok(json!({"current":state.history.current_id(), "unlimited":s.prefs().performance.unlimited_history,
+        "storageError":s.history_storage_error(), "states":state.history.timeline().iter().map(|entry|
+        json!({"id":entry.identity.id,"parent":entry.identity.parent,"branch":entry.identity.branch,"action":entry.label,"current":entry.current})).collect::<Vec<_>>() }))
+}
+
+fn jump(s: &mut Session, params: &Value) -> Result<Value> {
+    jump_on_path(s, params, None)
+}
+
+fn jump_on_path(s: &mut Session, params: &Value, branch: Option<u64>) -> Result<Value> {
+    let id = params
+        .get("state")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| EngineError::BadParams { cmd: "history.jump".into(), msg: "state must be an unsigned state ID".into() })?;
+    let active = s.active().ok_or(EngineError::NoDocument)?;
+    let state = active.history.state_by_id(active.doc.clone(), id).ok_or_else(|| EngineError::Other("History state is no longer available".into()))?;
+    if active.history.current_id() == id {
+        return Ok(json!({"state":id,"changed":false}));
+    }
+    crate::jobs::run(
+        s,
+        "Loading history state",
+        true,
+        move |ctx| {
+            ctx.check()?;
+            let document = state.load_document().map_err(EngineError::Other)?;
+            ctx.check()?;
+            Ok(document)
+        },
+        move |session, document| {
+            session.apply_history_destination(id, document, branch)?;
+            Ok(json!({"state":id,"changed":true}))
+        },
+    )
+}
+
+/// Keyboard undo/redo use the same single-destination background restore as row jumps.
+pub(crate) fn step(s: &mut Session, redo: bool) -> Result<Value> {
+    let id = s.active().and_then(|st| st.history.adjacent_id(redo)).ok_or_else(|| EngineError::Other("No adjacent history state".into()))?;
+    let branch = s.active().map(|state| state.history.navigation_branch());
+    let result = jump_on_path(s, &json!({"state": id}), branch)?;
+    Ok(if result.get("job").is_some() { result } else { json!(true) })
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use photocraft_doc::{ColorMode, Document, SampleType, Size};
+    fn session() -> Session {
+        let mut session = Session::new();
+        session.add_document(Document::new("Original", Size::new(2, 2), ColorMode::Rgb, SampleType::U8), None);
+        session
+    }
+    #[test]
+    fn direct_jump_is_one_revision_and_preserves_alternative_paths() {
+        let mut s = session();
+        for name in ["Brush paint", "Erase", "New layer"] {
+            s.edit(name, |doc, _| {
+                doc.name = name.into();
+                Ok(())
+            })
+            .unwrap();
+        }
+        let before = s.active().unwrap().revision;
+        s.execute("history.jump", json!({"state":0})).unwrap();
+        assert_eq!(s.active().unwrap().doc.name, "Original");
+        assert_eq!(s.active().unwrap().revision, before + 1);
+        s.edit("Move layer", |doc, _| {
+            doc.name = "Moved".into();
+            Ok(())
+        })
+        .unwrap();
+        let entries = s.execute("history.inspect", json!({})).unwrap();
+        assert_eq!(entries["states"].as_array().unwrap().len(), 5);
+        s.execute("history.jump", json!({"state":3})).unwrap();
+        assert_eq!(s.active().unwrap().doc.name, "New layer");
+    }
+    #[test]
+    fn unlimited_defaults_and_bad_params_leave_document_and_history_unchanged() {
+        let mut s = session();
+        assert!(s.prefs().performance.unlimited_history);
+        assert!(s.prefs().scratch_disks.use_available_space);
+        assert_eq!(s.active().unwrap().history.max_states, 0);
+        for params in [json!({}), json!({"state":-1}), json!({"state":"0"}), json!({"state":u64::MAX})] {
+            assert!(s.execute("history.jump", params).is_err());
+            assert_eq!(s.active().unwrap().doc.name, "Original");
+            assert_eq!(s.active().unwrap().history.timeline().len(), 1);
+        }
+    }
+    #[test]
+    fn legacy_explicit_limits_still_select_bounded_mode() {
+        let mut s = session();
+        s.execute("prefs.set", json!({"values":{"performance.historyStates":5,"scratchDisks.budgetMb":32}})).unwrap();
+        assert!(!s.prefs().performance.unlimited_history);
+        assert!(!s.prefs().scratch_disks.use_available_space);
+        assert_eq!(s.active().unwrap().history.max_states, 5);
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+    use photocraft_doc::{ColorMode, Document, SampleType, Size};
+    use photocraft_ops::ArchivedDocument;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    #[test]
+    fn undo_redo_follows_the_selected_branch_at_a_fork() {
+        let mut s = Session::new();
+        s.add_document(Document::new("Original", Size::new(2, 2), ColorMode::Rgb, SampleType::U8), None);
+        for name in ["Paint", "Erase"] {
+            s.edit(name, |doc, _| {
+                doc.name = name.into();
+                Ok(())
+            })
+            .unwrap();
+        }
+        s.execute("edit.undo", json!({})).unwrap();
+        s.edit("Move", |doc, _| {
+            doc.name = "Moved".into();
+            Ok(())
+        })
+        .unwrap();
+        s.execute("edit.undo", json!({})).unwrap();
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc.name, "Original");
+        s.execute("edit.redo", json!({})).unwrap();
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc.name, "Moved");
+    }
+    #[derive(Debug)]
+    struct Blocked {
+        doc: Arc<Document>,
+        release: Arc<AtomicBool>,
+    }
+    impl ArchivedDocument<photocraft_ops::PhotoCraftHistory> for Blocked {
+        fn load(&self) -> std::result::Result<Arc<Document>, String> {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !self.release.load(Ordering::Relaxed) {
+                if std::time::Instant::now() > deadline {
+                    return Err("test read timed out".into());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Ok(self.doc.clone())
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn cold_jump_returns_a_job_without_blocking_and_cancel_keeps_the_document() {
+        for cancel in [false, true] {
+            let mut s = Session::new();
+            s.add_document(Document::new("Original", Size::new(2, 2), ColorMode::Rgb, SampleType::U8), None);
+            let original = s.active().unwrap().doc.clone();
+            s.edit("Paint", |doc, _| {
+                doc.name = "Painted".into();
+                Ok(())
+            })
+            .unwrap();
+            let release = Arc::new(AtomicBool::new(false));
+            s.active_mut().unwrap().history.replace_resident(&original, Arc::new(Blocked { doc: original.clone(), release: release.clone() }));
+            let job = match s.start("history.jump", json!({"state":0})).unwrap() {
+                crate::jobs::Started::Job(id) => id,
+                _ => panic!("cold jump ran inline"),
+            };
+            assert_eq!(s.active().unwrap().doc.name, "Painted");
+            if cancel {
+                s.cancel_job(job);
+            }
+            release.store(true, Ordering::Relaxed);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while s.active_job().is_some() {
+                s.poll_jobs();
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            assert_eq!(s.active().unwrap().doc.name, if cancel { "Painted" } else { "Original" });
+        }
+    }
+}
+
+#[cfg(test)]
+mod upstream_tests {
     use super::*;
 
     /// A document with three steps after Open: entries Open, New Layer, Fill, Fill.
@@ -509,6 +741,48 @@ mod tests {
         for p in [json!({"state": -1}), json!({"state": 99}), json!({"state": "x"}), json!({"state": f64::NAN.to_string()})] {
             assert!(s.execute("history.newDocument", p.clone()).is_err(), "{p}");
         }
+        assert_eq!(s.documents().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+    use std::sync::Arc;
+    #[derive(Debug)]
+    struct Broken;
+    impl photocraft_ops::ArchivedDocument<photocraft_ops::PhotoCraftHistory> for Broken {
+        fn load(&self) -> std::result::Result<Arc<photocraft_doc::Document>, String> {
+            Err("corrupt history".into())
+        }
+    }
+    #[test]
+    fn delete_branch_preserves_unrelated_alternative_and_cold_failures_are_atomic() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":8,"height":8})).unwrap();
+        s.execute("layer.new.layer", json!({"name":"A"})).unwrap();
+        s.execute("layer.new.layer", json!({"name":"B"})).unwrap();
+        let branch_b = s.active().unwrap().history.current_id();
+        s.undo();
+        s.execute("layer.new.layer", json!({"name":"C"})).unwrap();
+        let branch_c = s.active().unwrap().history.current_id();
+        s.execute("history.deleteState", json!({})).unwrap();
+        let st = s.active().unwrap();
+        assert!(st.history.state_by_id(st.doc.clone(), branch_b).is_some());
+        assert!(st.history.state_by_id(st.doc.clone(), branch_c).is_none());
+        assert_eq!(st.history.adjacent_id(true), Some(branch_b), "an unrelated preserved branch remains redoable");
+        s.redo();
+        assert_eq!(s.active().unwrap().history.current_id(), branch_b);
+        s.undo();
+        s.execute("layer.new.layer", json!({"name":"D"})).unwrap();
+        let original = s.active().unwrap().history.try_state(0).unwrap().unwrap();
+        s.active_mut().unwrap().history.replace_resident(&original, Arc::new(Broken));
+        let doc = s.active().unwrap().doc.clone();
+        let stamp = s.active().unwrap().history.timeline_stamp();
+        assert!(s.execute("history.deleteState", json!({"state":1})).is_err());
+        assert!(s.execute("history.newDocument", json!({"state":0})).is_err());
+        assert!(Arc::ptr_eq(&doc, &s.active().unwrap().doc));
+        assert_eq!(s.active().unwrap().history.timeline_stamp(), stamp);
         assert_eq!(s.documents().len(), 1);
     }
 }

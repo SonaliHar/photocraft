@@ -29,6 +29,7 @@ mod clip_group;
 pub mod color_cmds;
 pub mod color_to_alpha_cmds;
 pub mod commands;
+mod compact_move;
 pub mod comps_cmds;
 pub mod cutout_cmds;
 pub mod display_color;
@@ -53,6 +54,7 @@ pub mod gradient_fill_cmds;
 pub mod group_view_cmds;
 pub mod guide_layout;
 pub mod hidden_target;
+mod history_cache;
 pub mod history_cmds;
 pub mod history_select_cmds;
 pub mod image_cmds;
@@ -234,7 +236,7 @@ impl DocState {
     pub fn new(doc: Document, path: Option<String>) -> Self {
         let active_layer = doc.top_layer();
         let mut history = History::default();
-        history.set_current_layers(LayerTarget { active: active_layer, selected: active_layer.into_iter().collect() });
+        history.set_current_target(LayerTarget { active: active_layer, selected: active_layer.into_iter().collect() });
         Self {
             doc: Arc::new(doc),
             history,
@@ -464,6 +466,8 @@ pub struct Session {
     /// document, source read-only)`. The shell takes them with [`Session::take_held_open`].
     held_opens: Vec<(u64, Document, bool)>,
     next_held_open: u64,
+    history_cache: history_cache::Cache,
+    compact_move: Option<compact_move::Run>,
 }
 
 /// Move item `i` of `v` to position `to`, clamped to the end. Returns where it went; `None` when
@@ -541,11 +545,14 @@ impl Session {
             doc.id = photocraft_doc::DocId::fresh();
         }
         let mut st = DocState::new(doc, path);
-        st.history.max_states = self.prefs.get().performance.history_states.max(1) as usize;
-        st.history.max_bytes = self.prefs.get().performance.history_budget_bytes();
+        st.history.max_states = if self.prefs.get().performance.unlimited_history { 0 } else { self.prefs.get().performance.history_states.max(1) as usize };
+        // Session-wide accounting replaces per-document trimming.
+        st.history.max_bytes = 0;
         self.docs.push(st);
         let i = self.docs.len() - 1;
         self.active = Some(i);
+        self.history_cache.dirty = true;
+        self.poll_history_cache();
         i
     }
 
@@ -584,6 +591,8 @@ impl Session {
                 _ => index.min(self.docs.len() - 1),
             })
         };
+        self.history_cache.dirty = true;
+        self.poll_history_cache();
         Some(d)
     }
 
@@ -690,8 +699,13 @@ impl Session {
 
     /// Apply an undoable edit to the active document.
     pub fn edit<R>(&mut self, label: &str, f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>) -> Result<R> {
+        self.edit_with_cache(label, true, f)
+    }
+
+    pub(crate) fn edit_with_cache<R>(&mut self, label: &str, poll: bool, f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>) -> Result<R> {
         let restrict = self.color_restrict;
         let sampler_map = self.sampler_map.take();
+        self.admit_history_edit()?;
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
         let before = st.doc.clone();
         // Selecting layers is not a step, so the state this edit leaves behind targets what was
@@ -736,12 +750,12 @@ impl Session {
         let key = self.coalesce_request.clone();
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
         let layers = st.layer_target();
+        st.history.clear_current_archive();
         if key.is_none() || st.coalesce != key || !st.history.can_undo() {
-            st.history.set_current_layers(prior);
+            st.history.set_current_target(prior);
             st.history.record(label, before, layers);
-            st.history.trim(&st.doc);
         } else {
-            st.history.set_current_layers(layers);
+            st.history.set_current_target(layers);
         }
         st.coalesce = key;
         st.revision += 1;
@@ -751,6 +765,10 @@ impl Session {
             // Free the mask early; a stale entry would only miss (it is keyed by pixels).
             self.subject_cache = Default::default();
             self.object_finder = Default::default();
+        }
+        self.history_cache.dirty = true;
+        if poll {
+            self.poll_history_cache();
         }
         Ok(r)
     }
@@ -817,52 +835,74 @@ impl Session {
         busy
     }
 
+    pub fn try_undo(&mut self) -> Result<bool> {
+        self.move_history(false)
+    }
+
+    pub fn try_redo(&mut self) -> Result<bool> {
+        self.move_history(true)
+    }
+
+    /// Legacy convenience API; errors remain available as a cache notice.
     pub fn undo(&mut self) -> bool {
-        // A background job is computing from the current state: it must not move under it.
-        if self.active_job().is_some() {
-            return false;
-        }
-        let Some(st) = self.active_mut() else { return false };
-        st.coalesce = None;
-        match st.history.undo(st.doc.clone()) {
-            Some((mut d, layers)) => {
-                // Save As changes file identity outside history, just like the saved path.
-                if d.name != st.doc.name {
-                    Arc::make_mut(&mut d).name.clone_from(&st.doc.name);
-                }
-                // Pixels this step can have touched, so the canvas recomposites only that
-                // (it recomposited everything before).
-                let damage = layer_multi_cmds::step_damage(&d, &st.doc);
-                st.doc = d;
-                restore_target(st, layers);
-                st.revision += 1;
-                st.last_damage = damage;
-                true
+        match self.try_undo() {
+            Ok(changed) => changed,
+            Err(error) => {
+                self.history_cache.notice = Some(error.to_string());
+                false
             }
-            None => false,
         }
     }
 
     pub fn redo(&mut self) -> bool {
-        if self.active_job().is_some() {
-            return false;
-        }
-        let Some(st) = self.active_mut() else { return false };
-        st.coalesce = None;
-        match st.history.redo(st.doc.clone()) {
-            Some((mut d, layers)) => {
-                if d.name != st.doc.name {
-                    Arc::make_mut(&mut d).name.clone_from(&st.doc.name);
-                }
-                let damage = layer_multi_cmds::step_damage(&st.doc, &d);
-                st.doc = d;
-                restore_target(st, layers);
-                st.revision += 1;
-                st.last_damage = damage;
-                true
+        match self.try_redo() {
+            Ok(changed) => changed,
+            Err(error) => {
+                self.history_cache.notice = Some(error.to_string());
+                false
             }
-            None => false,
         }
+    }
+
+    fn move_history(&mut self, redo: bool) -> Result<bool> {
+        if self.active_job().is_some() {
+            return Ok(false);
+        }
+        let Some(st) = self.active_mut() else { return Ok(false) };
+        let restored = if redo { st.history.try_redo(st.doc.clone()) } else { st.history.try_undo(st.doc.clone()) }.map_err(EngineError::Other)?;
+        let Some(mut doc) = restored else { return Ok(false) };
+        let layers = st.history.current_target().clone();
+        if doc.name != st.doc.name {
+            Arc::make_mut(&mut doc).name.clone_from(&st.doc.name);
+        }
+        let damage = layer_multi_cmds::step_damage(&st.doc, &doc);
+        st.coalesce = None;
+        st.doc = doc;
+        restore_target(st, layers);
+        st.revision += 1;
+        st.last_damage = damage;
+        self.history_cache.dirty = true;
+        self.poll_history_cache();
+        Ok(true)
+    }
+
+    pub(crate) fn apply_history_destination(&mut self, id: u64, mut doc: Arc<Document>, branch: Option<u64>) -> Result<()> {
+        let st = self.active_mut().ok_or(EngineError::NoDocument)?;
+        // Save As updates file identity outside history; returning to pixels must
+        // keep the current saved filename, just as the imperative undo API does.
+        if st.path.is_some() && doc.name != st.doc.name {
+            Arc::make_mut(&mut doc).name.clone_from(&st.doc.name);
+        }
+        let damage = layer_multi_cmds::step_damage(&st.doc, &doc);
+        st.history.jump_loaded_on_path(st.doc.clone(), id, doc.clone(), branch).map_err(EngineError::Other)?;
+        st.doc = doc;
+        st.coalesce = None;
+        restore_target(st, st.history.current_target().clone());
+        st.revision = st.revision.saturating_add(1);
+        st.last_damage = damage;
+        self.history_cache.dirty = true;
+        self.poll_history_cache();
+        Ok(())
     }
 }
 

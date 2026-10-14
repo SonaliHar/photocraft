@@ -4219,3 +4219,15 @@ shape	Appearance	Izgled
 	Ink Characteristics	Karakteristike mastila
 	Solidity:	Punoća:
 	Redrawing	Ponovno iscrtavanje
+	Memory budget (MiB)	Буџет меморије (MiB)
+	Undo disk budget (MiB)	Буџет диска за опозив (MiB)
+	Budget mb	Буџет (MiB)
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	Буџет меморије деле пиксели докумената, уграђени подаци и историја опозива. Расте по потреби; остала меморија апликације је додатна.
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	Простор на диску за опозив расте само по потреби, до овог ограничења. Нула искључује кеширање на диску. Путање привременог простора важе од следеће сесије кеша.
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	Ова верзија за прегледач чува историју опозива у меморији. Поставке привременог диска важе за десктоп апликацију.
+	Return to Original	Врати на оригинал
+	Branch	Грана
+	Retry storage	Покушај поново са складиштем
+	Unlimited history	Неограничена историја
+	Use available disk space	Користи расположиви простор на диску
+	Undo disk space grows only when needed. Unlimited history retains states until storage is full. Scratch paths apply to the next cache session.	Простор на диску за опозив расте само по потреби. Неограничена историја чува стања док се складиште не попуни. Путање привременог простора важе од следеће сесије кеша.

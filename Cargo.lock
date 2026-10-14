@@ -1223,6 +1223,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-history"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=4d001e6b32a73017b3f99377b98b97d13090318f#4d001e6b32a73017b3f99377b98b97d13090318f"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "craft-print"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=3d37da389a3618ab9b76109da11416e9ca4ea719#3d37da389a3618ab9b76109da11416e9ca4ea719"
@@ -4639,6 +4647,7 @@ dependencies = [
  "photocraft-format",
  "photocraft-geom",
  "photocraft-io",
+ "photocraft-ops",
  "photocraft-raster",
  "photocraft-tablet",
  "photocraft-ui-egui",
@@ -4824,12 +4833,14 @@ dependencies = [
  "photocraft-color",
  "photocraft-doc",
  "photocraft-geom",
+ "photocraft-ops",
  "photocraft-raster",
  "proptest",
  "rustix 1.1.5",
  "ruzstd",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
@@ -4897,7 +4908,9 @@ dependencies = [
 name = "photocraft-ops"
 version = "0.8.2"
 dependencies = [
+ "craft-history",
  "photocraft-doc",
+ "serde",
 ]
 
 [[package]]
@@ -5024,6 +5037,7 @@ dependencies = [
  "photocraft-geom",
  "photocraft-gpu",
  "photocraft-io",
+ "photocraft-ops",
  "photocraft-paint",
  "photocraft-plugins",
  "photocraft-psd",

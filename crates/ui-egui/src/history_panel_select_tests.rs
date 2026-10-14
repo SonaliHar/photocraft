@@ -1,5 +1,5 @@
 //! #2966: a click on a History panel state returns the document there with one command
-//! (`history.selectState`), not one Undo / Redo per state, so the canvas refreshes once and only
+//! (`history.jump`), not one Undo / Redo per state, so the canvas refreshes once and only
 //! where the jump changed pixels.
 
 use egui::vec2;
@@ -48,7 +48,7 @@ fn clicking_a_state_jumps_there_with_one_command() {
     h.get_all_by_label("New Layer").next().expect("the first New Layer row").click();
     h.run_steps(2);
     assert_eq!(state(&h), (1, 3, rev + 1));
-    assert_eq!(h.state().perf.last_command, "history.selectState");
+    assert_eq!(h.state().perf.last_command, "history.jump");
     // Forward to the last (dimmed) state, again in one step.
     h.get_all_by_label("Fill").last().expect("the last Fill row").click();
     h.run_steps(2);

@@ -1507,3 +1507,52 @@ fn merge_down_on_a_group_merges_the_group() {
     s.execute("edit.undo", json!({})).unwrap();
     assert!(s.active().unwrap().doc.layer(photocraft_doc::LayerId(group)).is_some());
 }
+
+#[test]
+fn command_history_navigation_preserves_successful_save_identity() {
+    for depth in [8, 16, 32] {
+        for command in ["edit.undo", "history.jump"] {
+            let mut session = Session::new();
+            session.execute("file.new", json!({"width": 4, "height": 4, "depth": depth, "name": "Untitled-1"})).unwrap();
+            session.execute("layer.new.layer", json!({})).unwrap();
+            session.active_mut().unwrap().saved_to("renamed.psb".into());
+            let original = session.active().unwrap().history.timeline().first().unwrap().identity.id;
+            let params = if command == "history.jump" { json!({"state": original}) } else { json!({}) };
+            session.execute(command, params).unwrap();
+            assert_eq!(session.active().unwrap().doc.name, "renamed.psb", "{command}, depth {depth}");
+            assert_eq!(session.active().unwrap().path.as_deref(), Some("renamed.psb"));
+            session.execute("edit.redo", json!({})).unwrap();
+            assert_eq!(session.active().unwrap().doc.name, "renamed.psb");
+        }
+    }
+}
+
+#[derive(Debug)]
+struct UnreadableHistoryState;
+impl photocraft_ops::ArchivedDocument<photocraft_ops::PhotoCraftHistory> for UnreadableHistoryState {
+    fn load(&self) -> std::result::Result<Arc<Document>, String> {
+        Err("corrupt history object".into())
+    }
+}
+
+#[test]
+fn history_aliases_report_failed_cold_loads_like_edit_commands() {
+    for command in ["edit.undo", "history.undo", "edit.redo", "history.redo"] {
+        let mut session = session_with_doc();
+        session.execute("layer.new.layer", json!({})).unwrap();
+        let destination = if command.ends_with("redo") {
+            let next = session.active().unwrap().doc.clone();
+            assert!(session.undo());
+            next
+        } else {
+            session.active().unwrap().history.state(0).unwrap()
+        };
+        assert!(session.active_mut().unwrap().history.replace_resident(&destination, Arc::new(UnreadableHistoryState)));
+        let before = session.active().unwrap().doc.clone();
+        let cursor = session.active().unwrap().history.current_id();
+        let error = session.execute(command, json!({})).unwrap_err();
+        assert!(error.to_string().contains("corrupt history object"), "{command}: {error}");
+        assert!(Arc::ptr_eq(&session.active().unwrap().doc, &before));
+        assert_eq!(session.active().unwrap().history.current_id(), cursor);
+    }
+}

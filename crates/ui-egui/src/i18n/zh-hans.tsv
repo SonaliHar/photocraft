@@ -2754,3 +2754,18 @@ curves	Smooth	平滑
 	Sent to {printer}	已发送到 {printer}
 	set in Print Settings…	在打印设置中设置…
 	ICO is limited to 256 × 256 pixels	ICO 最大为 256 × 256 像素
+
+# History cache and branching navigation
+	Memory budget (MiB)	内存上限 (MiB)
+	Undo disk budget (MiB)	撤销磁盘上限 (MiB)
+	Budget mb	容量上限 (MiB)
+	The memory budget is shared by document pixels, embedded data and undo history. It grows as needed; other app memory is additional.	文档像素、嵌入数据和撤销历史共用内存上限。内存按需增长；应用的其他内存另行使用。
+	Undo disk space grows only when needed, up to this limit. Zero disables disk caching. Scratch paths apply to the next cache session.	撤销磁盘空间仅在需要时增长，不超过此上限。设为零可禁用磁盘缓存。暂存路径将在下一个缓存会话中生效。
+	This browser build keeps undo history in memory. Scratch disk settings apply to the desktop app.	浏览器版将撤销历史保存在内存中。暂存盘设置适用于桌面应用。
+	Return to Original	返回原始状态
+	Branch	分支
+	Retry storage	重试存储
+	Unlimited history	无限历史记录
+	Use available disk space	使用可用磁盘空间
+	Undo disk space grows only when needed. Unlimited history retains states until storage is full. Scratch paths apply to the next cache session.	撤销存储空间按需增长。无限历史记录保留状态，直到存储空间已满。暂存路径适用于下次缓存会话。
+	Current	当前

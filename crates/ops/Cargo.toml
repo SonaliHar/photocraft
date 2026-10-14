@@ -8,4 +8,6 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+craft-history = { workspace = true }
 photocraft-doc = { workspace = true }
+serde = { workspace = true }
