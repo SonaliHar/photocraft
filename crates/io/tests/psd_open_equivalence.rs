@@ -26,8 +26,13 @@ fn textured_psd_import_matches_source_and_roundtrip_at_every_depth() {
         group.blend = BlendMode::Normal;
         // The parent mask has different bounds and pixels from either child. Borrowed import
         // must restore the group record index after decoding children before decoding its mask.
-        group.mask =
-            Some(LayerMask { surface: mask_surface(depth, Rect::new(31, 7, 481, 257), 1.0, 113), enabled: true, linked: false, density: 191.0 / 255.0, feather: 0.0 });
+        group.mask = Some(LayerMask {
+            surface: mask_surface(depth, Rect::new(31, 7, 481, 257), 1.0, 113),
+            enabled: true,
+            linked: false,
+            density: 191.0 / 255.0,
+            feather: 0.0,
+        });
         original.layers.push(group);
         original.layers.push(Layer::new("exposure", LayerContent::Adjustment(Adjustment::Exposure { exposure: 0.25, offset: 0.0, gamma: 1.0 })));
         let bytes = export(&original, "oracle.psd", &ExportOptions::default()).expect("generate fixture").bytes;

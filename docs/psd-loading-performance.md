@@ -47,12 +47,14 @@ output; removing that validation caused a malformed-file memory regression in a 
 trial. Worker-count tuning and fixed packing blocks were rejected because they did not
 produce repeatable useful improvements.
 
-## Remaining work
+## Scope and remaining architecture
 
-The umbrella issue tracks the remaining mask, sample-format, mip, sparse first-view and lazy
-materialization work. Parser borrowing, merged-plane reuse, native upload borrowing, dense
-pass fusion and first-open cache deferral have validated checkpoints below. GPU Navigator
-reuse already exists upstream. Final lint, wasm and native UI acceptance are pending.
+All retained import, upload, fusion, cache, mask, sample-format and mip changes are combined
+on one branch. The architecture evaluations below distinguish assessed proposals from
+implemented changes. Sparse base-canvas initialization, approximate display, lazy source
+realization, row-band streaming and opaque-raster pruning remain structural follow-ups.
+Navigator reuse already exists upstream. Current validation and final combined results are
+recorded at the end of this document.
 
 ## Upstream checkpoint
 
@@ -74,7 +76,7 @@ encoded buffers deliberately; decoding uses PsdView and roundtrip uses to_owned.
 PsdFile API and upstream depth-specific global-layer precedence are preserved.
 
 Current upstream already has GPU Navigator reuse (#4518), including initial GPU waiting;
-that item needs no duplicate implementation here. Corpus-enabled PSD/IO suites pass; final lint/wasm/UI gates remain pending.
+that item needs no duplicate implementation here. Corpus-enabled PSD/IO suites pass; see final validation below for lint, WASM and UI results.
 
 ## Raster pass fusion
 
@@ -112,7 +114,8 @@ excluded warmup pairs and six alternating measured pairs. See
 Initial deferred cache bytes are 0 rather than 512 MiB; after the first small edit the cache
 holds 16 MiB and the second edit reuses it. All GPU tests pass (98 cases), including
 opening/stale-cache/discarded-encoder/partial-edit regressions across depths. Linux
-`cargo check -p photocraft-ui-egui` passed; native visible UI acceptance remains pending.
+`cargo check -p photocraft-ui-egui` passed at this checkpoint; subsequent offscreen UI
+inspection is recorded below. Interactive native acceptance remains pending.
 The full opening harness's `cache-defer` mode requires `--features deferred-cache` and
 fresh compositors. Older reference builds remain compatible without that feature.
 
@@ -175,3 +178,92 @@ F32: 500522218 bytes, BLAKE3
 An initial trial accidentally reused identical Cargo executables after a timestamp-preserving
 source transfer; it was rejected. The retained comparison forced recompilation and verified
 distinct executable hashes before running. Subsequent source transfers invalidate mtimes.
+
+## Demand-driven display mips
+
+Each tile now retains independent dirty rectangles for every mip level. Uploads invalidate
+the whole downstream chain; callbacks generate visible tiles only through `ceil(lod)`.
+Shallow regeneration leaves deeper damage pending. Later pan/zoom/Navigator/window callbacks
+catch up without requiring another document edit. The base canvas and texture allocation
+remain complete. Fractional trilinear sampling, odd dimensions, one-dimensional tiles,
+rotated Pattern Preview offsets and the DX12 scratch path retain their original behavior.
+
+The separate 36 MP canvas upload-plus-demand benchmark measured 18.0 → 16.7 ms at 1×,
+17.6 → 17.1 ms at fit, and 17.5 → 17.0 ms with fit plus Navigator. Opening plus two small
+edits measured 18.5 → 16.8, 18.0 → 17.3 and 17.9 → 17.3 ms respectively. This excludes
+import, allocation and painting to the screen; do not add these values to the import/GPU
+completion benchmark. `perf/experiments/psd-open-linux-mips.json` retains both variants,
+all raw samples and excluded warmups in ABBA order.
+
+Nine UI GPU/Navigator tests pass, including full-chain numerical comparisons, independent
+damage at different levels, disjoint edits, fractional LOD, rotated/offset callbacks and
+panning at unchanged revision. Strict UI lint and all WASM checks pass. An offscreen GPU UI
+capture of the complex PSD was inspected: the image, masks, hidden layer and group stack
+render correctly. That capture is visual evidence, not release timing or interactive user
+acceptance.
+
+```mermaid
+flowchart TD
+  A[Frozen PSD bytes in RAM] --> B[PsdView borrows encoded channel payloads]
+  B --> C[Validate sizes and compression]
+  C --> D[Bounded workers; complete channel planes decoded]
+  D --> E[RGB / Gray / CMYK / Lab planes directly into final tiles]
+  D --> M[Retained mask buffer reuse]
+  C --> N[Discarded synthetic masks: validate without pixel storage]
+  E --> F[Document and Session admission]
+  M --> F
+  N --> F
+  F --> G[Borrow native tile bytes for GPU upload]
+  G --> H[Dense full-float raster content + blend fusion]
+  H --> I[Full accurate composite; first-open cache population deferred]
+  I --> J[Complete base display canvas]
+  J --> K[Per-level dirty rectangles]
+  K --> L[Canvas / Navigator / window requests needed mip levels]
+  L --> P[Paint current views]
+```
+
+## Final combined upstream run
+
+Reference: upstream main `369704ac551e8e409800e423ff550c353d5522ef`. Candidate: retained
+code at `e55b4388` (subsequent documentation and benchmark lock updates do not change the
+production code). Both standalone harnesses use identical dependency locks, compiler flags,
+adapter and immutable files. Executable hashes differ and are retained with the Linux logs.
+
+| Frozen workload | Upstream reference | Combined candidate | Reduction |
+|---|---:|---:|---:|
+| 36 MP, three-layer U8 | 487.2 ms | 179.9 ms | 63.1% |
+| Complex eight-layer U8 | 229.9 ms | 98.7 ms | 57.1% |
+| Three-layer U16 | 924.2 ms | 435.3 ms | 52.9% |
+| Three-layer F32 | 1440.6 ms | 784.5 ms | 45.5% |
+
+Six warm samples per variant in opposite-order batches, with excluded cold runs. Reference
+uses its original eager cache policy; candidate uses the retained one-shot first-open deferral.
+The endpoint remains in-memory import, Session admission and full-canvas GPU completion.
+Disk, GPU setup, readback, screen painting and native application startup are excluded.
+The separately measured mip optimization is not part of these values and is not added to them.
+
+`perf/experiments/psd-open-linux-final.json` stores phase medians/raw samples;
+`psd-open-linux-final-validation.json` stores both variants' GPU reports, cold runs,
+representative errors and complete import signatures. All four files' complete imported
+raster/mask/structure/warning signatures match, including 16/32-bit variants. Representative
+GPU crops match the CPU oracle within the documented tolerance; this is not full-frame GPU
+bitwise equality or an exact replay of the original CI P44 file.
+
+Final checks: 1001 corpus-enabled PSD/IO tests, 98 GPU tests, all 2687 UI unit tests
+and 109 UI integration tests across 26 targets passed. Nine targeted GPU/Navigator cases
+are included in the UI suite. Strict Clippy for PSD/IO/GPU/UI across all targets, dependency layering and all WASM
+checks passed. The complex PSD was opened and visually inspected in the Linux offscreen
+GPU UI; interactive native acceptance remains for a maintainer/user.
+
+Formatting checks, the repository quick performance run and generated scorecard check also
+pass. The broad integration run exposed an existing Camera Raw GPU-initialization failure:
+the complete target failed identically on unmodified upstream main, while its isolated case
+passed. Its test fixtures now share a headless instance/device/queue and create fresh egui
+renderers and callback resources for every theme. All pixel assertions and theme coverage
+remain; the complete 21-test target passes with no skips or retries in its code.
+`perf/experiments/psd-open-linux-tests.json` records the final integration coverage.
+
+When switching benchmark source snapshots with a shared Cargo target, invalidate all source
+mtimes or use separate artifact directories: stale cross-snapshot metadata was rejected
+rather than used as successful build evidence. Both retained final benchmark executables
+compiled coherent sources and used byte-identical dependency locks.

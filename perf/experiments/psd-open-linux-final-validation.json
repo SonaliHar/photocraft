@@ -1,0 +1,2813 @@
+{
+  "p44-3layer": {
+    "fixture_blake3": "497008838e0cd18506e4b2e0cf533ff001f53fe22d1bbc1a9aab41d90df8de0b",
+    "fixture_bytes": 294070821,
+    "complete_import_signature_matches": true,
+    "correctness": {
+      "cpu_crop_hash": "c646de1e6363f27304c4ea7ded4ed9d5b5b1c5ab3f900efc11301478fd6c193c",
+      "structure": {
+        "depth": "U8",
+        "layers": [
+          {
+            "blend": "Normal",
+            "clipped": false,
+            "content": {
+              "hash": "ac1876d447d3feb1c26283558129e1c26b6316215c9c5e64c8a87e69dc0e6fb4",
+              "kind": "raster",
+              "tiles": 580
+            },
+            "fill_opacity": 1.0,
+            "mask": null,
+            "name": "Full source image",
+            "opacity": 1.0,
+            "visible": true
+          },
+          {
+            "blend": "Multiply",
+            "clipped": false,
+            "content": {
+              "hash": "91756a60cb4eb65768eaeb3e8b1ba579593f5eb30d44c186bceada283fd61d42",
+              "kind": "raster",
+              "tiles": 580
+            },
+            "fill_opacity": 1.0,
+            "mask": null,
+            "name": "Full textured overlay 1",
+            "opacity": 0.501960813999176,
+            "visible": true
+          },
+          {
+            "blend": "Screen",
+            "clipped": false,
+            "content": {
+              "hash": "c6342c4ff28f941e5a7843ec6b75b3655c1e343983ab9aee2fd1a531fcf36a55",
+              "kind": "raster",
+              "tiles": 580
+            },
+            "fill_opacity": 1.0,
+            "mask": null,
+            "name": "Full textured overlay 2",
+            "opacity": 0.501960813999176,
+            "visible": true
+          }
+        ],
+        "mode": "Rgb",
+        "size": [
+          7360,
+          4912
+        ]
+      },
+      "warnings": []
+    },
+    "gpu_reports": {
+      "before": [
+        {
+          "adapter": "NVIDIA GeForce RTX 3090",
+          "cache": "cache-on",
+          "cold": {
+            "admission_ms": 2.284553,
+            "bytes_uploaded": 456130560,
+            "color": {
+              "action": "untagged",
+              "ask": false,
+              "missing": true,
+              "policy": "preserve",
+              "working": "sRGB IEC61966-2.1"
+            },
+            "encode_submit_ms": 104.554095,
+            "evicted": 0,
+            "flushes": 0,
+            "import_ms": 434.825466,
+            "passes": 7,
+            "prefix": {
+              "bytes": 536870912,
+              "hits": 0
+            },
+            "total_ms": 583.010667,
+            "uploads": 1740,
+            "wait_ms": 41.346553
+          },
+          "cpu_crop_blake3": "65fa77b174645fe4ffbb1d9d4a6d1d638e840cbc97124586aa821ab52f02b55e",
+          "fixture": "fixtures/p44-3layer.psd",
+          "fixture_blake3": "497008838e0cd18506e4b2e0cf533ff001f53fe22d1bbc1a9aab41d90df8de0b",
+          "fixture_bytes": 294070821,
+          "fresh": true,
+          "gpu_cpu_max_error": 1.1920928955078125e-07,
+          "p50_admission_ms": 1.9578149999999999,
+          "p50_encode_submit_ms": 90.018132,
+          "p50_import_ms": 340.229358,
+          "p50_total_ms": 474.065486,
+          "p50_wait_ms": 42.343416000000005,
+          "preview": "results/upstream-final-p44-3layer-upstream-final-before-0.png",
+          "representative_checks": [
+            {
+              "cpu_blake3": "84d17377af7f975c606100ee5ca6855687b1c9f2e3577fd54b88f37a16979597",
+              "max_error": 1.1920928955078125e-07,
+              "preview": "results/upstream-final-p44-3layer-upstream-final-before-0.mask.png",
+              "rect": [
+                1093,
+                737,
+                2053,
+                1377
+              ],
+              "region": "mask"
+            },
+            {
+              "cpu_blake3": "e719fef6e78564986213bba898cf28e6ca1351d57067ff928f53f08f3542954b",
+              "max_error": 1.1920928955078125e-07,
+              "preview": "results/upstream-final-p44-3layer-upstream-final-before-0.group.png",
+              "rect": [
+                2919,
+                1971,
+                3879,
+                2611
+              ],
+              "region": "group"
+            },
+            {
+              "cpu_blake3": "03066ec9668a290aa920490ca49f896df962d6e92cc9cd06239758838464c01d",
+              "max_error": 1.1920928955078125e-07,
+              "preview": "results/upstream-final-p44-3layer-upstream-final-before-0.group-mask.png",
+              "rect": [
+                3832,
+                2588,
+                4792,
+                3228
+              ],
+              "region": "group-mask"
+            }
+          ],
+          "reps": 3,
+          "samples": [
+            {
+              "admission_ms": 1.923956,
+              "bytes_uploaded": 456130560,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 90.733067,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 328.941622,
+              "passes": 7,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 463.899191,
+              "uploads": 1740,
+              "wait_ms": 42.300546000000004
+            },
+            {
+              "admission_ms": 1.962386,
+              "bytes_uploaded": 456130560,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 90.018132,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 366.012497,
+              "passes": 7,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 500.33643099999995,
+              "uploads": 1740,
+              "wait_ms": 42.343416000000005
+            },
+            {
+              "admission_ms": 1.9578149999999999,
+              "bytes_uploaded": 456130560,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 89.526307,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 340.229358,
+              "passes": 7,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 474.065486,
+              "uploads": 1740,
+              "wait_ms": 42.352005999999996
+            }
+          ],
+          "size": [
+            7360,
+            4912
+          ]
+        },
+        {
+          "adapter": "NVIDIA GeForce RTX 3090",
+          "cache": "cache-on",
+          "cold": {
+            "admission_ms": 2.372452,
+            "bytes_uploaded": 456130560,
+            "color": {
+              "action": "untagged",
+              "ask": false,
+              "missing": true,
+              "policy": "preserve",
+              "working": "sRGB IEC61966-2.1"
+            },
+            "encode_submit_ms": 103.431265,
+            "evicted": 0,
+            "flushes": 0,
+            "import_ms": 431.943811,
+            "passes": 7,
+            "prefix": {
+              "bytes": 536870912,
+              "hits": 0
+            },
+            "total_ms": 579.619737,
+            "uploads": 1740,
+            "wait_ms": 41.872209
+          },
+          "cpu_crop_blake3": "65fa77b174645fe4ffbb1d9d4a6d1d638e840cbc97124586aa821ab52f02b55e",
+          "fixture": "fixtures/p44-3layer.psd",
+          "fixture_blake3": "497008838e0cd18506e4b2e0cf533ff001f53fe22d1bbc1a9aab41d90df8de0b",
+          "fixture_bytes": 294070821,
+          "fresh": true,
+          "gpu_cpu_max_error": 1.1920928955078125e-07,
+          "p50_admission_ms": 1.9312159999999998,
+          "p50_encode_submit_ms": 90.10739199999999,
+          "p50_import_ms": 373.29605599999996,
+          "p50_total_ms": 507.75262,
+          "p50_wait_ms": 42.417956,
+          "preview": "results/upstream-final-p44-3layer-upstream-final-before-1.png",
+          "representative_checks": [
+            {
+              "cpu_blake3": "84d17377af7f975c606100ee5ca6855687b1c9f2e3577fd54b88f37a16979597",
+              "max_error": 1.1920928955078125e-07,
+              "preview": "results/upstream-final-p44-3layer-upstream-final-before-1.mask.png",
+              "rect": [
+                1093,
+                737,
+                2053,
+                1377
+              ],
+              "region": "mask"
+            },
+            {
+              "cpu_blake3": "e719fef6e78564986213bba898cf28e6ca1351d57067ff928f53f08f3542954b",
+              "max_error": 1.1920928955078125e-07,
+              "preview": "results/upstream-final-p44-3layer-upstream-final-before-1.group.png",
+              "rect": [
+                2919,
+                1971,
+                3879,
+                2611
+              ],
+              "region": "group"
+            },
+            {
+              "cpu_blake3": "03066ec9668a290aa920490ca49f896df962d6e92cc9cd06239758838464c01d",
+              "max_error": 1.1920928955078125e-07,
+              "preview": "results/upstream-final-p44-3layer-upstream-final-before-1.group-mask.png",
+              "rect": [
+                3832,
+                2588,
+                4792,
+                3228
+              ],
+              "region": "group-mask"
+            }
+          ],
+          "reps": 3,
+          "samples": [
+            {
+              "admission_ms": 2.0075060000000002,
+              "bytes_uploaded": 456130560,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 90.23356100000001,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 333.82886699999995,
+              "passes": 7,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 468.2145919999999,
+              "uploads": 1740,
+              "wait_ms": 42.144658
+            },
+            {
+              "admission_ms": 1.906836,
+              "bytes_uploaded": 456130560,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 89.375359,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 375.40041,
+              "passes": 7,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 509.28647900000004,
+              "uploads": 1740,
+              "wait_ms": 42.603874
+            },
+            {
+              "admission_ms": 1.9312159999999998,
+              "bytes_uploaded": 456130560,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 90.10739199999999,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 373.29605599999996,
+              "passes": 7,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 507.75262,
+              "uploads": 1740,
+              "wait_ms": 42.417956
+            }
+          ],
+          "size": [
+            7360,
+            4912
+          ]
+        }
+      ],
+      "after": [
+        {
+          "adapter": "NVIDIA GeForce RTX 3090",
+          "cache": "cache-defer",
+          "cold": {
+            "admission_ms": 2.283013,
+            "bytes_uploaded": 456130560,
+            "color": {
+              "action": "untagged",
+              "ask": false,
+              "missing": true,
+              "policy": "preserve",
+              "working": "sRGB IEC61966-2.1"
+            },
+            "encode_submit_ms": 72.348444,
+            "evicted": 0,
+            "flushes": 0,
+            "import_ms": 118.84934,
+            "passes": 4,
+            "prefix": {
+              "bytes": 0,
+              "hits": 0
+            },
+            "total_ms": 227.866672,
+            "uploads": 1740,
+            "wait_ms": 34.385875000000006
+          },
+          "cpu_crop_blake3": "65fa77b174645fe4ffbb1d9d4a6d1d638e840cbc97124586aa821ab52f02b55e",
+          "fixture": "fixtures/p44-3layer.psd",
+          "fixture_blake3": "497008838e0cd18506e4b2e0cf533ff001f53fe22d1bbc1a9aab41d90df8de0b",
+          "fixture_bytes": 294070821,
+          "fresh": true,
+          "gpu_cpu_max_error": 1.1920928955078125e-07,
+          "p50_admission_ms": 2.2923129999999996,
+          "p50_encode_submit_ms": 62.494237,
+          "p50_import_ms": 79.429382,
+          "p50_total_ms": 180.123146,
+          "p50_wait_ms": 35.476987,
+          "preview": "results/upstream-final-p44-3layer-upstream-final-after-0.png",
+          "representative_checks": [
+            {
+              "cpu_blake3": "84d17377af7f975c606100ee5ca6855687b1c9f2e3577fd54b88f37a16979597",
+              "max_error": 1.1920928955078125e-07,
+              "preview": "results/upstream-final-p44-3layer-upstream-final-after-0.mask.png",
+              "rect": [
+                1093,
+                737,
+                2053,
+                1377
+              ],
+              "region": "mask"
+            },
+            {
+              "cpu_blake3": "e719fef6e78564986213bba898cf28e6ca1351d57067ff928f53f08f3542954b",
+              "max_error": 1.1920928955078125e-07,
+              "preview": "results/upstream-final-p44-3layer-upstream-final-after-0.group.png",
+              "rect": [
+                2919,
+                1971,
+                3879,
+                2611
+              ],
+              "region": "group"
+            },
+            {
+              "cpu_blake3": "03066ec9668a290aa920490ca49f896df962d6e92cc9cd06239758838464c01d",
+              "max_error": 1.1920928955078125e-07,
+              "preview": "results/upstream-final-p44-3layer-upstream-final-after-0.group-mask.png",
+              "rect": [
+                3832,
+                2588,
+                4792,
+                3228
+              ],
+              "region": "group-mask"
+            }
+          ],
+          "reps": 3,
+          "samples": [
+            {
+              "admission_ms": 2.496591,
+              "bytes_uploaded": 456130560,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 63.031743,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 79.014405,
+              "passes": 4,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 180.123146,
+              "uploads": 1740,
+              "wait_ms": 35.580407
+            },
+            {
+              "admission_ms": 2.048804,
+              "bytes_uploaded": 456130560,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 62.459737000000004,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 79.429382,
+              "passes": 4,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 179.15982200000002,
+              "uploads": 1740,
+              "wait_ms": 35.221899
+            },
+            {
+              "admission_ms": 2.2923129999999996,
+              "bytes_uploaded": 456130560,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 62.494237,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 80.763402,
+              "passes": 4,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 181.026939,
+              "uploads": 1740,
+              "wait_ms": 35.476987
+            }
+          ],
+          "size": [
+            7360,
+            4912
+          ]
+        },
+        {
+          "adapter": "NVIDIA GeForce RTX 3090",
+          "cache": "cache-defer",
+          "cold": {
+            "admission_ms": 2.381812,
+            "bytes_uploaded": 456130560,
+            "color": {
+              "action": "untagged",
+              "ask": false,
+              "missing": true,
+              "policy": "preserve",
+              "working": "sRGB IEC61966-2.1"
+            },
+            "encode_submit_ms": 72.261575,
+            "evicted": 0,
+            "flushes": 0,
+            "import_ms": 117.67487899999999,
+            "passes": 4,
+            "prefix": {
+              "bytes": 0,
+              "hits": 0
+            },
+            "total_ms": 226.89400899999998,
+            "uploads": 1740,
+            "wait_ms": 34.575742999999996
+          },
+          "cpu_crop_blake3": "65fa77b174645fe4ffbb1d9d4a6d1d638e840cbc97124586aa821ab52f02b55e",
+          "fixture": "fixtures/p44-3layer.psd",
+          "fixture_blake3": "497008838e0cd18506e4b2e0cf533ff001f53fe22d1bbc1a9aab41d90df8de0b",
+          "fixture_bytes": 294070821,
+          "fresh": true,
+          "gpu_cpu_max_error": 1.1920928955078125e-07,
+          "p50_admission_ms": 1.9948560000000002,
+          "p50_encode_submit_ms": 62.235328,
+          "p50_import_ms": 80.085516,
+          "p50_total_ms": 179.653189,
+          "p50_wait_ms": 35.56434599999999,
+          "preview": "results/upstream-final-p44-3layer-upstream-final-after-1.png",
+          "representative_checks": [
+            {
+              "cpu_blake3": "84d17377af7f975c606100ee5ca6855687b1c9f2e3577fd54b88f37a16979597",
+              "max_error": 1.1920928955078125e-07,
+              "preview": "results/upstream-final-p44-3layer-upstream-final-after-1.mask.png",
+              "rect": [
+                1093,
+                737,
+                2053,
+                1377
+              ],
+              "region": "mask"
+            },
+            {
+              "cpu_blake3": "e719fef6e78564986213bba898cf28e6ca1351d57067ff928f53f08f3542954b",
+              "max_error": 1.1920928955078125e-07,
+              "preview": "results/upstream-final-p44-3layer-upstream-final-after-1.group.png",
+              "rect": [
+                2919,
+                1971,
+                3879,
+                2611
+              ],
+              "region": "group"
+            },
+            {
+              "cpu_blake3": "03066ec9668a290aa920490ca49f896df962d6e92cc9cd06239758838464c01d",
+              "max_error": 1.1920928955078125e-07,
+              "preview": "results/upstream-final-p44-3layer-upstream-final-after-1.group-mask.png",
+              "rect": [
+                3832,
+                2588,
+                4792,
+                3228
+              ],
+              "region": "group-mask"
+            }
+          ],
+          "reps": 3,
+          "samples": [
+            {
+              "admission_ms": 1.9948560000000002,
+              "bytes_uploaded": 456130560,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 62.235328,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 81.99129199999999,
+              "passes": 4,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 181.831593,
+              "uploads": 1740,
+              "wait_ms": 35.610116999999995
+            },
+            {
+              "admission_ms": 1.9944759999999997,
+              "bytes_uploaded": 456130560,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 62.489517,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 78.95371499999999,
+              "passes": 4,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 179.002054,
+              "uploads": 1740,
+              "wait_ms": 35.56434599999999
+            },
+            {
+              "admission_ms": 2.533122,
+              "bytes_uploaded": 456130560,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 61.693802999999996,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 80.085516,
+              "passes": 4,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 179.653189,
+              "uploads": 1740,
+              "wait_ms": 35.340748
+            }
+          ],
+          "size": [
+            7360,
+            4912
+          ]
+        }
+      ]
+    }
+  },
+  "complex-8layer": {
+    "fixture_blake3": "fc709ac01fcd5b73b47c5a08b7c1e9d75b22569edcbedf9c34d4c950042accca",
+    "fixture_bytes": 124948488,
+    "complete_import_signature_matches": true,
+    "correctness": {
+      "cpu_crop_hash": "af1dfeeec5ba229f638e0fd03647263dac932e4645b98683140e91eb33b5335e",
+      "structure": {
+        "depth": "U8",
+        "layers": [
+          {
+            "blend": "Normal",
+            "clipped": false,
+            "content": {
+              "hash": "ac1876d447d3feb1c26283558129e1c26b6316215c9c5e64c8a87e69dc0e6fb4",
+              "kind": "raster",
+              "tiles": 580
+            },
+            "fill_opacity": 1.0,
+            "mask": null,
+            "name": "Full source image",
+            "opacity": 1.0,
+            "visible": true
+          },
+          {
+            "blend": "Multiply",
+            "clipped": false,
+            "content": {
+              "hash": "620d1c094f71c78d57fe5291bf2013f11840d652567c3c0477d58e5ad851ad07",
+              "kind": "raster",
+              "tiles": 35
+            },
+            "fill_opacity": 1.0,
+            "mask": null,
+            "name": "Cropped source texture 0",
+            "opacity": 0.3764705955982208,
+            "visible": true
+          },
+          {
+            "blend": "Screen",
+            "clipped": false,
+            "content": {
+              "hash": "cd870a1ab6105008e240d62dffe0f16c3ac6537aec55ac291b25a03bda9e3fd5",
+              "kind": "raster",
+              "tiles": 42
+            },
+            "fill_opacity": 1.0,
+            "mask": {
+              "density": 1.0,
+              "enabled": true,
+              "feather": 0.0,
+              "hash": "07459b9bbdda61ba84b21fdf72008fa6f3bc07ffea27b53fbd16bdea2387453a",
+              "linked": true
+            },
+            "name": "Cropped source texture 1",
+            "opacity": 0.45098039507865906,
+            "visible": true
+          },
+          {
+            "blend": "Multiply",
+            "clipped": false,
+            "content": {
+              "hash": "a395e238f29f4fac2a92c3589b92349df64b526552528f5366e775a748e5ff44",
+              "kind": "raster",
+              "tiles": 40
+            },
+            "fill_opacity": 1.0,
+            "mask": null,
+            "name": "Cropped source texture 2",
+            "opacity": 0.5254902243614197,
+            "visible": true
+          },
+          {
+            "blend": "Screen",
+            "clipped": false,
+            "content": {
+              "hash": "b5af352e90e48b4c7d62bfea660260ceceb329ed6a644fdb4449bbf4d2ca598e",
+              "kind": "raster",
+              "tiles": 35
+            },
+            "fill_opacity": 1.0,
+            "mask": null,
+            "name": "Cropped source texture 5",
+            "opacity": 0.7490196228027344,
+            "visible": false
+          },
+          {
+            "blend": "Screen",
+            "clipped": false,
+            "content": {
+              "children": [
+                {
+                  "blend": "Screen",
+                  "clipped": false,
+                  "content": {
+                    "hash": "8dc4289ff62416d122c66a737db797a62e276a2d2151a40029c9c743002bcaba",
+                    "kind": "raster",
+                    "tiles": 35
+                  },
+                  "fill_opacity": 1.0,
+                  "mask": null,
+                  "name": "Cropped source texture 3",
+                  "opacity": 0.6000000238418579,
+                  "visible": true
+                },
+                {
+                  "blend": "Multiply",
+                  "clipped": false,
+                  "content": {
+                    "hash": "0aed604452eeeb5a3adc05c1a43b03fab2f18cda270668392c934ccf1aa19822",
+                    "kind": "raster",
+                    "tiles": 40
+                  },
+                  "fill_opacity": 1.0,
+                  "mask": {
+                    "density": 1.0,
+                    "enabled": true,
+                    "feather": 0.0,
+                    "hash": "2bc16b1823c8e5b1444dee8808654ed59e4f51e8d7fb93cd8fbdfb147fb26d1e",
+                    "linked": true
+                  },
+                  "name": "Cropped source texture 4",
+                  "opacity": 0.6745098233222961,
+                  "visible": true
+                }
+              ],
+              "kind": "group"
+            },
+            "fill_opacity": 1.0,
+            "mask": null,
+            "name": "Isolated screened detail",
+            "opacity": 0.7529411911964417,
+            "visible": true
+          },
+          {
+            "blend": "Normal",
+            "clipped": false,
+            "content": {
+              "kind": "adjustment",
+              "parameters": "BrightnessContrast { brightness: 4.0, contrast: 8.0, legacy: false }"
+            },
+            "fill_opacity": 1.0,
+            "mask": null,
+            "name": "Brightness contrast adjustment",
+            "opacity": 1.0,
+            "visible": true
+          }
+        ],
+        "mode": "Rgb",
+        "size": [
+          7360,
+          4912
+        ]
+      },
+      "warnings": []
+    },
+    "gpu_reports": {
+      "before": [
+        {
+          "adapter": "NVIDIA GeForce RTX 3090",
+          "cache": "cache-on",
+          "cold": {
+            "admission_ms": 1.828016,
+            "bytes_uploaded": 207749120,
+            "color": {
+              "action": "untagged",
+              "ask": false,
+              "missing": true,
+              "policy": "preserve",
+              "working": "sRGB IEC61966-2.1"
+            },
+            "encode_submit_ms": 61.802213,
+            "evicted": 0,
+            "flushes": 0,
+            "import_ms": 231.1846,
+            "passes": 24,
+            "prefix": {
+              "bytes": 536870912,
+              "hits": 0
+            },
+            "total_ms": 321.048925,
+            "uploads": 854,
+            "wait_ms": 26.234095999999997
+          },
+          "cpu_crop_blake3": "c447455ee4dfe087faaa33d92cc36d30dc8eb81041bfebca69363c668f28f067",
+          "fixture": "fixtures/complex-8layer.psd",
+          "fixture_blake3": "fc709ac01fcd5b73b47c5a08b7c1e9d75b22569edcbedf9c34d4c950042accca",
+          "fixture_bytes": 124948488,
+          "fresh": true,
+          "gpu_cpu_max_error": 0.003921538591384888,
+          "p50_admission_ms": 1.952775,
+          "p50_encode_submit_ms": 52.74645,
+          "p50_import_ms": 152.671481,
+          "p50_total_ms": 231.644826,
+          "p50_wait_ms": 24.956025999999998,
+          "preview": "results/upstream-final-complex-8layer-upstream-final-before-0.png",
+          "representative_checks": [
+            {
+              "cpu_blake3": "580e32d2d2bd81eec07f5bcaa12c51310bb0e6edbab66964984c0fca510fd0ce",
+              "max_error": 0.003921627998352051,
+              "preview": "results/upstream-final-complex-8layer-upstream-final-before-0.mask.png",
+              "rect": [
+                1093,
+                737,
+                2053,
+                1377
+              ],
+              "region": "mask"
+            },
+            {
+              "cpu_blake3": "16d8c6d4f2e3fb737d097f00399208ea8c8eb402b7ce923fc7ce15251476ebd1",
+              "max_error": 5.960464477539063e-08,
+              "preview": "results/upstream-final-complex-8layer-upstream-final-before-0.group.png",
+              "rect": [
+                2919,
+                1971,
+                3879,
+                2611
+              ],
+              "region": "group"
+            },
+            {
+              "cpu_blake3": "bfa7d918640469e990c59311e89b1c1da0c8232f28a8fc8e3d8027e054d46bbf",
+              "max_error": 0.003921598196029663,
+              "preview": "results/upstream-final-complex-8layer-upstream-final-before-0.group-mask.png",
+              "rect": [
+                3832,
+                2588,
+                4792,
+                3228
+              ],
+              "region": "group-mask"
+            }
+          ],
+          "reps": 3,
+          "samples": [
+            {
+              "admission_ms": 1.9526459999999999,
+              "bytes_uploaded": 207749120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 55.171851000000004,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 163.985777,
+              "passes": 24,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 246.0663,
+              "uploads": 854,
+              "wait_ms": 24.956025999999998
+            },
+            {
+              "admission_ms": 1.952775,
+              "bytes_uploaded": 207749120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 52.74645,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 149.023578,
+              "passes": 24,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 228.136732,
+              "uploads": 854,
+              "wait_ms": 24.413929
+            },
+            {
+              "admission_ms": 2.041314,
+              "bytes_uploaded": 207749120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 51.702518000000005,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 152.671481,
+              "passes": 24,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 231.644826,
+              "uploads": 854,
+              "wait_ms": 25.229512999999997
+            }
+          ],
+          "size": [
+            7360,
+            4912
+          ]
+        },
+        {
+          "adapter": "NVIDIA GeForce RTX 3090",
+          "cache": "cache-on",
+          "cold": {
+            "admission_ms": 1.9891650000000003,
+            "bytes_uploaded": 207749120,
+            "color": {
+              "action": "untagged",
+              "ask": false,
+              "missing": true,
+              "policy": "preserve",
+              "working": "sRGB IEC61966-2.1"
+            },
+            "encode_submit_ms": 62.325199,
+            "evicted": 0,
+            "flushes": 0,
+            "import_ms": 228.903928,
+            "passes": 24,
+            "prefix": {
+              "bytes": 536870912,
+              "hits": 0
+            },
+            "total_ms": 319.629277,
+            "uploads": 854,
+            "wait_ms": 26.410985
+          },
+          "cpu_crop_blake3": "c447455ee4dfe087faaa33d92cc36d30dc8eb81041bfebca69363c668f28f067",
+          "fixture": "fixtures/complex-8layer.psd",
+          "fixture_blake3": "fc709ac01fcd5b73b47c5a08b7c1e9d75b22569edcbedf9c34d4c950042accca",
+          "fixture_bytes": 124948488,
+          "fresh": true,
+          "gpu_cpu_max_error": 0.003921538591384888,
+          "p50_admission_ms": 2.002495,
+          "p50_encode_submit_ms": 52.077665,
+          "p50_import_ms": 131.375389,
+          "p50_total_ms": 208.88453600000003,
+          "p50_wait_ms": 24.446289,
+          "preview": "results/upstream-final-complex-8layer-upstream-final-before-1.png",
+          "representative_checks": [
+            {
+              "cpu_blake3": "580e32d2d2bd81eec07f5bcaa12c51310bb0e6edbab66964984c0fca510fd0ce",
+              "max_error": 0.003921627998352051,
+              "preview": "results/upstream-final-complex-8layer-upstream-final-before-1.mask.png",
+              "rect": [
+                1093,
+                737,
+                2053,
+                1377
+              ],
+              "region": "mask"
+            },
+            {
+              "cpu_blake3": "16d8c6d4f2e3fb737d097f00399208ea8c8eb402b7ce923fc7ce15251476ebd1",
+              "max_error": 5.960464477539063e-08,
+              "preview": "results/upstream-final-complex-8layer-upstream-final-before-1.group.png",
+              "rect": [
+                2919,
+                1971,
+                3879,
+                2611
+              ],
+              "region": "group"
+            },
+            {
+              "cpu_blake3": "bfa7d918640469e990c59311e89b1c1da0c8232f28a8fc8e3d8027e054d46bbf",
+              "max_error": 0.003921598196029663,
+              "preview": "results/upstream-final-complex-8layer-upstream-final-before-1.group-mask.png",
+              "rect": [
+                3832,
+                2588,
+                4792,
+                3228
+              ],
+              "region": "group-mask"
+            }
+          ],
+          "reps": 3,
+          "samples": [
+            {
+              "admission_ms": 1.981235,
+              "bytes_uploaded": 207749120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 54.20532,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 162.960785,
+              "passes": 24,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 243.53027899999998,
+              "uploads": 854,
+              "wait_ms": 24.382939
+            },
+            {
+              "admission_ms": 2.114834,
+              "bytes_uploaded": 207749120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 50.948024000000004,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 131.375389,
+              "passes": 24,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 208.88453600000003,
+              "uploads": 854,
+              "wait_ms": 24.446289
+            },
+            {
+              "admission_ms": 2.002495,
+              "bytes_uploaded": 207749120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 52.077665,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 126.64299400000002,
+              "passes": 24,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 205.62657000000002,
+              "uploads": 854,
+              "wait_ms": 24.903416
+            }
+          ],
+          "size": [
+            7360,
+            4912
+          ]
+        }
+      ],
+      "after": [
+        {
+          "adapter": "NVIDIA GeForce RTX 3090",
+          "cache": "cache-defer",
+          "cold": {
+            "admission_ms": 2.430322,
+            "bytes_uploaded": 207749120,
+            "color": {
+              "action": "untagged",
+              "ask": false,
+              "missing": true,
+              "policy": "preserve",
+              "working": "sRGB IEC61966-2.1"
+            },
+            "encode_submit_ms": 46.388987,
+            "evicted": 0,
+            "flushes": 0,
+            "import_ms": 77.875034,
+            "passes": 23,
+            "prefix": {
+              "bytes": 0,
+              "hits": 0
+            },
+            "total_ms": 148.85731900000002,
+            "uploads": 854,
+            "wait_ms": 22.162976
+          },
+          "cpu_crop_blake3": "c447455ee4dfe087faaa33d92cc36d30dc8eb81041bfebca69363c668f28f067",
+          "fixture": "fixtures/complex-8layer.psd",
+          "fixture_blake3": "fc709ac01fcd5b73b47c5a08b7c1e9d75b22569edcbedf9c34d4c950042accca",
+          "fixture_bytes": 124948488,
+          "fresh": true,
+          "gpu_cpu_max_error": 0.003921538591384888,
+          "p50_admission_ms": 1.9657950000000002,
+          "p50_encode_submit_ms": 33.78756,
+          "p50_import_ms": 41.996659,
+          "p50_total_ms": 99.17978699999999,
+          "p50_wait_ms": 20.571858,
+          "preview": "results/upstream-final-complex-8layer-upstream-final-after-0.png",
+          "representative_checks": [
+            {
+              "cpu_blake3": "580e32d2d2bd81eec07f5bcaa12c51310bb0e6edbab66964984c0fca510fd0ce",
+              "max_error": 0.003921627998352051,
+              "preview": "results/upstream-final-complex-8layer-upstream-final-after-0.mask.png",
+              "rect": [
+                1093,
+                737,
+                2053,
+                1377
+              ],
+              "region": "mask"
+            },
+            {
+              "cpu_blake3": "16d8c6d4f2e3fb737d097f00399208ea8c8eb402b7ce923fc7ce15251476ebd1",
+              "max_error": 5.960464477539063e-08,
+              "preview": "results/upstream-final-complex-8layer-upstream-final-after-0.group.png",
+              "rect": [
+                2919,
+                1971,
+                3879,
+                2611
+              ],
+              "region": "group"
+            },
+            {
+              "cpu_blake3": "bfa7d918640469e990c59311e89b1c1da0c8232f28a8fc8e3d8027e054d46bbf",
+              "max_error": 0.003921598196029663,
+              "preview": "results/upstream-final-complex-8layer-upstream-final-after-0.group-mask.png",
+              "rect": [
+                3832,
+                2588,
+                4792,
+                3228
+              ],
+              "region": "group-mask"
+            }
+          ],
+          "reps": 3,
+          "samples": [
+            {
+              "admission_ms": 1.902626,
+              "bytes_uploaded": 207749120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 35.315999,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 41.996659,
+              "passes": 23,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 99.76314199999999,
+              "uploads": 854,
+              "wait_ms": 20.547857999999998
+            },
+            {
+              "admission_ms": 2.340433,
+              "bytes_uploaded": 207749120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 33.78756,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 42.459326,
+              "passes": 23,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 99.17978699999999,
+              "uploads": 854,
+              "wait_ms": 20.592468
+            },
+            {
+              "admission_ms": 1.9657950000000002,
+              "bytes_uploaded": 207749120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 32.693168,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 41.619572,
+              "passes": 23,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 96.850393,
+              "uploads": 854,
+              "wait_ms": 20.571858
+            }
+          ],
+          "size": [
+            7360,
+            4912
+          ]
+        },
+        {
+          "adapter": "NVIDIA GeForce RTX 3090",
+          "cache": "cache-defer",
+          "cold": {
+            "admission_ms": 2.394672,
+            "bytes_uploaded": 207749120,
+            "color": {
+              "action": "untagged",
+              "ask": false,
+              "missing": true,
+              "policy": "preserve",
+              "working": "sRGB IEC61966-2.1"
+            },
+            "encode_submit_ms": 45.405905000000004,
+            "evicted": 0,
+            "flushes": 0,
+            "import_ms": 78.500229,
+            "passes": 23,
+            "prefix": {
+              "bytes": 0,
+              "hits": 0
+            },
+            "total_ms": 149.216876,
+            "uploads": 854,
+            "wait_ms": 22.91607
+          },
+          "cpu_crop_blake3": "c447455ee4dfe087faaa33d92cc36d30dc8eb81041bfebca69363c668f28f067",
+          "fixture": "fixtures/complex-8layer.psd",
+          "fixture_blake3": "fc709ac01fcd5b73b47c5a08b7c1e9d75b22569edcbedf9c34d4c950042accca",
+          "fixture_bytes": 124948488,
+          "fresh": true,
+          "gpu_cpu_max_error": 0.003921538591384888,
+          "p50_admission_ms": 1.9677649999999998,
+          "p50_encode_submit_ms": 33.119755,
+          "p50_import_ms": 42.320877,
+          "p50_total_ms": 98.13859400000001,
+          "p50_wait_ms": 20.645408,
+          "preview": "results/upstream-final-complex-8layer-upstream-final-after-1.png",
+          "representative_checks": [
+            {
+              "cpu_blake3": "580e32d2d2bd81eec07f5bcaa12c51310bb0e6edbab66964984c0fca510fd0ce",
+              "max_error": 0.003921627998352051,
+              "preview": "results/upstream-final-complex-8layer-upstream-final-after-1.mask.png",
+              "rect": [
+                1093,
+                737,
+                2053,
+                1377
+              ],
+              "region": "mask"
+            },
+            {
+              "cpu_blake3": "16d8c6d4f2e3fb737d097f00399208ea8c8eb402b7ce923fc7ce15251476ebd1",
+              "max_error": 5.960464477539063e-08,
+              "preview": "results/upstream-final-complex-8layer-upstream-final-after-1.group.png",
+              "rect": [
+                2919,
+                1971,
+                3879,
+                2611
+              ],
+              "region": "group"
+            },
+            {
+              "cpu_blake3": "bfa7d918640469e990c59311e89b1c1da0c8232f28a8fc8e3d8027e054d46bbf",
+              "max_error": 0.003921598196029663,
+              "preview": "results/upstream-final-complex-8layer-upstream-final-after-1.group-mask.png",
+              "rect": [
+                3832,
+                2588,
+                4792,
+                3228
+              ],
+              "region": "group-mask"
+            }
+          ],
+          "reps": 3,
+          "samples": [
+            {
+              "admission_ms": 2.180983,
+              "bytes_uploaded": 207749120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 35.033751,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 42.510436,
+              "passes": 23,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 100.347398,
+              "uploads": 854,
+              "wait_ms": 20.622228
+            },
+            {
+              "admission_ms": 1.9677649999999998,
+              "bytes_uploaded": 207749120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 33.119755,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 42.320877,
+              "passes": 23,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 98.13859400000001,
+              "uploads": 854,
+              "wait_ms": 20.730197
+            },
+            {
+              "admission_ms": 1.921495,
+              "bytes_uploaded": 207749120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 32.633258999999995,
+              "evicted": 0,
+              "flushes": 0,
+              "import_ms": 40.892888,
+              "passes": 23,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 96.09305,
+              "uploads": 854,
+              "wait_ms": 20.645408
+            }
+          ],
+          "size": [
+            7360,
+            4912
+          ]
+        }
+      ]
+    }
+  },
+  "p44-3layer-u16": {
+    "fixture_blake3": "64dfd543cc846601f0fa527854e0cd813c2d4480987b3bd2e337418e4bcdc93e",
+    "fixture_bytes": 490531278,
+    "complete_import_signature_matches": true,
+    "correctness": {
+      "cpu_crop_hash": "c646de1e6363f27304c4ea7ded4ed9d5b5b1c5ab3f900efc11301478fd6c193c",
+      "structure": {
+        "depth": "U16",
+        "layers": [
+          {
+            "blend": "Normal",
+            "clipped": false,
+            "content": {
+              "hash": "81b47a6c7afa1f0c25e5743cb2f174d02232e2b70073bccad26cce546465b971",
+              "kind": "raster",
+              "tiles": 580
+            },
+            "fill_opacity": 1.0,
+            "mask": null,
+            "name": "Full source image",
+            "opacity": 1.0,
+            "visible": true
+          },
+          {
+            "blend": "Multiply",
+            "clipped": false,
+            "content": {
+              "hash": "c944685568b8eccf476eb3302c9de4591ece80339e253e890cf0ff246706da80",
+              "kind": "raster",
+              "tiles": 580
+            },
+            "fill_opacity": 1.0,
+            "mask": null,
+            "name": "Full textured overlay 1",
+            "opacity": 0.501960813999176,
+            "visible": true
+          },
+          {
+            "blend": "Screen",
+            "clipped": false,
+            "content": {
+              "hash": "63ee0cef7eb3e55ddc942696c449904bfd5402b7975e3388e8e06cfb6c27dfdb",
+              "kind": "raster",
+              "tiles": 580
+            },
+            "fill_opacity": 1.0,
+            "mask": null,
+            "name": "Full textured overlay 2",
+            "opacity": 0.501960813999176,
+            "visible": true
+          }
+        ],
+        "mode": "Rgb",
+        "size": [
+          7360,
+          4912
+        ]
+      },
+      "warnings": []
+    },
+    "gpu_reports": {
+      "before": [
+        {
+          "adapter": "NVIDIA GeForce RTX 3090",
+          "cache": "cache-on",
+          "cold": {
+            "admission_ms": 2.1337040000000003,
+            "bytes_uploaded": 912261120,
+            "color": {
+              "action": "untagged",
+              "ask": false,
+              "missing": true,
+              "policy": "preserve",
+              "working": "sRGB IEC61966-2.1"
+            },
+            "encode_submit_ms": 193.201853,
+            "evicted": 0,
+            "flushes": 1,
+            "import_ms": 806.284063,
+            "passes": 7,
+            "prefix": {
+              "bytes": 536870912,
+              "hits": 0
+            },
+            "total_ms": 1032.551721,
+            "uploads": 1740,
+            "wait_ms": 30.932101
+          },
+          "cpu_crop_blake3": "65fa77b174645fe4ffbb1d9d4a6d1d638e840cbc97124586aa821ab52f02b55e",
+          "fixture": "fixtures/p44-3layer-u16.psd",
+          "fixture_blake3": "64dfd543cc846601f0fa527854e0cd813c2d4480987b3bd2e337418e4bcdc93e",
+          "fixture_bytes": 490531278,
+          "fresh": true,
+          "gpu_cpu_max_error": 0.00030040740966796875,
+          "p50_admission_ms": 1.9255360000000001,
+          "p50_encode_submit_ms": 177.395829,
+          "p50_import_ms": 711.7498519999999,
+          "p50_total_ms": 919.1819999999999,
+          "p50_wait_ms": 28.536389,
+          "preview": "results/upstream-final-p44-3layer-u16-upstream-final-before-0.png",
+          "representative_checks": [
+            {
+              "cpu_blake3": "84d17377af7f975c606100ee5ca6855687b1c9f2e3577fd54b88f37a16979597",
+              "max_error": 0.000299990177154541,
+              "preview": "results/upstream-final-p44-3layer-u16-upstream-final-before-0.mask.png",
+              "rect": [
+                1093,
+                737,
+                2053,
+                1377
+              ],
+              "region": "mask"
+            },
+            {
+              "cpu_blake3": "e719fef6e78564986213bba898cf28e6ca1351d57067ff928f53f08f3542954b",
+              "max_error": 0.00030040740966796875,
+              "preview": "results/upstream-final-p44-3layer-u16-upstream-final-before-0.group.png",
+              "rect": [
+                2919,
+                1971,
+                3879,
+                2611
+              ],
+              "region": "group"
+            },
+            {
+              "cpu_blake3": "03066ec9668a290aa920490ca49f896df962d6e92cc9cd06239758838464c01d",
+              "max_error": 0.00030040740966796875,
+              "preview": "results/upstream-final-p44-3layer-u16-upstream-final-before-0.group-mask.png",
+              "rect": [
+                3832,
+                2588,
+                4792,
+                3228
+              ],
+              "region": "group-mask"
+            }
+          ],
+          "reps": 3,
+          "samples": [
+            {
+              "admission_ms": 2.006635,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 180.686055,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 754.545066,
+              "passes": 7,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 965.774145,
+              "uploads": 1740,
+              "wait_ms": 28.536389
+            },
+            {
+              "admission_ms": 1.896266,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 176.918823,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 711.7498519999999,
+              "passes": 7,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 919.1819999999999,
+              "uploads": 1740,
+              "wait_ms": 28.617059
+            },
+            {
+              "admission_ms": 1.9255360000000001,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 177.395829,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 671.672819,
+              "passes": 7,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 879.3505349999999,
+              "uploads": 1740,
+              "wait_ms": 28.356351
+            }
+          ],
+          "size": [
+            7360,
+            4912
+          ]
+        },
+        {
+          "adapter": "NVIDIA GeForce RTX 3090",
+          "cache": "cache-on",
+          "cold": {
+            "admission_ms": 2.109754,
+            "bytes_uploaded": 912261120,
+            "color": {
+              "action": "untagged",
+              "ask": false,
+              "missing": true,
+              "policy": "preserve",
+              "working": "sRGB IEC61966-2.1"
+            },
+            "encode_submit_ms": 193.388453,
+            "evicted": 0,
+            "flushes": 1,
+            "import_ms": 809.385579,
+            "passes": 7,
+            "prefix": {
+              "bytes": 536870912,
+              "hits": 0
+            },
+            "total_ms": 1035.53388,
+            "uploads": 1740,
+            "wait_ms": 30.650094
+          },
+          "cpu_crop_blake3": "65fa77b174645fe4ffbb1d9d4a6d1d638e840cbc97124586aa821ab52f02b55e",
+          "fixture": "fixtures/p44-3layer-u16.psd",
+          "fixture_blake3": "64dfd543cc846601f0fa527854e0cd813c2d4480987b3bd2e337418e4bcdc93e",
+          "fixture_bytes": 490531278,
+          "fresh": true,
+          "gpu_cpu_max_error": 0.00030040740966796875,
+          "p50_admission_ms": 1.939256,
+          "p50_encode_submit_ms": 176.74946599999998,
+          "p50_import_ms": 723.878651,
+          "p50_total_ms": 929.183617,
+          "p50_wait_ms": 28.38311,
+          "preview": "results/upstream-final-p44-3layer-u16-upstream-final-before-1.png",
+          "representative_checks": [
+            {
+              "cpu_blake3": "84d17377af7f975c606100ee5ca6855687b1c9f2e3577fd54b88f37a16979597",
+              "max_error": 0.000299990177154541,
+              "preview": "results/upstream-final-p44-3layer-u16-upstream-final-before-1.mask.png",
+              "rect": [
+                1093,
+                737,
+                2053,
+                1377
+              ],
+              "region": "mask"
+            },
+            {
+              "cpu_blake3": "e719fef6e78564986213bba898cf28e6ca1351d57067ff928f53f08f3542954b",
+              "max_error": 0.00030040740966796875,
+              "preview": "results/upstream-final-p44-3layer-u16-upstream-final-before-1.group.png",
+              "rect": [
+                2919,
+                1971,
+                3879,
+                2611
+              ],
+              "region": "group"
+            },
+            {
+              "cpu_blake3": "03066ec9668a290aa920490ca49f896df962d6e92cc9cd06239758838464c01d",
+              "max_error": 0.00030040740966796875,
+              "preview": "results/upstream-final-p44-3layer-u16-upstream-final-before-1.group-mask.png",
+              "rect": [
+                3832,
+                2588,
+                4792,
+                3228
+              ],
+              "region": "group-mask"
+            }
+          ],
+          "reps": 3,
+          "samples": [
+            {
+              "admission_ms": 1.9872359999999998,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 182.492614,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 738.711391,
+              "passes": 7,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 951.5743510000001,
+              "uploads": 1740,
+              "wait_ms": 28.38311
+            },
+            {
+              "admission_ms": 1.8896659999999998,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 175.10363900000002,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 723.878651,
+              "passes": 7,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 929.183617,
+              "uploads": 1740,
+              "wait_ms": 28.311660999999997
+            },
+            {
+              "admission_ms": 1.939256,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 176.74946599999998,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 661.244654,
+              "passes": 7,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 868.330217,
+              "uploads": 1740,
+              "wait_ms": 28.396841
+            }
+          ],
+          "size": [
+            7360,
+            4912
+          ]
+        }
+      ],
+      "after": [
+        {
+          "adapter": "NVIDIA GeForce RTX 3090",
+          "cache": "cache-defer",
+          "cold": {
+            "admission_ms": 2.363893,
+            "bytes_uploaded": 912261120,
+            "color": {
+              "action": "untagged",
+              "ask": false,
+              "missing": true,
+              "policy": "preserve",
+              "working": "sRGB IEC61966-2.1"
+            },
+            "encode_submit_ms": 178.95390799999998,
+            "evicted": 0,
+            "flushes": 1,
+            "import_ms": 280.867716,
+            "passes": 4,
+            "prefix": {
+              "bytes": 0,
+              "hits": 0
+            },
+            "total_ms": 490.601768,
+            "uploads": 1740,
+            "wait_ms": 28.416251
+          },
+          "cpu_crop_blake3": "65fa77b174645fe4ffbb1d9d4a6d1d638e840cbc97124586aa821ab52f02b55e",
+          "fixture": "fixtures/p44-3layer-u16.psd",
+          "fixture_blake3": "64dfd543cc846601f0fa527854e0cd813c2d4480987b3bd2e337418e4bcdc93e",
+          "fixture_bytes": 490531278,
+          "fresh": true,
+          "gpu_cpu_max_error": 0.00030040740966796875,
+          "p50_admission_ms": 2.420172,
+          "p50_encode_submit_ms": 163.261154,
+          "p50_import_ms": 241.838245,
+          "p50_total_ms": 433.48073000000005,
+          "p50_wait_ms": 26.014868,
+          "preview": "results/upstream-final-p44-3layer-u16-upstream-final-after-0.png",
+          "representative_checks": [
+            {
+              "cpu_blake3": "84d17377af7f975c606100ee5ca6855687b1c9f2e3577fd54b88f37a16979597",
+              "max_error": 0.000299990177154541,
+              "preview": "results/upstream-final-p44-3layer-u16-upstream-final-after-0.mask.png",
+              "rect": [
+                1093,
+                737,
+                2053,
+                1377
+              ],
+              "region": "mask"
+            },
+            {
+              "cpu_blake3": "e719fef6e78564986213bba898cf28e6ca1351d57067ff928f53f08f3542954b",
+              "max_error": 0.00030040740966796875,
+              "preview": "results/upstream-final-p44-3layer-u16-upstream-final-after-0.group.png",
+              "rect": [
+                2919,
+                1971,
+                3879,
+                2611
+              ],
+              "region": "group"
+            },
+            {
+              "cpu_blake3": "03066ec9668a290aa920490ca49f896df962d6e92cc9cd06239758838464c01d",
+              "max_error": 0.00030040740966796875,
+              "preview": "results/upstream-final-p44-3layer-u16-upstream-final-after-0.group-mask.png",
+              "rect": [
+                3832,
+                2588,
+                4792,
+                3228
+              ],
+              "region": "group-mask"
+            }
+          ],
+          "reps": 3,
+          "samples": [
+            {
+              "admission_ms": 2.499481,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 169.36918,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 245.465658,
+              "passes": 4,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 445.142353,
+              "uploads": 1740,
+              "wait_ms": 27.808034
+            },
+            {
+              "admission_ms": 2.415842,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 161.731676,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 239.112514,
+              "passes": 4,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 429.2749,
+              "uploads": 1740,
+              "wait_ms": 26.014868
+            },
+            {
+              "admission_ms": 2.420172,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 163.261154,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 241.838245,
+              "passes": 4,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 433.48073000000005,
+              "uploads": 1740,
+              "wait_ms": 25.961159000000002
+            }
+          ],
+          "size": [
+            7360,
+            4912
+          ]
+        },
+        {
+          "adapter": "NVIDIA GeForce RTX 3090",
+          "cache": "cache-defer",
+          "cold": {
+            "admission_ms": 2.2735429999999996,
+            "bytes_uploaded": 912261120,
+            "color": {
+              "action": "untagged",
+              "ask": false,
+              "missing": true,
+              "policy": "preserve",
+              "working": "sRGB IEC61966-2.1"
+            },
+            "encode_submit_ms": 181.606999,
+            "evicted": 0,
+            "flushes": 1,
+            "import_ms": 283.858805,
+            "passes": 4,
+            "prefix": {
+              "bytes": 0,
+              "hits": 0
+            },
+            "total_ms": 495.91307900000004,
+            "uploads": 1740,
+            "wait_ms": 28.173732
+          },
+          "cpu_crop_blake3": "65fa77b174645fe4ffbb1d9d4a6d1d638e840cbc97124586aa821ab52f02b55e",
+          "fixture": "fixtures/p44-3layer-u16.psd",
+          "fixture_blake3": "64dfd543cc846601f0fa527854e0cd813c2d4480987b3bd2e337418e4bcdc93e",
+          "fixture_bytes": 490531278,
+          "fresh": true,
+          "gpu_cpu_max_error": 0.00030040740966796875,
+          "p50_admission_ms": 2.296153,
+          "p50_encode_submit_ms": 165.188511,
+          "p50_import_ms": 241.639227,
+          "p50_total_ms": 437.06685500000003,
+          "p50_wait_ms": 27.942964,
+          "preview": "results/upstream-final-p44-3layer-u16-upstream-final-after-1.png",
+          "representative_checks": [
+            {
+              "cpu_blake3": "84d17377af7f975c606100ee5ca6855687b1c9f2e3577fd54b88f37a16979597",
+              "max_error": 0.000299990177154541,
+              "preview": "results/upstream-final-p44-3layer-u16-upstream-final-after-1.mask.png",
+              "rect": [
+                1093,
+                737,
+                2053,
+                1377
+              ],
+              "region": "mask"
+            },
+            {
+              "cpu_blake3": "e719fef6e78564986213bba898cf28e6ca1351d57067ff928f53f08f3542954b",
+              "max_error": 0.00030040740966796875,
+              "preview": "results/upstream-final-p44-3layer-u16-upstream-final-after-1.group.png",
+              "rect": [
+                2919,
+                1971,
+                3879,
+                2611
+              ],
+              "region": "group"
+            },
+            {
+              "cpu_blake3": "03066ec9668a290aa920490ca49f896df962d6e92cc9cd06239758838464c01d",
+              "max_error": 0.00030040740966796875,
+              "preview": "results/upstream-final-p44-3layer-u16-upstream-final-after-1.group-mask.png",
+              "rect": [
+                3832,
+                2588,
+                4792,
+                3228
+              ],
+              "region": "group-mask"
+            }
+          ],
+          "reps": 3,
+          "samples": [
+            {
+              "admission_ms": 2.416262,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 167.842132,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 246.298762,
+              "passes": 4,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 444.544859,
+              "uploads": 1740,
+              "wait_ms": 27.987703
+            },
+            {
+              "admission_ms": 2.296153,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 165.188511,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 241.639227,
+              "passes": 4,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 437.06685500000003,
+              "uploads": 1740,
+              "wait_ms": 27.942964
+            },
+            {
+              "admission_ms": 2.232993,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 161.40422900000002,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 241.09266100000002,
+              "passes": 4,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 430.82498100000004,
+              "uploads": 1740,
+              "wait_ms": 26.095098
+            }
+          ],
+          "size": [
+            7360,
+            4912
+          ]
+        }
+      ]
+    }
+  },
+  "p44-3layer-f32": {
+    "fixture_blake3": "7724a7d9d356e99337f2edcf80dec7d9afdf0e0bcbcacd3ec25d127dc7c25b87",
+    "fixture_bytes": 500522218,
+    "complete_import_signature_matches": true,
+    "correctness": {
+      "cpu_crop_hash": "c646de1e6363f27304c4ea7ded4ed9d5b5b1c5ab3f900efc11301478fd6c193c",
+      "structure": {
+        "depth": "F32",
+        "layers": [
+          {
+            "blend": "Normal",
+            "clipped": false,
+            "content": {
+              "hash": "2bcc940e4eed5e73e4ae5cd79ae90b04ab4f36adcd51e92f5478fcd6be61ab77",
+              "kind": "raster",
+              "tiles": 580
+            },
+            "fill_opacity": 1.0,
+            "mask": null,
+            "name": "Full source image",
+            "opacity": 1.0,
+            "visible": true
+          },
+          {
+            "blend": "Multiply",
+            "clipped": false,
+            "content": {
+              "hash": "ca1c15369db45abcda79c2996844e3d6d5014b14429dc6d75dd03430350c7398",
+              "kind": "raster",
+              "tiles": 580
+            },
+            "fill_opacity": 1.0,
+            "mask": null,
+            "name": "Full textured overlay 1",
+            "opacity": 0.501960813999176,
+            "visible": true
+          },
+          {
+            "blend": "Screen",
+            "clipped": false,
+            "content": {
+              "hash": "b5b7a25c016fb2dba18b86621a82e91eae3f35bd8939ccb3a433b6300f98690e",
+              "kind": "raster",
+              "tiles": 580
+            },
+            "fill_opacity": 1.0,
+            "mask": null,
+            "name": "Full textured overlay 2",
+            "opacity": 0.501960813999176,
+            "visible": true
+          }
+        ],
+        "mode": "Rgb",
+        "size": [
+          7360,
+          4912
+        ]
+      },
+      "warnings": []
+    },
+    "gpu_reports": {
+      "before": [
+        {
+          "adapter": "NVIDIA GeForce RTX 3090",
+          "cache": "cache-on",
+          "cold": {
+            "admission_ms": 1.836357,
+            "bytes_uploaded": 912261120,
+            "color": {
+              "action": "untagged",
+              "ask": false,
+              "missing": true,
+              "policy": "preserve",
+              "working": "sRGB IEC61966-2.1"
+            },
+            "encode_submit_ms": 222.91459799999998,
+            "evicted": 0,
+            "flushes": 1,
+            "import_ms": 1407.563502,
+            "passes": 7,
+            "prefix": {
+              "bytes": 536870912,
+              "hits": 0
+            },
+            "total_ms": 1664.3489009999998,
+            "uploads": 1740,
+            "wait_ms": 32.034444
+          },
+          "cpu_crop_blake3": "65fa77b174645fe4ffbb1d9d4a6d1d638e840cbc97124586aa821ab52f02b55e",
+          "fixture": "fixtures/p44-3layer-f32.psd",
+          "fixture_blake3": "7724a7d9d356e99337f2edcf80dec7d9afdf0e0bcbcacd3ec25d127dc7c25b87",
+          "fixture_bytes": 500522218,
+          "fresh": true,
+          "gpu_cpu_max_error": 0.00030040740966796875,
+          "p50_admission_ms": 1.8490760000000002,
+          "p50_encode_submit_ms": 208.417535,
+          "p50_import_ms": 1176.313398,
+          "p50_total_ms": 1444.405223,
+          "p50_wait_ms": 51.534101,
+          "preview": "results/upstream-final-p44-3layer-f32-upstream-final-before-0.png",
+          "representative_checks": [
+            {
+              "cpu_blake3": "84d17377af7f975c606100ee5ca6855687b1c9f2e3577fd54b88f37a16979597",
+              "max_error": 0.000299990177154541,
+              "preview": "results/upstream-final-p44-3layer-f32-upstream-final-before-0.mask.png",
+              "rect": [
+                1093,
+                737,
+                2053,
+                1377
+              ],
+              "region": "mask"
+            },
+            {
+              "cpu_blake3": "e719fef6e78564986213bba898cf28e6ca1351d57067ff928f53f08f3542954b",
+              "max_error": 0.00030040740966796875,
+              "preview": "results/upstream-final-p44-3layer-f32-upstream-final-before-0.group.png",
+              "rect": [
+                2919,
+                1971,
+                3879,
+                2611
+              ],
+              "region": "group"
+            },
+            {
+              "cpu_blake3": "03066ec9668a290aa920490ca49f896df962d6e92cc9cd06239758838464c01d",
+              "max_error": 0.00030040740966796875,
+              "preview": "results/upstream-final-p44-3layer-f32-upstream-final-before-0.group-mask.png",
+              "rect": [
+                3832,
+                2588,
+                4792,
+                3228
+              ],
+              "region": "group-mask"
+            }
+          ],
+          "reps": 3,
+          "samples": [
+            {
+              "admission_ms": 1.8490760000000002,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 208.417535,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 1182.604511,
+              "passes": 7,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 1444.405223,
+              "uploads": 1740,
+              "wait_ms": 51.534101
+            },
+            {
+              "admission_ms": 1.847047,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 206.483629,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 1176.313398,
+              "passes": 7,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 1416.799148,
+              "uploads": 1740,
+              "wait_ms": 32.155074
+            },
+            {
+              "admission_ms": 1.900166,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 303.629295,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 1092.677055,
+              "passes": 7,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 1521.399169,
+              "uploads": 1740,
+              "wait_ms": 123.19265299999999
+            }
+          ],
+          "size": [
+            7360,
+            4912
+          ]
+        },
+        {
+          "adapter": "NVIDIA GeForce RTX 3090",
+          "cache": "cache-on",
+          "cold": {
+            "admission_ms": 1.6631580000000001,
+            "bytes_uploaded": 912261120,
+            "color": {
+              "action": "untagged",
+              "ask": false,
+              "missing": true,
+              "policy": "preserve",
+              "working": "sRGB IEC61966-2.1"
+            },
+            "encode_submit_ms": 224.648239,
+            "evicted": 0,
+            "flushes": 1,
+            "import_ms": 1388.686833,
+            "passes": 7,
+            "prefix": {
+              "bytes": 536870912,
+              "hits": 0
+            },
+            "total_ms": 1646.2017210000001,
+            "uploads": 1740,
+            "wait_ms": 31.203491
+          },
+          "cpu_crop_blake3": "65fa77b174645fe4ffbb1d9d4a6d1d638e840cbc97124586aa821ab52f02b55e",
+          "fixture": "fixtures/p44-3layer-f32.psd",
+          "fixture_blake3": "7724a7d9d356e99337f2edcf80dec7d9afdf0e0bcbcacd3ec25d127dc7c25b87",
+          "fixture_bytes": 500522218,
+          "fresh": true,
+          "gpu_cpu_max_error": 0.00030040740966796875,
+          "p50_admission_ms": 1.8197759999999998,
+          "p50_encode_submit_ms": 203.634394,
+          "p50_import_ms": 1196.478031,
+          "p50_total_ms": 1436.758392,
+          "p50_wait_ms": 30.416186,
+          "preview": "results/upstream-final-p44-3layer-f32-upstream-final-before-1.png",
+          "representative_checks": [
+            {
+              "cpu_blake3": "84d17377af7f975c606100ee5ca6855687b1c9f2e3577fd54b88f37a16979597",
+              "max_error": 0.000299990177154541,
+              "preview": "results/upstream-final-p44-3layer-f32-upstream-final-before-1.mask.png",
+              "rect": [
+                1093,
+                737,
+                2053,
+                1377
+              ],
+              "region": "mask"
+            },
+            {
+              "cpu_blake3": "e719fef6e78564986213bba898cf28e6ca1351d57067ff928f53f08f3542954b",
+              "max_error": 0.00030040740966796875,
+              "preview": "results/upstream-final-p44-3layer-f32-upstream-final-before-1.group.png",
+              "rect": [
+                2919,
+                1971,
+                3879,
+                2611
+              ],
+              "region": "group"
+            },
+            {
+              "cpu_blake3": "03066ec9668a290aa920490ca49f896df962d6e92cc9cd06239758838464c01d",
+              "max_error": 0.00030040740966796875,
+              "preview": "results/upstream-final-p44-3layer-f32-upstream-final-before-1.group-mask.png",
+              "rect": [
+                3832,
+                2588,
+                4792,
+                3228
+              ],
+              "region": "group-mask"
+            }
+          ],
+          "reps": 3,
+          "samples": [
+            {
+              "admission_ms": 1.918406,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 203.634394,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 1202.831271,
+              "passes": 7,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 1436.758392,
+              "uploads": 1740,
+              "wait_ms": 28.374321000000002
+            },
+            {
+              "admission_ms": 1.8197759999999998,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 245.704595,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 1182.449462,
+              "passes": 7,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 1518.597582,
+              "uploads": 1740,
+              "wait_ms": 88.623749
+            },
+            {
+              "admission_ms": 1.806097,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 203.506905,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 1196.478031,
+              "passes": 7,
+              "prefix": {
+                "bytes": 536870912,
+                "hits": 0
+              },
+              "total_ms": 1432.207219,
+              "uploads": 1740,
+              "wait_ms": 30.416186
+            }
+          ],
+          "size": [
+            7360,
+            4912
+          ]
+        }
+      ],
+      "after": [
+        {
+          "adapter": "NVIDIA GeForce RTX 3090",
+          "cache": "cache-defer",
+          "cold": {
+            "admission_ms": 2.2625140000000004,
+            "bytes_uploaded": 912261120,
+            "color": {
+              "action": "untagged",
+              "ask": false,
+              "missing": true,
+              "policy": "preserve",
+              "working": "sRGB IEC61966-2.1"
+            },
+            "encode_submit_ms": 201.965753,
+            "evicted": 0,
+            "flushes": 1,
+            "import_ms": 612.8503199999999,
+            "passes": 4,
+            "prefix": {
+              "bytes": 0,
+              "hits": 0
+            },
+            "total_ms": 845.4611179999999,
+            "uploads": 1740,
+            "wait_ms": 28.382531
+          },
+          "cpu_crop_blake3": "65fa77b174645fe4ffbb1d9d4a6d1d638e840cbc97124586aa821ab52f02b55e",
+          "fixture": "fixtures/p44-3layer-f32.psd",
+          "fixture_blake3": "7724a7d9d356e99337f2edcf80dec7d9afdf0e0bcbcacd3ec25d127dc7c25b87",
+          "fixture_bytes": 500522218,
+          "fresh": true,
+          "gpu_cpu_max_error": 0.00030040740966796875,
+          "p50_admission_ms": 2.3089429999999997,
+          "p50_encode_submit_ms": 188.31767399999998,
+          "p50_import_ms": 562.429412,
+          "p50_total_ms": 779.5750049999999,
+          "p50_wait_ms": 26.599805,
+          "preview": "results/upstream-final-p44-3layer-f32-upstream-final-after-0.png",
+          "representative_checks": [
+            {
+              "cpu_blake3": "84d17377af7f975c606100ee5ca6855687b1c9f2e3577fd54b88f37a16979597",
+              "max_error": 0.000299990177154541,
+              "preview": "results/upstream-final-p44-3layer-f32-upstream-final-after-0.mask.png",
+              "rect": [
+                1093,
+                737,
+                2053,
+                1377
+              ],
+              "region": "mask"
+            },
+            {
+              "cpu_blake3": "e719fef6e78564986213bba898cf28e6ca1351d57067ff928f53f08f3542954b",
+              "max_error": 0.00030040740966796875,
+              "preview": "results/upstream-final-p44-3layer-f32-upstream-final-after-0.group.png",
+              "rect": [
+                2919,
+                1971,
+                3879,
+                2611
+              ],
+              "region": "group"
+            },
+            {
+              "cpu_blake3": "03066ec9668a290aa920490ca49f896df962d6e92cc9cd06239758838464c01d",
+              "max_error": 0.00030040740966796875,
+              "preview": "results/upstream-final-p44-3layer-f32-upstream-final-after-0.group-mask.png",
+              "rect": [
+                3832,
+                2588,
+                4792,
+                3228
+              ],
+              "region": "group-mask"
+            }
+          ],
+          "reps": 3,
+          "samples": [
+            {
+              "admission_ms": 2.4372719999999997,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 194.142451,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 573.6878989999999,
+              "passes": 4,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 798.2063069999998,
+              "uploads": 1740,
+              "wait_ms": 27.938685
+            },
+            {
+              "admission_ms": 2.3089429999999997,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 188.31767399999998,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 562.348583,
+              "passes": 4,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 779.5750049999999,
+              "uploads": 1740,
+              "wait_ms": 26.599805
+            },
+            {
+              "admission_ms": 2.141914,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 187.109904,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 562.429412,
+              "passes": 4,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 777.52412,
+              "uploads": 1740,
+              "wait_ms": 25.84289
+            }
+          ],
+          "size": [
+            7360,
+            4912
+          ]
+        },
+        {
+          "adapter": "NVIDIA GeForce RTX 3090",
+          "cache": "cache-defer",
+          "cold": {
+            "admission_ms": 2.350742,
+            "bytes_uploaded": 912261120,
+            "color": {
+              "action": "untagged",
+              "ask": false,
+              "missing": true,
+              "policy": "preserve",
+              "working": "sRGB IEC61966-2.1"
+            },
+            "encode_submit_ms": 208.03884,
+            "evicted": 0,
+            "flushes": 1,
+            "import_ms": 605.18138,
+            "passes": 4,
+            "prefix": {
+              "bytes": 0,
+              "hits": 0
+            },
+            "total_ms": 842.357465,
+            "uploads": 1740,
+            "wait_ms": 26.786503
+          },
+          "cpu_crop_blake3": "65fa77b174645fe4ffbb1d9d4a6d1d638e840cbc97124586aa821ab52f02b55e",
+          "fixture": "fixtures/p44-3layer-f32.psd",
+          "fixture_blake3": "7724a7d9d356e99337f2edcf80dec7d9afdf0e0bcbcacd3ec25d127dc7c25b87",
+          "fixture_bytes": 500522218,
+          "fresh": true,
+          "gpu_cpu_max_error": 0.00030040740966796875,
+          "p50_admission_ms": 2.247494,
+          "p50_encode_submit_ms": 190.557879,
+          "p50_import_ms": 557.190823,
+          "p50_total_ms": 789.481634,
+          "p50_wait_ms": 27.879814999999997,
+          "preview": "results/upstream-final-p44-3layer-f32-upstream-final-after-1.png",
+          "representative_checks": [
+            {
+              "cpu_blake3": "84d17377af7f975c606100ee5ca6855687b1c9f2e3577fd54b88f37a16979597",
+              "max_error": 0.000299990177154541,
+              "preview": "results/upstream-final-p44-3layer-f32-upstream-final-after-1.mask.png",
+              "rect": [
+                1093,
+                737,
+                2053,
+                1377
+              ],
+              "region": "mask"
+            },
+            {
+              "cpu_blake3": "e719fef6e78564986213bba898cf28e6ca1351d57067ff928f53f08f3542954b",
+              "max_error": 0.00030040740966796875,
+              "preview": "results/upstream-final-p44-3layer-f32-upstream-final-after-1.group.png",
+              "rect": [
+                2919,
+                1971,
+                3879,
+                2611
+              ],
+              "region": "group"
+            },
+            {
+              "cpu_blake3": "03066ec9668a290aa920490ca49f896df962d6e92cc9cd06239758838464c01d",
+              "max_error": 0.00030040740966796875,
+              "preview": "results/upstream-final-p44-3layer-f32-upstream-final-after-1.group-mask.png",
+              "rect": [
+                3832,
+                2588,
+                4792,
+                3228
+              ],
+              "region": "group-mask"
+            }
+          ],
+          "reps": 3,
+          "samples": [
+            {
+              "admission_ms": 2.2187729999999997,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 190.557879,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 568.825167,
+              "passes": 4,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 789.481634,
+              "uploads": 1740,
+              "wait_ms": 27.879814999999997
+            },
+            {
+              "admission_ms": 2.407253,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 189.816474,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 557.190823,
+              "passes": 4,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 777.234145,
+              "uploads": 1740,
+              "wait_ms": 27.819595
+            },
+            {
+              "admission_ms": 2.247494,
+              "bytes_uploaded": 912261120,
+              "color": {
+                "action": "untagged",
+                "ask": false,
+                "missing": true,
+                "policy": "preserve",
+                "working": "sRGB IEC61966-2.1"
+              },
+              "encode_submit_ms": 295.391558,
+              "evicted": 0,
+              "flushes": 1,
+              "import_ms": 554.5641519999999,
+              "passes": 4,
+              "prefix": {
+                "bytes": 0,
+                "hits": 0
+              },
+              "total_ms": 923.48511,
+              "uploads": 1740,
+              "wait_ms": 71.281906
+            }
+          ],
+          "size": [
+            7360,
+            4912
+          ]
+        }
+      ]
+    }
+  }
+}
