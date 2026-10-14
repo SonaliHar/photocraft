@@ -224,14 +224,11 @@ fn held_command_inverts_displayed_move_auto_select_but_does_not_change_saved_val
         // ephemeral: the actual option stays the user's stored selection.
         let ctx = egui::Context::default();
         PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ProMedium);
-        let _ = ctx.run(
-            egui::RawInput { modifiers: egui::Modifiers::COMMAND, ..Default::default() },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    crate::panels::options_bar(&mut app, ui);
-                });
-            },
-        );
+        let _ = ctx.run(egui::RawInput { modifiers: egui::Modifiers::COMMAND, ..Default::default() }, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                crate::panels::options_bar(&mut app, ui);
+            });
+        });
         assert_eq!(app.ui.tool_options.move_auto_select, saved);
     }
 }
