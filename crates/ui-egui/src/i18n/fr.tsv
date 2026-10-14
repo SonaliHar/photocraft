@@ -3111,6 +3111,7 @@ curves	Smooth	Lisser
 	Remove after each stroke	Supprimer après chaque trait
 	Apply the removal ({key})	Appliquer la suppression ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Traits à supprimer : {n} (Entrée applique, Échap annule)
+	Show home recent files	Afficher les fichiers récents sur l'écran d'accueil
 	Clear Brush Controls	Effacer les commandes de pinceau
 	Reset All Locked Settings	Réinitialiser tous les paramètres verrouillés
 	Copy Texture to Other Tools	Copier la texture dans d'autres outils
@@ -3138,6 +3139,13 @@ curves	Smooth	Lisser
 	Step {step} is waiting for its dialog	L’étape {step} attend sa boîte de dialogue
 @plural	{n} action|{n} actions	{n} action|{n} actions
 	Auto Add/Delete	Ajout/suppr. auto
+
+# Native Windows printing qualification
+	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Ne cochez pas aussi Image miroir dans les paramètres d’impression : les deux inversions s’annulent.
+	Print Settings…	Paramètres d’impression…
+	Remember to turn off the printer's own colour management in Print Settings…	Pensez à désactiver la gestion des couleurs de l’imprimante dans les paramètres d’impression…
+	Sent to {printer}	Envoyé à {printer}
+	set in Print Settings…	défini dans les paramètres d’impression…
 	ICO is limited to 256 × 256 pixels	Le format ICO est limité à 256 × 256 pixels
 # Bevel & Emboss Technique.
 	Technique	Technique
