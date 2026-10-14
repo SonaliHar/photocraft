@@ -559,6 +559,9 @@
 	Blur	Rozostření
 	Blur Gallery	Galerie rozostření
 	Field Blur…	Rozostření pole…
+# Field Blur pins (#3373)
+	No pin selected	Není vybrán žádný špendlík
+	Click the image to add a pin; drag a pin to move it, or its ring to change its blur. Delete removes the selected pin.	Kliknutím do obrazu přidáte špendlík; tažením špendlík přesunete, tažením jeho prstence změníte rozostření. Delete odstraní vybraný špendlík.
 	Iris Blur…	Rozostření clonou…
 	Tilt-Shift…	Tilt-shift…
 	Path Blur…	Rozostření podél cesty…
@@ -994,7 +997,6 @@
 	Contiguous	Souvislé
 	Contrast	Kontrast
 	Control:	Řízení:
-	Convert document's colors to the working space	Převést barvy dokumentu do pracovního prostoru barev
 	Convert to sRGB	Převést do sRGB
 	Copies	Kopie
 	Copper	Měď
@@ -1577,7 +1579,6 @@
 	Use Default	Použít výchozí
 	Use Legacy	Použít starší
 	Use Measurement Scale	Použít měřítko měření
-	Use the embedded profile (instead of the working space)	Použít vložený profil (místo pracovního prostoru barev)
 	Variables bind a layer's visibility, text or pixels to a named data slot.	Proměnné vážou viditelnost, text nebo pixely vrstvy na pojmenované datové pole.
 	Vertical scale	Svislé měřítko
 	Vibrance	Živost
@@ -1906,6 +1907,8 @@
 	Camera Raw Defaults	Výchozí nastavení Camera Raw
 	Canvas border	Okraj plátna
 	Show canvas dots	Zobrazit tečky plátna
+	Clip thumbnails to layer bounds	Oříznout miniatury na hranice vrstvy
+	Clip Thumbnails to Layer Bounds	Oříznout miniatury na hranice vrstvy
 	Canvas color	Barva plátna
 	Canvas custom color	Vlastní barva plátna
 	Color picker	Výběr barvy
@@ -2096,7 +2099,8 @@
 	Expand group  ({key}-click: all groups)	Rozbalit skupinu  ({key}+kliknutí: všechny skupiny)
 	Fade steps	Kroky zeslabení
 	Hide the layer's effects  ({key}-click: all layers)	Skrýt efekty vrstvy  ({key}+kliknutí: všechny vrstvy)
-	Import Brushes… (.abr)	Importovat štětce… (.abr)
+	Import Brushes… (.abr or image)	Importovat štětce… (.abr nebo obrázek)
+	Import Brush from Image…	Importovat štětec z obrázku…
 	Move Group Down	Posunout skupinu dolů
 	Move Group Up	Posunout skupinu nahoru
 	Reset the brush to the defaults	Obnovit výchozí nastavení štětce
@@ -2209,6 +2213,9 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Není k dispozici žádná cesta, ze které by šlo vytvořit výběr: nakreslete ji nástrojem Pero nebo ji vyberte na panelu Cesty.
 	Cancel opening	Zrušit otevírání
 	Cancelled opening {name}	Otevírání {name} zrušeno
+	The document “{name}” does not have an embedded {mode} profile.	Dokument „{name}“ nemá vložený profil {mode}.
+	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Dokument „{name}“ má vložený barevný profil, který neodpovídá aktuálnímu pracovnímu prostoru barev {mode}.
+	Working: {working}	Pracovní: {working}
 	Developing {name}	Vyvolávání {name}
 	Cancelled {label}	Zrušeno: {label}
 	Esc to cancel	Esc pro zrušení
@@ -3475,6 +3482,7 @@ cameraRaw	Vibrance	Živost
 cameraRaw	Whites	Bílé
 layerLabel	No Color	Žádná barva
 	Loading fonts…	Načítání písem…
+	Response curve	Křivka odezvy
 	Simulate Pressure	Simulovat přítlak
 	Background Eraser	Guma pozadí
 	Healing Brush	Retušovací štětec
@@ -3667,8 +3675,6 @@ curves	Smooth	Vyhladit
 	fallback	náhradní
 
 # Composed labels and Navigator zoom context
-	The document does not have an embedded colour profile. Working space: {working}.	Dokument nemá vložený barevný profil. Pracovní prostor barev: {working}.
-	The document has an embedded colour profile that does not match the working space.\nEmbedded: {embedded}\nWorking: {working}	Dokument má vložený barevný profil, který neodpovídá pracovnímu prostoru barev.\nVložený: {embedded}\nPracovní: {working}
 	Importing {what} from {file}…	Importují se {what} ze souboru {file}…
 	brushes	štětce
 	gradients	přechody
@@ -3712,6 +3718,7 @@ navigator	Zoom	Zvětšení
 	Remove after each stroke	Odstranit po každém tahu
 	Apply the removal ({key})	Použít odstranění ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Tahy k odstranění: {n} (Enter použije, Esc zruší)
+	Show home recent files	Zobrazit nedávné soubory na úvodní obrazovce
 	Clear Brush Controls	Obnovit ovládací prvky stopy
 	Reset All Locked Settings	Obnovit všechna zamknutá nastavení
 	Copy Texture to Other Tools	Kopírovat texturu do jiných nástrojů
@@ -3726,6 +3733,8 @@ navigator	Zoom	Zvětšení
 @plural	Saved {n} action to {file}|Saved {n} actions to {file}	Uložena {n} akce do souboru {file}|Uloženy {n} akce do souboru {file}|Uloženo {n} akcí do souboru {file}
 @plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	Vynechán {n} krok bez obdoby v Photoshopu|Vynechány {n} kroky bez obdoby v Photoshopu|Vynecháno {n} kroků bez obdoby v Photoshopu
 
+	File Naming	Pojmenování souborů
+	Starting serial	Počáteční pořadové číslo
 # Actions panel: set folders, dialog toggle, Insert Stop
 	Insert Stop…	Vložit zastavení…
 	Save Set…	Uložit sadu…
@@ -3736,5 +3745,30 @@ navigator	Zoom	Zvětšení
 	Action playback stopped	Přehrávání akce zastaveno
 	Step {step} is waiting for its dialog	Krok {step} čeká na svůj dialog
 @plural	{n} action|{n} actions	{n} akce|{n} akce|{n} akcí
+# Batch / Image Processor
+	Include All Subfolders	Zahrnout všechny podsložky
 	Auto Add/Delete	Automaticky přidat/odstranit
+
+# Native Windows printing qualification
+	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Nezapínejte současně zrcadlení v nastavení tisku: obě převrácení se navzájem zruší.
+	Print Settings…	Nastavení tisku…
+	Remember to turn off the printer's own colour management in Print Settings…	Nezapomeňte v nastavení tisku vypnout vlastní správu barev tiskárny…
+	Sent to {printer}	Odesláno do {printer}
+	set in Print Settings…	nastavuje se v nastavení tisku…
 	ICO is limited to 256 × 256 pixels	ICO je omezen na 256 × 256 pixelů
+# Embedded Profile Mismatch: profile names beside the choices, Remember this choice
+	Use the embedded profile ({profile})	Použít vložený profil ({profile})
+	Convert to the working space ({profile})	Převést do pracovního prostoru barev ({profile})
+	Remember this choice for future images	Zapamatovat si tuto volbu pro další obrázky
+	Turn the prompt back on with Ask On Mismatch in Edit › Color Settings.	Dotaz znovu zapnete volbou Ask On Mismatch v nabídce Úpravy › Nastavení barev.
+	Button Mode	Režim tlačítka
+	Button Mode On	Režim tlačítka zapnutý
+
+# Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
+	Darken Interface	Ztmavit rozhraní
+	Lighten Interface	Zesvětlit rozhraní
+# Bevel & Emboss Technique.
+	Technique	Technika
+	Chisel Hard	Tvrdé tesání
+	Chisel Soft	Měkké tesání
+	Open color-less EXR as ACEScg	Otevřít EXR bez údaje o barevném prostoru jako ACEScg

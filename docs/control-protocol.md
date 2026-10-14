@@ -53,6 +53,7 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
 - `ui.set` also accepts `gradientBlendMode` (a layer blend mode name, such as `Difference`) and `gradientClassic` (boolean) for the Gradient tool options bar.
 - `ui.set` also accepts `camTransformOnDrop` (boolean), the Content-Aware Move tool's Transform On Drop checkbox: a drop then puts a scale/rotate box on the patch (`ui.inspect` › `camTransform`: its document/revision, drag `offset` and `frame`), driven with `ui.pointer` (handles as Free Transform's; outside the box rotates), committed with `ui.key Enter` (one `paint.contentAwareMove` with `scaleX`, `scaleY`, `rotate`) or dropped with `Escape`.
 - `ui.set` also accepts `tileGrid` (boolean), a developer overlay of the active layer's storage tiles: the tile grid over the document, every stored tile filled and labelled `tx,ty`, tiles with identical pixels in a shared colour and unique ones in blue. It has no menu item and View › Extras doesn't hide it. `ui.inspect` reports it as `view.tile_grid`.
+- `ui.set` also accepts `layerFilter` (#5048), the Layers panel filter row: `{by?, kinds?, name?, mode?}`, any subset. `by` is `kind`, `name` or `mode` (the filter-type dropdown); `kinds` lists the Kind toggles that are on (`pixel`, `adjustment`, `type`, `shape`, `smart`); `name` matches part of a layer name, ignoring case; `mode` is a blend mode name (`Multiply`, `Pass Through`). Kind and Name filter only once a kind is on or text is typed; Mode always filters, by Normal at first, as in Photoshop. Fields left out keep their value; a bad one is an error and changes nothing.
 - Each painting tool keeps its own brush, as in Photoshop: `tools.setBrush` and `ui.set {brushSize}` change the active tool's brush, and switching tools swaps in that tool's own (size, hardness, mode, opacity, flow, dynamics, smoothing). A tool used for the first time starts from the brush in hand. The colours, the erase flag and the stroke seed stay shared. So `ui.set {tool: "eraser", brushSize: 12}` sets the Eraser's size, and `ui.set {tool: "brush"}` afterwards brings the Brush's own size back.
 - `ui.set` also accepts the Eyedropper options bar (#1649): `eyedropperSampleSize` (`"point"` or 1, 3, 5, 11, 31, 51, 101: the side of the averaged square, shared by the Eyedropper, a painting tool's Alt-click eyedropper, the Curves/Color Picker eyedroppers and the Info panel), `eyedropperSample` (`current`, `currentAndBelow`, `all`, `allNoAdjustments`, `currentAndBelowNoAdjustments`) and `eyedropperRing` (boolean, Show Sampling Ring). `ui.inspect` reports them under `toolOptions` (`eyedropper_size`, `eyedropper_sample`, `eyedropper_ring`). The engine command `document.sampleColor {x, y, size, sampleLayer}` returns the colour such a sample picks.
 - `ui.set` also accepts the Crop tool's overlay menu (#1919): `cropOverlay` (`thirds`, `grid`, `diagonal`, `triangle`, `goldenRatio`, `goldenSpiral`), `cropOverlayShow` (`auto`: only while the crop box is dragged, Photoshop's default; `always`; `never`) and `cropOverlayOrientation` (0..3; Triangle has two orientations and Golden Spiral four, the others ignore it). `ui.inspect` reports them under `toolOptions` (`crop_overlay`, `crop_overlay_show`, `crop_overlay_orientation`). In the app, O cycles the overlay and ⇧O its orientation while the Crop tool shows a box.
@@ -100,7 +101,7 @@ store expose and persist the same setting; scripts keep using canonical command 
 |---|---|
 | `file.new` | `{"width":1920,"height":1080,"mode":"rgb","depth":8,"background":"white"}` |
 | `layer.new.layer` | `{"name":"Ink"}` |
-| `layer.select` | `{"layer":id,"mode":"replace\|toggle\|range\|add"}`: ⌘-click = toggle, ⇧-click = range; `document.inspect` reports `selectedLayers` and a per-layer `selected` flag |
+| `layer.select` | `{"layer":id\|str,"mode":"replace\|toggle\|range\|add\|remove"}` or `{"name":"Background","occurrence":0?}` (occurrence is zero-based document walk order; required for duplicate names): ⌘-click = toggle, ⇧-click = range; `document.inspect` reports `selectedLayers` and a per-layer `selected` flag |
 | `channel.target` / `channel.setVisible` | Channels panel target and eyes (`"composite"`, colour name, alpha index or name, `"quickMask"`). `document.inspect` (and `channel.list`) report `channels`: composite/colour/alpha rows with visibility, channel options, `quickMask`, `target`. Pixel commands without a `target` param follow the targeted channel |
 | `layer.setProps` | `{"layer":id?,"name":…,"visible":…,"opacity":0..1,"blend":"Multiply"}` |
 | `layer.fill.solidColor.set` | `{"layer":id?,"document":id?,"color":"#rrggbb"}`: edit a Solid Color Fill in one undo step; RGB without alpha preserves the fill's alpha. Float RGB arrays and a stored `Color` are also accepted. `document` rejects stale dialog targets. |
@@ -111,6 +112,7 @@ store expose and persist the same setting; scripts keep using canonical command 
 | `paint.stroke` | `{"points":[[x,y,pressure],…],"size":20,"color":"#ff0000"}` |
 | `select.rect` | `{"x":0,"y":0,"width":100,"height":50,"mode":"add","ellipse":false}` |
 | `document.inspect` | `{}`: layer tree, history, snapshots (`[{id, name}]`, for `history.selectSnapshot`), selection bounds |
+| `layer.list` | `{"document":index?,"flat":bool?}`: just the layers, top-down: `id`, `name`, `kind`, `visible`, `bounds` (`[x,y,w,h]` or null), `selected`, `active`; groups list their `children`, or with `flat` every layer is one row with its `depth` and `parent` group id |
 | `document.pixel` | `{"x":10,"y":10}`: composite RGBA |
 | `document.presets.list` | `{}` → `{presets:[{name,settings}]}`: saved New Document configurations |
 | `document.presets.save` | `{"name":"Product square","settings":{"width":1600,"height":1600,"background":"transparent"}}`: save a snapshot; names are trimmed, 1–255 characters, and ASCII case-insensitive duplicates are rejected |
@@ -196,9 +198,10 @@ Each element describes one command, in registry order:
 | `enabled` | boolean | Whether the command can run in the current state |
 | `disabledReason` | string or `null` | Why the command can't run now (`null` when `enabled`) |
 | `needsDocument` | boolean | `true` when it is off because no document is open (#3664) |
+| `keywords` | string, optional | Other names the command is found by (#5060), e.g. `select.rect`'s Elliptical Marquee; only present on commands that have them |
 
 Filtering narrows the same array without changing its elements: `serve`'s `engine.commands
-{filter}` and the MCP tool's `filter` keep commands whose id or label contains the text
+{filter}` and the MCP tool's `filter` keep commands whose id, label or keywords contain the text
 (case-insensitive), and the MCP tool's `enabled_only` keeps those with `enabled: true`. The
 desktop control channel's `engine.commands` takes no filter and always returns every command.
 The shape is pinned by a test in `crates/automation/src/rpc.rs` (#3684).
@@ -548,6 +551,17 @@ visibility reset when the dialog opens. HDR scopes are not implemented. See
 [camera-raw-histogram.md](camera-raw-histogram.md).
 
 ### Editing and composing actions
+
+Newly recorded Select Layer steps store the layer name instead of a document-specific ID,
+and the Actions panel shows `Select Layer (Background)`. Duplicate names include a zero-based
+`occurrence` in document walk order (including layers inside groups); keep that order consistent
+between source and target documents. A missing name or occurrence stops playback; a name without
+an occurrence is rejected when ambiguous. Names are captured at selection time, so a later
+rename in the action does not change the earlier target. Numeric `layer` IDs remain supported
+for direct commands and older recordings, which the panel labels `Select Layer (ID 26)`.
+String-valued `layer` targets from imported Photoshop actions keep main's topmost-name matching
+and show the same named label; `remove` selection mode is supported for either target form.
+Re-record old Select Layer steps: their original names cannot be recovered from an ID alone.
 
 Creating an action scrolls its row into view; newly recorded steps are revealed immediately.
 Drag a step above or below another step in the same action to reorder it. Drag an action header

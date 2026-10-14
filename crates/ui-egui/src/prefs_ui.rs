@@ -52,6 +52,7 @@ pub struct Runtime {
     show_rulers: Option<bool>,
     /// Tool options as last remembered in the preferences (see `tool_memory`).
     pub(crate) tool_options: Option<crate::state::ToolOptions>,
+    pub(crate) selected_tool: Option<crate::state::Tool>,
 }
 
 /// The GPU canvas colours from Preferences › Transparency & Gamut.
@@ -126,6 +127,26 @@ pub(crate) fn cycle_appearance(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.ui.theme != selected {
         app.apply_theme(ctx, selected);
     }
+}
+
+/// Photoshop's four interface brightnesses, darkest first.
+const BRIGHTNESSES: [ThemeKind; 4] = [ThemeKind::Pro, ThemeKind::ProMedium, ThemeKind::ProLightGray, ThemeKind::ProLight];
+
+/// Darken Interface (⇧⌘F1, `lighter` false) and Lighten Interface (⇧⌘F2): the next of
+/// Photoshop's four brightnesses from the theme on screen, stopping at either end, as in
+/// Photoshop. Another theme steps from the nearest brightness: Medium Gray for a dark one, Light
+/// Gray for a light one. The choice is saved like picking it in Preferences › Interface.
+pub(crate) fn step_brightness(app: &mut PhotocraftApp, ctx: &egui::Context, lighter: bool) -> Result<(), String> {
+    let current = app.ui.theme;
+    let at = BRIGHTNESSES.iter().position(|k| *k == current).unwrap_or(if crate::theme::Tokens::for_kind(current).dark() { 1 } else { 2 });
+    let next = if lighter { (at + 1).min(BRIGHTNESSES.len() - 1) } else { at.saturating_sub(1) };
+    let Some(&kind) = BRIGHTNESSES.get(next) else { return Ok(()) };
+    if kind == current {
+        return Ok(());
+    }
+    app.run("prefs.set", json!({"path": "interface.theme", "value": kind.id()}))?;
+    sync_appearance(app, ctx);
+    Ok(())
 }
 
 const LIGHT_THEME_OPTIONS: &[(&str, ThemeKind)] = &[
@@ -994,26 +1015,18 @@ pub fn open_shortcuts(app: &mut PhotocraftApp, tab: u64) -> u64 {
     open_kind(app, "shortcuts", tl!("Keyboard Shortcuts and Menus"), fields)
 }
 
-/// Open the Embedded Profile Mismatch prompt for the active document.
-pub fn open_mismatch(app: &mut PhotocraftApp, report: &Value) -> u64 {
-    let msg = if report.get("missing").and_then(Value::as_bool) == Some(true) {
-        let template = "The document does not have an embedded colour profile. Working space: {working}.";
-        crate::i18n::fmt(tl!(template), &[("working", report["working"].as_str().unwrap_or("?"))])
-    } else {
-        let template = "The document has an embedded colour profile that does not match the working space.\nEmbedded: {embedded}\nWorking: {working}";
-        crate::i18n::fmt(tl!(template), &[("embedded", report["embedded"].as_str().unwrap_or("?")), ("working", report["working"].as_str().unwrap_or("?"))])
-    };
-    let action = match report["action"].as_str() {
-        Some("converted") => "convert",
-        Some("discarded") => "discard",
-        _ => "preserve",
-    };
-    open_kind(
-        app,
-        "mismatch",
-        tl!("Embedded Profile Mismatch"),
-        json!({"message": msg, "action": action, "applied": action, "missing": report.get("missing").is_some()}),
-    )
+/// Open the Embedded Profile Mismatch prompt for a file waiting to open (`open_prompt`): its
+/// `message`, the answer selected first (`action`), and `marker`, the field that routes OK and
+/// Cancel back to `open_prompt`.
+/// `names` carries the embedded and working profile names and the Color Settings policy a
+/// remembered choice is saved to (`policyKey`, null for a mode without one).
+pub fn open_mismatch(app: &mut PhotocraftApp, message: &str, action: &str, missing: bool, marker: &str, names: Value) -> u64 {
+    let mut fields = json!({"message": message, "action": action, "missing": missing, "remember": false});
+    if let (Some(f), Value::Object(n)) = (fields.as_object_mut(), names) {
+        f.extend(n);
+    }
+    fields[marker] = json!(true);
+    open_kind(app, "mismatch", tl!("Embedded Profile Mismatch"), fields)
 }
 
 // ------------------------------------------------------------------ bodies
@@ -1037,6 +1050,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
 fn humanize(key: &str) -> String {
     match key {
         "appearanceMode" => return "Appearance Mode".into(),
+        "exrAcesCg" => return "Open color-less EXR as ACEScg".into(),
         "darkTheme" => return "Dark Theme".into(),
         "lightTheme" => return "Light Theme".into(),
         _ => {}
@@ -1766,8 +1780,10 @@ fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
                     }
                     ui.label(if changed { RichText::new(tl!("modified")).color(t.text_faint).size(10.5) } else { RichText::new("") });
                 } else {
-                    let mut visible = !hidden.contains(id);
-                    crate::widgets::checkbox(ui, &mut visible, tl!("Visible"));
+                    // Edit › Menus, Keyboard Shortcuts, Preferences, Save and Exit always stay (#5096).
+                    let hideable = photocraft_engine::prefs::MenuCustomization::hideable(id);
+                    let mut visible = !hideable || !hidden.contains(id);
+                    ui.add_enabled_ui(hideable, |ui| crate::widgets::checkbox(ui, &mut visible, tl!("Visible")));
                     if visible {
                         hidden.retain(|h| h != id);
                     } else if !hidden.contains(id) {
@@ -1931,19 +1947,28 @@ fn mismatch_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.add_space(6.0);
     let mut action = f.get("action").and_then(Value::as_str).unwrap_or("preserve").to_string();
     let missing = f.get("missing").and_then(Value::as_bool).unwrap_or(false);
-    let opts: &[(&str, &str)] = if missing {
-        &[("preserve", tl!("Leave as is (don't color manage)")), ("assignWorking", tl!("Assign working space"))]
+    let name = |k: &str| f.get(k).and_then(Value::as_str).unwrap_or("?").to_string();
+    let opts: Vec<(&str, String)> = if missing {
+        vec![("preserve", tl!("Leave as is (don't color manage)").into()), ("assignWorking", tl!("Assign working space").into())]
     } else {
-        &[
-            ("preserve", tl!("Use the embedded profile (instead of the working space)")),
-            ("convert", tl!("Convert document's colors to the working space")),
-            ("discard", tl!("Discard the embedded profile (don't color manage)")),
+        vec![
+            ("preserve", crate::i18n::fmt(tl!("Use the embedded profile ({profile})"), &[("profile", &name("embedded"))])),
+            ("convert", crate::i18n::fmt(tl!("Convert to the working space ({profile})"), &[("profile", &name("working"))])),
+            ("discard", tl!("Discard the embedded profile (don't color manage)").into()),
         ]
     };
     for (v, label) in opts {
-        ui.radio_value(&mut action, v.to_string(), *label);
+        ui.radio_value(&mut action, v.to_string(), label);
     }
     f.insert("action".into(), json!(action));
+    // Remembering sets the Color Settings policy and stops asking, so it needs a mode with a policy.
+    if !missing && f.get("policyKey").is_some_and(Value::is_string) {
+        ui.add_space(8.0);
+        let mut remember = f.get("remember").and_then(Value::as_bool).unwrap_or(false);
+        crate::widgets::checkbox(ui, &mut remember, tl!("Remember this choice for future images"))
+            .on_hover_text(tl!("Turn the prompt back on with Ask On Mismatch in Edit › Color Settings."));
+        f.insert("remember".into(), json!(remember));
+    }
 }
 
 // ------------------------------------------------------------------ confirm
@@ -2011,13 +2036,13 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
                 })
             }
         }
+        // The file it asks about opens with this answer (`open_prompt`).
         "mismatch" => {
             let action = f.get("action").and_then(Value::as_str).unwrap_or("preserve");
-            let applied = f.get("applied").and_then(Value::as_str).unwrap_or("preserve");
-            if action == applied {
-                return Ok(json!({"action": action}));
+            if f.get("remember").and_then(Value::as_bool) == Some(true) {
+                return crate::open_prompt::answer_remembering(app, action);
             }
-            app.run("color.profileMismatch", json!({"action": action}))
+            crate::open_prompt::answer(app, Some(action))
         }
         _ => Err("unknown dialog".into()),
     }
@@ -2180,6 +2205,65 @@ mod tests {
             assert_eq!(app.session.prefs().interface.dark_theme, DarkTheme::Studio);
             assert_eq!(app.session.prefs().interface.light_theme, LightTheme::Classic);
         }
+    }
+
+    #[test]
+    fn darken_and_lighten_interface_step_through_photoshops_brightnesses_and_stop_at_the_ends() {
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        sync_appearance(&mut app, &ctx);
+        assert_eq!(app.ui.theme, ThemeKind::ProMedium, "Photoshop's default brightness");
+        let press = |app: &mut PhotocraftApp, id: &str| crate::menus::invoke(app, &ctx, id, json!({})).unwrap();
+        for expected in [ThemeKind::ProLightGray, ThemeKind::ProLight, ThemeKind::ProLight] {
+            press(&mut app, "view.lightenInterface");
+            assert_eq!(app.ui.theme, expected);
+        }
+        // Saved like a choice in Preferences › Interface: the light slot and the Light appearance.
+        let i = &app.session.prefs().interface;
+        assert_eq!((i.appearance_mode, i.light_theme), (AppearanceMode::Light, LightTheme::ProLight));
+        for expected in [ThemeKind::ProLightGray, ThemeKind::ProMedium, ThemeKind::Pro, ThemeKind::Pro] {
+            press(&mut app, "view.darkenInterface");
+            assert_eq!(app.ui.theme, expected);
+        }
+        let i = &app.session.prefs().interface;
+        assert_eq!((i.appearance_mode, i.dark_theme), (AppearanceMode::Dark, DarkTheme::Pro));
+        // Another theme steps from the nearest brightness.
+        for (theme, id, expected) in [
+            ("studio", "view.darkenInterface", ThemeKind::Pro),
+            ("studio", "view.lightenInterface", ThemeKind::ProLightGray),
+            ("classic", "view.darkenInterface", ThemeKind::ProMedium),
+            ("classic", "view.lightenInterface", ThemeKind::ProLight),
+        ] {
+            app.run("prefs.set", json!({"path": "interface.theme", "value": theme})).unwrap();
+            sync_appearance(&mut app, &ctx);
+            press(&mut app, id);
+            assert_eq!(app.ui.theme, expected, "{theme} {id}");
+        }
+    }
+
+    #[test]
+    fn ctrl_shift_f1_and_f2_darken_and_lighten_the_interface() {
+        for (id, shortcut) in [("view.darkenInterface", "Cmd+Shift+F1"), ("view.lightenInterface", "Cmd+Shift+F2")] {
+            assert_eq!(crate::shortcuts::default_shortcut(id).as_deref(), Some(shortcut), "{id}");
+        }
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        sync_appearance(&mut app, &ctx);
+        let press = |app: &mut PhotocraftApp, key| {
+            let modifiers = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+            let raw = egui::RawInput {
+                events: vec![egui::Event::ModifiersChanged(modifiers), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }],
+                ..Default::default()
+            };
+            ctx.begin_pass(raw);
+            crate::shortcuts::handle(app, &ctx);
+            ctx.end_pass().textures_delta.clear();
+        };
+        press(&mut app, egui::Key::F1);
+        assert_eq!(app.ui.theme, ThemeKind::Pro);
+        press(&mut app, egui::Key::F2);
+        press(&mut app, egui::Key::F2);
+        assert_eq!(app.ui.theme, ThemeKind::ProLightGray);
     }
 
     fn appearance_frame(app: &mut PhotocraftApp, ctx: &egui::Context, appearance: Option<egui::Theme>) {
@@ -2746,6 +2830,110 @@ mod tests {
     }
 
     #[test]
+    fn selected_tool_survives_a_restart_without_option_changes() {
+        use crate::state::Tool;
+        let (mut app, store) = app_with_store();
+        let ctx = egui::Context::default();
+        tick(&mut app, &ctx);
+        assert_eq!(app.ui.tool, Tool::Brush);
+        // Every tool, including flyout-only tools, can be restored. Return to Brush last to
+        // prove selecting the default overwrites a previously remembered nondefault tool.
+        for tool in Tool::ALL.into_iter().chain([Tool::Brush]) {
+            app.ui.tool = tool;
+            crate::tool_memory::persist(&mut app, &ctx);
+            tick(&mut app, &ctx);
+            assert_eq!(stored(&store)["selectedTool"], serde_json::to_value(tool).unwrap());
+            let (app2, _) = app_with_saved(store.lock().unwrap().clone());
+            assert_eq!(app2.ui.tool, tool, "restored before the first frame");
+            assert_eq!(app2.ui.group_tool(tool.key()), Some(tool));
+            assert_eq!(app2.ui.tool_options, crate::state::ToolOptions::default());
+        }
+    }
+
+    #[test]
+    fn selected_tool_is_flushed_on_exit_without_another_frame() {
+        let (mut app, store) = app_with_store();
+        app.ui.tool = crate::state::Tool::Move;
+        crate::tool_memory::save_on_exit(&mut app).unwrap();
+        let (app2, _) = app_with_saved(store.lock().unwrap().clone());
+        assert_eq!(app2.ui.tool, crate::state::Tool::Move);
+    }
+
+    #[test]
+    fn selected_tool_explicit_eraser_survives_exit_during_temporary_switches() {
+        use crate::state::Tool;
+        for spring in [false, true] {
+            for menu in [false, true] {
+                let (mut app, store) = app_with_store();
+                app.stylus.tool_before_eraser = Some(Tool::Zoom);
+                app.ui.tool = Tool::Eraser;
+                if spring {
+                    crate::spring_tools::pressed(&mut app, 'E', Tool::Zoom, true, 0.0);
+                }
+                if menu {
+                    crate::menus::invoke(&mut app, &egui::Context::default(), "tools.select.eraser", json!({})).unwrap();
+                } else {
+                    crate::tool_memory::select(&mut app, Tool::Eraser);
+                }
+                assert_eq!(app.stylus.tool_before_eraser, None);
+                assert!(app.ui.spring.is_none());
+                crate::tool_memory::save_on_exit(&mut app).unwrap();
+                let (restored, _) = app_with_saved(store.lock().unwrap().clone());
+                assert_eq!(restored.ui.tool, Tool::Eraser);
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_selected_tool_preserves_other_preferences() {
+        for bad in [json!(null), json!("FutureTool"), json!(42), json!({}), json!([])] {
+            let (app, _) = app_with_saved(Some(
+                json!({
+                    "selectedTool": bad, "toolOptions": {"feather": 12.0}
+                })
+                .to_string(),
+            ));
+            assert_eq!(app.ui.tool, crate::state::Tool::Brush, "{bad}");
+            assert_eq!(app.ui.tool_options.feather, 12.0);
+        }
+    }
+
+    #[test]
+    fn selected_tool_excludes_temporary_switches() {
+        use crate::state::Tool;
+        let (mut app, store) = app_with_store();
+        let ctx = egui::Context::default();
+        app.ui.tool = Tool::Move;
+        crate::tool_memory::persist(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        app.tool_override = Some(Tool::Hand);
+        crate::tool_memory::persist(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        assert_eq!(stored(&store)["selectedTool"], json!("Move"));
+        app.tool_override = None;
+        app.ui.tool = Tool::Zoom;
+        crate::spring_tools::pressed(&mut app, 'Z', Tool::Move, true, 0.0);
+        crate::tool_memory::persist(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        assert_eq!(stored(&store)["selectedTool"], json!("Move"));
+        // A quick tap commits the choice after spring_tools clears the pending switch.
+        crate::spring_tools::tick(&mut app, &ctx);
+        crate::tool_memory::persist(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        assert_eq!(stored(&store)["selectedTool"], json!("Zoom"));
+        app.stylus.tool_before_eraser = Some(Tool::Zoom);
+        app.ui.tool = Tool::Eraser;
+        crate::tool_memory::persist(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        assert_eq!(stored(&store)["selectedTool"], json!("Zoom"));
+        // An explicit selection during a temporary switch takes precedence.
+        app.ui.tool = Tool::PolygonLasso;
+        crate::tool_memory::persist(&mut app, &ctx);
+        tick(&mut app, &ctx);
+        assert_eq!(stored(&store)["selectedTool"], json!("PolygonLasso"));
+    }
+
+    #[test]
     fn tool_options_survive_a_restart() {
         let (mut app, store) = app_with_store();
         let ctx = egui::Context::default();
@@ -3197,6 +3385,16 @@ mod tests {
         let (mut app, _) = app_with_store();
         app.run("edit.menus", json!({"hide": ["edit.fade"]})).unwrap();
         assert!(!crate::menus::menu_items(&app).iter().any(|i| i.id == "edit.fade"));
+    }
+
+    /// #5096: preferences that list Edit › Menus or File › Exit as hidden still show them.
+    #[test]
+    fn essential_menu_items_stay_visible() {
+        let (mut app, _) = app_with_store();
+        app.run("prefs.set", json!({"values": {"menus": {"hidden": ["edit.menus", "file.exit", "edit.fade"], "colors": {}}}})).unwrap();
+        let items = crate::menus::menu_items(&app);
+        assert!(items.iter().any(|i| i.id == "edit.menus") && items.iter().any(|i| i.id == "file.exit"));
+        assert!(!items.iter().any(|i| i.id == "edit.fade"));
     }
 
     #[test]
