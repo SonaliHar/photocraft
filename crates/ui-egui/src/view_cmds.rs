@@ -671,12 +671,7 @@ fn center_for_flipped_view(xf: ViewXform, size: [u32; 2], flip: bool) -> [f32; 2
 fn canvas_coverage(xf: ViewXform, size: [u32; 2]) -> f32 {
     let w = size[0] as f32;
     let h = size[1] as f32;
-    let corners = [
-        xf.to_screen(0.0, 0.0),
-        xf.to_screen(w, 0.0),
-        xf.to_screen(0.0, h),
-        xf.to_screen(w, h),
-    ];
+    let corners = [xf.to_screen(0.0, 0.0), xf.to_screen(w, 0.0), xf.to_screen(0.0, h), xf.to_screen(w, h)];
     let min_x = corners.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
     let min_y = corners.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
     let max_x = corners.iter().map(|p| p.x).fold(f32::NEG_INFINITY, f32::max);
