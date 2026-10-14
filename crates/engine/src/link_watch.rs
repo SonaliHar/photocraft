@@ -34,6 +34,10 @@ pub type LinkScan = Arc<Mutex<Option<(u64, Vec<(String, Vec<u64>, Option<Stamp>)
 
 #[cfg(not(target_arch = "wasm32"))]
 fn stamp(path: &str) -> Option<Stamp> {
+    // The path comes from the document: on a network share, even looking signs in to its host.
+    if photocraft_io::linked::is_network_path(path) {
+        return None;
+    }
     let meta = std::fs::metadata(path).ok()?;
     let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
     Some((meta.len(), modified.as_nanos()))
@@ -220,6 +224,31 @@ mod tests {
         assert!(s.undo());
         assert!(is(centre(&s), RED));
         assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated": []}));
+        assert!(is(centre(&s), RED));
+    }
+
+    /// A linked file on a network share is never looked at: on Windows that alone signs in to the
+    /// share's host with the user's credentials. On Unix `//dir/x` is the local `/dir/x`, so the
+    /// file is really there and only the guard keeps it unstamped.
+    #[cfg(unix)]
+    #[test]
+    fn a_network_path_is_never_looked_at() {
+        use photocraft_doc::{LayerContent, LayerId, SmartSource};
+        let d = dir("network");
+        let path = d.join("art.png");
+        std::fs::write(&path, png(10, 10, "#ff0000")).unwrap();
+        let (mut s, id) = placed(&path);
+        let network = format!("/{}", path.display());
+        s.edit("network", |doc, _| {
+            let Some(LayerContent::Smart(sm)) = doc.layer_mut(LayerId(id)).map(|l| &mut l.content) else { panic!("not a smart object") };
+            sm.source = SmartSource::Linked { path: network };
+            Ok(())
+        })
+        .unwrap();
+        s.execute("layer.smartObjects.updateChanged", json!({})).unwrap();
+        save(&path, &png(10, 10, "#0000ff"));
+        assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated": []}));
+        assert!(s.link_stamps.is_empty(), "{:?}", s.link_stamps);
         assert!(is(centre(&s), RED));
     }
 

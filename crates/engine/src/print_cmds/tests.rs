@@ -241,6 +241,30 @@ fn print_one_copy_repeats_the_last_settings() {
     assert!(r["pdf"].is_null());
 }
 
+/// A link on a network share is reported missing, not copied. On Unix `//dir/x` is the local
+/// `/dir/x`, so the file is really there and only the network-path guard keeps it unread.
+#[cfg(unix)]
+#[test]
+fn package_does_not_copy_a_network_link() {
+    let dir = tmp("package-network");
+    let link = format!("{dir}/art.png");
+    let mut src = Session::new();
+    src.execute("file.new", json!({"width": 20, "height": 20, "background": "#ff0000"})).unwrap();
+    crate::file_cmds::save_doc(&src.active().unwrap().doc, &link, None).unwrap();
+    let mut s = session("rgb", 8);
+    s.execute("file.placeLinked", json!({"path": link})).unwrap();
+    let network = format!("/{link}");
+    s.edit("network", |doc, active| {
+        let Some(LayerContent::Smart(so)) = doc.layer_mut(active.unwrap()).map(|l| &mut l.content) else { panic!("not a smart object") };
+        so.source = SmartSource::Linked { path: network.clone() };
+        Ok(())
+    })
+    .unwrap();
+    let r = s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap();
+    assert_eq!(r["links"], json!([]));
+    assert_eq!(r["missing"], json!([network]));
+}
+
 #[test]
 fn package_copies_links_and_relinks() {
     let dir = tmp("package");

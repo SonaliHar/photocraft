@@ -629,13 +629,15 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
                     fname = format!("{}-{}", copied.len(), fname);
                 }
                 let t = join(&links_dir, &fname);
-                match read_file(path) {
-                    Ok(bytes) => {
+                // A link on a network share is never opened (the path comes from the document).
+                let read = if photocraft_io::linked::is_network_path(path) { None } else { read_file(path).ok() };
+                match read {
+                    Some(bytes) => {
                         write_file(&t, &bytes)?;
                         copied.push((path.clone(), t.clone()));
                         t
                     }
-                    Err(_) => {
+                    None => {
                         missing.push(path.clone());
                         continue;
                     }

@@ -489,6 +489,26 @@ fn reveal_in_finder_dry_run_and_enabled() {
 }
 
 #[test]
+fn reveal_in_finder_refuses_a_network_link() {
+    let mut s = session(8, "rgb");
+    s.edit("linked", |doc, active| {
+        let l = Layer::new(
+            "linked",
+            LayerContent::Smart(photocraft_doc::SmartObject::new(
+                SmartSource::Linked { path: r"\\server\share\a.png".into() },
+                photocraft_geom::Affine::IDENTITY,
+                None,
+            )),
+        );
+        *active = Some(doc.insert_above(*active, l));
+        Ok(())
+    })
+    .unwrap();
+    let err = s.execute("layer.smartObjects.revealInFinder", json!({"dryRun": true})).unwrap_err();
+    assert!(err.to_string().contains("network share"), "{err}");
+}
+
+#[test]
 fn mask_all_objects_masks_the_subject() {
     let mut s = session(8, "rgb");
     paint(&mut s, |x, y| {
