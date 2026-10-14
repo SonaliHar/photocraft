@@ -15,7 +15,7 @@ use photocraft_algo::retouch::{ToneRange, dodge_burn, local_blur, local_sharpen,
 use photocraft_color::{BlendMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, LayerContent, LayerId};
 use photocraft_geom::Rect;
-use photocraft_paint::retouch::{Footprint, Region, Smudge, alpha_index, apply_coverage, apply_dab_stroke, stroke_coverage};
+use photocraft_paint::retouch::{Footprint, Region, Smudge, alpha_index, apply_coverage, apply_dab_stroke_clipped, footprint_within, stroke_coverage};
 use photocraft_paint::{BrushSettings, Stroke, StrokePoint};
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use serde_json::{Value, json};
@@ -1012,10 +1012,13 @@ fn dab_cmd(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         let fmt = surf.format();
         let mut effect = tool.effect(fmt, stroke.brush.spacing);
         let mut sampler = all.then(|| AllLayers::new(pre, fmt));
-        Ok(apply_dab_stroke(surf, &stroke, sel, lock, tool.halo(), |work, fp| match &mut sampler {
+        // Only the canvas changes, and only it (plus the halo the effect reads) is copied, so a
+        // brush far larger than the image costs what the image does (#5633).
+        let admit = |_: Rect| Ok(());
+        apply_dab_stroke_clipped(surf, &stroke, sel, lock, tool.halo(), pre.bounds(), admit, |work, fp| match &mut sampler {
             Some(all) => all.dab(work, fp, |w, f| effect(w, f)),
             None => effect(work, fp),
-        }))
+        })
     })?;
     Ok(json!({ "damage": damage_json(dmg) }))
 }
@@ -1120,15 +1123,19 @@ impl LiveDab {
         crate::brush_cmds::check_coords(pts, &self.cmd)?;
         self.renderer.push(pts);
         let ctx = self.renderer.ctx.clone();
+        // As on release (`apply_dab_stroke_clipped`): only the canvas changes, and each dab copies
+        // only its part of the canvas plus the halo the effect reads (#5633).
+        let canvas = self.doc.bounds();
         let new: Vec<_> = self.renderer.dabs().get(self.done..).unwrap_or_default().to_vec();
         let mut dmg = Rect::EMPTY;
         for (k, d) in new.iter().enumerate() {
-            let r = ctx.dab_rect(d, false);
+            let r = ctx.dab_rect(d, false).intersect(&canvas);
             if r.is_empty() {
                 continue;
             }
-            let mut region = Region::read(&self.work, r.inflate(self.halo));
-            (self.effect)(&mut region, &ctx.footprint(d, self.done + k));
+            let read = r.inflate(self.halo);
+            let mut region = Region::read(&self.work, read);
+            (self.effect)(&mut region, &footprint_within(&ctx, d, self.done + k, read));
             region.crop(r).write(&mut self.work);
             dmg = dmg.union(&r);
         }
@@ -1137,11 +1144,12 @@ impl LiveDab {
         let mut tail = None;
         if self.preview_tail {
             let ds = self.renderer.tail_dabs();
-            let r = ds.iter().fold(Rect::EMPTY, |a, d| a.union(&ctx.dab_rect(d, false)));
+            let r = ds.iter().fold(Rect::EMPTY, |a, d| a.union(&ctx.dab_rect(d, false))).intersect(&canvas);
             if !r.is_empty() {
-                let mut region = Region::read(&self.work, r.inflate(self.halo));
+                let read = r.inflate(self.halo);
+                let mut region = Region::read(&self.work, read);
                 for (k, d) in ds.iter().enumerate() {
-                    (self.effect)(&mut region, &ctx.footprint(d, self.done + k));
+                    (self.effect)(&mut region, &footprint_within(&ctx, d, self.done + k, read));
                 }
                 tail = Some((r, region.crop(r)));
             }
