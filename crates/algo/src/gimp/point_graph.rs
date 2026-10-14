@@ -16,6 +16,8 @@ use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
 use photocraft_raster::{Interrupt, MAX_CHECKED_RASTER_BYTES, checked_region_byte_len};
 #[path = "point_graph/red_eye_binding.rs"]
 mod red_eye_binding;
+#[path = "point_graph/color_exchange_binding.rs"]
+mod color_exchange_binding;
 
 /// Independently qualified caller interpretation of this exact node. Supplying
 /// arbitrary source metadata is not schema or profile qualification.
@@ -106,6 +108,7 @@ pub fn evaluate(binding: Binding<'_>, request: NodeRequest<'_>, budget: &mut Nod
         binding.operation,
         PointOperation::ThresholdAlpha { .. } | PointOperation::ChannelMixer { .. } | PointOperation::MonoMixerSigned { .. }
             | PointOperation::RedEyeRemoval { .. }
+            | PointOperation::ColorExchange { .. }
     ) { format.channels() } else { colors };
     for y in request.roi.y0..request.roi.y1 {
         budget.poll()?;
@@ -179,6 +182,7 @@ fn validate_operation(binding: &Binding<'_>, node: &photocraft_doc::xcf_filters:
         return Err(GraphExecuteError::Operation("alpha threshold graph requires a native alpha channel"));
     }
     match binding.operation {
+        PointOperation::ColorExchange { from, to, thresholds } => return color_exchange_binding::validate(binding, node, from, to, thresholds),
         PointOperation::RedEyeRemoval { threshold } => return red_eye_binding::validate(binding, node, threshold),
         PointOperation::ChannelMixer { gains, preserve_luminosity } => {
             let [[rr, rg, rb], [gr, gg, gb], [br, bg, bb]] = gains;

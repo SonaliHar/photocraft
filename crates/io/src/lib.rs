@@ -83,11 +83,13 @@ pub mod vector_map;
 mod wide_export;
 pub mod xcf_assessment;
 pub mod xcf_channel_candidate;
+pub mod xcf_color_to_alpha_candidate;
 mod xcf_current_assessment;
 mod xcf_export;
 mod xcf_export_loss;
 mod xcf_export_precision;
 mod xcf_filters;
+pub use xcf_filters::{CurvesMappingLimits, CurvesMappingRequirements, MappedCurvesSource, map_retained_curves_source};
 #[cfg(test)]
 #[path = "../tests/common/xcf.rs"]
 pub(crate) mod xcf_fixture;
