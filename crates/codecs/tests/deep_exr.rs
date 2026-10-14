@@ -657,11 +657,11 @@ fn deep_tile_count_table_is_admitted_against_max_alloc() {
         assert_eq!(decode_deep_exr(&clipped, &tight).expect("clipped table, 1 MiB budget"), scan, "compression {compression}");
         if compression != 0 {
             assert!(big.len() < 1 << 20, "compression {compression}: the file is {} bytes", big.len());
-            // The table and its scratch copy are admitted together: 8 MiB.
-            assert_eq!(decode_deep_exr(&big, &budget(2 * table)).expect("room for the table and its copy"), scan, "compression {compression}");
-            let got = decode_deep_exr(&big, &budget(2 * table - 1));
-            assert!(matches!(got, Err(CodecError::LimitExceeded(_))), "compression {compression}: one byte short gave {:?}", got.map(|d| d.total_samples()));
         }
+        // The table and its scratch copy are admitted together: 8 MiB.
+        assert_eq!(decode_deep_exr(&big, &budget(2 * table)).expect("room for the table and its copy"), scan, "compression {compression}");
+        let got = decode_deep_exr(&big, &budget(2 * table - 1));
+        assert!(matches!(got, Err(CodecError::LimitExceeded(_))), "compression {compression}: one byte short gave {:?}", got.map(|d| d.total_samples()));
     }
     // Ordinary tiles: full-size edge tables decode under the small budget, like clipped ones.
     let counts: Vec<u32> = (0..35).map(|p| (p * 3) % 4).collect();
@@ -674,6 +674,39 @@ fn deep_tile_count_table_is_admitted_against_max_alloc() {
             decode_deep_exr(&clipped, &tight).expect("clipped edge tables"),
             "compression {compression}"
         );
+    }
+}
+
+/// #4958, the edges of that admission. A tile of the largest size exr accepts (2^30 - 2 a side,
+/// a 2^62 byte count table) decodes from a clipped table under every budget, including no limits,
+/// where its full size passes the check and is only tried as the data arrives. Each tile is
+/// admitted on its own, because its table is freed before the next chunk: four 16×16 tiles over a
+/// 17×17 image need 2 KiB each for the table and its copy, 8 KiB in all, and decode under a
+/// budget of 8000 bytes. Half and uint channels decode after full-size tables like float ones.
+#[test]
+fn deep_tile_table_admission_edges() {
+    let budget = |max_alloc: u64| Limits { max_alloc, ..Limits::none() };
+    let scan = decode_deep_exr(&gen_deep(4, 4, &RGBAZ, 0, None, COUNTS_ONE, &sample_rgba), &Limits::none()).expect("scan lines");
+    let side = (1 << 30) - 2;
+    for compression in [0u8, 1, 2] {
+        let bytes = gen_deep(4, 4, &RGBAZ, compression, Some((side, side)), COUNTS_ONE, &sample_rgba);
+        for limits in [Limits::none(), Limits::default(), budget(1 << 20)] {
+            assert_eq!(decode_deep_exr(&bytes, &limits).expect("the largest tile, clipped table"), scan, "compression {compression}, {limits:?}");
+        }
+    }
+    let counts: Vec<u32> = (0..17 * 17).map(|p| (p % 3) as u32).collect();
+    let half: [Chan; 5] = RGBAZ.map(|c| Chan { ty: 1, ..c });
+    let [a, b, g, r, z] = RGBAZ;
+    let with_id = [a, b, g, r, z, Chan { name: "id", ty: 0 }];
+    for channels in [&RGBAZ[..], &half[..], &with_id[..]] {
+        let sample = |p: usize, ci: usize| -> Vec<f32> { (0..counts[p]).map(|k| [0.5, 0.25, 0.125, 1.0, 2.0 + k as f32, 7.0][ci]).collect() };
+        for compression in [0u8, 1, 2] {
+            let full = gen_deep_tables(17, 17, channels, compression, Some((16, 16)), &counts, &sample, true);
+            let clipped = gen_deep(17, 17, channels, compression, Some((16, 16)), &counts, &sample);
+            let what = format!("{} channels, compression {compression}", channels.len());
+            let want = decode_deep_exr(&clipped, &Limits::none()).expect("clipped tables");
+            assert_eq!(decode_deep_exr(&full, &budget(8000)).expect("full-size tables, admitted one at a time"), want, "{what}");
+        }
     }
 }
 

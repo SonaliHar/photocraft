@@ -23,7 +23,7 @@ use half::f16;
 use crate::Format;
 use crate::error::CodecError;
 use crate::image::{ChannelLayout, DecodeWarning, DeepChannel, DeepImage, Image, SampleType};
-use crate::options::Limits;
+use crate::options::{Limits, alloc_zeroed};
 
 const F: Format = Format::OpenExr;
 
@@ -81,10 +81,11 @@ fn differences_to_samples(buf: &mut [u8]) {
 }
 
 /// Undo the ZIP half-split: the stream is `[first half][second half]` with the second half
-/// holding every second byte of the original; weave them back together.
-fn interleave_byte_blocks(buf: &mut [u8]) {
+/// holding every second byte of the original; weave them back together. The scratch copy is
+/// allocated fallibly, so a buffer that passed `max_alloc` but not the allocator is an error.
+fn interleave_byte_blocks(buf: &mut [u8]) -> Result<(), CodecError> {
     let half = buf.len().div_ceil(2);
-    let mut out = vec![0u8; buf.len()];
+    let mut out = alloc_zeroed::<u8>(buf.len())?;
     let mut k = 0usize;
     for i in 0..buf.len() / 2 {
         let (a, b) = (buf.get(i).copied(), buf.get(half + i).copied());
@@ -105,6 +106,22 @@ fn interleave_byte_blocks(buf: &mut [u8]) {
         }
     }
     buf.copy_from_slice(&out);
+    Ok(())
+}
+
+/// Make room in `out` for `extra` more bytes, `limit` in all. Grows by doubling like `Vec`,
+/// but never reserves past `limit`: callers admit exactly that size against `max_alloc`, and
+/// plain doubling reserved up to twice as much. Fallible, so a failed allocation is an error.
+fn reserve_up_to(out: &mut Vec<u8>, extra: usize, limit: usize, what: &str) -> Result<(), CodecError> {
+    let need = out.len().saturating_add(extra);
+    if need > limit {
+        return Err(err(format!("{what}: data expands past {limit} bytes")));
+    }
+    if need > out.capacity() {
+        let target = out.capacity().saturating_mul(2).max(need).min(limit);
+        out.try_reserve_exact(target.saturating_sub(out.len())).map_err(|_| CodecError::LimitExceeded(format!("cannot allocate {target} bytes for {what}")))?;
+    }
+    Ok(())
 }
 
 /// OpenEXR RLE tokens: a negative byte `n` means `-n` literal bytes follow, a non-negative
@@ -119,6 +136,7 @@ fn rle_decode(src: &[u8], expected: usize, what: &str) -> Result<Vec<u8>, CodecE
         if out.len().saturating_add(n) > expected {
             return Err(err(format!("{what}: RLE data expands past {expected} bytes")));
         }
+        reserve_up_to(&mut out, n, expected, what)?;
         if count < 0 {
             let end = i.saturating_add(n);
             let run = src.get(i..end.min(src.len())).ok_or_else(|| err(format!("{what}: RLE run points past the compressed data")))?;
@@ -151,20 +169,38 @@ fn decompress(compression: Compression, packed: &[u8], expected: usize, what: &s
             // Like ZIPS, RLE runs over the predicted, byte-split stream.
             let mut out = rle_decode(packed, expected, what)?;
             differences_to_samples(&mut out);
-            interleave_byte_blocks(&mut out);
+            interleave_byte_blocks(&mut out)?;
             Ok(out)
         }
         Compression::ZIP1 => {
-            let mut out = Vec::with_capacity(expected.min(1 << 20));
-            flate2::read::ZlibDecoder::new(packed)
-                .take((expected as u64).saturating_add(1))
-                .read_to_end(&mut out)
-                .map_err(|_| err(format!("{what}: zlib data is malformed")))?;
+            // Inflate straight into `out`, grown with `reserve_up_to` rather than by
+            // `read_to_end`, whose doubling reserves past `expected`. Once `expected` bytes are
+            // in, a one-byte read checks that the stream ends there.
+            let malformed = || err(format!("{what}: zlib data is malformed"));
+            let mut zlib = flate2::read::ZlibDecoder::new(packed);
+            let mut out = Vec::new();
+            let mut filled = 0;
+            while filled < expected {
+                if filled == out.len() {
+                    let grow = out.len().max(1 << 13).min(expected - filled);
+                    reserve_up_to(&mut out, grow, expected, what)?;
+                    out.resize(filled + grow, 0);
+                }
+                let n = zlib.read(out.get_mut(filled..).unwrap_or_default()).map_err(|_| malformed())?;
+                if n == 0 {
+                    break;
+                }
+                filled += n;
+            }
+            out.truncate(filled);
+            if filled == expected && zlib.read(&mut [0u8; 1]).map_err(|_| malformed())? != 0 {
+                return Err(err(format!("{what}: zlib data expands past {expected} bytes")));
+            }
             if out.len() != expected {
                 return Err(err(format!("{what}: zlib data expands to {} bytes, expected {expected}", out.len())));
             }
             differences_to_samples(&mut out);
-            interleave_byte_blocks(&mut out);
+            interleave_byte_blocks(&mut out)?;
             Ok(out)
         }
         other => Err(unsup(format!("deep data with {other:?} compression (NONE, RLE and ZIPS are supported)"))),
@@ -627,4 +663,67 @@ pub(crate) fn flatten(deep: &DeepImage) -> Result<Image, CodecError> {
     }
     img.warnings.push(DecodeWarning::DeepFlattened { format: F, max_samples_per_pixel: max_samples });
     Ok(img)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write as _;
+
+    /// What the writer stores before compressing: the byte split, then the +128 predictor.
+    fn predicted(raw: &[u8]) -> Vec<u8> {
+        let half = raw.len().div_ceil(2);
+        let mut out = vec![0u8; raw.len()];
+        for (i, &v) in raw.iter().enumerate() {
+            out[if i % 2 == 0 { i / 2 } else { half + i / 2 }] = v;
+        }
+        let mut prev = 0i16;
+        for (i, b) in out.iter_mut().enumerate() {
+            let v = i16::from(*b);
+            if i > 0 {
+                *b = (v - prev + 128) as u8;
+            }
+            prev = v;
+        }
+        out
+    }
+
+    /// #4958: callers admit `expected` bytes for a decompressed buffer (twice that for a count
+    /// table, with the copy that undoes its byte split), so decompression must not reserve
+    /// more. `Vec`'s doubling gave a 4 MiB ZIPS table 8 MiB of capacity and a 3 MiB RLE table
+    /// 4 MiB, so the "admitted" table and its copy took up to three times the table size.
+    #[test]
+    fn decompressed_buffers_reserve_no_more_than_expected() {
+        for n in [1usize << 20, 2 << 20, (3 << 20) + 1, 4 << 20, 5 << 20] {
+            let raw = vec![0u8; n];
+            let p = predicted(&raw);
+            let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+            z.write_all(&p).expect("write to a Vec");
+            let zips = z.finish().expect("finish a Vec");
+            // RLE: the first byte as a literal, then runs of up to 128 copies of the next.
+            let mut rle = vec![0xFF, p[0]];
+            for run in p[1..].chunks(128) {
+                rle.extend_from_slice(&[(run.len() - 1) as u8, run[0]]);
+            }
+            for (compression, packed) in [(Compression::ZIP1, &zips), (Compression::RLE, &rle)] {
+                let out = decompress(compression, packed, n, "the table").expect("decompresses");
+                assert_eq!(out, raw, "{compression:?}, {n} bytes");
+                assert!(out.capacity() <= n, "{compression:?}: a {n} byte buffer reserved {} bytes", out.capacity());
+            }
+            // One byte short, the same data expands past the expected size and is refused.
+            for (compression, packed) in [(Compression::ZIP1, &zips), (Compression::RLE, &rle)] {
+                assert!(decompress(compression, packed, n - 1, "the table").is_err(), "{compression:?}, {n} bytes");
+            }
+        }
+    }
+
+    /// A size past the limit is malformed data, and a reservation the allocator refuses is an
+    /// error rather than an abort.
+    #[test]
+    fn reservations_past_the_limit_or_the_allocator_are_errors() {
+        let mut v = Vec::new();
+        assert!(matches!(reserve_up_to(&mut v, 2, 1, "x"), Err(CodecError::Malformed { .. })));
+        assert!(matches!(reserve_up_to(&mut v, isize::MAX as usize + 1, usize::MAX, "x"), Err(CodecError::LimitExceeded(_))));
+        assert_eq!(v.capacity(), 0);
+    }
 }
