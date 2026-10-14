@@ -248,6 +248,77 @@ fn include_color_needs_include_tool_settings() {
     assert_eq!(p.captures, photocraft_paint::PresetCaptures { size: true, tool_settings: false, color: false });
 }
 
+#[test]
+fn failed_new_brush_confirmation_keeps_the_form_and_accepts_a_corrected_retry() {
+    for theme in crate::theme::ThemeKind::ALL {
+        for enter in [false, true] {
+            let mut h = harness();
+            PhotocraftApp::setup_context(&h.ctx, theme);
+            h.state_mut().run("tools.setBrush", json!({"size":17.25,"noise":true})).unwrap();
+            let id = open(h.state_mut(), None);
+            {
+                let f = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+                f.insert("name".into(), json!("hard round"));
+                f.insert("captureSize".into(), json!(false));
+                f.insert("toolSettings".into(), json!(true));
+                f.insert("color".into(), json!(true));
+            }
+            h.run_steps(3);
+            let fields = h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+            let presets = h.state().session.tools.presets.clone();
+            let brush = h.state().session.tools.brush.clone();
+            let current = h.state().session.tools.current_preset.clone();
+            let journal = h.state().session.journal.clone();
+            assert!(crate::dialogs::confirm(h.state_mut(), id).is_err());
+            assert_eq!(dialog(&h), Some(id), "{theme:?}, Enter={enter}: rejected confirmation must retain the original dialog");
+            assert_eq!(h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields, fields);
+            {
+                let f = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+                f.insert("name".into(), json!("Retry preset"));
+                f.insert("brush".into(), json!({"size":photocraft_paint::MAX_BRUSH_SIZE + 1.0}));
+            }
+            h.run_steps(3);
+            if enter {
+                h.key_press(egui::Key::Enter);
+            } else {
+                h.get_by_label("OK").click();
+            }
+            h.run_steps(3);
+            assert!(h.state().ui.status.contains("at most 5000"));
+            assert_eq!(dialog(&h), Some(id), "invalid brush settings must also keep the form");
+            assert_eq!(field(&h, id, "name"), "Retry preset");
+            assert_eq!(field(&h, id, "brush")["size"], json!(photocraft_paint::MAX_BRUSH_SIZE + 1.0));
+            assert_eq!(h.state().session.tools.presets, presets);
+            assert_eq!(h.state().session.tools.brush, brush);
+            assert_eq!(h.state().session.tools.current_preset, current);
+            assert_eq!(h.state().session.journal, journal);
+            h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("brush".into(), json!({"size":17.25}));
+            h.run_steps(2);
+            if enter {
+                h.key_press(egui::Key::Enter);
+            } else {
+                h.get_by_label("OK").click();
+            }
+            h.run_steps(3);
+            assert!(dialog(&h).is_none());
+            assert_eq!(h.state().session.tools.presets.len(), presets.len() + 1);
+            assert_eq!(&h.state().session.tools.presets[..presets.len()], presets);
+            let saved = h.state().session.tools.presets.last().unwrap();
+            assert_eq!(saved.name, "Retry preset");
+            assert_eq!(saved.brush.size, 17.25);
+            assert_eq!(saved.captures, photocraft_paint::PresetCaptures { size: false, tool_settings: true, color: true });
+            assert_eq!(h.state().session.tools.current_preset.as_deref(), Some("Retry preset"));
+            assert_eq!(
+                &h.state().session.journal[journal.len()..],
+                &[(
+                    "brush.presets.save".to_string(),
+                    json!({"name":"Retry preset","captureSize":false,"toolSettings":true,"color":true,"brush":{"size":17.25}})
+                )]
+            );
+        }
+    }
+}
+
 /// The dialog opens on the name, all of it selected: typing replaces it, and Enter is OK.
 #[test]
 fn typing_replaces_the_suggested_name_and_enter_is_ok() {

@@ -1,6 +1,6 @@
 # Where PhotoCraft falls short of Photoshop
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (G4: New Brush Preset menu uses shared confirmation and case-safe names, #3477 partial; G7: Field Blur's on-canvas pins, #3373; G4: Hue Jitter amount track, #3825 partial; G4: minimum field interaction, #3825 partial; G1: CMYK Invert, Posterize and Threshold on the inks, 16-bit Lab Invert; Photoshop-oracle floor 145/258; G11: `.atn` import maps 112 events: Select and Mask, Filter Gallery Spatter, Ripple, Crystallize, Pattern Fill layers, mask targeting, Step Backward, nudges in points, Bitmap mode; G5: Free Transform H/V skew fields; G9: toolbar tool shortcut editing; refreshed against main: G2, G5, G7, G9, G10, G13, G14, G17 items that landed; G10: DPX read and write, #1049; G4: checkbox-only Brush Settings rows; G11: Load/Save Actions `.atn` landed, AUTO-219-2 partial; G5: hold-a-key spring-loaded tools landed, #2672; G1: #2465 fixed) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (G4: New Brush Preset uses shared confirmation, fresh names and validated writes with retained failed drafts, #3477 partial; G7: Field Blur's on-canvas pins, #3373; G4: Hue Jitter amount track, #3825 partial; G4: minimum field interaction, #3825 partial; G1: CMYK Invert, Posterize and Threshold on the inks, 16-bit Lab Invert; Photoshop-oracle floor 145/258; G11: `.atn` import maps 112 events: Select and Mask, Filter Gallery Spatter, Ripple, Crystallize, Pattern Fill layers, mask targeting, Step Backward, nudges in points, Bitmap mode; G5: Free Transform H/V skew fields; G9: toolbar tool shortcut editing; refreshed against main: G2, G5, G7, G9, G10, G13, G14, G17 items that landed; G10: DPX read and write, #1049; G4: checkbox-only Brush Settings rows; G11: Load/Save Actions `.atn` landed, AUTO-219-2 partial; G5: hold-a-key spring-loaded tools landed, #2672; G1: #2465 fixed) · **Target:** Adobe Photoshop 2026
 
 Every known shortfall against Photoshop 2026 (27.11.0), one entry each, ranked by user impact
 on the way to beta. This is the work list agents pick from: take the highest-ranked entry that
@@ -161,6 +161,9 @@ what an agent can't finish alone.
   an inline rename. Name/capture choices, Cancel/Escape and OK now follow the same flow
   as the picker and plus buttons (#4490 / #4563). Generic Brush N suggestions use the same
   case-insensitive identity as preset lookup/save, so switching tools cannot suggest an occupied name.
+  Preset Save/Update now apply the existing size/Scatter limits before changing the library. A rejected
+  New Brush Preset confirmation keeps its fields and capture choices for correction and retry. The
+  numeric rejection is exercised with automation-supplied settings; ordinary sliders already constrain them.
   The other tracking items remain open.
 - **Progress (2026-10-13, #3825 partial):** Hue Jitter shows a standard themed
   percentage-amount track rather than a hue spectrum. Other Brush Settings layout
@@ -269,7 +272,7 @@ what an agent can't finish alone.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-14 | minor | G4: Brush Settings menu defers creation to the shared dialog and generates case-safe fresh names (#3477, partial); no readiness percentage or estimate changed |
+| 2026-10-14 | minor | G4: shared preset confirmation, case-safe fresh names, bounded preset writes and retained failed drafts (#3477, partial); no readiness percentage or estimate changed |
 | 2026-10-13 | minor | G4: Hue Jitter amount-track appearance (#3825, partial); no readiness percentage or estimate changed |
 | 2026-10-13 | minor | G4: minimum inputs in Shape Dynamics and Transfer follow their Control (#3825, partial); no readiness percentage or estimate changed |
 | 2026-10-12 | minor | G5: Free Transform options bar H/V skew fields done |
