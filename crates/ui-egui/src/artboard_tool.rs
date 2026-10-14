@@ -264,7 +264,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     let outline = |r: [i64; 4]| -> Vec<Pos2> { vec![pt(r[0], r[1]), pt(r[2], r[1]), pt(r[2], r[3]), pt(r[0], r[3]), pt(r[0], r[1])] };
     let drag = app.ui.artboard_tool.drag;
     if let Some(d) = drag.as_ref() {
-        painter.add(egui::Shape::line(outline(preview(d)), Stroke::new(1.5, t.accent)));
+        painter.add(egui::Shape::line(outline(preview(d)), Stroke::new(1.5, t.editing_accent())));
     }
     let Some((_, r)) = active_board(app).filter(|_| !matches!(drag, Some(ArtboardDrag::New { .. }))) else { return };
     if drag.is_none()
@@ -273,9 +273,9 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         let rad = PLUS_RADIUS_PX as f32;
         for (_, c) in buttons {
             let c = xf.to_screen(c[0] as f32, c[1] as f32);
-            painter.circle(c, rad, t.card, Stroke::new(1.0, t.accent));
+            painter.circle(c, rad, t.card, Stroke::new(1.0, t.editing_accent()));
             let arm = rad * 0.5;
-            let s = Stroke::new(1.5, t.accent);
+            let s = Stroke::new(1.5, t.editing_accent());
             painter.line_segment([c - vec2(arm, 0.0), c + vec2(arm, 0.0)], s);
             painter.line_segment([c - vec2(0.0, arm), c + vec2(0.0, arm)], s);
         }
@@ -285,7 +285,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     for (x, y) in [(r[0], r[1]), (mx, r[1]), (r[2], r[1]), (r[2], my), (r[2], r[3]), (mx, r[3]), (r[0], r[3]), (r[0], my)] {
         let h = Rect::from_center_size(pt(x, y), vec2(7.0, 7.0));
         painter.rect_filled(h, 0.0, egui::Color32::WHITE);
-        painter.rect_stroke(h, 0.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+        painter.rect_stroke(h, 0.0, Stroke::new(1.0, t.editing_accent()), egui::StrokeKind::Inside);
     }
 }
 

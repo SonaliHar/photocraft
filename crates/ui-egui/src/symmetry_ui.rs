@@ -294,12 +294,12 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     let screen = |p: [f64; 2]| xf.to_screen(p[0] as f32, p[1] as f32);
     let t = Tokens::get(painter.ctx());
     for [a, b] in p.segments(size) {
-        painter.line_segment([screen(a), screen(b)], Stroke::new(1.0, t.accent));
+        painter.line_segment([screen(a), screen(b)], Stroke::new(1.0, t.editing_accent()));
     }
     if edit.is_some() {
         let center = screen(p.center);
-        crate::vector_ui::draw_anchor(&painter, center, true, t.accent);
-        crate::vector_ui::draw_handle(&painter, center, screen(rotation_handle(p, size)), t.accent);
+        crate::vector_ui::draw_anchor(&painter, center, true, t.editing_accent());
+        crate::vector_ui::draw_handle(&painter, center, screen(rotation_handle(p, size)), t.editing_accent());
     }
 }
 

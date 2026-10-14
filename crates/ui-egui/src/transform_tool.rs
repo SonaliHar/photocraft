@@ -2108,7 +2108,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     if pv.committing.is_some() {
         return;
     }
-    let accent = crate::theme::Tokens::get(painter.ctx()).accent;
+    let accent = crate::theme::Tokens::get(painter.ctx()).editing_accent();
     if let (Some(path), Some(h)) = (&pv.path, Homography::rect_to_quad(t.rect, t.quad)) {
         crate::vector_ui::draw_outline(
             painter,
@@ -2356,7 +2356,7 @@ fn draw_warp(painter: &egui::Painter, xf: &ViewXform, t: &TransformSession, w: &
     if let Some(a) = &pv.above {
         a.draw(painter, xf);
     }
-    let accent = crate::theme::Tokens::get(painter.ctx()).accent;
+    let accent = crate::theme::Tokens::get(painter.ctx()).editing_accent();
     // Transform Path › Warp: the path drawn through the warp.
     if let Some(path) = &pv.path {
         crate::vector_ui::draw_outline(
