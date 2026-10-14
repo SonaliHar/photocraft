@@ -899,6 +899,22 @@ fn options_bar_height(pro: bool, narrow: bool) -> f32 {
     }
 }
 
+/// Ctrl/Cmd temporarily inverts Move Auto-Select on the canvas (#5151).
+/// Show the *effective* value without writing the temporary key state into
+/// preferences. Clicking the box while Ctrl/Cmd is held still changes the
+/// persistent value so the displayed check state tracks the user's click.
+pub(crate) fn move_auto_select_display(saved: bool, command: bool) -> bool {
+    saved ^ command
+}
+
+fn move_auto_select_checkbox(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let command = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)).command;
+    let mut shown = move_auto_select_display(app.ui.tool_options.move_auto_select, command);
+    if widgets::checkbox(ui, &mut shown, tl!("Auto-Select:")).changed() {
+        app.ui.tool_options.move_auto_select = shown ^ command;
+    }
+}
+
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let narrow = app.session.prefs().workspace.narrow_options_bar();
@@ -1321,8 +1337,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     // Every theme gets the font, style and size controls (#1387), as with Auto-Select (#1275).
                     Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => crate::type_tool::options_bar(app, ui),
                     Tool::Move if t.pro => {
+                        move_auto_select_checkbox(app, ui);
                         let o = &mut app.ui.tool_options;
-                        widgets::checkbox(ui, &mut o.move_auto_select, tl!("Auto-Select:"));
                         widgets::dropdown(
                             ui,
                             "move-target",
@@ -1381,8 +1397,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         ),
                     ),
                     Tool::Move => {
-                        // The Studio themes keep Photoshop's Auto-Select toggle too (#1275).
-                        widgets::checkbox(ui, &mut app.ui.tool_options.move_auto_select, tl!("Auto-Select:"));
+                        // The Studio themes use the same effective option as Pro.
+                        move_auto_select_checkbox(app, ui);
                         hint(ui, tl!("Drag to move the active layer"));
                     }
                     Tool::Eyedropper => crate::eyedropper_ui::options(app, ui),

@@ -210,3 +210,25 @@ fn every_theme_shows_the_gradient_options() {
         assert!(combos.iter().any(|c| c.contains("Normal")), "{theme:?}: the blend mode picker shows; combo boxes: {combos:?}");
     }
 }
+
+#[test]
+fn held_command_inverts_displayed_move_auto_select_but_does_not_change_saved_value() {
+    // #5151: the toolbar reflects the same temporary inversion as canvas picks.
+    for saved in [true, false] {
+        let (mut app, _, _) = app();
+        app.ui.tool_options.move_auto_select = saved;
+        assert_eq!(crate::panels::move_auto_select_display(saved, false), saved);
+        assert_eq!(crate::panels::move_auto_select_display(saved, true), !saved);
+
+        // Both the standard and temporarily inverted visual states are
+        // ephemeral: the actual option stays the user's stored selection.
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ProMedium);
+        let _ = ctx.run(egui::RawInput { modifiers: egui::Modifiers::COMMAND, ..Default::default() }, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                crate::panels::options_bar(&mut app, ui);
+            });
+        });
+        assert_eq!(app.ui.tool_options.move_auto_select, saved);
+    }
+}
