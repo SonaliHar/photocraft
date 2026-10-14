@@ -106,6 +106,10 @@ pub use xcf_import::{
     LayerSelectionCandidate, LayerSelectionIds, LayerSelectionLimits, LayerSelectionNamespace, LayerSelectionRequirements,
     LAYER_SELECTION_EPOCH, map_layer_selection,
 };
+pub use xcf_import::{
+    AssembledLayerSelection, LayerCorrespondenceRequirements, LayerCurrentLimits, LayerCurrentRequirements, LayerOriginalPlanesProof,
+    SelectedCurrentLayer, assemble_owned_layer_selection, select_layer_current,
+};
 mod xcf_link_sources;
 pub mod xcf_modified_sources;
 mod xcf_ordinary_source;

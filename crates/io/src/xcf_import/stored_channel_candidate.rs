@@ -374,7 +374,7 @@ impl StoredChannelCorrespondence<'_> {
         self.source_blake3
     }
 }
-fn verify_plane(s: &Surface, p: &Plane, r: Rect, shared: &photocraft_xcf::Budget<'_>, ctl: &Interrupt<'_>) -> Result<(), IoError> {
+pub(super) fn verify_plane(s: &Surface, p: &Plane, r: Rect, shared: &photocraft_xcf::Budget<'_>, ctl: &Interrupt<'_>) -> Result<(), IoError> {
     let format = PixelFormat::new(ColorMode::Grayscale, depth(p.sample), false);
     let stride = format.bytes_per_pixel();
     if p.channels != 1

@@ -47,6 +47,13 @@ pub use layer_selection_candidate::{
     LAYER_SELECTION_EPOCH, map_layer_selection,
 };
 
+#[path = "xcf_import/layer_selection_owner.rs"]
+mod layer_selection_owner;
+pub use layer_selection_owner::{
+    AssembledLayerSelection, LayerCorrespondenceRequirements, LayerCurrentLimits, LayerCurrentRequirements, LayerOriginalPlanesProof,
+    SelectedCurrentLayer, assemble_owned_layer_selection, select_layer_current,
+};
+
 #[cfg(all(test, feature = "corpus"))]
 mod linked_custom_name_mapping_tests {
     use super::*;
