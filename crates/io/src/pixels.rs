@@ -1,7 +1,160 @@
 //! Conversions between PSD planar big-endian channel data and interleaved
 //! native-endian surface bytes.
 
-use photocraft_color::SampleType;
+use photocraft_color::{ColorMode, PixelFormat, SampleType};
+use photocraft_geom::{Rect, TILE_SIZE};
+use photocraft_raster::Surface;
+
+/// The common RGB8 import path: assemble planar channels in the final tiles, avoiding a
+/// full-image interleaved allocation and its subsequent tile copy. Other formats keep the
+/// general conversion path below. Coordinates may be negative or not tile-aligned.
+pub(crate) fn rgba8_surface(planes: &[Option<&[u8]>], rect: Rect) -> Option<Surface> {
+    let size = rect.size();
+    let (width, height) = (usize::try_from(size.width).ok()?, usize::try_from(size.height).ok()?);
+    let n = width.checked_mul(height)?;
+    let red = planes.first().copied().flatten()?;
+    let green = planes.get(1).copied().flatten()?;
+    let blue = planes.get(2).copied().flatten()?;
+    let alpha = planes.get(3).copied().flatten();
+    if red.len() != n || green.len() != n || blue.len() != n || alpha.is_some_and(|p| p.len() != n) {
+        return None;
+    }
+    let mut surface = Surface::new(photocraft_color::PixelFormat::RGBA8);
+    let tiles = surface.take_tiles(rect);
+    let count = tiles.len();
+    let step = bands(count).first().map_or(1, |b| b.len()).max(1);
+    let mut iter = tiles.into_iter();
+    let mut jobs = Vec::new();
+    while !iter.as_slice().is_empty() {
+        jobs.push(iter.by_ref().take(step).collect::<Vec<_>>());
+    }
+    let ready = par_map(jobs, |tiles| {
+        let mut populated = Vec::with_capacity(tiles.len());
+        for (coord, tile) in tiles {
+            let tr = coord.rect().intersect(&rect);
+            let mut tile = std::sync::Arc::unwrap_or_clone(tile);
+            let data = tile.bytes_mut();
+            for y in tr.y0..tr.y1 {
+                let src =
+                    usize::try_from(y.saturating_sub(rect.y0)).ok()?.checked_mul(width)?.checked_add(usize::try_from(tr.x0.saturating_sub(rect.x0)).ok()?)?;
+                let span = tr.width() as usize;
+                let dst = ((y - coord.rect().y0) as usize * TILE_SIZE as usize + (tr.x0 - coord.rect().x0) as usize) * 4;
+                let row = data.get_mut(dst..dst.checked_add(span.checked_mul(4)?)?)?;
+                let end = src.checked_add(span)?;
+                let (r, g, b) = (red.get(src..end)?, green.get(src..end)?, blue.get(src..end)?);
+                if let Some(a) = alpha.and_then(|a| a.get(src..src + span)) {
+                    for ((((dst, r), g), b), a) in row.as_chunks_mut::<4>().0.iter_mut().zip(r).zip(g).zip(b).zip(a) {
+                        dst.copy_from_slice(&[*r, *g, *b, *a]);
+                    }
+                } else {
+                    for (((dst, r), g), b) in row.as_chunks_mut::<4>().0.iter_mut().zip(r).zip(g).zip(b) {
+                        dst.copy_from_slice(&[*r, *g, *b, 255]);
+                    }
+                }
+            }
+            // Preserve nonzero RGB under zero alpha, just like Surface::prune does.
+            if tile.bytes().iter().any(|&v| v != 0) {
+                populated.push((coord, std::sync::Arc::new(tile)));
+            }
+        }
+        Some(populated)
+    })
+    .into_iter()
+    .collect::<Option<Vec<_>>>()?;
+    surface.put_tiles(ready.into_iter().flatten());
+    Some(surface)
+}
+
+/// Assemble supported PSD channel planes directly in final native-endian tiles. RGB8 keeps
+/// its specialized packing loop; other depths/models avoid the full-image interleaved buffer.
+/// Missing channels use the same zero/opaque fills as `interleave`; malformed planes fall back.
+pub(crate) fn planar_surface(planes: &[Option<&[u8]>], rect: Rect, format: PixelFormat) -> Option<Surface> {
+    if !format.alpha || planes.len() != format.channels() || !matches!(format.mode, ColorMode::Rgb | ColorMode::Grayscale | ColorMode::Cmyk | ColorMode::Lab) {
+        return None;
+    }
+    if format == PixelFormat::RGBA8
+        && let Some(surface) = rgba8_surface(planes, rect)
+    {
+        return Some(surface);
+    }
+    let size = rect.size();
+    let (width, height) = (usize::try_from(size.width).ok()?, usize::try_from(size.height).ok()?);
+    let bps = format.sample.bytes();
+    let channels = format.channels();
+    let bpp = channels.checked_mul(bps)?;
+    let expected = width.checked_mul(height)?.checked_mul(bps)?;
+    if planes.len() != channels || planes.iter().all(Option::is_none) || planes.iter().flatten().any(|p| p.len() != expected) {
+        return None;
+    }
+    let alpha = max_sample(format.sample);
+    let zero = zero_sample(format.sample);
+    let mut surface = Surface::new(format);
+    let tiles = surface.take_tiles(rect);
+    let step = bands(tiles.len()).first().map_or(1, |b| b.len()).max(1);
+    let mut iter = tiles.into_iter();
+    let mut jobs = Vec::new();
+    while !iter.as_slice().is_empty() {
+        jobs.push(iter.by_ref().take(step).collect::<Vec<_>>());
+    }
+    let ready = par_map(jobs, |tiles| {
+        let mut populated = Vec::with_capacity(tiles.len());
+        for (coord, tile) in tiles {
+            let tile_rect = coord.rect();
+            let tr = tile_rect.intersect(&rect);
+            let mut tile = std::sync::Arc::unwrap_or_clone(tile);
+            for y in tr.y0..tr.y1 {
+                let src = usize::try_from(y.saturating_sub(rect.y0))
+                    .ok()?
+                    .checked_mul(width)?
+                    .checked_add(usize::try_from(tr.x0.saturating_sub(rect.x0)).ok()?)?
+                    .checked_mul(bps)?;
+                let span = usize::try_from(tr.width()).ok()?;
+                let dst = usize::try_from(y.saturating_sub(tile_rect.y0))
+                    .ok()?
+                    .checked_mul(TILE_SIZE as usize)?
+                    .checked_add(usize::try_from(tr.x0.saturating_sub(tile_rect.x0)).ok()?)?
+                    .checked_mul(bpp)?;
+                let row = tile.bytes_mut().get_mut(dst..dst.checked_add(span.checked_mul(bpp)?)?)?;
+                let end = src.checked_add(span.checked_mul(bps)?)?;
+                for (channel, plane) in planes.iter().enumerate() {
+                    if let Some(plane) = plane {
+                        let input = plane.get(src..end)?;
+                        for (pixel, sample) in row.chunks_exact_mut(bpp).zip(input.chunks_exact(bps)) {
+                            let out = pixel.get_mut(channel * bps..(channel + 1) * bps)?;
+                            out.copy_from_slice(sample);
+                            if cfg!(target_endian = "little") {
+                                out.reverse();
+                            }
+                            if format.mode == ColorMode::Cmyk && channel + 1 < channels {
+                                invert_sample(out, format.sample);
+                            }
+                        }
+                    } else {
+                        // Missing CMYK planes are zero ink; inversion applies only to samples
+                        // present in the PSD, exactly as in the existing interleave path.
+                        let fill = if channel + 1 == channels { &alpha } else { &zero };
+                        for pixel in row.chunks_exact_mut(bpp) {
+                            pixel.get_mut(channel * bps..(channel + 1) * bps)?.copy_from_slice(fill);
+                        }
+                    }
+                }
+                if format.mode == ColorMode::Lab && format.sample == SampleType::U16 {
+                    lab16_chroma(row, channels, true);
+                }
+            }
+            // Byte comparison preserves hidden color, signed zero and NaN payloads, matching
+            // Surface::prune against the all-zero default pixel rather than testing alpha.
+            if tile.bytes().iter().any(|&v| v != 0) {
+                populated.push((coord, std::sync::Arc::new(tile)));
+            }
+        }
+        Some(populated)
+    })
+    .into_iter()
+    .collect::<Option<Vec<_>>>()?;
+    surface.put_tiles(ready.into_iter().flatten());
+    Some(surface)
+}
 
 /// PSD depth (bits) for a sample type.
 pub fn psd_depth(s: SampleType) -> u16 {
@@ -43,13 +196,16 @@ pub fn interleave(planes: &[Option<&[u8]>], fill: &[Vec<u8>], n: usize, s: Sampl
     let ch = planes.len();
     let row = ch * bps;
     let mut out = vec![0u8; n * row];
-    // One band of rows per core, written straight into its slice of the shared output: the
-    // per-pixel channel loop stays, but a band holds ~1/cores of a 20 MP image's iterations
-    // instead of all of them.
+    // Workers own disjoint output slices. Temporary per-worker images doubled the live
+    // interleaved storage and required another full-image copy after every import.
     let bs = bands(n);
-    let parts: Vec<Vec<u8>> = par_map(bs.clone(), |band| {
-        let mut part = vec![0u8; band.len() * row];
-        for (i, p) in band.clone().enumerate() {
+    let step = bs.first().map_or(1, |b| b.len()).max(1);
+    if row == 0 {
+        return out;
+    }
+    let chunks: Vec<_> = out.chunks_mut(step * row).enumerate().collect();
+    par_map(chunks, |(band, part)| {
+        for (i, p) in (band * step..band * step + part.len() / row).enumerate() {
             for (c, plane) in planes.iter().enumerate() {
                 let dst = &mut part[(i * ch + c) * bps..(i * ch + c + 1) * bps];
                 match plane {
@@ -69,11 +225,7 @@ pub fn interleave(planes: &[Option<&[u8]>], fill: &[Vec<u8>], n: usize, s: Sampl
                 }
             }
         }
-        part
     });
-    for (band, part) in bs.into_iter().zip(parts) {
-        out[band.start * row..band.end * row].copy_from_slice(&part);
-    }
     out
 }
 
@@ -216,6 +368,107 @@ pub fn bands(n: usize) -> Vec<std::ops::Range<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rgba8_tiles_match_planar_samples_across_negative_edges() {
+        let rect = Rect::new(-3, -2, 270, 260);
+        let n = rect.width() as usize * rect.height() as usize;
+        let channels: Vec<Vec<u8>> = (0..4).map(|c| (0..n).map(|i| if c == 3 { 0 } else { (i.wrapping_mul(37) + c * 29) as u8 }).collect()).collect();
+        let planes: Vec<_> = channels.iter().map(|p| Some(p.as_slice())).collect();
+        let surface = rgba8_surface(&planes, rect).expect("valid planes");
+        let expected: Vec<_> = (0..n).flat_map(|i| channels.iter().map(move |c| c[i])).collect();
+        assert_eq!(surface.to_interleaved(rect), expected);
+        assert!(surface.tile_count() > 0, "nonzero RGB beneath zero alpha must survive");
+        let planes = [Some(channels[0].as_slice()), Some(channels[1].as_slice()), Some(channels[2].as_slice()), None];
+        let opaque = rgba8_surface(&planes, rect).expect("missing alpha is opaque");
+        assert!(opaque.to_interleaved(rect).as_chunks::<4>().0.iter().all(|p| p[3] == 255));
+    }
+
+    #[test]
+    fn rgba8_tiles_prune_zero_data_and_reject_short_planes() {
+        let rect = Rect::new(-1, 3, 258, 261);
+        let zeros = vec![0; rect.width() as usize * rect.height() as usize];
+        let planes = [Some(zeros.as_slice()); 4];
+        assert_eq!(rgba8_surface(&planes, rect).expect("valid zeros").tile_count(), 0);
+        let short = [Some(&zeros[..zeros.len() - 1]); 4];
+        assert!(rgba8_surface(&short, rect).is_none());
+        assert!(rgba8_surface(&[None; 4], rect).is_none());
+    }
+
+    #[test]
+    fn direct_tiles_match_general_path_at_every_depth_and_supported_model() {
+        let rect = Rect::new(-3, -2, 270, 260);
+        let n = rect.width() as usize * rect.height() as usize;
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+            for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+                let format = PixelFormat::new(mode, sample, true);
+                let channels = format.channels();
+                let values: Vec<Vec<u8>> = (0..channels)
+                    .map(|c| {
+                        (0..n)
+                            .flat_map(|i| match sample {
+                                SampleType::U8 => vec![(i.wrapping_mul(37) + c * 29) as u8],
+                                SampleType::U16 => ((i.wrapping_mul(257) + c * 1999) as u16).to_be_bytes().to_vec(),
+                                SampleType::F32 => ((i % 257) as f32 / 128.0 - 0.3 + c as f32 * 0.07).to_be_bytes().to_vec(),
+                            })
+                            .collect()
+                    })
+                    .collect();
+                // Full planes, missing alpha, and missing color (plus alpha when another color exists).
+                for missing in 0..3 {
+                    let mut planes: Vec<_> = values.iter().map(|v| Some(v.as_slice())).collect();
+                    if missing == 1 || (missing == 2 && channels > 2) {
+                        planes[channels - 1] = None;
+                    }
+                    if missing >= 2 {
+                        planes[0] = None;
+                    }
+                    let fill: Vec<_> = (0..channels).map(|c| if c + 1 == channels { max_sample(sample) } else { zero_sample(sample) }).collect();
+                    let invert: Vec<_> = (0..channels).map(|c| mode == ColorMode::Cmyk && c + 1 < channels).collect();
+                    let mut expected = interleave(&planes, &fill, n, sample, &invert);
+                    if mode == ColorMode::Lab && sample == SampleType::U16 {
+                        lab16_chroma(&mut expected, channels, true);
+                    }
+                    let mut reference = Surface::from_interleaved(format, rect, &expected);
+                    reference.prune();
+                    let direct = planar_surface(&planes, rect, format).expect("supported exact planes");
+                    assert_eq!(direct.to_interleaved(rect), expected, "{format:?}, missing {missing}");
+                    assert_eq!(direct.tile_count(), reference.tile_count(), "{format:?}, missing {missing}");
+                    for (coord, tile) in reference.tiles() {
+                        assert_eq!(direct.tile(*coord).unwrap().bytes(), tile.bytes(), "{format:?}, missing {missing}, {coord:?}: includes padding");
+                    }
+                }
+                let zeros = vec![0; n * sample.bytes()];
+                let planes = vec![Some(zeros.as_slice()); channels];
+                let direct = planar_surface(&planes, rect, format).unwrap();
+                if mode != ColorMode::Cmyk {
+                    assert_eq!(direct.tile_count(), 0, "{format:?}");
+                }
+                let mut short = planes.clone();
+                short[0] = Some(&zeros[..zeros.len() - 1]);
+                assert!(planar_surface(&short, rect, format).is_none());
+                let long = vec![0; zeros.len() + 1];
+                short[0] = Some(&long);
+                assert!(planar_surface(&short, rect, format).is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn direct_float_tiles_preserve_ieee_bits_and_hidden_color() {
+        let rect = Rect::new(-1, 255, 4, 256);
+        let bits = [0x8000_0000u32, 0x7fc0_1234, 0x7f80_0000, 0xff80_0000, 0x4080_0000];
+        let color: Vec<_> = bits.into_iter().flat_map(u32::to_be_bytes).collect();
+        let alpha = vec![0; bits.len() * 4];
+        let planes = [Some(color.as_slice()), Some(color.as_slice()), Some(color.as_slice()), Some(alpha.as_slice())];
+        let direct = planar_surface(&planes, rect, PixelFormat::RGBA32F).unwrap();
+        let expected = interleave(&planes, &vec![zero_sample(SampleType::F32); 4], bits.len(), SampleType::F32, &[false; 4]);
+        assert_eq!(direct.to_interleaved(rect), expected);
+        assert!(direct.tile_count() > 0, "hidden IEEE bit patterns cannot be pruned by alpha");
+        assert!(planar_surface(&planes[..3], rect, PixelFormat::RGBA32F).is_none());
+        assert!(planar_surface(&[None; 4], rect, PixelFormat::RGBA32F).is_none());
+        assert!(planar_surface(&planes, rect, PixelFormat::new(ColorMode::Lab, SampleType::F32, false)).is_none());
+    }
 
     #[test]
     fn banded_shuffles_match_a_sequential_reference() {

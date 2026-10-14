@@ -808,18 +808,32 @@ fn fs_mask(in: VOut) -> @location(0) vec4<f32> {
     return c;
 }
 
-// blend_into(backdrop = A, src = B, mode, opacity), including Dissolve.
-@fragment
-fn fs_blend(in: VOut) -> @location(0) vec4<f32> {
-    let p = local(in.pos);
-    let b = textureLoad(tex_a, p, 0);
-    var s = textureLoad(tex_b, p, 0);
+// Shared final blend, including the document-coordinate Dissolve pattern.
+fn blend_source(p: vec2<i32>, b: vec4<f32>, source: vec4<f32>) -> vec4<f32> {
+    var s = source;
     if (s.a <= 0.0) { return b; }
     if (op.mode == M_DISSOLVE) {
         s.a = select(0.0, 1.0, dissolve_noise(doc_px(p)) < s.a * op.opacity * op.fill);
         return composite(M_NORMAL, b, s, 1.0);
     }
     return composite_fill(op.mode, b, s, op.opacity, op.fill, (op.flags & F_TEXT_GAMMA) != 0u);
+}
+
+// blend_into(backdrop = A, src = B, mode, opacity), including Dissolve.
+@fragment
+fn fs_blend(in: VOut) -> @location(0) vec4<f32> {
+    let p = local(in.pos);
+    return blend_source(p, textureLoad(tex_a, p, 0), textureLoad(tex_b, p, 0));
+}
+
+// Dense raster content and blend without writing/reading an intermediate content texture.
+@fragment
+fn fs_content_blend(in: VOut) -> @location(0) vec4<f32> {
+    let p = local(in.pos);
+    let d = doc_px(p);
+    var s = layer_texel(d);
+    s.a = s.a * mask_value(d);
+    return blend_source(p, textureLoad(tex_a, p, 0), s);
 }
 
 // composite_atop(base = A, src = B): blend as if the base were opaque, keep its alpha.

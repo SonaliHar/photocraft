@@ -147,6 +147,60 @@ pub mod packbits {
         Ok(())
     }
 
+    /// Decode a row directly into its final, disjoint output slice.
+    pub(super) fn decode_slice(src: &[u8], out: &mut [u8]) -> Result<()> {
+        visit_row(src, out.len(), Some(out))
+    }
+
+    pub(super) fn validate_row(src: &[u8], expected: usize) -> Result<()> {
+        visit_row(src, expected, None)
+    }
+
+    fn visit_row(src: &[u8], expected: usize, mut out: Option<&mut [u8]>) -> Result<()> {
+        let (mut input, mut written) = (0usize, 0usize);
+        while written < expected {
+            let Some(&h) = src.get(input) else {
+                return Err(PsdError::Decompress("PackBits row ended early".into()));
+            };
+            input += 1;
+            let h = h as i8;
+            if h >= 0 {
+                let len = h as usize + 1;
+                let Some(lit) = src.get(input..input + len) else {
+                    return Err(PsdError::Decompress("PackBits literal truncated".into()));
+                };
+                if len > expected - written {
+                    return Err(PsdError::Decompress("PackBits literal overflows row".into()));
+                }
+                if let Some(out) = out.as_deref_mut() {
+                    let Some(dst) = out.get_mut(written..written + len) else {
+                        return Err(PsdError::Decompress("PackBits literal overflows row".into()));
+                    };
+                    dst.copy_from_slice(lit);
+                }
+                input += len;
+                written += len;
+            } else if h != -128 {
+                let len = (1 - h as isize) as usize;
+                let Some(&b) = src.get(input) else {
+                    return Err(PsdError::Decompress("PackBits run truncated".into()));
+                };
+                input += 1;
+                if len > expected - written {
+                    return Err(PsdError::Decompress("PackBits run overflows row".into()));
+                }
+                if let Some(out) = out.as_deref_mut() {
+                    let Some(dst) = out.get_mut(written..written + len) else {
+                        return Err(PsdError::Decompress("PackBits run overflows row".into()));
+                    };
+                    dst.fill(b);
+                }
+                written += len;
+            }
+        }
+        Ok(())
+    }
+
     /// Decodes into a new vector of exactly `expected` bytes.
     pub fn decode(src: &[u8], expected: usize) -> Result<Vec<u8>> {
         let mut v = Vec::with_capacity(expected.min(src.len().saturating_mul(64)));
@@ -219,6 +273,39 @@ pub fn decode_planes(compression: Compression, data: &[u8], layout: &PlaneLayout
             let mut v = inflate_checked(data, total as u64, true)?;
             unpredict(&mut v, layout)?;
             Ok(v)
+        }
+        Compression::Unknown(c) => Err(PsdError::Unsupported(format!("compression method {c}"))),
+    }
+}
+
+/// Validates every decoded row or zlib stream without retaining decoded pixels.
+///
+/// Unlike parser-level validation, this enforces the same decoded-size limits and malformed
+/// packet errors as [`decode_planes`]. Useful for channels whose pixels will be discarded.
+pub fn validate_decoded_planes(compression: Compression, data: &[u8], layout: &PlaneLayout) -> Result<()> {
+    let total = layout.decoded_len()?;
+    match compression {
+        Compression::Raw => {
+            if data.len() < total {
+                return Err(PsdError::UnexpectedEof { offset: data.len(), needed: total - data.len() });
+            }
+            Ok(())
+        }
+        Compression::Rle => {
+            let (mut r, counts) = rle_input(data, layout, total)?;
+            for count in counts {
+                packbits::validate_row(r.bytes(count)?, layout.row_bytes())?;
+            }
+            Ok(())
+        }
+        Compression::Zip => inflate_checked(data, total as u64, false).map(|_| ()),
+        Compression::ZipPrediction => {
+            inflate_checked(data, total as u64, false)?;
+            // unpredict examines depth only when there is a nonempty complete row.
+            if layout.row_bytes() > 0 && total >= layout.row_bytes() && !matches!(layout.depth, 1 | 8 | 16 | 32) {
+                return Err(PsdError::Unsupported(format!("prediction for depth {}", layout.depth)));
+            }
+            Ok(())
         }
         Compression::Unknown(c) => Err(PsdError::Unsupported(format!("compression method {c}"))),
     }
@@ -318,9 +405,8 @@ fn read_count(r: &mut Reader<'_>, v: Version) -> Result<usize> {
     Ok(if v.is_psb() { r.u32()? as usize } else { r.u16()? as usize })
 }
 
-fn decode_rle(data: &[u8], layout: &PlaneLayout, total: usize) -> Result<Vec<u8>> {
+fn rle_input<'a>(data: &'a [u8], layout: &PlaneLayout, total: usize) -> Result<(Reader<'a>, Vec<usize>)> {
     let rows = layout.rows()?;
-    let rb = layout.row_bytes();
     let mut r = Reader::new(data);
     r.check_count(rows as u64, layout.count_size() as u64)?;
     let mut counts = Vec::with_capacity(rows);
@@ -331,12 +417,61 @@ fn decode_rle(data: &[u8], layout: &PlaneLayout, total: usize) -> Result<Vec<u8>
     if (total as u64) > (r.remaining() as u64).saturating_mul(64) {
         return Err(PsdError::Decompress("RLE data too short for declared size".into()));
     }
+    Ok((r, counts))
+}
+
+fn decode_rle(data: &[u8], layout: &PlaneLayout, total: usize) -> Result<Vec<u8>> {
+    let (mut r, counts) = rle_input(data, layout, total)?;
+    let rows = counts.len();
+    let rb = layout.row_bytes();
     // Up to MAX_DECODED_BYTES: report a machine without that much memory instead of aborting.
     let mut out = Vec::new();
     out.try_reserve_exact(total).map_err(|_| PsdError::LimitExceeded("not enough memory for the decoded channel data"))?;
-    for c in counts {
-        let row = r.bytes(c)?;
-        packbits::decode_into(row, rb, &mut out)?;
+    if total >= 262144 && rb > 0 && !cfg!(target_arch = "wasm32") {
+        // Channel decoding can itself be concurrent: limit each channel to four row jobs.
+        let workers = std::thread::available_parallelism().map_or(1, |v| v.get() / 4).clamp(1, 4);
+        let rows_per_job = rows.div_ceil(workers).max(1);
+        // Validate in row order before touching the complete declared output.
+        let row_data: Vec<_> = counts
+            .into_iter()
+            .map(|c| {
+                let row = r.bytes(c)?;
+                packbits::validate_row(row, rb)?;
+                Ok(row)
+            })
+            .collect::<Result<_>>()?;
+        out.resize(total, 0);
+        let mut input = row_data.into_iter();
+        let jobs: Vec<_> = out
+            .chunks_mut(rows_per_job * rb)
+            .map(|dst| {
+                let rows: Vec<_> = input.by_ref().take(dst.len() / rb).collect();
+                (rows, dst)
+            })
+            .collect();
+        let outcomes = std::thread::scope(|scope| {
+            let handles: Vec<_> = jobs
+                .into_iter()
+                .map(|(rows, dst)| {
+                    scope.spawn(move || {
+                        for (row, output) in rows.into_iter().zip(dst.chunks_mut(rb)) {
+                            packbits::decode_slice(row, output)?;
+                        }
+                        Ok(())
+                    })
+                })
+                .collect();
+            let joined: Vec<_> = handles.into_iter().map(|h| h.join()).collect();
+            joined.into_iter().map(|r| r.unwrap_or_else(|p| std::panic::resume_unwind(p))).collect::<Vec<Result<()>>>()
+        });
+        for result in outcomes {
+            result?;
+        }
+    } else {
+        for c in counts {
+            let row = r.bytes(c)?;
+            packbits::decode_into(row, rb, &mut out)?;
+        }
     }
     Ok(out)
 }
@@ -556,6 +691,48 @@ mod tests {
 
     fn layout(planes: usize, width: usize, height: usize, depth: u16, version: Version) -> PlaneLayout {
         PlaneLayout { planes, width, height, depth, version }
+    }
+
+    #[test]
+    fn discarded_channel_validation_matches_decode_errors_and_limits() {
+        for version in [Version::Psd, Version::Psb] {
+            for depth in [1, 8, 16, 32] {
+                let l = layout(1, 9, 3, depth, version);
+                let source = vec![37; l.decoded_len().unwrap()];
+                for compression in Compression::ALL {
+                    let data = encode_planes(compression, &source, &l).unwrap();
+                    assert_eq!(validate_decoded_planes(compression, &data, &l), decode_planes(compression, &data, &l).map(|_| ()));
+                    for cut in 0..data.len() {
+                        assert_eq!(
+                            validate_decoded_planes(compression, &data[..cut], &l),
+                            decode_planes(compression, &data[..cut], &l).map(|_| ()),
+                            "{version:?}/{depth}/{compression:?}/cut{cut}"
+                        );
+                    }
+                    for at in 0..data.len() {
+                        let mut corrupt = data.clone();
+                        corrupt[at] ^= 0xff;
+                        assert_eq!(
+                            validate_decoded_planes(compression, &corrupt, &l),
+                            decode_planes(compression, &corrupt, &l).map(|_| ()),
+                            "{version:?}/{depth}/{compression:?}/byte{at}"
+                        );
+                    }
+                }
+            }
+        }
+        for l in [layout(1, 0, 2, 24, Version::Psd), layout(1, 2, 0, 24, Version::Psb), layout(1, 2, 2, 24, Version::Psd)] {
+            let data = zip_compress(&vec![0; l.decoded_len().unwrap()]);
+            assert_eq!(validate_decoded_planes(Compression::ZipPrediction, &data, &l), decode_planes(Compression::ZipPrediction, &data, &l).map(|_| ()));
+        }
+        let too_large = layout(1, 300_000, 300_000, 32, Version::Psb);
+        for compression in Compression::ALL.into_iter().chain([Compression::Unknown(7)]) {
+            assert_eq!(validate_decoded_planes(compression, &[0], &too_large), decode_planes(compression, &[0], &too_large).map(|_| ()));
+        }
+        let small = layout(1, 2, 2, 8, Version::Psd);
+        assert_eq!(validate_decoded_planes(Compression::Unknown(7), &[0], &small), decode_planes(Compression::Unknown(7), &[0], &small).map(|_| ()));
+        let excessive = zip_compress(&vec![0; (1 << 20) + 5]);
+        assert_eq!(validate_decoded_planes(Compression::Zip, &excessive, &small), decode_planes(Compression::Zip, &excessive, &small).map(|_| ()));
     }
 
     fn pb_roundtrip(src: &[u8]) -> Vec<u8> {
@@ -869,6 +1046,75 @@ mod tests {
     #[test]
     fn zip_garbage_errors() {
         assert!(zip_decompress(&[1, 2, 3, 4], 4).is_err());
+    }
+
+    #[test]
+    fn slice_packbits_matches_append_decoder_on_valid_and_malformed_packets() {
+        for n in 0..300usize {
+            for run in [1, 2, 3, 17, 129] {
+                let source: Vec<_> = (0..n).map(|i| (i / run % 13) as u8).collect();
+                let mut encoded = packbits::encode_vec(&source);
+                encoded.insert(0, 128);
+                encoded.extend([255, 9]); // trailing data must be ignored
+                let mut out = vec![0; n];
+                packbits::decode_slice(&encoded, &mut out).unwrap();
+                assert_eq!(out, source);
+                for cut in [0, 1, encoded.len() / 2, encoded.len().saturating_sub(3)] {
+                    let input = &encoded[..cut];
+                    let old = packbits::decode(input, n);
+                    let new = packbits::decode_slice(input, &mut out);
+                    assert_eq!(old.as_ref().err().map(ToString::to_string), new.as_ref().err().map(ToString::to_string));
+                    if let Ok(old) = old {
+                        assert_eq!(out, old);
+                    }
+                }
+            }
+        }
+        for a in 0..=255u8 {
+            for b in [0, 127, 128, 255] {
+                for n in 0..=130 {
+                    let input = [a, b, 128, 0, 4];
+                    let old = packbits::decode(&input, n);
+                    let mut out = vec![0; n];
+                    let new = packbits::decode_slice(&input, &mut out);
+                    assert_eq!(old.as_ref().err().map(ToString::to_string), new.as_ref().err().map(ToString::to_string));
+                    if let Ok(old) = old {
+                        assert_eq!(out, old);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn parallel_rle_matches_serial_rows_and_first_error_across_depths() {
+        fn serial(data: &[u8], layout: &PlaneLayout) -> Result<Vec<u8>> {
+            let mut reader = Reader::new(data);
+            let counts: Vec<_> = (0..layout.rows()?).map(|_| read_count(&mut reader, layout.version)).collect::<Result<_>>()?;
+            let mut out = Vec::new();
+            for count in counts {
+                packbits::decode_into(reader.bytes(count)?, layout.row_bytes(), &mut out)?;
+            }
+            Ok(out)
+        }
+        for version in [Version::Psd, Version::Psb] {
+            for depth in [8, 16, 32] {
+                let l = layout(1, 257, 1025, depth, version);
+                let source: Vec<_> = (0..l.decoded_len().unwrap()).map(|i| ((i / 3 + i / 257) % 17) as u8).collect();
+                let encoded = encode_planes(Compression::Rle, &source, &l).unwrap();
+                assert_eq!(decode_planes(Compression::Rle, &encoded, &l).unwrap(), source);
+                assert_eq!(serial(&encoded, &l).unwrap(), source);
+                for cut in [encoded.len() / 2, encoded.len() - 1] {
+                    let input = &encoded[..cut];
+                    assert_eq!(serial(input, &l).unwrap_err().to_string(), decode_planes(Compression::Rle, input, &l).unwrap_err().to_string());
+                }
+                let mut corrupt = encoded.clone();
+                let table_len = l.rows().unwrap() * l.count_size();
+                corrupt[table_len] = 127; // malformed first row, plus EOF in a later row
+                corrupt.truncate(corrupt.len() - 1);
+                assert_eq!(serial(&corrupt, &l).unwrap_err().to_string(), decode_planes(Compression::Rle, &corrupt, &l).unwrap_err().to_string());
+            }
+        }
     }
 }
 

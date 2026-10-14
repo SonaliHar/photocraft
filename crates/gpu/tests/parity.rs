@@ -217,6 +217,47 @@ fn first_frame_renders() {
 }
 
 #[test]
+fn deferred_open_cache_resumes_after_first_edit_without_changing_pixels() {
+    let Some(g) = gpu() else { return };
+    let mut deferred = Compositor::new(&g.device);
+    deferred.set_composite_cache_budget(16 << 20);
+    let budget = deferred.memory_budget();
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut d = Document::new("deferred", Size::new(300, 70), ColorMode::Rgb, depth);
+        for seed in 1..=3 {
+            d.layers.push(noise_layer("layer", d.pixel_format(), d.bounds(), seed, 0.2));
+        }
+        // Populate stale state before the request, proving the deferred render clears it.
+        photocraft_gpu::render_to_vec(&mut deferred, &g.device, &g.queue, &d, d.bounds()).unwrap();
+        assert!(deferred.composite_cache_bytes() > 0);
+        deferred.defer_composite_cache_population();
+        // encode may be discarded and must not consume the one-shot render request.
+        let mut encoder = g.device.create_command_encoder(&Default::default());
+        deferred.encode(&g.device, &g.queue, &mut encoder, &d, d.bounds(), &mut |_, _| {}).unwrap();
+        drop(encoder);
+        let (pixels, stats) = photocraft_gpu::render_to_vec_stats(&mut deferred, &g.device, &g.queue, &d, d.bounds()).unwrap();
+        assert_eq!(stats.prefix_hits, 0);
+        assert_eq!(deferred.composite_cache_bytes(), 0);
+        assert_eq!(deferred.memory_budget(), budget);
+        let reference = photocraft_compose::flatten(&d);
+        assert!(worst_diff(&reference.px, &pixels).0 <= TOL);
+        let damage = Rect::new(15, 12, 51, 38);
+        for edit in 0..2 {
+            d.layers.last_mut().unwrap().surface_mut().unwrap().fill_rect(damage, &[0.3 + edit as f32 * 0.2, 0.6, 0.1, 0.7]);
+            let (pixels, stats) = photocraft_gpu::render_to_vec_stats(&mut deferred, &g.device, &g.queue, &d, damage).unwrap();
+            let cpu = photocraft_compose::render(&d, damage);
+            assert!(worst_diff(&cpu.px, &pixels).0 <= TOL);
+            assert!(deferred.composite_cache_bytes() > 0);
+            if edit == 0 {
+                assert_eq!(stats.prefix_hits, 0, "first edit populates the deferred cache");
+            } else {
+                assert!(stats.prefix_hits > 0, "second edit reuses the lower-stack cache");
+            }
+        }
+    }
+}
+
+#[test]
 fn stack_prefix_reuse_matches_uncached_gpu_and_cpu_at_every_depth() {
     let Some(mut g) = gpu() else { return };
     let mut uncached = Compositor::new(&g.device);
@@ -461,6 +502,54 @@ fn special_eight_fill_matches_cpu() {
             check(&mut g, &d, &format!("{mode:?} fill {fill}"));
             d.layers[0] = noise_layer("bg", PixelFormat::RGBA8, Rect::from_xywh(0, 0, 64, 48), 5, 1.0);
             check(&mut g, &d, &format!("{mode:?} fill {fill} opaque"));
+        }
+    }
+}
+
+/// Hidden clipping children force the old Content + Blend planner without changing pixels.
+/// Compare that reference with fused raster passes. Half accumulators retain the unfused
+/// path, preserving intermediate storage rounding without optional shader capabilities.
+#[test]
+fn fused_raster_content_matches_unfused_at_each_depth_and_accumulator_format() {
+    let Some((_adapter, device, queue, _lock)) = any_device() else { return };
+    for format in [wgpu::TextureFormat::Rgba32Float, wgpu::TextureFormat::Rgba16Float] {
+        let Ok(mut fused) = Compositor::try_new_with_format(&device, format) else { continue };
+        let mut reference = Compositor::try_new_with_format(&device, format).unwrap();
+        fused.set_composite_cache_budget(0);
+        reference.set_composite_cache_budget(0);
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            for mode in [BlendMode::Normal, BlendMode::Multiply, BlendMode::ColorDodge, BlendMode::Dissolve] {
+                let mut d = Document::new("fusion", Size::new(40, 32), ColorMode::Rgb, depth);
+                d.layers.push(noise_layer("backdrop", d.pixel_format(), Rect::new(-3, -2, 40, 32), 11, 0.2));
+                let mut top = noise_layer("masked", d.pixel_format(), Rect::new(-2, -3, 40, 32), 23, 0.1);
+                top.blend = mode;
+                top.opacity = 0.73;
+                top.fill_opacity = 0.43;
+                top.mask = Some(mask(Rect::new(7, 5, 29, 24), 31, 0.57));
+                d.layers.push(top);
+                assert_eq!(photocraft_gpu::plan(&d).unwrap().passes.iter().filter(|p| p.kernel == photocraft_gpu::Kernel::ContentBlend).count(), 2);
+                let mut unfused = d.clone();
+                unfused.layers.clear();
+                for layer in &d.layers {
+                    unfused.layers.push(layer.clone());
+                    let mut hidden = Layer::raster("force unfused", d.pixel_format());
+                    hidden.clipped = true;
+                    hidden.visible = false;
+                    unfused.layers.push(hidden);
+                }
+                assert!(!photocraft_gpu::plan(&unfused).unwrap().passes.iter().any(|p| p.kernel == photocraft_gpu::Kernel::ContentBlend));
+                for rect in [d.bounds(), Rect::new(5, 4, 31, 26)] {
+                    let got = render_to_vec(&mut fused, &device, &queue, &d, rect).unwrap();
+                    let want = render_to_vec(&mut reference, &device, &queue, &unfused, rect).unwrap();
+                    assert_eq!(got.len(), want.len());
+                    let (error, at) = worst_diff(&want, &got);
+                    assert!(error <= 1e-6, "{format:?} {depth:?} {mode:?} {rect:?}: fused/unfused error {error} at {at}");
+                }
+                let cpu = photocraft_compose::flatten(&d);
+                let got = render_to_vec(&mut fused, &device, &queue, &d, d.bounds()).unwrap();
+                let (error, at) = worst_diff(&cpu.px, &got);
+                assert!(error <= TOL, "{format:?} {depth:?} {mode:?}: CPU error {error} at {at}");
+            }
         }
     }
 }
@@ -1122,17 +1211,18 @@ fn small_layers_composite_over_their_bounds() {
 fn many_layers_submit_inside_one_chunk() {
     // P12: a refresh recorded every pass of a page cell into one command buffer, and with a few
     // hundred layers Metal ran out of command buffers (device lost, "pc_compose_uniforms is
-    // invalid"). 700 layers need well over 1000 passes in the document's only chunk.
+    // invalid"). 1100 layers cross the 1000-operation submission budget even with
+    // fused raster content/blend passes in the document's only chunk.
     let Some(mut g) = gpu() else { return };
     let mut d = base_doc(64, 48);
     let modes: Vec<BlendMode> = BlendMode::layer_modes().collect();
-    for (i, mode) in modes.iter().copied().cycle().take(700).enumerate() {
+    for (i, mode) in modes.iter().copied().cycle().take(1100).enumerate() {
         let mut l = noise_layer("l", PixelFormat::RGBA8, Rect::from_xywh(0, 0, 64, 48), 500 + i as u32, 0.0);
         l.blend = mode;
         l.opacity = 0.9;
         d.layers.push(l);
     }
-    let stats = diff_rect(&mut g, &d, d.bounds(), "700 layers").unwrap_or_else(|e| panic!("{e}"));
+    let stats = diff_rect(&mut g, &d, d.bounds(), "1100 fused layers").unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(stats.chunks, 1);
     assert!(stats.flushes > 0, "{stats:?}");
 }

@@ -1,7 +1,8 @@
 //! Layer records, layer masks, blending ranges and per-layer channel data.
 
 use crate::blend::BlendMode;
-use crate::compression::{Compression, PlaneLayout, decode_planes, encode_planes};
+use crate::borrowed::BorrowedChannels;
+use crate::compression::{Compression, PlaneLayout, decode_planes, encode_planes, validate_decoded_planes};
 use crate::error::{PsdError, Result};
 use crate::header::{MAX_DIMENSION, Version};
 use crate::io::{Reader, WriteExt, decode_legacy_name, read_pascal, write_pascal};
@@ -378,9 +379,13 @@ impl ChannelData {
 
     /// Decodes into planar big-endian samples.
     pub fn decode(&self, width: usize, height: usize, depth: u16, version: Version) -> Result<Vec<u8>> {
+        self.decode_from(&self.data, width, height, depth, version)
+    }
+
+    pub(crate) fn decode_from(&self, data: &[u8], width: usize, height: usize, depth: u16, version: Version) -> Result<Vec<u8>> {
         let layout = PlaneLayout { planes: 1, width, height, depth, version };
         match self.compression {
-            Some(c) => decode_planes(c, &self.data, &layout),
+            Some(c) => decode_planes(c, data, &layout),
             None => {
                 if layout.decoded_len()? == 0 {
                     Ok(Vec::new())
@@ -388,6 +393,15 @@ impl ChannelData {
                     Err(PsdError::invalid("channel has no data"))
                 }
             }
+        }
+    }
+
+    pub(crate) fn validate_from(&self, data: &[u8], width: usize, height: usize, depth: u16, version: Version) -> Result<()> {
+        let layout = PlaneLayout { planes: 1, width, height, depth, version };
+        match self.compression {
+            Some(c) => validate_decoded_planes(c, data, &layout),
+            None if layout.decoded_len()? == 0 => Ok(()),
+            None => Err(PsdError::invalid("channel has no data")),
         }
     }
 
@@ -537,6 +551,13 @@ impl LayerRecord {
         }
     }
 
+    /// Validates a channel completely without retaining its decoded samples.
+    pub fn validate_channel(&self, id: i16, depth: u16, version: Version) -> Result<()> {
+        let ch = self.channel(id).ok_or_else(|| PsdError::invalid(format!("layer has no channel {id}")))?;
+        let (w, h) = self.channel_rect(id).size()?;
+        ch.validate_from(&ch.data, w, h, depth, version)
+    }
+
     /// Decodes a channel's samples (planar, big-endian).
     pub fn decode_channel(&self, id: i16, depth: u16, version: Version) -> Result<Vec<u8>> {
         let ch = self.channel(id).ok_or_else(|| PsdError::invalid(format!("layer has no channel {id}")))?;
@@ -633,6 +654,10 @@ pub struct LayerInfo {
 impl LayerInfo {
     /// Parses a layer info body (the bytes covered by its length field).
     pub(crate) fn read_body(data: &[u8], version: Version) -> Result<Self> {
+        Self::read_body_with(data, version, false).map(|(info, _)| info)
+    }
+
+    pub(crate) fn read_body_with(data: &[u8], version: Version, borrow: bool) -> Result<(Self, BorrowedChannels<'_>)> {
         let mut r = Reader::new(data);
         let count = r.i16()?;
         let merged_alpha = count < 0;
@@ -646,22 +671,35 @@ impl LayerInfo {
             layers.push(rec);
             all_lens.push(lens);
         }
+        let mut borrowed = if borrow { Vec::with_capacity(layers.len()) } else { Vec::new() };
         for (rec, lens) in layers.iter_mut().zip(all_lens) {
+            let mut row = if borrow { Vec::with_capacity(lens.len()) } else { Vec::new() };
             for (ch, len) in rec.channels.iter_mut().zip(lens) {
                 if len == 0 {
+                    if borrow {
+                        row.push(&[][..]);
+                    }
                     continue;
                 }
                 if len == 1 {
                     return Err(PsdError::invalid("channel data length 1"));
                 }
                 ch.compression = Some(Compression::from_u16(r.u16()?));
-                ch.data = r.bytes_u64(len - 2)?.to_vec();
+                let data = r.bytes_u64(len - 2)?;
+                if borrow {
+                    row.push(data);
+                } else {
+                    ch.data = data.to_vec();
+                }
+            }
+            if borrow {
+                borrowed.push(row);
             }
         }
         let body_len = r.pos();
         let rest = r.peek_rest();
         let padding = if rest.len() == body_len % 2 && rest.iter().all(|&b| b == 0) { None } else { Some(rest.to_vec()) };
-        Ok(LayerInfo { merged_alpha, layers, padding })
+        Ok((LayerInfo { merged_alpha, layers, padding }, borrowed))
     }
 
     /// Length of the body (layer count, records and channel data) without

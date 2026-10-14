@@ -17,12 +17,27 @@ fn rect(h: &Harness<'_, PhotocraftApp>, field: &str) -> Rect {
     let a = v[field].as_array().unwrap();
     Rect::from_min_max(pos2(a[0].as_f64().unwrap() as f32, a[1].as_f64().unwrap() as f32), pos2(a[2].as_f64().unwrap() as f32, a[3].as_f64().unwrap() as f32))
 }
+// Reuse the headless device across theme fixtures. Repeated driver instance/adapter creation
+// can exhaust Linux adapter discovery within this test binary. Existing setup still creates a
+// fresh egui Renderer and callback resources for every harness, preserving texture isolation.
+fn shared_gpu_setup() -> eframe::egui_wgpu::WgpuSetup {
+    use eframe::egui_wgpu::{RendererOptions, WgpuSetup, WgpuSetupExisting};
+    static GPU: std::sync::OnceLock<WgpuSetupExisting> = std::sync::OnceLock::new();
+    WgpuSetup::Existing(
+        GPU.get_or_init(|| {
+            let state = egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), RendererOptions::PREDICTABLE);
+            WgpuSetupExisting { instance: state.instance, adapter: state.adapter, device: state.device, queue: state.queue }
+        })
+        .clone(),
+    )
+}
+
 fn fixture(theme: ThemeKind) -> Harness<'static, PhotocraftApp> {
     fixture_render(theme, false)
 }
 fn fixture_render(theme: ThemeKind, gpu: bool) -> Harness<'static, PhotocraftApp> {
     let builder = Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0));
-    let builder = if gpu { builder.wgpu() } else { builder };
+    let builder = if gpu { builder.wgpu_setup(shared_gpu_setup()) } else { builder };
     let mut h = builder.build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, theme);
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -409,7 +424,7 @@ fn alt_tone_diagnostics_and_double_click_reset_follow_the_same_proxy_revision() 
 #[test]
 fn both_clipping_warnings_leave_unclipped_preview_pixels_visible_on_gpu() {
     let _gpu = gpu_lock();
-    let mut h = Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(800.0, 600.0)).wgpu().build_eframe(|cc| {
+    let mut h = Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(800.0, 600.0)).wgpu_setup(shared_gpu_setup()).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.set_theme(&cc.egui_ctx, ThemeKind::Pro);

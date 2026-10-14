@@ -45,6 +45,7 @@ pub mod aco;
 pub mod ase;
 pub mod atn;
 pub mod blend;
+mod borrowed;
 pub mod builder;
 pub mod compression;
 pub mod descriptor;
@@ -73,6 +74,7 @@ pub mod tiff;
 pub mod tree;
 
 pub use blend::BlendMode;
+pub use borrowed::PsdView;
 pub use builder::{GroupSpec, LayerSpec, MaskSpec, PixelData, PsdBuilder};
 pub use compression::{Compression, PlaneLayout};
 pub use descriptor::{Descriptor, VersionedDescriptor};

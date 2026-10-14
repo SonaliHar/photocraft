@@ -417,6 +417,7 @@ pub struct Compositor {
     residents: HashMap<ResKey, Resident>,
     fx: HashMap<FxKey, FxEntry>,
     prefix: prefix::Prefix,
+    defer_prefix_population: bool,
     /// Effect temporaries (R32F, region sized) and the frame they were last used.
     temps: Vec<(Tex, u64)>,
     patterns: HashMap<String, CachedPattern>,
@@ -667,6 +668,7 @@ impl Compositor {
             residents: HashMap::new(),
             fx: HashMap::new(),
             prefix: prefix::Prefix::default(),
+            defer_prefix_population: false,
             temps: Vec::new(),
             patterns: HashMap::new(),
             pattern_mode: photocraft_color::ColorMode::Rgb,
@@ -755,7 +757,7 @@ impl Compositor {
     /// Bytes of the layer pages a render of `region` needs resident (each layer and mask
     /// surface's tiles within the region's page cells, in their texture format).
     pub fn working_set(&self, doc: &Document, region: Rect) -> u64 {
-        let Ok(plan) = plan(doc) else { return 0 };
+        let Ok(plan) = plan::plan_with_raster_fusion(doc, self.acc_format != wgpu::TextureFormat::Rgba16Float) else { return 0 };
         let grid = tile_grid(doc.bounds());
         let cells = grid_rects(region.intersect(&doc.bounds()), self.page)
             .into_iter()
@@ -795,7 +797,7 @@ impl Compositor {
     /// limit are fine: surfaces are stored in page-sized textures and effect maps of regions
     /// larger than the limit are built per page cell.
     pub fn supports(&self, doc: &Document) -> Result<(), Unsupported> {
-        let p = plan(doc)?;
+        let p = plan::plan_with_raster_fusion(doc, self.acc_format != wgpu::TextureFormat::Rgba16Float)?;
         self.check_fx(doc, &p)
     }
 
@@ -900,6 +902,18 @@ impl Compositor {
         self.health = Some(health);
     }
 
+    /// Skip lower-stack composite cache population for the next non-empty [`Self::render`]
+    /// that passes planning and resource preflight. Clears any previous composite cache on
+    /// that render, without changing its budget or the resident/effect caches. Subsequent
+    /// renders resume normal population and reuse. [`Self::encode`] does not consume this
+    /// request because its caller may discard the command buffer.
+    ///
+    /// Useful for showing a newly opened document before paying for an editing cache. The
+    /// first following edit must establish that cache; measure opening and editing together.
+    pub fn defer_composite_cache_population(&mut self) {
+        self.defer_prefix_population = true;
+    }
+
     /// Why the device can't be used (`None` while healthy or unwatched).
     pub fn fault(&self) -> Option<Fault> {
         self.health.as_ref().and_then(DeviceHealth::fault)
@@ -991,7 +1005,7 @@ impl Compositor {
     ) -> Result<Stats, Unsupported> {
         let canvas = doc.bounds();
         let region = region.intersect(&canvas);
-        let plan = plan(doc)?;
+        let plan = plan::plan_with_raster_fusion(doc, self.acc_format != wgpu::TextureFormat::Rgba16Float)?;
         self.check_fx(doc, &plan)?;
         self.pattern_mode = doc.pixel_format().mode;
         let mut stats = Stats { passes: plan.passes.len(), slots: plan.slots, ..Default::default() };
@@ -1018,7 +1032,14 @@ impl Compositor {
 
         // Only render owns submission. A caller may discard encode's command buffer, so it
         // cannot establish (or consume) a checkpoint whose GPU copy might never execute.
-        let checkpoint = if flush { self.prefix.prepare(doc, &plan) } else { None };
+        let checkpoint = if flush && std::mem::take(&mut self.defer_prefix_population) {
+            self.prefix.clear();
+            None
+        } else if flush {
+            self.prefix.prepare(doc, &plan)
+        } else {
+            None
+        };
 
         // Effect maps of whole regions first (they may render group shapes through sub-plans);
         // regions larger than the limit are built per cell below.
@@ -2058,8 +2079,10 @@ fn keep_overlap(device: &wgpu::Device, queue: &wgpu::Queue, old: &Resident, new:
 
 /// Convert `tiles` of `surface` to `kind` texels and hand each distinct tile, the coordinates
 /// sharing it and its bytes to `put`. Each distinct tile is converted once (a solid fill shares
-/// one `Arc` across every coordinate it covers), in parallel batches. Converting every tile one
-/// after another on the UI thread froze a 50 MP 16-bit document for about 1.4 s after a
+/// one `Arc` across every coordinate it covers), in parallel batches when conversion is needed.
+/// Native texture formats borrow the tile bytes directly, avoiding an intermediate allocation
+/// and copy. Converting every tile one after another on the UI thread froze a 50 MP 16-bit
+/// document for about 1.4 s after a
 /// full-canvas fill (#1774). Returns how many tiles were converted.
 fn convert_tiles(surface: &Surface, tiles: Vec<(TileCoord, Arc<Tile>)>, kind: TexKind, mut put: impl FnMut(&Arc<Tile>, &[TileCoord], &[u8])) -> usize {
     let mut groups: Vec<(Arc<Tile>, Vec<TileCoord>)> = Vec::new();
@@ -2072,6 +2095,14 @@ fn convert_tiles(surface: &Surface, tiles: Vec<(TileCoord, Arc<Tile>)>, kind: Te
                 groups.push((t, vec![c]));
             }
         }
+    }
+    if matches!(kind, TexKind::Rgba8Direct | TexKind::R8Direct) {
+        // Keep the same distinct-tile order and shared-coordinate grouping as the converted
+        // path. `put` consumes these bytes synchronously, including ordered scratch uploads.
+        for (t, cs) in &groups {
+            put(t, cs, t.bytes());
+        }
+        return groups.len();
     }
     for batch in groups.chunks(CONVERT_BATCH) {
         // A tile's content is the same at every coordinate sharing it: convert it at the first.
@@ -2469,6 +2500,9 @@ mod tests {
             assert_eq!(tiles.len(), 81, "{fmt:?}");
             let mut seen = Vec::new();
             let converted = convert_tiles(&s, tiles, kind, |t, cs, bytes| {
+                if matches!(kind, TexKind::Rgba8Direct | TexKind::R8Direct) {
+                    assert_eq!(bytes.as_ptr(), t.bytes().as_ptr(), "{fmt:?}: native uploads borrow tile storage");
+                }
                 for &c in cs {
                     assert!(s.tile(c).is_some_and(|own| Arc::ptr_eq(own, t)), "{fmt:?} {c:?}");
                     assert_eq!(bytes, convert_tile(&s, Some(t), kind, c).as_slice(), "{fmt:?} {c:?}");

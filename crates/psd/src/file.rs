@@ -1,5 +1,6 @@
 //! The top-level [`PsdFile`] model, parser and writer.
 
+use crate::borrowed::BorrowedChannels;
 use crate::error::{PsdError, Result};
 use crate::header::{ColorMode, Header, Version};
 use crate::image_data::ImageData;
@@ -90,6 +91,10 @@ pub struct PsdFile {
 impl PsdFile {
     /// Parses a PSD or PSB file.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        Self::parse_with(data, false).map(|(file, _, _)| file)
+    }
+
+    pub(crate) fn parse_with(data: &[u8], borrow: bool) -> Result<(Self, BorrowedChannels<'_>, &[u8])> {
         let mut r = Reader::new(data);
         let header = Header::read(&mut r)?;
         let psb = header.version.is_psb();
@@ -100,6 +105,7 @@ impl PsdFile {
         let lm_len = r.len_field(psb)?;
         let mut s = r.sub(lm_len)?;
         let mut layer_info = None;
+        let mut channels = Vec::new();
         let mut global_layer_mask = None;
         let mut global_blocks = Vec::new();
         let mut layer_mask_trailing = Vec::new();
@@ -107,7 +113,9 @@ impl PsdFile {
         if !s.is_empty() {
             let li_len = s.len_field(psb)?;
             if li_len > 0 {
-                layer_info = Some(LayerInfo::read_body(s.bytes_u64(li_len)?, header.version)?);
+                let (info, payloads) = LayerInfo::read_body_with(s.bytes_u64(li_len)?, header.version, borrow)?;
+                layer_info = Some(info);
+                channels = payloads;
             }
             if s.remaining() >= 4 {
                 let n = s.u32()?;
@@ -130,13 +138,15 @@ impl PsdFile {
                         return false;
                     }
                     candidate_seen = true;
-                    let Ok(info) = LayerInfo::read_body(data, header.version) else {
+                    let Ok((info, payloads)) = LayerInfo::read_body_with(data, header.version, borrow) else {
                         if target_key.is_some() {
                             layer_info = None;
+                            channels.clear();
                         }
                         return false;
                     };
                     layer_info = Some(info);
+                    channels = payloads;
                     layer_info_placement = LayerInfoPlacement::GlobalBlock { index, signature, key, padding: padding.clone() };
                     true
                 })?;
@@ -146,8 +156,12 @@ impl PsdFile {
                 layer_mask_trailing = s.peek_rest().to_vec();
             }
         }
-        let image_data = ImageData::read(&mut r, &header)?;
-        Ok(PsdFile { header, color_mode_data, resources, layer_info, layer_info_placement, global_layer_mask, global_blocks, layer_mask_trailing, image_data })
+        let (image_data, merged) = ImageData::read_with(&mut r, &header, borrow)?;
+        Ok((
+            PsdFile { header, color_mode_data, resources, layer_info, layer_info_placement, global_layer_mask, global_blocks, layer_mask_trailing, image_data },
+            channels,
+            merged,
+        ))
     }
 
     /// Serializes the file.

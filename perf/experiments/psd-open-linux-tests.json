@@ -1,0 +1,188 @@
+{
+  "ui_integration_targets": {
+    "adjust_preview_gpu": {
+      "status": "ok",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-tests.log"
+    },
+    "arbitrary_rotation_preview": {
+      "status": "ok",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-tests.log"
+    },
+    "batch_export_options": {
+      "status": "ok",
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-tests.log"
+    },
+    "camera_raw_histogram": {
+      "status": "ok",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-tests.log"
+    },
+    "camera_raw_localization": {
+      "status": "ok",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-tests.log"
+    },
+    "camera_raw_scope": {
+      "status": "ok",
+      "passed": 21,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-camera-raw-fixed.log"
+    },
+    "camera_raw_zoom": {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-remaining.log"
+    },
+    "canvas_16f": {
+      "status": "ok",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-remaining.log"
+    },
+    "checker_canvas": {
+      "status": "ok",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-remaining.log"
+    },
+    "color_managed_canvas": {
+      "status": "ok",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-remaining.log"
+    },
+    "crop_beyond_canvas": {
+      "status": "ok",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-remaining.log"
+    },
+    "crop_default_mode": {
+      "status": "ok",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-remaining.log"
+    },
+    "custom_print_paper": {
+      "status": "ok",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-remaining.log"
+    },
+    "drag_preview_canvas": {
+      "status": "ok",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-remaining.log"
+    },
+    "export_as_scaling": {
+      "status": "ok",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-remaining.log"
+    },
+    "full_res_preview": {
+      "status": "ok",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-remaining.log"
+    },
+    "gpu_device_loss": {
+      "status": "ok",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-remaining.log"
+    },
+    "layout_perf": {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-remaining.log"
+    },
+    "live_stroke_canvas": {
+      "status": "ok",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-remaining.log"
+    },
+    "marquee_autoscroll": {
+      "status": "ok",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-remaining.log"
+    },
+    "paint_bucket_all_layers": {
+      "status": "ok",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-remaining.log"
+    },
+    "pattern_preview_canvas": {
+      "status": "ok",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-remaining.log"
+    },
+    "system_locale": {
+      "status": "ok",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-remaining.log"
+    },
+    "ui_scale_canvas": {
+      "status": "ok",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-remaining.log"
+    },
+    "variables_data_sets": {
+      "status": "ok",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-remaining.log"
+    },
+    "workspace_presets": {
+      "status": "ok",
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0,
+      "log": "final-ui-integration-remaining.log"
+    }
+  },
+  "passed": 109,
+  "initial_environment_failure": "camera_raw_scope failed adapter initialization in both candidate and unmodified upstream. Test-only device reuse keeps fresh renderers and all assertions; complete target passes after fix."
+}

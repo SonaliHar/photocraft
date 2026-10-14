@@ -1,0 +1,697 @@
+{
+  "method": "ABBA, 3 warm samples per invocation; setup/generation/allocation/readback excluded",
+  "summary": {
+    "one-to-one": {
+      "eager": {
+        "opening_ms": 17.9888655,
+        "opening_and_two_edits_ms": 18.4518325,
+        "raw_opening_ms": [
+          19.327066000000002,
+          17.983256,
+          17.994474999999998,
+          18.094314,
+          17.218271,
+          17.064862
+        ]
+      },
+      "demand": {
+        "opening_ms": 16.723989500000002,
+        "opening_and_two_edits_ms": 16.8361695,
+        "raw_opening_ms": [
+          17.40562,
+          16.607066,
+          16.623406,
+          17.245161,
+          16.800954,
+          16.647025
+        ]
+      }
+    },
+    "fit": {
+      "eager": {
+        "opening_ms": 17.5863235,
+        "opening_and_two_edits_ms": 18.01673,
+        "raw_opening_ms": [
+          18.028035000000003,
+          18.042566,
+          17.732308,
+          17.440338999999998,
+          17.345860000000002,
+          17.347551
+        ]
+      },
+      "demand": {
+        "opening_ms": 17.0791725,
+        "opening_and_two_edits_ms": 17.286780999999998,
+        "raw_opening_ms": [
+          17.144802000000002,
+          17.014393,
+          17.143952,
+          16.868704,
+          17.180891,
+          17.012833
+        ]
+      }
+    },
+    "fit-and-navigator": {
+      "eager": {
+        "opening_ms": 17.4970395,
+        "opening_and_two_edits_ms": 17.945176,
+        "raw_opening_ms": [
+          17.749038000000002,
+          17.941105999999998,
+          17.643588,
+          17.350490999999998,
+          17.32969,
+          17.337721000000002
+        ]
+      },
+      "demand": {
+        "opening_ms": 17.005088,
+        "opening_and_two_edits_ms": 17.263406,
+        "raw_opening_ms": [
+          16.921494,
+          16.882264,
+          17.166781999999998,
+          17.088682000000002,
+          17.162811,
+          16.872234
+        ]
+      }
+    }
+  },
+  "reports": {
+    "eager": [
+      {
+        "adapter": "AdapterInfo { name: \"NVIDIA GeForce RTX 3090\", vendor: 4318, device: 8708, device_type: DiscreteGpu, device_pci_bus_id: \"0000:01:00.0\", driver: \"NVIDIA\", driver_info: \"615.71.09\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 32, transient_saves_memory: Some(false), limit_bucket: None }",
+        "excluded": [
+          "PSD decoding",
+          "texture allocation",
+          "source generation",
+          "readback",
+          "painting the canvas to the screen"
+        ],
+        "format": "Rgba8Unorm",
+        "metric": "canvas upload and required view mip work, including GPU wait",
+        "samples": [
+          {
+            "edits_ms": [
+              0.7864439999999999,
+              0.27111799999999997
+            ],
+            "opening_and_two_edits_ms": 24.197020000000002,
+            "opening_ms": 23.139458,
+            "round": 0,
+            "scenario": "one-to-one",
+            "warmup": true
+          },
+          {
+            "edits_ms": [
+              0.49503600000000003,
+              0.25086800000000004
+            ],
+            "opening_and_two_edits_ms": 20.07297,
+            "opening_ms": 19.327066000000002,
+            "round": 1,
+            "scenario": "one-to-one",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.244708,
+              0.230719
+            ],
+            "opening_and_two_edits_ms": 18.458683,
+            "opening_ms": 17.983256,
+            "round": 2,
+            "scenario": "one-to-one",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.24560800000000002,
+              0.204899
+            ],
+            "opening_and_two_edits_ms": 18.444981999999996,
+            "opening_ms": 17.994474999999998,
+            "round": 3,
+            "scenario": "one-to-one",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.247198,
+              0.19117900000000002
+            ],
+            "opening_and_two_edits_ms": 18.250694,
+            "opening_ms": 17.812317,
+            "round": 0,
+            "scenario": "fit",
+            "warmup": true
+          },
+          {
+            "edits_ms": [
+              0.245389,
+              0.21054799999999999
+            ],
+            "opening_and_two_edits_ms": 18.483972,
+            "opening_ms": 18.028035000000003,
+            "round": 1,
+            "scenario": "fit",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.230848,
+              0.20966800000000002
+            ],
+            "opening_and_two_edits_ms": 18.483082,
+            "opening_ms": 18.042566,
+            "round": 2,
+            "scenario": "fit",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.23222800000000002,
+              0.201808
+            ],
+            "opening_and_two_edits_ms": 18.166344,
+            "opening_ms": 17.732308,
+            "round": 3,
+            "scenario": "fit",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.24007799999999999,
+              0.19672900000000001
+            ],
+            "opening_and_two_edits_ms": 18.439062000000003,
+            "opening_ms": 18.002255,
+            "round": 0,
+            "scenario": "fit-and-navigator",
+            "warmup": true
+          },
+          {
+            "edits_ms": [
+              0.246088,
+              0.222168
+            ],
+            "opening_and_two_edits_ms": 18.217294000000003,
+            "opening_ms": 17.749038000000002,
+            "round": 1,
+            "scenario": "fit-and-navigator",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.242019,
+              0.210838
+            ],
+            "opening_and_two_edits_ms": 18.393963,
+            "opening_ms": 17.941105999999998,
+            "round": 2,
+            "scenario": "fit-and-navigator",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.233519,
+              0.222358
+            ],
+            "opening_and_two_edits_ms": 18.099465000000002,
+            "opening_ms": 17.643588,
+            "round": 3,
+            "scenario": "fit-and-navigator",
+            "warmup": false
+          }
+        ],
+        "size": [
+          7360,
+          4912
+        ],
+        "tile": 8192,
+        "validation": "exact level-zero bytes at canvas corners and both edit origins; full mip fidelity has separate tests"
+      },
+      {
+        "adapter": "AdapterInfo { name: \"NVIDIA GeForce RTX 3090\", vendor: 4318, device: 8708, device_type: DiscreteGpu, device_pci_bus_id: \"0000:01:00.0\", driver: \"NVIDIA\", driver_info: \"615.71.09\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 32, transient_saves_memory: Some(false), limit_bucket: None }",
+        "excluded": [
+          "PSD decoding",
+          "texture allocation",
+          "source generation",
+          "readback",
+          "painting the canvas to the screen"
+        ],
+        "format": "Rgba8Unorm",
+        "metric": "canvas upload and required view mip work, including GPU wait",
+        "samples": [
+          {
+            "edits_ms": [
+              0.6153550000000001,
+              0.207639
+            ],
+            "opening_and_two_edits_ms": 20.324728,
+            "opening_ms": 19.501734,
+            "round": 0,
+            "scenario": "one-to-one",
+            "warmup": true
+          },
+          {
+            "edits_ms": [
+              0.42179700000000003,
+              0.218109
+            ],
+            "opening_and_two_edits_ms": 18.73422,
+            "opening_ms": 18.094314,
+            "round": 1,
+            "scenario": "one-to-one",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.21038900000000002,
+              0.19744799999999998
+            ],
+            "opening_and_two_edits_ms": 17.626108000000002,
+            "opening_ms": 17.218271,
+            "round": 2,
+            "scenario": "one-to-one",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.213938,
+              0.194129
+            ],
+            "opening_and_two_edits_ms": 17.472929,
+            "opening_ms": 17.064862,
+            "round": 3,
+            "scenario": "one-to-one",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.216209,
+              0.182428
+            ],
+            "opening_and_two_edits_ms": 17.668968,
+            "opening_ms": 17.270331,
+            "round": 0,
+            "scenario": "fit",
+            "warmup": true
+          },
+          {
+            "edits_ms": [
+              0.233359,
+              0.193418
+            ],
+            "opening_and_two_edits_ms": 17.867116,
+            "opening_ms": 17.440338999999998,
+            "round": 1,
+            "scenario": "fit",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.223848,
+              0.20440899999999998
+            ],
+            "opening_and_two_edits_ms": 17.774117,
+            "opening_ms": 17.345860000000002,
+            "round": 2,
+            "scenario": "fit",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.219338,
+              0.19870900000000002
+            ],
+            "opening_and_two_edits_ms": 17.765598,
+            "opening_ms": 17.347551,
+            "round": 3,
+            "scenario": "fit",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.229938,
+              0.196209
+            ],
+            "opening_and_two_edits_ms": 17.782507000000003,
+            "opening_ms": 17.356360000000002,
+            "round": 0,
+            "scenario": "fit-and-navigator",
+            "warmup": true
+          },
+          {
+            "edits_ms": [
+              0.23221799999999998,
+              0.208178
+            ],
+            "opening_and_two_edits_ms": 17.790886999999998,
+            "opening_ms": 17.350490999999998,
+            "round": 1,
+            "scenario": "fit-and-navigator",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.230989,
+              0.205088
+            ],
+            "opening_and_two_edits_ms": 17.765767,
+            "opening_ms": 17.32969,
+            "round": 2,
+            "scenario": "fit-and-navigator",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.229298,
+              0.20006900000000002
+            ],
+            "opening_and_two_edits_ms": 17.767088,
+            "opening_ms": 17.337721000000002,
+            "round": 3,
+            "scenario": "fit-and-navigator",
+            "warmup": false
+          }
+        ],
+        "size": [
+          7360,
+          4912
+        ],
+        "tile": 8192,
+        "validation": "exact level-zero bytes at canvas corners and both edit origins; full mip fidelity has separate tests"
+      }
+    ],
+    "demand": [
+      {
+        "adapter": "AdapterInfo { name: \"NVIDIA GeForce RTX 3090\", vendor: 4318, device: 8708, device_type: DiscreteGpu, device_pci_bus_id: \"0000:01:00.0\", driver: \"NVIDIA\", driver_info: \"615.71.09\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 32, transient_saves_memory: Some(false), limit_bucket: None }",
+        "excluded": [
+          "PSD decoding",
+          "texture allocation",
+          "source generation",
+          "readback",
+          "painting the canvas to the screen"
+        ],
+        "format": "Rgba8Unorm",
+        "metric": "canvas upload and required view mip work, including GPU wait",
+        "samples": [
+          {
+            "edits_ms": [
+              0.1275,
+              0.043849
+            ],
+            "opening_and_two_edits_ms": 19.053427,
+            "opening_ms": 18.882078,
+            "round": 0,
+            "scenario": "one-to-one",
+            "warmup": true
+          },
+          {
+            "edits_ms": [
+              0.069429,
+              0.04416
+            ],
+            "opening_and_two_edits_ms": 17.519209,
+            "opening_ms": 17.40562,
+            "round": 1,
+            "scenario": "one-to-one",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.0679,
+              0.044189
+            ],
+            "opening_and_two_edits_ms": 16.719155,
+            "opening_ms": 16.607066,
+            "round": 2,
+            "scenario": "one-to-one",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.06752899999999999,
+              0.04318
+            ],
+            "opening_and_two_edits_ms": 16.734115,
+            "opening_ms": 16.623406,
+            "round": 3,
+            "scenario": "one-to-one",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.193458,
+              0.08491900000000001
+            ],
+            "opening_and_two_edits_ms": 17.325499999999998,
+            "opening_ms": 17.047123,
+            "round": 0,
+            "scenario": "fit",
+            "warmup": true
+          },
+          {
+            "edits_ms": [
+              0.12372899999999999,
+              0.098809
+            ],
+            "opening_and_two_edits_ms": 17.367340000000002,
+            "opening_ms": 17.144802000000002,
+            "round": 1,
+            "scenario": "fit",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.120809,
+              0.08679
+            ],
+            "opening_and_two_edits_ms": 17.221991999999997,
+            "opening_ms": 17.014393,
+            "round": 2,
+            "scenario": "fit",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.12238900000000001,
+              0.085229
+            ],
+            "opening_and_two_edits_ms": 17.35157,
+            "opening_ms": 17.143952,
+            "round": 3,
+            "scenario": "fit",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.331158,
+              0.120529
+            ],
+            "opening_and_two_edits_ms": 17.41976,
+            "opening_ms": 16.968073,
+            "round": 0,
+            "scenario": "fit-and-navigator",
+            "warmup": true
+          },
+          {
+            "edits_ms": [
+              0.150859,
+              0.11362900000000001
+            ],
+            "opening_and_two_edits_ms": 17.185982,
+            "opening_ms": 16.921494,
+            "round": 1,
+            "scenario": "fit-and-navigator",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.149319,
+              0.110059
+            ],
+            "opening_and_two_edits_ms": 17.141642,
+            "opening_ms": 16.882264,
+            "round": 2,
+            "scenario": "fit-and-navigator",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.149549,
+              0.101739
+            ],
+            "opening_and_two_edits_ms": 17.418069999999997,
+            "opening_ms": 17.166781999999998,
+            "round": 3,
+            "scenario": "fit-and-navigator",
+            "warmup": false
+          }
+        ],
+        "size": [
+          7360,
+          4912
+        ],
+        "tile": 8192,
+        "validation": "exact level-zero bytes at canvas corners and both edit origins; full mip fidelity has separate tests"
+      },
+      {
+        "adapter": "AdapterInfo { name: \"NVIDIA GeForce RTX 3090\", vendor: 4318, device: 8708, device_type: DiscreteGpu, device_pci_bus_id: \"0000:01:00.0\", driver: \"NVIDIA\", driver_info: \"615.71.09\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 32, transient_saves_memory: Some(false), limit_bucket: None }",
+        "excluded": [
+          "PSD decoding",
+          "texture allocation",
+          "source generation",
+          "readback",
+          "painting the canvas to the screen"
+        ],
+        "format": "Rgba8Unorm",
+        "metric": "canvas upload and required view mip work, including GPU wait",
+        "samples": [
+          {
+            "edits_ms": [
+              0.142759,
+              0.039799
+            ],
+            "opening_and_two_edits_ms": 19.067107,
+            "opening_ms": 18.884549,
+            "round": 0,
+            "scenario": "one-to-one",
+            "warmup": true
+          },
+          {
+            "edits_ms": [
+              0.07679,
+              0.041049
+            ],
+            "opening_and_two_edits_ms": 17.363,
+            "opening_ms": 17.245161,
+            "round": 1,
+            "scenario": "one-to-one",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.06994,
+              0.04663
+            ],
+            "opening_and_two_edits_ms": 16.917524,
+            "opening_ms": 16.800954,
+            "round": 2,
+            "scenario": "one-to-one",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.06816,
+              0.03963
+            ],
+            "opening_and_two_edits_ms": 16.754815,
+            "opening_ms": 16.647025,
+            "round": 3,
+            "scenario": "one-to-one",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.214718,
+              0.10103
+            ],
+            "opening_and_two_edits_ms": 17.540868999999997,
+            "opening_ms": 17.225120999999998,
+            "round": 0,
+            "scenario": "fit",
+            "warmup": true
+          },
+          {
+            "edits_ms": [
+              0.12673900000000002,
+              0.085669
+            ],
+            "opening_and_two_edits_ms": 17.081112,
+            "opening_ms": 16.868704,
+            "round": 1,
+            "scenario": "fit",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.121179,
+              0.08642
+            ],
+            "opening_and_two_edits_ms": 17.388489999999997,
+            "opening_ms": 17.180891,
+            "round": 2,
+            "scenario": "fit",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.121199,
+              0.086559
+            ],
+            "opening_and_two_edits_ms": 17.220591,
+            "opening_ms": 17.012833,
+            "round": 3,
+            "scenario": "fit",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.22137900000000002,
+              0.119059
+            ],
+            "opening_and_two_edits_ms": 17.161761999999996,
+            "opening_ms": 16.821323999999997,
+            "round": 0,
+            "scenario": "fit-and-navigator",
+            "warmup": true
+          },
+          {
+            "edits_ms": [
+              0.14529899999999998,
+              0.106849
+            ],
+            "opening_and_two_edits_ms": 17.34083,
+            "opening_ms": 17.088682000000002,
+            "round": 1,
+            "scenario": "fit-and-navigator",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.15456899999999998,
+              0.11190900000000001
+            ],
+            "opening_and_two_edits_ms": 17.429289,
+            "opening_ms": 17.162811,
+            "round": 2,
+            "scenario": "fit-and-navigator",
+            "warmup": false
+          },
+          {
+            "edits_ms": [
+              0.138519,
+              0.11412900000000001
+            ],
+            "opening_and_two_edits_ms": 17.124882,
+            "opening_ms": 16.872234,
+            "round": 3,
+            "scenario": "fit-and-navigator",
+            "warmup": false
+          }
+        ],
+        "size": [
+          7360,
+          4912
+        ],
+        "tile": 8192,
+        "validation": "exact level-zero bytes at canvas corners and both edit origins; full mip fidelity has separate tests"
+      }
+    ]
+  }
+}

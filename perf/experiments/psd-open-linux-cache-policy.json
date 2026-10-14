@@ -1,0 +1,583 @@
+{
+  "summary": {
+    "eager": {
+      "open_ms": 142.67128100000002,
+      "first_edit_ms": 1.596594,
+      "second_edit_ms": 0.45276150000000004,
+      "total_ms": 144.782411,
+      "first_cache_bytes": 536870912,
+      "after_first_edit_cache_bytes": 536870912,
+      "samples": 6
+    },
+    "deferred": {
+      "open_ms": 82.18409249999999,
+      "first_edit_ms": 2.0097455,
+      "second_edit_ms": 1.2224220000000001,
+      "total_ms": 85.4365555,
+      "first_cache_bytes": 0,
+      "after_first_edit_cache_bytes": 16777216,
+      "samples": 6
+    }
+  },
+  "raw": {
+    "accumulator": "Rgba32Float",
+    "adapter": "AdapterInfo { name: \"NVIDIA GeForce RTX 3090\", vendor: 4318, device: 8708, device_type: DiscreteGpu, device_pci_bus_id: \"0000:01:00.0\", driver: \"NVIDIA\", driver_info: \"615.71.09\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 32, transient_saves_memory: Some(false), limit_bucket: None }",
+    "cache_budget": 536870912,
+    "cold_pair": [
+      {
+        "deferred": false,
+        "edits": [
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 536870912,
+            "ms": 0.804534,
+            "passes": 4,
+            "prefix_hits": 1,
+            "prefix_passes_skipped": 3,
+            "uploads": 1
+          },
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 536870912,
+            "ms": 0.263258,
+            "passes": 4,
+            "prefix_hits": 1,
+            "prefix_passes_skipped": 3,
+            "uploads": 1
+          }
+        ],
+        "final_edit_cpu_error": 1.1920928955078125e-07,
+        "open": {
+          "bytes_uploaded": 456130560,
+          "cache_bytes": 536870912,
+          "ms": 112.530676,
+          "passes": 4,
+          "prefix_hits": 0,
+          "prefix_passes_skipped": 0,
+          "uploads": 1740
+        },
+        "repetition": 0,
+        "total_ms": 113.598468
+      },
+      {
+        "deferred": true,
+        "edits": [
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 16777216,
+            "ms": 1.947507,
+            "passes": 4,
+            "prefix_hits": 0,
+            "prefix_passes_skipped": 0,
+            "uploads": 1
+          },
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 16777216,
+            "ms": 1.271801,
+            "passes": 4,
+            "prefix_hits": 1,
+            "prefix_passes_skipped": 3,
+            "uploads": 1
+          }
+        ],
+        "final_edit_cpu_error": 1.1920928955078125e-07,
+        "open": {
+          "bytes_uploaded": 456130560,
+          "cache_bytes": 0,
+          "ms": 82.385586,
+          "passes": 4,
+          "prefix_hits": 0,
+          "prefix_passes_skipped": 0,
+          "uploads": 1740
+        },
+        "repetition": 0,
+        "total_ms": 85.604894
+      }
+    ],
+    "damage": [
+      128,
+      128,
+      192,
+      192
+    ],
+    "fixture": "fixtures/p44-3layer.psd",
+    "fixture_blake3": "497008838e0cd18506e4b2e0cf533ff001f53fe22d1bbc1a9aab41d90df8de0b",
+    "samples": [
+      {
+        "deferred": true,
+        "edits": [
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 16777216,
+            "ms": 2.083786,
+            "passes": 4,
+            "prefix_hits": 0,
+            "prefix_passes_skipped": 0,
+            "uploads": 1
+          },
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 16777216,
+            "ms": 1.263082,
+            "passes": 4,
+            "prefix_hits": 1,
+            "prefix_passes_skipped": 3,
+            "uploads": 1
+          }
+        ],
+        "final_edit_cpu_error": 1.1920928955078125e-07,
+        "open": {
+          "bytes_uploaded": 456130560,
+          "cache_bytes": 0,
+          "ms": 80.948146,
+          "passes": 4,
+          "prefix_hits": 0,
+          "prefix_passes_skipped": 0,
+          "uploads": 1740
+        },
+        "repetition": 1,
+        "total_ms": 84.295014
+      },
+      {
+        "deferred": false,
+        "edits": [
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 536870912,
+            "ms": 1.104582,
+            "passes": 4,
+            "prefix_hits": 1,
+            "prefix_passes_skipped": 3,
+            "uploads": 1
+          },
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 536870912,
+            "ms": 0.256578,
+            "passes": 4,
+            "prefix_hits": 1,
+            "prefix_passes_skipped": 3,
+            "uploads": 1
+          }
+        ],
+        "final_edit_cpu_error": 1.1920928955078125e-07,
+        "open": {
+          "bytes_uploaded": 456130560,
+          "cache_bytes": 536870912,
+          "ms": 90.923247,
+          "passes": 4,
+          "prefix_hits": 0,
+          "prefix_passes_skipped": 0,
+          "uploads": 1740
+        },
+        "repetition": 1,
+        "total_ms": 92.284407
+      },
+      {
+        "deferred": false,
+        "edits": [
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 536870912,
+            "ms": 1.940607,
+            "passes": 4,
+            "prefix_hits": 1,
+            "prefix_passes_skipped": 3,
+            "uploads": 1
+          },
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 536870912,
+            "ms": 0.754814,
+            "passes": 4,
+            "prefix_hits": 1,
+            "prefix_passes_skipped": 3,
+            "uploads": 1
+          }
+        ],
+        "final_edit_cpu_error": 1.1920928955078125e-07,
+        "open": {
+          "bytes_uploaded": 456130560,
+          "cache_bytes": 536870912,
+          "ms": 229.76333,
+          "passes": 4,
+          "prefix_hits": 0,
+          "prefix_passes_skipped": 0,
+          "uploads": 1740
+        },
+        "repetition": 2,
+        "total_ms": 232.458751
+      },
+      {
+        "deferred": true,
+        "edits": [
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 16777216,
+            "ms": 1.9875859999999999,
+            "passes": 4,
+            "prefix_hits": 0,
+            "prefix_passes_skipped": 0,
+            "uploads": 1
+          },
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 16777216,
+            "ms": 1.2417820000000002,
+            "passes": 4,
+            "prefix_hits": 1,
+            "prefix_passes_skipped": 3,
+            "uploads": 1
+          }
+        ],
+        "final_edit_cpu_error": 1.1920928955078125e-07,
+        "open": {
+          "bytes_uploaded": 456130560,
+          "cache_bytes": 0,
+          "ms": 79.490076,
+          "passes": 4,
+          "prefix_hits": 0,
+          "prefix_passes_skipped": 0,
+          "uploads": 1740
+        },
+        "repetition": 2,
+        "total_ms": 82.719444
+      },
+      {
+        "deferred": true,
+        "edits": [
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 16777216,
+            "ms": 1.898006,
+            "passes": 4,
+            "prefix_hits": 0,
+            "prefix_passes_skipped": 0,
+            "uploads": 1
+          },
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 16777216,
+            "ms": 1.315531,
+            "passes": 4,
+            "prefix_hits": 1,
+            "prefix_passes_skipped": 3,
+            "uploads": 1
+          }
+        ],
+        "final_edit_cpu_error": 1.1920928955078125e-07,
+        "open": {
+          "bytes_uploaded": 456130560,
+          "cache_bytes": 0,
+          "ms": 79.348137,
+          "passes": 4,
+          "prefix_hits": 0,
+          "prefix_passes_skipped": 0,
+          "uploads": 1740
+        },
+        "repetition": 3,
+        "total_ms": 82.561674
+      },
+      {
+        "deferred": false,
+        "edits": [
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 536870912,
+            "ms": 1.636839,
+            "passes": 4,
+            "prefix_hits": 1,
+            "prefix_passes_skipped": 3,
+            "uploads": 1
+          },
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 536870912,
+            "ms": 0.359867,
+            "passes": 4,
+            "prefix_hits": 1,
+            "prefix_passes_skipped": 3,
+            "uploads": 1
+          }
+        ],
+        "final_edit_cpu_error": 1.1920928955078125e-07,
+        "open": {
+          "bytes_uploaded": 456130560,
+          "cache_bytes": 536870912,
+          "ms": 168.43931700000002,
+          "passes": 4,
+          "prefix_hits": 0,
+          "prefix_passes_skipped": 0,
+          "uploads": 1740
+        },
+        "repetition": 3,
+        "total_ms": 170.436023
+      },
+      {
+        "deferred": false,
+        "edits": [
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 536870912,
+            "ms": 1.001253,
+            "passes": 4,
+            "prefix_hits": 1,
+            "prefix_passes_skipped": 3,
+            "uploads": 1
+          },
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 536870912,
+            "ms": 0.286898,
+            "passes": 4,
+            "prefix_hits": 1,
+            "prefix_passes_skipped": 3,
+            "uploads": 1
+          }
+        ],
+        "final_edit_cpu_error": 1.1920928955078125e-07,
+        "open": {
+          "bytes_uploaded": 456130560,
+          "cache_bytes": 536870912,
+          "ms": 93.150241,
+          "passes": 4,
+          "prefix_hits": 0,
+          "prefix_passes_skipped": 0,
+          "uploads": 1740
+        },
+        "repetition": 4,
+        "total_ms": 94.438392
+      },
+      {
+        "deferred": true,
+        "edits": [
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 16777216,
+            "ms": 1.9549960000000002,
+            "passes": 4,
+            "prefix_hits": 0,
+            "prefix_passes_skipped": 0,
+            "uploads": 1
+          },
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 16777216,
+            "ms": 1.203062,
+            "passes": 4,
+            "prefix_hits": 1,
+            "prefix_passes_skipped": 3,
+            "uploads": 1
+          }
+        ],
+        "final_edit_cpu_error": 1.1920928955078125e-07,
+        "open": {
+          "bytes_uploaded": 456130560,
+          "cache_bytes": 0,
+          "ms": 83.420039,
+          "passes": 4,
+          "prefix_hits": 0,
+          "prefix_passes_skipped": 0,
+          "uploads": 1740
+        },
+        "repetition": 4,
+        "total_ms": 86.578097
+      },
+      {
+        "deferred": true,
+        "edits": [
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 16777216,
+            "ms": 2.199614,
+            "passes": 4,
+            "prefix_hits": 0,
+            "prefix_passes_skipped": 0,
+            "uploads": 1
+          },
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 16777216,
+            "ms": 0.659426,
+            "passes": 4,
+            "prefix_hits": 1,
+            "prefix_passes_skipped": 3,
+            "uploads": 1
+          }
+        ],
+        "final_edit_cpu_error": 1.1920928955078125e-07,
+        "open": {
+          "bytes_uploaded": 456130560,
+          "cache_bytes": 0,
+          "ms": 103.875237,
+          "passes": 4,
+          "prefix_hits": 0,
+          "prefix_passes_skipped": 0,
+          "uploads": 1740
+        },
+        "repetition": 5,
+        "total_ms": 106.73427699999999
+      },
+      {
+        "deferred": false,
+        "edits": [
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 536870912,
+            "ms": 1.556349,
+            "passes": 4,
+            "prefix_hits": 1,
+            "prefix_passes_skipped": 3,
+            "uploads": 1
+          },
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 536870912,
+            "ms": 0.6878150000000001,
+            "passes": 4,
+            "prefix_hits": 1,
+            "prefix_passes_skipped": 3,
+            "uploads": 1
+          }
+        ],
+        "final_edit_cpu_error": 1.1920928955078125e-07,
+        "open": {
+          "bytes_uploaded": 456130560,
+          "cache_bytes": 536870912,
+          "ms": 229.777309,
+          "passes": 4,
+          "prefix_hits": 0,
+          "prefix_passes_skipped": 0,
+          "uploads": 1740
+        },
+        "repetition": 5,
+        "total_ms": 232.02147300000001
+      },
+      {
+        "deferred": false,
+        "edits": [
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 536870912,
+            "ms": 1.679898,
+            "passes": 4,
+            "prefix_hits": 1,
+            "prefix_passes_skipped": 3,
+            "uploads": 1
+          },
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 536870912,
+            "ms": 0.545656,
+            "passes": 4,
+            "prefix_hits": 1,
+            "prefix_passes_skipped": 3,
+            "uploads": 1
+          }
+        ],
+        "final_edit_cpu_error": 1.1920928955078125e-07,
+        "open": {
+          "bytes_uploaded": 456130560,
+          "cache_bytes": 536870912,
+          "ms": 116.903245,
+          "passes": 4,
+          "prefix_hits": 0,
+          "prefix_passes_skipped": 0,
+          "uploads": 1740
+        },
+        "repetition": 6,
+        "total_ms": 119.128799
+      },
+      {
+        "deferred": true,
+        "edits": [
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 16777216,
+            "ms": 2.031905,
+            "passes": 4,
+            "prefix_hits": 0,
+            "prefix_passes_skipped": 0,
+            "uploads": 1
+          },
+          {
+            "bytes_uploaded": 262144,
+            "cache_bytes": 16777216,
+            "ms": 1.033153,
+            "passes": 4,
+            "prefix_hits": 1,
+            "prefix_passes_skipped": 3,
+            "uploads": 1
+          }
+        ],
+        "final_edit_cpu_error": 1.1920928955078125e-07,
+        "open": {
+          "bytes_uploaded": 456130560,
+          "cache_bytes": 0,
+          "ms": 92.243388,
+          "passes": 4,
+          "prefix_hits": 0,
+          "prefix_passes_skipped": 0,
+          "uploads": 1740
+        },
+        "repetition": 6,
+        "total_ms": 95.30844599999999
+      }
+    ],
+    "timing": "GPU render plus completion; import, edits, construction and validation excluded",
+    "validation": [
+      {
+        "cpu_error": 1.1920928955078125e-07,
+        "deferred": false,
+        "phase": "open-top-left"
+      },
+      {
+        "cpu_error": 1.1920928955078125e-07,
+        "deferred": false,
+        "phase": "open-center"
+      },
+      {
+        "cpu_error": 5.960464477539063e-08,
+        "deferred": false,
+        "phase": "open-bottom-right"
+      },
+      {
+        "cpu_error": 1.1920928955078125e-07,
+        "deferred": false,
+        "edit": 1
+      },
+      {
+        "cpu_error": 1.1920928955078125e-07,
+        "deferred": false,
+        "edit": 2
+      },
+      {
+        "cpu_error": 1.1920928955078125e-07,
+        "deferred": true,
+        "phase": "open-top-left"
+      },
+      {
+        "cpu_error": 1.1920928955078125e-07,
+        "deferred": true,
+        "phase": "open-center"
+      },
+      {
+        "cpu_error": 5.960464477539063e-08,
+        "deferred": true,
+        "phase": "open-bottom-right"
+      },
+      {
+        "cpu_error": 1.1920928955078125e-07,
+        "deferred": true,
+        "edit": 1
+      },
+      {
+        "cpu_error": 1.1920928955078125e-07,
+        "deferred": true,
+        "edit": 2
+      }
+    ],
+    "warmup": "one opening-plus-two-edits pair per policy excluded from samples"
+  }
+}
