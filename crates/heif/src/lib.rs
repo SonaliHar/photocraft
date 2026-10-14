@@ -163,13 +163,24 @@ fn metadata(bytes: &[u8]) -> (Option<Vec<u8>>, Option<Vec<u8>>, Option<String>) 
         return (None, None, None);
     };
     let id = ctx.meta.primary;
-    let icc = ctx.props(id).ok().and_then(|p| ctx.icc(&p).map(<[u8]>::to_vec));
+    let icc = item_icc(&ctx, id).or_else(|| first_tile_icc(&ctx, id));
     let exif = ctx.exif(id).ok().flatten().map(<[u8]>::to_vec);
     let xmp = ctx.xmp_item(id).and_then(|x| ctx.item_data(x).ok()).and_then(|d| match d {
         Cow::Borrowed(b) => String::from_utf8(b.to_vec()).ok(),
         Cow::Owned(b) => String::from_utf8(b).ok(),
     });
     (icc, exif, xmp.map(|x| x.trim_end_matches('\0').to_string()))
+}
+
+fn item_icc(ctx: &heic_rs::context::Context<'_>, id: u32) -> Option<Vec<u8>> {
+    ctx.props(id).ok().and_then(|p| ctx.icc(&p).map(<[u8]>::to_vec))
+}
+
+/// Phone cameras put the `colr` profile on a grid's tiles and none on the grid itself; like
+/// libheif, a grid without a profile takes its first tile's.
+fn first_tile_icc(ctx: &heic_rs::context::Context<'_>, id: u32) -> Option<Vec<u8>> {
+    let (_, tiles) = ctx.grid(id).ok().flatten()?;
+    item_icc(ctx, *tiles.first()?)
 }
 
 #[cfg(test)]
@@ -207,6 +218,73 @@ mod tests {
             assert!(probe(bytes).is_err());
             assert!(decode(bytes, &Options::default()).is_err());
         }
+    }
+
+    fn bx(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut b = (u32::try_from(payload.len() + 8).unwrap()).to_be_bytes().to_vec();
+        b.extend_from_slice(kind);
+        b.extend_from_slice(payload);
+        b
+    }
+
+    fn full_box(kind: &[u8; 4], version: u8, payload: &[u8]) -> Vec<u8> {
+        bx(kind, &[&[version, 0, 0, 0][..], payload].concat())
+    }
+
+    fn infe(id: u16, kind: &[u8; 4]) -> Vec<u8> {
+        full_box(b"infe", 2, &[&id.to_be_bytes()[..], &[0, 0], kind, b"\0"].concat())
+    }
+
+    /// The container of a 1×2 grid HEIC (item 1, its tiles items 2 and 3), with a `colr prof` on
+    /// the grid and on the tiles as asked. No pixels: only the metadata is read.
+    fn grid_heic(grid_icc: Option<&[u8]>, tile_icc: Option<&[u8]>) -> Vec<u8> {
+        let grid = [0u8, 0, 0, 1, 0, 2, 0, 1];
+        // An `ipma` association list: a count, then one-based indices into `ipco`.
+        let mut ipco = Vec::new();
+        let mut assoc = |icc: Option<&[u8]>| match icc {
+            Some(icc) => {
+                ipco.push(bx(b"colr", &[b"prof", icc].concat()));
+                vec![1, u8::try_from(ipco.len()).unwrap()]
+            }
+            None => vec![0],
+        };
+        let grid_assoc = assoc(grid_icc);
+        let tile_assoc = assoc(tile_icc);
+        let ipco = ipco.concat();
+        let mut ipma = 3u32.to_be_bytes().to_vec();
+        for (id, a) in [(1u16, &grid_assoc), (2, &tile_assoc), (3, &tile_assoc)] {
+            ipma.extend_from_slice(&id.to_be_bytes());
+            ipma.extend_from_slice(a);
+        }
+        let iprp = bx(b"iprp", &[bx(b"ipco", &ipco), full_box(b"ipma", 0, &ipma)].concat());
+        let iloc = full_box(b"iloc", 1, &[0x44, 0x00, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 8]);
+        let iref = full_box(b"iref", 0, &bx(b"dimg", &[0, 1, 0, 2, 0, 2, 0, 3]));
+        let iinf = full_box(b"iinf", 0, &[&[0, 3][..], &infe(1, b"grid"), &infe(2, b"hvc1"), &infe(3, b"hvc1")].concat());
+        let hdlr = full_box(b"hdlr", 0, &[&[0; 4][..], b"pict", &[0; 12], b"\0"].concat());
+        let pitm = full_box(b"pitm", 0, &[0, 1]);
+        let meta = full_box(b"meta", 0, &[hdlr, pitm, iinf, iref, iloc, iprp, bx(b"idat", &grid)].concat());
+        [bx(b"ftyp", b"heic\0\0\0\0mif1heic"), meta].concat()
+    }
+
+    #[test]
+    fn a_grid_without_a_profile_takes_its_tiles_profile() {
+        // storytold/photocraft#5539: a OnePlus photo carries Display P3 on its tiles only.
+        let (icc, _, _) = metadata(&grid_heic(None, Some(b"tile-profile")));
+        assert_eq!(icc.as_deref(), Some(&b"tile-profile"[..]));
+    }
+
+    #[test]
+    fn a_grid_profile_wins_over_its_tiles() {
+        let (icc, _, _) = metadata(&grid_heic(Some(b"grid-profile"), Some(b"tile-profile")));
+        assert_eq!(icc.as_deref(), Some(&b"grid-profile"[..]));
+        let (icc, _, _) = metadata(&grid_heic(Some(b"grid-profile"), None));
+        assert_eq!(icc.as_deref(), Some(&b"grid-profile"[..]));
+    }
+
+    #[test]
+    fn a_grid_with_no_profile_anywhere_has_none() {
+        let (icc, _, _) = metadata(&grid_heic(None, None));
+        assert_eq!(icc, None);
     }
 
     #[test]
