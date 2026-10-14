@@ -43,11 +43,11 @@ pub(crate) fn rgba8_surface(planes: &[Option<&[u8]>], rect: Rect) -> Option<Surf
                 let end = src.checked_add(span)?;
                 let (r, g, b) = (red.get(src..end)?, green.get(src..end)?, blue.get(src..end)?);
                 if let Some(a) = alpha.and_then(|a| a.get(src..src + span)) {
-                    for ((((dst, r), g), b), a) in row.chunks_exact_mut(4).zip(r).zip(g).zip(b).zip(a) {
+                    for ((((dst, r), g), b), a) in row.as_chunks_mut::<4>().0.iter_mut().zip(r).zip(g).zip(b).zip(a) {
                         dst.copy_from_slice(&[*r, *g, *b, *a]);
                     }
                 } else {
-                    for (((dst, r), g), b) in row.chunks_exact_mut(4).zip(r).zip(g).zip(b) {
+                    for (((dst, r), g), b) in row.as_chunks_mut::<4>().0.iter_mut().zip(r).zip(g).zip(b) {
                         dst.copy_from_slice(&[*r, *g, *b, 255]);
                     }
                 }
@@ -381,7 +381,7 @@ mod tests {
         assert!(surface.tile_count() > 0, "nonzero RGB beneath zero alpha must survive");
         let planes = [Some(channels[0].as_slice()), Some(channels[1].as_slice()), Some(channels[2].as_slice()), None];
         let opaque = rgba8_surface(&planes, rect).expect("missing alpha is opaque");
-        assert!(opaque.to_interleaved(rect).chunks_exact(4).all(|p| p[3] == 255));
+        assert!(opaque.to_interleaved(rect).as_chunks::<4>().0.iter().all(|p| p[3] == 255));
     }
 
     #[test]

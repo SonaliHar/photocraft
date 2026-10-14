@@ -516,11 +516,11 @@ impl Ctx<'_> {
     fn vector_mask(&self, rec: &LayerRecord) -> Option<photocraft_doc::VectorMask> {
         let b = rec.block(b"vsms").or_else(|| rec.block(b"vmsk"))?;
         let mut vm = crate::vector_map::vector_mask_from_block(&b.data, self.file.header.width, self.file.header.height)?;
-        if let Some(m) = rec.layer_mask() {
-            if let Some(p) = m.parameters {
-                vm.density = p.vector_density.map_or(1.0, |d| f32::from(d) / 255.0);
-                vm.feather = p.vector_feather.map_or(0.0, |f| f as f32);
-            }
+        if let Some(m) = rec.layer_mask()
+            && let Some(p) = m.parameters
+        {
+            vm.density = p.vector_density.map_or(1.0, |d| f32::from(d) / 255.0);
+            vm.feather = p.vector_feather.map_or(0.0, |f| f as f32);
         }
         Some(vm)
     }

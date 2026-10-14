@@ -100,7 +100,7 @@ fn concurrent_large_missing_channels_fill_without_decode_warnings() {
             let (document, warnings) = psd_to_document(&file);
             assert!(!warnings.iter().any(|w| w.contains("could not be decoded") || w.contains("treated as empty")), "{version:?}: {warnings:?}");
             let surface = document.layers[0].surface().expect("raster layer");
-            for (i, source) in pixels.chunks_exact(4).enumerate() {
+            for (i, source) in pixels.as_chunks::<4>().0.iter().enumerate() {
                 let actual = surface.pixel((i % SIDE as usize) as i32, (i / SIDE as usize) as i32);
                 let expected = [if missing_red { 0 } else { source[0] }, source[1], source[2], 255];
                 for (channel, (&value, &want)) in actual.iter().zip(&expected).enumerate() {

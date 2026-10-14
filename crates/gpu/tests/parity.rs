@@ -218,7 +218,7 @@ fn first_frame_renders() {
 
 #[test]
 fn deferred_open_cache_resumes_after_first_edit_without_changing_pixels() {
-    let Some(mut g) = gpu() else { return };
+    let Some(g) = gpu() else { return };
     let mut deferred = Compositor::new(&g.device);
     deferred.set_composite_cache_budget(16 << 20);
     let budget = deferred.memory_budget();
