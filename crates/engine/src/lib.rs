@@ -8,7 +8,9 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod accounted_commands;
+pub(crate) mod accounted_color_range;
 mod accounted_session;
+pub mod accounted_selection_session;
 pub mod accounted_view;
 pub mod actions_cmds;
 pub mod actions_edit_cmds;

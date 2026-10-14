@@ -18,7 +18,7 @@ const MAX_NODES: usize = 4096;
 const MAX_DEPTH: usize = 4;
 
 pub fn supports(id: &str) -> bool {
-    matches!(id, "layer.select" | "layer.setProps" | "edit.undo" | "edit.redo")
+    matches!(id, "layer.select" | "layer.setProps" | "select.deselect" | "select.colorRange" | "edit.undo" | "edit.redo")
 }
 
 fn bad(id: &str, message: &str) -> EngineError {
@@ -29,11 +29,21 @@ fn bad(id: &str, message: &str) -> EngineError {
 enum Request<'a> {
     Select(LayerId),
     Edit(AccountedEdit<'a>),
+    ClearSelection,
+    ColorRange(&'a Value),
     Undo,
     Redo,
 }
 
 fn request<'a>(session: &Session, id: &str, params: &'a Value) -> Result<Request<'a>> {
+    if id == "select.colorRange" {
+        crate::accounted_color_range::validate_request(params)?;
+        return Ok(Request::ColorRange(params));
+    }
+    if id == "select.deselect" {
+        crate::selection_inverse_controlled::storage_dispatch_preflight(session, id, params, false)?;
+        return Ok(Request::ClearSelection);
+    }
     if params.is_null() && matches!(id, "edit.undo" | "edit.redo") {
         return Ok(if id == "edit.undo" { Request::Undo } else { Request::Redo });
     }
@@ -143,6 +153,10 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
         request(session, id, params)?;
     }
     Ok(match id {
+        "select.deselect" if state.doc.selection.is_none() => Some("no selection"),
+        "select.deselect" if state.doc.xcf_state.is_some() || state.doc.source_color_context.is_some() || state.doc.selection_channel_id.is_some() => {
+            Some("accounted selection editing requires a plain native selection owner")
+        }
         "layer.setProps" if state.active_layer.is_none() => Some("no active layer"),
         "edit.undo" if !state.history.can_undo() => Some("nothing to undo"),
         "edit.redo" if !state.history.can_redo() => Some("nothing to redo"),
@@ -306,6 +320,7 @@ pub struct PreparedAccountedCommand<'a> {
     request: Request<'a>,
     snapshot: crate::document_snapshot::DocumentSnapshot,
     revision: u64,
+    view_revision: u64,
     journal: Vec<(String, Value)>,
     lease: QuotaLease,
     overlap: QuotaLease,
@@ -366,7 +381,7 @@ impl<'a> PreparedAccountedCommand<'a> {
         journal.push((copied_string(id)?, copied_value(params, control)?));
         control.check(1)?;
         let state = session.active().ok_or(EngineError::NoDocument)?;
-        Ok(Self { request, snapshot: state.doc.clone(), revision: state.revision, journal, lease, overlap, quota })
+        Ok(Self { request, snapshot: state.doc.clone(), revision: state.revision, view_revision: state.view_revision, journal, lease, overlap, quota })
     }
     pub fn execute(self, session: &mut Session, control: &ReadControl<'_>) -> Result<Value> {
         let outcome = self.execute_staged(session, control)?;
@@ -384,6 +399,9 @@ impl<'a> PreparedAccountedCommand<'a> {
         let state = session.active().ok_or(EngineError::NoDocument)?;
         if state.revision != self.revision || !state.doc.shares_state(&self.snapshot) {
             return Err(EngineError::Other("the prepared accounted command targets an older document state".into()));
+        }
+        if matches!(self.request, Request::ClearSelection | Request::ColorRange(_)) && state.view_revision != self.view_revision {
+            return Err(EngineError::Other("the prepared accounted selection targets an older view".into()));
         }
         let previous = self.journal.get(..self.journal.len().checked_sub(1).ok_or(BackingError::Integrity)?).ok_or(BackingError::Integrity)?;
         control.check(MAX_PAYLOAD as u64)?;
@@ -403,6 +421,12 @@ impl<'a> PreparedAccountedCommand<'a> {
                 session.edit_accounted(label, edit, control)?;
                 Value::Null
             }
+            Request::ClearSelection => {
+                let target = crate::accounted_selection_session::AccountedSelectionTarget::capture(session)?;
+                session.replace_accounted_selection(target, "Deselect", None, control)?;
+                Value::Null
+            }
+            Request::ColorRange(params) => crate::accounted_color_range::run(session, params, control)?,
             Request::Undo => Value::Bool(session.undo_with_control(control)?),
             Request::Redo => Value::Bool(session.redo_with_control(control)?),
         };

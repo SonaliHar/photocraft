@@ -1,6 +1,10 @@
-//! Explicit retained Colorize scalar-authority mathematical consumer. Stored
+//! Explicit retained Colorize caller-selected triplet mathematical consumer. Stored
 //! HSL bytes and scalar words remain independent. Transfer role and Y weights
 //! are supplied separately; the current ICC never supplies either by inference.
+//! Scalar and stored-HSL authority are distinct exact policies; neither is chosen
+//! from property order, metadata presence or a presumed redundant representation.
+//! Explicit StoredOrder policy alone replays the actual four-field order; it is
+//! never selected from source order automatically and grants no universal rule.
 //! One lease covers known selected argument/header/kernel capacities; whole
 //! source/AST/profile/mask/pruned backing must remain caller held/prepaid. No
 //! source-exact, hidden GIMP arithmetic, mask/outer/default enrollment is granted.
@@ -8,7 +12,7 @@ use crate::{
     gimp_composite::{CompositionError as E, Result},
     gimp_render::PreparationBudget,
 };
-pub use math::{NumericPolicy, Parameters, TransferRole, TransferWitness, YWeights};
+pub use math::{NumericPolicy, Parameters, StoredField, TransferRole, TransferWitness, YWeights};
 use photocraft_algo::gimp::{colorize_candidate as math, wide_point::WorkingContext};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{
@@ -119,6 +123,25 @@ pub fn stored_parameters(arguments: &[FilterArgument]) -> Result<Parameters> {
     }
     Parameters::from_stored_bits(scalar, hsl).map_err(lower)
 }
+/// Only the explicit replay policy attaches actual retained declaration order.
+/// Legacy scalar/HSL parameter constructors remain order-free and unchanged.
+pub fn stored_parameters_for_policy(arguments: &[FilterArgument], policy: NumericPolicy) -> Result<Parameters> {
+    let params = stored_parameters(arguments)?;
+    if policy != NumericPolicy::DeclaredStoredOrderBinary64FinalFloat {
+        return Ok(params);
+    }
+    let mut order = [StoredField::Color; 4];
+    for (slot, arg) in order.iter_mut().zip(arguments) {
+        *slot = match arg.name.as_str() {
+            "hue" => StoredField::Hue,
+            "saturation" => StoredField::Saturation,
+            "lightness" => StoredField::Lightness,
+            "color" => StoredField::Color,
+            _ => return Err(bad("known original Colorize stored order")),
+        };
+    }
+    params.with_order(order).map_err(lower)
+}
 fn bind(node: &FilterNode, b: SourceBinding<'_>, format: PixelFormat, c: &Interrupt<'_>) -> Result<Parameters> {
     poll(c)?;
     if b.xcf_version != 22
@@ -135,10 +158,10 @@ fn bind(node: &FilterNode, b: SourceBinding<'_>, format: PixelFormat, c: &Interr
         || format.mode != ColorMode::Rgb
         || format.sample != SampleType::F32
     {
-        return Err(bad("exact retained Colorize/scalar authority/domain/transfer witness"));
+        return Err(bad("exact retained Colorize/triplet authority/domain/transfer witness"));
     }
     YWeights::from_bits(b.weights.bits()).map_err(lower)?;
-    stored_parameters(&node.arguments)
+    stored_parameters_for_policy(&node.arguments, b.policy)
 }
 /// Allocation-free fixed four-argument census before any constructor/copy.
 pub fn requirements(node: &FilterNode, b: SourceBinding<'_>, format: PixelFormat, l: Limits, c: &Interrupt<'_>) -> Result<Requirements> {
@@ -363,5 +386,20 @@ mod tests {
         let mut budget = Budget::default();
         assert!(matches!(prepare(&n, b, PixelFormat::RGBA32F, Limits::default(), &mut budget, &Interrupt::cancel_only(&stop)), Err(E::Raster(R::Cancelled))));
         assert_eq!(budget.bytes, 0);
+    }
+    #[test]
+    fn only_explicit_replay_policy_attaches_actual_original_order() {
+        let n = node();
+        let params = stored_parameters_for_policy(&n.arguments, NumericPolicy::DeclaredStoredOrderBinary64FinalFloat).unwrap();
+        assert_eq!(params.stored_order(), Some([StoredField::Hue, StoredField::Color, StoredField::Saturation, StoredField::Lightness]));
+        for policy in [NumericPolicy::DeclaredScalarTripletBinary64FinalFloat, NumericPolicy::DeclaredHslTripletBinary64FinalFloat] {
+            assert_eq!(stored_parameters_for_policy(&n.arguments, policy).unwrap().stored_order(), None);
+        }
+        let mut changed = n.arguments.clone();
+        changed.swap(0, 1);
+        let other = stored_parameters_for_policy(&changed, NumericPolicy::DeclaredStoredOrderBinary64FinalFloat).unwrap();
+        assert_eq!(params.scalar_bits(), other.scalar_bits());
+        assert_eq!(params.stored_hsl_bits(), other.stored_hsl_bits());
+        assert_ne!(params, other);
     }
 }

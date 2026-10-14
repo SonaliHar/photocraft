@@ -195,6 +195,7 @@ fn pixels_to_lab(t: &photocraft_cms::Transform, px: &[[f32; 4]]) -> Vec<[f32; 4]
 
 /// Prepared Sampled Colors query shared by the command and its interactive preview.
 /// Samples always come from the original document; reducing an image must not change them.
+pub use color_range_controlled::backed::{ColorRangeCoverage, BackedColorRangePixels};
 pub struct ColorRangeSamples {
     to_lab: std::sync::Arc<photocraft_cms::Transform>,
     range: sel::LabRange,
@@ -202,6 +203,51 @@ pub struct ColorRangeSamples {
     fuzziness: f32,
     localized: Option<f32>,
     plus_at: Vec<(f32, f32)>,
+    backed: Option<std::sync::Arc<color_range_controlled::backed::Retention>>,
+}
+
+/// Move-owned backed preview query retaining source and quota owners.
+/// No legacy unleased buffer API is exposed.
+pub struct BackedColorRangeSamples {
+    query: ColorRangeSamples,
+}
+impl BackedColorRangeSamples {
+    pub fn new_with_interrupt(s: &Session, p: &Value, control: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
+        Ok(Self { query: color_range_controlled::backed::prepare(s, p, control, None)? })
+    }
+    /// Prepare on the caller's actual work ledger as well as the persistent query ceiling.
+    pub fn new_with_read_control(s: &Session, p: &Value, control: &photocraft_raster::backing::ReadControl<'_>) -> Result<Self> {
+        Ok(Self { query: color_range_controlled::backed::prepare(s, p, control.interrupt, Some(control))? })
+    }
+    pub fn charge_backed_preview_work_with_read_control(&self, units: u64, control: &photocraft_raster::backing::ReadControl<'_>) -> Result<()> {
+        color_range_controlled::backed::charge_preview(&self.query, units, control.interrupt, Some(control))
+    }
+    pub fn backed_pixels_with_read_control(&self, rect: Rect, control: &photocraft_raster::backing::ReadControl<'_>) -> Result<BackedColorRangePixels> {
+        color_range_controlled::backed::original_pixels(&self.query, rect, control.interrupt, Some(control))
+    }
+    pub fn coverage_backed_pixels_with_read_control(&self, pixels: &BackedColorRangePixels, limits: photocraft_algo::selection::ColorRangeLimits, control: &photocraft_raster::backing::ReadControl<'_>) -> Result<ColorRangeCoverage> {
+        color_range_controlled::backed::paired_coverage(&self.query, pixels, limits, control.interrupt, Some(control))
+    }
+    /// Backed-query output retains its source, CMS preparation and quota leases.
+    pub fn coverage_owned_with_interrupt(&self,px:&[[f32;4]],width:usize,scale:f32,origin:[f32;2],limits:photocraft_algo::selection::ColorRangeLimits,control:&photocraft_raster::Interrupt<'_>)->Result<ColorRangeCoverage> {
+        color_range_controlled::backed::owned_coverage(&self.query,px,width,scale,origin,limits,control,None)
+    }
+    /// Only backed prepared queries carry an original target witness.
+    pub fn backed_source_is_current(&self,s:&Session)->Option<bool> {
+        self.query.backed.as_ref().map(|owner|owner.matches(s))
+    }
+    /// Price bounded preview preparation on the same cumulative backed-query owner.
+    pub fn charge_backed_preview_work(&self,units:u64,control:&photocraft_raster::Interrupt<'_>)->Result<()> {
+        color_range_controlled::backed::charge_preview(&self.query,units,control,None)
+    }
+    /// Exact original-coordinate native input; no proxy resampling or merged fallback.
+    pub fn backed_pixels_with_interrupt(&self,rect:Rect,control:&photocraft_raster::Interrupt<'_>)->Result<BackedColorRangePixels> {
+        color_range_controlled::backed::original_pixels(&self.query,rect,control,None)
+    }
+    pub fn coverage_backed_pixels_with_interrupt(&self,pixels:&BackedColorRangePixels,limits:photocraft_algo::selection::ColorRangeLimits,control:&photocraft_raster::Interrupt<'_>)->Result<ColorRangeCoverage> {
+        color_range_controlled::backed::paired_coverage(&self.query,pixels,limits,control,None)
+    }
+
 }
 
 impl ColorRangeSamples {
@@ -221,7 +267,6 @@ impl ColorRangeSamples {
     pub fn coverage_with_interrupt(&self,px:&[[f32;4]],width:usize,scale:f32,origin:[f32;2],limits:photocraft_algo::selection::ColorRangeLimits,control:&photocraft_raster::Interrupt<'_>)->Result<Vec<f32>> {
         color_range_controlled::coverage(self,px,width,scale,origin,limits,control)
     }
-
     /// Coverage of a composite rectangle. `scale` is the original document pixels represented
     /// by one input pixel; `origin` is in original document pixels (for a visible canvas crop).
     pub fn coverage(&self, px: &[[f32; 4]], width: usize, scale: f32, origin: [f32; 2]) -> Vec<f32> {

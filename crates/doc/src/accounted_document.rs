@@ -1,6 +1,7 @@
 //! Persistent Session/history ownership for explicitly accounted native models.
 //! Borrowed Documents remain Clone-capable; callers must use this transaction
 //! API for the internally enforced lifecycle, rather than cloning the raw view.
+use crate::accounted_selection::{AccountedSelection, SelectionView, SelectionViewCharges};
 use crate::{BackedLayerError, Document, LayerContent, LayerId, WorkingProfileInterpretation};
 use photocraft_geom::Rect;
 use photocraft_raster::backing::{
@@ -26,8 +27,15 @@ impl ModelCensus {
         self.index.checked_add(self.payload).ok_or(BackingError::Length)
     }
 }
+// Error paths destroy document/default/map storage before refunding view leases.
+struct ModelStaging {
+    document: Document,
+    selection_view: Option<SelectionViewCharges>,
+}
 struct ModelOwner {
     document: Document,
+    _selection: Option<AccountedSelection>,
+    _selection_view: Option<SelectionViewCharges>,
     retention: Arc<dyn Any + Send + Sync>,
     quota: BackingQuota,
     _model: Option<ModelCharges>,
@@ -150,6 +158,22 @@ impl AccountedHistory {
         self.cursor = next;
         Ok(())
     }
+    pub fn try_replace_selection(&mut self, selection: Option<&AccountedSelection>, control: &ReadControl<'_>) -> Result<(), BackingError> {
+        if self.current()?.selection_noop(selection, control)? {
+            control.check(1)?;
+            return Ok(());
+        }
+        let next = self.cursor.checked_add(1).ok_or(BackingError::Length)?;
+        if next >= self.maximum {
+            return Err(BackingError::Quota);
+        }
+        let staged = self.current()?.try_replace_selection(selection, control)?;
+        control.check(1)?;
+        self.states.truncate(next);
+        self.states.push(staged);
+        self.cursor = next;
+        Ok(())
+    }
     pub fn undo(&mut self, control: &ReadControl<'_>) -> Result<bool, BackingError> {
         control.check(1)?;
         if self.cursor == 0 {
@@ -189,7 +213,9 @@ impl AccountedDocument {
         let lease = quota.reserve(QuotaKind::Index, (std::mem::size_of::<ModelOwner>() + 128) as u64).map_err(|_| BackingError::Quota)?;
         control.check(1)?;
         let Incoming { document, retention } = incoming;
-        Ok(Self { owner: Arc::new(ModelOwner { document, retention, quota, _model: None, _allocation: Arc::new(lease) }) })
+        Ok(Self {
+            owner: Arc::new(ModelOwner { document, _selection: None, _selection_view: None, retention, quota, _model: None, _allocation: Arc::new(lease) }),
+        })
     }
     pub fn document(&self) -> &Document {
         &self.owner.document
@@ -206,6 +232,86 @@ impl AccountedDocument {
     /// Ephemeral identity for a cache held with a live/weak owner, never authority.
     pub fn model_identity(&self) -> usize {
         Arc::as_ptr(&self.owner) as usize
+    }
+    fn selection_noop(&self, selection: Option<&AccountedSelection>, control: &ReadControl<'_>) -> Result<bool, BackingError> {
+        let doc = self.document();
+        control.check(1)?;
+        if doc.selection_channel_id.is_some() || doc.xcf_state.is_some() || doc.source_color_context.is_some() {
+            return Err(BackingError::Unsupported);
+        }
+        match (&doc.selection, self.owner._selection.as_ref()) {
+            (None, None) => {}
+            (Some(surface), Some(guard)) if guard.matches(surface, self.quota(), control)? => {}
+            _ => return Err(BackingError::Integrity),
+        }
+        if let Some(guard) = selection {
+            if !self.quota().shares_ledger(guard.quota()) {
+                return Err(BackingError::Integrity);
+            }
+            if guard.format() != photocraft_color::PixelFormat::new(crate::ColorMode::Grayscale, doc.depth, false)
+                || !doc.bounds().contains_rect(&guard.bounds())
+            {
+                return Err(BackingError::Bounds);
+            }
+        }
+        let noop = match (selection, &doc.selection) {
+            (None, None) => true,
+            (Some(guard), Some(surface)) => guard.matches(surface, self.quota(), control)?,
+            _ => false,
+        };
+        control.check(1)?;
+        Ok(noop)
+    }
+    /// Borrowed metadata admission only. This neither allocates a replacement nor
+    /// grants a proof; final typed publication independently repeats its checks.
+    pub fn validate_selection_replacement(&self, control: &ReadControl<'_>) -> Result<(), BackingError> {
+        self.selection_noop(None, control)?;
+        census(self.document(), false, self.owner._selection.as_ref(), self.quota(), control)?;
+        Ok(())
+    }
+    /// Separate source-free RequireNone pixel-selection transaction. Imported
+    /// selection roles or unguarded Surface payloads never acquire authority.
+    /// Exact no-op shares the model, preserving the caller's redo branch.
+    pub fn try_replace_selection(&self, selection: Option<&AccountedSelection>, control: &ReadControl<'_>) -> Result<Self, BackingError> {
+        if self.selection_noop(selection, control)? {
+            return Ok(self.clone());
+        }
+        let doc = self.document();
+        let logical = census(doc, false, self.owner._selection.as_ref(), self.quota(), control)?;
+        let owner_bytes = (std::mem::size_of::<ModelOwner>() + 128) as u64;
+        let index = logical.index.checked_sub(owner_bytes).ok_or(BackingError::Integrity)?;
+        let index_envelope = index.checked_mul(2).and_then(|v| v.checked_add(4096)).ok_or(BackingError::Length)?;
+        let payload_envelope = logical.payload.checked_mul(2).ok_or(BackingError::Length)?;
+        let allocation = self.quota().reserve(QuotaKind::Index, owner_bytes).map_err(|_| BackingError::Quota)?;
+        let mut index_lease = self.quota().reserve(QuotaKind::Index, index_envelope).map_err(|_| BackingError::Quota)?;
+        let mut payload_lease = self.quota().reserve(QuotaKind::Resident, payload_envelope).map_err(|_| BackingError::Quota)?;
+        let view = selection.map(|guard| guard.clone_view(control)).transpose()?;
+        control.check(logical.total()?)?;
+        let mut staged = ModelStaging { document: clone_model_without_selection(doc), selection_view: None };
+        if let Some(SelectionView { surface, charges }) = view {
+            staged.document.selection = Some(surface);
+            staged.selection_view = Some(charges);
+        }
+        let retained = census(&staged.document, true, selection, self.quota(), control)?;
+        let retained_index = retained.index.checked_sub(owner_bytes).ok_or(BackingError::Integrity)?;
+        if retained_index > index_envelope || retained.payload > payload_envelope {
+            return Err(BackingError::Allocation);
+        }
+        index_lease.reconcile_capacity(retained_index).map_err(|_| BackingError::Quota)?;
+        payload_lease.reconcile_capacity(retained.payload).map_err(|_| BackingError::Quota)?;
+        control.check(1)?;
+        let ModelStaging { document, selection_view } = staged;
+        Ok(Self {
+            owner: Arc::new(ModelOwner {
+                document,
+                _selection: selection.cloned(),
+                _selection_view: selection_view,
+                retention: self.owner.retention.clone(),
+                quota: self.quota().clone(),
+                _model: Some(ModelCharges { _index: index_lease, _payload: payload_lease }),
+                _allocation: Arc::new(allocation),
+            }),
+        })
     }
     /// Stage one separately charged model; errors preserve this history snapshot.
     /// Unknown collections refuse before clone. Native COW allocation uses the
@@ -236,7 +342,7 @@ impl AccountedDocument {
         {
             return Err(BackingError::Unsupported);
         }
-        let logical = census(doc, false, control)?;
+        let logical = census(doc, false, self.owner._selection.as_ref(), self.quota(), control)?;
         let owner_bytes = (std::mem::size_of::<ModelOwner>() + 128) as u64;
         let index = logical.index.checked_sub(owner_bytes).ok_or(BackingError::Integrity)?;
         let index_envelope = index.checked_add(extra).and_then(|v| v.checked_mul(2)).and_then(|v| v.checked_add(4096)).ok_or(BackingError::Length)?;
@@ -247,8 +353,13 @@ impl AccountedDocument {
         control.check(logical.total()?)?;
         // The admitted Clone only duplicates the prepaid bounded tree containers and
         // strings below. Native tiles/ICC/source guards retain shared ownership.
-        let mut document = doc.clone();
-        let layer = find_layer_mut(&mut document.layers, id, 0, control)?.ok_or(BackingError::Bounds)?;
+        let view = self.owner._selection.as_ref().map(|guard| guard.clone_view(control)).transpose()?;
+        let mut staged = ModelStaging { document: clone_model_without_selection(doc), selection_view: None };
+        if let Some(SelectionView { surface, charges }) = view {
+            staged.document.selection = Some(surface);
+            staged.selection_view = Some(charges);
+        }
+        let layer = find_layer_mut(&mut staged.document.layers, id, 0, control)?.ok_or(BackingError::Bounds)?;
         match edit {
             AccountedEdit::LayerVisibility { visible, .. } => layer.visible = visible,
             AccountedEdit::LayerOpacity { opacity, .. } => layer.opacity = opacity,
@@ -271,8 +382,8 @@ impl AccountedDocument {
                 layer.content = LayerContent::BackedRaster(staged);
             }
         }
-        sync_current_item(&mut document, edit)?;
-        let retained = census(&document, true, control)?;
+        sync_current_item(&mut staged.document, edit)?;
+        let retained = census(&staged.document, true, self.owner._selection.as_ref(), self.quota(), control)?;
         let retained_index = retained.index.checked_sub(owner_bytes).ok_or(BackingError::Integrity)?;
         if retained_index > index_envelope || retained.payload > payload_envelope {
             return Err(BackingError::Allocation);
@@ -280,9 +391,12 @@ impl AccountedDocument {
         index_lease.reconcile_capacity(retained_index).map_err(|_| BackingError::Quota)?;
         payload_lease.reconcile_capacity(retained.payload).map_err(|_| BackingError::Quota)?;
         control.check(1)?;
+        let ModelStaging { document, selection_view } = staged;
         Ok(Self {
             owner: Arc::new(ModelOwner {
                 document,
+                _selection: self.owner._selection.clone(),
+                _selection_view: selection_view,
                 retention: self.owner.retention.clone(),
                 quota: self.quota().clone(),
                 _model: Some(ModelCharges { _index: index_lease, _payload: payload_lease }),
@@ -491,7 +605,13 @@ fn validate_backed_layers(
 }
 /// Capacity census for an intentionally explicit bounded tree model-copy domain.
 /// Owned complex collections are refused, never assigned a fabricated size.
-fn census(doc: &Document, actual: bool, control: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
+fn census(
+    doc: &Document,
+    actual: bool,
+    selection_guard: Option<&AccountedSelection>,
+    expected_quota: &BackingQuota,
+    control: &ReadControl<'_>,
+) -> Result<ModelCensus, BackingError> {
     let crate::Metadata { xmp: _, exif: _, psd_resources: _, psd_global_blocks: _, text: _ } = &doc.metadata;
     let crate::Guides { horizontal: _, vertical: _, colors: _ } = &doc.guides;
     let crate::text_styles::TextStyles { character: _, paragraph: _, basic: _, psd_raw: _ } = &doc.text_styles;
@@ -543,7 +663,6 @@ fn census(doc: &Document, actual: bool, control: &ReadControl<'_>) -> Result<Mod
     } = doc;
     control.check(1)?;
     if !doc.channels.is_empty()
-        || doc.selection.is_some()
         || !doc.paths.is_empty()
         || doc.work_path.is_some()
         || doc.clipping_path.is_some()
@@ -566,6 +685,23 @@ fn census(doc: &Document, actual: bool, control: &ReadControl<'_>) -> Result<Mod
         || doc.timeline.is_some()
     {
         return Err(BackingError::Unsupported);
+    }
+    // Each actual selection view has its own map/default charge; only immutable
+    // native tiles are physically shared through this private, genuine guard.
+    match (&doc.selection, selection_guard) {
+        (None, None) => {}
+        (Some(surface), Some(guard)) => {
+            if doc.selection_channel_id.is_some()
+                || doc.xcf_state.is_some()
+                || doc.source_color_context.is_some()
+                || guard.format() != photocraft_color::PixelFormat::new(crate::ColorMode::Grayscale, doc.depth, false)
+                || !doc.bounds().contains_rect(&guard.bounds())
+                || !guard.matches(surface, expected_quota, control)?
+            {
+                return Err(BackingError::Unsupported);
+            }
+        }
+        _ => return Err(BackingError::Unsupported),
     }
     let mut size = (std::mem::size_of::<ModelOwner>() + 128) as u64;
     add_string(&mut size, &doc.name, actual)?;
@@ -886,7 +1022,9 @@ impl<'a, 'i> CanonicalCensus<'a, 'i> {
                 FilterValue::Enum { domain, value: _ } => self.string(domain)?,
                 FilterValue::Color { components, encoding: _, profile: _ } => self.vec(components, 16)?,
                 FilterValue::StoredColor(crate::xcf_filters::ExactColorStorage { layout, samples, opaque_tail }) => {
-                    if !crate::xcf_filters::stored_color_shape(layout, samples, opaque_tail) { return Err(BackingError::Length); }
+                    if !crate::xcf_filters::stored_color_shape(layout, samples, opaque_tail) {
+                        return Err(BackingError::Length);
+                    }
                     self.string(layout)?;
                     self.vec(samples, 1024)?;
                     self.vec(opaque_tail, 1 << 20)?;
@@ -1082,5 +1220,90 @@ impl<'a, 'i> CanonicalCensus<'a, 'i> {
             return Err(BackingError::Length);
         }
         Ok(self.counted)
+    }
+}
+
+// Exhaustive private clone: every other field keeps exactly its ordinary Clone
+// semantics. Selection is separately installed through its charged/polled view.
+fn clone_model_without_selection(doc: &Document) -> Document {
+    let Document {
+        physical_resolution,
+        xcf_state,
+        sample_encoding,
+        source_color_context,
+        working_profile_interpretation,
+        id,
+        name,
+        size,
+        resolution_dpi,
+        mode,
+        depth,
+        icc_profile,
+        layers,
+        channels,
+        guides,
+        selection: _,
+        selection_channel_id,
+        metadata,
+        global_light,
+        paths,
+        work_path,
+        clipping_path,
+        quick_mask,
+        quick_mask_unselected,
+        patterns,
+        color_table,
+        duotone,
+        layer_comps,
+        last_applied_comp,
+        last_document_state,
+        measurement,
+        notes,
+        text_styles,
+        slices,
+        variables,
+        timeline,
+        file_encoding,
+        ruler_origin,
+    } = doc;
+    Document {
+        physical_resolution: physical_resolution.clone(),
+        xcf_state: xcf_state.clone(),
+        sample_encoding: sample_encoding.clone(),
+        source_color_context: source_color_context.clone(),
+        working_profile_interpretation: working_profile_interpretation.clone(),
+        id: id.clone(),
+        name: name.clone(),
+        size: size.clone(),
+        resolution_dpi: resolution_dpi.clone(),
+        mode: mode.clone(),
+        depth: depth.clone(),
+        icc_profile: icc_profile.clone(),
+        layers: layers.clone(),
+        channels: channels.clone(),
+        guides: guides.clone(),
+        selection: None,
+        selection_channel_id: selection_channel_id.clone(),
+        metadata: metadata.clone(),
+        global_light: global_light.clone(),
+        paths: paths.clone(),
+        work_path: work_path.clone(),
+        clipping_path: clipping_path.clone(),
+        quick_mask: quick_mask.clone(),
+        quick_mask_unselected: quick_mask_unselected.clone(),
+        patterns: patterns.clone(),
+        color_table: color_table.clone(),
+        duotone: duotone.clone(),
+        layer_comps: layer_comps.clone(),
+        last_applied_comp: last_applied_comp.clone(),
+        last_document_state: last_document_state.clone(),
+        measurement: measurement.clone(),
+        notes: notes.clone(),
+        text_styles: text_styles.clone(),
+        slices: slices.clone(),
+        variables: variables.clone(),
+        timeline: timeline.clone(),
+        file_encoding: file_encoding.clone(),
+        ruler_origin: ruler_origin.clone(),
     }
 }

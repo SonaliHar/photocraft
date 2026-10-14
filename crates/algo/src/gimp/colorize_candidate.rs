@@ -1,12 +1,13 @@
-//! Explicit Colorize scalar-triplet mathematical hypothesis, not GIMP/source admission.
+//! Explicit caller-selected Colorize triplet hypotheses, not GIMP/source admission.
 //! Two sealed analyses retain strict profile/format HOLDs and ambiguous precision
-//! or redundant scalar-vs-HSL authority. We explicitly choose original scalar
-//! Float words, retaining independent native HSL words without reconstruction.
+//! or redundant scalar-vs-HSL authority. The caller selects scalar or stored HSL
+//! authority or exact four-entry declared replay; original triplets stay independent
+//! and are never overwritten. No universal setter/property-order rule is claimed.
 //! Caller establishes nonlinear RGB Float working context, IEC or exact gamma2
 //! transfer role and independently supplies finite nonnegative Y weights summing
 //! to one. Current ICC-derived weights are NOT inferred: the owned profile probe
 //! disproved that general recipe. No CMS, masks, outer/default eligibility grants.
-//! Binary64 decode -> weighted Y -> signed L -> scalar HSL -> matching encode ->
+//! Binary64 decode -> weighted Y -> selected signed L/H/S -> matching encode ->
 //! final Float. Native alpha/default/off-ROI words stay raw; no neutral shortcut.
 pub use super::brightness_contrast_candidate::{PreparationRequirements, Requirements};
 use super::wide_point::WorkingContext;
@@ -15,12 +16,20 @@ use photocraft_doc::SampleEncoding;
 use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
 use photocraft_raster::{Interrupt, MAX_CHECKED_RASTER_BYTES, RasterInputError, Surface, checked_region_byte_len};
 use std::sync::atomic::{AtomicU64, Ordering};
+/// Fixed bound includes either three Float promotions or those promotions plus
+/// unfused binary64 2*stored_lightness-1 and fixed four-entry replay.
+/// The pixel pipeline is unchanged.
 pub const PREPARATION_WORK: u64 = 512;
 /// Declared arithmetic work, not a measured libm/CPU-time promise.
 pub const SAMPLE_WORK: u64 = 1024;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NumericPolicy {
     DeclaredScalarTripletBinary64FinalFloat,
+    /// Independently caller-selected HSL storage authority. L becomes signed
+    /// lightness via unfused binary64 2*L-1; no universal source-order rule.
+    DeclaredHslTripletBinary64FinalFloat,
+    /// Explicit caller-selected fixed field replay; not automatic source authority.
+    DeclaredStoredOrderBinary64FinalFloat,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TransferRole {
@@ -70,10 +79,19 @@ impl std::error::Error for Error {}
 type Result<T> = std::result::Result<T, Error>;
 /// Independent retained scalar and native HSL words. There is deliberately no
 /// equality invariant or conversion between these representations.
+/// Exact four stored property declarations, not inferred UI/default setter order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StoredField {
+    Hue,
+    Saturation,
+    Lightness,
+    Color,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Parameters {
     scalar_f32_bits: [u32; 3],
     stored_hsl_f32_bits: [u32; 3],
+    stored_order: Option<[StoredField; 4]>,
 }
 impl Parameters {
     pub fn from_stored_bits(scalar_f32_bits: [u32; 3], stored_hsl_f32_bits: [u32; 3]) -> Result<Self> {
@@ -89,7 +107,31 @@ impl Parameters {
                 return Err(Error::Parameters);
             }
         }
-        Ok(Self { scalar_f32_bits, stored_hsl_f32_bits })
+        Ok(Self { scalar_f32_bits, stored_hsl_f32_bits, stored_order: None })
+    }
+    /// Attach an explicit complete singleton order only for the stored-order policy.
+    pub fn with_order(mut self, order: [StoredField; 4]) -> Result<Self> {
+        let mut seen = 0u8;
+        for field in order {
+            let bit = match field {
+                StoredField::Hue => 1,
+                StoredField::Saturation => 2,
+                StoredField::Lightness => 4,
+                StoredField::Color => 8,
+            };
+            if seen & bit != 0 {
+                return Err(Error::Parameters);
+            }
+            seen |= bit;
+        }
+        if seen != 15 {
+            return Err(Error::Parameters);
+        }
+        self.stored_order = Some(order);
+        Ok(self)
+    }
+    pub fn stored_order(&self) -> Option<[StoredField; 4]> {
+        self.stored_order
     }
     pub fn scalar_bits(&self) -> [u32; 3] {
         self.scalar_f32_bits
@@ -245,7 +287,33 @@ impl PreparedColorize {
         {
             return Err(Error::ContextMismatch);
         }
-        let [hue, saturation, lightness] = parameters.scalar_values();
+        if policy != NumericPolicy::DeclaredStoredOrderBinary64FinalFloat && parameters.stored_order().is_some() {
+            return Err(Error::Parameters);
+        }
+        let [hue, saturation, lightness] = match policy {
+            NumericPolicy::DeclaredScalarTripletBinary64FinalFloat => parameters.scalar_values(),
+            NumericPolicy::DeclaredHslTripletBinary64FinalFloat => {
+                let [h, s, l] = parameters.stored_hsl_bits().map(|bits| f64::from(f32::from_bits(bits)));
+                [h, s, 2.0 * l - 1.0]
+            }
+            NumericPolicy::DeclaredStoredOrderBinary64FinalFloat => {
+                let order = parameters.stored_order().ok_or(Error::Parameters)?;
+                let [sh, ss, sl] = parameters.scalar_values();
+                let [h, s, l] = parameters.stored_hsl_bits().map(|bits| f64::from(f32::from_bits(bits)));
+                // All three scalar fields and one color field occur exactly once;
+                // every final component is overwritten, with no parameter default.
+                let mut selected = [0.; 3];
+                for field in order {
+                    match field {
+                        StoredField::Hue => selected[0] = sh,
+                        StoredField::Saturation => selected[1] = ss,
+                        StoredField::Lightness => selected[2] = sl,
+                        StoredField::Color => selected = [h, s, 2.0 * l - 1.0],
+                    }
+                }
+                selected
+            }
+        };
         let values = weights.values();
         if values.iter().any(|x| !x.is_finite() || *x < 0.) || values.into_iter().sum::<f64>() != 1. {
             return Err(Error::Parameters);

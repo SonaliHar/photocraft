@@ -1,4 +1,6 @@
 //! Controlled upstream Sampled Colors query; no inferred native/source interpretation.
+#[path = "selection_backed_sampling.rs"]
+pub(super) mod backed;
 use super::{ColorRangeSamples, b, f, sel};
 use crate::{DocumentSnapshot, EngineError, Result, Session};
 use photocraft_color::{PixelFormat, SampleType, read_sample};
@@ -154,7 +156,7 @@ fn with_context(
     }
     let range = range.unwrap_or_else(foreground);
     poll(control)?;
-    Ok(ColorRangeSamples { to_lab, range, grid, fuzziness: fuzz(40.0), localized, plus_at })
+    Ok(ColorRangeSamples { to_lab, range, grid, fuzziness: fuzz(40.0), localized, plus_at, backed: context.backed.clone() })
 }
 
 fn decimal(value: &Value) -> Option<u64> {
@@ -415,6 +417,9 @@ pub(crate) fn preview_admission(session: &Session, p: &Value, control: &Interrup
     poll(control)?;
     envelope(p)?;
     target(session, p)?;
+    if session.active().is_some_and(|s| s.doc.accounted().is_some()) {
+        return backed::metadata(session, p, control);
+    }
     crate::selection_sample_policy::existing_selection(session, CMD, control)?;
     let state = session.active().ok_or(EngineError::NoDocument)?;
     let all = if supports(p) { all_layers(p) } else { true };
@@ -533,6 +538,7 @@ struct QueryContext {
     to_lab: std::sync::Arc<photocraft_cms::Transform>,
     grid: bool,
     foreground: [f32; 4],
+    backed: Option<std::sync::Arc<backed::Retention>>,
 }
 impl QueryContext {
     fn capture(session: &Session, control: &Interrupt<'_>) -> Result<Self> {
@@ -541,7 +547,7 @@ impl QueryContext {
         admission(&st.doc, 0, 0, false, control)?;
         let to_lab = super::lab_transform(session)?;
         poll(control)?;
-        Ok(Self { to_lab, grid: st.doc.depth == SampleType::U8, foreground: session.tools.foreground })
+        Ok(Self { to_lab, grid: st.doc.depth == SampleType::U8, foreground: session.tools.foreground, backed: None })
     }
 }
 pub(super) fn new_query(session: &Session, p: &Value, control: &Interrupt<'_>) -> Result<ColorRangeSamples> {
@@ -549,6 +555,9 @@ pub(super) fn new_query(session: &Session, p: &Value, control: &Interrupt<'_>) -
     target(session, p)?;
     if !matches!(preset(p)?, Preset::Sampled) {
         return Err(failure("Sampled Colors query required"));
+    }
+    if session.active().is_some_and(|s| s.doc.accounted().is_some()) {
+        return Err(failure("backed preview requires BackedColorRangeSamples"));
     }
     crate::selection_sample_policy::color_range_preview(session, p, control)?;
     let st = session.active().ok_or(EngineError::NoDocument)?;
@@ -604,6 +613,20 @@ pub(super) fn coverage(
     limits: sel::ColorRangeLimits,
     control: &Interrupt<'_>,
 ) -> Result<Vec<f32>> {
+    if query.backed.is_some() {
+        return Err(failure("backed query requires move-owned coverage output"));
+    }
+    coverage_inner(query, px, width, scale, origin, limits, control)
+}
+fn coverage_inner(
+    query: &ColorRangeSamples,
+    px: &[[f32; 4]],
+    width: usize,
+    scale: f32,
+    origin: [f32; 2],
+    limits: sel::ColorRangeLimits,
+    control: &Interrupt<'_>,
+) -> Result<Vec<f32>> {
     poll(control)?;
     let default = sel::ColorRangeLimits::default();
     if limits.resident_bytes > default.resident_bytes
@@ -626,7 +649,10 @@ pub(super) fn coverage(
         .filter(|n| *n <= limits.work_units)
         .ok_or_else(|| failure("query CMS/sample work limit"))?;
     let mut lab = reserve(px.len())?;
-    lab.resize(px.len(), [0.; 4]);
+    for start in (0..px.len()).step_by(4096) {
+        poll(control)?;
+        lab.resize(start.saturating_add(4096).min(px.len()), [0.; 4]);
+    }
     let mut source = reserve(512)?;
     for (input, output) in px.chunks(512).zip(lab.chunks_mut(512)) {
         poll(control)?;

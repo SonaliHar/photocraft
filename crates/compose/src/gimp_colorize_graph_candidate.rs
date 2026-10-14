@@ -2,6 +2,8 @@
 //! Float domain only. Full original source/constructor lease and all pruned original
 //! backing must stay held/prepaid before planning; preparation is never repeated. Y weights and transfer role are explicit witnesses;
 //! neither is inferred from the current ICC or stored HSL framing.
+//! Exact caller-selected scalar versus stored-HSL policy is fenced independently
+//! of both retained triplets and cannot be changed by property order.
 //! Output represents its authoritative ROI and intersecting edge tiles only.
 //! Defaults, alpha and outside-ROI words WITHIN those tiles remain raw; unrelated
 //! original tiles stay in the held source, not this graph output. No source,
@@ -101,7 +103,7 @@ fn input<'a, L>(b: &Binding<'_, '_, L>, r: &NodeRequest<'a>) -> Result<&'a Surfa
     {
         return Err(op("exact prepared graph node/arguments/context witness"));
     }
-    if crate::gimp_colorize_candidate::stored_parameters(&r.node.arguments).map_err(comp)? != b.prepared.parameters()
+    if crate::gimp_colorize_candidate::stored_parameters_for_policy(&r.node.arguments, b.policy).map_err(comp)? != b.prepared.parameters()
         || r.node.arguments.iter().zip(&original.arguments).any(|(a, o)| a.name != o.name)
     {
         return Err(op("independent Colorize scalar/HSL words or declaration order changed"));
@@ -453,6 +455,23 @@ mod tests {
         pixels.try_read_interleaved_into_with(full, &mut preserved, &Interrupt::NONE).unwrap();
         assert_eq!(preserved.as_slice(), raw.as_slice());
         let remaining = prepared.requirements().remaining_work_units;
+        let wrong_policy = Binding { policy: source::NumericPolicy::DeclaredHslTripletBinary64FinalFloat, ..binding };
+        assert!(
+            execute_pipeline_with_roi(
+                &graph,
+                2,
+                Some(&pixels),
+                roi,
+                domain,
+                ExecutionLimits::default(),
+                &Interrupt::NONE,
+                |_, d, p| accepts_port(d, p),
+                |r| footprint(&wrong_policy, r),
+                |r, b| evaluate(&wrong_policy, r, b)
+            )
+            .is_err()
+        );
+        assert_eq!(prepared.requirements().remaining_work_units, remaining);
         let wrong = Binding { weights: source::YWeights::from_bits([0.5f64.to_bits(), 0.25f64.to_bits(), 0.25f64.to_bits()]).unwrap(), ..binding };
         assert!(
             execute_pipeline_with_roi(
@@ -470,6 +489,44 @@ mod tests {
             .is_err()
         );
         assert_eq!(prepared.requirements().remaining_work_units, remaining);
+        let replay_policy = source::NumericPolicy::DeclaredStoredOrderBinary64FinalFloat;
+        let replay = source::prepare(
+            &original,
+            source::SourceBinding {
+                xcf_version: 22,
+                expected_epoch: source::EPOCH,
+                schema_sha256: source::SCHEMA,
+                context,
+                policy: replay_policy,
+                transfer,
+                weights,
+            },
+            PixelFormat::RGBA32F,
+            source::Limits::default(),
+            &mut Prep,
+            &Interrupt::NONE,
+        )
+        .unwrap();
+        let mut reordered = graph.clone();
+        reordered.nodes[0].arguments.swap(0, 3);
+        let cross_order = Binding { node: &reordered.nodes[0], prepared: &replay, policy: replay_policy, ..binding };
+        let left = replay.requirements().remaining_work_units;
+        assert!(
+            execute_pipeline_with_roi(
+                &reordered,
+                2,
+                Some(&pixels),
+                roi,
+                domain,
+                ExecutionLimits::default(),
+                &Interrupt::NONE,
+                |_, d, p| accepts_port(d, p),
+                |r| footprint(&cross_order, r),
+                |r, b| evaluate(&cross_order, r, b)
+            )
+            .is_err()
+        );
+        assert_eq!(replay.requirements().remaining_work_units, left);
     }
     #[test]
     fn negative_partial_roi_prices_complete_edge_tiles() {

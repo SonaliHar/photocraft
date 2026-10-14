@@ -748,7 +748,13 @@ impl Session {
             crate::selection_refine_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
         }
         if id == "select.colorRange" {
-            crate::selection_cmds::color_range_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+            if self.active().is_some_and(|state| state.doc.accounted().is_some()) {
+                // The paid branch below runs its bounded synchronous native lane.
+                // Resident preparation must not reject it before authorization.
+                crate::accounted_color_range::validate_request(&params)?;
+            } else {
+                crate::selection_cmds::color_range_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+            }
         }
         if id == "channel.split" {
             crate::channel_cmds::split_dispatch_preflight(self, &params, background || self.jobs.spawn)?;

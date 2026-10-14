@@ -21,6 +21,8 @@ use crate::PhotocraftApp;
 use crate::state::DialogKind;
 use crate::theme::Tokens;
 use crate::widgets;
+#[path = "color_range_ui/backed.rs"]
+mod backed;
 
 /// The engine command the dialog drives.
 pub const COMMAND: &str = "select.colorRange";
@@ -182,7 +184,7 @@ pub struct Preview {
     revision: u64,
     /// Proxy scale: proxy pixel = `k` document pixels.
     k: u32,
-    proxy: Arc<Document>,
+    proxy: Option<Arc<Document>>,
     image: Option<egui::TextureHandle>,
     /// Hash of the params the mask texture shows.
     mask_key: u64,
@@ -192,6 +194,8 @@ pub struct Preview {
     canvas_proxy: Option<(u32, Arc<Document>)>,
     overlay: Option<egui::TextureHandle>,
     overlay_key: u64,
+    // Last: derivative textures are released before native backing reservations.
+    backed: Option<backed::NativePreview>,
 }
 
 fn hash(text: &str) -> u64 {
@@ -363,7 +367,7 @@ fn report(app: &mut PhotocraftApp, error: Option<String>) {
     let Some(p) = app.color_range.as_mut() else { return };
     if error.is_some() {
         // A failed query must not install a zero-mask success or retain an older overlay.
-        p.mask=None;p.mask_key=0;p.overlay=None;p.overlay_key=0;
+        p.mask=None;p.mask_key=0;p.overlay=None;p.overlay_key=0;p.backed=None;
     }
     if p.error != error {
         if let Some(e) = &error {
@@ -382,6 +386,13 @@ fn preview(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Map<String, Value>)
     let key=preview_key(app,f,&params,image_view);
     if let Some(error)=crate::color_range_origin::preview_failure(app,key) {app.ui.status=error.to_owned();app.ui.status_error=true;return None;}
     if let Err(error)=photocraft_engine::selection_cmds::color_range_preview_admission(&app.session,&params,&photocraft_raster::Interrupt::NONE) {return fail_preview(app,key,error.to_string());}
+    if app.session.active().is_some_and(|state|state.doc.accounted().is_some()) {
+        if image_view {return fail_preview(app,key,tl!("Image preview is unavailable for this document in Color Range.").into());}
+        return match backed::preview(app,ctx,&params,key) {
+            Ok(result)=>{crate::color_range_origin::clear_preview_failure(app);report(app,None);Some(result)},
+            Err(error)=>fail_preview(app,key,error),
+        };
+    }
     let (doc_id, revision, doc) = {
         let st = app.session.active()?;
         (st.doc.id, st.revision, st.doc.clone())
@@ -399,7 +410,7 @@ fn preview(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Map<String, Value>)
             doc: doc_id,
             revision,
             k,
-            proxy,
+            proxy: Some(proxy),
             image: None,
             mask_key: 0,
             mask: None,
@@ -407,11 +418,12 @@ fn preview(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Map<String, Value>)
             canvas_proxy: None,
             overlay: None,
             overlay_key: 0,
+            backed: None,
         });
     }
     let (proxy, k) = {
         let p = app.color_range.as_ref()?;
-        (p.proxy.clone(), p.k)
+        (p.proxy.as_ref()?.clone(), p.k)
     };
     let (w, h) = (proxy.size.width as usize, proxy.size.height as usize);
     if image_view {
@@ -692,6 +704,12 @@ pub(crate) fn paint_selection_preview(app: &mut PhotocraftApp, ctx: &egui::Conte
     // Refresh the document/revision cache before borrowing its canvas proxy.
     let _ = preview(app, ctx, &fields);
     if app.color_range.as_ref().is_none_or(|preview|preview.doc!=doc || preview.error.is_some()) {return;}
+    if app.session.active().is_some_and(|state|state.doc.accounted().is_some()) {
+        if let Err(error)=backed::paint_overlay(app,ctx,painter,doc,image,flip,mode) {
+            crate::color_range_origin::remember_preview_failure(app,failure_key,&error);report(app,Some(error));
+        }
+        return;
+    }
     if app.color_range.as_ref().is_some_and(|p| p.canvas_proxy.is_none()) {
         let Some(original) = app.session.active().map(|st| st.doc.clone()) else { return };
         let k = original.size.width.max(original.size.height).max(1).div_ceil(CANVAS_PREVIEW);
@@ -989,7 +1007,7 @@ mod tests {
         let fields = h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
         let cached = |app: &PhotocraftApp| {
             let p = app.color_range.as_ref().unwrap();
-            (p.mask_key, p.overlay_key, p.mask.as_ref().unwrap().id(), p.overlay.as_ref().unwrap().id(), Arc::as_ptr(&p.proxy))
+            (p.mask_key, p.overlay_key, p.mask.as_ref().unwrap().id(), p.overlay.as_ref().unwrap().id(), Arc::as_ptr(p.proxy.as_ref().unwrap()))
         };
         let before = cached(h.state());
         let st = h.state().session.active().unwrap();

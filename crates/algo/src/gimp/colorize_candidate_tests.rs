@@ -160,3 +160,181 @@ fn reserved_roi_initialization_polls_after_each_bounded_chunk() {
     assert_eq!(raw.len(), 64 * 1024);
     assert!(raw.iter().all(|v| *v == 0));
 }
+
+#[test]
+fn declared_hsl_authority_keeps_conflicting_scalar_words_independent() {
+    let hsl = [0.25f32, 0.75, 0.25].map(f32::to_bits);
+    let a = Parameters::from_stored_bits([0.0f32, 0.25, 0.5].map(f32::to_bits), hsl).unwrap();
+    let b = Parameters::from_stored_bits([0.75f32, 0.5, -0.5].map(f32::to_bits), hsl).unwrap();
+    for role in [TransferRole::CallerEstablishedIecSrgb, TransferRole::CallerEstablishedExactGamma2] {
+        let make = |params, policy| {
+            PreparedColorize::prepare(PixelFormat::RGBA32F, context(), params, policy, witness(role), weights(), Limits::default(), &Interrupt::NONE).unwrap()
+        };
+        let scalar_a = make(a, NumericPolicy::DeclaredScalarTripletBinary64FinalFloat);
+        let scalar_b = make(b, NumericPolicy::DeclaredScalarTripletBinary64FinalFloat);
+        let hsl_a = make(a, NumericPolicy::DeclaredHslTripletBinary64FinalFloat);
+        let hsl_b = make(b, NumericPolicy::DeclaredHslTripletBinary64FinalFloat);
+        let input = [0.8, 0.4, 0.2];
+        assert_ne!(scalar_a.try_eval_float_color(input).unwrap(), scalar_b.try_eval_float_color(input).unwrap());
+        assert_eq!(hsl_a.try_eval_float_color(input).unwrap(), hsl_b.try_eval_float_color(input).unwrap());
+        assert_ne!(hsl_a.try_eval_float_color(input).unwrap(), scalar_a.try_eval_float_color(input).unwrap());
+        assert_eq!(hsl_a.parameters(), a);
+        assert_eq!(hsl_b.parameters(), b);
+    }
+}
+#[test]
+fn hsl_mid_lightness_matches_explicit_signed_zero_without_raw_neutral_shortcut() {
+    let params = Parameters::from_stored_bits([0.25f32, 0., 0.].map(f32::to_bits), [0.25f32, 0., 0.5].map(f32::to_bits)).unwrap();
+    let scalar = prepare(params, TransferRole::CallerEstablishedExactGamma2);
+    let hsl = PreparedColorize::prepare(
+        PixelFormat::RGBA32F,
+        context(),
+        params,
+        NumericPolicy::DeclaredHslTripletBinary64FinalFloat,
+        witness(TransferRole::CallerEstablishedExactGamma2),
+        weights(),
+        Limits::default(),
+        &Interrupt::NONE,
+    )
+    .unwrap();
+    let input = [0.8, 0.4, 0.2];
+    let expected = scalar.try_eval_float_color(input).unwrap();
+    assert_eq!(hsl.try_eval_float_color(input).unwrap(), expected);
+    assert_ne!(expected, input);
+    assert_eq!(hsl.parameters().scalar_bits(), params.scalar_bits());
+    assert_eq!(hsl.parameters().stored_hsl_bits(), params.stored_hsl_bits());
+    assert_eq!(hsl.sample_work(), scalar.sample_work());
+}
+#[test]
+fn hsl_policy_native_roi_and_cancellation_keep_same_raw_alpha_default_and_quota() {
+    let params = Parameters::from_stored_bits([0.75f32, 0.25, 0.5].map(f32::to_bits), [0.25f32, 0.5, 0.25].map(f32::to_bits)).unwrap();
+    let p = PreparedColorize::prepare(
+        PixelFormat::RGBA32F,
+        context(),
+        params,
+        NumericPolicy::DeclaredHslTripletBinary64FinalFloat,
+        witness(TransferRole::CallerEstablishedIecSrgb),
+        weights(),
+        Limits::default(),
+        &Interrupt::NONE,
+    )
+    .unwrap();
+    let s = surface(&[[f32::NAN, 0., 0., 0.], [0.8, 0.4, 0.2, f32::from_bits(0x7fc01234)], [0.2, 0.4, 0.6, -0.]]);
+    let before = s.try_read_interleaved(Rect::new(0, 0, 3, 1)).unwrap();
+    let out = p.apply(&s, Rect::new(1, 0, 2, 1), context(), Limits::default(), &Interrupt::NONE).unwrap();
+    let raw = out.try_read_interleaved(Rect::new(0, 0, 3, 1)).unwrap();
+    assert_eq!(&raw[..16], &before[..16]);
+    assert_eq!(&raw[28..], &before[28..]);
+    assert_eq!(out.default_bytes(), s.default_bytes());
+    let stop = || true;
+    let left = p.remaining_work();
+    assert!(matches!(
+        p.evaluate_color_with_interrupt([0.8, 0.4, 0.2], context(), p.transfer_witness(), &Interrupt::cancel_only(&stop)),
+        Err(Error::Raster(RasterInputError::Cancelled))
+    ));
+    assert_eq!(p.remaining_work(), left);
+}
+
+#[test]
+fn declared_four_order_replays_contrast_independent_component_authorities() {
+    use StoredField::{Color, Hue, Lightness, Saturation};
+    let raw = Parameters::from_stored_bits([0.125f32, 0.75, 0.25].map(f32::to_bits), [0.25f32, 0.5, 0.375].map(f32::to_bits)).unwrap();
+    assert_eq!(raw.stored_order(), None);
+    let cases = [
+        ([Hue, Saturation, Lightness, Color], [0.25f32, 0.5, -0.25]),
+        ([Color, Hue, Saturation, Lightness], [0.125, 0.75, 0.25]),
+        ([Hue, Color, Saturation, Lightness], [0.25, 0.75, 0.25]),
+        ([Hue, Saturation, Color, Lightness], [0.25, 0.5, 0.25]),
+    ];
+    for role in [TransferRole::CallerEstablishedIecSrgb, TransferRole::CallerEstablishedExactGamma2] {
+        let mut observed = Vec::new();
+        for (order, expected) in cases {
+            let ordered = raw.with_order(order).unwrap();
+            let p = PreparedColorize::prepare(
+                PixelFormat::RGBA32F,
+                context(),
+                ordered,
+                NumericPolicy::DeclaredStoredOrderBinary64FinalFloat,
+                witness(role),
+                weights(),
+                Limits::default(),
+                &Interrupt::NONE,
+            )
+            .unwrap();
+            let reference = prepare(Parameters::from_stored_bits(expected.map(f32::to_bits), raw.stored_hsl_bits()).unwrap(), role);
+            let actual = p.try_eval_float_color([0.8, 0.4, 0.2]).unwrap();
+            assert_eq!(actual, reference.try_eval_float_color([0.8, 0.4, 0.2]).unwrap());
+            observed.push(actual);
+            assert_eq!(p.parameters().scalar_bits(), raw.scalar_bits());
+            assert_eq!(p.parameters().stored_hsl_bits(), raw.stored_hsl_bits());
+            assert_eq!(p.parameters().stored_order(), Some(order));
+        }
+        for i in 0..observed.len() {
+            for j in i + 1..observed.len() {
+                assert_ne!(observed[i], observed[j]);
+            }
+        }
+    }
+}
+#[test]
+fn stored_order_requires_complete_order_and_is_not_attached_to_legacy_parameters() {
+    use StoredField::{Color, Hue, Lightness, Saturation};
+    let raw = parameters([0.125, 0.75, 0.25]);
+    assert!(raw.with_order([Hue, Hue, Lightness, Color]).is_err());
+    assert!(matches!(
+        PreparedColorize::prepare(
+            PixelFormat::RGBA32F,
+            context(),
+            raw,
+            NumericPolicy::DeclaredStoredOrderBinary64FinalFloat,
+            witness(TransferRole::CallerEstablishedIecSrgb),
+            weights(),
+            Limits::default(),
+            &Interrupt::NONE
+        ),
+        Err(Error::Parameters)
+    ));
+    let ordered = raw.with_order([Color, Hue, Saturation, Lightness]).unwrap();
+    for policy in [NumericPolicy::DeclaredScalarTripletBinary64FinalFloat, NumericPolicy::DeclaredHslTripletBinary64FinalFloat] {
+        assert!(matches!(
+            PreparedColorize::prepare(
+                PixelFormat::RGBA32F,
+                context(),
+                ordered,
+                policy,
+                witness(TransferRole::CallerEstablishedIecSrgb),
+                weights(),
+                Limits::default(),
+                &Interrupt::NONE
+            ),
+            Err(Error::Parameters)
+        ));
+    }
+    assert_eq!(raw, Parameters::from_stored_bits(raw.scalar_bits(), raw.stored_hsl_bits()).unwrap());
+    assert_eq!(raw.stored_order(), None);
+}
+#[test]
+fn stored_order_same_pixel_quota_and_cancellation_do_not_reset() {
+    let params = parameters([0.125, 0.75, 0.25]).with_order([StoredField::Hue, StoredField::Color, StoredField::Saturation, StoredField::Lightness]).unwrap();
+    let limits = Limits { work_units: PREPARATION_WORK + SAMPLE_WORK, ..Limits::default() };
+    let p = PreparedColorize::prepare(
+        PixelFormat::RGBA32F,
+        context(),
+        params,
+        NumericPolicy::DeclaredStoredOrderBinary64FinalFloat,
+        witness(TransferRole::CallerEstablishedIecSrgb),
+        weights(),
+        limits,
+        &Interrupt::NONE,
+    )
+    .unwrap();
+    p.evaluate_color_with_interrupt([0.8, 0.4, 0.2], context(), p.transfer_witness(), &Interrupt::NONE).unwrap();
+    assert_eq!(p.remaining_work(), 0);
+    assert!(p.evaluate_color_with_interrupt([0.8, 0.4, 0.2], context(), p.transfer_witness(), &Interrupt::NONE).is_err());
+    let stop = || true;
+    assert!(matches!(
+        p.evaluate_color_with_interrupt([0.8, 0.4, 0.2], context(), p.transfer_witness(), &Interrupt::cancel_only(&stop)),
+        Err(Error::Raster(RasterInputError::Cancelled))
+    ));
+    assert_eq!(p.remaining_work(), 0);
+}

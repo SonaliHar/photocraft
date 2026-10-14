@@ -370,6 +370,45 @@ impl DocumentHistory {
             Ok(snapshot)
         })
     }
+    /// Typed charged pixel selection, separate from layer-target transactions.
+    pub fn try_commit_accounted_selection(
+        &mut self,
+        selection: Option<&photocraft_doc::accounted_selection::AccountedSelection>,
+        label: &str,
+        layers: &LayerTarget,
+        ctl: &ReadControl<'_>,
+    ) -> Result<DocumentSnapshot, BackingError> {
+        if !matches!(self.branch, Branch::Accounted(_)) {
+            return Err(BackingError::Unsupported);
+        }
+        self.sync_limits()?;
+        let max_states = self.max_states;
+        let Branch::Accounted(owner) = &self.branch else { return Err(BackingError::Unsupported) };
+        let current = owner.states.get(owner.cursor).ok_or(BackingError::Integrity)?;
+        let meta = Arc::new(metadata(current.document.quota(), label, layers, ctl)?);
+        let staged = current.document.try_replace_selection(selection, ctl)?;
+        let snapshot = DocumentSnapshot::from_accounted(staged.clone())?;
+        if staged.shares_model(&current.document) {
+            ctl.check(1)?;
+            return Ok(snapshot);
+        }
+        self.update(ctl, |h| {
+            let next = h.cursor.checked_add(1).ok_or(BackingError::Length)?;
+            let drop_oldest = h.cursor >= max_states;
+            let retained = next.checked_sub(usize::from(drop_oldest)).ok_or(BackingError::Integrity)?;
+            if retained >= h.states.capacity() {
+                return Err(BackingError::Integrity);
+            }
+            ctl.check(1)?;
+            h.states.truncate(next);
+            if drop_oldest {
+                h.states.remove(0);
+            }
+            h.states.push(Entry { document: staged, metadata: meta });
+            h.cursor = retained;
+            Ok(snapshot)
+        })
+    }
     fn travel(&mut self, current: &DocumentSnapshot, redo: bool, ctl: &ReadControl<'_>) -> Result<Option<HistoryChange>, BackingError> {
         if let Branch::Resident(h) = &mut self.branch {
             current.validate_resident()?;
