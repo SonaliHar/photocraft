@@ -530,7 +530,8 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
             for p in 0..nc {
                 for y in 0..hu {
                     for x in 0..wu {
-                        out.extend_from_slice(&d[idx(p, y, x)].to_be_bytes());
+                        let v = d[idx(p, y, x)].clamp(0.0, 1.0);
+                        out.extend_from_slice(&v.to_be_bytes());
                     }
                 }
             }
@@ -620,6 +621,14 @@ mod tests {
         b.extend_from_slice(&[10, 20]);
         let img = decode(&b, &Limits::default()).unwrap();
         assert_eq!(img.data(), &[10, 20]);
+    }
+
+    #[test]
+    fn f32_above_one_round_trips_in_documented_range() {
+        let img = Image::from_f32(2, 1, ChannelLayout::Gray, &[0.5, 3.0]).unwrap();
+        let bytes = crate::encode(&img, F, &EncodeOptions::default()).unwrap();
+        let back = decode(&bytes, &Limits::default()).unwrap();
+        assert_eq!(back.to_f32_samples().unwrap(), vec![0.5, 1.0]);
     }
 
     #[test]
