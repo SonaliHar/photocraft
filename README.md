@@ -184,4 +184,8 @@ Licensed, like PhotoCraft, under either of [MIT](LICENSE-MIT) or [Apache-2.0](LI
 assets and their licenses are listed in [ATTRIBUTION.md](ATTRIBUTION.md) and [NOTICE](NOTICE). The ArtCraft logos are not
 open source and aren't used here.
 
+For the license we *wish* we had, see the [ParodyShop™ Proprietary Subscription License Agreement](LICENSE-PROPRIETARY.md)
+(Version 9000.0, effective retroactively). It's a joke and grants or restricts nothing; the MIT and Apache-2.0
+licenses above are the real ones.
+
 The license, unlike everything else, is free.
