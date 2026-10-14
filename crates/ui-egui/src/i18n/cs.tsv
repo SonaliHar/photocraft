@@ -3752,3 +3752,8 @@ navigator	Zoom	Zvětšení
 	Sent to {printer}	Odesláno do {printer}
 	set in Print Settings…	nastavuje se v nastavení tisku…
 	ICO is limited to 256 × 256 pixels	ICO je omezen na 256 × 256 pixelů
+
+# Color Table (.act) dialog
+	Export Swatches as Color Table…	Exportovat vzorníky jako tabulku barev…
+	There is no color table to save.	Neexistuje žádná tabulka barev k uložení.
+@plural	Saved {n} color to {file}|Saved {n} colors to {file}	Uložena {n} barva do {file}|Uloženy {n} barvy do {file}|Uloženo {n} barev do {file}

@@ -3133,3 +3133,8 @@ curves	Smooth	Haluskan
 	Sent to {printer}	Dikirim ke {printer}
 	set in Print Settings…	diatur di Pengaturan Cetak…
 	ICO is limited to 256 × 256 pixels	ICO dibatasi hingga 256 × 256 piksel
+
+# Color Table (.act) dialog
+	Export Swatches as Color Table…	Ekspor swatch sebagai Tabel Warna…
+	There is no color table to save.	Tidak ada tabel warna untuk disimpan.
+@plural	Saved {n} color to {file}|Saved {n} colors to {file}	{n} warna disimpan ke {file}
