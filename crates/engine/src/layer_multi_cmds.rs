@@ -96,7 +96,7 @@ pub(crate) fn reselect(s: &mut Session, ids: Vec<LayerId>, active: Option<LayerI
         }
         crate::fix_selection(st);
         let layers = st.layer_target();
-        st.history.set_current_layers(layers);
+        st.history.set_current_target(layers);
     }
 }
 

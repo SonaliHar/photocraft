@@ -6,6 +6,26 @@ The feature inventory and proposed product work are tracked in
 Search, bookmarks, branch naming, a larger branch overview and comparison previews
 are follow-up product work, not claims about this port.
 
+## Shared library extraction
+
+The navigation engine now lives in `craft-history` in
+[craft-libs](https://github.com/storytold/craft-libs). PhotoCraft pins an immutable
+library revision and `photocraft-ops` provides the `PhotoCraftHistory` policy:
+document and target types, selection metadata, identity remapping, and tile/blob
+memory accounting. State identities, alternate branches, navigation, checkpoint
+validation, lazy archive handles and state/memory-limit enforcement are shared.
+
+The library has no PhotoCraft, UI, filesystem or native-format dependency.
+PhotoCraft retains native scratch serialization, exact compact raster replay,
+shared-session spill scheduling, recovery v1/v2 files and locks, engine commands,
+thumbnail generation and the history panel. The on-disk `layers`/`current_layers`
+fields retain their original names and meaning, despite generic `target` naming
+inside the library. Existing recovery files remain compatible.
+
+The shared tests use independent spreadsheet-like and slide/text models, including
+mixed branching/navigation/checkpoint sequences. These prove an independent API;
+PhotoCraft is the first integrated app, and the other apps have not been migrated.
+
 ## Sources and commit boundaries
 
 The inspected source is fork `main` at
@@ -27,9 +47,11 @@ its menus, dependencies and translations remain intact.
 | Short-dock footer | `2889675e` / fork #36: keep snapshot/history controls reachable. |
 | Snapshot-name independence | `c49c323d` / fork #36: state growth drives scrolling even when a snapshot shares an action's name; virtualized snapshots coexist with states. |
 | Current upstream compatibility | Reconcile native-format source/loader changes, current movement APIs, background recovery, theme tokens, snapshot controls, and index-based navigation. Retain upstream accounting oracles for masks, selections, patterns, video, coalesced states and transferred tiles. |
+| Shared library adoption | Extract generic navigation/archive/checkpoint machinery into [craft-libs #104](https://github.com/storytold/craft-libs/pull/104), retaining PhotoCraft adapters and all behavioral tests. |
 
-The first nine commits retain cherry-pick provenance. The final adaptation commit
-records conflict resolution and fixes needed for current upstream. The series has
+The first nine commits retain cherry-pick provenance. The compatibility commit
+records conflict resolution and fixes needed for current upstream; a subsequent
+commit adopts the shared library. The series has
 no fork-main merge and includes no runtime-theme catalog, HDR implementation,
 extra export writers or collaboration networking dependency.
 

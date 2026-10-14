@@ -171,7 +171,7 @@ fn checkpoint_preserves_current_undo_redo_and_lazy_lease_at_every_depth() {
 fn failed_history_load_preserves_previous_complete_checkpoint() {
     #[derive(Debug)]
     struct Broken;
-    impl photocraft_ops::ArchivedDocument for Broken {
+    impl photocraft_ops::ArchivedDocument<photocraft_ops::PhotoCraftHistory> for Broken {
         fn load(&self) -> std::result::Result<Arc<photocraft_doc::Document>, String> {
             Err("cold history unavailable".into())
         }
@@ -226,7 +226,7 @@ fn blocked_worker_retains_only_newest_pending_snapshot() {
         entered: std::sync::mpsc::Sender<()>,
         release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
     }
-    impl photocraft_ops::ArchivedDocument for Blocked {
+    impl photocraft_ops::ArchivedDocument<photocraft_ops::PhotoCraftHistory> for Blocked {
         fn load(&self) -> std::result::Result<Arc<photocraft_doc::Document>, String> {
             self.entered.send(()).map_err(|e| e.to_string())?;
             self.release.lock().map_err(|e| e.to_string())?.recv().map_err(|e| e.to_string())?;

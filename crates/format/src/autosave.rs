@@ -357,7 +357,7 @@ fn save_checkpoint(writer: &mut PcraftWriter, verified: &mut HashMap<PathBuf, Fi
                 label: state.label.clone(),
                 has_selection: state.has_selection(),
                 manifest,
-                layers: state.layers.clone(),
+                layers: state.target.clone(),
                 identity: state.identity,
             });
         }
@@ -374,7 +374,7 @@ fn save_checkpoint(writer: &mut PcraftWriter, verified: &mut HashMap<PathBuf, Fi
         branches,
         current_identity: job.history.current_identity,
         current_label: job.history.current_label.clone(),
-        current_layers: job.history.current_layers.clone(),
+        current_layers: job.history.current_target.clone(),
         max_states: job.history.max_states,
         max_bytes: job.history.max_bytes,
     };
@@ -513,7 +513,7 @@ impl RecoverySource {
         store::load_cached(self, &LoadOptions::default(), Some(&mut tiles), Some(&mut blobs))
     }
 }
-impl ArchivedDocument for RecoverySource {
+impl ArchivedDocument<photocraft_ops::PhotoCraftHistory> for RecoverySource {
     fn load(&self) -> std::result::Result<Arc<Document>, String> {
         self.load_native().map(Arc::new).map_err(|e| e.to_string())
     }
@@ -611,7 +611,7 @@ pub fn recover_checkpoint_with_context(entry: &RecoveryEntry) -> Result<(Documen
                 let source = RecoverySource { lease: lease.clone(), manifest: state.manifest };
                 // Validate manifest syntax now; object reads remain lazy and fallible.
                 store::read_manifest(&source, &LoadOptions::default())?;
-                let mut restored = HistoryState::from_archive(state.label, state.has_selection, Arc::new(source)).with_layers(state.layers);
+                let mut restored = HistoryState::from_archive(state.label, state.has_selection, Arc::new(source)).with_target(state.layers);
                 restored.identity = state.identity;
                 Ok(restored)
             })
@@ -623,7 +623,7 @@ pub fn recover_checkpoint_with_context(entry: &RecoveryEntry) -> Result<(Documen
         branches: restore(checkpoint.branches)?,
         current_identity: checkpoint.current_identity,
         current_label: checkpoint.current_label,
-        current_layers: checkpoint.current_layers,
+        current_target: checkpoint.current_layers,
         max_states: checkpoint.max_states,
         max_bytes: checkpoint.max_bytes,
     };

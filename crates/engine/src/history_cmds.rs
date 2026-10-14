@@ -481,7 +481,7 @@ mod path_tests {
         doc: Arc<Document>,
         release: Arc<AtomicBool>,
     }
-    impl ArchivedDocument for Blocked {
+    impl ArchivedDocument<photocraft_ops::PhotoCraftHistory> for Blocked {
         fn load(&self) -> std::result::Result<Arc<Document>, String> {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             while !self.release.load(Ordering::Relaxed) {
@@ -751,7 +751,7 @@ mod integration_tests {
     use std::sync::Arc;
     #[derive(Debug)]
     struct Broken;
-    impl photocraft_ops::ArchivedDocument for Broken {
+    impl photocraft_ops::ArchivedDocument<photocraft_ops::PhotoCraftHistory> for Broken {
         fn load(&self) -> std::result::Result<Arc<photocraft_doc::Document>, String> {
             Err("corrupt history".into())
         }

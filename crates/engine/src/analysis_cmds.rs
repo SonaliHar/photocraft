@@ -190,7 +190,7 @@ pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Sess
     match r {
         Ok(v) => {
             // As in `Session::edit`: undo targets what was selected just before the step (#1356).
-            st.history.set_current_layers(prior);
+            st.history.set_current_target(prior);
             st.history.record(label, before, st.layer_target());
             st.history.trim(&st.doc);
             st.coalesce = None;

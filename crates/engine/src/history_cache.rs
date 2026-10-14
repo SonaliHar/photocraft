@@ -15,7 +15,7 @@ use photocraft_format::{HistoryArchive, HistorySnapshot};
 #[derive(Debug)]
 struct ColdDocument(HistorySnapshot);
 #[cfg(not(target_arch = "wasm32"))]
-impl photocraft_ops::ArchivedDocument for ColdDocument {
+impl photocraft_ops::ArchivedDocument<photocraft_ops::PhotoCraftHistory> for ColdDocument {
     fn load(&self) -> std::result::Result<Arc<Document>, String> {
         self.0.load().map(Arc::new).map_err(|e| format!("Could not restore undo history: {e}"))
     }
@@ -176,7 +176,7 @@ impl Session {
                     Ok(Completed::Stored(snapshot)) => {
                         let Some(source) = pending.source else { return };
                         let protected = self.docs.iter().any(|st| Arc::ptr_eq(&st.doc, &source) || st.history.is_hot(&source));
-                        let cold: Arc<dyn photocraft_ops::ArchivedDocument> = Arc::new(ColdDocument(snapshot));
+                        let cold: Arc<dyn photocraft_ops::ArchivedDocument<photocraft_ops::PhotoCraftHistory>> = Arc::new(ColdDocument(snapshot));
                         if !protected {
                             for st in &mut self.docs {
                                 st.history.replace_resident(&source, cold.clone());

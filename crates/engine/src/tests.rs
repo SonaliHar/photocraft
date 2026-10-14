@@ -1529,7 +1529,7 @@ fn command_history_navigation_preserves_successful_save_identity() {
 
 #[derive(Debug)]
 struct UnreadableHistoryState;
-impl photocraft_ops::ArchivedDocument for UnreadableHistoryState {
+impl photocraft_ops::ArchivedDocument<photocraft_ops::PhotoCraftHistory> for UnreadableHistoryState {
     fn load(&self) -> std::result::Result<Arc<Document>, String> {
         Err("corrupt history object".into())
     }

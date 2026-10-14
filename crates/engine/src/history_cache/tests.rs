@@ -178,7 +178,7 @@ fn close_and_purge_reclaim_unused_scratch() {
 fn undo_command_decode_failure_preserves_document_and_history_cursors() {
     #[derive(Debug)]
     struct CorruptArchive;
-    impl photocraft_ops::ArchivedDocument for CorruptArchive {
+    impl photocraft_ops::ArchivedDocument<photocraft_ops::PhotoCraftHistory> for CorruptArchive {
         fn load(&self) -> std::result::Result<Arc<Document>, String> {
             Err("scratch snapshot checksum mismatch".into())
         }

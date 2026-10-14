@@ -10,7 +10,7 @@ struct Moved {
     dx: i32,
     dy: i32,
 }
-impl photocraft_ops::ArchivedDocument for Moved {
+impl photocraft_ops::ArchivedDocument<photocraft_ops::PhotoCraftHistory> for Moved {
     fn load(&self) -> Result<Arc<Document>, String> {
         if self.dx == 0 && self.dy == 0 {
             return Ok(self.source.clone());

@@ -236,7 +236,7 @@ impl DocState {
     pub fn new(doc: Document, path: Option<String>) -> Self {
         let active_layer = doc.top_layer();
         let mut history = History::default();
-        history.set_current_layers(LayerTarget { active: active_layer, selected: active_layer.into_iter().collect() });
+        history.set_current_target(LayerTarget { active: active_layer, selected: active_layer.into_iter().collect() });
         Self {
             doc: Arc::new(doc),
             history,
@@ -752,10 +752,10 @@ impl Session {
         let layers = st.layer_target();
         st.history.clear_current_archive();
         if key.is_none() || st.coalesce != key || !st.history.can_undo() {
-            st.history.set_current_layers(prior);
+            st.history.set_current_target(prior);
             st.history.record(label, before, layers);
         } else {
-            st.history.set_current_layers(layers);
+            st.history.set_current_target(layers);
         }
         st.coalesce = key;
         st.revision += 1;
@@ -871,7 +871,7 @@ impl Session {
         let Some(st) = self.active_mut() else { return Ok(false) };
         let restored = if redo { st.history.try_redo(st.doc.clone()) } else { st.history.try_undo(st.doc.clone()) }.map_err(EngineError::Other)?;
         let Some(mut doc) = restored else { return Ok(false) };
-        let layers = st.history.current_layers().clone();
+        let layers = st.history.current_target().clone();
         if doc.name != st.doc.name {
             Arc::make_mut(&mut doc).name.clone_from(&st.doc.name);
         }
@@ -897,7 +897,7 @@ impl Session {
         st.history.jump_loaded_on_path(st.doc.clone(), id, doc.clone(), branch).map_err(EngineError::Other)?;
         st.doc = doc;
         st.coalesce = None;
-        restore_target(st, st.history.current_layers().clone());
+        restore_target(st, st.history.current_target().clone());
         st.revision = st.revision.saturating_add(1);
         st.last_damage = damage;
         self.history_cache.dirty = true;
