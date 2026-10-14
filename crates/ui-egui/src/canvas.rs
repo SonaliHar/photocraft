@@ -1699,15 +1699,18 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
     #[cfg(not(target_arch = "wasm32"))]
     if app.background_jobs {
         app.filter_preview_worker.supersede(&request, crate::gpu_canvas::now_ms());
-        if let Some((finished, computed)) = app.filter_preview_worker.poll()
-            && finished == request
-        {
+        if let Some((finished, computed)) = app.filter_preview_worker.poll() {
             match computed {
-                Ok(computed) => publish_filter_preview(app, idx, finished, computed.result, computed.ms),
-                Err(error) => {
+                // A result for parameters a few frames old is still this dialog's preview, and is
+                // what makes the canvas follow a drag. Errors stay on the exact request: a value
+                // the pointer has already dragged past must not raise a notice.
+                Ok(computed) if finished.same_target(&request) => publish_filter_preview(app, idx, finished, computed.result, computed.ms),
+                Ok(_) => {}
+                Err(error) if finished == request => {
                     app.filter_preview = Some(crate::filter_dialog::FilterPreview { key: finished, result: None, committing: false });
                     crate::notices::error(app, error);
                 }
+                Err(_) => {}
             }
         }
         let fresh = app.filter_preview.as_ref().is_some_and(|p| p.key == request);
@@ -1742,15 +1745,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         }
         let preview = app.filter_preview.as_ref()?;
         // Keep the last preview during a drag, but never one from another source or dialog.
-        // Completed worker results above must match every parameter before being uploaded.
-        if preview.key.doc != request.doc
-            || preview.key.revision != request.revision
-            || preview.key.dialog != request.dialog
-            || preview.key.active != request.active
-            || preview.key.target != request.target
-            || preview.key.k != request.k
-            || preview.key.command != request.command
-        {
+        if !preview.key.same_target(&request) {
             return None;
         }
         let result = preview.result.as_ref()?;
@@ -5883,53 +5878,79 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn indexed_preview_discards_a_finished_job_after_slider_change_or_reopening() {
-        for reopen in [false, true] {
-            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-            app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
-            app.background_jobs = true;
-            crate::filter_dialog::open(&mut app, "image.mode.indexedColor").unwrap();
-            let d = app.ui.dialogs.first().unwrap();
-            let st = app.session.active().unwrap();
-            let old = crate::filter_dialog::FilterPreviewKey {
-                doc: st.doc.id,
-                revision: st.revision,
-                dialog: d.id,
-                active: st.active_layer,
-                target: st.channel_view.target,
-                command: "image.mode.indexedColor".into(),
-                params: app.with_mask_target("image.mode.indexedColor", crate::filter_dialog::params_of(&d.fields)),
-                k: 1,
-            };
-            let (release, wait) = std::sync::mpsc::channel();
-            let ctx = egui::Context::default();
-            app.filter_preview_worker
-                .start(old.clone(), ctx.clone(), move |_| {
-                    wait.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
-                    crate::filter_preview_worker::Computed { result: None, ms: 0.0 }
-                })
-                .unwrap();
-            if reopen {
-                app.ui.dialogs.clear();
-                crate::filter_preview_worker::discard_closed(&mut app);
-                crate::filter_dialog::open(&mut app, "image.mode.indexedColor").unwrap();
-            } else {
-                app.ui.dialogs.first_mut().unwrap().fields.insert("colors".into(), json!(16));
-            }
-            assert!(ensure_filter_preview(&mut app, 0, &ctx).is_none());
-            assert!(app.filter_preview.is_none());
-            release.send(()).unwrap();
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            while app.filter_preview.is_none() {
-                assert!(std::time::Instant::now() < deadline);
-                ensure_filter_preview(&mut app, 0, &ctx);
-                if let Some(preview) = &app.filter_preview {
-                    assert_ne!(preview.key, old, "an outdated preview was published");
-                }
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            }
-            assert_eq!(app.session.active().unwrap().doc.mode, photocraft_color::ColorMode::Rgb);
+    fn a_preview_computed_mid_drag_reaches_the_canvas() {
+        // A drag used to paint nothing at all: every completion was dropped for carrying stale
+        // parameters, so the canvas only ever showed an effect once the pointer had come to rest.
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        app.background_jobs = true;
+        crate::filter_dialog::open(&mut app, "filter.blur.gaussianBlur").unwrap();
+        let ctx = egui::Context::default();
+        let first = app.ui.dialogs[0].fields["radius"].as_f64().expect("the dialog seeds a radius");
+
+        // Hand the first radius to the worker, then move the slider before it can land.
+        assert!(ensure_filter_preview(&mut app, 0, &ctx).is_none());
+        let moved = first + 4.0;
+        app.ui.dialogs[0].fields.insert("radius".into(), json!(moved));
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.filter_preview.as_ref().is_none_or(|p| p.key.params["radius"].as_f64() != Some(first)) {
+            assert!(std::time::Instant::now() < deadline, "no mid-drag frame was published");
+            ensure_filter_preview(&mut app, 0, &ctx);
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
+        // The published frame is the one the worker finished, not the radius the slider is on.
+        assert_eq!(app.ui.dialogs[0].fields["radius"].as_f64(), Some(moved), "the slider kept moving");
+        assert!(app.filter_preview.as_ref().expect("a frame was published").result.is_some());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_reopened_dialog_discards_the_previous_dialogs_finished_preview() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        app.background_jobs = true;
+        crate::filter_dialog::open(&mut app, "image.mode.indexedColor").unwrap();
+        let d = app.ui.dialogs.first().expect("a dialog is open");
+        let st = app.session.active().expect("a document is active");
+        let old = crate::filter_dialog::FilterPreviewKey {
+            doc: st.doc.id,
+            revision: st.revision,
+            dialog: d.id,
+            active: st.active_layer,
+            target: st.channel_view.target,
+            command: "image.mode.indexedColor".into(),
+            params: app.with_mask_target("image.mode.indexedColor", crate::filter_dialog::params_of(&d.fields)),
+            k: 1,
+        };
+        let (release, wait) = std::sync::mpsc::channel();
+        let ctx = egui::Context::default();
+        app.filter_preview_worker
+            .start(old.clone(), ctx.clone(), move |_| {
+                wait.recv_timeout(std::time::Duration::from_secs(5)).expect("released in time");
+                crate::filter_preview_worker::Computed { result: None, ms: 0.0 }
+            })
+            .expect("the worker starts");
+
+        app.ui.dialogs.clear();
+        crate::filter_preview_worker::discard_closed(&mut app);
+        crate::filter_dialog::open(&mut app, "image.mode.indexedColor").unwrap();
+        assert!(ensure_filter_preview(&mut app, 0, &ctx).is_none());
+        assert!(app.filter_preview.is_none());
+        release.send(()).expect("released");
+
+        // The reopened dialog has its own id, so the old dialog's result must never be painted,
+        // whatever its parameters say.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.filter_preview.is_none() {
+            ensure_filter_preview(&mut app, 0, &ctx);
+            if let Some(preview) = &app.filter_preview {
+                assert_ne!(preview.key.dialog, old.dialog, "a reopened dialog painted the previous dialog's preview");
+            }
+            assert!(std::time::Instant::now() < deadline, "the reopened dialog never previewed");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(app.session.active().expect("a document is active").doc.mode, photocraft_color::ColorMode::Rgb);
     }
 
     #[test]
