@@ -628,7 +628,6 @@ mod tests {
         h.state_mut().run("select.rect", json!({"x": 0, "y": 0, "width": 32, "height": 48})).unwrap();
         h.state_mut().run("layer.layerMask.hideAll", json!({})).unwrap();
         h.state_mut().run("layer.layerMask.revealSelection", json!({})).unwrap();
-        h.state_mut().run("select.deselect", json!({})).unwrap();
         h.state_mut().run("channel.target", json!({"channel": "composite"})).unwrap();
         h.state_mut().ui.mask_target = true;
         h.run_steps(2);
