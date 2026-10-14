@@ -1849,6 +1849,17 @@ impl eframe::App for PhotocraftApp {
         // system title bar this is where the document name lives, as the in-app title is hidden.
         panels::sync_window_title(self, &ctx);
         let chrome = !self.ui.view.hides_chrome();
+        if self.services.touch_ui && !chrome {
+            egui::Area::new(egui::Id::new("tablet-fullscreen-exit"))
+                .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 12.0))
+                .order(egui::Order::Foreground)
+                .show(&ctx, |ui| {
+                    let exit = egui::Button::new(egui::RichText::new("×").size(24.0)).min_size(egui::vec2(44.0, 44.0));
+                    if ui.add(exit).on_hover_text(tl!("Exit Full Screen")).clicked() {
+                        let _ = crate::menus::invoke(self, &ctx, "view.screenMode.standard", serde_json::json!({}));
+                    }
+                });
+        }
         if chrome && self.ui.panels.menu_bar {
             panels::title_bar(self, ui);
         }
