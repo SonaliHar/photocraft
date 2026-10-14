@@ -61,6 +61,11 @@ rayon = "1"
 criterion = { version = "0.5", default-features = false }
 getrandom = "0.3"
 
+# Repeatable native creation hooks let the desktop assign real document-window ownership.
+# This pins only eframe; egui, egui-winit, egui-wgpu and winit keep their existing versions.
+[patch.crates-io]
+eframe = { git = "https://github.com/zenjabba/eframe-native-viewport-hooks", rev = "33d07ebf5bacc6e07be04ee35b00fc5a3e30c2a4" }
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 

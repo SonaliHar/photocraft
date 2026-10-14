@@ -390,6 +390,8 @@ pub type CapsLockFn = Box<dyn FnMut() -> bool>;
 /// Keeps an undecorated window's OS frame from offsetting its content and pointer (#2246).
 /// Called once per frame; `None` when the window is decorated or the platform needs no fixing.
 pub type WindowFrameFn = Box<dyn FnMut()>;
+/// Registers actual document viewport identities before the native shell creates their windows.
+pub type DocumentViewportsFn = Box<dyn FnMut(&[egui::ViewportId])>;
 /// The caption buttons' current style ([`Services::caption_style`]).
 pub type CaptionStyleFn = Box<dyn Fn(&egui::Context) -> CaptionStyle>;
 
@@ -468,6 +470,9 @@ pub struct Services {
     /// (Windows custom title bar, #2246). Called once per frame; `None` when the window is
     /// decorated or the platform needs no fixing.
     pub window_frame: Option<WindowFrameFn>,
+    /// Native document window roles, including primary floats and additional views. Called
+    /// before immediate viewport creation; an empty list clears the last document roles.
+    pub document_viewports: Option<DocumentViewportsFn>,
     /// How the custom title bar's caption buttons look and where they sit (Linux: the desktop's
     /// style and button layout). Read every frame, with the context to wake when it changes;
     /// `None` keeps Windows' buttons at the right end.
@@ -2869,3 +2874,6 @@ mod channel_tint_tests {
 
 #[cfg(test)]
 mod floating_documents_tests;
+
+#[cfg(test)]
+mod native_document_viewport_tests;

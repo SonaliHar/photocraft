@@ -1414,8 +1414,7 @@ dependencies = [
 [[package]]
 name = "eframe"
 version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55ad41fac6e3149abb4866e93df37dbd33baa95db525c3368c944584e95a5dc2"
+source = "git+https://github.com/zenjabba/eframe-native-viewport-hooks?rev=33d07ebf5bacc6e07be04ee35b00fc5a3e30c2a4#33d07ebf5bacc6e07be04ee35b00fc5a3e30c2a4"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -4223,6 +4222,7 @@ dependencies = [
  "resvg",
  "rfd",
  "ron",
+ "rustix 1.1.5",
  "serde_json",
  "winit",
  "winresource",

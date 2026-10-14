@@ -21,7 +21,7 @@ fn child_key(h: &mut Harness, backend: &BackendRef, id: egui::ViewportId, key: e
     focus(h, backend, id, ppp);
     backend.borrow_mut().events.insert(id, vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
     h.step();
-    let answer_pass = backend.borrow().output.get(&id).expect("actual child answer pass").clone();
+    let answer_pass = h.output().clone();
     h.run_steps(3);
     answer_pass
 }

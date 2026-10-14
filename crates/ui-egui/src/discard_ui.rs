@@ -223,7 +223,7 @@ fn couldnt_save(e: String) -> String {
     if e == crate::file_dialog::CANCELLED { e } else { format!("Couldn't save: {e}") }
 }
 
-fn prompt_viewport(app: &PhotocraftApp, ctx: &egui::Context, doc: DocId) -> egui::ViewportId {
+pub(crate) fn prompt_viewport(app: &PhotocraftApp, ctx: &egui::Context, doc: DocId) -> egui::ViewportId {
     if !ctx.embed_viewports()
         && let Some(window) = index_of(app, doc).and_then(|index| crate::document_windows::primary_window(app, index))
         && ctx.input(|input| input.raw.viewports.get(&crate::document_windows::viewport(window)).is_some_and(|info| info.native_pixels_per_point.is_some()))

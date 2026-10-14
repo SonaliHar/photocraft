@@ -17,6 +17,8 @@ pub struct Prompt {
     pub discard_layers: bool,
     /// Clears `ask_before_saving_layered_tiff` when the save goes ahead.
     pub dont_ask_again: bool,
+    /// Focus once when the parked document's presentation changes.
+    last_focus: Option<egui::ViewportId>,
 }
 
 /// `true` when `path` is a TIFF name (`.tif` / `.tiff`).
@@ -37,35 +39,58 @@ pub fn wants_prompt(app: &PhotocraftApp, path: &str) -> bool {
 /// Parks the save behind the prompt.
 pub fn park(app: &mut PhotocraftApp, path: String) -> Result<(), String> {
     let doc = app.active_doc_id()?;
-    app.tiff_options = Some(Prompt { doc, path, discard_layers: false, dont_ask_again: false });
+    app.tiff_options = Some(Prompt { doc, path, discard_layers: false, dont_ask_again: false, last_focus: None });
     Ok(())
 }
 
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let Some(doc) = app.tiff_options.as_ref().map(|p| p.doc) else { return };
+    let viewport = crate::discard_ui::prompt_viewport(app, ctx, doc);
+    let prompt_here = ctx.viewport_id() == viewport;
+    if !prompt_here && ctx.viewport_id() != egui::ViewportId::ROOT {
+        return;
+    }
     let Some(p) = &mut app.tiff_options else { return };
+    if p.last_focus != Some(viewport) {
+        p.last_focus = Some(viewport);
+        ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Focus);
+        ctx.request_repaint_of(viewport);
+    }
     let (mut ok, mut cancel) = (false, false);
     let (mut discard, mut dont_ask) = (p.discard_layers, p.dont_ask_again);
-    let modal = egui::Modal::new(egui::Id::new("tiff-options")).show(ctx, |ui| {
-        ui.set_max_width(420.0);
-        ui.label(egui::RichText::new(tl!("TIFF Options")).font(crate::theme::semibold(15.0)));
-        ui.add_space(4.0);
-        crate::widgets::hairline(ui);
-        ui.add_space(8.0);
-        ui.label(tl!("Including layers will increase file size."));
-        ui.add_space(8.0);
-        crate::widgets::checkbox(ui, &mut discard, tl!("Discard Layers and Save a Copy"));
-        crate::widgets::checkbox(ui, &mut dont_ask, tl!("Don't show again"));
-        ui.add_space(12.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 10.0;
-            ok = crate::widgets::primary_button(ui, tl!("OK"), 84.0).clicked();
-            cancel = crate::widgets::secondary_button(ui, tl!("Cancel"), 84.0).clicked();
-        });
-    });
-    cancel |= modal.should_close();
+    let modal = if prompt_here {
+        egui::Modal::new(egui::Id::new("tiff-options")).show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.label(egui::RichText::new(tl!("TIFF Options")).font(crate::theme::semibold(15.0)));
+            ui.add_space(4.0);
+            crate::widgets::hairline(ui);
+            ui.add_space(8.0);
+            ui.label(tl!("Including layers will increase file size."));
+            ui.add_space(8.0);
+            crate::widgets::checkbox(ui, &mut discard, tl!("Discard Layers and Save a Copy"));
+            crate::widgets::checkbox(ui, &mut dont_ask, tl!("Don't show again"));
+            ui.add_space(12.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                ok = crate::widgets::primary_button(ui, tl!("OK"), 84.0).clicked();
+                cancel = crate::widgets::secondary_button(ui, tl!("Cancel"), 84.0).clicked();
+            });
+        })
+    } else {
+        // The options are in the parked document's native window; keep root UI blocked.
+        egui::Modal::new(egui::Id::new("tiff-options")).frame(egui::Frame::NONE).show(ctx, |_| {})
+    };
+    if !prompt_here && modal.backdrop_response.clicked() {
+        ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Focus);
+    }
+    cancel |= if prompt_here {
+        modal.should_close()
+    } else {
+        modal.is_top_modal && !modal.any_popup_open && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    };
     p.discard_layers = discard;
     p.dont_ask_again = dont_ask;
-    if ok || ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+    if ok || (prompt_here && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))) {
         let Some(p) = app.tiff_options.take() else { return };
         if p.dont_ask_again {
             app.session.edit_prefs(|prefs| prefs.file_handling.ask_before_saving_layered_tiff = false);

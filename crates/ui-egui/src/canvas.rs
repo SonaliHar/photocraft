@@ -5615,6 +5615,10 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context, discard_was_p
         .filter(|w| w.open)
         .filter_map(|w| app.session.documents().get(w.document).map(|st| (w.clone(), st.doc.id, format!("{} — window {}", st.doc.name, w.id))))
         .collect();
+    if let Some(register) = app.services.document_viewports.as_mut() {
+        let ids: Vec<_> = wins.iter().map(|(w, _, _)| crate::document_windows::viewport(w.id)).collect();
+        register(&ids);
+    }
     let mut close_documents = Vec::new();
     for (w, document, title) in wins {
         let vid = crate::document_windows::viewport(w.id);
@@ -5636,7 +5640,7 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context, discard_was_p
                 }
             }
             // Native child viewports do not inherit the root modal's input layer.
-            if app.discard.is_some() || app.camera_raw.is_some() {
+            if app.discard.is_some() || app.camera_raw.is_some() || app.save_options_open() {
                 ui.disable();
             }
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(crate::theme::Tokens::get(ui.ctx()).canvas)).show(ui, |ui| {
@@ -5662,6 +5666,8 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context, discard_was_p
             if class != egui::ViewportClass::EmbeddedWindow {
                 // The canvas is disabled while confirming; the independent modal remains enabled.
                 crate::discard_ui::show(app, ui.ctx());
+                crate::tiff_options_ui::show(app, ui.ctx());
+                crate::targa_options_ui::show(app, ui.ctx());
             }
         });
         if let Some(win) = app.ui.windows.iter_mut().find(|x| x.id == w.id) {

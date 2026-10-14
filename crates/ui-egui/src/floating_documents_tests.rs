@@ -25,6 +25,9 @@ type BackendRef = Rc<RefCell<Backend>>;
 #[path = "floating_prompt_tests.rs"]
 mod prompt_tests;
 
+#[path = "floating_save_options_tests.rs"]
+mod save_options_tests;
+
 // Unregister while wgpu's own TLS is still alive, including normal test-assertion unwinding.
 // egui stores this callback in thread-local storage; leaving resources there aborts at TLS teardown.
 struct ImmediateIntegration;
