@@ -102,6 +102,10 @@ pub use xcf_import::{
     CurrentProfilePolicy, SelectedCurrentChannel, SelectedLimits, SelectedProfileRequirements, SelectedRequirements, select_current,
     select_current_with_profile_policy, selected_profile_requirements,
 };
+pub use xcf_import::{
+    LayerSelectionCandidate, LayerSelectionIds, LayerSelectionLimits, LayerSelectionNamespace, LayerSelectionRequirements,
+    LAYER_SELECTION_EPOCH, map_layer_selection,
+};
 mod xcf_link_sources;
 pub mod xcf_modified_sources;
 mod xcf_ordinary_source;

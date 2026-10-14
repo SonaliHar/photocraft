@@ -40,6 +40,13 @@ mod stored_channel_candidate;
 pub use stored_channel_candidate::{assemble_owned_stored_channel, AssembledStoredChannel, NamespaceBacking, StoredChannelCorrespondence, CorrespondenceRequirements};
 pub use stored_channel_candidate::{CurrentProfilePolicy, SelectedCurrentChannel, SelectedLimits, SelectedProfileRequirements, SelectedRequirements, select_current, select_current_with_profile_policy, selected_profile_requirements};
 
+#[path = "xcf_import/layer_selection_candidate.rs"]
+mod layer_selection_candidate;
+pub use layer_selection_candidate::{
+    LayerSelectionIds, LayerSelectionCandidate, LayerSelectionLimits, LayerSelectionNamespace, LayerSelectionRequirements,
+    LAYER_SELECTION_EPOCH, map_layer_selection,
+};
+
 #[cfg(all(test, feature = "corpus"))]
 mod linked_custom_name_mapping_tests {
     use super::*;
