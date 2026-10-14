@@ -100,3 +100,36 @@ fn created_documents_fill_the_recent_category() {
         (&json!(640), &json!(480), &json!("cmyk"), &json!(16), &json!("transparent"), &json!("Next"), &json!("in"))
     );
 }
+
+/// #5410: File › New suggests the lowest free "Untitled-N" no open document or pending job has,
+/// matching Photoshop parity.
+#[test]
+fn new_document_increments_default_name_while_untitled_documents_exist() {
+    let mut app = app();
+    assert_eq!(app.new_document_fields()["name"], "Untitled-1");
+
+    // Creating Untitled-1 increments the next suggested name to Untitled-2.
+    create(&mut app, json!({}));
+    assert_eq!(app.session.documents()[0].doc.name, "Untitled-1");
+    assert_eq!(app.new_document_fields()["name"], "Untitled-2");
+
+    // Creating Untitled-2 increments the next suggested name to Untitled-3.
+    create(&mut app, json!({}));
+    assert_eq!(app.session.documents()[1].doc.name, "Untitled-2");
+    assert_eq!(app.new_document_fields()["name"], "Untitled-3");
+
+    // Creating Untitled-3 increments the next suggested name to Untitled-4.
+    create(&mut app, json!({}));
+    assert_eq!(app.session.documents()[2].doc.name, "Untitled-3");
+    assert_eq!(app.new_document_fields()["name"], "Untitled-4");
+
+    // Closing Untitled-2 frees the slot: the next document reuses Untitled-2.
+    app.session.close(1).unwrap();
+    assert_eq!(app.new_document_fields()["name"], "Untitled-2");
+
+    // If an untitled document has been saved (e.g. Untitled-2.psd), its stem is still taken.
+    app.session.set_active(0);
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).name = "Untitled-2.psd".into();
+    // Now Untitled-2.psd and Untitled-3 are open. Untitled-1 is free.
+    assert_eq!(app.new_document_fields()["name"], "Untitled-1");
+}
