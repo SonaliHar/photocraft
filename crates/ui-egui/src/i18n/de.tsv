@@ -2069,7 +2069,8 @@
 	Expand group  ({key}-click: all groups)	Gruppe ausklappen  ({key}-Klick: alle Gruppen)
 	Fade steps	Verblassen-Schritte
 	Hide the layer's effects  ({key}-click: all layers)	Effekte der Ebene ausblenden  ({key}-Klick: alle Ebenen)
-	Import Brushes… (.abr)	Pinsel importieren… (.abr)
+	Import Brushes… (.abr or image)	Pinsel importieren… (.abr oder Bild)
+	Import Brush from Image…	Pinsel aus Bild importieren…
 	Move Group Down	Gruppe nach unten
 	Move Group Up	Gruppe nach oben
 	Reset the brush to the defaults	Pinsel auf Standardwerte zurücksetzen
@@ -3132,6 +3133,8 @@ curves	Smooth	Glätten
 	Action playback stopped	Aktionswiedergabe angehalten
 	Step {step} is waiting for its dialog	Schritt {step} wartet auf seinen Dialog
 @plural	{n} action|{n} actions	{n} Aktion|{n} Aktionen
+# Batch / Image Processor
+	Include All Subfolders	Alle Unterordner einschließen
 	Auto Add/Delete	Autom. hinzuf./löschen
 
 # Native Windows printing qualification
