@@ -2,10 +2,11 @@
 # (empty context = a plain UI string; `@id` = a command id; `@plural` = "one|other" English
 # forms, translated as two Bulgarian forms "one|other"; anything else = a `tr_ctx` context).
 #
-# Clean-room: every entry is written from the meaning of PhotoCraft's English label, following
-# Adobe Photoshop's Bulgarian UI conventions (слой, маска, криви, нива, запълване, щрих…); no
-# other application's Bulgarian localisation was consulted or copied. Drafted with AI
-# assistance (Gemini) from the English meaning; not yet reviewed by a native speaker.
+# Clean-room: every entry is written from the plain meaning of PhotoCraft's English labels, in
+# ordinary Bulgarian vocabulary of photo editing (слой, маска, криви, нива, запълване, щрих…); no
+# Photoshop (or any other application's) Bulgarian UI, string table or localisation resource was
+# consulted or copied. Drafted with AI assistance (Gemini) from the English meaning; not yet
+# reviewed by a native speaker.
 	% of all commits	% от всички комити
 	(No neutral color exists for {mode} mode.)	(Няма неутрален цвят за режим {mode}.)
 	(coming soon)	(очаквайте скоро)
@@ -252,7 +253,7 @@
 	Arch	Свод
 	Are you sure you want to quit?	Сигурни ли сте, че искате да излезете?
 	Are you sure?	Сигурни ли сте?
-	Area	Площна
+	Area	Площ
 	Around Center	Около центъра
 	Arrange	Подреждане
 	Arrangement	Подредба
@@ -1534,7 +1535,7 @@
 	Foreground/Background Jitter	Трептене на основен/фонов цвят
 	Format	Формат
 	Forward	Напред
-	Forward Warp	Право разтечняване
+	Forward Warp	Деформация напред
 	Fractions	Дроби
 	Fragment	Фрагмент
 	Frame	Кадър
@@ -1587,7 +1588,7 @@
 	Gamut Warning	Предупреждение за цветова гама
 	Gamut warning color	Цвят за предупреждение за цветова гама
 	Gamut warning opacity	Непрозрачност на предупреждението за цветова гама
-	Gap	Пропуст
+	Gap	Разстояние
 	Gaussian	Гаусово
 	Gaussian Blur	Гаусово размазване
 	Gaussian Blur…	Гаусово размазване…
@@ -3912,10 +3913,10 @@
 	Warming85	Затоплящ 85
 	Warmth	Топлина
 	Warning	Предупреждение
-	Warp	Изкривяване
+	Warp	Деформация
 	Warp Text	Деформиране на текст
 	Warp Text…	Деформиране на текст…
-	Warp:	Деформиране:
+	Warp:	Деформация:
 	Water Paper	Водна хартия
 	Watercolor	Акварел
 	Watercolour look: lighter interior, darker rims.	Акварелен изглед: по-светъл интериор, по-тъмни ръбове.
