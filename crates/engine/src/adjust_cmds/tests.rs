@@ -579,6 +579,54 @@ fn curves_apply_to_non_colour_targets_at_every_depth() {
     }
 }
 
+/// #5335: a layer mask, saved channel or Quick Mask holds gray levels whatever the document's
+/// colour mode: inverting 25% grey gives 75% grey in Lab and CMYK, not an untouched plane (Lab
+/// ignores the composite) or an ink-separated result (CMYK curves the inks).
+#[test]
+fn curves_on_grey_targets_ignore_the_document_colour_mode() {
+    let area = photocraft_geom::Rect::from_xywh(0, 0, 48, 32);
+    for mode in ["lab", "cmyk"] {
+        for depth in [8u64, 16] {
+            for target in ["mask", "alpha", "quickMask"] {
+                let mut s = session(depth, mode);
+                let p = match target {
+                    "mask" => {
+                        s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+                        json!("mask")
+                    }
+                    "alpha" => {
+                        s.execute("channel.new", json!({"name": "Sky sel", "fill": "white"})).unwrap();
+                        json!({"channel": 0})
+                    }
+                    _ => {
+                        s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+                        json!("quickMask")
+                    }
+                };
+                s.edit("levels", |doc, active| {
+                    let (surf, _) = crate::channel_cmds::target_surface(doc, *active, &json!({ "target": p })).unwrap();
+                    surf.fill_rect(area, &[0.25]);
+                    Ok(())
+                })
+                .unwrap();
+                let read = |s: &Session| match target {
+                    "quickMask" => doc(s).quick_mask.as_ref().unwrap().surface.sample_channel(8, 8, 0),
+                    "alpha" => doc(s).channels[0].surface.sample_channel(8, 8, 0),
+                    _ => mask_at(s, 8, 8),
+                };
+                let before = read(&s);
+                let pixels = rgba(&s, 8, 8);
+                s.execute("image.adjustments.curves", json!({"points": [[0, 255], [255, 0]], "target": p})).unwrap();
+                let after = read(&s);
+                let case = format!("{mode} {depth}-bit {target}");
+                assert!((before - 0.25).abs() < 0.01, "{case}: filled with 25% grey ({before})");
+                assert!((after - 0.75).abs() < 0.02, "{case}: inverting 25% grey gives 75% grey ({after})");
+                assert_eq!(rgba(&s, 8, 8), pixels, "{case}: colour pixels stay put");
+            }
+        }
+    }
+}
+
 #[test]
 fn replace_color_localized_clusters_only_change_the_colour_near_the_sample() {
     // The same cream on the left (x < 8) and the right (x ≥ 40), grey between.

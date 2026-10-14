@@ -294,10 +294,12 @@ pub fn tone_channels(space: ToneSpace, gray: bool) -> &'static [ToneChannel] {
 
 fn channel_picker(ui: &mut egui::Ui, id: egui::Id, chans: &[ToneChannel], text: &str) -> usize {
     let opts: Vec<(usize, &str)> = chans.iter().enumerate().map(|(i, c)| (i, c.label)).collect();
-    channel_picker_opts(ui, id, &opts, text)
+    channel_picker_opts(ui, id, &opts, text, true)
 }
 
-fn channel_picker_opts(ui: &mut egui::Ui, id: egui::Id, opts: &[(usize, &str)], text: &str) -> usize {
+/// The popup, with `translate` for whether the built-in labels follow the interface language;
+/// a user-typed channel name is shown exactly as entered (#5335).
+fn channel_picker_opts(ui: &mut egui::Ui, id: egui::Id, opts: &[(usize, &str)], text: &str, translate: bool) -> usize {
     let mut ch: usize = ui.data(|d| d.get_temp(id)).unwrap_or(0);
     if ch >= opts.len() {
         ch = 0;
@@ -305,7 +307,12 @@ fn channel_picker_opts(ui: &mut egui::Ui, id: egui::Id, opts: &[(usize, &str)], 
     ui.horizontal(|ui| {
         label(ui, text);
         let width = if opts.len() == 1 { 160.0 } else { 110.0 };
-        widgets::dropdown(ui, &format!("{id:?}-ch"), &mut ch, opts, width);
+        let key = format!("{id:?}-ch");
+        if translate {
+            widgets::dropdown(ui, &key, &mut ch, opts, width);
+        } else {
+            widgets::dropdown_literal(ui, &key, &mut ch, opts, width);
+        }
     });
     ui.data_mut(|d| d.insert_temp(id, ch));
     ch
@@ -437,7 +444,7 @@ fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let mut st: CurveUi = ui.data(|d| d.get_temp(state_id)).unwrap_or_default();
     let isolated = cx.isolated_curve.as_ref();
     let ch = if let Some(iso) = isolated {
-        channel_picker_opts(ui, cx.mem.with("curves-ch"), &[(0, iso.name.as_str())], tl!("Channel:"))
+        channel_picker_opts(ui, cx.mem.with("curves-ch"), &[(0, iso.name.as_str())], tl!("Channel:"), iso.translate)
     } else {
         channel_picker(ui, cx.mem.with("curves-ch"), chans, tl!("Channel:"))
     };
