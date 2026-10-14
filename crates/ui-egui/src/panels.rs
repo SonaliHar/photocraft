@@ -2244,8 +2244,7 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // redundant visible Opacity label rather than force the dropdown beyond
             // the panel's right edge (#2309). The numeric field keeps its name.
             let opacity_label = if t.pro { tl!("Opacity:") } else { tl!("Opacity") };
-            let (blend_width, show_opacity_label) =
-                opacity_row_layout(ui.available_width(), body_text_width(ui, opacity_label), ui.spacing().item_spacing.x);
+            let (blend_width, show_opacity_label) = opacity_row_layout(ui.available_width(), body_text_width(ui, opacity_label), ui.spacing().item_spacing.x);
             let options = blend_options(is_group, m);
             let (chosen, hovered) = widgets::dropdown_wheel_hovered(ui, "blend", &mut m, &options, blend_width);
             // One step per choice: a click, an arrow key or each wheel notch (#1747).
@@ -2259,11 +2258,8 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let field = widgets::popup_value_field(ui, opacity_label, &mut o, 0.0..=100.0, "%", LAYER_PCT_W);
                 // On a narrow dock the (scrubby) label yields its room to the controls (#2309).
-                let scrub = if show_opacity_label {
-                    scrub_pct_label(ui, opacity_label, &mut o, ui.available_width())
-                } else {
-                    widgets::PopupFieldResponse::default()
-                };
+                let scrub =
+                    if show_opacity_label { scrub_pct_label(ui, opacity_label, &mut o, ui.available_width()) } else { widgets::PopupFieldResponse::default() };
                 if let Some(l) = active_layer
                     && (field.changed || scrub.changed)
                 {
