@@ -170,10 +170,23 @@ fn menu_place_starts_transform_for_each_chosen_image() {
         let ctx = egui::Context::default();
         let initial_layers = app.session.active().unwrap().doc.layer_count();
         let initial_history = app.session.active().unwrap().history.past_len();
+        let linked_dir = (command == "file.placeLinked").then(|| {
+            let unique = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            let dir = std::env::temp_dir().join(format!("photocraft-menu-place-{}-{unique}", std::process::id()));
+            std::fs::create_dir(&dir).unwrap();
+            dir
+        });
         for index in 0..2 {
             menus::invoke(&mut app, &ctx, command, json!({})).unwrap();
             app.poll_file_dialog(&ctx, None);
-            answer(&open, Some(FileDialogAnswer::Contents(format!("drawing-{index}.png"), bytes.clone())));
+            let picked = if let Some(dir) = &linked_dir {
+                let path = dir.join(format!("drawing-{index}.png"));
+                std::fs::write(&path, &bytes).unwrap();
+                FileDialogAnswer::Paths(vec![path.to_string_lossy().into_owned()])
+            } else {
+                FileDialogAnswer::Contents(format!("drawing-{index}.png"), bytes.clone())
+            };
+            answer(&open, Some(picked));
             app.poll_file_dialog(&ctx, None);
             let st = app.session.active().unwrap();
             assert_eq!(st.doc.layer_count(), initial_layers + index + 1);
@@ -200,6 +213,12 @@ fn menu_place_starts_transform_for_each_chosen_image() {
                 assert_eq!(app.session.active().unwrap().doc.layer_count(), initial_layers + 1);
                 assert_eq!(app.session.active().unwrap().history.past_len(), initial_history + 1);
             }
+        }
+        if let Some(dir) = linked_dir {
+            for index in 0..2 {
+                std::fs::remove_file(dir.join(format!("drawing-{index}.png"))).unwrap();
+            }
+            std::fs::remove_dir(dir).unwrap();
         }
     }
 }
