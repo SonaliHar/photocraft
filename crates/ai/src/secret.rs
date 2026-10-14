@@ -34,7 +34,10 @@ pub fn redact(value: &mut serde_json::Value) {
         match value {
             serde_json::Value::Object(object) => {
                 for (name, value) in object {
-                    if ["comfyuiApiKey", "openaiPromptApiKey", "openaiImageApiKey"].iter().any(|key| name == key || name == &format!("integrations.{key}")) {
+                    if ["comfyuiDependencyApiKey", "comfyuiApiKey", "openaiPromptApiKey", "openaiImageApiKey"]
+                        .iter()
+                        .any(|key| name == key || name == &format!("integrations.{key}"))
+                    {
                         *value = serde_json::Value::Null;
                     } else {
                         visit(value, depth + 1);

@@ -7,7 +7,11 @@ pub const MAX_DOCUMENT_BYTES: usize = 256 * 1024 * 1024;
 pub const MAX_METADATA_BYTES: usize = 128 * 1024;
 pub const MAX_PREVIEW_BYTES: usize = 1024 * 1024 * 4;
 pub const MAX_PACKET_BYTES: usize = MAX_DOCUMENT_BYTES + MAX_METADATA_BYTES + MAX_PREVIEW_BYTES + 12;
+pub const JSON_COMMANDS: &[&str] = &["edit.aiDescribeImage", "comfy.dependencies.check", "comfy.dependencies.install"];
 pub const COMMANDS: &[&str] = &[
+    "comfy.dependencies.check",
+    "comfy.dependencies.install",
+    "edit.aiDescribeImage",
     "edit.generateImage",
     "edit.aiEdit",
     "edit.generativeFill",

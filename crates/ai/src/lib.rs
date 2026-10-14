@@ -7,6 +7,7 @@ pub mod artifact;
 #[cfg(target_arch = "wasm32")]
 pub mod browser;
 pub mod config;
+pub mod dependencies;
 pub mod fake;
 pub mod gateway;
 pub mod image_resolution;

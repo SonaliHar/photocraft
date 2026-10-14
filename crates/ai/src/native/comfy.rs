@@ -23,6 +23,19 @@ impl ComfyUi {
     pub fn configured(endpoint: &str, key_variable: &str, key: Option<&crate::secret::Secret>) -> Result<Self> {
         Ok(Self { http: Http::configured(endpoint, key_variable, key)?, sampling_steps: None })
     }
+    pub async fn dependency_nodes(&self, control: &Control) -> Result<Value> {
+        let info = self.http.json(self.http.request(Method::GET, "object_info"), 8 * 1024 * 1024, control).await?;
+        let mut nodes = BTreeSet::new();
+        for source in [include_str!("t2i.json"), include_str!("edit.json"), include_str!("maskedit.json"), include_str!("foreground.json")] {
+            let graph: BTreeMap<String, ApiNode> = serde_json::from_str(source).map_err(|_| AiError::Rejected)?;
+            nodes.extend(graph.into_values().map(|n| n.class_type));
+        }
+        nodes.extend(["UpscaleModelLoader", "ImageUpscaleWithModel", "VAEDecodeTiled", "EmptySD3LatentImage"].map(str::to_owned));
+        let missing: Vec<_> = nodes.iter().filter(|node| info.get(*node).is_none()).cloned().collect();
+        Ok(
+            json!({"required":nodes,"missing":missing,"note":"Missing core nodes require a compatible ComfyUI update. The model downloader does not install code or restart ComfyUI."}),
+        )
+    }
     pub fn set_sampling_steps(&mut self, steps: u32) -> Result<()> {
         if !(1..=100).contains(&steps) {
             return Err(AiError::InvalidRequest("sampling steps must be between 1 and 100".into()));

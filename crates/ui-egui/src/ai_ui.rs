@@ -4,6 +4,7 @@ use egui::{RichText, TextureOptions};
 use serde_json::{Map, Value, json};
 
 const COMMANDS: &[&str] = &[
+    "edit.aiDescribeImage",
     "edit.generateImage",
     "edit.aiEdit",
     "edit.aiBackground",
@@ -13,10 +14,24 @@ const COMMANDS: &[&str] = &[
     "image.generativeExpand",
     "image.aiUpscale",
 ];
+pub fn open_dependencies(app: &mut PhotocraftApp, result: Option<&Value>) -> u64 {
+    app.ui.open_dialog(
+        DialogKind::Command,
+        Map::from_iter([
+            ("__ai".into(), json!("dependencies")),
+            ("__command".into(), json!("comfy.dependencies.check")),
+            ("__label".into(), json!("ComfyUI Dependencies")),
+            ("__report".into(), result.cloned().unwrap_or(Value::Null)),
+        ]),
+    )
+}
 pub fn owns(fields: &Map<String, Value>) -> bool {
     fields.contains_key("__ai")
 }
 pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    if id == "comfy.dependencies.check" && params.as_object().is_none_or(|p| p.is_empty()) {
+        return Some(Ok(json!({"dialog":open_dependencies(app, None)})));
+    }
     if id == "ai.result.list" {
         return Some(Ok(json!({"dialog":open_results(app)})));
     }
@@ -44,7 +59,24 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
         fields.retain(|key, _| key.starts_with("__"));
         fields.insert("scale".into(), json!(2));
     }
+    if id == "edit.aiDescribeImage" {
+        fields.retain(|key, _| key.starts_with("__") || key == "textModel");
+        fields.insert("instruction".into(), json!(""));
+    }
     Some(Ok(json!({"dialog":app.ui.open_dialog(DialogKind::Command,fields)})))
+}
+pub fn open_interpretation(app: &mut PhotocraftApp, result: &Value) {
+    app.ui.open_dialog(
+        DialogKind::Command,
+        Map::from_iter([
+            ("__ai".into(), json!("interpretation")),
+            ("__command".into(), json!("edit.generateImage")),
+            ("__label".into(), json!("Review Recreation Prompt")),
+            ("description".into(), result.get("description").cloned().unwrap_or(Value::Null)),
+            ("prompt".into(), result.get("positivePrompt").cloned().unwrap_or(Value::Null)),
+            ("negativePrompt".into(), result.get("negativePrompt").cloned().unwrap_or(json!(""))),
+        ]),
+    );
 }
 pub fn open_results(app: &mut PhotocraftApp) -> u64 {
     if let Some(dialog) = app.ui.dialogs.iter().find(|d| d.fields.get("__ai").and_then(Value::as_str) == Some("results")) {
@@ -56,6 +88,25 @@ pub fn open_results(app: &mut PhotocraftApp) -> u64 {
     )
 }
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
+    if fields.get("__ai").and_then(Value::as_str) == Some("dependencies") {
+        dependency_form(app, ui, fields);
+        return;
+    }
+    if fields.get("__ai").and_then(Value::as_str) == Some("interpretation") {
+        ui.label(tl!("Image description"));
+        ui.label(fields.get("description").and_then(Value::as_str).unwrap_or_default());
+        text(ui, fields, "prompt", "Recreation prompt", 4096);
+        text(ui, fields, "negativePrompt", "Negative prompt", 4096);
+        ui.label(tl!("Review the prompt, then continue to image generation. Matching pixels are not guaranteed."));
+        return;
+    }
+    if fields.get("__command").and_then(Value::as_str) == Some("edit.aiDescribeImage") {
+        ui.label(tl!("Analyze the visible image and create an editable prompt for recreating it."));
+        text(ui, fields, "textModel", "Prompt model", 128);
+        text(ui, fields, "instruction", "Analysis instructions", 4096);
+        ui.label(tl!("A working image up to 1024 pixels is sent to your prompt provider. Choose a vision-capable model."));
+        return;
+    }
     if fields.get("__ai").and_then(Value::as_str) == Some("results") {
         results(app, ui, fields);
         return;
@@ -375,9 +426,98 @@ fn results(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, 
         }
     });
 }
+fn dependency_form(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
+    ui.label(tl!("Apply your AI settings before checking dependencies. Downloads run on the ComfyUI host."));
+    if ui.button(tl!("Check dependencies")).clicked() {
+        match app.run("comfy.dependencies.check", json!({})) {
+            Ok(value) => {
+                if let Some(report) = value.get("dependencyReport") {
+                    fields.insert("__report".into(), report.clone());
+                }
+            }
+            Err(error) => {
+                fields.insert("__error".into(), json!(error));
+            }
+        }
+    }
+    let report = fields.get("__report").cloned().unwrap_or(Value::Null);
+    if let Some(note) = report.pointer("/nodes/note").and_then(Value::as_str) {
+        ui.label(note);
+    }
+    if let Some(missing) = report.pointer("/nodes/missing").and_then(Value::as_array) {
+        for node in missing {
+            if let Some(node) = node.as_str() {
+                ui.colored_label(Tokens::get(ui.ctx()).danger, format!("Missing node: {node}"));
+            }
+        }
+    }
+    if let Some(note) = report.pointer("/models/note").and_then(Value::as_str) {
+        ui.label(note);
+    }
+    let mut selected: Vec<String> = fields.get("__selected").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+    if let Some(rows) = report.pointer("/models/models").and_then(Value::as_array) {
+        for row in rows {
+            let id = row.pointer("/model/id").and_then(Value::as_str).unwrap_or_default();
+            let state = row.get("state").and_then(Value::as_str).unwrap_or("unknown");
+            let mut checked = selected.iter().any(|value| value == id);
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        state == "missing",
+                        egui::Checkbox::new(
+                            &mut checked,
+                            format!("{id} · {state} · {:.2} GB", row.pointer("/model/size").and_then(Value::as_u64).unwrap_or(0) as f64 / 1e9),
+                        ),
+                    )
+                    .changed()
+                {
+                    selected.retain(|value| value != id);
+                    if checked {
+                        selected.push(id.into());
+                    }
+                }
+                if let (Some(license), Some(url)) =
+                    (row.pointer("/model/license").and_then(Value::as_str), row.pointer("/model/licenseUrl").and_then(Value::as_str))
+                    && url.starts_with("https://") {
+                    ui.hyperlink_to(license, url);
+                }
+            });
+        }
+    }
+    fields.insert("__selected".into(), json!(selected));
+    let mut accept = fields.get("__licenses").and_then(Value::as_bool).unwrap_or(false);
+    ui.checkbox(&mut accept, tl!("I have reviewed and accept the selected model licenses."));
+    fields.insert("__licenses".into(), json!(accept));
+    if ui.add_enabled(accept && !selected.is_empty(), egui::Button::new(tl!("Download selected models"))).clicked() {
+        match app.run("comfy.dependencies.install", json!({"models":selected,"acceptLicenses":true})) {
+            Ok(value) => {
+                if let Some(report) = value.get("dependencyReport") {
+                    fields.insert("__report".into(), report.clone());
+                }
+            }
+            Err(error) => {
+                fields.insert("__error".into(), json!(error));
+            }
+        }
+    }
+    if let Some(error) = fields.get("__error").and_then(Value::as_str) {
+        ui.colored_label(Tokens::get(ui.ctx()).danger, error);
+    }
+}
+
 pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
+    if fields.get("__ai").and_then(Value::as_str) == Some("interpretation") {
+        let opened = menu(app, "edit.generateImage", &json!({})).ok_or("Generation form unavailable")??;
+        let id = opened.get("dialog").and_then(Value::as_u64).ok_or("Generation form unavailable")?;
+        if let Some(dialog) = app.ui.dialog_mut(id) {
+            for key in ["prompt", "negativePrompt"] {
+                dialog.fields.insert(key.into(), fields.get(key).filter(|v| v.is_string()).cloned().unwrap_or(json!("")));
+            }
+        }
+        return Ok(opened);
+    }
     let command = fields.get("__command").and_then(Value::as_str).ok_or("AI dialog has no command")?;
-    if command == "ai.result.list" {
+    if command == "ai.result.list" || command == "comfy.dependencies.check" {
         return Ok(Value::Null);
     }
     let mut params = fields.iter().filter(|(k, _)| !k.starts_with("__")).map(|(k, v)| (k.clone(), v.clone())).collect::<Map<_, _>>();
@@ -522,5 +662,19 @@ mod tests {
         });
         receiver.recv_timeout(std::time::Duration::from_secs(15)).expect("AI preview rendering stalled or failed");
         worker.join().unwrap();
+    }
+    #[test]
+    fn interpreted_prompt_opens_generation_for_review_without_starting_a_job() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width":32,"height":24})).unwrap();
+        let revision = app.session.active().unwrap().revision;
+        open_interpretation(&mut app, &json!({"description":"A cube","positivePrompt":"A blue cube","negativePrompt":null}));
+        let fields = app.ui.dialogs.last().unwrap().fields.clone();
+        let opened = confirm(&mut app, &fields).unwrap();
+        let fields = &app.ui.dialog_mut(opened["dialog"].as_u64().unwrap()).unwrap().fields;
+        assert_eq!(fields["prompt"], "A blue cube");
+        assert_eq!(fields["preparePrompt"], false);
+        assert!(app.session.jobs().is_empty());
+        assert_eq!(app.session.active().unwrap().revision, revision);
     }
 }

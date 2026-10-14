@@ -85,6 +85,23 @@ pub struct PreviewImage {
 }
 
 impl Snapshot {
+    /// Colour-managed, bounded composite for vision input; original pixels stay local.
+    pub fn analysis_image(&self) -> Result<RgbaImage> {
+        let size = scaling::working_size(self.size(), 1024)?;
+        let buffer = photocraft_compose::render_reduced_rect(&self.doc, self.roi, size.width, size.height);
+        let source: Vec<_> = buffer.px.into_iter().flatten().collect();
+        let mut rgba = vec![0.0; size.pixels().map_err(error)?.checked_mul(4).ok_or_else(|| error("AI sample count overflow"))?];
+        let profile = crate::color_cmds::composite_profile(&self.doc);
+        transform::cached(&profile, Builtin::Srgb.profile(), Default::default()).map_err(error)?.convert_f32(&source, 4, &mut rgba, 4, true);
+        for value in &mut rgba {
+            if !value.is_finite() {
+                return Err(error("AI source contains non-finite pixels"));
+            }
+            *value = value.clamp(0.0, 1.0);
+        }
+        RgbaImage::new(size, rgba).map_err(error)
+    }
+
     pub fn size(&self) -> ImageSize {
         ImageSize { width: self.roi.width(), height: self.roi.height() }
     }

@@ -1,6 +1,6 @@
 services:
   web:
-    image: photocraft-web:0.6.0-ai-20261012
+    image: ${PHOTOCRAFT_WEB_IMAGE:-photocraft-web:0.8.2-ai-20261013}
     container_name: photocraft-web
     restart: unless-stopped
     env_file:

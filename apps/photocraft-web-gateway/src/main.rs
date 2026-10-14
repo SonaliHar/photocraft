@@ -124,7 +124,11 @@ impl Host {
     }
     fn effective_providers(&self, requested: &Integrations) -> std::result::Result<Integrations, String> {
         requested.validate()?;
-        if requested.comfyui_api_key.is_some() || requested.openai_prompt_api_key.is_some() || requested.openai_image_api_key.is_some() {
+        if requested.comfyui_dependency_api_key.is_some()
+            || requested.comfyui_api_key.is_some()
+            || requested.openai_prompt_api_key.is_some()
+            || requested.openai_image_api_key.is_some()
+        {
             return Err("Save API keys through AI Settings before starting a job".into());
         }
         let stored = self.providers.lock().unwrap_or_else(PoisonError::into_inner);
@@ -143,7 +147,11 @@ impl Host {
         {
             return Err("Save API key references through AI Settings before starting a job".into());
         }
+        if requested.comfyui_dependency_endpoint != stored.comfyui_dependency_endpoint {
+            return Err("Save the dependency service endpoint through AI Settings before starting a job".into());
+        }
         let mut providers = requested.clone();
+        providers.comfyui_dependency_api_key = stored.comfyui_dependency_api_key.clone();
         // Never forward stored credentials to an alternative endpoint.
         providers.comfyui_api_key = (requested.comfyui_endpoint == stored.comfyui_endpoint).then(|| stored.comfyui_api_key.clone()).flatten();
         providers.openai_prompt_api_key =
@@ -174,6 +182,7 @@ impl Host {
         incoming.validate()?;
         let mut stored = self.providers.lock().unwrap_or_else(PoisonError::into_inner);
         for (new, old) in [
+            (&mut incoming.comfyui_dependency_api_key, &stored.comfyui_dependency_api_key),
             (&mut incoming.comfyui_api_key, &stored.comfyui_api_key),
             (&mut incoming.openai_prompt_api_key, &stored.openai_prompt_api_key),
             (&mut incoming.openai_image_api_key, &stored.openai_image_api_key),
@@ -323,13 +332,19 @@ async fn submit(State(host): State<Arc<Host>>, Extension(caller): Extension<Call
 fn process(input: &gateway::Request, providers: &Integrations, prompt_model: &str, document: &[u8], ctx: &JobCtx) -> std::result::Result<Vec<u8>, String> {
     ctx.check().map_err(|e| e.to_string())?;
     ctx.progress(0.01, "Loading captured browser document");
-    let doc = photocraft_engine::ai_cmds::remote::load_document(document).map_err(|e| e.to_string())?;
     let mut session = Session::new();
-    session.add_document(doc, None);
+    if !document.is_empty() {
+        let doc = photocraft_engine::ai_cmds::remote::load_document(document).map_err(|e| e.to_string())?;
+        session.add_document(doc, None);
+    }
     session.configure_ai_prompt_model(prompt_model).map_err(|e| e.to_string())?;
     session.load_prefs_json(&json!({"integrations":providers}).to_string())?;
     session.set_inline_job_ctx(Some(ctx.clone()));
     let ready = session.execute(&input.command, input.params.clone()).map_err(|e| e.to_string())?;
+    if gateway::JSON_COMMANDS.contains(&input.command.as_str()) {
+        ctx.check().map_err(|e| e.to_string())?;
+        return gateway::encode(&ready, &[]).map_err(|e| e.to_string());
+    }
     let id = ready.get("result").and_then(Value::as_u64).ok_or("AI workflow returned no result")?;
     ctx.check().map_err(|e| e.to_string())?;
     session.export_ai_gateway_result(id).map_err(|e| e.to_string())
@@ -534,5 +549,21 @@ mod tests {
         bad = defaults;
         bad.comfyui_endpoint = "http://169.254.169.254".into();
         assert!(host.effective_providers(&bad).is_err());
+    }
+    #[test]
+    fn dependency_credentials_are_private_and_bound_to_saved_endpoint() {
+        let host = host();
+        let incoming = Integrations {
+            comfyui_dependency_endpoint: "http://localhost:8190".into(),
+            comfyui_dependency_api_key: Some(photocraft_ai::secret::Secret::new("synthetic-dependency-key".into()).unwrap()),
+            ..Default::default()
+        };
+        let public = host.save_configuration(incoming).unwrap();
+        assert!(!public.to_string().contains("synthetic-dependency-key"));
+        let mut request: Integrations = serde_json::from_value(public["providers"].clone()).unwrap();
+        assert_eq!(host.effective_providers(&request).unwrap().comfyui_dependency_api_key.unwrap().expose(), "synthetic-dependency-key");
+        request.comfyui_dependency_endpoint = "http://localhost:8191".into();
+        assert!(host.effective_providers(&request).is_err());
+        std::fs::remove_file(&host.config_path).unwrap();
     }
 }

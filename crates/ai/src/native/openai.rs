@@ -302,4 +302,26 @@ mod tests {
         assert_eq!(result.artifacts.first().unwrap().size(), request.size);
         server.join().unwrap();
     }
+    #[test]
+    fn vision_uses_images_and_private_auth_without_generation() {
+        let answer = json!({"description":"A blue square", "positive_prompt":"A blue square on a white background", "negative_prompt":null});
+        let body = serde_json::to_vec(
+            &json!({"status":"completed","output":[{"type":"message","status":"completed","content":[{"type":"output_text","text":answer.to_string()}]}]}),
+        )
+        .unwrap();
+        let (base, server) = super::super::tests::peer(200, body, |wire| {
+            assert!(wire.starts_with("POST /proxy/v1/responses "));
+            assert!(wire.to_lowercase().contains("authorization: bearer synthetic-vision-key"));
+            assert!(wire.contains("data:image/png;base64,"));
+            assert!(wire.contains("input_image"));
+            assert!(!wire.contains("images/generations"));
+            assert!(wire.contains("qwen3.6:35b@GPU-HOST"));
+        });
+        let key = crate::secret::Secret::new("synthetic-vision-key".into()).unwrap();
+        let provider = OpenAiPrompt::configured(&base, "", Some(&key), "qwen3.6:35b@GPU-HOST").unwrap();
+        let image = crate::RgbaImage::new(ImageSize { width: 2, height: 2 }, vec![1.0; 16]).unwrap();
+        let result = super::super::block_on(provider.interpret(&image, "Recreate composition", "en", &Control::default())).unwrap();
+        assert_eq!(result.description, "A blue square");
+        server.join().unwrap();
+    }
 }

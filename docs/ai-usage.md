@@ -1,15 +1,10 @@
 # PhotoCraft AI workflows
 
-Native PhotoCraft 0.6.0 development builds include ComfyUI image generation,
-prompt editing, selection fill/removal, four-sided canvas expansion and BiRefNet
-foreground masks. The current source additionally implements **direct high-resolution
-ComfyUI generation** and a separate **Image › AI Upscale…** command. Earlier
-20261011 installers generate a reduced image and reconstruct detail; they do not
-contain these new workflows. The 20261012 Debian installer passed direct 4K generation, standalone
-4K-to-8K Upscale, Save As identity, result recovery, Undo/Redo and native
-save/reopen in the installed GUI. The Windows installer passed Wine 10
-installation, executable loading, command registry, native save/reopen and
-uninstallation. Reports and screenshots accompany the artifacts. Native Windows GPU testing remains outstanding.
+The current AI integration targets PhotoCraft **0.8.2**, shared by the native
+Rust application and Rust/WASM browser build. Earlier 0.6.0 development installers
+have separate verification reports; they do not contain the new image-analysis
+and dependency-management features.
+
 OpenAI Responses can prepare the image prompt automatically
 before ComfyUI executes the fixed workflow. Direct OpenAI Images is an alternative
 for generation/edit/fill/remove requests.
@@ -68,6 +63,39 @@ generation rejects targets exceeding the chosen model limits. Explicit reduced
 generation maps destinations to a supported API working size.
 The legacy GPT Image 1/1.5 profile remains square-only. Compatible proxies may
 have different model limits. Seed/negative prompt are ComfyUI settings.
+
+## Create a prompt from an image
+
+Open the reference image, then choose **Edit › AI › Create Prompt from Image…**.
+Select a vision-capable prompt model and optionally describe which visual details
+matter. **Analyze image** sends a color-managed composite with a maximum
+1024-pixel long edge to the configured OpenAI-compatible Responses endpoint.
+It leaves the original document unchanged. Ordinary automatic prompt preparation
+remains text-only.
+
+Review the returned description and edit the recreation/negative prompts.
+**Use prompt for generation** opens the normal Generate Image form with automatic
+prompt preparation disabled. Choose the desired output resolution and generate
+explicitly. A textual description cannot guarantee identical source pixels.
+The endpoint must support Responses image inputs and structured JSON output;
+a text-only model or Chat Completions-only server is insufficient.
+
+## ComfyUI dependencies
+
+In **AI Integrations…**, configure the optional **ComfyUI · Dependency service**
+base URL and its separate token, then **Apply**. Choose **Manage ComfyUI
+dependencies…** (also **Edit › AI › Check ComfyUI Dependencies…**).
+Check required nodes and installed model files, select missing weights, review
+license links, accept the selected licenses and choose **Download selected models**.
+Downloads run on the ComfyUI host with normal progress and cancellation controls.
+
+The companion service verifies new downloads against fixed sizes and SHA-256
+hashes and preserves existing files. Existing files are checked by size only;
+a size mismatch is reported for manual review. It does not install arbitrary
+custom nodes or restart ComfyUI. See the [service deployment guide](../packaging/comfy-deps/README.md).
+
+English is the default UI language. Existing translations are retained; newly
+added AI strings use English where a translation is pending.
 
 ## Resolution and detail
 
@@ -142,7 +170,7 @@ are pixels; the default adds 128 pixels on the right.
 
 ## Current limits
 
-- Native Windows/Linux app; browser AI controls are disabled until a gateway exists.
+- Native Windows/Linux and browser workflows use the same commands. Browser AI requires the authenticated gateway.
 - RGB/Gray documents at 8/16 bits, ICC-converted to/from SDR sRGB transport.
 - Direct ComfyUI generation: 32–8192 pixels per side, up to 64 Mi pixels in
   transport; editing/segmentation/expansion: 32–1024 pixels per side. Direct
@@ -164,7 +192,7 @@ are pixels; the default adds 128 pixels on the right.
 The same commands are available through CLI/control/MCP. For example:
 
 ```json
-{"command":"edit.generativeFill","params":{"prompt":"eine blaue Keramiktasse","preparePrompt":true,"textModel":"gpt-4.1-mini","seed":42123,"contextMargin":32}}
+{"command":"edit.generativeFill","params":{"prompt":"a blue ceramic mug","preparePrompt":true,"textModel":"gpt-4.1-mini","seed":42123,"contextMargin":32}}
 ```
 
 Headless `Session::execute` finishes the pipeline inline. Desktop
@@ -209,7 +237,7 @@ remain local. The browser never contacts ComfyUI or OpenAI directly.
 
 Build `apps/photocraft-web` with Trunk, build `photocraft-web-gateway` in release mode,
 then run `packaging/web/build-container.sh` and
-`docker compose -f packaging/web/compose.yml up -d`. The private web-login file is
+`docker compose --env-file secrets/web.env -f packaging/web/compose.yml up -d`. The private web-login file is
 `secrets/web.env`; provider keys are configured in the KI menu, not this file.
 The server config volume is `secrets/web-config`. Back it up privately.
 The default host binding is `127.0.0.1:18888`. Use a TLS reverse proxy when
@@ -239,5 +267,5 @@ remains editable for each workflow. This model requires the user's compatible
 prompt endpoint; its ID alone does not discover or configure that server.
 
 After changing Docker environment settings, recreate the container with
-`docker compose -f packaging/web/compose.yml up -d --force-recreate`.
+`docker compose --env-file secrets/web.env -f packaging/web/compose.yml up -d --force-recreate`.
 `packaging/web/web.env.example` documents the settings without real credentials.

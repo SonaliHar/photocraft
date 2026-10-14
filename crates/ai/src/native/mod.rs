@@ -6,6 +6,7 @@ use serde_json::Value;
 use std::{future::Future, io::Cursor, time::Duration};
 
 pub mod comfy;
+pub mod dependencies;
 pub mod openai;
 
 pub fn block_on<T>(future: impl Future<Output = Result<T>>) -> Result<T> {

@@ -18,7 +18,7 @@ docker build -t photocraft-installer-builder:20261009 -f packaging/development/D
 ```
 
 Inside the builder container, set `PHOTOCRAFT_VERSION` to the package version
-(for example `0.6.0-dev.20261010`), `DIST=/src/dist/installers`, the build date and
+(for example `0.8.2-dev.20261013`), `DIST=/src/dist/installers`, the build date and
 an honest `PHOTOCRAFT_BUILD_SHA` identifying the development source. The app's
 internal version remains the workspace version. For Linux:
 
@@ -70,7 +70,7 @@ python3 packaging/development/with-display.py python3 packaging/development/gui-
 To test a setup executable in the Wine container:
 
 ```sh
-python3 packaging/development/with-display.py python3 packaging/development/windows-smoke.py /src/dist/installers/photocraft-0.6.0-dev.20261010-windows-x64-setup.exe /src/dist/installers/windows-verification.json
+python3 packaging/development/with-display.py python3 packaging/development/windows-smoke.py /src/dist/installers/photocraft-0.8.2-dev.20261013-windows-x64-setup.exe /src/dist/installers/windows-verification.json
 ```
 
 The Windows check installs, checks the uninstall registry command, exercises the

@@ -2,7 +2,7 @@
 
 This is the implementation contract for native and browser AI workflows. The
 existing implementation was validated on PhotoCraft 0.6.0. Integration with the
-fork's newer 0.8.2 base is in progress. Test numbers from the earlier base are
+fork's newer 0.8.2 base compiles; final workflow and distribution gates are in progress. Test numbers from the earlier base are
 historical evidence, not proof that the newer base has passed the same checks.
 
 ## Implemented baseline

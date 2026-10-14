@@ -588,3 +588,23 @@ fn background_swap_uses_inverse_foreground_and_previews_the_actual_masked_compos
     assert_eq!(preview.rgba.get(0..4), Some([0, 0, 255, 255].as_slice()));
     assert_ne!(preview.rgba.get(4..8), Some([0, 0, 255, 255].as_slice()));
 }
+
+#[test]
+fn vision_input_is_bounded_and_keeps_document_and_history_unchanged() {
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
+        for depth in [SampleType::U8, SampleType::U16] {
+            let s = session(mode, depth);
+            let original = s.active().unwrap().doc.clone();
+            let revision = s.active().unwrap().revision;
+            let input = Snapshot::capture_canvas(s.active().unwrap(), Source::Composite).unwrap().analysis_image().unwrap();
+            assert_eq!(input.size(), ImageSize { width: 8, height: 6 });
+            assert!(input.samples().iter().all(|value| value.is_finite() && (0.0..=1.0).contains(value)));
+            assert!(Arc::ptr_eq(&original, &s.active().unwrap().doc));
+            assert_eq!(s.active().unwrap().revision, revision);
+        }
+    }
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":2400,"height":1200})).unwrap();
+    let input = Snapshot::capture_canvas(s.active().unwrap(), Source::Composite).unwrap().analysis_image().unwrap();
+    assert_eq!(input.size(), ImageSize { width: 1024, height: 512 });
+}

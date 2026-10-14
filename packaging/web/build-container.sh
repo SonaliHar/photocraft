@@ -20,4 +20,4 @@ if [ -n "${CRAFT_FONTS_DIR:-}" ]; then
 fi
 cp "$TARGET/release/photocraft-web-gateway" "$STAGE/photocraft-web-gateway"
 cp -a "$ROOT/dist/web/." "$STAGE/site/"
-docker build -f "$ROOT/packaging/web/Dockerfile.gateway" -t photocraft-web:0.6.0-ai-20261012 "$STAGE"
+docker build -f "$ROOT/packaging/web/Dockerfile.gateway" -t "${PHOTOCRAFT_WEB_IMAGE:-photocraft-web:0.8.2-ai-20261013}" "$STAGE"

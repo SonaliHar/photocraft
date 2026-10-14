@@ -24,6 +24,7 @@ pub fn load_document(bytes: &[u8]) -> Result<Document> {
         max_blob_bytes: 256 * 1024 * 1024,
         max_total_bytes: CACHE_BYTES as u64,
         preserve_ids: false,
+        ..Default::default()
     };
     let document = photocraft_format::load_from_bytes_with(bytes, &options).map_err(error)?;
     validate_document(&document)?;

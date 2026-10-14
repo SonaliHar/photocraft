@@ -15,9 +15,11 @@
   authenticated Rust gateway deployed with Docker.
 - Support Docker API-key, language and prompt-model defaults with explicit
   per-session language and per-workflow model overrides. English is the default.
-- Add strict image-interpretation API contracts; the user-facing interpretation
-  workflow and scoped ComfyUI dependency downloader are still in progress.
-- Prepare integration with the newer fork base and omit private instance data
+- Add image interpretation with an editable recreation prompt and explicit handoff
+  to the generation form.
+- Add ComfyUI dependency checks and a scoped Rust model downloader with size/hash
+  verification, cancellation, license review and no-overwrite installation.
+- Integrate the fork’s PhotoCraft 0.8.2 base and omit private instance data
   from published source, examples and documentation.
 
 Unsigned native installer validation includes Debian GUI/private-key persistence
