@@ -49,11 +49,10 @@ produce repeatable useful improvements.
 
 ## Remaining work
 
-The umbrella issue records parser borrowing, pass fusion, adaptive cache population,
-mask/flattened conversion redundancies, other sample formats, Navigator/mips, sparse first
-view and lazy materialization. None of those is claimed complete by this checkpoint.
-Broad corpus, full lint/wasm checks and native UI acceptance are pending. This document
-must be updated as each sequential step is implemented and validated.
+The umbrella issue tracks the remaining mask, sample-format, mip, sparse first-view and lazy
+materialization work. Parser borrowing, merged-plane reuse, native upload borrowing, dense
+pass fusion and first-open cache deferral have validated checkpoints below. GPU Navigator
+reuse already exists upstream. Final lint, wasm and native UI acceptance are pending.
 
 ## Upstream checkpoint
 
@@ -75,8 +74,7 @@ encoded buffers deliberately; decoding uses PsdView and roundtrip uses to_owned.
 PsdFile API and upstream depth-specific global-layer precedence are preserved.
 
 Current upstream already has GPU Navigator reuse (#4518), including initial GPU waiting;
-that item needs no duplicate implementation here. Broad corpus/lint/wasm/UI gates remain
-pending.
+that item needs no duplicate implementation here. Corpus-enabled PSD/IO suites pass; final lint/wasm/UI gates remain pending.
 
 ## Raster pass fusion
 
@@ -85,15 +83,15 @@ blend in one pass. Sparse layers, effects, groups and clipping keep their prior 
 Full-float accumulation uses the fused path; half-float accumulation deliberately preserves
 separate passes and their intermediate rounding without requiring optional shader features.
 
-Adjacent Linux comparison: three-layer198.4→193.0ms; complex113.0→111.4ms.
-The dense fixture changes from7to4plannedpasses with unchanged source uploads. See
+Adjacent Linux comparison: three-layer 198.4 → 193.0 ms; complex 113.0 → 111.4 ms.
+The dense fixture changes from 7 to 4 planned passes with unchanged source uploads. See
 `perf/experiments/psd-open-linux-fusion.json`. All GPU unit/integration tests pass, including
 fused/unfused masks/blends/depths and half-float fallback. The submission-pressure regression
-uses1,100layers so that the new fused plan still crosses the1,000operation submission limit;
+uses 1,100 layers so that the new fused plan still crosses the 1,000 operation submission limit;
 CPU parity, one-chunk and forced-flush assertions are retained.
 
 The PSD and IO packages also pass their corpus-enabled suites on the borrowed-import
-checkpoint:401PSD and590IO tests, no failures.
+checkpoint: 401 PSD and 590 IO tests, no failures.
 
 ## First-open cache admission
 
@@ -102,17 +100,17 @@ The default compositor behavior and cache budgets remain unchanged; subsequent r
 can populate/reuse the cache. Empty/failed preflight and discardable encode calls do not
 consume the request. Stale cache entries are cleared on the deferred render.
 
-End-to-end adjacent comparison, including import: three-layer190.9→181.0ms;
-complex109.7→101.4ms. See `perf/experiments/psd-open-linux-cache-endtoend.json`.
-A separate GPU-only opening-plus-two-64×64-edits experiment measured opening142.7→82.2ms,
-first edit1.60→2.01ms, second edit0.45→1.22ms, total144.8→85.4ms.
+End-to-end adjacent comparison, including import: three-layer 190.9 → 181.0 ms;
+complex 109.7 → 101.4 ms. See `perf/experiments/psd-open-linux-cache-endtoend.json`.
+A separate GPU-only opening-plus-two-64×64-edits experiment measured opening 142.7 → 82.2 ms,
+first edit 1.60 → 2.01 ms, second edit 0.45 → 1.22 ms, total 144.8 → 85.4 ms.
 That experiment uses separate conditioning and excludes import/admission; its absolute
 times and savings must not be added to the end-to-end comparison. Both policies receive
 excluded warmup pairs and six alternating measured pairs. See
 `perf/experiments/psd-open-linux-cache-policy.json` for all samples and CPU checks.
 
-Initial deferred cache bytes are0rather than512MiB; after the first small edit the cache
-holds16MiB and the second edit reuses it. All GPU tests pass(98cases), including
+Initial deferred cache bytes are 0 rather than 512 MiB; after the first small edit the cache
+holds 16 MiB and the second edit reuses it. All GPU tests pass (98 cases), including
 opening/stale-cache/discarded-encoder/partial-edit regressions across depths. Linux
 `cargo check -p photocraft-ui-egui` passed; native visible UI acceptance remains pending.
 The full opening harness's `cache-defer` mode requires `--features deferred-cache` and
