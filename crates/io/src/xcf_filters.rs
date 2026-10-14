@@ -255,6 +255,8 @@ mod scene_channel_configured;
 pub mod scene_channel_preparation_candidate;
 pub mod scene_channel_input_candidate;
 pub mod colorize_source;
+pub mod stretch_contrast_source;
+pub mod checkerboard_source;
 
 mod stretch_hsv_source;
 pub use stretch_hsv_source::{

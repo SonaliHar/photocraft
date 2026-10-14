@@ -94,6 +94,8 @@ pub mod gimp_stretch_hsv_candidate;
 pub mod gimp_stretch_hsv_graph_candidate;
 pub mod gimp_colorize_candidate;
 pub mod gimp_colorize_graph_candidate;
+pub mod gimp_stretch_contrast_candidate;
+pub mod gimp_checkerboard_candidate;
 pub mod gimp_text_items;
 pub mod gimp_text_unit_candidate;
 pub mod gimp_text_fixed_box_candidate;

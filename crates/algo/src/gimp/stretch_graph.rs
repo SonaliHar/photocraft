@@ -48,6 +48,79 @@ pub struct PreparedGraph<'source> {
     remaining_work: std::sync::atomic::AtomicU64,
 }
 impl<'source> PreparedGraph<'source> {
+    /// O(1) genuine constructor-derived envelope, before source words or provider
+    /// callback. It shares the exact legacy guards and formula used by prepare.
+    pub fn preparation_requirements(
+        source: &Surface,
+        graph: &FilterGraph,
+        extent: Rect,
+        domain: ExecutionDomain,
+        limits: ExecutionLimits,
+        ctl: &Interrupt<'_>,
+    ) -> Result<StretchRequirements, GraphExecuteError> {
+        ctl.check().map_err(|_| GraphExecuteError::Cancelled)?;
+        let standard = ExecutionLimits::default();
+        if limits.resident_bytes > standard.resident_bytes
+            || limits.index_bytes > standard.index_bytes
+            || limits.cache_bytes > standard.cache_bytes
+            || limits.work_units > standard.work_units
+        {
+            return Err(GraphExecuteError::RaisedLimit);
+        }
+        if graph.nodes.len() != 1
+            || graph.edges.len() != 1
+            || graph.input.is_none()
+            || domain.format != PixelFormat::RGBA32F
+            || domain.encoding != SampleEncoding::Linear
+            || domain.profile_fingerprint.is_none_or(|h| h == [0; 32])
+            || source.format() != domain.format
+        {
+            return Err(GraphExecuteError::Domain);
+        }
+        let node = graph.nodes.first().ok_or(GraphExecuteError::InvalidPlan)?;
+        let edge = graph.edges.first().ok_or(GraphExecuteError::InvalidPlan)?;
+        if node.id.0 == 0
+            || graph.output != node.id
+            || graph.input != Some(edge.from)
+            || edge.from == node.id
+            || edge.from.0 == 0
+            || edge.to != node.id
+            || edge.input_port != "input"
+            || edge.output_port != "output"
+            || node.operation.schema_epoch.is_empty()
+            || node.operation.schema_epoch.len() > 256
+            || node.arguments.len() != 2
+        {
+            return Err(GraphExecuteError::InvalidPlan);
+        }
+        let mut args = [BoolArgument { name: "", value: false }; 2];
+        for (dst, arg) in args.iter_mut().zip(&node.arguments) {
+            if arg.name.len() > 32 {
+                return Err(GraphExecuteError::InvalidPlan);
+            }
+            let FilterValue::Bool(value) = arg.value else {
+                return Err(GraphExecuteError::Operation("stretch requires exact typed Boolean parameters"));
+            };
+            *dst = BoolArgument { name: &arg.name, value };
+        }
+        let _config = StretchContrast::from_named_booleans(&node.operation.name, &node.operation.stored_version, &args).map_err(raster)?;
+        let header_bytes = std::mem::size_of::<Self>() as u64;
+        let needs = kernel::preparation_requirements(source, extent).map_err(raster)?;
+        let preparation_work = add(needs.work_units, 256)?;
+        if add(needs.peak_resident_bytes, header_bytes)? > limits.resident_bytes
+            || add(needs.index_bytes, header_bytes)? > limits.index_bytes
+            || preparation_work > limits.work_units
+        {
+            return Err(GraphExecuteError::Reservation);
+        }
+        Ok(StretchRequirements {
+            retained_bytes: add(needs.retained_bytes, header_bytes)?,
+            peak_resident_bytes: add(needs.peak_resident_bytes, header_bytes)?,
+            index_bytes: add(needs.index_bytes, header_bytes)?,
+            work_units: preparation_work,
+        })
+    }
+
     /// Required callback binds actual retained epoch/version-origin/source schema
     /// independently. Its arbitrary captures/work are enclosing-caller prepaid.
     /// Construction reduces the whole authoritative extent exactly once.
@@ -107,14 +180,8 @@ impl<'source> PreparedGraph<'source> {
         }
         let config = StretchContrast::from_named_booleans(&node.operation.name, &node.operation.stored_version, &args).map_err(raster)?;
         let header_bytes = std::mem::size_of::<Self>() as u64;
-        let needs = kernel::preparation_requirements(source, extent).map_err(raster)?;
-        let preparation_work = add(needs.work_units, 256)?;
-        if add(needs.peak_resident_bytes, header_bytes)? > limits.resident_bytes
-            || add(needs.index_bytes, header_bytes)? > limits.index_bytes
-            || preparation_work > limits.work_units
-        {
-            return Err(GraphExecuteError::Reservation);
-        }
+        let needs = Self::preparation_requirements(source, graph, extent, domain, limits, ctl)?;
+        let preparation_work = needs.work_units;
         // Callback precedes no source scan/allocation, after its known typed shape
         // and full producer/header prospective envelope have been admitted.
         validate_arguments(node)?;
@@ -224,10 +291,9 @@ impl<'source> PreparedGraph<'source> {
         budget.poll()?;
         budget.finish_output(output.surface, request.roi, self.domain)
     }
-    /// Automatic held preparation debit; callers cannot forget it or substitute
-    /// another graph/source. Work is also atomically cumulative in the prepared
-    /// kernel across repeated/concurrent ROIs; cancellation never returns credit.
-    pub fn execute(&self, roi: Rect, limits: ExecutionLimits, ctl: &Interrupt<'_>) -> Result<super::graph_execute::GraphOutput<'source>, GraphPipelineError> {
+    /// Allocation-free exact work prepayment shared by execute. Failed caller
+    /// attempts may debit this before planning; no source-pixel reduction occurs.
+    pub fn execution_work_requirements(&self, roi: Rect, limits: ExecutionLimits, ctl: &Interrupt<'_>) -> Result<u64, GraphPipelineError> {
         let error = GraphPipelineError::Execute;
         if limits.resident_bytes > self.limits.resident_bytes
             || limits.cache_bytes > self.limits.cache_bytes
@@ -264,6 +330,14 @@ impl<'source> PreparedGraph<'source> {
         if run_work > limits.work_units.checked_sub(self.preparation_work).ok_or(error(GraphExecuteError::WorkLimit))? {
             return Err(error(GraphExecuteError::WorkLimit));
         }
+        Ok(run_work)
+    }
+    /// Automatic held preparation debit; callers cannot forget it or substitute
+    /// another graph/source. Work is also atomically cumulative in the prepared
+    /// kernel across repeated/concurrent ROIs; cancellation never returns credit.
+    pub fn execute(&self, roi: Rect, limits: ExecutionLimits, ctl: &Interrupt<'_>) -> Result<super::graph_execute::GraphOutput<'source>, GraphPipelineError> {
+        let error = GraphPipelineError::Execute;
+        let run_work = self.execution_work_requirements(roi, limits, ctl)?;
         self.remaining_work
             .try_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |left| left.checked_sub(run_work))
             .map_err(|_| error(GraphExecuteError::WorkLimit))?;

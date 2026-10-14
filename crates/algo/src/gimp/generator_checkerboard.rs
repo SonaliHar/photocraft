@@ -58,6 +58,11 @@ impl Checkerboard {
 
     pub fn format(&self) -> PixelFormat { self.format }
     pub fn encoding(&self) -> SampleEncoding { self.encoding }
+    pub fn cell_width(&self) -> i32 { self.cell_width }
+    pub fn cell_height(&self) -> i32 { 16 }
+    pub fn offsets(&self) -> [i32; 2] { [0, 0] }
+    pub fn color1_bytes(&self) -> &[u8] { self.color1.get(..self.format.bytes_per_pixel()).unwrap_or(&[]) }
+    pub fn color2_bytes(&self) -> &[u8] { self.color2.get(..self.format.bytes_per_pixel()).unwrap_or(&[]) }
 }
 
 fn encoded_color(pixel: &[u8], format: PixelFormat) -> Result<[u8; 32], RasterInputError> {
@@ -73,9 +78,22 @@ fn encoded_color(pixel: &[u8], format: PixelFormat) -> Result<[u8; 32], RasterIn
     Ok(encoded)
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct Limits {
     /// Invocation-local peak; the enclosing graph must also reserve aggregate owners.
     pub resident_bytes: u64,
+    pub work_units: u64,
+}
+
+/// Known output/native-map ownership and conservative overlapping writer scratch.
+/// This is not an allocator/RSS measurement or enclosing source admission.
+#[derive(Clone, Copy, Debug)]
+pub struct Requirements {
+    pub parameter_retained_bytes: u64,
+    pub output_retained_bytes: u64,
+    pub output_index_bytes: u64,
+    pub scratch_bytes: u64,
+    pub peak_resident_bytes: u64,
     pub work_units: u64,
 }
 
@@ -88,8 +106,7 @@ fn poll(control: &Interrupt<'_>) -> Result<(), RasterInputError> {
 /// pixels outside ROI read the explicit transparent-zero default, not an infinite
 /// generator. The caller owns clipping/graph extent and subsequent quantization.
 /// On refusal/cancellation all private output is discarded.
-pub fn try_generate(configuration: &Checkerboard, roi: Rect, limits: Limits, control: &Interrupt<'_>) -> Result<Surface, RasterInputError> {
-    poll(control)?;
+pub fn requirements(configuration: &Checkerboard, roi: Rect) -> Result<Requirements, RasterInputError> {
     if roi.is_empty() || roi.x0 < 0 || roi.y0 < 0 { return Err(RasterInputError::InvalidBounds); }
     let format = configuration.format;
     let bpp = format.bytes_per_pixel();
@@ -101,16 +118,31 @@ pub fn try_generate(configuration: &Checkerboard, roi: Rect, limits: Limits, con
     let tiles = columns.checked_mul(rows).ok_or(RasterInputError::LimitExceeded)?;
     let tile_bytes = u64::try_from(TILE_SIZE).map_err(|_| RasterInputError::LimitExceeded)?.checked_pow(2)
         .and_then(|count| count.checked_mul(bpp as u64)).ok_or(RasterInputError::LimitExceeded)?;
-    let peak = tiles.checked_mul(tile_bytes.checked_add(512).ok_or(RasterInputError::LimitExceeded)?)
-        .and_then(|count| count.checked_add(tile_bytes.checked_mul(3)?))
-        .and_then(|count| count.checked_add((bpp as u64).checked_mul(2)?))
-        .ok_or(RasterInputError::LimitExceeded)?;
+    let output_index_bytes = tiles.checked_mul(512).ok_or(RasterInputError::LimitExceeded)?;
+    let output_retained_bytes = tiles.checked_mul(tile_bytes.checked_add(256).ok_or(RasterInputError::LimitExceeded)?)
+        .and_then(|n| n.checked_add(bpp as u64)).and_then(|n| n.checked_add(std::mem::size_of::<Surface>() as u64)).ok_or(RasterInputError::LimitExceeded)?;
+    let parameter_retained_bytes = std::mem::size_of::<Checkerboard>() as u64;
+    let scratch_bytes = tile_bytes.checked_mul(4).and_then(|n| n.checked_add((bpp as u64).checked_mul(2)?)).ok_or(RasterInputError::LimitExceeded)?;
+    let peak = output_retained_bytes.checked_add(output_index_bytes).and_then(|n| n.checked_add(scratch_bytes))
+        .and_then(|n| n.checked_add(parameter_retained_bytes)).ok_or(RasterInputError::LimitExceeded)?;
     // Includes copying/initialization and the native writer's growing map walks.
-    let work = (bytes as u64).checked_mul(2)
+    let work = (bytes as u64).checked_mul(4)
         .and_then(|count| count.checked_add(roi.size().area().checked_mul(16)?))
         .and_then(|count| count.checked_add(tiles.checked_mul(tiles)?.checked_mul(256)?))
+        .and_then(|count| count.checked_add(tiles.checked_mul(tile_bytes)?.checked_mul(2)?))
         .ok_or(RasterInputError::LimitExceeded)?;
+    Ok(Requirements { parameter_retained_bytes, output_retained_bytes, output_index_bytes, scratch_bytes, peak_resident_bytes: peak, work_units: work })
+}
+
+/// Same admitted native generator, with requirements computed before allocation.
+pub fn try_generate(configuration: &Checkerboard, roi: Rect, limits: Limits, control: &Interrupt<'_>) -> Result<Surface, RasterInputError> {
+    poll(control)?;
+    let required = requirements(configuration, roi)?;
+    let peak = required.peak_resident_bytes;
+    let work = required.work_units;
     if peak > limits.resident_bytes.min(MAX_CHECKED_RASTER_BYTES) || work > limits.work_units { return Err(RasterInputError::LimitExceeded); }
+    let format = configuration.format;
+    let bpp = format.bytes_per_pixel();
     let zero = [0u8; 32];
     let mut output = Surface::try_with_default_bytes(format, zero.get(..bpp).ok_or(RasterInputError::LengthMismatch)?)?;
     for tile in roi.tiles() {
@@ -121,7 +153,12 @@ pub fn try_generate(configuration: &Checkerboard, roi: Rect, limits: Limits, con
         if width == 0 { return Err(RasterInputError::InvalidBounds); }
         let mut pixels = Vec::new();
         pixels.try_reserve_exact(length).map_err(|_| RasterInputError::AllocationFailed)?;
-        pixels.resize(length, 0);
+        if pixels.capacity() > length.checked_mul(2).ok_or(RasterInputError::LimitExceeded)? { return Err(RasterInputError::LimitExceeded); }
+        // Bound zero initialization/polls independently of the later color fill.
+        for start in (0..length).step_by(32 << 10) {
+            poll(control)?;
+            pixels.resize(start.checked_add((length - start).min(32 << 10)).ok_or(RasterInputError::LimitExceeded)?, 0);
+        }
         for (index, pixel) in pixels.chunks_exact_mut(bpp).enumerate() {
             if index.is_multiple_of(256) { poll(control)?; }
             let x = i64::from(rect.x0) + i64::try_from(index % width).map_err(|_| RasterInputError::InvalidBounds)?;
