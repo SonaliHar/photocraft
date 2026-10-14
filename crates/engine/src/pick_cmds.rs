@@ -52,6 +52,14 @@ fn layers_hit(doc: &Document, x: i32, y: i32, type_bounds: bool, control: &photo
         if matches!(l.content, LayerContent::Group(_) | LayerContent::Adjustment(_)) {
             continue;
         }
+        if let LayerContent::BackedRaster(backed) = &l.content {
+            // Outside the explicit operative extent there is no drawable hit.
+            // Inside it, absence of a resident Surface does not mean transparency.
+            if !backed.operative_bounds().contains(x, y) {
+                continue;
+            }
+            return Err(EngineError::Other("layer.pickAt.backed-pixel-sampling-unsupported".into()));
+        }
         let source = doc.xcf_state.as_ref().and_then(|state| {
             state.source_items.iter().find(|source| {
                 source.owner == photocraft_doc::item_identity::ItemRef::Layer(l.id)

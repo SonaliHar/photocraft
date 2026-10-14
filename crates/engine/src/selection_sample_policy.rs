@@ -1,6 +1,9 @@
 //! Metadata-only refusal policy for remaining legacy f32/byte color-selection samplers.
 //! The actual sampled owner and previous coverage are checked separately. This does
 //! not authorize source rendering, invent a conversion space, or inspect pixel values.
+#[cfg(test)]
+#[path = "backed_sampling_guard_tests.rs"]
+mod backed_sampling_guard_tests;
 use crate::{EngineError, Result, Session};
 use photocraft_color::SampleType;
 use photocraft_doc::{Document, Layer, LayerId, MAX_GROUP_DEPTH};
@@ -116,14 +119,19 @@ pub(crate) fn existing_selection(session: &Session, cmd: &str, ctl: &Interrupt<'
     }
     poll(ctl)
 }
-/// Direct layer sampling follows the exact existing active-layer surface fallback.
+/// Direct layer sampling preserves the active pixel owner before any nonpixel fallback.
 pub(crate) fn sampled_pixels(session: &Session, cmd: &str, all_layers: bool, ctl: &Interrupt<'_>) -> Result<()> {
     poll(ctl)?;
     let state = session.active().ok_or(EngineError::NoDocument)?;
     if !all_layers {
-        if let Some(pixels) = find_layer(&state.doc, state.active_layer, ctl)?.and_then(Layer::surface) {
-            surface(pixels, cmd)?;
-            return poll(ctl);
+        if let Some(layer) = find_layer(&state.doc, state.active_layer, ctl)? {
+            if matches!(layer.content, photocraft_doc::LayerContent::BackedRaster(_)) {
+                return Err(bad(cmd, "active-backed-pixel-sampling-unsupported"));
+            }
+            if let Some(pixels) = layer.surface() {
+                surface(pixels, cmd)?;
+                return poll(ctl);
+            }
         }
     }
     composite(&state.doc, cmd, ctl)
