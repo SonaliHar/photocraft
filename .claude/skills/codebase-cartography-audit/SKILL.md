@@ -55,7 +55,7 @@ layered, and the function-point basis for a desktop editor).
 output to `<report>/metrics/` with the exact commands in `metrics/commands.txt` and
 versions in `metrics/versions.txt`. Rough cost on a cold cache: scc seconds; jscpd
 ~4 min; clippy and the per-package test listing build the workspace into
-`target/agent-audit` (~10 GB, tens of minutes). Run `measure.sh` in the background
+`target/agent-audit` (built without debuginfo or incremental data, because a default debug build exceeded this session's disk allowance; still several GB and tens of minutes). Run `measure.sh` in the background
 and do the reading-heavy stages meanwhile. Steps can be skipped with `SKIP_CLIPPY=1`,
 `SKIP_TESTS=1`, `SKIP_JSCPD=1`; a skipped step is reported as skipped, never guessed.
 

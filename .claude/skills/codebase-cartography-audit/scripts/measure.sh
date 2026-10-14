@@ -9,6 +9,10 @@ m="$report/metrics"
 bin="${AUDIT_BIN:-$HOME/.cache/cartography/bin}"
 scc="$(command -v scc || echo "$HOME/go/bin/scc")"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo/target/agent-audit}"   # AGENTS.md section 6
+# Metrics only need test *listings*, not debuggable binaries: no debuginfo, no incremental
+# data. This keeps the build within a cloud session's disk allowance (a default debug
+# build of this workspace is >10 GB and exhausted it). Delete the target dir afterwards.
+export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
 mkdir -p "$m" "$report/images" "$report/diagrams"
 cd "$repo"
 rel_report="$(realpath --relative-to="$repo" "$report" 2>/dev/null || basename "$report")"
