@@ -30,6 +30,9 @@ use crate::{EngineError, Result};
 /// Pixels of the image handed to the model (it squeezes it to 1024 x 1024 anyway).
 const MODEL_INPUT_PX: usize = 1_400_000;
 
+/// Images smaller than this (pixels) use the classical algorithm even when the model is available.
+const MODEL_MIN_PX: i64 = 16_384;
+
 static AUTO_DOWNLOAD: AtomicBool = AtomicBool::new(false);
 
 /// Let `engine: "auto"` download the model on first use. Called once by interactive apps; tests,
@@ -97,7 +100,9 @@ fn model_region(doc: &Document, layer: Option<LayerId>, all_layers: bool, engine
     ctx.progress(0.72, "Finding the subject");
     let region = with_doc_sampler(doc, layer, all_layers, |smp, d| -> Result<Option<Region>> {
         let canvas = d.bounds();
-        if canvas.width() < 4 || canvas.height() < 4 {
+        // The model always works at 1024 x 1024 (seconds of CPU), which a thumbnail-sized image
+        // does not need: the classical algorithm handles those instantly.
+        if canvas.width() < 4 || canvas.height() < 4 || (canvas.width() as i64 * canvas.height() as i64) < MODEL_MIN_PX {
             return Ok(None);
         }
         let step = segment::scale_for(canvas, MODEL_INPUT_PX);
@@ -113,7 +118,14 @@ fn model_region(doc: &Document, layer: Option<LayerId>, all_layers: bool, engine
 /// Find the subject of `layer` (or of the composite). Runs on the job's worker thread.
 pub fn find(doc: &Document, layer: Option<LayerId>, all_layers: bool, engine: Engine, ctx: &JobCtx) -> Result<Found> {
     let mut note = None;
-    if engine != Engine::Classic && !disabled_by_env() {
+    // `auto` stays classical inside this crate's own unit tests, so they give the same answer on a
+    // machine that happens to have the model installed; `model` is still honoured.
+    let use_model = match engine {
+        Engine::Classic => false,
+        Engine::Auto => !cfg!(test),
+        Engine::Model => true,
+    };
+    if use_model && !disabled_by_env() {
         match model_region(doc, layer, all_layers, engine, ctx) {
             Ok(Some(region)) => return Ok(Found { region, engine: "model", note: None }),
             Ok(None) => {}

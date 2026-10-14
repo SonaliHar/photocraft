@@ -18,6 +18,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::time::SystemTime;
 
 use photocraft_algo::segment::RgbImage;
 use photocraft_algo::selection::{expand, mask_from_surface};
@@ -129,9 +130,24 @@ fn write_secrets(path: &Path, map: &SecretMap) -> Result<()> {
     Ok(())
 }
 
-/// The session's credentials, loaded from the credentials file on first use.
+/// Serialises every credentials read-modify-write in this process, so two sessions saving
+/// different providers cannot overwrite each other's entry.
+static IO_LOCK: Mutex<()> = Mutex::new(());
+
+/// What was last read from the credentials file: its stamp (modified time, length) and content.
+type FileCache = Option<((SystemTime, u64), SecretMap)>;
+
+/// The session's credentials. With a credentials file the file is the single source of truth:
+/// every read looks at it (re-reading only when it changed) and every save re-reads, merges its
+/// own provider and writes under [`IO_LOCK`], so nothing is cached that was not persisted and
+/// independent sessions merge instead of clobbering. Without a file the map lives in memory.
 #[derive(Default)]
-pub struct Secrets(Mutex<Option<SecretMap>>);
+pub struct Secrets {
+    /// Overrides the app-wide file (tests).
+    file: Option<PathBuf>,
+    memory: Mutex<SecretMap>,
+    cache: Mutex<FileCache>,
+}
 
 impl std::fmt::Debug for Secrets {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -140,10 +156,51 @@ impl std::fmt::Debug for Secrets {
 }
 
 impl Secrets {
-    fn with<R>(&self, f: impl FnOnce(&mut SecretMap) -> R) -> R {
-        let mut guard = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        let map = guard.get_or_insert_with(|| CREDENTIALS_FILE.get().map(|p| read_secrets(p)).unwrap_or_default());
-        f(map)
+    fn path(&self) -> Option<&Path> {
+        self.file.as_deref().or_else(|| CREDENTIALS_FILE.get().map(PathBuf::as_path))
+    }
+
+    /// The credentials as they are now.
+    fn snapshot(&self) -> SecretMap {
+        let Some(path) = self.path() else {
+            return self.memory.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        };
+        let stamp = std::fs::metadata(path).ok().and_then(|m| Some((m.modified().ok()?, m.len())));
+        let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
+        if let (Some(stamp), Some((seen, map))) = (stamp, cache.as_ref())
+            && *seen == stamp
+        {
+            return map.clone();
+        }
+        let map = read_secrets(path);
+        *cache = stamp.map(|st| (st, map.clone()));
+        map
+    }
+
+    /// Set (or, with a default [`Secret`], remove) one provider's credentials. The in-memory
+    /// state changes only if the file write succeeded, so a retry really retries.
+    fn store(&self, id: &str, secret: Secret) -> Result<()> {
+        let _io = IO_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+        let apply = |map: &mut SecretMap| {
+            if secret == Secret::default() {
+                map.remove(id);
+            } else {
+                map.insert(id.to_string(), secret.clone());
+            }
+        };
+        match self.path() {
+            None => {
+                apply(&mut self.memory.lock().unwrap_or_else(PoisonError::into_inner));
+                Ok(())
+            }
+            Some(path) => {
+                let mut map = read_secrets(path);
+                apply(&mut map);
+                write_secrets(path, &map)?;
+                *self.cache.lock().unwrap_or_else(PoisonError::into_inner) = None;
+                Ok(())
+            }
+        }
     }
 }
 
@@ -154,41 +211,33 @@ impl Secrets {
 /// preferences: use [`save_settings`].
 pub fn settings(s: &Session) -> Settings {
     let mut st: Settings = s.prefs().dialogs.get(SETTINGS_KEY).and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
-    s.ai_secrets.with(|m| {
-        for p in Provider::ALL {
-            if let Some(secret) = m.get(p.id()) {
-                let cfg = st.providers.entry(p.id().to_string()).or_default();
-                cfg.api_key.clone_from(&secret.api_key);
-                cfg.account_id.clone_from(&secret.account_id);
-            }
+    let secrets = s.ai_secrets.snapshot();
+    for p in Provider::ALL {
+        if let Some(secret) = secrets.get(p.id()) {
+            let cfg = st.providers.entry(p.id().to_string()).or_default();
+            cfg.api_key.clone_from(&secret.api_key);
+            cfg.account_id.clone_from(&secret.account_id);
         }
-    });
+    }
     st
 }
 
-/// Save: the preferences get everything except credentials; those go to the credentials store
-/// (and its file, when enabled). Fails only if the file cannot be written; the credentials still
-/// work for this session.
-fn save_settings(s: &mut Session, st: &Settings) -> Result<()> {
+/// Save `st`, which differs from the stored settings in the provider choice and/or `changed`'s
+/// configuration. The credentials of `changed` go to the credentials store first (nothing is
+/// recorded if that write fails); the preferences get everything except credentials.
+fn save_settings(s: &mut Session, st: &Settings, changed: Option<Provider>) -> Result<()> {
+    if let Some(p) = changed {
+        let cfg = st.config(p);
+        s.ai_secrets.store(p.id(), Secret { api_key: cfg.api_key, account_id: cfg.account_id })?;
+    }
     let mut public = st.clone();
-    let mut secrets = SecretMap::new();
-    for (id, cfg) in &mut public.providers {
-        let secret = Secret { api_key: std::mem::take(&mut cfg.api_key), account_id: std::mem::take(&mut cfg.account_id) };
-        if secret != Secret::default() {
-            secrets.insert(id.clone(), secret);
-        }
+    for cfg in public.providers.values_mut() {
+        cfg.api_key.clear();
+        cfg.account_id.clear();
     }
     let value = serde_json::to_value(&public).unwrap_or(Value::Null);
     s.prefs.edit(|p| p.dialogs.insert(SETTINGS_KEY.into(), value));
-    let changed = s.ai_secrets.with(|m| {
-        let changed = *m != secrets;
-        *m = secrets.clone();
-        changed
-    });
-    match CREDENTIALS_FILE.get() {
-        Some(path) if changed => write_secrets(path, &secrets),
-        _ => Ok(()),
-    }
+    Ok(())
 }
 
 /// Where a credential comes from, for display (never the credential itself).
@@ -246,6 +295,7 @@ fn valid_url(u: &str) -> bool {
 fn set_settings(s: &mut Session, p: &Value) -> Result<Value> {
     let mut st = settings(s);
     let mut changed = false;
+    let mut configured: Option<Provider> = None;
     if let Some(id) = p.get("provider").and_then(Value::as_str) {
         let prov = Provider::parse(id).ok_or_else(|| bad(SETTINGS_CMD, format!("unknown provider `{id}`")))?;
         changed |= st.provider != Some(prov);
@@ -284,11 +334,14 @@ fn set_settings(s: &mut Session, p: &Value) -> Result<Value> {
             let n = v.as_u64().filter(|n| *n == 0 || (64..=2048).contains(n)).ok_or_else(|| bad(SETTINGS_CMD, "maxSide must be 0 (default) or 64..2048"))?;
             cfg.max_side = n as u32;
         }
-        changed |= st.config(prov) != cfg;
+        if st.config(prov) != cfg {
+            changed = true;
+            configured = Some(prov);
+        }
         st.providers.insert(prov.id().to_string(), cfg);
     }
     if changed {
-        save_settings(s, &st)?;
+        save_settings(s, &st, configured)?;
     }
     Ok(settings_state(s))
 }
@@ -619,6 +672,45 @@ mod tests {
         // Clearing removes them.
         s.execute(SETTINGS_CMD, json!({"configure": {"provider": "cloudflare", "apiKey": "", "accountId": ""}})).unwrap();
         assert_eq!(settings(&s).config(Provider::Cloudflare).api_key, "", "an empty string clears it");
+    }
+
+    /// Review finding: sessions that load the file independently must merge, not clobber.
+    #[test]
+    fn independent_sessions_merge_their_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ai-credentials.json");
+        let mut a = Session::new();
+        let mut b = Session::new();
+        a.ai_secrets.file = Some(path.clone());
+        b.ai_secrets.file = Some(path.clone());
+        // Both read the (still missing) file before either writes.
+        assert!(settings(&a).config(Provider::Gemini).api_key.is_empty());
+        assert!(settings(&b).config(Provider::OpenAi).api_key.is_empty());
+        a.execute(SETTINGS_CMD, json!({"configure": {"provider": "gemini", "apiKey": "dummy-gemini"}})).unwrap();
+        b.execute(SETTINGS_CMD, json!({"configure": {"provider": "openai", "apiKey": "dummy-openai"}})).unwrap();
+        let on_disk = read_secrets(&path);
+        assert_eq!(on_disk.get("gemini").map(|s| s.api_key.as_str()), Some("dummy-gemini"));
+        assert_eq!(on_disk.get("openai").map(|s| s.api_key.as_str()), Some("dummy-openai"));
+        // Each session sees the other's change without restarting.
+        assert_eq!(settings(&a).config(Provider::OpenAi).api_key, "dummy-openai");
+        assert_eq!(settings(&b).config(Provider::Gemini).api_key, "dummy-gemini");
+    }
+
+    /// Review finding: a failed write must not be remembered as saved, so retrying retries.
+    #[test]
+    fn a_failed_credentials_write_is_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ai-credentials.json");
+        std::fs::create_dir(&path).unwrap(); // an obstruction: the target is a directory
+        let mut s = Session::new();
+        s.ai_secrets.file = Some(path.clone());
+        let params = json!({"configure": {"provider": "gemini", "apiKey": "dummy-key"}});
+        assert!(s.execute(SETTINGS_CMD, params.clone()).is_err(), "the write must fail");
+        assert!(settings(&s).config(Provider::Gemini).api_key.is_empty(), "a failed save is not remembered");
+        std::fs::remove_dir(&path).unwrap();
+        s.execute(SETTINGS_CMD, params).unwrap();
+        assert_eq!(read_secrets(&path).get("gemini").map(|s| s.api_key.as_str()), Some("dummy-key"), "the retry wrote the file");
+        assert!(!s.prefs_to_json().contains("dummy-key"));
     }
 
     #[test]
