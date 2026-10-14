@@ -162,6 +162,37 @@ fn answer(open: &Open, answer: Option<FileDialogAnswer>) {
 }
 
 #[test]
+fn menu_place_starts_transform_for_each_chosen_image() {
+    for command in ["file.placeEmbedded", "file.placeLinked"] {
+        let (mut app, open, _) = app();
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "source.png", &Default::default()).unwrap().bytes;
+        let ctx = egui::Context::default();
+        let initial_layers = app.session.active().unwrap().doc.layer_count();
+        let initial_history = app.session.active().unwrap().history.past_len();
+        for index in 0..2 {
+            menus::invoke(&mut app, &ctx, command, json!({})).unwrap();
+            app.poll_file_dialog(&ctx, None);
+            answer(&open, Some(FileDialogAnswer::Contents(format!("drawing-{index}.png"), bytes.clone())));
+            app.poll_file_dialog(&ctx, None);
+            let st = app.session.active().unwrap();
+            assert_eq!(st.doc.layer_count(), initial_layers + index + 1);
+            assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, format!("drawing-{index}"));
+            let transform = app.ui.transform.as_ref().expect("File > Place must offer transform handles after the picker completes");
+            assert_eq!(transform.made, Some(crate::state::MadeLayer::Place));
+            if index == 0 {
+                crate::transform_tool::commit(&mut app);
+                assert_eq!(app.session.active().unwrap().history.past_len(), initial_history + 1);
+            } else {
+                crate::transform_tool::cancel(&mut app);
+                assert_eq!(app.session.active().unwrap().doc.layer_count(), initial_layers + 1);
+                assert_eq!(app.session.active().unwrap().history.past_len(), initial_history + 1);
+            }
+        }
+    }
+}
+
+#[test]
 fn open_starts_in_the_last_used_folder() {
     let (mut app, open, _) = app();
     let ctx = egui::Context::default();
