@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 pub const VERSION: u64 = 1;
 /// Bumped whenever the pictures made from the same edits change (render maths, colour handling, sizes), so
 /// a host knows pictures made before are out of date. Image Triage keeps the same number.
-pub const ALGORITHM: u64 = 1;
+pub const ALGORITHM: u64 = 2;
 
 /// What a host asked for: where the manifest goes, and the original photo's signature (`"<bytes>:<mtime_ns>"`).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -32,7 +32,7 @@ pub struct Request {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Made {
     /// A saved project: the file's size and SHA-256.
-    Project { size: u64, sha256: String },
+    Project { size: u64, sha256: String, depth: u8 },
     /// A Camera Raw recipe: the SHA-256 of the recipe file's bytes.
     Recipe { sha256: String },
 }
@@ -136,9 +136,9 @@ pub fn content(generation: u64, made: &Made, source: Option<&str>, outputs: &[(&
         "outputs": pictures,
     });
     match made {
-        Made::Project { size, sha256 } => {
+        Made::Project { size, sha256, depth } => {
             manifest["kind"] = json!("project");
-            manifest["project"] = json!({"size": size, "sha256": sha256});
+            manifest["project"] = json!({"size": size, "sha256": sha256, "depth": depth});
         }
         Made::Recipe { sha256 } => {
             manifest["kind"] = json!("recipe");

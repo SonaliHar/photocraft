@@ -460,6 +460,7 @@ pub fn control(app: &mut PhotocraftApp, ctx: &egui::Context, p: &serde_json::Val
     if let Some(recipe) = camera_raw_ui::recipe(app) {
         state["recipe"] = recipe;
     }
+    state["source"] = json!(camera_raw_ui::source(app));
     if let Some(left) = left {
         state["result"] = left;
     }

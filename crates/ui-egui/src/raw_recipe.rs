@@ -432,8 +432,14 @@ mod tests {
         let doc = grey_document(0.5);
         let id = doc.id;
         app.session.add_document(doc, None);
-        persist(&mut app, id, &Targets { recipe: None, display: Some("a.display.jpg".into()), manifest: None }, &CameraRaw::default(), &Developed::default())
-            .unwrap();
+        persist(
+            &mut app,
+            id,
+            &Targets { recipe: None, display: Some("blocked-render.display.jpg".into()), manifest: None },
+            &CameraRaw::default(),
+            &Developed::default(),
+        )
+        .unwrap();
     }
 
     #[test]

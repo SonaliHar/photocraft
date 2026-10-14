@@ -1104,6 +1104,10 @@ pub(crate) fn recipe(app: &PhotocraftApp) -> Option<Value> {
     app.camera_raw.as_ref().map(|d| crate::raw_recipe::to_json(&d.params))
 }
 
+pub(crate) fn source(app: &PhotocraftApp) -> Option<&str> {
+    app.camera_raw.as_ref()?.raw_open.as_ref()?.path.as_deref()
+}
+
 /// Leaving the photo the dialog is on ("Done"): a raw's settings are kept as its recipe and nothing is
 /// developed or applied to a document, so browsing past a photo never costs a develop or a save; any other
 /// dialog applies as a photo switch does (changed settings as one history step, untouched ones just close).

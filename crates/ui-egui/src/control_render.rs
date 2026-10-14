@@ -30,7 +30,13 @@ pub fn start(app: &mut PhotocraftApp, p: &Value) -> Result<Started, String> {
             if !project.to_ascii_lowercase().ends_with(".pcraft") {
                 return Err("render `project` must be a .pcraft project".into());
             }
-            let snapshot = text("snapshot").and_then(|key| app.jobs.host_snapshots.get(key)).map(|(doc, _)| doc.clone());
+            let snapshot = match p.get("snapshot") {
+                None => None,
+                Some(Value::String(key)) if !key.is_empty() => {
+                    Some(app.jobs.host_snapshots.get(key).map(|(doc, _)| doc.clone()).ok_or_else(|| format!("no pending snapshot for {key}"))?)
+                }
+                Some(_) => return Err("snapshot must name a pending host save".into()),
+            };
             Source::Project { path: project.to_string(), snapshot }
         }
         (None, Some(recipe)) => {
@@ -262,6 +268,8 @@ mod tests {
         assert!(start(&mut app, &json!({"out": "x", "source": "IMG.dng", "recipe": {"version": 1, "cameraRaw": {"exposure": "bright"}}})).is_err());
         assert!(start(&mut app, &json!({"out": "x", "project": "p.psd"})).is_err());
         assert!(start(&mut app, &json!({"project": "p.pcraft"})).unwrap_err().contains("out"));
+        assert!(start(&mut app, &json!({"out": "x", "project": "p.pcraft", "snapshot": "missing.pcraft"})).unwrap_err().contains("snapshot"));
+        assert!(start(&mut app, &json!({"out": "x", "project": "p.pcraft", "snapshot": 7})).is_err());
         let started = start(&mut app, &json!({"out": "x", "source": "flat.png", "recipe": crate::raw_recipe::to_json(&CameraRaw::default())})).unwrap();
         assert!(finish(&mut app, started).unwrap_err().contains("raw photos only"));
         // Values are clamped where they are applied, except what the develop itself refuses: a failure, never the original.

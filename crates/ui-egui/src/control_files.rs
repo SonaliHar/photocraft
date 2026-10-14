@@ -123,6 +123,7 @@ pub fn open_with_camera_raw(app: &mut PhotocraftApp, path: &str, replace: bool, 
                 .map_err(|e| EngineError::Other(e.to_string()))?;
                 ctx.check()?;
                 // The dialog's proxy is built here, on the worker, not by the editor's own thread when the dialog opens.
+                photocraft_engine::jobs::warm_layer_bounds(&imported.document, || ctx.check())?;
                 let proxy = if camera_raw_import { crate::camera_raw_ui::proxy_for(&imported.document) } else { None };
                 let proxy = match (proxy, curve) {
                     (Some(proxy), Some(curve)) => Some(proxy.with_curve(curve)),
@@ -334,7 +335,12 @@ pub fn stash_with_outputs(
                 };
                 if let (Some(request), Some(n)) = (&manifest, generation) {
                     use crate::render_manifest::{Made, content, publish, sha256_hex};
-                    let made = Made::Project { size: project.bytes.len() as u64, sha256: sha256_hex(&project.bytes) };
+                    let depth = match doc.depth {
+                        photocraft_color::SampleType::U8 => 8,
+                        photocraft_color::SampleType::U16 => 16,
+                        photocraft_color::SampleType::F32 => 32,
+                    };
+                    let made = Made::Project { size: project.bytes.len() as u64, sha256: sha256_hex(&project.bytes), depth };
                     let mut outputs: Vec<(&str, &str, &[u8])> = Vec::new();
                     if let (Some(target), Some(render)) = (&preview, &render) {
                         outputs.push(("png", target.as_str(), render.bytes.as_slice()));
