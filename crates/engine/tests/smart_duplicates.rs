@@ -272,6 +272,10 @@ fn photoshop_placed_copies_import_as_shared_instances() {
     assert_eq!(copies.len(), 2);
     assert_eq!(copies[0]["smartContents"], copies[1]["smartContents"]);
     assert_eq!(copies[0]["smartContents"]["instances"], 2);
+    for copy in &copies {
+        assert_eq!(copy["smartSource"]["kind"], "embedded");
+        assert!(copy["smartSource"]["uuid"].as_str().is_some());
+    }
     let mut ids: Vec<u64> = copies.iter().map(|l| l["id"].as_u64().unwrap()).collect();
     let path = contents_file([0.0, 1.0, 0.0, 1.0], "photoshop-copies");
     let replaced = s.execute("layer.smartObjects.replaceContents", json!({"layer": ids[0], "path": path}));
