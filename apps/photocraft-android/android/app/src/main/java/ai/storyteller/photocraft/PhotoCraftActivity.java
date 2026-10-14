@@ -15,6 +15,8 @@ import android.view.View;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -56,6 +58,7 @@ public final class PhotoCraftActivity extends NativeActivity {
     private float touchSlopPx;
     private boolean stylusTipDown;
     private boolean stylusBarrelHeld;
+    private OnBackInvokedCallback backCallback;
 
     private final Runnable bridgePump = new Runnable() {
         @Override
@@ -81,6 +84,10 @@ public final class PhotoCraftActivity extends NativeActivity {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         touchSlopPx = android.view.ViewConfiguration.get(this).getScaledTouchSlop();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            backCallback = () -> moveTaskToBack(true);
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback);
+        }
         enterImmersiveMode();
         handler.post(bridgePump);
     }
@@ -101,9 +108,18 @@ public final class PhotoCraftActivity extends NativeActivity {
 
     @Override
     protected void onDestroy() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && backCallback != null) {
+            getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backCallback);
+        }
         handler.removeCallbacks(bridgePump);
         io.shutdownNow();
         super.onDestroy();
+    }
+
+    @Override
+    @SuppressWarnings("deprecation")
+    public void onBackPressed() {
+        moveTaskToBack(true);
     }
 
     /** Keeps the editing surface clear of status and navigation bars. A swipe still reveals them temporarily. */
