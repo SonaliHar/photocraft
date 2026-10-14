@@ -1101,9 +1101,10 @@ impl<'a> Planner<'a> {
         };
         for &(i, e) in &rev {
             if let Effect::DropShadow(s) = e {
-                // The layer hides the shadow beneath it where its fill is see-through.
+                // The layer hides the shadow beneath it where its fill is see-through, and wholly
+                // in a mode that blends with it (as the CPU renderer: `shadow_see_through`).
                 let flags = if s.knocks_out { F_KNOCKOUT } else { 0 };
-                let see_through = 1.0 - layer.fill_opacity.clamp(0.0, 1.0);
+                let see_through = photocraft_compose::effects::shadow_see_through(layer);
                 w = self.paint_k(
                     w,
                     content,
@@ -1600,7 +1601,9 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
             (2, p, None)
         }
         Adjustment::Posterize { levels } => {
+            // The levels, and the 16-bit rule (compose::adjust::posterize_in).
             p[0][0] = (*levels).clamp(2, 255) as f32;
+            p[0][1] = if depth == photocraft_color::SampleType::U16 { 1.0 } else { 0.0 };
             (3, p, None)
         }
         Adjustment::BrightnessContrast { brightness, contrast, legacy: true } => {
