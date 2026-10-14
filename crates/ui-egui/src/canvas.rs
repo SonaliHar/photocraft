@@ -1701,11 +1701,22 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         app.filter_preview_worker.supersede(&request, crate::gpu_canvas::now_ms());
         if let Some((finished, computed)) = app.filter_preview_worker.poll() {
             match computed {
-                // A result for parameters a few frames old is still this dialog's preview, and is
-                // what makes the canvas follow a drag. Errors stay on the exact request: a value
-                // the pointer has already dragged past must not raise a notice.
-                Ok(computed) if finished.same_target(&request) => publish_filter_preview(app, idx, finished, computed.result, computed.ms),
+                // The dialog still holds these exact parameters. Publish as before, including an
+                // empty result: that is how a filter which no longer applies clears the canvas.
+                Ok(computed) if finished == request => publish_filter_preview(app, idx, finished, computed.result, computed.ms),
+                // Mid-drag, a frame for the value the pointer has just left is what makes the
+                // canvas follow the drag. Three things have to hold for it: it belongs to this
+                // preview, it has a frame to show (an empty one would blank a good preview), and
+                // it must not displace a frame that is already exact for the dialog, which is
+                // what a slider dragged out and back would otherwise make the canvas do.
+                Ok(computed)
+                    if finished.same_target(&request) && computed.result.is_some() && !app.filter_preview.as_ref().is_some_and(|p| p.key == request) =>
+                {
+                    publish_filter_preview(app, idx, finished, computed.result, computed.ms);
+                }
                 Ok(_) => {}
+                // Errors stay on the exact request: a value the pointer has already dragged past
+                // must not raise a notice, and a still one will raise it when it is recomputed.
                 Err(error) if finished == request => {
                     app.filter_preview = Some(crate::filter_dialog::FilterPreview { key: finished, result: None, committing: false });
                     crate::notices::error(app, error);
@@ -5876,9 +5887,63 @@ mod tests {
         assert!(app.filter_preview.as_ref().unwrap().result.is_some());
     }
 
+    // Starts a worker job that computes a real preview for the dialog as it stands, but only
+    // finishes when the returned sender is signalled. Gating it here keeps these tests off the
+    // clock: `supersede` cancels a running job once the values have been still for SETTLE_MS, so a
+    // test that relies on a real blur beating a 150 ms timer is a test that fails on a loaded box.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn gated_blur_preview(app: &mut PhotocraftApp, ctx: &egui::Context) -> (std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>, f64) {
+        let d = app.ui.dialogs.first().expect("a dialog is open");
+        let st = app.session.active().expect("a document is active");
+        let command = "filter.blur.gaussianBlur";
+        let params = app.with_mask_target(command, crate::filter_dialog::params_of(&d.fields));
+        assert_eq!(
+            crate::filter_dialog::preview_factor(command, &params, 1),
+            1,
+            "a 64x48 document previews at full resolution, and these tests rely on k staying 1"
+        );
+        let key = crate::filter_dialog::FilterPreviewKey {
+            doc: st.doc.id,
+            revision: st.revision,
+            dialog: d.id,
+            active: st.active_layer,
+            target: st.channel_view.target,
+            command: command.into(),
+            params,
+            k: 1,
+        };
+        let doc = app.session.documents()[0].doc.clone();
+        let documents: Vec<_> = app.session.documents().iter().map(|d| d.doc.clone()).collect();
+        let radius = key.params["radius"].as_f64().expect("the dialog seeds a radius");
+        let (release, wait) = std::sync::mpsc::channel::<()>();
+        let (done, finished) = std::sync::mpsc::channel::<()>();
+        app.filter_preview_worker
+            .start(key.clone(), ctx.clone(), move |_| {
+                wait.recv_timeout(std::time::Duration::from_secs(30)).expect("the test releases the job");
+                let result =
+                    crate::filter_dialog::preview_document_for_target(&doc, key.active, &key.command, &key.params, key.k, None, key.target, &documents).map(
+                        |d| {
+                            let buffer = photocraft_compose::flatten(&d);
+                            (std::sync::Arc::new(d), buffer)
+                        },
+                    );
+                // Tell the test the result is already sitting in the worker's channel, so the
+                // test never has to sleep and never races `supersede`'s settle timer.
+                let _ = done.send(());
+                crate::filter_preview_worker::Computed { result, ms: 0.0 }
+            })
+            .expect("the worker starts");
+        (release, finished, radius)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn await_job(finished: &std::sync::mpsc::Receiver<()>) {
+        finished.recv_timeout(std::time::Duration::from_secs(30)).expect("the preview job finished");
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn a_preview_computed_mid_drag_reaches_the_canvas() {
+    fn a_preview_computed_mid_drag_reaches_the_canvas_and_then_converges() {
         // A drag used to paint nothing at all: every completion was dropped for carrying stale
         // parameters, so the canvas only ever showed an effect once the pointer had come to rest.
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -5886,71 +5951,144 @@ mod tests {
         app.background_jobs = true;
         crate::filter_dialog::open(&mut app, "filter.blur.gaussianBlur").unwrap();
         let ctx = egui::Context::default();
-        let first = app.ui.dialogs[0].fields["radius"].as_f64().expect("the dialog seeds a radius");
+        let (release, finished, first) = gated_blur_preview(&mut app, &ctx);
 
-        // Hand the first radius to the worker, then move the slider before it can land.
-        assert!(ensure_filter_preview(&mut app, 0, &ctx).is_none());
+        // The pointer moves on before the frame lands.
         let moved = first + 4.0;
         app.ui.dialogs[0].fields.insert("radius".into(), json!(moved));
+        release.send(()).expect("released");
+        await_job(&finished);
 
+        // The finished frame is painted even though the dialog has moved on.
+        ensure_filter_preview(&mut app, 0, &ctx);
+        let shown = app.filter_preview.as_ref().expect("the mid-drag frame was published");
+        assert_eq!(shown.key.params["radius"].as_f64(), Some(first), "the frame is the one the worker finished");
+        assert!(shown.result.is_some());
+        assert_eq!(app.ui.dialogs[0].fields["radius"].as_f64(), Some(moved), "the slider kept moving");
+        // The display gate lets it through, so the canvas has something to draw: this is what
+        // re-adding `params` to that gate would break.
+        assert!(ensure_filter_preview(&mut app, 0, &ctx).is_some(), "the canvas draws the mid-drag frame");
+
+        // And the preview still converges on the value the dialog holds. `fresh` has to stay an
+        // exact match for that: relaxed, the canvas would believe it already had the current
+        // request after the first frame of a drag and never compute again.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while app.filter_preview.as_ref().is_none_or(|p| p.key.params["radius"].as_f64() != Some(first)) {
-            assert!(std::time::Instant::now() < deadline, "no mid-drag frame was published");
+        while app.filter_preview.as_ref().is_none_or(|p| p.key.params["radius"].as_f64() != Some(moved)) {
+            assert!(std::time::Instant::now() < deadline, "the preview never converged on the current radius");
             ensure_filter_preview(&mut app, 0, &ctx);
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        // The published frame is the one the worker finished, not the radius the slider is on.
-        assert_eq!(app.ui.dialogs[0].fields["radius"].as_f64(), Some(moved), "the slider kept moving");
-        assert!(app.filter_preview.as_ref().expect("a frame was published").result.is_some());
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn a_reopened_dialog_discards_the_previous_dialogs_finished_preview() {
+    fn a_mid_drag_frame_does_not_replace_a_frame_that_is_already_exact() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
         app.background_jobs = true;
-        crate::filter_dialog::open(&mut app, "image.mode.indexedColor").unwrap();
+        crate::filter_dialog::open(&mut app, "filter.blur.gaussianBlur").unwrap();
+        let ctx = egui::Context::default();
+
+        // A frame for the radius the dialog holds right now reaches the canvas. This also proves
+        // the hand-built key is the one the canvas builds: it can only be published by the exact
+        // arm, which requires `finished == request`.
+        let (release, finished, first) = gated_blur_preview(&mut app, &ctx);
+        release.send(()).expect("released");
+        await_job(&finished);
+        ensure_filter_preview(&mut app, 0, &ctx);
+        assert_eq!(app.filter_preview.as_ref().expect("published").key.params["radius"].as_f64(), Some(first));
+
+        // The slider moves away and a frame for the new radius is computed...
+        let moved = first + 4.0;
+        app.ui.dialogs[0].fields.insert("radius".into(), json!(moved));
+        let (release_moved, finished_moved, _) = gated_blur_preview(&mut app, &ctx);
+        // ...and back to `first` before that frame lands.
+        app.ui.dialogs[0].fields.insert("radius".into(), json!(first));
+        release_moved.send(()).expect("released");
+        await_job(&finished_moved);
+
+        // The frame for `moved` arrives late. It belongs to this preview, but the frame on screen
+        // is already exact for the dialog, so it must not be shown in place of it.
+        ensure_filter_preview(&mut app, 0, &ctx);
+        let shown = app.filter_preview.as_ref().expect("a frame is on screen");
+        assert_eq!(shown.key.params["radius"].as_f64(), Some(first), "a late frame replaced an exact one");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_mid_drag_empty_result_leaves_the_preview_alone() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        app.background_jobs = true;
+        crate::filter_dialog::open(&mut app, "filter.blur.gaussianBlur").unwrap();
+        let ctx = egui::Context::default();
+
+        let (release, finished, first) = gated_blur_preview(&mut app, &ctx);
+        release.send(()).expect("released");
+        await_job(&finished);
+        ensure_filter_preview(&mut app, 0, &ctx);
+        assert!(app.filter_preview.as_ref().expect("published").result.is_some());
+
+        // The slider moves and a job for the new radius is started, then the slider moves again
+        // before that job lands: its result is stale by the time it arrives.
+        let moved = first + 4.0;
+        app.ui.dialogs[0].fields.insert("radius".into(), json!(moved));
         let d = app.ui.dialogs.first().expect("a dialog is open");
         let st = app.session.active().expect("a document is active");
-        let old = crate::filter_dialog::FilterPreviewKey {
+        let key = crate::filter_dialog::FilterPreviewKey {
             doc: st.doc.id,
             revision: st.revision,
             dialog: d.id,
             active: st.active_layer,
             target: st.channel_view.target,
-            command: "image.mode.indexedColor".into(),
-            params: app.with_mask_target("image.mode.indexedColor", crate::filter_dialog::params_of(&d.fields)),
+            command: "filter.blur.gaussianBlur".into(),
+            params: json!({"radius": moved}),
             k: 1,
         };
-        let (release, wait) = std::sync::mpsc::channel();
-        let ctx = egui::Context::default();
+        let (release_empty, wait) = std::sync::mpsc::channel::<()>();
+        let (done, finished_empty) = std::sync::mpsc::channel::<()>();
         app.filter_preview_worker
-            .start(old.clone(), ctx.clone(), move |_| {
-                wait.recv_timeout(std::time::Duration::from_secs(5)).expect("released in time");
+            .start(key, ctx.clone(), move |_| {
+                wait.recv_timeout(std::time::Duration::from_secs(30)).expect("released");
+                let _ = done.send(());
                 crate::filter_preview_worker::Computed { result: None, ms: 0.0 }
             })
             .expect("the worker starts");
+        app.ui.dialogs[0].fields.insert("radius".into(), json!(moved + 4.0));
+        release_empty.send(()).expect("released");
+        await_job(&finished_empty);
 
+        // Storing an empty result here would drop the canvas back to the unfiltered layer for a
+        // frame. The exact request may still store one; a stale one may not.
+        ensure_filter_preview(&mut app, 0, &ctx);
+        assert!(app.filter_preview.as_ref().expect("a preview is still shown").result.is_some(), "an empty mid-drag result blanked the canvas");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_reopened_dialog_never_paints_the_previous_dialogs_preview() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        app.background_jobs = true;
+        crate::filter_dialog::open(&mut app, "filter.blur.gaussianBlur").unwrap();
+        let ctx = egui::Context::default();
+        let first_dialog = app.ui.dialogs.first().expect("a dialog is open").id;
+        let (release, finished, _) = gated_blur_preview(&mut app, &ctx);
+
+        // Close that dialog and open another one for the same layer and the same command. Only the
+        // dialog id differs, which is exactly what `same_target` has to notice.
         app.ui.dialogs.clear();
-        crate::filter_preview_worker::discard_closed(&mut app);
-        crate::filter_dialog::open(&mut app, "image.mode.indexedColor").unwrap();
-        assert!(ensure_filter_preview(&mut app, 0, &ctx).is_none());
-        assert!(app.filter_preview.is_none());
+        crate::filter_dialog::open(&mut app, "filter.blur.gaussianBlur").unwrap();
+        let second_dialog = app.ui.dialogs.first().expect("a dialog is open").id;
+        assert_ne!(second_dialog, first_dialog, "a reopened dialog gets a new id");
         release.send(()).expect("released");
+        await_job(&finished);
 
-        // The reopened dialog has its own id, so the old dialog's result must never be painted,
-        // whatever its parameters say.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while app.filter_preview.is_none() {
-            ensure_filter_preview(&mut app, 0, &ctx);
-            if let Some(preview) = &app.filter_preview {
-                assert_ne!(preview.key.dialog, old.dialog, "a reopened dialog painted the previous dialog's preview");
-            }
-            assert!(std::time::Instant::now() < deadline, "the reopened dialog never previewed");
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        assert_eq!(app.session.active().expect("a document is active").doc.mode, photocraft_color::ColorMode::Rgb);
+        // The first dialog's frame arrives late. It must not be painted under the second one.
+        // `discard_closed` usually reclaims it a frame earlier, which is why this test drives the
+        // gate directly: the id check is the part that has to hold when that cleanup misses.
+        ensure_filter_preview(&mut app, 0, &ctx);
+        assert!(app.filter_preview.is_none(), "a reopened dialog painted the previous dialog's preview");
     }
 
     #[test]

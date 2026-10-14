@@ -962,10 +962,12 @@ pub struct FilterPreview {
     pub committing: bool,
 }
 
-/// Match the full request before accepting a worker result, including a reopened dialog.
+/// Identity of one filter dialog's live preview.
 ///
-/// Two keys that agree on [`Self::same_target`] name the same dialog, layer, document and preview
-/// resolution; only the parameters may differ. That is exactly what a slider drag produces: the
+/// `PartialEq` is the whole request: it says a worker result is exactly what the dialog is asking
+/// for now. [`Self::same_target`] is the looser question of whether a result belongs to this
+/// preview at all; two keys that agree on it name the same dialog, layer, document and preview
+/// resolution, and differ only in parameters — which is what a slider drag produces, since the
 /// worker computed for the value the pointer passed a moment ago.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FilterPreviewKey {
@@ -1002,7 +1004,6 @@ impl FilterPreviewKey {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     /// Preset names such as "iPhone 14 Pro Max" (the artboard dialog's choices) are text, not
     /// camelCase keys: they used to read "I Phone 14  Pro  Max".
