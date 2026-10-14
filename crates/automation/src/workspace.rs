@@ -368,7 +368,7 @@ fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
             params.get("data").is_none() && params.get("path").is_some()
         }
         // With a `path` the file is written there; without one the bytes come back as `data`.
-        "actions.save" | "swatches.export" => params.get("path").is_some(),
+        "actions.save" | "actions.export" | "swatches.export" => params.get("path").is_some(),
         "plugin.reload" => true,
         _ => false,
     }
@@ -767,6 +767,7 @@ mod tests {
             ("swatches.export", serde_json::json!({"path": "/outside/set.ase"})),
             ("actions.load", serde_json::json!({"path": "/outside/set.atn"})),
             ("actions.save", serde_json::json!({"path": "/outside/set.atn"})),
+            ("actions.export", serde_json::json!({"path": "/outside/actions.json"})),
         ] {
             assert!(authorize_engine_command(id, &params).is_err(), "{id}: {params}");
         }
@@ -778,6 +779,8 @@ mod tests {
             ("swatches.export", serde_json::json!({"format": "ase"})),
             ("actions.load", serde_json::json!({"data": "QUJD"})),
             ("actions.save", serde_json::json!({"set": "S"})),
+            ("actions.import", serde_json::json!({"data": "{\"version\":1,\"actions\":[]}"})),
+            ("actions.export", serde_json::json!({})),
         ] {
             assert!(authorize_engine_command(id, &params).is_ok(), "{id}: {params}");
         }
