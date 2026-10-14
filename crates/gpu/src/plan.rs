@@ -1613,13 +1613,13 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
             (3, p, None)
         }
         Adjustment::BrightnessContrast { brightness, contrast, legacy: true } => {
-            let c = contrast.clamp(-100.0, 99.0);
-            let k = if c >= 0.0 { 1.0 / (1.0 - c / 100.0) } else { 1.0 + c / 100.0 };
-            // Brightness before contrast when it is raised, after it when lowered (compose::adjust).
-            let (pre, post) = if c >= 0.0 { (brightness / 255.0, 0.0) } else { (0.0, brightness / 255.0) };
-            // 32-bit documents pivot at 127 of 255 and don't clip (the shader checks F_HDR).
-            let pivot = if depth == photocraft_color::SampleType::F32 { 127.0 / 255.0 } else { photocraft_compose::adjust::LEGACY_PIVOT };
-            p[0] = [pre, k, pivot, post];
+            // In 8-bit levels: brightness before contrast when it is raised, after it when
+            // lowered; an 8-bit table below 32 bits, the line unclipped at 32 bits (the shader
+            // checks F_HDR) (compose::adjust::legacy_brightness_contrast).
+            use photocraft_compose::adjust::{LEGACY_PIVOT_LEVEL, legacy_brightness_contrast_line};
+            let (pre, k, post) = legacy_brightness_contrast_line(*brightness, *contrast, depth);
+            p[0] = [pre, k, LEGACY_PIVOT_LEVEL, post];
+            p[1][0] = if depth == photocraft_color::SampleType::F32 { 0.0 } else { 1.0 };
             (4, p, None)
         }
         Adjustment::BrightnessContrast { brightness, contrast, .. } => {

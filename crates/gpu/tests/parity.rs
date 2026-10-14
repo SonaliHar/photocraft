@@ -595,6 +595,7 @@ fn adjustments() -> Vec<Adjustment> {
         Adjustment::Posterize { levels: 5 },
         Adjustment::BrightnessContrast { brightness: 30.0, contrast: 40.0, legacy: false },
         Adjustment::BrightnessContrast { brightness: -20.0, contrast: -30.0, legacy: true },
+        Adjustment::BrightnessContrast { brightness: 20.0, contrast: 57.0, legacy: true },
         Adjustment::Exposure { exposure: 0.7, offset: 0.02, gamma: 1.2 },
         Adjustment::Levels {
             master: lc(0.1, 0.9, 1.3),
@@ -674,6 +675,10 @@ fn adjustment_layers() {
         // Threshold: whole 16-bit samples against the level in 16 bits, or the float luminosity.
         d.layers.push(Layer::new("th", LayerContent::Adjustment(Adjustment::Threshold { level: 0.5 })));
         check(&mut g, &d, &format!("threshold {depth:?}"));
+        // Legacy B/C: the 8-bit table with the fractional slope at 16 bits, the line at 32.
+        let bc = Adjustment::BrightnessContrast { brightness: 25.0, contrast: 30.0, legacy: true };
+        d.layers.push(Layer::new("bc", LayerContent::Adjustment(bc)));
+        check(&mut g, &d, &format!("legacy brightness/contrast {depth:?}"));
     }
     for adj in adjustments() {
         for (mode, opacity, masked) in [(BlendMode::Normal, 1.0, false), (BlendMode::Multiply, 0.7, true)] {

@@ -615,10 +615,23 @@ fn adjust(c: vec3<f32>) -> vec3<f32> {
             if p0.y > 0.5 { return vec3(posterize16(c.r, p0.x), posterize16(c.g, p0.x), posterize16(c.b, p0.x)); }
             return vec3(posterize(c.r, p0.x), posterize(c.g, p0.x), posterize(c.b, p0.x));
         }
-        case 4: {                                                              // B/C legacy: brightness before (p0.x) or after (p0.w) contrast around the pivot (p0.z); 32-bit unclipped
-            let v = (c + p0.x - p0.z) * p0.y + p0.z + p0.w;
-            if (hdr) { return v; }
-            return clamp(v, vec3(0.0), vec3(1.0));
+        case 4: {                                                              // B/C legacy (compose::adjust::legacy_brightness_contrast)
+            // In 8-bit levels: brightness before (p0.x) or after (p0.w) contrast p0.y around
+            // level p0.z; p1.x = 1 looks up the 8-bit table (whole levels, halves away from the
+            // pivot), interpolating between two levels' entries. 32-bit documents (F_HDR) take the
+            // line unclipped (legacy_brightness_contrast_hdr).
+            let x = c * 255.0;
+            if p1.x < 0.5 {
+                let v = (p0.z + (x + p0.x - p0.z) * p0.y + p0.w) / 255.0;
+                if (hdr) { return v; }
+                return clamp(v, vec3(0.0), vec3(1.0));
+            }
+            let lo = floor(x);
+            let d0 = (lo + p0.x - p0.z) * p0.y;
+            let d1 = (lo + 1.0 + p0.x - p0.z) * p0.y;
+            let e0 = sign(d0) * floor(abs(d0) + 0.5);
+            let e1 = sign(d1) * floor(abs(d1) + 0.5);
+            return clamp((p0.z + mix(e0, e1, x - lo) + p0.w) / 255.0, vec3(0.0), vec3(1.0));
         }
         case 6: { return vec3(exposure(c.r, p0), exposure(c.g, p0), exposure(c.b, p0)); }  // Exposure
         case 7: { return vec3(tone_channel(0, c.r, p0.x), tone_channel(1, c.g, p0.y), tone_channel(2, c.b, p0.z)); } // Levels / Curves / modern Brightness/Contrast (compose::adjust::modern_lut)
