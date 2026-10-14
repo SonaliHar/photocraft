@@ -389,7 +389,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
     let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(true);
     match req.method.as_str() {
         "app.handoff" => ok(
-            json!({"version": 2, "replace": true, "hiddenStart": true, "cameraRaw": 1, "cameraRawPrefetch": 1, "cameraRawSwitch": 1, "stashWithoutPreview": 1}),
+            json!({"version": 2, "replace": true, "hiddenStart": true, "cameraRaw": 1, "cameraRawPrefetch": 1, "cameraRawSwitch": 1, "stashWithoutPreview": 1, "renderManifest": 1}),
         ),
         "ui.cameraRaw" => run_waiting(app, wait, |app| crate::raw_workspace::control(app, ctx, p)),
         "app.prefetch" => match (s("path"), s("signature")) {
@@ -1265,14 +1265,27 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         },
         "app.bind" => match (s("path"), s("preview"), app.session.active()) {
             (Some(path), Some(preview), Some(state)) if path.ends_with(".pcraft") && preview.ends_with(".png") => {
-                app.jobs.host_target = Some((state.doc.id, path.to_string(), preview.to_string()));
-                ok(json!({"bound": true}))
+                let display = s("display").map(str::to_string);
+                let manifest =
+                    s("manifest").map(|manifest| crate::render_manifest::Request { manifest: manifest.to_string(), source: s("source").map(str::to_string) });
+                if display.as_ref().is_some_and(|d| !d.to_ascii_lowercase().ends_with(".jpg"))
+                    || manifest.as_ref().is_some_and(|m| !m.manifest.to_ascii_lowercase().ends_with(".json"))
+                {
+                    err("bind `display` must be a .jpg file and `manifest` a .json file")
+                } else {
+                    let doc = state.doc.id;
+                    app.jobs.host_target =
+                        Some(crate::control_files::HostTarget { doc, path: path.to_string(), preview: preview.to_string(), display, manifest });
+                    ok(json!({"bound": true}))
+                }
             }
             _ => err("bind requires an open document, .pcraft path and .png preview"),
         },
         "app.stash" => match s("path") {
             Some(path) if s("preview").is_some() || s("display").is_some() => {
-                match crate::control_files::stash_with_display(app, path, s("preview"), s("display")) {
+                let manifest =
+                    s("manifest").map(|manifest| crate::render_manifest::Request { manifest: manifest.to_string(), source: s("source").map(str::to_string) });
+                match crate::control_files::stash_with_outputs(app, path, s("preview"), s("display"), manifest) {
                     Ok(photocraft_engine::jobs::Started::Job(job)) if req.params.get("wait").and_then(Value::as_bool) == Some(false) => {
                         ok(json!({"job": job.0, "pending": true}))
                     }

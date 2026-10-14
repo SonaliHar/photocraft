@@ -307,10 +307,10 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             app.ask_folder(|app, path| app.run("file.import.videoFramesToLayers", json!({"path": path})).map_err(|e| e.to_string()))
         }
         "file.save" => {
-            if let Some((id, path, preview)) = app.jobs.host_target.clone()
-                && app.session.active().is_some_and(|state| state.doc.id == id)
+            if let Some(target) = app.jobs.host_target.clone()
+                && app.session.active().is_some_and(|state| state.doc.id == target.doc)
             {
-                return crate::control_files::stash(app, &path, &preview).map(|started| match started {
+                return crate::control_files::save_bound(app, &target).map(|started| match started {
                     photocraft_engine::jobs::Started::Job(job) => json!({"job": job.0, "pending": true}),
                     photocraft_engine::jobs::Started::Done(result) => result,
                 });

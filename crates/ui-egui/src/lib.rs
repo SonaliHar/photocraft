@@ -169,6 +169,7 @@ pub mod quick_pick;
 pub mod rasterize_prompt;
 pub mod raw_recipe;
 pub mod raw_workspace;
+pub mod render_manifest;
 pub mod retouch_ui;
 mod rgb_histogram;
 pub mod rotate_view;

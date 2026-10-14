@@ -41,6 +41,8 @@ flate2 = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }
+# The render manifest's fingerprints (render_manifest.rs): SHA-256, which a host can compute without extra libraries.
+sha2 = "0.10"
 # Safe native UI-language APIs (Windows/macOS); no subprocess or web dependency.
 sys-locale = "=0.3.2"
 

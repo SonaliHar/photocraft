@@ -34,6 +34,13 @@ const RENDER_DELAY_MS: u64 = 1500;
 pub struct Targets {
     pub recipe: Option<String>,
     pub display: Option<String>,
+    /// The photo's render manifest: the render is then written under a name of its own and published in it
+    /// (see `render_manifest`).
+    pub manifest: Option<crate::render_manifest::Request>,
+}
+
+fn recipe_bytes(params: &CameraRaw) -> Result<Vec<u8>, String> {
+    serde_json::to_vec_pretty(&to_json(params)).map_err(|e| e.to_string())
 }
 
 /// The recipe file's content for `params`: only the settings that differ from the defaults.
@@ -81,7 +88,7 @@ pub fn render_display(doc: &Document, params: &CameraRaw) -> Result<Vec<u8>, Str
 pub fn write_recipe(app: &PhotocraftApp, targets: &Targets, params: &CameraRaw) -> Result<(), String> {
     let Some(path) = &targets.recipe else { return Ok(()) };
     let write = app.services.background_automation_write.clone().ok_or("background automation write authority is not configured")?;
-    let bytes = serde_json::to_vec_pretty(&to_json(params)).map_err(|e| e.to_string())?;
+    let bytes = recipe_bytes(params)?;
     write(path, &bytes).map_err(|error| format!("could not keep the Camera Raw settings in {path}: {error}"))
 }
 
@@ -97,6 +104,15 @@ fn render_in_background(app: &PhotocraftApp, document: DocId, targets: &Targets,
     let Some(write) = app.services.background_automation_write.clone() else { return };
     let Some(display) = targets.display.clone() else { return };
     let Some(doc) = app.session.documents().iter().find(|st| st.doc.id == document).map(|st| st.doc.clone()) else { return };
+    // With a manifest: numbered now, so a save of the photo asked for after this render wins over it whenever either lands, and
+    // made against the recipe as written (a render without a recipe written has nothing to be checked against).
+    let published = match (&targets.manifest, &targets.recipe, recipe_bytes(params)) {
+        (Some(request), Some(_), Ok(bytes)) => {
+            let generation = crate::render_manifest::generation();
+            Some((request.clone(), generation, crate::render_manifest::Made::Recipe { sha256: crate::render_manifest::sha256_hex(&bytes) }))
+        }
+        _ => None,
+    };
     let params = params.clone();
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -135,8 +151,16 @@ fn render_in_background(app: &PhotocraftApp, document: DocId, targets: &Targets,
             };
             match rendered {
                 Ok(bytes) => {
-                    if let Err(error) = write(&display, &bytes) {
-                        log::warn!("could not write the Camera Raw render {display}: {error}");
+                    let target = published.as_ref().map_or_else(|| display.clone(), |(_, n, _)| crate::render_manifest::versioned(&display, *n));
+                    if let Err(error) = write(&target, &bytes) {
+                        log::warn!("could not write the Camera Raw render {target}: {error}");
+                        return;
+                    }
+                    if let Some((request, n, made)) = &published {
+                        let manifest = crate::render_manifest::content(*n, made, request.source.as_deref(), &[("display", target.as_str(), bytes.as_slice())]);
+                        if let Err(error) = crate::render_manifest::publish(&write, request, *n, &manifest) {
+                            log::warn!("could not publish the Camera Raw render: {error}");
+                        }
                     }
                 }
                 Err(error) => log::warn!("could not render the Camera Raw recipe: {error}"),
@@ -147,7 +171,7 @@ fn render_in_background(app: &PhotocraftApp, document: DocId, targets: &Targets,
         }
     }
     #[cfg(target_arch = "wasm32")]
-    let _ = (doc, params, display, write);
+    let _ = (doc, params, display, write, published);
 }
 
 #[cfg(test)]
@@ -219,7 +243,7 @@ mod tests {
         let id = doc.id;
         app.session.add_document(doc, None);
         let params = CameraRaw { exposure: 1.0, ..Default::default() };
-        let targets = Targets { recipe: Some("a.cameraraw.json".into()), display: Some("a.display.jpg".into()) };
+        let targets = Targets { recipe: Some("a.cameraraw.json".into()), display: Some("a.display.jpg".into()), manifest: None };
         persist(&mut app, id, &targets, &params).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while writes.lock().unwrap().len() < 2 && std::time::Instant::now() < deadline {
@@ -229,6 +253,45 @@ mod tests {
         let recipe = writes.iter().find(|(path, _)| path == "a.cameraraw.json").expect("recipe written");
         assert_eq!(from_json(&serde_json::from_slice(&recipe.1).unwrap()).unwrap(), params);
         assert!(writes.iter().any(|(path, bytes)| path == "a.display.jpg" && bytes.starts_with(&[0xFF, 0xD8])), "render written");
+    }
+
+    #[test]
+    fn a_recipe_render_is_published_in_the_manifest_with_the_recipe_s_fingerprint() {
+        let writes = Arc::new(Mutex::new(Vec::<(String, Vec<u8>)>::new()));
+        let recorded = writes.clone();
+        let services = crate::Services {
+            background_automation_write: Some(Arc::new(move |path, bytes| {
+                recorded.lock().unwrap().push((path.to_string(), bytes.to_vec()));
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let doc = grey_document(0.25);
+        let id = doc.id;
+        app.session.add_document(doc, None);
+        let manifest = format!("m{}.photocraft.renders.json", crate::render_manifest::generation());
+        let targets = Targets {
+            recipe: Some("m.cameraraw.json".into()),
+            display: Some("m.photocraft.display.jpg".into()),
+            manifest: Some(crate::render_manifest::Request { manifest: manifest.clone(), source: Some("1:2".into()) }),
+        };
+        persist(&mut app, id, &targets, &CameraRaw { exposure: 1.0, ..Default::default() }).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !writes.lock().unwrap().iter().any(|(p, _)| *p == manifest) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let writes = writes.lock().unwrap();
+        let published: Value = serde_json::from_slice(&writes.iter().find(|(p, _)| *p == manifest).expect("published").1).unwrap();
+        let recipe = &writes.iter().find(|(p, _)| p == "m.cameraraw.json").unwrap().1;
+        assert_eq!(published["kind"], "recipe");
+        assert_eq!(published["recipe"]["sha256"], crate::render_manifest::sha256_hex(recipe).as_str());
+        assert_eq!(published["source"], "1:2");
+        let n = published["generation"].as_u64().unwrap();
+        let file = format!("m.photocraft.display.g{n}.jpg");
+        assert_eq!(published["outputs"]["display"]["file"], file.as_str());
+        assert!(writes.iter().any(|(p, b)| *p == file && b.starts_with(&[0xFF, 0xD8])));
+        assert!(!writes.iter().any(|(p, _)| p == "m.photocraft.display.jpg"), "never the fixed name");
     }
 
     #[test]
@@ -246,7 +309,7 @@ mod tests {
         let doc = grey_document(0.25);
         let id = doc.id;
         app.session.add_document(doc, None);
-        let targets = Targets { recipe: None, display: Some("coalesce.display.jpg".into()) };
+        let targets = Targets { recipe: None, display: Some("coalesce.display.jpg".into()), manifest: None };
         // Both are requested before either can run (the first holds the turn while it renders).
         for exposure in [0.5f32, 2.0] {
             persist(&mut app, id, &targets, &CameraRaw { exposure, ..Default::default() }).unwrap();
@@ -280,7 +343,7 @@ mod tests {
         let doc = grey_document(0.5);
         let id = doc.id;
         app.session.add_document(doc, None);
-        let targets = Targets { recipe: Some("a.json".into()), display: Some("a.display.jpg".into()) };
+        let targets = Targets { recipe: Some("a.json".into()), display: Some("a.display.jpg".into()), manifest: None };
         let error = persist(&mut app, id, &targets, &CameraRaw { exposure: 1.0, ..Default::default() }).unwrap_err();
         assert!(error.contains("disk full") && error.contains("a.json"), "{error}");
         std::thread::sleep(std::time::Duration::from_millis(300));
@@ -294,13 +357,13 @@ mod tests {
         let doc = grey_document(0.5);
         let id = doc.id;
         app.session.add_document(doc, None);
-        persist(&mut app, id, &Targets { recipe: None, display: Some("a.display.jpg".into()) }, &CameraRaw::default()).unwrap();
+        persist(&mut app, id, &Targets { recipe: None, display: Some("a.display.jpg".into()), manifest: None }, &CameraRaw::default()).unwrap();
     }
 
     #[test]
     fn a_recipe_without_write_authority_is_an_error() {
         let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        assert!(write_recipe(&app, &Targets { recipe: Some("a.json".into()), display: None }, &CameraRaw::default()).is_err());
+        assert!(write_recipe(&app, &Targets { recipe: Some("a.json".into()), display: None, manifest: None }, &CameraRaw::default()).is_err());
         write_recipe(&app, &Targets::default(), &CameraRaw::default()).unwrap();
     }
 }

@@ -6,8 +6,20 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 
+/// What a host bound the open photo's document to (`app.bind`): where the editor's own Save writes it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HostTarget {
+    pub doc: photocraft_doc::DocId,
+    pub path: String,
+    pub preview: String,
+    /// The screen-sized picture a host shows while browsing (see [`stash_with_display`]).
+    pub display: Option<String>,
+    /// The render manifest to keep (see `render_manifest`).
+    pub manifest: Option<crate::render_manifest::Request>,
+}
+
 pub fn hosted_save(app: &PhotocraftApp, command: &str) -> bool {
-    command == "file.save" && app.jobs.host_target.as_ref().is_some_and(|(id, _, _)| app.session.active().is_some_and(|state| state.doc.id == *id))
+    command == "file.save" && app.jobs.host_target.as_ref().is_some_and(|target| app.session.active().is_some_and(|state| state.doc.id == target.doc))
 }
 
 /// Document `from` was replaced by `to`, and `to` is the same photo: the raw developed again for "Open", or the photo's own
@@ -15,9 +27,9 @@ pub fn hosted_save(app: &PhotocraftApp, command: &str) -> bool {
 /// saving the photo for the host instead of asking where to save it. A binding of any other document stays as it is.
 pub(crate) fn rebind(app: &mut PhotocraftApp, from: photocraft_doc::DocId, to: photocraft_doc::DocId) {
     if let Some(target) = app.jobs.host_target.as_mut()
-        && target.0 == from
+        && target.doc == from
     {
-        target.0 = to;
+        target.doc = to;
     }
 }
 
@@ -154,6 +166,7 @@ fn close_replaced(session: &mut photocraft_engine::Session, previous: Option<pho
 pub const DISPLAY_LONG_SIDE: u32 = 2560;
 pub const DISPLAY_QUALITY: u8 = 90;
 
+#[cfg(test)]
 pub fn stash(app: &mut PhotocraftApp, path: &str, preview: &str) -> Result<Started, String> {
     stash_with_display(app, path, Some(preview), None)
 }
@@ -206,8 +219,30 @@ fn side_by_side<A: Send, B: Send, C: Send>(
 /// encode (from the compositor's reduced render, not a full-size one) and written as soon as it is
 /// ready, so a quick return to the photo can use it long before the project and full render land.
 /// It is a convenience: a failure to make or write it never fails the save.
+#[cfg(test)]
 pub fn stash_with_display(app: &mut PhotocraftApp, path: &str, preview: Option<&str>, display: Option<&str>) -> Result<Started, String> {
+    stash_with_outputs(app, path, preview, display, None)
+}
+
+/// The editor's own Save of a document a host bound ([`HostTarget`]): what the host's saves write.
+pub fn save_bound(app: &mut PhotocraftApp, target: &HostTarget) -> Result<Started, String> {
+    stash_with_outputs(app, &target.path, Some(&target.preview), target.display.as_deref(), target.manifest.clone())
+}
+
+/// [`stash_with_display`] that, with `manifest`, keeps the photo's render manifest: the full-size and screen-sized pictures are
+/// written under names of this save's own (`render_manifest::versioned`), and once they and the project are written the manifest
+/// is switched to them. Only pictures that were written are listed; a manifest that cannot be written fails the save.
+pub fn stash_with_outputs(
+    app: &mut PhotocraftApp,
+    path: &str,
+    preview: Option<&str>,
+    display: Option<&str>,
+    manifest: Option<crate::render_manifest::Request>,
+) -> Result<Started, String> {
     crate::raw_workspace::settle(app)?;
+    if manifest.as_ref().is_some_and(|request| !request.manifest.to_ascii_lowercase().ends_with(".json")) {
+        return Err("stash `manifest` must be a .json file".into());
+    }
     if preview.is_none() && display.is_none() {
         return Err("stash requires a preview or a display render".into());
     }
@@ -232,8 +267,11 @@ pub fn stash_with_display(app: &mut PhotocraftApp, path: &str, preview: Option<&
         return Err("The previous photo snapshot is still saving; the current edits are retained".into());
     }
     let path = path.to_string();
-    let preview = preview.map(str::to_string);
-    let display = display.map(str::to_string);
+    // Numbered when this save is taken, so a save asked for later always has the higher number.
+    let generation = manifest.as_ref().map(|_| crate::render_manifest::generation());
+    let named = |target: Option<&str>| target.map(|target| generation.map_or_else(|| target.to_string(), |n| crate::render_manifest::versioned(target, n)));
+    let preview = named(preview);
+    let display = named(display);
     let applied_path = path.clone();
     let id = doc.id;
     let job_path = path.clone();
@@ -257,7 +295,8 @@ pub fn stash_with_display(app: &mut PhotocraftApp, path: &str, preview: Option<&
                     display.as_ref().map(|target| {
                         || {
                             let jpeg = photocraft_io::export_display_jpeg(&doc, DISPLAY_LONG_SIDE, DISPLAY_QUALITY).map_err(|e| e.to_string())?;
-                            write(target, &jpeg.bytes)
+                            write(target, &jpeg.bytes)?;
+                            Ok::<_, String>(jpeg.bytes)
                         }
                     }),
                 );
@@ -266,16 +305,44 @@ pub fn stash_with_display(app: &mut PhotocraftApp, path: &str, preview: Option<&
                     project.map_err(|_| EngineError::Other("project encoder stopped unexpectedly".into()))?.map_err(|e| EngineError::Other(e.to_string()))?;
                 let render = render.transpose().map_err(|e| EngineError::Other(e.to_string()))?;
                 ctx.check()?;
-                // Each capability write is atomic. Report success only after both.
-                write(&path, &project.bytes).map_err(EngineError::Other)?;
-                if let (Some(target), Some(render)) = (&preview, &render) {
-                    write(target, &render.bytes).map_err(EngineError::Other)?;
+                // Each capability write is atomic. Report success only after both. With a manifest the render goes first, under its
+                // own name: the project then replaces the old one, and the manifest follows at once (until it does, a reader finds
+                // the old manifest no longer matching the project, and treats its pictures as out of date).
+                let write_render = || match (&preview, &render) {
+                    (Some(target), Some(render)) => write(target, &render.bytes).map_err(EngineError::Other),
+                    _ => Ok(()),
+                };
+                if manifest.is_some() {
+                    write_render()?;
+                    write(&path, &project.bytes).map_err(EngineError::Other)?;
+                } else {
+                    write(&path, &project.bytes).map_err(EngineError::Other)?;
+                    write_render()?;
                 }
-                let mut warnings = project.warnings;
-                match shown {
-                    Some(Ok(Err(error))) => warnings.push(format!("display preview not written: {error}")),
-                    Some(Err(_)) => warnings.push("display preview not written: its encoder stopped unexpectedly".to_string()),
-                    Some(Ok(Ok(()))) | None => {}
+                let mut warnings = project.warnings.clone();
+                let shown = match shown {
+                    Some(Ok(Err(error))) => {
+                        warnings.push(format!("display preview not written: {error}"));
+                        None
+                    }
+                    Some(Err(_)) => {
+                        warnings.push("display preview not written: its encoder stopped unexpectedly".to_string());
+                        None
+                    }
+                    Some(Ok(Ok(bytes))) => Some(bytes),
+                    None => None,
+                };
+                if let (Some(request), Some(n)) = (&manifest, generation) {
+                    use crate::render_manifest::{Made, content, publish, sha256_hex};
+                    let made = Made::Project { size: project.bytes.len() as u64, sha256: sha256_hex(&project.bytes) };
+                    let mut outputs: Vec<(&str, &str, &[u8])> = Vec::new();
+                    if let (Some(target), Some(render)) = (&preview, &render) {
+                        outputs.push(("png", target.as_str(), render.bytes.as_slice()));
+                    }
+                    if let (Some(target), Some(bytes)) = (&display, &shown) {
+                        outputs.push(("display", target.as_str(), bytes.as_slice()));
+                    }
+                    publish(&write, request, n, &content(n, &made, request.source.as_deref(), &outputs)).map_err(EngineError::Other)?;
                 }
                 Ok((warnings, render.map(|render| render.warnings).unwrap_or_default()))
             },
@@ -383,7 +450,7 @@ mod tests {
         app.services.automation_authorize = Some(|_, _| Err(EngineError::Other("ambient engine IO denied".into())));
         app.automation_input = true;
         let id = app.session.active().unwrap().doc.id;
-        app.jobs.host_target = Some((id, "photo.pcraft".into(), "preview.png".into()));
+        app.jobs.host_target = Some(HostTarget { doc: id, path: "photo.pcraft".into(), preview: "preview.png".into(), display: None, manifest: None });
         let ctx = egui::Context::default();
         let (request, _) = crate::ControlRequest::new("ui.menu.invoke", json!({"id": "file.save", "wait": false}));
         let response = crate::control::handle(&mut app, &ctx, &request);
@@ -414,6 +481,121 @@ mod tests {
         let display = writes.iter().find(|(path, _)| path == "photo.display.jpg").expect("display written");
         assert!(display.1.starts_with(&[0xFF, 0xD8]), "not a JPEG");
         assert_eq!(writes.len(), 3);
+    }
+
+    fn manifest_written(writes: &[(String, Vec<u8>)], path: &str) -> Option<Value> {
+        writes.iter().rev().find(|(name, _)| name == path).map(|(_, bytes)| serde_json::from_slice(bytes).unwrap())
+    }
+
+    fn bound(app: &mut PhotocraftApp) {
+        let id = app.session.active().unwrap().doc.id;
+        app.jobs.host_target = Some(HostTarget {
+            doc: id,
+            path: "photo.jpg.pcraft".into(),
+            preview: "photo.jpg.photocraft.png".into(),
+            display: Some("photo.jpg.photocraft.display.jpg".into()),
+            manifest: Some(crate::render_manifest::Request { manifest: "photo.jpg.photocraft.renders.json".into(), source: Some("12:34".into()) }),
+        });
+    }
+
+    #[test]
+    fn native_save_of_a_bound_photo_writes_its_pictures_and_the_manifest_last() {
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let recorded = writes.clone();
+        let mut app = app(Arc::new(move |path, bytes| {
+            recorded.lock().unwrap().push((path.to_string(), bytes.to_vec()));
+            Ok(())
+        }));
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        bound(&mut app);
+        let target = app.jobs.host_target.clone().unwrap();
+        let started = save_bound(&mut app, &target).unwrap();
+        finish(&mut app, started).unwrap();
+        let writes = writes.lock().unwrap();
+        let (last, _) = writes.last().unwrap();
+        assert_eq!(last, "photo.jpg.photocraft.renders.json", "the manifest is switched after everything it names is written");
+        let manifest = manifest_written(&writes, "photo.jpg.photocraft.renders.json").unwrap();
+        let n = manifest["generation"].as_u64().unwrap();
+        assert_eq!(manifest["kind"], "project");
+        assert_eq!(manifest["source"], "12:34");
+        assert_eq!(manifest["renderer"]["algorithm"], crate::render_manifest::ALGORITHM);
+        let png = format!("photo.jpg.photocraft.g{n}.png");
+        let display = format!("photo.jpg.photocraft.display.g{n}.jpg");
+        assert_eq!(manifest["outputs"]["png"]["file"], png.as_str());
+        assert_eq!(manifest["outputs"]["display"]["file"], display.as_str());
+        assert_eq!(manifest["outputs"]["png"]["format"], "png");
+        assert_eq!(manifest["outputs"]["display"]["format"], "jpeg");
+        assert!(writes.iter().any(|(path, _)| *path == png) && writes.iter().any(|(path, _)| *path == display));
+        let project = writes.iter().find(|(path, _)| path == "photo.jpg.pcraft").unwrap();
+        assert_eq!(manifest["project"]["sha256"], crate::render_manifest::sha256_hex(&project.1).as_str());
+        assert_eq!(manifest["project"]["size"], project.1.len());
+        assert!(!writes.iter().any(|(path, _)| path == "photo.jpg.photocraft.png"), "never the fixed name: a picture is not rewritten in place");
+    }
+
+    #[test]
+    fn a_save_after_an_autosave_publishes_a_newer_generation_with_the_full_size_render() {
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let recorded = writes.clone();
+        let mut app = app(Arc::new(move |path, bytes| {
+            recorded.lock().unwrap().push((path.to_string(), bytes.to_vec()));
+            Ok(())
+        }));
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        bound(&mut app);
+        let target = app.jobs.host_target.clone().unwrap();
+        // The host's autosave: no full-size render.
+        let started = stash_with_outputs(&mut app, &target.path, None, target.display.as_deref(), target.manifest.clone()).unwrap();
+        finish(&mut app, started).unwrap();
+        let autosaved = manifest_written(&writes.lock().unwrap(), "photo.jpg.photocraft.renders.json").unwrap();
+        assert!(autosaved["outputs"].get("png").is_none(), "{autosaved}");
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        let started = save_bound(&mut app, &target).unwrap();
+        finish(&mut app, started).unwrap();
+        let saved = manifest_written(&writes.lock().unwrap(), "photo.jpg.photocraft.renders.json").unwrap();
+        assert!(saved["generation"].as_u64() > autosaved["generation"].as_u64());
+        assert!(saved["outputs"]["png"].is_object() && saved["outputs"]["display"].is_object());
+    }
+
+    #[test]
+    fn a_render_that_cannot_be_written_publishes_no_manifest() {
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let recorded = writes.clone();
+        let mut app = app(Arc::new(move |path, bytes| {
+            if path.ends_with(".png") {
+                return Err("disk full".into());
+            }
+            recorded.lock().unwrap().push((path.to_string(), bytes.to_vec()));
+            Ok(())
+        }));
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        bound(&mut app);
+        let target = app.jobs.host_target.clone().unwrap();
+        let started = save_bound(&mut app, &target).unwrap();
+        assert!(finish(&mut app, started).unwrap_err().contains("disk full"));
+        let writes = writes.lock().unwrap();
+        assert!(manifest_written(&writes, "photo.jpg.photocraft.renders.json").is_none());
+        assert!(!writes.iter().any(|(path, _)| path == "photo.jpg.pcraft"), "nor a project the pictures do not match");
+    }
+
+    #[test]
+    fn a_screen_sized_picture_that_cannot_be_written_is_left_out_of_the_manifest() {
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let recorded = writes.clone();
+        let mut app = app(Arc::new(move |path, bytes| {
+            if path.ends_with(".jpg") {
+                return Err("read-only".into());
+            }
+            recorded.lock().unwrap().push((path.to_string(), bytes.to_vec()));
+            Ok(())
+        }));
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        bound(&mut app);
+        let target = app.jobs.host_target.clone().unwrap();
+        let started = save_bound(&mut app, &target).unwrap();
+        finish(&mut app, started).unwrap();
+        let manifest = manifest_written(&writes.lock().unwrap(), "photo.jpg.photocraft.renders.json").unwrap();
+        assert!(manifest["outputs"]["png"].is_object());
+        assert!(manifest["outputs"].get("display").is_none(), "{manifest}");
     }
 
     #[test]

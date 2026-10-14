@@ -168,7 +168,9 @@ pub struct OpenSpec {
 impl OpenSpec {
     pub fn parse(value: &Value) -> Result<Self, String> {
         let object = value.as_object().ok_or("cameraRaw must be an object")?;
-        if let Some(key) = object.keys().find(|key| !["recipe", "recipePath", "displayPath", "continueFrom", "signature"].contains(&key.as_str())) {
+        if let Some(key) =
+            object.keys().find(|key| !["recipe", "recipePath", "displayPath", "manifestPath", "continueFrom", "signature"].contains(&key.as_str()))
+        {
             return Err(format!("unknown cameraRaw field `{key}`"));
         }
         let text = |name: &str| -> Result<Option<String>, String> {
@@ -182,7 +184,7 @@ impl OpenSpec {
             None | Some(Value::Null) => None,
             Some(recipe) => Some(raw_recipe::from_json(recipe)?),
         };
-        let targets = Targets { recipe: text("recipePath")?, display: text("displayPath")? };
+        let targets = Targets { recipe: text("recipePath")?, display: text("displayPath")?, manifest: None };
         if targets.recipe.as_ref().is_some_and(|p| !p.to_ascii_lowercase().ends_with(".json")) {
             return Err("cameraRaw.recipePath must be a .json file".into());
         }
@@ -194,6 +196,17 @@ impl OpenSpec {
             return Err("cameraRaw.continueFrom must be a .pcraft project".into());
         }
         let signature = text("signature")?;
+        let manifest = text("manifestPath")?;
+        if manifest.as_ref().is_some_and(|p| !p.to_ascii_lowercase().ends_with(".json")) {
+            return Err("cameraRaw.manifestPath must be a .json file".into());
+        }
+        let mut targets = Targets { manifest: manifest.map(|manifest| crate::render_manifest::Request { manifest, source: signature.clone() }), ..targets };
+        if continue_from.is_some() {
+            // The photo has a full-editor document, and that is what a host shows of it: a render of the recipe would only
+            // take the place of that document's pictures.
+            targets.display = None;
+            targets.manifest = None;
+        }
         Ok(Self { recipe, targets, continue_from, signature })
     }
 }
@@ -806,7 +819,7 @@ mod tests {
 
     fn spec(recipe: Option<f32>) -> OpenSpec {
         let mut spec = OpenSpec {
-            targets: Targets { recipe: Some("IMG.dng.cameraraw.json".into()), display: Some("IMG.dng.photocraft.display.jpg".into()) },
+            targets: Targets { recipe: Some("IMG.dng.cameraraw.json".into()), display: Some("IMG.dng.photocraft.display.jpg".into()), manifest: None },
             ..Default::default()
         };
         if let Some(exposure) = recipe {
@@ -829,6 +842,17 @@ mod tests {
 
     fn written(writes: &Writes, path: &str) -> Option<Vec<u8>> {
         writes.lock().unwrap().iter().rev().find(|(name, _)| name == path).map(|(_, bytes)| bytes.clone())
+    }
+
+    #[test]
+    fn the_spec_names_the_manifest_and_a_photo_with_a_project_renders_no_recipe() {
+        let parsed = OpenSpec::parse(&json!({"recipePath": "a.json", "displayPath": "a.jpg", "manifestPath": "a.renders.json", "signature": "5:6"})).unwrap();
+        assert_eq!(parsed.targets.manifest, Some(crate::render_manifest::Request { manifest: "a.renders.json".into(), source: Some("5:6".into()) }));
+        assert!(OpenSpec::parse(&json!({"manifestPath": "a.txt"})).unwrap_err().contains("manifestPath"));
+        let with_project =
+            OpenSpec::parse(&json!({"recipePath": "a.json", "displayPath": "a.jpg", "manifestPath": "a.renders.json", "continueFrom": "a.pcraft"})).unwrap();
+        assert_eq!(with_project.targets.recipe.as_deref(), Some("a.json"), "the recipe is still kept");
+        assert_eq!((with_project.targets.display, with_project.targets.manifest), (None, None));
     }
 
     #[test]
@@ -1010,7 +1034,13 @@ mod tests {
     /// Binds the active document as a host does after its open (`app.bind`).
     fn bind(app: &mut PhotocraftApp) -> photocraft_doc::DocId {
         let id = app.session.active().unwrap().doc.id;
-        app.jobs.host_target = Some((id, "IMG.dng.pcraft".into(), "IMG.dng.photocraft.png".into()));
+        app.jobs.host_target = Some(crate::control_files::HostTarget {
+            doc: id,
+            path: "IMG.dng.pcraft".into(),
+            preview: "IMG.dng.photocraft.png".into(),
+            display: None,
+            manifest: None,
+        });
         id
     }
 
@@ -1040,7 +1070,7 @@ mod tests {
             }
             let developed = app.session.active().unwrap().doc.id;
             assert_ne!(developed, raw, "background {background}: a new document");
-            assert_eq!(app.jobs.host_target.as_ref().map(|t| t.0), Some(developed), "background {background}");
+            assert_eq!(app.jobs.host_target.as_ref().map(|t| t.doc), Some(developed), "background {background}");
             assert!(native_save_is_the_host_s(&app), "background {background}: Ctrl+S saves for the host, not Save As");
         }
     }
@@ -1115,7 +1145,7 @@ mod tests {
         }
         crate::jobs_ui::tick(&mut app, &ctx);
         assert_ne!(app.session.active().unwrap().doc.id, raw);
-        assert_eq!(app.jobs.host_target.as_ref().map(|t| t.0), Some(raw), "the binding stays with the photo it was made for");
+        assert_eq!(app.jobs.host_target.as_ref().map(|t| t.doc), Some(raw), "the binding stays with the photo it was made for");
         assert!(!native_save_is_the_host_s(&app), "until the host binds the new photo");
     }
 
@@ -1227,10 +1257,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed.recipe.unwrap().exposure, 1.0);
+        // A photo with a saved project is shown from the project's pictures: its recipe is kept, but not rendered over them.
         assert_eq!(
             (parsed.targets.recipe.as_deref(), parsed.targets.display.as_deref(), parsed.continue_from.as_deref()),
-            (Some("a.json"), Some("a.jpg"), Some("a.pcraft"))
+            (Some("a.json"), None, Some("a.pcraft"))
         );
+        let without_project = OpenSpec::parse(&json!({"recipePath": "a.json", "displayPath": "a.jpg"})).unwrap();
+        assert_eq!(without_project.targets.display.as_deref(), Some("a.jpg"));
     }
 
     #[test]
@@ -1338,7 +1371,7 @@ mod tests {
     fn open_photo(app: &mut PhotocraftApp, ctx: &egui::Context, path: &str) {
         use photocraft_engine::jobs::Started;
         let mut spec = spec(None);
-        spec.targets = Targets { recipe: Some(format!("{path}.cameraraw.json")), display: Some(format!("{path}.photocraft.display.jpg")) };
+        spec.targets = Targets { recipe: Some(format!("{path}.cameraraw.json")), display: Some(format!("{path}.photocraft.display.jpg")), manifest: None };
         let started = crate::control_files::open_with_camera_raw(app, path, true, Some(spec)).unwrap();
         let Started::Job(job) = started else { panic!("expected a background open") };
         app.session.wait_job(job).unwrap();
@@ -1362,7 +1395,7 @@ mod tests {
 
         // The host asks for the next photo while the first one's dialog is up.
         let mut spec = spec(None);
-        spec.targets = Targets { recipe: Some("B.dng.cameraraw.json".into()), display: None };
+        spec.targets = Targets { recipe: Some("B.dng.cameraraw.json".into()), display: None, manifest: None };
         let started = crate::control_files::open_with_camera_raw(&mut app, "B.dng", true, Some(spec)).unwrap();
         let Started::Job(job) = started else { panic!("expected a background open") };
         let dialog = app.camera_raw.as_ref().expect("the dialog did not close");
@@ -1383,7 +1416,7 @@ mod tests {
         PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
         open_photo(&mut app, &ctx, "A.dng");
         let mut spec = spec(None);
-        spec.targets = Targets { recipe: Some("B.dng.cameraraw.json".into()), display: None };
+        spec.targets = Targets { recipe: Some("B.dng.cameraraw.json".into()), display: None, manifest: None };
         let started = crate::control_files::open_with_camera_raw(&mut app, "B.dng", true, Some(spec)).unwrap();
         let Started::Job(job) = started else { panic!("expected a background open") };
         app.session.wait_job(job).unwrap();

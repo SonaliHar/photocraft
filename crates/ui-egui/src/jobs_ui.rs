@@ -155,7 +155,7 @@ pub struct JobsUi {
     /// Pending, failed and three recently saved host snapshots stay available
     /// for returning to a photo without waiting on disk or decoding.
     pub(crate) host_snapshots: std::collections::HashMap<String, (Arc<photocraft_doc::Document>, u64)>,
-    pub(crate) host_target: Option<(photocraft_doc::DocId, String, String)>,
+    pub(crate) host_target: Option<crate::control_files::HostTarget>,
     pub(crate) host_inflight: std::collections::HashMap<String, JobId>,
     pub(crate) host_saved: std::collections::VecDeque<String>,
     /// Camera Raw workspace: the raw just opened for the dialog (its bytes, and what the host asked for).
