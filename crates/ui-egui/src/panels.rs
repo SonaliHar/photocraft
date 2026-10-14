@@ -650,14 +650,16 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     // the theme toggle (Preferences), then search (Edit › Search), and narrows
                     // the switcher (Window › Workspace) before anything runs over.
                     let room = ui.available_width();
-                    let icons_shown: u8 = if room >= WORKSPACE_MIN + 2.0 * ICON_SLOT {
+                    let exit_slot = if app.services.touch_ui { ICON_SLOT } else { 0.0 };
+                    let optional_room = (room - exit_slot).max(0.0);
+                    let icons_shown: u8 = if optional_room >= WORKSPACE_MIN + 2.0 * ICON_SLOT {
                         2
-                    } else if room >= WORKSPACE_MIN + ICON_SLOT {
+                    } else if optional_room >= WORKSPACE_MIN + ICON_SLOT {
                         1
                     } else {
                         0
                     };
-                    let ws_width = (room - f32::from(icons_shown) * ICON_SLOT - 6.0).clamp(WORKSPACE_MIN, 130.0);
+                    let ws_width = (optional_room - f32::from(icons_shown) * ICON_SLOT - 6.0).clamp(WORKSPACE_MIN, 130.0);
                     if room >= WORKSPACE_MIN && widgets::dropdown(ui, "workspace", &mut ws, &opts, ws_width) {
                         app.ui.workspace = ws;
                         crate::menus::apply_workspace(app);
@@ -679,6 +681,9 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             crate::prefs_ui::cycle_appearance(app, ui.ctx());
                         }
                         button.context_menu(|ui| crate::prefs_ui::appearance_context_menu(app, ui));
+                    }
+                    if app.services.touch_ui && icons::button(ui, "x", 28.0, false, tl!("Exit PhotoCraft")).clicked() {
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                     // The community Discord, one click away while the bar has room for it
                     // (narrow windows drop it first; it is also Help › Discord).
