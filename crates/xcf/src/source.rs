@@ -2,6 +2,9 @@
 use crate::{ErrorKind, XcfError};
 use std::cell::Cell;
 use web_time::Instant;
+#[path = "source/persistent.rs"]
+mod persistent;
+pub use persistent::OwnedReservation;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResourcePolicy {
@@ -129,6 +132,7 @@ pub struct Budget<'a> {
     started: Instant,
     cancelled: Option<&'a dyn Fn() -> bool>,
     cancelled_observed: Cell<bool>,
+    shared: Option<persistent::SharedLedger>,
 }
 impl<'a> Budget<'a> {
     pub fn new(limits: ResourceLimits, cancelled: Option<&'a dyn Fn() -> bool>) -> Self {
@@ -139,7 +143,27 @@ impl<'a> Budget<'a> {
             started: Instant::now(),
             cancelled,
             cancelled_observed: Cell::new(false),
+            shared: None,
         }
+    }
+    /// Explicit opt-in persistent ownership. Existing new() stays Cell-only with
+    /// no Arc allocation or synchronization. Callback/deadline authority remains
+    /// borrowed by this job-local Budget, never retained by an owned receipt.
+    pub fn new_persistent(limits: ResourceLimits, cancelled: Option<&'a dyn Fn() -> bool>) -> Result<Self, XcfError> {
+        let started = Instant::now();
+        if cancelled.is_some_and(|f| f()) {
+            return Err(XcfError::new(ErrorKind::Cancelled, 0, "cancelled during persistent budget construction"));
+        }
+        let shared = persistent::SharedLedger::new(&limits)?;
+        Ok(Self {
+            limits,
+            used: std::array::from_fn(|_| Cell::new(0)),
+            peak: std::array::from_fn(|_| Cell::new(0)),
+            started,
+            cancelled,
+            cancelled_observed: Cell::new(false),
+            shared: Some(shared),
+        })
     }
     pub(crate) fn mark_cancelled(&self) {
         self.cancelled_observed.set(true);
@@ -148,18 +172,27 @@ impl<'a> Budget<'a> {
         &self.limits
     }
     pub fn used(&self, kind: BudgetKind) -> u64 {
+        if let Some(shared) = &self.shared {
+            return shared.used(kind);
+        }
         self.used.get(kind.index()).map(Cell::get).unwrap_or(0)
     }
     /// High-water mark of successfully charged reservations or performed work.
     /// Admission checks alone are not charges; backend transient estimates and
     /// process RSS require their own measurements.
     pub fn peak(&self, kind: BudgetKind) -> u64 {
+        if let Some(shared) = &self.shared {
+            return shared.peak(kind);
+        }
         self.peak.get(kind.index()).map(Cell::get).unwrap_or(0)
     }
     pub fn poll(&self, phase: &str) -> Result<(), XcfError> {
         if self.cancelled_observed.get() || self.cancelled.is_some_and(|f| f()) {
             self.cancelled_observed.set(true);
             return Err(XcfError::new(ErrorKind::Cancelled, 0, format!("cancelled during {phase}")));
+        }
+        if let Some(shared) = &self.shared {
+            shared.valid(phase)?;
         }
         if self.started.elapsed().as_millis() >= u128::from(self.limits.get(BudgetKind::Deadline)) {
             return Err(self.denial(BudgetKind::Deadline, self.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64, phase));
@@ -196,8 +229,12 @@ impl<'a> Budget<'a> {
         if matches!(kind, BudgetKind::Work | BudgetKind::Visits | BudgetKind::Deadline) {
             return Err(XcfError::new(ErrorKind::Limit, 0, "performed work/visits and deadline cannot use refundable reservations"));
         }
-        let total = self.added(kind, n, phase)?;
         let resident = matches!(kind, BudgetKind::Decoder | BudgetKind::Cache | BudgetKind::Index | BudgetKind::Resource);
+        if let Some(shared) = &self.shared {
+            shared.reserve(kind, n, resident, phase)?;
+            return Ok(Reservation { budget: self, kind, bytes: n, resident });
+        }
+        let total = self.added(kind, n, phase)?;
         let resident_total = if resident { Some(self.added(BudgetKind::Resident, n, phase)?) } else { None };
         self.set(kind, total);
         if let Some(total) = resident_total {
@@ -207,11 +244,19 @@ impl<'a> Budget<'a> {
     }
     /// Performed work is never refunded. Kernels must call this at <=4096-unit boundaries.
     pub fn consume_work(&self, n: u64, phase: &str) -> Result<(), XcfError> {
+        if let Some(shared) = &self.shared {
+            self.poll(phase)?;
+            return shared.reserve(BudgetKind::Work, n, false, phase);
+        }
         let total = self.added(BudgetKind::Work, n, phase)?;
         self.set(BudgetKind::Work, total);
         Ok(())
     }
     pub fn consume_visits(&self, n: u64, phase: &str) -> Result<(), XcfError> {
+        if let Some(shared) = &self.shared {
+            self.poll(phase)?;
+            return shared.reserve(BudgetKind::Visits, n, false, phase);
+        }
         let total = self.added(BudgetKind::Visits, n, phase)?;
         self.set(BudgetKind::Visits, total);
         Ok(())
@@ -227,8 +272,26 @@ impl Reservation<'_, '_> {
     pub fn bytes(&self) -> u64 {
         self.bytes
     }
+    /// Transfer this exact charge without a refund/recharge or copied statistics.
+    /// On failure the borrowed receipt is unchanged. The local Cell mode cannot
+    /// manufacture a persistent receipt. Successful transfer empties this receipt.
+    pub fn detach_owned(&mut self) -> Result<OwnedReservation, XcfError> {
+        let shared = self.budget.shared.as_ref().ok_or_else(|| XcfError::new(ErrorKind::Unsupported, 0, "local XCF reservations cannot detach"))?;
+        self.budget.poll("persistent reservation handoff")?;
+        let owned = shared.owned(self.kind, self.bytes, self.resident);
+        self.bytes = 0;
+        Ok(owned)
+    }
     /// Grow atomically; shrinking is cleanup and remains permitted after cancellation.
     pub fn resize(&mut self, bytes: u64, phase: &str) -> Result<(), XcfError> {
+        if let Some(shared) = &self.budget.shared {
+            if bytes >= self.bytes {
+                self.budget.poll(phase)?;
+            }
+            shared.resize(self.kind, self.bytes, bytes, self.resident, phase)?;
+            self.bytes = bytes;
+            return Ok(());
+        }
         if bytes >= self.bytes {
             let delta = bytes - self.bytes;
             let total = self.budget.added(self.kind, delta, phase)?;
@@ -255,6 +318,10 @@ impl std::fmt::Debug for Reservation<'_, '_> {
 }
 impl Drop for Reservation<'_, '_> {
     fn drop(&mut self) {
+        if let Some(shared) = &self.budget.shared {
+            shared.refund(self.kind, self.bytes, self.resident);
+            return;
+        }
         self.budget.set(self.kind, self.budget.used(self.kind).saturating_sub(self.bytes));
         if self.resident {
             self.budget.set(BudgetKind::Resident, self.budget.used(BudgetKind::Resident).saturating_sub(self.bytes));
