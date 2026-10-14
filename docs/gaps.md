@@ -1,6 +1,6 @@
 # Where PhotoCraft falls short of Photoshop
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (horizontal Type tool path text, #5189; G7: Field Blur's on-canvas pins, #3373; G4: Hue Jitter amount track, #3825 partial; G4: minimum field interaction, #3825 partial; G1: CMYK Invert, Posterize and Threshold on the inks, 16-bit Lab Invert; Photoshop-oracle floor 145/258; G11: `.atn` import maps 112 events: Select and Mask, Filter Gallery Spatter, Ripple, Crystallize, Pattern Fill layers, mask targeting, Step Backward, nudges in points, Bitmap mode; G5: Free Transform H/V skew fields; G9: toolbar tool shortcut editing; refreshed against main: G2, G5, G7, G9, G10, G13, G14, G17 items that landed; G10: DPX read and write, #1049; G4: checkbox-only Brush Settings rows; G11: Load/Save Actions `.atn` landed, AUTO-219-2 partial; G5: hold-a-key spring-loaded tools landed, #2672; G1: #2465 fixed) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (horizontal Type tool path text, #1082; G1: Gradient Map driven by the W3C luminosity, Photoshop-oracle floor 147/258; G7: Field Blur's on-canvas pins, #3373; G4: Hue Jitter amount track, #3825 partial; G4: minimum field interaction, #3825 partial; G1: CMYK Invert, Posterize and Threshold on the inks, 16-bit Lab Invert; Photoshop-oracle floor 145/258; G11: `.atn` import maps 112 events: Select and Mask, Filter Gallery Spatter, Ripple, Crystallize, Pattern Fill layers, mask targeting, Step Backward, nudges in points, Bitmap mode; G5: Free Transform H/V skew fields; G9: toolbar tool shortcut editing; refreshed against main: G2, G5, G7, G9, G10, G13, G14, G17 items that landed; G10: DPX read and write, #1049; G4: checkbox-only Brush Settings rows; G11: Load/Save Actions `.atn` landed, AUTO-219-2 partial; G5: hold-a-key spring-loaded tools landed, #2672; G1: #2465 fixed; stale missing-tool rows corrected: Color Replacement, Red Eye and Add/Delete Anchor Point are live tools, so only Art History Brush is missing; no estimate changed) · **Target:** Adobe Photoshop 2026
 
 Every known shortfall against Photoshop 2026 (27.11.0), one entry each, ranked by user impact
 on the way to beta. This is the work list agents pick from: take the highest-ranked entry that
@@ -43,7 +43,7 @@ what an agent can't finish alone.
 - **Missing:** PSDs we write are not always accepted by Photoshop, and Photoshop-authored files
   don't always render as Photoshop renders them.
 - **Evidence:** corpus floors (`crates/io/tests/corpus.rs`, scorecard): Photoshop-authored
-  oracles 145/258 (56%; CMYK Invert, Posterize and Threshold on the inks 2026-10-12), io corpus 146/170 (86%), psd-tools 236/309 (76%); round trips ~100%
+  oracles 147/258 (57%; Gradient Map luminosity 2026-10-13; CMYK Invert, Posterize and Threshold on the inks 2026-10-12), io corpus 146/170 (86%), psd-tools 236/309 (76%); round trips ~100%
   within the corpus. Smart-filter re-render matches 5/30. User reports: a PSD with text layers
   re-saved unmodified would not reopen (#2374, closed 2026-10-10), Photoshop 26.6 cannot reopen our files (#1281), "PSD not
   opening in Photoshop" (#2469), a CS2-era smart object unavailable (#2465, fixed 2026-10-12), PSB smart object
@@ -54,8 +54,7 @@ what an agent can't finish alone.
   scripted check there) is the only real oracle.
 
 ### G6. Missing tools
-- **Missing (4 of 68):** Color Replacement (engine command exists), Art
-  History Brush, Add Anchor Point, Delete Anchor Point. Convert Point landed (#3204). Freeform
+- **Missing (1 of 68):** Art History Brush. Convert Point landed (#3204). Freeform
   Pen and Curvature Pen landed (#1054); Color Sampler landed (#1046, `view.colorSamplers.*`); Horizontal and Vertical Type Mask landed (#1055,
   `type.createSelection`); Perspective Crop landed (#1043, `image.perspectiveCrop`); Frame landed
   (#2914).
@@ -79,7 +78,7 @@ what an agent can't finish alone.
 
 ### G8. Type depth
 - **Partial:** type on a path (TYPE-218-1): 2026-10-13, the horizontal Type tool clicks ellipse,
-  work and saved paths, with a curved caret/selection and one undo step (#5189). PSD path text,
+  work and saved paths, with a curved caret/selection and one undo step (#1082). PSD path text,
   interactive start/end/flip handles and vertical path text UI remain missing.
 - **Missing:** paragraph direction UI (TYPE-218-2), complex-script
   fallback fonts and golden tests (TYPE-218-3), OpenType Numerals and Stylistic Sets submenus
@@ -266,6 +265,8 @@ what an agent can't finish alone.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | G1: Gradient Map driven by the W3C luminosity (0.3, 0.59, 0.11), as Photoshop is; rgb8/rgb16 gradient-map pass; Photoshop-oracle floor 145 → 147 of 258 |
+| 2026-10-13 | minor | G6: stale "missing tool" list corrected against `main` — Color Replacement (`paint.colorReplacement`), Red Eye (`paint.redEye`) and Add/Delete Anchor Point (P flyout, #4144) are live tools, so the toolbox is 67 of 68 and Art History Brush is the only one missing; no percentage or estimate changed |
 | 2026-10-13 | minor | G4: Hue Jitter amount-track appearance (#3825, partial); no readiness percentage or estimate changed |
 | 2026-10-13 | minor | G4: minimum inputs in Shape Dynamics and Transfer follow their Control (#3825, partial); no readiness percentage or estimate changed |
 | 2026-10-12 | minor | G5: Free Transform options bar H/V skew fields done |
@@ -286,4 +287,5 @@ what an agent can't finish alone.
 | 2026-10-10 | minor | G2: recorded Tilt-Shift computation/filtered-proxy measurements and limits; gap and estimate remain open |
 | 2026-10-10 | minor | Checked against the alpha gate (no alpha blockers); #2374 marked closed |
 | 2026-10-10 | major | First version, from the full re-measure against Photoshop 2026 27.11.0 and the open issues |
-| 2026-10-13 | minor | Horizontal Type tool clicks shape/work/saved paths with curved caret and selection (#5189); PSD path text and start/end/flip handles remain open; estimates unchanged |
+| 2026-10-13 | minor | Horizontal Type tool clicks shape/work/saved paths with curved caret and selection (#1082); PSD path text and start/end/flip handles remain open; estimates unchanged |
+| 2026-10-14 | minor | Reconciled upstream progress headers and linked horizontal Type path text to #1082; text inside shapes and PSD path text remain open |

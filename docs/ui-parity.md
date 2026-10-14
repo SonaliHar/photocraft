@@ -1,6 +1,6 @@
 # UI parity: tools, handles, modifiers and feel
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (horizontal Type tool path text, #5189; smart filter reordering by drag; smart object perspective row corrected to done, #426; Free Transform H/V skew fields; toolbar tool shortcuts can be reassigned; ⇧-dragged guides land on ruler ticks; layer and selection keys; tool keys; spring-loaded tool letters; type formatting keys; Pen Auto Add/Delete, #4144; smart filter rows) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (horizontal Type tool path text, #1082; smart filter reordering by drag; smart object perspective row corrected to done, #426; Free Transform H/V skew fields; toolbar tool shortcuts can be reassigned; ⇧-dragged guides land on ruler ticks; layer and selection keys; tool keys; spring-loaded tool letters; type formatting keys; Pen Auto Add/Delete, #4144; smart filter rows; stale missing-tool rows corrected: Color Replacement, Red Eye and the Add/Delete Anchor Point pair are live toolbar tools, Frame landed; no percentage changed) · **Target:** Adobe Photoshop 2026
 
 How PhotoCraft's direct manipulation compares with Photoshop 2026 (27.11.0): the toolbox, the
 handles and modifier keys of each gesture, nudging, snapping, numeric precision, navigation,
@@ -34,13 +34,13 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Frame | Frame (frames are groups clipped by a rectangular or elliptical mask) | |
 | Eyedropper | Eyedropper, Color Sampler, Ruler, Note, Count | |
 | Retouch | Remove, Spot Healing, Healing, Patch, Content-Aware Move, Red Eye | |
-| Brush | Brush, Pencil, Mixer Brush | Color Replacement (`paint.colorReplacement` exists) |
+| Brush | Brush, Pencil, Mixer Brush | |
 | Stamp | Clone Stamp, Pattern Stamp | |
 | History | History Brush | Art History Brush |
 | Eraser | Eraser, Background Eraser, Magic Eraser | |
 | Fill | Gradient, Paint Bucket | |
 | Focus, toning | Blur, Sharpen, Smudge, Dodge, Burn, Sponge | |
-| Pen | Pen, Freeform Pen, Curvature Pen (#1054), Convert Point (#3204; also ⌥ with Pen) | Add Anchor Point, Delete Anchor Point |
+| Pen | Pen, Freeform Pen, Curvature Pen (#1054), Convert Point (#3204; also ⌥ with Pen), Add Anchor Point, Delete Anchor Point (P cycles them; #4144 auto add/delete with the Pen itself) | |
 | Type | Horizontal, Vertical, Vertical Type Mask, Horizontal Type Mask | |
 | Path selection | Path Selection, Direct Selection | |
 | Shapes | Rectangle, Ellipse, Triangle, Polygon, Line, Custom Shape | (Star is a Polygon option in Photoshop) |
@@ -97,7 +97,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | ⌘-drag temporary Move shows the box and snaps | partial | #2681 |
 | ⌘-right-click layer list under the pointer | done | `layer_pick_ui.rs` |
 | Double-click type to edit it (caret at the pointer, Type tool) | done | #1132, `type_tool::edit_at` |
-| Horizontal Type tool clicks an ellipse/shape, work path or selected saved path; path stays visible and caret/selection follow it | partial | #5189, 2026-10-13, `type_tool.rs`: click offset, closed-circle seam and atomic create/undo; start/end/flip handles and vertical path text UI remain missing. Native saves preserve it; PSD saves as point text |
+| Horizontal Type tool clicks an ellipse/shape, work path or selected saved path; path stays visible and caret/selection follow it | partial | #1082, 2026-10-13, `type_tool.rs`: click offset, closed-circle seam and atomic create/undo; start/end/flip handles and vertical path text UI remain missing. Native saves preserve it; PSD saves as point text |
 | Moving a selection on a mask moves the mask, not the pixels | partial | #2468 |
 
 ## Selection modifiers
@@ -218,6 +218,7 @@ Paragraph; the rest open as in-app floating windows.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | Stale "missing tool" rows corrected against main: Color Replacement (`paint.colorReplacement`), Red Eye (`paint.redEye`) and Add/Delete Anchor Point (the P flyout cycle) are live toolbar tools, so only Art History Brush is missing; no percentage or estimate changed |
 | 2026-10-13 | minor | Smart object perspective (non-affine) corrected to done: #426 landed four-corner placements with PSD round trip; scorecard FILE-215-6 flipped |
 | 2026-10-10 | major | First version, from a source audit against Photoshop 2026 27.11.0's shortcuts file and the open issues |
 | 2026-10-10 | minor | Fixed Crop live resize snapping feedback and outdated-camera rendering, applied ratios immediately to centred inscribed previews, and removed two-point options-bar overflow; added pointer, rendering, dropdown/Enter, Swap/X and scrolling regressions |
@@ -233,4 +234,5 @@ Paragraph; the rest open as in-app floating windows.
 | 2026-10-12 | minor | Smart filter rows can be selected, and dragged (⌥: copied) onto another smart object or onto Delete (#4271) |
 | 2026-10-12 | minor | Free Transform options bar: H and V skew fields; a sheared box reads as skew instead of a taller H |
 | 2026-10-13 | minor | Smart filter rows can be dragged up or down their stack to reorder the filters |
-| 2026-10-13 | minor | Horizontal Type tool clicks shape/work/saved paths with curved caret and selection (#5189); PSD path text and start/end/flip handles remain open; estimates unchanged |
+| 2026-10-13 | minor | Horizontal Type tool clicks shape/work/saved paths with curved caret and selection (#1082); PSD path text and start/end/flip handles remain open; estimates unchanged |
+| 2026-10-14 | minor | Reconciled upstream progress headers and linked horizontal Type path text to #1082; text inside shapes and PSD path text remain open |
