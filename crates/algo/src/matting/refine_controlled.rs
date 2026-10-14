@@ -756,3 +756,7 @@ mod copy_tests {
         }
     }
 }
+
+#[path = "decontaminate_controlled.rs"]
+mod decontamination;
+pub use decontamination::{DecontaminateRequirements, decontaminate_with_interrupt, requirements as decontaminate_requirements};

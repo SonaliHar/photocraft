@@ -176,6 +176,13 @@ fn checked_downsample(img: &RgbImage, step: usize) -> SamplingResult<RgbImage> {
 pub trait Sampler: Sync {
     /// Straight RGBA over the exact checked rectangle; never blank on a read error.
     fn rgba(&self, r: Rect) -> SamplingResult<Vec<[f32; 4]>>;
+    /// Additive cooperative read hook; legacy implementors retain boundary polls.
+    fn rgba_with_interrupt(&self,r:Rect,control:&Interrupt<'_>)->SamplingResult<Vec<[f32;4]>> {
+        control.check().map_err(|_|RasterInputError::Cancelled)?;
+        let result=self.rgba(r)?;
+        control.check().map_err(|_|RasterInputError::Cancelled)?;
+        Ok(result)
+    }
     fn rgb(&self, r: Rect) -> SamplingResult<RgbImage> {
         let (w, h, n) = sample_shape(r, 16)?;
         let source = self.rgba(r)?;

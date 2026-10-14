@@ -603,6 +603,16 @@ also use canonical decimal strings. Both fields accept `null` to clear the view;
 or recovery. Resource reports require explicit Inspect, and stale targets reset
 their cached reports. Filter insertion choices use the same 64-row stack pages.
 
+Composition controls expose `xcfCompositionDraft` with exactly `document`,
+`revision`, `layer`, `sourceMode`, `blendSpace`, `compositeSpace`, and `operator`.
+Identities are canonical decimal strings. Spaces are `null` or 1 (linear RGB),
+2 (profile RGB), 4 (perceptual RGB); operators are `null` or 1 through 4 (union,
+clip to backdrop, clip to layer, intersection). Setting the draft clears its
+private edit origin and performs no document operation. `null` clears the draft.
+Agents can dispatch `xcf.composition.set` directly with explicit supported
+policies and paired `documentId`/`expectedRevision` strings; stale pairs refuse
+before floating-preview preparation. Retained Auto resolution is read-only.
+
 Pending decoded imports that could not enter the profile-question queue can be
 released with the registered engine command `file.open.discardPending`.
 It accepts an empty object to discard all private pending imports, or

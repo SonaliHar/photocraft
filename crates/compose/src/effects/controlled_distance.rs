@@ -157,6 +157,69 @@ pub(super) fn dilate(source: &Map, r: f32, budget: usize, c: &Interrupt<'_>) -> 
     poll(c)?;
     Ok(Map { w: source.w, h: source.h, v: out })
 }
+/// Exact stroke chamfer field. Local coverage is computed from immutable
+/// neighbors in place of materializing an otherwise unobserved full map.
+pub(super) fn field(shape: &Map, inner: bool, budget: usize, c: &Interrupt<'_>) -> Result<Vec<f32>, E> {
+    poll(c)?;
+    requirements(shape, 1.0, budget)?;
+    let n = shape.w.checked_mul(shape.h).ok_or(E::LimitExceeded)?;
+    if (n as u64).checked_mul(if inner { 320 } else { 192 }).is_none_or(|n| n > MAX_WORK) {
+        return Err(E::LimitExceeded);
+    }
+    let mut start = filled(n, 0.0f32, c)?;
+    let get = |x: i64, y: i64| -> Result<f32, E> {
+        if x < 0 || y < 0 || x >= shape.w as i64 || y >= shape.h as i64 {
+            return Ok(0.0);
+        }
+        shape.v.get(y as usize * shape.w + x as usize).copied().ok_or(E::LengthMismatch)
+    };
+    for y in 0..shape.h {
+        poll(c)?;
+        for x in 0..shape.w {
+            poll(c)?;
+            let i = y * shape.w + x;
+            let a = *shape.v.get(i).ok_or(E::LengthMismatch)?;
+            if !a.is_finite() {
+                return Err(E::InvalidSample);
+            }
+            let seed = if inner {
+                if a <= INSIDE_EPS {
+                    0.0
+                } else {
+                    let mut maximum = a;
+                    for dy in -1..=1 {
+                        for dx in -1..=1 {
+                            poll(c)?;
+                            let value = get(x as i64 + dx, y as i64 + dy)?;
+                            if !value.is_finite() {
+                                return Err(E::InvalidSample);
+                            }
+                            maximum = maximum.max(value);
+                        }
+                    }
+                    let cov = (a / maximum).min(1.0);
+                    if cov < 1.0 - INSIDE_EPS { cov } else { CHAMFER_INF }
+                }
+            } else if a > INSIDE_EPS {
+                1.0 - a.min(1.0)
+            } else {
+                CHAMFER_INF
+            };
+            *start.get_mut(i).ok_or(E::LengthMismatch)? = seed;
+        }
+    }
+    let (d, nearest) = chamfer(start, shape.w, shape.h, c)?;
+    drop(nearest);
+    let mut out = filled(n, 0.0f32, c)?;
+    for (i, ((o, d), a)) in out.iter_mut().zip(d).zip(&shape.v).enumerate() {
+        if i.is_multiple_of(1024) {
+            poll(c)?;
+        }
+        *o = if if inner { *a <= INSIDE_EPS } else { *a > INSIDE_EPS } { -0.5 } else { d - 0.5 };
+    }
+    poll(c)?;
+    Ok(out)
+}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,6 +1,7 @@
 //! Existing fixed-color native Normal/erase math, staged under the real job token.
 //! CMS provider setup is boundary-polled; its internal execution is not interruptible.
-//! Parent brush resolution precedes this child. Bounded JSON/tool/axis capture
+//! Owned recipe resolution runs in the job; compatibility entry takes a resolved brush.
+//! Bounded JSON/tool/axis capture
 //! uses the standard allocator after prospective admission, not a deep token API.
 use super::*;
 use crate::{DocumentSnapshot,WeakDocumentSnapshot,EngineError,Result};
@@ -14,14 +15,15 @@ fn mul(a:u64,b:u64)->Result<u64>{a.checked_mul(b).ok_or_else(||fail("wide stroke
 fn paint(e:StrokeError)->EngineError{match e{StrokeError::Cancelled=>EngineError::Cancelled,e=>fail(e.to_string())}}
 fn raster(e:photocraft_raster::RasterInputError)->EngineError{match e{photocraft_raster::RasterInputError::Cancelled=>EngineError::Cancelled,e=>fail(e.to_string())}}
 // Bounded borrowed parameter admission precedes Value::clone (standard allocator).
-fn json_bytes(v:&Value,depth:usize,n:&mut usize)->Result<u64>{
-    *n=n.checked_add(1).filter(|n|*n<=1_000_000).ok_or_else(||fail("wide parameter count"))?;
+fn json_bytes(v:&Value,depth:usize,n:&mut usize,c:&Interrupt<'_>)->Result<u64>{
+    poll(c)?;*n=n.checked_add(1).filter(|n|*n<=1_000_000).ok_or_else(||fail("wide parameter count"))?;
     if depth>16{return Err(fail("wide parameter depth"));}
     let mut b=size_of::<Value>() as u64;
-    match v{Value::String(s)=>b=add(b,s.len() as u64)?,Value::Array(a)=>{b=add(b,mul(a.capacity() as u64,size_of::<Value>() as u64)?)?;for v in a{b=add(b,json_bytes(v,depth+1,n)?)?;}},Value::Object(o)=>for(k,v)in o{b=add(b,add(k.len() as u64+256,json_bytes(v,depth+1,n)?)?)?;},_=>{}}
+    match v{Value::String(s)=>b=add(b,s.len() as u64)?,Value::Array(a)=>{b=add(b,mul(a.capacity() as u64,size_of::<Value>() as u64)?)?;for v in a{b=add(b,json_bytes(v,depth+1,n,c)?)?;}},Value::Object(o)=>for(k,v)in o{b=add(b,add(k.len() as u64+256,json_bytes(v,depth+1,n,c)?)?)?;},_=>{}}
     if b>64<<20{return Err(fail("wide parameter capacity"));}Ok(b)
 }
-pub(super) fn parameter_bytes(v:&Value)->Result<u64>{json_bytes(v,0,&mut 0)}
+pub(super) fn parameter_bytes(v:&Value)->Result<u64>{json_bytes(v,0,&mut 0,&Interrupt::NONE)}
+pub(super) fn parameter_bytes_with_interrupt(v:&Value,c:&Interrupt<'_>)->Result<u64>{json_bytes(v,0,&mut 0,c)}
 fn axis_copy(axis:Option<&crate::symmetry_cmds::PaintingSymmetry>)->Result<Option<crate::symmetry_cmds::PaintingSymmetry>>{
     use crate::symmetry_cmds::{PaintingSymmetry,SymmetryAxis};
     Ok(match axis{None=>None,Some(PaintingSymmetry::Preset(p))=>Some(PaintingSymmetry::Preset(*p)),Some(PaintingSymmetry::Path(a))=>{
@@ -36,7 +38,26 @@ pub(super) fn eligible(s:&Session,cmd:&str,p:&Value,b:&BrushSettings,pts:&[Strok
     let state=s.active().ok_or(EngineError::NoDocument)?;
     Ok(matches!(crate::channel_cmds::read_target_surface(&state.doc,id,p)?.format().sample,photocraft_color::SampleType::U32|photocraft_color::SampleType::F64))
 }
-struct Input{snapshot:DocumentSnapshot,weak:WeakDocumentSnapshot,revision:u64,active:Option<photocraft_doc::LayerId>,view:crate::channel_cmds::ChannelView,axis:Option<crate::symmetry_cmds::PaintingSymmetry>,id:Option<photocraft_doc::LayerId>,params:Value,brush:BrushSettings,points:Vec<StrokePoint>,zoom:f32,label:String,restricted:bool,auto_erase:bool,coalesce:Option<String>,request:Option<String>,tool_brush:BrushSettings,foreground:[f32;4],background:[f32;4],capture_bytes:u64,recipe:Option<super::brush_recipe_controlled::Recipe>,stores:Vec<crate::preset_store::TipStoreWitness>,presets_revision:u64}
+fn equal_value(a:&Value,b:&Value,c:&Interrupt<'_>)->Result<bool>{
+    poll(c)?;match(a,b){
+        (Value::String(a),Value::String(b))=>{if a.len()!=b.len(){return Ok(false);}for(a,b)in a.as_bytes().chunks(4096).zip(b.as_bytes().chunks(4096)){poll(c)?;if a!=b{return Ok(false);}}Ok(true)},
+        (Value::Array(a),Value::Array(b))=>{if a.len()!=b.len(){return Ok(false);}for(a,b)in a.iter().zip(b){if !equal_value(a,b,c)?{return Ok(false);}}Ok(true)},
+        (Value::Object(a),Value::Object(b))=>{if a.len()!=b.len(){return Ok(false);}for(k,v)in a{poll(c)?;let Some(other)=b.get(k)else{return Ok(false);};if !equal_value(v,other,c)?{return Ok(false);}}Ok(true)},
+        _=>Ok(a==b),
+    }
+}
+pub(super) fn match_offer(offer:&LiveCommit,base:(photocraft_doc::DocId,u64),cmd:&str,p:&Value,points:&[StrokePoint],c:&Interrupt<'_>)->Result<bool>{
+    poll(c)?;
+    let work=mul(add(parameter_bytes_with_interrupt(p,c)?,parameter_bytes_with_interrupt(&offer.params,c)?)?,16)?;
+    if work>StrokeLimits::default().work_units/16||offer.points.len()>100_000{return Err(fail("live offer match work limit"));}
+    if offer.cmd!=cmd||offer.base!=base||p.get("seed").and_then(Value::as_u64)!=offer.seed||offer.points.len()!=points.len(){return Ok(false);}
+    for(a,b)in offer.points.iter().zip(points){poll(c)?;if a!=b{return Ok(false);}}
+    let (Some(a),Some(b))=(p.as_object(),offer.params.as_object())else{return Ok(false);};
+    let count=|v:&serde_json::Map<String,Value>|v.len()-usize::from(v.contains_key("points"))-usize::from(v.contains_key("seed"));
+    if count(a)!=count(b){return Ok(false);}for(k,v)in a{poll(c)?;if matches!(k.as_str(),"points"|"seed"){continue;}let Some(other)=b.get(k)else{return Ok(false);};if !equal_value(v,other,c)?{return Ok(false);}}
+    poll(c)?;Ok(true)
+}
+struct Input{snapshot:DocumentSnapshot,weak:WeakDocumentSnapshot,revision:u64,active:Option<photocraft_doc::LayerId>,view:crate::channel_cmds::ChannelView,axis:Option<crate::symmetry_cmds::PaintingSymmetry>,id:Option<photocraft_doc::LayerId>,params:Value,brush:BrushSettings,points:Vec<StrokePoint>,zoom:f32,cmd:String,label:String,restricted:bool,auto_erase:bool,coalesce:Option<String>,request:Option<String>,tool_brush:BrushSettings,foreground:[f32;4],background:[f32;4],capture_bytes:u64,recipe:Option<super::brush_recipe_controlled::Recipe>,stores:Vec<crate::preset_store::TipStoreWitness>,presets_revision:u64,offer:Option<LiveCommit>}
 struct Candidate{input:Input,output:Surface,damage:Rect,response:Value,lock:bool,changed:bool}
 fn equal(a:&Surface,b:&Surface,c:&Interrupt<'_>)->Result<bool>{
     if a.format()!=b.format()||a.default_bytes()!=b.default_bytes(){return Ok(false);}
@@ -51,8 +72,8 @@ fn prepare(mut input:Input,c:&Interrupt<'_>)->Result<Candidate>{
     let held=photocraft_io::retained_native_input_bytes(doc,native,c).map_err(|e|if c.cancelled(){EngineError::Cancelled}else{fail(e.to_string())})? as u64;
     if let Some(recipe)=input.recipe.take(){
         let available=StrokeLimits::default().resident_bytes.checked_sub(add(held,input.capture_bytes)?).ok_or_else(||fail("brush recipe document headroom"))?;
-        let (mut brush,points)=recipe.resolve(&input.params,StrokeLimits{resident_bytes:available/2,work_units:StrokeLimits::default().work_units/8},c)?;
-        input.label=if brush.erase&&!clear_mode(&input.params){"Eraser".into()}else{"Brush Tool".into()};
+        let (mut brush,points)=recipe.resolve_for(&input.cmd,&input.params,StrokeLimits{resident_bytes:available/2,work_units:StrokeLimits::default().work_units/8},c)?;
+        input.label=if brush.erase&&!clear_mode(&input.params){"Eraser".into()}else{if input.cmd=="paint.pencil"{"Pencil".into()}else{"Brush Tool".into()}};
         if (crate::commands::is_mask_target(&input.params)||crate::channel_cmds::is_channel_target(&input.params))&&brush.erase{brush.erase=false;brush.color=input.background;}
         input.brush=brush;input.points=points;
     }
@@ -66,8 +87,25 @@ fn prepare(mut input:Input,c:&Interrupt<'_>)->Result<Candidate>{
         crate::channel_cmds::Target::Alpha(i)=>{let channel=doc.channels.get(i).ok_or_else(||fail("channel missing"))?;crate::xcf_item_locks::require_channel_content(doc,channel.id)?;false},
         crate::channel_cmds::Target::QuickMask=>false,
     };
-    poll(c)?;let mut wide=wide_stroke_context(doc,input.id,&input.params,&input.brush,format,lock,input.restricted,input.auto_erase)?.ok_or_else(||fail("native target changed"))?;poll(c)?;
-    let standard=StrokeLimits::default();let reflections=match &input.axis{Some(axis)=>stroke_controlled::prepare_reflected_passes(axis,&input.points,StrokeLimits{resident_bytes:standard.resident_bytes.checked_sub(input.capture_bytes).ok_or_else(||fail("capture headroom"))?,work_units:standard.work_units/8},c)?,None=>Vec::new()};
+    if input.auto_erase{return Err(fail("native Pencil Auto Erase is unsupported"));}
+    if let Some(offer)=input.offer.take(){
+        if offer.matches_captured_with_interrupt((doc.id,input.revision),&input.cmd,&input.params,&input.points,c)?{
+            if offer.surface.format()!=format{return Err(fail("live native offer format changed"));}
+            offer.surface.try_validate_tile_origins_with(c).map_err(raster)?;
+            let work=mul(add(source.resident_payload_bytes().map_err(raster)?,offer.surface.resident_payload_bytes().map_err(raster)?)?,4)?;
+            if work>StrokeLimits::default().work_units/16{return Err(fail("live offer equality work"));}
+            if i64::from(offer.bounds.x1)-i64::from(offer.bounds.x0)>i64::from(i32::MAX)||i64::from(offer.bounds.y1)-i64::from(offer.bounds.y0)>i64::from(i32::MAX){return Err(fail("live offer damage bounds"));}
+            let changed=!equal(source,&offer.surface,c)?;let damage=if changed{offer.bounds}else{Rect::EMPTY};
+            let response=json!({"damage":[damage.x0,damage.y0,damage.width(),damage.height()],"fromLive":true});poll(c)?;
+            return Ok(Candidate{input,output:offer.surface,damage,response,lock,changed});
+        }
+    }
+    let standard=StrokeLimits::default();
+    let color_headroom=standard.resident_bytes.checked_sub(add(held,input.capture_bytes)?).ok_or_else(||fail("native profile document headroom"))?;
+    poll(c)?;let (wide,profile_work)=wide_stroke_context_with_limits(doc,input.id,&input.params,&input.brush,format,lock,input.restricted,input.auto_erase,StrokeLimits{resident_bytes:color_headroom,work_units:standard.work_units/16},c)?;
+    let mut wide=wide.ok_or_else(||fail("native target changed"))?;poll(c)?;
+    if profile_work>standard.work_units/16{return Err(fail("native profile work envelope"));}
+    let reflections=match &input.axis{Some(axis)=>stroke_controlled::prepare_reflected_passes(axis,&input.points,StrokeLimits{resident_bytes:standard.resident_bytes.checked_sub(input.capture_bytes).ok_or_else(||fail("capture headroom"))?,work_units:standard.work_units/8},c)?,None=>Vec::new()};
     let mut limits=live_begin_controlled::one_shot_limits(doc,&input.brush,format,input.zoom,reflections.len(),c)?;
     let mut capture_bytes=add(input.capture_bytes,mul(reflections.capacity() as u64,size_of::<Vec<StrokePoint>>() as u64)?)?;
     for pass in &reflections{poll(c)?;capture_bytes=add(capture_bytes,mul(pass.capacity() as u64,size_of::<StrokePoint>() as u64)?)?;}
@@ -75,7 +113,7 @@ fn prepare(mut input:Input,c:&Interrupt<'_>)->Result<Candidate>{
     limits.resident_bytes=limits.resident_bytes.checked_sub(capture_bytes).ok_or_else(||fail("wide captured storage"))?;
     // Partition reflection/equality envelopes out of the aggregate stage work.
     let stage_count=2*(reflections.len() as u64+1)+1;
-    limits.work_units=limits.work_units.checked_sub(standard.work_units/4/stage_count).ok_or_else(||fail("wide work headroom"))?;
+    limits.work_units=limits.work_units.checked_sub(standard.work_units/2/stage_count).ok_or_else(||fail("wide work headroom"))?;
     let comparison_budget=standard.work_units/16;
     wide.budget.extend(&input.brush,&input.points)?;for pass in &reflections{poll(c)?;wide.budget.extend(&input.brush,pass)?;}
     let mut primary=StrokeRenderer::try_new_with_interrupt(&input.brush,Some(format),input.zoom,limits,c).map_err(paint)?;
@@ -107,7 +145,7 @@ fn capture_input(s:&Session,cmd:&str,p:&Value,label:&str,brush:BrushSettings,poi
     stroke_controlled::dispatch_preflight(s,cmd,p,false)?;check_coords(&points,cmd)?;
     let state=s.active().ok_or(EngineError::NoDocument)?;
     if state.floating.is_some()||state.channel_view.color_hidden.len()>16||state.channel_view.alpha_visible.len()>10_000{return Err(fail("native stroke capture context limit"));}
-    let params_bytes=json_bytes(p,0,&mut 0)?;
+    let params_bytes=parameter_bytes(p)?;
     let tool=StrokeRenderer::new_requirements(&s.tools.brush,None,zoom,StrokeLimits::default(),&Interrupt::NONE).map_err(paint)?;
     if state.coalesce.as_ref().is_some_and(|v|v.len()>4096)||s.coalesce_request.as_ref().is_some_and(|v|v.len()>4096)||cmd.len()>256||label.len()>4096{return Err(fail("wide scalar capture limit"));}
     let axis_bytes=match &state.symmetry{Some(crate::symmetry_cmds::PaintingSymmetry::Path(a))=>add(a.source.capacity() as u64,mul(a.segments.capacity() as u64,size_of::<[[f64;2];2]>() as u64)?)?,_=>64};
@@ -115,7 +153,7 @@ fn capture_input(s:&Session,cmd:&str,p:&Value,label:&str,brush:BrushSettings,poi
     capture_bytes=add(capture_bytes,recipe.as_ref().map_or(0,|r|r.retained_bytes))?;
     if capture_bytes>StrokeLimits::default().resident_bytes/4{return Err(fail("wide capture budget"));}
     let axis=axis_copy(state.symmetry.as_ref())?;let snapshot=state.doc.clone();let weak=snapshot.downgrade();
-    let input=Input{snapshot,weak,revision:state.revision,active:state.active_layer,view:state.channel_view.clone(),axis,id,params:p.clone(),brush,points,zoom,label:label.into(),restricted:s.color_restrict.is_some(),auto_erase,coalesce:state.coalesce.clone(),request:s.coalesce_request.clone(),tool_brush:s.tools.brush.clone(),foreground:s.tools.foreground,background:s.tools.background,capture_bytes,recipe,stores,presets_revision:s.tools.presets_rev};
+    let input=Input{snapshot,weak,revision:state.revision,active:state.active_layer,view:state.channel_view.clone(),axis,id,params:p.clone(),brush,points,zoom,cmd:cmd.into(),label:label.into(),restricted:s.color_restrict.is_some(),auto_erase,coalesce:state.coalesce.clone(),request:s.coalesce_request.clone(),tool_brush:s.tools.brush.clone(),foreground:s.tools.foreground,background:s.tools.background,capture_bytes,recipe,stores,presets_revision:s.tools.presets_rev,offer:None};
     Ok(input)
 }
 fn launch(s:&mut Session,input:Input,label:&str)->Result<Value>{
@@ -124,9 +162,8 @@ fn launch(s:&mut Session,input:Input,label:&str)->Result<Value>{
 pub(super) fn run(s:&mut Session,cmd:&str,p:&Value,label:&str,brush:BrushSettings,points:Vec<StrokePoint>,id:Option<photocraft_doc::LayerId>,zoom:f32,auto_erase:bool)->Result<Value>{
     let input=capture_input(s,cmd,p,label,brush,points,id,zoom,auto_erase,None,Vec::new())?;launch(s,input,label)
 }
-pub(super) fn try_run_recipe(s:&mut Session,p:&Value)->Result<Option<Value>>{
-    // Valid live preview commits retain their genuine upstream reuse route.
-    if s.live_commit.is_some(){return Ok(None);}
+pub(super) fn try_run_recipe(s:&mut Session,cmd:&str,p:&Value)->Result<Option<Value>>{
+    if !matches!(cmd,"paint.stroke"|"paint.pencil"){return Ok(None);}
     let state=s.active().ok_or(EngineError::NoDocument)?;
     let id=if crate::channel_cmds::is_channel_target(p){None}else{Some(layer_id(s,p)?)};
     let source=crate::channel_cmds::read_target_surface(&state.doc,id,p)?;
@@ -137,11 +174,21 @@ pub(super) fn try_run_recipe(s:&mut Session,p:&Value)->Result<Option<Value>>{
         crate::channel_cmds::Target::Alpha(index)=>crate::xcf_item_locks::require_channel_content(&state.doc,state.doc.channels.get(index).ok_or_else(||fail("channel target missing"))?.id)?,
         crate::channel_cmds::Target::QuickMask=>{},
     }
-    let mut recipe=super::brush_recipe_controlled::Recipe::capture(s,p,&Interrupt::NONE)?;
-    if !recipe.effective_normal(p){return Ok(None);}
+    if cmd=="paint.pencil"&&flag(p,"autoErase",false){return Err(fail("native Pencil Auto Erase is unsupported"));}
+    let mut recipe=super::brush_recipe_controlled::Recipe::capture_for(s,cmd,p,&Interrupt::NONE)?;
+    if !recipe.effective_normal(cmd,p){return Ok(None);}
     let stores=std::mem::take(&mut recipe.witnesses);
-    let input=capture_input(s,"paint.stroke",p,"Brush Tool",BrushSettings::default(),Vec::new(),id,num(p,"zoom").unwrap_or(1.0),false,Some(recipe),stores)?;
-    let value=launch(s,input,"Brush Tool")?;s.live_commit=None;Ok(Some(value))
+    let label=if cmd=="paint.pencil"{"Pencil"}else{"Brush Tool"};
+    let mut input=capture_input(s,cmd,p,label,BrushSettings::default(),Vec::new(),id,num(p,"zoom").unwrap_or(1.0),cmd=="paint.pencil"&&flag(p,"autoErase",false),Some(recipe),stores)?;
+    if let Some(offer)=s.live_commit.as_ref(){
+        let held=add(parameter_bytes(&offer.params)?,add(mul(offer.points.capacity() as u64,size_of::<StrokePoint>() as u64)?,add(offer.surface.resident_payload_bytes().map_err(raster)?,mul(offer.surface.tile_count() as u64,512)?)?)?)?;
+        input.capture_bytes=add(input.capture_bytes,held)?;
+        if input.capture_bytes>StrokeLimits::default().resident_bytes/2{return Err(fail("live offer captured budget"));}
+    }
+    // Move only after all fallible capture/admission. A dispatch attempt consumes
+    // offers under the existing command semantics; no preview API changes.
+    input.offer=s.live_commit.take();
+    let value=launch(s,input,label)?;s.live_commit=None;Ok(Some(value))
 }
 
 #[cfg(test)]
@@ -170,6 +217,18 @@ mod tests{
             let mut expected=pre.clone();renderer.try_composite_wide(pre,&mut expected,&wide.color,doc.selection.as_ref(),false,wide.clip,&Interrupt::NONE).unwrap();
             s.execute("paint.stroke",p).unwrap();let actual=s.active().unwrap().doc.layer(id.unwrap()).unwrap().surface().unwrap();assert!(equal(&expected,actual,&Interrupt::NONE).unwrap());
         }
+    }
+    #[test]
+    fn registered_native_pencil_and_block_reuse_exact_live_offer(){
+        for sample in [SampleType::U32,SampleType::F64]{for block in [false,true]{let mut s=fixture(sample);let mut p=params();p["block"]=json!(block);p["zoom"]=json!(2.5);
+            let live=LiveStroke::begin_with(&s,"paint.pencil",&p).unwrap();let expected=crate::channel_cmds::read_target_surface(&live.doc,live.layer,&live.params).unwrap().clone();let rev=s.active().unwrap().revision;let before=s.active().unwrap().doc.clone();s.offer_live_stroke(live).unwrap();
+            let response=s.execute("paint.pencil",p).unwrap();assert_eq!(response.get("fromLive"),Some(&json!(true)));assert_eq!(s.active().unwrap().revision,rev+1);assert!(equal(s.active().unwrap().doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap(),&expected,&Interrupt::NONE).unwrap());assert!(s.undo());assert_eq!(&*s.active().unwrap().doc,&*before);
+        }}
+    }
+    #[test]
+    fn moved_stale_offer_falls_back_and_native_autoerase_preserves_redo(){
+        let mut s=fixture(SampleType::F64);let p=params();let live=LiveStroke::begin_with(&s,"paint.stroke",&p).unwrap();s.offer_live_stroke(live).unwrap();let mut changed=p.clone();changed["seed"]=json!(23);let response=s.execute("paint.stroke",changed).unwrap();assert!(response.get("fromLive").is_none());assert!(s.undo());let before=s.active().unwrap().doc.clone();let mut refused=p;refused["autoErase"]=json!(true);
+        assert!(s.execute("paint.pencil",refused).is_err());assert!(s.active().unwrap().doc.shares_state(&before));assert!(s.active().unwrap().history.can_redo());
     }
     #[test]
     fn actual_inline_job_cancellation_and_zero_opacity_preserve_redo(){

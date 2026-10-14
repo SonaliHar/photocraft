@@ -256,6 +256,12 @@ fn object_at_point(s: &mut Session, p: &Value, (x, y): (f32, f32)) -> Result<Val
 }
 
 fn object_selection(s: &mut Session, p: &Value) -> Result<Value> {
+    if crate::selection_object_controlled::handles(p) {
+        return crate::selection_object_controlled::run(s, p);
+    }
+    if p.get("documentId").is_some() || p.get("expectedRevision").is_some() {
+        return Err(bad("select.object", "captured targets currently require rect"));
+    }
     if p.get("rect").is_none()
         && let Some(pt) = point_param(p)
     {
@@ -509,7 +515,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.object",
             "Object Selection",
             [],
-            r##"{"rect":[x,y,w,h] | "point":[x,y],"mode":"replace|add|subtract|intersect"="replace","sampleAllLayers":bool=false} (point: the Object Finder's object under the point, as hovering previews it)"##,
+            r##"{"rect":[x,y,w,h] | "point":[x,y],"mode":"replace|add|subtract|intersect"="replace","sampleAllLayers":bool=false,"documentId"?:canonical decimal string,"expectedRevision"?:canonical decimal string} (captured pair: rectangle only; point: the Object Finder's object under the point, as hovering previews it)"##,
             has_doc,
             object_selection
         ),

@@ -96,3 +96,47 @@ pub(crate) fn source_wire(page: Option<&crate::state::XcfSourcePageDraft>) -> Va
 pub(crate) fn resource_wire(page: Option<&crate::xcf_notices::ResourcePageDraft>) -> Value {
     page.map_or(Value::Null, |page| json!({"document":page.document.to_string(),"revision":page.revision.to_string(),"offset":page.offset,"open":page.open}))
 }
+/// View-only values cannot recreate the private composition edit origin.
+pub(crate) fn composition(p: &Value) -> Result<Option<Option<crate::xcf_panels::composition::CompositionDraft>>> {
+    let Some(value) = p.get("xcfCompositionDraft") else { return Ok(None) };
+    if value.is_null() {
+        return Ok(Some(None));
+    }
+    let object = value
+        .as_object()
+        .filter(|object| {
+            object.len() == 7
+                && object
+                    .keys()
+                    .all(|key| matches!(key.as_str(), "document" | "revision" | "layer" | "sourceMode" | "blendSpace" | "compositeSpace" | "operator"))
+        })
+        .ok_or("composition draft requires exactly document, revision, layer, sourceMode, blendSpace, compositeSpace and operator")?;
+    let choice = |key: &str, allowed: &[u8]| -> Result<Option<u8>> {
+        let value = object.get(key).ok_or("missing composition choice")?;
+        if value.is_null() {
+            return Ok(None);
+        }
+        let code = value.as_u64().and_then(|value| u8::try_from(value).ok()).filter(|value| allowed.contains(value)).ok_or("unsupported composition choice")?;
+        Ok(Some(code))
+    };
+    Ok(Some(Some(crate::xcf_panels::composition::CompositionDraft {
+        document: decimal(object.get("document"), true)?,
+        revision: decimal(object.get("revision"), false)?,
+        layer: decimal(object.get("layer"), true)?,
+        source_mode: object
+            .get("sourceMode")
+            .and_then(Value::as_i64)
+            .and_then(|value| i32::try_from(value).ok())
+            .ok_or("composition sourceMode must be an I32 integer")?,
+        blend_space: choice("blendSpace", &[1, 2, 4])?,
+        composite_space: choice("compositeSpace", &[1, 2, 4])?,
+        operator: choice("operator", &[1, 2, 3, 4])?,
+    })))
+}
+pub(crate) fn composition_wire(draft: Option<&crate::xcf_panels::composition::CompositionDraft>) -> Value {
+    draft.map_or(Value::Null, |draft| {
+        json!({"document":draft.document.to_string(), "revision":draft.revision.to_string(),
+        "layer":draft.layer.to_string(), "sourceMode":draft.source_mode, "blendSpace":draft.blend_space,
+        "compositeSpace":draft.composite_space, "operator":draft.operator})
+    })
+}

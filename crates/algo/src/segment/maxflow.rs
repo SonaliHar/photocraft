@@ -15,6 +15,7 @@
 use std::collections::VecDeque;
 
 mod push_relabel;
+mod controlled;
 
 const NONE: u32 = u32::MAX;
 const TERMINAL: u32 = u32::MAX - 1;

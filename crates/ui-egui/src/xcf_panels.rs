@@ -13,6 +13,7 @@ mod color_overlay;
 mod color_rotate;
 mod component_extract;
 mod current_items;
+pub(crate) mod composition;
 mod editing;
 mod filter_stack;
 mod filter_insert;
@@ -56,6 +57,7 @@ pub(crate) fn linked_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, laye
 
 pub(crate) fn editing_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: LayerId) {
     current_items::properties(app, ui, layer);
+    composition::properties(app, ui, layer);
     source_inspect::properties(app, ui, layer);
     indexed_palette::properties(app, ui, layer);
     layer_mask::properties(app, ui, layer);

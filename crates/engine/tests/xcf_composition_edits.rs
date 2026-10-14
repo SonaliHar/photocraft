@@ -85,6 +85,36 @@ fn session(doc: Document) -> Session {
     s
 }
 #[test]
+fn captured_composition_rejects_stale_or_malformed_pairs_without_history() {
+    let mut s = session(fixture());
+    let before = s.active().unwrap().doc.clone();
+    let revision = s.active().unwrap().revision;
+    let base = params(&before);
+    let document = before.id.0.to_string();
+    for (id, rev) in [
+        (Some(document.clone()), None),
+        (None, Some(revision.to_string())),
+        (Some(format!("0{document}")), Some(revision.to_string())),
+        (Some(document.clone()), Some(format!("0{}", revision))),
+        (Some(document.clone()), Some(revision.saturating_add(1).to_string())),
+        (Some("18446744073709551616".into()), Some(revision.to_string())),
+    ] {
+        let mut request = base.clone();
+        if let Some(id) = id { request["documentId"] = json!(id); }
+        if let Some(rev) = rev { request["expectedRevision"] = json!(rev); }
+        assert!(s.execute("xcf.composition.set", request).is_err());
+        let active = s.active().unwrap();
+        assert_eq!(active.doc, before);
+        assert_eq!(active.revision, revision);
+        assert_eq!(active.history.past_len(), 0);
+    }
+    let mut request = base;
+    request["documentId"] = json!(document);
+    request["expectedRevision"] = json!(revision.to_string());
+    s.execute("xcf.composition.set", request).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), 1);
+}
+#[test]
 fn explicit_policy_edit_inspects_preserves_native_samples_and_undoes() {
     let before = fixture();
     let id = before.layers[1].id;

@@ -154,11 +154,18 @@ impl Gmm {
     /// Same deterministic k-means++/10 Lloyd/3 EM recipe for <=4000 unit RGB
     /// samples and <=16 components, with fallible bounded scratch and inner polls.
     pub fn fit_with_interrupt(samples: &[[f32; 3]], k: usize, reg: f32, c: &Interrupt<'_>) -> Result<Option<Self>, E> {
+        Self::fit_bounded(samples, k, reg, 4000, c)
+    }
+    /// GrabCut's unchanged forty-thousand sample recipe, separately admitted by its caller.
+    pub(crate) fn fit_grabcut_with_interrupt(samples: &[[f32; 3]], k: usize, reg: f32, c: &Interrupt<'_>) -> Result<Option<Self>, E> {
+        Self::fit_bounded(samples, k, reg, 40_000, c)
+    }
+    fn fit_bounded(samples: &[[f32; 3]], k: usize, reg: f32, max_samples: usize, c: &Interrupt<'_>) -> Result<Option<Self>, E> {
         poll(c)?;
         if samples.is_empty() {
             return Ok(None);
         }
-        if samples.len() > 4000 || k > 16 || !reg.is_finite() || reg < 0. {
+        if samples.len() > max_samples || k > 16 || !reg.is_finite() || reg < 0. {
             return Err(E::LimitExceeded);
         }
         for (i, z) in samples.iter().enumerate() {
@@ -187,6 +194,34 @@ impl Gmm {
         }
         poll(c)?;
         Ok(Some(g))
+    }
+    pub(crate) fn refit_grabcut_with_interrupt(&self, samples: &[[f32; 3]], c: &Interrupt<'_>) -> Result<Option<Self>, E> {
+        poll(c)?;
+        if samples.len() > 40_000 || self.comps.len() > 16 {
+            return Err(E::LimitExceeded);
+        }
+        let mut labels = reserved(samples.len())?;
+        for (i, z) in samples.iter().enumerate() {
+            if i.is_multiple_of(64) {
+                poll(c)?;
+            }
+            if z.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
+                return Err(E::InvalidSample);
+            }
+            labels.push(self.component_of(*z));
+        }
+        from_labels(samples, &labels, self.comps.len(), self.reg, c)
+    }
+    pub(crate) fn clone_grabcut_with_interrupt(&self, c: &Interrupt<'_>) -> Result<Self, E> {
+        if self.comps.len() > 16 {
+            return Err(E::LimitExceeded);
+        }
+        let mut comps = reserved(self.comps.len())?;
+        for component in &self.comps {
+            poll(c)?;
+            comps.push(component.clone());
+        }
+        Ok(Self { comps, reg: self.reg })
     }
 }
 #[cfg(test)]

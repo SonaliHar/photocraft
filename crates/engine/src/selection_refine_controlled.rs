@@ -1,5 +1,5 @@
-//! Controlled ordinary Refine outputs without decontamination or brush strokes.
-//! Unported brush/decontamination routes retain upstream behavior; no native-wide
+//! Controlled ordinary Refine outputs including color decontamination.
+//! Unported brush routes retain upstream behavior; no native-wide
 //! interpretation or source-render qualification is added.
 use crate::channel_cmds::ChannelView;
 use crate::{DocState, DocumentSnapshot, EngineError, Result, Session};
@@ -207,6 +207,8 @@ struct Request {
     target_mask: bool,
     eligible: bool,
     output: Output,
+    decontaminate: bool,
+    amount: f32,
 }
 fn scalar(p: &Value, k: &str, default: f32, lo: f32, hi: f32) -> Result<f32> {
     let n = p.get(k).map_or(Ok(f64::from(default)), |v| v.as_f64().ok_or_else(|| bad(ID, "numeric parameter required")))?;
@@ -351,7 +353,7 @@ fn request(s: &Session, p: &Value) -> Result<Request> {
     let (brush, brush_adds) = brush_header(p)?;
     let all = flag(p, "sampleAllLayers", false)?;
     let decontaminate = flag(p, "decontaminate", false)?;
-    let _ = scalar(p, "amount", 100., 0., 100.)?;
+    let amount = scalar(p, "amount", 100., 0., 100.)?;
     let target_mask = text(p, "target", "")? == "mask";
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let prior = source_mask(&st.doc, st.active_layer, target_mask, &Interrupt::NONE)?;
@@ -374,6 +376,7 @@ fn request(s: &Session, p: &Value) -> Result<Request> {
     // Other outputs use f32-based pixel helpers and may replace native mask storage.
     // Their existing legacy route cannot promise a raw native output operation.
     if output == "layerMask"
+        && !decontaminate
         && source_mask(&st.doc, st.active_layer, true, &Interrupt::NONE)?.is_some_and(|v| matches!(v.format().sample, SampleType::U32 | SampleType::F64))
     {
         return Err(bad(ID, "native mask output replacement unsupported"));
@@ -388,8 +391,8 @@ fn request(s: &Session, p: &Value) -> Result<Request> {
     if output == "selection" && !decontaminate {
         crate::selection_sample_policy::existing_selection(s, ID, &Interrupt::NONE)?;
     }
-    let eligible = !decontaminate && !brush;
-    let output_kind = match output {
+    let eligible = !brush;
+    let output_kind = match if decontaminate && matches!(output, "selection" | "layerMask") { "newLayerWithMask" } else { output } {
         "selection" => Output::Selection,
         "layerMask" => Output::LayerMask,
         "newLayer" => Output::NewLayer,
@@ -430,7 +433,7 @@ fn request(s: &Session, p: &Value) -> Result<Request> {
             crate::xcf_item_locks::require_layer_mask_content(&st.doc, id)?;
         }
     }
-    Ok(Request { params, all, target_mask, eligible, output: output_kind })
+    Ok(Request { params, all, target_mask, eligible, output: output_kind, decontaminate, amount })
 }
 pub(crate) fn handles(s: &Session, p: &Value) -> Result<bool> {
     Ok(request(s, p)?.eligible)
@@ -506,6 +509,13 @@ fn admission(doc: &Document, active: Option<LayerId>, r: Request, c: &Interrupt<
     } else {
         (0, 0)
     };
+    let (decontaminate_bytes, decontaminate_work) = if r.decontaminate {
+        let pixels = find_surface(doc, active, c)?.ok_or_else(|| bad(ID, "active layer has no pixels"))?;
+        let d = matting::decontaminate_requirements(pixels, req.bbox, r.params.radius, c).map_err(|e| error(ID, c, e))?;
+        (d.peak_resident_bytes, d.work_units)
+    } else {
+        (0, 0)
+    };
     raster
         .retained_bytes
         .checked_mul(2)
@@ -517,11 +527,13 @@ fn admission(doc: &Document, active: Option<LayerId>, r: Request, c: &Interrupt<
         .and_then(|v| v.checked_add(output))
         .and_then(|v| v.checked_add((std::mem::size_of::<DocState>() as u64).checked_mul(8192 * 2)?))
         .and_then(|v| v.checked_add(copy_bytes))
+        .and_then(|v| v.checked_add(decontaminate_bytes))
         .filter(|v| *v <= MAX_CHECKED_RASTER_BYTES)
         .ok_or_else(|| bad(ID, "aggregate Refine resident limit"))?;
     req.work_units
         .checked_add(render_work)
         .and_then(|v| v.checked_add(copy_work))
+        .and_then(|v| v.checked_add(decontaminate_work))
         .and_then(|v| v.checked_add(model.checked_add(payload)?.checked_mul(8)?))
         .and_then(|v| v.checked_add(raster.retained_bytes.checked_mul(2)?))
         .and_then(|v| v.checked_add(output.checked_mul(16)?))
@@ -805,6 +817,12 @@ fn prepare(doc: &Document, active: Option<LayerId>, r: Request, c: &Interrupt<'_
     let pixels = source_layer.surface().ok_or_else(|| bad(ID, "active layer has no pixels"))?;
     let empty = photocraft_algo::segment::Region { bbox: Rect::EMPTY, mask: Vec::new() };
     let region = region.as_ref().unwrap_or(&empty);
+    let decontaminated = if r.decontaminate {
+        Some(matting::decontaminate_with_interrupt(pixels, region, r.params.radius, r.amount, MattingLimits::default(), c).map_err(|e| error(ID, c, e))?)
+    } else {
+        None
+    };
+    let pixels = decontaminated.as_ref().unwrap_or(pixels);
     let content = if r.output.with_mask() {
         poll(c)?;
         pixels.clone()
@@ -980,7 +998,7 @@ mod tests {
     fn direct_current_refine_matches_original_and_preserves_pixels() {
         let d = document();
         let params = RefineParams { radius: 4., smart_radius: true, smooth: 17., feather: 2., contrast: 22., shift_edge: 12.5 };
-        let r = Request { params, all: false, target_mask: false, eligible: true, output: Output::Selection };
+        let r = Request { params, all: false, target_mask: false, eligible: true, output: Output::Selection, decontaminate: false, amount: 100. };
         let before = d.clone();
         let actual = prepare(&d, Some(d.layers[0].id), r, &Interrupt::NONE).unwrap();
         let old = d.selection.as_ref().unwrap();
@@ -1006,14 +1024,28 @@ mod tests {
         assert!(dispatch_preflight(&s, &json!({"target":"mask","output":"selection"}), true).is_err());
     }
     #[test]
-    fn captured_unported_decontamination_refuses_and_cancel_never_mutates_snapshot() {
+    fn captured_unported_brush_refuses_and_cancel_never_mutates_snapshot() {
         let mut s = Session::new();
         s.add_document(document(), None).unwrap();
         let st = s.active().unwrap();
         let old = st.doc.clone();
         let rev = st.revision;
-        assert!(handles(&s, &json!({"output":"layerMask","decontaminate":true,"documentId":old.id.0.to_string(),"expectedRevision":rev.to_string()})).is_err());
-        let r = Request { params: RefineParams::default(), all: false, target_mask: false, eligible: true, output: Output::Selection };
+        assert!(
+            handles(
+                &s,
+                &json!({"output":"layerMask","refineStrokes":[{"points":[[3,4]]}],"documentId":old.id.0.to_string(),"expectedRevision":rev.to_string()})
+            )
+            .is_err()
+        );
+        let r = Request {
+            params: RefineParams::default(),
+            all: false,
+            target_mask: false,
+            eligible: true,
+            output: Output::Selection,
+            decontaminate: false,
+            amount: 100.,
+        };
         assert!(matches!(prepare(&old, st.active_layer, r, &Interrupt::cancel_only(&|| true)), Err(EngineError::Cancelled)));
         assert!(old.shares_state(&s.active().unwrap().doc));
         assert_eq!(rev, s.active().unwrap().revision);
@@ -1107,12 +1139,42 @@ mod output_tests {
         }
         let old = s.active().unwrap().doc.clone();
         let active = s.active().unwrap().active_layer;
-        let request = Request { params: RefineParams::default(), all: false, target_mask: false, eligible: true, output: Output::NewLayerWithMask };
+        let request = Request {
+            params: RefineParams::default(),
+            all: false,
+            target_mask: false,
+            eligible: true,
+            output: Output::NewLayerWithMask,
+            decontaminate: false,
+            amount: 100.,
+        };
         assert!(matches!(prepare(&old, active, request, &Interrupt::cancel_only(&|| true)), Err(EngineError::Cancelled)));
         assert!(old.shares_state(&s.active().unwrap().doc));
         run(&mut s, &json!({"output":"layerMask"})).unwrap();
         let m = s.active().unwrap().doc.layers[0].mask.as_ref().unwrap();
         assert!(!m.enabled && !m.linked);
         assert_eq!((m.density, m.feather), (0.37, 2.25));
+    }
+}
+
+#[cfg(test)]
+mod decontamination_tests {
+    use super::*;
+    #[test]
+    fn original_output_promotion_and_all_destination_policies_remain() {
+        for requested in ["selection", "layerMask", "newLayer", "newLayerWithMask", "newDocument", "newDocumentWithMask"] {
+            let mut s = Session::new();
+            s.add_document(super::tests::document(), None).unwrap();
+            let source = s.active().unwrap().doc.clone();
+            let response = run(&mut s, &json!({"output":requested,"decontaminate":true,"amount":50})).unwrap();
+            let expected = if matches!(requested, "selection" | "layerMask") { "newLayerWithMask" } else { requested };
+            assert_eq!(response["output"], expected);
+            if requested.starts_with("newDocument") {
+                assert!(source.shares_state(&s.documents()[0].doc));
+            } else {
+                assert!(s.undo());
+                assert_eq!(s.active().unwrap().doc, source);
+            }
+        }
     }
 }

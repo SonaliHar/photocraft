@@ -597,8 +597,19 @@ and inherited renderer/provider boundaries remain explicit. Named previews avoid
 have controlled workers, and explicitly generated Focus Area/Sky
 forms carry private origins without changing immediate menu routing. These paths
 have not yet passed the deferred runtime checks.
-Refine Edge's six ordinary outputs have bounded preparation when decontamination
-is off and brush strokes are empty. Source Details includes saved channels,
+Refine Edge's six ordinary outputs, including color decontamination, have bounded
+preparation when brush strokes are empty. Its dialog carries a private target
+origin; unsupported brush confirmation refuses before closing or saving options.
+Rectangle Object Selection retains the original GrabCut/GMM policy in a controlled
+worker; point and Subject retain their existing paths. Native Pencil and matching
+live-stroke offers use the owned, tokened recipe consumer while preview APIs retain
+their current behavior. Precise Glow and Raster Stroke retain original distance
+math and thresholds with shared-field admission under the existing 64 MiB stage.
+Controlled conversion, cubic and floating-anchor profile preparation uses lower
+CMS envelopes; Transform/WorkingSpace constructors remain explicit boundaries.
+Modern raster composition Properties offers captured Edit/Apply/Reset with
+explicit supported spaces/operators and read-only retained Auto resolution.
+Source Details includes saved channels,
 masks and paths; XCF notices provide explicit paged resource inspection. Filter
 insertion templates use the same stack pages, including choices after node 64.
 

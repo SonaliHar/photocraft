@@ -43,7 +43,7 @@ pub(crate) fn dispatch_preflight(session: &Session, command: &str, params: &Valu
     }
     Ok(())
 }
-fn admission(doc: &Document, include_anchor_pixels: bool, control: &Interrupt<'_>) -> Result<()> {
+fn admission(doc: &Document, include_anchor_pixels: bool, control: &Interrupt<'_>) -> Result<photocraft_cms::control::Limits> {
     poll(control)?;
     let limits = photocraft_io::NativeSaveLimits::default().preparation;
     let payload = photocraft_io::retained_native_payload_bytes(doc, limits, control).map_err(error)? as u64;
@@ -97,7 +97,17 @@ fn admission(doc: &Document, include_anchor_pixels: bool, control: &Interrupt<'_
     if peak > MAX_CHECKED_RASTER_BYTES {
         return Err(error("anchor aggregate storage limit"));
     }
-    poll(control)
+    let maximum=photocraft_cms::control::Limits::default();
+    let profile_limits=photocraft_cms::control::Limits{
+        resident_bytes:usize::try_from(MAX_CHECKED_RASTER_BYTES.checked_sub(peak).ok_or_else(||error("anchor profile headroom"))?.min(maximum.resident_bytes as u64)).map_err(error)?,
+        work_units:maximum.work_units,
+    };
+    if include_anchor_pixels {
+        let profiles=crate::color_cmds::document_profile_requirements_with_limits(doc,profile_limits,control)?;
+        peak.checked_add(profiles.peak_resident_bytes as u64).filter(|bytes|*bytes<=MAX_CHECKED_RASTER_BYTES).ok_or_else(||error("anchor aggregate profile/model/raster limit"))?;
+        if profiles.work_units.checked_mul(2).is_none_or(|work|work>profile_limits.work_units){return Err(error("anchor profile/working-space work limit"));}
+    }
+    poll(control)?;Ok(profile_limits)
 }
 pub(crate) fn anchor(session: &mut Session, params: &Value) -> Result<Value> {
     dispatch_preflight(session, CMD, params)?;
@@ -114,8 +124,8 @@ pub(crate) fn anchor(session: &mut Session, params: &Value) -> Result<Value> {
         true,
         move |context| {
             context.stage(0.0, 0.95, "Anchor Floating Layer", |control| {
-                admission(&worker, true, control)?;
-                let plan = super::prepare(&worker, control)?;
+                let profile_limits=admission(&worker, true, control)?;
+                let plan = super::prepare_with_profile_limits(&worker,profile_limits,control)?;
                 poll(control)?;
                 Ok((plan, context.clone()))
             })
@@ -180,7 +190,7 @@ pub(crate) fn release(session: &mut Session, params: &Value, delete: bool) -> Re
         true,
         move |context| {
             context.stage(0.0, 0.95, label, |control| {
-                admission(&worker, false, control)?;
+                let _=admission(&worker, false, control)?;
                 poll(control)?;
                 // Model capacity is admitted above. This standard Document clone is
                 // bounded and boundary-polled, not an all-allocator guarantee.

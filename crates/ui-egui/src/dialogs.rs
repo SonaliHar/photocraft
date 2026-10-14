@@ -160,6 +160,17 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 app.ui.status_error = true;
             }
         }
+        if crate::selection_refine_origin::owns(&dialog.fields) {
+            if let Err(error) = crate::selection_refine_origin::fields(&dialog.fields) {
+                dialog.kind = DialogKind::Error;
+                dialog.fields = serde_json::Map::new();
+                dialog.fields.insert("message".into(), Value::String(error.clone()));
+                app.ui.selection_refine_origin = None;
+                app.filter_preview = None;
+                app.ui.status = error;
+                app.ui.status_error = true;
+            }
+        }
     }
     let dialogs = app.ui.dialogs.clone();
     let top = dialogs.last().map(|d| d.id);
@@ -613,6 +624,9 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
         if crate::selection_color_origin::owns(&dialog.fields) {
             crate::selection_color_origin::validate(app, id, &dialog.fields)?;
         }
+        if crate::selection_refine_origin::owns(&dialog.fields) {
+            crate::selection_refine_origin::validate(app, id, &dialog.fields)?;
+        }
     }
     if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id).filter(|d| crate::guide_layout_ui::owns(&d.fields)) {
         if app.ui.dialogs.iter().any(|child| crate::color_picker_ui::owns(&child.fields) && child.fields.get("__dialog").and_then(Value::as_u64) == Some(id)) {
@@ -684,6 +698,9 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
                 if crate::selection_color_origin::handles(&cmd) {
                     crate::selection_color_origin::validate(app, id, &d.fields)?;
                 }
+                if crate::selection_refine_origin::handles(&cmd) {
+                    crate::selection_refine_origin::validate(app, id, &d.fields)?;
+                }
                 if crate::native_gray_adjustment_origin::handles(&cmd) {
                     crate::native_gray_adjustment_origin::validate(app, id, &d.fields)?;
                 }
@@ -697,6 +714,8 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
                     crate::selection_modify_origin::prepare(app, id, &d.fields, params)
                 } else if crate::selection_color_origin::handles(&cmd) {
                     crate::selection_color_origin::prepare(app, id, &d.fields, params)
+                } else if crate::selection_refine_origin::handles(&cmd) {
+                    crate::selection_refine_origin::prepare(app, id, &d.fields, params)
                 } else { Ok(params) }
             })();
             let (params, result) = match preparation {
@@ -723,6 +742,9 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
                 if crate::selection_color_origin::handles(&cmd) {
                     crate::selection_color_origin::clear(app);
                 }
+                if crate::selection_refine_origin::handles(&cmd) {
+                    crate::selection_refine_origin::clear(app);
+                }
                 crate::filter_dialog::remember(app, &cmd, &d.fields);
                 // A step dialog of a playing action: the action continues after it.
                 crate::actions::resume(app, &d.fields);
@@ -742,6 +764,9 @@ pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     }
     if crate::selection_color_origin::owns(&closed.fields) {
         crate::selection_color_origin::clear(app);
+    }
+    if crate::selection_refine_origin::owns(&closed.fields) {
+        crate::selection_refine_origin::clear(app);
     }
     crate::actions::stopped(app, &closed.fields);
     if crate::guide_layout_ui::owns(&closed.fields) {
@@ -784,6 +809,7 @@ pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) 
     fields.insert("__label".into(), json!(label));
     let id = app.ui.open_dialog(DialogKind::Command, fields);
     crate::selection_color_origin::capture_open(app, id, command);
+    crate::selection_refine_origin::capture_open(app, id, command);
     id
 }
 

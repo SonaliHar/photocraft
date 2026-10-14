@@ -313,7 +313,11 @@ impl WideStrokeBudget {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn wide_stroke_context(
+fn wide_stroke_context(doc:&photocraft_doc::Document,layer:Option<photocraft_doc::LayerId>,p:&Value,brush:&BrushSettings,format:photocraft_color::PixelFormat,lock:bool,restricted_color:bool,auto_erase:bool)->Result<Option<WideStroke>>{
+    wide_stroke_context_with_limits(doc,layer,p,brush,format,lock,restricted_color,auto_erase,photocraft_paint::stroke_controlled::StrokeLimits::default(),&photocraft_raster::Interrupt::NONE).map(|(wide,_)|wide)
+}
+#[allow(clippy::too_many_arguments)]
+fn wide_stroke_context_with_limits(
     doc: &photocraft_doc::Document,
     layer: Option<photocraft_doc::LayerId>,
     p: &Value,
@@ -322,11 +326,14 @@ fn wide_stroke_context(
     lock: bool,
     restricted_color: bool,
     auto_erase: bool,
-) -> Result<Option<WideStroke>> {
+    limits: photocraft_paint::stroke_controlled::StrokeLimits,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<(Option<WideStroke>,u64)> {
     use photocraft_color::{ColorMode, PixelFormat, SampleType};
     if !matches!(format.sample, SampleType::U32 | SampleType::F64) {
-        return Ok(None);
+        return Ok((None,0));
     }
+    control.check().map_err(|_|EngineError::Cancelled)?;
     let blend = match brush.mode {
         photocraft_color::BlendMode::Normal => None,
         photocraft_color::BlendMode::Multiply => Some(photocraft_paint::wide_blend_controlled::NativeUnitBlend::Multiply),
@@ -342,7 +349,12 @@ fn wide_stroke_context(
         if !matches!(current.content, LayerContent::Raster(_)) || current.indexed_source.is_some() || current.video.is_some() || current.import_compositing.is_some() {
             return Err(bad("paint.stroke", "native blend source carrier is unsupported"));
         }
-        crate::native_linear_context::validate(doc, &photocraft_raster::Interrupt::NONE).map_err(|message| bad("paint.stroke", message))?;
+        // Eligible controlled preparation performs the same strict encoded
+        // gate before private parsing below; incompatible contexts retain the
+        // existing strict refusal rather than being reinterpreted by a provider.
+        if !native_wide_color_controlled::eligible(doc,p){
+            crate::native_linear_context::validate(doc, control).map_err(|message|if control.cancelled(){EngineError::Cancelled}else{bad("paint.stroke",message)})?;
+        }
     }
     if restricted_color
         || auto_erase
@@ -356,7 +368,20 @@ fn wide_stroke_context(
         ));
     }
     let clip = wide_paint_extent(doc, layer, p);
-    let values = if brush.erase { [0.0; 4] } else { native_wide_color(doc, format, p, crate::paint_cmds::wide_color(p.get("color"), brush.color)?)? };
+    let (values,profile_work) = if brush.erase { ([0.0;4],0) } else {
+        let rgba=crate::paint_cmds::wide_color(p.get("color"),brush.color)?;
+        if native_wide_color_controlled::eligible(doc,p){
+            let (values,requirements)=native_wide_color_controlled::prepare(doc,format,p,rgba,limits,control)?;
+            if requirements.peak_resident_bytes>limits.resident_bytes||requirements.work_units>limits.work_units{return Err(bad("paint.stroke","native color aggregate limit"));}
+            (values,requirements.work_units)
+        }else{
+            // Existing Normal/numeric-target encoding compatibility. The old
+            // provider/Transform internals remain explicit boundary-only work.
+            control.check().map_err(|_|EngineError::Cancelled)?;
+            let values=native_wide_color(doc,format,p,rgba)?;
+            control.check().map_err(|_|EngineError::Cancelled)?;(values,0)
+        }
+    };
     let float_format = PixelFormat::new(format.mode, SampleType::F64, format.alpha);
     let mut encoded = [0_u8; 32];
     for (channel, value) in values.iter().enumerate().take(float_format.channels()) {
@@ -367,7 +392,8 @@ fn wide_stroke_context(
         encoded.get(..float_format.bytes_per_pixel()).ok_or_else(|| bad("paint.stroke", "invalid native pixel size"))?,
     )
     .map_err(|e| bad("paint.stroke", e.to_string()))?;
-    Ok(Some(WideStroke { blend, color, clip, budget: WideStrokeBudget::default() }))
+    control.check().map_err(|_|EngineError::Cancelled)?;
+    Ok((Some(WideStroke { blend, color, clip, budget: WideStrokeBudget::default() }),profile_work))
 }
 
 /// Canonical finite extent for a layer, mask or channel; temporary targets have no imported extent.
@@ -442,6 +468,7 @@ pub(crate) fn doc_cmyk_space(s: &Session) -> Option<std::sync::Arc<photocraft_co
 mod stroke_controlled;
 mod live_begin_controlled;
 mod wide_one_shot_controlled;
+mod native_wide_color_controlled;
 mod brush_recipe_controlled;
 mod advanced_native_admission;
 mod native_replace_controlled;
@@ -584,7 +611,10 @@ fn apply_auto_erase(brush: &mut BrushSettings, surf: &Surface, start: Option<&St
 /// The Pencil's brush: the session brush made aliased (every pixel fully painted or untouched,
 /// dabs on the pixel grid), hard and at full flow, with the options-bar mode.
 fn pencil_brush(s: &Session, p: &Value) -> Result<BrushSettings> {
-    let mut brush = with_blend_mode(resolve_brush(s, p, "paint.pencil")?, p);
+    pencil_settings(with_blend_mode(resolve_brush(s, p, "paint.pencil")?, p), p)
+}
+// Shared exact post-resolution Pencil/Block policy, without another resolver.
+fn pencil_settings(mut brush: BrushSettings, p: &Value) -> Result<BrushSettings> {
     if flag(p, "block", false) {
         return block_brush(brush, p);
     }
@@ -657,7 +687,7 @@ fn with_blend_mode(mut b: BrushSettings, p: &Value) -> BrushSettings {
 
 /// `paint.stroke`: the Brush (and Eraser) tool.
 pub fn paint_stroke(s: &mut Session, p: &Value) -> Result<Value> {
-    if let Some(value) = wide_one_shot_controlled::try_run_recipe(s, p)? { return Ok(value); }
+    if let Some(value) = wide_one_shot_controlled::try_run_recipe(s, "paint.stroke", p)? { return Ok(value); }
     let pts = parse_points(p, "paint.stroke")?;
     let brush = with_blend_mode(resolve_brush(s, p, "paint.stroke")?, p);
     let label = if brush.erase && !clear_mode(p) { "Eraser" } else { "Brush Tool" };
@@ -722,6 +752,10 @@ impl LiveCommit {
             o.remove("seed");
         }
         p
+    }
+
+    fn matches_captured_with_interrupt(&self, base:(photocraft_doc::DocId,u64),cmd:&str,p:&Value,pts:&[StrokePoint],control:&photocraft_raster::Interrupt<'_>)->Result<bool>{
+        wide_one_shot_controlled::match_offer(self,base,cmd,p,pts,control)
     }
 
     pub(crate) fn matches(&self, s: &Session, cmd: &str, p: &Value, pts: &[StrokePoint]) -> bool {
@@ -941,6 +975,7 @@ impl LiveStroke {
 }
 
 fn pencil(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(value) = wide_one_shot_controlled::try_run_recipe(s, "paint.pencil", p)? { return Ok(value); }
     let pts = parse_points(p, "paint.pencil")?;
     let brush = pencil_brush(s, p)?;
     let label = if brush.erase && !clear_mode(p) { "Eraser" } else { "Pencil" };

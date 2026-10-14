@@ -3233,6 +3233,8 @@ mod tests {
 
 mod controlled_distance;
 mod controlled_glow;
+mod controlled_euclidean;
+mod controlled_stroke;
 
 // Additive checked preparation kernels; legacy rendering retains its existing API.
 mod checked_prepare {
@@ -3419,6 +3421,11 @@ mod checked_prepare {
                     }
                 }
                 Effect::OuterGlow(glow) | Effect::InnerGlow(glow) => super::controlled_glow::validate(glow)?,
+                Effect::Stroke(st) => {
+                    if !matches!(layer.content, photocraft_doc::LayerContent::Raster(_)) || !st.size.is_finite() {
+                        return Err(RasterInputError::UnsupportedConversion);
+                    }
+                }
                 _ => return Err(RasterInputError::UnsupportedConversion),
             }
             count = count.checked_add(1).ok_or(RasterInputError::LimitExceeded)?;
@@ -3453,10 +3460,9 @@ mod checked_prepare {
         if values.capacity() != values.len() {
             return Err(E::LimitExceeded);
         }
-        let retained = bytes
-            .checked_mul(count + 1)
-            .and_then(|n| count.checked_mul(128).and_then(|v| v.checked_add(1024)).and_then(|v| n.checked_add(v)))
-            .ok_or(E::LimitExceeded)?;
+        let retained = super::checked_effect_map_retained_bytes(layer, rect, control)?;
+        let stroke_plan = super::controlled_stroke::plan(layer, control)?;
+        let stroke_retained = super::controlled_stroke::retained_bytes(rect.width() as usize, rect.height() as usize, stroke_plan)?;
         // Every retained map plus conservative current shift/tent/line staging.
         let scratch = super::checked_effect_map_scratch_bytes(layer, rect, control)?;
         let peak = retained.checked_add(scratch).ok_or(E::LimitExceeded)?;
@@ -3466,7 +3472,7 @@ mod checked_prepare {
         // Charge each repeated shift/distance/blur pass before private owners.
         // This is a lower-only preparation work ceiling, not a global RSS claim.
         let pixels = (bytes / 4) as u64;
-        let mut work = (layer.effects.items.len() as u64).checked_mul(5).ok_or(E::LimitExceeded)?;
+        let mut work = (layer.effects.items.len() as u64).checked_mul(12).ok_or(E::LimitExceeded)?;
         if work > 8_000_000_000 {
             return Err(E::LimitExceeded);
         }
@@ -3484,6 +3490,7 @@ mod checked_prepare {
                     }
                     continue;
                 }
+                Effect::Stroke(_) => continue,
                 _ => return Err(E::UnsupportedConversion),
             };
             let (radius, blur) = spread_split(shadow.size, shadow.spread);
@@ -3496,6 +3503,10 @@ mod checked_prepare {
                 return Err(E::LimitExceeded);
             }
         }
+        work = work.checked_add(super::controlled_stroke::work_units(rect.width() as usize, rect.height() as usize, stroke_plan)?).ok_or(E::LimitExceeded)?;
+        if work > 8_000_000_000 {
+            return Err(E::LimitExceeded);
+        }
         let shape = Map { w: rect.width() as usize, h: rect.height() as usize, v: values };
         let mut per = Vec::new();
         per.try_reserve_exact(count).map_err(|_| E::AllocationFailed)?;
@@ -3505,6 +3516,10 @@ mod checked_prepare {
         for e in &layer.effects.items {
             poll(control)?;
             if !e.enabled() {
+                continue;
+            }
+            if matches!(e, Effect::Stroke(_)) {
+                per.push(Vec::new());
                 continue;
             }
             let map = match e {
@@ -3573,8 +3588,22 @@ mod checked_prepare {
             return Err(E::LimitExceeded);
         }
         bevel_paint.resize(count, BevelPaint::Inner);
+        let stroke_budget = budget.checked_sub(retained.checked_sub(stroke_retained).ok_or(E::LimitExceeded)?).ok_or(E::LimitExceeded)?;
+        let fields = super::controlled_stroke::build(layer, &shape, rect, stroke_budget, control)?;
         poll(control)?;
-        Ok(FxMaps { rect, shape, per, bevel_paint, din: None, dout: None, dout_exact: None, vdout: None, vdout_exact: None, outline: false, frames: Vec::new() })
+        Ok(FxMaps {
+            rect,
+            shape,
+            per,
+            bevel_paint,
+            din: fields.din,
+            dout: fields.dout,
+            dout_exact: fields.dout_exact,
+            vdout: None,
+            vdout_exact: None,
+            outline: false,
+            frames: fields.frames,
+        })
     }
     #[cfg(test)]
     #[test]
@@ -3609,7 +3638,7 @@ mod checked_prepare {
         let Effect::InnerGlow(g) = &mut layer.effects.items[2] else {
             panic!("inner glow");
         };
-        g.technique = GlowTechnique::Precise;
+        g.range = f32::NAN;
         assert!(matches!(build(&layer, input, rect, &light, 64 << 20, &Interrupt::NONE), Err(RasterInputError::UnsupportedConversion)));
     }
     #[cfg(test)]
@@ -3782,12 +3811,20 @@ mod checked_prepare {
                 position: StrokePosition::Outside,
                 paint: FxPaint::Color(Color::WHITE),
             }));
-            assert!(matches!(build(&layer, shape, rect, &light, 64 << 20, &Interrupt::NONE), Err(RasterInputError::UnsupportedConversion)));
+            let expected_with_stroke = build_maps(&layer, shape.clone(), rect, &light, &tex);
+            let checked_with_stroke = build(&layer, shape, rect, &light, 64 << 20, &Interrupt::NONE).unwrap();
+            assert!(checked_with_stroke.din.is_some());
+            assert!(checked_with_stroke.dout.is_some());
+            assert!(checked_with_stroke.dout_exact.is_none());
+            for (a,b) in [(&checked_with_stroke.din,&expected_with_stroke.din),(&checked_with_stroke.dout,&expected_with_stroke.dout)] {
+                assert_eq!(a.as_ref().map(|v|v.iter().map(|v|v.to_bits()).collect::<Vec<_>>()),b.as_ref().map(|v|v.iter().map(|v|v.to_bits()).collect::<Vec<_>>()));
+            }
+            assert!(checked_with_stroke.per.last().unwrap().is_empty());
         }
     }
 }
 
-/// Checked finite-spread shadows and Softer Glows with Linear contours and finite noise0..=1. Other styles
+/// Checked finite-spread shadows and Glows with Linear contours and finite noise0..=1. Other styles
 /// remain explicitly unsupported in this additive preparation path.
 pub(crate) fn try_build_shadow_maps(
     layer: &Layer,
@@ -3810,7 +3847,7 @@ pub(crate) fn validate_checked_shadows_with_interrupt(
     checked_prepare::validate_with_interrupt(layer, control)
 }
 
-/// Known scratch for the currently checked ordinary shadow/Softer Glow maps.
+/// Known scratch for the currently checked ordinary shadow/Glow maps.
 /// Retained shape/result maps are charged separately by the caller.
 pub(crate) fn checked_effect_map_scratch_bytes(
     layer: &Layer,
@@ -3824,6 +3861,7 @@ pub(crate) fn checked_effect_map_scratch_bytes(
         photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Grayscale, photocraft_color::SampleType::F32, false),
     )?;
     let mut lut = 0usize;
+    let mut glow_peak = 0usize;
     for e in &layer.effects.items {
         control.check().map_err(|_| E::Cancelled)?;
         if !e.enabled() {
@@ -3831,11 +3869,37 @@ pub(crate) fn checked_effect_map_scratch_bytes(
         }
         if let Effect::OuterGlow(g) | Effect::InnerGlow(g) = e {
             lut = lut.max(controlled_glow::lut_bytes(g));
+            glow_peak = glow_peak.max(controlled_glow::scratch_bytes(rect.width() as usize, rect.height() as usize, g)?);
         }
     }
-    bytes
+    let base = bytes
         .checked_mul(8)
         .and_then(|n| (rect.width().max(rect.height()) as usize).checked_add(512).and_then(|v| v.checked_mul(24)).and_then(|v| n.checked_add(v)))
         .and_then(|n| n.checked_add(lut))
+        .ok_or(E::LimitExceeded)?;
+    let stroke_plan = controlled_stroke::plan(layer, control)?;
+    let stroke_peak = if stroke_plan.present { controlled_stroke::scratch_bytes(rect.width() as usize, rect.height() as usize, stroke_plan)? } else { 0 };
+    Ok(base.max(glow_peak).max(stroke_peak))
+}
+
+/// Exact requested retained owners for the checked raster effect-map stack.
+pub(crate) fn checked_effect_map_retained_bytes(
+    layer: &Layer,
+    rect: Rect,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<usize, photocraft_raster::RasterInputError> {
+    use photocraft_raster::RasterInputError as E;
+    let count = checked_prepare::validate_with_interrupt(layer, control)?;
+    let plan = controlled_stroke::plan(layer, control)?;
+    let bytes = photocraft_raster::checked_region_byte_len(
+        rect,
+        photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Grayscale, photocraft_color::SampleType::F32, false),
+    )?;
+    let maps = count.checked_sub(plan.strokes).ok_or(E::LimitExceeded)?;
+    bytes
+        .checked_mul(maps.checked_add(1).ok_or(E::LimitExceeded)?)
+        .and_then(|n| controlled_stroke::retained_bytes(rect.width() as usize, rect.height() as usize, plan).ok().and_then(|v| n.checked_add(v)))
+        .and_then(|n| count.checked_mul(128).and_then(|v| n.checked_add(v)))
+        .and_then(|n| n.checked_add(1024))
         .ok_or(E::LimitExceeded)
 }

@@ -1,4 +1,4 @@
-//! Controlled ordinary Softer Glow coverage, preserving legacy range/order.
+//! Controlled ordinary Glow coverage, preserving legacy range/order.
 use super::{Contour, Glow, GlowSource, GlowTechnique, Map, box_geom, spread_split};
 use photocraft_raster::{Interrupt, MAX_CHECKED_RASTER_BYTES, RasterInputError as E};
 const TABLE_LEN: usize = 4096;
@@ -8,13 +8,13 @@ fn poll(c: &Interrupt<'_>) -> Result<(), E> {
 }
 pub(super) fn validate(g: &Glow) -> Result<(), E> {
     let (r, blur) = spread_split(g.size, g.spread);
-    if g.technique != GlowTechnique::Softer
-        || !matches!(g.contour, Contour::Linear)
+    if !matches!(g.contour, Contour::Linear)
         || !g.size.is_finite()
         || !g.spread.is_finite()
         || !r.is_finite()
         || !blur.is_finite()
         || !g.range.is_finite()
+        || g.technique == GlowTechnique::Precise && (!(g.size * g.spread).is_finite() || !(g.size + 1.0 - g.size * g.spread).is_finite())
         || !g.noise.is_finite()
         || !(0.0..=1.0).contains(&g.noise)
     {
@@ -28,6 +28,16 @@ pub(super) fn lut_bytes(g: &Glow) -> usize {
 pub(super) fn work_units(w: usize, h: usize, g: &Glow) -> Result<u64, E> {
     validate(g)?;
     let n = w.checked_mul(h).ok_or(E::LimitExceeded)?;
+    if g.technique == GlowTechnique::Precise {
+        let work = super::controlled_euclidean::work_units(w, h)?
+            .checked_add((n as u64).checked_mul(64).ok_or(E::LimitExceeded)?)
+            .and_then(|n| n.checked_add((TABLE_LEN as u64) * 16))
+            .ok_or(E::LimitExceeded)?;
+        if work > MAX_WORK {
+            return Err(E::LimitExceeded);
+        }
+        return Ok(work);
+    }
     let (_, blur) = spread_split(g.size, g.spread);
     let (r, _, _) = box_geom(blur);
     let lines = (w as u64).checked_add(h as u64).and_then(|n| n.checked_mul(u64::try_from(r).ok()?)).and_then(|n| n.checked_mul(16)).ok_or(E::LimitExceeded)?;
@@ -36,6 +46,19 @@ pub(super) fn work_units(w: usize, h: usize, g: &Glow) -> Result<u64, E> {
         return Err(E::LimitExceeded);
     }
     Ok(work)
+}
+/// Peak private owners for one checked glow; retained input/result maps are
+/// charged separately by the caller's full enabled-stack envelope.
+pub(super) fn scratch_bytes(w: usize, h: usize, g: &Glow) -> Result<usize, E> {
+    validate(g)?;
+    let n = w.checked_mul(h).ok_or(E::LimitExceeded)?;
+    if g.technique == GlowTechnique::Precise {
+        return super::controlled_euclidean::scratch_bytes(w, h)?.checked_add(lut_bytes(g)).ok_or(E::LimitExceeded);
+    }
+    let (_, blur) = spread_split(g.size, g.spread);
+    let (r, _, _) = box_geom(blur);
+    let line = w.max(h).checked_add(usize::try_from(r).map_err(|_| E::LimitExceeded)?.checked_mul(2).ok_or(E::LimitExceeded)?).ok_or(E::LimitExceeded)?;
+    n.checked_mul(28).and_then(|n| line.checked_mul(24).and_then(|v| n.checked_add(v))).and_then(|n| n.checked_add(lut_bytes(g))).ok_or(E::LimitExceeded)
 }
 fn filled(n: usize, c: &Interrupt<'_>) -> Result<Vec<f32>, E> {
     poll(c)?;
@@ -83,41 +106,53 @@ pub(super) fn build(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32), budg
         return Err(E::LengthMismatch);
     }
     work_units(shape.w, shape.h, g)?;
-    let (radius, blur) = spread_split(g.size, g.spread);
-    let (r, _, _) = box_geom(blur);
-    let line =
-        shape.w.max(shape.h).checked_add(usize::try_from(r).map_err(|_| E::LimitExceeded)?.checked_mul(2).ok_or(E::LimitExceeded)?).ok_or(E::LimitExceeded)?;
-    let peak = shape
-        .v
-        .capacity()
-        .checked_mul(4)
-        .and_then(|n| n.checked_add(shape.v.len().checked_mul(24)?))
-        .and_then(|n| n.checked_add(line.checked_mul(24)?))
-        .and_then(|n| n.checked_add(lut_bytes(g)))
-        .ok_or(E::LimitExceeded)?;
+    let peak = scratch_bytes(shape.w, shape.h, g)?;
     if peak > budget.min(64 << 20) || peak as u64 > MAX_CHECKED_RASTER_BYTES {
         return Err(E::LimitExceeded);
     }
-    let mut values = filled(n, c)?;
-    for (i, (o, a)) in values.iter_mut().zip(&shape.v).enumerate() {
-        if i.is_multiple_of(1024) {
-            poll(c)?;
+    let mut map = match g.technique {
+        GlowTechnique::Precise => {
+            let distance = super::controlled_euclidean::distance(shape, inner, budget, c)?;
+            let solid = g.size * g.spread;
+            let soft = (g.size + 1.0 - solid).max(1e-3);
+            if !solid.is_finite() || !soft.is_finite() {
+                return Err(E::UnsupportedConversion);
+            }
+            let mut out = filled(n, c)?;
+            for (i, (v, d)) in out.iter_mut().zip(distance).enumerate() {
+                if i.is_multiple_of(1024) {
+                    poll(c)?;
+                }
+                let d = d + 0.5;
+                *v = if d <= solid { 1.0 } else { 0.5 * (1.0 - (d - solid) / soft).clamp(0.0, 1.0) };
+            }
+            Map { w: shape.w, h: shape.h, v: out }
         }
-        if !a.is_finite() {
-            return Err(E::InvalidSample);
+        GlowTechnique::Softer => {
+            let (radius, blur) = spread_split(g.size, g.spread);
+            let mut values = filled(n, c)?;
+            for (i, (o, a)) in values.iter_mut().zip(&shape.v).enumerate() {
+                if i.is_multiple_of(1024) {
+                    poll(c)?;
+                }
+                if !a.is_finite() {
+                    return Err(E::InvalidSample);
+                }
+                *o = if inner { 1.0 - a } else { *a };
+            }
+            let source = Map { w: shape.w, h: shape.h, v: values };
+            let grown = if radius > 0.0 {
+                let grown = super::controlled_distance::dilate(&source, radius, budget, c)?;
+                drop(source);
+                grown
+            } else {
+                source
+            };
+            let map = super::checked_prepare::try_tent(&grown, budget, blur, c)?;
+            drop(grown);
+            map
         }
-        *o = if inner { 1.0 - a } else { *a };
-    }
-    let source = Map { w: shape.w, h: shape.h, v: values };
-    let grown = if radius > 0.0 {
-        let grown = super::controlled_distance::dilate(&source, radius, budget, c)?;
-        drop(source);
-        grown
-    } else {
-        source
     };
-    let mut map = super::checked_prepare::try_tent(&grown, budget, blur, c)?;
-    drop(grown);
     if let Some(lut) = range_lut(g, c)? {
         for (i, v) in map.v.iter_mut().enumerate() {
             if i.is_multiple_of(1024) {
@@ -195,18 +230,40 @@ mod tests {
         }
     }
     #[test]
-    fn unsupported_precise_and_private_failure() {
+    fn malformed_glow_and_private_failure() {
         let shape = Map::new(64, 64, 0.5);
         let before = shape.v.clone();
         let mut g = glow();
-        g.technique = GlowTechnique::Precise;
+        g.range = f32::NAN;
         assert!(matches!(build(&shape, &g, false, (0, 0), 64 << 20, &Interrupt::NONE), Err(E::UnsupportedConversion)));
-        g.technique = GlowTechnique::Softer;
+        g.range = 0.5;
         assert!(matches!(build(&shape, &g, false, (0, 0), 1, &Interrupt::NONE), Err(E::LimitExceeded)));
         use std::sync::atomic::{AtomicUsize, Ordering};
         let ticks = AtomicUsize::new(0);
         let cancel = || ticks.fetch_add(1, Ordering::Relaxed) > 40;
         assert!(matches!(build(&shape, &g, true, (0, 0), 64 << 20, &Interrupt::cancel_only(&cancel)), Err(E::Cancelled)));
         assert_eq!(shape.v, before);
+    }
+    #[test]
+    fn exact_precise_glow_keeps_nearest_alpha_range_center_and_noise() {
+        for (w, h) in [(0, 0), (1, 1), (1, 19), (27, 1), (31, 23)] {
+            let mut shape = Map::new(w, h, 0.0);
+            for (i, a) in shape.v.iter_mut().enumerate() {
+                *a = ((i * 73) % 101) as f32 / 100.0;
+            }
+            for range in [0.5, 0.999, 1.0] {
+                for inner in [false, true] {
+                    for source in [GlowSource::Edge, GlowSource::Center] {
+                        let mut g = glow();
+                        g.technique = GlowTechnique::Precise;
+                        g.range = range;
+                        g.source = source;
+                        let expected = super::super::glow_map(&shape, &g, inner, (-7, 13));
+                        let got = build(&shape, &g, inner, (-7, 13), 64 << 20, &Interrupt::NONE).unwrap();
+                        assert_eq!(got.v.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), expected.v.iter().map(|v| v.to_bits()).collect::<Vec<_>>());
+                    }
+                }
+            }
+        }
     }
 }

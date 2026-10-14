@@ -848,4 +848,5 @@ mod controlled_color;
 pub use controlled_color::guided_filter_color_with_interrupt;
 
 mod refine_controlled;
-pub use refine_controlled::{RefineRequirements, requirements as refine_requirements, refine_mask_with_interrupt, masked_copy_requirements, masked_copy_with_interrupt};
+pub use refine_controlled::{RefineRequirements, requirements as refine_requirements, refine_mask_with_interrupt, masked_copy_requirements, masked_copy_with_interrupt,
+    DecontaminateRequirements, decontaminate_requirements, decontaminate_with_interrupt};

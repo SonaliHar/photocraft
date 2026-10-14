@@ -1233,6 +1233,10 @@ pub struct UiState {
     #[serde(default)]
     pub xcf_resource_page_draft: Option<crate::xcf_notices::ResourcePageDraft>,
     #[serde(default)]
+    pub xcf_composition_draft: Option<crate::xcf_panels::composition::CompositionDraft>,
+    #[serde(skip)]
+    pub(crate) xcf_composition_origin: Option<crate::xcf_panels::composition::CompositionOrigin>,
+    #[serde(default)]
     pub xcf_filter_stack_page: Option<XcfFilterStackPage>,
     #[serde(default)]
     pub xcf_item_set_page: Option<XcfItemSetPage>,
@@ -1381,6 +1385,8 @@ pub struct UiState {
     #[serde(skip)]
     pub(crate) selection_color_origin: Option<crate::selection_color_origin::Origin>,
     #[serde(skip)]
+    pub(crate) selection_refine_origin: Option<crate::selection_refine_origin::Origin>,
+    #[serde(skip)]
     pub(crate) native_gray_adjustment_origin: Option<crate::native_gray_adjustment_origin::Origin>,
     #[serde(skip)]
     pub(crate) duplicate_layer_origin: Option<crate::duplicate_layer_origin::Origin>,
@@ -1514,6 +1520,8 @@ impl Default for UiState {
             xcf_graph_page_draft: None,
             xcf_source_page_draft: None,
             xcf_resource_page_draft: None,
+            xcf_composition_draft: None,
+            xcf_composition_origin: None,
             xcf_filter_stack_page: None,
             xcf_item_set_page: None,
             xcf_mask_geometry_draft: None,
@@ -1567,6 +1575,7 @@ impl Default for UiState {
             selection_modify_origin: None,
             color_range_origin: None,
             selection_color_origin: None,
+            selection_refine_origin: None,
             native_gray_adjustment_origin: None,
             duplicate_layer_origin: None,
             new_layer_origin: None,

@@ -49,8 +49,8 @@ fn tip(v:&Value,l:StrokeLimits,c:&Interrupt<'_>)->Result<TipShape>{if v.as_objec
 fn pattern(v:&Value,l:StrokeLimits,c:&Interrupt<'_>)->Result<Pattern>{if v.as_object().is_some_and(|v|v.len()!=1){return Err(fail("invalid brush pattern variant"));}if let Some(v)=v.get("tile"){Ok(Pattern::Tile(tile(v,l,c)?))}else if let Some(v)=v.get("stored"){Ok(Pattern::Stored(stored(v,l,c)?))}else{serde_json::from_value(clone_json(v,c)?).map_err(|e|fail(e.to_string()))}}
 pub(super) struct Recipe{base:BrushSettings,inputs:Vec<(String,std::result::Result<PreparedTip,String>)>,pub witnesses:Vec<TipStoreWitness>,pub retained_bytes:u64,foreground:[f32;4],background:[f32;4],picked:Option<([f32;3],[f32;4])>}
 impl Recipe{
-    pub(super) fn capture(s:&Session,p:&Value,c:&Interrupt<'_>)->Result<Self>{
-        stroke_controlled::dispatch_preflight(s,"paint.stroke",p,false)?;poll(c)?;
+    pub(super) fn capture_for(s:&Session,cmd:&str,p:&Value,c:&Interrupt<'_>)->Result<Self>{
+        stroke_controlled::dispatch_preflight(s,cmd,p,false)?;poll(c)?;
         let mut selected=&s.tools.brush;let mut preset=None;
         if let Some(name)=p.get("preset").and_then(Value::as_str){if name.len()>4096||s.tools.presets.len()>200_000{return Err(fail("brush preset lookup limit"));}for candidate in &s.tools.presets{poll(c)?;if candidate.name.eq_ignore_ascii_case(name){preset=Some(candidate);break;}}selected=&preset.ok_or_else(||fail("brush preset not found"))?.brush;}
         let standard=StrokeLimits::default();let req=StrokeRenderer::new_requirements(selected,None,1.0,standard,c).map_err(|e|fail(e.to_string()))?;
@@ -67,10 +67,10 @@ impl Recipe{
         let rgba=rgba(p,s.tools.foreground);let picked=s.tools.picked_cmyk([rgba[0],rgba[1],rgba[2]]).map(|v|([rgba[0],rgba[1],rgba[2]],v));
         Ok(Self{base,inputs,witnesses,retained_bytes,foreground:s.tools.foreground,background:s.tools.background,picked})
     }
-    pub(super) fn effective_normal(&self,p:&Value)->bool{if flag(p,"erase",false)||clear_mode(p){return true;}let mode=p.get("mode").and_then(Value::as_str).and_then(crate::commands::blend_from_str).or_else(||p.pointer("/brush/mode").and_then(Value::as_str).and_then(crate::commands::blend_from_str)).unwrap_or(self.base.mode);mode==photocraft_color::BlendMode::Normal}
-    pub(super) fn resolve(mut self,p:&Value,l:StrokeLimits,c:&Interrupt<'_>)->Result<(BrushSettings,Vec<StrokePoint>)>{
+    pub(super) fn effective_normal(&self,cmd:&str,p:&Value)->bool{if cmd=="paint.pencil"&&flag(p,"block",false){return true;}if flag(p,"erase",false)||clear_mode(p){return true;}let mode=p.get("mode").and_then(Value::as_str).and_then(crate::commands::blend_from_str).or_else(||p.pointer("/brush/mode").and_then(Value::as_str).and_then(crate::commands::blend_from_str)).unwrap_or(self.base.mode);mode==photocraft_color::BlendMode::Normal}
+    pub(super) fn resolve_for(mut self,cmd:&str,p:&Value,l:StrokeLimits,c:&Interrupt<'_>)->Result<(BrushSettings,Vec<StrokePoint>)>{
         poll(c)?;let mut base=self.base;
-        let param_bytes=super::wide_one_shot_controlled::parameter_bytes(p)?;
+        let param_bytes=super::wide_one_shot_controlled::parameter_bytes_with_interrupt(p,c)?;
         let mut config_work=mul(param_bytes,16)?;let mut config_bytes=mul(param_bytes,4)?;
         if let Some(patch)=p.get("brush").filter(|v|v.is_object()){
             for(path,bitmap)in [(&["tip"][..],base.tip.bitmap()),(&["dualBrush","tip"][..],base.dual_brush.tip.bitmap()),(&["texture","pattern"][..],base.texture.pattern.bitmap())]{
@@ -89,7 +89,7 @@ impl Recipe{
             merge_json(&mut value,patch,c)?;
             let t=match tip_keep{Some(t)=>t,None=>tip(value.get("tip").ok_or_else(||fail("brush tip missing"))?,l,c)?};let d=match dual_keep{Some(t)=>t,None=>tip(value.pointer("/dualBrush/tip").ok_or_else(||fail("dual tip missing"))?,l,c)?};let pat=match pattern_keep{Some(t)=>t,None=>pattern(value.pointer("/texture/pattern").ok_or_else(||fail("pattern missing"))?,l,c)?};
             set(&mut value,&["tip"],json!("round"))?;set(&mut value,&["dualBrush","tip"],json!("round"))?;set(&mut value,&["texture","pattern"],serde_json::to_value(Pattern::default()).map_err(|e|fail(e.to_string()))?)?;
-            if super::wide_one_shot_controlled::parameter_bytes(&value)?>64<<10{return Err(fail("brush structural config limit"));}poll(c)?;base=serde_json::from_value(value).map_err(|e|fail(e.to_string()))?;poll(c)?;base.tip=t;base.dual_brush.tip=d;base.texture.pattern=pat;
+            if super::wide_one_shot_controlled::parameter_bytes_with_interrupt(&value,c)?>64<<10{return Err(fail("brush structural config limit"));}poll(c)?;base=serde_json::from_value(value).map_err(|e|fail(e.to_string()))?;poll(c)?;base.tip=t;base.dual_brush.tip=d;base.texture.pattern=pat;
         }
         let mut planned=0u64;
         for t in [&base.tip,&base.dual_brush.tip]{poll(c)?;if let Some(bitmap)=t.bitmap(){planned=add(planned,mul(bitmap.data.len() as u64,2)?)?;}if let TipShape::Stored(t)=t{if t.full.is_none(){planned=add(planned,mul(u64::from(t.width)*u64::from(t.height),8)?)?;}}}
@@ -100,10 +100,10 @@ impl Recipe{
         struct Seed<'a,'b>{hash:u64,c:&'a Interrupt<'b>}
         impl Write for Seed<'_,'_>{fn write(&mut self,b:&[u8])->std::io::Result<usize>{for chunk in b.chunks(4096){self.c.check().map_err(|_|std::io::Error::other("cancelled"))?;for byte in chunk{self.hash^=u64::from(*byte);self.hash=self.hash.wrapping_mul(0x00000100000001B3);}}Ok(b.len())}fn flush(&mut self)->std::io::Result<()>{Ok(())}}
         base.seed=match p.get("seed").and_then(Value::as_u64){Some(v)=>v,None=>{let mut writer=Seed{hash:0xCBF29CE484222325,c};if let Some(points)=p.get("points"){serde_json::to_writer(&mut writer,points).map_err(|e|if c.cancelled(){EngineError::Cancelled}else{fail(e.to_string())})?;}photocraft_paint::rng::mix64(writer.hash)}};
-        validate_brush(&base,"paint.stroke")?;base=with_blend_mode(base,p);
+        validate_brush(&base,cmd)?;base=with_blend_mode(base,p);if cmd=="paint.pencil"{base=pencil_settings(base,p)?;}
         let array=p.get("points").and_then(Value::as_array).ok_or_else(||fail("missing points"))?;let mut points=reserve(array.len())?;
         for value in array{poll(c)?;let point=match value{Value::Array(a)=>{let g=|i|a.get(i).and_then(Value::as_f64);match(g(0),g(1)){(Some(x),Some(y))=>{let mut q=StrokePoint::new(x,y,g(2).unwrap_or(1.0)as f32);q.tilt_x=g(3).unwrap_or(0.0)as f32;q.tilt_y=g(4).unwrap_or(0.0)as f32;q.rotation=g(5).unwrap_or(0.0)as f32;q.time=g(6).unwrap_or(0.0);q.wheel=g(7).unwrap_or(1.0)as f32;Some(q)},_=>None}},Value::Object(_)=>serde_json::from_value(clone_json(value,c)?).ok(),_=>None};if let Some(point)=point{points.push(point);}}
-        if points.is_empty(){return Err(fail("points is empty"));}check_coords(&points,"paint.stroke")?;poll(c)?;Ok((base,points))
+        if points.is_empty(){return Err(fail("points is empty"));}check_coords(&points,cmd)?;poll(c)?;Ok((base,points))
     }
 }
 fn load(t:&mut StoredTile,inputs:&mut Vec<(String,std::result::Result<PreparedTip,String>)>,l:StrokeLimits,c:&Interrupt<'_>)->Result<()>{
@@ -119,13 +119,21 @@ mod tests{
         let s=fixture();for patch in [json!({"size":7,"spacing":0.37}),json!({"tip":{"sampled":{"width":2,"height":1,"data":[0.25,0.75]}}}),json!({"tip":"round"})]{
             let p=json!({"points":[[1.125,2.25,0.5],{"x":3.25,"y":4.5,"pressure":0.75}],"color":[0.3,0.6,0.2,0.8],"brush":patch});
             let expected=with_blend_mode(resolve_brush(&s,&p,"paint.stroke").unwrap(),&p);let points=parse_points(&p,"paint.stroke").unwrap();
-            let recipe=Recipe::capture(&s,&p,&Interrupt::NONE).unwrap();let(actual,actual_points)=recipe.resolve(&p,StrokeLimits::default(),&Interrupt::NONE).unwrap();assert_eq!(actual,expected);assert_eq!(serde_json::to_value(actual_points).unwrap(),serde_json::to_value(points).unwrap());
+            let recipe=Recipe::capture_for(&s,"paint.stroke",&p,&Interrupt::NONE).unwrap();let(actual,actual_points)=recipe.resolve_for("paint.stroke",&p,StrokeLimits::default(),&Interrupt::NONE).unwrap();assert_eq!(actual,expected);assert_eq!(serde_json::to_value(actual_points).unwrap(),serde_json::to_value(points).unwrap());
+        }
+    }
+    #[test]
+    fn pencil_and_block_recipe_match_existing_forced_settings_and_seed(){
+        let s=fixture();for patch in [json!({}),json!({"hardness":0.3,"flow":0.4}),json!({"block":true,"zoom":2.5,"mode":"multiply"}),json!({"block":true,"zoom":0.125,"erase":true})]{
+            let mut p=json!({"points":[[1.125,2.25,0.5],[3.25,4.5,0.75]],"seed":79});for(k,v)in patch.as_object().unwrap(){p[k]=v.clone();}
+            let expected=pencil_brush(&s,&p).unwrap();let recipe=Recipe::capture_for(&s,"paint.pencil",&p,&Interrupt::NONE).unwrap();assert!(recipe.effective_normal("paint.pencil",&p));
+            let(actual,_)=recipe.resolve_for("paint.pencil",&p,StrokeLimits::default(),&Interrupt::NONE).unwrap();assert_eq!(actual,expected);
         }
     }
     #[test]
     fn retained_tip_arc_and_cancelled_recipe_keep_authoritative_source(){
         let s=fixture();let p=json!({"points":[[2,2,1]],"brush":{"size":4}});let old=s.tools.brush.tip.bitmap().unwrap().data.clone();
-        let recipe=Recipe::capture(&s,&p,&Interrupt::NONE).unwrap();let(brush,_)=recipe.resolve(&p,StrokeLimits::default(),&Interrupt::NONE).unwrap();assert!(std::sync::Arc::ptr_eq(&old,&brush.tip.bitmap().unwrap().data));
-        let recipe=Recipe::capture(&s,&p,&Interrupt::NONE).unwrap();let cancel=||true;assert!(matches!(recipe.resolve(&p,StrokeLimits::default(),&Interrupt::cancel_only(&cancel)),Err(EngineError::Cancelled)));assert!(std::sync::Arc::ptr_eq(&old,&s.tools.brush.tip.bitmap().unwrap().data));
+        let recipe=Recipe::capture_for(&s,"paint.stroke",&p,&Interrupt::NONE).unwrap();let(brush,_)=recipe.resolve_for("paint.stroke",&p,StrokeLimits::default(),&Interrupt::NONE).unwrap();assert!(std::sync::Arc::ptr_eq(&old,&brush.tip.bitmap().unwrap().data));
+        let recipe=Recipe::capture_for(&s,"paint.stroke",&p,&Interrupt::NONE).unwrap();let cancel=||true;assert!(matches!(recipe.resolve_for("paint.stroke",&p,StrokeLimits::default(),&Interrupt::cancel_only(&cancel)),Err(EngineError::Cancelled)));assert!(std::sync::Arc::ptr_eq(&old,&s.tools.brush.tip.bitmap().unwrap().data));
     }
 }

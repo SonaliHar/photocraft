@@ -85,6 +85,7 @@ mod selection_grow_controlled;
 mod selection_wand_controlled;
 mod selection_focus_controlled;
 mod selection_sky_controlled;
+mod selection_object_controlled;
 mod selection_refine_controlled;
 mod selection_modify_controlled;
 mod selection_morphology_controlled;

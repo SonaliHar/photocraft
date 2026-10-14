@@ -56,7 +56,11 @@ fn checked_bounds(bounds: Rect) -> Result<()> {
     }
     Ok(())
 }
-fn prepare(doc: &Document, ctl: &Interrupt<'_>) -> Result<AnchorPlan> {
+#[cfg(test)]
+fn prepare(doc:&Document,ctl:&Interrupt<'_>)->Result<AnchorPlan> {
+    prepare_with_profile_limits(doc,photocraft_cms::control::Limits::default(),ctl)
+}
+fn prepare_with_profile_limits(doc: &Document, profile_limits:photocraft_cms::control::Limits, ctl: &Interrupt<'_>) -> Result<AnchorPlan> {
     if ctl.cancelled() {
         return Err(EngineError::Cancelled);
     }
@@ -133,8 +137,23 @@ fn prepare(doc: &Document, ctl: &Interrupt<'_>) -> Result<AnchorPlan> {
     if resident > 512 << 20 {
         return Err(error("anchor resident limit exceeded"));
     }
-    let profile = crate::color_cmds::try_document_profile(doc)?;
-    let working = WorkingSpace::new(&profile, stored, resolved.composite_space).map_err(error)?;
+    // Reserve the strict current profile while both native owners and the
+    // prospective replacement remain resident, before private output/plane clones.
+    let maximum=photocraft_cms::control::Limits::default();
+    if profile_limits.resident_bytes>maximum.resident_bytes||profile_limits.work_units>maximum.work_units{return Err(error("profile limits may only be lowered"));}
+    let remaining=(512u64<<20).checked_sub(resident).ok_or_else(||error("anchor profile resident limit"))?;
+    let limits=photocraft_cms::control::Limits{
+        resident_bytes:usize::try_from(remaining.min(profile_limits.resident_bytes as u64)).map_err(error)?,
+        work_units:profile_limits.work_units,
+    };
+    let required=crate::color_cmds::document_profile_requirements_with_limits(doc,limits,ctl)?;
+    // WorkingSpace's unchanged validation is still an outer-polled CMS boundary;
+    // reserve its repeated validation work rather than claiming deep cancellation.
+    if required.work_units.checked_mul(2).is_none_or(|work|work>limits.work_units){return Err(error("anchor profile/working-space work limit"));}
+    resident.checked_add(required.peak_resident_bytes as u64).filter(|bytes|*bytes<=512<<20).ok_or_else(||error("anchor aggregate profile/native headroom limit"))?;
+    let profile = crate::color_cmds::try_document_profile_with_limits(doc,limits,ctl)?;
+    let working = WorkingSpace::new_with_interrupt(&profile, stored, resolved.composite_space,ctl).map_err(|error|if ctl.cancelled(){EngineError::Cancelled}else{self::error(error)})?;
+    ctl.check().map_err(|_|EngineError::Cancelled)?;
     let mut output = dst.clone();
     let channels = format.channels();
     let mut source_bytes = [0u8; 32];
@@ -341,6 +360,17 @@ mod tests {
         assert!(prepare(&doc, &Interrupt::cancel_only(&cancel)).is_err());
         assert!(count.load(Ordering::Relaxed) >= 100);
         assert_eq!(doc, original);
+    }
+    #[test]
+    fn controlled_profile_anchor_preserves_old_normal_words_and_source_identity() {
+        let mut doc=fixture();doc.size=Size::new(2,2);let bounds=doc.bounds();for item in &mut doc.xcf_state.as_mut().unwrap().items{item.raster_bounds=Some(bounds);}
+        let original=doc.clone();let old=crate::color_cmds::try_document_profile(&doc).unwrap();let old_working=WorkingSpace::new(&old,SampleEncoding::Linear,GimpSpace::LinearRgb).unwrap();
+        let expected=old_working.normal([0.;4],[0.2,0.3,0.4,0.5],1.0,GimpOperator::Union).unwrap();let actual=prepare(&doc,&Interrupt::NONE).unwrap();let words=actual.surface.try_read_region_f64(Rect::new(0,0,1,1)).unwrap();assert_eq!(words.iter().map(|v|v.to_bits()).collect::<Vec<_>>(),expected.map(f64::to_bits));assert_eq!(doc,original);
+        assert!(prepare_with_profile_limits(&doc,photocraft_cms::control::Limits{resident_bytes:1,work_units:1},&Interrupt::NONE).is_err());assert_eq!(doc,original);
+    }
+    #[test]
+    fn assigned_model_mismatch_keeps_floating_relation_and_raw_samples() {
+        let mut doc=fixture();doc.icc_profile=Some(photocraft_cms::Builtin::SGray.profile().to_bytes());let original=doc.clone();assert!(prepare(&doc,&Interrupt::NONE).is_err());assert_eq!(doc,original);assert!(doc.xcf_state.as_ref().unwrap().floating.is_some());
     }
 }
 #[cfg(test)]

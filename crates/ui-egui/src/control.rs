@@ -140,7 +140,7 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 42] = [
+pub const UI_SET_FIELDS: [&str; 43] = [
     "tool",
     "panels",
     "dock",
@@ -172,6 +172,7 @@ pub const UI_SET_FIELDS: [&str; 42] = [
     "xcfItemSetPage",
     "xcfSourcePageDraft",
     "xcfResourcePageDraft",
+    "xcfCompositionDraft",
     "xcfItemSetDraft",
     "eyedropperSampleSize",
     "eyedropperSample",
@@ -734,6 +735,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 let item_set_page = layer_page_field(p,"xcfItemSetPage",9984)?;
                 let source_page = crate::control_xcf_pages::source(p)?;
                 let resource_page = crate::control_xcf_pages::resource(p)?;
+                let composition_draft = crate::control_xcf_pages::composition(p)?;
                 let item_set_draft = item_set_draft_field(p)?;
                 // The Eyedropper's options bar (#1649): Sample Size, Sample, Show Sampling Ring.
                 let eyedropper_size = match p.get("eyedropperSampleSize") {
@@ -889,6 +891,10 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 }
                 if let Some(page) = source_page { app.ui.xcf_source_page_draft = page; }
                 if let Some(page) = resource_page { app.ui.xcf_resource_page_draft = page; }
+                if let Some(draft) = composition_draft {
+                    app.ui.xcf_composition_draft = draft;
+                    app.ui.xcf_composition_origin = None;
+                }
                 if let Some(draft) = item_set_draft {
                     app.ui.xcf_item_set_draft = draft;
                 }
@@ -1593,6 +1599,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Result<Value, String
     let fields=result.as_object_mut().ok_or_else(||"UI inspection object could not be prepared".to_owned())?;
     fields.insert("xcfSourcePageDraft".into(),crate::control_xcf_pages::source_wire(app.ui.xcf_source_page_draft.as_ref()));
     fields.insert("xcfResourcePageDraft".into(),crate::control_xcf_pages::resource_wire(app.ui.xcf_resource_page_draft.as_ref()));
+    fields.insert("xcfCompositionDraft".into(),crate::control_xcf_pages::composition_wire(app.ui.xcf_composition_draft.as_ref()));
     for (key,page) in [("xcfFilterStackPage",app.ui.xcf_filter_stack_page.as_ref()),("xcfItemSetPage",app.ui.xcf_item_set_page.as_ref())] {
         fields.insert(key.into(),page.map_or(Value::Null,|page|json!({
             "document":page.document.to_string(),"layer":page.layer.to_string(),"revision":page.revision.to_string(),"offset":page.offset,
@@ -3345,6 +3352,29 @@ mod item_set_draft_tests {
 #[cfg(test)]
 mod filter_stack_page_tests {
     use super::*;
+    #[test]
+    fn composition_view_draft_is_lossless_bounded_and_has_no_edit_origin() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let draft = json!({"document":"18446744073709551615","revision":"0","layer":"9007199254740993",
+            "sourceMode":28,"blendSpace":null,"compositeSpace":2,"operator":1});
+        let (request, _) = ControlRequest::new("ui.set", json!({"xcfCompositionDraft":draft}));
+        let Outcome::Done(result) = handle(&mut app, &ctx, &request) else { panic!("expected view update") };
+        assert_eq!(result["ok"], true);
+        assert_eq!(crate::control_xcf_pages::composition_wire(app.ui.xcf_composition_draft.as_ref()), draft);
+        assert!(app.ui.xcf_composition_origin.is_none());
+        assert!(app.session.documents().is_empty());
+        for (key, value) in [("document", json!("01")), ("revision", json!(0)),
+            ("blendSpace", json!(3)), ("operator", json!(0)), ("sourceMode", json!(2147483648u64))] {
+            let before = app.ui.clone();
+            let mut invalid = draft.clone();
+            invalid[key] = value;
+            let (request, _) = ControlRequest::new("ui.set", json!({"gradientClassic":!before.gradient_classic,"xcfCompositionDraft":invalid}));
+            let Outcome::Done(result) = handle(&mut app, &ctx, &request) else { panic!("expected refusal") };
+            assert_eq!(result["ok"], false);
+            assert_eq!(app.ui, before);
+        }
+    }
     #[test]
     fn source_resource_view_cursors_keep_u64_ids_and_reject_partial_updates() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());

@@ -287,12 +287,7 @@ pub(super) fn prepare_checked_effects(doc: &Document, cx: &Ctx, control: &Interr
     for layer in &layers {
         let margin = effects::margin(layer);
         let region = layer_bounds(layer, cx.canvas).inflate(margin).intersect(&cx.canvas.inflate(margin));
-        let bytes = photocraft_raster::checked_region_byte_len(region, photocraft_color::PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false))?;
-        let count = effects::validate_checked_shadows_with_interrupt(layer, control)?;
-        retained = retained
-            .checked_add(bytes.checked_mul(count + 1).ok_or(E::LimitExceeded)?)
-            .and_then(|n| count.checked_mul(128).and_then(|v| v.checked_add(1024)).and_then(|v| n.checked_add(v)))
-            .ok_or(E::LimitExceeded)?;
+        retained = retained.checked_add(effects::checked_effect_map_retained_bytes(layer, region, control)?).ok_or(E::LimitExceeded)?;
         let scratch = effects::checked_effect_map_scratch_bytes(layer, region, control)?;
         maximum_scratch = maximum_scratch.max(scratch);
     }

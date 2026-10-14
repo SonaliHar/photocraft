@@ -715,6 +715,14 @@ impl Session {
             crate::inspect_pixel_cmds::dispatch_preflight(&params)?;
         }
         crate::brush_cmds::advanced_dispatch_preflight(self, id, &params)?;
+        crate::xcf_composition_cmds::dispatch_preflight(self, id, &params)?;
+        if id == "select.object" && crate::selection_object_controlled::handles(&params) {
+            crate::selection_object_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "select.object" && !crate::selection_object_controlled::handles(&params)
+            && (params.get("documentId").is_some() || params.get("expectedRevision").is_some()) {
+            return Err(EngineError::BadParams { cmd: id.into(), msg: "captured Object Selection targets currently require rect".into() });
+        }
         if id == "select.colorRange" && !crate::selection_cmds::color_range_has_controlled_route(&params) {
             crate::selection_sample_policy::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         }
@@ -1034,7 +1042,6 @@ impl Session {
             gate(id, &params)?;
         }
         crate::xcf_link_cmds::dispatch_preflight_with_background(self, id, &params, background || self.jobs.spawn)?;
-        crate::xcf_composition_cmds::dispatch_preflight(self, id, &params)?;
         if id == "xcf.link.substitute" {
             crate::xcf_link_substitution_cmds::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
         }
