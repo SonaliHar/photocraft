@@ -874,7 +874,11 @@ mod tests {
     fn done_keeps_the_recipe_and_its_render_and_develops_nothing() {
         let (mut app, writes) = host_app(vec![("IMG.dng", synthetic_raw())]);
         let ctx = egui::Context::default();
-        open_in_camera_raw(&mut app, &ctx, spec(None));
+        // A render path of its own: a newer render of the same path, from a test running beside this one, would replace it.
+        let display = format!("IMG{}.dng.photocraft.display.jpg", crate::render_manifest::generation());
+        let mut own = spec(None);
+        own.targets.display = Some(display.clone());
+        open_in_camera_raw(&mut app, &ctx, own);
         let document = app.session.active().unwrap().doc.id;
         let steps = history(&app);
         adjust(&mut app, &ctx, 2.0);
@@ -887,10 +891,10 @@ mod tests {
         let recipe = written(&writes, "IMG.dng.cameraraw.json").expect("recipe written");
         assert_eq!(raw_recipe::from_json(&serde_json::from_slice(&recipe).unwrap()).unwrap().exposure, 2.0);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-        while written(&writes, "IMG.dng.photocraft.display.jpg").is_none() && std::time::Instant::now() < deadline {
+        while written(&writes, &display).is_none() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        assert!(written(&writes, "IMG.dng.photocraft.display.jpg").is_some_and(|b| b.starts_with(&[0xFF, 0xD8])), "render written");
+        assert!(written(&writes, &display).is_some_and(|b| b.starts_with(&[0xFF, 0xD8])), "render written");
     }
 
     #[test]

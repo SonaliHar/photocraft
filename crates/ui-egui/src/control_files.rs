@@ -487,15 +487,19 @@ mod tests {
         writes.iter().rev().find(|(name, _)| name == path).map(|(_, bytes)| serde_json::from_slice(bytes).unwrap())
     }
 
-    fn bound(app: &mut PhotocraftApp) {
+    /// Binds the open document as a host does, with a manifest path of its own (the editor's record of what it published is
+    /// process-wide, and tests run side by side). Returns the manifest path.
+    fn bound(app: &mut PhotocraftApp) -> String {
+        let manifest = format!("photo{}.photocraft.renders.json", crate::render_manifest::generation());
         let id = app.session.active().unwrap().doc.id;
         app.jobs.host_target = Some(HostTarget {
             doc: id,
             path: "photo.jpg.pcraft".into(),
             preview: "photo.jpg.photocraft.png".into(),
             display: Some("photo.jpg.photocraft.display.jpg".into()),
-            manifest: Some(crate::render_manifest::Request { manifest: "photo.jpg.photocraft.renders.json".into(), source: Some("12:34".into()) }),
+            manifest: Some(crate::render_manifest::Request { manifest: manifest.clone(), source: Some("12:34".into()) }),
         });
+        manifest
     }
 
     #[test]
@@ -507,14 +511,14 @@ mod tests {
             Ok(())
         }));
         app.session.execute("layer.new.layer", json!({})).unwrap();
-        bound(&mut app);
+        let manifest_path = bound(&mut app);
         let target = app.jobs.host_target.clone().unwrap();
         let started = save_bound(&mut app, &target).unwrap();
         finish(&mut app, started).unwrap();
         let writes = writes.lock().unwrap();
         let (last, _) = writes.last().unwrap();
-        assert_eq!(last, "photo.jpg.photocraft.renders.json", "the manifest is switched after everything it names is written");
-        let manifest = manifest_written(&writes, "photo.jpg.photocraft.renders.json").unwrap();
+        assert_eq!(*last, manifest_path, "the manifest is switched after everything it names is written");
+        let manifest = manifest_written(&writes, &manifest_path).unwrap();
         let n = manifest["generation"].as_u64().unwrap();
         assert_eq!(manifest["kind"], "project");
         assert_eq!(manifest["source"], "12:34");
@@ -541,17 +545,17 @@ mod tests {
             Ok(())
         }));
         app.session.execute("layer.new.layer", json!({})).unwrap();
-        bound(&mut app);
+        let manifest_path = bound(&mut app);
         let target = app.jobs.host_target.clone().unwrap();
         // The host's autosave: no full-size render.
         let started = stash_with_outputs(&mut app, &target.path, None, target.display.as_deref(), target.manifest.clone()).unwrap();
         finish(&mut app, started).unwrap();
-        let autosaved = manifest_written(&writes.lock().unwrap(), "photo.jpg.photocraft.renders.json").unwrap();
+        let autosaved = manifest_written(&writes.lock().unwrap(), &manifest_path).unwrap();
         assert!(autosaved["outputs"].get("png").is_none(), "{autosaved}");
         app.session.execute("layer.new.layer", json!({})).unwrap();
         let started = save_bound(&mut app, &target).unwrap();
         finish(&mut app, started).unwrap();
-        let saved = manifest_written(&writes.lock().unwrap(), "photo.jpg.photocraft.renders.json").unwrap();
+        let saved = manifest_written(&writes.lock().unwrap(), &manifest_path).unwrap();
         assert!(saved["generation"].as_u64() > autosaved["generation"].as_u64());
         assert!(saved["outputs"]["png"].is_object() && saved["outputs"]["display"].is_object());
     }
@@ -568,12 +572,12 @@ mod tests {
             Ok(())
         }));
         app.session.execute("layer.new.layer", json!({})).unwrap();
-        bound(&mut app);
+        let manifest_path = bound(&mut app);
         let target = app.jobs.host_target.clone().unwrap();
         let started = save_bound(&mut app, &target).unwrap();
         assert!(finish(&mut app, started).unwrap_err().contains("disk full"));
         let writes = writes.lock().unwrap();
-        assert!(manifest_written(&writes, "photo.jpg.photocraft.renders.json").is_none());
+        assert!(manifest_written(&writes, &manifest_path).is_none());
         assert!(!writes.iter().any(|(path, _)| path == "photo.jpg.pcraft"), "nor a project the pictures do not match");
     }
 
@@ -589,11 +593,11 @@ mod tests {
             Ok(())
         }));
         app.session.execute("layer.new.layer", json!({})).unwrap();
-        bound(&mut app);
+        let manifest_path = bound(&mut app);
         let target = app.jobs.host_target.clone().unwrap();
         let started = save_bound(&mut app, &target).unwrap();
         finish(&mut app, started).unwrap();
-        let manifest = manifest_written(&writes.lock().unwrap(), "photo.jpg.photocraft.renders.json").unwrap();
+        let manifest = manifest_written(&writes.lock().unwrap(), &manifest_path).unwrap();
         assert!(manifest["outputs"]["png"].is_object());
         assert!(manifest["outputs"].get("display").is_none(), "{manifest}");
     }
