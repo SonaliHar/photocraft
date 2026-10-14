@@ -1310,7 +1310,8 @@ pub fn dropdown_wheel_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, curre
 }
 
 fn dropdown_with<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, options: &[(T, &str)], width: f32, wheel: bool) -> (Vec<T>, Option<T>) {
-    let label = options.iter().find(|(v, _)| v == current).map(|(_, l)| tl!(l)).unwrap_or("—");
+    // Labels can be document-derived (document, printer, EXR-part names), not just catalogue keys.
+    let label = options.iter().find(|(v, _)| v == current).map(|(_, l)| crate::bidi::visual(tl!(l).as_ref()).into_owned()).unwrap_or_else(|| "—".into());
     let (mut chosen, mut hovered) = (Vec::new(), None);
     // The wheel's notches add up over the button and the open list alike.
     let wheel_id = ui.make_persistent_id(id).with("wheel");
@@ -1324,7 +1325,7 @@ fn dropdown_with<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, o
     let (press, close) = crate::press_menu::PressCombo::before(ui, id);
     let response =
         egui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(420.0).icon(chevron_icon).close_behavior(close).show_ui(ui, |ui| {
-            fit_widest_option(ui, options.iter().map(|(_, l)| tl!(l)));
+            fit_widest_option(ui, options.iter().map(|(_, l)| crate::bidi::visual(tl!(l).as_ref())));
             // A typed letter jumps to the next option starting with it, ↩ closes the list (#1481).
             let labels: Vec<&str> = options.iter().map(|(_, l)| tl!(l)).collect();
             let shown = options.iter().position(|(v, _)| v == current);
@@ -1346,7 +1347,7 @@ fn dropdown_with<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, o
             let pointer = ui.ctx().pointer_hover_pos().filter(|_| ui.rect_contains_pointer(ui.clip_rect()));
             let mut nearest: Option<(f32, &T)> = None;
             for (v, l) in options {
-                let item = ui.selectable_label(v == current, tl!(l));
+                let item = ui.selectable_label(v == current, crate::bidi::visual(tl!(l).as_ref()));
                 if reveal && v == current {
                     item.scroll_to_me(None);
                 }
@@ -1393,9 +1394,9 @@ fn dropdown_with<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, o
 /// takes a plain row's frame stroke off its padding but draws a hovered row with the stroke, so a
 /// row grows by two stroke widths under the pointer, and the list never shrinks back: scrolling
 /// the widest option under the pointer widened the list (#2607).
-fn fit_widest_option<'a>(ui: &mut Ui, labels: impl Iterator<Item = &'a str>) {
+fn fit_widest_option(ui: &mut Ui, labels: impl Iterator<Item = impl AsRef<str>>) {
     let extend = Some(egui::TextWrapMode::Extend);
-    let widest = labels.map(|l| egui::WidgetText::from(l).into_galley(ui, extend, f32::INFINITY, egui::FontSelection::Default).size().x).fold(0.0, f32::max);
+    let widest = labels.map(|l| egui::WidgetText::from(l.as_ref()).into_galley(ui, extend, f32::INFINITY, egui::FontSelection::Default).size().x).fold(0.0, f32::max);
     ui.set_min_width(widest + 2.0 * ui.spacing().button_padding.x);
 }
 
@@ -1516,12 +1517,13 @@ pub fn swatch_popup(swatch: &Response) -> egui::Popup<'static> {
 }
 
 pub fn dropdown_with_tooltips<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &mut T, options: &[(T, &str, &str)], width: f32) -> bool {
-    let label = options.iter().find(|(v, _, _)| v == current).map(|(_, l, _)| tl!(l)).unwrap_or("—");
+    // Labels can be document-derived, not just catalogue keys.
+    let label = options.iter().find(|(v, _, _)| v == current).map(|(_, l, _)| crate::bidi::visual(tl!(l).as_ref()).into_owned()).unwrap_or_else(|| "—".into());
     let mut changed = false;
     let (press, close) = crate::press_menu::PressCombo::before(ui, id);
     let response =
         egui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(420.0).icon(chevron_icon).close_behavior(close).show_ui(ui, |ui| {
-            fit_widest_option(ui, options.iter().map(|(_, l, _)| tl!(l)));
+            fit_widest_option(ui, options.iter().map(|(_, l, _)| crate::bidi::visual(tl!(l).as_ref())));
             let labels: Vec<&str> = options.iter().map(|(_, l, _)| tl!(l)).collect();
             let shown = options.iter().position(|(v, _, _)| v == current);
             if let Some((v, _, _)) = type_ahead::keys(ui, ui.make_persistent_id(id), shown, &labels).and_then(|i| options.get(i)) {
@@ -1529,7 +1531,7 @@ pub fn dropdown_with_tooltips<T: PartialEq + Clone>(ui: &mut Ui, id: &str, curre
                 changed = true;
             }
             for (v, l, tip) in options {
-                let item = ui.selectable_label(v == current, tl!(l)).on_hover_text(tl!(tip));
+                let item = ui.selectable_label(v == current, crate::bidi::visual(tl!(l).as_ref())).on_hover_text(tl!(tip));
                 if press.chosen(ui, &item) {
                     *current = v.clone();
                     changed = true;

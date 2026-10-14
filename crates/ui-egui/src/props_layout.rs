@@ -51,7 +51,8 @@ pub fn header(ui: &mut egui::Ui, layer: &Layer) {
     // The name takes what's left between the icon and the kind (elided when long).
     let name_x = r.left() + 26.0;
     let name_w = (r.right() - kind_w - 8.0 - name_x).max(0.0);
-    let mut job = egui::text::LayoutJob::simple_singleline(layer.name.clone(), theme::medium(12.5), t.text);
+    let name = crate::bidi::visual(&layer.name).into_owned();
+    let mut job = egui::text::LayoutJob::simple_singleline(name, theme::medium(12.5), t.text);
     job.wrap = egui::text::TextWrapping::truncate_at_width(name_w);
     let name_g = ui.painter().layout_job(job);
     ui.painter().galley(pos2(name_x, r.center().y - name_g.size().y / 2.0), name_g, t.text);

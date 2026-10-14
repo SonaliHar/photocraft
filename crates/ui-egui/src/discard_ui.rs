@@ -272,7 +272,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ui.add_space(4.0);
         crate::widgets::hairline(ui);
         ui.add_space(8.0);
-        ui.label(message);
+        // The prompt names the document.
+        ui.label(crate::bidi::visual(&message).as_ref());
         ui.add_space(12.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 10.0;

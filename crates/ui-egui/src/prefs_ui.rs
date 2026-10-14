@@ -1914,7 +1914,8 @@ fn presets_io_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 
 fn mismatch_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
-    ui.label(RichText::new(f.get("message").and_then(Value::as_str).unwrap_or("")).color(t.text));
+    // The message names the file being opened.
+    ui.label(RichText::new(crate::bidi::visual(f.get("message").and_then(Value::as_str).unwrap_or("")).as_ref()).color(t.text));
     ui.add_space(6.0);
     let mut action = f.get("action").and_then(Value::as_str).unwrap_or("preserve").to_string();
     let missing = f.get("missing").and_then(Value::as_bool).unwrap_or(false);

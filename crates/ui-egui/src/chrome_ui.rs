@@ -161,7 +161,8 @@ pub fn status_bar_pro(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.ui.views[i].fit_pending = false;
     }
     ui.add_space(12.0);
-    ui.label(RichText::new(tl!(&text)).color(t.text_dim).size(12.0));
+    // The text carries the ICC profile's description, which names the document's colour space.
+    ui.label(RichText::new(tl!(crate::bidi::visual(&text).as_ref())).color(t.text_dim).size(12.0));
     let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
     if resp.hovered() {
         ui.painter().rect_filled(r, t.radius_sm, t.hover);
@@ -191,7 +192,8 @@ fn status_message(app: &PhotocraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let (r, _) = ui.allocate_exact_size(vec2(17.0, 16.0), Sense::hover());
     ui.painter().line_segment([r.center_top(), r.center_bottom()], Stroke::new(1.0, t.separator));
     let is_err = app.ui.status_error || app.ui.status.starts_with("Couldn");
-    ui.label(RichText::new(&app.ui.status).color(if is_err { t.warning } else { t.text_faint }));
+    // Status messages interpolate file names ("Opened …", "Imported … swatches from …").
+    ui.label(RichText::new(crate::bidi::visual(&app.ui.status).as_ref()).color(if is_err { t.warning } else { t.text_faint }));
 }
 
 /// Home button at the very start of Photoshop 2026's options bar: toggles the Home (start)

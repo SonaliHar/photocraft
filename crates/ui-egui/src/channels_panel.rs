@@ -182,7 +182,8 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // Built-in labels only: alpha/spot names and "{layer} Mask" stay verbatim.
             let label = match row {
                 Row::Composite | Row::Color(_) | Row::QuickMask => tl!(&name).to_owned(),
-                Row::Alpha(_) | Row::LayerMask => name.clone(),
+                // Alpha/spot names and "{layer} Mask" are user-derived text.
+                Row::Alpha(_) | Row::LayerMask => crate::bidi::visual(&name).into_owned(),
             };
             job.append(&label, 0.0, egui::TextFormat { font_id: font, color: t.text, italics: italic, ..Default::default() });
             let galley = painter.layout_job(job);

@@ -50,7 +50,7 @@ pub fn draw_frames(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform)
         let on = active == Some(id);
         painter.rect_stroke(r, 0.0, Stroke::new(1.0, if on { t.accent } else { Color32::from_black_alpha(90) }), egui::StrokeKind::Outside);
         let pos = Pos2::new(r.left(), r.top() - 4.0);
-        painter.text(pos, Align2::LEFT_BOTTOM, name, egui::FontId::proportional(11.0), if on { t.text } else { t.text_dim });
+        painter.text(pos, Align2::LEFT_BOTTOM, crate::bidi::visual(name), egui::FontId::proportional(11.0), if on { t.text } else { t.text_dim });
     }
 }
 

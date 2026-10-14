@@ -708,6 +708,8 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 return;
             }
             let font = theme::medium(13.0);
+            // egui has no bidi: draw the title in visual order.
+            let title = crate::bidi::visual(&title).into_owned();
             let galley = ui.painter().layout_no_wrap(title.clone(), font.clone(), t.text_dim);
             if let Some(x) = title_x(full.center().x, free.0, free.1, galley.size().x) {
                 ui.painter().galley(egui::pos2(x, full.center().y - galley.size().y / 2.0), galley, t.text_dim);
@@ -746,6 +748,7 @@ pub fn window_title(app: &PhotocraftApp) -> String {
 /// Keep the OS window title (and the taskbar / Alt-Tab entry) on the active file. Sends
 /// `ViewportCommand::Title` only when the title changed since the last frame.
 pub fn sync_window_title(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    // The OS title bar does its own BiDi, so this string stays in logical order.
     let want = window_title(app);
     if app.last_window_title != want {
         app.last_window_title = want.clone();

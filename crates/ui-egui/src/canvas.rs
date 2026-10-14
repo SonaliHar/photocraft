@@ -2102,7 +2102,7 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
             let name = studio_tab_name(app, st);
             let meta = format!("{}/{}", mode_label(&st.doc), st.doc.depth.bits());
             let natural_w = natural.get(i).copied().unwrap_or(0.0);
-            let meta_g = ui.painter().layout_no_wrap(meta, meta_font.clone(), t.text_faint);
+            let meta_g = ui.painter().layout_no_wrap(crate::bidi::visual(&meta).into_owned(), meta_font.clone(), t.text_faint);
             let name_max = (r.width() - STUDIO_TAB_PAD + STUDIO_TAB_GAP - meta_g.size().x).max(1.0);
             let name_g = crate::tab_strip::elided(ui, &name, font.clone(), t.text, name_max);
             // The title was cut: the tooltip has the rest of it.

@@ -1400,7 +1400,8 @@ fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
                 });
                 ui.separator();
                 for g in &cx.gradients {
-                    ui.label(RichText::new(&g.name).color(t.text_faint));
+                    // Gradient groups and preset names come from imported .GRD files.
+                    ui.label(RichText::new(crate::bidi::visual(&g.name).as_ref()).color(t.text_faint));
                     for p in &g.items {
                         ui.horizontal(|ui| {
                             // A map has no transparency: colour stops only, shown opaque.
@@ -1408,7 +1409,7 @@ fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
                             let (r, swatch) = ui.allocate_exact_size(vec2(48.0, 16.0), Sense::click());
                             crate::preset_panels::paint_gradient(ui, r, &rgba);
                             // Both, not short-circuited: the name is drawn either way.
-                            let name = ui.selectable_label(false, &p.name);
+                            let name = ui.selectable_label(false, crate::bidi::visual(&p.name).as_ref());
                             if press.chosen(ui, &swatch) | press.chosen(ui, &name) {
                                 picked = Some(rgba.iter().map(|(at, c)| (*at, [c[0], c[1], c[2]])).collect::<Vec<Stop>>());
                             }

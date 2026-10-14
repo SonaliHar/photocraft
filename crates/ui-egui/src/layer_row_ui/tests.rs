@@ -607,3 +607,16 @@ fn clicking_the_lock_icon_on_a_row_unlocks_the_layer() {
     assert!(doc.background().is_none(), "the Background became a normal layer");
     assert!(!doc.layer(bg).unwrap().locks.any());
 }
+
+/// An Arabic layer name reaches the paint galley in visual (display) word order, not stream order.
+#[test]
+fn an_arabic_layer_name_is_laid_out_in_visual_order() {
+    let ctx = egui::Context::default();
+    let mut galley = None;
+    let mut output = ctx.run_ui(Default::default(), |ui| {
+        galley = super::truncated(ui.painter(), "طبقة لا شيء", egui::FontId::proportional(12.0), egui::Color32::WHITE, false, 300.0);
+    });
+    output.textures_delta.clear();
+    let g = galley.unwrap();
+    assert_eq!(g.job.text, "شيء لا طبقة");
+}

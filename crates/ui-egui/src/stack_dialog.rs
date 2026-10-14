@@ -152,10 +152,12 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             egui::ScrollArea::vertical().id_salt("load-stack-files").max_height(160.0).auto_shrink([false, false]).show(ui, |ui| {
                 ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                     if folder_mode && !folder(f).is_empty() {
-                        ui.label(RichText::new(folder(f)).color(t.text_dim));
+                        // The folder and rows are paths on disk.
+                        ui.label(RichText::new(crate::bidi::visual(folder(f)).as_ref()).color(t.text_dim));
                     }
                     for (i, p) in shown.iter().enumerate() {
-                        let row = ui.add(egui::Button::selectable(!folder_mode && sel == Some(i), file_name(p))).on_hover_text(p.as_str());
+                        let shown_name = crate::bidi::visual(file_name(p)).into_owned();
+                        let row = ui.add(egui::Button::selectable(!folder_mode && sel == Some(i), shown_name)).on_hover_text(crate::bidi::visual(p).as_ref());
                         if row.clicked() && !folder_mode {
                             f.insert("selected".into(), json!(i));
                         }

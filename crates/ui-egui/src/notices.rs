@@ -206,7 +206,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     .show(ui, |ui| {
                         ui.set_width(340.0);
                         ui.horizontal(|ui| {
-                            let title = egui::RichText::new(n.text(&n.title)).strong().color(if n.error { t.warning } else { t.text });
+                            // Notice titles and lines interpolate file names.
+                            let title = egui::RichText::new(crate::bidi::visual(&n.text(&n.title))).strong().color(if n.error { t.warning } else { t.text });
                             ui.add(egui::Label::new(title).wrap());
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                                 if ui.add(egui::Button::new(egui::RichText::new("×").color(t.text_dim)).frame(false)).on_hover_text(tl!("Dismiss")).clicked() {
@@ -216,7 +217,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         });
                         for line in n.lines.iter().take(MAX_LINES) {
                             let line = n.text(line);
-                            ui.add(egui::Label::new(egui::RichText::new(format!("• {line}")).color(t.text_dim)).wrap());
+                            ui.add(egui::Label::new(egui::RichText::new(format!("• {}", crate::bidi::visual(&line))).color(t.text_dim)).wrap());
                         }
                         if n.lines.len() > MAX_LINES {
                             let text = crate::i18n::fmt(tl!("…and {n} more"), &[("n", &(n.lines.len() - MAX_LINES).to_string())]);

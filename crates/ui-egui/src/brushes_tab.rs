@@ -409,7 +409,7 @@ fn grid_cell(ui: &mut egui::Ui, p: &BrushPreset, current: bool, presets: &[Brush
         egui::FontId::proportional(9.5),
         t.text_dim,
     );
-    let resp = resp.on_hover_text(&p.name);
+    let resp = resp.on_hover_text(crate::bidi::visual(&p.name).as_ref());
     preset_interactions(ui, &resp, r, p, presets, true, acts);
 }
 
@@ -606,7 +606,7 @@ fn preset_card(
             t.text_dim,
         );
     }
-    let resp = resp.on_hover_text(&p.name);
+    let resp = resp.on_hover_text(crate::bidi::visual(&p.name).as_ref());
     // A tip-only card's grid drops between columns, like the Brushes tab's: the rest drop between
     // rows (there is a row under the tip there).
     preset_interactions(ui, &resp, card, p, presets, tip_only, acts);
@@ -658,6 +658,8 @@ fn group_header(ui: &mut egui::Ui, label: &str, key: &str, folder: &[String], op
         ui.painter().rect_filled(r, t.radius_sm, t.hover);
     }
     let shown = folder.last().map_or(label, String::as_str);
+    // Group and folder names are user-renamable.
+    let shown: &str = &crate::bidi::visual(shown);
     let x = r.left() + 4.0 + FOLDER_INDENT * folder.len().min(MAX_VIEW_DEPTH) as f32;
     icons::paint(
         ui,
@@ -920,7 +922,7 @@ pub fn preset_list(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&
         egui::Area::new(egui::Id::new(("brush-drag-label", layout.id))).order(egui::Order::Tooltip).fixed_pos(p + vec2(12.0, 8.0)).interactable(false).show(
             ui.ctx(),
             |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| ui.label(name));
+                egui::Frame::popup(ui.style()).show(ui, |ui| ui.label(crate::bidi::visual(&name).as_ref()));
             },
         );
     }

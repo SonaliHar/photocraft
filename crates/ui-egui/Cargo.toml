@@ -36,6 +36,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 base64 = "0.22"
+# egui does no bidi: chrome strings are reordered for display.
+unicode-bidi = "0.3"
 # Inflating the translation catalogs, stored deflated (build.rs); already linked through photocraft-io.
 flate2 = { workspace = true }
 

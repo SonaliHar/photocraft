@@ -1013,7 +1013,8 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         if !own_window {
             painter.rect_filled(title, 0.0, t.dock);
             painter.line_segment([title.left_bottom(), title.right_bottom()], Stroke::new(1.0, t.separator));
-            painter.text(title.center(), Align2::CENTER_CENTER, d.window_title(), FontId::proportional(13.0), t.text);
+            // The OS window title (viewport builder) stays raw: the WM does its own bidi.
+            painter.text(title.center(), Align2::CENTER_CENTER, crate::bidi::visual(&d.window_title()), FontId::proportional(13.0), t.text);
         }
         let ok_label = if d.target == Target::OpenRaw { tl!("Open") } else { tl!("OK") };
         let footer_h = 48.0;

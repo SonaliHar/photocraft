@@ -406,7 +406,8 @@ pub(crate) fn browser(
                 crate::icons::paint(ui, tri, if open { "chevron-down" } else { "chevron-right" }, 10.0, t.text_dim);
                 let fold = Rect::from_center_size(pos2(hr.left() + 25.0, hr.center().y), vec2(14.0, 14.0));
                 crate::icons::paint(ui, fold, if open { "folder-open" } else { "folder" }, 12.0, t.icon);
-                ui.painter().text(pos2(hr.left() + 37.0, hr.center().y), Align2::LEFT_CENTER, &g.name, FontId::proportional(11.5), t.text);
+                // Group names are user-renamable preset groups.
+                ui.painter().text(pos2(hr.left() + 37.0, hr.center().y), Align2::LEFT_CENTER, crate::bidi::visual(&g.name), FontId::proportional(11.5), t.text);
                 if hresp.clicked() {
                     let k = format!("{panel}/{}", g.name);
                     if !st.toggled.remove(&k) {
@@ -463,7 +464,8 @@ pub(crate) fn browser(
                         }
                         let tr = Rect::from_min_size(r.min + vec2(24.0, 2.0), vec2(20.0, 20.0));
                         thumb(ui, tr, gi, ii);
-                        ui.painter().text(pos2(tr.right() + 8.0, r.center().y), Align2::LEFT_CENTER, &it.name, FontId::proportional(11.5), t.text);
+                        // Item names are user-renamable preset names.
+                        ui.painter().text(pos2(tr.right() + 8.0, r.center().y), Align2::LEFT_CENTER, crate::bidi::visual(&it.name), FontId::proportional(11.5), t.text);
                     } else {
                         thumb(ui, r, gi, ii);
                         let (stroke, kind) = if is_sel {
@@ -475,7 +477,7 @@ pub(crate) fn browser(
                         };
                         ui.painter().rect_stroke(r, CornerRadius::same(2), stroke, kind);
                     }
-                    let resp = if list { resp } else { resp.on_hover_text(&it.name) };
+                    let resp = if list { resp } else { resp.on_hover_text(crate::bidi::visual(&it.name).as_ref()) };
                     if resp.double_clicked() {
                         ev.push(Ev::Activate(it.key.clone()));
                     } else if resp.clicked() {
@@ -931,7 +933,8 @@ pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.set_width(232.0);
         egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
             for g in &groups {
-                ui.label(egui::RichText::new(&g.name).color(t.text_dim).size(11.0));
+                // Shape groups come from imported .csh files.
+                ui.label(egui::RichText::new(crate::bidi::visual(&g.name).as_ref()).color(t.text_dim).size(11.0));
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
                     for sh in &g.items {

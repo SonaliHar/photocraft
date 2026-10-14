@@ -102,9 +102,16 @@ direction follows the language code, so a catalog needs no extra setting.
 Not mirrored yet: panel interiors, dialogs, menu rows (shortcuts stay on the right), submenus
 (they open to the right), document tabs and the canvas. Before an Arabic catalog reads
 correctly, the UI also needs an Arabic fallback font (the bundled UI fonts have no Arabic
-glyphs) and bidirectional word order: egui 0.36 shapes each right-to-left word with HarfRust,
-so letters join, but lays a line's words out left to right, and its caret indexing is off in
-right-to-left text (emilk/egui#8576, #8577). Document text is laid out by the text engine.
+glyphs). Chrome strings (layer rows, tab titles, menu labels, status text) display in visual
+order: egui 0.36 shapes each right-to-left word with HarfRust, so letters join, but lays a
+line's words out left to right, and `bidi::visual` (`crates/ui-egui/src/bidi.rs`) reorders a
+string per UAX #9 with a forced LTR paragraph level, reversing the whitespace-separated words
+of a right-to-left run, so a filename's extension and any trailing markers stay to the right of
+the Arabic name, as Photoshop lays them out. Still in
+logical order: words glued to another script without whitespace (Arabic next to digits or
+brackets), `TextEdit` content (egui's caret indexing is off in right-to-left text,
+emilk/egui#8576, #8577), and the OS window title and native macOS menus (the OS reorders them
+itself). Document text is laid out by the text engine.
 
 No right-to-left catalog ships yet. To check the mirrored layout with any language, launch with
 `PHOTOCRAFT_UI_DIRECTION=rtl` (or `ltr` to force left-to-right); it is read once per process

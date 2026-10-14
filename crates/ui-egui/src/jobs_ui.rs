@@ -781,11 +781,14 @@ pub fn open_card(app: &mut PhotocraftApp, ui: &mut egui::Ui, job: JobId) {
     let fill = ui.painter().add(egui::Shape::Noop);
     let border = ui.painter().add(egui::Shape::Noop);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(card.shrink(OPEN_CARD_PAD)));
+    let opening = crate::bidi::visual(&tab.name).into_owned();
     let title = child
-        .add(egui::Label::new(RichText::new(crate::i18n::fmt(tl!("Opening {name}"), &[("name", &tab.name)])).font(crate::theme::semibold(14.0))).truncate())
+        .add(egui::Label::new(RichText::new(crate::i18n::fmt(tl!("Opening {name}"), &[("name", &opening)])).font(crate::theme::semibold(14.0))).truncate())
         .rect;
     child.add_space(4.0);
     let msg = if j.message.is_empty() { tl!("Reading…").to_string() } else { format!("{}…", j.message) };
+    // Job messages can name the file too.
+    let msg = crate::bidi::visual(&msg).into_owned();
     child.add(egui::Label::new(RichText::new(msg).color(t.text_dim).size(12.0)).truncate());
     child.add_space(10.0);
     let (br, _) = child.allocate_exact_size(vec2(child.available_width(), 8.0), Sense::hover());
