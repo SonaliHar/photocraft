@@ -932,7 +932,9 @@ mod tests {
         while std::time::Instant::now() < deadline {
             prefs_ui::tick(&mut app, &ctx);
             recovered = list_recovery(&recovery);
-            if !recovered.is_empty() {
+            // A committed bundle is recoverable before its sidecar is published, with
+            // fallback revision 0. Wait for this retry's metadata, not just the bundle.
+            if recovered.iter().any(|entry| entry.info.revision == revision) {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
