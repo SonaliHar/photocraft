@@ -243,6 +243,12 @@ pub use hue_saturation_source_candidate::{
     HUE_SATURATION_SCHEMA, HueSaturationMappingLimits, HueSaturationMappingRequirements,
     HueSaturationSourceIdentity, MappedHueSaturationSource, map_retained_hue_saturation_source,
 };
+#[path = "xcf_filters/scene_channel_storage.rs"]
+mod scene_channel_storage;
+pub use scene_channel_storage::{
+    SceneChannelBinding, SceneChannelLimits, SceneChannelRequirements, SceneChannelStorage,
+    StoredSceneChannel, StoredSceneEffect, assemble_scene_channel_storage,
+};
 
 fn color_to_alpha_arguments<P>(effect: &Effect<P>) -> Result<Vec<FilterArgument>, IoError> {
     if effect.version.as_deref() != Some("0:0") || effect.arguments.len() != 3 {

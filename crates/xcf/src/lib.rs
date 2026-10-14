@@ -16,6 +16,7 @@ mod source;
 mod text;
 mod text_layout;
 mod types;
+mod owned_backing_census;
 mod vector_layer;
 pub use container::{
     BudgetDecodedImport, DecodeReservations, DecodedImport, SourceAccounting, SourceContainer, classify_container, decode_candidate,
@@ -25,6 +26,7 @@ pub use error::{ErrorKind, XcfError};
 pub use sink::*;
 pub use source::*;
 pub use types::*;
+pub use owned_backing_census::{OwnedBackingLimits, OwnedBackingRequirements, census_owned_file};
 
 /// Accounting assertion for an immutable caller-owned plain source, not an IO grant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

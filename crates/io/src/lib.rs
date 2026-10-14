@@ -100,6 +100,8 @@ pub use xcf_filters::{
     BrightnessContrastSourceIdentity, MappedBrightnessContrastSource, map_retained_brightness_contrast_source,
     HUE_SATURATION_SCHEMA, HueSaturationMappingLimits, HueSaturationMappingRequirements,
     HueSaturationSourceIdentity, MappedHueSaturationSource, map_retained_hue_saturation_source,
+    SceneChannelBinding, SceneChannelLimits, SceneChannelRequirements, SceneChannelStorage,
+    StoredSceneChannel, StoredSceneEffect, assemble_scene_channel_storage,
 };
 #[cfg(test)]
 #[path = "../tests/common/xcf.rs"]
