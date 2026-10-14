@@ -2453,11 +2453,9 @@ impl PhotocraftApp {
         for o in &self.jobs.opens {
             check(&o.name);
         }
-        for d in &self.ui.dialogs {
-            if d.kind == crate::state::DialogKind::NewDocument {
-                if let Some(name) = d.fields.get("name").and_then(serde_json::Value::as_str) {
-                    check(name);
-                }
+        for d in self.ui.dialogs.iter().filter(|d| d.kind == crate::state::DialogKind::NewDocument) {
+            if let Some(name) = d.fields.get("name").and_then(serde_json::Value::as_str) {
+                check(name);
             }
         }
         let default_name = format!("Untitled-{}", max_n + 1);
