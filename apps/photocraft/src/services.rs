@@ -932,7 +932,9 @@ mod tests {
         while std::time::Instant::now() < deadline {
             prefs_ui::tick(&mut app, &ctx);
             recovered = list_recovery(&recovery);
-            if !recovered.is_empty() {
+            // The bundle is listed as soon as it is committed, before its sidecar (which holds
+            // the revision) is written (#4967): wait for the finished autosave.
+            if recovered.iter().any(|e| e.info.revision == revision) {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
