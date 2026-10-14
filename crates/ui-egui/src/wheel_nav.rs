@@ -1,20 +1,23 @@
-//! Mouse wheel and trackpad navigation over the canvas (#293, #635), as in Photoshop:
+//! Mouse wheel and trackpad navigation over the canvas (#293, #635, #5363):
 //!
-//! - The wheel scrolls up and down; ⇧ or ⌘/Ctrl + wheel scrolls sideways.
-//! - ⌥/Alt + wheel zooms around the pointer, 10% per wheel notch, applied the frame it arrives.
-//! - Preferences › General › Zoom with Scroll Wheel swaps the two: the wheel zooms and
-//!   ⌥/Alt + wheel scrolls.
+//! - The wheel scrolls up and down; ⇧ or ⌘ (Mac) + wheel scrolls sideways.
+//! - Ctrl + a mouse-wheel notch zooms around the pointer, 10% per notch, the frame it arrives.
+//!   Windows reports Ctrl as the command key, which egui would otherwise fold into a sideways
+//!   scroll; a whole line-notch is taken back out of that pan (#5363).
+//! - ⌥/Alt + wheel zooms the same way.
+//! - Preferences › General › Zoom with Scroll Wheel swaps the plain wheel and ⌥/Alt.
+//!   Ctrl + a notch still zooms.
 //! - A trackpad pinch zooms around the pointer, unless Preferences › Enhanced Controls ›
 //!   Zoom with Trackpad Pinch is off (then a pinch does nothing, and Windows' Ctrl + wheel
 //!   fractions scroll sideways like the wheel, because the fold below is skipped).
 //!
-//! [`configure`] makes egui fold ⌘/Ctrl + wheel into a sideways scroll as it does ⇧ + wheel, so
-//! only a real pinch (egui's `Event::Zoom`, or a touch screen) reaches `zoom_delta`. macOS and
-//! browsers deliver a pinch as its own event, but Windows hands a precision touchpad pinch to apps
+//! [`configure`] makes egui fold ⇧ and ⌘/Ctrl + wheel into a sideways scroll, so only a real
+//! pinch (egui's `Event::Zoom`, or a touch screen) reaches `zoom_delta`. macOS and browsers
+//! deliver a pinch as its own event, but Windows hands a precision touchpad pinch to apps
 //! as Ctrl + wheel in fractions of a notch (also on some Linux Wayland systems):
-//! [`fold_legacy_pinch`] turns those back into a pinch
-//! before egui sees them, so Ctrl + a notched mouse wheel scrolls sideways and the pinch still
-//! zooms.
+//! [`fold_legacy_pinch`] turns those back into a pinch before egui sees them. A whole
+//! mouse-wheel notch with Ctrl held is not a pinch: [`read`] zooms by ×1.1 instead of
+//! scrolling sideways.
 //!
 //! The target behaviour is exact ×1.1 steps, one per notch, with no easing in between
 //! (measured frame by frame on a screen recording). egui smooths a wheel notch over several
@@ -58,6 +61,8 @@ pub struct Input {
     pub pinch_zooms: bool,
     /// Points per wheel notch (egui's `line_scroll_speed`).
     pub notch: f32,
+    /// Ctrl + a whole mouse-wheel notch (#5363). The smoothed tail must not pan.
+    pub ctrl_zoom: bool,
 }
 
 /// The view change for one frame of wheel input, if any.
@@ -71,18 +76,23 @@ pub fn classify(i: Input) -> Option<Wheel> {
         let f = NOTCH.powf(dy / notch);
         (f.is_finite() && f > 0.0 && f != 1.0).then_some(Wheel::Zoom(f))
     };
+    // Ctrl + a whole mouse notch zooms on the frame it arrives. Its smoothed tail is not a pan.
+    if i.ctrl_zoom {
+        return step(i.raw.y + i.raw.x);
+    }
     match (i.alt, i.zoom_with_wheel) {
         // egui folds a scroll with Alt held into y. The smoothed tail of a notch is ignored.
         (true, false) => step(i.raw.y + i.raw.x),
-        // ⇧ and ⌘/Ctrl fold the wheel into x: those still scroll sideways.
+        // ⇧ and Mac ⌘ fold the wheel into x: those still scroll sideways.
         (false, true) if i.raw.y != 0.0 || i.scroll.y != 0.0 => step(i.raw.y),
         _ if !(i.scroll.x.is_finite() && i.scroll.y.is_finite()) || i.scroll == Vec2::ZERO => None,
         _ => Some(Wheel::Pan(i.scroll)),
     }
 }
 
-/// Set egui's wheel modifiers (once, at setup): ⌘/Ctrl + wheel scrolls sideways like ⇧ + wheel
-/// instead of zooming, everywhere in the app.
+/// Set egui's wheel modifiers (once, at setup): ⇧ and ⌘/Ctrl + wheel scroll sideways.
+/// A Ctrl mouse-wheel notch is turned back into a zoom in [`read`] (#5363). Mac ⌘ stays a
+/// sideways pan, because it sets `mac_cmd` and not `ctrl`.
 pub fn configure(ctx: &Context) {
     ctx.options_mut(|o| {
         o.input_options.zoom_modifier = Modifiers::NONE;
@@ -92,9 +102,9 @@ pub fn configure(ctx: &Context) {
 
 /// Turn a Windows or Linux touchpad pinch, which arrives as Ctrl + wheel in fractions of a notch or points, into
 /// pinch events (`Event::Zoom`) at egui's Ctrl-scroll zoom speed (`notch` points per line,
-/// `speed` per point). Ctrl + wheel in whole notches (a mouse wheel) is left to scroll sideways,
-/// unless it comes within [`PINCH_GAP`] of a pinch step. `last` is the time of the previous pinch
-/// step; returns the time of the latest one.
+/// `speed` per point). Ctrl + wheel in whole notches (a mouse wheel) is left as a wheel event
+/// ([`read`] zooms those by ×1.1), unless it comes within [`PINCH_GAP`] of a pinch step. `last`
+/// is the time of the previous pinch step; returns the time of the latest one.
 pub fn legacy_pinch_to_zoom(events: &mut [Event], now: f64, last: Option<f64>, notch: f32, speed: f32) -> Option<f64> {
     let ctrl_wheel = |e: &Event| match e {
         Event::MouseWheel { unit: MouseWheelUnit::Line, delta, modifiers, .. } if modifiers.ctrl => Some((*delta, false)),
@@ -149,15 +159,35 @@ fn alt_id() -> Id {
     Id::new("pc-wheel-alt")
 }
 
+fn ctrl_id() -> Id {
+    Id::new("pc-wheel-ctrl-zoom")
+}
+
+/// Ctrl + a whole mouse-wheel notch (line units, no fraction). Windows and Linux set `command`
+/// as well as `ctrl`; a Mac ⌘ scroll sets `mac_cmd` and is a sideways pan. Fractions are a
+/// touchpad pinch ([`fold_legacy_pinch`]), or a sideways scroll when that preference is off.
+fn ctrl_mouse_zoom(unit: MouseWheelUnit, delta: Vec2, m: Modifiers) -> bool {
+    unit == MouseWheelUnit::Line
+        && m.ctrl
+        && !m.mac_cmd
+        && !m.alt
+        && !m.shift
+        && delta.x.fract() == 0.0
+        && delta.y.fract() == 0.0
+        && (delta.x != 0.0 || delta.y != 0.0)
+}
+
 /// Read this frame's wheel input. Call it every frame (hovered or not) so the Alt state of the
 /// gesture follows the latest wheel event.
 pub fn read(ctx: &Context, zoom_with_wheel: bool, pinch_zooms: bool) -> Option<Wheel> {
     let notch = ctx.options(|o| o.input_options.line_scroll_speed);
-    let (scroll, zoom_delta, latest, wheel, page) = ctx.input(|i| {
+    let (scroll, zoom_delta, latest_alt, latest_ctrl, wheel, page) = ctx.input(|i| {
         let latest = i.events.iter().rev().find_map(|e| match e {
-            Event::MouseWheel { modifiers, .. } => Some(modifiers.alt && !modifiers.command && !modifiers.ctrl),
+            Event::MouseWheel { unit, delta, modifiers, .. } => Some((*unit, *delta, *modifiers)),
             _ => None,
         });
+        let latest_alt = latest.map(|(_, _, m)| m.alt && !m.command && !m.ctrl);
+        let latest_ctrl = latest.map(|(unit, delta, m)| ctrl_mouse_zoom(unit, delta, m));
         let wheel: Vec<(MouseWheelUnit, Vec2, Modifiers)> = i
             .events
             .iter()
@@ -166,29 +196,46 @@ pub fn read(ctx: &Context, zoom_with_wheel: bool, pinch_zooms: bool) -> Option<W
                 _ => None,
             })
             .collect();
-        (i.smooth_scroll_delta, i.zoom_delta(), latest, wheel, i.content_rect().height())
+        (i.smooth_scroll_delta, i.zoom_delta(), latest_alt, latest_ctrl, wheel, i.content_rect().height())
     });
-    let alt = match latest {
+    let alt = match latest_alt {
         Some(a) => {
             ctx.data_mut(|d| d.insert_temp(alt_id(), a));
             a
         }
         None => ctx.data(|d| d.get_temp::<bool>(alt_id())).unwrap_or(false),
     };
-    // The wheel events that belong to the gesture in progress: Alt ones, or plain ones (⇧ and
-    // ⌘/Ctrl wheel scroll sideways and never zoom).
-    let raw = wheel.iter().filter(|(_, _, m)| if alt { m.alt && !m.command && !m.ctrl } else { !m.alt && !m.shift && !m.command && !m.ctrl }).fold(
-        Vec2::ZERO,
-        |sum, (unit, delta, _)| {
+    // Held until the next wheel event, so the smoothed tail of a Ctrl notch does not pan.
+    let ctrl_zoom = match latest_ctrl {
+        Some(z) => {
+            ctx.data_mut(|d| d.insert_temp(ctrl_id(), z));
+            z
+        }
+        None => ctx.data(|d| d.get_temp::<bool>(ctrl_id())).unwrap_or(false),
+    };
+    // The wheel events that belong to the gesture in progress. ⇧ and Mac ⌘ scroll sideways.
+    // A whole Ctrl notch zooms (#5363); a fractional Ctrl wheel is a pinch, or a sideways pan
+    // when pinch zoom is off.
+    let raw = wheel
+        .iter()
+        .filter(|(unit, delta, m)| {
+            if ctrl_zoom {
+                ctrl_mouse_zoom(*unit, *delta, *m)
+            } else if alt {
+                m.alt && !m.command && !m.ctrl
+            } else {
+                !m.alt && !m.shift && !m.command && !m.ctrl
+            }
+        })
+        .fold(Vec2::ZERO, |sum, (unit, delta, _)| {
             sum + *delta
                 * match unit {
                     MouseWheelUnit::Point => 1.0,
                     MouseWheelUnit::Line => notch,
                     MouseWheelUnit::Page => page,
                 }
-        },
-    );
-    classify(Input { scroll, raw, zoom_delta, alt, zoom_with_wheel, pinch_zooms, notch })
+        });
+    classify(Input { scroll, raw, zoom_delta, alt, zoom_with_wheel, pinch_zooms, notch, ctrl_zoom })
 }
 
 #[cfg(test)]
@@ -198,7 +245,7 @@ mod tests {
     use super::*;
 
     fn input(scroll: Vec2, alt: bool) -> Input {
-        Input { scroll, raw: scroll, zoom_delta: 1.0, alt, zoom_with_wheel: false, pinch_zooms: true, notch: 40.0 }
+        Input { scroll, raw: scroll, zoom_delta: 1.0, alt, zoom_with_wheel: false, pinch_zooms: true, notch: 40.0, ctrl_zoom: false }
     }
 
     fn wheel(delta: Vec2, modifiers: Modifiers) -> Event {
@@ -327,9 +374,14 @@ mod tests {
         let one = |m: Modifiers| gesture(vec![vec![wheel(notch, m)]], false, false);
         let (pan, zoom) = one(Modifiers::NONE);
         assert!(near(pan, Vec2::new(0.0, 40.0)) && zoom == 1.0, "wheel scrolls vertically: {pan:?} {zoom}");
-        for m in [Modifiers::SHIFT, CTRL, CMD, Modifiers::CTRL] {
+        for m in [Modifiers::SHIFT, CMD] {
             let (pan, zoom) = one(m);
             assert!(near(pan, Vec2::new(40.0, 0.0)) && zoom == 1.0, "{m:?} + wheel scrolls sideways: {pan:?} {zoom}");
+        }
+        // Windows reports Ctrl as command+ctrl. Either form zooms; the smoothed tail does not pan.
+        for m in [CTRL, Modifiers::CTRL] {
+            let (pan, zoom) = one(m);
+            assert!(pan == Vec2::ZERO && (zoom - 1.1).abs() < 1e-4, "{m:?} + wheel zooms: {pan:?} {zoom}");
         }
         let (pan, zoom) = one(Modifiers::ALT);
         assert!(pan == Vec2::ZERO && (zoom - 1.1).abs() < 1e-4, "⌥ + wheel zooms 10%, at once: {pan:?} {zoom}");
@@ -339,7 +391,9 @@ mod tests {
         let (pan, zoom) = gesture(vec![vec![wheel(notch, Modifiers::NONE)]], true, false);
         assert!(pan == Vec2::ZERO && (zoom - 1.1).abs() < 1e-4, "{pan:?} {zoom}");
         let (pan, zoom) = gesture(vec![vec![wheel(notch, CTRL)]], true, false);
-        assert!(near(pan, Vec2::new(40.0, 0.0)) && zoom == 1.0, "⌘/Ctrl + wheel still scrolls sideways: {pan:?} {zoom}");
+        assert!(pan == Vec2::ZERO && (zoom - 1.1).abs() < 1e-4, "Ctrl + wheel still zooms: {pan:?} {zoom}");
+        let (pan, zoom) = gesture(vec![vec![wheel(notch, Modifiers::SHIFT)]], true, false);
+        assert!(near(pan, Vec2::new(40.0, 0.0)) && zoom == 1.0, "Shift + wheel still scrolls sideways: {pan:?} {zoom}");
     }
 
     #[test]
@@ -352,7 +406,24 @@ mod tests {
         let speed = egui::InputOptions::default().scroll_zoom_speed;
         assert!(pan == Vec2::ZERO && (zoom - (speed * 40.0 * 0.75).exp()).abs() < 1e-4, "the pinch zooms: {pan:?} {zoom}");
         let (pan, zoom) = gesture(vec![vec![wheel(Vec2::new(0.0, 1.0), CTRL)]], false, true);
-        assert!(near(pan, Vec2::new(40.0, 0.0)) && zoom == 1.0, "Ctrl + mouse wheel scrolls sideways: {pan:?} {zoom}");
+        assert!(pan == Vec2::ZERO && (zoom - 1.1).abs() < 1e-4, "Ctrl + mouse wheel zooms, and its tail does not pan: {pan:?} {zoom}");
+        // Pinch preference off: the fraction is not folded, so it stays the sideways scroll.
+        let (pan, zoom) = gesture(vec![vec![wheel(Vec2::new(0.0, 0.25), CTRL)]], false, false);
+        assert!(zoom == 1.0 && near(pan, Vec2::new(10.0, 0.0)), "a Ctrl fraction without the pinch fold pans sideways: {pan:?} {zoom}");
+    }
+
+    /// #5363: egui has already folded Ctrl into a sideways delta. The notch still zooms, and the
+    /// smoothed sideways tail does not pan.
+    #[test]
+    fn ctrl_notch_zooms_and_ignores_the_sideways_tail() {
+        let sideways = Vec2::new(40.0, 0.0);
+        let i = Input { raw: Vec2::new(0.0, 40.0), ctrl_zoom: true, ..input(sideways, false) };
+        let Some(Wheel::Zoom(f)) = classify(i) else { panic!("zoom") };
+        assert!((f - 1.1).abs() < 1e-5, "{f}");
+        let tail = Input { raw: Vec2::ZERO, ctrl_zoom: true, ..input(sideways, false) };
+        assert_eq!(classify(tail), None, "the smoothed sideways tail is not a pan");
+        let shift = classify(input(sideways, false));
+        assert_eq!(shift, Some(Wheel::Pan(sideways)), "Shift / ⌘ sideways pan is unchanged");
     }
 
     #[test]
@@ -418,8 +489,16 @@ mod tests {
             for alt in [false, true] {
                 for notch in [0.0, -1.0, f32::NAN, 40.0] {
                     for zd in [f32::NAN, 0.0, -1.0, f32::INFINITY, 1.0] {
-                        let i =
-                            Input { scroll: Vec2::new(0.0, s), raw: Vec2::new(0.0, s), zoom_delta: zd, alt, zoom_with_wheel: !alt, pinch_zooms: true, notch };
+                        let i = Input {
+                            scroll: Vec2::new(0.0, s),
+                            raw: Vec2::new(0.0, s),
+                            zoom_delta: zd,
+                            alt,
+                            zoom_with_wheel: !alt,
+                            pinch_zooms: true,
+                            notch,
+                            ctrl_zoom: false,
+                        };
                         if let Some(Wheel::Zoom(f)) = classify(i) {
                             assert!(f.is_finite() && f > 0.0, "{f} from {i:?}");
                         }
