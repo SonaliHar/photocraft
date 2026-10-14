@@ -74,6 +74,7 @@ pub mod direct_select;
 pub mod direction;
 pub mod discard_ui;
 pub mod paywall;
+pub mod saas;
 pub mod distort_ui;
 pub mod doc_props_ui;
 pub mod dock;
@@ -743,6 +744,8 @@ pub struct PhotocraftApp {
     pub(crate) discard: Option<discard_ui::Prompt>,
     /// The subscription offer in front of every feature (see `paywall`).
     pub paywall: paywall::Paywall,
+    /// The splash, EULA, cookie banner, Terms updates and usage meter around it (see `saas`).
+    pub saas: saas::Saas,
     /// The Open or Save dialog in progress, and the action waiting on it (see `file_dialog`).
     pub(crate) file_dialog: Option<file_dialog::Pending>,
     /// A Save As to a layered TIFF parked behind the TIFF Options prompt (see `tiff_options_ui`).
@@ -888,6 +891,7 @@ impl PhotocraftApp {
             prefs_rt: Default::default(),
             discard: None,
             paywall: Default::default(),
+            saas: Default::default(),
             file_dialog: None,
             tiff_options: None,
             save_dirs: HashMap::new(),
@@ -904,6 +908,7 @@ impl PhotocraftApp {
         prefs_ui::load(&mut app);
         // The free tier: the Hand tool, so you can wave goodbye to your money.
         app.paywall = paywall::Paywall::new(app.services.paywall);
+        app.saas = saas::Saas::new(app.services.paywall);
         if app.paywall.enabled {
             app.ui.tool = state::Tool::Hand;
         }
@@ -1716,6 +1721,7 @@ impl eframe::App for PhotocraftApp {
         self.drain_control(ctx);
         native_menu::run(self, ctx);
         paywall::guard_tool(self);
+        saas::tick(self, ctx);
         // Switching tools commits, also between the Type and Type Mask tools.
         if self.ui.text_edit.as_ref().is_some_and(|ed| !self.ui.tool.is_type() || ed.mask != self.ui.tool.is_type_mask()) {
             type_tool::commit(self);
@@ -1881,6 +1887,7 @@ impl eframe::App for PhotocraftApp {
         rasterize_prompt::run_pending(self, &ctx);
         jobs_ui::dialog(self, &ctx);
         discard_ui::show(self, &ctx);
+        saas::show(self, &ctx);
         paywall::show(self, &ctx);
         tiff_options_ui::show(self, &ctx);
         targa_options_ui::show(self, &ctx);

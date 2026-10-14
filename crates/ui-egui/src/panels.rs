@@ -1612,6 +1612,7 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     crate::chrome_ui::status_bar_pro(app, ui);
                     // Background job progress with Cancel, at the far end (#210).
                     ui.with_layout(crate::direction::trailing(), |ui| {
+                        crate::saas::status_meter(app, ui);
                         crate::jobs_ui::status_progress(app, ui);
                         crate::background_redraw::status(app, ui);
                     });
@@ -1654,6 +1655,7 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         crate::jobs_ui::status_progress(app, ui);
                     }
                     crate::background_redraw::status(app, ui);
+                    crate::saas::status_meter(app, ui);
                 });
             });
         });

@@ -50,6 +50,8 @@ pub struct Paywall {
     licensed_tool: Option<Tool>,
     /// Payments declined so far this session (shown as "loyalty").
     declined: u32,
+    /// Minutes since the EULA was accepted: engagement-based pricing (see `saas`).
+    minutes_used: f64,
 }
 
 struct Prompt {
@@ -86,10 +88,28 @@ impl Paywall {
     /// The monthly price of `key` right now, in cents (surge pricing included).
     pub fn price_cents(&self, key: &str) -> u64 {
         let tries = self.attempts.get(key).copied().unwrap_or(0).min(60);
-        let surged = base_cents(key) as f64 * SURGE.powi(tries.saturating_sub(1) as i32);
+        let surged = base_cents(key) as f64 * SURGE.powi(tries.saturating_sub(1) as i32) * self.engagement();
         // Every price ends in .99, as is the law.
         let dollars = (surged / 100.0).floor().clamp(0.0, 9_999_999.0) as u64;
         dollars.saturating_mul(100).saturating_add(99)
+    }
+
+    /// Engagement-based pricing: +1% per minute of use (up to 5×). The more you use it, the more
+    /// it's worth to you.
+    pub fn engagement(&self) -> f64 {
+        1.0 + (self.minutes_used.max(0.0) / 100.0).min(4.0)
+    }
+
+    pub fn set_minutes_used(&mut self, minutes: f64) {
+        if minutes.is_finite() {
+            self.minutes_used = minutes;
+        }
+    }
+
+    /// Put up the offer for something that isn't a command or a tool (`saas`: skipping the intro,
+    /// rejecting cookies, disagreeing with the EULA).
+    pub fn offer(&mut self, feature: &str, key: &str) {
+        self.open(feature.to_string(), key.to_string());
     }
 
     fn bill(&mut self, key: &str) {
@@ -293,8 +313,15 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             Stage::Offer => {
                 ui.label(pitch(&key));
                 ui.add_space(10.0);
-                plans(ui, price);
+                if plans(ui, price) {
+                    app.saas.sales = Some(crate::saas::Sales::Calendar);
+                    close = true;
+                }
                 ui.add_space(6.0);
+                let engagement = app.paywall.engagement();
+                if engagement > 1.005 {
+                    ui.label(egui::RichText::new(format!("Includes engagement-based pricing: +{:.0}% for the {:.0} minutes you've spent with us.", (engagement - 1.0) * 100.0, app.paywall.minutes_used)).small().weak());
+                }
                 ui.label(egui::RichText::new("Billed annually, charged monthly, cancellable never. Prices may surge on retry. Taxes, fees and feelings not included.").small().weak());
                 if declined > 0 {
                     ui.label(egui::RichText::new(format!("Loyalty status: {declined} declined payment{} (Platinum Declinee)", if declined == 1 { "" } else { "s" })).small().weak());
@@ -380,8 +407,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
-/// The three plans, the most expensive marked as the most popular.
-fn plans(ui: &mut egui::Ui, cents: u64) {
+/// The three plans, the most expensive marked as the most popular, and Enterprise. Returns whether
+/// Contact Sales was clicked.
+fn plans(ui: &mut egui::Ui, cents: u64) -> bool {
+    let mut sales = false;
     let rows = [
         ("Basic", cents, "Includes this feature's icon. Not the feature."),
         ("Pro", cents.saturating_mul(3), "Includes the feature, on weekdays, outside business hours."),
@@ -394,7 +423,12 @@ fn plans(ui: &mut egui::Ui, cents: u64) {
             ui.label(egui::RichText::new(blurb).small());
             ui.end_row();
         }
+        ui.label(egui::RichText::new("Enterprise").strong());
+        sales = ui.link("Contact Sales").clicked();
+        ui.label(egui::RichText::new("Pricing available on request, and on request only.").small());
+        ui.end_row();
     });
+    sales
 }
 
 fn ad(ui: &mut egui::Ui) {

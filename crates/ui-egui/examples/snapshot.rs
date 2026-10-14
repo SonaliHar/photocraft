@@ -22,6 +22,8 @@
 //! `--click-at X,Y` opens a screen-space menu (for example the top Select menu) after the script.
 //! `--paywall ID` turns ParodyShop Premium™ on after the script and invokes command `ID` as a menu
 //! click would, so the capture shows its subscription offer (the README screenshot).
+//! `--saas STAGE` turns on the rest of the SaaS experience after the script and shows one part of
+//! it: `splash`, `eula`, `cookies`, `partners`, `terms` or `sales` (the README gallery).
 
 use photocraft_ui_egui::control::{ControlRequest, Outcome, handle};
 use photocraft_ui_egui::{PhotocraftApp, Services};
@@ -148,6 +150,28 @@ fn main() {
             eprintln!("--paywall {id}: {e}");
         }
         harness.run_steps(4);
+    }
+    if let Some(stage) = arg(&args, "--saas") {
+        use photocraft_ui_egui::saas::{Cookies, Onboarding, Saas, Sales};
+        let app = harness.state_mut();
+        app.saas = Saas::new(true);
+        app.ui.tool = photocraft_ui_egui::state::Tool::Hand;
+        match stage.as_str() {
+            "splash" => {}
+            "eula" => app.saas.onboarding = Onboarding::Eula,
+            other => {
+                app.saas.skip_onboarding(0.0);
+                app.saas.pixels_hovered = 18_203.0;
+                match other {
+                    "partners" => app.saas.cookies = Cookies::Managing,
+                    "terms" => app.saas.terms_open = Some(48),
+                    "sales" => app.saas.sales = Some(Sales::Calendar),
+                    _ => {}
+                }
+            }
+        }
+        // The splash moves on by itself: capture it partway.
+        harness.run_steps(if stage == "splash" { 2 } else { 4 });
     }
     for (flag, button) in [("--click-at", egui::PointerButton::Primary), ("--right-click-at", egui::PointerButton::Secondary)] {
         let Some((x, y)) = arg(&args, flag).and_then(|s| s.split_once(',').and_then(|(x, y)| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?)))) else {
