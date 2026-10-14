@@ -2439,15 +2439,28 @@ impl PhotocraftApp {
     /// request, so the OS clipboard is read here, as for a paste.
     pub(crate) fn new_document_fields(&mut self) -> serde_json::Map<String, serde_json::Value> {
         let mut f = crate::state::UiState::new_document_fields();
-        let default_name =
-            photocraft_engine::file_cmds::untitled_name("Untitled", |n| {
-                let matches = |name: &str| name == n || name.rsplit_once('.').is_some_and(|(stem, _)| stem == n);
-                self.session.documents().iter().any(|d| matches(&d.doc.name))
-                    || self.jobs.opens.iter().any(|o| matches(&o.name))
-                    || self.ui.dialogs.iter().any(|d| {
-                        d.kind == crate::state::DialogKind::NewDocument && d.fields.get("name").and_then(serde_json::Value::as_str).is_some_and(matches)
-                    })
-            });
+        let mut max_n = 0u32;
+        let mut check = |name: &str| {
+            let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
+            let n = if stem == "Untitled" { Some(1) } else { stem.strip_prefix("Untitled-").and_then(|s| s.parse::<u32>().ok()) };
+            if let Some(n) = n {
+                max_n = max_n.max(n);
+            }
+        };
+        for d in self.session.documents() {
+            check(&d.doc.name);
+        }
+        for o in &self.jobs.opens {
+            check(&o.name);
+        }
+        for d in &self.ui.dialogs {
+            if d.kind == crate::state::DialogKind::NewDocument {
+                if let Some(name) = d.fields.get("name").and_then(serde_json::Value::as_str) {
+                    check(name);
+                }
+            }
+        }
+        let default_name = format!("Untitled-{}", max_n + 1);
         f.insert("name".into(), serde_json::Value::String(default_name));
         if let Some(serde_json::Value::Object(saved)) = self.session.prefs().dialogs.get(NEW_DOCUMENT) {
             for k in NEW_DOCUMENT_REMEMBERED {

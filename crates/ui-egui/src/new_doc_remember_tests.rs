@@ -101,8 +101,10 @@ fn created_documents_fill_the_recent_category() {
     );
 }
 
-/// #5410: File › New suggests the lowest free "Untitled-N" no open document or pending job has,
-/// matching Photoshop parity.
+/// #5410: File › New suggests "Untitled-N" where N is max(open untitled numbers) + 1,
+/// matching Photoshop parity:
+/// - Creating 1 then 2, closing 2 -> next is 2.
+/// - Creating 1 then 2, closing 1 (keeping 2 open) -> next is 3.
 #[test]
 fn new_document_increments_default_name_while_untitled_documents_exist() {
     let mut app = app();
@@ -118,18 +120,30 @@ fn new_document_increments_default_name_while_untitled_documents_exist() {
     assert_eq!(app.session.documents()[1].doc.name, "Untitled-2");
     assert_eq!(app.new_document_fields()["name"], "Untitled-3");
 
-    // Creating Untitled-3 increments the next suggested name to Untitled-4.
-    create(&mut app, json!({}));
-    assert_eq!(app.session.documents()[2].doc.name, "Untitled-3");
-    assert_eq!(app.new_document_fields()["name"], "Untitled-4");
-
-    // Closing Untitled-2 frees the slot: the next document reuses Untitled-2.
+    // Scenario 1: 1 and 2 open. Close 2 -> max open is 1 -> next is 2.
     app.session.close(1).unwrap();
+    assert_eq!(app.session.documents().len(), 1);
+    assert_eq!(app.session.documents()[0].doc.name, "Untitled-1");
     assert_eq!(app.new_document_fields()["name"], "Untitled-2");
 
-    // If an untitled document has been saved (e.g. Untitled-2.psd), its stem is still taken.
+    // Re-create 2.
+    create(&mut app, json!({}));
+    assert_eq!(app.session.documents()[1].doc.name, "Untitled-2");
+
+    // Scenario 2: 1 and 2 open. Close 1 (2 remains open) -> max open is 2 -> next is 3.
+    app.session.close(0).unwrap();
+    assert_eq!(app.session.documents().len(), 1);
+    assert_eq!(app.session.documents()[0].doc.name, "Untitled-2");
+    assert_eq!(app.new_document_fields()["name"], "Untitled-3");
+
+    // If an untitled document has been saved (e.g. Untitled-3.psd), its stem is still counted.
     app.session.set_active(0);
-    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).name = "Untitled-2.psd".into();
-    // Now Untitled-2.psd and Untitled-3 are open. Untitled-1 is free.
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).name = "Untitled-3.psd".into();
+    // Now Untitled-3.psd is open. Max is 3 -> next is 4.
+    assert_eq!(app.new_document_fields()["name"], "Untitled-4");
+
+    // Closing all documents resets back to Untitled-1.
+    app.session.close(0).unwrap();
+    assert!(app.session.documents().is_empty());
     assert_eq!(app.new_document_fields()["name"], "Untitled-1");
 }
