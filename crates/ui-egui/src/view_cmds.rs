@@ -1193,6 +1193,9 @@ fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value)
         "file.openExrParts" => open_exr_parts_dialog(app),
         "file.saveACopy" => Some(save_a_copy(app)),
         "file.placeEmbedded" | "file.placeLinked" => {
+            if app.ui.transform.is_some() {
+                return Some(Err("Commit or cancel the transform first".into()));
+            }
             let doc = match app.active_doc_id() {
                 Ok(doc) => doc,
                 Err(e) => return Some(Err(e)),
@@ -1200,11 +1203,14 @@ fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value)
             let linked = id == "file.placeLinked";
             let ctx = ctx.clone();
             Some(app.pick_file_bytes(move |app, name, bytes| {
+                if app.ui.transform.is_some() {
+                    return Err("Commit or cancel the transform first".into());
+                }
                 app.refocus(doc)?;
                 let linked = linked.then(|| name.clone());
-                let placed = app.place_bytes(&name, bytes, linked)?;
+                let result = app.place_bytes(&name, bytes, linked)?;
                 crate::transform_tool::begin_placed(app, &ctx)?;
-                Ok(placed)
+                Ok(result)
             }))
         }
         "layer.smartObjects.replaceContents" => {
