@@ -42,6 +42,7 @@ pub mod candidate_dispatch;
 pub mod candidate_graph;
 pub mod point_graph;
 pub mod pixelize_graph;
+pub mod sobel_graph;
 pub mod native_point_graph;
 pub mod graph_bindings;
 pub mod typed_schema;

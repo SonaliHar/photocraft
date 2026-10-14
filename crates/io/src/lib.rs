@@ -90,6 +90,7 @@ mod xcf_export_loss;
 mod xcf_export_precision;
 mod xcf_filters;
 pub use xcf_filters::{CurvesMappingLimits, CurvesMappingRequirements, MappedCurvesSource, map_retained_curves_source};
+pub use xcf_filters::{LevelsMappingLimits, LevelsMappingRequirements, MappedLevelsSource, map_retained_levels_source};
 #[cfg(test)]
 #[path = "../tests/common/xcf.rs"]
 pub(crate) mod xcf_fixture;

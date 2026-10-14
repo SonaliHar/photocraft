@@ -84,16 +84,16 @@ fn add(a: u64, b: u64) -> Result<u64, IoError> {
 fn mul(a: u64, b: u64) -> Result<u64, IoError> {
     a.checked_mul(b).ok_or_else(|| bad("size overflow"))
 }
-struct Meter<'c, 'i> {
-    limits: CurvesMappingLimits,
-    input: u64,
-    copied: u64,
-    index: u64,
-    work: u64,
-    ctl: &'c Interrupt<'i>,
+pub(super) struct Meter<'c, 'i> {
+    pub(super) limits: CurvesMappingLimits,
+    pub(super) input: u64,
+    pub(super) copied: u64,
+    pub(super) index: u64,
+    pub(super) work: u64,
+    pub(super) ctl: &'c Interrupt<'i>,
 }
 impl Meter<'_, '_> {
-    fn step(&mut self, n: u64) -> Result<(), IoError> {
+    pub(super) fn step(&mut self, n: u64) -> Result<(), IoError> {
         self.ctl.check().map_err(|_| IoError::Cancelled)?;
         self.work = add(self.work, n)?;
         if self.work > self.limits.work_units {
@@ -101,18 +101,18 @@ impl Meter<'_, '_> {
         }
         Ok(())
     }
-    fn input(&mut self, n: u64) -> Result<(), IoError> {
+    pub(super) fn input(&mut self, n: u64) -> Result<(), IoError> {
         self.step(1)?;
         self.input = add(self.input, n)?;
         self.check()
     }
-    fn check(&self) -> Result<(), IoError> {
+    pub(super) fn check(&self) -> Result<(), IoError> {
         if add(self.input, self.copied)? > self.limits.resident_bytes || self.index > self.limits.index_bytes {
             return Err(bad("input/copy/index envelope"));
         }
         Ok(())
     }
-    fn vector<T>(&mut self, n: usize) -> Result<Vec<T>, IoError> {
+    pub(super) fn vector<T>(&mut self, n: usize) -> Result<Vec<T>, IoError> {
         let bytes = mul(n as u64, size_of::<T>() as u64)?;
         self.step(1)?;
         self.copied = add(self.copied, bytes)?;
@@ -126,7 +126,7 @@ impl Meter<'_, '_> {
         self.check()?;
         Ok(out)
     }
-    fn text(&mut self, s: &str) -> Result<String, IoError> {
+    pub(super) fn text(&mut self, s: &str) -> Result<String, IoError> {
         if s.len() > 65536 || s.contains('\0') {
             return Err(bad("bounded text"));
         }
@@ -137,13 +137,13 @@ impl Meter<'_, '_> {
         }
         String::from_utf8(v).map_err(|_| bad("UTF8"))
     }
-    fn input_text(&mut self, s: &String) -> Result<(), IoError> {
+    pub(super) fn input_text(&mut self, s: &String) -> Result<(), IoError> {
         if s.len() > 1 << 20 {
             return Err(bad("input text bound"));
         }
         self.input(s.capacity() as u64)
     }
-    fn ast(&mut self, nodes: &Vec<ConfigNode>, depth: usize, count: &mut usize, span: u64) -> Result<(), IoError> {
+    pub(super) fn ast(&mut self, nodes: &Vec<ConfigNode>, depth: usize, count: &mut usize, span: u64) -> Result<(), IoError> {
         if depth > 32 {
             return Err(bad("AST depth"));
         }
@@ -164,12 +164,12 @@ impl Meter<'_, '_> {
         Ok(())
     }
 }
-fn word(bytes: &[u8], at: usize) -> Result<u32, IoError> {
+pub(super) fn word(bytes: &[u8], at: usize) -> Result<u32, IoError> {
     let end = at.checked_add(4).ok_or_else(|| bad("word overflow"))?;
     let value: [u8; 4] = bytes.get(at..end).ok_or_else(|| bad("short word"))?.try_into().map_err(|_| bad("word width"))?;
     Ok(u32::from_be_bytes(value))
 }
-fn raw_argument<'a>(a: &Argument, properties: &'a [RawProperty]) -> Result<(&'a [u8], usize), IoError> {
+pub(super) fn raw_argument<'a>(a: &Argument, properties: &'a [RawProperty]) -> Result<(&'a [u8], usize), IoError> {
     let p = properties.get(a.property_index).filter(|p| p.tag == 45).ok_or_else(|| bad("argument raw association"))?;
     let len = usize::try_from(word(&p.payload, 0)?).map_err(|_| bad("argument name length"))?;
     let end = 4usize.checked_add(len).ok_or_else(|| bad("name overflow"))?;

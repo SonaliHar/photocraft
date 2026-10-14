@@ -699,6 +699,9 @@ impl PointOperation {
     fn identity(self) -> bool {
         matches!(self, Self::Exposure { stops: 0.0, black_level: 0.0 } | Self::BrightnessContrast { brightness: 0.0, contrast: 1.0 })
             || matches!(self,Self::Levels{input_low,input_high,output_low,output_high} if input_low==output_low && input_high==output_high)
+            || matches!(self,
+                Self::AlphaClipPrecision { clip_low: false, clip_high: false, .. }
+                    | Self::AlphaClipFinitePrecision { clip_low: false, clip_high: false, .. })
     }
 }
 
@@ -816,6 +819,10 @@ pub fn try_apply(
     }
     Ok(out)
 }
+
+#[cfg(test)]
+#[path = "point/alpha_clip_identity_tests.rs"]
+mod alpha_clip_identity_tests;
 
 #[cfg(test)]
 mod integer_gray_temperature_tests {

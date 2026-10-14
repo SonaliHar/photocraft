@@ -100,6 +100,11 @@ impl<L> Prepared<'_, L> {
     pub fn requirements(&self) -> Requirements {
         self.requirements
     }
+    /// Prospective read-only ceiling for a consumer ROI. Concurrent calls may
+    /// consume it afterward; each evaluation still performs atomic admission.
+    pub fn remaining_evaluation_work(&self) -> u64 {
+        self.limits.work_units.saturating_sub(self.work.load(Ordering::Relaxed))
+    }
     /// Input is already caller-converted nonlinear RGB/unit alpha. This never
     /// converts native image pixels or claims an operation's hidden GIMP context.
     /// The supplied budget must be the same held enclosing ledger; per-pixel work

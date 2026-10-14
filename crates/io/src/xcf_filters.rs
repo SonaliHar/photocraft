@@ -222,6 +222,9 @@ mod configured_source_candidate;
 pub use configured_source_candidate::{
     CurvesMappingLimits, CurvesMappingRequirements, MappedCurvesSource, map_retained_curves_source,
 };
+#[path = "xcf_filters/levels_source_candidate.rs"]
+mod levels_source_candidate;
+pub use levels_source_candidate::{LevelsMappingLimits, LevelsMappingRequirements, MappedLevelsSource, map_retained_levels_source};
 
 fn color_to_alpha_arguments<P>(effect: &Effect<P>) -> Result<Vec<FilterArgument>, IoError> {
     if effect.version.as_deref() != Some("0:0") || effect.arguments.len() != 3 {
