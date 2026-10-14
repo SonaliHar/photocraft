@@ -115,3 +115,22 @@ opening/stale-cache/discarded-encoder/partial-edit regressions across depths. Li
 `cargo check -p photocraft-ui-egui` passed; native visible UI acceptance remains pending.
 The full opening harness's `cache-defer` mode requires `--features deferred-cache` and
 fresh compositors. Older reference builds remain compatible without that feature.
+
+## Mask materialization
+
+Retained single-channel masks reuse exact-length decoded buffers and convert sample byte
+order in place. Packed depth-1 or unusual plane lengths retain the original interleave
+fallback. Synthetic masks already discarded by existing vector/rendered-layer rules receive
+complete capped channel validation without materializing decoded pixels or tiles. Real-mask
+precedence, preferred vector blocks, malformed-channel warnings and absent-channel behavior
+remain unchanged.
+
+Adjacent Linux comparison with deferred caches on both sides: three-layer 181.6 → 181.5 ms
+(effectively unchanged); complex 101.7 → 98.7 ms, import 45.3 → 42.1 ms. See
+`perf/experiments/psd-open-linux-masks.json`. Both frozen signatures and representative GPU
+crops pass. Corpus-enabled suites passed 402 PSD and 594 IO tests, including warning parity,
+packed masks, decoder error parity and retained sample values at several depths.
+
+Upstream main advanced to `369704ac551e8e409800e423ff550c353d5522ef` with printing changes
+and was merged into this same branch. The measurements above isolate the mask change before
+that merge; affected integration checks are recorded separately.
