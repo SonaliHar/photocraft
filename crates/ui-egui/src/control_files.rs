@@ -10,6 +10,17 @@ pub fn hosted_save(app: &PhotocraftApp, command: &str) -> bool {
     command == "file.save" && app.jobs.host_target.as_ref().is_some_and(|(id, _, _)| app.session.active().is_some_and(|state| state.doc.id == *id))
 }
 
+/// Document `from` was replaced by `to`, and `to` is the same photo: the raw developed again for "Open", or the photo's own
+/// saved project continued in its place. A host's binding of `from` (`app.bind`) moves to `to`, so the editor's own Save keeps
+/// saving the photo for the host instead of asking where to save it. A binding of any other document stays as it is.
+pub(crate) fn rebind(app: &mut PhotocraftApp, from: photocraft_doc::DocId, to: photocraft_doc::DocId) {
+    if let Some(target) = app.jobs.host_target.as_mut()
+        && target.0 == from
+    {
+        target.0 = to;
+    }
+}
+
 #[cfg(test)]
 pub fn open(app: &mut PhotocraftApp, path: &str) -> Result<Started, String> {
     open_with_mode(app, path, false)

@@ -528,6 +528,7 @@ fn finish_redevelop(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen, 
     }
     if let Some(new_id) = app.session.documents().get(index).map(|st| st.doc.id) {
         crate::raw_workspace::claim(app, new_id);
+        crate::control_files::rebind(app, raw.document, new_id);
     }
     let warnings: Vec<String> =
         v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
@@ -1017,10 +1018,18 @@ pub(crate) fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
             if let Some(project) = raw.continue_from.clone() {
                 // The photo already has a full-editor document: go back to it, untouched.
                 app.camera_raw = None;
-                app.raw_workspace.expect_continue = true;
-                return match crate::control_files::open_with_camera_raw(app, &project, true, None)? {
-                    photocraft_engine::jobs::Started::Job(job) => Ok(json!({"job": job.0, "pending": true, "continued": project})),
-                    photocraft_engine::jobs::Started::Done(done) => Ok(done),
+                app.raw_workspace.expect_continue = Some(raw.document);
+                return match crate::control_files::open_with_camera_raw(app, &project, true, None) {
+                    Ok(photocraft_engine::jobs::Started::Job(job)) => Ok(json!({"job": job.0, "pending": true, "continued": project})),
+                    // Restored from memory (a save of it still in flight): it has landed already.
+                    Ok(photocraft_engine::jobs::Started::Done(done)) => {
+                        crate::raw_workspace::on_open_event(app, None, true);
+                        Ok(done)
+                    }
+                    Err(error) => {
+                        app.raw_workspace.expect_continue = None;
+                        Err(error)
+                    }
                 };
             }
             commit_open_raw(app, &params, &raw)?

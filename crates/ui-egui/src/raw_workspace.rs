@@ -26,8 +26,9 @@ pub struct State {
     /// Documents the workspace's own flows made (a raw's Camera Raw dialog, the document "Open" develops or
     /// continues): Camera Raw is already settled for them and must not open again by itself.
     claimed: std::collections::HashSet<DocId>,
-    /// "Open" is continuing a saved document: the next one an `app.open` produces is that document.
-    pub(crate) expect_continue: bool,
+    /// "Open" is continuing a saved document: the next one an `app.open` produces is that document, in place of
+    /// this one (the raw's).
+    pub(crate) expect_continue: Option<DocId>,
     /// The raw being browsed in Camera Raw: its document exists only to feed the dialog. While it is the active
     /// document and nobody has pressed Open or Cancel, nothing draws it (a 45 MP canvas costs seconds, and the host
     /// shows its own picture of the photo meanwhile), including after the dialog was left with Done.
@@ -120,11 +121,13 @@ pub(crate) fn claim(app: &mut PhotocraftApp, document: DocId) {
 }
 
 /// An `app.open` job ended. If "Open" was continuing a saved document, that document is now the active one:
-/// it is settled too. A raw opened for Camera Raw gets its dialog queued.
+/// it is settled too, and takes over a host's binding of the raw it replaced. A raw opened for Camera Raw gets
+/// its dialog queued.
 pub fn on_open_event(app: &mut PhotocraftApp, document: Option<DocId>, done: bool) {
-    if std::mem::take(&mut app.raw_workspace.expect_continue) && done {
+    if let (Some(replaced), true) = (app.raw_workspace.expect_continue.take(), done) {
         if let Some(id) = document.or_else(|| app.session.active().map(|st| st.doc.id)) {
             claim(app, id);
+            crate::control_files::rebind(app, replaced, id);
         }
         app.raw_workspace.end_shell();
         return;
@@ -1002,6 +1005,120 @@ mod tests {
         assert!(app.camera_raw.is_none(), "the saved document is the full editor's: Camera Raw must not open on it again");
     }
 
+    // --- the host's binding (native Save) follows the photo -----------------------------------------------
+
+    /// Binds the active document as a host does after its open (`app.bind`).
+    fn bind(app: &mut PhotocraftApp) -> photocraft_doc::DocId {
+        let id = app.session.active().unwrap().doc.id;
+        app.jobs.host_target = Some((id, "IMG.dng.pcraft".into(), "IMG.dng.photocraft.png".into()));
+        id
+    }
+
+    fn native_save_is_the_host_s(app: &PhotocraftApp) -> bool {
+        crate::control_files::hosted_save(app, "file.save")
+    }
+
+    #[test]
+    fn open_that_develops_the_raw_again_keeps_the_host_s_binding() {
+        for background in [false, true] {
+            let (mut app, _writes) = host_app(vec![("IMG.dng", synthetic_raw())]);
+            app.background_jobs = background;
+            let ctx = egui::Context::default();
+            open_in_camera_raw(&mut app, &ctx, spec(None));
+            let raw = bind(&mut app);
+            adjust(&mut app, &ctx, 1.0); // exposure acts on the sensor data: Open develops the raw again
+            let state = control(&mut app, &ctx, &json!({"commit": true})).unwrap();
+            if let Some(job) = state["result"]["job"].as_u64() {
+                let _ = app.session.wait_job(photocraft_engine::jobs::JobId(job));
+                for _ in 0..50 {
+                    crate::jobs_ui::tick(&mut app, &ctx);
+                    if app.raw_redevelop.is_none() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            }
+            let developed = app.session.active().unwrap().doc.id;
+            assert_ne!(developed, raw, "background {background}: a new document");
+            assert_eq!(app.jobs.host_target.as_ref().map(|t| t.0), Some(developed), "background {background}");
+            assert!(native_save_is_the_host_s(&app), "background {background}: Ctrl+S saves for the host, not Save As");
+        }
+    }
+
+    #[test]
+    fn open_of_a_stand_in_keeps_the_host_s_binding() {
+        let (mut app, _writes) = host_app(vec![("IMG.dng", big_raw())]);
+        let ctx = egui::Context::default();
+        open_in_camera_raw(&mut app, &ctx, spec(None));
+        let raw = bind(&mut app);
+        control(&mut app, &ctx, &json!({"commit": true})).unwrap();
+        let developed = app.session.active().unwrap().doc.id;
+        assert_ne!(developed, raw, "the full-size development replaced the stand-in");
+        assert!(native_save_is_the_host_s(&app));
+    }
+
+    #[test]
+    fn continuing_the_photo_s_saved_project_keeps_the_host_s_binding() {
+        let saved =
+            photocraft_doc::Document::new("saved edits", photocraft_geom::Size::new(8, 8), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        let project = photocraft_io::export(&saved, "IMG.dng.pcraft", &Default::default()).unwrap().bytes;
+        let (mut app, _writes) = host_app(vec![("IMG.dng", synthetic_raw()), ("IMG.dng.pcraft", project)]);
+        let ctx = egui::Context::default();
+        let mut with_project = spec(Some(1.0));
+        with_project.continue_from = Some("IMG.dng.pcraft".into());
+        open_in_camera_raw(&mut app, &ctx, with_project);
+        let raw = bind(&mut app);
+        let state = control(&mut app, &ctx, &json!({"commit": true})).unwrap();
+        app.session.wait_job(photocraft_engine::jobs::JobId(state["result"]["job"].as_u64().unwrap())).unwrap();
+        crate::jobs_ui::tick(&mut app, &ctx);
+        let continued = app.session.active().unwrap().doc.id;
+        assert_ne!(continued, raw);
+        assert!(native_save_is_the_host_s(&app), "Ctrl+S saves the continued project for the host");
+    }
+
+    #[test]
+    fn continuing_from_memory_keeps_the_binding_and_does_not_swallow_the_next_open() {
+        let (mut app, _writes) = host_app(vec![("IMG.dng", synthetic_raw()), ("NEXT.dng", synthetic_raw())]);
+        let ctx = egui::Context::default();
+        // A save of the photo is still in flight: the editor holds its snapshot.
+        let saved =
+            photocraft_doc::Document::new("saved edits", photocraft_geom::Size::new(8, 8), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        app.jobs.host_snapshots.insert("IMG.dng.pcraft".into(), (std::sync::Arc::new(saved), 7));
+        let mut with_project = spec(Some(1.0));
+        with_project.continue_from = Some("IMG.dng.pcraft".into());
+        open_in_camera_raw(&mut app, &ctx, with_project);
+        let raw = bind(&mut app);
+        let state = control(&mut app, &ctx, &json!({"commit": true})).unwrap();
+        assert!(state["result"]["job"].is_null(), "restored at once: {state}");
+        let continued = app.session.active().unwrap();
+        assert_eq!((continued.doc.name.as_str(), continued.revision), ("saved edits", 7));
+        assert_ne!(continued.doc.id, raw);
+        assert!(native_save_is_the_host_s(&app));
+        assert!(app.raw_workspace.expect_continue.is_none(), "the continuation has landed");
+        auto_open(&mut app, &ctx);
+        assert!(app.camera_raw.is_none(), "the continued document is settled");
+        // The next photo opens in Camera Raw, not taken for the continuation.
+        let next = open_in_camera_raw(&mut app, &ctx, spec(None));
+        assert_eq!(next["cameraRaw"]["dialog"], true, "{next}");
+        assert_eq!(camera_raw_ui::target_name(&app), Some("openRaw"));
+    }
+
+    #[test]
+    fn another_photo_replacing_the_bound_one_does_not_take_its_binding() {
+        let (mut app, _writes) = host_app(vec![("IMG.dng", synthetic_raw()), ("NEXT.dng", synthetic_raw())]);
+        let ctx = egui::Context::default();
+        open_in_camera_raw(&mut app, &ctx, spec(None));
+        let raw = bind(&mut app);
+        let started = crate::control_files::open_with_camera_raw(&mut app, "NEXT.dng", true, Some(spec(None))).unwrap();
+        if let photocraft_engine::jobs::Started::Job(job) = started {
+            app.session.wait_job(job).unwrap();
+        }
+        crate::jobs_ui::tick(&mut app, &ctx);
+        assert_ne!(app.session.active().unwrap().doc.id, raw);
+        assert_eq!(app.jobs.host_target.as_ref().map(|t| t.0), Some(raw), "the binding stays with the photo it was made for");
+        assert!(!native_save_is_the_host_s(&app), "until the host binds the new photo");
+    }
+
     /// A raw big enough to be browsed reduced: its longer side is more than twice the browsing size.
     fn big_raw() -> Vec<u8> {
         use photocraft_raw::testgen::{DngSpec, mosaic, scene};
@@ -1078,7 +1195,7 @@ mod tests {
         let job = state["result"]["job"].as_u64().unwrap();
         assert!(app.session.wait_job(photocraft_engine::jobs::JobId(job)).is_err(), "the project does not exist");
         crate::jobs_ui::tick(&mut app, &ctx);
-        assert!(!app.raw_workspace.expect_continue, "a failed open clears the expectation");
+        assert!(app.raw_workspace.expect_continue.is_none(), "a failed open clears the expectation");
     }
 
     #[test]
