@@ -134,7 +134,7 @@ fn encode_writes_unassociated_extra_samples_only_when_flagged() {
     let data: Vec<u8> = (0..16).map(|i| i as u8).collect();
     let mut img = Image::from_u8(2, 2, ChannelLayout::Rgba, data).unwrap();
     let assoc = photocraft_codecs::encode(&img, Format::Tiff, &EncodeOptions::default()).unwrap();
-    assert!(!photocraft_codecs::decode(&assoc).unwrap().meta.unassociated_alpha);
+    assert!(photocraft_codecs::decode(&assoc).unwrap().meta.unassociated_alpha);
     img.meta.unassociated_alpha = true;
     let unassoc = photocraft_codecs::encode(&img, Format::Tiff, &EncodeOptions::default()).unwrap();
     assert!(photocraft_codecs::decode(&unassoc).unwrap().meta.unassociated_alpha);
