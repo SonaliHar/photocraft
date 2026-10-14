@@ -198,6 +198,7 @@ pub mod xcf_selection_cmds;
 pub mod xcf_channel_state_cmds;
 pub mod xcf_channel_consumer;
 pub mod xcf_channel_stored_load;
+pub mod xcf_channel_gaussian_prepare;
 pub mod xcf_channel_name_cmds;
 pub mod xcf_channel_locks_cmds;
 pub mod xcf_channel_indicates_cmds;
@@ -1060,6 +1061,20 @@ impl Session {
         self.edit_index_with_interrupt(index, label, control, None, false, f)
     }
 
+    /// Reuses a caller-admitted runtime font through the final edit validator.
+    /// The borrowed handle is scoped to this transaction and is never stored in
+    /// the session, document, or history. All normal edit fences still apply.
+    pub fn edit_with_runtime_font_with_interrupt<R>(
+        &mut self,
+        label: &str,
+        font: &photocraft_text::xcf::runtime_font_input::PreparedRuntimeFont<'_>,
+        control: &photocraft_raster::Interrupt<'_>,
+        f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>,
+    ) -> Result<R> {
+        let index = self.active.ok_or(EngineError::NoDocument)?;
+        self.edit_index_font_input(index, label, control, None, false, Some(font), f)
+    }
+
     /// Commit to a caller-fenced resident document without changing tab focus.
     /// The caller must fence identity/revision and destination jobs before entry.
     pub(crate) fn edit_document_with_interrupt<R>(
@@ -1123,6 +1138,20 @@ impl Session {
         reset_channel_view: bool,
         f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>,
     ) -> Result<R> {
+        self.edit_index_font_input(index, label, control, target, reset_channel_view, None, f)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn edit_index_font_input<R>(
+        &mut self,
+        index: usize,
+        label: &str,
+        control: &photocraft_raster::Interrupt<'_>,
+        target: Option<(LayerTarget, Option<LayerId>)>,
+        reset_channel_view: bool,
+        font: Option<&photocraft_text::xcf::runtime_font_input::PreparedRuntimeFont<'_>>,
+        f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>,
+    ) -> Result<R> {
         control.check().map_err(|_| EngineError::Cancelled)?;
         let restrict = self.color_restrict;
         let sampler_map = if self.active == Some(index) { self.sampler_map.take() } else { None };
@@ -1158,7 +1187,10 @@ impl Session {
             }
             None => (st.selected_layers.clone(), st.layer_anchor),
         };
-        edit_validation::validate(&before, &mut doc, active, restrict, control)?;
+        match font {
+            Some(font) => edit_validation::validate_with_authorized_font(&before, &mut doc, active, restrict, font, control)?,
+            None => edit_validation::validate(&before, &mut doc, active, restrict, control)?,
+        }
         let snapshot = DocumentSnapshot::from_resident(Arc::new(doc))?;
         fix_selection_parts(&snapshot, active, &mut selected, &mut anchor);
         let layers = LayerTarget { active, selected: selected.clone() };

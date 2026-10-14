@@ -493,16 +493,41 @@ fn same_type(current: &FilterValue, replacement: &FilterValue) -> bool {
 }
 /// Immutable, cancellable validation seam for command staging and future worker dispatch.
 pub fn validate_current_pipeline_with_interrupt(doc: &Document, control: &Interrupt<'_>) -> Result<()> {
+    validate_current_pipeline_font_input(doc, None, control)
+}
+/// Reuses an already admitted runtime font for qualification and every render
+/// band. The original document/resource font authority gates remain unchanged.
+/// This is borrowed runtime input, never a serialized grant or locator lookup.
+pub fn validate_current_pipeline_with_authorized_font(
+    doc: &Document,
+    font: &photocraft_text::xcf::runtime_font_input::PreparedRuntimeFont<'_>,
+    control: &Interrupt<'_>,
+) -> Result<()> {
+    validate_current_pipeline_font_input(doc, Some(font), control)
+}
+fn validate_current_pipeline_font_input(
+    doc: &Document,
+    font: Option<&photocraft_text::xcf::runtime_font_input::PreparedRuntimeFont<'_>>,
+    control: &Interrupt<'_>,
+) -> Result<()> {
     doc.validate_xcf_state_with(control).map_err(|e| if control.cancelled() { EngineError::Cancelled } else { bad(SET, e.to_string()) })?;
     let bounds = doc.bounds();
     let pixels = u64::from(bounds.width()).checked_mul(u64::from(bounds.height())).ok_or_else(|| bad(SET, "canvas work overflow"))?;
     if pixels == 0 || pixels > 36_000_000 {
         return Err(bad(SET, "filter validation requires a nonempty canvas at most36MP"));
     }
-    let prepared = photocraft_compose::gimp_render::PreparedRenderer::new_with_interrupt(doc, control)
-        .map_err(|e| if control.cancelled() { EngineError::Cancelled } else { bad(SET, format!("unqualified filter pipeline: {e}")) })?;
-    let mut sampled = 0u64;
-    let mut resident = 0u64;
+    // Carry the admitted font receipt into this validation envelope. Reusing
+    // the handle does not perform another hash or create a fresh font budget.
+    let mut sampled = font.map(|font| font.requirements().work_units).unwrap_or(0);
+    let mut resident = font.map(|font| font.requirements().peak_bytes).unwrap_or(0);
+    if sampled > 36_000_000 * 512 || resident > 512 * 1024 * 1024 {
+        return Err(bad(SET, "authorized font exceeds filter validation envelope"));
+    }
+    let prepared = match font {
+        Some(font) => photocraft_compose::gimp_render::PreparedRenderer::new_with_authorized_font(doc, font, control),
+        None => photocraft_compose::gimp_render::PreparedRenderer::new_with_interrupt(doc, control),
+    }
+    .map_err(|e| if control.cancelled() { EngineError::Cancelled } else { bad(SET, format!("unqualified filter pipeline: {e}")) })?;
     let mut poll = |work| {
         use photocraft_cms::WideWork;
         use photocraft_compose::gimp_composite::CompositionError;

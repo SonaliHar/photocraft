@@ -781,8 +781,13 @@ pub(crate) fn link_stages_relative_controlled(src:&Profile,dst:&Profile,b:&mut c
 
 // Cooperative construction retains the original APIs and never populates CACHE.
 mod controlled;
-pub use controlled::TransformRequirements;
+pub use controlled::{TransformRequirements,EffectivePairRequirements};
 impl Transform {
+    /// Allocation-free prospective original-definition/effective-transfer pair.
+    /// Relative/no-BPC RGB/Gray analytical domain; no profiles or bytes copied.
+    pub fn effective_pair_requirements_with_control(basis:&Profile,source:crate::xcf_color::Encoding,working:crate::xcf_color::Encoding,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<EffectivePairRequirements>{
+        controlled::effective_pair_requirements(basis,source,working,limits,cancelled)
+    }
     pub fn requirements_with_control(src:&Profile,dst:&Profile,options:TransformOptions,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<TransformRequirements> {
         controlled::requirements(src,dst,options,limits,cancelled)
     }

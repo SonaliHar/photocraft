@@ -5,6 +5,28 @@ use photocraft_raster::Interrupt;
 
 #[inline(never)]
 pub(crate) fn validate(before: &DocumentSnapshot, doc: &mut Document, active: Option<LayerId>, restrict: Option<usize>, control: &Interrupt<'_>) -> Result<()> {
+    validate_font_input(before, doc, active, restrict, None, control)
+}
+/// A per-call borrowed input, retained only through validation. This grants no
+/// font registration, source qualification, or persistent document authority.
+pub(crate) fn validate_with_authorized_font(
+    before: &DocumentSnapshot,
+    doc: &mut Document,
+    active: Option<LayerId>,
+    restrict: Option<usize>,
+    font: &photocraft_text::xcf::runtime_font_input::PreparedRuntimeFont<'_>,
+    control: &Interrupt<'_>,
+) -> Result<()> {
+    validate_font_input(before, doc, active, restrict, Some(font), control)
+}
+fn validate_font_input(
+    before: &DocumentSnapshot,
+    doc: &mut Document,
+    active: Option<LayerId>,
+    restrict: Option<usize>,
+    font: Option<&photocraft_text::xcf::runtime_font_input::PreparedRuntimeFont<'_>>,
+    control: &Interrupt<'_>,
+) -> Result<()> {
     control.check().map_err(|_| EngineError::Cancelled)?;
     retained_surface_validation::validate_document(doc, control)
         .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { EngineError::Other(format!("invalid edited raster: {error}")) })?;
@@ -44,10 +66,21 @@ pub(crate) fn validate(before: &DocumentSnapshot, doc: &mut Document, active: Op
         })?;
         doc.xcf_state = Some(state);
     }
-    if xcf_vector_guard::has_live_sources(before) && photocraft_compose::gimp_render::PreparedRenderer::new_with_interrupt(before, control).is_ok() {
-        photocraft_compose::gimp_render::PreparedRenderer::new_with_interrupt(doc, control).map_err(|error| {
-            if control.cancelled() { EngineError::Cancelled } else { EngineError::Other(format!("cannot preserve live imported rendering: {error}")) }
-        })?;
+    if xcf_vector_guard::has_live_sources(before) {
+        let previous_qualified = match font {
+            Some(font) => photocraft_compose::gimp_render::PreparedRenderer::new_with_authorized_font(before, font, control),
+            None => photocraft_compose::gimp_render::PreparedRenderer::new_with_interrupt(before, control),
+        }
+        .is_ok();
+        if previous_qualified {
+            match font {
+                Some(font) => photocraft_compose::gimp_render::PreparedRenderer::new_with_authorized_font(doc, font, control),
+                None => photocraft_compose::gimp_render::PreparedRenderer::new_with_interrupt(doc, control),
+            }
+            .map_err(|error| {
+                if control.cancelled() { EngineError::Cancelled } else { EngineError::Other(format!("cannot preserve live imported rendering: {error}")) }
+            })?;
+        }
     }
     control.check().map_err(|_| EngineError::Cancelled)?;
     Ok(())

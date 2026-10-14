@@ -426,6 +426,26 @@ pub(super) fn reserve_execution<'a>(
 ) -> Result<ExecutionReservation<'a>> {
     reserve_execution_domains(external, roi, domain, domain, limits, nodes, edges, control)
 }
+/// Allocation-free envelope shared by the executor and callers that need an
+/// additional structural plan before preparing operation-owned data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlanningRequirements {
+    pub index_bytes: u64,
+    pub work_units: u64,
+}
+pub fn planning_requirements(nodes: usize, edges: usize) -> Result<PlanningRequirements> {
+    if nodes > 4096 || edges > 16384 {
+        return Err(GraphExecuteError::InvalidPlan);
+    }
+    let index_bytes = add(
+        add(count(nodes)?.checked_mul(512).ok_or(GraphExecuteError::IndexLimit)?, count(edges)?.checked_mul(256).ok_or(GraphExecuteError::IndexLimit)?)?,
+        4096,
+    )?;
+    Ok(PlanningRequirements {
+        index_bytes,
+        work_units: u64::try_from(super::graph_plan::MAX_WORK).map_err(|_| GraphExecuteError::WorkLimit)?,
+    })
+}
 #[allow(clippy::too_many_arguments)]
 pub(super) fn reserve_execution_domains<'a>(
     external: Option<&'a Surface>,
@@ -457,10 +477,7 @@ pub(super) fn reserve_execution_domains<'a>(
     // One conservative allowance covers retained plan indices plus peak planner
     // scratch and executor metadata/borrow bindings. Planner scratch is freed
     // before execution; a second plan is never constructed or retained.
-    let index_charge = add(
-        add(count(nodes)?.checked_mul(512).ok_or(GraphExecuteError::IndexLimit)?, count(edges)?.checked_mul(256).ok_or(GraphExecuteError::IndexLimit)?)?,
-        4096,
-    )?;
+    let index_charge = planning_requirements(nodes, edges)?.index_bytes;
     if index_charge > limits.index_bytes || index_charge > limits.resident_bytes {
         return Err(GraphExecuteError::IndexLimit);
     }

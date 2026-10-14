@@ -92,6 +92,9 @@ pub mod xcf_graphs;
 pub mod xcf_graph_candidate;
 pub use xcf_filters::graph_argument_candidate;
 pub mod xcf_import;
+pub use xcf_import::{
+    AssembledStoredChannel, CorrespondenceRequirements, NamespaceBacking, StoredChannelCorrespondence, assemble_owned_stored_channel,
+};
 mod xcf_link_sources;
 pub mod xcf_modified_sources;
 mod xcf_ordinary_source;

@@ -96,6 +96,10 @@ impl OwnedConfiguredColorCandidate<'_> {
 /// Both profile/encoding and constructor envelopes are admitted before copying.
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_owned_color_candidate<'a>(node:&'a FilterNode,binding:SourceBinding<'a>,sampling:CurveSamplePolicy,actual_source:WorkingContext,source_profile:&Profile,working_profile:&Profile,limits:Limits,control:&Interrupt<'_>)->Result<OwnedConfiguredColorCandidate<'a>,RasterInputError>{
+ prepare_owned_with_envelope(node,binding,sampling,actual_source,source_profile,working_profile,limits,control,None)
+}
+#[allow(clippy::too_many_arguments)]
+fn prepare_owned_with_envelope<'a>(node:&'a FilterNode,binding:SourceBinding<'a>,sampling:CurveSamplePolicy,actual_source:WorkingContext,source_profile:&Profile,working_profile:&Profile,limits:Limits,control:&Interrupt<'_>,upper:Option<&photocraft_cms::transform::EffectivePairRequirements>)->Result<OwnedConfiguredColorCandidate<'a>,RasterInputError>{
  poll(control)?;
  if limits.resident_bytes==0||limits.resident_bytes>MAX_CHECKED_RASTER_BYTES||!matches!(actual_source.color_channels,1|3)||actual_source.color_channels!=source_profile.channels()||binding.working.color_channels!=working_profile.channels()||actual_source.alpha!=binding.working.alpha{return Err(RasterInputError::UnsupportedConversion);}
  let bound=bind_source_node_with_sample_policy(node,binding,sampling,control)?;
@@ -120,6 +124,10 @@ pub fn prepare_owned_color_candidate<'a>(node:&'a FilterNode,binding:SourceBindi
  let options=photocraft_cms::transform::TransformOptions{intent:Intent::RelativeColorimetric,bpc:false,..Default::default()};
  let f=Transform::requirements_with_control(source_profile,working_profile,options,pair_limits,&cancelled).map_err(cms_error)?;
  let r=Transform::requirements_with_control(working_profile,source_profile,options,pair_limits,&cancelled).map_err(cms_error)?;
+ if let Some(upper)=upper{
+  for (actual,bound) in [(se,upper.source_encoding),(we,upper.working_encoding)]{if actual.retained_bytes>bound.retained_bytes||actual.peak_resident_bytes>bound.peak_resident_bytes||actual.work_units>bound.work_units||actual.encoded_bytes_upper_bound>bound.encoded_bytes_upper_bound{return Err(RasterInputError::LimitExceeded);}}
+  for (actual,bound) in [(f,upper.forward),(r,upper.inverse)]{if actual.retained_bytes>bound.retained_bytes||actual.peak_resident_bytes>bound.peak_resident_bytes||actual.work_units>bound.work_units{return Err(RasterInputError::LimitExceeded);}}
+ }
  let pair_peak=f.peak_resident_bytes.checked_add(r.peak_resident_bytes).ok_or(RasterInputError::LimitExceeded)?;
  let pair_work=mul(add(f.work_units,r.work_units)?,3)?;
  if pair_peak>pair_limits.resident_bytes||pair_work>pair_limits.work_units{return Err(RasterInputError::LimitExceeded);}
@@ -128,8 +136,10 @@ pub fn prepare_owned_color_candidate<'a>(node:&'a FilterNode,binding:SourceBindi
  let source_bytes=source_profile.to_bytes_with_control(lowered(cms_limits,we.peak_resident_bytes,we.work_units)?,&cancelled).map_err(cms_error)?;
  let working_bytes=working_profile.to_bytes_with_control(lowered(cms_limits,se.peak_resident_bytes,se.work_units)?,&cancelled).map_err(cms_error)?;
  if digest(&source_bytes,source_hash_bound,control)?!=actual_source.profile_identity||digest(&working_bytes,working_hash_bound,control)?!=binding.working.profile_identity{return Err(RasterInputError::UnsupportedConversion);}
- let forward=Transform::with_options_with_control(source_profile,working_profile,options,lowered(pair_limits,r.peak_resident_bytes,mul(r.work_units,3)?)?,&cancelled).map_err(cms_error)?;
- let inverse=Transform::with_options_with_control(working_profile,source_profile,options,lowered(pair_limits,f.peak_resident_bytes,mul(f.work_units,3)?)?,&cancelled).map_err(cms_error)?;
+ let forward_limits=match upper{Some(bound)=>phase_limits(bound.forward.peak_resident_bytes,mul(bound.forward.work_units,3)?)?,None=>lowered(pair_limits,r.peak_resident_bytes,mul(r.work_units,3)?)?};
+ let inverse_limits=match upper{Some(bound)=>phase_limits(bound.inverse.peak_resident_bytes,mul(bound.inverse.work_units,3)?)?,None=>lowered(pair_limits,f.peak_resident_bytes,mul(f.work_units,3)?)?};
+ let forward=Transform::with_options_with_control(source_profile,working_profile,options,forward_limits,&cancelled).map_err(cms_error)?;
+ let inverse=Transform::with_options_with_control(working_profile,source_profile,options,inverse_limits,&cancelled).map_err(cms_error)?;
  let retained=add(forward.retained_bytes_with_control(pair_limits,&cancelled).map_err(cms_error)? as u64,inverse.retained_bytes_with_control(pair_limits,&cancelled).map_err(cms_error)? as u64)?;
  let (_,fw)=transform_requirements(&forward,control)?;let (_,rw)=transform_requirements(&inverse,control)?;
  // The actual pipeline scan is prepaid from the existing bounded 32-stage,
@@ -226,6 +236,27 @@ mod tests {
   assert_eq!(profile.to_bytes().as_slice(),before.as_slice());
  }
  #[test]
+ fn complete_node_census_precedes_effective_copies_and_bounds_real_constructor(){
+  use photocraft_cms::xcf_color::Encoding;
+  let mut node=fixture();node.arguments[0].value=FilterValue::Enum{domain:"gimp:levels::trc".into(),value:0};let original_node=node.clone();let basis=photocraft_cms::Builtin::Srgb.profile();let bytes=basis.to_bytes();let actual=context(basis);
+  let schema=crate::gimp_configured_candidate::RetainedSchemaIdentity{xcf_version:22,expected_epoch:"owned-test",schema_sha256:LEVELS_SCHEMA};
+  let required=profile_owned_color_requirements(&node,schema,basis,Encoding::NonlinearProfile,actual,limits(),&Interrupt::NONE).unwrap();
+  let quota=Limits{resident_bytes:required.peak_resident_bytes,work_units:required.work_units};
+  let candidate=prepare_profile_owned_color_candidate(&node,schema,basis,Encoding::NonlinearProfile,actual,quota,&Interrupt::NONE).unwrap();
+  assert!(candidate.retained_bytes()<=required.retained_bytes);assert_eq!(candidate.preparation_work(),required.work_units);assert_eq!(candidate.original_node(),&original_node);assert_eq!(basis.to_bytes().as_slice(),bytes.as_slice());
+  assert!(matches!(prepare_profile_owned_color_candidate(&node,schema,basis,Encoding::NonlinearProfile,actual,Limits{resident_bytes:required.peak_resident_bytes-1,..quota},&Interrupt::NONE),Err(RasterInputError::LimitExceeded)));
+  assert!(matches!(prepare_profile_owned_color_candidate(&node,schema,basis,Encoding::NonlinearProfile,actual,Limits{work_units:required.work_units-1,..quota},&Interrupt::NONE),Err(RasterInputError::LimitExceeded)));
+  assert_eq!(node,original_node);
+ }
+ #[test]
+ fn whole_node_borrowed_census_preserves_malformed_source_and_propagates_cancel(){
+  use photocraft_cms::xcf_color::Encoding;
+  let node=fixture();let basis=photocraft_cms::Builtin::Srgb.profile();let actual=context(basis);let schema=crate::gimp_configured_candidate::RetainedSchemaIdentity{xcf_version:22,expected_epoch:"owned-test",schema_sha256:LEVELS_SCHEMA};let stop=||true;
+  assert!(matches!(profile_owned_color_requirements(&node,schema,basis,Encoding::NonlinearProfile,actual,limits(),&Interrupt::cancel_only(&stop)),Err(RasterInputError::Cancelled)));
+  let mut malformed=basis.clone();malformed.matrix.as_mut().unwrap()[0][0]=f64::NAN;let before=malformed.to_bytes();
+  assert!(matches!(profile_owned_color_requirements(&node,schema,&malformed,Encoding::NonlinearProfile,actual,limits(),&Interrupt::NONE),Err(RasterInputError::UnsupportedConversion)));assert_eq!(malformed.to_bytes().as_slice(),before.as_slice());
+ }
+ #[test]
  fn changed_profile_identity_schema_and_resource_limits_refuse_before_roi() {
   let node=fixture();let profile=photocraft_cms::Builtin::Srgb.profile();let context=context(profile);let mut stale=context;stale.profile_identity[0]^=1;
   assert!(matches!(prepare_owned_color_candidate(&node,binding(context),CurveSamplePolicy::RequireExact256,stale,profile,profile,limits(),&Interrupt::NONE),Err(RasterInputError::UnsupportedConversion)));
@@ -260,61 +291,88 @@ pub fn prepare_retained_color_candidate<'a>(
  poll(control)?;Ok(candidate)
 }
 
-/// One caller-explicit base definition, with no builtin/assigned-profile fallback.
-/// Current encoding is explicit and must match actual_source. Only the working
-/// transfer comes from the retained five-selector TRC. The generated effective
-/// definitions retain existing CMS override/writer behavior and exact byte hashes.
+/// Complete prospective owned-node envelope. All profile/ICC/pipeline owners
+/// are derived from constructor-owned borrowed CMS requirements, not caller sizes.
+#[derive(Clone,Copy,Debug)]
+pub struct ProfileOwnedColorRequirements {pub peak_resident_bytes:u64,pub retained_bytes:u64,pub work_units:u64}
+struct ProfileOwnedPlan {
+ required:ProfileOwnedColorRequirements,
+ profiles:photocraft_cms::transform::EffectivePairRequirements,
+ working_encoding:photocraft_cms::xcf_color::Encoding,
+ owned_work:u64,
+}
+fn phase_limits(bytes:usize,work:u64)->Result<control::Limits,RasterInputError>{
+ let maximum=control::Limits::default();if bytes>maximum.resident_bytes||work>maximum.work_units{return Err(RasterInputError::LimitExceeded);}
+ Ok(control::Limits{resident_bytes:bytes,work_units:work})
+}
 #[allow(clippy::too_many_arguments)]
-pub fn prepare_profile_owned_color_candidate<'a>(
- node:&'a FilterNode,
- schema:crate::gimp_configured_candidate::RetainedSchemaIdentity<'a>,
- basis:&Profile,
- current_encoding:photocraft_cms::xcf_color::Encoding,
- actual_source:WorkingContext,
- limits:Limits,
- control:&Interrupt<'_>,
-)->Result<OwnedConfiguredColorCandidate<'a>,RasterInputError>{
- use photocraft_cms::xcf_color::{self,Encoding};
- use photocraft_algo::gimp::configured::Transfer;
+fn profile_owned_plan(node:&FilterNode,schema:crate::gimp_configured_candidate::RetainedSchemaIdentity<'_>,basis:&Profile,current_encoding:photocraft_cms::xcf_color::Encoding,actual_source:WorkingContext,limits:Limits,control:&Interrupt<'_>)->Result<ProfileOwnedPlan,RasterInputError>{
+ use photocraft_cms::xcf_color::Encoding;use photocraft_algo::gimp::configured::Transfer;
  poll(control)?;
- if limits.work_units<CONFIG_WORK{return Err(RasterInputError::LimitExceeded);}
+ if limits.resident_bytes==0||limits.resident_bytes>MAX_CHECKED_RASTER_BYTES||limits.work_units<CONFIG_WORK{return Err(RasterInputError::LimitExceeded);}
  let working_transfer=crate::gimp_configured_candidate::retained_source_transfer(node,schema,control)?;
  let source_transfer=match current_encoding{Encoding::Linear=>Transfer::Linear,Encoding::NonlinearProfile=>Transfer::NonlinearProfile,Encoding::Perceptual=>Transfer::Perceptual};
  if actual_source.transfer!=source_transfer||actual_source.color_channels!=basis.channels()||!matches!(basis.color_space,photocraft_cms::ColorSpace::Rgb|photocraft_cms::ColorSpace::Gray){return Err(RasterInputError::UnsupportedConversion);}
  let working_encoding=match working_transfer{Transfer::Linear=>Encoding::Linear,Transfer::NonlinearProfile=>Encoding::NonlinearProfile,Transfer::Perceptual=>Encoding::Perceptual};
- if limits.resident_bytes==0||limits.resident_bytes>MAX_CHECKED_RASTER_BYTES{return Err(RasterInputError::LimitExceeded);}
- let maximum=control::Limits::default();
- let cms_limits=control::Limits{resident_bytes:usize::try_from(limits.resident_bytes.min(maximum.resident_bytes as u64)).map_err(|_|RasterInputError::LimitExceeded)?,work_units:limits.work_units.min(maximum.work_units)};
- let cancelled=||control.cancelled();
- let validation_work=profile_domain(basis,cms_limits,control)?;
- let cms_limits=lowered(cms_limits,0,validation_work)?;
- let source_req=xcf_color::effective_profile_requirements_with_control(basis,current_encoding,cms_limits,&cancelled).map_err(cms_error)?;
- let working_req=xcf_color::effective_profile_requirements_with_control(basis,working_encoding,cms_limits,&cancelled).map_err(cms_error)?;
- let profile_peak=source_req.peak_resident_bytes.checked_add(working_req.peak_resident_bytes).ok_or(RasterInputError::LimitExceeded)?;
- let mut prior_work=add(mul(add(source_req.work_units,working_req.work_units)?,3)?,CONFIG_WORK)?;
- if profile_peak>cms_limits.resident_bytes||prior_work>cms_limits.work_units{return Err(RasterInputError::LimitExceeded);}
- let source_profile=xcf_color::effective_profile_from_definition_with_control(basis,current_encoding,lowered(cms_limits,working_req.peak_resident_bytes,mul(working_req.work_units,3)?)?,&cancelled).map_err(cms_error)?;
- let working_profile=xcf_color::effective_profile_from_definition_with_control(basis,working_encoding,lowered(cms_limits,source_req.peak_resident_bytes,mul(source_req.work_units,3)?)?,&cancelled).map_err(cms_error)?;
- // The base owner remains outside the new pair's source/working profile census.
- let basis_bytes=basis.clone_requirements_with_control(cms_limits,&cancelled).map_err(cms_error)?.retained_bytes;
- let source_bytes=source_profile.clone_requirements_with_control(cms_limits,&cancelled).map_err(cms_error)?.retained_bytes;
- let working_bytes=working_profile.clone_requirements_with_control(cms_limits,&cancelled).map_err(cms_error)?.retained_bytes;
- let models=basis_bytes.checked_add(source_bytes).and_then(|n|n.checked_add(working_bytes)).ok_or(RasterInputError::LimitExceeded)?;
- let hash_limits=lowered(cms_limits,models,prior_work)?;
- let encoded=working_profile.encode_requirements_with_control(hash_limits,&cancelled).map_err(cms_error)?;
- let hash_bound=encoded.encoded_bytes_upper_bound.max(encoded.retained_bytes);
- let hash_work=add(mul(encoded.work_units,3)?,hash_bound as u64)?;
- if hash_work>hash_limits.work_units||encoded.peak_resident_bytes>hash_limits.resident_bytes{return Err(RasterInputError::LimitExceeded);}
+ let maximum=control::Limits::default();let lower=control::Limits{resident_bytes:usize::try_from(limits.resident_bytes.min(maximum.resident_bytes as u64)).map_err(|_|RasterInputError::LimitExceeded)?,work_units:limits.work_units.min(maximum.work_units)};
+ profile_domain(basis,lower,control)?;
+ let profiles=Transform::effective_pair_requirements_with_control(basis,current_encoding,working_encoding,lower,&||control.cancelled()).map_err(cms_error)?;
+ let source_hash_bound=profiles.source_encoding.encoded_bytes_upper_bound.max(profiles.source_encoding.retained_bytes);
+ let working_hash_bound=profiles.working_encoding.encoded_bytes_upper_bound.max(profiles.working_encoding.retained_bytes);
+ let encoding_work=add(mul(add(profiles.source_encoding.work_units,profiles.working_encoding.work_units)?,3)?,add(source_hash_bound as u64,working_hash_bound as u64)?)?;
+ let pair_work=mul(add(profiles.forward.work_units,profiles.inverse.work_units)?,3)?;
+ let owned_work=add(add(add(mul(CONFIG_WORK,2)?,CENSUS_WORK)?,mul(PROFILE_VALIDATION_WORK,2)?)?,add(encoding_work,pair_work)?)?;
+ let effective_work=mul(add(profiles.source_profile.work_units,profiles.working_profile.work_units)?,3)?;
+ let hash_work=add(mul(profiles.working_encoding.work_units,3)?,working_hash_bound as u64)?;
+ // Two complete borrowed census passes cover graph preadmission and the actual
+ // constructor's recheck; construction phase work is separately reserved below.
+ let census=add(add(add(PROFILE_VALIDATION_WORK,CONFIG_WORK)?,add(profiles.source_profile.work_units,profiles.working_profile.work_units)?)?,add(add(profiles.source_encoding.work_units,profiles.working_encoding.work_units)?,add(profiles.forward.work_units,profiles.inverse.work_units)?)?)?;
+ let work_units=add(add(add(add(mul(census,2)?,effective_work)?,hash_work)?,owned_work)?,CONFIG_WORK)?;
+ let mut peak=usize::try_from(CONFIG_BYTES).map_err(|_|RasterInputError::LimitExceeded)?;
+ for bytes in [profiles.original_retained_bytes,profiles.source_profile.peak_resident_bytes,profiles.working_profile.peak_resident_bytes,profiles.source_encoding.peak_resident_bytes,profiles.working_encoding.peak_resident_bytes,profiles.forward.peak_resident_bytes,profiles.inverse.peak_resident_bytes]{peak=peak.checked_add(bytes).ok_or(RasterInputError::LimitExceeded)?;}
+ let retained=profiles.original_retained_bytes.checked_add(profiles.forward.peak_resident_bytes).and_then(|n|n.checked_add(profiles.inverse.peak_resident_bytes)).ok_or(RasterInputError::LimitExceeded)?;
+ let required=ProfileOwnedColorRequirements{peak_resident_bytes:u64::try_from(peak).map_err(|_|RasterInputError::LimitExceeded)?,retained_bytes:u64::try_from(retained).map_err(|_|RasterInputError::LimitExceeded)?,work_units};
+ if required.peak_resident_bytes>limits.resident_bytes||required.work_units>limits.work_units{return Err(RasterInputError::LimitExceeded);}
+ // Each eventual builder receives a fixed derived subquota; do not clamp or
+ // reset a full CMS budget after earlier phases have retained their owners.
+ phase_limits(profiles.source_profile.peak_resident_bytes,mul(profiles.source_profile.work_units,3)?)?;
+ phase_limits(profiles.working_profile.peak_resident_bytes,mul(profiles.working_profile.work_units,3)?)?;
+ phase_limits(profiles.working_encoding.peak_resident_bytes,mul(profiles.working_encoding.work_units,3)?)?;
+ phase_limits(profiles.forward.peak_resident_bytes,mul(profiles.forward.work_units,3)?)?;
+ phase_limits(profiles.inverse.peak_resident_bytes,mul(profiles.inverse.work_units,3)?)?;
+ poll(control)?;Ok(ProfileOwnedPlan{required,profiles,working_encoding,owned_work})
+}
+/// Allocation-free whole-node census before effective/profile/hash/pair copies.
+/// Original node/source/graph backing remains the enclosing owner's reservation.
+#[allow(clippy::too_many_arguments)]
+pub fn profile_owned_color_requirements(node:&FilterNode,schema:crate::gimp_configured_candidate::RetainedSchemaIdentity<'_>,basis:&Profile,current_encoding:photocraft_cms::xcf_color::Encoding,actual_source:WorkingContext,limits:Limits,control:&Interrupt<'_>)->Result<ProfileOwnedColorRequirements,RasterInputError>{
+ profile_owned_plan(node,schema,basis,current_encoding,actual_source,limits,control).map(|plan|plan.required)
+}
+/// One explicit original definition and current encoding. Working transfer comes
+/// only from the retained selector/TRC state; no absent/default profile inference.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_profile_owned_color_candidate<'a>(node:&'a FilterNode,schema:crate::gimp_configured_candidate::RetainedSchemaIdentity<'a>,basis:&Profile,current_encoding:photocraft_cms::xcf_color::Encoding,actual_source:WorkingContext,limits:Limits,control:&Interrupt<'_>)->Result<OwnedConfiguredColorCandidate<'a>,RasterInputError>{
+ use photocraft_cms::xcf_color;
+ // The complete envelope is checked before either effective definition exists.
+ let plan=profile_owned_plan(node,schema,basis,current_encoding,actual_source,limits,control)?;let profiles=plan.profiles;let cancelled=||control.cancelled();
+ let source_profile=xcf_color::effective_profile_from_definition_with_control(basis,current_encoding,phase_limits(profiles.source_profile.peak_resident_bytes,mul(profiles.source_profile.work_units,3)?)?,&cancelled).map_err(cms_error)?;
+ let working_profile=xcf_color::effective_profile_from_definition_with_control(basis,plan.working_encoding,phase_limits(profiles.working_profile.peak_resident_bytes,mul(profiles.working_profile.work_units,3)?)?,&cancelled).map_err(cms_error)?;
+ let source_model=source_profile.clone_requirements_with_control(phase_limits(profiles.source_profile.peak_resident_bytes,mul(profiles.source_profile.work_units,3)?)?,&cancelled).map_err(cms_error)?;
+ let working_model=working_profile.clone_requirements_with_control(phase_limits(profiles.working_profile.peak_resident_bytes,mul(profiles.working_profile.work_units,3)?)?,&cancelled).map_err(cms_error)?;
+ if source_model.retained_bytes>profiles.source_profile.peak_resident_bytes||working_model.retained_bytes>profiles.working_profile.peak_resident_bytes{return Err(RasterInputError::LimitExceeded);}
+ let hash_bound=profiles.working_encoding.encoded_bytes_upper_bound.max(profiles.working_encoding.retained_bytes);
+ let hash_limits=phase_limits(profiles.working_encoding.peak_resident_bytes,mul(profiles.working_encoding.work_units,3)?)?;
  let bytes=working_profile.to_bytes_with_control(hash_limits,&cancelled).map_err(cms_error)?;
  let working_identity=digest(&bytes,hash_bound,control)?;drop(bytes);
- prior_work=add(prior_work,hash_work)?;
  let identity=crate::gimp_configured_candidate::RetainedSourceIdentity{xcf_version:schema.xcf_version,expected_epoch:schema.expected_epoch,schema_sha256:schema.schema_sha256,profile_identity:working_identity,color_channels:basis.channels(),alpha:actual_source.alpha};
- let candidate_limits=Limits{resident_bytes:limits.resident_bytes.checked_sub(basis_bytes as u64).ok_or(RasterInputError::LimitExceeded)?,work_units:limits.work_units.checked_sub(prior_work).and_then(|n|n.checked_sub(validation_work)).ok_or(RasterInputError::LimitExceeded)?};
- let mut candidate=prepare_retained_color_candidate(node,identity,actual_source,&source_profile,&working_profile,candidate_limits,control)?;
- candidate.preparation_work=add(add(candidate.preparation_work,prior_work)?,validation_work)?;
- // Conservatively carry the caller's base owner during rendering as well; shared
- // encoded Arc ownership does not lower the existing known-capacity reservation.
- candidate.retained_bytes=add(candidate.retained_bytes,basis_bytes as u64)?;
- candidate.ceiling=limits;
- poll(control)?;Ok(candidate)
+ let candidate_limits=Limits{resident_bytes:limits.resident_bytes.checked_sub(profiles.original_retained_bytes as u64).ok_or(RasterInputError::LimitExceeded)?,work_units:plan.owned_work};
+ let retained_plan=crate::gimp_configured_candidate::prepare_retained_source_plan(node,identity,Limits{resident_bytes:CONFIG_BYTES,work_units:CONFIG_WORK},control)?;
+ let lower_candidate=Limits{resident_bytes:candidate_limits.resident_bytes,work_units:candidate_limits.work_units.checked_sub(CONFIG_WORK).ok_or(RasterInputError::LimitExceeded)?};
+ let mut candidate=prepare_owned_with_envelope(node,retained_plan.binding(),CurveSamplePolicy::RequireExact256,actual_source,&source_profile,&working_profile,lower_candidate,control,Some(&profiles))?;
+ candidate.preparation_work=add(candidate.preparation_work,CONFIG_WORK)?;
+ candidate.retained_bytes=add(candidate.retained_bytes,profiles.original_retained_bytes as u64)?;
+ if candidate.retained_bytes>plan.required.retained_bytes||candidate.preparation_work>plan.owned_work{return Err(RasterInputError::LimitExceeded);}
+ // Keep the admitted aggregate work/residency through rendering; no upstream
+ // graph/source reservation is refunded when temporary definitions are dropped.
+ candidate.preparation_work=plan.required.work_units;candidate.ceiling=limits;poll(control)?;Ok(candidate)
 }

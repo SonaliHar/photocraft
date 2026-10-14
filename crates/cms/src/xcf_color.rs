@@ -768,7 +768,7 @@ fn controlled_validate(p:&Profile,b:&mut crate::control::Budget<'_>)->crate::con
 pub fn validate_profile_with_control(profile:&Profile,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<()> {
  let mut b=crate::control::Budget::new(limits,cancelled)?;b.retained(profile.controlled_retained_bytes(&b)?)?;controlled_validate(profile,&mut b)
 }
-fn transfer_recipe(encoding:Encoding)->Option<(&'static str,Curve)>{match encoding{Encoding::NonlinearProfile=>None,Encoding::Linear=>Some((" (XCF Linear samples)",Curve::Identity)),Encoding::Perceptual=>Some((" (XCF Perceptual samples)",crate::curve::srgb_trc()))}}
+pub(crate) fn transfer_recipe(encoding:Encoding)->Option<(&'static str,Curve)>{match encoding{Encoding::NonlinearProfile=>None,Encoding::Linear=>Some((" (XCF Linear samples)",Curve::Identity)),Encoding::Perceptual=>Some((" (XCF Perceptual samples)",crate::curve::srgb_trc()))}}
 /// Borrowed admission before cloning, description append or ICC output allocation.
 pub fn effective_profile_requirements_with_control(profile:&Profile,encoding:Encoding,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<EffectiveProfileRequirements> {
  use crate::control::{Budget,Error};let mut b=Budget::new(limits,cancelled)?;let retained=profile.controlled_retained_bytes(&b)?;b.retained(retained)?;controlled_validate(profile,&mut b)?;

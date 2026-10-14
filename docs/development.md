@@ -554,6 +554,18 @@ feature plan is `specs/002-full-xcf-import/tasks.md`; its implementation table
 records code present while its checkboxes retain the full acceptance criteria.
 Test execution is deferred during the user-requested implementation pass.
 
+Explicit configured-graph preparation validates retained node, port and topology
+witnesses before allocating CMS pairs, with constructor-derived all-node quotas
+and an immutable execution partition. The Vibrance candidate consumes a controlled
+Linear RGB/physical LCh Float provider; its input is an explicitly converted stage.
+Prepared external-font handles are reused by text qualification, render jobs and
+final edit validation, with no document/history font grant. Owned PNG16 preparation
+requires exact original/current/decoded/resolved ICC bytes, verified resource
+hashes and all-chunk CRCs. Stored-channel correspondence is an opt-in selective IO
+route retaining its independent decode and checking native raw planes, defaults
+and padded tiles. Full-scene import, whole-filter channel semantics and normal
+qualification are separate unfinished work; these APIs return private candidates.
+
 Image Adjustments now have native RGB/Gray routes for Invert, Threshold,
 Posterize, Levels, Curves, and explicit legacy Brightness/Contrast. Numeric Gray
 mask/channel/Quick Mask targets have corresponding routes. They retain original

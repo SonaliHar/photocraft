@@ -23,6 +23,18 @@ pub struct ProfileOwnedBinding<'a> {
  parameters:ProfileOwnedParameters<'a>,
  candidate:OwnedConfiguredColorCandidate<'a>,
 }
+impl<'a> ProfileOwnedBinding<'a> {
+ pub(crate) fn execution_parameters(&self)->&ProfileOwnedParameters<'a>{&self.parameters}
+ pub(crate) fn execution_original(&self)->&FilterNode{self.candidate.original_node()}
+ pub(crate) fn execution_retained(&self)->u64{self.candidate.retained_bytes()}
+ pub(crate) fn execution_preparation_work(&self)->u64{self.candidate.preparation_work()}
+ /// Execute an explicitly bound graph with already-owned sources. Original
+ /// source schema, outer composition and filesystem authority are not inferred.
+ #[allow(clippy::too_many_arguments)]
+ pub fn execute_graph<'s>(graph:&photocraft_doc::xcf_filters::FilterGraph,bindings:&[&ProfileOwnedBinding<'_>],sources:&[crate::gimp_configured_graph_execution::OwnedSource<'_>],backing:&[&[u8]],external:Option<&'s photocraft_raster::Surface>,roi:Rect,external_domain:ExecutionDomain,assignments:&[photocraft_algo::gimp::graph_execute::DomainAssignment],max_depth:usize,limits:photocraft_algo::gimp::graph_execute::ExecutionLimits,control:&Interrupt<'_>)->Result<photocraft_algo::gimp::graph_execute::GraphOutput<'s>,photocraft_algo::gimp::graph_pipeline::GraphPipelineError>{
+  crate::gimp_configured_graph_execution::execute(graph,bindings,sources,backing,external,roi,external_domain,assignments,max_depth,limits,control)
+ }
+}
 fn valid(p:&ProfileOwnedParameters<'_>)->bool {
  p.node.0!=0&&!p.source_extent.is_empty()&&[p.input_port,p.upstream_output_port,p.output_port].iter().all(|name|!name.is_empty()&&name.len()<=256&&!name.contains('\0'))
 }

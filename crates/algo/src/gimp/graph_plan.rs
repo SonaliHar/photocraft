@@ -9,7 +9,7 @@ use std::{cmp::Reverse, collections::{BinaryHeap, HashMap, HashSet}, ops::Range}
 
 const MAX_NODES: usize = 4096;
 const MAX_EDGES: usize = 16384;
-const MAX_WORK: usize = 100_000;
+pub(super) const MAX_WORK: usize = 100_000;
 const MAX_PORT_BYTES: usize = 1 << 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

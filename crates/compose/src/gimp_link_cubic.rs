@@ -10,7 +10,7 @@ pub use controlled::{Limits, Requirements};
 fn refused() -> CompositionError {
     CompositionError::Unsupported("unqualified cubic linked transform")
 }
-fn cubic_weight(value: f64) -> f64 {
+pub(crate) fn cubic_weight(value: f64) -> f64 {
     let x = value.abs();
     if x < 1.0 {
         ((6.0 * x - 10.5) * x * x + 5.0) / 6.0

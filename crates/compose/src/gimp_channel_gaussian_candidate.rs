@@ -83,7 +83,31 @@ pub struct DerivedOutput<'a, L> {
     requirements: Requirements,
     _lease: L,
 }
+/// Owned private stage. Dropping the borrowed record view does not confer
+/// publication authority; the enclosing caller must retain its original owner.
+pub struct StagedOutput<L> {
+    surface: Surface,
+    config: Config,
+    requirements: Requirements,
+    _lease: L,
+}
+impl<L> StagedOutput<L> {
+    pub fn surface(&self) -> &Surface {
+        &self.surface
+    }
+    pub fn config(&self) -> Config {
+        self.config
+    }
+    pub fn requirements(&self) -> Requirements {
+        self.requirements
+    }
+}
 impl<L> DerivedOutput<'_, L> {
+    /// Move private output/accounting without cloning native pixels or records.
+    /// Original snapshot ownership and any target fence remain caller duties.
+    pub fn into_staged(self) -> StagedOutput<L> {
+        StagedOutput { surface: self.surface, config: self.config, requirements: self.requirements, _lease: self._lease }
+    }
     pub fn original(&self) -> Original<'_> {
         self.original
     }

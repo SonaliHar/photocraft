@@ -17,22 +17,32 @@ fn model_equal(a:&Profile,z:&Profile,b:&mut Budget<'_>)->Result<bool>{
 }
 fn profile_classes(src:&Profile,dst:&Profile,b:&Budget<'_>)->Result<()>{for p in [src,dst]{b.poll()?;let lab=p.color_space==ColorSpace::Lab&&p.a2b.iter().flatten().all(|l|l.outputs==3)&&p.b2a.iter().flatten().all(|l|l.inputs==3);if matches!(p.class,ProfileClass::DeviceLink|ProfileClass::NamedColor|ProfileClass::Abstract)&&!lab{return Err(CmsError::Unsupported(format!("{:?} profiles cannot be used as a source or destination",p.class)).into());}}Ok(())}
 fn cost(p:&Profile,input:bool,intent:Intent,b:&Budget<'_>)->Result<(usize,u64)>{let(bytes,work,_)=p.selected_side_cost(input,intent,b)?;Ok((bytes,work))}
+fn identity_envelope(retained:usize)->Result<TransformRequirements>{
+ Ok(TransformRequirements{retained_bytes:retained,peak_resident_bytes:add(retained,4096)?,work_units:work_add((retained as u64).checked_mul(4).ok_or(Error::Limit("identity transform work"))?,16<<20)?})
+}
+fn construction_envelope(retained:usize,copied:usize,side_work:u64,connection_work:u64,nodes:usize,same:bool)->Result<TransformRequirements>{
+ let peak=add(retained,add(mul(copied,16)?,8<<20)?)?;
+ let evaluations=(nodes as u64).checked_add(if same{128}else{(OUT_TABLE+TABLE_1D+256+128) as u64}).ok_or(Error::Limit("transform evaluations"))?;
+ let work=side_work.checked_mul(evaluations).and_then(|v|v.checked_mul(4)).and_then(|v|v.checked_add(connection_work.checked_mul(4)?)).and_then(|v|v.checked_add((retained as u64).checked_mul(8)?)).and_then(|v|v.checked_add(1<<20)).ok_or(Error::Limit("transform sampling work"))?;
+ Ok(TransformRequirements{retained_bytes:retained,peak_resident_bytes:peak,work_units:work})
+}
+#[path="controlled/effective_requirements.rs"]
+mod effective_requirements;
+pub use effective_requirements::{EffectivePairRequirements,effective_pair_requirements};
 pub fn requirements(src:&Profile,dst:&Profile,opts:TransformOptions,limits:Limits,cancelled:&dyn Fn()->bool)->Result<TransformRequirements>{
  let mut b=Budget::new(limits,cancelled)?;let retained=add(src.controlled_retained_bytes(&b)?,dst.controlled_retained_bytes(&b)?)?;b.retained(retained)?;
  // Exact model equality is part of the actual legacy recipe, including original
  // wide CLUT storage/strides. It is cooperatively compared, never tolerance-fit.
  let same=model_equal(src,dst,&mut b)?;
- if same&&matches!(src.color_space,ColorSpace::Rgb|ColorSpace::Gray){crate::xcf_color::validate_profile_with_control(src,limits,cancelled)?;let work=work_add((retained as u64).checked_mul(4).ok_or(Error::Limit("identity transform work"))?,16<<20)?;let peak=add(retained,4096)?;let admit=Budget::new(limits,cancelled)?;admit.admit(peak,work)?;return Ok(TransformRequirements{retained_bytes:retained,peak_resident_bytes:peak,work_units:work})}
+ if same&&matches!(src.color_space,ColorSpace::Rgb|ColorSpace::Gray){crate::xcf_color::validate_profile_with_control(src,limits,cancelled)?;let required=identity_envelope(retained)?;let admit=Budget::new(limits,cancelled)?;admit.admit(required.peak_resident_bytes,required.work_units)?;return Ok(required)}
  profile_classes(src,dst,&b)?;let(sb,sw)=cost(src,true,opts.intent,&b)?;let(db,dw)=cost(dst,false,opts.intent,&b)?;let mut copied=add(sb,db)?;let side_work=work_add(sw,dw)?;let mut connection_work=0u64;
  if opts.bpc&&opts.intent!=Intent::AbsoluteColorimetric{for p in [src,dst]{let(a,w)=cost(p,true,opts.intent,&b)?;copied=add(copied,a)?;connection_work=work_add(connection_work,w)?;let reverse=if opts.intent==Intent::Saturation{Intent::Saturation}else{Intent::RelativeColorimetric};match cost(p,false,reverse,&b){Ok((a,w))=>{copied=add(copied,a)?;connection_work=work_add(connection_work,w)?;},Err(Error::Cms(_))=>(),Err(e)=>return Err(e)}}}
  let has_clut=[src.selected_lut(true,opts.intent),dst.selected_lut(false,opts.intent)].into_iter().flatten().any(|l|l.stages.iter().any(|s|matches!(s,Stage::Clut(_))));
  let nodes=if has_clut&&!same{match src.channels(){1=>TABLE_1D,2=>GRID_3D.checked_pow(2).ok_or(Error::Limit("grid nodes"))?,3=>GRID_3D.checked_pow(3).ok_or(Error::Limit("grid nodes"))?,4=>GRID_4D.checked_pow(4).ok_or(Error::Limit("grid nodes"))?,_=>0}}else{0};
  // Includes all cumulative fallible copies (link/BPC/optimizer/head), merged
  // matrices, worst 15-output fixed grid, shaper/post/grid8 and vector owners.
- let peak=add(retained,add(mul(copied,16)?,8<<20)?)?;
- let evaluations=(nodes as u64).checked_add(if same{128}else{(OUT_TABLE+TABLE_1D+256+128) as u64}).ok_or(Error::Limit("transform evaluations"))?;
- let work=side_work.checked_mul(evaluations).and_then(|v|v.checked_mul(4)).and_then(|v|v.checked_add(connection_work.checked_mul(4)?)).and_then(|v|v.checked_add((retained as u64).checked_mul(8)?)).and_then(|v|v.checked_add(1<<20)).ok_or(Error::Limit("transform sampling work"))?;
- let admit=Budget::new(limits,cancelled)?;admit.admit(peak,work)?;Ok(TransformRequirements{retained_bytes:retained,peak_resident_bytes:peak,work_units:work})
+ let required=construction_envelope(retained,copied,side_work,connection_work,nodes,same)?;
+ let admit=Budget::new(limits,cancelled)?;admit.admit(required.peak_resident_bytes,required.work_units)?;Ok(required)
 }
 fn copy_stages(stages:&[Stage],b:&mut Budget<'_>)->Result<Vec<Stage>>{let mut out=b.reserve(stages.len())?;for s in stages{out.push(s.copy_controlled(b)?);}Ok(out)}
 fn optimize(pipe:&mut Pipeline,b:&mut Budget<'_>)->Result<()>{

@@ -8,6 +8,7 @@ use photocraft_doc::{
     item_identity::ItemRef,
 };
 use photocraft_geom::Rect;
+use photocraft_text::xcf::runtime_font_input::{self, PreparedRuntimeFont};
 #[path = "gimp_accounted.rs"]
 mod accounted;
 #[path = "gimp_group_gaussian.rs"]
@@ -93,7 +94,22 @@ struct Prepared<'a> {
     text_source: Option<&'a photocraft_doc::xcf_items::SourceItem>,
     finite_normal_source: bool,
 }
+enum HeldTextFont<'a> {
+    Borrowed(&'a PreparedRuntimeFont<'a>),
+    Prepared(PreparedRuntimeFont<'a>),
+}
+impl HeldTextFont<'_> {
+    fn handle(&self) -> &PreparedRuntimeFont<'_> {
+        match self {
+            Self::Borrowed(font) => font,
+            Self::Prepared(font) => font,
+        }
+    }
+}
 struct RenderJob<'a, 'b> {
+    supplied_font: Option<&'a PreparedRuntimeFont<'a>>,
+    text_font: Option<HeldTextFont<'a>>,
+    font_bytes: u64,
     cache: crate::gimp_neighborhood::TileCache,
     interrupt: &'a photocraft_raster::Interrupt<'b>,
     groups: Vec<(photocraft_doc::LayerId, photocraft_raster::Surface)>,
@@ -107,10 +123,13 @@ impl RenderJob<'_, '_> {
     fn finish(&mut self, poll: &mut impl FnMut(WideWork) -> Result<()>) -> Result<()> {
         self.vectors.clear();
         self.texts.clear();
+        self.text_font.take();
+        let font_bytes = std::mem::take(&mut self.font_bytes);
+        let fonts = if font_bytes == 0 { Ok(()) } else { poll(WideWork::ReleaseBytes(font_bytes)) };
         let texts = poll(WideWork::ReleaseBytes(std::mem::take(&mut self.text_bytes)));
         let vectors = poll(WideWork::ReleaseBytes(std::mem::take(&mut self.vector_bytes)));
         let filters = self.cache.finish(poll);
-        vectors.and(texts).and(filters)
+        vectors.and(texts).and(fonts).and(filters)
     }
 }
 fn regenerate_vector(
@@ -143,6 +162,65 @@ fn regenerate_vector(
     Ok(())
 }
 
+fn prepare_text_font<'a, 'b>(job: &mut RenderJob<'a, 'b>, poll: &mut impl FnMut(WideWork) -> Result<()>) -> Result<()> {
+    if job.text_font.is_some() {
+        return Ok(());
+    }
+    prepare_control::checkpoint(job.interrupt)?;
+    if let Some(font) = job.supplied_font {
+        let requirements = font.requirements();
+        let next = job.font_bytes.checked_add(requirements.peak_bytes).ok_or(CompositionError::Invalid("font resident overflow"))?;
+        poll(WideWork::ReserveBytes(requirements.peak_bytes))?;
+        job.font_bytes = next;
+        poll(WideWork::SampleUnits(requirements.work_units))?;
+        prepare_control::checkpoint(job.interrupt)?;
+        job.text_font = Some(HeldTextFont::Borrowed(font));
+        return Ok(());
+    }
+    let meter = std::cell::RefCell::new(poll);
+    let held = std::cell::Cell::new(0u64);
+    let denied = std::cell::RefCell::new(None);
+    let output = runtime_font_input::prepare_with_charge(
+        runtime_font_input::RuntimeInput { bytes: &photocraft_text::fonts::INTER_REGULAR[..], identity: runtime_font_input::FaceIdentity::inter_regular() },
+        runtime_font_input::Limits::default(),
+        job.interrupt,
+        &mut |bytes| {
+            let next = held.get().checked_add(bytes).ok_or(photocraft_text::xcf::TextSourceError::Budget)?;
+            let mut callback = meter.try_borrow_mut().map_err(|_| photocraft_text::xcf::TextSourceError::Budget)?;
+            (**callback)(WideWork::ReserveBytes(bytes)).map_err(|e| {
+                if let Ok(mut failure) = denied.try_borrow_mut() {
+                    *failure = Some(e);
+                }
+                photocraft_text::xcf::TextSourceError::Budget
+            })?;
+            held.set(next);
+            Ok(())
+        },
+        &mut |units| {
+            let mut callback = meter.try_borrow_mut().map_err(|_| photocraft_text::xcf::TextSourceError::Budget)?;
+            (**callback)(WideWork::SampleUnits(units)).map_err(|e| {
+                if let Ok(mut failure) = denied.try_borrow_mut() {
+                    *failure = Some(e);
+                }
+                photocraft_text::xcf::TextSourceError::Budget
+            })
+        },
+    );
+    job.font_bytes = job.font_bytes.checked_add(held.get()).ok_or(CompositionError::Invalid("font resident overflow"))?;
+    if let Some(error) = denied.into_inner() {
+        return Err(error);
+    }
+    let font = output.map_err(|error| {
+        if error == photocraft_text::xcf::TextSourceError::Cancelled {
+            photocraft_raster::RasterInputError::Cancelled.into()
+        } else {
+            CompositionError::Unsupported("exact runtime text font unavailable")
+        }
+    })?;
+    prepare_control::checkpoint(job.interrupt)?;
+    job.text_font = Some(HeldTextFont::Prepared(font));
+    Ok(())
+}
 fn regenerate_text(
     job: &mut RenderJob<'_, '_>,
     id: photocraft_doc::LayerId,
@@ -152,6 +230,7 @@ fn regenerate_text(
     if job.texts.iter().any(|(cached, _)| *cached == id) {
         return Ok(());
     }
+    prepare_text_font(job, poll)?;
     let held = std::cell::Cell::new(0_u64);
     let mut charge = |bytes: u64| {
         let next = held.get().checked_add(bytes).ok_or(CompositionError::Invalid("text resident overflow"))?;
@@ -159,13 +238,15 @@ fn regenerate_text(
         held.set(next);
         Ok(())
     };
-    let output = crate::gimp_text_items::render_source(job.doc, source, job.interrupt, &mut charge);
+    let font = job.text_font.as_ref().ok_or(CompositionError::Invalid("text font preparation missing"))?.handle();
+    let output = crate::gimp_text_items::render_source_with_authorized_font(job.doc, source, font, job.interrupt, &mut charge);
     job.text_bytes = job.text_bytes.checked_add(held.get()).ok_or(CompositionError::Invalid("text resident overflow"))?;
     job.texts.try_reserve(1).map_err(|_| CompositionError::Invalid("text job cache allocation"))?;
     job.texts.push((id, output?));
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prepare<'a>(
     doc: &'a Document,
     layers: &'a [Layer],
@@ -174,6 +255,7 @@ fn prepare<'a>(
     spaces: &mut Vec<(GimpSpace, WorkingSpace)>,
     depth: usize,
     interrupt: &photocraft_raster::Interrupt<'_>,
+    authorized_font: Option<&PreparedRuntimeFont<'_>>,
 ) -> Result<Vec<Prepared<'a>>> {
     prepare_control::checkpoint(interrupt)?;
     if depth == 0 {
@@ -216,7 +298,11 @@ fn prepare<'a>(
             })
         });
         if let Some(source) = text_source {
-            crate::gimp_text_items::qualify_current_source(doc, source, interrupt)?;
+            if let Some(font) = authorized_font {
+                crate::gimp_text_items::qualify_current_source_with_authorized_font(doc, source, font, interrupt)?;
+            } else {
+                crate::gimp_text_items::qualify_current_source(doc, source, interrupt)?;
+            }
         }
         if let Some(source) = vector_source {
             if layer.mask.is_some() || doc.xcf_state.as_ref().is_some_and(|state| state.filter_stacks.iter().any(|stack| stack.owner == source.owner)) {
@@ -364,7 +450,7 @@ fn prepare<'a>(
                 if group.artboard.is_some() {
                     return Err(CompositionError::Unsupported("wide artboard bounds"));
                 }
-                prepare(doc, &group.children, profile, stored, spaces, depth + 1, interrupt)?
+                prepare(doc, &group.children, profile, stored, spaces, depth + 1, interrupt, authorized_font)?
             }
             _ => return Err(CompositionError::Unsupported("wide editable item renderer")),
         };
@@ -741,7 +827,13 @@ fn prepare<'a>(
                         }
                     }
                     for node in stack.nodes.iter().filter(|node| node.enabled || generic_point) {
-                        crate::gimp_neighborhood::qualify_selection_mask_with_interrupt(state, node, layer.id, if generic_point { doc.bounds() } else { extent }, interrupt)?;
+                        crate::gimp_neighborhood::qualify_selection_mask_with_interrupt(
+                            state,
+                            node,
+                            layer.id,
+                            if generic_point { doc.bounds() } else { extent },
+                            interrupt,
+                        )?;
                     }
                     let qualified = extent == Rect::new(0, 0, 96, 80)
                         && doc.mode == ColorMode::Rgb
@@ -1040,6 +1132,7 @@ pub fn try_render(doc: &Document, rect: Rect, poll: &mut impl FnMut(WideWork) ->
 
 /// Qualified tree/working spaces reused across bounded bands or reduced previews.
 pub struct PreparedRenderer<'a> {
+    authorized_font: Option<&'a PreparedRuntimeFont<'a>>,
     doc: &'a Document,
     layers: Vec<Prepared<'a>>,
     spaces: Vec<(GimpSpace, WorkingSpace)>,
@@ -1740,7 +1833,21 @@ impl<'a> PreparedRenderer<'a> {
         let renderer = Self::new_internal(doc, interrupt)?;
         Ok(LeasedPreparedRenderer { renderer, _source_lease: source_lease, _prepared_lease: lease })
     }
+    /// Caller-held runtime font; no stored grant or new source qualification.
+    pub fn new_with_authorized_font(doc: &'a Document, font: &'a PreparedRuntimeFont<'a>, interrupt: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
+        if normal_ordinary::applies(doc) {
+            return Err(CompositionError::Unsupported("ordinary Normal scene requires retained job preparation accounting"));
+        }
+        Self::new_internal_with_authorized_font(doc, Some(font), interrupt)
+    }
     fn new_internal(doc: &'a Document, interrupt: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
+        Self::new_internal_with_authorized_font(doc, None, interrupt)
+    }
+    fn new_internal_with_authorized_font(
+        doc: &'a Document,
+        authorized_font: Option<&'a PreparedRuntimeFont<'a>>,
+        interrupt: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<Self> {
         interrupt.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
         if doc.has_backed_rasters()? {
             return Err(CompositionError::Unsupported("fallible native storage requires the bounded backed renderer"));
@@ -1854,9 +1961,9 @@ impl<'a> PreparedRenderer<'a> {
             )?
         };
         let mut spaces = Vec::new();
-        let layers = prepare(doc, &doc.layers, &profile, stored, &mut spaces, 0, interrupt)?;
+        let layers = prepare(doc, &doc.layers, &profile, stored, &mut spaces, 0, interrupt, authorized_font)?;
         prepare_control::checkpoint(interrupt)?;
-        Ok(Self { doc, layers, spaces })
+        Ok(Self { doc, layers, spaces, authorized_font })
     }
     pub fn render(&self, rect: Rect, poll: &mut impl FnMut(WideWork) -> Result<()>) -> Result<WideBuffer> {
         self.render_with_interrupt(rect, poll, &photocraft_raster::Interrupt::NONE)
@@ -1886,6 +1993,9 @@ impl<'a> PreparedRenderer<'a> {
             vector_bytes: 0,
             texts: Vec::new(),
             text_bytes: 0,
+            supplied_font: self.authorized_font,
+            text_font: None,
+            font_bytes: 0,
         };
         let mut result = (|| {
             let mut px = Vec::new();
@@ -1963,6 +2073,9 @@ impl<'a> PreparedRenderer<'a> {
             vector_bytes: 0,
             texts: Vec::new(),
             text_bytes: 0,
+            supplied_font: self.authorized_font,
+            text_font: None,
+            font_bytes: 0,
         };
         let mut result = (|| {
             let mut px = Vec::new();
@@ -2004,5 +2117,117 @@ impl<'a> PreparedRenderer<'a> {
             let _ = poll(WideWork::ReleaseBytes(reserved));
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod runtime_text_font_drafts {
+    use super::*;
+    fn doc() -> Document {
+        Document::new("Own runtime font draft", photocraft_geom::Size { width: 1, height: 1 }, ColorMode::Rgb, photocraft_color::SampleType::U8)
+    }
+    fn job<'a, 'b>(doc: &'a Document, control: &'a photocraft_raster::Interrupt<'b>, font: Option<&'a PreparedRuntimeFont<'a>>) -> RenderJob<'a, 'b> {
+        RenderJob {
+            cache: crate::gimp_neighborhood::TileCache::new(),
+            interrupt: control,
+            groups: Vec::new(),
+            doc,
+            vectors: Vec::new(),
+            vector_bytes: 0,
+            texts: Vec::new(),
+            text_bytes: 0,
+            supplied_font: font,
+            text_font: None,
+            font_bytes: 0,
+        }
+    }
+    #[test]
+    fn prepared_font_is_shared_and_released_once_per_job() {
+        let doc = doc();
+        let control = photocraft_raster::Interrupt::NONE;
+        let font = runtime_font_input::prepare_with_charge(
+            runtime_font_input::RuntimeInput { bytes: &photocraft_text::fonts::INTER_REGULAR[..], identity: runtime_font_input::FaceIdentity::inter_regular() },
+            runtime_font_input::Limits::default(),
+            &control,
+            &mut |_| Ok(()),
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+        let mut job = job(&doc, &control, Some(&font));
+        let mut reserved = 0u64;
+        let mut work = 0u64;
+        let mut meter = |event| {
+            match event {
+                WideWork::ReserveBytes(n) => reserved += n,
+                WideWork::SampleUnits(n) => work += n,
+                _ => {}
+            }
+            Ok(())
+        };
+        prepare_text_font(&mut job, &mut meter).unwrap();
+        prepare_text_font(&mut job, &mut meter).unwrap();
+        drop(meter);
+        assert_eq!(reserved, font.requirements().peak_bytes);
+        assert_eq!(work, font.requirements().work_units);
+        assert!(std::ptr::eq(job.text_font.as_ref().unwrap().handle(), &font));
+        let mut released = 0;
+        job.finish(&mut |event| {
+            if let WideWork::ReleaseBytes(n) = event {
+                released += n;
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(released, reserved);
+        assert!(job.text_font.is_none());
+        assert_eq!(job.font_bytes, 0);
+    }
+    #[test]
+    fn work_failure_after_font_reserve_keeps_no_handle_and_releases_lease() {
+        let doc = doc();
+        let control = photocraft_raster::Interrupt::NONE;
+        let mut job = job(&doc, &control, None);
+        let mut reserved = 0;
+        assert!(
+            prepare_text_font(&mut job, &mut |event| {
+                match event {
+                    WideWork::ReserveBytes(n) => reserved += n,
+                    WideWork::SampleUnits(n) if n > 0 => return Err(CompositionError::Invalid("Own denied font work")),
+                    _ => {}
+                }
+                Ok(())
+            })
+            .is_err()
+        );
+        assert!(job.text_font.is_none());
+        assert!(reserved > 0);
+        let mut released = 0;
+        job.finish(&mut |event| {
+            if let WideWork::ReleaseBytes(n) = event {
+                released += n;
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(reserved, released);
+    }
+    #[test]
+    fn pre_cancelled_font_preparation_does_not_charge_or_publish() {
+        let doc = doc();
+        let signal = || true;
+        let control = photocraft_raster::Interrupt::cancel_only(&signal);
+        let mut job = job(&doc, &control, None);
+        let mut calls = 0;
+        assert!(
+            prepare_text_font(&mut job, &mut |_| {
+                calls += 1;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert_eq!(calls, 0);
+        assert!(job.text_font.is_none());
+        assert_eq!(job.font_bytes, 0);
+        assert!(doc.xcf_state.is_none());
     }
 }

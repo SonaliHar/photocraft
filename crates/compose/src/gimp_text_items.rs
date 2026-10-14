@@ -9,7 +9,8 @@ use photocraft_raster::{Interrupt, RasterInputError};
 use photocraft_text::xcf::{ExactFont, ScaledText, StemRendered, StemText, TextSourceError};
 
 mod underline;
-pub use underline::qualify_underlined_source;
+use photocraft_text::xcf::runtime_font_input::PreparedRuntimeFont;
+pub use underline::{qualify_underlined_source, qualify_underlined_source_with_authorized_font};
 
 /// Explicit current-source dispatch; old markup-free APIs remain closed.
 pub fn qualify_current_source(doc: &Document, source: &SourceItem, ctl: &Interrupt<'_>) -> Result<()> {
@@ -17,6 +18,14 @@ pub fn qualify_current_source(doc: &Document, source: &SourceItem, ctl: &Interru
         qualify_underlined_source(doc, source, ctl).map(|_| ())
     } else {
         qualify_layout_source(doc, source, ctl).map(|_| ())
+    }
+}
+
+pub fn qualify_current_source_with_authorized_font(doc: &Document, source: &SourceItem, font: &PreparedRuntimeFont<'_>, ctl: &Interrupt<'_>) -> Result<()> {
+    if matches!(&source.source, EditableSource::Text { markup: Some(_), .. }) {
+        qualify_underlined_source_with_authorized_font(doc, source, font, ctl).map(|_| ())
+    } else {
+        qualify_layout_source_with_authorized_font(doc, source, font, ctl).map(|_| ())
     }
 }
 
@@ -71,6 +80,22 @@ pub fn qualify_spaced_colored_source<'a>(
 }
 /// Explicit layout opt-in; legacy single-line consumers remain closed.
 pub fn qualify_layout_source<'a>(doc: &Document, source: &'a SourceItem, ctl: &Interrupt<'_>) -> Result<photocraft_text::xcf::QualifiedRectilinearText<'a>> {
+    qualify_layout_source_impl(doc, source, None, ctl)
+}
+pub fn qualify_layout_source_with_authorized_font<'a>(
+    doc: &Document,
+    source: &'a SourceItem,
+    font: &PreparedRuntimeFont<'_>,
+    ctl: &Interrupt<'_>,
+) -> Result<photocraft_text::xcf::QualifiedRectilinearText<'a>> {
+    qualify_layout_source_impl(doc, source, Some(font.exact_font()), ctl)
+}
+fn qualify_layout_source_impl<'a>(
+    doc: &Document,
+    source: &'a SourceItem,
+    authorized: Option<&ExactFont<'_>>,
+    ctl: &Interrupt<'_>,
+) -> Result<photocraft_text::xcf::QualifiedRectilinearText<'a>> {
     let (resource, bounds) = qualify_context(doc, source, ctl)?;
     let qualified =
         photocraft_text::xcf::qualify_placed_layout_colored_rectilinear_source(source, resource, [bounds.x0, bounds.y0], ctl).map_err(text_error)?;
@@ -80,7 +105,13 @@ pub fn qualify_layout_source<'a>(doc: &Document, source: &'a SourceItem, ctl: &I
     ) {
         return Err(unsupported());
     }
-    let font = ExactFont::bundled_inter(ctl).map_err(text_error)?;
+    let fallback;
+    let font = if let Some(font) = authorized {
+        font
+    } else {
+        fallback = ExactFont::bundled_inter(ctl).map_err(text_error)?;
+        &fallback
+    };
     photocraft_text::xcf::qualify_layout_rectilinear_geometry(&font, qualified, ctl).map_err(text_error)?;
     doc.working_profile_interpretation.validate_with(doc.icc_profile.as_deref().map(Vec::as_slice), doc.mode).map_err(|_| unsupported())?;
     Ok(qualified)
@@ -197,12 +228,42 @@ pub fn current_source_layout_bounds(
     ctl: &Interrupt<'_>,
     charge: &mut dyn FnMut(u64) -> Result<()>,
 ) -> Result<photocraft_geom::Rect> {
+    current_source_layout_bounds_impl(doc, source, None, ctl, charge)
+}
+pub fn current_source_layout_bounds_with_authorized_font(
+    doc: &Document,
+    source: &SourceItem,
+    font: &PreparedRuntimeFont<'_>,
+    ctl: &Interrupt<'_>,
+    charge: &mut dyn FnMut(u64) -> Result<()>,
+) -> Result<photocraft_geom::Rect> {
+    current_source_layout_bounds_impl(doc, source, Some(font.exact_font()), ctl, charge)
+}
+fn current_source_layout_bounds_impl(
+    doc: &Document,
+    source: &SourceItem,
+    authorized: Option<&ExactFont<'_>>,
+    ctl: &Interrupt<'_>,
+    charge: &mut dyn FnMut(u64) -> Result<()>,
+) -> Result<photocraft_geom::Rect> {
     if matches!(&source.source, EditableSource::Text { markup: Some(_), .. }) {
-        return underline::layout_bounds(doc, source, ctl, charge);
+        return if authorized.is_some() {
+            underline::layout_bounds_with_font(doc, source, authorized, ctl, charge)
+        } else {
+            underline::layout_bounds(doc, source, ctl, charge)
+        };
     }
-    charge(u64::try_from(photocraft_text::fonts::INTER_REGULAR.len()).map_err(|_| unsupported())?)?;
-    let qualified = qualify_layout_source(doc, source, ctl)?;
-    let font = ExactFont::bundled_inter(ctl).map_err(text_error)?;
+    if authorized.is_none() {
+        charge(u64::try_from(photocraft_text::fonts::INTER_REGULAR.len()).map_err(|_| unsupported())?)?;
+    }
+    let qualified = qualify_layout_source_impl(doc, source, authorized, ctl)?;
+    let fallback;
+    let font = if let Some(font) = authorized {
+        font
+    } else {
+        fallback = ExactFont::bundled_inter(ctl).map_err(text_error)?;
+        &fallback
+    };
     let mut denied = None;
     let mut account = |bytes| {
         charge(bytes).map_err(|error| {
@@ -218,13 +279,37 @@ pub fn current_source_layout_bounds(
 }
 
 pub fn render_source(doc: &Document, source: &SourceItem, ctl: &Interrupt<'_>, charge: &mut dyn FnMut(u64) -> Result<()>) -> Result<StemRendered> {
+    render_source_impl(doc, source, None, ctl, charge)
+}
+pub fn render_source_with_authorized_font(
+    doc: &Document,
+    source: &SourceItem,
+    font: &PreparedRuntimeFont<'_>,
+    ctl: &Interrupt<'_>,
+    charge: &mut dyn FnMut(u64) -> Result<()>,
+) -> Result<StemRendered> {
+    render_source_impl(doc, source, Some(font.exact_font()), ctl, charge)
+}
+fn render_source_impl(
+    doc: &Document,
+    source: &SourceItem,
+    authorized: Option<&ExactFont<'_>>,
+    ctl: &Interrupt<'_>,
+    charge: &mut dyn FnMut(u64) -> Result<()>,
+) -> Result<StemRendered> {
     if matches!(&source.source, EditableSource::Text { markup: Some(_), .. }) {
-        return underline::render(doc, source, ctl, charge);
+        return if authorized.is_some() {
+            underline::render_with_font(doc, source, authorized, ctl, charge)
+        } else {
+            underline::render(doc, source, ctl, charge)
+        };
     }
-    let qualified = qualify_layout_source(doc, source, ctl)?;
+    let qualified = qualify_layout_source_impl(doc, source, authorized, ctl)?;
     let color = qualified.color;
     // Borrowed compiled authority is charged conservatively for this job too.
-    charge(u64::try_from(photocraft_text::fonts::INTER_REGULAR.len()).map_err(|_| unsupported())?)?;
+    if authorized.is_none() {
+        charge(u64::try_from(photocraft_text::fonts::INTER_REGULAR.len()).map_err(|_| unsupported())?)?;
+    }
     // Stored encoding is operative data. Use the bound current implicit profile
     // through CMS; neither the original raster nor a guessed sRGB curve selects it.
     let bound = doc.icc_profile.as_ref().ok_or_else(unsupported)?;
@@ -244,7 +329,13 @@ pub fn render_source(doc: &Document, source: &SourceItem, ctl: &Interrupt<'_>, c
     // Independent alpha-only saved edits retain stored alpha while rendering an
     // opaque glyph fill. Coverage still comes from the measured glyph rasterizer.
     let encoded = [converted[0].clamp(0.0, 1.0) as f32, converted[1].clamp(0.0, 1.0) as f32, converted[2].clamp(0.0, 1.0) as f32, 1.0];
-    let font = ExactFont::bundled_inter(ctl).map_err(text_error)?;
+    let fallback;
+    let font = if let Some(font) = authorized {
+        font
+    } else {
+        fallback = ExactFont::bundled_inter(ctl).map_err(text_error)?;
+        &fallback
+    };
     let mut denied = None;
     let mut render_charge = |bytes| {
         charge(bytes).map_err(|error| {

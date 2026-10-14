@@ -10,6 +10,25 @@ const LINE_SPACING: &str = "xcf.text.lineSpacing.set";
 const SPACING: &str = "xcf.text.letterSpacing.set";
 const COLOR: &str = "xcf.text.color.set";
 const UNDERLINE: &str = "xcf.text.underline.set";
+use photocraft_text::xcf::runtime_font_input::{self as runtime_font, PreparedRuntimeFont};
+// One operation carries this font reservation across qualification, proposal
+// and final text regeneration. Other legacy document/pipeline model accounting
+// remains an enclosing engine boundary; this is not a global allocator claim.
+fn bundled_font(ctl: &Interrupt<'_>) -> Result<PreparedRuntimeFont<'static>> {
+    runtime_font::prepare_with_charge(
+        runtime_font::RuntimeInput { bytes: &photocraft_text::fonts::INTER_REGULAR, identity: runtime_font::FaceIdentity::inter_regular() },
+        runtime_font::Limits::default(), ctl,
+        &mut |n| if n <= 8 << 20 { Ok(()) } else { Err(photocraft_text::xcf::TextSourceError::Budget) },
+        &mut |n| if n <= 1_000_000 { Ok(()) } else { Err(photocraft_text::xcf::TextSourceError::Budget) },
+    ).map_err(|e| text_error(e, ctl))
+}
+fn font_charge(font: &PreparedRuntimeFont<'_>, ctl: &Interrupt<'_>) -> Result<u64> {
+    ctl.check().map_err(|_| EngineError::Cancelled)?;
+    let req = font.requirements();
+    if req.peak_bytes > 8 << 20 || req.work_units > 1_000_000 { return Err(bad("exact font operation admission")); }
+    Ok(req.peak_bytes)
+}
+
 fn bad(message: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: SET.into(), msg: message.into() }
 }
@@ -20,13 +39,17 @@ fn index(doc: &Document, owner: LayerId, ctl: &Interrupt<'_>) -> Result<(usize, 
     qualified_index(doc, owner, ctl, true)
 }
 fn qualified_index(doc: &Document, owner: LayerId, ctl: &Interrupt<'_>, require_editable: bool) -> Result<(usize, usize, [i32; 2])> {
+    let font = bundled_font(ctl)?;
+    qualified_index_with_font(doc, owner, ctl, require_editable, &font)
+}
+fn qualified_index_with_font(doc: &Document, owner: LayerId, ctl: &Interrupt<'_>, require_editable: bool, font: &PreparedRuntimeFont<'_>) -> Result<(usize, usize, [i32; 2])> {
+    font_charge(font, ctl)?;
     let (idx, rid, origin) = source_index(doc, owner, ctl, require_editable)?;
     let state = doc.xcf_state.as_ref().ok_or_else(|| bad("missing source state"))?;
     let item = state.source_items.get(idx).ok_or_else(|| bad("missing text source"))?;
     let resource = state.resources.get(rid).ok_or_else(|| bad("missing exact font"))?;
     let source = photocraft_text::xcf::qualify_placed_layout_colored_rectilinear_source(item, resource, origin, ctl).map_err(|e| text_error(e, ctl))?;
-    let font = photocraft_text::xcf::ExactFont::bundled_inter(ctl).map_err(|e| text_error(e, ctl))?;
-    photocraft_text::xcf::qualify_layout_rectilinear_geometry(&font, source, ctl).map_err(|e| text_error(e, ctl))?;
+    photocraft_text::xcf::qualify_layout_rectilinear_geometry(font.exact_font(), source, ctl).map_err(|e| text_error(e, ctl))?;
     Ok((idx, rid, origin))
 }
 fn source_index(doc: &Document, owner: LayerId, ctl: &Interrupt<'_>, require_editable: bool) -> Result<(usize, usize, [i32; 2])> {
@@ -173,10 +196,10 @@ enum Edit<'a> {
     Size(f32),
     Color(photocraft_text::xcf::TextColor),
 }
-fn update(doc: &mut Document, owner: LayerId, edit: &Edit<'_>, ctl: &Interrupt<'_>) -> Result<bool> {
-    use photocraft_text::xcf::{ExactFont, ScaledText, TextSourceError, set_rectilinear_font_size, set_scaled_rectilinear_content};
-    let (idx, rid, origin) = index(doc, owner, ctl)?;
-    let font = ExactFont::bundled_inter(ctl).map_err(|e| text_error(e, ctl))?;
+fn update(doc: &mut Document, owner: LayerId, edit: &Edit<'_>, font: &PreparedRuntimeFont<'_>, held: &mut u64, ctl: &Interrupt<'_>) -> Result<bool> {
+    use photocraft_text::xcf::{ScaledText, TextSourceError, set_rectilinear_font_size, set_scaled_rectilinear_content};
+    let (idx, rid, origin) = qualified_index_with_font(doc, owner, ctl, true, font)?;
+    let font = font.exact_font();
     let state = doc.xcf_state.as_mut().ok_or_else(|| bad("missing source state"))?;
     let resource = state.resources.get(rid).ok_or_else(|| bad("missing exact font"))?;
     let item = state.source_items.get_mut(idx).ok_or_else(|| bad("missing text owner"))?;
@@ -188,43 +211,52 @@ fn update(doc: &mut Document, owner: LayerId, edit: &Edit<'_>, ctl: &Interrupt<'
     retained.push_str(current.content);
     let size = current.size_px;
     let multiline = matches!(source.layout, photocraft_text::xcf::RectilinearLineLayout::TwoLines { .. });
-    let limit = if multiline { 16 << 20 } else { 8 << 20 };
-    let mut held = 0_u64;
+    let maximum: u64 = if multiline { 16 << 20 } else { 8 << 20 };
+    let limit = maximum.checked_sub(*held).ok_or_else(|| bad("text/font shared resident limit"))?;
     let mut charge = |n: u64| {
-        held = held.checked_add(n).ok_or(TextSourceError::Budget)?;
-        if held > limit { Err(TextSourceError::Budget) } else { Ok(()) }
+        *held = held.checked_add(n).ok_or(TextSourceError::Budget)?;
+        if *held > maximum { Err(TextSourceError::Budget) } else { Ok(()) }
     };
     if multiline {
         let result = match edit {
-            Edit::Content(content) => photocraft_text::xcf::set_multiline_rectilinear_content(item, resource, origin, content, &font, limit, ctl, &mut charge),
-            Edit::LineSpacing(spacing) => photocraft_text::xcf::set_rectilinear_line_spacing(item, resource, origin, *spacing, &font, limit, ctl, &mut charge),
+            Edit::Content(content) => photocraft_text::xcf::set_multiline_rectilinear_content(item, resource, origin, content, font, limit, ctl, &mut charge),
+            Edit::LineSpacing(spacing) => photocraft_text::xcf::set_rectilinear_line_spacing(item, resource, origin, *spacing, font, limit, ctl, &mut charge),
             _ => return Err(bad("multiline editing currently supports content and line spacing only")),
         };
         return result.map_err(|e| text_error(e, ctl));
     }
     let result = match edit {
         Edit::LineSpacing(_) => return Err(bad("line spacing requires a qualified two-line source")),
-        Edit::Position(next) => photocraft_text::xcf::set_rectilinear_origin(item, resource, origin, *next, &font, 8 << 20, ctl, &mut charge),
-        Edit::Spacing(spacing) => photocraft_text::xcf::set_rectilinear_letter_spacing(item, resource, origin, *spacing, &font, 8 << 20, ctl, &mut charge),
-        Edit::Color(color) => photocraft_text::xcf::set_rectilinear_color(item, resource, origin, *color, &font, 8 << 20, ctl, &mut charge),
+        Edit::Position(next) => photocraft_text::xcf::set_rectilinear_origin(item, resource, origin, *next, font, limit, ctl, &mut charge),
+        Edit::Spacing(spacing) => photocraft_text::xcf::set_rectilinear_letter_spacing(item, resource, origin, *spacing, font, limit, ctl, &mut charge),
+        Edit::Color(color) => photocraft_text::xcf::set_rectilinear_color(item, resource, origin, *color, font, limit, ctl, &mut charge),
         Edit::Content(content) => {
-            set_scaled_rectilinear_content(item, resource, ScaledText { content, origin, size_px: size }, &font, 8 << 20, ctl, &mut charge)
+            set_scaled_rectilinear_content(item, resource, ScaledText { content, origin, size_px: size }, font, limit, ctl, &mut charge)
         }
         Edit::Size(size_px) => {
             if mode != photocraft_text::xcf::RectilinearAntialias::AreaCoverage {
                 return Err(bad("font size editing requires qualified AA text"));
             }
-            set_rectilinear_font_size(item, resource, ScaledText { content: &retained, origin, size_px: *size_px }, &font, 8 << 20, ctl, &mut charge)
+            set_rectilinear_font_size(item, resource, ScaledText { content: &retained, origin, size_px: *size_px }, font, limit, ctl, &mut charge)
         }
     };
     result.map_err(|e| text_error(e, ctl))
 }
-fn apply(s: &mut Session, owner: LayerId, edit: Edit<'_>, ctl: &Interrupt<'_>) -> Result<bool> {
+fn apply(s: &mut Session, owner: LayerId, edit: Edit<'_>, supplied: Option<&PreparedRuntimeFont<'_>>, ctl: &Interrupt<'_>) -> Result<bool> {
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    let (idx, rid, origin) = source_index(doc, owner, ctl, true)?;
+    let state = doc.xcf_state.as_ref().ok_or_else(|| bad("missing source state"))?;
+    photocraft_text::xcf::qualify_placed_layout_colored_rectilinear_source(
+        state.source_items.get(idx).ok_or_else(|| bad("missing text source"))?,
+        state.resources.get(rid).ok_or_else(|| bad("missing exact font"))?, origin, ctl,
+    ).map_err(|e| text_error(e, ctl))?;
+    let fallback;
+    let font = if let Some(font) = supplied { font } else { fallback = bundled_font(ctl)?; &fallback };
+    let mut held = font_charge(font, ctl)?;
     let mut proposed = (**doc).clone();
-    let changed = update(&mut proposed, owner, &edit, ctl)?;
+    let changed = update(&mut proposed, owner, &edit, font, &mut held, ctl)?;
     if changed {
-        crate::xcf_filter_cmds::validate_current_pipeline_with_interrupt(&proposed, ctl)?;
+        crate::xcf_filter_cmds::validate_current_pipeline_with_authorized_font(&proposed, font, ctl)?;
         ctl.progress(1.);
         if ctl.cancelled() {
             return Err(EngineError::Cancelled);
@@ -237,8 +269,8 @@ fn apply(s: &mut Session, owner: LayerId, edit: Edit<'_>, ctl: &Interrupt<'_>) -
             Edit::Spacing(_) => "Edit GIMP Text Letter Spacing",
             Edit::LineSpacing(_) => "Edit GIMP Text Line Spacing",
         };
-        s.edit_with_interrupt(label, ctl, |doc, _| {
-            update(doc, owner, &edit, ctl)?;
+        s.edit_with_runtime_font_with_interrupt(label, font, ctl, |doc, _| {
+            update(doc, owner, &edit, font, &mut held, ctl)?;
             Ok(())
         })?;
     }
@@ -248,15 +280,29 @@ fn apply(s: &mut Session, owner: LayerId, edit: Edit<'_>, ctl: &Interrupt<'_>) -
     Ok(changed)
 }
 pub fn set_content_with_interrupt(s: &mut Session, p: &Value, ctl: &Interrupt<'_>) -> Result<Value> {
+    set_content_with_font_input(s, p, None, ctl)
+}
+/// Reuse an already-authorized runtime-only exact Inter handle; no saved grant.
+pub fn set_content_with_runtime_font(s: &mut Session, p: &Value, font: &PreparedRuntimeFont<'_>, ctl: &Interrupt<'_>) -> Result<Value> {
+    set_content_with_font_input(s, p, Some(font), ctl)
+}
+fn set_content_with_font_input(s: &mut Session, p: &Value, font: Option<&PreparedRuntimeFont<'_>>, ctl: &Interrupt<'_>) -> Result<Value> {
     let owner = owner(p, "content")?;
     let content = p.get("content").and_then(Value::as_str).ok_or_else(|| bad("content must be UTF8 string"))?;
     if !(1..=9).contains(&content.len()) || content.bytes().any(|b| !(32..=126).contains(&b) && b != b'\n') {
         return Err(bad("content outside bounded exact-font rectilinear domain"));
     }
-    let changed = apply(s, owner, Edit::Content(content), ctl)?;
+    let changed = apply(s, owner, Edit::Content(content), font, ctl)?;
     Ok(json!({"layerId":owner.0.to_string(),"updated":changed}))
 }
 pub fn set_line_spacing_with_interrupt(s: &mut Session, p: &Value, ctl: &Interrupt<'_>) -> Result<Value> {
+    set_line_spacing_with_font_input(s, p, None, ctl)
+}
+/// Reuse an already-authorized runtime-only exact Inter handle; no saved grant.
+pub fn set_line_spacing_with_runtime_font(s: &mut Session, p: &Value, font: &PreparedRuntimeFont<'_>, ctl: &Interrupt<'_>) -> Result<Value> {
+    set_line_spacing_with_font_input(s, p, Some(font), ctl)
+}
+fn set_line_spacing_with_font_input(s: &mut Session, p: &Value, font: Option<&PreparedRuntimeFont<'_>>, ctl: &Interrupt<'_>) -> Result<Value> {
     let result = (|| {
         let owner = owner(p, "lineSpacingPx")?;
         let value = p.get("lineSpacingPx").and_then(Value::as_u64).ok_or_else(|| bad("lineSpacingPx requires an exact integer"))?;
@@ -266,7 +312,7 @@ pub fn set_line_spacing_with_interrupt(s: &mut Session, p: &Value, ctl: &Interru
             4 => 4.,
             _ => return Err(bad("qualified additional line spacing is0,2,4 pixels")),
         };
-        let updated = apply(s, owner, Edit::LineSpacing(spacing), ctl)?;
+        let updated = apply(s, owner, Edit::LineSpacing(spacing), font, ctl)?;
         Ok(json!({"layerId":owner.0.to_string(),"lineSpacingPx":value,"updated":updated}))
     })();
     result.map_err(|e| match e {
@@ -278,12 +324,19 @@ fn run_line_spacing(s: &mut Session, p: &Value) -> Result<Value> {
     set_line_spacing_with_interrupt(s, p, &Interrupt::NONE)
 }
 pub fn set_font_size_with_interrupt(s: &mut Session, p: &Value, ctl: &Interrupt<'_>) -> Result<Value> {
-    font_size_inner(s, p, ctl).map_err(|e| match e {
+    set_font_size_with_font_input(s, p, None, ctl)
+}
+/// Reuse an already-authorized runtime-only exact Inter handle; no saved grant.
+pub fn set_font_size_with_runtime_font(s: &mut Session, p: &Value, font: &PreparedRuntimeFont<'_>, ctl: &Interrupt<'_>) -> Result<Value> {
+    set_font_size_with_font_input(s, p, Some(font), ctl)
+}
+fn set_font_size_with_font_input(s: &mut Session, p: &Value, font: Option<&PreparedRuntimeFont<'_>>, ctl: &Interrupt<'_>) -> Result<Value> {
+    font_size_inner(s, p, font, ctl).map_err(|e| match e {
         EngineError::BadParams { msg, .. } => EngineError::BadParams { cmd: SIZE.into(), msg },
         other => other,
     })
 }
-fn font_size_inner(s: &mut Session, p: &Value, ctl: &Interrupt<'_>) -> Result<Value> {
+fn font_size_inner(s: &mut Session, p: &Value, font: Option<&PreparedRuntimeFont<'_>>, ctl: &Interrupt<'_>) -> Result<Value> {
     let owner = owner(p, "sizePx")?;
     let size = p.get("sizePx").and_then(Value::as_u64).ok_or_else(|| bad("sizePx requires an exact integer"))?;
     let size_px = match size {
@@ -293,7 +346,7 @@ fn font_size_inner(s: &mut Session, p: &Value, ctl: &Interrupt<'_>) -> Result<Va
         40 => 40.,
         _ => return Err(bad("qualified AA sizes are 16,24,32,40 pixels")),
     };
-    let changed = apply(s, owner, Edit::Size(size_px), ctl)?;
+    let changed = apply(s, owner, Edit::Size(size_px), font, ctl)?;
     Ok(json!({"layerId":owner.0.to_string(),"sizePx":size,"updated":changed}))
 }
 fn enabled(s: &Session) -> std::result::Result<(), String> {
@@ -306,6 +359,13 @@ fn run_size(s: &mut Session, p: &Value) -> Result<Value> {
     set_font_size_with_interrupt(s, p, &Interrupt::NONE)
 }
 pub fn set_color_with_interrupt(s: &mut Session, p: &Value, ctl: &Interrupt<'_>) -> Result<Value> {
+    set_color_with_font_input(s, p, None, ctl)
+}
+/// Reuse an already-authorized runtime-only exact Inter handle; no saved grant.
+pub fn set_color_with_runtime_font(s: &mut Session, p: &Value, font: &PreparedRuntimeFont<'_>, ctl: &Interrupt<'_>) -> Result<Value> {
+    set_color_with_font_input(s, p, Some(font), ctl)
+}
+fn set_color_with_font_input(s: &mut Session, p: &Value, font: Option<&PreparedRuntimeFont<'_>>, ctl: &Interrupt<'_>) -> Result<Value> {
     use photocraft_text::xcf::{TextColor, TextColorEncoding};
     let result = (|| {
         let object = p.as_object().ok_or_else(|| bad("parameters must be an object"))?;
@@ -328,7 +388,7 @@ pub fn set_color_with_interrupt(s: &mut Session, p: &Value, ctl: &Interrupt<'_>)
             *slot = u32::from_str_radix(hex, 16).map_err(|_| bad("invalid f32 bits"))?;
         }
         let color = TextColor::checked(encoding, bits).map_err(|e| text_error(e, ctl))?;
-        let changed = apply(s, owner, Edit::Color(color), ctl)?;
+        let changed = apply(s, owner, Edit::Color(color), font, ctl)?;
         Ok(json!({"changed":changed}))
     })();
     result.map_err(|e| match e {
@@ -340,6 +400,13 @@ fn run_color(s: &mut Session, p: &Value) -> Result<Value> {
     set_color_with_interrupt(s, p, &Interrupt::NONE)
 }
 pub fn set_letter_spacing_with_interrupt(s: &mut Session, p: &Value, ctl: &Interrupt<'_>) -> Result<Value> {
+    set_letter_spacing_with_font_input(s, p, None, ctl)
+}
+/// Reuse an already-authorized runtime-only exact Inter handle; no saved grant.
+pub fn set_letter_spacing_with_runtime_font(s: &mut Session, p: &Value, font: &PreparedRuntimeFont<'_>, ctl: &Interrupt<'_>) -> Result<Value> {
+    set_letter_spacing_with_font_input(s, p, Some(font), ctl)
+}
+fn set_letter_spacing_with_font_input(s: &mut Session, p: &Value, font: Option<&PreparedRuntimeFont<'_>>, ctl: &Interrupt<'_>) -> Result<Value> {
     let result = (|| {
         let owner = owner(p, "letterSpacingPx")?;
         let spacing = match p.get("letterSpacingPx").and_then(Value::as_u64) {
@@ -348,7 +415,7 @@ pub fn set_letter_spacing_with_interrupt(s: &mut Session, p: &Value, ctl: &Inter
             Some(4) => 4.,
             _ => return Err(bad("letterSpacingPx requires exact integer 0, 2 or 4")),
         };
-        let updated = apply(s, owner, Edit::Spacing(spacing), ctl)?;
+        let updated = apply(s, owner, Edit::Spacing(spacing), font, ctl)?;
         Ok(json!({"layerId":owner.0.to_string(),"letterSpacingPx":spacing as u32,"updated":updated}))
     })();
     result.map_err(|e| match e {
@@ -360,6 +427,13 @@ fn run_spacing(s: &mut Session, p: &Value) -> Result<Value> {
     set_letter_spacing_with_interrupt(s, p, &Interrupt::NONE)
 }
 pub fn set_position_with_interrupt(s: &mut Session, p: &Value, ctl: &Interrupt<'_>) -> Result<Value> {
+    set_position_with_font_input(s, p, None, ctl)
+}
+/// Reuse an already-authorized runtime-only exact Inter handle; no saved grant.
+pub fn set_position_with_runtime_font(s: &mut Session, p: &Value, font: &PreparedRuntimeFont<'_>, ctl: &Interrupt<'_>) -> Result<Value> {
+    set_position_with_font_input(s, p, Some(font), ctl)
+}
+fn set_position_with_font_input(s: &mut Session, p: &Value, font: Option<&PreparedRuntimeFont<'_>>, ctl: &Interrupt<'_>) -> Result<Value> {
     let result = (|| {
         let owner = owner(p, "originPx")?;
         let values = p.get("originPx").and_then(Value::as_array).ok_or_else(|| bad("originPx requires exactly two integer coordinates"))?;
@@ -374,7 +448,7 @@ pub fn set_position_with_interrupt(s: &mut Session, p: &Value, ctl: &Interrupt<'
             }
             *slot = i32::try_from(integer).map_err(|_| bad("originPx exceeds I32"))?;
         }
-        let updated = apply(s, owner, Edit::Position(origin), ctl)?;
+        let updated = apply(s, owner, Edit::Position(origin), font, ctl)?;
         Ok(json!({"layerId":owner.0.to_string(),"originPx":origin,"updated":updated}))
     })();
     result.map_err(|e| match e {
@@ -411,26 +485,33 @@ pub fn underline_edit_candidate(doc: &Document, owner: LayerId) -> bool {
     source_index(doc, owner, &Interrupt::NONE, true).is_ok() && current_underline_ranges(doc, owner).is_some()
 }
 
-fn update_underline(doc: &mut Document, owner: LayerId, ranges: &[[usize; 2]], ctl: &Interrupt<'_>) -> Result<bool> {
+fn update_underline(doc: &mut Document, owner: LayerId, ranges: &[[usize; 2]], font: &PreparedRuntimeFont<'_>, used: &mut u64, ctl: &Interrupt<'_>) -> Result<bool> {
     let (idx, rid, origin) = source_index(doc, owner, ctl, true)?;
     let state = doc.xcf_state.as_ref().ok_or_else(|| bad("missing source state"))?;
     let item = state.source_items.get(idx).ok_or_else(|| bad("missing text source"))?;
-    photocraft_compose::gimp_text_items::qualify_underlined_source(doc, item, ctl)
+    photocraft_compose::gimp_text_items::qualify_underlined_source_with_authorized_font(doc, item, font, ctl)
         .map_err(|e| if ctl.cancelled() { EngineError::Cancelled } else { bad(e.to_string()) })?;
-    let font = photocraft_text::xcf::ExactFont::bundled_inter(ctl).map_err(|e| text_error(e, ctl))?;
+    let font = font.exact_font();
     let state = doc.xcf_state.as_mut().ok_or_else(|| bad("missing source state"))?;
     let resource = state.resources.get(rid).ok_or_else(|| bad("missing font"))?;
     let item = state.source_items.get_mut(idx).ok_or_else(|| bad("missing source"))?;
-    let mut used = 0_u64;
-    photocraft_text::xcf::set_underlined_ranges(item, resource, origin, ranges, &font, 8 << 20, ctl, &mut |n| {
-        used = used.checked_add(n).ok_or(photocraft_text::xcf::TextSourceError::Budget)?;
-        if used > 8 << 20 { Err(photocraft_text::xcf::TextSourceError::Budget) } else { Ok(()) }
+    let limit = (8u64 << 20).checked_sub(*used).ok_or_else(|| bad("text/font shared resident limit"))?;
+    photocraft_text::xcf::set_underlined_ranges(item, resource, origin, ranges, font, limit, ctl, &mut |n| {
+        *used = used.checked_add(n).ok_or(photocraft_text::xcf::TextSourceError::Budget)?;
+        if *used > 8 << 20 { Err(photocraft_text::xcf::TextSourceError::Budget) } else { Ok(()) }
     })
     .map_err(|e| text_error(e, ctl))
 }
 /// Current semantic underline ranges; no opaque source bytes or font authorities
 /// are rewritten. All inputs and pipeline output are checked before history.
 pub fn set_underline_with_interrupt(s: &mut Session, p: &Value, ctl: &Interrupt<'_>) -> Result<Value> {
+    set_underline_with_font_input(s, p, None, ctl)
+}
+/// Reuse an already-authorized runtime-only exact Inter handle; no saved grant.
+pub fn set_underline_with_runtime_font(s: &mut Session, p: &Value, font: &PreparedRuntimeFont<'_>, ctl: &Interrupt<'_>) -> Result<Value> {
+    set_underline_with_font_input(s, p, Some(font), ctl)
+}
+fn set_underline_with_font_input(s: &mut Session, p: &Value, font: Option<&PreparedRuntimeFont<'_>>, ctl: &Interrupt<'_>) -> Result<Value> {
     let result = (|| {
         let owner = owner(p, "ranges")?;
         let values = p
@@ -447,16 +528,20 @@ pub fn set_underline_with_interrupt(s: &mut Session, p: &Value, ctl: &Interrupt<
         }
         let ranges = ranges.get(..values.len()).ok_or_else(|| bad("range limit"))?;
         let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+        source_index(doc, owner, ctl, true)?;
+        let fallback;
+        let font = if let Some(font) = font { font } else { fallback = bundled_font(ctl)?; &fallback };
+        let mut used = font_charge(font, ctl)?;
         let mut proposed = (**doc).clone();
-        let updated = update_underline(&mut proposed, owner, ranges, ctl)?;
+        let updated = update_underline(&mut proposed, owner, ranges, font, &mut used, ctl)?;
         if updated {
-            crate::xcf_filter_cmds::validate_current_pipeline_with_interrupt(&proposed, ctl)?;
+            crate::xcf_filter_cmds::validate_current_pipeline_with_authorized_font(&proposed, font, ctl)?;
             ctl.progress(1.);
             if ctl.cancelled() {
                 return Err(EngineError::Cancelled);
             }
-            s.edit_with_interrupt("Edit GIMP Text Underline", ctl, |doc, _| {
-                update_underline(doc, owner, ranges, ctl)?;
+            s.edit_with_runtime_font_with_interrupt("Edit GIMP Text Underline", font, ctl, |doc, _| {
+                update_underline(doc, owner, ranges, font, &mut used, ctl)?;
                 Ok(())
             })?;
         }
@@ -547,4 +632,28 @@ pub fn specs() -> Vec<CommandSpec> {
             journal: true,
         },
     ]
+}
+
+#[cfg(test)]
+mod runtime_font_tests {
+    use super::*;
+    #[test]
+    fn malformed_edit_is_rejected_before_missing_document_or_font() {
+        let mut session = Session::new();
+        for params in [json!({"layerId":"0","content":"I"}), json!({"layerId":"1","content":""}), json!({"layerId":"1","content":"I","fontPath":"never-read"})] {
+            assert!(matches!(set_content_with_interrupt(&mut session, &params, &Interrupt::NONE), Err(EngineError::BadParams { .. })));
+        }
+        assert!(matches!(set_content_with_interrupt(&mut session, &json!({"layerId":"1","content":"I"}), &Interrupt::NONE), Err(EngineError::NoDocument)));
+    }
+    #[test]
+    fn prepared_external_authority_reuses_exact_bytes_and_cancellation() {
+        let owned = photocraft_text::fonts::INTER_REGULAR.to_vec();
+        let font = runtime_font::prepare_with_charge(runtime_font::RuntimeInput { bytes: &owned, identity: runtime_font::FaceIdentity::inter_regular() }, runtime_font::Limits::default(), &Interrupt::NONE, &mut |_| Ok(()), &mut |_| Ok(())).unwrap();
+        let mut session = Session::new();
+        let params = json!({"layerId":"1","content":"I"});
+        assert!(matches!(set_content_with_runtime_font(&mut session, &params, &font, &Interrupt::NONE), Err(EngineError::NoDocument)));
+        assert_eq!(font_charge(&font, &Interrupt::NONE).unwrap(), font.requirements().peak_bytes);
+        assert!(matches!(font_charge(&font, &Interrupt::cancel_only(&|| true)), Err(EngineError::Cancelled)));
+        assert_eq!(owned.as_slice(), &photocraft_text::fonts::INTER_REGULAR[..]);
+    }
 }
