@@ -7,10 +7,11 @@
 //! `WT_PROXIMITY`, and reports each reading through the same callback as the other platforms —
 //! pen in range (hovering or touching) is `Some`, back to mouse is `None`. The DLL is loaded
 //! dynamically, so a machine without a Wintab driver fails [`Monitor::install`] cleanly. Packets
-//! ask for `PK_ORIENTATION`: a tilt-capable pen's azimuth/altitude become the sample's
-//! `tilt_x`/`tilt_y` and the barrel rotation of an Art Pen or 4D mouse (orTwist) its `rotation`.
-//! Drivers that report no orientation axes — most plain pens — leave both at zero, so nothing
-//! depends on a tilt-capable device.
+//! always ask for pressure, plus `PK_ORIENTATION` when the context device's `DVC_ORIENTATION`
+//! axes say it has tilt or twist — a plain pen gets a pressure-only context rather than one
+//! `WTOpen` refuses. Where reported, a tilt-capable pen's azimuth/altitude become the sample's
+//! `tilt_x`/`tilt_y` and its barrel twist the `rotation`; the move mask carries pressure and
+//! orientation too, so stationary changes still deliver.
 //!
 //! As in `appkit` and `xi`, all decoding (message parameters, pressure scale, eraser bits, hover
 //! vs contact) is pure and unit-tested on every platform; the Windows glue is the gated `win`
@@ -43,17 +44,34 @@ pub fn packet_for_context(lparam: usize, hctx: usize) -> bool {
     lparam == hctx
 }
 
+/// `WTI_DEVICES` (wintab.h): the base `WTInfo` category of the device records; each device has
+/// its own ([`CATEGORY_LIMIT`] slots: 100..200, then `WTI_CURSORS`).
+const WTI_DEVICES: u32 = 100;
+/// `DVC_NPRESSURE` (wintab.h): the normal (tip) pressure `AXIS` entry.
+const DVC_NPRESSURE: u32 = 15;
+/// `DVC_ORIENTATION` (wintab.h): the `AXIS[3]` orientation entry (azimuth, altitude, twist).
+const DVC_ORIENTATION: u32 = 17;
+
 /// `WTI_CURSORS` (wintab.h): the base `WTInfo` category of the cursors. Each category spans
-/// [`CURSOR_LIMIT`] slots (the cursors' 200..300; 300, `WTI_EXTENSIONS`, starts the next).
+/// [`CATEGORY_LIMIT`] slots (the cursors' 200..300; 300, `WTI_EXTENSIONS`, starts the next).
 const WTI_CURSORS: u32 = 200;
-/// How many slots one `WTInfo` category holds.
-const CURSOR_LIMIT: u32 = 100;
+/// How many slots one `WTInfo` category holds (the bases are 100 apart).
+const CATEGORY_LIMIT: u32 = 100;
 
 /// The `WTInfo` category of a packet cursor's `CSR_TYPE` entry: `WTI_CURSORS` plus the cursor
-/// index, or `None` when the index leaves the cursor category ([`CURSOR_LIMIT`] slots) — a packet
+/// index, or `None` when the index leaves the cursor category ([`CATEGORY_LIMIT`] slots) — a packet
 /// field must never select another category's memory.
 pub fn cursor_type_entry(cursor: u32) -> Option<u32> {
-    if cursor < CURSOR_LIMIT { Some(WTI_CURSORS + cursor) } else { None }
+    if cursor < CATEGORY_LIMIT { Some(WTI_CURSORS + cursor) } else { None }
+}
+
+/// The `WTInfo` category of the context's device (`lcDevice`): `WTI_DEVICES` plus the index,
+/// bounded to the device category ([`CATEGORY_LIMIT`] slots — a query must never read another
+/// category). An out-of-range index falls back to device 0's entries: Wacom's `WTI_DEFCONTEXT`
+/// carries `lcDevice = 0xFFFFFFFF` for "the default device", and reading nothing for it dropped
+/// orientation and mis-scaled pressure with the 10-bit fallback.
+pub fn device_category(device: u32) -> u32 {
+    WTI_DEVICES + if device < CATEGORY_LIMIT { device } else { 0 }
 }
 
 /// The pressure scale from an `AXIS` maximum (10-bit Wintab when the driver reports none).
@@ -66,9 +84,10 @@ fn pressure_unit(pressure: u32, pressure_max: f32) -> f32 {
     if pressure_max > 0.0 && pressure_max.is_finite() { (pressure as f32 / pressure_max).clamp(0.0, 1.0) } else { 0.0 }
 }
 
-/// The orientation axes' maxima from `WTI_DEVICES`/`DVC_ORIENTATION` (`AXIS[3]`: azimuth,
-/// altitude, twist), in the driver's own units (tenths of a degree). All zero when the driver
-/// reports no such axes — a pen without tilt or barrel rotation — which maps everything to zero.
+/// The orientation axes' maxima from the selected device's `DVC_ORIENTATION` (`AXIS[3]`:
+/// azimuth, altitude, twist), in the driver's own units (tenths of a degree). All zero when the
+/// driver reports no such axes — a pen without tilt or barrel rotation — which maps everything
+/// to zero.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct OrientationScales {
     pub azimuth: f32,
@@ -84,12 +103,85 @@ impl OrientationScales {
     }
 }
 
-/// The device's report ranges, read once at install from `WTI_DEVICES`: the pressure axis'
+/// The device's report ranges, read at install from the context's device: the pressure axis'
 /// maximum as the divisor for 0..1 ([`pressure_scale`]) and the orientation axes'.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Scales {
     pub pressure_max: f32,
     pub orientation: OrientationScales,
+}
+
+/// The packet data bits (`PK_*`, wintab.h) in bit order (a packet lays its set fields out so).
+const PK_CURSOR: u32 = 0x0020;
+const PK_BUTTONS: u32 = 0x0040;
+const PK_X: u32 = 0x0080;
+const PK_Y: u32 = 0x0100;
+const PK_NORMAL_PRESSURE: u32 = 0x0400;
+const PK_ORIENTATION: u32 = 0x1000;
+
+/// The packet fields every context asks for: cursor, buttons, position and pressure. Pressure
+/// rides the layout unconditionally — every pen reports it, and Wacom's `DVC_PKTDATA` is a default
+/// mask (0x1FF), not a capability list, so gating on it would have dropped pressure and orientation
+/// from a fully capable context.
+const BASE_FIELDS: u32 = PK_CURSOR | PK_BUTTONS | PK_X | PK_Y | PK_NORMAL_PRESSURE;
+
+/// Whether the orientation axes say the device can actually report tilt or twist: nonzero azimuth
+/// and altitude (tilt) or twist maxima (a Z-rotary stub with zero tilt reads as none).
+fn orientation_usable(axes: [i32; 3]) -> bool {
+    (axes[0] > 0 && axes[1] > 0) || axes[2] > 0
+}
+
+/// The `lcPktData` layout and `lcMoveMask` for a device whose `DVC_ORIENTATION` axes are `axes`
+/// (`None` when the driver reports none).
+///
+/// The layout may only name supported fields — Wintab fails `WTOpen` on an unsupported item — so
+/// `PK_ORIENTATION` is requested only when the device has usable orientation axes. The move mask
+/// names position, pressure and orientation so stationary changes still generate a packet;
+/// buttons and cursor have their own events.
+pub fn packet_masks(axes: Option<[i32; 3]>) -> (u32, u32) {
+    let pkt_data = match axes {
+        Some(axes) if orientation_usable(axes) => BASE_FIELDS | PK_ORIENTATION,
+        _ => BASE_FIELDS,
+    };
+    (pkt_data, pkt_data & (PK_X | PK_Y | PK_NORMAL_PRESSURE | PK_ORIENTATION))
+}
+
+/// The `WTInfo` entries [`context_settings`] reads from the context's device.
+pub trait DeviceInfo {
+    /// The normal-pressure axis' maximum (`DVC_NPRESSURE`), in driver units.
+    fn pressure_max(&mut self, category: u32) -> Option<i32>;
+    /// The orientation axes' maxima (`DVC_ORIENTATION`: azimuth, altitude, twist); `None` when
+    /// the device reports no axes.
+    fn orientation_max(&mut self, category: u32) -> Option<[i32; 3]>;
+}
+
+/// The context's tuned fields and its device's report ranges.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ContextSettings {
+    /// `lcPktData`: the fields in each packet.
+    pub pkt_data: u32,
+    /// `lcMoveMask`: the fields whose change generates a packet.
+    pub move_mask: u32,
+    /// The selected device's ranges.
+    pub scales: Scales,
+}
+
+/// The settings for a context on `device` (`lcDevice`), querying only that device's `WTInfo`
+/// category: another device's ranges would scale its packets wrongly. [`DeviceInfo`] supplies the
+/// answers, keeping the multi-device and capability logic testable on every platform.
+pub fn context_settings(device: u32, info: &mut impl DeviceInfo) -> ContextSettings {
+    let category = device_category(device);
+    let axes = info.orientation_max(category);
+    let (pkt_data, move_mask) = packet_masks(axes);
+    // The driver's Tip-Feel'ed output range (0..ax_max); missing reads as the 10-bit fallback.
+    let pressure_max = pressure_scale(info.pressure_max(category).unwrap_or(0));
+    // No PK_ORIENTATION in the layout: its fields stay zero, so the axes are not read.
+    let orientation = if pkt_data & PK_ORIENTATION != 0 {
+        OrientationScales::new(axes.unwrap_or([0; 3]))
+    } else {
+        OrientationScales::default()
+    };
+    ContextSettings { pkt_data, move_mask, scales: Scales { pressure_max, orientation } }
 }
 
 /// One packet's decoded fields: what the stream reads out of a `WT_PACKET`.
@@ -189,23 +281,12 @@ mod win {
     use crate::{Error, deliver};
 
     // `wintab.h`: the default message base (`WT_PACKET`/`WT_PROXIMITY` are its offsets), the
-    // default context to copy, the cursor's type entry, the device's pressure and orientation
-    // axes, and the packet fields this reader asks for (in the wintab bit order).
+    // default context to copy, and the cursor's type entry.
     const WT_DEFBASE: u32 = 0x7FF0;
     const WT_PACKET: u32 = WT_DEFBASE;
     const WT_PROXIMITY: u32 = WT_DEFBASE + 5;
     const WTI_DEFCONTEXT: u32 = 3;
-    const WTI_DEVICES: u32 = 100;
-    const DVC_NPRESSURE: u32 = 15;
-    const DVC_ORIENTATION: u32 = 17;
     const CSR_TYPE: u32 = 20;
-    const PK_CURSOR: u32 = 0x0020;
-    const PK_BUTTONS: u32 = 0x0040;
-    const PK_X: u32 = 0x0080;
-    const PK_Y: u32 = 0x0100;
-    const PK_NORMAL_PRESSURE: u32 = 0x0400;
-    const PK_ORIENTATION: u32 = 0x1000;
-    const PKT_FIELDS: u32 = PK_CURSOR | PK_BUTTONS | PK_X | PK_Y | PK_NORMAL_PRESSURE | PK_ORIENTATION;
     /// `CXO_MESSAGES`: want `WT_*` messages; deliberately without `CXO_SYSTEM` (the driver's own
     /// system context keeps moving the cursor and clicking, which is what the unchecked box
     /// promises).
@@ -287,9 +368,9 @@ mod win {
         twist: i32,
     }
 
-    /// One packet, the fields of `PKT_FIELDS` in bit order. `WTPacket` writes only the fields the
-    /// driver grants, so the rest of a `default()` packet stays zero — an ungranted
-    /// `PK_ORIENTATION` reads as no tilt rather than stale data.
+    /// One packet, the context's layout (`lcPktData`) in bit order. `WTPacket` writes only the
+    /// granted fields, so the rest of a `default()` packet stays zero — an unrequested or
+    /// ungranted `PK_ORIENTATION` reads as no tilt rather than stale data.
     #[repr(C)]
     #[derive(Clone, Copy, Default)]
     struct Packet {
@@ -366,6 +447,17 @@ mod win {
         }
     }
 
+    /// The context device's `WTInfo` entries, as [`context_settings`] asks for them.
+    impl DeviceInfo for Dll {
+        fn pressure_max(&mut self, category: u32) -> Option<i32> {
+            self.entry::<AXIS>(category, DVC_NPRESSURE).map(|axis| axis.ax_max)
+        }
+
+        fn orientation_max(&mut self, category: u32) -> Option<[i32; 3]> {
+            self.entry::<[AXIS; 3]>(category, DVC_ORIENTATION).map(|axes| axes.map(|axis| axis.ax_max))
+        }
+    }
+
     /// Read one `WTInfo` entry. The driver-reported size is queried with a null output and checked
     /// before it writes, so a driver built against a larger structure can never write past the
     /// buffer; its first `size_of::<T>()` bytes are then copied out. `None` when the entry is
@@ -413,7 +505,7 @@ mod win {
             if hwnd.is_invalid() {
                 return Err(Error::Unsupported("no window handle".into()));
             }
-            let dll = Dll::load()?;
+            let mut dll = Dll::load()?;
             // SAFETY: a plain API call; `0, 0, null` is the documented presence check.
             if unsafe { (dll.wt_info)(0, 0, std::ptr::null_mut()) } == 0 {
                 return Err(Error::Unsupported("no Wintab devices (WTInfo reports none)".into()));
@@ -427,15 +519,12 @@ mod win {
             }
             lc.options = CXO_MESSAGES;
             lc.msg_base = WT_DEFBASE;
-            lc.pkt_data = PKT_FIELDS;
+            // The default context's own device supplies the layout (supported fields only), the
+            // move mask and the scales — a context on device 1 must not read device 0's.
+            let settings = context_settings(lc.device, &mut dll);
+            lc.pkt_data = settings.pkt_data;
             lc.pkt_mode = 0;
-            lc.move_mask = PK_X | PK_Y;
-            // The driver's Tip-Feel'ed output range (0..ax_max), and the azimuth/altitude/twist
-            // ranges: absent for a pen without tilt or barrel rotation (`DVC_ORIENTATION` then
-            // reports no size and the zeros map everything to zero).
-            let pressure_max = pressure_scale(dll.entry::<AXIS>(WTI_DEVICES, DVC_NPRESSURE).map_or(0, |axis| axis.ax_max));
-            let orientation_axes = dll.entry::<[AXIS; 3]>(WTI_DEVICES, DVC_ORIENTATION).unwrap_or([AXIS::default(); 3]);
-            let scales = Scales { pressure_max, orientation: OrientationScales::new(orientation_axes.map(|axis| axis.ax_max)) };
+            lc.move_mask = settings.move_mask;
 
             // SAFETY: the name/fields above satisfy the spec; `hwnd` is the live window the
             // caller keeps alive; `lc` lives for the call; the context is closed in `Drop` (or at
@@ -453,7 +542,7 @@ mod win {
                 wtpacket: dll.wtpacket,
                 wt_close: dll.wt_close,
                 hctx,
-                scales,
+                scales: settings.scales,
                 last_cursor: Cell::new((u32::MAX, 0)),
                 stream: Cell::new(PenStream::default()),
                 freed,
@@ -639,6 +728,39 @@ mod tests {
     }
 
     #[test]
+    fn device_entries_stay_inside_the_device_category() {
+        assert_eq!(device_category(0), 100, "device 0's own category");
+        assert_eq!(device_category(1), 101, "a second device gets its own category");
+        assert_eq!(device_category(99), 199, "the category's last slot");
+        assert_eq!(device_category(100), 100, "200 starts the cursors: nothing to read, fall back");
+        assert_eq!(device_category(u32::MAX), 100, "Wacom's lcDevice = 0xFFFFFFFF sentinel");
+    }
+
+    #[test]
+    fn packet_fields_follow_the_devices_orientation_axes() {
+        // A plain pen (no axes): pressure only, no PK_ORIENTATION claim (WTOpen fails on an
+        // unsupported item), and the move mask still carries pressure.
+        let (pkt_data, move_mask) = packet_masks(None);
+        assert_eq!(pkt_data, BASE_FIELDS);
+        assert_eq!(pkt_data & PK_ORIENTATION, 0, "no orientation claim without axes");
+        assert_eq!(move_mask & PK_NORMAL_PRESSURE, PK_NORMAL_PRESSURE);
+        assert_eq!(move_mask & PK_ORIENTATION, 0);
+        // Axes reported but zero or twist-only tilt stubs: still no orientation.
+        assert_eq!(packet_masks(Some([0, 0, 0])).0, BASE_FIELDS);
+        assert_eq!(packet_masks(Some([0, 0, 3600])).0, BASE_FIELDS | PK_ORIENTATION, "Z-rotary-only");
+        assert_eq!(packet_masks(Some([3600, 0, 0])).0, BASE_FIELDS, "no altitude: no tilt");
+        // A tilt-capable pen: orientation requested, and in the move mask.
+        let (pkt_data, move_mask) = packet_masks(Some([3600, 900, 3600]));
+        assert_eq!(pkt_data, BASE_FIELDS | PK_ORIENTATION);
+        assert_eq!(move_mask & PK_NORMAL_PRESSURE, PK_NORMAL_PRESSURE);
+        assert_eq!(move_mask & PK_ORIENTATION, PK_ORIENTATION);
+        assert_eq!(move_mask & !pkt_data, 0, "the move mask only names requested fields");
+        // Wacom's real DVC_PKTDATA default mask (0x1FF) must not gate anything: it lists no
+        // pressure or orientation bits even on a fully capable pen.
+        assert_eq!(0x1FF & (PK_NORMAL_PRESSURE | PK_ORIENTATION), 0);
+    }
+
+    #[test]
     fn eraser_bits() {
         assert!(!is_eraser(0, 0x0802), "Wacom stylus");
         assert!(is_eraser(0, 0x082a), "grip pen's eraser end");
@@ -755,5 +877,134 @@ mod tests {
         // A plain pen (no orientation axes) still reads zero tilt and rotation.
         let s = contact(pen.packet(reading(512), 0x0802, plain_scales(1024.0)));
         assert!(s.tilt_x == 0.0 && s.tilt_y == 0.0 && s.rotation == 0.0, "{s:?}");
+    }
+
+    #[test]
+    fn stationary_pressure_and_tilt_changes_reach_the_stream() {
+        // With pressure and orientation in the move mask, a pen resting at one spot still gets a
+        // WT_PACKET when only those change (the reading carries no position at all); the old
+        // PK_X|PK_Y-only mask delivered neither, freezing the sample.
+        let (_, move_mask) = packet_masks(Some([3600, 900, 3600]));
+        assert_eq!(move_mask & (PK_NORMAL_PRESSURE | PK_ORIENTATION), PK_NORMAL_PRESSURE | PK_ORIENTATION);
+        let full = Scales { pressure_max: 8191.0, orientation: OrientationScales { azimuth: 3600.0, altitude: 900.0, twist: 3600.0 } };
+        let mut pen = PenStream::default();
+        let contact = |u| match u {
+            Update::Set(Some(s)) => s,
+            other => panic!("expected a sample, got {other:?}"),
+        };
+        let s = contact(pen.packet(oriented(4095, 0, 900, 0), 0x0802, full));
+        assert!((s.pressure - 0.5).abs() < 0.001, "half of the 8191 range: {s:?}");
+        // Same spot, same pressure: only the tilt and twist moved, and both must come through.
+        let s = contact(pen.packet(oriented(4095, 900, 450, 900), 0x0802, full));
+        assert!((s.tilt_x - 45.0).abs() < 0.01 && (s.rotation - 270.0).abs() < 0.01, "{s:?}");
+    }
+
+    /// A fake `WTInfo` device table for [`context_settings`], recording every entry asked for.
+    #[derive(Default)]
+    struct FakeDevice {
+        pressure_max: Option<i32>,
+        orientation_max: Option<[i32; 3]>,
+    }
+
+    #[derive(Default)]
+    struct FakeDevices {
+        devices: Vec<FakeDevice>,
+        /// Every `(category, entry)` queried, for asserting the right category was read.
+        asked: Vec<(u32, u32)>,
+    }
+
+    impl FakeDevices {
+        fn device(&mut self, category: u32) -> Option<&mut FakeDevice> {
+            let index = usize::try_from(category.checked_sub(WTI_DEVICES)?).ok()?;
+            self.devices.get_mut(index)
+        }
+    }
+
+    impl DeviceInfo for FakeDevices {
+        fn pressure_max(&mut self, category: u32) -> Option<i32> {
+            self.asked.push((category, DVC_NPRESSURE));
+            self.device(category)?.pressure_max
+        }
+
+        fn orientation_max(&mut self, category: u32) -> Option<[i32; 3]> {
+            self.asked.push((category, DVC_ORIENTATION));
+            self.device(category)?.orientation_max
+        }
+    }
+
+    #[test]
+    fn context_settings_come_from_the_contexts_own_device() {
+        // The fixture that reported the bug: device 0 a coarse 10-bit, 1800-twist pen, device 1
+        // an 8191-range, 3600-twist one. Reading device 1 with device 0's ranges turned pressure
+        // 4095 into 1.0 instead of ~0.5 and twist 900 into 180° instead of 270°.
+        let mut info = FakeDevices {
+            devices: vec![
+                FakeDevice { pressure_max: Some(1023), orientation_max: Some([3600, 900, 1800]) },
+                FakeDevice { pressure_max: Some(8191), orientation_max: Some([3600, 900, 3600]) },
+                FakeDevice { pressure_max: Some(2047), orientation_max: None },
+            ],
+            ..FakeDevices::default()
+        };
+        let settings = context_settings(1, &mut info);
+        assert_eq!(settings.scales.pressure_max, 8191.0, "device 1's range, not device 0's 1023");
+        assert_eq!(settings.scales.orientation, OrientationScales { azimuth: 3600.0, altitude: 900.0, twist: 3600.0 });
+        assert_eq!(settings.pkt_data & PK_ORIENTATION, PK_ORIENTATION, "device 1 has orientation axes");
+        assert_eq!(info.asked.len(), 2, "{:?}", info.asked);
+        assert!(info.asked.iter().all(|&(category, _)| category == WTI_DEVICES + 1), "queried device 0's category: {:?}", info.asked);
+        let mut pen = PenStream::default();
+        let contact = |u| match u {
+            Update::Set(Some(s)) => s,
+            other => panic!("expected a sample, got {other:?}"),
+        };
+        let s = contact(pen.packet(oriented(4095, 0, 900, 900), 0x0802, settings.scales));
+        assert!((s.pressure - 0.5).abs() < 0.001, "4095 of device 1's 8191: {s:?}");
+        assert!((s.rotation - 270.0).abs() < 0.01, "twist 900 of device 1's 3600: {s:?}");
+
+        // The same reading through device 0's scales, for contrast: device 0's owner gets these.
+        info.asked.clear();
+        let settings = context_settings(0, &mut info);
+        assert_eq!(settings.scales.pressure_max, 1023.0);
+        assert_eq!(settings.scales.orientation.twist, 1800.0);
+        assert!(info.asked.iter().all(|&(category, _)| category == WTI_DEVICES), "{:?}", info.asked);
+        let mut pen = PenStream::default();
+        let s = contact(pen.packet(oriented(4095, 0, 900, 900), 0x0802, settings.scales));
+        assert_eq!(s.pressure, 1.0, "4095 clamps against device 0's own 1023");
+        assert!((s.rotation - 180.0).abs() < 0.01, "twist 900 of device 0's 1800: {s:?}");
+
+        // Device 2 reports no orientation axes: a pressure-only context.
+        info.asked.clear();
+        let settings = context_settings(2, &mut info);
+        assert_eq!(settings.scales.pressure_max, 2047.0);
+        assert_eq!(settings.scales.orientation, OrientationScales::default());
+        assert_eq!(settings.pkt_data, BASE_FIELDS);
+
+        // An index outside the device category falls back to device 0's entries — not "nothing".
+        info.asked.clear();
+        let settings = context_settings(200, &mut info);
+        assert!(info.asked.iter().all(|&(category, _)| category == WTI_DEVICES), "{:?}", info.asked);
+        assert_eq!(settings.scales.pressure_max, 1023.0);
+        assert_eq!(settings.scales.orientation.twist, 1800.0);
+    }
+
+    #[test]
+    fn wacom_default_context_device_sentinel_reads_the_default_device() {
+        // The regression the real driver exposed: Wacom's `WTI_DEFCONTEXT` leaves
+        // `lcDevice = 0xFFFFFFFF`, and treating it as "no device" dropped orientation from the
+        // layout (tilt and rotation dead) and fell back to the 10-bit pressure scale against the
+        // pen's real 32767 range, so pressure clamped to 1.0 almost at once.
+        let real = FakeDevice { pressure_max: Some(32767), orientation_max: Some([3600, 900, 3600]) };
+        let mut info = FakeDevices { devices: vec![real], ..FakeDevices::default() };
+        let settings = context_settings(u32::MAX, &mut info);
+        assert!(info.asked.iter().all(|&(category, _)| category == WTI_DEVICES), "{:?}", info.asked);
+        assert_eq!(settings.pkt_data, BASE_FIELDS | PK_ORIENTATION, "orientation must ride the layout");
+        assert_eq!(settings.scales.pressure_max, 32767.0);
+        let mut pen = PenStream::default();
+        let contact = |u| match u {
+            Update::Set(Some(s)) => s,
+            other => panic!("expected a sample, got {other:?}"),
+        };
+        let s = contact(pen.packet(oriented(16383, 0, 900, 900), 0x0802, settings.scales));
+        assert!((s.pressure - 0.5).abs() < 0.001, "16383 of the pen's 32767: {s:?}");
+        assert!((s.rotation - 270.0).abs() < 0.01, "twist 900 of 3600: {s:?}");
     }
 }
