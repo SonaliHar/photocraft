@@ -2,7 +2,7 @@
 
 use crate::blend::BlendMode;
 use crate::borrowed::BorrowedChannels;
-use crate::compression::{Compression, PlaneLayout, decode_planes, encode_planes};
+use crate::compression::{Compression, PlaneLayout, decode_planes, encode_planes, validate_decoded_planes};
 use crate::error::{PsdError, Result};
 use crate::header::{MAX_DIMENSION, Version};
 use crate::io::{Reader, WriteExt, decode_legacy_name, read_pascal, write_pascal};
@@ -396,6 +396,15 @@ impl ChannelData {
         }
     }
 
+    pub(crate) fn validate_from(&self, data: &[u8], width: usize, height: usize, depth: u16, version: Version) -> Result<()> {
+        let layout = PlaneLayout { planes: 1, width, height, depth, version };
+        match self.compression {
+            Some(c) => validate_decoded_planes(c, data, &layout),
+            None if layout.decoded_len()? == 0 => Ok(()),
+            None => Err(PsdError::invalid("channel has no data")),
+        }
+    }
+
     /// Replaces the channel contents, re-encoding with `compression`.
     #[allow(clippy::too_many_arguments)]
     pub fn set_decoded(&mut self, compression: Compression, decoded: &[u8], width: usize, height: usize, depth: u16, version: Version) -> Result<()> {
@@ -540,6 +549,13 @@ impl LayerRecord {
             (CHANNEL_REAL_USER_MASK, MaskData::Mask(m)) => m.real.map_or(m.rect, |r| r.rect),
             _ => self.rect,
         }
+    }
+
+    /// Validates a channel completely without retaining its decoded samples.
+    pub fn validate_channel(&self, id: i16, depth: u16, version: Version) -> Result<()> {
+        let ch = self.channel(id).ok_or_else(|| PsdError::invalid(format!("layer has no channel {id}")))?;
+        let (w, h) = self.channel_rect(id).size()?;
+        ch.validate_from(&ch.data, w, h, depth, version)
     }
 
     /// Decodes a channel's samples (planar, big-endian).

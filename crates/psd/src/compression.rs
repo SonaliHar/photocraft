@@ -278,6 +278,39 @@ pub fn decode_planes(compression: Compression, data: &[u8], layout: &PlaneLayout
     }
 }
 
+/// Validates every decoded row or zlib stream without retaining decoded pixels.
+///
+/// Unlike parser-level validation, this enforces the same decoded-size limits and malformed
+/// packet errors as [`decode_planes`]. Useful for channels whose pixels will be discarded.
+pub fn validate_decoded_planes(compression: Compression, data: &[u8], layout: &PlaneLayout) -> Result<()> {
+    let total = layout.decoded_len()?;
+    match compression {
+        Compression::Raw => {
+            if data.len() < total {
+                return Err(PsdError::UnexpectedEof { offset: data.len(), needed: total - data.len() });
+            }
+            Ok(())
+        }
+        Compression::Rle => {
+            let (mut r, counts) = rle_input(data, layout, total)?;
+            for count in counts {
+                packbits::validate_row(r.bytes(count)?, layout.row_bytes())?;
+            }
+            Ok(())
+        }
+        Compression::Zip => inflate_checked(data, total as u64, false).map(|_| ()),
+        Compression::ZipPrediction => {
+            inflate_checked(data, total as u64, false)?;
+            // unpredict examines depth only when there is a nonempty complete row.
+            if layout.row_bytes() > 0 && total >= layout.row_bytes() && !matches!(layout.depth, 1 | 8 | 16 | 32) {
+                return Err(PsdError::Unsupported(format!("prediction for depth {}", layout.depth)));
+            }
+            Ok(())
+        }
+        Compression::Unknown(c) => Err(PsdError::Unsupported(format!("compression method {c}"))),
+    }
+}
+
 /// Encodes planar data (excluding the 2-byte compression field).
 pub fn encode_planes(compression: Compression, decoded: &[u8], layout: &PlaneLayout) -> Result<Vec<u8>> {
     let total = layout.decoded_len()?;
@@ -372,9 +405,8 @@ fn read_count(r: &mut Reader<'_>, v: Version) -> Result<usize> {
     Ok(if v.is_psb() { r.u32()? as usize } else { r.u16()? as usize })
 }
 
-fn decode_rle(data: &[u8], layout: &PlaneLayout, total: usize) -> Result<Vec<u8>> {
+fn rle_input<'a>(data: &'a [u8], layout: &PlaneLayout, total: usize) -> Result<(Reader<'a>, Vec<usize>)> {
     let rows = layout.rows()?;
-    let rb = layout.row_bytes();
     let mut r = Reader::new(data);
     r.check_count(rows as u64, layout.count_size() as u64)?;
     let mut counts = Vec::with_capacity(rows);
@@ -385,6 +417,13 @@ fn decode_rle(data: &[u8], layout: &PlaneLayout, total: usize) -> Result<Vec<u8>
     if (total as u64) > (r.remaining() as u64).saturating_mul(64) {
         return Err(PsdError::Decompress("RLE data too short for declared size".into()));
     }
+    Ok((r, counts))
+}
+
+fn decode_rle(data: &[u8], layout: &PlaneLayout, total: usize) -> Result<Vec<u8>> {
+    let (mut r, counts) = rle_input(data, layout, total)?;
+    let rows = counts.len();
+    let rb = layout.row_bytes();
     // Up to MAX_DECODED_BYTES: report a machine without that much memory instead of aborting.
     let mut out = Vec::new();
     out.try_reserve_exact(total).map_err(|_| PsdError::LimitExceeded("not enough memory for the decoded channel data"))?;
@@ -652,6 +691,48 @@ mod tests {
 
     fn layout(planes: usize, width: usize, height: usize, depth: u16, version: Version) -> PlaneLayout {
         PlaneLayout { planes, width, height, depth, version }
+    }
+
+    #[test]
+    fn discarded_channel_validation_matches_decode_errors_and_limits() {
+        for version in [Version::Psd, Version::Psb] {
+            for depth in [1, 8, 16, 32] {
+                let l = layout(1, 9, 3, depth, version);
+                let source = vec![37; l.decoded_len().unwrap()];
+                for compression in Compression::ALL {
+                    let data = encode_planes(compression, &source, &l).unwrap();
+                    assert_eq!(validate_decoded_planes(compression, &data, &l), decode_planes(compression, &data, &l).map(|_| ()));
+                    for cut in 0..data.len() {
+                        assert_eq!(
+                            validate_decoded_planes(compression, &data[..cut], &l),
+                            decode_planes(compression, &data[..cut], &l).map(|_| ()),
+                            "{version:?}/{depth}/{compression:?}/cut{cut}"
+                        );
+                    }
+                    for at in 0..data.len() {
+                        let mut corrupt = data.clone();
+                        corrupt[at] ^= 0xff;
+                        assert_eq!(
+                            validate_decoded_planes(compression, &corrupt, &l),
+                            decode_planes(compression, &corrupt, &l).map(|_| ()),
+                            "{version:?}/{depth}/{compression:?}/byte{at}"
+                        );
+                    }
+                }
+            }
+        }
+        for l in [layout(1, 0, 2, 24, Version::Psd), layout(1, 2, 0, 24, Version::Psb), layout(1, 2, 2, 24, Version::Psd)] {
+            let data = zip_compress(&vec![0; l.decoded_len().unwrap()]);
+            assert_eq!(validate_decoded_planes(Compression::ZipPrediction, &data, &l), decode_planes(Compression::ZipPrediction, &data, &l).map(|_| ()));
+        }
+        let too_large = layout(1, 300_000, 300_000, 32, Version::Psb);
+        for compression in Compression::ALL.into_iter().chain([Compression::Unknown(7)]) {
+            assert_eq!(validate_decoded_planes(compression, &[0], &too_large), decode_planes(compression, &[0], &too_large).map(|_| ()));
+        }
+        let small = layout(1, 2, 2, 8, Version::Psd);
+        assert_eq!(validate_decoded_planes(Compression::Unknown(7), &[0], &small), decode_planes(Compression::Unknown(7), &[0], &small).map(|_| ()));
+        let excessive = zip_compress(&vec![0; (1 << 20) + 5]);
+        assert_eq!(validate_decoded_planes(Compression::Zip, &excessive, &small), decode_planes(Compression::Zip, &excessive, &small).map(|_| ()));
     }
 
     fn pb_roundtrip(src: &[u8]) -> Vec<u8> {

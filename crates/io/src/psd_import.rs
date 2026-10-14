@@ -90,6 +90,25 @@ fn selected_real_mask(rec: &LayerRecord) -> Option<photocraft_psd::RealMask> {
     rec.layer_mask()?.real
 }
 
+// Exact native-sample planes can reuse their allocation. Packed bitmap channels (depth 1)
+// and any unusual short/long plane retain the old interleave padding/truncation behavior.
+fn mask_plane_to_native(mut plane: Vec<u8>, pixels: usize, sample: SampleType) -> Vec<u8> {
+    if pixels.checked_mul(sample.bytes()) != Some(plane.len()) {
+        return interleave(&[Some(&plane)], &[zero_sample(sample)], pixels, sample, &[false]);
+    }
+    if cfg!(target_endian = "little") {
+        for value in plane.chunks_exact_mut(sample.bytes()) {
+            value.reverse();
+        }
+    }
+    plane
+}
+
+// Coverage already in rendered caches, or replaced by a successfully parsed vector mask.
+fn bitmap_mask_is_discarded(rec: &LayerRecord, replacement: bool) -> bool {
+    replacement && selected_real_mask(rec).is_none() && rec.layer_mask().is_some_and(|m| m.flags & 8 != 0)
+}
+
 /// The fill of a plain shape layer (fill block + vector path, no stroke) to import as a fill layer
 /// with a vector mask: when its mask parameters give the vector mask a density below 100 % or a
 /// feather (`.1` true), or when it fills with a pattern.
@@ -236,7 +255,7 @@ impl Ctx<'_> {
         surf
     }
 
-    fn record_mask(&mut self, rec: &LayerRecord, name: &str) -> Option<LayerMask> {
+    fn record_mask(&mut self, rec: &LayerRecord, name: &str, discard: bool) -> Option<LayerMask> {
         let m = rec.layer_mask()?;
         let (id, rect, default, flags) = match selected_real_mask(rec) {
             Some(real) => (CHANNEL_REAL_USER_MASK, real.rect, real.background, real.flags),
@@ -245,14 +264,27 @@ impl Ctx<'_> {
                 (CHANNEL_USER_MASK, m.rect, m.default_color, m.flags)
             }
         };
+        if discard {
+            // Keep the same malformed-channel warning in the same position, but do not allocate
+            // decoded pixels or tiles for a synthetic bitmap mask that cannot affect the layer.
+            if !rect.is_empty() && rect.size().is_ok() && rec.channel(id).is_some() {
+                let result = match self.view {
+                    Some(view) => view.validate_channel(self.record_index, id),
+                    None => rec.validate_channel(id, self.file.header.depth, self.file.header.version),
+                };
+                if let Err(e) = result {
+                    self.warn(format!("layer \"{name}\": channel {id} could not be decoded ({e}); treated as empty"));
+                }
+            }
+            return None;
+        }
         let mut surface = Surface::with_default(self.mask_fmt, &[f32::from(default) / 255.0]);
         if !rect.is_empty()
             && let Ok((w, h)) = rect.size()
             && let Some(plane) = self.channel_plane(rec, id, name)
         {
-            let s = self.mask_fmt.sample;
-            let bytes = interleave(&[Some(&plane)], &[zero_sample(s)], w * h, s, &[false]);
-            surface.write_interleaved(Rect::new(rect.left, rect.top, rect.right, rect.bottom), &bytes);
+            let plane = mask_plane_to_native(plane, w * h, self.mask_fmt.sample);
+            surface.write_interleaved(Rect::new(rect.left, rect.top, rect.right, rect.bottom), &plane);
             surface.prune();
         }
         let params = m.parameters;
@@ -279,7 +311,7 @@ impl Ctx<'_> {
         }
     }
 
-    fn apply_common(&mut self, l: &mut Layer, rec: &LayerRecord, blend_override: Option<photocraft_psd::BlendMode>) {
+    fn apply_common(&mut self, l: &mut Layer, rec: &LayerRecord, blend_override: Option<photocraft_psd::BlendMode>, discard_mask: bool) {
         l.visible = rec.is_visible();
         l.opacity = f32::from(rec.opacity) / 255.0;
         l.fill_opacity = f32::from(rec.fill_opacity()) / 255.0;
@@ -336,7 +368,7 @@ impl Ctx<'_> {
         l.blend_if = crate::blocks::blend_if_from_ranges(&rec.blending_ranges);
         l.psd_id = rec.layer_id();
         let name = l.name.clone();
-        l.mask = self.record_mask(rec, &name);
+        l.mask = self.record_mask(rec, &name, discard_mask);
     }
 
     fn layer_from_record(&mut self, rec: &LayerRecord) -> Layer {
@@ -473,35 +505,26 @@ impl Ctx<'_> {
         let mut l = Layer::new(name, content);
         l.psd_blocks = blocks;
         l.fill_cache = fill_cache;
-        self.apply_common(&mut l, rec, None);
-        // Mask flag bit 3: the user mask was rendered from vector data. For
-        // shape/text/smart layers the cached pixels already include that
-        // coverage, so applying it again would double-mask.
-        if rendered && selected_real_mask(rec).is_none() && rec.layer_mask().is_some_and(|m| m.flags & 8 != 0) {
-            l.mask = None;
-        }
-        if !matches!(l.content, LayerContent::Shape(_)) {
-            self.apply_vector_mask(&mut l, rec);
-        }
+        let vector_mask = if matches!(l.content, LayerContent::Shape(_)) { None } else { self.vector_mask(rec) };
+        let discard_mask = bitmap_mask_is_discarded(rec, rendered || vector_mask.is_some());
+        self.apply_common(&mut l, rec, None, discard_mask);
+        l.vector_mask = vector_mask;
         l
     }
 
     /// Typed vector mask from `vsms`/`vmsk` (non-shape layers). A user mask that Photoshop
     /// rendered from the vector data (flag bit 3, no separate real mask) is dropped: the
     /// compositor rasterizes the vector mask itself.
-    fn apply_vector_mask(&mut self, l: &mut Layer, rec: &LayerRecord) {
-        let Some(b) = rec.block(b"vsms").or_else(|| rec.block(b"vmsk")) else { return };
-        let Some(mut vm) = crate::vector_map::vector_mask_from_block(&b.data, self.file.header.width, self.file.header.height) else { return };
+    fn vector_mask(&self, rec: &LayerRecord) -> Option<photocraft_doc::VectorMask> {
+        let b = rec.block(b"vsms").or_else(|| rec.block(b"vmsk"))?;
+        let mut vm = crate::vector_map::vector_mask_from_block(&b.data, self.file.header.width, self.file.header.height)?;
         if let Some(m) = rec.layer_mask() {
             if let Some(p) = m.parameters {
                 vm.density = p.vector_density.map_or(1.0, |d| f32::from(d) / 255.0);
                 vm.feather = p.vector_feather.map_or(0.0, |f| f as f32);
             }
-            if m.flags & 8 != 0 && selected_real_mask(rec).is_none() {
-                l.mask = None;
-            }
         }
-        l.vector_mask = Some(vm);
+        Some(vm)
     }
 
     fn build(&mut self, nodes: &[LayerNode], depth: usize) -> Vec<Layer> {
@@ -541,8 +564,10 @@ impl Ctx<'_> {
                     l.psd_blocks = preserved_blocks(rec);
                     // Child recursion changes the active record; group masks use the parent.
                     self.record_index = *index;
-                    self.apply_common(&mut l, rec, sd.and_then(|s| s.blend_mode));
-                    self.apply_vector_mask(&mut l, rec);
+                    let vector_mask = self.vector_mask(rec);
+                    let discard_mask = bitmap_mask_is_discarded(rec, vector_mask.is_some());
+                    self.apply_common(&mut l, rec, sd.and_then(|s| s.blend_mode), discard_mask);
+                    l.vector_mask = vector_mask;
                     l
                 }
             })
@@ -1000,4 +1025,40 @@ fn psd_to_document_source<'a>(file: &'a PsdFile, view: Option<&'a PsdView<'a>>, 
     }
     ctl.progress(1.0);
     Some((doc, cx.warnings))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod mask_plane_tests {
+    use super::*;
+
+    #[test]
+    fn packed_depth1_mask_keeps_old_padding_and_writes_valid_surface() {
+        let rect = Rect::from_xywh(-1, 2, 5, 1);
+        let plane = photocraft_psd::compression::decode_planes(
+            photocraft_psd::Compression::Raw,
+            &[0b1010_0000],
+            &photocraft_psd::PlaneLayout { planes: 1, width: 5, height: 1, depth: 1, version: photocraft_psd::Version::Psd },
+        )
+        .unwrap();
+        let expected = interleave(&[Some(&plane)], &[zero_sample(SampleType::U8)], 5, SampleType::U8, &[false]);
+        let native = mask_plane_to_native(plane, 5, SampleType::U8);
+        assert_eq!(native, expected);
+        assert_eq!(native, [160, 0, 0, 0, 0]);
+        let mut surface = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false));
+        surface.write_interleaved(rect, &native);
+        assert_eq!(surface.to_interleaved(rect), native);
+    }
+
+    #[test]
+    fn mask_native_fast_path_and_short_plane_match_interleave_at_all_depths() {
+        for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let bytes = (0..5 * sample.bytes()).map(|i| (i * 19) as u8).collect::<Vec<_>>();
+            for length in [0, bytes.len() - 1, bytes.len()] {
+                let plane = bytes[..length].to_vec();
+                let expected = interleave(&[Some(&plane)], &[zero_sample(sample)], 5, sample, &[false]);
+                assert_eq!(mask_plane_to_native(plane, 5, sample), expected);
+            }
+        }
+    }
 }

@@ -52,6 +52,15 @@ impl<'a> PsdView<'a> {
         channel.decode_from(bytes, w, h, self.metadata.header.depth, self.metadata.header.version)
     }
 
+    /// Validates a layer channel completely without retaining its decoded samples.
+    pub fn validate_channel(&self, index: usize, id: i16) -> Result<()> {
+        let rec = self.metadata.layers().get(index).ok_or_else(|| PsdError::invalid(format!("no layer record {index}")))?;
+        let channel = rec.channel(id).ok_or_else(|| PsdError::invalid(format!("layer has no channel {id}")))?;
+        let bytes = self.channel_bytes(index, id).ok_or_else(|| PsdError::invalid("missing borrowed channel data"))?;
+        let (w, h) = rec.channel_rect(id).size()?;
+        channel.validate_from(bytes, w, h, self.metadata.header.depth, self.metadata.header.version)
+    }
+
     /// Decodes all merged channels into planar big-endian samples.
     pub fn decode_merged(&self) -> Result<Vec<u8>> {
         decode_planes(self.metadata.image_data.compression, self.merged, &ImageData::layout(&self.metadata.header))
