@@ -1,6 +1,6 @@
 # PhotoCraft vs Adobe Photoshop: target-app parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-13 · **Change:** minor (on-canvas corner radius widgets, TOOL-214-12; `.atn` import maps 112 events; Free Transform H/V skew fields; stale rows corrected against `main` and the scorecard, estimates unchanged; Photoshop Actions `.atn` load and save; 2026-10-10: Tilt-Shift measurements added; earlier the same day: major, full re-measure against Photoshop 2026 27.11.0; merged `parity-estimate.md` and the roadmap's honest assessment; stale missing-tool rows corrected: Color Replacement and Red Eye are live toolbar tools, Frame landed; percentages unchanged) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-14 · **Change:** minor (print positioning, grayscale preview/output, native print confirmation and desktop CI coverage improved; on-canvas corner radius widgets, TOOL-214-12; `.atn` import maps 112 events; Free Transform H/V skew fields; stale rows corrected against `main` and the scorecard, estimates unchanged; Photoshop Actions `.atn` load and save; 2026-10-10: Tilt-Shift measurements added; earlier the same day: major, full re-measure against Photoshop 2026 27.11.0; merged `parity-estimate.md` and the roadmap's honest assessment; stale missing-tool rows corrected: Color Replacement and Red Eye are live toolbar tools, Frame landed; percentages unchanged) · **Target:** Adobe Photoshop 2026
 
 The authoritative answer to "how close is PhotoCraft to Photoshop, and how much work is left". The
 one-page summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work list is [`gaps.md`](gaps.md);
@@ -185,6 +185,14 @@ parity for the area and are already contained in the dimension rows above.
 | AI / generative | 10% | 300–600 | See the dimension row |
 
 Batch supports [output naming templates](batch-naming.md); AUTO-219-5 remains partial.
+
+Print improvements (2026-10-13): preview dragging and stable centering, linked physical sizes,
+rotation-independent PPI, retained driver choices and explicit preset/custom media selection.
+Focused macOS/Linux/Windows print CI was added the same day; Windows direct paper limits are
+validated separately from PDF export. Print now confirms through the macOS print sheet, Linux XDG
+Print portal, or Windows Print dialog; cancellation submits no job. Grayscale appears in the
+preview and PDF. Physical acceptance remains open. Covered by engine and real dialog tests. Printer imageable margins,
+proof-color preview and resize handles remain open; no percentage re-measured.
 
 ## Remaining effort and calibration
 
@@ -567,6 +575,8 @@ See [method, raw measurements and reproduction](five-algorithm-performance.md).
 |---|---|---|
 | 2026-10-13 | minor | Vector shapes: on-canvas corner radius widgets on live rectangles (TOOL-214-12); estimates unchanged |
 | 2026-10-13 | minor | Stale "missing tool" rows corrected against main: Color Replacement (`paint.colorReplacement`), Red Eye (`paint.redEye`) and Add/Delete Anchor Point (the Pen flyout) are live toolbar tools and Frame landed, so Art History Brush is the only tool still missing; percentages unchanged |
+| 2026-10-13 | minor | Removed misleading PDF-viewer handoff; grayscale preview/PDF and focused desktop platform CI; percentages unchanged |
+| 2026-10-13 | minor | Print preview dragging, rotation-independent PPI, linked size fields, retained driver choices and explicit media selection; percentages unchanged |
 | 2026-10-12 | minor | Free Transform options bar H/V skew fields; percentages unchanged |
 | 2026-10-12 | minor | `.atn` import: 112 events mapped (TrueGrit Texture Supply sets play end to end); percentages unchanged |
 | 2026-10-12 | minor | Photoshop Actions `.atn` load and save (90 events mapped both ways); percentages unchanged |
