@@ -1055,6 +1055,8 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             .iter()
             .enumerate()
             .map(|(i, p)| {
+                // Labels stay logical: the OS renders native menus (macOS) and the in-app bar
+                // reorders for egui's LTR-only layout.
                 let label = std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.clone());
                 MenuItem { id: format!("file.openRecent.{i}"), label, path: rp.clone(), shortcut: None, enabled: true, checked: None, color: None }
             })
@@ -1088,6 +1090,7 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
         let active = app.session.active_index();
         let docs = app.session.documents().iter().enumerate().map(|(i, st)| MenuItem {
             id: format!("{DOCUMENT_ITEM}{i}"),
+            // Kept logical: the OS renders native menus (macOS) and the in-app bar reorders.
             label: st.doc.name.clone(),
             path: window(),
             shortcut: None,
@@ -1455,7 +1458,9 @@ fn render_level_rows(ui: &mut egui::Ui, items: &[&MenuItem], depth: usize, click
                 }
                 continue;
             }
-            let mut text = translated_menu_label(lang, it);
+            // egui lays font runs out in stream order, so visual order for anything user-derived
+            // (document and recent-file names); catalogue text is a borrowed no-op.
+            let mut text = crate::bidi::visual(&translated_menu_label(lang, it)).into_owned();
             if let Some(c) = it.checked {
                 text = format!("{} {}", if c { "✔" } else { "  " }, text);
             }
@@ -2057,6 +2062,39 @@ mod open_recent_tests {
         invoke(&mut app, &ctx, "file.removeRecent", json!({"path": "/tmp/not-listed.png"})).unwrap();
         assert_eq!(app.ui.recent_files.len(), 2, "a path that isn't listed changes nothing");
         assert!(invoke(&mut app, &ctx, "file.removeRecent", json!({})).is_err(), "needs a path");
+    }
+
+    // #5159: an Arabic document name paints in visual (reversed-word) order in the in-app menu
+    // bar, characters intact; native menus keep the logical name for the OS to reorder.
+    #[test]
+    fn arabic_menu_items_paint_in_visual_order() {
+        use egui_kittest::kittest::NodeT;
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.add_document(
+            photocraft_doc::Document::new("ملف تجريبي.psd", photocraft_geom::Size::new(4, 4), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8),
+            None,
+        );
+        app.sync_views();
+        let mut harness = Harness::builder().with_size(egui::vec2(1024.0, 200.0)).build_ui_state(
+            |ui, app| {
+                menu_bar(app, ui);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ALL[0]);
+        harness.run_steps(3);
+        harness.get_by_label("Window").click();
+        harness.run_steps(3);
+        let painted: Vec<String> = harness
+            .query_all_by_label_contains("تجريبي")
+            .filter_map(|n| n.accesskit_node().label().as_deref().map(str::to_string))
+            .collect();
+        let label = painted.first().map(String::as_str).unwrap_or_default();
+        assert!(!painted.is_empty(), "the document's menu item is painted");
+        let (second, first) = (label.find("تجريبي"), label.find("ملف"));
+        assert!(second.is_some() && first.is_some(), "both words survive: {label}");
+        assert!(second < first, "words painted in visual order, not logical: {label}");
     }
 
     #[cfg(not(target_arch = "wasm32"))]

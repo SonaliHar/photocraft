@@ -1076,7 +1076,7 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 continue;
             }
             if k == "quality" && f.get("__command").and_then(Value::as_str) == Some("file.automate.batch") {
-                ui.label(label(&k));
+                ui.label(crate::bidi::visual(&label(&k)).as_ref());
                 let mut custom = v.as_f64().is_some();
                 let mut quality = v.as_f64().or_else(|| f.get("__batchQuality").and_then(Value::as_f64)).unwrap_or(8.0).clamp(0.0, 12.0) as f32;
                 ui.horizontal(|ui| {
@@ -1095,11 +1095,14 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 Value::Bool(b) => {
                     ui.label("");
                     let mut b = *b;
-                    ui.checkbox(&mut b, label(&k));
+                    // __labels carry file-derived names (EXR parts, paths); the dropdown below
+                    // reorders its own copies, so only the painted labels do it here.
+                    let shown = crate::bidi::visual(&label(&k)).into_owned();
+                    ui.checkbox(&mut b, shown);
                     json!(b)
                 }
                 Value::String(s) => {
-                    ui.label(label(&k));
+                    ui.label(crate::bidi::visual(&label(&k)).as_ref());
                     let mut s = s.clone();
                     match choices.get(&k).and_then(Value::as_array) {
                         Some(opts) => {

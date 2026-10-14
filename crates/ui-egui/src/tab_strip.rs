@@ -16,9 +16,11 @@ pub fn fit(natural: &[f32], selected: usize, avail: f32, min_w: f32, chevron_w: 
     craft_ui::tabs::fit(natural, selected, avail, min_w, chevron_w)
 }
 
-/// A label laid out on one row no wider than `max_w`, cut with '…' when it doesn't fit.
+/// A label laid out on one row no wider than `max_w`, cut with '…' when it doesn't fit. The text
+/// is drawn in visual order, so RTL word order reads correctly.
 pub fn elided(ui: &Ui, text: &str, font: egui::FontId, color: egui::Color32, max_w: f32) -> std::sync::Arc<egui::Galley> {
-    let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
+    let text = crate::bidi::visual(text);
+    let mut job = egui::text::LayoutJob::simple_singleline(text.into_owned(), font, color);
     job.wrap = egui::text::TextWrapping { max_width: max_w.max(1.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
     ui.painter().layout_job(job)
 }
@@ -317,6 +319,21 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// An Arabic tab label is drawn in visual word order; a Latin label is unchanged.
+    #[test]
+    fn elided_draws_rtl_labels_in_visual_order() {
+        let ctx = egui::Context::default();
+        crate::PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let font = egui::FontId::proportional(12.0);
+            let arabic = elided(ui, "لا شيء", font.clone(), egui::Color32::WHITE, 100.0);
+            assert_eq!(arabic.text(), "شيء لا", "the words are reordered for display");
+            let latin = elided(ui, "Layer 1", font, egui::Color32::WHITE, 100.0);
+            assert_eq!(latin.text(), "Layer 1", "LTR labels pass through unchanged");
+        });
+        output.textures_delta.clear();
     }
 
     #[test]

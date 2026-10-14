@@ -169,7 +169,7 @@ fn drop(app: &mut PhotocraftApp, ctx: &egui::Context, dest: usize, at: Option<[f
 pub fn ghost(ctx: &egui::Context, p: egui::Pos2, label: &str) {
     let t = crate::theme::Tokens::get(ctx);
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("layer-transfer-ghost")));
-    let g = painter.layout_no_wrap(label.to_string(), egui::FontId::proportional(12.0), t.text);
+    let g = painter.layout_no_wrap(crate::bidi::visual(label).into_owned(), egui::FontId::proportional(12.0), t.text);
     let r = egui::Rect::from_min_size(p + egui::vec2(12.0, -10.0), g.size() + egui::vec2(16.0, 8.0));
     painter.rect_filled(r, t.radius_sm, t.card.gamma_multiply(0.95));
     painter.rect_stroke(r, t.radius_sm, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);

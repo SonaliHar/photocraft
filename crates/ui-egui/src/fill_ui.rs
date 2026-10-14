@@ -186,7 +186,8 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
                         f.insert("pattern".into(), json!(id));
                     }
                     let name = app.session.patterns.items.iter().find(|p| p.id == get_str(f, "pattern", "")).map(|p| p.display_name().to_string());
-                    ui.label(egui::RichText::new(name.unwrap_or_default()).color(Tokens::get(ui.ctx()).text_dim));
+                    // Pattern names come from imported .pat files.
+                    ui.label(egui::RichText::new(crate::bidi::visual(&name.unwrap_or_default()).as_ref()).color(Tokens::get(ui.ctx()).text_dim));
                 }
             });
         }

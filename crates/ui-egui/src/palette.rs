@@ -216,7 +216,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                             ui.painter().rect_filled(rect, t.radius_sm, if i == sel { t.accent_soft } else { t.hover });
                         }
                         let color = if *enabled { t.text } else { t.text_faint };
-                        ui.painter().text(rect.left_center() + vec2(12.0, 0.0), Align2::LEFT_CENTER, label, theme::medium(13.0), color);
+                        // Menu labels carry document and recent-file names; egui needs visual order.
+                        ui.painter().text(rect.left_center() + vec2(12.0, 0.0), Align2::LEFT_CENTER, crate::bidi::visual(label), theme::medium(13.0), color);
                         if let Some(d) = detail {
                             ui.painter().text(rect.right_center() - vec2(12.0, 0.0), Align2::RIGHT_CENTER, d, egui::FontId::proportional(11.5), t.text_faint);
                         }

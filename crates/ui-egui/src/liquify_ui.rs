@@ -747,7 +747,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         painter.text(
             title.center(),
             Align2::CENTER_CENTER,
-            format!("{} ({}, {:.0}%)", tl!("Liquify…").trim_end_matches('…'), d.layer_name, pct),
+            crate::bidi::visual(&format!("{} ({}, {:.0}%)", tl!("Liquify…").trim_end_matches('…'), d.layer_name, pct)),
             FontId::proportional(13.0),
             t.text,
         );

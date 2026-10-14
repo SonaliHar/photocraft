@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (Serbian catalog; previously minor: Italian native review) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (Arabic word order in UI chrome via the bidi helper, #5159; previously minor: Serbian catalog) · **Target:** Adobe Photoshop 2026
 
 Per-language status of PhotoCraft's UI. How catalogs work and how to add one:
 [`localization.md`](localization.md). Language notes: [Korean](localization-ko.md), [Spanish](localization-es.md),
@@ -34,7 +34,7 @@ speakers, ~55% ready. Remaining: 80–140 h, plus native-speaker review (recorde
 | Simplified Chinese | `zh-hans` | 1,608 / 1,608 (100%) | 2,366 | dialogs, tooltips yes; engine messages English | CJK fonts (lazy loader), IME preedit/commit, vertical type | no | partial | 8–12 h |
 | Spanish | `es` | 1,608 / 1,608 (100%) | 2,413 | as above | Latin | no | partial | 6–10 h |
 | Hindi | `hi` | 0 (0%) | – | – | Devanagari shaping in the text engine (parley/HarfRust); no Devanagari fallback font (TYPE-218-3) | no | none | 20–30 h |
-| Arabic | `ar` | 0 (0%) | – | – | Arabic shaping and bidi in the text engine, Arabic fallback font; RTL shell layout but not inside panels, and UI labels in LTR word order (DIST-220-4), paragraph direction has no UI (TYPE-218-2), layer names as tofu (#1408, #1693) | no | none | 40–60 h |
+| Arabic | `ar` | 0 (0%) | – | – | Arabic shaping and bidi in the text engine, Arabic fallback font; RTL shell layout but not inside panels; chrome strings display in visual word order via the app-side helper (`bidi.rs`, #5159), while glued script boundaries and `TextEdit` content stay logical (DIST-220-4), paragraph direction has no UI (TYPE-218-2), layer names as tofu (#1408, #1693) | no | none | 40–60 h |
 | French | `fr` | 1,608 / 1,608 (100%) | 2,766 | as above | Latin | no | partial | 6–10 h |
 | Portuguese (Brazil) | `pt-br` | 1,608 / 1,608 (100%) | 2,788 | as above | Latin; every `pt` locale uses it | no | partial | 6–10 h |
 | Indonesian | `id` | 1,608 / 1,608 (100%) | 2,764 | as above | Latin | no | partial | 6–10 h |
@@ -65,10 +65,12 @@ engine localization or native review is complete.
 ## Cross-language gaps
 
 - Engine error, status and parameter-help messages are English in every language.
-- Right-to-left UI layout is partial (2026-10-10): the shell mirrors for Arabic, Hebrew, Persian,
-  Urdu and other right-to-left codes (`direction.rs`), but panel interiors, dialogs, menu rows,
-  submenus and document tabs stay left to right. UI labels also lack an Arabic fallback font, and
-  egui 0.36 joins letters within a word but orders a line's words left to right (no bidi).
+- Right-to-left UI layout is partial (2026-10-10; word order 2026-10-14): the shell mirrors for
+  Arabic, Hebrew, Persian, Urdu and other right-to-left codes (`direction.rs`), but panel
+  interiors, dialogs, menu rows, submenus and document tabs stay left to right. Chrome strings
+  display in visual word order through the app-side `bidi::visual` helper (`bidi.rs`, #5159);
+  words glued to another script without whitespace and `TextEdit` content (egui's caret
+  indexing, emilk/egui#8576) stay logical. UI labels still lack an Arabic fallback font.
 - Web build: no browser-locale detection, no CJK web fonts.
 - WebAssembly plug-ins disappear from Filter › Plug-ins when the UI isn't English (#2540).
 - A user couldn't find the language option (#2532): it is in Preferences › Interface.
@@ -77,6 +79,7 @@ engine localization or native review is complete.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Arabic word order in UI chrome: RTL strings display in visual order via the app-side `bidi::visual` helper (#5159); layout mirroring beyond the shell, the Arabic fallback font and the TextEdit caret remain open |
 | 2026-10-10 | major | First version, measured from the catalogs with the `i18n-coverage` rules |
 | 2026-10-10 | minor | Right-to-left shell layout (menu bar, title, options and status bars, toolbox and dock sides) |
 | 2026-10-11 | minor | Czech dynamic status/notice and hardware text, render labels and Navigator zoom context; engine messages remain English |

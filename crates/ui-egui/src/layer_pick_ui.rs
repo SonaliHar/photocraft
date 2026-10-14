@@ -82,7 +82,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
         egui::Frame::menu(ui.style()).show(ui, |ui| {
             // As wide as the longest name (long names are cut short), like a menu.
             let font = egui::TextStyle::Button.resolve(ui.style());
-            let widest = menu.layers.iter().map(|(_, n)| ui.painter().layout_no_wrap(n.clone(), font.clone(), Color32::WHITE).size().x).fold(0.0, f32::max);
+            let widest = menu.layers.iter().map(|(_, n)| ui.painter().layout_no_wrap(crate::bidi::visual(n).into_owned(), font.clone(), Color32::WHITE).size().x).fold(0.0, f32::max);
             let w = (widest + 2.0 * ui.spacing().button_padding.x + 8.0).clamp(140.0, 360.0);
             ui.set_width(w);
             ui.spacing_mut().item_spacing.y = 0.0;
@@ -90,7 +90,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
             egui::ScrollArea::vertical().max_height((screen.height() - 24.0).max(48.0)).show(ui, |ui| {
                 ui.set_width(w);
                 for (layer, name) in &menu.layers {
-                    let b = egui::Button::selectable(Some(*layer) == active, name.as_str()).truncate().min_size(egui::vec2(w, 22.0));
+                    let b = egui::Button::selectable(Some(*layer) == active, crate::bidi::visual(name).into_owned()).truncate().min_size(egui::vec2(w, 22.0));
                     if ui.add(b).clicked() {
                         chosen = Some(*layer);
                     }
