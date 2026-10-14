@@ -181,6 +181,29 @@ fn save_a_copy_writes_the_dpx_bits_asked_for() {
     }
 }
 
+#[test]
+fn save_a_copy_writes_tex_options_and_rejects_bad_params_before_writing() {
+    let dir = tmp("tex-options");
+    let mut s = session(8, 8, 8);
+    let out = join(&dir, "copy.tex");
+    let revision = s.active().unwrap().revision;
+    for code in [12, 13, 14, 20] {
+        s.execute("file.saveACopy", json!({"path": out, "texCompression": code, "texMipmaps": false})).unwrap();
+        let bytes = std::fs::read(&out).unwrap();
+        let info = photocraft_codecs::tex_info(&bytes).unwrap();
+        assert_eq!(info.compression.code(), code);
+        assert!(!info.mipmaps);
+        assert_eq!(s.active().unwrap().path, None);
+        assert_eq!(s.active().unwrap().revision, revision);
+    }
+    let original = std::fs::read(&out).unwrap();
+    for mut params in [json!({"texCompression": 999}), json!({"texCompression": "bc7"}), json!({"texMipmaps": 1})] {
+        params["path"] = json!(out);
+        assert!(matches!(s.execute("file.saveACopy", params), Err(EngineError::BadParams { .. })));
+        assert_eq!(std::fs::read(&out).unwrap(), original);
+    }
+}
+
 /// A `tgaBits` other than 24 or 32 is a bad parameter, reported before anything is written.
 #[test]
 fn bad_targa_bits_are_refused_before_writing() {

@@ -28,6 +28,7 @@ pub mod web;
 pub use crate::codecs::exr_cryptomatte::{cryptomatte_id, cryptomatte_key, cryptomatte_preview_color};
 pub use crate::codecs::gif_frames::{AnimationFrame, MAX_GIF_FRAMES};
 pub use crate::codecs::png::{PngPalette, encode_indexed as encode_png_indexed, palette as png_palette};
+pub use crate::codecs::riot_tex::{TexCompression, TexInfo, info as tex_info};
 pub use crate::codecs::tiff::{PhotoshopTags as TiffPhotoshopTags, photoshop_tags as tiff_photoshop_tags, writes_little_endian as tiff_writes_little_endian};
 pub use crate::codecs::tiff_ifd::{TiffInfo, TiffPage, TiffPageKind};
 pub use crate::error::CodecError;
@@ -69,6 +70,7 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
     }
     let l = &opts.limits;
     let img = match format {
+        Format::RiotTex => codecs::riot_tex::decode(bytes, l),
         Format::Png => png::decode(bytes, l),
         Format::Jpeg => jpeg::decode(bytes, l),
         Format::Tiff => tiff::decode(bytes, l),
@@ -242,6 +244,7 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
     }
     let plan = fidelity::plan(image, format, opts);
     match format {
+        Format::RiotTex => codecs::riot_tex::encode(image, opts),
         Format::Png => png::encode(image, plan, opts),
         Format::Jpeg => jpeg::encode(image, plan, opts),
         Format::Tiff => tiff::encode(image, plan, opts),

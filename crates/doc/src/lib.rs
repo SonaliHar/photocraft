@@ -923,6 +923,12 @@ pub struct Document {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct FileEncoding {
+    /// Riot TEX format code retained for Save.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tex_compression: Option<u8>,
+    /// Whether the source TEX has a full mip chain.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tex_mipmaps: Option<bool>,
     /// JPEG quality (estimated from the file's quantisation tables on open).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jpeg_quality: Option<u8>,

@@ -216,7 +216,8 @@ pub fn fidelity_warnings_with(image: &Image, format: Format, opts: &EncodeOption
     // Compression
     if format == Format::Gif {
         w.push(W::PaletteQuantized);
-    } else if c.lossy || (format == Format::WebP && !opts.webp_lossless) {
+    } else if c.lossy || (format == Format::WebP && !opts.webp_lossless) || (format == Format::RiotTex && opts.tex_compression != crate::TexCompression::Bgra8)
+    {
         w.push(W::LossyCompression);
     }
 

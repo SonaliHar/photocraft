@@ -16,7 +16,8 @@ photocraft-cli: headless Photocraft
 
 USAGE:
   photocraft-cli convert <in> <out> [--format <ext>] [--quality <1-100>] [--tiff-layers] [--tga-bits <24|32>] [--dpx-bits <8|10|12|16>]
-      Convert between formats (.pcraft, .psd, .png, .jpg, .tif, .webp, .exr, …).
+      Convert between formats (.pcraft, .psd, .png, .jpg, .tif, .webp, .exr, .tex, …).
+      TEX: --tex-format bc1|bc3|bc5|bc7|bgra8 (default bgra8); --tex-mipmaps true|false (default true).
       TIFF output is flat unless --tiff-layers keeps the layers (Photoshop layer data).
       --quality sets the JPEG or WebP quality; a WebP written with a quality is lossy, without one lossless.
       --tga-bits sets a TGA's bits per pixel: 32 writes the alpha channel (or else the transparency) as
@@ -69,17 +70,22 @@ struct Subcommand {
 }
 
 const SUBCOMMANDS: &[Subcommand] = &[
-    Subcommand { name: "convert", values: &["--format", "--quality", "--tga-bits", "--dpx-bits"], bare: &["--tiff-layers"], run: convert },
+    Subcommand {
+        name: "convert",
+        values: &["--format", "--quality", "--tga-bits", "--dpx-bits", "--tex-format", "--tex-mipmaps"],
+        bare: &["--tiff-layers"],
+        run: convert,
+    },
     Subcommand { name: "info", values: &[], bare: &["--compact"], run: |a, out, _| info(a, out) },
     Subcommand {
         name: "run",
-        values: &["--new", "--cmd", "--params", "--out", "--format", "--quality", "--tga-bits", "--dpx-bits"],
+        values: &["--new", "--cmd", "--params", "--out", "--format", "--quality", "--tga-bits", "--dpx-bits", "--tex-format", "--tex-mipmaps"],
         bare: &["--tiff-layers"],
         run: run_cmds,
     },
     Subcommand {
         name: "batch",
-        values: &["--actions", "--action", "--in", "--out", "--format", "--quality", "--tga-bits", "--dpx-bits"],
+        values: &["--actions", "--action", "--in", "--out", "--format", "--quality", "--tga-bits", "--dpx-bits", "--tex-format", "--tex-mipmaps"],
         bare: &["--in-place", "--tiff-layers"],
         run: batch,
     },
@@ -218,6 +224,23 @@ fn export_opts(a: &Args) -> Result<ExportOptions, String> {
     if let Some(b) = a.get("--dpx-bits") {
         o.encode.dpx_bits =
             Some(b.parse().ok().and_then(photocraft_io::DpxBits::from_bits).ok_or_else(|| format!("bad --dpx-bits `{b}`: expected 8, 10, 12 or 16"))?);
+    }
+    if let Some(f) = a.get("--tex-format") {
+        o.encode.tex_compression = match f.to_ascii_lowercase().as_str() {
+            "bc1" => photocraft_codecs::TexCompression::Bc1,
+            "bc3" => photocraft_codecs::TexCompression::Bc3,
+            "bc5" => photocraft_codecs::TexCompression::Bc5,
+            "bc7" => photocraft_codecs::TexCompression::Bc7,
+            "bgra8" => photocraft_codecs::TexCompression::Bgra8,
+            _ => return Err("--tex-format expects bc1, bc3, bc5, bc7 or bgra8".into()),
+        };
+    }
+    if let Some(m) = a.get("--tex-mipmaps") {
+        o.encode.tex_mipmaps = match m {
+            "true" => true,
+            "false" => false,
+            _ => return Err("--tex-mipmaps expects true or false".into()),
+        };
     }
     Ok(o)
 }

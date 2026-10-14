@@ -199,6 +199,7 @@ pub mod swatches_ui;
 pub mod symmetry_ui;
 mod tab_strip;
 pub mod targa_options_ui;
+pub mod tex_options_ui;
 pub mod text_field_menu;
 pub mod theme;
 pub mod tiff_options_ui;
@@ -249,6 +250,8 @@ pub type ImportFn = Box<dyn Fn(&str, &[u8], usize) -> Result<(Document, Vec<Stri
 /// Encoder settings chosen in Export As (the file format comes from the name's extension).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExportSettings {
+    pub tex_compression: photocraft_codecs::TexCompression,
+    pub tex_mipmaps: bool,
     /// JPEG quality 1–100 (None = codec default).
     pub jpeg_quality: Option<u8>,
     /// WebP: lossless (VP8L) rather than lossy (VP8 at [`Self::webp_quality`]).
@@ -275,6 +278,8 @@ pub struct ExportSettings {
 impl Default for ExportSettings {
     fn default() -> Self {
         ExportSettings {
+            tex_compression: photocraft_codecs::TexCompression::Bgra8,
+            tex_mipmaps: true,
             jpeg_quality: None,
             webp_lossless: true,
             webp_quality: None,
@@ -751,6 +756,7 @@ pub struct PhotocraftApp {
     /// Files read but not opened yet: the first waits on its profile prompt, the rest behind it
     /// (see `open_prompt`).
     pub(crate) held_opens: std::collections::VecDeque<open_prompt::Held>,
+    pub(crate) tex_options: Option<tex_options_ui::Prompt>,
     /// Set once the user has agreed to quit, so the resulting close request goes through.
     pub(crate) allow_close: bool,
     /// Pen pressure/tilt from the platform (see `stylus`).
@@ -889,6 +895,7 @@ impl PhotocraftApp {
             save_dirs: HashMap::new(),
             targa_options: None,
             held_opens: Default::default(),
+            tex_options: None,
             allow_close: false,
             stylus: Default::default(),
             background_jobs: false,
@@ -1363,6 +1370,11 @@ impl PhotocraftApp {
 
     /// [`Self::save_as_with`] once the path is known.
     fn save_to(&mut self, path: String, tga_bits: Option<photocraft_io::TgaBits>) -> Result<Value, String> {
+        if tex_options_ui::is_tex_path(&path) {
+            let copy = self.saves_copy(&path, None)?;
+            tex_options_ui::park(self, path.clone(), copy, "file.saveAs")?;
+            return Ok(serde_json::json!({"path": path, "warnings": []}));
+        }
         // An RGB Targa asks for its bits per pixel, unless the caller chose them; the save
         // continues from the prompt (still a copy when it would be one without the prompt),
         // which records the step once answered.
@@ -1420,6 +1432,20 @@ impl PhotocraftApp {
             return self.save_in_place(path);
         }
         let path = params.get("path").and_then(Value::as_str).filter(|p| !p.is_empty()).ok_or("Save As needs a `path`")?;
+        if tex_options_ui::is_tex_path(path) {
+            let (c, m) = photocraft_engine::file_cmds::tex_params(params, id).map_err(|e| e.to_string())?;
+            let mut settings = self.save_settings();
+            if let Some(c) = c {
+                settings.tex_compression = c;
+            }
+            if let Some(m) = m {
+                settings.tex_mipmaps = m;
+            }
+            let copy = id == "file.saveACopy" || self.saves_copy(path, None)?;
+            let result = self.write_document(path.to_string(), &settings, copy)?;
+            self.session.journal.push((id.into(), params.clone()));
+            return Ok(serde_json::json!({"path":path,"pending":result.is_none()}));
+        }
         let tga_bits = targa_options_ui::bits_param(params, id)?;
         if id == "file.saveACopy" {
             // A copy: the document keeps its own file and unsaved state, as when recorded (#4373).
@@ -1442,6 +1468,8 @@ impl PhotocraftApp {
         let mut settings = ExportSettings { image_previews: previews, psd_maximize_compatibility: maximize, ..ExportSettings::default() };
         if let Some(st) = self.session.active() {
             let e = &st.doc.file_encoding;
+            settings.tex_compression = e.tex_compression.and_then(photocraft_codecs::TexCompression::from_code).unwrap_or_default();
+            settings.tex_mipmaps = e.tex_mipmaps.unwrap_or(true);
             settings.jpeg_quality = e.jpeg_quality.map(|q| q.clamp(1, 100));
             settings.webp_lossless = e.webp_lossless.unwrap_or(settings.webp_lossless);
             settings.webp_quality = e.webp_quality.map(|q| q.min(100));
@@ -1493,6 +1521,7 @@ impl PhotocraftApp {
         let (bytes, warnings) = export(&st.doc, &path, settings)?;
         let write = self.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;
+        tex_options_ui::remember(self, doc, &path, settings, copy);
         self.saved(doc, revision, &path, &warnings, copy);
         Ok(Some((path, warnings)))
     }
@@ -1557,7 +1586,7 @@ impl PhotocraftApp {
 
     /// TIFF Options or Targa Options is waiting on an answer before a save is written.
     pub(crate) fn save_options_open(&self) -> bool {
-        self.tiff_options.is_some() || self.targa_options.is_some()
+        self.tiff_options.is_some() || self.targa_options.is_some() || self.tex_options.is_some()
     }
 
     /// A print worker may still be handing a job to the system queue.
@@ -1873,6 +1902,7 @@ impl eframe::App for PhotocraftApp {
         discard_ui::show(self, &ctx);
         tiff_options_ui::show(self, &ctx);
         targa_options_ui::show(self, &ctx);
+        tex_options_ui::show(self, &ctx);
         distort_ui::show(self, &ctx);
         camera_raw_ui::show(self, &ctx);
         wide_angle_ui::show(self, &ctx);

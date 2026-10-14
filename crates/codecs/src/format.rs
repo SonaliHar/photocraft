@@ -12,6 +12,8 @@ pub enum Format {
     Gif,
     Bmp,
     Tga,
+    /// Riot Games texture container (BC1/3/5/7 and BGRA8).
+    RiotTex,
     Ico,
     /// Netpbm family: PBM/PGM/PPM (P1–P6), PAM (P7) and PFM (`PF`/`Pf`).
     Pnm,
@@ -95,7 +97,7 @@ const ALL_LAYOUTS: &[ChannelLayout] = &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::C
 
 impl Format {
     /// Every format known to the crate (enabled or not).
-    pub const ALL: [Format; 19] = [
+    pub const ALL: [Format; 20] = [
         Format::Png,
         Format::Jpeg,
         Format::Tiff,
@@ -103,6 +105,7 @@ impl Format {
         Format::Gif,
         Format::Bmp,
         Format::Tga,
+        Format::RiotTex,
         Format::Ico,
         Format::Pnm,
         Format::Pcx,
@@ -136,6 +139,7 @@ impl Format {
             Format::Gif => "GIF",
             Format::Bmp => "BMP",
             Format::Tga => "TGA",
+            Format::RiotTex => "Riot TEX",
             Format::Ico => "ICO",
             Format::Pnm => "Netpbm",
             Format::Pcx => "PCX",
@@ -162,6 +166,7 @@ impl Format {
             Format::Gif => &["gif"],
             Format::Bmp => &["bmp", "dib"],
             Format::Tga => &["tga", "icb", "vda", "vst"],
+            Format::RiotTex => &["tex"],
             Format::Ico => &["ico"],
             Format::Pnm => &["pnm", "pbm", "pgm", "ppm", "pam", "pfm"],
             Format::Pcx => &["pcx"],
@@ -186,6 +191,7 @@ impl Format {
             Format::Gif => "image/gif",
             Format::Bmp => "image/bmp",
             Format::Tga => "image/x-tga",
+            Format::RiotTex => "image/x-riot-tex",
             Format::Ico => "image/x-icon",
             Format::Pnm => "image/x-portable-anymap",
             Format::Pcx => "image/x-pcx",
@@ -204,7 +210,7 @@ impl Format {
     /// Maximum encodable dimensions, if the format has a hard limit.
     pub fn max_dimensions(self) -> Option<(u32, u32)> {
         match self {
-            Format::Jpeg | Format::Gif => Some((65535, 65535)),
+            Format::Jpeg | Format::Gif | Format::RiotTex => Some((65535, 65535)),
             Format::WebP => Some((16384, 16384)),
             Format::Ico => Some((256, 256)),
             _ => None,
@@ -236,7 +242,7 @@ pub fn caps(format: Format) -> FormatCaps {
         Format::Tiff => FormatCaps { depths: &[S::U8, S::U16, S::F32], layouts: ALL_LAYOUTS, icc: true, exif: true, xmp: true, dpi: true, text: true, ..base },
         Format::WebP => FormatCaps { icc: true, exif: true, xmp: true, animation: true, ..base },
         Format::Gif => FormatCaps { layouts: &[L::Rgba], animation: true, lossy: true, ..base },
-        Format::Bmp => base,
+        Format::Bmp | Format::RiotTex => base,
         Format::Tga => FormatCaps { layouts: RGB_GRAY, ..base },
         Format::Ico => FormatCaps { layouts: &[L::Rgba], ..base },
         Format::Pnm => FormatCaps { depths: &[S::U8, S::U16, S::F32], layouts: ALL_LAYOUTS, ..base },
@@ -260,6 +266,9 @@ pub fn caps(format: Format) -> FormatCaps {
 /// magic and is recognized last, by header plausibility.
 pub fn detect(bytes: &[u8]) -> Option<Format> {
     let b = bytes;
+    if b.starts_with(b"TEX\0") {
+        return Some(Format::RiotTex);
+    }
     if b.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Some(Format::Png);
     }

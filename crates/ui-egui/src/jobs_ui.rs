@@ -134,6 +134,7 @@ const SAVE_CANCELLED: &str = "cancelled";
 /// A save running in the background: what to record once the file is written.
 #[derive(Clone, Debug)]
 pub struct SaveJob {
+    pub settings: ExportSettings,
     pub job: JobId,
     pub doc: DocId,
     /// The document's revision when the save started (the job locks it against edits).
@@ -277,6 +278,7 @@ pub fn start_save(
     let result_path = path.clone();
     let state = Arc::new(SaveState::default());
     let worker = Arc::clone(&state);
+    let saved_settings = settings.clone();
     let started = app.session.start_job(
         SAVE_JOB,
         json!({"path": path}),
@@ -292,6 +294,7 @@ pub fn start_save(
     );
     match started.map_err(|e| e.to_string())? {
         Started::Done(v) => {
+            crate::tex_options_ui::remember(app, doc, &path, &saved_settings, copy);
             let warnings = warnings_of(&v);
             if automation {
                 app.saved_automation(doc, revision, &path, &warnings, copy);
@@ -301,7 +304,7 @@ pub fn start_save(
             Ok(Some((path, warnings)))
         }
         Started::Job(job) => {
-            app.jobs.saves.push(SaveJob { job, doc, revision, path, copy, automation, state, ended: false });
+            app.jobs.saves.push(SaveJob { settings: saved_settings, job, doc, revision, path, copy, automation, state, ended: false });
             // Control and MCP requests wait on it, as for other jobs.
             app.jobs.last_started = Some(job);
             // The status bar's progress readout names the save; clear any old message.
@@ -321,6 +324,7 @@ fn warnings_of(v: &Value) -> Vec<String> {
 fn finish_save(app: &mut PhotocraftApp, ctx: &egui::Context, save: SaveJob, label: &str, outcome: JobOutcome) {
     match outcome {
         JobOutcome::Done(v) => {
+            crate::tex_options_ui::remember(app, save.doc, &save.path, &save.settings, save.copy);
             if save.automation {
                 app.saved_automation(save.doc, save.revision, &save.path, &warnings_of(&v), save.copy);
             } else {

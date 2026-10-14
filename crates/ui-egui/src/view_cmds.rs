@@ -1422,6 +1422,10 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
     app.pick_save(&suggested, move |app, path| {
         // An RGB Targa asks for its bits per pixel first; the copy is written from the prompt.
         let parked = app.with_document(doc.id, |app| {
+            if crate::tex_options_ui::is_tex_path(&path) {
+                crate::tex_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
+                return Ok(true);
+            }
             let ask = crate::targa_options_ui::wants_prompt(app, &path);
             if ask {
                 crate::targa_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
