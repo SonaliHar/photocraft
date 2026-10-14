@@ -71,7 +71,7 @@ pub fn layout(row: Rect, name_left: f32, items: &[(Indicator, f32)]) -> (Vec<(In
 /// Width the always-shown indicators of `l` take at the row's right (blend label excluded).
 pub fn reserved_width(l: &Layer) -> f32 {
     let mut w = RIGHT_PAD;
-    if l.locks.transparency || l.locks.position || l.locks.all {
+    if l.locks.any() {
         w += ICON_W + GAP;
     }
     if !l.effects.items.is_empty() {
@@ -113,7 +113,7 @@ pub fn indicators(
     actions: &mut Vec<(String, Value)>,
 ) -> (f32, Vec<(Indicator, Rect)>, bool) {
     let t = Tokens::get(ui.ctx());
-    let locked = l.locks.transparency || l.locks.position || l.locks.all;
+    let locked = l.locks.any();
     let fx_font = theme::semibold(11.0);
     let blend_font = FontId::proportional(10.5);
     let has_fx = !l.effects.items.is_empty();
@@ -198,6 +198,16 @@ pub fn panel_menu(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui) {
     let can = app.session.is_enabled("layer.setExpanded");
     if ui.add_enabled(can, egui::Button::new(tl!("Collapse All Groups"))).clicked() {
         if let Err(e) = app.run("layer.setExpanded", json!({"all": true, "expanded": false})) {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+        ui.close();
+    }
+    ui.separator();
+    // Photoshop's Clip Thumbnails to Layer Bounds: frame each layer's pixels, not the canvas (#4281).
+    let mut clip = app.session.prefs().interface.clip_thumbnails_to_layer_bounds;
+    if crate::widgets::checkbox(ui, &mut clip, tl!("Clip Thumbnails to Layer Bounds")).changed() {
+        if let Err(e) = app.run("prefs.set", json!({"path": "interface.clipThumbnailsToLayerBounds", "value": clip})) {
             app.ui.status = e;
             app.ui.status_error = true;
         }
