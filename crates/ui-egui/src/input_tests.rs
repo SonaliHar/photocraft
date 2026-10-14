@@ -12,7 +12,7 @@ fn harness() -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.sync_views();
-    let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut PhotocraftApp| {
             let ctx = ui.ctx().clone();
             // Fonts set up after the first frame only apply from the next one.
@@ -44,6 +44,26 @@ fn open_dialog(h: &mut Harness<'static, PhotocraftApp>) {
 fn free_canvas(h: &Harness<'static, PhotocraftApp>) -> Pos2 {
     let r = h.state().last_canvas_rect;
     pos2(r.left() + 60.0, r.bottom() - 60.0)
+}
+
+#[test]
+fn double_clicking_an_empty_workspace_opens_the_file_picker() {
+    for home in [false, true] {
+        let mut h = harness();
+        h.state_mut().services.file_dialog = Some(Box::new(|_, _, _| {}));
+        h.state_mut().session.prefs.edit(|p| p.general.auto_show_home_screen = home);
+        h.state_mut().run("file.close", json!({})).unwrap();
+        h.run_steps(3);
+        assert!(h.state().session.documents().is_empty());
+        let p = pos2(85.0, 160.0); // Outside the Home card, when it is shown.
+        h.event(egui::Event::PointerMoved(p));
+        h.run_steps(1);
+        for pressed in [true, false, true, false] {
+            h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+            h.run_steps(1);
+        }
+        assert!(h.state().file_dialog.is_some(), "double click must open the file picker (home={home})");
+    }
 }
 
 #[test]
