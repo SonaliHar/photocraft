@@ -386,7 +386,7 @@ pub fn queue_dialog(app: &mut PhotocraftApp, document: Option<DocId>) {
     app.pending_raw_open = Some(camera_raw_ui::RawOpen {
         document,
         name,
-        path: None,
+        path: Some(pending.path),
         bytes: Some(bytes),
         initial: pending.spec.recipe,
         targets: pending.spec.targets,
@@ -1396,6 +1396,7 @@ mod tests {
         let (mut app, writes, ctx) = two_photos();
         open_photo(&mut app, &ctx, "A.dng");
         assert_eq!(dialog_name(&app), "A.dng");
+        assert_eq!(control(&mut app, &ctx, &json!({})).unwrap()["source"], "A.dng");
         adjust(&mut app, &ctx, 1.5);
 
         // The host asks for the next photo while the first one's dialog is up.
@@ -1433,6 +1434,7 @@ mod tests {
         assert!(app.pending_raw_open.is_none());
         assert_eq!(dialog_name(&app), "B.dng");
         assert!(!app.camera_raw.as_ref().unwrap().busy(), "the new photo's dialog is ready");
+        assert_eq!(control(&mut app, &ctx, &json!({})).unwrap()["source"], "B.dng");
         assert_eq!(app.session.documents().len(), 1, "the photo left behind was closed");
         assert_eq!(app.session.active().unwrap().doc.name, "B.dng");
         assert_eq!(crate::control::viewport(&app, &ctx)["cameraRaw"]["busy"], false);
