@@ -72,9 +72,6 @@ what an agent can't finish alone.
   Blur Gallery: Field, Iris, Tilt-Shift and Spin Blur are edited on the image with Photoshop's pins
   and handles (2026-10-11, #3373); Tilt-Shift has one band (the engine takes one), and Path Blur
   (#1759) is still a parameter dialog.
-  Blur Gallery: Field Blur's pins and Iris Blur's pins with their outline, roundness and feather
-  handles are edited on the image (2026-10-11, #3373); Tilt-Shift, Spin and Path Blur are still
-  parameter dialogs.
 - **Evidence:** scorecard rows above, all partial or missing.
 - **Impact:** these are the tools retouchers and compositors use daily; a slider dialog is not a
   substitute.
