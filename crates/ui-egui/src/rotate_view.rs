@@ -245,7 +245,7 @@ pub fn overlay(app: &PhotocraftApp, ctx: &egui::Context, painter: &egui::Painter
         painter.text(badge.center(), Align2::CENTER_CENTER, "↔", egui::FontId::proportional(18.0), t.accent);
     }
     if !compass_visible(view.rotation) {
-        ctx.data_mut(|d| d.remove_temp::<Rect>(compass_id()));
+        ctx.data_mut(|d| d.remove::<Rect>(compass_id()));
         return false;
     }
     let r = compass_rect(xf.rect);
