@@ -3820,6 +3820,7 @@ cameraData	Lens	Lens
 @plural	{n} step|{n} steps	{n} adım
 @plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+{n} fırça ön ayarı uyarısı daha)
 @plural	{what} with {n} warning|{what} with {n} warnings	{what}, {n} uyarı ile
+	Show home recent files	Ana ekranda son dosyaları göster
 	Clear Brush Controls	Fırça Denetimlerini Temizle
 	Reset All Locked Settings	Tüm Kilitli Ayarları Sıfırla
 	Copy Texture to Other Tools	Dokuyu Diğer Araçlara Kopyala
@@ -3858,6 +3859,13 @@ cameraData	Lens	Lens
 	Loaded Camera Raw settings from {file}	Camera Raw ayarları {file} dosyasından yüklendi
 	Loaded Camera Raw settings from {file} ({n} not supported)	Camera Raw ayarları {file} dosyasından yüklendi ({n} desteklenmiyor)
 	Auto Add/Delete	Otomatik Ekle/Sil
+
+# Native Windows printing qualification
+	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Yazdırma Ayarlarında ayrıca Ayna Görüntüsünü açmayın: iki yansıtma birbirini iptal eder.
+	Print Settings…	Yazdırma Ayarları…
+	Remember to turn off the printer's own colour management in Print Settings…	Yazdırma Ayarlarında yazıcının kendi renk yönetimini kapatmayı unutmayın…
+	Sent to {printer}	{printer} yazıcısına gönderildi
+	set in Print Settings…	Yazdırma Ayarlarında belirlenir…
 	ICO is limited to 256 × 256 pixels	ICO 256 × 256 piksel ile sınırlıdır
 
 # Channel Options and New Spot Channel (#3761)
@@ -3871,3 +3879,14 @@ cameraData	Lens	Lens
 	Convert to the working space ({profile})	Çalışma alanına dönüştürün ({profile})
 	Remember this choice for future images	Bu seçimi sonraki görüntüler için hatırla
 	Turn the prompt back on with Ask On Mismatch in Edit › Color Settings.	Soruyu Düzen › Renk Ayarları'ndaki Ask On Mismatch ile yeniden açabilirsiniz.
+	Button Mode	Düğme modu
+	Button Mode On	Düğme modu açık
+
+# Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
+	Darken Interface	Arayüzü koyulaştır
+	Lighten Interface	Arayüzü açıklaştır
+# Bevel & Emboss Technique.
+	Technique	Teknik
+	Chisel Hard	Sert Keski
+	Chisel Soft	Yumuşak Keski
+	Open color-less EXR as ACEScg	Renk bilgisi olmayan EXR'yi ACEScg olarak aç

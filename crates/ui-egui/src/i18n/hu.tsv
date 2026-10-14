@@ -4008,7 +4008,8 @@ cameraRaw	Yellow	Sárga
 	The layer or its mask changed. Drag the mask onto the Trash again.	A réteg vagy a maszkja megváltozott. Húzd újra a maszkot a Kukába.
 	Transform On Drop	Átalakítás elengedéskor
 	Vanishing Point is not active	Az Enyészpont nem aktív
-	Vanishing Point: click four corners to create a plane	Enyészpont: sík létrehozásához kattints a négy sarokra
+	Vanishing Point: click four corners to create a plane	Enyészpont: sík létrehozásához kattintson a négy sarokra
+	Show home recent files	Legutóbbi fájlok megjelenítése a kezdőképernyőn
 	Clear Brush Controls	Ecsetvezérlők törlése
 	Reset All Locked Settings	Összes zárolt beállítás visszaállítása
 	Copy Texture to Other Tools	Textúra másolása más eszközökre
@@ -4047,6 +4048,13 @@ cameraRaw	Yellow	Sárga
 	Loaded Camera Raw settings from {file}	Camera Raw-beállítások betöltve innen: {file}
 	Loaded Camera Raw settings from {file} ({n} not supported)	Camera Raw-beállítások betöltve innen: {file} ({n} nem támogatott)
 	Auto Add/Delete	Automatikus hozzáadás/törlés
+
+# Native Windows printing qualification
+	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	A nyomtatási beállításokban ne jelöld be a tükrözést is: a két tükrözés kioltja egymást.
+	Print Settings…	Nyomtatási beállítások…
+	Remember to turn off the printer's own colour management in Print Settings…	Ne felejtsd el kikapcsolni a nyomtató saját színkezelését a nyomtatási beállításokban…
+	Sent to {printer}	Elküldve ide: {printer}
+	set in Print Settings…	a nyomtatási beállításokban adható meg…
 	ICO is limited to 256 × 256 pixels	Az ICO legfeljebb 256 × 256 képpont lehet
 
 # Channel Options and New Spot Channel (#3761)
@@ -4060,3 +4068,14 @@ cameraRaw	Yellow	Sárga
 	Convert to the working space ({profile})	Átalakítás a munkaszíntérbe ({profile})
 	Remember this choice for future images	A választás megjegyzése a későbbi képekhez
 	Turn the prompt back on with Ask On Mismatch in Edit › Color Settings.	A kérdés a Szerkesztés › Színbeállítások Ask On Mismatch beállításával kapcsolható vissza.
+	Button Mode	Gomb mód
+	Button Mode On	Gomb mód be
+
+# Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
+	Darken Interface	Felület sötétítése
+	Lighten Interface	Felület világosítása
+# Bevel & Emboss Technique.
+	Technique	Technika
+	Chisel Hard	Kemény vésés
+	Chisel Soft	Lágy vésés
+	Open color-less EXR as ACEScg	Színinformáció nélküli EXR megnyitása ACEScg-ként

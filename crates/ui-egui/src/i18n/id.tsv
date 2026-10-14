@@ -3095,6 +3095,7 @@ curves	Smooth	Haluskan
 	Remove after each stroke	Hapus setelah setiap goresan
 	Apply the removal ({key})	Terapkan penghapusan ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Goresan untuk dihapus: {n} (Enter menerapkan, Esc membatalkan)
+	Show home recent files	Tampilkan file terbaru di layar beranda
 	Clear Brush Controls	Hapus Kontrol Kuas
 	Reset All Locked Settings	Atur Ulang Semua Pengaturan Terkunci
 	Copy Texture to Other Tools	Salin Tekstur ke Alat Lain
@@ -3122,9 +3123,27 @@ curves	Smooth	Haluskan
 	Step {step} is waiting for its dialog	Langkah {step} menunggu dialognya
 @plural	{n} action|{n} actions	{n} tindakan
 	Auto Add/Delete	Tambah/Hapus Otomatis
+
+# Native Windows printing qualification
+	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Jangan aktifkan juga Gambar Cermin di Pengaturan Cetak: kedua pembalikan saling meniadakan.
+	Print Settings…	Pengaturan Cetak…
+	Remember to turn off the printer's own colour management in Print Settings…	Ingat untuk menonaktifkan pengelolaan warna milik printer di Pengaturan Cetak…
+	Sent to {printer}	Dikirim ke {printer}
+	set in Print Settings…	diatur di Pengaturan Cetak…
 	ICO is limited to 256 × 256 pixels	ICO dibatasi hingga 256 × 256 piksel
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Pakai profil tertanam ({profile})
 	Convert to the working space ({profile})	Konversi ke working space ({profile})
 	Remember this choice for future images	Ingat pilihan ini untuk gambar berikutnya
 	Turn the prompt back on with Ask On Mismatch in Edit › Color Settings.	Aktifkan lagi pertanyaan ini lewat Ask On Mismatch di Edit › Pengaturan Warna.
+	Button Mode	Mode tombol
+	Button Mode On	Mode tombol aktif
+
+# Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
+	Darken Interface	Gelapkan Antarmuka
+	Lighten Interface	Cerahkan Antarmuka
+# Bevel & Emboss Technique.
+	Technique	Teknik
+	Chisel Hard	Pahat Keras
+	Chisel Soft	Pahat Lembut
+	Open color-less EXR as ACEScg	Buka EXR tanpa informasi warna sebagai ACEScg

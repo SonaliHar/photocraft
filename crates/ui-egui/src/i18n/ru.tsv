@@ -3052,6 +3052,7 @@ curves	Smooth	Сгладить
 	Remove after each stroke	Удалять после каждого штриха
 	Apply the removal ({key})	Применить удаление ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Штрихов к удалению: {n} (Enter применяет, Esc отменяет)
+	Show home recent files	Показывать недавние файлы на домашнем экране
 	Clear Brush Controls	Очистить параметры кисти
 	Reset All Locked Settings	Сбросить все заблокированные параметры
 	Copy Texture to Other Tools	Скопировать текстуру в другие инструменты
@@ -3079,6 +3080,13 @@ curves	Smooth	Сгладить
 	Step {step} is waiting for its dialog	Шаг {step} ожидает своего диалога
 @plural	{n} action|{n} actions	{n} операция|{n} операции|{n} операций
 	Auto Add/Delete	Автодобавление/удаление
+
+# Native Windows printing qualification
+	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Не включайте также зеркальное отражение в параметрах печати: два отражения отменяют друг друга.
+	Print Settings…	Параметры печати…
+	Remember to turn off the printer's own colour management in Print Settings…	Не забудьте отключить управление цветом самого принтера в параметрах печати…
+	Sent to {printer}	Отправлено на {printer}
+	set in Print Settings…	задаётся в параметрах печати…
 	ICO is limited to 256 × 256 pixels	ICO ограничен размером 256 × 256 пикселей
 
 # Dynamic selection context menu and appearance favorites
@@ -3105,3 +3113,14 @@ curves	Smooth	Сгладить
 	Convert to the working space ({profile})	Преобразовать в рабочее пространство ({profile})
 	Remember this choice for future images	Запомнить этот выбор для следующих изображений
 	Turn the prompt back on with Ask On Mismatch in Edit › Color Settings.	Снова включить вопрос можно параметром Ask On Mismatch в Редактирование › Настройки цвета.
+	Button Mode	Режим кнопок
+	Button Mode On	Режим кнопок включён
+
+# Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
+	Darken Interface	Сделать интерфейс темнее
+	Lighten Interface	Сделать интерфейс светлее
+# Bevel & Emboss Technique.
+	Technique	Метод
+	Chisel Hard	Жесткая огранка
+	Chisel Soft	Мягкая огранка
+	Open color-less EXR as ACEScg	Открывать EXR без цветового профиля как ACEScg
