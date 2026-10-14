@@ -110,8 +110,10 @@ and this runner is Apple M1 Max. No performance-improvement claim is made.
 The final base refresh to upstream `706638b2` passed 5,548 library tests across
 engine, UI, IO, compose, algo and PSD (49 ignored), targeted layer-selection and
 PSD/resolution tests, strict all-target Clippy, strengthened panic hunt, full
-WASM checks, layering and regenerated scorecard checks. The final IO corpus
-and rendered-panel evidence are recorded in the task's validation report.
+WASM checks, layering and regenerated scorecard checks. The final IO release/
+corpus suites passed 593 tests (five ignored), with zero failures. The refreshed
+310x820 panel render passed its six-action, alternate-branch and exact-restoration
+checks and was visually inspected; final formatting checks passed.
 
 The craft-libs workspace passed 288 tests (two existing ignored), strict workspace
 Clippy, formatting and a WASM build of history. The shared history coverage is
