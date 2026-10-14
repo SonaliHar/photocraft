@@ -252,8 +252,12 @@ impl<'source> PreparedGraph<'source> {
         // The fixed200k additionally covers both bounded structural planners.
         // Complete prepayment precedes even planner allocations.
         let regions = mul(add(roi.size().area(), self.prepared.extent().size().area()).map_err(error)?, 16).map_err(error)?;
+        // Reopened scheduler accounting: graph_execute debits these node samples
+        // before the callback, independently of declarations and kernel work.
+        let scheduler_samples = mul(roi.size().area(), self.domain.format.channels() as u64).map_err(error)?;
         let run_work = add(
-            add(add(200_000, regions).map_err(error)?, add(needs.work_units, trim_work).map_err(error)?).map_err(error)?,
+            add(add(add(200_000, regions).map_err(error)?, scheduler_samples).map_err(error)?, add(needs.work_units, trim_work).map_err(error)?)
+                .map_err(error)?,
             mul(self.prepared.source().tile_count() as u64, 256).map_err(error)?,
         )
         .map_err(error)?;
@@ -357,5 +361,9 @@ mod tests {
             [value, value, value, 1.].into_iter().flat_map(f32::to_ne_bytes).collect::<Vec<_>>()
         );
         assert_eq!(wide_source, wide_before);
+        // 512 scheduler samples exceed the 256 extra one-tile scan allowance;
+        // admission must explicitly price them instead of accidentally masking it.
+        let full = wide.execute(wide_extent, limits, &Interrupt::NONE).unwrap();
+        assert_eq!(full.surface().try_read_interleaved(wide_extent).unwrap(), words);
     }
 }

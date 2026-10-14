@@ -157,6 +157,14 @@ pub enum TypedConfiguration {
     Levels(LevelsConfiguration),
     Curves(CurvesConfiguration),
     ColorBalance(ColorBalanceConfiguration),
+    BrightnessContrast(BrightnessContrastConfiguration),
+}
+/// Exact stock GIMP wrapper settings, separate from GEGL affine parameters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BrightnessContrastConfiguration {
+    pub time_bits: Option<u64>,
+    pub brightness_bits: u64,
+    pub contrast_bits: u64,
 }
 /// Ordered, exact scalar settings from a stock Color Balance configuration.
 /// This is source data; it does not qualify an evaluator or invent defaults.

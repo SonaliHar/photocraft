@@ -95,6 +95,10 @@ pub use xcf_filters::{
     ExceptionalGraphProvenance, GraphOuterMetadata, GraphSourceAuthority, GraphSourceLimits, GraphSourceRequirements,
     MappedGraphSource, map_exceptional_graph_source,
 };
+pub use xcf_filters::{
+    BRIGHTNESS_CONTRAST_SCHEMA, BRIGHTNESS_CONTRAST_SCHEMA_308, BrightnessContrastMappingLimits, BrightnessContrastMappingRequirements,
+    BrightnessContrastSourceIdentity, MappedBrightnessContrastSource, map_retained_brightness_contrast_source,
+};
 #[cfg(test)]
 #[path = "../tests/common/xcf.rs"]
 pub(crate) mod xcf_fixture;

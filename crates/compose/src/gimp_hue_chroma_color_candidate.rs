@@ -22,6 +22,7 @@ use photocraft_doc::SampleEncoding;
 use photocraft_geom::Rect;
 use photocraft_raster::{Interrupt, MAX_CHECKED_RASTER_BYTES, RasterInputError as E};
 use std::mem::size_of;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const MAX_WORK: u64 = 1 << 30;
 const SCRATCH_BYTES: u64 = 4096;
@@ -109,6 +110,18 @@ pub struct PreparedRgb<'a> {
     preparation_work: u64,
     limits: Limits,
     trc_policy: TrcPolicy,
+    graph_work: AtomicU64,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct GraphPointRequirements {
+    pub retained_bytes: u64,
+    pub scratch_bytes: u64,
+    pub preparation_work_units: u64,
+    pub pixel_work_units: u64,
+    pub remaining_work_units: u64,
+}
+fn prepared_header_bytes() -> Result<u64, E> {
+    u64::try_from(size_of::<PreparedRgb<'_>>()).map_err(|_| E::LimitExceeded)
 }
 fn poll(c: &Interrupt<'_>) -> Result<(), E> {
     c.check().map_err(|_| E::Cancelled)
@@ -212,6 +225,10 @@ pub fn preparation_requirements_with_trc_policy(
 ) -> Result<PreparationRequirements, E> {
     poll(c)?;
     limits_checked(limits)?;
+    let header_and_scratch = plus(prepared_header_bytes()?, SCRATCH_BYTES)?;
+    if header_and_scratch > limits.resident_bytes {
+        return Err(E::LimitExceeded);
+    }
     hue_chroma::validate(parameters)?;
     profile_domain(profile, context, policy, c)?;
     let cancelled = || c.check().is_err();
@@ -221,7 +238,7 @@ pub fn preparation_requirements_with_trc_policy(
     let borrowed_profile_bytes = u64::try_from(input.retained_profile_bytes.max(output.retained_profile_bytes)).map_err(|_| E::LimitExceeded)?;
     let private_pipeline_bytes =
         plus(u64::try_from(input.staged_bytes).map_err(|_| E::LimitExceeded)?, u64::try_from(output.staged_bytes).map_err(|_| E::LimitExceeded)?)?;
-    let peak_bytes = plus(plus(borrowed_profile_bytes, private_pipeline_bytes)?, SCRATCH_BYTES)?;
+    let peak_bytes = plus(plus(borrowed_profile_bytes, private_pipeline_bytes)?, header_and_scratch)?;
     let side_work = plus(input.work_units, output.work_units)?;
     // Include caller-side census plus this preparation's repeated CMS side
     // requirements, construction and fixed analytical-domain/capacity checks.
@@ -345,7 +362,7 @@ impl<'a> PreparedRgb<'a> {
         if req.ingress_work_units > remaining_work {
             return Err(E::LimitExceeded);
         }
-        let resident_for_pipelines = limits.resident_bytes.checked_sub(SCRATCH_BYTES).ok_or(E::LimitExceeded)?;
+        let resident_for_pipelines = limits.resident_bytes.checked_sub(plus(SCRATCH_BYTES, prepared_header_bytes()?)?).ok_or(E::LimitExceeded)?;
         let lower = cms_limits(Limits { resident_bytes: resident_for_pipelines, work_units: req.ingress_work_units })?;
         let (ingress, in_pcs) = profile.device_to_pcs_with_control(Intent::RelativeColorimetric, lower, &cancelled).map_err(cms_error)?;
         remaining_work = remaining_work.checked_sub(req.ingress_work_units).ok_or(E::LimitExceeded)?;
@@ -368,7 +385,9 @@ impl<'a> PreparedRgb<'a> {
             return Err(E::LimitExceeded);
         }
         let retained = plus(pipeline_bytes(&ingress, policy)?, pipeline_bytes(&egress, policy)?)?;
-        if retained > req.private_pipeline_bytes || plus(plus(req.borrowed_profile_bytes, retained)?, SCRATCH_BYTES)? > limits.resident_bytes {
+        if retained > req.private_pipeline_bytes
+            || plus(plus(req.borrowed_profile_bytes, retained)?, plus(SCRATCH_BYTES, prepared_header_bytes()?)?)? > limits.resident_bytes
+        {
             return Err(E::LimitExceeded);
         }
         poll(c)?;
@@ -383,6 +402,7 @@ impl<'a> PreparedRgb<'a> {
             preparation_work,
             limits,
             trc_policy: policy,
+            graph_work: AtomicU64::new(preparation_work),
         })
     }
     pub fn trc_policy(&self) -> TrcPolicy {
@@ -403,6 +423,38 @@ impl<'a> PreparedRgb<'a> {
     pub fn limits(&self) -> Limits {
         self.limits
     }
+    /// Actual known header/profile/pipeline retention, with constructor work
+    /// separated from steady graph work. Enclosing scheduler prepays/holds full
+    /// source/config/model backing independently, including pruned owners.
+    pub fn graph_point_requirements(&self, c: &Interrupt<'_>) -> Result<GraphPointRequirements, E> {
+        poll(c)?;
+        let retained_bytes = plus(plus(self.profile_bytes, self.pipeline_bytes)?, prepared_header_bytes()?)?;
+        if plus(retained_bytes, SCRATCH_BYTES)? > self.limits.resident_bytes {
+            return Err(E::LimitExceeded);
+        }
+        let left = self.limits.work_units.saturating_sub(self.graph_work.load(Ordering::Relaxed));
+        Ok(GraphPointRequirements {
+            retained_bytes,
+            scratch_bytes: SCRATCH_BYTES,
+            preparation_work_units: self.preparation_work,
+            pixel_work_units: PIXEL_WORK,
+            remaining_work_units: left / PIXEL_WORK * PIXEL_WORK,
+        })
+    }
+    /// Uses the original prepared pipelines/policy/equations, no per-ROI
+    /// reconstruction. Caller prepays steady graph work; concurrent prospective
+    /// checks are not reservations, so final admission remains atomic/private.
+    pub fn evaluate_graph_pixel_with_interrupt(&self, input: [f32; 4], actual: WorkingContext, c: &Interrupt<'_>) -> Result<[f32; 4], E> {
+        poll(c)?;
+        if actual != self.context {
+            return Err(E::UnsupportedConversion);
+        }
+        self.graph_work
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(PIXEL_WORK).filter(|n| *n <= self.limits.work_units))
+            .map_err(|_| E::LimitExceeded)?;
+        self.evaluate(input, c)
+    }
+
     /// Allocation-free shape/context census; no sample scan or frame rendering.
     /// Retains the preparation quota in every render admission, conservatively;
     /// the prepared immutable envelope may only be lowered, never refreshed.
@@ -425,7 +477,10 @@ impl<'a> PreparedRgb<'a> {
         }
         let borrowed_source_bytes = bytes(input, 16)?;
         let private_output_bytes = bytes(output, 16)?;
-        let peak_bytes = plus(plus(plus(self.profile_bytes, self.pipeline_bytes)?, borrowed_source_bytes)?, plus(private_output_bytes, SCRATCH_BYTES)?)?;
+        let peak_bytes = plus(
+            plus(plus(self.profile_bytes, self.pipeline_bytes)?, borrowed_source_bytes)?,
+            plus(private_output_bytes, plus(SCRATCH_BYTES, prepared_header_bytes()?)?)?,
+        )?;
         let pixel_work_units = u64::try_from(output).map_err(|_| E::LimitExceeded)?.checked_mul(PIXEL_WORK).ok_or(E::LimitExceeded)?;
         let work_units = plus(self.preparation_work, pixel_work_units)?;
         if peak_bytes > limits.resident_bytes || work_units > limits.work_units {
@@ -695,5 +750,48 @@ mod tests {
         let view = RgbFloatView { extent: Rect::new(0, 0, 8, 1), pixels: &source, context: context() };
         assert_eq!(p.render_roi(view, view.extent, Limits::default(), &control).err(), Some(E::Cancelled));
         assert_eq!(source.map(|px| px.map(f32::to_bits)), before);
+    }
+    #[test]
+    fn graph_point_reuses_original_pipeline_and_raw_alpha_without_constructor_reset() {
+        let profile = photocraft_cms::Builtin::AdobeRgbCompat.profile();
+        let parameters = Parameters { hue: 37.5, chroma: -12.5, lightness: 8.25 };
+        let prepared = PreparedRgb::prepare(profile, context(), parameters, Limits::default(), &Interrupt::NONE).unwrap();
+        let pixels = [[0.25, 0.5, 0.75, -0.0], [0.5, 0.25, 0.75, 1.0]];
+        let view = RgbFloatView { extent: Rect::new(-1, 2, 1, 3), pixels: &pixels, context: context() };
+        let array = prepared.render_roi(view, view.extent, Limits::default(), &Interrupt::NONE).unwrap();
+        let before = prepared.graph_point_requirements(&Interrupt::NONE).unwrap();
+        for (input, expected) in pixels.into_iter().zip(array.pixels) {
+            let actual = prepared.evaluate_graph_pixel_with_interrupt(input, context(), &Interrupt::NONE).unwrap();
+            assert_eq!(actual.map(f32::to_bits), expected.map(f32::to_bits));
+            assert_eq!(actual[3].to_bits(), input[3].to_bits());
+        }
+        let after = prepared.graph_point_requirements(&Interrupt::NONE).unwrap();
+        assert_eq!(before.preparation_work_units, after.preparation_work_units);
+        assert_eq!(before.remaining_work_units - after.remaining_work_units, 2 * PIXEL_WORK);
+        assert!(std::ptr::eq(prepared.profile(), profile));
+    }
+    #[test]
+    fn graph_steady_quota_is_shared_across_requests_and_cancel_never_recaptures() {
+        let profile = photocraft_cms::Builtin::AdobeRgbCompat.profile();
+        let req = preparation_requirements(profile, context(), neutral(), Limits::default(), &Interrupt::NONE).unwrap();
+        let prepared =
+            PreparedRgb::prepare(profile, context(), neutral(), Limits { work_units: req.work_units + PIXEL_WORK, ..Limits::default() }, &Interrupt::NONE)
+                .unwrap();
+        assert_eq!(prepared.graph_point_requirements(&Interrupt::NONE).unwrap().remaining_work_units, PIXEL_WORK);
+        assert_eq!(prepared.evaluate_graph_pixel_with_interrupt([0.25, 0.5, 0.75, -0.0], context(), &Interrupt::cancel_only(&|| true)), Err(E::Cancelled));
+        assert_eq!(prepared.graph_point_requirements(&Interrupt::NONE).unwrap().remaining_work_units, PIXEL_WORK);
+        prepared.evaluate_graph_pixel_with_interrupt([0.25, 0.5, 0.75, -0.0], context(), &Interrupt::NONE).unwrap();
+        assert_eq!(prepared.graph_point_requirements(&Interrupt::NONE).unwrap().remaining_work_units, 0);
+        assert_eq!(prepared.evaluate_graph_pixel_with_interrupt([0.25, 0.5, 0.75, -0.0], context(), &Interrupt::NONE), Err(E::LimitExceeded));
+        assert!(matches!(
+            PreparedRgb::prepare(
+                profile,
+                context(),
+                neutral(),
+                Limits { resident_bytes: prepared_header_bytes().unwrap() - 1, ..Limits::default() },
+                &Interrupt::NONE
+            ),
+            Err(E::LimitExceeded)
+        ));
     }
 }

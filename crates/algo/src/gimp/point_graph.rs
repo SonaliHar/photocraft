@@ -22,6 +22,8 @@ mod color_exchange_binding;
 mod alpha_clip_binding;
 #[path = "point_graph/color_overlay_binding.rs"]
 mod color_overlay_binding;
+#[path = "point_graph/color_rotate_binding.rs"]
+mod color_rotate_binding;
 
 /// Independently qualified caller interpretation of this exact node. Supplying
 /// arbitrary source metadata is not schema or profile qualification.
@@ -115,6 +117,7 @@ pub fn evaluate(binding: Binding<'_>, request: NodeRequest<'_>, budget: &mut Nod
             | PointOperation::ColorExchange { .. }
             | PointOperation::AlphaClipPrecision { .. } | PointOperation::AlphaClipFinitePrecision { .. }
             | PointOperation::ColorOverlay { .. }
+            | PointOperation::ColorRotate { .. }
     ) { format.channels() } else { colors };
     for y in request.roi.y0..request.roi.y1 {
         budget.poll()?;
@@ -188,6 +191,7 @@ fn validate_operation(binding: &Binding<'_>, node: &photocraft_doc::xcf_filters:
         return Err(GraphExecuteError::Operation("alpha threshold graph requires a native alpha channel"));
     }
     match binding.operation {
+        PointOperation::ColorRotate { operation } => return color_rotate_binding::validate(binding, node, operation),
         PointOperation::ColorOverlay { color } => return color_overlay_binding::validate(binding, node, color),
         PointOperation::AlphaClipPrecision { .. } | PointOperation::AlphaClipFinitePrecision { .. } => return alpha_clip_binding::validate(binding, node),
         PointOperation::ColorExchange { from, to, thresholds } => return color_exchange_binding::validate(binding, node, from, to, thresholds),

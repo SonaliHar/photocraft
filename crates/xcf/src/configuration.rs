@@ -1,6 +1,7 @@
 //! Ordered stock configuration records. No mathematical execution or defaults.
 use crate::{reader::Reader, *};
 mod color_balance;
+mod brightness_contrast;
 fn fail(r: &Reader<'_, '_>) -> XcfError {
     r.error(ErrorKind::Unsupported, "unqualified required effect configuration shape")
 }
@@ -138,6 +139,9 @@ fn curve(r: &mut Reader<'_, '_>, v: &[ConfigNode]) -> Result<StoredCurve, XcfErr
     Ok(StoredCurve { curve_type: curve_type.ok_or_else(|| fail(r))?, points_bits, point_types, n_samples, samples_bits })
 }
 pub(crate) fn typed(r: &mut Reader<'_, '_>, operation: &str, nodes: &[ConfigNode]) -> Result<Option<TypedConfiguration>, XcfError> {
+    if operation == "gimp:brightness-contrast" {
+        return brightness_contrast::typed(r, nodes).map(Some);
+    }
     if operation == "gimp:color-balance" {
         return color_balance::typed(r, nodes).map(Some);
     }

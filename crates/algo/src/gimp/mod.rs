@@ -44,6 +44,7 @@ pub mod point_graph;
 pub mod pixelize_graph;
 pub mod sobel_graph;
 pub mod stretch_graph;
+pub mod generator_roi_graph;
 pub mod native_point_graph;
 pub mod graph_bindings;
 pub mod typed_schema;

@@ -231,6 +231,12 @@ pub use graph_source_candidate::{
     ExceptionalGraphProvenance, GraphOuterMetadata, GraphSourceAuthority, GraphSourceLimits, GraphSourceRequirements,
     MappedGraphSource, map_exceptional_graph_source,
 };
+#[path = "xcf_filters/brightness_contrast_source_candidate.rs"]
+mod brightness_contrast_source_candidate;
+pub use brightness_contrast_source_candidate::{
+    BRIGHTNESS_CONTRAST_SCHEMA, BRIGHTNESS_CONTRAST_SCHEMA_308, BrightnessContrastMappingLimits, BrightnessContrastMappingRequirements,
+    BrightnessContrastSourceIdentity, MappedBrightnessContrastSource, map_retained_brightness_contrast_source,
+};
 
 fn color_to_alpha_arguments<P>(effect: &Effect<P>) -> Result<Vec<FilterArgument>, IoError> {
     if effect.version.as_deref() != Some("0:0") || effect.arguments.len() != 3 {

@@ -101,6 +101,10 @@ impl<'a> BoundSource<'a> {
     pub fn parameters(&self) -> Parameters {
         self.parameters
     }
+    /// Captured LCh stage identity; not an RGB sample-format/space alias.
+    pub fn context(&self) -> LchFloatContext {
+        self.binding.context
+    }
     pub fn requirements(&self, source: LchFloatView<'_>, roi: Rect, limits: Limits) -> Result<Requirements, E> {
         if source.context != self.binding.context {
             return Err(E::UnsupportedConversion);
