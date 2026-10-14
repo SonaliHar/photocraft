@@ -107,7 +107,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     let Some(d) = app.ui.frame_tool.drag.filter(|_| app.ui.tool == Tool::Frame) else { return };
     let t = Tokens::get(painter.ctx());
     let r = drawn(&d).map(|v| v as f32);
-    let stroke = Stroke::new(1.5, t.accent);
+    let stroke = Stroke::new(1.5, t.editing_accent());
     let points: Vec<Pos2> = if app.ui.frame_tool.ellipse {
         let (cx, cy, rx, ry) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0, (r[2] - r[0]) / 2.0, (r[3] - r[1]) / 2.0);
         (0..=64).map(|i| i as f32 * std::f32::consts::TAU / 64.0).map(|a| xf.to_screen(cx + rx * a.cos(), cy + ry * a.sin())).collect()

@@ -1018,7 +1018,7 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
         return;
     }
     let shape = app.session.active().and_then(|s| text_layer(&s.doc, id).map(|t| t.shape.clone()));
-    let frame = Stroke::new(1.0, t.accent);
+    let frame = Stroke::new(1.0, t.editing_accent());
     match shape {
         Some(photocraft_doc::text::TextShape::Box { x, y, width, height }) => {
             let c = [scr_t(x, y), scr_t(x + width, y), scr_t(x + width, y + height), scr_t(x, y + height)];
@@ -1034,7 +1034,7 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
             for ln in &l.lines {
                 // Horizontal: just under the baseline; vertical: the column's centre line.
                 let y = if l.vertical { ln.baseline } else { ln.baseline + ln.descent * 0.25 };
-                painter.line_segment([scr(ln.x0.min(0.0), y), scr(ln.x1.max(ln.x0 + 1.0), y)], Stroke::new(1.0, t.accent.gamma_multiply(0.8)));
+                painter.line_segment([scr(ln.x0.min(0.0), y), scr(ln.x1.max(ln.x0 + 1.0), y)], Stroke::new(1.0, t.editing_accent().gamma_multiply(0.8)));
             }
         }
     }
@@ -1047,14 +1047,14 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
             let (x0, x1) = xs.iter().fold((f32::MAX, f32::MIN), |(lo, hi), (p, q)| (lo.min(*p), hi.max(*q)));
             if x0 < x1 {
                 let y = ln.baseline + ln.descent * 0.5;
-                painter.line_segment([scr(x0, y), scr(x1, y)], Stroke::new(1.5, t.accent));
+                painter.line_segment([scr(x0, y), scr(x1, y)], Stroke::new(1.5, t.editing_accent()));
             }
         }
     }
     // Selection: per line, the clusters inside [a, b).
     let (a, b) = (byte_of(&text, ed.caret.min(ed.anchor)), byte_of(&text, ed.caret.max(ed.anchor)));
     if a < b {
-        let fill = Color32::from_rgba_unmultiplied(t.accent.r(), t.accent.g(), t.accent.b(), 110);
+        let fill = Color32::from_rgba_unmultiplied(t.editing_accent().r(), t.editing_accent().g(), t.editing_accent().b(), 110);
         for (li, ln) in l.lines.iter().enumerate() {
             let xs: Vec<(f32, f32)> =
                 l.clusters.iter().filter(|c| c.line == li && c.range.start >= a && c.range.end <= b).map(|c| (c.x, c.x + c.advance)).collect();

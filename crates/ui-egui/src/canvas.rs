@@ -4576,7 +4576,7 @@ fn begin_transform_controls_at(app: &mut PhotocraftApp, ctx: &egui::Context, xf:
 /// Move tool › Show Transform Controls: the active layer's bounding box with its eight handles.
 fn draw_transform_controls(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     let Some(r) = transform_controls_rect(app, xf) else { return };
-    let accent = crate::theme::Tokens::get(painter.ctx()).accent;
+    let accent = crate::theme::Tokens::get(painter.ctx()).editing_accent();
     painter.rect_stroke(r, 0.0, Stroke::new(1.0, accent), egui::StrokeKind::Middle);
     for p in [r.left_top(), r.center_top(), r.right_top(), r.right_center(), r.right_bottom(), r.center_bottom(), r.left_bottom(), r.left_center()] {
         let h = Rect::from_center_size(p, vec2(7.0, 7.0));
@@ -4678,7 +4678,7 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
             if let Some(lasso) = &d.lasso {
                 pts.push(xf.to_screen(lasso.cursor[0] as f32, lasso.cursor[1] as f32));
             }
-            painter.add(egui::Shape::line(pts, Stroke::new(1.5, crate::theme::Tokens::get(painter.ctx()).accent)));
+            painter.add(egui::Shape::line(pts, Stroke::new(1.5, crate::theme::Tokens::get(painter.ctx()).editing_accent())));
         }
         Tool::Lasso | Tool::Patch | Tool::ContentAwareMove => {
             let mut pts: Vec<Pos2> = d.points.iter().map(|p| xf.to_screen(p[0] as f32, p[1] as f32)).collect();
@@ -4708,7 +4708,7 @@ fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &View
         Tool::Move if !crate::move_ui::showing(app) => {
             let from = xf.to_screen(d.start[0] as f32, d.start[1] as f32);
             let off = xf.to_screen(last[0] as f32, last[1] as f32) - from;
-            painter.arrow(from, off, Stroke::new(2.0, crate::theme::Tokens::get(painter.ctx()).accent));
+            painter.arrow(from, off, Stroke::new(2.0, crate::theme::Tokens::get(painter.ctx()).editing_accent()));
         }
         _ => {}
     }

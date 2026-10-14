@@ -429,7 +429,7 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
             xf.to_screen((rect[0] + d[0]) as f32, (rect[1] + d[1]) as f32),
             xf.to_screen((rect[2] + d[0]) as f32, (rect[3] + d[1]) as f32),
         );
-        painter.rect_stroke(r, 0.0, Stroke::new(1.0, crate::theme::Tokens::get(painter.ctx()).accent), egui::StrokeKind::Middle);
+        painter.rect_stroke(r, 0.0, Stroke::new(1.0, crate::theme::Tokens::get(painter.ctx()).editing_accent()), egui::StrokeKind::Middle);
     }
     if !smart_on(app) {
         return;

@@ -121,7 +121,7 @@ pub(crate) fn draw(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXf
         painter.ctx().request_repaint();
     }
     let Some(b) = outline_rect else { return };
-    let accent = crate::theme::Tokens::get(painter.ctx()).accent;
+    let accent = crate::theme::Tokens::get(painter.ctx()).editing_accent();
     painter.rect_stroke(xf.doc_rect(b), 0.0, Stroke::new(1.5, accent), egui::StrokeKind::Outside);
 }
 

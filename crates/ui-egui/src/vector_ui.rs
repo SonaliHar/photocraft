@@ -168,7 +168,7 @@ pub fn draw_shape_preview(app: &PhotocraftApp, painter: &egui::Painter, xf: &Vie
     // This lightweight screen overlay retains the existing display-colour behaviour; document
     // rendering still goes through its format/profile path when the shape is committed.
     crate::shape_stroke_ui::paint_shape_preview(painter, &shape);
-    let accent = Tokens::get(painter.ctx()).accent;
+    let accent = Tokens::get(painter.ctx()).editing_accent();
     for (pts, _) in path_lines(&path, &|q| xf.to_screen(q[0] as f32, q[1] as f32)) {
         // The accent path over a dark halo: visible on any pixels (#172).
         painter.extend(crate::tool_feedback::contrast_path(pts, true, accent));
@@ -932,7 +932,7 @@ pub(crate) fn draw_handle(painter: &egui::Painter, anchor: Pos2, handle: Pos2, a
 pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) {
     let tool = app.ui.tool;
     let vector_tool = matches!(tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::PathSelection) || is_shape_tool(tool);
-    let accent = Tokens::get(painter.ctx()).accent;
+    let accent = Tokens::get(painter.ctx()).editing_accent();
     let to_scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
     let draw_path = |p: &Path, anchors: bool| {
         draw_outline(painter, p, &to_scr, accent);

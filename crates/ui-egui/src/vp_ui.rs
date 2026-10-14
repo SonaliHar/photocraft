@@ -453,7 +453,7 @@ pub fn draw(s: &VpSession, painter: &egui::Painter, xf: &ViewXform) {
     for (i, p) in s.planes.iter().enumerate() {
         let check = p.check(center);
         let colour = match check {
-            PlaneCheck::Valid => tokens.accent,
+            PlaneCheck::Valid => tokens.editing_accent(),
             PlaneCheck::Questionable => tokens.warning,
             PlaneCheck::Invalid => tokens.danger,
         };
@@ -491,9 +491,9 @@ pub fn draw(s: &VpSession, painter: &egui::Painter, xf: &ViewXform) {
         if let Some(hover) = painter.ctx().pointer_hover_pos() {
             pts.push(hover);
         }
-        painter.add(egui::Shape::line(pts.clone(), Stroke::new(1.25, tokens.accent)));
+        painter.add(egui::Shape::line(pts.clone(), Stroke::new(1.25, tokens.editing_accent())));
         for c in pts.iter().take(s.pending.len()) {
-            painter.rect_filled(egui::Rect::from_center_size(*c, egui::vec2(6.0, 6.0)), 0.0, tokens.accent);
+            painter.rect_filled(egui::Rect::from_center_size(*c, egui::vec2(6.0, 6.0)), 0.0, tokens.editing_accent());
         }
     }
 }

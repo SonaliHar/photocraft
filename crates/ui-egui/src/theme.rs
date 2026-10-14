@@ -25,10 +25,10 @@ use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ThemeKind {
-    /// Photoshop-style Spectrum dark: flat charcoal panels, tab strips, blue accents (darkest brightness).
-    Pro,
-    /// Photoshop's default (second) interface brightness: #535353 panels, #282828 canvas (default).
+    /// Standard ArtCraft dark UI in the Pro layout.
     #[default]
+    Pro,
+    /// Photoshop's second interface brightness: #535353 panels, #282828 canvas.
     ProMedium,
     /// Photoshop's third interface brightness: #B8B8B8 panels (#2661).
     ProLightGray,
@@ -202,7 +202,42 @@ impl Tokens {
         [Color32::from_black_alpha(160), Color32::from_white_alpha(235)]
     }
 
+    /// Editing overlays retain the tool colour while standard-dark chrome uses the suite accent.
+    pub(crate) fn editing_accent(&self) -> Color32 {
+        if self.kind == ThemeKind::Pro { Color32::from_rgb(55, 142, 240) } else { self.accent }
+    }
+
     pub fn for_kind(kind: ThemeKind) -> Self {
+        let mut t = Self::original_for_kind(kind);
+        if kind == ThemeKind::Pro {
+            // Shared ArtCraft standard-dark roles, adapted after preset selection so
+            // measured brightness levels and named themes retain their own palettes.
+            let roles = craft_ui::theme::SuitePalette::ARTCRAFT_DARK;
+            t.chrome = roles.chrome;
+            t.dock = roles.window;
+            t.card = roles.panel;
+            t.card_border = roles.border;
+            t.field = roles.input;
+            t.field_border = roles.border;
+            t.hover = roles.hover;
+            t.pressed = roles.pressed;
+            t.text = roles.text;
+            t.text_dim = roles.text_secondary;
+            t.text_faint = roles.text_disabled;
+            t.icon = roles.text;
+            t.accent = roles.accent;
+            t.accent_soft = roles.selection;
+            t.accent_border = roles.focus;
+            t.separator = roles.border;
+            t.primary_bg = roles.accent;
+            t.primary_text = roles.on_accent;
+            t.tab_strip = roles.chrome;
+            t.row_selected = roles.selection;
+        }
+        t
+    }
+
+    fn original_for_kind(kind: ThemeKind) -> Self {
         match kind {
             // Sampled from Photoshop 2026's default brightness (raw display values).
             ThemeKind::ProMedium => Tokens {
@@ -223,7 +258,7 @@ impl Tokens {
                 separator: Color32::from_rgb(62, 62, 62),
                 tab_strip: Color32::from_rgb(74, 74, 74),
                 row_selected: Color32::from_rgb(107, 107, 107),
-                ..Tokens::for_kind(ThemeKind::Pro)
+                ..Tokens::original_for_kind(ThemeKind::Pro)
             },
             // Photoshop's medium-light brightness: #B8B8B8 panels, dark text, a mid-grey canvas.
             ThemeKind::ProLightGray => Tokens {
@@ -248,7 +283,7 @@ impl Tokens {
                 shadow: Color32::from_black_alpha(70),
                 tab_strip: Color32::from_rgb(170, 170, 170),
                 row_selected: Color32::from_rgb(212, 212, 212),
-                ..Tokens::for_kind(ThemeKind::Pro)
+                ..Tokens::original_for_kind(ThemeKind::Pro)
             },
             // Photoshop's lightest brightness: #F0F0F0 panels, dark text, a light-grey canvas.
             ThemeKind::ProLight => Tokens {
@@ -273,7 +308,7 @@ impl Tokens {
                 shadow: Color32::from_black_alpha(50),
                 tab_strip: Color32::from_rgb(226, 226, 226),
                 row_selected: Color32::from_rgb(204, 204, 204),
-                ..Tokens::for_kind(ThemeKind::Pro)
+                ..Tokens::original_for_kind(ThemeKind::Pro)
             },
             ThemeKind::Pro => Tokens {
                 kind,
@@ -992,8 +1027,14 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     v.menu_corner_radius = CornerRadius::same(t.radius as u8);
     v.window_shadow = egui::Shadow { offset: [0, 10], blur: 32, spread: 0, color: t.shadow };
     v.popup_shadow = egui::Shadow { offset: [0, 6], blur: 20, spread: 0, color: t.shadow };
-    v.selection.bg_fill = if t.bevel || t.pro { t.accent } else { t.accent_soft };
-    v.selection.stroke = Stroke::new(1.0, t.accent_text);
+    v.selection.bg_fill = if kind == ThemeKind::Pro {
+        t.row_selected
+    } else if t.bevel || t.pro {
+        t.accent
+    } else {
+        t.accent_soft
+    };
+    v.selection.stroke = Stroke::new(1.0, if kind == ThemeKind::Pro { t.text } else { t.accent_text });
     v.slider_trailing_fill = true;
     v.handle_shape = egui::style::HandleShape::Circle;
     v.striped = false;
@@ -1070,6 +1111,61 @@ pub fn canvas_bg(t: &Tokens) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pro_adapter_reads_shared_roles_and_preserves_document_and_semantic_colors() {
+        let roles = craft_ui::theme::SuitePalette::ARTCRAFT_DARK;
+        let dark = Tokens::for_kind(ThemeKind::Pro);
+        assert_eq!(dark.chrome, roles.chrome);
+        assert_eq!(dark.dock, roles.window);
+        assert_eq!(dark.card, roles.panel);
+        assert_eq!(dark.card_border, roles.border);
+        assert_eq!(dark.field, roles.input);
+        assert_eq!(dark.field_border, roles.border);
+        assert_eq!(dark.hover, roles.hover);
+        assert_eq!(dark.pressed, roles.pressed);
+        assert_eq!(dark.text, roles.text);
+        assert_eq!(dark.text_dim, roles.text_secondary);
+        assert_eq!(dark.text_faint, roles.text_disabled);
+        assert_eq!(dark.icon, roles.text);
+        assert_eq!(dark.accent, roles.accent);
+        assert_eq!(dark.editing_accent(), Color32::from_rgb(55, 142, 240));
+        assert_eq!(dark.accent_soft, roles.selection);
+        assert_eq!(dark.accent_border, roles.focus);
+        assert_eq!(dark.separator, roles.border);
+        assert_eq!(dark.primary_bg, roles.accent);
+        assert_eq!(dark.primary_text, roles.on_accent);
+        assert_eq!(dark.tab_strip, roles.chrome);
+        assert_eq!(dark.row_selected, roles.selection);
+        let original = Tokens::original_for_kind(ThemeKind::Pro);
+        assert_eq!(
+            (dark.canvas, dark.canvas_dot, dark.histogram_bg, dark.histogram_level),
+            (original.canvas, original.canvas_dot, original.histogram_bg, original.histogram_level)
+        );
+        assert_eq!(
+            (dark.danger, dark.warning, dark.caption_close, dark.caption_close_text, dark.scrim),
+            (original.danger, original.warning, original.caption_close, original.caption_close_text, original.scrim)
+        );
+        for kind in ThemeKind::ALL.into_iter().filter(|kind| *kind != ThemeKind::Pro) {
+            assert_eq!(Tokens::for_kind(kind), Tokens::original_for_kind(kind), "{kind:?}");
+            assert_eq!(Tokens::for_kind(kind).editing_accent(), Tokens::original_for_kind(kind).accent, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn pro_dark_uses_artcraft_roles_without_recoloring_other_pro_levels() {
+        let dark = Tokens::for_kind(ThemeKind::Pro);
+        assert_eq!(dark.chrome, Color32::from_rgb(10, 10, 12));
+        assert_eq!(dark.card, Color32::from_rgb(16, 16, 20));
+        assert_eq!(dark.field, Color32::from_rgb(6, 6, 7));
+        assert_eq!(dark.text, Color32::from_rgb(242, 241, 238));
+        assert_eq!(dark.accent, Color32::from_rgb(45, 129, 255));
+        assert_eq!(dark.row_selected, Color32::from_rgb(32, 59, 101));
+        let medium = Tokens::for_kind(ThemeKind::ProMedium);
+        assert_eq!(medium.card, Color32::from_rgb(83, 83, 83));
+        assert_eq!(medium.accent, Color32::from_rgb(55, 142, 240));
+        assert_eq!(Tokens::for_kind(ThemeKind::ProLight).accent_text, Color32::from_rgb(16, 98, 196));
+    }
 
     fn text_sizes(ctx: &egui::Context) -> Vec<egui::Vec2> {
         let mut sizes = Vec::new();

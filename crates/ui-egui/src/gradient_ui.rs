@@ -458,7 +458,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     }
     let Some((fill, frame, grabbed)) = shown_fill(app) else { return };
     let Some(w) = Widget::new(&fill, frame) else { return };
-    let accent = Tokens::get(painter.ctx()).accent;
+    let accent = Tokens::get(painter.ctx()).editing_accent();
     let sp = |p: [f32; 2]| xf.to_screen(p[0], p[1]);
     let (s, e) = (sp(w.start), sp(w.end));
     let r = s.distance(e);

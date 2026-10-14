@@ -273,7 +273,7 @@ pub fn draw(s: &PerspSession, painter: &egui::Painter, xf: &ViewXform) {
         }
     }
     painter.add(mesh);
-    let accent = crate::theme::Tokens::get(painter.ctx()).accent;
+    let accent = crate::theme::Tokens::get(painter.ctx()).editing_accent();
     let warp = s.mode == PerspMode::Warp;
     for p in &s.planes {
         // Plane grid at thirds (like Photoshop's), then the outline.
