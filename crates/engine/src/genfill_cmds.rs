@@ -17,6 +17,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::SystemTime;
 
@@ -115,27 +116,60 @@ fn read_secrets(path: &Path) -> SecretMap {
     std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
 }
 
+/// The file system steps of an atomic write, creating the temporary file owner-only from the
+/// start (no window where the credentials are readable by others) and never inheriting the mode
+/// of a file an earlier build left behind.
+struct PrivateFs;
+
+impl photocraft_format::atomic::AtomicFs for PrivateFs {
+    fn write_new(&self, tmp: &Path, bytes: &[u8]) -> std::io::Result<()> {
+        use std::io::Write;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(tmp)?;
+        file.write_all(bytes)?;
+        photocraft_format::atomic::sync_file(&file)
+    }
+    fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        photocraft_format::atomic::AtomicFs::rename(&photocraft_format::atomic::RealFs, from, to)
+    }
+    fn remove(&self, path: &Path) -> std::io::Result<()> {
+        photocraft_format::atomic::AtomicFs::remove(&photocraft_format::atomic::RealFs, path)
+    }
+    fn sync_dir(&self, dir: &Path) -> std::io::Result<()> {
+        photocraft_format::atomic::AtomicFs::sync_dir(&photocraft_format::atomic::RealFs, dir)
+    }
+    fn copy_permissions(&self, _from: &Path, _to: &Path) -> std::io::Result<()> {
+        // Deliberately nothing: the new file keeps its owner-only mode.
+        Ok(())
+    }
+}
+
 fn write_secrets(path: &Path, map: &SecretMap) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(map).map_err(|e| EngineError::Other(format!("cannot encode the credentials: {e}")))?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| EngineError::Other(format!("cannot create {}: {e}", dir.display())))?;
     }
-    photocraft_format::atomic_write(path, &bytes).map_err(|e| EngineError::Other(format!("cannot save the credentials to {}: {e}", path.display())))?;
-    // Owner-only where the platform has permission bits (Windows keeps them in the user profile).
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-    }
-    Ok(())
+    photocraft_format::atomic::atomic_write_with(&PrivateFs, photocraft_format::atomic::RenameRetry::platform(), path, &bytes)
+        .map_err(|e| EngineError::Other(format!("cannot save the credentials to {}: {e}", path.display())))
 }
 
 /// Serialises every credentials read-modify-write in this process, so two sessions saving
 /// different providers cannot overwrite each other's entry.
 static IO_LOCK: Mutex<()> = Mutex::new(());
 
+/// Bumped by every credentials save in this process; a cached read is only valid for the
+/// generation it was made in (a same-length change within one file-time tick is not visible to the
+/// file stamp alone).
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
 /// What was last read from the credentials file: its stamp (modified time, length) and content.
-type FileCache = Option<((SystemTime, u64), SecretMap)>;
+type FileCache = Option<((SystemTime, u64, u64), SecretMap)>;
 
 /// The session's credentials. With a credentials file the file is the single source of truth:
 /// every read looks at it (re-reading only when it changed) and every save re-reads, merges its
@@ -165,7 +199,8 @@ impl Secrets {
         let Some(path) = self.path() else {
             return self.memory.lock().unwrap_or_else(PoisonError::into_inner).clone();
         };
-        let stamp = std::fs::metadata(path).ok().and_then(|m| Some((m.modified().ok()?, m.len())));
+        let generation = GENERATION.load(Ordering::SeqCst);
+        let stamp = std::fs::metadata(path).ok().and_then(|m| Some((m.modified().ok()?, m.len(), generation)));
         let mut cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
         if let (Some(stamp), Some((seen, map))) = (stamp, cache.as_ref())
             && *seen == stamp
@@ -196,8 +231,11 @@ impl Secrets {
             Some(path) => {
                 let mut map = read_secrets(path);
                 apply(&mut map);
-                write_secrets(path, &map)?;
+                let written = write_secrets(path, &map);
+                // A failed write may have touched the file too: never trust an earlier read.
+                GENERATION.fetch_add(1, Ordering::SeqCst);
                 *self.cache.lock().unwrap_or_else(PoisonError::into_inner) = None;
+                written?;
                 Ok(())
             }
         }
@@ -696,6 +734,22 @@ mod tests {
         assert_eq!(settings(&b).config(Provider::Gemini).api_key, "dummy-gemini");
     }
 
+    /// A key replaced by another of the same length is seen by the other session at once, even if
+    /// the file's modified time did not move.
+    #[test]
+    fn a_same_length_replacement_is_seen_by_other_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ai-credentials.json");
+        let mut a = Session::new();
+        let mut b = Session::new();
+        a.ai_secrets.file = Some(path.clone());
+        b.ai_secrets.file = Some(path.clone());
+        a.execute(SETTINGS_CMD, json!({"configure": {"provider": "gemini", "apiKey": "dummy-aaaa"}})).unwrap();
+        assert_eq!(settings(&b).config(Provider::Gemini).api_key, "dummy-aaaa");
+        a.execute(SETTINGS_CMD, json!({"configure": {"provider": "gemini", "apiKey": "dummy-bbbb"}})).unwrap();
+        assert_eq!(settings(&b).config(Provider::Gemini).api_key, "dummy-bbbb");
+    }
+
     /// Review finding: a failed write must not be remembered as saved, so retrying retries.
     #[test]
     fn a_failed_credentials_write_is_retried() {
@@ -724,7 +778,13 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o077, 0, "owner only");
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o077, 0, "owner only right after the first save");
+            // A file an earlier build left world-readable is replaced by an owner-only one.
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            map.insert("openai".into(), Secret { api_key: "k2".into(), account_id: String::new() });
+            write_secrets(&path, &map).unwrap();
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o077, 0, "owner only after overwriting a 0644 file");
+            assert_eq!(read_secrets(&path), map);
         }
         assert!(read_secrets(&dir.path().join("missing.json")).is_empty());
         std::fs::write(&path, b"not json").unwrap();
