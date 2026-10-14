@@ -135,7 +135,7 @@
 	Adjustment Layers	Слоеве за корекция
 	Adjustment Preview	Преглед на корекцията
 	Adjustment Properties	Свойства на корекцията
-	Adjustment layers have nothing to transform	Слоьовете за корекция нямат нищо за трансформиране
+	Adjustment layers have nothing to transform	Слоевете за корекция нямат нищо за трансформиране
 	Adjustment visible	Видима корекция
 	Adjustments	Корекции
 	Adobe	Adobe
@@ -723,7 +723,7 @@
 	Color Range…	Цветови диапазон…
 	Color Replacement	Замяна на цвят
 	Color Replacement Tool	Инструмент за замяна на цвят
-	Color Sampler Tool	Инструмент „Цветен пробовръзка“
+	Color Sampler Tool	Инструмент „Цветна проба“
 	Color Settings	Цветови настройки
 	Color Settings…	Цветови настройки…
 	Color Swatches	Цветови образци
@@ -746,8 +746,8 @@
 	Combine Shapes	Комбиниране на форми
 	Comic Book	Комикс
 	Command	Команда
-	Commit Perspective Warp ({key})	Приложи перспективено деформиране ({key})
-	Commit Perspective Warp (↩)	Приложи перспективено деформиране (↩)
+	Commit Perspective Warp ({key})	Приложи перспективно деформиране ({key})
+	Commit Perspective Warp (↩)	Приложи перспективно деформиране (↩)
 	Commit Puppet Warp ({key})	Приложи марионетно деформиране ({key})
 	Commit Puppet Warp (↩)	Приложи марионетно деформиране (↩)
 	Commit any current edits ({key})	Приложи всички текущи редакции ({key})
@@ -1013,8 +1013,8 @@
 	Date and Time	Дата и час
 	DateTime Original	Първоначална дата и час
 	Day For Night	Ден за нощ
-	De-Interlace	Премахване на презредадеността
-	De-Interlace…	Премахване на презредадеността…
+	De-Interlace	Премахване на преплитането
+	De-Interlace…	Премахване на преплитането…
 	Decontaminate	Обеззаразяване
 	Decrease Brush Hardness	Намаляване твърдостта на четката
 	Decrease Brush Size	Намаляване размера на четката
@@ -1023,11 +1023,11 @@
 	Deep	Дълбок
 	Deep Blue	Тъмносиньо
 	Deep Emerald	Тъмносмарагдово
-	Deep Red	Тъмносив/Тъмноечервено -> Тъмноечервено
-	Deep Yellow	Тъмноелбедено -> Тъмноежълто
+	Deep Red	Тъмночервено
+	Deep Yellow	Тъмножълто
 	Default	По подразбиране
 	Default Features	Стандартни функции
-	Default Foreground and Background Colors	Стандартни цвят на преден план и цвят на фон
+	Default Foreground and Background Colors	Стандартни цветове на преден план и фон
 	Default Leaves	Стандартни листа
 	Default PhotoCraft Size	Стандартен размер на PhotoCraft
 	Default Photoshop Size	Стандартен размер на Photoshop
@@ -1460,11 +1460,11 @@
 	Find and Replace Text	Търсене и замяна на текст
 	Find and Replace Text…	Търсене и замяна на текст…
 	Fine	Фина
-	Fine Dots	Финни точки
+	Fine Dots	Фини точки
 	Finger Painting	Рисуване с пръст
 	Finish	Завършване
 	First	Първи
-	First Color Readout	Първи отчит на цвят
+	First Color Readout	Първо отчитане на цвят
 	First Line Indent	Отстъп на първи ред
 	First commit	Първи комит
 	Fish	Риба
@@ -1614,7 +1614,7 @@
 	Glow Brightness	Яркост на сиянието
 	Glow Color	Цвят на сиянието
 	Glow Size	Размер на сиянието
-	Glowing Edges	Сяящи ръбове
+	Glowing Edges	Сияйни ръбове
 	Glyph	Глиф
 	Glyph Scaling	Мащабиране на глифове
 	Glyphs	Глифи
@@ -1641,7 +1641,7 @@
 	Gradient Tool	Инструмент „Градиент“
 	Gradient picker	Избор на градиент
 	Gradient stops	Опорни точки на градиента
-	Gradients	Разградкѝ
+	Gradients	Градиенти
 	Gradient…	Градиент…
 	Grain	Зърнести текстури
 	Grain Amount	Количество зърнистост
@@ -1831,7 +1831,7 @@
 	Imported {n} shortcuts from {file}. Click OK to keep them.	Внесени са {n} клавишни комбинации от {file}. Кликнете „OK“, за да ги запазите.
 	Importing {what} from {file}…	Внасяне на {what} от {file}…
 	Importing…	Внасяне…
-	Import…	Имртиране…
+	Import…	Импортиране…
 	Impressionist	Импресионистичен
 	In	Във
 	In Black	В черно
@@ -1912,8 +1912,8 @@
 	Invert Selection	Инвертиране на селекцията
 	Invert has no settings.	Инвертиране няма настройки.
 	Invert…	Инвертиране…
-	Iris Blur	Ирисно размиване
-	Iris Blur…	Ирисно размиване…
+	Iris Blur	Ирисово размиване
+	Iris Blur…	Ирисово размиване…
 	Isolate Layers	Изолиране на слоеве
 	Italic	Курсив
 	Its layers don't fit the GPU memory budget. Raising Memory usage in Preferences › Performance raises the budget, up to a quarter of this computer's memory.	Неговите слоеве не се побират в паметта на GPU. Увеличаването на използването на паметта в Предпочитания › Производителност увеличава бюджета до една четвърт от паметта на този компютър.
@@ -2001,7 +2001,7 @@
 	Layers to Files…	Слоеве към файлове…
 	Layer…	Слой…
 	Layout	Оформление
-	Leading	Междуредрие
+	Leading	Междуредие
 	Leading (set to the font size × auto-leading when Auto)	Интерлинеар (зададен на размера на шрифта × авто-интерлинеар при Авто)
 	Leaf Color	Цвят на листа
 	Learn More	Научете повече
@@ -2071,8 +2071,8 @@
 	Line delta	Разлика в редовете
 	Linear	Линеен
 	Linear Burn	Линейно затъмняване
-	Linear Dodge	Линейно изветляване
-	Linear Dodge (Add)	Линейно изветляване (Добавяне)
+	Linear Dodge	Линейно изсветляване
+	Linear Dodge (Add)	Линейно изсветляване (Добавяне)
 	Linear Gradient	Линеен градиент
 	Linear Height	Линейна височина
 	Linear Light	Линейна светлина
@@ -2511,7 +2511,7 @@
 	Open a document to select a colour range.	Отворете документ, за да изберете цветови диапазон.
 	Open a document to use the timeline.	Отворете документ, за да използвате времевата скала.
 	Open as smart object	Отваряне като интелигентен обект
-	Open documents as tabs	Отваряне на документите като подкази
+	Open documents as tabs	Отваряне на документите като раздели
 	Open in camera raw	Отваряне в Camera Raw
 	Open paths use centered strokes	Отворените пътища използват центрирани щрихи
 	OpenGL	OpenGL
@@ -2708,8 +2708,8 @@
 	Place Linked…	Поставяне като свързан…
 	Place Scale Marker	Поставяне на мащабен маркер
 	Place Scale Marker…	Поставяне на мащабен маркер…
-	Plane	ПлОСкост
-	Planes	ПлОСкости
+	Plane	Плоскост
+	Planes	Плоскости
 	Plaster	Мазилка
 	Plastic Wrap	Пластмасово фолио
 	Platform: {os} {arch}	Платформа: {os} {arch}
@@ -2840,7 +2840,7 @@
 	Punctuation	Пунктуация
 	Pupil Size	Размер на зеницата
 	Puppet Warp	Марионетна деформация
-	Puppet Warp is not active	Puppet Warp не е активен
+	Puppet Warp is not active	Марионетната деформация не е активна
 	Purge	Изчистване на паметта
 	Purity	Чистота
 	Purple	Лилав
@@ -3380,7 +3380,7 @@
 	Size Jitter	Трептене на размера
 	Size:	Размер:
 	Sketch	Скица
-	Skew	Искавяване
+	Skew	Наклоняване
 	Skewness	Асиметрия
 	Skip	Пропусни
 	Sky	Небе
@@ -3650,7 +3650,7 @@
 	The document does not have an embedded colour profile. Working space: {working}.	Документът няма вграден цветови профил. Работно пространство: {working}.
 	The document has an embedded colour profile that does not match the working space.\nEmbedded: {embedded}\nWorking: {working}	Документът има вграден цветови профил, който не съвпада с работното пространство.\nВграден: {embedded}\nРаботен: {working}
 	The document is closed	Документът е затворен
-	The document or selected layers changed. Please request deletion again.	Документът или избраните слоеве бяха променени. Моля, заявeте изтриването отново.
+	The document or selected layers changed. Please request deletion again.	Документът или избраните слоеве бяха променени. Моля, заявете изтриването отново.
 	The document “{name}” does not have an embedded {mode} profile.	Документът „{name}“ няма вграден {mode} профил.
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Документът „{name}“ има вграден цветови профил, който не съвпада с текущото {mode} работно пространство.
 	The file could not be opened.	Файлът не можа да бъде отворен.
@@ -3664,7 +3664,7 @@
 	Thickness	Дебелина
 	Thin	Тънка
 	This Layer:	Този слой:
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Този Интелиентен обект трябва да бъде растеризиран, преди да продължите. Съдържанието му вече няма да може да се редактира. Да се растеризира ли Интелигентният обект?
+	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Този интелигентен обект трябва да бъде растеризиран, преди да продължите. Съдържанието му вече няма да може да се редактира. Да се растеризира ли интелигентният обект?
 	This adjustment ({key}) is kept as imported and can't be edited yet.	Тази корекция ({key}) се запазва както е импортирана и все още не може да се редактира.
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Този слой за запълване трябва да бъде растеризиран, преди да продължите. Съдържанието му за запълване вече няма да може да се редактира. Да се растеризира ли слоят?
 	This layer must be rasterized before proceeding.	Този слой трябва да бъде растеризиран, преди да продължите.
@@ -4106,7 +4106,7 @@ cameraData	F-Stop	[cameraData] Диафрагма
 cameraData	Focal Length	[cameraData] Фокусно разстояние
 cameraData	Focal Length (35 mm)	[cameraData] Фокусно разстояние (35 мм)
 cameraData	ISO Speed	[cameraData] ISO скорост
-cameraData	Lens	[cameraData] Обектиф
+cameraData	Lens	Обектив
 cameraData	Make	[cameraData] Производител
 cameraData	Model	[cameraData] Модел
 cameraRaw	Amount	[cameraRaw] Количество
