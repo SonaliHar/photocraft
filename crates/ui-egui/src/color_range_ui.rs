@@ -109,7 +109,9 @@ pub fn open(app: &mut PhotocraftApp) -> u64 {
     f.insert("__view".into(), json!("selection"));
     f.insert("__selectionPreview".into(), json!("none"));
     app.color_range = None;
-    app.ui.open_dialog(DialogKind::Command, f)
+    let id=app.ui.open_dialog(DialogKind::Command,f);
+    if let Err(error)=crate::color_range_origin::capture(app,id) {app.ui.status=error;app.ui.status_error=true;}
+    id
 }
 
 pub fn owns(f: &Map<String, Value>) -> bool {
@@ -159,9 +161,19 @@ pub fn params(f: &Map<String, Value>) -> Value {
 }
 
 /// OK: run the command on the document (one history step).
-pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    app.color_range = None;
-    app.run(COMMAND, params(f))
+pub fn confirm_for_dialog(app:&mut PhotocraftApp,id:u64,f:&Map<String,Value>)->Result<Value,String> {
+    crate::color_range_origin::validate(app,id,f)?;
+    let params=crate::color_range_origin::request(app,id,f,params(f))?;
+    photocraft_engine::selection_cmds::color_range_preview_admission(&app.session,&params,&photocraft_raster::Interrupt::NONE).map_err(|error|error.to_string())?;
+    app.color_range=None;
+    let result=app.run(COMMAND,params);
+    if result.is_ok() {app.ui.color_range_origin=None;}
+    result
+}
+#[cfg(test)]
+pub fn confirm(app:&mut PhotocraftApp,f:&Map<String,Value>)->Result<Value,String> {
+    let id=app.ui.dialogs.last().filter(|dialog|owns(&dialog.fields)).map(|dialog|dialog.id).ok_or(tl!("Reopen the Color Range dialog."))?;
+    confirm_for_dialog(app,id,f)
 }
 
 /// Cached preview: the document proxy (per revision) and the textures drawn from it.
@@ -204,93 +216,155 @@ fn query_key(app: &PhotocraftApp, params: &Value) -> u64 {
     key.finish().max(1)
 }
 
-/// Keep the accelerated preview paths in sync with the engine's Color Range replacement.
-/// The full-resolution engine handles other combine modes itself.
-fn scope_preview(proxy: &Document, params: &Value, mask: &mut [f32]) {
-    if matches!(params.get("mode").and_then(Value::as_str), Some("add" | "subtract" | "intersect")) {
-        return;
+fn preview_key(app:&PhotocraftApp,fields:&Map<String,Value>,params:&Value,image_view:bool)->u64 {
+    let mut key=std::collections::hash_map::DefaultHasher::new();
+    query_key(app,params).hash(&mut key);image_view.hash(&mut key);
+    s(fields,"__selectionPreview","none").hash(&mut key);key.finish().max(1)
+}
+fn fail_preview<T>(app:&mut PhotocraftApp,key:u64,error:String)->Option<T> {
+    crate::color_range_origin::remember_preview_failure(app,key,&error);report(app,Some(error));None
+}
+fn preview_count(area:photocraft_geom::Rect,bytes_per_pixel:usize)->Result<usize,String> {
+    if area.is_empty() {return Ok(0);}
+    let width=i64::from(area.x1)-i64::from(area.x0);let height=i64::from(area.y1)-i64::from(area.y0);
+    // Both production proxies have longest side <= CANVAS_PREVIEW; this is a UI
+    // scratch bound, not an image/import limit or a new source qualification.
+    if width>i64::from(CANVAS_PREVIEW) || height>i64::from(CANVAS_PREVIEW) {return Err(tl!("The Color Range preview is too large.").into());}
+    let count=usize::try_from(width).ok().and_then(|width|usize::try_from(height).ok().and_then(|height|width.checked_mul(height)))
+        .ok_or_else(||tl!("The Color Range preview is too large.").to_owned())?;
+    if count.checked_mul(bytes_per_pixel).is_none_or(|bytes|bytes as u64>photocraft_raster::MAX_CHECKED_RASTER_BYTES) {return Err(tl!("The Color Range preview is too large.").into());}
+    Ok(count)
+}
+fn preview_plane<T:Clone>(count:usize,value:T)->Result<Vec<T>,String> {
+    if count.checked_mul(std::mem::size_of::<T>()).is_none_or(|bytes|bytes as u64>photocraft_raster::MAX_CHECKED_RASTER_BYTES) {return Err(tl!("The Color Range preview is too large.").into());}
+    let mut out=Vec::new();out.try_reserve_exact(count).map_err(|_|tl!("There is not enough memory for the Color Range preview.").to_owned())?;
+    if out.capacity().checked_mul(std::mem::size_of::<T>()).is_none_or(|bytes|bytes as u64>photocraft_raster::MAX_CHECKED_RASTER_BYTES) {return Err(tl!("The Color Range preview is too large.").into());}
+    out.resize(count,value);Ok(out)
+}
+fn preview_poll(control:&photocraft_raster::Interrupt<'_>)->Result<(),String> {control.check().map_err(|error|error.to_string())}
+fn checked_preview_surface(surface:&photocraft_raster::Surface,control:&photocraft_raster::Interrupt<'_>)->Result<(),String> {
+    preview_poll(control)?;
+    surface.try_validate_tile_origins_with(control).map_err(|error|error.to_string())?;
+    let bpp=surface.format().bytes_per_pixel();
+    if surface.default_bytes().len()!=bpp {return Err(tl!("The Color Range preview contains invalid stored pixels.").into());}
+    let expected=(photocraft_geom::TILE_SIZE as usize).checked_mul(photocraft_geom::TILE_SIZE as usize).and_then(|count|count.checked_mul(bpp)).ok_or_else(||tl!("The Color Range preview is too large.").to_owned())?;
+    for (cell,tile) in surface.tiles() {
+        preview_poll(control)?;
+        if tile.bytes().len()!=expected || cell.tx.checked_mul(photocraft_geom::TILE_SIZE).and_then(|origin|origin.checked_add(photocraft_geom::TILE_SIZE)).is_none()
+            || cell.ty.checked_mul(photocraft_geom::TILE_SIZE).and_then(|origin|origin.checked_add(photocraft_geom::TILE_SIZE)).is_none() {return Err(tl!("The Color Range preview contains invalid stored pixels.").into());}
     }
-    if let Some(selection) = proxy.selection.as_ref() {
-        let prior = photocraft_algo::selection::mask_from_surface(Some(selection), proxy.bounds());
-        for (value, bound) in mask.iter_mut().zip(prior) {
-            *value = value.min(bound);
+    Ok(())
+}
+/// Keep existing narrow RGBA conversion equations; bound/poll the row provider boundary.
+fn preview_rgba(surface:&photocraft_raster::Surface,area:photocraft_geom::Rect,control:&photocraft_raster::Interrupt<'_>)->Result<Vec<[f32;4]>,String> {
+    checked_preview_surface(surface,control)?;
+    if matches!(surface.format().sample,photocraft_doc::SampleType::U32|photocraft_doc::SampleType::F64) {return Err(tl!("Color Range preview is unavailable for this stored precision.").into());}
+    let count=preview_count(area,std::mem::size_of::<[f32;4]>())?;
+    let mut out=preview_plane(count,[0f32;4])?;
+    if area.is_empty() {return Ok(out);}
+    let width=usize::try_from(area.width()).map_err(|_|tl!("The Color Range preview is too large."))?;
+    for (row,values) in out.chunks_exact_mut(width).enumerate() {
+        preview_poll(control)?;
+        let y=i32::try_from(i64::from(area.y0)+i64::try_from(row).map_err(|_|tl!("The Color Range preview is too large."))?).map_err(|_|tl!("The Color Range preview is too large."))?;
+        let end=y.checked_add(1).ok_or(tl!("The Color Range preview is too large."))?;
+        surface.read_rgba_into(photocraft_geom::Rect::new(area.x0,y,area.x1,end),values);
+    }
+    preview_poll(control)?;Ok(out)
+}
+fn preview_prior_mask(surface:Option<&photocraft_raster::Surface>,area:photocraft_geom::Rect,control:&photocraft_raster::Interrupt<'_>)->Result<Vec<f32>,String> {
+    preview_poll(control)?;
+    let count=preview_count(area,std::mem::size_of::<f32>())?;let mut out=preview_plane(count,0f32)?;
+    let Some(surface)=surface else {preview_poll(control)?;return Ok(out)};
+    checked_preview_surface(surface,control)?;
+    if matches!(surface.format().sample,photocraft_doc::SampleType::U32|photocraft_doc::SampleType::F64) {return Err(tl!("Color Range preview is unavailable for this stored selection precision.").into());}
+    if area.is_empty() {return Ok(out);}
+    let width=usize::try_from(area.width()).map_err(|_|tl!("The Color Range preview is too large."))?;let bpp=surface.format().bytes_per_pixel();
+    for (row,values) in out.chunks_exact_mut(width).enumerate() {
+        preview_poll(control)?;
+        let y=i32::try_from(i64::from(area.y0)+i64::try_from(row).map_err(|_|tl!("The Color Range preview is too large."))?).map_err(|_|tl!("The Color Range preview is too large."))?;
+        let raw=surface.try_read_interleaved_with(photocraft_geom::Rect::new(area.x0,y,area.x1,y.checked_add(1).ok_or(tl!("The Color Range preview is too large."))?),control).map_err(|error|error.to_string())?;
+        if raw.len()!=width.checked_mul(bpp).ok_or(tl!("The Color Range preview is too large."))? {return Err(tl!("The Color Range preview contains invalid stored pixels.").into());}
+        for (value,pixel) in values.iter_mut().zip(raw.chunks_exact(bpp)) {
+            // Retain legacy narrow arithmetic after checked encoded-width validation.
+            photocraft_color::try_read_sample_f64(pixel,surface.format().sample,0).map_err(|error|error.to_string())?;
+            *value=photocraft_color::read_sample(pixel,surface.format().sample,0);
         }
     }
+    preview_poll(control)?;Ok(out)
+}
+/// Keep the accelerated preview paths in sync with the engine's Color Range replacement.
+/// The full-resolution engine handles other combine modes itself.
+fn scope_preview(proxy: &Document, params: &Value, mask: &mut [f32],control:&photocraft_raster::Interrupt<'_>)->Result<(),String> {
+    preview_poll(control)?;
+    if mask.len()!=preview_count(proxy.bounds(),std::mem::size_of::<f32>())? {return Err(tl!("The Color Range preview contains an incomplete selection.").into());}
+    if matches!(params.get("mode").and_then(Value::as_str), Some("add" | "subtract" | "intersect")) {
+        return Ok(());
+    }
+    if let Some(selection) = proxy.selection.as_ref() {
+        let prior=preview_prior_mask(Some(selection),proxy.bounds(),control)?;
+        for (values,bounds) in mask.chunks_mut(4096).zip(prior.chunks(4096)) {
+            preview_poll(control)?;for (value,bound) in values.iter_mut().zip(bounds) {*value=value.min(*bound);}
+        }
+    }
+    preview_poll(control)
 }
 
 /// The selection mask `params` would make, on the proxy: the engine command run on a scratch
 /// session (Out Of Gamut uses the document's own proof setup).
 fn proxy_mask(app: &PhotocraftApp, proxy: &Document, k: u32, params: &Value) -> Result<Vec<f32>, String> {
     let area = proxy.bounds();
+    let expected=preview_count(area,std::mem::size_of::<[f32;4]>())?;
     if params.get("select").and_then(Value::as_str).unwrap_or("sampledColors") == "sampledColors" {
         // Pick on the original document, not the thumbnail's nearest retained pixel. The
         // prepared Lab query is the same one the command uses at full resolution.
-        let query = photocraft_engine::selection_cmds::ColorRangeSamples::new(&app.session, params).map_err(|e| e.to_string())?;
+        let query = photocraft_engine::selection_cmds::ColorRangeSamples::new_with_interrupt(&app.session, params, &photocraft_raster::Interrupt::NONE).map_err(|e| e.to_string())?;
         // Like the command (and OK): `sampleAllLayers: false` judges the active layer's own
         // pixels, otherwise the composite.
         let all_layers = params.get("sampleAllLayers").and_then(Value::as_bool).unwrap_or(true);
         let layer = app.session.active().and_then(|d| d.active_layer).and_then(|id| proxy.layer(id)).and_then(|l| l.surface());
         let px = match (all_layers, layer) {
             (false, Some(surf)) => {
-                let mut px = vec![[0.0f32; 4]; area.width() as usize * area.height() as usize];
-                surf.read_rgba_into(area, &mut px);
-                px
+                preview_rgba(surf,area,&photocraft_raster::Interrupt::NONE)?
             }
-            _ => photocraft_compose::render(proxy, area).map_err(|e| e.to_string())?.px,
+            _ => photocraft_compose::render_with_interrupt(proxy, area,&photocraft_raster::Interrupt::NONE).map_err(|e| e.to_string())?.px,
         };
+        if px.len()!=expected {return Err(tl!("The Color Range preview contains incomplete image pixels.").into());}
         let invert = params.get("invert").and_then(Value::as_bool).unwrap_or(false);
-        let mut mask: Vec<f32> = query
-            .coverage(&px, area.width() as usize, k as f32, [0.0, 0.0])
-            .into_iter()
-            .map(|v| {
-                let v = if invert { 1.0 - v } else { v };
-                // Match the command's GRAY8 mask rounding, before display interpolation.
-                (v.clamp(0.0, 1.0) * 255.0 + 0.5).floor() / 255.0
-            })
-            .collect();
-        scope_preview(proxy, params, &mut mask);
+        let mut mask=query.coverage_with_interrupt(&px,area.width() as usize,k as f32,[0.0,0.0],
+            photocraft_engine::selection_cmds::ColorRangeLimits::default(),&photocraft_raster::Interrupt::NONE).map_err(|error|error.to_string())?;
+        for value in &mut mask {
+            let v=if invert {1.0-*value}else {*value};
+            // Match the command's GRAY8 mask rounding, before display interpolation.
+            *value=(v.clamp(0.0,1.0)*255.0+0.5).floor()/255.0;
+        }
+        scope_preview(proxy,params,&mut mask,&photocraft_raster::Interrupt::NONE)?;
         return Ok(mask);
     }
     if params.get("select").and_then(Value::as_str) == Some("outOfGamut") {
-        let pv = app.session.color.proof(proxy.id);
-        let (m, _) = photocraft_engine::color_cmds::gamut_mask(proxy, &pv.setup, pv.gamut_threshold).map_err(|e| e.to_string())?;
+        let mut mask=photocraft_engine::selection_cmds::color_range_gamut_preview(&app.session,proxy,&photocraft_raster::Interrupt::NONE).map_err(|error|error.to_string())?;
         let invert = params.get("invert").and_then(Value::as_bool).unwrap_or(false);
-        let mut mask: Vec<f32> = m.iter().map(|v| f32::from(*v) / 255.0).map(|v| if invert { 1.0 - v } else { v }).collect();
-        scope_preview(proxy, params, &mut mask);
+        if mask.len()!=expected {return Err(tl!("The Color Range preview contains an incomplete selection.").into());}
+        for values in mask.chunks_mut(4096) {
+            preview_poll(&photocraft_raster::Interrupt::NONE)?;
+            for value in values {let coverage=if invert {1.0-*value}else {*value};*value=(coverage.clamp(0.0,1.0)*255.0+0.5).floor()/255.0;}
+        }
+        scope_preview(proxy,params,&mut mask,&photocraft_raster::Interrupt::NONE)?;
         return Ok(mask);
     }
-    let mut p = params.clone();
-    // Eyedropper points are in document pixels; the proxy is 1/k the size.
-    let (w, h) = (f64::from(area.width().max(1)), f64::from(area.height().max(1)));
-    if let Some(o) = p.as_object_mut() {
-        for key in ["points", "subtractPoints"] {
-            if let Some(Value::Array(a)) = o.get_mut(key) {
-                for v in a.iter_mut() {
-                    if let Some([x, y]) = v.as_array().map(Vec::as_slice).and_then(|s| match s {
-                        [x, y] => Some([x.as_f64()?, y.as_f64()?]),
-                        _ => None,
-                    }) {
-                        *v = json!([(x / f64::from(k)).floor().clamp(0.0, w - 1.0), (y / f64::from(k)).floor().clamp(0.0, h - 1.0)]);
-                    }
-                }
-            }
-        }
-    }
-    let mut s = photocraft_engine::Session::new();
-    s.tools = app.session.tools.clone();
-    // Preserve the proxy's pre-existing selection so preview and OK use the same scope.
-    s.add_document(proxy.clone(), None).map_err(|error| error.to_string())?;
-    if let Some(id) = app.session.active().and_then(|d| d.active_layer) {
-        let _ = s.select_layer(id);
-    }
-    s.execute(COMMAND, p).map_err(|e| e.to_string())?;
-    let d = s.active().ok_or("no preview document")?;
-    Ok(photocraft_algo::selection::mask_from_surface(d.doc.selection.as_ref(), area))
+    // Named presets delegate invert/combine/prior scope exactly once to the checked engine.
+    // Unlike sampled colors they do not consume original-document eyedropper points.
+    let selection=photocraft_engine::selection_cmds::color_range_named_preview(&app.session,proxy,params,&photocraft_raster::Interrupt::NONE).map_err(|error|error.to_string())?;
+    preview_prior_mask(selection.as_ref(),area,&photocraft_raster::Interrupt::NONE)
 }
 
 /// Record why the preview failed (logged once per new reason), or clear it.
 fn report(app: &mut PhotocraftApp, error: Option<String>) {
+    if error.is_some() {app.ui.status_error=true;if let Some(error)=&error {app.ui.status=error.clone();}}
     let Some(p) = app.color_range.as_mut() else { return };
+    if error.is_some() {
+        // A failed query must not install a zero-mask success or retain an older overlay.
+        p.mask=None;p.mask_key=0;p.overlay=None;p.overlay_key=0;
+    }
     if p.error != error {
         if let Some(e) = &error {
             log::warn!("Color Range preview: {e}");
@@ -302,6 +376,12 @@ fn report(app: &mut PhotocraftApp, error: Option<String>) {
 /// Refresh the cached proxy / textures for the active document and the dialog's params. Returns
 /// (texture to show, its size in proxy pixels, k).
 fn preview(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Map<String, Value>) -> Option<(egui::TextureId, [usize; 2], u32)> {
+    if let Err(error)=crate::color_range_origin::validate_frame(app,f) {report(app,Some(error));return None;}
+    let params=params(f);
+    let image_view=(s(f,"__view","selection")=="image") ^ ctx.input(|input|input.modifiers.command || (!cfg!(target_os="macos") && input.modifiers.ctrl));
+    let key=preview_key(app,f,&params,image_view);
+    if let Some(error)=crate::color_range_origin::preview_failure(app,key) {app.ui.status=error.to_owned();app.ui.status_error=true;return None;}
+    if let Err(error)=photocraft_engine::selection_cmds::color_range_preview_admission(&app.session,&params,&photocraft_raster::Interrupt::NONE) {return fail_preview(app,key,error.to_string());}
     let (doc_id, revision, doc) = {
         let st = app.session.active()?;
         (st.doc.id, st.revision, st.doc.clone())
@@ -309,7 +389,12 @@ fn preview(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Map<String, Value>)
     if !matches!(&app.color_range, Some(p) if p.doc == doc_id && p.revision == revision) {
         let side = doc.size.width.max(doc.size.height).max(1);
         let k = side.div_ceil(PREVIEW).max(1);
-        let proxy = Arc::new(crate::proxy::proxy_document(&doc, k).map_err(|error| app.ui.status = error.to_string()).ok()?);
+        // The lower provider's initial Document clone is still noninterruptible;
+        // earlier engine model admission bounds it, not an async cancellation/RSS claim.
+        let proxy=match photocraft_compose::proxy::try_proxy_document_with_interrupt(&doc,k,&photocraft_raster::Interrupt::NONE) {
+            Ok(proxy)=>Arc::new(proxy),
+            Err(error)=>{app.color_range=None;return fail_preview(app,key,error.to_string());},
+        };
         app.color_range = Some(Preview {
             doc: doc_id,
             revision,
@@ -324,9 +409,6 @@ fn preview(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Map<String, Value>)
             overlay_key: 0,
         });
     }
-    let image_view = (s(f, "__view", "selection") == "image") ^ ctx.input(|i| i.modifiers.command || (!cfg!(target_os = "macos") && i.modifiers.ctrl));
-    let params = params(f);
-    let key = query_key(app, &params);
     let (proxy, k) = {
         let p = app.color_range.as_ref()?;
         (p.proxy.clone(), p.k)
@@ -337,21 +419,18 @@ fn preview(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Map<String, Value>)
             let buf = match photocraft_compose::thumbnail_buffer(&proxy, proxy.size.width.max(proxy.size.height)) {
                 Ok(buf) => buf,
                 Err(error) => {
-                    report(app, Some(error.to_string()));
-                    return None;
+                    return fail_preview(app,key,error.to_string());
                 }
             };
             let thumb = match app.session.color.canvas_display(&proxy) {
                 Ok(display) => display.to_rgba8(&buf),
                 Err(e) => {
-                    report(app, Some(e.to_string()));
-                    return None;
+                    return fail_preview(app,key,e.to_string());
                 }
             };
             let size = [thumb.width as usize, thumb.height as usize];
             if size != [w, h] || thumb.pixels.len() != w * h * 4 {
-                report(app, Some(format!("the image thumbnail is {}×{}, expected {w}×{h}", thumb.width, thumb.height)));
-                return None;
+                return fail_preview(app,key,format!("the image thumbnail is {}×{}, expected {w}×{h}",thumb.width,thumb.height));
             }
             let img = egui::ColorImage::from_rgba_unmultiplied(size, &thumb.pixels);
             let tex = ctx.load_texture("color-range-image", img, egui::TextureOptions::LINEAR);
@@ -359,6 +438,8 @@ fn preview(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Map<String, Value>)
                 p.image = Some(tex);
             }
         }
+        crate::color_range_origin::clear_preview_failure(app);
+        report(app,None);
         return app.color_range.as_ref()?.image.as_ref().map(|t| (t.id(), [w, h], k));
     }
     if app.color_range.as_ref().is_some_and(|p| p.mask_key != key || p.mask.is_none()) {
@@ -368,13 +449,11 @@ fn preview(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Map<String, Value>)
                 m
             }
             Err(e) => {
-                report(app, Some(e));
-                vec![0.0; w * h]
+                return fail_preview(app,key,e);
             }
         };
         if mask.len() != w * h {
-            report(app, Some(format!("the selection preview has {} pixels, expected {}", mask.len(), w * h)));
-            return None;
+            return fail_preview(app,key,format!("the selection preview has {} pixels, expected {}",mask.len(),w*h));
         }
         let px: Vec<Color32> = mask.iter().map(|v| Color32::from_gray((v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8)).collect();
         let img = egui::ColorImage::new([w, h], px);
@@ -385,6 +464,7 @@ fn preview(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Map<String, Value>)
         }
         p.mask_key = key;
     }
+    crate::color_range_origin::clear_preview_failure(app);
     app.color_range.as_ref()?.mask.as_ref().map(|t| (t.id(), [w, h], k))
 }
 
@@ -424,6 +504,7 @@ fn set_points(f: &mut Map<String, Value>, k: &str, pts: &[[f64; 2]]) {
 
 /// Dialog body.
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    if let Err(error)=crate::color_range_origin::validate_frame(app,f) {report(app,Some(error.clone()));ui.label(error);return;}
     let t = Tokens::get(ui.ctx());
     let c = controls(f);
     let select = s(f, "select", "sampledColors").to_string();
@@ -500,7 +581,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                     ((p.x - img_rect.left()) / scale).floor().max(0.0) as f64 * f64::from(k) + f64::from(k / 2),
                     ((p.y - img_rect.top()) / scale).floor().max(0.0) as f64 * f64::from(k) + f64::from(k / 2),
                 ];
-                pick(app, f, at, ui.input(|i| i.modifiers));
+                if let Err(error)=pick(app,f,at,ui.input(|i|i.modifiers)) {report(app,Some(error));}
             }
         }
         // A preview that can't be drawn says why (#145) instead of staying blank.
@@ -598,20 +679,27 @@ fn overlay_pixel(mode: &str, coverage: f32) -> Color32 {
 /// Photoshop's Selection Preview on the image, shared by CPU/GPU canvases and all platforms.
 /// This never edits the real selection, image, channels or history; closing the dialog removes it.
 pub(crate) fn paint_selection_preview(app: &mut PhotocraftApp, ctx: &egui::Context, painter: &egui::Painter, doc: DocId, image: Rect, flip: bool) {
-    let Some(fields) = app.ui.dialogs.last().filter(|d| owns(&d.fields)).map(|d| d.fields.clone()) else { return };
+    let Some(dialog)=app.ui.dialogs.last().filter(|dialog|owns(&dialog.fields)) else {return;};
+    if let Err(error)=crate::color_range_origin::validate(app,dialog.id,&dialog.fields) {report(app,Some(error));return;}
+    let fields=dialog.fields.clone();
     let mode = s(&fields, "__selectionPreview", "none");
+    let query=params(&fields);
+    let image_view=(s(&fields,"__view","selection")=="image") ^ ctx.input(|input|input.modifiers.command || (!cfg!(target_os="macos") && input.modifiers.ctrl));
+    let failure_key=preview_key(app,&fields,&query,image_view);
     if mode == "none" || !app.session.active().is_some_and(|st| st.doc.id == doc) {
         return;
     }
     // Refresh the document/revision cache before borrowing its canvas proxy.
     let _ = preview(app, ctx, &fields);
+    if app.color_range.as_ref().is_none_or(|preview|preview.doc!=doc || preview.error.is_some()) {return;}
     if app.color_range.as_ref().is_some_and(|p| p.canvas_proxy.is_none()) {
         let Some(original) = app.session.active().map(|st| st.doc.clone()) else { return };
         let k = original.size.width.max(original.size.height).max(1).div_ceil(CANVAS_PREVIEW);
-        let proxy = match crate::proxy::proxy_document(&original, k) {
+        let proxy = match photocraft_compose::proxy::try_proxy_document_with_interrupt(&original,k,&photocraft_raster::Interrupt::NONE) {
             Ok(proxy) => Arc::new(proxy),
             Err(error) => {
-                app.ui.status = error.to_string();
+                crate::color_range_origin::remember_preview_failure(app,failure_key,&error.to_string());
+                report(app,Some(error.to_string()));
                 return;
             }
         };
@@ -626,6 +714,7 @@ pub(crate) fn paint_selection_preview(app: &mut PhotocraftApp, ctx: &egui::Conte
         let mask = match proxy_mask(app, &proxy, k, &params) {
             Ok(mask) => mask,
             Err(e) => {
+                crate::color_range_origin::remember_preview_failure(app,failure_key,&e);
                 report(app, Some(e));
                 return;
             }
@@ -648,23 +737,22 @@ pub(crate) fn paint_selection_preview(app: &mut PhotocraftApp, ctx: &egui::Conte
 }
 
 /// The top dialog's fields when it is Color Range in a mode that takes eyedropper samples.
-fn sampling_top(app: &PhotocraftApp) -> Option<Map<String, Value>> {
-    app.ui.dialogs.last().map(|d| &d.fields).filter(|f| owns(f) && controls(f).sampling).cloned()
+fn sampling_top(app:&PhotocraftApp)->Result<Option<Map<String,Value>>,String> {
+    let Some(dialog)=app.ui.dialogs.last().filter(|dialog|owns(&dialog.fields) && controls(&dialog.fields).sampling) else {return Ok(None)};
+    crate::color_range_origin::validate(app,dialog.id,&dialog.fields)?;
+    Ok(Some(dialog.fields.clone()))
 }
 
 /// The dialog's eyedropper on the canvas: with Color Range › Sampled Colors as the top dialog,
 /// picks the colour at document point `at` (Shift adds to the sample, Alt subtracts), as a click
 /// on the image does in Photoshop. Returns whether it picked.
 pub fn pick_top(app: &mut PhotocraftApp, at: [f64; 2], mods: egui::Modifiers) -> bool {
-    let Some(mut f) = sampling_top(app) else { return false };
+    let mut f=match sampling_top(app) {Ok(Some(fields))=>fields,Ok(None)=>return false,Err(error)=>{report(app,Some(error));return false;}};
     let Some(doc) = app.session.active().map(|st| &st.doc) else { return false };
     if !at[0].is_finite() || !at[1].is_finite() || at[0] < 0.0 || at[1] < 0.0 || at[0] >= f64::from(doc.size.width) || at[1] >= f64::from(doc.size.height) {
         return false;
     }
-    if doc.selection.as_ref().is_some_and(|selection| selection.sample_channel(at[0].floor() as i32, at[1].floor() as i32, 0) <= 0.0) {
-        return false;
-    }
-    pick(app, &mut f, at, mods);
+    match pick(app,&mut f,at,mods) {Ok(true)=>{},Ok(false)=>return false,Err(error)=>{report(app,Some(error));return false;}}
     match app.ui.dialogs.last_mut() {
         Some(d) => {
             d.fields = f;
@@ -678,7 +766,7 @@ pub fn pick_top(app: &mut PhotocraftApp, at: [f64; 2], mods: egui::Modifiers) ->
 /// shows the dialog's eyedropper (+ / − while Shift / Alt add or subtract), and a press at document
 /// point `press` takes a sample. False when Color Range isn't the top dialog.
 pub fn canvas_eyedropper(app: &mut PhotocraftApp, ctx: &egui::Context, over: egui::Pos2, press: Option<[f64; 2]>) -> bool {
-    let Some(f) = sampling_top(app) else { return false };
+    let f=match sampling_top(app) {Ok(Some(fields))=>fields,Ok(None)=>return false,Err(error)=>{report(app,Some(error));return true;}};
     let mods = ctx.input(|i| i.modifiers);
     let tool = if mods.shift {
         "add"
@@ -715,13 +803,16 @@ pub fn canvas_eyedropper(app: &mut PhotocraftApp, ctx: &egui::Context, over: egu
 
 /// An eyedropper click at document pixel `at`: the plain eyedropper replaces the samples, the
 /// + one (or Shift) adds one, the − one (or Alt) subtracts one.
-pub fn pick(app: &PhotocraftApp, f: &mut Map<String, Value>, at: [f64; 2], mods: egui::Modifiers) {
-    let Some(st) = app.session.active() else { return };
+pub fn pick(app: &PhotocraftApp, f: &mut Map<String, Value>, at: [f64; 2], mods: egui::Modifiers)->Result<bool,String> {
+    crate::color_range_origin::validate_frame(app,f)?;
+    photocraft_engine::selection_cmds::color_range_preview_admission(&app.session,&params(f),&photocraft_raster::Interrupt::NONE).map_err(|error|error.to_string())?;
+    if !at.iter().all(|value|value.is_finite()) {return Err(tl!("Choose a valid point inside the image.").into());}
+    let Some(st) = app.session.active() else { return Ok(false) };
     let (w, h) = (f64::from(st.doc.size.width.max(1)), f64::from(st.doc.size.height.max(1)));
     let [x, y] = at;
     let at = [x.floor().clamp(0.0, w - 1.0), y.floor().clamp(0.0, h - 1.0)];
     if st.doc.selection.as_ref().is_some_and(|selection| selection.sample_channel(at[0] as i32, at[1] as i32, 0) <= 0.0) {
-        return;
+        return Ok(false);
     }
     let tool = if mods.shift {
         "add"
@@ -730,6 +821,7 @@ pub fn pick(app: &PhotocraftApp, f: &mut Map<String, Value>, at: [f64; 2], mods:
     } else {
         s(f, "__tool", "sample")
     };
+    if matches!(tool,"add"|"subtract") && f.get("points").and_then(Value::as_array).map_or(0,Vec::len).checked_add(f.get("subtractPoints").and_then(Value::as_array).map_or(0,Vec::len)).is_none_or(|count|count>=4096) {return Err(tl!("There are too many Color Range samples. Clear samples before adding more.").into());}
     // The click order matters: Photoshop applies additions and subtractions one after another.
     let mut order: Vec<Value> = f.get("__order").and_then(Value::as_array).cloned().unwrap_or_default();
     match tool {
@@ -752,6 +844,7 @@ pub fn pick(app: &PhotocraftApp, f: &mut Map<String, Value>, at: [f64; 2], mods:
         }
     }
     f.insert("__order".into(), Value::Array(order));
+    Ok(true)
 }
 
 /// The click order for the command (`order`), when it is consistent with the point lists.
@@ -1138,10 +1231,10 @@ mod tests {
         let mut app = app_with_doc();
         let id = open(&mut app);
         let mut f = app.ui.dialog_mut(id).unwrap().fields.clone();
-        pick(&app, &mut f, [2.0, 2.0], egui::Modifiers::NONE);
-        pick(&app, &mut f, [30.0, 2.0], egui::Modifiers::SHIFT);
-        pick(&app, &mut f, [30.0, 2.0], egui::Modifiers::ALT);
-        pick(&app, &mut f, [30.0, 2.0], egui::Modifiers::ALT);
+        pick(&app, &mut f, [2.0, 2.0], egui::Modifiers::NONE).unwrap();
+        pick(&app, &mut f, [30.0, 2.0], egui::Modifiers::SHIFT).unwrap();
+        pick(&app, &mut f, [30.0, 2.0], egui::Modifiers::ALT).unwrap();
+        pick(&app, &mut f, [30.0, 2.0], egui::Modifiers::ALT).unwrap();
         assert_eq!(params(&f)["order"], json!(["+", "+", "-", "-"]));
     }
 
@@ -1199,7 +1292,7 @@ mod tests {
         let mut app = PhotocraftApp::new(session, crate::Services::default());
         let id = open(&mut app);
         let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
-        pick(&app, &mut fields, [101.0, 1.0], egui::Modifiers::NONE);
+        pick(&app, &mut fields, [101.0, 1.0], egui::Modifiers::NONE).unwrap();
         fields.insert("fuzziness".into(), json!(0.0));
         let original = app.session.active().unwrap().doc.clone();
         let proxy = crate::proxy::proxy_document(&original, 2).unwrap();
@@ -1251,9 +1344,9 @@ mod tests {
         // Localized needs a picked point.
         f.insert("localized".into(), json!(true));
         assert!(params(&f).get("localized").is_none());
-        pick(&app, &mut f, [3.0, 4.0], egui::Modifiers::NONE);
-        pick(&app, &mut f, [99.0, -4.0], egui::Modifiers::SHIFT);
-        pick(&app, &mut f, [1.0, 1.0], egui::Modifiers::ALT);
+        pick(&app, &mut f, [3.0, 4.0], egui::Modifiers::NONE).unwrap();
+        pick(&app, &mut f, [99.0, -4.0], egui::Modifiers::SHIFT).unwrap();
+        pick(&app, &mut f, [1.0, 1.0], egui::Modifiers::ALT).unwrap();
         assert_eq!(
             params(&f),
             json!({"select": "sampledColors", "invert": false, "fuzziness": 40.0, "points": [[3.0, 4.0], [39.0, 0.0]], "subtractPoints": [[1.0, 1.0]], "order": ["+", "+", "-"], "localized": true, "range": 100.0})
@@ -1308,14 +1401,91 @@ mod tests {
         let mut h = harness(app_with_doc());
         open(h.state_mut());
         h.run_steps(3);
-        // The engine refuses these params: the preview says so instead of staying blank.
+        // The engine refuses these params: no stale successful mask/overlay survives.
+        let before=h.state().session.active().unwrap().doc.clone();
+        let revision=h.state().session.active().unwrap().revision;
+        assert!(h.state().color_range.as_ref().unwrap().mask.is_some());
         let id = dialog_id(h.state());
         h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("select".into(), json!("noSuchMode"));
         h.run_steps(3);
         let err = h.state().color_range.as_ref().and_then(|p| p.error.clone());
         assert!(err.is_some(), "the failure is recorded");
+        let preview=h.state().color_range.as_ref().unwrap();
+        assert!(preview.mask.is_none() && preview.overlay.is_none());assert_eq!(preview.mask_key,0);assert_eq!(preview.overlay_key,0);
+        assert!(h.state().session.active().unwrap().doc.shares_state(&before));assert_eq!(h.state().session.active().unwrap().revision,revision);
         assert!(h.query_by_label_contains("Color Range preview unavailable").is_some(), "and shown");
         set(&mut h, "select", json!("reds"));
         assert!(h.state().color_range.as_ref().unwrap().error.is_none(), "and cleared once the preview works again");
     }
+    #[test]
+    fn checked_sampled_preview_refuses_bad_original_points_without_installing_mask() {
+        let app=app_with_doc();let before=app.session.active().unwrap().doc.clone();
+        let proxy=crate::proxy::proxy_document(&before,2).unwrap();
+        assert!(proxy_mask(&app,&proxy,2,&json!({"select":"sampledColors","points":[[-1,0]],"fuzziness":0})).is_err());
+        assert!(app.session.active().unwrap().doc.shares_state(&before));
+    }
+
+    #[test]
+    fn preview_failure_key_changes_with_legitimate_query_display_and_foreground_options() {
+        let mut app=app_with_doc();let id=open(&mut app);let mut fields=app.ui.dialog_mut(id).unwrap().fields.clone();
+        let before=preview_key(&app,&fields,&params(&fields),false);
+        assert_ne!(before,preview_key(&app,&fields,&params(&fields),true));
+        fields.insert("__selectionPreview".into(),json!("quickMask"));
+        assert_ne!(before,preview_key(&app,&fields,&params(&fields),false));
+        fields.insert("__selectionPreview".into(),json!("none"));fields.insert("fuzziness".into(),json!(5));
+        assert_ne!(before,preview_key(&app,&fields,&params(&fields),false));
+        let option_key=preview_key(&app,&fields,&params(&fields),false);app.session.tools.foreground=[0.4,0.2,0.8,1.];
+        assert_ne!(option_key,preview_key(&app,&fields,&params(&fields),false));
+    }
+
+    #[test]
+    fn checked_preview_planes_keep_narrow_values_defaults_and_prior_scope() {
+        let area=GRect::new(-2,-1,3,2);
+        for sample in [SampleType::U8,SampleType::U16,SampleType::F32] {
+            let format=photocraft_doc::PixelFormat::new(ColorMode::Rgb,sample,true);
+            let mut surface=photocraft_raster::Surface::with_default(format,&[0.2,0.4,0.6,0.5]);
+            surface.fill_rect(GRect::new(0,0,1,1),&[0.8,0.1,0.3,1.]);
+            let mut old=vec![[0f32;4];area.width() as usize*area.height() as usize];surface.read_rgba_into(area,&mut old);
+            assert_eq!(preview_rgba(&surface,area,&photocraft_raster::Interrupt::NONE).unwrap(),old);
+            let mut mask=photocraft_raster::Surface::with_default(photocraft_doc::PixelFormat::new(ColorMode::Grayscale,sample,false),&[0.25]);
+            mask.fill_rect(GRect::new(0,0,1,1),&[0.75]);
+            assert_eq!(preview_prior_mask(Some(&mask),area,&photocraft_raster::Interrupt::NONE).unwrap(),photocraft_algo::selection::mask_from_surface(Some(&mask),area));
+        }
+    }
+    #[test]
+    fn checked_preview_planes_refuse_oversize_wide_and_cancel_before_publication() {
+        let area=GRect::new(0,0,4,4);let surface=photocraft_raster::Surface::new(photocraft_doc::PixelFormat::RGBA8);
+        assert!(preview_rgba(&surface,area,&photocraft_raster::Interrupt::cancel_only(&||true)).is_err());
+        assert!(preview_prior_mask(None,area,&photocraft_raster::Interrupt::cancel_only(&||true)).is_err());
+        assert!(preview_count(GRect::new(0,0,1025,1),16).is_err());
+        for sample in [SampleType::U32,SampleType::F64] {
+            let wide=photocraft_raster::Surface::new(photocraft_doc::PixelFormat::new(ColorMode::Grayscale,sample,false));
+            assert!(preview_prior_mask(Some(&wide),area,&photocraft_raster::Interrupt::NONE).is_err());
+        }
+    }
+
+    #[test]
+    fn named_preview_matches_registered_proxy_command_combine_invert_and_prior_scope() {
+        let mut app=app_with_doc();
+        let mut prior=photocraft_raster::Surface::new(photocraft_doc::PixelFormat::GRAY8);
+        prior.fill_rect(GRect::new(0,0,20,15),&[0.5]);
+        app.session.active_mut().unwrap().doc.try_resident_mut().unwrap().selection=Some(prior);
+        let original=app.session.active().unwrap().doc.clone();
+        let proxy=photocraft_compose::proxy::try_proxy_document_with_interrupt(&original,2,&photocraft_raster::Interrupt::NONE).unwrap();
+        for preset in ["reds","skinTones","highlights","midtones","shadows"] {
+            for mode in ["replace","add","subtract","intersect"] {for invert in [false,true] {
+                let params=json!({"select":preset,"mode":mode,"invert":invert,"fuzziness":20});
+                let shown=proxy_mask(&app,&proxy,2,&params).unwrap();
+                // Compatibility comparison with the prior scratch-command behavior;
+                // this is not an independent typography/source or GIMP oracle.
+                let mut scratch=photocraft_engine::Session::new();scratch.tools=app.session.tools.clone();scratch.add_document(proxy.clone(),None).unwrap();
+                if let Some(layer)=app.session.active().unwrap().active_layer {scratch.select_layer(layer).unwrap();}
+                scratch.execute(COMMAND,params).unwrap();
+                let expected=preview_prior_mask(scratch.active().unwrap().doc.selection.as_ref(),proxy.bounds(),&photocraft_raster::Interrupt::NONE).unwrap();
+                assert_eq!(shown,expected,"{preset} {mode} invert={invert}");
+                assert!(app.session.active().unwrap().doc.shares_state(&original));
+            }}
+        }
+    }
+
 }

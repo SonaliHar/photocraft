@@ -3231,6 +3231,8 @@ mod tests {
     }
 }
 
+mod controlled_distance;
+
 // Additive checked preparation kernels; legacy rendering retains its existing API.
 mod checked_prepare {
     use super::*;
@@ -3386,13 +3388,27 @@ mod checked_prepare {
         poll(control)
     }
     pub(super) fn validate(layer: &Layer) -> Result<usize, RasterInputError> {
+        validate_with_interrupt(layer, &Interrupt::NONE)
+    }
+    pub(super) fn validate_with_interrupt(layer: &Layer, control: &Interrupt<'_>) -> Result<usize, RasterInputError> {
+        poll(control)?;
+        if (layer.effects.items.len() as u64).checked_mul(3).is_none_or(|n| n > 8_000_000_000) {
+            return Err(RasterInputError::LimitExceeded);
+        }
         let mut count = 0_usize;
-        for e in layer.effects.items.iter().filter(|e| e.enabled()) {
+        for e in &layer.effects.items {
+            poll(control)?;
+            if !e.enabled() {
+                continue;
+            }
             let shadow = match e {
                 Effect::DropShadow(s) | Effect::InnerShadow(s) => s,
                 _ => return Err(RasterInputError::UnsupportedConversion),
             };
-            if shadow.spread != 0.0
+            let (radius, blur) = spread_split(shadow.size, shadow.spread);
+            if !shadow.spread.is_finite()
+                || !radius.is_finite()
+                || !blur.is_finite()
                 || !shadow.noise.is_finite()
                 || !(0.0..=1.0).contains(&shadow.noise)
                 || !matches!(shadow.contour, Contour::Linear)
@@ -3419,7 +3435,8 @@ mod checked_prepare {
     ) -> Result<FxMaps, RasterInputError> {
         use RasterInputError as E;
         poll(control)?;
-        let count = validate(layer)?;
+        let count = validate_with_interrupt(layer, control)?;
+        let budget = budget.min(64 << 20);
         if !light.angle.is_finite() {
             return Err(E::UnsupportedConversion);
         }
@@ -3429,6 +3446,9 @@ mod checked_prepare {
         )?;
         if values.len() != bytes / 4 {
             return Err(E::LengthMismatch);
+        }
+        if values.capacity() != values.len() {
+            return Err(E::LimitExceeded);
         }
         let retained = bytes
             .checked_mul(count + 1)
@@ -3442,11 +3462,37 @@ mod checked_prepare {
         if peak > budget {
             return Err(E::LimitExceeded);
         }
+        // Charge each repeated shift/distance/blur pass before private owners.
+        // This is a lower-only preparation work ceiling, not a global RSS claim.
+        let pixels = (bytes / 4) as u64;
+        let mut work = (layer.effects.items.len() as u64).checked_mul(3).ok_or(E::LimitExceeded)?;
+        for e in &layer.effects.items {
+            poll(control)?;
+            let shadow = match e {
+                Effect::DropShadow(s) | Effect::InnerShadow(s) if e.enabled() => s,
+                _ => continue,
+            };
+            let (radius, blur) = spread_split(shadow.size, shadow.spread);
+            let (tent_radius, _, _) = box_geom(blur);
+            let sides = u64::from(rect.width()).checked_add(u64::from(rect.height())).ok_or(E::LimitExceeded)?;
+            let line_work = u64::try_from(tent_radius).map_err(|_| E::LimitExceeded)?.checked_mul(sides).and_then(|n| n.checked_mul(16)).ok_or(E::LimitExceeded)?;
+            let pixel_work = pixels.checked_mul(if radius > 0.0 { 320 } else { 128 }).ok_or(E::LimitExceeded)?;
+            work = work.checked_add(pixel_work).and_then(|n| n.checked_add(line_work)).ok_or(E::LimitExceeded)?;
+            if work > 8_000_000_000 {
+                return Err(E::LimitExceeded);
+            }
+        }
         let shape = Map { w: rect.width() as usize, h: rect.height() as usize, v: values };
         let mut per = Vec::new();
         per.try_reserve_exact(count).map_err(|_| E::AllocationFailed)?;
-        for e in layer.effects.items.iter().filter(|e| e.enabled()) {
+        if per.capacity() != count {
+            return Err(E::LimitExceeded);
+        }
+        for e in &layer.effects.items {
             poll(control)?;
+            if !e.enabled() {
+                continue;
+            }
             let (shadow, inner) = match e {
                 Effect::DropShadow(s) => (s, false),
                 Effect::InnerShadow(s) => (s, true),
@@ -3477,7 +3523,15 @@ mod checked_prepare {
                     *shift.v.get_mut(y * shape.w + x).ok_or(E::LengthMismatch)? = top * (1.0 - ay) + bot * ay;
                 }
             }
-            let mut map = try_tent(&shift, budget.saturating_sub(retained), shadow.size, control)?;
+            let (radius, blur) = spread_split(shadow.size, shadow.spread);
+            let source = if radius > 0.0 {
+                let grown = super::controlled_distance::dilate(&shift, radius, budget.saturating_sub(retained), control)?;
+                drop(shift);
+                grown
+            } else {
+                shift
+            };
+            let mut map = try_tent(&source, budget.saturating_sub(retained), blur, control)?;
             checked_noise(&mut map, shadow.noise, (rect.x0, rect.y0), control)?;
             if inner {
                 for (i, (v, a)) in map.v.iter_mut().zip(&shape.v).enumerate() {
@@ -3489,14 +3543,53 @@ mod checked_prepare {
             }
             let mut maps = Vec::new();
             maps.try_reserve_exact(1).map_err(|_| E::AllocationFailed)?;
+            if maps.capacity() != 1 {
+                return Err(E::LimitExceeded);
+            }
             maps.push(map);
             per.push(maps);
         }
         let mut bevel_paint = Vec::new();
         bevel_paint.try_reserve_exact(count).map_err(|_| E::AllocationFailed)?;
+        if bevel_paint.capacity() != count {
+            return Err(E::LimitExceeded);
+        }
         bevel_paint.resize(count, BevelPaint::Inner);
         poll(control)?;
         Ok(FxMaps { rect, shape, per, bevel_paint, din: None, dout: None, dout_exact: None, vdout: None, vdout_exact: None, outline: false, frames: Vec::new() })
+    }
+    #[cfg(test)]
+    #[test]
+    fn checked_spread_shadows_match_existing_maps_and_refuse_privately() {
+        use photocraft_doc::{Color, LayerContent, Surface};
+        for spread in [0.0, 0.02, 0.4, 1.0] {
+            let mut layer = Layer::new("Spread draft", LayerContent::Raster(Surface::new(photocraft_color::PixelFormat::RGBA8)));
+            let mut effect = Effect::default_drop_shadow();
+            let Effect::DropShadow(shadow) = &mut effect else {
+                panic!("default shadow");
+            };
+            shadow.spread = spread;
+            shadow.size = 17.25;
+            shadow.angle = 37.0;
+            shadow.distance = 3.4;
+            shadow.noise = 0.17;
+            shadow.contour = Contour::Linear;
+            let inner = Effect::InnerShadow(shadow.clone());
+            layer.effects.items = vec![effect, inner];
+            let rect = Rect::new(-3, 7, 38, 36);
+            let input = (0..41 * 29).map(|i| ((i * 73) % 101) as f32 / 100.0).collect::<Vec<_>>();
+            let light = GlobalLight::default();
+            let tex = TextureCtx { rect, patterns: &[], anchor: (0.0, 0.0) };
+            let expected = build_maps(&layer, input.clone(), rect, &light, &tex);
+            let got = build(&layer, input.clone(), rect, &light, 64 << 20, &Interrupt::NONE).unwrap();
+            for (a, b) in got.per.iter().zip(&expected.per) {
+                assert_eq!(a[0].v.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), b[0].v.iter().map(|v| v.to_bits()).collect::<Vec<_>>());
+            }
+            let saved = layer.clone();
+            assert!(matches!(build(&layer, input.clone(), rect, &light, 1, &Interrupt::NONE), Err(RasterInputError::LimitExceeded)));
+            assert!(matches!(build(&layer, input, rect, &light, 64 << 20, &Interrupt::cancel_only(&|| true)), Err(RasterInputError::Cancelled)));
+            assert_eq!(layer, saved);
+        }
     }
     #[cfg(test)]
     #[test]
@@ -3640,7 +3733,7 @@ mod checked_prepare {
     }
 }
 
-/// Checked zero-spread linear-contour shadow maps with finite noise0..=1. Other styles
+/// Checked finite-spread linear-contour shadow maps with finite noise0..=1. Other styles
 /// remain explicitly unsupported in this additive preparation path.
 pub(crate) fn try_build_shadow_maps(
     layer: &Layer,
@@ -3654,4 +3747,11 @@ pub(crate) fn try_build_shadow_maps(
 }
 pub(crate) fn validate_checked_shadows(layer: &Layer) -> Result<usize, photocraft_raster::RasterInputError> {
     checked_prepare::validate(layer)
+}
+
+/// Borrowed checked-shadow metadata validation under the renderer token.
+pub(crate) fn validate_checked_shadows_with_interrupt(
+    layer: &Layer, control: &photocraft_raster::Interrupt<'_>,
+) -> Result<usize, photocraft_raster::RasterInputError> {
+    checked_prepare::validate_with_interrupt(layer, control)
 }

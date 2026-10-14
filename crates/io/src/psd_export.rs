@@ -504,7 +504,11 @@ impl Ex {
             blocks.push(TaggedBlock::protection(lspf));
         }
         if l.label != photocraft_doc::LabelColor::None {
-            blocks.push(TaggedBlock::sheet_color(blocks::label_index(l.label)));
+            if let Some(index) = blocks::label_index_if_supported(l.label) {
+                blocks.push(TaggedBlock::sheet_color(index));
+            } else {
+                self.warnings.push(format!("layer \"{}\": Brown layer label omitted from PSD; no documented Photoshop sheet-colour equivalent", l.name));
+            }
         }
         blocks.push(TaggedBlock::fill_opacity(q255(l.fill_opacity)));
         // Effects: the original lfx2 while the effects are unchanged (or

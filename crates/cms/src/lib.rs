@@ -17,6 +17,7 @@
 
 pub mod builtin;
 pub mod clut;
+pub mod control;
 pub mod curve;
 pub mod gamut;
 pub mod lut3d;

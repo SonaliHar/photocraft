@@ -354,3 +354,13 @@ pub fn encode(p: &Profile) -> Vec<u8> {
     debug_assert_eq!(o.len(), size);
     o
 }
+
+// Additive cooperative recipe; the legacy writer above remains unchanged.
+pub(crate) mod controlled;
+pub use controlled::EncodeRequirements;
+pub fn requirements_with_control(profile:&Profile,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<EncodeRequirements> {
+    controlled::requirements(profile,limits,cancelled)
+}
+pub fn encode_with_control(profile:&Profile,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<Vec<u8>> {
+    controlled::encode(profile,limits,cancelled)
+}

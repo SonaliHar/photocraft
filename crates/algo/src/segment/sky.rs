@@ -320,3 +320,6 @@ mod tests {
         assert!(colour_prior([0.9, 0.9, 0.92]) > 0.8);
     }
 }
+
+mod controlled;
+pub use controlled::{SkyLimits, SkyRequirements, requirements, select_sky_with_interrupt};

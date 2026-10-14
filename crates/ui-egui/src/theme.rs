@@ -776,6 +776,8 @@ impl Tokens {
             LabelColor::Fuchsia => ([0xB0, 0x14, 0xC0], [0x71, 0x0F, 0x74]),
             LabelColor::Violet => ([0x91, 0x76, 0xD5], [0x5D, 0x3F, 0x8E]),
             LabelColor::Gray => ([0x9C, 0x9C, 0x9C], [0x57, 0x57, 0x57]),
+            // PhotoCraft's own Brown UI palette; not a source-editor RGB oracle.
+            LabelColor::Brown => ([0xB4, 0x83, 0x5B], [0x70, 0x4E, 0x33]),
         };
         let rgb = |[r, g, b]: [u8; 3]| Color32::from_rgb(r, g, b);
         Some((rgb(swatch), rgb(eye)))

@@ -31,6 +31,8 @@ pub mod grabcut;
 pub mod maxflow;
 pub mod quick;
 pub mod sky;
+mod clean_controlled;
+pub use clean_controlled::{CleanupLimits, clean_mask_with_interrupt};
 pub mod slic;
 pub mod subject;
 

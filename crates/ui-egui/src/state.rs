@@ -1382,6 +1382,10 @@ pub struct UiState {
     #[serde(skip)]
     pub(crate) selection_modify_origin: Option<crate::selection_modify_origin::Origin>,
     #[serde(skip)]
+    pub(crate) color_range_origin: Option<crate::color_range_origin::Origin>,
+    #[serde(skip)]
+    pub(crate) selection_color_origin: Option<crate::selection_color_origin::Origin>,
+    #[serde(skip)]
     pub(crate) native_gray_adjustment_origin: Option<crate::native_gray_adjustment_origin::Origin>,
     #[serde(skip)]
     pub(crate) duplicate_layer_origin: Option<crate::duplicate_layer_origin::Origin>,
@@ -1565,6 +1569,8 @@ impl Default for UiState {
             trim_origin: None,
             fill_origin: None,
             selection_modify_origin: None,
+            color_range_origin: None,
+            selection_color_origin: None,
             native_gray_adjustment_origin: None,
             duplicate_layer_origin: None,
             new_layer_origin: None,

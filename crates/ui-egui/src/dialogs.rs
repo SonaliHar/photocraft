@@ -135,6 +135,32 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     crate::layer_style::color_picker::prune(app);
     crate::type_panels_ui::color_picker::prune(app);
     crate::edit_history::track_dialogs(app, ctx);
+    // Reject restored or agent-supplied oversized Color Range fields while they
+    // are still borrowed. The normal frame snapshot below must not clone their
+    // point arrays or recursively nested values before admission.
+    for dialog in &mut app.ui.dialogs {
+        if crate::color_range_ui::owns(&dialog.fields) {
+            if let Err(error) = crate::color_range_origin::fields(&dialog.fields) {
+                dialog.kind = DialogKind::Error;
+                dialog.fields = serde_json::Map::new();
+                dialog.fields.insert("message".into(), Value::String(error.clone()));
+                app.ui.color_range_origin = None;
+                app.color_range = None;
+                app.ui.status = error;
+                app.ui.status_error = true;
+            }
+        }
+        if crate::selection_color_origin::owns(&dialog.fields) {
+            if let Err(error) = crate::selection_color_origin::fields(&dialog.fields) {
+                dialog.kind = DialogKind::Error;
+                dialog.fields = serde_json::Map::new();
+                dialog.fields.insert("message".into(), Value::String(error.clone()));
+                app.ui.selection_color_origin = None;
+                app.ui.status = error;
+                app.ui.status_error = true;
+            }
+        }
+    }
     let dialogs = app.ui.dialogs.clone();
     let top = dialogs.last().map(|d| d.id);
     let mut shown = Vec::new();
@@ -503,6 +529,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             Some(true) => {
                 if let Err(error) = confirm(app, d.id) {
                     app.ui.status = error;
+                    app.ui.status_error = true;
                 }
             }
             Some(false) => {
@@ -577,6 +604,16 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     if crate::layer_style::color_picker::has_child(app, id) {
         return Err("confirm or cancel the Layer Style color picker first".into());
     }
+    // Keep an invalid or stale selection form available for Cancel/reopening.
+    // These borrowed checks also precede closing the form or cloning params.
+    if let Some(dialog) = app.ui.dialogs.iter().find(|dialog| dialog.id == id) {
+        if crate::color_range_ui::owns(&dialog.fields) {
+            crate::color_range_origin::validate(app, id, &dialog.fields)?;
+        }
+        if crate::selection_color_origin::owns(&dialog.fields) {
+            crate::selection_color_origin::validate(app, id, &dialog.fields)?;
+        }
+    }
     if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id).filter(|d| crate::guide_layout_ui::owns(&d.fields)) {
         if app.ui.dialogs.iter().any(|child| crate::color_picker_ui::owns(&child.fields) && child.fields.get("__dialog").and_then(Value::as_u64) == Some(id)) {
             return Err("confirm or cancel the guide color picker first".into());
@@ -618,7 +655,7 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
         DialogKind::Command if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::new_guide_ui::owns(&d.fields) => crate::guide_dialog::confirm(app, id, &d.fields),
         DialogKind::Command if crate::color_picker_ui::owns(&d.fields) => crate::color_picker_ui::confirm(app, &d.fields),
-        DialogKind::Command if crate::color_range_ui::owns(&d.fields) => crate::color_range_ui::confirm(app, &d.fields),
+        DialogKind::Command if crate::color_range_ui::owns(&d.fields) => crate::color_range_ui::confirm_for_dialog(app, id, &d.fields),
         DialogKind::Command if crate::prefs_ui::owns(&d.fields) => crate::prefs_ui::confirm(app, &d.fields),
         DialogKind::Command if crate::sizing::owns(&d.fields) => crate::sizing::confirm(app, id, &d.fields),
         DialogKind::Command if crate::trim::owns(&d.fields) => crate::trim::confirm(app, id, &d.fields),
@@ -644,6 +681,9 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
                 if crate::selection_modify_origin::handles(&cmd) {
                     crate::selection_modify_origin::validate(app, id, &d.fields)?;
                 }
+                if crate::selection_color_origin::handles(&cmd) {
+                    crate::selection_color_origin::validate(app, id, &d.fields)?;
+                }
                 if crate::native_gray_adjustment_origin::handles(&cmd) {
                     crate::native_gray_adjustment_origin::validate(app, id, &d.fields)?;
                 }
@@ -655,6 +695,8 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
                 cmd = confirmed;
                 if crate::selection_modify_origin::handles(&cmd) {
                     crate::selection_modify_origin::prepare(app, id, &d.fields, params)
+                } else if crate::selection_color_origin::handles(&cmd) {
+                    crate::selection_color_origin::prepare(app, id, &d.fields, params)
                 } else { Ok(params) }
             })();
             let (params, result) = match preparation {
@@ -678,6 +720,9 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
                 app.ui.view.guide_layout = params;
             }
             if result.is_ok() {
+                if crate::selection_color_origin::handles(&cmd) {
+                    crate::selection_color_origin::clear(app);
+                }
                 crate::filter_dialog::remember(app, &cmd, &d.fields);
                 // A step dialog of a playing action: the action continues after it.
                 crate::actions::resume(app, &d.fields);
@@ -692,6 +737,12 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
 /// Cancel a dialog and its dependent Layer Style picker, without applying edits.
 pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     let closed = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
+    if crate::color_range_ui::owns(&closed.fields) {
+        app.ui.color_range_origin = None;
+    }
+    if crate::selection_color_origin::owns(&closed.fields) {
+        crate::selection_color_origin::clear(app);
+    }
     crate::actions::stopped(app, &closed.fields);
     if crate::guide_layout_ui::owns(&closed.fields) {
         app.ui.dialogs.retain(|child| child.fields.get("__dialog").and_then(Value::as_u64) != Some(id));
@@ -731,12 +782,34 @@ pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) 
     let mut fields = serde_json::Map::new();
     fields.insert("__command".into(), json!(command));
     fields.insert("__label".into(), json!(label));
-    app.ui.open_dialog(DialogKind::Command, fields)
+    let id = app.ui.open_dialog(DialogKind::Command, fields);
+    crate::selection_color_origin::capture_open(app, id, command);
+    id
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_color_selection_forms_remain_available_for_cancel() {
+        for command in ["select.colorRange", "select.focusArea", "select.sky"] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", serde_json::json!({"width": 4, "height": 4})).unwrap();
+            let id = open_command_dialog(&mut app, command, "Selection");
+            let before = app.session.active().unwrap().doc.clone();
+            let preferences = app.session.prefs().dialogs.clone();
+            app.session.active_mut().unwrap().revision += 1;
+            assert!(confirm(&mut app, id).is_err());
+            assert!(app.ui.dialogs.iter().any(|dialog| dialog.id == id));
+            assert!(app.session.active().unwrap().doc.shares_state(&before));
+            assert_eq!(app.session.prefs().dialogs, preferences);
+            cancel(&mut app, id).unwrap();
+            assert!(!app.ui.dialogs.iter().any(|dialog| dialog.id == id));
+            assert!(app.ui.color_range_origin.is_none());
+            assert!(app.ui.selection_color_origin.is_none());
+        }
+    }
 
     /// A filter dialog over a 256×256 layer, with the preview the canvas computed for it on screen.
     fn filter_dialog_with_preview(background: bool) -> (PhotocraftApp, u64) {

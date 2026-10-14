@@ -220,7 +220,9 @@ pub fn save_current_document_archive<W: Write + Seek>(
     let mut sink = OwnedSink { entries, finite: None, reservations, limits, control };
     crate::convert::check_nesting(&doc.layers, *control.interrupt)?;
     let document = crate::convert::doc_m(doc, &mut sink)?;
-    let version = if crate::convert::requires_reader_v7_state_with(doc, *control.interrupt)? {
+    let version = if crate::convert::requires_reader_v8_state_with(doc, *control.interrupt)? {
+        8
+    } else if crate::convert::requires_reader_v7_state_with(doc, *control.interrupt)? {
         7
     } else if crate::convert::requires_reader_v6_state_with(doc, *control.interrupt)? {
         6

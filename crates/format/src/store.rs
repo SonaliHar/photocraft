@@ -533,6 +533,9 @@ pub(crate) fn load_with_interrupt(src: &dyn Source, opts: &LoadOptions, control:
     if convert::requires_reader_v6_state_with(&doc, *control)? && m.minimum_reader_version < 6 {
         return Err(FormatError::corrupt("current resource resolution requires minimum reader version 6"));
     }
+    if convert::requires_reader_v8_state_with(&doc, *control)? && m.minimum_reader_version < 8 {
+        return Err(FormatError::corrupt("Brown layer label requires minimum reader version 8"));
+    }
     if convert::requires_reader_v7_state_with(&doc, *control)? && m.minimum_reader_version < 7 {
         return Err(FormatError::corrupt("current linked geometry requires minimum reader version 7"));
     }
@@ -1224,7 +1227,9 @@ impl PcraftWriter {
             previews.push((COMPOSITE, png(t)?));
             c.poll()?;
         }
-        let required_version = if convert::requires_reader_v7_state_with(doc, control)? {
+        let required_version = if convert::requires_reader_v8_state_with(doc, control)? {
+            8
+        } else if convert::requires_reader_v7_state_with(doc, control)? {
             7
         } else if convert::requires_reader_v6_state_with(doc, control)? {
             6

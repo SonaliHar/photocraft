@@ -69,7 +69,7 @@ pub mod psblend;
 mod render_interrupt;
 pub mod shape_split;
 mod vector_interrupt;
-pub use render_interrupt::{render_bands_with_interrupt, render_with_interrupt};
+pub use render_interrupt::{OrdinaryRenderRequirements, ordinary_render_requirements, render_bands_with_interrupt, render_with_interrupt};
 mod preparation_bridge;
 pub mod preview_budget;
 pub mod proxy_preview;

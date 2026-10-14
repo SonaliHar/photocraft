@@ -5,6 +5,76 @@
 use super::*;
 use photocraft_color::{ColorMode, SampleType};
 use photocraft_raster::{Interrupt, RasterInputError};
+/// Known ordinary render-region envelope; does not qualify retained source
+/// rendering or make legacy style preparation internally cancellable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OrdinaryRenderRequirements {
+    pub output_bytes: usize,
+    pub scratch_bytes: usize,
+    pub preparation_reserve_bytes: usize,
+    pub work_units: u64,
+    pub peak_bytes: usize,
+    columns: usize,
+    rows: usize,
+}
+/// Borrowed metadata-only calculation shared by the renderer and aggregate
+/// callers. Existing worker count, microblock sizing and ceilings are retained.
+/// This calculation is not permission to render a canonical imported source;
+/// each existing renderer entry keeps its original admission policy.
+pub fn ordinary_render_requirements(doc: &Document, rect: Rect, control: &Interrupt<'_>) -> Result<OrdinaryRenderRequirements, RasterInputError> {
+    use photocraft_raster::RasterInputError as E;
+    control.check().map_err(|_| E::Cancelled)?;
+    let bytes = photocraft_raster::checked_region_byte_len(rect, photocraft_color::PixelFormat::RGBA32F)?;
+    if rect.is_empty() {
+        return Ok(OrdinaryRenderRequirements {
+            output_bytes: 0,
+            scratch_bytes: 0,
+            preparation_reserve_bytes: 0,
+            work_units: 0,
+            peak_bytes: 0,
+            columns: 1,
+            rows: 1,
+        });
+    }
+    let (layers, depth) = tree_weight(&doc.layers, 0, control)?;
+    let pixels = bytes / 16;
+    let work = (pixels as u64).checked_mul(layers.max(1) as u64).ok_or(E::LimitExceeded)?;
+    if work > (1_u64 << 32) {
+        return Err(E::LimitExceeded);
+    }
+    let area = (65536 / layers.max(1)).max(1);
+    let columns = (rect.width() as usize).min(256).min(area).max(1);
+    let rows = (area / columns).clamp(1, 8);
+    #[cfg(not(target_arch = "wasm32"))]
+    let workers = rayon::current_num_threads();
+    #[cfg(target_arch = "wasm32")]
+    let workers = 1usize;
+    let staged = columns
+        .checked_mul(rows)
+        .and_then(|n| n.checked_mul(16))
+        .and_then(|n| n.checked_mul(depth + 8))
+        .and_then(|n| n.checked_mul(workers))
+        .ok_or(E::LimitExceeded)?;
+    let preparation = pattern::PREPARED_PATTERN_BYTES
+        .checked_add(64 << 20)
+        .and_then(|n| n.checked_add(vector_interrupt::VECTOR_BYTES))
+        .and_then(|n| n.checked_add(feather_cache::FEATHER_BYTES))
+        .ok_or(E::LimitExceeded)?;
+    let peak = bytes.checked_add(staged).and_then(|n| n.checked_add(preparation)).ok_or(E::LimitExceeded)?;
+    if peak as u64 > photocraft_raster::MAX_CHECKED_RASTER_BYTES {
+        return Err(E::LimitExceeded);
+    }
+    control.check().map_err(|_| E::Cancelled)?;
+    Ok(OrdinaryRenderRequirements {
+        output_bytes: bytes,
+        scratch_bytes: staged,
+        preparation_reserve_bytes: preparation,
+        work_units: work,
+        peak_bytes: peak,
+        columns,
+        rows,
+    })
+}
 /// Same ordinary compositor values, with an additive cancellation-aware sink.
 /// A cancelled band is never delivered. Canonical imported rendering uses its
 /// own PreparedRenderer rather than this legacy display-buffer path.
@@ -65,35 +135,15 @@ pub fn render_with_interrupt(doc: &Document, rect: Rect, control: &Interrupt<'_>
 pub(super) fn render_region(doc: &Document, rect: Rect, cx: &Ctx, control: &Interrupt<'_>) -> Result<Buffer, RasterInputError> {
     use photocraft_raster::RasterInputError as E;
     control.check().map_err(|_| E::Cancelled)?;
-    let bytes = photocraft_raster::checked_region_byte_len(rect, photocraft_color::PixelFormat::RGBA32F)?;
+    let requirements = ordinary_render_requirements(doc, rect, control)?;
+    let bytes = requirements.output_bytes;
     if rect.is_empty() {
         return Ok(Buffer { rect, px: Vec::new() });
     }
-    let (layers, depth) = tree_weight(&doc.layers, 0, control)?;
     let pixels = bytes / 16;
-    if (pixels as u64).checked_mul(layers.max(1) as u64).is_none_or(|work| work > (1_u64 << 32)) {
-        return Err(E::LimitExceeded);
-    }
-    let area = (65536 / layers.max(1)).max(1);
-    let columns = (rect.width() as usize).min(256).min(area).max(1);
-    let rows = (area / columns).clamp(1, 8);
-    #[cfg(not(target_arch = "wasm32"))]
-    let workers = rayon::current_num_threads();
-    #[cfg(target_arch = "wasm32")]
-    let workers = 1_usize;
-    let staged = columns
-        .checked_mul(rows)
-        .and_then(|n| n.checked_mul(16))
-        .and_then(|n| n.checked_mul(depth + 8))
-        .and_then(|n| n.checked_mul(workers))
-        .ok_or(E::LimitExceeded)?;
-    let peak = bytes
-        .checked_add(staged)
-        .and_then(|n| n.checked_add(pattern::PREPARED_PATTERN_BYTES + (64 << 20) + vector_interrupt::VECTOR_BYTES + feather_cache::FEATHER_BYTES))
-        .ok_or(E::LimitExceeded)?;
-    if peak as u64 > photocraft_raster::MAX_CHECKED_RASTER_BYTES {
-        return Err(E::LimitExceeded);
-    }
+    let columns = requirements.columns;
+    let rows = requirements.rows;
+    let peak = requirements.peak_bytes;
     // Preserve legacy effect-map/cache scope before microblocks. These existing
     // backend preparations can still delay cancellation inside a single call.
     let cmyk = cmyk_space(doc);
@@ -192,7 +242,11 @@ pub(super) fn prepare_checked_effects(doc: &Document, cx: &Ctx, control: &Interr
                     && l.advanced.transparency_shapes
                     && !l.advanced.layer_mask_hides_effects
                     && !l.advanced.vector_mask_hides_effects
-                    && effects::validate_checked_shadows(l).is_ok()
+                    && match effects::validate_checked_shadows_with_interrupt(l, control) {
+                        Ok(_) => true,
+                        Err(E::Cancelled) => return Err(E::Cancelled),
+                        Err(_) => false,
+                    }
                 {
                     out.try_reserve(1).map_err(|_| E::AllocationFailed)?;
                     out.push(l);
@@ -234,7 +288,7 @@ pub(super) fn prepare_checked_effects(doc: &Document, cx: &Ctx, control: &Interr
         let margin = effects::margin(layer);
         let region = layer_bounds(layer, cx.canvas).inflate(margin).intersect(&cx.canvas.inflate(margin));
         let bytes = photocraft_raster::checked_region_byte_len(region, photocraft_color::PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false))?;
-        let count = effects::validate_checked_shadows(layer)?;
+        let count = effects::validate_checked_shadows_with_interrupt(layer, control)?;
         retained = retained
             .checked_add(bytes.checked_mul(count + 1).ok_or(E::LimitExceeded)?)
             .and_then(|n| count.checked_mul(128).and_then(|v| v.checked_add(1024)).and_then(|v| n.checked_add(v)))
@@ -329,6 +383,25 @@ mod tests {
     use super::*;
     use photocraft_doc::{Color, ColorMode, SampleType, Size};
     use std::sync::atomic::{AtomicUsize, Ordering};
+    #[test]
+    fn requirements_keep_existing_envelope_and_render_values() {
+        let doc = Document::with_background("requirements draft", Size::new(19, 11), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+        let rect = Rect::new(0, 0, 19, 11);
+        let req = ordinary_render_requirements(&doc, rect, &Interrupt::NONE).unwrap();
+        assert_eq!(req.output_bytes, 19 * 11 * 16);
+        assert_eq!(req.work_units, 19 * 11);
+        assert_eq!(req.preparation_reserve_bytes, pattern::PREPARED_PATTERN_BYTES + (64 << 20) + vector_interrupt::VECTOR_BYTES + feather_cache::FEATHER_BYTES);
+        assert_eq!(req.peak_bytes, req.output_bytes + req.scratch_bytes + req.preparation_reserve_bytes);
+        #[cfg(not(target_arch = "wasm32"))]
+        let workers = rayon::current_num_threads();
+        #[cfg(target_arch = "wasm32")]
+        let workers = 1;
+        assert_eq!(req.scratch_bytes, 19 * 8 * 16 * 8 * workers);
+        assert_eq!(render_with_interrupt(&doc, rect, &Interrupt::NONE).unwrap().px, render(&doc, rect).unwrap().px);
+        let empty = ordinary_render_requirements(&doc, Rect::new(0, 0, 0, 0), &Interrupt::NONE).unwrap();
+        assert_eq!(empty.peak_bytes, 0);
+        assert!(matches!(ordinary_render_requirements(&doc, rect, &Interrupt::cancel_only(&|| true)), Err(RasterInputError::Cancelled)));
+    }
     #[test]
     fn effect_free_preparation_does_not_reserve_an_unused_collection() {
         let doc = Document::with_background("Own full-ledger plain view", Size::new(8, 6), ColorMode::Rgb, SampleType::U16, Color::WHITE);

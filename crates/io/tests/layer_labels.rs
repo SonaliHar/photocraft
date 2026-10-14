@@ -31,7 +31,7 @@ fn layer_labels_keep_the_psd_indices() {
 fn layer_labels_psd_roundtrip_all_colors_and_depths() {
     for depth in SampleType::ALL {
         let mut doc = Document::new("Labels", Size::new(2, 2), ColorMode::Rgb, depth);
-        for color in LabelColor::ALL {
+        for color in LabelColor::ALL.into_iter().filter(|color| *color != LabelColor::Brown) {
             let mut child = Layer::raster("Child", doc.pixel_format());
             child.label = color;
             let mut group = Layer::group(color.label(), vec![child]);
@@ -51,4 +51,19 @@ fn layer_labels_psd_roundtrip_all_colors_and_depths() {
 fn layer_labels_truncated_sheet_color_is_not_a_label() {
     let block = photocraft_psd::TaggedBlock::new(*b"lclr", vec![0]);
     assert!(matches!(block.parsed(), Some(Err(_))));
+}
+
+#[test]
+fn brown_psd_export_reports_loss_without_inventing_an_index_or_mutating_native_labels() {
+    assert_eq!(photocraft_io::blocks::label_index_if_supported(LabelColor::Brown), None);
+    for depth in [SampleType::U8,SampleType::U16,SampleType::F64] {
+        let mut doc=Document::new("Brown",Size::new(2,2),ColorMode::Rgb,depth);
+        let mut child=Layer::raster("Brown child",doc.pixel_format());child.label=LabelColor::Brown;
+        let mut group=Layer::group("Brown group",vec![child]);group.label=LabelColor::Brown;doc.layers.push(group);
+        let before=doc.clone();let exported=photocraft_io::export(&doc,"brown.psd",&Default::default()).unwrap();
+        assert_eq!(exported.warnings.iter().filter(|w|w.contains("Brown layer label omitted from PSD")).count(),2);
+        let reopened=photocraft_io::import("brown.psd",&exported.bytes).unwrap().document;
+        assert!(reopened.walk().iter().all(|(_,_,layer)|layer.label==LabelColor::None));
+        assert_eq!(doc,before);
+    }
 }

@@ -131,7 +131,9 @@ pub fn label_from_index(v: u16) -> LabelColor {
     }
 }
 
-/// Label → `lclr` index.
+/// Legacy lossy label → `lclr` index adapter. Brown has no Photoshop index
+/// and returns no-colour (0); exporters must explicitly report that loss.
+/// Use `label_index_if_supported` when preserving metadata is required.
 pub fn label_index(l: LabelColor) -> u16 {
     match l {
         LabelColor::None => 0,
@@ -146,7 +148,13 @@ pub fn label_index(l: LabelColor) -> u16 {
         LabelColor::Indigo => 9,
         LabelColor::Magenta => 10,
         LabelColor::Fuchsia => 11,
+        LabelColor::Brown => 0,
     }
+}
+
+/// An exact PSD label index, or None when no documented counterpart exists.
+pub fn label_index_if_supported(label: LabelColor) -> Option<u16> {
+    if label == LabelColor::Brown { None } else { Some(label_index(label)) }
 }
 
 pub(crate) fn num(v: Option<&Value>) -> Option<f64> {

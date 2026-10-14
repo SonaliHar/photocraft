@@ -15,7 +15,7 @@ use photocraft_geom::{Affine, Rect, Size};
 use serde::{Deserialize, Serialize};
 
 /// Current manifest version written by this build.
-pub const FORMAT_VERSION: u32 = 7;
+pub const FORMAT_VERSION: u32 = 8;
 
 fn default_reader_version() -> u32 {
     1

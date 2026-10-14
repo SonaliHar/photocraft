@@ -549,11 +549,25 @@ pub fn working_profile(mode: ColorMode) -> Arc<Profile> {
     Arc::new(photocraft_cms::builtin::default_for(mode_space(mode)).unwrap_or(Builtin::Srgb.profile()).clone())
 }
 
+type ParsedProfileCache = Mutex<Vec<(Weak<Vec<u8>>, Arc<Profile>)>>;
+static PARSED_PROFILE_CACHE: std::sync::OnceLock<ParsedProfileCache> = std::sync::OnceLock::new();
+
+/// Borrow an already parsed definition without parsing bytes, growing the cache,
+/// or changing profile authority. Controlled workers can admit this model before
+/// constructing their own transforms; a cache miss is not a replacement profile.
+/// An oversized cache is also a miss for this bounded read-only route.
+pub(crate) fn cached_profile_from_bytes(bytes: &Arc<Vec<u8>>) -> Option<Arc<Profile>> {
+    let cache = PARSED_PROFILE_CACHE.get()?;
+    let entries = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if entries.len() > 100_000 {
+        return None;
+    }
+    entries.iter().find(|(owner, _)| owner.as_ptr() == Arc::as_ptr(bytes) && owner.strong_count() > 0).map(|(_, profile)| profile.clone())
+}
+
 /// Parses ICC bytes, caching by allocation so repeated lookups for the same document are free.
 pub fn profile_from_bytes(bytes: &Arc<Vec<u8>>) -> std::result::Result<Arc<Profile>, photocraft_cms::CmsError> {
-    type Cache = Mutex<Vec<(Weak<Vec<u8>>, Arc<Profile>)>>;
-    static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
-    let cache = CACHE.get_or_init(Default::default);
+    let cache = PARSED_PROFILE_CACHE.get_or_init(Default::default);
     {
         let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
         c.retain(|(w, _)| w.strong_count() > 0);
@@ -1463,6 +1477,18 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn borrowed_profile_cache_lookup_requires_the_previously_parsed_allocation() {
+        let encoded = super::Builtin::Srgb.profile().to_bytes();
+        let first = std::sync::Arc::new(encoded.as_ref().clone());
+        let same_content = std::sync::Arc::new(encoded.as_ref().clone());
+        assert!(super::cached_profile_from_bytes(&first).is_none());
+        assert!(super::cached_profile_from_bytes(&same_content).is_none());
+        let parsed = super::profile_from_bytes(&first).unwrap();
+        let borrowed = super::cached_profile_from_bytes(&first).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&parsed, &borrowed));
+        assert!(super::cached_profile_from_bytes(&same_content).is_none());
+    }
     use super::*;
     use photocraft_geom::Rect;
 

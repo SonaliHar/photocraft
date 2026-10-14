@@ -56,6 +56,7 @@ pub mod cjk_fonts;
 pub mod clip_line_ui;
 pub mod color_picker_ui;
 pub mod color_range_ui;
+mod color_range_origin;
 pub mod comps_ui;
 pub mod control;
 pub mod credits;
@@ -91,6 +92,7 @@ pub mod file_ui;
 pub mod fill_ui;
 pub mod filter_dialog;
 mod selection_modify_origin;
+mod selection_color_origin;
 mod native_gray_adjustment_origin;
 mod filter_preview_ui;
 #[cfg(not(target_arch = "wasm32"))]

@@ -4,7 +4,7 @@
 //! composite), run them, and store the result as the selection (or a mask / new layer).
 
 use photocraft_algo::matting::{self, RefineParams};
-use photocraft_algo::segment::{Sampler, SurfaceSampler, focus, grabcut, quick, subject};
+use photocraft_algo::segment::{Sampler, SurfaceSampler, grabcut, quick, subject};
 use photocraft_algo::selection::{Region, SelectionMode, combine_region};
 use photocraft_doc::{Document, Layer, LayerContent, LayerId, LayerMask};
 use photocraft_geom::Rect;
@@ -319,9 +319,7 @@ fn select_subject(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn focus_area(s: &mut Session, p: &Value) -> Result<Value> {
-    let (range, noise) = (f(p, "range", 0.5).clamp(0.0, 1.0), f(p, "noise", 0.0).clamp(0.0, 1.0));
-    let region = with_sampler(s, b(p, "sampleAllLayers", true), |smp, doc| focus::focus_area(smp, doc.bounds(), range, noise))?;
-    apply(s, "Focus Area", region.as_ref(), mode(p, "replace"))
+    crate::selection_focus_controlled::run(s, p)
 }
 
 fn refine_params(p: &Value) -> RefineParams {
@@ -532,7 +530,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.focusArea",
             "Focus Area…",
             ["Select"],
-            r##"{"range":0..1=0.5,"noise":0..1=0,"sampleAllLayers":bool=true,"mode":"replace|add|subtract|intersect"="replace"}"##,
+            r##"{"range":0..1=0.5,"noise":0..1=0,"sampleAllLayers":bool=true,"mode":"replace|add|subtract|intersect"="replace","documentId":string?,"expectedRevision":string?}"##,
             has_doc,
             focus_area
         ),

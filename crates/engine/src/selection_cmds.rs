@@ -9,6 +9,29 @@ use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
+mod color_range_controlled;
+pub(crate) fn color_range_has_controlled_route(params: &Value) -> bool {
+    color_range_controlled::supports(params)
+}
+pub use photocraft_algo::selection::ColorRangeLimits;
+pub(crate) fn color_range_dispatch_preflight(session: &Session, params: &Value, background: bool) -> Result<()> {
+    color_range_controlled::dispatch_preflight(session, params, background)
+}
+/// Bounded read-only admission before UI proxy preparation. A successful check
+/// does not qualify an imported renderer or grant access to resources.
+pub fn color_range_preview_admission(session: &Session, params: &Value, control: &photocraft_raster::Interrupt<'_>) -> Result<()> {
+    color_range_controlled::preview_admission(session, params, control)
+}
+/// Checked gamut coverage for the already admitted display proxy. The proxy is
+/// a derived preview; it never grants source rendering or profile authority.
+pub fn color_range_gamut_preview(session: &Session, proxy: &Document, control: &photocraft_raster::Interrupt<'_>) -> Result<Vec<f32>> {
+    color_range_controlled::gamut_preview(session, proxy, control)
+}
+/// Derive a named-preset preview with the command's same combination and
+/// inversion rules, without creating a scratch session or history entry.
+pub fn color_range_named_preview(session: &Session, proxy: &Document, params: &Value, control: &photocraft_raster::Interrupt<'_>) -> Result<Option<photocraft_raster::Surface>> {
+    color_range_controlled::named_preview(session, proxy, params, control)
+}
 
 fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
@@ -69,6 +92,7 @@ fn set_selection(s: &mut Session, label: &str, area: Rect, mask: Vec<f32>, m: Se
     Ok(json!({ "selected": selected }))
 }
 
+#[cfg(test)]
 fn current_mask(doc: &Document) -> (Rect, Vec<f32>) {
     let area = doc.bounds();
     (area, sel::mask_from_surface(doc.selection.as_ref(), area))
@@ -78,6 +102,7 @@ fn current_mask(doc: &Document) -> (Rect, Vec<f32>) {
 /// composite: a gray layer-mask view, or â€” with every colour channel hidden â€” the first
 /// visible alpha, Quick Mask, or the active layer's mask. The Magic Wand selects from this
 /// so a white alpha stays one region instead of breaking up along the RGB underneath.
+#[cfg(test)]
 fn shown_gray(s: &Session) -> Result<Option<(Rect, Vec<[u8; 4]>)>> {
     let Some(surface) = crate::selection_sample_policy::shown_gray_surface(s, "select.magicWand", &photocraft_raster::Interrupt::NONE)? else { return Ok(None) };
     let area = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
@@ -100,35 +125,9 @@ pub(crate) fn sample_rgba8(s: &Session, all_layers: bool) -> Result<(Rect, Vec<[
 }
 
 fn magic_wand(s: &mut Session, p: &Value) -> Result<Value> {
-    crate::selection_sample_policy::dispatch_preflight(s, "select.magicWand", p, false)?;
-    let (x, y) = (f(p, "x", 0.0).floor() as i32, f(p, "y", 0.0).floor() as i32);
-    let (area, img) = match shown_gray(s)? {
-        Some(plane) => plane,
-        None => sample_rgba8(s, b(p, "sampleAllLayers", false))?,
-    };
-    let region = sel::wand_region(&img, area, (x, y), f(p, "tolerance", 32.0), b(p, "contiguous", true), b(p, "antiAlias", true));
-    drop(img);
-    let m = mode(p);
-    let selected = s.edit("Magic Wand", |doc, _| {
-        doc.selection = sel::combine_region(doc.selection.as_ref(), region.as_ref(), m);
-        Ok(doc.selection.is_some())
-    })?;
-    Ok(json!({ "selected": selected }))
+    crate::selection_wand_controlled::run(s, p)
 }
-
-fn parse_color(p: &Value) -> [f32; 3] {
-    match p.get("color") {
-        Some(Value::Array(a)) if a.len() >= 3 => [0, 1, 2].map(|i| a[i].as_f64().unwrap_or(0.0) as f32),
-        Some(Value::String(h)) => {
-            let h = h.trim_start_matches('#');
-            let c = |i: usize| h.get(i..i + 2).and_then(|x| u8::from_str_radix(x, 16).ok()).map_or(0.0, |v| f32::from(v) / 255.0);
-            [c(0), c(2), c(4)]
-        }
-        _ => [0.0; 3],
-    }
-}
-
-/// Eyedropper samples from `key` (`[[x, y], â€¦]` in document pixels): the colour under each point
+/// Eyedropper samples from `key` (`[[x, y], …]` in document pixels): the colour under each point
 /// and where it was picked (area-local, for Localized Color Clusters).
 fn eyedropper_samples(
     p: &Value,
@@ -139,7 +138,7 @@ fn eyedropper_samples(
     bad: &impl Fn(String) -> EngineError,
 ) -> Result<Vec<sel::RangeSample>> {
     let Some(pts) = p.get(key) else { return Ok(Vec::new()) };
-    let pts = pts.as_array().ok_or_else(|| bad(format!("`{key}` must be [[x, y], â€¦]")))?;
+    let pts = pts.as_array().ok_or_else(|| bad(format!("`{key}` must be [[x, y], …]")))?;
     let w = area.width() as usize;
     let mut out = Vec::with_capacity(pts.len().min(4096));
     for pt in pts {
@@ -209,118 +208,18 @@ impl ColorRangeSamples {
     /// Prepare the query without allocating a full-resolution composite. Point samples use
     /// exactly the same compositor/profile as the final selection.
     pub fn new(s: &Session, p: &Value) -> Result<Self> {
-        crate::selection_sample_policy::color_range_preview(s, p, &photocraft_raster::Interrupt::NONE)?;
-        let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
-        let area = doc.bounds();
-        let bad = |msg: String| EngineError::BadParams { cmd: "select.colorRange".into(), msg };
-        let sample = |key: &str| -> Result<Vec<sel::RangeSample>> {
-            let Some(pts) = p.get(key) else { return Ok(Vec::new()) };
-            let pts = pts.as_array().ok_or_else(|| bad(format!("`{key}` must be [[x, y], â€¦]")))?;
-            let mut samples = Vec::new();
-            for point in pts {
-                let q = point.as_array().and_then(|v| match v.as_slice() {
-                    [x, y] => Some((x.as_f64()?, y.as_f64()?)),
-                    _ => None,
-                });
-                let Some((x, y)) = q.filter(|(x, y)| x.is_finite() && y.is_finite()) else {
-                    return Err(bad(format!("bad point {point} in `{key}` (want [x, y])")));
-                };
-                let (x, y) = (x.floor() as i32, y.floor() as i32);
-                if !area.contains(x, y) {
-                    return Err(bad(format!("point [{x}, {y}] in `{key}` is outside the canvas")));
-                }
-                if mode(p) == SelectionMode::Replace && !point_in_selection(doc, x, y) {
-                    return Err(bad(format!("point [{x}, {y}] in `{key}` is outside the active selection")));
-                }
-                let r = Rect::from_xywh(x, y, 1, 1);
-                let pixel = if !b(p, "sampleAllLayers", true) {
-                    s.active().and_then(|d| d.active_layer.and_then(|id| d.doc.layer(id))).and_then(|l| l.surface()).map(|surf| {
-                        let mut px = [[0.0; 4]];
-                        surf.read_rgba_into(r, &mut px);
-                        px[0]
-                    })
-                } else {
-                    None
-                };
-                let px = match pixel {
-                    Some(px) => px,
-                    None => photocraft_compose::render(doc, r)?.px.first().copied().unwrap_or([0.0; 4]),
-                };
-                samples.push(sel::RangeSample { color: [px[0], px[1], px[2]], at: Some(((x - area.x0) as f32, (y - area.y0) as f32)) });
-            }
-            Ok(samples)
-        };
-        Self::with_samples(s, p, area, &sample("points")?, &sample("subtractPoints")?)
+        Self::new_with_interrupt(s,p,&photocraft_raster::Interrupt::NONE)
     }
-
-    fn with_samples(s: &Session, p: &Value, area: Rect, plus: &[sel::RangeSample], minus: &[sel::RangeSample]) -> Result<Self> {
-        let bad = |msg: String| EngineError::BadParams { cmd: "select.colorRange".into(), msg };
-        let fuzz = |d: f32| f(p, "fuzziness", d).max(0.0);
-        // The order the eyedropper clicks came in ("+" a point, "-" a subtracted point):
-        // Photoshop applies them one after another. Without it, all additions come first.
-        let order: Vec<bool> = match p.get("order") {
-            None => std::iter::repeat_n(true, plus.len()).chain(std::iter::repeat_n(false, minus.len())).collect(),
-            Some(o) => {
-                let o = o.as_array().ok_or_else(|| bad("`order` must be a list of \"+\" and \"-\"".into()))?;
-                let order = o
-                    .iter()
-                    .map(|v| match v.as_str() {
-                        Some("+") => Ok(true),
-                        Some("-") => Ok(false),
-                        _ => Err(bad(format!("bad entry {v} in `order` (want \"+\" or \"-\")"))),
-                    })
-                    .collect::<Result<Vec<bool>>>()?;
-                if order.iter().filter(|x| **x).count() != plus.len() || order.iter().filter(|x| !**x).count() != minus.len() {
-                    return Err(bad("`order` must list each of `points` (\"+\") and `subtractPoints` (\"-\") once".into()));
-                }
-                order
-            }
-        };
-        let mut fixed: Vec<[f32; 3]> = Vec::new();
-        if let Some(cs) = p.get("colors") {
-            let cs = cs.as_array().ok_or_else(|| bad("`colors` must be a list of colours".into()))?;
-            fixed.extend(cs.iter().map(|c| parse_color(&json!({ "color": c }))));
-        }
-        if p.get("color").is_some() {
-            fixed.push(parse_color(p));
-        }
-        // Localized Color Clusters: Range is a percentage of the canvas's longer side.
-        let plus_at: Vec<(f32, f32)> = plus.iter().filter_map(|x| x.at).collect();
-        let localized = if b(p, "localized", false) {
-            if plus_at.is_empty() {
-                return Err(bad("localized clusters need eyedropper `points`".into()));
-            }
-            Some(f(p, "range", 100.0).clamp(0.0, 100.0) / 100.0 * area.width().max(area.height()) as f32)
-        } else {
-            None
-        };
-        // Photoshop compares colours in Lab, through the document's profile
-        // (sel::lab_range_coverage). The samples span one Lab box; "Add to Sample" grows it,
-        // "Subtract from Sample" reshapes it (sel::LabRange::subtract).
-        let to_lab = lab_transform(s)?;
-        // 8-bit documents are compared on the 8-bit Lab grid, samples and pixels alike.
-        let grid = s.active().is_some_and(|d| d.doc.depth == photocraft_doc::SampleType::U8);
-        let q = |c: [f32; 3]| if grid { sel::quantize_lab8(c) } else { c };
-        let colour_to_lab = |t: &photocraft_cms::Transform, c: [f32; 3]| q(colour_to_lab(t, c));
-        let foreground = || {
-            let [r, g, b, _] = s.tools.foreground;
-            sel::LabRange::point(colour_to_lab(&to_lab, [r, g, b]))
-        };
-        let fixed_lab: Vec<[f32; 3]> = fixed.iter().map(|c| colour_to_lab(&to_lab, *c)).collect();
-        let mut range = sel::LabRange::spanning(&fixed_lab);
-        let (mut pi, mut mi) = (plus.iter(), minus.iter());
-        for add in order {
-            if add {
-                if let Some(x) = pi.next() {
-                    let c = colour_to_lab(&to_lab, x.color);
-                    range = Some(range.map_or(sel::LabRange::point(c), |r| r.grow(&c)));
-                }
-            } else if let Some(x) = mi.next() {
-                range = Some(range.unwrap_or_else(foreground).subtract(&colour_to_lab(&to_lab, x.color), fuzz(40.0)));
-            }
-        }
-        let range = range.unwrap_or_else(foreground);
-        Ok(Self { to_lab, range, grid, fuzziness: fuzz(40.0), localized, plus_at })
+    /// Original-document samples and unchanged Lab profile policy, with bounded preparation.
+    pub fn new_with_interrupt(s:&Session,p:&Value,control:&photocraft_raster::Interrupt<'_>)->Result<Self> {
+        color_range_controlled::new_query(s,p,control)
+    }
+    fn with_samples(s:&Session,p:&Value,area:Rect,plus:&[sel::RangeSample],minus:&[sel::RangeSample])->Result<Self> {
+        color_range_controlled::with_samples(s,p,area,plus,minus,&photocraft_raster::Interrupt::NONE)
+    }
+    /// Checked native-preview/worker API. Scale/origin retain original-document coordinates.
+    pub fn coverage_with_interrupt(&self,px:&[[f32;4]],width:usize,scale:f32,origin:[f32;2],limits:photocraft_algo::selection::ColorRangeLimits,control:&photocraft_raster::Interrupt<'_>)->Result<Vec<f32>> {
+        color_range_controlled::coverage(self,px,width,scale,origin,limits,control)
     }
 
     /// Coverage of a composite rectangle. `scale` is the original document pixels represented
@@ -341,6 +240,9 @@ impl ColorRangeSamples {
 
 fn color_range(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "select.colorRange";
+    if color_range_controlled::supports(p) {
+        return color_range_controlled::run(s, p);
+    }
     crate::selection_sample_policy::dispatch_preflight(s, CMD, p, false)?;
     let bad = |msg: String| EngineError::BadParams { cmd: CMD.into(), msg };
     let preset = p.get("select").map_or(Some("sampledColors"), Value::as_str).ok_or_else(|| bad("`select` must be a string".into()))?;
@@ -467,47 +369,8 @@ fn crop_mask(m: &[f32], pw: usize, pad: usize, w: usize, h: usize) -> Vec<f32> {
 /// Grow (contiguous) / Similar (anywhere): pixels whose colour lies within
 /// the selected pixels' colour range widened by the tolerance.
 fn grow_similar(s: &mut Session, p: &Value, contiguous: bool) -> Result<Value> {
-    crate::selection_sample_policy::dispatch_preflight(s, if contiguous { "select.grow" } else { "select.similar" }, p, false)?;
-    let tol = f(p, "tolerance", 32.0) / 255.0;
-    let (area, px) = sample_pixels(s, b(p, "sampleAllLayers", false))?;
-    let (_, m) = current_mask(&s.active().ok_or(EngineError::NoDocument)?.doc);
-    let (mut lo, mut hi) = ([f32::MAX; 4], [f32::MIN; 4]);
-    for (q, v) in px.iter().zip(&m) {
-        if *v >= 0.5 {
-            for c in 0..4 {
-                lo[c] = lo[c].min(q[c]);
-                hi[c] = hi[c].max(q[c]);
-            }
-        }
-    }
-    if lo[0] > hi[0] {
-        return Err(EngineError::Other("selection is empty".into()));
-    }
-    let inside = |q: &[f32; 4]| (0..4).all(|c| q[c] >= lo[c] - tol - 1e-6 && q[c] <= hi[c] + tol + 1e-6);
-    let (w, h) = (area.width() as usize, area.height() as usize);
-    let mut out: Vec<f32> = m.iter().map(|v| if *v >= 0.5 { 1.0 } else { 0.0 }).collect();
-    if contiguous {
-        let mut stack: Vec<usize> = (0..out.len()).filter(|i| out[*i] > 0.0).collect();
-        while let Some(i) = stack.pop() {
-            let (x, y) = (i % w, i / w);
-            let n = [(x > 0).then(|| i - 1), (x + 1 < w).then(|| i + 1), (y > 0).then(|| i - w), (y + 1 < h).then(|| i + w)];
-            for j in n.into_iter().flatten() {
-                if out[j] == 0.0 && inside(&px[j]) {
-                    out[j] = 1.0;
-                    stack.push(j);
-                }
-            }
-        }
-    } else {
-        for (o, q) in out.iter_mut().zip(&px) {
-            if inside(q) {
-                *o = 1.0;
-            }
-        }
-    }
-    set_selection(s, if contiguous { "Grow" } else { "Similar" }, area, out, SelectionMode::Replace)
+    crate::selection_grow_controlled::run(s, if contiguous { "select.grow" } else { "select.similar" }, p)
 }
-
 fn lasso(s: &mut Session, p: &Value) -> Result<Value> {
     crate::selection_polygon_controlled::run(s, p)
 }
@@ -531,28 +394,28 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.magicWand",
             "Magic Wand",
             [],
-            r##"{"x":px,"y":px,"tolerance":0..255=32,"contiguous":bool=true,"antiAlias":bool=true,"sampleAllLayers":bool=false,"mode":"replace|add|subtract|intersect"="replace"} (samples the visible alpha, Quick Mask, or layer mask when that is the picture)"##,
+            r##"{"x":px,"y":px,"tolerance":0..255=32,"contiguous":bool=true,"antiAlias":bool=true,"sampleAllLayers":bool=false,"mode":"replace|add|subtract|intersect"="replace","documentId":decimal-string?,"expectedRevision":decimal-string? (captured pair)} (samples the visible alpha, Quick Mask, or layer mask when that is the picture)"##,
             has_doc,
             magic_wand
         ),
         spec!(
             "select.colorRange",
-            "Color Rangeâ€¦",
+            "Color Range…",
             ["Select"],
-            r##"{"select":"sampledColors|reds|yellows|greens|cyans|blues|magentas|highlights|midtones|shadows|skinTones|outOfGamut"="sampledColors","color":"#rrggbb"=foreground,"colors":["#rrggbb",â€¦]?,"points":[[x,y],â€¦]? (eyedropper samples),"subtractPoints":[[x,y],â€¦]? (minus eyedropper),"order":["+"|"-",â€¦]? (click order of points and subtractPoints; default all points first),"fuzziness":0..200=40 (tones: 0..100 %=20),"detectFaces":bool=false (not available yet: refused),"localized":bool=false,"range":0..100=100 (% of the longer side),"tonalRange":level|[lo,hi] (shadows 65, highlights 190, midtones [105,150]),"invert":bool=false,"sampleAllLayers":bool=true,"mode":"replace|add|subtract|intersect"="replace"}"##,
+            r##"{"select":"sampledColors|reds|yellows|greens|cyans|blues|magentas|highlights|midtones|shadows|skinTones|outOfGamut"="sampledColors","color":"#rrggbb"=foreground,"colors":["#rrggbb",…]?,"points":[[x,y],…]? (eyedropper samples),"subtractPoints":[[x,y],…]? (minus eyedropper),"order":["+"|"-",…]? (click order of points and subtractPoints; default all points first),"fuzziness":0..200=40 (tones: 0..100 %=20),"detectFaces":bool=false (not available yet: refused),"localized":bool=false,"range":0..100=100 (% of the longer side),"tonalRange":level|[lo,hi] (shadows 65, highlights 190, midtones [105,150]),"invert":bool=false,"sampleAllLayers":bool=true,"mode":"replace|add|subtract|intersect"="replace","documentId":decimal-string?,"expectedRevision":decimal-string? (captured pair)}"##,
             has_doc,
             color_range
         ),
-        spec!("select.modify.border", "Borderâ€¦", ["Select", "Modify"], r##"{"radius":1..200=1}"##, has_selection, |s, p| crate::selection_morphology_controlled::run(s, "select.modify.border", p)),
-        spec!("select.modify.smooth", "Smoothâ€¦", ["Select", "Modify"], r##"{"radius":1..500=1,"applyAtCanvasBounds":bool=false}"##, has_selection, |s, p| {
+        spec!("select.modify.border", "Border…", ["Select", "Modify"], r##"{"radius":1..200=1}"##, has_selection, |s, p| crate::selection_morphology_controlled::run(s, "select.modify.border", p)),
+        spec!("select.modify.smooth", "Smooth…", ["Select", "Modify"], r##"{"radius":1..500=1,"applyAtCanvasBounds":bool=false}"##, has_selection, |s, p| {
             crate::selection_smooth_controlled::run(s, p)
         }),
-        spec!("select.modify.expand", "Expandâ€¦", ["Select", "Modify"], r##"{"radius":1..500=1,"applyAtCanvasBounds":bool=false}"##, has_selection, |s, p| {
+        spec!("select.modify.expand", "Expand…", ["Select", "Modify"], r##"{"radius":1..500=1,"applyAtCanvasBounds":bool=false}"##, has_selection, |s, p| {
             crate::selection_morphology_controlled::run(s, "select.modify.expand", p)
         }),
         spec!(
             "select.modify.contract",
-            "Contractâ€¦",
+            "Contract…",
             ["Select", "Modify"],
             r##"{"radius":1..500=1,"applyAtCanvasBounds":bool=false}"##,
             has_selection,
@@ -560,21 +423,21 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!(
             "select.modify.feather",
-            "Featherâ€¦",
+            "Feather…",
             ["Select", "Modify"],
             r##"{"radius":0.1..1000=1,"applyAtCanvasBounds":bool=false}"##,
             has_selection,
             crate::selection_modify_controlled::run_feather
         ),
-        spec!("select.grow", "Grow", ["Select"], r##"{"tolerance":0..255=32,"sampleAllLayers":bool=false}"##, has_selection, |s, p| grow_similar(s, p, true)),
-        spec!("select.similar", "Similar", ["Select"], r##"{"tolerance":0..255=32,"sampleAllLayers":bool=false}"##, has_selection, |s, p| grow_similar(
+        spec!("select.grow", "Grow", ["Select"], r##"{"tolerance":0..255=32,"sampleAllLayers":bool=false,"documentId":decimal-string?,"expectedRevision":decimal-string? (captured pair)}"##, has_selection, |s, p| grow_similar(s, p, true)),
+        spec!("select.similar", "Similar", ["Select"], r##"{"tolerance":0..255=32,"sampleAllLayers":bool=false,"documentId":decimal-string?,"expectedRevision":decimal-string? (captured pair)}"##, has_selection, |s, p| grow_similar(
             s, p, false
         )),
         spec!(
             "select.lasso",
             "Lasso",
             [],
-            r##"{"points":[[x,y],â€¦],"mode":"replace|add|subtract|intersect"="replace","antiAlias":bool=true,"feather":px=0,"documentId":canonical-decimal-string?,"expectedRevision":canonical-decimal-string? (supply captured pair together)}"##,
+            r##"{"points":[[x,y],…],"mode":"replace|add|subtract|intersect"="replace","antiAlias":bool=true,"feather":px=0,"documentId":canonical-decimal-string?,"expectedRevision":canonical-decimal-string? (supply captured pair together)}"##,
             has_doc,
             lasso
         ),

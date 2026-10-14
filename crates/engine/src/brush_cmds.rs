@@ -441,6 +441,7 @@ pub(crate) fn doc_cmyk_space(s: &Session) -> Option<std::sync::Arc<photocraft_co
 
 mod stroke_controlled;
 mod live_begin_controlled;
+mod wide_one_shot_controlled;
 mod advanced_native_admission;
 mod native_replace_controlled;
 mod native_mixer_controlled;
@@ -459,10 +460,15 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
         s.live_commit = None;
         return Ok(result);
     }
+    let (id, brush, zoom) = stroke_target(s, p, brush)?;
+    if wide_one_shot_controlled::eligible(s, cmd, p, &brush, &pts, id)? {
+        let result = wide_one_shot_controlled::run(s, cmd, p, label, brush, pts, id, zoom, auto_erase)?;
+        s.live_commit = None;
+        return Ok(result);
+    }
     let bg = s.tools.background;
     let fg = brush.color;
     let symmetry = s.active().and_then(|st| st.symmetry.clone());
-    let (id, brush, zoom) = stroke_target(s, p, brush)?;
     let restricted_color = s.color_restrict.is_some();
     let cmyk = doc_cmyk_space(s);
     let reflected = match &symmetry {

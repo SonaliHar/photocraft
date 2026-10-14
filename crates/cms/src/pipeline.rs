@@ -325,3 +325,39 @@ impl Pipeline {
         self.stages = out;
     }
 }
+
+impl Stage {
+ pub(crate) fn controlled_bytes(&self)->crate::control::Result<usize>{
+  use crate::control::Error;
+  match self{
+   Self::Curves(v)|Self::InvCurves(v)=>{if v.len()>MAX{return Err(crate::control::invalid("curve channel count"));}let mut bytes=v.capacity().checked_mul(std::mem::size_of::<crate::Curve>()).ok_or(Error::Limit("curve inventory"))?;for c in v{bytes=bytes.checked_add(c.controlled_bytes()?).ok_or(Error::Limit("curve inventory"))?;}Ok(bytes)},
+   Self::Matrix{rows,cols,m,offset}=>{if *rows==0||*cols==0||*rows>MAX||*cols>MAX||m.len()!=rows.checked_mul(*cols).ok_or(Error::Limit("matrix shape"))?||offset.len()!=*rows{return Err(crate::control::invalid("matrix shape"));}m.capacity().checked_add(offset.capacity()).and_then(|n|n.checked_mul(8)).ok_or(Error::Limit("matrix capacity"))},
+   Self::Clut(c)=>c.controlled_bytes(),_=>Ok(0)
+  }
+ }
+ pub(crate) fn controlled_work(&self)->crate::control::Result<u64>{
+  Ok(match self{Self::Curves(v)=>(v.len() as u64).checked_mul(128).ok_or(crate::control::Error::Limit("curve work"))?,Self::InvCurves(v)=>v.iter().try_fold(0u64,|n,c|n.checked_add(c.controlled_work()).ok_or(crate::control::Error::Limit("curve work")))?,Self::Clut(c)=>c.interpolation_taps()?.checked_mul(c.outputs as u64).ok_or(crate::control::Error::Limit("CLUT work"))?,Self::Matrix{rows,cols,..}=>(*rows as u64)*(*cols as u64)+128,_=>128})
+ }
+ pub(crate) fn copy_controlled(&self,b:&mut crate::control::Budget<'_>)->crate::control::Result<Self>{
+  b.poll()?;self.controlled_bytes()?;Ok(match self{Self::Curves(v)|Self::InvCurves(v)=>{let mut cs=b.reserve(v.len())?;for c in v{cs.push(c.copy_controlled(b)?);}if matches!(self,Self::Curves(_)){Self::Curves(cs)}else{Self::InvCurves(cs)}},Self::Matrix{rows,cols,m,offset}=>Self::Matrix{rows:*rows,cols:*cols,m:b.copy(m)?,offset:b.copy(offset)?},Self::Clut(c)=>Self::Clut(c.copy_controlled(b)?),_=>self.clone()})
+ }
+}
+impl Pipeline {
+ pub(crate) fn validate_controlled(&self)->crate::control::Result<()>{
+  if self.inputs==0||self.inputs>MAX||self.outputs==0||self.outputs>MAX||self.stages.len()>4096{return Err(crate::control::invalid("pipeline dimensions/stage count"));}
+  let mut n=self.inputs;for stage in &self.stages{stage.controlled_bytes()?;match stage{Stage::Curves(cs)|Stage::InvCurves(cs)if cs.len()!=n=>return Err(crate::control::invalid("curve pipeline dimensions")),Stage::Matrix{cols,..}if *cols!=n=>return Err(crate::control::invalid("matrix pipeline dimensions")),Stage::Clut(c)if c.inputs!=n=>return Err(crate::control::invalid("CLUT pipeline dimensions")),Stage::LabToXyz|Stage::XyzToLab|Stage::DecodeLabV4|Stage::EncodeLabV4|Stage::DecodeLabV2|Stage::EncodeLabV2|Stage::DecodeXyz|Stage::EncodeXyz if n!=3=>return Err(crate::control::invalid("PCS pipeline dimensions")),_=>{}}n=stage.outputs(n);}
+  if n!=self.outputs{return Err(crate::control::invalid("pipeline output dimensions"));}Ok(())
+ }
+ pub(crate) fn controlled_work(&self)->crate::control::Result<u64>{self.stages.iter().try_fold(0u64,|n,s|n.checked_add(s.controlled_work()?).ok_or(crate::control::Error::Limit("pipeline work")))}
+ pub(crate) fn eval_controlled(&self,input:&[f32],out:&mut[f32],b:&mut crate::control::Budget<'_>)->crate::control::Result<()>{
+  use crate::control::{Error,invalid};b.poll()?;self.validate_controlled()?;
+  if input.len()!=self.inputs||out.len()!=self.outputs||input.iter().any(|v|!v.is_finite()){return Err(invalid("pipeline input/output"));}
+  let mut values=[0f32;MAX];values.get_mut(..self.inputs).ok_or(Error::Limit("pipeline input"))?.copy_from_slice(input);let mut n=self.inputs;
+  for stage in &self.stages{b.poll()?;match stage{
+   Stage::InvCurves(cs)=>{for (v,c) in values.get_mut(..n).ok_or(Error::Limit("pipeline curves"))?.iter_mut().zip(cs){*v=c.eval_inverse_controlled(*v,b)?;}},
+   Stage::Clut(c)=>{let mut next=[0f32;MAX];c.eval_controlled(values.get(..n).ok_or(Error::Limit("pipeline CLUT input"))?,next.get_mut(..c.outputs).ok_or(Error::Limit("pipeline CLUT output"))?,b)?;values.get_mut(..c.outputs).ok_or(Error::Limit("pipeline CLUT output"))?.copy_from_slice(next.get(..c.outputs).ok_or(Error::Limit("pipeline CLUT output"))?);n=c.outputs;},
+   _=>{b.work(stage.controlled_work()?)?;n=stage.run(&mut values,n);}
+  }if values.get(..n).ok_or(Error::Limit("pipeline result"))?.iter().any(|v|!v.is_finite()){return Err(invalid("nonfinite pipeline output"));}}
+  b.poll()?;out.copy_from_slice(values.get(..self.outputs).ok_or(Error::Limit("pipeline output"))?);Ok(())
+ }
+}

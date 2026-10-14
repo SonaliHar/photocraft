@@ -13,6 +13,8 @@
 //! Work is tiled: only tiles near the selection boundary are processed (in parallel on native
 //! targets), so cost scales with the boundary length rather than the selection area.
 
+mod controlled_gray;
+pub use controlled_gray::{MattingLimits, box_mean_with_interrupt, guided_filter_gray_with_interrupt};
 use photocraft_color::PixelFormat;
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
@@ -841,3 +843,6 @@ mod tests {
         assert!((c.pixel(1, 1)[0] - 0.5).abs() < 0.01 && c.pixel(1, 1)[1] == 1.0);
     }
 }
+
+mod controlled_color;
+pub use controlled_color::guided_filter_color_with_interrupt;

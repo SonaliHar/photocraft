@@ -584,9 +584,24 @@ an oversized candidate is refused before collecting its body.
 
 Lasso and Transform Selection have bounded controlled preparation using the
 existing upstream geometric calculations. Freehand Lasso and selection-transform
-boxes carry private target captures. Wide nonidentity selection interpolation
-remains unsupported. Legacy color-based selections check both the actual sampled
+boxes carry private target captures. Native Gray U32/F64 nearest homographies and
+explicit-nearest mesh/Warp copy raw words and defaults without numeric interpretation;
+other native interpolation remains unsupported. Legacy color-based selections check both the actual sampled
 owner and old coverage before any unsupported native-to-f32 sample path.
+Ordinary Grow/Similar, Magic Wand and Color Range sampled, hue and tone presets
+use bounded workers and captured publication. Color Range dialogs retain a private
+document origin, and malformed field payloads are refused before frame cloning.
+Scoped Out of Gamut uses controlled builtin/cached/cold ordinary RGB/Gray profile
+preparation; effective/implicit profiles and synchronous model/provider boundaries
+remain open. Named previews avoid scratch sessions/history. Focus Area and Sky
+have controlled workers, and explicitly generated Focus Area/Sky
+forms carry private origins without changing immediate menu routing. These paths
+have not yet passed the deferred runtime checks.
+
+XCF Brown layer tags map to the current Brown label. Such documents require native
+reader version 8; existing label identities and other reader floors are preserved.
+PSD export reports Brown label loss explicitly. Where a Brown translation is absent,
+the UI uses the existing English fallback.
 
 Selection Load/Save/New Channel offer default-off raw storage transfer for
 eligible same-depth Gray surfaces. This copies stored defaults and off-canvas

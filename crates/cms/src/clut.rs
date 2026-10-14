@@ -115,6 +115,95 @@ impl Clut {
         Ok(())
     }
 
+    /// Cooperative wide evaluation with the exact legacy axis/corner order.
+    pub fn try_eval_f64_with_control(&self,input:&[f64],out:&mut[f64],limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<()> {
+        let mut budget=crate::control::Budget::new(limits,cancelled)?;
+        budget.retained(self.controlled_bytes()?)?;
+        self.eval_f64_controlled(input,out,&mut budget)
+    }
+    pub(crate) fn eval_f64_controlled(&self, input: &[f64], out: &mut [f64], budget: &mut crate::control::Budget<'_>) -> crate::control::Result<()> {
+        if !(1..=MAX_CHANNELS).contains(&self.inputs)
+            || !(1..=MAX_CHANNELS).contains(&self.outputs)
+            || self.grid.len() != self.inputs
+            || input.len() != self.inputs
+            || out.len() != self.outputs
+            || input.iter().any(|v| !v.is_finite())
+        {
+            return Err(wide_invalid().into());
+        }
+        budget.poll()?;
+        let visits=match self.inputs {3=>4u64,4=>8u64,n=>1u64.checked_shl(n as u32).ok_or(crate::control::Error::Limit("CLUT corners"))?};
+        budget.work(visits.checked_mul((self.inputs+self.outputs+1) as u64).ok_or(crate::control::Error::Limit("CLUT work"))?)?;
+        let mut strides = [0_usize; MAX_CHANNELS];
+        let mut length = self.outputs;
+        for d in (0..self.inputs).rev() {
+            let points = *self.grid.get(d).ok_or_else(wide_invalid)?;
+            if points == 0 {
+                return Err(wide_invalid().into());
+            }
+            *strides.get_mut(d).ok_or_else(wide_invalid)? = length;
+            length = length.checked_mul(points).ok_or_else(wide_invalid)?;
+        }
+        if length != self.data.len() {
+            return Err(wide_invalid().into());
+        }
+        let mut base = 0_usize;
+        let mut fractions = [0.0_f64; MAX_CHANNELS];
+        let mut steps = [0_usize; MAX_CHANNELS];
+        for (d, &value) in input.iter().enumerate() {
+            let points = *self.grid.get(d).ok_or_else(wide_invalid)?;
+            if points == 1 {
+                continue;
+            }
+            let position = value.clamp(0.0, 1.0) * (points - 1) as f64;
+            let index = (position as usize).min(points - 2);
+            let stride = *strides.get(d).ok_or_else(wide_invalid)?;
+            base = base.checked_add(index.checked_mul(stride).ok_or_else(wide_invalid)?).ok_or_else(wide_invalid)?;
+            *fractions.get_mut(d).ok_or_else(wide_invalid)? = position - index as f64;
+            *steps.get_mut(d).ok_or_else(wide_invalid)? = stride;
+        }
+        let mut result = [0.0_f64; MAX_CHANNELS];
+        match self.inputs {
+            3 => self.tetra64(base, &steps[..3], &fractions[..3], result.get_mut(..self.outputs).ok_or_else(wide_invalid)?)?,
+            4 => {
+                self.tetra64(base, &steps[1..4], &fractions[1..4], result.get_mut(..self.outputs).ok_or_else(wide_invalid)?)?;
+                let mut high = [0.0_f64; MAX_CHANNELS];
+                self.tetra64(base.checked_add(steps[0]).ok_or_else(wide_invalid)?, &steps[1..4], &fractions[1..4], high.get_mut(..self.outputs).ok_or_else(wide_invalid)?)?;
+                for (low, high) in result.get_mut(..self.outputs).ok_or_else(wide_invalid)?.iter_mut().zip(high) {
+                    *low += (high - *low) * fractions[0];
+                }
+            }
+            _ => {
+                for corner in 0..(1_usize << self.inputs) {
+                    if corner.is_multiple_of(64) { budget.poll()?; }
+                    let mut weight = 1.0;
+                    let mut offset = base;
+                    for d in 0..self.inputs {
+                        let fraction = *fractions.get(d).ok_or_else(wide_invalid)?;
+                        if corner & (1 << d) != 0 {
+                            weight *= fraction;
+                            offset = offset.checked_add(*steps.get(d).ok_or_else(wide_invalid)?).ok_or_else(wide_invalid)?;
+                        } else {
+                            weight *= 1.0 - fraction;
+                        }
+                    }
+                    if weight == 0.0 {
+                        continue;
+                    }
+                    for (channel, value) in result.get_mut(..self.outputs).ok_or_else(wide_invalid)?.iter_mut().enumerate() {
+                        *value += weight * self.node64(offset, channel)?;
+                    }
+                }
+            }
+        }
+        if result.get(..self.outputs).ok_or_else(wide_invalid)?.iter().any(|v| !v.is_finite()) {
+            return Err(wide_invalid().into());
+        }
+        budget.poll()?;
+        out.copy_from_slice(result.get(..self.outputs).ok_or_else(wide_invalid)?);
+        Ok(())
+    }
+
     fn node64(&self, offset: usize, channel: usize) -> Result<f64, crate::CmsError> {
         let index = offset.checked_add(channel).ok_or_else(wide_invalid)?;
         let preview = *self.data.get(index).ok_or_else(wide_invalid)?;
@@ -406,4 +495,77 @@ mod tests {
         c.eval(&[0.5, 0.25], &mut o);
         assert!((o[0] - 0.75).abs() < 1e-6);
     }
+}
+
+impl Clut {
+ pub(crate) fn controlled_bytes(&self)->crate::control::Result<usize>{
+  use crate::control::{Error,invalid};
+  if !(1..=MAX_CHANNELS).contains(&self.inputs)||!(1..=MAX_CHANNELS).contains(&self.outputs)||self.grid.len()!=self.inputs||self.strides.len()!=self.inputs{return Err(invalid("CLUT shape"));}
+  let mut length=self.outputs;
+  for axis in (0..self.inputs).rev(){if *self.strides.get(axis).ok_or(Error::Limit("CLUT stride"))?!=length{return Err(invalid("CLUT strides"));}let n=*self.grid.get(axis).ok_or(Error::Limit("CLUT grid"))?;if n==0{return Err(invalid("zero CLUT grid"));}length=length.checked_mul(n).ok_or(Error::Limit("CLUT product"))?;}
+  if self.data.len()!=length||self.wide_data.as_ref().is_some_and(|v|v.len()!=length){return Err(invalid("CLUT node length"));}
+  self.data.capacity().checked_mul(4).and_then(|n|n.checked_add(self.wide_data.as_ref().map_or(0,|v|v.capacity().checked_mul(8).unwrap_or(usize::MAX)))).and_then(|n|n.checked_add(self.grid.capacity().checked_mul(std::mem::size_of::<usize>())?)).and_then(|n|n.checked_add(self.strides.capacity().checked_mul(std::mem::size_of::<usize>())?)).ok_or(Error::Limit("CLUT capacity"))
+ }
+ pub(crate) fn copy_controlled(&self,b:&mut crate::control::Budget<'_>)->crate::control::Result<Self>{
+  self.controlled_bytes()?;Ok(Self{inputs:self.inputs,outputs:self.outputs,grid:b.copy(&self.grid)?,data:b.copy(&self.data)?,strides:b.copy(&self.strides)?,wide_data:self.wide_data.as_ref().map(|v|b.copy(v)).transpose()?})
+ }
+ pub(crate) fn eval_controlled(&self,input:&[f32],out:&mut[f32],b:&mut crate::control::Budget<'_>)->crate::control::Result<()>{
+  use crate::control::{Error,invalid};self.controlled_bytes()?;
+  if input.len()!=self.inputs||out.len()!=self.outputs||input.iter().any(|v|!v.is_finite()){return Err(invalid("CLUT input/output"));}
+  b.work(self.interpolation_taps()?.checked_mul(self.outputs as u64).ok_or(Error::Limit("CLUT evaluation work"))?)?;
+  let mut values=[0f32;MAX_CHANNELS];let target=values.get_mut(..self.outputs).ok_or(Error::Limit("CLUT outputs"))?;
+  if matches!(self.inputs,1|3|4){self.eval(input,target);}else{
+   let n=self.inputs;let mut base=0usize;let mut fractions=[0f32;MAX_CHANNELS];let mut steps=[0usize;MAX_CHANNELS];
+   for (axis,&value) in input.iter().enumerate(){let (offset,fraction,step)=self.locate(axis,value);base=base.checked_add(offset).ok_or(Error::Limit("CLUT offset"))?;*fractions.get_mut(axis).ok_or(Error::Limit("CLUT fraction"))?=fraction;*steps.get_mut(axis).ok_or(Error::Limit("CLUT step"))?=step;}
+   for corner in 0..(1usize<<n){if corner%64==0{b.poll()?;}let mut weight=1f32;let mut offset=base;
+    for axis in 0..n{let fraction=*fractions.get(axis).ok_or(Error::Limit("CLUT fraction"))?;if corner&(1<<axis)!=0{weight*=fraction;offset=offset.checked_add(*steps.get(axis).ok_or(Error::Limit("CLUT step"))?).ok_or(Error::Limit("CLUT offset"))?;}else{weight*=1.0-fraction;}}
+    if weight==0.0{continue;}for (channel,value) in target.iter_mut().enumerate(){*value+=weight * *self.data.get(offset.checked_add(channel).ok_or(Error::Limit("CLUT offset"))?).ok_or(Error::Limit("CLUT node"))?;}
+   }
+  }
+  b.poll()?;out.copy_from_slice(target);Ok(())
+ }
+ pub(crate) fn sample_controlled(grid:&[usize],outputs:usize,b:&mut crate::control::Budget<'_>,mut f:impl FnMut(&[f32],&mut[f32],&mut crate::control::Budget<'_>)->crate::control::Result<()>)->crate::control::Result<Self>{
+  use crate::control::{Error,invalid};let inputs=grid.len();if !(1..=MAX_CHANNELS).contains(&inputs)||!(1..=MAX_CHANNELS).contains(&outputs)||grid.contains(&0){return Err(invalid("CLUT sample dimensions"));}
+  let total=grid.iter().try_fold(1usize,|n,&v|n.checked_mul(v).ok_or(Error::Limit("CLUT sample product")))?;
+  let length=total.checked_mul(outputs).ok_or(Error::Limit("CLUT sample length"))?;
+  let bytes=length.checked_mul(4).and_then(|n|n.checked_add(inputs.checked_mul(2*std::mem::size_of::<usize>()+4)?)).ok_or(Error::Limit("CLUT sample storage"))?;
+  b.admit(bytes,total as u64)?;let mut data=b.reserve(length)?;let grid=b.copy(grid)?;let mut strides=b.reserve(inputs)?;strides.resize(inputs,0);
+  let mut stride=outputs;for axis in (0..inputs).rev(){*strides.get_mut(axis).ok_or(Error::Limit("CLUT stride"))?=stride;stride=stride.checked_mul(*grid.get(axis).ok_or(Error::Limit("CLUT grid"))?).ok_or(Error::Limit("CLUT stride"))?;}
+  let mut input=[0f32;MAX_CHANNELS];let mut output=[0f32;MAX_CHANNELS];
+  for node in 0..total{b.work(1)?;let mut remainder=node;for axis in (0..inputs).rev(){let n=*grid.get(axis).ok_or(Error::Limit("CLUT grid"))?;let i=remainder%n;remainder/=n;*input.get_mut(axis).ok_or(Error::Limit("CLUT sample input"))?=if n>1{i as f32/(n-1) as f32}else{0.0};}
+   let out=output.get_mut(..outputs).ok_or(Error::Limit("CLUT sample output"))?;out.fill(0.0);f(input.get(..inputs).ok_or(Error::Limit("CLUT sample input"))?,out,b)?;b.poll()?;if out.iter().any(|v|!v.is_finite()){return Err(invalid("nonfinite sampled CLUT output"));}data.extend_from_slice(out);
+  }Ok(Self{inputs,outputs,grid,data,strides,wide_data:None})
+ }
+ /// Controlled sampling retains the original node-coordinate and declaration order.
+ /// The callback's own work/allocations remain caller-managed.
+ pub fn try_sample_with_control(grid:&[usize],outputs:usize,limits:crate::control::Limits,cancelled:&dyn Fn()->bool,mut f:impl FnMut(&[f32],&mut[f32])->crate::control::Result<()>)->crate::control::Result<Self>{
+  let mut b=crate::control::Budget::new(limits,cancelled)?;Self::sample_controlled(grid,outputs,&mut b,|input,out,_|f(input,out))
+ }
+}
+
+#[cfg(test)]
+mod controlled_tests {
+ use super::*;
+ #[test]
+ fn controlled_sample_preserves_coordinates_and_node_words(){
+  let old=Clut::sample(vec![5,3,4],1,|p,o|o[0]=p[0]*0.5+p[1]*0.25+p[2]*0.125);
+  let new=Clut::try_sample_with_control(&[5,3,4],1,crate::control::Limits::default(),&||false,|p,o|{o[0]=p[0]*0.5+p[1]*0.25+p[2]*0.125;Ok(())}).unwrap();assert_eq!(new,old);
+ }
+ #[test]
+ fn controlled_sample_checks_overflow_before_callback_and_cancels_atomically(){
+  let called=std::cell::Cell::new(false);assert!(Clut::try_sample_with_control(&[usize::MAX,usize::MAX],1,crate::control::Limits::default(),&||false,|_,_|{called.set(true);Ok(())}).is_err());assert!(!called.get());
+  assert!(matches!(Clut::try_sample_with_control(&[256],1,crate::control::Limits::default(),&||true,|_,_|Ok(())),Err(crate::control::Error::Cancelled)));
+ }
+}
+
+impl Clut {
+ pub(crate) fn from_f64_controlled(grid:Vec<usize>,outputs:usize,values:Vec<f64>,b:&mut crate::control::Budget<'_>)->crate::control::Result<Self>{
+  use crate::control::{Error,invalid};let inputs=grid.len();if !(1..=MAX_CHANNELS).contains(&inputs)||!(1..=MAX_CHANNELS).contains(&outputs){return Err(invalid("wide CLUT dimensions"));}
+  let mut length=outputs;for &n in grid.iter().rev(){if n==0{return Err(invalid("zero CLUT grid"));}length=length.checked_mul(n).ok_or(Error::Limit("wide CLUT product"))?;}
+  if values.len()!=length{return Err(invalid("wide CLUT node length"));}
+  b.admit(length.checked_mul(4).and_then(|n|n.checked_add(inputs.checked_mul(std::mem::size_of::<usize>())?)).ok_or(Error::Limit("wide CLUT shadow"))?,length as u64)?;
+  let mut strides=b.reserve(inputs)?;strides.resize(inputs,0);let mut stride=outputs;for (axis,&n) in grid.iter().enumerate().rev(){*strides.get_mut(axis).ok_or(Error::Limit("wide CLUT stride"))?=stride;stride=stride.checked_mul(n).ok_or(Error::Limit("wide CLUT stride"))?;}
+  let mut data=b.reserve(length)?;for chunk in values.chunks(1024){b.work(chunk.len() as u64)?;for &value in chunk{if !value.is_finite(){return Err(invalid("nonfinite wide CLUT node"));}data.push(value as f32);}}
+  Ok(Self{inputs,outputs,grid,data,strides,wide_data:Some(values)})
+ }
 }

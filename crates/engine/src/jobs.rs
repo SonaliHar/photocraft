@@ -715,8 +715,23 @@ impl Session {
             crate::inspect_pixel_cmds::dispatch_preflight(&params)?;
         }
         crate::brush_cmds::advanced_dispatch_preflight(self, id, &params)?;
-        if matches!(id, "select.magicWand" | "select.colorRange" | "select.grow" | "select.similar") {
+        if id == "select.colorRange" && !crate::selection_cmds::color_range_has_controlled_route(&params) {
             crate::selection_sample_policy::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        }
+        if matches!(id, "select.grow" | "select.similar") {
+            crate::selection_grow_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
+        }
+        if id == "select.magicWand" {
+            crate::selection_wand_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "select.focusArea" {
+            crate::selection_focus_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "select.sky" {
+            crate::selection_sky_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "select.colorRange" {
+            crate::selection_cmds::color_range_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
         }
         if id == "channel.split" {
             crate::channel_cmds::split_dispatch_preflight(self, &params, background || self.jobs.spawn)?;

@@ -491,3 +491,36 @@ mod tests {
         assert_eq!(threshold.eval_inverse64(-2.0), 0.0);
     }
 }
+
+impl Curve {
+ pub(crate) fn controlled_bytes(&self)->crate::control::Result<usize>{
+  let bytes=match self{Self::Table(v)=>v.capacity().checked_mul(4),Self::Table64(v)=>v.capacity().checked_mul(8),_=>Some(0)};
+  bytes.ok_or(crate::control::Error::Limit("curve capacity"))
+ }
+ pub(crate) fn controlled_work(&self)->u64{match self{Self::Table(v)=>v.len() as u64+64,Self::Table64(v)=>v.len() as u64+64,_=>128}}
+ pub(crate) fn copy_controlled(&self,b:&mut crate::control::Budget<'_>)->crate::control::Result<Self>{
+  b.poll()?;Ok(match self{Self::Identity=>Self::Identity,Self::Gamma(g)=>Self::Gamma(*g),Self::Parametric{kind,p}=>Self::Parametric{kind:*kind,p:*p},Self::Table(v)=>Self::Table(b.copy(v)?),Self::Table64(v)=>Self::Table64(b.copy(v)?)})
+ }
+ pub(crate) fn eval_inverse_controlled(&self,y:f32,b:&mut crate::control::Budget<'_>)->crate::control::Result<f32>{
+  use crate::control::{Error,Result};
+  fn edge<T:Copy+Into<f64>>(t:&[T],start:bool,b:&mut crate::control::Budget<'_>)->Result<usize>{
+   let n=t.len();let reference=if start{t.first()}else{t.last()}.ok_or(Error::Limit("empty curve edge"))?;let value=(*reference).into();
+   if start{for (i,v) in t.iter().enumerate(){if i%256==0{b.poll()?;}if ((*v).into()-value).abs()>1e-7{return Ok(i.saturating_sub(1));}}Ok(n-1)}
+   else{for (i,v) in t.iter().enumerate().rev(){if i%256==0{b.poll()?;}if ((*v).into()-value).abs()>1e-7{return Ok(i+1);}}Ok(0)}
+  }
+  fn edge32(t:&[f32],start:bool,b:&mut crate::control::Budget<'_>)->Result<usize>{
+   let n=t.len();let value=*if start{t.first()}else{t.last()}.ok_or(Error::Limit("empty curve edge"))?;
+   if start{for (i,&v) in t.iter().enumerate(){if i%256==0{b.poll()?;}if (v-value).abs()>1e-7{return Ok(i.saturating_sub(1));}}Ok(n-1)}
+   else{for (i,&v) in t.iter().enumerate().rev(){if i%256==0{b.poll()?;}if (v-value).abs()>1e-7{return Ok(i+1);}}Ok(0)}
+  }
+  b.work(self.controlled_work())?;
+  let value=match self{
+   Self::Table(t)=>{let n=t.len();if n<2{y}else{let first=*t.first().ok_or(Error::Limit("curve first"))?;let last=*t.last().ok_or(Error::Limit("curve last"))?;let inc=last>=first;let (low,high)=if inc{(first,last)}else{(last,first)};
+    if y<=low{edge32(t,inc,b)? as f32/(n-1) as f32}else if y>=high{edge32(t,!inc,b)? as f32/(n-1) as f32}else{let(mut lo,mut hi)=(0,n-1);while hi-lo>1{b.poll()?;let mid=(lo+hi)/2;if (*t.get(mid).ok_or(Error::Limit("curve midpoint"))?<y)==inc{lo=mid}else{hi=mid}}let a=*t.get(lo).ok_or(Error::Limit("curve low"))?;let z=*t.get(hi).ok_or(Error::Limit("curve high"))?;let f=if (z-a).abs()>1e-12{(y-a)/(z-a)}else{0.5};(lo as f32+f)/(n-1) as f32}
+   }},
+   Self::Table64(t)=>{let n=t.len();let y=f64::from(y);if n<2||!y.is_finite(){y as f32}else{let first=*t.first().ok_or(Error::Limit("curve first"))?;let last=*t.last().ok_or(Error::Limit("curve last"))?;let inc=last>=first;let(low,high)=if inc{(first,last)}else{(last,first)};
+    let v=if y<=low||y>=high{let start=if y<=low{inc}else{!inc};edge(t,start,b)? as f64/(n-1) as f64}else{let(mut lo,mut hi)=(0,n-1);while hi-lo>1{b.poll()?;let mid=lo+(hi-lo)/2;if (*t.get(mid).ok_or(Error::Limit("curve midpoint"))?<y)==inc{lo=mid}else{hi=mid}}let a=*t.get(lo).ok_or(Error::Limit("curve low"))?;let z=*t.get(hi).ok_or(Error::Limit("curve high"))?;let f=if z!=a{(y-a)/(z-a)}else{0.5};(lo as f64+f)/(n-1) as f64};v as f32
+   }},_=>self.eval_inverse(y)
+  };b.poll()?;Ok(value)
+ }
+}

@@ -242,7 +242,7 @@ fn encoding(e: Encoding) -> SampleEncoding {
     }
 }
 // GimpColorTag numeric order from the retained public GIMP 3.2.6
-// libgimpbase/gimpbaseenums.h. Brown has no exact current LabelColor equivalent.
+// libgimpbase/gimpbaseenums.h. Labels preserve stored identity, not swatch RGB.
 fn layer_color_tag(tag: Option<u32>) -> std::result::Result<photocraft_doc::LabelColor, &'static str> {
     use photocraft_doc::LabelColor;
     match tag {
@@ -251,7 +251,7 @@ fn layer_color_tag(tag: Option<u32>) -> std::result::Result<photocraft_doc::Labe
         Some(2) => Ok(LabelColor::Green),
         Some(3) => Ok(LabelColor::Yellow),
         Some(4) => Ok(LabelColor::Orange),
-        Some(5) => Err("Brown has no exact PhotoCraft layer label"),
+        Some(5) => Ok(LabelColor::Brown),
         Some(6) => Ok(LabelColor::Red),
         Some(7) => Ok(LabelColor::Violet),
         Some(8) => Ok(LabelColor::Gray),
@@ -2656,7 +2656,7 @@ mod unit_tests {
             (2, LabelColor::Green, None),
             (3, LabelColor::Yellow, None),
             (4, LabelColor::Orange, None),
-            (5, LabelColor::None, Some("Brown")),
+            (5, LabelColor::Brown, None),
             (6, LabelColor::Red, None),
             (7, LabelColor::Violet, None),
             (8, LabelColor::Gray, None),

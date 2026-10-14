@@ -91,6 +91,16 @@ impl Ledger {
         Ok(result)
     }
 }
+/// Bounded companion of the existing binary distance transform, for callers
+/// needing distances rather than Expand/Contract coverage. Same envelope/order.
+pub fn edt_with_interrupt(inside:&[bool],width:usize,height:usize,limits:Limits,ctl:&Interrupt<'_>)->Result<Vec<f32>,RasterInputError>{
+    poll(ctl)?;
+    let r=requirements(width,height,Operation::Expand,0.0)?;
+    if r.peak_resident_bytes>limits.resident_bytes.min(MAX_CHECKED_RASTER_BYTES)||r.work_units>limits.work_units.min(MAX_WORK){return Err(RasterInputError::LimitExceeded);}
+    let mut ledger=Ledger{bytes:r.peak_resident_bytes,work:r.work_units};
+    let result=edt(inside,width,height,&mut ledger,ctl)?;poll(ctl)?;Ok(result)
+}
+
 fn row_distance(
     costs: &[u32],
     output: &mut [f32],
@@ -375,4 +385,10 @@ mod tests {
         assert_eq!(apply(&[0.5], 1, 1, Operation::Expand, 1.0, Limits::default(), &Interrupt::cancel_only(&|| true)), Err(RasterInputError::Cancelled));
         assert!(requirements(usize::MAX, 2, Operation::Border, 1.0).is_err());
     }
+}
+
+#[cfg(test)]
+mod edt_companion_tests{
+ use super::*;
+ #[test]fn raw_distance_companion_matches_existing_seeds_and_cancel(){let mask=(0..35*23).map(|i|i%31==0).collect::<Vec<_>>();assert_eq!(edt_with_interrupt(&mask,35,23,Limits::default(),&Interrupt::NONE).unwrap(),crate::selection::edt(&mask,35,23));assert!(matches!(edt_with_interrupt(&mask,35,23,Limits::default(),&Interrupt::cancel_only(&||true)),Err(RasterInputError::Cancelled)));}
 }

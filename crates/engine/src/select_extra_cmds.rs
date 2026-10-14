@@ -8,10 +8,8 @@
 //!   quad (distort / perspective), an affine matrix, scale / rotate / skew / move about a
 //!   reference point, or a warp (same params as `edit.transform.warp`).
 
-use photocraft_algo::segment::sky::{self, SkyParams};
-use photocraft_algo::segment::{Sampler, SurfaceSampler};
-use photocraft_algo::selection::{SelectionMode, combine_region};
 use photocraft_doc::{Document, LayerId};
+#[cfg(test)]
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
@@ -27,45 +25,10 @@ fn has_selection(s: &Session) -> std::result::Result<(), String> {
 fn has_layer(s: &Session) -> std::result::Result<(), String> {
     s.active().and_then(|d| d.active_layer).map(|_| ()).ok_or_else(|| "no active layer".into())
 }
-fn f(p: &Value, k: &str, d: f64) -> f64 {
-    p.get(k).and_then(Value::as_f64).unwrap_or(d)
-}
-
-struct CompositeSampler<'a>(&'a Document);
-
-impl Sampler for CompositeSampler<'_> {
-    fn rgba(&self, r: Rect) -> std::result::Result<Vec<[f32; 4]>, photocraft_raster::RasterInputError> {
-        Ok(photocraft_compose::render(self.0, r)?.px)
-    }
-}
-
 // ---------------------------------------------------------------- Sky
 
 fn select_sky(s: &mut Session, p: &Value) -> Result<Value> {
-    let d = s.active().ok_or(EngineError::NoDocument)?;
-    let doc = d.doc.clone();
-    let canvas = doc.bounds();
-    let params = SkyParams { threshold: f(p, "threshold", 50.0) as f32, softness: f(p, "softness", 50.0) as f32 };
-    let all = p.get("sampleAllLayers").and_then(Value::as_bool).unwrap_or(true);
-    let layer = d.active_layer.and_then(|id| doc.layer(id)).and_then(|l| l.surface());
-    let region = match (all, layer) {
-        (false, Some(surf)) => sky::select_sky(&SurfaceSampler(surf), canvas, params),
-        _ => sky::select_sky(&CompositeSampler(&doc), canvas, params),
-    }?;
-    let m = p.get("mode").and_then(Value::as_str).unwrap_or("replace");
-    let m = SelectionMode::parse(if m == "new" { "replace" } else { m });
-    let Some(region) = region else {
-        // Photoshop reports "No sky was detected" and leaves the selection alone.
-        return Ok(json!({ "selected": doc.selection.is_some(), "changed": false, "coverage": 0.0, "message": "No sky was detected" }));
-    };
-    let total: f64 = region.mask.iter().map(|v| f64::from(*v) / 255.0).sum();
-    let coverage = total / (canvas.width() as f64 * canvas.height() as f64).max(1.0);
-    let b = region.bbox;
-    let selected = s.edit("Select Sky", |doc, _| {
-        doc.selection = combine_region(doc.selection.as_ref(), Some(&region), m);
-        Ok(doc.selection.is_some())
-    })?;
-    Ok(json!({ "selected": selected, "changed": true, "coverage": coverage, "bounds": [b.x0, b.y0, b.width() as i32, b.height() as i32] }))
+    crate::selection_sky_controlled::run(s, p)
 }
 
 // ---------------------------------------------------------------- Isolate Layers
@@ -105,7 +68,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Sky",
             menu: &["Select"],
             shortcut: None,
-            params: r##"{"mode":"replace|add|subtract|intersect"="replace","sampleAllLayers":bool=true,"threshold":0..100=50 (higher = stricter),"softness":0..100=50 (edge softness)} → {selected, changed, coverage (0–1 of the canvas), bounds [x,y,w,h]}"##,
+            params: r##"{"mode":"replace|add|subtract|intersect"="replace","sampleAllLayers":bool=true,"threshold":0..100=50 (higher = stricter),"softness":0..100=50 (edge softness),"documentId":string?,"expectedRevision":string?} → {selected, changed, coverage (0–1 of the canvas), bounds [x,y,w,h]}"##,
             enabled: has_doc,
             run: select_sky,
             journal: true,

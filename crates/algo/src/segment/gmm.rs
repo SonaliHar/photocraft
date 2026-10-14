@@ -252,3 +252,5 @@ pub fn kmeans(samples: &[[f32; 3]], k: usize, iters: usize) -> Vec<[f32; 3]> {
     }
     centers
 }
+
+mod controlled;

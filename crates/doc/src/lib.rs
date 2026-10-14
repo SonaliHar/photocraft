@@ -185,11 +185,13 @@ pub enum LabelColor {
     Indigo,
     Magenta,
     Fuchsia,
+    /// XCF's Brown tag; no equivalent Photoshop sheet-colour index.
+    Brown,
 }
 
 impl LabelColor {
     /// Display order, independent of the PSD sheet-colour indices.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::None,
         Self::Red,
         Self::Orange,
@@ -202,6 +204,7 @@ impl LabelColor {
         Self::Fuchsia,
         Self::Violet,
         Self::Gray,
+        Self::Brown,
     ];
 
     /// Stable, language-independent command and inspection value.
@@ -219,6 +222,7 @@ impl LabelColor {
             Self::Fuchsia => "fuchsia",
             Self::Violet => "violet",
             Self::Gray => "gray",
+            Self::Brown => "brown",
         }
     }
 
@@ -236,6 +240,7 @@ impl LabelColor {
             Self::Fuchsia => "Fuchsia",
             Self::Violet => "Violet",
             Self::Gray => "Gray",
+            Self::Brown => "Brown",
         }
     }
 
@@ -259,6 +264,7 @@ mod label_color_tests {
             ("Blue", LabelColor::Blue),
             ("Violet", LabelColor::Violet),
             ("Gray", LabelColor::Gray),
+            ("Brown", LabelColor::Brown),
         ] {
             assert_eq!(serde_json::to_value(color).unwrap(), name);
             assert_eq!(serde_json::from_value::<LabelColor>(serde_json::json!(name)).unwrap(), color);

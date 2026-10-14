@@ -148,6 +148,25 @@ fn decode_xcf_state(bytes: &[u8], control: &photocraft_raster::Interrupt<'_>) ->
 /// Native state metadata borrows the model; cache payloads are registered as blobs separately.
 /// This avoids cloning large source byte buffers just to remove them from JSON.
 struct StoredXcfState<'a>(&'a photocraft_doc::XcfState);
+/// Brown is a new enum identity. Older bundles/labels are never renamed.
+pub(crate) fn requires_reader_v8_state_with(doc: &Document, control: photocraft_raster::Interrupt<'_>) -> Result<bool> {
+    fn visit(layers: &[Layer], depth: usize, control: photocraft_raster::Interrupt<'_>) -> Result<bool> {
+        // Match check_nesting exactly: a deepest allowed group may have an
+        // empty children slice beyond the limit. This feature scan imposes no
+        // new layer-count policy; save/load callers retain their own ceilings.
+        if depth > MAX_GROUP_DEPTH && !layers.is_empty() { return Err(too_deep()); }
+        for layer in layers {
+            if control.cancelled() { return Err(FormatError::Cancelled); }
+            if layer.label == photocraft_doc::LabelColor::Brown { return Ok(true); }
+            if let LayerContent::Group(group) = &layer.content {
+                if visit(&group.children, depth + 1, control)? { return Ok(true); }
+            }
+        }
+        Ok(false)
+    }
+    if control.cancelled() { return Err(FormatError::Cancelled); }
+    visit(&doc.layers, 0, control)
+}
 pub(crate) fn requires_reader_v7_state_with(doc: &Document, control: photocraft_raster::Interrupt<'_>) -> Result<bool> {
     if control.cancelled() {
         return Err(FormatError::Cancelled);
@@ -1819,6 +1838,19 @@ mod tests {
         assert!(unhex("zz").is_err());
         assert!(unhex(" 1").is_err());
         assert!(unhex("g0").is_err());
+    }
+
+    #[test]
+    fn brown_feature_scan_preserves_the_existing_empty_deepest_group_boundary() {
+        let mut doc = Document::new("existing depth boundary", photocraft_geom::Size::new(1, 1), photocraft_color::ColorMode::Rgb, SampleType::U8);
+        let mut layers = vec![Layer::group("empty deepest group", Vec::new())];
+        for _ in 0..MAX_GROUP_DEPTH { layers = vec![Layer::group("ancestor", layers)]; }
+        doc.layers = layers;
+        check_nesting(&doc.layers, photocraft_raster::Interrupt::NONE).unwrap();
+        assert!(!requires_reader_v8_state_with(&doc, photocraft_raster::Interrupt::NONE).unwrap());
+        doc.layers[0].label = photocraft_doc::LabelColor::Brown;
+        assert!(requires_reader_v8_state_with(&doc, photocraft_raster::Interrupt::NONE).unwrap());
+        assert!(matches!(requires_reader_v8_state_with(&doc, photocraft_raster::Interrupt::cancel_only(&|| true)), Err(FormatError::Cancelled)));
     }
 
     #[test]

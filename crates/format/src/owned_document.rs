@@ -157,6 +157,9 @@ pub fn load_document_from_owned_archive(
     if crate::convert::requires_reader_v6_state_with(&document, *control.interrupt)? && manifest.minimum_reader_version < 6 {
         return Err(FormatError::Corrupt("current resource resolution requires minimum reader version 6".into()));
     }
+    if crate::convert::requires_reader_v8_state_with(&document, *control.interrupt)? && manifest.minimum_reader_version < 8 {
+        return Err(FormatError::Corrupt("Brown layer label requires minimum reader version 8".into()));
+    }
     if crate::convert::requires_reader_v7_state_with(&document, *control.interrupt)? && manifest.minimum_reader_version < 7 {
         return Err(FormatError::Corrupt("current linked geometry requires minimum reader version 7".into()));
     }

@@ -74,6 +74,15 @@ pub(crate) fn selection_write_authority(doc: &Document, ctl: &Interrupt<'_>) -> 
 }
 
 fn authority(doc: &Document, ctl: &Interrupt<'_>) -> Result<()> {
+    selection_write_authority_metadata(doc, ctl)?;
+    doc.validate_xcf_state_with(ctl).map_err(|e| error(ctl, e))?;
+    poll(ctl)
+}
+
+/// Borrowed selection-owner checks for admission before starting a controlled
+/// worker. Full source validation remains mandatory inside the worker and at
+/// publication; this helper does not hash retained payloads.
+pub(crate) fn selection_write_authority_metadata(doc: &Document, ctl: &Interrupt<'_>) -> Result<()> {
     poll(ctl)?;
     let Some(state) = &doc.xcf_state else {
         if doc.selection_channel_id.is_some() {
@@ -132,7 +141,6 @@ fn authority(doc: &Document, ctl: &Interrupt<'_>) -> Result<()> {
             return Err(bad("canonical selection depth mismatch"));
         }
     }
-    doc.validate_xcf_state_with(ctl).map_err(|e| error(ctl, e))?;
     poll(ctl)
 }
 struct Plan {

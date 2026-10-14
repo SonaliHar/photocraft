@@ -89,3 +89,6 @@ pub fn focus_area(sampler: &dyn Sampler, canvas: Rect, range: f32, noise: f32) -
     out.chunks_mut(fw).enumerate().for_each(|(y, o)| row(y, o));
     Ok(super::trim_region(Region { bbox: canvas, mask: out }))
 }
+
+mod controlled;
+pub use controlled::{FocusLimits, focus_area_with_interrupt, requirements};

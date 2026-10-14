@@ -12,6 +12,29 @@ fn bad(cmd: &str, reason: &str) -> EngineError {
 fn poll(ctl: &Interrupt<'_>) -> Result<()> {
     ctl.check().map_err(|_| EngineError::Cancelled)
 }
+fn captured_target(session: &Session, cmd: &str, p: &Value, ctl: &Interrupt<'_>) -> Result<()> {
+    poll(ctl)?;
+    let decimal = |value: &Value| {
+        value
+            .as_str()
+            .filter(|text| {
+                !text.is_empty() && text.len() <= 20 && text.bytes().all(|byte| byte.is_ascii_digit()) && (text.len() == 1 || !text.starts_with('0'))
+            })
+            .and_then(|text| text.parse::<u64>().ok())
+    };
+    match (p.get("documentId"), p.get("expectedRevision")) {
+        (None, None) => Ok(()),
+        (Some(id), Some(revision)) => {
+            let current = session.active().ok_or(EngineError::NoDocument)?;
+            if current.doc.id.0 != 0 && decimal(id) == Some(current.doc.id.0) && decimal(revision) == Some(current.revision) {
+                Ok(())
+            } else {
+                Err(bad(cmd, "captured-target-changed"))
+            }
+        }
+        _ => Err(bad(cmd, "captured-target-incomplete")),
+    }
+}
 fn wide(sample: SampleType) -> bool {
     matches!(sample, SampleType::U32 | SampleType::F64)
 }
@@ -153,11 +176,20 @@ pub(crate) fn shown_gray_surface<'a>(session: &'a Session, cmd: &str, ctl: &Inte
 /// Preview uses the same actual sampling/old-coverage guards, but does not request
 /// write authority or falsely refuse an ordinary read solely due to content locks.
 pub(crate) fn color_range_preview(session: &Session, p: &Value, ctl: &Interrupt<'_>) -> Result<()> {
+    captured_target(session, "select.colorRange", p, ctl)?;
     existing_selection(session, "select.colorRange", ctl)?;
     sampled_pixels(session, "select.colorRange", p.get("sampleAllLayers").and_then(Value::as_bool).unwrap_or(true), ctl)
 }
 pub(crate) fn dispatch_preflight(session: &Session, cmd: &str, p: &Value, _background: bool) -> Result<()> {
-    let ctl = &Interrupt::NONE;
+    admission(session, cmd, p, &Interrupt::NONE, true)
+}
+/// Metadata admission for commands whose worker performs the full tokened
+/// source validation before pixels and again before publishing an edit.
+pub(crate) fn metadata_preflight(session: &Session, cmd: &str, p: &Value, ctl: &Interrupt<'_>) -> Result<()> {
+    admission(session, cmd, p, ctl, false)
+}
+fn admission(session: &Session, cmd: &str, p: &Value, ctl: &Interrupt<'_>, full: bool) -> Result<()> {
+    captured_target(session, cmd, p, ctl)?;
     existing_selection(session, cmd, ctl)?;
     match cmd {
         "select.magicWand" => {
@@ -178,7 +210,12 @@ pub(crate) fn dispatch_preflight(session: &Session, cmd: &str, p: &Value, _backg
         )?,
         _ => return Err(bad(cmd, "unknown-route")),
     }
-    crate::selection_inverse_controlled::selection_write_authority(&session.active().ok_or(EngineError::NoDocument)?.doc, ctl)
+    let doc = &session.active().ok_or(EngineError::NoDocument)?.doc;
+    if full {
+        crate::selection_inverse_controlled::selection_write_authority(doc, ctl)
+    } else {
+        crate::selection_inverse_controlled::selection_write_authority_metadata(doc, ctl)
+    }
 }
 
 #[cfg(test)]

@@ -769,3 +769,12 @@ impl Clut {
         }
     }
 }
+
+/// Controlled exact relative-colorimetric/no-BPC link used by GamutCheck.
+/// Other intents/BPC retain their existing route; no profile policy is inferred.
+pub(crate) fn link_stages_relative_controlled(src:&Profile,dst:&Profile,b:&mut crate::control::Budget<'_>)->crate::control::Result<Vec<Stage>>{
+ for profile in [src,dst]{b.poll()?;let lab_to_lab=profile.color_space==ColorSpace::Lab&&profile.a2b.iter().flatten().all(|l|l.outputs==3)&&profile.b2a.iter().flatten().all(|l|l.inputs==3);if matches!(profile.class,ProfileClass::DeviceLink|ProfileClass::NamedColor|ProfileClass::Abstract)&&!lab_to_lab{return Err(CmsError::Unsupported(format!("{:?} profiles cannot be used as a source or destination",profile.class)).into());}}
+ let (s,spcs)=src.relative_side_controlled(true,b)?;let (d,dpcs)=dst.relative_side_controlled(false,b)?;
+ let extra=usize::from(spcs!=dpcs);let count=s.len().checked_add(d.len()).and_then(|n|n.checked_add(extra)).ok_or(crate::control::Error::Limit("linked stages"))?;
+ let mut stages=b.reserve(count)?;stages.extend(s);match(spcs,dpcs){(Pcs::Lab,Pcs::Xyz)=>stages.push(Stage::LabToXyz),(Pcs::Xyz,Pcs::Lab)=>stages.push(Stage::XyzToLab),_=>{}}stages.extend(d);b.poll()?;Ok(stages)
+}
