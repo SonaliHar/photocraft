@@ -211,6 +211,17 @@ fn alpha_after_an_unspecified_extra_sample_is_kept() {
 }
 
 #[test]
+fn extra_samples_unassociated_sets_metadata() {
+    let px = [200u8, 100, 50, 128].repeat(4);
+    let d = strips(2, 2, 8, 4, 2, 2, &px).tag(338, SHORT, &[2]);
+    let img = decode_ok(&build(true, false, &[d], &[0]).bytes);
+    assert!(img.meta.unassociated_alpha);
+    let d = strips(2, 2, 8, 4, 2, 2, &px).tag(338, SHORT, &[1]);
+    let img = decode_ok(&build(true, false, &[d], &[0]).bytes);
+    assert!(!img.meta.unassociated_alpha);
+}
+
+#[test]
 fn associated_alpha_is_made_straight() {
     // Premultiplied: half-transparent mid gray is stored as 64 with alpha 128.
     let px = [64u8, 128, 200, 255, 0, 0];
