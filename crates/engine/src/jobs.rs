@@ -730,6 +730,9 @@ impl Session {
         if id == "select.sky" {
             crate::selection_sky_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
         }
+        if id == "select.refineEdge" {
+            crate::selection_refine_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
         if id == "select.colorRange" {
             crate::selection_cmds::color_range_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
         }

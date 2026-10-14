@@ -392,6 +392,9 @@ fn refine_strokes(p: &Value) -> Result<Vec<matting::EdgeStroke>> {
 /// `newLayerWithMask` (as Photoshop does). New-layer outputs hide the source layer; new-document
 /// outputs leave the source document untouched.
 fn refine_edge(s: &mut Session, p: &Value) -> Result<Value> {
+    if crate::selection_refine_controlled::handles(s, p)? {
+        return crate::selection_refine_controlled::run(s, p);
+    }
     let params = refine_params(p);
     let strokes = refine_strokes(p)?;
     let decontaminate = b(p, "decontaminate", false);
@@ -522,7 +525,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.refineEdge",
             "Refine Edge",
             [],
-            r##"{"radius":px=0,"smartRadius":bool=false,"smooth":0..100=0,"feather":px=0,"contrast":0..100=0,"shiftEdge":-100..100=0,"decontaminate":bool=false,"amount":0..100=100,"output":"selection|layerMask|newLayer|newLayerWithMask|newDocument|newDocumentWithMask"="selection","sampleAllLayers":bool=false,"refineStrokes":[{"points":[[x,y],…],"size":px=30,"mode":"add|subtract"="add"},…]=[]} (refineStrokes: the Refine Edge Brush, in painting order: add refines the painted area from the image, subtract keeps the original edge there)"##,
+            r##"{"radius":px=0,"smartRadius":bool=false,"smooth":0..100=0,"feather":px=0,"contrast":0..100=0,"shiftEdge":-100..100=0,"decontaminate":bool=false,"amount":0..100=100,"output":"selection|layerMask|newLayer|newLayerWithMask|newDocument|newDocumentWithMask"="selection","sampleAllLayers":bool=false,"refineStrokes":[{"points":[[x,y],…],"size":px=30,"mode":"add|subtract"="add"},…]=[],"documentId":string?,"expectedRevision":string?} (captured pair: selection output without decontamination or brush strokes only; refineStrokes: the Refine Edge Brush, in painting order: add refines the painted area from the image, subtract keeps the original edge there)"##,
             has_selection_or_mask,
             refine_edge
         ),

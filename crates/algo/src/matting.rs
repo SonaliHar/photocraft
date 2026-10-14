@@ -846,3 +846,6 @@ mod tests {
 
 mod controlled_color;
 pub use controlled_color::guided_filter_color_with_interrupt;
+
+mod refine_controlled;
+pub use refine_controlled::{RefineRequirements, requirements as refine_requirements, refine_mask_with_interrupt};
