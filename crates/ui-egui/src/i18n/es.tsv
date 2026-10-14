@@ -4151,3 +4151,19 @@ navigator	Zoom	Zoom
 	There are too many sets: delete one first.	Hay demasiados conjuntos: elimine uno primero.
 	set name	nombre del conjunto
 	{set} (modified)	{set} (modificado)
+
+# Window › Timelapse
+	Timelapse	Timelapse
+	Frames	Fotogramas
+	State	Estado
+	no session	sin sesión
+	capturing…	capturando…
+	recording	grabando
+	stopped	detenido
+	Start Recording	Iniciar grabación
+	Stop Recording	Detener grabación
+	Capture Frame Now	Capturar fotograma ahora
+	Min seconds between frames	Mín. de segundos entre fotogramas
+	Reference layer prefix (not recorded)	Prefijo de capa de referencia (no se graba)
+	Export Video (MP4 + 30 s)	Exportar vídeo (MP4 + 30 s)
+	Open Frames Folder	Abrir carpeta de fotogramas

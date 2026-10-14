@@ -3889,3 +3889,19 @@ curves	Smooth	Εξομάλυνση
 	There are too many sets: delete one first.	Υπάρχουν πάρα πολλά σύνολα: διαγράψτε πρώτα ένα.
 	set name	όνομα συνόλου
 	{set} (modified)	{set} (τροποποιημένο)
+
+# Window › Timelapse
+	Timelapse	Χρονοϋστέρηση
+	Frames	Καρέ
+	State	Κατάσταση
+	no session	καμία συνεδρία
+	capturing…	λήψη…
+	recording	εγγραφή
+	stopped	σε διακοπή
+	Start Recording	Έναρξη εγγραφής
+	Stop Recording	Διακοπή εγγραφής
+	Capture Frame Now	Λήψη καρέ τώρα
+	Min seconds between frames	Ελάχ. δευτερόλεπτα μεταξύ καρέ
+	Reference layer prefix (not recorded)	Πρόθεμα επιπέδου αναφοράς (δεν καταγράφεται)
+	Export Video (MP4 + 30 s)	Εξαγωγή βίντεο (MP4 + 30 δ)
+	Open Frames Folder	Άνοιγμα φακέλου καρέ

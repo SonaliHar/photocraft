@@ -3888,3 +3888,19 @@ curves	Smooth	Згладити
 	There are too many sets: delete one first.	Забагато наборів: спершу видаліть один.
 	set name	назва набору
 	{set} (modified)	{set} (змінено)
+
+# Window › Timelapse
+	Timelapse	Таймлапс
+	Frames	Кадри
+	State	Стан
+	no session	немає сеансу
+	capturing…	захоплення…
+	recording	запис
+	stopped	зупинено
+	Start Recording	Почати запис
+	Stop Recording	Зупинити запис
+	Capture Frame Now	Захопити кадр зараз
+	Min seconds between frames	Мін. секунд між кадрами
+	Reference layer prefix (not recorded)	Префікс опорного шару (не записується)
+	Export Video (MP4 + 30 s)	Експорт відео (MP4 + 30 с)
+	Open Frames Folder	Відкрити теку кадрів

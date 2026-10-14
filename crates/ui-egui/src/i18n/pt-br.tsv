@@ -3979,3 +3979,19 @@ layerLabel	No Color	Sem cor
 	There are too many sets: delete one first.	Há conjuntos demais: exclua um primeiro.
 	set name	nome do conjunto
 	{set} (modified)	{set} (modificado)
+
+# Window › Timelapse
+	Timelapse	Timelapse
+	Frames	Quadros
+	State	Estado
+	no session	nenhuma sessão
+	capturing…	capturando…
+	recording	gravando
+	stopped	parado
+	Start Recording	Iniciar gravação
+	Stop Recording	Parar gravação
+	Capture Frame Now	Capturar quadro agora
+	Min seconds between frames	Mín. de segundos entre quadros
+	Reference layer prefix (not recorded)	Prefixo da camada de referência (não gravada)
+	Export Video (MP4 + 30 s)	Exportar vídeo (MP4 + 30 s)
+	Open Frames Folder	Abrir pasta de quadros

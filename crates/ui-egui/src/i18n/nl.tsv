@@ -3949,3 +3949,19 @@ curves	Smooth	Vloeiend maken
 	There are too many sets: delete one first.	Er zijn te veel sets: verwijder er eerst een.
 	set name	naam van de set
 	{set} (modified)	{set} (gewijzigd)
+
+# Window › Timelapse
+	Timelapse	Timelapse
+	Frames	Frames
+	State	Status
+	no session	geen sessie
+	capturing…	vastleggen…
+	recording	opnemen
+	stopped	gestopt
+	Start Recording	Opname starten
+	Stop Recording	Opname stoppen
+	Capture Frame Now	Nu frame vastleggen
+	Min seconds between frames	Min. seconden tussen frames
+	Reference layer prefix (not recorded)	Voorvoegsel referentielaag (niet opgenomen)
+	Export Video (MP4 + 30 s)	Video exporteren (MP4 + 30 s)
+	Open Frames Folder	Map met frames openen

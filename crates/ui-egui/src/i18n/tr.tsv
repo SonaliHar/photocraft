@@ -3919,3 +3919,19 @@ cameraData	Lens	Lens
 	There are too many sets: delete one first.	Çok fazla küme var: önce birini silin.
 	set name	küme adı
 	{set} (modified)	{set} (değiştirildi)
+
+# Window › Timelapse
+	Timelapse	Hızlandırılmış Çekim
+	Frames	Kareler
+	State	Durum
+	no session	oturum yok
+	capturing…	yakalanıyor…
+	recording	kaydediliyor
+	stopped	durduruldu
+	Start Recording	Kaydı Başlat
+	Stop Recording	Kaydı Durdur
+	Capture Frame Now	Şimdi Kare Yakala
+	Min seconds between frames	Kareler arası min. saniye
+	Reference layer prefix (not recorded)	Referans katman öneki (kaydedilmez)
+	Export Video (MP4 + 30 s)	Videoyu Dışa Aktar (MP4 + 30 sn)
+	Open Frames Folder	Kare Klasörünü Aç

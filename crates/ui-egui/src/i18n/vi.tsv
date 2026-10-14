@@ -3675,3 +3675,19 @@ curves	Smooth	Làm mượt
 	There are too many sets: delete one first.	Có quá nhiều bộ: hãy xóa một bộ trước.
 	set name	tên bộ
 	{set} (modified)	{set} (đã sửa đổi)
+
+# Window › Timelapse
+	Timelapse	Timelapse
+	Frames	Khung hình
+	State	Trạng thái
+	no session	không có phiên
+	capturing…	đang chụp…
+	recording	đang ghi
+	stopped	đã dừng
+	Start Recording	Bắt đầu ghi
+	Stop Recording	Dừng ghi
+	Capture Frame Now	Chụp khung hình ngay
+	Min seconds between frames	Số giây tối thiểu giữa các khung hình
+	Reference layer prefix (not recorded)	Tiền tố lớp tham chiếu (không được ghi)
+	Export Video (MP4 + 30 s)	Xuất video (MP4 + 30 giây)
+	Open Frames Folder	Mở thư mục khung hình

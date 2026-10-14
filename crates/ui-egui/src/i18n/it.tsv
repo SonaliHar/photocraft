@@ -4310,3 +4310,19 @@ shape	Appearance	Aspetto
 	There are too many sets: delete one first.	Ci sono troppi set: eliminane prima uno.
 	set name	nome del set
 	{set} (modified)	{set} (modificato)
+
+# Window › Timelapse
+	Timelapse	Timelapse
+	Frames	Fotogrammi
+	State	Stato
+	no session	nessuna sessione
+	capturing…	acquisizione…
+	recording	in registrazione
+	stopped	fermo
+	Start Recording	Avvia registrazione
+	Stop Recording	Interrompi registrazione
+	Capture Frame Now	Acquisisci fotogramma ora
+	Min seconds between frames	Secondi min. tra fotogrammi
+	Reference layer prefix (not recorded)	Prefisso livello di riferimento (non registrato)
+	Export Video (MP4 + 30 s)	Esporta video (MP4 + 30 s)
+	Open Frames Folder	Apri cartella fotogrammi

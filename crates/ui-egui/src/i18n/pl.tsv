@@ -3787,3 +3787,19 @@ curves	Smooth	Wygładź
 	There are too many sets: delete one first.	Zestawów jest za dużo: najpierw usuń jeden.
 	set name	nazwa zestawu
 	{set} (modified)	{set} (zmieniony)
+
+# Window › Timelapse
+	Timelapse	Timelapse
+	Frames	Klatki
+	State	Stan
+	no session	brak sesji
+	capturing…	przechwytywanie…
+	recording	nagrywanie
+	stopped	zatrzymano
+	Start Recording	Rozpocznij nagrywanie
+	Stop Recording	Zatrzymaj nagrywanie
+	Capture Frame Now	Przechwyć klatkę teraz
+	Min seconds between frames	Min. sekund między klatkami
+	Reference layer prefix (not recorded)	Prefiks warstwy referencyjnej (nienagrywanej)
+	Export Video (MP4 + 30 s)	Eksportuj wideo (MP4 + 30 s)
+	Open Frames Folder	Otwórz folder klatek

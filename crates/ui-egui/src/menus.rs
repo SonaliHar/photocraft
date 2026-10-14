@@ -32,6 +32,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.panel.dock", "Dock Panel", &[], None),
     ("window.panel.activate", "Activate Panel", &[], None),
     ("window.panel.close", "Close Panel", &[], None),
+    ("window.timelapse", "Timelapse", &["Window"], None),
     ("file.open", "Open…", &["File"], Some("Cmd+O")),
     ("file.save", "Save", &["File"], Some("Cmd+S")),
     ("file.saveAs", "Save As…", &["File"], Some("Cmd+Shift+S")),
@@ -219,6 +220,11 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
     }
     // Image > Variables (Define / Data Sets), Apply Data Set.
     if let Some(r) = crate::variables_ui::menu(app, id, &params) {
+        return r;
+    }
+    // Window > Timelapse recorder.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(r) = crate::timelapse::menu(app, id, &params) {
         return r;
     }
     // Window > Timeline panel.
@@ -753,6 +759,10 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
     if crate::preset_panels::handles(id) || crate::type_panels_ui::handles(id) || crate::timeline_ui::handles(id) {
         return true;
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if crate::timelapse::handles(id) {
+        return true;
+    }
     if let Some(e) = crate::view_cmds::is_enabled(app, id) {
         return e;
     }
@@ -844,6 +854,10 @@ fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         return Some(c);
     }
     if let Some(c) = crate::timeline_ui::checked(app, id) {
+        return Some(c);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(c) = crate::timelapse::checked(app, id) {
         return Some(c);
     }
     if let Some(c) = crate::type_panels_ui::checked(app, id) {
@@ -970,6 +984,7 @@ pub fn is_live(id: &str) -> bool {
         || crate::preset_panels::handles(id)
         || crate::type_panels_ui::handles(id)
         || crate::timeline_ui::handles(id)
+        || (cfg!(not(target_arch = "wasm32")) && id == "window.timelapse")
 }
 
 /// Commands outside the catalogue that belong right after a catalogue item: `(id, after)`.

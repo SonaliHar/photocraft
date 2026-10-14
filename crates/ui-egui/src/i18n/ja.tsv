@@ -3865,3 +3865,19 @@ curves	Smooth	スムーズ
 	There are too many sets: delete one first.	セットが多すぎます。先に 1 つ削除してください。
 	set name	セット名
 	{set} (modified)	{set}（変更あり）
+
+# Window › Timelapse
+	Timelapse	タイムラプス
+	Frames	フレーム
+	State	状態
+	no session	セッションなし
+	capturing…	キャプチャ中…
+	recording	記録中
+	stopped	停止
+	Start Recording	記録を開始
+	Stop Recording	記録を停止
+	Capture Frame Now	今すぐフレームをキャプチャ
+	Min seconds between frames	フレーム間の最小秒数
+	Reference layer prefix (not recorded)	参照レイヤーの接頭辞（記録されません）
+	Export Video (MP4 + 30 s)	ビデオを書き出し（MP4 + 30 秒）
+	Open Frames Folder	フレームフォルダーを開く
