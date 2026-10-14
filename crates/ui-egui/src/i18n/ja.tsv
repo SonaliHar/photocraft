@@ -3816,3 +3816,6 @@ curves	Smooth	スムーズ
 	Copy Texture to Other Tools	テクスチャを他のツールにコピー
 	ICO is limited to 256 × 256 pixels	ICO は 256 × 256 ピクセルまでです
 # Imported GIMP text and filter controls
+# XCF resource details: retained metadata does not grant access.
+	Fonts remain external. Resource names and locators do not grant access.	フォントは外部リソースのままです。リソースの名前や場所はアクセス権を付与しません。
+	Resolved payload hash	解決済みリソースデータのハッシュ

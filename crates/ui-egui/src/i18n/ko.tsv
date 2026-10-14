@@ -3313,3 +3313,6 @@ curves	Smooth	매끄럽게
 	Auto Add/Delete	자동 추가/삭제
 	ICO is limited to 256 × 256 pixels	ICO는 256 × 256픽셀로 제한됩니다
 # Imported GIMP text and filter controls
+# XCF resource details: retained metadata does not grant access.
+	Fonts remain external. Resource names and locators do not grant access.	글꼴은 외부 리소스로 유지됩니다. 리소스 이름과 위치는 접근 권한을 부여하지 않습니다.
+	Resolved payload hash	확인된 리소스 데이터 해시

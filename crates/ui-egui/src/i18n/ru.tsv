@@ -3104,3 +3104,6 @@ curves	Smooth	Сгладить
 	Integrated Density	Интегральная плотность
 	Length	Длина
 # Imported GIMP properties and filters
+# XCF resource details: retained metadata does not grant access.
+	Fonts remain external. Resource names and locators do not grant access.	Шрифты остаются внешними. Имена и расположения ресурсов не предоставляют права доступа.
+	Resolved payload hash	Хеш доступных данных ресурса

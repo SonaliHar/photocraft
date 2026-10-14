@@ -4058,3 +4058,6 @@ cameraRaw	Yellow	Sárga
 	Ink Characteristics	Festék jellemzői
 	Solidity:	Fedőképesség:
 	Redrawing	Újrarajzolás
+# XCF resource details: retained metadata does not grant access.
+	Fonts remain external. Resource names and locators do not grant access.	A betűkészletek külső erőforrások maradnak. Az erőforrások neve és helye nem biztosít hozzáférést.
+	Resolved payload hash	Az elérhető erőforrásadatok hashértéke

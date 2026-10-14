@@ -197,9 +197,9 @@ pub struct NodeOutput {
     domain: ExecutionDomain,
     resident: u64,
 }
-impl NodeBudget<'_, '_> {
+impl<'a, 'b> NodeBudget<'a, 'b> {
     /// The same cancellation/deadline witness used by scheduler and budget checks.
-    pub fn interrupt(&self) -> &Interrupt<'_> {
+    pub fn interrupt(&self) -> &'a Interrupt<'b> {
         self.control
     }
     pub fn remaining(&self) -> RemainingBudget {

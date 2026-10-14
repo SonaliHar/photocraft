@@ -3624,3 +3624,6 @@ curves	Smooth	Làm mượt
 	Choose a gradient file (.grd).	Chọn tệp chuyển sắc (.grd).
 	Auto Add/Delete	Tự động thêm/xóa
 	ICO is limited to 256 × 256 pixels	ICO giới hạn ở 256 × 256 pixel
+# XCF resource details: retained metadata does not grant access.
+	Fonts remain external. Resource names and locators do not grant access.	Phông chữ vẫn là tài nguyên bên ngoài. Tên và vị trí tài nguyên không cấp quyền truy cập.
+	Resolved payload hash	Mã băm dữ liệu tài nguyên đã xác định

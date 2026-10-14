@@ -18,7 +18,8 @@ pub struct ResourcePageDraft {
 }
 #[derive(Clone)]
 struct Target { document: DocId, revision: u64, snapshot: WeakDocumentSnapshot }
-struct Row { id: u64, name: String, kind: &'static str, status: &'static str, activated: Option<bool>, bytes: u64, hash: Option<String> }
+struct ResolvedIdentity { hash: String }
+struct Row { resolved: Option<ResolvedIdentity>, id: u64, name: String, kind: &'static str, status: &'static str, activated: Option<bool>, bytes: u64, hash: Option<String> }
 struct Report { target: Target, rows: Vec<Row> }
 fn invalid() -> String { tl!("The resource details exceed the supported display limit or are unavailable.").to_owned() }
 fn stale() -> String { tl!("The document changed. Inspect Resources again.").to_owned() }
@@ -34,6 +35,22 @@ fn id(value: &Value) -> Result<u64, String> {
     let text = value.as_str().ok_or_else(invalid)?;
     if text.is_empty() || text.len() > 20 || text.starts_with('0') || !text.bytes().all(|byte| byte.is_ascii_digit()) { return Err(invalid()); }
     text.parse().map_err(|_| invalid())
+}
+fn resolved_identity(row: &Value) -> Result<Option<ResolvedIdentity>, String> {
+    let resolved = row.get("identityResolved").and_then(Value::as_bool).ok_or_else(invalid)?;
+    let resolution = row.get("resolution").ok_or_else(invalid)?;
+    let status = row.get("status").and_then(Value::as_str).ok_or_else(invalid)?;
+    if resolution.is_null() {
+        if resolved || matches!(status, "exact-resolved-bytes" | "substituted-resolved-bytes") { return Err(invalid()); }
+        return Ok(None);
+    }
+    if !resolved || !resolution.is_object() { return Err(invalid()); }
+    let fidelity = resolution.get("fidelity").and_then(Value::as_str).ok_or_else(invalid)?;
+    if !matches!((fidelity,status), ("Exact","exact-resolved-bytes") | ("Substituted","substituted-resolved-bytes")) { return Err(invalid()); }
+    let hash = resolution.get("payload_hash").and_then(Value::as_str)
+        .filter(|hash| hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit())).ok_or_else(invalid)?;
+    let mut copy = String::new(); copy.try_reserve_exact(64).map_err(|_| invalid())?; copy.push_str(hash);
+    Ok(Some(ResolvedIdentity { hash: copy }))
 }
 fn decode(value: &Value, target: Target) -> Result<Report, String> {
     let rows = value.get("resources").and_then(Value::as_array).filter(|rows| rows.len() <= MAX_ROWS).ok_or_else(invalid)?;
@@ -56,8 +73,8 @@ fn decode(value: &Value, target: Target) -> Result<Report, String> {
         };
         let name = row.get("name").and_then(Value::as_str).filter(|name| name.len() <= (16 << 10) && !name.contains('\0')).ok_or_else(invalid)?;
         names = names.checked_add(name.len()).filter(|sum| *sum <= MAX_NAMES).ok_or_else(invalid)?;
-        // Copy only bounded display names. Never copy locators, resolution data,
-        // resource payloads, or collection/provider details into view state.
+        // Copy only bounded display names and validated scalar identity hashes.
+        // Never copy locators, resource payloads or provider data into view state.
         let end = name.char_indices().nth(256).map_or(name.len(), |(offset, _)| offset);
         let prefix = name.get(..end).ok_or_else(invalid)?;
         let mut display = String::new(); display.try_reserve_exact(prefix.len() + 3).map_err(|_| invalid())?;
@@ -71,7 +88,8 @@ fn decode(value: &Value, target: Target) -> Result<Report, String> {
             }
             _ => return Err(invalid()),
         };
-        output.push(Row { id: resource, name: display, kind, status, activated, bytes, hash });
+        let resolved = resolved_identity(row)?;
+        output.push(Row { resolved, id: resource, name: display, kind, status, activated, bytes, hash });
     }
     Ok(Report { target, rows: output })
 }
@@ -120,6 +138,13 @@ pub(super) fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             ui.label(format!("{} {} · {}", tl!("Resource"), row.id, crate::i18n::t(row.kind)));
                             if !row.name.is_empty() { ui.label(&row.name); }
                             ui.label(crate::i18n::t(row.status));
+                            if row.kind == "Font" {
+                                ui.label(egui::RichText::new(tl!("Fonts remain external. Resource names and locators do not grant access.")).color(Tokens::get(ui.ctx()).text));
+                            }
+                            if let Some(resolved) = &row.resolved {
+                                ui.label(format!("{}: {}", tl!("Resolved payload hash"), resolved.hash));
+                            }
+
                             ui.label(format!("{}: {}", tl!("Stored bytes"), row.bytes));
                             if let Some(hash) = &row.hash { ui.label(format!("{}: {hash}", tl!("Content hash"))); }
                             ui.label(match row.activated { Some(true) => tl!("Reported available consumer"), Some(false) => tl!("No reported available consumer"), None => tl!("Consumer status unavailable") });
@@ -158,7 +183,7 @@ mod tests {
     fn row(id: u64) -> Value {
         json!({"id":id.to_string(),"name":"Own resource","kind":"linked-image","status":"unresolved",
             "activated":false,"ownedByteLength":0,"contentHash":null,
-            "locator":"private-locator-must-not-be-view-state","resolution":{"payload":"private-payload"}})
+            "locator":"private-locator-must-not-be-view-state","identityResolved":false,"resolution":null,"providerPayload":"private-payload"})
     }
     #[test]
     fn later_page_preserves_resource_order_and_restored_cursor_is_only_view_state() {
@@ -179,7 +204,7 @@ mod tests {
         let report = decode(&json!({"resources":[value],"count":1}), target(&app)).unwrap();
         let display = report.rows.first().unwrap(); assert_eq!(display.id, u64::MAX); assert_eq!(display.hash.as_deref(), Some(hash.as_str()));
         assert_eq!(display.name, "Own resource"); assert_eq!(display.status, "Unavailable"); assert_eq!(display.activated, Some(false));
-        // The typed display Row has no locator, resolution, payload or action.
+        // The typed display Row retains only validated resolution identity, never locator, payload or action.
     }
     #[test]
     fn count_duplicate_id_shape_and_excessive_output_refuse_without_partial_page() {
@@ -218,4 +243,28 @@ mod tests {
         let after_undo = target(&app); app.session.execute("file.new", json!({"width":2,"height":2})).unwrap();
         assert!(!stable(&app, &after_undo));
     }
+    #[test]
+    fn exact_and_substituted_identity_do_not_imply_consumer_activation() {
+        let app=app();
+        for (status,fidelity) in [("exact-resolved-bytes","Exact"),("substituted-resolved-bytes","Substituted")] {
+            let mut value=row(9);value["kind"]=json!("font");value["status"]=json!(status);
+            value["identityResolved"]=json!(true);value["resolution"]=json!({"fidelity":fidelity,"payload_hash":"Ab".repeat(32),"providerPayload":"never-display"});
+            let report=decode(&json!({"resources":[value],"count":1}),target(&app)).unwrap();
+            let display=report.rows.first().unwrap();
+            assert_eq!(display.resolved.as_ref().unwrap().hash,"Ab".repeat(32));
+            assert_eq!(display.activated,Some(false));assert_eq!(display.bytes,0);
+        }
+    }
+    #[test]
+    fn conflicting_or_malformed_resolution_never_publishes_partial_report() {
+        let app=app();let mut value=row(1);
+        value["status"]=json!("exact-resolved-bytes");value["identityResolved"]=json!(true);
+        value["resolution"]=json!({"fidelity":"Substituted","payload_hash":"ab".repeat(32)});
+        assert!(decode(&json!({"resources":[value.clone()],"count":1}),target(&app)).is_err());
+        value["resolution"]=json!({"fidelity":"Exact","payload_hash":"private-locator"});
+        assert!(decode(&json!({"resources":[value.clone()],"count":1}),target(&app)).is_err());
+        value["resolution"]=json!({"fidelity":"Exact","payload_hash":"ab".repeat(32)});value["identityResolved"]=json!(false);
+        assert!(decode(&json!({"resources":[value],"count":1}),target(&app)).is_err());
+    }
+
 }

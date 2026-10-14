@@ -57,7 +57,7 @@ pub use native_open::import_native_stream_candidate;
 mod native_save_model;
 mod native_scene_preview;
 #[cfg(not(target_arch = "wasm32"))]
-pub use native_save::{save_native_path, save_native_path_guarded};
+pub use native_save::{save_native_path, save_native_path_guarded, save_native_path_guarded_with_resident_guard};
 pub use native_save::{NativeSaveLimits, NativeSaveResult, PreparedNativeStream, prepare_native_stream, retained_native_input_bytes, retained_native_model_bytes, retained_native_payload_bytes, save_native_bytes, save_native_stream};
 mod origin;
 mod ora;
@@ -79,6 +79,7 @@ pub mod tiff_layers;
 pub mod vector_map;
 mod wide_export;
 pub mod xcf_assessment;
+pub mod xcf_channel_candidate;
 mod xcf_current_assessment;
 mod xcf_export;
 mod xcf_export_loss;

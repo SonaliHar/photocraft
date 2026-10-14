@@ -387,6 +387,22 @@ pub fn validate_destination_protected_with_interrupt(
     validate_destination_protected_with_limit(path, protection, format_override, control, None)
 }
 
+/// Validate within a caller's remaining save envelope. The limit admits only
+/// destination inspection; it supplies no new path or source authority.
+pub fn validate_destination_protected_with_resident_limit(
+    path: &Path,
+    protection: &photocraft_engine::WriteProtection,
+    format_override: Option<&str>,
+    control: &photocraft_raster::Interrupt<'_>,
+    resident_limit: u64,
+) -> Result<(), AutomationError> {
+    poll(control)?;
+    if resident_limit > photocraft_io::source_protection::resident_ceiling() {
+        return Err(AutomationError::BadRequest("source-protection.resident-limit may only be lowered".into()));
+    }
+    validate_destination_protected_with_limit(path, protection, format_override, control, Some(resident_limit))
+}
+
 fn validate_destination_protected_with_limit(
     path: &Path,
     protection: &photocraft_engine::WriteProtection,
@@ -618,6 +634,23 @@ pub fn render_png(doc: &Document, max_side: u32) -> Result<Vec<u8>, AutomationEr
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod controlled_native_write_tests {
     use super::*;
+    #[test]
+    fn source_inspection_raise_and_cancel_refuse_before_destination_io() {
+        let root = root("inspection-admission");
+        let path = root.join("absent.pcraft");
+        let protection = photocraft_engine::WriteProtection::default();
+        let result = validate_destination_protected_with_resident_limit(
+            &path, &protection, Some("pcraft"), &photocraft_raster::Interrupt::NONE,
+            photocraft_io::source_protection::resident_ceiling().checked_add(1).unwrap(),
+        );
+        assert!(matches!(result, Err(AutomationError::BadRequest(_))));
+        let cancelled = || true;
+        assert!(validate_destination_protected_with_resident_limit(
+            &path, &protection, Some("pcraft"), &photocraft_raster::Interrupt::cancel_only(&cancelled), 0,
+        ).is_err());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+        std::fs::remove_dir(root).unwrap();
+    }
     fn root(label: &str) -> std::path::PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};
         static SERIAL: AtomicU64 = AtomicU64::new(0);

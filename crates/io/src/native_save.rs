@@ -479,8 +479,9 @@ pub fn save_native_path(doc: &Document, path: &std::path::Path, limits: NativeSa
     save_native_path_guarded(doc, path, limits, control, &|_| Ok(()))
 }
 
-/// Add caller-owned runtime exclusions without importing engine types or authority.
-/// The callback runs before preparation and before every final rename attempt.
+/// Compatibility callback without a shared inspection allowance. The callback
+/// still runs before preparation and at every final commit guard. Callers that
+/// inspect destination content should use the resident-aware additive API.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn save_native_path_guarded(
     doc: &Document,
@@ -489,10 +490,76 @@ pub fn save_native_path_guarded(
     control: &Interrupt<'_>,
     before_commit: &dyn Fn(&std::path::Path) -> Result<(), IoError>,
 ) -> Result<NativeSaveResult, IoError> {
-    let fingerprints = crate::source_protection::document_fingerprints_with_interrupt(doc, control)
-        .map_err(|error| if matches!(error, crate::source_protection::SourceProtectionError::Cancelled) {
-            IoError::Cancelled
-        } else { IoError::Unsupported(error.to_string()) })?;
+    poll(control)?;
+    before_commit(path)?;
+    save_native_path_guarded_with_resident_guard(doc, path, limits, control, &|target, _| before_commit(target))
+}
+
+/// Stream native output with one shared resident envelope for prepared owners,
+/// persistence caches and sequential destination inspection. The callback must
+/// finish/release its inspection scratch before returning; its allowance includes
+/// SOURCE_PROTECTION_FIXED_BYTES and is lower-only. No blocked-read or RSS claim.
+/// External callback captures (including all-open WriteProtection/hash owners)
+/// remain caller-precharged storage; this function charges its own hash copies.
+/// Preparation is private; guards run before output creation and every rename.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn save_native_path_guarded_with_resident_guard(
+    doc: &Document,
+    path: &std::path::Path,
+    limits: NativeSaveLimits,
+    control: &Interrupt<'_>,
+    before_commit: &dyn Fn(&std::path::Path, u64) -> Result<(), IoError>,
+) -> Result<NativeSaveResult, IoError> {
+    poll(control)?;
+    if path.as_os_str().len() > 4096 || crate::is_xcf_filename(&path.to_string_lossy()) {
+        return Err(IoError::Unsupported("source-protection.destination: choose a writable native destination".into()));
+    }
+    // Validate the caller's original envelope before lowering it for retained
+    // fingerprint storage; subtraction must not hide a raised standard limit.
+    let mut limit_check = PcraftWriter::new();
+    limit_check.set_preparation_limits(limits.preparation)?;
+    drop(limit_check);
+    let retained_input = retained_native_input_bytes(doc, limits.preparation, control)?;
+    let collection_resident = limits.preparation.resident_bytes.checked_sub(retained_input)
+        .ok_or_else(|| limit("source-protection.resident-limit: retained document leaves no fingerprint headroom"))?;
+    let fingerprints = crate::source_protection::document_fingerprints_with_resident_limit(
+        doc,
+        u64::try_from(collection_resident).map_err(|_| limit("source-protection.resident-limit"))?
+            .min(crate::source_protection::resident_ceiling()),
+        control,
+    ).map_err(|error| if matches!(error, crate::source_protection::SourceProtectionError::Cancelled) {
+        IoError::Cancelled
+    } else { IoError::Unsupported(error.to_string()) })?;
+    let mut fingerprint_bytes = fingerprints.capacity().checked_mul(std::mem::size_of::<String>())
+        .and_then(|n| n.checked_add(std::mem::size_of::<Vec<String>>()))
+        .ok_or_else(|| limit("source-protection.fingerprint resident overflow"))?;
+    for fingerprint in &fingerprints {
+        poll(control)?;
+        fingerprint_bytes = fingerprint_bytes.checked_add(fingerprint.capacity())
+            .ok_or_else(|| limit("source-protection.fingerprint resident overflow"))?;
+    }
+    let prepared_limits = NativeSaveLimits {
+        preparation: PreparationLimits {
+            resident_bytes: limits.preparation.resident_bytes.checked_sub(fingerprint_bytes)
+                .ok_or_else(|| limit("source-protection.resident-limit: fingerprint owners exceed save envelope"))?,
+            ..limits.preparation
+        },
+        ..limits
+    };
+    // prepare() debits retained document payload/model, previews and archive
+    // workspace. This fresh writer has no persistence objects/caches yet, so
+    // its remaining envelope is available to the initial sequential inspection.
+    // The FnOnce writer closure below drops every writer cache and preview
+    // before any final/retry guard. Reuse the same conservative allowance then
+    // without refunding the already-debited preview/archive reservation.
+    let (mut writer, previews, warnings, retained_payload_bytes, retained_model_slice_bytes) = prepare(doc, prepared_limits, control)?;
+    let inspection_resident = u64::try_from(writer.preparation_limits().resident_bytes)
+        .map_err(|_| limit("source-protection.resident-limit"))?
+        .min(crate::source_protection::resident_ceiling());
+    if inspection_resident < crate::source_protection::SOURCE_PROTECTION_FIXED_BYTES {
+        return Err(limit("source-protection.resident-limit: no shared native-save inspection headroom"));
+    }
+    poll(control)?;
     let guard = |target: &std::path::Path| -> Result<(), IoError> {
         poll(control)?;
         if target.as_os_str().len() > 4096 || crate::is_xcf_filename(&target.to_string_lossy()) {
@@ -504,25 +571,29 @@ pub fn save_native_path_guarded(
                 if !metadata.is_file() {
                     return Err(IoError::Unsupported("source-protection.destination: not a regular file".into()));
                 }
-                crate::source_protection::check_reader_with_interrupt(&mut file, metadata.len(), &fingerprints, control)
+                crate::source_protection::check_reader_with_resident_limit(&mut file, metadata.len(), &fingerprints, inspection_resident, control)
                     .map_err(|error| if matches!(error, crate::source_protection::SourceProtectionError::Cancelled) { IoError::Cancelled } else { IoError::Unsupported(error.to_string()) })?;
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(FormatError::Io(error).into()),
         }
         poll(control)?;
-        before_commit(target)?;
+        before_commit(target, inspection_resident)?;
         poll(control)
     };
     guard(path)?;
-    let (mut writer, previews, warnings, retained_payload_bytes, retained_model_slice_bytes) = prepare(doc, limits, control)?;
     let stats = photocraft_format::atomic::atomic_write_stream_guarded(
         path,
-        |file| {
-            writer
+        move |file| {
+            let result = writer
                 .save_zip_stream(doc, &previews, file, limits.archive, limits.preparation.object_bytes, control)
                 .map(|(_, stats)| stats)
-                .map_err(|error| NativeSaveCommitError(if matches!(error, FormatError::Cancelled) { IoError::Cancelled } else { error.into() }))
+                .map_err(|error| NativeSaveCommitError(if matches!(error, FormatError::Cancelled) { IoError::Cancelled } else { error.into() }));
+            // Atomic's final guard runs only after this closure returns. Retained
+            // manifests/source caches therefore cannot overlap decoder scratch.
+            drop(writer);
+            drop(previews);
+            result
         },
         |target| {
             guard(path).map_err(NativeSaveCommitError)?;
@@ -557,6 +628,51 @@ mod tests {
         cancelled.store(false, std::sync::atomic::Ordering::Relaxed);
         assert!(sink.write_all(&vec![0; 32768]).is_err());
         assert_eq!(sink.bytes, b"own");
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn shared_inspection_allowance_refusal_precedes_output_creation() {
+        let doc = Document::new("guard", photocraft_doc::Size::new(1, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        let dir = std::env::temp_dir().join(format!("photocraft-native-guard-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("output.pcraft");
+        let limits = NativeSaveLimits::default();
+        let observed = std::cell::Cell::new(0u64);
+        let result = save_native_path_guarded_with_resident_guard(&doc, &path, limits, &Interrupt::NONE, &|_, allowance| {
+            observed.set(allowance);
+            assert!(allowance >= crate::source_protection::SOURCE_PROTECTION_FIXED_BYTES);
+            assert!(allowance < limits.preparation.resident_bytes as u64);
+            assert!(allowance <= crate::source_protection::resident_ceiling());
+            Err(IoError::Unsupported("own guard refusal".into()))
+        });
+        assert!(result.is_err());
+        assert!(observed.get() > 0);
+        assert!(!path.exists());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        std::fs::remove_dir(&dir).unwrap();
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn final_shared_guard_cancellation_keeps_original_destination() {
+        let doc = Document::new("guard", photocraft_doc::Size::new(1, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        let dir = std::env::temp_dir().join(format!("photocraft-native-final-guard-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("output.pcraft");
+        std::fs::write(&path, b"own unrelated original").unwrap();
+        let calls = std::cell::Cell::new(0usize);
+        let allowance = std::cell::Cell::new(None);
+        let result = save_native_path_guarded_with_resident_guard(&doc, &path, NativeSaveLimits::default(), &Interrupt::NONE, &|_, resident| {
+            if let Some(previous) = allowance.get() { assert_eq!(resident, previous); }
+            allowance.set(Some(resident));
+            calls.set(calls.get() + 1);
+            if calls.get() >= 3 { Err(IoError::Cancelled) } else { Ok(()) }
+        });
+        assert!(matches!(result, Err(IoError::Cancelled)));
+        assert!(calls.get() >= 3);
+        assert_eq!(std::fs::read(&path).unwrap(), b"own unrelated original");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
     }
     #[test]
     fn controlled_previews_match_previous_native_save_values() {

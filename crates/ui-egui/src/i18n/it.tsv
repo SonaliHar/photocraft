@@ -4101,3 +4101,6 @@ navigator	Zoom	Zoom
 	Auto Add/Delete	Aggiungi/elimina automaticamente
 	ICO is limited to 256 × 256 pixels	ICO è limitato a 256 × 256 pixel
 # XCF editable text and independently qualified GIMP filter controls.
+# XCF resource details: retained metadata does not grant access.
+	Fonts remain external. Resource names and locators do not grant access.	I font rimangono esterni. I nomi e le posizioni delle risorse non concedono accesso.
+	Resolved payload hash	Hash dei dati disponibili della risorsa

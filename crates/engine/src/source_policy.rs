@@ -8,6 +8,25 @@ pub struct WriteProtection {
     pub fingerprints: Vec<String>,
 }
 impl WriteProtection {
+    /// Known retained exclusion metadata for a shared save envelope. Paths remain
+    /// inert strings until an already-authorized destination guard consumes them.
+    pub fn resident_bytes_with_interrupt(&self, control: &photocraft_raster::Interrupt<'_>) -> crate::Result<usize> {
+        let poll = || control.check().map_err(|_| crate::EngineError::Cancelled);
+        let denied = || crate::EngineError::Other("source-protection.resident-limit: exclusion metadata".into());
+        poll()?;
+        if self.sources.len() > 4096 { return Err(denied()); }
+        let hashes = photocraft_io::source_protection::fingerprint_resident_bytes(&self.fingerprints, self.fingerprints.capacity(), control)
+            .map_err(|error| if control.cancelled() { crate::EngineError::Cancelled } else { crate::EngineError::Other(error.to_string()) })?;
+        let mut bytes = self.sources.capacity().checked_mul(std::mem::size_of::<String>())
+            .and_then(|n| n.checked_add(hashes)).and_then(|n| n.checked_add(std::mem::size_of::<Self>())).ok_or_else(denied)?;
+        for path in &self.sources {
+            poll()?;
+            if path.len() > 4096 { return Err(denied()); }
+            bytes = bytes.checked_add(path.capacity()).ok_or_else(denied)?;
+        }
+        poll()?;
+        Ok(bytes)
+    }
     pub fn add_document(&mut self, document: &photocraft_doc::Document, source: Option<&SourceIdentity>) -> Result<(), String> {
         self.add_document_with_interrupt(document, source, &photocraft_raster::Interrupt::NONE).map_err(|error| error.to_string())
     }
@@ -75,6 +94,22 @@ fn same_name(a: &str, b: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn exclusion_residency_keeps_actual_string_capacity_and_no_authority() {
+        let mut path = String::with_capacity(8192);
+        path.push_str("granted/source.xcf");
+        let mut hash = String::with_capacity(256);
+        hash.push_str(&blake3::hash(b"own source").to_hex().to_string());
+        let protection = WriteProtection { sources: vec![path], fingerprints: vec![hash] };
+        let before = protection.sources.clone();
+        let resident = protection.resident_bytes_with_interrupt(&photocraft_raster::Interrupt::NONE).unwrap();
+        assert!(resident >= 8192 + 256);
+        assert_eq!(protection.sources, before);
+        assert!(matches!(protection.resident_bytes_with_interrupt(&photocraft_raster::Interrupt::cancel_only(&|| true)), Err(crate::EngineError::Cancelled)));
+        let mut altered = protection;
+        altered.fingerprints[0] = "invalid".into();
+        assert!(altered.resident_bytes_with_interrupt(&photocraft_raster::Interrupt::NONE).is_err());
+    }
     use photocraft_color::{ColorMode, SampleType};
     use photocraft_doc::{Document, Size};
     #[test]

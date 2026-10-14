@@ -3869,3 +3869,6 @@ cameraData	Lens	Lens
 	Ink Characteristics	Mürekkep Özellikleri
 	Solidity:	Doluluk:
 	Redrawing	Yeniden çiziliyor
+# XCF resource details: retained metadata does not grant access.
+	Fonts remain external. Resource names and locators do not grant access.	Yazı tipleri harici kalır. Kaynak adları ve konumları erişim izni vermez.
+	Resolved payload hash	Kullanılabilir kaynak verilerinin özeti

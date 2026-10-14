@@ -245,14 +245,18 @@ fn save_native(
         snapshot.validate_resident().map_err(|error| error.to_string())?;
         let target = Path::new(path);
         let control = photocraft_raster::Interrupt::NONE;
-        let guard = |candidate: &Path| -> Result<(), photocraft_io::IoError> {
-            photocraft_automation::files::validate_destination_protected_with_interrupt(candidate, protection, Some("pcraft"), &control)
+        let held_protection = protection.resident_bytes_with_interrupt(&control).map_err(|error| error.to_string())?;
+        let mut limits = photocraft_io::NativeSaveLimits::default();
+        limits.preparation.resident_bytes = limits.preparation.resident_bytes.checked_sub(held_protection)
+            .ok_or_else(|| "source-protection.resident-limit: exclusion metadata exceeds save envelope".to_owned())?;
+        let guard = |candidate: &Path, resident_limit: u64| -> Result<(), photocraft_io::IoError> {
+            photocraft_automation::files::validate_destination_protected_with_resident_limit(candidate, protection, Some("pcraft"), &control, resident_limit)
                 .map_err(|error| photocraft_io::IoError::Unsupported(error.to_string()))
         };
         // Preserve the existing native atomic writer's parent-directory policy.
         // Admission and target guards precede preparation; the writer repeats
         // guards on its resolved target and each atomic rename attempt.
-        let result = photocraft_io::save_native_path_guarded(snapshot, target, Default::default(), &control, &guard).map_err(|error| error.to_string())?;
+        let result = photocraft_io::save_native_path_guarded_with_resident_guard(snapshot, target, limits, &control, &guard).map_err(|error| error.to_string())?;
         Ok(photocraft_ui_egui::services::NativeSaveResult { warnings: result.warnings })
     })
 }

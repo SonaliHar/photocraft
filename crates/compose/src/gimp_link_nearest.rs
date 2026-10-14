@@ -3,6 +3,9 @@ use crate::gimp_composite::{CompositionError, Result};
 use photocraft_algo::transform::Homography;
 use photocraft_doc::{PixelFormat, Rect, xcf_items::TransformState};
 use photocraft_raster::{Interrupt, RasterInputError, Surface};
+#[path = "gimp_link_nearest_controlled.rs"]
+mod controlled;
+pub use controlled::{Limits, Requirements};
 fn refused() -> CompositionError {
     CompositionError::Unsupported("unqualified nearest linked transform")
 }
@@ -76,62 +79,83 @@ pub(crate) fn mapping_with_interpolation(width: u32, height: u32, state: &Transf
 /// The caller supplies independently qualified current-color source bytes. Only
 /// interpolation zero is admitted; this is not an approximation of other kernels.
 pub fn transform(bytes: &[u8], width: u32, height: u32, format: PixelFormat, state: &TransformState, bounds: Rect, control: &Interrupt<'_>) -> Result<Surface> {
+    transform_with_limits(bytes, width, height, format, state, bounds, Limits::default(), control)
+}
+/// Allocation-free current raster/geometry census for caller aggregate budgets.
+#[allow(clippy::too_many_arguments)]
+pub fn requirements(
+    bytes: &[u8],
+    width: u32,
+    height: u32,
+    format: PixelFormat,
+    state: &TransformState,
+    bounds: Rect,
+    control: &Interrupt<'_>,
+) -> Result<Requirements> {
+    controlled::requirements(bytes, width, height, format, state, bounds, control)
+}
+/// Same native nearest math under explicitly lowered invocation budgets.
+#[allow(clippy::too_many_arguments)]
+pub fn transform_with_limits(
+    bytes: &[u8],
+    width: u32,
+    height: u32,
+    format: PixelFormat,
+    state: &TransformState,
+    bounds: Rect,
+    limits: Limits,
+    control: &Interrupt<'_>,
+) -> Result<Surface> {
+    let admitted = controlled::requirements(bytes, width, height, format, state, bounds, control)?;
+    controlled::admit(admitted, limits)?;
     control.check().map_err(|_| RasterInputError::Cancelled)?;
     let bpp = format.bytes_per_pixel();
-    let source_size = u64::from(width).checked_mul(u64::from(height)).and_then(|n| n.checked_mul(bpp as u64)).ok_or_else(refused)?;
-    let output_pixels = u64::from(bounds.width()).checked_mul(u64::from(bounds.height())).ok_or_else(refused)?;
-    if state.interpolation != 0
-        || !format.alpha
-        || width == 0
-        || height == 0
-        || width > 8192
-        || height > 8192
-        || source_size > 64 << 20
-        || usize::try_from(source_size).ok() != Some(bytes.len())
-        || bounds.is_empty()
-        || bounds.width() > 8192
-        || bounds.height() > 8192
-        || output_pixels > 4_000_000
-        || output_pixels.checked_mul(bpp as u64).is_none_or(|n| n > 64 << 20)
-    {
-        return Err(refused());
-    }
     let (inverse, ox, oy) = mapping_with_interpolation(width, height, state, bounds, 0)?;
-    let row_size = usize::try_from(bounds.width()).ok().and_then(|n| n.checked_mul(bpp)).ok_or_else(refused)?;
-    let mut row = Vec::new();
-    row.try_reserve_exact(row_size).map_err(|_| RasterInputError::AllocationFailed)?;
-    row.resize(row_size, 0);
     let mut output = Surface::try_with_default_bytes(format, [0u8; 40].get(..bpp).ok_or_else(refused)?)?;
-    for y in bounds.y0..bounds.y1 {
+    // Nearest samples are independent native-byte copies. Tile grouping changes
+    // no sample calculation while avoiding repeated full-tile COW per row.
+    for tile in bounds.tiles() {
         control.check().map_err(|_| RasterInputError::Cancelled)?;
-        row.fill(0);
-        for (column, x) in (bounds.x0..bounds.x1).enumerate() {
-            if column.is_multiple_of(4096) {
-                control.check().map_err(|_| RasterInputError::Cancelled)?;
-            }
-            let (sx, sy) = inverse.apply(f64::from(x) + 0.5, f64::from(y) + 0.5);
-            let (sx, sy) = (sx - ox, sy - oy);
-            if !sx.is_finite() || !sy.is_finite() {
-                return Err(refused());
-            }
-            if sx < 0.0 || sy < 0.0 || sx >= f64::from(width) || sy >= f64::from(height) {
-                continue;
-            }
-            // Bounds above prove these finite floors fit the bounded source descriptor.
-            let start = (sy.floor() as usize)
-                .checked_mul(width as usize)
-                .and_then(|n| n.checked_add(sx.floor() as usize))
-                .and_then(|n| n.checked_mul(bpp))
-                .ok_or_else(refused)?;
-            let end = start.checked_add(bpp).ok_or_else(refused)?;
-            let dest = column.checked_mul(bpp).ok_or_else(refused)?;
-            let dest_end = dest.checked_add(bpp).ok_or_else(refused)?;
-            row.get_mut(dest..dest_end).ok_or_else(refused)?.copy_from_slice(bytes.get(start..end).ok_or_else(refused)?);
+        let patch = tile.rect().intersect(&bounds);
+        let length = photocraft_raster::checked_region_byte_len(patch, format)?;
+        let mut bytes_out = Vec::new();
+        bytes_out.try_reserve_exact(length).map_err(|_| RasterInputError::AllocationFailed)?;
+        let capacity_limit = (length as u64).checked_mul(2).and_then(|n| n.checked_add(64)).ok_or_else(refused)?;
+        if bytes_out.capacity() as u64 > capacity_limit || capacity_limit > admitted.scratch_bytes {
+            return Err(RasterInputError::LimitExceeded.into());
         }
-        let end_y = y.checked_add(1).ok_or_else(refused)?;
-        output.try_write_interleaved_with(Rect::new(bounds.x0, y, bounds.x1, end_y), &row, control)?;
+        while bytes_out.len() < length {
+            control.check().map_err(|_| RasterInputError::Cancelled)?;
+            let end = bytes_out.len().checked_add((length - bytes_out.len()).min(64 << 10)).ok_or_else(refused)?;
+            bytes_out.resize(end, 0);
+        }
+        let mut cursor = 0usize;
+        for y in patch.y0..patch.y1 {
+            control.check().map_err(|_| RasterInputError::Cancelled)?;
+            for x in patch.x0..patch.x1 {
+                let (sx, sy) = inverse.apply(f64::from(x) + 0.5, f64::from(y) + 0.5);
+                let (sx, sy) = (sx - ox, sy - oy);
+                if !sx.is_finite() || !sy.is_finite() {
+                    return Err(refused());
+                }
+                let end = cursor.checked_add(bpp).ok_or_else(refused)?;
+                if sx >= 0.0 && sy >= 0.0 && sx < f64::from(width) && sy < f64::from(height) {
+                    let start = (sy.floor() as usize)
+                        .checked_mul(width as usize)
+                        .and_then(|n| n.checked_add(sx.floor() as usize))
+                        .and_then(|n| n.checked_mul(bpp))
+                        .ok_or_else(refused)?;
+                    let source_end = start.checked_add(bpp).ok_or_else(refused)?;
+                    bytes_out.get_mut(cursor..end).ok_or_else(refused)?.copy_from_slice(bytes.get(start..source_end).ok_or_else(refused)?);
+                }
+                cursor = end;
+            }
+        }
+        control.check().map_err(|_| RasterInputError::Cancelled)?;
+        output.try_write_interleaved_with(patch, &bytes_out, control)?;
     }
-    output.prune();
+    output.try_prune_with(control)?;
+    control.check().map_err(|_| RasterInputError::Cancelled)?;
     Ok(output)
 }
 
@@ -154,5 +178,53 @@ mod tests {
         assert!(transform(&bytes, 2, 1, format, &state, bounds, &Interrupt::NONE).is_err());
         state.matrix_f64_bits = [0; 9];
         assert!(transform(&bytes, 2, 1, format, &state, bounds, &Interrupt::NONE).is_err());
+    }
+    // Draft only: raw precision/tile boundary and lower-limit refusal, unrun.
+    #[test]
+    fn controlled_native_u32_tile_boundary_and_budget_refusal() {
+        let format = PixelFormat::new(ColorMode::Grayscale, SampleType::U32, true);
+        let words =
+            [0x0100_0001u32, u32::MAX, 0x0100_0003, u32::MAX, 0x0100_0005, u32::MAX, 0x0100_0007, u32::MAX, 0x0100_0009, u32::MAX, 0x0100_000b, u32::MAX];
+        let bytes = words.into_iter().flat_map(u32::to_ne_bytes).collect::<Vec<_>>();
+        let state = TransformState { matrix_f64_bits: Homography::IDENTITY.0.map(f64::to_bits), interpolation: 0, pre_offset: [255, -1] };
+        let bounds = Rect::new(255, -1, 258, 1);
+        let req = requirements(&bytes, 3, 2, format, &state, bounds, &Interrupt::NONE).unwrap();
+        let output = transform_with_limits(&bytes, 3, 2, format, &state, bounds, Limits::default(), &Interrupt::NONE).unwrap();
+        assert_eq!(output.try_read_interleaved(bounds).unwrap(), bytes);
+        assert!(
+            transform_with_limits(
+                &bytes,
+                3,
+                2,
+                format,
+                &state,
+                bounds,
+                Limits { resident_bytes: req.peak_resident_bytes - 1, work_units: req.work_units },
+                &Interrupt::NONE
+            )
+            .is_err()
+        );
+        assert!(
+            transform_with_limits(
+                &bytes,
+                3,
+                2,
+                format,
+                &state,
+                bounds,
+                Limits { resident_bytes: req.peak_resident_bytes, work_units: req.work_units - 1 },
+                &Interrupt::NONE
+            )
+            .is_err()
+        );
+        let visits = std::cell::Cell::new(0u32);
+        let stop = || {
+            visits.set(visits.get() + 1);
+            visits.get() > 12
+        };
+        let cancelled = transform_with_limits(&bytes, 3, 2, format, &state, bounds, Limits::default(), &Interrupt::cancel_only(&stop));
+        assert!(cancelled.is_err());
+        assert!(visits.get() > 12);
+        assert_eq!(bytes, words.into_iter().flat_map(u32::to_ne_bytes).collect::<Vec<_>>());
     }
 }

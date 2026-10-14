@@ -2748,3 +2748,6 @@ curves	Smooth	平滑
 	Auto Add/Delete	自动添加/删除
 	ICO is limited to 256 × 256 pixels	ICO 最大为 256 × 256 像素
 # Imported GIMP text and filter controls
+# XCF resource details: retained metadata does not grant access.
+	Fonts remain external. Resource names and locators do not grant access.	字体仍为外部资源。资源名称和位置不授予访问权限。
+	Resolved payload hash	已解析资源数据的哈希值

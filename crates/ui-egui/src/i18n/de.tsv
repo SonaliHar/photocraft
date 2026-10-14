@@ -3136,3 +3136,6 @@ curves	Smooth	Glätten
 	Auto Add/Delete	Autom. hinzuf./löschen
 	ICO is limited to 256 × 256 pixels	ICO ist auf 256 × 256 Pixel begrenzt
 # XCF editable text and independently qualified GIMP filter controls.
+# XCF resource details: retained metadata does not grant access.
+	Fonts remain external. Resource names and locators do not grant access.	Schriftarten bleiben extern. Ressourcennamen und Speicherortangaben gewähren keinen Zugriff.
+	Resolved payload hash	Hash der verfügbaren Ressourcendaten

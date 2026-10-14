@@ -3746,3 +3746,6 @@ navigator	Zoom	Zvětšení
 	Auto Add/Delete	Automaticky přidat/odstranit
 	ICO is limited to 256 × 256 pixels	ICO je omezen na 256 × 256 pixelů
 # Imported GIMP properties and filters
+# XCF resource details: retained metadata does not grant access.
+	Fonts remain external. Resource names and locators do not grant access.	Písma zůstávají externí. Názvy prostředků a jejich umístění neposkytují oprávnění k přístupu.
+	Resolved payload hash	Hash dostupných dat prostředku

@@ -197,6 +197,7 @@ pub mod xcf_filter_mask_cmds;
 pub mod xcf_selection_cmds;
 pub mod xcf_channel_state_cmds;
 pub mod xcf_channel_consumer;
+pub mod xcf_channel_stored_load;
 pub mod xcf_channel_name_cmds;
 pub mod xcf_channel_locks_cmds;
 pub mod xcf_channel_indicates_cmds;

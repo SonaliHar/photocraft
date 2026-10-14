@@ -629,6 +629,15 @@ reconstruction. These are bounded APIs with retained-source checks. They do not
 qualify full LoHalo RGB sampling, general filtered-channel appearance or broader
 text/source admission. Independent GIMP captures are recorded separately from
 deferred PhotoCraft tests.
+Qualified linked nearest and RGBA8 cubic regeneration use controlled tile patches
+with lower memory/work limits, cancellable pruning and a final token fence.
+Cubic retains its existing inner CMS table-validation boundary. These paths keep
+their original source eligibility and do not admit full LoHalo color sampling.
+Native path saves pass the remaining shared resident allowance to destination
+guards. Captured exclusions and private fingerprint copies are charged, and
+writer caches/previews are released before final rename guards inspect content.
+The resource panel shows resolved payload identity separately from consumer
+availability; fonts remain external. Runtime and visual checks are deferred.
 Modern raster composition Properties offers captured Edit/Apply/Reset with
 explicit supported spaces/operators and read-only retained Auto resolution.
 Source Details includes saved channels,

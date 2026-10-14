@@ -3928,3 +3928,6 @@ layerLabel	No Color	Sem cor
 	Auto Add/Delete	Adicionar/excluir automaticamente
 	ICO is limited to 256 × 256 pixels	ICO é limitado a 256 × 256 pixels
 # XCF import and retained editing controls
+# XCF resource details: retained metadata does not grant access.
+	Fonts remain external. Resource names and locators do not grant access.	As fontes permanecem externas. Os nomes e as localizações dos recursos não concedem acesso.
+	Resolved payload hash	Hash dos dados disponíveis do recurso

@@ -309,7 +309,20 @@ fn validate_destination_with_fingerprints_and_interrupt(
     fingerprints: &[String],
     control: &photocraft_raster::Interrupt<'_>,
 ) -> Result<()> {
+    validate_destination_with_fingerprints_and_limit(path, source, fingerprints, control, None)
+}
+
+fn validate_destination_with_fingerprints_and_limit(
+    path: &str,
+    source: Option<&crate::SourceIdentity>,
+    fingerprints: &[String],
+    control: &photocraft_raster::Interrupt<'_>,
+    resident_limit: Option<u64>,
+) -> Result<()> {
     control.check().map_err(|_| EngineError::Cancelled)?;
+    if resident_limit.is_some_and(|limit| limit > photocraft_io::source_protection::resident_ceiling()) {
+        return Err(EngineError::Other("source-protection.resident-limit may only be lowered".into()));
+    }
     photocraft_io::source_protection::validate_fingerprints_with_interrupt(fingerprints, control).map_err(|error| {
         if matches!(error, photocraft_io::source_protection::SourceProtectionError::Cancelled) {
             EngineError::Cancelled
@@ -342,7 +355,11 @@ fn validate_destination_with_fingerprints_and_interrupt(
             Ok(mut file) => {
                 let metadata = file.metadata().map_err(|error| EngineError::Other(format!("cannot inspect save destination: {error}")))?;
                 if metadata.is_file() {
-                    photocraft_io::source_protection::check_reader_with_interrupt(&mut file, metadata.len(), fingerprints, control).map_err(|error| {
+                    let checked = match resident_limit {
+                        Some(limit) => photocraft_io::source_protection::check_reader_with_resident_limit(&mut file, metadata.len(), fingerprints, limit, control),
+                        None => photocraft_io::source_protection::check_reader_with_interrupt(&mut file, metadata.len(), fingerprints, control),
+                    };
+                    checked.map_err(|error| {
                         if matches!(error, photocraft_io::source_protection::SourceProtectionError::Cancelled) {
                             EngineError::Cancelled
                         } else {
@@ -510,7 +527,7 @@ pub(crate) fn save_doc_with_source_and_interrupt(
             EngineError::Other(error.to_string())
         }
     })?;
-    save_doc_with_fingerprints(doc, path, save, source, &fingerprints, control)
+    save_doc_with_fingerprints(doc, path, save, source, &fingerprints, fingerprints.capacity(), control)
 }
 
 /// Encode a derivative without grafting original editing state; retain both
@@ -533,7 +550,7 @@ pub(crate) fn save_doc_with_protection_document(
         fingerprints.push(fingerprint);
     }
     photocraft_io::source_protection::validate_fingerprints(&fingerprints).map_err(|error| EngineError::Other(error.to_string()))?;
-    save_doc_with_fingerprints(doc, path, save, source, &fingerprints, &photocraft_raster::Interrupt::NONE)
+    save_doc_with_fingerprints(doc, path, save, source, &fingerprints, fingerprints.capacity(), &photocraft_raster::Interrupt::NONE)
 }
 
 fn save_doc_with_fingerprints(
@@ -542,25 +559,39 @@ fn save_doc_with_fingerprints(
     save: impl Into<SaveOpts>,
     source: Option<&crate::SourceIdentity>,
     fingerprints: &[String],
+    fingerprint_slots: usize,
     control: &photocraft_raster::Interrupt<'_>,
 ) -> Result<Vec<String>> {
-    validate_destination_with_fingerprints_and_interrupt(path, source, fingerprints, control)?;
+    #[cfg(target_arch = "wasm32")]
+    let _ = fingerprint_slots;
     control.check().map_err(|_| EngineError::Cancelled)?;
     #[cfg(not(target_arch = "wasm32"))]
     if extension(path).as_deref() == Some(photocraft_format::EXTENSION) {
-        let guard = |target: &std::path::Path| -> std::result::Result<(), photocraft_io::IoError> {
+        let mut held = photocraft_io::source_protection::fingerprint_resident_bytes(fingerprints, fingerprint_slots, control)
+            .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { EngineError::Other(error.to_string()) })?;
+        if let Some(source) = source {
+            held = held.checked_add(std::mem::size_of::<crate::SourceIdentity>())
+                .and_then(|n| n.checked_add(source.label.capacity()))
+                .and_then(|n| n.checked_add(source.path.as_ref().map_or(0, String::capacity)))
+                .ok_or_else(|| EngineError::Other("source-protection.resident-limit: captured identity overflow".into()))?;
+        }
+        let mut limits = photocraft_io::NativeSaveLimits::default();
+        limits.preparation.resident_bytes = limits.preparation.resident_bytes.checked_sub(held)
+            .ok_or_else(|| EngineError::Other("source-protection.resident-limit: captured identities exceed save envelope".into()))?;
+        let guard = |target: &std::path::Path, resident_limit: u64| -> std::result::Result<(), photocraft_io::IoError> {
             control.check().map_err(|_| photocraft_io::IoError::Cancelled)?;
             let map = |error| {
                 if matches!(error, EngineError::Cancelled) { photocraft_io::IoError::Cancelled } else { photocraft_io::IoError::Unsupported(error.to_string()) }
             };
-            validate_destination_with_fingerprints_and_interrupt(path, source, fingerprints, control).map_err(map)?;
+            validate_destination_with_fingerprints_and_limit(path, source, fingerprints, control, Some(resident_limit)).map_err(map)?;
             let target = target.to_str().ok_or_else(|| photocraft_io::IoError::Unsupported("native save target must be valid UTF-8".into()))?;
-            validate_destination_with_fingerprints_and_interrupt(target, source, fingerprints, control).map_err(map)
+            validate_destination_with_fingerprints_and_limit(target, source, fingerprints, control, Some(resident_limit)).map_err(map)
         };
-        return photocraft_io::save_native_path_guarded(doc, std::path::Path::new(path), Default::default(), control, &guard)
+        return photocraft_io::save_native_path_guarded_with_resident_guard(doc, std::path::Path::new(path), limits, control, &guard)
             .map(|result| result.warnings)
             .map_err(|e| if matches!(e, photocraft_io::IoError::Cancelled) { EngineError::Cancelled } else { EngineError::Other(format!("{path}: {e}")) });
     }
+    validate_destination_with_fingerprints_and_interrupt(path, source, fingerprints, control)?;
     let (bytes, warnings) = encode(doc, path, save)?;
     control.check().map_err(|_| EngineError::Cancelled)?;
     write_file_with_exclusions(path, &bytes, source, fingerprints, control)?;

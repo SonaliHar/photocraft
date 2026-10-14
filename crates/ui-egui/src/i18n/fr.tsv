@@ -3140,3 +3140,6 @@ curves	Smooth	Lisser
 	Auto Add/Delete	Ajout/suppr. auto
 	ICO is limited to 256 × 256 pixels	Le format ICO est limité à 256 × 256 pixels
 # XCF editable text and independently qualified GIMP filter controls.
+# XCF resource details: retained metadata does not grant access.
+	Fonts remain external. Resource names and locators do not grant access.	Les polices restent externes. Les noms et les emplacements des ressources ne donnent aucun droit d’accès.
+	Resolved payload hash	Empreinte des données disponibles de la ressource

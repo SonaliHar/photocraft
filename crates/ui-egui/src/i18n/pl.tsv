@@ -3736,3 +3736,6 @@ curves	Smooth	Wygładź
 	Auto Add/Delete	Automatyczne dodawanie/usuwanie
 	ICO is limited to 256 × 256 pixels	ICO jest ograniczony do 256 × 256 pikseli
 # Imported GIMP properties and filters
+# XCF resource details: retained metadata does not grant access.
+	Fonts remain external. Resource names and locators do not grant access.	Czcionki pozostają zewnętrzne. Nazwy i lokalizacje zasobów nie przyznają prawa dostępu.
+	Resolved payload hash	Skrót dostępnych danych zasobu
