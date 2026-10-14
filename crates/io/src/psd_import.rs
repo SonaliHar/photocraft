@@ -10,7 +10,7 @@ use photocraft_geom::{Rect, Size, TILE_SIZE};
 use photocraft_psd::layer::{CHANNEL_REAL_USER_MASK, CHANNEL_TRANSPARENCY, CHANNEL_USER_MASK};
 use photocraft_psd::resources::ids;
 use photocraft_psd::tagged::BlockData;
-use photocraft_psd::{ColorMode as PsdMode, LayerNode, LayerRecord, PsdFile, TaggedBlock};
+use photocraft_psd::{ColorMode as PsdMode, LayerNode, LayerRecord, PsdFile, PsdView, TaggedBlock};
 use photocraft_raster::Surface;
 
 use crate::adjust_map::{self, ADJUSTMENT_KEYS};
@@ -46,6 +46,8 @@ pub(crate) const REGENERATED: [&[u8; 4]; 9] = [b"luni", b"lyid", b"lsct", b"lsdk
 
 pub(crate) struct Ctx<'a> {
     pub file: &'a PsdFile,
+    view: Option<&'a PsdView<'a>>,
+    record_index: usize,
     pub fmt: PixelFormat,
     pub mask_fmt: PixelFormat,
     pub cc: usize,
@@ -152,22 +154,22 @@ impl Ctx<'_> {
         Placement { id, transform, perspective, warp }
     }
 
+    fn decode_channel(&self, rec: &LayerRecord, id: i16) -> photocraft_psd::Result<Vec<u8>> {
+        match self.view {
+            Some(view) => view.decode_channel(self.record_index, id),
+            None => rec.decode_channel(id, self.file.header.depth, self.file.header.version),
+        }
+    }
+
     fn channel_plane(&mut self, rec: &LayerRecord, id: i16, name: &str) -> Option<Vec<u8>> {
         rec.channel(id)?;
-        match rec.decode_channel(id, self.file.header.depth, self.file.header.version) {
+        match self.decode_channel(rec, id) {
             Ok(p) => Some(p),
             Err(e) => {
                 self.warn(format!("layer \"{name}\": channel {id} could not be decoded ({e}); treated as empty"));
                 None
             }
         }
-    }
-
-    /// [`Self::channel_plane`] without the warnings sink, so a layer's channels decode
-    /// concurrently (their RLE rows are the bulk of the open time on full-canvas layers).
-    fn channel_plane_decoded(&self, rec: &LayerRecord, id: i16) -> Option<Vec<u8>> {
-        rec.channel(id)?;
-        rec.decode_channel(id, self.file.header.depth, self.file.header.version).ok()
     }
 
     fn record_surface(&mut self, rec: &LayerRecord, name: &str) -> Surface {
@@ -182,18 +184,25 @@ impl Ctx<'_> {
             // A layer's channels are independent streams. Keep warnings in channel order,
             // while decoding the small bounded set of channels concurrently on native.
             let header = &self.file.header;
-            crate::pixels::par_map(ids.clone(), |id| rec.channel(id).map(|_| rec.decode_channel(id, header.depth, header.version)))
-                .into_iter()
-                .zip(&ids)
-                .map(|(plane, id)| match plane {
-                    Some(Ok(p)) => Some(p),
-                    Some(Err(e)) => {
-                        self.warn(format!("layer \"{name}\": channel {id} could not be decoded ({e}); treated as empty"));
-                        None
-                    }
-                    None => None,
+            let view = self.view;
+            let index = self.record_index;
+            crate::pixels::par_map(ids.clone(), |id| {
+                rec.channel(id).map(|_| match view {
+                    Some(view) => view.decode_channel(index, id),
+                    None => rec.decode_channel(id, header.depth, header.version),
                 })
-                .collect::<Vec<_>>()
+            })
+            .into_iter()
+            .zip(&ids)
+            .map(|(plane, id)| match plane {
+                Some(Ok(p)) => Some(p),
+                Some(Err(e)) => {
+                    self.warn(format!("layer \"{name}\": channel {id} could not be decoded ({e}); treated as empty"));
+                    None
+                }
+                None => None,
+            })
+            .collect::<Vec<_>>()
         } else {
             ids.iter().map(|&id| self.channel_plane(rec, id, name)).collect()
         };
@@ -504,6 +513,7 @@ impl Ctx<'_> {
             .take_while(|_| !ctl.cancelled())
             .map(|n| match n {
                 LayerNode::Layer { index } => {
+                    self.record_index = *index;
                     let l = self.layer_from_record(&layers[*index]);
                     self.done += 1;
                     // Layers are 10–95 % of an open (the merged image and channels the rest).
@@ -529,6 +539,8 @@ impl Ctx<'_> {
                     let artboard = crate::comps_map::ARTBOARD_KEYS.iter().find_map(|k| rec.block(k)).and_then(|b| crate::comps_map::parse_artboard(&b.data));
                     let mut l = Layer::new(rec.name(), LayerContent::Group(Group { children, expanded, artboard }));
                     l.psd_blocks = preserved_blocks(rec);
+                    // Child recursion changes the active record; group masks use the parent.
+                    self.record_index = *index;
                     self.apply_common(&mut l, rec, sd.and_then(|s| s.blend_mode));
                     self.apply_vector_mask(&mut l, rec);
                     l
@@ -663,6 +675,14 @@ pub fn psd_to_document(file: &PsdFile) -> (Document, Vec<String>) {
 /// [`psd_to_document`] for a background open: checks `ctl` per layer record and reports
 /// progress. `None` when cancelled.
 pub fn psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) -> Option<(Document, Vec<String>)> {
+    psd_to_document_source(file, None, ctl)
+}
+
+pub(crate) fn psd_view_to_document_with(view: &PsdView<'_>, ctl: &photocraft_raster::Interrupt) -> Option<(Document, Vec<String>)> {
+    psd_to_document_source(view.metadata(), Some(view), ctl)
+}
+
+fn psd_to_document_source<'a>(file: &'a PsdFile, view: Option<&'a PsdView<'a>>, ctl: &photocraft_raster::Interrupt<'a>) -> Option<(Document, Vec<String>)> {
     let h = &file.header;
     let mut warnings = Vec::new();
     let mode = doc_mode(h.color_mode).unwrap_or_else(|| {
@@ -747,6 +767,8 @@ pub fn psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) 
     let cc = fmt.mode.color_channels();
     let mut cx = Ctx {
         file,
+        view,
+        record_index: 0,
         fmt,
         mask_fmt: PixelFormat::new(ColorMode::Grayscale, depth, false),
         cc,
@@ -784,7 +806,10 @@ pub fn psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) 
     // half the file's bytes, decoded and thrown away on every open before this.
     let extra = usize::from(h.channels) > cc + usize::from(file.merged_has_alpha());
     let merged = if !layered || file.layers().is_empty() || extra {
-        let m = file.decode_merged();
+        let m = match view {
+            Some(view) => view.decode_merged(),
+            None => file.decode_merged(),
+        };
         if ctl.cancelled() {
             return None;
         }
@@ -887,7 +912,16 @@ pub fn psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) 
         } else if !file.color_mode_data.is_empty() {
             cx.warn("color mode data is not preserved");
         }
-        let rgba = file.composite_rgba8().or_else(|_| {
+        // Reuse merged planes already decoded for this flattened import.
+        let rgba = match &merged {
+            Some(Ok(planes)) => file.composite_rgba8_from_planes(planes),
+            Some(Err(error)) => Err(error.clone()),
+            None => match view {
+                Some(view) => view.composite_rgba8(),
+                None => file.composite_rgba8(),
+            },
+        }
+        .or_else(|_| {
             // Multichannel: show the first channels as RGB.
             let all = merged.clone().ok_or_else(|| photocraft_psd::PsdError::Invalid("no merged image".into()))??;
             let plane = h.row_bytes() * hh;

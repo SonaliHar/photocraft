@@ -273,13 +273,14 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, m
         return Ok(ImportResult { document: photocraft_format::load_from_bytes(bytes)?, warnings: Vec::new(), source_read_only: false, preview_only: false });
     }
     if is_psd(bytes) {
-        let file = PsdFile::from_bytes(bytes)?;
+        let view = photocraft_psd::PsdView::from_bytes(bytes)?;
+        let file = view.metadata();
         // Nesting past the document model's cap could never be saved; reject the file with the
         // actionable limit.
-        psd_import::check_group_depth(&file)?;
+        psd_import::check_group_depth(file)?;
         ctl.check().map_err(|_| IoError::Cancelled)?;
         ctl.progress(0.05);
-        let (mut document, warnings) = psd_import::psd_to_document_with(&file, ctl).ok_or(IoError::Cancelled)?;
+        let (mut document, warnings) = psd_import::psd_view_to_document_with(&view, ctl).ok_or(IoError::Cancelled)?;
         document.name = name.to_string();
         text_import::prepare(&mut document);
         return Ok(ImportResult { document, warnings, source_read_only: false, preview_only: false });

@@ -301,6 +301,16 @@ impl PsdFile {
     /// extra channel when [`PsdFile::merged_has_alpha`] is true. Removes the
     /// white matte from RGB composites before reducing precision.
     pub fn composite_rgba8(&self) -> Result<RgbaImage> {
+        self.composite_rgba8_with(|| self.decode_merged())
+    }
+
+    /// Converts already decoded merged planar samples into RGBA8.
+    /// Uses the same output limits, alpha handling and color conversion as [`Self::composite_rgba8`].
+    pub fn composite_rgba8_from_planes(&self, planes: &[u8]) -> Result<RgbaImage> {
+        self.composite_rgba8_with(|| Ok(Cow::Borrowed(planes)))
+    }
+
+    pub(crate) fn composite_rgba8_with<B: AsRef<[u8]>>(&self, decode: impl FnOnce() -> Result<B>) -> Result<RgbaImage> {
         let h = &self.header;
         h.validate()?;
         let (w, hh) = (h.width as usize, h.height as usize);
@@ -313,7 +323,8 @@ impl PsdFile {
         if usize::from(h.channels) < cc {
             return Err(PsdError::invalid("fewer channels than the color mode requires"));
         }
-        let all = self.decode_merged()?;
+        let decoded = decode()?;
+        let all = decoded.as_ref();
         let plane = h.row_bytes().checked_mul(hh).ok_or(PsdError::LimitExceeded("plane size overflow"))?;
         let alpha_bytes = if self.merged_has_alpha() {
             Some(all.get(cc * plane..(cc + 1) * plane).ok_or_else(|| PsdError::invalid("alpha channel size mismatch"))?)

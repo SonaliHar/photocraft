@@ -434,11 +434,11 @@ pub(crate) fn read_blocks(r: &mut Reader<'_>, version: Version) -> Result<(Vec<T
 }
 
 /// The callback consumes selected payloads before they are copied into owned blocks.
-pub(crate) fn read_blocks_with(
-    r: &mut Reader<'_>,
+pub(crate) fn read_blocks_with<'a>(
+    r: &mut Reader<'a>,
     version: Version,
     alignment: usize,
-    mut consume: impl FnMut(usize, [u8; 4], [u8; 4], &[u8], &Option<Vec<u8>>) -> bool,
+    mut consume: impl FnMut(usize, [u8; 4], [u8; 4], &'a [u8], &Option<Vec<u8>>) -> bool,
 ) -> Result<(Vec<TaggedBlock>, Vec<u8>)> {
     let mut blocks = Vec::new();
     loop {
