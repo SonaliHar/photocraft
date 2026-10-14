@@ -19,7 +19,7 @@ Disk, GPU initialization, compositor construction, readback and validation are e
 The compositor is fresh per sample. Alternate and reverse version order; keep raw samples.
 These are P44-class workloads, not the original CI P44 file or native UI startup measurements.
 
-The prior import prototype reduced measured three-layer opening from 621 to 250 ms and
+Historical fork-based evidence: the prior import prototype reduced measured three-layer opening from 621 to 250 ms and
 complex opening from 287 to 136 ms. That historical comparison is separate from subsequent
 adjacent comparisons; do not combine batches to attribute a gain to a single change.
 
@@ -54,3 +54,26 @@ mask/flattened conversion redundancies, other sample formats, Navigator/mips, sp
 view and lazy materialization. None of those is claimed complete by this checkpoint.
 Broad corpus, full lint/wasm checks and native UI acceptance are pending. This document
 must be updated as each sequential step is implemented and validated.
+
+## Upstream checkpoint
+
+Upstream implementation PR: https://github.com/storytold/photocraft/pull/5396, based directly
+on upstream main `583425b4df1c57a4515f591fed64fcedf8440cba`. The initially opened fork
+PR was closed; unrelated fork changes are excluded.
+
+The upstream control measured 504.0→197.4 ms (three layers) and 216.3→113.3 ms (complex).
+See `perf/experiments/psd-open-linux-upstream-total.json`. Borrowed parsing alone in an
+adjacent comparison measured 235.2→199.4 ms, with import 119.3→83.5 ms; complex
+129.9→112.4 ms. See `perf/experiments/psd-open-linux-borrowed.json`. These pooled medians
+use six warm samples in opposite-order batches; phase medians need not sum exactly.
+
+All 211 PSD unit tests and the three import-equivalence tests passed on the upstream
+checkpoint. The oracle now includes a distinct parent group mask. Its density uses an exact
+PSD-representable 8-bit value, preserving the strict source-versus-import comparison.
+Both fixture signatures and representative GPU crops remain valid. Borrowed metadata omits
+encoded buffers deliberately; decoding uses PsdView and roundtrip uses to_owned. The owned
+PsdFile API and upstream depth-specific global-layer precedence are preserved.
+
+Current upstream already has GPU Navigator reuse (#4518), including initial GPU waiting;
+that item needs no duplicate implementation here. Broad corpus/lint/wasm/UI gates remain
+pending.

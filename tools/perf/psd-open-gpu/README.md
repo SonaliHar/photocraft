@@ -1,6 +1,10 @@
 # Fixed-file PSD opening experiment
 
-The production optimization branch is `codex/psd-open-performance`, starting at freshly fetched fork/main `14c612c24b270ff62aaddd38bf64776c823f6003`. A second experimental branch `codex/psd-open-known-fast-experiment` starts at the historical reported-fast `05e0b1f8a5a9e1e17798df140bf03f040b95f1e3`, with the same import-only patch applied. The old revision is a performance reference, not a wholesale downgrade of the fork. Neither primary checkout nor main was changed.
+Implementation PR: https://github.com/storytold/photocraft/pull/5396. The existing branch
+`codex/psd-open-performance` is now based directly on upstream main `583425b4`, following
+the user's requested destination. Earlier fork-based timings below are historical evidence.
+Current upstream comparisons are recorded in `docs/psd-loading-performance.md` and
+`perf/experiments/`; no unrelated fork changes are included.
 
 The PR comment spans 557 commits and does not identify one culpable commit. Cache disabling is a diagnostic control, not a proven fix. No GPU or file-format correctness fix was reverted.
 
