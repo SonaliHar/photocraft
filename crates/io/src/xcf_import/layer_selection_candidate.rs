@@ -11,6 +11,12 @@ use photocraft_doc::{
 };
 use std::collections::HashSet;
 pub const LAYER_SELECTION_EPOCH: &str = "xcf22-layer-selection-gaussian-unresolved-v1";
+/// Structural retention does not resolve any space/operator word or qualify rendering.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayerOuterPolicy {
+    ObservedLiteral,
+    RetainUnresolved,
+}
 #[derive(Clone, Copy, Debug)]
 pub struct LayerSelectionIds {
     pub layer: LayerId,
@@ -166,6 +172,17 @@ fn word(bytes: &[u8], at: usize) -> Result<u32, IoError> {
     let x: [u8; 4] = bytes.get(at..end).ok_or_else(|| fail("short raw word"))?.try_into().map_err(|_| fail("word width"))?;
     Ok(u32::from_be_bytes(x))
 }
+fn outer_words(blend: Option<i32>, space: Option<i32>, mode: Option<i32>, policy: LayerOuterPolicy) -> Result<(i32, i32, i32), IoError> {
+    let words = (
+        blend.ok_or_else(|| fail("missing blend space"))?,
+        space.ok_or_else(|| fail("missing composite space"))?,
+        mode.ok_or_else(|| fail("missing composite mode"))?,
+    );
+    if policy == LayerOuterPolicy::ObservedLiteral && words != (1848279633, 1848279633, 1848279633) {
+        return Err(fail("observed source outer tuple"));
+    }
+    Ok(words)
+}
 fn argument(a: &photocraft_xcf::Argument, e: &photocraft_xcf::Effect, l: &mut Local<'_, '_>, b: &mut Budget<'_>) -> Result<FilterValue, IoError> {
     l.step(1)?;
     if a.configuration.is_some() || a.graph.is_some() {
@@ -251,6 +268,21 @@ pub fn map_layer_selection<'a>(
     reserve: &mut dyn FnMut(u64, u64) -> Result<(), IoError>,
     charge: &mut dyn FnMut(u64) -> Result<(), IoError>,
 ) -> Result<LayerSelectionCandidate<'a>, IoError> {
+    map_layer_selection_with_outer_policy(file, ordinal, ids, LayerOuterPolicy::ObservedLiteral, existing, limits, ctl, reserve, charge)
+}
+/// Explicit source-only structural tuple retention. Old entry remains literal.
+#[allow(clippy::too_many_arguments)]
+pub fn map_layer_selection_with_outer_policy<'a>(
+    file: &'a XcfFile,
+    ordinal: usize,
+    ids: LayerSelectionIds,
+    outer_policy: LayerOuterPolicy,
+    existing: LayerSelectionNamespace<'_>,
+    limits: LayerSelectionLimits,
+    ctl: &Interrupt<'_>,
+    reserve: &mut dyn FnMut(u64, u64) -> Result<(), IoError>,
+    charge: &mut dyn FnMut(u64) -> Result<(), IoError>,
+) -> Result<LayerSelectionCandidate<'a>, IoError> {
     poll(ctl)?;
     let maximum = LayerSelectionLimits::default();
     if limits.resident_bytes > maximum.resident_bytes
@@ -286,6 +318,7 @@ pub fn map_layer_selection<'a>(
     }
     let effect = layer.effects.first().ok_or_else(|| fail("layer effect"))?;
     let mask = effect.mask.as_deref().ok_or_else(|| fail("retained effect mask"))?;
+    outer_words(effect.state.blend_space, effect.state.composite_space, effect.state.composite_mode, outer_policy)?;
     if effect.operation != "gegl:gaussian-blur"
         || effect.version.as_deref() != Some("0:0")
         || effect.arguments.len() != 5
@@ -296,9 +329,6 @@ pub fn map_layer_selection<'a>(
         || effect.state.mode != Some(62)
         || effect.state.region != Some(0)
         || effect.state.clipping != Some(0)
-        || effect.state.blend_space != Some(1848279633)
-        || effect.state.composite_space != Some(1848279633)
-        || effect.state.composite_mode != Some(1848279633)
     {
         return Err(fail("observed source effect tuple"));
     }
@@ -368,7 +398,9 @@ pub fn map_layer_selection<'a>(
             8 => 1,
             33 => 1f32.to_bits(),
             7 => 62,
-            35 | 36 | 37 => 1848279633,
+            35 => effect.state.composite_mode.ok_or_else(|| fail("missing raw operator"))? as u32,
+            36 => effect.state.composite_space.ok_or_else(|| fail("missing raw composite space"))? as u32,
+            37 => effect.state.blend_space.ok_or_else(|| fail("missing raw blend space"))? as u32,
             44 | 46 => 0,
             _ => return Err(fail("outer property")),
         };
@@ -424,9 +456,9 @@ pub fn map_layer_selection<'a>(
             compatibility_epoch: l.text(LAYER_SELECTION_EPOCH, &mut b)?,
             source_mode: 62,
             legacy: false,
-            stored_blend_space: 1848279633,
-            stored_composite_space: 1848279633,
-            stored_operator: 1848279633,
+            stored_blend_space: effect.state.blend_space.ok_or_else(|| fail("missing stored blend space"))?,
+            stored_composite_space: effect.state.composite_space.ok_or_else(|| fail("missing stored composite space"))?,
+            stored_operator: effect.state.composite_mode.ok_or_else(|| fail("missing stored operator"))?,
             resolved: None,
             pass_through: false,
         }),
@@ -473,6 +505,15 @@ pub fn map_layer_selection<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unresolved_outer_policy_retains_signed_words_without_literal_aliasing() {
+        let successor = 0xe67b8251u32 as i32;
+        assert_eq!(outer_words(Some(successor), Some(i32::MIN), Some(i32::MAX), LayerOuterPolicy::RetainUnresolved).unwrap(), (successor, i32::MIN, i32::MAX));
+        assert!(outer_words(Some(successor), Some(successor), Some(successor), LayerOuterPolicy::ObservedLiteral).is_err());
+        assert!(outer_words(None, Some(successor), Some(successor), LayerOuterPolicy::RetainUnresolved).is_err());
+        assert_eq!(word(&successor.to_be_bytes(), 0).unwrap(), successor as u32);
+        assert!(word(&successor.to_be_bytes()[..3], 0).is_err());
+    }
     #[test]
     fn f64_native_ingestion_preserves_nonunit_signed_zero_and_subnormal_words() {
         let words = [1.0000000361224046f64.to_bits(), (-0f64).to_bits(), 1u64];

@@ -43,15 +43,16 @@ pub use stored_channel_candidate::{CurrentProfilePolicy, SelectedCurrentChannel,
 #[path = "xcf_import/layer_selection_candidate.rs"]
 mod layer_selection_candidate;
 pub use layer_selection_candidate::{
-    LayerSelectionIds, LayerSelectionCandidate, LayerSelectionLimits, LayerSelectionNamespace, LayerSelectionRequirements,
-    LAYER_SELECTION_EPOCH, map_layer_selection,
+    LayerOuterPolicy, LayerSelectionIds, LayerSelectionCandidate, LayerSelectionLimits, LayerSelectionNamespace, LayerSelectionRequirements,
+    LAYER_SELECTION_EPOCH, map_layer_selection, map_layer_selection_with_outer_policy,
 };
 
 #[path = "xcf_import/layer_selection_owner.rs"]
 mod layer_selection_owner;
 pub use layer_selection_owner::{
     AssembledLayerSelection, LayerCorrespondenceRequirements, LayerCurrentLimits, LayerCurrentRequirements, LayerOriginalPlanesProof,
-    SelectedCurrentLayer, assemble_owned_layer_selection, select_layer_current,
+    LayerProfilePolicy, LayerProfileRequirements, SelectedCurrentLayer, assemble_owned_layer_selection,
+    assemble_owned_layer_selection_with_outer_policy, layer_profile_requirements, select_layer_current, select_layer_current_with_profile_policy,
 };
 
 #[cfg(all(test, feature = "corpus"))]

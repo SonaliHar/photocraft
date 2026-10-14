@@ -3,8 +3,8 @@
 //! The independent IO owner, frozen current document and native layer/filter-mask
 //! words remain separate. No selection coverage, mask multiplication, Gaussian,
 //! working-domain, renderer, source qualification, or publication authority is
-//! supplied. OriginalExact profile identity is required; materialized Gray ICC
-//! is not inferred from absence or accepted via the RGB channel proof policy.
+//! supplied. OriginalExact is the default. Explicit materialized Gray ICC
+//! policy uses its own controlled proof, never absence or the RGB channel policy.
 //!
 //! One conservative lower resident/work lease covers full retained original and
 //! current census envelopes, runtime view and identity-COW map copies. This is
@@ -49,6 +49,9 @@ pub struct Requirements {
     pub current_payload_bytes: u64,
     pub current_view_bytes: u64,
     pub native_copy_bytes: u64,
+    /// Final genuine conservative held envelope, including unreleased scratch.
+    pub held_resident_bytes: u64,
+    pub held_index_bytes: u64,
     pub index_envelope_bytes: u64,
     pub prepaid_verification_work: u64,
     pub verification_work: u64,
@@ -281,7 +284,19 @@ impl<L> PreparedStoredLayer<'_, '_, '_, '_, L> {
         self.original.source_sha256()
     }
     pub fn requirements(&self) -> Requirements {
-        self.requirements
+        let mut requirements = self.requirements;
+        requirements.preparation_work = self.work.used.load(Ordering::Relaxed);
+        requirements
+    }
+    /// A debit only: it cannot assert retained capacities, credit work, or create
+    /// a fresh budget. The sibling numerical adapter computes its bounded field
+    /// validation cost before comparisons under this same retained Work.
+    pub(crate) fn charge_metadata_work(&self, bytes: u64, control: &Interrupt<'_>) -> Result<()> {
+        poll(control)?;
+        self.work.charge(bytes)
+    }
+    pub(crate) fn original_node(&self) -> Result<&photocraft_doc::xcf_filters::FilterNode> {
+        self.original.original_node().map_err(|error| EngineError::Other(error.to_string()))
     }
     pub fn remaining_work_units(&self) -> u64 {
         self.work.remaining()
@@ -299,6 +314,99 @@ impl<L> PreparedStoredLayer<'_, '_, '_, '_, L> {
             return Err(bad("raw layer preparation work limit"));
         }
         result
+    }
+}
+// This budget cannot accept caller-asserted scene/census totals. Only the
+// actual prepared reader's held ledger and concrete kernel requirements create it.
+struct StageBudget<'a> {
+    held: &'a mut u64,
+    limit: u64,
+    peak: u64,
+    work: &'a mut Prepaid,
+}
+impl PreparationBudget for StageBudget<'_> {
+    type Lease = ();
+    fn reserve_prepared_bytes(&mut self, bytes: u64) -> std::result::Result<(), CompositionError> {
+        if bytes > self.peak {
+            return Err(CompositionError::Invalid("layer Gaussian prospective peak"));
+        }
+        *self.held =
+            self.held.checked_add(bytes).filter(|held| *held <= self.limit).ok_or(CompositionError::Invalid("layer Gaussian shared resident envelope"))?;
+        Ok(())
+    }
+    fn consume_preparation_work(&mut self, units: u64) -> std::result::Result<(), CompositionError> {
+        self.work.consume(units).map_err(|_| CompositionError::Invalid("layer Gaussian prepaid work"))
+    }
+}
+impl<'o, 's, 'b, 'a, L> PreparedStoredLayer<'o, 's, 'b, 'a, L> {
+    /// Concrete same-ledger transaction: no numeric scene totals, fresh external
+    /// quota, or arbitrary unmetered callback can enter through this seam.
+    pub(crate) fn into_gaussian_stage(
+        mut self,
+        session: &Session,
+        config: photocraft_compose::gimp_layer_selection_gaussian_candidate::Config,
+        control: &Interrupt<'_>,
+    ) -> Result<(Self, photocraft_compose::gimp_layer_selection_gaussian_candidate::StagedOutput<()>)> {
+        use photocraft_compose::gimp_layer_selection_gaussian_candidate as kernel;
+        self.validate(session, control)?;
+        // Numerical wrapper has exactly this tuple as its sole field. Its actual
+        // inline delta is known here, including L's layout; no asserted header.
+        let header = (std::mem::size_of::<(Self, kernel::StagedOutput<()>)>() as u64)
+            .checked_sub(std::mem::size_of::<Self>() as u64)
+            .ok_or_else(|| bad("stage header underflow"))?;
+        let staged = (|| {
+            let work = &self.work;
+            let cancelled = || control.cancelled() || work.charge(1).is_err();
+            let progress = |fraction| control.progress(fraction);
+            let metered = Interrupt::new(&cancelled, &progress);
+            let held = add(self.requirements.held_resident_bytes, header)?;
+            let remaining = photocraft_compose::gimp_channel_gaussian_candidate::Limits {
+                resident_bytes: self.requirements.admitted_resident_bytes.checked_sub(held).ok_or_else(|| bad("stage remaining resident envelope"))?,
+                index_bytes: self
+                    .requirements
+                    .index_envelope_bytes
+                    .checked_sub(self.requirements.held_index_bytes)
+                    .ok_or_else(|| bad("stage remaining index envelope"))?,
+                work_units: work.remaining(),
+            };
+            let input = kernel::Inputs { source: &self.source_surface, mask: &self.mask_surface, bounds: self.source_bounds, mask_bounds: self.mask_bounds };
+            let required = kernel::requirements(input, config, remaining, &metered).map_err(composition)?;
+            if required.work_units > work.remaining() {
+                return Err(bad("stage remaining work envelope"));
+            }
+            let index = add(self.requirements.held_index_bytes, required.index_bytes)?;
+            if add(held, required.peak_resident_bytes)? > self.requirements.admitted_resident_bytes || index > self.requirements.index_envelope_bytes {
+                return Err(bad("combined raw and Gaussian stage envelope"));
+            }
+            let mut prepaid = Prepaid::reserve(work, required.work_units)?;
+            self.requirements.held_resident_bytes = held;
+            self.requirements.held_index_bytes = index;
+            let mut local = StageBudget {
+                held: &mut self.requirements.held_resident_bytes,
+                limit: self.requirements.admitted_resident_bytes,
+                peak: required.peak_resident_bytes,
+                work: &mut prepaid,
+            };
+            let output = kernel::prepare(input, config, remaining, &mut local, &metered).map_err(composition)?.into_staged();
+            local.work.finish()?;
+            let actual = output.requirements();
+            if actual.peak_resident_bytes > required.peak_resident_bytes
+                || actual.index_bytes > required.index_bytes
+                || actual.work_units > required.work_units
+                || output.surface().resident_accounted_bytes()? > required.peak_resident_bytes
+            {
+                return Err(bad("Gaussian stage exceeds prospective requirements"));
+            }
+            poll(&metered)?;
+            Ok(output)
+        })();
+        if self.work.exceeded.load(Ordering::Relaxed) {
+            return Err(bad("raw layer preparation work limit"));
+        }
+        let output = staged?;
+        self.validate(session, control)?;
+        self.requirements.preparation_work = self.work.used.load(Ordering::Relaxed);
+        Ok((self, output))
     }
 }
 fn verification_upper(source_work: u64, resident_limit: u64) -> Result<u64> {
@@ -347,6 +455,19 @@ pub fn prepare<'o, 's, 'b, 'a, B: PreparationBudget>(
     budget: &mut B,
     control: &Interrupt<'_>,
 ) -> Result<PreparedStoredLayer<'o, 's, 'b, 'a, B::Lease>> {
+    prepare_with_profile_policy(session, layer, owner, photocraft_io::LayerProfilePolicy::OriginalExact, limits, budget, control)
+}
+/// Explicit opt-in only. The exact controlled IO/CMS proof of materialization
+/// does not establish numerical layer/mask working-domain or coverage semantics.
+pub fn prepare_with_profile_policy<'o, 's, 'b, 'a, B: PreparationBudget>(
+    session: &Session,
+    layer: LayerId,
+    owner: &'o photocraft_io::AssembledLayerSelection<'s, 'b, 'a>,
+    profile_policy: photocraft_io::LayerProfilePolicy,
+    limits: Limits,
+    budget: &mut B,
+    control: &Interrupt<'_>,
+) -> Result<PreparedStoredLayer<'o, 's, 'b, 'a, B::Lease>> {
     poll(control)?;
     idle(session)?;
     let max = Limits::default();
@@ -383,8 +504,23 @@ pub fn prepare<'o, 's, 'b, 'a, B: PreparationBudget>(
         if add(add(original.resident_bytes, retained_header)?, copy_upper)? > limits.resident_bytes || reserved_index > limits.index_bytes {
             return Err(bad("complete original owner exceeds shared envelope"));
         }
-        // Reserve the proof before all current hierarchy/model/payload scans.
-        let prepaid_units = verification_upper(original.work_units, limits.resident_bytes)?;
+        // Borrowed prospective CMS accounting precedes marker hashes, profile
+        // clones and current census. Its documented builtin initialization is
+        // the CMS provider boundary; the outer lease/token already remain held.
+        let profile = photocraft_io::layer_profile_requirements(
+            owner,
+            &current.doc,
+            profile_policy,
+            photocraft_io::LayerCurrentLimits { resident_bytes: limits.resident_bytes, index_bytes: limits.index_bytes, work_units: work.remaining() },
+            &metered,
+        )
+        .map_err(|error| io_error(error, &metered))?;
+        if add(add(add(original.resident_bytes, retained_header)?, copy_upper)?, profile.resident_bytes)? > limits.resident_bytes {
+            return Err(bad("prospective layer profile resident envelope"));
+        }
+        // Reserve the entire proof, including explicit profile verification,
+        // before all current hierarchy/model/payload scans. No refunds/reset.
+        let prepaid_units = add(verification_upper(original.work_units, limits.resident_bytes)?, profile.work_units)?;
         let mut proof_work = Prepaid::reserve(&work, prepaid_units)?;
         let resident = current.doc.resident_arc().ok_or(photocraft_raster::backing::BackingError::Unsupported)?;
         let backed = photocraft_doc::resident_structure::has_backed_rasters_with(resident, &metered)?;
@@ -393,7 +529,7 @@ pub fn prepare<'o, 's, 'b, 'a, B: PreparationBudget>(
         }
         let raster = current.doc.resident_raster_footprint_with(&metered)?;
         let raster_extra = add(raster.retained_bytes, mul(raster.clone_metadata_bytes, 4)?)?;
-        let mut held = add(add(add(original.resident_bytes, retained_header)?, copy_upper)?, raster_extra)?;
+        let mut held = add(add(add(add(original.resident_bytes, profile.resident_bytes)?, retained_header)?, copy_upper)?, raster_extra)?;
         let model_limits = inspector_limits(limits, held, &work, reserved_index)?;
         let model = photocraft_io::retained_native_model_census(&current.doc, model_limits, &metered).map_err(|e| io_error(e, &metered))?;
         let model_bytes = model.retained_bytes() as u64;
@@ -414,9 +550,10 @@ pub fn prepare<'o, 's, 'b, 'a, B: PreparationBudget>(
         };
         let mut selected_resident = 0;
         let mut selected_index = 0;
-        let selected = photocraft_io::select_layer_current(
+        let selected = photocraft_io::select_layer_current_with_profile_policy(
             census,
             owner,
+            profile_policy,
             selected_limits,
             &metered,
             &mut |resident, index| {
@@ -434,6 +571,9 @@ pub fn prepare<'o, 's, 'b, 'a, B: PreparationBudget>(
         )
         .map_err(|e| io_error(e, &metered))?;
         let required = selected.requirements();
+        if required.implicit_profile_peak_bytes > profile.resident_bytes || required.implicit_profile_work_units > profile.work_units {
+            return Err(bad("actual layer profile exceeds prospective requirements"));
+        }
         if !std::ptr::eq(selected.document(), &*current.doc)
             || selected.layer_id() != layer
             || selected.filter_id() != owner.filter_id()
@@ -505,6 +645,8 @@ pub fn prepare<'o, 's, 'b, 'a, B: PreparationBudget>(
             current_payload_bytes: payload_bytes,
             current_view_bytes: runtime_actual,
             native_copy_bytes: copied,
+            held_resident_bytes: actual_held,
+            held_index_bytes: actual_index,
             index_envelope_bytes: limits.index_bytes,
             prepaid_verification_work: prepaid_units,
             verification_work: required.verification_work_units,
@@ -618,6 +760,58 @@ mod tests {
         let limit = add(small, reserved).unwrap();
         assert!(add(large, reserved).unwrap() > limit);
         // Size inspection does not construct or borrow a forged IO owner.
+    }
+    #[test]
+    fn stage_uses_prepaid_remaining_work_and_keeps_raw_owners_charged() {
+        use photocraft_algo::gimp::neighborhood::{GaussianAbyss, GaussianFilter, GaussianParams};
+        use photocraft_compose::{gimp_channel_gaussian_candidate::DerivedPrecision, gimp_layer_selection_gaussian_candidate as kernel};
+        let format = photocraft_color::PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false);
+        let source = Surface::try_with_default_bytes(format, &0.25f64.to_le_bytes()).unwrap();
+        let mask = Surface::try_with_default_bytes(format, &0f64.to_le_bytes()).unwrap();
+        let inputs = kernel::Inputs { source: &source, mask: &mask, bounds: Rect::new(0, 0, 32, 32), mask_bounds: Rect::new(0, 0, 32, 32) };
+        let config = kernel::Config {
+            source_domain: kernel::SourceDomain::SrgbNonlinearF64,
+            mask_domain: kernel::MaskDomain::NativeLinearF64,
+            mask_policy: kernel::RawBinary::EmptySelectionUnrestricted,
+            precision: DerivedPrecision::F64,
+            gaussian: GaussianParams { std_dev_x: 1., std_dev_y: 1., abyss: GaussianAbyss::Clamp, clip_extent: true },
+            filter: GaussianFilter::Auto,
+            output: Rect::new(0, 0, 32, 32),
+        };
+        let limits = photocraft_compose::gimp_channel_gaussian_candidate::Limits::default();
+        let required = kernel::requirements(inputs, config, limits, &Interrupt::NONE).unwrap();
+        let work = Work { used: AtomicU64::new(13), exceeded: AtomicBool::new(false), limit: limits.work_units };
+        let mut held = 100;
+        let mut prepaid = Prepaid::reserve(&work, required.work_units).unwrap();
+        let remaining = work.remaining();
+        let mut local = StageBudget { held: &mut held, limit: limits.resident_bytes, peak: required.peak_resident_bytes, work: &mut prepaid };
+        let output = kernel::prepare(inputs, config, limits, &mut local, &Interrupt::NONE).unwrap().into_staged();
+        local.work.finish().unwrap();
+        assert_eq!(*local.held, 100 + required.peak_resident_bytes);
+        assert_eq!(work.remaining(), remaining);
+        let mut value = [0.0];
+        output.surface().try_read_pixel_f64(0, 0, &mut value).unwrap();
+        assert!((value[0] - 0.25).abs() <= 2.0 / 255.0);
+        assert_eq!(mask.default_bytes(), 0f64.to_le_bytes());
+        drop(output);
+        assert_eq!(*local.held, 100 + required.peak_resident_bytes); // no quota refund
+        assert!(local.reserve_prepared_bytes(required.peak_resident_bytes + 1).is_err());
+    }
+    #[test]
+    fn explicit_profile_verification_work_cannot_be_spent_by_current_census() {
+        let profile = photocraft_io::LayerProfileRequirements { resident_bytes: 12, work_units: 9 };
+        let upper = add(verification_upper(10, 8).unwrap(), profile.work_units).unwrap();
+        let work = Work { used: AtomicU64::new(0), exceeded: AtomicBool::new(false), limit: 100 };
+        let mut prepaid = Prepaid::reserve(&work, upper).unwrap();
+        assert_eq!(work.remaining(), 17);
+        work.charge(10).unwrap();
+        let mut exact = prepaid.take_exact(add(42, profile.work_units).unwrap()).unwrap();
+        exact.consume(51).unwrap();
+        exact.finish().unwrap();
+        assert_eq!(work.remaining(), 7);
+        assert_eq!(prepaid.remaining, 32);
+        assert!(work.charge(8).is_err());
+        assert!(add(upper, u64::MAX).is_err());
     }
     #[test]
     fn quota_receipt_does_not_reset_refund_or_double_charge() {

@@ -103,12 +103,13 @@ pub use xcf_import::{
     select_current_with_profile_policy, selected_profile_requirements,
 };
 pub use xcf_import::{
-    LayerSelectionCandidate, LayerSelectionIds, LayerSelectionLimits, LayerSelectionNamespace, LayerSelectionRequirements,
-    LAYER_SELECTION_EPOCH, map_layer_selection,
+    LayerOuterPolicy, LayerSelectionCandidate, LayerSelectionIds, LayerSelectionLimits, LayerSelectionNamespace, LayerSelectionRequirements,
+    LAYER_SELECTION_EPOCH, map_layer_selection, map_layer_selection_with_outer_policy,
 };
 pub use xcf_import::{
     AssembledLayerSelection, LayerCorrespondenceRequirements, LayerCurrentLimits, LayerCurrentRequirements, LayerOriginalPlanesProof,
-    SelectedCurrentLayer, assemble_owned_layer_selection, select_layer_current,
+    LayerProfilePolicy, LayerProfileRequirements, SelectedCurrentLayer, assemble_owned_layer_selection,
+    assemble_owned_layer_selection_with_outer_policy, layer_profile_requirements, select_layer_current, select_layer_current_with_profile_policy,
 };
 mod xcf_link_sources;
 pub mod xcf_modified_sources;

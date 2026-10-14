@@ -1,7 +1,7 @@
 //! Independent whole-decoder owner for a private v22 layer projection.
 //! Exact original native planes/records only; never filter appearance, profile
 //! semantics, selection evaluation, renderer admission or serialized grants.
-use super::layer_selection_candidate::{self as mapper, LayerSelectionIds, LayerSelectionLimits, LayerSelectionNamespace};
+use super::layer_selection_candidate::{self as mapper, LayerOuterPolicy, LayerSelectionIds, LayerSelectionLimits, LayerSelectionNamespace};
 use super::*;
 use crate::native_save::NativeCurrentCensus;
 use photocraft_doc::{
@@ -51,6 +51,83 @@ impl Default for LayerCurrentLimits {
         }
     }
 }
+/// Explicit current Gray profile policy. No authority is inferred from source absence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayerProfilePolicy {
+    OriginalExact,
+    MaterializedImplicitSGray,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct LayerProfileRequirements {
+    pub resident_bytes: u64,
+    pub work_units: u64,
+}
+fn profile_limits(limits: LayerCurrentLimits) -> Result<photocraft_cms::control::Limits, IoError> {
+    let maximum = photocraft_cms::control::Limits::default();
+    Ok(photocraft_cms::control::Limits {
+        resident_bytes: usize::try_from(limits.resident_bytes.min(maximum.resident_bytes as u64)).map_err(|_| bad("Gray CMS address space"))?,
+        work_units: limits.work_units.min(maximum.work_units),
+    })
+}
+fn materialized_gray<'d>(owner: &AssembledLayerSelection<'_, '_, '_>, doc: &'d Document) -> Result<&'d [u8], IoError> {
+    if owner.original.model != Model::Gray || owner.original.encoding != Encoding::NonlinearProfile || !owner.original.icc.is_empty() {
+        return Err(bad("original implicit Gray source mismatch"));
+    }
+    current_gray_metadata(doc, depth(owner.original.sample), owner.original.precision)
+}
+fn current_gray_metadata(doc: &Document, original_depth: SampleType, original_precision: u32) -> Result<&[u8], IoError> {
+    if doc.mode != ColorMode::Grayscale
+        || doc.depth != original_depth
+        || doc.sample_encoding != Some(SampleEncoding::NonlinearProfile)
+        || doc.source_color_context.as_ref().is_none_or(|s| s.original_icc.is_some() || s.source_precision != original_precision)
+        || !matches!(&doc.working_profile_interpretation,photocraft_doc::WorkingProfileInterpretation::ImplicitSGray{icc_blake3} if icc_blake3.len()==64&&icc_blake3.bytes().all(|v|v.is_ascii_hexdigit()))
+    {
+        return Err(bad("explicit current implicit Gray/source context mismatch"));
+    }
+    let bytes = doc.icc_profile.as_ref().ok_or_else(|| bad("explicit Gray marker requires current ICC"))?;
+    if bytes.is_empty() || bytes.len() > 16 << 20 {
+        return Err(bad("current Gray ICC bound"));
+    }
+    Ok(bytes.as_slice())
+}
+/// Borrowed prospective recipe only, not hash/equality proof. Use before full
+/// census to prepay exact CMS validation and retain its temporary owner envelope.
+pub fn layer_profile_requirements(
+    owner: &AssembledLayerSelection<'_, '_, '_>,
+    doc: &Document,
+    policy: LayerProfilePolicy,
+    limits: LayerCurrentLimits,
+    ctl: &Interrupt<'_>,
+) -> Result<LayerProfileRequirements, IoError> {
+    tick(ctl)?;
+    let maximum = LayerCurrentLimits::default();
+    if limits.resident_bytes > maximum.resident_bytes || limits.index_bytes > maximum.index_bytes || limits.work_units > maximum.work_units {
+        return Err(bad("Gray profile lower-only limits"));
+    }
+    if policy == LayerProfilePolicy::OriginalExact {
+        return Ok(LayerProfileRequirements { resident_bytes: 0, work_units: 0 });
+    }
+    let bytes = materialized_gray(owner, doc)?;
+    let r = photocraft_cms::xcf_color::effective_implicit_profile_requirements_with_control(
+        bytes,
+        photocraft_cms::ColorSpace::Gray,
+        photocraft_cms::xcf_color::Encoding::NonlinearProfile,
+        profile_limits(limits)?,
+        &|| ctl.cancelled(),
+    )
+    .map_err(|e| if ctl.cancelled() { IoError::Cancelled } else { bad(&e.to_string()) })?;
+    // Conservative complete schedule, not a count of three helper invocations:
+    // Four possible recipe evaluations (caller, selection, verifier and builder)
+    // fit the fixed Gray recipe's conservative validation floor; the multiplier
+    // also holds clone/encoding checks, marker hash and exact byte comparison.
+    let required =
+        LayerProfileRequirements { resident_bytes: r.peak_resident_bytes as u64, work_units: add(mul(r.work_units, 3)?, add(bytes.len() as u64, 4096)?)? };
+    if required.resident_bytes > limits.resident_bytes || required.work_units > limits.work_units {
+        return Err(bad("Gray profile prospective envelope"));
+    }
+    tick(ctl)?;
+    Ok(required)
+}
 #[derive(Clone, Copy, Debug)]
 pub struct LayerCurrentRequirements {
     pub current_retained_bytes: u64,
@@ -58,6 +135,8 @@ pub struct LayerCurrentRequirements {
     pub complete_index_bytes: u64,
     pub selection_work_units: u64,
     pub verification_work_units: u64,
+    pub implicit_profile_peak_bytes: u64,
+    pub implicit_profile_work_units: u64,
 }
 pub struct SelectedCurrentLayer<'d> {
     census: NativeCurrentCensus<'d>,
@@ -70,6 +149,8 @@ pub struct SelectedCurrentLayer<'d> {
     mask: &'d photocraft_doc::FilterMask,
     mask_item: &'d ItemState,
     requirements: LayerCurrentRequirements,
+    profile_policy: LayerProfilePolicy,
+    profile_limits: photocraft_cms::control::Limits,
 }
 impl<'d> SelectedCurrentLayer<'d> {
     pub fn document(&self) -> &'d Document {
@@ -269,6 +350,21 @@ pub fn assemble_owned_layer_selection<'s, 'b, 'a>(
     accounting: SourceAccounting,
     ctl: &Interrupt<'_>,
 ) -> Result<AssembledLayerSelection<'s, 'b, 'a>, IoError> {
+    assemble_owned_layer_selection_with_outer_policy(bytes, ordinal, ids, LayerOuterPolicy::ObservedLiteral, limits, options, shared, accounting, ctl)
+}
+/// Explicit unresolved outer-word retention; source interpretation remains closed.
+#[allow(clippy::too_many_arguments)]
+pub fn assemble_owned_layer_selection_with_outer_policy<'s, 'b, 'a>(
+    bytes: &'s [u8],
+    ordinal: usize,
+    ids: LayerSelectionIds,
+    outer_policy: LayerOuterPolicy,
+    limits: LayerSelectionLimits,
+    options: &DecodeOptions<'_>,
+    shared: &'b photocraft_xcf::Budget<'a>,
+    accounting: SourceAccounting,
+    ctl: &Interrupt<'_>,
+) -> Result<AssembledLayerSelection<'s, 'b, 'a>, IoError> {
     poll(shared, ctl)?;
     if bytes.is_empty() || bytes.len() > 16_384 || !photocraft_xcf::is_xcf(bytes) {
         return Err(bad("plain bounded layer source"));
@@ -357,10 +453,11 @@ pub fn assemble_owned_layer_selection<'s, 'b, 'a>(
         metadata_bytes: limits.metadata_bytes - global_upper as u64,
         ..limits
     };
-    let candidate = mapper::map_layer_selection(
+    let candidate = mapper::map_layer_selection_with_outer_policy(
         &original,
         ordinal,
         ids,
+        outer_policy,
         LayerSelectionNamespace { layers: &[ids.layer], filters: &[], masks: &[] },
         mapping,
         ctl,
@@ -465,18 +562,32 @@ pub fn select_layer_current<'d>(
     reserve: &mut dyn FnMut(u64, u64) -> Result<(), IoError>,
     charge: &mut dyn FnMut(u64) -> Result<(), IoError>,
 ) -> Result<SelectedCurrentLayer<'d>, IoError> {
+    select_layer_current_with_profile_policy(census, owner, LayerProfilePolicy::OriginalExact, limits, ctl, reserve, charge)
+}
+/// Explicit selected current-profile opt-in, independent of opaque tuple policy.
+#[allow(clippy::too_many_arguments)]
+pub fn select_layer_current_with_profile_policy<'d>(
+    census: NativeCurrentCensus<'d>,
+    owner: &'d AssembledLayerSelection<'_, '_, '_>,
+    policy: LayerProfilePolicy,
+    limits: LayerCurrentLimits,
+    ctl: &Interrupt<'_>,
+    reserve: &mut dyn FnMut(u64, u64) -> Result<(), IoError>,
+    charge: &mut dyn FnMut(u64) -> Result<(), IoError>,
+) -> Result<SelectedCurrentLayer<'d>, IoError> {
     tick(ctl)?;
     let maximum = LayerCurrentLimits::default();
     if limits.resident_bytes > maximum.resident_bytes || limits.index_bytes > maximum.index_bytes || limits.work_units > maximum.work_units {
         return Err(bad("current lower-only limits"));
     }
+    let profile = layer_profile_requirements(owner, census.document(), policy, limits, ctl)?;
     let current = census.retained_bytes() as u64;
     let source = owner.correspondence_requirements()?;
     let scratch = add(256 * 256, std::mem::size_of::<SelectedCurrentLayer<'d>>() as u64)?;
     let index = add(add(census.known_index_reservation_bytes() as u64, source.index_bytes)?, scratch)?;
-    let resident = add(add(add(current, census.known_map_reservation_bytes() as u64)?, source.resident_bytes)?, index)?;
+    let resident = add(add(add(add(current, census.known_map_reservation_bytes() as u64)?, source.resident_bytes)?, index)?, profile.resident_bytes)?;
     let selection_work = add(mul(census.model_retained_bytes() as u64, 16)?, 65536)?;
-    let verification_work = add(source.work_units, mul(current, 8)?)?;
+    let verification_work = add(add(source.work_units, mul(current, 8)?)?, profile.work_units)?;
     if resident > limits.resident_bytes || index > limits.index_bytes || add(selection_work, verification_work)? > limits.work_units {
         return Err(bad("complete layer correspondence envelope"));
     }
@@ -632,6 +743,17 @@ pub fn select_layer_current<'d>(
             complete_index_bytes: index,
             selection_work_units: selection_work,
             verification_work_units: verification_work,
+            implicit_profile_peak_bytes: profile.resident_bytes,
+            implicit_profile_work_units: profile.work_units,
+        },
+        profile_policy: policy,
+        profile_limits: if policy == LayerProfilePolicy::MaterializedImplicitSGray {
+            photocraft_cms::control::Limits {
+                resident_bytes: usize::try_from(profile.resident_bytes).map_err(|_| bad("Gray profile peak range"))?,
+                work_units: profile.work_units,
+            }
+        } else {
+            profile_limits(limits)?
         },
     })
 }
@@ -662,8 +784,6 @@ impl AssembledLayerSelection<'_, '_, '_> {
         if doc.mode != ColorMode::Grayscale
             || doc.depth != depth(self.original.sample)
             || doc.sample_encoding != Some(SampleEncoding::NonlinearProfile)
-            || doc.icc_profile.is_some()
-            || doc.working_profile_interpretation != photocraft_doc::WorkingProfileInterpretation::Icc
             || doc.source_color_context.as_ref().is_none_or(|s| s.original_icc.is_some() || s.source_precision != self.original.precision)
             || state.provenance.format != "xcf"
             || state.provenance.format_version != 22
@@ -671,6 +791,28 @@ impl AssembledLayerSelection<'_, '_, '_> {
             || state.provenance.source_hash.as_deref() != Some(self.source_blake3.to_hex().as_str())
         {
             return Err(bad("original exact Gray profile/source context differs"));
+        }
+        match selected.profile_policy {
+            LayerProfilePolicy::OriginalExact => {
+                if doc.icc_profile.is_some() || doc.working_profile_interpretation != photocraft_doc::WorkingProfileInterpretation::Icc {
+                    return Err(bad("original exact current Gray interpretation differs"));
+                }
+            }
+            LayerProfilePolicy::MaterializedImplicitSGray => {
+                let bytes = materialized_gray(self, doc)?;
+                doc.working_profile_interpretation
+                    .validate_with_interrupt(Some(bytes), doc.mode, ctl)
+                    .map_err(|e| if ctl.cancelled() { IoError::Cancelled } else { bad(&e.to_string()) })?;
+                let effective = photocraft_cms::xcf_color::effective_implicit_profile_with_control(
+                    bytes,
+                    photocraft_cms::ColorSpace::Gray,
+                    photocraft_cms::xcf_color::Encoding::NonlinearProfile,
+                    selected.profile_limits,
+                    &|| ctl.cancelled(),
+                )
+                .map_err(|e| if ctl.cancelled() { IoError::Cancelled } else { bad(&e.to_string()) })?;
+                drop(effective);
+            }
         }
         let expected_item = self.state.items.iter().find(|i| i.item == ItemRef::Layer(self.ids.layer)).ok_or_else(|| bad("original layer item missing"))?;
         let expected_mask = self.state.items.iter().find(|i| i.item == ItemRef::Mask(self.ids.mask)).ok_or_else(|| bad("original mask item missing"))?;
@@ -747,6 +889,43 @@ impl AssembledLayerSelection<'_, '_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn explicit_gray_metadata_never_infers_authority_from_absent_source_icc() {
+        let mut doc = Document::new("Metadata witness", Size { w: 32, h: 32 }, ColorMode::Grayscale, SampleType::F64);
+        let bytes = b"metadata witness only, not a valid implicit profile".to_vec();
+        doc.sample_encoding = Some(SampleEncoding::NonlinearProfile);
+        doc.source_color_context = Some(photocraft_doc::SourceColorContext { original_icc: None, source_precision: 750 });
+        doc.icc_profile = Some(bytes.clone());
+        assert!(current_gray_metadata(&doc, SampleType::F64, 750).is_err());
+        doc.working_profile_interpretation = photocraft_doc::WorkingProfileInterpretation::implicit_sgray(&bytes);
+        assert_eq!(current_gray_metadata(&doc, SampleType::F64, 750).unwrap(), bytes);
+        assert!(
+            photocraft_cms::xcf_color::effective_implicit_profile_with_control(
+                &bytes,
+                photocraft_cms::ColorSpace::Gray,
+                photocraft_cms::xcf_color::Encoding::NonlinearProfile,
+                photocraft_cms::control::Limits::default(),
+                &|| false,
+            )
+            .is_err()
+        );
+        let stop = || true;
+        assert!(matches!(tick(&Interrupt::cancel_only(&stop)), Err(IoError::Cancelled)));
+        assert!(doc.working_profile_interpretation.validate_with_interrupt(Some(b"changed"), doc.mode, &Interrupt::NONE).is_err());
+        assert!(current_gray_metadata(&doc, SampleType::F64, 751).is_err());
+        assert!(current_gray_metadata(&doc, SampleType::U8, 750).is_err());
+        doc.sample_encoding = Some(SampleEncoding::Linear);
+        assert!(current_gray_metadata(&doc, SampleType::F64, 750).is_err());
+        doc.sample_encoding = Some(SampleEncoding::NonlinearProfile);
+        doc.mode = ColorMode::Rgb;
+        assert!(current_gray_metadata(&doc, SampleType::F64, 750).is_err());
+        doc.mode = ColorMode::Grayscale;
+        doc.icc_profile = None;
+        assert!(current_gray_metadata(&doc, SampleType::F64, 750).is_err());
+        doc.icc_profile = Some(bytes);
+        doc.source_color_context.as_mut().unwrap().original_icc = Some(std::sync::Arc::new(vec![1]));
+        assert!(current_gray_metadata(&doc, SampleType::F64, 750).is_err());
+    }
     #[test]
     fn opaque_merge_admits_simultaneous_bodies_before_reserve_and_checks_overflow() {
         let bytes = 3 * std::mem::size_of::<photocraft_doc::xcf_provenance::OpaqueRecord>() as u64;
