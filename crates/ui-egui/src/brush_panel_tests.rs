@@ -380,6 +380,19 @@ fn options_bar_edits_are_one_set_brush_per_gesture() {
 }
 
 #[test]
+fn studio_options_bar_keeps_brush_size_above_2500_px() {
+    // storytold/photocraft#5708: the Studio options bar clamped Size to 2500 px while the engine allows 5000.
+    let mut h = options_bar_harness(crate::state::Tool::Brush);
+    h.state_mut().session.tools.brush.size = 4000.0;
+    h.run_steps(4);
+    assert_eq!(h.state().session.tools.brush.size, 4000.0);
+    h.state_mut().ui.tool = crate::state::Tool::Eraser;
+    h.state_mut().session.tools.brush.size = 4500.0;
+    h.run_steps(4);
+    assert_eq!(h.state().session.tools.brush.size, 4500.0);
+}
+
+#[test]
 fn brush_mode_dropdown_shows_outside_the_pro_themes() {
     // #4512: only the Pro themes drew the Brush's Mode; the Pencil has it in every theme.
     use egui_kittest::kittest::{NodeT, Queryable};
