@@ -459,7 +459,17 @@ fn unsupported_shapes_become_photoshop_steps_not_errors() {
         item(
             "Dplc",
             "Duplicate",
-            Some(desc("null").with("null", target_ref("Lyr ")).with("T   ", D::Reference(vec![ReferenceItem::Name { class: class("Dcmn"), name: UnicodeString::new_nul("Other") }]))),
+            Some(
+                desc("null")
+                    .with("null", target_ref("Lyr "))
+                    .with(
+                        "T   ",
+                        D::Reference(vec![ReferenceItem::Name {
+                            class: class("Dcmn"),
+                            name: UnicodeString::new_nul("Other"),
+                        }]),
+                    ),
+            ),
         ),
     ];
     let file = AtnFile {
