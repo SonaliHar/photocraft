@@ -2340,6 +2340,10 @@
 	Targa Options	Targa-Optionen
 	24 bits/pixel	24 Bit/Pixel
 	32 bits/pixel	32 Bit/Pixel
+	JPEG Options	JPEG-Optionen
+	Image Options	Bildoptionen
+	smaller file	kleinere Datei
+	larger file	größere Datei
 	Including layers will increase file size.	Das Einbeziehen von Ebenen vergrößert die Datei.
 	Discard Layers and Save a Copy	Ebenen verwerfen und Kopie speichern
 	Don't show again	Nicht mehr anzeigen

@@ -2727,6 +2727,10 @@ cameraRaw	Blending	Fusion
 	Targa Options	Options Targa
 	24 bits/pixel	24 bits/pixel
 	32 bits/pixel	32 bits/pixel
+	JPEG Options	Options JPEG
+	Image Options	Options d’image
+	smaller file	fichier plus petit
+	larger file	fichier plus gros
 	Including layers will increase file size.	L'inclusion des calques augmentera la taille du fichier.
 	Discard Layers and Save a Copy	Supprimer les calques et enregistrer une copie
 	Don't show again	Ne plus afficher

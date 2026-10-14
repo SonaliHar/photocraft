@@ -2894,6 +2894,10 @@ cameraRaw	Color	색상
 	Targa Options	Targa 옵션
 	24 bits/pixel	24비트/픽셀
 	32 bits/pixel	32비트/픽셀
+	JPEG Options	JPEG 옵션
+	Image Options	이미지 옵션
+	smaller file	더 작은 파일
+	larger file	더 큰 파일
 	Including layers will increase file size.	레이어를 포함하면 파일 크기가 커집니다.
 	Discard Layers and Save a Copy	레이어를 삭제하고 사본 저장
 	Don't show again	다시 표시 안 함

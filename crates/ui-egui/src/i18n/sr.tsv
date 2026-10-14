@@ -2706,6 +2706,10 @@ cameraRaw	Blending	Stapanje
 	Targa Options	Targa opcije
 	24 bits/pixel	24 bita/piksel
 	32 bits/pixel	32 bita/piksel
+	JPEG Options	Opcije JPEG-a
+	Image Options	Opcije slike
+	smaller file	manja datoteka
+	larger file	veća datoteka
 	Including layers will increase file size.	Uključivanje slojeva povećaće veličinu datoteke.
 	Discard Layers and Save a Copy	Odbaci slojeve i sačuvaj kopiju
 	Don't show again	Ne prikazuj ponovo

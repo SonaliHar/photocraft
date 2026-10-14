@@ -2726,6 +2726,10 @@ cameraRaw	Whites	Brancos
 	Targa Options	Opções de Targa
 	24 bits/pixel	24 bits/pixel
 	32 bits/pixel	32 bits/pixel
+	JPEG Options	Opções de JPEG
+	Image Options	Opções de imagem
+	smaller file	arquivo menor
+	larger file	arquivo maior
 	Including layers will increase file size.	Incluir as camadas aumentará o tamanho do arquivo.
 	Discard Layers and Save a Copy	Descartar camadas e salvar uma cópia
 	Don't show again	Não mostrar novamente

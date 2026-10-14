@@ -1118,6 +1118,10 @@
 	Targa Options	Επιλογές Targa
 	24 bits/pixel	24 bit/εικονοστοιχείο
 	32 bits/pixel	32 bit/εικονοστοιχείο
+	JPEG Options	Επιλογές JPEG
+	Image Options	Επιλογές εικόνας
+	smaller file	μικρότερο αρχείο
+	larger file	μεγαλύτερο αρχείο
 	Including layers will increase file size.	Η συμπερίληψη επιπέδων θα αυξήσει το μέγεθος του αρχείου.
 	Discard Layers and Save a Copy	Απόρριψη επιπέδων και αποθήκευση αντιγράφου
 	Don't show again	Να μην εμφανιστεί ξανά

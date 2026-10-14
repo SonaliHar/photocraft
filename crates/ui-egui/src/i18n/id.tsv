@@ -2714,6 +2714,10 @@ cameraRaw	Blending	Pembauran
 	Targa Options	Opsi Targa
 	24 bits/pixel	24 Bit/Piksel
 	32 bits/pixel	32 Bit/Piksel
+	JPEG Options	Opsi JPEG
+	Image Options	Opsi Gambar
+	smaller file	file lebih kecil
+	larger file	file lebih besar
 	Including layers will increase file size.	Menyertakan layer akan memperbesar ukuran file.
 	Discard Layers and Save a Copy	Buang Layer dan Simpan Salinan
 	Don't show again	Jangan tampilkan lagi

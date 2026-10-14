@@ -2743,6 +2743,10 @@ cameraRaw	Roughness	Chropowatość
 	Targa Options	Opcje Targa
 	24 bits/pixel	24 bity/piksel
 	32 bits/pixel	32 bity/piksel
+	JPEG Options	Opcje JPEG
+	Image Options	Opcje obrazu
+	smaller file	mniejszy plik
+	larger file	większy plik
 	Including layers will increase file size.	Dołączenie warstw zwiększy rozmiar pliku.
 	Discard Layers and Save a Copy	Odrzuć warstwy i zapisz kopię
 	Don't show again	Nie pokazuj ponownie

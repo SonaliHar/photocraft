@@ -2286,6 +2286,10 @@ cameraRaw	Blending	混合
 	Targa Options	Targa 選項
 	24 bits/pixel	24 位元/像素
 	32 bits/pixel	32 位元/像素
+	JPEG Options	JPEG 選項
+	Image Options	影像選項
+	smaller file	較小檔案
+	larger file	較大檔案
 	Including layers will increase file size.	包含圖層會增加檔案大小。
 	Discard Layers and Save a Copy	放棄圖層並儲存拷貝
 	Don't show again	不再顯示

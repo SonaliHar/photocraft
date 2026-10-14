@@ -2370,6 +2370,10 @@ cameraRaw	Amount	Quantità
 	Targa Options	Opzioni Targa
 	24 bits/pixel	24 bit/pixel
 	32 bits/pixel	32 bit/pixel
+	JPEG Options	Opzioni JPEG
+	Image Options	Opzioni immagine
+	smaller file	file più piccolo
+	larger file	file più grande
 	Including layers will increase file size.	Includere i livelli aumenterà le dimensioni del file.
 	Discard Layers and Save a Copy	Elimina i livelli e salva una copia
 	Don't show again	Non mostrare più

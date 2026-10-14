@@ -2288,6 +2288,10 @@
 	Targa Options	Targa Seçenekleri
 	24 bits/pixel	24 bit/piksel
 	32 bits/pixel	32 bit/piksel
+	JPEG Options	JPEG Seçenekleri
+	Image Options	Görüntü Seçenekleri
+	smaller file	daha küçük dosya
+	larger file	daha büyük dosya
 	Including layers will increase file size.	Katmanların eklenmesi dosya boyutunu artıracaktır.
 	Discard Layers and Save a Copy	Katmanları Atın ve Bir Kopyasını Kaydedin
 	Don't show again	Bir daha gösterme

@@ -139,7 +139,8 @@ fn save_as_flat_keeps_the_layered_original() {
         app.run("edit.fill", json!({"color": "#000000"})).unwrap();
         let before = identity(&app);
         for flat in ["art.jpg", "art.png"] {
-            menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": flat})).unwrap();
+            // `quality` answers JPEG Options ahead.
+            menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": flat, "quality": 10})).unwrap();
             assert_eq!(identity(&app), before, "{flat}, layered: {layered}");
         }
         menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
@@ -150,8 +151,13 @@ fn save_as_flat_keeps_the_layered_original() {
     // An untitled layered document saved as a JPEG is still untitled and unsaved.
     let mut app = app();
     let before = identity(&app);
-    app.save_as(Some("flat.jpg".into())).unwrap();
+    app.save_as_with(Some("flat.jpg".into()), jpeg_answered()).unwrap();
     assert_eq!(identity(&app), before);
+}
+
+/// JPEG Options answered ahead, so a JPEG Save As writes at once.
+fn jpeg_answered() -> crate::SaveAnswers {
+    crate::SaveAnswers { jpeg_quality: Some(10), ..Default::default() }
 }
 
 /// A flat document that isn't in a layered file becomes the flat file it is saved as, as before.
@@ -161,7 +167,7 @@ fn save_as_flat_retargets_a_flat_document() {
     app.run("file.new", json!({"width": 4, "height": 4, "name": "Untitled-2"})).unwrap();
     app.save_as(Some("shot.png".into())).unwrap();
     assert_eq!(app.session.active().unwrap().path.as_deref(), Some("shot.png"));
-    app.save_as(Some("shot.jpg".into())).unwrap();
+    app.save_as_with(Some("shot.jpg".into()), jpeg_answered()).unwrap();
     let st = app.session.active().unwrap();
     assert_eq!((st.doc.name.as_str(), st.path.as_deref()), ("shot.jpg", Some("shot.jpg")));
     assert_eq!(st.saved_revision, st.revision);

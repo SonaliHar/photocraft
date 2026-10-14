@@ -2377,6 +2377,10 @@ shape	Appearance	Diện mạo
 	(No neutral color exists for {mode} mode.)	(Không có màu trung tính cho chế độ {mode}.)
 	24 bits/pixel	24 bit/pixel
 	32 bits/pixel	32 bit/pixel
+	JPEG Options	Tùy chọn JPEG
+	Image Options	Tùy chọn hình ảnh
+	smaller file	tệp nhỏ hơn
+	larger file	tệp lớn hơn
 	Activate Panel	Kích hoạt bảng
 	Add New Artboard	Thêm artboard mới
 	Add to favorites	Thêm vào mục yêu thích

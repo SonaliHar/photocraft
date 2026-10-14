@@ -143,15 +143,19 @@ fn layered_save_respects_explicit_jpeg_choices() {
     app.poll_file_dialog(&ctx, None);
     answer(&open, Some(FileDialogAnswer::SaveTo("/exports/chosen.JPEG".into())));
     app.poll_file_dialog(&ctx, None);
-    assert_eq!(*written.borrow(), ["/exports/chosen.jpeg"]);
-    // The JPEG can't hold the layers, so it is a copy and the document keeps its file (#2550).
+    // JPEG Options asks for the quality first (#5563). The JPEG can't hold the layers, so it is a
+    // copy and the document keeps its file (#2550).
+    assert_eq!(app.jpeg_options.as_ref().map(|p| (p.path.as_str(), p.copy)), Some(("/exports/chosen.jpeg", true)));
+    assert!(written.borrow().is_empty());
     assert_eq!(app.session.active().unwrap().path.as_deref(), Some("/pics/My image.JPEG"));
-    // Explicit command paths carry the same choice and bypass the picker.
+    // Explicit command paths carry the same choice and bypass the picker; a `quality` answers
+    // JPEG Options too.
     for command in ["file.save", "file.saveAs"] {
         let (mut app, open, written) = jpeg_app(Some("/pics/My image.JPEG"), true);
-        menus::invoke(&mut app, &ctx, command, json!({"path": "/exports/chosen.jpg"})).unwrap();
-        assert!(!app.file_dialog_open() && open.borrow().is_empty());
+        menus::invoke(&mut app, &ctx, command, json!({"path": "/exports/chosen.jpg", "quality": 8})).unwrap();
+        assert!(!app.file_dialog_open() && open.borrow().is_empty() && app.jpeg_options.is_none());
         assert_eq!(*written.borrow(), ["/exports/chosen.jpg"]);
+        assert_eq!(app.session.active().unwrap().path.as_deref(), Some("/pics/My image.JPEG"));
     }
 }
 
