@@ -185,6 +185,7 @@ Excluded by the commercial-safe rule: RMBG (non-commercial), FLUX.1-dev (non-com
 - No pickle formats. ONNX and safetensors only.
 - PhotoCraft never talks to the internet for AI. Only the manager does, and only for catalog downloads or explicitly allowed web jobs.
 - Agents run in the CraftML account. They don't get admin rights or secrets, and never push to `main` (branch protection, PRs only).
+- Agents never read stored credentials (`git credential fill`, Windows Credential Manager, browser stores, token files) and never pass them to other tools. GitHub work goes through `gh` signed in with the fine-grained token (TASKS CN-00). If a step needs a credential the agent doesn't have, it stops and says so.
 
 ## How the agents work
 
@@ -220,3 +221,17 @@ These refine "PhotoCraft fork: what changes". Where this section and the text ab
 8. **LaMa candidate found** (M1 item 8 still open): Hugging Face `Carve/LaMa-ONNX` › `lama_fp32.onnx`, revision `a3ee2fca54baebec351b8fa7786154ffa7555aa6`, about 208 MB, fixed 512×512, opset 17, tagged Apache-2.0, a port of big-lama. LFS SHA-256 as shown on the page: `1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6`. Re-check it on download before it goes into the catalog. **Licence note:** big-lama's code and published weights are Apache-2.0, but it was trained on Places365, whose image terms are for non-commercial research. Erik's decision (D2, Oct 13): accept for M1, record the training-data note in the catalog entry, revisit before any commercial release.
 9. **Repo line endings.** The clone uses Windows `core.autocrlf=true`. Agents commit from Windows Git only; Git in a Linux VM over the mounted folder reports every file as modified.
 10. **Name decided (Oct 13):** the manager is **Craft AI Manager**, short **CAIM**; repo `erikerikerik/craft-ai-manager`. This answers open question 1. PhotoCraft's messages call it "Craft AI Manager" (e.g. "Craft AI Manager isn't running"). `photocraft-ml` stays upstream's name for their planned in-process crate; we don't use it.
+11. **Job protocol v1, wire details (Oct 13, before PC-03 and CAIM-01).** Both sides build to exactly this; a change needs a SPEC edit first.
+    - **Transport:** HTTP/1.1 to `127.0.0.1:<port>` only. Every request has `Authorization: Bearer <token>`, `Host: 127.0.0.1:<port>`, `Connection: close` and a `Content-Length` (no chunked bodies either way). Discovery as above: `%LOCALAPPDATA%\CraftAI\endpoint.json` (macOS `~/Library/Application Support/CraftAI/`, Linux `$XDG_DATA_HOME/CraftAI/` or `~/.local/share/CraftAI/`), overridable with the `CRAFT_AI_ENDPOINT` environment variable (a path to the file) for tests. The client refuses any host other than 127.0.0.1.
+    - **Errors:** a JSON body `{"error": "<plain sentence>"}` with 400 bad input, 401 missing or wrong token, 404 unknown job, 409 result not ready, 413 too large, 500 internal.
+    - `GET /v1/health` → 200 `{"protocol": 1, "app": "caim/<version>", "devices": ["cpu", …]}`
+    - `GET /v1/tasks` → 200 `{"tasks": [{"id": "fill_masked_area", "needs_prompt": false, "max_pixels": <n>}]}`
+    - `POST /v1/jobs` → 202 `{"id": "<opaque>"}`. Body `multipart/form-data` with three parts, in this order:
+      - `job` (`application/json`): `{"task": "fill_masked_area", "image_size": [w, h], "region": [x, y, w, h], "bit_depth": 8 | 16, "channels": 3 | 4, "prompt": null, "settings": {}, "provider": "auto", "client": "photocraft/<version>"}`. `region` is the window in document coordinates; `image_size` equals its width and height.
+      - `image` (`image/png`): the window, RGB or RGBA, 8-bit for 8-bit documents and 16-bit otherwise, in the document's colour space (no conversion). f32 → integer: clamp 0–1, multiply by 255 or 65535, round.
+      - `mask` (`image/png`): 8-bit grayscale, same size; 255 = fully selected, 0 = keep, values between are soft coverage.
+    - `GET /v1/jobs/{id}` → 200 `{"state": "queued" | "running" | "done" | "failed" | "cancelled", "progress": 0–1, "message": "<text>"}`
+    - `GET /v1/jobs/{id}/result` → 200 `{"model": "…", "device": "cpu" | "cuda" | …, "provider": "local" | "<service>", "elapsed_ms": <n>, "image_size": [w, h]}`; 409 while not done.
+    - `GET /v1/jobs/{id}/result.png` → 200 `image/png`: same size, bit depth and channels as the `image` part. Pixels outside the mask equal the input.
+    - `DELETE /v1/jobs/{id}` → 204 (also for a job that already finished).
+    - **Client limits:** connect timeout 2 s, read timeout 30 s per request, JSON bodies ≤ 64 KiB, PNG bodies ≤ 1 GiB and ≤ the request's pixel count; anything else is an error, never a panic.

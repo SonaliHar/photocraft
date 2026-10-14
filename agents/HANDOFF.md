@@ -2,6 +2,25 @@
 
 Update this at the end of every session: newest entry on top, keep it short.
 
+## 2026-10-13: local agent (Codex/Strata) - PC-02 Generative Fill command
+
+`edit.generativeFill` is implemented and green: it fills the selection through the AI provider inside a background job and writes the
+result onto a new layer named "Generative Fill" (D1), as one undo step. Worktree `E:\CraftML\work\wt\pc-02`, branch
+`ai/pc-02-generative-fill`, base `1d9e0c35`, `CARGO_TARGET_DIR=target/agent-local`. Receipt: `agents/receipts/PC-02.md`. Status is
+`review`; PC-02 guard added to `agents/guards.txt`; parity floor 631 -> 632 (Edit 76/76) and `docs/parity-checklist.md` regenerated.
+
+Reused, not copied: `edit_menu_cmds::read_fill_window` (window pixels + hole + original + soft coverage) and
+`apply_content_aware_fill(..., layer_name)` now serve both Content-Aware Fill and Generative Fill; CAF's behaviour and its 23 tests are
+unchanged. PC-01's `FakeProvider` moved to `crates/engine/src/ai_testing.rs` (`#[cfg(test)] pub(crate) mod testing` in `ai.rs`) and grew a
+`bad_pixel` knob for the review follow-up (non-finite result pixels are rejected). Added the "Generative Fill..." row to all 20 complete
+i18n catalogs, which the i18n test requires.
+
+Gate (all pass): `--lib generative` 13/0/0; `--lib edit_menu` 23/0/0; `--lib ai::tests` 14/0/0; clippy engine+ui-egui `--all-targets -D
+warnings` clean; `cargo xtask layers` 29 crates; `cargo xtask wasm` all ok; `cargo xtask parity` 632/632; `panic_hunt -- --ignored` pass;
+BASE guards (`xtask layers`, `build -p photocraft -p photocraft-cli` 116 s, `--lib --tests` 1626 lib passed / 13 ignored, 54 binaries) pass.
+
+Next: PC-03 (transport crate) and PC-04 (inject the client), then PC-05 for the MCP automation test. Not merged; `main` untouched.
+
 ## 2026-10-13: Claude (PC-01 review, routing, PC-02 prompt)
 
 - PC-01 reviewed and approved (notes in `agents/receipts/PC-01.md`); two follow-ups go into PC-02.
