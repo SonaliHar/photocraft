@@ -1014,12 +1014,7 @@ mod tests {
         let mut s = Session::new();
         let mut surface = Surface::new(PixelFormat::RGBA8);
         surface.write_pixel(i32::MIN, 0, &[1.0, 0.0, 0.0, 1.0]);
-        s.clipboard = Some(Clip {
-            surface,
-            bounds: Rect::from_xywh(i32::MIN, 0, 1, 1),
-            layers: None,
-            resolution: None,
-        });
+        s.clipboard = Some(Clip { surface, bounds: Rect::from_xywh(i32::MIN, 0, 1, 1), layers: None, resolution: None });
         let result = new_from_clipboard(&mut s);
         assert!(result.unwrap_err().to_string().contains("clipboard origin"));
         assert!(s.execute("file.newFromClipboard", json!({})).is_err());
