@@ -143,6 +143,28 @@ fn mixer_brush_reservoir_and_cleaning() {
 }
 
 #[test]
+fn mixer_wet_blending_command_paints_and_honors_dilution() {
+    let paint_once = |dilution| {
+        let mut s = session(30, 30);
+        s.execute("tools.setColors", json!({"foreground": "#ff0000"})).unwrap();
+        s.execute(
+            "paint.mixerBrush",
+            json!({
+                "points": [[15, 15]], "size": 8, "wetBlending": true,
+                "blending": 0, "dilution": dilution, "flow": 100,
+                "brush": {"pressureSize": false, "spacing": 0.25}
+            }),
+        )
+        .unwrap();
+        rgba(&s, 15, 15)
+    };
+    let opaque = paint_once(0);
+    assert!(opaque[0] > 0.95 && opaque[3] > 0.95, "zero Dilution paints the source color: {opaque:?}");
+    let transparent = paint_once(100);
+    assert!(transparent[3] < 0.05, "full Dilution follows the transparent sample: {transparent:?}");
+}
+
+#[test]
 fn color_replacement_modes() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 60, "height": 40, "background": "#33993f"})).unwrap();
@@ -660,7 +682,7 @@ fn new_brush_controls_round_trip_through_set_brush() {
         "shapeDynamics": {"tiltScale": 1.5, "brushProjection": true},
         "transfer": {"wetness": {"jitter": 0.3, "control": "penPressure"}, "mix": {"jitter": 0.6, "minimum": 0.2}},
         "locks": {"shapeDynamics": true, "texture": true, "noise": true},
-        "mixer": {"wet": 0.8, "load": 0.25, "mix": 0.4, "flow": 0.9, "sampleAllLayers": true},
+        "mixer": {"wetBlending": true, "blending": 0.35, "dilution": 0.6, "persistence": 0.8, "wet": 0.8, "load": 0.25, "mix": 0.4, "flow": 0.9, "sampleAllLayers": true},
     });
     s.execute("tools.setBrush", json!({ "brush": patch })).unwrap();
     let b = &s.tools.brush;
@@ -669,6 +691,7 @@ fn new_brush_controls_round_trip_through_set_brush() {
     assert_eq!((b.transfer.mix.jitter, b.transfer.mix.minimum), (0.6, 0.2));
     assert!(b.locks.shape_dynamics && b.locks.texture && b.locks.noise && !b.locks.scattering);
     assert_eq!((b.mixer.wet, b.mixer.load, b.mixer.mix, b.mixer.flow, b.mixer.sample_all_layers), (0.8, 0.25, 0.4, 0.9, true));
+    assert_eq!((b.mixer.wet_blending, b.mixer.blending, b.mixer.dilution, b.mixer.persistence), (true, 0.35, 0.6, 0.8));
     // brush.get reports them, and a fresh session gets the same brush from the reported JSON.
     let got = s.execute("brush.get", json!({})).unwrap();
     for (path, want) in [
@@ -679,8 +702,13 @@ fn new_brush_controls_round_trip_through_set_brush() {
         ("/locks/texture", json!(true)),
         ("/mixer/sampleAllLayers", json!(true)),
         ("/mixer/load", json!(0.25)),
+        ("/mixer/wetBlending", json!(true)),
     ] {
         assert_eq!(got.pointer(path), Some(&want), "{path}");
+    }
+    for (path, want) in [("/mixer/blending", 0.35), ("/mixer/dilution", 0.6), ("/mixer/persistence", 0.8)] {
+        let actual = got.pointer(path).and_then(Value::as_f64).unwrap_or_default();
+        assert!((actual - want).abs() < 1e-6, "{path}: {actual} != {want}");
     }
     let mut t = session(40, 40);
     t.execute("tools.setBrush", json!({ "brush": got })).unwrap();

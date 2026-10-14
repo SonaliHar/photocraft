@@ -1,4 +1,5 @@
-//! Mixer Brush: a reservoir of loaded paint plus a pickup well that mixes in canvas colour.
+//! Mixer Brush: the default reservoir/pickup model, plus an opt-in premultiplied wet-blending
+//! color-state model (`MixerSettings::wet_blending`).
 //!
 //! Model (behavioural, our own): each dab samples the canvas colour under its footprint. The pickup
 //! colour `P` moves towards it by `wet`. The deposited colour mixes the reservoir `R` (weight
@@ -6,7 +7,7 @@
 //! weight. The reservoir amount drains per dab unless `load` is 100 %, so low Load strokes dry out.
 //! A dry brush (`wet = 0`) paints only reservoir colour; an empty, wet brush smears canvas colour.
 
-use photocraft_raster::{Surface, from_rgba, to_rgba};
+use photocraft_raster::{Surface, from_rgba, from_rgba_into, to_rgba};
 use serde::{Deserialize, Serialize};
 
 use crate::Stroke;
@@ -20,6 +21,15 @@ pub const PICKUP_RATE: f32 = 0.25;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct MixerSettings {
+    /// Use the independent Blending / Dilution / Persistence color-state model instead of the
+    /// reservoir model below. This is opt-in so existing Mixer Brush presets keep their meaning.
+    pub wet_blending: bool,
+    /// Current-color contribution (0..1; mapped to `(1 - value)^1.6`).
+    pub blending: f32,
+    /// Sampled-opacity correction (0..1; mapped to `(1 - value)^1.6`).
+    pub dilution: f32,
+    /// Retention of the previous mixed color (0..1; mapped to `(1 - value)^2.4`).
+    pub persistence: f32,
     pub wet: f32,
     pub load: f32,
     pub mix: f32,
@@ -30,7 +40,7 @@ pub struct MixerSettings {
 
 impl Default for MixerSettings {
     fn default() -> Self {
-        Self { wet: 0.5, load: 0.5, mix: 0.5, flow: 1.0, sample_all_layers: false }
+        Self { wet_blending: false, blending: 0.0, dilution: 0.0, persistence: 0.0, wet: 0.5, load: 0.5, mix: 0.5, flow: 1.0, sample_all_layers: false }
     }
 }
 
@@ -69,6 +79,9 @@ pub fn apply_mixer_stroke(
     selection: Option<&Surface>,
     lock_transparency: bool,
 ) -> Rect {
+    if m.wet_blending {
+        return apply_wet_blending_stroke(target, sample, stroke, m, selection, lock_transparency);
+    }
     let fmt = target.format();
     let n = fmt.channels();
     let a = alpha_index(&fmt);
@@ -148,6 +161,138 @@ pub fn apply_mixer_stroke(
     state.amount = amount;
     state.pickup = pickup.map(|p| to_rgba(&fmt, &p));
     dmg
+}
+
+/// Apply the documented premultiplied color-state recurrence as an opt-in Mixer Brush model.
+/// The state is stroke-local and each generated dab samples the already-updated working surface.
+/// Final pixel deposition remains PhotoCraft's normal source-over operation.
+// Keep sample → candidate → persistence → deposition together: that order is the behavioral spec.
+#[allow(clippy::too_many_lines)]
+fn apply_wet_blending_stroke(
+    target: &mut Surface,
+    sample: Option<&Surface>,
+    stroke: &Stroke,
+    settings: &MixerSettings,
+    selection: Option<&Surface>,
+    lock_transparency: bool,
+) -> Rect {
+    let fmt = target.format();
+    let n = fmt.channels();
+    let nc = fmt.mode.color_channels();
+    let alpha = alpha_index(&fmt);
+    let blend0 = (1.0 - settings.blending.clamp(0.0, 1.0)).powf(1.6);
+    let dilution0 = (1.0 - settings.dilution.clamp(0.0, 1.0)).powf(1.6);
+    let persistence = (1.0 - settings.persistence.clamp(0.0, 1.0)).powf(2.4);
+    let flow = settings.flow.clamp(0.0, 1.0);
+    let mut carried: Option<Vec<f32>> = None; // premultiplied native color followed by alpha
+    let mut sampled = vec![0.0f32; nc];
+    let mut straight_sample = vec![0.0f32; nc];
+    let mut next = vec![0.0f32; nc + 1];
+    let mut paint = vec![0.0f32; n];
+    let mut converted_sample = vec![0.0f32; n];
+    let mut st = stroke.clone();
+    st.brush.opacity = 1.0;
+    apply_dab_stroke(target, &st, selection, lock_transparency, 0, |work, fp| {
+        let mut source_native = from_rgba(&fmt, fp.dab.color);
+        if let Some(a) = alpha
+            && let Some(ch) = source_native.get_mut(a)
+        {
+            *ch = fp.dab.color[3].clamp(0.0, 1.0);
+        }
+        let r = fp.rect.intersect(&work.rect);
+        if r.is_empty() {
+            return;
+        }
+        let sample_data = sample.map(|s| s.read_region(r));
+        let sample_channels = sample.map_or(0, Surface::channels);
+        let (mut weight_sum, mut alpha_sum) = (0.0f32, 0.0f32);
+        sampled.fill(0.0);
+        for y in r.y0..r.y1 {
+            for x in r.x0..r.x1 {
+                let w = fp.at(x, y);
+                if w <= 0.0 {
+                    continue;
+                }
+                let px: &[f32] = if let (Some(s), Some(data)) = (sample, sample_data.as_ref()) {
+                    let i = ((y - r.y0) as usize * r.width() as usize + (x - r.x0) as usize) * sample_channels;
+                    let Some(channels) = data.get(i..i + sample_channels) else { continue };
+                    if s.format() == fmt {
+                        channels
+                    } else {
+                        let rgba = to_rgba(&s.format(), channels);
+                        from_rgba_into(&fmt, rgba, &mut converted_sample);
+                        &converted_sample
+                    }
+                } else {
+                    work.px(x, y)
+                };
+                let a = alpha.and_then(|i| px.get(i).copied()).unwrap_or(1.0).clamp(0.0, 1.0);
+                for (sum, value) in sampled.iter_mut().zip(px).take(nc) {
+                    *sum += value * a * w;
+                }
+                weight_sum += w;
+                alpha_sum += a * w;
+            }
+        }
+        if weight_sum <= f32::EPSILON {
+            return;
+        }
+        let sample_alpha = (alpha_sum / weight_sum).clamp(0.0, 1.0);
+        straight_sample.fill(0.0);
+        if sample_alpha >= 1.0 / 128.0 && alpha_sum > f32::EPSILON {
+            for (straight, sum) in straight_sample.iter_mut().zip(&sampled) {
+                *straight = sum / alpha_sum;
+            }
+        } else {
+            straight_sample.copy_from_slice(&source_native[..nc]);
+        }
+
+        // Dab transfer controls apply to the current-color contribution per update. The recovered
+        // pressure response and tool-specific overrides are intentionally not inferred here.
+        let blend = blend0 * fp.dab.mix.clamp(0.0, 1.0);
+        let dilution = dilution0;
+        let mixed_alpha = sample_alpha + (1.0 - sample_alpha) * dilution;
+        let source_alpha = alpha.and_then(|i| source_native.get(i).copied()).unwrap_or(1.0).clamp(0.0, 1.0) * fp.dab.opacity.clamp(0.0, 1.0);
+        next.fill(0.0);
+        for (c, dst) in next.iter_mut().take(nc).enumerate() {
+            let sampled_premul = sampled[c] / weight_sum;
+            let diluted = sampled_premul + (straight_sample[c] - sampled_premul) * dilution;
+            let source_premul = mixed_alpha * source_native.get(c).copied().unwrap_or(0.0);
+            *dst = diluted + (source_premul - diluted) * blend;
+        }
+        next[nc] = mixed_alpha + (mixed_alpha * source_alpha - mixed_alpha) * blend;
+        if let Some(previous) = carried.as_ref() {
+            for (dst, prev) in next.iter_mut().zip(previous) {
+                *dst = *prev + (*dst - *prev) * persistence;
+            }
+            if let Some(state) = carried.as_mut() {
+                state.copy_from_slice(&next);
+            }
+        } else {
+            carried = Some(next.clone());
+        }
+        let Some(carried_color) = carried.as_ref() else { return };
+        let carried_alpha = carried_color[nc].clamp(0.0, 1.0);
+        paint.fill(0.0);
+        if carried_alpha > f32::EPSILON {
+            for (dst, src) in paint.iter_mut().zip(carried_color).take(nc) {
+                *dst = src / carried_alpha;
+            }
+        } else {
+            paint[..nc].copy_from_slice(&straight_sample);
+        }
+        if let Some(a) = alpha {
+            paint[a] = carried_alpha;
+        }
+        for y in r.y0..r.y1 {
+            for x in r.x0..r.x1 {
+                let k = fp.at(x, y) * flow;
+                if k > 0.0 {
+                    over_native(&fmt, work.px_mut(x, y), &paint, k, lock_transparency);
+                }
+            }
+        }
+    })
 }
 
 #[cfg(test)]
@@ -236,5 +381,58 @@ mod tests {
         };
         assert!(run(0.0).is_none());
         assert!(run(1.0).is_some_and(|p| p[2] > 0.2));
+    }
+
+    #[test]
+    fn wet_blending_slider_endpoints_separate_source_color_and_opacity() {
+        let make_stroke = || {
+            let mut s = stroke(10.0);
+            s.brush.color = [1.0, 0.0, 0.0, 1.0];
+            s.points.truncate(1);
+            s
+        };
+        let settings = |dilution| MixerSettings { wet_blending: true, blending: 0.0, dilution, flow: 1.0, ..Default::default() };
+
+        let mut undiluted = Surface::new(PixelFormat::RGBA8);
+        let mut state = MixerState::default();
+        apply_mixer_stroke(&mut undiluted, None, &make_stroke(), &settings(0.0), &mut state, None, false);
+        assert!(undiluted.rgba(4, 10)[3] > 0.95, "zero Dilution should retain opaque paint: {:?}", undiluted.rgba(4, 10));
+
+        let mut diluted = Surface::new(PixelFormat::RGBA8);
+        apply_mixer_stroke(&mut diluted, None, &make_stroke(), &settings(1.0), &mut state, None, false);
+        assert!(diluted.rgba(4, 10)[3] < 0.05, "full Dilution should follow transparent sample alpha: {:?}", diluted.rgba(4, 10));
+    }
+
+    #[test]
+    fn wet_blending_blending_endpoint_selects_source_or_sample_color() {
+        for (blending, expect_red) in [(0.0, true), (1.0, false)] {
+            let mut s = Surface::new(PixelFormat::RGBA8);
+            s.fill_rect(Rect::new(0, 0, 200, 20), &[0.0, 0.0, 1.0, 1.0]);
+            let mut k = stroke(10.0);
+            k.brush.color = [1.0, 0.0, 0.0, 1.0];
+            let mut state = MixerState::default();
+            let m = MixerSettings { wet_blending: true, blending, dilution: 0.0, flow: 1.0, ..Default::default() };
+            apply_mixer_stroke(&mut s, None, &k, &m, &mut state, None, false);
+            let pixel = s.rgba(90, 10);
+            assert_eq!(pixel[0] > pixel[2], expect_red, "Blending {blending}: {pixel:?}");
+        }
+    }
+
+    #[test]
+    fn wet_blending_persistence_retains_the_first_mixture_across_dabs() {
+        let mut sample = Surface::new(PixelFormat::RGBA8);
+        sample.fill_rect(Rect::new(0, 0, 100, 20), &[0.0, 0.0, 1.0, 1.0]);
+        sample.fill_rect(Rect::new(100, 0, 200, 20), &[1.0, 1.0, 1.0, 1.0]);
+        let run = |persistence| {
+            let mut target = Surface::new(PixelFormat::RGBA8);
+            let mut state = MixerState::default();
+            let settings = MixerSettings { wet_blending: true, blending: 1.0, dilution: 0.0, persistence, flow: 1.0, ..Default::default() };
+            apply_mixer_stroke(&mut target, Some(&sample), &stroke(10.0), &settings, &mut state, None, false);
+            target.rgba(160, 10)
+        };
+        let reset_each_dab = run(0.0);
+        let retain_first = run(1.0);
+        assert!(reset_each_dab[..3].iter().all(|v| *v > 0.9), "no persistence follows the white sample: {reset_each_dab:?}");
+        assert!(retain_first[2] > 0.9 && retain_first[0] < 0.1, "full persistence retains the first blue mixture: {retain_first:?}");
     }
 }

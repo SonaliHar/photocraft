@@ -634,6 +634,10 @@ fn mixer_brush(s: &mut Session, p: &Value) -> Result<Value> {
     // The brush's Mixer Brush options, overridden by the scalar params.
     let bm = &brush.mixer;
     let m = MixerSettings {
+        wet_blending: flag(p, "wetBlending", bm.wet_blending),
+        blending: pct(p, "blending", bm.blending * 100.0),
+        dilution: pct(p, "dilution", bm.dilution * 100.0),
+        persistence: pct(p, "persistence", bm.persistence * 100.0),
         wet: pct(p, "wet", bm.wet * 100.0),
         load: pct(p, "load", bm.load * 100.0),
         mix: pct(p, "mix", bm.mix * 100.0),
@@ -643,7 +647,7 @@ fn mixer_brush(s: &mut Session, p: &Value) -> Result<Value> {
     let sample_all = m.sample_all_layers;
     let (clean, load_after) = (flag(p, "cleanAfterStroke", true), flag(p, "loadAfterStroke", true));
     let mut state = s.tools.mixer.clone();
-    if load_after || state.reservoir.is_none() {
+    if !m.wet_blending && (load_after || state.reservoir.is_none()) {
         state.load(color(p.get("color"), s.tools.foreground));
     }
     let id = if crate::channel_cmds::is_channel_target(p) { None } else { Some(layer_id(s, p)?) };
@@ -667,10 +671,12 @@ fn mixer_brush(s: &mut Session, p: &Value) -> Result<Value> {
         let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
         Ok(apply_mixer_stroke(surf, sample.as_ref(), &stroke, &m, &mut state, sel.as_ref(), lock))
     })?;
-    if clean {
+    if !m.wet_blending && clean {
         state.clean();
     }
-    s.tools.mixer = state;
+    if !m.wet_blending {
+        s.tools.mixer = state;
+    }
     Ok(damage_json(s, dmg))
 }
 
@@ -1108,7 +1114,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "paint.mixerBrush",
             "Mixer Brush",
-            r##"{"points":[…],"brush":{…}?,"preset":name?,"size":0.5..5000 px?,"wet":0..100=brush.mixer.wet,"load":0..100=brush.mixer.load,"mix":0..100=brush.mixer.mix,"flow":0..100=brush.mixer.flow,"color":"#rrggbb"?=foreground,"sampleAllLayers":bool=brush.mixer.sampleAllLayers,"cleanAfterStroke":bool=true,"loadAfterStroke":bool=true,"seed":u64?}"##,
+            r##"{"points":[…],"brush":{…}?,"preset":name?,"size":0.5..5000 px?,"wetBlending":bool=brush.mixer.wetBlending,"blending":0..100=brush.mixer.blending,"dilution":0..100=brush.mixer.dilution,"persistence":0..100=brush.mixer.persistence,"wet":0..100=brush.mixer.wet,"load":0..100=brush.mixer.load,"mix":0..100=brush.mixer.mix,"flow":0..100=brush.mixer.flow,"color":"#rrggbb"?=foreground,"sampleAllLayers":bool=brush.mixer.sampleAllLayers,"cleanAfterStroke":bool=true,"loadAfterStroke":bool=true,"seed":u64?}"##,
             has_paintable,
             mixer_brush,
             true
