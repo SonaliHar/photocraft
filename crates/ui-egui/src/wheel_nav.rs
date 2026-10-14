@@ -14,7 +14,8 @@
 //! as Ctrl + wheel in fractions of a notch (also on some Linux Wayland systems):
 //! [`fold_legacy_pinch`] turns those back into a pinch
 //! before egui sees them, so Ctrl + a notched mouse wheel scrolls sideways and the pinch still
-//! zooms.
+//! zooms. Other Wayland compositors deliver a pinch as a two-axis point-unit scroll with no Ctrl
+//! (#5122); those become a pinch too. A one-axis two-finger scroll still pans.
 //!
 //! The target behaviour is exact ×1.1 steps, one per notch, with no easing in between
 //! (measured frame by frame on a screen recording). egui smooths a wheel notch over several
@@ -95,6 +96,15 @@ pub fn configure(ctx: &Context) {
 /// `speed` per point). Ctrl + wheel in whole notches (a mouse wheel) is left to scroll sideways,
 /// unless it comes within [`PINCH_GAP`] of a pinch step. `last` is the time of the previous pinch
 /// step; returns the time of the latest one.
+/// A two-axis point-unit scroll is a pinch some Wayland compositors send without Ctrl (#5122).
+/// A one-axis two-finger flick is a pan: the other axis is noise, not a second finger spread.
+fn two_axis_point_pinch(d: Vec2) -> bool {
+    let ax = d.x.abs();
+    let ay = d.y.abs();
+    let (lo, hi) = if ax < ay { (ax, ay) } else { (ay, ax) };
+    lo.is_finite() && hi.is_finite() && lo > 0.01 && hi > 0.0 && lo / hi >= 0.25
+}
+
 pub fn legacy_pinch_to_zoom(events: &mut [Event], now: f64, last: Option<f64>, notch: f32, speed: f32) -> Option<f64> {
     let ctrl_wheel = |e: &Event| match e {
         Event::MouseWheel { unit: MouseWheelUnit::Line, delta, modifiers, .. } if modifiers.ctrl => Some((*delta, false)),
@@ -104,8 +114,12 @@ pub fn legacy_pinch_to_zoom(events: &mut [Event], now: f64, last: Option<f64>, n
         _ => None,
     };
     let fraction = |d: Vec2| d.x.fract() != 0.0 || d.y.fract() != 0.0;
-    let pinching =
-        last.is_some_and(|t| (0.0..PINCH_GAP).contains(&(now - t))) || events.iter().filter_map(ctrl_wheel).any(|(d, high_res)| high_res || fraction(d));
+    let pinching = last.is_some_and(|t| (0.0..PINCH_GAP).contains(&(now - t)))
+        || events.iter().filter_map(ctrl_wheel).any(|(d, high_res)| high_res || fraction(d))
+        || events.iter().any(|e| match e {
+            Event::MouseWheel { unit: MouseWheelUnit::Point, delta, modifiers, .. } if !modifiers.ctrl && !modifiers.alt => two_axis_point_pinch(*delta),
+            _ => false,
+        });
     if !pinching {
         return last;
     }
@@ -113,6 +127,14 @@ pub fn legacy_pinch_to_zoom(events: &mut [Event], now: f64, last: Option<f64>, n
     for e in events.iter_mut() {
         if let Some((d, _)) = ctrl_wheel(e) {
             let f = (speed * notch * (d.x + d.y)).exp();
+            *e = Event::Zoom(if f.is_finite() && f > 0.0 { f } else { 1.0 });
+            latest = Some(now);
+        } else if let Event::MouseWheel { unit: MouseWheelUnit::Point, delta, modifiers, .. } = e
+            && !modifiers.ctrl
+            && !modifiers.alt
+            && two_axis_point_pinch(*delta)
+        {
+            let f = (speed * (delta.x + delta.y)).exp();
             *e = Event::Zoom(if f.is_finite() && f > 0.0 { f } else { 1.0 });
             latest = Some(now);
         }
@@ -353,6 +375,31 @@ mod tests {
         assert!(pan == Vec2::ZERO && (zoom - (speed * 40.0 * 0.75).exp()).abs() < 1e-4, "the pinch zooms: {pan:?} {zoom}");
         let (pan, zoom) = gesture(vec![vec![wheel(Vec2::new(0.0, 1.0), CTRL)]], false, true);
         assert!(near(pan, Vec2::new(40.0, 0.0)) && zoom == 1.0, "Ctrl + mouse wheel scrolls sideways: {pan:?} {zoom}");
+    }
+
+    #[test]
+    fn linux_wayland_two_axis_scroll_is_a_pinch_one_axis_still_pans() {
+        // Some Wayland compositors send a pinch as a two-axis point-unit scroll with no Ctrl
+        // (#5122). A one-axis two-finger flick is still a pan.
+        let mut pinch = [Event::MouseWheel { unit: MouseWheelUnit::Point, delta: Vec2::new(6.0, 8.0), phase: TouchPhase::Move, modifiers: Modifiers::NONE }];
+        assert_eq!(legacy_pinch_to_zoom(&mut pinch, 1.0, None, 40.0, 0.005), Some(1.0));
+        assert!(matches!(pinch[0], Event::Zoom(f) if (f - (14.0f32 * 0.005).exp()).abs() < 1e-5), "{pinch:?}");
+        let mut pan = [Event::MouseWheel { unit: MouseWheelUnit::Point, delta: Vec2::new(0.0, 12.0), phase: TouchPhase::Move, modifiers: Modifiers::NONE }];
+        assert_eq!(legacy_pinch_to_zoom(&mut pan, 1.0, None, 40.0, 0.005), None);
+        assert!(matches!(pan[0], Event::MouseWheel { .. }), "two-finger scroll stays a pan");
+        let (pan, zoom) = gesture(
+            vec![vec![Event::MouseWheel { unit: MouseWheelUnit::Point, delta: Vec2::new(4.0, 4.0), phase: TouchPhase::Move, modifiers: Modifiers::NONE }]],
+            false,
+            true,
+        );
+        let speed = egui::InputOptions::default().scroll_zoom_speed;
+        assert!(pan == Vec2::ZERO && (zoom - (speed * 8.0).exp()).abs() < 1e-4, "two-axis pinch zooms: {pan:?} {zoom}");
+        let (pan, zoom) = gesture(
+            vec![vec![Event::MouseWheel { unit: MouseWheelUnit::Point, delta: Vec2::new(0.0, 16.0), phase: TouchPhase::Move, modifiers: Modifiers::NONE }]],
+            false,
+            true,
+        );
+        assert!(near(pan, Vec2::new(0.0, 16.0)) && zoom == 1.0, "two-finger scroll pans: {pan:?} {zoom}");
     }
 
     #[test]
