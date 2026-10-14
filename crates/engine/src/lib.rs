@@ -10,8 +10,10 @@
 pub mod accounted_commands;
 pub(crate) mod accounted_color_range;
 pub(crate) mod accounted_color_range_banded;
+mod imported_backed_sampling;
 pub(crate) mod accounted_select_all;
 mod accounted_session;
+mod accounted_xcf_open;
 pub mod accounted_selection_session;
 pub mod accounted_view;
 pub mod actions_cmds;

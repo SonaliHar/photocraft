@@ -135,11 +135,10 @@ fn selected<'a>(session: &'a Session, p: &Value, control: &Interrupt<'_>) -> Res
     if b(p, "detectFaces", false) {
         return Err(failure("backed preview face detection unsupported"));
     }
-    if doc.xcf_state.is_some()
-        || doc.source_color_context.is_some()
-        || doc.mode != photocraft_doc::ColorMode::Rgb
+    let policy = crate::imported_backed_sampling::metadata(doc)?;
+    if doc.mode != photocraft_doc::ColorMode::Rgb
         || doc.sample_encoding != Some(SampleEncoding::NonlinearProfile)
-        || doc.working_profile_interpretation != WorkingProfileInterpretation::Icc
+        || (policy == crate::imported_backed_sampling::Policy::SourceFree && doc.working_profile_interpretation != WorkingProfileInterpretation::Icc)
         || doc.icc_profile.as_ref().is_none_or(|b| b.is_empty() || b.len() > 16 << 20)
     {
         return Err(failure("backed preview explicit RGB/nonlinear/current ICC context unsupported"));
@@ -157,7 +156,6 @@ fn selected<'a>(session: &'a Session, p: &Value, control: &Interrupt<'_>) -> Res
         || layer.vector_mask.is_some()
         || !layer.effects.items.is_empty()
         || layer.effects.psd_raw.is_some()
-        || layer.import_compositing.is_some()
         || layer.indexed_source.is_some()
         || layer.video.is_some()
         || layer.fill_cache.is_some()
@@ -167,6 +165,7 @@ fn selected<'a>(session: &'a Session, p: &Value, control: &Interrupt<'_>) -> Res
     if !backed.quota().shares_ledger(state.doc.quota().ok_or_else(|| failure("backed preview source quota missing"))?) {
         return Err(failure("backed preview source/backing quota identity"));
     }
+    crate::imported_backed_sampling::layer(doc, layer)?;
     crate::selection_sample_policy::existing_selection(session, CMD, control)?;
     poll(control)?;
     Ok(layer)
@@ -203,6 +202,7 @@ struct CapturedQueryOwners {
     _header: QuotaLease,
 }
 pub struct CapturedBackedColorRange {
+    policy: crate::imported_backed_sampling::Policy,
     source: DocumentSnapshot,
     revision: u64,
     active: Option<LayerId>,
@@ -315,6 +315,7 @@ fn capture(session: &Session, p: &Value, control: &Interrupt<'_>, parent: Option
     let view = view_copy(view, &work, control, parent)?;
     let params = param_copy(p, 0, &work, control, parent)?;
     Ok(CapturedBackedColorRange {
+        policy: crate::imported_backed_sampling::metadata(&state.doc)?,
         source: state.doc.clone(),
         revision: state.revision,
         active: state.active_layer,
@@ -331,9 +332,14 @@ pub(in crate::selection_cmds) fn prepare(session: &Session, p: &Value, control: 
     Ok(result)
 }
 fn prepare_captured(captured: CapturedBackedColorRange, control: &Interrupt<'_>, parent: Option<&ReadControl<'_>>) -> Result<ColorRangeSamples> {
-    let CapturedBackedColorRange { source, revision, active, foreground, owners, work } = captured;
+    let CapturedBackedColorRange { policy, source, revision, active, foreground, owners, work } = captured;
     let p = &owners.params;
     let sample_source = source.clone();
+    {
+        let charge =
+            |n| work.consume(n, control, parent).map_err(|e| if matches!(e, EngineError::Cancelled) { BackingError::Cancelled } else { BackingError::Work });
+        crate::imported_backed_sampling::verify(&sample_source, policy, &ReadControl { interrupt: control, work: &charge })?;
+    }
     work.consume(100_000, control, parent)?;
     let layer = active_layer(&sample_source, active.ok_or_else(|| failure("captured active owner missing"))?, control)?;
     let LayerContent::BackedRaster(backed) = &layer.content else {

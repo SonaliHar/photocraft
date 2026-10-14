@@ -38,6 +38,10 @@ mod provenance;
 mod staged_source;
 pub use staged_source::import_staged_plain_source_with_budget;
 
+#[path = "xcf_import/owned_plain_source.rs"]
+mod owned_plain_source;
+pub use owned_plain_source::{OwnedPlainXcfImport, import_owned_staged_plain_bytes};
+
 #[path = "xcf_import/source.rs"]
 mod source;
 pub use source::import_plain_source_with_budget;

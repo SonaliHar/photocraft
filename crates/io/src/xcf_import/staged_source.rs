@@ -361,6 +361,61 @@ impl MappingPlane for StagedPlane<'_, '_> {
 /// Explicit opt-in plain source endpoint. This preserves original native bytes
 /// while constructing current COW tiles directly; other families return errors.
 /// CallerReserved accounting assertions are trusted contracts, not IO authority.
+// Payload fields precede all receipts on both success and error. Only the
+// opt-in owned endpoint may consume this private transaction before those actual
+// reservations die; the existing resident API intentionally retains its scope.
+pub(super) struct CompletedStagedImport<'b, 'a> {
+    pub(super) result: ImportResult,
+    tokens: Vec<Token<'b, 'a>>,
+    registry_lease: Option<Reservation<'b, 'a>>,
+    reservations: photocraft_xcf::DecodeReservations<'b, 'a>,
+}
+pub(super) struct OwnedStagedImport {
+    pub(super) result: ImportResult,
+    pub(super) encoded: Arc<Vec<u8>>,
+    pub(super) source_batch: Option<photocraft_xcf::OwnedReservationBatch>,
+    pub(super) surface_batch: photocraft_xcf::OwnedReservationBatch,
+}
+impl<'b, 'a> CompletedStagedImport<'b, 'a> {
+    pub(super) fn detach_owned(
+        self,
+        encoded: Arc<Vec<u8>>,
+        extra: &mut [&mut Reservation<'b, 'a>],
+        budget: &'b photocraft_xcf::Budget<'a>,
+    ) -> Result<OwnedStagedImport, IoError> {
+        // If a later transfer fails, the complete result and encoded owner die
+        // BEFORE either the old borrowed or the earlier owned receipts refund.
+        struct Transfer<'b, 'a> {
+            completed: CompletedStagedImport<'b, 'a>,
+            encoded: Arc<Vec<u8>>,
+            source_batch: Option<photocraft_xcf::OwnedReservationBatch>,
+        }
+        let mut transfer = Transfer { completed: self, encoded, source_batch: None };
+        if transfer.completed.tokens.len() > 4096 {return Err(IoError::Unsupported("owned staged plane count".into()));}
+        let count = transfer.completed.tokens.len().checked_mul(2)
+            .and_then(|n|n.checked_add(usize::from(transfer.completed.registry_lease.is_some())))
+            .and_then(|n|n.checked_add(extra.len())).ok_or_else(||IoError::Unsupported("owned staged receipt count".into()))?;
+        let requested=count.checked_mul(std::mem::size_of::<&mut Reservation<'b,'a>>()).and_then(|n|n.checked_mul(2)).and_then(|n|n.checked_add(128)).ok_or_else(||IoError::Unsupported("owned staged handle index".into()))?;
+        let mut handle_lease=budget.reserve(BudgetKind::Index,requested as u64,"owned staged receipt references").map_err(accounting_error)?;
+        let mut references=Vec::new();references.try_reserve_exact(count).map_err(|_|accounting_error(stage_error(ErrorKind::Allocation,"owned staged receipt allocation")))?;
+        let actual=references.capacity().checked_mul(std::mem::size_of::<&mut Reservation<'b,'a>>()).and_then(|n|n.checked_add(128)).ok_or_else(||IoError::Unsupported("owned staged receipt capacity".into()))?;
+        if actual>requested {return Err(IoError::Unsupported("owned staged receipt allocator capacity".into()));}
+        handle_lease.resize(actual as u64,"owned staged receipt actual capacity").map_err(accounting_error)?;
+        transfer.source_batch=Some(transfer.completed.reservations.detach_owned().map_err(accounting_error)?);
+        for token in &mut transfer.completed.tokens {
+            budget.consume_work(1,"owned staged receipt traversal").map_err(accounting_error)?;
+            let token=Rc::get_mut(token).ok_or_else(||IoError::Unsupported("owned staged Surface token escaped transaction".into()))?;
+            references.push(&mut token._surface);references.push(&mut token._metadata);
+        }
+        if let Some(lease)=&mut transfer.completed.registry_lease {references.push(lease);}
+        for lease in extra {references.push(&mut **lease);}
+        let surface_batch=Reservation::detach_owned_batch(&mut references).map_err(accounting_error)?;
+        drop(references);drop(handle_lease);
+        let Transfer{completed,encoded,source_batch}=transfer;
+        let CompletedStagedImport{result,..}=completed;
+        Ok(OwnedStagedImport{result,encoded,source_batch,surface_batch})
+    }
+}
 pub fn import_staged_plain_source_with_budget(
     name: &str,
     source: &mut dyn photocraft_xcf::Source,
@@ -369,6 +424,17 @@ pub fn import_staged_plain_source_with_budget(
     budget: &photocraft_xcf::Budget<'_>,
     accounting: photocraft_xcf::PlainSourceAccounting,
 ) -> Result<ImportResult, IoError> {
+    Ok(complete_staged_plain_source(name, source, control, options, budget, accounting)?.result)
+}
+
+pub(super) fn complete_staged_plain_source<'b, 'a>(
+    name: &str,
+    source: &mut dyn photocraft_xcf::Source,
+    control: &Interrupt<'_>,
+    options: &DecodeOptions<'_>,
+    budget: &'b photocraft_xcf::Budget<'a>,
+    accounting: photocraft_xcf::PlainSourceAccounting,
+) -> Result<CompletedStagedImport<'b, 'a>, IoError> {
     control.check().map_err(|_| IoError::Cancelled)?;
     // Sink registry is declared before decoded/mapped storage so errors destroy
     // actual Surfaces before their final token/registry refunds.
@@ -399,8 +465,12 @@ pub fn import_staged_plain_source_with_budget(
         .min(usize::try_from(budget.limits().get(BudgetKind::Resident)).map_err(|_| IoError::Unsupported("staged resident address space".into()))?);
     let (mut result, _) = map_accounted(name, file, control, maximum, Some(&account), Some((budget, &leases)))?;
     provenance::stamp(&mut result, source, decoded.encoded_bytes, control, budget, previous.get(), &account)?;
-    // Ownership leaves transaction ledger only after complete validation/hash.
-    Ok(result)
+    // Mapping and provenance have finished. The completed transaction owns the
+    // actual surface registry and source/mapping receipts until explicit transfer.
+    let reservations = leases.into_inner();
+    let Sink { active, tokens, registry_lease, .. } = sink;
+    if active.is_some() {return Err(IoError::Unsupported("staged import left an active plane".into()));}
+    Ok(CompletedStagedImport { result, tokens, registry_lease, reservations })
 }
 
 #[cfg(test)]

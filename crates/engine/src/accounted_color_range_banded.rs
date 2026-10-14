@@ -1,5 +1,6 @@
 //! Charged row-band Color Range worker, separate from the frozen small inline lane.
-//! Exact original coordinates and query math; no merged/imported/wide interpretation.
+//! Exact original coordinates and query math, with separate closed current-profile
+//! admission for imported pixels. No merged or wide-sample interpretation.
 use crate::{
     DocumentSnapshot, EngineError, Result, Session,
     accounted_selection_session::AccountedSelectionTarget,
@@ -66,13 +67,9 @@ pub(crate) fn validate_request(session: &Session, p: &Value) -> Result<()> {
     }
     let state = session.active().ok_or(EngineError::NoDocument)?;
     let doc = &state.doc;
-    if doc.accounted().is_none()
-        || doc.xcf_state.is_some()
-        || doc.source_color_context.is_some()
-        || doc.selection_channel_id.is_some()
-        || doc.quick_mask.is_some()
-    {
-        return Err(bad("banded Color Range requires a source-free current selection"));
+    crate::imported_backed_sampling::metadata(doc)?;
+    if doc.accounted().is_none() || doc.selection_channel_id.is_some() || doc.quick_mask.is_some() {
+        return Err(bad("banded Color Range requires an admitted anonymous current selection"));
     }
     if doc.size.width == 0 || doc.size.height == 0 || doc.size.width > 262144 || doc.size.height > 262144 {
         return Err(bad("banded canvas bounds"));

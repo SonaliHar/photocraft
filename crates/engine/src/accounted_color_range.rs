@@ -1,9 +1,11 @@
 //! Closed registered accounted Color Range publication adapter.
 //! Original active-only sampled query/CMS/math stays in BackedColorRangeSamples;
-//! source-free RGB/nonlinear analytic ICC U8/U16/Float, fullcanvas<=200side only.
+//! source-free or closed imported RGB/nonlinear analytic ICC U8/U16/Float.
+//! Fullcanvas<=200side only; imported profile/storage proof remains separate.
 //! Derived unit selection values follow invert -> prior min -> final GRAY8 q,
 //! then upstream GRAY8 storage. RGB source words are never narrowed.
-//! Larger/asynchronous, merged, imported and other selection modes remain refused.
+//! Larger work uses the separate banded adapter; merged and other selection modes
+//! remain refused here.
 use crate::{
     EngineError, Result, Session,
     accounted_selection_session::AccountedSelectionTarget,
@@ -60,17 +62,16 @@ fn context(session: &Session, params: &Value, control: &ReadControl<'_>) -> Resu
         return Err(bad("accounted Color Range requires an idle original target"));
     }
     let owner = doc.accounted().ok_or(BackingError::Unsupported)?;
+    let policy = crate::imported_backed_sampling::metadata(doc)?;
     if doc.mode != ColorMode::Rgb
         || !matches!(doc.depth, SampleType::U8 | SampleType::U16 | SampleType::F32)
         || doc.sample_encoding != Some(SampleEncoding::NonlinearProfile)
-        || doc.working_profile_interpretation != WorkingProfileInterpretation::Icc
-        || doc.xcf_state.is_some()
-        || doc.source_color_context.is_some()
+        || (policy == crate::imported_backed_sampling::Policy::SourceFree && doc.working_profile_interpretation != WorkingProfileInterpretation::Icc)
         || doc.selection_channel_id.is_some()
         || doc.quick_mask.is_some()
         || doc.icc_profile.as_ref().is_none_or(|p| p.is_empty() || p.len() > 16 << 20)
     {
-        return Err(bad("accounted Color Range requires source-free explicit nonlinear RGB U8/U16/Float/analytic ICC context"));
+        return Err(bad("accounted Color Range requires an admitted nonlinear RGB U8/U16/Float/analytic ICC context"));
     }
     if doc.size.width == 0 || doc.size.height == 0 || doc.size.width > 200 || doc.size.height > 200 {
         return Err(bad("accounted Color Range synchronous canvas limit is 200 pixels per side"));
@@ -104,13 +105,13 @@ fn context(session: &Session, params: &Value, control: &ReadControl<'_>) -> Resu
         || layer.vector_mask.is_some()
         || !layer.effects.items.is_empty()
         || layer.effects.psd_raw.is_some()
-        || layer.import_compositing.is_some()
         || layer.indexed_source.is_some()
         || layer.video.is_some()
         || layer.fill_cache.is_some()
     {
         return Err(bad("active native owner or fullcanvas bounds are unsupported for accounted Color Range"));
     }
+    crate::imported_backed_sampling::layer(doc, layer)?;
     control.check(1)?;
     Ok(area)
 }

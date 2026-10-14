@@ -121,6 +121,7 @@ pub use xcf_filters::{
     StretchHsvMappingRequirements, StretchHsvSourceIdentity, map_retained_stretch_hsv_source,
 };
 pub mod xcf_import;
+pub use xcf_import::{OwnedPlainXcfImport, import_owned_staged_plain_bytes};
 pub use xcf_import::{
     AssembledStoredChannel, CorrespondenceRequirements, NamespaceBacking, StoredChannelCorrespondence, assemble_owned_stored_channel,
 };

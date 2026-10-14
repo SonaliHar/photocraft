@@ -2,6 +2,9 @@
 use crate::{Builtin, CmsError, ColorSpace, Curve, Profile};
 use std::sync::Arc;
 
+mod implicit_planner;
+pub use implicit_planner::effective_implicit_rgb_nonlinear_planner_work_with_control;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Encoding {
     Linear,
@@ -776,7 +779,7 @@ pub fn effective_profile_requirements_with_control(profile:&Profile,encoding:Enc
  let clone=profile.clone_requirements_with_control(limits,cancelled)?;let mut peak=retained.checked_add(clone.cloned_model_bytes).ok_or(Error::Limit("effective profile model"))?;
  // Validation is repeated by callers; charge a conservative per retained byte
  // plus fixed evaluation schedule for every bounded curve/stage in the model.
- let mut work=(retained as u64).checked_mul(4).and_then(|v|v.checked_add(200_000)).ok_or(Error::Limit("effective profile work"))?;
+ let mut work=implicit_planner::base_effective_work(retained)?;
  for l in profile.a2b.iter().chain(&profile.b2a).flatten(){for stage in &l.stages{b.poll()?;let extra=match stage{crate::pipeline::Stage::Curves(c)|crate::pipeline::Stage::InvCurves(c)=>(c.len() as u64)*32_896,crate::pipeline::Stage::Clut(c)=>c.interpolation_taps()?.checked_mul((c.inputs+c.outputs+1) as u64).ok_or(Error::Limit("ICC eval work"))?,_=>128};work=work.checked_add(extra).ok_or(Error::Limit("ICC validation work"))?;}}
  if let Some((suffix,curve))=transfer_recipe(encoding){let text=profile.description.len().checked_add(suffix.len()).ok_or(Error::Limit("ICC description"))?;let writer=crate::write::controlled::transfer_requirements(profile,suffix,&curve,limits,cancelled)?;peak=peak.checked_add(text).and_then(|v|v.checked_add(256)).and_then(|v|v.checked_add(writer.peak_resident_bytes.checked_sub(writer.retained_bytes)?)).ok_or(Error::Limit("effective ICC peak"))?;work=work.checked_add(writer.work_units).and_then(|v|v.checked_add(text as u64)).ok_or(Error::Limit("effective ICC work"))?;}
  let check=Budget::new(limits,cancelled)?;check.admit(peak,work)?;Ok(EffectiveProfileRequirements{retained_bytes:retained,peak_resident_bytes:peak,work_units:work})

@@ -1,0 +1,85 @@
+//! Typed publication of the opt-in owned XCF import, including runtime source
+//! protection. The ordinary open service retains its color-policy decisions.
+use crate::{DocState, EngineError, Result, Session, source_policy::SourceIdentity};
+use photocraft_io::OwnedPlainXcfImport;
+use photocraft_raster::backing::{BackingError, ReadControl};
+
+fn text(value: &str, control: &ReadControl<'_>) -> Result<String> {
+    let mut copy = String::new();
+    copy.try_reserve_exact(value.len()).map_err(|_| BackingError::Allocation)?;
+    if copy.capacity() > value.len().checked_mul(2).ok_or(BackingError::Length)? {
+        return Err(BackingError::Allocation.into());
+    }
+    for part in value.as_bytes().chunks(4096) {
+        control.check(part.len() as u64)?;
+    }
+    // UTF-8 text is copied once, after the caller's prospective work admission.
+    copy.push_str(value);
+    Ok(copy)
+}
+
+impl Session {
+    /// Lower-level counterpart of `add_accounted_document` for the exact owned
+    /// plain-XCF result. Shares its actual model/source owner, retains source
+    /// exclusion even for a renamed input, and stages everything before tab
+    /// publication. A supplied path is an inert identity from the open service;
+    /// this function performs no filesystem access or resource authorization.
+    ///
+    /// This preserves the imported current interpretation. An open service must
+    /// resolve color-policy questions/conversions separately before choosing
+    /// this explicit endpoint. Default opens and native-large policy are unchanged.
+    pub fn add_owned_plain_xcf_import(
+        &mut self,
+        imported: &OwnedPlainXcfImport,
+        label: &str,
+        source_path: Option<&str>,
+        control: &ReadControl<'_>,
+    ) -> Result<usize> {
+        control.check(1)?;
+        if imported.origin() != photocraft_io::ImportOrigin::xcf() || imported.preview_only() {
+            return Err(BackingError::Unsupported.into());
+        }
+        let path_len = source_path.map_or(0, str::len);
+        if label.len() > 4096 || path_len > 4096 {
+            return Err(BackingError::Length.into());
+        }
+        let input_len = label.len().checked_add(path_len).ok_or(BackingError::Length)?;
+        control.check(input_len as u64)?;
+        if label.contains('\0') || source_path.is_some_and(|p| p.contains('\0')) {
+            return Err(BackingError::Length.into());
+        }
+        let document = imported.document();
+        if self.docs.len() >= 4096 {
+            return Err(BackingError::Length.into());
+        }
+        for states in self.docs.chunks(64) {
+            control.check(states.len() as u64)?;
+            if states.iter().any(|state| state.doc.id == document.document().id) {
+                return Err(EngineError::Other("an open document already owns this accounted identity".into()));
+            }
+        }
+        let history_states = self.prefs.get().performance.history_states.max(1) as usize;
+        let mut state = DocState::new_accounted(document.clone(), None, history_states, control)?;
+        // SourceIdentity's inline fields are already included in DocState. Pay
+        // new String capacities before either allocation, retaining that charge
+        // with the source fields on every later failure and through tab lifetime.
+        let metadata = state._accounted_metadata.as_mut().ok_or(BackingError::Integrity)?;
+        let previous = metadata.bytes();
+        let envelope = (input_len as u64).checked_mul(2).and_then(|n| n.checked_add(128)).ok_or(BackingError::Length)?;
+        metadata.try_resize(previous.checked_add(envelope).ok_or(BackingError::Length)?).map_err(|_| BackingError::Quota)?;
+        let label = text(label, control)?;
+        let path = source_path.map(|p| text(p, control)).transpose()?;
+        let actual = label.capacity().checked_add(path.as_ref().map_or(0, String::capacity)).ok_or(BackingError::Length)?;
+        metadata
+            .reconcile_capacity(previous.checked_add(actual as u64).and_then(|n| n.checked_add(128)).ok_or(BackingError::Length)?)
+            .map_err(|_| BackingError::Quota)?;
+        state.source = Some(SourceIdentity::new(label, path, imported.origin()));
+        state.source_read_only = imported.source_read_only() || imported.origin().is_read_only();
+        control.check(1)?;
+        self.publish_document_state(state, control)
+    }
+}
+
+#[cfg(test)]
+#[path = "accounted_xcf_open_tests.rs"]
+mod tests;
