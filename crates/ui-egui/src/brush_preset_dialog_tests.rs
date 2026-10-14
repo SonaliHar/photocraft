@@ -262,3 +262,49 @@ fn typing_replaces_the_suggested_name_and_enter_is_ok() {
     assert!(dialog(&h).is_none(), "Enter is OK");
     assert_eq!(h.state().session.tools.current_preset.as_deref(), Some("Inky"));
 }
+
+/// A tool without a picked preset gets a usable fresh name, even with differently cased names.
+#[test]
+fn fresh_preset_names_after_a_tool_switch_save_without_touching_existing_presets() {
+    for kind in crate::theme::ThemeKind::ALL {
+        for menu in [false, true] {
+            let mut h = harness();
+            h.state_mut().run("prefs.set", json!({"path":"interface.theme", "value":kind.id()})).unwrap();
+            for (name, size) in [("brush 1", 31), ("BRUSH 2", 52)] {
+                h.state_mut().run("tools.setBrush", json!({"size":size})).unwrap();
+                h.state_mut().run("brush.presets.save", json!({"name":name})).unwrap();
+            }
+            // A real tool switch forgets the outgoing preset's identity.
+            h.state_mut().ui.tool = crate::state::Tool::Eraser;
+            h.run_steps(3);
+            assert_eq!(h.state().session.tools.current_preset, None);
+            assert_eq!(Tokens::get(&h.ctx), Tokens::for_kind(kind));
+            let presets = h.state().session.tools.presets.clone();
+            let journal = h.state().session.journal.len();
+            if menu {
+                settings_menu(&mut h, 0);
+            } else {
+                h.state_mut().ui.brush_picker = Some([300.0, 120.0]);
+                h.run_steps(3);
+                h.get_by_label("New Brush Preset").click();
+                h.run_steps(3);
+            }
+            let id = dialog(&h).expect("the creation dialog opened");
+            assert_eq!(field(&h, id, "name"), "Brush 3", "{kind:?}, menu={menu}");
+            assert!(!h.get_by_label("OK").accesskit_node().is_disabled());
+            assert_eq!(h.state().session.tools.presets, presets, "opening does not change a preset");
+            if menu {
+                h.get_by_label("OK").click();
+            } else {
+                h.key_press(egui::Key::Enter);
+            }
+            h.run_steps(3);
+            assert!(dialog(&h).is_none());
+            assert_eq!(h.state().session.tools.presets.len(), presets.len() + 1);
+            assert_eq!(h.state().session.tools.presets.get(..presets.len()), Some(presets.as_slice()));
+            assert_eq!(h.state().session.tools.current_preset.as_deref(), Some("Brush 3"));
+            assert_eq!(h.state().session.journal.len(), journal + 1);
+            assert_eq!(h.state().session.journal.last().unwrap().0, "brush.presets.save");
+        }
+    }
+}

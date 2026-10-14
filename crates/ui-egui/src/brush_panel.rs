@@ -226,9 +226,9 @@ pub fn grouped_presets(presets: &[paint::BrushPreset]) -> Vec<(String, Vec<usize
     out
 }
 
-/// A fresh "Brush N" name.
+/// A fresh "Brush N" name, using the same identity as preset lookup and saving.
 pub(crate) fn new_preset_name(presets: &[paint::BrushPreset]) -> String {
-    (1..).map(|n| format!("Brush {n}")).find(|n| !presets.iter().any(|p| &p.name == n)).unwrap_or_else(|| "Brush".into())
+    (1..).map(|n| format!("Brush {n}")).find(|n| paint::presets::find(presets, n).is_none()).unwrap_or_else(|| "Brush".into())
 }
 
 pub(crate) fn run_or_status(app: &mut PhotocraftApp, id: &str, p: Value) {

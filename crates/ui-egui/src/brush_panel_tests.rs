@@ -829,6 +829,17 @@ fn kit(name: &str, folder: &[&str]) -> paint::BrushPreset {
 }
 
 #[test]
+fn fresh_preset_names_use_the_same_identity_as_preset_lookup() {
+    let mut presets = vec![kit("brush 1", &[]), kit("BRUSH 2", &[]), kit("bRuSh 4", &[])];
+    assert_eq!(new_preset_name(&presets), "Brush 3", "skip differently cased names but keep the first gap");
+    presets.push(kit("BRush 3", &[]));
+    let name = new_preset_name(&presets);
+    assert_eq!(name, "Brush 5");
+    assert!(paint::presets::find(&presets, &name).is_none(), "a fresh name must not replace a saved preset");
+    assert_eq!(new_preset_name(&[]), "Brush 1");
+}
+
+#[test]
 fn folder_tree_nests_presets_in_panel_order() {
     use crate::brushes_tab::{MAX_VIEW_DEPTH, Node, folder_tree};
     let deep: Vec<&str> = vec!["d"; MAX_VIEW_DEPTH + 5];
