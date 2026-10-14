@@ -2,6 +2,16 @@
 
 Update this at the end of every session: newest entry on top, keep it short.
 
+## 2026-10-13 (end of day): Claude
+
+**Done today:** PC-00, MG-03, PC-01, PC-02, PC-03, all reviewed. PhotoCraft now has Edit › Generative Fill and a tested client for Craft AI Manager; nothing on the manager side exists yet.
+
+**Next session, in order:**
+1. **PC-04** (local): inject `CaimProvider` into `apps/photocraft` and `apps/photocraft-cli`, and return `AiResult` provenance in the command result (B08). Claude writes the prompt first.
+2. **MG-00:** create `erikerikerik/craft-ai-manager` (Erik, or Claude once the connector can create repos), then **CAIM-01 / MG-01** (local): the loopback server to SPEC amendment 11, then MG-02, MG-04, MG-05.
+3. **PC-06:** first real fill end to end on the 4090 PC.
+4. Erik, any time: **CN-00** (fine-grained token + `gh`, remove the cached GitHub login) and **S7** (Actions on the fork).
+
 ## 2026-10-13: local agent (Codex/GPT-6) - PC-03 Craft AI Manager client crate
 
 `crates/ai-client` (package `photocraft-ai-client`, L6, native only) is new and green: it implements `photocraft_engine::ai::AiProvider`
