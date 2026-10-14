@@ -247,6 +247,10 @@ fn work(shared: &photocraft_xcf::Budget<'_>, ctl: &Interrupt<'_>, n: u64) -> Res
     shared.consume_work(n, "layer original owner").map_err(accounting_error)
 }
 impl AssembledLayerSelection<'_, '_, '_> {
+    /// Immutable independently decoded backing, not a rendering or read grant.
+    pub fn original_file(&self) -> &XcfFile {
+        &self.original
+    }
     pub fn original_bytes(&self) -> &[u8] {
         self.source
     }
@@ -891,7 +895,7 @@ mod tests {
     use super::*;
     #[test]
     fn explicit_gray_metadata_never_infers_authority_from_absent_source_icc() {
-        let mut doc = Document::new("Metadata witness", Size { w: 32, h: 32 }, ColorMode::Grayscale, SampleType::F64);
+        let mut doc = Document::new("Metadata witness", Size::new(32, 32), ColorMode::Grayscale, SampleType::F64);
         let bytes = b"metadata witness only, not a valid implicit profile".to_vec();
         doc.sample_encoding = Some(SampleEncoding::NonlinearProfile);
         doc.source_color_context = Some(photocraft_doc::SourceColorContext { original_icc: None, source_precision: 750 });

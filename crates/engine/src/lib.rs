@@ -201,6 +201,7 @@ pub mod xcf_channel_stored_load;
 pub mod xcf_channel_gaussian_prepare;
 pub mod xcf_layer_stored_prepare;
 pub mod xcf_layer_gaussian_prepare;
+pub mod xcf_layer_fractional_gaussian_prepare;
 pub mod xcf_channel_name_cmds;
 pub mod xcf_channel_locks_cmds;
 pub mod xcf_channel_indicates_cmds;

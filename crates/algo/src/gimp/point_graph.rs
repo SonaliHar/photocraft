@@ -96,10 +96,14 @@ pub fn evaluate(binding: Binding<'_>, request: NodeRequest<'_>, budget: &mut Nod
         }
     }
     // Reject nonfinite/unsupported sample domains before allocating private output.
-    // Alpha is passed only to explicit alpha threshold; color-only families retain
-    // its original encoded bytes through try_apply.
+    // Alpha threshold and Float mixer kernels require complete RGBA arity.
+    // Mixers copy Float alpha exactly; color-only families retain its encoded
+    // bytes through try_apply without interpreting it as a color component.
     let colors = format.mode.color_channels();
-    let evaluated = if matches!(binding.operation, PointOperation::ThresholdAlpha { .. }) { format.channels() } else { colors };
+    let evaluated = if matches!(
+        binding.operation,
+        PointOperation::ThresholdAlpha { .. } | PointOperation::ChannelMixer { .. } | PointOperation::MonoMixerSigned { .. }
+    ) { format.channels() } else { colors };
     for y in request.roi.y0..request.roi.y1 {
         budget.poll()?;
         for x in request.roi.x0..request.roi.x1 {
@@ -138,6 +142,18 @@ pub fn evaluate(binding: Binding<'_>, request: NodeRequest<'_>, budget: &mut Nod
 }
 
 fn validate_operation(binding: &Binding<'_>, node: &photocraft_doc::xcf_filters::GraphNode) -> Result<(), GraphExecuteError> {
+    // These retained mixer kernels consume unassociated Linear RGB Float.
+    // The fingerprint is caller-established identity, never an inferred sRGB
+    // alias or permission to convert Gray/native-wide input here.
+    if matches!(binding.operation, PointOperation::ChannelMixer { .. } | PointOperation::MonoMixerSigned { .. })
+        && (binding.domain.format.mode != ColorMode::Rgb
+            || binding.domain.format.sample != SampleType::F32
+            || !binding.domain.format.alpha
+            || binding.domain.encoding != SampleEncoding::Linear
+            || binding.domain.profile_fingerprint.is_none_or(|value| value == [0; 32]))
+    {
+        return Err(GraphExecuteError::Operation("mixer graph requires explicit profiled Linear RGB Float with alpha"));
+    }
     let rgb_only = matches!(
         binding.operation,
         PointOperation::ValueInvert
@@ -160,6 +176,23 @@ fn validate_operation(binding: &Binding<'_>, node: &photocraft_doc::xcf_filters:
         return Err(GraphExecuteError::Operation("alpha threshold graph requires a native alpha channel"));
     }
     match binding.operation {
+        PointOperation::ChannelMixer { gains, preserve_luminosity } => {
+            let [[rr, rg, rb], [gr, gg, gb], [br, bg, bb]] = gains;
+            return validate_values(
+                binding, node, "gegl:channel-mixer", "0:0", SampleEncoding::Linear,
+                &[("rr-gain", SourceValue::Float(rr)), ("rg-gain", SourceValue::Float(rg)), ("rb-gain", SourceValue::Float(rb)),
+                  ("gr-gain", SourceValue::Float(gr)), ("gg-gain", SourceValue::Float(gg)), ("gb-gain", SourceValue::Float(gb)),
+                  ("br-gain", SourceValue::Float(br)), ("bg-gain", SourceValue::Float(bg)), ("bb-gain", SourceValue::Float(bb)),
+                  ("preserve-luminosity", SourceValue::Bool(preserve_luminosity))],
+            );
+        }
+        PointOperation::MonoMixerSigned { red, green, blue, preserve_luminosity } => {
+            return validate_values(
+                binding, node, "gegl:mono-mixer", "0:0", SampleEncoding::Linear,
+                &[("red", SourceValue::Float(red)), ("green", SourceValue::Float(green)), ("blue", SourceValue::Float(blue)),
+                  ("preserve-luminosity", SourceValue::Bool(preserve_luminosity))],
+            );
+        }
         PointOperation::ValueInvert => return validate_values(binding, node, "gegl:value-invert", "0:0", SampleEncoding::NonlinearProfile, &[]),
         PointOperation::Posterize { levels } => {
             return validate_values(
@@ -332,7 +365,7 @@ fn validate_values(
     {
         return Err(GraphExecuteError::Operation("point identity/version/encoding/configuration does not match typed operation"));
     }
-    let mut seen = [false; 4];
+    let mut seen = [false; 10];
     for argument in &node.arguments {
         let index = parameters.iter().position(|(name, _)| *name == argument.name).ok_or(GraphExecuteError::Operation("unknown point scalar argument"))?;
         let (name, expected) = parameters.get(index).ok_or(GraphExecuteError::InvalidPlan)?;
@@ -367,6 +400,10 @@ fn tile_count(roi: Rect) -> Result<u64, GraphExecuteError> {
     let height = u64::try_from(i64::from(last.ty) - i64::from(first.ty) + 1).map_err(|_| GraphExecuteError::Roi)?;
     width.checked_mul(height).ok_or(GraphExecuteError::ResidentLimit)
 }
+
+#[cfg(test)]
+#[path = "point_graph/mixer_binding_tests.rs"]
+mod mixer_binding_tests;
 
 #[cfg(test)]
 mod tests {

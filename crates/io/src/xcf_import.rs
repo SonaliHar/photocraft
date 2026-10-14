@@ -55,6 +55,12 @@ pub use layer_selection_owner::{
     assemble_owned_layer_selection_with_outer_policy, layer_profile_requirements, select_layer_current, select_layer_current_with_profile_policy,
 };
 
+#[path = "xcf_import/layer_selection_current.rs"]
+mod layer_selection_current;
+pub use layer_selection_current::{
+    LayerStorageRequirements, PrivateLayerCurrent, assemble_private_layer_current, layer_storage_requirements,
+};
+
 #[cfg(all(test, feature = "corpus"))]
 mod linked_custom_name_mapping_tests {
     use super::*;

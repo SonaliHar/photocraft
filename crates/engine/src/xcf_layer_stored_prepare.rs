@@ -408,6 +408,82 @@ impl<'o, 's, 'b, 'a, L> PreparedStoredLayer<'o, 's, 'b, 'a, L> {
         self.requirements.preparation_work = self.work.used.load(Ordering::Relaxed);
         Ok((self, output))
     }
+    /// Explicit finite-unit fractional mathematics only. Zero coverage keeps
+    /// original words; it is not binary empty-selection/unrestricted filtering.
+    pub(crate) fn into_fractional_gaussian_stage(
+        mut self,
+        session: &Session,
+        config: photocraft_compose::gimp_layer_fractional_gaussian_candidate::Config,
+        control: &Interrupt<'_>,
+    ) -> Result<(Self, photocraft_compose::gimp_layer_fractional_gaussian_candidate::StagedOutput<()>)> {
+        use photocraft_compose::gimp_layer_fractional_gaussian_candidate as kernel;
+        self.validate(session, control)?;
+        // Numerical wrapper has exactly this tuple as its sole field. Its actual
+        // inline delta is known here, including L's layout; no asserted header.
+        let header = (std::mem::size_of::<(Self, kernel::StagedOutput<()>)>() as u64)
+            .checked_sub(std::mem::size_of::<Self>() as u64)
+            .ok_or_else(|| bad("stage header underflow"))?;
+        let staged = (|| {
+            let work = &self.work;
+            let cancelled = || control.cancelled() || work.charge(1).is_err();
+            let progress = |fraction| control.progress(fraction);
+            let metered = Interrupt::new(&cancelled, &progress);
+            let held = add(self.requirements.held_resident_bytes, header)?;
+            let remaining = photocraft_compose::gimp_channel_gaussian_candidate::Limits {
+                resident_bytes: self.requirements.admitted_resident_bytes.checked_sub(held).ok_or_else(|| bad("stage remaining resident envelope"))?,
+                index_bytes: self
+                    .requirements
+                    .index_envelope_bytes
+                    .checked_sub(self.requirements.held_index_bytes)
+                    .ok_or_else(|| bad("stage remaining index envelope"))?,
+                work_units: work.remaining(),
+            };
+            let input = kernel::Inputs { source: &self.source_surface, mask: &self.mask_surface, bounds: self.source_bounds, mask_bounds: self.mask_bounds };
+            let required = kernel::requirements(input, config, remaining, &metered).map_err(composition)?;
+            if required.work_units > work.remaining() {
+                return Err(bad("stage remaining work envelope"));
+            }
+            let index = add(self.requirements.held_index_bytes, required.index_bytes)?;
+            if add(held, required.peak_resident_bytes)? > self.requirements.admitted_resident_bytes || index > self.requirements.index_envelope_bytes {
+                return Err(bad("combined raw and fractional Gaussian stage envelope"));
+            }
+            let mut prepaid = Prepaid::reserve(work, required.work_units)?;
+            self.requirements.held_resident_bytes = held;
+            self.requirements.held_index_bytes = index;
+            let mut local = StageBudget {
+                held: &mut self.requirements.held_resident_bytes,
+                limit: self.requirements.admitted_resident_bytes,
+                peak: required.peak_resident_bytes,
+                work: &mut prepaid,
+            };
+            let output = kernel::prepare(input, config, remaining, &mut local, &metered).map_err(composition)?.into_staged();
+            local.work.finish()?;
+            let actual = output.requirements();
+            if actual.peak_resident_bytes > required.peak_resident_bytes
+                || actual.index_bytes > required.index_bytes
+                || actual.work_units > required.work_units
+                || output.surface().resident_accounted_bytes()? > required.peak_resident_bytes
+                || output
+                    .unmasked_surface()
+                    .map(|surface| surface.resident_accounted_bytes())
+                    .transpose()?
+                    .unwrap_or(0)
+                    .checked_add(output.surface().resident_accounted_bytes()?)
+                    .is_none_or(|bytes| bytes > required.peak_resident_bytes)
+            {
+                return Err(bad("fractional Gaussian stage exceeds prospective requirements"));
+            }
+            poll(&metered)?;
+            Ok(output)
+        })();
+        if self.work.exceeded.load(Ordering::Relaxed) {
+            return Err(bad("raw layer preparation work limit"));
+        }
+        let output = staged?;
+        self.validate(session, control)?;
+        self.requirements.preparation_work = self.work.used.load(Ordering::Relaxed);
+        Ok((self, output))
+    }
 }
 fn verification_upper(source_work: u64, resident_limit: u64) -> Result<u64> {
     // Actual IO descriptor formula is source.work +8*authentic current census
@@ -796,6 +872,41 @@ mod tests {
         drop(output);
         assert_eq!(*local.held, 100 + required.peak_resident_bytes); // no quota refund
         assert!(local.reserve_prepared_bytes(required.peak_resident_bytes + 1).is_err());
+    }
+    #[test]
+    fn fractional_stage_zero_coverage_is_raw_noop_under_same_spent_budget() {
+        use photocraft_algo::gimp::neighborhood::{GaussianAbyss, GaussianFilter, GaussianParams};
+        use photocraft_compose::{gimp_channel_gaussian_candidate::DerivedPrecision, gimp_layer_fractional_gaussian_candidate as kernel};
+        let format = photocraft_color::PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false);
+        let source = Surface::try_with_default_bytes(format, &0x7ff8000000000192u64.to_le_bytes()).unwrap();
+        let mask = Surface::try_with_default_bytes(format, &0f64.to_le_bytes()).unwrap();
+        let inputs = kernel::Inputs { source: &source, mask: &mask, bounds: Rect::new(0, 0, 32, 32), mask_bounds: Rect::new(0, 0, 32, 32) };
+        let config = kernel::Config {
+            source_domain: kernel::SourceDomain::SrgbNonlinearF64,
+            mask_domain: kernel::MaskDomain::NativeLinearF64,
+            gaussian_precision: DerivedPrecision::F64,
+            coverage_precision: kernel::CoveragePrecision::NativeF64,
+            mix_space: kernel::MixSpace::RawEncodedGray,
+            mix_precision: DerivedPrecision::F64,
+            gaussian: GaussianParams { std_dev_x: 1., std_dev_y: 1., abyss: GaussianAbyss::Clamp, clip_extent: true },
+            filter: GaussianFilter::Auto,
+            output: Rect::new(0, 0, 32, 32),
+        };
+        let limits = photocraft_compose::gimp_channel_gaussian_candidate::Limits::default();
+        let required = kernel::requirements(inputs, config, limits, &Interrupt::NONE).unwrap();
+        let work = Work { used: AtomicU64::new(5), exceeded: AtomicBool::new(false), limit: limits.work_units };
+        let mut prepaid = Prepaid::reserve(&work, required.work_units).unwrap();
+        let spent = work.remaining();
+        let mut held = 100;
+        let mut local = StageBudget { held: &mut held, limit: limits.resident_bytes, peak: required.peak_resident_bytes, work: &mut prepaid };
+        let output = kernel::prepare(inputs, config, limits, &mut local, &Interrupt::NONE).unwrap().into_staged();
+        local.work.finish().unwrap();
+        assert_eq!(output.surface(), &source);
+        assert!(output.unmasked_surface().is_none());
+        assert_eq!(*local.held, 100 + required.peak_resident_bytes);
+        assert_eq!(work.remaining(), spent);
+        drop(output);
+        assert_eq!(*local.held, 100 + required.peak_resident_bytes);
     }
     #[test]
     fn explicit_profile_verification_work_cannot_be_spent_by_current_census() {

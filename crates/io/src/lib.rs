@@ -111,6 +111,7 @@ pub use xcf_import::{
     LayerProfilePolicy, LayerProfileRequirements, SelectedCurrentLayer, assemble_owned_layer_selection,
     assemble_owned_layer_selection_with_outer_policy, layer_profile_requirements, select_layer_current, select_layer_current_with_profile_policy,
 };
+pub use xcf_import::{LayerStorageRequirements, PrivateLayerCurrent, assemble_private_layer_current, layer_storage_requirements};
 mod xcf_link_sources;
 pub mod xcf_modified_sources;
 mod xcf_ordinary_source;
