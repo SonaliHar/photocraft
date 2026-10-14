@@ -258,14 +258,8 @@ impl CameraRawDialog {
     pub(crate) fn render(&mut self, ctx: &egui::Context) {
         let t0 = crate::gpu_canvas::now_ms();
         let mut px = self.proxy.clone();
-        let mut p = self.params.clone();
-        p.pixel_scale = (self.pw as f32 / self.full_w.max(1) as f32).min(1.0);
-        if let Some(curve) = &self.raw_curve {
-            let tone = raw_stage(&p);
-            photocraft_io::raw::retone(&mut px, self.pw, self.ph, curve, tone);
-            (p.shadows, p.highlights, p.clarity, p.texture, p.dehaze) = (0.0, 0.0, 0.0, 0.0, 0.0);
-        }
-        photocraft_algo::camera_raw::develop(&mut px, self.pw, self.ph, &p, self.float);
+        let scale = (self.pw as f32 / self.full_w.max(1) as f32).min(1.0);
+        crate::raw_recipe::apply(&mut px, self.pw, self.ph, &self.params, self.raw_curve.as_deref(), scale, self.float);
         if let Some(mask) = &self.selection {
             for ((out, original), coverage) in px.iter_mut().zip(&self.proxy).zip(mask) {
                 for (out, original) in out.iter_mut().zip(original) {
@@ -425,7 +419,7 @@ pub struct Redevelop {
 }
 
 /// The sliders a raw open applies while developing, before the tone curve (as Camera Raw does).
-fn raw_stage(p: &CameraRaw) -> photocraft_io::raw::Tone {
+pub(crate) fn raw_stage(p: &CameraRaw) -> photocraft_io::raw::Tone {
     photocraft_io::raw::Tone { shadows: p.shadows, highlights: p.highlights, clarity: p.clarity, texture: p.texture, dehaze: p.dehaze }
 }
 
@@ -1005,10 +999,11 @@ pub(crate) fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
             let raw = d.raw_open.clone().ok_or("no raw file is being opened")?;
             let params = d.params.clone();
             let changed = d.params != d.original;
+            let developed = developed(d);
             // Open keeps the recipe too, so the next visit starts from what was just chosen. It is kept before anything
             // changes: changed settings that cannot be kept open nothing and leave the dialog as it was. Unchanged ones
             // are already the photo's, so a failed rewrite of them does not stop the Open.
-            match crate::raw_recipe::persist(app, raw.document, &raw.targets, &params) {
+            match crate::raw_recipe::persist(app, raw.document, &raw.targets, &params, &developed) {
                 Err(error) if changed => return Err(error),
                 Err(error) => log::warn!("{error}"),
                 Ok(()) => {}
@@ -1052,6 +1047,12 @@ pub(crate) fn target_name(app: &PhotocraftApp) -> Option<&'static str> {
     })
 }
 
+/// How the dialog's photo was developed, for rendering its recipe as the dialog shows it.
+fn developed(d: &CameraRawDialog) -> crate::raw_recipe::Developed {
+    let full_width = d.raw_open.as_ref().and_then(|raw| raw.full_size).map(|(w, _)| w);
+    crate::raw_recipe::Developed { curve: d.raw_curve.clone(), full_width }
+}
+
 /// The open dialog's settings as a recipe file's content.
 pub(crate) fn recipe(app: &PhotocraftApp) -> Option<Value> {
     app.camera_raw.as_ref().map(|d| crate::raw_recipe::to_json(&d.params))
@@ -1073,9 +1074,10 @@ pub(crate) fn done(app: &mut PhotocraftApp) -> Result<Value, String> {
     }
     let raw = d.raw_open.clone().ok_or("no raw file is being opened")?;
     let params = d.params.clone();
+    let developed = developed(d);
     // The recipe is kept before the dialog goes: one that cannot be written leaves the dialog, and its settings, as they were.
     if changed {
-        crate::raw_recipe::persist(app, raw.document, &raw.targets, &params)?;
+        crate::raw_recipe::persist(app, raw.document, &raw.targets, &params, &developed)?;
     }
     app.camera_raw = None;
     Ok(json!({"open": false, "changed": changed, "recipe": crate::raw_recipe::to_json(&params)}))
@@ -1260,9 +1262,10 @@ pub(crate) fn leave_in_place(app: &mut PhotocraftApp) -> Result<(), String> {
     let raw = d.raw_open.clone().ok_or("no raw file is being opened")?;
     let params = d.params.clone();
     let changed = d.params != d.original;
+    let developed = developed(d);
     // Kept first: a recipe that cannot be written leaves the dialog on this photo, unchanged, and the next photo is not opened.
     if changed {
-        crate::raw_recipe::persist(app, raw.document, &raw.targets, &params)?;
+        crate::raw_recipe::persist(app, raw.document, &raw.targets, &params, &developed)?;
     }
     if let Some(d) = app.camera_raw.as_mut() {
         d.original = d.params.clone();
@@ -1878,6 +1881,32 @@ mod tests {
         assert_eq!(st.saved_revision, st.revision, "Open leaves the document unmodified");
         assert_eq!(st.doc.depth, photocraft_color::SampleType::U16);
         assert!(mean_red(&app) > before + 0.05, "{before} → {}", mean_red(&app));
+    }
+
+    #[test]
+    fn the_recipe_render_is_the_picture_the_dialog_shows() {
+        let (mut app, dng) = raw_app();
+        let ctx = egui::Context::default();
+        app.open_bytes("IMG_0003.dng", &dng).unwrap();
+        let raw = app.pending_raw_open.take().unwrap();
+        open_raw(&mut app, &ctx, raw).unwrap();
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"shadows": 75, "highlights": -70}}})).unwrap().unwrap();
+        let d = app.camera_raw.as_mut().unwrap();
+        d.render(&ctx);
+        let (shown, (pw, ph)) = (d.processed.clone(), (d.pw, d.ph));
+        let (params, developed) = (d.params.clone(), developed(d));
+        assert!(developed.curve.is_some());
+        let doc = app.session.active().unwrap().doc.clone();
+        let rendered = crate::raw_recipe::render_pixels_for_test(&doc, &params, &developed);
+        assert_eq!((rendered.rect.width() as usize, rendered.rect.height() as usize), (pw, ph), "a photo this small renders at the preview's size");
+        let mean_difference = |a: &[[f32; 4]], b: &[[f32; 4]]| {
+            a.iter().zip(b).map(|(a, b)| (0..3).map(|c| (a[c] - b[c]).abs()).sum::<f32>()).sum::<f32>() / (a.len() * 3) as f32 * 255.0
+        };
+        let difference = mean_difference(&rendered.px, &shown);
+        assert!(difference < 1.0, "the render and the dialog differ by {difference:.2} codes on average");
+        // Without the raw-stage tone step (as the render was made before), the two differ visibly.
+        let without = crate::raw_recipe::render_pixels_for_test(&doc, &params, &crate::raw_recipe::Developed::default());
+        assert!(mean_difference(&without.px, &shown) > 3.0 * difference.max(0.5), "{:.2}", mean_difference(&without.px, &shown));
     }
 
     #[test]

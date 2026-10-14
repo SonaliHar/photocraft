@@ -65,16 +65,50 @@ pub fn from_json(value: &Value) -> Result<CameraRaw, String> {
     Ok(params)
 }
 
-/// `doc` with `params` applied, as a screen-sized sRGB JPEG. Works on a reduced copy of the composite,
-/// the way the dialog's own preview does, so it costs a fraction of a full-size pass.
-pub fn render_display(doc: &Document, params: &CameraRaw) -> Result<Vec<u8>, String> {
+/// How the photo under a recipe was developed: what the dialog's picture of the recipe depends on besides the settings.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Developed {
+    /// The raw's tone curve: the settings that act on the sensor data are applied along it, as a raw open applies them.
+    pub curve: Option<Vec<[f32; 2]>>,
+    /// The width of the photo's full development, when the document is a reduced stand-in for it (sizes in the settings,
+    /// such as Clarity's radius, are relative to the photo).
+    pub full_width: Option<u32>,
+}
+
+/// The dialog's picture of `params`, from the photo's pixels as developed with the defaults (`px`, `w` x `h`, at `pixel_scale` of
+/// the photo's full size): the settings that act on the sensor data (Shadows, Highlights, Clarity, Texture, Dehaze) along the raw's
+/// tone curve, as a raw open applies them, then the rest as the Camera Raw filter. One definition for the dialog's preview and the
+/// recipe's render, so a photo browsed past looks as it did in the dialog.
+pub fn apply(px: &mut [[f32; 4]], w: usize, h: usize, params: &CameraRaw, raw_curve: Option<&[[f32; 2]]>, pixel_scale: f32, float: bool) {
+    let mut p = params.clone();
+    p.pixel_scale = pixel_scale;
+    if let Some(curve) = raw_curve {
+        photocraft_io::raw::retone(px, w, h, curve, crate::camera_raw_ui::raw_stage(&p));
+        (p.shadows, p.highlights, p.clarity, p.texture, p.dehaze) = (0.0, 0.0, 0.0, 0.0, 0.0);
+    }
+    photocraft_algo::camera_raw::develop(px, w, h, &p, float);
+}
+
+/// `doc` with `params` applied as [`apply`] does, at the size of the render.
+fn render_pixels(doc: &Document, params: &CameraRaw, developed: &Developed) -> photocraft_compose::Buffer {
     let buffer = photocraft_compose::thumbnail_buffer(doc, RENDER_SIDE);
     let (w, h) = (buffer.rect.width() as usize, buffer.rect.height() as usize);
     let mut px = buffer.px;
-    let mut p = params.clone();
-    p.pixel_scale = (w as f32 / doc.size.width.max(1) as f32).min(1.0);
-    photocraft_algo::camera_raw::develop(&mut px, w, h, &p, false);
-    let adjusted = photocraft_compose::Buffer { rect: buffer.rect, px };
+    let full_width = developed.full_width.unwrap_or(doc.size.width).max(1);
+    let float = doc.depth == photocraft_color::SampleType::F32;
+    apply(&mut px, w, h, params, developed.curve.as_deref(), (w as f32 / full_width as f32).min(1.0), float);
+    photocraft_compose::Buffer { rect: buffer.rect, px }
+}
+
+#[cfg(test)]
+pub(crate) fn render_pixels_for_test(doc: &Document, params: &CameraRaw, developed: &Developed) -> photocraft_compose::Buffer {
+    render_pixels(doc, params, developed)
+}
+
+/// `doc` with `params` applied, as a screen-sized sRGB JPEG: the picture the dialog shows ([`apply`]), from a reduced copy of
+/// the composite, so it costs a fraction of a full-size pass.
+pub fn render_display(doc: &Document, params: &CameraRaw, developed: &Developed) -> Result<Vec<u8>, String> {
+    let adjusted = render_pixels(doc, params, developed);
     let icc = if matches!(doc.mode, photocraft_color::ColorMode::Cmyk | photocraft_color::ColorMode::Lab) {
         None
     } else {
@@ -94,13 +128,13 @@ pub fn write_recipe(app: &PhotocraftApp, targets: &Targets, params: &CameraRaw) 
 
 /// Writes `params` as the photo's recipe ([`write_recipe`]) and, once it is kept, starts rendering it for
 /// `document`. Only the recipe can fail the call; the render's failures are logged (it is a cache).
-pub fn persist(app: &mut PhotocraftApp, document: DocId, targets: &Targets, params: &CameraRaw) -> Result<(), String> {
+pub fn persist(app: &mut PhotocraftApp, document: DocId, targets: &Targets, params: &CameraRaw, developed: &Developed) -> Result<(), String> {
     write_recipe(app, targets, params)?;
-    render_in_background(app, document, targets, params);
+    render_in_background(app, document, targets, params, developed);
     Ok(())
 }
 
-fn render_in_background(app: &PhotocraftApp, document: DocId, targets: &Targets, params: &CameraRaw) {
+fn render_in_background(app: &PhotocraftApp, document: DocId, targets: &Targets, params: &CameraRaw, developed: &Developed) {
     let Some(write) = app.services.background_automation_write.clone() else { return };
     let Some(display) = targets.display.clone() else { return };
     let Some(doc) = app.session.documents().iter().find(|st| st.doc.id == document).map(|st| st.doc.clone()) else { return };
@@ -114,6 +148,7 @@ fn render_in_background(app: &PhotocraftApp, document: DocId, targets: &Targets,
         _ => None,
     };
     let params = params.clone();
+    let developed = developed.clone();
     #[cfg(not(target_arch = "wasm32"))]
     {
         use std::sync::atomic::{AtomicU64, Ordering};
@@ -146,8 +181,8 @@ fn render_in_background(app: &PhotocraftApp, document: DocId, targets: &Targets,
             // rayon): the photo being opened next keeps the other cores.
             let pool = POOL.get_or_init(|| rayon::ThreadPoolBuilder::new().num_threads(1).thread_name(|_| "camera-raw-render-worker".into()).build().ok());
             let rendered = match pool {
-                Some(pool) => pool.install(|| render_display(&doc, &params)),
-                None => render_display(&doc, &params),
+                Some(pool) => pool.install(|| render_display(&doc, &params, &developed)),
+                None => render_display(&doc, &params, &developed),
             };
             match rendered {
                 Ok(bytes) => {
@@ -171,7 +206,7 @@ fn render_in_background(app: &PhotocraftApp, document: DocId, targets: &Targets,
         }
     }
     #[cfg(target_arch = "wasm32")]
-    let _ = (doc, params, display, write, published);
+    let _ = (doc, params, developed, display, write, published);
 }
 
 #[cfg(test)]
@@ -220,9 +255,9 @@ mod tests {
     #[test]
     fn the_render_applies_the_recipe_to_a_screen_sized_copy() {
         let doc = grey_document(0.25);
-        let plain = render_display(&doc, &CameraRaw::default()).unwrap();
+        let plain = render_display(&doc, &CameraRaw::default(), &Developed::default()).unwrap();
         let brighter = CameraRaw { exposure: 2.0, ..Default::default() };
-        let lifted = render_display(&doc, &brighter).unwrap();
+        let lifted = render_display(&doc, &brighter, &Developed::default()).unwrap();
         assert!(plain.starts_with(&[0xFF, 0xD8]) && lifted.starts_with(&[0xFF, 0xD8]));
         assert!(centre_red(&lifted) > centre_red(&plain) + 40, "{} vs {}", centre_red(&lifted), centre_red(&plain));
     }
@@ -244,7 +279,7 @@ mod tests {
         app.session.add_document(doc, None);
         let params = CameraRaw { exposure: 1.0, ..Default::default() };
         let targets = Targets { recipe: Some("a.cameraraw.json".into()), display: Some("a.display.jpg".into()), manifest: None };
-        persist(&mut app, id, &targets, &params).unwrap();
+        persist(&mut app, id, &targets, &params, &Developed::default()).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while writes.lock().unwrap().len() < 2 && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -276,7 +311,7 @@ mod tests {
             display: Some("m.photocraft.display.jpg".into()),
             manifest: Some(crate::render_manifest::Request { manifest: manifest.clone(), source: Some("1:2".into()) }),
         };
-        persist(&mut app, id, &targets, &CameraRaw { exposure: 1.0, ..Default::default() }).unwrap();
+        persist(&mut app, id, &targets, &CameraRaw { exposure: 1.0, ..Default::default() }, &Developed::default()).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while !writes.lock().unwrap().iter().any(|(p, _)| *p == manifest) && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -312,7 +347,7 @@ mod tests {
         let targets = Targets { recipe: None, display: Some("coalesce.display.jpg".into()), manifest: None };
         // Both are requested before either can run (the first holds the turn while it renders).
         for exposure in [0.5f32, 2.0] {
-            persist(&mut app, id, &targets, &CameraRaw { exposure, ..Default::default() }).unwrap();
+            persist(&mut app, id, &targets, &CameraRaw { exposure, ..Default::default() }, &Developed::default()).unwrap();
         }
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while !writes.lock().unwrap().iter().any(|(p, _)| p == "coalesce.display.jpg") && std::time::Instant::now() < deadline {
@@ -324,7 +359,7 @@ mod tests {
         assert!(!rendered.is_empty() && rendered.len() <= 2, "{} renders", rendered.len());
         let last = rendered.last().unwrap();
         // The final write is always the newest recipe's (+2 EV is far brighter than +0.5 EV on the same grey).
-        let older = render_display(&grey_document(0.25), &CameraRaw { exposure: 0.5, ..Default::default() }).unwrap();
+        let older = render_display(&grey_document(0.25), &CameraRaw { exposure: 0.5, ..Default::default() }, &Developed::default()).unwrap();
         assert!(centre_red(&last.1) > centre_red(&older) + 20, "the newest recipe is the one that ends up on disk");
     }
 
@@ -344,7 +379,7 @@ mod tests {
         let id = doc.id;
         app.session.add_document(doc, None);
         let targets = Targets { recipe: Some("a.json".into()), display: Some("a.display.jpg".into()), manifest: None };
-        let error = persist(&mut app, id, &targets, &CameraRaw { exposure: 1.0, ..Default::default() }).unwrap_err();
+        let error = persist(&mut app, id, &targets, &CameraRaw { exposure: 1.0, ..Default::default() }, &Developed::default()).unwrap_err();
         assert!(error.contains("disk full") && error.contains("a.json"), "{error}");
         std::thread::sleep(std::time::Duration::from_millis(300));
         assert_eq!(*attempts.lock().unwrap(), ["a.json"], "no render of settings that were not kept");
@@ -357,7 +392,8 @@ mod tests {
         let doc = grey_document(0.5);
         let id = doc.id;
         app.session.add_document(doc, None);
-        persist(&mut app, id, &Targets { recipe: None, display: Some("a.display.jpg".into()), manifest: None }, &CameraRaw::default()).unwrap();
+        persist(&mut app, id, &Targets { recipe: None, display: Some("a.display.jpg".into()), manifest: None }, &CameraRaw::default(), &Developed::default())
+            .unwrap();
     }
 
     #[test]
