@@ -176,11 +176,7 @@ pub fn context_settings(device: u32, info: &mut impl DeviceInfo) -> ContextSetti
     // The driver's Tip-Feel'ed output range (0..ax_max); missing reads as the 10-bit fallback.
     let pressure_max = pressure_scale(info.pressure_max(category).unwrap_or(0));
     // No PK_ORIENTATION in the layout: its fields stay zero, so the axes are not read.
-    let orientation = if pkt_data & PK_ORIENTATION != 0 {
-        OrientationScales::new(axes.unwrap_or([0; 3]))
-    } else {
-        OrientationScales::default()
-    };
+    let orientation = if pkt_data & PK_ORIENTATION != 0 { OrientationScales::new(axes.unwrap_or([0; 3])) } else { OrientationScales::default() };
     ContextSettings { pkt_data, move_mask, scales: Scales { pressure_max, orientation } }
 }
 

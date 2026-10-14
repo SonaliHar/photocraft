@@ -649,17 +649,17 @@ fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
     let stroke = if d.tool == Tool::ColorReplacement {
         // The params `retouch_ui::finish_stroke` commits.
         let mut p = crate::retouch_ui::color_replacement_params(app);
-        p["points"] = json!(d.points);
+        p["points"] = json!(app.stylus.stroke_points(&d.points));
         EngineStroke::Dab(photocraft_engine::brush_cmds::live_color_replacement(&app.session, &p).ok()?)
     } else if let Some((cmd, mut p)) = crate::retouch_ui::dab_params(app, d.tool) {
         // The params `retouch_ui::finish_stroke` commits; Sample All Layers isn't previewed.
-        p["points"] = json!(d.points);
+        p["points"] = json!(app.stylus.stroke_points(&d.points));
         p["target"] = paint_target(app);
         EngineStroke::Dab(photocraft_engine::retouch_cmds::LiveDab::begin(&app.session, cmd, &p).ok()?)
     } else if let Some(cmd) = live_retouch_command(d.tool) {
         // The params `retouch_ui::finish_stroke` commits.
         let mut p = if d.tool == Tool::HistoryBrush { json!({}) } else { crate::retouch_ui::clone_params(app)? };
-        p["points"] = json!(d.points);
+        p["points"] = json!(app.stylus.stroke_points(&d.points));
         p["target"] = paint_target(app);
         EngineStroke::Retouch(photocraft_engine::retouch_cmds::LiveRetouch::begin(&app.session, cmd, &p).ok()?)
     } else {
