@@ -564,7 +564,6 @@
 	Blur Angle	Ángulo de desenfoque
 	No path selected	Ningún trazado seleccionado
 	Drag on the image to draw a path; drag its points to bend it, click its line to add a point, and Alt-click a point to remove it. Delete removes the selected path.	Arrastre sobre la imagen para dibujar un trazado; arrastre sus puntos para curvarlo, haga clic en su línea para añadir un punto y Alt-clic en un punto para eliminarlo. Suprimir elimina el trazado seleccionado.
-	Speed	Velocidad
 	Iris Blur…	Desenfoque de iris…
 	Tilt-Shift…	Cambio de inclinación…
 	Path Blur…	Desenfoque de trazado…
@@ -3463,6 +3462,7 @@ layerLabel	No Color	Sin color
 	Radius X	Radio X
 	Radius Y	Radio Y
 	Pins	Chinchetas
+	Speed	Velocidad
 	Taper	Estrechamiento
 	Start X	Inicio X
 	Start Y	Inicio Y

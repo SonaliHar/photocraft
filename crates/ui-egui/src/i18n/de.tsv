@@ -566,8 +566,6 @@
 	Drag the handles on the outline to resize and turn it; the ring sets the blur angle.	Ziehen Sie die Griffe am Umriss, um ihn zu skalieren und zu drehen; der Ring legt den Unschärfewinkel fest.
 	No path selected	Kein Pfad ausgewählt
 	Drag on the image to draw a path; drag its points to bend it, click its line to add a point, and Alt-click a point to remove it. Delete removes the selected path.	Ziehen Sie im Bild, um einen Pfad zu zeichnen; ziehen Sie seine Punkte, um ihn zu biegen, klicken Sie auf seine Linie, um einen Punkt hinzuzufügen, und Alt-klicken Sie einen Punkt, um ihn zu entfernen. Entf entfernt den ausgewählten Pfad.
-	Speed	Geschwindigkeit
-	Taper	Verjüngung
 	Iris Blur…	Irisweichzeichner…
 	Tilt-Shift…	Tilt-Shift…
 	Path Blur…	Pfadweichzeichner…
@@ -2931,6 +2929,8 @@ curves	Smooth	Glätten
 	Overlay Edge	Kante überlagern
 	Focus	Fokus
 	Transition	Übergang
+	Speed	Geschwindigkeit
+	Taper	Verjüngung
 	End X	Ende X
 	End Y	Ende Y
 	Blur Angle	Weichzeichnungswinkel
