@@ -314,7 +314,9 @@ fn tip_shape(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset], 
     if let Some(p) = tip_grid(ui, "brush-tip-grid", presets, highlight).and_then(|i| presets.get(i)) {
         let (pt, ps, ph, pa, pr, psp) = preset_tip(p);
         b.tip = pt.clone();
-        b.size = ps;
+        if p.captures.size {
+            b.size = ps;
+        }
         b.hardness = ph;
         b.angle = pa;
         b.roundness = pr;

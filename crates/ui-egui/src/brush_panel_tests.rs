@@ -1471,59 +1471,75 @@ fn checkboxes_show_a_pressed_state_from_their_label() {
 #[test]
 fn tip_grid_window_picks_only_tip_fields_and_records_its_identity() {
     use egui_kittest::kittest::{NodeT, Queryable};
-    let mut h = harness(0, 0);
-    h.state_mut().session.tools.presets = (0..16)
-        .map(|i| paint::BrushPreset {
-            name: format!("Tip command {i:04}"),
-            brush: BrushSettings {
-                size: 73.0,
-                hardness: 0.35,
-                angle: 37.0,
-                roundness: 0.45,
-                spacing: 0.21,
-                tip: TipShape::Sampled(GrayTile { width: 2, height: 2, data: vec![0, 65535, 65535, 0].into() }),
-                ..Default::default()
-            },
-            builtin: false,
-            group: "Synthetic".into(),
-            folder: Vec::new(),
-            captures: Default::default(),
-        })
-        .collect();
-    h.state_mut()
-        .session
-        .execute(
-            "tools.setBrush",
-            json!({"size":130,"hardness":0.9,"angle":-29,"roundness":0.85,"spacing":0.11,
-        "flipX":true,"spacingEnabled":false,"noise":true,"locks":{"noise":true},
-        "shapeDynamics":{"enabled":true,"size":{"control":"penTilt","minimum":0.37}}}),
-        )
-        .unwrap();
-    h.run_steps(4);
-    let before = h.state().session.tools.brush.clone();
-    let n = h.state().session.journal.len();
-    let chosen = h.state().session.tools.presets[7].brush.clone();
-    h.get_by_label("Tip command 0007").click();
-    h.run_steps(4);
-    let mut expected = before;
-    expected.tip = chosen.tip.clone();
-    expected.size = chosen.size;
-    expected.hardness = chosen.hardness;
-    expected.angle = chosen.angle;
-    expected.roundness = chosen.roundness;
-    expected.spacing = chosen.spacing;
-    assert_eq!(h.state().session.tools.brush, expected, "dynamics, flips, locks and spacing switch stay with the working brush");
-    assert_eq!(h.state().session.tools.current_preset.as_deref(), Some("Tip command 0007"));
-    assert_eq!(h.state().session.journal.len(), n + 2);
-    assert_eq!(h.state().session.journal[n].0, "brush.presets.setCurrent");
-    let (id, params) = last_journal(h.state()).unwrap();
-    assert_eq!(id, "tools.setBrush");
-    assert_eq!(
-        params["brush"],
-        json!({"tip":serde_json::to_value(&chosen.tip).unwrap(),"size":73.0,"hardness":0.35f32,"angle":37.0,"roundness":0.45f32,"spacing":0.21f32})
-    );
-    assert_eq!(h.get_by_label("Tip command 0007").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
-    assert_eq!(h.get_by_label("Tip command 0006").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+    for capture_size in [true, false] {
+        let mut h = harness(0, 0);
+        h.state_mut().session.tools.presets = (0..16)
+            .map(|i| paint::BrushPreset {
+                name: format!("Tip command {i:04}"),
+                brush: BrushSettings {
+                    size: 73.0,
+                    hardness: 0.35,
+                    angle: 37.0,
+                    roundness: 0.45,
+                    spacing: 0.21,
+                    tip: TipShape::Sampled(GrayTile { width: 2, height: 2, data: vec![0, 65535, 65535, 0].into() }),
+                    ..Default::default()
+                },
+                builtin: false,
+                group: "Synthetic".into(),
+                folder: Vec::new(),
+                captures: paint::PresetCaptures { size: capture_size, ..Default::default() },
+            })
+            .collect();
+        h.state_mut()
+            .session
+            .execute(
+                "tools.setBrush",
+                json!({
+                    "size":17.25,"hardness":0.9,"angle":-29,"roundness":0.85,"spacing":0.11,
+                    "flipX":true,"spacingEnabled":false,"noise":true,"locks":{"noise":true},
+                    "shapeDynamics":{"enabled":true,"size":{"control":"penTilt","minimum":0.37}}
+                }),
+            )
+            .unwrap();
+        h.run_steps(4);
+        let before = h.state().session.tools.brush.clone();
+        let presets = h.state().session.tools.presets.clone();
+        let n = h.state().session.journal.len();
+        let chosen = presets[7].clone();
+        h.get_by_label("Tip command 0007").click();
+        h.run_steps(4);
+        let mut expected = before.clone();
+        expected.tip = chosen.brush.tip.clone();
+        // The model documents that uncaptured size stays with the working tool.
+        expected.size = chosen.picked_over(&before).size;
+        expected.hardness = chosen.brush.hardness;
+        expected.angle = chosen.brush.angle;
+        expected.roundness = chosen.brush.roundness;
+        expected.spacing = chosen.brush.spacing;
+        assert_eq!(h.state().session.tools.brush, expected, "captureSize={capture_size}: preserve the model's size choice and non-tip fields");
+        assert_eq!(h.state().session.tools.presets, presets, "picking cannot rewrite the saved preset");
+        assert_eq!(h.state().session.tools.current_preset.as_deref(), Some("Tip command 0007"));
+        assert_eq!(h.state().session.journal.len(), n + 2);
+        assert_eq!(h.state().session.journal[n].0, "brush.presets.setCurrent");
+        let (id, params) = last_journal(h.state()).unwrap();
+        assert_eq!(id, "tools.setBrush");
+        let mut patch = json!({"tip":serde_json::to_value(&chosen.brush.tip).unwrap(),"hardness":0.35f32,"angle":37.0,"roundness":0.45f32,"spacing":0.21f32});
+        if capture_size {
+            patch["size"] = json!(73.0);
+        }
+        assert_eq!(params["brush"], patch, "uncaptured size must not leak into the command journal");
+        let mut replay = photocraft_engine::Session::new();
+        replay.tools.presets = presets;
+        replay.tools.brush = before;
+        for (id, params) in &h.state().session.journal[n..] {
+            replay.execute(id, params.clone()).unwrap();
+        }
+        assert_eq!(replay.tools.brush, expected);
+        assert_eq!(replay.tools.current_preset.as_deref(), Some("Tip command 0007"));
+        assert_eq!(h.get_by_label("Tip command 0007").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+        assert_eq!(h.get_by_label("Tip command 0006").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+    }
 }
 
 #[test]
