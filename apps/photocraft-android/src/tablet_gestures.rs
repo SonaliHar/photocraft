@@ -1,6 +1,7 @@
 //! Android tablet gestures that need a little more detail than winit currently exposes.
 
 use egui::{Event, PointerButton, Pos2, RawInput};
+use photocraft_engine::prefs::StylusButtonAction;
 
 /// An Android-host gesture expressed independently from Java/JNI, so its translation stays
 /// testable with normal Rust unit tests.
@@ -29,7 +30,7 @@ pub(crate) struct TabletGestureRouter {
 }
 
 impl TabletGestureRouter {
-    pub(crate) fn apply(&mut self, raw: &mut RawInput, actions: impl IntoIterator<Item = TabletAction>) {
+    pub(crate) fn apply(&mut self, raw: &mut RawInput, actions: impl IntoIterator<Item = TabletAction>, mode: StylusButtonAction) {
         let now = raw.time.unwrap_or(0.0);
         let mut touch_tap = None;
         let mut touch_frame = !self.touches.is_empty();
@@ -122,7 +123,7 @@ impl TabletGestureRouter {
             }
         }
 
-        let rewrite_primary = self.barrel_down || self.barrel_released;
+        let rewrite_primary = mode == StylusButtonAction::ContextMenu && (self.barrel_down || self.barrel_released);
         let mut saw_press = false;
         let mut saw_release = false;
         if rewrite_primary {
@@ -137,11 +138,14 @@ impl TabletGestureRouter {
             }
         }
 
-        if let Some((x, y)) = barrel_press.filter(|_| !saw_press) {
+        if let Some((x, y)) = barrel_press.filter(|_| mode == StylusButtonAction::ContextMenu && !saw_press) {
             push_button(raw, x, y, true);
         }
-        if let Some((x, y)) = barrel_release.filter(|_| !saw_release) {
+        if let Some((x, y)) = barrel_release.filter(|_| mode == StylusButtonAction::ContextMenu && !saw_release) {
             push_button(raw, x, y, false);
+        }
+        if let Some((x, y)) = barrel_release.filter(|_| mode != StylusButtonAction::ContextMenu) {
+            push_primary_release(raw, x, y);
         }
         self.barrel_released = false;
 
@@ -166,6 +170,12 @@ fn push_button(raw: &mut RawInput, x: f32, y: f32, pressed: bool) {
     let Some(pos) = normalized_pos(raw, x, y) else { return };
     raw.events.push(Event::PointerMoved(pos));
     raw.events.push(Event::PointerButton { pos, button: PointerButton::Secondary, pressed, modifiers: Default::default() });
+}
+
+fn push_primary_release(raw: &mut RawInput, x: f32, y: f32) {
+    let Some(pos) = normalized_pos(raw, x, y) else { return };
+    raw.events.push(Event::PointerMoved(pos));
+    raw.events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
 }
 
 fn normalized_pos(raw: &RawInput, x: f32, y: f32) -> Option<Pos2> {
@@ -200,7 +210,7 @@ mod tests {
         for (frame, events) in frames.into_iter().enumerate() {
             let mut raw = input(events);
             raw.time = Some(1.0 + frame as f64 * 0.02);
-            router.apply(&mut raw, []);
+            router.apply(&mut raw, [], StylusButtonAction::ContextMenu);
             ctx.begin_pass(raw);
             ctx.input(|i| {
                 assert!(!i.pointer.primary_down());
@@ -222,11 +232,11 @@ mod tests {
             Event::PointerButton { pos: pos2(100.0, 100.0), button: PointerButton::Primary, pressed: true, modifiers: Default::default() },
         ]);
         raw.time = Some(1.0);
-        router.apply(&mut raw, []);
+        router.apply(&mut raw, [], StylusButtonAction::ContextMenu);
         assert!(router.waiting_for_chord());
         let mut raw = input(vec![]);
         raw.time = Some(1.09);
-        router.apply(&mut raw, []);
+        router.apply(&mut raw, [], StylusButtonAction::ContextMenu);
         assert!(raw.events.iter().any(|event| matches!(event, Event::PointerButton { button: PointerButton::Primary, pressed: true, .. })));
         assert!(!router.waiting_for_chord());
     }
@@ -238,7 +248,7 @@ mod tests {
             let mut router = TabletGestureRouter::default();
             let mut raw = input(vec![touch(1, egui::TouchPhase::Start, 100.0), touch(2, egui::TouchPhase::Start, 200.0)]);
             raw.time = Some(1.0);
-            router.apply(&mut raw, []);
+            router.apply(&mut raw, [], StylusButtonAction::ContextMenu);
             let mut events = Vec::new();
             if moved {
                 events.push(touch(2, egui::TouchPhase::Move, 250.0));
@@ -246,7 +256,7 @@ mod tests {
             events.extend([touch(2, egui::TouchPhase::End, 200.0), touch(1, egui::TouchPhase::End, 100.0)]);
             let mut raw = input(events);
             raw.time = Some(1.1);
-            router.apply(&mut raw, []);
+            router.apply(&mut raw, [], StylusButtonAction::ContextMenu);
             let clicks = raw.events.iter().filter(|event| matches!(event, Event::PointerButton { button: PointerButton::Secondary, .. })).count();
             assert_eq!(clicks, if moved { 0 } else { 2 });
         }
@@ -257,19 +267,32 @@ mod tests {
         let mut router = TabletGestureRouter::default();
         let down = Event::PointerButton { pos: pos2(20.0, 30.0), button: PointerButton::Primary, pressed: true, modifiers: Default::default() };
         let mut raw = input(vec![down]);
-        router.apply(&mut raw, [TabletAction::Barrel { x: 0.02, y: 0.06, pressed: true }]);
+        router.apply(&mut raw, [TabletAction::Barrel { x: 0.02, y: 0.06, pressed: true }], StylusButtonAction::ContextMenu);
         assert!(matches!(raw.events.as_slice(), [Event::PointerButton { button: PointerButton::Secondary, pressed: true, .. }]));
 
         let up = Event::PointerButton { pos: pos2(20.0, 30.0), button: PointerButton::Primary, pressed: false, modifiers: Default::default() };
         let mut raw = input(vec![up]);
-        router.apply(&mut raw, [TabletAction::Barrel { x: 0.02, y: 0.06, pressed: false }]);
+        router.apply(&mut raw, [TabletAction::Barrel { x: 0.02, y: 0.06, pressed: false }], StylusButtonAction::ContextMenu);
         assert!(matches!(raw.events.as_slice(), [Event::PointerButton { button: PointerButton::Secondary, pressed: false, .. }]));
+    }
+
+    #[test]
+    fn temporary_barrel_tool_keeps_primary_input_and_ends_when_released() {
+        let mut router = TabletGestureRouter::default();
+        let down = Event::PointerButton { pos: pos2(20.0, 30.0), button: PointerButton::Primary, pressed: true, modifiers: Default::default() };
+        let mut raw = input(vec![down]);
+        router.apply(&mut raw, [TabletAction::Barrel { x: 0.02, y: 0.06, pressed: true }], StylusButtonAction::Eraser);
+        assert!(matches!(raw.events.as_slice(), [Event::PointerButton { button: PointerButton::Primary, pressed: true, .. }]));
+
+        let mut raw = input(Vec::new());
+        router.apply(&mut raw, [TabletAction::Barrel { x: 0.02, y: 0.06, pressed: false }], StylusButtonAction::Eraser);
+        assert!(matches!(raw.events.as_slice(), [Event::PointerMoved(_), Event::PointerButton { button: PointerButton::Primary, pressed: false, .. }]));
     }
 
     #[test]
     fn two_finger_tap_adds_a_complete_secondary_click_at_the_normalized_point() {
         let mut raw = input(Vec::new());
-        TabletGestureRouter::default().apply(&mut raw, [TabletAction::SecondaryTap { x: 0.25, y: 0.8 }]);
+        TabletGestureRouter::default().apply(&mut raw, [TabletAction::SecondaryTap { x: 0.25, y: 0.8 }], StylusButtonAction::ContextMenu);
         assert!(
             matches!(raw.events.as_slice(), [Event::PointerMoved(pos), Event::PointerButton { pos: down, button: PointerButton::Secondary, pressed: true, .. }, Event::PointerMoved(release_pos), Event::PointerButton { pos: up, button: PointerButton::Secondary, pressed: false, .. }] if *pos == pos2(250.0, 400.0) && *down == *pos && *release_pos == *pos && *up == *pos)
         );

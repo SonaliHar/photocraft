@@ -3185,14 +3185,26 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let temporary = crate::hold_keys::for_frame(app, &ctx, drawing || crate::type_transform::active(app));
     let space_pan = temporary == Some(crate::hold_keys::Temporary::Hand);
     let middle = ui.input(|i| i.pointer.middle_down());
-    let tool = match temporary {
-        Some(t) => t.tool(),
-        None if middle => Tool::Hand,
-        None => app.ui.tool,
+    let stylus_tool = app
+        .services
+        .stylus_barrel_held
+        .as_ref()
+        .is_some_and(|held| held())
+        .then(|| match app.session.prefs().tools.stylus_button_action {
+            photocraft_engine::prefs::StylusButtonAction::Eraser => Some(Tool::Eraser),
+            photocraft_engine::prefs::StylusButtonAction::Lasso => Some(Tool::Lasso),
+            photocraft_engine::prefs::StylusButtonAction::ContextMenu => None,
+        })
+        .flatten();
+    let tool = match (stylus_tool, temporary) {
+        (Some(tool), _) => tool,
+        (None, Some(t)) => t.tool(),
+        (None, None) if middle => Tool::Hand,
+        (None, None) => app.ui.tool,
     };
     // ⌘ held: this frame's gestures go to the Move tool (`PhotocraftApp::active_tool`). The Hand
     // and Zoom never reach `tool_event`, so only the Move needs the state machine to know.
-    app.tool_override = (temporary == Some(crate::hold_keys::Temporary::Move)).then_some(Tool::Move);
+    app.tool_override = stylus_tool.or_else(|| (temporary == Some(crate::hold_keys::Temporary::Move)).then_some(Tool::Move));
     // `~` held: a Brush or Pencil stroke that starts now erases (`tool_event`'s `Down`).
     app.held_erase = crate::hold_keys::erase_held(app, &ctx);
     // Zoom direction: the temporary zoom key decides, else ⌥ (Zoom tool), held or latched in

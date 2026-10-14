@@ -75,12 +75,16 @@ fn android_services(data_dir: PathBuf, ctx: egui::Context) -> Services {
         save_prefs: Some(Box::new(move |text| write_atomic(&prefs_for_save, text.as_bytes()))),
         raw_input: Some(Box::new({
             let mut router = TabletGestureRouter::default();
-            move |raw| {
-                router.apply(raw, gesture_bridge.take_tablet_actions());
+            move |raw, mode| {
+                router.apply(raw, gesture_bridge.take_tablet_actions(), mode);
                 if router.waiting_for_chord() {
                     ctx.request_repaint_after(std::time::Duration::from_millis(80));
                 }
             }
+        })),
+        stylus_barrel_held: Some(Box::new({
+            let bridge = bridge::shared();
+            move || bridge.barrel_held()
         })),
         touch_ui: true,
         ..recovery

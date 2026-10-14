@@ -392,7 +392,7 @@ pub type CapsLockFn = Box<dyn FnMut() -> bool>;
 pub type WindowFrameFn = Box<dyn FnMut()>;
 /// Adds platform-specific input before egui sees a frame. Used by tablet shells to translate
 /// operating-system gestures that winit cannot express directly.
-pub type RawInputFn = Box<dyn FnMut(&mut egui::RawInput)>;
+pub type RawInputFn = Box<dyn FnMut(&mut egui::RawInput, photocraft_engine::prefs::StylusButtonAction)>;
 /// The caption buttons' current style ([`Services::caption_style`]).
 pub type CaptionStyleFn = Box<dyn Fn(&egui::Context) -> CaptionStyle>;
 
@@ -444,6 +444,8 @@ pub struct Services {
     pub save_prefs: Option<SaveTextFn>,
     /// Platform gestures injected before PhotoCraft processes the frame's pointer events.
     pub raw_input: Option<RawInputFn>,
+    /// Whether a platform pen's side button is held during a tip contact.
+    pub stylus_barrel_held: Option<Box<dyn Fn() -> bool>>,
     /// Photoshop's live keyboard shortcut set, imported once at first launch (`kys_import`).
     pub photoshop_shortcuts: Option<PhotoshopShortcutsFn>,
     pub system_theme: Option<SystemThemeFn>,
@@ -1770,7 +1772,7 @@ impl eframe::App for PhotocraftApp {
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         if let Some(platform_input) = self.services.raw_input.as_mut() {
-            platform_input(raw_input);
+            platform_input(raw_input, self.session.prefs().tools.stylus_button_action);
         }
         let frame_start = gpu_canvas::now_ms();
         // An undecorated window gets its caption back when the toolkit changes its flags

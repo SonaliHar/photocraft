@@ -38,6 +38,7 @@ struct State {
     save_targets: HashMap<String, String>,
     write: Option<SaveRequest>,
     tablet_actions: VecDeque<TabletAction>,
+    barrel_held: bool,
 }
 
 /// One pending picker or write at a time. PhotoCraft itself serializes file dialogs, and the
@@ -206,8 +207,15 @@ impl Bridge {
         lock(&self.state).tablet_actions.drain(..).collect()
     }
 
+    pub(crate) fn barrel_held(&self) -> bool {
+        lock(&self.state).barrel_held
+    }
+
     fn tablet_action(&self, action: TabletAction) {
         let mut state = lock(&self.state);
+        if let TabletAction::Barrel { pressed, .. } = action {
+            state.barrel_held = pressed;
+        }
         if state.tablet_actions.len() >= MAX_TABLET_ACTIONS {
             state.tablet_actions.pop_front();
         }
