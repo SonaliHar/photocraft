@@ -205,7 +205,7 @@ pub struct SelectParams {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ListParams {
-    /// Only commands whose id or label contains this text (case-insensitive).
+    /// Only commands whose id, label or keywords contain this text (case-insensitive).
     #[serde(default)]
     pub filter: Option<String>,
     /// Only commands that can run right now.
@@ -796,7 +796,8 @@ impl PhotocraftMcp {
         }
     }
 
-    #[tool(description = "List engine commands: id, label, menu path, shortcut, parameter doc, enabled now. \
+    #[tool(description = "List engine commands. Returns a JSON array (no wrapper object) of {id, label, menu: [path], \
+        shortcut: string|null, params: doc string, enabled: bool, disabledReason: string|null, needsDocument: bool}. \
         `disabledReason` says why a command is off (null when enabled); `needsDocument` is true when it is off because no \
         document is open: create or open one first (doc_new, doc_open).")]
     async fn command_list(&self, Parameters(p): Parameters<ListParams>) -> Result<CallToolResult, McpError> {
@@ -820,9 +821,8 @@ impl PhotocraftMcp {
             .unwrap_or_else(|| all.get("commands").and_then(Value::as_array).cloned().unwrap_or_default())
             .into_iter()
             .filter(|c| {
-                let hay =
-                    format!("{} {}", c.get("id").and_then(Value::as_str).unwrap_or(""), c.get("label").and_then(Value::as_str).unwrap_or("")).to_lowercase();
-                needle.as_ref().is_none_or(|n| hay.contains(n)) && (!enabled_only || c.get("enabled").and_then(Value::as_bool).unwrap_or(true))
+                needle.as_ref().is_none_or(|n| photocraft_engine::commands::list_entry_matches(c, n))
+                    && (!enabled_only || c.get("enabled").and_then(Value::as_bool).unwrap_or(true))
             })
             .collect();
         Ok(ok_json(&Value::Array(items)))

@@ -925,7 +925,28 @@ pub fn preset_list(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&
         egui::Area::new(egui::Id::new(("brush-drag-label", layout.id))).order(egui::Order::Tooltip).fixed_pos(p + vec2(12.0, 8.0)).interactable(false).show(
             ui.ctx(),
             |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| ui.label(name));
+                if matches!(&*d, BrushDrag::Preset(_)) {
+                    ui.set_opacity(0.8);
+                }
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        if let BrushDrag::Preset(n) = &*d
+                            && let Some(preset) = presets.iter().find(|preset| preset.name == *n)
+                        {
+                            let brush = &preset.brush;
+                            let tip = brush_preview::tip_texture(
+                                ui.ctx(),
+                                &format!("brushes-drag-tip:{}", preset.name),
+                                &brush.tip,
+                                (brush.hardness, brush.angle, brush.roundness),
+                                36,
+                                Tokens::get(ui.ctx()).text,
+                            );
+                            ui.add(egui::Image::new(&tip).fit_to_exact_size(vec2(36.0, 36.0)).alt_text(&preset.name));
+                        }
+                        ui.label(name);
+                    });
+                });
             },
         );
     }
@@ -996,8 +1017,8 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if crate::brush_picker::named(new, "Create new brush from the current settings").clicked() {
                 crate::brush_preset_dialog::open(app, None);
             }
-            if icons::button(ui, "folder-open", 24.0, false, "Import Brushes… (.abr)").clicked() {
-                let _ = app.open_dialog_file();
+            if icons::button(ui, "folder-open", 24.0, false, "Import Brushes… (.abr or image)").clicked() {
+                let _ = crate::preset_files_ui::import_brushes(app);
             }
         });
     });

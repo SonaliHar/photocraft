@@ -553,6 +553,9 @@
 	Blur	ぼかし
 	Blur Gallery	ぼかしギャラリー
 	Field Blur…	フィールドぼかし…
+# Field Blur pins (#3373)
+	No pin selected	ピンが選択されていません
+	Click the image to add a pin; drag a pin to move it, or its ring to change its blur. Delete removes the selected pin.	画像をクリックしてピンを追加します。ピンをドラッグして移動し、リングをドラッグしてぼかしを変更します。Delete キーで選択したピンを削除します。
 	Iris Blur…	虹彩絞りぼかし…
 	Tilt-Shift…	チルトシフト…
 	Path Blur…	パスぼかし…
@@ -982,7 +985,6 @@
 	Contiguous	隣接
 	Contrast	コントラスト
 	Control:	コントロール:
-	Convert document's colors to the working space	ドキュメントの色を作業用スペースに変換
 	Convert to sRGB	sRGB に変換
 	Copies	部数
 	Copper	銅
@@ -1562,7 +1564,6 @@
 	Use Default	既定を使用
 	Use Legacy	従来方式を使用
 	Use Measurement Scale	測定スケールを使用
-	Use the embedded profile (instead of the working space)	埋め込みプロファイルを使用 (作業用スペースの代わり)
 	Variables bind a layer's visibility, text or pixels to a named data slot.	変数は、レイヤーの表示状態・テキスト・ピクセルを、名前付きのデータ枠に結び付けます。
 	Vertical scale	垂直比率
 	Vibrance	自然な彩度
@@ -1890,6 +1891,8 @@
 	Camera Raw Defaults	Camera Raw の既定値
 	Canvas border	カンバスの境界
 	Show canvas dots	カンバスのドットを表示
+	Clip thumbnails to layer bounds	サムネールをレイヤーの境界でクリップ
+	Clip Thumbnails to Layer Bounds	サムネールをレイヤーの境界でクリップ
 	Canvas color	カンバスの色
 	Canvas custom color	カンバスのカスタム色
 	Color picker	カラーピッカー
@@ -2081,6 +2084,8 @@
 	Fade steps	フェードのステップ数
 	Hide the layer's effects  ({key}-click: all layers)	レイヤーの効果を隠す ({key}+クリック: すべてのレイヤー)
 	Import Brushes… (.abr)	ブラシを読み込み…(.abr)
+	Import Brushes… (.abr or image)	ブラシを読み込み…(.abr または画像)
+	Import Brush from Image…	画像からブラシを読み込み…
 	Move Group Down	グループを下へ移動
 	Move Group Up	グループを上へ移動
 	Reset the brush to the defaults	ブラシを既定に戻す
@@ -2189,6 +2194,9 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	選択範囲を作成するパスがありません。ペンツールで描くか、パスパネルでパスを選択してください。
 	Cancel opening	開くのをキャンセル
 	Cancelled opening {name}	{name} を開くのをキャンセルしました
+	The document “{name}” does not have an embedded {mode} profile.	ドキュメント「{name}」には埋め込み {mode} プロファイルがありません。
+	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	ドキュメント「{name}」の埋め込みカラープロファイルは、現在の {mode} 作業用スペースと一致しません。
+	Working: {working}	作業用スペース: {working}
 	Developing {name}	{name} を現像中
 	Cancelled {label}	{label} をキャンセルしました
 	Esc to cancel	Esc キーでキャンセル
@@ -2398,6 +2406,7 @@ cameraRaw	Color	カラー
 	Violet	紫
 	Reset	初期化
 	Large document: redrawing on the CPU	大きなドキュメント: CPU で再描画しています
+	Redrawing	再描画中
 	This redraw took {seconds} s on the CPU.	この再描画は CPU で {seconds} 秒かかりました。
 	Edits that change the whole document, such as a layer's blend mode, opacity or visibility, redraw all of it.	レイヤーの描画モード、不透明度、表示/非表示など、ドキュメント全体に関わる編集では全体が再描画されます。
 	Its layers don't fit the GPU memory budget. Raising Memory usage in Preferences › Performance raises the budget, up to a quarter of this computer's memory.	レイヤーが GPU メモリの予算に収まりません。環境設定 › パフォーマンスのメモリ使用量を増やすと、このコンピューターのメモリの4分の1まで予算が増えます。
@@ -3305,7 +3314,6 @@ fontWeight	Italic	斜体
 	Exposure Program	露出プログラム
 	Extra Bold	エクストラボールド
 	Extra Light	エクストラライト
-	File Naming	ファイル名の付け方
 	Fill Light	フィルライト
 	First Color Readout	最初のカラー読み取り
 	Flash	フラッシュ
@@ -3634,6 +3642,7 @@ cameraData	Lens	レンズ
 	Search settings…	設定を検索…
 	No matching settings	一致する設定はありません
 	Loading fonts…	フォントを読み込み中…
+	Response curve	応答カーブ
 	Simulate Pressure	筆圧をシミュレート
 	Stroke Path…	パスのストローク…
 	Background Eraser	背景消しゴム
@@ -3669,6 +3678,7 @@ curves	Smooth	スムーズ
 	Paint over hair or fur on the image; Alt paints the other mode	画像の髪や毛の上をペイントします。Alt で反対のモードでペイント
 	Clear Brush Strokes	ブラシストロークを消去
 	Show rulers	定規を表示
+	Presentation	プレゼンテーション
 
 # Color Sampler (added with the i18n coverage repair)
 	Click to place · Alt-click or drag off-canvas to remove	クリックで配置 · Alt キーを押しながらクリック、またはカンバス外へドラッグで削除
@@ -3710,7 +3720,8 @@ curves	Smooth	スムーズ
 	No object found there — drag a rectangle around it	そこにオブジェクトが見つかりません — 周囲に矩形をドラッグしてください
 	Remove after each stroke	ストロークごとに削除
 	Apply the removal ({key})	削除を適用 ({key})
-	Strokes to remove: {n} (Enter applies, Esc cancels)	削除するストローク: {n} (Enter で適用、Esc で取り消し)
+	Strokes to remove: {n} (Enter applies, Esc cancels)	削除するストローク: {n}（Enter で適用、Esc で取り消し）
+	Show home recent files	ホーム画面に最近使ったファイルを表示
 
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
 	Load Actions…	アクションを読み込み…
@@ -3722,6 +3733,8 @@ curves	Smooth	スムーズ
 @plural	Saved {n} action to {file}|Saved {n} actions to {file}	{file} にアクション {n} 個を保存しました
 @plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	Photoshop に対応するもののない {n} 個のステップを省きました
 
+	File Naming	ファイル名の付け方
+	Starting serial	開始番号
 # Actions panel: set folders, dialog toggle, Insert Stop
 	Insert Stop…	ストップを挿入…
 	Save Set…	セットを保存…
@@ -3732,6 +3745,8 @@ curves	Smooth	スムーズ
 	Action playback stopped	アクションの再生を停止しました
 	Step {step} is waiting for its dialog	ステップ {step} はダイアログを待っています
 @plural	{n} action|{n} actions	アクション {n} 個
+# Batch / Image Processor
+	Include All Subfolders	すべてのサブフォルダーを含める
 
 # Liquify tool names (shown via tl!(tool.label()) in the UI, so they are not found by the static scan)
 	Forward Warp	前方ワープ
@@ -3799,9 +3814,30 @@ curves	Smooth	スムーズ
 	Vector Mask Hides Effects	ベクトルマスクで効果を隠す
 	Auto Add/Delete	自動追加・削除
 
+# Native Windows printing qualification
+	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	印刷設定の「鏡像」も有効にしないでください。2回反転すると元に戻ります。
+	Print Settings…	印刷設定…
+	Remember to turn off the printer's own colour management in Print Settings…	印刷設定でプリンター独自のカラーマネジメントを無効にしてください…
+	Sent to {printer}	{printer} に送信しました
+	set in Print Settings…	印刷設定で指定…
 # Restored rows (custom print paper #3820, brush presets, Vanishing Point help, brush panel menu)
 	Drag to pan · Scroll to zoom · Double-click to fit	ドラッグで移動 · スクロールでズーム · ダブルクリックで全体表示
 	Clear Brush Controls	ブラシのコントロールを消去
 	Reset All Locked Settings	ロックされた設定をすべて初期化
 	Copy Texture to Other Tools	テクスチャを他のツールにコピー
 	ICO is limited to 256 × 256 pixels	ICO は 256 × 256 ピクセルまでです
+# Embedded Profile Mismatch: profile names beside the choices, Remember this choice
+	Use the embedded profile ({profile})	埋め込みプロファイルを使用 ({profile})
+	Convert to the working space ({profile})	作業用スペースに変換 ({profile})
+	Remember this choice for future images	今後の画像でもこの選択を使用
+	Turn the prompt back on with Ask On Mismatch in Edit › Color Settings.	確認を再び表示するには、編集 › カラー設定 の Ask On Mismatch をオンにします。
+	Button Mode	ボタンモード
+	Button Mode On	ボタンモード オン
+# Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
+	Darken Interface	インターフェイスを暗くする
+	Lighten Interface	インターフェイスを明るくする
+# Bevel & Emboss Technique.
+	Technique	テクニック
+	Chisel Hard	チゼルハード
+	Chisel Soft	チゼルソフト
+	Open color-less EXR as ACEScg	色空間のないEXRをACEScgとして開く
