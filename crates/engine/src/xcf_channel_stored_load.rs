@@ -1,8 +1,8 @@
 //! Bounded preparation for an explicit stored-channel selection replacement.
-//! No registered route or mutation is supplied here: default Load and its raw
-//! admission stay unchanged. SourceBinding is an explicit original-byte witness,
-//! not a renderer, and selection-only publication needs a separately reviewed
-//! dispatcher/transaction boundary. The frozen snapshot owns source storage.
+//! Preparation itself never publishes. The scoped registered publication child
+//! consumes its separately admitted offer; default Load/raw admission is unchanged.
+//! SourceBinding is an explicit original-byte witness, not a renderer or a grant.
+//! The frozen snapshot owns source storage through the final transaction fence.
 use crate::{
     DocumentSnapshot, EngineError, Result, Session,
     channel_cmds::ChannelView,
@@ -96,6 +96,17 @@ fn inspector_limits(limits: Limits, held: u64, work: &Work, view_reservation: u6
         manifest_bytes: standard.manifest_bytes.min(available),
         object_bytes: standard.object_bytes.min(available),
     })
+}
+fn history_error(error: photocraft_raster::RasterInputError, ctl: &Interrupt<'_>) -> EngineError {
+    if ctl.cancelled() {
+        return EngineError::Cancelled;
+    }
+    if error == photocraft_raster::RasterInputError::UnsupportedConversion {
+        return bad(
+            "stored selection publication requires plain resident history; byte-budgeted, cached-tile or accounted history needs controlled history publication",
+        );
+    }
+    bad(&format!("stored history admission: {error}"))
 }
 fn bad(message: &str) -> EngineError {
     EngineError::BadParams { cmd: "select.loadSelection".into(), msg: message.into() }
@@ -240,8 +251,36 @@ pub struct PreparedStoredLoad {
     bounds: Rect,
     old_bounds: Rect,
     requirements: PreparationRequirements,
+    publication_reserved: bool,
+    publication_runtime: Option<[usize; 4]>,
+    publication_history: Option<photocraft_ops::CloneMetadataRequirements>,
+    publication_history_max_states: Option<usize>,
 }
 impl PreparedStoredLoad {
+    pub(crate) fn snapshot(&self) -> &DocumentSnapshot {
+        &self.snapshot
+    }
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+    pub(crate) fn publication_reserved(&self) -> bool {
+        self.publication_reserved
+    }
+    /// Revalidate the exact old target before updating only its current extent.
+    pub(crate) fn apply_selection_bounds(&self, doc: &mut Document, ctl: &Interrupt<'_>) -> Result<()> {
+        if !self.publication_reserved || doc.id != self.snapshot.id {
+            return Err(bad("missing stored publication reservation"));
+        }
+        let format = self.stored_surface()?.format();
+        let (id, old) = target(doc, self.source, self.bounds, format, ctl)?;
+        if id != self.selection || old != self.old_bounds {
+            return Err(bad("stored publication target changed"));
+        }
+        let state = doc.xcf_state.as_mut().ok_or_else(|| bad("stored selection state disappeared"))?;
+        let item = state.items.iter_mut().find(|item| item.item == ItemRef::Channel(id)).ok_or_else(|| bad("stored selection metadata disappeared"))?;
+        item.raster_bounds = Some(self.bounds);
+        poll(ctl)
+    }
     pub fn source_channel(&self) -> ChannelId {
         self.source
     }
@@ -281,6 +320,32 @@ impl PreparedStoredLoad {
         {
             return Err(bad("stored selection target changed during preparation"));
         }
+        if let Some(expected) = self.publication_runtime {
+            let actual = [current.selected_layers.len(), current.selected_layers.capacity(), current.color_samplers.len(), current.color_samplers.capacity()];
+            if actual != expected {
+                return Err(bad("stored publication runtime selection or sampler storage changed"));
+            }
+        }
+        if let Some(expected) = self.publication_history {
+            if self.publication_history_max_states != Some(current.history.max_states) {
+                return Err(bad("stored publication history policy changed"));
+            }
+            let census = current.history.plain_clone_census_work().map_err(|error| history_error(error, control))?;
+            if census > expected.census_work_units {
+                return Err(bad("stored publication history traversal grew"));
+            }
+            let actual = current
+                .history
+                .plain_clone_metadata_requirements(
+                    add(expected.retained_bytes, expected.clone_bytes)?,
+                    add(expected.census_work_units, expected.clone_work_units)?,
+                    control,
+                )
+                .map_err(|error| history_error(error, control))?;
+            if actual != expected {
+                return Err(bad("stored publication history metadata changed"));
+            }
+        }
         let surface = self.stored_surface()?;
         let (id, old) = target(&current.doc, self.source, self.bounds, surface.format(), control)?;
         if id != self.selection || old != self.old_bounds {
@@ -298,7 +363,50 @@ pub fn prepare(session: &Session, binding: &SourceBinding<'_>, control: &Interru
 /// Poll work, model/payload bytes and repeated validation work share one ledger.
 /// Charges are conservative known operations, not CPU time or all legacy heap/RSS.
 pub fn prepare_with_limits(session: &Session, binding: &SourceBinding<'_>, limits: Limits, control: &Interrupt<'_>) -> Result<PreparedStoredLoad> {
+    prepare_internal(session, binding, limits, control, false)
+}
+/// The closed stored-read source has at most one native tile. This additional
+/// lease covers its output map, scoped offer/response/JSON headers, and the
+/// registered transaction's private model COW (already in the four-copy census).
+pub(crate) const PUBLICATION_BYTES: u64 = 8192;
+pub(crate) const PUBLICATION_INDEX: u64 = 4096;
+pub(crate) fn prepare_for_publication_with_limits(
+    session: &Session,
+    binding: &SourceBinding<'_>,
+    limits: Limits,
+    control: &Interrupt<'_>,
+) -> Result<PreparedStoredLoad> {
+    prepare_internal(session, binding, limits, control, true)
+}
+fn prepare_internal(
+    session: &Session,
+    binding: &SourceBinding<'_>,
+    mut limits: Limits,
+    control: &Interrupt<'_>,
+    publication: bool,
+) -> Result<PreparedStoredLoad> {
     limits.validate()?;
+    let mut publication_bytes = 0;
+    let mut publication_index = 0;
+    let mut publication_runtime = None;
+    let mut publication_history = None;
+    let mut publication_history_max_states = None;
+    if publication {
+        idle(session)?;
+        let current = session.active().ok_or(EngineError::NoDocument)?;
+        if current.selected_layers.len() > 10000 || current.color_samplers.len() > 10000 {
+            return Err(bad("stored publication runtime count limit"));
+        }
+        let selected = mul(current.selected_layers.capacity() as u64, std::mem::size_of::<LayerId>() as u64)?;
+        let samplers = mul(current.color_samplers.capacity() as u64, std::mem::size_of::<[f64; 2]>() as u64)?;
+        let runtime = add(mul(selected, 4)?, mul(samplers, 2)?)?;
+        publication_bytes = add(PUBLICATION_BYTES, runtime)?;
+        publication_index = add(PUBLICATION_INDEX, runtime)?;
+        publication_runtime =
+            Some([current.selected_layers.len(), current.selected_layers.capacity(), current.color_samplers.len(), current.color_samplers.capacity()]);
+        limits.resident_bytes = limits.resident_bytes.checked_sub(publication_bytes).ok_or_else(|| bad("stored publication resident limit"))?;
+        limits.index_bytes = limits.index_bytes.checked_sub(publication_index).ok_or_else(|| bad("stored publication index limit"))?;
+    }
     let work = Work { used: AtomicU64::new(0), exceeded: AtomicBool::new(false), limit: limits.work_units };
     let cancelled = || control.cancelled() || work.charge(1).is_err();
     let progress = |fraction| control.progress(fraction);
@@ -309,6 +417,32 @@ pub fn prepare_with_limits(session: &Session, binding: &SourceBinding<'_>, limit
         idle(session)?;
         let current = session.active().ok_or(EngineError::NoDocument)?;
         current.doc.validate_resident()?;
+        if publication {
+            // The allocation-free History census has its own genuine O(1)
+            // visit bound. Prepay it before traversal; token polls additionally
+            // share this Work. Clone work is paid before the registered edit.
+            let census = current.history.plain_clone_census_work().map_err(|error| history_error(error, &metered))?;
+            // One initial census and all fixed scoped offer/final fences.
+            // At most eight passes; no refund or fresh default work budget.
+            work.charge(mul(census, 8)?)?;
+            let history = current
+                .history
+                .plain_clone_metadata_requirements(limits.resident_bytes, work.remaining(), &metered)
+                .map_err(|error| history_error(error, &metered))?;
+            if history.census_work_units > census {
+                return Err(bad("stored history census exceeded prepaid work"));
+            }
+            work.charge(history.clone_work_units)?;
+            let metadata = add(history.retained_bytes, history.clone_bytes)?;
+            limits.resident_bytes = limits.resident_bytes.checked_sub(metadata).ok_or_else(|| bad("stored history resident limit"))?;
+            limits.index_bytes = limits.index_bytes.checked_sub(metadata).ok_or_else(|| bad("stored history index limit"))?;
+            publication_bytes = add(publication_bytes, metadata)?;
+            publication_index = add(publication_index, metadata)?;
+            publication_history = Some(history);
+            publication_history_max_states = Some(current.history.max_states);
+            // Historical Arc<Document> backing is already retained by caller
+            // history; this census prices metadata, not a complete RSS census.
+        }
         let requested_view = structural_view_bytes(&current.channel_view, false)?;
         if requested_view > limits.resident_bytes || requested_view > limits.index_bytes {
             return Err(bad("stored view preparation limit"));
@@ -317,6 +451,13 @@ pub fn prepare_with_limits(session: &Session, binding: &SourceBinding<'_>, limit
         // Metadata-only raster census is controlled before any inspector scratch
         // or view copy; the existing snapshot/provider is already owned by Session.
         let raster = current.doc.resident_raster_footprint_with(&metered)?;
+        if publication {
+            // Equality can visit a source and destination tile, plus final
+            // selection bounds/locks and transaction validation. Price native
+            // bytes, not a narrowed coverage interpretation. Poll work is extra.
+            let tile = mul(mul(photocraft_geom::TILE_SIZE as u64, photocraft_geom::TILE_SIZE as u64)?, 8)?;
+            work.charge(add(add(mul(tile, 2)?, 216384)?, PUBLICATION_INDEX)?)?;
+        }
         let mut held = add(add(raster.retained_bytes, mul(raster.clone_metadata_bytes, 4)?)?, requested_view)?;
         let mut model_limits = inspector_limits(limits, held, &work, requested_view)?;
         // The model is retained in the four-copy metadata envelope. Lower the
@@ -343,7 +484,8 @@ pub fn prepare_with_limits(session: &Session, binding: &SourceBinding<'_>, limit
         // both target scans before entry, including shared payload revalidation.
         // Per-loop polls
         // additionally debit the same meter; there is no refund on refusal.
-        work.charge(repeated_validation_work(&current.doc, model, payload)?)?;
+        let validation = repeated_validation_work(&current.doc, model, payload)?;
+        work.charge(if publication { mul(validation, 2)? } else { validation })?;
         let read = read_stored(&current.doc, binding, &metered)?;
         let (selection, old_bounds) = target(&current.doc, read.channel, read.bounds, read.surface.format(), &metered)?;
         let view = view_copy(&current.channel_view, &metered)?;
@@ -362,7 +504,15 @@ pub fn prepare_with_limits(session: &Session, binding: &SourceBinding<'_>, limit
             selection,
             bounds: read.bounds,
             old_bounds,
-            requirements: PreparationRequirements { resident_bytes, index_bytes, work_units: 0 },
+            requirements: PreparationRequirements {
+                resident_bytes: add(resident_bytes, publication_bytes)?,
+                index_bytes: add(index_bytes, publication_index)?,
+                work_units: 0,
+            },
+            publication_reserved: publication,
+            publication_runtime,
+            publication_history,
+            publication_history_max_states,
         };
         prepared.validate(session, &metered)?;
         poll(&metered)?;
@@ -373,6 +523,38 @@ pub fn prepare_with_limits(session: &Session, binding: &SourceBinding<'_>, limit
         return Err(bad("stored preparation work limit"));
     }
     result
+}
+
+// Isolated transaction drafts begin AFTER original-binding preparation. This
+// test-only constructor cannot grant synthetic bytes through bind_source or
+// the public trusted preparation entry.
+#[cfg(test)]
+pub(crate) fn draft_publication_prepared(session: &Session, source: ChannelId, bounds: Rect) -> PreparedStoredLoad {
+    let current = session.active().unwrap();
+    let format = current.doc.channels.iter().find(|channel| channel.id == source).unwrap().surface.format();
+    let (selection, old_bounds) = target(&current.doc, source, bounds, format, &Interrupt::NONE).unwrap();
+    PreparedStoredLoad {
+        snapshot: current.doc.clone(),
+        revision: current.revision,
+        active: current.active_layer,
+        view: current.channel_view.clone(),
+        source,
+        selection,
+        bounds,
+        old_bounds,
+        requirements: PreparationRequirements { resident_bytes: PUBLICATION_BYTES, index_bytes: PUBLICATION_INDEX, work_units: 0 },
+        publication_reserved: true,
+        publication_history: Some(
+            current.history.plain_clone_metadata_requirements(Limits::default().resident_bytes, Limits::default().work_units, &Interrupt::NONE).unwrap(),
+        ),
+        publication_history_max_states: Some(current.history.max_states),
+        publication_runtime: Some([
+            current.selected_layers.len(),
+            current.selected_layers.capacity(),
+            current.color_samplers.len(),
+            current.color_samplers.capacity(),
+        ]),
+    }
 }
 
 #[cfg(test)]
@@ -436,5 +618,16 @@ mod tests {
         assert_eq!(doc, before);
         let stop = || true;
         assert!(matches!(target(&doc, ChannelId(19), Rect::new(0, 0, 32, 32), format, &Interrupt::cancel_only(&stop)), Err(EngineError::Cancelled)));
+    }
+    #[test]
+    fn publication_bounds_change_requires_position_lock_and_preserves_original_fields() {
+        let mut doc = document();
+        let format = doc.selection.as_ref().unwrap().format();
+        let selected = ItemRef::Channel(ChannelId(17));
+        doc.xcf_state.as_mut().unwrap().items.iter_mut().find(|item| item.item == selected).unwrap().locks.position = true;
+        let before = doc.clone();
+        assert!(target(&doc, ChannelId(19), Rect::new(1, 0, 33, 32), format, &Interrupt::NONE).is_err());
+        assert_eq!(doc, before);
+        assert!(target(&doc, ChannelId(19), Rect::new(0, 0, 32, 32), format, &Interrupt::NONE).is_ok());
     }
 }

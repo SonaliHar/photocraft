@@ -719,6 +719,8 @@ pub struct Session {
     pub(crate) live_commit: Option<brush_cmds::LiveCommit>,
     /// Finished native Luminosity preview, consumed only by its matching command.
     pub(crate) native_replace_commit: Option<brush_cmds::NativeLuminosityCommit>,
+    /// Host-bound stored-channel read, valid for one Load Selection dispatch only.
+    pub(crate) stored_load_offer: Option<channel_cmds::StoredLoadOffer>,
     /// Documents a background open decoded but held back until the user answers the profile
     /// prompt ([`ColorState::open_question`](color_cmds::ColorState::open_question)): `(id,
     /// document, source read-only, import origin)`. The shell takes them with

@@ -158,6 +158,15 @@ pub enum TypedConfiguration {
     Curves(CurvesConfiguration),
     ColorBalance(ColorBalanceConfiguration),
     BrightnessContrast(BrightnessContrastConfiguration),
+    HueSaturation(HueSaturationConfiguration),
+}
+/// Ordered ALL, RED, YELLOW, GREEN, CYAN, BLUE, MAGENTA native configuration words.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HueSaturationConfiguration {
+    pub time_bits: Option<u64>,
+    /// Each selector retains hue, saturation and lightness, in that order.
+    pub ranges: [[u64; 3]; 7],
+    pub overlap_bits: u64,
 }
 /// Exact stock GIMP wrapper settings, separate from GEGL affine parameters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

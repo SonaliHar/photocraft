@@ -127,6 +127,42 @@ fn slots(q: &BackingQuota, maximum: usize, ctl: &ReadControl<'_>) -> Result<Acco
     Ok(Accounted { states, cursor: 0, maximum, _lease: lease })
 }
 impl DocumentHistory {
+    /// Prospective metadata census only; byte-budgeted or accounted history has a separate consumer.
+    pub(crate) fn plain_clone_census_work(&self) -> Result<u64, photocraft_raster::RasterInputError> {
+        if self.max_bytes != 0 {
+            return Err(photocraft_raster::RasterInputError::UnsupportedConversion);
+        }
+        let Branch::Resident(history) = &self.branch else {
+            return Err(photocraft_raster::RasterInputError::UnsupportedConversion);
+        };
+        history.plain_clone_census_work()
+    }
+
+    pub(crate) fn plain_clone_metadata_requirements(
+        &self,
+        byte_limit: u64,
+        work_limit: u64,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<photocraft_ops::CloneMetadataRequirements, photocraft_raster::RasterInputError> {
+        self.plain_clone_census_work()?;
+        let Branch::Resident(history) = &self.branch else {
+            return Err(photocraft_raster::RasterInputError::UnsupportedConversion);
+        };
+        let extra = size_of::<Self>() as u64;
+        let extra_bytes = extra.checked_mul(3).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
+        let extra_work = extra.checked_mul(8).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
+        let mut needs = history.plain_clone_metadata_requirements(
+            byte_limit.checked_sub(extra_bytes).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?,
+            work_limit.checked_sub(extra_work).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?,
+            control,
+        )?;
+        needs.retained_bytes = needs.retained_bytes.checked_add(extra).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
+        needs.clone_bytes = needs.clone_bytes.checked_add(extra.checked_mul(2).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?)
+            .ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
+        needs.clone_work_units = needs.clone_work_units.checked_add(extra_work).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
+        Ok(needs)
+    }
+
     pub fn resident(history: History) -> Self {
         Self { max_states: history.max_states, max_bytes: history.max_bytes, branch: Branch::Resident(history) }
     }

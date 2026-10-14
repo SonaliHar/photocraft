@@ -683,6 +683,9 @@ impl Session {
 
     /// Run the command `id`: inline, or (with `background`) as a job when it is one.
     pub(crate) fn dispatch(&mut self, id: &str, params: Value, background: bool) -> Result<Started> {
+        if id != "select.loadSelection" {
+            self.stored_load_offer = None;
+        }
         if id != "paint.colorReplacement" {
             self.clear_native_color_replacement();
         }
@@ -691,6 +694,7 @@ impl Session {
         // the command handler runs. Failed authorization cannot retain pixels
         // for a later command to adopt.
         self.clear_native_color_replacement();
+        self.stored_load_offer = None;
         result
     }
 

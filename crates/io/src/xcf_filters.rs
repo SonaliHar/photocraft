@@ -237,6 +237,12 @@ pub use brightness_contrast_source_candidate::{
     BRIGHTNESS_CONTRAST_SCHEMA, BRIGHTNESS_CONTRAST_SCHEMA_308, BrightnessContrastMappingLimits, BrightnessContrastMappingRequirements,
     BrightnessContrastSourceIdentity, MappedBrightnessContrastSource, map_retained_brightness_contrast_source,
 };
+#[path = "xcf_filters/hue_saturation_source_candidate.rs"]
+mod hue_saturation_source_candidate;
+pub use hue_saturation_source_candidate::{
+    HUE_SATURATION_SCHEMA, HueSaturationMappingLimits, HueSaturationMappingRequirements,
+    HueSaturationSourceIdentity, MappedHueSaturationSource, map_retained_hue_saturation_source,
+};
 
 fn color_to_alpha_arguments<P>(effect: &Effect<P>) -> Result<Vec<FilterArgument>, IoError> {
     if effect.version.as_deref() != Some("0:0") || effect.arguments.len() != 3 {

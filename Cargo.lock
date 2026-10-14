@@ -4596,6 +4596,7 @@ name = "photocraft-ops"
 version = "0.8.2"
 dependencies = [
  "photocraft-doc",
+ "photocraft-raster",
 ]
 
 [[package]]

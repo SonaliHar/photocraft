@@ -1,6 +1,8 @@
 //! Frozen Load Selection. Explicit native unit coverage is separate from legacy GRAY8.
 #[path="canonical_selection_storage.rs"]
 pub(super) mod canonical_selection_storage;
+#[path="stored_load_publication.rs"]
+pub(crate) mod stored_load_publication;
 use super::{ChanRef,SnapshotSource,bad,source_dimensions,source_reference,source_owner,source_from_snapshot_with_interrupt};
 use crate::{DocumentSnapshot,EngineError,Result,Session};
 use photocraft_algo::selection::SelectionMode;
@@ -74,7 +76,10 @@ fn request(session:&Session,value:&Value,allow_normalize:bool)->Result<Request>{
     }
     Ok(Request{source_index,source:SnapshotSource{layer,channel,gray:true,invert},mode,native,raw_storage})
 }
-pub(super) fn dispatch_preflight(session:&Session,value:&Value,_background:bool)->Result<()>{request(session,value,true).map(|_|())}
+pub(super) fn dispatch_preflight(session:&Session,value:&Value,background:bool)->Result<()>{
+    if value.get("storedSource").is_some() { return stored_load_publication::preflight(session,value,background); }
+    request(session,value,true).map(|_|())
+}
 fn native_source<'a>(doc:&'a Document,active:Option<LayerId>,request:Request,ctl:&Interrupt<'_>)->Result<&'a Surface>{
     poll(ctl)?;
     match request.source.channel{
@@ -183,6 +188,7 @@ fn stage(source:&DocumentSnapshot,target:&DocumentSnapshot,active:Option<LayerId
     else{let mut planes=source_from_snapshot_with_interrupt(source,active,request.source,CMD,ctl)?;if planes.len()!=1{return Err(bad(CMD,"source must yield one coverage plane"));}let plane=planes.pop().ok_or_else(||bad(CMD,"missing source plane"))?;legacy_result(target.selection.as_ref(),&plane,area,request.mode,ctl).map(|selection|(selection,None))}
 }
 pub(super) fn run(session:&mut Session,value:&Value)->Result<Value>{
+    if value.get("storedSource").is_some() { return stored_load_publication::run(session,value); }
     let request=request(session,value,false)?;let target=session.active().ok_or(EngineError::NoDocument)?;let original=target.doc.clone();let revision=target.revision;let weak=original.downgrade();
     let source_state=session.documents().get(request.source_index).ok_or_else(||bad(CMD,"source disappeared"))?;let source=source_state.doc.clone();let source_revision=source_state.revision;let source_weak=source.downgrade();let active=source_state.active_layer;
     let target_work=original.clone();let source_work=source.clone();let label=match request.source.channel{ChanRef::Transparency=>"Load Transparency",ChanRef::LayerMask=>"Load Layer Mask",_=>"Load Selection"};

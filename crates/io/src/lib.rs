@@ -98,6 +98,8 @@ pub use xcf_filters::{
 pub use xcf_filters::{
     BRIGHTNESS_CONTRAST_SCHEMA, BRIGHTNESS_CONTRAST_SCHEMA_308, BrightnessContrastMappingLimits, BrightnessContrastMappingRequirements,
     BrightnessContrastSourceIdentity, MappedBrightnessContrastSource, map_retained_brightness_contrast_source,
+    HUE_SATURATION_SCHEMA, HueSaturationMappingLimits, HueSaturationMappingRequirements,
+    HueSaturationSourceIdentity, MappedHueSaturationSource, map_retained_hue_saturation_source,
 };
 #[cfg(test)]
 #[path = "../tests/common/xcf.rs"]

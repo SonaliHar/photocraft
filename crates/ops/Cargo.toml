@@ -9,3 +9,5 @@ workspace = true
 
 [dependencies]
 photocraft-doc = { workspace = true }
+
+photocraft-raster = { workspace = true }

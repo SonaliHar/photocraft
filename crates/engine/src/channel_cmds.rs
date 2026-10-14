@@ -1664,6 +1664,19 @@ pub(crate) fn load_selection_dispatch_preflight(s: &Session, p: &Value, backgrou
     load_selection_controlled::dispatch_preflight(s, p, background)
 }
 
+pub(crate) use load_selection_controlled::stored_load_publication::StoredLoadOffer;
+
+/// Dispatch Load Selection with an independently bound original source held by the host.
+/// The binding is used only for this attempt and never becomes serialized authority.
+pub fn load_stored_selection_with_binding(
+    session: &mut Session,
+    binding: &crate::xcf_channel_consumer::SourceBinding<'_>,
+    limits: crate::xcf_channel_stored_load::Limits,
+    context: &crate::jobs::JobCtx,
+) -> Result<Value> {
+    load_selection_controlled::stored_load_publication::load_stored_selection_with_binding(session, binding, limits, context)
+}
+
 fn load_selection(s: &mut Session, p: &Value) -> Result<Value> {
     load_selection_controlled::run(s, p)
 }
@@ -2550,7 +2563,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Load Selection…",
             ["Select"],
             None,
-            r##"{"channel":index|name|"composite"|"red|green|blue|…"|"transparency"|"mask"|"vectorMask"|"quickMask"|"selection"|"targeted" (the Channels panel's target),"layer":id?,"document":index?,"invert":bool=false,"operation":"new|add|subtract|intersect"="new","rawStorage":bool=false (plain same-depth saved Gray channel; replace without invert; preserve all raw storage),"nativeCoverage":bool=false,"coverageContext":"unit"?}"##,
+            r##"{"channel":index|name|"composite"|"red|green|blue|…"|"transparency"|"mask"|"vectorMask"|"quickMask"|"selection"|"targeted" (the Channels panel's target),"layer":id?,"document":index?,"invert":bool=false,"operation":"new|add|subtract|intersect"="new","rawStorage":bool=false (plain same-depth saved Gray channel; replace without invert; preserve all raw storage),"storedSource":bool=false (same-document stored read; requires fresh host-held original binding; no filtered appearance),"nativeCoverage":bool=false,"coverageContext":"unit"?}"##,
             has_doc,
             load_selection
         ),
