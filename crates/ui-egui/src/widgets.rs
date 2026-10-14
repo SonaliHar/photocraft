@@ -721,13 +721,8 @@ pub fn text_field_ex(ui: &mut Ui, id: egui::Id, text: &mut String, hint: &str, w
     let inner = rect.shrink2(TEXT_FIELD_PAD);
     // TextEdit draws its text at the top of its rect; fill the box and centre the line in it, so
     // the text sits on the field's middle like a dropdown's or value field's.
-    let mut edit = egui::TextEdit::singleline(text)
-        .id(id)
-        .hint_text(hint)
-        .frame(egui::Frame::NONE)
-        .font(font)
-        .min_size(inner.size())
-        .vertical_align(egui::Align::Center);
+    let mut edit =
+        egui::TextEdit::singleline(text).id(id).hint_text(hint).frame(egui::Frame::NONE).font(font).min_size(inner.size()).vertical_align(egui::Align::Center);
     if let Some(limit) = char_limit {
         edit = edit.char_limit(limit);
     }
