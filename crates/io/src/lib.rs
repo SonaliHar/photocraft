@@ -98,7 +98,10 @@ pub mod xcf_import;
 pub use xcf_import::{
     AssembledStoredChannel, CorrespondenceRequirements, NamespaceBacking, StoredChannelCorrespondence, assemble_owned_stored_channel,
 };
-pub use xcf_import::{SelectedCurrentChannel, SelectedLimits, SelectedRequirements, select_current};
+pub use xcf_import::{
+    CurrentProfilePolicy, SelectedCurrentChannel, SelectedLimits, SelectedProfileRequirements, SelectedRequirements, select_current,
+    select_current_with_profile_policy, selected_profile_requirements,
+};
 mod xcf_link_sources;
 pub mod xcf_modified_sources;
 mod xcf_ordinary_source;

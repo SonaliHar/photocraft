@@ -74,6 +74,23 @@ interpolation (2.483×). This excludes image allocation and ICC construction and
 import, display or RSS result. Reproduce with `cargo test -p photocraft-cms --release --test bench
 bench_wide_rgb_clut_24mp -- --ignored --nocapture`.
 
+### Controlled current implicit-profile binding
+
+`xcf_color::effective_implicit_profile_requirements_with_control(bound_icc, space,
+encoding, limits, cancelled)` returns a borrowed prospective `EffectiveProfileRequirements`
+envelope for explicit RGB or Gray only. It conservatively admits the bound bytes and the
+analytical effective-model construction before input-sized copies. Requirements are not
+an equality proof: even unrelated same-sized ICC bytes can pass that admission.
+
+`effective_implicit_profile_with_control` consumes the same planner, constructs the exact
+analytical definition for the declared current encoding, and compares its generated ICC
+bytes with the binding. A mismatch returns an error. The binding is limited to 16 MiB;
+`control::Limits` may only lower the existing storage/work ceilings. Callers retain current
+identity-marker validation, any spare input capacity accounting, and original assigned-ICC
+absence separately; neither helper infers an implicit marker from source provenance.
+Builtin profile `OnceLock` initialization remains a provider boundary with outer cancellation
+polls, rather than a claim of controlled initialization or complete process-memory accounting.
+
 ### Evaluation
 
 * Exact path: a float stage pipeline (curves, matrices, CLUTs, Lab↔XYZ, PCS encodings, BPC /

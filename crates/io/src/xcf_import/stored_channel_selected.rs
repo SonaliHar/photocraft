@@ -19,6 +19,82 @@ impl Default for SelectedLimits {
         }
     }
 }
+/// Explicit current interpretation policy, not authority inferred from an absent ICC.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CurrentProfilePolicy {
+    OriginalExact,
+    MaterializedImplicit,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct SelectedProfileRequirements {
+    pub resident_bytes: u64,
+    pub work_units: u64,
+}
+fn cms_limits(limits: SelectedLimits) -> Result<photocraft_cms::control::Limits, IoError> {
+    let maximum = photocraft_cms::control::Limits::default();
+    Ok(photocraft_cms::control::Limits {
+        resident_bytes: usize::try_from(limits.resident_bytes.min(maximum.resident_bytes as u64)).map_err(|_| bad("selected CMS address space"))?,
+        work_units: limits.work_units.min(maximum.work_units),
+    })
+}
+fn implicit_fields<'d>(original: &Document, doc: &'d Document) -> Result<&'d [u8], IoError> {
+    if doc.mode != original.mode
+        || doc.depth != original.depth
+        || doc.sample_encoding != original.sample_encoding
+        || doc.source_color_context != original.source_color_context
+        || !matches!(&doc.working_profile_interpretation,photocraft_doc::WorkingProfileInterpretation::ImplicitSrgb{icc_blake3} if icc_blake3.len()==64&&icc_blake3.bytes().all(|v|v.is_ascii_hexdigit()))
+    {
+        return Err(bad("selected materialized implicit context differs from original"));
+    }
+    let bytes = doc.icc_profile.as_ref().ok_or_else(|| bad("explicit implicit marker needs current ICC"))?;
+    if bytes.is_empty() || bytes.len() > 16 << 20 {
+        return Err(bad("selected materialized ICC bound"));
+    }
+    Ok(bytes.as_slice())
+}
+fn implicit_context<'d>(owner: &AssembledStoredChannel<'_, '_, '_>, doc: &'d Document) -> Result<&'d [u8], IoError> {
+    // General CMS Gray or transfer support does not widen the closed assembly.
+    if !owner.original.icc.is_empty() || owner.original.model != Model::Rgb || owner.original.encoding != Encoding::NonlinearProfile {
+        return Err(bad("selected materialized source descriptor outside original domain"));
+    }
+    implicit_fields(&owner.document, doc)
+}
+/// Borrowed accounting only, never an interpretation proof. The engine may use
+/// this before full-current census to prepay the eventual exact CMS verifier.
+pub fn selected_profile_requirements(
+    owner: &AssembledStoredChannel<'_, '_, '_>,
+    doc: &Document,
+    policy: CurrentProfilePolicy,
+    limits: SelectedLimits,
+    ctl: &Interrupt<'_>,
+) -> Result<SelectedProfileRequirements, IoError> {
+    tick(ctl)?;
+    let maximum = SelectedLimits::default();
+    if limits.resident_bytes > maximum.resident_bytes || limits.index_bytes > maximum.index_bytes || limits.work_units > maximum.work_units {
+        return Err(bad("selected profile lower-only limits"));
+    }
+    if policy == CurrentProfilePolicy::OriginalExact {
+        return Ok(SelectedProfileRequirements { resident_bytes: 0, work_units: 0 });
+    }
+    let bytes = implicit_context(owner, doc)?;
+    let r = photocraft_cms::xcf_color::effective_implicit_profile_requirements_with_control(
+        bytes,
+        photocraft_cms::ColorSpace::Rgb,
+        photocraft_cms::xcf_color::Encoding::NonlinearProfile,
+        cms_limits(limits)?,
+        &|| ctl.cancelled(),
+    )
+    .map_err(|e| if ctl.cancelled() { IoError::Cancelled } else { bad(&e.to_string()) })?;
+    let required = SelectedProfileRequirements {
+        resident_bytes: r.peak_resident_bytes as u64,
+        work_units: plus(times(r.work_units, 3)?, plus(bytes.len() as u64, 4096)?)?,
+    };
+    if required.resident_bytes > limits.resident_bytes || required.work_units > limits.work_units {
+        return Err(bad("selected implicit profile envelope"));
+    }
+    tick(ctl)?;
+    Ok(required)
+}
 #[derive(Clone, Copy, Debug)]
 pub struct SelectedRequirements {
     pub current_retained_bytes: u64,
@@ -28,6 +104,8 @@ pub struct SelectedRequirements {
     pub complete_index_bytes: u64,
     pub selection_work_units: u64,
     pub verification_work_units: u64,
+    pub implicit_profile_resident_bytes: u64,
+    pub implicit_profile_work_units: u64,
 }
 /// Private construction requires genuine same-document census receipts and a
 /// bounded namespace/dependency scan. The census and immutable borrow stay live.
@@ -43,6 +121,8 @@ pub struct SelectedCurrentChannel<'d> {
     source_sha256: &'static str,
     source_blake3: blake3::Hash,
     requirements: SelectedRequirements,
+    profile_policy: CurrentProfilePolicy,
+    profile_limits: photocraft_cms::control::Limits,
 }
 impl<'d> SelectedCurrentChannel<'d> {
     pub fn document(&self) -> &'d Document {
@@ -144,6 +224,19 @@ pub fn select_current<'d>(
     reserve: &mut dyn FnMut(u64, u64) -> Result<(), IoError>,
     charge: &mut dyn FnMut(u64) -> Result<(), IoError>,
 ) -> Result<SelectedCurrentChannel<'d>, IoError> {
+    select_current_with_profile_policy(census, owner, CurrentProfilePolicy::OriginalExact, limits, ctl, reserve, charge)
+}
+/// Additive explicitly requested current-profile interpretation route.
+#[allow(clippy::too_many_arguments)]
+pub fn select_current_with_profile_policy<'d>(
+    census: NativeCurrentCensus<'d>,
+    owner: &'d AssembledStoredChannel<'_, '_, '_>,
+    policy: CurrentProfilePolicy,
+    limits: SelectedLimits,
+    ctl: &Interrupt<'_>,
+    reserve: &mut dyn FnMut(u64, u64) -> Result<(), IoError>,
+    charge: &mut dyn FnMut(u64) -> Result<(), IoError>,
+) -> Result<SelectedCurrentChannel<'d>, IoError> {
     tick(ctl)?;
     let maximum = SelectedLimits::default();
     if limits.resident_bytes > maximum.resident_bytes || limits.index_bytes > maximum.index_bytes || limits.work_units > maximum.work_units {
@@ -156,6 +249,7 @@ pub fn select_current<'d>(
         return Err(bad("selected zero/aliased identities"));
     }
     let source = owner.correspondence_requirements()?;
+    let profile = selected_profile_requirements(owner, doc, policy, limits, ctl)?;
     let current_retained = census.retained_bytes() as u64;
     let current_index = census.known_index_reservation_bytes() as u64;
     let current_map = census.known_map_reservation_bytes() as u64;
@@ -163,11 +257,11 @@ pub fn select_current<'d>(
     // allocated full-scene index. No selected-slice retention refund is made.
     let scratch = plus(256 * 256, std::mem::size_of::<SelectedCurrentChannel<'d>>() as u64)?;
     let complete_index = plus(plus(current_index, source.index_bytes)?, scratch)?;
-    let complete_resident = plus(plus(plus(current_retained, current_map)?, source.resident_bytes)?, complete_index)?;
+    let complete_resident = plus(plus(plus(plus(current_retained, current_map)?, source.resident_bytes)?, complete_index)?, profile.resident_bytes)?;
     let visits = census.visit_scope();
     let outer = plus(plus(visits.identity_visits as u64, visits.layer_visits as u64)?, plus(visits.surface_visits as u64, visits.model_visits as u64)?)?;
     let selection_work = plus(times(census.model_retained_bytes() as u64, 16)?, plus(times(outer, 16)?, 65536)?)?;
-    let verification_work = plus(source.work_units, times(current_retained, 8)?)?;
+    let verification_work = plus(plus(source.work_units, times(current_retained, 8)?)?, profile.work_units)?;
     if complete_resident > limits.resident_bytes || complete_index > limits.index_bytes || plus(selection_work, verification_work)? > limits.work_units {
         return Err(bad("complete selected owner envelope"));
     }
@@ -332,6 +426,8 @@ pub fn select_current<'d>(
         complete_index_bytes: complete_index,
         selection_work_units: selection_work,
         verification_work_units: verification_work,
+        implicit_profile_resident_bytes: profile.resident_bytes,
+        implicit_profile_work_units: profile.work_units,
     };
     tick(ctl)?;
     Ok(SelectedCurrentChannel {
@@ -346,6 +442,15 @@ pub fn select_current<'d>(
         source_sha256: owner.source_sha256,
         source_blake3: owner.source_blake3,
         requirements,
+        profile_policy: policy,
+        profile_limits: if policy == CurrentProfilePolicy::MaterializedImplicit {
+            photocraft_cms::control::Limits {
+                resident_bytes: usize::try_from(profile.resident_bytes).map_err(|_| bad("selected implicit peak range"))?,
+                work_units: profile.work_units,
+            }
+        } else {
+            cms_limits(limits)?
+        },
     })
 }
 impl AssembledStoredChannel<'_, '_, '_> {
@@ -380,8 +485,6 @@ impl AssembledStoredChannel<'_, '_, '_> {
         if current.mode != self.document.mode
             || current.depth != self.document.depth
             || current.sample_encoding != self.document.sample_encoding
-            || current.working_profile_interpretation != self.document.working_profile_interpretation
-            || current.icc_profile != self.document.icc_profile
             || current.source_color_context != self.document.source_color_context
             || state.provenance.format != baseline.provenance.format
             || state.provenance.format_version != baseline.provenance.format_version
@@ -389,6 +492,31 @@ impl AssembledStoredChannel<'_, '_, '_> {
             || state.provenance.source_hash != baseline.provenance.source_hash
         {
             return Err(bad("selected original profile/provenance differs"));
+        }
+        match selected.profile_policy {
+            CurrentProfilePolicy::OriginalExact => {
+                if current.working_profile_interpretation != self.document.working_profile_interpretation || current.icc_profile != self.document.icc_profile {
+                    return Err(bad("selected original working interpretation differs"));
+                }
+            }
+            CurrentProfilePolicy::MaterializedImplicit => {
+                let bytes = implicit_context(self, current)?;
+                current
+                    .working_profile_interpretation
+                    .validate_with_interrupt(Some(bytes), current.mode, ctl)
+                    .map_err(|e| if ctl.cancelled() { IoError::Cancelled } else { bad(&e.to_string()) })?;
+                // Temporary effective profile is dropped before issuing the proof.
+                // Exact bytes, never same-color/profile-name aliases, bind authority.
+                let effective = photocraft_cms::xcf_color::effective_implicit_profile_with_control(
+                    bytes,
+                    photocraft_cms::ColorSpace::Rgb,
+                    photocraft_cms::xcf_color::Encoding::NonlinearProfile,
+                    selected.profile_limits,
+                    &|| ctl.cancelled(),
+                )
+                .map_err(|e| if ctl.cancelled() { IoError::Cancelled } else { bad(&e.to_string()) })?;
+                drop(effective);
+            }
         }
         let original = self.original.channels.get(self.ordinal).ok_or_else(|| bad("original selected channel missing"))?;
         let effect = original.effects.first().ok_or_else(|| bad("original selected effect missing"))?;
@@ -472,6 +600,54 @@ impl AssembledStoredChannel<'_, '_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn explicit_implicit_context_rejects_marker_model_encoding_and_source_aliases() {
+        use photocraft_doc::WorkingProfileInterpretation;
+        let mut original = Document::new("Original", Size::new(32, 32), ColorMode::Rgb, SampleType::U8);
+        original.sample_encoding = Some(SampleEncoding::NonlinearProfile);
+        original.source_color_context = Some(SourceColorContext { original_icc: None, source_precision: 150 });
+        let mut current = original.clone();
+        let bytes = photocraft_cms::Builtin::Srgb.profile().to_bytes();
+        current.icc_profile = Some(bytes.clone());
+        current.working_profile_interpretation = WorkingProfileInterpretation::implicit_srgb(&bytes);
+        assert_eq!(implicit_fields(&original, &current).unwrap(), bytes.as_slice());
+        let good = current.clone();
+        current.working_profile_interpretation = WorkingProfileInterpretation::Icc;
+        assert!(implicit_fields(&original, &current).is_err());
+        current = good.clone();
+        current.working_profile_interpretation = WorkingProfileInterpretation::implicit_sgray(&bytes);
+        assert!(implicit_fields(&original, &current).is_err());
+        current = good.clone();
+        current.icc_profile = None;
+        assert!(implicit_fields(&original, &current).is_err());
+        current = good.clone();
+        current.mode = ColorMode::Grayscale;
+        assert!(implicit_fields(&original, &current).is_err());
+        current = good.clone();
+        current.sample_encoding = Some(SampleEncoding::Linear);
+        assert!(implicit_fields(&original, &current).is_err());
+        current = good.clone();
+        current.source_color_context = Some(SourceColorContext { original_icc: Some(bytes.clone()), source_precision: 150 });
+        assert!(implicit_fields(&original, &current).is_err());
+        current = good.clone();
+        current.source_color_context = Some(SourceColorContext { original_icc: None, source_precision: 151 });
+        assert!(implicit_fields(&original, &current).is_err());
+        current = good.clone();
+        current.depth = SampleType::F64;
+        assert!(implicit_fields(&original, &current).is_err());
+        // Marker identity alone is not semantic verification: corrupt ICC still
+        // requires the real CMS exact generated-definition check in proof.
+        current = good;
+        let mut corrupt = bytes.as_ref().clone();
+        *corrupt.last_mut().unwrap() ^= 1;
+        current.icc_profile = Some(Arc::new(corrupt));
+        assert!(
+            current
+                .working_profile_interpretation
+                .validate_with_interrupt(current.icc_profile.as_deref().map(Vec::as_slice), current.mode, &Interrupt::NONE)
+                .is_err()
+        );
+    }
     #[test]
     fn native_layer_alias_and_cancel_refuse_without_changing_scene() {
         let ids = Ids { channel: ChannelId(41), filter: FilterId(42), mask: MaskId(43) };

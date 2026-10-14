@@ -4,7 +4,7 @@
 //! complete decoded original scene remains retained in the proof owner.
 #[path = "stored_channel_selected.rs"]
 mod selected;
-pub use selected::{SelectedCurrentChannel, SelectedLimits, SelectedRequirements, select_current};
+pub use selected::{CurrentProfilePolicy, SelectedCurrentChannel, SelectedLimits, SelectedProfileRequirements, SelectedRequirements, select_current, select_current_with_profile_policy, selected_profile_requirements};
 use super::*;
 use crate::xcf_channel_candidate::{self as mapper, Ids, Namespace};
 use photocraft_doc::{

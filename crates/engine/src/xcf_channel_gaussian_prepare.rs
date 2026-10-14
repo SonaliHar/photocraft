@@ -51,8 +51,15 @@ pub struct SourceEvidence<'a> {
 }
 enum PreparationInput<'e, 's, 'b, 't> {
     Metadata(SourceEvidence<'e>),
-    Correspondence { owner: &'e photocraft_io::AssembledStoredChannel<'s, 'b, 't>, working: WorkingDomainEvidence<'e> },
-    Selected { owner: &'e photocraft_io::AssembledStoredChannel<'s, 'b, 't>, working: WorkingDomainEvidence<'e> },
+    Correspondence {
+        owner: &'e photocraft_io::AssembledStoredChannel<'s, 'b, 't>,
+        working: WorkingDomainEvidence<'e>,
+    },
+    Selected {
+        owner: &'e photocraft_io::AssembledStoredChannel<'s, 'b, 't>,
+        working: WorkingDomainEvidence<'e>,
+        profile_policy: photocraft_io::CurrentProfilePolicy,
+    },
 }
 impl PreparationInput<'_, '_, '_, '_> {
     fn original_bytes(&self) -> &[u8] {
@@ -398,7 +405,36 @@ pub fn prepare_from_selected_correspondence<B: PreparationBudget>(
     if owner.channel_id() != channel {
         return Err(bad("selected correspondence owner belongs to a different channel"));
     }
-    prepare_input(session, channel, PreparationInput::Selected { owner, working }, config, limits, budget, control)
+    prepare_input(
+        session,
+        channel,
+        PreparationInput::Selected { owner, working, profile_policy: photocraft_io::CurrentProfilePolicy::OriginalExact },
+        config,
+        limits,
+        budget,
+        control,
+    )
+}
+/// Explicit opt-in for independently verified materialization of an original
+/// implicit profile. This does not establish the Gaussian working domain: the
+/// caller must still supply separate native-format/space evidence. Neither this
+/// proof nor the private output authorizes Load, Bake, or publication.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_from_selected_correspondence_with_profile_policy<B: PreparationBudget>(
+    session: &Session,
+    channel: ChannelId,
+    owner: &photocraft_io::AssembledStoredChannel<'_, '_, '_>,
+    profile_policy: photocraft_io::CurrentProfilePolicy,
+    working: WorkingDomainEvidence<'_>,
+    config: gaussian::Config,
+    limits: Limits,
+    budget: &mut B,
+    control: &Interrupt<'_>,
+) -> Result<PreparedChannelGaussian<B::Lease>> {
+    if owner.channel_id() != channel {
+        return Err(bad("selected correspondence owner belongs to a different channel"));
+    }
+    prepare_input(session, channel, PreparationInput::Selected { owner, working, profile_policy }, config, limits, budget, control)
 }
 #[allow(clippy::too_many_arguments)]
 fn prepare_input<B: PreparationBudget>(
@@ -446,11 +482,31 @@ fn prepare_input<B: PreparationBudget>(
         };
         correspondence_admission(correspondence_requirements, limits, requested_view, &work)?;
         let selected_lane = matches!(&input, PreparationInput::Selected { .. });
-        // This is the actual IO constructor formula: source.work +8*current
-        // census retention. Current retention must fit the lower resident
-        // envelope; reserve its conservative bound before any census traversal.
+        // Borrowed prospective CMS accounting under the already held outer
+        // lease/token; CMS retains its documented builtin initialization boundary.
+        // No marker hash, profile clone, or census is allowed
+        // to spend the eventual verifier's promised work or scratch envelope.
+        let profile_requirements = match &input {
+            PreparationInput::Selected { owner, profile_policy, .. } => photocraft_io::selected_profile_requirements(
+                owner,
+                &current.doc,
+                *profile_policy,
+                photocraft_io::SelectedLimits { resident_bytes: limits.resident_bytes, index_bytes: limits.index_bytes, work_units: work.remaining() },
+                &metered,
+            )
+            .map_err(|e| if metered.cancelled() { EngineError::Cancelled } else { EngineError::Other(e.to_string()) })?,
+            _ => photocraft_io::SelectedProfileRequirements { resident_bytes: 0, work_units: 0 },
+        };
+        if add(add(correspondence_requirements.resident_bytes, requested_view)?, add(input_bytes, profile_requirements.resident_bytes)?)?
+            > limits.resident_bytes
+        {
+            return Err(bad("prospective selected profile resident envelope"));
+        }
+        // Actual IO formula: source.work +8*current census retention + explicit
+        // prospective profile verification work. Current retention must fit the
+        // lower resident envelope. Prepay all of this before census traversal.
         let prepaid_units = if selected_lane {
-            selected_verification_upper(correspondence_requirements.work_units, limits.resident_bytes)?
+            add(selected_verification_upper(correspondence_requirements.work_units, limits.resident_bytes)?, profile_requirements.work_units)?
         } else {
             correspondence_requirements.work_units
         };
@@ -473,7 +529,7 @@ fn prepare_input<B: PreparationBudget>(
         }
         let raster = current.doc.resident_raster_footprint_with(&metered)?;
         let mut held = add(
-            correspondence_requirements.resident_bytes,
+            add(correspondence_requirements.resident_bytes, profile_requirements.resident_bytes)?,
             add(add(raster.retained_bytes, mul(raster.clone_metadata_bytes, 4)?)?, add(requested_view, input_bytes)?)?,
         )?;
         let prospective_index = add(add(requested_view, DERIVED_INDEX_RESERVATION)?, correspondence_requirements.index_bytes)?;
@@ -509,7 +565,7 @@ fn prepare_input<B: PreparationBudget>(
         let mut selected_index = 0;
         let mut selected_namespace_work = 0;
         let mut verification_work = correspondence_requirements.work_units;
-        if let PreparationInput::Selected { owner, .. } = &input {
+        if let PreparationInput::Selected { owner, profile_policy, .. } = &input {
             let census = photocraft_io::NativeCurrentCensus::join(model_census, payload_census).map_err(|e| EngineError::Other(e.to_string()))?;
             // IO's complete envelope includes actual census model/payload/maps,
             // original owner and descriptor/namespace scratch. Add our retained
@@ -524,9 +580,10 @@ fn prepare_input<B: PreparationBudget>(
                 work_units: add(work.remaining(), proof_work.remaining)?,
             };
             selected = Some(
-                photocraft_io::select_current(
+                photocraft_io::select_current_with_profile_policy(
                     census,
                     owner,
+                    *profile_policy,
                     selected_limits,
                     &metered,
                     &mut |resident, index| {
@@ -547,6 +604,11 @@ fn prepare_input<B: PreparationBudget>(
             );
             let descriptor = selected.as_ref().ok_or_else(|| bad("missing selected descriptor"))?;
             let required = descriptor.requirements();
+            if required.implicit_profile_resident_bytes > profile_requirements.resident_bytes
+                || required.implicit_profile_work_units > profile_requirements.work_units
+            {
+                return Err(bad("selected profile exceeds prospective requirements"));
+            }
             selected_namespace_work = required.selection_work_units;
             verification_work = required.verification_work_units;
             if verification_work > prepaid_units {
@@ -579,7 +641,7 @@ fn prepare_input<B: PreparationBudget>(
         }
         let (evidence, correspondence) = match input {
             PreparationInput::Metadata(evidence) => (evidence, SourceCorrespondence::MetadataOnly),
-            PreparationInput::Correspondence { owner, working } | PreparationInput::Selected { owner, working } => {
+            PreparationInput::Correspondence { owner, working } | PreparationInput::Selected { owner, working, .. } => {
                 let verified = proof.as_ref().ok_or_else(|| bad("missing opaque correspondence result"))?;
                 if !std::ptr::eq(verified.document(), &*current.doc)
                     || verified.channel_id() != channel
@@ -910,6 +972,26 @@ mod tests {
         }
         assert_eq!(work.remaining(), 5); // failure/drop does not refund
         assert!(work.charge(6).is_err());
+    }
+    #[test]
+    fn explicit_profile_verification_is_prepaid_before_census() {
+        let original_upper = selected_verification_upper(10, 8).unwrap();
+        let profile = photocraft_io::SelectedProfileRequirements { resident_bytes: 12, work_units: 9 };
+        let upper = add(original_upper, profile.work_units).unwrap();
+        let work = Work { used: AtomicU64::new(0), exceeded: AtomicBool::new(false), limit: 100 };
+        let mut prepaid = PrepaidProofWork::reserve(&work, upper).unwrap();
+        assert_eq!(work.remaining(), 17);
+        // Census cannot use prepaid CMS work; IO consumes exactly the genuine
+        // smaller current-document requirement, including its CMS bound.
+        work.charge(10).unwrap();
+        let mut exact = prepaid.take_exact(add(42, profile.work_units).unwrap()).unwrap();
+        exact.consume(51).unwrap();
+        exact.finish().unwrap();
+        assert_eq!(work.remaining(), 7);
+        assert!(work.charge(8).is_err());
+        assert_eq!(prepaid.remaining, 32);
+        assert_eq!(add(original_upper, 0).unwrap(), original_upper);
+        assert!(add(original_upper, u64::MAX).is_err());
     }
     #[test]
     fn selected_actual_verification_uses_subreceipt_without_refunding_upper() {

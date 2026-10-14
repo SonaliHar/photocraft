@@ -46,6 +46,7 @@ pub mod gimp_vibrance_candidate;
 pub mod gimp_vibrance_color_candidate;
 pub mod gimp_vibrance_prepared_candidate;
 pub mod gimp_channel_gaussian_candidate;
+pub mod gimp_channel_opacity_candidate;
 pub mod gimp_link_native_precision_candidate;
 pub mod gimp_link_wide_cubic_candidate;
 pub mod gimp_link_owned_wide_candidate;

@@ -787,12 +787,27 @@ pub fn effective_profile_from_definition_with_control(profile:&Profile,encoding:
  use crate::control::{Budget,Error};let _=effective_profile_requirements_with_control(profile,encoding,limits,cancelled)?;let mut p=profile.try_clone_with_control(limits,cancelled)?;
  if let Some((suffix,c))=transfer_recipe(encoding){let mut b=Budget::new(limits,cancelled)?;let n=p.description.len().checked_add(suffix.len()).ok_or(Error::Limit("ICC description"))?;let mut text=b.reserve(n)?;for chunk in p.description.as_bytes().chunks(1024){b.work(chunk.len() as u64)?;text.extend_from_slice(chunk);}text.extend_from_slice(suffix.as_bytes());p.description=String::from_utf8(text).map_err(|_|crate::control::invalid("ICC description UTF-8"))?;if p.color_space==ColorSpace::Rgb{p.trc=Some([c.clone(),c.clone(),c]);}else{p.gray_trc=Some(c);}p=p.with_encoded_bytes_with_control(limits,cancelled)?;}if cancelled(){return Err(Error::Cancelled)}Ok(p)
 }
+/// Borrowed prospective admission for the exact current implicit RGB/Gray binding.
+/// Does not verify equality until construction generates the analytical ICC.
+/// Builtin OnceLock initialization remains a provider boundary with outer polls.
+pub fn effective_implicit_profile_requirements_with_control(bound:&[u8],space:ColorSpace,encoding:Encoding,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<EffectiveProfileRequirements> {
+ use crate::control::{Budget,Error,invalid};let b=Budget::new(limits,cancelled)?;if bound.len()>16<<20{return Err(invalid("XCF implicit ICC exceeds 16 MiB"));}b.admit(bound.len(),bound.len() as u64)?;
+ let original=match space{ColorSpace::Rgb=>Builtin::Srgb.profile(),ColorSpace::Gray=>Builtin::SGray.profile(),_=>return Err(CmsError::Unsupported("XCF implicit color model".into()).into())};b.poll()?;
+ let r=effective_profile_requirements_with_control(original,encoding,limits,cancelled)?;
+ let required=EffectiveProfileRequirements {
+  retained_bytes:r.retained_bytes.checked_add(bound.len()).ok_or(Error::Limit("implicit ICC retained"))?,
+  peak_resident_bytes:r.peak_resident_bytes.checked_add(bound.len()).ok_or(Error::Limit("implicit ICC peak"))?,
+  work_units:r.work_units.checked_add(bound.len() as u64).ok_or(Error::Limit("implicit ICC work"))?,
+ };
+ b.admit(required.peak_resident_bytes,required.work_units)?;b.poll()?;Ok(required)
+}
 /// Verify the actual generated implicit ICC against the caller's binding.
 /// Builtin OnceLock initialization remains a provider boundary with outer polls.
 pub fn effective_implicit_profile_with_control(bound:&[u8],space:ColorSpace,encoding:Encoding,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<Profile> {
- use crate::control::{Budget,Error,invalid};let b=Budget::new(limits,cancelled)?;if bound.len()>16<<20{return Err(invalid("XCF implicit ICC exceeds 16 MiB"));}b.admit(bound.len(),bound.len() as u64)?;
- let original=match space{ColorSpace::Rgb=>Builtin::Srgb.profile(),ColorSpace::Gray=>Builtin::SGray.profile(),_=>return Err(CmsError::Unsupported("XCF implicit color model".into()).into())};b.poll()?;
- let r=effective_profile_requirements_with_control(original,encoding,limits,cancelled)?;let mut check=Budget::new(limits,cancelled)?;check.admit(r.peak_resident_bytes.checked_add(bound.len()).ok_or(Error::Limit("implicit ICC peak"))?,r.work_units.checked_add(bound.len() as u64).ok_or(Error::Limit("implicit ICC work"))?)?;
+ use crate::control::{Budget,invalid};
+ let required=effective_implicit_profile_requirements_with_control(bound,space,encoding,limits,cancelled)?;
+ let original=match space{ColorSpace::Rgb=>Builtin::Srgb.profile(),ColorSpace::Gray=>Builtin::SGray.profile(),_=>return Err(CmsError::Unsupported("XCF implicit color model".into()).into())};
+ let mut check=Budget::new(limits,cancelled)?;check.admit(required.peak_resident_bytes,required.work_units)?;
  let effective=effective_profile_from_definition_with_control(original,encoding,limits,cancelled)?;let actual=effective.encoded_bytes().ok_or_else(||invalid("implicit ICC encoding missing"))?;
  if actual.len()!=bound.len(){return Err(invalid("active implicit profile ICC does not match its analytical interpretation"));}for(a,b)in actual.chunks(1024).zip(bound.chunks(1024)){check.work(a.len() as u64)?;if a!=b{return Err(invalid("active implicit profile ICC does not match its analytical interpretation"));}}check.poll()?;Ok(effective)
 }
@@ -888,5 +903,39 @@ mod controlled_encoded_gate_tests {
  fn borrowed_gate_cancel_resource_and_raw_tail_unchanged() {
   let mut bytes=Builtin::DisplayP3.profile().to_bytes().as_ref().clone();bytes.extend_from_slice(b"retained undeclared tail");let before=bytes.clone();validate_encoded_profile_with_control(&bytes,Limits::default(),&||false).unwrap();assert!(parse_bounded_profile(&bytes,ColorSpace::Rgb).is_ok());
   assert!(matches!(validate_encoded_profile_with_control(&bytes,Limits{resident_bytes:1,work_units:1},&||false),Err(Error::Limit(_))));let visits=Cell::new(0);assert!(matches!(validate_encoded_profile_with_control(&bytes,Limits::default(),&||{visits.set(visits.get()+1);visits.get()>12}),Err(Error::Cancelled)));assert_eq!(bytes,before);
+ }
+}
+
+#[cfg(test)]
+mod implicit_requirements_tests {
+ use super::*;
+ use crate::control::{Limits,Error};
+ #[test]
+ fn implicit_requirements_match_existing_envelope_and_constructor() {
+  for space in [ColorSpace::Rgb,ColorSpace::Gray] {
+   let base=match space {ColorSpace::Rgb=>Builtin::Srgb.profile(),_=>Builtin::SGray.profile()};
+   for encoding in [Encoding::NonlinearProfile,Encoding::Linear,Encoding::Perceptual] {
+    let bound=effective_profile_from_definition(base,encoding).unwrap().to_bytes();
+    let r=effective_profile_requirements_with_control(base,encoding,Limits::default(),&||false).unwrap();
+    let got=effective_implicit_profile_requirements_with_control(&bound,space,encoding,Limits::default(),&||false).unwrap();
+    assert_eq!(got.retained_bytes,r.retained_bytes+bound.len());
+    assert_eq!(got.peak_resident_bytes,r.peak_resident_bytes+bound.len());
+    assert_eq!(got.work_units,r.work_units+bound.len() as u64);
+    let actual=effective_implicit_profile_with_control(&bound,space,encoding,Limits::default(),&||false).unwrap();
+    assert_eq!(actual.to_bytes(),bound);
+    assert!(effective_implicit_profile_requirements_with_control(&bound,space,encoding,Limits{resident_bytes:got.peak_resident_bytes-1,work_units:got.work_units},&||false).is_err());
+    assert!(effective_implicit_profile_requirements_with_control(&bound,space,encoding,Limits{resident_bytes:got.peak_resident_bytes,work_units:got.work_units-1},&||false).is_err());
+   }
+  }
+ }
+ #[test]
+ fn implicit_requirements_do_not_claim_equality_or_admit_wrong_space_cancel() {
+  let bound=effective_profile(None,ColorSpace::Rgb,Encoding::Linear).unwrap().to_bytes();
+  assert!(matches!(effective_implicit_profile_requirements_with_control(&bound,ColorSpace::Rgb,Encoding::Linear,Limits::default(),&||true),Err(Error::Cancelled)));
+  assert!(effective_implicit_profile_requirements_with_control(&bound,ColorSpace::Cmyk,Encoding::Linear,Limits::default(),&||false).is_err());
+  let mut wrong=bound.as_ref().clone();*wrong.last_mut().unwrap()^=1;
+  assert!(effective_implicit_profile_requirements_with_control(&wrong,ColorSpace::Rgb,Encoding::Linear,Limits::default(),&||false).is_ok());
+  assert!(effective_implicit_profile_with_control(&wrong,ColorSpace::Rgb,Encoding::Linear,Limits::default(),&||false).is_err());
+  assert_eq!(bound,effective_profile(None,ColorSpace::Rgb,Encoding::Linear).unwrap().to_bytes());
  }
 }
