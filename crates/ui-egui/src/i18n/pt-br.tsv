@@ -3979,3 +3979,16 @@ layerLabel	No Color	Sem cor
 	There are too many sets: delete one first.	Há conjuntos demais: exclua um primeiro.
 	set name	nome do conjunto
 	{set} (modified)	{set} (modificado)
+# System print job controls
+	Auto-Rotate Image	Girar imagem automaticamente
+	C5 Envelope	Envelope C5
+	Collate	Agrupar cópias
+	Print in Grayscale	Imprimir em escala de cinza
+	Printer Default	Padrão da impressora
+	Printer Properties	Propriedades da impressora
+	Printer preferences opened	Preferências da impressora abertas
+	Single-Sided	Um lado
+	System Default	Padrão do sistema
+	Two-Sided, Flip on Long Edge	Frente e verso, virar na borda longa
+	Two-Sided, Flip on Short Edge	Frente e verso, virar na borda curta
+	Unavailable	Indisponível

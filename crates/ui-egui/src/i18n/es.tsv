@@ -4151,3 +4151,16 @@ navigator	Zoom	Zoom
 	There are too many sets: delete one first.	Hay demasiados conjuntos: elimine uno primero.
 	set name	nombre del conjunto
 	{set} (modified)	{set} (modificado)
+# System print job controls
+	Auto-Rotate Image	Girar imagen automáticamente
+	C5 Envelope	Sobre C5
+	Collate	Intercalar
+	Print in Grayscale	Imprimir en escala de grises
+	Printer Default	Predeterminado de la impresora
+	Printer Properties	Propiedades de la impresora
+	Printer preferences opened	Preferencias de la impresora abiertas
+	Single-Sided	Una cara
+	System Default	Predeterminado del sistema
+	Two-Sided, Flip on Long Edge	Dos caras, voltear por el borde largo
+	Two-Sided, Flip on Short Edge	Dos caras, voltear por el borde corto
+	Unavailable	No disponible

@@ -3888,3 +3888,16 @@ curves	Smooth	Згладити
 	There are too many sets: delete one first.	Забагато наборів: спершу видаліть один.
 	set name	назва набору
 	{set} (modified)	{set} (змінено)
+# System print job controls
+	Auto-Rotate Image	Автоматично повертати зображення
+	C5 Envelope	Конверт C5
+	Collate	Розібрати за копіями
+	Print in Grayscale	Друк у відтінках сірого
+	Printer Default	Типові налаштування принтера
+	Printer Properties	Властивості принтера
+	Printer preferences opened	Налаштування принтера відкрито
+	Single-Sided	Односторонній
+	System Default	Типові налаштування системи
+	Two-Sided, Flip on Long Edge	Двосторонній, переворот по довгому краю
+	Two-Sided, Flip on Short Edge	Двосторонній, переворот по короткому краю
+	Unavailable	Недоступно

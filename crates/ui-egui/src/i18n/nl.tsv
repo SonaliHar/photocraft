@@ -3949,3 +3949,16 @@ curves	Smooth	Vloeiend maken
 	There are too many sets: delete one first.	Er zijn te veel sets: verwijder er eerst een.
 	set name	naam van de set
 	{set} (modified)	{set} (gewijzigd)
+# System print job controls
+	Auto-Rotate Image	Afbeelding automatisch draaien
+	C5 Envelope	C5-envelop
+	Collate	Sorteren
+	Print in Grayscale	Afdrukken in grijstinten
+	Printer Default	Printerstandaard
+	Printer Properties	Printereigenschappen
+	Printer preferences opened	Printervoorkeuren geopend
+	Single-Sided	Enkelzijdig
+	System Default	Systeemstandaard
+	Two-Sided, Flip on Long Edge	Dubbelzijdig, omslaan langs lange zijde
+	Two-Sided, Flip on Short Edge	Dubbelzijdig, omslaan langs korte zijde
+	Unavailable	Niet beschikbaar

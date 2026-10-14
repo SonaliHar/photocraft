@@ -3159,3 +3159,16 @@ curves	Smooth	Сгладить
 	set name	имя набора
 	{set} (modified)	{set} (изменён)
 	Random	Случайно
+# System print job controls
+	Auto-Rotate Image	Автоматически поворачивать изображение
+	C5 Envelope	Конверт C5
+	Collate	Разобрать по копиям
+	Print in Grayscale	Печать в оттенках серого
+	Printer Default	По умолчанию для принтера
+	Printer Properties	Свойства принтера
+	Printer preferences opened	Настройки принтера открыты
+	Single-Sided	Односторонняя
+	System Default	По умолчанию для системы
+	Two-Sided, Flip on Long Edge	Двусторонняя, переворот по длинному краю
+	Two-Sided, Flip on Short Edge	Двусторонняя, переворот по короткому краю
+	Unavailable	Недоступно
