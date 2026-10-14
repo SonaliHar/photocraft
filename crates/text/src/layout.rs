@@ -21,6 +21,7 @@ use parley::{
     Alignment, AlignmentOptions, FontData, FontFamily, FontFeatures, FontStyle, FontVariations, FontWeight, IndentOptions, Layout, LayoutContext,
     PositionedLayoutItem, StyleProperty,
 };
+use photocraft_color::Color;
 use photocraft_doc::TextLayer;
 use photocraft_doc::text::{Caps, CharStyle, Kerning, Orientation, TextAlign, TextDirection, TextShape};
 use skrifa::raw::types::Tag;
@@ -176,6 +177,16 @@ pub struct DecorationRect {
     pub style: u32,
 }
 
+/// A fill behind one paragraph, in text space (y down), expanded by the style's padding.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BackgroundRect {
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+    pub color: Color,
+}
+
 /// A line (a column in vertical type) in line space: `x` runs along the line and `baseline` is the
 /// cross-line position. In vertical type `baseline` is the column's centre line and
 /// `ascent`/`descent` are the column's half widths on either side.
@@ -208,6 +219,8 @@ pub struct TextLayout {
     pub faces: Vec<GlyphFace>,
     pub glyphs: Vec<PlacedGlyph>,
     pub decorations: Vec<DecorationRect>,
+    /// Character fills (Photoshop `_FillBackgroundColor`), behind the glyphs. Empty when no run has one.
+    pub backgrounds: Vec<BackgroundRect>,
     pub lines: Vec<LineInfo>,
     pub clusters: Vec<ClusterInfo>,
     /// Resolved character styles (one per run of the layer).
@@ -1039,7 +1052,69 @@ impl Layouter {
             }
             pending_space += ps.space_after_pt * k;
         }
+        push_character_backgrounds(&mut out, &run_starts);
         out
+    }
+}
+
+/// Photoshop's `_FillBackgroundColor`: one bar per line for each run of characters that share a
+/// background, from the line's ascent to its descent.
+fn push_character_backgrounds(layout: &mut TextLayout, run_starts: &[usize]) {
+    let lines = layout.lines.clone();
+    let clusters = layout.clusters.clone();
+    for (li, line) in lines.iter().enumerate() {
+        let mut row: Vec<&ClusterInfo> = clusters.iter().filter(|c| c.line == li).collect();
+        row.sort_by(|a, b| a.x.total_cmp(&b.x));
+        let mut cur: Option<(Color, f32, f32)> = None;
+        for c in row {
+            if ![c.x, c.advance].iter().all(|v| v.is_finite()) {
+                continue;
+            }
+            let si = run_index_at(run_starts, c.range.start);
+            let color = layout
+                .styles
+                .get(si)
+                .filter(|s| s.fill_background)
+                .and_then(|s| s.background)
+                .filter(|c| c.alpha.is_finite() && c.c.iter().all(|v| v.is_finite()));
+            let (x0, x1) = (c.x.min(c.x + c.advance), c.x.max(c.x + c.advance));
+            let same = cur.as_ref().is_some_and(|(cc, _, _)| color == Some(*cc));
+            if same {
+                if let Some(span) = cur.as_mut() {
+                    span.1 = span.1.min(x0);
+                    span.2 = span.2.max(x1);
+                }
+            } else {
+                emit_character_background(layout, line, cur.take());
+                if let Some(color) = color {
+                    cur = Some((color, x0, x1));
+                }
+            }
+        }
+        emit_character_background(layout, line, cur);
+    }
+}
+
+fn emit_character_background(layout: &mut TextLayout, line: &LineInfo, span: Option<(Color, f32, f32)>) {
+    let Some((color, x0, x1)) = span else { return };
+    if ![line.baseline, line.ascent, line.descent, x0, x1].iter().all(|v| v.is_finite()) || x1 <= x0 {
+        return;
+    }
+    let y0 = line.baseline - line.ascent;
+    let y1 = line.baseline + line.descent;
+    let corners = [layout.to_text(x0, y0), layout.to_text(x1, y0), layout.to_text(x0, y1), layout.to_text(x1, y1)];
+    let mut rect = [corners[0].0, corners[0].1, corners[0].0, corners[0].1];
+    for (x, y) in corners {
+        if !x.is_finite() || !y.is_finite() {
+            return;
+        }
+        rect[0] = rect[0].min(x);
+        rect[1] = rect[1].min(y);
+        rect[2] = rect[2].max(x);
+        rect[3] = rect[3].max(y);
+    }
+    if rect[2] > rect[0] && rect[3] > rect[1] {
+        layout.backgrounds.push(BackgroundRect { x0: rect[0], y0: rect[1], x1: rect[2], y1: rect[3], color });
     }
 }
 

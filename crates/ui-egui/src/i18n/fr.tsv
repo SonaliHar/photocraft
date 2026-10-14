@@ -2788,6 +2788,7 @@ cameraRaw	Blending	Fusion
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Sélecteur de couleurs (Couleur du texte)
+	Color Picker (Background Color)	Sélecteur de couleurs (Couleur de l'arrière-plan)
 	Color Picker ({name})	Sélecteur de couleurs ({name})
 	Color Picker (Fill Color)	Sélecteur de couleurs (Couleur de remplissage)
 	Fill color	Couleur de remplissage
@@ -3146,3 +3147,5 @@ curves	Smooth	Lisser
 	Sent to {printer}	Envoyé à {printer}
 	set in Print Settings…	défini dans les paramètres d’impression…
 	ICO is limited to 256 × 256 pixels	Le format ICO est limité à 256 × 256 pixels
+
+# Paragraph background behind type

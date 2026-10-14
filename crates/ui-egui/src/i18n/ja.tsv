@@ -2339,6 +2339,7 @@ cameraRaw	Color	カラー
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	カラーピッカー (文字色)
+	Color Picker (Background Color)	カラーピッカー (背景色)
 	Color Picker ({name})	カラーピッカー（{name}）
 	Color Picker (Fill Color)	カラーピッカー (塗りつぶしカラー)
 	Fill color	塗りつぶしカラー
@@ -3821,3 +3822,5 @@ curves	Smooth	スムーズ
 	Reset All Locked Settings	ロックされた設定をすべて初期化
 	Copy Texture to Other Tools	テクスチャを他のツールにコピー
 	ICO is limited to 256 × 256 pixels	ICO は 256 × 256 ピクセルまでです
+
+# Paragraph background behind type

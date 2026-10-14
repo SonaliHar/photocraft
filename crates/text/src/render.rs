@@ -53,7 +53,25 @@ impl<S: LineSink> LineSink for WarpSink<'_, S> {
 /// when `color` is `None`) into `sink`, through `transform` (text space → sink space), bending
 /// the outlines with `warp` first (in text space).
 fn draw(layout: &TextLayout, transform: &Xform, sink: &mut impl LineSink, only_color: Option<&Color>, warp: Option<&Warp>) {
+    draw_backgrounds(layout, transform, sink, only_color, warp);
     draw_pass(layout, transform, sink, only_color, warp, Pass::All);
+}
+
+/// Fills character backgrounds. Drawn before glyphs so the type sits on top, including when a
+/// glyph uses the same colour as its box.
+fn draw_backgrounds(layout: &TextLayout, transform: &Xform, sink: &mut impl LineSink, only_color: Option<&Color>, warp: Option<&Warp>) {
+    for b in &layout.backgrounds {
+        if only_color.is_some_and(|c| c != &b.color) {
+            continue;
+        }
+        match warp {
+            Some(w) => {
+                let mut ws = WarpSink { inner: &mut *sink, warp: w, post: *transform };
+                rect_to(&mut ws, &Xform::IDENTITY, b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64);
+            }
+            None => rect_to(sink, transform, b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64),
+        }
+    }
 }
 
 /// Which part of the layout [`draw_pass`] emits. Faux bold draws each glyph at several offsets;
@@ -207,6 +225,27 @@ fn color_in(format: &PixelFormat, c: &Color) -> Vec<f32> {
     }
 }
 
+/// Source-over one coverage buffer onto premultiplied `acc` (colour channels, then alpha).
+fn paint_coverage(acc: &mut [f32], cov: &[f32], color: &Color, format: &PixelFormat, antialias: AntiAlias) {
+    let n = format.mode.color_channels();
+    let stride = n + 1;
+    let comps = color_in(format, color);
+    let a = color.alpha.clamp(0.0, 1.0);
+    for (i, &cv) in cov.iter().enumerate() {
+        let cv = if antialias == AntiAlias::None { if cv >= 0.5 { 1.0 } else { 0.0 } } else { cv };
+        let s = cv * a;
+        if s <= 0.0 {
+            continue;
+        }
+        let px = &mut acc[i * stride..(i + 1) * stride];
+        let keep = 1.0 - s;
+        for j in 0..n {
+            px[j] = comps[j] * s + px[j] * keep;
+        }
+        px[n] = s + px[n] * keep;
+    }
+}
+
 /// Document-space bounds of the drawn text (integer pixel rectangle).
 pub fn ink_rect(layout: &TextLayout, transform: &Affine) -> Rect {
     ink_rect_warped(layout, transform, None)
@@ -256,6 +295,15 @@ pub fn rasterize_warped(layout: &TextLayout, transform: &Affine, format: PixelFo
     let mut acc = vec![0.0f32; w * h * stride];
     let xf = Xform([1.0, 0.0, 0.0, 1.0, -rect.x0 as f64, -rect.y0 as f64]).mul(&Xform(transform.m));
     let mut colors: Vec<Color> = Vec::new();
+    for b in &layout.backgrounds {
+        if !colors.contains(&b.color) {
+            colors.push(b.color);
+            let mut cov = Coverage::new(w, h);
+            draw_backgrounds(layout, &xf, &mut cov, Some(&b.color), warp);
+            paint_coverage(&mut acc, &cov.finish(), &b.color, &format, antialias);
+        }
+    }
+    colors.clear();
     for st in &layout.styles {
         if !colors.contains(&st.color) {
             colors.push(st.color);
@@ -274,21 +322,7 @@ pub fn rasterize_warped(layout: &TextLayout, transform: &Affine, format: PixelFo
                 }
             }
         }
-        let comps = color_in(&format, c);
-        let a = c.alpha.clamp(0.0, 1.0);
-        for (i, &cv) in cov.iter().enumerate() {
-            let cv = if antialias == AntiAlias::None { if cv >= 0.5 { 1.0 } else { 0.0 } } else { cv };
-            let s = cv * a;
-            if s <= 0.0 {
-                continue;
-            }
-            let px = &mut acc[i * stride..(i + 1) * stride];
-            let keep = 1.0 - s;
-            for j in 0..n {
-                px[j] = comps[j] * s + px[j] * keep;
-            }
-            px[n] = s + px[n] * keep;
-        }
+        paint_coverage(&mut acc, &cov, c, &format, antialias);
     }
     // Unpremultiply.
     for px in acc.chunks_exact_mut(stride) {

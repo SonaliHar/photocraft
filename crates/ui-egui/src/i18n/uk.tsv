@@ -2607,6 +2607,7 @@ cameraRaw	Roughness	Шорсткість
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Вибір кольору (колір тексту)
+	Color Picker (Background Color)	Вибір кольору (колір тла)
 	Color Picker ({name})	Вибір кольору ({name})
 	Color Picker (Fill Color)	Вибір кольору (колір заливки)
 	Fill color	Колір заливки
@@ -3843,3 +3844,5 @@ curves	Smooth	Згладити
 	Sent to {printer}	Надіслано на {printer}
 	set in Print Settings…	задається в параметрах друку…
 	ICO is limited to 256 × 256 pixels	ICO обмежено розміром 256 × 256 пікселів
+
+# Paragraph background behind type

@@ -631,7 +631,35 @@ pub(crate) fn char_style(base: Option<&E>, d: &E, fonts: &[String], k: f32) -> C
             _ => Color::BLACK,
         };
     }
+    if let Some(c) = g("_FillBackgroundColor").and_then(engine_color) {
+        s.background = Some(c);
+    }
+    s.fill_background = flag("_FillBackgroundFlag") == Some(true) && s.background.is_some();
     s
+}
+
+/// Photoshop's colour dict (`Type` + `Values`) as a [`Color`]. `None` when the array is empty.
+fn engine_color(d: &E) -> Option<Color> {
+    let v = arr_f(d.get("Values"));
+    let a = v.first().copied().unwrap_or(1.0) as f32;
+    let color = match v.len() {
+        5 => Color { mode: ColorMode::Cmyk, c: [v[1] as f32, v[2] as f32, v[3] as f32, v[4] as f32], alpha: a },
+        2 => Color { mode: ColorMode::Grayscale, c: [v[1] as f32, 0.0, 0.0, 0.0], alpha: a },
+        4 => Color::rgba(v[1] as f32, v[2] as f32, v[3] as f32, a),
+        _ => return None,
+    };
+    (color.alpha.is_finite() && color.c.iter().all(|c| c.is_finite())).then_some(color)
+}
+
+fn engine_color_parts(c: &Color) -> (i64, Vec<E>) {
+    match c.mode {
+        ColorMode::Cmyk => (2, vec![real(c.alpha), real(c.c[0]), real(c.c[1]), real(c.c[2]), real(c.c[3])]),
+        ColorMode::Grayscale => (0, vec![real(c.alpha), real(c.c[0])]),
+        _ => {
+            let [r, g, b] = c.to_rgb();
+            (1, vec![real(c.alpha), real(r), real(g), real(b)])
+        }
+    }
 }
 
 pub(crate) fn para_style(base: Option<&E>, d: &E, k: f32) -> ParagraphStyle {
@@ -860,6 +888,13 @@ pub(crate) fn style_sheet_data(s: &CharStyle, font: usize, k: f32) -> E {
         ("FillFlag".into(), E::Bool(true)),
         ("FillColor".into(), E::Dict(vec![("Type".into(), E::Int(color_type)), ("Values".into(), E::Array(values))])),
     ];
+    // Always written: a parent sheet (Normal RGB) may already have the flag, and a run that omits
+    // it would inherit that fill. Photoshop itself stores `false` on characters without a box.
+    dict.push(("_FillBackgroundFlag".into(), E::Bool(s.fill_background)));
+    if let Some(bg) = &s.background {
+        let (bg_type, bg_values) = engine_color_parts(bg);
+        dict.push(("_FillBackgroundColor".into(), E::Dict(vec![("Type".into(), E::Int(bg_type)), ("Values".into(), E::Array(bg_values))])));
+    }
     dict.append(&mut opentype);
     E::Dict(dict)
 }

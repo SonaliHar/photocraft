@@ -3606,6 +3606,7 @@ fontWeight	Thin	Πολύ λεπτά
 
 # Shared text style Color Picker (#2015)
 	Color Picker (Text Color)	Επιλογέας χρώματος (χρώμα κειμένου)
+	Color Picker (Background Color)	Επιλογέας χρώματος (χρώμα φόντου)
 	Color Picker ({name})	Επιλογέας χρώματος ({name})
 	Auto Hide Notifications	Αυτόματη απόκρυψη ειδοποιήσεων
 	Notification Duration (seconds)	Διάρκεια ειδοποίησης (δευτερόλεπτα)
@@ -3842,3 +3843,5 @@ curves	Smooth	Εξομάλυνση
 	Sent to {printer}	Στάλθηκε στον {printer}
 	set in Print Settings…	ορίζεται στις ρυθμίσεις εκτύπωσης…
 	ICO is limited to 256 × 256 pixels	Το ICO περιορίζεται σε 256 × 256 εικονοστοιχεία
+
+# Paragraph background behind type

@@ -768,7 +768,8 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     let color = f.get("color").and_then(Value::as_str).unwrap_or("#000000");
     if let Some(cmd) = f.get("__command").and_then(Value::as_str) {
         let mut p = f.get("__params").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
-        p["color"] = json!(color);
+        let key = f.get("__colorKey").and_then(Value::as_str).filter(|k| !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric())).unwrap_or("color");
+        p[key] = json!(color);
         return app.run(cmd, p);
     }
     if target == "field" {

@@ -2377,6 +2377,7 @@ cameraRaw	Blending	混合
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	拾色器（文字颜色）
+	Color Picker (Background Color)	拾色器（背景颜色）
 	Color Picker ({name})	拾色器（{name}）
 	Color Picker (Fill Color)	拾色器（填充颜色）
 	Fill color	填充颜色
@@ -2754,3 +2755,5 @@ curves	Smooth	平滑
 	Sent to {printer}	已发送到 {printer}
 	set in Print Settings…	在打印设置中设置…
 	ICO is limited to 256 × 256 pixels	ICO 最大为 256 × 256 像素
+
+# Paragraph background behind type

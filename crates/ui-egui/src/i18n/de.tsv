@@ -2406,6 +2406,7 @@
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Farbwähler (Textfarbe)
+	Color Picker (Background Color)	Farbwähler (Hintergrundfarbe)
 	Color Picker ({name})	Farbwähler ({name})
 	Color Picker (Fill Color)	Farbwähler (Füllfarbe)
 	Fill color	Füllfarbe
@@ -3142,3 +3143,5 @@ curves	Smooth	Glätten
 	Sent to {printer}	An {printer} gesendet
 	set in Print Settings…	in den Druckeinstellungen festlegen…
 	ICO is limited to 256 × 256 pixels	ICO ist auf 256 × 256 Pixel begrenzt
+
+# Paragraph background behind type

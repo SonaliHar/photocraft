@@ -2345,6 +2345,7 @@
 	Knockout	Nakavt
 	Apply At Canvas Bounds	Kanvas Sınırlarında Uygula
 	Color Picker (Text Color)	Renk Seçici (Metin Rengi)
+	Color Picker (Background Color)	Renk Seçici (Arka Plan Rengi)
 	Color Picker ({name})	Renk Seçici ({name})
 	Color Picker (Fill Color)	Renk Seçici (Dolgu Rengi)
 	Fill color	Rengi doldur
@@ -3876,3 +3877,5 @@ cameraData	Lens	Lens
 	Ink Characteristics	Mürekkep Özellikleri
 	Solidity:	Doluluk:
 	Redrawing	Yeniden çiziliyor
+
+# Paragraph background behind type

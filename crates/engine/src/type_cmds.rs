@@ -357,6 +357,31 @@ pub fn apply_char_props(s: &mut CharStyle, p: &Value) -> bool {
         s.language = v.as_str().map(str::to_string);
         hit(true);
     }
+    match p.get("background") {
+        Some(Value::Null) => {
+            s.background = None;
+            s.fill_background = false;
+            hit(true);
+        }
+        Some(v) => {
+            if let Some(mut c) = color(v) {
+                // A colour without alpha keeps the shade already on these characters.
+                if rgb_only(v)
+                    && let Some(prev) = s.background
+                {
+                    c.alpha = prev.alpha;
+                }
+                s.background = Some(c);
+                s.fill_background = true;
+                hit(true);
+            }
+        }
+        None => {}
+    }
+    if let Some(on) = p.get("fillBackground").and_then(Value::as_bool) {
+        s.fill_background = on && s.background.is_some();
+        hit(true);
+    }
     any
 }
 
@@ -401,6 +426,15 @@ pub fn apply_para_props(s: &mut ParagraphStyle, p: &Value) -> bool {
         any = true;
     }
     any
+}
+
+/// `#rrggbb` or `[r,g,b]`: no alpha of its own.
+fn rgb_only(v: &Value) -> bool {
+    match v {
+        Value::String(s) => s.trim_start_matches('#').len() == 6,
+        Value::Array(a) => a.len() == 3,
+        _ => false,
+    }
 }
 
 fn push_merge<S: PartialEq>(out: &mut Vec<(usize, S)>, len: usize, st: S) {
@@ -785,7 +819,7 @@ pub(crate) fn new_text_layer(s: &Session, p: &Value, cmd: &str) -> Result<TextLa
     Ok(t)
 }
 
-const CHAR_PARAMS: &str = r##""font":str,"fontStyle":str,"weight":100..900,"italic":bool,"size":0.1..=1296 pt,"color":"#rrggbb"|[r,g,b,a],"tracking":-1000..=10000 (1/1000 em),"leading":pt|"auto","baselineShift":pt,"horizontalScale":%,"verticalScale":%,"underline":bool,"strikethrough":bool,"fauxBold":bool,"fauxItalic":bool,"kerning":1/1000em (manual, after each character)|"metrics"|"optical"|"off","caps":"normal|small|all","ligatures":bool,"discretionaryLigatures":bool,"features":{"ss01":1},"variations":{"wght":650},"language":str"##;
+const CHAR_PARAMS: &str = r##""font":str,"fontStyle":str,"weight":100..900,"italic":bool,"size":0.1..=1296 pt,"color":"#rrggbb"|[r,g,b,a],"tracking":-1000..=10000 (1/1000 em),"leading":pt|"auto","baselineShift":pt,"horizontalScale":%,"verticalScale":%,"underline":bool,"strikethrough":bool,"fauxBold":bool,"fauxItalic":bool,"kerning":1/1000em (manual, after each character)|"metrics"|"optical"|"off","caps":"normal|small|all","ligatures":bool,"discretionaryLigatures":bool,"features":{"ss01":1},"variations":{"wght":650},"language":str,"background":"#rrggbb"|[r,g,b,a]|null (Photoshop _FillBackgroundColor; null clears the colour too),"fillBackground":bool (draw that colour; false keeps it for the next time)"##;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![

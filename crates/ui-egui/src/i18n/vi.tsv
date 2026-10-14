@@ -2012,6 +2012,7 @@ layers	Fill:	Độ tô:
 	Clone source {n} ({key}-click with Clone Stamp to set)	Nguồn nhân bản {n} ({key}+nhấp bằng Dấu nhân bản để đặt)
 	Color Picker (Layer Style Color)	Ống hút màu (Màu kiểu lớp)
 	Color Picker (Text Color)	Ống hút màu (Màu chữ)
+	Color Picker (Background Color)	Ống hút màu (Màu nền)
 	Color to Alpha…	Màu sang alpha…
 	Corner radius	Bán kính góc
 	Create new shape from the current path	Tạo hình mới từ đường dẫn hiện tại
@@ -3631,3 +3632,5 @@ curves	Smooth	Làm mượt
 	Sent to {printer}	Đã gửi tới {printer}
 	set in Print Settings…	đặt trong thiết lập in…
 	ICO is limited to 256 × 256 pixels	ICO giới hạn ở 256 × 256 pixel
+
+# Paragraph background behind type

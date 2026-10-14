@@ -89,10 +89,21 @@ pub struct CharStyle {
     pub variations: Vec<FontVariation>,
     /// BCP-47 language tag (affects shaping and line breaking).
     pub language: Option<String>,
+    /// Fill behind these characters (Photoshop `_FillBackgroundColor`). Kept when the box is
+    /// switched off, so turning it back on uses the same colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<Color>,
+    /// Whether that fill is drawn (Photoshop `_FillBackgroundFlag`). The colour stays either way.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fill_background: bool,
     /// Applied character style (id in [`crate::TextStyles`]); `None` = "None". Attributes above
     /// stay fully resolved; differences from the style are local overrides.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub style_sheet: Option<u32>,
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 impl Default for CharStyle {
@@ -122,6 +133,8 @@ impl Default for CharStyle {
             features: Vec::new(),
             variations: Vec::new(),
             language: None,
+            background: None,
+            fill_background: false,
             style_sheet: None,
         }
     }
