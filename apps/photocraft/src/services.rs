@@ -261,6 +261,59 @@ fn save_native(
     })
 }
 
+/// Interactive accounted output only. Source exclusions are inert metadata;
+/// destination authority comes from this desktop service, never provenance.
+/// The inherited protected-reader guard uses its bounded local read/hash work
+/// limits and the real Interrupt, not the caller's cumulative work counter.
+/// Blocking filesystem syscalls remain an existing platform boundary.
+fn save_accounted_native(
+    snapshot: &photocraft_engine::DocumentSnapshot,
+    path: &str,
+    protection: &photocraft_engine::WriteProtection,
+    control: &photocraft_raster::backing::ReadControl<'_>,
+) -> Result<(), String> {
+    use photocraft_io::accounted_native::{AccountedNativeError, ServiceAuthorizedNativeWritePath};
+    use photocraft_raster::backing::{BackingError, quota::QuotaKind};
+    crate::crash_guard::guard("Save", || {
+        control.check(1).map_err(|e| e.to_string())?;
+        let owner = snapshot.accounted().ok_or("accounted native save requires the actual owned snapshot")?;
+        if path.is_empty() || path.len() > 4096 {
+            return Err("accounted native save destination exceeds path limits".into());
+        }
+        let quota = owner.quota();
+        let held = protection.resident_bytes_with_interrupt(control.interrupt).map_err(|e| e.to_string())?;
+        let _protection = quota.reserve(QuotaKind::Resident, held as u64).map_err(|e| e.to_string())?;
+        // Prepay the service's derived PathBuf and the alias guard's bounded
+        // native path/handle bookkeeping before either is constructed.
+        let _paths = quota.reserve(QuotaKind::Resident, 65536).map_err(|e| e.to_string())?;
+        let selected = Path::new(path);
+        let validate = |candidate: &Path, ctl: &photocraft_raster::backing::ReadControl<'_>| -> Result<(), AccountedNativeError> {
+            ctl.check(1)?;
+            let fixed = photocraft_io::source_protection::SOURCE_PROTECTION_FIXED_BYTES;
+            let _inspection = quota.reserve(QuotaKind::Resident, fixed).map_err(|_| BackingError::Quota)?;
+            // No encoded-wrapper collection headroom: this accounted writer
+            // already refuses wrappers. Plain destination fingerprints stream
+            // through the existing fixed reader/hash scratch under this lease.
+            let result =
+                photocraft_automation::files::validate_destination_protected_with_resident_limit(candidate, protection, Some("pcraft"), ctl.interrupt, fixed);
+            ctl.check(1)?;
+            result.map_err(|e| AccountedNativeError::Io(std::io::Error::other(e.to_string())))
+        };
+        validate(selected, control).map_err(|e| e.to_string())?;
+        let capability = ServiceAuthorizedNativeWritePath::from_platform_authorized(selected.to_path_buf(), quota, control).map_err(|e| e.to_string())?;
+        photocraft_io::accounted_native::save_accounted_native_path(snapshot, &capability, Default::default(), quota, control, |resolved, ctl| {
+            validate(selected, ctl)?;
+            if resolved != selected {
+                validate(resolved, ctl)?;
+            }
+            Ok(())
+        })
+        .map_err(|e| e.to_string())
+        // No fallible response/bookkeeping or cancellation poll after rename.
+        // The engine's prepared completion owns final publication separately.
+    })
+}
+
 fn export_options(settings: &photocraft_ui_egui::ExportSettings) -> photocraft_io::ExportOptions {
     let mut opts = photocraft_io::ExportOptions::default();
     if let Some(q) = settings.jpeg_quality {
@@ -537,6 +590,9 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     });
     Services {
         native_save: Some(Box::new(save_native)),
+        accounted_native_save: Some(Box::new(save_accounted_native)),
+        // Rooted accounted streaming requires its own namespace-safe adapter.
+        automation_accounted_native_save: None,
         validate_write: Some(Box::new(|path, source| {
             photocraft_automation::files::validate_destination(Path::new(path), source, None).map_err(|e| e.to_string())
         })),
@@ -617,6 +673,121 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         preset_store: None,
         is_wayland: false,
         ..recovery_services(recovery_dir())
+    }
+}
+
+#[cfg(test)]
+mod accounted_native_save_tests {
+    //! UNRUN desktop capability/guard drafts; no source qualification claims.
+    use super::*;
+    use photocraft_doc::{BackedLayer, ColorMode, Layer, LayerContent, PixelFormat, SampleType, accounted_document::AccountedDocument};
+    use photocraft_engine::DocumentSnapshot;
+    use photocraft_geom::{Rect, Size};
+    use photocraft_raster::{
+        Interrupt,
+        backing::{quota::*, *},
+    };
+    use std::sync::atomic::{AtomicU64, Ordering};
+    struct Root(PathBuf);
+    impl Root {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!("photocraft-accounted-service-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for Root {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    fn ctl() -> ReadControl<'static> {
+        ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) }
+    }
+    #[derive(Debug)]
+    struct Defaults {
+        descriptor: NativePlaneDescriptor,
+        _lease: QuotaLease,
+    }
+    impl NativePlaneStore for Defaults {
+        fn descriptor(&self) -> NativePlaneDescriptor {
+            self.descriptor
+        }
+        fn read_exact_at(&self, offset: u64, out: &mut [u8], c: &ReadControl<'_>) -> Result<(), BackingError> {
+            c.check(out.len() as u64)?;
+            for (i, v) in out.iter_mut().enumerate() {
+                *v = self.descriptor.default_bytes()[((offset + i as u64) % self.descriptor.default_bytes().len() as u64) as usize];
+            }
+            Ok(())
+        }
+    }
+    fn fixture(depth: SampleType) -> DocumentSnapshot {
+        let q = BackingQuota::new(QuotaLimits { resident: 128 << 20, index: 16 << 20, scratch: 128 << 20 });
+        let format = PixelFormat::new(ColorMode::Rgb, depth, true);
+        let default = if depth == SampleType::U32 { 0x01000001u32.to_ne_bytes().repeat(4) } else { (-0.0f64).to_ne_bytes().repeat(4) };
+        let descriptor = NativePlaneDescriptor::new(format, Rect::new(0, 0, 2, 1), &default).unwrap();
+        let store = Arc::new(Defaults { descriptor, _lease: q.reserve(QuotaKind::Resident, 512).unwrap() });
+        let raster = BackedRaster::new(store, q.clone(), 1, &ctl()).unwrap();
+        let layer = BackedLayer::new(raster, descriptor, &ctl()).unwrap();
+        let mut doc = Document::new("unchanged current", Size::new(2, 1), ColorMode::Rgb, depth);
+        doc.layers.push(Layer::new("native", LayerContent::BackedRaster(layer)));
+        let guard = q.reserve(QuotaKind::Index, 65536).unwrap();
+        DocumentSnapshot::from_accounted(AccountedDocument::from_owned(doc, Arc::new(guard), q, &ctl()).unwrap()).unwrap()
+    }
+    #[test]
+    fn interactive_native_capability_streams_owned_words_without_mutating_snapshot() {
+        let root = Root::new();
+        for depth in [SampleType::U32, SampleType::F64] {
+            let snapshot = fixture(depth);
+            let original = snapshot.clone();
+            let path = root.0.join(format!("{depth:?}.pcraft"));
+            save_accounted_native(&snapshot, path.to_str().unwrap(), &Default::default(), &ctl()).unwrap();
+            assert!(std::fs::metadata(&path).unwrap().len() > 0);
+            assert!(snapshot.shares_state(&original));
+            assert_eq!(snapshot.name, "unchanged current");
+        }
+        let services = native(None);
+        assert!(services.accounted_native_save.is_some());
+        assert!(services.automation_accounted_native_save.is_none());
+    }
+    #[test]
+    fn all_open_source_alias_and_fingerprint_exclusions_precede_output_replacement() {
+        let root = Root::new();
+        let snapshot = fixture(SampleType::U32);
+        let source = root.0.join("inactive-source.xcf");
+        let alias = root.0.join("alias.pcraft");
+        let raw = b"gimp xcf own protected bytes";
+        std::fs::write(&source, raw).unwrap();
+        std::fs::hard_link(&source, &alias).unwrap();
+        let protection = photocraft_engine::WriteProtection { sources: vec![source.to_str().unwrap().into()], fingerprints: Vec::new() };
+        assert!(save_accounted_native(&snapshot, alias.to_str().unwrap(), &protection, &ctl()).is_err());
+        assert_eq!(std::fs::read(&source).unwrap(), raw);
+        assert_eq!(std::fs::read(&alias).unwrap(), raw);
+        let empty = root.0.join("retained-fingerprint.pcraft");
+        std::fs::write(&empty, []).unwrap();
+        let protection = photocraft_engine::WriteProtection {
+            sources: Vec::new(),
+            fingerprints: vec!["af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262".into()],
+        };
+        assert!(save_accounted_native(&snapshot, empty.to_str().unwrap(), &protection, &ctl()).is_err());
+        assert_eq!(std::fs::metadata(&empty).unwrap().len(), 0);
+    }
+    #[test]
+    fn wrapper_and_precancel_refuse_without_creating_or_mutating_destination() {
+        let root = Root::new();
+        let snapshot = fixture(SampleType::F64);
+        let path = root.0.join("wrapped.pcraft");
+        let raw = b"\x1f\x8bnot a writable native archive";
+        std::fs::write(&path, raw).unwrap();
+        assert!(save_accounted_native(&snapshot, path.to_str().unwrap(), &Default::default(), &ctl()).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), raw);
+        let absent = root.0.join("cancelled.pcraft");
+        let stop = || true;
+        let interrupt = Interrupt::cancel_only(&stop);
+        let control = ReadControl { interrupt: &interrupt, work: &|_| Ok(()) };
+        assert!(save_accounted_native(&snapshot, absent.to_str().unwrap(), &Default::default(), &control).is_err());
+        assert!(!absent.exists());
     }
 }
 

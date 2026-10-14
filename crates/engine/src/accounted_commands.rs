@@ -12,6 +12,10 @@ use photocraft_raster::backing::{
 use serde_json::Value;
 
 mod job_journal;
+#[path = "accounted_save_journal.rs"]
+mod save_journal;
+pub(crate) use save_journal::PreparedSaveJournalWitness;
+pub use save_journal::PreparedAccountedSaveReply;
 #[path = "imported_accounted_metadata.rs"]
 mod imported_metadata;
 pub(crate) use job_journal::PreparedAccountedJobJournal;

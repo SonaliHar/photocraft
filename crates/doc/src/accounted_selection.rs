@@ -15,6 +15,8 @@ use photocraft_raster::backing::{
 };
 use photocraft_raster::{MAX_CHECKED_RASTER_BYTES, Surface, Tile};
 use std::sync::Arc;
+#[path = "accounted_selection_owned.rs"]
+mod owned;
 #[path = "accounted_selection_bands.rs"]
 mod bands;
 pub use bands::AccountedSelectionBandBuilder;
@@ -26,8 +28,9 @@ struct SelectionOwner {
     surface: Surface,
     bounds: Rect,
     quota: BackingQuota,
-    _payload: QuotaLease,
-    _index: QuotaLease,
+    _retention: Option<Arc<dyn std::any::Any + Send + Sync>>,
+    _payload: Option<QuotaLease>,
+    _index: Option<QuotaLease>,
 }
 /// Sharing keeps the original charged native Tile owners alive. This exposes no
 /// mutable Surface, payload-taking accessor, Weak owner or arbitrary lease hook.
@@ -187,7 +190,7 @@ impl AccountedSelection {
         drop(scratch_lease);
         // All physical tiles are fresh; borrowed caller input cannot mutate them.
         Ok(Self {
-            owner: Arc::new(SelectionOwner { surface, bounds: extent, quota: quota.clone(), _payload: payload_lease, _index: index_lease }),
+            owner: Arc::new(SelectionOwner { surface, bounds: extent, quota: quota.clone(), _retention: None, _payload: Some(payload_lease), _index: Some(index_lease) }),
             _allocation: Arc::new(allocation_lease),
         })
     }

@@ -370,6 +370,44 @@ impl DocumentHistory {
             Ok(snapshot)
         })
     }
+    /// Stage a save-identity replacement without recording an undo step.
+    /// The caller must prepare this in a cloned history before external output,
+    /// and fence/publish that history with the matching Session snapshot. Only a
+    /// genuine charged model on the exact current ledger and document identity
+    /// is accepted; this does not authorize a raw Document mutation callback.
+    /// Labels, layer targets, cursor, and all prior undo/redo entries are retained.
+    pub(crate) fn try_replace_accounted_current(
+        &mut self,
+        expected: &AccountedDocument,
+        prepared: AccountedDocument,
+        ctl: &ReadControl<'_>,
+    ) -> Result<DocumentSnapshot, BackingError> {
+        ctl.check(1)?;
+        let Branch::Accounted(owner) = &self.branch else {
+            return Err(BackingError::Unsupported);
+        };
+        let current = owner.states.get(owner.cursor).ok_or(BackingError::Integrity)?;
+        if !current.document.shares_model(expected) || prepared.document().id != expected.document().id || !prepared.quota().shares_ledger(expected.quota()) {
+            return Err(BackingError::Integrity);
+        }
+        let snapshot = DocumentSnapshot::from_accounted(prepared.clone())?;
+        if prepared.shares_model(&current.document) {
+            ctl.check(1)?;
+            return Ok(snapshot);
+        }
+        // update reserves its complete slot/header envelope before allocation;
+        // entries share genuine model and Metadata owners, never copied totals.
+        self.update(ctl, |history| {
+            let current = history.states.get_mut(history.cursor).ok_or(BackingError::Integrity)?;
+            if !current.document.shares_model(expected) {
+                return Err(BackingError::Integrity);
+            }
+            ctl.check(1)?;
+            current.document = prepared;
+            Ok(snapshot)
+        })
+    }
+
     /// Typed charged pixel selection, separate from layer-target transactions.
     pub fn try_commit_accounted_selection(
         &mut self,
@@ -615,3 +653,7 @@ impl DocumentHistory {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "document_history_accounted_replacement_tests.rs"]
+mod accounted_replacement_tests;

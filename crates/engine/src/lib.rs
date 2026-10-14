@@ -8,6 +8,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod accounted_commands;
+pub mod accounted_native_open;
+pub mod accounted_native_save;
 pub(crate) mod accounted_color_range;
 pub(crate) mod accounted_color_range_banded;
 mod imported_backed_sampling;
@@ -354,6 +356,8 @@ pub struct DocState {
     pub floating: Option<float_cmds::Floating>,
     accounted_view: Option<accounted_view::AccountedView>,
     _accounted_metadata: Option<photocraft_raster::backing::quota::QuotaLease>,
+    /// Retains the separately prepared native save path after publication.
+    _accounted_save_identity: Option<photocraft_raster::backing::quota::QuotaLease>,
     /// Color Sampler points (`view.colorSamplers.*`, #1046): numbered sample positions in document
     /// pixel coordinates. Per-document view state: discarded when the document closes, never saved
     /// to `.pcraft` or PSD, and not a history step.
@@ -396,6 +400,7 @@ impl DocState {
             next_snapshot: self.next_snapshot,
             accounted_view: None,
             _accounted_metadata: None,
+            _accounted_save_identity: None,
         })
     }
     /// Record the detected policy without granting filesystem authority.
@@ -490,6 +495,7 @@ impl DocState {
             next_snapshot: 1,
             accounted_view: None,
             _accounted_metadata: None,
+            _accounted_save_identity: None,
         };
         poll()?;
         Ok(state)

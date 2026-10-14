@@ -15,6 +15,10 @@ use std::{
 
 #[path = "accounted_imported_edits.rs"]
 mod imported_edits;
+#[path = "accounted_selection_rehydrate.rs"]
+mod selection_rehydrate;
+#[path = "accounted_document_name.rs"]
+mod document_name;
 #[path = "accounted_imported_selection.rs"]
 mod imported_selection;
 

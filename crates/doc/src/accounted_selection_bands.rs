@@ -131,7 +131,7 @@ impl AccountedSelectionBandBuilder {
         let Self { surface, canvas, quota, payload, index, allocation, scratch, .. } = self;
         drop(scratch);
         Ok(Some(AccountedSelection {
-            owner: Arc::new(SelectionOwner { surface, bounds: canvas, quota, _payload: payload, _index: index }),
+            owner: Arc::new(SelectionOwner { surface, bounds: canvas, quota, _retention: None, _payload: Some(payload), _index: Some(index) }),
             _allocation: Arc::new(allocation),
         }))
     }

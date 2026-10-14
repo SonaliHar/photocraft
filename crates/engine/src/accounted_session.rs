@@ -56,6 +56,7 @@ impl DocState {
             next_snapshot: 1,
             accounted_view: Some(view),
             _accounted_metadata: Some(metadata),
+            _accounted_save_identity: None,
         })
     }
 }

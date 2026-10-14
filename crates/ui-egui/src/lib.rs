@@ -442,6 +442,8 @@ pub struct Services {
     pub export: Option<ExportFn>,
     /// Atomic streamed native saves with all open-document source exclusions.
     pub native_save: Option<services::NativeSaveFn>,
+    /// Explicit quota-backed native output; no resident writer fallback.
+    pub accounted_native_save: Option<services::AccountedNativeSaveFn>,
     /// Background save over the automation write authority (`app.save`, #2017): same worker
     /// contract as `save_file`, but the bytes go through the capability-scoped workspace.
     pub automation_save: Option<SaveFileFn>,
@@ -468,6 +470,8 @@ pub struct Services {
     pub automation_write: Option<AutomationWriteFn>,
     /// Stream native output beneath the held automation write root only.
     pub automation_native_save: Option<services::NativeSaveFn>,
+    /// Accounted native output beneath the held automation write authority.
+    pub automation_accounted_native_save: Option<services::AccountedNativeSaveFn>,
     pub automation_validate_write: Option<AutomationValidateWriteFn>,
     pub automation_open_pcraft: Option<AutomationOpenPcraftFn>,
     pub automation_command: Option<AutomationCommandFn>,
@@ -1483,6 +1487,9 @@ impl PhotocraftApp {
         if self.save_options_open() {
             return Err("Answer TIFF or Targa Options before starting another save".into());
         }
+        if self.session.active().is_some_and(|s| s.doc.accounted().is_some()) {
+            return self.save_accounted_native(&path, false, false, Some("file.save"));
+        }
         let r = self.write_save(path, None, None)?;
         self.session.journal.push(("file.save".into(), Value::Object(Default::default())));
         Ok(r)
@@ -1491,6 +1498,10 @@ impl PhotocraftApp {
     /// Writes the Save As and journals it as a `file.saveAs` step with its path (and TIFF or
     /// Targa answer), so an action being recorded keeps it (#2032).
     fn save_as_step(&mut self, path: String, tiff_layers: Option<bool>, tga_bits: Option<photocraft_io::TgaBits>) -> Result<Value, String> {
+        if self.session.active().is_some_and(|s| s.doc.accounted().is_some()) {
+            if tiff_layers.is_some() || tga_bits.is_some() { return Err("accounted native Save As does not take TIFF or Targa options".into()); }
+            return self.save_accounted_native(&path, false, false, Some("file.saveAs"));
+        }
         let r = self.write_save(path.clone(), tiff_layers, tga_bits)?;
         let mut step = serde_json::json!({"path": path});
         if let Some(layers) = tiff_layers {
@@ -1580,6 +1591,10 @@ impl PhotocraftApp {
     /// `None` when the save went to a background job (#2017), which finishes it in
     /// [`jobs_ui::tick`].
     pub(crate) fn write_document(&mut self, path: String, settings: &ExportSettings, copy: bool) -> Result<Option<(String, Vec<String>)>, String> {
+        if self.session.active().is_some_and(|s| s.doc.accounted().is_some()) {
+            self.save_accounted_native(&path, copy, false, None)?;
+            return Ok(Some((path, Vec::new())));
+        }
         self.validate_document_destination(&path, false)?;
         if photocraft_engine::file_cmds::extension(&path).as_deref() == Some("pcraft") && self.services.native_save.is_some() {
             let protection = self.open_document_write_protection()?;
@@ -1609,6 +1624,100 @@ impl PhotocraftApp {
         }
         self.saved(doc, revision, &path, &warnings, copy);
         Ok(Some((path, warnings)))
+    }
+
+    /// The explicit accounted native path stages file identity, journal and
+    /// response before writing. Resident save bookkeeping is never reused.
+    fn save_accounted_native(&mut self, path: &str, copy: bool, automation: bool, record: Option<&str>) -> Result<Value, String> {
+        use photocraft_raster::backing::{BackingError, ReadControl, quota::QuotaKind};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        if path.len() > 4096 || !std::path::Path::new(path).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pcraft")) {
+            return Err("accounted save requires a bounded .pcraft destination".into());
+        }
+        let available = if automation { self.services.automation_accounted_native_save.is_some() } else { self.services.accounted_native_save.is_some() };
+        if !available {
+            return Err(if automation { "accounted native automation write authority is not configured" } else { "accounted native writer is not configured" }.into());
+        }
+        let work = AtomicU64::new(0);
+        let charge = |units: u64| {
+            work.try_update(Ordering::Relaxed, Ordering::Relaxed, |used| used.checked_add(units).filter(|next| *next <= 8_000_000_000))
+                .map_err(|_| BackingError::Length)?;
+            Ok(())
+        };
+        let control = ReadControl { interrupt: &photocraft_raster::Interrupt::NONE, work: &charge };
+        control.check(path.len() as u64).map_err(|e| e.to_string())?;
+        if path.contains('\0') { return Err("accounted save destination contains NUL".into()); }
+        let protection = services::AccountedSaveProtection::prepare(&self.session, &control)?;
+        // This allocation-free spelling comparison is the early inert source
+        // exclusion. The host still checks actual identity/content at commit.
+        let spelling = |value: u8| {
+            let value = if value == b'\\' { b'/' } else { value };
+            if cfg!(windows) { value.to_ascii_lowercase() } else { value }
+        };
+        for source in &protection.protection.sources {
+            control.check((source.len() + path.len()) as u64).map_err(|e| e.to_string())?;
+            if source.bytes().map(spelling).eq(path.bytes().map(spelling)) { return Err("the imported XCF source is protected; choose another .pcraft destination".into()); }
+        }
+        let quota = self.session.active().and_then(|s| s.doc.quota()).ok_or("accounted save lost its source owner")?;
+        // The request is itself paid while the engine copies its final journal.
+        let step_bytes = path.len().checked_mul(2).and_then(|n| n.checked_add(4096)).ok_or("accounted save request limit")?;
+        let _step_lease = quota.reserve(QuotaKind::Index, step_bytes as u64).map_err(|e| e.to_string())?;
+        let mut step = Value::Object(Default::default());
+        if record == Some("file.saveAs") {
+            let mut owned = String::new();
+            owned.try_reserve_exact(path.len()).map_err(|_| "accounted save request allocation failed")?;
+            if owned.capacity() > path.len().saturating_mul(2) { return Err("accounted save request allocation limit".into()); }
+            for ch in path.chars() { control.check(ch.len_utf8() as u64).map_err(|e| e.to_string())?; owned.push(ch); }
+            if let Value::Object(object) = &mut step { object.insert("path".into(), Value::String(owned)); }
+        } else if record.is_some_and(|id| id != "file.save") {
+            return Err("unsupported accounted save journal record".into());
+        }
+        let reply = photocraft_engine::accounted_commands::PreparedAccountedSaveReply::prepare(
+            &self.session, path, record.map(|id| (id, &step)), &control,
+        ).map_err(|e| e.to_string())?;
+        let completion = if copy { None } else {
+            Some(photocraft_engine::accounted_native_save::PreparedAccountedNativeSave::prepare(&self.session, path, &control).map_err(|e| e.to_string())?)
+        };
+        let original = self.session.active().ok_or("no document")?.doc.clone();
+        reply.validate(&self.session, &control).map_err(|e| e.to_string())?;
+        let writer = if automation { self.services.automation_accounted_native_save.as_mut() } else { self.services.accounted_native_save.as_mut() }
+            .ok_or("accounted native writer disappeared")?;
+        if let Some(completion) = completion {
+            completion.write_and_publish(&mut self.session, &control, |snapshot, target| {
+                writer(snapshot, target, &protection.protection, &control).map_err(photocraft_engine::EngineError::Other)
+            }).map_err(|e| e.to_string())?;
+        } else {
+            writer(&original, path, &protection.protection, &control)?;
+        }
+        // The required file identity/journal/reply publication is complete
+        // before optional existing user notifications and hooks run.
+        let result = reply.publish(&mut self.session);
+        self.accounted_saved_notifications(original.id, path, copy, automation);
+        Ok(result)
+    }
+
+    /// Existing post-save user behavior without repeating resident saved_to().
+    /// Optional hook/notification failure cannot change a committed save result.
+    fn accounted_saved_notifications(&mut self, doc: DocId, path: &str, copy: bool, automation: bool) {
+        self.ui.status = crate::i18n::fmt(tl!("Saved {name}"), &[("name", path)]);
+        if !copy && !automation {
+            let _ = self.with_document(doc, |app| {
+                if let Some(i) = app.session.active_index()
+                    && let Some(r) = photocraft_engine::automate_cmds::document_saved(&mut app.session, i)
+                {
+                    app.ui.status = crate::i18n::fmt(
+                        tl!("Saved {path}; image assets: {n} in {dir}"),
+                        &[("path", path), ("n", &r["files"].as_array().map_or(0, Vec::len).to_string()), ("dir", r["dir"].as_str().unwrap_or(""))],
+                    );
+                }
+                Ok(())
+            });
+            self.push_recent(path);
+        }
+        self.ui.status_error = false;
+        let what = crate::i18n::fmt(tl!("Saved {name}"), &[("name", file_open::display_name(path).as_str())]);
+        notices::io_warnings(self, &what, &[]);
+        self.sync_views();
     }
 
     /// Record a written save of document `doc` as it was at `revision`: its name, path and saved
@@ -1734,6 +1843,10 @@ impl PhotocraftApp {
                 "pass `path`: a save without one writes back only to the document's own PSD, PSB, .pcraft or OpenRaster file, and to OpenRaster only when it holds everything (adjustment layers, styles and masks don't fit)",
             )?
         };
+        if self.session.active().is_some_and(|s| s.doc.accounted().is_some()) {
+            if tga_bits.is_some() { return Err("accounted native save does not take Targa options".into()); }
+            return self.save_accounted_native(&target, false, true, None);
+        }
         let reply = |path: &str, warnings: &[String]| json!({"path": path, "warnings": warnings});
         // #2017: the File › Save worker path, so the encode doesn't block the frame loop.
         let state = self.session.active().ok_or("no document")?;

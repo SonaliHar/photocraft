@@ -78,7 +78,7 @@ impl OwnedDocumentArchive {
         control.check(0).map_err(error)?;
         let Self { document, _archive, _model } = self;
         let retention = Arc::new(NativeRetention { _archive, _model, _owner: lease });
-        photocraft_doc::accounted_document::AccountedDocument::from_owned(document, retention, quota, control).map_err(error)
+        photocraft_doc::accounted_document::AccountedDocument::from_owned_rehydrating_selection(document, retention, quota, control).map_err(error)
     }
 
     pub fn document(&self) -> &Document {
