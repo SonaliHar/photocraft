@@ -33,6 +33,8 @@ mod plain_normal;
 mod plain_point;
 #[path = "gimp_prepare_control.rs"]
 mod prepare_control;
+#[path = "gimp_text_budgeted.rs"]
+mod text_budgeted;
 #[path = "gimp_scene_budget.rs"]
 pub mod scene_budget;
 
@@ -1839,6 +1841,37 @@ impl<'a> PreparedRenderer<'a> {
             return Err(CompositionError::Unsupported("ordinary Normal scene requires retained job preparation accounting"));
         }
         Self::new_internal_with_authorized_font(doc, Some(font), interrupt)
+    }
+    /// Cheap accounting-class membership only; constructor checks all source,
+    /// geometry, profile and current-raster relationships without widening them.
+    pub fn supports_authorized_text_budgeted(doc: &Document) -> bool {
+        text_budgeted::supports(doc)
+    }
+    /// Existing v19 exact-font text preparation on the caller's source/decoder
+    /// ledger. Font authority is borrowed for this renderer's lifetime; no
+    /// resource payload, locator permission or default source gate is changed.
+    pub fn new_budgeted_with_authorized_font<B: PreparationBudget, S>(
+        doc: &'a Document,
+        font: &'a PreparedRuntimeFont<'a>,
+        interrupt: &photocraft_raster::Interrupt<'_>,
+        budget: &mut B,
+        source_lease: S,
+    ) -> Result<LeasedPreparedRenderer<'a, S, B::Lease>> {
+        // The helper's fixed header allowance must cover the actual generic
+        // source/preparation lease carriers, not merely their common small form.
+        if std::mem::size_of::<LeasedPreparedRenderer<'a, S, B::Lease>>() > 4096 {
+            return Err(CompositionError::Unsupported("text preparation lease carrier exceeds reserved header"));
+        }
+        let lease = text_budgeted::reserve(doc, font, budget, interrupt)?;
+        text_budgeted::validate_text(doc, font, budget, interrupt)?;
+        let renderer = Self::new_internal_with_authorized_font(doc, Some(font), interrupt)?;
+        // Exactly one raster node and its same-profile working space. Refuse an
+        // unexpected allocator capacity before returning a leased preparation.
+        if renderer.layers.capacity() > 2 || renderer.spaces.capacity() > 4 {
+            return Err(CompositionError::Invalid("text prepared capacity exceeds reserved headers"));
+        }
+        interrupt.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
+        Ok(LeasedPreparedRenderer { renderer, _source_lease: source_lease, _prepared_lease: lease })
     }
     fn new_internal(doc: &'a Document, interrupt: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
         Self::new_internal_with_authorized_font(doc, None, interrupt)

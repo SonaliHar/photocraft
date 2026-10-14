@@ -11,6 +11,9 @@ use photocraft_raster::backing::{
 };
 use serde_json::Value;
 
+mod job_journal;
+pub(crate) use job_journal::PreparedAccountedJobJournal;
+
 const MAX_RECORDS: usize = 256;
 const MAX_PAYLOAD: usize = 64 * 1024;
 const MAX_STRING: usize = 4096;
@@ -18,7 +21,7 @@ const MAX_NODES: usize = 4096;
 const MAX_DEPTH: usize = 4;
 
 pub fn supports(id: &str) -> bool {
-    matches!(id, "layer.select" | "layer.setProps" | "select.deselect" | "select.colorRange" | "edit.undo" | "edit.redo")
+    matches!(id, "layer.select" | "layer.setProps" | "select.all" | "select.deselect" | "select.colorRange" | "edit.undo" | "edit.redo")
 }
 
 fn bad(id: &str, message: &str) -> EngineError {
@@ -30,12 +33,17 @@ enum Request<'a> {
     Select(LayerId),
     Edit(AccountedEdit<'a>),
     ClearSelection,
+    SelectAll(&'a Value),
     ColorRange(&'a Value),
     Undo,
     Redo,
 }
 
 fn request<'a>(session: &Session, id: &str, params: &'a Value) -> Result<Request<'a>> {
+    if id == "select.all" {
+        crate::accounted_select_all::validate_request(session, params)?;
+        return Ok(Request::SelectAll(params));
+    }
     if id == "select.colorRange" {
         crate::accounted_color_range::validate_request(params)?;
         return Ok(Request::ColorRange(params));
@@ -154,7 +162,7 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
     }
     Ok(match id {
         "select.deselect" if state.doc.selection.is_none() => Some("no selection"),
-        "select.deselect" if state.doc.xcf_state.is_some() || state.doc.source_color_context.is_some() || state.doc.selection_channel_id.is_some() => {
+        "select.all" | "select.deselect" if state.doc.xcf_state.is_some() || state.doc.source_color_context.is_some() || state.doc.selection_channel_id.is_some() => {
             Some("accounted selection editing requires a plain native selection owner")
         }
         "layer.setProps" if state.active_layer.is_none() => Some("no active layer"),
@@ -400,7 +408,7 @@ impl<'a> PreparedAccountedCommand<'a> {
         if state.revision != self.revision || !state.doc.shares_state(&self.snapshot) {
             return Err(EngineError::Other("the prepared accounted command targets an older document state".into()));
         }
-        if matches!(self.request, Request::ClearSelection | Request::ColorRange(_)) && state.view_revision != self.view_revision {
+        if matches!(self.request, Request::ClearSelection | Request::SelectAll(_) | Request::ColorRange(_)) && state.view_revision != self.view_revision {
             return Err(EngineError::Other("the prepared accounted selection targets an older view".into()));
         }
         let previous = self.journal.get(..self.journal.len().checked_sub(1).ok_or(BackingError::Integrity)?).ok_or(BackingError::Integrity)?;
@@ -427,6 +435,7 @@ impl<'a> PreparedAccountedCommand<'a> {
                 Value::Null
             }
             Request::ColorRange(params) => crate::accounted_color_range::run(session, params, control)?,
+            Request::SelectAll(params) => crate::accounted_select_all::run(session, params, control)?,
             Request::Undo => Value::Bool(session.undo_with_control(control)?),
             Request::Redo => Value::Bool(session.redo_with_control(control)?),
         };

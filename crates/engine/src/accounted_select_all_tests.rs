@@ -1,0 +1,100 @@
+//! Implementation regression drafts; deliberately unrun in this wave.
+use super::*;
+use photocraft_doc::{Document, accounted_document::AccountedDocument};
+use photocraft_geom::Size;
+use photocraft_raster::{
+    Interrupt,
+    backing::quota::{BackingQuota, QuotaLimits},
+};
+use serde_json::json;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
+fn control() -> ReadControl<'static> {
+    ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) }
+}
+fn fixture(depth: SampleType) -> (Session, BackingQuota) {
+    let quota = BackingQuota::new(QuotaLimits { resident: 32 << 20, index: 8 << 20, scratch: 8 << 20 });
+    let held = quota.reserve(QuotaKind::Resident, 65536).unwrap();
+    let doc = Document::new("own accounted All draft", Size::new(3, 2), ColorMode::Rgb, depth);
+    let owned = AccountedDocument::from_owned(doc, Arc::new(held), quota.clone(), &control()).unwrap();
+    let mut session = Session::new();
+    session.add_accounted_document(owned, None, &control()).unwrap();
+    (session, quota)
+}
+#[test]
+fn no_prior_selection_keeps_upstream_gray8_even_on_wide_document_and_noop_redo() {
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32, SampleType::U32, SampleType::F64] {
+        let (mut session, _) = fixture(depth);
+        run(&mut session, &Value::Null, &control()).unwrap();
+        let all = session.active().unwrap().doc.clone();
+        let selection = all.selection.as_ref().unwrap();
+        assert_eq!(selection.format(), PixelFormat::GRAY8);
+        assert_eq!(selection.default_bytes(), &[0]);
+        assert_eq!(selection.try_read_interleaved_with(Rect::new(0, 0, 3, 2), &Interrupt::NONE).unwrap(), vec![255; 6]);
+        let mut outside = [255];
+        selection.try_read_pixel_bytes(3, 0, &mut outside).unwrap();
+        assert_eq!(outside, [0]);
+        session.replace_accounted_selection(AccountedSelectionTarget::capture(&session).unwrap(), "Deselect", None, &control()).unwrap();
+        session.undo_with_control(&control()).unwrap();
+        let revision = session.active().unwrap().revision;
+        let past = session.active().unwrap().history.past_len();
+        assert!(session.active().unwrap().history.can_redo());
+        run(&mut session, &json!({}), &control()).unwrap();
+        assert!(session.active().unwrap().doc.shares_state(&all));
+        assert_eq!(session.active().unwrap().revision, revision);
+        assert_eq!(session.active().unwrap().history.past_len(), past);
+        assert!(session.active().unwrap().history.can_redo());
+    }
+}
+#[test]
+fn existing_u32_f64_coverage_retains_format_with_zero_default_and_padded_tail() {
+    for depth in [SampleType::U32, SampleType::F64] {
+        let (mut session, quota) = fixture(depth);
+        let format = PixelFormat::new(ColorMode::Grayscale, depth, false);
+        let zero = vec![0; 6 * format.bytes_per_pixel()];
+        let prior = AccountedSelection::try_from_native(
+            format,
+            Rect::new(0, 0, 3, 2),
+            &vec![0; format.bytes_per_pixel()],
+            &zero,
+            CoverageDomain::FiniteUnit,
+            &quota,
+            &control(),
+        )
+        .unwrap();
+        session.replace_accounted_selection(AccountedSelectionTarget::capture(&session).unwrap(), "Prior", Some(&prior), &control()).unwrap();
+        run(&mut session, &Value::Null, &control()).unwrap();
+        let doc = &session.active().unwrap().doc;
+        let selected = doc.selection.as_ref().unwrap();
+        assert_eq!(selected.format(), format);
+        let (word, n) = unit(format).unwrap();
+        assert_eq!(selected.try_read_interleaved_with(Rect::new(0, 0, 3, 2), &Interrupt::NONE).unwrap(), word[..n].repeat(6));
+        let mut outside = vec![255; n];
+        selected.try_read_pixel_bytes(3, 0, &mut outside).unwrap();
+        assert_eq!(outside, vec![0; n]);
+    }
+}
+#[test]
+fn denial_cancel_and_stale_pair_preserve_snapshot_history_quota() {
+    let (mut session, quota) = fixture(SampleType::U8);
+    let before = session.active().unwrap().doc.clone();
+    let revision = session.active().unwrap().revision;
+    let usage = quota.usage().unwrap();
+    let used = AtomicU64::new(0);
+    let deny = |n| {
+        used.fetch_add(n, Ordering::Relaxed);
+        Err(BackingError::Work)
+    };
+    assert!(run(&mut session, &Value::Null, &ReadControl { interrupt: &Interrupt::NONE, work: &deny }).is_err());
+    assert!(used.load(Ordering::Relaxed) > 0);
+    assert_eq!(quota.usage().unwrap(), usage);
+    let cancelled = Interrupt::cancel_only(&|| true);
+    assert!(matches!(run(&mut session, &Value::Null, &ReadControl { interrupt: &cancelled, work: &|_| Ok(()) }), Err(EngineError::Cancelled)));
+    let params = json!({"documentId":before.id.0.to_string(),"expectedRevision":(revision+1).to_string()});
+    assert!(run(&mut session, &params, &control()).is_err());
+    assert!(session.active().unwrap().doc.shares_state(&before));
+    assert_eq!(session.active().unwrap().revision, revision);
+    assert!(!session.active().unwrap().history.can_undo());
+}

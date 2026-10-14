@@ -29,6 +29,8 @@ use serde_json::{Value, json};
 
 use crate::{EngineError, Result, Session, WeakDocumentSnapshot};
 
+mod accounted_color_range;
+
 /// Identifies one background job for the session's lifetime.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
 pub struct JobId(pub u64);
@@ -47,6 +49,9 @@ struct Shared {
     /// `fetch_max` keeps progress monotonic even with several reporting threads.
     progress: AtomicU32,
     message: Mutex<String>,
+    /// A paid accounted worker keeps its control-storage charge through the
+    /// last JobCtx clone, including cancellation/draining after Running drops.
+    _accounted_dispatch: Mutex<Option<Arc<photocraft_raster::backing::quota::QuotaLease>>>,
 }
 
 impl std::fmt::Debug for JobCtx {
@@ -56,6 +61,14 @@ impl std::fmt::Debug for JobCtx {
 }
 
 impl JobCtx {
+    fn retain_accounted_dispatch(&self, lease: Arc<photocraft_raster::backing::quota::QuotaLease>) {
+        let mut held = self.shared._accounted_dispatch.lock().unwrap_or_else(PoisonError::into_inner);
+        // Nested inline calls may share their original token. Retaining the
+        // first paid owner until that token dies avoids replacing a live grant.
+        if held.is_none() {
+            *held = Some(lease);
+        }
+    }
     pub fn new() -> Self {
         Self::default()
     }
@@ -175,6 +188,9 @@ struct Running {
     label: String,
     params: Value,
     journal: bool,
+    /// The typed accounted carrier publishes its prepaid journal itself.
+    /// Only the private accounted dispatch can enable this path.
+    prepaid_bookkeeping: bool,
     doc: Option<DocId>,
     /// The document as the job saw it: applying fails if it was edited meanwhile.
     snapshot: Option<WeakDocumentSnapshot>,
@@ -186,6 +202,9 @@ struct Running {
     apply: Option<Apply>,
     #[cfg(not(target_arch = "wasm32"))]
     handle: Option<std::thread::JoinHandle<()>>,
+    // Paid accounted dispatch metadata follows its physical strings/callbacks.
+    // Generic executor/table/channel allocator internals keep their existing scope.
+    _accounted_dispatch: Option<Arc<photocraft_raster::backing::quota::QuotaLease>>,
 }
 
 impl Running {
@@ -366,6 +385,7 @@ pub fn run<T: Send + 'static>(
         label: label.to_string(),
         params: Value::Null,
         journal: true,
+        prepaid_bookkeeping: false,
         doc,
         snapshot,
         ctx,
@@ -376,6 +396,7 @@ pub fn run<T: Send + 'static>(
         apply: Some(erased),
         #[cfg(not(target_arch = "wasm32"))]
         handle,
+        _accounted_dispatch: None,
     });
     Ok(json!({"job": id.0}))
 }
@@ -1067,6 +1088,12 @@ impl Session {
             if let Some(why) = self.job_conflict(id, spec.journal) {
                 return Err(EngineError::Disabled(id.to_string(), why));
             }
+            if id == "select.colorRange" {
+                return std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.dispatch_accounted_color_range(params, background || self.jobs.spawn)
+                }))
+                .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` failed with an internal error (logged); the document is unchanged"))));
+            }
             let control = photocraft_raster::backing::ReadControl { interrupt: &photocraft_raster::Interrupt::NONE, work: &|_| Ok(()) };
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::accounted_commands::dispatch(self, id, &params, &control)))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` failed with an internal error (logged); the document is unchanged"))));
@@ -1236,7 +1263,7 @@ impl Session {
         // Apply-time hooks can dispatch commands too. Keep the same single-step recording
         // contract as synchronous dispatch without truncating work done while the worker ran.
         let nested_from = self.journal.len();
-        let recording = if *journal && crate::actions_cmds::replayable(command) { self.actions.recording.take() } else { None };
+        let recording = if !job.prepaid_bookkeeping && *journal && crate::actions_cmds::replayable(command) { self.actions.recording.take() } else { None };
         let r = match apply {
             Some(f) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self, payload)))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{label}` failed with an internal error (logged); the document is unchanged")))),
@@ -1250,7 +1277,7 @@ impl Session {
         // Finish successful command bookkeeping on the document the job edited.
         // Restoring the viewed document first would attribute Fade and slice updates
         // to that document instead, when the user switched tabs mid-job.
-        let bookkeeping = if r.is_ok()
+        let bookkeeping = if !job.prepaid_bookkeeping && r.is_ok()
             && !matches!(
                 command.as_str(),
                 "document.pixel.inspect"

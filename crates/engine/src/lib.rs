@@ -9,6 +9,8 @@
 
 pub mod accounted_commands;
 pub(crate) mod accounted_color_range;
+pub(crate) mod accounted_color_range_banded;
+pub(crate) mod accounted_select_all;
 mod accounted_session;
 pub mod accounted_selection_session;
 pub mod accounted_view;

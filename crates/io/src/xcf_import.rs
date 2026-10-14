@@ -5,11 +5,15 @@ use photocraft_doc::{
     SampleEncoding, SampleType, Size, SourceColorContext,
 };
 use photocraft_raster::{Interrupt, Surface};
+use photocraft_text::xcf::runtime_font_input::PreparedRuntimeFont;
 use photocraft_xcf::{ArgumentValue, DecodeOptions, Drawable, Encoding, ErrorKind, Limits, Model, Plane, Sample, XcfError, XcfFile};
 use std::sync::Arc;
 
 #[path = "xcf_import/text_preparation.rs"]
 mod text_preparation;
+#[cfg(test)]
+#[path="xcf_import/authorized_font_tests.rs"]
+mod authorized_font_tests;
 
 #[path = "xcf_import/plane.rs"]
 mod plane;
@@ -138,7 +142,41 @@ pub fn import_candidate_with_budget(
     shared: &photocraft_xcf::Budget<'_>,
     accounting: photocraft_xcf::SourceAccounting,
 ) -> Result<Option<ImportResult>, IoError> {
-    import_candidate_accounted(name, bytes, ctl, options, shared, accounting, None)
+    import_candidate_accounted(name, bytes, ctl, options, shared, accounting, None, None)
+}
+/// Additive borrowed exact host-font authority. The prepared input and its bytes
+/// must remain held through this call; no resource path/name is read or persisted.
+/// All parser/mapping/font/renderer reservations use the supplied shared budget.
+pub fn import_candidate_with_budget_and_authorized_font(
+    name: &str,
+    bytes: &[u8],
+    ctl: &Interrupt<'_>,
+    options: &DecodeOptions<'_>,
+    shared: &photocraft_xcf::Budget<'_>,
+    accounting: photocraft_xcf::SourceAccounting,
+    font: &PreparedRuntimeFont<'_>,
+) -> Result<Option<ImportResult>, IoError> {
+    import_candidate_accounted(name, bytes, ctl, options, shared, accounting, None, Some(font))
+}
+pub fn import_with_authorized_font(name: &str, bytes: &[u8], font: &PreparedRuntimeFont<'_>, ctl: &Interrupt<'_>) -> Result<ImportResult, IoError> {
+    import_with_limits_and_authorized_font(name, bytes, ctl, Limits::default(), font)
+}
+/// Same import/source gates and lower-only parser policy as the legacy route.
+pub fn import_with_limits_and_authorized_font(
+    name: &str,
+    bytes: &[u8],
+    ctl: &Interrupt<'_>,
+    limits: Limits,
+    font: &PreparedRuntimeFont<'_>,
+) -> Result<ImportResult, IoError> {
+    let base = photocraft_xcf::ResourceLimits::for_policy(photocraft_xcf::ResourcePolicy::default())?;
+    let policy = crate::xcf_policy::from_parser_limits(limits, &base)?;
+    let cancelled = || ctl.cancelled();
+    let progress = |v| ctl.progress(v * 0.7);
+    let options = DecodeOptions { limits: policy.parser, cancelled: Some(&cancelled), progress: Some(&progress), allow_finite_drawable_alpha: true };
+    let shared = photocraft_xcf::Budget::new(policy.resources, Some(&cancelled));
+    import_candidate_with_budget_and_authorized_font(name, bytes, ctl, &options, &shared, photocraft_xcf::SourceAccounting::Borrowed, font)?
+        .ok_or_else(|| IoError::Unsupported("input does not contain GIMP XCF".into()))
 }
 fn import_candidate_accounted(
     name: &str,
@@ -148,7 +186,21 @@ fn import_candidate_accounted(
     shared: &photocraft_xcf::Budget<'_>,
     accounting: photocraft_xcf::SourceAccounting,
     decoded_phase: Option<&dyn Fn()>,
+    authorized_font: Option<&PreparedRuntimeFont<'_>>,
 ) -> Result<Option<ImportResult>, IoError> {
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    // Held caller bytes participate in the SAME parser/mapping transaction before
+    // decoding. No hash/parser is rerun and no font authority is serialized.
+    let font_lease = authorized_font
+        .map(|font| {
+            let bytes = font
+                .requirements()
+                .borrowed_input_bytes
+                .checked_add(std::mem::size_of::<PreparedRuntimeFont<'_>>() as u64)
+                .ok_or_else(|| IoError::Unsupported("authorized font ownership overflow".into()))?;
+            shared.reserve(photocraft_xcf::BudgetKind::Resident, bytes, "authorized runtime font held during XCF import").map_err(accounting_error)
+        })
+        .transpose()?;
     // Mapping below validates the qualified finite-alpha domain before publishing a document.
     let mapping_options =
         DecodeOptions { limits: options.limits.clone(), allow_finite_drawable_alpha: true, cancelled: options.cancelled, progress: options.progress };
@@ -159,7 +211,7 @@ fn import_candidate_accounted(
     if let Some(phase) = decoded_phase {
         phase();
     }
-    decoded
+    let result = decoded
         .map(|decoded| {
             let photocraft_xcf::BudgetDecodedImport { decoded, reservations } = decoded;
             let source_bytes = decoded.encoded_bytes;
@@ -184,7 +236,7 @@ fn import_candidate_accounted(
                 usize::try_from(shared.limits().get(photocraft_xcf::BudgetKind::Resident))
                     .map_err(|_| IoError::Unsupported("XCF resident policy exceeds address space".into()))?,
             );
-            let (mut result, _) = map_accounted(name, decoded.file, ctl, maximum, Some(&account), Some((shared, &lease)))?;
+            let (mut result, _) = map_accounted_with_authorized_font(name, decoded.file, ctl, maximum, Some(&account), Some((shared, &lease)), authorized_font)?;
             shared.consume_work(bytes.len() as u64, "source provenance hash").map_err(accounting_error)?;
             stamp_source(&mut result, bytes, decoded.container, ctl)?;
             shared.poll("mapped document completed").map_err(
@@ -194,7 +246,9 @@ fn import_candidate_accounted(
             )?;
             Ok(result)
         })
-        .transpose()
+        .transpose();
+    drop(font_lease);
+    result
 }
 fn accounting_error(error: XcfError) -> IoError {
     if error.kind == ErrorKind::Cancelled { IoError::Cancelled } else { IoError::Xcf(error) }
@@ -253,7 +307,7 @@ pub fn import_with_stats(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Resul
     let before = std::time::Instant::now();
     let decode = std::cell::Cell::new(std::time::Duration::ZERO);
     let phase = || decode.set(before.elapsed());
-    let result = import_candidate_accounted(name, bytes, ctl, &options, &budget, photocraft_xcf::SourceAccounting::Borrowed, Some(&phase))?
+    let result = import_candidate_accounted(name, bytes, ctl, &options, &budget, photocraft_xcf::SourceAccounting::Borrowed, Some(&phase), None)?
         .ok_or_else(|| IoError::Unsupported("input does not contain GIMP XCF".into()))?;
     let elapsed = before.elapsed();
     let peak_charged_bytes = usize::try_from(budget.peak(photocraft_xcf::BudgetKind::Resident))
@@ -1657,14 +1711,19 @@ impl<'b, 'a> photocraft_compose::gimp_render::PreparationBudget for SharedPrepar
     }
 }
 
+// Preserve the genuine default mapping seam used by staged/held-source imports.
+fn map_accounted<P: MappingPlane,S>(name:&str,file:XcfFile<P>,ctl:&Interrupt<'_>,resident:usize,shared:Option<&dyn Fn(usize)->Result<(),IoError>>,preparation:Option<(&photocraft_xcf::Budget<'_>,S)>)->Result<(ImportResult,usize),IoError>{
+    map_accounted_with_authorized_font(name,file,ctl,resident,shared,preparation,None)
+}
 #[allow(clippy::too_many_arguments)]
-fn map_accounted<P: MappingPlane, S>(
+fn map_accounted_with_authorized_font<P: MappingPlane, S>(
     name: &str,
     mut file: XcfFile<P>,
     ctl: &Interrupt<'_>,
     resident: usize,
     shared: Option<&dyn Fn(usize) -> Result<(), IoError>>,
     preparation: Option<(&photocraft_xcf::Budget<'_>, S)>,
+    authorized_font: Option<&PreparedRuntimeFont<'_>>,
 ) -> Result<(ImportResult, usize), IoError> {
     let admission::AdmissionDomains {
         point_replace_domain,
@@ -1896,7 +1955,11 @@ fn map_accounted<P: MappingPlane, S>(
                 let mut mapped =
                     crate::xcf_sources::map_source_with_storage(&drawable, Some(plane), context.mapping, ctl, &mut fresh, &mut |bytes| budget.charge(bytes))?
                         .ok_or_else(|| IoError::Unsupported("XCF qualified text source disappeared".into()))?;
-                text_preparation::validate(&mapped, &drawable, doc.size, &mut budget, preparation.as_ref().map(|(budget, _)| *budget), ctl)?;
+                // Supplied-font geometry and lower preparation run once inside the
+                // final budgeted renderer, after its genuine aggregate reservation.
+                if authorized_font.is_none() {
+                    text_preparation::validate(&mapped, &drawable, doc.size, &mut budget, preparation.as_ref().map(|(budget, _)| *budget), ctl)?;
+                }
                 for record in &mut mapped.opaque {
                     if record.namespace == "gimp/xcf/text-parasite" && record.identity == "gimp-text-layer" && record.source_version == 19 {
                         record.rendering_required = false;
@@ -2496,7 +2559,16 @@ fn map_accounted<P: MappingPlane, S>(
             if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF imported state: {e}")) }
         },
     )?;
-    if photocraft_compose::gimp_singleton_preparation::supports(&doc) {
+    if let (true, Some(font)) = (stem_text_domain, authorized_font) {
+        let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("authorized text scene requires transaction accounting".into()))?;
+        let mut adapter = SharedPreparation { shared, failure: None };
+        let checked = photocraft_compose::gimp_render::PreparedRenderer::new_budgeted_with_authorized_font(&doc, font, ctl, &mut adapter, source_lease);
+        if let Err(error) = checked {
+            return Err(adapter.failure.map(accounting_error).unwrap_or_else(|| {
+                if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF authorized text rendering consumer: {error}")) }
+            }));
+        }
+    } else if photocraft_compose::gimp_singleton_preparation::supports(&doc) {
         // The qualified singleton is selected before the legacy filter route.
         // Decoder/mapped source accounting stays live during validation, with
         // preparation charged on the exact same transaction Budget.

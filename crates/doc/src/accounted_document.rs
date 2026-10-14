@@ -248,7 +248,7 @@ impl AccountedDocument {
             if !self.quota().shares_ledger(guard.quota()) {
                 return Err(BackingError::Integrity);
             }
-            if guard.format() != photocraft_color::PixelFormat::new(crate::ColorMode::Grayscale, doc.depth, false)
+            if !selection_format_allowed(guard.format(), doc.depth)
                 || !doc.bounds().contains_rect(&guard.bounds())
             {
                 return Err(BackingError::Bounds);
@@ -603,6 +603,13 @@ fn validate_backed_layers(
     }
     Ok(())
 }
+// Upstream selection commands create Gray8 coverage independently of image
+// depth. Typed native-wide operations may also retain the image's exact Gray
+// depth; this admission never converts or reinterprets either representation.
+fn selection_format_allowed(format: photocraft_color::PixelFormat, depth: crate::SampleType) -> bool {
+    format == photocraft_color::PixelFormat::GRAY8 || format == photocraft_color::PixelFormat::new(crate::ColorMode::Grayscale, depth, false)
+}
+
 /// Capacity census for an intentionally explicit bounded tree model-copy domain.
 /// Owned complex collections are refused, never assigned a fabricated size.
 fn census(
@@ -694,7 +701,7 @@ fn census(
             if doc.selection_channel_id.is_some()
                 || doc.xcf_state.is_some()
                 || doc.source_color_context.is_some()
-                || guard.format() != photocraft_color::PixelFormat::new(crate::ColorMode::Grayscale, doc.depth, false)
+                || !selection_format_allowed(guard.format(), doc.depth)
                 || !doc.bounds().contains_rect(&guard.bounds())
                 || !guard.matches(surface, expected_quota, control)?
             {

@@ -113,6 +113,31 @@ fn typed_layer_clone_retains_payload_and_each_map_default_view_is_paid() {
     assert!(selected.document().selection.is_some());
     drop(original_tile);
 }
+
+#[test]
+fn upstream_gray8_selection_on_wide_document_survives_typed_edits() {
+    let q = quota();
+    let d = document(&q);
+    let s = AccountedSelection::try_from_native(
+        PixelFormat::GRAY8,
+        Rect::new(0, 0, 3, 2),
+        &[0],
+        &[0, 64, 128, 255, 192, 32],
+        CoverageDomain::FiniteUnit,
+        &q,
+        &control(),
+    )
+    .unwrap();
+    let selected = d.try_replace_selection(Some(&s), &control()).unwrap();
+    assert_eq!(selected.document().depth, SampleType::F64);
+    let layer = selected.document().layers[0].id;
+    let edited = selected.try_edit(AccountedEdit::LayerVisibility { layer, visible: false }, &control()).unwrap();
+    let coverage = edited.document().selection.as_ref().unwrap();
+    assert_eq!(coverage.format(), PixelFormat::GRAY8);
+    assert_eq!(coverage.try_read_interleaved(Rect::new(0, 0, 3, 2)).unwrap(), [0, 64, 128, 255, 192, 32]);
+    let no_op = edited.try_replace_selection(Some(&s), &control()).unwrap();
+    assert!(edited.shares_model(&no_op));
+}
 #[test]
 fn history_noop_preserves_redo_and_full_slot_refuses_before_staging() {
     let q = quota();

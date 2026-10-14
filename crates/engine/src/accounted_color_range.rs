@@ -1,8 +1,8 @@
 //! Closed registered accounted Color Range publication adapter.
 //! Original active-only sampled query/CMS/math stays in BackedColorRangeSamples;
-//! source-free RGB/nonlinear analytic ICC Float, fullcanvas<=200side only.
+//! source-free RGB/nonlinear analytic ICC U8/U16/Float, fullcanvas<=200side only.
 //! Derived unit selection values follow invert -> prior min -> final GRAY8 q,
-//! then exact native Gray Float storage. RGB source words are never narrowed.
+//! then upstream GRAY8 storage. RGB source words are never narrowed.
 //! Larger/asynchronous, merged, imported and other selection modes remain refused.
 use crate::{
     EngineError, Result, Session,
@@ -61,7 +61,7 @@ fn context(session: &Session, params: &Value, control: &ReadControl<'_>) -> Resu
     }
     let owner = doc.accounted().ok_or(BackingError::Unsupported)?;
     if doc.mode != ColorMode::Rgb
-        || doc.depth != SampleType::F32
+        || !matches!(doc.depth, SampleType::U8 | SampleType::U16 | SampleType::F32)
         || doc.sample_encoding != Some(SampleEncoding::NonlinearProfile)
         || doc.working_profile_interpretation != WorkingProfileInterpretation::Icc
         || doc.xcf_state.is_some()
@@ -70,7 +70,7 @@ fn context(session: &Session, params: &Value, control: &ReadControl<'_>) -> Resu
         || doc.quick_mask.is_some()
         || doc.icc_profile.as_ref().is_none_or(|p| p.is_empty() || p.len() > 16 << 20)
     {
-        return Err(bad("accounted Color Range requires source-free explicit nonlinear RGB Float/analytic ICC context"));
+        return Err(bad("accounted Color Range requires source-free explicit nonlinear RGB U8/U16/Float/analytic ICC context"));
     }
     if doc.size.width == 0 || doc.size.height == 0 || doc.size.width > 200 || doc.size.height > 200 {
         return Err(bad("accounted Color Range synchronous canvas limit is 200 pixels per side"));
@@ -97,7 +97,7 @@ fn context(session: &Session, params: &Value, control: &ReadControl<'_>) -> Resu
     };
     let area = doc.bounds();
     if backed.format().mode != ColorMode::Rgb
-        || backed.format().sample != SampleType::F32
+        || backed.format().sample != doc.depth
         || !backed.operative_bounds().contains_rect(&area)
         || !backed.quota().shares_ledger(owner.quota())
         || layer.mask.is_some()
@@ -126,11 +126,19 @@ fn native_bytes(
     quota: &BackingQuota,
     control: &ReadControl<'_>,
 ) -> Result<(NativeSelectionBytes, bool)> {
+    // The ordinary command always produces GRAY8, independent of RGB depth.
+    // Prior coverage remains native until after invert/min, never prequantized.
+    let prior_depth = prior.map(|p| p.format().sample);
+    if prior.is_some_and(|p| {
+        p.format().mode != ColorMode::Grayscale || p.format().alpha || !matches!(p.format().sample, SampleType::U8 | SampleType::U16 | SampleType::F32)
+    }) {
+        return Err(BackingError::Unsupported.into());
+    }
     let count = usize::try_from(area.size().area()).map_err(|_| BackingError::Length)?;
     if mask.len() != count {
         return Err(BackingError::Length.into());
     }
-    let length = count.checked_mul(4).ok_or(BackingError::Length)?;
+    let length = count;
     let envelope = length.checked_mul(2).and_then(|v| v.checked_add(std::mem::size_of::<NativeSelectionBytes>())).ok_or(BackingError::Length)?;
     let mut lease = quota.reserve(QuotaKind::Resident, envelope as u64).map_err(|_| BackingError::Quota)?;
     control.check(length as u64)?;
@@ -154,14 +162,19 @@ fn native_bytes(
         }
         let mut value = if invert { 1. - value } else { value };
         if let Some(prior) = prior {
-            if prior.format() != PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false) {
-                return Err(BackingError::Unsupported.into());
-            }
             let x = area.x0.checked_add(i32::try_from(i % width).map_err(|_| BackingError::Length)?).ok_or(BackingError::Bounds)?;
             let y = area.y0.checked_add(i32::try_from(i / width).map_err(|_| BackingError::Length)?).ok_or(BackingError::Bounds)?;
             let mut word = [0; 4];
-            prior.try_read_pixel_bytes(x, y, &mut word)?;
-            let old = f32::from_ne_bytes(word);
+            let sample_bytes = prior.format().bytes_per_pixel();
+            prior.try_read_pixel_bytes(x, y, word.get_mut(..sample_bytes).ok_or(BackingError::Length)?)?;
+            let old = match prior_depth {
+                Some(SampleType::U8) => f32::from(*word.first().ok_or(BackingError::Length)?) / 255.,
+                Some(SampleType::U16) => {
+                    f32::from(u16::from_ne_bytes(word.get(..2).ok_or(BackingError::Length)?.try_into().map_err(|_| BackingError::Length)?)) / 65535.
+                }
+                Some(SampleType::F32) => f32::from_ne_bytes(word),
+                _ => return Err(BackingError::Unsupported.into()),
+            };
             if !old.is_finite() || !(0.0..=1.0).contains(&old) {
                 return Err(bad("finite unit prior selection required"));
             }
@@ -170,8 +183,7 @@ fn native_bytes(
         // Exact authoritative command order, including unquantized Float priors.
         let quantized = (value.clamp(0., 1.) * 255. + 0.5) as u8;
         selected |= quantized != 0;
-        let derived = f32::from(quantized) / 255.;
-        native.bytes.extend_from_slice(&derived.to_ne_bytes());
+        native.bytes.push(quantized);
     }
     control.check(1)?;
     if native.bytes.len() != length {
@@ -192,15 +204,8 @@ pub(crate) fn run(session: &mut Session, params: &Value, control: &ReadControl<'
     let invert = params.get("invert").and_then(Value::as_bool).unwrap_or(false);
     let (native, selected) = native_bytes(coverage.values(), source.selection.as_ref(), area, invert, &quota, control)?;
     let selection = if selected {
-        Some(AccountedSelection::try_from_native(
-            PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false),
-            area,
-            &0f32.to_ne_bytes(),
-            &native.bytes,
-            CoverageDomain::FiniteUnit,
-            &quota,
-            control,
-        )?)
+        let format = PixelFormat::GRAY8;
+        Some(AccountedSelection::try_from_native(format, area, &[0], &native.bytes, CoverageDomain::FiniteUnit, &quota, control)?)
     } else {
         None
     };

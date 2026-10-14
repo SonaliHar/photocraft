@@ -15,6 +15,9 @@ use photocraft_raster::backing::{
 };
 use photocraft_raster::{MAX_CHECKED_RASTER_BYTES, Surface, Tile};
 use std::sync::Arc;
+#[path = "accounted_selection_bands.rs"]
+mod bands;
+pub use bands::AccountedSelectionBandBuilder;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CoverageDomain {
     FiniteUnit,
@@ -216,6 +219,30 @@ impl AccountedSelection {
         }
         control.check(1)?;
         Ok(SelectionView { surface, charges })
+    }
+    /// Exact borrowed native storage equality for no-op decisions only. This
+    /// grants no source, ledger, installation or mutation proof. The caller owns
+    /// the borrowed surface; this owner retains its own charged storage throughout.
+    pub fn matches_native_surface(&self, surface: &Surface, control: &ReadControl<'_>) -> Result<bool, BackingError> {
+        control.check(1)?;
+        if surface.format() != self.format() || surface.default_bytes() != self.surface().default_bytes() || surface.tile_count() != self.surface().tile_count()
+        {
+            return Ok(false);
+        }
+        for ((a, left), (b, right)) in surface.tiles().zip(self.surface().tiles()) {
+            control.check(1)?;
+            if a != b || left.bytes().len() != right.bytes().len() {
+                return Ok(false);
+            }
+            for (left, right) in left.bytes().chunks(64 * 1024).zip(right.bytes().chunks(64 * 1024)) {
+                control.check(left.len() as u64)?;
+                if left != right {
+                    return Ok(false);
+                }
+            }
+        }
+        control.check(1)?;
+        Ok(true)
     }
     pub(crate) fn matches(&self, surface: &Surface, quota: &BackingQuota, control: &ReadControl<'_>) -> Result<bool, BackingError> {
         control.check(1)?;

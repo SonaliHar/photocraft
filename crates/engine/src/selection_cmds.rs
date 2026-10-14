@@ -195,7 +195,7 @@ fn pixels_to_lab(t: &photocraft_cms::Transform, px: &[[f32; 4]]) -> Vec<[f32; 4]
 
 /// Prepared Sampled Colors query shared by the command and its interactive preview.
 /// Samples always come from the original document; reducing an image must not change them.
-pub use color_range_controlled::backed::{ColorRangeCoverage, BackedColorRangePixels};
+pub use color_range_controlled::backed::{ColorRangeCoverage, BackedColorRangePixels, CapturedBackedColorRange};
 pub struct ColorRangeSamples {
     to_lab: std::sync::Arc<photocraft_cms::Transform>,
     range: sel::LabRange,

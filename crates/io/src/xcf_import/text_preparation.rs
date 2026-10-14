@@ -1,4 +1,6 @@
-//! Existing rectilinear preparation plus the independently scoped underline member.
+//! Default bundled rectilinear preparation plus the scoped underline member.
+//! Authorized-font imports defer these same checks to their budgeted renderer so
+//! all geometry/outline preparation follows its shared prospective admission.
 use super::*;
 
 pub(super) fn validate<P>(

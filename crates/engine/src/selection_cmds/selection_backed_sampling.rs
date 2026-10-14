@@ -192,33 +192,154 @@ fn view_copy(view: &ChannelView, work: &Work, control: &Interrupt<'_>, parent: O
         editing_mask: view.editing_mask,
     })
 }
-pub(in crate::selection_cmds) fn prepare(session: &Session, p: &Value, control: &Interrupt<'_>, parent: Option<&ReadControl<'_>>) -> Result<ColorRangeSamples> {
-    let work = Work { used: AtomicU64::new(0) };
-    work.consume(100_000, control, parent)?; // bounded owner classification, before its traversal
-    let layer = selected(session, p, control)?;
-    let state = session.active().ok_or(EngineError::NoDocument)?;
-    let LayerContent::BackedRaster(backed) = &layer.content else {
-        return Err(failure("backed preview owner changed"));
+/// Metadata-only, move-owned query capture. No CMS construction or backing read occurs here.
+// Values precede their physical leases even on an early worker return.
+// Keep this owner intact; destructuring values and guards into separate locals
+// would reverse their destruction order.
+struct CapturedQueryOwners {
+    params: Value,
+    view: ChannelView,
+    _params: QuotaLease,
+    _header: QuotaLease,
+}
+pub struct CapturedBackedColorRange {
+    source: DocumentSnapshot,
+    revision: u64,
+    active: Option<LayerId>,
+    foreground: [f32; 4],
+    owners: CapturedQueryOwners,
+    work: Arc<Work>,
+}
+fn param_envelope(value: &Value, depth: usize, work: &Work, control: &Interrupt<'_>, parent: Option<&ReadControl<'_>>) -> Result<u64> {
+    if depth > 4 {
+        return Err(failure("captured query depth"));
+    }
+    work.consume(64, control, parent)?;
+    let header = std::mem::size_of::<Value>() as u64;
+    let body = match value {
+        Value::Array(values) => {
+            let mut bytes = mul(values.capacity() as u64, header)?;
+            bytes = add(bytes, mul(values.len() as u64, header * 2)?)?;
+            for value in values {
+                bytes = add(bytes, param_envelope(value, depth + 1, work, control, parent)?)?;
+            }
+            bytes
+        }
+        Value::Object(values) => {
+            let mut bytes = mul(values.len() as u64, 3 * (header + std::mem::size_of::<String>() as u64 + 128))?;
+            for (key, value) in values {
+                work.consume(key.len() as u64, control, parent)?;
+                bytes = add(bytes, add(key.capacity() as u64, mul(key.len() as u64, 2)?)?)?;
+                bytes = add(bytes, param_envelope(value, depth + 1, work, control, parent)?)?;
+            }
+            bytes
+        }
+        Value::String(value) => {
+            work.consume(value.len() as u64, control, parent)?;
+            add(value.capacity() as u64, mul(value.len() as u64, 2)?)?
+        }
+        _ => 0,
     };
-    let quota = state.doc.quota().ok_or_else(|| failure("backed preview quota missing"))?.clone();
+    add(header, body).and_then(|n| if n <= 8 << 20 { Ok(n) } else { Err(failure("captured parameter capacity limit")) })
+}
+fn param_copy(value: &Value, depth: usize, work: &Work, control: &Interrupt<'_>, parent: Option<&ReadControl<'_>>) -> Result<Value> {
+    if depth > 4 {
+        return Err(failure("captured query depth"));
+    }
+    work.consume(64, control, parent)?;
+    Ok(match value {
+        Value::Array(values) => {
+            let mut out = reserve(values.len())?;
+            for value in values {
+                out.push(param_copy(value, depth + 1, work, control, parent)?);
+            }
+            Value::Array(out)
+        }
+        Value::Object(values) => {
+            let mut out = serde_json::Map::new();
+            for (key, value) in values {
+                work.consume(key.len() as u64, control, parent)?;
+                let mut copied = String::new();
+                copied.try_reserve_exact(key.len()).map_err(|_| failure("captured key allocation"))?;
+                if copied.capacity() > key.len().saturating_mul(2) {
+                    return Err(failure("captured key capacity"));
+                }
+                copied.push_str(key);
+                out.insert(copied, param_copy(value, depth + 1, work, control, parent)?);
+            }
+            Value::Object(out)
+        }
+        Value::String(value) => {
+            work.consume(value.len() as u64, control, parent)?;
+            let mut out = String::new();
+            out.try_reserve_exact(value.len()).map_err(|_| failure("captured string allocation"))?;
+            if out.capacity() > value.len().saturating_mul(2) {
+                return Err(failure("captured string capacity"));
+            }
+            out.push_str(value);
+            Value::String(out)
+        }
+        value => value.clone(),
+    })
+}
+impl CapturedBackedColorRange {
+    pub fn capture_with_read_control(session: &Session, p: &Value, control: &ReadControl<'_>) -> Result<Self> {
+        capture(session, p, control.interrupt, Some(control))
+    }
+    pub fn prepare_with_read_control(self, control: &ReadControl<'_>) -> Result<crate::selection_cmds::BackedColorRangeSamples> {
+        Ok(crate::selection_cmds::BackedColorRangeSamples { query: prepare_captured(self, control.interrupt, Some(control))? })
+    }
+}
+fn capture(session: &Session, p: &Value, control: &Interrupt<'_>, parent: Option<&ReadControl<'_>>) -> Result<CapturedBackedColorRange> {
+    let work = Work { used: AtomicU64::new(0) };
+    work.consume(100_000, control, parent)?;
+    selected(session, p, control)?;
+    let state = session.active().ok_or(EngineError::NoDocument)?;
+    let quota = state.doc.quota().ok_or_else(|| failure("backed preview quota missing"))?;
     let view = &state.channel_view;
     if view.color_hidden.len() > 100_000 || view.alpha_visible.len() > 100_000 {
         return Err(failure("backed preview view count"));
     }
     let header_bytes = add(
-        (std::mem::size_of::<Retention>() + std::mem::size_of::<Work>() + 6 * std::mem::size_of::<usize>() + 40) as u64,
+        (std::mem::size_of::<Retention>() + std::mem::size_of::<CapturedBackedColorRange>() + std::mem::size_of::<Work>() + 256) as u64,
         add(
             add(view.color_hidden.capacity() as u64, view.alpha_visible.capacity() as u64)?,
             add(view.color_hidden.len() as u64, view.alpha_visible.len() as u64)?,
         )?,
     )?;
-    let header = reserve_owner(&quota, header_bytes)?;
-    let work = Arc::new(work);
-    let owned_view = view_copy(view, &work, control, parent)?;
-    let source = state.doc.clone();
-    let revision = state.revision;
-    let active = state.active_layer;
-    let foreground = session.tools.foreground;
+    let header = reserve_owner(quota, header_bytes)?;
+    // Actual held capacity plus prospective copied values/maps are admitted
+    // before the first copy; the closed envelope limits logical shapes too.
+    let param_bytes = param_envelope(p, 0, &work, control, parent)?;
+    let params_lease = quota.reserve(QuotaKind::Index, param_bytes).map_err(failure)?;
+    let view = view_copy(view, &work, control, parent)?;
+    let params = param_copy(p, 0, &work, control, parent)?;
+    Ok(CapturedBackedColorRange {
+        source: state.doc.clone(),
+        revision: state.revision,
+        active: state.active_layer,
+        foreground: session.tools.foreground,
+        owners: CapturedQueryOwners { params, view, _params: params_lease, _header: header },
+        work: Arc::new(work),
+    })
+}
+pub(in crate::selection_cmds) fn prepare(session: &Session, p: &Value, control: &Interrupt<'_>, parent: Option<&ReadControl<'_>>) -> Result<ColorRangeSamples> {
+    let result = prepare_captured(capture(session, p, control, parent)?, control, parent)?;
+    if !result.backed.as_ref().is_some_and(|r| r.matches(session)) {
+        return Err(failure("backed preview captured target changed"));
+    }
+    Ok(result)
+}
+fn prepare_captured(captured: CapturedBackedColorRange, control: &Interrupt<'_>, parent: Option<&ReadControl<'_>>) -> Result<ColorRangeSamples> {
+    let CapturedBackedColorRange { source, revision, active, foreground, owners, work } = captured;
+    let p = &owners.params;
+    let sample_source = source.clone();
+    work.consume(100_000, control, parent)?;
+    let layer = active_layer(&sample_source, active.ok_or_else(|| failure("captured active owner missing"))?, control)?;
+    let LayerContent::BackedRaster(backed) = &layer.content else {
+        return Err(failure("captured backing missing"));
+    };
+    let quota = source.quota().ok_or_else(|| failure("captured source quota missing"))?.clone();
     let points = ["points", "subtractPoints"].iter().map(|k| p.get(k).and_then(Value::as_array).map_or(0, Vec::len)).sum::<usize>();
     if points > 4096 {
         return Err(failure("backed preview combined point limit"));
@@ -282,16 +403,16 @@ pub(in crate::selection_cmds) fn prepare(session: &Session, p: &Value, control: 
         source,
         revision,
         active,
-        view: owned_view,
+        view: owners.view,
         foreground,
         quota,
         work,
-        _header: header,
+        _header: owners._header,
         _profile: profile_lease,
         _transform: transform_lease,
         _query: query_lease,
     });
-    let context = QueryContext { to_lab: Arc::new(to_lab), grid: state.doc.depth == SampleType::U8, foreground, backed: Some(Arc::clone(&retention)) };
+    let context = QueryContext { to_lab: Arc::new(to_lab), grid: sample_source.depth == SampleType::U8, foreground, backed: Some(Arc::clone(&retention)) };
     let format = backed.format();
     let charge = |n| {
         retention.work.consume(n, control, parent).map_err(|e| if matches!(e, EngineError::Cancelled) { BackingError::Cancelled } else { BackingError::Work })
@@ -305,10 +426,10 @@ pub(in crate::selection_cmds) fn prepare(session: &Session, p: &Value, control: 
             let pair = point.as_array().ok_or_else(|| failure("sample point shape"))?;
             let x = pair.first().and_then(Value::as_f64).ok_or_else(|| failure("sample x"))?.floor() as i32;
             let y = pair.get(1).and_then(Value::as_f64).ok_or_else(|| failure("sample y"))?.floor() as i32;
-            if !state.doc.bounds().contains(x, y) || !backed.operative_bounds().contains(x, y) {
+            if !sample_source.bounds().contains(x, y) || !backed.operative_bounds().contains(x, y) {
                 return Err(failure("backed sample outside explicit canvas/native extent"));
             }
-            if super::super::mode(p) == sel::SelectionMode::Replace && state.doc.selection.is_some() && !(previous(&state.doc, x, y, control)? > 0.0) {
+            if super::super::mode(p) == sel::SelectionMode::Replace && sample_source.selection.is_some() && !(previous(&sample_source, x, y, control)? > 0.0) {
                 return Err(failure("sample point outside active selection"));
             }
             let mut raw = [0u8; 40];
@@ -324,7 +445,7 @@ pub(in crate::selection_cmds) fn prepare(session: &Session, p: &Value, control: 
             }
             out.push(sel::RangeSample {
                 color: [rgba[0], rgba[1], rgba[2]],
-                at: Some(((x - state.doc.bounds().x0) as f32, (y - state.doc.bounds().y0) as f32)),
+                at: Some(((x - sample_source.bounds().x0) as f32, (y - sample_source.bounds().y0) as f32)),
             });
         }
         Ok(out)
@@ -332,10 +453,7 @@ pub(in crate::selection_cmds) fn prepare(session: &Session, p: &Value, control: 
     let plus = sample("points")?;
     let minus = sample("subtractPoints")?;
     retention.work.consume(mul((points + fixed + 1) as u64, 1024)?, control, parent)?;
-    let result = with_context(&context, p, state.doc.bounds(), &plus, &minus, control)?;
-    if !retention.matches(session) {
-        return Err(failure("backed preview captured target changed"));
-    }
+    let result = with_context(&context, p, sample_source.bounds(), &plus, &minus, control)?;
     poll(control)?;
     Ok(result)
 }
