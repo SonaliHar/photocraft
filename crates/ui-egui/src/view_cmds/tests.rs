@@ -15,7 +15,7 @@ fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
 }
 
 #[test]
-fn flip_horizontal_keeps_the_image_centre_in_place_for_rotated_views() {
+fn flip_horizontal_preserves_the_relevant_anchor_across_view_transforms() {
     use crate::canvas::ViewXform;
     use egui::{Rect, pos2, vec2};
 
@@ -32,14 +32,49 @@ fn flip_horizontal_keeps_the_image_centre_in_place_for_rotated_views() {
                     let center = center_for_flipped_view(xf, size, next);
                     let after = ViewXform { center, flip: next, ..xf };
                     let screen_after = after.to_screen(doc_center[0], doc_center[1]);
-                    assert!(
-                        screen_before.distance(screen_after) < 1e-3,
-                        "zoom={zoom} rotation={rotation} aspect={aspect} flip={flip}: {screen_before:?} -> {screen_after:?}"
-                    );
+                    if canvas_coverage(xf, size) >= 0.5 {
+                        assert_eq!(
+                            center, xf.center,
+                            "zoomed-in view should retain the camera centre: zoom={zoom} rotation={rotation} aspect={aspect} flip={flip}"
+                        );
+                    } else {
+                        assert!(
+                            screen_before.distance(screen_after) < 1e-3,
+                            "zoomed-out view should keep the image centre in place: zoom={zoom} rotation={rotation} aspect={aspect} flip={flip}: {screen_before:?} -> {screen_after:?}"
+                        );
+                    }
                 }
             }
         }
     }
+}
+
+#[test]
+fn flip_horizontal_keeps_the_viewed_region_when_canvas_covers_half_the_viewport() {
+    use crate::canvas::ViewXform;
+    use egui::{Rect, pos2, vec2};
+
+    let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(900.0, 640.0));
+    let size = [320, 180];
+    let xf = ViewXform { rect, zoom: 2.4, center: [160.0, 90.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    assert!(canvas_coverage(xf, size) >= 0.5);
+    assert_eq!(center_for_flipped_view(xf, size, true), xf.center);
+}
+
+#[test]
+fn flip_horizontal_keeps_image_centre_when_zoomed_out() {
+    use crate::canvas::ViewXform;
+    use egui::{Rect, pos2, vec2};
+
+    let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(900.0, 640.0));
+    let size = [320, 180];
+    let xf = ViewXform { rect, zoom: 0.35, center: [160.0, 90.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    assert!(canvas_coverage(xf, size) < 0.5);
+    let before = xf.to_screen(size[0] as f32 * 0.5, size[1] as f32 * 0.5);
+    let center = center_for_flipped_view(xf, size, true);
+    let after = ViewXform { center, flip: true, ..xf };
+    let after_point = after.to_screen(size[0] as f32 * 0.5, size[1] as f32 * 0.5);
+    assert!(before.distance(after_point) < 1e-3, "{before:?} -> {after_point:?}");
 }
 
 #[test]
