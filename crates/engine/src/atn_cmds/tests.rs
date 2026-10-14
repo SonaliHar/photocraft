@@ -462,13 +462,7 @@ fn unsupported_shapes_become_photoshop_steps_not_errors() {
             Some(
                 desc("null")
                     .with("null", target_ref("Lyr "))
-                    .with(
-                        "T   ",
-                        D::Reference(vec![ReferenceItem::Name {
-                            class: class("Dcmn"),
-                            name: UnicodeString::new_nul("Other"),
-                        }]),
-                    ),
+                    .with("T   ", D::Reference(vec![ReferenceItem::Name { class: class("Dcmn"), name: UnicodeString::new_nul("Other") }])),
             ),
         ),
     ];
