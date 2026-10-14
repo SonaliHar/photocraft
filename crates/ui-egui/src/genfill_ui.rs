@@ -159,7 +159,7 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
         text_row(ui, f, "baseUrl", "Server URL:", &base, false);
         let model = info.get("model").and_then(Value::as_str).filter(|m| !m.is_empty()).map(str::to_string).unwrap_or_else(|| default("model"));
         text_row(ui, f, "model", "Model:", if model.is_empty() { "(server default)" } else { &model }, false);
-        note(ui, "Keys stay in your preferences on this computer. Empty fields keep what is saved.", t.text_faint);
+        note(ui, "Keys are stored in a separate file in your user config folder, not in preferences. Empty fields keep what is saved.", t.text_faint);
     }
     if !configured
         && !typed_key

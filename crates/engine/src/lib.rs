@@ -409,6 +409,8 @@ pub struct Session {
     pub link_scan: Option<link_watch::LinkScan>,
     /// Select Subject's last result, reused while the pixels are unchanged (#2865).
     subject_cache: smartselect_cmds::SubjectCache,
+    /// Generative Fill provider credentials, kept out of the preferences ([`genfill_cmds`]).
+    pub(crate) ai_secrets: genfill_cmds::Secrets,
     /// A finished live stroke offered to the `paint.stroke` / `paint.pencil` that commits it
     /// ([`Session::offer_live_stroke`]).
     pub(crate) live_commit: Option<brush_cmds::LiveCommit>,

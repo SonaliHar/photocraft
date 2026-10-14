@@ -157,6 +157,8 @@ fn main() -> eframe::Result {
     crash_guard::install_hook();
     // Select Subject fetches its model on first use here (tests, the CLI and scripts stay offline).
     photocraft_engine::subject_model::set_auto_download(true);
+    // Generative Fill credentials persist in their own file, never in the preferences.
+    photocraft_engine::genfill_cmds::enable_credentials_file();
     // The system font scan can take seconds (minutes on some Macs): run it off the UI thread.
     photocraft_ui_egui::type_tool::warm_fonts();
     let mut control_port: Option<u16> = None;

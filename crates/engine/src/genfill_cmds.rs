@@ -5,15 +5,19 @@
 //!   provider, and puts the answer on a new pixel layer whose alpha is the selection, so the
 //!   original is untouched and the result can be hidden, masked, moved or undone. An empty prompt
 //!   removes the selected content.
-//! * `ai.settings` reads and changes the provider and its credentials. They are kept in the
-//!   preferences (`dialogs["ai.generativeFill"]`); environment variables
-//!   `PHOTOCRAFT_<PROVIDER>_API_KEY` / `_ACCOUNT_ID` are used when nothing is saved. Keys are
-//!   never returned by any command.
+//! * `ai.settings` reads and changes the provider and its settings. The provider choice, server
+//!   URL and model are ordinary preferences (`dialogs["ai.generativeFill"]`). **Credentials are
+//!   not preferences**: API keys and account ids live in a separate file in the user's config
+//!   folder ([`enable_credentials_file`]; in memory only until an app enables it), so no
+//!   preferences view, export or serialisation can carry them, and no command returns them.
+//!   Environment variables `PHOTOCRAFT_<PROVIDER>_API_KEY` / `_ACCOUNT_ID` are used when nothing
+//!   is saved.
 //!
 //! Only the crop around the selection is uploaded, and only when the command runs.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use photocraft_algo::segment::RgbImage;
 use photocraft_algo::selection::{expand, mask_from_surface};
@@ -68,14 +72,123 @@ impl Settings {
     }
 }
 
-/// The saved settings (defaults when none, or when the saved value is unreadable).
-pub fn settings(s: &Session) -> Settings {
-    s.prefs().dialogs.get(SETTINGS_KEY).and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default()
+// ------------------------------------------------------------------ credentials
+
+/// One provider's secrets: kept out of the preferences.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct Secret {
+    api_key: String,
+    account_id: String,
 }
 
-fn save_settings(s: &mut Session, st: &Settings) {
-    let value = serde_json::to_value(st).unwrap_or(Value::Null);
+type SecretMap = BTreeMap<String, Secret>;
+
+static CREDENTIALS_FILE: OnceLock<PathBuf> = OnceLock::new();
+
+/// Where credentials are stored: `PHOTOCRAFT_CONFIG_DIR`, else the platform's user config folder.
+pub fn default_credentials_path() -> Option<PathBuf> {
+    let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let dir = env("PHOTOCRAFT_CONFIG_DIR").or_else(|| {
+        #[cfg(target_os = "windows")]
+        let base = env("APPDATA");
+        #[cfg(target_os = "macos")]
+        let base = env("HOME").map(|h| h.join("Library").join("Application Support"));
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        let base = env("XDG_CONFIG_HOME").or_else(|| env("HOME").map(|h| h.join(".config")));
+        base.map(|b| b.join("photocraft"))
+    })?;
+    Some(dir.join("ai-credentials.json"))
+}
+
+/// Persist credentials to [`default_credentials_path`]. Interactive apps call this once at
+/// start-up; without it (tests, the CLI, scripts) saved credentials live in memory for the
+/// session only, and the environment variables still work.
+pub fn enable_credentials_file() {
+    if let Some(p) = default_credentials_path() {
+        let _ = CREDENTIALS_FILE.set(p);
+    }
+}
+
+fn read_secrets(path: &Path) -> SecretMap {
+    std::fs::read(path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+fn write_secrets(path: &Path, map: &SecretMap) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(map).map_err(|e| EngineError::Other(format!("cannot encode the credentials: {e}")))?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| EngineError::Other(format!("cannot create {}: {e}", dir.display())))?;
+    }
+    photocraft_format::atomic_write(path, &bytes).map_err(|e| EngineError::Other(format!("cannot save the credentials to {}: {e}", path.display())))?;
+    // Owner-only where the platform has permission bits (Windows keeps them in the user profile).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+/// The session's credentials, loaded from the credentials file on first use.
+#[derive(Default)]
+pub struct Secrets(Mutex<Option<SecretMap>>);
+
+impl std::fmt::Debug for Secrets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Secrets(..)")
+    }
+}
+
+impl Secrets {
+    fn with<R>(&self, f: impl FnOnce(&mut SecretMap) -> R) -> R {
+        let mut guard = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let map = guard.get_or_insert_with(|| CREDENTIALS_FILE.get().map(|p| read_secrets(p)).unwrap_or_default());
+        f(map)
+    }
+}
+
+// ------------------------------------------------------------------ settings
+
+/// The saved settings with the credentials filled in from the credentials store (defaults when
+/// none, or when the saved value is unreadable). Never serialise the result into the
+/// preferences: use [`save_settings`].
+pub fn settings(s: &Session) -> Settings {
+    let mut st: Settings = s.prefs().dialogs.get(SETTINGS_KEY).and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+    s.ai_secrets.with(|m| {
+        for p in Provider::ALL {
+            if let Some(secret) = m.get(p.id()) {
+                let cfg = st.providers.entry(p.id().to_string()).or_default();
+                cfg.api_key.clone_from(&secret.api_key);
+                cfg.account_id.clone_from(&secret.account_id);
+            }
+        }
+    });
+    st
+}
+
+/// Save: the preferences get everything except credentials; those go to the credentials store
+/// (and its file, when enabled). Fails only if the file cannot be written; the credentials still
+/// work for this session.
+fn save_settings(s: &mut Session, st: &Settings) -> Result<()> {
+    let mut public = st.clone();
+    let mut secrets = SecretMap::new();
+    for (id, cfg) in &mut public.providers {
+        let secret = Secret { api_key: std::mem::take(&mut cfg.api_key), account_id: std::mem::take(&mut cfg.account_id) };
+        if secret != Secret::default() {
+            secrets.insert(id.clone(), secret);
+        }
+    }
+    let value = serde_json::to_value(&public).unwrap_or(Value::Null);
     s.prefs.edit(|p| p.dialogs.insert(SETTINGS_KEY.into(), value));
+    let changed = s.ai_secrets.with(|m| {
+        let changed = *m != secrets;
+        *m = secrets.clone();
+        changed
+    });
+    match CREDENTIALS_FILE.get() {
+        Some(path) if changed => write_secrets(path, &secrets),
+        _ => Ok(()),
+    }
 }
 
 /// Where a credential comes from, for display (never the credential itself).
@@ -175,7 +288,7 @@ fn set_settings(s: &mut Session, p: &Value) -> Result<Value> {
         st.providers.insert(prov.id().to_string(), cfg);
     }
     if changed {
-        save_settings(s, &st);
+        save_settings(s, &st)?;
     }
     Ok(settings_state(s))
 }
@@ -377,7 +490,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "AI Settings",
             menu: &[],
             shortcut: None,
-            params: r##"{"provider":id?,"configure":{"provider":id,"apiKey":string?,"accountId":string?,"baseUrl":string?,"model":string?,"maxSide":0|64..2048?}?} → {provider,providers:[{id,label,needsKey,needsAccount,configured,missing,keySource,accountSource,baseUrl,model,maxSide,defaults}],subjectModel:{id,licence,bytes,present,path}} (credentials are stored in the preferences and never returned; environment variables PHOTOCRAFT_<PROVIDER>_API_KEY and _ACCOUNT_ID are used when none is saved)"##,
+            params: r##"{"provider":id?,"configure":{"provider":id,"apiKey":string?,"accountId":string?,"baseUrl":string?,"model":string?,"maxSide":0|64..2048?}?} → {provider,providers:[{id,label,needsKey,needsAccount,configured,missing,keySource,accountSource,baseUrl,model,maxSide,defaults}],subjectModel:{id,licence,bytes,present,path}} (credentials are stored in a separate credentials file in the user config folder, never in the preferences, and never returned; environment variables PHOTOCRAFT_<PROVIDER>_API_KEY and _ACCOUNT_ID are used when none is saved)"##,
             enabled: always,
             run: set_settings,
             journal: false,
@@ -467,6 +580,63 @@ mod tests {
         assert!(e.is_err());
         let e = s.execute(SETTINGS_CMD, json!({"provider": "dalle"}));
         assert!(e.is_err());
+    }
+
+    /// The dummy key must not appear in any view or serialisation of the preferences, in the
+    /// command results, or in the journal; it still reaches the provider config.
+    #[test]
+    fn credentials_never_reach_the_preferences_or_other_views() {
+        const KEY: &str = "dummy-key-7c1e9f";
+        const ACCOUNT: &str = "dummy-account-42b";
+        let mut s = Session::new();
+        let r = s
+            .execute(
+                SETTINGS_CMD,
+                json!({"provider": "cloudflare", "configure": {"provider": "cloudflare", "apiKey": KEY, "accountId": ACCOUNT, "model": "m"}}),
+            )
+            .unwrap();
+        let views = [
+            ("ai.settings result", r.to_string()),
+            ("prefs_to_json", s.prefs_to_json()),
+            ("prefs_value", s.prefs_value().to_string()),
+            ("prefs serde", serde_json::to_string(s.prefs()).unwrap()),
+            ("prefs dialogs", serde_json::to_string(&s.prefs().dialogs).unwrap()),
+            ("journal", format!("{:?}", s.journal)),
+            ("session debug", format!("{:?}", s.ai_secrets)),
+            ("ai.settings again", s.execute(SETTINGS_CMD, json!({})).unwrap().to_string()),
+        ];
+        for (what, text) in views {
+            assert!(!text.contains(KEY) && !text.contains(ACCOUNT), "{what} leaks a credential");
+        }
+        // Non-secret settings are ordinary preferences; the credentials are still usable.
+        assert!(s.prefs_to_json().contains("\"model\""));
+        let cfg = settings(&s).config(Provider::Cloudflare);
+        assert_eq!((cfg.api_key.as_str(), cfg.account_id.as_str()), (KEY, ACCOUNT));
+        // Reloading the preferences from their own JSON keeps the credentials (they are separate).
+        let json = s.prefs_to_json();
+        s.load_prefs_json(&json).unwrap();
+        assert_eq!(settings(&s).config(Provider::Cloudflare).api_key, KEY);
+        // Clearing removes them.
+        s.execute(SETTINGS_CMD, json!({"configure": {"provider": "cloudflare", "apiKey": "", "accountId": ""}})).unwrap();
+        assert_eq!(settings(&s).config(Provider::Cloudflare).api_key, "", "an empty string clears it");
+    }
+
+    #[test]
+    fn the_credentials_file_round_trips_and_is_private() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sub").join("ai-credentials.json");
+        let mut map = SecretMap::new();
+        map.insert("gemini".into(), Secret { api_key: "k".into(), account_id: String::new() });
+        write_secrets(&path, &map).unwrap();
+        assert_eq!(read_secrets(&path), map);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o077, 0, "owner only");
+        }
+        assert!(read_secrets(&dir.path().join("missing.json")).is_empty());
+        std::fs::write(&path, b"not json").unwrap();
+        assert!(read_secrets(&path).is_empty(), "a corrupt file is ignored, not a panic");
     }
 
     #[test]

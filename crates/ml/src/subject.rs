@@ -165,7 +165,10 @@ mod tests {
     /// out mostly selected in the middle and not at the corners.
     #[test]
     fn real_model_finds_a_disc() {
-        let Some(model) = crate::models::present(&crate::models::SUBJECT) else { return };
+        let Some(model) = crate::models::present(&crate::models::SUBJECT) else {
+            eprintln!("SKIPPED: no model installed (set PHOTOCRAFT_MODEL_DIR to a folder with isnet-general-use.onnx)");
+            return;
+        };
         let (w, h) = (256usize, 256usize);
         let rgb: Vec<[f32; 3]> = (0..w * h)
             .map(|i| {

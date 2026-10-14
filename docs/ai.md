@@ -36,8 +36,12 @@ step, the original is untouched). Empty prompt = remove the selected content.
 | `openai` | `/v1/images/edits`, `gpt-image-1` | Base URL and model are editable, so compatible servers work. |
 | `stability` | `/v2beta/stable-image/edit/inpaint` | Paid credits. |
 
-Credentials are saved with `ai.settings` in the preferences (`dialogs["ai.generativeFill"]`) or read
-from `PHOTOCRAFT_<PROVIDER>_API_KEY` / `PHOTOCRAFT_<PROVIDER>_ACCOUNT_ID`. No command returns a key.
+Credentials are saved with `ai.settings` in a **separate file** (`ai-credentials.json` in the user
+config folder, `%APPDATA%\photocraft` on Windows; `PHOTOCRAFT_CONFIG_DIR` overrides it), never in the
+preferences, so no preferences view or export can carry them. Only the provider choice, server URL
+and model are preferences. Without the file (tests, CLI, scripts) saved credentials stay in memory
+for the session. They can also come from `PHOTOCRAFT_<PROVIDER>_API_KEY` /
+`PHOTOCRAFT_<PROVIDER>_ACCOUNT_ID`. No command returns a key.
 Adding a provider is one `Provider` variant and one match arm in `crates/ml/src/genfill.rs`; the
 request/response shapes are covered by tests against a local mock server.
 

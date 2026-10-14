@@ -138,6 +138,7 @@ mod tests {
     #[test]
     fn model_selects_a_disc() {
         if !models::is_present(&models::SUBJECT) {
+            eprintln!("SKIPPED: no model installed (set PHOTOCRAFT_MODEL_DIR to a folder with isnet-general-use.onnx)");
             return;
         }
         let mut s = crate::Session::new();
