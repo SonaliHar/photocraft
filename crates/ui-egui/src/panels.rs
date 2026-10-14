@@ -903,9 +903,13 @@ fn options_bar_height(pro: bool, narrow: bool) -> f32 {
 /// Show the *effective* value without writing the temporary key state into
 /// preferences. Clicking the box while Ctrl/Cmd is held still changes the
 /// persistent value so the displayed check state tracks the user's click.
+pub(crate) fn move_auto_select_display(saved: bool, command: bool) -> bool {
+    saved ^ command
+}
+
 fn move_auto_select_checkbox(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let command = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)).command;
-    let mut shown = app.ui.tool_options.move_auto_select ^ command;
+    let mut shown = move_auto_select_display(app.ui.tool_options.move_auto_select, command);
     if widgets::checkbox(ui, &mut shown, tl!("Auto-Select:")).changed() {
         app.ui.tool_options.move_auto_select = shown ^ command;
     }
