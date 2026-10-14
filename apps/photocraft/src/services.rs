@@ -932,7 +932,10 @@ mod tests {
         while std::time::Instant::now() < deadline {
             prefs_ui::tick(&mut app, &ctx);
             recovered = list_recovery(&recovery);
-            if !recovered.is_empty() {
+            // The bundle manifest is published before its sidecar. During that short window,
+            // list_recovery intentionally exposes a sidecar-less entry with revision 0 for crash
+            // recovery. Wait for the committed sidecar so this test observes the completed retry.
+            if recovered.iter().any(|entry| entry.info.revision == revision) {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
