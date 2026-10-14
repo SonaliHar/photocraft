@@ -349,3 +349,14 @@ fn invert_posterize_and_threshold_change_lab_and_cmyk_channels_as_stored() {
     assert_levels(&adjusted_pixel(lab8, &f([128.0, 30.0, 220.0, 255.0]), &level, None), &[255.0, 128.0, 128.0, 255.0], "Lab threshold light");
     assert_levels(&adjusted_pixel(lab16, &f([127.0, 30.0, 220.0, 255.0]), &level, None), &[0.0, 128.0, 128.0, 255.0], "Lab threshold dark");
 }
+
+#[test]
+fn posterize_and_threshold_keep_the_16_bit_sample_grid_in_committed_pixels() {
+    let rgb = PixelFormat::new(ColorMode::Rgb, SampleType::U16, true);
+    // Just above the 16-bit bin boundary, but still in the lower 8-bit bin.
+    let posterized = adjusted_pixel(rgb, &[0.334, 0.334, 0.334, 1.0], &Adjustment::Posterize { levels: 3 }, None);
+    assert_levels(&posterized, &[128.0, 128.0, 128.0, 255.0], "16-bit posterize");
+    // Rounding the input channels to 8 bits changes this luminosity split.
+    let threshold = adjusted_pixel(rgb, &[0.34, 0.5, 0.12, 1.0], &Adjustment::Threshold { level: 105.0 / 255.0 }, None);
+    assert_levels(&threshold, &[0.0, 0.0, 0.0, 255.0], "16-bit threshold");
+}

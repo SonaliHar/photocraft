@@ -129,8 +129,11 @@ fn adjusted(s: &Surface, r: Rect, adj: &Adjustment, selection: Option<&Surface>,
     let mut buf = Buffer { rect: r, px: raw.chunks_exact(n).map(|p| to_rgba(&fmt, p)).collect() };
     let orig = buf.clone();
     // 32-bit documents get the float behaviour of an adjustment layer there (Levels doesn't clip);
-    // integer depths keep the unrounded, clipped curves.
-    let depth = (fmt.sample == photocraft_color::SampleType::F32).then_some(fmt.sample);
+    // Integer tone curves keep their unrounded behaviour. Posterize and
+    // Threshold need the document depth, as their adjustment layers do, so a
+    // 16-bit preview and the committed pixels split on the same sample grid.
+    let depth =
+        (fmt.sample == photocraft_color::SampleType::F32 || matches!(adj, Adjustment::Posterize { .. } | Adjustment::Threshold { .. })).then_some(fmt.sample);
     adjust::apply_in(adj, &mut buf, adjust::Transfer::for_document(mode, fmt.sample), depth, mode);
     mix_through_selection(&fmt, r, &orig.px, &buf.px, selection)
 }
