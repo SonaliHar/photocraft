@@ -126,7 +126,7 @@ fn surface_faces(surf: &Surface, canvas: Rect) -> Result<Vec<Landmarks>> {
     let (w, h) = (canvas.width() as usize, canvas.height() as usize);
     let mut px = vec![[0.0f32; 4]; w * h];
     surf.read_rgba_into(canvas, &mut px);
-    let faces = photocraft_algo::faces::detect(&px, w, h, crate::face_cmds::MIN_SCORE).ok_or_else(|| EngineError::Other("face detection failed".into()))?;
+    let faces = crate::face_cmds::detect(&px, w, h, crate::face_cmds::MIN_SCORE)?;
     let (x0, y0) = (f64::from(canvas.x0), f64::from(canvas.y0));
     Ok(faces.iter().map(|f| f.landmarks.map(|[x, y]| [f64::from(x) + x0, f64::from(y) + y0])).collect())
 }
