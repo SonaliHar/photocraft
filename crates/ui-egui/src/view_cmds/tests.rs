@@ -24,14 +24,7 @@ fn flip_horizontal_keeps_the_image_centre_in_place_for_rotated_views() {
         for rotation in [0.0, 27.0, 90.0, -43.0] {
             for aspect in [0.5, 1.0, 2.0] {
                 for flip in [false, true] {
-                    let xf = ViewXform {
-                        rect,
-                        zoom,
-                        center: [35.0, 91.0],
-                        flip,
-                        rotation,
-                        aspect,
-                    };
+                    let xf = ViewXform { rect, zoom, center: [35.0, 91.0], flip, rotation, aspect };
                     let size = [320, 180];
                     let doc_center = [size[0] as f32 / 2.0, size[1] as f32 / 2.0];
                     let screen_before = xf.to_screen(doc_center[0], doc_center[1]);
