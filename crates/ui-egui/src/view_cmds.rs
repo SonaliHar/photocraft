@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
+use crate::canvas::ViewXform;
 use crate::state::DialogKind;
 
 /// View › Show flags (Photoshop defaults).
@@ -624,6 +625,42 @@ fn flag_param(p: &Value, cur: bool) -> bool {
     p.get("on").and_then(Value::as_bool).unwrap_or(!cur)
 }
 
+/// Toggle the view mirror without moving the document's centre on screen.
+fn flip_horizontal(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
+    let current = app.ui.view.flip_horizontal;
+    let next = flag_param(p, current);
+    if next == current {
+        return Ok(json!(next));
+    }
+
+    // Capture the active canvas transform before changing the shared view option. The image
+    // centre, rather than the camera centre, is the visual anchor: the two differ after panning.
+    let xf = ViewXform::active(app);
+    let size = app.session.active().map(|st| [st.doc.size.width, st.doc.size.height]);
+    let index = app.session.active_index();
+    app.ui.view.flip_horizontal = next;
+
+    if let (Some(xf), Some(size), Some(index)) = (xf, size, index) {
+        if xf.zoom.is_finite() && xf.zoom.abs() > f32::EPSILON {
+            app.ui.views[index].center = center_for_flipped_view(xf, size, next);
+        }
+    }
+    Ok(json!(next))
+}
+
+/// Camera centre that keeps the image centre at the same screen point after changing the mirror.
+fn center_for_flipped_view(xf: ViewXform, size: [u32; 2], flip: bool) -> [f32; 2] {
+    if !(xf.zoom.is_finite() && xf.zoom.abs() > f32::EPSILON) {
+        return xf.center;
+    }
+    let image_center = [size[0] as f32 * 0.5, size[1] as f32 * 0.5];
+    let before = xf.to_screen(image_center[0], image_center[1]);
+    let after_xf = ViewXform { flip, ..xf };
+    let after = after_xf.to_screen(image_center[0], image_center[1]);
+    let camera_delta = after_xf.unmap_vec((after - before) / after_xf.zoom);
+    [xf.center[0] + camera_delta.x, xf.center[1] + camera_delta.y]
+}
+
 fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Result<Value, String> {
     if let Some((panel, tab)) = panel_tab(app, id) {
         let group = crate::dock::Group::from_key(panel);
@@ -659,6 +696,9 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
     }
     if id == "view.resetView" {
         return crate::rotate_view::reset(app);
+    }
+    if id == "view.flipHorizontal" {
+        return flip_horizontal(app, p);
     }
     let o = &mut app.ui.view;
     if let Some(k) = id.strip_prefix("view.show.") {
@@ -729,10 +769,6 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
         "view.extras" => {
             o.extras = flag_param(p, o.extras);
             Ok(json!(o.extras))
-        }
-        "view.flipHorizontal" => {
-            o.flip_horizontal = flag_param(p, o.flip_horizontal);
-            Ok(json!(o.flip_horizontal))
         }
         "view.pixelAspectRatioCorrection" => {
             o.pixel_aspect_correction = flag_param(p, o.pixel_aspect_correction);
