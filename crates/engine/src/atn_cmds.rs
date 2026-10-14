@@ -1718,7 +1718,8 @@ fn export_from(d: &Descriptor) -> Mapped {
     let unsupported = Mapped::Unsupported { harmless: false };
     let Some(u) = get_obj(d, "Usng") else { return unsupported };
     let Some(path) = d.get("In  ").and_then(path_text) else { return unsupported };
-    let mut p = json!({"path": path});
+    // "Save in directory": `In  ` is only the folder, and each document saves under its own name.
+    let mut p = if get_bool(u, "DIDr") == Some(true) { json!({"folder": path}) } else { json!({"path": path}) };
     if let Some(f) = get_enum(u, "Fmt ") {
         match lookup(WEB_FORMATS, &f) {
             Some(f) => p["format"] = json!(f),
@@ -1745,8 +1746,16 @@ fn export_from(d: &Descriptor) -> Mapped {
 }
 
 fn export_to(_: &str, p: &Value) -> Option<Descriptor> {
-    let path = jstr(p, "path")?;
+    // A step recorded with the document's own name keeps only its folder (#5305).
+    let (path, in_folder) = match (jstr(p, "path").filter(|v| !v.is_empty()), jstr(p, "folder")) {
+        (Some(path), _) => (path, false),
+        (None, Some(folder)) => (folder, true),
+        (None, None) => return None,
+    };
     let mut u = desc("SaveForWeb").with("Op  ", enm("SWOp", "OpSa")).with("Fmt ", enm("IRFm", lookup_back(WEB_FORMATS, jstr(p, "format").unwrap_or("png24"))?));
+    if in_folder {
+        u = u.with("DIDr", D::Boolean(true));
+    }
     for (key, param, default) in [
         ("Intr", "interlaced", false),
         ("Trns", "transparency", true),

@@ -218,7 +218,7 @@ pub fn open_web(app: &mut PhotocraftApp) -> u64 {
         .unwrap_or_else(|| json!({"format": "jpeg", "quality": 60}));
     if let Value::Object(m) = last {
         for (k, v) in m {
-            if !matches!(k.as_str(), "path" | "dir" | "width" | "height" | "percent" | "colorTable" | "colorTableEdits") {
+            if !matches!(k.as_str(), "path" | "dir" | "folder" | "width" | "height" | "percent" | "colorTable" | "colorTableEdits") {
                 f.insert(k, v);
             }
         }
@@ -669,7 +669,7 @@ fn web_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         authorize(&prepared)?;
         p = prepared;
     }
-    if p.get("path").is_some() || p.get("dir").is_some() {
+    if p.get("path").is_some() || p.get("dir").is_some() || p.get("folder").is_some() {
         return save_for_web(app, p);
     }
     let doc = app.session.active().ok_or("no document")?.doc.clone();
@@ -684,11 +684,23 @@ fn web_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
             let dir = path.rfind(['/', '\\']).map(|i| path[..i].to_string()).unwrap_or_else(|| ".".into());
             p["dir"] = json!(dir);
             p["html"] = json!(html);
+        } else if let Some(folder) = kept_name_folder(&path, &base, st.format.ext()) {
+            // The suggested name kept: only the folder, so a recorded action saves each
+            // document under its own name, as in Photoshop (#5305).
+            p["folder"] = json!(folder);
         } else {
             p["path"] = json!(path);
         }
         save_for_web(app, p)
     })
+}
+
+/// The folder of `path` when its file is the one Save for Web suggests: `base`, with the format's
+/// own extension `ext` (the folder alone writes exactly that file).
+fn kept_name_folder(path: &str, base: &str, ext: &str) -> Option<String> {
+    let file = std::path::Path::new(path);
+    let kept = file.file_stem().is_some_and(|s| s.to_string_lossy() == base) && file.extension().is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case(ext));
+    kept.then(|| file.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default())
 }
 
 /// Runs Save for Web with `p`, which says where to write.
@@ -1216,6 +1228,38 @@ mod tests {
         let f = &app.ui.dialog_mut(id).unwrap().fields;
         assert_eq!(f["format"], "png8");
         assert_eq!(f["colors"], 64);
+    }
+
+    /// #5305: Save for Web with the suggested name runs (and so is recorded) with only the
+    /// folder, so an action saves each document under its own name; another name is kept.
+    #[test]
+    fn save_for_web_with_the_suggested_name_records_only_the_folder() {
+        let dir = std::env::temp_dir().join(format!("pc-webui-kept-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, expected) in [
+            ("web.png", json!({"folder": dir.to_string_lossy()})),
+            ("other.png", json!({"path": dir.join("other.png").to_string_lossy()})),
+            ("web.gif", json!({"path": dir.join("web.gif").to_string_lossy()})),
+        ] {
+            let (mut app, ctx) = app();
+            let target = dir.join(name).to_string_lossy().into_owned();
+            let (dialog, _) = crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::SaveTo(target.clone()))]);
+            app.services.file_dialog = Some(dialog);
+            let id = open_web(&mut app);
+            app.ui.dialog_mut(id).unwrap().fields.insert("format".into(), json!("png24"));
+            crate::dialogs::confirm(&mut app, id).unwrap();
+            app.poll_file_dialog(&ctx, None);
+            assert!(std::path::Path::new(&target).exists(), "{target}");
+            let (id, params) = app.session.journal.last().unwrap();
+            assert_eq!(id, WEB_COMMAND);
+            for (k, v) in expected.as_object().unwrap() {
+                assert_eq!(&params[k], v, "{params}");
+            }
+            assert!(params.get(if name == "web.png" { "path" } else { "folder" }).is_none(), "{params}");
+            assert!(!dir.join("web.png").exists() || name == "web.png", "only the picked file is written");
+            let _ = std::fs::remove_file(&target);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

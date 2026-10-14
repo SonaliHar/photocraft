@@ -79,8 +79,15 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if ok || ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
         let Some(p) = app.targa_options.take() else { return };
         let settings = ExportSettings { tga_bits: Some(p.bits), ..app.save_settings() };
-        let step = serde_json::json!({"path": p.path, "tgaBits": p.bits.bits()});
-        let written = app.with_document(p.doc, |app| app.write_document(p.path, &settings, p.copy));
+        let mut step = serde_json::json!({"path": p.path});
+        let written = app.with_document(p.doc, |app| {
+            // A Save As keeps the document's own name as only its folder (#5305); a copy its path.
+            if p.record == "file.saveAs" {
+                step = app.save_as_record(&p.path);
+            }
+            app.write_document(p.path, &settings, p.copy)
+        });
+        step["tgaBits"] = p.bits.bits().into();
         if written.is_ok() {
             // An action being recorded keeps the Save As or Save a Copy with this answer (#2032).
             app.session.journal.push((p.record.into(), step));

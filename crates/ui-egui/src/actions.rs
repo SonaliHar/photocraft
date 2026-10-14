@@ -1290,6 +1290,45 @@ mod tests {
         assert_eq!(app.session.active().unwrap().path.as_deref(), Some("out/result.psd"));
     }
 
+    /// #5305: a Save As recorded with the document's own name (the one Save As suggests) keeps
+    /// only the folder, so playing the action saves each document under its own name instead of
+    /// over the recorded file; a name typed in is recorded as it is.
+    #[test]
+    fn recorded_save_as_with_the_suggested_name_saves_each_document_under_its_own() {
+        let written = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        let log = written.clone();
+        let services = crate::Services {
+            export: Some(Box::new(|doc, path, _| {
+                photocraft_io::export(doc, path, &Default::default()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
+            })),
+            write: Some(Box::new(move |path, _| {
+                log.borrow_mut().push(path.to_string());
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 16, "height": 16, "name": "first"})).unwrap();
+        app.run("actions.record", json!({})).unwrap();
+        crate::menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": "out/first.psd"})).unwrap();
+        crate::menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": "out/renamed.psd"})).unwrap();
+        app.run("actions.stop", json!({})).unwrap();
+        let steps = &app.session.actions.list[0].steps;
+        assert_eq!(steps, &[("file.saveAs".into(), json!({"folder": "out", "extension": "psd"})), ("file.saveAs".into(), json!({"path": "out/renamed.psd"}))]);
+        // Played on another document: its own name in the recorded folder, then the typed name.
+        app.session.actions.list[0].steps.truncate(1);
+        written.borrow_mut().clear();
+        app.run("file.new", json!({"width": 16, "height": 16, "name": "second"})).unwrap();
+        let played = app.run("actions.play", json!({"action": 0})).unwrap();
+        assert!(played.get("failed").is_none(), "{played}");
+        let second = std::path::Path::new("out").join("second.psd").to_string_lossy().into_owned();
+        assert_eq!(*written.borrow(), std::slice::from_ref(&second));
+        assert_eq!(app.session.active().unwrap().path.as_deref(), Some(second.as_str()));
+        // A folder step needs its extension.
+        assert!(app.replay_save("file.saveAs", &json!({"folder": "out"})).is_err());
+    }
+
     #[test]
     fn set_folders_group_actions_and_collapse() {
         use egui_kittest::{Harness, kittest::Queryable};
