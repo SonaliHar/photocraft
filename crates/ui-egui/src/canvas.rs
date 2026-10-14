@@ -151,6 +151,7 @@ pub(crate) fn checked_imported_canvas(doc: &Document) -> bool {
 enum ImportedPreviewBuffer {
     Plain(photocraft_compose::Buffer),
     Accounted(photocraft_compose::gimp_render::scene_budget::SceneBuffer<photocraft_compose::Buffer>),
+    Singleton(photocraft_compose::gimp_singleton_preparation::SingletonBuffer<photocraft_compose::gimp_singleton_preparation::Lease>),
 }
 impl std::ops::Deref for ImportedPreviewBuffer {
     type Target = photocraft_compose::Buffer;
@@ -158,22 +159,31 @@ impl std::ops::Deref for ImportedPreviewBuffer {
         match self {
             Self::Plain(buffer) => buffer,
             Self::Accounted(buffer) => buffer.buffer(),
+            Self::Singleton(buffer) => buffer.buffer(),
         }
     }
 }
+#[path = "canvas/singleton_preview.rs"]
+mod singleton_preview;
+#[cfg(test)]
 fn imported_preview(doc: &Document, w: u32, h: u32, damage: Option<DRect>) -> Result<ImportedPreviewBuffer, String> {
+    imported_preview_with_interrupt(doc, w, h, damage, &photocraft_raster::Interrupt::NONE)
+}
+fn imported_preview_with_interrupt(doc: &Document, w: u32, h: u32, damage: Option<DRect>, control: &photocraft_raster::Interrupt<'_>) -> Result<ImportedPreviewBuffer, String> {
+    if photocraft_compose::gimp_singleton_preparation::supports(doc) {
+        return singleton_preview::preview(doc, w, h, damage, control).map(ImportedPreviewBuffer::Singleton);
+    }
     if photocraft_compose::gimp_render::PreparedRenderer::requires_preparation_budget(doc) {
-        let control = photocraft_raster::Interrupt::NONE;
         let scene = photocraft_compose::gimp_render::scene_budget::prepare(
             doc,
-            &control,
+            control,
             photocraft_compose::gimp_render::scene_budget::SceneLimits { resident_bytes: 512 << 20, work_units: 36_000_000 * 512 },
         )
         .map_err(|e| format!("XCF canvas: {e}"))?;
-        return scene.render_reduced(w, h, damage, &control, &mut |_| Ok(())).map(ImportedPreviewBuffer::Accounted).map_err(|e| format!("XCF canvas: {e}"));
+        return scene.render_reduced(w, h, damage, control, &mut |_| Ok(())).map(ImportedPreviewBuffer::Accounted).map_err(|e| format!("XCF canvas: {e}"));
     }
-    photocraft_compose::gimp_render::PreparedRenderer::new(doc)
-        .and_then(|prepared| prepared.render_reduced(w, h, damage, &mut |_| Ok(())))
+    photocraft_compose::gimp_render::PreparedRenderer::new_with_interrupt(doc, control)
+        .and_then(|prepared| prepared.render_reduced_with_interrupt(w, h, damage, &mut |_| Ok(()), control))
         .map(ImportedPreviewBuffer::Plain)
         .map_err(|e| format!("XCF canvas: {e}"))
 }
@@ -1801,7 +1811,7 @@ fn ensure_texture_with_interrupt(
             // Only what the edit or stroke touched: the reduced texture's pixels over it, with the
             // values the whole reduction gives them (factor 1 is the plain composite of `d`).
             let buf = if checked_imported_canvas(&doc) {
-                match imported_preview(&doc, w, h, Some(d)) {
+                match imported_preview_with_interrupt(&doc, w, h, Some(d), control) {
                     Ok(buf) => buf,
                     Err(error) => {
                         app.ui.status = error;
@@ -1831,7 +1841,7 @@ fn ensure_texture_with_interrupt(
         } else {
             // Reduced in bands straight from the compositor: no full-size composite in memory.
             let full = if checked_imported_canvas(&doc) {
-                match imported_preview(&doc, w, h, None) {
+                match imported_preview_with_interrupt(&doc, w, h, None, control) {
                     Ok(buf) => buf,
                     Err(error) => {
                         app.ui.status = error;

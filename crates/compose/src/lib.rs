@@ -89,6 +89,7 @@ mod gimp_neighborhood;
 pub mod gimp_filter_mask_state;
 pub mod gimp_red_eye;
 pub mod gimp_render;
+pub mod gimp_singleton_preparation;
 pub mod gimp_text_items;
 pub mod gimp_text_unit_candidate;
 pub mod gimp_text_fixed_box_candidate;

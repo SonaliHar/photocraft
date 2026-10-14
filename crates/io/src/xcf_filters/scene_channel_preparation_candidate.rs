@@ -5,6 +5,7 @@
 //! source/profile/ports. The entire storage owner remains borrowed, including
 //! unrelated/pruned backing. No source/default import admission is added.
 use super::scene_channel_configured::ConfiguredSceneStacks;
+use super::scene_channel_input_candidate::PreparedSceneInputs;
 use crate::IoError;
 use photocraft_algo::gimp::{
     configured::Limits as ConfiguredLimits,
@@ -96,6 +97,99 @@ pub struct PreparedSceneChannels<'a, 'o, 'p, 's, 'd, 'b, 'r, L> {
     work: AtomicU64,
     ceiling: Limits,
     _lease: L,
+}
+/// Receipt-backed route: the exact decoded/current native input proof and its
+/// aggregate lease stay held alongside the private inner-stage preparation.
+/// This cannot promote caller profile/domain declarations or unresolved outer
+/// state to original-file or rendering authority.
+pub struct InputBoundPreparedScene<'a, 'src, 'o, 'p, 's, 'd, 'b, 'r, L> {
+    inputs: &'a PreparedSceneInputs<'src, 'o, 'p, 's, 'd, 'b, 'r, L>,
+    stage: PreparedSceneChannels<'a, 'o, 'p, 's, 'd, 'b, 'r, ()>,
+    requirements: Requirements,
+}
+fn input_witnesses_match(
+    inputs: &PreparedSceneInputs<'_, '_, '_, '_, '_, '_, '_, impl Sized>,
+    witnesses: &[ChannelWitness<'_>],
+    c: &Interrupt<'_>,
+) -> Result<(), IoError> {
+    poll(c)?;
+    if inputs.inputs().len() != witnesses.len() {
+        return Err(bad("one genuine native input receipt per channel stage"));
+    }
+    for (input, witness) in inputs.inputs().iter().zip(witnesses) {
+        poll(c)?;
+        let verified = input.witness();
+        if witness.stack.owner != ItemRef::Channel(verified.channel)
+            || !std::ptr::eq(witness.working_source, input.surface())
+            || witness.full_extent != verified.bounds
+            || witness.domain != verified.domain
+        {
+            return Err(bad("actual input receipt/source pointer/domain/extent mismatch"));
+        }
+    }
+    Ok(())
+}
+/// Prospective admission remains allocation-free, including full graph/config
+/// census. It uses the input owner's genuine residual ceilings, never a fresh
+/// independent maximum. Caller witness Vec capacity stays an enclosing duty.
+pub fn requirements_with_inputs<L>(
+    inputs: &PreparedSceneInputs<'_, '_, '_, '_, '_, '_, '_, L>,
+    witnesses: &[ChannelWitness<'_>],
+    limits: Limits,
+    c: &Interrupt<'_>,
+) -> Result<Requirements, IoError> {
+    let remaining = inputs.remaining_limits();
+    if limits.resident_bytes > remaining.resident_bytes || limits.index_bytes > remaining.index_bytes || limits.work_units > remaining.work_units {
+        return Err(bad("input-backed lower residual limits"));
+    }
+    requirements_bound_inputs(inputs, witnesses, limits, c)
+}
+fn requirements_bound_inputs<L>(
+    inputs: &PreparedSceneInputs<'_, '_, '_, '_, '_, '_, '_, L>,
+    witnesses: &[ChannelWitness<'_>],
+    limits: Limits,
+    c: &Interrupt<'_>,
+) -> Result<Requirements, IoError> {
+    input_witnesses_match(inputs, witnesses, c)?;
+    if size_of::<InputBoundPreparedScene<'_, '_, '_, '_, '_, '_, '_, '_, L>>() > 4096 {
+        return Err(bad("actual input-backed facade header"));
+    }
+    let mut q = requirements(inputs.original(), witnesses, limits, c)?;
+    // The prospective call and prepare's repeated census are both prepaid by
+    // this retained input owner. Execution work stays a separate immutable sum.
+    q.preparation_work_units = mul(q.preparation_work_units, 2)?;
+    q.peak_resident_bytes = add(q.peak_resident_bytes, 4096)?;
+    if q.peak_resident_bytes > limits.resident_bytes || add(q.preparation_work_units, q.execution_work_units)? > limits.work_units {
+        return Err(bad("actual input-backed facade/preparation envelope"));
+    }
+    Ok(q)
+}
+/// Additive genuine-input consumer; legacy explicit low-level prepare remains
+/// unchanged. Receipt comparison precedes all stage copies/CMS construction.
+pub fn prepare_with_inputs<'a, 'src: 'a, 'o, 'p, 's, 'd, 'b, 'r, L>(
+    inputs: &'a mut PreparedSceneInputs<'src, 'o, 'p, 's, 'd, 'b, 'r, L>,
+    witnesses: &'a [ChannelWitness<'a>],
+    limits: Limits,
+    c: &Interrupt<'_>,
+) -> Result<InputBoundPreparedScene<'a, 'src, 'o, 'p, 's, 'd, 'b, 'r, L>, IoError> {
+    // Admission precedes even the prospective graph/config/profile traversal.
+    // The entire requested immutable slice stays consumed after any failure.
+    let mut budget = inputs.claim_stage_envelope(limits, c)?;
+    let q = requirements_bound_inputs(inputs, witnesses, limits, c)?;
+    let stage = prepare(inputs.original(), witnesses, limits, &mut budget, c)?;
+    poll(c)?;
+    Ok(InputBoundPreparedScene { inputs, stage, requirements: q })
+}
+impl<'a, 'src, 'o, 'p, 's, 'd, 'b, 'r, L> InputBoundPreparedScene<'a, 'src, 'o, 'p, 's, 'd, 'b, 'r, L> {
+    pub fn inputs(&self) -> &'a PreparedSceneInputs<'src, 'o, 'p, 's, 'd, 'b, 'r, L> {
+        self.inputs
+    }
+    pub fn requirements(&self) -> Requirements {
+        self.requirements
+    }
+    pub fn execute_channel<'v>(&'v self, channel: ChannelId, roi: Rect, c: &Interrupt<'_>) -> Result<GraphOutput<'v>, IoError> {
+        self.stage.execute_channel(channel, roi, c)
+    }
 }
 fn bad(message: &str) -> IoError {
     IoError::Unsupported(format!("configured channel inner-stage: {message}"))

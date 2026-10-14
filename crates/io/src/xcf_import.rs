@@ -2496,7 +2496,22 @@ fn map_accounted<P: MappingPlane, S>(
             if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF imported state: {e}")) }
         },
     )?;
-    if ordinary_geometry_domain {
+    if photocraft_compose::gimp_singleton_preparation::supports(&doc) {
+        // The qualified singleton is selected before the legacy filter route.
+        // Decoder/mapped source accounting stays live during validation, with
+        // preparation charged on the exact same transaction Budget.
+        let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("singleton scene requires transaction accounting".into()))?;
+        let mut adapter = SharedPreparation { shared, failure: None };
+        let failure = match photocraft_compose::gimp_singleton_preparation::prepare(&doc, ctl, &mut adapter, source_lease) {
+            Ok(prepared) => { drop(prepared); None },
+            Err(error) => Some(error),
+        };
+        if let Some(error) = failure {
+            return Err(adapter.failure.map(accounting_error).unwrap_or_else(|| {
+                if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF singleton rendering consumer: {error}")) }
+            }));
+        }
+    } else if ordinary_geometry_domain {
         let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("ordinary scene requires transaction accounting".into()))?;
         let mut adapter = SharedPreparation { shared, failure: None };
         let checked = photocraft_compose::gimp_render::PreparedRenderer::new_budgeted(&doc, ctl, &mut adapter, source_lease);

@@ -112,6 +112,11 @@ pub mod xcf_graphs;
 pub mod xcf_graph_candidate;
 pub use xcf_filters::graph_argument_candidate;
 pub use xcf_filters::scene_channel_preparation_candidate;
+pub use xcf_filters::scene_channel_input_candidate;
+pub use xcf_filters::{
+    STRETCH_HSV_SCHEMA, MappedStretchHsvSource, StretchHsvMappingLimits,
+    StretchHsvMappingRequirements, StretchHsvSourceIdentity, map_retained_stretch_hsv_source,
+};
 pub mod xcf_import;
 pub use xcf_import::{
     AssembledStoredChannel, CorrespondenceRequirements, NamespaceBacking, StoredChannelCorrespondence, assemble_owned_stored_channel,

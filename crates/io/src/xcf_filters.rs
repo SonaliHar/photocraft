@@ -253,6 +253,13 @@ pub use scene_channel_storage::{
 mod scene_channel_configured;
 #[path = "xcf_filters/scene_channel_preparation_candidate.rs"]
 pub mod scene_channel_preparation_candidate;
+pub mod scene_channel_input_candidate;
+
+mod stretch_hsv_source;
+pub use stretch_hsv_source::{
+    STRETCH_HSV_SCHEMA, MappedStretchHsvSource, StretchHsvMappingLimits,
+    StretchHsvMappingRequirements, StretchHsvSourceIdentity, map_retained_stretch_hsv_source,
+};
 pub use scene_channel_configured::{
     ConfiguredEffectBinding, ConfiguredEffectIdentity, ConfiguredSceneStacks,
     SceneConfiguredLimits, SceneConfiguredRequirements, map_scene_channel_configured,
