@@ -219,7 +219,7 @@ fn scripts_browse_lists_only_script_files() {
     assert!(matches!(
         open.borrow().first().map(|(r, _)| r),
         Some(FileDialogRequest::Open { multiple: false, extensions: Some(exts), .. })
-            if exts.iter().map(String::as_str).collect::<Vec<_>>() == ["psjs", "ccjs", "jsx", "js", "jsxbin", "json", "txt"]
+            if exts.iter().map(String::as_str).collect::<Vec<_>>() == ["json", "txt", "pcdroplet"]
     ));
 }
 
