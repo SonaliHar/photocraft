@@ -3,8 +3,9 @@
 //! Candidate schedule: analytical ICC RGB -> XYZ in f64, physical CIE Lab using
 //! the own CMS D50 constant, polar LCh in f64 rounded once to f32, the measured
 //! Float LCh point stage, then f64 inverse polar/Lab/ICC and final RGB f32.
-//! Only Identity/Gamma/parametric0 analytical TRCs are admitted; piecewise
-//! kinds3/4 (including stock sRGB curves) refuse without a proven inverse join.
+//! Strict preparation admits Identity/Gamma/parametric0 only. The explicit
+//! DeclaredSrgbPair policy additionally admits the exact canonical IEC pair or
+//! its exact ICC s15f16 representation, without claiming a gap-free inverse.
 //! Only the Float LCh point stage is empirically established by retained captures.
 //! RGB ingress/egress and this precision schedule have NOT been qualified against
 //! GIMP. No absent-profile alias, outer composition, mask, intent/BPC default,
@@ -26,6 +27,22 @@ const MAX_WORK: u64 = 1 << 30;
 const SCRATCH_BYTES: u64 = 4096;
 // Declared conservative algorithm work units, not a libm latency/RSS claim.
 const PIXEL_WORK: u64 = 256;
+
+/// The opt-in is a declared forward/analytic inverse pair, not a proof that
+/// every value at the standard breakpoint has an exact mathematical inverse.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TrcPolicy {
+    #[default]
+    StrictAnalytic,
+    DeclaredSrgbPair,
+}
+fn declared_srgb(curve: &Curve) -> bool {
+    let Curve::Parametric { kind: 3, p } = curve else { return false };
+    let Curve::Parametric { p: canonical, .. } = photocraft_cms::curve::srgb_trc() else { return false };
+    let exact = p.iter().zip(canonical).all(|(a, b)| a.to_bits() == b.to_bits());
+    let encoded = p.iter().zip(canonical).all(|(a, b)| a.to_bits() == math::s15f16_round(b).to_bits());
+    exact || encoded
+}
 
 /// Caller-established identity of the supplied immutable profile/model and space.
 /// Equality is a caller witness, not an ICC hash check or source authority grant.
@@ -91,6 +108,7 @@ pub struct PreparedRgb<'a> {
     pipeline_bytes: u64,
     preparation_work: u64,
     limits: Limits,
+    trc_policy: TrcPolicy,
 }
 fn poll(c: &Interrupt<'_>) -> Result<(), E> {
     c.check().map_err(|_| E::Cancelled)
@@ -128,18 +146,23 @@ fn valid_gamma(g: f64) -> bool {
 }
 /// Closed invertible analytical families; no sampled curves, numerical inverse
 /// fallback, LUT/device-link interpretation, or profile equivalence heuristics.
+#[cfg(test)]
 fn validate_curve(curve: &Curve) -> Result<(), E> {
+    validate_curve_with_policy(curve, TrcPolicy::StrictAnalytic)
+}
+fn validate_curve_with_policy(curve: &Curve, policy: TrcPolicy) -> Result<(), E> {
     match curve {
         Curve::Identity => Ok(()),
         Curve::Gamma(g) if valid_gamma(*g) => Ok(()),
         Curve::Parametric { kind: 0, p } if valid_gamma(p[0]) && p.iter().all(|v| v.is_finite()) => Ok(()),
+        _ if policy == TrcPolicy::DeclaredSrgbPair && declared_srgb(curve) => Ok(()),
         // Piecewise kinds3/4 can contain gaps/overlaps, including otherwise
         // finite positive branches. This candidate admits no guessed join
-        // tolerance and no numerical inverse fallback; all such curves refuse.
+        // tolerance and no numerical inverse fallback; all other such curves refuse.
         _ => Err(E::UnsupportedConversion),
     }
 }
-fn profile_domain(profile: &Profile, context: WorkingContext, c: &Interrupt<'_>) -> Result<(), E> {
+fn profile_domain(profile: &Profile, context: WorkingContext, policy: TrcPolicy, c: &Interrupt<'_>) -> Result<(), E> {
     poll(c)?;
     if context.encoding != SampleEncoding::NonlinearProfile
         || context.profile_identity == [0; 32]
@@ -163,7 +186,7 @@ fn profile_domain(profile: &Profile, context: WorkingContext, c: &Interrupt<'_>)
     }
     for curve in profile.trc.as_ref().ok_or(E::UnsupportedConversion)? {
         poll(c)?;
-        validate_curve(curve)?;
+        validate_curve_with_policy(curve, policy)?;
     }
     poll(c)
 }
@@ -176,10 +199,21 @@ pub fn preparation_requirements(
     limits: Limits,
     c: &Interrupt<'_>,
 ) -> Result<PreparationRequirements, E> {
+    preparation_requirements_with_trc_policy(profile, context, parameters, TrcPolicy::StrictAnalytic, limits, c)
+}
+/// Explicit policy admission; supplied curves are checked and never normalized.
+pub fn preparation_requirements_with_trc_policy(
+    profile: &Profile,
+    context: WorkingContext,
+    parameters: Parameters,
+    policy: TrcPolicy,
+    limits: Limits,
+    c: &Interrupt<'_>,
+) -> Result<PreparationRequirements, E> {
     poll(c)?;
     limits_checked(limits)?;
     hue_chroma::validate(parameters)?;
-    profile_domain(profile, context, c)?;
+    profile_domain(profile, context, policy, c)?;
     let cancelled = || c.check().is_err();
     let lower = cms_limits(limits)?;
     let input = profile.side_requirements_with_control(true, Intent::RelativeColorimetric, lower, &cancelled).map_err(cms_error)?;
@@ -210,7 +244,7 @@ pub fn preparation_requirements(
         work_units,
     })
 }
-fn pipeline_bytes(p: &Pipeline) -> Result<u64, E> {
+fn pipeline_bytes(p: &Pipeline, policy: TrcPolicy) -> Result<u64, E> {
     let mut result = bytes(p.stages.capacity(), size_of::<Stage>())?;
     if p.inputs != 3 || p.outputs != 3 || p.stages.len() != 2 {
         return Err(E::UnsupportedConversion);
@@ -222,7 +256,7 @@ fn pipeline_bytes(p: &Pipeline) -> Result<u64, E> {
                     return Err(E::UnsupportedConversion);
                 }
                 for curve in curves {
-                    validate_curve(curve)?;
+                    validate_curve_with_policy(curve, policy)?;
                 }
                 result = plus(result, bytes(curves.capacity(), size_of::<Curve>())?)?;
             }
@@ -293,7 +327,19 @@ impl<'a> PreparedRgb<'a> {
     /// Relative-colorimetric analytical profile sides only; no BPC/CLUT/cache.
     /// Does not clone the caller profile or infer a profile for absent metadata.
     pub fn prepare(profile: &'a Profile, context: WorkingContext, parameters: Parameters, limits: Limits, c: &Interrupt<'_>) -> Result<Self, E> {
-        let req = preparation_requirements(profile, context, parameters, limits, c)?;
+        Self::prepare_with_trc_policy(profile, context, parameters, TrcPolicy::StrictAnalytic, limits, c)
+    }
+    /// Uses the original supplied curves and their existing analytical paired
+    /// inverse, including the IEC/encoded breakpoint gap. No curve is repaired.
+    pub fn prepare_with_trc_policy(
+        profile: &'a Profile,
+        context: WorkingContext,
+        parameters: Parameters,
+        policy: TrcPolicy,
+        limits: Limits,
+        c: &Interrupt<'_>,
+    ) -> Result<Self, E> {
+        let req = preparation_requirements_with_trc_policy(profile, context, parameters, policy, limits, c)?;
         let cancelled = || c.check().is_err();
         let mut remaining_work = limits.work_units.checked_sub(req.inspection_work_units).ok_or(E::LimitExceeded)?;
         if req.ingress_work_units > remaining_work {
@@ -305,7 +351,7 @@ impl<'a> PreparedRgb<'a> {
         remaining_work = remaining_work.checked_sub(req.ingress_work_units).ok_or(E::LimitExceeded)?;
         poll(c)?;
         let ingress = Pipeline::new(3, ingress);
-        let input_retained = pipeline_bytes(&ingress)?;
+        let input_retained = pipeline_bytes(&ingress, policy)?;
         let remaining = resident_for_pipelines.checked_sub(input_retained).ok_or(E::LimitExceeded)?;
         if req.egress_work_units > remaining_work {
             return Err(E::LimitExceeded);
@@ -321,7 +367,7 @@ impl<'a> PreparedRgb<'a> {
         if preparation_work != req.work_units {
             return Err(E::LimitExceeded);
         }
-        let retained = plus(pipeline_bytes(&ingress)?, pipeline_bytes(&egress)?)?;
+        let retained = plus(pipeline_bytes(&ingress, policy)?, pipeline_bytes(&egress, policy)?)?;
         if retained > req.private_pipeline_bytes || plus(plus(req.borrowed_profile_bytes, retained)?, SCRATCH_BYTES)? > limits.resident_bytes {
             return Err(E::LimitExceeded);
         }
@@ -336,7 +382,11 @@ impl<'a> PreparedRgb<'a> {
             pipeline_bytes: retained,
             preparation_work,
             limits,
+            trc_policy: policy,
         })
+    }
+    pub fn trc_policy(&self) -> TrcPolicy {
+        self.trc_policy
     }
     pub fn context(&self) -> WorkingContext {
         self.context
@@ -455,6 +505,71 @@ impl<'a> PreparedRgb<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn declared_srgb_is_exact_closed_pair_and_strict_stays_default() {
+        let canonical = photocraft_cms::curve::srgb_trc();
+        let Curve::Parametric { kind, p } = canonical.clone() else { panic!("canonical kind3") };
+        assert_eq!(kind, 3);
+        let encoded = Curve::Parametric { kind, p: p.map(math::s15f16_round) };
+        for curve in [&canonical, &encoded] {
+            assert_eq!(validate_curve(curve), Err(E::UnsupportedConversion));
+            assert_eq!(validate_curve_with_policy(curve, TrcPolicy::DeclaredSrgbPair), Ok(()));
+            let Curve::Parametric { p: supplied, .. } = curve else { panic!("kind3") };
+            for index in 0..7 {
+                let mut changed = *supplied;
+                changed[index] = f64::from_bits(changed[index].to_bits() ^ 1);
+                assert_eq!(validate_curve_with_policy(&Curve::Parametric { kind: 3, p: changed }, TrcPolicy::DeclaredSrgbPair), Err(E::UnsupportedConversion));
+            }
+            assert_eq!(validate_curve_with_policy(&Curve::Parametric { kind: 4, p: *supplied }, TrcPolicy::DeclaredSrgbPair), Err(E::UnsupportedConversion));
+            // Declare actual branch rules, including the gap: no roundtrip
+            // equality claim and no invented join tolerance.
+            let d = supplied[4];
+            let high = (supplied[1] * d + supplied[2]).powf(supplied[0]);
+            let low = supplied[3] * d;
+            assert!(high.is_finite() && low.is_finite());
+            assert_eq!(curve.eval64(d), high);
+            assert_eq!(curve.eval_inverse64(low.min(high) * 0.5), low.min(high) * 0.5 / supplied[3]);
+            for x in [0.0, d * 0.5, d, 0.5, 1.0] {
+                assert!(curve.eval64(x).is_finite());
+                assert!(curve.eval_inverse64(x).is_finite());
+            }
+        }
+        let counterexample = Curve::Parametric { kind: 3, p: [1.0, 1.0, 0.0, 2.0, 0.5, 0.0, 0.0] };
+        assert_eq!(validate_curve_with_policy(&counterexample, TrcPolicy::DeclaredSrgbPair), Err(E::UnsupportedConversion));
+    }
+    #[test]
+    fn declared_srgb_icc_roundtrip_and_same_work_envelope() {
+        let mut profile = photocraft_cms::Builtin::AdobeRgbCompat.profile().clone();
+        let curve = photocraft_cms::curve::srgb_trc();
+        profile.trc = Some([curve.clone(), curve.clone(), curve]);
+        let parsed = Profile::parse(&profile.to_bytes()).unwrap();
+        for curve in parsed.trc.as_ref().unwrap() {
+            assert!(declared_srgb(curve));
+        }
+        for profile in [&profile, &parsed] {
+            assert_eq!(PreparedRgb::prepare(profile, context(), neutral(), Limits::default(), &Interrupt::NONE).err(), Some(E::UnsupportedConversion));
+            let req = preparation_requirements_with_trc_policy(profile, context(), neutral(), TrcPolicy::DeclaredSrgbPair, Limits::default(), &Interrupt::NONE)
+                .unwrap();
+            let low = Limits { work_units: req.work_units - 1, ..Limits::default() };
+            assert_eq!(
+                PreparedRgb::prepare_with_trc_policy(profile, context(), neutral(), TrcPolicy::DeclaredSrgbPair, low, &Interrupt::NONE).err(),
+                Some(E::LimitExceeded)
+            );
+            let admitted = Limits { work_units: req.work_units + PIXEL_WORK, ..Limits::default() };
+            let prepared =
+                PreparedRgb::prepare_with_trc_policy(profile, context(), neutral(), TrcPolicy::DeclaredSrgbPair, admitted, &Interrupt::NONE).unwrap();
+            assert_eq!(prepared.trc_policy(), TrcPolicy::DeclaredSrgbPair);
+            let pixels = [[0.04045, 0.5, 0.75, -0.0]];
+            let input = RgbFloatView { extent: Rect::new(0, 0, 1, 1), pixels: &pixels, context: context() };
+            let output = prepared.render_roi(input, input.extent, admitted, &Interrupt::NONE).unwrap();
+            assert!(output.pixels[0].iter().all(|v| v.is_finite()));
+            assert_eq!(output.pixels[0][3].to_bits(), (-0.0_f32).to_bits());
+            assert_eq!(
+                prepared.render_roi(input, input.extent, Limits { work_units: admitted.work_units - 1, ..admitted }, &Interrupt::NONE).err(),
+                Some(E::LimitExceeded)
+            );
+        }
+    }
     fn context() -> WorkingContext {
         WorkingContext { profile_identity: [7; 32], working_space_identity: [9; 32], encoding: SampleEncoding::NonlinearProfile }
     }

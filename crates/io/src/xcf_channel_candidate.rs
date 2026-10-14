@@ -91,6 +91,11 @@ impl<P> StoredChannelCandidate<'_, P> {
     pub fn mask_properties(&self) -> &[RawProperty] {
         &self.mask.raw_properties
     }
+    /// The original 96x80 mask is not resized to the 32x32 channel. Its record
+    /// offset/opacity are inert source metadata; caller IDs stay independent.
+    pub fn original_mask_descriptor(&self) -> (u32, u32, (i32, i32), u32, u64) {
+        (self.mask.width, self.mask.height, self.mask.offset, self.mask.opacity.to_bits(), self.mask.record_offset)
+    }
 }
 fn bad(message: &str) -> IoError {
     IoError::Unsupported(format!("XCF stored-channel candidate: {message}"))
@@ -300,8 +305,8 @@ pub fn map<'a, P>(
         || state.clipping != Some(0)
         || state.region != Some(1)
         || mask.record_offset == 0
-        || mask.width != 32
-        || mask.height != 32
+        || mask.width != 96
+        || mask.height != 80
         || mask.model != photocraft_xcf::Model::Gray
         || mask.alpha
         || mask.plane.is_none()

@@ -80,3 +80,4 @@ pub mod registry;
 pub mod threshold;
 pub mod threshold_alpha;
 pub mod threshold_alpha_composition;
+pub mod point_vibrance;

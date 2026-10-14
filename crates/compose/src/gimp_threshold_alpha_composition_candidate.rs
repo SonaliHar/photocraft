@@ -64,8 +64,15 @@ pub fn bind_source<'a>(node: &'a FilterNode, binding: SourceBinding<'_>, c: &Int
         _ => return Err(E::UnsupportedConversion),
     };
     let argument = node.arguments.first().ok_or(E::LengthMismatch)?;
-    let FilterValue::Number(ExactNumber::Float64Bits(bits)) = &argument.value else { return Err(E::UnsupportedConversion) };
-    let value = f64::from_bits(*bits);
+    let value = match &argument.value {
+        // The independent XCF tag45 observer records type3/Float32 source
+        // values. Promote exactly to the operation's Double threshold while
+        // retaining the original typed argument. Current Float64 values remain
+        // an explicit caller-owned point-stage input.
+        FilterValue::Number(ExactNumber::Float32Bits(bits)) => f64::from(f32::from_bits(*bits)),
+        FilterValue::Number(ExactNumber::Float64Bits(bits)) => f64::from_bits(*bits),
+        _ => return Err(E::UnsupportedConversion),
+    };
     if argument.name != "value" || !matches!(value, 0.25 | 0.5) {
         return Err(E::UnsupportedConversion);
     }
@@ -128,5 +135,14 @@ mod tests {
         altered.composition.as_mut().unwrap().stored_operator = 0;
         assert!(bind_source(&altered, binding(), &Interrupt::NONE).is_err());
         assert_eq!(node, before);
+        let mut stored = node.clone();
+        stored.arguments[0].value = FilterValue::Number(ExactNumber::Float32Bits(0.5f32.to_bits()));
+        let original_stored = stored.clone();
+        let bound_stored = bind_source(&stored, binding(), &Interrupt::NONE).unwrap();
+        assert!(std::ptr::eq(bound_stored.original_node(), &stored));
+        assert_eq!(bound_stored.evaluate(&[0.25], alpha::Limits::default(), &Interrupt::NONE).unwrap(), vec![0.25]);
+        assert_eq!(stored, original_stored);
+        stored.arguments[0].value = FilterValue::Number(ExactNumber::Float32Bits(f32::NAN.to_bits()));
+        assert!(bind_source(&stored, binding(), &Interrupt::NONE).is_err());
     }
 }
