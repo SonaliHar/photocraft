@@ -70,6 +70,12 @@ pub fn detect(px: &[[f32; 4]], w: usize, h: usize, min_score: f32) -> Option<Vec
     Some(faces)
 }
 
+/// The browser build has no detector (see the module docs): always `None`.
+#[cfg(target_arch = "wasm32")]
+pub fn detect(_px: &[[f32; 4]], _w: usize, _h: usize, _min_score: f32) -> Option<Vec<Face>> {
+    None
+}
+
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
