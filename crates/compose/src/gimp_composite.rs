@@ -1,7 +1,7 @@
 //! Checked straight-alpha GIMP Normal composition in explicit source-profile spaces.
 //! Operators select union/backdrop/layer/intersection coverage; alpha is never gamma encoded.
 use photocraft_cms::xcf_color::Encoding;
-use photocraft_cms::{CmsError, Intent, Profile, Transform};
+use photocraft_cms::{CmsError, Profile, Transform};
 
 #[path = "gimp_composite_controlled.rs"]
 mod controlled;
@@ -122,37 +122,11 @@ impl WorkingSpace {
             photocraft_cms::control::Limits::default(), &|| control.cancelled()).map_err(controlled::cms_error)?;
         // Physical Lab bypasses ICC v4 normalized Lab output clipping. Only
         // matrix/TRC RGB definitions are qualified for these component modes.
-        let physical_lab = if source.channels() == 3
-            && source.matrix.is_some()
-            && source.trc.is_some()
+        let physical = source.channels() == 3
+            && source.matrix.is_some() && source.trc.is_some()
             && source.a2b.iter().all(Option::is_none)
-            && source.b2a.iter().all(Option::is_none)
-        {
-            use photocraft_cms::{
-                pipeline::{Pipeline, Stage},
-                profile::Pcs,
-            };
-            let (mut forward, fp) = controlled::prepare(control, || Ok(source.device_to_pcs(Intent::RelativeColorimetric)?))?;
-            let (reverse, rp) = controlled::prepare(control, || Ok(source.pcs_to_device(Intent::RelativeColorimetric)?))?;
-            if fp != Pcs::Xyz || rp != Pcs::Xyz {
-                None
-            } else {
-                forward.try_reserve_exact(1).map_err(|_| photocraft_raster::RasterInputError::AllocationFailed)?;
-                forward.push(Stage::XyzToLab);
-                let count = reverse.len().checked_add(1).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
-                let mut backward = Vec::new();
-                backward.try_reserve_exact(count).map_err(|_| photocraft_raster::RasterInputError::AllocationFailed)?;
-                backward.push(Stage::LabToXyz);
-                for stage in reverse {
-                    controlled::checkpoint(control)?;
-                    backward.push(stage);
-                }
-                Some((Pipeline::new(3, forward), Pipeline::new(3, backward)))
-            }
-        } else {
-            None
-        };
-        let (forward, reverse) = controlled::transform_pair(&source, &target, control)?;
+            && source.b2a.iter().all(Option::is_none);
+        let (forward, reverse, physical_lab) = controlled::lab_bundle(&source, &target, physical, control)?;
         Ok(Self {
             kind: working,
             forward: Some(forward),

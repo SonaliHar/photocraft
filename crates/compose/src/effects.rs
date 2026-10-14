@@ -3450,11 +3450,23 @@ mod checked_prepare {
         }
         Ok(count)
     }
+    #[cfg(test)]
     pub(super) fn build(
         layer: &Layer,
         values: Vec<f32>,
         rect: Rect,
         light: &GlobalLight,
+        budget: usize,
+        control: &Interrupt<'_>,
+    ) -> Result<FxMaps, RasterInputError> {
+        build_with_texture(layer, values, rect, light, None, budget, control)
+    }
+    pub(super) fn build_with_texture(
+        layer: &Layer,
+        values: Vec<f32>,
+        rect: Rect,
+        light: &GlobalLight,
+        texture: Option<(&TextureCtx<'_>, &PreparedPatterns<'_>)>,
         budget: usize,
         control: &Interrupt<'_>,
     ) -> Result<FxMaps, RasterInputError> {
@@ -3531,6 +3543,30 @@ mod checked_prepare {
         if work > 8_000_000_000 {
             return Err(E::LimitExceeded);
         }
+        let mut textures = 0usize;
+        for effect in &layer.effects.items {
+            poll(control)?;
+            if matches!(effect,Effect::BevelEmboss(b) if b.enabled&&b.texture.is_some()) {
+                textures = textures.checked_add(1).ok_or(E::LimitExceeded)?;
+            }
+        }
+        if textures > 0 {
+            let (tex, patterns) = texture.ok_or(E::UnsupportedConversion)?;
+            if tex.rect != rect || !std::ptr::eq(tex.patterns, patterns.source()) {
+                return Err(E::UnsupportedConversion);
+            }
+            let req = patterns.checked_requirements_with_interrupt(control)?;
+            // Borrowed document model/source is already caller-owned; the checked
+            // prepared cache retains its separate pattern lease, not a second
+            // effect-stage reservation. Check arithmetic without double charging.
+            req.source_bytes.checked_add(req.prepared_bytes).ok_or(E::LimitExceeded)?;
+            work = work
+                .checked_add(req.work_units.checked_mul((textures as u64).checked_add(1).ok_or(E::LimitExceeded)?).ok_or(E::LimitExceeded)?)
+                .ok_or(E::LimitExceeded)?;
+            if work > 8_000_000_000 {
+                return Err(E::LimitExceeded);
+            }
+        }
         let shape = Map { w: rect.width() as usize, h: rect.height() as usize, v: values };
         let mut per = Vec::new();
         per.try_reserve_exact(count).map_err(|_| E::AllocationFailed)?;
@@ -3549,7 +3585,7 @@ mod checked_prepare {
                 continue;
             }
             if let Effect::BevelEmboss(b) = e {
-                let (maps, paint) = super::controlled_bevel::build(&shape, b, light, budget.saturating_sub(retained), control)?;
+                let (maps, paint) = super::controlled_bevel::build_with_texture(&shape, b, light, texture, budget.saturating_sub(retained), control)?;
                 *bevel_paint.get_mut(per.len()).ok_or(E::LengthMismatch)? = paint;
                 per.push(maps);
                 continue;
@@ -3869,8 +3905,8 @@ mod checked_prepare {
     }
 }
 
-/// Checked finite-spread shadows and Glows with Linear contours and finite noise0..=1. Other styles
-/// remain explicitly unsupported in this additive preparation path.
+/// No-texture regression entry for the checked ordinary style-map preparation.
+#[cfg(test)]
 pub(crate) fn try_build_shadow_maps(
     layer: &Layer,
     shape: Vec<f32>,
@@ -3880,6 +3916,18 @@ pub(crate) fn try_build_shadow_maps(
     control: &photocraft_raster::Interrupt<'_>,
 ) -> Result<FxMaps, photocraft_raster::RasterInputError> {
     checked_prepare::build(layer, shape, rect, light, budget, control)
+}
+/// Checked existing style-map preparation with already charged pattern pixels.
+pub(crate) fn try_build_effect_maps_with_texture(
+    layer: &Layer,
+    shape: Vec<f32>,
+    rect: Rect,
+    light: &GlobalLight,
+    texture: (&TextureCtx<'_>, &PreparedPatterns<'_>),
+    budget: usize,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<FxMaps, photocraft_raster::RasterInputError> {
+    checked_prepare::build_with_texture(layer, shape, rect, light, Some(texture), budget, control)
 }
 pub(crate) fn validate_checked_shadows(layer: &Layer) -> Result<usize, photocraft_raster::RasterInputError> {
     checked_prepare::validate(layer)

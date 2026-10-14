@@ -154,6 +154,7 @@ pub mod selection_cmds;
 pub mod slice_cmds;
 pub mod smart_cmds;
 pub mod smartselect_cmds;
+pub mod object_finder_controlled;
 pub mod snap;
 mod source_policy;
 #[cfg(test)]

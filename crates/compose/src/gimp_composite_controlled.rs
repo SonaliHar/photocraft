@@ -1,5 +1,5 @@
-//! Controlled storage for WorkingSpace; CMS preparation calls are fenced,
-//! not claimed to be interruptible inside their existing implementations.
+//! Controlled WorkingSpace storage and selected CMS pipeline preparation.
+//! Builtin profile initialization remains an outer-polled provider boundary.
 use super::{CompositionError, Result};
 use photocraft_cms::{Profile, curve::Curve, xcf_color::Encoding};
 use photocraft_raster::{Interrupt, RasterInputError};
@@ -27,10 +27,12 @@ pub(super) fn cms_error(error: photocraft_cms::control::Error) -> CompositionErr
 /// Both constructors remain alive together. Conservatively retain the first
 /// complete phase envelope while admitting the reverse constructor.
 pub(super) fn transform_pair(source: &Profile, target: &Profile, control: &Interrupt<'_>) -> Result<(photocraft_cms::Transform, photocraft_cms::Transform)> {
+    transform_pair_with_limits(source,target,photocraft_cms::control::Limits::default(),control)
+}
+fn transform_pair_with_limits(source: &Profile,target: &Profile,limits:photocraft_cms::control::Limits,control:&Interrupt<'_>)->Result<(photocraft_cms::Transform,photocraft_cms::Transform)> {
     use photocraft_cms::{Intent, Transform, transform::TransformOptions, control::Limits};
     checkpoint(control)?;
     let cancelled = || control.cancelled();
-    let limits = Limits::default();
     let options = TransformOptions { intent: Intent::RelativeColorimetric, bpc: false, ..Default::default() };
     let forward = Transform::requirements_with_control(source, target, options, limits, &cancelled).map_err(cms_error)?;
     let reverse = Transform::requirements_with_control(target, source, options, limits, &cancelled).map_err(cms_error)?;
@@ -168,4 +170,58 @@ mod tests {
         assert!(matches!(result, Err(CompositionError::Raster(RasterInputError::Cancelled))));
         assert_eq!(values, vec![0.25; 8192]);
     }
+}
+
+/// Physical-Lab pipelines and both normalized ICC transforms coexist. Reserve
+/// their combined envelopes before any side copy; no numerical recipe changes.
+pub(super) fn lab_bundle(source:&Profile,target:&Profile,physical:bool,control:&Interrupt<'_>)->Result<(photocraft_cms::Transform,photocraft_cms::Transform,Option<(photocraft_cms::pipeline::Pipeline,photocraft_cms::pipeline::Pipeline)>)> {
+ use photocraft_cms::{Intent,control::Limits,pipeline::{Pipeline,Stage},profile::Pcs};
+ let limits=Limits::default();let cancelled=||control.cancelled();
+ if !physical {let (a,b)=transform_pair(source,target,control)?;return Ok((a,b,None));}
+ let a=source.side_requirements_with_control(true,Intent::RelativeColorimetric,limits,&cancelled).map_err(cms_error)?;
+ let b=source.side_requirements_with_control(false,Intent::RelativeColorimetric,limits,&cancelled).map_err(cms_error)?;
+ // Forward append and reverse prepend may temporarily retain both old/new
+ // stage inventories. Each side reserves a bounded extra pair of inventories.
+ let extra=8usize.checked_mul(std::mem::size_of::<Stage>()).ok_or(RasterInputError::LimitExceeded)?;
+ let bytes=a.peak_resident_bytes.checked_add(b.peak_resident_bytes).and_then(|n|n.checked_add(extra)).ok_or(RasterInputError::LimitExceeded)?;
+ let work=a.work_units.checked_add(b.work_units).and_then(|n|n.checked_mul(3)).and_then(|n|n.checked_add(128)).ok_or(RasterInputError::LimitExceeded)?;
+ let pair_limits=Limits{resident_bytes:limits.resident_bytes.checked_sub(bytes).ok_or(RasterInputError::LimitExceeded)?,work_units:limits.work_units.checked_sub(work).ok_or(RasterInputError::LimitExceeded)?};
+ // The pair constructor's borrowed admission completes before side allocation.
+ let options=photocraft_cms::transform::TransformOptions{intent:Intent::RelativeColorimetric,bpc:false,..Default::default()};
+ let f=photocraft_cms::Transform::requirements_with_control(source,target,options,pair_limits,&cancelled).map_err(cms_error)?;
+ let r=photocraft_cms::Transform::requirements_with_control(target,source,options,pair_limits,&cancelled).map_err(cms_error)?;
+ if f.peak_resident_bytes.checked_add(r.peak_resident_bytes).is_none_or(|n|n>pair_limits.resident_bytes)||f.work_units.checked_add(r.work_units).and_then(|n|n.checked_mul(3)).is_none_or(|n|n>pair_limits.work_units){return Err(RasterInputError::LimitExceeded.into());}
+ let side_limits=Limits{resident_bytes:bytes,work_units:work};
+ let (mut forward,fp)=source.device_to_pcs_with_control(Intent::RelativeColorimetric,side_limits,&cancelled).map_err(cms_error)?;
+ let (reverse,rp)=source.pcs_to_device_with_control(Intent::RelativeColorimetric,side_limits,&cancelled).map_err(cms_error)?;
+ let physical=if fp!=Pcs::Xyz||rp!=Pcs::Xyz {None}else{
+  forward.try_reserve_exact(1).map_err(|_|RasterInputError::AllocationFailed)?;forward.push(Stage::XyzToLab);
+  let count=reverse.len().checked_add(1).ok_or(RasterInputError::LimitExceeded)?;
+  let mut backward=Vec::new();backward.try_reserve_exact(count).map_err(|_|RasterInputError::AllocationFailed)?;
+  let actual=forward.capacity().checked_add(backward.capacity()).and_then(|n|n.checked_mul(std::mem::size_of::<Stage>())).ok_or(RasterInputError::LimitExceeded)?;
+  if actual>bytes{return Err(RasterInputError::LimitExceeded.into());}
+  backward.push(Stage::LabToXyz);for stage in reverse{checkpoint(control)?;backward.push(stage);}
+  Some((Pipeline::new(3,forward),Pipeline::new(3,backward)))
+ };
+ let (forward,reverse)=transform_pair_with_limits(source,target,pair_limits,control)?;checkpoint(control)?;Ok((forward,reverse,physical))
+}
+
+#[cfg(test)]
+mod physical_side_tests {
+ use super::*;
+ #[test]
+ fn physical_reverse_keeps_signed_unclipped_f64_words() {
+  use photocraft_cms::{Builtin,Intent,pipeline::{Pipeline,Stage}};
+  let source=Builtin::Srgb.profile();let target=Builtin::LabD50.profile();
+  let (_,_,physical)=lab_bundle(source,target,true,&Interrupt::NONE).unwrap();let (_,actual)=physical.unwrap();
+  let (reverse,_)=source.pcs_to_device(Intent::RelativeColorimetric).unwrap();let mut stages=vec![Stage::LabToXyz];stages.extend(reverse);let old=Pipeline::new(3,stages);
+  for input in [[53.0,200.0,-300.0],[53.0,30.0,-20.0],[f64::from_bits(53.0f64.to_bits()+1),30.0,-20.0]] {
+   let mut a=[0.0;3];let mut b=[0.0;3];actual.try_eval_f64(&input,&mut a).unwrap();old.try_eval_f64(&input,&mut b).unwrap();assert_eq!(a.map(f64::to_bits),b.map(f64::to_bits));
+  }
+ }
+ #[test]
+ fn physical_bundle_cancellation_is_not_a_normalized_lab_fallback() {
+  let stop=||true;
+  assert!(matches!(lab_bundle(photocraft_cms::Builtin::Srgb.profile(),photocraft_cms::Builtin::LabD50.profile(),true,&Interrupt::cancel_only(&stop)),Err(CompositionError::Raster(RasterInputError::Cancelled))));
+ }
 }

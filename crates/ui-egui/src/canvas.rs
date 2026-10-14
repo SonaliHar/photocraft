@@ -226,6 +226,7 @@ pub struct Drag {
     object_origin: Option<crate::selection_object_origin::Origin>,
     /// A native preview refusal must not become an implicit one-shot fallback.
     native_replacement_failed: bool,
+    live_begin_failed: bool,
 }
 
 impl Drag {
@@ -246,6 +247,7 @@ impl Drag {
             selection_origin: None,
             object_origin: None,
             native_replacement_failed: false,
+            live_begin_failed: false,
         }
     }
 
@@ -710,7 +712,193 @@ fn eyedropper_ring(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXf
     Some(egui::CursorIcon::None)
 }
 
+
+/// Construct only the unqueued tail, preserving exact f64 coordinates/time and
+/// the same fallback pose used by the existing live feed and final command.
+fn pending_stroke_points(app: &PhotocraftApp, d: &Drag, from: usize) -> Result<Vec<photocraft_engine::paint::StrokePoint>, String> {
+    if d.points.len() > 100000 || from > d.points.len() {
+        return Err("This stroke has too many points.".into());
+    }
+    let mut out = Vec::new();
+    let n = d.points.len() - from;
+    out.try_reserve_exact(n).map_err(|_| "Stroke point allocation failed.".to_string())?;
+    if out.capacity() > n.saturating_add(16) {
+        return Err("Stroke point allocation failed.".into());
+    }
+    let t0 = app.stylus.point_ms(0);
+    for i in from..d.points.len() {
+        let p = d.points.get(i).ok_or_else(|| "Invalid stroke sample.".to_string())?;
+        let pose = app.stylus.stroke.get(i).or(app.stylus.stroke.last()).copied().unwrap_or_default();
+        let mut point = photocraft_engine::paint::StrokePoint::new(p[0], p[1], p[2] as f32);
+        (point.tilt_x, point.tilt_y, point.rotation) = (pose[0], pose[1], pose[2]);
+        point.time = app.stylus.point_ms(i) - t0;
+        if [point.x, point.y, f64::from(point.pressure), f64::from(point.tilt_x), f64::from(point.tilt_y), f64::from(point.rotation), point.time]
+            .iter()
+            .any(|v| !v.is_finite())
+        {
+            return Err("Invalid stroke sample.".into());
+        }
+        out.push(point);
+    }
+    Ok(out)
+}
+fn live_begin_error(app: &mut PhotocraftApp, error: String) {
+    app.live_begin_worker.cancel();
+    app.live_stroke = None;
+    app.session.clear_live_stroke();
+    if let Some(d) = app.drag.as_mut() {
+        d.live_begin_failed = true;
+    }
+    app.ui.status = error;
+    app.ui.status_error = true;
+}
+fn pending_settings(app: &PhotocraftApp) -> Option<serde_json::Value> {
+    let tool = app.live_begin_worker.tool()?;
+    let original = app.live_begin_worker.params()?;
+    let mut d = Drag::new(tool, [0., 0.], Vec::new(), egui::Modifiers::NONE, original.get("erase").and_then(serde_json::Value::as_bool).unwrap_or(false));
+    d.clear = original.get("mode").and_then(serde_json::Value::as_str) == Some("clear");
+    Some(stroke_params(app, &d, &[]))
+}
+fn pending_current(app: &PhotocraftApp) -> Result<(), String> {
+    let settings = pending_settings(app).ok_or_else(|| "The stroke target changed. Start the stroke again.".to_string())?;
+    if app.live_begin_worker.command()!=app.live_begin_worker.tool().map(|tool|stroke_command(app,tool)){return Err("The stroke target changed. Start the stroke again.".into());}
+    app.live_begin_worker.check(app.active_tool(), &settings)?;
+    app.live_begin_worker.validate(&app.session)
+}
+fn append_pending_live(app: &mut PhotocraftApp) -> Result<(), String> {
+    pending_current(app)?;
+    let d = app.drag.as_ref().ok_or_else(|| "The stroke target changed. Start the stroke again.".to_string())?;
+    let from = if d.points.len() == 1 { 0 } else { app.live_begin_worker.count() };
+    let points = pending_stroke_points(app, d, from)?;
+    app.live_begin_worker.append(from, &points)
+}
+fn add_live_damage(live: &mut LiveStroke, area: DRect) -> Result<(), String> {
+    if live.damage.len() >= 100000 {
+        return Err("This stroke has too many preview steps.".into());
+    }
+    live.damage.try_reserve(1).map_err(|_| "Stroke preview allocation failed.".to_string())?;
+    live.damage.push(area);
+    Ok(())
+}
+fn feed_pending_live(app: &mut PhotocraftApp) {
+    if !app.live_begin_worker.ready() {
+        return;
+    }
+    let result = (|| {
+        pending_current(app)?;
+        let Some(l) = app.live_stroke.as_mut() else { return Err("Live stroke preview is unavailable.".to_string()) };
+        let tail = app.live_begin_worker.tail(l.fed)?;
+        if !tail.is_empty() {
+            let r = l.stroke.push(&app.session, tail).map_err(|e| e.to_string())?;
+            add_live_damage(l, r)?;
+            l.fed = app.live_begin_worker.count();
+        }
+        Ok(())
+    })();
+    if let Err(e) = result {
+        live_begin_error(app, e);
+    }
+}
+fn finish_pending_live(app: &mut PhotocraftApp) {
+    if !app.live_begin_worker.released() || !app.live_begin_worker.ready() {
+        return;
+    }
+    feed_pending_live(app);
+    if !app.live_begin_worker.active() {
+        return;
+    }
+    let result = (|| {
+        pending_current(app)?;
+        let live = app.live_stroke.take().ok_or_else(|| "Live stroke preview is unavailable.".to_string())?;
+        let seed = live.stroke.seed().ok_or_else(|| "Live stroke seed is unavailable.".to_string())?;
+        let commit = app.live_begin_worker.commit(seed)?;
+        let LiveStroke { stroke, doc, key, damage, .. } = live;
+        if !commit.replay {
+            if let EngineStroke::Brush(stroke) = stroke {
+                app.session.offer_live_stroke(*stroke).map_err(|e| e.to_string())?;
+            }
+        }
+        let response = app.run(commit.command, commit.params);
+        app.session.clear_live_stroke();
+        let response = response?;
+        let revision = app.session.documents().iter().find(|st| st.doc.id == doc).map(|st| st.revision);
+        if response.get("fromLive").and_then(serde_json::Value::as_bool) == Some(true) {
+            if let Some(revision) = revision {
+                app.committed_stroke = Some(CommittedStroke { doc, revision, key, damage });
+            }
+        } else {
+            let shown = CommittedStroke { doc, revision: 0, key, damage };
+            shown_as_document(app, doc, |k| shown.since(k).is_some());
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        live_begin_error(app, error);
+    }
+}
+fn poll_pending_live(app: &mut PhotocraftApp) {
+    if !app.live_begin_worker.active() {
+        return;
+    }
+    if let Err(error) = pending_current(app) {
+        live_begin_error(app, error);
+        return;
+    }
+    if app.drag.is_none() && !app.live_begin_worker.released() {
+        live_begin_error(app, "Live stroke cancelled.".into());
+        return;
+    }
+    match app.live_begin_worker.poll(&app.session) {
+        Some(Err(error)) => {
+            live_begin_error(app, error);
+            return;
+        }
+        Some(Ok(stroke)) => {
+            static KEYS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let n = KEYS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xff_ffff;
+            let damage = stroke.bounds();
+            let Some(st) = app.session.active() else {
+                live_begin_error(app, "The stroke target changed. Start the stroke again.".into());
+                return;
+            };
+            let (doc, revision) = (st.doc.id, st.revision);
+            let mut preview = LiveStroke {
+                stroke: EngineStroke::Brush(Box::new(stroke)),
+                doc,
+                revision,
+                key: (1 << 45) | (n << 20),
+                damage: Vec::new(),
+                fed: app.live_begin_worker.initial(),
+            };
+            if let Err(error) = add_live_damage(&mut preview, damage) {
+                live_begin_error(app, error);
+                return;
+            }
+            app.live_stroke = Some(preview);
+        }
+        None => (),
+    }
+    feed_pending_live(app);
+    finish_pending_live(app);
+}
+/// Frame-level polling also covers hidden canvases and released gestures. Escape
+/// cancels the owned preparation token and never falls back onto a new target.
+pub(crate) fn poll_live_begin(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if !app.live_begin_worker.active() {
+        return;
+    }
+    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        live_begin_error(app, "Live stroke cancelled.".into());
+        return;
+    }
+    poll_pending_live(app);
+    if app.live_begin_worker.active() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(10));
+    }
+}
+
 fn begin_live_stroke(app: &mut PhotocraftApp) -> Option<LiveStroke> {
+    app.live_begin_worker.cancel();
     static STROKES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let st = app.session.active()?;
     let d = app.drag.as_ref()?;
@@ -739,8 +927,18 @@ fn begin_live_stroke(app: &mut PhotocraftApp) -> Option<LiveStroke> {
         p["target"] = paint_target(app);
         EngineStroke::Retouch(photocraft_engine::retouch_cmds::LiveRetouch::begin(&app.session, cmd, &p).ok()?)
     } else {
-        let p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
-        EngineStroke::Brush(Box::new(photocraft_engine::brush_cmds::LiveStroke::begin_with(&app.session, stroke_command(app, d.tool), &p).ok()?))
+        let tool=d.tool;
+        let command=stroke_command(app,tool);
+        let points=pending_stroke_points(app,d,0);
+        let settings=stroke_params(app,d,&[]);
+        let result=(||{
+            let points=points?;
+            let mut params=settings.clone();
+            params["points"]=crate::live_begin_worker::points_value(&points)?;
+            app.live_begin_worker.start(&app.session,command,params,settings,tool,points)
+        })();
+        if let Err(error)=result{live_begin_error(app,error);}
+        return None;
     };
     let n = STROKES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xff_ffff;
     let damage = vec![stroke.bounds()];
@@ -753,6 +951,11 @@ fn feed_live_stroke(app: &mut PhotocraftApp) {
     // A batched move replays several samples in one frame and calls this once at the end, so the
     // per-sample calls from `tool_event` are skipped (see `canvas_view`).
     if app.defer_live_stroke {
+        return;
+    }
+    if app.live_begin_worker.active(){
+        if let Err(error)=append_pending_live(app){live_begin_error(app,error);}
+        feed_pending_live(app);
         return;
     }
     let (Some(l), Some(d)) = (app.live_stroke.as_mut(), app.drag.as_ref()) else { return };
@@ -3097,6 +3300,7 @@ fn hdr_preview(app: &PhotocraftApp, doc: &photocraft_doc::Document) -> Option<[f
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
     cancel_stale_object_gesture(app);
     let ctx = ui.ctx().clone();
+    poll_live_begin(app,&ctx);
     // The camera as the app holds it before this frame's input. The canvas works on its own copy
     // (`view`) and writes it back at the end; a tool that moves the camera itself meanwhile (the
     // Crop tool's default mode pans and turns the view with the image, `crop_mode`) must not be
@@ -5149,6 +5353,7 @@ fn cancel_stale_object_gesture(app:&mut PhotocraftApp)->bool {
 }
 
 pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
+    if matches!(ev,ToolEvent::Down{..}) && app.live_begin_worker.active(){app.live_begin_worker.cancel();app.live_stroke=None;app.session.clear_live_stroke();}
     if cancel_stale_object_gesture(app) {return;}
     if crate::symmetry_ui::pointer(app, ev, crate::workspace_ui::sticky_mods(app, mods)) {
         return;
@@ -5843,6 +6048,16 @@ fn snap_aliased_tip(app: &PhotocraftApp, tool: Tool, x: f64, y: f64) -> (f64, f6
 }
 
 pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
+    if matches!(d.tool,Tool::Brush|Tool::Pencil|Tool::Eraser) && (app.live_begin_worker.active()||d.live_begin_failed){
+        if !d.live_begin_failed{
+            let result=(||{let from=if d.points.len()==1{0}else{app.live_begin_worker.count()};let points=pending_stroke_points(app,&d,from)?;app.live_begin_worker.append(from,&points)?;app.live_begin_worker.release()})();
+            if let Err(error)=result{live_begin_error(app,error);return;}
+            if let Some(point)=d.points.last().copied() && let Some(st)=app.session.active(){app.last_stroke_end=Some((st.doc.id,point));}
+            poll_pending_live(app);
+        }
+        return;
+    }
+
     if matches!(d.tool,Tool::ObjectSelection|Tool::QuickSelection) && let Err(error)=crate::selection_object_origin::validate(app,d.object_origin.as_ref()) {
         app.ui.status=error;app.ui.status_error=true;crate::object_finder::clear(app);return;
     }

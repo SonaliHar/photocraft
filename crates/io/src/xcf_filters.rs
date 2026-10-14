@@ -1503,3 +1503,25 @@ pub(crate) fn qualified_stack<P>(
     }
     Ok(FilterStack { owner, nodes, revision: 0 })
 }
+
+/// Explicit opt-in structural graph argument bridge. The normal stock/source
+/// admission path does not call this; unknown source graph types remain inert.
+#[allow(clippy::too_many_arguments)]
+pub fn graph_argument_candidate<'a>(
+    argument:&'a photocraft_xcf::Argument,
+    schemas:&photocraft_algo::gimp::typed_schema::PreparedSchemaIndex<'_,'_>,
+    limits:crate::xcf_graph_candidate::Limits,
+    control:&photocraft_raster::Interrupt<'_>,
+    fresh:&mut dyn FnMut()->photocraft_doc::item_identity::GraphNodeId,
+    resolve:&mut crate::xcf_graphs::GraphSchemaResolver<'_>,
+    ports:&mut crate::xcf_graph_candidate::PortValidator<'_>,
+    auxiliary:&mut crate::xcf_graph_candidate::AuxiliaryValidator<'_>,
+    resources:&mut crate::xcf_graph_candidate::ResourceValidator<'_>,
+    charge:&mut dyn FnMut(usize)->Result<(),IoError>,
+)->Result<crate::xcf_graph_candidate::GraphCandidate<'a>,IoError>{
+    control.check().map_err(|_|IoError::Cancelled)?;
+    if argument.configuration.is_some(){return Err(IoError::Unsupported("XCF graph argument also contains unbound configuration".into()));}
+    let photocraft_xcf::ArgumentValue::String(original)=&argument.value else{return Err(IoError::Unsupported("XCF graph argument requires original serialized string".into()));};
+    let graph=argument.graph.as_ref().ok_or_else(||IoError::Unsupported("XCF graph argument has no retained grammar".into()))?;
+    crate::xcf_graph_candidate::map_with_schemas(graph,original,schemas,limits,control,fresh,resolve,ports,auxiliary,resources,charge)
+}

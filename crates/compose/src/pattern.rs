@@ -13,6 +13,36 @@ use photocraft_doc::{ColorMode, Pattern, PixelFormat, Rect, SampleType};
 pub(crate) const PREPARED_PATTERN_BYTES: usize = 64 << 20;
 const MAX_PREPARED_PATTERNS: usize = 64;
 type PreparedSlot = Arc<OnceLock<Option<Arc<Tile>>>>;
+/// No new owners are implied by the borrowed source census.
+pub(crate) struct CheckedPatternRequirements {
+    pub prepared_bytes: usize,
+    pub source_bytes: usize,
+    pub work_units: u64,
+}
+fn checked_display_name<'a>(name: &'a str, c: &photocraft_raster::Interrupt<'_>) -> Result<&'a str, photocraft_raster::RasterInputError> {
+    use photocraft_raster::RasterInputError as E;
+    let mut end = name.len();
+    while end > 0 && name.as_bytes().get(end - 1) == Some(&0) {
+        if end.is_multiple_of(1024) {
+            c.check().map_err(|_| E::Cancelled)?;
+        }
+        end -= 1;
+    }
+    let n = name.get(..end).ok_or(E::LengthMismatch)?;
+    if let Some(rest) = n.strip_prefix("$$$/") {
+        for (i, b) in rest.bytes().enumerate() {
+            if i.is_multiple_of(1024) {
+                c.check().map_err(|_| E::Cancelled)?;
+            }
+            if b == b'=' {
+                return rest.get(i + 1..).ok_or(E::LengthMismatch);
+            }
+        }
+    }
+    c.check().map_err(|_| E::Cancelled)?;
+    Ok(n)
+}
+
 
 struct PreparedState {
     slots: HashMap<usize, PreparedSlot>,
@@ -88,6 +118,131 @@ impl<'a> PreparedPatterns<'a> {
 
     pub(crate) fn source(&self) -> &'a [Pattern] {
         self.patterns
+    }
+
+    /// Actual checked cache owners and borrowed source census. These are separate:
+    /// the caller already charges its document and the pattern preparation lease.
+    pub(crate) fn checked_requirements_with_interrupt(
+        &self,
+        c: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<CheckedPatternRequirements, photocraft_raster::RasterInputError> {
+        use photocraft_raster::RasterInputError as E;
+        c.check().map_err(|_| E::Cancelled)?;
+        if !self.checked || self.patterns.len() > MAX_PREPARED_PATTERNS {
+            return Err(E::UnsupportedConversion);
+        }
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.slots.len() != self.patterns.len() {
+            return Err(E::UnsupportedConversion);
+        }
+        let mut prepared_bytes = state.slots.capacity().checked_mul(1024).ok_or(E::LimitExceeded)?;
+        let mut source_bytes = self.patterns.len().checked_mul(std::mem::size_of::<Pattern>()).ok_or(E::LimitExceeded)?;
+        let mut work_units = 0u64;
+        for p in self.patterns {
+            c.check().map_err(|_| E::Cancelled)?;
+            let names = p.id.len().checked_add(p.name.len()).ok_or(E::LimitExceeded)?;
+            let work = (names as u64)
+                .checked_mul(4)
+                .and_then(|n| (p.surface.tile_count() as u64).checked_mul(32).and_then(|v| n.checked_add(v)))
+                .ok_or(E::LimitExceeded)?;
+            work_units = work_units.checked_add(work).ok_or(E::LimitExceeded)?;
+            if work_units > 8_000_000_000 {
+                return Err(E::LimitExceeded);
+            }
+            for chunk in p.id.as_bytes().chunks(4096).chain(p.name.as_bytes().chunks(4096)) {
+                let _ = chunk;
+                c.check().map_err(|_| E::Cancelled)?;
+            }
+            source_bytes = source_bytes
+                .checked_add(p.id.capacity())
+                .and_then(|n| n.checked_add(p.name.capacity()))
+                .and_then(|n| n.checked_add(p.surface.default_bytes().len()))
+                .and_then(|n| p.surface.tile_count().checked_mul(256).and_then(|v| n.checked_add(v)))
+                .ok_or(E::LimitExceeded)?;
+            for (_, tile) in p.surface.tiles() {
+                c.check().map_err(|_| E::Cancelled)?;
+                source_bytes = source_bytes.checked_add(tile.bytes().len()).ok_or(E::LimitExceeded)?;
+            }
+            let slot = state.slots.get(&(std::ptr::from_ref(p) as usize)).ok_or(E::UnsupportedConversion)?;
+            let tile = slot.get().ok_or(E::UnsupportedConversion)?;
+            if let Some(tile) = tile {
+                let len = tile.w.checked_mul(tile.h).ok_or(E::LimitExceeded)?;
+                if len != tile.px.len() || tile.w != p.width as usize || tile.h != p.height as usize || len == 0 {
+                    return Err(E::LengthMismatch);
+                }
+                prepared_bytes = prepared_bytes.checked_add(tile.px.capacity().checked_mul(16).ok_or(E::LimitExceeded)?).ok_or(E::LimitExceeded)?;
+            }
+        }
+        if prepared_bytes > self.budget {
+            return Err(E::LimitExceeded);
+        }
+        c.check().map_err(|_| E::Cancelled)?;
+        Ok(CheckedPatternRequirements { prepared_bytes, source_bytes, work_units })
+    }
+    /// No lazy conversion: only an eagerly checked cache can serve texture reads.
+    pub(crate) fn get_prepared_with_interrupt(
+        &self,
+        id: &str,
+        name: &str,
+        c: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<Option<Arc<Tile>>, photocraft_raster::RasterInputError> {
+        use photocraft_raster::RasterInputError as E;
+        c.check().map_err(|_| E::Cancelled)?;
+        if !self.checked || self.patterns.len() > MAX_PREPARED_PATTERNS {
+            return Err(E::UnsupportedConversion);
+        }
+        let same = |a: &str, b: &str, insensitive: bool| -> Result<bool, E> {
+            if a.len() != b.len() {
+                return Ok(false);
+            }
+            for (a, b) in a.as_bytes().chunks(4096).zip(b.as_bytes().chunks(4096)) {
+                c.check().map_err(|_| E::Cancelled)?;
+                if if insensitive { !a.eq_ignore_ascii_case(b) } else { a != b } {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        };
+        let mut found = None;
+        if !id.is_empty() {
+            for p in self.patterns {
+                c.check().map_err(|_| E::Cancelled)?;
+                if same(&p.id, id, false)? {
+                    found = Some(p);
+                    break;
+                }
+            }
+        }
+        if found.is_none() && !name.is_empty() {
+            for p in self.patterns {
+                c.check().map_err(|_| E::Cancelled)?;
+                if same(&p.name, name, false)? {
+                    found = Some(p);
+                    break;
+                }
+            }
+        }
+        if found.is_none() && !name.is_empty() {
+            let name = checked_display_name(name, c)?;
+            for p in self.patterns {
+                c.check().map_err(|_| E::Cancelled)?;
+                if same(checked_display_name(&p.name, c)?, name, true)? {
+                    found = Some(p);
+                    break;
+                }
+            }
+        }
+        let Some(p) = found else {
+            return Ok(None);
+        };
+        if !p.is_paintable() {
+            return Ok(None);
+        }
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let slot = state.slots.get(&(std::ptr::from_ref(p) as usize)).ok_or(E::UnsupportedConversion)?;
+        let tile = slot.get().ok_or(E::UnsupportedConversion)?.clone();
+        c.check().map_err(|_| E::Cancelled)?;
+        Ok(tile)
     }
 
     pub(crate) fn get(&self, id: &str, name: &str) -> Option<Arc<Tile>> {

@@ -7,6 +7,7 @@ use photocraft_doc::Document;
 use photocraft_paint::{BrushSettings,render::StrokeRenderer,stroke_controlled::{StrokeError,StrokeLimits}};
 use photocraft_color::PixelFormat;
 use photocraft_raster::Interrupt;
+#[cfg(test)]
 use std::mem::size_of;
 fn bad(message:&str)->EngineError{EngineError::Other(format!("live stroke preparation: {message}"))}
 fn poll(control:&Interrupt<'_>)->Result<()>{control.check().map_err(|_|EngineError::Cancelled)}
@@ -17,6 +18,7 @@ fn io(error:photocraft_io::IoError)->EngineError{match error{photocraft_io::IoEr
 /// The caller supplies the actual resolved target format and brush. This grants
 /// no source/profile authority and never changes brush colors or layer content.
 /// Preset symmetry currently has at most3 mirrors; stored-path symmetry has1.
+#[cfg(test)]
 pub(super) fn prepare_renderers(
     doc:&Document,brush:&BrushSettings,format:PixelFormat,zoom:f32,mirror_count:usize,control:&Interrupt<'_>,
 )->Result<(StrokeRenderer,Vec<StrokeRenderer>,Vec<bool>)>{

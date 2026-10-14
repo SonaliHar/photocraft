@@ -24,8 +24,9 @@ pub struct TransformPair<'a> {
     pub working: WorkingContext,
     pub forward: &'a Transform,
     pub inverse: &'a Transform,
-    /// Must include private Transform acceleration/Post allocations as well as
-    /// visible pipelines. L0 exposes pipeline only; this total is caller-bound.
+    /// Compatibility entry points retain this caller-bound total. The owned
+    /// factory derives it from the complete controlled Transform capacity census,
+    /// including acceleration/Post storage beyond the visible pipeline.
     pub retained_bytes: u64,
     pub work_per_pixel: u64,
 }
@@ -516,3 +517,7 @@ fn render_color_execution(
     poll(control)?;
     Ok(RenderedCandidate { surface, roi })
 }
+
+#[path = "gimp_configured_color_candidate/owned.rs"]
+mod owned;
+pub use owned::{OwnedConfiguredColorCandidate, prepare_owned_color_candidate};

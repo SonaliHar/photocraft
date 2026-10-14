@@ -30,7 +30,7 @@ fn exact(v: &Value) -> Result<u64> {
         .ok_or_else(|| bad(ID, "canonical captured identity required"))?;
     s.parse().map_err(|_| bad(ID, "identity range"))
 }
-fn find_surface<'a>(doc: &'a Document, id: Option<LayerId>, ctl: &Interrupt<'_>) -> Result<Option<&'a Surface>> {
+pub(crate) fn find_surface<'a>(doc: &'a Document, id: Option<LayerId>, ctl: &Interrupt<'_>) -> Result<Option<&'a Surface>> {
     let Some(id) = id else { return Ok(None) };
     let mut stack: [Option<std::slice::Iter<'a, Layer>>; MAX_GROUP_DEPTH + 1] = std::array::from_fn(|_| None);
     *stack.first_mut().ok_or_else(|| bad("select.object", "hierarchy"))? = Some(doc.layers.iter());
@@ -68,7 +68,7 @@ fn copy_flags(values: &[bool], cmd: &str) -> Result<Vec<bool>> {
     result.extend_from_slice(values);
     Ok(result)
 }
-fn copy_view(view: &ChannelView, cmd: &str) -> Result<ChannelView> {
+pub(crate) fn copy_view(view: &ChannelView, cmd: &str) -> Result<ChannelView> {
     Ok(ChannelView {
         target: view.target,
         color_hidden: copy_flags(&view.color_hidden, cmd)?,
@@ -156,10 +156,10 @@ fn request(s: &Session, p: &Value) -> Result<Request> {
 pub(crate) fn dispatch_preflight(s: &Session, p: &Value, _background: bool) -> Result<()> {
     request(s, p).map(|_| ())
 }
-struct BoundedSampler<'a, 'c> {
-    doc: &'a Document,
-    direct: Option<&'a Surface>,
-    control: &'a Interrupt<'c>,
+pub(crate) struct BoundedSampler<'a, 'c> {
+    pub(crate) doc: &'a Document,
+    pub(crate) direct: Option<&'a Surface>,
+    pub(crate) control: &'a Interrupt<'c>,
 }
 impl Sampler for BoundedSampler<'_, '_> {
     fn rgba(&self, r: Rect) -> std::result::Result<Vec<[f32; 4]>, E> {

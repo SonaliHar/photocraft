@@ -46,6 +46,7 @@ pub mod graph_bindings;
 pub mod typed_schema;
 pub mod wide_point;
 pub mod levels;
+pub mod hue_chroma;
 pub mod neighborhood;
 pub mod neighborhood_gaussian;
 pub mod neighborhood_morphology;

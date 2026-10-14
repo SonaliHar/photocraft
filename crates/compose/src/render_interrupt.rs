@@ -336,7 +336,8 @@ pub(super) fn prepare_checked_effects(doc: &Document, cx: &Ctx, control: &Interr
         }
         let stage = cx.preparation.as_ref().map(|b| b.stage(64 << 20, control)).transpose()?;
         let ceiling = stage.as_ref().map_or(64 << 20, |s| s.bytes());
-        let maps = effects::try_build_shadow_maps(layer, shape, region, &cx.light, ceiling, control)?;
+        let texture = texture_ctx(layer, region, cx);
+        let maps = effects::try_build_effect_maps_with_texture(layer, shape, region, &cx.light, (&texture, cx.patterns), ceiling, control)?;
         if let (Some(bridge), Some(stage)) = (cx.preparation.as_ref(), stage) {
             bridge.retained(stage, maps.checked_payload_bytes()?.checked_add(1024).ok_or(E::LimitExceeded)?)?;
         }

@@ -96,6 +96,7 @@ mod selection_modify_origin;
 mod selection_color_origin;
 mod selection_refine_origin;
 mod selection_object_origin;
+mod live_begin_worker;
 mod native_gray_adjustment_origin;
 mod filter_preview_ui;
 #[cfg(not(target_arch = "wasm32"))]
@@ -572,6 +573,7 @@ pub struct PhotocraftApp {
     pub(crate) tool_override: Option<state::Tool>,
     /// Brush/Eraser stroke being drawn, rendered by the engine (see `canvas::LiveStroke`).
     live_stroke: Option<canvas::LiveStroke>,
+    pub(crate) live_begin_worker: live_begin_worker::Worker,
     /// A live stroke just committed with its own pixels: the canvas caches that showed it
     /// refresh only what it drew after the step they showed (`canvas::damage_since`).
     committed_stroke: Option<canvas::CommittedStroke>,
@@ -843,6 +845,7 @@ impl PhotocraftApp {
             move_blocked: false,
             tool_override: None,
             live_stroke: None,
+            live_begin_worker: live_begin_worker::Worker::default(),
             committed_stroke: None,
             trail: None,
             remove_pending: Vec::new(),
@@ -1911,6 +1914,7 @@ impl eframe::App for PhotocraftApp {
         // shortcuts see Esc).
         if !screen_picker::tick(self, ctx) {
             jobs_ui::tick(self, ctx);
+            canvas::poll_live_begin(self, ctx);
             #[cfg(not(target_arch = "wasm32"))]
             filter_preview_worker::discard_closed(self);
             shortcuts::handle(self, ctx);

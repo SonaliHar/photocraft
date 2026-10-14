@@ -605,18 +605,31 @@ so a large canvas need not preallocate every later speculative graph. Object/Qui
 gestures carry private target origins; Subject and point caches publish after the
 final document fence. Ordinary Brush/Pencil and native Multiply/Screen use the
 owned, tokened recipe consumer while preview APIs retain their current behavior.
+Object Finder also uses private tokened preparation and fenced derived-cache
+publication, with distinct failure/miss handling and stationary cache refresh.
 Precise Glow, Raster Stroke, all Bevel techniques and custom contours retain
 original math with shared-field admission under the existing 64 MiB stage.
 Controlled conversion/cubic carry prepared CMS transforms; WorkingSpace controls
-paired Lab constructors, with physical-Lab side-pipeline preparation still an
-explicit boundary. Custom CMYK factories/default prewarming preserve existing
+paired Lab constructors and physical-Lab side-pipeline preparation. Custom CMYK factories/default prewarming preserve existing
 scope/fallback semantics under lower limits; builtin initialization remains bounded
 separately. These are implementation paths, with runtime checks still deferred.
+Live Brush/Pencil/Eraser startup also captures its recipe before worker preparation.
+The bounded mailbox retains the seed, settings and ordered points through release
+before readiness; target and tool fences precede installation and commit. Native
+preparation uses a worker thread; wasm preparation runs inline. Raster Bevel texture
+preparation retains the existing eager pattern cache and sample order with separate
+pattern and effect reserves. These additions await runtime checks.
+Explicit candidate APIs now include LCh Float Hue-Chroma, owned paired-CMS
+Curves/Levels preparation and schema-bound serialized graphs. Their exact input
+contexts are caller supplied; broader normal-import admission remains incomplete.
 Modern raster composition Properties offers captured Edit/Apply/Reset with
 explicit supported spaces/operators and read-only retained Auto resolution.
 Source Details includes saved channels,
 masks and paths; XCF notices provide explicit paged resource inspection. Filter
 insertion templates use the same stack pages, including choices after node 64.
+The existing qualified isolated-group Gaussian filter exposes activation through
+the Properties checkbox; other group edits retain their restrictions. Vector
+Properties offers exact stroke widths 1–9 through the existing checked command.
 
 XCF Brown layer tags map to the current Brown label. Such documents require native
 reader version 8; existing label identities and other reader floors are preserved.

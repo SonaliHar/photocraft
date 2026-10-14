@@ -10,6 +10,8 @@ use photocraft_raster::{Interrupt,Surface};
 use std::mem::size_of;
 #[path="ordinary_one_shot_controlled.rs"]
 mod ordinary_one_shot_controlled;
+#[path="live_begin_recipe_controlled.rs"]
+pub(super) mod live_begin_recipe_controlled;
 fn poll(c:&Interrupt<'_>)->Result<()>{c.check().map_err(|_|EngineError::Cancelled)}
 fn fail(m:impl Into<String>)->EngineError{bad("paint.stroke",m)}
 fn add(a:u64,b:u64)->Result<u64>{a.checked_add(b).ok_or_else(||fail("wide stroke accounting overflow"))}

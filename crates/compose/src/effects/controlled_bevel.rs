@@ -1,4 +1,4 @@
-//! Exact ordinary raster bevel preparation; texture remains excluded.
+//! Exact ordinary raster bevel preparation with caller-charged checked pattern textures.
 use super::{BEVEL_H_EPS, Bevel, BevelGeom, BevelPaint, BevelTechnique, GlobalLight, INSIDE_EPS, Map, bevel_geom, box_geom};
 use photocraft_raster::{Interrupt, RasterInputError as E};
 fn poll(c: &Interrupt<'_>) -> Result<(), E> {
@@ -10,8 +10,16 @@ pub(super) fn validate(b: &Bevel) -> Result<(), E> {
     if let Some(contour) = &b.contour {
         super::controlled_contour::requirements(&contour.contour, None, true)?;
     }
-    if b.texture.is_some()
-        || !b.size.is_finite()
+    if let Some(t) = &b.texture {
+        if !t.scale.is_finite() || !t.depth.is_finite() || !t.phase.0.is_finite() || !t.phase.1.is_finite() {
+            return Err(E::UnsupportedConversion);
+        }
+        let names = t.id.len().checked_add(t.name.len()).ok_or(E::LimitExceeded)?;
+        if (names as u64).checked_mul(4).is_none_or(|n| n > 8_000_000_000) {
+            return Err(E::LimitExceeded);
+        }
+    }
+    if !b.size.is_finite()
         || !b.depth.is_finite()
         || !b.soften.is_finite()
         || !b.angle.is_finite()
@@ -91,6 +99,17 @@ pub(super) fn work_units(w: usize, h: usize, b: &Bevel) -> Result<u64, E> {
         })
         .and_then(|n| (w as u64).checked_add(h as u64).and_then(|v| v.checked_mul(radius)).and_then(|v| v.checked_mul(16)).and_then(|v| n.checked_add(v)))
         .and_then(|n| n.checked_add(contour_work))
+        .and_then(|n| {
+            if let Some(t) = &b.texture {
+                (t.id.len() as u64)
+                    .checked_add(t.name.len() as u64)
+                    .and_then(|v| v.checked_mul(4))
+                    .and_then(|v| (w as u64).checked_mul(h as u64).and_then(|p| p.checked_mul(128)).and_then(|p| p.checked_add(v)))
+                    .and_then(|v| n.checked_add(v))
+            } else {
+                Some(n)
+            }
+        })
         .ok_or(E::LimitExceeded)?;
     if work > 8_000_000_000 {
         return Err(E::LimitExceeded);
@@ -177,10 +196,30 @@ fn mix(a: Map, b: Map, shape: &Map, c: &Interrupt<'_>) -> Result<Map, E> {
     }
     Ok(Map { w: a.w, h: a.h, v: values })
 }
+#[cfg(test)]
 pub(super) fn build(shape: &Map, b: &Bevel, light: &GlobalLight, budget: usize, c: &Interrupt<'_>) -> Result<(Vec<Map>, BevelPaint), E> {
+    build_with_texture(shape, b, light, None, budget, c)
+}
+pub(super) fn build_with_texture(
+    shape: &Map,
+    b: &Bevel,
+    light: &GlobalLight,
+    texture: Option<(&super::TextureCtx<'_>, &super::PreparedPatterns<'_>)>,
+    budget: usize,
+    c: &Interrupt<'_>,
+) -> Result<(Vec<Map>, BevelPaint), E> {
     poll(c)?;
     validate(b)?;
     validate_light(b, light)?;
+    let texture_tile = if let Some(t) = &b.texture {
+        let (tex, patterns) = texture.ok_or(E::UnsupportedConversion)?;
+        if !tex.anchor.0.is_finite() || !tex.anchor.1.is_finite() {
+            return Err(E::UnsupportedConversion);
+        }
+        Some((tex, patterns.get_prepared_with_interrupt(&t.id, &t.name, c)?))
+    } else {
+        None
+    };
     let n = shape.w.checked_mul(shape.h).ok_or(E::LimitExceeded)?;
     if n != shape.v.len() {
         return Err(E::LengthMismatch);
@@ -205,6 +244,40 @@ pub(super) fn build(shape: &Map, b: &Bevel, light: &GlobalLight, budget: usize, 
     if let Some(contour) = &b.contour {
         let lut = super::controlled_contour::prepare(&contour.contour, None, true, budget, c)?;
         super::controlled_contour::apply(&mut height, lut.as_deref(), c)?;
+    }
+    if let Some((tex, Some(tile))) = texture_tile {
+        let t = b.texture.as_ref().ok_or(E::UnsupportedConversion)?;
+        let unit = if b.depth.abs() > 1e-6 { (g.depth / b.depth).abs().max(1e-3) } else { g.width.max(1.0) };
+        let k = t.depth / unit;
+        if !unit.is_finite() || !k.is_finite() {
+            return Err(E::UnsupportedConversion);
+        }
+        let place = super::Placement::anchored(tex.anchor, t.link, t.phase, t.scale, 0.0);
+        for y in 0..height.h {
+            poll(c)?;
+            for x in 0..height.w {
+                if x.is_multiple_of(256) {
+                    poll(c)?;
+                }
+                let wx = i64::from(tex.rect.x0).checked_add(i64::try_from(x).map_err(|_| E::LimitExceeded)?).ok_or(E::LimitExceeded)?;
+                let wy = i64::from(tex.rect.y0).checked_add(i64::try_from(y).map_err(|_| E::LimitExceeded)?).ok_or(E::LimitExceeded)?;
+                let (u, v) = place.map(wx as f64 + 0.5, wy as f64 + 0.5);
+                if !u.is_finite() || !v.is_finite() {
+                    return Err(E::InvalidSample);
+                }
+                let p = tile.sample(u, v);
+                if p.iter().any(|v| !v.is_finite()) {
+                    return Err(E::InvalidSample);
+                }
+                let l = (0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]) * p[3];
+                let index = y.checked_mul(height.w).and_then(|n| n.checked_add(x)).ok_or(E::LimitExceeded)?;
+                let value = height.v.get_mut(index).ok_or(E::LengthMismatch)?;
+                *value += k * if t.invert { 1.0 - l } else { l };
+                if !value.is_finite() {
+                    return Err(E::InvalidSample);
+                }
+            }
+        }
     }
     if b.soften >= 1.0 {
         let softened = super::checked_prepare::try_tent(&height, budget, b.soften, c)?;
@@ -706,6 +779,55 @@ mod tests {
                                 for (a, b) in old.iter().zip(&actual) {
                                     assert_eq!(a.v.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), b.v.iter().map(|v| v.to_bits()).collect::<Vec<_>>());
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn checked_texture_keeps_pattern_placement_height_and_lighting_words() {
+        let rect = photocraft_geom::Rect::new(-7, 11, 24, 34);
+        let mut shape = Map::new(31, 23, 0.0);
+        for (i, v) in shape.v.iter_mut().enumerate() {
+            *v = ((i * 73) % 101) as f32 / 100.0;
+        }
+        for mode in [photocraft_doc::ColorMode::Rgb, photocraft_doc::ColorMode::Grayscale, photocraft_doc::ColorMode::Cmyk] {
+            let mut source = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA32F);
+            source.fill_rect(photocraft_geom::Rect::new(0, 0, 4, 4), &[0.2, 0.7, 0.4, 0.75]);
+            source.fill_rect(photocraft_geom::Rect::new(0, 2, 4, 4), &[0.9, 0.1, 0.6, 0.5]);
+            let patterns = [photocraft_doc::Pattern::new("$$$/Patterns/test=Stripes", source, 4, 4)];
+            let legacy = super::super::PreparedPatterns::new(&patterns, super::super::PREPARED_PATTERN_BYTES).in_mode(mode);
+            let checked =
+                super::super::PreparedPatterns::try_new_in_mode_with_interrupt(&patterns, super::super::PREPARED_PATTERN_BYTES, mode, &Interrupt::NONE)
+                    .unwrap();
+            checked.checked_requirements_with_interrupt(&Interrupt::NONE).unwrap();
+            for technique in [BevelTechnique::Smooth, BevelTechnique::ChiselHard, BevelTechnique::ChiselSoft] {
+                for link in [false, true] {
+                    for invert in [false, true] {
+                        for scale in [0.0, 0.5, 1.25] {
+                            let mut b = bevel(BevelStyle::PillowEmboss);
+                            b.technique = technique;
+                            b.soften = 1.25;
+                            b.contour = Some(BevelContour::default());
+                            b.texture = Some(photocraft_doc::BevelTexture {
+                                name: "stripes".into(),
+                                id: String::new(),
+                                scale,
+                                depth: 0.7,
+                                invert,
+                                link,
+                                phase: (1.25, -3.5),
+                            });
+                            let tex = super::super::TextureCtx { rect, patterns: &patterns, anchor: (-2.75, 17.5) };
+                            let light = GlobalLight::default();
+                            let (expected, paint) = super::super::bevel_maps(&shape, &b, &light, &tex, &legacy);
+                            let (actual, actual_paint) = build_with_texture(&shape, &b, &light, Some((&tex, &checked)), 64 << 20, &Interrupt::NONE).unwrap();
+                            assert_eq!(paint, actual_paint);
+                            for (a, b) in actual.iter().zip(&expected) {
+                                assert_eq!(a.v.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), b.v.iter().map(|v| v.to_bits()).collect::<Vec<_>>());
                             }
                         }
                     }

@@ -33,6 +33,7 @@ mod semantic_selection;
 mod text_name;
 mod text_view_cache;
 mod vector_style;
+mod vector_width;
 mod underline;
 
 pub(crate) fn mask_storage_params(app:&PhotocraftApp,layer:LayerId,on_set:bool,command:&str)->Result<serde_json::Value,String> {
@@ -65,6 +66,7 @@ pub(crate) fn editing_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, lay
     semantic_selection::properties(app, ui, layer);
     editing::properties(app, ui, layer);
     vector_style::properties(app, ui, layer);
+    vector_width::properties(app, ui, layer);
 }
 
 pub(crate) fn has_item_set_properties(document: &photocraft_doc::Document, layer: LayerId) -> bool {
@@ -335,7 +337,10 @@ pub(crate) fn filter_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, laye
             let caption: String = node.source_display_name.as_deref().filter(|name| !name.is_empty()).unwrap_or(&node.operation.name).chars().take(128).collect();
             ui.horizontal_wrapped(|ui| {
                 let mut enabled = node.enabled;
-                if ui.add_enabled(editable, egui::Checkbox::new(&mut enabled, caption)).changed() {
+                let activation_editable = editable || (unlocked
+                    && document.layer(layer).is_some_and(|owner| matches!(owner.content, photocraft_doc::LayerContent::Group(_)))
+                    && photocraft_engine::xcf_filter_cmds::activation_edit_candidate(&document, node));
+                if ui.add_enabled(activation_editable, egui::Checkbox::new(&mut enabled, caption)).changed() {
                     run_checked(app, &document, revision, "xcf.filter.enable", json!({"filterId":node.id.0.to_string(),"enabled":enabled}));
                 }
             });

@@ -203,6 +203,7 @@ impl ObjectFinderCache {
 }
 
 /// Fixed-count owned cache witness. No masks/documents are deep-cloned.
+#[derive(Clone)]
 pub(crate) struct ObjectFinderSnapshot {
     document: Option<std::sync::Arc<Document>>,
     document_id: Option<photocraft_doc::DocId>,
@@ -227,6 +228,20 @@ impl ObjectFinderCache {
     }
 }
 impl ObjectFinderSnapshot {
+    /// Exact bounded cache-owner fence; no pixels, masks or hashes are scanned.
+    pub(crate) fn is_current_cache(&self, cache: &ObjectFinderCache) -> bool {
+        if self.document_id != cache.doc_id || self.target != cache.target
+            || cache.regions.len() > OBJECT_FINDER_ENTRIES
+            || self.regions.iter().flatten().count() != cache.regions.len()
+        { return false; }
+        let owner = match (&self.document, cache.doc.upgrade()) {
+            (None, None) => true,
+            (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, &b),
+            _ => false,
+        };
+        owner && self.regions.iter().flatten().zip(&cache.regions)
+            .all(|(a,b)| std::sync::Arc::ptr_eq(a,b))
+    }
     pub(crate) fn retained_with_interrupt(&self, control: &photocraft_raster::Interrupt<'_>) -> Result<u64> {
         let mut bytes = 0u64;
         for region in self.regions.iter().flatten() {

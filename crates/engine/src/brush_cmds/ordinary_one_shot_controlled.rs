@@ -29,7 +29,7 @@ fn finish(input:Input,output:Surface,damage:Rect,lock:bool,from_live:bool,c:&Int
 // Reserve sequential provider peaks against already retained document/tips.
 // Work is never refunded: default preparation is partitioned before the cold
 // custom factory, whose requirements reserve its entire supplied envelope.
-fn cmyk_scope(doc:&photocraft_doc::Document,needs_default:bool,available:u64,c:&Interrupt<'_>)->Result<(Option<Arc<photocraft_color::convert::CmykSpace>>,u64)> {
+pub(super) fn cmyk_scope(doc:&photocraft_doc::Document,needs_default:bool,available:u64,c:&Interrupt<'_>)->Result<(Option<Arc<photocraft_color::convert::CmykSpace>>,u64)> {
     use photocraft_color::convert::{CmykSpace,default_cmyk_requirements_with_control,warm_default_cmyk_with_control};
     use photocraft_cms::control::{Limits,Error};
     let cancelled=||c.cancelled();

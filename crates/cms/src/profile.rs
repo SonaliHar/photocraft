@@ -1001,3 +1001,58 @@ impl Profile {
 impl Profile {
  pub(crate) fn selected_lut(&self,input:bool,intent:Intent)->Option<&Lut>{Self::lut_for(if input{&self.a2b}else{&self.b2a},intent)}
 }
+
+/// Borrowed profile plus prospective selected side storage; no pipeline is copied.
+#[derive(Clone, Copy, Debug)]
+pub struct SidePipelineRequirements {
+ pub retained_profile_bytes: usize,
+ pub staged_bytes: usize,
+ pub peak_resident_bytes: usize,
+ pub work_units: u64,
+}
+impl Profile {
+ pub fn side_requirements_with_control(&self, input: bool, intent: Intent, limits: crate::control::Limits, cancelled: &dyn Fn() -> bool) -> crate::control::Result<SidePipelineRequirements> {
+  use crate::control::{Budget, Error};
+  let budget=Budget::new(limits,cancelled)?;
+  let retained=self.controlled_retained_bytes(&budget)?;
+  let (staged,side_work,_)=self.selected_side_cost(input,intent,&budget)?;
+  let work=side_work.checked_add(u64::try_from(staged).map_err(|_|Error::Limit("profile side copy work"))?).ok_or(Error::Limit("profile side copy work"))?;
+  let peak=retained.checked_add(staged).ok_or(Error::Limit("profile side storage"))?;
+  budget.admit(peak,work)?;
+  Ok(SidePipelineRequirements{retained_profile_bytes:retained,staged_bytes:staged,peak_resident_bytes:peak,work_units:work})
+ }
+ fn side_with_control(&self,input:bool,intent:Intent,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<(Vec<Stage>,Pcs)> {
+  let required=self.side_requirements_with_control(input,intent,limits,cancelled)?;
+  let mut budget=crate::control::Budget::new(limits,cancelled)?;
+  budget.retained(required.retained_profile_bytes)?;
+  let output=self.selected_side_controlled(input,intent,&mut budget)?;
+  budget.poll()?;Ok(output)
+ }
+ /// Exact device_to_pcs recipe with cooperative copying, without optimizer changes.
+ pub fn device_to_pcs_with_control(&self,intent:Intent,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<(Vec<Stage>,Pcs)> {self.side_with_control(true,intent,limits,cancelled)}
+ /// Exact pcs_to_device recipe with cooperative copying, without optimizer changes.
+ pub fn pcs_to_device_with_control(&self,intent:Intent,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<(Vec<Stage>,Pcs)> {self.side_with_control(false,intent,limits,cancelled)}
+}
+
+#[cfg(test)]
+mod side_pipeline_control_tests {
+ use super::*;
+ #[test]
+ fn controlled_sides_preserve_relative_stage_order_and_native_words() {
+  for builtin in [crate::Builtin::Srgb,crate::Builtin::GrayGamma22,crate::Builtin::LabD50] {
+   let p=builtin.profile();
+   for input in [true,false] {
+    let old=if input{p.device_to_pcs(Intent::RelativeColorimetric)}else{p.pcs_to_device(Intent::RelativeColorimetric)}.unwrap();
+    let controlled=if input{p.device_to_pcs_with_control(Intent::RelativeColorimetric,crate::control::Limits::default(),&||false)}else{p.pcs_to_device_with_control(Intent::RelativeColorimetric,crate::control::Limits::default(),&||false)}.unwrap();
+    assert_eq!(old,controlled);
+   }
+  }
+ }
+ #[test]
+ fn side_admission_and_cancellation_do_not_copy_or_change_profile() {
+  let p=crate::Builtin::Srgb.profile();let before=p.to_bytes();
+  assert!(matches!(p.device_to_pcs_with_control(Intent::RelativeColorimetric,crate::control::Limits{resident_bytes:1,work_units:1},&||false),Err(crate::control::Error::Limit(_))));
+  assert!(matches!(p.pcs_to_device_with_control(Intent::RelativeColorimetric,crate::control::Limits::default(),&||true),Err(crate::control::Error::Cancelled)));
+  assert_eq!(p.to_bytes().as_slice(),before.as_slice());
+ }
+}

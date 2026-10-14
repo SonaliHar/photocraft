@@ -9,6 +9,7 @@ use photocraft_raster::Interrupt;
 use serde_json::{Value, json};
 
 mod color_balance;
+mod group_activation;
 
 const INSPECT: &str = "xcf.filter.inspect";
 const SET: &str = "xcf.filter.set";
@@ -114,6 +115,32 @@ pub fn scalar_edit_candidate(node: &FilterNode) -> bool {
                 | "gimp:levels"
                 | "gimp:color-balance"
         ) && node.operation.stored_version == "0:0")
+}
+/// Bounded metadata hint for activation controls only. Group parameter editing
+/// remains separate; the registered operation performs actual renderer admission.
+pub fn activation_edit_candidate(document:&Document,node:&FilterNode)->bool {
+    let Some(state)=document.xcf_state.as_ref()else{return false};
+    if state.filter_stacks.len()>10_000||state.items.len()>10_000{return false;}
+    let mut total=0usize;let mut found=None;
+    for stack in &state.filter_stacks {
+        let Some(next)=total.checked_add(stack.nodes.len()).filter(|count|*count<=10_000)else{return false};total=next;
+        for current in &stack.nodes {
+            if current.id==node.id {
+                if found.is_some()||!std::ptr::eq(current,node){return false;}
+                found=Some(stack);
+            }
+        }
+    }
+    let Some(stack)=found else{return false};
+    let ItemRef::Layer(owner)=stack.owner else{return false};
+    let Ok(locks)=crate::xcf_item_locks::effective_layer_locks(document,owner)else{return false};
+    if locks.native.all||locks.native.pixels||locks.imported.content||locks.imported.visibility{return false;}
+    let Some(layer)=document.layer(owner)else{return false};
+    match &layer.content {
+        LayerContent::Raster(_)=>scalar_edit_candidate(node),
+        LayerContent::Group(_)=>stack.nodes.len()==1&&node.operation.name=="gegl:gaussian-blur"&&node.operation.stored_version=="0:0"&&node.operation.schema_epoch=="xcf22-isolated-small-auto-v1",
+        _=>false,
+    }
 }
 fn reference(item: ItemRef) -> Value {
     let kind = match item {
@@ -664,6 +691,11 @@ pub fn set_with_interrupt(s: &mut Session, params: &Value, control: &Interrupt<'
     let state = document.xcf_state.as_ref().ok_or_else(|| bad(SET, "missing imported filter state"))?;
     let stack = state.filter_stacks.iter().find(|stack| stack.nodes.iter().any(|node| node.id == id)).ok_or_else(|| bad(SET, "unknown filterId"))?;
     let node = stack.nodes.iter().find(|node| node.id == id).ok_or_else(|| bad(SET, "unknown filterId"))?;
+    if let ItemRef::Layer(owner) = stack.owner {
+        if document.layer(owner).is_some_and(|layer| matches!(layer.content, LayerContent::Group(_))) {
+            return group_activation::set(s, params, &snapshot, revision, id, control);
+        }
+    }
     let patches = patches(params, &node.operation.name)?;
     if enabled.is_none() && opacity.is_none() && patches.is_empty() {
         return Err(bad(SET, "an activation or parameter patch is required"));
@@ -1016,7 +1048,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Enable GIMP Stock Filter",
             menu: &[],
             shortcut: None,
-            params: "{filterId:decimal string,enabled:bool}; exact qualified activation",
+            params: "{filterId:decimal string,enabled:bool}; exact qualified activation; isolated-small-auto Gaussian group singleton activation only, no group parameter/stack edits",
             enabled,
             run: enable,
             journal: true,

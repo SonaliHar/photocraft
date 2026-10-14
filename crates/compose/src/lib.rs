@@ -39,6 +39,7 @@ pub mod gimp_composite;
 mod gimp_curves;
 pub mod gimp_configured_candidate;
 pub mod gimp_configured_color_candidate;
+pub mod gimp_hue_chroma_candidate;
 pub mod gimp_configured_color_graph_candidate;
 pub mod gimp_link_cached_affine_candidate;
 pub mod gimp_configured_render_candidate;

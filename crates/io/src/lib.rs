@@ -88,6 +88,8 @@ mod xcf_filters;
 #[path = "../tests/common/xcf.rs"]
 pub(crate) mod xcf_fixture;
 pub mod xcf_graphs;
+pub mod xcf_graph_candidate;
+pub use xcf_filters::graph_argument_candidate;
 pub mod xcf_import;
 mod xcf_link_sources;
 pub mod xcf_modified_sources;

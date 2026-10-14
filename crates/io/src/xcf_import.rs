@@ -35,6 +35,50 @@ pub use staged_source::import_staged_plain_source_with_budget;
 mod source;
 pub use source::import_plain_source_with_budget;
 
+#[cfg(all(test, feature = "corpus"))]
+mod linked_custom_name_mapping_tests {
+    use super::*;
+    #[test]
+    fn linked_name_flag_maps_without_changing_pixels_or_monitoring() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../photocraft-corpus/xcf/full/transform-interpolation");
+        let original = std::fs::read(root.join("link-none.xcf")).unwrap();
+        let decoded = photocraft_xcf::decode(&original, &Default::default()).unwrap();
+        let position = decoded.layers.iter().position(|layer| layer.link.is_some()).unwrap();
+        let pixels = decoded.layers[position].plane.as_ref().unwrap().bytes.clone();
+        for flags in 0..4u32 {
+            // Synthetic metadata controls in the already admitted linked domain;
+            // these are not independent render or new source-family evidence.
+            let mut file = decoded.clone();
+            file.layers[position].link.as_mut().unwrap().flags = flags;
+            for property in &mut file.layers[position].raw_properties {
+                if property.tag == 48 {
+                    property.payload[..4].copy_from_slice(&flags.to_be_bytes());
+                }
+            }
+            let imported = map("linked name mapping", file, &Interrupt::NONE, 128 << 20).unwrap().0;
+            let doc = imported.document;
+            let state = doc.xcf_state.as_ref().unwrap();
+            let source = state.source_items.iter().find(|source| matches!(source.source,
+                photocraft_doc::xcf_items::EditableSource::Linked { .. })).unwrap();
+            let item = state.items.iter().find(|item| item.item == source.owner).unwrap();
+            assert_eq!(item.custom_name, flags & 1 != 0);
+            assert_eq!(item.name, decoded.layers[position].name);
+            assert_eq!(source.cache.as_ref().unwrap().bytes.as_slice(), pixels.as_slice());
+            let photocraft_doc::xcf_items::EditableSource::Linked { configuration, .. } = &source.source else {
+                panic!("linked source")
+            };
+            assert!(configuration.iter().any(|argument| argument.name == "flags" &&
+                matches!(argument.value, photocraft_doc::xcf_filters::FilterValue::Number(
+                    photocraft_doc::xcf_filters::ExactNumber::Unsigned { width: 32, value })
+                    if value == u64::from(flags))));
+            let native = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
+            assert_eq!(photocraft_format::load_from_bytes(&native).unwrap(), doc);
+        }
+        assert_eq!(std::fs::read(root.join("link-none.xcf")).unwrap(), original);
+    }
+}
+
 /// Common import contract, including cancellation and a conservative shared resident budget.
 pub fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<ImportResult, IoError> {
     import_with_limits(name, bytes, ctl, Limits::default())
@@ -2099,7 +2143,7 @@ fn map_accounted<P: MappingPlane, S>(
         state.items.push(photocraft_doc::xcf_state::ItemState {
             item: owner,
             name: l.name.clone(),
-            custom_name: false,
+            custom_name: d.link.as_ref().is_some_and(|link| link.custom_name()),
             visible: l.visible,
             locks: photocraft_doc::xcf_state::ItemLocks {
                 content: d.lock_content,

@@ -468,6 +468,7 @@ pub(crate) fn doc_cmyk_space(s: &Session) -> Option<std::sync::Arc<photocraft_co
 mod stroke_controlled;
 mod live_begin_controlled;
 mod wide_one_shot_controlled;
+pub use wide_one_shot_controlled::live_begin_recipe_controlled::{CapturedLiveBegin,PreparedLiveBegin,LiveBeginFence};
 mod native_wide_color_controlled;
 mod brush_recipe_controlled;
 mod advanced_native_admission;
@@ -784,61 +785,7 @@ impl LiveStroke {
     /// Parameter/model copies remain bounded legacy preparation boundaries;
     /// renderer construction and incremental rendering carry this token.
     pub fn begin_with_interrupt(s: &Session, cmd: &str, p: &Value, control: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
-        control.check().map_err(|_| EngineError::Cancelled)?;
-        stroke_controlled::dispatch_preflight(s, cmd, p, false)?;
-        has_paintable(s).map_err(EngineError::Other)?;
-        let pts = parse_points(p, cmd)?;
-        let pencil = match cmd {
-            "paint.stroke" => false,
-            "paint.pencil" => true,
-            other => return Err(bad(other, "live strokes are `paint.stroke` or `paint.pencil`")),
-        };
-        let brush = if pencil { pencil_brush(s, p)? } else { with_blend_mode(resolve_brush(s, p, cmd)?, p) };
-        let (seed, fg) = (brush.seed, brush.color);
-        let (layer, mut brush, zoom) = stroke_target(s, p, brush)?;
-        let st = s.active().ok_or(EngineError::NoDocument)?;
-        let base = (st.doc.id, st.revision);
-        st.doc.validate_resident()?;
-        let mut doc = (*st.doc).clone();
-        let sel = doc.selection.clone();
-        let format = crate::channel_cmds::target_surface(&mut doc, layer, p)?.0.format();
-        let lock = crate::channel_cmds::target_surface(&mut doc, layer, p)?.1;
-        let wide = wide_stroke_context(&doc, layer, p, &brush, format, lock, s.color_restrict.is_some(), pencil && flag(p, "autoErase", false))?;
-        let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, layer, p)?;
-        erase_locked(&mut brush, lock, s.tools.background);
-        if pencil && flag(p, "autoErase", false) {
-            apply_auto_erase(&mut brush, surf, pts.first(), fg, s.tools.background);
-        }
-        let render_format = surf.format();
-        let symmetry = s.active().and_then(|st| st.symmetry.clone());
-        let (renderer, mirrors, mirror_distinct) = live_begin_controlled::prepare_renderers(
-            &doc, &brush, render_format, zoom, symmetry.as_ref().map_or(0, |s| s.mirror_count()), control,
-        )?;
-        control.check().map_err(|_| EngineError::Cancelled)?;
-        let pre = crate::channel_cmds::target_surface(&mut doc, layer, p)?.0.clone();
-        let mut live = Self {
-            doc: crate::DocumentSnapshot::from_resident(std::sync::Arc::new(doc))?,
-            seed,
-            cmd: cmd.into(),
-            renderer,
-            symmetry,
-            mirrors,
-            mirror_distinct,
-            union_live: None,
-            pre,
-            sel,
-            lock,
-            layer,
-            params: p.clone(),
-            tail: Rect::EMPTY,
-            wide,
-            cmyk: doc_cmyk_space(s),
-            points: Vec::new(),
-            point_ledger: Default::default(),
-            base,
-        };
-        live.push_with_interrupt(&pts, control)?;
-        Ok(live)
+        CapturedLiveBegin::capture_with_interrupt(s,cmd,p,control)?.prepare(control)?.install_with_interrupt(s,control)
     }
 
     /// The stroke as its commit would take it over (see [`LiveCommit`]).
@@ -886,16 +833,19 @@ impl LiveStroke {
     }
 
     fn push_staged(&mut self, pts: &[StrokePoint], control: &photocraft_raster::Interrupt<'_>) -> Result<Rect> {
+        self.push_staged_with_limits(pts,photocraft_paint::stroke_controlled::StrokeLimits::default(),control)
+    }
+
+    fn push_staged_with_limits(&mut self, pts: &[StrokePoint], limits:photocraft_paint::stroke_controlled::StrokeLimits, control: &photocraft_raster::Interrupt<'_>) -> Result<Rect> {
         check_coords(pts, &self.cmd)?;
         let prepared = stroke_controlled::live_batch_controlled::PreparedLiveBatch::prepare(
-            self, pts, &self.point_ledger, photocraft_paint::stroke_controlled::StrokeLimits::default(), control,
+            self, pts, &self.point_ledger, limits, control,
         )?;
         let used_work = self.point_ledger.work_units();
         let (reflected, ledger) = prepared.install(self, used_work, control)?;
         self.point_ledger = ledger;
         let cmyk = self.cmyk.clone();
         photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
-            let limits = photocraft_paint::stroke_controlled::StrokeLimits::default();
             self.renderer.push_with_interrupt(pts, limits, control)
                 .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;
             for (mirror, reflected) in self.mirrors.iter_mut().zip(&reflected) {
@@ -904,7 +854,6 @@ impl LiveStroke {
             }
             let (surf, _) = crate::channel_cmds::target_surface(self.doc.try_resident_mut()?, self.layer, &self.params)?;
             if let Some(wide) = &self.wide {
-                let limits = photocraft_paint::stroke_controlled::StrokeLimits::default();
                 let mut preview = photocraft_paint::render::clone_incremental_state_with_interrupt(&self.renderer, &self.mirrors, None, limits, control)
                     .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;
                 preview.renderer.finish_with_interrupt(limits, control)
