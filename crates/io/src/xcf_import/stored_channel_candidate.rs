@@ -2,6 +2,9 @@
 //! Never called by normal import, never an appearance/source evaluator qualifier.
 //! This selective Document contains the selected channel/filter mask only; the
 //! complete decoded original scene remains retained in the proof owner.
+#[path = "stored_channel_selected.rs"]
+mod selected;
+pub use selected::{SelectedCurrentChannel, SelectedLimits, SelectedRequirements, select_current};
 use super::*;
 use crate::xcf_channel_candidate::{self as mapper, Ids, Namespace};
 use photocraft_doc::{

@@ -319,7 +319,7 @@ impl Walk<'_, '_, '_> {
         self.counter.add(8, Arc::as_ptr(&mask.surface) as usize, bytes)
     }
 }
-pub(super) fn measure<'c, 'i>(doc: &Document, counter: &mut Payloads<'c, 'i>, control: &Interrupt<'i>) -> Result<(), IoError> {
+pub(super) fn measure<'c, 'i>(doc: &Document, counter: &mut Payloads<'c, 'i>, control: &Interrupt<'i>) -> Result<usize, IoError> {
     let mut walk = Walk { counter, control, visits: 0, arguments: 0, filters: 0 };
     walk.visit(0)?;
     string(walk.counter, &doc.name)?;
@@ -328,7 +328,7 @@ pub(super) fn measure<'c, 'i>(doc: &Document, counter: &mut Payloads<'c, 'i>, co
     if let Some(state) = &doc.xcf_state {
         walk.state(state)?;
     }
-    Ok(())
+    Ok(walk.visits)
 }
 
 #[cfg(test)]

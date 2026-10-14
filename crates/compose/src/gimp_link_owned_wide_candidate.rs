@@ -17,6 +17,15 @@ use photocraft_geom::{TILE_SIZE, TileCoord};
 use photocraft_raster::{Interrupt, MAX_CHECKED_RASTER_BYTES, RasterInputError, Surface, checked_region_byte_len};
 pub use precision::{FinalQuantization, Limits};
 const DECODE_LIMIT: u64 = 16 << 20;
+/// Strict existing APIs remain exact-present. The opt-in never makes an absent
+/// PNG/resource profile implicit, and never changes Document profile markers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OriginalProfilePolicy {
+    #[default]
+    RequireExactPresent,
+    ExplicitProvenImportedImplicit,
+}
+
 /// Explicit caller census; never a self-proving whole-document/RSS estimate.
 /// `retained_bytes` includes payload/model/map/raster owners. `validation_scratch`
 /// and `work_units` also cover two full canonical state validation passes. Obtain
@@ -46,6 +55,8 @@ pub struct Requirements {
     pub candidate_reserve_bytes: u64,
     pub peak_resident_bytes: u64,
     pub work_units: u64,
+    pub profile_verification_scratch_bytes: u64,
+    pub profile_verification_work_units: u64,
 }
 fn refused() -> CompositionError {
     CompositionError::Unsupported("unqualified owned PNG16 linked candidate")
@@ -77,6 +88,88 @@ fn equal(a: &[u8], b: &[u8], c: &Interrupt<'_>) -> Result<bool> {
 }
 fn validation(e: photocraft_doc::XcfValidationError) -> CompositionError {
     if e.code == "cancelled" { RasterInputError::Cancelled.into() } else { CompositionError::Invalid("invalid owned linked source state") }
+}
+fn cms_error(e: photocraft_cms::control::Error) -> CompositionError {
+    match e {
+        photocraft_cms::control::Error::Cancelled => RasterInputError::Cancelled.into(),
+        photocraft_cms::control::Error::Allocation => RasterInputError::AllocationFailed.into(),
+        photocraft_cms::control::Error::Limit(_) => limit(),
+        photocraft_cms::control::Error::Cms(e) => e.into(),
+    }
+}
+#[derive(Clone, Copy)]
+struct VerificationPlan {
+    scratch: u64,
+    work: u64,
+    implicit_work: u64,
+    clone_work: u64,
+    encode_work: u64,
+}
+fn verification_plan(
+    doc: &Document,
+    profile: BoundProfile<'_>,
+    policy: OriginalProfilePolicy,
+    limits: photocraft_cms::control::Limits,
+    c: &Interrupt<'_>,
+) -> Result<VerificationPlan> {
+    poll(c)?;
+    if policy == OriginalProfilePolicy::RequireExactPresent {
+        return Ok(VerificationPlan { scratch: 0, work: 0, implicit_work: 0, clone_work: 0, encode_work: 0 });
+    }
+    let icc = doc.icc_profile.as_ref().ok_or_else(refused)?;
+    let cancelled = || c.cancelled();
+    // Genuine controlled effective-profile and fresh writer censuses; no cached
+    // profile hash/encoding is accepted as a model equality proof.
+    let implicit = photocraft_cms::xcf_color::effective_profile_requirements_with_control(
+        photocraft_cms::Builtin::Srgb.profile(),
+        photocraft_cms::xcf_color::Encoding::NonlinearProfile,
+        limits,
+        &cancelled,
+    )
+    .map_err(cms_error)?;
+    let clone = profile.definition.clone_requirements_with_control(limits, &cancelled).map_err(cms_error)?;
+    let encode = profile.definition.encode_requirements_with_control(limits, &cancelled).map_err(cms_error)?;
+    let scratch = plus(
+        plus(implicit.peak_resident_bytes as u64, icc.len() as u64)?,
+        plus(plus(clone.retained_bytes as u64, clone.cloned_model_bytes as u64)?, encode.peak_resident_bytes as u64)?,
+    )?;
+    // Includes initial/repeated borrowed admission plus the actual controlled
+    // helper/clone/writer passes. Sequential phases receive debited subquotas.
+    let implicit_work = plus(times(implicit.work_units, 5)?, times(icc.len() as u64, 4)?)?;
+    let clone_work = times(clone.work_units, 4)?;
+    let encode_work = times(encode.work_units, 4)?;
+    let work = plus(plus(implicit_work, clone_work)?, plus(encode_work, plus(times(icc.len() as u64, 4)?, 4096)?)?)?;
+    if scratch > limits.resident_bytes as u64 || work > limits.work_units {
+        return Err(limit());
+    }
+    poll(c)?;
+    Ok(VerificationPlan { scratch, work, implicit_work, clone_work, encode_work })
+}
+fn verify_current_model(doc: &Document, profile: BoundProfile<'_>, q: VerificationPlan, c: &Interrupt<'_>) -> Result<()> {
+    if q.work == 0 {
+        return poll(c);
+    }
+    let icc = doc.icc_profile.as_ref().ok_or_else(refused)?;
+    let cancelled = || c.cancelled();
+    let caps = |work| -> Result<photocraft_cms::control::Limits> {
+        Ok(photocraft_cms::control::Limits { resident_bytes: usize::try_from(q.scratch).map_err(|_| limit())?, work_units: work })
+    };
+    let verified = photocraft_cms::xcf_color::effective_implicit_profile_with_control(
+        icc,
+        ColorSpace::Rgb,
+        photocraft_cms::xcf_color::Encoding::NonlinearProfile,
+        caps(q.implicit_work)?,
+        &cancelled,
+    )
+    .map_err(cms_error)?;
+    drop(verified);
+    poll(c)?;
+    let copy = profile.definition.try_clone_with_control(caps(q.clone_work)?, &cancelled).map_err(cms_error)?;
+    let fresh = copy.with_encoded_bytes_with_control(caps(q.encode_work)?, &cancelled).map_err(cms_error)?;
+    if !equal(fresh.encoded_bytes().ok_or_else(refused)?, icc, c)? {
+        return Err(refused());
+    }
+    poll(c)
 }
 #[derive(Debug)]
 struct Png {
@@ -180,7 +273,14 @@ struct Bound<'a> {
     width: u32,
     height: u32,
 }
-fn bind<'a>(doc: &'a Document, source: &'a SourceItem, policy: Policy, profile: BoundProfile<'_>, c: &Interrupt<'_>) -> Result<Bound<'a>> {
+fn bind<'a>(
+    doc: &'a Document,
+    source: &'a SourceItem,
+    policy: Policy,
+    profile: BoundProfile<'_>,
+    original_policy: OriginalProfilePolicy,
+    c: &Interrupt<'_>,
+) -> Result<Bound<'a>> {
     poll(c)?;
     let state = doc.xcf_state.as_ref().ok_or_else(refused)?;
     if state.source_items.len() > 100_000
@@ -237,15 +337,33 @@ fn bind<'a>(doc: &'a Document, source: &'a SourceItem, policy: Policy, profile: 
         return Err(refused());
     }
     let icc = doc.icc_profile.as_ref().ok_or_else(refused)?;
-    let original_icc = doc.source_color_context.as_ref().and_then(|context| context.original_icc.as_ref()).ok_or_else(refused)?;
+    let original_context = doc.source_color_context.as_ref().ok_or_else(refused)?;
     let profile_icc = profile.definition.encoded_bytes().ok_or_else(refused)?;
-    if icc.len() > DECODE_LIMIT as usize
-        || original_icc.len() > DECODE_LIMIT as usize
-        || profile_icc.len() > DECODE_LIMIT as usize
-        || !equal(original_icc, icc, c)?
-        || !equal(profile_icc, icc, c)?
-    {
+    if icc.len() > DECODE_LIMIT as usize || profile_icc.len() > DECODE_LIMIT as usize || !equal(profile_icc, icc, c)? {
         return Err(refused());
+    }
+    match original_policy {
+        OriginalProfilePolicy::RequireExactPresent => {
+            let original = original_context.original_icc.as_ref().ok_or_else(refused)?;
+            if original.len() > DECODE_LIMIT as usize || !equal(original, icc, c)? {
+                return Err(refused());
+            }
+        }
+        OriginalProfilePolicy::ExplicitProvenImportedImplicit => {
+            let precision = match doc.depth {
+                SampleType::U16 => 250,
+                SampleType::F32 => 650,
+                SampleType::F64 => 750,
+                _ => return Err(refused()),
+            };
+            if original_context.original_icc.is_some()
+                || original_context.source_precision != precision
+                || !matches!(doc.working_profile_interpretation, photocraft_doc::WorkingProfileInterpretation::ImplicitSrgb { .. })
+            {
+                return Err(refused());
+            }
+            doc.working_profile_interpretation.validate_with_interrupt(Some(icc.as_slice()), doc.mode, c).map_err(validation)?;
+        }
     }
     let mut retained = None;
     for entry in &state.resources {
@@ -385,11 +503,25 @@ pub fn requirements(
     limits: Limits,
     c: &Interrupt<'_>,
 ) -> Result<Requirements> {
+    requirements_with_original_profile_policy(doc, source, envelope, policy, profile, OriginalProfilePolicy::RequireExactPresent, limits, c)
+}
+/// Additive opt-in; profile verification is admitted before decode/ICC copies.
+#[allow(clippy::too_many_arguments)]
+pub fn requirements_with_original_profile_policy(
+    doc: &Document,
+    source: &SourceItem,
+    envelope: HeldDocumentEnvelope<'_>,
+    policy: Policy,
+    profile: BoundProfile<'_>,
+    original_policy: OriginalProfilePolicy,
+    limits: Limits,
+    c: &Interrupt<'_>,
+) -> Result<Requirements> {
     poll(c)?;
     if !std::ptr::eq(doc, envelope.document) || limits.resident_bytes > MAX_CHECKED_RASTER_BYTES || limits.work_units > 8_000_000_000 {
         return Err(limit());
     }
-    let b = bind(doc, source, policy, profile, c)?;
+    let b = bind(doc, source, policy, profile, original_policy, c)?;
     let (floor, scratch, work) = held_floor(doc, c)?;
     if envelope.retained_bytes < floor || envelope.validation_scratch < scratch || envelope.work_units < work {
         return Err(limit());
@@ -437,6 +569,19 @@ pub fn requirements(
     if peak > limits.resident_bytes || work > limits.work_units {
         return Err(limit());
     }
+    let verification = verification_plan(
+        doc,
+        profile,
+        original_policy,
+        photocraft_cms::control::Limits {
+            resident_bytes: usize::try_from((limits.resident_bytes - peak).min(max.resident_bytes as u64)).map_err(|_| limit())?,
+            work_units: (limits.work_units - work).min(max.work_units),
+        },
+        c,
+    )?;
+    let candidate = plus(candidate, verification.scratch)?;
+    let peak = plus(peak, verification.scratch)?;
+    let work = plus(work, verification.work)?;
     poll(c)?;
     Ok(Requirements {
         held_document_bytes: held,
@@ -444,6 +589,8 @@ pub fn requirements(
         candidate_reserve_bytes: candidate,
         peak_resident_bytes: peak,
         work_units: work,
+        profile_verification_scratch_bytes: verification.scratch,
+        profile_verification_work_units: verification.work,
     })
 }
 /// Return private current pixels only; no SourceCache/resource/provenance writes,
@@ -457,8 +604,39 @@ pub fn prepare_owned_current_candidate(
     limits: Limits,
     c: &Interrupt<'_>,
 ) -> Result<(LayerId, Surface)> {
-    let r = requirements(doc, source, envelope, policy, profile, limits, c)?;
-    let b = bind(doc, source, policy, profile, c)?;
+    prepare_owned_current_candidate_with_original_profile_policy(doc, source, envelope, policy, profile, OriginalProfilePolicy::RequireExactPresent, limits, c)
+}
+/// Explicit caller-proven imported marker only; decoded PNG ICC still must be
+/// present and byte-exact current. Private output never mutates source metadata.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_owned_current_candidate_with_original_profile_policy(
+    doc: &Document,
+    source: &SourceItem,
+    envelope: HeldDocumentEnvelope<'_>,
+    policy: Policy,
+    profile: BoundProfile<'_>,
+    original_policy: OriginalProfilePolicy,
+    limits: Limits,
+    c: &Interrupt<'_>,
+) -> Result<(LayerId, Surface)> {
+    let r = requirements_with_original_profile_policy(doc, source, envelope, policy, profile, original_policy, limits, c)?;
+    let b = bind(doc, source, policy, profile, original_policy, c)?;
+    if original_policy == OriginalProfilePolicy::ExplicitProvenImportedImplicit {
+        let q = verification_plan(
+            doc,
+            profile,
+            original_policy,
+            photocraft_cms::control::Limits {
+                resident_bytes: usize::try_from(r.profile_verification_scratch_bytes).map_err(|_| limit())?,
+                work_units: r.profile_verification_work_units,
+            },
+            c,
+        )?;
+        if q.scratch > r.profile_verification_scratch_bytes || q.work > r.profile_verification_work_units {
+            return Err(limit());
+        }
+        verify_current_model(doc, profile, q, c)?;
+    }
     doc.validate_xcf_state_with(c).map_err(validation)?;
     poll(c)?;
     let image = photocraft_codecs::decode_with(
@@ -491,13 +669,17 @@ pub fn prepare_owned_current_candidate(
     };
     // Whole-input and decoder slack remain reserved while lower allocates output.
     let inner = Limits {
-        resident_bytes: limits.resident_bytes.checked_sub(plus(r.held_document_bytes, r.decoder_reserve_bytes)?).ok_or_else(limit)?,
+        resident_bytes: limits
+            .resident_bytes
+            .checked_sub(plus(plus(r.held_document_bytes, r.decoder_reserve_bytes)?, r.profile_verification_scratch_bytes)?)
+            .ok_or_else(limit)?,
         work_units: limits
             .work_units
             .checked_sub(plus(
                 envelope.work_units,
                 plus(times(b.bytes.len() as u64, 128)?, times(doc.icc_profile.as_ref().ok_or_else(refused)?.len() as u64, 16)?)?,
             )?)
+            .and_then(|work| work.checked_sub(r.profile_verification_work_units))
             .ok_or_else(limit)?,
     };
     let output = match policy.reconstruction {
@@ -519,7 +701,7 @@ pub fn prepare_owned_current_candidate(
     // Immutable borrowed inputs cannot change during this invocation. Revalidate
     // full source/hash relationships under the token before returning private work.
     doc.validate_xcf_state_with(c).map_err(validation)?;
-    let final_binding = bind(doc, source, policy, profile, c)?;
+    let final_binding = bind(doc, source, policy, profile, original_policy, c)?;
     if final_binding.owner != b.owner
         || !std::ptr::eq(final_binding.bytes, b.bytes)
         || !std::ptr::eq(final_binding.transform, b.transform)
@@ -597,6 +779,110 @@ mod tests {
         assert_eq!(id, owner);
         assert_eq!(output.try_read_interleaved(doc.bounds()).unwrap(), raw);
         assert_eq!(doc.xcf_state, before);
+        let mut implicit = doc.clone();
+        implicit.source_color_context.as_mut().unwrap().original_icc = None;
+        implicit.working_profile_interpretation = photocraft_doc::WorkingProfileInterpretation::implicit_srgb(&encoded);
+        let implicit_source = &implicit.xcf_state.as_ref().unwrap().source_items[0];
+        let implicit_envelope = HeldDocumentEnvelope { document: &implicit, ..envelope };
+        let original = implicit.clone();
+        assert!(prepare_owned_current_candidate(&implicit, implicit_source, implicit_envelope, policy, bound, limits, &Interrupt::NONE).is_err());
+        let choice = OriginalProfilePolicy::ExplicitProvenImportedImplicit;
+        let (id, output) = prepare_owned_current_candidate_with_original_profile_policy(
+            &implicit,
+            implicit_source,
+            implicit_envelope,
+            policy,
+            bound,
+            choice,
+            limits,
+            &Interrupt::NONE,
+        )
+        .unwrap();
+        assert_eq!(id, owner);
+        assert_eq!(output.try_read_interleaved(implicit.bounds()).unwrap(), raw);
+        assert_eq!(implicit.icc_profile, original.icc_profile);
+        assert_eq!(implicit.source_color_context, original.source_color_context);
+        assert_eq!(implicit.working_profile_interpretation, original.working_profile_interpretation);
+        assert_eq!(implicit.xcf_state, original.xcf_state);
+        let req =
+            requirements_with_original_profile_policy(&implicit, implicit_source, implicit_envelope, policy, bound, choice, limits, &Interrupt::NONE).unwrap();
+        assert!(req.profile_verification_work_units > 0 && req.profile_verification_scratch_bytes > 0);
+        assert!(
+            prepare_owned_current_candidate_with_original_profile_policy(
+                &implicit,
+                implicit_source,
+                implicit_envelope,
+                policy,
+                bound,
+                choice,
+                Limits { resident_bytes: req.peak_resident_bytes - 1, ..limits },
+                &Interrupt::NONE
+            )
+            .is_err()
+        );
+        assert!(
+            prepare_owned_current_candidate_with_original_profile_policy(
+                &implicit,
+                implicit_source,
+                implicit_envelope,
+                policy,
+                bound,
+                choice,
+                limits,
+                &Interrupt::cancel_only(&|| true)
+            )
+            .is_err()
+        );
+        // Public model mutation keeps its old cached encoding; exact fresh model
+        // verification must reject it before the decoder/current-pixel stage.
+        let mut stale = profile.clone();
+        stale.trc = Some([Curve::Gamma(1.0), Curve::Gamma(1.0), Curve::Gamma(1.0)]);
+        assert_eq!(stale.encoded_bytes(), profile.encoded_bytes());
+        assert!(
+            prepare_owned_current_candidate_with_original_profile_policy(
+                &implicit,
+                implicit_source,
+                implicit_envelope,
+                policy,
+                BoundProfile { definition: &stale, context },
+                choice,
+                limits,
+                &Interrupt::NONE
+            )
+            .is_err()
+        );
+        let mut absent = implicit.clone();
+        absent.icc_profile = None;
+        let absent_source = &absent.xcf_state.as_ref().unwrap().source_items[0];
+        assert!(
+            requirements_with_original_profile_policy(
+                &absent,
+                absent_source,
+                HeldDocumentEnvelope { document: &absent, ..envelope },
+                policy,
+                bound,
+                choice,
+                limits,
+                &Interrupt::NONE
+            )
+            .is_err()
+        );
+        let mut ordinary = implicit.clone();
+        ordinary.working_profile_interpretation = photocraft_doc::WorkingProfileInterpretation::Icc;
+        let ordinary_source = &ordinary.xcf_state.as_ref().unwrap().source_items[0];
+        assert!(
+            requirements_with_original_profile_policy(
+                &ordinary,
+                ordinary_source,
+                HeldDocumentEnvelope { document: &ordinary, ..envelope },
+                policy,
+                bound,
+                choice,
+                limits,
+                &Interrupt::NONE
+            )
+            .is_err()
+        );
         let other = doc.clone();
         assert!(
             prepare_owned_current_candidate(&doc, source, HeldDocumentEnvelope { document: &other, ..envelope }, policy, bound, limits, &Interrupt::NONE)

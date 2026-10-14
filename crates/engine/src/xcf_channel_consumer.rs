@@ -326,6 +326,59 @@ pub fn read_stored<'a>(document: &'a Document, binding: &SourceBinding<'_>, cont
     Ok(StoredGrayRead { channel: binding.channel, bounds: candidate.bounds, surface })
 }
 
+/// Selected native view from genuine IO census/independent-original proof.
+/// No full-document validator or scene qualification occurs. The descriptor
+/// already owns the bounded namespace/dependency checks and captured references;
+/// the proof owns exact original channel/mask word comparison, not appearance.
+pub fn read_stored_from_selected_correspondence<'d>(
+    document: &'d Document,
+    binding: &SourceBinding<'_>,
+    selected: &photocraft_io::SelectedCurrentChannel<'d>,
+    proof: &photocraft_io::StoredChannelCorrespondence<'_>,
+    control: &Interrupt<'_>,
+) -> Result<StoredGrayRead<'d>> {
+    poll(control)?;
+    if !std::ptr::eq(document, selected.document())
+        || !std::ptr::eq(document, proof.document())
+        || binding.channel != selected.channel_id()
+        || binding.channel != proof.channel_id()
+        || selected.mask_id() != proof.mask_id()
+        || !std::ptr::eq(selected.original_node(), proof.original_node())
+        || selected.original_node() != binding.original
+        || proof.source_sha256() != binding.source_sha256
+        || proof.source_blake3() != binding.source_blake3
+    {
+        return Err(bad("selected native correspondence does not belong to the bound current source"));
+    }
+    let format = photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Grayscale, binding.depth, false);
+    let mask = selected.filter_mask();
+    let channel_item = selected.channel_item();
+    let mask_item = selected.mask_item();
+    if document.depth != binding.depth
+        || selected.channel_surface().format() != format
+        || selected.channel_bounds() != Rect::new(0, 0, 32, 32)
+        || channel_item.item != ItemRef::Channel(binding.channel)
+        || channel_item.raster_bounds != Some(selected.channel_bounds())
+        || mask.id != selected.mask_id()
+        || mask.owner != selected.original_node().id
+        || mask.bounds != binding.mask_bounds()
+        || selected.original_node().mask != Some(ItemRef::Mask(mask.id))
+        || mask_item.item != ItemRef::Mask(mask.id)
+        || mask_item.raster_bounds != Some(binding.mask_bounds())
+        || mask_item
+            .mask
+            .as_ref()
+            .is_none_or(|association| association.owner != ItemRef::Channel(binding.channel) || association.bounds != binding.mask_bounds())
+    {
+        return Err(bad("selected native correspondence storage or typed association changed"));
+    }
+    // All source bytes/planes and source/profile/provenance fields were checked
+    // by opaque IO verification under the enclosing admitted ledger. This is
+    // deliberately not a call to inspect_candidate or whole-state validation.
+    poll(control)?;
+    Ok(StoredGrayRead { channel: binding.channel, bounds: selected.channel_bounds(), surface: selected.channel_surface() })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

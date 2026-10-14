@@ -59,6 +59,9 @@ mod native_scene_preview;
 #[cfg(not(target_arch = "wasm32"))]
 pub use native_save::{save_native_path, save_native_path_guarded, save_native_path_guarded_with_resident_guard};
 pub use native_save::{NativeSaveLimits, NativeSaveResult, PreparedNativeStream, prepare_native_stream, retained_native_input_bytes, retained_native_model_bytes, retained_native_payload_bytes, save_native_bytes, save_native_stream};
+pub use native_save::{
+    NativeCensusVisits, NativeCurrentCensus, NativeModelCensus, NativePayloadCensus, retained_native_model_census, retained_native_payload_census,
+};
 mod origin;
 mod ora;
 pub use ora::losses as ora_losses;
@@ -95,6 +98,7 @@ pub mod xcf_import;
 pub use xcf_import::{
     AssembledStoredChannel, CorrespondenceRequirements, NamespaceBacking, StoredChannelCorrespondence, assemble_owned_stored_channel,
 };
+pub use xcf_import::{SelectedCurrentChannel, SelectedLimits, SelectedRequirements, select_current};
 mod xcf_link_sources;
 pub mod xcf_modified_sources;
 mod xcf_ordinary_source;

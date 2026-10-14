@@ -52,12 +52,13 @@ pub struct SourceEvidence<'a> {
 enum PreparationInput<'e, 's, 'b, 't> {
     Metadata(SourceEvidence<'e>),
     Correspondence { owner: &'e photocraft_io::AssembledStoredChannel<'s, 'b, 't>, working: WorkingDomainEvidence<'e> },
+    Selected { owner: &'e photocraft_io::AssembledStoredChannel<'s, 'b, 't>, working: WorkingDomainEvidence<'e> },
 }
 impl PreparationInput<'_, '_, '_, '_> {
     fn original_bytes(&self) -> &[u8] {
         match self {
             Self::Metadata(evidence) => evidence.original_bytes,
-            Self::Correspondence { owner, .. } => owner.original_bytes(),
+            Self::Correspondence { owner, .. } | Self::Selected { owner, .. } => owner.original_bytes(),
         }
     }
 }
@@ -67,6 +68,7 @@ impl PreparationInput<'_, '_, '_, '_> {
 pub enum SourceCorrespondence {
     MetadataOnly,
     DecodedOriginalNativePlanes,
+    SelectedDecodedOriginalNativePlanes,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Requirements {
@@ -81,6 +83,9 @@ pub struct Requirements {
     pub correspondence_owner_bytes: u64,
     pub correspondence_owner_index_bytes: u64,
     pub correspondence_verification_work: u64,
+    /// Conservative pre-census receipt bound, not CPU time or refunded work.
+    pub correspondence_prepaid_work_units: u64,
+    pub selected_namespace_work_units: u64,
     pub index_envelope_bytes: u64,
     pub preparation_work_units: u64,
     pub derived: gaussian::Requirements,
@@ -116,6 +121,11 @@ impl PrepaidProofWork {
         self.remaining =
             self.remaining.checked_sub(units).ok_or_else(|| photocraft_io::IoError::Unsupported("channel correspondence exceeds prepaid proof work".into()))?;
         Ok(())
+    }
+    fn take_exact(&mut self, units: u64) -> Result<Self> {
+        self.remaining = self.remaining.checked_sub(units).ok_or_else(|| bad("actual selected verification exceeds prepaid bound"))?;
+        // The unused parent receipt stays debited. No global work is refunded.
+        Ok(Self { remaining: units })
     }
     fn finish(&self) -> Result<()> {
         if self.remaining != 0 {
@@ -221,6 +231,11 @@ fn correspondence_admission(requirements: photocraft_io::CorrespondenceRequireme
     }
     Ok(())
 }
+fn selected_verification_upper(source_work: u64, resident_limit: u64) -> Result<u64> {
+    // Exact select_current formula is source.work +8*census.retained_bytes.
+    // The genuine census must fit resident_limit before descriptor construction.
+    add(source_work, mul(resident_limit, 8)?)
+}
 fn node<'a>(snapshot: &'a DocumentSnapshot, channel: ChannelId, control: &Interrupt<'_>) -> Result<&'a FilterNode> {
     xcf_channel_consumer::inspect_candidate(snapshot, channel, ChannelConsumer::StoredSelectionRead, control)?
         .map(|candidate| candidate.filter)
@@ -315,6 +330,12 @@ impl<L> PreparedChannelGaussian<L> {
             {
                 return Err(bad("channel preparation target changed"));
             }
+            if self.correspondence == SourceCorrespondence::SelectedDecodedOriginalNativePlanes {
+                // Genuine descriptor/proof checked the complete selected source
+                // and captured refs once. Exact immutable snapshot identity keeps
+                // those checks valid; do not traverse/qualify unrelated scene.
+                return poll(&metered);
+            }
             let original = node(&self.snapshot, self.channel, &metered)?;
             let binding = xcf_channel_consumer::bind_source(&self.source_bytes, self.channel, original, &metered)?;
             xcf_channel_consumer::read_stored(&current.doc, &binding, &metered)?;
@@ -360,6 +381,25 @@ pub fn prepare_from_correspondence<B: PreparationBudget>(
     }
     prepare_input(session, channel, PreparationInput::Correspondence { owner, working }, config, limits, budget, control)
 }
+/// Selected channel/mask correspondence inside a retained full current scene.
+/// Native census receipts are generated from the actual captured Document under
+/// this lease; no externally asserted census totals or whole-scene qualification.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_from_selected_correspondence<B: PreparationBudget>(
+    session: &Session,
+    channel: ChannelId,
+    owner: &photocraft_io::AssembledStoredChannel<'_, '_, '_>,
+    working: WorkingDomainEvidence<'_>,
+    config: gaussian::Config,
+    limits: Limits,
+    budget: &mut B,
+    control: &Interrupt<'_>,
+) -> Result<PreparedChannelGaussian<B::Lease>> {
+    if owner.channel_id() != channel {
+        return Err(bad("selected correspondence owner belongs to a different channel"));
+    }
+    prepare_input(session, channel, PreparationInput::Selected { owner, working }, config, limits, budget, control)
+}
 #[allow(clippy::too_many_arguments)]
 fn prepare_input<B: PreparationBudget>(
     session: &Session,
@@ -400,13 +440,24 @@ fn prepare_input<B: PreparationBudget>(
         work.charge(add(requested_view, input_bytes)?)?;
         let correspondence_requirements = match &input {
             PreparationInput::Metadata(_) => photocraft_io::CorrespondenceRequirements { resident_bytes: 0, index_bytes: 0, work_units: 0 },
-            PreparationInput::Correspondence { owner, .. } => owner.correspondence_requirements().map_err(|e| EngineError::Other(e.to_string()))?,
+            PreparationInput::Correspondence { owner, .. } | PreparationInput::Selected { owner, .. } => {
+                owner.correspondence_requirements().map_err(|e| EngineError::Other(e.to_string()))?
+            }
         };
         correspondence_admission(correspondence_requirements, limits, requested_view, &work)?;
+        let selected_lane = matches!(&input, PreparationInput::Selected { .. });
+        // This is the actual IO constructor formula: source.work +8*current
+        // census retention. Current retention must fit the lower resident
+        // envelope; reserve its conservative bound before any census traversal.
+        let prepaid_units = if selected_lane {
+            selected_verification_upper(correspondence_requirements.work_units, limits.resident_bytes)?
+        } else {
+            correspondence_requirements.work_units
+        };
         // Do not let hierarchy/model/payload census spend work promised to the
         // opaque proof. IO's callback consumes this reservation without another
         // global charge; failure/unused receipt never resets or refunds Work.
-        let mut proof_work = PrepaidProofWork::reserve(&work, correspondence_requirements.work_units)?;
+        let mut proof_work = PrepaidProofWork::reserve(&work, prepaid_units)?;
         // Resident variant and hierarchy admission occur only after the full
         // envelope is held, using the same polled work/cancellation ledger.
         let resident = current.doc.resident_arc().ok_or(photocraft_raster::backing::BackingError::Unsupported)?;
@@ -432,14 +483,16 @@ fn prepare_input<B: PreparationBudget>(
         model_limits.manifest_bytes = model_limits.manifest_bytes.min(model_limits.resident_bytes);
         model_limits.object_bytes = model_limits.object_bytes.min(model_limits.resident_bytes);
         let mut scratch = model_limits.index_bytes as u64;
-        let model = photocraft_io::retained_native_model_bytes(&current.doc, model_limits, &metered)
-            .map_err(|e| if metered.cancelled() { EngineError::Cancelled } else { EngineError::Other(e.to_string()) })? as u64;
+        let model_census = photocraft_io::retained_native_model_census(&current.doc, model_limits, &metered)
+            .map_err(|e| if metered.cancelled() { EngineError::Cancelled } else { EngineError::Other(e.to_string()) })?;
+        let model = model_census.retained_bytes() as u64;
         work.charge(model)?;
         held = add(held, mul(model, 4)?)?;
         let payload_limits = inspectors(limits, held, &work, prospective_index)?;
         scratch = scratch.max(payload_limits.index_bytes as u64);
-        let payload = photocraft_io::retained_native_payload_bytes(&current.doc, payload_limits, &metered)
-            .map_err(|e| if metered.cancelled() { EngineError::Cancelled } else { EngineError::Other(e.to_string()) })? as u64;
+        let payload_census = photocraft_io::retained_native_payload_census(&current.doc, payload_limits, &metered)
+            .map_err(|e| if metered.cancelled() { EngineError::Cancelled } else { EngineError::Other(e.to_string()) })?;
+        let payload = payload_census.retained_bytes() as u64;
         work.charge(payload)?;
         held = add(held, payload)?;
         if add(held, scratch)? > limits.resident_bytes {
@@ -449,8 +502,59 @@ fn prepare_input<B: PreparationBudget>(
         let repeats = [state.source_items.len(), state.resources.len(), state.opaque.len(), state.editable_indexed.len(), state.filter_masks.len()]
             .into_iter()
             .try_fold(3_u64, |n, count| add(n, count as u64))?;
-        let validation_work = add(mul(add(model, payload)?, repeats)?, input_bytes)?;
+        let validation_work = if selected_lane { add(requested_view, input_bytes)? } else { add(mul(add(model, payload)?, repeats)?, input_bytes)? };
         work.charge(validation_work)?;
+        let selected;
+        let mut selected_resident = held;
+        let mut selected_index = 0;
+        let mut selected_namespace_work = 0;
+        let mut verification_work = correspondence_requirements.work_units;
+        if let PreparationInput::Selected { owner, .. } = &input {
+            let census = photocraft_io::NativeCurrentCensus::join(model_census, payload_census).map_err(|e| EngineError::Other(e.to_string()))?;
+            // IO's complete envelope includes actual census model/payload/maps,
+            // original owner and descriptor/namespace scratch. Add our retained
+            // raster/COW, extra clone model and future view/source-copy envelope.
+            let extra = add(add(raster.retained_bytes, mul(raster.clone_metadata_bytes, 4)?)?, add(mul(model, 3)?, add(requested_view, input_bytes)?)?)?;
+            let selected_limits = photocraft_io::SelectedLimits {
+                resident_bytes: limits.resident_bytes.checked_sub(extra).ok_or_else(|| bad("selected descriptor resident envelope"))?,
+                index_bytes: limits
+                    .index_bytes
+                    .checked_sub(add(requested_view, DERIVED_INDEX_RESERVATION)?)
+                    .ok_or_else(|| bad("selected descriptor index envelope"))?,
+                work_units: add(work.remaining(), proof_work.remaining)?,
+            };
+            selected = Some(
+                photocraft_io::select_current(
+                    census,
+                    owner,
+                    selected_limits,
+                    &metered,
+                    &mut |resident, index| {
+                        let total = add(resident, extra).map_err(|e| photocraft_io::IoError::Unsupported(e.to_string()))?;
+                        let index_total =
+                            add(index, add(requested_view, DERIVED_INDEX_RESERVATION).map_err(|e| photocraft_io::IoError::Unsupported(e.to_string()))?)
+                                .map_err(|e| photocraft_io::IoError::Unsupported(e.to_string()))?;
+                        if total > limits.resident_bytes || index_total > limits.index_bytes {
+                            return Err(photocraft_io::IoError::Unsupported("selected descriptor exceeds shared envelope".into()));
+                        }
+                        selected_resident = total;
+                        selected_index = index;
+                        Ok(())
+                    },
+                    &mut |units| work.charge(units).map_err(|e| photocraft_io::IoError::Unsupported(e.to_string())),
+                )
+                .map_err(|e| if metered.cancelled() { EngineError::Cancelled } else { EngineError::Other(e.to_string()) })?,
+            );
+            let descriptor = selected.as_ref().ok_or_else(|| bad("missing selected descriptor"))?;
+            let required = descriptor.requirements();
+            selected_namespace_work = required.selection_work_units;
+            verification_work = required.verification_work_units;
+            if verification_work > prepaid_units {
+                return Err(bad("genuine selected verification exceeds prepaid formula"));
+            }
+        } else {
+            selected = None;
+        }
         // Only this opaque IO verification can construct the stronger input.
         // The original metadata-only compatibility route is left unchanged.
         let proof = match &input {
@@ -460,11 +564,22 @@ fn prepare_input<B: PreparationBudget>(
                     .verify_document_with_charge(&current.doc, &metered, &mut |units| proof_work.consume(units))
                     .map_err(|e| if metered.cancelled() { EngineError::Cancelled } else { EngineError::Other(e.to_string()) })?,
             ),
+            PreparationInput::Selected { owner, .. } => {
+                let descriptor = selected.as_ref().ok_or_else(|| bad("missing selected descriptor"))?;
+                let mut exact_work = proof_work.take_exact(verification_work)?;
+                let proof = owner
+                    .verify_selected_with_charge(descriptor, &metered, &mut |units| exact_work.consume(units))
+                    .map_err(|e| if metered.cancelled() { EngineError::Cancelled } else { EngineError::Other(e.to_string()) })?;
+                exact_work.finish()?;
+                Some(proof)
+            }
         };
-        proof_work.finish()?;
+        if !selected_lane {
+            proof_work.finish()?;
+        }
         let (evidence, correspondence) = match input {
             PreparationInput::Metadata(evidence) => (evidence, SourceCorrespondence::MetadataOnly),
-            PreparationInput::Correspondence { owner, working } => {
+            PreparationInput::Correspondence { owner, working } | PreparationInput::Selected { owner, working } => {
                 let verified = proof.as_ref().ok_or_else(|| bad("missing opaque correspondence result"))?;
                 if !std::ptr::eq(verified.document(), &*current.doc)
                     || verified.channel_id() != channel
@@ -476,14 +591,24 @@ fn prepare_input<B: PreparationBudget>(
                 }
                 (
                     SourceEvidence { original_bytes: verified.original_bytes(), original_node: verified.original_node(), working },
-                    SourceCorrespondence::DecodedOriginalNativePlanes,
+                    if selected_lane { SourceCorrespondence::SelectedDecodedOriginalNativePlanes } else { SourceCorrespondence::DecodedOriginalNativePlanes },
                 )
             }
         };
         let binding = xcf_channel_consumer::bind_source(evidence.original_bytes, channel, evidence.original_node, &metered)?;
         working(&evidence.working, &binding, config)?;
-        let read = xcf_channel_consumer::read_stored(&current.doc, &binding, &metered)?;
-        let actual_node = node(&current.doc, channel, &metered)?;
+        let read = if let Some(selected) = selected.as_ref() {
+            xcf_channel_consumer::read_stored_from_selected_correspondence(
+                &current.doc,
+                &binding,
+                selected,
+                proof.as_ref().ok_or_else(|| bad("missing selected proof"))?,
+                &metered,
+            )?
+        } else {
+            xcf_channel_consumer::read_stored(&current.doc, &binding, &metered)?
+        };
+        let actual_node = if let Some(selected) = selected.as_ref() { selected.original_node() } else { node(&current.doc, channel, &metered)? };
         // Bind the explicit numerical sigma request to exact scalar source words;
         // raw type5 enum/outer tuple words are not converted into Auto or Clamp.
         for (name, value) in [("std-dev-x", config.gaussian.std_dev_x), ("std-dev-y", config.gaussian.std_dev_y)] {
@@ -496,24 +621,35 @@ fn prepare_input<B: PreparationBudget>(
         let ItemRef::Mask(mask_id) = actual_node.mask.ok_or_else(|| bad("missing original mask"))? else {
             return Err(bad("wrong original mask kind"));
         };
-        let mut mask = None;
-        for value in &state.filter_masks {
-            poll(&metered)?;
-            if value.id == mask_id && mask.replace(value).is_some() {
-                return Err(bad("duplicate original mask mapping"));
+        let mut mask = selected.as_ref().map(|selected| selected.filter_mask());
+        if !selected_lane {
+            for value in &state.filter_masks {
+                poll(&metered)?;
+                if value.id == mask_id && mask.replace(value).is_some() {
+                    return Err(bad("duplicate original mask mapping"));
+                }
             }
         }
         let mask = mask.ok_or_else(|| bad("missing original mask mapping"))?;
         if mask.bounds != binding.mask_bounds() {
             return Err(bad("original mask geometry changed"));
         }
+        if selected_lane {
+            // Temporary inspector sets are gone; no full validator follows in
+            // this lane. Retain the genuine descriptor's complete namespace
+            // allowance instead, while the outer envelope lease remains held.
+            held = selected_resident;
+            scratch = selected_index;
+        }
+        let additional_scratch = if selected_lane { 0 } else { scratch };
         let max_view_resident = limits
             .resident_bytes
-            .checked_sub(add(held.checked_sub(requested_view).ok_or_else(|| bad("view accounting underflow"))?, scratch)?)
+            .checked_sub(add(held.checked_sub(requested_view).ok_or_else(|| bad("view accounting underflow"))?, additional_scratch)?)
             .ok_or_else(|| bad("view remaining resident envelope"))?;
+        let retained_owner_index = if selected_lane { 0 } else { correspondence_requirements.index_bytes };
         let max_view_index = limits
             .index_bytes
-            .checked_sub(add(add(scratch, DERIVED_INDEX_RESERVATION)?, correspondence_requirements.index_bytes)?)
+            .checked_sub(add(add(scratch, DERIVED_INDEX_RESERVATION)?, retained_owner_index)?)
             .ok_or_else(|| bad("view remaining index envelope"))?;
         let view = copy_view(&current.channel_view, max_view_resident.min(max_view_index), &metered)?;
         let actual_view = view_bytes(&view, true)?;
@@ -525,8 +661,10 @@ fn prepare_input<B: PreparationBudget>(
         )?;
         // Keep the conservative census/validation scratch allowance throughout
         // derived preparation and every later source/current validation.
-        held = add(held, scratch)?;
-        let source_index = add(add(actual_view, scratch)?, correspondence_requirements.index_bytes)?;
+        if !selected_lane {
+            held = add(held, scratch)?;
+        }
+        let source_index = add(add(actual_view, scratch)?, retained_owner_index)?;
         if held > limits.resident_bytes || add(source_index, DERIVED_INDEX_RESERVATION)? > limits.index_bytes {
             return Err(bad("actual source/view capacity admission"));
         }
@@ -558,7 +696,9 @@ fn prepare_input<B: PreparationBudget>(
             source_and_view_bytes: held,
             correspondence_owner_bytes: correspondence_requirements.resident_bytes,
             correspondence_owner_index_bytes: correspondence_requirements.index_bytes,
-            correspondence_verification_work: correspondence_requirements.work_units,
+            correspondence_verification_work: verification_work,
+            correspondence_prepaid_work_units: prepaid_units,
+            selected_namespace_work_units: selected_namespace_work,
             index_envelope_bytes: limits.index_bytes,
             preparation_work_units: 0,
             derived: output.requirements(),
@@ -721,6 +861,8 @@ mod tests {
                 correspondence_owner_bytes: 0,
                 correspondence_owner_index_bytes: 0,
                 correspondence_verification_work: 0,
+                correspondence_prepaid_work_units: 0,
+                selected_namespace_work_units: 0,
                 index_envelope_bytes: Limits::default().index_bytes,
                 preparation_work_units: 0,
                 derived,
@@ -768,5 +910,21 @@ mod tests {
         }
         assert_eq!(work.remaining(), 5); // failure/drop does not refund
         assert!(work.charge(6).is_err());
+    }
+    #[test]
+    fn selected_actual_verification_uses_subreceipt_without_refunding_upper() {
+        let upper = selected_verification_upper(10, 8).unwrap();
+        assert_eq!(upper, 74);
+        let work = Work { used: AtomicU64::new(0), exceeded: AtomicBool::new(false), limit: 100 };
+        let mut reserved = PrepaidProofWork::reserve(&work, upper).unwrap();
+        // Genuine IO requirement for a smaller current census:10+8*4.
+        let mut exact = reserved.take_exact(42).unwrap();
+        assert_eq!(reserved.remaining, 32);
+        assert_eq!(work.remaining(), 26);
+        exact.consume(42).unwrap();
+        exact.finish().unwrap();
+        assert_eq!(work.remaining(), 26);
+        assert!(reserved.take_exact(33).is_err());
+        assert!(selected_verification_upper(u64::MAX, 1).is_err());
     }
 }

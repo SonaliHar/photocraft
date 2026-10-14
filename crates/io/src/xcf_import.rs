@@ -38,6 +38,7 @@ pub use source::import_plain_source_with_budget;
 #[path = "xcf_import/stored_channel_candidate.rs"]
 mod stored_channel_candidate;
 pub use stored_channel_candidate::{assemble_owned_stored_channel, AssembledStoredChannel, NamespaceBacking, StoredChannelCorrespondence, CorrespondenceRequirements};
+pub use stored_channel_candidate::{SelectedCurrentChannel, SelectedLimits, SelectedRequirements, select_current};
 
 #[cfg(all(test, feature = "corpus"))]
 mod linked_custom_name_mapping_tests {

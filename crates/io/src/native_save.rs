@@ -27,6 +27,85 @@ fn limit(name: &str) -> IoError {
 fn poll(control: &Interrupt<'_>) -> Result<(), IoError> {
     if control.cancelled() { Err(IoError::Cancelled) } else { Ok(()) }
 }
+/// Actual outer visitor counts, not a CPU-time or complete provider-work estimate.
+/// Surface origin validation has its own controlled inner traversal, not counted here.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NativeCensusVisits {
+    pub identity_visits: usize,
+    pub layer_visits: usize,
+    pub surface_visits: usize,
+    pub model_visits: usize,
+}
+/// Borrowed exact-document model capacity receipt. No caller-asserted totals.
+pub struct NativeModelCensus<'d> {
+    document: &'d Document,
+    retained: usize,
+    index: usize,
+    visits: NativeCensusVisits,
+}
+/// Borrowed exact-document unique payload capacity receipt.
+pub struct NativePayloadCensus<'d> {
+    document: &'d Document,
+    retained: usize,
+    index: usize,
+    maps: usize,
+    visits: NativeCensusVisits,
+}
+macro_rules! census_accessors {
+    ($ty:ident) => {
+        impl<'d> $ty<'d> {
+            pub fn document(&self) -> &'d Document { self.document }
+            pub fn belongs_to(&self, document: &Document) -> bool { std::ptr::eq(self.document, document) }
+            pub fn retained_bytes(&self) -> usize { self.retained }
+            /// Conservative identity-index reservation, not measured HashSet allocation.
+            pub fn known_index_reservation_bytes(&self) -> usize { self.index }
+            pub fn visit_scope(&self) -> NativeCensusVisits { self.visits }
+        }
+    };
+}
+census_accessors!(NativeModelCensus);
+census_accessors!(NativePayloadCensus);
+impl NativeModelCensus<'_> {
+    pub fn known_map_reservation_bytes(&self) -> usize { 0 }
+}
+impl NativePayloadCensus<'_> {
+    /// Conservative raster-map reservation (256 bytes per observed tile), not private node capacity.
+    pub fn known_map_reservation_bytes(&self) -> usize { self.maps }
+}
+/// Two authentic receipts for the same immutable current Document.
+/// The slices preserve their old scopes; this does not measure total private heap/RSS.
+pub struct NativeCurrentCensus<'d> {
+    model: NativeModelCensus<'d>,
+    payload: NativePayloadCensus<'d>,
+    retained: usize,
+    index: usize,
+    visits: NativeCensusVisits,
+}
+impl<'d> NativeCurrentCensus<'d> {
+    pub fn join(model: NativeModelCensus<'d>, payload: NativePayloadCensus<'d>) -> Result<Self, IoError> {
+        if !std::ptr::eq(model.document, payload.document) {
+            return Err(IoError::Unsupported("native census document identity mismatch".into()));
+        }
+        let retained = model.retained.checked_add(payload.retained).ok_or_else(|| limit("native census retained overflow"))?;
+        let index = model.index.checked_add(payload.index).ok_or_else(|| limit("native census index overflow"))?;
+        let sum = |a: usize, b: usize| a.checked_add(b).ok_or_else(|| limit("native census visit overflow"));
+        let visits = NativeCensusVisits {
+            identity_visits: sum(model.visits.identity_visits, payload.visits.identity_visits)?,
+            layer_visits: sum(model.visits.layer_visits, payload.visits.layer_visits)?,
+            surface_visits: sum(model.visits.surface_visits, payload.visits.surface_visits)?,
+            model_visits: sum(model.visits.model_visits, payload.visits.model_visits)?,
+        };
+        Ok(Self { model, payload, retained, index, visits })
+    }
+    pub fn document(&self) -> &'d Document { self.model.document }
+    pub fn belongs_to(&self, document: &Document) -> bool { std::ptr::eq(self.document(), document) }
+    pub fn retained_bytes(&self) -> usize { self.retained }
+    pub fn model_retained_bytes(&self) -> usize { self.model.retained }
+    pub fn payload_retained_bytes(&self) -> usize { self.payload.retained }
+    pub fn known_index_reservation_bytes(&self) -> usize { self.index }
+    pub fn known_map_reservation_bytes(&self) -> usize { self.payload.maps }
+    pub fn visit_scope(&self) -> NativeCensusVisits { self.visits }
+}
 pub(super) struct Payloads<'a, 'i> {
     seen: HashSet<(u8, usize)>,
     bytes: usize,
@@ -34,10 +113,12 @@ pub(super) struct Payloads<'a, 'i> {
     map_bytes: usize,
     limits: PreparationLimits,
     control: &'a Interrupt<'i>,
+    visits: NativeCensusVisits,
 }
 impl Payloads<'_, '_> {
     pub(super) fn add(&mut self, tag: u8, pointer: usize, bytes: usize) -> Result<(), IoError> {
         poll(self.control)?;
+        self.visits.identity_visits = self.visits.identity_visits.checked_add(1).ok_or_else(|| limit("native census visit overflow"))?;
         if bytes == 0 || self.seen.contains(&(tag, pointer)) {
             return Ok(());
         }
@@ -62,7 +143,11 @@ impl Payloads<'_, '_> {
         self.add(2, bytes.as_ptr() as usize, bytes.capacity())
     }
     fn surface(&mut self, surface: &Surface) -> Result<(), IoError> {
-        surface.try_validate_tile_origins_with(self.control).map_err(|e| IoError::Unsupported(e.to_string()))?;
+        self.visits.surface_visits = self.visits.surface_visits.checked_add(1).ok_or_else(|| limit("native census visit overflow"))?;
+        surface.try_validate_tile_origins_with(self.control).map_err(|e| match e {
+            photocraft_raster::RasterInputError::Cancelled => IoError::Cancelled,
+            other => IoError::Unsupported(other.to_string()),
+        })?;
         self.map_bytes = self.map_bytes.checked_add(surface.tile_count().checked_mul(256).ok_or_else(|| limit("native raster map overflow"))?).ok_or_else(|| limit("native raster map overflow"))?;
         self.add(3, surface.default_bytes().as_ptr() as usize, surface.default_bytes().len())?;
         for (_, tile) in surface.tiles() {
@@ -71,6 +156,7 @@ impl Payloads<'_, '_> {
         Ok(())
     }
     fn layer(&mut self, layer: &Layer, depth: usize) -> Result<(), IoError> {
+        self.visits.layer_visits = self.visits.layer_visits.checked_add(1).ok_or_else(|| limit("native census visit overflow"))?;
         poll(self.control)?;
         if depth > photocraft_doc::MAX_GROUP_DEPTH {
             return Err(limit("native layer nesting"));
@@ -141,11 +227,11 @@ impl Payloads<'_, '_> {
 }
 /// Unique retained raster/source payloads, including hidden layers and immutable caches.
 /// This measures payload capacity, not every model container or arbitrary metadata allocation.
-fn retained_native_payload_and_maps(doc: &Document, limits: PreparationLimits, control: &Interrupt<'_>) -> Result<(usize, usize), IoError> {
+pub fn retained_native_payload_census<'d>(doc: &'d Document, limits: PreparationLimits, control: &Interrupt<'_>) -> Result<NativePayloadCensus<'d>, IoError> {
     let mut check = PcraftWriter::new();
     check.set_preparation_limits(limits)?;
     poll(control)?;
-    let mut payloads = Payloads { seen: HashSet::new(), bytes: 0, index: 0, map_bytes: 0, limits, control };
+    let mut payloads = Payloads { seen: HashSet::new(), bytes: 0, index: 0, map_bytes: 0, limits, control, visits: NativeCensusVisits::default() };
     for bytes in
         [doc.icc_profile.as_ref(), doc.metadata.exif.as_ref(), doc.source_color_context.as_ref().and_then(|c| c.original_icc.as_ref())].into_iter().flatten()
     {
@@ -198,13 +284,14 @@ fn retained_native_payload_and_maps(doc: &Document, limits: PreparationLimits, c
             }
         }
     }
-    Ok((payloads.bytes, payloads.map_bytes))
+    poll(control)?;
+    Ok(NativePayloadCensus { document: doc, retained: payloads.bytes, index: payloads.index, maps: payloads.map_bytes, visits: payloads.visits })
 }
 pub fn retained_native_payload_bytes(doc: &Document, limits: PreparationLimits, control: &Interrupt<'_>) -> Result<usize, IoError> {
-    Ok(retained_native_payload_and_maps(doc, limits, control)?.0)
+    Ok(retained_native_payload_census(doc, limits, control)?.retained_bytes())
 }
 pub(crate) fn retained_native_map_bytes(doc: &Document, limits: PreparationLimits, control: &Interrupt<'_>) -> Result<usize, IoError> {
-    Ok(retained_native_payload_and_maps(doc, limits, control)?.1)
+    Ok(retained_native_payload_census(doc, limits, control)?.known_map_reservation_bytes())
 }
 /// Measured public canonical/structural String and Vec capacities, excluding
 /// retained raster, cache, resource and other immutable byte payloads.
@@ -215,21 +302,24 @@ pub(crate) fn retained_native_map_bytes(doc: &Document, limits: PreparationLimit
 /// conservatively charges distinct mask Surface owners independently of tiles.
 /// Limits apply to this slice and its bounded identity index only; callers must
 /// admit raster/COW work and immutable retained payloads separately.
-pub fn retained_native_model_bytes(doc: &Document, limits: PreparationLimits, control: &Interrupt<'_>) -> Result<usize, IoError> {
+pub fn retained_native_model_census<'d>(doc: &'d Document, limits: PreparationLimits, control: &Interrupt<'_>) -> Result<NativeModelCensus<'d>, IoError> {
     let mut check = PcraftWriter::new();
     check.set_preparation_limits(limits)?;
     poll(control)?;
-    let mut counter = Payloads { seen: HashSet::new(), bytes: 0, index: 0, map_bytes: 0, limits, control };
-    super::native_save_model::measure(doc, &mut counter, control)?;
+    let mut counter = Payloads { seen: HashSet::new(), bytes: 0, index: 0, map_bytes: 0, limits, control, visits: NativeCensusVisits::default() };
+    counter.visits.model_visits = super::native_save_model::measure(doc, &mut counter, control)?;
     poll(control)?;
-    Ok(counter.bytes)
+    Ok(NativeModelCensus { document: doc, retained: counter.bytes, index: counter.index, visits: counter.visits })
+}
+pub fn retained_native_model_bytes(doc: &Document, limits: PreparationLimits, control: &Interrupt<'_>) -> Result<usize, IoError> {
+    Ok(retained_native_model_census(doc, limits, control)?.retained_bytes())
 }
 
 /// Retained payloads plus the measured public canonical/structural String and Vec capacity slice.
 /// Legacy text/effect/vector/private map allocations and allocator overhead remain unmeasured.
 pub fn retained_native_input_bytes(doc: &Document, limits: PreparationLimits, control: &Interrupt<'_>) -> Result<usize, IoError> {
     let payload = retained_native_payload_bytes(doc, limits, control)?;
-    let mut counter = Payloads { seen: HashSet::new(), bytes: payload, index: 0, map_bytes: 0, limits, control };
+    let mut counter = Payloads { seen: HashSet::new(), bytes: payload, index: 0, map_bytes: 0, limits, control, visits: NativeCensusVisits::default() };
     super::native_save_model::measure(doc, &mut counter, control)?;
     Ok(counter.bytes)
 }
@@ -696,3 +786,50 @@ mod tests {
 #[cfg(test)]
 #[path = "native_save_hdr_tests.rs"]
 mod hdr_tests;
+
+#[cfg(test)]
+mod census_receipt_tests {
+    use super::*;
+    #[test]
+    fn receipt_join_is_exact_document_not_equal_document_or_asserted_bytes() {
+        let doc = Document::new("receipt", photocraft_doc::Size::new(1, 1), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        let other = doc.clone();
+        let model = retained_native_model_census(&doc, PreparationLimits::default(), &Interrupt::NONE).unwrap();
+        let payload = retained_native_payload_census(&other, PreparationLimits::default(), &Interrupt::NONE).unwrap();
+        assert!(NativeCurrentCensus::join(model, payload).is_err());
+        let model = retained_native_model_census(&doc, PreparationLimits::default(), &Interrupt::NONE).unwrap();
+        let payload = retained_native_payload_census(&doc, PreparationLimits::default(), &Interrupt::NONE).unwrap();
+        let model_bytes = model.retained_bytes();
+        let payload_bytes = payload.retained_bytes();
+        let joined = NativeCurrentCensus::join(model, payload).unwrap();
+        assert!(joined.belongs_to(&doc));
+        assert!(!joined.belongs_to(&other));
+        assert_eq!(joined.retained_bytes(), model_bytes + payload_bytes);
+        assert_eq!(joined.model_retained_bytes(), retained_native_model_bytes(&doc, PreparationLimits::default(), &Interrupt::NONE).unwrap());
+        assert_eq!(joined.payload_retained_bytes(), retained_native_payload_bytes(&doc, PreparationLimits::default(), &Interrupt::NONE).unwrap());
+        assert!(joined.visit_scope().model_visits > 0);
+    }
+    #[test]
+    fn cancellation_during_origin_validation_preserves_typed_error() {
+        let format = photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Grayscale, photocraft_color::SampleType::U8, false);
+        let mut surface = Surface::try_with_default_bytes(format, &[0]).unwrap();
+        surface.try_write_pixel_f64(0, 0, &[1.0]).unwrap();
+        let calls = std::cell::Cell::new(0usize);
+        let cancelled = || { calls.set(calls.get() + 1); calls.get() > 1 };
+        let control = Interrupt::cancel_only(&cancelled);
+        let mut counter = Payloads { seen: HashSet::new(), bytes: 0, index: 0, map_bytes: 0, limits: PreparationLimits::default(), control: &control, visits: NativeCensusVisits::default() };
+        assert!(matches!(counter.surface(&surface), Err(IoError::Cancelled)));
+        assert!(calls.get() >= 2);
+        assert_eq!(counter.visits.identity_visits, 0);
+        assert_eq!(counter.bytes, 0);
+        assert_eq!(counter.map_bytes, 0);
+    }
+    #[test]
+    fn cancelled_census_cannot_produce_a_receipt() {
+        let doc = Document::new("cancel", photocraft_doc::Size::new(1, 1), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        let cancelled = || true;
+        let control = Interrupt::cancel_only(&cancelled);
+        assert!(matches!(retained_native_model_census(&doc, PreparationLimits::default(), &control), Err(IoError::Cancelled)));
+        assert!(matches!(retained_native_payload_census(&doc, PreparationLimits::default(), &control), Err(IoError::Cancelled)));
+    }
+}
