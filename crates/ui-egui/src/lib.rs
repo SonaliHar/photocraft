@@ -30,6 +30,7 @@ pub(crate) mod blend_preview;
 pub mod blur_pins;
 mod brand;
 pub(crate) mod brush_cursor;
+mod brush_mode_menu;
 pub mod brush_panel;
 pub mod brush_picker;
 pub mod brush_preset_dialog;
