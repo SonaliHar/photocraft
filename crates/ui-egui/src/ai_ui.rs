@@ -478,7 +478,8 @@ fn dependency_form(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<
                 }
                 if let (Some(license), Some(url)) =
                     (row.pointer("/model/license").and_then(Value::as_str), row.pointer("/model/licenseUrl").and_then(Value::as_str))
-                    && url.starts_with("https://") {
+                    && url.starts_with("https://")
+                {
                     ui.hyperlink_to(license, url);
                 }
             });

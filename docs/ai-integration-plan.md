@@ -2,7 +2,8 @@
 
 This is the implementation contract for native and browser AI workflows. The
 existing implementation was validated on PhotoCraft 0.6.0. Integration with the
-fork's newer 0.8.2 base compiles; final workflow and distribution gates are in progress. Test numbers from the earlier base are
+fork's newer 0.8.2 base passes the browser workflow and IO corpus gates; refreshed
+installer packaging is in progress. Test numbers from the earlier base are
 historical evidence, not proof that the newer base has passed the same checks.
 
 ## Implemented baseline
@@ -120,8 +121,12 @@ HTTP peers without a paid API call.
 
 These tests do not establish the user's actual prompt endpoint, credentials or
 vision-model capability. Real-photo quality, exact reference recreation and
-native Windows driver/GPU behavior require separate acceptance. New image
-interpretation and dependency UI/service checks are still being implemented.
+native Windows driver/GPU behavior require separate acceptance. On 0.8.2, the
+browser image-analysis/review/edit/generate/apply/Undo/Redo sequence passed with a
+synthetic Responses/Images peer. The live dependency inventory reported all five
+models present; public diagnostics and browser storage omitted provider keys.
+The new dialogs were visually inspected. The IO corpus suite passed after the
+upstream merge. Existing model files are size-checked, not claimed hash-verified.
 
 See [AI usage](ai-usage.md), [ComfyUI audit](comfyui-audit-2026-10-08.md) and
 [Photoshop workflow comparison](photoshop-workflow-abgleich-2026-10-08.md).
