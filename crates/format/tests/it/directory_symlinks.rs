@@ -1,6 +1,6 @@
 //! Directory cleanup only owns content-addressed objects; unrelated files survive.
 
-mod common;
+use crate::common;
 
 use common::temp_dir;
 use photocraft_color::{ColorMode, SampleType};

@@ -4,7 +4,7 @@
 //! Photoshop writes these blocks this way. Readers that check the block length exactly (Unity's
 //! PSD Importer, "Incorrect length for InfoLayers") reject a block whose length counts the padding.
 
-mod common;
+use crate::common;
 
 use common::Features;
 use photocraft_color::{ColorMode, SampleType};
