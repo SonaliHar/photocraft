@@ -51,6 +51,47 @@ fn raster_integer_text_colors_stay_bounded() {
     }
 }
 
+#[test]
+fn character_background_paints_behind_the_glyphs_only() {
+    let mut e = TextEngine::new();
+    let red = Color::rgb(1.0, 0.0, 0.0);
+    let plain = styled("H", CharStyle { size_pt: 72.0, color: Color::BLACK, ..Default::default() });
+    let backed = styled(
+        "H",
+        CharStyle { size_pt: 72.0, color: Color::BLACK, background: Some(red), ..Default::default() },
+    );
+    let (lay, bare) = e.render(&plain, 72.0, PixelFormat::RGBA8);
+    let (shaded, boxy) = e.render(&backed, 72.0, PixelFormat::RGBA8);
+    assert_eq!(lay.backgrounds.len(), 0);
+    assert_eq!(shaded.backgrounds.len(), 1);
+    assert!(boxy.rect.height() >= bare.rect.height() && boxy.rect.width() >= bare.rect.width());
+    let solid = |s: &photocraft_raster::Surface, r: photocraft_geom::Rect, pred: fn([f32; 4]) -> bool| {
+        let px = s.read_region(r);
+        px.as_chunks::<4>().0.iter().filter(|p| pred(**p)).count()
+    };
+    let is_red = |p: [f32; 4]| p[0] > 0.8 && p[1] < 0.2 && p[2] < 0.2 && p[3] > 0.8;
+    let is_black = |p: [f32; 4]| p[0] < 0.15 && p[1] < 0.15 && p[2] < 0.15 && p[3] > 0.9;
+    assert!(solid(&boxy.surface, boxy.rect, is_red) > 20, "the line box is the background colour");
+    assert!(solid(&boxy.surface, boxy.rect, is_black) > 10, "the glyph stays on top of the box");
+    // Only the characters that ask for a fill get one. "One\n" is the first run.
+    let two = TextLayer {
+        text: "One\nTwo".into(),
+        runs: vec![
+            TextRun { len: 4, style: CharStyle { size_pt: 20.0, background: Some(red), ..Default::default() } },
+            TextRun { len: 3, style: CharStyle { size_pt: 20.0, ..Default::default() } },
+        ],
+        ..Default::default()
+    };
+    let l = e.layout(&two, 72.0);
+    assert_eq!(l.backgrounds.len(), 1);
+    let mid = (l.backgrounds[0].y0 + l.backgrounds[0].y1) * 0.5;
+    assert!(mid < l.lines[1].baseline - l.lines[1].ascent, "the box stays on the first line");
+    let vertical = TextLayer { orientation: Orientation::Vertical, ..backed };
+    let v = e.layout(&vertical, 72.0);
+    assert_eq!(v.backgrounds.len(), 1);
+    assert!(v.backgrounds[0].x1 > v.backgrounds[0].x0 && v.backgrounds[0].y1 > v.backgrounds[0].y0);
+}
+
 fn with_para(mut t: TextLayer, p: ParagraphStyle) -> TextLayer {
     t.paragraphs = vec![ParagraphRun { len: t.text.len(), style: p }];
     t
@@ -1219,6 +1260,68 @@ fn psd_round_trips_antialias_opentype_and_warp() {
         tags.sort_unstable();
         assert_eq!(tags, ["frac", "swsh"]);
     }
+}
+
+/// Photoshop stores the box behind type on the character style sheet
+/// (`_FillBackgroundFlag` / `_FillBackgroundColor`), the cream in `Pagella solare_menzione.psd`.
+#[test]
+fn psd_round_trips_character_fill_background() {
+    let cream = Color::rgba(0.961, 0.929, 0.859, 1.0);
+    let style = CharStyle { font_family: "Inter".into(), size_pt: 20.0, background: Some(cream), ..Default::default() };
+    let t = styled("Pagella", style);
+    let bytes = crate::psd::build_tysh(&t, 72.0, None);
+    let engine = String::from_utf8_lossy(&bytes);
+    assert!(engine.contains("_FillBackgroundFlag true"), "the flag is Photoshop's key");
+    assert!(engine.contains("_FillBackgroundColor"), "the colour is Photoshop's key");
+    let back = crate::psd::text_layer_from_tysh(&bytes, 72.0).unwrap();
+    let got = back.char_runs()[0].style.background.expect("the fill comes back");
+    let [r, g, b] = got.to_rgb();
+    assert!((r - 0.961).abs() < 1e-3 && (g - 0.929).abs() < 1e-3 && (b - 0.859).abs() < 1e-3, "{got:?}");
+    assert!((got.alpha - 1.0).abs() < 1e-3);
+    let clear = styled("Pagella", CharStyle { font_family: "Inter".into(), size_pt: 20.0, ..Default::default() });
+    let clear_bytes = crate::psd::build_tysh(&clear, 72.0, None);
+    assert!(String::from_utf8_lossy(&clear_bytes).contains("_FillBackgroundFlag false"));
+    let clear_back = crate::psd::text_layer_from_tysh(&clear_bytes, 72.0).unwrap();
+    assert!(clear_back.char_runs()[0].style.background.is_none());
+}
+
+/// The cream boxes in `Pagella solare_menzione.psd` (repo root, not committed) are Photoshop's
+/// character fill, and a TySh rewrite keeps them.
+#[test]
+fn pagella_psd_keeps_the_cream_character_fill() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Pagella solare_menzione.psd");
+    let Ok(bytes) = std::fs::read(&path) else {
+        assert!(std::env::var_os("PHOTOCRAFT_PAGELLA").is_none(), "missing {}", path.display());
+        return;
+    };
+    let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
+    let mut cream = 0usize;
+    let mut rewritten = 0usize;
+    for layer in file.layers() {
+        let Some(block) = layer.block(b"TySh") else { continue };
+        let Some(t) = crate::psd::text_layer_from_tysh(&block.data, 72.0) else { continue };
+        let had = t.char_runs().iter().any(|r| {
+            r.style.background.is_some_and(|c| {
+                let [r, g, b] = c.to_rgb();
+                (r - 0.961).abs() < 0.02 && (g - 0.929).abs() < 0.02 && (b - 0.859).abs() < 0.02
+            })
+        });
+        if !had {
+            continue;
+        }
+        cream += 1;
+        let back = crate::psd::text_layer_from_tysh(&crate::psd::build_tysh(&t, 72.0, None), 72.0).unwrap();
+        if back.char_runs().iter().any(|r| {
+            r.style.background.is_some_and(|c| {
+                let [r, g, b] = c.to_rgb();
+                (r - 0.961).abs() < 0.02 && (g - 0.929).abs() < 0.02 && (b - 0.859).abs() < 0.02
+            })
+        }) {
+            rewritten += 1;
+        }
+    }
+    assert!(cream > 0, "the PSD's type layers have no cream _FillBackgroundColor ({})", bytes.len());
+    assert_eq!(rewritten, cream, "a TySh rewrite dropped the cream fill");
 }
 
 /// #1469: Some older PSD writers combine a zero PointBase with an enormous local ink origin.

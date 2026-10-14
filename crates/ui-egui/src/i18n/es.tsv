@@ -2437,6 +2437,7 @@ cameraRaw	Amount	Cantidad
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Selector de color (Color del texto)
+	Color Picker (Background Color)	Selector de color (Color de fondo)
 	Color Picker ({name})	Selector de color ({name})
 	Color Picker (Fill Color)	Selector de color (Color de relleno)
 	Fill color	Color de relleno
@@ -2829,3 +2830,5 @@ curves	Smooth	Suavizar
 	Sent to {printer}	Enviado a {printer}
 	set in Print Settings…	se establece en Ajustes de impresión…
 	ICO is limited to 256 × 256 pixels	ICO está limitado a 256 × 256 píxeles
+
+# Paragraph background behind type

@@ -2955,6 +2955,7 @@ cameraRaw	Color	색상
 
 # Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	색상 선택기 (텍스트 색상)
+	Color Picker (Background Color)	색상 선택기 (배경 색상)
 	Color Picker ({name})	색상 선택기 ({name})
 	Color Picker (Fill Color)	색상 선택기 (채우기 색상)
 	Fill color	채우기 색상
@@ -3319,3 +3320,5 @@ curves	Smooth	매끄럽게
 	Sent to {printer}	{printer}(으)로 전송됨
 	set in Print Settings…	인쇄 설정에서 지정…
 	ICO is limited to 256 × 256 pixels	ICO는 256 × 256픽셀로 제한됩니다
+
+# Paragraph background behind type
