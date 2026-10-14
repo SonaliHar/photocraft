@@ -163,6 +163,13 @@ impl Ctx<'_> {
         }
     }
 
+    /// [`Self::channel_plane`] without the warnings sink, so a layer's channels decode
+    /// concurrently (their RLE rows are the bulk of the open time on full-canvas layers).
+    fn channel_plane_decoded(&self, rec: &LayerRecord, id: i16) -> Option<Vec<u8>> {
+        rec.channel(id)?;
+        rec.decode_channel(id, self.file.header.depth, self.file.header.version).ok()
+    }
+
     fn record_surface(&mut self, rec: &LayerRecord, name: &str) -> Surface {
         let r = rec.rect;
         if r.is_empty() || r.size().is_err() {
@@ -170,15 +177,28 @@ impl Ctx<'_> {
         }
         let (w, h) = r.size().unwrap_or((0, 0));
         let s = self.fmt.sample;
-        let mut planes = Vec::with_capacity(self.cc + 1);
-        for c in 0..self.cc {
-            planes.push(self.channel_plane(rec, c as i16, name));
-        }
-        planes.push(self.channel_plane(rec, CHANNEL_TRANSPARENCY, name));
+        let ids: Vec<i16> = (0..self.cc as i16).chain([CHANNEL_TRANSPARENCY]).collect();
+        let planes: Vec<Option<Vec<u8>>> = if cfg!(target_arch = "wasm32") {
+            ids.iter().map(|&id| self.channel_plane(rec, id, name)).collect()
+        } else {
+            // The channels decode independently; their RLE rows are the bulk of the open
+            // time for full-canvas layers, so they run side by side and the warnings land
+            // in the same order afterwards.
+            // par_map reuses the crate's worker pool (one OS thread per channel per layer
+            // would spawn thousands on a file with many layers).
+            let decoded: Vec<Option<Vec<u8>>> = crate::pixels::par_map(ids.to_vec(), |id| self.channel_plane_decoded(rec, id));
+            let mut planes: Vec<Option<Vec<u8>>> = Vec::with_capacity(decoded.len());
+            for (&id, p) in ids.iter().zip(decoded) {
+                if p.is_none() && rec.channel(id).is_some() {
+                    self.warn(format!("layer \"{name}\": channel {id} could not be decoded; treated as empty"));
+                }
+                planes.push(p);
+            }
+            planes
+        };
         // A channel that is in the file but could not be decoded leaves the layer empty, as the
         // warning says. Filling in for it would paint an opaque black layer over the document.
-        let ids = (0..self.cc as i16).chain([CHANNEL_TRANSPARENCY]);
-        if ids.zip(&planes).any(|(id, p)| p.is_none() && rec.channel(id).is_some()) {
+        if ids.iter().zip(planes.iter()).any(|(&id, p)| p.is_none() && rec.channel(id).is_some()) {
             return Surface::new(self.fmt);
         }
         // Only decoded channel data justifies a buffer: the decoders bound their output by the
@@ -653,8 +673,9 @@ pub fn psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) 
         match r.id {
             ids::RESOLUTION_INFO => {
                 if let Ok(ri) = photocraft_psd::ResolutionInfo::from_bytes(&r.data) {
-                    let ppi = |res: f64, unit: u16| if unit == 2 { res * 2.54 } else { res };
-                    let (x, y) = (ppi(ri.h_res(), ri.h_res_unit), ppi(ri.v_res(), ri.v_res_unit));
+                    // Fixed 16.16 hRes/vRes are pixels per inch. The unit shorts only
+                    // say how to show that number (1 = px/in, 2 = px/cm).
+                    let (x, y) = (ri.h_res(), ri.v_res());
                     doc.resolution_dpi = x as f32;
                     warnings.extend(crate::unequal_resolution_warning(x, y));
                 }
