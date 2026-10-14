@@ -79,7 +79,7 @@ what an agent can't finish alone.
 ### G8. Type depth
 - **Partial:** type on a path (TYPE-218-1): 2026-10-13, the horizontal Type tool clicks ellipse,
   work and saved paths, with a curved caret/selection and one undo step (#1082). PSD path text,
-  interactive start/end/flip handles and vertical path text UI remain missing.
+  interactive start/end/flip handles, text inside shapes and vertical path text UI remain missing.
 - **Missing:** paragraph direction UI (TYPE-218-2), complex-script
   fallback fonts and golden tests (TYPE-218-3), OpenType Numerals and Stylistic Sets submenus
   (TYPE-218-5; the Character panel buttons landed 2026-10-11, #3752), live Warp Text preview

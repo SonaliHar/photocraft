@@ -9,7 +9,7 @@ id = "TYPE-218-1"
 target = "Type on a path: path shape, glyphs along the curve, caret follows, PSD round trip"
 status = "partial"
 issue = 218
-note = "TextShape::Path with rigid glyph placement by arc length, type.attachToPath/type.detachFromPath (#4365) and atomic type.create path params. The Type tool follows clicked shape/work/saved paths with a curved caret and selection (#5189), including the seam of closed circles. .pcraft round trip. Missing: PSD path text (it saves as point text), interactive start/end/flip handles and vertical path text UI"
+note = "TextShape::Path with rigid glyph placement by arc length, type.attachToPath/type.detachFromPath (#4365) and atomic type.create path params. The Type tool follows clicked shape/work/saved paths with a curved caret and selection (#1082), including the seam of closed circles. .pcraft round trip. Missing: PSD path text (it saves as point text), interactive start/end/flip handles, text inside shapes and vertical path text UI"
 
 [[item]]
 id = "TYPE-218-2"
