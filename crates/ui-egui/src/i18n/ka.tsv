@@ -3787,6 +3787,7 @@ layerLabel	No Color	ფერის გარეშე
 	Functions	ფუნქციები
 	Print Resolution:	ბეჭდვის გარჩევადობა:
 
+# Added upstream (sync 2026-10-13)
 	Merge Group	ჯგუფის შერწყმა
 	Manage submitted jobs in the system print queue	სისტემის ბეჭდვის რიგში გაგზავნილი დავალებების მართვა
 	Enable animations	ანიმაციების ჩართვა
@@ -4072,6 +4073,7 @@ layers	Fill:	შევსება:
 shape	Appearance	იერსახე
 	Export As: {n} layers	ექსპორტი სხვა ფორმატით: შრე: {n}
 	Exported {n} files	ექსპორტირებულია ფაილი: {n}
+# Added upstream (sync 2 2026-10-13)
 	A brush preset with this name already exists	ფუნჯის პრესეტი ამ სახელით უკვე არსებობს
 	Action playback stopped	მოქმედების შესრულება შეწყდა
 	Add Mask to Selection	ნიღბის მონიშნულში დამატება
@@ -4081,6 +4083,13 @@ shape	Appearance	იერსახე
 	Allow Continue	გაგრძელების დაშვება
 	Attempt to Automatically Align Source Images	წყარო გამოსახულებების ავტომატური სწორების მცდელობა
 	Auto Add/Delete	ავტომატური დამატება/წაშლა
+
+# Native Windows printing qualification
+	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	ბეჭდვის პარამეტრებში… დამატებით ნუ ჩართავთ „სარკისებურ ასახვას“: ორი ასახვა ერთმანეთს აბათილებს.
+	Print Settings…	ბეჭდვის პარამეტრები…
+	Remember to turn off the printer's own colour management in Print Settings…	არ დაგავიწყდეთ თავად პრინტერის ფერების მართვის გამორთვა ბეჭდვის პარამეტრებში…
+	Sent to {printer}	გაიგზავნა პრინტერზე: {printer}
+	set in Print Settings…	განისაზღვრება ბეჭდვის პარამეტრებში…
 	Based On	საფუძველი
 	Bend	მოხრა
 	Capture Brush Size in Preset	ფუნჯის ზომის პრესეტში შენახვა
@@ -4158,6 +4167,7 @@ shape	Appearance	იერსახე
 @plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	გამოტოვებული ნაბიჯი, რომელსაც Photoshop-ში შესატყვისი არ აქვს: {n}
 liquify	Rate	სიჩქარე
 
+# Sync 2026-10-14 (strings added upstream)
 	Choose Stack Mode:	აირჩიეთ დასტის რეჟიმი:
 	No pin selected	სამაგრი არ არის მონიშნული
 	Click the image to add a pin; drag a pin to move it, or its ring to change its blur. Delete removes the selected pin.	სამაგრის დასამატებლად დაწკაპეთ გამოსახულებაზე; სამაგრის გადასაადგილებლად გადაათრიეთ ის, გაბუნდოვნების შესაცვლელად კი — მისი რგოლი. Delete წაშლის მონიშნულ სამაგრს.
