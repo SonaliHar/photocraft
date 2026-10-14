@@ -70,6 +70,19 @@ impl Walk<'_, '_, '_> {
                 FilterValue::String(value) => string(self.counter, value)?,
                 FilterValue::Enum { domain, .. } => string(self.counter, domain)?,
                 FilterValue::Color { components, .. } => slots(self.counter, components)?,
+                FilterValue::StoredColor(storage) => {
+                    let photocraft_doc::xcf_filters::ExactColorStorage { layout, samples, opaque_tail } = storage;
+                    // These owned mutable buffers are model-clone storage, not
+                    // immutable raster/cache/resource Arc payloads.
+                    string(self.counter, layout)?;
+                    slots(self.counter, samples)?;
+                    slots(self.counter, opaque_tail)?;
+                    for bytes in [layout.as_bytes(), samples.as_slice(), opaque_tail.as_slice()] {
+                        for _ in bytes.chunks(4096) {
+                            self.visit(depth)?;
+                        }
+                    }
+                }
                 FilterValue::Curve { points_f64_bits, point_types, samples_f64_bits, .. } => {
                     slots(self.counter, points_f64_bits)?;
                     slots(self.counter, point_types)?;
@@ -234,7 +247,11 @@ impl Walk<'_, '_, '_> {
     fn legacy_document(&mut self, doc: &Document) -> Result<(), IoError> {
         let Metadata { xmp, exif: _, psd_resources, psd_global_blocks, text } = &doc.metadata;
         slots(self.counter, text)?;
-        for (key,value) in text { self.visit(0)?; string(self.counter,key)?; string(self.counter,value)?; }
+        for (key, value) in text {
+            self.visit(0)?;
+            string(self.counter, key)?;
+            string(self.counter, value)?;
+        }
         optional(self.counter, xmp)?;
         slots(self.counter, psd_resources)?;
         slots(self.counter, psd_global_blocks)?;
@@ -295,14 +312,21 @@ impl Walk<'_, '_, '_> {
                 self.counter.add(7, indexed.palette().as_ptr() as usize, indexed.palette_capacity_bytes())?;
             }
             if let LayerContent::Text(text) = &layer.content
-                && let photocraft_doc::text::TextShape::Path { path, .. } = &text.shape {
-                slots(self.counter,&path.knots)?;
-                for _ in &path.knots { self.visit(0)?; }
+                && let photocraft_doc::text::TextShape::Path { path, .. } = &text.shape
+            {
+                slots(self.counter, &path.knots)?;
+                for _ in &path.knots {
+                    self.visit(0)?;
+                }
             }
-            if let Some(video)=&layer.video {
-                slots(self.counter,&video.frames)?;
-                if let Some(original)=&video.original_frames {slots(self.counter,original)?;}
-                if let photocraft_doc::video::VideoSource::File {path}=&video.source {string(self.counter,path)?;}
+            if let Some(video) = &layer.video {
+                slots(self.counter, &video.frames)?;
+                if let Some(original) = &video.original_frames {
+                    slots(self.counter, original)?;
+                }
+                if let photocraft_doc::video::VideoSource::File { path } = &video.source {
+                    string(self.counter, path)?;
+                }
             }
             if let LayerContent::Group(group) = &layer.content {
                 self.layers(&group.children, depth + 1)?;
@@ -335,6 +359,52 @@ pub(super) fn measure<'c, 'i>(doc: &Document, counter: &mut Payloads<'c, 'i>, co
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn exact_stored_color_owned_spare_capacities_are_model_storage() {
+        let mut doc = Document::new("raw color model", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+        let layer = Layer::raster("one", doc.pixel_format());
+        let id = layer.id;
+        doc.layers.push(layer);
+        let storage = ExactColorStorage { layout: "RGBA float".into(), samples: vec![0; 16], opaque_tail: vec![0; 4] };
+        let node = FilterNode {
+            id: item_identity::FilterId(2),
+            operation: OperationIdentity { name: "caller:opaque-color".into(), stored_version: "stored".into(), schema_epoch: "caller".into() },
+            source_display_name: None,
+            source_icon: None,
+            arguments: vec![FilterArgument { name: "literal".into(), value: FilterValue::StoredColor(storage) }],
+            enabled: true,
+            opacity_f64_bits: 1f64.to_bits(),
+            source_clipping: None,
+            source_region: None,
+            mask: None,
+            auxiliary: vec![],
+            composition: None,
+        };
+        let mut state = XcfState::default();
+        state.filter_stacks.push(FilterStack { owner: item_identity::ItemRef::Layer(id), nodes: vec![node], revision: 0 });
+        doc.xcf_state = Some(state);
+        let before = crate::retained_native_model_bytes(&doc, Default::default(), &Interrupt::NONE).unwrap();
+        let storage = match &mut doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].arguments[0].value {
+            FilterValue::StoredColor(value) => value,
+            _ => panic!("raw storage fixture"),
+        };
+        let old = storage.layout.capacity() + storage.samples.capacity() + storage.opaque_tail.capacity();
+        storage.layout.reserve(512);
+        storage.samples.reserve(1024);
+        storage.opaque_tail.reserve(8192);
+        let extra = storage.layout.capacity() + storage.samples.capacity() + storage.opaque_tail.capacity() - old;
+        let after = crate::retained_native_model_bytes(&doc, Default::default(), &Interrupt::NONE).unwrap();
+        assert_eq!(after - before, extra);
+        assert!(
+            crate::retained_native_model_bytes(
+                &doc,
+                photocraft_format::PreparationLimits { resident_bytes: after - 1, ..Default::default() },
+                &Interrupt::NONE
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn shared_and_distinct_mask_surface_owners_have_separate_model_charges() {

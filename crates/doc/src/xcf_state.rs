@@ -185,6 +185,15 @@ fn arguments(
                     resource(*id, resources)?
                 }
             }
+            FilterValue::StoredColor(ExactColorStorage { layout, samples, opaque_tail }) => {
+                if !stored_color_shape(layout, samples, opaque_tail) {
+                    return Err(invalid("stored_color_storage"));
+                }
+                for _ in samples.chunks(32 << 10).chain(opaque_tail.chunks(32 << 10)) {
+                    cancellation(control)?;
+                }
+                cancellation(control)?;
+            }
             FilterValue::Curve { free, points_f64_bits, point_types, samples_f64_bits } => {
                 if points_f64_bits.len() > 100000
                     || samples_f64_bits.len() > 100000

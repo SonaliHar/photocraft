@@ -131,6 +131,19 @@ impl<'a, 'b> Census<'a, 'b> {
                 FilterValue::Color { components, .. } => {
                     self.charge(mul(n(components.capacity())?, n(size_of::<photocraft_doc::xcf_filters::ExactNumber>())?)?, n(components.len())?)?
                 }
+                FilterValue::StoredColor(storage) => {
+                    let photocraft_doc::xcf_filters::ExactColorStorage { layout, samples, opaque_tail } = storage;
+                    let capacity = add(n(layout.capacity())?, add(n(samples.capacity())?, n(opaque_tail.capacity())?)?)?;
+                    let length = add(n(layout.len())?, add(n(samples.len())?, n(opaque_tail.len())?)?)?;
+                    self.charge(capacity, length)?;
+                    for bytes in [layout.as_bytes(), samples.as_slice(), opaque_tail.as_slice()] {
+                        for _ in bytes.chunks(4096) {
+                            self.charge(0, 1)?;
+                        }
+                    }
+                    // Only owned metadata accounting: no transfer/profile or
+                    // resource reference is inferred from these opaque bytes.
+                }
                 FilterValue::Curve { points_f64_bits, point_types, samples_f64_bits, .. } => self.charge(
                     add(add(mul(n(points_f64_bits.capacity())?, 16)?, mul(n(point_types.capacity())?, 4)?)?, mul(n(samples_f64_bits.capacity())?, 8)?)?,
                     add(n(points_f64_bits.len())?, n(samples_f64_bits.len())?)?,
@@ -340,6 +353,28 @@ pub fn execute<'s>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stored_color_census_counts_native_capacity_without_profile_alias() {
+        let mut samples = Vec::with_capacity(128);
+        samples.resize(16, 0);
+        let mut tail = Vec::with_capacity(8192);
+        tail.resize(4097, 0);
+        let layout = String::from("RGBA float");
+        let capacity = (layout.capacity() + samples.capacity() + tail.capacity()) as u64;
+        let length = (layout.len() + samples.len() + tail.len()) as u64;
+        let args = vec![FilterArgument {
+            name: "raw".into(),
+            value: FilterValue::StoredColor(photocraft_doc::xcf_filters::ExactColorStorage { layout, samples, opaque_tail: tail }),
+        }];
+        let expected = capacity + (args.capacity() * size_of::<FilterArgument>() + args[0].name.capacity()) as u64;
+        let mut census = Census::new(ExecutionLimits::default(), &Interrupt::NONE);
+        census.args(&args, 0).unwrap();
+        assert_eq!(census.bytes(), expected);
+        assert!(census.work() >= length);
+        let stop = || true;
+        let mut cancelled = Census::new(ExecutionLimits::default(), &Interrupt::cancel_only(&stop));
+        assert_eq!(cancelled.args(&args, 0).unwrap_err(), E::Cancelled);
+    }
     use photocraft_color::PixelFormat;
     use photocraft_doc::{SampleEncoding, xcf_filters::OperationIdentity};
     fn node(id: u64) -> GraphNode {

@@ -885,6 +885,15 @@ impl<'a, 'i> CanonicalCensus<'a, 'i> {
                 FilterValue::String(s) => self.string(s)?,
                 FilterValue::Enum { domain, value: _ } => self.string(domain)?,
                 FilterValue::Color { components, encoding: _, profile: _ } => self.vec(components, 16)?,
+                FilterValue::StoredColor(crate::xcf_filters::ExactColorStorage { layout, samples, opaque_tail }) => {
+                    if !crate::xcf_filters::stored_color_shape(layout, samples, opaque_tail) { return Err(BackingError::Length); }
+                    self.string(layout)?;
+                    self.vec(samples, 1024)?;
+                    self.vec(opaque_tail, 1 << 20)?;
+                    for chunk in samples.chunks(32 << 10).chain(opaque_tail.chunks(32 << 10)) {
+                        self.control.check(chunk.len() as u64)?;
+                    }
+                }
                 FilterValue::Curve { free: _, points_f64_bits, point_types, samples_f64_bits } => {
                     self.vec(points_f64_bits, 100_000)?;
                     self.vec(point_types, 100_000)?;

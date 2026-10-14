@@ -5,7 +5,7 @@ use photocraft_raster::Interrupt;
 use std::mem::size_of;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Error { Cancelled, RaisedLimits, Limit, Allocation, InvalidSchema, Identity, UnknownProperty, PropertyOrder, MissingProperty, Value, Index }
+pub enum Error { Cancelled, RaisedLimits, Limit, Allocation, InvalidSchema, Identity, UnknownProperty, PropertyOrder, MissingProperty, Value, Index, StoredColorUnsupported }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "typed operation schema: {self:?}") }
 }
@@ -84,6 +84,9 @@ impl<'c, 'i> ValidationContext<'c, 'i> {
             FilterValue::String(value) => self.string(value, 64 << 10)?,
             FilterValue::Enum { domain, .. } => self.string(domain, 256)?,
             FilterValue::Color { components, .. } => self.vector(components)?,
+            FilterValue::StoredColor(storage) => {
+                self.string(&storage.layout, 64 << 10)?; self.vector(&storage.samples)?; self.vector(&storage.opaque_tail)?;
+            }
             FilterValue::Curve { points_f64_bits, point_types, samples_f64_bits, .. } => {
                 self.vector(points_f64_bits)?; self.vector(point_types)?; self.vector(samples_f64_bits)?;
             }
@@ -233,6 +236,7 @@ fn prepare_rule(rule: ValueRule<'_>, context: &mut ValidationContext<'_, '_>) ->
 }
 fn check_value(rule: ValueRule<'_>, value: &FilterValue, context: &mut ValidationContext<'_, '_>) -> Result<()> {
     context.envelope(value, 0)?;
+    if matches!(value, FilterValue::StoredColor(_)) { return Err(Error::StoredColorUnsupported); }
     match (rule, value) {
         (ValueRule::Number(rule), FilterValue::Number(value)) => check_number(rule, value),
         (ValueRule::Bool, FilterValue::Bool(_)) => Ok(()),

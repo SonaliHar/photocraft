@@ -12,16 +12,32 @@ pub enum ExactNumber {
     Float64Bits(u64),
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExactColorStorage {
+    pub layout: String,
+    pub samples: Vec<u8>,
+    pub opaque_tail: Vec<u8>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FilterValue {
     Number(ExactNumber),
     Bool(bool),
     String(String),
     Enum { domain: String, value: i32 },
     Color { components: Vec<ExactNumber>, encoding: SampleEncoding, profile: Option<ResourceId> },
+    /// Exact serialized color storage, with no inferred numeric layout, transfer or profile.
+    /// Semantic consumers must explicitly bind the layout and original bytes themselves.
+    StoredColor(ExactColorStorage),
     Curve { free: bool, points_f64_bits: Vec<[u64; 2]>, point_types: Vec<i32>, samples_f64_bits: Vec<u64> },
     Config(Vec<FilterArgument>),
     Resource(ResourceId),
     Graph(FilterGraph),
+}
+
+/// Structural storage bounds only; this does not establish color semantics.
+pub(crate) fn stored_color_shape(layout: &str, samples: &[u8], opaque_tail: &[u8]) -> bool {
+    !layout.is_empty() && layout.len() <= 256 && !layout.as_bytes().contains(&0)
+        && !samples.is_empty() && samples.len() <= 1024 && opaque_tail.len() <= 1 << 20
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -113,6 +113,7 @@ pub mod xcf_graph_candidate;
 pub use xcf_filters::graph_argument_candidate;
 pub use xcf_filters::scene_channel_preparation_candidate;
 pub use xcf_filters::scene_channel_input_candidate;
+pub use xcf_filters::colorize_source;
 pub use xcf_filters::{
     STRETCH_HSV_SCHEMA, MappedStretchHsvSource, StretchHsvMappingLimits,
     StretchHsvMappingRequirements, StretchHsvSourceIdentity, map_retained_stretch_hsv_source,

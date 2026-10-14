@@ -332,6 +332,7 @@ impl<'a> Builder<'a, '_, '_> {
                 FilterValue::Number(number) => validate_number(number)?,
                 FilterValue::Config(args) => self.arguments(args, depth + 1)?,
                 FilterValue::Graph(_) => return Err(unsupported("resolver supplied unqualified nested graph")),
+                FilterValue::StoredColor(_) => return Err(unsupported("resolver stored color requires an exact literal binding")),
                 FilterValue::Resource(id) if id.0 == 0 => return Err(unsupported("zero resource reference")),
                 FilterValue::String(s) => {
                     self.check_string(s)?;

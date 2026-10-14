@@ -208,6 +208,7 @@ fn validate_arguments(candidate: &Candidate, arguments: &[FilterArgument]) -> Re
         if std::mem::replace(slot, true) {
             return Err(GraphExecuteError::Operation("duplicate candidate source argument"));
         }
+        if matches!(&argument.value, FilterValue::StoredColor(_)) { return Err(GraphExecuteError::Operation("StoredColor candidate evaluation is unsupported")); }
         let valid = match (kind, argument.name.as_str(), &argument.value) {
             (Kind::Sobel | Kind::StretchContrast, name, FilterValue::Bool(value)) => candidate.matches_source_boolean(name, *value),
             (Kind::Checkerboard, name @ ("x" | "y" | "x-offset" | "y-offset"), FilterValue::Number(ExactNumber::Signed { width: 32, value })) => {

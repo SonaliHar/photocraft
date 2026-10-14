@@ -2,6 +2,10 @@
 //! their previous behavior. The owned route supplies a persistent model owner.
 //! Complex metadata uses the same bounded logical clone envelope as save
 //! preparation; this is not an allocator/RSS census.
+//! Raw StoredColor is serialized in the separately bounded XCF state blob,
+//! loaded through its existing byte-scaled model reservation and chunked parser.
+//! This helper's unchanged 64 KiB limit applies to cloned manifest metadata,
+//! not to that XCF state-blob path. No storage limit is raised by the new variant.
 use crate::{FormatError, Result, convert::Fetch};
 use std::io::Write;
 

@@ -1,5 +1,8 @@
 //! Selective channel-metadata staging. Global source/resource/selection state is
 //! borrowed and validated, never cloned merely to obtain atomic publication.
+#[cfg(test)]
+#[path = "stored_color_clone_tests.rs"]
+mod stored_color_clone_tests;
 use super::{invalid, Result};
 use crate::{Document, XcfState, FilterMask, item_identity::*, xcf_state::ItemState, xcf_filters::*, xcf_items::EditableSource, xcf_provenance::OpaqueRecord, import_compositing::GimpComposition};
 use photocraft_raster::{Interrupt, Surface};
@@ -36,6 +39,10 @@ pub(super) fn arguments(values:&[FilterArgument],depth:usize,control:&Interrupt<
             FilterValue::String(value)=>FilterValue::String(string(value,control)?),
             FilterValue::Enum{domain,value}=>FilterValue::Enum{domain:string(domain,control)?,value:*value},
             FilterValue::Color{components,encoding,profile}=>FilterValue::Color{components:copied(components,control)?,encoding:*encoding,profile:*profile},
+            FilterValue::StoredColor(ExactColorStorage{layout,samples,opaque_tail})=>{
+                if !stored_color_shape(layout,samples,opaque_tail){return Err(invalid("stored_color_storage"));}
+                FilterValue::StoredColor(ExactColorStorage{layout:string(layout,control)?,samples:copied(samples,control)?,opaque_tail:copied(opaque_tail,control)?})
+            },
             FilterValue::Curve{free,points_f64_bits,point_types,samples_f64_bits}=>FilterValue::Curve{free:*free,points_f64_bits:copied(points_f64_bits,control)?,point_types:copied(point_types,control)?,samples_f64_bits:copied(samples_f64_bits,control)?},
             FilterValue::Config(config)=>FilterValue::Config(arguments(config,depth+1,control)?),
             FilterValue::Graph(graph)=>{
@@ -83,6 +90,11 @@ impl Census<'_,'_> {
             match &argument.value {
                 FilterValue::String(value)=>self.text(value)?,FilterValue::Enum{domain,..}=>self.text(domain)?,
                 FilterValue::Color{components,..}=>{self.array(components)?;add(&mut self.work,components.len() as u64)?;},
+                FilterValue::StoredColor(ExactColorStorage{layout,samples,opaque_tail})=>{
+                    if !stored_color_shape(layout,samples,opaque_tail){return Err(invalid("stored_color_storage"));}
+                    self.text(layout)?;self.array(samples)?;self.array(opaque_tail)?;
+                    for chunk in samples.chunks(32<<10).chain(opaque_tail.chunks(32<<10)){poll(self.control)?;add(&mut self.work,chunk.len() as u64)?;}
+                },
                 FilterValue::Curve{points_f64_bits,point_types,samples_f64_bits,..}=>{self.array(points_f64_bits)?;self.array(point_types)?;self.array(samples_f64_bits)?;add(&mut self.work,(points_f64_bits.len()+point_types.len()+samples_f64_bits.len()) as u64)?;},
                 FilterValue::Config(config)=>self.arguments(config,depth+1)?,
                 FilterValue::Graph(graph)=>{

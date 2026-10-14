@@ -148,6 +148,68 @@ fn decode_xcf_state(bytes: &[u8], control: &photocraft_raster::Interrupt<'_>) ->
 /// Native state metadata borrows the model; cache payloads are registered as blobs separately.
 /// This avoids cloning large source byte buffers just to remove them from JSON.
 struct StoredXcfState<'a>(&'a photocraft_doc::XcfState);
+/// Raw stored-color enum identity needs reader 9, including nested source configurations.
+/// This scans storage identities only; it neither interprets layouts nor resolves profiles.
+pub(crate) fn requires_reader_v9_state_with(doc: &Document, control: photocraft_raster::Interrupt<'_>) -> Result<bool> {
+    use photocraft_doc::xcf_filters::{FilterArgument, FilterValue};
+    fn visit(control: photocraft_raster::Interrupt<'_>, visits: &mut usize) -> Result<()> {
+        if control.cancelled() { return Err(FormatError::Cancelled); }
+        *visits = visits.checked_add(1).filter(|n| *n <= 100_000).ok_or_else(|| FormatError::LimitExceeded("stored-color feature scan visits".into()))?;
+        Ok(())
+    }
+    fn arguments(values: &[FilterArgument], depth: usize, visits: &mut usize, control: photocraft_raster::Interrupt<'_>) -> Result<bool> {
+        if depth > 32 || values.len() > 100_000 { return Err(FormatError::LimitExceeded("stored-color feature scan depth/count".into())); }
+        if control.cancelled() { return Err(FormatError::Cancelled); }
+        let mut found = false;
+        for argument in values {
+            visit(control, visits)?;
+            match &argument.value {
+                FilterValue::StoredColor(_) => found = true,
+                FilterValue::Config(config) => found |= arguments(config, depth + 1, visits, control)?,
+                FilterValue::Graph(graph) => {
+                    if graph.nodes.len() > 4096 || graph.edges.len() > 16384 { return Err(FormatError::LimitExceeded("stored-color graph count".into())); }
+                    *visits = visits.checked_add(graph.nodes.len()).and_then(|n| n.checked_add(graph.edges.len()))
+                        .and_then(|n| n.checked_add(usize::from(graph.input.is_some()))).filter(|n| *n <= 100_000)
+                        .ok_or_else(|| FormatError::LimitExceeded("stored-color graph visits".into()))?;
+                    for node in &graph.nodes {
+                        if control.cancelled() { return Err(FormatError::Cancelled); }
+                        found |= arguments(&node.arguments, depth + 2, visits, control)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(found)
+    }
+    let mut visits = 0;
+    if control.cancelled() { return Err(FormatError::Cancelled); }
+    let mut found = false;
+    if let Some(state) = &doc.xcf_state {
+        if state.source_items.len() > 10_000 || state.filter_stacks.len() > 10_000 { return Err(FormatError::LimitExceeded("stored-color state scan count".into())); }
+        for source in &state.source_items {
+            if control.cancelled() { return Err(FormatError::Cancelled); }
+            let configuration = match &source.source {
+                photocraft_doc::xcf_items::EditableSource::Text { configuration, .. }
+                | photocraft_doc::xcf_items::EditableSource::Vector { configuration, .. }
+                | photocraft_doc::xcf_items::EditableSource::Linked { configuration, .. } => configuration,
+            };
+            found |= arguments(configuration, 0, &mut visits, control)?;
+        }
+        for stack in &state.filter_stacks {
+            if control.cancelled() { return Err(FormatError::Cancelled); }
+            if stack.nodes.len() > 1024 { return Err(FormatError::LimitExceeded("stored-color filter scan count".into())); }
+            for node in &stack.nodes {
+                if control.cancelled() { return Err(FormatError::Cancelled); }
+                found |= arguments(&node.arguments, 0, &mut visits, control)?;
+            }
+        }
+    }
+    if control.cancelled() { return Err(FormatError::Cancelled); }
+    Ok(found)
+}
+#[cfg(test)]
+#[path = "stored_color_reader_tests.rs"]
+mod stored_color_reader_tests;
 /// Brown is a new enum identity. Older bundles/labels are never renamed.
 pub(crate) fn requires_reader_v8_state_with(doc: &Document, control: photocraft_raster::Interrupt<'_>) -> Result<bool> {
     fn visit(layers: &[Layer], depth: usize, control: photocraft_raster::Interrupt<'_>) -> Result<bool> {

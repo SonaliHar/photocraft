@@ -154,6 +154,12 @@ pub(super) fn bytes(doc: &Document, interrupt: &Interrupt<'_>, budget: &mut impl
             for node in &stack.nodes {
                 poll(interrupt)?;
                 budget.consume_preparation_work(1)?;
+                if node.arguments.len() > 10 {
+                    return Err(unsupported());
+                }
+                if node.arguments.iter().any(|a| matches!(&a.value, photocraft_doc::xcf_filters::FilterValue::StoredColor(_))) {
+                    return Err(CompositionError::Unsupported("accounted point stored color requires an exact literal binding"));
+                }
                 let overlay = node.operation.name == "gegl:color-overlay";
                 if !scalar(&node.operation.name)
                     || !node.auxiliary.is_empty()

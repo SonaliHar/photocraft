@@ -171,12 +171,28 @@ fn inspect(s: &mut Session, params: &Value) -> Result<Value> {
     }
     // Editable configurations have closed depth/count limits. Other forms remain inspectable
     // as metadata without recursively serializing hostile, arbitrarily large configuration trees.
+    let mut stored_color_bytes = 0usize;
+    for argument in node.arguments.iter().take(64) {
+        if let FilterValue::StoredColor(storage) = &argument.value {
+            let (layout, samples, opaque_tail) = (&storage.layout, &storage.samples, &storage.opaque_tail);
+            let encoded = samples
+                .len()
+                .checked_add(opaque_tail.len())
+                .and_then(|n| n.checked_mul(2))
+                .and_then(|n| layout.len().checked_mul(6).and_then(|text| n.checked_add(text)))
+                .and_then(|n| n.checked_add(256))
+                .ok_or_else(|| bad(INSPECT, "StoredColor inspection size overflow"))?;
+            stored_color_bytes =
+                stored_color_bytes.checked_add(encoded).filter(|n| *n <= 16 * 1024).ok_or_else(|| bad(INSPECT, "StoredColor exact inspection exceeds16KiB"))?;
+        }
+    }
     let arguments: Vec<_> = node
         .arguments
         .iter()
         .take(64)
-        .map(|argument| {
+        .map(|argument| -> Result<Value> {
             let value = match &argument.value {
+                FilterValue::StoredColor(storage) => json!({"value":crate::inspect_xcf_typed::stored_color_inspection(&storage.layout,&storage.samples,&storage.opaque_tail,&Interrupt::NONE)?,"editable":false}),
                 FilterValue::Number(_) | FilterValue::Bool(_) => json!({"value":argument.value}),
                 FilterValue::Color { components, encoding: photocraft_doc::SampleEncoding::NonlinearProfile, profile: None }
                     if matches!(node.operation.name.as_str(), "gegl:color-exchange" | "gegl:color-to-alpha") && components.len() == 4
@@ -193,9 +209,9 @@ fn inspect(s: &mut Session, params: &Value) -> Result<Value> {
                 FilterValue::Resource(resource) => json!({"resourceId":resource.0.to_string()}),
                 _ => json!({"unresolvedStructuredValue":"outside bounded scalar inspection"}),
             };
-            json!({"name":argument.name,"state":value})
+            Ok(json!({"name":argument.name,"state":value}))
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
     let auxiliary: Vec<_> = node.auxiliary.iter().map(|(port, target)| json!({"port":port,"target":reference(*target)})).collect();
     Ok(json!({"filterId":id.0.to_string(),"owner":reference(stack.owner),"revision":stack.revision,
         "operation":node.operation,"enabled":node.enabled,"opacityF64Bits":node.opacity_f64_bits,"opacityF64Hex":format!("0x{:016x}",node.opacity_f64_bits),

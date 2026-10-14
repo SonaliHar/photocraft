@@ -59,6 +59,7 @@ fn profile(value:&Value)->Result<Option<ResourceId>> {
     let id=unsigned(value)?;if id==0 {return Err("profile identity must be nonzero".into());}Ok(Some(ResourceId(id)))
 }
 fn scalar_preflight(value:&Value)->Result<()> {
+    if value.as_object().is_some_and(|object| object.contains_key("StoredColor")) {return Err("StoredColor editing is unsupported without an exact stored-color schema".into());}
     let outer=record(value,&["Number","Bool","String","Enum","Color"],false)?;
     if outer.len()!=1 {return Err("filter value requires one supported scalar variant".into());}
     if let Some(value)=outer.get("Number") {number(value)?;return Ok(());}
@@ -117,6 +118,7 @@ pub fn decode_operation(value:&Value)->Result<OperationIdentity> {
     Ok(OperationIdentity {name:owned(text(field(object,"name")?,256)?)?,stored_version:owned(text(field(object,"stored_version")?,64)?)?,schema_epoch:owned(text(field(object,"schema_epoch")?,256)?)?})
 }
 fn decode_scalar(value:&Value)->Result<FilterValue> {
+    if value.as_object().is_some_and(|object| object.contains_key("StoredColor")) {return Err("StoredColor editing is unsupported without an exact stored-color schema".into());}
     let outer=record(value,&["Number","Bool","String","Enum","Color"],false)?;
     if let Some(value)=outer.get("Number") {return number(value).map(FilterValue::Number);}
     if let Some(value)=outer.get("Bool") {return value.as_bool().map(FilterValue::Bool).ok_or_else(||"Bool needs a boolean".into());}
@@ -136,6 +138,12 @@ pub fn decode_arguments(value:&Value)->Result<Vec<FilterArgument>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stored_color_wire_cannot_grant_an_editing_schema() {
+        let value = serde_json::json!([{"name":"color","value":{"StoredColor":{"layout":"HSL float","samples":[0,0,0,128],"opaque_tail":[]}}}]);
+        assert!(preflight_arguments(&value).unwrap_err().contains("StoredColor editing is unsupported"));
+        assert!(decode_arguments(&value).unwrap_err().contains("StoredColor editing is unsupported"));
+    }
     use super::*;
     use serde_json::json;
     #[test]

@@ -524,6 +524,9 @@ pub(crate) fn load_with_interrupt(src: &dyn Source, opts: &LoadOptions, control:
         tiles: HashMap::new(),
     };
     let doc = loader.document_with_interrupt(&m.document, control)?;
+    if convert::requires_reader_v9_state_with(&doc, *control)? && m.minimum_reader_version < 9 {
+        return Err(FormatError::corrupt("raw stored color requires minimum reader version 9"));
+    }
     if convert::requires_reader_v3_state(&doc) && m.minimum_reader_version < 3 {
         return Err(FormatError::corrupt("required source/working state requires minimum reader version 3"));
     }
@@ -1227,7 +1230,9 @@ impl PcraftWriter {
             previews.push((COMPOSITE, png(t)?));
             c.poll()?;
         }
-        let required_version = if convert::requires_reader_v8_state_with(doc, control)? {
+        let required_version = if convert::requires_reader_v9_state_with(doc, control)? {
+            9
+        } else if convert::requires_reader_v8_state_with(doc, control)? {
             8
         } else if convert::requires_reader_v7_state_with(doc, control)? {
             7

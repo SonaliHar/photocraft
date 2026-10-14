@@ -254,6 +254,7 @@ mod scene_channel_configured;
 #[path = "xcf_filters/scene_channel_preparation_candidate.rs"]
 pub mod scene_channel_preparation_candidate;
 pub mod scene_channel_input_candidate;
+pub mod colorize_source;
 
 mod stretch_hsv_source;
 pub use stretch_hsv_source::{

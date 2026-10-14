@@ -84,6 +84,39 @@ impl Budget<'_, '_> {
         output.push_str(value);
         Ok(output)
     }
+    fn hex(&mut self, value: &[u8]) -> Result<String> {
+        let bytes = value.len().checked_mul(2).ok_or_else(|| error("stored color hex overflow"))?;
+        self.charge(bytes)?;
+        let mut output = String::new();
+        output.try_reserve_exact(bytes).map_err(|_| error("stored color hex allocation denied"))?;
+        self.charge(output.capacity().saturating_sub(bytes))?;
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
+        for chunk in value.chunks(512) {
+            self.control.check().map_err(|_| EngineError::Cancelled)?;
+            for byte in chunk {
+                output.push(char::from(*DIGITS.get(usize::from(byte >> 4)).ok_or_else(|| error("hex digit"))?));
+                output.push(char::from(*DIGITS.get(usize::from(byte & 15)).ok_or_else(|| error("hex digit"))?));
+            }
+        }
+        Ok(output)
+    }
+}
+fn stored_color(layout: &str, samples: &[u8], tail: &[u8], budget: &mut Budget<'_, '_>) -> Result<Value> {
+    // Admit the complete exact payload before either byte vector is copied.
+    let bytes = samples
+        .len()
+        .checked_add(tail.len())
+        .and_then(|n| n.checked_mul(2))
+        .and_then(|n| layout.len().checked_mul(6).and_then(|text| n.checked_add(text)))
+        .ok_or_else(|| error("stored color reply overflow"))?;
+    if budget.bytes.checked_add(bytes).is_none_or(|n| n > MAX_REPLY) {
+        return Err(error("stored color exceeds bounded exact inspection"));
+    }
+    Ok(json!({"StoredColor":{"layout":budget.text(layout)?,"samples_hex":budget.hex(samples)?,"opaque_tail_hex":budget.hex(tail)?}}))
+}
+pub(crate) fn stored_color_inspection(layout: &str, samples: &[u8], tail: &[u8], control: &Interrupt<'_>) -> Result<Value> {
+    let mut budget = Budget { control, bytes: 128, nodes: 0 };
+    stored_color(layout, samples, tail, &mut budget)
 }
 fn number(value: &ExactNumber, budget: &mut Budget<'_, '_>, depth: usize) -> Result<Value> {
     budget.node(depth)?;
@@ -113,6 +146,7 @@ fn arguments(values: &[FilterArgument], budget: &mut Budget<'_, '_>, depth: usiz
 fn value(input: &FilterValue, budget: &mut Budget<'_, '_>, depth: usize) -> Result<Value> {
     budget.node(depth)?;
     Ok(match input {
+        FilterValue::StoredColor(storage) => stored_color(&storage.layout, &storage.samples, &storage.opaque_tail, budget)?,
         FilterValue::Number(input) => json!({"Number":number(input,budget,depth+1)?}),
         FilterValue::Bool(input) => json!({"Bool":input}),
         FilterValue::String(input) => json!({"String":budget.text(input)?}),
@@ -259,6 +293,19 @@ pub fn source_with_interrupt(document: &Document, owner: ItemRef, offset: usize,
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stored_color_inspection_preserves_uninterpreted_words_and_tail() {
+        let samples = [0x42, 0, 0xc0, 0x7f, 0, 0, 0, 0x80];
+        let tail = [0, 255, 1];
+        let value = super::stored_color_inspection("HSL float", &samples, &tail, &photocraft_raster::Interrupt::NONE).unwrap();
+        assert_eq!(value["StoredColor"]["layout"], "HSL float");
+        assert_eq!(value["StoredColor"]["samples_hex"], "4200c07f00000080");
+        assert_eq!(value["StoredColor"]["opaque_tail_hex"], "00ff01");
+        assert!(value["StoredColor"].get("encoding").is_none());
+        assert!(value["StoredColor"].get("profile").is_none());
+        assert!(super::stored_color_inspection("HSL float", &vec![0; 32768], &[], &photocraft_raster::Interrupt::NONE).is_err());
+        assert!(super::stored_color_inspection("HSL float", &samples, &tail, &photocraft_raster::Interrupt::cancel_only(&|| true)).is_err());
+    }
     use super::*;
     use photocraft_doc::{ColorMode, SampleType, Size, xcf_items::SourceItem};
 

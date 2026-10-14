@@ -258,6 +258,7 @@ impl Census<'_, '_> {
                 FilterValue::Color { components, .. } => {
                     self.charge(bytes::<photocraft_doc::xcf_filters::ExactNumber>(components.capacity())?, 0, components.len() as u64)?
                 }
+                FilterValue::StoredColor(_) => return Err(bad("stored color is unsupported by closed channel point-stage schemas")),
                 FilterValue::Curve { points_f64_bits, point_types, samples_f64_bits, .. } => {
                     self.charge(
                         add(

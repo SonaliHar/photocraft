@@ -569,6 +569,17 @@ fn current_arguments(args: &[photocraft_doc::xcf_filters::FilterArgument], max: 
         match &a.value {
             photocraft_doc::xcf_filters::FilterValue::Resource(id) => *max = (*max).max(id.0),
             photocraft_doc::xcf_filters::FilterValue::Color { profile: Some(id), .. } => *max = (*max).max(id.0),
+            photocraft_doc::xcf_filters::FilterValue::StoredColor(storage) => {
+                let photocraft_doc::xcf_filters::ExactColorStorage { layout, samples, opaque_tail } = storage;
+                // Capacity is already held by the genuine current model census.
+                // This namespace walk consumes bounded byte traversal work but
+                // cannot derive ResourceId/profile/encoding from an opaque tail.
+                for bytes in [layout.as_bytes(), samples.as_slice(), opaque_tail.as_slice()] {
+                    for part in bytes.chunks(4096) {
+                        m.step(part.len() as u64 + 1)?;
+                    }
+                }
+            }
             photocraft_doc::xcf_filters::FilterValue::Config(children) => current_arguments(children, max, depth + 1, m)?,
             photocraft_doc::xcf_filters::FilterValue::Graph(graph) => {
                 if let Some(id) = graph.input {

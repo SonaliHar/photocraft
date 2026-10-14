@@ -89,7 +89,7 @@ fn header_at<P>(source: &[u8], start: usize, end: usize, e: &Effect<P>, m: &mut 
     }
     Ok(at == end)
 }
-fn header<P>(source: &[u8], e: &Effect<P>, m: &mut Meter<'_, '_>) -> Result<(), IoError> {
+pub(super) fn header<P>(source: &[u8], e: &Effect<P>, m: &mut Meter<'_, '_>) -> Result<(), IoError> {
     let first = e.properties.first().ok_or_else(|| bad("state properties absent"))?;
     let end = offset(first.offset)?.checked_sub(8).ok_or_else(|| bad("property header"))?;
     let mut minimum = 0usize;
@@ -115,6 +115,15 @@ fn header<P>(source: &[u8], e: &Effect<P>, m: &mut Meter<'_, '_>) -> Result<(), 
     Err(bad("raw effect header/name/icon/operation/version mismatch"))
 }
 fn raw_state<P>(source: &[u8], e: &Effect<P>, m: &mut Meter<'_, '_>) -> Result<(), IoError> {
+    raw_state_inner(source, e, m, false)
+}
+/// Shared physical frame only: callers must separately bind EVERY retained
+/// argument's name/type/value/configuration before making a typed candidate.
+/// This admits no source/schema/renderer and preserves all original frame checks.
+pub(super) fn raw_state_with_arguments<P>(source: &[u8], e: &Effect<P>, m: &mut Meter<'_, '_>) -> Result<(), IoError> {
+    raw_state_inner(source, e, m, true)
+}
+fn raw_state_inner<P>(source: &[u8], e: &Effect<P>, m: &mut Meter<'_, '_>, allow_arguments: bool) -> Result<(), IoError> {
     let mut at = offset(e.properties.first().ok_or_else(|| bad("properties absent"))?.offset)?.checked_sub(8).ok_or_else(|| bad("property header"))?;
     let mut seen = 0u16;
     let EffectState { enabled, opacity_u8, opacity_bits, mode, composite_mode, composite_space, blend_space, clipping, region } = &e.state;
@@ -123,7 +132,7 @@ fn raw_state<P>(source: &[u8], e: &Effect<P>, m: &mut Meter<'_, '_>) -> Result<(
     }
     for p in &e.properties {
         m.step(24)?;
-        if p.tag == 0 || p.tag == 45 || p.tag == 6 {
+        if p.tag == 0 || (!allow_arguments && p.tag == 45) || p.tag == 6 {
             return Err(bad("zero-argument/native opacity properties required"));
         }
         let payload = at.checked_add(8).ok_or_else(|| bad("property extent"))?;

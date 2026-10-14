@@ -205,6 +205,7 @@ fn metadata(node: &GraphNode) -> Result<(u64, u64), GraphExecuteError> {
         }
         args = add(args, arg.name.capacity() as u64)?;
         match &arg.value {
+            FilterValue::StoredColor(_) => return Err(GraphExecuteError::Operation("StoredColor partial generator evaluation is unsupported")),
             FilterValue::Number(n) if number(n) => {}
             FilterValue::Bool(_) => {}
             FilterValue::String(v) if v.len() <= 1024 => args = add(args, v.capacity() as u64)?,

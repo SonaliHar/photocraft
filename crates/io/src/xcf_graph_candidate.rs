@@ -158,6 +158,7 @@ fn resources(value:&FilterValue,depth:usize,visits:&mut usize,allowed:&mut Resou
     match value{
         FilterValue::Resource(id)=>if id.0==0||!allowed(*id){return Err(unsupported("unbound explicit resource"));},
         FilterValue::Color{profile:Some(id),..}=>if id.0==0||!allowed(*id){return Err(unsupported("unbound explicit color profile"));},
+        FilterValue::StoredColor(_)=>return Err(unsupported("stored color requires an explicit literal schema binding")),
         FilterValue::Config(arguments)=>for argument in arguments{resources(&argument.value,depth+1,visits,allowed,c)?;},
         FilterValue::Graph(_)=>return Err(unsupported("resolver nested graph lacks retained chain binding")),
         _=>{},
@@ -247,5 +248,7 @@ mod tests {
     fn resource_closure_refusal_and_cancel_never_return_partial_mapping() {
         let stop=||true;assert!(matches!(resources(&FilterValue::Resource(ResourceId(7)),0,&mut 0,&mut |_|true,&Interrupt::cancel_only(&stop)),Err(IoError::Cancelled)));
         assert!(resources(&FilterValue::Config(vec![photocraft_doc::xcf_filters::FilterArgument{name:"resource".into(),value:FilterValue::Resource(ResourceId(7))}]),0,&mut 0,&mut |_|false,&Interrupt::NONE).is_err());
+        let raw=FilterValue::StoredColor(photocraft_doc::xcf_filters::ExactColorStorage{layout:"RGBA float".into(),samples:vec![0;16],opaque_tail:vec![0;4]});
+        assert!(matches!(resources(&raw,0,&mut 0,&mut |_|true,&Interrupt::NONE),Err(IoError::Unsupported(message)) if message.contains("explicit literal schema")));
     }
 }

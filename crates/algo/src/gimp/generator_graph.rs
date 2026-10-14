@@ -89,6 +89,7 @@ fn argument_bytes(node: &GraphNode) -> Result<u64, GraphExecuteError> {
         if argument.name.is_empty() || argument.name.len() > 128 { return Err(GraphExecuteError::Operation("generator argument name")); }
         bytes = add(bytes, argument.name.capacity() as u64)?;
         match &argument.value {
+            FilterValue::StoredColor(_) => return Err(GraphExecuteError::Operation("StoredColor generator evaluation is unsupported")),
             FilterValue::Number(value) if number(value) => {}
             FilterValue::Bool(_) => {}
             FilterValue::String(value) if value.len() <= 1024 => bytes = add(bytes, value.capacity() as u64)?,
