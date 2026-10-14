@@ -1032,6 +1032,8 @@ struct TagSet<'a> {
     dpi: Option<(f32, f32)>,
     text: Vec<(Tag, &'a str)>,
     alpha: bool,
+    /// TIFF ExtraSamples `2` (unassociated) vs `1` (associated / layer transparency).
+    unassociated_alpha: bool,
     photoshop_resources: Option<&'a [u8]>,
     photoshop_layers: Option<&'a [u8]>,
 }
@@ -1062,8 +1064,10 @@ where
     }
     let d = im.encoder();
     if tags.alpha {
-        // 2 = unassociated alpha
-        d.write_tag(Tag::ExtraSamples, &[2u16][..])?;
+        // ExtraSamples 2 = unassociated channel (#5301); 1 = associated transparency so a
+        // single-layer TIFF with layer alpha round-trips without becoming Alpha 1.
+        let extra: u16 = if tags.unassociated_alpha { 2 } else { 1 };
+        d.write_tag(Tag::ExtraSamples, &[extra][..])?;
     }
     if let Some(icc) = tags.icc {
         d.write_tag(Tag::IccProfile, Undefined(icc))?;
@@ -1171,6 +1175,7 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
         dpi: if opts.embed_metadata { img.meta.dpi.filter(|d| d.0 > 0.0 && d.1 > 0.0) } else { None },
         text,
         alpha: img.layout().has_alpha(),
+        unassociated_alpha: img.meta.unassociated_alpha,
         // Document content, not metadata: written whenever present.
         photoshop_resources: img.meta.photoshop_resources.as_deref().filter(|r| !r.is_empty()),
         photoshop_layers: img.meta.photoshop_layers.as_deref().filter(|l| !l.is_empty()),

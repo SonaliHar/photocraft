@@ -577,7 +577,15 @@ pub(crate) fn export_flat_with(doc: &Document, format: Format, opts: &ExportOpti
 fn tiff_alpha_image(doc: &Document, img: Image, warnings: &mut Vec<String>) -> Result<Image, IoError> {
     let alphas: Vec<&AlphaChannel> = doc.channels.iter().filter(|c| c.spot.is_none()).collect();
     match alphas.as_slice() {
-        [] => Ok(img),
+        [] => {
+            // Layer transparency is ExtraSamples unassociated alpha, same as Photoshop's
+            // extra sample, so reopen splits it to Alpha 1 (#5301).
+            let mut img = img;
+            if img.layout().has_alpha() {
+                img.meta.unassociated_alpha = true;
+            }
+            Ok(img)
+        }
         [channel] => {
             let mut out = with_alpha_channel(doc, img, channel, warnings)?;
             out.meta.unassociated_alpha = true;

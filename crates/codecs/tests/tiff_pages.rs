@@ -129,6 +129,18 @@ fn planar_strips_at_every_depth() {
 }
 
 #[test]
+fn encode_writes_unassociated_extra_samples_only_when_flagged() {
+    use photocraft_codecs::{ChannelLayout, EncodeOptions, Format, Image};
+    let data: Vec<u8> = (0..16).map(|i| i as u8).collect();
+    let mut img = Image::from_u8(2, 2, ChannelLayout::Rgba, data).unwrap();
+    let assoc = photocraft_codecs::encode(&img, Format::Tiff, &EncodeOptions::default()).unwrap();
+    assert!(!photocraft_codecs::decode(&assoc).unwrap().meta.unassociated_alpha);
+    img.meta.unassociated_alpha = true;
+    let unassoc = photocraft_codecs::encode(&img, Format::Tiff, &EncodeOptions::default()).unwrap();
+    assert!(photocraft_codecs::decode(&unassoc).unwrap().meta.unassociated_alpha);
+}
+
+#[test]
 fn extra_samples_that_are_not_alpha_are_dropped() {
     let (w, h) = (5usize, 3usize);
     let t = truth(w * h * 5, 4);
