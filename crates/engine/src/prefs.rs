@@ -257,6 +257,9 @@ pub struct Interface {
     /// Show the repeating dot pattern on the canvas surround (including the empty workspace).
     /// Disable for a uniform background, for example on OLED displays (#2264).
     pub show_canvas_dots: bool,
+    /// List recent files on the Home screen (the empty workspace). Off hides the list; the
+    /// recent files themselves are kept and File > Open Recent still shows them.
+    pub show_home_recent_files: bool,
     /// Document border in standard screen mode.
     pub canvas_border: CanvasBorder,
     pub ui_scale: UiScale,
@@ -298,6 +301,7 @@ impl Default for Interface {
             canvas_color: CanvasColor::Default,
             canvas_custom_color: "#282828".into(),
             show_canvas_dots: true,
+            show_home_recent_files: true,
             canvas_border: CanvasBorder::DropShadow,
             ui_scale: UiScale::Auto,
             language: "auto".into(),
@@ -521,6 +525,9 @@ pub struct FileHandling {
     pub recover_on_launch: bool,
     /// Open a file with no ICC profile as untagged even when its EXIF ColorSpace tag says sRGB.
     pub ignore_exif_profile_tag: bool,
+    /// Most renderers write ACEScg EXRs without stating the colour space. With this on, an EXR
+    /// that would otherwise open as linear sRGB opens as ACEScg (AP1, linear) instead.
+    pub exr_aces_cg: bool,
     pub ask_before_saving_layered_tiff: bool,
     pub maximize_psd_compatibility: Ask,
     /// SVG groups deeper than this are rasterised on import; parser and document safety caps remain fixed.
@@ -540,6 +547,7 @@ impl Default for FileHandling {
             autosave_minutes: 10,
             recover_on_launch: true,
             ignore_exif_profile_tag: false,
+            exr_aces_cg: false,
             ask_before_saving_layered_tiff: true,
             maximize_psd_compatibility: Ask::Always,
             rasterize_svg_groups_deeper_than: photocraft_doc::MAX_GROUP_DEPTH as u32,
