@@ -3829,6 +3829,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                             _ => {
                                 let centre = brush_tip_centre(tool, alt || app.ui.shell.sticky_alt, cur.show_crosshair_in_brush_tip);
                                 let axes = crate::brush_cursor::tip_axes(&xf, brush.size);
+                                let axes = crate::brush_cursor::follow_axes(ui.ctx(), brush, axes, painting, app.stylus.sample());
                                 crate::brush_cursor::cursor(&painter, p, brush, full, axes, cur.painting == PaintingCursor::NormalTip, centre)
                             }
                         }
