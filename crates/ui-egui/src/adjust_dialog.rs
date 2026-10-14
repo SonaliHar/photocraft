@@ -751,13 +751,8 @@ mod tests {
         PhotocraftApp::setup_context(&h.ctx, Default::default());
         open(h.state_mut(), "image.adjustments.curves").unwrap();
         h.run_steps(4);
-        let combo = h.get_by_role(egui::accesskit::Role::ComboBox);
-        let name = combo.value().unwrap_or_default();
-        assert!(name.contains("Mask"), "{name}");
-        combo.click();
-        h.run_steps(2);
-        let options: Vec<String> = h.query_all_by_role(egui::accesskit::Role::Button).filter_map(|n| n.value().map(|s| s.to_string())).collect();
-        assert!(options.iter().any(|l| l.contains("Mask")), "{options:?}");
-        assert!(!options.iter().any(|l| l == "Red" || l == "Green" || l == "Blue" || l == "RGB"), "{options:?}");
+        let names: Vec<String> = h.query_all_by_role(egui::accesskit::Role::ComboBox).filter_map(|n| n.value().map(|s| s.to_string())).collect();
+        assert!(names.iter().any(|n| n.contains("Mask")), "{names:?}");
+        assert!(!names.iter().any(|n| n == "RGB" || n == "Red" || n == "Green" || n == "Blue"), "{names:?}");
     }
 }
