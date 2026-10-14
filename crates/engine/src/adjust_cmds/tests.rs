@@ -538,3 +538,97 @@ fn replace_color_localized_clusters_only_change_the_colour_near_the_sample() {
     let err = s.execute("image.adjustments.replaceColor", json!({"points": [[1]]})).unwrap_err();
     assert!(err.to_string().contains("bad point"), "{err}");
 }
+
+/// #5335: Curves on an alpha (a saved selection), a spot channel, a layer mask or the Quick Mask
+/// changes that gray plane only. Undo restores it, and Actions records the command and replays it
+/// onto the channel that is targeted when the action plays.
+#[test]
+fn curves_apply_to_non_color_channels_and_record() {
+    use crate::channel_cmds::ChannelTarget;
+
+    let curve = json!({"points": [[0.0, 0.0], [128.0, 255.0], [255.0, 255.0]]});
+    let mid = 128.0 / 255.0;
+
+    let apply = |s: &mut Session, read: &dyn Fn(&Session) -> f32| {
+        let pixels = rgba(s, 4, 4);
+        let steps = s.active().unwrap().history.past_len();
+        assert!((read(s) - mid).abs() < 0.02, "the channel starts at mid gray");
+        s.execute("actions.record", json!({"name": "Curve channel"})).unwrap();
+        s.execute("image.adjustments.curves", curve.clone()).unwrap();
+        s.execute("actions.stop", json!({})).unwrap();
+        assert!(read(s) > 0.95, "the gray curve lifts mid gray to white, got {}", read(s));
+        assert!(changed(rgba(s, 4, 4), pixels) < 1e-5, "the layer's colour is untouched");
+        assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one history step");
+        let recorded = s.execute("actions.get", json!({"action": "Curve channel"})).unwrap();
+        let steps_json = recorded["steps"].as_array().unwrap();
+        assert_eq!(steps_json.len(), 1);
+        assert_eq!(steps_json[0][0], "image.adjustments.curves");
+        assert!(steps_json[0][1].get("points").is_some());
+        assert!(steps_json[0][1].get("__kind").is_none(), "the private key is not recorded");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!((read(s) - mid).abs() < 0.02, "undo restores the channel");
+        assert_eq!(rgba(s, 4, 4), pixels);
+        s.execute("actions.play", json!({"action": "Curve channel"})).unwrap();
+        assert!(read(s) > 0.95, "playback applies the curve to the targeted channel");
+        assert!(changed(rgba(s, 4, 4), pixels) < 1e-5);
+        // A bad curve is an error and leaves the channel where playback put it.
+        let kept = read(s);
+        let err = s.execute("image.adjustments.curves", json!({"points": "nope"})).unwrap_err();
+        assert!(err.to_string().contains("points"), "{err}");
+        assert_eq!(read(s), kept);
+    };
+
+    // Saved selection (an alpha channel), including a custom name.
+    let mut s = session(8, "rgb");
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("select.saveSelection", json!({"name": "Cutout"})).unwrap();
+    assert_eq!(s.active().unwrap().doc.channels[0].name, "Cutout");
+    s.active_mut().unwrap().channel_view.target = ChannelTarget::Alpha(0);
+    s.execute("edit.fill", json!({"contents": "gray"})).unwrap();
+    apply(&mut s, &|s| s.active().unwrap().doc.channels[0].surface.sample_channel(4, 4, 0));
+
+    // Spot channel. The ink colour must not matter: the curve edits the gray plane.
+    let mut s = session(8, "rgb");
+    let made = s.execute("channel.newSpot", json!({"name": "White Ink", "fromSelection": false, "color": "#ff0000"})).unwrap();
+    let i = made["channel"].as_u64().unwrap() as usize;
+    s.active_mut().unwrap().channel_view.target = ChannelTarget::Alpha(i);
+    s.execute("edit.fill", json!({"contents": "gray"})).unwrap();
+    apply(&mut s, &|s| s.active().unwrap().doc.channels[i].surface.sample_channel(4, 4, 0));
+
+    // Layer mask, at 8 and 16 bit. A selection limits the curve.
+    for depth in [8u64, 16] {
+        let mut s = session(depth, "rgb");
+        s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+        s.active_mut().unwrap().channel_view.target = ChannelTarget::LayerMask;
+        s.execute("edit.fill", json!({"contents": "gray"})).unwrap();
+        apply(&mut s, &|s| mask_at(s, 4, 4));
+        s.execute("edit.undo", json!({})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 32})).unwrap();
+        s.execute("image.adjustments.curves", curve.clone()).unwrap();
+        assert!(mask_at(&s, 4, 4) > 0.95, "depth {depth}: inside the selection");
+        assert!((mask_at(&s, 20, 4) - mid).abs() < 0.02, "depth {depth}: outside the selection");
+    }
+
+    // Quick Mask.
+    let mut s = session(8, "rgb");
+    s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+    s.execute("edit.fill", json!({"contents": "gray"})).unwrap();
+    apply(&mut s, &|s| s.active().unwrap().doc.quick_mask.as_ref().unwrap().surface.sample_channel(4, 4, 0));
+}
+
+/// #5335: with one colour channel targeted, a composite curve changes only that channel.
+#[test]
+fn curves_on_a_targeted_colour_channel_leave_the_others() {
+    use crate::channel_cmds::ChannelTarget;
+    let mut s = session(8, "rgb");
+    s.active_mut().unwrap().channel_view.target = ChannelTarget::Color(1);
+    let before = rgba(&s, 4, 4);
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("image.adjustments.curves", json!({"points": [[0.0, 255.0], [255.0, 0.0]]})).unwrap();
+    let after = rgba(&s, 4, 4);
+    assert!((after[0] - before[0]).abs() < 1e-5 && (after[2] - before[2]).abs() < 1e-5, "red and blue stay, {before:?} → {after:?}");
+    assert!((after[1] - before[1]).abs() > 0.05, "green takes the curve");
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(rgba(&s, 4, 4), before);
+}

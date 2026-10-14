@@ -144,6 +144,38 @@ pub fn histograms(app: &mut PhotocraftApp, source: HistSource, space: ToneSpace)
     h
 }
 
+/// 256-bin histogram of a grayscale channel over `bounds` (a mask, alpha, spot or Quick Mask).
+/// At most about 65,536 samples, strided, so a large channel does not scan every pixel.
+pub fn histogram_gray(surf: &photocraft_raster::Surface, bounds: photocraft_geom::Rect) -> [u32; 256] {
+    let mut h = [0u32; 256];
+    let (w, ht) = (bounds.width(), bounds.height());
+    if w == 0 || ht == 0 {
+        return h;
+    }
+    let area = (w as u64).saturating_mul(ht as u64);
+    let step = ((area / 65_536).max(1) as f64).sqrt().ceil() as i32;
+    let step = step.max(1);
+    let cols = (w as i32).saturating_add(step - 1) / step;
+    let cols = usize::try_from(cols).unwrap_or(0);
+    if cols == 0 {
+        return h;
+    }
+    let mut row = vec![0.0f32; cols];
+    let mut y = bounds.y0;
+    while y < bounds.y1 {
+        surf.sample_row_strided(y, bounds.x0, step, 0, &mut row);
+        for v in &row {
+            let b = (v.clamp(0.0, 1.0) * 255.0).round();
+            let b = if b.is_finite() { b as usize } else { 0 };
+            if let Some(slot) = h.get_mut(b.min(255)) {
+                *slot = slot.saturating_add(1);
+            }
+        }
+        y = y.saturating_add(step);
+    }
+    h
+}
+
 /// Whether the latest revision changed no pixels (selecting a layer, say): cached histograms of
 /// the previous revision still hold (#125).
 fn view_only(st: &photocraft_engine::DocState) -> bool {
@@ -361,6 +393,16 @@ mod tests {
         assert!(h[0][255] > 0 && h[0][0] == 0, "the black layer above is hidden");
         assert_eq!(compute_histograms(&st.doc, HistSource::Layer(bg), ToneSpace::Cmyk).ch.len(), 5);
         assert_eq!(compute_histograms(&st.doc, HistSource::Layer(bg), ToneSpace::Lab).ch.len(), 3);
+    }
+
+    #[test]
+    fn gray_histogram_counts_the_channel_and_ignores_nan() {
+        let mut s = photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8);
+        let bounds = photocraft_geom::Rect::from_xywh(0, 0, 8, 4);
+        s.write_region(bounds, &[1.0; 32]);
+        let h = histogram_gray(&s, bounds);
+        assert!(h[255] > 0 && h[0] == 0);
+        assert_eq!(histogram_gray(&s, photocraft_geom::Rect::EMPTY), [0; 256]);
     }
 }
 

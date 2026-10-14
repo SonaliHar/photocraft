@@ -92,6 +92,30 @@ pub struct EditorCx {
     /// Preferences ▸ Interface ▸ Dynamic Color Sliders: colour tracks on the colour sliders
     /// (off: the plain track).
     pub dynamic_color_sliders: bool,
+    /// Image › Adjustments › Curves opened on one Channels-panel target. `None` lists every
+    /// colour channel (the Properties panel, and Curves with the composite selected).
+    pub curves_only: Option<CurvesOnly>,
+}
+
+/// The single channel Curves shows when the Channels panel targets one (#5335).
+pub struct CurvesOnly {
+    /// Params key: `""` is the gray/composite curve (`points`); a colour component is `red`, …
+    pub key: &'static str,
+    /// The Channels panel's name for this row.
+    pub label: String,
+    /// Alpha, spot and layer-mask names are shown as written. Colour names and Quick Mask are
+    /// translated like the panel.
+    pub verbatim: bool,
+    /// Row in the document tone histograms. Ignored when [`Self::gray_hist`] is set.
+    pub hist_index: usize,
+    /// Histogram of a non-colour channel's own gray values.
+    pub gray_hist: Option<Arc<[u32; 256]>>,
+}
+
+/// Whether the curve stroke uses the channel colour. A non-colour target and the composite stay
+/// neutral; a colour component keeps its colour even when it is the only row (#5335).
+pub(crate) fn curves_stroke_uses_channel_color(key: &str, index: usize, solo: bool) -> bool {
+    if solo { !matches!(key, "" | "lightness" | "black") } else { index != 0 }
 }
 
 /// The Levels/Curves channel space the values address.
@@ -422,17 +446,41 @@ fn curves_mode_row(ui: &mut egui::Ui, v: &mut Value, key: &str, gray: bool) -> E
     e
 }
 
+/// One Curves channel row: the popup shows that name and nothing else.
+fn show_curves_channel(ui: &mut egui::Ui, id: egui::Id, only: &CurvesOnly) {
+    ui.horizontal(|ui| {
+        label(ui, tl!("Channel:"));
+        if only.verbatim {
+            let width = (only.label.chars().count() as f32 * 7.5 + 28.0).clamp(110.0, 240.0);
+            egui::ComboBox::from_id_salt(id.with("solo")).selected_text(&only.label).width(width).show_ui(ui, |ui| {
+                let _ = ui.selectable_label(true, &only.label);
+            });
+        } else {
+            let mut ch = 0usize;
+            let opts = [(0usize, only.label.as_str())];
+            widgets::dropdown(ui, &format!("{id:?}-ch"), &mut ch, &opts, 110.0);
+        }
+    });
+}
+
 fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let t = Tokens::get(ui.ctx());
     let space = space_of(v);
     let chans = tone_channels(space, cx.gray);
     let state_id = cx.mem.with("curves");
     let mut st: CurveUi = ui.data(|d| d.get_temp(state_id)).unwrap_or_default();
-    let ch = channel_picker(ui, cx.mem.with("curves-ch"), chans, tl!("Channel:"));
+    let solo = cx.curves_only.as_ref();
+    let ch = if let Some(only) = solo {
+        show_curves_channel(ui, cx.mem.with("curves-ch"), only);
+        0
+    } else {
+        channel_picker(ui, cx.mem.with("curves-ch"), chans, tl!("Channel:"))
+    };
     if ch != st.channel {
         st = CurveUi { channel: ch, ..Default::default() };
     }
-    let chan = chans.get(ch).copied().unwrap_or(ToneChannel { key: "", label: "" });
+    let chan =
+        solo.map(|only| ToneChannel { key: only.key, label: "" }).unwrap_or_else(|| chans.get(ch).copied().unwrap_or(ToneChannel { key: "", label: "" }));
     let key = curve_key(&chan);
     let mut e = curves_mode_row(ui, v, key, cx.gray);
     let pencil = v.get("pencil").and_then(Value::as_bool).unwrap_or(false);
@@ -476,8 +524,10 @@ fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     // Draw: histogram, quarter grid, baseline, gradient bars, other channels, the curve, points.
     let p = ui.painter_at(full.expand(2.0));
     p.rect_filled(graph, 0.0, t.field);
-    if let Some(h) = &cx.hist {
-        tone::draw_histogram(&p, graph, &h[ch], Color32::from_gray(if t.pro { 88 } else { 190 }).gamma_multiply(0.75));
+    let hist_index = solo.map(|only| only.hist_index).unwrap_or(ch);
+    let hist_bins = solo.and_then(|only| only.gray_hist.clone()).or_else(|| cx.hist.as_ref().map(|h| Arc::new(h[hist_index])));
+    if let Some(bins) = &hist_bins {
+        tone::draw_histogram(&p, graph, bins, Color32::from_gray(if t.pro { 88 } else { 190 }).gamma_multiply(0.75));
     }
     for i in 1..4 {
         let f = i as f32 / 4.0;
@@ -510,7 +560,7 @@ fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         let line: Vec<Pos2> = map.iter().enumerate().map(|(k, o)| to_scr([k as f32 / last * 255.0, *o])).collect();
         p.add(egui::Shape::line(line, Stroke::new(width, color)));
     };
-    if ch == 0 {
+    if ch == 0 && solo.is_none() {
         // Photoshop overlays the edited channel curves on the composite.
         for c in chans.iter().skip(1) {
             if pencil {
@@ -526,7 +576,8 @@ fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
             }
         }
     }
-    let color = if ch == 0 { t.text } else { bar_color(&chan, &t) };
+    let color = if curves_stroke_uses_channel_color(chan.key, ch, solo.is_some()) { bar_color(&chan, &t) } else { t.text };
+    ui.data_mut(|d| d.insert_temp(cx.mem.with("curves-stroke"), color));
     if pencil {
         draw_map(&map, color, 1.5);
     } else {
@@ -1623,6 +1674,7 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
         gradients: gradient_presets(app, kind),
         dialog: false,
         dynamic_color_sliders: app.session.prefs().interface.dynamic_color_sliders,
+        curves_only: None,
     };
     if matches!(kind, "levels" | "curves") {
         crate::layer_picker::controls(app, ui, id);
@@ -1676,6 +1728,7 @@ mod tests {
             gradients: Vec::new(),
             dialog: false,
             dynamic_color_sliders: dynamic,
+            curves_only: None,
         };
         let stops = [Color32::BLACK, Color32::RED];
         assert_eq!(track_stops(&cx(true), &stops), Some(&stops[..]));
@@ -1718,6 +1771,19 @@ mod tests {
         h[200] = 1000;
         assert_eq!(auto_levels(&h), (10.0, 200.0));
         assert_eq!(auto_levels(&[0; 256]), (253.0, 255.0), "an empty histogram is no panic");
+    }
+
+    /// #5335: a colour component keeps its curve colour when it is the only row; a non-colour
+    /// channel and the composite stay untinted.
+    #[test]
+    fn a_solo_colour_channel_keeps_its_curve_colour() {
+        assert!(curves_stroke_uses_channel_color("green", 0, true));
+        assert!(curves_stroke_uses_channel_color("red", 1, false));
+        assert!(!curves_stroke_uses_channel_color("", 0, true), "a non-colour channel is a neutral curve");
+        assert!(!curves_stroke_uses_channel_color("", 0, false), "the composite curve stays neutral");
+        assert!(!curves_stroke_uses_channel_color("lightness", 0, true));
+        assert!(!curves_stroke_uses_channel_color("black", 0, true));
+        assert!(curves_stroke_uses_channel_color("black", 4, false), "Black in the full CMYK list is unchanged");
     }
 }
 
