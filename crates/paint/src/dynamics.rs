@@ -358,12 +358,12 @@ impl PathWalker {
         if let Some(f) = self.pending_first.take() {
             self.emit(f, out);
         }
-        if self.curved {
-            if let (Some(prev_mid), Some(prev_pt)) = (self.prev_mid.take(), self.prev_pt.take()) {
-                let sl = self.last_step_len;
-                let step_len = |_p: &StrokePoint| sl;
-                self.walk_straight_segment(&prev_mid, &prev_pt, &step_len, out);
-            }
+        if self.curved
+            && let (Some(prev_mid), Some(prev_pt)) = (self.prev_mid.take(), self.prev_pt.take())
+        {
+            let sl = self.last_step_len;
+            let step_len = |_p: &StrokePoint| sl;
+            self.walk_straight_segment(&prev_mid, &prev_pt, &step_len, out);
         }
     }
 }
