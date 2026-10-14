@@ -18,7 +18,7 @@ use crate::{
     xcf_channel_consumer::{self, ChannelConsumer, SourceBinding},
 };
 use photocraft_compose::{
-    gimp_channel_gaussian_candidate as gaussian,
+    gimp_channel_gaussian_candidate as gaussian, gimp_channel_opacity_candidate as opacity,
     gimp_composite::{CompositionError, Result as ComposeResult},
     gimp_render::PreparationBudget,
 };
@@ -96,6 +96,7 @@ pub struct Requirements {
     pub index_envelope_bytes: u64,
     pub preparation_work_units: u64,
     pub derived: gaussian::Requirements,
+    pub opacity: Option<opacity::Requirements>,
 }
 struct Work {
     used: AtomicU64,
@@ -279,6 +280,21 @@ impl PreparationBudget for LocalBudget<'_> {
         self.work.charge(units).map_err(|_| CompositionError::Invalid("channel remaining work budget"))
     }
 }
+struct StageBudget<'a> {
+    held: u64,
+    limit: u64,
+    work: &'a mut PrepaidProofWork,
+}
+impl PreparationBudget for StageBudget<'_> {
+    type Lease = ();
+    fn reserve_prepared_bytes(&mut self, bytes: u64) -> ComposeResult<()> {
+        self.held = self.held.checked_add(bytes).filter(|n| *n <= self.limit).ok_or(CompositionError::Invalid("combined channel resident budget"))?;
+        Ok(())
+    }
+    fn consume_preparation_work(&mut self, units: u64) -> ComposeResult<()> {
+        self.work.consume(units).map_err(|_| CompositionError::Invalid("combined channel prepaid work"))
+    }
+}
 /// Owns source and derived stages separately. There is intentionally no commit,
 /// mutable Surface, LoadProof, or channel-write authorization method.
 pub struct PreparedChannelGaussian<L> {
@@ -290,6 +306,7 @@ pub struct PreparedChannelGaussian<L> {
     source_bytes: Vec<u8>,
     correspondence: SourceCorrespondence,
     output: gaussian::StagedOutput<()>,
+    opacity_output: Option<opacity::StagedOutput<()>>,
     requirements: Requirements,
     validation_work: u64,
     work: Work,
@@ -306,7 +323,14 @@ impl<L> PreparedChannelGaussian<L> {
         self.correspondence
     }
     pub fn derived_surface(&self) -> &Surface {
+        self.opacity_output.as_ref().map_or_else(|| self.output.surface(), |stage| stage.surface())
+    }
+    /// Retained intermediate; no mutable or publication authority.
+    pub fn gaussian_surface(&self) -> &Surface {
         self.output.surface()
+    }
+    pub fn opacity_config(&self) -> Option<opacity::Config> {
+        self.opacity_output.as_ref().map(|stage| stage.config())
     }
     pub fn config(&self) -> gaussian::Config {
         self.output.config()
@@ -364,7 +388,7 @@ pub fn prepare<B: PreparationBudget>(
     budget: &mut B,
     control: &Interrupt<'_>,
 ) -> Result<PreparedChannelGaussian<B::Lease>> {
-    prepare_input(session, channel, PreparationInput::Metadata(evidence), config, limits, budget, control)
+    prepare_input(session, channel, PreparationInput::Metadata(evidence), config, None, limits, budget, control)
 }
 /// The opaque IO owner holds independently decoded original backing. Its whole
 /// resident/index envelope is charged in addition to current Document storage;
@@ -386,7 +410,7 @@ pub fn prepare_from_correspondence<B: PreparationBudget>(
     if owner.channel_id() != channel {
         return Err(bad("correspondence owner belongs to a different channel"));
     }
-    prepare_input(session, channel, PreparationInput::Correspondence { owner, working }, config, limits, budget, control)
+    prepare_input(session, channel, PreparationInput::Correspondence { owner, working }, config, None, limits, budget, control)
 }
 /// Selected channel/mask correspondence inside a retained full current scene.
 /// Native census receipts are generated from the actual captured Document under
@@ -410,6 +434,7 @@ pub fn prepare_from_selected_correspondence<B: PreparationBudget>(
         channel,
         PreparationInput::Selected { owner, working, profile_policy: photocraft_io::CurrentProfilePolicy::OriginalExact },
         config,
+        None,
         limits,
         budget,
         control,
@@ -434,7 +459,29 @@ pub fn prepare_from_selected_correspondence_with_profile_policy<B: PreparationBu
     if owner.channel_id() != channel {
         return Err(bad("selected correspondence owner belongs to a different channel"));
     }
-    prepare_input(session, channel, PreparationInput::Selected { owner, working, profile_policy }, config, limits, budget, control)
+    prepare_input(session, channel, PreparationInput::Selected { owner, working, profile_policy }, config, None, limits, budget, control)
+}
+/// Explicit selected correspondence followed by Gaussian and optional observed
+/// opacity mathematics. Profile policy and numerical working-domain evidence
+/// remain separate. The original 96x80 mask is retained, never applied here.
+/// Both private stages and their source owners share one immutable lower ledger.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_from_selected_correspondence_with_opacity<B: PreparationBudget>(
+    session: &Session,
+    channel: ChannelId,
+    owner: &photocraft_io::AssembledStoredChannel<'_, '_, '_>,
+    profile_policy: photocraft_io::CurrentProfilePolicy,
+    working: WorkingDomainEvidence<'_>,
+    config: gaussian::Config,
+    opacity_config: Option<opacity::Config>,
+    limits: Limits,
+    budget: &mut B,
+    control: &Interrupt<'_>,
+) -> Result<PreparedChannelGaussian<B::Lease>> {
+    if owner.channel_id() != channel {
+        return Err(bad("selected correspondence owner belongs to a different channel"));
+    }
+    prepare_input(session, channel, PreparationInput::Selected { owner, working, profile_policy }, config, opacity_config, limits, budget, control)
 }
 #[allow(clippy::too_many_arguments)]
 fn prepare_input<B: PreparationBudget>(
@@ -442,6 +489,7 @@ fn prepare_input<B: PreparationBudget>(
     channel: ChannelId,
     input: PreparationInput<'_, '_, '_, '_>,
     config: gaussian::Config,
+    opacity_config: Option<opacity::Config>,
     limits: Limits,
     budget: &mut B,
     control: &Interrupt<'_>,
@@ -458,6 +506,12 @@ fn prepare_input<B: PreparationBudget>(
     {
         return Err(bad("channel preparation input or lower-only limits"));
     }
+    if let Some(opacity) = opacity_config {
+        if opacity.domain != config.domain || opacity.precision != config.precision || opacity.output != config.output {
+            return Err(bad("paired Gaussian and opacity domain, precision, or ROI differ"));
+        }
+    }
+    let derived_index_reservation = if opacity_config.is_some() { mul(DERIVED_INDEX_RESERVATION, 2)? } else { DERIVED_INDEX_RESERVATION };
     let current = session.active().ok_or(EngineError::NoDocument)?;
     let requested_view = view_bytes(&current.channel_view, false)?;
     if requested_view > limits.index_bytes || requested_view > limits.resident_bytes {
@@ -532,7 +586,7 @@ fn prepare_input<B: PreparationBudget>(
             add(correspondence_requirements.resident_bytes, profile_requirements.resident_bytes)?,
             add(add(raster.retained_bytes, mul(raster.clone_metadata_bytes, 4)?)?, add(requested_view, input_bytes)?)?,
         )?;
-        let prospective_index = add(add(requested_view, DERIVED_INDEX_RESERVATION)?, correspondence_requirements.index_bytes)?;
+        let prospective_index = add(add(requested_view, derived_index_reservation)?, correspondence_requirements.index_bytes)?;
         let mut model_limits = inspectors(limits, held, &work, prospective_index)?;
         model_limits.resident_bytes /= 4;
         model_limits.index_bytes = model_limits.index_bytes.min(model_limits.resident_bytes);
@@ -575,7 +629,7 @@ fn prepare_input<B: PreparationBudget>(
                 resident_bytes: limits.resident_bytes.checked_sub(extra).ok_or_else(|| bad("selected descriptor resident envelope"))?,
                 index_bytes: limits
                     .index_bytes
-                    .checked_sub(add(requested_view, DERIVED_INDEX_RESERVATION)?)
+                    .checked_sub(add(requested_view, derived_index_reservation)?)
                     .ok_or_else(|| bad("selected descriptor index envelope"))?,
                 work_units: add(work.remaining(), proof_work.remaining)?,
             };
@@ -589,7 +643,7 @@ fn prepare_input<B: PreparationBudget>(
                     &mut |resident, index| {
                         let total = add(resident, extra).map_err(|e| photocraft_io::IoError::Unsupported(e.to_string()))?;
                         let index_total =
-                            add(index, add(requested_view, DERIVED_INDEX_RESERVATION).map_err(|e| photocraft_io::IoError::Unsupported(e.to_string()))?)
+                            add(index, add(requested_view, derived_index_reservation).map_err(|e| photocraft_io::IoError::Unsupported(e.to_string()))?)
                                 .map_err(|e| photocraft_io::IoError::Unsupported(e.to_string()))?;
                         if total > limits.resident_bytes || index_total > limits.index_bytes {
                             return Err(photocraft_io::IoError::Unsupported("selected descriptor exceeds shared envelope".into()));
@@ -711,7 +765,7 @@ fn prepare_input<B: PreparationBudget>(
         let retained_owner_index = if selected_lane { 0 } else { correspondence_requirements.index_bytes };
         let max_view_index = limits
             .index_bytes
-            .checked_sub(add(add(scratch, DERIVED_INDEX_RESERVATION)?, retained_owner_index)?)
+            .checked_sub(add(add(scratch, derived_index_reservation)?, retained_owner_index)?)
             .ok_or_else(|| bad("view remaining index envelope"))?;
         let view = copy_view(&current.channel_view, max_view_resident.min(max_view_index), &metered)?;
         let actual_view = view_bytes(&view, true)?;
@@ -727,7 +781,7 @@ fn prepare_input<B: PreparationBudget>(
             held = add(held, scratch)?;
         }
         let source_index = add(add(actual_view, scratch)?, retained_owner_index)?;
-        if held > limits.resident_bytes || add(source_index, DERIVED_INDEX_RESERVATION)? > limits.index_bytes {
+        if held > limits.resident_bytes || add(source_index, derived_index_reservation)? > limits.index_bytes {
             return Err(bad("actual source/view capacity admission"));
         }
         source_bytes.extend_from_slice(evidence.original_bytes);
@@ -736,17 +790,62 @@ fn prepare_input<B: PreparationBudget>(
             index_bytes: limits.index_bytes.checked_sub(source_index).ok_or_else(|| bad("no derived index budget"))?,
             work_units: work.remaining(),
         };
-        let mut local = LocalBudget { held, limit: limits.resident_bytes, work: &work };
-        let output = gaussian::prepare(
-            gaussian::Original { surface: read.surface, bounds: read.bounds, node: actual_node, mask: Some(mask), opaque: &state.opaque },
-            config,
-            remaining,
-            &mut local,
-            &metered,
-        )
-        .map_err(composition)?
-        .into_staged();
-        if output.requirements().index_bytes > DERIVED_INDEX_RESERVATION {
+        let original = gaussian::Original { surface: read.surface, bounds: read.bounds, node: actual_node, mask: Some(mask), opaque: &state.opaque };
+        let (output, opacity_output) = if let Some(opacity_config) = opacity_config {
+            // Opacity peak = source + derived + fixed staging. Pricing source as
+            // the prospective derived gives 2*source + staging; adding the whole
+            // Gaussian peak bounds the actual derived body without inventing a
+            // new cap. Gaussian's full peak remains charged during opacity prep.
+            let gaussian_req = gaussian::requirements(original, config, remaining, &metered).map_err(composition)?;
+            // requirements also validates selected source samples. Conservatively
+            // charge its full declared bound separately from the later prepare;
+            // this admitted, allocation-free pass must not be free work.
+            work.charge(gaussian_req.work_units)?;
+            let prospective_opacity = opacity::requirements(
+                opacity::Inputs { source: read.surface, derived: read.surface, bounds: read.bounds },
+                opacity_config,
+                remaining,
+                &metered,
+            )
+            .map_err(composition)?;
+            let opacity_upper = add(prospective_opacity.peak_resident_bytes, gaussian_req.peak_resident_bytes)?;
+            let combined_peak = add(gaussian_req.peak_resident_bytes, opacity_upper)?;
+            let combined_index = add(gaussian_req.index_bytes, prospective_opacity.index_bytes)?;
+            let combined_work = add(gaussian_req.work_units, prospective_opacity.work_units)?;
+            if combined_peak > remaining.resident_bytes || combined_index > remaining.index_bytes || combined_work > work.remaining() {
+                return Err(bad("combined Gaussian and opacity envelope"));
+            }
+            let mut stage_work = PrepaidProofWork::reserve(&work, combined_work)?;
+            let mut local = StageBudget { held, limit: limits.resident_bytes, work: &mut stage_work };
+            let output = gaussian::prepare(original, config, remaining, &mut local, &metered).map_err(composition)?.into_staged();
+            if output.requirements().peak_resident_bytes > gaussian_req.peak_resident_bytes
+                || output.requirements().index_bytes > gaussian_req.index_bytes
+                || output.requirements().work_units > gaussian_req.work_units
+            {
+                return Err(bad("Gaussian exceeds combined prospective requirements"));
+            }
+            let opacity_limits = Limits {
+                resident_bytes: limits.resident_bytes.checked_sub(local.held).ok_or_else(|| bad("opacity remaining resident envelope"))?,
+                index_bytes: remaining.index_bytes.checked_sub(output.requirements().index_bytes).ok_or_else(|| bad("opacity remaining index envelope"))?,
+                work_units: add(work.remaining(), local.work.remaining)?,
+            };
+            let inputs = opacity::Inputs { source: read.surface, derived: output.surface(), bounds: read.bounds };
+            let actual = opacity::requirements(inputs, opacity_config, opacity_limits, &metered).map_err(composition)?;
+            if actual.peak_resident_bytes > opacity_upper
+                || actual.index_bytes > prospective_opacity.index_bytes
+                || actual.work_units > prospective_opacity.work_units
+            {
+                return Err(bad("opacity exceeds combined prospective requirements"));
+            }
+            let opacity_output = opacity::prepare(inputs, opacity_config, opacity_limits, &mut local, &metered).map_err(composition)?.into_staged();
+            local.work.finish()?;
+            (output, Some(opacity_output))
+        } else {
+            let mut local = LocalBudget { held, limit: limits.resident_bytes, work: &work };
+            let output = gaussian::prepare(original, config, remaining, &mut local, &metered).map_err(composition)?.into_staged();
+            (output, None)
+        };
+        if add(output.requirements().index_bytes, opacity_output.as_ref().map_or(0, |stage| stage.requirements().index_bytes))? > derived_index_reservation {
             return Err(bad("derived index exceeds prospective reservation"));
         }
         let requirements = Requirements {
@@ -764,13 +863,25 @@ fn prepare_input<B: PreparationBudget>(
             index_envelope_bytes: limits.index_bytes,
             preparation_work_units: 0,
             derived: output.requirements(),
+            opacity: opacity_output.as_ref().map(|stage| stage.requirements()),
         };
-        Ok((current.doc.clone(), current.revision, current.active_layer, view, source_bytes, correspondence, output, requirements, validation_work))
+        Ok((
+            current.doc.clone(),
+            current.revision,
+            current.active_layer,
+            view,
+            source_bytes,
+            correspondence,
+            output,
+            opacity_output,
+            requirements,
+            validation_work,
+        ))
     })();
     if work.exceeded.load(Ordering::Relaxed) {
         return Err(bad("channel preparation work limit"));
     }
-    let (snapshot, revision, active, view, source_bytes, correspondence, output, requirements, validation_work) = staged?;
+    let (snapshot, revision, active, view, source_bytes, correspondence, output, opacity_output, requirements, validation_work) = staged?;
     let mut prepared = PreparedChannelGaussian {
         snapshot,
         revision,
@@ -780,6 +891,7 @@ fn prepare_input<B: PreparationBudget>(
         source_bytes,
         correspondence,
         output,
+        opacity_output,
         requirements,
         validation_work,
         work,
@@ -913,6 +1025,7 @@ mod tests {
             source_bytes: vec![],
             correspondence: SourceCorrespondence::MetadataOnly,
             output,
+            opacity_output: None,
             requirements: Requirements {
                 admitted_resident_bytes: Limits::default().resident_bytes,
                 admitted_work_units: 100000,
@@ -928,6 +1041,7 @@ mod tests {
                 index_envelope_bytes: Limits::default().index_bytes,
                 preparation_work_units: 0,
                 derived,
+                opacity: None,
             },
             validation_work: 100,
             work: Work { used: AtomicU64::new(0), exceeded: AtomicBool::new(false), limit: 100000 },
@@ -972,6 +1086,43 @@ mod tests {
         }
         assert_eq!(work.remaining(), 5); // failure/drop does not refund
         assert!(work.charge(6).is_err());
+    }
+    #[test]
+    fn combined_stage_budget_keeps_gaussian_held_and_zero_opacity_source_exact() {
+        let fmt = PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false);
+        let source = Surface::try_with_default_bytes(fmt, &0.25f64.to_le_bytes()).unwrap();
+        let node = node_fixture();
+        let original = gaussian::Original { surface: &source, bounds: config().output, node: &node, mask: None, opaque: &[] };
+        let limits = Limits::default();
+        let gaussian_req = gaussian::requirements(original, config(), limits, &Interrupt::NONE).unwrap();
+        let opacity_config = opacity::Config {
+            domain: config().domain,
+            mix_space: opacity::MixSpace::LinearF64,
+            precision: config().precision,
+            opacity_f64_bits: 0,
+            output: config().output,
+        };
+        let prospective =
+            opacity::requirements(opacity::Inputs { source: &source, derived: &source, bounds: config().output }, opacity_config, limits, &Interrupt::NONE)
+                .unwrap();
+        let work = Work { used: AtomicU64::new(0), exceeded: AtomicBool::new(false), limit: limits.work_units };
+        let mut prepaid = PrepaidProofWork::reserve(&work, add(gaussian_req.work_units, prospective.work_units).unwrap()).unwrap();
+        let charged = work.remaining();
+        let mut local = StageBudget { held: 100, limit: limits.resident_bytes, work: &mut prepaid };
+        let gaussian = gaussian::prepare(original, config(), limits, &mut local, &Interrupt::NONE).unwrap().into_staged();
+        let after_gaussian = local.held;
+        let inputs = opacity::Inputs { source: &source, derived: gaussian.surface(), bounds: config().output };
+        let req = opacity::requirements(inputs, opacity_config, limits, &Interrupt::NONE).unwrap();
+        let result = opacity::prepare(inputs, opacity_config, limits, &mut local, &Interrupt::NONE).unwrap().into_staged();
+        assert_eq!(result.surface(), &source);
+        assert_eq!(local.held, after_gaussian + req.peak_resident_bytes);
+        assert_eq!(after_gaussian, 100 + gaussian_req.peak_resident_bytes);
+        local.work.finish().unwrap();
+        assert_eq!(work.remaining(), charged); // callbacks consume receipt only
+        drop(result);
+        drop(gaussian);
+        assert_eq!(local.held, after_gaussian + req.peak_resident_bytes); // no refund
+        assert!(local.reserve_prepared_bytes(limits.resident_bytes).is_err());
     }
     #[test]
     fn explicit_profile_verification_is_prepaid_before_census() {

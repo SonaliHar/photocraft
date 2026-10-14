@@ -48,7 +48,32 @@ pub struct PrivateOutput<'a, L> {
     requirements: Requirements,
     _lease: L,
 }
+/// Owned private stage with the same accounting lease. The enclosing caller
+/// must retain original source/derived owners and target fences. Moving the
+/// borrowed view away grants no installation, mutation or source authority.
+pub struct StagedOutput<L> {
+    surface: Surface,
+    config: Config,
+    requirements: Requirements,
+    _lease: L,
+}
+impl<L> StagedOutput<L> {
+    pub fn surface(&self) -> &Surface {
+        &self.surface
+    }
+    pub fn config(&self) -> Config {
+        self.config
+    }
+    pub fn requirements(&self) -> Requirements {
+        self.requirements
+    }
+}
 impl<L> PrivateOutput<'_, L> {
+    /// Move private native output and its lease without cloning pixels or
+    /// retaining borrowed Inputs. Original ownership remains a caller duty.
+    pub fn into_staged(self) -> StagedOutput<L> {
+        StagedOutput { surface: self.surface, config: self.config, requirements: self.requirements, _lease: self._lease }
+    }
     pub fn original(&self) -> Inputs<'_> {
         self.original
     }
