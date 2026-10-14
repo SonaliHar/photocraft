@@ -390,6 +390,9 @@ pub type CapsLockFn = Box<dyn FnMut() -> bool>;
 /// Keeps an undecorated window's OS frame from offsetting its content and pointer (#2246).
 /// Called once per frame; `None` when the window is decorated or the platform needs no fixing.
 pub type WindowFrameFn = Box<dyn FnMut()>;
+/// Adds platform-specific input before egui sees a frame. Used by tablet shells to translate
+/// operating-system gestures that winit cannot express directly.
+pub type RawInputFn = Box<dyn FnMut(&mut egui::RawInput)>;
 /// The caption buttons' current style ([`Services::caption_style`]).
 pub type CaptionStyleFn = Box<dyn Fn(&egui::Context) -> CaptionStyle>;
 
@@ -439,11 +442,17 @@ pub struct Services {
     /// the web (see `prefs_ui`).
     pub load_prefs: Option<LoadTextFn>,
     pub save_prefs: Option<SaveTextFn>,
+    /// Platform gestures injected before PhotoCraft processes the frame's pointer events.
+    pub raw_input: Option<RawInputFn>,
     /// Photoshop's live keyboard shortcut set, imported once at first launch (`kys_import`).
     pub photoshop_shortcuts: Option<PhotoshopShortcutsFn>,
     pub system_theme: Option<SystemThemeFn>,
     /// The native window is connected directly to a Wayland compositor.
     pub is_wayland: bool,
+    /// Use touch-friendly spacing when the system scale preference is Automatic. Platform shells
+    /// set this for tablet-first devices; people can still choose an explicit interface scale in
+    /// Preferences.
+    pub touch_ui: bool,
     /// On Wayland, the shell command that starts this install under XWayland, where native file
     /// drops work (#386); `None` when there is no X server to run it on.
     pub xwayland_command: Option<String>,
@@ -1760,6 +1769,9 @@ impl eframe::App for PhotocraftApp {
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        if let Some(platform_input) = self.services.raw_input.as_mut() {
+            platform_input(raw_input);
+        }
         let frame_start = gpu_canvas::now_ms();
         // An undecorated window gets its caption back when the toolkit changes its flags
         // (maximize, restore, …): take it off again before the frame is laid out (#2246).
