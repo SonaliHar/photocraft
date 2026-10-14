@@ -1521,8 +1521,8 @@ fn tip_grid_window_picks_only_tip_fields_and_records_its_identity() {
         assert_eq!(h.state().session.tools.presets, presets, "picking cannot rewrite the saved preset");
         assert_eq!(h.state().session.tools.current_preset.as_deref(), Some("Tip command 0007"));
         assert_eq!(h.state().session.journal.len(), n + 2);
-        assert_eq!(h.state().session.journal[n].0, "brush.presets.setCurrent");
-        let (id, params) = last_journal(h.state()).unwrap();
+        assert_eq!(h.state().session.journal[n + 1].0, "brush.presets.setCurrent");
+        let (id, params) = h.state().session.journal[n].clone();
         assert_eq!(id, "tools.setBrush");
         let mut patch = json!({"tip":serde_json::to_value(&chosen.brush.tip).unwrap(),"hardness":0.35f32,"angle":37.0,"roundness":0.45f32,"spacing":0.21f32});
         if capture_size {
@@ -1539,6 +1539,89 @@ fn tip_grid_window_picks_only_tip_fields_and_records_its_identity() {
         assert_eq!(replay.tools.current_preset.as_deref(), Some("Tip command 0007"));
         assert_eq!(h.get_by_label("Tip command 0007").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
         assert_eq!(h.get_by_label("Tip command 0006").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+        let mut twin = chosen.clone();
+        twin.name = "Look-alike tip".into();
+        h.state_mut().session.tools.presets.push(twin);
+        h.run_steps(2);
+        let before_twin = h.state().session.tools.brush.clone();
+        let presets_twin = h.state().session.tools.presets.clone();
+        let journal_twin = h.state().session.journal.len();
+        h.get_by_label("Look-alike tip").click();
+        h.run_steps(4);
+        assert_eq!(h.state().session.tools.brush, before_twin);
+        assert_eq!(h.state().session.tools.presets, presets_twin);
+        assert_eq!(h.state().session.tools.current_preset.as_deref(), Some("Look-alike tip"));
+        assert_eq!(&h.state().session.journal[journal_twin..], &[("brush.presets.setCurrent".to_string(), json!({"name":"Look-alike tip"}))]);
+    }
+}
+
+#[test]
+fn tip_grid_rejects_unavailable_tip_without_marking_it_current() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    use std::sync::Arc;
+    for theme in crate::theme::ThemeKind::ALL {
+        for had_current in [false, true] {
+            let mut h = harness(0, 0);
+            PhotocraftApp::setup_context(&h.ctx, theme);
+            let working = paint::BrushPreset {
+                name: "Working tip".into(),
+                brush: BrushSettings::default(),
+                builtin: false,
+                group: "Synthetic".into(),
+                folder: Vec::new(),
+                captures: Default::default(),
+            };
+            let unavailable = paint::BrushPreset {
+                name: "Unavailable tip".into(),
+                brush: BrushSettings {
+                    size: 73.0,
+                    tip: TipShape::Stored(paint::StoredTile {
+                        key: "unavailable-tip".into(),
+                        width: 16,
+                        height: 16,
+                        preview: Arc::new(GrayTile::from_fn(1, 1, |_, _| 1.0)),
+                        full: None,
+                    }),
+                    ..Default::default()
+                },
+                ..working.clone()
+            };
+            h.state_mut().session.tools.presets = vec![working, unavailable];
+            h.state_mut().run("tools.setBrush", json!({"size":17.25,"noise":true,"opacity":0.37})).unwrap();
+            h.state_mut().run("tools.setColors", json!({"foreground":"#00ff00","background":"#0000ff"})).unwrap();
+            if had_current {
+                h.state_mut().run("brush.presets.setCurrent", json!({"name":"Working tip"})).unwrap();
+            }
+            h.run_steps(3);
+            let brush = h.state().session.tools.brush.clone();
+            let current = h.state().session.tools.current_preset.clone();
+            let presets = h.state().session.tools.presets.clone();
+            let rev = h.state().session.tools.brush_rev;
+            let journal = h.state().session.journal.clone();
+            h.get_by_label("Unavailable tip").click();
+            h.run_steps(4);
+            assert!(h.state().ui.status.contains("no preset store"));
+            assert_eq!(h.state().session.tools.current_preset, current, "{theme:?}, current={had_current}: reject identity with the tip");
+            assert_eq!(h.state().session.tools.brush, brush);
+            assert_eq!(h.state().session.tools.foreground, [0.0, 1.0, 0.0, 1.0]);
+            assert_eq!(h.state().session.tools.background, [0.0, 0.0, 1.0, 1.0]);
+            assert_eq!(h.state().session.tools.presets, presets);
+            assert_eq!(h.state().session.tools.brush_rev, rev);
+            assert_eq!(h.state().session.journal, journal);
+            assert_eq!(h.get_by_label("Update the current brush with these settings").accesskit_node().is_disabled(), !had_current);
+            assert_eq!(h.get_by_label("Unavailable tip").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+
+            // A later available tip still selects normally after the rejected pick.
+            h.state_mut().session.tools.presets[1].brush.tip = TipShape::Sampled(GrayTile::from_fn(16, 16, |_, _| 1.0));
+            h.run_steps(2);
+            h.get_by_label("Unavailable tip").click();
+            h.run_steps(4);
+            assert_eq!(h.state().session.tools.current_preset.as_deref(), Some("Unavailable tip"));
+            assert_eq!(h.state().session.tools.brush.size, 73.0);
+            assert!(h.state().session.tools.brush.noise);
+            assert_eq!(h.state().session.tools.brush.opacity, 0.37);
+            assert_eq!(h.state().session.journal.len(), journal.len() + 2);
+        }
     }
 }
 
