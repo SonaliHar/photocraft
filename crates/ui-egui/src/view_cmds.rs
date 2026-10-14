@@ -476,6 +476,7 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
                     || (doc && matches!(&i["window.arrange.".len()..], "floatAllInWindows" | "cascade" | "tile" | "tileAllVertically" | "tileAllHorizontally"))
             }
         },
+        "file.placeEmbedded" | "file.placeLinked" => doc && app.services.file_dialog.is_some(),
         i if wraps(i) => app.session.is_enabled(i),
         _ => true,
     })
@@ -612,7 +613,7 @@ fn no_params(p: &Value) -> bool {
 /// `id` isn't ours.
 pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if wraps(id) {
-        return front(app, id, params);
+        return front(app, ctx, id, params);
     }
     if !handles(id) {
         return None;
@@ -1154,7 +1155,7 @@ fn default_dir(app: &PhotocraftApp) -> String {
     app.session.active().and_then(|d| d.path.as_deref()).and_then(|p| p.rfind(['/', '\\']).map(|i| p[..i].to_string())).unwrap_or_else(|| ".".into())
 }
 
-fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
+fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if id == "file.closeAll" || id == "file.closeOthers" {
         // Keep the remaining document's view (views are index-aligned with documents).
         let keep = app.session.active_index().and_then(|i| app.ui.views.get(i).cloned());
@@ -1197,10 +1198,13 @@ fn front(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Val
                 Err(e) => return Some(Err(e)),
             };
             let linked = id == "file.placeLinked";
+            let ctx = ctx.clone();
             Some(app.pick_file_bytes(move |app, name, bytes| {
                 app.refocus(doc)?;
                 let linked = linked.then(|| name.clone());
-                app.place_bytes(&name, bytes, linked)
+                let placed = app.place_bytes(&name, bytes, linked)?;
+                crate::transform_tool::begin_placed(app, &ctx)?;
+                Ok(placed)
             }))
         }
         "layer.smartObjects.replaceContents" => {
