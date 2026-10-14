@@ -378,6 +378,7 @@ mod tests {
         crate::liquify_ui::open(&mut app, &ctx).unwrap();
         assert!(app.distort.liquify.is_some());
         app.session.execute("file.new", json!({"width": 40, "height": 40, "depth": 8})).unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
         app.sync_views();
         assert!(app.distort.liquify.is_none());
         let past = app.session.active().unwrap().history.past_len();
