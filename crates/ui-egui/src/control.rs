@@ -12,7 +12,7 @@
 //!   change UI state; any other field is an error ([`UI_SET_FIELDS`])
 //! - `ui.dialog.open {kind, fields?}` (kinds: newDocument, about, layerStyle {effect?}, colorPicker {target: foreground|background}, command {command}) / `ui.dialog.set {dialog, field, value}` / `ui.dialog.confirm {dialog, wait?}` / `ui.dialog.cancel {dialog}`
 //! - `ui.dialog.apply {dialog}`: commit Preferences changes without closing the dialog
-//! - `ui.window.open {document?}` / `ui.window.close {window}`: extra document windows
+//! - `ui.window.open {document?}`: extra view; `ui.window.close {window}`: close that view, or a primary document through the stock unsaved-changes prompt
 //! - `ui.pointer {events: [{kind: down|move|up, x, y, pressure?, tiltX?, tiltY?, rotation?}], tool?, modifiers?, button?}`: drive the active tool in document coordinates (`button: "secondary"` opens the tool's canvas context menu (the pasteboard colour menu outside the image) or Brush Preset picker, or erases with Preferences › Tools › Right-click with painting tools = erase)
 //! - `ui.click {x, y, button?, count?}` / `ui.move {x, y}`: synthetic pointer input in screen points
 //!   (`count` at most [`MAX_CLICKS`])
@@ -941,9 +941,26 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         }
         "ui.window.close" => {
             let Some(id) = u("window") else { return err("missing `window`") };
-            let before = app.ui.windows.len();
-            app.ui.windows.retain(|w| w.id != id);
-            if app.ui.windows.len() < before { ok(Value::Null) } else { err(format!("no window {id}")) }
+            let Some(window) = app.ui.windows.iter().find(|w| w.id == id).cloned() else { return err(format!("no window {id}")) };
+            if window.primary {
+                let Some(document) = app.session.documents().get(window.document).map(|d| d.doc.id) else {
+                    return err(format!("no document for window {id}"));
+                };
+                let Some(index) = crate::document_windows::index(app, document) else { return err(format!("no document for window {id}")) };
+                let params = json!({"document": index});
+                // Native/synthetic menu invocation already checks this policy when input is
+                // automated; direct requests must check it too, before parking a dirty close.
+                if !app.automation_input
+                    && let Some(authorize) = app.services.automation_command.as_ref()
+                    && let Err(error) = authorize("file.close", &params)
+                {
+                    return err(error);
+                }
+                wrap(crate::menus::invoke(app, ctx, "file.close", params))
+            } else {
+                app.ui.windows.retain(|w| w.id != id);
+                ok(Value::Null)
+            }
         }
         "ui.pointer" => {
             // Every field and event is validated before the first event runs, so a rejected call
@@ -1260,6 +1277,21 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         dialogs.push(json!({"id": SHELL_DIALOG, "kind": kind, "title": crate::workspace_ui::title(kind), "fields": fields}));
     }
     dialogs.extend(crate::discard_ui::inspect(app));
+    // Readback is separate from the initial placement request: writing it into UiState would
+    // turn each native move (including DPI changes) into a new ViewportBuilder command.
+    let mut windows = app.ui.windows.clone();
+    if !ctx.embed_viewports() {
+        ctx.input(|i| {
+            for window in &mut windows {
+                if let Some(rect) = i.raw.viewports.get(&crate::document_windows::viewport(window.id)).and_then(|v| v.outer_rect)
+                    && rect.is_finite()
+                    && rect.is_positive()
+                {
+                    window.position = Some([rect.min.x, rect.min.y]);
+                }
+            }
+        });
+    }
     json!({
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
         "tool": app.ui.tool,
@@ -1305,7 +1337,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "view": app.ui.view,
         "views": app.ui.views,
         "dialogs": dialogs,
-        "windows": app.ui.windows,
+        "windows": windows,
         "theme": app.ui.theme,
         "status": app.ui.status,
         "statusError": app.ui.status_error,
@@ -1357,6 +1389,50 @@ pub fn save_screenshot(app: &mut PhotocraftApp, image: &egui::ColorImage, path: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inspect_reports_initial_and_moved_native_float_positions_without_changing_requests() {
+        for requested in [None, Some([45.0, 60.0])] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            let ctx = egui::Context::default();
+            ctx.set_embed_viewports(false);
+            app.run("file.new", json!({"width":16,"height":16})).unwrap();
+            let params = requested.map_or_else(|| json!({}), |position| json!({"position":position}));
+            let floated = call(&mut app, &ctx, "ui.menu.invoke", json!({"id":"window.arrange.floatInWindow","params":params}));
+            assert_eq!(floated["ok"], true, "{floated}");
+            let id = app.ui.windows[0].id;
+            assert_eq!(
+                call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["windows"][0]["position"],
+                json!(requested),
+                "unavailable geometry preserves the original request"
+            );
+            for position in [[2300.0, 330.0], [-500.5, 120.0]] {
+                let mut input = egui::RawInput::default();
+                input.viewports.insert(
+                    crate::document_windows::viewport(id),
+                    egui::ViewportInfo {
+                        parent: Some(egui::ViewportId::ROOT),
+                        native_pixels_per_point: Some(1.5),
+                        outer_rect: Some(egui::Rect::from_min_size(egui::pos2(position[0], position[1]), egui::vec2(800.0, 600.0))),
+                        ..Default::default()
+                    },
+                );
+                ctx.run_ui(input, |ui| {
+                    let inspected = call(&mut app, ui.ctx(), "ui.inspect", json!({}));
+                    assert_eq!(inspected["result"]["windows"][0]["position"], json!(position), "inspect reports platform geometry from creation onward");
+                })
+                .textures_delta
+                .clear();
+                assert_eq!(app.ui.windows[0].position, requested, "readback must not become a new positioning command");
+            }
+            ctx.set_embed_viewports(true);
+            assert_eq!(
+                call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["windows"][0]["position"],
+                json!(requested),
+                "embedded views have no native screen position"
+            );
+        }
+    }
 
     fn call(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Value) -> Value {
         let (req, _rx) = ControlRequest::new(method, params);

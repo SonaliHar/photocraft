@@ -487,14 +487,18 @@ impl Default for View {
     }
 }
 
-/// An extra OS window showing a document ("Window → Arrange → New Window for Document").
+/// An OS document window: primary presentation or an additional independent view.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DocWindow {
+    /// Primary floats own document input/close; legacy and New Window views remain additional.
+    #[serde(default)]
+    pub primary: bool,
     pub id: u64,
     pub document: usize,
     pub view: View,
     pub open: bool,
-    /// Where the window opens on screen (outer top-left, in points); `None` lets the OS place it.
+    /// Initial outer top-left in points; `None` uses native parent-relative placement when available.
+    /// `ui.inspect` overlays the actual native position without changing this request.
     /// A tab dragged off the tab strip opens its window where it was dropped (#3733).
     #[serde(default)]
     pub position: Option<[f32; 2]>,

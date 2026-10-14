@@ -76,6 +76,7 @@ pub mod discard_ui;
 pub mod distort_ui;
 pub mod doc_props_ui;
 pub mod dock;
+mod document_windows;
 pub mod duplicate_layer_ui;
 pub mod edit_history;
 pub mod egui_fonts;
@@ -390,6 +391,8 @@ pub type CapsLockFn = Box<dyn FnMut() -> bool>;
 /// Keeps an undecorated window's OS frame from offsetting its content and pointer (#2246).
 /// Called once per frame; `None` when the window is decorated or the platform needs no fixing.
 pub type WindowFrameFn = Box<dyn FnMut()>;
+/// Registers actual document viewport identities before the native shell creates their windows.
+pub type DocumentViewportsFn = Box<dyn FnMut(&[egui::ViewportId])>;
 /// The caption buttons' current style ([`Services::caption_style`]).
 pub type CaptionStyleFn = Box<dyn Fn(&egui::Context) -> CaptionStyle>;
 
@@ -468,6 +471,9 @@ pub struct Services {
     /// (Windows custom title bar, #2246). Called once per frame; `None` when the window is
     /// decorated or the platform needs no fixing.
     pub window_frame: Option<WindowFrameFn>,
+    /// Native document window roles, including primary floats and additional views. Called
+    /// before immediate viewport creation; an empty list clears the last document roles.
+    pub document_viewports: Option<DocumentViewportsFn>,
     /// How the custom title bar's caption buttons look and where they sit (Linux: the desktop's
     /// style and button layout). Read every frame, with the context to wake when it changes;
     /// `None` keeps Windows' buttons at the right end.
@@ -618,6 +624,7 @@ pub struct PhotocraftApp {
     pub(crate) drop_places: std::collections::VecDeque<egui::DroppedFileHandle>,
     /// The document each of `ui.views` belongs to, as of the last [`Self::sync_views`].
     view_docs: Vec<DocId>,
+    document_windows: document_windows::State,
     pub fps: f32,
     last_frame_time: f64,
     thumbs: HashMap<(photocraft_doc::LayerId, u8), (u64, egui::TextureHandle)>,
@@ -822,6 +829,7 @@ impl PhotocraftApp {
             tab_strip: None,
             drop_places: Default::default(),
             view_docs: Vec::new(),
+            document_windows: Default::default(),
             fps: 0.0,
             last_frame_time: 0.0,
             thumbs: HashMap::new(),
@@ -1159,13 +1167,14 @@ impl PhotocraftApp {
             let new_docs: Vec<usize> = ids.iter().enumerate().filter(|(_, id)| !self.view_docs.contains(id)).map(|(i, _)| i).collect();
             for &idx in &new_docs {
                 if !self.ui.windows.iter().any(|w| w.document == idx) {
-                    crate::view_cmds::float_window(self, idx, idx);
+                    crate::view_cmds::float_primary_window(self, idx, idx);
                 }
             }
         }
         self.canvases.retain(|(doc, _), _| ids.contains(doc));
         self.navigator_textures.retain(|doc, _| ids.contains(doc));
         self.view_docs = ids;
+        document_windows::prune(self);
         self.prune_thumbs();
         self.sync_mask_targets();
         // Channel-view textures outlive a hidden view (cheap re-show), not their document.
@@ -1695,6 +1704,7 @@ impl eframe::App for PhotocraftApp {
         }
         self.last_frame_time = now;
         self.sync_views();
+        document_windows::prepare(self, ctx);
         crate::type_font_preview::follow_hover(self, ctx);
         self.check_gpu(ctx);
         #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
@@ -1729,7 +1739,9 @@ impl eframe::App for PhotocraftApp {
             jobs_ui::tick(self, ctx);
             #[cfg(not(target_arch = "wasm32"))]
             filter_preview_worker::discard_closed(self);
-            shortcuts::handle(self, ctx);
+            if document_windows::root_keys(self, ctx) {
+                shortcuts::handle(self, ctx);
+            }
         }
         let arrived: Vec<(String, Vec<u8>)> =
             self.services.inbox.as_ref().map(|q| std::mem::take(&mut *q.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();
@@ -1867,13 +1879,14 @@ impl eframe::App for PhotocraftApp {
         dialogs::show(self, &ctx);
         rasterize_prompt::run_pending(self, &ctx);
         jobs_ui::dialog(self, &ctx);
+        let discard_was_pending = self.discard.is_some();
         discard_ui::show(self, &ctx);
         tiff_options_ui::show(self, &ctx);
         targa_options_ui::show(self, &ctx);
         distort_ui::show(self, &ctx);
         camera_raw_ui::show(self, &ctx);
         wide_angle_ui::show(self, &ctx);
-        canvas::extra_windows(self, &ctx);
+        canvas::extra_windows(self, &ctx, discard_was_pending);
         notices::show(self, &ctx);
         gpu_status::show_fallback(self, &ctx);
         kys_import::show_offer(self, &ctx);
@@ -2876,3 +2889,9 @@ mod channel_tint_tests {
         assert_eq!(channel_tint(Rgb, 0, 77, false), Color32::from_gray(77));
     }
 }
+
+#[cfg(test)]
+mod floating_documents_tests;
+
+#[cfg(test)]
+mod native_document_viewport_tests;

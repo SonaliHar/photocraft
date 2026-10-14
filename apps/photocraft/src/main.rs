@@ -43,6 +43,8 @@ mod mac_window;
 mod linux_libs;
 mod logging;
 mod monitor_profile;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod native_document_owner;
 mod photoshop_settings;
 mod screen_color;
 mod services;
@@ -51,6 +53,8 @@ mod services;
 mod tablet;
 mod ui_state;
 mod window_frame;
+#[cfg(target_os = "linux")]
+mod x11_deadline;
 
 use photocraft_engine::Session;
 use photocraft_ui_egui::PhotocraftApp;
@@ -321,6 +325,23 @@ fn main() -> eframe::Result {
     let presets = services::presets_dir().map(photocraft_engine::preset_store::open_dir_async);
     let custom_titlebar = custom_titlebar(services::prefs_file().as_deref());
     let mut options = native_options(custom_titlebar);
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    let document_owners = native_document_owner::NativeOwners::with_observer(Some(std::sync::Arc::new(|event| {
+        use native_document_owner::OwnerEvent;
+        match event {
+            OwnerEvent::Attributes { id, owned, visible } => {
+                log::trace!("native document window {id:?}: owned={owned}, requested visible={visible}");
+            }
+            OwnerEvent::RootCreated => log::trace!("native document window owner created"),
+            OwnerEvent::ChildCreated { id, hidden, transient, restored_visible, detail } => {
+                log::trace!("native document window {id:?}: hidden={hidden}, transient={transient}, immediate visibility={restored_visible}: {detail}");
+            }
+        }
+    })));
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    {
+        options.native_viewport_hooks = Some(document_owners.hooks());
+    }
     // winit picks Wayland whenever `WAYLAND_DISPLAY` is set; open on X11 when that was chosen.
     #[cfg(target_os = "linux")]
     if session == linux_libs::DisplaySession::X11 {
@@ -376,6 +397,10 @@ fn main() -> eframe::Result {
             created_in_callback.store(true, std::sync::atomic::Ordering::Relaxed);
             let automation = control.as_ref().map(|(_, _, workspace)| workspace.clone());
             let mut services = services::native(automation);
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            {
+                services.document_viewports = Some(Box::new(move |ids| document_owners.set_document_viewports(ids)));
+            }
             services.preset_store = presets;
             #[cfg(target_os = "linux")]
             let display = tablet::DisplayKind::of(cc);
