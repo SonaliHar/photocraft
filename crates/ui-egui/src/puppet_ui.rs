@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use egui::{Color32, Stroke, TextureHandle, pos2, vec2};
 use photocraft_algo::puppet::{ITERATIONS, PuppetDensity, PuppetMesh, PuppetMode, PuppetPin, PuppetSolver, PuppetWarp, build_mesh};
-use photocraft_doc::{Document, LayerId};
+use photocraft_doc::{DocId, Document, LayerId};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -22,6 +22,8 @@ use crate::canvas::{ToolEvent, ViewXform};
 
 pub struct PuppetSession {
     pub key: u64,
+    /// Document this session belongs to (#5115).
+    pub document: DocId,
     pub layer: LayerId,
     /// Command to commit with (`edit.puppetWarp` or `layer.smartObjects.puppetWarp`).
     command: String,
@@ -81,6 +83,7 @@ impl PuppetSession {
 
     pub fn describe(&self) -> Value {
         json!({
+            "document": self.document.0,
             "layer": self.layer.0,
             "pins": self.warp.pins,
             "mode": self.warp.mode,
@@ -186,6 +189,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context, command: &str) -> Res
     let texture = ctx.load_texture(format!("puppet-{key}"), img, egui::TextureOptions::LINEAR);
     let mut s = PuppetSession {
         key,
+        document: st.doc.id,
         layer,
         command: command.to_string(),
         surface,
