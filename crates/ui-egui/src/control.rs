@@ -1277,6 +1277,21 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         dialogs.push(json!({"id": SHELL_DIALOG, "kind": kind, "title": crate::workspace_ui::title(kind), "fields": fields}));
     }
     dialogs.extend(crate::discard_ui::inspect(app));
+    // Readback is separate from the initial placement request: writing it into UiState would
+    // turn each native move (including DPI changes) into a new ViewportBuilder command.
+    let mut windows = app.ui.windows.clone();
+    if !ctx.embed_viewports() {
+        ctx.input(|i| {
+            for window in &mut windows {
+                if let Some(rect) = i.raw.viewports.get(&crate::document_windows::viewport(window.id)).and_then(|v| v.outer_rect)
+                    && rect.is_finite()
+                    && rect.is_positive()
+                {
+                    window.position = Some([rect.min.x, rect.min.y]);
+                }
+            }
+        });
+    }
     json!({
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
         "tool": app.ui.tool,
@@ -1322,7 +1337,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "view": app.ui.view,
         "views": app.ui.views,
         "dialogs": dialogs,
-        "windows": app.ui.windows,
+        "windows": windows,
         "theme": app.ui.theme,
         "status": app.ui.status,
         "statusError": app.ui.status_error,
@@ -1374,6 +1389,50 @@ pub fn save_screenshot(app: &mut PhotocraftApp, image: &egui::ColorImage, path: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inspect_reports_initial_and_moved_native_float_positions_without_changing_requests() {
+        for requested in [None, Some([45.0, 60.0])] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            let ctx = egui::Context::default();
+            ctx.set_embed_viewports(false);
+            app.run("file.new", json!({"width":16,"height":16})).unwrap();
+            let params = requested.map_or_else(|| json!({}), |position| json!({"position":position}));
+            let floated = call(&mut app, &ctx, "ui.menu.invoke", json!({"id":"window.arrange.floatInWindow","params":params}));
+            assert_eq!(floated["ok"], true, "{floated}");
+            let id = app.ui.windows[0].id;
+            assert_eq!(
+                call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["windows"][0]["position"],
+                json!(requested),
+                "unavailable geometry preserves the original request"
+            );
+            for position in [[2300.0, 330.0], [-500.5, 120.0]] {
+                let mut input = egui::RawInput::default();
+                input.viewports.insert(
+                    crate::document_windows::viewport(id),
+                    egui::ViewportInfo {
+                        parent: Some(egui::ViewportId::ROOT),
+                        native_pixels_per_point: Some(1.5),
+                        outer_rect: Some(egui::Rect::from_min_size(egui::pos2(position[0], position[1]), egui::vec2(800.0, 600.0))),
+                        ..Default::default()
+                    },
+                );
+                ctx.run_ui(input, |ui| {
+                    let inspected = call(&mut app, ui.ctx(), "ui.inspect", json!({}));
+                    assert_eq!(inspected["result"]["windows"][0]["position"], json!(position), "inspect reports platform geometry from creation onward");
+                })
+                .textures_delta
+                .clear();
+                assert_eq!(app.ui.windows[0].position, requested, "readback must not become a new positioning command");
+            }
+            ctx.set_embed_viewports(true);
+            assert_eq!(
+                call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["windows"][0]["position"],
+                json!(requested),
+                "embedded views have no native screen position"
+            );
+        }
+    }
 
     fn call(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Value) -> Value {
         let (req, _rx) = ControlRequest::new(method, params);

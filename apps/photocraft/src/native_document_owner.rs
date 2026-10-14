@@ -1,4 +1,4 @@
-//! Native ownership for document viewports; unrelated viewports keep their own window role.
+//! Native ownership and initial placement for document viewports; unrelated windows keep their role.
 use egui::ViewportId;
 use raw_window_handle::HasWindowHandle;
 #[cfg(target_os = "linux")]
@@ -11,6 +11,7 @@ use std::{
     collections::HashSet,
     sync::{Arc, Mutex, MutexGuard, Weak},
 };
+use winit::dpi::{PhysicalPosition, PhysicalSize, Size};
 use winit::raw_window_handle;
 use winit::window::{Window, WindowAttributes};
 #[cfg(target_os = "linux")]
@@ -132,7 +133,7 @@ impl NativeOwners {
             {
                 let pending = Pending { visible: attributes.visible, root: Arc::downgrade(&root), generation: state.generation };
                 state.pending.insert(id, pending);
-                return (attributes.with_visible(false), true);
+                return (at_parent(attributes, &root).with_visible(false), true);
             }
         }
         #[cfg(target_os = "windows")]
@@ -144,7 +145,7 @@ impl NativeOwners {
                 && let Ok(handle) = root.window_handle()
                 && let raw_window_handle::RawWindowHandle::Win32(handle) = handle.as_raw()
             {
-                return (attributes.with_owner_window(handle.hwnd.get()), true);
+                return (at_parent(attributes, &root).with_owner_window(handle.hwnd.get()), true);
             }
         }
         (attributes, false)
@@ -206,6 +207,39 @@ impl NativeOwners {
         });
         self.emit(OwnerEvent::ChildCreated { id, hidden, transient, restored_visible: window.is_visible().unwrap_or(true), detail });
     }
+}
+
+fn at_parent(attributes: WindowAttributes, root: &Window) -> WindowAttributes {
+    if attributes.position.is_some() || root.is_minimized() == Some(true) {
+        return attributes;
+    }
+    // Wayland can withhold global coordinates; leave placement to its compositor.
+    let Ok(position) = root.inner_position() else { return attributes };
+    default_position(attributes, position, root.inner_size(), root.scale_factor())
+}
+
+fn default_position(mut attributes: WindowAttributes, parent: PhysicalPosition<i32>, parent_size: PhysicalSize<u32>, scale: f64) -> WindowAttributes {
+    if attributes.position.is_some() || !scale.is_finite() || scale <= 0.0 || parent_size.width == 0 || parent_size.height == 0 {
+        return attributes;
+    }
+    let Some(size) = attributes.inner_size else { return attributes };
+    if let Size::Logical(size) = size
+        && (!size.width.is_finite() || !size.height.is_finite() || size.width <= 0.0 || size.height <= 0.0)
+    {
+        return attributes;
+    }
+    let size = size.to_physical::<u32>(scale);
+    if size.width == 0 || size.height == 0 {
+        return attributes;
+    }
+    let x = i64::from(parent.x) + i64::from(parent_size.width.saturating_sub(size.width)) / 2;
+    let y = i64::from(parent.y) + i64::from(parent_size.height.saturating_sub(size.height)) / 2;
+    if let (Ok(x), Ok(y)) = (i32::try_from(x), i32::try_from(y)) {
+        // Owned Windows windows use WS_POPUP: CW_USEDEFAULT places those at (0, 0).
+        // Physical coordinates also avoid applying the primary monitor's DPI to this offset.
+        attributes = attributes.with_position(PhysicalPosition::new(x, y));
+    }
+    attributes
 }
 #[cfg(target_os = "linux")]
 struct RestoreVisibility {
@@ -451,10 +485,111 @@ fn parse_auth(mut bytes: &[u8], family: x11rb::reexports::x11rb_protocol::xauth:
     }
     Ok(None)
 }
+#[cfg(test)]
+mod position_tests {
+    use super::*;
+    #[test]
+    fn default_position_uses_parent_scale_and_preserves_negative_screen_coordinates() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            for parent in [PhysicalPosition::new(1920, 100), PhysicalPosition::new(-2400, -1600)] {
+                let attributes = WindowAttributes::default().with_inner_size(winit::dpi::LogicalSize::new(800.0, 600.0));
+                let requested_size = attributes.inner_size;
+                let placed = default_position(attributes, parent, PhysicalSize::new(2400, 1600), scale);
+                let child = requested_size.unwrap().to_physical::<u32>(scale);
+                assert_eq!(
+                    placed.position,
+                    Some(PhysicalPosition::new(parent.x + (2400 - child.width as i32) / 2, parent.y + (1600 - child.height as i32) / 2).into())
+                );
+                assert_eq!(placed.inner_size, requested_size);
+            }
+        }
+    }
+    #[test]
+    fn default_position_keeps_explicit_requests_and_oversized_titlebars_at_parent() {
+        let parent = PhysicalPosition::new(-900, 80);
+        let size = PhysicalSize::new(400, 300);
+        let attributes = WindowAttributes::default().with_inner_size(winit::dpi::LogicalSize::new(800.0, 600.0));
+        assert_eq!(default_position(attributes.clone(), parent, size, 2.0).position, Some(parent.into()));
+        for position in [winit::dpi::Position::from(PhysicalPosition::new(50, 60)), winit::dpi::LogicalPosition::new(-500.5, 120.0).into()] {
+            assert_eq!(default_position(attributes.clone().with_position(position), parent, size, 2.0).position, Some(position));
+        }
+    }
+    #[test]
+    fn default_position_leaves_unavailable_or_invalid_geometry_to_the_window_system() {
+        let parent = PhysicalPosition::new(1920, 100);
+        let size = PhysicalSize::new(2400, 1600);
+        let attributes = WindowAttributes::default().with_inner_size(winit::dpi::LogicalSize::new(800.0, 600.0));
+        for scale in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(default_position(attributes.clone(), parent, size, scale).position, None);
+        }
+        for inner_size in [None, Some(Size::Physical(PhysicalSize::new(0, 300))), Some(winit::dpi::LogicalSize::new(f64::NAN, 600.0).into())] {
+            let mut invalid = attributes.clone();
+            invalid.inner_size = inner_size;
+            assert_eq!(default_position(invalid, parent, size, 1.0).position, None);
+        }
+        assert_eq!(default_position(attributes.clone(), parent, PhysicalSize::new(0, 1600), 1.0).position, None);
+        assert_eq!(default_position(attributes, PhysicalPosition::new(i32::MAX, i32::MAX), size, 1.0).position, None);
+    }
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
     use x11rb::reexports::x11rb_protocol::xauth::Family;
+    #[test]
+    #[ignore = "requires an X11 display with room for a window at (2000, 80)"]
+    fn default_document_position_uses_actual_parent_geometry() {
+        use winit::{
+            application::ApplicationHandler,
+            event::WindowEvent,
+            event_loop::{ActiveEventLoop, EventLoop},
+            platform::x11::EventLoopBuilderExtX11,
+        };
+        struct Probe;
+        impl ApplicationHandler for Probe {
+            fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+                let owners = NativeOwners::new();
+                let hooks = owners.hooks();
+                let created = hooks.window_created.as_ref().unwrap();
+                let attributes = hooks.window_attributes.as_ref().unwrap();
+                let root = Arc::new(
+                    event_loop
+                        .create_window(
+                            WindowAttributes::default()
+                                .with_decorations(false)
+                                .with_position(winit::dpi::PhysicalPosition::new(2000, 80))
+                                .with_inner_size(winit::dpi::PhysicalSize::new(1000, 800)),
+                        )
+                        .unwrap(),
+                );
+                let root_ids = egui::ViewportIdPair { this: ViewportId::ROOT, parent: ViewportId::ROOT };
+                created(root_ids, &Default::default(), &root);
+                let id = ViewportId::from_hash_of("placement-probe");
+                owners.set_document_viewports(&[id]);
+                let ids = egui::ViewportIdPair { this: id, parent: ViewportId::ROOT };
+                let requested = || WindowAttributes::default().with_decorations(false).with_inner_size(winit::dpi::PhysicalSize::new(400, 300));
+                let placed = attributes(ids, &Default::default(), requested());
+                let at = placed.position.expect("default document float needs a parent-relative initial position").to_physical::<i32>(root.scale_factor());
+                let parent_at = root.inner_position().unwrap();
+                let parent_size = root.inner_size();
+                assert_eq!(
+                    at,
+                    winit::dpi::PhysicalPosition::new(parent_at.x + (parent_size.width as i32 - 400) / 2, parent_at.y + (parent_size.height as i32 - 300) / 2)
+                );
+                let child = Arc::new(event_loop.create_window(placed).unwrap());
+                created(ids, &Default::default(), &child);
+                assert_eq!(child.outer_position().unwrap(), at, "native creation applies the requested physical position");
+                let explicit = winit::dpi::PhysicalPosition::new(50, 60);
+                assert_eq!(attributes(ids, &Default::default(), requested().with_position(explicit)).position, Some(explicit.into()));
+                let unrelated = egui::ViewportIdPair { this: ViewportId::from_hash_of("unrelated-probe"), parent: ViewportId::ROOT };
+                assert_eq!(attributes(unrelated, &Default::default(), requested()).position, None);
+                event_loop.exit();
+            }
+            fn window_event(&mut self, _: &ActiveEventLoop, _: winit::window::WindowId, _: WindowEvent) {}
+        }
+        let event_loop = EventLoop::builder().with_x11().with_any_thread(true).build().unwrap();
+        event_loop.run_app(&mut Probe).unwrap();
+    }
     #[test]
     fn poisoned_state_recovers_pending_visibility_data() {
         let owners = NativeOwners::new();
