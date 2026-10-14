@@ -46,3 +46,24 @@ fn cancelled_attempt_keeps_legacy_error_and_has_no_invented_recovery() {
     assert!(failure.details.diagnostics[0].recovery_actions.is_empty());
     assert!(matches!(failure.error, photocraft_io::IoError::Cancelled));
 }
+
+#[test]
+fn accounted_preparation_failures_keep_typed_codes_without_source_offsets_or_payloads() {
+    use photocraft_format::FormatError;
+    use photocraft_io::{IoError, xcf_assessment::ImportFailure};
+    for (native_error, expected) in [
+        (FormatError::Cancelled, DiagnosticCode::Cancelled),
+        (FormatError::LimitExceeded("secret embedded source path".into()), DiagnosticCode::ResourceLimit),
+        (FormatError::Unsupported("secret embedded source path".into()), DiagnosticCode::UnsupportedFeature),
+        (FormatError::Corrupt("secret embedded source path".into()), DiagnosticCode::ImportFailed),
+    ] {
+        let failure = ImportFailure::from(IoError::Pcraft(native_error));
+        let diagnostic = &failure.details.diagnostics[0];
+        assert_eq!(diagnostic.code, expected);
+        assert_eq!(diagnostic.source_offset, None);
+        assert!(diagnostic.recovery_actions.is_empty());
+        let encoded = serde_json::to_string(&failure.details).unwrap();
+        assert!(!encoded.contains("secret embedded source path"));
+        assert!(matches!(failure.error, IoError::Pcraft(_)));
+    }
+}

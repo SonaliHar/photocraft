@@ -139,6 +139,42 @@ fn write_file_with_exclusions(
         Err(EngineError::Other(format!("cannot write {path}: no file system on the web")))
     }
 }
+
+/// Layer export retains exclusions from every open document. Runtime identities
+/// stay borrowed from the session; persisted fingerprints remain inert evidence.
+fn write_layer_export_with_protection(path: &str, bytes: &[u8], session: &Session, protection: &crate::WriteProtection) -> Result<()> {
+    let control = &photocraft_raster::Interrupt::NONE;
+    let guard = |target: &str| {
+        validate_destination_with_sources_and_limit(
+            target,
+            session.documents().iter().filter_map(|document| document.source.as_ref()),
+            &protection.fingerprints,
+            control,
+            None,
+        )
+    };
+    guard(path)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::io::Write;
+        photocraft_format::atomic::atomic_write_stream_guarded(
+            std::path::Path::new(path),
+            |file| file.write_all(bytes),
+            |target| {
+                guard(path).map_err(|error| std::io::Error::other(error.to_string()))?;
+                let target = target.to_str().ok_or_else(|| std::io::Error::other("save target must be valid UTF-8"))?;
+                guard(target).map_err(|error| std::io::Error::other(error.to_string()))
+            },
+        )
+        .map_err(|error| EngineError::Other(error.to_string()))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = bytes;
+        Err(EngineError::Other(format!("cannot write {path}: no file system on the web")))
+    }
+}
+
 /// Files of a folder that look like images we can open, sorted by name.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn list_images(dir: &str) -> Result<Vec<String>> {
@@ -319,6 +355,16 @@ fn validate_destination_with_fingerprints_and_limit(
     control: &photocraft_raster::Interrupt<'_>,
     resident_limit: Option<u64>,
 ) -> Result<()> {
+    validate_destination_with_sources_and_limit(path, source.into_iter(), fingerprints, control, resident_limit)
+}
+
+fn validate_destination_with_sources_and_limit<'a>(
+    path: &str,
+    sources: impl Iterator<Item = &'a crate::SourceIdentity>,
+    fingerprints: &[String],
+    control: &photocraft_raster::Interrupt<'_>,
+    resident_limit: Option<u64>,
+) -> Result<()> {
     control.check().map_err(|_| EngineError::Cancelled)?;
     if resident_limit.is_some_and(|limit| limit > photocraft_io::source_protection::resident_ceiling()) {
         return Err(EngineError::Other("source-protection.resident-limit may only be lowered".into()));
@@ -333,30 +379,37 @@ fn validate_destination_with_fingerprints_and_limit(
     if photocraft_io::is_xcf_filename(path) {
         return Err(EngineError::Other("XCF is an import-only format; choose a writable destination such as .pcraft".into()));
     }
-    if let Some(source) = source {
+    for source in sources {
+        control.check().map_err(|_| EngineError::Cancelled)?;
         source.check_destination(path).map_err(EngineError::Other)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let target = std::path::Path::new(path);
+            if let Some(original) = source.origin.is_read_only().then_some(source.path.as_deref()).flatten()
+                && target.exists()
+                && same_file::is_same_file(original, target).map_err(|e| EngineError::Other(format!("cannot establish XCF source identity: {e}")))?
+            {
+                return Err(EngineError::Other("an alias of the original XCF source is protected".into()));
+            }
+            if let Some(original) = source.origin.is_read_only().then_some(source.path.as_deref()).flatten()
+                && let (Ok(a), Ok(b)) = (std::fs::canonicalize(original), std::fs::canonicalize(target))
+                && a == b
+            {
+                return Err(EngineError::Other("the original XCF source is protected".into()));
+            }
+        }
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
         let target = std::path::Path::new(path);
-        if let Some(original) = source.filter(|s| s.origin.is_read_only()).and_then(|s| s.path.as_deref())
-            && target.exists()
-            && same_file::is_same_file(original, target).map_err(|e| EngineError::Other(format!("cannot establish XCF source identity: {e}")))?
-        {
-            return Err(EngineError::Other("an alias of the original XCF source is protected".into()));
-        }
-        if let Some(original) = source.filter(|s| s.origin.is_read_only()).and_then(|s| s.path.as_deref())
-            && let (Ok(a), Ok(b)) = (std::fs::canonicalize(original), std::fs::canonicalize(target))
-            && a == b
-        {
-            return Err(EngineError::Other("the original XCF source is protected".into()));
-        }
         match std::fs::File::open(target) {
             Ok(mut file) => {
                 let metadata = file.metadata().map_err(|error| EngineError::Other(format!("cannot inspect save destination: {error}")))?;
                 if metadata.is_file() {
                     let checked = match resident_limit {
-                        Some(limit) => photocraft_io::source_protection::check_reader_with_resident_limit(&mut file, metadata.len(), fingerprints, limit, control),
+                        Some(limit) => {
+                            photocraft_io::source_protection::check_reader_with_resident_limit(&mut file, metadata.len(), fingerprints, limit, control)
+                        }
                         None => photocraft_io::source_protection::check_reader_with_interrupt(&mut file, metadata.len(), fingerprints, control),
                     };
                     checked.map_err(|error| {
@@ -1504,8 +1557,12 @@ fn flatten_all_masks(s: &mut Session) -> Result<Value> {
 fn layers_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.layersToFiles";
     let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?.to_string();
-    let state = s.active().ok_or(EngineError::NoDocument)?;
-    let names = export_layers_with(s, p, |name, bytes| write_file_with_source(&join(&dir, name), bytes, &state.doc, state.source.as_ref()))?;
+    s.active().ok_or(EngineError::NoDocument)?;
+    let mut protection = crate::WriteProtection::default();
+    for document in s.documents() {
+        protection.add_document_with_interrupt(&document.doc, document.source.as_ref(), &photocraft_raster::Interrupt::NONE)?;
+    }
+    let names = export_layers_with(s, p, |name, bytes| write_layer_export_with_protection(&join(&dir, name), bytes, s, &protection))?;
     let files: Vec<String> = names.iter().map(|name| join(&dir, name)).collect();
     Ok(json!({"files": files}))
 }
@@ -1924,6 +1981,10 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "file_cmds/tests.rs"]
 mod tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "file_cmds/all_open_export_protection_tests.rs"]
+mod all_open_export_protection_tests;
 
 #[cfg(test)]
 mod physical_axes_tests {

@@ -26,7 +26,7 @@ pub mod server;
 pub mod workspace;
 
 pub use bridge::BridgeClient;
-pub use headless::{Headless, load_stored_selection_from_root_with_context};
+pub use headless::{Headless, load_stored_selection_from_root_with_context, validate_stored_selection_request};
 pub use server::{Backend, PhotocraftMcp};
 pub use workspace::AuthorizedWorkspace;
 

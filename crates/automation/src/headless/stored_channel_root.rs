@@ -75,6 +75,12 @@ fn parse(p: &Value, wait: bool) -> Result<Request<'_>, AutomationError> {
     };
     Ok(Request { target, path, ordinal, policy })
 }
+/// Validate only the borrowed host request shape. This creates no filesystem
+/// authority, captures no document, and performs no source reads.
+pub fn validate_stored_selection_request(params: &Value, wait: bool) -> Result<(), AutomationError> {
+    parse(params, wait).map(|_| ())
+}
+
 fn limits(read_resident: u64, read_index: u64, read_work: u64) -> Result<HostLoadLimits, AutomationError> {
     Ok(HostLoadLimits {
         aggregate: Quota {

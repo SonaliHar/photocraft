@@ -1272,6 +1272,19 @@ string below 10,000; a current channel ID, index, name or tattoo cannot substitu
 for this association. Both storage flags must be `true`. `wait:false`, wrong
 field types, unknown keys and pending jobs refuse before synchronization or read.
 
+CLI `run` accepts the same inner request with an explicit read root:
+
+```sh
+photocraft-cli run current.pcraft --automation-read-root ./inputs --cmd select.loadSelection --params '{"documentId":"1","expectedRevision":"0","channelId":"2","rawStorage":true,"storedSource":true,"originalPath":"originals/own-channel.xcf","originalOrdinal":"0","profilePolicy":"originalExact"}'
+```
+
+Replace the example identities and revision with the actual current document
+values. The CLI validates this host request and requires the read-root flag before
+opening its input document. The separate held root authorizes only the explicit
+original read; ordinary CLI input, output and commands retain their existing
+behavior. Unsupported original/current bindings still refuse through the same
+facade, and this option does not grant a renderer or broaden XCF import support.
+
 `originalPath` is an explicitly requested path beneath the already held read
 root, following the workspace capability path rules. It must contain 1..4096
 UTF-8 bytes without NUL. No document locator or SourceIdentity path is consulted.

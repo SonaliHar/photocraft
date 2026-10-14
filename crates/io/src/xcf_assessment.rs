@@ -64,6 +64,12 @@ impl FailureReport {
                 (code, Some(error.offset.to_string()))
             }
             IoError::Cancelled => (DiagnosticCode::Cancelled, None),
+            // Accounted preparation uses the native storage ledger as well as
+            // the XCF decoder. Preserve its typed failures without inspecting
+            // messages that may contain an untrusted path or payload.
+            IoError::Pcraft(photocraft_format::FormatError::Cancelled) => (DiagnosticCode::Cancelled, None),
+            IoError::Pcraft(photocraft_format::FormatError::LimitExceeded(_)) => (DiagnosticCode::ResourceLimit, None),
+            IoError::Pcraft(photocraft_format::FormatError::Unsupported(_)) => (DiagnosticCode::UnsupportedFeature, None),
             IoError::Unsupported(_) => (DiagnosticCode::UnsupportedFeature, None),
             _ => (DiagnosticCode::ImportFailed, None),
         };

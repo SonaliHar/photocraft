@@ -12,6 +12,8 @@ use photocraft_engine::actions_cmds::Action;
 use photocraft_io::ExportOptions;
 use serde_json::{Value, json};
 
+mod stored_channel_run;
+
 pub const USAGE: &str = "\
 photocraft-cli: headless PhotoCraft
 
@@ -27,9 +29,11 @@ USAGE:
       --dpx-bits sets a DPX's bits per sample. Without it: 8 for an 8-bit document, else 16.
   photocraft-cli info <file> [--compact] [--json-errors]
       Print the document as JSON (size, mode, depth, layer tree).
-  photocraft-cli run (<file> | --new <json>) --cmd <id> [--params <json>] [--cmd …] [--out <file>] [--format <ext>] [--quality <1-100>] [--tiff-layers] [--tga-bits <24|32>] [--dpx-bits <8|10|12|16>] [--json-errors]
+  photocraft-cli run (<file> | --new <json>) --cmd <id> [--params <json>] [--cmd …] [--out <file>] [--format <ext>] [--quality <1-100>] [--tiff-layers] [--tga-bits <24|32>] [--dpx-bits <8|10|12|16>] [--json-errors] [--automation-read-root <dir>]
       Open a file, run engine commands in order, save the result. Each --params
       applies to the preceding --cmd. Prints each command's JSON result.
+      Stored-original select.loadSelection requires an explicit --automation-read-root;
+      its originalPath is relative to that held root, with no ambient fallback.
   photocraft-cli batch --actions <actions.json|set.atn> [--action <name>] --in <dir> --out <dir> [--format <ext>] [--quality <1-100>] [--in-place] [--tiff-layers] [--tga-bits <24|32>] [--dpx-bits <8|10|12|16>]
       --json-errors emits per-file JSON failures and a separate aggregate error on stderr.
       Apply an action list to every image in a directory. A Photoshop Actions file (.atn) is a
@@ -99,7 +103,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     Subcommand { name: "info", values: &[], bare: &["--compact", "--json-errors"], run: |a, out, _| info(a, out) },
     Subcommand {
         name: "run",
-        values: &["--new", "--cmd", "--params", "--out", "--format", "--quality", "--tga-bits", "--dpx-bits"],
+        values: &["--new", "--cmd", "--params", "--out", "--format", "--quality", "--tga-bits", "--dpx-bits", "--automation-read-root"],
         bare: &["--tiff-layers", "--json-errors"],
         run: run_cmds,
     },
@@ -375,6 +379,7 @@ fn run_cmds(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
         ([],Some(new))=>Some(serde_json::from_str::<Value>(new).map_err(|e|format!("bad --new JSON: {e}"))?),
         _=>return Err("run needs exactly one of <file> or --new <json>".into()),
     };
+    let stored_workspace = stored_channel_run::prepare(&cmds, a.get("--automation-read-root")).map_err(|error| automation_error(a, error))?;
     let mut h = Headless::trusted_local();
     // Opening, running commands and exporting can all notice the same missing font:
     // one `run` invocation reports each warning line at most once.
@@ -394,7 +399,10 @@ fn run_cmds(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
         _ => return Err("run needs exactly one of <file> or --new <json>".into()),
     }
     for (id, params) in cmds {
-        let r = h.command_run(&id, params).map_err(|e| format!("`{id}`: {}",automation_error(a,e)))?;
+        let r = match stored_channel_run::execute(&mut h.session, stored_workspace.as_ref(), &id, &params) {
+            Some(result) => result,
+            None => h.command_run(&id, params),
+        }.map_err(|e| format!("`{id}`: {}",automation_error(a,e)))?;
         if let Some(e) = photocraft_engine::actions_cmds::nested_failure(&id, &r) {
             return Err(format!("`{id}`: {e}"));
         }
