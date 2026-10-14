@@ -81,7 +81,7 @@ mod tests {
  use photocraft_color::{ColorMode,SampleType};
  use photocraft_geom::Size;
  use std::cell::Cell;
- fn doc(mode:ColorMode)->Document {Document::new("owned profile",Size{w:2,h:2},mode,SampleType::F64)}
+ fn doc(mode:ColorMode)->Document {Document::new("owned profile",Size::new(2,2),mode,SampleType::F64)}
  #[test]
  fn strict_assigned_cold_and_cached_definition_equal_legacy() {
   for mode in [ColorMode::Rgb,ColorMode::Grayscale] {for sample in [SampleEncoding::Linear,SampleEncoding::Perceptual,SampleEncoding::NonlinearProfile] {

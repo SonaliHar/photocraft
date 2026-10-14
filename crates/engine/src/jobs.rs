@@ -719,9 +719,11 @@ impl Session {
         if id == "select.object" && crate::selection_object_controlled::handles(&params) {
             crate::selection_object_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
         }
-        if id == "select.object" && !crate::selection_object_controlled::handles(&params)
-            && (params.get("documentId").is_some() || params.get("expectedRevision").is_some()) {
-            return Err(EngineError::BadParams { cmd: id.into(), msg: "captured Object Selection targets currently require rect".into() });
+        if id == "select.quick" {
+            crate::selection_quick_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
+        }
+        if id == "select.subject" {
+            crate::selection_subject_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
         }
         if id == "select.colorRange" && !crate::selection_cmds::color_range_has_controlled_route(&params) {
             crate::selection_sample_policy::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;

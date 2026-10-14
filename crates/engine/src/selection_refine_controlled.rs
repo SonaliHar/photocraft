@@ -1,5 +1,5 @@
 //! Controlled ordinary Refine outputs including color decontamination.
-//! Unported brush routes retain upstream behavior; no native-wide
+//! Brush construction and refinement retain upstream math; no native-wide
 //! interpretation or source-render qualification is added.
 use crate::channel_cmds::ChannelView;
 use crate::{DocState, DocumentSnapshot, EngineError, Result, Session};
@@ -350,7 +350,7 @@ fn request(s: &Session, p: &Value) -> Result<Request> {
         shift_edge: scalar(p, "shiftEdge", 0., -100., 100.)?,
     };
     json_shape(p, 0, &mut 0, &mut 0)?;
-    let (brush, brush_adds) = brush_header(p)?;
+    let (_, brush_adds) = brush_header(p)?;
     let all = flag(p, "sampleAllLayers", false)?;
     let decontaminate = flag(p, "decontaminate", false)?;
     let amount = scalar(p, "amount", 100., 0., 100.)?;
@@ -391,7 +391,7 @@ fn request(s: &Session, p: &Value) -> Result<Request> {
     if output == "selection" && !decontaminate {
         crate::selection_sample_policy::existing_selection(s, ID, &Interrupt::NONE)?;
     }
-    let eligible = !brush;
+    let eligible = true;
     let output_kind = match if decontaminate && matches!(output, "selection" | "layerMask") { "newLayerWithMask" } else { output } {
         "selection" => Output::Selection,
         "layerMask" => Output::LayerMask,
@@ -475,7 +475,78 @@ fn mask_read(source: &Surface, r: Rect, c: &Interrupt<'_>) -> std::result::Resul
     c.check().map_err(|_| E::Cancelled)?;
     Ok(out)
 }
-fn admission(doc: &Document, active: Option<LayerId>, r: Request, c: &Interrupt<'_>) -> Result<matting::RefineRequirements> {
+fn capture_strokes(p: &Value, c: &Interrupt<'_>) -> Result<Vec<matting::EdgeStroke>> {
+    poll(c)?;
+    let Some(v) = p.get("refineStrokes").filter(|v| !v.is_null()) else { return Ok(Vec::new()) };
+    let list = v.as_array().filter(|v| v.len() <= 4096).ok_or_else(|| bad(ID, "stroke array limit"))?;
+    let mut count = 0usize;
+    for v in list {
+        poll(c)?;
+        let points = v.get("points").and_then(Value::as_array).ok_or_else(|| bad(ID, "stroke points required"))?;
+        count = count.checked_add(points.len()).filter(|v| *v <= 100000).ok_or_else(|| bad(ID, "stroke point limit"))?;
+    }
+    let bytes = (list.len() as u64)
+        .checked_mul(std::mem::size_of::<matting::EdgeStroke>() as u64)
+        .and_then(|v| v.checked_add((count as u64).checked_add((list.len() as u64).checked_mul(16)?)?.checked_mul(8)?))
+        .ok_or_else(|| bad(ID, "stroke metadata overflow"))?;
+    if bytes > 16 << 20 {
+        return Err(bad(ID, "stroke metadata byte limit"));
+    }
+    let mut out = Vec::new();
+    out.try_reserve_exact(list.len()).map_err(|_| bad(ID, "stroke metadata allocation"))?;
+    if out.capacity() > list.len().saturating_add(16) {
+        return Err(bad(ID, "stroke metadata capacity"));
+    }
+    for v in list {
+        poll(c)?;
+        let points = v.get("points").and_then(Value::as_array).filter(|v| !v.is_empty()).ok_or_else(|| bad(ID, "stroke points required"))?;
+        let mut owned = Vec::new();
+        owned.try_reserve_exact(points.len()).map_err(|_| bad(ID, "stroke point allocation"))?;
+        if owned.capacity() > points.len().saturating_add(16) {
+            return Err(bad(ID, "stroke point capacity"));
+        }
+        for point in points {
+            poll(c)?;
+            let xy = point.as_array().filter(|v| v.len() == 2).ok_or_else(|| bad(ID, "stroke point pair required"))?;
+            let x = xy.first().and_then(Value::as_f64).filter(|v| v.is_finite() && v.abs() <= 1e7).ok_or_else(|| bad(ID, "stroke x range"))?;
+            let y = xy.get(1).and_then(Value::as_f64).filter(|v| v.is_finite() && v.abs() <= 1e7).ok_or_else(|| bad(ID, "stroke y range"))?;
+            owned.push((x as f32, y as f32));
+        }
+        let size =
+            v.get("size").map_or(Ok(30.), |v| v.as_f64().filter(|v| v.is_finite() && (1.0..=5000.0).contains(v)).ok_or_else(|| bad(ID, "stroke size range")))?
+                as f32;
+        let add = match v.get("mode") {
+            None => true,
+            Some(v) if v.as_str() == Some("add") => true,
+            Some(v) if v.as_str() == Some("subtract") => false,
+            _ => return Err(bad(ID, "stroke mode")),
+        };
+        out.push(matting::EdgeStroke { points: owned, size, add });
+    }
+    poll(c)?;
+    Ok(out)
+}
+fn parameter_bytes(strokes: &Vec<matting::EdgeStroke>, c: &Interrupt<'_>) -> Result<u64> {
+    let mut bytes =
+        (strokes.capacity() as u64).checked_mul(std::mem::size_of::<matting::EdgeStroke>() as u64).ok_or_else(|| bad(ID, "stroke capacity overflow"))?;
+    for s in strokes {
+        poll(c)?;
+        bytes = bytes
+            .checked_add((s.points.capacity() as u64).checked_mul(8).ok_or_else(|| bad(ID, "point capacity overflow"))?)
+            .ok_or_else(|| bad(ID, "stroke capacity overflow"))?;
+    }
+    if bytes > 16 << 20 {
+        return Err(bad(ID, "stroke retained metadata limit"));
+    }
+    Ok(bytes)
+}
+fn admission(
+    doc: &Document,
+    active: Option<LayerId>,
+    r: Request,
+    strokes: &Vec<matting::EdgeStroke>,
+    c: &Interrupt<'_>,
+) -> Result<matting::RefineRequirements> {
     poll(c)?;
     let preparation = photocraft_io::NativeSaveLimits::default().preparation;
     let model = photocraft_io::retained_native_model_bytes(doc, preparation, c).map_err(|e| error(ID, c, e))? as u64;
@@ -486,10 +557,14 @@ fn admission(doc: &Document, active: Option<LayerId>, r: Request, c: &Interrupt<
     }
     let source = source_mask(doc, active, r.target_mask, c)?;
     let content = source.map_or(Ok(Rect::EMPTY), |m| m.try_content_bounds_with_interrupt(c).map_err(|e| error(ID, c, e)))?;
-    let req = matting::refine_requirements(content, doc.bounds(), &r.params).map_err(|e| error(ID, c, e))?;
+    let brush = matting::EdgeBrush::requirements_with_interrupt(strokes, doc.bounds(), c).map_err(|e| error(ID, c, e))?;
+    let window = if brush.bounds.is_empty() { 0 } else { brush.window };
+    let req =
+        matting::refine_requirements_with_brush_bounds(content, doc.bounds(), &r.params, brush.possible_added_bounds, window).map_err(|e| error(ID, c, e))?;
+    let brush_bytes = brush.peak_resident_bytes.checked_add(parameter_bytes(strokes, c)?).ok_or_else(|| bad(ID, "brush admission overflow"))?;
     let direct = if r.all { None } else { find_surface(doc, active, c)? };
     let (mut render_bytes, mut render_work) = (0u64, 0u64);
-    if direct.is_none() && !req.bbox.is_empty() && r.params.radius > 0. {
+    if direct.is_none() && !req.bbox.is_empty() && (r.params.radius > 0. || !brush.possible_added_bounds.is_empty()) {
         let area = Rect::new(0, 0, req.window_width as i32, req.window_height as i32);
         let q = photocraft_compose::ordinary_render_requirements(doc, area, c).map_err(|e| error(ID, c, e))?;
         render_bytes = (q.scratch_bytes as u64).checked_add(q.preparation_reserve_bytes as u64).ok_or_else(|| bad(ID, "render resident overflow"))?;
@@ -523,6 +598,7 @@ fn admission(doc: &Document, active: Option<LayerId>, r: Request, c: &Interrupt<
         .and_then(|v| v.checked_add(model.checked_mul(5)?))
         .and_then(|v| v.checked_add(payload.checked_mul(2)?))
         .and_then(|v| v.checked_add(req.peak_resident_bytes))
+        .and_then(|v| v.checked_add(brush_bytes))
         .and_then(|v| v.checked_add(render_bytes))
         .and_then(|v| v.checked_add(output))
         .and_then(|v| v.checked_add((std::mem::size_of::<DocState>() as u64).checked_mul(8192 * 2)?))
@@ -532,6 +608,7 @@ fn admission(doc: &Document, active: Option<LayerId>, r: Request, c: &Interrupt<
         .ok_or_else(|| bad(ID, "aggregate Refine resident limit"))?;
     req.work_units
         .checked_add(render_work)
+        .and_then(|v| v.checked_add(brush.work_units))
         .and_then(|v| v.checked_add(copy_work))
         .and_then(|v| v.checked_add(decontaminate_work))
         .and_then(|v| v.checked_add(model.checked_add(payload)?.checked_mul(8)?))
@@ -763,19 +840,25 @@ struct Prepared {
     change: bool,
     publication: Option<Publication>,
 }
+#[cfg(test)]
 fn prepare(doc: &Document, active: Option<LayerId>, r: Request, c: &Interrupt<'_>) -> Result<Prepared> {
-    let req = admission(doc, active, r, c)?;
+    prepare_brushed(doc, active, r, &Vec::new(), c)
+}
+fn prepare_brushed(doc: &Document, active: Option<LayerId>, r: Request, strokes: &Vec<matting::EdgeStroke>, c: &Interrupt<'_>) -> Result<Prepared> {
+    let req = admission(doc, active, r, strokes, c)?;
     crate::selection_inverse_controlled::selection_write_authority(doc, c)?;
     let source = source_mask(doc, active, r.target_mask, c)?;
     let region = if let Some(source) = source {
         let direct = if r.all { None } else { find_surface(doc, active, c)? };
         let sampler = BoundedSampler { doc, direct, control: c };
-        matting::refine_mask_with_interrupt(
+        let brush = matting::EdgeBrush::new_with_interrupt(strokes, doc.bounds(), MattingLimits::default(), c).map_err(|e| error(ID, c, e))?;
+        matting::refine_mask_brushed_with_interrupt(
             &sampler,
             &|area| mask_read(source, area, c),
             source.try_content_bounds_with_interrupt(c).map_err(|e| error(ID, c, e))?,
             doc.bounds(),
             &r.params,
+            brush.as_ref(),
             MattingLimits { resident_bytes: req.peak_resident_bytes, work_units: req.work_units },
             c,
         )
@@ -877,6 +960,7 @@ pub(crate) fn run(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(ID, "output route is not controlled"));
     }
     let st = s.active().ok_or(EngineError::NoDocument)?;
+    let strokes = capture_strokes(p, &Interrupt::NONE)?;
     let baseline = st.doc.clone();
     let worker = baseline.clone();
     let revision = st.revision;
@@ -889,7 +973,7 @@ pub(crate) fn run(s: &mut Session, p: &Value) -> Result<Value> {
         true,
         move |ctx| {
             ctx.stage(0., 0.95, "Select and Mask", |c| {
-                photocraft_color::convert::with_cmyk_space(color.as_ref(), || Ok((prepare(&worker, active, r, c)?, ctx.clone())))
+                photocraft_color::convert::with_cmyk_space(color.as_ref(), || Ok((prepare_brushed(&worker, active, r, &strokes, c)?, ctx.clone())))
             })
         },
         move |s, (prepared, ctx)| {
@@ -1024,7 +1108,7 @@ mod tests {
         assert!(dispatch_preflight(&s, &json!({"target":"mask","output":"selection"}), true).is_err());
     }
     #[test]
-    fn captured_unported_brush_refuses_and_cancel_never_mutates_snapshot() {
+    fn captured_invalid_brush_refuses_and_cancel_never_mutates_snapshot() {
         let mut s = Session::new();
         s.add_document(document(), None).unwrap();
         let st = s.active().unwrap();
@@ -1033,7 +1117,7 @@ mod tests {
         assert!(
             handles(
                 &s,
-                &json!({"output":"layerMask","refineStrokes":[{"points":[[3,4]]}],"documentId":old.id.0.to_string(),"expectedRevision":rev.to_string()})
+                &json!({"output":"layerMask","refineStrokes":[{"points":[["bad",4]]}],"documentId":old.id.0.to_string(),"expectedRevision":rev.to_string()})
             )
             .is_err()
         );
@@ -1176,5 +1260,51 @@ mod decontamination_tests {
                 assert_eq!(s.active().unwrap().doc, source);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod brush_command_tests {
+    use super::*;
+    #[test]
+    fn captured_brush_all_outputs_with_decontamination_use_current_publication() {
+        for output in ["selection", "layerMask", "newLayer", "newLayerWithMask", "newDocument", "newDocumentWithMask"] {
+            for decontaminate in [false, true] {
+                let mut s = Session::new();
+                s.add_document(super::tests::document(), None).unwrap();
+                let old = s.active().unwrap().doc.clone();
+                let rev = s.active().unwrap().revision;
+                let args = json!({"output":output,"decontaminate":decontaminate,"radius":4,"refineStrokes":[{"points":[[11,5],[13,11]],"size":5,"mode":"add"},{"points":[[10,9]],"size":3,"mode":"subtract"}],"documentId":old.id.0.to_string(),"expectedRevision":rev.to_string()});
+                assert!(handles(&s, &args).unwrap());
+                let response = run(&mut s, &args).unwrap();
+                let effective = if decontaminate && matches!(output, "selection" | "layerMask") { "newLayerWithMask" } else { output };
+                assert_eq!(response["output"], effective);
+                if output.starts_with("newDocument") {
+                    assert!(old.shares_state(&s.documents()[0].doc));
+                } else {
+                    assert!(s.undo());
+                    assert_eq!(s.active().unwrap().doc, old);
+                }
+            }
+        }
+    }
+    #[test]
+    fn actual_worker_late_cancel_discards_brush_and_selection() {
+        let d = super::tests::document();
+        let strokes = vec![matting::EdgeStroke { points: vec![(2., 4.), (19., 12.)], size: 7., add: true }];
+        let r = Request {
+            params: RefineParams { radius: 4., ..Default::default() },
+            all: false,
+            target_mask: false,
+            eligible: true,
+            output: Output::Selection,
+            decontaminate: false,
+            amount: 100.,
+        };
+        let old = d.clone();
+        let count = std::sync::atomic::AtomicUsize::new(0);
+        let cancel = || count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) > 100;
+        assert!(matches!(prepare_brushed(&d, Some(d.layers[0].id), r, &strokes, &Interrupt::cancel_only(&cancel)), Err(EngineError::Cancelled)));
+        assert_eq!(d, old);
     }
 }

@@ -569,3 +569,12 @@ impl Clut {
   Ok(Self{inputs,outputs,grid,data,strides,wide_data:Some(values)})
  }
 }
+
+impl Clut {
+ pub(crate) fn equals_controlled(&self,other:&Self,b:&mut crate::control::Budget<'_>)->crate::control::Result<bool>{
+  fn eq<T:PartialEq>(a:&[T],z:&[T],b:&mut crate::control::Budget<'_>)->crate::control::Result<bool>{if a.len()!=z.len(){return Ok(false)}for(x,y)in a.chunks(1024).zip(z.chunks(1024)){b.work(x.len() as u64)?;if x!=y{return Ok(false)}}Ok(true)}
+  if self.inputs!=other.inputs||self.outputs!=other.outputs{return Ok(false)}
+  if !eq(&self.grid,&other.grid,b)?||!eq(&self.strides,&other.strides,b)?||!eq(&self.data,&other.data,b)?{return Ok(false)}
+  match(&self.wide_data,&other.wide_data){(None,None)=>Ok(true),(Some(a),Some(z))=>eq(a,z,b),_=>Ok(false)}
+ }
+}

@@ -80,41 +80,50 @@ fn copy_view(view: &ChannelView, cmd: &str) -> Result<ChannelView> {
 }
 
 #[derive(Clone, Copy)]
+enum Selector {
+    Rect(Rect),
+    Point(f32, f32),
+}
+#[derive(Clone, Copy)]
 struct Request {
-    rect: Rect,
+    selector: Selector,
     all: bool,
     mode: SelectionMode,
 }
 pub(crate) fn handles(p: &Value) -> bool {
-    p.get("rect").is_some()
+    p.get("rect").is_some() || p.get("point").is_some()
 }
 fn request(s: &Session, p: &Value) -> Result<Request> {
     let o = p
         .as_object()
         .filter(|o| o.len() <= 6 && o.keys().all(|k| matches!(k.as_str(), "rect" | "point" | "mode" | "sampleAllLayers" | "documentId" | "expectedRevision")))
         .ok_or_else(|| bad(ID, "bounded rectangle parameters required"))?;
-    let a = o.get("rect").and_then(Value::as_array).filter(|a| a.len() == 4).ok_or_else(|| bad(ID, "rect must contain four numbers"))?;
-    let mut v = [0f64; 4];
-    for (out, input) in v.iter_mut().zip(a) {
-        *out = input.as_f64().filter(|v| v.is_finite()).ok_or_else(|| bad(ID, "finite rectangle required"))?;
-    }
-    let end_x = v[0] + v[2];
-    let end_y = v[1] + v[3];
-    let bounds = [v[0].min(end_x).floor(), v[1].min(end_y).floor(), v[0].max(end_x).ceil(), v[1].max(end_y).ceil()];
-    if bounds.iter().any(|v| !v.is_finite() || *v < f64::from(i32::MIN) || *v > f64::from(i32::MAX)) {
-        return Err(bad(ID, "rectangle coordinate range"));
-    }
-    let rect = Rect::new(bounds[0] as i32, bounds[1] as i32, bounds[2] as i32, bounds[3] as i32);
-    // Rectangle wins over point as before, but ignored point data must still
-    // fit the envelope before dispatcher cloning.
-    if let Some(point) = o.get("point") {
-        let pair = point.as_array().filter(|a| a.len() == 2).ok_or_else(|| bad(ID, "bounded point pair required"))?;
-        for value in pair {
-            if value.as_f64().is_none_or(|v| !v.is_finite() || v.abs() > f64::from(f32::MAX)) {
-                return Err(bad(ID, "finite point required"));
-            }
+    let point = if let Some(point) = o.get("point") {
+        let a = point.as_array().filter(|a| a.len() == 2).ok_or_else(|| bad(ID, "point must contain two numbers"))?;
+        let parse = |v: &Value| {
+            v.as_f64().filter(|v| v.is_finite() && v.abs() <= f64::from(f32::MAX)).map(|v| v as f32).ok_or_else(|| bad(ID, "finite point required"))
+        };
+        Some((parse(a.first().ok_or_else(|| bad(ID, "point x"))?)?, parse(a.get(1).ok_or_else(|| bad(ID, "point y"))?)?))
+    } else {
+        None
+    };
+    let selector = if let Some(rect) = o.get("rect") {
+        let a = rect.as_array().filter(|a| a.len() == 4).ok_or_else(|| bad(ID, "rect must contain four numbers"))?;
+        let mut v = [0f64; 4];
+        for (out, input) in v.iter_mut().zip(a) {
+            *out = input.as_f64().filter(|v| v.is_finite()).ok_or_else(|| bad(ID, "finite rectangle required"))?;
         }
-    }
+        let end_x = v[0] + v[2];
+        let end_y = v[1] + v[3];
+        let bounds = [v[0].min(end_x).floor(), v[1].min(end_y).floor(), v[0].max(end_x).ceil(), v[1].max(end_y).ceil()];
+        if bounds.iter().any(|v| !v.is_finite() || *v < f64::from(i32::MIN) || *v > f64::from(i32::MAX)) {
+            return Err(bad(ID, "rectangle coordinate range"));
+        }
+        Selector::Rect(Rect::new(bounds[0] as i32, bounds[1] as i32, bounds[2] as i32, bounds[3] as i32))
+    } else {
+        let (x, y) = point.ok_or_else(|| bad(ID, "rect or point required"))?;
+        Selector::Point(x, y)
+    };
     let all = o.get("sampleAllLayers").map_or(Ok(false), |v| v.as_bool().ok_or_else(|| bad(ID, "sampleAllLayers must be boolean")))?;
     let mode = o.get("mode").map_or(Ok("replace"), |v| v.as_str().filter(|v| v.len() <= 32).ok_or_else(|| bad(ID, "bounded selection mode required")))?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
@@ -142,7 +151,7 @@ fn request(s: &Session, p: &Value) -> Result<Request> {
     crate::selection_sample_policy::existing_selection(s, ID, &Interrupt::NONE)?;
     crate::selection_sample_policy::sampled_pixels(s, ID, all, &Interrupt::NONE)?;
     crate::selection_inverse_controlled::selection_write_authority_metadata(&st.doc, &Interrupt::NONE)?;
-    Ok(Request { rect, all, mode: SelectionMode::parse(if mode == "new" { "replace" } else { mode }) })
+    Ok(Request { selector, all, mode: SelectionMode::parse(if mode == "new" { "replace" } else { mode }) })
 }
 pub(crate) fn dispatch_preflight(s: &Session, p: &Value, _background: bool) -> Result<()> {
     request(s, p).map(|_| ())
@@ -219,13 +228,29 @@ impl Sampler for BoundedSampler<'_, '_> {
         Ok(out)
     }
 }
-fn admission(doc: &Document, active: Option<LayerId>, r: Request, c: &Interrupt<'_>) -> Result<(grabcut::ObjectSelectionRequirements, ObjectSelectionLimits)> {
+fn admission(
+    doc: &Document,
+    active: Option<LayerId>,
+    r: Request,
+    cache_bytes: u64,
+    cache_work: u64,
+    hit: bool,
+    c: &Interrupt<'_>,
+) -> Result<(grabcut::ObjectSelectionRequirements, ObjectSelectionLimits)> {
     poll(c)?;
     if doc.size.width == 0 || doc.size.height == 0 || doc.size.width > 300_000 || doc.size.height > 300_000 {
         return Err(bad(ID, "Object Selection canvas bounds"));
     }
     let canvas = doc.bounds();
-    let req = grabcut::requirements(canvas, r.rect, 160_000).map_err(|e| error(ID, c, e))?;
+    let req = if hit {
+        grabcut::ObjectSelectionRequirements { window: canvas, step: 1, peak_resident_bytes: 0, work_units: 1 }
+    } else {
+        match r.selector {
+            Selector::Rect(rect) => grabcut::requirements(canvas, rect, 160_000),
+            Selector::Point(x, y) => grabcut::point_requirements(canvas, x, y, grabcut::OBJECT_AT_WORK_PX),
+        }
+        .map_err(|e| error(ID, c, e))?
+    };
     let direct = if r.all { None } else { find_surface(doc, active, c)? };
     if doc.xcf_state.is_some() {
         return Err(bad(ID, "canonical imported merged sampling unsupported"));
@@ -238,7 +263,7 @@ fn admission(doc: &Document, active: Option<LayerId>, r: Request, c: &Interrupt<
     // Both low-resolution strips and refinement halos can invoke merged render.
     // Charge the larger call's scratch/preparation, and all possible calls' work.
     let (mut render_extra, mut render_work) = (0u64, 0u64);
-    if direct.is_none() && !req.window.is_empty() {
+    if !hit && direct.is_none() && !req.window.is_empty() {
         let strip_h =
             if req.step == 1 { req.window.height() as usize } else { (64usize.div_ceil(req.step).max(1) * req.step).min(req.window.height() as usize) }.max(1);
         let win_w = 216usize.min(req.window.width() as usize).max(1);
@@ -283,11 +308,14 @@ fn admission(doc: &Document, active: Option<LayerId>, r: Request, c: &Interrupt<
         .and_then(|v| v.checked_add(model.checked_mul(5)?))
         .and_then(|v| v.checked_add(payload.checked_mul(2)?))
         .and_then(|v| v.checked_add(req.peak_resident_bytes))
+        .and_then(|v| v.checked_add(cache_bytes))
         .and_then(|v| v.checked_add(render_extra))
         .and_then(|v| v.checked_add(selection_bytes))
         .filter(|v| *v <= MAX_CHECKED_RASTER_BYTES)
         .ok_or_else(|| bad(ID, "aggregate Object Selection resident limit"))?;
-    let overhead = Some(render_work)
+    let overhead = render_work
+        .checked_add(cache_work)
+        .and_then(|v| v.checked_add(cache_bytes.checked_mul(8)?))
         .and_then(|v| v.checked_add(model.checked_add(payload)?.checked_mul(8)?))
         .and_then(|v| v.checked_add(raster.retained_bytes.checked_mul(2)?))
         .and_then(|v| v.checked_add(pixels.checked_mul(32)?))
@@ -326,15 +354,53 @@ struct Prepared {
     selection: Option<Surface>,
     response: Value,
     change: bool,
+    cache: Option<crate::smartselect_cmds::ObjectFinderCache>,
 }
-fn prepare(doc: &Document, active: Option<LayerId>, r: Request, c: &Interrupt<'_>) -> Result<Prepared> {
-    let (_req, limits) = admission(doc, active, r, c)?;
-    crate::selection_inverse_controlled::selection_write_authority(doc, c)?;
+fn prepare(
+    doc: &Document,
+    active: Option<LayerId>,
+    r: Request,
+    cache: Option<&crate::smartselect_cmds::ObjectFinderSnapshot>,
+    c: &Interrupt<'_>,
+) -> Result<Prepared> {
+    let mut cache_work = 0u64;
+    let mut cache_bytes = 0u64;
     let direct = if r.all { None } else { find_surface(doc, active, c)? };
+    let target = if direct.is_some() { active } else { None };
+    let (mut cached, mut valid) = (None, false);
+    if let (Selector::Point(x, y), Some(cache)) = (r.selector, cache) {
+        cache_bytes = cache.retained_with_interrupt(c)?;
+        if cache_bytes > MAX_CHECKED_RASTER_BYTES {
+            return Err(bad(ID, "finder cache resident limit"));
+        }
+        let mut charge = |n: u64| {
+            poll(c)?;
+            cache_work = cache_work.checked_add(n).filter(|v| *v <= MAX_WORK).ok_or_else(|| bad(ID, "finder cache comparison work limit"))?;
+            Ok(())
+        };
+        (cached, valid) = cache.lookup_controlled(doc, target, x, y, c, &mut charge)?;
+    }
+    let hit = cached.is_some();
+    let (_req, limits) = admission(doc, active, r, cache_bytes, cache_work, hit, c)?;
+    crate::selection_inverse_controlled::selection_write_authority(doc, c)?;
     let sampler = BoundedSampler { doc, direct, control: c };
-    let region = grabcut::object_select_with_interrupt(&sampler, doc.bounds(), r.rect, 160_000, limits, c).map_err(|e| error(ID, c, e))?;
+    let region = if let Some(region) = cached {
+        Some(region)
+    } else {
+        match r.selector {
+            Selector::Rect(rect) => grabcut::object_select_with_interrupt(&sampler, doc.bounds(), rect, 160_000, limits, c),
+            Selector::Point(x, y) => grabcut::object_at_with_interrupt(&sampler, doc.bounds(), x, y, grabcut::OBJECT_AT_WORK_PX, limits, c),
+        }
+        .map_err(|e| error(ID, c, e))?
+        .map(std::sync::Arc::new)
+    };
+    let next_cache = if let (Selector::Point(_, _), Some(cache)) = (r.selector, cache) {
+        cache.prepare_update(doc.id, target, valid, hit, region.clone(), c)?
+    } else {
+        None
+    };
     let Some(region) = region else {
-        return Ok(Prepared { selection: None, change: false, response: json!({"selected":doc.selection.is_some(),"changed":false}) });
+        return Ok(Prepared { selection: None, change: false, cache: next_cache, response: json!({"selected":doc.selection.is_some(),"changed":false}) });
     };
     let b = region.bbox;
     let selection = sel::try_combine_region_with_interrupt(
@@ -348,7 +414,7 @@ fn prepare(doc: &Document, active: Option<LayerId>, r: Request, c: &Interrupt<'_
     poll(c)?;
     let response = json!({"selected":selection.is_some(),"changed":true,"bounds":[b.x0,b.y0,b.width()as i32,b.height()as i32]});
     let change = !same(doc.selection.as_ref(), selection.as_ref(), c)?;
-    Ok(Prepared { selection, response, change })
+    Ok(Prepared { selection, response, change, cache: next_cache })
 }
 pub(crate) fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let r = request(s, p)?;
@@ -358,6 +424,7 @@ pub(crate) fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let revision = st.revision;
     let active = st.active_layer;
     let view = copy_view(&st.channel_view, ID)?;
+    let cache = if matches!(r.selector, Selector::Point(_, _)) { Some(s.object_finder.capture_controlled()?) } else { None };
     let color = photocraft_color::convert::active_cmyk_space();
     crate::jobs::run(
         s,
@@ -365,7 +432,7 @@ pub(crate) fn run(s: &mut Session, p: &Value) -> Result<Value> {
         true,
         move |ctx| {
             ctx.stage(0., 0.95, "Object Selection", |c| {
-                photocraft_color::convert::with_cmyk_space(color.as_ref(), || Ok((prepare(&worker, active, r, c)?, ctx.clone())))
+                photocraft_color::convert::with_cmyk_space(color.as_ref(), || Ok((prepare(&worker, active, r, cache.as_ref(), c)?, ctx.clone())))
             })
         },
         move |s, (prepared, ctx)| {
@@ -387,7 +454,14 @@ pub(crate) fn run(s: &mut Session, p: &Value) -> Result<Value> {
             ctx.stage(0.95, 1., "Object Selection", |c| {
                 poll(c)?;
                 crate::selection_inverse_controlled::selection_write_authority(&s.active().ok_or(EngineError::NoDocument)?.doc, c)?;
+                let cache = prepared.cache;
                 if !prepared.change {
+                    if let Some(mut cache) = cache {
+                        if let Some(current) = s.active().and_then(|st| st.doc.resident_arc()) {
+                            cache.bind_controlled(current);
+                        }
+                        s.object_finder = cache;
+                    }
                     return Ok(prepared.response);
                 }
                 let response = prepared.response;
@@ -396,6 +470,14 @@ pub(crate) fn run(s: &mut Session, p: &Value) -> Result<Value> {
                     doc.selection = prepared.selection;
                     poll(c)
                 })?;
+                // All cache storage was prepared before the edit. Only this
+                // infallible binding/ownership publication follows success.
+                if let Some(mut cache) = cache {
+                    if let Some(current) = s.active().and_then(|st| st.doc.resident_arc()) {
+                        cache.bind_controlled(current);
+                    }
+                    s.object_finder = cache;
+                }
                 Ok(response)
             })
         },
@@ -425,13 +507,22 @@ mod tests {
     fn rectangle_private_matches_legacy_and_cancel_preserves() {
         let d = doc();
         let active = Some(d.layers[0].id);
-        let r = Request { rect: Rect::from_xywh(18, 10, 44, 44), all: false, mode: SelectionMode::Replace };
+        let r = Request { selector: Selector::Rect(Rect::from_xywh(18, 10, 44, 44)), all: false, mode: SelectionMode::Replace };
         let source = photocraft_algo::segment::SurfaceSampler(d.layers[0].surface().unwrap());
-        let region = grabcut::object_select(&source, d.bounds(), r.rect, 160_000).unwrap();
+        let region = grabcut::object_select(
+            &source,
+            d.bounds(),
+            match r.selector {
+                Selector::Rect(v) => v,
+                _ => Rect::EMPTY,
+            },
+            160_000,
+        )
+        .unwrap();
         let expected = sel::combine_region(d.selection.as_ref(), region.as_ref(), r.mode);
-        let actual = prepare(&d, active, r, &Interrupt::NONE).unwrap();
+        let actual = prepare(&d, active, r, None, &Interrupt::NONE).unwrap();
         assert_eq!(actual.selection, expected);
-        assert!(matches!(prepare(&d, active, r, &Interrupt::cancel_only(&|| true)), Err(EngineError::Cancelled)));
+        assert!(matches!(prepare(&d, active, r, None, &Interrupt::cancel_only(&|| true)), Err(EngineError::Cancelled)));
     }
     #[test]
     fn registered_rectangle_one_undo_and_stale_redo_retention() {
@@ -445,5 +536,50 @@ mod tests {
         assert!(s.execute(ID, json!({"rect":[18,10,44,44],"documentId":before.id.0.to_string(),"expectedRevision":"18446744073709551615"})).is_err());
         assert!(s.redo());
         assert_eq!(*s.active().unwrap().doc, *after);
+    }
+    #[test]
+    fn point_matches_old_finder_and_cache_reuses_after_selection_only_edit() {
+        let mut session = Session::new();
+        session.add_document(doc(), None).unwrap();
+        let before = session.active().unwrap().doc.clone();
+        let active = session.active().unwrap().active_layer;
+        let expected = crate::smartselect_cmds::try_find_object(&before, active, false, 40., 32.).unwrap();
+        let params = json!({"point":[40.,32.],"documentId":before.id.0.to_string(),"expectedRevision":session.active().unwrap().revision.to_string()});
+        session.execute(ID, params).unwrap();
+        assert_eq!(session.active().unwrap().doc.selection, sel::combine_region(before.selection.as_ref(), expected.as_ref(), SelectionMode::Replace));
+        let current = session.active().unwrap();
+        let target = crate::smartselect_cmds::sampled_target(&current.doc, current.active_layer, false);
+        let cached = session.object_finder.lookup(&current.doc, target, 40., 32.).unwrap();
+        session.execute("select.deselect", json!({})).unwrap();
+        session.execute(ID, json!({"point":[40.,32.]})).unwrap();
+        let current = session.active().unwrap();
+        let reused = session.object_finder.lookup(&current.doc, target, 40., 32.).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&cached, &reused));
+    }
+    #[test]
+    fn point_stale_and_cancel_do_not_publish_cache_or_consume_redo() {
+        let mut session = Session::new();
+        session.add_document(doc(), None).unwrap();
+        session.execute(ID, json!({"point":[40.,32.]})).unwrap();
+        let after = session.active().unwrap().doc.clone();
+        assert!(session.undo());
+        let before = session.active().unwrap().doc.clone();
+        let cache_count = session.object_finder.len();
+        let snapshot = session.object_finder.capture_controlled().unwrap();
+        assert!(matches!(
+            prepare(
+                &before,
+                session.active().unwrap().active_layer,
+                Request { selector: Selector::Point(40., 32.), all: false, mode: SelectionMode::Replace },
+                Some(&snapshot),
+                &Interrupt::cancel_only(&|| true)
+            ),
+            Err(EngineError::Cancelled)
+        ));
+        assert!(session.execute(ID, json!({"point":[40.,32.],"documentId":before.id.0.to_string(),"expectedRevision":"18446744073709551615"})).is_err());
+        assert_eq!(session.object_finder.len(), cache_count);
+        assert_eq!(*session.active().unwrap().doc, *before);
+        assert!(session.redo());
+        assert_eq!(*session.active().unwrap().doc, *after);
     }
 }

@@ -368,3 +368,6 @@ pub fn upsample(low: &[bool], lw: usize, lh: usize, step: usize, w: usize, h: us
     }
     out
 }
+
+mod controlled;
+pub use controlled::{QuickLimits,QuickRequirements,requirements,quick_select_with_interrupt,quick_select_accounted_with_interrupt};

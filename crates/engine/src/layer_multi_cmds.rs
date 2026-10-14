@@ -12,6 +12,8 @@ use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, int_i32};
 use crate::{DocState, EngineError, Result, Session};
+mod pixel_cache_controlled;
+pub(crate) use pixel_cache_controlled::same_plain_pixels_with_interrupt;
 
 // ---------- selection state ----------
 

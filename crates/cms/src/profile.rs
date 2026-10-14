@@ -970,3 +970,34 @@ impl Profile {
         budget.poll()?;Ok(std::sync::Arc::new(bytes))
     }
 }
+
+// Intent-aware additive side recipe for cooperative Transform construction.
+impl Profile {
+ pub(crate) fn selected_side_cost(&self,input:bool,intent:Intent,b:&crate::control::Budget<'_>)->crate::control::Result<(usize,u64,usize)>{
+  use crate::control::Error;b.poll()?;let luts=if input{&self.a2b}else{&self.b2a};
+  if let Some(lut)=Self::lut_for(luts,intent){if lut.stages.len()>4096{return Err(Error::Limit("profile stage count"));}let count=lut.stages.len().checked_add(1).ok_or(Error::Limit("profile stages"))?;let mut bytes=count.checked_mul(std::mem::size_of::<Stage>()).ok_or(Error::Limit("profile stage storage"))?;let mut work=128u64;for stage in &lut.stages{b.poll()?;bytes=bytes.checked_add(stage.controlled_bytes()?).ok_or(Error::Limit("profile copied bytes"))?;work=work.checked_add(stage.controlled_work()?).ok_or(Error::Limit("profile evaluation work"))?;}return Ok((bytes,work,count));}
+  let mut bytes=2*std::mem::size_of::<Stage>()+128;let mut work=256u64;
+  match self.color_space{ColorSpace::Rgb=>{let curves=self.trc.as_ref().ok_or_else(||crate::control::invalid("RGB profile without TRC or LUT"))?;if self.matrix.is_none(){return Err(crate::control::invalid("RGB profile without matrix or LUT"));}bytes+=3*std::mem::size_of::<Curve>();for c in curves{b.poll()?;bytes=bytes.checked_add(c.controlled_bytes()?).ok_or(Error::Limit("profile copied curves"))?;work=work.checked_add(if input{128}else{c.controlled_work()}).ok_or(Error::Limit("profile curve work"))?;}},ColorSpace::Gray=>{let c=self.gray_trc.as_ref().ok_or_else(||crate::control::invalid("gray profile without kTRC"))?;bytes=bytes.checked_add(c.controlled_bytes()?).and_then(|n|n.checked_add(std::mem::size_of::<Curve>())).ok_or(Error::Limit("profile copied curve"))?;work=work.checked_add(if input{128}else{c.controlled_work()}).ok_or(Error::Limit("profile curve work"))?;},ColorSpace::Lab|ColorSpace::Xyz=>{},_=>return Err(crate::CmsError::Unsupported("profile without relative-colorimetric LUT".into()).into())}
+  Ok((bytes,work,2))
+ }
+ pub(crate) fn selected_side_controlled(&self,input:bool,intent:Intent,b:&mut crate::control::Budget<'_>)->crate::control::Result<(Vec<Stage>,Pcs)>{
+  use crate::control::invalid;b.poll()?;let (_,_,count)=self.selected_side_cost(input,intent,b)?;let mut out=b.reserve(count)?;
+  let luts=if input{&self.a2b}else{&self.b2a};if let Some(lut)=Self::lut_for(luts,intent){
+   if input{for stage in &lut.stages{out.push(stage.copy_controlled(b)?);}out.push(decode_pcs(self.pcs,lut.kind));}
+   else{out.push(encode_pcs(self.pcs,lut.kind));for stage in &lut.stages{out.push(stage.copy_controlled(b)?);}}return Ok((out,self.pcs));
+  }
+  let matrix=|rows,cols,m:&[f64],offset:&[f64],b:&mut crate::control::Budget<'_>|->crate::control::Result<Stage>{Ok(Stage::Matrix{rows,cols,m:b.copy(m)?,offset:b.copy(offset)?})};
+  match self.color_space{
+   ColorSpace::Rgb=>{let m=self.matrix.as_ref().ok_or_else(||invalid("RGB profile without matrix"))?;let curves=self.trc.as_ref().ok_or_else(||invalid("RGB profile without TRC"))?;
+    let mut copied=b.reserve(3)?;for curve in curves{copied.push(curve.copy_controlled(b)?);}
+    let m=if input{*m}else{math::invert(m).ok_or_else(||invalid("singular colorant matrix"))?};let mut flat=[0f64;9];for (dst,value) in flat.iter_mut().zip(m.iter().flatten()){*dst=*value;}
+    if input{out.push(Stage::Curves(copied));out.push(matrix(3,3,&flat,&[0.0;3],b)?);}else{out.push(matrix(3,3,&flat,&[0.0;3],b)?);out.push(Stage::InvCurves(copied));}Ok((out,Pcs::Xyz))
+   },ColorSpace::Gray=>{let curve=self.gray_trc.as_ref().ok_or_else(||invalid("gray profile without kTRC"))?;let mut curves=b.reserve(1)?;curves.push(curve.copy_controlled(b)?);
+    if input{out.push(Stage::Curves(curves));let values=if self.pcs==Pcs::Lab{[100.0,0.0,0.0]}else{math::D50};out.push(matrix(3,1,&values,&[0.0;3],b)?);}else{let values=if self.pcs==Pcs::Lab{[0.01,0.0,0.0]}else{[0.0,1.0,0.0]};out.push(matrix(1,3,&values,&[0.0],b)?);out.push(Stage::InvCurves(curves));}Ok((out,self.pcs))
+   },ColorSpace::Lab=>{out.push(if input{Stage::DecodeLabV4}else{Stage::EncodeLabV4});Ok((out,Pcs::Lab))},ColorSpace::Xyz=>{out.push(if input{Stage::DecodeXyz}else{Stage::EncodeXyz});Ok((out,Pcs::Xyz))},_=>Err(crate::CmsError::Unsupported("profile without relative-colorimetric LUT".into()).into())
+  }
+ }
+}
+impl Profile {
+ pub(crate) fn selected_lut(&self,input:bool,intent:Intent)->Option<&Lut>{Self::lut_for(if input{&self.a2b}else{&self.b2a},intent)}
+}

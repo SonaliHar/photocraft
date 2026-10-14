@@ -280,3 +280,6 @@ pub fn otsu(v: &[f32]) -> f32 {
     }
     (bt as f32 + 0.5) / 255.0
 }
+
+mod controlled;
+pub use controlled::{SubjectLimits,SubjectRequirements,requirements,select_subject_with_interrupt};

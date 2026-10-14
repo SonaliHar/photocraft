@@ -524,3 +524,20 @@ impl Curve {
   };b.poll()?;Ok(value)
  }
 }
+impl Curve {
+ pub(crate) fn equals_controlled(&self,other:&Self,b:&mut crate::control::Budget<'_>)->crate::control::Result<bool>{
+  fn eq<T:PartialEq>(a:&[T],z:&[T],b:&mut crate::control::Budget<'_>)->crate::control::Result<bool>{if a.len()!=z.len(){return Ok(false)}for(x,y)in a.chunks(1024).zip(z.chunks(1024)){b.work(x.len() as u64)?;if x!=y{return Ok(false)}}Ok(true)}
+  b.poll()?;match(self,other){(Self::Identity,Self::Identity)=>Ok(true),(Self::Gamma(a),Self::Gamma(z))=>Ok(a==z),(Self::Parametric{kind:a,p:x},Self::Parametric{kind:z,p:y})=>Ok(a==z&&x==y),(Self::Table(a),Self::Table(z))=>eq(a,z,b),(Self::Table64(a),Self::Table64(z))=>eq(a,z,b),_=>Ok(false)}
+ }
+ pub(crate) fn identity_controlled(&self,b:&mut crate::control::Budget<'_>)->crate::control::Result<bool>{
+  b.poll()?;match self {Self::Table(t)=>{let n=t.len();if n<2{return Ok(true)}for(i,&v)in t.iter().enumerate(){b.work(1)?;if !((f64::from(v)-i as f64/(n-1) as f64).abs()<1.0/65535.0){return Ok(false)}}Ok(true)},Self::Table64(t)=>{let n=t.len();if n<2{return Ok(true)}for(i,&v)in t.iter().enumerate(){b.work(1)?;if !((v-i as f64/(n-1) as f64).abs()<1.0/65535.0){return Ok(false)}}Ok(true)},_=>Ok(self.is_identity())}
+ }
+ pub(crate) fn inverse64_controlled(&self,y:f64,b:&mut crate::control::Budget<'_>)->crate::control::Result<f64>{
+  fn table<T:Copy+Into<f64>>(t:&[T],y:f64,b:&mut crate::control::Budget<'_>)->crate::control::Result<f64>{
+   use crate::control::invalid;b.work((t.len() as u64).checked_add(128).ok_or(crate::control::Error::Limit("inverse curve work"))?)?;let(Some(&first),Some(&last))=(t.first(),t.last())else{return Ok(y)};if t.len()<2||!y.is_finite(){return Ok(y)}let(first,last)=(first.into(),last.into());let increasing=last>=first;let(low,high)=if increasing{(first,last)}else{(last,first)};
+   if y<=low||y>=high{let start=if y<=low{increasing}else{!increasing};let edge=if start{first}else{last};let mut found=None;if start{for(i,v)in t.iter().enumerate(){if i.is_multiple_of(256){b.poll()?;}if ((*v).into()-edge).abs()>1e-7{found=Some(i.saturating_sub(1));break;}}}else{for(i,v)in t.iter().enumerate().rev(){if i.is_multiple_of(256){b.poll()?;}if ((*v).into()-edge).abs()>1e-7{found=Some(i+1);break;}}}return Ok(found.unwrap_or(if start{t.len()-1}else{0}) as f64/(t.len()-1) as f64)}
+   let(mut lo,mut hi)=(0,t.len()-1);while hi-lo>1{b.poll()?;let mid=lo+(hi-lo)/2;let v=(*t.get(mid).ok_or_else(||invalid("inverse curve midpoint"))?).into();if (v<y)==increasing{lo=mid}else{hi=mid}}let a=(*t.get(lo).ok_or_else(||invalid("inverse curve low"))?).into();let z=(*t.get(hi).ok_or_else(||invalid("inverse curve high"))?).into();let fraction=if z!=a{(y-a)/(z-a)}else{0.5};Ok((lo as f64+fraction)/(t.len()-1) as f64)
+  }
+  b.poll()?;let value=match self{Self::Table(t)=>table(t,y,b)?,Self::Table64(t)=>table(t,y,b)?,_=>{b.work(128)?;self.eval_inverse64(y)}};b.poll()?;Ok(value)
+ }
+}

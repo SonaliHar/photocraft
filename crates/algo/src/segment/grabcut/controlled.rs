@@ -18,24 +18,24 @@ impl Default for ObjectSelectionLimits {
         Self { resident_bytes: MAX_CHECKED_RASTER_BYTES, work_units: 8_000_000_000 }
     }
 }
-struct Budget<'a, 'b> {
-    left: Cell<u64>,
-    control: &'a Interrupt<'b>,
+pub(crate) struct Budget<'a, 'b> {
+    pub(crate) left: Cell<u64>,
+    pub(crate) control: &'a Interrupt<'b>,
 }
 impl Budget<'_, '_> {
-    fn ensure_work(&self, n: u64) -> Result<(), E> {
+    pub(crate) fn ensure_work(&self, n: u64) -> Result<(), E> {
         self.control.check().map_err(|_| E::Cancelled)?;
         if n > self.left.get() {
             return Err(E::LimitExceeded);
         }
         Ok(())
     }
-    fn work(&self, n: u64) -> Result<(), E> {
+    pub(crate) fn work(&self, n: u64) -> Result<(), E> {
         self.control.check().map_err(|_| E::Cancelled)?;
         self.left.set(self.left.get().checked_sub(n).ok_or(E::LimitExceeded)?);
         Ok(())
     }
-    fn filled<T: Clone>(&self, n: usize, value: T) -> Result<Vec<T>, E> {
+    pub(crate) fn filled<T: Clone>(&self, n: usize, value: T) -> Result<Vec<T>, E> {
         let mut out = self.reserve(n)?;
         while out.len() < n {
             let end = out.len().saturating_add(1024).min(n);
@@ -44,7 +44,7 @@ impl Budget<'_, '_> {
         }
         Ok(out)
     }
-    fn reserve<T>(&self, n: usize) -> Result<Vec<T>, E> {
+    pub(crate) fn reserve<T>(&self, n: usize) -> Result<Vec<T>, E> {
         self.work(1)?;
         let mut out = Vec::new();
         out.try_reserve_exact(n).map_err(|_| E::AllocationFailed)?;
@@ -54,7 +54,7 @@ impl Budget<'_, '_> {
         Ok(out)
     }
 }
-fn index(x: usize, y: usize, w: usize) -> Result<usize, E> {
+pub(crate) fn index(x: usize, y: usize, w: usize) -> Result<usize, E> {
     y.checked_mul(w).and_then(|v| v.checked_add(x)).ok_or(E::LimitExceeded)
 }
 fn at(img: &RgbImage, x: usize, y: usize) -> Result<[f32; 3], E> {
@@ -80,7 +80,7 @@ fn rgb(s: &dyn Sampler, r: Rect, b: &Budget<'_, '_>) -> Result<RgbImage, E> {
     Ok(RgbImage { w, h, px })
 }
 // Same legacy 64-source-row strip grouping and f32 cell summation order.
-fn scaled(s: &dyn Sampler, r: Rect, step: usize, b: &Budget<'_, '_>) -> Result<RgbImage, E> {
+pub(crate) fn scaled(s: &dyn Sampler, r: Rect, step: usize, b: &Budget<'_, '_>) -> Result<RgbImage, E> {
     if step == 0 {
         return Err(E::InvalidBounds);
     }
@@ -264,7 +264,7 @@ fn fit_samples(img: &RgbImage, trimap: &[u8], foreground: bool, b: &Budget<'_, '
     }
     Ok(out)
 }
-fn iterations(img: &RgbImage, trimap: &mut [u8], iters: usize, b: &Budget<'_, '_>) -> Result<Option<(Gmm, Gmm)>, E> {
+pub(crate) fn iterations(img: &RgbImage, trimap: &mut [u8], iters: usize, b: &Budget<'_, '_>) -> Result<Option<(Gmm, Gmm)>, E> {
     let beta = beta(img, b)?;
     let mut fixed = b.reserve(trimap.len())?;
     for t in trimap.iter() {
@@ -319,7 +319,17 @@ fn iterations(img: &RgbImage, trimap: &mut [u8], iters: usize, b: &Budget<'_, '_
     Ok(models)
 }
 
-fn finish(s: &dyn Sampler, window: Rect, step: usize, low: &[bool], lw: usize, lh: usize, fg: &Gmm, bg: &Gmm, b: &Budget<'_, '_>) -> Result<Option<Region>, E> {
+pub(crate) fn finish(
+    s: &dyn Sampler,
+    window: Rect,
+    step: usize,
+    low: &[bool],
+    lw: usize,
+    lh: usize,
+    fg: &Gmm,
+    bg: &Gmm,
+    b: &Budget<'_, '_>,
+) -> Result<Option<Region>, E> {
     let (w, h, n) = crate::segment::sample_shape(window, 1)?;
     if step == 0 || lw != w.div_ceil(step) || lh != h.div_ceil(step) || lw.checked_mul(lh) != Some(low.len()) {
         return Err(E::LengthMismatch);
@@ -616,3 +626,6 @@ mod tests {
         );
     }
 }
+
+mod point;
+pub use point::{object_at_with_interrupt, point_requirements};

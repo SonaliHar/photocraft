@@ -79,6 +79,28 @@ pub(crate) fn color_replacement_params(app: &PhotocraftApp) -> Value {
     })
 }
 
+/// Real Quick Selection gestures fence their original owner before constructing
+/// any pressure JSON, XY arrays, or generic retouch option copies.
+pub(crate) fn finish_quick_selection_captured(app:&mut PhotocraftApp,points:&[[f64;3]],mods:egui::Modifiers,origin:Option<&crate::selection_object_origin::Origin>) {
+    let result=(|| {
+        crate::selection_object_origin::validate(app,origin)?;
+        if points.is_empty() || points.len()>100_000 {return Err(tl!("Quick Selection has too many points or no points.").to_owned());}
+        let mut xy=Vec::new();xy.try_reserve_exact(points.len()).map_err(|_|tl!("Quick Selection point storage is unavailable.").to_owned())?;
+        for point in points {
+            let [x,y,_]=*point;
+            if !x.is_finite() || !y.is_finite() || x.abs()>1e7 || y.abs()>1e7 {return Err(tl!("Quick Selection contains invalid coordinates.").to_owned());}
+            xy.push([x,y]);
+        }
+        let mode=if mods.alt {"subtract"} else {"add"};
+        let params=json!({"points":xy,"size":app.session.tools.brush.size,"mode":mode,
+            "enhanceEdge":app.ui.tool_options.enhance_edge,"sampleAllLayers":app.ui.tool_options.sample_all_layers});
+        let params=crate::selection_object_origin::prepare_for(app,origin,"select.quick",params)?;
+        app.run("select.quick",params)
+    })();
+    if let Err(error)=&result {app.ui.status=error.clone();app.ui.status_error=true;}
+    report_smart_result(app,result,tl!("Quick Selection found nothing there"));
+}
+
 /// Finish a stroke with a retouching tool. Returns false if `tool` isn't one.
 pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], mods: egui::Modifiers) -> bool {
     let o = app.ui.tool_options.clone();
@@ -349,6 +371,15 @@ pub fn content_aware_move_params(app: &PhotocraftApp, offset: [i64; 2]) -> Value
 /// the brush size instead of looking dead (⌥ subtracts, otherwise it adds). Larger drags
 /// run the rectangle GrabCut (⌥ subtracts, ⇧ adds, otherwise replaces).
 pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
+    finish_object_selection_impl(app,start,end,mods,None);
+}
+/// Real canvas gestures must carry their original target; absence is a refusal,
+/// rather than authority inferred from a new active document at release.
+pub(crate) fn finish_object_selection_captured(app:&mut PhotocraftApp,start:[f64;2],end:[f64;2],mods:egui::Modifiers,origin:Option<&crate::selection_object_origin::Origin>) {
+    if let Err(error)=crate::selection_object_origin::validate(app,origin) {app.ui.status=error;app.ui.status_error=true;return;}
+    finish_object_selection_impl(app,start,end,mods,origin);
+}
+fn finish_object_selection_impl(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers, origin:Option<&crate::selection_object_origin::Origin>) {
     let (x, y) = (start[0].min(end[0]), start[1].min(end[1]));
     let (w, h) = ((end[0] - start[0]).abs(), (end[1] - start[1]).abs());
     let sample_all = app.ui.tool_options.sample_all_layers;
@@ -360,15 +391,23 @@ pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f
             (false, true) => "subtract",
             (false, false) => "replace",
         };
-        let r = app.run("select.object", json!({"point": [end[0], end[1]], "mode": mode, "sampleAllLayers": sample_all}));
+        let params=json!({"point": [end[0], end[1]], "mode": mode, "sampleAllLayers": sample_all});
+        let r=if let Some(origin)=origin {
+            crate::selection_object_origin::prepare(app,Some(origin),params).and_then(|params|app.run("select.object",params))
+        } else {app.run("select.object",params)};
         crate::object_finder::clear(app);
+        if let Err(error)=&r {app.ui.status=error.clone();app.ui.status_error=true;}
         report_smart_result(app, r, tl!("No object found there — drag a rectangle around it"));
         return;
     }
     if w < 2.0 || h < 2.0 {
         let size = app.session.tools.brush.size;
         let mode = if mods.alt { "subtract" } else { "add" };
-        let r = app.run("select.quick", json!({"points": [[end[0], end[1]]], "size": size, "mode": mode, "sampleAllLayers": sample_all}));
+        let params=json!({"points": [[end[0], end[1]]], "size": size, "mode": mode, "sampleAllLayers": sample_all});
+        let r=if let Some(origin)=origin {
+            crate::selection_object_origin::prepare_for(app,Some(origin),"select.quick",params).and_then(|params|app.run("select.quick",params))
+        } else {app.run("select.quick",params)};
+        if let Err(error)=&r {app.ui.status=error.clone();app.ui.status_error=true;}
         report_smart_result(app, r, tl!("Quick Selection found nothing there"));
         return;
     }
@@ -379,7 +418,11 @@ pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f
     } else {
         "replace"
     };
-    let r = app.run("select.object", json!({"rect": [x.round(), y.round(), w.round(), h.round()], "mode": mode, "sampleAllLayers": sample_all}));
+    let params=json!({"rect": [x.round(), y.round(), w.round(), h.round()], "mode": mode, "sampleAllLayers": sample_all});
+    let r=if let Some(origin)=origin {
+        crate::selection_object_origin::prepare(app,Some(origin),params).and_then(|params|app.run("select.object",params))
+    } else {app.run("select.object",params)};
+    if let Err(error)=&r {app.ui.status=error.clone();app.ui.status_error=true;}
     report_smart_result(app, r, tl!("Object Selection found nothing there — try a tighter rectangle"));
 }
 

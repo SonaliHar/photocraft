@@ -778,3 +778,21 @@ pub(crate) fn link_stages_relative_controlled(src:&Profile,dst:&Profile,b:&mut c
  let extra=usize::from(spcs!=dpcs);let count=s.len().checked_add(d.len()).and_then(|n|n.checked_add(extra)).ok_or(crate::control::Error::Limit("linked stages"))?;
  let mut stages=b.reserve(count)?;stages.extend(s);match(spcs,dpcs){(Pcs::Lab,Pcs::Xyz)=>stages.push(Stage::LabToXyz),(Pcs::Xyz,Pcs::Lab)=>stages.push(Stage::XyzToLab),_=>{}}stages.extend(d);b.poll()?;Ok(stages)
 }
+
+// Cooperative construction retains the original APIs and never populates CACHE.
+mod controlled;
+pub use controlled::TransformRequirements;
+impl Transform {
+    pub fn requirements_with_control(src:&Profile,dst:&Profile,options:TransformOptions,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<TransformRequirements> {
+        controlled::requirements(src,dst,options,limits,cancelled)
+    }
+    pub fn with_options_with_control(src:&Profile,dst:&Profile,options:TransformOptions,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<Self> {
+        controlled::construct(src,dst,options,limits,cancelled)
+    }
+    pub fn new_with_control(src:&Profile,dst:&Profile,intent:Intent,bpc:bool,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<Self> {
+        Self::with_options_with_control(src,dst,TransformOptions{intent,bpc,..Default::default()},limits,cancelled)
+    }
+}
+impl Transform {
+    pub fn retained_bytes_with_control(&self,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<usize>{controlled::retained(self,limits,cancelled)}
+}

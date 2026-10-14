@@ -15,10 +15,76 @@ pub(super) fn prepare<T>(control: &Interrupt<'_>, operation: impl FnOnce() -> Re
     value
 }
 
+pub(super) fn cms_error(error: photocraft_cms::control::Error) -> CompositionError {
+    match error {
+        photocraft_cms::control::Error::Cancelled => RasterInputError::Cancelled.into(),
+        photocraft_cms::control::Error::Allocation => RasterInputError::AllocationFailed.into(),
+        photocraft_cms::control::Error::Limit(_) => RasterInputError::LimitExceeded.into(),
+        photocraft_cms::control::Error::Cms(error) => error.into(),
+    }
+}
+
+/// Both constructors remain alive together. Conservatively retain the first
+/// complete phase envelope while admitting the reverse constructor.
+pub(super) fn transform_pair(source: &Profile, target: &Profile, control: &Interrupt<'_>) -> Result<(photocraft_cms::Transform, photocraft_cms::Transform)> {
+    use photocraft_cms::{Intent, Transform, transform::TransformOptions, control::Limits};
+    checkpoint(control)?;
+    let cancelled = || control.cancelled();
+    let limits = Limits::default();
+    let options = TransformOptions { intent: Intent::RelativeColorimetric, bpc: false, ..Default::default() };
+    let forward = Transform::requirements_with_control(source, target, options, limits, &cancelled).map_err(cms_error)?;
+    let reverse = Transform::requirements_with_control(target, source, options, limits, &cancelled).map_err(cms_error)?;
+    let peak = forward.peak_resident_bytes.checked_add(reverse.peak_resident_bytes).ok_or(RasterInputError::LimitExceeded)?;
+    let work = forward.work_units.checked_add(reverse.work_units).and_then(|n| n.checked_mul(3)).ok_or(RasterInputError::LimitExceeded)?;
+    if peak > limits.resident_bytes || work > limits.work_units { return Err(RasterInputError::LimitExceeded.into()); }
+    let first_limits = Limits { resident_bytes: limits.resident_bytes.checked_sub(reverse.peak_resident_bytes).ok_or(RasterInputError::LimitExceeded)?,
+        work_units: limits.work_units.checked_sub(reverse.work_units.checked_mul(3).ok_or(RasterInputError::LimitExceeded)?).ok_or(RasterInputError::LimitExceeded)? };
+    let second_limits = Limits { resident_bytes: limits.resident_bytes.checked_sub(forward.peak_resident_bytes).ok_or(RasterInputError::LimitExceeded)?,
+        work_units: limits.work_units.checked_sub(forward.work_units.checked_mul(3).ok_or(RasterInputError::LimitExceeded)?).ok_or(RasterInputError::LimitExceeded)? };
+    let forward = Transform::with_options_with_control(source, target, options, first_limits, &cancelled).map_err(cms_error)?;
+    let reverse = Transform::with_options_with_control(target, source, options, second_limits, &cancelled).map_err(cms_error)?;
+    checkpoint(control)?;
+    Ok((forward, reverse))
+}
+
+#[cfg(test)]
+mod transform_pair_tests {
+    use super::*;
+    use photocraft_cms::{Builtin, Intent, Transform};
+    #[test]
+    fn paired_constructor_retains_relative_no_bpc_forward_reverse_words() {
+        for builtin in [Builtin::Srgb, Builtin::GrayGamma22] {
+            let source = builtin.profile();
+            let target = Builtin::LabD50.profile();
+            let (forward, reverse) = transform_pair(source, target, &Interrupt::NONE).unwrap();
+            let old_forward = Transform::new(source, target, Intent::RelativeColorimetric, false).unwrap();
+            let old_reverse = Transform::new(target, source, Intent::RelativeColorimetric, false).unwrap();
+            for values in [[0., 0., 0.], [0.25, 0.5, 0.75], [1., 1., 1.]] {
+                let input = &values[..source.channels()];
+                let mut actual = [0.; 3]; let mut expected = [0.; 3];
+                forward.try_eval_f64(input, &mut actual).unwrap();
+                old_forward.try_eval_f64(input, &mut expected).unwrap();
+                assert_eq!(actual.map(f64::to_bits), expected.map(f64::to_bits));
+                let mut back = [0.; 3]; let mut old_back = [0.; 3];
+                reverse.try_eval_f64(&actual, &mut back[..source.channels()]).unwrap();
+                old_reverse.try_eval_f64(&expected, &mut old_back[..source.channels()]).unwrap();
+                assert_eq!(back.map(f64::to_bits), old_back.map(f64::to_bits));
+            }
+        }
+    }
+    #[test]
+    fn cancelled_pair_never_returns_partial_working_space() {
+        let stop = || true;
+        assert!(matches!(transform_pair(Builtin::Srgb.profile(), Builtin::LabD50.profile(), &Interrupt::cancel_only(&stop)),
+            Err(CompositionError::Raster(RasterInputError::Cancelled))));
+    }
+}
+
 // Identical validation/override policy to effective_profile_from_definition,
 // without cloning a profile which the separable-transfer consumer never uses.
 pub(super) fn validate_interpretation(profile: &Profile, encoding: Encoding, control: &Interrupt<'_>) -> Result<()> {
-    prepare(control, || Ok(photocraft_cms::xcf_color::validate_profile(profile)?))?;
+    checkpoint(control)?;
+    photocraft_cms::xcf_color::validate_profile_with_control(profile, photocraft_cms::control::Limits::default(), &|| control.cancelled()).map_err(cms_error)?;
     if (profile.a2b.iter().any(Option::is_some) || profile.b2a.iter().any(Option::is_some)) && encoding != Encoding::NonlinearProfile {
         return Err(photocraft_cms::CmsError::Unsupported(
             "XCF ICC LUT transfer override has no separable tone curves; retain profile-defined nonlinear encoding".into(),

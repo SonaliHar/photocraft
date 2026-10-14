@@ -223,6 +223,7 @@ pub struct Drag {
     pub sel_move: Option<bool>,
     pub lasso: Option<crate::lasso_ui::Lasso>,
     selection_origin: Option<marquee_origin::Origin>,
+    object_origin: Option<crate::selection_object_origin::Origin>,
     /// A native preview refusal must not become an implicit one-shot fallback.
     native_replacement_failed: bool,
 }
@@ -243,6 +244,7 @@ impl Drag {
             sel_move: None,
             lasso: None,
             selection_origin: None,
+            object_origin: None,
             native_replacement_failed: false,
         }
     }
@@ -3093,6 +3095,7 @@ fn hdr_preview(app: &PhotocraftApp, doc: &photocraft_doc::Document) -> Option<[f
 
 /// Draw one canvas view and handle its input. `primary` = main window (tools active).
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
+    cancel_stale_object_gesture(app);
     let ctx = ui.ctx().clone();
     // The camera as the app holds it before this frame's input. The canvas works on its own copy
     // (`view`) and writes it back at the end; a tool that moves the camera itself meanwhile (the
@@ -5137,7 +5140,16 @@ fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui:
 }
 
 /// Tool state machine. Shared by mouse input and automation.
+/// Cancel only the gesture's private view before drawing or interpreting another
+/// event. No selection/document edit is made by this cancellation.
+fn cancel_stale_object_gesture(app:&mut PhotocraftApp)->bool {
+    let Some(drag)=app.drag.as_ref().filter(|drag|matches!(drag.tool,Tool::ObjectSelection|Tool::QuickSelection)) else {return false;};
+    let Err(error)=crate::selection_object_origin::validate(app,drag.object_origin.as_ref()) else {return false;};
+    app.drag=None;app.trail=None;crate::object_finder::clear(app);app.ui.status=error;app.ui.status_error=true;true
+}
+
 pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
+    if cancel_stale_object_gesture(app) {return;}
     if crate::symmetry_ui::pointer(app, ev, crate::workspace_ui::sticky_mods(app, mods)) {
         return;
     }
@@ -5502,7 +5514,12 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                     Err(error)=>{app.ui.status=error;app.ui.status_error=true;return;},
                 }
             } else {None};
-            app.drag = Some(Drag { clear, selection_origin, ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) });
+            let object_origin=if matches!(tool,Tool::ObjectSelection|Tool::QuickSelection) {
+                match crate::selection_object_origin::capture(app) {
+                    Ok(origin)=>Some(origin),Err(error)=>{app.ui.status=error;app.ui.status_error=true;return;},
+                }
+            } else {None};
+            app.drag = Some(Drag { clear, selection_origin, object_origin, ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) });
             app.trail = None;
             app.stylus.begin_stroke();
             if from.is_some() {
@@ -5826,6 +5843,9 @@ fn snap_aliased_tip(app: &PhotocraftApp, tool: Tool, x: f64, y: f64) -> (f64, f6
 }
 
 pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
+    if matches!(d.tool,Tool::ObjectSelection|Tool::QuickSelection) && let Err(error)=crate::selection_object_origin::validate(app,d.object_origin.as_ref()) {
+        app.ui.status=error;app.ui.status_error=true;crate::object_finder::clear(app);return;
+    }
     if d.sel_move.is_none() && matches!(d.tool,Tool::RectMarquee|Tool::EllipseMarquee|Tool::SingleRowMarquee|Tool::SingleColumnMarquee|Tool::Lasso)
         && let Err(error)=marquee_origin::validate(app,d.selection_origin.as_ref()) {
         app.ui.status=error;app.ui.status_error=true;return;
@@ -5851,13 +5871,17 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
     if live_retouch_command(d.tool).is_some() || crate::retouch_ui::dab_params(app, d.tool).is_some() || d.tool == Tool::ColorReplacement {
         app.live_stroke = None;
     }
-    let finished = crate::eraser_ui::finish_stroke(app, d.tool, &d.points) || crate::retouch_ui::finish_stroke(app, d.tool, &d.points, d.modifiers);
+    // The Quick route never enters generic retouch settings/pressure JSON copying.
+    // Retain ordinary preview cleanup; the original witness was checked above.
+    let finished = if d.tool==Tool::QuickSelection {
+        crate::retouch_ui::finish_quick_selection_captured(app,&d.points,d.modifiers,d.object_origin.as_ref());true
+    } else {crate::eraser_ui::finish_stroke(app, d.tool, &d.points) || crate::retouch_ui::finish_stroke(app, d.tool, &d.points, d.modifiers)};
     app.session.clear_live_stroke();
     if finished {
         return;
     }
     match d.tool {
-        Tool::ObjectSelection => crate::retouch_ui::finish_object_selection(app, d.start, [end[0], end[1]], d.modifiers),
+        Tool::ObjectSelection => crate::retouch_ui::finish_object_selection_captured(app, d.start, [end[0], end[1]], d.modifiers, d.object_origin.as_ref()),
         Tool::FreeformPen => crate::vector_ui::freeform_finish(app, &d.points, d.lasso.as_ref().map_or(&[], |l| l.straight())),
         // Photoshop: a click without dragging opens Create Rectangle / Ellipse / … instead.
         t if crate::vector_ui::is_shape_tool(t)

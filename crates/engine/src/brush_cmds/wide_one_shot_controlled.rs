@@ -8,6 +8,8 @@ use crate::{DocumentSnapshot,WeakDocumentSnapshot,EngineError,Result};
 use photocraft_paint::stroke_controlled::{StrokeLimits,StrokeError};
 use photocraft_raster::{Interrupt,Surface};
 use std::mem::size_of;
+#[path="ordinary_one_shot_controlled.rs"]
+mod ordinary_one_shot_controlled;
 fn poll(c:&Interrupt<'_>)->Result<()>{c.check().map_err(|_|EngineError::Cancelled)}
 fn fail(m:impl Into<String>)->EngineError{bad("paint.stroke",m)}
 fn add(a:u64,b:u64)->Result<u64>{a.checked_add(b).ok_or_else(||fail("wide stroke accounting overflow"))}
@@ -33,8 +35,22 @@ fn axis_copy(axis:Option<&crate::symmetry_cmds::PaintingSymmetry>)->Result<Optio
         Some(PaintingSymmetry::Path(SymmetryAxis{source,segments}))
     }})
 }
+/// Existing unit blend scope, checked before held-tip capture and again in
+/// worker. Full strict encoded/profile interpretation stays in controlled CMS;
+/// this cheap borrowed guard allocates no profile or raster payload.
+pub(super) fn admit_blend_source(doc:&photocraft_doc::Document,id:Option<photocraft_doc::LayerId>,p:&Value,mode:photocraft_color::BlendMode,c:&Interrupt<'_>)->Result<()>{
+    poll(c)?;if !matches!(mode,photocraft_color::BlendMode::Multiply|photocraft_color::BlendMode::Screen){return Ok(());}
+    let source=crate::channel_cmds::read_target_surface(doc,id,p)?;
+    if !matches!(source.format().sample,photocraft_color::SampleType::U32|photocraft_color::SampleType::F64){return Ok(());}
+    if crate::channel_cmds::target_of(p)!=crate::channel_cmds::Target::Pixels||doc.xcf_state.is_some()||doc.source_color_context.is_some()||doc.color_table.is_some(){return Err(fail("native Multiply/Screen requires plain source-free pixel target"));}
+    let layer=doc.layer(id.ok_or_else(||fail("native blend owner missing"))?).ok_or_else(||fail("native blend owner missing"))?;
+    if !matches!(layer.content,LayerContent::Raster(_))||layer.indexed_source.is_some()||layer.video.is_some()||layer.import_compositing.is_some(){return Err(fail("native blend source carrier is unsupported"));}
+    if !super::native_wide_color_controlled::eligible(doc,p){return Err(fail("native Multiply/Screen requires explicit Linear current ICC bounded to 16 MiB"));}
+    if !matches!(source.format().mode,photocraft_color::ColorMode::Rgb|photocraft_color::ColorMode::Grayscale){return Err(fail("native unit blend model is unsupported"));}
+    poll(c)
+}
 pub(super) fn eligible(s:&Session,cmd:&str,p:&Value,b:&BrushSettings,pts:&[StrokePoint],id:Option<photocraft_doc::LayerId>)->Result<bool>{
-    if b.mode!=photocraft_color::BlendMode::Normal||s.live_commit.as_ref().is_some_and(|l|l.matches(s,cmd,p,pts)){return Ok(false);}
+    if !matches!(b.mode,photocraft_color::BlendMode::Normal|photocraft_color::BlendMode::Multiply|photocraft_color::BlendMode::Screen)||s.live_commit.as_ref().is_some_and(|l|l.matches(s,cmd,p,pts)){return Ok(false);}
     let state=s.active().ok_or(EngineError::NoDocument)?;
     Ok(matches!(crate::channel_cmds::read_target_surface(&state.doc,id,p)?.format().sample,photocraft_color::SampleType::U32|photocraft_color::SampleType::F64))
 }
@@ -87,6 +103,8 @@ fn prepare(mut input:Input,c:&Interrupt<'_>)->Result<Candidate>{
         crate::channel_cmds::Target::Alpha(i)=>{let channel=doc.channels.get(i).ok_or_else(||fail("channel missing"))?;crate::xcf_item_locks::require_channel_content(doc,channel.id)?;false},
         crate::channel_cmds::Target::QuickMask=>false,
     };
+    if matches!(format.sample,photocraft_color::SampleType::U8|photocraft_color::SampleType::U16|photocraft_color::SampleType::F32){return ordinary_one_shot_controlled::prepare(input,lock,c);}
+    admit_blend_source(doc,input.id,&input.params,input.brush.mode,c)?;
     if input.auto_erase{return Err(fail("native Pencil Auto Erase is unsupported"));}
     if let Some(offer)=input.offer.take(){
         if offer.matches_captured_with_interrupt((doc.id,input.revision),&input.cmd,&input.params,&input.points,c)?{
@@ -101,7 +119,14 @@ fn prepare(mut input:Input,c:&Interrupt<'_>)->Result<Candidate>{
         }
     }
     let standard=StrokeLimits::default();
-    let color_headroom=standard.resident_bytes.checked_sub(add(held,input.capture_bytes)?).ok_or_else(||fail("native profile document headroom"))?;
+    let base_headroom=standard.resident_bytes.checked_sub(add(held,input.capture_bytes)?).ok_or_else(||fail("native profile document headroom"))?;
+    // Recipe-loaded full tips are now retained alongside the profile phase,
+    // whereas their future mip/output scratch is sequential. Pay the actual
+    // current brush and typed points before any private profile copies.
+    // This allocation-free census reports prospective constructor/mip work;
+    // that work is debited once by one_shot_limits below, not spent again here.
+    let brush_req=StrokeRenderer::new_requirements(&input.brush,Some(format),input.zoom,StrokeLimits{resident_bytes:base_headroom,work_units:standard.work_units},c).map_err(paint)?;
+    let color_headroom=base_headroom.checked_sub(add(brush_req.retained_bytes,mul(input.points.capacity() as u64,size_of::<StrokePoint>() as u64)?)?).ok_or_else(||fail("native profile/loaded tip headroom"))?;
     poll(c)?;let (wide,profile_work)=wide_stroke_context_with_limits(doc,input.id,&input.params,&input.brush,format,lock,input.restricted,input.auto_erase,StrokeLimits{resident_bytes:color_headroom,work_units:standard.work_units/16},c)?;
     let mut wide=wide.ok_or_else(||fail("native target changed"))?;poll(c)?;
     if profile_work>standard.work_units/16{return Err(fail("native profile work envelope"));}
@@ -124,7 +149,7 @@ fn prepare(mut input:Input,c:&Interrupt<'_>)->Result<Candidate>{
     }
     let mut references=Vec::new();references.try_reserve_exact(mirrors.len()).map_err(|_|fail("mirror reference allocation"))?;references.extend(mirrors.iter());
     let mut output=source.clone();poll(c)?;
-    let damage=primary.try_composite_union_many_wide_with_blend(&references,source,&mut output,&wide.color,doc.selection.as_ref(),lock,wide.clip,None,limits,c).map_err(raster)?;
+    let damage=primary.try_composite_union_many_wide_with_blend(&references,source,&mut output,&wide.color,doc.selection.as_ref(),lock,wide.clip,wide.blend,limits,c).map_err(raster)?;
     let comparison_work=mul(add(source.resident_payload_bytes().map_err(raster)?,output.resident_payload_bytes().map_err(raster)?)?,4)?;
     if comparison_work>comparison_budget{return Err(fail("wide equality work limit"));}
     let changed=!equal(source,&output,c)?;
@@ -157,7 +182,7 @@ fn capture_input(s:&Session,cmd:&str,p:&Value,label:&str,brush:BrushSettings,poi
     Ok(input)
 }
 fn launch(s:&mut Session,input:Input,label:&str)->Result<Value>{
-    crate::jobs::run(s,label,true,move|ctx|ctx.stage(0.0,0.95,"Native fixed-color stroke",|c|prepare(input,c)).map(|candidate|(candidate,ctx.clone())),move|session,(candidate,ctx)|ctx.stage(0.95,1.0,"Apply native stroke",|c|apply(session,candidate,c)))
+    crate::jobs::run(s,label,true,move|ctx|ctx.stage(0.0,0.95,"Prepare stroke",|c|prepare(input,c)).map(|candidate|(candidate,ctx.clone())),move|session,(candidate,ctx)|ctx.stage(0.95,1.0,"Apply stroke",|c|apply(session,candidate,c)))
 }
 pub(super) fn run(s:&mut Session,cmd:&str,p:&Value,label:&str,brush:BrushSettings,points:Vec<StrokePoint>,id:Option<photocraft_doc::LayerId>,zoom:f32,auto_erase:bool)->Result<Value>{
     let input=capture_input(s,cmd,p,label,brush,points,id,zoom,auto_erase,None,Vec::new())?;launch(s,input,label)
@@ -167,16 +192,17 @@ pub(super) fn try_run_recipe(s:&mut Session,cmd:&str,p:&Value)->Result<Option<Va
     let state=s.active().ok_or(EngineError::NoDocument)?;
     let id=if crate::channel_cmds::is_channel_target(p){None}else{Some(layer_id(s,p)?)};
     let source=crate::channel_cmds::read_target_surface(&state.doc,id,p)?;
-    if !matches!(source.format().sample,photocraft_color::SampleType::U32|photocraft_color::SampleType::F64){return Ok(None);}
+    let native_wide=matches!(source.format().sample,photocraft_color::SampleType::U32|photocraft_color::SampleType::F64);
+    if !native_wide&&!matches!(source.format().sample,photocraft_color::SampleType::U8|photocraft_color::SampleType::U16|photocraft_color::SampleType::F32){return Ok(None);}
     match crate::channel_cmds::target_of(p){
         crate::channel_cmds::Target::Pixels=>crate::commands::check_pixels_unlocked(&state.doc,id.ok_or_else(||fail("pixel target missing"))?)?,
         crate::channel_cmds::Target::Mask=>crate::xcf_item_locks::require_layer_mask_content(&state.doc,id.ok_or_else(||fail("mask target missing"))?)?,
         crate::channel_cmds::Target::Alpha(index)=>crate::xcf_item_locks::require_channel_content(&state.doc,state.doc.channels.get(index).ok_or_else(||fail("channel target missing"))?.id)?,
         crate::channel_cmds::Target::QuickMask=>{},
     }
-    if cmd=="paint.pencil"&&flag(p,"autoErase",false){return Err(fail("native Pencil Auto Erase is unsupported"));}
+    if native_wide&&cmd=="paint.pencil"&&flag(p,"autoErase",false){return Err(fail("native Pencil Auto Erase is unsupported"));}
     let mut recipe=super::brush_recipe_controlled::Recipe::capture_for(s,cmd,p,&Interrupt::NONE)?;
-    if !recipe.effective_normal(cmd,p){return Ok(None);}
+    if native_wide&&!matches!(recipe.effective_mode(cmd,p),photocraft_color::BlendMode::Normal|photocraft_color::BlendMode::Multiply|photocraft_color::BlendMode::Screen){return Ok(None);}
     let stores=std::mem::take(&mut recipe.witnesses);
     let label=if cmd=="paint.pencil"{"Pencil"}else{"Brush Tool"};
     let mut input=capture_input(s,cmd,p,label,BrushSettings::default(),Vec::new(),id,num(p,"zoom").unwrap_or(1.0),cmd=="paint.pencil"&&flag(p,"autoErase",false),Some(recipe),stores)?;
@@ -229,6 +255,21 @@ mod tests{
     fn moved_stale_offer_falls_back_and_native_autoerase_preserves_redo(){
         let mut s=fixture(SampleType::F64);let p=params();let live=LiveStroke::begin_with(&s,"paint.stroke",&p).unwrap();s.offer_live_stroke(live).unwrap();let mut changed=p.clone();changed["seed"]=json!(23);let response=s.execute("paint.stroke",changed).unwrap();assert!(response.get("fromLive").is_none());assert!(s.undo());let before=s.active().unwrap().doc.clone();let mut refused=p;refused["autoErase"]=json!(true);
         assert!(s.execute("paint.pencil",refused).is_err());assert!(s.active().unwrap().doc.shares_state(&before));assert!(s.active().unwrap().history.can_redo());
+    }
+    #[test]
+    fn registered_native_blends_match_existing_union_and_actual_job_cancel(){
+        use photocraft_paint::wide_blend_controlled::NativeUnitBlend;
+        for sample in [SampleType::U32,SampleType::F64]{for(mode,blend)in [("multiply",NativeUnitBlend::Multiply),("screen",NativeUnitBlend::Screen)]{
+            let mut s=fixture(sample);let mut p=params();p["mode"]=json!(mode);let pts=parse_points(&p,"paint.stroke").unwrap();let brush=with_blend_mode(resolve_brush(&s,&p,"paint.stroke").unwrap(),&p);let(id,brush,zoom)=stroke_target(&s,&p,brush).unwrap();let doc=&s.active().unwrap().doc;let pre=crate::channel_cmds::read_target_surface(doc,id,&p).unwrap();
+            let wide=wide_stroke_context(doc,id,&p,&brush,pre.format(),false,false,false).unwrap().unwrap();let mut renderer=StrokeRenderer::new(&brush,Some(pre.format()),zoom);renderer.push(&pts);renderer.finish();let mut expected=pre.clone();renderer.try_composite_union_many_wide_with_blend(&[],pre,&mut expected,&wide.color,doc.selection.as_ref(),false,wide.clip,Some(blend),StrokeLimits::default(),&Interrupt::NONE).unwrap();
+            let before=s.active().unwrap().doc.clone();let revision=s.active().unwrap().revision;s.execute("paint.stroke",p.clone()).unwrap();assert_eq!(s.active().unwrap().revision,revision+1);let actual=s.active().unwrap().doc.layer(id.unwrap()).unwrap().surface().unwrap();assert!(equal(actual,&expected,&Interrupt::NONE).unwrap());assert!(s.undo());assert_eq!(&*s.active().unwrap().doc,&*before);
+            let ctx=crate::jobs::JobCtx::default();ctx.cancel();s.set_inline_job_ctx(Some(ctx));assert!(matches!(s.execute("paint.stroke",p),Err(EngineError::Cancelled)));assert!(s.active().unwrap().doc.shares_state(&before));assert!(s.active().unwrap().history.can_redo());
+        }}
+    }
+    #[test]
+    fn native_unit_blend_live_match_and_nonlinear_refusal_preserve_authority(){
+        let mut s=fixture(SampleType::F64);let mut p=params();p["mode"]=json!("screen");let live=LiveStroke::begin(&s,&p).unwrap();s.offer_live_stroke(live).unwrap();let response=s.execute("paint.stroke",p.clone()).unwrap();assert_eq!(response.get("fromLive"),Some(&json!(true)));assert!(s.undo());
+        s.edit("Nonlinear",|doc,_|{doc.sample_encoding=Some(photocraft_doc::SampleEncoding::NonlinearProfile);Ok(())}).unwrap();let before=s.active().unwrap().doc.clone();let revision=s.active().unwrap().revision;assert!(s.execute("paint.stroke",p).is_err());assert!(s.active().unwrap().doc.shares_state(&before));assert_eq!(s.active().unwrap().revision,revision);
     }
     #[test]
     fn actual_inline_job_cancellation_and_zero_opacity_preserve_redo(){

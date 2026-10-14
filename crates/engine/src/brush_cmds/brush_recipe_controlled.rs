@@ -47,6 +47,10 @@ fn tile(v:&Value,l:StrokeLimits,c:&Interrupt<'_>)->Result<GrayTile>{
 fn stored(v:&Value,l:StrokeLimits,c:&Interrupt<'_>)->Result<StoredTile>{Ok(StoredTile{key:string(v.get("key").and_then(Value::as_str).ok_or_else(||fail("stored tip key"))?,c)?,width:v.get("width").and_then(Value::as_u64).and_then(|v|u32::try_from(v).ok()).ok_or_else(||fail("stored tip width"))?,height:v.get("height").and_then(Value::as_u64).and_then(|v|u32::try_from(v).ok()).ok_or_else(||fail("stored tip height"))?,preview:std::sync::Arc::new(tile(v.get("preview").ok_or_else(||fail("stored tip preview"))?,l,c)?),full:None})}
 fn tip(v:&Value,l:StrokeLimits,c:&Interrupt<'_>)->Result<TipShape>{if v.as_object().is_some_and(|v|v.len()!=1){return Err(fail("invalid brush tip variant"));}if let Some(v)=v.get("sampled"){Ok(TipShape::Sampled(tile(v,l,c)?))}else if let Some(v)=v.get("stored"){Ok(TipShape::Stored(stored(v,l,c)?))}else{serde_json::from_value(clone_json(v,c)?).map_err(|e|fail(e.to_string()))}}
 fn pattern(v:&Value,l:StrokeLimits,c:&Interrupt<'_>)->Result<Pattern>{if v.as_object().is_some_and(|v|v.len()!=1){return Err(fail("invalid brush pattern variant"));}if let Some(v)=v.get("tile"){Ok(Pattern::Tile(tile(v,l,c)?))}else if let Some(v)=v.get("stored"){Ok(Pattern::Stored(stored(v,l,c)?))}else{serde_json::from_value(clone_json(v,c)?).map_err(|e|fail(e.to_string()))}}
+fn effective_mode(base:&BrushSettings,cmd:&str,p:&Value)->photocraft_color::BlendMode{
+    if (cmd=="paint.pencil"&&flag(p,"block",false))||flag(p,"erase",false)||clear_mode(p){return photocraft_color::BlendMode::Normal;}
+    p.get("mode").and_then(Value::as_str).and_then(crate::commands::blend_from_str).or_else(||p.pointer("/brush/mode").and_then(Value::as_str).and_then(crate::commands::blend_from_str)).unwrap_or(base.mode)
+}
 pub(super) struct Recipe{base:BrushSettings,inputs:Vec<(String,std::result::Result<PreparedTip,String>)>,pub witnesses:Vec<TipStoreWitness>,pub retained_bytes:u64,foreground:[f32;4],background:[f32;4],picked:Option<([f32;3],[f32;4])>}
 impl Recipe{
     pub(super) fn capture_for(s:&Session,cmd:&str,p:&Value,c:&Interrupt<'_>)->Result<Self>{
@@ -58,6 +62,8 @@ impl Recipe{
         let mut retained_bytes=add(add(req.retained_bytes,req.staged_bytes)?,add(current.retained_bytes,current.staged_bytes)?)?;if retained_bytes>standard.resident_bytes/4{return Err(fail("brush recipe capture limit"));}
         // Fixed-size settings + shared Arc samples; string clone storage admitted.
         let base=match preset{Some(preset)=>preset.picked_over(&s.tools.brush),None=>s.tools.brush.clone()};poll(c)?;
+        let state=s.active().ok_or(EngineError::NoDocument)?;let id=if crate::channel_cmds::is_channel_target(p){None}else{Some(layer_id(s,p)?)};
+        super::wide_one_shot_controlled::admit_blend_source(&state.doc,id,p,effective_mode(&base,cmd,p),c)?;
         let mut keys:Vec<String>=reserve(6)?;
         for t in [&base.tip,&base.dual_brush.tip]{if let TipShape::Stored(t)=t{if t.full.is_none(){keys.push(string(&t.key,c)?);}}}
         if let Pattern::Stored(t)=&base.texture.pattern{if t.full.is_none(){keys.push(string(&t.key,c)?);}}
@@ -67,7 +73,7 @@ impl Recipe{
         let rgba=rgba(p,s.tools.foreground);let picked=s.tools.picked_cmyk([rgba[0],rgba[1],rgba[2]]).map(|v|([rgba[0],rgba[1],rgba[2]],v));
         Ok(Self{base,inputs,witnesses,retained_bytes,foreground:s.tools.foreground,background:s.tools.background,picked})
     }
-    pub(super) fn effective_normal(&self,cmd:&str,p:&Value)->bool{if cmd=="paint.pencil"&&flag(p,"block",false){return true;}if flag(p,"erase",false)||clear_mode(p){return true;}let mode=p.get("mode").and_then(Value::as_str).and_then(crate::commands::blend_from_str).or_else(||p.pointer("/brush/mode").and_then(Value::as_str).and_then(crate::commands::blend_from_str)).unwrap_or(self.base.mode);mode==photocraft_color::BlendMode::Normal}
+    pub(super) fn effective_mode(&self,cmd:&str,p:&Value)->photocraft_color::BlendMode{effective_mode(&self.base,cmd,p)}
     pub(super) fn resolve_for(mut self,cmd:&str,p:&Value,l:StrokeLimits,c:&Interrupt<'_>)->Result<(BrushSettings,Vec<StrokePoint>)>{
         poll(c)?;let mut base=self.base;
         let param_bytes=super::wide_one_shot_controlled::parameter_bytes_with_interrupt(p,c)?;
@@ -126,7 +132,7 @@ mod tests{
     fn pencil_and_block_recipe_match_existing_forced_settings_and_seed(){
         let s=fixture();for patch in [json!({}),json!({"hardness":0.3,"flow":0.4}),json!({"block":true,"zoom":2.5,"mode":"multiply"}),json!({"block":true,"zoom":0.125,"erase":true})]{
             let mut p=json!({"points":[[1.125,2.25,0.5],[3.25,4.5,0.75]],"seed":79});for(k,v)in patch.as_object().unwrap(){p[k]=v.clone();}
-            let expected=pencil_brush(&s,&p).unwrap();let recipe=Recipe::capture_for(&s,"paint.pencil",&p,&Interrupt::NONE).unwrap();assert!(recipe.effective_normal("paint.pencil",&p));
+            let expected=pencil_brush(&s,&p).unwrap();let recipe=Recipe::capture_for(&s,"paint.pencil",&p,&Interrupt::NONE).unwrap();assert_eq!(recipe.effective_mode("paint.pencil",&p),photocraft_color::BlendMode::Normal);
             let(actual,_)=recipe.resolve_for("paint.pencil",&p,StrokeLimits::default(),&Interrupt::NONE).unwrap();assert_eq!(actual,expected);
         }
     }

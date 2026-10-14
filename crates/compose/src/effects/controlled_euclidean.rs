@@ -111,7 +111,7 @@ fn dt1(t: &mut Scratch, n: usize, c: &Interrupt<'_>) -> Result<(), E> {
     }
     poll(c)
 }
-fn edt(inside: &[bool], w: usize, h: usize, c: &Interrupt<'_>) -> Result<(Vec<f32>, Vec<u32>), E> {
+pub(super) fn edt(inside: &[bool], w: usize, h: usize, c: &Interrupt<'_>) -> Result<(Vec<f32>, Vec<u32>), E> {
     poll(c)?;
     let total = w.checked_mul(h).ok_or(E::LimitExceeded)?;
     let admitted = scratch_bytes(w, h)?;

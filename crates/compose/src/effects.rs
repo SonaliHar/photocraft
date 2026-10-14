@@ -3235,6 +3235,8 @@ mod controlled_distance;
 mod controlled_glow;
 mod controlled_euclidean;
 mod controlled_stroke;
+mod controlled_bevel;
+mod controlled_contour;
 
 // Additive checked preparation kernels; legacy rendering retains its existing API.
 mod checked_prepare {
@@ -3406,13 +3408,13 @@ mod checked_prepare {
             }
             match e {
                 Effect::DropShadow(shadow) | Effect::InnerShadow(shadow) => {
+                    super::controlled_contour::validate(&shadow.contour, control)?;
                     let (radius, blur) = spread_split(shadow.size, shadow.spread);
                     if !shadow.spread.is_finite()
                         || !radius.is_finite()
                         || !blur.is_finite()
                         || !shadow.noise.is_finite()
                         || !(0.0..=1.0).contains(&shadow.noise)
-                        || !matches!(shadow.contour, Contour::Linear)
                         || !shadow.size.is_finite()
                         || !shadow.distance.is_finite()
                         || !shadow.angle.is_finite()
@@ -3420,7 +3422,20 @@ mod checked_prepare {
                         return Err(RasterInputError::UnsupportedConversion);
                     }
                 }
-                Effect::OuterGlow(glow) | Effect::InnerGlow(glow) => super::controlled_glow::validate(glow)?,
+                Effect::OuterGlow(glow) | Effect::InnerGlow(glow) => {
+                    super::controlled_contour::validate(&glow.contour, control)?;
+                    super::controlled_glow::validate(glow)?;
+                }
+                Effect::BevelEmboss(bevel) => {
+                    if !matches!(layer.content, photocraft_doc::LayerContent::Raster(_)) {
+                        return Err(RasterInputError::UnsupportedConversion);
+                    }
+                    super::controlled_contour::validate(&bevel.gloss_contour, control)?;
+                    if let Some(contour) = &bevel.contour {
+                        super::controlled_contour::validate(&contour.contour, control)?;
+                    }
+                    super::controlled_bevel::validate(bevel)?;
+                }
                 Effect::Stroke(st) => {
                     if !matches!(layer.content, photocraft_doc::LayerContent::Raster(_)) || !st.size.is_finite() {
                         return Err(RasterInputError::UnsupportedConversion);
@@ -3490,6 +3505,14 @@ mod checked_prepare {
                     }
                     continue;
                 }
+                Effect::BevelEmboss(b) => {
+                    super::controlled_bevel::validate_light(b, light)?;
+                    work = work.checked_add(super::controlled_bevel::work_units(rect.width() as usize, rect.height() as usize, b)?).ok_or(E::LimitExceeded)?;
+                    if work > 8_000_000_000 {
+                        return Err(E::LimitExceeded);
+                    }
+                    continue;
+                }
                 Effect::Stroke(_) => continue,
                 _ => return Err(E::UnsupportedConversion),
             };
@@ -3498,6 +3521,7 @@ mod checked_prepare {
             let sides = u64::from(rect.width()).checked_add(u64::from(rect.height())).ok_or(E::LimitExceeded)?;
             let line_work = u64::try_from(tent_radius).map_err(|_| E::LimitExceeded)?.checked_mul(sides).and_then(|n| n.checked_mul(16)).ok_or(E::LimitExceeded)?;
             let pixel_work = pixels.checked_mul(if radius > 0.0 { 320 } else { 128 }).ok_or(E::LimitExceeded)?;
+            work = work.checked_add(super::controlled_contour::requirements(&shadow.contour, None, false)?.work_units).ok_or(E::LimitExceeded)?;
             work = work.checked_add(pixel_work).and_then(|n| n.checked_add(line_work)).ok_or(E::LimitExceeded)?;
             if work > 8_000_000_000 {
                 return Err(E::LimitExceeded);
@@ -3513,9 +3537,21 @@ mod checked_prepare {
         if per.capacity() != count {
             return Err(E::LimitExceeded);
         }
+        let mut bevel_paint = Vec::new();
+        bevel_paint.try_reserve_exact(count).map_err(|_| E::AllocationFailed)?;
+        if bevel_paint.capacity() != count {
+            return Err(E::LimitExceeded);
+        }
+        bevel_paint.resize(count, BevelPaint::Inner);
         for e in &layer.effects.items {
             poll(control)?;
             if !e.enabled() {
+                continue;
+            }
+            if let Effect::BevelEmboss(b) = e {
+                let (maps, paint) = super::controlled_bevel::build(&shape, b, light, budget.saturating_sub(retained), control)?;
+                *bevel_paint.get_mut(per.len()).ok_or(E::LengthMismatch)? = paint;
+                per.push(maps);
                 continue;
             }
             if matches!(e, Effect::Stroke(_)) {
@@ -3561,6 +3597,9 @@ mod checked_prepare {
                         shift
                     };
                     let mut map = try_tent(&source, budget.saturating_sub(retained), blur, control)?;
+                    let lut = super::controlled_contour::prepare(&shadow.contour, None, false, budget.saturating_sub(retained), control)?;
+                    super::controlled_contour::apply(&mut map, lut.as_deref(), control)?;
+                    drop(lut);
                     checked_noise(&mut map, shadow.noise, (rect.x0, rect.y0), control)?;
                     if inner {
                         for (i, (v, a)) in map.v.iter_mut().zip(&shape.v).enumerate() {
@@ -3582,12 +3621,6 @@ mod checked_prepare {
             maps.push(map);
             per.push(maps);
         }
-        let mut bevel_paint = Vec::new();
-        bevel_paint.try_reserve_exact(count).map_err(|_| E::AllocationFailed)?;
-        if bevel_paint.capacity() != count {
-            return Err(E::LimitExceeded);
-        }
-        bevel_paint.resize(count, BevelPaint::Inner);
         let stroke_budget = budget.checked_sub(retained.checked_sub(stroke_retained).ok_or(E::LimitExceeded)?).ok_or(E::LimitExceeded)?;
         let fields = super::controlled_stroke::build(layer, &shape, rect, stroke_budget, control)?;
         poll(control)?;
@@ -3656,7 +3689,19 @@ mod checked_prepare {
             shadow.angle = 37.0;
             shadow.distance = 3.4;
             shadow.noise = 0.17;
-            shadow.contour = Contour::Linear;
+            shadow.contour = if spread == 0.4 {
+                Contour::Custom {
+                    name: String::new(),
+                    points: vec![
+                        photocraft_doc::adjust::CurvePoint { input: 0.0, output: 0.0 },
+                        photocraft_doc::adjust::CurvePoint { input: 0.45, output: 0.85 },
+                        photocraft_doc::adjust::CurvePoint { input: 1.0, output: 0.2 },
+                    ],
+                    corners: vec![false, true, false],
+                }
+            } else {
+                Contour::Linear
+            };
             let inner = Effect::InnerShadow(shadow.clone());
             layer.effects.items = vec![effect, inner];
             let rect = Rect::new(-3, 7, 38, 36);
@@ -3862,14 +3907,22 @@ pub(crate) fn checked_effect_map_scratch_bytes(
     )?;
     let mut lut = 0usize;
     let mut glow_peak = 0usize;
+    let mut bevel_peak = 0usize;
+    let mut shadow_contour_peak = 0usize;
     for e in &layer.effects.items {
         control.check().map_err(|_| E::Cancelled)?;
         if !e.enabled() {
             continue;
         }
         if let Effect::OuterGlow(g) | Effect::InnerGlow(g) = e {
-            lut = lut.max(controlled_glow::lut_bytes(g));
+            lut = lut.max(controlled_glow::contour_scratch_bytes(g)?);
             glow_peak = glow_peak.max(controlled_glow::scratch_bytes(rect.width() as usize, rect.height() as usize, g)?);
+        }
+        if let Effect::DropShadow(s) | Effect::InnerShadow(s) = e {
+            shadow_contour_peak = shadow_contour_peak.max(controlled_contour::requirements(&s.contour, None, false)?.peak_bytes);
+        }
+        if let Effect::BevelEmboss(b) = e {
+            bevel_peak = bevel_peak.max(controlled_bevel::scratch_bytes(rect.width() as usize, rect.height() as usize, b)?);
         }
     }
     let base = bytes
@@ -3879,7 +3932,7 @@ pub(crate) fn checked_effect_map_scratch_bytes(
         .ok_or(E::LimitExceeded)?;
     let stroke_plan = controlled_stroke::plan(layer, control)?;
     let stroke_peak = if stroke_plan.present { controlled_stroke::scratch_bytes(rect.width() as usize, rect.height() as usize, stroke_plan)? } else { 0 };
-    Ok(base.max(glow_peak).max(stroke_peak))
+    Ok(base.checked_add(shadow_contour_peak).ok_or(E::LimitExceeded)?.max(glow_peak).max(stroke_peak).max(bevel_peak))
 }
 
 /// Exact requested retained owners for the checked raster effect-map stack.
@@ -3895,7 +3948,14 @@ pub(crate) fn checked_effect_map_retained_bytes(
         rect,
         photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Grayscale, photocraft_color::SampleType::F32, false),
     )?;
-    let maps = count.checked_sub(plan.strokes).ok_or(E::LimitExceeded)?;
+    let mut bevels = 0usize;
+    for e in &layer.effects.items {
+        control.check().map_err(|_| E::Cancelled)?;
+        if e.enabled() && matches!(e, Effect::BevelEmboss(_)) {
+            bevels = bevels.checked_add(1).ok_or(E::LimitExceeded)?;
+        }
+    }
+    let maps = count.checked_sub(plan.strokes).and_then(|n| n.checked_add(bevels)).ok_or(E::LimitExceeded)?;
     bytes
         .checked_mul(maps.checked_add(1).ok_or(E::LimitExceeded)?)
         .and_then(|n| controlled_stroke::retained_bytes(rect.width() as usize, rect.height() as usize, plan).ok().and_then(|v| n.checked_add(v)))

@@ -30,6 +30,7 @@ pub mod gmm;
 pub mod grabcut;
 pub mod maxflow;
 pub mod quick;
+mod controlled_cut;
 pub mod sky;
 mod clean_controlled;
 pub use clean_controlled::{CleanupLimits, clean_mask_with_interrupt};

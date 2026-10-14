@@ -1,6 +1,6 @@
 //! Checked straight-alpha GIMP Normal composition in explicit source-profile spaces.
 //! Operators select union/backdrop/layer/intersection coverage; alpha is never gamma encoded.
-use photocraft_cms::xcf_color::{Encoding, effective_profile_from_definition};
+use photocraft_cms::xcf_color::Encoding;
 use photocraft_cms::{CmsError, Intent, Profile, Transform};
 
 #[path = "gimp_composite_controlled.rs"]
@@ -70,7 +70,9 @@ impl WorkingSpace {
         Self::new_with_interrupt(profile, stored, working, &photocraft_raster::Interrupt::NONE)
     }
     /// Same color equations and admission as `new`, with preparation fences and
-    /// fallible retained curve storage. CMS internals remain boundary-polled.
+    /// fallible retained curve storage and controlled paired CMS transforms.
+    /// Physical-Lab side-pipeline construction and builtin initialization retain
+    /// their explicit preparation boundaries.
     pub fn new_with_interrupt(profile: &Profile, stored: SampleEncoding, working: GimpSpace, control: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
         controlled::prepare(control, || Self::prepare_with_interrupt(profile, stored, working, control))
     }
@@ -113,8 +115,11 @@ impl WorkingSpace {
                 luminance,
             });
         }
-        let source = controlled::prepare(control, || Ok(effective_profile_from_definition(profile, encoding(stored))?))?;
-        let target = controlled::prepare(control, || Ok(photocraft_cms::Builtin::LabD50.profile().clone()))?;
+        let source = photocraft_cms::xcf_color::effective_profile_from_definition_with_control(profile, encoding(stored),
+            photocraft_cms::control::Limits::default(), &|| control.cancelled()).map_err(controlled::cms_error)?;
+        // Builtin initialization remains a fixed boundary; its owned clone is controlled.
+        let target = photocraft_cms::Builtin::LabD50.profile().try_clone_with_control(
+            photocraft_cms::control::Limits::default(), &|| control.cancelled()).map_err(controlled::cms_error)?;
         // Physical Lab bypasses ICC v4 normalized Lab output clipping. Only
         // matrix/TRC RGB definitions are qualified for these component modes.
         let physical_lab = if source.channels() == 3
@@ -147,10 +152,11 @@ impl WorkingSpace {
         } else {
             None
         };
+        let (forward, reverse) = controlled::transform_pair(&source, &target, control)?;
         Ok(Self {
             kind: working,
-            forward: Some(controlled::prepare(control, || Ok(Transform::new(&source, &target, Intent::RelativeColorimetric, false)?))?),
-            reverse: Some(controlled::prepare(control, || Ok(Transform::new(&target, &source, Intent::RelativeColorimetric, false)?))?),
+            forward: Some(forward),
+            reverse: Some(reverse),
             channels: profile.channels(),
             transfer: None,
             physical_lab,

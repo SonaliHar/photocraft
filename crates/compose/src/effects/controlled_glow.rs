@@ -1,15 +1,14 @@
 //! Controlled ordinary Glow coverage, preserving legacy range/order.
-use super::{Contour, Glow, GlowSource, GlowTechnique, Map, box_geom, spread_split};
+use super::{Glow, GlowSource, GlowTechnique, Map, box_geom, spread_split};
 use photocraft_raster::{Interrupt, MAX_CHECKED_RASTER_BYTES, RasterInputError as E};
-const TABLE_LEN: usize = 4096;
 const MAX_WORK: u64 = 8_000_000_000;
 fn poll(c: &Interrupt<'_>) -> Result<(), E> {
     c.check().map_err(|_| E::Cancelled)
 }
 pub(super) fn validate(g: &Glow) -> Result<(), E> {
     let (r, blur) = spread_split(g.size, g.spread);
-    if !matches!(g.contour, Contour::Linear)
-        || !g.size.is_finite()
+    super::controlled_contour::requirements(&g.contour, Some(g.range), false)?;
+    if !g.size.is_finite()
         || !g.spread.is_finite()
         || !r.is_finite()
         || !blur.is_finite()
@@ -22,16 +21,17 @@ pub(super) fn validate(g: &Glow) -> Result<(), E> {
     }
     Ok(())
 }
-pub(super) fn lut_bytes(g: &Glow) -> usize {
-    if g.range.clamp(0.01, 1.0) >= 0.999 { 0 } else { TABLE_LEN * 4 }
+pub(super) fn contour_scratch_bytes(g: &Glow) -> Result<usize, E> {
+    Ok(super::controlled_contour::requirements(&g.contour, Some(g.range), false)?.peak_bytes)
 }
 pub(super) fn work_units(w: usize, h: usize, g: &Glow) -> Result<u64, E> {
     validate(g)?;
     let n = w.checked_mul(h).ok_or(E::LimitExceeded)?;
+    let contour_work = super::controlled_contour::requirements(&g.contour, Some(g.range), false)?.work_units;
     if g.technique == GlowTechnique::Precise {
         let work = super::controlled_euclidean::work_units(w, h)?
             .checked_add((n as u64).checked_mul(64).ok_or(E::LimitExceeded)?)
-            .and_then(|n| n.checked_add((TABLE_LEN as u64) * 16))
+            .and_then(|n| n.checked_add(contour_work))
             .ok_or(E::LimitExceeded)?;
         if work > MAX_WORK {
             return Err(E::LimitExceeded);
@@ -41,7 +41,7 @@ pub(super) fn work_units(w: usize, h: usize, g: &Glow) -> Result<u64, E> {
     let (_, blur) = spread_split(g.size, g.spread);
     let (r, _, _) = box_geom(blur);
     let lines = (w as u64).checked_add(h as u64).and_then(|n| n.checked_mul(u64::try_from(r).ok()?)).and_then(|n| n.checked_mul(16)).ok_or(E::LimitExceeded)?;
-    let work = (n as u64).checked_mul(320).and_then(|n| n.checked_add(lines)).and_then(|n| n.checked_add((TABLE_LEN as u64) * 16)).ok_or(E::LimitExceeded)?;
+    let work = (n as u64).checked_mul(320).and_then(|n| n.checked_add(lines)).and_then(|n| n.checked_add(contour_work)).ok_or(E::LimitExceeded)?;
     if work > MAX_WORK {
         return Err(E::LimitExceeded);
     }
@@ -53,12 +53,15 @@ pub(super) fn scratch_bytes(w: usize, h: usize, g: &Glow) -> Result<usize, E> {
     validate(g)?;
     let n = w.checked_mul(h).ok_or(E::LimitExceeded)?;
     if g.technique == GlowTechnique::Precise {
-        return super::controlled_euclidean::scratch_bytes(w, h)?.checked_add(lut_bytes(g)).ok_or(E::LimitExceeded);
+        return super::controlled_euclidean::scratch_bytes(w, h)?.checked_add(contour_scratch_bytes(g)?).ok_or(E::LimitExceeded);
     }
     let (_, blur) = spread_split(g.size, g.spread);
     let (r, _, _) = box_geom(blur);
     let line = w.max(h).checked_add(usize::try_from(r).map_err(|_| E::LimitExceeded)?.checked_mul(2).ok_or(E::LimitExceeded)?).ok_or(E::LimitExceeded)?;
-    n.checked_mul(28).and_then(|n| line.checked_mul(24).and_then(|v| n.checked_add(v))).and_then(|n| n.checked_add(lut_bytes(g))).ok_or(E::LimitExceeded)
+    n.checked_mul(28)
+        .and_then(|n| line.checked_mul(24).and_then(|v| n.checked_add(v)))
+        .and_then(|n| n.checked_add(contour_scratch_bytes(g).ok()?))
+        .ok_or(E::LimitExceeded)
 }
 fn filled(n: usize, c: &Interrupt<'_>) -> Result<Vec<f32>, E> {
     poll(c)?;
@@ -72,31 +75,6 @@ fn filled(n: usize, c: &Interrupt<'_>) -> Result<Vec<f32>, E> {
         out.resize(out.len().saturating_add(4096).min(n), 0.0);
     }
     Ok(out)
-}
-fn range_lut(g: &Glow, c: &Interrupt<'_>) -> Result<Option<Vec<f32>>, E> {
-    let range = g.range.clamp(0.01, 1.0);
-    if range >= 0.999 {
-        return Ok(None);
-    }
-    let mut lut = filled(TABLE_LEN, c)?;
-    for (k, v) in lut.iter_mut().enumerate() {
-        if k.is_multiple_of(256) {
-            poll(c)?;
-        }
-        *v = (k as f32 / (TABLE_LEN - 1) as f32 / range).min(1.0);
-    }
-    Ok(Some(lut))
-}
-fn lookup(l: &[f32], v: f32) -> Result<f32, E> {
-    if l.len() != TABLE_LEN || !v.is_finite() {
-        return Err(E::InvalidSample);
-    }
-    let x = v.clamp(0.0, 1.0) * (l.len() - 1) as f32;
-    let i = x.floor() as usize;
-    let j = (i + 1).min(l.len() - 1);
-    let a = *l.get(i).ok_or(E::LengthMismatch)?;
-    let b = *l.get(j).ok_or(E::LengthMismatch)?;
-    Ok(a + (b - a) * (x - i as f32))
 }
 pub(super) fn build(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32), budget: usize, c: &Interrupt<'_>) -> Result<Map, E> {
     poll(c)?;
@@ -153,14 +131,9 @@ pub(super) fn build(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32), budg
             map
         }
     };
-    if let Some(lut) = range_lut(g, c)? {
-        for (i, v) in map.v.iter_mut().enumerate() {
-            if i.is_multiple_of(1024) {
-                poll(c)?;
-            }
-            *v = lookup(&lut, *v)?;
-        }
-    }
+    let lut = super::controlled_contour::prepare(&g.contour, Some(g.range), false, budget, c)?;
+    super::controlled_contour::apply(&mut map, lut.as_deref(), c)?;
+    drop(lut);
     if inner && g.source == GlowSource::Center {
         for (i, v) in map.v.iter_mut().enumerate() {
             if i.is_multiple_of(1024) {
@@ -192,6 +165,7 @@ pub(super) fn build(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32), budg
 }
 #[cfg(test)]
 mod tests {
+    use super::super::Contour;
     use super::*;
     fn glow() -> Glow {
         Glow {
@@ -219,6 +193,17 @@ mod tests {
                 for inner in [false, true] {
                     for source in [GlowSource::Edge, GlowSource::Center] {
                         let mut g = glow();
+                        if range == 0.5 {
+                            g.contour = Contour::Custom {
+                                name: String::new(),
+                                points: vec![
+                                    photocraft_doc::adjust::CurvePoint { input: 0.0, output: 0.0 },
+                                    photocraft_doc::adjust::CurvePoint { input: 0.45, output: 0.85 },
+                                    photocraft_doc::adjust::CurvePoint { input: 1.0, output: 0.2 },
+                                ],
+                                corners: vec![false, true, false],
+                            };
+                        }
                         g.range = range;
                         g.source = source;
                         let expected = super::super::glow_map(&shape, &g, inner, (-7, 13));
@@ -255,6 +240,17 @@ mod tests {
                 for inner in [false, true] {
                     for source in [GlowSource::Edge, GlowSource::Center] {
                         let mut g = glow();
+                        if range == 0.5 {
+                            g.contour = Contour::Custom {
+                                name: String::new(),
+                                points: vec![
+                                    photocraft_doc::adjust::CurvePoint { input: 0.0, output: 0.0 },
+                                    photocraft_doc::adjust::CurvePoint { input: 0.45, output: 0.85 },
+                                    photocraft_doc::adjust::CurvePoint { input: 1.0, output: 0.2 },
+                                ],
+                                corners: vec![false, true, false],
+                            };
+                        }
                         g.technique = GlowTechnique::Precise;
                         g.range = range;
                         g.source = source;

@@ -597,16 +597,21 @@ and inherited renderer/provider boundaries remain explicit. Named previews avoid
 have controlled workers, and explicitly generated Focus Area/Sky
 forms carry private origins without changing immediate menu routing. These paths
 have not yet passed the deferred runtime checks.
-Refine Edge's six ordinary outputs, including color decontamination, have bounded
-preparation when brush strokes are empty. Its dialog carries a private target
-origin; unsupported brush confirmation refuses before closing or saving options.
-Rectangle Object Selection retains the original GrabCut/GMM policy in a controlled
-worker; point and Subject retain their existing paths. Native Pencil and matching
-live-stroke offers use the owned, tokened recipe consumer while preview APIs retain
-their current behavior. Precise Glow and Raster Stroke retain original distance
-math and thresholds with shared-field admission under the existing 64 MiB stage.
-Controlled conversion, cubic and floating-anchor profile preparation uses lower
-CMS envelopes; Transform/WorkingSpace constructors remain explicit boundaries.
+Refine Edge's six ordinary outputs, including brush refinement and color
+decontamination, have bounded preparation. Its dialog carries a private target
+origin. Rectangle/point Object Selection, Quick Selection and Subject retain their
+original algorithms in controlled workers. Quick uses dynamic per-window admission
+so a large canvas need not preallocate every later speculative graph. Object/Quick
+gestures carry private target origins; Subject and point caches publish after the
+final document fence. Ordinary Brush/Pencil and native Multiply/Screen use the
+owned, tokened recipe consumer while preview APIs retain their current behavior.
+Precise Glow, Raster Stroke, all Bevel techniques and custom contours retain
+original math with shared-field admission under the existing 64 MiB stage.
+Controlled conversion/cubic carry prepared CMS transforms; WorkingSpace controls
+paired Lab constructors, with physical-Lab side-pipeline preparation still an
+explicit boundary. Custom CMYK factories/default prewarming preserve existing
+scope/fallback semantics under lower limits; builtin initialization remains bounded
+separately. These are implementation paths, with runtime checks still deferred.
 Modern raster composition Properties offers captured Edit/Apply/Reset with
 explicit supported spaces/operators and read-only retained Auto resolution.
 Source Details includes saved channels,

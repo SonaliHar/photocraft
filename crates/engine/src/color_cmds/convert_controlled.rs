@@ -1,6 +1,6 @@
 //! Controlled jobs for the existing CMS color conversion lane.
 //! Destination profiles use the existing ColorState resolver, never stored locators.
-use super::{convert_document_with_profile_limits, validate_analytic_xcf_profile_change_with_interrupt, space_mode};
+use super::{convert_document_with_prepared_profiles, validate_analytic_xcf_profile_change_with_interrupt, space_mode};
 #[cfg(test)]
 use super::convert_document_with_interrupt;
 use crate::{DocumentSnapshot, EngineError, Result, Session};
@@ -94,7 +94,33 @@ pub(super) fn profile_preparation(doc:&photocraft_doc::Document,dst:&Profile,lim
     poll(control)?;Ok(ProfilePreparation{peak_bytes:peak,work_units:work,source_limits,destination_limits})
 }
 
-fn prepare(snapshot:&DocumentSnapshot,dst:&Profile,control:&Interrupt<'_>)->Result<photocraft_cms::control::Limits> {
+pub(super) struct PreparedConversion {
+    pub transform:photocraft_cms::Transform,
+    pub profile_bytes:Arc<Vec<u8>>,
+}
+/// Prepare all owned profile/transform state before the caller clones pixel/model
+/// output. Earlier phase work and simultaneously live bytes remain reserved.
+pub(super) fn prepare_profiles(doc:&photocraft_doc::Document,dst:&Profile,intent:Intent,bpc:bool,limits:photocraft_cms::control::Limits,control:&Interrupt<'_>)->Result<PreparedConversion> {
+    let phases=profile_preparation(doc,dst,limits,control)?;
+    let source=if matches!(doc.mode,ColorMode::Rgb|ColorMode::Grayscale|ColorMode::Indexed){super::try_document_profile_with_limits(doc,phases.source_limits,control)?}else{
+        // Preserve the old CMYK/Lab compatibility provider boundary; the owned
+        // resulting definition is admitted before controlled linking/copying.
+        poll(control)?;let profile=super::document_profile(doc);poll(control)?;profile
+    };
+    let profile_bytes=dst.to_bytes_with_control(phases.destination_limits,&||control.cancelled()).map_err(cms_error)?;
+    let outside=if dst.encoded_bytes().is_none(){profile_bytes.capacity()}else{0};
+    let constructor_limits=photocraft_cms::control::Limits{
+        resident_bytes:limits.resident_bytes.checked_sub(outside).ok_or_else(||error("destination encoded owner headroom"))?,
+        work_units:limits.work_units.checked_sub(phases.work_units).ok_or_else(||error("profile preparation consumed constructor work"))?,
+    };
+    let options=photocraft_cms::transform::TransformOptions{intent,bpc,..Default::default()};let cancelled=||control.cancelled();
+    let required=photocraft_cms::Transform::requirements_with_control(&source,dst,options,constructor_limits,&cancelled).map_err(cms_error)?;
+    required.peak_resident_bytes.checked_add(outside).filter(|v|*v<=limits.resident_bytes).ok_or_else(||error("aggregate source/destination/transform headroom"))?;
+    required.work_units.checked_add(phases.work_units).filter(|v|*v<=limits.work_units).ok_or_else(||error("aggregate profile/transform work"))?;
+    let transform=photocraft_cms::Transform::with_options_with_control(&source,dst,options,constructor_limits,&cancelled).map_err(cms_error)?;
+    poll(control)?;Ok(PreparedConversion{transform,profile_bytes})
+}
+fn prepare(snapshot:&DocumentSnapshot,dst:&Profile,intent:Intent,bpc:bool,control:&Interrupt<'_>)->Result<PreparedConversion> {
     poll(control)?;snapshot.validate_resident()?;
     snapshot.validate_xcf_state_with(control).map_err(|e|if control.cancelled(){EngineError::Cancelled}else{error(e)})?;
     validate_analytic_xcf_profile_change_with_interrupt(snapshot,Some(dst),control)?;
@@ -128,15 +154,18 @@ fn prepare(snapshot:&DocumentSnapshot,dst:&Profile,control:&Interrupt<'_>)->Resu
     let profiles=profile_preparation(snapshot,dst,profile_limits,control)?;
     retained.checked_add(profiles.peak_bytes as u64).filter(|v|*v<=MAX_CHECKED_RASTER_BYTES).ok_or_else(||error("aggregate profile/model/output headroom limit"))?;
     work.checked_add(profiles.work_units).filter(|v|*v<=1<<32).ok_or_else(||error("aggregate profile/sample work limit"))?;
-    poll(control)?;Ok(profile_limits)
+    // The returned owned bundle is prepaid under the same remaining envelope;
+    // no source profile or Transform is rebuilt after the Document clone.
+    let prepared=prepare_profiles(snapshot,dst,intent,bpc,profile_limits,control)?;
+    poll(control)?;Ok(prepared)
 }
 fn run(session:&mut Session,dst:Arc<Profile>,intent:Intent,bpc:bool,label:&'static str,include_mode:bool)->Result<Value> {
     let state=session.active().ok_or(EngineError::NoDocument)?;
     let baseline=state.doc.clone();let revision=state.revision;let weak=baseline.downgrade();let work_base=baseline.clone();
     crate::jobs::run(session,label,true,move|ctx|ctx.stage(0.0,0.95,label,|control| {
-        let profile_limits=prepare(&work_base,&dst,control)?;poll(control)?;
+        let profiles=prepare(&work_base,&dst,intent,bpc,control)?;poll(control)?;
         let mut document=(*work_base).clone();
-        convert_document_with_profile_limits(&mut document,&dst,intent,bpc,profile_limits,control)?;poll(control)?;
+        convert_document_with_prepared_profiles(&mut document,&dst,intent,bpc,&profiles,control)?;poll(control)?;
         let response=if include_mode {json!({"profile":dst.description,"mode":format!("{:?}",document.mode),"intent":intent.id(),"bpc":bpc})}
             else {json!({"profile":dst.description,"intent":intent.id(),"bpc":bpc})};
         Ok((document,response,ctx.clone()))
@@ -206,7 +235,7 @@ mod tests {
         let mut session=Session::new();session.execute("file.new",json!({"width":1,"height":1})).unwrap();
         let original=session.active().unwrap().doc.clone();let cancel=||true;
         let dst=session.color.working(ColorMode::Grayscale);
-        assert!(matches!(prepare(&original,&dst,&Interrupt::cancel_only(&cancel)),Err(EngineError::Cancelled)));
+        assert!(matches!(prepare(&original,&dst,Intent::RelativeColorimetric,true,&Interrupt::cancel_only(&cancel)),Err(EngineError::Cancelled)));
         assert!(original.shares_state(&session.active().unwrap().doc));
         assert_eq!(original.icc_profile,session.active().unwrap().doc.icc_profile);
         assert_eq!(original.physical_resolution,session.active().unwrap().doc.physical_resolution);
@@ -239,6 +268,14 @@ mod tests {
         assert!(profile_preparation(&input,destination,photocraft_cms::control::Limits{resident_bytes:1,work_units:1},&Interrupt::NONE).is_err());assert_eq!(input,original);
         let visits=Cell::new(0);let cancel=||{visits.set(visits.get()+1);visits.get()>80};
         assert!(matches!(convert_document_with_interrupt(&mut input,destination,Intent::RelativeColorimetric,true,&Interrupt::cancel_only(&cancel)),Err(EngineError::Cancelled)));assert_eq!(input,original);
+    }
+
+    #[test]
+    fn owned_constructor_bundle_preserves_requested_intent_bpc_and_legacy_pipeline() {
+        let mut input=photocraft_doc::Document::new("owned transform",photocraft_geom::Size::new(1,1),ColorMode::Rgb,photocraft_color::SampleType::F64);
+        input.icc_profile=Some(Arc::new(photocraft_cms::Builtin::DisplayP3.profile().to_bytes().as_ref().clone()));let before=input.clone();let destination=photocraft_cms::Builtin::Srgb.profile();
+        for intent in [Intent::Perceptual,Intent::RelativeColorimetric,Intent::Saturation,Intent::AbsoluteColorimetric]{for bpc in [false,true]{let source=super::super::try_document_profile(&input).unwrap();let expected=photocraft_cms::Transform::new(&source,destination,intent,bpc).unwrap();let prepared=prepare_profiles(&input,destination,intent,bpc,photocraft_cms::control::Limits::default(),&Interrupt::NONE).unwrap();assert_eq!(prepared.transform.pipeline(),expected.pipeline());assert_eq!(prepared.transform.options(),expected.options());assert_eq!(prepared.profile_bytes,destination.to_bytes());}}
+        assert_eq!(input,before);
     }
 
 }

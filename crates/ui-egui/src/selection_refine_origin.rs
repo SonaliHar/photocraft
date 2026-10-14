@@ -1,5 +1,5 @@
-//! Captured Refine Edge forms. The brush remains an explicitly refused captured
-//! output route until its controlled worker exists; no silent legacy fallback.
+//! Captured Refine Edge forms, including the controlled brush outputs.
+//! Source qualification and output preparation remain engine authority.
 use crate::PhotocraftApp;
 use photocraft_doc::{DocId,LayerId};
 use photocraft_engine::{WeakDocumentSnapshot,channel_cmds::ChannelView};
@@ -116,9 +116,6 @@ pub(crate) fn validate(app:&PhotocraftApp,dialog:u64,fields_value:&Map<String,Va
     fields(fields_value)?;
     let command=fields_value.get("__command").and_then(Value::as_str).ok_or_else(invalid)?;
     if !handles(command) {return Ok(());}
-    if fields_value.get("refineStrokes").and_then(Value::as_array).is_some_and(|strokes|!strokes.is_empty()) {
-        return Err(tl!("Applying Refine Edge brush strokes is not supported in this dialog yet. Clear Brush Strokes to continue.").to_owned());
-    }
     idle(app)?;let origin=app.ui.selection_refine_origin.as_ref().ok_or_else(stale)?;
     let active=app.session.active().ok_or_else(stale)?;
     if origin.dialog!=dialog || origin.command!=command || active.doc.id!=origin.document || active.revision!=origin.revision
@@ -165,16 +162,27 @@ mod tests {
         assert!(app.ui.selection_refine_origin.is_none());assert!(validate(&app,7,&fields).is_err());
     }
     #[test]
-    fn nonempty_brush_confirmation_refuses_before_close_and_preserves_doc_and_history() {
+    fn nonempty_brush_keeps_exact_points_order_and_captured_pair_for_each_output() {
+        for output in ["selection","layerMask","newLayer","newLayerWithMask","newDocument","newDocumentWithMask"] {
+            for decontaminate in [false,true] {
+                let mut app=app();let mut fields=settings();
+                let brush=json!([{"points":[[1,1],[2,1]],"size":3,"mode":"add"},{"points":[[2,2]],"size":2,"mode":"subtract"}]);
+                fields.insert("refineStrokes".into(),brush.clone());fields.insert("output".into(),json!(output));fields.insert("decontaminate".into(),json!(decontaminate));
+                capture_open(&mut app,7,"select.refineEdge");assert!(validate(&app,7,&fields).is_ok());
+                let request=prepare(&app,7,&fields,crate::filter_dialog::params_of(&fields)).unwrap();
+                assert_eq!(request["refineStrokes"],brush);assert_eq!(request["output"],output);assert_eq!(request["decontaminate"],decontaminate);
+                assert_eq!(request["documentId"],app.session.active().unwrap().doc.id.0.to_string());
+            }
+        }
+    }
+    #[test]
+    fn stale_brush_confirmation_keeps_form_document_and_history() {
         let mut app=app();let mut fields=settings();fields.insert("refineStrokes".into(),json!([{"points":[[1,1]],"size":3,"mode":"add"}]));
-        assert!(super::fields(&fields).is_ok());
         let id=app.ui.open_dialog(crate::state::DialogKind::Command,fields);capture_open(&mut app,id,"select.refineEdge");
+        app.session.active_mut().unwrap().channel_view.target=photocraft_engine::channel_cmds::ChannelTarget::Color(0);
         let before=app.session.active().unwrap().doc.clone();let history=app.session.active().unwrap().history.past_len();
         assert!(crate::dialogs::confirm(&mut app,id).is_err());assert!(app.ui.dialogs.iter().any(|dialog|dialog.id==id));
-        assert!(app.ui.selection_refine_origin.is_some());assert!(app.session.active().unwrap().doc.shares_state(&before));
-        assert_eq!(app.session.active().unwrap().history.past_len(),history);
-        app.ui.dialog_mut(id).unwrap().fields.insert("refineStrokes".into(),json!([]));
-        let retry=app.ui.dialog_mut(id).unwrap().fields.clone();assert!(validate(&app,id,&retry).is_ok());
+        assert!(app.session.active().unwrap().doc.shares_state(&before));assert_eq!(app.session.active().unwrap().history.past_len(),history);
     }
     #[test]
     fn malformed_arrays_and_stale_revision_refuse_before_params_copy() {

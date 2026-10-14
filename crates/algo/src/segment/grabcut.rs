@@ -285,5 +285,5 @@ fn box3(px: &[[f32; 3]], w: usize, h: usize) -> Vec<[f32; 3]> {
     out
 }
 
-mod controlled;
-pub use controlled::{ObjectSelectionLimits,ObjectSelectionRequirements,requirements,object_select_with_interrupt};
+pub(crate) mod controlled;
+pub use controlled::{ObjectSelectionLimits,ObjectSelectionRequirements,requirements,object_select_with_interrupt,point_requirements,object_at_with_interrupt};

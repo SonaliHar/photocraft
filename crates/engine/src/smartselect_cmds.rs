@@ -4,7 +4,7 @@
 //! composite), run them, and store the result as the selection (or a mask / new layer).
 
 use photocraft_algo::matting::{self, RefineParams};
-use photocraft_algo::segment::{Sampler, SurfaceSampler, grabcut, quick, subject};
+use photocraft_algo::segment::{Sampler, SurfaceSampler, grabcut};
 use photocraft_algo::selection::{Region, SelectionMode, combine_region};
 use photocraft_doc::{Document, Layer, LayerContent, LayerId, LayerMask};
 use photocraft_geom::Rect;
@@ -99,37 +99,8 @@ fn apply(s: &mut Session, label: &str, region: Option<&Region>, m: SelectionMode
     Ok(json!({ "selected": selected, "changed": true, "bounds": bbox.map(|r| [r.x0, r.y0, r.width() as i32, r.height() as i32]) }))
 }
 
-fn points(p: &Value) -> Vec<(f32, f32)> {
-    p.get("points")
-        .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(|q| Some((q.get(0)?.as_f64()? as f32, q.get(1)?.as_f64()? as f32))).collect())
-        .unwrap_or_default()
-}
-
-/// Auto-Enhance for Quick Selection: a light edge refinement that flows the edge towards image
-/// edges and removes blockiness.
-const ENHANCE: RefineParams = RefineParams { radius: 4.0, smart_radius: true, smooth: 15.0, feather: 0.0, contrast: 25.0, shift_edge: 0.0 };
-
 fn quick_selection(s: &mut Session, p: &Value) -> Result<Value> {
-    let pts = points(p);
-    if pts.is_empty() {
-        return Err(bad("select.quick", "needs at least one point"));
-    }
-    let size = f(p, "size", 30.0).clamp(1.0, 5000.0);
-    let m = match p.get("mode").and_then(Value::as_str).unwrap_or("add") {
-        "subtract" => SelectionMode::Subtract,
-        "replace" | "new" => SelectionMode::Replace,
-        _ => SelectionMode::Add,
-    };
-    let enhance = b(p, "enhanceEdge", false);
-    let region = with_sampler(s, b(p, "sampleAllLayers", false), |smp, doc| {
-        let canvas = doc.bounds();
-        let Some(r) = quick::quick_select(smp, canvas, &pts, size, quick::WORK_PX)? else {
-            return Ok(None);
-        };
-        if enhance { matting::refine_mask(smp, &matting::region_reader(&r), r.bbox, canvas, &ENHANCE) } else { Ok(Some(r)) }
-    })?;
-    apply(s, "Quick Selection", region.as_ref(), m)
+    crate::selection_quick_controlled::run(s, p)
 }
 
 fn rect_param(p: &Value) -> Option<Rect> {
@@ -231,6 +202,122 @@ impl ObjectFinderCache {
     }
 }
 
+/// Fixed-count owned cache witness. No masks/documents are deep-cloned.
+pub(crate) struct ObjectFinderSnapshot {
+    document: Option<std::sync::Arc<Document>>,
+    document_id: Option<photocraft_doc::DocId>,
+    target: Option<LayerId>,
+    regions: [Option<std::sync::Arc<Region>>; OBJECT_FINDER_ENTRIES],
+}
+impl ObjectFinderCache {
+    pub(crate) fn capture_controlled(&self) -> Result<ObjectFinderSnapshot> {
+        if self.regions.len() > OBJECT_FINDER_ENTRIES {
+            return Err(bad("select.object", "finder cache entry limit"));
+        }
+        Ok(ObjectFinderSnapshot {
+            document: self.doc.upgrade(),
+            document_id: self.doc_id,
+            target: self.target,
+            regions: std::array::from_fn(|i| self.regions.get(i).cloned()),
+        })
+    }
+    pub(crate) fn bind_controlled(&mut self, doc: &std::sync::Arc<Document>) {
+        self.doc = std::sync::Arc::downgrade(doc);
+        self.doc_id = Some(doc.id);
+    }
+}
+impl ObjectFinderSnapshot {
+    pub(crate) fn retained_with_interrupt(&self, control: &photocraft_raster::Interrupt<'_>) -> Result<u64> {
+        let mut bytes = 0u64;
+        for region in self.regions.iter().flatten() {
+            control.check().map_err(|_| EngineError::Cancelled)?;
+            let n = u64::from(region.bbox.width()).checked_mul(u64::from(region.bbox.height())).ok_or_else(|| bad("select.object", "finder mask bounds"))?;
+            if n != region.mask.len() as u64 {
+                return Err(bad("select.object", "finder mask length"));
+            }
+            bytes = bytes.checked_add(region.mask.capacity() as u64).ok_or_else(|| bad("select.object", "finder cache residency"))?;
+        }
+        if let Some(document) = &self.document {
+            let limits = photocraft_io::NativeSaveLimits::default().preparation;
+            let model = photocraft_io::retained_native_model_bytes(document, limits, control).map_err(|e| {
+                if matches!(e, photocraft_io::IoError::Cancelled) || control.cancelled() { EngineError::Cancelled } else { EngineError::Other(e.to_string()) }
+            })? as u64;
+            let payload = photocraft_io::retained_native_payload_bytes(document, limits, control).map_err(|e| {
+                if matches!(e, photocraft_io::IoError::Cancelled) || control.cancelled() { EngineError::Cancelled } else { EngineError::Other(e.to_string()) }
+            })? as u64;
+            bytes = bytes.checked_add(model).and_then(|v| v.checked_add(payload)).ok_or_else(|| bad("select.object", "finder document residency"))?;
+            let raster = crate::DocumentSnapshot::resident_raster_footprint_of(document, control)?;
+            bytes = bytes
+                .checked_add(raster.retained_bytes)
+                .and_then(|v| v.checked_add(raster.clone_metadata_bytes))
+                .ok_or_else(|| bad("select.object", "finder raster residency"))?;
+        }
+        control.check().map_err(|_| EngineError::Cancelled)?;
+        Ok(bytes)
+    }
+    pub(crate) fn lookup_controlled(
+        &self,
+        doc: &Document,
+        target: Option<LayerId>,
+        x: f32,
+        y: f32,
+        control: &photocraft_raster::Interrupt<'_>,
+        charge: &mut dyn FnMut(u64) -> Result<()>,
+    ) -> Result<(Option<std::sync::Arc<Region>>, bool)> {
+        control.check().map_err(|_| EngineError::Cancelled)?;
+        let valid = if self.document_id != Some(doc.id) || self.target != target {
+            false
+        } else if let Some(old) = &self.document {
+            std::ptr::eq(old.as_ref(), doc) || crate::layer_multi_cmds::same_plain_pixels_with_interrupt(old, doc, control, charge)?
+        } else {
+            false
+        };
+        if !valid {
+            return Ok((None, false));
+        }
+        for region in self.regions.iter().flatten() {
+            charge(1)?;
+            control.check().map_err(|_| EngineError::Cancelled)?;
+            if region.at(x.floor() as i32, y.floor() as i32) >= 0.5 {
+                return Ok((Some(std::sync::Arc::clone(region)), true));
+            }
+        }
+        Ok((None, true))
+    }
+    pub(crate) fn prepare_update(
+        &self,
+        document_id: photocraft_doc::DocId,
+        target: Option<LayerId>,
+        valid: bool,
+        hit: bool,
+        new: Option<std::sync::Arc<Region>>,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<Option<ObjectFinderCache>> {
+        if new.is_none() && !valid {
+            return Ok(None);
+        }
+        let mut regions = Vec::new();
+        regions.try_reserve_exact(OBJECT_FINDER_ENTRIES).map_err(|_| bad("select.object", "finder cache allocation"))?;
+        if regions.capacity() > OBJECT_FINDER_ENTRIES + 16 {
+            return Err(bad("select.object", "finder cache capacity"));
+        }
+        if valid {
+            for region in self.regions.iter().flatten() {
+                control.check().map_err(|_| EngineError::Cancelled)?;
+                regions.push(std::sync::Arc::clone(region));
+            }
+        }
+        if !hit && let Some(region) = new {
+            if regions.len() >= OBJECT_FINDER_ENTRIES {
+                regions.remove(0);
+            }
+            regions.push(region);
+        }
+        control.check().map_err(|_| EngineError::Cancelled)?;
+        Ok(Some(ObjectFinderCache { doc: std::sync::Weak::new(), doc_id: Some(document_id), target, regions }))
+    }
+}
+
 /// `select.object` with `"point"`: the Object Finder's object under the point (cached).
 fn object_at_point(s: &mut Session, p: &Value, (x, y): (f32, f32)) -> Result<Value> {
     let all_layers = b(p, "sampleAllLayers", false);
@@ -297,31 +384,70 @@ impl SubjectCache {
     }
 }
 
-fn select_subject(s: &mut Session, p: &Value) -> Result<Value> {
-    let all_layers = b(p, "sampleAllLayers", true);
-    let d = s.active().ok_or(EngineError::NoDocument)?;
-    // What `with_doc_sampler` samples: the active layer's pixels, else the composite.
-    let target = d.active_layer.filter(|id| !all_layers && d.doc.layer(*id).and_then(Layer::surface).is_some());
-    let c = &s.subject_cache;
-    let hit = c.target == target && c.doc.upgrade().is_some_and(|old| crate::layer_multi_cmds::same_pixels(&old, &d.doc));
-    let region = if hit {
-        c.region.clone()
-    } else {
-        let doc = std::sync::Arc::clone(d.doc.resident_arc().ok_or(photocraft_raster::backing::BackingError::Unsupported)?);
-        let region = with_doc_sampler(&doc, d.active_layer, all_layers, |smp, doc| subject::select_subject(smp, doc.bounds()))?.map(std::sync::Arc::new);
-        s.subject_cache = SubjectCache { doc: std::sync::Arc::downgrade(&doc), doc_id: Some(doc.id), target, region: region.clone() };
-        region
-    };
-    let out = apply(s, "Select Subject", region.as_deref(), mode(p, "replace"))?;
-    // Follow the document past the selection edit just made (same pixels), so a short history
-    // dropping the older state doesn't turn the next repeat into a miss.
-    if let Some(d) = s.active()
-        && s.subject_cache.doc_id == Some(d.doc.id)
-        && s.subject_cache.doc.upgrade().is_some_and(|old| crate::layer_multi_cmds::same_pixels(&old, &d.doc))
-    {
-        s.subject_cache.doc = std::sync::Arc::downgrade(d.doc.resident_arc().ok_or(photocraft_raster::backing::BackingError::Unsupported)?);
+/// Snapshot holds only shared cache owners until private worker admission.
+pub(crate) struct SubjectSnapshot {
+    witness: ObjectFinderSnapshot,
+}
+impl SubjectCache {
+    pub(crate) fn capture_controlled(&self) -> SubjectSnapshot {
+        SubjectSnapshot {
+            witness: ObjectFinderSnapshot {
+                document: self.doc.upgrade(),
+                document_id: self.doc_id,
+                target: self.target,
+                regions: std::array::from_fn(|i| if i == 0 { self.region.clone() } else { None }),
+            },
+        }
     }
-    Ok(out)
+    pub(crate) fn bind_controlled(&mut self, doc: &std::sync::Arc<Document>) {
+        if self.doc_id == Some(doc.id) {
+            self.doc = std::sync::Arc::downgrade(doc);
+        }
+    }
+}
+impl SubjectSnapshot {
+    pub(crate) fn retained_with_interrupt(&self, c: &photocraft_raster::Interrupt<'_>) -> Result<u64> {
+        self.witness.retained_with_interrupt(c)
+    }
+    pub(crate) fn lookup_controlled(
+        &self,
+        doc: &Document,
+        target: Option<LayerId>,
+        c: &photocraft_raster::Interrupt<'_>,
+        charge: &mut dyn FnMut(u64) -> Result<()>,
+    ) -> Result<(Option<std::sync::Arc<Region>>, bool)> {
+        c.check().map_err(|_| EngineError::Cancelled)?;
+        let hit = self.witness.target == target
+            && if let Some(old) = &self.witness.document {
+                std::ptr::eq(old.as_ref(), doc) || crate::layer_multi_cmds::same_plain_pixels_with_interrupt(old, doc, c, charge)?
+            } else {
+                false
+            };
+        Ok((if hit { self.witness.regions.first().and_then(Option::as_ref).cloned() } else { None }, hit))
+    }
+    pub(crate) fn prepare_update(
+        &self,
+        document_id: photocraft_doc::DocId,
+        target: Option<LayerId>,
+        region: Option<std::sync::Arc<Region>>,
+        hit: bool,
+    ) -> SubjectCache {
+        // A cross-document same-pixels hit keeps the original weak owner, as
+        // upstream's doc_id-guarded follow does. A new result binds on publication.
+        if hit {
+            SubjectCache {
+                doc: self.witness.document.as_ref().map_or_else(std::sync::Weak::new, std::sync::Arc::downgrade),
+                doc_id: self.witness.document_id,
+                target,
+                region,
+            }
+        } else {
+            SubjectCache { doc: std::sync::Weak::new(), doc_id: Some(document_id), target, region }
+        }
+    }
+}
+fn select_subject(s: &mut Session, p: &Value) -> Result<Value> {
+    crate::selection_subject_controlled::run(s, p)
 }
 
 fn focus_area(s: &mut Session, p: &Value) -> Result<Value> {
@@ -507,7 +633,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.quick",
             "Quick Selection",
             [],
-            r##"{"points":[[x,y],…],"size":px=30,"mode":"add|subtract|replace"="add","sampleAllLayers":bool=false,"enhanceEdge":bool=false}"##,
+            r##"{"points":[[x,y],…],"size":px=30,"mode":"add|subtract|replace"="add","sampleAllLayers":bool=false,"enhanceEdge":bool=false,"documentId"?:canonical decimal string,"expectedRevision"?:canonical decimal string}"##,
             has_doc,
             quick_selection
         ),
@@ -515,7 +641,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.object",
             "Object Selection",
             [],
-            r##"{"rect":[x,y,w,h] | "point":[x,y],"mode":"replace|add|subtract|intersect"="replace","sampleAllLayers":bool=false,"documentId"?:canonical decimal string,"expectedRevision"?:canonical decimal string} (captured pair: rectangle only; point: the Object Finder's object under the point, as hovering previews it)"##,
+            r##"{"rect":[x,y,w,h] | "point":[x,y],"mode":"replace|add|subtract|intersect"="replace","sampleAllLayers":bool=false,"documentId"?:canonical decimal string,"expectedRevision"?:canonical decimal string} (rect takes precedence; point: the Object Finder's object under the point, as hovering previews it)"##,
             has_doc,
             object_selection
         ),
@@ -523,7 +649,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.subject",
             "Subject",
             ["Select"],
-            r##"{"sampleAllLayers":bool=true,"mode":"replace|add|subtract|intersect"="replace"}"##,
+            r##"{"sampleAllLayers":bool=true,"mode":"replace|add|subtract|intersect"="replace","documentId"?:canonical decimal string,"expectedRevision"?:canonical decimal string}"##,
             has_doc,
             select_subject
         ),

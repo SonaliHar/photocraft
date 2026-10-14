@@ -331,3 +331,7 @@ mod tests {
         assert!(EdgeBrush::new(&[off, nan, empty], canvas).is_none());
     }
 }
+
+mod controlled;
+pub use controlled::BrushRequirements;
+pub(super) use controlled::estimate_with_interrupt;

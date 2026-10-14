@@ -54,6 +54,9 @@ fn parameters(p: &RefineParams) -> Result<(), E> {
     Ok(())
 }
 pub fn requirements(content: Rect, canvas: Rect, p: &RefineParams) -> Result<RefineRequirements, E> {
+    requirements_with_brush_bounds(content, canvas, p, Rect::EMPTY, 0)
+}
+pub fn requirements_with_brush_bounds(content: Rect, canvas: Rect, p: &RefineParams, added: Rect, window: usize) -> Result<RefineRequirements, E> {
     parameters(p)?;
     if canvas.x1 < canvas.x0
         || canvas.y1 < canvas.y0
@@ -64,8 +67,11 @@ pub fn requirements(content: Rect, canvas: Rect, p: &RefineParams) -> Result<Ref
         return Err(E::InvalidBounds);
     }
     let content = content.intersect(&canvas);
-    let bbox = if content.is_empty() { Rect::EMPTY } else { content.inflate(p.spread()).intersect(&canvas) };
-    let halo = p.halo();
+    let bbox = if content.is_empty() { Rect::EMPTY } else { content.inflate(p.spread()).union(&added).intersect(&canvas) };
+    if window > 64 {
+        return Err(E::InvalidBounds);
+    }
+    let halo = p.halo().checked_add(i32::try_from(window.checked_mul(4).ok_or(E::LimitExceeded)?).map_err(|_| E::InvalidBounds)?).ok_or(E::InvalidBounds)?;
     let w = (bbox.width() as usize).min(256).checked_add(2 * halo as usize).ok_or(E::LimitExceeded)?.min(canvas.width() as usize);
     let h = (bbox.height() as usize).min(256).checked_add(2 * halo as usize).ok_or(E::LimitExceeded)?.min(canvas.height() as usize);
     let n = w.checked_mul(h).ok_or(E::LimitExceeded)? as u64;
@@ -332,7 +338,20 @@ fn widths(img: &RgbImage, r: usize, l: MattingLimits, c: &Interrupt<'_>) -> Resu
     let _ = l;
     Ok(out)
 }
+#[cfg(test)]
 fn buffer(img: Option<&RgbImage>, m: &[f32], w: usize, h: usize, p: &RefineParams, l: MattingLimits, c: &Interrupt<'_>) -> Result<Vec<f32>, E> {
+    buffer_brushed(img, m, w, h, p, None, l, c)
+}
+fn buffer_brushed(
+    img: Option<&RgbImage>,
+    m: &[f32],
+    w: usize,
+    h: usize,
+    p: &RefineParams,
+    brush: Option<(&[f32], usize)>,
+    l: MattingLimits,
+    c: &Interrupt<'_>,
+) -> Result<Vec<f32>, E> {
     validate(m, w, h, c)?;
     let mut a = copied(m, c)?;
     if p.uses_image() {
@@ -384,9 +403,33 @@ fn buffer(img: Option<&RgbImage>, m: &[f32], w: usize, h: usize, p: &RefineParam
                     Some(w) => at(w, i)?.clamp(1.5, p.radius.max(1.5)),
                     None => p.radius,
                 };
-                let wgt = (reff + 1. - at(&dist, i)?).clamp(0., 1.);
+                let mut wgt = (reff + 1. - at(&dist, i)?).clamp(0., 1.);
+                if let Some((b, _)) = brush {
+                    let b = at(b, i)?;
+                    if b < 0. {
+                        wgt *= 1. + b;
+                    }
+                }
                 if wgt > 0. {
                     *v = at(m, i)? + (at(&q, i)?.clamp(0., 1.) - at(m, i)?) * wgt;
+                }
+            }
+        }
+    }
+    if let (Some((b, window)), Some(img)) = (brush, img) {
+        let mut adds = false;
+        for chunk in b.chunks(1024) {
+            poll(c)?;
+            adds |= chunk.iter().any(|v| *v > 0.);
+        }
+        if adds {
+            let estimate = super::brush::estimate_with_interrupt(img, m, b, w, h, window, l, c)?;
+            for ((i, v), (e, b)) in a.iter_mut().enumerate().zip(estimate.iter().zip(b)) {
+                if i.is_multiple_of(1024) {
+                    poll(c)?;
+                }
+                if *b > 0. {
+                    *v += (e - *v) * b;
                 }
             }
         }
@@ -465,8 +508,26 @@ pub fn refine_mask_with_interrupt(
     l: MattingLimits,
     c: &Interrupt<'_>,
 ) -> Result<Option<Region>, E> {
+    refine_mask_brushed_with_interrupt(sampler, mask, content, canvas, p, None, l, c)
+}
+pub fn refine_mask_brushed_with_interrupt(
+    sampler: &dyn Sampler,
+    mask: &(dyn Fn(Rect) -> Result<Vec<f32>, E> + Sync),
+    content: Rect,
+    canvas: Rect,
+    p: &RefineParams,
+    brush: Option<&super::EdgeBrush>,
+    l: MattingLimits,
+    c: &Interrupt<'_>,
+) -> Result<Option<Region>, E> {
     poll(c)?;
-    let req = requirements(content, canvas, p)?;
+    let req = requirements_with_brush_bounds(
+        content,
+        canvas,
+        p,
+        brush.map_or(Rect::EMPTY, super::EdgeBrush::added_bounds),
+        brush.map_or(0, super::EdgeBrush::window),
+    )?;
     if req.peak_resident_bytes > l.resident_bytes.min(MAX_CHECKED_RASTER_BYTES) || req.work_units > l.work_units.min(MAX_WORK) {
         return Err(E::LimitExceeded);
     }
@@ -490,11 +551,19 @@ pub fn refine_mask_with_interrupt(
                 poll(c)?;
                 constant &= chunk.iter().all(|v| *v == first);
             }
-            let data = if constant {
+            let painted = brush.filter(|b| !b.bounds().intersect(&r).is_empty()).map(|b| b.read_with_interrupt(r, l, c)).transpose()?;
+            let mut adds = false;
+            if let Some(b) = &painted {
+                for chunk in b.chunks(1024) {
+                    poll(c)?;
+                    adds |= chunk.iter().any(|v| *v > 0.);
+                }
+            }
+            let data = if constant && !adds {
                 None
             } else {
-                let img = if p.uses_image() { Some(rgb(sampler, r, c)?) } else { None };
-                Some(buffer(img.as_ref(), &m, w, h, p, l, c)?)
+                let img = if p.uses_image() || adds { Some(rgb(sampler, r, c)?) } else { None };
+                Some(buffer_brushed(img.as_ref(), &m, w, h, p, painted.as_ref().zip(brush).map(|(v, b)| (v.as_slice(), b.window())), l, c)?)
             };
             for y in tile.y0..tile.y1 {
                 poll(c)?;
@@ -760,3 +829,28 @@ mod copy_tests {
 #[path = "decontaminate_controlled.rs"]
 mod decontamination;
 pub use decontamination::{DecontaminateRequirements, decontaminate_with_interrupt, requirements as decontaminate_requirements};
+
+#[cfg(test)]
+mod brushed_tests {
+    use super::*;
+    #[test]
+    fn add_restore_and_processing_order_match_original_refine() {
+        let (w, h) = (120usize, 60usize);
+        let img = RgbImage::from_fn(w, h, |x, _| if x < 40 || ((60..84).contains(&x) && x % 4 == 0) { [0.9, 0.7, 0.2] } else { [0.1, 0.3, 0.8] });
+        let canvas = Rect::new(0, 0, 120, 60);
+        let region = Region { bbox: canvas, mask: (0..w * h).map(|i| if i % w < 40 { 255 } else { 0 }).collect() };
+        let sampler = crate::segment::ImageSampler { img: &img, origin: (0, 0) };
+        let strokes = [
+            super::super::EdgeStroke { points: vec![(70., 10.), (70., 50.)], size: 30., add: true },
+            super::super::EdgeStroke { points: vec![(40., 20.), (40., 40.)], size: 13., add: false },
+        ];
+        let brush = super::super::EdgeBrush::new_with_interrupt(&strokes, canvas, MattingLimits::default(), &Interrupt::NONE).unwrap();
+        let reader = super::super::region_reader(&region);
+        let p = RefineParams { radius: 4., smart_radius: true, smooth: 10., feather: 1., contrast: 17., shift_edge: 12.5 };
+        let old = super::super::refine_mask_brushed(&sampler, &reader, canvas, canvas, &p, brush.as_ref()).unwrap();
+        let actual =
+            refine_mask_brushed_with_interrupt(&sampler, &|r| Ok(reader(r)), canvas, canvas, &p, brush.as_ref(), MattingLimits::default(), &Interrupt::NONE)
+                .unwrap();
+        assert_eq!(actual, old);
+    }
+}

@@ -240,7 +240,7 @@ pub fn morph(src: &[f32], w: usize, h: usize, r: usize, grow: bool) -> Vec<f32> 
 mod brush;
 mod morphology;
 
-pub use brush::{EdgeBrush, EdgeStroke, MAX_SWEPT_AREA, SIZE_RANGE as BRUSH_SIZE_RANGE, swept_area};
+pub use brush::{EdgeBrush, EdgeStroke, BrushRequirements, MAX_SWEPT_AREA, SIZE_RANGE as BRUSH_SIZE_RANGE, swept_area};
 
 /// Running max (or min) over a window of radius `r` (edge-clipped), van Herk / Gil–Werman:
 /// three comparisons per sample whatever the radius.
@@ -849,4 +849,5 @@ pub use controlled_color::guided_filter_color_with_interrupt;
 
 mod refine_controlled;
 pub use refine_controlled::{RefineRequirements, requirements as refine_requirements, refine_mask_with_interrupt, masked_copy_requirements, masked_copy_with_interrupt,
-    DecontaminateRequirements, decontaminate_requirements, decontaminate_with_interrupt};
+    DecontaminateRequirements, decontaminate_requirements, decontaminate_with_interrupt,
+    requirements_with_brush_bounds as refine_requirements_with_brush_bounds, refine_mask_brushed_with_interrupt};
