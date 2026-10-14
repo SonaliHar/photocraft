@@ -12,6 +12,8 @@ use photocraft_raster::backing::{
 use serde_json::Value;
 
 mod job_journal;
+#[path = "imported_accounted_metadata.rs"]
+mod imported_metadata;
 pub(crate) use job_journal::PreparedAccountedJobJournal;
 
 const MAX_RECORDS: usize = 256;
@@ -28,8 +30,9 @@ fn bad(id: &str, message: &str) -> EngineError {
     EngineError::BadParams { cmd: id.into(), msg: message.into() }
 }
 
-#[derive(Clone, Copy)]
 enum Request<'a> {
+    ImportedMetadata(imported_metadata::Request<'a>),
+    PreparedMetadata(imported_metadata::Prepared<'a>),
     Select(LayerId),
     Edit(AccountedEdit<'a>),
     ClearSelection,
@@ -40,6 +43,9 @@ enum Request<'a> {
 }
 
 fn request<'a>(session: &Session, id: &str, params: &'a Value) -> Result<Request<'a>> {
+    if id == "layer.setProps" && imported_metadata::applies(session) {
+        return Ok(Request::ImportedMetadata(imported_metadata::parse(params)?));
+    }
     if id == "select.all" {
         crate::accounted_select_all::validate_request(session, params)?;
         return Ok(Request::SelectAll(params));
@@ -343,6 +349,10 @@ impl<'a> PreparedAccountedCommand<'a> {
         if let Some(reason) = global_refusal(session) {
             return Err(EngineError::Other(reason.into()));
         }
+        let request = match request {
+            Request::ImportedMetadata(request) => Request::PreparedMetadata(request.prepare(session, control)?),
+            other => other,
+        };
         let quota = session.active().and_then(|state| state.doc.quota()).ok_or(BackingError::Unsupported)?.clone();
         let count = session.journal.len().checked_add(1).ok_or(BackingError::Length)?;
         if count > MAX_RECORDS {
@@ -410,7 +420,7 @@ impl<'a> PreparedAccountedCommand<'a> {
         if state.revision != self.revision || !state.doc.shares_state(&self.snapshot) {
             return Err(EngineError::Other("the prepared accounted command targets an older document state".into()));
         }
-        if matches!(self.request, Request::ClearSelection | Request::SelectAll(_) | Request::ColorRange(_)) && state.view_revision != self.view_revision {
+        if matches!(&self.request, Request::ClearSelection | Request::SelectAll(_) | Request::ColorRange(_) | Request::PreparedMetadata(_)) && state.view_revision != self.view_revision {
             return Err(EngineError::Other("the prepared accounted selection targets an older view".into()));
         }
         let previous = self.journal.get(..self.journal.len().checked_sub(1).ok_or(BackingError::Integrity)?).ok_or(BackingError::Integrity)?;
@@ -422,6 +432,8 @@ impl<'a> PreparedAccountedCommand<'a> {
         // bookkeeping runs after a successful edit.
         control.check(1)?;
         let result = match self.request {
+            Request::PreparedMetadata(prepared) => prepared.execute(session, control)?,
+            Request::ImportedMetadata(_) => return Err(BackingError::Integrity.into()),
             Request::Select(layer) => {
                 session.select_accounted_with_control(layer, control)?;
                 Value::Null

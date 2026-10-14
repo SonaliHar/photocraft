@@ -117,6 +117,9 @@ fn edit_locks(document: &AccountedDocument, edit: AccountedEdit<'_>, control: &R
         AccountedEdit::LayerVisibility { visible, .. } if visible != layer.visible && imported.visibility => {
             Err(EngineError::Other("the imported layer is visibility-locked".into()))
         }
+        AccountedEdit::LayerMetadata { visible: Some(visible), .. } if visible != layer.visible && imported.visibility => {
+            Err(EngineError::Other("the imported layer is visibility-locked".into()))
+        }
         AccountedEdit::NativePixels { .. } if access.locks.pixels || access.locks.all || access.locks.transparency || imported.content || imported.alpha => {
             Err(EngineError::Other("native pixel replacement cannot change a content- or alpha-locked layer".into()))
         }

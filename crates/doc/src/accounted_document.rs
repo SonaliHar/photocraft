@@ -13,6 +13,8 @@ use std::{
     sync::{Arc, Weak},
 };
 
+#[path = "accounted_imported_edits.rs"]
+mod imported_edits;
 #[path = "accounted_imported_selection.rs"]
 mod imported_selection;
 
@@ -73,6 +75,13 @@ impl std::fmt::Debug for AccountedDocument {
 /// retained collection in a user callback. Incoming names/native data are borrowed.
 #[derive(Clone, Copy, Debug)]
 pub enum AccountedEdit<'a> {
+    /// Atomic current metadata, initially restricted to the closed imported lane.
+    LayerMetadata {
+        layer: LayerId,
+        name: Option<&'a str>,
+        visible: Option<bool>,
+        opacity: Option<f32>,
+    },
     LayerVisibility { layer: LayerId, visible: bool },
     LayerOpacity { layer: LayerId, opacity: f32 },
     LayerName { layer: LayerId, name: &'a str },
@@ -84,7 +93,8 @@ impl AccountedEdit<'_> {
     /// Target identity independent of the specific typed transaction.
     pub fn layer_id(self) -> LayerId {
         match self {
-            Self::LayerVisibility { layer, .. }
+            Self::LayerMetadata { layer, .. }
+            | Self::LayerVisibility { layer, .. }
             | Self::LayerOpacity { layer, .. }
             | Self::LayerName { layer, .. }
             | Self::NativePixels { layer, .. }
@@ -146,6 +156,7 @@ impl AccountedHistory {
         self.cursor.checked_add(1).is_some_and(|next| next < self.states.len())
     }
     pub fn try_commit(&mut self, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<(), BackingError> {
+        imported_edits::validate_owner(self.current()?, edit, control)?;
         if is_noop(self.current()?.document(), edit, control)? {
             control.check(1)?;
             return Ok(());
@@ -324,10 +335,19 @@ impl AccountedDocument {
             }),
         })
     }
+    /// Borrowed preflight for the closed imported current-metadata transaction.
+    /// No allocation or mutation authority; final try_edit repeats these gates.
+    pub fn validate_imported_metadata_edit(&self, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<(), BackingError> {
+        if !imported_selection::applies(self.document()) { return Err(BackingError::Unsupported); }
+        imported_edits::validate_owner(self, edit, control)?;
+        accounted_layer_access(self.document(), edit.layer_id(), control)?.ok_or(BackingError::Bounds)?;
+        Ok(())
+    }
     /// Stage one separately charged model; errors preserve this history snapshot.
     /// Unknown collections refuse before clone. Native COW allocation uses the
     /// same source ledger and never replaces immutable source/default samples.
     pub fn try_edit(&self, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<Self, BackingError> {
+        let imported = imported_edits::validate_owner(self, edit, control)?;
         if is_noop(self.document(), edit, control)? {
             control.check(1)?;
             return Ok(self.clone());
@@ -339,8 +359,9 @@ impl AccountedDocument {
             return Err(BackingError::Unsupported);
         }
         let extra = match edit {
+            AccountedEdit::LayerMetadata { name, .. } => name.map_or(Ok(0), |name| name.len().checked_mul(2).map(|n| n as u64).ok_or(BackingError::Length))?,
             AccountedEdit::LayerName { name, .. } => {
-                if name.len() > 1 << 20 || name.contains('\0') {
+                if !imported && (name.len() > 1 << 20 || name.contains('\0')) {
                     return Err(BackingError::Length);
                 }
                 name.len().checked_mul(2).ok_or(BackingError::Length)? as u64
@@ -353,7 +374,11 @@ impl AccountedDocument {
         {
             return Err(BackingError::Unsupported);
         }
-        let logical = census(doc, false, self.owner._selection.as_ref(), self.quota(), control)?;
+        let logical = if imported {
+            selection_census(doc, false, self.owner._selection.as_ref(), self.quota(), control)?
+        } else {
+            census(doc, false, self.owner._selection.as_ref(), self.quota(), control)?
+        };
         let owner_bytes = (std::mem::size_of::<ModelOwner>() + 128) as u64;
         let index = logical.index.checked_sub(owner_bytes).ok_or(BackingError::Integrity)?;
         let index_envelope = index.checked_add(extra).and_then(|v| v.checked_mul(2)).and_then(|v| v.checked_add(4096)).ok_or(BackingError::Length)?;
@@ -365,22 +390,38 @@ impl AccountedDocument {
         // The admitted Clone only duplicates the prepaid bounded tree containers and
         // strings below. Native tiles/ICC/source guards retain shared ownership.
         let view = self.owner._selection.as_ref().map(|guard| guard.clone_view(control)).transpose()?;
-        let mut staged = ModelStaging { document: clone_model_without_selection(doc), selection_view: None };
+        let copied = if imported { imported_selection::copy_document(doc, control)? } else { clone_model_without_selection(doc) };
+        let mut staged = ModelStaging { document: copied, selection_view: None };
         if let Some(SelectionView { surface, charges }) = view {
             staged.document.selection = Some(surface);
             staged.selection_view = Some(charges);
         }
         let layer = find_layer_mut(&mut staged.document.layers, id, 0, control)?.ok_or(BackingError::Bounds)?;
         match edit {
+            AccountedEdit::LayerMetadata { name, visible, opacity, .. } => {
+                if let Some(name) = name {
+                    layer.name = imported_edits::copy_name(name, control)?;
+                }
+                if let Some(visible) = visible {
+                    layer.visible = visible;
+                }
+                if let Some(opacity) = opacity {
+                    layer.opacity = opacity;
+                }
+            }
             AccountedEdit::LayerVisibility { visible, .. } => layer.visible = visible,
             AccountedEdit::LayerOpacity { opacity, .. } => layer.opacity = opacity,
             AccountedEdit::MaskEnabled { enabled, .. } => layer.mask.as_mut().ok_or(BackingError::Unsupported)?.enabled = enabled,
             AccountedEdit::MaskLinked { linked, .. } => layer.mask.as_mut().ok_or(BackingError::Unsupported)?.linked = linked,
             AccountedEdit::LayerName { name, .. } => {
-                let mut owned = String::new();
-                owned.try_reserve_exact(name.len()).map_err(|_| BackingError::Allocation)?;
-                owned.push_str(name);
-                layer.name = owned;
+                if imported {
+                    layer.name = imported_edits::copy_name(name, control)?;
+                } else {
+                    let mut owned = String::new();
+                    owned.try_reserve_exact(name.len()).map_err(|_| BackingError::Allocation)?;
+                    owned.push_str(name);
+                    layer.name = owned;
+                }
             }
             AccountedEdit::NativePixels { rect, bytes, .. } => {
                 let LayerContent::BackedRaster(backed) = &layer.content else {
@@ -393,8 +434,16 @@ impl AccountedDocument {
                 layer.content = LayerContent::BackedRaster(staged);
             }
         }
-        sync_current_item(&mut staged.document, edit)?;
-        let retained = census(&staged.document, true, self.owner._selection.as_ref(), self.quota(), control)?;
+        if imported {
+            imported_edits::synchronize(&mut staged.document, edit, control)?;
+        } else {
+            sync_current_item(&mut staged.document, edit)?;
+        }
+        let retained = if imported {
+            selection_census(&staged.document, true, self.owner._selection.as_ref(), self.quota(), control)?
+        } else {
+            census(&staged.document, true, self.owner._selection.as_ref(), self.quota(), control)?
+        };
         let retained_index = retained.index.checked_sub(owner_bytes).ok_or(BackingError::Integrity)?;
         if retained_index > index_envelope || retained.payload > payload_envelope {
             return Err(BackingError::Allocation);
@@ -420,6 +469,20 @@ fn is_noop(doc: &Document, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -
     let id = edit.layer_id();
     let layer = accounted_layer_access(doc, id, control)?.ok_or(BackingError::Bounds)?.layer;
     match edit {
+        AccountedEdit::LayerMetadata { name, visible, opacity, .. } => {
+            if !imported_selection::applies(doc) {
+                return Err(BackingError::Unsupported);
+            }
+            // Incoming fields were validated by validate_owner before this
+            // private helper; every repeated name comparison is charged here.
+            let same_name = match name { Some(name) => imported_edits::names_equal(name, &layer.name, control)?, None => true };
+            if opacity.is_some_and(|v| !v.is_finite() || !(0.0..=1.0).contains(&v)) {
+                return Err(BackingError::Bounds);
+            }
+            Ok(same_name
+                && visible.is_none_or(|v| v == layer.visible)
+                && opacity.is_none_or(|v| v.to_bits() == layer.opacity.to_bits()))
+        }
         AccountedEdit::LayerVisibility { visible, .. } => Ok(layer.visible == visible),
         AccountedEdit::LayerOpacity { opacity, .. } => {
             if !opacity.is_finite() || !(0.0..=1.0).contains(&opacity) {
@@ -428,6 +491,7 @@ fn is_noop(doc: &Document, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -
             Ok(layer.opacity.to_bits() == opacity.to_bits())
         }
         AccountedEdit::LayerName { name, .. } => {
+            if imported_selection::applies(doc) { return imported_edits::names_equal(&layer.name, name, control); }
             if name.len() > 1 << 20 || name.contains('\0') {
                 return Err(BackingError::Length);
             }
@@ -915,6 +979,7 @@ fn validate_shared_mask(mask: &crate::LayerMask, total_tiles: &mut usize, contro
 fn sync_current_item(document: &mut Document, edit: AccountedEdit<'_>) -> Result<(), BackingError> {
     let Some(state) = &mut document.xcf_state else { return Ok(()) };
     let (id, visible, name) = match edit {
+        AccountedEdit::LayerMetadata { .. } => return Err(BackingError::Unsupported),
         AccountedEdit::LayerVisibility { layer, visible } => (layer, Some(visible), None),
         AccountedEdit::LayerName { layer, name } => (layer, None, Some(name)),
         AccountedEdit::MaskEnabled { layer, enabled } => {

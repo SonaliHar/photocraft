@@ -108,3 +108,37 @@ fn actual_owned_xcf_registered_color_range_and_undo_keep_native_source_and_runti
     assert_eq!(session.active().unwrap().source, source);
     assert!(session.active().unwrap().source_read_only);
 }
+
+#[test]
+fn actual_owned_xcf_compound_properties_are_one_undo_and_equal_request_preserves_redo() {
+    let imported = imported();
+    let mut session = Session::new();
+    session.add_owned_plain_xcf_import(&imported, "renamed.psd", Some("authorized/renamed.psd"), &control()).unwrap();
+    drop(imported);
+    let before = session.active().unwrap().doc.clone();
+    let source = session.active().unwrap().source.clone();
+    session.execute("layer.setProps", serde_json::json!({"name":"Current name","visible":false,"opacity":0.375})).unwrap();
+    let changed = session.active().unwrap().doc.clone();
+    assert_eq!(changed.layers[0].name, "Current name");
+    assert!(!changed.layers[0].visible);
+    assert_eq!(changed.layers[0].opacity.to_bits(), 0.375f32.to_bits());
+    assert_eq!(changed.source_color_context, before.source_color_context);
+    assert_eq!(changed.xcf_state.as_ref().unwrap().provenance, before.xcf_state.as_ref().unwrap().provenance);
+    let item =
+        changed.xcf_state.as_ref().unwrap().items.iter().find(|item| item.item == photocraft_doc::item_identity::ItemRef::Layer(changed.layers[0].id)).unwrap();
+    assert_eq!(item.name, "Current name");
+    assert!(!item.visible);
+    session.execute("edit.undo", serde_json::json!({})).unwrap();
+    assert!(before.shares_state(&session.active().unwrap().doc));
+    session
+        .execute("layer.setProps", serde_json::json!({"name":before.layers[0].name,"visible":before.layers[0].visible,"opacity":before.layers[0].opacity}))
+        .unwrap();
+    assert!(before.shares_state(&session.active().unwrap().doc));
+    session.execute("edit.redo", serde_json::json!({})).unwrap();
+    assert!(changed.shares_state(&session.active().unwrap().doc));
+    assert_eq!(session.active().unwrap().source, source);
+    let photocraft_doc::LayerContent::BackedRaster(layer) = &session.active().unwrap().doc.layers[0].content else { panic!("owned source lost") };
+    let mut raw = [0; 4];
+    layer.checked_view().read_logical_pixel_native_into(0, 0, &mut raw, &control()).unwrap();
+    assert_eq!(raw, [31, 61, 91, 255]);
+}

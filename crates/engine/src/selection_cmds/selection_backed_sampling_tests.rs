@@ -172,3 +172,46 @@ fn supplied_read_control_receives_each_stage_work_and_denial_precedes_reads() {
     assert!(session.active().unwrap().doc.shares_state(&original));
     assert_eq!(coverage.values().len(), 2);
 }
+
+#[test]
+fn only_active_localization_debits_point_distance_work_on_the_same_counter() {
+    // UNRUN: use the actual query/owned pixel path and a lower work bound that
+    // admitted CMS alone but previously rejected inactive point-distance work.
+    let (session, _, _, _) = fixture(64 << 20, None, false);
+    let original = session.active().unwrap().doc.clone();
+    let total = AtomicU64::new(0);
+    let charge = |n| {
+        total.fetch_add(n, Ordering::Relaxed);
+        Ok(())
+    };
+    let ctl = ReadControl { interrupt: &Interrupt::NONE, work: &charge };
+    let mut query =
+        BackedColorRangeSamples::new_with_read_control(&session, &json!({"sampleAllLayers":false,"points":[[0,0],[0,0]],"fuzziness":40}), &ctl).unwrap();
+    let pixels = query.backed_pixels_with_read_control(Rect::new(0, 0, 2, 1), &ctl).unwrap();
+    let lower = sel::ColorRangeLimits { work_units: 2 * 1024, ..Default::default() };
+    let before = total.load(Ordering::Relaxed);
+    let actual = query.coverage_backed_pixels_with_read_control(&pixels, lower, &ctl).unwrap();
+    assert_eq!(total.load(Ordering::Relaxed) - before, 2 * 1024);
+    let expected = coverage_inner(&query.query, pixels.pixels(), 2, 1., [0., 0.], Default::default(), &Interrupt::NONE).unwrap();
+    assert_eq!(actual.values(), expected);
+    query.query.localized = Some(1.);
+    let before = total.load(Ordering::Relaxed);
+    assert!(query.coverage_backed_pixels_with_read_control(&pixels, lower, &ctl).is_err());
+    assert_eq!(total.load(Ordering::Relaxed), before);
+    let localized_work = 2 * (1024 + 2 * 48);
+    let higher = sel::ColorRangeLimits { work_units: localized_work, ..Default::default() };
+    query.coverage_backed_pixels_with_read_control(&pixels, higher, &ctl).unwrap();
+    assert_eq!(total.load(Ordering::Relaxed) - before, localized_work);
+    assert_eq!(total.load(Ordering::Relaxed), query.query.backed.as_ref().unwrap().work.used.load(Ordering::Relaxed));
+    query.query.plus_at.clear();
+    assert_eq!(active_localized_points(&query.query), 0);
+    let before = total.load(Ordering::Relaxed);
+    query.coverage_backed_pixels_with_read_control(&pixels, lower, &ctl).unwrap();
+    assert_eq!(total.load(Ordering::Relaxed) - before, 2 * 1024);
+    let cancelled = || true;
+    let cancelled_ctl = ReadControl { interrupt: &Interrupt::cancel_only(&cancelled), work: &charge };
+    let before = total.load(Ordering::Relaxed);
+    assert!(matches!(query.coverage_backed_pixels_with_read_control(&pixels, lower, &cancelled_ctl), Err(EngineError::Cancelled)));
+    assert_eq!(total.load(Ordering::Relaxed), before);
+    assert!(session.active().unwrap().doc.shares_state(&original));
+}

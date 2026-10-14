@@ -618,6 +618,10 @@ pub(super) fn coverage(
     }
     coverage_inner(query, px, width, scale, origin, limits, control)
 }
+// Match the lower Lab request, which discards localization with no points.
+fn active_localized_points(query: &ColorRangeSamples) -> usize {
+    if query.localized.is_some() && !query.plus_at.is_empty() { query.plus_at.len() } else { 0 }
+}
 fn coverage_inner(
     query: &ColorRangeSamples,
     px: &[[f32; 4]],
@@ -645,7 +649,7 @@ fn coverage_inner(
         .filter(|n| *n <= limits.resident_bytes)
         .ok_or_else(|| failure("query Lab/mask residency limit"))?;
     (px.len() as u64)
-        .checked_mul((query.plus_at.len() as u64).checked_mul(48).and_then(|n| n.checked_add(1024)).ok_or_else(|| failure("query work"))?)
+        .checked_mul((active_localized_points(query) as u64).checked_mul(48).and_then(|n| n.checked_add(1024)).ok_or_else(|| failure("query work"))?)
         .filter(|n| *n <= limits.work_units)
         .ok_or_else(|| failure("query CMS/sample work limit"))?;
     let mut lab = reserve(px.len())?;

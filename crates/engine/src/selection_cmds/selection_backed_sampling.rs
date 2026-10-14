@@ -502,7 +502,7 @@ pub(in crate::selection_cmds) fn owned_coverage(
     if bytes > limits.resident_bytes {
         return Err(failure("backed coverage lower resident limit"));
     }
-    let units = mul(px.len() as u64, add(mul(query.plus_at.len() as u64, 48)?, 1024)?)?;
+    let units = mul(px.len() as u64, add(mul(active_localized_points(query) as u64, 48)?, 1024)?)?;
     if units > limits.work_units {
         return Err(failure("backed coverage lower work limit"));
     }

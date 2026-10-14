@@ -1,6 +1,7 @@
 //! Checked native Document consumer for fallible, quota-owned storage.
 //! Initial explicit slice: flat owned-backed raster layers, Normal/Union, current
-//! ICC interpretation. Unsupported semantics return errors before any pixel reads.
+//! ICC interpretation, plus a closed accounted plain-import current-storage lane.
+//! Unsupported semantics return errors before any pixel reads.
 use crate::backed_normal::{BackedNormalError, NormalBandLimits, ResidentNormalMask};
 use crate::backed_normal_stack::{NormalStackLayer, NormalStackLimits, OwnedNormalStackBand, PreparedBackedNormalStack, ResidentNormalStackLayer};
 use photocraft_cms::Profile;
@@ -14,6 +15,8 @@ use photocraft_raster::backing::{
 
 #[path = "backed_group.rs"]
 mod group;
+#[path = "backed_document/plain_import.rs"]
+mod plain_import;
 // Keep the prepared profile owner inline: both routes charge the compiled
 // Document owner header before publication, without an extra infallible Box.
 #[allow(clippy::large_enum_variant)]
@@ -62,9 +65,10 @@ impl<'a> PreparedBackedDocument<'a> {
     /// Profile/encoding are explicit current interpretation. The profile ICC
     /// bytes must match the current document, never immutable import provenance.
     pub fn new(doc: &'a Document, profile: &Profile, limits: NormalBandLimits, control: &ReadControl<'_>) -> Result<Self, BackedNormalError> {
-        Self::new_internal(doc, profile, limits, control, false)
+        Self::new_internal(doc, profile, limits, control, None)
     }
-    /// Qualified resident masks require an explicit retained model/source guard.
+    /// Qualified resident masks and closed plain imports require the actual paid
+    /// model/source guard. This does not extend ordinary bare-Document admission.
     pub fn new_accounted(
         owner: &'a photocraft_doc::accounted_document::AccountedDocument,
         profile: &Profile,
@@ -77,31 +81,42 @@ impl<'a> PreparedBackedDocument<'a> {
             control.check(1).map_err(BackedNormalError::Backing)?;
             return Ok(Self { stack: DocumentCompositor::Group(prepared), limits, quota: owner.quota().clone(), bounds: owner.document().bounds(), _index: index });
         }
-        Self::new_internal(owner.document(), profile, limits, control, true)
+        Self::new_internal(owner.document(), profile, limits, control, Some(owner))
     }
     fn new_internal(
         doc: &'a Document,
         profile: &Profile,
         limits: NormalBandLimits,
         control: &ReadControl<'_>,
-        retained_source: bool,
+        retained_source: Option<&'a photocraft_doc::accounted_document::AccountedDocument>,
     ) -> Result<Self, BackedNormalError> {
-        if doc.xcf_state.is_some() && !retained_source {
+        if doc.xcf_state.is_some() && retained_source.is_none() {
             return Err(BackedNormalError::Unsupported("ordinary backed masks require accounted source ownership"));
         }
         control.check(1).map_err(BackedNormalError::Backing)?;
         if doc.layers.is_empty() || doc.layers.len() > 10_000 {
             return Err(BackedNormalError::Invalid("backed Document layer count"));
         }
+        let plain = if doc.xcf_state.is_some() && !doc.layers.iter().any(|layer| layer.mask.is_some()) {
+            Some(plain_import::qualify(
+                retained_source.ok_or(BackedNormalError::Unsupported("plain imported stack requires accounted owner"))?,
+                profile,
+                control,
+            )?)
+        } else {
+            None
+        };
         if !matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale)
-            || !matches!(doc.working_profile_interpretation, WorkingProfileInterpretation::Icc)
+            || (plain.is_none() && !matches!(doc.working_profile_interpretation, WorkingProfileInterpretation::Icc))
             || !doc.channels.is_empty()
         {
             return Err(BackedNormalError::Unsupported("initial backed Document explicit ICC RGB/Gray slice"));
         }
-        let ordinary = qualify_ordinary_mask(doc, control)?;
+        let ordinary = if plain.is_some() { false } else { qualify_ordinary_mask(doc, control)? };
         let stored = doc.sample_encoding.ok_or(BackedNormalError::Unsupported("backed Document requires explicit current encoding"))?;
-        let composite = if ordinary {
+        let composite = if let Some(composite) = plain {
+            composite
+        } else if ordinary {
             GimpSpace::LinearRgb
         } else {
             match stored {
@@ -111,8 +126,9 @@ impl<'a> PreparedBackedDocument<'a> {
             }
         };
         if profile.channels() != if doc.mode == ColorMode::Rgb { 3 } else { 1 }
-            || doc.icc_profile.as_deref().map(Vec::as_slice)
-                != Some(profile.encoded_bytes().ok_or(BackedNormalError::Unsupported("current profile encoding must be retained"))?)
+            || (plain.is_none()
+                && doc.icc_profile.as_deref().map(Vec::as_slice)
+                    != Some(profile.encoded_bytes().ok_or(BackedNormalError::Unsupported("current profile encoding must be retained"))?))
         {
             return Err(BackedNormalError::Invalid("backed Document current profile mismatch"));
         }
@@ -144,9 +160,13 @@ impl<'a> PreparedBackedDocument<'a> {
                 || layer.vector_mask.is_some()
                 || !layer.effects.items.is_empty()
                 || layer.indexed_source.is_some()
-                || layer.import_compositing.is_some_and(|policy| {
-                    !ordinary || policy.pass_through || policy.blend_encoding != SampleEncoding::Linear || policy.composite_encoding != SampleEncoding::Linear
-                })
+                || (plain.is_none()
+                    && layer.import_compositing.is_some_and(|policy| {
+                        !ordinary
+                            || policy.pass_through
+                            || policy.blend_encoding != SampleEncoding::Linear
+                            || policy.composite_encoding != SampleEncoding::Linear
+                    }))
                 || layer.video.is_some()
                 || layer.fill_cache.is_some()
                 || layer.excluded_channels != 0
