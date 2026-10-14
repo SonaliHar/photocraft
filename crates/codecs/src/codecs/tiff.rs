@@ -298,6 +298,8 @@ fn metadata(f: &File<'_>, dir: &Ifd, icc: &mut Option<Vec<u8>>) -> Metadata {
         if dir.at == f.first_ifd { photoshop_tags(f.b) } else { (f.tag_bytes(dir, TAG_PHOTOSHOP), f.tag_bytes(dir, TAG_IMAGE_SOURCE_DATA)) };
     meta.photoshop_resources = resources.map(<[u8]>::to_vec);
     meta.photoshop_layers = layers.map(<[u8]>::to_vec);
+    // ExtraSamples `2` is unassociated alpha (TIFF 6.0); `1` is associated transparency.
+    meta.unassociated_alpha = f.tag_uints(dir, ifd::TAG_EXTRA_SAMPLES, 64).unwrap_or_default().contains(&2u64);
     // EXIF: the Exif and GPS directories IFD0 points to, with IFD0's descriptive tags, as an
     // EXIF block (the other pages are reduced copies or layers of the same image).
     if dir.at == f.first_ifd
@@ -1060,7 +1062,9 @@ where
     }
     let d = im.encoder();
     if tags.alpha {
-        // 2 = unassociated alpha
+        // ExtraSamples 2 = unassociated / straight alpha. ExtraSamples 1 is associated
+        // (premultiplied); decoding that un-premultiplies and breaks lossless codec
+        // round-trips of RGBA TIFFs.
         d.write_tag(Tag::ExtraSamples, &[2u16][..])?;
     }
     if let Some(icc) = tags.icc {

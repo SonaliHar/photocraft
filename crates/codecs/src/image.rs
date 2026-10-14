@@ -127,6 +127,9 @@ pub struct Metadata {
     /// Photoshop layer data (TIFF tag 37724 `ImageSourceData`): a layered TIFF's layers. Kept
     /// opaque here; `photocraft-io` reads and writes it through `photocraft-psd`.
     pub photoshop_layers: Option<Vec<u8>>,
+    /// TIFF ExtraSamples unassociated alpha (`2`): the last sample is a separate alpha channel,
+    /// not associated (premultiplied) transparency. PhotoCraft opens it as an alpha channel.
+    pub unassociated_alpha: bool,
 }
 
 impl Metadata {
