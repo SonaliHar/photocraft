@@ -12,6 +12,7 @@ use crate::AutomationError;
 
 mod linked_read;
 mod source_write;
+mod stored_channel_read;
 
 const DENIED: &str = "automation filesystem access is not granted";
 
@@ -37,6 +38,22 @@ pub struct AuthorizedWorkspace {
 }
 
 impl AuthorizedWorkspace {
+    /// Presence of an already-open read capability; no new authority is made.
+    pub fn has_read_root(&self) -> bool {
+        self.read.is_some()
+    }
+    /// Explicit original input beneath the existing held read root. No document
+    /// locator, source identity or serialized grant is consulted. The host must
+    /// capture its target and admit reader storage before calling this method.
+    pub fn read_xcf_stored_channel_source(&self, path: &str, control: &photocraft_raster::Interrupt<'_>) -> Result<Vec<u8>, AutomationError> {
+        control.check().map_err(|_| AutomationError::Engine(photocraft_engine::EngineError::Cancelled))?;
+        if path.is_empty() || path.len() > 4096 || path.contains('\0') {
+            return Err(AutomationError::BadRequest("select.loadSelection.originalPath: bounded explicit path required".into()));
+        }
+        let root = self.read.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: read authority is absent")))?;
+        let relative = request_path(path, Some(root))?;
+        stored_channel_read::read(&root.dir, &relative, control)
+    }
     /// Read explicitly requested linked material below the held read-root capability.
     /// The caller captures the engine target before I/O, then constructs and
     /// immediately executes the registered substitution request after reading.

@@ -308,4 +308,4 @@ pub fn evaluate_prepared_available(
 
 #[path="gimp_configured_color_graph_candidate/profile_owned.rs"]
 mod profile_owned;
-pub use profile_owned::{ProfileOwnedBinding,ProfileOwnedParameters,prepare_profile_owned_binding,evaluate_profile_owned,evaluate_profile_owned_available,footprint_profile_owned,accepts_profile_owned_port};
+pub use profile_owned::{ProfileOwnedBinding,ProfileOwnedBindingReceipt,ProfileOwnedParameters,prepare_profile_owned_binding,evaluate_profile_owned,evaluate_profile_owned_available,footprint_profile_owned,accepts_profile_owned_port};

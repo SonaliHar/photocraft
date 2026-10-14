@@ -157,7 +157,7 @@ pub fn requirements<L>(binding: &Binding<'_, '_, L>, request: &NodeRequest<'_>, 
     let scratch_bytes = add(mul(64 * 64, bpp)?, 4096)?;
     let whole_bytes = checked_region_byte_len(enclosure, source.format()).map_err(E::Raster)? as u64;
     let staging_work = add(mul(whole_bytes, 4)?, add(mul(cells, 256)?, add(bitmap, add(tiles, 16)?)?)?)?;
-    let sample_work = binding.prepared.requirements().sample_work_units;
+    let sample_work = binding.prepared.sample_work();
     let kernel_work = mul(mul(request.roi.size().area(), sample_work)?, 2)?;
     let validation = add(mul(request.roi.size().area(), 64)?, mul(source.tile_count() as u64, 256)?)?;
     let work_units = add(kernel_work, add(staging_work, validation)?)?;
@@ -261,7 +261,7 @@ pub fn evaluate<L>(binding: &Binding<'_, '_, L>, request: NodeRequest<'_>, budge
     let mut stage_budget = BuilderBudget { bytes: q.staging_bytes, work: q.staging_work, reserved: false };
     let mut builder = StagedSurfaceBuilder::new(source.format(), source.default_bytes(), q.enclosure, &mut stage_budget, c).map_err(E::Raster)?;
     let mut kernel_left = q.kernel_work / 2;
-    let sample_work = binding.prepared.requirements().sample_work_units;
+    let sample_work = binding.prepared.sample_work();
     for y in (q.enclosure.y0..q.enclosure.y1).step_by(64) {
         for x in (q.enclosure.x0..q.enclosure.x1).step_by(64) {
             poll(c)?;
@@ -299,10 +299,167 @@ pub fn evaluate<L>(binding: &Binding<'_, '_, L>, request: NodeRequest<'_>, budge
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gimp_render::PreparationBudget;
+    use photocraft_algo::gimp::graph_execute::InputBinding;
+    use photocraft_algo::gimp::graph_plan::Endpoint;
+    use photocraft_doc::{
+        item_identity::{FilterId, GraphNodeId},
+        xcf_filters::{ExactNumber, FilterArgument, FilterNode, FilterValue, OperationIdentity},
+    };
+    struct PrepBudget;
+    impl PreparationBudget for PrepBudget {
+        type Lease = ();
+        fn reserve_prepared_bytes(&mut self, _: u64) -> crate::gimp_composite::Result<()> {
+            Ok(())
+        }
+        fn consume_preparation_work(&mut self, _: u64) -> crate::gimp_composite::Result<()> {
+            Ok(())
+        }
+    }
     #[test]
     fn raw_edge_tiles_are_included_for_f64_payload() {
         let (r, n) = enclosure(Rect::new(-1, 2, 1, 3), PixelFormat { sample: photocraft_color::SampleType::F64, ..PixelFormat::RGBA32F }).unwrap();
         assert_eq!(n, 2);
         assert_eq!(r, Rect::new(-256, 0, 256, 256));
+    }
+    #[test]
+    fn policy_fence_is_exact_and_adjacent_preflight_uses_double_old_sample_cost() {
+        let names = [
+            "time",
+            "all.hue",
+            "all.saturation",
+            "all.lightness",
+            "red.hue",
+            "red.saturation",
+            "red.lightness",
+            "yellow.hue",
+            "yellow.saturation",
+            "yellow.lightness",
+            "green.hue",
+            "green.saturation",
+            "green.lightness",
+            "cyan.hue",
+            "cyan.saturation",
+            "cyan.lightness",
+            "blue.hue",
+            "blue.saturation",
+            "blue.lightness",
+            "magenta.hue",
+            "magenta.saturation",
+            "magenta.lightness",
+            "overlap",
+        ];
+        let mut bits = [0u64; 23];
+        bits[7] = 0.125f64.to_bits();
+        bits[10] = 0.125f64.to_bits();
+        bits[22] = 0.5f64.to_bits();
+        let source_node = FilterNode {
+            id: FilterId(4),
+            operation: OperationIdentity { name: "gimp:hue-saturation".into(), stored_version: "0:0".into(), schema_epoch: "test-captured".into() },
+            source_display_name: None,
+            source_icon: None,
+            enabled: true,
+            opacity_f64_bits: 1f64.to_bits(),
+            source_clipping: None,
+            source_region: None,
+            mask: None,
+            auxiliary: vec![],
+            composition: None,
+            arguments: vec![FilterArgument {
+                name: "config".into(),
+                value: FilterValue::Config(
+                    names
+                        .into_iter()
+                        .zip(bits)
+                        .map(|(name, b)| FilterArgument { name: name.into(), value: FilterValue::Number(ExactNumber::Float64Bits(b)) })
+                        .collect(),
+                ),
+            }],
+        };
+        let node = GraphNode {
+            id: GraphNodeId(20),
+            operation: source_node.operation.clone(),
+            version_origin: GraphVersionOrigin::Stored,
+            arguments: source_node.arguments.clone(),
+        };
+        let context = WorkingContext { encoding: SampleEncoding::NonlinearProfile, profile_identity: [7; 32] };
+        let policy = NumericPolicy::OriginalHslF32SixPhaseAdjacentMappedHsl;
+        let mut prep_budget = PrepBudget;
+        let format = PixelFormat { sample: photocraft_color::SampleType::F64, ..PixelFormat::RGBA32F };
+        let prepared = crate::gimp_sector_hue_saturation_candidate::prepare(
+            &source_node,
+            crate::gimp_sector_hue_saturation_candidate::SourceBinding {
+                xcf_version: 22,
+                expected_epoch: "test-captured",
+                schema_sha256: crate::gimp_sector_hue_saturation_candidate::SCHEMA,
+                context,
+                policy,
+            },
+            format,
+            crate::gimp_sector_hue_saturation_candidate::Limits::default(),
+            &mut prep_budget,
+            &Interrupt::NONE,
+        )
+        .unwrap();
+        let mut source = Surface::new(format);
+        let roi = Rect::new(0, 0, 1, 1);
+        let selected = [0.5f64.to_bits(), 0.75f64.to_bits(), 0.25f64.to_bits(), 0x7ff8000000000042];
+        let raw: Vec<u8> = selected.into_iter().flat_map(u64::to_le_bytes).collect();
+        source.try_write_interleaved(roi, &raw).unwrap();
+        let outside: Vec<u8> = [0.75f64.to_bits(), 0.25f64.to_bits(), 0.5f64.to_bits(), (-0.0f64).to_bits()].into_iter().flat_map(u64::to_le_bytes).collect();
+        source.try_write_interleaved(Rect::new(1, 0, 2, 1), &outside).unwrap();
+        let domain = ExecutionDomain { format, encoding: context.encoding, profile_fingerprint: Some(context.profile_identity) };
+        let inputs = [InputBinding {
+            input_port: "input",
+            output_port: "output",
+            endpoint: Endpoint::ExternalInput(GraphNodeId(19)),
+            surface: &source,
+            domain,
+            roi,
+            footprint: None,
+        }];
+        let request = NodeRequest { node: &node, inputs: &inputs, roi, domain };
+        let binding = Binding { node: &node, version_origin: node.version_origin, prepared: &prepared, context, policy, domain, full_extent: roi };
+        let q = requirements(&binding, &request, &Interrupt::NONE).unwrap();
+        assert_eq!(q.kernel_work, 3072);
+        let remaining = prepared.requirements().remaining_work_units;
+        let wrong = Binding { policy: NumericPolicy::OriginalHslF32SixPhaseAllPureHueOutputSaturationBound, ..binding };
+        assert!(requirements(&wrong, &request, &Interrupt::NONE).is_err());
+        assert_eq!(prepared.requirements().remaining_work_units, remaining);
+        let graph = photocraft_doc::xcf_filters::FilterGraph {
+            input: Some(GraphNodeId(19)),
+            nodes: vec![node],
+            edges: vec![photocraft_doc::xcf_filters::GraphEdge {
+                from: GraphNodeId(19),
+                to: GraphNodeId(20),
+                input_port: "input".into(),
+                output_port: "output".into(),
+            }],
+            output: GraphNodeId(20),
+            original_pipeline: None,
+        };
+        let graph_binding =
+            Binding { node: &graph.nodes[0], version_origin: GraphVersionOrigin::Stored, prepared: &prepared, context, policy, domain, full_extent: roi };
+        let assignments = [photocraft_algo::gimp::graph_execute::DomainAssignment { node: GraphNodeId(20), domain }];
+        let output = photocraft_algo::gimp::graph_pipeline::execute_pipeline_domains(
+            &graph,
+            2,
+            Some(&source),
+            roi,
+            domain,
+            &assignments,
+            photocraft_algo::gimp::graph_execute::ExecutionLimits::default(),
+            &Interrupt::NONE,
+            |_, direction, port| accepts_port(direction, port),
+            |r, b| evaluate(&graph_binding, r, b),
+        )
+        .unwrap();
+        let mut bytes = [0u8; 32];
+        output.surface().try_read_pixel_bytes(0, 0, &mut bytes).unwrap();
+        assert_eq!(&bytes[24..], &raw[24..]);
+        output.surface().try_read_pixel_bytes(1, 0, &mut bytes).unwrap();
+        assert_eq!(bytes.as_slice(), outside.as_slice());
+        assert_eq!(output.surface().default_bytes(), source.default_bytes());
+        assert_eq!(remaining - prepared.requirements().remaining_work_units, 3072);
     }
 }

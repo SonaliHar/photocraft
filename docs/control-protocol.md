@@ -1246,3 +1246,59 @@ dock target. The panel menu and icon rail remain
 available in custom workspaces. `window.panel.<id> {show:true}` always reveals, selects
 and expands the panel, including when another tab is selected. Workspace snapshots
 retain custom collapse settings and Timeline visibility.
+
+
+## Stored saved-channel Load from an explicit original
+
+The native desktop control handler and Headless automation backend accept a
+host-only form of the existing `select.loadSelection` through `engine.execute`.
+Native launch requires `--automation-read-root`; Headless construction requires
+`Headless::with_workspace` with a held read root. Denied and TrustedLocal backends
+have no ambient fallback. Platforms without the native host service fail closed.
+Ordinary Load requests without `originalPath` retain their behavior. Native requests
+borrow the live Session and use the same bounded facade; they do not move or clone
+the Session, open a picker, normalize a transient preview, or run UI script hooks.
+
+```json
+{"id":22,"method":"engine.execute","params":{"command":"select.loadSelection","wait":true,"params":{"documentId":"1","expectedRevision":"0","channelId":"2","rawStorage":true,"storedSource":true,"originalPath":"originals/own-channel.xcf","originalOrdinal":"0","profilePolicy":"originalExact"}}}
+```
+
+The inner request contains exactly these eight fields. `documentId` and
+`channelId` are canonical nonzero decimal U64 strings. `expectedRevision` is a
+canonical decimal U64 string, allowing zero but excluding the exhausted maximum.
+Use inspected identities and `revisionString` verbatim. `originalOrdinal` is the
+original file's zero-based physical channel-record ordinal, a canonical decimal
+string below 10,000; a current channel ID, index, name or tattoo cannot substitute
+for this association. Both storage flags must be `true`. `wait:false`, wrong
+field types, unknown keys and pending jobs refuse before synchronization or read.
+
+`originalPath` is an explicitly requested path beneath the already held read
+root, following the workspace capability path rules. It must contain 1..4096
+UTF-8 bytes without NUL. No document locator or SourceIdentity path is consulted.
+The held regular file is read through one capability handle, in bounded chunks,
+with a 16,384-byte limit and an EOF growth probe. Length/mtime changes, short
+reads, excessive Interrupted retries and cancellation refuse before publication.
+Cancellation is cooperative around filesystem calls.
+
+Choose `profilePolicy:"originalExact"` for exact retained interpretation, or
+explicitly request `"materializedImplicit"` for the existing closed RGB/nonlinear
+original whose current ImplicitSrgb marker and ICC bytes pass the generated-profile
+verifier. An absent original ICC alone supplies no working-profile authority.
+Only the existing observed original-byte and canonical current-channel domain is
+accepted; this path does not render or bake Gaussian appearance or apply its mask.
+
+The backend holds a 384 MiB resident, 16 MiB index and 2^34 work aggregate.
+Reader/path/view/header reservations reduce the engine's remaining envelope.
+The original decoder phase uses 64 MiB resident, 2 MiB index and 16,000,000 work;
+current proof uses 128 MiB resident, 4 MiB index and 2^32 work; publication uses
+128 MiB resident, 4 MiB index and 2^31 work. All phases and actual capacities must
+fit together. These lower limits do not enable a large-document policy.
+
+The target snapshot and view are captured before reading and fenced again before
+registered Load. The independent original decoder supplies the original node;
+using a same-ID current node does not supply the proof. A successful result is
+`{"selected":true}`. The registered command is authorized and executed once;
+its journal receives only the existing five keys (`documentId`, `expectedRevision`,
+`channelId`, `rawStorage`, `storedSource`). Original paths, bytes and grants are
+not persisted. Replaying that five-key request without the scoped host offer
+refuses. Native source/cache/filter state remains unchanged.

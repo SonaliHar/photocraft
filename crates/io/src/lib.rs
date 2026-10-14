@@ -111,6 +111,7 @@ pub(crate) mod xcf_fixture;
 pub mod xcf_graphs;
 pub mod xcf_graph_candidate;
 pub use xcf_filters::graph_argument_candidate;
+pub use xcf_filters::scene_channel_preparation_candidate;
 pub mod xcf_import;
 pub use xcf_import::{
     AssembledStoredChannel, CorrespondenceRequirements, NamespaceBacking, StoredChannelCorrespondence, assemble_owned_stored_channel,

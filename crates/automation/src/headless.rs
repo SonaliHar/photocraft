@@ -13,6 +13,8 @@ use crate::workspace::{ExportSequence, authorize_engine_command, authorize_engin
 use crate::{AuthorizedWorkspace, AutomationError, files};
 
 mod linked_root;
+mod stored_channel_root;
+pub use stored_channel_root::load_stored_selection_from_root_with_context;
 
 fn native_save_requested(name: &str, format: Option<&str>) -> bool {
     format
@@ -723,6 +725,9 @@ impl Headless {
     /// Photomerge, â€¦) runs in the background and this returns `{"job": id}` at once (poll with
     /// `jobs.list`, stop with `jobs.cancel`). Other commands finish before returning either way.
     pub fn command_start(&mut self, id: &str, params: Value, wait: bool) -> Result<Value, AutomationError> {
+        if id == "select.loadSelection" && params.get("originalPath").is_some() {
+            return self.stored_selection_from_root(&params, wait);
+        }
         let params = if params.is_null() { json!({}) } else { params };
         if !matches!(&self.filesystem, Filesystem::TrustedLocal) {
             if id == "file.export.renderVideo" {

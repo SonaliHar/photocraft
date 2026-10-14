@@ -645,6 +645,33 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             if req.method == "engine.execute" && matches!(id, "xcf.link.substitute" | "xcf.link.recover") && !wait {
                 return err(format!("{id}.context"));
             }
+            // Programmatic host form: borrow the exact small request BEFORE
+            // app.run, script hooks, job normalization or arbitrary JSON clones.
+            if req.method == "engine.execute" && id == "select.loadSelection"
+                && p.get("params").and_then(|value| value.get("originalPath")).is_some() {
+                let wait = match p.get("wait") {
+                    None => true,
+                    Some(Value::Bool(value)) => *value,
+                    _ => return err("select.loadSelection.originalPath: wait must be a boolean"),
+                };
+                if !wait { return err("select.loadSelection.originalPath: stored original Load requires wait=true"); }
+                let Some(request) = p.get("params") else { return err("stored original Load params required") };
+                if let Some(authorize) = app.services.automation_command.as_ref()
+                    && let Err(error) = authorize(id, request) {
+                    return err(error);
+                }
+                let Some(service) = app.services.automation_stored_selection.as_mut() else {
+                    return err("select.loadSelection.originalPath: held read-root service unavailable");
+                };
+                let context = photocraft_engine::jobs::JobCtx::new();
+                // handle() already scoped the desktop per-step authorizer onto
+                // this live Session. The platform facade preflights it and the
+                // sole registered final execute checks it again normally.
+                let result = service(&mut app.session, request, wait, &context);
+                if result.is_ok() { app.sync_views(); ctx.request_repaint(); }
+                // No preference restore or other fallible work after commit.
+                return wrap(result);
+            }
             let params = p.get("params").cloned().unwrap_or(json!({}));
             // A control-channel menu click must respect the same modal gate as the native menu.
             // Camera Raw's documented `ui` requests operate its already-open dialog rather
@@ -3423,3 +3450,7 @@ mod filter_stack_page_tests {
         assert_eq!(result["ok"],true);assert!(app.ui.xcf_filter_stack_page.is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "control/stored_channel_root_tests.rs"]
+mod stored_channel_root_tests;

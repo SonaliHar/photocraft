@@ -77,6 +77,7 @@ fn lower(e: math::Error) -> E {
         math::Error::Raster(r) => r.into(),
         math::Error::NonFinite | math::Error::OutsideUnit => R::InvalidSample.into(),
         math::Error::UnsupportedConfiguration => bad("GIMP sector Hue/Saturation unsupported named settings or combination"),
+        math::Error::UnsupportedHueWrap => bad("GIMP sector Hue/Saturation adjacent mapped hue wrap unsupported"),
         _ => bad("GIMP hue/saturation declared parameters/context"),
     }
 }
@@ -198,7 +199,12 @@ pub fn requirements(node: &FilterNode, b: SourceBinding<'_>, format: PixelFormat
     Ok(Requirements {
         retained_bytes,
         preparation_work_units,
-        sample_work_units: math::SAMPLE_WORK,
+        sample_work_units: match b.policy {
+            NumericPolicy::OriginalHslF32SixPhaseAdjacentMappedHsl => math::ADJACENT_SAMPLE_WORK,
+            NumericPolicy::OriginalHslF32SixPhaseOutputSaturationBound | NumericPolicy::OriginalHslF32SixPhaseAllPureHueOutputSaturationBound => {
+                math::SAMPLE_WORK
+            }
+        },
         remaining_work_units: limits.work_units - preparation_work_units,
     })
 }
@@ -246,15 +252,20 @@ impl<L> Prepared<'_, L> {
     pub fn policy(&self) -> NumericPolicy {
         self.kernel.policy()
     }
+    /// Actual immutable numerical policy cost supplied by the prepared kernel.
+    pub fn sample_work(&self) -> u64 {
+        self.kernel.sample_work()
+    }
     pub fn scalar_bits(&self) -> [u64; 23] {
         self.bits
     }
     pub fn requirements(&self) -> Requirements {
         let mut q = self.requirements;
+        q.sample_work_units = self.sample_work();
         q.remaining_work_units = self.limits.work_units.saturating_sub(self.work.load(Ordering::Relaxed));
         q
     }
-    /// Caller prepays SAMPLE_WORK for EACH RGB tuple call (prevalidation and
+    /// Caller prepays sample_work() for EACH RGB tuple call (prevalidation and
     /// rendering) in its held graph/job ledger. Unit native F64 is checked before
     /// explicit Float ingress/finalFloat widening. Alpha is never interpreted.
     pub fn evaluate_rgb_with_interrupt(&self, value: [f64; 3], actual: WorkingContext, c: &Interrupt<'_>) -> Result<[f64; 3]> {
@@ -263,7 +274,7 @@ impl<L> Prepared<'_, L> {
             return Err(bad("GIMP working context changed"));
         }
         self.work
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(math::SAMPLE_WORK).filter(|n| *n <= self.limits.work_units))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(self.sample_work()).filter(|n| *n <= self.limits.work_units))
             .map_err(|_| limit())?;
         if value.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
             return Err(R::InvalidSample.into());
@@ -457,5 +468,51 @@ mod tests {
             Err(E::Unsupported("GIMP sector Hue/Saturation unsupported named settings or combination"))
         ));
         assert_eq!(refused.bytes, 0);
+    }
+    #[test]
+    fn explicit_new_pure_hue_policy_admits_green_blue_without_changing_old_policy() {
+        for (field, input, expected) in [(10, [0.35, 0.8, 0.2], [0.2, 0.8, 0.5]), (16, [0.2, 0.35, 0.8], [0.5, 0.2, 0.8])] {
+            let mut original = node();
+            if let FilterValue::Config(fields) = &mut original.arguments[0].value {
+                for f in fields.iter_mut() {
+                    f.value = FilterValue::Number(ExactNumber::Float64Bits(0));
+                }
+                fields[field].value = FilterValue::Number(ExactNumber::Float64Bits(0.25f64.to_bits()));
+            }
+            let mut rejected = Budget::default();
+            assert!(prepare(&original, bound(), PixelFormat::RGBA32F, Limits::default(), &mut rejected, &Interrupt::NONE).is_err());
+            assert_eq!(rejected.bytes, 0);
+            let b = SourceBinding { policy: NumericPolicy::OriginalHslF32SixPhaseAllPureHueOutputSaturationBound, ..bound() };
+            let mut budget = Budget::default();
+            let prepared = prepare(&original, b, PixelFormat::RGBA32F, Limits::default(), &mut budget, &Interrupt::NONE).unwrap();
+            let output = prepared.evaluate_rgb_with_interrupt(input, b.context, &Interrupt::NONE).unwrap();
+            assert!(output.iter().zip(expected).all(|(a, b)| (*a - b).abs() < 1e-6));
+            assert_eq!(prepared.sample_work(), math::SAMPLE_WORK);
+            assert_eq!(prepared.evaluate_rgb_with_interrupt([0.4; 3], b.context, &Interrupt::NONE).unwrap(), [f64::from(0.4f32); 3]);
+        }
+    }
+    #[test]
+    fn adjacent_policy_charges_its_actual_cost_and_retains_saturation_lightness_words() {
+        let mut original = node();
+        if let FilterValue::Config(fields) = &mut original.arguments[0].value {
+            for f in fields.iter_mut() {
+                f.value = FilterValue::Number(ExactNumber::Float64Bits(0));
+            }
+            for (i, v) in [(7, 0.125f64), (8, -0.25), (9, 0.25), (10, 0.125), (11, -0.5), (12, -0.25), (22, 0.5)] {
+                fields[i].value = FilterValue::Number(ExactNumber::Float64Bits(v.to_bits()));
+            }
+        }
+        let before = original.clone();
+        let b = SourceBinding { policy: NumericPolicy::OriginalHslF32SixPhaseAdjacentMappedHsl, ..bound() };
+        let limits = Limits { work_units: BIND_WORK + math::PREPARATION_WORK + math::ADJACENT_SAMPLE_WORK, ..Limits::default() };
+        let mut budget = Budget::default();
+        let prepared = prepare(&original, b, PixelFormat { sample: SampleType::F64, ..PixelFormat::RGBA32F }, limits, &mut budget, &Interrupt::NONE).unwrap();
+        assert_eq!(prepared.sample_work(), 1536);
+        assert_eq!(prepared.requirements().sample_work_units, prepared.sample_work());
+        let got = prepared.evaluate_rgb_with_interrupt([0.5, 0.75, 0.25], b.context, &Interrupt::NONE).unwrap();
+        assert!(got.iter().all(|v| v.is_finite()));
+        assert_eq!(prepared.requirements().remaining_work_units, 0);
+        assert!(prepared.evaluate_rgb_with_interrupt([0.5, 0.75, 0.25], b.context, &Interrupt::NONE).is_err());
+        assert_eq!(prepared.original_node(), &before);
     }
 }

@@ -488,6 +488,13 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         Box::new(move |path: &str, reply: FileDialogReply| rooted_linked_replacement(&workspace, path, reply))
             as photocraft_ui_egui::file_dialog::AutomationReadXcfLinkedReplacementFn
     });
+    let automation_stored_selection = automation.clone().filter(|workspace| workspace.has_read_root()).map(|workspace| {
+        Box::new(move |session: &mut photocraft_engine::Session, params: &serde_json::Value, wait: bool, context: &photocraft_engine::jobs::JobCtx| {
+            crate::crash_guard::guard("Load Stored Selection", || {
+                photocraft_automation::load_stored_selection_from_root_with_context(session, &workspace, params, wait, context).map_err(|error| error.to_string())
+            })
+        }) as photocraft_ui_egui::AutomationStoredSelectionFn
+    });
     let automation_write = automation.clone().map(|workspace| {
         Box::new(move |path: &str, bytes: &[u8], protection: &photocraft_engine::WriteProtection| {
             workspace.write_protected(path, bytes, &protection.sources, &protection.fingerprints).map_err(|error| error.to_string())
@@ -549,6 +556,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         write: Some(Box::new(|path: &str, bytes: &[u8]| write_atomic(Path::new(path), bytes))),
         automation_read,
         automation_read_xcf_linked_replacement,
+        automation_stored_selection,
         automation_write,
         automation_open_pcraft,
         automation_save,

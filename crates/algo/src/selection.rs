@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::photo_util::{par_map, par_rows};
 
 mod wand_controlled;
+pub mod native_mask_combine;
 mod color_range_controlled;
 pub use color_range_controlled::{color_range_lab_with_interrupt, named_color_range_with_interrupt, ColorRangeLimits, NamedColorRange};
 pub use wand_controlled::{WandLimits, try_rgba8_image_with_interrupt, try_wand_region_with_interrupt, try_combine_region_with_interrupt};

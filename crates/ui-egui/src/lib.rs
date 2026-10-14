@@ -369,6 +369,10 @@ pub(crate) enum SaveKind {
 pub type AutomationOpenPcraftFn = Box<dyn FnMut(&str) -> Result<Option<(String, Document)>, String>>;
 /// Reject engine commands which still perform ambient filesystem I/O.
 pub type AutomationCommandFn = Box<dyn Fn(&str, &Value) -> Result<(), String>>;
+/// Invoke the registered stored-channel Load using borrowed live engine state
+/// and a platform-held read root. Platforms without the service fail closed.
+pub type AutomationStoredSelectionFn = Box<dyn FnMut(&mut photocraft_engine::Session, &Value, bool, &photocraft_engine::jobs::JobCtx) -> Result<Value, String>>;
+
 /// Open a URL in the system browser (native) — reliable cross-platform, unlike `ctx.open_url`.
 pub type OpenUrlFn = Box<dyn Fn(&str) -> Result<(), String>>;
 pub type EncodePngFn = Box<dyn Fn(u32, u32, &[u8]) -> Result<Vec<u8>, String>>;
@@ -459,6 +463,8 @@ pub struct Services {
     /// Capped asynchronous linked-image read beneath the held automation root.
     /// Stored document locators never supply authority to this service.
     pub automation_read_xcf_linked_replacement: Option<file_dialog::AutomationReadXcfLinkedReplacementFn>,
+    /// Exact originalPath host form only; never a generic source locator read.
+    pub automation_stored_selection: Option<AutomationStoredSelectionFn>,
     pub automation_write: Option<AutomationWriteFn>,
     /// Stream native output beneath the held automation write root only.
     pub automation_native_save: Option<services::NativeSaveFn>,

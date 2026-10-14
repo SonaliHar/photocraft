@@ -198,6 +198,7 @@ pub mod xcf_selection_cmds;
 pub mod xcf_channel_state_cmds;
 pub mod xcf_channel_consumer;
 pub mod xcf_channel_stored_load;
+pub mod xcf_channel_host_load;
 pub mod xcf_channel_gaussian_prepare;
 pub mod xcf_layer_stored_prepare;
 pub mod xcf_layer_gaussian_prepare;
@@ -1066,6 +1067,24 @@ impl Session {
         self.edit_index_with_interrupt(index, label, control, None, false, f)
     }
 
+    /// Caller-admitted resident history staging for a synchronous transaction.
+    /// Document/output backing and the complete history envelope remain held by
+    /// the caller through this method. The controlled history is installed only
+    /// with the privately validated document at the final cancellation fence.
+    pub(crate) fn edit_with_controlled_resident_history_with_interrupt<R>(
+        &mut self,
+        label: &str,
+        limits: photocraft_ops::ResidentHistoryLimits,
+        control: &photocraft_raster::Interrupt<'_>,
+        f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>,
+    ) -> Result<R> {
+        if self.coalesce_request.is_some() || self.color_restrict.is_some() {
+            return Err(EngineError::Other("finish transient edits before controlled history publication".into()));
+        }
+        let index = self.active.ok_or(EngineError::NoDocument)?;
+        self.edit_index_font_input(index, label, control, None, false, None, Some(limits), f)
+    }
+
     /// Reuses a caller-admitted runtime font through the final edit validator.
     /// The borrowed handle is scoped to this transaction and is never stored in
     /// the session, document, or history. All normal edit fences still apply.
@@ -1077,7 +1096,7 @@ impl Session {
         f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>,
     ) -> Result<R> {
         let index = self.active.ok_or(EngineError::NoDocument)?;
-        self.edit_index_font_input(index, label, control, None, false, Some(font), f)
+        self.edit_index_font_input(index, label, control, None, false, Some(font), None, f)
     }
 
     /// Commit to a caller-fenced resident document without changing tab focus.
@@ -1143,7 +1162,7 @@ impl Session {
         reset_channel_view: bool,
         f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>,
     ) -> Result<R> {
-        self.edit_index_font_input(index, label, control, target, reset_channel_view, None, f)
+        self.edit_index_font_input(index, label, control, target, reset_channel_view, None, None, f)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1155,6 +1174,7 @@ impl Session {
         target: Option<(LayerTarget, Option<LayerId>)>,
         reset_channel_view: bool,
         font: Option<&photocraft_text::xcf::runtime_font_input::PreparedRuntimeFont<'_>>,
+        resident_history: Option<photocraft_ops::ResidentHistoryLimits>,
         f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>,
     ) -> Result<R> {
         control.check().map_err(|_| EngineError::Cancelled)?;
@@ -1226,15 +1246,24 @@ impl Session {
         let damage = layer_multi_cmds::step_damage(&before, &snapshot);
         let key = self.coalesce_request.clone();
         let st = self.docs.get_mut(index).ok_or(EngineError::NoDocument)?;
-        let mut history = st.history.clone();
         let history_control = photocraft_raster::backing::ReadControl { interrupt: control, work: &|_| Ok(()) };
-        if key.is_none() || st.coalesce != key || !history.can_undo() {
-            history.set_current_layers(prior, &history_control)?;
-            history.record(label, before, layers, &history_control)?;
-            history.trim(&snapshot, &history_control)?;
+        let history = if let Some(limits) = resident_history {
+            if key.is_some() || st.coalesce.is_some() {
+                return Err(EngineError::Other("controlled history cannot coalesce".into()));
+            }
+            st.history.try_clone_record_trim_with_interrupt(before, &snapshot, label, &prior, &layers, limits, control)
+                .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { EngineError::Other(format!("controlled resident history: {error}")) })?
         } else {
-            history.set_current_layers(layers, &history_control)?;
-        }
+            let mut history = st.history.clone();
+            if key.is_none() || st.coalesce != key || !history.can_undo() {
+                history.set_current_layers(prior, &history_control)?;
+                history.record(label, before, layers, &history_control)?;
+                history.trim(&snapshot, &history_control)?;
+            } else {
+                history.set_current_layers(layers, &history_control)?;
+            }
+            history
+        };
         control.check().map_err(|_| EngineError::Cancelled)?;
         st.doc = snapshot;
         st.history = history;

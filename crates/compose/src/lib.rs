@@ -63,6 +63,8 @@ pub mod gimp_mixed_hue_saturation_candidate;
 pub mod gimp_mixed_hue_saturation_graph_candidate;
 pub mod gimp_sector_hue_saturation_candidate;
 pub mod gimp_sector_hue_saturation_graph_candidate;
+pub mod gimp_gray_hue_saturation_candidate;
+pub mod gimp_gray_hue_saturation_graph_candidate;
 pub mod gimp_link_native_precision_candidate;
 pub mod gimp_link_wide_cubic_candidate;
 pub mod gimp_link_owned_wide_candidate;

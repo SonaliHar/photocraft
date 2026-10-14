@@ -23,7 +23,16 @@ pub struct ProfileOwnedBinding<'a> {
  parameters:ProfileOwnedParameters<'a>,
  candidate:OwnedConfiguredColorCandidate<'a>,
 }
+/// Actual constructor-owned storage/work, not a caller-asserted source census.
+#[derive(Clone,Copy,Debug)]
+pub struct ProfileOwnedBindingReceipt {
+ pub retained_bytes:u64,
+ pub preparation_work_units:u64,
+}
 impl<'a> ProfileOwnedBinding<'a> {
+ pub fn parameters(&self)->&ProfileOwnedParameters<'a>{&self.parameters}
+ pub fn original_node(&self)->&FilterNode{self.candidate.original_node()}
+ pub fn requirements_receipt(&self)->ProfileOwnedBindingReceipt{ProfileOwnedBindingReceipt{retained_bytes:self.candidate.retained_bytes(),preparation_work_units:self.candidate.preparation_work()}}
  pub(crate) fn execution_parameters(&self)->&ProfileOwnedParameters<'a>{&self.parameters}
  pub(crate) fn execution_original(&self)->&FilterNode{self.candidate.original_node()}
  pub(crate) fn execution_retained(&self)->u64{self.candidate.retained_bytes()}

@@ -251,6 +251,8 @@ pub use scene_channel_storage::{
 };
 #[path = "xcf_filters/scene_channel_configured.rs"]
 mod scene_channel_configured;
+#[path = "xcf_filters/scene_channel_preparation_candidate.rs"]
+pub mod scene_channel_preparation_candidate;
 pub use scene_channel_configured::{
     ConfiguredEffectBinding, ConfiguredEffectIdentity, ConfiguredSceneStacks,
     SceneConfiguredLimits, SceneConfiguredRequirements, map_scene_channel_configured,

@@ -9,8 +9,18 @@
 //! zero overlap and exclusive local selection. Existing ALL/RED controls retain
 //! the mixed58e26/af3a and bounds916c/d430 declared schedule. Green/Blue, adjacent
 //! local combinations and other named-sector S/L remain explicit refusals.
+//! The additive AllPureHue policy separately admits Green/Blue exclusive hue
+//! at overlap0 from sealed c16ce6d3/3188bf93. It does not resolve the adjacent
+//! mixed-window/HSL-blend ambiguity or enroll general local S/L/overlap controls.
+//! The original policy still rejects Green/Blue with identical behavior.
 //! This Float-ingress/f64-HSL/final-Float recipe is a candidate, not hidden TRC,
 //! unique intermediate precision, source/default qualification or native equality.
+//! AdjacentMappedHsl separately consumes nonmid6cfe5b4c/08d5a2b6: only Y/G or
+//! C/B pairs with neutral ALL/RED/others and overlap exactly.5. Original local
+//! HSL maps blend before RGB once. Dynamic unsupported hue wrap/half-turn refuses;
+//! no universal circular policy, all-sector symmetry or coefficient-sum identity
+//! follows. Earlier ALL/RED coefficient-sum recipes remain declared candidates,
+//! not retroactively asserted as unique source mathematics.
 use super::wide_point::WorkingContext;
 use photocraft_color::{ColorMode, PixelFormat, SampleType, try_read_sample_f64, try_write_sample_f64};
 use photocraft_doc::SampleEncoding;
@@ -20,6 +30,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub const PREPARATION_WORK: u64 = 1024;
 /// Declared operation work, not a measured libm latency bound.
 pub const SAMPLE_WORK: u64 = 768;
+/// The distinct adjacent policy prices two weighted local HSL maps.
+pub const ADJACENT_SAMPLE_WORK: u64 = 1536;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Parameters {
     pub time_bits: Option<u64>,
@@ -45,6 +57,7 @@ pub enum Error {
     NonFinite,
     OutsideUnit,
     UnsupportedConfiguration,
+    UnsupportedHueWrap,
 }
 impl From<RasterInputError> for Error {
     fn from(v: RasterInputError) -> Self {
@@ -76,6 +89,12 @@ pub struct Requirements {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NumericPolicy {
     OriginalHslF32SixPhaseOutputSaturationBound,
+    /// All six independently observed exclusive pure-hue sectors, not all-sector
+    /// mixed controls. Earlier ALL/RED lanes retain their existing declared math.
+    OriginalHslF32SixPhaseAllPureHueOutputSaturationBound,
+    /// Closed Y/G or C/B pair at overlap.5, original mapped HSL components.
+    /// Unsupported weighted hue wrapping/half-turn ambiguity refuses explicitly.
+    OriginalHslF32SixPhaseAdjacentMappedHsl,
 }
 pub struct PreparedSectorHueSaturation {
     format: PixelFormat,
@@ -179,23 +198,42 @@ impl PreparedSectorHueSaturation {
         // pure hue with ALL neutral and overlap0; no symmetry/mix is inferred.
         let mut local_sector = 0usize;
         let mut local = *red;
-        let mut named = None;
-        for (index, range) in parameters.ranges.iter().enumerate().skip(2) {
-            if range.iter().all(|bits| f64::from_bits(*bits) == 0.0) {
-                continue;
-            }
-            if !matches!(index, 2 | 4 | 6)
-                || named.is_some()
-                || overlap != 0.0
-                || all.iter().any(|bits| f64::from_bits(*bits) != 0.0)
-                || red.iter().any(|bits| f64::from_bits(*bits) != 0.0)
-                || range.iter().skip(1).any(|bits| f64::from_bits(*bits) != 0.0)
-            {
+        if policy == NumericPolicy::OriginalHslF32SixPhaseAdjacentMappedHsl {
+            if overlap != 0.5 || all.iter().chain(red).any(|bits| f64::from_bits(*bits) != 0.0) {
                 return Err(Error::UnsupportedConfiguration);
             }
-            named = Some(index);
-            local_sector = index.checked_sub(1).ok_or(Error::Parameters)?;
-            local = *range;
+            let active =
+                |index: usize| -> Result<bool> { Ok(parameters.ranges.get(index).ok_or(Error::Parameters)?.iter().any(|bits| f64::from_bits(*bits) != 0.0)) };
+            let pair = if active(2)? && active(3)? && !active(4)? && !active(5)? && !active(6)? {
+                (2usize, 6usize)
+            } else if !active(2)? && !active(3)? && active(4)? && active(5)? && !active(6)? {
+                (4usize, 7usize)
+            } else {
+                return Err(Error::UnsupportedConfiguration);
+            };
+            local = *parameters.ranges.get(pair.0).ok_or(Error::Parameters)?;
+            local_sector = pair.1;
+        } else {
+            let mut named = None;
+            for (index, range) in parameters.ranges.iter().enumerate().skip(2) {
+                if range.iter().all(|bits| f64::from_bits(*bits) == 0.0) {
+                    continue;
+                }
+                let admitted = matches!(index, 2 | 4 | 6)
+                    || matches!(policy, NumericPolicy::OriginalHslF32SixPhaseAllPureHueOutputSaturationBound) && matches!(index, 3 | 5);
+                if !admitted
+                    || named.is_some()
+                    || overlap != 0.0
+                    || all.iter().any(|bits| f64::from_bits(*bits) != 0.0)
+                    || red.iter().any(|bits| f64::from_bits(*bits) != 0.0)
+                    || range.iter().skip(1).any(|bits| f64::from_bits(*bits) != 0.0)
+                {
+                    return Err(Error::UnsupportedConfiguration);
+                }
+                named = Some(index);
+                local_sector = index.checked_sub(1).ok_or(Error::Parameters)?;
+                local = *range;
+            }
         }
         let local_hue = f64::from_bits(*local.first().ok_or(Error::Parameters)?);
         let local_saturation = f64::from_bits(*local.get(1).ok_or(Error::Parameters)?);
@@ -233,11 +271,17 @@ impl PreparedSectorHueSaturation {
     pub fn parameters(&self) -> Parameters {
         self.parameters
     }
+    pub fn sample_work(&self) -> u64 {
+        match self.policy {
+            NumericPolicy::OriginalHslF32SixPhaseAdjacentMappedHsl => ADJACENT_SAMPLE_WORK,
+            NumericPolicy::OriginalHslF32SixPhaseOutputSaturationBound | NumericPolicy::OriginalHslF32SixPhaseAllPureHueOutputSaturationBound => SAMPLE_WORK,
+        }
+    }
     pub fn remaining_work(&self) -> u64 {
         self.remaining_work.load(Ordering::Relaxed)
     }
     /// Allocation-free declared native-nonlinear unit RGB HSL math. Enclosing
-    /// consumers prepay SAMPLE_WORK per RGB tuple and poll their actual job token.
+    /// consumers prepay sample_work() per RGB tuple and poll their actual job token.
     /// RGB/lightness/combined parameters remain unclipped. Only the explicit
     /// hue weight and resulting saturation0..1 output are bounded here.
     /// This output-equivalent floor does not identify the hidden internal stage.
@@ -269,36 +313,86 @@ impl PreparedSectorHueSaturation {
             };
             hue = (sector / 6.0).rem_euclid(1.0);
         }
-        let original_saturation = saturation;
-        let original_hue = hue;
-        let phase = match self.policy {
-            NumericPolicy::OriginalHslF32SixPhaseOutputSaturationBound => f64::from((original_hue * 6.0) as f32) / 6.0,
-        };
-        let distance = phase.min(1.0 - phase);
-        let weight = if original_saturation == 0.0 {
-            0.0
-        } else if self.local_sector != 0 {
-            // Named pure hue lanes: original Float six-phase band, lower
-            // inclusive/upper exclusive. These sectors never receive overlap.
-            let phase_six = match self.policy {
-                NumericPolicy::OriginalHslF32SixPhaseOutputSaturationBound => f64::from((original_hue * 6.0) as f32),
-            };
-            let center = self.local_sector as f64;
-            if phase_six >= center - 0.5 && phase_six < center + 0.5 { 1.0 } else { 0.0 }
-        } else if self.overlap == 0.0 {
-            if phase < 1.0 / 12.0 || phase >= 11.0 / 12.0 { 1.0 } else { 0.0 }
+        if self.policy == NumericPolicy::OriginalHslF32SixPhaseAdjacentMappedHsl {
+            // This policy retains the original source HSL for both maps; opposing
+            // signed lightness branches must be mapped before components blend.
+            if saturation != 0.0 {
+                let phase = f64::from((hue * 6.0) as f32);
+                let first = match self.local_sector {
+                    6 => 2usize,
+                    7 => 4usize,
+                    _ => return Err(Error::UnsupportedConfiguration),
+                };
+                let second = first.checked_add(1).ok_or(Error::Parameters)?;
+                let mut weight_sum = 0.0;
+                let mut hue_sum = 0.0;
+                let mut sat_sum = 0.0;
+                let mut light_sum = 0.0;
+                for index in [first, second] {
+                    let center = index.checked_sub(1).ok_or(Error::Parameters)? as f64;
+                    let difference = (phase - center + 3.0).rem_euclid(6.0) - 3.0;
+                    let weight = (0.5 + (0.5 - difference.abs()) / self.overlap).clamp(0.0, 1.0);
+                    if weight == 0.0 {
+                        continue;
+                    }
+                    let range = self.parameters.ranges.get(index).ok_or(Error::Parameters)?;
+                    let mapped_hue = hue + f64::from_bits(*range.first().ok_or(Error::Parameters)?) / 2.0;
+                    // No universal circular-anchor claim: this closed policy
+                    // accepts only nonwrapping shifts strictly below half a turn.
+                    if !(0.0..1.0).contains(&mapped_hue) || (mapped_hue - hue).abs() >= 0.5 {
+                        return Err(Error::UnsupportedHueWrap);
+                    }
+                    let mapped_sat = (saturation * (1.0 + f64::from_bits(*range.get(1).ok_or(Error::Parameters)?))).clamp(0.0, 1.0);
+                    let lightness = f64::from_bits(*range.get(2).ok_or(Error::Parameters)?);
+                    let mapped_light = if lightness < 0.0 { light * (1.0 + lightness) } else { light + (1.0 - light) * lightness };
+                    weight_sum += weight;
+                    hue_sum += weight * mapped_hue;
+                    sat_sum += weight * mapped_sat;
+                    light_sum += weight * mapped_light;
+                }
+                // Unaffected local ranges are neutral mapped source HSL. This
+                // remaining weight preserves the neutral conversion outside pair.
+                let neutral = 1.0 - weight_sum;
+                hue = hue_sum + neutral * hue;
+                saturation = sat_sum + neutral * saturation;
+                light = light_sum + neutral * light;
+            }
         } else {
-            (0.5 + (1.0 / 12.0 - distance) / (self.overlap / 6.0)).clamp(0.0, 1.0)
-        };
-        let combined_hue = self.all_hue + weight * self.local_hue;
-        let combined_saturation = self.all_saturation + weight * self.local_saturation;
-        let combined_lightness = self.all_lightness + weight * self.local_lightness;
-        hue = (hue + combined_hue / 2.0).rem_euclid(1.0);
-        saturation = saturation * (1.0 + combined_saturation);
-        // Unit-input observations support this output-equivalent bound;
-        // the hidden location of the negative floor remains unidentified.
-        saturation = saturation.clamp(0.0, 1.0);
-        light = if combined_lightness < 0.0 { light * (1.0 + combined_lightness) } else { light + (1.0 - light) * combined_lightness };
+            let original_saturation = saturation;
+            let original_hue = hue;
+            let phase = match self.policy {
+                NumericPolicy::OriginalHslF32SixPhaseOutputSaturationBound
+                | NumericPolicy::OriginalHslF32SixPhaseAllPureHueOutputSaturationBound
+                | NumericPolicy::OriginalHslF32SixPhaseAdjacentMappedHsl => f64::from((original_hue * 6.0) as f32) / 6.0,
+            };
+            let distance = phase.min(1.0 - phase);
+            let weight = if original_saturation == 0.0 {
+                0.0
+            } else if self.local_sector != 0 {
+                // Named pure hue lanes: original Float six-phase band, lower
+                // inclusive/upper exclusive. These sectors never receive overlap.
+                let phase_six = match self.policy {
+                    NumericPolicy::OriginalHslF32SixPhaseOutputSaturationBound
+                    | NumericPolicy::OriginalHslF32SixPhaseAllPureHueOutputSaturationBound
+                    | NumericPolicy::OriginalHslF32SixPhaseAdjacentMappedHsl => f64::from((original_hue * 6.0) as f32),
+                };
+                let center = self.local_sector as f64;
+                if phase_six >= center - 0.5 && phase_six < center + 0.5 { 1.0 } else { 0.0 }
+            } else if self.overlap == 0.0 {
+                if phase < 1.0 / 12.0 || phase >= 11.0 / 12.0 { 1.0 } else { 0.0 }
+            } else {
+                (0.5 + (1.0 / 12.0 - distance) / (self.overlap / 6.0)).clamp(0.0, 1.0)
+            };
+            let combined_hue = self.all_hue + weight * self.local_hue;
+            let combined_saturation = self.all_saturation + weight * self.local_saturation;
+            let combined_lightness = self.all_lightness + weight * self.local_lightness;
+            hue = (hue + combined_hue / 2.0).rem_euclid(1.0);
+            saturation = saturation * (1.0 + combined_saturation);
+            // Unit-input observations support this output-equivalent bound;
+            // the hidden location of the negative floor remains unidentified.
+            saturation = saturation.clamp(0.0, 1.0);
+            light = if combined_lightness < 0.0 { light * (1.0 + combined_lightness) } else { light + (1.0 - light) * combined_lightness };
+        }
         // Stable inverse of the same public HSL relation: subtracting from1
         // would erase the chroma of valid subnormal dark Float colors.
         let c = (if light <= 0.5 { 2.0 * light } else { 2.0 - 2.0 * light }) * saturation;
@@ -349,7 +443,7 @@ impl PreparedSectorHueSaturation {
         let peak_resident_bytes =
             add(add(source_retained_bytes, parameter_retained_bytes)?, add(add(output_retained_bytes, output_index_bytes)?, scratch_bytes)?)?;
         let work_units = add(
-            add(mul(length, 8)?, mul(length / bpp, SAMPLE_WORK)?)?,
+            add(mul(length, 8)?, mul(length / bpp, self.sample_work())?)?,
             add(add(mul(mul(count, add(source_tiles, count)?)?, 512)?, mul(source_tiles, 256)?)?, mul(mul(count, payload)?, 2)?)?,
         )?;
         poll(ctl)?;

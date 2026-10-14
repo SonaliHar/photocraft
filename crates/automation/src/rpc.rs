@@ -90,6 +90,20 @@ impl Headless {
             let id = params.get("command").and_then(Value::as_str).ok_or_else(|| bad("missing linked-image command"))?;
             return self.command_start(id, params.get("params").cloned().unwrap_or(Value::Null), wait);
         }
+        // Host original bytes are captured/read before any job synchronization.
+        // Borrow the strict small request; never clone arbitrary inner JSON here.
+        if method == "engine.execute"
+            && params.get("command").and_then(Value::as_str) == Some("select.loadSelection")
+            && params.get("params").and_then(|p| p.get("originalPath")).is_some()
+        {
+            let wait = match params.get("wait") {
+                None => true,
+                Some(Value::Bool(value)) => *value,
+                _ => return Err(bad("stored original Load wait must be a boolean")),
+            };
+            let request = params.get("params").ok_or_else(|| bad("stored original Load params required"))?;
+            return self.stored_selection_from_root(request, wait);
+        }
         self.sync_jobs();
         let p = if params.is_null() { json!({}) } else { params };
         match method {

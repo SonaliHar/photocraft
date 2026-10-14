@@ -153,12 +153,17 @@ pub(crate) fn run(session: &mut Session, params: &Value) -> Result<Value> {
         if offer.unchanged {
             return Ok(response);
         }
-        session.edit_with_interrupt("Load Stored Selection", control, |doc, _| {
+        let edit = |doc: &mut photocraft_doc::Document, _: &mut Option<photocraft_doc::LayerId>| {
             offer.prepared.apply_selection_bounds(doc, control)?;
             doc.selection = Some(output);
             control.check().map_err(|_| EngineError::Cancelled)?;
             Ok(())
-        })?;
+        };
+        if let Some(limits) = offer.prepared.resident_history_limits() {
+            session.edit_with_controlled_resident_history_with_interrupt("Load Stored Selection", limits, control, edit)?;
+        } else {
+            session.edit_with_interrupt("Load Stored Selection", control, edit)?;
+        }
         // No cancellation or other fallible operation after publication.
         Ok(response)
     })
@@ -209,6 +214,69 @@ mod tests {
         let mut session = Session::new();
         session.add_document(doc, None).unwrap();
         (session, ChannelId(19))
+    }
+    #[test]
+    fn admitted_byte_budgeted_resident_history_restores_exact_selection() {
+        let (mut session, source) = transaction_session();
+        session.active_mut().unwrap().history.max_bytes = 1 << 20;
+        assert!(session.active().unwrap().history.plain_clone_census_work().is_err());
+        let before = session.active().unwrap().doc.selection.as_ref().unwrap().clone();
+        let output = session.active().unwrap().doc.channels.iter().find(|channel| channel.id == source).unwrap().surface.clone();
+        let expected = output.clone();
+        session
+            .edit_with_controlled_resident_history_with_interrupt(
+                "Load Stored Selection",
+                photocraft_ops::ResidentHistoryLimits::default(),
+                &Interrupt::NONE,
+                |document, _| {
+                    document.selection = Some(output);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(session.active().unwrap().history.max_bytes, 1 << 20);
+        assert!(session.undo());
+        assert!(
+            super::super::super::selection_storage_controlled::equal_storage(
+                session.active().unwrap().doc.selection.as_ref().unwrap(),
+                &before,
+                &Interrupt::NONE,
+            )
+            .unwrap()
+        );
+        assert!(session.redo());
+        assert!(
+            super::super::super::selection_storage_controlled::equal_storage(
+                session.active().unwrap().doc.selection.as_ref().unwrap(),
+                &expected,
+                &Interrupt::NONE,
+            )
+            .unwrap()
+        );
+    }
+    #[test]
+    fn cancelled_controlled_history_transaction_keeps_selection_and_history() {
+        let (mut session, _) = transaction_session();
+        session.active_mut().unwrap().history.max_bytes = 1 << 20;
+        let before = session.active().unwrap().doc.clone();
+        let revision = session.active().unwrap().revision;
+        let cancel = AtomicBool::new(false);
+        let check = || cancel.load(Ordering::Relaxed);
+        let control = Interrupt::cancel_only(&check);
+        let result = session.edit_with_controlled_resident_history_with_interrupt(
+            "Load Stored Selection",
+            photocraft_ops::ResidentHistoryLimits::default(),
+            &control,
+            |document, _| {
+                document.selection = None;
+                cancel.store(true, Ordering::Relaxed);
+                Ok(())
+            },
+        );
+        assert!(matches!(result, Err(EngineError::Cancelled)));
+        assert!(session.active().unwrap().doc.shares_state(&before));
+        assert_eq!(session.active().unwrap().revision, revision);
+        assert!(!session.active().unwrap().history.can_undo());
     }
     fn offer_after_binding(session: &Session, source: photocraft_doc::item_identity::ChannelId, ctx: JobCtx) -> (StoredLoadOffer, Value) {
         // This isolated draft verifies registered publication AFTER the genuine

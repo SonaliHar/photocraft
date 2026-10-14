@@ -255,8 +255,18 @@ pub struct PreparedStoredLoad {
     publication_runtime: Option<[usize; 4]>,
     publication_history: Option<photocraft_ops::CloneMetadataRequirements>,
     publication_history_max_states: Option<usize>,
+    publication_resident_history: Option<ResidentHistoryAdmission>,
+}
+#[derive(Clone, Copy)]
+struct ResidentHistoryAdmission {
+    requirements: photocraft_ops::ResidentHistoryRequirements,
+    limits: photocraft_ops::ResidentHistoryLimits,
+    max_bytes: usize,
 }
 impl PreparedStoredLoad {
+    pub(crate) fn resident_history_limits(&self) -> Option<photocraft_ops::ResidentHistoryLimits> {
+        self.publication_resident_history.map(|admission| admission.limits)
+    }
     pub(crate) fn snapshot(&self) -> &DocumentSnapshot {
         &self.snapshot
     }
@@ -346,6 +356,28 @@ impl PreparedStoredLoad {
                 return Err(bad("stored publication history metadata changed"));
             }
         }
+        if let Some(expected) = self.publication_resident_history {
+            if self.publication_history_max_states != Some(current.history.max_states) || expected.max_bytes != current.history.max_bytes {
+                return Err(bad("stored publication resident history policy changed"));
+            }
+            let layers = current.layer_target()?;
+            let actual = current
+                .history
+                .resident_record_requirements_with_extra_tiles(
+                    &current.doc,
+                    &current.doc,
+                    "Load Stored Selection",
+                    &layers,
+                    &layers,
+                    1,
+                    expected.limits,
+                    control,
+                )
+                .map_err(|error| history_error(error, control))?;
+            if actual != expected.requirements {
+                return Err(bad("stored publication resident history backing changed"));
+            }
+        }
         let surface = self.stored_surface()?;
         let (id, old) = target(&current.doc, self.source, self.bounds, surface.format(), control)?;
         if id != self.selection || old != self.old_bounds {
@@ -391,6 +423,7 @@ fn prepare_internal(
     let mut publication_runtime = None;
     let mut publication_history = None;
     let mut publication_history_max_states = None;
+    let mut publication_resident_history = None;
     if publication {
         idle(session)?;
         let current = session.active().ok_or(EngineError::NoDocument)?;
@@ -421,25 +454,55 @@ fn prepare_internal(
             // The allocation-free History census has its own genuine O(1)
             // visit bound. Prepay it before traversal; token polls additionally
             // share this Work. Clone work is paid before the registered edit.
-            let census = current.history.plain_clone_census_work().map_err(|error| history_error(error, &metered))?;
-            // One initial census and all fixed scoped offer/final fences.
-            // At most eight passes; no refund or fresh default work budget.
-            work.charge(mul(census, 8)?)?;
-            let history = current
-                .history
-                .plain_clone_metadata_requirements(limits.resident_bytes, work.remaining(), &metered)
-                .map_err(|error| history_error(error, &metered))?;
-            if history.census_work_units > census {
-                return Err(bad("stored history census exceeded prepaid work"));
+            let plain = current.history.plain_clone_census_work();
+            if matches!(plain, Err(photocraft_raster::RasterInputError::UnsupportedConversion)) {
+                // The original selected reader is independently closed to one
+                // native tile. Price one additional candidate tile occurrence
+                // before making that replacement; native backing stays in the
+                // separately held document/output envelope below.
+                let layers = current.layer_target()?;
+                let initial = photocraft_ops::ResidentHistoryLimits {
+                    resident_bytes: limits.resident_bytes.min(photocraft_ops::ResidentHistoryLimits::default().resident_bytes),
+                    work_units: work.remaining().min(photocraft_ops::ResidentHistoryLimits::default().work_units),
+                };
+                let history = current
+                    .history
+                    .resident_record_requirements_with_extra_tiles(&current.doc, &current.doc, "Load Stored Selection", &layers, &layers, 1, initial, &metered)
+                    .map_err(|error| history_error(error, &metered))?;
+                // Initial admission, scoped offer/final fences and the real
+                // clone/record/trim each share one non-refundable work ceiling.
+                work.charge(mul(history.work_units, 10)?)?;
+                limits.resident_bytes = limits.resident_bytes.checked_sub(history.peak_bytes).ok_or_else(|| bad("stored resident history limit"))?;
+                limits.index_bytes = limits.index_bytes.checked_sub(history.peak_bytes).ok_or_else(|| bad("stored resident history index limit"))?;
+                publication_bytes = add(publication_bytes, history.peak_bytes)?;
+                publication_index = add(publication_index, history.peak_bytes)?;
+                publication_resident_history = Some(ResidentHistoryAdmission {
+                    requirements: history,
+                    limits: photocraft_ops::ResidentHistoryLimits { resident_bytes: history.peak_bytes, work_units: history.work_units },
+                    max_bytes: current.history.max_bytes,
+                });
+                publication_history_max_states = Some(current.history.max_states);
+            } else {
+                let census = plain.map_err(|error| history_error(error, &metered))?;
+                // One initial census and all fixed scoped offer/final fences.
+                // At most eight passes; no refund or fresh default work budget.
+                work.charge(mul(census, 8)?)?;
+                let history = current
+                    .history
+                    .plain_clone_metadata_requirements(limits.resident_bytes, work.remaining(), &metered)
+                    .map_err(|error| history_error(error, &metered))?;
+                if history.census_work_units > census {
+                    return Err(bad("stored history census exceeded prepaid work"));
+                }
+                work.charge(history.clone_work_units)?;
+                let metadata = add(history.retained_bytes, history.clone_bytes)?;
+                limits.resident_bytes = limits.resident_bytes.checked_sub(metadata).ok_or_else(|| bad("stored history resident limit"))?;
+                limits.index_bytes = limits.index_bytes.checked_sub(metadata).ok_or_else(|| bad("stored history index limit"))?;
+                publication_bytes = add(publication_bytes, metadata)?;
+                publication_index = add(publication_index, metadata)?;
+                publication_history = Some(history);
+                publication_history_max_states = Some(current.history.max_states);
             }
-            work.charge(history.clone_work_units)?;
-            let metadata = add(history.retained_bytes, history.clone_bytes)?;
-            limits.resident_bytes = limits.resident_bytes.checked_sub(metadata).ok_or_else(|| bad("stored history resident limit"))?;
-            limits.index_bytes = limits.index_bytes.checked_sub(metadata).ok_or_else(|| bad("stored history index limit"))?;
-            publication_bytes = add(publication_bytes, metadata)?;
-            publication_index = add(publication_index, metadata)?;
-            publication_history = Some(history);
-            publication_history_max_states = Some(current.history.max_states);
             // Historical Arc<Document> backing is already retained by caller
             // history; this census prices metadata, not a complete RSS census.
         }
@@ -513,6 +576,7 @@ fn prepare_internal(
             publication_runtime,
             publication_history,
             publication_history_max_states,
+            publication_resident_history,
         };
         prepared.validate(session, &metered)?;
         poll(&metered)?;
@@ -548,6 +612,7 @@ pub(crate) fn draft_publication_prepared(session: &Session, source: ChannelId, b
             current.history.plain_clone_metadata_requirements(Limits::default().resident_bytes, Limits::default().work_units, &Interrupt::NONE).unwrap(),
         ),
         publication_history_max_states: Some(current.history.max_states),
+        publication_resident_history: None,
         publication_runtime: Some([
             current.selected_layers.len(),
             current.selected_layers.capacity(),

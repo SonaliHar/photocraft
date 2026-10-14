@@ -18,6 +18,8 @@ use photocraft_doc::{Document, LayerId};
 mod tiles;
 mod clone_metadata;
 pub use clone_metadata::CloneMetadataRequirements;
+mod resident_history_controlled;
+pub use resident_history_controlled::{ResidentHistoryLimits, ResidentHistoryRequirements};
 
 /// The layers a state targeted: the active ("key") layer and every selected layer. Undo and redo
 /// bring them back with the state's document, as the reference app does. Selecting layers is not

@@ -40,6 +40,100 @@ pub(crate) fn surfaces(doc: &Document, mut visit: impl FnMut(&Surface)) {
 }
 
 impl Tiles {
+    pub(crate) fn capacity(&self) -> usize {
+        self.refs.capacity()
+    }
+
+    pub(crate) fn try_clone_with(&self, m: &mut crate::resident_history_controlled::Meter<'_, '_>) -> Result<Self, photocraft_raster::RasterInputError> {
+        use photocraft_raster::RasterInputError as E;
+        let slots = self.refs.capacity();
+        m.allocate((slots as u64).checked_mul(128).ok_or(E::LimitExceeded)?)?;
+        let mut refs = HashMap::new();
+        refs.try_reserve(slots).map_err(|_| E::AllocationFailed)?;
+        m.allocate((refs.capacity().saturating_sub(slots) as u64).checked_mul(128).ok_or(E::LimitExceeded)?)?;
+        for (key, value) in &self.refs {
+            m.step(1)?;
+            refs.insert(*key, *value);
+        }
+        Ok(Self { refs, bytes: self.bytes })
+    }
+    pub(crate) fn add_with(
+        &mut self,
+        doc: &Document,
+        m: &mut crate::resident_history_controlled::Meter<'_, '_>,
+    ) -> Result<(), photocraft_raster::RasterInputError> {
+        use photocraft_raster::RasterInputError as E;
+        let mut count = 0usize;
+        surfaces_with(doc, m, |surface, m| {
+            m.step(1)?;
+            count = count.checked_add(surface.tile_count()).ok_or(E::LimitExceeded)?;
+            Ok(())
+        })?;
+        let old = self.refs.capacity();
+        let needed = self.refs.len().checked_add(count).ok_or(E::LimitExceeded)?;
+        let delta = needed.saturating_sub(old);
+        m.allocate((delta as u64).checked_mul(128).ok_or(E::LimitExceeded)?)?;
+        self.refs.try_reserve(count).map_err(|_| E::AllocationFailed)?;
+        m.allocate((self.refs.capacity().saturating_sub(old.checked_add(delta).ok_or(E::LimitExceeded)?) as u64).checked_mul(128).ok_or(E::LimitExceeded)?)?;
+        surfaces_with(doc, m, |surface, m| {
+            for (_, tile) in surface.tiles() {
+                m.step(1)?;
+                let key = Arc::as_ptr(tile) as usize;
+                if let Some(value) = self.refs.get_mut(&key) {
+                    value.0 = value.0.checked_add(1).ok_or(E::LimitExceeded)?;
+                } else {
+                    self.bytes = self.bytes.checked_add(tile.bytes().len() as u128).ok_or(E::LimitExceeded)?;
+                    self.refs.insert(key, (1, tile.bytes().len()));
+                }
+            }
+            Ok(())
+        })
+    }
+    pub(crate) fn remove_with(
+        &mut self,
+        doc: &Document,
+        m: &mut crate::resident_history_controlled::Meter<'_, '_>,
+    ) -> Result<(), photocraft_raster::RasterInputError> {
+        use photocraft_raster::RasterInputError as E;
+        surfaces_with(doc, m, |surface, m| {
+            for (_, tile) in surface.tiles() {
+                m.step(1)?;
+                let key = Arc::as_ptr(tile) as usize;
+                if let Some(value) = self.refs.get_mut(&key) {
+                    value.0 = value.0.checked_sub(1).ok_or(E::InvalidBounds)?;
+                    if value.0 == 0 {
+                        self.bytes = self.bytes.checked_sub(value.1 as u128).ok_or(E::InvalidBounds)?;
+                        self.refs.remove(&key);
+                    }
+                }
+            }
+            Ok(())
+        })
+    }
+    pub(crate) fn fits_with(
+        &self,
+        doc: &Document,
+        budget: usize,
+        seen: &mut HashSet<usize>,
+        m: &mut crate::resident_history_controlled::Meter<'_, '_>,
+    ) -> Result<bool, photocraft_raster::RasterInputError> {
+        if self.bytes > budget as u128 {
+            m.step(1)?;
+            return Ok(false);
+        }
+        let mut total = self.bytes;
+        surfaces_with(doc, m, |surface, m| {
+            for (_, tile) in surface.tiles() {
+                m.step(1)?;
+                let key = Arc::as_ptr(tile) as usize;
+                if !self.refs.contains_key(&key) && seen.insert(key) {
+                    total = total.checked_add(tile.bytes().len() as u128).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
+                }
+            }
+            Ok(())
+        })?;
+        Ok(total <= budget as u128)
+    }
     pub(crate) fn add(&mut self, doc: &Document) {
         surfaces(doc, |surface| {
             for (_, tile) in surface.tiles() {
@@ -87,4 +181,45 @@ impl Tiles {
         });
         total
     }
+}
+
+/// Same owner order/scope as legacy `surfaces`, with bounded model walks and no sample interpretation.
+pub(crate) fn surfaces_with(
+    doc: &Document,
+    m: &mut crate::resident_history_controlled::Meter<'_, '_>,
+    mut visit: impl FnMut(&Surface, &mut crate::resident_history_controlled::Meter<'_, '_>) -> Result<(), photocraft_raster::RasterInputError>,
+) -> Result<(), photocraft_raster::RasterInputError> {
+    let control = m.ctl;
+    photocraft_doc::resident_structure::visit_layers_with(doc, control, |layer| {
+        m.step(1)?;
+        if matches!(layer.content, photocraft_doc::LayerContent::BackedRaster(_)) {
+            return Err(photocraft_raster::RasterInputError::UnsupportedConversion);
+        }
+        if let Some(surface) = layer.surface() {
+            visit(surface, m)?;
+        }
+        if let Some(mask) = &layer.mask {
+            visit(&mask.surface, m)?;
+        }
+        if let Some(video) = &layer.video {
+            for frame in video.frames.iter().chain(video.original_frames.iter().flatten()) {
+                m.step(1)?;
+                visit(frame, m)?;
+            }
+        }
+        Ok(true)
+    })?;
+    for channel in doc.channels.iter().chain(&doc.quick_mask) {
+        m.step(1)?;
+        visit(&channel.surface, m)?;
+    }
+    for pattern in &doc.patterns {
+        m.step(1)?;
+        visit(&pattern.surface, m)?;
+    }
+    if let Some(selection) = &doc.selection {
+        m.step(1)?;
+        visit(selection, m)?;
+    }
+    m.step(1)
 }

@@ -127,6 +127,41 @@ fn slots(q: &BackingQuota, maximum: usize, ctl: &ReadControl<'_>) -> Result<Acco
     Ok(Accounted { states, cursor: 0, maximum, _lease: lease })
 }
 impl DocumentHistory {
+    /// Resident-only controlled record/trim admission. Historical Arc payloads remain caller-held.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn resident_record_requirements_with_extra_tiles(
+        &self, before:&DocumentSnapshot, candidate:&DocumentSnapshot, label:&str,
+        prior:&LayerTarget, layers:&LayerTarget, extra_candidate_tile_occurrences:u64,
+        limits:photocraft_ops::ResidentHistoryLimits, ctl:&photocraft_raster::Interrupt<'_>,
+    )->Result<photocraft_ops::ResidentHistoryRequirements,photocraft_raster::RasterInputError>{
+        let Branch::Resident(history)=&self.branch else{return Err(photocraft_raster::RasterInputError::UnsupportedConversion)};
+        before.resident_arc().ok_or(photocraft_raster::RasterInputError::UnsupportedConversion)?;
+        candidate.resident_arc().ok_or(photocraft_raster::RasterInputError::UnsupportedConversion)?;
+        let maximum=photocraft_ops::ResidentHistoryLimits::default();
+        if limits.resident_bytes>maximum.resident_bytes || limits.work_units>maximum.work_units{return Err(photocraft_raster::RasterInputError::LimitExceeded)}
+        let extra=(size_of::<Self>() as u64).checked_mul(3).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
+        let lower=photocraft_ops::ResidentHistoryLimits{resident_bytes:limits.resident_bytes.checked_sub(extra).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?,work_units:limits.work_units};
+        let mut requirement=history.resident_record_requirements_with_extra_tiles(before,candidate,label,prior,layers,self.max_states,self.max_bytes,extra_candidate_tile_occurrences,lower,ctl)?;
+        requirement.retained_bytes=requirement.retained_bytes.checked_add(size_of::<Self>() as u64).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
+        requirement.clone_bytes=requirement.clone_bytes.checked_add((size_of::<Self>() as u64).checked_mul(2).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
+        requirement.peak_bytes=requirement.peak_bytes.checked_add(extra).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
+        Ok(requirement)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn try_clone_record_trim_with_interrupt(
+        &self,before:DocumentSnapshot,candidate:&DocumentSnapshot,label:&str,
+        prior:&LayerTarget,layers:&LayerTarget,limits:photocraft_ops::ResidentHistoryLimits,
+        ctl:&photocraft_raster::Interrupt<'_>,
+    )->Result<Self,photocraft_raster::RasterInputError>{
+        let Branch::Resident(history)=&self.branch else{return Err(photocraft_raster::RasterInputError::UnsupportedConversion)};
+        self.resident_record_requirements_with_extra_tiles(&before,candidate,label,prior,layers,0,limits,ctl)?;
+        let arc=before.resident_arc().ok_or(photocraft_raster::RasterInputError::UnsupportedConversion)?.clone();
+        let extra=(size_of::<Self>() as u64).checked_mul(3).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
+        let lower=photocraft_ops::ResidentHistoryLimits{resident_bytes:limits.resident_bytes.checked_sub(extra).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?,work_units:limits.work_units};
+        let result=history.try_clone_record_trim_with_interrupt(arc,candidate,label,prior,layers,self.max_states,self.max_bytes,lower,ctl)?;
+        ctl.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
+        Ok(Self::resident(result))
+    }
     /// Prospective metadata census only; byte-budgeted or accounted history has a separate consumer.
     pub(crate) fn plain_clone_census_work(&self) -> Result<u64, photocraft_raster::RasterInputError> {
         if self.max_bytes != 0 {

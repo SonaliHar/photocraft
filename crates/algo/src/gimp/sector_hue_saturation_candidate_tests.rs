@@ -253,3 +253,155 @@ fn unproved_named_controls_or_combinations_are_not_enrolled_by_symmetry() {
         ));
     }
 }
+
+#[test]
+fn additive_all_pure_hue_policy_preserves_original_green_blue_refusal() {
+    let policy = NumericPolicy::OriginalHslF32SixPhaseAllPureHueOutputSaturationBound;
+    for (index, input, expected) in [(3, [0.35, 0.8, 0.2], [0.2, 0.8, 0.5]), (5, [0.2, 0.35, 0.8], [0.5, 0.2, 0.8])] {
+        let mut p = parameters();
+        p.ranges[index][0] = 0.25f64.to_bits();
+        assert!(matches!(
+            PreparedSectorHueSaturation::prepare(
+                PixelFormat::RGBA32F,
+                context(),
+                p,
+                NumericPolicy::OriginalHslF32SixPhaseOutputSaturationBound,
+                Limits::default(),
+                &Interrupt::NONE
+            ),
+            Err(Error::UnsupportedConfiguration)
+        ));
+        let candidate = PreparedSectorHueSaturation::prepare(PixelFormat::RGBA32F, context(), p, policy, Limits::default(), &Interrupt::NONE).unwrap();
+        assert_eq!(candidate.parameters(), p);
+        assert_eq!(candidate.policy(), policy);
+        near(candidate.try_eval_float_rgb(input).unwrap(), expected);
+        near(candidate.try_eval_float_rgb([0.4; 3]).unwrap(), [0.4; 3]);
+        p.overlap_bits = 0.5f64.to_bits();
+        assert!(matches!(
+            PreparedSectorHueSaturation::prepare(PixelFormat::RGBA32F, context(), p, policy, Limits::default(), &Interrupt::NONE),
+            Err(Error::UnsupportedConfiguration)
+        ));
+    }
+}
+#[test]
+fn policies_remain_distinct_even_when_same_raw_neutral_config_is_accepted() {
+    let old = prepare(PixelFormat::RGBA32F, parameters());
+    let new = PreparedSectorHueSaturation::prepare(
+        PixelFormat::RGBA32F,
+        context(),
+        parameters(),
+        NumericPolicy::OriginalHslF32SixPhaseAllPureHueOutputSaturationBound,
+        Limits::default(),
+        &Interrupt::NONE,
+    )
+    .unwrap();
+    assert_eq!(old.parameters(), new.parameters());
+    assert_ne!(old.policy(), new.policy());
+    // A typed graph binding must compare this immutable policy witness as well
+    // as raw configuration; identical neutral pixels do not erase the witness.
+    assert_eq!(old.try_eval_float_rgb([0.8, 0.4, 0.2]).unwrap(), new.try_eval_float_rgb([0.8, 0.4, 0.2]).unwrap());
+    let mut p = parameters();
+    p.ranges[3][1] = 0.25f64.to_bits();
+    assert!(matches!(
+        PreparedSectorHueSaturation::prepare(PixelFormat::RGBA32F, context(), p, new.policy(), Limits::default(), &Interrupt::NONE),
+        Err(Error::UnsupportedConfiguration)
+    ));
+}
+
+fn adjacent_parameters(first: usize) -> Parameters {
+    let mut p = parameters();
+    p.overlap_bits = 0.5f64.to_bits();
+    if first == 2 {
+        p.ranges[2] = [0.25f64.to_bits(), (-0.25f64).to_bits(), 0.125f64.to_bits()];
+        p.ranges[3] = [(-0.125f64).to_bits(), 0.25f64.to_bits(), (-0.125f64).to_bits()];
+    } else {
+        p.ranges[4] = [0.125f64.to_bits(), 0.25f64.to_bits(), (-0.125f64).to_bits()];
+        p.ranges[5] = [(-0.25f64).to_bits(), (-0.125f64).to_bits(), 0.25f64.to_bits()];
+    }
+    p
+}
+fn adjacent(format: PixelFormat, p: Parameters) -> PreparedSectorHueSaturation {
+    PreparedSectorHueSaturation::prepare(format, context(), p, NumericPolicy::OriginalHslF32SixPhaseAdjacentMappedHsl, Limits::default(), &Interrupt::NONE)
+        .unwrap()
+}
+#[test]
+fn nonmid_opposed_lightness_is_mapped_before_component_blend() {
+    let yg = adjacent(PixelFormat::RGBA32F, adjacent_parameters(2));
+    assert_eq!(yg.sample_work(), ADJACENT_SAMPLE_WORK);
+    let output = yg.try_eval_float_rgb([0.345, 0.48, 0.12]).unwrap();
+    near(output, [0.22766599, 0.5432812, 0.16921878]);
+    let light = (output.into_iter().fold(f32::NEG_INFINITY, f32::max) + output.into_iter().fold(f32::INFINITY, f32::min)) / 2.;
+    assert!((light - 0.35625).abs() < 2e-7);
+    assert!((light - 0.34375).abs() > 0.01); // coefficient-SUM hypothesis is distinct.
+    near(yg.try_eval_float_rgb([0.745, 0.88, 0.52]).unwrap(), [0.60022455, 0.8604688, 0.5520312]);
+    let cb = adjacent(PixelFormat::RGBA32F, adjacent_parameters(4));
+    near(cb.try_eval_float_rgb([0.12, 0.345, 0.48]).unwrap(), [0.09666014, 0.3293103, 0.5345898]);
+    near(cb.try_eval_float_rgb([0.52, 0.745, 0.88]).unwrap(), [0.41248053, 0.6681653, 0.89376956]);
+    // Original achromatic controls are skipped, including local lightness.
+    near(yg.try_eval_float_rgb([0.4; 3]).unwrap(), [0.4; 3]);
+}
+#[test]
+fn mapped_policy_guard_does_not_enroll_generic_pairs_or_wrapping_hue() {
+    let p = adjacent_parameters(2);
+    assert_eq!(adjacent(PixelFormat::RGBA32F, p).parameters(), p);
+    for policy in [NumericPolicy::OriginalHslF32SixPhaseOutputSaturationBound, NumericPolicy::OriginalHslF32SixPhaseAllPureHueOutputSaturationBound] {
+        assert!(matches!(
+            PreparedSectorHueSaturation::prepare(PixelFormat::RGBA32F, context(), p, policy, Limits::default(), &Interrupt::NONE),
+            Err(Error::UnsupportedConfiguration)
+        ));
+    }
+    for change in 0..4 {
+        let mut q = p;
+        match change {
+            0 => q.overlap_bits = 0.25f64.to_bits(),
+            1 => q.ranges[0][0] = 0.125f64.to_bits(),
+            2 => q.ranges[3] = [0; 3],
+            _ => q.ranges[6][0] = 0.125f64.to_bits(),
+        }
+        assert!(matches!(
+            PreparedSectorHueSaturation::prepare(
+                PixelFormat::RGBA32F,
+                context(),
+                q,
+                NumericPolicy::OriginalHslF32SixPhaseAdjacentMappedHsl,
+                Limits::default(),
+                &Interrupt::NONE
+            ),
+            Err(Error::UnsupportedConfiguration)
+        ));
+    }
+    let mut q = p;
+    q.ranges[2][0] = (-1f64).to_bits();
+    assert!(matches!(adjacent(PixelFormat::RGBA32F, q).try_eval_float_rgb([0.345, 0.48, 0.12]), Err(Error::UnsupportedHueWrap)));
+    q.ranges[2][0] = 1f64.to_bits();
+    assert!(matches!(adjacent(PixelFormat::RGBA32F, q).try_eval_float_rgb([0.345, 0.48, 0.12]), Err(Error::UnsupportedHueWrap)));
+}
+#[test]
+fn mapped_roi_precharges_policy_work_and_preserves_native_alpha_and_outside() {
+    let format = PixelFormat { mode: ColorMode::Rgb, sample: SampleType::F64, alpha: true };
+    let alpha = 0xfff8_0000_0000_0042u64;
+    let outside = [0x7ff8_1234_5678_9abcu64, (-10f64).to_bits(), f64::INFINITY.to_bits(), alpha];
+    let selected = [0.345f64.to_bits(), 0.48f64.to_bits(), 0.12f64.to_bits(), alpha];
+    let default = outside.into_iter().flat_map(u64::to_ne_bytes).collect::<Vec<_>>();
+    let extent = Rect::new(-1, 0, 1, 1);
+    let roi = Rect::new(0, 0, 1, 1);
+    let mut source = Surface::try_with_default_bytes(format, &default).unwrap();
+    source.try_write_interleaved_with(extent, &outside.into_iter().chain(selected).flat_map(u64::to_ne_bytes).collect::<Vec<_>>(), &Interrupt::NONE).unwrap();
+    let p = adjacent_parameters(2);
+    let candidate = adjacent(format, p);
+    let before = source.clone();
+    let requirements = candidate.requirements_with_interrupt(&source, roi, context(), &Interrupt::NONE).unwrap();
+    let remaining = candidate.remaining_work();
+    assert!(matches!(
+        candidate.apply(&source, roi, context(), Limits { work_units: requirements.work_units - 1, ..Limits::default() }, &Interrupt::NONE),
+        Err(Error::Raster(RasterInputError::LimitExceeded))
+    ));
+    assert_eq!(candidate.remaining_work(), remaining);
+    let output = candidate.apply(&source, roi, context(), Limits::default(), &Interrupt::NONE).unwrap();
+    let bytes = output.try_read_interleaved(roi).unwrap();
+    assert_eq!(&bytes[24..32], &alpha.to_ne_bytes());
+    assert_eq!(output.default_bytes(), default);
+    assert_eq!(output.try_read_interleaved(Rect::new(-1, 0, 0, 1)).unwrap(), before.try_read_interleaved(Rect::new(-1, 0, 0, 1)).unwrap());
+    assert_eq!(source, before);
+    assert_eq!(candidate.remaining_work(), remaining - requirements.work_units);
+}
