@@ -23,7 +23,6 @@ pub fn android_main(app: AndroidApp) {
     if let Err(error) = std::fs::create_dir_all(&data_dir) {
         eprintln!("PhotoCraft cannot create Android data directory: {error}");
     }
-    let services = android_services(data_dir);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_title("PhotoCraft").with_app_id("ai.storyteller.photocraft"),
         persistence_path: None,
@@ -34,6 +33,7 @@ pub fn android_main(app: AndroidApp) {
         "PhotoCraft",
         options,
         Box::new(move |cc| {
+            let services = android_services(data_dir, cc.egui_ctx.clone());
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
             let mut editor = PhotocraftApp::new(Session::new(), services);
             // Decoding and saving a multilayer image must keep the tablet responsive.
@@ -49,7 +49,7 @@ pub fn android_main(app: AndroidApp) {
     }
 }
 
-fn android_services(data_dir: PathBuf) -> Services {
+fn android_services(data_dir: PathBuf, ctx: egui::Context) -> Services {
     let prefs = data_dir.join("preferences.json");
     let prefs_for_load = prefs.clone();
     let prefs_for_save = prefs.clone();
@@ -75,7 +75,12 @@ fn android_services(data_dir: PathBuf) -> Services {
         save_prefs: Some(Box::new(move |text| write_atomic(&prefs_for_save, text.as_bytes()))),
         raw_input: Some(Box::new({
             let mut router = TabletGestureRouter::default();
-            move |raw| router.apply(raw, gesture_bridge.take_tablet_actions())
+            move |raw| {
+                router.apply(raw, gesture_bridge.take_tablet_actions());
+                if router.waiting_for_chord() {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(80));
+                }
+            }
         })),
         touch_ui: true,
         ..recovery

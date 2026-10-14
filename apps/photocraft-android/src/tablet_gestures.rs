@@ -23,25 +23,35 @@ pub(crate) struct TabletGestureRouter {
     tap_start: Option<f64>,
     tap_center: Option<Pos2>,
     tap_invalid: bool,
+    pending_pointer: Vec<Event>,
+    pointer_committed: bool,
+    multi_touch: bool,
 }
 
 impl TabletGestureRouter {
     pub(crate) fn apply(&mut self, raw: &mut RawInput, actions: impl IntoIterator<Item = TabletAction>) {
         let now = raw.time.unwrap_or(0.0);
         let mut touch_tap = None;
+        let mut touch_frame = !self.touches.is_empty();
+        let mut finished = false;
         for event in &raw.events {
             let Event::Touch { device_id, id, phase, pos, .. } = event else { continue };
+            touch_frame = true;
             match phase {
                 egui::TouchPhase::Start => {
                     if self.touches.is_empty() {
                         self.tap_start = Some(now);
                         self.tap_center = None;
                         self.tap_invalid = false;
+                        self.pointer_committed = false;
+                        self.multi_touch = false;
                     }
                     self.touches.push((*device_id, *id, *pos));
                     if let [(_, _, first), (_, _, second)] = self.touches.as_slice() {
+                        self.multi_touch = true;
                         self.tap_center = Some(first.lerp(*second, 0.5));
                     } else if self.touches.len() > 2 {
+                        self.multi_touch = true;
                         self.tap_invalid = true;
                     }
                 }
@@ -58,14 +68,40 @@ impl TabletGestureRouter {
                     }
                     self.touches.retain(|(device, touch, _)| device != device_id || touch != id);
                     if self.touches.is_empty() {
+                        finished = true;
                         if !self.tap_invalid && self.tap_start.is_some_and(|start| now - start <= 0.35) {
                             touch_tap = self.tap_center;
                         }
-                        self.tap_start = None;
                         self.tap_center = None;
                     }
                 }
             }
+        }
+        // Reserve a short chord window before forwarding the first finger's emulated mouse
+        // press. Otherwise a two-finger context click first starts moving the selection.
+        if touch_frame && !self.pointer_committed {
+            let mut retained = Vec::new();
+            for event in std::mem::take(&mut raw.events) {
+                if matches!(event, Event::PointerMoved(_) | Event::PointerGone | Event::PointerButton { button: PointerButton::Primary, .. }) {
+                    if self.pending_pointer.len() < 256 {
+                        self.pending_pointer.push(event);
+                    }
+                } else {
+                    retained.push(event);
+                }
+            }
+            raw.events = retained;
+        }
+        if self.multi_touch {
+            self.pending_pointer.clear();
+        } else if !self.pointer_committed && (finished || self.tap_invalid || self.tap_start.is_some_and(|start| now - start >= 0.08)) {
+            let mut events = std::mem::take(&mut self.pending_pointer);
+            events.append(&mut raw.events);
+            raw.events = events;
+            self.pointer_committed = true;
+        }
+        if finished {
+            self.tap_start = None;
         }
         let mut secondary_taps = Vec::new();
         let mut barrel_press = None;
@@ -120,6 +156,10 @@ impl TabletGestureRouter {
             }
         }
     }
+
+    pub(crate) fn waiting_for_chord(&self) -> bool {
+        self.tap_start.is_some() && !self.pointer_committed && !self.multi_touch
+    }
 }
 
 fn push_button(raw: &mut RawInput, x: f32, y: f32, pressed: bool) {
@@ -144,6 +184,51 @@ mod tests {
 
     fn input(events: Vec<Event>) -> RawInput {
         RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 500.0))), events, ..Default::default() }
+    }
+
+    #[test]
+    fn staggered_two_finger_tap_never_starts_primary_selection_drag() {
+        let mut router = TabletGestureRouter::default();
+        let ctx = egui::Context::default();
+        let touch = |id, phase, x| Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(id), phase, pos: pos2(x, 100.0), force: None };
+        let button = |pressed| Event::PointerButton { pos: pos2(100.0, 100.0), button: PointerButton::Primary, pressed, modifiers: Default::default() };
+        let frames = [
+            vec![touch(1, egui::TouchPhase::Start, 100.0), Event::PointerMoved(pos2(100.0, 100.0)), button(true)],
+            vec![touch(2, egui::TouchPhase::Start, 200.0)],
+            vec![touch(2, egui::TouchPhase::End, 200.0), touch(1, egui::TouchPhase::End, 100.0), button(false), Event::PointerGone],
+        ];
+        for (frame, events) in frames.into_iter().enumerate() {
+            let mut raw = input(events);
+            raw.time = Some(1.0 + frame as f64 * 0.02);
+            router.apply(&mut raw, []);
+            ctx.begin_pass(raw);
+            ctx.input(|i| {
+                assert!(!i.pointer.primary_down());
+                assert!(!i.pointer.button_pressed(PointerButton::Primary));
+                if frame == 2 {
+                    assert!(i.pointer.secondary_clicked());
+                }
+            });
+            let mut output = ctx.end_pass();
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn single_touch_press_is_forwarded_after_chord_window() {
+        let mut router = TabletGestureRouter::default();
+        let mut raw = input(vec![
+            Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase: egui::TouchPhase::Start, pos: pos2(100.0, 100.0), force: None },
+            Event::PointerButton { pos: pos2(100.0, 100.0), button: PointerButton::Primary, pressed: true, modifiers: Default::default() },
+        ]);
+        raw.time = Some(1.0);
+        router.apply(&mut raw, []);
+        assert!(router.waiting_for_chord());
+        let mut raw = input(vec![]);
+        raw.time = Some(1.09);
+        router.apply(&mut raw, []);
+        assert!(raw.events.iter().any(|event| matches!(event, Event::PointerButton { button: PointerButton::Primary, pressed: true, .. })));
+        assert!(!router.waiting_for_chord());
     }
 
     #[test]
