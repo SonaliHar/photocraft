@@ -685,7 +685,9 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
         match key.as_str() {
             "set" | "scope" | "view" => {}
             "before" | "commit" | "cancel" | "saveSettings" | "loadSettings" | "undo" | "redo" if value.is_boolean() => {}
-            "before" | "commit" | "cancel" | "saveSettings" | "loadSettings" | "undo" | "redo" => return Some(Err(format!("Camera Raw {key} must be a boolean"))),
+            "before" | "commit" | "cancel" | "saveSettings" | "loadSettings" | "undo" | "redo" => {
+                return Some(Err(format!("Camera Raw {key} must be a boolean")));
+            }
             _ => return Some(Err(format!("unknown Camera Raw ui property {key}"))),
         }
     }
