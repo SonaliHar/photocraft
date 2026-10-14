@@ -2544,6 +2544,8 @@ mod blur_pins_tests;
 
 #[cfg(test)]
 mod move_outline_tests;
+#[cfg(test)]
+mod release_frame_tests;
 
 #[cfg(test)]
 mod mask_thumb_refresh_tests;
