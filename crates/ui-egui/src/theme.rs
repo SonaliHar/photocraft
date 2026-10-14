@@ -205,29 +205,29 @@ impl Tokens {
     pub fn for_kind(kind: ThemeKind) -> Self {
         let mut t = Self::original_for_kind(kind);
         if kind == ThemeKind::Pro {
-            // ArtCraft's first-party dark UI roles. Apply after choosing the preset,
-            // leaving the measured Pro brightness levels and named themes intact.
-            let hex = |s: u32| Color32::from_rgb((s >> 16) as u8, (s >> 8) as u8, s as u8);
-            t.chrome = hex(0x0a0a0c);
-            t.dock = hex(0x121316);
-            t.card = hex(0x101014);
-            t.card_border = hex(0x36373a);
-            t.field = hex(0x060607);
-            t.field_border = hex(0x36373a);
-            t.hover = hex(0x323337);
-            t.pressed = hex(0x414246);
-            t.text = hex(0xf2f1ee);
-            t.text_dim = hex(0xa6a6a8);
-            t.text_faint = hex(0x717176);
-            t.icon = hex(0xf2f1ee);
-            t.accent = hex(0x2d81ff);
-            t.accent_soft = hex(0x203b65);
-            t.accent_border = hex(0x74aaff);
-            t.separator = hex(0x36373a);
-            t.primary_bg = hex(0x2d81ff);
-            t.primary_text = hex(0x060607);
-            t.tab_strip = hex(0x0a0a0c);
-            t.row_selected = hex(0x203b65);
+            // Shared ArtCraft standard-dark roles, adapted after preset selection so
+            // measured brightness levels and named themes retain their own palettes.
+            let roles = craft_ui::theme::SuiteDarkPalette::ARTCRAFT;
+            t.chrome = roles.chrome;
+            t.dock = roles.window;
+            t.card = roles.panel;
+            t.card_border = roles.border;
+            t.field = roles.input;
+            t.field_border = roles.border;
+            t.hover = roles.hover;
+            t.pressed = roles.pressed;
+            t.text = roles.text;
+            t.text_dim = roles.text_secondary;
+            t.text_faint = roles.text_disabled;
+            t.icon = roles.text;
+            t.accent = roles.accent;
+            t.accent_soft = roles.selection;
+            t.accent_border = roles.focus;
+            t.separator = roles.border;
+            t.primary_bg = roles.accent;
+            t.primary_text = roles.on_accent;
+            t.tab_strip = roles.chrome;
+            t.row_selected = roles.selection;
         }
         t
     }
@@ -1106,6 +1106,44 @@ pub fn canvas_bg(t: &Tokens) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pro_adapter_reads_shared_roles_and_preserves_document_and_semantic_colors() {
+        let roles = craft_ui::theme::SuiteDarkPalette::ARTCRAFT;
+        let dark = Tokens::for_kind(ThemeKind::Pro);
+        assert_eq!(dark.chrome, roles.chrome);
+        assert_eq!(dark.dock, roles.window);
+        assert_eq!(dark.card, roles.panel);
+        assert_eq!(dark.card_border, roles.border);
+        assert_eq!(dark.field, roles.input);
+        assert_eq!(dark.field_border, roles.border);
+        assert_eq!(dark.hover, roles.hover);
+        assert_eq!(dark.pressed, roles.pressed);
+        assert_eq!(dark.text, roles.text);
+        assert_eq!(dark.text_dim, roles.text_secondary);
+        assert_eq!(dark.text_faint, roles.text_disabled);
+        assert_eq!(dark.icon, roles.text);
+        assert_eq!(dark.accent, roles.accent);
+        assert_eq!(dark.accent_soft, roles.selection);
+        assert_eq!(dark.accent_border, roles.focus);
+        assert_eq!(dark.separator, roles.border);
+        assert_eq!(dark.primary_bg, roles.accent);
+        assert_eq!(dark.primary_text, roles.on_accent);
+        assert_eq!(dark.tab_strip, roles.chrome);
+        assert_eq!(dark.row_selected, roles.selection);
+        let original = Tokens::original_for_kind(ThemeKind::Pro);
+        assert_eq!(
+            (dark.canvas, dark.canvas_dot, dark.histogram_bg, dark.histogram_level),
+            (original.canvas, original.canvas_dot, original.histogram_bg, original.histogram_level)
+        );
+        assert_eq!(
+            (dark.danger, dark.warning, dark.caption_close, dark.caption_close_text, dark.scrim),
+            (original.danger, original.warning, original.caption_close, original.caption_close_text, original.scrim)
+        );
+        for kind in ThemeKind::ALL.into_iter().filter(|kind| *kind != ThemeKind::Pro) {
+            assert_eq!(Tokens::for_kind(kind), Tokens::original_for_kind(kind), "{kind:?}");
+        }
+    }
 
     #[test]
     fn pro_dark_uses_artcraft_roles_without_recoloring_other_pro_levels() {
