@@ -1254,6 +1254,9 @@ pub struct UiState {
     /// A keyboard shortcut set found at first launch, waiting for Import / Don't Import.
     #[serde(default)]
     pub kys_offer: Option<crate::kys_import::Offer>,
+    /// The first-launch setup window is up, waiting for a theme and a language.
+    #[serde(default)]
+    pub first_launch_setup: bool,
     /// Documents (ids) whose slow full refresh on the CPU compositor has had its notice.
     #[serde(default)]
     pub slow_refresh_noticed: Vec<u64>,
@@ -1344,6 +1347,7 @@ impl Default for UiState {
             notices: Vec::new(),
             gpu_fallback_notice: None,
             kys_offer: None,
+        first_launch_setup: false,
             slow_refresh_noticed: Vec::new(),
             chrome: Default::default(),
             camera_raw_scope: Default::default(),

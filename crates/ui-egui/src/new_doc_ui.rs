@@ -270,16 +270,18 @@ fn small_label(ui: &mut egui::Ui, s: &str) {
 }
 
 /// Lay out a preset card's title centred in `width`: wrapped onto at most two lines, the rest
-/// elided, so long translations stay inside the card.
-fn card_title(painter: &egui::Painter, title: &str, width: f32, color: egui::Color32) -> std::sync::Arc<egui::Galley> {
+/// elided, so long translations stay inside the card. `pub(crate)` so the Home screen's Templates
+/// panel titles its cards the same way, long translations included.
+pub(crate) fn card_title(painter: &egui::Painter, title: &str, width: f32, color: egui::Color32) -> std::sync::Arc<egui::Galley> {
     let mut job = egui::text::LayoutJob::simple(title.to_owned(), egui::FontId::proportional(12.0), color, width);
     job.wrap.max_rows = 2;
     job.halign = egui::Align::Center;
     painter.layout_job(job)
 }
 
-/// Paint a page thumbnail with the preset's aspect ratio.
-fn page_icon(ui: &egui::Ui, r: Rect, w: u32, h: u32, t: &Tokens) {
+/// Paint a page thumbnail with the preset's aspect ratio. `pub(crate)` for the same reason as
+/// [`card_title`]: one page drawing for both screens.
+pub(crate) fn page_icon(ui: &egui::Ui, r: Rect, w: u32, h: u32, t: &Tokens) {
     let s = 30.0 / (w.max(h) as f32);
     let page = Rect::from_center_size(r.center(), vec2(w as f32 * s, h as f32 * s));
     ui.painter().rect_stroke(page, 1.0, Stroke::new(1.2, t.text_dim), StrokeKind::Inside);
@@ -351,15 +353,16 @@ fn holds(f: &Map<String, Value>, settings: &DocumentSettings) -> bool {
         && get_s(f, "background", "white") == settings.background
 }
 
-/// A card in the preset grid: a built-in preset or a recently created document.
-enum Card {
+/// A card in the preset grid: a built-in preset or a recently created document. `pub(crate)` so the
+/// Home screen's Templates panel lists the same cards this dialog does.
+pub(crate) enum Card {
     Builtin(Preset),
     Recent(DocumentSettings),
 }
 
 impl Card {
     /// Pixel size and resolution; a built-in preset at the Units & Rulers preset resolutions.
-    fn size(&self, units: &UnitsAndRulers) -> (u32, u32, f32) {
+    pub(crate) fn size(&self, units: &UnitsAndRulers) -> (u32, u32, f32) {
         match self {
             Card::Builtin(listed) => {
                 let p = at_pref_resolutions(listed, units);
@@ -370,7 +373,7 @@ impl Card {
     }
 
     /// The preset's name; a recent document takes the name of the built-in preset it matches.
-    fn title(&self) -> &'static str {
+    pub(crate) fn title(&self) -> &'static str {
         match self {
             Card::Builtin(p) => p.0,
             Card::Recent(s) => {
@@ -379,8 +382,8 @@ impl Card {
         }
     }
 
-    /// The size line, in the unit the preset applies (a recent one: the unit it was made in).
-    fn size_line(&self, units: &UnitsAndRulers, f: &Map<String, Value>) -> String {
+/// The size line, in the unit the preset applies (a recent one: the unit it was made in).
+    pub(crate) fn size_line(&self, units: &UnitsAndRulers, f: &Map<String, Value>) -> String {
         let (w, h, ppi) = self.size(units);
         let unit = match self {
             Card::Builtin(p) => preset_unit(p, f),
@@ -396,8 +399,9 @@ impl Card {
 }
 
 /// The Recent category: the Clipboard preset, the documents recently created here (newest
-/// first), then the built-in defaults they don't already cover.
-fn recent_cards(f: &Map<String, Value>, recent: &[DocumentSettings], units: &UnitsAndRulers) -> Vec<Card> {
+/// first), then the built-in defaults they don't already cover. `pub(crate)` so the Home screen's
+/// Templates panel lists Recent exactly as this dialog does.
+pub(crate) fn recent_cards(f: &Map<String, Value>, recent: &[DocumentSettings], units: &UnitsAndRulers) -> Vec<Card> {
     let mut cards: Vec<Card> = clipboard_preset(f).map(Card::Builtin).into_iter().collect();
     cards.extend(recent.iter().cloned().map(Card::Recent));
     let defaults = CATEGORIES[0].1.iter().filter(|p| {
