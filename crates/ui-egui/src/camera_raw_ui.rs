@@ -131,6 +131,10 @@ pub(crate) fn proxy_for(document: &photocraft_doc::Document) -> Option<ProxyData
     Some(ProxyData { area: geometry.area, k: geometry.k, pw: geometry.pw, ph: geometry.ph, pixels: std::sync::Arc::new(pixels), curve: None })
 }
 const PANEL_W: f32 = 330.0;
+/// In the workspace (the editor hosted in Image Triage) the photo gets more of the window than in the filter's own window: a narrower
+/// settings panel, a thinner margin around the photo, and no strip under it (the zoom tools sit in the footer). See [`layout`].
+const WORKSPACE_PANEL_W: f32 = 270.0;
+const WORKSPACE_VIEW_MARGIN: f32 = 8.0;
 const BANDS: [&str; 8] = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"];
 
 pub struct CameraRawDialog {
@@ -1210,14 +1214,19 @@ pub(crate) struct Layout {
 
 pub(crate) fn layout(screen: ERect, own_window: bool) -> Layout {
     let footer_h = 48.0;
+    // `own_window`: the filter's own OS window, as upstream lays it out (16 px around the photo, a 48 px strip under it for the zoom tools,
+    // a 330 px panel). In the workspace the photo takes the strip and part of the margin, and the panel is narrower.
+    let panel_w = if own_window { PANEL_W } else { WORKSPACE_PANEL_W };
+    let margin = if own_window { 16.0 } else { WORKSPACE_VIEW_MARGIN };
+    let below = if own_window { 48.0 } else { WORKSPACE_VIEW_MARGIN };
     let title = ERect::from_min_size(screen.min, vec2(screen.width(), if own_window { 0.0 } else { 30.0 }));
     let body = ERect::from_min_max(pos2(screen.left(), title.bottom()), pos2(screen.right(), screen.bottom() - footer_h));
-    let preview_body = ERect::from_min_max(body.min, pos2((body.right() - PANEL_W).max(body.left() + 1.0), body.bottom()));
+    let preview_body = ERect::from_min_max(body.min, pos2((body.right() - panel_w).max(body.left() + 1.0), body.bottom()));
     let view = ERect::from_min_max(
-        preview_body.min + vec2(16.0, 16.0),
-        pos2((preview_body.right() - 16.0).max(preview_body.left() + 17.0), (preview_body.bottom() - 48.0).max(preview_body.top() + 17.0)),
+        preview_body.min + vec2(margin, margin),
+        pos2((preview_body.right() - margin).max(preview_body.left() + margin + 1.0), (preview_body.bottom() - below).max(preview_body.top() + margin + 1.0)),
     );
-    let right = ERect::from_min_max(pos2(body.right() - PANEL_W, body.top()), body.max);
+    let right = ERect::from_min_max(pos2(body.right() - panel_w, body.top()), body.max);
     let foot = ERect::from_min_max(pos2(screen.left(), screen.bottom() - footer_h), screen.max);
     Layout { title, body, preview_body, view, right, foot }
 }
@@ -1374,15 +1383,17 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         if let Some(region) = zoom_box {
             preview.painter().rect_stroke(region, 0.0, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
         }
-        let toolbar = ERect::from_min_max(pos2(preview_body.left() + 16.0, view.bottom() + 8.0), preview_body.right_bottom() - vec2(16.0, 4.0));
-        let mut nav_ui = ui.new_child(egui::UiBuilder::new().max_rect(toolbar).layout(egui::Layout::left_to_right(egui::Align::Center)));
-        nav_ui.set_clip_rect(preview_body.intersect(ui.clip_rect()));
-        super::camera_raw_preview_ui::toolbar(&mut nav_ui, navigation, view, size, &mut scope.sampler_tool);
-        if d.detail.pending() || busy_visible {
-            nav_ui.spinner();
-        }
-        if let Some(error) = &d.detail.error {
-            nav_ui.label(egui::RichText::new(tl!("Full-resolution preview unavailable")).color(t.text_faint)).on_hover_text(error);
+        if own_window {
+            let toolbar = ERect::from_min_max(pos2(preview_body.left() + 16.0, view.bottom() + 8.0), preview_body.right_bottom() - vec2(16.0, 4.0));
+            let mut nav_ui = ui.new_child(egui::UiBuilder::new().max_rect(toolbar).layout(egui::Layout::left_to_right(egui::Align::Center)));
+            nav_ui.set_clip_rect(preview_body.intersect(ui.clip_rect()));
+            super::camera_raw_preview_ui::toolbar(&mut nav_ui, navigation, view, size, &mut scope.sampler_tool);
+            if d.detail.pending() || busy_visible {
+                nav_ui.spinner();
+            }
+            if let Some(error) = &d.detail.error {
+                nav_ui.label(egui::RichText::new(tl!("Full-resolution preview unavailable")).color(t.text_faint)).on_hover_text(error);
+            }
         }
         // Panels.
         let right = lay.right;
@@ -1531,6 +1542,23 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         if fu.button(tl!("Load Settings…")).on_hover_text(tl!("Load settings from a Camera Raw .xmp file")).clicked() {
             action = Some("load");
         }
+        if !own_window {
+            // The zoom tools: in the workspace they are in the footer, in what the buttons leave free on its left, so the photo has the
+            // strip they used to have. In a window too narrow for both, the tools are clipped, never the buttons.
+            let free = ERect::from_min_max(
+                pos2(foot.left() + 16.0, foot.top() + 9.0),
+                pos2((fu.min_rect().left() - 12.0).max(foot.left() + 16.0), foot.bottom() - 9.0),
+            );
+            let mut tools = ui.new_child(egui::UiBuilder::new().max_rect(free).layout(egui::Layout::left_to_right(egui::Align::Center)));
+            tools.set_clip_rect(free.intersect(ui.clip_rect()));
+            super::camera_raw_preview_ui::toolbar(&mut tools, navigation, view, size, &mut scope.sampler_tool);
+            if d.detail.pending() || busy_visible {
+                tools.spinner();
+            }
+            if let Some(error) = &d.detail.error {
+                tools.label(egui::RichText::new(tl!("Full-resolution preview unavailable")).color(t.text_faint)).on_hover_text(error);
+            }
+        }
     });
     super::camera_raw_scope_ui::persist(app, ctx);
     if ctx.input(|i| i.key_pressed(egui::Key::Y))
@@ -1580,6 +1608,42 @@ fn hue_color(h: f32) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_filters_own_window_keeps_upstreams_layout() {
+        let screen = ERect::from_min_size(pos2(0.0, 0.0), vec2(1365.0, 767.0));
+        let lay = layout(screen, true);
+        assert_eq!(lay.right.width(), 330.0);
+        assert_eq!(lay.view.left(), 16.0);
+        assert_eq!(lay.view.top(), 16.0);
+        assert_eq!(lay.preview_body.bottom() - lay.view.bottom(), 48.0, "the strip under the photo, for the zoom tools");
+    }
+
+    #[test]
+    fn the_workspace_gives_the_photo_the_strip_and_part_of_the_margin_and_narrows_the_panel() {
+        let screen = ERect::from_min_size(pos2(0.0, 0.0), vec2(1365.0, 767.0));
+        let lay = layout(screen, false);
+        let upstream = layout(screen, true);
+        assert_eq!(lay.right.width(), WORKSPACE_PANEL_W);
+        assert!(lay.right.width() < upstream.right.width());
+        assert_eq!(lay.view.left() - lay.preview_body.left(), WORKSPACE_VIEW_MARGIN);
+        assert_eq!(lay.preview_body.right() - lay.view.right(), WORKSPACE_VIEW_MARGIN);
+        assert_eq!(lay.view.top() - lay.preview_body.top(), WORKSPACE_VIEW_MARGIN);
+        assert_eq!(lay.preview_body.bottom() - lay.view.bottom(), WORKSPACE_VIEW_MARGIN, "no strip under the photo any more");
+        assert!(lay.view.width() > upstream.view.width() && lay.view.height() > upstream.view.height());
+        assert_eq!(lay.foot.height(), 48.0, "the footer is what holds the tools now");
+    }
+
+    #[test]
+    fn the_workspace_panel_stays_clear_of_the_photo_and_the_footer() {
+        for width in [700.0, 1000.0, 1365.0, 2560.0] {
+            let lay = layout(ERect::from_min_size(pos2(0.0, 0.0), vec2(width, 700.0)), false);
+            assert!(lay.view.right() <= lay.right.left(), "{width}: the photo runs into the panel");
+            assert!(lay.view.bottom() <= lay.foot.top(), "{width}: the photo runs into the footer");
+            assert!(lay.view.width() > 0.0 && lay.view.height() > 0.0);
+            assert_eq!(lay.right.right(), width);
+        }
+    }
 
     #[test]
     fn preview_texture_uses_linear_document_display_encoding() {
