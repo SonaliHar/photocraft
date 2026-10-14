@@ -31,9 +31,10 @@ PhotoCraft is the first integrated app, and the other apps have not been migrate
 The inspected source is fork `main` at
 `14c612c24b270ff62aaddd38bf64776c823f6003` (2026-10-13).
 The fresh integration branch starts at upstream `main`
-`369704ac551e8e409800e423ff550c353d5522ef`.
-The final refresh rebases the series over upstream's native-printing integration;
-its menus, dependencies and translations remain intact.
+`706638b2842a330cfc5c305c7860d0b7c9921960`.
+The refresh retains upstream's native-printing integration and the subsequent
+selection, PSD, validation and panic-hunt fixes. Shared-core and PhotoCraft policy
+code remain unchanged across the final base refresh.
 
 | Individual commit | Source / purpose |
 |---|---|
@@ -95,3 +96,30 @@ Classic captures verify the existing upstream theme vocabulary.
 The port also preserves the successful Save As filename through command-based
 Undo, Redo and direct navigation. A regression covers these routes at all three
 sample depths; the imperative Undo/Redo API retains its upstream behavior.
+
+## Shared-core validation
+
+The first extraction run on upstream `369704ac` passed 4,910 touched-crate
+library/integration tests (31 ignored), strict all-target Clippy, layering,
+L0–L6 WASM checks and the adversarial command test. The engine release/corpus
+run passed 1,811 tests (19 ignored); these include unit/integration cases and
+are not a unique real-file count. The quick performance smoke run completed;
+its regression comparison was skipped because the baseline is Apple M4 Pro
+and this runner is Apple M1 Max. No performance-improvement claim is made.
+
+The final base refresh to upstream `706638b2` passed 5,548 library tests across
+engine, UI, IO, compose, algo and PSD (49 ignored), targeted layer-selection and
+PSD/resolution tests, strict all-target Clippy, strengthened panic hunt, full
+WASM checks, layering and regenerated scorecard checks. The final IO corpus
+and rendered-panel evidence are recorded in the task's validation report.
+
+The craft-libs workspace passed 288 tests (two existing ignored), strict workspace
+Clippy, formatting and a WASM build of history. The shared history coverage is
+13 independent integration tests plus its README doctest. PhotoCraft pins the
+implementation commit `4d001e6b32a73017b3f99377b98b97d13090318f`; later commits
+in craft-libs #104 add CI and improve the example adapter/tests without changing
+the shared engine's production Rust code. Other Craft apps remain future adopters.
+
+Hosted CI reports `action_required` before jobs start. The contributor account
+has read-only upstream permissions, so these local checks do not imply hosted
+Linux/Windows/macOS CI has passed.
