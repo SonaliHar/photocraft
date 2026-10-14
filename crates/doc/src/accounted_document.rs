@@ -13,6 +13,9 @@ use std::{
     sync::{Arc, Weak},
 };
 
+#[path = "accounted_imported_selection.rs"]
+mod imported_selection;
+
 struct ModelCharges {
     _index: QuotaLease,
     _payload: QuotaLease,
@@ -236,8 +239,11 @@ impl AccountedDocument {
     fn selection_noop(&self, selection: Option<&AccountedSelection>, control: &ReadControl<'_>) -> Result<bool, BackingError> {
         let doc = self.document();
         control.check(1)?;
-        if doc.selection_channel_id.is_some() || doc.xcf_state.is_some() || doc.source_color_context.is_some() {
+        if doc.selection_channel_id.is_some() {
             return Err(BackingError::Unsupported);
+        }
+        if imported_selection::applies(doc) {
+            imported_selection::validate(doc, self.quota(), control)?;
         }
         match (&doc.selection, self.owner._selection.as_ref()) {
             (None, None) => {}
@@ -266,18 +272,18 @@ impl AccountedDocument {
     /// grants a proof; final typed publication independently repeats its checks.
     pub fn validate_selection_replacement(&self, control: &ReadControl<'_>) -> Result<(), BackingError> {
         self.selection_noop(None, control)?;
-        census(self.document(), false, self.owner._selection.as_ref(), self.quota(), control)?;
+        selection_census(self.document(), false, self.owner._selection.as_ref(), self.quota(), control)?;
         Ok(())
     }
-    /// Separate source-free RequireNone pixel-selection transaction. Imported
-    /// selection roles or unguarded Surface payloads never acquire authority.
+    /// Anonymous pixel-selection transaction. The separate imported plain-raster
+    /// copier preserves retained metadata; unguarded codec selections refuse.
     /// Exact no-op shares the model, preserving the caller's redo branch.
     pub fn try_replace_selection(&self, selection: Option<&AccountedSelection>, control: &ReadControl<'_>) -> Result<Self, BackingError> {
         if self.selection_noop(selection, control)? {
             return Ok(self.clone());
         }
         let doc = self.document();
-        let logical = census(doc, false, self.owner._selection.as_ref(), self.quota(), control)?;
+        let logical = selection_census(doc, imported_selection::applies(doc), self.owner._selection.as_ref(), self.quota(), control)?;
         let owner_bytes = (std::mem::size_of::<ModelOwner>() + 128) as u64;
         let index = logical.index.checked_sub(owner_bytes).ok_or(BackingError::Integrity)?;
         let index_envelope = index.checked_mul(2).and_then(|v| v.checked_add(4096)).ok_or(BackingError::Length)?;
@@ -287,12 +293,17 @@ impl AccountedDocument {
         let mut payload_lease = self.quota().reserve(QuotaKind::Resident, payload_envelope).map_err(|_| BackingError::Quota)?;
         let view = selection.map(|guard| guard.clone_view(control)).transpose()?;
         control.check(logical.total()?)?;
-        let mut staged = ModelStaging { document: clone_model_without_selection(doc), selection_view: None };
+        let copied = if imported_selection::applies(doc) {
+            imported_selection::copy_document(doc, control)?
+        } else {
+            clone_model_without_selection(doc)
+        };
+        let mut staged = ModelStaging { document: copied, selection_view: None };
         if let Some(SelectionView { surface, charges }) = view {
             staged.document.selection = Some(surface);
             staged.selection_view = Some(charges);
         }
-        let retained = census(&staged.document, true, selection, self.quota(), control)?;
+        let retained = selection_census(&staged.document, true, selection, self.quota(), control)?;
         let retained_index = retained.index.checked_sub(owner_bytes).ok_or(BackingError::Integrity)?;
         if retained_index > index_envelope || retained.payload > payload_envelope {
             return Err(BackingError::Allocation);
@@ -612,9 +623,16 @@ fn selection_format_allowed(format: photocraft_color::PixelFormat, depth: crate:
 
 /// Capacity census for an intentionally explicit bounded tree model-copy domain.
 /// Owned complex collections are refused, never assigned a fabricated size.
-fn census(
+fn census(doc: &Document, actual: bool, guard: Option<&AccountedSelection>, quota: &BackingQuota, control: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
+    census_inner(doc, actual, false, guard, quota, control)
+}
+fn selection_census(doc: &Document, actual: bool, guard: Option<&AccountedSelection>, quota: &BackingQuota, control: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
+    census_inner(doc, actual, imported_selection::applies(doc), guard, quota, control)
+}
+fn census_inner(
     doc: &Document,
     actual: bool,
+    imported_selection: bool,
     selection_guard: Option<&AccountedSelection>,
     expected_quota: &BackingQuota,
     control: &ReadControl<'_>,
@@ -699,8 +717,7 @@ fn census(
         (None, None) => {}
         (Some(surface), Some(guard)) => {
             if doc.selection_channel_id.is_some()
-                || doc.xcf_state.is_some()
-                || doc.source_color_context.is_some()
+                || (!imported_selection && (doc.xcf_state.is_some() || doc.source_color_context.is_some()))
                 || !selection_format_allowed(guard.format(), doc.depth)
                 || !doc.bounds().contains_rect(&guard.bounds())
                 || !guard.matches(surface, expected_quota, control)?
@@ -759,6 +776,9 @@ fn census(
         return Err(BackingError::Length);
     }
     let mut canonical = CanonicalCensus::new(size, actual, control);
+    if imported_selection {
+        imported_selection::shared_payloads(doc, &mut canonical, control)?;
+    }
     if let Some(state) = &doc.xcf_state {
         canonical.state(state)?;
     }

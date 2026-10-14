@@ -1,4 +1,4 @@
-//! Source-free accounted Select All using upstream canvas and native-format policy.
+//! Accounted Select All using upstream canvas and native-format policy.
 //! No source, profile, mask or imported selection authority is inferred.
 use crate::{EngineError, Result, Session, accounted_selection_session::AccountedSelectionTarget};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
@@ -19,8 +19,8 @@ pub(crate) fn validate_request(session: &Session, params: &Value) -> Result<()> 
     crate::selection_inverse_controlled::storage_dispatch_preflight(session, CMD, params, false)?;
     let state = session.active().ok_or(EngineError::NoDocument)?;
     let doc = &state.doc;
-    if doc.accounted().is_none() || doc.xcf_state.is_some() || doc.source_color_context.is_some() || doc.selection_channel_id.is_some() {
-        return Err(bad("accounted Select All requires a source-free current pixel selection"));
+    if doc.accounted().is_none() || doc.selection_channel_id.is_some() {
+        return Err(bad("accounted Select All requires an anonymous current pixel selection"));
     }
     if doc.size.width == 0 || doc.size.height == 0 || doc.size.width > 262144 || doc.size.height > 262144 {
         return Err(bad("accounted Select All canvas exceeds native selection bounds"));
@@ -112,6 +112,8 @@ pub(crate) fn run(session: &mut Session, params: &Value, control: &ReadControl<'
     let state = session.active().ok_or(EngineError::NoDocument)?;
     let baseline = state.doc.clone();
     let owner = baseline.accounted().ok_or(BackingError::Unsupported)?;
+    // The paid document gate alone admits plain imported metadata/storage.
+    // This dispatch check never clears source state or supplies an ownership proof.
     owner.validate_selection_replacement(control)?;
     if !state.history.current()?.shares_state(&baseline) {
         return Err(BackingError::Integrity.into());

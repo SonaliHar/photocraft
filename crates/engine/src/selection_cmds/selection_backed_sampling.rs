@@ -358,8 +358,11 @@ fn prepare_captured(captured: CapturedBackedColorRange, control: &Interrupt<'_>,
     let cancel = || control.cancelled();
     let cms_limits = photocraft_cms::control::Limits::default();
     let icc = source.icc_profile.as_ref().ok_or_else(|| failure("backed preview ICC missing"))?;
-    work.consume(cms_limits.work_units, control, parent)?; // genuine lower planner ceiling, no reset/refund
-    let profile_req = photocraft_cms::Profile::parse_requirements_with_control(icc, cms_limits, &cancel).map_err(cms_error)?;
+    work.consume(64, control, parent)?;
+    let parse_ceiling = photocraft_cms::Profile::parse_planning_work_ceiling(icc.len()).map_err(cms_error)?;
+    let parse_limits = photocraft_cms::control::Limits { work_units: parse_ceiling, ..cms_limits };
+    work.consume(parse_ceiling, control, parent)?;
+    let profile_req = photocraft_cms::Profile::parse_requirements_with_control(icc, parse_limits, &cancel).map_err(cms_error)?;
     let profile_lease = reserve_owner(&quota, profile_req.peak_resident_bytes as u64)?;
     work.consume(profile_req.work_units, control, parent)?;
     let profile = photocraft_cms::Profile::parse_with_control(
@@ -382,9 +385,18 @@ fn prepare_captured(captured: CapturedBackedColorRange, control: &Interrupt<'_>,
     poll(control)?;
     let lab = photocraft_cms::Builtin::LabD50.profile();
     poll(control)?;
-    work.consume(cms_limits.work_units, control, parent)?;
+    work.consume(photocraft_cms::Transform::RGB_TO_BUILTIN_LAB_PLANNING_WORK, control, parent)?;
+    let prospective = photocraft_cms::Transform::rgb_to_builtin_lab_planning_requirements_with_control(&profile, cms_limits, &cancel).map_err(cms_error)?;
+    let transform_limits = photocraft_cms::control::Limits { work_units: prospective.work_units, ..cms_limits };
+    work.consume(prospective.work_units, control, parent)?;
     let options = photocraft_cms::TransformOptions::default();
-    let transform_req = photocraft_cms::Transform::requirements_with_control(&profile, lab, options, cms_limits, &cancel).map_err(cms_error)?;
+    let transform_req = photocraft_cms::Transform::requirements_with_control(&profile, lab, options, transform_limits, &cancel).map_err(cms_error)?;
+    if transform_req.work_units > prospective.work_units
+        || transform_req.peak_resident_bytes > prospective.peak_resident_bytes
+        || transform_req.retained_bytes > prospective.retained_bytes
+    {
+        return Err(failure("actual transform requirements exceeded prospective envelope"));
+    }
     let transform_lease = reserve_owner(&quota, transform_req.peak_resident_bytes as u64)?;
     work.consume(transform_req.work_units, control, parent)?;
     let to_lab = photocraft_cms::Transform::with_options_with_control(
@@ -395,8 +407,11 @@ fn prepare_captured(captured: CapturedBackedColorRange, control: &Interrupt<'_>,
         &cancel,
     )
     .map_err(cms_error)?;
-    work.consume(cms_limits.work_units, control, parent)?;
-    if to_lab.retained_bytes_with_control(cms_limits, &cancel).map_err(cms_error)? > transform_req.retained_bytes {
+    // Actual retained census charges stage/vector counts only; the already
+    // admitted construction envelope (>=1Mi work) bounds this closed result.
+    work.consume(transform_req.work_units, control, parent)?;
+    let retention_limits = photocraft_cms::control::Limits { work_units: transform_req.work_units, ..cms_limits };
+    if to_lab.retained_bytes_with_control(retention_limits, &cancel).map_err(cms_error)? > transform_req.retained_bytes {
         return Err(failure("backed preview actual transform exceeded prepared envelope"));
     }
     let retention = Arc::new(Retention {

@@ -3,6 +3,20 @@ use super::*;
 use crate::control::{Budget,Error,Limits,Result,invalid};
 #[derive(Clone,Copy,Debug)]
 pub struct ParseRequirements {pub input_bytes:usize,pub model_bytes:usize,pub peak_resident_bytes:usize,pub work_units:u64}
+impl Profile {
+ /// O(1) upper bound for this parser's requirements census, before inspecting
+ /// hostile ICC records. This is an accounting bound, not a header/profile gate.
+ /// Two whole-input charges + four named curve tags (<=2L work) + six LUTs
+ /// (each <=3L CLUT work + three <=L/2 sequential curve groups) + two text
+ /// tags (<=16L) give <=47L. <=1024 tag headers and fixed groups fit65536.
+ /// Repeated/shared tag payloads are deliberately counted repeatedly. The
+ /// default ceiling is never raised; the actual planner enforces the result.
+ pub fn parse_planning_work_ceiling(input_bytes:usize)->Result<u64>{
+  let bound=u64::try_from(input_bytes).map_err(|_|Error::Limit("ICC input work"))?
+   .checked_mul(64).and_then(|n|n.checked_add(65536)).ok_or(Error::Limit("ICC input work"))?;
+  Ok(bound.min(Limits::default().work_units))
+ }
+}
 fn add(a:usize,b:usize)->Result<usize>{a.checked_add(b).ok_or(Error::Limit("ICC size addition"))}
 fn mul(a:usize,b:usize)->Result<usize>{a.checked_mul(b).ok_or(Error::Limit("ICC size product"))}
 fn at(off:usize,index:usize,stride:usize)->Result<usize>{add(off,mul(index,stride)?)}
@@ -290,5 +304,25 @@ mod tests{
   let mut raw=icc(&[(*b"A2B0",mft(true))]);let before=raw.clone();assert!(matches!(parse(&raw,Limits{resident_bytes:1,work_units:1},&||false),Err(Error::Limit(_))));assert!(matches!(parse(&raw,Limits::default(),&||true),Err(Error::Cancelled)));assert_eq!(raw,before);
   word(&mut raw,128,1025);assert!(matches!(requirements(&raw,Limits::default(),&||false),Err(Error::Cms(_))));
   let raw=icc(&[(*b"A2B0",mft(false))]);let ticks=std::cell::Cell::new(0);let cancelled=||{let n=ticks.get();ticks.set(n+1);n>30};assert!(matches!(parse(&raw,Limits::default(),&cancelled),Err(Error::Cancelled)));
+ }
+}
+
+#[cfg(test)]
+mod planning_ceiling_tests {
+ use super::*;
+ #[test]
+ fn original_parser_requirements_fit_input_derived_ceiling_without_header_policy_change(){
+  for builtin in [crate::Builtin::Srgb,crate::Builtin::SGray,crate::Builtin::CoatedCmyk,crate::Builtin::LabD50]{
+   let bytes=builtin.profile().to_bytes();let before=bytes.clone();let ceiling=Profile::parse_planning_work_ceiling(bytes.len()).unwrap();
+   let lower=Limits{work_units:ceiling,..Limits::default()};
+   let a=requirements(&bytes,Limits::default(),&||false).unwrap();let z=requirements(&bytes,lower,&||false).unwrap();
+   assert_eq!(a.work_units,z.work_units);assert_eq!(a.model_bytes,z.model_bytes);assert!(z.work_units<=ceiling);assert_eq!(bytes,before);
+  }
+ }
+ #[test]
+ fn lower_work_and_cancellation_are_still_actual_planner_errors(){
+  let bytes=crate::Builtin::Srgb.profile().to_bytes();assert!(requirements(&bytes,Limits{work_units:0,..Limits::default()},&||false).is_err());
+  assert!(matches!(requirements(&bytes,Limits{work_units:Profile::parse_planning_work_ceiling(bytes.len()).unwrap(),..Limits::default()},&||true),Err(Error::Cancelled)));
+  assert_eq!(Profile::parse_planning_work_ceiling(16<<20).unwrap(),Limits::default().work_units);
  }
 }

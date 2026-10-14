@@ -1,9 +1,12 @@
 //! UNRUN job-publication fence regressions; no runtime acceptance claimed.
 use super::*;
-use photocraft_color::{ColorMode, SampleType};
-use photocraft_doc::{Document, accounted_document::AccountedDocument};
-use photocraft_geom::Size;
-use photocraft_raster::{Interrupt, backing::quota::QuotaLimits};
+use photocraft_color::{ColorMode, PixelFormat, SampleType};
+use photocraft_doc::{BackedLayer, Document, Layer, LayerContent, accounted_document::AccountedDocument};
+use photocraft_geom::{Rect, Size};
+use photocraft_raster::{
+    Interrupt,
+    backing::{BackedRaster, NativePlaneDescriptor, NativePlaneStore, quota::QuotaLimits},
+};
 use serde_json::json;
 use std::sync::{
     Arc,
@@ -13,10 +16,29 @@ use std::sync::{
 fn control() -> ReadControl<'static> {
     ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) }
 }
+#[derive(Debug)]
+struct ZeroStore(NativePlaneDescriptor);
+impl NativePlaneStore for ZeroStore {
+    fn descriptor(&self) -> NativePlaneDescriptor {
+        self.0
+    }
+    fn read_exact_at(&self, offset: u64, out: &mut [u8], control: &ReadControl<'_>) -> std::result::Result<(), BackingError> {
+        control.check(out.len() as u64)?;
+        let end = offset.checked_add(out.len() as u64).ok_or(BackingError::Bounds)?;
+        if end > 3 * 2 * 32 {
+            return Err(BackingError::Bounds);
+        }
+        out.fill(0);
+        Ok(())
+    }
+}
 fn fixture() -> (Session, BackingQuota) {
     let quota = BackingQuota::new(QuotaLimits { resident: 32 << 20, index: 8 << 20, scratch: 8 << 20 });
     let lease = quota.reserve(QuotaKind::Resident, 65536).unwrap();
-    let doc = Document::new("owned job journal", Size::new(3, 2), ColorMode::Rgb, SampleType::F64);
+    let mut doc = Document::new("owned job journal", Size::new(3, 2), ColorMode::Rgb, SampleType::F64);
+    let descriptor = NativePlaneDescriptor::new(PixelFormat::new(ColorMode::Rgb, SampleType::F64, true), Rect::new(0, 0, 3, 2), &[0; 32]).unwrap();
+    let raster = BackedRaster::new(Arc::new(ZeroStore(descriptor)), quota.clone(), 1, &control()).unwrap();
+    doc.layers.push(Layer::new("native", LayerContent::BackedRaster(BackedLayer::new(raster, descriptor, &control()).unwrap())));
     let owner = AccountedDocument::from_owned(doc, Arc::new(lease), quota.clone(), &control()).unwrap();
     let mut session = Session::new();
     session.add_accounted_document(owner, None, &control()).unwrap();

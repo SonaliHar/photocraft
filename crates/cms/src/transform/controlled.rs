@@ -44,6 +44,24 @@ pub fn requirements(src:&Profile,dst:&Profile,opts:TransformOptions,limits:Limit
  let required=construction_envelope(retained,copied,side_work,connection_work,nodes,same)?;
  let admit=Budget::new(limits,cancelled)?;admit.admit(required.peak_resident_bytes,required.work_units)?;Ok(required)
 }
+impl Transform {
+ /// Bound charged by callers before this fixed-shape borrowed prepass. The
+ /// source has exactly three RGB curves (plus optional gray curve), no LUT;
+ /// the actual immutable builtin Lab has two one-stage/three-identity-curve
+ /// sides. Equality stops at unequal color spaces. All curve costs inspect
+ /// lengths/capacities only; no table values, profile copies or pipelines run.
+ /// The builtin provider retains its existing outer-polled initialization boundary.
+ pub const RGB_TO_BUILTIN_LAB_PLANNING_WORK:u64=4096;
+ /// Reuses the real constructor envelope and unchanged default options. The
+ /// resulting requirement is suitable as a lower work ceiling for the normal
+ /// planner/constructor, which independently repeats/enforces admission.
+ pub fn rgb_to_builtin_lab_planning_requirements_with_control(src:&Profile,limits:Limits,cancelled:&dyn Fn()->bool)->Result<TransformRequirements>{
+  let b=Budget::new(limits,cancelled)?;
+  if src.color_space!=ColorSpace::Rgb||src.matrix.is_none()||src.trc.is_none()||src.a2b.iter().any(Option::is_some)||src.b2a.iter().any(Option::is_some){return Err(invalid("RGB matrix/TRC prospective transform required"));}
+  b.poll()?;let dst=crate::Builtin::LabD50.profile();b.poll()?;
+  requirements(src,dst,TransformOptions::default(),limits,cancelled)
+ }
+}
 fn copy_stages(stages:&[Stage],b:&mut Budget<'_>)->Result<Vec<Stage>>{let mut out=b.reserve(stages.len())?;for s in stages{out.push(s.copy_controlled(b)?);}Ok(out)}
 fn optimize(pipe:&mut Pipeline,b:&mut Budget<'_>)->Result<()>{
  pipe.validate_controlled()?;let mut out=b.reserve(pipe.stages.len())?;
@@ -129,4 +147,26 @@ pub fn retained(transform:&Transform,limits:Limits,cancelled:&dyn Fn()->bool)->R
  match &transform.core{Core::Exact=>(),Core::Grid(c)=>total=add(total,c.controlled_bytes()?)?,Core::Shaper{curves8,curves,matrix}=>{total=add(total,mul(curves8.capacity(),std::mem::size_of::<[f32;256]>())?)?;total=add(total,mul(curves.capacity(),std::mem::size_of::<Vec<f32>>())?)?;for c in curves{b.work(1)?;total=add(total,mul(c.capacity(),4)?)?;b.admit(total,0)?;}if let Some((_,_,m,o))=matrix{total=add(total,mul(add(m.capacity(),o.capacity())?,4)?)?;}}}
  if let Some(post)=&transform.post{total=add(total,mul(post.tables.capacity(),std::mem::size_of::<Vec<f32>>())?)?;for t in &post.tables{b.work(1)?;total=add(total,mul(t.capacity(),4)?)?;b.admit(total,0)?;}}
  b.admit(total,0)?;b.poll()?;Ok(total)
+}
+
+#[cfg(test)]
+mod rgb_lab_planning_tests {
+ use super::*;
+ #[test]
+ fn closed_prospective_requirement_is_same_real_constructor_envelope(){
+  for builtin in [crate::Builtin::Srgb,crate::Builtin::DisplayP3,crate::Builtin::AdobeRgbCompat]{
+   let source=builtin.profile();let before=source.to_bytes();
+   let a=Transform::rgb_to_builtin_lab_planning_requirements_with_control(source,Limits::default(),&||false).unwrap();
+   let limits=Limits{work_units:a.work_units,..Limits::default()};
+   let z=requirements(source,crate::Builtin::LabD50.profile(),TransformOptions::default(),limits,&||false).unwrap();
+   assert_eq!(a.work_units,z.work_units);assert_eq!(a.peak_resident_bytes,z.peak_resident_bytes);assert!(a.work_units<Limits::default().work_units);
+   assert_eq!(source.to_bytes(),before);
+  }
+ }
+ #[test]
+ fn closed_shape_lower_limit_and_cancellation_never_fall_back(){
+  assert!(Transform::rgb_to_builtin_lab_planning_requirements_with_control(crate::Builtin::CoatedCmyk.profile(),Limits::default(),&||false).is_err());
+  assert!(Transform::rgb_to_builtin_lab_planning_requirements_with_control(crate::Builtin::Srgb.profile(),Limits{work_units:0,..Limits::default()},&||false).is_err());
+  assert!(matches!(Transform::rgb_to_builtin_lab_planning_requirements_with_control(crate::Builtin::Srgb.profile(),Limits::default(),&||true),Err(Error::Cancelled)));
+ }
 }

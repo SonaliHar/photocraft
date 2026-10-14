@@ -19,6 +19,9 @@ mod authorized_font_tests;
 mod plane;
 use plane::{ExactParsedPlane, MappingPlane};
 
+#[path = "xcf_import/layer_mask_geometry.rs"]
+mod layer_mask_geometry;
+
 #[path = "xcf_import/admission.rs"]
 mod admission;
 
@@ -455,13 +458,16 @@ fn gimp_space(encoding: SampleEncoding) -> photocraft_doc::import_compositing::G
         SampleEncoding::Perceptual => GimpSpace::PerceptualRgb,
     }
 }
-fn admit<P>(
+fn admit<P: MappingPlane>(
     d: &Drawable<P>,
     effects_candidate: bool,
     blend_domain: bool,
     normal_mask_domain: bool,
     modified: Option<crate::xcf_modified_sources::ModifiedSourceKind>,
-) -> Result<(), IoError> {
+    source_sample: Sample,
+    ctl: &Interrupt<'_>,
+) -> Result<Option<layer_mask_geometry::Placement>, IoError> {
+    let mask_placement = layer_mask_geometry::validate(d, source_sample, ctl)?;
     if let Some(reason) = d.unsupported.iter().find(|reason| {
         !(effects_candidate && reason.as_str() == "GEGL layer effects"
             || modified == Some(crate::xcf_modified_sources::ModifiedSourceKind::Text) && reason.as_str() == "editable GIMP text layer"
@@ -490,11 +496,8 @@ fn admit<P>(
         if !m.unsupported.is_empty() {
             return Err(unsupported(m, "unsupported layer mask semantics"));
         }
-        if m.width != d.width || m.height != d.height {
-            return Err(unsupported(d, "mask/layer dimensions differ"));
-        }
     }
-    Ok(())
+    Ok(mask_placement)
 }
 pub(crate) fn bounds<P>(d: &Drawable<P>) -> Result<Rect, IoError> {
     let x1 = d
@@ -1934,12 +1937,14 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 || threshold_alpha_domain
                 || P::legacy_point_candidate(d, point_context, levels_context, doc.size)?);
 
-        admit(
+        let mask_placement = admit(
             d,
             effects_candidate,
             multiply_domain || basic_blend_domain || gray_mask_domain || masked_group_domain || multiply_spaces_domain || composition_command_domain,
             normal_mask_domain,
             modified,
+            file.sample,
+            ctl,
         )?;
         budget.charge(1024 + d.name.len() + d.path.len() * 4 + d.diagnostics.iter().map(|v| v.len() + std::mem::size_of::<String>()).sum::<usize>())?;
         let (mut drawable, mut l, side) = P::current_owner(drawable, &file.palette, &mut budget, ctl)?;
@@ -2047,7 +2052,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         warnings.extend(d.diagnostics.iter().cloned());
         if let Some(m) = &d.mask {
             let p = m.plane.as_ref().ok_or_else(|| unsupported(m, "missing mask plane"))?.eager_original()?;
-            let r = bounds(d)?;
+            let r = mask_placement.ok_or_else(|| unsupported(m, "missing validated layer-mask placement"))?.world_bounds;
             let s = surface(&mut budget, p, r, ColorMode::Grayscale, false, &p.bytes, ctl)?;
             budget.charge(std::mem::size_of::<Surface>() + 128)?;
             l.mask = Some(LayerMask { surface: std::sync::Arc::new(s), enabled: d.mask_enabled, linked: true, density: 1.0, feather: 0.0 });
@@ -2316,6 +2321,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
             }),
         });
         let mask_owner = if let Some(mask) = &d.mask {
+            let placement = mask_placement.ok_or_else(|| unsupported(mask, "missing validated layer-mask placement"))?;
             let mask_id = u64::try_from(i).ok().and_then(|v| v.checked_add(1)).ok_or_else(|| unsupported(d, "mask identity overflow"))?;
             let item = photocraft_doc::item_identity::ItemRef::Mask(photocraft_doc::item_identity::MaskId(mask_id));
             budget.charge(512 + mask.name.len())?;
@@ -2334,12 +2340,12 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 parent: None,
                 source_tattoo: mask.tattoo,
                 source_flags: 0,
-                raster_bounds: Some(bounds(d)?),
+                raster_bounds: Some(placement.world_bounds),
                 composition: None,
                 mask: Some(photocraft_doc::xcf_state::MaskState {
                     owner,
-                    bounds: bounds(d)?,
-                    offset: [d.offset.0, d.offset.1],
+                    bounds: placement.world_bounds,
+                    offset: placement.world_offset,
                     outside_f64_bits: 0.0_f64.to_bits(),
                     enabled: d.mask_enabled,
                     shown: d.mask_shown,

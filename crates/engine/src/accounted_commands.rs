@@ -162,8 +162,10 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
     }
     Ok(match id {
         "select.deselect" if state.doc.selection.is_none() => Some("no selection"),
-        "select.all" | "select.deselect" if state.doc.xcf_state.is_some() || state.doc.source_color_context.is_some() || state.doc.selection_channel_id.is_some() => {
-            Some("accounted selection editing requires a plain native selection owner")
+        "select.all" | "select.deselect" if state.doc.selection_channel_id.is_some() => {
+            // Menu eligibility is only a hint. The actual source/guard/model
+            // census remains mandatory under the typed publication control.
+            Some("accounted anonymous selection editing requires no saved selection owner")
         }
         "layer.setProps" if state.active_layer.is_none() => Some("no active layer"),
         "edit.undo" if !state.history.can_undo() => Some("nothing to undo"),
