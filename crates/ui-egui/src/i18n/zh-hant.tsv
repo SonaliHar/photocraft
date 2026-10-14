@@ -563,6 +563,9 @@
 	Blur	模糊
 	Blur Gallery	模糊收藏館
 	Field Blur…	區域模糊…
+# Field Blur pins (#3373)
+	No pin selected	未選取圖釘
+	Click the image to add a pin; drag a pin to move it, or its ring to change its blur. Delete removes the selected pin.	按一下影像即可新增圖釘；拖移圖釘可移動它，拖移其圓環可變更模糊程度。按 Delete 鍵刪除所選圖釘。
 	Iris Blur…	光圈模糊…
 	Tilt-Shift…	傾斜偏移…
 	Path Blur…	路徑模糊…
@@ -2195,6 +2198,10 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	沒有可用來建立選取範圍的路徑：請使用鋼筆工具繪製，或在路徑面板中選取一個路徑。
 	Cancel opening	取消開啟
 	Cancelled opening {name}	已取消開啟 {name}
+	The document “{name}” does not have an embedded {mode} profile.	文件「{name}」沒有嵌入的 {mode} 描述檔。
+	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	文件「{name}」嵌入的色彩描述檔與目前的 {mode} 工作空間不符。
+	Embedded: {embedded}	嵌入：{embedded}
+	Working: {working}	工作空間：{working}
 	Developing {name}	正在處理 {name}
 	Cancelled {label}	已取消 {label}
 	Esc to cancel	按 Esc 取消
@@ -2697,6 +2704,7 @@ curves	Smooth	平滑
 	Remove after each stroke	每次描邊後移除
 	Apply the removal ({key})	套用移除 ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	待移除的描邊：{n}（Enter 套用，Esc 取消）
+	Show home recent files	在主畫面上顯示最近的檔案
 	Clear Brush Controls	清除筆刷控制項
 	Reset All Locked Settings	重設所有鎖定的設定
 	Copy Texture to Other Tools	複製紋理至其他工具
@@ -2724,6 +2732,22 @@ curves	Smooth	平滑
 	Step {step} is waiting for its dialog	步驟 {step} 正在等待其對話框
 @plural	{n} action|{n} actions	{n} 個動作
 	Auto Add/Delete	自動增加/刪除
+
+# Native Windows printing qualification
+	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	請勿同時勾選列印設定中的鏡像：兩次翻轉會互相抵消。
+	Print Settings…	列印設定…
+	Remember to turn off the printer's own colour management in Print Settings…	請記得在列印設定中關閉印表機本身的色彩管理…
+	Sent to {printer}	已傳送至 {printer}
+	set in Print Settings…	在列印設定中設定…
 	ICO is limited to 256 × 256 pixels	ICO 最大為 256 × 256 像素
 	Button Mode	按鈕模式
 	Button Mode On	按鈕模式 開
+
+# Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
+	Darken Interface	介面變暗
+	Lighten Interface	介面變亮
+# Bevel & Emboss Technique.
+	Technique	方法
+	Chisel Hard	雕刻清晰
+	Chisel Soft	雕刻柔和
+	Open color-less EXR as ACEScg	將無色彩空間資訊的 EXR 以 ACEScg 開啟

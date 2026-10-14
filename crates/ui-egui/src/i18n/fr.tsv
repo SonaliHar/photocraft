@@ -543,6 +543,9 @@
 	Blur	Flou
 	Blur Gallery	Galerie de flous
 	Field Blur…	Flou de champ…
+# Field Blur pins (#3373)
+	No pin selected	Aucune épingle sélectionnée
+	Click the image to add a pin; drag a pin to move it, or its ring to change its blur. Delete removes the selected pin.	Cliquez dans l’image pour ajouter une épingle ; faites glisser une épingle pour la déplacer, ou son anneau pour modifier le flou. Suppr supprime l’épingle sélectionnée.
 	Iris Blur…	Flou d'iris…
 	Tilt-Shift…	Inclinaison-décalage…
 	Path Blur…	Flou de tracé…
@@ -2155,6 +2158,10 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Aucun tracé à partir duquel créer une sélection : dessinez-en un avec l'outil Plume ou sélectionnez-en un dans le panneau Tracés.
 	Cancel opening	Annuler l'ouverture
 	Cancelled opening {name}	Ouverture de {name} annulée
+	The document “{name}” does not have an embedded {mode} profile.	Le document « {name} » n'a pas de profil {mode} incorporé.
+	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Le document « {name} » a un profil colorimétrique incorporé qui ne correspond pas à l'espace de travail {mode} actuel.
+	Embedded: {embedded}	Incorporé : {embedded}
+	Working: {working}	Espace de travail : {working}
 	Developing {name}	Développement de {name}
 	Cancelled {label}	{label} : annulé
 	Esc to cancel	Échap pour annuler
@@ -3104,6 +3111,7 @@ curves	Smooth	Lisser
 	Remove after each stroke	Supprimer après chaque trait
 	Apply the removal ({key})	Appliquer la suppression ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Traits à supprimer : {n} (Entrée applique, Échap annule)
+	Show home recent files	Afficher les fichiers récents sur l'écran d'accueil
 	Clear Brush Controls	Effacer les commandes de pinceau
 	Reset All Locked Settings	Réinitialiser tous les paramètres verrouillés
 	Copy Texture to Other Tools	Copier la texture dans d'autres outils
@@ -3131,6 +3139,22 @@ curves	Smooth	Lisser
 	Step {step} is waiting for its dialog	L’étape {step} attend sa boîte de dialogue
 @plural	{n} action|{n} actions	{n} action|{n} actions
 	Auto Add/Delete	Ajout/suppr. auto
+
+# Native Windows printing qualification
+	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Ne cochez pas aussi Image miroir dans les paramètres d’impression : les deux inversions s’annulent.
+	Print Settings…	Paramètres d’impression…
+	Remember to turn off the printer's own colour management in Print Settings…	Pensez à désactiver la gestion des couleurs de l’imprimante dans les paramètres d’impression…
+	Sent to {printer}	Envoyé à {printer}
+	set in Print Settings…	défini dans les paramètres d’impression…
 	ICO is limited to 256 × 256 pixels	Le format ICO est limité à 256 × 256 pixels
 	Button Mode	Mode bouton
 	Button Mode On	Mode bouton activé
+
+# Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
+	Darken Interface	Assombrir l'interface
+	Lighten Interface	Éclaircir l'interface
+# Bevel & Emboss Technique.
+	Technique	Technique
+	Chisel Hard	Ciselage dur
+	Chisel Soft	Ciselage doux
+	Open color-less EXR as ACEScg	Ouvrir les EXR sans espace colorimétrique en ACEScg

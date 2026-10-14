@@ -1315,7 +1315,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "frame": app.frame,
         "session": photocraft_engine::inspect::session(&app.session),
         "document": app.session.active().map(photocraft_engine::inspect::document),
-        "perf": {"fps": app.fps, "timings": app.perf},
+        "perf": {"fps": app.fps, "timings": app.perf, "strokeTrace": app.stroke_trace.last},
         "brush": {"size": app.session.tools.brush.size, "hardness": app.session.tools.brush.hardness, "opacity": app.session.tools.brush.opacity},
         "distort": app.distort.describe(),
         "jobs": crate::jobs_ui::inspect(app),
@@ -1386,22 +1386,16 @@ mod tests {
             app.open_bytes("control.dng", &dng).unwrap();
             ctx.run_ui(Default::default(), |ui| crate::camera_raw_ui::show(&mut app, ui.ctx())).textures_delta.clear();
             assert!(app.camera_raw.is_some());
-            // The raw develops in ProPhoto, so opening it also asks about the working-space
-            // mismatch. Answer that prompt through the same control path before editing.
-            assert_eq!(app.ui.dialogs.len(), 1);
-            let mismatch = app.ui.dialogs.first().unwrap();
-            assert_eq!(mismatch.fields["__prefsui"], "mismatch");
-            assert_eq!(mismatch.fields["action"], "preserve");
-            assert_eq!(mismatch.fields["applied"], "preserve");
-            let mismatch_id = mismatch.id;
-            let update = json!({"id":"filter.cameraRaw","params":{"ui":{"set":{"exposure":0.5}}}});
-            assert_eq!(call(&mut app, &ctx, "ui.menu.invoke", update.clone())["ok"], false);
-            let confirmed = call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog":mismatch_id}));
-            assert_eq!(confirmed["ok"], true, "{confirmed}");
-            assert_eq!(confirmed["result"]["action"], "preserve");
+            // A developed raw has no embedded profile to ask about (`open_prompt`), so no profile
+            // prompt stands between the open and the Camera Raw dialog.
             assert!(app.ui.dialogs.is_empty());
+            let update = json!({"id":"filter.cameraRaw","params":{"ui":{"set":{"exposure":0.5}}}});
             let original = app.session.active().unwrap().doc.clone();
-            let changed = call(&mut app, &ctx, "ui.menu.invoke", update);
+            let changed = call(&mut app, &ctx, "ui.menu.invoke", update.clone());
+            let undone = call(&mut app, &ctx, "ui.menu.invoke", json!({"id":"filter.cameraRaw","params":{"ui":{"undo":true}}}));
+            assert_eq!(undone["result"]["params"]["exposure"], 0.0, "{undone}");
+            let redone = call(&mut app, &ctx, "ui.menu.invoke", json!({"id":"filter.cameraRaw","params":{"ui":{"redo":true}}}));
+            assert_eq!(redone["result"]["params"]["exposure"], 0.5, "{redone}");
             assert_eq!(changed["ok"], true, "{changed}");
             assert_eq!(changed["result"]["params"]["exposure"], 0.5);
             assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &original), "a preview must not commit");

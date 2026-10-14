@@ -537,6 +537,9 @@
 	Blur	Desfoque
 	Blur Gallery	Galeria de desfoque
 	Field Blur…	Desfoque de campo…
+# Field Blur pins (#3373)
+	No pin selected	Nenhum alfinete selecionado
+	Click the image to add a pin; drag a pin to move it, or its ring to change its blur. Delete removes the selected pin.	Clique na imagem para adicionar um alfinete; arraste um alfinete para movê-lo ou o anel dele para alterar o desfoque. Delete remove o alfinete selecionado.
 	Iris Blur…	Desfoque de íris…
 	Tilt-Shift…	Tilt-shift…
 	Path Blur…	Desfoque de demarcador…
@@ -2151,6 +2154,10 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Nenhum demarcador para criar a seleção: desenhe um com a ferramenta Caneta ou selecione um no painel Demarcadores.
 	Cancel opening	Cancelar abertura
 	Cancelled opening {name}	Abertura de {name} cancelada
+	The document “{name}” does not have an embedded {mode} profile.	O documento “{name}” não tem um perfil {mode} incorporado.
+	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	O documento “{name}” tem um perfil de cores incorporado que não corresponde ao espaço de trabalho {mode} atual.
+	Embedded: {embedded}	Incorporado: {embedded}
+	Working: {working}	Espaço de trabalho: {working}
 	Developing {name}	Revelando {name}
 	Cancelled {label}	{label} cancelado
 	Esc to cancel	Esc para cancelar
@@ -3892,6 +3899,7 @@ layerLabel	No Color	Sem cor
 	Remove after each stroke	Remover após cada traço
 	Apply the removal ({key})	Aplicar a remoção ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Traços a remover: {n} (Enter aplica, Esc cancela)
+	Show home recent files	Mostrar arquivos recentes na tela inicial
 	Clear Brush Controls	Limpar controles de pincel
 	Reset All Locked Settings	Redefinir todas as configurações bloqueadas
 	Copy Texture to Other Tools	Copiar textura para outras ferramentas
@@ -3919,6 +3927,22 @@ layerLabel	No Color	Sem cor
 	Step {step} is waiting for its dialog	A etapa {step} está aguardando sua caixa de diálogo
 @plural	{n} action|{n} actions	{n} ação|{n} ações
 	Auto Add/Delete	Adicionar/excluir automaticamente
+
+# Native Windows printing qualification
+	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Não ative também a imagem espelhada nas configurações de impressão: as duas inversões se anulam.
+	Print Settings…	Configurações de impressão…
+	Remember to turn off the printer's own colour management in Print Settings…	Lembre-se de desativar o gerenciamento de cores da própria impressora nas configurações de impressão…
+	Sent to {printer}	Enviado para {printer}
+	set in Print Settings…	definido nas configurações de impressão…
 	ICO is limited to 256 × 256 pixels	ICO é limitado a 256 × 256 pixels
 	Button Mode	Modo de botão
 	Button Mode On	Modo de botão ativado
+
+# Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
+	Darken Interface	Escurecer interface
+	Lighten Interface	Clarear interface
+# Bevel & Emboss Technique.
+	Technique	Técnica
+	Chisel Hard	Cinzel duro
+	Chisel Soft	Cinzel suave
+	Open color-less EXR as ACEScg	Abrir EXR sem espaço de cor como ACEScg

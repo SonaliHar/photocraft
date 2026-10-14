@@ -552,6 +552,9 @@
 	Blur	Rozmycie
 	Blur Gallery	Galeria rozmyć
 	Field Blur…	Rozmycie pola…
+# Field Blur pins (#3373)
+	No pin selected	Nie zaznaczono pinezki
+	Click the image to add a pin; drag a pin to move it, or its ring to change its blur. Delete removes the selected pin.	Kliknij obraz, aby dodać pinezkę; przeciągnij pinezkę, aby ją przesunąć, lub jej pierścień, aby zmienić rozmycie. Delete usuwa zaznaczoną pinezkę.
 	Iris Blur…	Rozmycie irysowe…
 	Tilt-Shift…	Tilt-shift…
 	Path Blur…	Rozmycie ścieżki…
@@ -2176,6 +2179,10 @@
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Brak ścieżki, z której można utworzyć zaznaczenie: narysuj ją narzędziem Pióro lub wybierz w panelu Ścieżki.
 	Cancel opening	Anuluj otwieranie
 	Cancelled opening {name}	Anulowano otwieranie {name}
+	The document “{name}” does not have an embedded {mode} profile.	Dokument „{name}” nie ma osadzonego profilu {mode}.
+	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Dokument „{name}” ma osadzony profil kolorów, który nie pasuje do bieżącej przestrzeni roboczej {mode}.
+	Embedded: {embedded}	Osadzony: {embedded}
+	Working: {working}	Przestrzeń robocza: {working}
 	Cancelled {label}	Anulowano: {label}
 	Esc to cancel	Esc, aby anulować
 	Opened {name}	Otworzono: {name}
@@ -3700,6 +3707,7 @@ curves	Smooth	Wygładź
 	Remove after each stroke	Usuwaj po każdym pociągnięciu
 	Apply the removal ({key})	Zastosuj usuwanie ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	Pociągnięcia do usunięcia: {n} (Enter stosuje, Esc anuluje)
+	Show home recent files	Pokaż ostatnie pliki na ekranie głównym
 	Clear Brush Controls	Wyczyść elementy sterujące pędzlem
 	Reset All Locked Settings	Resetuj wszystkie zablokowane ustawienia
 	Copy Texture to Other Tools	Kopiuj teksturę do innych narzędzi
@@ -3727,6 +3735,22 @@ curves	Smooth	Wygładź
 	Step {step} is waiting for its dialog	Krok {step} czeka na swoje okno dialogowe
 @plural	{n} action|{n} actions	{n} operacja|{n} operacje|{n} operacji
 	Auto Add/Delete	Automatyczne dodawanie/usuwanie
+
+# Native Windows printing qualification
+	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Nie włączaj też odbicia lustrzanego w ustawieniach druku: oba odbicia wzajemnie się znoszą.
+	Print Settings…	Ustawienia druku…
+	Remember to turn off the printer's own colour management in Print Settings…	Pamiętaj o wyłączeniu zarządzania kolorami drukarki w ustawieniach druku…
+	Sent to {printer}	Wysłano do {printer}
+	set in Print Settings…	ustawiane w ustawieniach druku…
 	ICO is limited to 256 × 256 pixels	ICO jest ograniczony do 256 × 256 pikseli
 	Button Mode	Tryb przycisku
 	Button Mode On	Tryb przycisku włączony
+
+# Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
+	Darken Interface	Przyciemnij interfejs
+	Lighten Interface	Rozjaśnij interfejs
+# Bevel & Emboss Technique.
+	Technique	Technika
+	Chisel Hard	Dłuto twarde
+	Chisel Soft	Dłuto miękkie
+	Open color-less EXR as ACEScg	Otwieraj EXR bez profilu koloru jako ACEScg
