@@ -1071,7 +1071,12 @@ fn push_character_backgrounds(layout: &mut TextLayout, run_starts: &[usize]) {
                 continue;
             }
             let si = run_index_at(run_starts, c.range.start);
-            let color = layout.styles.get(si).and_then(|s| s.background).filter(|c| c.alpha.is_finite() && c.c.iter().all(|v| v.is_finite()));
+            let color = layout
+                .styles
+                .get(si)
+                .filter(|s| s.fill_background)
+                .and_then(|s| s.background)
+                .filter(|c| c.alpha.is_finite() && c.c.iter().all(|v| v.is_finite()));
             let (x0, x1) = (c.x.min(c.x + c.advance), c.x.max(c.x + c.advance));
             let same = cur.as_ref().is_some_and(|(cc, _, _)| color == Some(*cc));
             if same {

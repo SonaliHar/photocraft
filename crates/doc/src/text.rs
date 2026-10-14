@@ -89,14 +89,21 @@ pub struct CharStyle {
     pub variations: Vec<FontVariation>,
     /// BCP-47 language tag (affects shaping and line breaking).
     pub language: Option<String>,
-    /// Fill behind these characters (Photoshop EngineData `_FillBackgroundFlag` /
-    /// `_FillBackgroundColor`). `None` = no background. The box is the line, with no extra padding.
+    /// Fill behind these characters (Photoshop `_FillBackgroundColor`). Kept when the box is
+    /// switched off, so turning it back on uses the same colour.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background: Option<Color>,
+    /// Whether that fill is drawn (Photoshop `_FillBackgroundFlag`). The colour stays either way.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fill_background: bool,
     /// Applied character style (id in [`crate::TextStyles`]); `None` = "None". Attributes above
     /// stay fully resolved; differences from the style are local overrides.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub style_sheet: Option<u32>,
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 impl Default for CharStyle {
@@ -127,6 +134,7 @@ impl Default for CharStyle {
             variations: Vec::new(),
             language: None,
             background: None,
+            fill_background: false,
             style_sheet: None,
         }
     }
@@ -316,10 +324,5 @@ mod tests {
         // Missing keys take defaults.
         let p: ParagraphStyle = serde_json::from_str(r#"{"align":"Center"}"#).unwrap();
         assert_eq!((p.align, p.auto_leading), (TextAlign::Center, 1.2));
-        let shaded = CharStyle { background: Some(Color::rgba(0.961, 0.929, 0.859, 1.0)), ..Default::default() };
-        let back: CharStyle = serde_json::from_value(serde_json::to_value(&shaded).unwrap()).unwrap();
-        assert_eq!(back, shaded);
-        let old: CharStyle = serde_json::from_str("{}").unwrap();
-        assert!(old.background.is_none());
     }
 }

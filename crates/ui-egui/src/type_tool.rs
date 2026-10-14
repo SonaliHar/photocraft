@@ -2207,16 +2207,23 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
             });
         });
         ui.add_space(ROW_GAP);
-        let mut bg_on = c.background.is_some();
+        let mut bg_on = c.fill_background;
         if crate::widgets::checkbox(ui, &mut bg_on, "Background").changed() {
             if bg_on {
-                let fg = app.session.tools.foreground;
-                apply(app, ui.ctx(), json!({"background": [fg[0], fg[1], fg[2], 1.0]}));
+                if let Some(bg) = c.background {
+                    let rgb = bg.to_rgb();
+                    apply(app, ui.ctx(), json!({"fillBackground": true, "background": [rgb[0], rgb[1], rgb[2], 1.0]}));
+                } else {
+                    let fg = app.session.tools.foreground;
+                    apply(app, ui.ctx(), json!({"fillBackground": true, "background": [fg[0], fg[1], fg[2], 1.0]}));
+                }
             } else {
-                apply(app, ui.ctx(), json!({"background": null}));
+                apply(app, ui.ctx(), json!({"fillBackground": false}));
             }
         }
-        if let Some(bg) = c.background {
+        if c.fill_background
+            && let Some(bg) = c.background
+        {
             ui.add_space(ROW_GAP);
             row(ui, &mut |ui| {
                 let rgb = bg.to_rgb();

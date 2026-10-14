@@ -631,11 +631,10 @@ pub(crate) fn char_style(base: Option<&E>, d: &E, fonts: &[String], k: f32) -> C
             _ => Color::BLACK,
         };
     }
-    if flag("_FillBackgroundFlag") == Some(true)
-        && let Some(c) = g("_FillBackgroundColor").and_then(engine_color)
-    {
+    if let Some(c) = g("_FillBackgroundColor").and_then(engine_color) {
         s.background = Some(c);
     }
+    s.fill_background = flag("_FillBackgroundFlag") == Some(true) && s.background.is_some();
     s
 }
 
@@ -891,7 +890,7 @@ pub(crate) fn style_sheet_data(s: &CharStyle, font: usize, k: f32) -> E {
     ];
     // Always written: a parent sheet (Normal RGB) may already have the flag, and a run that omits
     // it would inherit that fill. Photoshop itself stores `false` on characters without a box.
-    dict.push(("_FillBackgroundFlag".into(), E::Bool(s.background.is_some())));
+    dict.push(("_FillBackgroundFlag".into(), E::Bool(s.fill_background)));
     if let Some(bg) = &s.background {
         let (bg_type, bg_values) = engine_color_parts(bg);
         dict.push(("_FillBackgroundColor".into(), E::Dict(vec![("Type".into(), E::Int(bg_type)), ("Values".into(), E::Array(bg_values))])));

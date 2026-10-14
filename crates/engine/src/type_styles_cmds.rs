@@ -111,6 +111,7 @@ fn perturbed_char() -> CharStyle {
         variations: vec![FontVariation { axis: "\u{1}".into(), value: -1.0 }],
         language: Some("\u{1}".into()),
         background: Some(photocraft_color::Color::rgba(0.2, 0.3, 0.4, 0.5)),
+        fill_background: true,
         style_sheet: None,
     }
 }

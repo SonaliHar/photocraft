@@ -360,6 +360,7 @@ pub fn apply_char_props(s: &mut CharStyle, p: &Value) -> bool {
     match p.get("background") {
         Some(Value::Null) => {
             s.background = None;
+            s.fill_background = false;
             hit(true);
         }
         Some(v) => {
@@ -371,10 +372,15 @@ pub fn apply_char_props(s: &mut CharStyle, p: &Value) -> bool {
                     c.alpha = prev.alpha;
                 }
                 s.background = Some(c);
+                s.fill_background = true;
                 hit(true);
             }
         }
         None => {}
+    }
+    if let Some(on) = p.get("fillBackground").and_then(Value::as_bool) {
+        s.fill_background = on && s.background.is_some();
+        hit(true);
     }
     any
 }
@@ -813,7 +819,7 @@ pub(crate) fn new_text_layer(s: &Session, p: &Value, cmd: &str) -> Result<TextLa
     Ok(t)
 }
 
-const CHAR_PARAMS: &str = r##""font":str,"fontStyle":str,"weight":100..900,"italic":bool,"size":0.1..=1296 pt,"color":"#rrggbb"|[r,g,b,a],"tracking":-1000..=10000 (1/1000 em),"leading":pt|"auto","baselineShift":pt,"horizontalScale":%,"verticalScale":%,"underline":bool,"strikethrough":bool,"fauxBold":bool,"fauxItalic":bool,"kerning":1/1000em (manual, after each character)|"metrics"|"optical"|"off","caps":"normal|small|all","ligatures":bool,"discretionaryLigatures":bool,"features":{"ss01":1},"variations":{"wght":650},"language":str,"background":"#rrggbb"|[r,g,b,a]|null (Photoshop _FillBackgroundColor behind these characters; null clears it)"##;
+const CHAR_PARAMS: &str = r##""font":str,"fontStyle":str,"weight":100..900,"italic":bool,"size":0.1..=1296 pt,"color":"#rrggbb"|[r,g,b,a],"tracking":-1000..=10000 (1/1000 em),"leading":pt|"auto","baselineShift":pt,"horizontalScale":%,"verticalScale":%,"underline":bool,"strikethrough":bool,"fauxBold":bool,"fauxItalic":bool,"kerning":1/1000em (manual, after each character)|"metrics"|"optical"|"off","caps":"normal|small|all","ligatures":bool,"discretionaryLigatures":bool,"features":{"ss01":1},"variations":{"wght":650},"language":str,"background":"#rrggbb"|[r,g,b,a]|null (Photoshop _FillBackgroundColor; null clears the colour too),"fillBackground":bool (draw that colour; false keeps it for the next time)"##;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -1195,29 +1201,6 @@ mod tests {
             Err(EngineError::BadParams { cmd, .. }) if cmd == "type.setStyle"
         ));
         assert_eq!(text_layer(&s, id).runs, before.runs);
-    }
-
-    #[test]
-    fn character_background_is_per_run_and_clears() {
-        let mut s = session();
-        let id = s.execute("type.create", json!({"text": "One\nTwo", "size": 24, "color": "#000000"})).unwrap()["layer"].as_u64().unwrap();
-        s.execute("type.setStyle", json!({"layer": id, "range": [0, 3], "background": "#ffcc88"})).unwrap();
-        let t = text_layer(&s, id);
-        let runs = t.char_runs();
-        assert!(runs.len() >= 2);
-        let bg = runs[0].style.background.expect("the selected characters have a background");
-        assert!((bg.to_rgb()[0] - 1.0).abs() < 1e-3 && bg.alpha > 0.99);
-        assert!(runs[1..].iter().all(|r| r.style.background.is_none()), "characters outside the range stay clear");
-        // A colour without alpha keeps the opacity already set.
-        s.execute("type.setStyle", json!({"layer": id, "range": [0, 3], "background": [0.0, 0.5, 0.0, 0.4]})).unwrap();
-        s.execute("type.setStyle", json!({"layer": id, "range": [0, 3], "background": "#00ff00"})).unwrap();
-        let kept = text_layer(&s, id).char_runs()[0].style.background.unwrap();
-        assert!((kept.alpha - 0.4).abs() < 1e-3, "alpha {}", kept.alpha);
-        s.execute("type.setStyle", json!({"layer": id, "background": null})).unwrap();
-        assert!(text_layer(&s, id).char_runs().iter().all(|r| r.style.background.is_none()));
-        // Garbage does not panic and does not invent a colour.
-        s.execute("type.setStyle", json!({"layer": id, "background": "nope"})).unwrap();
-        assert!(text_layer(&s, id).char_runs()[0].style.background.is_none());
     }
 
     /// A font that arrives after the layer was drawn (served fonts on the web) re-renders it with

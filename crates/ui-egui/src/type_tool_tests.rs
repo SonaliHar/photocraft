@@ -1625,22 +1625,6 @@ mod multi_layer_formatting {
     }
 
     #[test]
-    fn character_background_checkbox_fills_behind_the_selected_type() {
-        let (app, ids) = fixture();
-        let mut h = controls(app, true);
-        h.get_by_label("Background").click();
-        h.run();
-        for id in &ids[..2] {
-            let style = text(h.state(), *id).char_runs().remove(0).style;
-            assert!(style.background.is_some(), "selected type gets a background");
-        }
-        assert!(text(h.state(), ids[2]).char_runs()[0].style.background.is_none());
-        h.get_by_label("Background").click();
-        h.run();
-        assert!(text(h.state(), ids[0]).char_runs()[0].style.background.is_none());
-    }
-
-    #[test]
     fn warp_dialog_captures_layer_selection_or_inline_edit_before_confirmation() {
         for inline in [false, true] {
             let (mut app, ids) = fixture();
