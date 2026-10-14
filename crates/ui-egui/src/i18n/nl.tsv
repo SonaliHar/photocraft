@@ -769,9 +769,9 @@
 	Timeline	Tijdlijn
 	Tool Presets	Gereedschapsvoorinstellingen
 	Tools	Gereedschappen
-	About PhotoCraft	Over PhotoCraft
-	PhotoCraft Website	Website van PhotoCraft
-	PhotoCraft on GitHub	PhotoCraft op GitHub
+	About ParodyShop	Over ParodyShop
+	ParodyShop Website	Website van ParodyShop
+	ParodyShop on GitHub	ParodyShop op GitHub
 	ArtCraft Website	Website van ArtCraft
 	Join the ArtCraft Discord…	Deelnemen aan de ArtCraft-Discord…
 	Report an Issue…	Probleem melden…
@@ -1326,9 +1326,9 @@
 	Perspective Warp is not active	Perspectiefvervorming is niet actief
 	Perspective Warp: draw planes along the image's perspective, then switch to Warp	Perspectiefvervorming: teken vlakken langs het perspectief van de afbeelding en schakel daarna naar Verbuigen
 	Photo Filter	Fotofilter
-	PhotoCraft	PhotoCraft
+	ParodyShop	ParodyShop
 	PhotoCraft Manages Colors	PhotoCraft beheert kleuren
-	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — een opensource, native afbeeldingseditor geschreven in Rust.
+	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.
 	Pin Depth:	Speldiepte:
 	Pixel Length:	Pixellengte:
 	Pixels/Centimeter	Pixels/centimeter
@@ -3784,7 +3784,7 @@ cameraData	Lens	Lens
 	There is no crop size or ratio to save	Er is geen uitsnijformaat of verhouding om op te slaan
 	Search settings…	Instellingen zoeken…
 	No matching settings	Geen overeenkomende instellingen
-	PhotoCraft — Screen Color Picker	PhotoCraft — Schermkleurkiezer
+	ParodyShop — Screen Color Picker	ParodyShop — Schermkleurkiezer
 	Loading fonts…	Lettertypen laden…
 	Simulate Pressure	Druk simuleren
 	Stroke Path…	Pad omlijnen…

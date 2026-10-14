@@ -400,6 +400,8 @@ fn services(inbox: Inbox) -> Services {
         // Preferences live in the browser's localStorage.
         load_prefs: Some(Box::new(|| local_storage()?.get_item(PREFS_KEY).ok().flatten())),
         save_prefs: Some(Box::new(|text: &str| local_storage().ok_or("no localStorage")?.set_item(PREFS_KEY, text).map_err(|e| format!("{e:?}")))),
+        // ParodyShop Premium™: the browser has no environment to read the source from.
+        paywall: true,
         ..Default::default()
     }
 }

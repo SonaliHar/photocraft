@@ -1,0 +1,16 @@
+name: 💸 New paywall idea
+description: Suggest a new way to not let people use a feature.
+labels: ["new-revenue-stream"]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: Which feature, and what does it cost? Remember the rule — we never ask for real payment details.
+    validations:
+      required: true
+  - type: input
+    id: projected
+    attributes:
+      label: Projected ARR
+      placeholder: "$0.00 (accurate)"

@@ -425,6 +425,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             {
                 return err(error);
             }
+            if let Some(bill) = crate::paywall::bill_agent(app, id) {
+                return err(bill);
+            }
             // `engine.execute` is programmatic: engine commands run directly with their default
             // params and never open a dialog (an agent would otherwise get a modal instead of a
             // result). `ui.menu.invoke` behaves like a menu click, so it may open the dialog.

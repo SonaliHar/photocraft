@@ -652,7 +652,7 @@
 	3-up Vertical	3 cửa sổ dọc
 	4-up	4 cửa sổ
 	6-up	6 cửa sổ
-	About PhotoCraft	Giới thiệu PhotoCraft
+	About ParodyShop	Giới thiệu ParodyShop
 	Actions	Thao tác
 	ArtCraft Website	Trang web ArtCraft
 	Brush Settings	Thiết lập cọ
@@ -694,8 +694,8 @@
 	Paragraph Styles	Kiểu đoạn văn
 	Paths	Đường dẫn
 	Patterns	Họa tiết
-	PhotoCraft on GitHub	PhotoCraft trên GitHub
-	PhotoCraft Website	Trang web PhotoCraft
+	ParodyShop on GitHub	ParodyShop trên GitHub
+	ParodyShop Website	Trang web ParodyShop
 	Photography	Nhiếp ảnh
 	Pixel Art	Pixel Art
 	Pro Medium Gray Theme	Chủ đề Pro xám vừa
@@ -1548,7 +1548,7 @@ cameraRaw	Shadows	Vùng tối
 	About	Giới thiệu
 	Contributors	Người đóng góp
 	Models	Mô hình
-	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — trình chỉnh sửa ảnh gốc mã nguồn mở viết bằng Rust.
+	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.
 	Version {version}	Phiên bản {version}
 	Unsaved changes	Thay đổi chưa lưu
 	Answer the unsaved-changes prompt first	Hãy trả lời hộp thoại thay đổi chưa lưu trước
@@ -2342,7 +2342,7 @@ shape	Appearance	Diện mạo
 	Inverse	Đảo vùng chọn
 	Lighten	Làm sáng
 	Missing delete command	Thiếu lệnh xóa
-	PhotoCraft	PhotoCraft
+	ParodyShop	ParodyShop
 	Reset	Đặt lại
 	Tetrahedral	Tetrahedral
 	Top	Trên
@@ -2364,7 +2364,7 @@ shape	Appearance	Diện mạo
 	Next Document	Tài liệu tiếp theo
 	Open EXR Parts…	Mở các phần EXR…
 	Pencil	Bút chì
-	PhotoCraft — Screen Color Picker	PhotoCraft — Bộ chọn màu màn hình
+	ParodyShop — Screen Color Picker	ParodyShop — Bộ chọn màu màn hình
 	Previous Document	Tài liệu trước
 	Refine	Tinh chỉnh
 	Remove from Recent	Xóa khỏi Gần đây

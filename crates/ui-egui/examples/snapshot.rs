@@ -20,6 +20,8 @@
 //! `--right-click-at X,Y` opens a screen-space context menu after the script, including panel
 //! and document-tab menus that are outside the document-coordinate control pointer.
 //! `--click-at X,Y` opens a screen-space menu (for example the top Select menu) after the script.
+//! `--paywall ID` turns ParodyShop Premium™ on after the script and invokes command `ID` as a menu
+//! click would, so the capture shows its subscription offer (the README screenshot).
 
 use photocraft_ui_egui::control::{ControlRequest, Outcome, handle};
 use photocraft_ui_egui::{PhotocraftApp, Services};
@@ -137,6 +139,15 @@ fn main() {
         if timing {
             eprintln!("{:>8.1} ms  {label}", t0.elapsed().as_secs_f64() * 1000.0);
         }
+    }
+    if let Some(id) = arg(&args, "--paywall") {
+        let app = harness.state_mut();
+        app.paywall = photocraft_ui_egui::paywall::Paywall::new(true);
+        app.ui.tool = photocraft_ui_egui::state::Tool::Hand;
+        if let Err(e) = photocraft_ui_egui::menus::invoke(app, &ctx, &id, Value::Null) {
+            eprintln!("--paywall {id}: {e}");
+        }
+        harness.run_steps(4);
     }
     for (flag, button) in [("--click-at", egui::PointerButton::Primary), ("--right-click-at", egui::PointerButton::Secondary)] {
         let Some((x, y)) = arg(&args, flag).and_then(|s| s.split_once(',').and_then(|(x, y)| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?)))) else {

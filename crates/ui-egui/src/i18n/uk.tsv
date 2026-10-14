@@ -503,9 +503,9 @@
 	Hide All	Приховати все
 
 # Help
-	About PhotoCraft	Про PhotoCraft
-	PhotoCraft Website	Вебсайт PhotoCraft
-	PhotoCraft on GitHub	PhotoCraft на GitHub
+	About ParodyShop	Про ParodyShop
+	ParodyShop Website	Вебсайт ParodyShop
+	ParodyShop on GitHub	ParodyShop на GitHub
 	Report an Issue…	Повідомити про проблему…
 	ArtCraft Website	Вебсайт ArtCraft
 	Join the ArtCraft Discord…	Приєднатися до Discord ArtCraft…
@@ -2163,8 +2163,8 @@
 	Output:	Вихід:
 	Paint Overlay	Малювати накладання
 	Pattern Size	Розмір візерунка
-	PhotoCraft	PhotoCraft
-	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — нативний редактор зображень із відкритим кодом, написаний на Rust.
+	ParodyShop	ParodyShop
+	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.
 	Position and Size	Положення та розмір
 	Preserve Details	Зберігати деталі
 	Preserve Luminosity	Зберігати світність
@@ -3716,7 +3716,7 @@ cameraData	Lens	Об'єктив
 	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	Клацання: плавна точка · Подвійне клацання: кут · Перетягування точки: перемістити · Клацання першої точки: замкнути · {key}: завершити
 	Search settings…	Пошук налаштувань…
 	No matching settings	Немає відповідних налаштувань
-	PhotoCraft — Screen Color Picker	PhotoCraft — Піпетка кольору екрана
+	ParodyShop — Screen Color Picker	ParodyShop — Піпетка кольору екрана
 	Loading fonts…	Завантаження шрифтів…
 	Simulate Pressure	Імітувати натиск
 	Stroke Path…	Обвести контур…

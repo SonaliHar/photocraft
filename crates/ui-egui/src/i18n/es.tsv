@@ -789,9 +789,9 @@
 	Timeline	Línea de tiempo
 	Tool Presets	Ajustes preestablecidos de herramienta
 	Tools	Herramientas
-	About PhotoCraft	Acerca de PhotoCraft
-	PhotoCraft Website	Sitio web de PhotoCraft
-	PhotoCraft on GitHub	PhotoCraft en GitHub
+	About ParodyShop	Acerca de ParodyShop
+	ParodyShop Website	Sitio web de ParodyShop
+	ParodyShop on GitHub	ParodyShop en GitHub
 	ArtCraft Website	Sitio web de ArtCraft
 	Join the ArtCraft Discord…	Únase al Discord de ArtCraft…
 	Report an Issue…	Informar de un problema…
@@ -1346,9 +1346,9 @@
 	Perspective Warp is not active	La deformación de perspectiva no está activa
 	Perspective Warp: draw planes along the image's perspective, then switch to Warp	Deformación de perspectiva: dibuje planos siguiendo la perspectiva de la imagen y luego cambie a Deformar
 	Photo Filter	Filtro de fotografía
-	PhotoCraft	PhotoCraft
+	ParodyShop	ParodyShop
 	PhotoCraft Manages Colors	PhotoCraft gestiona el color
-	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — un editor de imágenes nativo y de código abierto escrito en Rust.
+	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.
 	Pin Depth:	Profundidad de la chincheta:
 	Pixel Length:	Longitud en píxeles:
 	Pixels/Centimeter	Píxeles/centímetro
@@ -2553,7 +2553,7 @@ fontWeight	Italic	Cursiva
 	Color to Alpha…	Color a alfa…
 	Transparency Threshold	Umbral de transparencia
 	Opacity Threshold	Umbral de opacidad
-	PhotoCraft — Screen Color Picker	PhotoCraft — Selector de color de pantalla
+	ParodyShop — Screen Color Picker	ParodyShop — Selector de color de pantalla
 
 	Rasterize svg groups deeper than	Rasterizar grupos SVG con mayor profundidad
 	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 desactiva este umbral; los grupos SVG anidados a más de 100 niveles siempre se rasterizan.

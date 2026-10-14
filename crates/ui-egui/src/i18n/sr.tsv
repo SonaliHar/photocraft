@@ -766,9 +766,9 @@
 	Timeline	Vremenska linija
 	Tool Presets	Šabloni alatki
 	Tools	Alatke
-	About PhotoCraft	O programu PhotoCraft
-	PhotoCraft Website	Veb-sajt PhotoCraft-a
-	PhotoCraft on GitHub	PhotoCraft na GitHub-u
+	About ParodyShop	O programu ParodyShop
+	ParodyShop Website	Veb-sajt ParodyShop-a
+	ParodyShop on GitHub	ParodyShop na GitHub-u
 	ArtCraft Website	Veb-sajt ArtCraft-a
 	Join the ArtCraft Discord…	Pridružite se ArtCraft Discord zajednici…
 	Report an Issue…	Prijavi problem…
@@ -1305,9 +1305,9 @@
 	Perspective Warp is not active	Perspektivno krivljenje nije aktivno
 	Perspective Warp: draw planes along the image's perspective, then switch to Warp	Perspektivno krivljenje: nacrtajte ravni duž perspektive slike, a zatim pređite na krivljenje
 	Photo Filter	Foto-filter
-	PhotoCraft	PhotoCraft
+	ParodyShop	ParodyShop
 	PhotoCraft Manages Colors	PhotoCraft upravlja bojama
-	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — izvorni uređivač slika otvorenog koda, napisan u Rust-u.
+	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.
 	Pin Depth:	Dubina čiode:
 	Pixel Length:	Dužina u pikselima:
 	Pixels/Centimeter	Piksela/centimetar
@@ -2877,7 +2877,7 @@ fontWeight	Italic	Kurziv
 	Color to Alpha…	Boja u alfu…
 	Transparency Threshold	Prag providnosti
 	Opacity Threshold	Prag neprozirnosti
-	PhotoCraft — Screen Color Picker	PhotoCraft — birač boja sa ekrana
+	ParodyShop — Screen Color Picker	ParodyShop — birač boja sa ekrana
 
 	Rasterize svg groups deeper than	Rasterizuj SVG grupe dublje od
 	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 isključuje ovaj prag; SVG grupe ugnežđene dublje od 100 nivoa uvek se rasterizuju.

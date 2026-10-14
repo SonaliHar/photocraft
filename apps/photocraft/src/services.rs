@@ -508,6 +508,8 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         // Set by main, which starts loading the store before the window opens.
         preset_store: None,
         is_wayland: false,
+        // ParodyShop Premium™ in front of every feature, unless you read the source.
+        paywall: !photocraft_ui_egui::paywall::open_source_mode(std::env::var(photocraft_ui_egui::paywall::OPEN_SOURCE_ENV).ok().as_deref()),
         ..recovery_services(recovery_dir())
     }
 }

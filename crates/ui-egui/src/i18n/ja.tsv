@@ -787,9 +787,9 @@
 	Timeline	タイムライン
 	Tool Presets	ツールプリセット
 	Tools	ツール
-	About PhotoCraft	PhotoCraft について
-	PhotoCraft Website	PhotoCraft の Web サイト
-	PhotoCraft on GitHub	GitHub 上の PhotoCraft
+	About ParodyShop	ParodyShop について
+	ParodyShop Website	ParodyShop の Web サイト
+	ParodyShop on GitHub	GitHub 上の ParodyShop
 	ArtCraft Website	ArtCraft の Web サイト
 	Join the ArtCraft Discord…	ArtCraft の Discord に参加…
 	Report an Issue…	問題を報告…
@@ -1345,9 +1345,9 @@
 	Perspective Warp is not active	遠近法ワープは有効ではありません
 	Perspective Warp: draw planes along the image's perspective, then switch to Warp	遠近法ワープ: 画像の遠近に沿って面を描き、ワープに切り替えます
 	Photo Filter	写真フィルター
-	PhotoCraft	PhotoCraft
+	ParodyShop	ParodyShop
 	PhotoCraft Manages Colors	PhotoCraft でカラーを管理
-	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — Rust で書かれた、オープンソースのネイティブ画像エディター。
+	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.
 	Pin Depth:	ピンの深さ:
 	Pixel Length:	ピクセル長:
 	Pixels/Centimeter	ピクセル/センチメートル
@@ -3498,7 +3498,7 @@ fontWeight	Italic	斜体
 	Color to Alpha…	カラーを透明に…
 	Transparency Threshold	透明のしきい値
 	Opacity Threshold	不透明度のしきい値
-	PhotoCraft — Screen Color Picker	PhotoCraft — スクリーンカラーピッカー
+	ParodyShop — Screen Color Picker	ParodyShop — スクリーンカラーピッカー
 
 	Rasterize svg groups deeper than	この深さを超える SVG グループをラスタライズ
 	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 でこのしきい値は無効になります。100 階層を超えて入れ子になった SVG グループは常にラスタライズされます。

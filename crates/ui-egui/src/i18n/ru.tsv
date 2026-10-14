@@ -525,9 +525,9 @@
 	Hide All	Скрыть все
 
 # Help
-	About PhotoCraft	О программе PhotoCraft
-	PhotoCraft Website	Сайт PhotoCraft
-	PhotoCraft on GitHub	PhotoCraft на GitHub
+	About ParodyShop	О программе ParodyShop
+	ParodyShop Website	Сайт ParodyShop
+	ParodyShop on GitHub	ParodyShop на GitHub
 	Report an Issue…	Сообщить о проблеме…
 	ArtCraft Website	Сайт ArtCraft
 	Join the ArtCraft Discord…	Discord сообщества ArtCraft…
@@ -2177,8 +2177,8 @@
 	Output:	Выход:
 	Paint Overlay	Перекрытие краской
 	Pattern Size	Размер паттерна
-	PhotoCraft	PhotoCraft
-	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — открытый нативный графический редактор на Rust.
+	ParodyShop	ParodyShop
+	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.
 	Position and Size	Положение и размер
 	Preserve Details	Сохранять детали
 	Preserve Luminosity	Сохранять светлоту
@@ -2752,7 +2752,7 @@ fontWeight	Italic	Курсив
 	Color to Alpha…	Цвет в альфа-канал…
 	Transparency Threshold	Порог прозрачности
 	Opacity Threshold	Порог непрозрачности
-	PhotoCraft — Screen Color Picker	PhotoCraft — Пипетка цвета экрана
+	ParodyShop — Screen Color Picker	ParodyShop — Пипетка цвета экрана
 
 	Rasterize svg groups deeper than	Растеризовать группы SVG глубже этого уровня
 	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 отключает этот порог; группы SVG с вложенностью более 100 уровней всегда растрируются.

@@ -797,9 +797,9 @@
 	Timeline	時間軸
 	Tool Presets	工具預設集
 	Tools	工具
-	About PhotoCraft	關於 PhotoCraft
-	PhotoCraft Website	PhotoCraft 網站
-	PhotoCraft on GitHub	GitHub 上的 PhotoCraft
+	About ParodyShop	關於 ParodyShop
+	ParodyShop Website	ParodyShop 網站
+	ParodyShop on GitHub	GitHub 上的 ParodyShop
 	ArtCraft Website	ArtCraft 網站
 	Join the ArtCraft Discord…	加入 ArtCraft Discord…
 	Report an Issue…	回報問題…
@@ -1352,9 +1352,9 @@
 	Perspective Warp is not active	透視彎曲未啟用
 	Perspective Warp: draw planes along the image's perspective, then switch to Warp	透視彎曲：沿影像透視繪製平面，然後切換到彎曲
 	Photo Filter	相片濾鏡
-	PhotoCraft	PhotoCraft
+	ParodyShop	ParodyShop
 	PhotoCraft Manages Colors	PhotoCraft 管理色彩
-	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — 以 Rust 撰寫的開放原始碼原生影像編輯器。
+	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.
 	Pin Depth:	圖釘深度：
 	Pixel Length:	像素長度：
 	Pixels/Centimeter	像素/公分
@@ -2465,7 +2465,7 @@ fontWeight	Italic	斜體
 	Color to Alpha…	顏色轉為 Alpha…
 	Transparency Threshold	透明度臨界值
 	Opacity Threshold	不透明度臨界值
-	PhotoCraft — Screen Color Picker	PhotoCraft — 螢幕取色器
+	ParodyShop — Screen Color Picker	ParodyShop — 螢幕取色器
 
 	Rasterize svg groups deeper than	點陣化超過此深度的 SVG 群組
 	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	設為 0 可關閉此臨界值；巢狀超過 100 層的 SVG 群組一律會點陣化。

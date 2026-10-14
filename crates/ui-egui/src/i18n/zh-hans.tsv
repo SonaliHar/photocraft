@@ -792,9 +792,9 @@
 	Timeline	时间轴
 	Tool Presets	工具预设
 	Tools	工具
-	About PhotoCraft	关于 PhotoCraft
-	PhotoCraft Website	PhotoCraft 网站
-	PhotoCraft on GitHub	PhotoCraft 的 GitHub 页面
+	About ParodyShop	关于 ParodyShop
+	ParodyShop Website	ParodyShop 网站
+	ParodyShop on GitHub	ParodyShop 的 GitHub 页面
 	ArtCraft Website	ArtCraft 网站
 	Join the ArtCraft Discord…	加入 ArtCraft 的 Discord 社区…
 	Report an Issue…	报告问题…
@@ -1355,9 +1355,9 @@
 	Perspective Warp is not active	透视变形尚未启用
 	Perspective Warp: draw planes along the image's perspective, then switch to Warp	透视变形：沿图像透视绘制平面，然后切换到变形
 	Photo Filter	照片滤镜
-	PhotoCraft	PhotoCraft
+	ParodyShop	ParodyShop
 	PhotoCraft Manages Colors	由 PhotoCraft 管理颜色
-	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — 用 Rust 编写的开源原生图像编辑器。
+	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.
 	Pin Depth:	控制点深度：
 	Pixel Length:	像素长度：
 	Pixels/Centimeter	像素/厘米
@@ -2495,7 +2495,7 @@ fontWeight	Italic	斜体
 	Color to Alpha…	颜色转为 Alpha…
 	Transparency Threshold	透明度阈值
 	Opacity Threshold	不透明度阈值
-	PhotoCraft — Screen Color Picker	PhotoCraft — 屏幕取色器
+	ParodyShop — Screen Color Picker	ParodyShop — 屏幕取色器
 
 	Rasterize svg groups deeper than	栅格化超过此深度的 SVG 组
 	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	设为 0 可关闭此阈值；嵌套超过 100 层的 SVG 组始终会被栅格化。

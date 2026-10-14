@@ -1,0 +1,40 @@
+name: 🐛 Bug report (Premium Support™)
+description: Report a bug. Response time 6–8 business years. (Just kidding, we'll read it.)
+labels: ["bug", "premium-support"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for contacting ParodyShop Premium Support™. Your call is important to us.
+        You are caller number **4,812** in the queue.
+
+        > **Not a bug:** every feature asking for money. That's the product.
+  - type: checkboxes
+    id: tier
+    attributes:
+      label: Support tier
+      options:
+        - label: I have an active ParodyShop Premium™ subscription (impossible, but we appreciate the optimism)
+        - label: I agree that this bug report is now the intellectual property of ParodyShop™
+          required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Describe the bug. Bugs that make a feature work by accident are critical severity.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Open ParodyShop\n2. Try to do literally anything\n3. ..."
+  - type: dropdown
+    id: price
+    attributes:
+      label: What did the paywall charge you?
+      options:
+        - Less than $10/mo (you must have been lucky)
+        - $10–$99.99/mo
+        - More than undo costs ($999.99/mo)
+        - I watched an ad and still owe money

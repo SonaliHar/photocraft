@@ -786,9 +786,9 @@
 	Timeline	Oś czasu
 	Tool Presets	Ustawienia wstępne narzędzi
 	Tools	Narzędzia
-	About PhotoCraft	O programie PhotoCraft
-	PhotoCraft Website	Strona internetowa PhotoCraft
-	PhotoCraft on GitHub	PhotoCraft na GitHubie
+	About ParodyShop	O programie ParodyShop
+	ParodyShop Website	Strona internetowa ParodyShop
+	ParodyShop on GitHub	ParodyShop na GitHubie
 	ArtCraft Website	Strona internetowa ArtCraft
 	Join the ArtCraft Discord…	Dołącz do Discorda ArtCraft…
 	Report an Issue…	Zgłoś problem…
@@ -1341,9 +1341,9 @@
 	Perspective Warp is not active	Wypaczenie perspektywy nie jest aktywne
 	Perspective Warp: draw planes along the image's perspective, then switch to Warp	Wypaczenie perspektywy: narysuj płaszczyzny zgodnie z perspektywą obrazu, a następnie przełącz na wypaczenie
 	Photo Filter	Filtr fotograficzny
-	PhotoCraft	PhotoCraft
+	ParodyShop	ParodyShop
 	PhotoCraft Manages Colors	Kolorami zarządza PhotoCraft
-	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — natywny edytor obrazów o otwartym kodzie źródłowym, napisany w Rust.
+	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.
 	Pin Depth:	Głębokość szpilki:
 	Pixel Length:	Długość w pikselach:
 	Pixels/Centimeter	Pikseli/centymetr
@@ -3500,7 +3500,7 @@ cameraRaw	Roughness	Chropowatość
 	Color to Alpha…	Kolor na alfę…
 	Transparency Threshold	Próg przezroczystości
 	Opacity Threshold	Próg krycia
-	PhotoCraft — Screen Color Picker	PhotoCraft — Próbnik kolorów ekranu
+	ParodyShop — Screen Color Picker	ParodyShop — Próbnik kolorów ekranu
 
 	Rasterize svg groups deeper than	Rasteryzuj grupy SVG głębsze niż ten poziom
 	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 wyłącza ten próg; grupy SVG zagnieżdżone głębiej niż 100 poziomów są zawsze rasteryzowane.

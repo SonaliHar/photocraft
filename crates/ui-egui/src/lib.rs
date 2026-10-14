@@ -73,6 +73,7 @@ pub mod dialogs;
 pub mod direct_select;
 pub mod direction;
 pub mod discard_ui;
+pub mod paywall;
 pub mod distort_ui;
 pub mod doc_props_ui;
 pub mod dock;
@@ -486,6 +487,9 @@ pub struct Services {
     /// while AppKit's run loop is still going crashes or hangs Touch Bar Macs (#1575, #1458).
     /// Without one, eframe closes the window and the app ends with it.
     pub quit: Option<QuitFn>,
+    /// Put every feature behind ParodyShop Premium™ (see `paywall`). Off by default, so tests and
+    /// embedders get the real features; the desktop and web apps turn it on.
+    pub paywall: bool,
 }
 
 /// A document histogram being computed off the UI thread: (document, revision, receiver of
@@ -737,6 +741,8 @@ pub struct PhotocraftApp {
     pub(crate) prefs_rt: prefs_ui::Runtime,
     /// Close, Revert or Exit parked behind the unsaved-changes prompt (see `discard_ui`).
     pub(crate) discard: Option<discard_ui::Prompt>,
+    /// The subscription offer in front of every feature (see `paywall`).
+    pub paywall: paywall::Paywall,
     /// The Open or Save dialog in progress, and the action waiting on it (see `file_dialog`).
     pub(crate) file_dialog: Option<file_dialog::Pending>,
     /// A Save As to a layered TIFF parked behind the TIFF Options prompt (see `tiff_options_ui`).
@@ -881,6 +887,7 @@ impl PhotocraftApp {
             stroke_trace: stroke_trace::StrokeTrace::from_env(),
             prefs_rt: Default::default(),
             discard: None,
+            paywall: Default::default(),
             file_dialog: None,
             tiff_options: None,
             save_dirs: HashMap::new(),
@@ -895,6 +902,11 @@ impl PhotocraftApp {
         };
         // Saved preferences are in place before the first frame; recovery starts in upkeep.
         prefs_ui::load(&mut app);
+        // The free tier: the Hand tool, so you can wave goodbye to your money.
+        app.paywall = paywall::Paywall::new(app.services.paywall);
+        if app.paywall.enabled {
+            app.ui.tool = state::Tool::Hand;
+        }
         // After the saved preferences, which say whether the set was already offered.
         kys_import::offer_import(&mut app);
         notices::wayland_file_drop_guidance(&mut app);
@@ -1703,6 +1715,7 @@ impl eframe::App for PhotocraftApp {
         }
         self.drain_control(ctx);
         native_menu::run(self, ctx);
+        paywall::guard_tool(self);
         // Switching tools commits, also between the Type and Type Mask tools.
         if self.ui.text_edit.as_ref().is_some_and(|ed| !self.ui.tool.is_type() || ed.mask != self.ui.tool.is_type_mask()) {
             type_tool::commit(self);
@@ -1868,6 +1881,7 @@ impl eframe::App for PhotocraftApp {
         rasterize_prompt::run_pending(self, &ctx);
         jobs_ui::dialog(self, &ctx);
         discard_ui::show(self, &ctx);
+        paywall::show(self, &ctx);
         tiff_options_ui::show(self, &ctx);
         targa_options_ui::show(self, &ctx);
         distort_ui::show(self, &ctx);

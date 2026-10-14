@@ -430,7 +430,7 @@
 	32-bit Preview Options…	32 bites előnézet beállításai…
 	4-up	4 nézet
 	6-up	6 nézet
-	About PhotoCraft	A PhotoCraft névjegye
+	About ParodyShop	A ParodyShop névjegye
 	About {app}	Névjegy: {app}
 	Actions	Műveletsorok
 	Activate Panel	Panel aktiválása
@@ -707,9 +707,9 @@
 	Paths	Útvonalak
 	Paths to Illustrator	Útvonalak Illustrator-fájlba
 	Pattern Preview	Mintázat előnézete
-	PhotoCraft	PhotoCraft
-	PhotoCraft on GitHub	PhotoCraft a GitHubon
-	PhotoCraft Website	PhotoCraft-weboldal
+	ParodyShop	ParodyShop
+	ParodyShop on GitHub	ParodyShop a GitHubon
+	ParodyShop Website	ParodyShop-weboldal
 	Photography	Fotózás
 	Picture Frame…	Képkeret…
 	Pinch…	Becsípés…
@@ -2873,7 +2873,7 @@ cameraRaw	Yellow	Sárga
 	PhotoCraft found your keyboard shortcut set {set} from another image editor on this computer: {n} of its shortcuts differ from PhotoCraft's. Import it?	A PhotoCraft egy másik képszerkesztő billentyűparancs-készletét találta ezen a számítógépen: {set}. Ebben {n} billentyűparancs eltér a PhotoCraftétól. Importálod?
 	PhotoCraft keeps retrying; until a save succeeds, preference changes are lost when it closes.	A PhotoCraft tovább próbálkozik; amíg a mentés nem sikerül, a beállítások módosításai bezáráskor elvesznek.
 	PhotoCraft Manages Colors	A PhotoCraft kezeli a színeket
-	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft – nyílt forráskódú, natív képszerkesztő Rust nyelven.
+	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.
 	Picas	Pica
 	Pixels	Pixel
 	Pixels/Centimeter	Pixel/centiméter
@@ -3429,7 +3429,7 @@ cameraRaw	Yellow	Sárga
 	Perspective Crop Tool	Perspektivikus körbevágás
 	PhotoCraft is using the CPU image compositor. The window may still use your graphics adapter.	A PhotoCraft a CPU-s képösszeállítót használja. Az ablak megjelenítése ettől még használhatja a grafikus adaptert.
 	PhotoCraft website	PhotoCraft-weboldal
-	PhotoCraft — Screen Color Picker	PhotoCraft — Képernyő-színválasztó
+	ParodyShop — Screen Color Picker	ParodyShop — Képernyő-színválasztó
 	Photomerge	Fotóegyesítés
 	Pick a screen pixel or press Esc to cancel	Válassz egy pixelt a képernyőn, vagy nyomd meg az Esc billentyűt a megszakításhoz
 	Pick screen color	Szín kiválasztása a képernyőről

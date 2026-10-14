@@ -764,9 +764,9 @@
 	Timeline	타임라인
 	Tool Presets	도구 사전 설정
 	Tools	도구
-	About PhotoCraft	PhotoCraft 정보
-	PhotoCraft Website	PhotoCraft 웹사이트
-	PhotoCraft on GitHub	GitHub의 PhotoCraft
+	About ParodyShop	ParodyShop 정보
+	ParodyShop Website	ParodyShop 웹사이트
+	ParodyShop on GitHub	GitHub의 ParodyShop
 	ArtCraft Website	ArtCraft 웹사이트
 	Join the ArtCraft Discord…	ArtCraft Discord 참여…
 	Report an Issue…	문제 신고…
@@ -1317,9 +1317,9 @@
 	Perspective Warp is not active	원근 뒤틀기가 활성화되어 있지 않습니다
 	Perspective Warp: draw planes along the image's perspective, then switch to Warp	원근 뒤틀기: 이미지의 원근에 따라 평면을 그린 다음 뒤틀기로 전환하세요
 	Photo Filter	포토 필터
-	PhotoCraft	PhotoCraft
+	ParodyShop	ParodyShop
 	PhotoCraft Manages Colors	PhotoCraft에서 색상 관리
-	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — Rust로 작성된 오픈 소스 네이티브 이미지 편집기.
+	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.
 	Pin Depth:	핀 깊이:
 	Pixel Length:	픽셀 길이:
 	Pixels/Centimeter	픽셀/센티미터
@@ -3064,7 +3064,7 @@ fontWeight	Italic	기울임
 	Color to Alpha…	색상을 알파로…
 	Transparency Threshold	투명도 한계값
 	Opacity Threshold	불투명도 한계값
-	PhotoCraft — Screen Color Picker	PhotoCraft — 화면 색상 선택기
+	ParodyShop — Screen Color Picker	ParodyShop — 화면 색상 선택기
 
 	Rasterize svg groups deeper than	이 깊이보다 깊은 SVG 그룹 래스터화
 	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0이면 이 임계값을 끕니다. 100단계보다 깊이 중첩된 SVG 그룹은 항상 래스터화됩니다.

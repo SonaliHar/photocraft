@@ -757,9 +757,9 @@
 	Timeline	Zaman çizelgesi
 	Tool Presets	Araç Ön Ayarları
 	Tools	Araçlar
-	About PhotoCraft	PhotoCraft Hakkında
-	PhotoCraft Website	PhotoCraft Web Sitesi
-	PhotoCraft on GitHub	GitHub'da PhotoCraft
+	About ParodyShop	ParodyShop Hakkında
+	ParodyShop Website	ParodyShop Web Sitesi
+	ParodyShop on GitHub	GitHub'da ParodyShop
 	ArtCraft Website	ArtCraft Web Sitesi
 	Join the ArtCraft Discord…	ArtCraft Discord'una katılın…
 	Report an Issue…	Bir Sorun Bildirin…
@@ -1302,9 +1302,9 @@
 	Perspective Warp is not active	Perspektif Çarpıtma etkin değil
 	Perspective Warp: draw planes along the image's perspective, then switch to Warp	Perspektif Çarpıtma: görüntünün perspektifi boyunca düzlemler çizin, ardından Çarpıtma'ya geçin
 	Photo Filter	Fotoğraf Filtresi
-	PhotoCraft	PhotoCraft
+	ParodyShop	ParodyShop
 	PhotoCraft Manages Colors	PhotoCraft Renkleri Yönetir
-	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — Rust'ta yazılmış açık kaynaklı, yerel bir resim düzenleyici.
+	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.	ParodyShop — an open-source image editor where every feature is a Premium™ feature. A parody fork of PhotoCraft.
 	Pin Depth:	Pim Derinliği:
 	Pixel Length:	Piksel Uzunluğu:
 	Pixels/Centimeter	Piksel/Santimetre
@@ -3750,7 +3750,7 @@ cameraData	Lens	Lens
 	There is no crop size or ratio to save	Kaydedilecek kırpma boyutu veya oranı yok
 	Search settings…	Arama ayarları…
 	No matching settings	Eşleşen ayar yok
-	PhotoCraft — Screen Color Picker	PhotoCraft — Ekran Rengi Seçici
+	ParodyShop — Screen Color Picker	ParodyShop — Ekran Rengi Seçici
 	Loading fonts…	Yazı tipleri yükleniyor…
 	Onion Skin	Soğan Kabuğu
 	Marching Ants	Yürüyen Karıncalar
