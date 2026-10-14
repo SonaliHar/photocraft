@@ -33,17 +33,21 @@ fn cubic(t: f32) -> vec4<f32> {
     return vec4(-0.75*t3+1.5*t2-0.75*t, 1.25*t3-2.25*t2+1.0, -1.25*t3+1.5*t2+0.75*t, 0.75*t3-0.75*t2);
 }
 fn sample_at(at: vec2<f32>, footprint: vec2<f32>, repeat_edge: bool) -> vec2<f32> {
-    if any(p.rect.zw <= p.rect.xy) { return vec2(0.0); }
     if p.opts.x == 0.0 { return lifted(vec2<i32>(floor(at + 0.5)), false); }
+    if any(p.rect.zw <= p.rect.xy) { return vec2(0.0); }
     if repeat_edge && (any(at < p.rect.xy - vec2(1.0)) || any(at > p.rect.zw)) { return vec2(0.0); }
     let pos = vec2<i32>(floor(at)); let frac = fract(at);
+    // Interior kernels already lie inside the source rectangle; their taps need no clamping.
+    let first = pos - select(vec2(0), vec2(1), p.opts.x == 2.0);
+    let last = pos + select(vec2(1), vec2(2), p.opts.x == 2.0);
+    let clamp_samples = repeat_edge && (any(vec2<f32>(first) < p.rect.xy) || any(vec2<f32>(last) >= p.rect.zw));
     var value = vec2(0.0);
     if p.opts.x == 1.0 {
-        value = mix(mix(lifted(pos, repeat_edge), lifted(pos + vec2(1,0), repeat_edge), frac.x), mix(lifted(pos + vec2(0,1), repeat_edge), lifted(pos + vec2(1,1), repeat_edge), frac.x), frac.y);
+        value = mix(mix(lifted(pos, clamp_samples), lifted(pos + vec2(1,0), clamp_samples), frac.x), mix(lifted(pos + vec2(0,1), clamp_samples), lifted(pos + vec2(1,1), clamp_samples), frac.x), frac.y);
     } else {
         let wx = cubic(frac.x); let wy = cubic(frac.y);
         for (var j = 0; j < 4; j++) {
-            for (var i = 0; i < 4; i++) { value += lifted(pos + vec2(i-1,j-1), repeat_edge) * wx[u32(i)] * wy[u32(j)]; }
+            for (var i = 0; i < 4; i++) { value += lifted(pos + vec2(i-1,j-1), clamp_samples) * wx[u32(i)] * wy[u32(j)]; }
         }
     }
     if repeat_edge {
@@ -84,10 +88,12 @@ fn finish(at: vec2<i32>, transformed: vec2<f32>) -> vec4<f32> {
     return vec4(rgba.rgb * rgba.a, rgba.a);
 }
 @fragment fn fs_affine(v: Vertex) -> @location(0) vec4<f32> {
-    if any(v.position.xy < p.bounds.xy) || any(v.position.xy >= p.bounds.zw) { return finish(vec2<i32>(v.position.xy), vec2(0.0)); }
     let dst = vec3(v.position.xy, 1.0);
     let denom = dot(p.h2.xyz, dst);
     let src = vec2(dot(p.h0.xyz, dst), dot(p.h1.xyz, dst)) / denom - 0.5;
+    // Integer translations retain the original nearest-sample path, without coverage work.
+    if p.opts.x == 0.0 { return finish(vec2<i32>(v.position.xy), lifted(vec2<i32>(floor(src + 0.5)), false)); }
+    if any(v.position.xy < p.bounds.xy) || any(v.position.xy >= p.bounds.zw) { return finish(vec2<i32>(v.position.xy), vec2(0.0)); }
     var footprint = vec2(1.0);
     if p.opts.x != 0.0 {
         if p.h2.x == 0.0 && p.h2.y == 0.0 {

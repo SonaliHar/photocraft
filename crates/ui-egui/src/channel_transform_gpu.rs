@@ -302,7 +302,11 @@ impl Preview {
         let identity = t.warp.as_ref().map_or_else(|| h.is_identity(), photocraft_geom::warp::Warp::is_identity);
         data.extend([interp, f32::from(self.selected), self.steps, f32::from(identity)]);
         // Perspective edge coverage uses the CPU sampler's destination-tile midpoint.
-        let output = photocraft_algo::transform::warp_output_bounds(source_bounds, &h).unwrap_or(photocraft_geom::Rect::EMPTY);
+        let output = if t.warp.is_none() && interp != 0.0 {
+            photocraft_algo::transform::warp_output_bounds(source_bounds, &h).unwrap_or(photocraft_geom::Rect::EMPTY)
+        } else {
+            photocraft_geom::Rect::EMPTY
+        };
         data.extend([output.x0, output.y0, output.x1, output.y1].map(|v| v as f32));
         if data.iter().any(|v| !v.is_finite()) {
             return None;
