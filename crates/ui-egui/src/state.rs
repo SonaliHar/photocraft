@@ -1058,6 +1058,9 @@ pub struct UiState {
     /// Inline type editing session, if any.
     #[serde(default)]
     pub text_edit: Option<TextEdit>,
+    /// Clock time in seconds when type cursor blink was last reset (e.g. on keypress/caret move).
+    #[serde(skip)]
+    pub caret_blink_time: f64,
     /// Ctrl/Cmd Type-tool gesture, exposed to automation but never restored as a held pointer.
     #[serde(default, skip_deserializing)]
     pub type_transform: Option<TypeTransform>,
@@ -1270,6 +1273,7 @@ impl Default for UiState {
             spring: None,
             recent_files: Vec::new(),
             text_edit: None,
+            caret_blink_time: 0.0,
             type_transform: None,
             type_transform_pivot: None,
             cam_transform: None,

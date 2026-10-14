@@ -781,7 +781,11 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
         e.caret = e.caret.min(n);
         e.anchor = e.anchor.min(n);
     }
-    ctx.request_repaint_after(std::time::Duration::from_millis(530)); // caret blink
+    let time = ctx.input(|i| i.time);
+    let elapsed = (time - app.ui.caret_blink_time).max(0.0);
+    let period = 0.530;
+    let remaining = period - (elapsed % period);
+    ctx.request_repaint_after(std::time::Duration::from_secs_f64(remaining.clamp(0.010, period)));
     let events = ctx.input(|i| i.events.clone());
     let vertical_flow = is_vertical(app, id);
     let mut handled = vec![false; events.len()];
@@ -934,6 +938,7 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
         }
     }
     if handled.iter().any(|h| *h) {
+        app.ui.caret_blink_time = ctx.input(|i| i.time);
         let mut k = 0;
         ctx.input_mut(|i| {
             i.events.retain(|_| {
@@ -987,6 +992,9 @@ pub fn commit_with(app: &mut PhotocraftApp, mods: egui::Modifiers) {
 /// Selection highlight, caret and text frame over the canvas.
 pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     let Some(ed) = app.ui.text_edit.clone() else { return };
+    if ed.dragging {
+        app.ui.caret_blink_time = painter.ctx().input(|i| i.time);
+    }
     let id = LayerId(ed.layer);
     let Some((l, aff, text)) = layout(app, id) else { return };
     if ed.mask {
@@ -1070,9 +1078,10 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
             }
         }
     } else {
-        // Blinking caret (Photoshop's ~0.53 s rhythm), solid while dragging.
+        // Blinking caret (Photoshop's ~0.53 s rhythm), solid while dragging or immediately after interaction.
         let time = painter.ctx().input(|i| i.time);
-        if ed.dragging || (time * 1000.0 / 530.0) as i64 % 2 == 0 {
+        let elapsed = (time - app.ui.caret_blink_time).max(0.0);
+        if ed.dragging || (elapsed * 1000.0 / 530.0) as i64 % 2 == 0 {
             let (x, top, bot) = l.caret(a);
             let (x, top, bot) = if l.lines.is_empty() { (0.0, -(12.0 * l.px_per_pt.max(1.0)), 3.0) } else { (x, top, bot) };
             let c = if crate::theme::Tokens::get(painter.ctx()).pro { Color32::WHITE } else { Color32::BLACK };
@@ -2648,5 +2657,27 @@ mod tests {
         assert_eq!(word_boundary("hello big world", 0, true), 5);
         assert_eq!(word_boundary("hello big world", 7, false), 6);
         assert_eq!(word_boundary("hello big world", 15, false), 10);
+    }
+
+    #[test]
+    fn arrow_keys_reset_caret_blink_phase() {
+        let mut app = app();
+        pointer_up(&mut app, [10.0, 50.0], [10.0, 50.0]);
+        insert(&mut app, "Hello");
+        app.ui.caret_blink_time = 0.0;
+        let ctx = egui::Context::default();
+        ctx.begin_pass(egui::RawInput {
+            time: Some(10.5),
+            events: vec![egui::Event::Key {
+                key: egui::Key::ArrowRight,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        });
+        handle_keys(&mut app, &ctx);
+        assert_eq!(app.ui.caret_blink_time, 10.5);
     }
 }
