@@ -908,6 +908,11 @@ impl Ex {
             SmartSource::Linked { path } => {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
+                    if crate::linked::is_network_path(path) {
+                        return Err(format!(
+                            "the linked file {path} is on a network share, which PhotoCraft doesn't open from a document; copy it to this computer (or map the share to a drive letter) and relink it"
+                        ));
+                    }
                     let bytes = std::fs::read(path).map_err(|e| format!("the linked file {path} can't be read: {e}"))?;
                     let name = path.rsplit(['/', '\\']).next().unwrap_or(path).to_string();
                     self.warnings.push(format!("the linked smart object {name} was embedded (PSD export keeps no external links)"));

@@ -1079,6 +1079,78 @@ fn inspect_reports_the_smart_source() {
     assert!(source(&s)["fileName"].is_string());
 }
 
+/// A white `W × H` PNG at `dir/name`, and the network spelling of its path: on Unix `//dir/x` is
+/// the local `/dir/x`, so the file is really there and only the network-path guard keeps it unread.
+#[cfg(unix)]
+fn local_file_with_network_spelling(dir: &std::path::Path, name: &str) -> (String, String) {
+    std::fs::create_dir_all(dir).unwrap();
+    let white = Document::with_background(
+        "white",
+        Size::new(W as u32, H as u32),
+        photocraft_color::ColorMode::Rgb,
+        photocraft_color::SampleType::U8,
+        photocraft_color::Color::rgba(1.0, 1.0, 1.0, 1.0),
+    );
+    let path = dir.join(name);
+    std::fs::write(&path, photocraft_io::export(&white, "png", &Default::default()).unwrap().bytes).unwrap();
+    (path.to_string_lossy().into_owned(), format!("/{}", path.display()))
+}
+
+/// Point the active smart layer at `path`, as a document made elsewhere can.
+#[cfg(unix)]
+fn relink_active(s: &mut Session, path: &str) {
+    s.edit("relink", |doc, active| {
+        let Some(LayerContent::Smart(sm)) = doc.layer_mut(active.unwrap()).map(|l| &mut l.content) else { panic!("not a smart object") };
+        sm.source = SmartSource::Linked { path: path.to_string() };
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn network_linked_sources_are_not_read() {
+    let dir = std::env::temp_dir().join(format!("pcraft-network-source-{}", std::process::id()));
+    let (local, network) = local_file_with_network_spelling(&dir, "a.png");
+    assert!(source_bytes(&Metadata::default(), &SmartSource::Linked { path: local }).is_some());
+    assert!(source_bytes(&Metadata::default(), &SmartSource::Linked { path: network }).is_none());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// PSD export embeds a linked file's bytes, so a network link would also hand the file to whoever
+/// receives the PSD. It is written as pixels instead, with a warning.
+#[cfg(unix)]
+#[test]
+fn psd_export_does_not_embed_a_network_link() {
+    let dir = std::env::temp_dir().join(format!("pcraft-network-psd-{}", std::process::id()));
+    let (local, network) = local_file_with_network_spelling(&dir, "a.png");
+    let file = std::fs::read(&local).unwrap();
+    let embeds = |psd: &std::path::Path| std::fs::read(psd).unwrap().windows(file.len()).any(|w| w == file.as_slice());
+    let mut s = session(8);
+    s.execute("file.placeLinked", json!({"path": local})).unwrap();
+    let local_psd = dir.join("local.psd");
+    s.execute("file.saveACopy", json!({"path": local_psd.to_string_lossy()})).unwrap();
+    assert!(embeds(&local_psd), "a local link is embedded");
+    relink_active(&mut s, &network);
+    let network_psd = dir.join("network.psd");
+    let r = s.execute("file.saveACopy", json!({"path": network_psd.to_string_lossy()})).unwrap();
+    assert!(!embeds(&network_psd), "a network link is not");
+    assert!(r["warnings"].to_string().contains("network share"), "{r}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[cfg(unix)]
+#[test]
+fn displace_maps_on_a_network_share_are_not_read() {
+    let dir = std::env::temp_dir().join(format!("pcraft-network-displace-{}", std::process::id()));
+    let (_, network) = local_file_with_network_spelling(&dir, "white.png");
+    let mut s = session(8);
+    paint(&mut s);
+    let err = s.execute("filter.distort.displace", json!({"horizontal": 8, "vertical": 8, "mapPath": network})).unwrap_err();
+    assert!(err.to_string().contains("network share"), "{err}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[test]
 fn displace_smart_filter_reads_its_map_path_on_re_render() {
     let dir = std::env::temp_dir().join(format!("pcraft-displace-{}", std::process::id()));

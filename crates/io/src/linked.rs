@@ -113,6 +113,21 @@ pub fn find_linked_file(meta: &Metadata, uuid: &str) -> Option<LinkedFile> {
     find_in_blocks(meta.psd_global_blocks.iter().map(|(_, k, d)| (k, d.as_slice())), uuid)
 }
 
+/// Whether Windows would open `path` somewhere other than a local drive: a UNC share
+/// (`\\host\share\…`, also spelled with `/`), a device or verbatim UNC path (`\\.\…`,
+/// `\\?\UNC\…`) or an NT object path (`\??\…`). Even looking at one makes Windows connect to the
+/// host and sign in with the user's NTLM credentials, so a path that came from a document (a
+/// linked smart object, a Displace map) must not reach the file system when this is true. A
+/// verbatim or device path to a drive letter (`\\?\C:\…`, what `canonicalize` returns on Windows)
+/// is local. Judged by text on every platform, since documents travel between them.
+pub fn is_network_path(path: &str) -> bool {
+    let p = path.trim_start().replace('/', "\\");
+    let Some(rest) = p.strip_prefix("\\\\?\\").or_else(|| p.strip_prefix("\\\\.\\")).or_else(|| p.strip_prefix("\\??\\")) else {
+        return p.starts_with("\\\\");
+    };
+    !matches!(rest.as_bytes(), [letter, b':'] | [letter, b':', b'\\', ..] if letter.is_ascii_alphabetic())
+}
+
 /// The embedded file for smart-object `uuid` among PSD global blocks given as (key, data).
 pub fn find_in_blocks<'a>(blocks: impl IntoIterator<Item = (&'a [u8; 4], &'a [u8])>, uuid: &str) -> Option<LinkedFile> {
     if uuid.is_empty() {
@@ -401,6 +416,39 @@ pub(crate) fn copy_item(data: &[u8], uuid: &str, new_uuid: &str) -> Option<Vec<u
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn network_paths_are_told_from_local_ones() {
+        for path in [
+            r"\\server\share\x.png",
+            "//server/share/x.png",
+            r"/\server\share\x.png",
+            r"  \\server\share\x.png",
+            r"\\server@SSL@443\DavWWWRoot\x.png",
+            r"\\?\UNC\server\share\x.png",
+            r"\\?\unc\server\share\x.png",
+            r"\\.\pipe\x",
+            r"\\?\GLOBALROOT\Device\Mup\server\share\x.png",
+            r"\??\UNC\server\share\x.png",
+        ] {
+            assert!(is_network_path(path), "{path}");
+        }
+        for path in [
+            r"C:\Users\me\x.png",
+            "c:/Users/me/x.png",
+            r"\\?\C:\Users\me\x.png",
+            r"\\.\D:\x.png",
+            r"\??\C:\x.png",
+            r"\Users\me\x.png",
+            "/Users/me/x.png",
+            "x.png",
+            "Links/x.png",
+            "1d9e7b3c-0f6a-11e9-9f0e-c4b3017a8b9b",
+            "",
+        ] {
+            assert!(!is_network_path(path), "{path}");
+        }
+    }
 
     /// #2465: a placed source's size comes from its header, for every format a CS2 file embeds,
     /// and never by importing it as a document.

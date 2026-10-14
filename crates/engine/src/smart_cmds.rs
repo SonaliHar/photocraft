@@ -77,8 +77,10 @@ fn base_name(path: &str) -> String {
     path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
 }
 
+/// A linked source's bytes. The path comes from the document, so one on a network share is never
+/// opened ([`photocraft_io::linked::is_network_path`]): the source is unavailable instead.
 fn read_file(path: &str) -> Option<Vec<u8>> {
-    if path.is_empty() { None } else { photocraft_format::read_file(std::path::Path::new(path)).ok() }
+    if path.is_empty() || photocraft_io::linked::is_network_path(path) { None } else { photocraft_format::read_file(std::path::Path::new(path)).ok() }
 }
 
 /// The source file of a smart object: embedded bytes, the PSD's embedded linked-layer data (PSD

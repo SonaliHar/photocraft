@@ -459,6 +459,12 @@ fn map_path(p: &Value) -> Option<&str> {
 
 /// Displace's map read from a file (flattened, or its `mapLayer`).
 fn map_from_path(path: &str, layer: Option<u64>) -> Result<Option<algo::Image>> {
+    // Smart filters keep `mapPath` in the document and read it again on every re-render.
+    if photocraft_io::linked::is_network_path(path) {
+        return Err(EngineError::Other(format!(
+            "the displacement map `{path}` is on a network share, which PhotoCraft doesn't open from a document; copy it to this computer"
+        )));
+    }
     let bytes = std::fs::read(path).map_err(|e| EngineError::Other(format!("cannot read displacement map `{path}`: {e}")))?;
     let imported = crate::file_cmds::import(path, &bytes).map_err(|e| EngineError::Other(format!("cannot open displacement map `{path}`: {e}")))?;
     Ok(map_from_document(&imported, layer))
