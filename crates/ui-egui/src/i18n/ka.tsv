@@ -1345,11 +1345,11 @@
 	Remove Tool	ხელსაწყოს მოშორება
 	Remove stop	გადასვლის წერტილის წაშლა
 	Remove variable	ცვლადის მოშორება
-	Rename	გადარქმევა
-	Rename Group…	ჯგუფის გადარქმევა…
+	Rename	სახელის შეცვლა
+	Rename Group…	ჯგუფის სახელის შეცვლა…
 	Rename Layer…	შრის სახელის შეცვლა…
-	Rename Tool Preset…	ხელსაწყოს პრესეტის გადარქმევა…
-	Rename…	გადარქმევა…
+	Rename Tool Preset…	ხელსაწყოს პრესეტის სახელის შეცვლა…
+	Rename…	სახელის შეცვლა…
 	Resample	ხელახალი დისკრეტიზაცია
 	Reset All to Defaults	ყველაფრის ნაგულისხმევზე დაბრუნება
 	Import Shortcuts…	მალსახმობების იმპორტი…
@@ -2042,7 +2042,7 @@
 	Toggle the Brush Settings panel  (F5)	ფუნჯის პარამეტრების პანელის ჩართვა/გამორთვა  (F5)
 	Create new brush preset from the current settings	ფუნჯის ახალი პრესეტის შექმნა მიმდინარე პარამეტრებით
 	Brush Settings…  (F5): every option of this brush	ფუნჯის პარამეტრები…  (F5): ამ ფუნჯის ყველა პარამეტრი
-	Rename Brush…	ფუნჯის გადარქმევა…
+	Rename Brush…	ფუნჯის სახელის შეცვლა…
 	Delete Brush	ფუნჯის წაშლა
 	New Brush Preset…	ფუნჯის ახალი პრესეტი…
 	Brush Preset Options	ფუნჯის პრესეტის პარამეტრები
@@ -2352,7 +2352,7 @@
 	Hide	დამალვა
 	New Layer Comp	შრეების ახალი კომპოზიცია
 	Duplicate Layer Comp	შრეების კომპოზიციის დუბლირება
-	Rename Layer Comp	შრეების კომპოზიციის გადარქმევა
+	Rename Layer Comp	შრეების კომპოზიციის სახელის შეცვლა
 	Apply Layer Comp	შრეების კომპოზიციის გამოყენება
 	Update Layer Comp	შრეების კომპოზიციის განახლება
 	Restore last viewed comp	ბოლოს ნანახი კომპოზიციის აღდგენა
@@ -3382,11 +3382,11 @@ layerLabel	No Color	ფერის გარეშე
 	Load 3D LUT	3D LUT-ის ჩატვირთვა
 	New document	ახალი დოკუმენტი
 	Press keys	დააჭირეთ კლავიშებს
-	Rename Group	ჯგუფის გადარქმევა
-	Rename Tool Preset	ხელსაწყოს პრესეტის გადარქმევა
+	Rename Group	ჯგუფის სახელის შეცვლა
+	Rename Tool Preset	ხელსაწყოს პრესეტის სახელის შეცვლა
 	Search commands, tools and panels	ბრძანებების, ხელსაწყოებისა და პანელების ძიება
 	Slice Options	ნაჭრის პარამეტრები
-	Rename Brush	ფუნჯის გადარქმევა
+	Rename Brush	ფუნჯის სახელის შეცვლა
 	Opening	იხსნება
 	Reading	იკითხება
 	Working	მუშავდება
@@ -3845,7 +3845,7 @@ curves	Smooth	გაგლუვება
 @plural	{what} with {n} warning|{what} with {n} warnings	{what}, გაფრთხილება: {n}
 	Duplicate Channel	არხის დუბლირება
 	Delete Channel	არხის წაშლა
-	Rename Channel…	არხის გადარქმევა…
+	Rename Channel…	არხის სახელის შეცვლა…
 	Merge Spot Channel	სპოტ-ფერის არხის შერწყმა
 	Convert to Alpha Channel	ალფა-არხად გარდაქმნა
 	Exit Quick Mask	სწრაფი ნიღბიდან გამოსვლა
@@ -3902,7 +3902,7 @@ curves	Smooth	გაგლუვება
 	Exported {path}	ექსპორტირებულია: {path}
 	Added swatch {name}	დაემატა ფერის ნიმუში: {name}
 	Step {step} ({id}) failed: {error}	ნაბიჯი {step} ({id}) ვერ შესრულდა: {error}
-	Could not rename the action: {error}	მოქმედების გადარქმევა ვერ მოხერხდა: {error}
+	Could not rename the action: {error}	მოქმედების სახელის შეცვლა ვერ მოხერხდა: {error}
 	Action playback failed: {error}	მოქმედების შესრულება ვერ მოხერხდა: {error}
 	Clone source set at {x}, {y}	კლონირების წყარო დაყენდა: {x}, {y}
 	Color management: {error}	ფერების მართვა: {error}
