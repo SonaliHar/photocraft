@@ -193,7 +193,7 @@ pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Sess
     }
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     st.history = history;
-    match r {
+    let result = match r {
         Ok(v) => {
             // As in `Session::edit`: undo targets what was selected just before the step (#1356).
             st.history.set_current_layers(prior);
@@ -218,7 +218,12 @@ pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Sess
             st.last_damage = None;
             Err(e)
         }
+    };
+    if result.is_err() {
+        // The app-wide tool colours/mask mode follow the restored channel target.
+        s.sync_tools_mask_target();
     }
+    result
 }
 
 /// Current time as ISO 8601 UTC (`2026-10-01T12:34:56Z`); empty on the web (no clock).
