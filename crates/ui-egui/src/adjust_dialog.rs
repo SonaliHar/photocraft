@@ -184,11 +184,62 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     Some(app.ui.open_dialog(crate::state::DialogKind::Command, fields))
 }
 
+/// Curves' channel popup when the Channels panel targets one channel (#5335). `None` lists every
+/// colour channel. The choice matches what OK will edit: an alpha or spot channel, Quick Mask,
+/// the layer mask, or one colour component.
+fn curves_target(app: &PhotocraftApp) -> Option<adjust_editors::CurvesOnly> {
+    use photocraft_doc::ColorMode;
+    use photocraft_engine::channel_cmds::ChannelTarget;
+    let st = app.session.active()?;
+    let doc = &st.doc;
+    if let ChannelTarget::Alpha(i) = st.channel_view.target
+        && let Some(ch) = doc.channels.get(i)
+    {
+        return Some(neutral_curve(ch.name.clone(), &ch.surface, doc.bounds(), true));
+    }
+    if doc.quick_mask.is_some() && st.channel_view.target == ChannelTarget::Composite {
+        let surf = &doc.quick_mask.as_ref()?.surface;
+        return Some(neutral_curve("Quick Mask".to_string(), surf, doc.bounds(), false));
+    }
+    if app.layer_mask_targeted() {
+        let layer = st.active_layer.and_then(|id| doc.layer(id))?;
+        let mask = layer.mask.as_ref()?;
+        return Some(neutral_curve(format!("{} Mask", layer.name), &mask.surface, doc.bounds(), true));
+    }
+    if let ChannelTarget::Color(k) = st.channel_view.target
+        && !adjust_editors::is_gray(doc.mode)
+    {
+        let key = color_curve_key(doc.mode, k)?;
+        let label = photocraft_engine::channel_cmds::color_names(doc.mode).get(k)?.to_string();
+        let hist_index = if doc.mode == ColorMode::Lab { k } else { k.saturating_add(1) };
+        return Some(adjust_editors::CurvesOnly { key, label, verbatim: false, hist_index, gray_hist: None });
+    }
+    None
+}
+
+fn neutral_curve(label: String, surf: &photocraft_raster::Surface, bounds: photocraft_geom::Rect, verbatim: bool) -> adjust_editors::CurvesOnly {
+    adjust_editors::CurvesOnly { key: "", label, verbatim, hist_index: 0, gray_hist: Some(std::sync::Arc::new(tone::histogram_gray(surf, bounds))) }
+}
+
+/// Params key of colour component `k` in `mode`.
+fn color_curve_key(mode: photocraft_doc::ColorMode, k: usize) -> Option<&'static str> {
+    let keys: &[&str] = match mode {
+        photocraft_doc::ColorMode::Cmyk => &["cyan", "magenta", "yellow", "black"],
+        photocraft_doc::ColorMode::Lab => &["lightness", "a", "b"],
+        photocraft_doc::ColorMode::Rgb => &["red", "green", "blue"],
+        _ => return None,
+    };
+    keys.get(k).copied()
+}
+
 /// Dialog body: the kind's editor over the fields, then the Preview checkbox.
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
     let kind = fields.get("__adjust").and_then(Value::as_str).unwrap_or_default().to_string();
     let mode = app.session.active().map_or(photocraft_doc::ColorMode::Rgb, |s| s.doc.mode);
-    if matches!(kind.as_str(), "levels" | "curves") {
+    // Curves opens on the Channels-panel target. Levels keeps the full channel list.
+    let curves_only = (kind == "curves").then(|| curves_target(app)).flatten();
+    let neutral_channel = curves_only.as_ref().is_some_and(|c| c.key.is_empty());
+    if matches!(kind.as_str(), "levels" | "curves") && !neutral_channel {
         picker_controls(ui, fields, mode);
         ui.add_space(4.0);
     }
@@ -207,6 +258,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
         gradients: adjust_editors::gradient_presets(app, &kind),
         dialog: true,
         dynamic_color_sliders: app.session.prefs().interface.dynamic_color_sliders,
+        curves_only,
     };
     let e = adjust_editors::editor(ui, &kind, &mut values, &cx);
     if e.import_gradients {
@@ -737,5 +789,107 @@ mod tests {
         let _ = crate::control::handle(&mut app, &context, &request);
         assert_eq!(channel_points(&app, "red"), red, "pointer up does not sample again");
         assert!(picker_armed(&app));
+    }
+
+    fn curves_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+        // Fonts are installed after the builder's first frame, so that frame must not open a
+        // dialog (it draws with the semibold family).
+        let h = Harness::builder().with_size(egui::vec2(1100.0, 820.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h
+    }
+
+    fn combo_text(h: &Harness<'_, PhotocraftApp>) -> String {
+        h.get_by_role(egui::accesskit::Role::ComboBox).value().unwrap_or_default()
+    }
+
+    fn listed(h: &Harness<'_, PhotocraftApp>, label: &str) -> bool {
+        h.query_all_by_label(label).next().is_some()
+    }
+
+    /// #5335: Curves opens on the selected channel. A non-colour target is one neutral curve
+    /// named exactly as in the Channels panel; a colour component keeps its curve colour.
+    #[test]
+    fn curves_opens_on_the_selected_channel() {
+        use egui::accesskit::Role;
+        use photocraft_engine::channel_cmds::ChannelTarget;
+
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 24, "background": "white"})).unwrap();
+        let mut h = curves_harness(app);
+        let id = open(h.state_mut(), "image.adjustments.curves").unwrap();
+        h.run_steps(4);
+        assert_eq!(combo_text(&h), "RGB");
+        h.get_by_role(Role::ComboBox).click();
+        h.run_steps(2);
+        assert!(listed(&h, "Red") && listed(&h, "Green") && listed(&h, "Blue"));
+        h.state_mut().ui.close_dialog(id);
+
+        // Custom spot name, neutral curve (not the red ink).
+        h.state_mut().run("channel.newSpot", json!({"name": "White Ink", "fromSelection": false, "color": "#ff0000"})).unwrap();
+        h.state_mut().session.active_mut().unwrap().channel_view.target = ChannelTarget::Alpha(0);
+        h.state_mut().run("edit.fill", json!({"contents": "gray"})).unwrap();
+        let id = open(h.state_mut(), "image.adjustments.curves").unwrap();
+        h.run_steps(4);
+        assert_eq!(combo_text(&h), "White Ink");
+        h.get_by_role(Role::ComboBox).click();
+        h.run_steps(2);
+        assert!(listed(&h, "White Ink"));
+        assert!(!listed(&h, "Red") && !listed(&h, "RGB") && !listed(&h, "Green"));
+        assert!(!listed(&h, "Set Black Point"), "a non-colour curve has no colour eyedroppers");
+        let stroke = h.ctx.data(|d| d.get_temp::<egui::Color32>(dialog_mem("curves").with("curves-stroke"))).unwrap();
+        let tokens = crate::theme::Tokens::get(&h.ctx);
+        assert_eq!(stroke, tokens.text, "the curve is untinted, not the spot ink");
+        assert_ne!(stroke, egui::Color32::from_rgb(255, 0, 0));
+        let before = h.state().session.active().unwrap().doc.channels[0].surface.sample_channel(4, 4, 0);
+        let steps = h.state().session.active().unwrap().history.past_len();
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("points".into(), json!([[0.0, 0.0], [128.0, 255.0], [255.0, 255.0]]));
+        crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        let after = h.state().session.active().unwrap().doc.channels[0].surface.sample_channel(4, 4, 0);
+        assert!(after > 0.95, "OK applies the gray curve to the spot, {before} → {after}");
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        let back = h.state().session.active().unwrap().doc.channels[0].surface.sample_channel(4, 4, 0);
+        assert!((back - before).abs() < 0.02, "undo restores the spot");
+
+        // Layer mask uses the Channels-panel name.
+        h.state_mut().session.active_mut().unwrap().channel_view.target = ChannelTarget::Composite;
+        h.state_mut().run("layer.layerMask.revealAll", json!({})).unwrap();
+        h.state_mut().ui.mask_target = true;
+        let id = open(h.state_mut(), "image.adjustments.curves").unwrap();
+        h.run_steps(4);
+        let layer_name = h.state().session.active().unwrap().doc.layers[0].name.clone();
+        let mask_name = format!("{layer_name} Mask");
+        assert_eq!(combo_text(&h), mask_name, "the row uses the Channels panel's mask name");
+        assert_eq!(curves_target(h.state()).unwrap().label, mask_name);
+        assert!(curves_target(h.state()).unwrap().verbatim);
+        h.state_mut().ui.close_dialog(id);
+
+        // Quick Mask.
+        h.state_mut().ui.mask_target = false;
+        h.state_mut().run("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+        let id = open(h.state_mut(), "image.adjustments.curves").unwrap();
+        h.run_steps(4);
+        assert_eq!(combo_text(&h), "Quick Mask");
+        assert!(!curves_target(h.state()).unwrap().verbatim);
+        h.state_mut().ui.close_dialog(id);
+        h.state_mut().run("select.editInQuickMaskMode", json!({"on": false})).unwrap();
+
+        // Green stays a green curve, and is the only row. Levels is unchanged.
+        h.state_mut().ui.mask_target = false;
+        h.state_mut().session.active_mut().unwrap().channel_view.target = ChannelTarget::Color(1);
+        let id = open(h.state_mut(), "image.adjustments.curves").unwrap();
+        h.run_steps(4);
+        assert_eq!(combo_text(&h), "Green");
+        let stroke = h.ctx.data(|d| d.get_temp::<egui::Color32>(dialog_mem("curves").with("curves-stroke"))).unwrap();
+        assert_eq!(stroke, crate::tone::channel_color("green", &crate::theme::Tokens::get(&h.ctx)));
+        h.get_by_role(Role::ComboBox).click();
+        h.run_steps(2);
+        assert!(listed(&h, "Green"));
+        assert!(!listed(&h, "Red") && !listed(&h, "Blue") && !listed(&h, "RGB"));
+        h.state_mut().ui.close_dialog(id);
+        open(h.state_mut(), "image.adjustments.levels").unwrap();
+        h.run_steps(4);
+        assert_eq!(combo_text(&h), "RGB", "Levels still lists every colour channel");
     }
 }
