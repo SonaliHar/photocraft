@@ -632,13 +632,9 @@ fn pct(p: &Value, k: &str, d: f32) -> f32 {
     num(p, k).unwrap_or(d).clamp(0.0, 100.0) / 100.0
 }
 
-fn mixer_brush(s: &mut Session, p: &Value) -> Result<Value> {
-    let cmd = "paint.mixerBrush";
-    let pts = parse_points(p, cmd)?;
-    let brush = resolve_brush(s, p, cmd)?;
-    // The brush's Mixer Brush options, overridden by the scalar params.
+fn mixer_settings(brush: &BrushSettings, p: &Value) -> MixerSettings {
     let bm = &brush.mixer;
-    let m = MixerSettings {
+    MixerSettings {
         wet_blending: flag(p, "wetBlending", bm.wet_blending),
         blending: pct(p, "blending", bm.blending * 100.0),
         dilution: pct(p, "dilution", bm.dilution * 100.0),
@@ -648,7 +644,14 @@ fn mixer_brush(s: &mut Session, p: &Value) -> Result<Value> {
         mix: pct(p, "mix", bm.mix * 100.0),
         flow: pct(p, "flow", bm.flow * 100.0),
         sample_all_layers: flag(p, "sampleAllLayers", bm.sample_all_layers),
-    };
+    }
+}
+
+fn mixer_brush(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "paint.mixerBrush";
+    let pts = parse_points(p, cmd)?;
+    let brush = resolve_brush(s, p, cmd)?;
+    let m = mixer_settings(&brush, p);
     let sample_all = m.sample_all_layers;
     let (clean, load_after) = (flag(p, "cleanAfterStroke", true), flag(p, "loadAfterStroke", true));
     let mut state = s.tools.mixer.clone();
@@ -683,6 +686,38 @@ fn mixer_brush(s: &mut Session, p: &Value) -> Result<Value> {
         s.tools.mixer = state;
     }
     Ok(damage_json(s, dmg))
+}
+
+/// Live preview for the opt-in Wet Blending Mixer Brush. Sample All Layers reads the unchanged
+/// pre-stroke composite under each dab, matching the committed stroke's source.
+pub fn live_mixer_blending(s: &Session, p: &Value) -> Result<crate::retouch_cmds::LiveDab> {
+    let cmd = "paint.mixerBrush";
+    let points = parse_points(p, cmd)?;
+    let brush = resolve_brush(s, p, cmd)?;
+    let settings = mixer_settings(&brush, p);
+    if !settings.wet_blending {
+        return Err(bad(cmd, "live preview requires Wet Blending"));
+    }
+    let sample_doc = settings.sample_all_layers.then(|| s.active().map(|st| std::sync::Arc::clone(&st.doc))).flatten();
+    let id = if crate::channel_cmds::is_channel_target(p) { None } else { Some(layer_id(s, p)?) };
+    let mut stroke = Stroke { brush, points };
+    // `apply_wet_blending_stroke` runs its dab renderer at unit stroke opacity; source opacity is
+    // carried in each dab's Transfer value and the mixer recurrence.
+    stroke.brush.opacity = 1.0;
+    crate::retouch_cmds::LiveDab::with_effect_working_depth(s, cmd, p, stroke, id, 0, true, |pre, lock| {
+        let mut wet = photocraft_paint::mixer::WetBlending::new(pre.format(), &settings);
+        let mut sample = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA32F);
+        Box::new(move |work, fp| {
+            if let Some(doc) = sample_doc.as_deref() {
+                let buf = photocraft_compose::render(doc, fp.rect);
+                let flat: Vec<f32> = buf.px.iter().flatten().copied().collect();
+                sample.write_region(fp.rect, &flat);
+                wet.dab(work, fp, Some(&sample), lock);
+            } else {
+                wet.dab(work, fp, None, lock);
+            }
+        })
+    })
 }
 
 /// `paint.colorReplacement`'s stroke and settings. The replacement colour is the brush colour
@@ -726,7 +761,7 @@ fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
 /// recolouring per dab as the commit, so the preview at the last point is the committed result.
 pub fn live_color_replacement(s: &Session, p: &Value) -> Result<crate::retouch_cmds::LiveDab> {
     let (stroke, rs, id) = color_replacement_setup(s, p)?;
-    crate::retouch_cmds::LiveDab::with_effect(s, "paint.colorReplacement", &json!({}), stroke, Some(id), 0, |pre| {
+    crate::retouch_cmds::LiveDab::with_effect(s, "paint.colorReplacement", &json!({}), stroke, Some(id), 0, |pre, _| {
         Box::new(color_replacement_effect(pre.clone(), rs))
     })?
     .with_tail_preview()

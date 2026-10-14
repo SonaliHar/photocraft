@@ -1059,7 +1059,7 @@ impl LiveDab {
         let (stroke, id) = parse_brush(s, p, cmd)?;
         let (tool, _) = DabTool::parse(s, cmd, p, &stroke)?;
         let (halo, spacing) = (tool.halo(), stroke.brush.spacing);
-        Self::with_effect(s, cmd, p, stroke, id, halo, |pre| tool.effect(pre.format(), spacing))
+        Self::with_effect(s, cmd, p, stroke, id, halo, |pre, _| tool.effect(pre.format(), spacing))
     }
 
     /// Start a live stroke of `cmd` that runs `effect` (made from the target before the stroke)
@@ -1071,13 +1071,34 @@ impl LiveDab {
         stroke: Stroke,
         id: Option<LayerId>,
         halo: i32,
-        effect: impl FnOnce(&Surface) -> DabEffect,
+        effect: impl FnOnce(&Surface, bool) -> DabEffect,
+    ) -> Result<Self> {
+        Self::with_effect_working_depth(s, cmd, p, stroke, id, halo, false, effect)
+    }
+
+    /// Variant for effects whose committed dab sequence keeps an unquantized working copy until
+    /// the whole stroke is mixed back (Wet Blending is sensitive to this at 8/16-bit depths).
+    pub(crate) fn with_effect_working_depth(
+        s: &Session,
+        cmd: &str,
+        p: &Value,
+        stroke: Stroke,
+        id: Option<LayerId>,
+        halo: i32,
+        float_work: bool,
+        effect: impl FnOnce(&Surface, bool) -> DabEffect,
     ) -> Result<Self> {
         let mut doc = (*s.active().ok_or(EngineError::NoDocument)?.doc).clone();
         let sel = doc.selection.clone();
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, id, p)?;
         let pre_surf = surf.clone();
-        let effect = effect(&pre_surf);
+        let work = if float_work {
+            let fmt = surf.format();
+            surf.convert(photocraft_color::PixelFormat::new(fmt.mode, photocraft_color::SampleType::F32, fmt.alpha))
+        } else {
+            pre_surf.clone()
+        };
+        let effect = effect(&pre_surf, lock);
         // `apply_dab_stroke` generates the same dabs (`dabs`: zoom 1, no smoothing scale).
         let renderer = photocraft_paint::StrokeRenderer::new(&stroke.brush, None, 1.0).record_dabs();
         let mut live = Self {
@@ -1087,7 +1108,7 @@ impl LiveDab {
             done: 0,
             effect,
             halo,
-            work: pre_surf.clone(),
+            work,
             pre_surf,
             id,
             params: p.clone(),
