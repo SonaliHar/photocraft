@@ -91,3 +91,4 @@ pub mod threshold_alpha;
 pub mod threshold_alpha_composition;
 pub mod point_vibrance;
 pub mod global_stretch_hsv_candidate;
+pub mod colorize_candidate;
