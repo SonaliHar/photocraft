@@ -851,3 +851,30 @@ fn transfer_wetness_and_mix_vary_per_dab() {
     assert!(old.spacing_enabled && !old.shape_dynamics.brush_projection && old.shape_dynamics.tilt_scale == 0.0 && old.locks == SectionLocks::default());
     assert_eq!(old.mixer, crate::mixer::MixerSettings::default());
 }
+
+#[test]
+fn fast_corner_smoothing_rounds_sharp_turn() {
+    // Fast 90-degree corner: (0, 0) -> (100, 0) -> (100, 100)
+    let pts = vec![
+        StrokePoint::new(0.0, 0.0, 1.0),
+        StrokePoint::new(100.0, 0.0, 1.0),
+        StrokePoint::new(100.0, 100.0, 1.0),
+    ];
+    let b = BrushSettings {
+        size: 10.0,
+        spacing: 0.1,
+        smoothing: Smoothing { amount: 0.5, ..Default::default() },
+        ..brush()
+    };
+    let dabs = dabs_of(&b, &pts);
+    assert!(!dabs.is_empty());
+    // Dabs in curved smoothing should smoothly round the corner rather than
+    // making an abrupt 90-degree angle at (100, 0).
+    let corner_dabs: Vec<&Dab> = dabs.iter().filter(|d| (d.center.x - 100.0).abs() < 40.0 && d.center.y < 40.0).collect();
+    assert!(corner_dabs.len() >= 3);
+    for w in corner_dabs.windows(2) {
+        let diff = (w[1].angle - w[0].angle).abs();
+        assert!(diff < std::f32::consts::FRAC_PI_2, "Angle step should be smooth, got {diff}");
+    }
+}
+

@@ -140,7 +140,7 @@ pub struct StepInput {
     pub step: u64,
 }
 
-/// Walks a polyline and emits steps every `step_len(point)` pixels, plus airbrush steps in time.
+/// Walks a polyline or smooth curve and emits steps every `step_len(point)` pixels, plus airbrush steps in time.
 #[derive(Clone, Debug)]
 pub struct PathWalker {
     last: Option<StrokePoint>,
@@ -157,6 +157,11 @@ pub struct PathWalker {
     /// Speed spacing (Spacing unchecked): one step per this many ms of stroke time.
     speed: Option<f64>,
     speed_acc: f64,
+    /// Smooth curve interpolation between vertices to eliminate sharp corners on fast strokes.
+    curved: bool,
+    prev_mid: Option<StrokePoint>,
+    prev_pt: Option<StrokePoint>,
+    last_step_len: f64,
 }
 
 impl PathWalker {
@@ -172,7 +177,17 @@ impl PathWalker {
             time_acc: 0.0,
             speed: None,
             speed_acc: 0.0,
+            curved: false,
+            prev_mid: None,
+            prev_pt: None,
+            last_step_len: 1.0,
         }
+    }
+
+    /// Enable smooth curve interpolation between points (midpoint quadratic Bézier).
+    pub fn curved(mut self, enabled: bool) -> Self {
+        self.curved = enabled;
+        self
     }
 
     /// Space steps by stroke time instead of distance ([`SPEED_SPACING_MS`]): faster movement
@@ -188,14 +203,14 @@ impl PathWalker {
         out(s);
     }
 
-    pub fn push(&mut self, p: StrokePoint, step_len: &impl Fn(&StrokePoint) -> f64, out: &mut impl FnMut(StepInput)) {
-        let Some(a) = self.last else {
-            self.last = Some(p);
-            self.pending_first = Some(p);
-            self.next_at = step_len(&p);
-            return;
-        };
-        let (dx, dy) = (p.x - a.x, p.y - a.y);
+    fn walk_straight_segment(
+        &mut self,
+        a: &StrokePoint,
+        b: &StrokePoint,
+        step_len: &impl Fn(&StrokePoint) -> f64,
+        out: &mut impl FnMut(StepInput),
+    ) {
+        let (dx, dy) = (b.x - a.x, b.y - a.y);
         let len = (dx * dx + dy * dy).sqrt();
         if len > 1e-9 {
             self.dir = (-dy).atan2(dx) as f32;
@@ -210,14 +225,16 @@ impl PathWalker {
             match self.speed {
                 None => {
                     while self.next_at <= len + 1e-9 {
-                        let q = lerp_pt(&a, &p, (self.next_at / len).min(1.0));
+                        let q = lerp_pt(a, b, (self.next_at / len).min(1.0));
                         self.emit(q, out);
-                        self.next_at += step_len(&q).max(0.25);
+                        let sl = step_len(&q).max(0.25);
+                        self.last_step_len = sl;
+                        self.next_at += sl;
                     }
                     self.next_at -= len;
                 }
                 Some(iv) => {
-                    let dt = p.time - a.time;
+                    let dt = b.time - a.time;
                     if dt > 0.0 && dt.is_finite() {
                         self.speed_acc += dt;
                         let max_n = (len / MIN_SPEED_STEP).ceil().max(1.0) as usize;
@@ -225,7 +242,9 @@ impl PathWalker {
                         while self.speed_acc >= iv && n < max_n {
                             self.speed_acc -= iv;
                             let f = ((dt - self.speed_acc) / dt).clamp(0.0, 1.0);
-                            self.emit(lerp_pt(&a, &p, f), out);
+                            let q = lerp_pt(a, b, f);
+                            self.last_step_len = step_len(&q).max(0.25);
+                            self.emit(q, out);
                             n += 1;
                         }
                         if n == max_n {
@@ -233,28 +252,118 @@ impl PathWalker {
                         }
                     } else {
                         // No timestamps: one dab per input point.
-                        self.emit(p, out);
+                        self.last_step_len = step_len(b).max(0.25);
+                        self.emit(*b, out);
                     }
                 }
             }
         }
         if let Some(iv) = self.interval {
-            let dt = p.time - a.time;
-            if dt > 0.0 {
+            let dt = b.time - a.time;
+            if dt > 0.0 && dt.is_finite() {
                 self.time_acc += dt;
                 while self.time_acc >= iv {
                     self.time_acc -= iv;
                     let f = ((dt - self.time_acc) / dt).clamp(0.0, 1.0);
-                    self.emit(lerp_pt(&a, &p, f), out);
+                    let q = lerp_pt(a, b, f);
+                    self.last_step_len = step_len(&q).max(0.25);
+                    self.emit(q, out);
                 }
             }
         }
+    }
+
+    fn walk_quad_bezier(
+        &mut self,
+        m0: &StrokePoint,
+        ctrl: &StrokePoint,
+        m1: &StrokePoint,
+        step_len: &impl Fn(&StrokePoint) -> f64,
+        out: &mut impl FnMut(StepInput),
+    ) {
+        let (dx0, dy0) = (ctrl.x - m0.x, ctrl.y - m0.y);
+        let (dx1, dy1) = (m1.x - ctrl.x, m1.y - ctrl.y);
+        let chord_len = ((m1.x - m0.x).powi(2) + (m1.y - m0.y).powi(2)).sqrt();
+        let poly_len = (dx0 * dx0 + dy0 * dy0).sqrt() + (dx1 * dx1 + dy1 * dy1).sqrt();
+        let approx_len = (2.0 * chord_len + poly_len) / 3.0;
+        if approx_len <= 1e-9 {
+            return;
+        }
+
+        // Subdivide into fine segments (approx 2 px per sub-step) for smooth curvature and tangent rotation.
+        let sub_steps = ((approx_len / 2.0).ceil() as usize).clamp(8, 64);
+        let mut prev = *m0;
+        for i in 1..=sub_steps {
+            let t = i as f64 / sub_steps as f64;
+            let p_a = lerp_pt(m0, ctrl, t);
+            let p_b = lerp_pt(ctrl, m1, t);
+            let pt = lerp_pt(&p_a, &p_b, t);
+
+            let tan_x = p_b.x - p_a.x;
+            let tan_y = p_b.y - p_a.y;
+            if (tan_x * tan_x + tan_y * tan_y) > 1e-9 {
+                self.dir = (-tan_y).atan2(tan_x) as f32;
+                if self.initial_dir.is_none() {
+                    self.initial_dir = Some(self.dir);
+                }
+            }
+
+            self.walk_straight_segment(&prev, &pt, step_len, out);
+            prev = pt;
+        }
+    }
+
+    pub fn push(&mut self, p: StrokePoint, step_len: &impl Fn(&StrokePoint) -> f64, out: &mut impl FnMut(StepInput)) {
+        if !self.curved {
+            let Some(a) = self.last else {
+                self.last = Some(p);
+                self.pending_first = Some(p);
+                self.next_at = step_len(&p);
+                self.last_step_len = self.next_at;
+                return;
+            };
+            self.walk_straight_segment(&a, &p, step_len, out);
+            self.last = Some(p);
+            return;
+        }
+
+        // Smooth curve interpolation
+        let Some(prev_pt) = self.prev_pt else {
+            self.prev_pt = Some(p);
+            self.last = Some(p);
+            self.pending_first = Some(p);
+            self.next_at = step_len(&p);
+            self.last_step_len = self.next_at;
+            return;
+        };
+
+        let (dx, dy) = (p.x - prev_pt.x, p.y - prev_pt.y);
+        if (dx * dx + dy * dy) < 1e-9 {
+            return;
+        }
+
+        let mid = lerp_pt(&prev_pt, &p, 0.5);
+        if let Some(prev_mid) = self.prev_mid {
+            self.walk_quad_bezier(&prev_mid, &prev_pt, &mid, step_len, out);
+        } else {
+            self.walk_straight_segment(&prev_pt, &mid, step_len, out);
+        }
+
+        self.prev_mid = Some(mid);
+        self.prev_pt = Some(p);
         self.last = Some(p);
     }
 
     pub fn finish(&mut self, out: &mut impl FnMut(StepInput)) {
         if let Some(f) = self.pending_first.take() {
             self.emit(f, out);
+        }
+        if self.curved {
+            if let (Some(prev_mid), Some(prev_pt)) = (self.prev_mid.take(), self.prev_pt.take()) {
+                let sl = self.last_step_len;
+                let step_len = |_p: &StrokePoint| sl;
+                self.walk_straight_segment(&prev_mid, &prev_pt, &step_len, out);
+            }
         }
     }
 }
@@ -594,10 +703,15 @@ impl DabGenerator {
     pub fn new(brush: &BrushSettings, zoom: f32) -> Self {
         let interval = brush.build_up.then(|| 1000.0 / f64::from(brush.build_up_rate.clamp(0.1, 1000.0)));
         let dual_on = brush.dual_brush.enabled;
+        let curved = brush.smoothing.amount > 0.0 && !brush.smoothing.pulled_string;
         Self {
             smoother: Smoother::new(&brush.smoothing, zoom),
-            walker: if brush.spacing_enabled { PathWalker::new(interval) } else { PathWalker::new(interval).speed_spacing(SPEED_SPACING_MS) },
-            dual_walker: dual_on.then(|| PathWalker::new(None)),
+            walker: if brush.spacing_enabled {
+                PathWalker::new(interval).curved(curved)
+            } else {
+                PathWalker::new(interval).speed_spacing(SPEED_SPACING_MS).curved(curved)
+            },
+            dual_walker: dual_on.then(|| PathWalker::new(None).curved(curved)),
             builder: DabBuilder::new(brush),
             dual: dual_on.then(|| DualBuilder::new(brush)),
             scratch: Vec::new(),
