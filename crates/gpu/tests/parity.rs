@@ -2416,6 +2416,60 @@ fn blend_if_with_bounded_exact_gradients() {
 }
 
 #[test]
+fn wide_exact_gradient_strokes_match_cpu_with_round_outer_fields() {
+    // Main switches the outer field to Euclidean at 20 px. Exercise that field together
+    // with the bounded exact paint, including a shape stroked along its vector outline.
+    let Some(mut g) = gpu() else { return };
+    use photocraft_doc::vector::{Path, ShapeLayer, ShapeStroke, StrokeAlign, Subpath};
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for shape in [false, true] {
+            let mut d = Document::with_background("wide exact stroke", Size::new(128, 128), ColorMode::Rgb, depth, Color::rgb(0.15, 0.15, 0.15));
+            let mut layer = if shape {
+                let path = Path::new(vec![Subpath::polygon(&[(54.0, 54.0), (73.0, 54.0), (73.0, 73.0), (54.0, 73.0)])]);
+                let vector_stroke = ShapeStroke { width: 4.0, align: StrokeAlign::Inside, paint: Fill::Solid(Color::WHITE), ..ShapeStroke::default() };
+                let mut sh = ShapeLayer { path, fill: None, stroke: Some(vector_stroke), live: None, cache: None, psd_raw: None };
+                sh.cache = Some(photocraft_vector::render_shape(&sh, d.pixel_format(), d.bounds()));
+                Layer::new("vector outline", LayerContent::Shape(sh))
+            } else {
+                let mut layer = Layer::raster("raster shape", d.pixel_format());
+                layer.surface_mut().unwrap().write_region(Rect::new(54, 54, 73, 73), &vec![1.0; 19 * 19 * 4]);
+                layer
+            };
+            let gradient = Gradient {
+                stops: hard_stops(0.5),
+                opacity_stops: vec![(0.0, 1.0), (1.0, 1.0)],
+                style: GradientStyle::Linear,
+                angle: 0.0,
+                scale: 1.0,
+                reverse: false,
+                align: true,
+                offset: (0.0, 0.0),
+            };
+            layer.effects.items = vec![Effect::Stroke(stroke(32.0, StrokePosition::Outside, FxPaint::Gradient(gradient)))];
+            d.layers.push(layer);
+            if depth == SampleType::F32 {
+                assert_exact_geometry_fallback(&d);
+                let cpu = photocraft_compose::render(&d, d.bounds());
+                assert_eq!(cpu.px.len(), 128 * 128);
+                assert!(cpu.px.iter().flatten().all(|v| v.is_finite()));
+                eprintln!("wide exact stroke F32 CPU fallback asserted: shape={shape}");
+            } else {
+                let planned = photocraft_gpu::plan(&d).expect("the bounded wide exact stroke must stay on the GPU");
+                assert!(
+                    planned
+                        .passes
+                        .iter()
+                        .any(|pass| { pass.kernel == photocraft_gpu::Kernel::FxStroke && pass.flags & photocraft_gpu::plan::F_EXACT_RAMP != 0 })
+                );
+                let stats = diff_rect(&mut g, &d, d.bounds(), &format!("wide exact stroke {depth:?} shape={shape}")).unwrap_or_else(|e| panic!("{e}"));
+                assert!(stats.fx_shapes > 0 && stats.fx_programs > 0, "the stroke's maps must execute on the GPU: {stats:?}");
+                eprintln!("wide exact stroke rendered: {depth:?} shape={shape} stats={stats:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn channel_restrictions() {
     let Some(mut g) = gpu() else { return };
     for mask_bits in [0b001u32, 0b010, 0b100, 0b101, 0b111] {
