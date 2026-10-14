@@ -549,6 +549,9 @@ fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui, two_columns: bool) {
     s.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Swap colours (X)")));
     if s.on_hover_text(tl!("Swap colours (X)")).clicked() {
         let _ = app.run("tools.swapColors", json!({}));
+        // The swap is a foreground colour change: selected type recolours with it, as when the
+        // Color or Swatches panels set the foreground (#5690).
+        crate::type_tool::foreground_changed(app);
     }
     if d.is_some_and(|d| d.on_hover_text(tl!("Default colours (D)")).clicked()) {
         let _ = app.run("tools.defaultColors", json!({}));
@@ -4304,6 +4307,61 @@ mod color_tests {
             assert_eq!(h.state().session.tools.foreground, [0.0, 0.0, 0.0, 1.0], "{kind:?}");
             assert_eq!(h.state().session.tools.background, [1.0, 1.0, 1.0, 1.0], "{kind:?}");
         }
+    }
+
+    /// #5690: the Switch Colors arrow is a foreground colour change, so while characters are
+    /// selected in a type layer it recolours them with the swapped-in foreground (the old
+    /// background), as the Color and Swatches panels do. A caret leaves the type alone.
+    #[test]
+    fn swap_colors_recolours_selected_type_only() {
+        use egui_kittest::kittest::Queryable;
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 320, "height": 200})).unwrap();
+        let id = s.execute("type.create", json!({"text": "Hello", "size": 40, "x": 30, "y": 120, "color": "#000000"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("tools.setColors", json!({"foreground": "#ff0000", "background": "#0000ff"})).unwrap();
+        let mut app = PhotocraftApp::new(s, crate::Services::default());
+        let edit = |caret, anchor| crate::state::TextEdit {
+            layer: id,
+            caret,
+            anchor,
+            session: "s".into(),
+            created: false,
+            mask: false,
+            dragging: false,
+            resize: None,
+            preedit: None,
+        };
+        let run_color = |app: &PhotocraftApp, ci: usize| -> [u8; 4] {
+            let LayerContent::Text(t) = &app.session.active().unwrap().doc.layer(LayerId(id)).unwrap().content else {
+                panic!("type layer")
+            };
+            let b = t.text.char_indices().nth(ci).map_or(t.text.len(), |(b, _)| b);
+            let mut at = 0;
+            for r in t.char_runs() {
+                if b < at + r.len {
+                    return r.style.color.to_rgba8();
+                }
+                at += r.len;
+            }
+            [0; 4]
+        };
+        // A caret: the colours swap, the type keeps its colour.
+        app.ui.text_edit = Some(edit(3, 3));
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(80.0, 120.0))
+            .build_ui_state(|ui, app: &mut PhotocraftApp| color_chips(app, ui, false), app);
+        h.run_steps(2);
+        h.get_by_label("Swap colours (X)").click();
+        h.run_steps(2);
+        assert_eq!(h.state().session.tools.foreground, [0.0, 0.0, 1.0, 1.0], "the colours swapped");
+        assert_eq!(run_color(h.state(), 0), [0, 0, 0, 255], "a caret leaves the type alone");
+        // A selection: the selected characters take the swapped-in foreground (red again).
+        h.state_mut().ui.text_edit = Some(edit(5, 1));
+        h.run_steps(1);
+        h.get_by_label("Swap colours (X)").click();
+        h.run_steps(2);
+        assert_eq!(run_color(h.state(), 0), [0, 0, 0, 255], "outside the selection");
+        assert_eq!(run_color(h.state(), 1), [255, 0, 0, 255], "the selection recoloured");
     }
 
     /// The Studio layout (chips stacked, icons below) fits the height the toolbar reserves for
