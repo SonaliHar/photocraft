@@ -56,6 +56,7 @@ fn type_layers_offer_free_transform_distort_and_perspective() {
         pasteboard: false,
         anchor: None,
         text: false,
+        guide: false,
         spelling: None,
     };
     assert!(crate::canvas_tool_menu::available(&app, &menu, "edit.freeTransform"));
