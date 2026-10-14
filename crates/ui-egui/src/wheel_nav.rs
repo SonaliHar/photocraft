@@ -91,11 +91,6 @@ pub fn configure(ctx: &Context) {
     });
 }
 
-/// Turn a Windows or Linux touchpad pinch, which arrives as Ctrl + wheel in fractions of a notch or points, into
-/// pinch events (`Event::Zoom`) at egui's Ctrl-scroll zoom speed (`notch` points per line,
-/// `speed` per point). Ctrl + wheel in whole notches (a mouse wheel) is left to scroll sideways,
-/// unless it comes within [`PINCH_GAP`] of a pinch step. `last` is the time of the previous pinch
-/// step; returns the time of the latest one.
 /// A two-axis point-unit scroll is a pinch some Wayland compositors send without Ctrl (#5122).
 /// A one-axis two-finger flick is a pan: the other axis is noise, not a second finger spread.
 fn two_axis_point_pinch(d: Vec2) -> bool {
@@ -105,6 +100,12 @@ fn two_axis_point_pinch(d: Vec2) -> bool {
     lo.is_finite() && hi.is_finite() && lo > 0.01 && hi > 0.0 && lo / hi >= 0.25
 }
 
+/// Turn a Windows or Linux touchpad pinch, which arrives as Ctrl + wheel in fractions of a notch or points, into
+/// pinch events (`Event::Zoom`) at egui's Ctrl-scroll zoom speed (`notch` points per line,
+/// `speed` per point). Ctrl + wheel in whole notches (a mouse wheel) is left to scroll sideways,
+/// unless it comes within [`PINCH_GAP`] of a pinch step. A two-axis point-unit scroll with no Ctrl
+/// is treated as a pinch too. `last` is the time of the previous pinch
+/// step; returns the time of the latest one.
 pub fn legacy_pinch_to_zoom(events: &mut [Event], now: f64, last: Option<f64>, notch: f32, speed: f32) -> Option<f64> {
     let ctrl_wheel = |e: &Event| match e {
         Event::MouseWheel { unit: MouseWheelUnit::Line, delta, modifiers, .. } if modifiers.ctrl => Some((*delta, false)),
