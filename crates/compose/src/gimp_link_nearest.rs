@@ -217,14 +217,11 @@ mod tests {
             )
             .is_err()
         );
-        let visits = std::cell::Cell::new(0u32);
-        let stop = || {
-            visits.set(visits.get() + 1);
-            visits.get() > 12
-        };
+        let visits = std::sync::atomic::AtomicU32::new(0);
+        let stop = || visits.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1 > 12;
         let cancelled = transform_with_limits(&bytes, 3, 2, format, &state, bounds, Limits::default(), &Interrupt::cancel_only(&stop));
         assert!(cancelled.is_err());
-        assert!(visits.get() > 12);
+        assert!(visits.load(std::sync::atomic::Ordering::Relaxed) > 12);
         assert_eq!(bytes, words.into_iter().flat_map(u32::to_ne_bytes).collect::<Vec<_>>());
     }
 }

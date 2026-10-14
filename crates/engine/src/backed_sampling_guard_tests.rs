@@ -42,6 +42,9 @@ fn fixture() -> (Document, BackingQuota, LayerId, LayerId, Arc<AtomicUsize>) {
 #[test]
 fn backed_hit_is_not_transparent_clickthrough_but_outside_extent_is_skipped() {
     let (mut doc, _, id, background, reads) = fixture();
+    // The raw alpha-only lane separately handles source-free owners. Canonical
+    // imported semantics remain outside that lane and retain this named guard.
+    doc.xcf_state = Some(photocraft_doc::XcfState::default());
     let before = doc.clone();
     assert!(crate::pick_cmds::layers_at_checked(&doc, 1, 1, &Interrupt::NONE).unwrap_err().to_string().contains("backed-pixel-sampling-unsupported"));
     assert!(crate::pick_cmds::auto_select_target_checked(&doc, 1, 1, false, &Interrupt::NONE).is_err());
@@ -53,7 +56,8 @@ fn backed_hit_is_not_transparent_clickthrough_but_outside_extent_is_skipped() {
 }
 #[test]
 fn active_backed_selection_refuses_before_merged_fallback_and_keeps_history() {
-    let (doc, quota, id, _, reads) = fixture();
+    let (mut doc, quota, id, _, reads) = fixture();
+    doc.xcf_state = Some(photocraft_doc::XcfState::default());
     let retention = quota.reserve(QuotaKind::Resident, 65536).unwrap();
     let owner = AccountedDocument::from_owned(doc, Arc::new(retention), quota, &crate::read_control_none()).unwrap();
     let mut session = Session::new();

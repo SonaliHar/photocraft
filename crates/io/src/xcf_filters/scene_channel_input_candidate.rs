@@ -418,11 +418,8 @@ mod tests {
         let bytes = vec![0u8; 2048 * 8];
         let p = Plane { width: 2048, height: 1, channels: 1, sample: Sample::F64, bytes: bytes.clone() };
         let s = Surface::try_from_interleaved_with(PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false), bounds, &bytes, &Interrupt::NONE).unwrap();
-        let polls = std::cell::Cell::new(0usize);
-        let cancel = || {
-            polls.set(polls.get() + 1);
-            polls.get() > 4
-        };
+        let polls = std::sync::atomic::AtomicUsize::new(0);
+        let cancel = || polls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1 > 4;
         assert!(matches!(compare_native(&input(&s, &p, bounds), &Interrupt::cancel_only(&cancel)), Err(IoError::Cancelled)));
         assert_eq!(p.bytes, bytes);
     }

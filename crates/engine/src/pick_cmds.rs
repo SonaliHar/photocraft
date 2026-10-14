@@ -2,6 +2,7 @@
 //! point (Photoshop's options bar "Auto-Select: Layer | Group", ⌘-click with the Move tool, and the
 //! canvas right-click layer list). Like Photoshop, Auto-Select hits a type layer anywhere inside its
 //! text's bounds, so a click between letters picks the type rather than the layer under it (#2370).
+mod backed_alpha;
 
 use photocraft_doc::{Document, LayerContent, LayerId};
 use photocraft_geom::Rect;
@@ -30,6 +31,7 @@ fn layers_hit(doc: &Document, x: i32, y: i32, type_bounds: bool, control: &photo
     if x.checked_add(1).is_none() || y.checked_add(1).is_none() {
         return Ok(Vec::new());
     }
+    let read_work = backed_alpha::PickReadWork::new();
     let rows = doc.walk();
     let mut out = Vec::new();
     for (path, _, l) in rows.iter().rev() {
@@ -58,7 +60,10 @@ fn layers_hit(doc: &Document, x: i32, y: i32, type_bounds: bool, control: &photo
             if !backed.operative_bounds().contains(x, y) {
                 continue;
             }
-            return Err(EngineError::Other("layer.pickAt.backed-pixel-sampling-unsupported".into()));
+            if backed_alpha::hit(doc, l, backed, x, y, &read_work, control)? {
+                out.push(l.id);
+            }
+            continue;
         }
         let source = doc.xcf_state.as_ref().and_then(|state| {
             state.source_items.iter().find(|source| {

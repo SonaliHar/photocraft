@@ -29,15 +29,11 @@ fn controlled_copy_retains_raw_words_and_census_uses_actual_capacity() {
 fn cancellation_during_private_tail_copy_preserves_caller_data() {
     let input = values();
     let before = input.clone();
-    let calls = std::cell::Cell::new(0usize);
-    let stop = || {
-        let n = calls.get();
-        calls.set(n + 1);
-        n >= 8
-    };
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    let stop = || calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 8;
     assert!(arguments(&input, 0, &Interrupt::cancel_only(&stop)).is_err());
     assert_eq!(input, before);
-    assert!(calls.get() > 8);
+    assert!(calls.load(std::sync::atomic::Ordering::Relaxed) > 8);
 }
 #[test]
 fn oversized_or_malformed_raw_storage_is_not_cloned() {
