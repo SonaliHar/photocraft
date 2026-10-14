@@ -119,6 +119,23 @@ fn gen_deep(
     counts: &[u32],
     sample: &dyn Fn(usize, usize) -> Vec<f32>,
 ) -> Vec<u8> {
+    gen_deep_tables(w, h, channels, compression, tile, counts, sample, false)
+}
+
+/// [`gen_deep`]; with `full_tile_tables` every tile's count table is stored at the full tile
+/// size, as the OpenEXR library writes edge tiles: the block's entries first (in rows of its
+/// clipped width), then zeros.
+#[allow(clippy::too_many_arguments)]
+fn gen_deep_tables(
+    w: usize,
+    h: usize,
+    channels: &[Chan],
+    compression: u8,
+    tile: Option<(usize, usize)>,
+    counts: &[u32],
+    sample: &dyn Fn(usize, usize) -> Vec<f32>,
+    full_tile_tables: bool,
+) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&0x0131_2f76u32.to_le_bytes());
     // Single-part deep files (deepscanline and deeptile alike) carry only the deep-data
@@ -216,6 +233,10 @@ fn gen_deep(
                 table.extend_from_slice(&acc.to_le_bytes());
             }
         }
+        assert_eq!(table.len(), table_len(b));
+        if let (true, Some((tw, th))) = (full_tile_tables, tile) {
+            table.resize(tw * th * 4, 0);
+        }
         let mut data = Vec::new();
         for row in b.pixels.chunks(b.row_w) {
             for (ci, ch) in channels.iter().enumerate() {
@@ -237,7 +258,6 @@ fn gen_deep(
         c.extend_from_slice(&(data.len() as u64).to_le_bytes());
         c.extend_from_slice(&ct);
         c.extend_from_slice(&cd);
-        assert_eq!(table.len(), table_len(b));
         assert_eq!(data.len(), data_len(b));
         chunks.push((bi, c));
     }
@@ -606,6 +626,55 @@ fn hostile_sizes_and_offsets_error() {
     let mut far = bytes.clone();
     far[header_end..header_end + 8].copy_from_slice(&u64::MAX.to_le_bytes());
     assert!(matches!(decode_deep_exr(&far, &Limits::none()), Err(CodecError::Malformed { .. })));
+}
+
+/// #4958: a deep tile's count table may be stored at the full tile size, and that size comes
+/// from the header alone: nothing ties it to the data window. One 1024×1024 tile over a 4×4
+/// image, its table stored at that size, makes a compressed file of tens of KB whose table
+/// inflates to 4 MiB, plus as much again for the copy that undoes the byte split. Under a
+/// budget smaller than both the table must be refused before it is allocated; with room for
+/// both it decodes. Tables stored at the clipped size, and the full-size edge tables of
+/// ordinary tiles, still decode under a small budget.
+#[test]
+fn deep_tile_count_table_is_admitted_against_max_alloc() {
+    let budget = |max_alloc: u64| Limits { max_alloc, ..Limits::none() };
+    let tight = budget(1 << 20);
+    let table: u64 = 1024 * 1024 * 4; // the full tile's count table, in bytes
+    let scan = decode_deep_exr(&gen_deep(4, 4, &RGBAZ, 0, None, COUNTS_ONE, &sample_rgba), &Limits::none()).expect("scan lines");
+    for compression in [0u8, 1, 2] {
+        let big = gen_deep_tables(4, 4, &RGBAZ, compression, Some((1024, 1024)), COUNTS_ONE, &sample_rgba, true);
+        assert_eq!(decode_deep_exr(&big, &Limits::none()).expect("full-size table, no limits"), scan, "compression {compression}");
+        let got = decode_deep_exr(&big, &tight);
+        assert!(
+            matches!(got, Err(CodecError::LimitExceeded(_))),
+            "compression {compression}: a 4 MiB count table under a 1 MiB budget gave {:?}",
+            got.map(|d| d.total_samples())
+        );
+        let flat = photocraft_codecs::decode_with(&big, &photocraft_codecs::DecodeOptions { limits: tight, ..Default::default() });
+        assert!(matches!(flat, Err(CodecError::LimitExceeded(_))), "compression {compression}: the flat decode gave {:?}", flat.map(|i| i.width()));
+        // The same tile with its table stored at the clipped size fits the small budget.
+        let clipped = gen_deep(4, 4, &RGBAZ, compression, Some((1024, 1024)), COUNTS_ONE, &sample_rgba);
+        assert_eq!(decode_deep_exr(&clipped, &tight).expect("clipped table, 1 MiB budget"), scan, "compression {compression}");
+        if compression != 0 {
+            assert!(big.len() < 1 << 20, "compression {compression}: the file is {} bytes", big.len());
+            // The table and its scratch copy are admitted together: 8 MiB.
+            assert_eq!(decode_deep_exr(&big, &budget(2 * table)).expect("room for the table and its copy"), scan, "compression {compression}");
+            let got = decode_deep_exr(&big, &budget(2 * table - 1));
+            assert!(matches!(got, Err(CodecError::LimitExceeded(_))), "compression {compression}: one byte short gave {:?}", got.map(|d| d.total_samples()));
+        }
+    }
+    // Ordinary tiles: full-size edge tables decode under the small budget, like clipped ones.
+    let counts: Vec<u32> = (0..35).map(|p| (p * 3) % 4).collect();
+    let sample = |p: usize, ci: usize| -> Vec<f32> { (0..counts[p]).map(|k| [0.5, 0.25, 0.125 * k as f32, 1.0, 10.0 - k as f32][ci]).collect() };
+    for compression in [0u8, 1, 2] {
+        let full = gen_deep_tables(7, 5, &RGBAZ, compression, Some((3, 2)), &counts, &sample, true);
+        let clipped = gen_deep(7, 5, &RGBAZ, compression, Some((3, 2)), &counts, &sample);
+        assert_eq!(
+            decode_deep_exr(&full, &tight).expect("full-size edge tables"),
+            decode_deep_exr(&clipped, &tight).expect("clipped edge tables"),
+            "compression {compression}"
+        );
+    }
 }
 
 /// Walk the attributes like the format prescribes: the offset table starts after the

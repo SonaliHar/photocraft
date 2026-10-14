@@ -157,7 +157,7 @@ fn decompress(compression: Compression, packed: &[u8], expected: usize, what: &s
         Compression::ZIP1 => {
             let mut out = Vec::with_capacity(expected.min(1 << 20));
             flate2::read::ZlibDecoder::new(packed)
-                .take(expected as u64 + 1)
+                .take((expected as u64).saturating_add(1))
                 .read_to_end(&mut out)
                 .map_err(|_| err(format!("{what}: zlib data is malformed")))?;
             if out.len() != expected {
@@ -340,13 +340,30 @@ pub(crate) fn decode_deep(meta: &MetaData, bytes: &[u8], limits: &Limits) -> Res
         if packed_table > remaining || packed_data > remaining.saturating_sub(packed_table) {
             return Err(err("deep chunk sizes point past the end of the file"));
         }
-        let table_bytes = read_exact(&mut cur, packed_table as usize, "the sample-count table")?;
+        let what = "the sample-count table";
+        let table_bytes = read_exact(&mut cur, packed_table as usize, what)?;
         let expected_table = block_pixels.len().checked_mul(4).ok_or_else(|| err("count table overflows"))?;
         // An edge tile's table may still be stored at the full tile size (its pixels first, in
         // rows of the clipped width, then unused entries), as the OpenEXR library writes it.
-        let full_table = tile_w.saturating_mul(tile_h).saturating_mul(4).max(expected_table);
-        let raw = decompress(compression, &table_bytes, full_table, "the sample-count table")
-            .or_else(|_| decompress(compression, &table_bytes, expected_table, "the sample-count table"))?;
+        // That size comes from the header's tile size alone, which nothing ties to the data
+        // window, so it is tried only when `max_alloc` has room for the table and for the copy
+        // that undoes its byte split. Otherwise only the clipped size is read.
+        let full_table = tile_w.checked_mul(tile_h).and_then(|n| n.checked_mul(4));
+        let raw = match full_table {
+            // Scan lines and interior tiles: the full size is the clipped size.
+            Some(full) if full <= expected_table => decompress(compression, &table_bytes, expected_table, what)?,
+            Some(full) if (full as u64).saturating_mul(2) <= limits.max_alloc => {
+                decompress(compression, &table_bytes, full, what).or_else(|_| decompress(compression, &table_bytes, expected_table, what))?
+            }
+            _ => decompress(compression, &table_bytes, expected_table, what).map_err(|_| {
+                // Four bytes per pixel of the tile, twice: the table and its scratch copy.
+                let need = (tile_w as u64).saturating_mul(tile_h as u64).saturating_mul(8);
+                CodecError::LimitExceeded(format!(
+                    "{what} of a {tile_w}x{tile_h} deep tile does not decode at the clipped size, and at the full tile size it needs {need} bytes with its scratch copy, exceeding max_alloc {}",
+                    limits.max_alloc
+                ))
+            })?,
+        };
 
         // The table is cumulative within each row of the block (a tile restarts at every row);
         // `prefix` is cumulative over the whole block, and each pixel's own count is the difference.
