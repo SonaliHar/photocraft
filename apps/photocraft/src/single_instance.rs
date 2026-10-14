@@ -20,6 +20,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufReader, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -34,6 +35,8 @@ const HANDOFF_WAIT: Duration = Duration::from_secs(5);
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
 /// More paths than this in one request is not a file manager.
 const MAX_PATHS: usize = 4096;
+/// Launches served at once; a stalled client holds only its own slot, never the next launch.
+const MAX_CLIENTS: usize = 8;
 
 /// Outcome of [`claim`].
 pub enum Launch {
@@ -98,14 +101,28 @@ fn serve(dir: &Path, lock: File) -> Result<Primary, String> {
     let inbox: Arc<Mutex<Inbox>> = Arc::default();
     let queue = Arc::clone(&inbox);
     let spawned = std::thread::Builder::new().name("single-instance".into()).spawn(move || {
+        let token = Arc::new(token);
+        let clients = Arc::new(AtomicUsize::new(0));
         for stream in listener.incoming().flatten() {
-            // One short request per connection, served in turn: launches arrive at human speed.
-            if let Some(paths) = receive(stream, &token) {
-                let mut inbox = queue.lock().unwrap_or_else(PoisonError::into_inner);
-                inbox.events.push(OsEvent::Open(paths));
-                if let Some(ctx) = &inbox.ctx {
-                    ctx.request_repaint();
+            // Each launch on its own thread, so one that connects and stalls doesn't hold the
+            // ones after it; past the cap a connection is dropped and that launch retries.
+            if clients.fetch_add(1, Ordering::AcqRel) >= MAX_CLIENTS {
+                clients.fetch_sub(1, Ordering::AcqRel);
+                continue;
+            }
+            let (token, queue, slot) = (Arc::clone(&token), Arc::clone(&queue), Arc::clone(&clients));
+            let spawned = std::thread::Builder::new().name("single-instance-client".into()).spawn(move || {
+                if let Some(paths) = receive(stream, &token) {
+                    let mut inbox = queue.lock().unwrap_or_else(PoisonError::into_inner);
+                    inbox.events.push(OsEvent::Open(paths));
+                    if let Some(ctx) = &inbox.ctx {
+                        ctx.request_repaint();
+                    }
                 }
+                slot.fetch_sub(1, Ordering::AcqRel);
+            });
+            if spawned.is_err() {
+                clients.fetch_sub(1, Ordering::AcqRel);
             }
         }
     });
@@ -114,11 +131,20 @@ fn serve(dir: &Path, lock: File) -> Result<Primary, String> {
 }
 
 /// Port and token, written to a temporary file and renamed so a reader never sees half of it.
+/// On Unix the file is the user's alone (0600): another local user who read the token could make
+/// this app open any path. (Windows keeps the per-user ACL of the settings folder.)
 fn write_info(dir: &Path, port: u16, token: &str) -> Result<(), String> {
     let path = dir.join(INFO_FILE);
     let tmp = dir.join(format!("{INFO_FILE}.{}.tmp", std::process::id()));
     let body = json!({"port": port, "token": token, "pid": std::process::id()}).to_string();
-    std::fs::write(&tmp, body).and_then(|()| std::fs::rename(&tmp, &path)).map_err(|e| {
+    // A leftover from a crash could carry wider permissions; the mode applies only on create.
+    let _ = std::fs::remove_file(&tmp);
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let written = options.open(&tmp).and_then(|mut f| f.write_all(body.as_bytes())).and_then(|()| std::fs::rename(&tmp, &path));
+    written.map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         format!("{}: {e}", path.display())
     })
@@ -291,6 +317,38 @@ mod tests {
         }
         let many: Vec<String> = (0..=MAX_PATHS).map(|i| i.to_string()).collect();
         assert_eq!(parse_request(&json!({"token": token, "open": many}).to_string(), &token), None);
+    }
+
+    #[test]
+    fn a_stalled_client_does_not_hold_up_the_next_launch() {
+        let dir = temp_dir("stalled");
+        let Launch::Primary(primary) = claim(&dir, &[]) else { panic!("first launch should be primary") };
+        let (port, _) = read_info(&dir).unwrap();
+        // Connects and never sends a line (each would otherwise hold the listener for IO_TIMEOUT).
+        let stalled: Vec<TcpStream> = (0..3).map(|_| TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap()).collect();
+        let started = Instant::now();
+        assert!(matches!(claim(&dir, &["b.psd".into()]), Launch::Forwarded));
+        assert!(started.elapsed() < IO_TIMEOUT, "took {:?}", started.elapsed());
+        assert_eq!(drain(&primary), vec![OsEvent::Open(vec!["b.psd".into()])]);
+        drop(stalled);
+        drop(primary);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_token_file_is_private_to_the_user() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir("mode");
+        std::fs::create_dir_all(&dir).unwrap();
+        // A wide leftover temporary file from a crashed start doesn't widen the new one.
+        let tmp = dir.join(format!("{INFO_FILE}.{}.tmp", std::process::id()));
+        std::fs::write(&tmp, "{}").unwrap();
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_info(&dir, 1, &generate_token().unwrap()).unwrap();
+        let mode = std::fs::metadata(dir.join(INFO_FILE)).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
