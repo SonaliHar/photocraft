@@ -33,3 +33,6 @@
 + cargo test -p photocraft-cli -- --list --format terse
 + cargo test -p xtask -- --list --format terse
 + testlist metrics/test-list.txt .
++ cargo run -q -p photocraft-cli -- commands --json
++ fpcount metrics/commands.json
++ sizing metrics/sizing-inputs.txt metrics/category-language.tsv > metrics/sizing.md

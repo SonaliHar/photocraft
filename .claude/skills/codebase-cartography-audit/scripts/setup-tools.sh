@@ -21,7 +21,7 @@ jar="$HOME/.local/share/plantuml/plantuml.jar"
 [ -s "$jar" ] || curl -sSfL -o "$jar" \
   https://github.com/plantuml/plantuml/releases/download/v1.2025.4/plantuml-1.2025.4.jar
 
-for h in metrics sizing testlist; do
+for h in metrics sizing testlist fpcount; do
   rustc -O --edition 2021 "$here/$h.rs" -o "$bin/$h"
 done
 
@@ -32,4 +32,4 @@ echo "plantuml: $(java -jar "$jar" -version 2>/dev/null | head -1)  ($jar)"
 echo "jscpd:    $(npx -y jscpd@4.0.5 --version 2>/dev/null | tail -1) (npx)"
 echo "rustc:    $(rustc --version)"
 echo "clippy:   $(cargo clippy --version)"
-echo "helpers:  $bin/{metrics,sizing,testlist}"
+echo "helpers:  $bin/{metrics,sizing,testlist,fpcount}"
