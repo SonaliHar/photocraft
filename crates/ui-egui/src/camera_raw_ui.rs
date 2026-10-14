@@ -1003,10 +1003,17 @@ pub(crate) fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
         Target::OpenRaw => {
             let raw = d.raw_open.clone().ok_or("no raw file is being opened")?;
             let params = d.params.clone();
+            let changed = d.params != d.original;
+            // Open keeps the recipe too, so the next visit starts from what was just chosen. It is kept before anything
+            // changes: changed settings that cannot be kept open nothing and leave the dialog as it was. Unchanged ones
+            // are already the photo's, so a failed rewrite of them does not stop the Open.
+            match crate::raw_recipe::persist(app, raw.document, &raw.targets, &params) {
+                Err(error) if changed => return Err(error),
+                Err(error) => log::warn!("{error}"),
+                Ok(()) => {}
+            }
             // Open goes to the full editor: its canvas draws from now on.
             app.raw_workspace.browsing = None;
-            // Open keeps the recipe too, so the next visit starts from what was just chosen.
-            crate::raw_recipe::persist(app, raw.document, &raw.targets, &params);
             if let Some(project) = raw.continue_from.clone() {
                 // The photo already has a full-editor document: go back to it, untouched.
                 app.camera_raw = None;
@@ -1057,10 +1064,11 @@ pub(crate) fn done(app: &mut PhotocraftApp) -> Result<Value, String> {
     }
     let raw = d.raw_open.clone().ok_or("no raw file is being opened")?;
     let params = d.params.clone();
-    app.camera_raw = None;
+    // The recipe is kept before the dialog goes: one that cannot be written leaves the dialog, and its settings, as they were.
     if changed {
-        crate::raw_recipe::persist(app, raw.document, &raw.targets, &params);
+        crate::raw_recipe::persist(app, raw.document, &raw.targets, &params)?;
     }
+    app.camera_raw = None;
     Ok(json!({"open": false, "changed": changed, "recipe": crate::raw_recipe::to_json(&params)}))
 }
 
@@ -1236,17 +1244,20 @@ pub(crate) fn layout(screen: ERect, own_window: bool) -> Layout {
 /// [`done`] does; the dialog stays up, marked busy (its controls dim if the swap takes more than a moment), until the next
 /// photo replaces its contents.
 pub(crate) fn leave_in_place(app: &mut PhotocraftApp) -> Result<(), String> {
-    let Some(d) = app.camera_raw.as_mut() else { return Ok(()) };
+    let Some(d) = app.camera_raw.as_ref() else { return Ok(()) };
     if d.target != Target::OpenRaw {
         return Err("only the open-time dialog can hand over to the next photo".into());
     }
     let raw = d.raw_open.clone().ok_or("no raw file is being opened")?;
     let params = d.params.clone();
     let changed = d.params != d.original;
-    d.original = d.params.clone();
-    d.busy_since = d.busy_since.or_else(|| Some(std::time::Instant::now()));
+    // Kept first: a recipe that cannot be written leaves the dialog on this photo, unchanged, and the next photo is not opened.
     if changed {
-        crate::raw_recipe::persist(app, raw.document, &raw.targets, &params);
+        crate::raw_recipe::persist(app, raw.document, &raw.targets, &params)?;
+    }
+    if let Some(d) = app.camera_raw.as_mut() {
+        d.original = d.params.clone();
+        d.busy_since = d.busy_since.or_else(|| Some(std::time::Instant::now()));
     }
     Ok(())
 }

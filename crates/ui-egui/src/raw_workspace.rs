@@ -771,6 +771,28 @@ mod tests {
         (app, writes)
     }
 
+    /// [`host_app`] whose writer fails, as a full or read-only disk does, while the returned flag is set.
+    fn host_app_with_failing_writes(files: Vec<(&'static str, Vec<u8>)>) -> (PhotocraftApp, Writes, std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (mut app, writes) = host_app(files);
+        let failing = std::sync::Arc::new(AtomicBool::new(false));
+        let (fail, recorded) = (failing.clone(), writes.clone());
+        app.services.background_automation_write = Some(std::sync::Arc::new(move |path: &str, bytes: &[u8]| {
+            if fail.load(Ordering::SeqCst) {
+                return Err("disk full".into());
+            }
+            recorded.lock().unwrap().push((path.to_string(), bytes.to_vec()));
+            Ok(())
+        }));
+        (app, writes, failing)
+    }
+
+    fn recipe_writes(writes: &Writes) -> Vec<f32> {
+        let writes = writes.lock().unwrap();
+        let recipes = writes.iter().filter(|(name, _)| name.ends_with(".cameraraw.json"));
+        recipes.map(|(_, bytes)| raw_recipe::from_json(&serde_json::from_slice(bytes).unwrap()).unwrap().exposure).collect()
+    }
+
     fn synthetic_raw() -> Vec<u8> {
         use photocraft_raw::testgen::{DngSpec, mosaic, scene};
         let (w, h) = (48, 32);
@@ -875,6 +897,75 @@ mod tests {
         settle(&mut app).unwrap();
         assert!(app.camera_raw.is_none());
         assert!(written(&writes, "IMG.dng.cameraraw.json").is_some());
+    }
+
+    #[test]
+    fn done_that_cannot_keep_the_recipe_leaves_the_dialog_and_its_settings_until_it_can() {
+        use std::sync::atomic::Ordering;
+        let (mut app, writes, failing) = host_app_with_failing_writes(vec![("IMG.dng", synthetic_raw())]);
+        let ctx = egui::Context::default();
+        open_in_camera_raw(&mut app, &ctx, spec(None));
+        adjust(&mut app, &ctx, 2.0);
+        failing.store(true, Ordering::SeqCst);
+        for attempt in 0..3 {
+            let error = control(&mut app, &ctx, &json!({"done": true})).unwrap_err();
+            assert!(error.contains("disk full"), "attempt {attempt}: {error}");
+            let d = app.camera_raw.as_ref().expect("the dialog stays");
+            assert_eq!(d.params.exposure, 2.0, "attempt {attempt}: the settings stay");
+            assert!(camera_raw_ui::changed(&app), "attempt {attempt}: still a change to keep (the dialog's starting point is untouched)");
+            assert!(!app.camera_raw.as_ref().unwrap().busy(), "attempt {attempt}");
+        }
+        assert!(recipe_writes(&writes).is_empty());
+        failing.store(false, Ordering::SeqCst);
+        let state = control(&mut app, &ctx, &json!({"done": true})).unwrap();
+        assert_eq!(state["result"]["changed"], true);
+        assert!(app.camera_raw.is_none());
+        assert_eq!(recipe_writes(&writes), [2.0], "kept once, once it could be");
+    }
+
+    #[test]
+    fn switching_photos_when_the_recipe_cannot_be_kept_stays_on_the_photo() {
+        use std::sync::atomic::Ordering;
+        let (mut app, writes, failing) = host_app_with_failing_writes(vec![("IMG.dng", synthetic_raw()), ("NEXT.dng", synthetic_raw())]);
+        let ctx = egui::Context::default();
+        open_in_camera_raw(&mut app, &ctx, spec(None));
+        let document = app.session.active().unwrap().doc.id;
+        adjust(&mut app, &ctx, 1.5);
+        failing.store(true, Ordering::SeqCst);
+        for _ in 0..2 {
+            let error = crate::control_files::open_with_camera_raw(&mut app, "NEXT.dng", true, Some(spec(None))).unwrap_err();
+            assert!(error.contains("disk full"), "{error}");
+            let d = app.camera_raw.as_ref().expect("the dialog stays on the photo");
+            assert_eq!(d.params.exposure, 1.5);
+            assert!(!d.busy(), "not handed over");
+            assert!(camera_raw_ui::changed(&app));
+            assert_eq!((app.session.documents().len(), app.session.active().unwrap().doc.id), (1, document), "the next photo was not opened");
+        }
+        failing.store(false, Ordering::SeqCst);
+        crate::control_files::open_with_camera_raw(&mut app, "NEXT.dng", true, Some(spec(None))).unwrap();
+        assert_eq!(recipe_writes(&writes), [1.5]);
+    }
+
+    #[test]
+    fn open_that_cannot_keep_changed_settings_opens_nothing() {
+        use std::sync::atomic::Ordering;
+        let (mut app, writes, failing) = host_app_with_failing_writes(vec![("IMG.dng", synthetic_raw())]);
+        let ctx = egui::Context::default();
+        open_in_camera_raw(&mut app, &ctx, spec(None));
+        let document = app.session.active().unwrap().doc.id;
+        let browsing = app.raw_workspace.browsing;
+        adjust(&mut app, &ctx, 1.0);
+        failing.store(true, Ordering::SeqCst);
+        let error = control(&mut app, &ctx, &json!({"commit": true})).unwrap_err();
+        assert!(error.contains("disk full"), "{error}");
+        assert_eq!(app.camera_raw.as_ref().expect("the dialog stays").params.exposure, 1.0);
+        assert!(camera_raw_ui::changed(&app));
+        assert_eq!(app.raw_workspace.browsing, browsing, "still browsing");
+        assert_eq!(app.session.active().unwrap().doc.id, document, "nothing developed");
+        failing.store(false, Ordering::SeqCst);
+        control(&mut app, &ctx, &json!({"commit": true})).unwrap();
+        assert!(app.camera_raw.is_none());
+        assert_eq!(recipe_writes(&writes), [1.0]);
     }
 
     #[test]

@@ -6,6 +6,10 @@
 //! writes the recipe, and renders it at screen size in the background so the photo can be shown with its
 //! adjustments the moment it is visited again. Both are written through the host's write authority, so
 //! nothing reaches outside the folder the host granted.
+//!
+//! The recipe is the edit itself: it is written before the dialog lets go of the settings, and a write that
+//! fails is an error for the caller, which leaves the dialog as it was. The render is a cache: its failures
+//! are only logged.
 
 use photocraft_algo::camera_raw::CameraRaw;
 use photocraft_doc::{DocId, Document};
@@ -72,17 +76,25 @@ pub fn render_display(doc: &Document, params: &CameraRaw) -> Result<Vec<u8>, Str
     photocraft_io::display_jpeg_from_buffer(&adjusted, icc, RENDER_QUALITY).map(|r| r.bytes).map_err(|e| e.to_string())
 }
 
-/// Writes `params` as the photo's recipe and starts rendering it for `document`. Failures are logged
-/// and never reach the user: a missed recipe write is retried by the next visit, and the render is a
-/// cache.
-pub fn persist(app: &mut PhotocraftApp, document: DocId, targets: &Targets, params: &CameraRaw) {
+/// Writes `params` as the photo's recipe, if the host asked for one. A failed write is returned, never
+/// only logged: the settings exist nowhere else once the dialog lets them go.
+pub fn write_recipe(app: &PhotocraftApp, targets: &Targets, params: &CameraRaw) -> Result<(), String> {
+    let Some(path) = &targets.recipe else { return Ok(()) };
+    let write = app.services.background_automation_write.clone().ok_or("background automation write authority is not configured")?;
+    let bytes = serde_json::to_vec_pretty(&to_json(params)).map_err(|e| e.to_string())?;
+    write(path, &bytes).map_err(|error| format!("could not keep the Camera Raw settings in {path}: {error}"))
+}
+
+/// Writes `params` as the photo's recipe ([`write_recipe`]) and, once it is kept, starts rendering it for
+/// `document`. Only the recipe can fail the call; the render's failures are logged (it is a cache).
+pub fn persist(app: &mut PhotocraftApp, document: DocId, targets: &Targets, params: &CameraRaw) -> Result<(), String> {
+    write_recipe(app, targets, params)?;
+    render_in_background(app, document, targets, params);
+    Ok(())
+}
+
+fn render_in_background(app: &PhotocraftApp, document: DocId, targets: &Targets, params: &CameraRaw) {
     let Some(write) = app.services.background_automation_write.clone() else { return };
-    if let Some(path) = &targets.recipe {
-        let bytes = serde_json::to_vec_pretty(&to_json(params)).unwrap_or_default();
-        if let Err(error) = write(path, &bytes) {
-            log::warn!("could not write the Camera Raw recipe {path}: {error}");
-        }
-    }
     let Some(display) = targets.display.clone() else { return };
     let Some(doc) = app.session.documents().iter().find(|st| st.doc.id == document).map(|st| st.doc.clone()) else { return };
     let params = params.clone();
@@ -208,7 +220,7 @@ mod tests {
         app.session.add_document(doc, None);
         let params = CameraRaw { exposure: 1.0, ..Default::default() };
         let targets = Targets { recipe: Some("a.cameraraw.json".into()), display: Some("a.display.jpg".into()) };
-        persist(&mut app, id, &targets, &params);
+        persist(&mut app, id, &targets, &params).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while writes.lock().unwrap().len() < 2 && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -237,7 +249,7 @@ mod tests {
         let targets = Targets { recipe: None, display: Some("coalesce.display.jpg".into()) };
         // Both are requested before either can run (the first holds the turn while it renders).
         for exposure in [0.5f32, 2.0] {
-            persist(&mut app, id, &targets, &CameraRaw { exposure, ..Default::default() });
+            persist(&mut app, id, &targets, &CameraRaw { exposure, ..Default::default() }).unwrap();
         }
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while !writes.lock().unwrap().iter().any(|(p, _)| p == "coalesce.display.jpg") && std::time::Instant::now() < deadline {
@@ -254,12 +266,41 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_write_is_not_an_error_for_the_caller() {
+    fn a_recipe_that_cannot_be_written_is_the_caller_s_error_and_nothing_is_rendered() {
+        let attempts = Arc::new(Mutex::new(Vec::<String>::new()));
+        let recorded = attempts.clone();
+        let services = crate::Services {
+            background_automation_write: Some(Arc::new(move |path, _| {
+                recorded.lock().unwrap().push(path.to_string());
+                Err("disk full".into())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let doc = grey_document(0.5);
+        let id = doc.id;
+        app.session.add_document(doc, None);
+        let targets = Targets { recipe: Some("a.json".into()), display: Some("a.display.jpg".into()) };
+        let error = persist(&mut app, id, &targets, &CameraRaw { exposure: 1.0, ..Default::default() }).unwrap_err();
+        assert!(error.contains("disk full") && error.contains("a.json"), "{error}");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(*attempts.lock().unwrap(), ["a.json"], "no render of settings that were not kept");
+    }
+
+    #[test]
+    fn a_render_that_cannot_be_written_is_not_an_error_for_the_caller() {
         let services = crate::Services { background_automation_write: Some(Arc::new(|_, _| Err("disk full".into()))), ..Default::default() };
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
         let doc = grey_document(0.5);
         let id = doc.id;
         app.session.add_document(doc, None);
-        persist(&mut app, id, &Targets { recipe: Some("a.json".into()), display: None }, &CameraRaw::default());
+        persist(&mut app, id, &Targets { recipe: None, display: Some("a.display.jpg".into()) }, &CameraRaw::default()).unwrap();
+    }
+
+    #[test]
+    fn a_recipe_without_write_authority_is_an_error() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        assert!(write_recipe(&app, &Targets { recipe: Some("a.json".into()), display: None }, &CameraRaw::default()).is_err());
+        write_recipe(&app, &Targets::default(), &CameraRaw::default()).unwrap();
     }
 }
