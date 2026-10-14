@@ -331,21 +331,14 @@ pub(crate) fn draw(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXf
 /// A transform box: its outline, corner and edge handles and reference point. Shared with
 /// Content-Aware Move's Transform On Drop.
 pub(crate) fn draw_box(painter: &egui::Painter, xf: &ViewXform, t: &TransformSession) {
-    let tokens = crate::theme::Tokens::get(painter.ctx());
     let pts = t.quad.map(|p| xf.to_screen(p[0] as f32, p[1] as f32));
-    painter.add(egui::Shape::closed_line(pts.to_vec(), Stroke::new(3.0, tokens.shadow)));
-    painter.add(egui::Shape::closed_line(pts.to_vec(), Stroke::new(1.0, tokens.accent)));
+    let color = egui::Color32::from_rgb(30, 30, 30);
+    painter.add(egui::Shape::closed_line(pts.to_vec(), Stroke::new(1.0, color)));
     let mids = [pts[0].lerp(pts[1], 0.5), pts[1].lerp(pts[2], 0.5), pts[2].lerp(pts[3], 0.5), pts[3].lerp(pts[0], 0.5)];
     for p in pts.iter().chain(mids.iter()) {
         let r = egui::Rect::from_center_size(*p, vec2(7.0, 7.0));
-        painter.rect_filled(r, 0.0, tokens.accent_text);
-        painter.rect_stroke(r, 0.0, Stroke::new(1.0, tokens.accent), egui::StrokeKind::Inside);
-    }
-    let c = xf.to_screen(t.pivot[0] as f32, t.pivot[1] as f32);
-    painter.circle_stroke(c, 4.0, Stroke::new(2.0, tokens.shadow));
-    painter.circle_stroke(c, 4.0, Stroke::new(1.0, tokens.accent_text));
-    for axis in [vec2(6.0, 0.0), vec2(0.0, 6.0)] {
-        painter.line_segment([c - axis, c + axis], Stroke::new(1.0, tokens.accent));
+        painter.rect_filled(r, 0.0, egui::Color32::WHITE);
+        painter.rect_stroke(r, 0.0, Stroke::new(1.0, color), egui::StrokeKind::Inside);
     }
 }
 

@@ -1014,11 +1014,12 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
     }
     // Frame: paragraph text shows its box with handles; point text an underline per line.
     let mods = crate::workspace_ui::sticky_mods(app, painter.ctx().input(|i| i.modifiers));
-    if !crate::type_transform::draw(app, painter, xf, mods) {
-        let shape = app.session.active().and_then(|s| text_layer(&s.doc, id).map(|t| t.shape.clone()));
-        let frame = Stroke::new(1.0, t.accent);
-        match shape {
-            Some(photocraft_doc::text::TextShape::Box { x, y, width, height }) => {
+    let has_transform = crate::type_transform::draw(app, painter, xf, mods);
+    let shape = app.session.active().and_then(|s| text_layer(&s.doc, id).map(|t| t.shape.clone()));
+    let frame = Stroke::new(1.0, t.accent);
+    match shape {
+        Some(photocraft_doc::text::TextShape::Box { x, y, width, height }) => {
+            if !has_transform {
                 let c = [scr_t(x, y), scr_t(x + width, y), scr_t(x + width, y + height), scr_t(x, y + height)];
                 painter.add(egui::Shape::closed_line(c.to_vec(), frame));
                 let mids = [c[0].lerp(c[1], 0.5), c[1].lerp(c[2], 0.5), c[2].lerp(c[3], 0.5), c[3].lerp(c[0], 0.5)];
@@ -1028,12 +1029,12 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
                     painter.rect_stroke(r, 0.0, frame, egui::StrokeKind::Inside);
                 }
             }
-            _ => {
-                for ln in &l.lines {
-                    // Horizontal: just under the baseline; vertical: the column's centre line.
-                    let y = if l.vertical { ln.baseline } else { ln.baseline + ln.descent * 0.25 };
-                    painter.line_segment([scr(ln.x0.min(0.0), y), scr(ln.x1.max(ln.x0 + 1.0), y)], Stroke::new(1.0, t.accent.gamma_multiply(0.8)));
-                }
+        }
+        _ => {
+            for ln in &l.lines {
+                // Horizontal: just under the baseline; vertical: the column's centre line.
+                let y = if l.vertical { ln.baseline } else { ln.baseline + ln.descent * 0.25 };
+                painter.line_segment([scr(ln.x0.min(0.0), y), scr(ln.x1.max(ln.x0 + 1.0), y)], Stroke::new(1.0, Color32::from_rgb(50, 50, 50)));
             }
         }
     }
