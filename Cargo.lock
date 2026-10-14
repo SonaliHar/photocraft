@@ -4244,6 +4244,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "photocraft-ai-client"
+version = "0.8.2"
+dependencies = [
+ "photocraft-color",
+ "photocraft-engine",
+ "photocraft-geom",
+ "png 0.18.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "photocraft-algo"
 version = "0.8.2"
 dependencies = [

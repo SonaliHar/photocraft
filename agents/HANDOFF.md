@@ -2,6 +2,27 @@
 
 Update this at the end of every session: newest entry on top, keep it short.
 
+## 2026-10-13: local agent (Codex/GPT-6) - PC-03 Craft AI Manager client crate
+
+`crates/ai-client` (package `photocraft-ai-client`, L6, native only) is new and green: it implements `photocraft_engine::ai::AiProvider`
+over SPEC amendment 11 with no HTTP dependency (HTTP/1.1 on `std::net::TcpStream`, `127.0.0.1` only). Worktree `E:\CraftML\work\wt\pc-03`,
+branch `ai/pc-03-ai-client`, base `eeda9e24`, `CARGO_TARGET_DIR=target/agent-local`. Receipt: `agents/receipts/PC-03.md`. Status is
+`review`; PC-03 guard added to `agents/guards.txt`. Not merged; `main` untouched. PR not opened: `gh` is not installed on CraftML (CN-00).
+
+Endpoint file (`%LOCALAPPDATA%\CraftAI\endpoint.json`, or `CRAFT_AI_ENDPOINT`) is re-read on every `submit` and the endpoint used is kept
+with the job, so poll/result/cancel follow the manager that took the job. Anything unusable is `AiError::NoProvider` (missing/bad file,
+version != 1, port 0, connection refused); a non-loopback host is an error and no request is sent. 401 gives the token-mismatch sentence,
+other statuses give the manager's sentence. Reply framing is strict (chunked, missing/duplicate/non-numeric `Content-Length`, non-UTF-8
+headers, over-cap and truncated bodies all error), with the amendment's caps: 2 s connect, 30 s read, 64 KiB JSON, PNG <= 1 GiB and <= the
+window's pixel count. `image`/`mask` PNGs and `result.png` are checked against the request's size, channels and depth.
+
+Gate (all pass): `cargo test -p photocraft-ai-client` 24/0/0 (2.0 s); clippy `--all-targets -D warnings` clean; `cargo xtask layers` 30
+crates; `cargo xtask wasm` all ok (141 s); BASE guards `build -p photocraft -p photocraft-cli` (142 s) and `--lib --tests` (1626 lib /
+13 ignored, 54 binaries); PC-01 `ai::tests` 14/0/0; PC-02 `generative` 13/0/0.
+
+Next: PC-04 injects `CaimProvider` into `apps/photocraft` and `apps/photocraft-cli` and returns provenance in the command result; PC-05
+the MCP automation test; PC-06 the real-manager run. `GET /v1/health` is not called (not required by the contract); no overall job
+deadline (the engine's poll loop owns that).
 ## 2026-10-13: local agent (Codex/Strata) - PC-02 Generative Fill command
 
 `edit.generativeFill` is implemented and green: it fills the selection through the AI provider inside a background job and writes the

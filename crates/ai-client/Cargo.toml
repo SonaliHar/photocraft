@@ -1,0 +1,19 @@
+[package]
+name = "photocraft-ai-client"
+description = "PhotoCraft's client for Craft AI Manager: the engine's AiProvider over loopback HTTP (native only)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+photocraft-engine = { workspace = true }
+photocraft-color = { workspace = true }
+photocraft-geom = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# PNG for the image and mask parts (SPEC v1.1 amendment 5: no HTTP dependency; png is already in the tree).
+png = "0.18"
