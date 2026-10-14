@@ -8,6 +8,7 @@ publish = false
 
 [features]
 legacy-compositor = []
+deferred-cache = []
 
 [dependencies]
 photocraft-io = { path = "../../../crates/io" }
@@ -28,6 +29,11 @@ photocraft-psd = { path = "../../../crates/psd" }
 [[bin]]
 name = "psd-open-fixture"
 path = "../../../crates/io/examples/psd_open_experiment.rs"
+
+[[bin]]
+name = "psd-cache-policy"
+path = "src/bin/cache_policy.rs"
+required-features = ["deferred-cache"]
 
 [[test]]
 name = "psd-open-equivalence"

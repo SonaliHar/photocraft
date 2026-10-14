@@ -94,3 +94,26 @@ CPU parity, one-chunk and forced-flush assertions are retained.
 
 The PSD and IO packages also pass their corpus-enabled suites on the borrowed-import
 checkpoint:401PSD and590IO tests, no failures.
+
+## First-open cache admission
+
+Fresh supported GPU canvases request a one-shot deferral of lower-stack cache population.
+The default compositor behavior and cache budgets remain unchanged; subsequent renders
+can populate/reuse the cache. Empty/failed preflight and discardable encode calls do not
+consume the request. Stale cache entries are cleared on the deferred render.
+
+End-to-end adjacent comparison, including import: three-layer190.9→181.0ms;
+complex109.7→101.4ms. See `perf/experiments/psd-open-linux-cache-endtoend.json`.
+A separate GPU-only opening-plus-two-64×64-edits experiment measured opening142.7→82.2ms,
+first edit1.60→2.01ms, second edit0.45→1.22ms, total144.8→85.4ms.
+That experiment uses separate conditioning and excludes import/admission; its absolute
+times and savings must not be added to the end-to-end comparison. Both policies receive
+excluded warmup pairs and six alternating measured pairs. See
+`perf/experiments/psd-open-linux-cache-policy.json` for all samples and CPU checks.
+
+Initial deferred cache bytes are0rather than512MiB; after the first small edit the cache
+holds16MiB and the second edit reuses it. All GPU tests pass(98cases), including
+opening/stale-cache/discarded-encoder/partial-edit regressions across depths. Linux
+`cargo check -p photocraft-ui-egui` passed; native visible UI acceptance remains pending.
+The full opening harness's `cache-defer` mode requires `--features deferred-cache` and
+fresh compositors. Older reference builds remain compatible without that feature.

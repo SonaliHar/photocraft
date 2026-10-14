@@ -417,6 +417,7 @@ pub struct Compositor {
     residents: HashMap<ResKey, Resident>,
     fx: HashMap<FxKey, FxEntry>,
     prefix: prefix::Prefix,
+    defer_prefix_population: bool,
     /// Effect temporaries (R32F, region sized) and the frame they were last used.
     temps: Vec<(Tex, u64)>,
     patterns: HashMap<String, CachedPattern>,
@@ -667,6 +668,7 @@ impl Compositor {
             residents: HashMap::new(),
             fx: HashMap::new(),
             prefix: prefix::Prefix::default(),
+            defer_prefix_population: false,
             temps: Vec::new(),
             patterns: HashMap::new(),
             pattern_mode: photocraft_color::ColorMode::Rgb,
@@ -900,6 +902,18 @@ impl Compositor {
         self.health = Some(health);
     }
 
+    /// Skip lower-stack composite cache population for the next non-empty [`Self::render`]
+    /// that passes planning and resource preflight. Clears any previous composite cache on
+    /// that render, without changing its budget or the resident/effect caches. Subsequent
+    /// renders resume normal population and reuse. [`Self::encode`] does not consume this
+    /// request because its caller may discard the command buffer.
+    ///
+    /// Useful for showing a newly opened document before paying for an editing cache. The
+    /// first following edit must establish that cache; measure opening and editing together.
+    pub fn defer_composite_cache_population(&mut self) {
+        self.defer_prefix_population = true;
+    }
+
     /// Why the device can't be used (`None` while healthy or unwatched).
     pub fn fault(&self) -> Option<Fault> {
         self.health.as_ref().and_then(DeviceHealth::fault)
@@ -1018,7 +1032,14 @@ impl Compositor {
 
         // Only render owns submission. A caller may discard encode's command buffer, so it
         // cannot establish (or consume) a checkpoint whose GPU copy might never execute.
-        let checkpoint = if flush { self.prefix.prepare(doc, &plan) } else { None };
+        let checkpoint = if flush && std::mem::take(&mut self.defer_prefix_population) {
+            self.prefix.clear();
+            None
+        } else if flush {
+            self.prefix.prepare(doc, &plan)
+        } else {
+            None
+        };
 
         // Effect maps of whole regions first (they may render group shapes through sub-plans);
         // regions larger than the limit are built per cell below.

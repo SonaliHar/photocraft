@@ -14,6 +14,10 @@ fn configure_cache(comp: &mut Compositor, mode: &str) {
     if mode == "cache-off" {
         comp.set_composite_cache_budget(0);
     }
+    #[cfg(all(feature = "deferred-cache", not(feature = "legacy-compositor")))]
+    if mode == "cache-defer" {
+        comp.defer_composite_cache_population();
+    }
     #[cfg(feature = "legacy-compositor")]
     let _ = (comp, mode);
 }
@@ -35,7 +39,7 @@ fn median(v: &[Value], key: &str) -> Option<f64> {
 }
 fn run() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    let fixture = args.first().ok_or("usage: psd-open-gpu-experiment PSD OUTPUT [reps] [cache-on|cache-off] [shared|fresh]")?;
+    let fixture = args.first().ok_or("usage: psd-open-gpu-experiment PSD OUTPUT [reps] [cache-on|cache-off|cache-defer] [shared|fresh]")?;
     let output = args.get(1).ok_or("missing output JSON path")?;
     let reps: usize = args.get(2).map_or(Ok(5), |s| s.parse())?;
     if !(1..=30).contains(&reps) {
@@ -43,8 +47,16 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
     let cache = args.get(3).map(String::as_str).unwrap_or("cache-on");
     let fresh = args.get(4).map(String::as_str).unwrap_or("shared") == "fresh";
-    if !matches!(cache, "cache-on" | "cache-off") {
+    if !matches!(cache, "cache-on" | "cache-off" | "cache-defer") {
         return Err("invalid cache mode".into());
+    }
+    if cache == "cache-defer" {
+        if !cfg!(all(feature = "deferred-cache", not(feature = "legacy-compositor"))) {
+            return Err("cache-defer requires --features deferred-cache and cannot use legacy-compositor".into());
+        }
+        if !fresh {
+            return Err("cache-defer requires fresh compositors so every measured opening consumes a new one-shot request".into());
+        }
     }
     let bytes = std::fs::read(fixture)?;
     let instance = wgpu::Instance::default();

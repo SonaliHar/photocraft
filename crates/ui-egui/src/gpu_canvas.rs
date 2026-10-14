@@ -454,6 +454,9 @@ impl GpuCanvas {
         let keep_hdr = i32::from(format == FORMAT_HIGH);
         // Last-resort guard: a wgpu panic (e.g. polling a device lost mid-refresh) marks the
         // device lost instead of taking the app and its documents down.
+        if fresh {
+            comp.defer_composite_cache_population();
+        }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             comp.render(device, queue, doc, region, |enc, out| {
                 for t in &d.tiles {

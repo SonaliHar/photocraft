@@ -217,6 +217,47 @@ fn first_frame_renders() {
 }
 
 #[test]
+fn deferred_open_cache_resumes_after_first_edit_without_changing_pixels() {
+    let Some(mut g) = gpu() else { return };
+    let mut deferred = Compositor::new(&g.device);
+    deferred.set_composite_cache_budget(16 << 20);
+    let budget = deferred.memory_budget();
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut d = Document::new("deferred", Size::new(300, 70), ColorMode::Rgb, depth);
+        for seed in 1..=3 {
+            d.layers.push(noise_layer("layer", d.pixel_format(), d.bounds(), seed, 0.2));
+        }
+        // Populate stale state before the request, proving the deferred render clears it.
+        photocraft_gpu::render_to_vec(&mut deferred, &g.device, &g.queue, &d, d.bounds()).unwrap();
+        assert!(deferred.composite_cache_bytes() > 0);
+        deferred.defer_composite_cache_population();
+        // encode may be discarded and must not consume the one-shot render request.
+        let mut encoder = g.device.create_command_encoder(&Default::default());
+        deferred.encode(&g.device, &g.queue, &mut encoder, &d, d.bounds(), &mut |_, _| {}).unwrap();
+        drop(encoder);
+        let (pixels, stats) = photocraft_gpu::render_to_vec_stats(&mut deferred, &g.device, &g.queue, &d, d.bounds()).unwrap();
+        assert_eq!(stats.prefix_hits, 0);
+        assert_eq!(deferred.composite_cache_bytes(), 0);
+        assert_eq!(deferred.memory_budget(), budget);
+        let reference = photocraft_compose::flatten(&d);
+        assert!(worst_diff(&reference.px, &pixels).0 <= TOL);
+        let damage = Rect::new(15, 12, 51, 38);
+        for edit in 0..2 {
+            d.layers.last_mut().unwrap().surface_mut().unwrap().fill_rect(damage, &[0.3 + edit as f32 * 0.2, 0.6, 0.1, 0.7]);
+            let (pixels, stats) = photocraft_gpu::render_to_vec_stats(&mut deferred, &g.device, &g.queue, &d, damage).unwrap();
+            let cpu = photocraft_compose::render(&d, damage);
+            assert!(worst_diff(&cpu.px, &pixels).0 <= TOL);
+            assert!(deferred.composite_cache_bytes() > 0);
+            if edit == 0 {
+                assert_eq!(stats.prefix_hits, 0, "first edit populates the deferred cache");
+            } else {
+                assert!(stats.prefix_hits > 0, "second edit reuses the lower-stack cache");
+            }
+        }
+    }
+}
+
+#[test]
 fn stack_prefix_reuse_matches_uncached_gpu_and_cpu_at_every_depth() {
     let Some(mut g) = gpu() else { return };
     let mut uncached = Compositor::new(&g.device);
