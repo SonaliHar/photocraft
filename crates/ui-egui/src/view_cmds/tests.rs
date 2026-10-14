@@ -15,6 +15,53 @@ fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
 }
 
 #[test]
+fn flip_horizontal_keeps_the_image_centre_in_place_for_rotated_views() {
+    use crate::canvas::ViewXform;
+    use egui::{Rect, pos2, vec2};
+
+    let rect = Rect::from_min_size(pos2(17.0, 31.0), vec2(900.0, 640.0));
+    for zoom in [0.35, 1.0, 2.4] {
+        for rotation in [0.0, 27.0, 90.0, -43.0] {
+            for aspect in [0.5, 1.0, 2.0] {
+                for flip in [false, true] {
+                    let xf = ViewXform {
+                        rect,
+                        zoom,
+                        center: [35.0, 91.0],
+                        flip,
+                        rotation,
+                        aspect,
+                    };
+                    let size = [320, 180];
+                    let doc_center = [size[0] as f32 / 2.0, size[1] as f32 / 2.0];
+                    let screen_before = xf.to_screen(doc_center[0], doc_center[1]);
+                    let next = !flip;
+                    let center = center_for_flipped_view(xf, size, next);
+                    let after = ViewXform { center, flip: next, ..xf };
+                    let screen_after = after.to_screen(doc_center[0], doc_center[1]);
+                    assert!(
+                        screen_before.distance(screen_after) < 1e-3,
+                        "zoom={zoom} rotation={rotation} aspect={aspect} flip={flip}: {screen_before:?} -> {screen_after:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn flip_horizontal_does_not_change_document_history() {
+    let (mut app, ctx) = app_with(1);
+    let history = app.session.active().unwrap().history.past_len();
+    menu(&mut app, &ctx, "view.flipHorizontal", json!({})).unwrap();
+    assert!(app.ui.view.flip_horizontal);
+    assert_eq!(app.session.active().unwrap().history.past_len(), history);
+    menu(&mut app, &ctx, "view.flipHorizontal", json!({})).unwrap();
+    assert!(!app.ui.view.flip_horizontal);
+    assert_eq!(app.session.active().unwrap().history.past_len(), history);
+}
+
+#[test]
 fn show_snap_extras_and_screen_modes_are_state() {
     let (mut app, ctx) = app_with(1);
     for id in [
