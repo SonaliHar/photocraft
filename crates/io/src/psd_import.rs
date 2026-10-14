@@ -237,9 +237,7 @@ impl Ctx<'_> {
             return Surface::new(self.fmt);
         }
         let refs: Vec<Option<&[u8]>> = planes.iter().map(|p| p.as_deref()).collect();
-        if self.fmt == PixelFormat::RGBA8
-            && let Some(surface) = crate::pixels::rgba8_surface(&refs, Rect::new(r.left, r.top, r.right, r.bottom))
-        {
+        if let Some(surface) = crate::pixels::planar_surface(&refs, Rect::new(r.left, r.top, r.right, r.bottom), self.fmt) {
             return surface;
         }
         let mut fill: Vec<Vec<u8>> = vec![zero_sample(s); self.cc];

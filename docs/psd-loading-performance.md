@@ -134,3 +134,44 @@ packed masks, decoder error parity and retained sample values at several depths.
 Upstream main advanced to `369704ac551e8e409800e423ff550c353d5522ef` with printing changes
 and was merged into this same branch. The measurements above isolate the mask change before
 that merge; affected integration checks are recorded separately.
+
+## Architecture evaluations
+
+The implemented paths retain full-resolution imported pixels and a fully valid base canvas.
+The remaining proposals change ownership or display readiness and need separate acceptance
+criteria. They are evaluated here rather than represented as implemented optimizations.
+
+| Proposal | Current code constraint | Decision and required follow-up |
+|---|---|---|
+| Sparse viewport-first composition | An unchanged document revision skips composition; Navigator samples the whole canvas. | Do not restrict the first render alone: pan would expose stale/uninitialized pixels. Add base-tile revision/coverage tracking and collect demand from every viewport, rotation, Pattern Preview and Navigator before rendering. Fit-to-screen still demands the whole document. |
+| Approximate initial display | Existing measurements finish an exact full-resolution composite; saved PSD composites may be absent or stale. | Keep the default accurate. A preliminary proxy needs explicit readiness state and separate preliminary/accurate/full-completion measurements plus visual acceptance for masks, effects, adjustments and HDR. |
+| Lazy hidden/offscreen raster materialization | Raster layers store realized Surfaces; the borrowed source ends at import completion. | Requires owned source backing and realization state across visibility, editing, compositors, native saves, PSD export, history and recovery. Skipping hidden records would lose data. ZIP validation still inflates the stream even if pixels are not retained. |
+| Bounded decode-to-tile streaming | Full decoded planes remain allocated; predictors/checksums can fail after earlier rows. | A new row-band decoder must align color/alpha channels and publish tiles transactionally, preserving all-or-empty failed-layer behavior and deterministic warning order. This is a further memory optimization; not delivered by direct tile packing. |
+| Opaque raster coverage pruning | Current occlusion predicates accept opaque fills, not raster bounds. Mutable tile bytes have no invalidated alpha/coverage summary. | Bounds do not prove opacity. Add cached, mutation-invalidated alpha/hole summaries and retain all blend/mask/effect exclusions; do not scan whole surfaces every redraw or discard layers on an unproven inference. |
+
+These evaluations preserve original pixels, hidden/off-canvas data and current warning/error
+semantics. The structural follow-ups remain open in the umbrella issue; no speedup is claimed
+for an unimplemented path.
+
+## Direct tiles at other depths and models
+
+RGB, grayscale, CMYK and Lab alpha surfaces now assemble exact planar samples directly into
+final tiles at U8/U16/F32. The specialized RGBA8 loop remains. Missing-channel fills, CMYK
+inversion, Lab16 chroma scaling, endian conversion, transparent padding and byte pruning
+match the prior interleave/write path. Unsupported or malformed plane layouts fall back.
+Float RGB preserves HDR values, signed zero and NaN payloads without numeric conversion.
+
+Adjacent same-file comparison: U16 595.1 → 446.0 ms (import 400.2 → 254.4 ms);
+F32 1125.2 → 788.5 ms (import 882.6 → 562.2 ms). U8 three-layer 179.9 → 179.8 ms;
+complex 98.4 → 100.0 ms (no useful improvement claimed for those U8 cases). Nine pixel tests
+and three source/roundtrip oracles pass; frozen fixture signatures and GPU crops match.
+See `perf/experiments/psd-open-linux-depth.json`.
+
+High-depth files were generated once from the frozen three-layer image with the standalone
+`depth_fixture` generator, outside timing. U16: 490531278 bytes, BLAKE3
+`64dfd543cc846601f0fa527854e0cd813c2d4480987b3bd2e337418e4bcdc93e`.
+F32: 500522218 bytes, BLAKE3
+`7724a7d9d356e99337f2edcf80dec7d9afdf0e0bcbcacd3ec25d127dc7c25b87`.
+An initial trial accidentally reused identical Cargo executables after a timestamp-preserving
+source transfer; it was rejected. The retained comparison forced recompilation and verified
+distinct executable hashes before running. Subsequent source transfers invalidate mtimes.
