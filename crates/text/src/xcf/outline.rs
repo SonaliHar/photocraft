@@ -3,7 +3,7 @@
 use super::{TextSourceError, poll};
 use photocraft_raster::Interrupt;
 
-mod layout;
+pub(crate) mod layout;
 pub use layout::{PreparedOutlineText, prepare_outline_with_charge, qualify_outline_geometry};
 
 const MAX_EDGES: usize = 4096;

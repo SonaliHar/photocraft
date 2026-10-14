@@ -12,7 +12,7 @@ use skrifa::{
 
 const SHAPING: u64 = 2 * 1024 * 1024;
 #[derive(Clone, Copy, Default)]
-enum Command {
+pub(crate) enum Command {
     #[default]
     Empty,
     Move(Point),
@@ -20,13 +20,13 @@ enum Command {
     Quad(Point, Point),
     Close,
 }
-struct Pen {
-    commands: [Command; 256],
-    len: usize,
-    invalid: bool,
+pub(crate) struct Pen {
+    pub(crate) commands: [Command; 256],
+    pub(crate) len: usize,
+    pub(crate) invalid: bool,
 }
 impl Pen {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self { commands: [Command::Empty; 256], len: 0, invalid: false }
     }
     fn point(&mut self, x: f32, y: f32) -> Point {

@@ -622,6 +622,13 @@ pattern and effect reserves. These additions await runtime checks.
 Explicit candidate APIs now include LCh Float Hue-Chroma, owned paired-CMS
 Curves/Levels preparation and schema-bound serialized graphs. Their exact input
 contexts are caller supplied; broader normal-import admission remains incomplete.
+New research-derived candidates also cover the observed external-font fixed-box
+text layout, explicitly stored saved-channel reads, profile-owned configured
+transfer preparation, threshold-alpha outer alpha composition and linked alpha
+reconstruction. These are bounded APIs with retained-source checks. They do not
+qualify full LoHalo RGB sampling, general filtered-channel appearance or broader
+text/source admission. Independent GIMP captures are recorded separately from
+deferred PhotoCraft tests.
 Modern raster composition Properties offers captured Edit/Apply/Reset with
 explicit supported spaces/operators and read-only retained Auto resolution.
 Source Details includes saved channels,

@@ -520,4 +520,4 @@ fn render_color_execution(
 
 #[path = "gimp_configured_color_candidate/owned.rs"]
 mod owned;
-pub use owned::{OwnedConfiguredColorCandidate, prepare_owned_color_candidate};
+pub use owned::{OwnedConfiguredColorCandidate, prepare_owned_color_candidate, prepare_retained_color_candidate, prepare_profile_owned_color_candidate};

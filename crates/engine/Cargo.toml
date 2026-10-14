@@ -12,6 +12,7 @@ workspace = true
 corpus = []
 
 [dependencies]
+sha2 = "0.10"
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 photocraft-cms = { workspace = true }
@@ -46,7 +47,6 @@ same-file = "1.0"
 
 [dev-dependencies]
 photocraft-xcf = { workspace = true }
-sha2 = "0.10"
 photocraft-affinity = { workspace = true, features = ["synth"] }
 # Synthetic camera raw files for the open tests.
 photocraft-raw = { workspace = true, features = ["testgen"] }

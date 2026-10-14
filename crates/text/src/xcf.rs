@@ -12,8 +12,11 @@ use skrifa::{
     outline::{DrawSettings, OutlinePen},
 };
 mod config;
+pub mod fixed_box_candidate;
 pub mod outline;
+pub mod outline_binary_candidate;
 mod rectilinear;
+pub mod runtime_font_input;
 pub mod underline;
 pub mod unit_layout;
 pub mod unit_outline;
