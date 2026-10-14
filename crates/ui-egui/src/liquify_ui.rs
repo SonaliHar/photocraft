@@ -916,7 +916,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if let Some((subtract, pts)) = &d.lasso
             && pts.len() > 1
         {
-            let color = if *subtract { t.accent } else { t.danger };
+            let color = if *subtract { t.editing_accent() } else { t.danger };
             let line: Vec<Pos2> = pts.iter().map(|p| to_screen(d, area, *p)).collect();
             clip.add(egui::Shape::line(line, Stroke::new(1.0, color)));
         }

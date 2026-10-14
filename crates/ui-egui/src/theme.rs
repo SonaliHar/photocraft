@@ -202,6 +202,11 @@ impl Tokens {
         [Color32::from_black_alpha(160), Color32::from_white_alpha(235)]
     }
 
+    /// Editing overlays retain the tool colour while standard-dark chrome uses the suite accent.
+    pub(crate) fn editing_accent(&self) -> Color32 {
+        if self.kind == ThemeKind::Pro { Color32::from_rgb(55, 142, 240) } else { self.accent }
+    }
+
     pub fn for_kind(kind: ThemeKind) -> Self {
         let mut t = Self::original_for_kind(kind);
         if kind == ThemeKind::Pro {
@@ -1124,6 +1129,7 @@ mod tests {
         assert_eq!(dark.text_faint, roles.text_disabled);
         assert_eq!(dark.icon, roles.text);
         assert_eq!(dark.accent, roles.accent);
+        assert_eq!(dark.editing_accent(), Color32::from_rgb(55, 142, 240));
         assert_eq!(dark.accent_soft, roles.selection);
         assert_eq!(dark.accent_border, roles.focus);
         assert_eq!(dark.separator, roles.border);
@@ -1142,6 +1148,7 @@ mod tests {
         );
         for kind in ThemeKind::ALL.into_iter().filter(|kind| *kind != ThemeKind::Pro) {
             assert_eq!(Tokens::for_kind(kind), Tokens::original_for_kind(kind), "{kind:?}");
+            assert_eq!(Tokens::for_kind(kind).editing_accent(), Tokens::original_for_kind(kind).accent, "{kind:?}");
         }
     }
 

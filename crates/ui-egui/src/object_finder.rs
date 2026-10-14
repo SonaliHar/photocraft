@@ -197,7 +197,7 @@ pub(crate) fn draw(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXf
     let Some(f) = app.object_finder.as_mut() else { return };
     let key = Arc::as_ptr(&r) as usize;
     if f.texture.as_ref().is_none_or(|(k, _)| *k != key) {
-        let accent = crate::theme::Tokens::get(&ctx).accent;
+        let accent = crate::theme::Tokens::get(&ctx).editing_accent();
         let tex = ctx.load_texture("object-finder", overlay_image(&r, accent), TextureOptions::LINEAR);
         f.texture = Some((key, tex));
     }
