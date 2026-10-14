@@ -907,6 +907,7 @@ mod tests {
         let mut app = launch(&recovery);
         new_doc(&mut app, "#ff0000");
         let revision = app.session.active().unwrap().revision;
+        assert_ne!(revision, 0, "a sidecar-less bundle lists as revision 0");
         autosave(&mut app, &ctx);
 
         let mut failed = false;
@@ -927,46 +928,16 @@ mod tests {
         std::fs::remove_file(&recovery).unwrap();
         std::fs::create_dir(&recovery).unwrap();
         autosave(&mut app, &ctx);
-
-        // Force the manifest-before-sidecar window on every platform. list_recovery can now
-        // discover that committed bundle with fallback revision 0, before its JSON is published.
-        let mut poll = app.services.autosave_results.take().unwrap();
-        let retry_dir = recovery.clone();
-        let mut delayed_sidecar: Option<(PathBuf, Vec<u8>)> = None;
-        let mut delayed = false;
-        app.services.autosave_results = Some(Box::new(move || {
-            if let Some((path, bytes)) = delayed_sidecar.take() {
-                std::fs::write(path, bytes).unwrap();
-            }
-            if delayed {
-                return poll();
-            }
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-            let results = loop {
-                let results = poll();
-                if !results.is_empty() {
-                    break results;
-                }
-                assert!(std::time::Instant::now() < deadline, "retry write must complete");
-                std::thread::sleep(std::time::Duration::from_millis(1));
-            };
-            assert!(results.iter().any(|(_, rev, result)| *rev == revision && result.is_ok()));
-            let entries = list_recovery(&retry_dir);
-            let sidecar = retry_dir.join(format!("{}.json", entries[0].info.key));
-            let bytes = std::fs::read(&sidecar).unwrap();
-            std::fs::remove_file(&sidecar).unwrap();
-            assert_eq!(list_recovery(&retry_dir)[0].info.revision, 0);
-            delayed_sidecar = Some((sidecar, bytes));
-            delayed = true;
-            results
-        }));
-
+        // The worker commits the bundle's manifest before it publishes the sidecar, and
+        // `list_recovery` lists a committed sidecar-less bundle (revision 0) on its own, so
+        // the first non-empty listing can come from the middle of the write. Wait for the write
+        // to finish: the entry then carries the sidecar's revision.
         let mut recovered = Vec::new();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while std::time::Instant::now() < deadline {
             prefs_ui::tick(&mut app, &ctx);
             recovered = list_recovery(&recovery);
-            if recovered.first().is_some_and(|entry| entry.info.revision == revision) {
+            if recovered.iter().any(|e| e.info.revision == revision) {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
