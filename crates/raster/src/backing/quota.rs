@@ -41,6 +41,7 @@ impl std::error::Error for QuotaError {}
 #[derive(Debug)]
 struct State {
     limits: QuotaLimits,
+    aggregate_limit: Option<u64>,
     used: QuotaUsage,
     failed: bool,
 }
@@ -55,9 +56,46 @@ pub struct QuotaLease {
     bytes: u64,
 }
 
+/// Fixed initial reservations, refunded on drop. This is allocation accounting,
+/// not evidence of the origin, validity or authority of any associated payload.
+/// Keep associated storage alive no longer than this non-cloneable owner.
+#[derive(Debug)]
+pub struct QuotaBaseline {
+    _index: QuotaLease,
+    _resident: QuotaLease,
+    _scratch: QuotaLease,
+}
+
 impl BackingQuota {
     pub fn new(limits: QuotaLimits) -> Self {
-        Self { state: Arc::new(Mutex::new(State { limits, used: QuotaUsage::default(), failed: false })) }
+        Self { state: Arc::new(Mutex::new(State { limits, aggregate_limit: None, used: QuotaUsage::default(), failed: false })) }
+    }
+    /// Known Mutex/State size plus a conservative 128-byte reservation for Arc
+    /// counters, allocation alignment and allocator metadata. This is a logical
+    /// envelope, not a measurement of private allocator storage or process RSS.
+    pub const fn aggregate_header_bytes() -> u64 {
+        std::mem::size_of::<Mutex<State>>() as u64 + 128
+    }
+    /// Opt-in aggregate admission. `initial.resident` already includes index;
+    /// aggregate usage is resident + scratch, never resident + index + scratch.
+    /// Header ownership remains charged until the last ledger owner is dropped.
+    /// All checks precede the one new Arc allocation. Arc allocation itself uses
+    /// the standard allocator and is not made fallible by this accounting API.
+    /// Aggregate denial uses `LimitExceeded(Resident)`; limits are never raised.
+    pub fn new_with_aggregate_initial(limits: QuotaLimits, aggregate_limit: u64, initial: QuotaUsage) -> Result<(Self, QuotaBaseline), QuotaError> {
+        let resident = initial.resident.checked_sub(initial.index).ok_or(QuotaError::Invariant)?;
+        let header = Self::aggregate_header_bytes();
+        let used = added(QuotaUsage::default(), limits, Some(aggregate_limit), QuotaKind::Index, header)?;
+        let used = added(used, limits, Some(aggregate_limit), QuotaKind::Index, initial.index)?;
+        let used = added(used, limits, Some(aggregate_limit), QuotaKind::Resident, resident)?;
+        let used = added(used, limits, Some(aggregate_limit), QuotaKind::Scratch, initial.scratch)?;
+        let quota = Self { state: Arc::new(Mutex::new(State { limits, aggregate_limit: Some(aggregate_limit), used, failed: false })) };
+        let baseline = QuotaBaseline {
+            _index: QuotaLease { quota: quota.clone(), kind: QuotaKind::Index, bytes: initial.index },
+            _resident: QuotaLease { quota: quota.clone(), kind: QuotaKind::Resident, bytes: resident },
+            _scratch: QuotaLease { quota: quota.clone(), kind: QuotaKind::Scratch, bytes: initial.scratch },
+        };
+        Ok((quota, baseline))
     }
     /// Runtime owner identity only; equal limits do not imply the same ledger.
     pub fn shares_ledger(&self, other: &Self) -> bool {
@@ -76,12 +114,12 @@ impl BackingQuota {
             if state.failed {
                 return Err(QuotaError::Invariant);
             }
-            state.used = added(state.used, state.limits, kind, bytes)?;
+            state.used = added(state.used, state.limits, state.aggregate_limit, kind, bytes)?;
         }
         Ok(QuotaLease { quota: self.clone(), kind, bytes })
     }
 }
-fn added(mut used: QuotaUsage, limits: QuotaLimits, kind: QuotaKind, bytes: u64) -> Result<QuotaUsage, QuotaError> {
+fn added(mut used: QuotaUsage, limits: QuotaLimits, aggregate_limit: Option<u64>, kind: QuotaKind, bytes: u64) -> Result<QuotaUsage, QuotaError> {
     match kind {
         QuotaKind::Resident => used.resident = used.resident.checked_add(bytes).ok_or(QuotaError::Overflow)?,
         QuotaKind::Scratch => used.scratch = used.scratch.checked_add(bytes).ok_or(QuotaError::Overflow)?,
@@ -98,6 +136,11 @@ fn added(mut used: QuotaUsage, limits: QuotaLimits, kind: QuotaKind, bytes: u64)
     }
     if used.index > limits.index {
         return Err(QuotaError::LimitExceeded(QuotaKind::Index));
+    }
+    if let Some(limit) = aggregate_limit {
+        if used.resident.checked_add(used.scratch).ok_or(QuotaError::Overflow)? > limit {
+            return Err(QuotaError::LimitExceeded(QuotaKind::Resident));
+        }
     }
     Ok(used)
 }
@@ -127,7 +170,7 @@ impl QuotaLease {
             return Err(QuotaError::Invariant);
         }
         let next = if new_bytes >= self.bytes {
-            added(state.used, state.limits, self.kind, new_bytes - self.bytes)?
+            added(state.used, state.limits, state.aggregate_limit, self.kind, new_bytes - self.bytes)?
         } else {
             removed(state.used, self.kind, self.bytes - new_bytes)?
         };
@@ -154,6 +197,9 @@ impl Drop for QuotaLease {
         }
     }
 }
+#[cfg(test)]
+#[path = "quota_aggregate_tests.rs"]
+mod aggregate_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
