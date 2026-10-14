@@ -32,6 +32,8 @@ pub enum Kernel {
     /// Transparent fill (no draw).
     Clear,
     Content,
+    /// Raster content and its final blend, without an intermediate content texture.
+    ContentBlend,
     Mask,
     Blend,
     Atop,
@@ -71,6 +73,7 @@ impl Kernel {
         Some(match self {
             Kernel::Clear | Kernel::CopyRect | Kernel::CopyFull => return None,
             Kernel::Content => "fs_content",
+            Kernel::ContentBlend => "fs_content_blend",
             Kernel::Mask => "fs_mask",
             Kernel::Blend => "fs_blend",
             Kernel::Atop => "fs_atop",
@@ -111,8 +114,9 @@ impl Kernel {
     }
 
     /// Every kernel with a pipeline.
-    pub const DRAWN: [Kernel; 21] = [
+    pub const DRAWN: [Kernel; 22] = [
         Kernel::Content,
+        Kernel::ContentBlend,
         Kernel::Mask,
         Kernel::Blend,
         Kernel::Atop,
@@ -328,10 +332,16 @@ impl<'a> DocCtx<'a> {
 
 /// Build the pass list for `doc`.
 pub fn plan(doc: &Document) -> Result<Plan<'_>, Unsupported> {
+    plan_with_raster_fusion(doc, true)
+}
+
+/// Half-float accumulators keep the separate Content pass to preserve its storage rounding
+/// without requiring optional half-float shader instructions on the device.
+pub(crate) fn plan_with_raster_fusion(doc: &Document, raster_fusion: bool) -> Result<Plan<'_>, Unsupported> {
     if doc.mode == photocraft_color::ColorMode::Multichannel {
         return Err(Unsupported("Multichannel inks (printed on the CPU)".into()));
     }
-    let mut p = Planner::new(DocCtx::of(doc));
+    let mut p = Planner::new(DocCtx::of(doc), raster_fusion);
     let root = p.clear();
     // Start at the topmost layer that hides everything beneath it (an opaque fill layer): the
     // layers below can't change the result, so they cost no passes or uploads.
@@ -341,6 +351,7 @@ pub fn plan(doc: &Document) -> Result<Plan<'_>, Unsupported> {
 }
 
 struct Planner<'a> {
+    raster_fusion: bool,
     passes: Vec<Pass<'a>>,
     free: Vec<Slot>,
     refs: Vec<u32>,
@@ -436,8 +447,8 @@ pub const INIT_OUTLINE: i32 = 7;
 pub const SHAPE_MAP: usize = usize::MAX;
 
 impl<'a> Planner<'a> {
-    fn new(cx: DocCtx<'a>) -> Self {
-        Planner { passes: Vec::new(), free: Vec::new(), refs: Vec::new(), cx, fx: Vec::new(), checkpoints: Vec::new() }
+    fn new(cx: DocCtx<'a>, raster_fusion: bool) -> Self {
+        Planner { raster_fusion, passes: Vec::new(), free: Vec::new(), refs: Vec::new(), cx, fx: Vec::new(), checkpoints: Vec::new() }
     }
 
     fn finish(self, root: Slot) -> Plan<'a> {
@@ -759,6 +770,19 @@ impl<'a> Planner<'a> {
                 self.check_advanced(c, &[])?;
             }
             return Ok(backdrop);
+        }
+        // Fuse only dense raster content with no clipping unit. Sparse layers keep their
+        // scissored content/blend/copy-back path; other content retains its existing planner.
+        if self.raster_fusion && matches!(layer.content, LayerContent::Raster(_)) && clipped.is_empty() && clip.is_none() {
+            let mut p = self.content_pass(layer)?;
+            p.kernel = Kernel::ContentBlend;
+            p.a = Some(backdrop);
+            p.mode = layer.blend;
+            p.opacity = layer.opacity;
+            p.fill = layer.fill_opacity;
+            p.flags = gamma_flag(layer);
+            p.extra[3] = photocraft_compose::text_gamma(layer);
+            return Ok(self.emit(p));
         }
         let start = self.passes.len();
         let mut content = self.content(layer)?;
@@ -1915,6 +1939,53 @@ mod tests {
     }
 
     #[test]
+    fn dense_rasters_fuse_content_and_blend_without_losing_checkpoints() {
+        let mut d = Document::new("fused", Size::new(64, 48), ColorMode::Rgb, SampleType::U8);
+        for i in 0..3 {
+            let mut layer = Layer::raster(format!("layer {i}"), d.pixel_format());
+            layer.surface_mut().unwrap().fill_rect(d.bounds(), &[0.2, 0.4, 0.6, 0.7]);
+            layer.opacity = 0.6;
+            layer.fill_opacity = 0.8;
+            d.layers.push(layer);
+        }
+        let p = plan(&d).unwrap();
+        assert_eq!(p.passes.len(), 4);
+        assert_eq!(p.passes[0].kernel, Kernel::Clear);
+        assert!(p.passes[1..].iter().all(|p| p.kernel == Kernel::ContentBlend && p.b.is_none()));
+        assert!(p.slots <= 2);
+        assert_eq!(p.checkpoints.iter().map(|c| c.pass_end).collect::<Vec<_>>(), vec![2, 3, 4]);
+        let unfused = plan_with_raster_fusion(&d, false).unwrap();
+        assert_eq!(unfused.passes.len(), 7);
+        assert!(!unfused.passes.iter().any(|p| p.kernel == Kernel::ContentBlend));
+        assert_eq!(unfused.checkpoints.iter().map(|c| c.pass_end).collect::<Vec<_>>(), vec![3, 5, 7]);
+        for pass in &p.passes[1..] {
+            assert_ne!(pass.a, Some(pass.dst), "a render target cannot be its sampled backdrop");
+            assert_eq!((pass.opacity, pass.fill), (0.6, 0.8));
+        }
+        // Even an invisible clipping child keeps the original clipping-unit path. This
+        // exercises the unfused reference used by the GPU equivalence regression.
+        let mut hidden = Layer::raster("hidden clip", d.pixel_format());
+        hidden.clipped = true;
+        hidden.visible = false;
+        d.layers.push(hidden);
+        let p = plan(&d).unwrap();
+        assert_eq!(p.passes.iter().filter(|p| p.kernel == Kernel::ContentBlend).count(), 2);
+        assert_eq!(p.passes.last().unwrap().kernel, Kernel::Blend);
+    }
+
+    #[test]
+    fn sparse_rasters_keep_scissored_content_and_copy_back() {
+        let mut d = Document::new("sparse", Size::new(64, 48), ColorMode::Rgb, SampleType::U8);
+        let mut layer = Layer::raster("small", d.pixel_format());
+        let r = Rect::new(10, 12, 20, 30);
+        layer.surface_mut().unwrap().fill_rect(r, &[0.2, 0.4, 0.6, 0.7]);
+        d.layers.push(layer);
+        let p = plan(&d).unwrap();
+        assert_eq!(p.passes.iter().map(|p| p.kernel).collect::<Vec<_>>(), vec![Kernel::Clear, Kernel::Content, Kernel::Blend, Kernel::CopyRect]);
+        assert!(p.passes[1..].iter().all(|p| p.clip == Some(r)));
+    }
+
+    #[test]
     fn slots_are_recycled() {
         let mut d = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
         for i in 0..10 {
@@ -1922,14 +1993,14 @@ mod tests {
         }
         let p = plan(&d).unwrap();
         // Empty layers draw nothing.
-        assert_eq!(p.passes.len(), 1 + 2);
+        assert_eq!(p.passes.len(), 1 + 1);
         for (i, l) in d.layers.iter_mut().skip(1).enumerate() {
             l.surface_mut().unwrap().fill_rect(Rect::new(i as i32 % 4, 0, 4, 8), &[0.0, 0.0, 1.0, 1.0]);
         }
         let p = plan(&d).unwrap();
         assert!(p.slots <= 3, "{} slots", p.slots);
         // The background, then each small layer over its bounds and copied back.
-        assert_eq!(p.passes.len(), 1 + 2 + 10 * 3);
+        assert_eq!(p.passes.len(), 1 + 1 + 10 * 3);
     }
 
     #[test]

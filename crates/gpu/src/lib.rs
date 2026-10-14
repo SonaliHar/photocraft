@@ -755,7 +755,7 @@ impl Compositor {
     /// Bytes of the layer pages a render of `region` needs resident (each layer and mask
     /// surface's tiles within the region's page cells, in their texture format).
     pub fn working_set(&self, doc: &Document, region: Rect) -> u64 {
-        let Ok(plan) = plan(doc) else { return 0 };
+        let Ok(plan) = plan::plan_with_raster_fusion(doc, self.acc_format != wgpu::TextureFormat::Rgba16Float) else { return 0 };
         let grid = tile_grid(doc.bounds());
         let cells = grid_rects(region.intersect(&doc.bounds()), self.page)
             .into_iter()
@@ -795,7 +795,7 @@ impl Compositor {
     /// limit are fine: surfaces are stored in page-sized textures and effect maps of regions
     /// larger than the limit are built per page cell.
     pub fn supports(&self, doc: &Document) -> Result<(), Unsupported> {
-        let p = plan(doc)?;
+        let p = plan::plan_with_raster_fusion(doc, self.acc_format != wgpu::TextureFormat::Rgba16Float)?;
         self.check_fx(doc, &p)
     }
 
@@ -991,7 +991,7 @@ impl Compositor {
     ) -> Result<Stats, Unsupported> {
         let canvas = doc.bounds();
         let region = region.intersect(&canvas);
-        let plan = plan(doc)?;
+        let plan = plan::plan_with_raster_fusion(doc, self.acc_format != wgpu::TextureFormat::Rgba16Float)?;
         self.check_fx(doc, &plan)?;
         self.pattern_mode = doc.pixel_format().mode;
         let mut stats = Stats { passes: plan.passes.len(), slots: plan.slots, ..Default::default() };

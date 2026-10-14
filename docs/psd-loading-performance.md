@@ -77,3 +77,20 @@ PsdFile API and upstream depth-specific global-layer precedence are preserved.
 Current upstream already has GPU Navigator reuse (#4518), including initial GPU waiting;
 that item needs no duplicate implementation here. Broad corpus/lint/wasm/UI gates remain
 pending.
+
+## Raster pass fusion
+
+Dense raster layers without clipping units now combine content/mask sampling and final
+blend in one pass. Sparse layers, effects, groups and clipping keep their prior paths.
+Full-float accumulation uses the fused path; half-float accumulation deliberately preserves
+separate passes and their intermediate rounding without requiring optional shader features.
+
+Adjacent Linux comparison: three-layer198.4→193.0ms; complex113.0→111.4ms.
+The dense fixture changes from7to4plannedpasses with unchanged source uploads. See
+`perf/experiments/psd-open-linux-fusion.json`. All GPU unit/integration tests pass, including
+fused/unfused masks/blends/depths and half-float fallback. The submission-pressure regression
+uses1,100layers so that the new fused plan still crosses the1,000operation submission limit;
+CPU parity, one-chunk and forced-flush assertions are retained.
+
+The PSD and IO packages also pass their corpus-enabled suites on the borrowed-import
+checkpoint:401PSD and590IO tests, no failures.
