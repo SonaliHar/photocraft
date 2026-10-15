@@ -29,6 +29,8 @@ use photocraft_raster::backing::{
 mod empty;
 #[path = "backed_stock_point_hue_chroma.rs"]
 mod owned_hue;
+#[path = "backed_stock_point_vibrance.rs"]
+mod owned_vibrance;
 
 #[derive(Clone, Copy)]
 enum Recipe {
@@ -196,6 +198,7 @@ fn initial_member(node: &FilterNode, budget: &mut impl PlanBudget, interrupt: &I
             "gegl:color-overlay" => node.operation.schema_epoch == gimp_filters::COLOR_OVERLAY_PRECISION_EPOCH,
             "gimp:semi-flatten" => node.operation.schema_epoch == gimp_filters::SEMI_FLATTEN_EPOCH,
             "gegl:hue-chroma" => node.operation.schema_epoch == crate::gimp_hue_chroma::EPOCH,
+            "gegl:vibrance" => node.operation.schema_epoch == crate::gimp_vibrance::EPOCH,
             "gegl:channel-mixer" => node.operation.schema_epoch == gimp_filters::CHANNEL_MIXER_PRECISION_EPOCH,
             "gegl:mono-mixer" => matches!(
                 node.operation.schema_epoch.as_str(),
@@ -234,6 +237,7 @@ fn initial_member(node: &FilterNode, budget: &mut impl PlanBudget, interrupt: &I
         | crate::gimp_unpremultiply::UNPREMULTIPLY_EPOCH => node.operation.schema_epoch.as_str(),
         gimp_filters::SEMI_FLATTEN_EPOCH => gimp_filters::SEMI_FLATTEN_EPOCH,
         crate::gimp_hue_chroma::EPOCH => crate::gimp_hue_chroma::EPOCH,
+        crate::gimp_vibrance::EPOCH => crate::gimp_vibrance::EPOCH,
         gimp_filters::STACK_EDITS_EPOCH => gimp_filters::STACK_EDITS_EPOCH,
         crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH => crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH,
         crate::gimp_video_degradation::VIDEO_DEGRADATION_OPTIONS_EPOCH => crate::gimp_video_degradation::VIDEO_DEGRADATION_OPTIONS_EPOCH,
@@ -586,6 +590,9 @@ fn prepare_plan<B: PlanBudget>(
         _ => return Err(scope()),
     };
     let stored = doc.sample_encoding.ok_or_else(scope)?;
+    if crate::gimp_vibrance::claims(node) {
+        return owned_vibrance::prepare(doc, supplied, header, extent, format, default, interrupt, budget);
+    }
     if crate::gimp_hue_chroma::claims(node) {
         return owned_hue::prepare(doc, supplied, header, extent, format, default, interrupt, budget);
     }
@@ -1003,3 +1010,7 @@ mod empty_tests;
 #[cfg(test)]
 #[path = "backed_hue_chroma_tests.rs"]
 mod hue_chroma_tests;
+
+#[cfg(test)]
+#[path = "backed_vibrance_tests.rs"]
+mod vibrance_tests;

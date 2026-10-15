@@ -24,6 +24,7 @@ pub mod lut3d;
 pub mod lutfile;
 pub mod math;
 pub mod owned_lab;
+pub mod owned_linear_srgb_lab;
 pub mod pipeline;
 pub mod profile;
 pub mod synth;

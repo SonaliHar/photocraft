@@ -42,21 +42,41 @@ fn poll(c:&Interrupt<'_>)->Result<(),E>{c.check().map_err(|_|E::Cancelled)}
 fn converted(value:[f32;4],alpha:u32)->Result<[f32;4],E>{
  if value.iter().any(|v|!v.is_finite())||value.get(3).is_none_or(|v|v.to_bits()!=alpha){return Err(E::InvalidSample);}Ok(value)
 }
+/// Explicit Linear RGB Float stage, without source/profile authority. Public
+/// observations establish exact scale-one identity at this boundary. This is
+/// not a whole-Vibrance shortcut: physical LCh conversion still follows it.
+/// Other scales retain the existing Native-choice Saturation arithmetic.
+pub fn saturation_linear_float(input: [f32; 4], saturation: f64) -> Result<[f32; 4], E> {
+    if !saturation.is_finite() || !(0.0..=10.0).contains(&saturation) {
+        return Err(E::UnsupportedConversion);
+    }
+    if input.iter().any(|value| !value.is_finite() || !(0.0..=1.0).contains(value)) {
+        return Err(E::InvalidSample);
+    }
+    if saturation == 1.0 {
+        return Ok(input);
+    }
+    let mut output = [0.0f64; 4];
+    PointOperation::Saturation { scale: saturation, colorspace: 0 }.try_eval_pixel(&input.map(f64::from), 3, &mut output)?;
+    let [_, _, _, alpha] = input;
+    converted(output.map(|value| value as f32), alpha.to_bits())
+}
 /// Fixed private scratch only. Conversion requirements must be admitted by the
 /// enclosing caller before invoking this function; cancellation spans both stages.
 /// Selected RGB input is finite unit; intermediate/output RGB may be finite HDR.
 /// Alpha, including signed zero, is never arithmetically changed.
 pub fn evaluate(input:[f32;4],p:Parameters,actual:Context,conversions:&impl FloatConversions,c:&Interrupt<'_>)->Result<[f32;4],E>{
  poll(c)?;validate(p,actual)?;if conversions.context()!=actual{return Err(E::UnsupportedConversion);}
- if input.iter().any(|v|!v.is_finite()||!(0.0..=1.0).contains(v)){return Err(E::InvalidSample);}
  let [_,_,_,alpha]=input;
- let mut saturation=[0.0f64;4];
- PointOperation::Saturation{scale:p.saturation,colorspace:0}.try_eval_pixel(&input.map(f64::from),3,&mut saturation)?;
- let saturation=converted(saturation.map(|v|v as f32),alpha.to_bits())?;
+ let saturation=saturation_linear_float(input,p.saturation)?;
  poll(c)?;let lch=converted(conversions.rgb_to_lch(saturation,c)?,alpha.to_bits())?;
  let lch=hue_chroma::evaluate_lch_float(lch,hue_chroma::Parameters{hue:0.0,chroma:p.vibrance,lightness:0.0})?;
  poll(c)?;let output=converted(conversions.lch_to_rgb(lch,c)?,alpha.to_bits())?;poll(c)?;Ok(output)
 }
+
+#[cfg(test)]
+#[path = "point_vibrance_identity_tests.rs"]
+mod identity_tests;
 
 #[cfg(test)]
 mod tests {

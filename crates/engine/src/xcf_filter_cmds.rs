@@ -650,6 +650,12 @@ fn set_wire(value:&Value,depth:usize,nodes:&mut usize,bytes:&mut usize)->Result<
     }
     Ok(())
 }
+pub(crate) fn vibrance_node(node:&photocraft_doc::xcf_filters::FilterNode)->bool{
+    node.operation.name=="gegl:vibrance" && node.operation.stored_version=="0:0" && node.operation.schema_epoch==photocraft_compose::VIBRANCE_EPOCH && node.composition.as_ref().is_some_and(|p|p.compatibility_epoch==photocraft_compose::VIBRANCE_EPOCH)
+}
+pub(crate) fn vibrance_owner(owner:&photocraft_doc::accounted_document::AccountedDocument)->bool{
+    owner.is_readonly_point_storage() && owner.document().xcf_state.as_ref().is_some_and(|state|matches!(state.filter_stacks.as_slice(),[stack] if matches!(stack.nodes.as_slice(),[node] if vibrance_node(node))))
+}
 pub(crate) fn hue_chroma_node(node:&photocraft_doc::xcf_filters::FilterNode)->bool{
     node.operation.name=="gegl:hue-chroma" && node.operation.stored_version=="0:0" && node.operation.schema_epoch==photocraft_compose::HUE_CHROMA_EPOCH && node.composition.as_ref().is_some_and(|p|p.compatibility_epoch==photocraft_compose::HUE_CHROMA_EPOCH)
 }

@@ -1014,3 +1014,41 @@ F64 primary captures are stable; separate default-space graph diagnostics can
 still vary. ICC date bytes, profile roles, physical padding/default identity and
 internal rounding positions remain explicit evidence limits. Regression drafts
 and all numerical, native workflow, visual and performance acceptance are deferred.
+
+
+Owned `gegl:vibrance` / `0:0` uses the separate
+`xcf22-gegl-vibrance-linear-lch-float-v1` epoch. Its first source/current role is
+implicit RGB nonlinear F32/650 or F64/750, an 8x6 native drawable/canvas at the
+origin, original ICC absent and finite unit native RGBA. Source admission keeps
+the observed enabled singleton Replace62/unit/clip0/region0/no-auxiliary envelope,
+visible unit-opacity layer, same-depth numeric-zero selection mask, and three
+present opaque raw policy words under its own compatibility policy. Stored
+`vibrance` [-100,100] and `saturation` [0,10] are exact F32 arguments.
+
+The declared recipe converts wide native NL RGB to Linear Float, applies the
+Saturation stage, then separately owned Linear-sRGB physical Lab/LCh Float and
+Hue-Chroma(chroma=vibrance), inverse Linear RGB Float, NL transfer and final RGB
+Float. Generated Float alpha survives; finite signed/HDR intermediates and output
+are retained without unit clamp. Exactly unit saturation copies its validated
+Float stage; the active operation still runs every conversion and Hue stage.
+Other scalar Saturation arithmetic remains the existing compatibility formula.
+Neutral and zero/full-alpha enabled cases never bypass the complete recipe.
+Disabled identity still requires full input/default/profile/mask proof.
+
+The fixed Linear CMS constructor has a distinct correctly typed owner and no
+nonlinear-encoding alias. Combined actual profile/Parts/transfer/holder/Stage
+peaks, constructor work, pipeline-derived work, saturation/polar/narrowing and
+scratch are independently prepaid on one caller ledger. The full phase fee
+survives with its owners; generic resident routes cannot construct unpaid Parts.
+Existing set/enable/readonly supported metadata/reorder/remove/native continuation
+keep complete staged validation and publication fences. Direct compound metadata
+and Move remain closed; removal reuses only the narrow derived-current empty role.
+
+Public graph observations establish the ordered Saturation-to-Hue chain for the
+controls, not exact scalar/FMA/Babl conversion. Both F32 and F64 producer primary
+outputs vary author-to-fresh, including visible F32 differences about 0.2382684
+in the extreme control and about 0.0236765 in another control; fresh/repeat primary
+captures match. Old 9x7 HDR-native and U8 files remain separate refusal references.
+ICC date bytes, profile/diagnostic roles, precision and physical default/padding
+identity remain HOLD. All regression, numerical, native workflow, visual and
+performance acceptance remains deferred.

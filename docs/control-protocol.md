@@ -2165,3 +2165,28 @@ GIMP F32 author/fresh projection/merged differences about 0.5086223 and separate
 profile/rounding/default-space graph limits remain HOLD. No numerical acceptance
 or tolerance waiver follows from source transport or a matching standalone graph.
 All new regression and native/widget workflows remain UNRUN and uncompiled.
+
+
+Owned Vibrance continuation uses the existing filter wire commands under exact
+`gegl:vibrance` / `0:0` and `xcf22-gegl-vibrance-linear-lch-float-v1`. The initial
+actual Point role is implicit RGB nonlinear F32/650 or F64/750, original ICC
+absent, 8x6 native/canvas at the origin and finite unit native RGBA. Its separate
+source/current Replace policy and full current/staged proof remain mandatory.
+Exactly two unique arguments use `Number.Float32Bits`: `vibrance` [-100,100] and
+`saturation` [0,10]. Saturation is a scale with default1, without percent or F64
+aliases. Bounded controls combine changed arguments and activation atomically;
+exact raw no-ops retain existing history rules.
+
+Registered readonly name/visibility/unit-opacity edits (including combined
+supported fields), singleton reorder/remove, inspection and native `.pcraft`
+save/reopen retain all existing source/history/view/channel/journal/reply fences.
+The direct compound metadata API and Move remain closed. Removed-empty uses the
+existing narrow derived-current role without inventing original-XCF provenance.
+
+The paid recipe separately owns NL/Linear transfer and actual Linear physical
+Lab/LCh conversion. It preserves generated Float alpha and finite HDR output.
+Exact saturation1 is a stage identity; the full active operation still converts.
+Old HDR-native/U8 inputs are refusal references, not unit-source evidence. Strong
+F32 and smaller F64 author/fresh producer differences, scalar rounding, profile,
+padding and Babl conversion limits remain HOLD; no tolerance or numerical
+acceptance follows from public graph equality. New workflows remain UNRUN.

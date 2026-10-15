@@ -219,3 +219,15 @@ schedule; callers debit it before evaluation in addition to native/coverage work
 `Pipeline::retained_bytes_with_control` and
 `evaluation_work_units_with_control` expose bounded capacity and evaluation
 facts. Existing transform constructors and cached transform behavior are unchanged.
+
+`owned_linear_srgb_lab` is a separate fixed Linear-sRGB preparation path for
+explicit Linear intermediates. It takes no caller profile or encoding flag:
+the actual source definition is `Builtin::LinearSrgb`, with independently owned
+LabD50 and physical side pipelines. Its constant `planning_work_ceiling()`
+initializes no profile. Fixed builtin initialization remains process-global;
+after that boundary, requirements traverse borrowed inputs without creating
+prepared job owners. Reserve the full reported peak and prepay construction
+work before `construct_with_control`; keep the fee with every returned owner.
+The existing `Parts` composite work field retains its meaning. Point callers
+derive and charge their own actual direction, transfer and stage work instead.
+This API grants no document/source/profile equivalence or numerical acceptance.

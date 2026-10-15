@@ -104,6 +104,8 @@ pub use gimp_filters::SEMI_FLATTEN_EPOCH;
 mod gimp_semi_flatten;
 mod gimp_hue_chroma;
 pub use gimp_hue_chroma::EPOCH as HUE_CHROMA_EPOCH;
+mod gimp_vibrance;
+pub use gimp_vibrance::EPOCH as VIBRANCE_EPOCH;
 mod gimp_levels;
 pub mod gimp_link_items;
 pub mod gimp_link_cubic;
