@@ -22,6 +22,7 @@ pub mod backed_document;
 pub mod backed_normal;
 pub mod backed_normal_stack;
 pub mod backed_point_filter;
+pub mod backed_point;
 pub mod backed_threshold;
 pub mod backed_threshold_context;
 pub mod backed_threshold_document;

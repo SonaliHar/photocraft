@@ -24,6 +24,8 @@ mod component_extract;
 mod saturation;
 #[path = "point_temperature.rs"]
 mod temperature;
+#[path = "point/native_pixel.rs"]
+mod native_pixel;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PointOperation {
@@ -718,26 +720,7 @@ pub fn try_apply(
     control: &Interrupt<'_>,
 ) -> Result<Surface, RasterInputError> {
     let prepared = operation.prepare()?;
-    let changes_alpha = matches!(
-        operation,
-        PointOperation::AlphaClipFinitePrecision { clip_low: true, .. }
-            | PointOperation::AlphaClipFinitePrecision { clip_high: true, .. }
-            | PointOperation::AlphaClipPrecision { clip_low: true, .. }
-            | PointOperation::AlphaClipPrecision { clip_high: true, .. }
-            | PointOperation::ThresholdAlpha { .. }
-            | PointOperation::ChannelMixer { .. }
-            | PointOperation::MonoMixerSigned { .. }
-            | PointOperation::RedEyeRemoval { .. }
-            | PointOperation::ColorOverlay { .. }
-            | PointOperation::ColorToAlpha { .. }
-            | PointOperation::ComponentExtract { .. }
-    );
-    if changes_alpha && !source.format().alpha {
-        return Err(RasterInputError::UnsupportedConversion);
-    }
-    if !matches!(source.format().mode, photocraft_color::ColorMode::Rgb | photocraft_color::ColorMode::Grayscale) {
-        return Err(RasterInputError::UnsupportedConversion);
-    }
+    prepared.validate_native_format(source.format())?;
     if source.resident_payload_bytes()? > resident_limit.min(photocraft_raster::MAX_CHECKED_RASTER_BYTES) {
         return Err(RasterInputError::LimitExceeded);
     }
@@ -772,45 +755,10 @@ pub fn try_apply(
             if index.is_multiple_of(256) && control.cancelled() {
                 return Err(RasterInputError::Cancelled);
             }
-            let colors = format.mode.color_channels();
-            let mut input = [0.0; 4];
-            for (channel, value) in input.iter_mut().take(colors).enumerate() {
-                *value = try_read_sample_f64(pixel, format.sample, channel).map_err(|_| RasterInputError::InvalidSample)?;
-            }
-            let count = if changes_alpha {
-                *input.get_mut(colors).ok_or(RasterInputError::LengthMismatch)? =
-                    try_read_sample_f64(pixel, format.sample, colors).map_err(|_| RasterInputError::InvalidSample)?;
-                colors.checked_add(1).ok_or(RasterInputError::LengthMismatch)?
-            } else {
-                colors
-            };
-            let mut output = [0.0; 4];
-            prepared.try_eval_pixel(
-                input.get(..count).ok_or(RasterInputError::LengthMismatch)?,
-                colors,
-                output.get_mut(..count).ok_or(RasterInputError::LengthMismatch)?,
-            )?;
-            if changes_alpha {
-                try_write_sample_f64(pixel, format.sample, colors, *output.get(colors).ok_or(RasterInputError::LengthMismatch)?)
-                    .map_err(|_| RasterInputError::InvalidSample)?;
-            }
-            // These coupled operations change color and coverage together. Alpha-only
-            // operations retain their original color samples without a conversion round trip.
-            if !changes_alpha
-                || matches!(
-                    operation,
-                    PointOperation::ColorOverlay { .. }
-                        | PointOperation::ChannelMixer { .. }
-                        | PointOperation::MonoMixerSigned { .. }
-                        | PointOperation::RedEyeRemoval { .. }
-                        | PointOperation::ColorToAlpha { .. }
-                        | PointOperation::ComponentExtract { .. }
-                )
-            {
-                for (channel, value) in output.iter().take(colors).enumerate() {
-                    try_write_sample_f64(pixel, format.sample, channel, *value).map_err(|_| RasterInputError::InvalidSample)?;
-                }
-            }
+            let mut staged = [0u8; 40];
+            let target = staged.get_mut(..format.bytes_per_pixel()).ok_or(RasterInputError::LengthMismatch)?;
+            prepared.try_eval_native_pixel(pixel, format, target)?;
+            pixel.copy_from_slice(target);
         }
         out.try_write_interleaved_with(rect, &raw, control)?;
     }
