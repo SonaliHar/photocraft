@@ -2,11 +2,7 @@
 //! Original-source qualification belongs to the typed IO carrier; this stage
 //! independently validates the current assigned profile and complete canvas.
 use super::*;
-use photocraft_compose::{
-    backed_assigned_current_profile::{AssignedCurrentProfileLimits, PreparedAssignedCurrentProfile},
-    backed_document::{BackedDocumentSinkError, PreparedBackedDocument},
-    backed_normal::BackedNormalError,
-};
+use photocraft_compose::backed_normal::BackedNormalError;
 use photocraft_doc::accounted_document::AccountedDocument;
 
 fn render_error(error: BackedNormalError, control: &ReadControl<'_>) -> EngineError {
@@ -25,21 +21,7 @@ fn render_error(error: BackedNormalError, control: &ReadControl<'_>) -> EngineEr
 /// The L1 gate retains all original float/integer geometry epochs and raw
 /// tuples; the compositor independently binds the exact retained ICC definition.
 pub(crate) fn validate_current_analytic_geometry_storage(owner: &AccountedDocument, control: &ReadControl<'_>) -> Result<()> {
-    let profile = PreparedAssignedCurrentProfile::prepare(owner, AssignedCurrentProfileLimits::default(), control).map_err(|e| render_error(e, control))?;
-    let prepared =
-        PreparedBackedDocument::new_accounted_with_assigned_profile(owner, &profile, Default::default(), control).map_err(|e| render_error(e, control))?;
-    prepared
-        .render_bands(owner.document().bounds(), control, |band| -> std::result::Result<(), BackedNormalError> {
-            drop(band);
-            Ok(())
-        })
-        .map_err(|e| match e {
-            BackedDocumentSinkError::Render(e) | BackedDocumentSinkError::Sink(e) => render_error(e, control),
-        })?;
-    drop(prepared);
-    drop(profile);
-    control.check(1)?;
-    Ok(())
+    photocraft_compose::backed_assigned_current::validate_current_assigned_geometry_storage(owner, control).map_err(|error| render_error(error, control))
 }
 impl Session {
     /// Explicit keep-current source handoff. Actual assigned ICC/native/mask

@@ -17,6 +17,7 @@ mod save_journal;
 pub use save_journal::PreparedAccountedSaveReply;
 pub(crate) use save_journal::PreparedSaveJournalWitness;
 mod assigned_mask;
+mod assigned_translate;
 #[path = "imported_accounted_metadata.rs"]
 mod imported_metadata;
 mod imported_translate;

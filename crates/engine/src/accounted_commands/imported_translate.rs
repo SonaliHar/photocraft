@@ -1,4 +1,4 @@
-//! Paid whole-layer CURRENT translation of a closed unmasked imported owner.
+//! Paid CURRENT translation of a closed plain or linked assigned foreground.
 //! Source pixels/locators remain immutable. This grants no new source family.
 use super::*;
 use crate::{
@@ -22,6 +22,34 @@ pub(super) fn candidate(owner: &AccountedDocument) -> bool {
         && owner.document().source_color_context.is_some()
         && owner.document().layers.first().is_some_and(|l| matches!(&l.content, photocraft_doc::LayerContent::BackedRaster(_)))
 }
+#[derive(Clone, Copy)]
+enum MovePolicy {
+    Plain,
+    Assigned,
+}
+impl MovePolicy {
+    fn for_owner(owner: &AccountedDocument) -> Self {
+        if super::assigned_translate::candidate(owner) { Self::Assigned } else { Self::Plain }
+    }
+    fn validate(self, owner: &AccountedDocument, layer: LayerId, dx: i32, dy: i32, c: &ReadControl<'_>) -> Result<()> {
+        match self {
+            Self::Plain => Ok(owner.validate_imported_layer_translation(layer, dx, dy, c)?),
+            Self::Assigned => super::assigned_translate::validate(owner, layer, dx, dy, c),
+        }
+    }
+    fn stage(self, owner: &AccountedDocument, layer: LayerId, dx: i32, dy: i32, c: &ReadControl<'_>) -> Result<AccountedDocument> {
+        match self {
+            Self::Plain => Ok(owner.try_with_imported_layer_translation(layer, dx, dy, c)?),
+            Self::Assigned => super::assigned_translate::stage(owner, layer, dx, dy, c),
+        }
+    }
+    fn current(self, owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<()> {
+        match self {
+            Self::Plain => current(owner, c),
+            Self::Assigned => super::assigned_translate::current(owner, c),
+        }
+    }
+}
 fn wire(session: &Session, p: &Value) -> Result<(i32, i32)> {
     // Existing resident diagnostics format an unknown unit verbatim. Refuse
     // this bounded paid wire before that potentially attacker-sized copy.
@@ -44,10 +72,11 @@ fn wire(session: &Session, p: &Value) -> Result<(i32, i32)> {
     if delta == (0, 0) {
         return Ok(delta);
     }
-    if p.get("target").and_then(Value::as_str).is_some_and(|s| matches!(s, "mask" | "quickMask"))
+    let policy = session.active().and_then(|state| state.doc.accounted()).map(MovePolicy::for_owner).ok_or(BackingError::Unsupported)?;
+    if p.get("target").and_then(Value::as_str).is_some_and(|s| s == "quickMask" || (s == "mask" && !matches!(policy, MovePolicy::Assigned)))
         || p.get("target").and_then(|v| v.get("channel")).and_then(Value::as_u64).is_some()
     {
-        return Err(invalid("owned Move supports unmasked layer pixels only"));
+        return Err(invalid("owned Move supports plain pixels or an assigned linked foreground only"));
     }
     if p.get("layer").and_then(Value::as_str).is_some_and(|s| s.len() > MAX_STRING) {
         return Err(invalid("Move layer name exceeds limit"));
@@ -98,7 +127,7 @@ fn context(session: &Session) -> Result<()> {
 }
 fn target_check(owner: &AccountedDocument, layer: LayerId, c: &ReadControl<'_>) -> Result<()> {
     let access = accounted_layer_access(owner.document(), layer, c)?.ok_or(EngineError::NoLayer(layer))?;
-    if access.layer.mask.is_some() || access.layer.link_group.is_some() {
+    if (access.layer.mask.is_some() && !matches!(MovePolicy::for_owner(owner), MovePolicy::Assigned)) || access.layer.link_group.is_some() {
         return Err(invalid("Move masks and linked-layer expansion are not qualified"));
     }
     if access.layer.effects.reference.is_some() {
@@ -123,8 +152,8 @@ fn view_check(state: &crate::DocState, c: &ReadControl<'_>) -> Result<()> {
     super::imported_metadata::channel_check(&state.channel_view, state.doc.mode.color_channels())?;
     Ok(())
 }
-fn current(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<()> {
-    photocraft_compose::backed_plain_current::validate_current_plain_import_storage(owner, c).map_err(|e| match e {
+pub(super) fn current_error(error: photocraft_compose::backed_normal::BackedNormalError, c: &ReadControl<'_>, context: &str) -> EngineError {
+    match error {
         photocraft_compose::backed_normal::BackedNormalError::Backing(e) => e.into(),
         photocraft_compose::backed_normal::BackedNormalError::View(
             photocraft_raster::checked_view::RasterViewError::Backed(e)
@@ -134,8 +163,12 @@ fn current(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<()> {
         photocraft_compose::backed_normal::BackedNormalError::Quota(_) => BackingError::Quota.into(),
         photocraft_compose::backed_normal::BackedNormalError::Allocation => BackingError::Allocation.into(),
         _ if c.interrupt.cancelled() => EngineError::Cancelled,
-        other => EngineError::Other(format!("owned plain Move current recipe: {other}")),
-    })
+        other => EngineError::Other(format!("{context}: {other}")),
+    }
+}
+fn current(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<()> {
+    photocraft_compose::backed_plain_current::validate_current_plain_import_storage(owner, c)
+        .map_err(|error| current_error(error, c, "owned plain Move current recipe"))
 }
 pub(super) struct Request<'a> {
     layer: Option<LayerId>,
@@ -171,7 +204,7 @@ impl<'a> Request<'a> {
             _ => return Err(invalid("layer must be an identity, bounded name, or null")),
         };
         view_check(state, c)?;
-        owner.validate_imported_layer_translation(layer, dx, dy, c)?;
+        MovePolicy::for_owner(owner).validate(owner, layer, dx, dy, c)?;
         target_check(owner, layer, c)?;
         Ok(Self { layer: Some(layer), dx, dy, key })
     }
@@ -180,7 +213,7 @@ impl<'a> Request<'a> {
         let state = session.active().ok_or(EngineError::NoDocument)?;
         let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
         if self.layer.is_some() {
-            current(owner, c)?;
+            MovePolicy::for_owner(owner).current(owner, c)?;
         }
         let fence = AssignedFence::prepare::<Prepared<'_>>(session, c)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
@@ -237,7 +270,7 @@ impl Prepared<'_> {
     }
 }
 impl Session {
-    /// Typed current-only plain whole-layer Move. An opaque key shares the
+    /// Typed current-only plain or linked assigned-foreground Move. An opaque key shares the
     /// existing document gesture across metadata/Move commands, never grants
     /// source/locator/native pixel authority. No-op/error preserves key and redo.
     pub fn translate_accounted_imported_layer(&mut self, layer: LayerId, dx: i32, dy: i32, key: Option<&str>, c: &ReadControl<'_>) -> Result<()> {
@@ -253,18 +286,19 @@ impl Session {
         let state = self.active_mut().ok_or(EngineError::NoDocument)?;
         let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
         view_check(state, c)?;
-        owner.validate_imported_layer_translation(layer, dx, dy, c)?;
+        MovePolicy::for_owner(owner).validate(owner, layer, dx, dy, c)?;
         target_check(owner, layer, c)?;
         if !state.history.current()?.shares_state(&state.doc) {
             return Err(BackingError::Integrity.into());
         }
-        current(owner, c)?;
-        let staged = owner.try_with_imported_layer_translation(layer, dx, dy, c)?;
+        let policy = MovePolicy::for_owner(owner);
+        policy.current(owner, c)?;
+        let staged = policy.stage(owner, layer, dx, dy, c)?;
         if staged.shares_model(owner) {
             c.check(1)?;
             return Ok(());
         }
-        current(&staged, c)?;
+        policy.current(&staged, c)?;
         let matching = match (key, state._accounted_metadata_gesture.as_ref()) {
             (Some(key), Some(marker)) => marker.matches(key, state.doc.id, owner.quota(), c)?,
             _ => false,

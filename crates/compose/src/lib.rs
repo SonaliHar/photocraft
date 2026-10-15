@@ -20,6 +20,7 @@ pub mod adjust;
 pub mod advanced;
 pub mod backed_document;
 pub mod backed_plain_current;
+pub mod backed_assigned_current;
 pub(crate) mod backed_analytic_geometry;
 pub mod backed_assigned_current_profile;
 pub mod backed_normal;

@@ -1587,3 +1587,17 @@ source pixels, profile and source protection. This path requires synchronous
 dispatch and one selected layer, with no pixel selection, mask, linked-layer
 expansion or effect reference. Native continuation uses the existing current
 descriptor and tile writer. Behavioral tests remain deferred.
+
+For the existing assigned-ICC Normal geometry family, `layer.translate` also
+moves the foreground with its linked mask. The backdrop stays fixed. A linked
+`"target":"mask"` request takes this same whole-layer path, as upstream does;
+disabled linked masks still move. Checked raw mask staging retains complete
+stored tiles and exact defaults under the actual quota and work control.
+Current canonical layer and mask bounds and mask offset move atomically with
+the actual pixels. This current-state synchronization is explicit; ordinary
+resident reconciliation retains declared mask bounds. Original source evidence,
+profile, mask flags and operators remain unchanged. Complete current and staged
+assigned profile/native/mask/canvas validation precedes the shared undo and
+gesture transaction. Independent unlinked-mask, backdrop and group movement
+remain outside this path. These additions have compilation checks only;
+behavioral acceptance is pending.

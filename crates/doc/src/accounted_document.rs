@@ -17,6 +17,8 @@ use std::{
 mod imported_edits;
 #[path = "accounted_imported_translation.rs"]
 mod imported_translation;
+#[path = "accounted_imported_masked_translation.rs"]
+mod imported_masked_translation;
 #[path = "accounted_selection_rehydrate.rs"]
 mod selection_rehydrate;
 #[path = "accounted_filter_readonly.rs"]

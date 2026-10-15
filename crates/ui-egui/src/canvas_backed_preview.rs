@@ -234,3 +234,7 @@ fn backed_display_image(
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_translate_tests.rs"]
 mod translate_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "canvas_backed_assigned_translate_tests.rs"]
+mod assigned_translate_tests;
