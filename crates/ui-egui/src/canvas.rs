@@ -8440,6 +8440,16 @@ mod checked_preview_tests;
 mod backed_preview;
 use backed_preview::backed_snapshot_display_image;
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) mod assigned_geometry_test_support {
+    pub(crate) use super::backed_preview::analytic_geometry_tests::{cases, ctl, plane_words, profiles};
+    pub(crate) fn display(
+        snapshot: &photocraft_engine::DocumentSnapshot,
+    ) -> Result<(egui::ColorImage, photocraft_raster::backing::quota::QuotaLease), String> {
+        super::backed_preview::backed_snapshot_display_image(snapshot, snapshot.size.width, snapshot.size.height, None, &photocraft_raster::Interrupt::NONE)
+    }
+}
+
 #[cfg(test)]
 mod layer_edges_tests;
 

@@ -48,6 +48,9 @@ mod owned_analytic_geometry_command_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_analytic_geometry_layer_props_tests.rs"]
 mod owned_analytic_geometry_layer_props_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_analytic_geometry_mask_enabled_tests.rs"]
+mod owned_analytic_geometry_mask_enabled_tests;
 pub use photocraft_engine::accounted_filter_inspect::{OwnedFilterInspectReply, OwnedFilterInspectWire};
 pub use owned_native_open::OwnedNativeOpenReply;
 pub use owned_xcf_open::OwnedXcfOpenReply;

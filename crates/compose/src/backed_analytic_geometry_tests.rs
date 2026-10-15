@@ -457,3 +457,6 @@ fn hidden_current_full_validation_preserves_control_and_refunds_private_scratch(
     assert!(matches!(qualify_assigned(&owner, &binding, &ReadControl { interrupt: &stop, work: &|_| Ok(()) }), Err(E::Backing(BackingError::Cancelled))));
     assert_eq!(owner.quota().usage().unwrap(), before);
 }
+
+#[path = "backed_analytic_geometry_mask_tests.rs"]
+mod mask_activity;

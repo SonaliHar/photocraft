@@ -14,11 +14,15 @@ pub(super) fn validate_owner(owner: &AccountedDocument, edit: AccountedEdit<'_>,
     if imported {
         // This hint selects only a validator. It cannot grant source, pixel or
         // generic imported edit authority, and a selected refusal is final.
-        if matches!(edit, AccountedEdit::LayerMetadata { .. })
+        if matches!(edit, AccountedEdit::LayerMetadata { .. } | AccountedEdit::MaskEnabled { .. })
             && owner.document().layers.len() == 2
             && owner.document().layers.get(1).is_some_and(|layer| layer.mask.is_some())
         {
-            validate_parameters(edit, c)?;
+            if matches!(edit, AccountedEdit::MaskEnabled { .. }) {
+                c.check(1)?;
+            } else {
+                validate_parameters(edit, c)?;
+            }
             owner.validate_assigned_analytic_geometry_storage(c)?;
             // A malformed native current with divergent canonical names is
             // refused; omitted fields do not silently repair unrelated state.
@@ -110,6 +114,24 @@ pub(super) fn synchronize(doc: &mut Document, edit: AccountedEdit<'_>, c: &ReadC
     let Some(state) = &mut doc.xcf_state else {
         return Ok(());
     };
+    if let AccountedEdit::MaskEnabled { layer, enabled } = edit {
+        // Only the sealed assigned edit domain reaches this branch. Complete
+        // the controlled unique relation scan before touching canonical state.
+        let mut found = None;
+        for (index, item) in state.items.iter().enumerate() {
+            c.check(1)?;
+            if item.mask.as_ref().is_some_and(|mask| mask.owner == crate::item_identity::ItemRef::Layer(layer)) {
+                if found.is_some() || !matches!(item.item, crate::item_identity::ItemRef::Mask(_)) {
+                    return Err(BackingError::Integrity);
+                }
+                found = Some(index);
+            }
+        }
+        c.check(1)?;
+        let mask = state.items.get_mut(found.ok_or(BackingError::Integrity)?).and_then(|item| item.mask.as_mut()).ok_or(BackingError::Integrity)?;
+        mask.enabled = enabled;
+        return Ok(());
+    }
     let id = crate::item_identity::ItemRef::Layer(edit.layer_id());
     let mut found = None;
     for (index, item) in state.items.iter().enumerate() {

@@ -109,6 +109,33 @@ pub(super) fn operators(doc: &Document, row: &Value) {
     };
     assert_eq!(policy.resolved.as_ref().unwrap().operator, expected);
 }
+pub(super) fn plane_words(doc: &Document) -> Vec<(photocraft_raster::backing::NativePlaneDescriptor, String)> {
+    doc.layers
+        .iter()
+        .map(|layer| {
+            let LayerContent::BackedRaster(backed) = &layer.content else { panic!("actual native owner") };
+            let mut d = Sha256::new();
+            d.update(backed.descriptor().default_bytes());
+            for coord in backed.descriptor().bounds().tiles() {
+                let pin = backed.checked_view().pin_tile(coord, &ctl()).unwrap();
+                match pin.encoded() {
+                    NativeTileBytes::FullTile(b) | NativeTileBytes::DefaultPixel(b) => d.update(b),
+                }
+            }
+            if let Some(mask) = &layer.mask {
+                d.update(format!("{:?}", (mask.surface.tile_bounds(), mask.surface.format(), mask.linked)).as_bytes());
+                d.update(mask.density.to_bits().to_ne_bytes());
+                d.update(mask.feather.to_bits().to_ne_bytes());
+                d.update(mask.surface.default_bytes());
+                for (coord, tile) in mask.surface.tiles() {
+                    d.update(format!("{coord:?}").as_bytes());
+                    d.update(tile.bytes());
+                }
+            }
+            (backed.descriptor(), d.finalize().iter().map(|v| format!("{v:02x}")).collect())
+        })
+        .collect()
+}
 pub(super) fn native(doc: &Document) -> Vec<(photocraft_raster::backing::NativePlaneDescriptor, String)> {
     doc.layers
         .iter()

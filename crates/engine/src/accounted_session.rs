@@ -12,6 +12,8 @@ use photocraft_doc::{
 use photocraft_raster::backing::{BackingError, ReadControl, quota::QuotaKind};
 use std::sync::{Arc, Mutex};
 
+#[path = "accounted_assigned_fence.rs"]
+pub(crate) mod assigned_fence;
 #[path = "accounted_metadata_gesture.rs"]
 pub(crate) mod metadata_gesture;
 
@@ -229,6 +231,11 @@ impl Session {
 
     fn edit_accounted_inner(&mut self, label: &str, edit: AccountedEdit<'_>, alpha_check: NativeAlphaCheck, control: &ReadControl<'_>) -> Result<()> {
         control.check(1)?;
+        if let AccountedEdit::MaskEnabled { layer, enabled } = edit
+            && self.active().and_then(|state| state.doc.accounted()).is_some_and(metadata_gesture::assigned_geometry_metadata_candidate)
+        {
+            return self.edit_accounted_assigned_mask_enabled(label, layer, enabled, control).map(|_| ());
+        }
         if matches!(edit, AccountedEdit::LayerMetadata { .. })
             && self.active().and_then(|state| state.doc.accounted()).is_some_and(metadata_gesture::assigned_geometry_metadata_candidate)
         {

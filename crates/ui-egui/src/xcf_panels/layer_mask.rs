@@ -123,6 +123,10 @@ pub(crate) fn properties(app:&mut PhotocraftApp,ui:&mut egui::Ui,layer:LayerId) 
         app.ui.status_error=true;
     }
 }
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "layer_mask/assigned_geometry_tests.rs"]
+mod assigned_geometry_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;

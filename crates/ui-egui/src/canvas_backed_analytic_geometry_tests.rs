@@ -10,13 +10,13 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{io::Cursor, path::PathBuf};
 
-pub(super) fn ctl() -> ReadControl<'static> {
+pub(crate) fn ctl() -> ReadControl<'static> {
     ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) }
 }
 fn hash(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|v| format!("{v:02x}")).collect()
 }
-pub(super) fn cases() -> Vec<(PathBuf, Value)> {
+pub(crate) fn cases() -> Vec<(PathBuf, Value)> {
     let corpus = PathBuf::from(std::env::var_os("PHOTOCRAFT_XCF_FULL_CORPUS").unwrap());
     let mut result = Vec::new();
     for (set, pins) in [
@@ -73,7 +73,7 @@ pub(super) fn cases() -> Vec<(PathBuf, Value)> {
 // Observation ICC values describe GIMP source/profile roles. The canonical
 // current ICC for Linear/Perceptual is the existing CMS derivative of ORIGINAL;
 // parsing its rounded serialized curves as original would change the recipe.
-pub(super) fn profiles(doc: &Document, row: &Value) {
+pub(crate) fn profiles(doc: &Document, row: &Value) {
     let original = doc.source_color_context.as_ref().unwrap().original_icc.as_deref().unwrap();
     assert_eq!(hash(original), row["assigned_icc"]["sha256"].as_str().unwrap());
     assert_eq!(original.len() as u64, row["assigned_icc"]["bytes"].as_u64().unwrap());
@@ -97,7 +97,7 @@ pub(super) fn profiles(doc: &Document, row: &Value) {
     assert_eq!(current, expected.as_ref());
     assert_ne!(current, original);
 }
-pub(super) fn operators(doc: &Document, row: &Value) {
+pub(crate) fn operators(doc: &Document, row: &Value) {
     let explicit: Vec<_> =
         doc.xcf_state.as_ref().unwrap().items.iter().filter_map(|item| item.composition.as_ref()).filter(|policy| policy.stored_operator != -1).collect();
     assert_eq!(explicit.len(), 1);
@@ -114,7 +114,34 @@ pub(super) fn operators(doc: &Document, row: &Value) {
     };
     assert_eq!(policy.resolved.as_ref().unwrap().operator, expected);
 }
-pub(super) fn native(doc: &Document) -> Vec<(photocraft_raster::backing::NativePlaneDescriptor, String)> {
+pub(crate) fn plane_words(doc: &Document) -> Vec<(photocraft_raster::backing::NativePlaneDescriptor, String)> {
+    doc.layers
+        .iter()
+        .map(|layer| {
+            let LayerContent::BackedRaster(backed) = &layer.content else { panic!("actual native owner") };
+            let mut d = Sha256::new();
+            d.update(backed.descriptor().default_bytes());
+            for coord in backed.descriptor().bounds().tiles() {
+                let pin = backed.checked_view().pin_tile(coord, &ctl()).unwrap();
+                match pin.encoded() {
+                    NativeTileBytes::FullTile(b) | NativeTileBytes::DefaultPixel(b) => d.update(b),
+                }
+            }
+            if let Some(mask) = &layer.mask {
+                d.update(format!("{:?}", (mask.surface.tile_bounds(), mask.surface.format(), mask.linked)).as_bytes());
+                d.update(mask.density.to_bits().to_ne_bytes());
+                d.update(mask.feather.to_bits().to_ne_bytes());
+                d.update(mask.surface.default_bytes());
+                for (coord, tile) in mask.surface.tiles() {
+                    d.update(format!("{coord:?}").as_bytes());
+                    d.update(tile.bytes());
+                }
+            }
+            (backed.descriptor(), d.finalize().iter().map(|v| format!("{v:02x}")).collect())
+        })
+        .collect()
+}
+pub(crate) fn native(doc: &Document) -> Vec<(photocraft_raster::backing::NativePlaneDescriptor, String)> {
     doc.layers
         .iter()
         .map(|layer| {

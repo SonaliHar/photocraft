@@ -1538,3 +1538,13 @@ Layer or Intersection policy, with a Union backdrop. Typed composition handles
 outside-layer and zero-opacity coverage; a hidden layer skips composition.
 Existing bare-profile constructors retain their Union scope. Other blend modes,
 profiles, editing domains and behavioral acceptance remain pending.
+
+For the same assigned geometry family, `xcf.mask.enabled.set` accepts the
+existing strict `{"maskId":"canonical decimal U64","enabled":bool}` request
+and returns `maskId`, `layerId`, `enabled` and `changed`. It changes only the
+native and canonical current enabled flags, retaining the exact mask samples
+and source owners. Owner and mask content locks apply before no-op detection.
+Current and staged profile/canvas validation precede one undo step; unchanged
+requests preserve redo. Disabled masks still undergo complete validation.
+The command remains synchronous, rejects coalescing and has no journal entry.
+Headless nonwaiting requests retain their existing synchronous-dispatch refusal.

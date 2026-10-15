@@ -5,13 +5,13 @@ use photocraft_raster::Interrupt;
 use serde_json::{Value, json};
 
 fn bad(code: &str) -> EngineError { EngineError::Other(format!("xcf.mask.enabled.{code}")) }
-fn envelope(params: &Value) -> Result<(MaskId, bool)> {
+pub(crate) fn envelope(params: &Value) -> Result<(MaskId, bool)> {
     let object = params.as_object().ok_or_else(|| bad("params"))?;
     if object.len() != 2 || object.keys().any(|key| !matches!(key.as_str(), "maskId" | "enabled")) { return Err(bad("params")); }
     let text = object.get("maskId").and_then(Value::as_str).ok_or_else(|| bad("identity"))?;
     if text.is_empty() || text.len() > 20 || !text.bytes().all(|byte| byte.is_ascii_digit()) { return Err(bad("identity")); }
     let raw = text.parse::<u64>().map_err(|_| bad("identity"))?;
-    if raw == 0 || raw.to_string() != text { return Err(bad("identity")); }
+    if raw == 0 || text.starts_with('0') { return Err(bad("identity")); }
     let enabled = object.get("enabled").and_then(Value::as_bool).ok_or_else(|| bad("params"))?;
     Ok((MaskId(raw), enabled))
 }

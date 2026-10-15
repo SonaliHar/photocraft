@@ -204,7 +204,7 @@ mod neighborhood_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_analytic_geometry_tests.rs"]
-mod analytic_geometry_tests;
+pub(crate) mod analytic_geometry_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_analytic_geometry_layer_props_tests.rs"]

@@ -191,14 +191,15 @@ fn validate_with(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>, transfer
                 || record.parent.is_some()
                 || record.composition.is_some()
                 || record.raster_bounds != Some(extent)
-                || !mask.enabled
+                || (!transfer_override && !mask.enabled)
                 || mask.density.to_bits() != 1f32.to_bits()
                 || mask.feather.to_bits() != 0f32.to_bits()
                 || mask.surface.format() != PixelFormat::new(ColorMode::Grayscale, doc.depth, false)
                 || m.bounds != extent
                 || m.offset != [extent.x0, extent.y0]
                 || m.outside_f64_bits != 0f64.to_bits()
-                || !m.enabled
+                || m.enabled != mask.enabled
+                || (!transfer_override && !m.enabled)
                 || m.shown
                 || m.editing
                 || m.linked != mask.linked
@@ -267,3 +268,7 @@ impl AccountedDocument {
 #[cfg(test)]
 #[path = "accounted_imported_masked_metadata_tests.rs"]
 mod metadata_tests;
+
+#[cfg(test)]
+#[path = "accounted_imported_mask_enabled_tests.rs"]
+mod mask_enabled_tests;

@@ -2,14 +2,13 @@
 //! name/visibility/opacity subset of the existing registered upstream command;
 //! it grants neither native pixel editing nor source/render qualification.
 use super::*;
+use crate::accounted_session::assigned_fence::AssignedFence;
 use crate::accounted_session::metadata_gesture::MetadataPolicy;
 use crate::{
     accounted_view::AccountedView,
     channel_cmds::{ChannelTarget, ChannelView},
 };
 use photocraft_doc::accounted_document::accounted_layer_access;
-#[path = "imported_accounted_metadata/assigned.rs"]
-mod assigned;
 #[derive(Clone, Copy)]
 enum Target<'a> {
     Active,
@@ -100,7 +99,7 @@ pub(super) struct Prepared<'a> {
     anchor: Option<LayerId>,
     channel: ChannelView,
     only_visibility: bool,
-    assigned: Option<assigned::AssignedFence>,
+    assigned: Option<AssignedFence>,
     _lease: QuotaLease,
 }
 impl<'a> Request<'a> {
@@ -136,7 +135,7 @@ impl<'a> Request<'a> {
         policy.validate_current(owner, control)?;
         let assigned = match policy {
             MetadataPolicy::Plain => None,
-            MetadataPolicy::AssignedGeometry => Some(assigned::AssignedFence::prepare(session, control)?),
+            MetadataPolicy::AssignedGeometry => Some(AssignedFence::prepare::<Prepared<'_>>(session, control)?),
         };
         check_locks(owner.document(), edit, control)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;

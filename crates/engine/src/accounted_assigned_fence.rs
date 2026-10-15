@@ -1,8 +1,9 @@
 //! Additional paid preparation fences only for assigned masked metadata.
 use super::*;
 use crate::{DocumentSnapshot, document_history::DocumentHistory, source_policy::SourceIdentity};
+use photocraft_raster::backing::quota::QuotaLease;
 
-pub(super) struct AssignedFence {
+pub(crate) struct AssignedFence {
     document: DocumentSnapshot,
     history: DocumentHistory,
     path: Option<String>,
@@ -33,15 +34,14 @@ fn copy(text: &str, control: &ReadControl<'_>) -> Result<String> {
     Ok(result)
 }
 impl AssignedFence {
-    pub(super) fn prepare(session: &Session, control: &ReadControl<'_>) -> Result<Self> {
+    pub(crate) fn prepare<T>(session: &Session, control: &ReadControl<'_>) -> Result<Self> {
         let state = session.active().ok_or(EngineError::NoDocument)?;
         let owner = state.doc.accounted().ok_or(BackingError::Integrity)?;
         if !state.history.current()?.shares_state(&state.doc) {
             return Err(BackingError::Integrity.into());
         }
         let count = strings(state)?;
-        let header =
-            std::mem::size_of::<Self>().checked_add(std::mem::size_of::<super::Prepared<'_>>()).and_then(|n| n.checked_add(128)).ok_or(BackingError::Length)?;
+        let header = std::mem::size_of::<Self>().checked_add(std::mem::size_of::<T>()).and_then(|n| n.checked_add(128)).ok_or(BackingError::Length)?;
         let envelope = count.checked_mul(2).and_then(|n| n.checked_add(header)).ok_or(BackingError::Length)?;
         let mut lease = owner.quota().reserve(QuotaKind::Index, envelope as u64).map_err(|_| BackingError::Quota)?;
         let path = state.path.as_deref().map(|text| copy(text, control)).transpose()?;
@@ -79,7 +79,7 @@ impl AssignedFence {
         control.check(1)?;
         Ok(result)
     }
-    pub(super) fn check(&self, session: &Session, control: &ReadControl<'_>) -> Result<()> {
+    pub(crate) fn check(&self, session: &Session, control: &ReadControl<'_>) -> Result<()> {
         let state = session.active().ok_or(EngineError::NoDocument)?;
         let count = strings(state)?;
         let retained = self

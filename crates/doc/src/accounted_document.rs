@@ -389,6 +389,20 @@ impl AccountedDocument {
         accounted_layer_access(self.document(), edit.layer_id(), control)?.ok_or(BackingError::Bounds)?;
         Ok(())
     }
+    /// Borrowed mask-enabled preflight for the actual assigned geometry owner.
+    /// This grants no linked/pixel edit or source/render eligibility; try_edit
+    /// independently repeats storage, target and canonical association checks.
+    pub fn validate_assigned_analytic_mask_edit(&self, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<(), BackingError> {
+        if self.owner._storage_class != StorageClass::Legacy || !matches!(edit, AccountedEdit::MaskEnabled { .. }) {
+            return Err(BackingError::Unsupported);
+        }
+        if imported_edits::validate_owner(self, edit, control)? != imported_edits::EditDomain::AssignedGeometry {
+            return Err(BackingError::Unsupported);
+        }
+        let layer = accounted_layer_access(self.document(), edit.layer_id(), control)?.ok_or(BackingError::Bounds)?.layer;
+        validate_mask_control(self.document(), layer, control)?;
+        Ok(())
+    }
     /// Borrowed preflight for raw native writes in the existing closed imported
     /// plain class. Empty/outside regions and wrong native lengths refuse. This
     /// grants no mutable model access; final try_edit independently revalidates.

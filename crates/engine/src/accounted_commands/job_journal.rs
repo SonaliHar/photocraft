@@ -13,7 +13,7 @@ pub(crate) struct PreparedAccountedJobJournal {
 }
 impl PreparedAccountedCommand<'_> {
     pub(crate) fn into_job_journal(self) -> PreparedAccountedJobJournal {
-        let Self { request: _, snapshot, revision, view_revision, history: _, journal, lease, overlap, quota } = self;
+        let Self { journal_policy: _, request: _, snapshot, revision, view_revision, history: _, journal, lease, overlap, quota } = self;
         let lease = lease.into_lease();
         PreparedAccountedJobJournal { snapshot, revision, view_revision, journal, lease, overlap, quota }
     }

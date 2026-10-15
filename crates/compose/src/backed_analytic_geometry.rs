@@ -279,14 +279,14 @@ fn qualify_inner(
                 return Err(scope());
             }
             let meta = record.mask.as_ref().ok_or_else(scope)?;
-            if !mask.enabled
+            if (binding.is_none() && !mask.enabled)
+                || meta.enabled != mask.enabled
                 || mask.density.to_bits() != 1f32.to_bits()
                 || mask.feather.to_bits() != 0f32.to_bits()
                 || mask.surface.format() != photocraft_color::PixelFormat::new(ColorMode::Grayscale, doc.depth, false)
                 || meta.bounds != extent
                 || meta.offset != [extent.x0, extent.y0]
                 || meta.outside_f64_bits != 0f64.to_bits()
-                || !meta.enabled
                 || meta.shown
                 || meta.editing
                 || meta.linked != mask.linked

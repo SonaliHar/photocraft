@@ -1140,6 +1140,8 @@ impl Session {
             // Bounded native pixel, filter and assigned-geometry property preparation share one
             // immutable registered work ledger; no per-cell allowance reset.
             let bounded_work = matches!(id, "edit.clear" | "edit.fill")
+                || id == "xcf.mask.enabled.set"
+                    && self.active().and_then(|state| state.doc.accounted()).is_some_and(crate::assigned_geometry_metadata_candidate)
                 || id == "layer.setProps"
                     && self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| {
                         owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage()

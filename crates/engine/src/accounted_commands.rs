@@ -16,12 +16,13 @@ mod job_journal;
 mod save_journal;
 pub use save_journal::PreparedAccountedSaveReply;
 pub(crate) use save_journal::PreparedSaveJournalWitness;
+mod assigned_mask;
 #[path = "imported_accounted_metadata.rs"]
 mod imported_metadata;
-mod threshold_alpha;
-mod threshold;
 mod point;
 mod readonly_layer_name;
+mod threshold;
+mod threshold_alpha;
 #[cfg(test)]
 mod threshold_alpha_journal_tests;
 pub(crate) use job_journal::PreparedAccountedJobJournal;
@@ -49,6 +50,7 @@ pub fn supports(id: &str) -> bool {
             | "xcf.filter.enable"
             | "xcf.filter.move"
             | "xcf.filter.remove"
+            | "xcf.mask.enabled.set"
     )
 }
 
@@ -57,6 +59,8 @@ fn bad(id: &str, message: &str) -> EngineError {
 }
 
 enum Request<'a> {
+    AssignedMask(assigned_mask::Request<'a>),
+    PreparedAssignedMask(assigned_mask::Prepared<'a>),
     ImportedMetadata(imported_metadata::Request<'a>),
     PreparedMetadata(imported_metadata::Prepared<'a>),
     ThresholdAlpha(threshold_alpha::Request<'a>),
@@ -93,6 +97,9 @@ fn require_history_selection_enabled(session: &Session) -> Result<()> {
 }
 
 fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadControl<'_>) -> Result<Request<'a>> {
+    if id == "xcf.mask.enabled.set" {
+        return Ok(Request::AssignedMask(assigned_mask::Request::parse(session, params, control)?));
+    }
     if id == "edit.fill" {
         crate::accounted_fill::validate_request(session, params)?;
         return Ok(Request::Fill(params));
@@ -241,19 +248,33 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
     if let Some(reason) = global_refusal(session) {
         return Ok(Some(reason));
     }
+    if id == "xcf.mask.enabled.set" && !state.doc.accounted().is_some_and(crate::assigned_geometry_metadata_candidate) {
+        return Ok(Some("this accounted storage has no qualified assigned layer mask"));
+    }
     if id == "history.selectState" && history_selection_disabled(session)? {
         return Ok(Some("the history holds only one state"));
     }
     if matches!(id, "xcf.filter.move" | "xcf.filter.remove") && !state.doc.accounted().is_some_and(|owner| owner.is_readonly_point_storage()) {
         return Ok(Some("this accounted filter storage has no qualified stack edit recipe"));
     }
-    if matches!(id, "xcf.filter.set" | "xcf.filter.enable") && !state.doc.accounted().is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage()) {
+    if matches!(id, "xcf.filter.set" | "xcf.filter.enable")
+        && !state
+            .doc
+            .accounted()
+            .is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage())
+    {
         return Ok(Some("this accounted filter storage has no qualified editing recipe"));
     }
-    if id == "edit.clear" && (state.doc.xcf_state.is_none() || state.doc.accounted().is_none_or(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage())) {
+    if id == "edit.clear"
+        && (state.doc.xcf_state.is_none()
+            || state.doc.accounted().is_none_or(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage()))
+    {
         return Ok(Some("accounted Clear requires the plain imported native owner"));
     }
-    if id == "edit.fill" && (state.doc.xcf_state.is_none() || state.doc.accounted().is_none_or(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage())) {
+    if id == "edit.fill"
+        && (state.doc.xcf_state.is_none()
+            || state.doc.accounted().is_none_or(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage()))
+    {
         return Ok(Some("accounted Fill requires the plain imported native owner"));
     }
     if id == "edit.fill" && !matches!(state.doc.depth, photocraft_doc::SampleType::U8 | photocraft_doc::SampleType::U16 | photocraft_doc::SampleType::F32) {
@@ -290,13 +311,19 @@ struct Census {
 }
 impl Census {
     fn command_value(&mut self, id: &str, value: &Value, control: &ReadControl<'_>) -> Result<()> {
-        self.depth_extra = threshold_alpha::journal_depth(id, value).max(threshold::journal_depth(id, value)).max(point::journal_depth_controlled(id, value, control)?).saturating_sub(MAX_DEPTH);
+        self.depth_extra = threshold_alpha::journal_depth(id, value)
+            .max(threshold::journal_depth(id, value))
+            .max(point::journal_depth_controlled(id, value, control)?)
+            .saturating_sub(MAX_DEPTH);
         let result = self.value(value, 0, control);
         self.depth_extra = 0;
         result
     }
     fn retained_command_value(&mut self, id: &str, value: &Value, control: &ReadControl<'_>) -> Result<()> {
-        self.depth_extra = threshold_alpha::journal_depth(id, value).max(threshold::journal_depth(id, value)).max(point::journal_depth_controlled(id, value, control)?).saturating_sub(MAX_DEPTH);
+        self.depth_extra = threshold_alpha::journal_depth(id, value)
+            .max(threshold::journal_depth(id, value))
+            .max(point::journal_depth_controlled(id, value, control)?)
+            .saturating_sub(MAX_DEPTH);
         let result = self.retained_value(value, 0, control);
         self.depth_extra = 0;
         result
@@ -514,7 +541,13 @@ impl CommandLease {
     }
 }
 
+#[derive(Clone, Copy)]
+enum JournalPolicy {
+    Append,
+    Retain,
+}
 pub struct PreparedAccountedCommand<'a> {
+    journal_policy: JournalPolicy,
     request: Request<'a>,
     snapshot: crate::document_snapshot::DocumentSnapshot,
     revision: u64,
@@ -533,6 +566,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             return Err(EngineError::Other(reason.into()));
         }
         let request = match request {
+            Request::AssignedMask(request) => Request::PreparedAssignedMask(request.prepare(session, control)?),
             Request::ImportedMetadata(request) => Request::PreparedMetadata(request.prepare(session, control)?),
             Request::ThresholdAlpha(request) => Request::PreparedThresholdAlpha(request.prepare(session, control)?),
             Request::Threshold(request) => Request::PreparedThreshold(request.prepare(session, control)?),
@@ -563,7 +597,10 @@ impl<'a> PreparedAccountedCommand<'a> {
         } else {
             None
         };
-        let count = session.journal.len().checked_add(1).ok_or(BackingError::Length)?;
+        // Mask enablement preserves its upstream journal:false contract. Its
+        // retained response still owns a real fee beside the unchanged journal.
+        let journal_policy = if matches!(&request, Request::PreparedAssignedMask(_)) { JournalPolicy::Retain } else { JournalPolicy::Append };
+        let count = session.journal.len().checked_add(usize::from(matches!(journal_policy, JournalPolicy::Append))).ok_or(BackingError::Length)?;
         if count > MAX_RECORDS {
             return Err(BackingError::Length.into());
         }
@@ -592,8 +629,13 @@ impl<'a> PreparedAccountedCommand<'a> {
             census.string(label)?;
             census.command_value(label, value, control)?;
         }
-        census.string(id)?;
-        census.command_value(id, params, control)?;
+        if matches!(journal_policy, JournalPolicy::Append) {
+            census.string(id)?;
+            census.command_value(id, params, control)?;
+        }
+        if matches!(&request, Request::PreparedAssignedMask(_)) {
+            census.add(0, usize::try_from(assigned_mask::REPLY_ENVELOPE).map_err(|_| BackingError::Length)?)?;
+        }
         if matches!(&request, Request::PreparedThresholdAlpha(_)) {
             // The staged adapter already owns its temporary reply fee. This
             // overlapping retained charge survives publication with the journal
@@ -638,7 +680,9 @@ impl<'a> PreparedAccountedCommand<'a> {
         for (label, value) in &session.journal {
             journal.push((copied_string(label)?, copied_value(value, control)?));
         }
-        journal.push((copied_string(id)?, copied_value(params, control)?));
+        if matches!(journal_policy, JournalPolicy::Append) {
+            journal.push((copied_string(id)?, copied_value(params, control)?));
+        }
         control.check(1)?;
         let state = session.active().ok_or(EngineError::NoDocument)?;
         let lease = match response_plan {
@@ -647,8 +691,33 @@ impl<'a> PreparedAccountedCommand<'a> {
             }
             None => CommandLease::Journal(lease),
         };
-        let history = if matches!(&request, Request::HistorySelect(_) | Request::PreparedPoint(_) | Request::PreparedThresholdAlpha(_) | Request::PreparedThreshold(_) | Request::PreparedReadonlyLayerName(_) | Request::PreparedClear(_) | Request::PreparedFill(_)) { Some(state.history.clone()) } else { None };
-        Ok(Self { request, snapshot: state.doc.clone(), revision: state.revision, view_revision: state.view_revision, history, journal, lease, overlap, quota })
+        let history = if matches!(
+            &request,
+            Request::HistorySelect(_)
+                | Request::PreparedPoint(_)
+                | Request::PreparedThresholdAlpha(_)
+                | Request::PreparedThreshold(_)
+                | Request::PreparedReadonlyLayerName(_)
+                | Request::PreparedClear(_)
+                | Request::PreparedFill(_)
+                | Request::PreparedAssignedMask(_)
+        ) {
+            Some(state.history.clone())
+        } else {
+            None
+        };
+        Ok(Self {
+            journal_policy,
+            request,
+            snapshot: state.doc.clone(),
+            revision: state.revision,
+            view_revision: state.view_revision,
+            history,
+            journal,
+            lease,
+            overlap,
+            quota,
+        })
     }
     pub fn execute(self, session: &mut Session, control: &ReadControl<'_>) -> Result<Value> {
         let outcome = self.execute_staged(session, control)?;
@@ -676,6 +745,7 @@ impl<'a> PreparedAccountedCommand<'a> {
                 | Request::SelectAll(_)
                 | Request::ColorRange(_)
                 | Request::PreparedMetadata(_)
+                | Request::PreparedAssignedMask(_)
                 | Request::PreparedThresholdAlpha(_)
                 | Request::PreparedReadonlyLayerName(_)
                 | Request::PreparedThreshold(_)
@@ -696,7 +766,10 @@ impl<'a> PreparedAccountedCommand<'a> {
                 return Err(EngineError::Other("the prepared history selection targets an older history".into()));
             }
         }
-        let previous = self.journal.get(..self.journal.len().checked_sub(1).ok_or(BackingError::Integrity)?).ok_or(BackingError::Integrity)?;
+        let previous = match self.journal_policy {
+            JournalPolicy::Append => self.journal.get(..self.journal.len().checked_sub(1).ok_or(BackingError::Integrity)?).ok_or(BackingError::Integrity)?,
+            JournalPolicy::Retain => self.journal.as_slice(),
+        };
         control.check(MAX_PAYLOAD as u64)?;
         if previous != session.journal.as_slice() {
             return Err(EngineError::Other("the command journal changed after preparation".into()));
@@ -710,6 +783,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             return Err(BackingError::Integrity.into());
         }
         let result = match self.request {
+            Request::PreparedAssignedMask(prepared) => prepared.execute(session, control)?,
             Request::PreparedMetadata(prepared) => prepared.execute(session, control)?,
             Request::PreparedThresholdAlpha(prepared) => prepared.execute(session, control)?,
             Request::PreparedThreshold(prepared) => prepared.execute(session, control)?,
@@ -723,6 +797,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             Request::Threshold(_) => return Err(BackingError::Integrity.into()),
             Request::Point(_) => return Err(BackingError::Integrity.into()),
             Request::ReadonlyLayerName(_) => return Err(BackingError::Integrity.into()),
+            Request::AssignedMask(_) => return Err(BackingError::Integrity.into()),
             Request::ImportedMetadata(_) => return Err(BackingError::Integrity.into()),
             Request::Select(layer) => {
                 session.select_accounted_with_control(layer, control)?;
