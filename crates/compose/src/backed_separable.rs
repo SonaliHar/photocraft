@@ -23,6 +23,10 @@ use photocraft_raster::{
 pub fn is_supported_mode(mode: i32) -> bool {
     matches!(mode, 23 | 30..=36 | 41..=53)
 }
+/// Separate legacy inventory; this never changes modern source selection.
+pub fn is_supported_legacy_mode(mode: i32) -> bool {
+    matches!(mode, 3 | 4 | 6..=10 | 15..=21)
+}
 pub(crate) fn error() -> E {
     E::Unsupported("bounded modern separable RGB transfer stack")
 }
@@ -168,7 +172,7 @@ impl<'a> PreparedBackedSeparableStack<'a> {
                 || !(0.0..=1.0).contains(&input.opacity)
                 || !matches!(input.layer.format().mode, ColorMode::Rgb | ColorMode::Grayscale)
                 || input.layer.format().mode.color_channels() != profile.channels()
-                || !(input.source_mode == 28 || is_supported_mode(input.source_mode))
+                || !(input.source_mode == 28 || is_supported_mode(input.source_mode) || is_supported_legacy_mode(input.source_mode))
             {
                 return Err(error());
             }
@@ -210,7 +214,10 @@ impl<'a> PreparedBackedSeparableStack<'a> {
             let view = entry.input.layer.checked_view();
             let format = view.format();
             c.check(format.channels() as u64).map_err(E::Backing)?;
-            decode(view.default_bytes(), format)?;
+            let default = decode(view.default_bytes(), format)?;
+            if is_supported_legacy_mode(entry.input.source_mode) && default.iter().any(|v| !(0.0..=1.0).contains(v)) {
+                return Err(error());
+            }
             for coord in view.logical_bounds().tiles() {
                 let pin = view.pin_tile(coord, c).map_err(E::View)?;
                 let r = coord.rect().intersect(&view.logical_bounds());
@@ -220,7 +227,10 @@ impl<'a> PreparedBackedSeparableStack<'a> {
                         let mut bytes = [0; 40];
                         let raw = bytes.get_mut(..format.bytes_per_pixel()).ok_or_else(error)?;
                         pin.read_pixel_native_into(x, y, raw, c).map_err(E::View)?;
-                        decode(raw, format)?;
+                        let pixel = decode(raw, format)?;
+                        if is_supported_legacy_mode(entry.input.source_mode) && pixel.iter().any(|v| !(0.0..=1.0).contains(v)) {
+                            return Err(error());
+                        }
                     }
                 }
             }

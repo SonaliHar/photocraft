@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 #[path = "flat_modern_source.rs"]
 mod flat_modern_source;
 pub use flat_modern_source::{FlatModernSourceRule, FlatSourceRgbDomain, XCF_FLAT_MODERN_IMPLICIT_SOURCE_EPOCH, flat_modern_source_rule};
+#[path = "flat_legacy_source.rs"]
+mod flat_legacy_source;
+pub use flat_legacy_source::{FlatLegacySourceRule, XCF12_FLAT_LEGACY_SOURCE_EPOCH, flat_legacy_source_rule};
 /// Explicit structural behavior identity, independent of current profile assignment.
 pub const XCF13_ISOLATED_MULTIPLY_SEED_EPOCH: &str = "xcf13-isolated-multiply-seed-v1";
 /// Finite signed/over-one source alpha over an empty or opaque backdrop only.

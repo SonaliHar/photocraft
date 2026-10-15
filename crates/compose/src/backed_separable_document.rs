@@ -34,6 +34,8 @@ mod tests;
 mod general_current;
 #[path = "backed_separable_general_source.rs"]
 mod general_source;
+#[path = "backed_separable_legacy_source.rs"]
+mod legacy_source;
 #[derive(Clone, Copy)]
 struct Recipe {
     mode: i32,
@@ -235,6 +237,39 @@ impl<S, L> LeasedSeparableBlendPipeline<S, L> {
             _ => CompositionError::Unsupported("flat separable source preparation"),
         })
     }
+    /// Preparation for separately admitted exact legacy two-leaf originals.
+    pub fn new_legacy_budgeted<B: crate::gimp_render::PreparationBudget<Lease = L>>(
+        doc: &Document,
+        interrupt: &Interrupt<'_>,
+        budget: &mut B,
+        source_lease: S,
+    ) -> Result<Self, CompositionError> {
+        let result = (|| -> Result<Self, E> {
+            let mut check = |n| {
+                if interrupt.cancelled() {
+                    return Err(E::Backing(BackingError::Cancelled));
+                }
+                budget.consume_preparation_work(n).map_err(E::Color)
+            };
+            let recipes = legacy_source::metadata(doc, interrupt, &mut check)?;
+            let mut needed = [false; 3];
+            for r in recipes {
+                *needed.get_mut(lower::slot(r.blend)?).ok_or_else(scope)? = true;
+                *needed.get_mut(lower::slot(r.composite)?).ok_or_else(scope)? = true;
+            }
+            let profile = Builtin::Srgb.profile();
+            let (bytes, work) = lower::space_requirements(profile, SampleEncoding::NonlinearProfile, needed, std::mem::size_of::<Self>())?;
+            let fee = budget.reserve_prepared_bytes(bytes).map_err(E::Color)?;
+            budget.consume_preparation_work(work).map_err(E::Color)?;
+            let spaces = Spaces::prepare(profile, SampleEncoding::NonlinearProfile, needed, fee, interrupt)?;
+            Ok(Self { _recipes: None, _spaces: spaces, _source: source_lease })
+        })();
+        result.map_err(|e| match e {
+            E::Color(e) => e,
+            E::Backing(BackingError::Cancelled) => photocraft_raster::RasterInputError::Cancelled.into(),
+            _ => CompositionError::Unsupported("legacy flat separable source preparation"),
+        })
+    }
     /// Preparation only for the separately qualified generic original epoch.
     /// This does not evaluate or promote source-native pixels.
     pub fn new_general_budgeted<B: crate::gimp_render::PreparationBudget<Lease = L>>(
@@ -282,7 +317,7 @@ impl<'a> PreparedBackedSeparableDocument<'a> {
             .map_err(E::Quota)?;
         for (layer, recipe) in self.owner.document().layers.iter().zip(&self._metadata.recipes) {
             let mode = recipe.mode;
-            let unit = matches!(mode, 41..=49 | 51 | 53);
+            let unit = matches!(mode, 41..=49 | 51 | 53) || lower::is_supported_legacy_mode(mode);
             let LayerContent::BackedRaster(backed) = &layer.content else { return Err(scope()) };
             let view = backed.checked_view();
             let f = view.format();

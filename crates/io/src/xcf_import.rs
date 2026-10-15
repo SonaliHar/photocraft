@@ -1688,6 +1688,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
 ) -> Result<(ImportResult, usize), IoError> {
     let admission::AdmissionDomains {
         general_separable_domain,
+        legacy_separable_domain,
         point_replace_domain,
         owned_point_domain,
         owned_neighborhood_domain,
@@ -2595,6 +2596,15 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         if let Err(error) = checked {
             return Err(adapter.failure.map(accounting_error).unwrap_or_else(|| {
                 if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF staged Point rendering consumer: {error}")) }
+            }));
+        }
+    } else if P::requires_budgeted_legacy_separable_preparation(legacy_separable_domain) {
+        let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("staged legacy separable scene requires accounting".into()))?;
+        let mut adapter = SharedPreparation { shared, failure: None };
+        let checked = photocraft_compose::backed_separable_document::LeasedSeparableBlendPipeline::new_legacy_budgeted(&doc, ctl, &mut adapter, source_lease);
+        if let Err(error) = checked {
+            return Err(adapter.failure.map(accounting_error).unwrap_or_else(|| {
+                if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF staged legacy separable preparation: {error}")) }
             }));
         }
     } else if P::requires_budgeted_general_separable_preparation(general_separable_domain) {

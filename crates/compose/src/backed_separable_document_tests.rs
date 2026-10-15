@@ -24,6 +24,8 @@ const MODES: [i32; 21] = [23, 30, 31, 32, 33, 34, 35, 36, 41, 42, 43, 44, 45, 46
 mod general_current_tests;
 #[path = "backed_separable_general_source_tests.rs"]
 mod general_source_tests;
+#[path = "backed_separable_legacy_tests.rs"]
+mod legacy_tests;
 fn ctl() -> ReadControl<'static> {
     ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) }
 }

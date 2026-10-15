@@ -922,3 +922,7 @@ impl Session {
 #[cfg(test)]
 #[path = "accounted_history_select_tests.rs"]
 mod history_select_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "accounted_legacy_flat_composite_workflow_tests.rs"]
+mod legacy_flat_composite_workflow_tests;

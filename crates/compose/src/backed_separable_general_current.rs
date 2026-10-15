@@ -27,13 +27,27 @@ fn explicit_operator(raw: i32) -> Option<GimpOperator> {
 fn policy(policy: &GimpComposition, version: u32, c: &ReadControl<'_>) -> Result<Recipe, E> {
     if policy.compatibility_epoch.is_empty()
         || policy.compatibility_epoch.len() > 128
-        || policy.legacy
         || policy.pass_through
-        || !(policy.source_mode == 28 || lower::is_supported_mode(policy.source_mode))
+        || !(policy.source_mode == 28 || lower::is_supported_mode(policy.source_mode) || lower::is_supported_legacy_mode(policy.source_mode))
     {
         return Err(scope());
     }
     c.check(policy.compatibility_epoch.len() as u64 + 1).map_err(E::Backing)?;
+    if policy.legacy {
+        use photocraft_doc::import_compositing::{XCF12_FLAT_LEGACY_SOURCE_EPOCH, flat_legacy_source_rule};
+        if policy.compatibility_epoch != XCF12_FLAT_LEGACY_SOURCE_EPOCH {
+            return Err(scope());
+        }
+        let rule = flat_legacy_source_rule(version, policy.source_mode, policy.stored_blend_space, policy.stored_composite_space, policy.stored_operator)
+            .ok_or_else(scope)?;
+        if policy.checked_resolved().map_err(|_| scope())? != &rule.resolved() {
+            return Err(scope());
+        }
+        return Ok(Recipe { mode: policy.source_mode, blend: rule.blend_space, composite: rule.composite_space, operator: rule.operator });
+    }
+    if lower::is_supported_legacy_mode(policy.source_mode) {
+        return Err(scope());
+    }
     // These existing epochs select separate assigned-profile or signed-alpha
     // recipes in the resident renderer. Fully explicit fields do not erase
     // those semantic prerequisites or grant either specialized lane here.

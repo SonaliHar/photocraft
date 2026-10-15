@@ -1,5 +1,7 @@
 //! One sealed original-source intersection for flat modern separable blends.
 use super::*;
+#[path = "staged_legacy_separable_blend.rs"]
+mod legacy;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Domain {
     Basic,
@@ -10,7 +12,7 @@ pub(super) fn mode(mode: i32) -> bool {
     matches!(mode,23|30..=36|41..=53)
 }
 pub(super) fn hint<P>(f: &XcfFile<P>) -> bool {
-    f.layers.len() == 2 && f.layers.first().is_some_and(|d| !d.group && mode(d.mode))
+    f.layers.len() == 2 && f.layers.first().is_some_and(|d| !d.group && (mode(d.mode) || legacy::mode(d.mode)))
 }
 pub(super) fn domain<P: ExactParsedPlane>(f: &XcfFile<P>) -> Option<Domain> {
     if f.model != Model::Rgb
@@ -128,6 +130,7 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SourceKind {
     Strict(Domain),
+    LegacyStrict,
     General,
 }
 fn pay(ctl: &Interrupt<'_>, budget: &photocraft_xcf::Budget<'_>, units: u64) -> Result<(), IoError> {
@@ -163,6 +166,7 @@ pub(super) fn qualify_selected<P: ExactParsedPlane>(
     if domain(f).is_some() {
         return qualify(f, ctl, budget).map(|kind| kind.map(SourceKind::Strict));
     }
+    if legacy::domain(f) { return legacy::qualify(f, ctl, budget).map(|ok| ok.then_some(SourceKind::LegacyStrict)); }
     qualify_general(f, ctl, budget).map(|ok| ok.then_some(SourceKind::General))
 }
 fn qualify_general<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, budget: &photocraft_xcf::Budget<'_>) -> Result<bool, IoError> {
@@ -265,3 +269,9 @@ mod tests;
 #[cfg(all(test, feature = "corpus"))]
 #[path = "staged_general_separable_blend_tests.rs"]
 mod general_tests;
+
+pub(super) fn legacy_domain<P:ExactParsedPlane>(f:&XcfFile<P>)->bool{legacy::domain(f)}
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "staged_legacy_separable_blend_tests.rs"]
+mod legacy_tests;

@@ -270,3 +270,7 @@ mod original_flat_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_flat_translate_tests.rs"]
 mod flat_translate_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "canvas_backed_legacy_flat_tests.rs"]
+mod legacy_flat_tests;

@@ -1750,3 +1750,14 @@ with it. Source pixels, defaults and original composition records remain exact.
 Masks and linked-layer expansion are outside this route. Desktop dispatch uses
 the synchronous transaction even when background jobs are enabled; Headless
 retains its existing wait/auth rules. Behavioral checks remain deferred.
+The owned flat-composite path now also carries fourteen channel-separable
+legacy modes: 3,4,6..10 and15..21. Original source admission is a separate strict
+v12 RGB F32 nonlinear implicit-sRGB two-layer intersection with the established
+raw policy/geometry and complete finite-unit native checks on both planes.
+Its refusal cannot retry through General or Plain. CURRENT recipes use bounded
+dynamic layer geometry, exact legacy flag/epoch/raw/resolved policy, and full
+unit validation of every legacy native/default sample, including hidden and
+off-canvas content. Existing legacy min-alpha coverage, ratio endpoints and
+128/255 grain behavior remain the evaluation authority. This adds no legacy
+composition mutation wire; explicit composition edits keep their existing
+modern20 subset. Behavioral and numerical acceptance remain deferred.
