@@ -32,15 +32,10 @@
 //!   of the same parity, starting at the seeds of maker note `0x0096`.
 //! * Lossless (`0x0096` version `0x46`): the decoded values are the samples.
 //!   Lossy (`0x44`): they index a curve. Type 1 (`0x44 0x10`) stores the whole
-//!   curve, type 2 (`0x44 0x20` / `0x44 0x40`) stores `n` points, linearly
-//!   interpolated. In `0x44 0x20` the points are `2^bits / (n - 1)` codes
-//!   apart. In `0x44 0x40` (Z 7, Z 7II) the codes span two bits fewer than the
-//!   samples, so the points are `2^(bits - 2) / (n - 1)` apart: 14-bit files
-//!   carry 0, 16, 32, … (codes 0..=4096 for samples up to 16383) and 12-bit
-//!   files 0, 4, 8, …. Read with the `0x20` spacing every sample came out a
-//!   quarter of its value, below the black level: a black picture. With this
-//!   spacing a Z 7 14-bit and a Z 7II 12-bit lossy file decode sample for
-//!   sample like LibRaw's output (compared as pixels, black box).
+//!   curve, type 2 (`0x44 0x20` / `0x44 0x40`) stores `n` points spaced
+//!   `2^bits / (n - 1)` codes apart, linearly interpolated. Version `0x44 0x40`
+//!   uses a two-bit-smaller encoded domain (1025 / 4097 levels for 12 / 14-bit
+//!   samples), not the sensor bit depth; see Bill Claff's NEF Compression tables.
 //! * Values in the maker note are in the maker note's byte order.
 //!
 //! Not decoded (reported as unsupported; the embedded preview is used
@@ -56,6 +51,59 @@ use crate::tiff::{Ifd, Tiff, tag};
 pub(crate) const NIKON_COMPRESSION: u32 = 34713;
 /// Maker note NEFLinearizationTable.
 pub(crate) const NIKON_LINEARIZATION_TABLE: u16 = 0x0096;
+
+/// Packed uncompressed NEF modes 6 (12-bit) and 10 (14-bit). Measured on CC0
+/// Z6/Z7/D850 samples: little-endian bit packing, rows optionally padded to 16
+/// bytes. Selection comes from the maker note, never from the strip's length.
+pub(crate) fn read_packed(t: &Tiff, ifd: &Ifd, bits: u32, limits: &Limits) -> Result<Plane> {
+    let w = t.tag_uint(ifd, tag::IMAGE_WIDTH).ok_or_else(|| RawError::malformed("packed NEF has no width"))? as usize;
+    let h = t.tag_uint(ifd, tag::IMAGE_LENGTH).ok_or_else(|| RawError::malformed("packed NEF has no height"))? as usize;
+    if !t.le || t.tag_uint(ifd, tag::BITS_PER_SAMPLE) != Some(bits) || t.tag_uint(ifd, tag::SAMPLES_PER_PIXEL).unwrap_or(1) != 1 {
+        return Err(RawError::unsupported("packed NEF byte order, bit depth or sample layout"));
+    }
+    limits.check(w as u64, h as u64, 2)?;
+    let offsets = t.tag_uints(ifd, tag::STRIP_OFFSETS);
+    let counts = t.tag_uints(ifd, tag::STRIP_BYTE_COUNTS);
+    let ([off], [len]) = (offsets.as_slice(), counts.as_slice()) else {
+        return Err(RawError::unsupported("packed NEF with multiple strips"));
+    };
+    let src = t.bytes(*off as usize, *len as usize).ok_or_else(|| RawError::malformed("packed NEF strip lies outside the file"))?;
+    let data = unpack_little_rows(src, w, h, bits)?;
+    Ok(Plane { width: w, height: h, samples: 1, bits, data })
+}
+
+fn unpack_little_rows(src: &[u8], w: usize, h: usize, bits: u32) -> Result<Vec<u16>> {
+    let bad = || RawError::malformed("packed NEF row layout is invalid or truncated");
+    if w == 0 || h == 0 || !matches!(bits, 12 | 14) {
+        return Err(bad());
+    }
+    let row = w.checked_mul(bits as usize).ok_or_else(bad)?.div_ceil(8);
+    let padded = row.checked_add(15).ok_or_else(bad)? / 16 * 16;
+    let stride = if row.checked_mul(h) == Some(src.len()) {
+        row
+    } else if padded.checked_mul(h) == Some(src.len()) {
+        padded
+    } else {
+        return Err(bad());
+    };
+    let count = w.checked_mul(h).ok_or_else(bad)?;
+    let mut out = Vec::with_capacity(count);
+    let mask = (1u32 << bits) - 1;
+    for row in src.chunks_exact(stride) {
+        let mut bytes = row.iter();
+        let (mut acc, mut have) = (0u32, 0u32);
+        for _ in 0..w {
+            while have < bits {
+                acc |= u32::from(*bytes.next().ok_or_else(bad)?) << have;
+                have += 8;
+            }
+            out.push((acc & mask) as u16);
+            acc >>= bits;
+            have -= bits;
+        }
+    }
+    Ok(out)
+}
 
 /// A code word that never occurred in any analysed sample.
 const UNSEEN: u8 = u8::MAX;
@@ -223,8 +271,10 @@ pub(crate) fn parse_table(t: &[u8], le: bool, bits: u32) -> Result<DecodeTable> 
                 if split != 0 {
                     return Err(RawError::unsupported(format!("Nikon \"lossy after split\" compressed NEF (split at row {split})")));
                 }
-                // `0x40` codes two bits fewer than the sample depth (see the module comment).
-                let range = if v1 == 0x40 { 1usize << (bits - 2) } else { 1usize << bits };
+                // The modern lossy curve has a smaller *encoded* domain while
+                // its output remains in sensor ADUs. Using 2^bits stretches the
+                // curve fourfold and puts Z6 image values below its black level.
+                let range = 1usize << if v1 == 0x40 { bits - 2 } else { bits };
                 if n - 1 > range || !range.is_multiple_of(n - 1) {
                     return Err(RawError::unsupported(format!("Nikon compressed NEF: {n}-point curve for {bits}-bit data")));
                 }
@@ -481,42 +531,6 @@ mod tests {
         }
     }
 
-    /// Maker note `0x0096` version `0x44 0x40` as a Z 7 writes it: 257 points that start 0, 16, 32, … for 14 bits
-    /// (0, 4, 8, … for 12) and steepen towards the white level.
-    fn lossy_table_0x40(bits: u32) -> Vec<u8> {
-        let mut t = vec![0x44, 0x40];
-        for _ in 0..4 {
-            t.extend_from_slice(&300u16.to_le_bytes());
-        }
-        t.extend_from_slice(&257u16.to_le_bytes());
-        let (step, max) = (1u32 << (bits - 10), (1u32 << bits) - 1);
-        for i in 0..257u32 {
-            // Slope 1 for the first three quarters, then up to the white level.
-            let v = if i <= 192 { i * step } else { 192 * step + (max - 192 * step) * (i - 192) / 64 };
-            t.extend_from_slice(&(v as u16).to_le_bytes());
-        }
-        t.resize(624, 0);
-        t
-    }
-
-    #[test]
-    fn lossy_0x40_points_are_a_quarter_as_far_apart() {
-        for (bits, t) in [(12u32, LOSSY_12), (14, LOSSY_14)] {
-            let table = parse_table(&lossy_table_0x40(bits), true, bits).unwrap();
-            let Encoding::Lossy(curve) = &table.encoding else { panic!() };
-            let codes = 1usize << (bits - 2);
-            assert_eq!(curve.len(), codes + 1, "{bits}-bit: codes span two bits fewer than the samples");
-            // Where the points rise by one step per point, a code is its own sample: not a quarter of it.
-            assert!((0..=codes * 3 / 4).all(|code| usize::from(curve[code]) == code), "{bits}-bit");
-            assert_eq!(usize::from(curve[codes]), (1 << bits) - 1, "the last code is the white level");
-            assert!(curve.windows(2).all(|p| p[0] <= p[1]));
-            let (w, h) = (48, 7);
-            let img = image(w, h, codes as i32 - 1, 7);
-            let out = decode(&encode(&img, w, &t, table.seeds), w, h, bits, &table).unwrap();
-            assert_eq!(out, img.iter().map(|&v| curve[v as usize]).collect::<Vec<_>>());
-        }
-    }
-
     #[test]
     fn lossy_type1_full_curve() {
         let mut t = vec![0x44, 0x10, 0, 10, 0, 10, 0, 10, 0, 10, 0, 5];
@@ -545,6 +559,37 @@ mod tests {
         odd[10..12].copy_from_slice(&300u16.to_be_bytes());
         assert!(parse_table(&odd, false, 12).is_err());
         assert!(parse_table(&[0x44, 0x20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0], false, 12).is_err());
+    }
+
+    #[test]
+    fn modern_lossy_curve_preserves_sensor_adus_at_both_depths() {
+        for bits in [12u32, 14] {
+            for le in [false, true] {
+                let put = |v: u16| if le { v.to_le_bytes() } else { v.to_be_bytes() };
+                let mut t = vec![0x44, 0x40];
+                for _ in 0..4 {
+                    t.extend(put(256));
+                }
+                t.extend(put(257));
+                let white = (1u16 << bits) - 1;
+                for i in 0..=256u32 {
+                    t.extend(put(((i * 64).min(u32::from(white))) as u16));
+                }
+                t.resize(624, 0);
+                let parsed = parse_table(&t, le, bits).unwrap();
+                let Encoding::Lossy(curve) = &parsed.encoding else { panic!() };
+                let range = 1usize << (bits - 2);
+                assert_eq!(curve.len(), range + 1);
+                assert_eq!(curve[range], white);
+                // Stored point 16 is 1024 ADU. It belongs to encoded code 256
+                // at 14 bits, code 64 at 12 bits, independent of end-point clipping.
+                assert_eq!(curve[range / 16], 1024.min(white));
+                let indices = vec![0, (range / 16) as i32, (range / 8) as i32, (range / 32) as i32];
+                let huffman = if bits == 12 { &LOSSY_12 } else { &LOSSY_14 };
+                let src = encode(&indices, 2, huffman, parsed.seeds);
+                assert_eq!(decode(&src, 2, 2, bits, &parsed).unwrap(), vec![0, 1024, 2048, 512]);
+            }
+        }
     }
 
     /// A 14-bit lossless table (version 0x46) with the given seeds.

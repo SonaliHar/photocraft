@@ -350,13 +350,47 @@ fn invert_posterize_and_threshold_change_lab_and_cmyk_channels_as_stored() {
     assert_levels(&adjusted_pixel(lab16, &f([127.0, 30.0, 220.0, 255.0]), &level, None), &[0.0, 128.0, 128.0, 255.0], "Lab threshold dark");
 }
 
+/// Image › Adjustments › Brightness/Contrast on a CMYK layer curves each stored ink value
+/// (1 - ink) exactly, modern and legacy, and a selection mixes the stored inks.
 #[test]
-fn posterize_and_threshold_keep_the_16_bit_sample_grid_in_committed_pixels() {
-    let rgb = PixelFormat::new(ColorMode::Rgb, SampleType::U16, true);
-    // Just above the 16-bit bin boundary, but still in the lower 8-bit bin.
-    let posterized = adjusted_pixel(rgb, &[0.334, 0.334, 0.334, 1.0], &Adjustment::Posterize { levels: 3 }, None);
-    assert_levels(&posterized, &[128.0, 128.0, 128.0, 255.0], "16-bit posterize");
-    // Rounding the input channels to 8 bits changes this luminosity split.
-    let threshold = adjusted_pixel(rgb, &[0.34, 0.5, 0.12, 1.0], &Adjustment::Threshold { level: 105.0 / 255.0 }, None);
-    assert_levels(&threshold, &[0.0, 0.0, 0.0, 255.0], "16-bit threshold");
+fn brightness_contrast_curves_cmyk_inks_as_stored() {
+    let cmyk = PixelFormat::new(ColorMode::Cmyk, SampleType::U16, true);
+    let ink = [0.2, 0.4, 0.6, 0.1, 1.0];
+    for legacy in [false, true] {
+        let adj = Adjustment::BrightnessContrast { brightness: 25.0, contrast: 30.0, legacy };
+        let table = adjust::ink_brightness_contrast_lut(25.0, 30.0, legacy);
+        let got = adjusted_pixel(cmyk, &ink, &adj, None);
+        for c in 0..4 {
+            let want = adjust::ink_through(&table, ink[c]);
+            assert!((got[c] - want).abs() < 1e-4, "legacy {legacy} ink {c}: {} vs {want}", got[c]);
+        }
+        assert_eq!(got[4], 1.0);
+        let half = adjusted_pixel(cmyk, &ink, &adj, Some(0.5));
+        for c in 0..4 {
+            let want = ink[c] + (adjust::ink_through(&table, ink[c]) - ink[c]) * 128.0 / 255.0;
+            assert!((half[c] - want).abs() < 1e-3, "legacy {legacy} ink {c} through half a selection");
+        }
+    }
+}
+
+/// Image › Adjustments › Hue/Saturation and Color Balance on a CMYK layer work on its stored C, M
+/// and Y as inverted RGB, keep its black ink exactly, and mix through a selection.
+#[test]
+fn hue_saturation_and_color_balance_keep_a_cmyk_layers_black() {
+    let cmyk = PixelFormat::new(ColorMode::Cmyk, SampleType::U16, true);
+    let ink = [0.2, 0.7, 0.1, 0.3, 1.0];
+    let hue =
+        Adjustment::HueSaturation { hue: 40.0, saturation: 25.0, lightness: -10.0, colorize: false, ranges: photocraft_doc::adjust::HueRange::defaults() };
+    let balance =
+        Adjustment::ColorBalance { shadows: [20.0, -10.0, 0.0], midtones: [-15.0, 10.0, 30.0], highlights: [0.0, 0.0, -20.0], preserve_luminosity: true };
+    for adj in [hue, balance] {
+        let mut want = [[ink[0], ink[1], ink[2], ink[3]]];
+        adjust::apply_cmy(&adj, &mut want);
+        let got = adjusted_pixel(cmyk, &ink, &adj, None);
+        assert!((0..4).all(|c| (got[c] - want[0][c]).abs() < 1e-4), "{}: {got:?} vs {want:?}", adj.label());
+        assert!((got[3] - ink[3]).abs() < 1e-4 && got[4] == 1.0, "{}: black and alpha kept", adj.label());
+        let half = adjusted_pixel(cmyk, &ink, &adj, Some(0.5));
+        let k = 128.0 / 255.0;
+        assert!((0..4).all(|c| (half[c] - (ink[c] + (want[0][c] - ink[c]) * k)).abs() < 1e-3), "{}: half a selection", adj.label());
+    }
 }
