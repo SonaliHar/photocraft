@@ -47,9 +47,14 @@ pub fn packet_for_context(lparam: usize, hctx: usize) -> bool {
 /// `WTI_DEVICES` (wintab.h): the base `WTInfo` category of the device records; each device has
 /// its own ([`CATEGORY_LIMIT`] slots: 100..200, then `WTI_CURSORS`).
 const WTI_DEVICES: u32 = 100;
-/// `DVC_NPRESSURE` (wintab.h): the normal (tip) pressure `AXIS` entry.
+/// `DVC_NPRESSURE` (wintab.h): the normal (tip) pressure `AXIS` entry. Only the Windows glue
+/// queries it (the tests fake that query), so it exists exactly where something uses it: ungated,
+/// it is dead code on every other platform (and warnings are denied).
+#[cfg(any(target_os = "windows", test))]
 const DVC_NPRESSURE: u32 = 15;
-/// `DVC_ORIENTATION` (wintab.h): the `AXIS[3]` orientation entry (azimuth, altitude, twist).
+/// `DVC_ORIENTATION` (wintab.h): the `AXIS[3]` orientation entry (azimuth, altitude, twist). Gated
+/// like [`DVC_NPRESSURE`].
+#[cfg(any(target_os = "windows", test))]
 const DVC_ORIENTATION: u32 = 17;
 
 /// `WTI_CURSORS` (wintab.h): the base `WTInfo` category of the cursors. Each category spans
