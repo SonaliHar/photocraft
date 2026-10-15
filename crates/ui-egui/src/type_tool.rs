@@ -766,6 +766,10 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
         crate::type_transform::cancel_drag(app);
     }
     let Some(ed) = app.ui.text_edit.clone() else { return false };
+    // The font picker (and other focused fields) owns keyboard input while it is open.
+    if ctx.text_edit_focused() || ctx.egui_wants_keyboard_input() {
+        return true;
+    }
     let id = LayerId(ed.layer);
     let Some(text) = current_text(app, id) else {
         app.ui.text_edit = None;
@@ -1010,20 +1014,20 @@ pub fn draw_overlay(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewX
     }
     // Frame: paragraph text shows its box with handles; point text an underline per line.
     let mods = crate::workspace_ui::sticky_mods(app, painter.ctx().input(|i| i.modifiers));
-    if crate::type_transform::draw(app, painter, xf, mods) {
-        return;
-    }
+    let has_transform = crate::type_transform::draw(app, painter, xf, mods);
     let shape = app.session.active().and_then(|s| text_layer(&s.doc, id).map(|t| t.shape.clone()));
     let frame = Stroke::new(1.0, t.accent);
     match shape {
         Some(photocraft_doc::text::TextShape::Box { x, y, width, height }) => {
-            let c = [scr_t(x, y), scr_t(x + width, y), scr_t(x + width, y + height), scr_t(x, y + height)];
-            painter.add(egui::Shape::closed_line(c.to_vec(), frame));
-            let mids = [c[0].lerp(c[1], 0.5), c[1].lerp(c[2], 0.5), c[2].lerp(c[3], 0.5), c[3].lerp(c[0], 0.5)];
-            for p in c.iter().chain(mids.iter()) {
-                let r = egui::Rect::from_center_size(*p, egui::vec2(7.0, 7.0));
-                painter.rect_filled(r, 0.0, Color32::WHITE);
-                painter.rect_stroke(r, 0.0, frame, egui::StrokeKind::Inside);
+            if !has_transform {
+                let c = [scr_t(x, y), scr_t(x + width, y), scr_t(x + width, y + height), scr_t(x, y + height)];
+                painter.add(egui::Shape::closed_line(c.to_vec(), frame));
+                let mids = [c[0].lerp(c[1], 0.5), c[1].lerp(c[2], 0.5), c[2].lerp(c[3], 0.5), c[3].lerp(c[0], 0.5)];
+                for p in c.iter().chain(mids.iter()) {
+                    let r = egui::Rect::from_center_size(*p, egui::vec2(7.0, 7.0));
+                    painter.rect_filled(r, 0.0, Color32::WHITE);
+                    painter.rect_stroke(r, 0.0, frame, egui::StrokeKind::Inside);
+                }
             }
         }
         _ => {
@@ -1525,16 +1529,49 @@ pub(crate) fn family_picker_in(
     press.after(&response.response);
     let hovered_font = response.inner.unwrap_or_default();
 
+    // The wheel over the closed button steps through the families, a notch each, like Photoshop's
+    // options-bar font menu: no need to open the list (#3350).
+    if !egui::ComboBox::is_open(ui.ctx(), response.response.id) && ui.is_enabled() {
+        let hovered = response.response.hovered();
+        if hovered {
+            ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
+        }
+        let notches = crate::widgets::wheel_notches_of(ui, response.response.id.with("family-wheel"), hovered, 1.0);
+        let rows = font_menu_rows(families, labels, "");
+        if let Some(i) = rows.iter().position(|(f, _)| *f == current)
+            && let Some(n) = wheel_family_index(i, rows.len(), notches)
+            && let Some((f, _)) = rows.get(n)
+            && **f != *current
+        {
+            current.clone_from(f);
+            photocraft_text::served::request(f);
+            changed = true;
+        }
+    }
+
     if salt == "type-font" {
         let hover_id = egui::Id::new("type-font-hover");
         if let Some(f) = hovered_font {
             ui.ctx().data_mut(|d| d.insert_temp(hover_id, f));
-        } else {
+        } else if egui::ComboBox::is_open(ui.ctx(), response.response.id) {
+            // Only the open menu clears it: the options bar and the Character section both draw
+            // this picker, and the closed one must not wipe the other's hover (#5152).
             ui.ctx().data_mut(|d| d.remove::<String>(hover_id));
         }
     }
 
     changed
+}
+
+/// The row `notches` wheel notches from row `index` of `len` (down, negative, is the next one),
+/// stopping at the ends; none when the wheel did not move.
+fn wheel_family_index(index: usize, len: usize, notches: f32) -> Option<usize> {
+    let steps = notches.abs().min(len as f32) as usize;
+    if steps == 0 || len == 0 {
+        return None;
+    }
+    let last = len - 1;
+    Some(if notches < 0.0 { index.saturating_add(steps).min(last) } else { index.saturating_sub(steps) })
 }
 
 /// Representative for the displayed properties: the edit layer, else a selected type layer.

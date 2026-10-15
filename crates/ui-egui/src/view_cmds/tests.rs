@@ -256,6 +256,45 @@ fn apply_image_and_calculations_open_dialogs_without_editing() {
 }
 
 #[test]
+fn apply_image_dialog_offers_source_layer_scale_and_offset() {
+    let (mut app, ctx) = app_with(0);
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    app.run("edit.fill", json!({"color": "#c08040"})).unwrap();
+    app.run("layer.new.layer", json!({"name": "Skin High"})).unwrap();
+    app.run("edit.fill", json!({"color": "#406080"})).unwrap();
+    app.sync_views();
+    let background = app.session.active().unwrap().doc.walk()[0].2.name.clone();
+    let open = |app: &mut PhotocraftApp| menu(app, &ctx, "image.applyImage", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let d = open(&mut app);
+    let fields = &app.ui.dialog_mut(d).unwrap().fields;
+    assert_eq!(fields["sourceLayer"], "merged");
+    assert_eq!(fields["scale"], 1.0);
+    assert_eq!(fields["offset"], 0);
+    // Merged first, then the layers top to bottom, shown by their own names.
+    assert_eq!(fields["__choices"]["sourceLayer"], json!(["merged", "Skin High", background]));
+    assert_eq!(fields["__labels"]["Skin High"], "Skin High");
+    // The frequency separation recipe: a layer subtracted from itself at Scale 2, Offset 128 is mid grey.
+    for (k, v) in [("sourceLayer", json!("Skin High")), ("blending", json!("subtract")), ("scale", json!(2.0)), ("offset", json!(128))] {
+        app.ui.dialog_mut(d).unwrap().fields.insert(k.into(), v);
+    }
+    crate::dialogs::confirm(&mut app, d).unwrap();
+    let st = app.session.active().unwrap();
+    let p = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().pixel(3, 3);
+    assert!(p[..3].iter().all(|v| (v - 128.0 / 255.0).abs() < 0.003), "{p:?}");
+    app.run("edit.undo", json!({})).unwrap();
+    // The chosen layer is the source, not the merged image.
+    let d = open(&mut app);
+    for (k, v) in [("sourceLayer", json!(background)), ("blending", json!("subtract")), ("scale", json!(2.0)), ("offset", json!(128))] {
+        app.ui.dialog_mut(d).unwrap().fields.insert(k.into(), v);
+    }
+    crate::dialogs::confirm(&mut app, d).unwrap();
+    let st = app.session.active().unwrap();
+    let p = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().pixel(3, 3);
+    let want = (64.0 - 192.0) / 255.0 / 2.0 + 128.0 / 255.0;
+    assert!((p[0] - want).abs() < 0.003, "{p:?} vs {want}");
+}
+
+#[test]
 fn new_guide_layout_remembers_successful_values_not_cancelled_edits() {
     let (mut app, ctx) = app_with(1);
     let first = menu(&mut app, &ctx, "view.newGuideLayout", json!({})).unwrap()["dialog"].as_u64().unwrap();
@@ -288,8 +327,8 @@ fn new_guide_layout_remembers_successful_values_not_cancelled_edits() {
 
 #[test]
 fn new_guide_layout_does_not_remember_a_failed_command() {
-    let (mut app, _) = app_with(0);
-    let id = front(&mut app, "view.newGuideLayout", &json!({})).unwrap().unwrap()["dialog"].as_u64().unwrap();
+    let (mut app, ctx) = app_with(0);
+    let id = front(&mut app, &ctx, "view.newGuideLayout", &json!({})).unwrap().unwrap()["dialog"].as_u64().unwrap();
     app.ui.dialog_mut(id).unwrap().fields.insert("columns".into(), json!(3));
     assert!(crate::dialogs::confirm(&mut app, id).is_err());
     assert_eq!(app.ui.view.guide_layout["columns"], 8);
@@ -297,10 +336,10 @@ fn new_guide_layout_does_not_remember_a_failed_command() {
 
 #[test]
 fn lookup_export_dialog_uses_the_current_adjustment_selection() {
-    let (mut app, _ctx) = app_with(1);
+    let (mut app, ctx) = app_with(1);
     app.run("layer.newAdjustmentLayer.invert", json!({})).unwrap();
     let current = app.session.active().unwrap().active_layer.unwrap();
-    let opened = front(&mut app, "file.export.colorLookupTables", &json!({})).unwrap().unwrap();
+    let opened = front(&mut app, &ctx, "file.export.colorLookupTables", &json!({})).unwrap().unwrap();
     let id = opened["dialog"].as_u64().unwrap();
     let dialog = &app.ui.dialogs.last().unwrap().fields;
     assert_eq!(dialog["scope"], "selected");
@@ -309,7 +348,7 @@ fn lookup_export_dialog_uses_the_current_adjustment_selection() {
     app.ui.close_dialog(id);
 
     app.run("layer.new.layer", json!({"name": "Unrelated pixels"})).unwrap();
-    let opened = front(&mut app, "file.export.colorLookupTables", &json!({})).unwrap().unwrap();
+    let opened = front(&mut app, &ctx, "file.export.colorLookupTables", &json!({})).unwrap().unwrap();
     let id = opened["dialog"].as_u64().unwrap();
     assert_eq!(app.ui.dialogs.last().unwrap().fields["scope"], "all");
     app.ui.close_dialog(id);
@@ -318,6 +357,32 @@ fn lookup_export_dialog_uses_the_current_adjustment_selection() {
     let direct = app.run("file.export.colorLookupTables", json!({"size": 3, "scope": "selected"})).unwrap();
     assert_eq!(direct["layerCount"], 1);
     assert!(direct["cube"].as_str().unwrap().contains("LUT_3D_SIZE 3"));
+}
+
+/// Batch and Image Processor carry Photoshop's "Include All Subfolders" checkbox (AUTO-219-5,
+/// #3753): off by default, and confirming it on processes a subfolder's images too.
+#[test]
+fn batch_dialogs_include_all_subfolders() {
+    let (mut app, ctx) = app_with(1);
+    let dir = std::env::temp_dir().join(format!("photocraft-ui-batch-subfolders-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("in/sub")).unwrap();
+    let input = dir.join("in").to_string_lossy().into_owned();
+    app.run("file.saveACopy", json!({"path": dir.join("in/sub/a.png").to_string_lossy()})).unwrap();
+    app.session.actions.list.push(photocraft_engine::actions_cmds::Action::new("Invert", vec![("image.adjustments.invert".into(), json!({}))]));
+    for (id, out) in [("file.automate.batch", "batch"), ("file.scripts.imageProcessor", "processed")] {
+        let d = menu(&mut app, &ctx, id, json!({})).unwrap()["dialog"].as_u64().unwrap();
+        let fields = &mut app.ui.dialog_mut(d).unwrap().fields;
+        assert_eq!(fields["includeSubfolders"], json!(false), "{id}");
+        assert_eq!(fields["__labels"]["includeSubfolders"], json!("Include All Subfolders"), "{id}");
+        fields.insert("input".into(), json!(input));
+        fields.insert("output".into(), json!(dir.join(out).to_string_lossy()));
+        fields.insert("includeSubfolders".into(), json!(true));
+        let r = crate::dialogs::confirm(&mut app, d).unwrap();
+        assert_eq!(r["files"].as_array().map(Vec::len), Some(1), "{id}: {r}");
+        assert!(dir.join(out).join("sub").is_dir(), "{id} keeps the subfolder: {r}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Float in Window takes the document and the screen position a dragged-off tab was dropped at
