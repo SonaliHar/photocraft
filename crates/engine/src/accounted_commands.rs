@@ -934,3 +934,7 @@ mod component_luma_workflow_tests;
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_alpha_flat_workflow_tests.rs"]
 mod alpha_flat_workflow_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "accounted_lab_flat_workflow_tests.rs"]
+mod lab_flat_workflow_tests;

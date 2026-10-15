@@ -34,6 +34,9 @@ pub fn is_supported_component_mode(mode: i32) -> bool {
 pub fn is_supported_alpha_mode(mode: i32) -> bool {
     matches!(mode, 57..=60)
 }
+pub fn is_supported_lab_mode(mode: i32) -> bool {
+    matches!(mode, 24..=27)
+}
 pub(crate) fn error() -> E {
     E::Unsupported("bounded modern separable RGB transfer stack")
 }
@@ -96,7 +99,82 @@ pub(crate) fn space_requirements(profile: &Profile, stored: SampleEncoding, need
 }
 pub(crate) struct Spaces<L> {
     values: [Option<WorkingSpace>; 3],
+    lab: Option<PaidLab<L>>,
     _fee: L,
+}
+struct PaidLab<L> {
+    space: WorkingSpace,
+    per_pixel: u64,
+    _fee: L,
+}
+trait LabBudget {
+    type Lease;
+    fn reserve(&mut self, n: u64) -> Result<Self::Lease, E>;
+    fn work(&mut self, n: u64) -> Result<(), E>;
+    fn interrupt(&self) -> &photocraft_raster::Interrupt<'_>;
+}
+fn prepare_lab<B: LabBudget>(profile: &Profile, stored: SampleEncoding, budget: &mut B) -> Result<PaidLab<B::Lease>, E> {
+    let stored = encoding(stored);
+    budget.work(photocraft_cms::owned_lab::planning_work_ceiling(profile, stored).map_err(cms)?)?;
+    let limits = photocraft_cms::control::Limits::default();
+    let requirements = photocraft_cms::owned_lab::requirements_with_control(profile, stored, limits, &|| budget.interrupt().cancelled()).map_err(cms)?;
+    let bytes = requirements.peak_resident_bytes.checked_add(std::mem::size_of::<PaidLab<B::Lease>>()).ok_or_else(length)?;
+    let fee = budget.reserve(bytes as u64)?;
+    struct Staged<L> {
+        parts: Option<photocraft_cms::owned_lab::Parts>,
+        fee: L,
+    }
+    let mut staged = Staged { parts: None, fee };
+    budget.work(requirements.work_units)?;
+    staged.parts = Some(
+        photocraft_cms::owned_lab::construct_with_control(
+            profile,
+            stored,
+            photocraft_cms::control::Limits { resident_bytes: requirements.peak_resident_bytes, work_units: requirements.work_units },
+            &|| budget.interrupt().cancelled(),
+        )
+        .map_err(cms)?,
+    );
+    budget.work(0)?;
+    let Staged { parts, fee } = staged;
+    let parts = parts.ok_or_else(error)?;
+    let per_pixel = parts.per_pixel_work_units;
+    Ok(PaidLab { space: WorkingSpace::from_owned_physical_lab(parts, profile), per_pixel, _fee: fee })
+}
+struct CurrentLabBudget<'a, 'c> {
+    q: &'a BackingQuota,
+    c: &'a ReadControl<'c>,
+}
+impl LabBudget for CurrentLabBudget<'_, '_> {
+    type Lease = QuotaLease;
+    fn reserve(&mut self, n: u64) -> Result<QuotaLease, E> {
+        self.q.reserve(QuotaKind::Resident, n).map_err(E::Quota)
+    }
+    fn work(&mut self, n: u64) -> Result<(), E> {
+        self.c.check(n).map_err(E::Backing)
+    }
+    fn interrupt(&self) -> &photocraft_raster::Interrupt<'_> {
+        self.c.interrupt
+    }
+}
+struct SourceLabBudget<'a, 'i, B> {
+    budget: &'a mut B,
+    interrupt: &'a photocraft_raster::Interrupt<'i>,
+}
+impl<B: crate::gimp_render::PreparationBudget> LabBudget for SourceLabBudget<'_, '_, B> {
+    type Lease = B::Lease;
+    fn reserve(&mut self, n: u64) -> Result<B::Lease, E> {
+        self.budget.reserve_prepared_bytes(n).map_err(E::Color)
+    }
+    fn work(&mut self, n: u64) -> Result<(), E> {
+        if self.interrupt.cancelled() {
+            return Err(E::Backing(BackingError::Cancelled));
+        }
+        self.budget.consume_preparation_work(n).map_err(E::Color)
+    }
+    fn interrupt(&self) -> &photocraft_raster::Interrupt<'_> {
+        self.interrupt
+    }
 }
 impl<L> Spaces<L> {
     pub(crate) fn prepare(
@@ -107,7 +185,7 @@ impl<L> Spaces<L> {
         interrupt: &photocraft_raster::Interrupt<'_>,
     ) -> Result<Self, E> {
         // Payload-before-fee guard is installed before any fallible constructor.
-        let mut out = Self { values: [None, None, None], _fee: fee };
+        let mut out = Self { values: [None, None, None], lab: None, _fee: fee };
         photocraft_cms::xcf_color::qualify_effective_analytic_profile(profile, encoding(stored)).map_err(|e| color(CompositionError::Color(e)))?;
         for (i, kind) in [GimpSpace::LinearRgb, GimpSpace::ProfileRgb, GimpSpace::PerceptualRgb].into_iter().enumerate() {
             if needed.get(i).copied().ok_or_else(error)? {
@@ -117,7 +195,20 @@ impl<L> Spaces<L> {
         Ok(out)
     }
     fn get(&self, kind: GimpSpace) -> Result<&WorkingSpace, E> {
+        if kind == GimpSpace::Lab {
+            return self.lab.as_ref().map(|v| &v.space).ok_or_else(error);
+        }
         self.values.get(slot(kind)?).and_then(Option::as_ref).ok_or_else(error)
+    }
+    pub(crate) fn prepare_lab_budgeted<B: crate::gimp_render::PreparationBudget<Lease = L>>(
+        &mut self,
+        profile: &Profile,
+        stored: SampleEncoding,
+        budget: &mut B,
+        interrupt: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<(), E> {
+        self.lab = Some(prepare_lab(profile, stored, &mut SourceLabBudget { budget, interrupt })?);
+        Ok(())
     }
 }
 #[derive(Clone, Copy)]
@@ -172,6 +263,7 @@ impl<'a> PreparedBackedSeparableStack<'a> {
             return Err(error());
         }
         let mut needed = [false; 3];
+        let mut needs_lab = false;
         for input in layers {
             c.check(std::mem::size_of::<SeparableStackLayer<'_>>() as u64).map_err(E::Backing)?;
             if !q.shares_ledger(input.layer.quota())
@@ -183,17 +275,26 @@ impl<'a> PreparedBackedSeparableStack<'a> {
                     || is_supported_mode(input.source_mode)
                     || is_supported_legacy_mode(input.source_mode)
                     || is_supported_component_mode(input.source_mode)
-                    || is_supported_alpha_mode(input.source_mode))
+                    || is_supported_alpha_mode(input.source_mode)
+                    || is_supported_lab_mode(input.source_mode))
             {
                 return Err(error());
             }
-            *needed.get_mut(slot(input.blend_space)?).ok_or_else(error)? = true;
-            *needed.get_mut(slot(input.composite_space)?).ok_or_else(error)? = true;
+            for kind in [input.blend_space, input.composite_space] {
+                if kind == GimpSpace::Lab {
+                    needs_lab = true;
+                } else {
+                    *needed.get_mut(slot(kind)?).ok_or_else(error)? = true;
+                }
+            }
         }
         let (bytes, work) = space_requirements(profile, stored, needed, std::mem::size_of::<Spaces<QuotaLease>>())?;
         let fee = q.reserve(QuotaKind::Resident, bytes).map_err(E::Quota)?;
         c.check(work).map_err(E::Backing)?;
-        let spaces = Spaces::prepare(profile, stored, needed, fee, c.interrupt)?;
+        let mut spaces = Spaces::prepare(profile, stored, needed, fee, c.interrupt)?;
+        if needs_lab {
+            spaces.lab = Some(prepare_lab(profile, stored, &mut CurrentLabBudget { q, c })?);
+        }
         let indexbytes = layers
             .len()
             .checked_mul(std::mem::size_of::<Entry<'a>>())
@@ -228,7 +329,8 @@ impl<'a> PreparedBackedSeparableStack<'a> {
             let default = decode(view.default_bytes(), format)?;
             if (is_supported_legacy_mode(entry.input.source_mode)
                 || is_supported_component_mode(entry.input.source_mode)
-                || is_supported_alpha_mode(entry.input.source_mode))
+                || is_supported_alpha_mode(entry.input.source_mode)
+                || is_supported_lab_mode(entry.input.source_mode))
                 && default.iter().any(|v| !(0.0..=1.0).contains(v))
             {
                 return Err(error());
@@ -245,7 +347,8 @@ impl<'a> PreparedBackedSeparableStack<'a> {
                         let pixel = decode(raw, format)?;
                         if (is_supported_legacy_mode(entry.input.source_mode)
                             || is_supported_component_mode(entry.input.source_mode)
-                            || is_supported_alpha_mode(entry.input.source_mode))
+                            || is_supported_alpha_mode(entry.input.source_mode)
+                            || is_supported_lab_mode(entry.input.source_mode))
                             && pixel.iter().any(|v| !(0.0..=1.0).contains(v))
                         {
                             return Err(error());
@@ -274,9 +377,10 @@ impl<'a> PreparedBackedSeparableStack<'a> {
             let mut next = Band::new(&self.quota, count, c)?;
             let composite = self.spaces.get(entry.input.composite_space)?;
             let blend = self.spaces.get(entry.input.blend_space)?;
+            let lab_work = if is_supported_lab_mode(entry.input.source_mode) { self.spaces.lab.as_ref().ok_or_else(error)?.per_pixel } else { 0 };
             for _y in rect.y0..rect.y1 {
                 for _x in rect.x0..rect.x1 {
-                    c.check(32 + 128).map_err(E::Backing)?;
+                    c.check((32u64 + 128).checked_add(lab_work).ok_or_else(length)?).map_err(E::Backing)?;
                     let bg = prior.as_ref().map_or(Ok(backdrop), |b| b.pixels.get(next.pixels.len()).copied().ok_or_else(error))?;
                     // Zero source must still reach the existing operator equation.
                     let value = if entry.mode == GimpBlendMode::Normal {
@@ -296,7 +400,7 @@ impl<'a> PreparedBackedSeparableStack<'a> {
                 let r = coord.rect().intersect(&active);
                 for y in r.y0..r.y1 {
                     for x in r.x0..r.x1 {
-                        c.check(512 + format.channels() as u64).map_err(E::Backing)?;
+                        c.check((512u64 + format.channels() as u64).checked_add(lab_work).ok_or_else(length)?).map_err(E::Backing)?;
                         let mut bytes = [0; 40];
                         let raw = bytes.get_mut(..format.bytes_per_pixel()).ok_or_else(error)?;
                         pin.read_pixel_native_into(x, y, raw, c).map_err(E::View)?;

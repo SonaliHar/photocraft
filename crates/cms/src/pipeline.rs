@@ -160,6 +160,17 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
+    /// Actual nested public Vec storage; no allocator/RSS claim.
+    pub fn retained_bytes_with_control(&self,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<usize>{
+        use crate::control::{Budget,Error};let mut b=Budget::new(limits,cancelled)?;self.validate_controlled()?;
+        let mut n=self.stages.capacity().checked_mul(std::mem::size_of::<Stage>()).and_then(|n|n.checked_add(std::mem::size_of::<Self>())).ok_or(Error::Limit("pipeline retained"))?;
+        for stage in &self.stages{b.work(1)?;n=n.checked_add(stage.controlled_bytes()?).ok_or(Error::Limit("pipeline retained"))?;b.admit(n,0)?;}b.admit(n,0)?;Ok(n)
+    }
+    /// Prospective wide evaluation schedule from actual retained stage shapes.
+    pub fn evaluation_work_units_with_control(&self,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<u64>{
+        let mut b=crate::control::Budget::new(limits,cancelled)?;self.validate_controlled()?;
+        let mut n=0u64;for stage in &self.stages{b.work(1)?;n=n.checked_add(stage.controlled_work()?).ok_or(crate::control::Error::Limit("pipeline evaluation work"))?;}b.admit(0,n)?;Ok(n)
+    }
     pub fn new(inputs: usize, stages: Vec<Stage>) -> Self {
         let outputs = stages.iter().fold(inputs, |n, s| s.outputs(n));
         Pipeline { inputs, outputs, stages }

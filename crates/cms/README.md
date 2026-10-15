@@ -200,3 +200,22 @@ boundaries. Public GIMP gamma/type3/type4 holdouts vary parameters and primaries
 consumer qualification is recorded separately from this mathematical predicate.
 
 `xcf_color::qualify_effective_analytic_profile(profile, encoding)` checks active current ICC interpretation without immutable source substitution. It keeps the existing semantic D50 matrix/shaper class. Linear accepts only operative identity transfer (Identity, Gamma(1), or parametric type0 gamma1); Perceptual accepts only canonical sRGB parametric type3 coefficients, analytical or their exact ICC s15Fixed16-rounded array. One additional coefficient LSB is outside this exact effective interpretation. Gray uses only kTRC; unrelated RGB tags are inert. This helper does not admit new source epochs or change Curve evaluation.
+
+### Controlled physical Lab preparation
+
+`owned_lab` provides an additive matrix/TRC RGB nonlinear preparation path.
+Callers first debit `planning_work_ceiling`, then obtain
+`requirements_with_control`, reserve its aggregate peak on their actual quota,
+and debit its constructor work before `construct_with_control`. Requirements
+and local `Limits` are facts and bounds; they are not allocation receipts.
+Keep the full peak reservation alive with the returned resources unless a
+complete retained-capacity census justifies a smaller reservation.
+
+`Parts` retains both RelativeColorimetric/no-BPC transforms and the physical
+D50 Lab forward/reverse side pipelines. Physical Lab values and signed inverse
+RGB remain distinct from normalized ICC Lab. `per_pixel_work_units` prices two
+physical forwards, one reverse and the clip-to-backdrop composite-transfer
+schedule; callers debit it before evaluation in addition to native/coverage work.
+`Pipeline::retained_bytes_with_control` and
+`evaluation_work_units_with_control` expose bounded capacity and evaluation
+facts. Existing transform constructors and cached transform behavior are unchanged.

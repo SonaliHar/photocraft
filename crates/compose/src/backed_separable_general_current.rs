@@ -32,7 +32,8 @@ fn policy(policy: &GimpComposition, version: u32, c: &ReadControl<'_>) -> Result
             || lower::is_supported_mode(policy.source_mode)
             || lower::is_supported_legacy_mode(policy.source_mode)
             || lower::is_supported_component_mode(policy.source_mode)
-            || lower::is_supported_alpha_mode(policy.source_mode))
+            || lower::is_supported_alpha_mode(policy.source_mode)
+            || lower::is_supported_lab_mode(policy.source_mode))
     {
         return Err(scope());
     }
@@ -70,6 +71,18 @@ fn policy(policy: &GimpComposition, version: u32, c: &ReadControl<'_>) -> Result
             return Err(scope());
         }
         let rule = flat_alpha_source_rule(version, policy.source_mode, policy.stored_blend_space, policy.stored_composite_space, policy.stored_operator)
+            .ok_or_else(scope)?;
+        if policy.checked_resolved().map_err(|_| scope())? != &rule.resolved() {
+            return Err(scope());
+        }
+        return Ok(Recipe { mode: policy.source_mode, blend: rule.blend_space, composite: rule.composite_space, operator: rule.operator });
+    }
+    if lower::is_supported_lab_mode(policy.source_mode) {
+        use photocraft_doc::import_compositing::{XCF12_FLAT_LAB_SOURCE_EPOCH, flat_lab_source_rule};
+        if policy.compatibility_epoch != XCF12_FLAT_LAB_SOURCE_EPOCH {
+            return Err(scope());
+        }
+        let rule = flat_lab_source_rule(version, policy.source_mode, policy.stored_blend_space, policy.stored_composite_space, policy.stored_operator)
             .ok_or_else(scope)?;
         if policy.checked_resolved().map_err(|_| scope())? != &rule.resolved() {
             return Err(scope());
@@ -267,9 +280,15 @@ impl<'a> Metadata<'a> {
                 return Err(scope());
             }
             has_alpha |= lower::is_supported_alpha_mode(recipe.mode);
-            let physical = layer.import_compositing.as_ref().ok_or_else(scope)?;
-            if physical.pass_through || physical.blend_encoding != transfer(recipe.blend)? || physical.composite_encoding != transfer(recipe.composite)? {
-                return Err(scope());
+            if lower::is_supported_lab_mode(recipe.mode) {
+                if layer.import_compositing.is_some() {
+                    return Err(scope());
+                }
+            } else {
+                let physical = layer.import_compositing.as_ref().ok_or_else(scope)?;
+                if physical.pass_through || physical.blend_encoding != transfer(recipe.blend)? || physical.composite_encoding != transfer(recipe.composite)? {
+                    return Err(scope());
+                }
             }
             // Physical Layer.blend stays inert, exactly as in the resident path.
             out.inputs.push(SeparableStackLayer {

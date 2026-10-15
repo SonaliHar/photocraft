@@ -1788,3 +1788,19 @@ transition wire; metadata and Move use the same paid transactions in both models
 Eight referenced producer Gray effective-ICC captures are missing locally and
 remain an evidence HOLD; no byte equivalence is asserted. Tests, UI visual checks
 and numerical/profile acceptance remain deferred.
+Owned LCh modes24..27 use physical CIELab D50 through a separate paid preparation
+owner. Before initialization, the caller prepays bounded planning, the full
+constructor peak and constructor work for effective-source/target profiles,
+both Relative/noBPC transforms and physical side pipelines, including stage
+vector overlap. Actual per-pixel pipeline work is charged before both exterior
+zero-source and operative evaluation. Existing signed inverse RGB and zero-chroma
+behavior is unchanged; normalized ICC Lab is not a fallback.
+
+Original LabStrict source selection retains the established v12 RGB F32 nonlinear
+implicit-sRGB two-layer geometry, raw(-3,-1,-2) and complete native-unit proof,
+with no refusal retry. CURRENT remains bounded dynamic geometry and requires
+exact Lab policy. The original physical import hint remains absent; canonical
+composition carries Lab authority. Existing RGB modern20 explicit transitions
+may replace it with their matching physical hint. No LCh composition setter,
+new profile grant or native normalization is added. Tests and numerical/profile
+acceptance remain deferred.

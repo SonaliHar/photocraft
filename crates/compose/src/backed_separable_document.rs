@@ -34,6 +34,8 @@ mod tests;
 mod alpha_source;
 #[path = "backed_separable_component_source.rs"]
 mod component_source;
+#[path = "backed_separable_lab_source.rs"]
+mod lab_source;
 fn implicit_basis(doc: &Document) -> Result<&'static photocraft_cms::Profile, E> {
     match (doc.mode, &doc.working_profile_interpretation) {
         (ColorMode::Rgb, WorkingProfileInterpretation::ImplicitSrgb { .. }) => Ok(Builtin::Srgb.profile()),
@@ -314,6 +316,42 @@ impl<S, L> LeasedSeparableBlendPipeline<S, L> {
             _ => CompositionError::Unsupported("component/luma flat source preparation"),
         })
     }
+    /// Preparation for exact physical-Lab originals, with a real CMS bundle fee.
+    pub fn new_lab_budgeted<B: crate::gimp_render::PreparationBudget<Lease = L>>(
+        doc: &Document,
+        interrupt: &Interrupt<'_>,
+        budget: &mut B,
+        source_lease: S,
+    ) -> Result<Self, CompositionError> {
+        let result = (|| -> Result<Self, E> {
+            let mut check = |n| {
+                if interrupt.cancelled() {
+                    return Err(E::Backing(BackingError::Cancelled));
+                }
+                budget.consume_preparation_work(n).map_err(E::Color)
+            };
+            let recipes = lab_source::metadata(doc, interrupt, &mut check)?;
+            let mut needed = [false; 3];
+            for r in recipes {
+                if r.blend != GimpSpace::Lab {
+                    *needed.get_mut(lower::slot(r.blend)?).ok_or_else(scope)? = true;
+                }
+                *needed.get_mut(lower::slot(r.composite)?).ok_or_else(scope)? = true;
+            }
+            let profile = Builtin::Srgb.profile();
+            let (bytes, work) = lower::space_requirements(profile, SampleEncoding::NonlinearProfile, needed, std::mem::size_of::<Self>())?;
+            let fee = budget.reserve_prepared_bytes(bytes).map_err(E::Color)?;
+            budget.consume_preparation_work(work).map_err(E::Color)?;
+            let mut spaces = Spaces::prepare(profile, SampleEncoding::NonlinearProfile, needed, fee, interrupt)?;
+            spaces.prepare_lab_budgeted(profile, SampleEncoding::NonlinearProfile, budget, interrupt)?;
+            Ok(Self { _recipes: None, _spaces: spaces, _source: source_lease })
+        })();
+        result.map_err(|e| match e {
+            E::Color(e) => e,
+            E::Backing(BackingError::Cancelled) => photocraft_raster::RasterInputError::Cancelled.into(),
+            _ => CompositionError::Unsupported("physical Lab flat source preparation"),
+        })
+    }
     /// Preparation for separately admitted exact RGB/Gray alpha originals.
     pub fn new_alpha_budgeted<B: crate::gimp_render::PreparationBudget<Lease = L>>(
         doc: &Document,
@@ -398,7 +436,8 @@ impl<'a> PreparedBackedSeparableDocument<'a> {
             let unit = matches!(mode, 41..=49 | 51 | 53)
                 || lower::is_supported_legacy_mode(mode)
                 || lower::is_supported_component_mode(mode)
-                || lower::is_supported_alpha_mode(mode);
+                || lower::is_supported_alpha_mode(mode)
+                || lower::is_supported_lab_mode(mode);
             let LayerContent::BackedRaster(backed) = &layer.content else { return Err(scope()) };
             let view = backed.checked_view();
             let f = view.format();

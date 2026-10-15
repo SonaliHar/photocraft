@@ -66,6 +66,11 @@ pub struct WorkingSpace {
     physical_lab: Option<(photocraft_cms::pipeline::Pipeline, photocraft_cms::pipeline::Pipeline)>,
 }
 impl WorkingSpace {
+    /// Additive owned-only entry; the caller holds the complete CMS peak fee.
+    pub(crate) fn from_owned_physical_lab(parts:photocraft_cms::owned_lab::Parts,profile:&Profile)->Self {
+        Self { kind:GimpSpace::Lab,forward:Some(parts.forward),reverse:Some(parts.reverse),channels:3,transfer:None,
+            luminance:crate::gimp_blend::luminance_coefficients(profile),physical_lab:Some((parts.physical_forward,parts.physical_reverse)) }
+    }
     pub fn new(profile: &Profile, stored: SampleEncoding, working: GimpSpace) -> Result<Self> {
         Self::new_with_interrupt(profile, stored, working, &photocraft_raster::Interrupt::NONE)
     }

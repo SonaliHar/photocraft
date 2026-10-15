@@ -13,6 +13,9 @@ pub use flat_component_source::{FlatComponentSourceRule, XCF12_FLAT_COMPONENT_SO
 #[path = "flat_alpha_source.rs"]
 mod flat_alpha_source;
 pub use flat_alpha_source::{FlatAlphaSourceRule, XCF12_FLAT_ALPHA_SOURCE_EPOCH, flat_alpha_source_rule};
+#[path = "flat_lab_source.rs"]
+mod flat_lab_source;
+pub use flat_lab_source::{FlatLabSourceRule, XCF12_FLAT_LAB_SOURCE_EPOCH, flat_lab_source_rule};
 /// Explicit structural behavior identity, independent of current profile assignment.
 pub const XCF13_ISOLATED_MULTIPLY_SEED_EPOCH: &str = "xcf13-isolated-multiply-seed-v1";
 /// Finite signed/over-one source alpha over an empty or opaque backdrop only.

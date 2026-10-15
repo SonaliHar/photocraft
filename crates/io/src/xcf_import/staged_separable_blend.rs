@@ -6,6 +6,8 @@ mod legacy;
 mod component;
 #[path = "staged_alpha_separable_blend.rs"]
 mod alpha;
+#[path = "staged_lab_separable_blend.rs"]
+mod lab;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Domain {
     Basic,
@@ -16,7 +18,7 @@ pub(super) fn mode(mode: i32) -> bool {
     matches!(mode,23|30..=36|41..=53)
 }
 pub(super) fn hint<P>(f: &XcfFile<P>) -> bool {
-    f.layers.len() == 2 && f.layers.first().is_some_and(|d| !d.group && (mode(d.mode) || legacy::mode(d.mode) || component::mode(d.mode) || alpha::mode(d.mode)))
+    f.layers.len() == 2 && f.layers.first().is_some_and(|d| !d.group && (mode(d.mode) || legacy::mode(d.mode) || component::mode(d.mode) || alpha::mode(d.mode) || lab::mode(d.mode)))
 }
 pub(super) fn domain<P: ExactParsedPlane>(f: &XcfFile<P>) -> Option<Domain> {
     if f.model != Model::Rgb
@@ -137,6 +139,7 @@ pub(super) enum SourceKind {
     LegacyStrict,
     ComponentStrict,
     AlphaStrict,
+    LabStrict,
     General,
 }
 fn pay(ctl: &Interrupt<'_>, budget: &photocraft_xcf::Budget<'_>, units: u64) -> Result<(), IoError> {
@@ -175,6 +178,7 @@ pub(super) fn qualify_selected<P: ExactParsedPlane>(
     if legacy::domain(f) { return legacy::qualify(f, ctl, budget).map(|ok| ok.then_some(SourceKind::LegacyStrict)); }
     if component::domain(f) { return component::qualify(f, ctl, budget).map(|ok| ok.then_some(SourceKind::ComponentStrict)); }
     if alpha::domain(f) { return alpha::qualify(f, ctl, budget).map(|ok| ok.then_some(SourceKind::AlphaStrict)); }
+    if lab::domain(f) { return lab::qualify(f, ctl, budget).map(|ok| ok.then_some(SourceKind::LabStrict)); }
     qualify_general(f, ctl, budget).map(|ok| ok.then_some(SourceKind::General))
 }
 fn qualify_general<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, budget: &photocraft_xcf::Budget<'_>) -> Result<bool, IoError> {
@@ -295,3 +299,9 @@ pub(super) fn alpha_domain<P:ExactParsedPlane>(f:&XcfFile<P>)->bool{alpha::domai
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "staged_alpha_separable_blend_tests.rs"]
 mod alpha_tests;
+
+pub(super) fn lab_domain<P:ExactParsedPlane>(f:&XcfFile<P>)->bool{lab::domain(f)}
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "staged_lab_separable_blend_tests.rs"]
+mod lab_tests;

@@ -28,6 +28,8 @@ mod component_tests;
 mod general_current_tests;
 #[path = "backed_separable_general_source_tests.rs"]
 mod general_source_tests;
+#[path = "backed_separable_lab_tests.rs"]
+mod lab_tests;
 #[path = "backed_separable_legacy_tests.rs"]
 mod legacy_tests;
 fn ctl() -> ReadControl<'static> {
