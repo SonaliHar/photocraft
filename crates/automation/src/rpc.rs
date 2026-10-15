@@ -7,7 +7,7 @@
 //! Methods (camelCase params):
 //! - `engine.execute {command, params?, wait?}` / `engine.commands {filter?}`
 //! - `jobs.list` / `jobs.cancel {job?}`: background jobs (#210)
-//! - `session.list`, `doc.open {path, xcfProfilePolicy?: "keepCurrent"}`, `doc.new {…file.new params}`,
+//! - `session.list`, `doc.open {path, xcfProfilePolicy?: "keepCurrent", nativeProfilePolicy?: "keepCurrent"}`, `doc.new {…file.new params}`,
 //!   `doc.place {path, scale?, fit?, center?, index?}` (#2810: the read root is the scope,
 //!   the counterpart of the refused ambient `file.placeEmbedded`),
 //!   `doc.exportLayers {dir, format?, prefix?, visibleOnly?, quality?, index?}`,
@@ -35,7 +35,7 @@ use crate::security::{
 use crate::{AutomationError, Headless};
 mod owned_xcf_open;
 use owned_xcf_open::RoutedReply;
-pub(crate) use owned_xcf_open::validate_owned_path;
+pub(crate) use owned_xcf_open::{validate_owned_path,validate_owned_native_path};
 
 /// Method names served by [`Headless::handle`].
 pub const METHODS: &[&str] = &[
@@ -82,7 +82,7 @@ fn str_of<'a>(p: &'a Value, k: &str) -> Option<&'a str> {
 impl Headless {
     /// Dispatch one request. Unknown methods and bad params are errors, never panics.
     pub fn handle(&mut self, method: &str, params: Value) -> Result<Value, AutomationError> {
-        if method=="doc.open" && params.get("xcfProfilePolicy").is_some() {
+        if method=="doc.open" && (params.get("xcfProfilePolicy").is_some() || params.get("nativeProfilePolicy").is_some()) {
             return Err(bad("explicit owned doc.open requires the retained RPC transport or owned Headless API"));
         }
         if method == "xcf.link.substituteFromRoot" {
@@ -288,7 +288,7 @@ fn respond_retained(h: &Mutex<Headless>, line: &str, allow_owned:bool) -> Routed
     let Some(method)=req.get("method").and_then(Value::as_str) else {
         return RoutedReply::Legacy(json!({"id":id,"ok":false,"error":"missing `method`"}));
     };
-    let owned=method=="doc.open" && req.get("params").is_some_and(|p|p.get("xcfProfilePolicy").is_some());
+    let owned=method=="doc.open" && req.get("params").is_some_and(|p|p.get("xcfProfilePolicy").is_some() || p.get("nativeProfilePolicy").is_some());
     if owned {
         if let Err(error)=owned_xcf_open::validate_id_shape(id) {
             return RoutedReply::Legacy(json!({"id":null,"ok":false,"error":error.to_string()}));
@@ -296,9 +296,12 @@ fn respond_retained(h: &Mutex<Headless>, line: &str, allow_owned:bool) -> Routed
     }
     let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if owned && allow_owned {
-            let path=owned_xcf_open::parameters(req.get("params").ok_or_else(||bad("missing owned doc.open parameters"))?)?;
+            let request=owned_xcf_open::parameters(req.get("params").ok_or_else(||bad("missing owned doc.open parameters"))?)?;
             let mut headless=h.lock().unwrap_or_else(PoisonError::into_inner);
-            return headless.open_owned_xcf_rpc_bounded(std::path::Path::new(path),id).map(RoutedReply::Owned);
+            return match request {
+                owned_xcf_open::OpenRequest::Xcf(path)=>headless.open_owned_xcf_rpc_bounded(std::path::Path::new(path),id),
+                owned_xcf_open::OpenRequest::Native(path)=>headless.open_owned_native_rpc_bounded(std::path::Path::new(path),id),
+            }.map(RoutedReply::Owned);
         }
         let params=req.get("params").cloned().unwrap_or(Value::Null);
         h.lock().unwrap_or_else(PoisonError::into_inner).handle(method,params)

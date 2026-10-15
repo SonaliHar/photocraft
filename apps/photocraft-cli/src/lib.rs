@@ -28,17 +28,19 @@ USAGE:
       --tga-bits sets a TGA's bits per pixel: 32 writes the alpha channel (or else the transparency) as
       its alpha, 24 none. Without it: 32 with an alpha channel or transparency, else 24.
       --dpx-bits sets a DPX's bits per sample. Without it: 8 for an 8-bit document, else 16.
-  photocraft-cli info <file> [--compact] [--json-errors] [--xcf-profile-policy keepCurrent]
+  photocraft-cli info <file> [--compact] [--json-errors] [--xcf-profile-policy keepCurrent | --native-profile-policy keepCurrent]
       Print the document as JSON (size, mode, depth, layer tree).
       Explicit --xcf-profile-policy keepCurrent uses the bounded owned XCF class and
       prints an owned-import-summary; ordinary Open/profile settings stay unchanged.
+      --native-profile-policy keepCurrent explicitly reopens a .pcraft with its saved profile.
+      The two profile-policy options are mutually exclusive; neither changes ordinary Open.
       Example: photocraft-cli info source.xcf --xcf-profile-policy keepCurrent
-  photocraft-cli run (<file> | --new <json>) --cmd <id> [--params <json>] [--cmd …] [--out <file>] [--format <ext>] [--quality <1-100>] [--tiff-layers] [--tga-bits <24|32>] [--dpx-bits <8|10|12|16>] [--json-errors] [--automation-read-root <dir>] [--xcf-profile-policy keepCurrent]
+  photocraft-cli run (<file> | --new <json>) --cmd <id> [--params <json>] [--cmd …] [--out <file>] [--format <ext>] [--quality <1-100>] [--tiff-layers] [--tga-bits <24|32>] [--dpx-bits <8|10|12|16>] [--json-errors] [--automation-read-root <dir>] [--xcf-profile-policy keepCurrent | --native-profile-policy keepCurrent]
       Open a file, run engine commands in order, save the result. Each --params
       applies to the preceding --cmd. Prints each command's JSON result.
       Stored-original select.loadSelection requires an explicit --automation-read-root;
       its originalPath is relative to that held root, with no ambient fallback.
-      Explicit keepCurrent accepts a .xcf input and optional .pcraft --out only;
+      Explicit keepCurrent accepts the matching .xcf or .pcraft input and optional .pcraft --out only;
       --new and flat exports are refused before opening input.
       Example: photocraft-cli run source.xcf --xcf-profile-policy keepCurrent --cmd select.all --out copy.pcraft
       registered commands retain their existing typed eligibility and source guards.
@@ -108,10 +110,10 @@ struct Subcommand {
 
 const SUBCOMMANDS: &[Subcommand] = &[
     Subcommand { name: "convert", values: &["--format", "--quality", "--tga-bits", "--dpx-bits"], bare: &["--tiff-layers", "--json", "--json-errors"], run: convert },
-    Subcommand { name: "info", values: &["--xcf-profile-policy"], bare: &["--compact", "--json-errors"], run: |a, out, _| info(a, out) },
+    Subcommand { name: "info", values: &["--xcf-profile-policy", "--native-profile-policy"], bare: &["--compact", "--json-errors"], run: |a, out, _| info(a, out) },
     Subcommand {
         name: "run",
-        values: &["--new", "--cmd", "--params", "--out", "--format", "--quality", "--tga-bits", "--dpx-bits", "--automation-read-root", "--xcf-profile-policy"],
+        values: &["--new", "--cmd", "--params", "--out", "--format", "--quality", "--tga-bits", "--dpx-bits", "--automation-read-root", "--xcf-profile-policy", "--native-profile-policy"],
         bare: &["--tiff-layers", "--json-errors"],
         run: run_cmds,
     },
@@ -335,8 +337,8 @@ fn info(a: &Args, out: &mut dyn Write) -> R {
         return Err("info needs <file>".into());
     };
     let mut h = Headless::trusted_local();
-    if owned {
-        let reply = owned_xcf_open::open(&mut h, file).map_err(|e| automation_error(a,e))?;
+    if let Some(policy) = owned {
+        let reply = owned_xcf_open::open(&mut h, file, policy).map_err(|e| automation_error(a,e))?;
         return print_json(out, reply.value(), a.has("--compact"));
     }
     let opened = h.open(Path::new(file)).map_err(|e| automation_error(a,e))?;
@@ -400,8 +402,8 @@ fn run_cmds(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
     let mut reported_fonts = std::collections::HashSet::<String>::new();
     match (a.positional.as_slice(), a.get("--new")) {
         ([file], None) => {
-            if owned {
-                let reply = owned_xcf_open::open(&mut h, file).map_err(|e|automation_error(a,e))?;
+            if let Some(policy) = owned {
+                let reply = owned_xcf_open::open(&mut h, file, policy).map_err(|e|automation_error(a,e))?;
                 for warning in reply.warnings() {
                     if reported_fonts.insert(warning.clone()) { warn_all(err, std::slice::from_ref(warning)); }
                 }

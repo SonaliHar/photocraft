@@ -100,7 +100,7 @@ impl Headless {
     }
 }
 
-fn id_copy_bound(value: &Value, control: &ReadControl<'_>) -> Result<u64, ReplyError> {
+pub(super) fn id_copy_bound(value: &Value, control: &ReadControl<'_>) -> Result<u64, ReplyError> {
     fn visit(value: &Value, depth: usize, nodes: &mut usize, text: &mut usize, control: &ReadControl<'_>) -> Result<u64, ReplyError> {
         control.check(1).map_err(ReplyError::Backing)?;
         *nodes = nodes.checked_add(1).ok_or("RPC ID node overflow")?;
@@ -149,7 +149,7 @@ fn id_copy_bound(value: &Value, control: &ReadControl<'_>) -> Result<u64, ReplyE
     visit(value, 0, &mut 0, &mut 0, control)
 }
 impl OwnedXcfOpenReply {
-    fn validate_rpc_wire_size(&self, control: &ReadControl<'_>) -> Result<(), ReplyError> {
+    pub(super) fn validate_rpc_wire_size(&self, control: &ReadControl<'_>) -> Result<(), ReplyError> {
         // Allocation-free serialization census prevents an oversized successful
         // envelope being replaced by a transport-limit error after adoption.
         control.check(self._lease.bytes().checked_mul(8).ok_or("RPC wire work overflow")?).map_err(ReplyError::Backing)?;
@@ -181,7 +181,7 @@ impl OwnedXcfOpenReply {
         }
         result.map_err(|_| ReplyError::from("owned RPC reply exceeds transport limit"))
     }
-    fn wrap_rpc(&mut self, id: &Value, id_bound: u64, control: &ReadControl<'_>) -> Result<(), ReplyError> {
+    pub(super) fn wrap_rpc(&mut self, id: &Value, id_bound: u64, control: &ReadControl<'_>) -> Result<(), ReplyError> {
         let before = self._lease.bytes();
         let extra = id_bound.checked_mul(4).and_then(|v| v.checked_add(4096)).ok_or("RPC envelope overflow")?;
         self._lease.try_resize(before.checked_add(extra).ok_or("RPC envelope overflow")?).map_err(|e| e.to_string())?;
@@ -201,7 +201,7 @@ impl OwnedXcfOpenReply {
     }
 }
 
-enum ReplyError {
+pub(super) enum ReplyError {
     Backing(BackingError),
     Message(String),
 }
@@ -216,7 +216,7 @@ impl From<&str> for ReplyError {
     }
 }
 impl ReplyError {
-    fn into_automation(self) -> AutomationError {
+    pub(super) fn into_automation(self) -> AutomationError {
         match self {
             Self::Backing(e) => AutomationError::Engine(e.into()),
             Self::Message(e) => AutomationError::Other(e),
@@ -395,3 +395,34 @@ impl OwnedXcfOpenReply {
 
 #[cfg(test)]
 mod tests;
+
+impl OwnedXcfOpenReply {
+    pub(super) fn new_native(archive: &photocraft_format::owned_document::OwnedDocumentArchive, path: &str, index: usize, control: &ReadControl<'_>) -> Result<Self, ReplyError> {
+        let doc = archive.document();
+        if path.len() > 4096 || doc.name.len() > 1 << 20 { return Err("native summary text limit exceeded".into()); }
+        let text = (path.len() as u64).checked_add(doc.name.len() as u64).ok_or("native summary text overflow")?;
+        let envelope = text.checked_mul(8).and_then(|v| v.checked_add(16384)).ok_or("native summary envelope overflow")?;
+        let mut lease = archive.quota().reserve(QuotaKind::Index, envelope).map_err(|e| e.to_string())?;
+        // The authenticated archive already holds its complete bounded model.
+        // Count layers with an explicitly bounded, polled borrowed recursion.
+        fn layers(values: &[photocraft_doc::Layer], depth: usize, count: &mut usize, control: &ReadControl<'_>) -> Result<(), ReplyError> {
+            if depth > photocraft_doc::MAX_GROUP_DEPTH { return Err("native summary depth limit".into()); }
+            for layer in values {
+                control.check(1).map_err(ReplyError::Backing)?;
+                *count = count.checked_add(1).filter(|v| *v <= 4096).ok_or("native summary layer limit")?;
+                if let photocraft_doc::LayerContent::Group(group) = &layer.content { layers(&group.children, depth + 1, count, control)?; }
+            }
+            Ok(())
+        }
+        let mut count = 0;
+        layers(&doc.layers, 0, &mut count, control)?;
+        control.check(text.checked_mul(4).and_then(|v| v.checked_add(4096)).ok_or("native summary work overflow")?).map_err(ReplyError::Backing)?;
+        let value = json!({"path":path,"name":doc.name,"width":doc.size.width,"height":doc.size.height,
+            "layers":count,"mode":doc.mode,"depth":doc.depth,"index":index,"warnings":[],
+            "sourceReadOnly":false,"inspectionScope":"owned-native-summary","nativeProfilePolicy":"keepCurrent"});
+        let actual = tree_bytes(&value, 0, control)?.checked_add(std::mem::size_of::<Self>() as u64 + 256).ok_or("native summary actual overflow")?;
+        if actual > envelope { return Err("native summary actual exceeds admission".into()); }
+        lease.reconcile_capacity(actual).map_err(|e|e.to_string())?;
+        Ok(Self { value, warnings: Vec::new(), _lease: lease })
+    }
+}

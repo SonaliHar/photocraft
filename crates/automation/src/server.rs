@@ -54,9 +54,18 @@ pub struct OpenParams {
     #[serde(default, rename="xcfProfilePolicy")]
     #[schemars(with="XcfProfilePolicy")]
     pub xcf_profile_policy: Option<XcfProfilePolicy>,
+    /// Explicit owned native current interpretation. Mutually exclusive with XCF policy.
+    #[serde(default, rename="nativeProfilePolicy")]
+    #[schemars(with="NativeProfilePolicy")]
+    pub native_profile_policy: Option<NativeProfilePolicy>,
 }
 #[derive(Debug, Deserialize, JsonSchema)]
 pub enum XcfProfilePolicy {
+    #[serde(rename="keepCurrent")]
+    KeepCurrent,
+}
+#[derive(Debug, Deserialize, JsonSchema)]
+pub enum NativeProfilePolicy {
     #[serde(rename="keepCurrent")]
     KeepCurrent,
 }
@@ -66,6 +75,9 @@ fn open_params_schema(schema:&mut schemars::Schema) {
     schema.insert("allOf".into(),json!([{
         "if":{"required":["xcfProfilePolicy"]},
         "then":{"properties":{"path":true,"xcfProfilePolicy":true},"additionalProperties":false}
+    },{
+        "if":{"required":["nativeProfilePolicy"]},
+        "then":{"properties":{"path":true,"nativeProfilePolicy":true},"additionalProperties":false}
     }]));
 }
 impl<'de> Deserialize<'de> for OpenParams {
@@ -76,6 +88,8 @@ impl<'de> Deserialize<'de> for OpenParams {
             Path,
             #[serde(rename="xcfProfilePolicy")]
             Policy,
+            #[serde(rename="nativeProfilePolicy")]
+            NativePolicy,
             #[serde(other)]
             Other,
         }
@@ -86,6 +100,7 @@ impl<'de> Deserialize<'de> for OpenParams {
             fn visit_map<A:serde::de::MapAccess<'de>>(self,mut map:A)->Result<Self::Value,A::Error> {
                 let mut path=None;
                 let mut policy=None;
+                let mut native=None;
                 let mut extra=false;
                 while let Some(field)=map.next_key::<Field>()? {
                     match field {
@@ -98,11 +113,16 @@ impl<'de> Deserialize<'de> for OpenParams {
                             // Presence never treats null as omission.
                             policy=Some(map.next_value::<XcfProfilePolicy>()?);
                         },
+                        Field::NativePolicy=>{
+                            if native.is_some(){return Err(serde::de::Error::duplicate_field("nativeProfilePolicy"));}
+                            native=Some(map.next_value::<NativeProfilePolicy>()?);
+                        },
                         Field::Other=>{extra=true;map.next_value::<serde::de::IgnoredAny>()?;},
                     }
                 }
-                if policy.is_some() && extra {return Err(serde::de::Error::custom("explicit owned Open accepts path and xcfProfilePolicy only"));}
-                Ok(OpenParams{path:path.ok_or_else(||serde::de::Error::missing_field("path"))?,xcf_profile_policy:policy})
+                if policy.is_some() && native.is_some() {return Err(serde::de::Error::custom("owned Open accepts exactly one profile policy"));}
+                if (policy.is_some() || native.is_some()) && extra {return Err(serde::de::Error::custom("explicit owned Open accepts path and one profile policy only"));}
+                Ok(OpenParams{path:path.ok_or_else(||serde::de::Error::missing_field("path"))?,xcf_profile_policy:policy,native_profile_policy:native})
             }
         }
         deserializer.deserialize_map(OpenVisitor)
@@ -704,8 +724,23 @@ impl PhotocraftMcp {
         to_result(b.call_read("ui.inspect", json!({})).await)
     }
 
-    #[tool(description = "Open an image or document file and make it active. Returns index, size and import warnings.")]
+    #[tool(description = "Open an image or document file and make it active. Returns index, size and import warnings. Optional xcfProfilePolicy or nativeProfilePolicy keepCurrent uses its bounded owned class; omit both for ordinary Open.")]
     async fn doc_open(&self, Parameters(p): Parameters<OpenParams>) -> Result<CallToolResult, McpError> {
+        if p.native_profile_policy.is_some() && p.xcf_profile_policy.is_some() {
+            return to_result(Err(AutomationError::BadRequest("owned Open accepts exactly one profile policy".into())));
+        }
+        if p.native_profile_policy.is_some() {
+            if let Err(error)=crate::rpc::validate_owned_native_path(&p.path) {return to_result(Err(error));}
+            let path=PathBuf::from(&p.path);
+            if let Some(result)=self.headless_op_without_sync(move |h|h.open_owned_native_keep_current_bounded(&path)).await {
+                return match result {
+                    Ok(reply)=>Ok(ok_json(reply.value())),
+                    Err(error)=>to_result(Err(error)),
+                };
+            }
+            let Some(bridge)=self.bridge_client() else{return Ok(no_backend());};
+            return to_result(bridge.call("app.open",json!({"path":p.path,"nativeProfilePolicy":"keepCurrent"})).await);
+        }
         if p.xcf_profile_policy.is_some() {
             if let Err(error)=crate::rpc::validate_owned_path(&p.path) { return to_result(Err(error)); }
             let path=PathBuf::from(&p.path);
@@ -1364,3 +1399,7 @@ mod tests {
 #[cfg(test)]
 #[path="server/owned_xcf_open_tests.rs"]
 mod owned_xcf_open_tests;
+
+#[cfg(test)]
+#[path="server/owned_native_open_tests.rs"]
+mod owned_native_open_tests;

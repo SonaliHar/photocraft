@@ -342,7 +342,7 @@ How each MCP tool maps onto control methods in bridge mode:
 | `command_list {filter?, enabled_only?}` | `engine.commands` (filtered by the MCP server; replies with the same bare array, rows keep `disabledReason` and `needsDocument`, see [Command list replies](#command-list-replies)) |
 | `doc_new {…}` | `engine.execute {command: "file.new", params}` |
 | `doc_inspect` | `engine.execute {command: "document.inspect"}` |
-| `doc_open {path, xcfProfilePolicy?}` | `app.open {path, xcfProfilePolicy?}` |
+| `doc_open {path, xcfProfilePolicy?, nativeProfilePolicy?}` | `app.open {path, xcfProfilePolicy?, nativeProfilePolicy?}` |
 | `doc_place {path, …}` | `engine.execute {command: "file.placeEmbedded", params}` |
 | `doc_export_layers {dir, …}` | `engine.execute {command: "file.export.layersToFiles", params}` |
 | `doc_export_data_sets {dir, …}` | `engine.execute {command: "file.export.dataSetsAsFiles", params}` |
@@ -399,7 +399,7 @@ no MCP framing, no app start-up per command. Configure its file access with the 
 | `jobs.list` / `jobs.cancel` | `{}` / `{job?}`: background jobs; cancel one or all. Every request (and MCP tool call) first applies the jobs that finished, so `doc.save`, `doc.inspect`, `doc.render` and `session.list` include a finished job's result without polling `jobs.list` first |
 | `engine.commands` | `{filter?}`: registry with params docs and enablement (`enabled`, `disabledReason`, `needsDocument`); `result` is a bare array of command objects ([Command list replies](#command-list-replies)) |
 | `session.list` | open documents and the active index |
-| `doc.open` / `doc.new` | `{path, xcfProfilePolicy?}` / `file.new` params |
+| `doc.open` / `doc.new` | `{path, xcfProfilePolicy?, nativeProfilePolicy?}` / `file.new` params |
 | `doc.place` | `{path, scale? (percent), fit? (true), center? ([x, y]), index?}`: places a file as a Smart Object layer above the active one and returns `{layer, scale, bounds}`. `path` resolves beneath the read root, so this is the capability-scoped `file.placeEmbedded` — that command itself still refuses an ambient path |
 | `doc.exportLayers` | `{dir, format? (png), prefix?, visibleOnly? (true), quality?, index?}` → `{files, count}`: one file per exported layer, named like `file.export.layersToFiles` names them. `dir` resolves beneath the write root, so the ambient command stays refused. The bytes come from the command's own core, so both paths write the same files; the write capability refuses to overwrite an existing file |
 | `doc.exportDataSets` | `{dir, format? (png), dataSets? (all), naming? ("{name}\|{index}\|{document}"), index?}` → `{files, count}`: the capability-scoped `file.export.dataSetsAsFiles`. The batch is planned first and colliding names are refused before any file is written, as in the command |
@@ -420,6 +420,15 @@ locators grant no access. MCP bridge mode forwards the same two fields to `app.o
 The retained JSON-lines transport keeps its paid complete reply through writing; direct
 raw-Value `Headless::handle`/`respond` and nested generic batches refuse this explicit policy.
 The typed Headless owned method remains available to callers that retain its reply carrier.
+
+For explicit owned native reopen, use exactly `{"path":"current.pcraft","nativeProfilePolicy":"keepCurrent"}`
+with `doc.open` or MCP `doc_open`. Exactly one profile policy is permitted; both together,
+null/unknown values, extra explicit fields and mismatched suffixes refuse before job
+synchronization or file access. With neither policy, legacy ignored extension fields and
+ordinary Open remain unchanged. The native route retains the actual current interpretation
+on the catalog quota and returns an `owned-native-summary`; persisted original-source
+locators restore no read authority. The retained RPC and MCP handoff rules above also apply.
+
 
 For an active owned document, Headless `doc.save` supports native `.pcraft`
 Save/Save As through the same prepared engine transaction used by the desktop.

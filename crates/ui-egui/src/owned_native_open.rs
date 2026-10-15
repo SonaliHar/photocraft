@@ -68,21 +68,10 @@ enum Authority {
     Interactive,
     HeldRoot,
 }
-// Stored operation names select a stricter current-storage validator. They do
-// not establish the runtime storage class, original-source proof or read access.
+// The shared hint preserves the original string-error boundary. The selected
+// strict Session handoff still performs all current-storage/recipe validation.
 fn threshold_candidate(document: &photocraft_doc::Document, control: &ReadControl<'_>) -> Result<bool, String> {
-    if let Some(state) = &document.xcf_state {
-        for stack in &state.filter_stacks {
-            control.check(1).map_err(|e| e.to_string())?;
-            for node in &stack.nodes {
-                control.check(1).map_err(|e| e.to_string())?;
-                if node.operation.name == "gimp:threshold-alpha" {
-                    return Ok(true);
-                }
-            }
-        }
-    }
-    Ok(false)
+    photocraft_engine::accounted_native_open::is_current_threshold_alpha_candidate(document, control).map_err(|e| e.to_string())
 }
 /// Only the caller's independently installed held-root capability may read here.
 pub(crate) fn invoke_authorized(app: &mut PhotocraftApp, params: &Value) -> Result<Value, String> {

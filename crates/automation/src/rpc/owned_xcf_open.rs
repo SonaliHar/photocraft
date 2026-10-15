@@ -24,17 +24,39 @@ pub(crate) fn validate_owned_path(path: &str) -> Result<(), AutomationError> {
     }
     Ok(())
 }
-pub(super) fn parameters(params: &Value) -> Result<&str, AutomationError> {
-    let object = params.as_object().ok_or_else(|| bad("explicit owned doc.open requires an object"))?;
-    if object.len() != 2
-        || object.keys().any(|key| !matches!(key.as_str(), "path" | "xcfProfilePolicy"))
-        || object.get("xcfProfilePolicy").and_then(Value::as_str) != Some("keepCurrent")
+pub(crate) fn validate_owned_native_path(path: &str) -> Result<(), AutomationError> {
+    if path.is_empty()
+        || path.len() > 4096
+        || path.contains('\0')
+        || !std::path::Path::new(path).extension().and_then(|v| v.to_str()).is_some_and(|v| v.eq_ignore_ascii_case("pcraft"))
     {
-        return Err(bad("explicit owned doc.open accepts exactly path and xcfProfilePolicy=keepCurrent"));
+        return Err(bad("explicit nativeProfilePolicy=keepCurrent requires a bounded .pcraft path"));
+    }
+    Ok(())
+}
+pub(super) enum OpenRequest<'a> {
+    Xcf(&'a str),
+    Native(&'a str),
+}
+pub(super) fn parameters(params: &Value) -> Result<OpenRequest<'_>, AutomationError> {
+    let object = params.as_object().ok_or_else(|| bad("explicit owned doc.open requires an object"))?;
+    let xcf = object.contains_key("xcfProfilePolicy");
+    let native = object.contains_key("nativeProfilePolicy");
+    if xcf == native || object.len() != 2 || object.keys().any(|key| !matches!(key.as_str(), "path" | "xcfProfilePolicy" | "nativeProfilePolicy")) {
+        return Err(bad("explicit owned doc.open requires path and exactly one profile policy"));
+    }
+    let policy = if native { "nativeProfilePolicy" } else { "xcfProfilePolicy" };
+    if object.get(policy).and_then(Value::as_str) != Some("keepCurrent") {
+        return Err(bad("explicit owned Open profile policy must be keepCurrent"));
     }
     let path = object.get("path").and_then(Value::as_str).ok_or_else(|| bad("explicit owned doc.open requires path string"))?;
-    validate_owned_path(path)?;
-    Ok(path)
+    if native {
+        validate_owned_native_path(path)?;
+        Ok(OpenRequest::Native(path))
+    } else {
+        validate_owned_path(path)?;
+        Ok(OpenRequest::Xcf(path))
+    }
 }
 // Transport-shape prepass only; the controlled constructor separately prepays
 // the actual ID copy and charges its visits before source or derived allocation.
@@ -73,3 +95,6 @@ pub(super) fn validate_id_shape(value: &Value) -> Result<(), AutomationError> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod native_tests;

@@ -16,6 +16,24 @@ enum NativeHandoff {
     CurrentThresholdAlpha,
 }
 
+/// Stored operation names select a stricter current-storage validator only.
+/// This hint grants no runtime storage class, original-source proof or read
+/// access. Typed Session handoff must still validate; refusal must not retry.
+pub fn is_current_threshold_alpha_candidate(document: &photocraft_doc::Document, control: &ReadControl<'_>) -> std::result::Result<bool, BackingError> {
+    if let Some(state) = &document.xcf_state {
+        for stack in &state.filter_stacks {
+            control.check(1)?;
+            for node in &stack.nodes {
+                control.check(1)?;
+                if node.operation.name == "gimp:threshold-alpha" {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
 fn text(value: &str, c: &ReadControl<'_>) -> Result<String> {
     let mut owned = String::new();
     owned.try_reserve_exact(value.len()).map_err(|_| BackingError::Allocation)?;
@@ -166,3 +184,7 @@ mod tests;
 #[cfg(test)]
 #[path = "accounted_native_threshold_alpha_open_tests.rs"]
 mod threshold_alpha_tests;
+
+#[cfg(test)]
+#[path = "accounted_native_open_hint_tests.rs"]
+mod hint_tests;

@@ -33,7 +33,10 @@ async fn actual_mcp_held_root_returns_bounded_summary_and_denied_backend_has_no_
     std::fs::write(root.join("plain.xcf"), fixture::image(13, 150, 0, 1, 1, &[31, 61, 91, 255])).unwrap();
     let h = Arc::new(Mutex::new(Headless::with_workspace(AuthorizedWorkspace::new(Some(&root), None).unwrap())));
     let mcp = PhotocraftMcp::with_backend(Backend::Headless(h.clone()));
-    let result = mcp.doc_open(Parameters(OpenParams { path: "plain.xcf".into(), xcf_profile_policy: Some(XcfProfilePolicy::KeepCurrent) })).await.unwrap();
+    let result = mcp
+        .doc_open(Parameters(OpenParams { path: "plain.xcf".into(), xcf_profile_policy: Some(XcfProfilePolicy::KeepCurrent), native_profile_policy: None }))
+        .await
+        .unwrap();
     assert_ne!(result.is_error, Some(true));
     let wire = serde_json::to_value(result).unwrap();
     assert!(wire.to_string().contains("owned-import-summary"));
@@ -44,7 +47,11 @@ async fn actual_mcp_held_root_returns_bounded_summary_and_denied_backend_has_no_
     let denied = Arc::new(Mutex::new(Headless::new()));
     let mcp = PhotocraftMcp::with_backend(Backend::Headless(denied.clone()));
     let result = mcp
-        .doc_open(Parameters(OpenParams { path: root.join("plain.xcf").to_str().unwrap().into(), xcf_profile_policy: Some(XcfProfilePolicy::KeepCurrent) }))
+        .doc_open(Parameters(OpenParams {
+            path: root.join("plain.xcf").to_str().unwrap().into(),
+            xcf_profile_policy: Some(XcfProfilePolicy::KeepCurrent),
+            native_profile_policy: None,
+        }))
         .await
         .unwrap();
     assert_eq!(result.is_error, Some(true));
