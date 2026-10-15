@@ -72,7 +72,13 @@ fn wire<'a>(id: &str, params: &'a Value) -> Option<Fields<'a>> {
                 if n.len() != 1 {
                     return None;
                 }
-                {
+                if let Some(signed) = n.get("Signed") {
+                    let signed = signed.as_object()?;
+                    if signed.len() != 2 || signed.get("width")?.as_u64()? != 32 {
+                        return None;
+                    }
+                    (PointArgumentValue::Signed32(i32::try_from(signed.get("value")?.as_i64()?).ok()?), None)
+                } else {
                     let bits = u32::try_from(n.get("Float32Bits")?.as_u64()?).ok()?;
                     if !f32::from_bits(bits).is_finite() {
                         return None;
@@ -133,8 +139,15 @@ pub(super) fn journal_depth(id: &str, params: &Value) -> usize {
     };
     // root0 -> arguments1 -> entry2 -> value3 -> Color4 -> components5
     // -> component object6 -> Float32Bits scalar7. Only this exact closed
-    // literal wire gains depth7; old flat set shapes remain depth5.
-    if fields.arguments.iter().flatten().any(|a| matches!(a.value, PointArgumentValue::Color4F32(_))) { 7 } else { 5 }
+    // literal wire gains depth7. Signed32 adds Number4 -> Signed5 ->
+    // width/value6; old flat set shapes remain depth5.
+    if fields.arguments.iter().flatten().any(|a| matches!(a.value, PointArgumentValue::Color4F32(_))) {
+        7
+    } else if fields.arguments.iter().flatten().any(|a| matches!(a.value, PointArgumentValue::Signed32(_))) {
+        6
+    } else {
+        5
+    }
 }
 
 pub(super) struct Request<'a> {
@@ -151,7 +164,7 @@ impl<'a> Request<'a> {
             _ => return Err(BackingError::Unsupported.into()),
         };
         let fields = wire(id, params).ok_or_else(|| {
-            bad(id, "accounted Point supports at most ten existing flat Float32, Bool, Enum or exact literal Color patches, activation, and exact opacity one")
+            bad(id, "accounted Point supports at most ten existing flat Float32, signed32, Bool, Enum or exact literal Color patches, activation, and exact opacity one")
         })?;
         // The closed shape has at most four fixed keys and ten bounded typed patches,
         // bounded identity digits and opacity characters. Price its
@@ -234,6 +247,7 @@ impl<'a> Request<'a> {
             let stored = node.arguments.iter().find(|v| v.name == argument.name).ok_or(BackingError::Unsupported)?;
             use photocraft_doc::xcf_filters::{ExactNumber, FilterValue};
             match (&stored.value, argument.value, argument.domain) {
+                (FilterValue::Number(ExactNumber::Signed { width: 32, value }), PointArgumentValue::Signed32(_), None) if i32::try_from(*value).is_ok() => {}
                 (FilterValue::Number(ExactNumber::Float32Bits(_)), PointArgumentValue::Float32Bits(_), None)
                 | (FilterValue::Bool(_), PointArgumentValue::Bool(_), None) => {}
                 (FilterValue::Enum { domain, .. }, PointArgumentValue::Enum(_), Some(requested)) if domain == requested => {}

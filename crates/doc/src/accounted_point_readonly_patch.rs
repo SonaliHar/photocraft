@@ -6,6 +6,7 @@ use crate::{LayerId, item_identity::FilterId};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PointArgumentValue {
     Float32Bits(u32),
+    Signed32(i32),
     Bool(bool),
     /// Replaces only the integer; the original independent enum domain stays.
     Enum(i32),
@@ -39,6 +40,9 @@ pub(in crate::accounted_document) struct Plan {
 fn original(value: &FilterValue, control: &ReadControl<'_>) -> Result<PointArgumentValue, BackingError> {
     match value {
         FilterValue::Number(ExactNumber::Float32Bits(bits)) => Ok(PointArgumentValue::Float32Bits(*bits)),
+        FilterValue::Number(ExactNumber::Signed { width: 32, value }) => {
+            Ok(PointArgumentValue::Signed32(i32::try_from(*value).map_err(|_| BackingError::Length)?))
+        }
         FilterValue::Bool(value) => Ok(PointArgumentValue::Bool(*value)),
         FilterValue::Enum { value, .. } => Ok(PointArgumentValue::Enum(*value)),
         FilterValue::Color { components, encoding: crate::SampleEncoding::NonlinearProfile, profile: None } if components.len() == 4 => {
@@ -135,6 +139,7 @@ pub(super) fn apply(document: &mut Document, plan: Plan, control: &ReadControl<'
         let argument = node.arguments.get_mut(index).ok_or(BackingError::Integrity)?;
         match (&mut argument.value, replacement) {
             (FilterValue::Number(ExactNumber::Float32Bits(bits)), PointArgumentValue::Float32Bits(value)) => *bits = value,
+            (FilterValue::Number(ExactNumber::Signed { width: 32, value: before }), PointArgumentValue::Signed32(value)) => *before = i64::from(value),
             (FilterValue::Bool(before), PointArgumentValue::Bool(value)) => *before = value,
             (FilterValue::Enum { value: before, .. }, PointArgumentValue::Enum(value)) => *before = value,
             (FilterValue::Color { components, encoding: crate::SampleEncoding::NonlinearProfile, profile: None }, PointArgumentValue::Color4F32(words))

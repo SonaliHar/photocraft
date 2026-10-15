@@ -96,6 +96,13 @@ fn initial_member(node: &FilterNode, budget: &mut impl PlanBudget, interrupt: &I
         work(budget, interrupt, text.len() as u64)?;
     }
     let epoch_ok = match node.operation.name.as_str() {
+        "gimp:desaturate" => node.operation.schema_epoch == gimp_filters::DESATURATE_PRECISION_EPOCH,
+        "gegl:saturation" => matches!(
+            node.operation.schema_epoch.as_str(),
+            gimp_filters::SATURATION_PRECISION_EPOCH | gimp_filters::SATURATION_GRAY_PRECISION_EPOCH | gimp_filters::SATURATION_RGB_YUV_PRECISION_EPOCH
+        ),
+        "gegl:value-invert" => node.operation.schema_epoch == gimp_filters::VALUE_INVERT_PRECISION_EPOCH,
+        "gimp:posterize" => node.operation.schema_epoch == "xcf-22-stock-point-replace",
         "gegl:brightness-contrast" => node.operation.schema_epoch == gimp_filters::BRIGHTNESS_CONTRAST_PRECISION_EPOCH,
         "gegl:levels" => node.operation.schema_epoch == gimp_filters::GEGL_LEVELS_PRECISION_EPOCH,
         "gegl:exposure" => node.operation.schema_epoch == gimp_filters::EXPOSURE_BLACK_PRECISION_EPOCH,
@@ -140,6 +147,12 @@ fn initial_member(node: &FilterNode, budget: &mut impl PlanBudget, interrupt: &I
     let compatibility = match node.operation.schema_epoch.as_str() {
         crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH => crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH,
         crate::gimp_video_degradation::VIDEO_DEGRADATION_OPTIONS_EPOCH => crate::gimp_video_degradation::VIDEO_DEGRADATION_OPTIONS_EPOCH,
+        gimp_filters::DESATURATE_PRECISION_EPOCH
+        | gimp_filters::SATURATION_PRECISION_EPOCH
+        | gimp_filters::SATURATION_GRAY_PRECISION_EPOCH
+        | gimp_filters::SATURATION_RGB_YUV_PRECISION_EPOCH
+        | gimp_filters::VALUE_INVERT_PRECISION_EPOCH
+        | "xcf-22-stock-point-replace" => node.operation.schema_epoch.as_str(),
         _ => gimp_filters::POINT_REPLACE_COMPATIBILITY_EPOCH,
     };
     if !epoch_ok || policy.compatibility_epoch != compatibility {
@@ -152,6 +165,7 @@ fn initial_member(node: &FilterNode, budget: &mut impl PlanBudget, interrupt: &I
         work(budget, interrupt, argument.name.len() as u64 + 1)?;
         match &argument.value {
             FilterValue::Number(photocraft_doc::xcf_filters::ExactNumber::Float32Bits(_)) | FilterValue::Bool(_) => {}
+            FilterValue::Number(photocraft_doc::xcf_filters::ExactNumber::Signed { width: 32, .. }) if node.operation.name == "gimp:posterize" => {}
             FilterValue::Enum { domain, .. } if domain.len() <= 4096 => work(budget, interrupt, domain.len() as u64)?,
             FilterValue::Color { components, encoding: SampleEncoding::NonlinearProfile, profile: None }
                 if components.len() == 4 && components.iter().all(|v| matches!(v, photocraft_doc::xcf_filters::ExactNumber::Float32Bits(_))) =>
@@ -245,6 +259,7 @@ struct StockPointPlan {
     stack: OrderedStack,
     _current_profile: Profile,
     format: PixelFormat,
+    opaque_input: bool,
 }
 pub struct PreparedStockPointPipeline {
     plan: StockPointPlan,
@@ -365,6 +380,7 @@ fn prepare_plan<B: PlanBudget>(
     let valid_mask = crate::gimp_neighborhood::qualify_selection_mask_with_interrupt(state, node, layer.id, doc.bounds(), interrupt);
     work(budget, interrupt, 0)?;
     valid_mask.map_err(BackedNormalError::Color)?;
+    crate::gimp_render::qualify_residual_point_metadata(doc, layer, state, filters, extent, stored, interrupt).map_err(BackedNormalError::Color)?;
     crate::gimp_render::qualify_point_family_context(doc, layer, state, filters, extent, known, stored, interrupt).map_err(BackedNormalError::Color)?;
     let stack = OrderedStack::new_for_stock(filters, known, stored, state.provenance.format_version, extent, interrupt)
         .map_err(BackedNormalError::Color)?
@@ -376,7 +392,7 @@ fn prepare_plan<B: PlanBudget>(
     }
     // Keep the entire admitted peak for the pipeline lifetime; no phase
     // refund can expose headroom while this owned plan remains live.
-    let plan = StockPointPlan { stack, _current_profile: current_profile, format };
+    let plan = StockPointPlan { stack, _current_profile: current_profile, format, opaque_input: node.operation.name == "gimp:posterize" };
     work(budget, interrupt, 0)?;
     Ok((plan, lease))
 }
@@ -447,6 +463,9 @@ impl PreparedStockPointPipeline {
         let read = |channel| try_read_sample_f64(raw, format.sample, channel).map_err(|_| length());
         let rgb = if format.mode == ColorMode::Grayscale { [read(0)?; 3] } else { [read(0)?, read(1)?, read(2)?] };
         let input = [rgb[0], rgb[1], rgb[2], read(format.mode.color_channels())?];
+        if self.plan.opaque_input && input[3] != 1.0 {
+            return Err(BackedNormalError::Unsupported("Posterize opaque current input"));
+        }
         let mut failed = None;
         let mut temporary: Option<QuotaLease> = None;
         let mut poll = |event| {
@@ -616,3 +635,7 @@ pub(crate) mod tests;
 #[cfg(test)]
 #[path = "backed_stock_point_general_tests.rs"]
 mod general_tests;
+
+#[cfg(test)]
+#[path = "backed_stock_point_residual_tests.rs"]
+mod residual_tests;

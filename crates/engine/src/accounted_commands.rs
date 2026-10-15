@@ -276,7 +276,7 @@ struct Census {
     nodes: usize,
     envelope: u64,
     // Only exact closed filter wires gain their own bounded depth: scalar5
-    // or literal Point Color7. All unrelated journal values retain depth4.
+    // Signed32 depth6 or literal Point Color7. Unrelated values retain depth4.
     depth_extra: usize,
 }
 impl Census {

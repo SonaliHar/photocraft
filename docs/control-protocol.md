@@ -475,9 +475,15 @@ default Open enrollment and other stock families are separate work. Paid Point
 inspection exposes bounded literal Color storage as exact words, independently
 of evaluation or editing eligibility; resident inspection is unchanged.
 
+The same holder also carries the separately qualified Desaturate, Saturation
+RGB/Gray/YUV, Value Invert precision and original Posterize families. Their
+distinct schema/composition epochs and original model, precision, encoding and
+geometry requirements remain mandatory. Posterize uses exact signed width-32
+integer arguments; other widths and integers outside the i32 range refuse.
+
 For a qualified current Point document, existing `xcf.filter.set` and
 `xcf.filter.enable` accept activation and up to ten unique existing arguments.
-Arguments retain their exact Float32Bits, Bool, Enum or four-word Color shape;
+Arguments retain their exact Float32Bits, signed width-32, Bool, Enum or four-word Color shape;
 literal colors require `nonlinear_profile` encoding and a null profile. Unknown
 names, changed raw types or enum domains, unsupported structures and non-unit
 filter opacity refuse. The current and proposed complete operative recipes must

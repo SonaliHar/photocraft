@@ -205,6 +205,85 @@ fn color_patch_late_cancel_and_quota_failure_keep_original_words_and_refund() {
     let FilterValue::Color { components, .. } = &owner.document().xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].arguments[9].value else { panic!() };
     assert_eq!(components.first(), Some(&ExactNumber::Float32Bits(0x80000000)));
 }
+
+fn signed(value: i32, revision: u64) -> AccountedDocument {
+    let q = quota();
+    let (mut doc, guard) = fixture(&q, SampleType::U32, SampleEncoding::Perceptual, 375);
+    let stack = &mut doc.xcf_state.as_mut().unwrap().filter_stacks[0];
+    stack.revision = revision;
+    stack.nodes[0].arguments[3].value = FilterValue::Number(ExactNumber::Signed { width: 32, value: i64::from(value) });
+    AccountedDocument::new_readonly_point_storage(doc, guard, q, &ctl()).unwrap()
+}
+#[test]
+fn signed32_storage_and_patch_keep_exact_width_order_other_words_and_flat_original() {
+    let original = signed(i32::MAX, 11);
+    let args = [PointArgumentPatch { name: "raw-3", value: PointArgumentValue::Signed32(i32::MIN) }];
+    let changed = original.try_with_readonly_point_filter(patch(&original, &args, None), &ctl()).unwrap();
+    let mut expected = original.document().clone();
+    let stack = &mut expected.xcf_state.as_mut().unwrap().filter_stacks[0];
+    stack.revision = 12;
+    stack.nodes[0].arguments[3].value = FilterValue::Number(ExactNumber::Signed { width: 32, value: i64::from(i32::MIN) });
+    assert_eq!(changed.document(), &expected);
+    let titled = changed.try_with_document_name("integer retained", &ctl()).unwrap();
+    let root = titled.owner.retention.downcast_ref::<OriginalRetention>().unwrap();
+    assert!(root.original.shares_model(&original));
+    assert_eq!(
+        titled.document().xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].arguments[3].value,
+        FilterValue::Number(ExactNumber::Signed { width: 32, value: i64::from(i32::MIN) })
+    );
+    let a = &original.document().xcf_state.as_ref().unwrap().filter_masks[0].surface;
+    let b = &titled.document().xcf_state.as_ref().unwrap().filter_masks[0].surface;
+    assert!(Arc::ptr_eq(a.tile(TileCoord::new(1, 0)).unwrap(), b.tile(TileCoord::new(1, 0)).unwrap()));
+    assert_eq!(original.document().source_color_context, titled.document().source_color_context);
+}
+#[test]
+fn signed32_noop_at_max_revision_and_full_quota_and_wrong_type_are_exact() {
+    let owner = signed(i32::MIN, u64::MAX);
+    let q = owner.quota();
+    let before = q.usage().unwrap();
+    let blocker = q.reserve(QuotaKind::Index, (16 << 20) - before.index).unwrap();
+    let same = [PointArgumentPatch { name: "raw-3", value: PointArgumentValue::Signed32(i32::MIN) }];
+    assert!(owner.try_with_readonly_point_filter(patch(&owner, &same, None), &ctl()).unwrap().shares_model(&owner));
+    let changed = [PointArgumentPatch { name: "raw-3", value: PointArgumentValue::Signed32(0) }];
+    assert!(matches!(owner.try_with_readonly_point_filter(patch(&owner, &changed, None), &ctl()), Err(BackingError::Length)));
+    for args in [
+        vec![PointArgumentPatch { name: "raw-3", value: PointArgumentValue::Float32Bits(0) }],
+        vec![PointArgumentPatch { name: "raw-0", value: PointArgumentValue::Signed32(0) }],
+    ] {
+        assert!(owner.try_with_readonly_point_filter(patch(&owner, &args, None), &ctl()).is_err());
+    }
+    drop(blocker);
+    assert_eq!(q.usage().unwrap(), before);
+}
+#[test]
+fn malformed_signed_storage_and_paid_signed_patch_failures_refuse_privately() {
+    for number in [
+        ExactNumber::Signed { width: 16, value: 3 },
+        ExactNumber::Signed { width: 64, value: 3 },
+        ExactNumber::Signed { width: 32, value: i64::from(i32::MAX) + 1 },
+        ExactNumber::Signed { width: 32, value: i64::from(i32::MIN) - 1 },
+        ExactNumber::Unsigned { width: 32, value: 3 },
+    ] {
+        let q = quota();
+        let (mut doc, guard) = fixture(&q, SampleType::F32, SampleEncoding::Linear, 600);
+        doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].arguments[3].value = FilterValue::Number(number);
+        assert!(AccountedDocument::new_readonly_point_storage(doc, guard, q.clone(), &ctl()).is_err());
+        assert_eq!(q.usage().unwrap(), Default::default());
+    }
+    let owner = signed(3, 4);
+    let q = owner.quota();
+    let before = q.usage().unwrap();
+    let args = [PointArgumentPatch { name: "raw-3", value: PointArgumentValue::Signed32(4) }];
+    let work = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Err(BackingError::Work) };
+    assert!(matches!(owner.try_with_readonly_point_filter(patch(&owner, &args, None), &work), Err(BackingError::Work)));
+    let cancelled = || q.usage().unwrap().index > before.index;
+    let interrupt = Interrupt::cancel_only(&cancelled);
+    assert!(matches!(
+        owner.try_with_readonly_point_filter(patch(&owner, &args, None), &ReadControl { interrupt: &interrupt, work: &|_| Ok(()) }),
+        Err(BackingError::Cancelled)
+    ));
+    assert_eq!(q.usage().unwrap(), before);
+}
 #[test]
 fn work_cancel_after_fees_and_quota_failures_leave_current_owner_and_refund() {
     let owner = current(true);

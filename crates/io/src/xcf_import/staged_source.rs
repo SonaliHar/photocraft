@@ -8,6 +8,10 @@ use std::{cell::RefCell, marker::PhantomData, rc::Rc};
 
 // Private type-selected factories only: file data and callers cannot opt an
 // already decoded plain plane into a different admission policy.
+#[path = "staged_residual_point.rs"]
+mod residual;
+use residual::ResidualPointFamily;
+
 trait StagePolicy {
     const THRESHOLD_ALPHA: bool;
     const SOURCE_SELECTED: bool = false;
@@ -23,6 +27,7 @@ pub(super) enum SelectedStagedFamily {
     ThresholdAlpha,
     Threshold,
     Point(crate::xcf_filters::PointReplaceFamily),
+    ResidualPoint(ResidualPointFamily),
 }
 impl std::fmt::Debug for SelectedStagedFamily {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -31,6 +36,7 @@ impl std::fmt::Debug for SelectedStagedFamily {
             Self::ThresholdAlpha => "ThresholdAlpha",
             Self::Threshold => "Threshold",
             Self::Point(_) => "Point",
+            Self::ResidualPoint(_) => "ResidualPoint",
         })
     }
 }
@@ -50,6 +56,9 @@ impl StagePolicy for SourceSelectedPolicy {
             // This chooses a strict validator only. admissions() must obtain
             // the SAME family from the original whole-file classifier before
             // mapping; completion cannot return this route after a refusal.
+            if let Some(family) = ResidualPointFamily::hint(file) {
+                return SelectedStagedFamily::ResidualPoint(family);
+            }
             let point = crate::xcf_point_replace_source::classify_family_hint(file);
             if let Some(family) = point {
                 return SelectedStagedFamily::Point(family);
@@ -385,14 +394,21 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         let family = P::family(file);
         let histogram = family == SelectedStagedFamily::Threshold;
         let threshold = family == SelectedStagedFamily::ThresholdAlpha || histogram;
-        let point = if let SelectedStagedFamily::Point(expected) = family {
-            let actual = crate::xcf_point_replace_source::classify(file, ctl, shared)?;
-            if actual != Some(crate::xcf_filters::NeighborhoodDomain::PointReplace(expected)) {
-                return Err(IoError::Unsupported("staged Point source is outside its exact whole-file predicate".into()));
+        let point = match family {
+            SelectedStagedFamily::Point(expected) => {
+                let actual = crate::xcf_point_replace_source::classify(file, ctl, shared)?;
+                if actual != Some(crate::xcf_filters::NeighborhoodDomain::PointReplace(expected)) {
+                    return Err(IoError::Unsupported("staged Point source is outside its exact whole-file predicate".into()));
+                }
+                actual
             }
-            actual
-        } else {
-            None
+            SelectedStagedFamily::ResidualPoint(expected) => {
+                if !expected.qualify(file, ctl, shared)? {
+                    return Err(IoError::Unsupported("staged residual Point source is outside its exact whole-file predicate".into()));
+                }
+                Some(expected.domain())
+            }
+            _ => None,
         };
         if point.is_some() {
             // Full original source, precision, geometry, mask flags and unit
@@ -465,10 +481,14 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         // Generic mapping always runs admissions before this side-effect-free
         // domain handoff. Only the private Threshold factory can select this
         // type, and its admissions above propagate the shared exact predicate.
+        let mut domains = admission::LateAdmissionDomains::default();
+        if let SelectedStagedFamily::ResidualPoint(family) = P::family(file) {
+            family.set_late(&mut domains);
+        }
         admission::LateAdmissionDomains {
             threshold_alpha_domain: P::family(file) == SelectedStagedFamily::ThresholdAlpha,
             threshold_domain: P::family(file) == SelectedStagedFamily::Threshold,
-            ..Default::default()
+            ..domains
         }
     }
     fn eager_original(&self) -> Result<&Plane, IoError> {

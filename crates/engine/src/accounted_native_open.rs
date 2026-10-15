@@ -48,6 +48,10 @@ pub fn is_current_point_candidate(document: &photocraft_doc::Document, control: 
                         | "gegl:color-to-alpha"
                         | "gegl:component-extract"
                         | "gegl:alpha-clip"
+                        | "gimp:desaturate"
+                        | "gegl:saturation"
+                        | "gegl:value-invert"
+                        | "gimp:posterize"
                 ) {
                     return Ok(true);
                 }
@@ -362,3 +366,7 @@ mod histogram_threshold_integration_tests;
 #[cfg(test)]
 #[path = "accounted_point_handoff_tests.rs"]
 mod point_handoff_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "accounted_residual_point_workflow_tests.rs"]
+mod residual_point_workflow_tests;

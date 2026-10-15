@@ -117,7 +117,7 @@ impl OrderedStack {
         let mut spaces = Vec::new();
         spaces.try_reserve_exact(source.nodes.len()).map_err(|_| CompositionError::Invalid("ordered space allocation denied"))?;
         stages.try_reserve_exact(source.nodes.len()).map_err(|_| CompositionError::Invalid("ordered preparation allocation denied"))?;
-        if source
+        if stock || source
             .nodes
             .iter()
             .any(|node| node.operation.name == "gegl:unpremultiply"

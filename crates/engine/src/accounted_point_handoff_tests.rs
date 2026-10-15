@@ -57,6 +57,10 @@ fn exact_point_names_hint_only_stricter_route_and_propagate_actual_control() {
         "gegl:color-to-alpha",
         "gegl:component-extract",
         "gegl:alpha-clip",
+        "gimp:desaturate",
+        "gegl:saturation",
+        "gegl:value-invert",
+        "gimp:posterize",
     ] {
         let document = hint(name);
         let work = AtomicU64::new(0);

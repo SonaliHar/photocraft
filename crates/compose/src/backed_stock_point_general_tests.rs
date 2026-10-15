@@ -153,6 +153,9 @@ impl NativePlaneStore for Store {
     }
 }
 fn reframe(doc: &mut Document, q: &BackingQuota, canvas: Size, bounds: Rect) {
+    reframe_coverage(doc, q, canvas, bounds, false);
+}
+pub(super) fn reframe_coverage(doc: &mut Document, q: &BackingQuota, canvas: Size, bounds: Rect, opaque: bool) {
     let format = doc.pixel_format();
     let length = bounds.width() as usize * bounds.height() as usize * format.bytes_per_pixel();
     assert!(length <= 65536);
@@ -163,7 +166,19 @@ fn reframe(doc: &mut Document, q: &BackingQuota, canvas: Size, bounds: Rect) {
         for channel in 0..3 {
             photocraft_color::try_write_sample_f64(pixel, format.sample, channel, [0.25, 0.5, 0.75][channel]).unwrap();
         }
-        photocraft_color::try_write_sample_f64(pixel, format.sample, 3, if i % 2 == 0 { 0.125 } else { 0.75 }).unwrap();
+        photocraft_color::try_write_sample_f64(
+            pixel,
+            format.sample,
+            3,
+            if opaque {
+                1.0
+            } else if i % 2 == 0 {
+                0.125
+            } else {
+                0.75
+            },
+        )
+        .unwrap();
     }
     let descriptor = NativePlaneDescriptor::new(format, bounds, &vec![0; format.bytes_per_pixel()]).unwrap();
     let store = Arc::new(Store { descriptor, bytes, quota: q.clone(), _fee: fee });

@@ -111,6 +111,7 @@ fn node_shape(node: &FilterNode, control: &ReadControl<'_>) -> Result<(), Backin
         }
         match &argument.value {
             FilterValue::Number(ExactNumber::Float32Bits(_)) | FilterValue::Bool(_) => {}
+            FilterValue::Number(ExactNumber::Signed { width: 32, value }) if i32::try_from(*value).is_ok() => {}
             FilterValue::Enum { domain, .. } if !domain.is_empty() && domain.len() <= 4096 => {}
             FilterValue::Color { components, encoding: crate::SampleEncoding::NonlinearProfile, profile: None }
                 if components.len() == 4 && components.iter().all(|value| matches!(value, ExactNumber::Float32Bits(_))) => {}
@@ -387,6 +388,9 @@ fn copy_node(node: &FilterNode, control: &ReadControl<'_>) -> Result<FilterNode,
         control.check(1)?;
         let value = match &argument.value {
             FilterValue::Number(ExactNumber::Float32Bits(bits)) => FilterValue::Number(ExactNumber::Float32Bits(*bits)),
+            FilterValue::Number(ExactNumber::Signed { width: 32, value }) if i32::try_from(*value).is_ok() => {
+                FilterValue::Number(ExactNumber::Signed { width: 32, value: *value })
+            }
             FilterValue::Bool(value) => FilterValue::Bool(*value),
             FilterValue::Enum { domain, value } => FilterValue::Enum { domain: imported_edits::copy_name(domain, control)?, value: *value },
             FilterValue::Color { components, encoding, profile } => {

@@ -584,7 +584,7 @@ impl PointStack {
         {
             return Err(CompositionError::Unsupported("unqualified witnessed point stack domain"));
         }
-        for node in controlled::iter(source, control).filter(|node| node.enabled || replace_fields) {
+        for node in controlled::iter(source, control).filter(|node| node.enabled || replace_fields || stock) {
             controlled::checkpoint(control)?;
             let policy = node.composition.as_ref().ok_or(CompositionError::Unsupported("missing point effect policy"))?;
             // Exact v022 originals have these malformed raw fields. They are preserved,

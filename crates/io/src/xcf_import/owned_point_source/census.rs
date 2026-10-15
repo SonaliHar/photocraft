@@ -73,6 +73,7 @@ pub(super) fn shape(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control
     for argument in &node.arguments {
         match &argument.value {
             FilterValue::Number(ExactNumber::Float32Bits(bits)) if f32::from_bits(*bits).is_finite() => {}
+            FilterValue::Number(ExactNumber::Signed { width: 32, value }) if i32::try_from(*value).is_ok() => {}
             FilterValue::Bool(_) | FilterValue::Enum { .. } => {}
             FilterValue::Color { components, encoding: photocraft_doc::SampleEncoding::NonlinearProfile, profile: None }
                 if components.len() == 4

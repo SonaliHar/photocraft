@@ -203,6 +203,9 @@ fn point_session(count: usize) -> (Session, BackingQuota, Arc<AtomicU64>) {
     point_session_with_colors(count, false)
 }
 fn point_session_with_colors(count: usize, colors: bool) -> (Session, BackingQuota, Arc<AtomicU64>) {
+    point_session_with_values(count, colors, None)
+}
+fn point_session_with_values(count: usize, colors: bool, integer: Option<i32>) -> (Session, BackingQuota, Arc<AtomicU64>) {
     let (mut doc, q, guard, reads, _, _) = fixture(ColorMode::Rgb, SampleType::F64, SampleEncoding::NonlinearProfile);
     let extra = q.reserve(QuotaKind::Index, 32768).unwrap();
     let node = &mut doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0];
@@ -219,7 +222,10 @@ fn point_session_with_colors(count: usize, colors: bool) -> (Session, BackingQuo
                     encoding: SampleEncoding::NonlinearProfile,
                     profile: None,
                 },
-                0 => FilterValue::Number(ExactNumber::Float32Bits(if i == 0 { (-0.0f32).to_bits() } else { 0x7fc12345 })),
+                0 => FilterValue::Number(match integer {
+                    Some(value) => ExactNumber::Signed { width: 32, value: i64::from(value) },
+                    None => ExactNumber::Float32Bits(if i == 0 { (-0.0f32).to_bits() } else { 0x7fc12345 }),
+                }),
                 1 => FilterValue::Bool(i % 2 == 0),
                 _ => FilterValue::Enum { domain: "declared-metadata-domain".into(), value: i as i32 },
             },
@@ -235,6 +241,30 @@ fn point_session_with_colors(count: usize, colors: bool) -> (Session, BackingQuo
 }
 fn request(s: &Session) -> Value {
     json!({"filterId":s.active().unwrap().doc.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].id.0.to_string()})
+}
+
+#[test]
+fn point_signed32_metadata_keeps_exact_bounds_and_refuses_other_widths_without_pixel_reads() {
+    for integer in [i32::MIN, i32::MAX] {
+        let (s, q, reads) = point_session_with_values(1, false, Some(integer));
+        let baseline = q.usage().unwrap();
+        let reply = prepare(&s, &request(&s), &ctl()).unwrap();
+        assert_eq!(reply.value()["arguments"][0]["state"]["value"]["Number"]["Signed"], json!({"width":32,"value":integer}));
+        assert_eq!(reads.load(Ordering::Relaxed), 0);
+        assert!(q.usage().unwrap().index > baseline.index);
+        let mut node = s.active().unwrap().doc.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].clone();
+        assert!(metadata(&node, &ctl()).is_err());
+        for value in [
+            ExactNumber::Signed { width: 64, value: 0 },
+            ExactNumber::Signed { width: 32, value: i64::from(i32::MAX) + 1 },
+            ExactNumber::Unsigned { width: 32, value: 0 },
+        ] {
+            node.arguments[0].value = FilterValue::Number(value);
+            assert!(point_metadata(&node, &ctl()).is_err());
+        }
+        drop(reply);
+        assert_eq!(q.usage().unwrap(), baseline);
+    }
 }
 
 #[test]

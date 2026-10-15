@@ -181,6 +181,10 @@ mod threshold_tests;
 #[path = "canvas_backed_stock_point_tests.rs"]
 mod stock_point_tests;
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "canvas_backed_residual_point_tests.rs"]
+mod residual_point_tests;
+
 #[cfg(test)]
 fn backed_display_image(
     doc: &Document,

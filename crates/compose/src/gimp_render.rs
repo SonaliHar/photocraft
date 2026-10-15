@@ -537,6 +537,7 @@ fn prepare<'a>(
                     if generic_point {
                         qualify_generic_point_context(doc, layer, state, stack, (extent, profile, stored), interrupt)?;
                     }
+                    qualify_residual_point_metadata(doc, layer, state, stack, extent, stored, interrupt)?;
                     let precision_value = stack.nodes.len() == 1
                         && stack.nodes.first().is_some_and(|node| {
                             node.operation.name == "gegl:value-invert" && node.operation.schema_epoch == "xcf-22-stock-value-invert-precision-v1"
@@ -1184,6 +1185,42 @@ pub(crate) fn qualify_current_point_layer_coverage_metadata(
     stored: SampleEncoding, format: photocraft_color::PixelFormat, default_bytes: &[u8],
 ) -> Result<()> {
     qualify_point_storage_metadata(doc, layer, state, stack, extent, stored, format, default_bytes, PointLayerCoverage::Current)
+}
+/// Metadata portion of the existing scoped precision-point/current raster gates.
+/// Native input validation stays with the caller's real controlled reader.
+/// These identities retain their own epochs and never use PointReplace aliases.
+pub(crate) fn qualify_residual_point_metadata(
+    doc:&Document, layer:&Layer, state:&photocraft_doc::XcfState,
+    stack:&photocraft_doc::xcf_filters::FilterStack, extent:Rect,
+    stored:SampleEncoding, interrupt:&photocraft_raster::Interrupt<'_>,
+)->Result<()> {
+    interrupt.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
+    let [node]=stack.nodes.as_slice() else { return Ok(()) };
+    let desaturate=node.operation.name=="gimp:desaturate" && node.operation.schema_epoch==crate::gimp_filters::DESATURATE_PRECISION_EPOCH;
+    let saturation=node.operation.name=="gegl:saturation" && matches!(node.operation.schema_epoch.as_str(),crate::gimp_filters::SATURATION_PRECISION_EPOCH|crate::gimp_filters::SATURATION_GRAY_PRECISION_EPOCH|crate::gimp_filters::SATURATION_RGB_YUV_PRECISION_EPOCH);
+    let value=node.operation.name=="gegl:value-invert" && node.operation.schema_epoch==crate::gimp_filters::VALUE_INVERT_PRECISION_EPOCH;
+    let posterize=node.operation.name=="gimp:posterize" && node.operation.schema_epoch=="xcf-22-stock-point-replace";
+    if !(desaturate||saturation||value||posterize) { return Ok(()) }
+    let gray=saturation && node.operation.schema_epoch==crate::gimp_filters::SATURATION_GRAY_PRECISION_EPOCH;
+    let yuv=saturation && !gray && (node.operation.schema_epoch==crate::gimp_filters::SATURATION_RGB_YUV_PRECISION_EPOCH || node.arguments.iter().any(|arg|arg.name=="colorspace" && matches!(&arg.value,photocraft_doc::xcf_filters::FilterValue::Enum{domain,value:2} if domain=="GeglSaturationType")));
+    let precision=if value { matches!((doc.depth,stored),
+        (photocraft_color::SampleType::U16,SampleEncoding::NonlinearProfile)|
+        (photocraft_color::SampleType::F32,SampleEncoding::Linear)|
+        (photocraft_color::SampleType::F64,SampleEncoding::NonlinearProfile))
+    } else if posterize { doc.depth==photocraft_color::SampleType::U8 && stored==SampleEncoding::NonlinearProfile
+    } else { matches!(doc.depth,photocraft_color::SampleType::U16|photocraft_color::SampleType::F32|photocraft_color::SampleType::F64) && matches!(stored,SampleEncoding::Linear|SampleEncoding::NonlinearProfile) };
+    let side=if posterize {32} else {8};
+    let height=if posterize {32} else {6};
+    if doc.size!=photocraft_doc::Size::new(side,height) || extent!=Rect::new(0,0,side as i32,height as i32)
+        || doc.mode!=if gray {ColorMode::Grayscale} else {ColorMode::Rgb}
+        || !precision || (yuv && !matches!(doc.depth,photocraft_color::SampleType::U16|photocraft_color::SampleType::F32))
+        || doc.layers.len()!=1 || !doc.channels.is_empty() || !doc.paths.is_empty() || !state.source_items.is_empty()
+        || state.filter_stacks.len()!=1 || layer.mask.is_some() || !layer.visible || layer.opacity.to_bits()!=1f32.to_bits()
+        || doc.source_color_context.as_ref().is_none_or(|context|context.original_icc.is_some())
+        || state.items.iter().find(|item|item.item==ItemRef::Layer(layer.id)).and_then(|item|item.composition.as_ref()).is_none_or(|policy|policy.source_mode!=28 || (policy.stored_blend_space,policy.stored_composite_space,policy.stored_operator)!=(0,-1,-1) || policy.legacy || policy.pass_through)
+    { return Err(CompositionError::Unsupported("unqualified residual point current raster context")); }
+    interrupt.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
+    Ok(())
 }
 #[derive(Clone, Copy)]
 enum PointLayerCoverage { OriginalRecipe, Current }
