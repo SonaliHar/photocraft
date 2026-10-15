@@ -144,10 +144,11 @@ const fn code(c: &[u8; 4]) -> i32 {
     i32::from_be_bytes(*c)
 }
 
-const KNOWN: [Known; 14] = [
+const KNOWN: [Known; 15] = [
     Known { class: "GsnB", filter_id: code(b"GsnB"), name: "Gaussian Blur...", command: "filter.blur.gaussianBlur" },
     Known { class: "boxblur", filter_id: 840, name: "Box Blur...", command: "filter.blur.boxBlur" },
     Known { class: "MtnB", filter_id: code(b"MtnB"), name: "Motion Blur...", command: "filter.blur.motionBlur" },
+    Known { class: "Shrp", filter_id: code(b"Shrp"), name: "Sharpen", command: "filter.sharpen.sharpen" },
     Known { class: "UnsM", filter_id: code(b"UnsM"), name: "Unsharp Mask...", command: "filter.sharpen.unsharpMask" },
     Known { class: "AdNs", filter_id: code(b"AdNs"), name: "Add Noise...", command: "filter.noise.addNoise" },
     Known { class: "Mdn ", filter_id: code(b"Mdn "), name: "Median...", command: "filter.noise.median" },
@@ -263,7 +264,7 @@ fn curves_params(f: &Descriptor) -> Option<J> {
 fn known_params(class: &str, f: Option<&Descriptor>) -> Option<(&'static str, J)> {
     let k = KNOWN.iter().find(|k| k.class == class)?;
     let params = match (class, f) {
-        ("adaptCorrect", None) => json!({}),
+        ("adaptCorrect" | "Shrp", None) => json!({}),
         (_, None) => return None,
         ("GsnB" | "boxblur" | "Mdn " | "HghP" | "Mxm " | "Mnm ", Some(f)) => json!({"radius": px(f, "Rds ")?}),
         ("MtnB", Some(f)) => json!({"angle": int(f, "Angl")?, "distance": px(f, "Dstn")?}),
@@ -583,6 +584,12 @@ fn fltr_for(k: &Known, p: &J) -> Result<Option<Descriptor>, String> {
                 return Err("“preserve roundness” has no PSD equivalent".into());
             }
             d.with("Rds ", unit(b"#Pxl", pf(p, "radius", 1.0)))
+        }
+        "Shrp" => {
+            if p.as_object().is_some_and(|o| o.keys().any(|k| !is_meta(k))) {
+                return Err("Sharpen has no PSD settings".into());
+            }
+            return Ok(None);
         }
         "MtnB" => d.with("Angl", pi(p, "angle", 0.0)).with("Dstn", unit(b"#Pxl", pf(p, "distance", 10.0))),
         "UnsM" => d.with("Amnt", unit(b"#Prc", pf(p, "amount", 50.0))).with("Rds ", unit(b"#Pxl", pf(p, "radius", 1.0))).with("Thsh", pi(p, "threshold", 0.0)),
@@ -1047,6 +1054,40 @@ mod tests {
 
     fn sf(command: &str, params: J) -> SmartFilter {
         SmartFilter { command: command.into(), params, blend: BlendMode::Normal, opacity: 1.0, visible: true }
+    }
+
+    /// #6267: Sharpen has no Fltr descriptor; its filterID selects the command.
+    #[test]
+    fn sharpen_descriptor_keeps_settings_and_round_trips() {
+        let item = Descriptor::new("filterFX")
+            .with("Nm  ", Value::Text(UnicodeString::new_nul("Sharpen")))
+            .with("filterID", Value::Integer(code(b"Shrp")))
+            .with(
+                "blendOptions",
+                blend_options(&SmartFilter {
+                    command: "filter.sharpen.sharpen".into(),
+                    params: json!({}),
+                    blend: BlendMode::Multiply,
+                    opacity: 0.6,
+                    visible: false,
+                }),
+            )
+            .with("enab", Value::Boolean(false))
+            .with("hasoptions", Value::Boolean(false));
+        let imported = filter_from_item(&item);
+        assert_eq!(imported.command, "filter.sharpen.sharpen");
+        assert_eq!(imported.params, json!({}));
+        assert_eq!(imported.blend, BlendMode::Multiply);
+        assert!((imported.opacity - 0.6).abs() < 1e-6);
+        assert!(!imported.visible);
+        let written = item_for_filter(&imported).unwrap();
+        assert_eq!(filter_from_item(&written), imported);
+        assert!(written.get("Fltr").is_none());
+        assert!(item_for_filter(&sf("filter.sharpen.sharpen", json!({"amount": 100}))).is_err());
+        let with_unknown_options = item.with("Fltr", Value::Descriptor(Descriptor::new("Shrp").with("unknownSetting", Value::Integer(1))));
+        let unsupported = filter_from_item(&with_unknown_options);
+        assert_eq!(unsupported.command, UNSUPPORTED_FILTER);
+        assert_eq!(filter_from_item(&item_for_filter(&unsupported).unwrap()).params, unsupported.params);
     }
 
     #[test]
