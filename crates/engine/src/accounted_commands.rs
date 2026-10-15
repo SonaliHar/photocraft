@@ -22,6 +22,7 @@ mod assigned_translate;
 mod imported_metadata;
 mod imported_translate;
 mod point;
+mod gaussian_group;
 mod readonly_layer_name;
 mod threshold;
 mod threshold_alpha;
@@ -79,6 +80,8 @@ enum Request<'a> {
     PreparedThresholdAlpha(threshold_alpha::Prepared<'a>),
     ReadonlyLayerName(readonly_layer_name::Request<'a>),
     PreparedReadonlyLayerName(readonly_layer_name::Prepared<'a>),
+    GaussianGroup(gaussian_group::Request<'a>),
+    PreparedGaussianGroup(gaussian_group::Prepared<'a>),
     Point(point::Request<'a>),
     PreparedPoint(point::Prepared<'a>),
     Threshold(threshold::Request<'a>),
@@ -124,6 +127,9 @@ fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadCon
         return Ok(Request::Clear(params));
     }
     if matches!(id, "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.move" | "xcf.filter.remove") {
+        if session.active().and_then(|state|state.doc.accounted()).is_some_and(|owner|owner.is_readonly_gaussian_group_storage()) {
+            return Ok(Request::GaussianGroup(gaussian_group::Request::parse(session,id,params,control)?));
+        }
         if session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_point_storage()) {
             return Ok(Request::Point(point::Request::parse(session, id, params, control)?));
         }
@@ -279,7 +285,7 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
         && !state
             .doc
             .accounted()
-            .is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage())
+            .is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage() || owner.is_readonly_gaussian_group_storage())
     {
         return Ok(Some("this accounted filter storage has no qualified editing recipe"));
     }
@@ -590,6 +596,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             Request::ThresholdAlpha(request) => Request::PreparedThresholdAlpha(request.prepare(session, control)?),
             Request::Threshold(request) => Request::PreparedThreshold(request.prepare(session, control)?),
             Request::Point(request) => Request::PreparedPoint(request.prepare(session, control)?),
+            Request::GaussianGroup(request) => Request::PreparedGaussianGroup(request.prepare(session, control)?),
             Request::ReadonlyLayerName(request) => Request::PreparedReadonlyLayerName(request.prepare(session, control)?),
             Request::Clear(params) => Request::PreparedClear(crate::accounted_clear::Prepared::prepare(session, params, control)?),
             Request::Fill(params) => Request::PreparedFill(crate::accounted_fill::Prepared::prepare(session, params, control)?),
@@ -661,6 +668,9 @@ impl<'a> PreparedAccountedCommand<'a> {
             // and covers the synchronous returned reply after that stage drops.
             census.add(0, usize::try_from(threshold_alpha::REPLY_ENVELOPE).map_err(|_| BackingError::Length)?)?;
         }
+        if matches!(&request, Request::PreparedGaussianGroup(_)) {
+            census.add(0,usize::try_from(gaussian_group::REPLY_ENVELOPE).map_err(|_|BackingError::Length)?)?;
+        }
         if matches!(&request, Request::PreparedPoint(_)) {
             census.add(0, usize::try_from(point::REPLY_ENVELOPE).map_err(|_| BackingError::Length)?)?;
         }
@@ -715,6 +725,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             Request::HistorySelect(_)
                 | Request::PreparedImportedTranslate(_)
                 | Request::PreparedPoint(_)
+                | Request::PreparedGaussianGroup(_)
                 | Request::PreparedThresholdAlpha(_)
                 | Request::PreparedThreshold(_)
                 | Request::PreparedReadonlyLayerName(_)
@@ -771,6 +782,7 @@ impl<'a> PreparedAccountedCommand<'a> {
                 | Request::PreparedReadonlyLayerName(_)
                 | Request::PreparedThreshold(_)
                 | Request::PreparedPoint(_)
+                | Request::PreparedGaussianGroup(_)
                 | Request::PreparedClear(_)
                 | Request::PreparedFill(_)
                 | Request::HistorySelect(_)
@@ -811,6 +823,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             Request::PreparedThresholdAlpha(prepared) => prepared.execute(session, control)?,
             Request::PreparedThreshold(prepared) => prepared.execute(session, control)?,
             Request::PreparedPoint(prepared) => prepared.execute(session, control)?,
+            Request::PreparedGaussianGroup(prepared) => prepared.execute(session, control)?,
             Request::PreparedReadonlyLayerName(prepared) => prepared.execute(session, control)?,
             Request::PreparedClear(prepared) => prepared.execute(session, control)?,
             Request::PreparedFill(prepared) => prepared.execute(session, control)?,
@@ -819,6 +832,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             Request::ThresholdAlpha(_) => return Err(BackingError::Integrity.into()),
             Request::Threshold(_) => return Err(BackingError::Integrity.into()),
             Request::Point(_) => return Err(BackingError::Integrity.into()),
+            Request::GaussianGroup(_) => return Err(BackingError::Integrity.into()),
             Request::ReadonlyLayerName(_) => return Err(BackingError::Integrity.into()),
             Request::AssignedMask(_) => return Err(BackingError::Integrity.into()),
             Request::ImportedMetadata(_) => return Err(BackingError::Integrity.into()),

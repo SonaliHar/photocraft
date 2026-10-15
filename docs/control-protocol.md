@@ -1536,8 +1536,14 @@ mode-28 isolated group with two native children, a native backdrop, a physical
 group mask and a distinct empty filter mask. The actual hierarchy and three
 native leaves remain separate model objects in the native `.pcraft` project. Rendering
 uses the existing child composition, Gaussian and group-mask order. This typed
-route supports paid project/filter inspection and title copies; it does not
-grant generic group edits. Mode 61, other Gaussian arguments and broader source
+route supports paid project/filter inspection, title copies and the existing
+group activation transaction. Both `xcf.filter.set` and `xcf.filter.enable`
+accept exactly `{"filterId":"123","enabled":false}` for that filter. Arguments
+or opacity fields refuse even when empty or unchanged. Changed activation adds
+one `Set GIMP Group Filter Enabled` undo step; a no-op preserves redo. Inherited
+content locks and complete current/proposed validation apply before publication,
+and a saved disabled-only raw tuple cannot be enabled by rewriting it. Dispatch
+is synchronous. Mode 61, other Gaussian arguments and broader source
 geometry/profile policies remain outside this route. Source XCF is read-only;
 save/reopen continues in `.pcraft`. Behavioral acceptance remains pending.
 

@@ -1153,6 +1153,7 @@ impl Session {
                 || matches!(id, "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.move" | "xcf.filter.remove")
                     && self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| {
                         owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage()
+                            || matches!(id, "xcf.filter.set" | "xcf.filter.enable") && owner.is_readonly_gaussian_group_storage()
                     });
             let registered_work = std::sync::atomic::AtomicU64::new(crate::accounted_clear::REGISTERED_WORK_LIMIT);
             let debit = |units| {

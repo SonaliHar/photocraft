@@ -29,6 +29,7 @@ mod threshold_readonly;
 mod point_readonly;
 #[path = "accounted_gaussian_group_readonly.rs"]
 mod gaussian_group_readonly;
+pub use gaussian_group_readonly::GaussianGroupEnabledPatch;
 pub use point_readonly::{PointArgumentPatch, PointArgumentValue, PointFilterMovePatch, PointFilterPatch, PointFilterRemovePatch};
 pub use point_readonly::{
     PointArgumentShape, PointStructuredArgumentPatch, PointStructuredFilterPatch,

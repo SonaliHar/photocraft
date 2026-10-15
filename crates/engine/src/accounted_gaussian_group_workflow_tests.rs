@@ -131,7 +131,7 @@ fn gaussian_groups_preserve_original_owners_and_current_metadata() {
         assert!(s.active().unwrap().doc.shares_state(&initial));
         assert!(s.active().unwrap().history.shares_accounted_history(&history));
         assert_eq!(s.journal, journal);
-        assert!(s.execute("xcf.filter.enable", serde_json::json!({"filterId":node.id.0.to_string(),"enabled":false})).is_err());
+        assert!(s.execute("xcf.filter.set", serde_json::json!({"filterId":node.id.0.to_string(),"enabled":false,"arguments":[]})).is_err());
         let saved = crate::accounted_native_save::PreparedAccountedNativeSave::prepare(&s, "Gaussian-current.pcraft", &ctl())
             .unwrap()
             .write_and_publish(&mut s, &ctl(), |snapshot, _| {

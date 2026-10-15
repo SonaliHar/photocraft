@@ -12,14 +12,14 @@ use photocraft_raster::{
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 
-fn ctl() -> ReadControl<'static> {
+pub(super) fn ctl() -> ReadControl<'static> {
     ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) }
 }
-fn quota() -> BackingQuota {
+pub(super) fn quota() -> BackingQuota {
     BackingQuota::new(QuotaLimits { resident: 128 << 20, index: 32 << 20, scratch: 0 })
 }
 #[derive(Debug)]
-struct Guard {
+pub(super) struct Guard {
     _model: QuotaLease,
     _payload: QuotaLease,
 }
@@ -111,7 +111,7 @@ fn mask_row(id: MaskId, owner: LayerId, extent: Rect, physical: bool) -> ItemSta
         }),
     }
 }
-fn fixture(q: &BackingQuota, edited: bool, enabled: bool) -> (Document, Arc<Guard>) {
+pub(super) fn fixture(q: &BackingQuota, edited: bool, enabled: bool) -> (Document, Arc<Guard>) {
     let guard = Arc::new(Guard { _model: q.reserve(QuotaKind::Index, 8 << 20).unwrap(), _payload: q.reserve(QuotaKind::Resident, 8 << 20).unwrap() });
     let mut doc = Document::new("original.pcraft", Size::new(16, 12), ColorMode::Rgb, SampleType::F32);
     doc.sample_encoding = Some(SampleEncoding::NonlinearProfile);
@@ -188,7 +188,7 @@ fn fixture(q: &BackingQuota, edited: bool, enabled: bool) -> (Document, Arc<Guar
     doc.layers = vec![base, group];
     (doc, guard)
 }
-fn owned(q: &BackingQuota, edited: bool, enabled: bool) -> AccountedDocument {
+pub(super) fn owned(q: &BackingQuota, edited: bool, enabled: bool) -> AccountedDocument {
     let (doc, guard) = fixture(q, edited, enabled);
     AccountedDocument::from_owned_readonly_gaussian_group(doc, guard, q.clone(), &ctl()).unwrap()
 }
@@ -220,6 +220,7 @@ fn title_copy_preserves_raw_tree_masks_native_defaults_and_flat_original_custody
             }
             let retained = again.owner.retention.downcast_ref::<OriginalRetention>().unwrap();
             assert!(retained.original.shares_model(&source));
+            drop(expected); // external oracle also holds native/store Arcs
             drop(source);
             drop(changed);
             again.validate_gaussian_group_storage(&ctl()).unwrap();

@@ -1451,3 +1451,7 @@ mod color_rotate_boundary_tests;
 
 #[cfg(test)]
 mod red_eye_geometry_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "xcf_panels/gaussian_group_activation_tests.rs"]
+mod gaussian_group_activation_tests;

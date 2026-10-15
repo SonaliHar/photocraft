@@ -6,6 +6,9 @@ use crate::xcf_filters::{ExactNumber, FilterArgument, FilterNode, FilterStack, F
 use crate::{ColorMode, PixelFormat, SampleEncoding, SampleType, item_identity::ItemRef};
 
 const FILTER_EPOCH: &str = "xcf22-isolated-small-auto-v1";
+#[path = "accounted_gaussian_group_readonly_enabled.rs"]
+mod enabled;
+pub use enabled::GaussianGroupEnabledPatch;
 fn fail() -> BackingError {
     BackingError::Unsupported
 }
@@ -483,11 +486,23 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, c: &ReadControl<'_>
         c.check(1)?;
         return Ok(owner.clone());
     }
+    current_copy(owner, logical, CopyKind::Title(name), c)
+}
+#[derive(Clone, Copy)]
+enum CopyKind<'a> {
+    Title(&'a str),
+    Enabled(enabled::Plan),
+}
+fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<'_>, c: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
+    let name_bytes = match kind {
+        CopyKind::Title(name) => name.len() as u64,
+        CopyKind::Enabled(_) => 0,
+    };
     let wrapper = std::mem::size_of::<OriginalRetention>() as u64 + 128;
     let envelope = logical
         .index
         .checked_mul(2)
-        .and_then(|n| n.checked_add((name.len() as u64).checked_mul(2)?))
+        .and_then(|n| n.checked_add(name_bytes.checked_mul(2)?))
         .and_then(|n| n.checked_add(4096 + wrapper))
         .ok_or(BackingError::Length)?;
     let allocation = owner.quota().reserve(QuotaKind::Index, AccountedDocument::owned_model_reservation_bytes()).map_err(|_| BackingError::Quota)?;
@@ -512,7 +527,10 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, c: &ReadControl<'_>
     let mask = source.filter_masks.first().ok_or_else(fail)?;
     let plan = filter_readonly::MaskCopyPlan::new(&mask.surface, mask.bounds, c)?;
     target.filter_masks.push(crate::FilterMask { id: mask.id, owner: mask.owner, bounds: mask.bounds, surface: plan.copy(&mask.surface, c)? });
-    staged.document.name = imported_edits::copy_name(name, c)?;
+    match kind {
+        CopyKind::Title(name) => staged.document.name = imported_edits::copy_name(name, c)?,
+        CopyKind::Enabled(plan) => enabled::apply(&mut staged.document, plan, c)?,
+    }
     let actual = measured(&staged.document, owner.quota(), c)?;
     let actual_index = actual.index.checked_add(wrapper).ok_or(BackingError::Length)?;
     if actual_index > envelope || actual.payload > payload_envelope {
