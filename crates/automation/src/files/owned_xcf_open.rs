@@ -1,7 +1,7 @@
 //! Explicit service-authorized selected-path capture for the closed owned plain
 //! XCF class. No stored locator, profile decision, or default Open route is used.
 use crate::AutomationError;
-use photocraft_io::OwnedPlainXcfImport;
+use photocraft_io::{OwnedPlainXcfImport, OwnedXcfImport};
 use photocraft_raster::backing::{
     BackingError, ReadControl,
     quota::{BackingQuota, QuotaKind},
@@ -72,6 +72,27 @@ pub(crate) fn validate_path(path: &str, control: &ReadControl<'_>) -> Result<(),
 /// reads nor normal rendering/profile admission. Caller supplies the real catalog
 /// quota (or a genuine standard initial quota), never a census-derived substitute.
 pub fn open_owned_plain_xcf_selected_path(path: &str, quota: BackingQuota, control: &ReadControl<'_>) -> Result<OwnedPlainXcfImport, AutomationError> {
+    open_selected(path, quota, control, |name, file, length, options, limits, quota, control| {
+        photocraft_io::import_owned_staged_plain_from_reader_in_quota(name, file, length, options, limits, quota, control)
+    })
+}
+
+/// Explicit original-source selection between the already closed plain and
+/// Threshold Alpha owned classes. The original is captured and decoded once by
+/// IO; an ineligible or failed selected family is not retried as another class.
+/// Current interpretation/application publication remain the caller's decision.
+pub fn open_owned_current_xcf_selected_path(path: &str, quota: BackingQuota, control: &ReadControl<'_>) -> Result<OwnedXcfImport, AutomationError> {
+    open_selected(path, quota, control, |name, file, length, options, limits, quota, control| {
+        photocraft_io::import_owned_xcf_from_reader_in_quota(name, file, length, options, limits, quota, control)
+    })
+}
+
+fn open_selected<T>(
+    path: &str,
+    quota: BackingQuota,
+    control: &ReadControl<'_>,
+    decode: impl FnOnce(&str, &mut File, u64, &DecodeOptions<'_>, &ResourceLimits, BackingQuota, &ReadControl<'_>) -> Result<T, photocraft_io::IoError>,
+) -> Result<T, AutomationError> {
     validate_path(path, control)?;
     let (options, limits) = memory_policy()?;
     let name = basename(Path::new(path))?;
@@ -98,8 +119,7 @@ pub fn open_owned_plain_xcf_selected_path(path: &str, quota: BackingQuota, contr
         return Err(AutomationError::BadRequest("owned XCF input must be a regular file within the memory capture limit".into()));
     }
     let modified = before.modified().map_err(|e| AutomationError::Io(e.to_string()))?;
-    let imported = photocraft_io::import_owned_staged_plain_from_reader_in_quota(name, &mut file, before.len(), &options, &limits, quota, control)
-        .map_err(import_error)?;
+    let imported = decode(name, &mut file, before.len(), &options, &limits, quota, control).map_err(import_error)?;
     control.check(1).map_err(backing)?;
     let after = file.metadata().map_err(|e| AutomationError::Io(e.to_string()))?;
     if !after.is_file() || after.len() != before.len() || after.modified().map_err(|e| AutomationError::Io(e.to_string()))? != modified {

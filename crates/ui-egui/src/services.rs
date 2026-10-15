@@ -34,6 +34,17 @@ pub type OwnedPlainXcfOpenFn = Box<
     ) -> Result<photocraft_io::OwnedPlainXcfImport, String>,
 >;
 
+/// The same explicit current-profile decision, with one source-selected decode
+/// over the supported original-XCF classes. A failed read/import is final; this
+/// capability never authorizes retrying another reader or widening eligibility.
+pub type OwnedCurrentXcfOpenFn = Box<
+    dyn FnMut(
+        &str,
+        Option<&photocraft_raster::backing::quota::BackingQuota>,
+        &photocraft_raster::backing::ReadControl<'_>,
+    ) -> Result<photocraft_io::OwnedXcfImport, String>,
+>;
+
 /// Explicit accounted native output. Preparation, source protection and the
 /// atomic writer use the caller's same control and the snapshot's actual quota.
 /// This capability does not complete Session save bookkeeping itself.

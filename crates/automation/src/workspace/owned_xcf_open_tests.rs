@@ -63,3 +63,29 @@ fn root_fifo_never_waits_for_writer_and_cancel_does_not_read() {
     ));
     assert_eq!(q.usage().unwrap(), QuotaUsage::default());
 }
+
+#[test]
+fn combined_root_route_has_no_ambient_fallback_or_failed_decode_retry() {
+    let directory = Directory::new();
+    std::fs::write(directory.0.join("original.xcf"), b"one held root original").unwrap();
+    let workspace = AuthorizedWorkspace::new(Some(&directory.0), None).unwrap();
+    let q = quota();
+    for path in ["../outside.xcf", "original.xcf"] {
+        assert!(workspace.open_owned_current_xcf_with_read_control(path, q.clone(), &ctl()).is_err());
+        assert_eq!(q.usage().unwrap(), QuotaUsage::default());
+    }
+    let absent = AuthorizedWorkspace::new(None, None).unwrap();
+    assert!(
+        matches!(absent.open_owned_current_xcf_with_read_control("original.xcf", q.clone(), &ctl()), Err(AutomationError::BadRequest(message)) if message.contains(DENIED))
+    );
+    let calls = AtomicU64::new(0);
+    let result: Result<(), AutomationError> = workspace.open_owned_xcf_with("original.xcf", q.clone(), &ctl(), |name, _, _, _, _, actual, _| {
+        calls.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(name, "original.xcf");
+        assert!(actual.shares_ledger(&q));
+        Err(photocraft_io::IoError::Unsupported("selected family refused".into()))
+    });
+    assert!(result.is_err());
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert_eq!(q.usage().unwrap(), QuotaUsage::default());
+}

@@ -2,6 +2,7 @@
 //! the default open route and confers no additional source/render qualification.
 //! Original decoded buffers move into private native stores; no f32 round trip.
 //! Standard prepaid Arc/map allocation boundaries remain, not total RSS control.
+use super::owned_xcf_source::{ParsedPromotion, PromotionSource};
 use super::*;
 use photocraft_doc::{BackedLayer, accounted_document::AccountedDocument};
 use photocraft_raster::backing::{
@@ -18,7 +19,7 @@ pub(in crate::xcf_import) mod store;
 pub use existing_quota::import_owned_staged_plain_bytes_in_quota;
 #[path = "owned_plain_source/reader.rs"]
 mod reader;
-pub use reader::import_owned_staged_plain_from_reader_in_quota;
+pub use reader::{import_owned_staged_plain_from_reader_in_quota, import_owned_xcf_from_reader_in_quota};
 fn invalid(message: &str) -> IoError {
     IoError::Unsupported(message.into())
 }
@@ -245,8 +246,8 @@ fn import_impl(
         extra: photocraft_xcf::Reservation<'b, 'a>,
     }
     let name_bytes = (name.len() as u64).checked_mul(4).and_then(|n| n.checked_add(1024)).ok_or_else(|| invalid("owned name envelope"))?;
-    let mut name_lease = budget.reserve(BudgetKind::Index, name_bytes, "owned mapped name copies").map_err(accounting_error)?;
-    let mut input = Input {
+    let name_lease = budget.reserve(BudgetKind::Index, name_bytes, "owned mapped name copies").map_err(accounting_error)?;
+    let input = Input {
         bytes: preparation_input.bytes.take().ok_or_else(|| invalid("owned preparation source already transferred"))?,
         extra: budget.reserve(BudgetKind::Resident, extra, "owned source spare capacity/header").map_err(accounting_error)?,
     };
@@ -254,27 +255,51 @@ fn import_impl(
         let mut source = Bytes(input.bytes.as_slice());
         staged_source::complete_staged_plain_source(name, &mut source, control, options, &budget, photocraft_xcf::PlainSourceAccounting::BorrowedMemory)?
     };
-    let measured = census::measure(&completed.result.document, &budget, control)?;
-    let reports = census::reports(&completed.result, &budget)?;
+    let Input { bytes, extra } = input;
+    let source = ParsedPromotion::plain(bytes, completed, extra, name_lease);
+    promote_source(source, &budget, limits, aggregate, existing.as_ref(), &mut preparation_input.hold, control)
+}
+
+/// Consumes an actual sealed source transaction. Default plain entry points use
+/// exactly the original census, native phase recipe and reservation amounts.
+pub(in crate::xcf_import) fn promote_source<'b, 'a, S: PromotionSource<'b, 'a>>(
+    source: S,
+    budget: &'b photocraft_xcf::Budget<'a>,
+    limits: &photocraft_xcf::ResourceLimits,
+    aggregate: u64,
+    existing: Option<&existing_quota::Context<'_, '_>>,
+    preparation: &mut Option<existing_quota::PreparationHold>,
+    control: &Interrupt<'_>,
+) -> Result<OwnedPlainXcfImport, IoError> {
+    // The source payload precedes supplemental capacity fees on all failures.
+    struct Incoming<'b, 'a, S> {
+        source: S,
+        model: Option<photocraft_xcf::Reservation<'b, 'a>>,
+        payload: Option<photocraft_xcf::Reservation<'b, 'a>>,
+        bridge: Option<photocraft_xcf::Reservation<'b, 'a>>,
+    }
+    let mut incoming = Incoming { source, model: None, payload: None, bridge: None };
+    let measured = census::measure(&incoming.source.document(), &budget, control)?;
+    let reports = incoming.source.report_capacity_with_budget(budget)?;
     // A second explicit index receipt conservatively retains the real owned
     // model/map/report capacities alongside the mapper's original reservations.
     // It is not a fabricated receipt reconstructed from peak/used statistics.
     let index_bytes = add(measured.model, reports)?;
-    let mut model_lease = budget.reserve(BudgetKind::Index, index_bytes, "owned exact model/index capacities").map_err(accounting_error)?;
-    let mut payload_lease = budget.reserve(BudgetKind::Resident, measured.payload, "owned shared profile/raw capacities").map_err(accounting_error)?;
+    incoming.model = Some(budget.reserve(BudgetKind::Index, index_bytes, "owned exact model/index capacities").map_err(accounting_error)?);
+    incoming.payload = Some(budget.reserve(BudgetKind::Resident, measured.payload, "owned shared profile/raw capacities").map_err(accounting_error)?);
     let per_store = add(std::mem::size_of::<store::SurfaceStore<Retention>>() as u64, 128)?;
     let bridge_bytes = add(
         add(std::mem::size_of::<Retention>() as u64, std::mem::size_of::<OwnedPlainXcfImport>() as u64)?,
         add((measured.layers as u64).checked_mul(per_store).ok_or_else(|| invalid("owned store headers"))?, 4096)?,
     )?;
-    let mut bridge_lease = budget.reserve(BudgetKind::Index, bridge_bytes, "owned native bridge headers").map_err(accounting_error)?;
+    incoming.bridge = Some(budget.reserve(BudgetKind::Index, bridge_bytes, "owned native bridge headers").map_err(accounting_error)?);
     // One checked, nonrefundable phase allowance is spent on the actual import
     // Budget before a Sync ReadControl exists. It covers physical row/padding
     // bytes, BOTH layer/item lookup passes, bounded owner/model/header checks,
     // and a conservative four traversals of all measured model/raw/source bytes.
     // Original budget callbacks/deadline still run serially in each row/ID pass.
-    let state = completed.result.document.xcf_state.as_ref().ok_or_else(|| invalid("owned source missing state"))?;
-    let phase_work = native_phase_work(&completed.result.document, measured.model, measured.payload, input.bytes.len() as u64, &budget)?;
+    let state = incoming.source.document().xcf_state.as_ref().ok_or_else(|| invalid("owned source missing state"))?;
+    let phase_work = native_phase_work(&incoming.source.document(), measured.model, measured.payload, incoming.source.original_bytes().len() as u64, &budget)?;
     prepay_phase_work(&budget, phase_work)?;
     let remaining = std::sync::atomic::AtomicU64::new(phase_work);
     let work = |units: u64| -> Result<(), BackingError> {
@@ -289,13 +314,19 @@ fn import_impl(
             .map_err(|e| if e.kind == ErrorKind::Cancelled { BackingError::Cancelled } else { BackingError::Work })
     };
     let read = ReadControl { interrupt: control, work: &work };
-    for layer in &completed.result.document.layers {
+    for layer in &incoming.source.document().layers {
         let LayerContent::Raster(surface) = &layer.content else { return Err(invalid("owned source requires staged raster")) };
         store::validate(surface, layer_bounds(state, layer.id, &read, &phase_poll).map_err(backing)?, &read, &phase_poll).map_err(backing)?;
     }
     budget.poll("owned source preparation closed").map_err(accounting_error)?;
-    let Input { bytes, ref mut extra } = input;
-    let owned = completed.detach_owned(bytes, &mut [extra, &mut model_lease, &mut payload_lease, &mut bridge_lease, &mut name_lease], &budget)?;
+    let owned = incoming.source.detach_owned(
+        &mut [
+            incoming.model.as_mut().ok_or_else(|| invalid("plain model fee missing"))?,
+            incoming.payload.as_mut().ok_or_else(|| invalid("plain payload fee missing"))?,
+            incoming.bridge.as_mut().ok_or_else(|| invalid("plain bridge fee missing"))?,
+        ],
+        budget,
+    )?;
     // No more import reservation/allocation phases beyond this point. Work polls
     // may still use the job-local budget while every allocation uses this quota.
     let mut physical = owned.surface_batch.physical_usage();
@@ -308,15 +339,15 @@ fn import_impl(
     }
     physical = combined(physical, header.physical_usage())?;
     let (quota, baseline) = if let Some(context) = &existing {
-        let hold = preparation_input.hold.as_mut().ok_or_else(|| invalid("owned preparation fees missing"))?;
+        let hold = preparation.as_mut().ok_or_else(|| invalid("owned preparation fees missing"))?;
         hold.retain_physical(physical, measured.layers, context.control)?;
-        let hold = preparation_input.hold.take().ok_or_else(|| invalid("owned preparation fees already transferred"))?;
+        let hold = preparation.take().ok_or_else(|| invalid("owned preparation fees already transferred"))?;
         let baseline = match hold.into_baseline() {
             Ok(baseline) => baseline,
             Err((error, hold)) => {
                 // Restore every actual fee before this function drops the later
                 // declared owned result/model/native surfaces on its error path.
-                preparation_input.hold = Some(hold);
+                *preparation = Some(hold);
                 return Err(error);
             }
         };

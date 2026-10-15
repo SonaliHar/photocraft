@@ -4,7 +4,7 @@ use crate::{
     AutomationError,
     files::owned_xcf_open::{backing, basename, import_error, memory_policy, validate_path},
 };
-use photocraft_io::OwnedPlainXcfImport;
+use photocraft_io::{OwnedPlainXcfImport, OwnedXcfImport};
 use photocraft_raster::backing::{
     BackingError, ReadControl,
     quota::{BackingQuota, QuotaKind},
@@ -24,6 +24,40 @@ impl AuthorizedWorkspace {
         quota: BackingQuota,
         control: &ReadControl<'_>,
     ) -> Result<OwnedPlainXcfImport, AutomationError> {
+        self.open_owned_xcf_with(path, quota, control, |name, file, length, options, limits, quota, control| {
+            photocraft_io::import_owned_staged_plain_from_reader_in_quota(name, file, length, options, limits, quota, control)
+        })
+    }
+
+    /// Single original decode selecting the closed plain/Threshold Alpha family
+    /// beneath this actual read root. Failure never falls back to an ambient
+    /// path or retries another source/render family. No new grant is persisted.
+    pub fn open_owned_current_xcf_with_read_control(
+        &self,
+        path: &str,
+        quota: BackingQuota,
+        control: &ReadControl<'_>,
+    ) -> Result<OwnedXcfImport, AutomationError> {
+        self.open_owned_xcf_with(path, quota, control, |name, file, length, options, limits, quota, control| {
+            photocraft_io::import_owned_xcf_from_reader_in_quota(name, file, length, options, limits, quota, control)
+        })
+    }
+
+    fn open_owned_xcf_with<T>(
+        &self,
+        path: &str,
+        quota: BackingQuota,
+        control: &ReadControl<'_>,
+        decode: impl FnOnce(
+            &str,
+            &mut cap_std::fs::File,
+            u64,
+            &photocraft_xcf::DecodeOptions<'_>,
+            &photocraft_xcf::ResourceLimits,
+            BackingQuota,
+            &ReadControl<'_>,
+        ) -> Result<T, photocraft_io::IoError>,
+    ) -> Result<T, AutomationError> {
         validate_path(path, control)?;
         let (options, limits) = memory_policy()?;
         let root = self.read.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: read authority is absent")))?;
@@ -50,8 +84,7 @@ impl AuthorizedWorkspace {
             return Err(AutomationError::BadRequest("owned XCF input must be a regular file within the memory capture limit".into()));
         }
         let modified = before.modified().map_err(|e| file_error("inspect owned XCF modification", path, e))?;
-        let imported = photocraft_io::import_owned_staged_plain_from_reader_in_quota(name, &mut file, before.len(), &options, &limits, quota, control)
-            .map_err(import_error)?;
+        let imported = decode(name, &mut file, before.len(), &options, &limits, quota, control).map_err(import_error)?;
         control.check(1).map_err(backing)?;
         let after = file.metadata().map_err(|e| file_error("recheck owned XCF", path, e))?;
         let after_modified = after.modified().map_err(|e| file_error("recheck owned XCF modification", path, e))?;

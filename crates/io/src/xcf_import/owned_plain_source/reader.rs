@@ -1,7 +1,7 @@
 //! Charged capture from an already authorized reader into the existing owned
 //! plain-XCF class. No path, resource locator or profile policy is resolved here.
 use super::{OwnedPlainXcfImport, backing, import_owned_staged_plain_bytes_in_quota};
-use crate::IoError;
+use crate::{IoError, OwnedXcfImport, import_owned_xcf_bytes_in_quota};
 use photocraft_raster::backing::{
     BackingError, ReadControl,
     quota::{BackingQuota, QuotaKind, QuotaLease},
@@ -134,6 +134,41 @@ pub fn import_owned_staged_plain_from_reader_in_quota(
     quota: BackingQuota,
     control: &ReadControl<'_>,
 ) -> Result<OwnedPlainXcfImport, IoError> {
+    capture_and_consume(name, reader, exact_length, options, limits, quota, control, |bytes, quota| {
+        import_owned_staged_plain_bytes_in_quota(name, bytes, options, limits, quota, control)
+    })
+}
+
+/// Same paid exact-reader capture with one source-selected decode. Only the two
+/// existing owned source families can be returned. Selection consumes original
+/// parsed records, never a filename/header heuristic; a failed family is not
+/// retried through another importer. Path authority and profile policy remain
+/// the caller's responsibility, as for the plain-only reader entry.
+pub fn import_owned_xcf_from_reader_in_quota(
+    name: &str,
+    reader: &mut (impl Read + ?Sized),
+    exact_length: u64,
+    options: &DecodeOptions<'_>,
+    limits: &ResourceLimits,
+    quota: BackingQuota,
+    control: &ReadControl<'_>,
+) -> Result<OwnedXcfImport, IoError> {
+    capture_and_consume(name, reader, exact_length, options, limits, quota, control, |bytes, quota| {
+        import_owned_xcf_bytes_in_quota(name, bytes, options, limits, quota, control)
+    })
+}
+
+#[allow(clippy::too_many_arguments)] // Exact public capture inputs plus its one consuming handoff.
+fn capture_and_consume<T>(
+    name: &str,
+    reader: &mut (impl Read + ?Sized),
+    exact_length: u64,
+    options: &DecodeOptions<'_>,
+    limits: &ResourceLimits,
+    quota: BackingQuota,
+    control: &ReadControl<'_>,
+    consume: impl FnOnce(Arc<Vec<u8>>, BackingQuota) -> Result<T, IoError>,
+) -> Result<T, IoError> {
     check(control, options, 1)?;
     let cap = limits.get(BudgetKind::Encoded).min(limits.get(BudgetKind::Logical)).min(options.limits.input_bytes as u64);
     if name.len() > 1 << 20 || exact_length == 0 || exact_length > cap {
@@ -145,7 +180,7 @@ pub fn import_owned_staged_plain_from_reader_in_quota(
     let resident_limit = limits.get(BudgetKind::Resident).min(options.limits.resident_bytes as u64);
     let capture = Captured::read(reader, exact_length, options, &quota, resident_limit, control)?;
     check(control, options, 1)?;
-    let result = import_owned_staged_plain_bytes_in_quota(name, capture.bytes.clone(), options, limits, quota, control);
+    let result = consume(capture.bytes.clone(), quota);
     // This overlapping reservation must outlive the entire import call, including
     // all failed private phases. The importer retains its own actual source owner.
     drop(capture);

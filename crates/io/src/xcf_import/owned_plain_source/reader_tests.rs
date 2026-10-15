@@ -142,3 +142,106 @@ fn parent_work_denial_during_capture_refunds_storage_but_not_consumed_work() {
     assert!(work.load(Ordering::Relaxed) > 0);
     assert_eq!(q.usage().unwrap(), QuotaUsage::default());
 }
+
+#[test]
+fn selected_reader_plain_owner_is_typed_and_old_plain_reader_remains_plain_only() {
+    let raw = xcf_fixture::image(13, 150, 0, 1, 1, &[31, 61, 91, 255]);
+    let q = quota(512 << 20);
+    let selected = import_owned_xcf_from_reader_in_quota(
+        "no-filename-policy",
+        &mut Cursor::new(&raw),
+        raw.len() as u64,
+        &Default::default(),
+        &limits(),
+        q.clone(),
+        &control(),
+    )
+    .unwrap();
+    assert!(matches!(&selected, OwnedXcfImport::Plain(_)));
+    assert!(!selected.document().is_readonly_threshold_alpha_storage());
+    assert!(selected.document().quota().shares_ledger(&q));
+    let old =
+        import_owned_staged_plain_from_reader_in_quota("old", &mut Cursor::new(&raw), raw.len() as u64, &Default::default(), &limits(), q.clone(), &control())
+            .unwrap();
+    assert_eq!(old.origin(), selected.origin());
+    drop(old);
+    drop(selected);
+    assert_eq!(q.usage().unwrap(), QuotaUsage::default());
+}
+#[test]
+fn common_capture_calls_one_consumer_and_retains_its_real_fee_on_failure() {
+    let q = quota(1 << 20);
+    let baseline = q.usage().unwrap();
+    let calls = AtomicU64::new(0);
+    let observed = AtomicU64::new(0);
+    let raw = b"not a source-selector or filename authority";
+    let result: Result<(), IoError> = capture_and_consume(
+        "pretend-threshold.xcf",
+        &mut Cursor::new(raw),
+        raw.len() as u64,
+        &Default::default(),
+        &limits(),
+        q.clone(),
+        &control(),
+        |bytes, actual| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            assert_eq!(bytes.as_slice(), raw);
+            assert!(actual.shares_ledger(&q));
+            observed.store(q.usage().unwrap().resident, Ordering::Relaxed);
+            assert!(Arc::strong_count(&bytes) >= 2, "capture must retain its owner through consumer return");
+            Err(error(ErrorKind::Unsupported, "one selected consumer failed"))
+        },
+    );
+    assert!(result.is_err());
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert!(observed.load(Ordering::Relaxed) >= raw.len() as u64);
+    assert_eq!(q.usage().unwrap(), baseline);
+}
+#[test]
+fn selected_reader_denial_and_trailing_data_have_no_decode_fallback_or_retained_charge() {
+    let raw = xcf_fixture::image(13, 150, 0, 1, 1, &[31, 61, 91, 255]);
+    let q = quota(512 << 20);
+    let denied = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Err(BackingError::Work) };
+    let mut reader = NeverRead(0);
+    assert!(import_owned_xcf_from_reader_in_quota("x", &mut reader, raw.len() as u64, &Default::default(), &limits(), q.clone(), &denied).is_err());
+    assert_eq!(reader.0, 0);
+    let mut extra = raw.clone();
+    extra.push(0);
+    assert!(
+        import_owned_xcf_from_reader_in_quota("x", &mut Cursor::new(&extra), raw.len() as u64, &Default::default(), &limits(), q.clone(), &control()).is_err()
+    );
+    assert_eq!(q.usage().unwrap(), QuotaUsage::default());
+}
+#[cfg(feature = "corpus")]
+#[test]
+#[ignore = "UNRUN: requires pinned independently saved Threshold Alpha sources"]
+fn selected_reader_original_threshold_is_distinct_and_old_plain_does_not_retry_into_it() {
+    use sha2::{Digest, Sha256};
+    let hash = |bytes: &[u8]| Sha256::digest(bytes).iter().map(|v| format!("{v:02x}")).collect::<String>();
+    let root = std::path::PathBuf::from(std::env::var_os("PHOTOCRAFT_XCF_FULL_CORPUS").unwrap()).join("alpha-threshold-precision-evidence");
+    let manifest = std::fs::read(root.join("SHA256SUMS.json")).unwrap();
+    assert_eq!(hash(&manifest), "37eb14b73c0b873bc418781310b2bd384d873d9ebade486932bcdde0c4d27263");
+    let manifest: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+    let proof: serde_json::Value = serde_json::from_slice(&std::fs::read(root.join("fresh-verification.json")).unwrap()).unwrap();
+    let l =
+        ResourceLimits::for_policy(Default::default()).unwrap().lowered(&[("residentBytes", 64 << 20), ("indexBytes", 8 << 20), ("scratchBytes", 0)]).unwrap();
+    // Each invocation owns just one selected source. No second decode is used
+    // by the production entry; the legacy call below is a separate refusal oracle.
+    for row in proof["checks"].as_array().unwrap() {
+        let name = format!("{}.xcf", row["id"].as_str().unwrap());
+        let bytes = std::fs::read(root.join(&name)).unwrap();
+        assert_eq!(hash(&bytes), manifest[&name].as_str().unwrap());
+        let q = quota(512 << 20);
+        let selected =
+            import_owned_xcf_from_reader_in_quota(&name, &mut Cursor::new(&bytes), bytes.len() as u64, &Default::default(), &l, q.clone(), &control()).unwrap();
+        assert!(matches!(&selected, OwnedXcfImport::ThresholdAlpha(_)));
+        selected.document().validate_readonly_threshold_alpha_storage(&control()).unwrap();
+        assert!(selected.document().quota().shares_ledger(&q));
+        assert!(
+            import_owned_staged_plain_from_reader_in_quota(&name, &mut Cursor::new(&bytes), bytes.len() as u64, &Default::default(), &l, q.clone(), &control())
+                .is_err()
+        );
+        drop(selected);
+        assert_eq!(q.usage().unwrap(), QuotaUsage::default());
+    }
+}

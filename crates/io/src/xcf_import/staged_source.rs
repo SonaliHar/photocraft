@@ -10,10 +10,37 @@ use std::{cell::RefCell, marker::PhantomData, rc::Rc};
 // already decoded plain plane into a different admission policy.
 trait StagePolicy {
     const THRESHOLD_ALPHA: bool;
+    const SOURCE_SELECTED: bool = false;
     fn accepts(d: &PlaneDescriptor) -> bool;
+    fn family<Q: ExactParsedPlane>(_: &XcfFile<Q>) -> SelectedStagedFamily {
+        if Self::THRESHOLD_ALPHA { SelectedStagedFamily::ThresholdAlpha } else { SelectedStagedFamily::Plain }
+    }
+}
+/// Internal successful source-route identity, never persisted or caller-set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SelectedStagedFamily {
+    Plain,
+    ThresholdAlpha,
 }
 struct PlainPolicy;
 struct ThresholdAlphaPolicy;
+struct SourceSelectedPolicy;
+impl StagePolicy for SourceSelectedPolicy {
+    const THRESHOLD_ALPHA: bool = false;
+    const SOURCE_SELECTED: bool = true;
+    fn accepts(d: &PlaneDescriptor) -> bool {
+        PlainPolicy::accepts(d) || ThresholdAlphaPolicy::accepts(d)
+    }
+    fn family<Q: ExactParsedPlane>(file: &XcfFile<Q>) -> SelectedStagedFamily {
+        // Select exactly one old gate, before mapping or mutation. A refusal
+        // never retries the other gate. This is not eligibility by name/epoch.
+        if file.layers.len() == 1 && file.layers.first().is_some_and(|layer| !layer.effects.is_empty()) {
+            SelectedStagedFamily::ThresholdAlpha
+        } else {
+            SelectedStagedFamily::Plain
+        }
+    }
+}
 impl StagePolicy for PlainPolicy {
     const THRESHOLD_ALPHA: bool = false;
     fn accepts(d: &PlaneDescriptor) -> bool {
@@ -120,7 +147,7 @@ impl<'b, 'a, P: StagePolicy> PlaneSink for Sink<'b, 'a, '_, '_, P> {
         if self.active.is_some() || !P::accepts(d) {
             return Err(stage_error(
                 ErrorKind::Unsupported,
-                if P::THRESHOLD_ALPHA {
+                if P::THRESHOLD_ALPHA || P::SOURCE_SELECTED {
                     "staged Threshold Alpha endpoint does not admit this native plane role/format"
                 } else {
                     "staged endpoint requires alpha-bearing RGB/Gray native plain raster"
@@ -313,8 +340,12 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     fn requires_budgeted_rendering_preparation() -> bool {
         P::THRESHOLD_ALPHA
     }
+    fn requires_budgeted_rendering_preparation_for(threshold_alpha_domain: bool) -> bool {
+        if P::SOURCE_SELECTED { threshold_alpha_domain } else { Self::requires_budgeted_rendering_preparation() }
+    }
     fn admissions(file: &XcfFile<Self>, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<admission::AdmissionDomains, IoError> {
-        if P::THRESHOLD_ALPHA {
+        let threshold = P::family(file) == SelectedStagedFamily::ThresholdAlpha;
+        if threshold {
             if !precision_point_source::qualify(file, "gimp:threshold-alpha", false, false, ctl, shared)? {
                 return Err(IoError::Unsupported("staged Threshold Alpha source is outside the existing precision-point predicate".into()));
             }
@@ -330,7 +361,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         }
         for d in &file.layers {
             ctl.check().map_err(|_| IoError::Cancelled)?;
-            if !P::THRESHOLD_ALPHA
+            if !threshold
                 && (d.group
                     || d.path.len() > 1
                     || d.model != file.model
@@ -367,11 +398,11 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         }
         Ok(admission::AdmissionDomains::default())
     }
-    fn late_admissions(_: &XcfFile<Self>) -> admission::LateAdmissionDomains {
+    fn late_admissions(file: &XcfFile<Self>) -> admission::LateAdmissionDomains {
         // Generic mapping always runs admissions before this side-effect-free
         // domain handoff. Only the private Threshold factory can select this
         // type, and its admissions above propagate the shared exact predicate.
-        admission::LateAdmissionDomains { threshold_alpha_domain: P::THRESHOLD_ALPHA, ..Default::default() }
+        admission::LateAdmissionDomains { threshold_alpha_domain: P::family(file) == SelectedStagedFamily::ThresholdAlpha, ..Default::default() }
     }
     fn eager_original(&self) -> Result<&Plane, IoError> {
         Err(IoError::Unsupported("staged storage has no eager Plane".into()))
@@ -385,7 +416,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     fn current_filter_mask_surface(&mut self, rect: Rect, _: &mut Budget<'_>, ctl: &Interrupt<'_>) -> Result<Surface, IoError> {
         ctl.check().map_err(|_| IoError::Cancelled)?;
         let d = &self.descriptor;
-        if !P::THRESHOLD_ALPHA || d.role != PlaneRole::Mask || !ThresholdAlphaPolicy::accepts(d) {
+        if !(P::THRESHOLD_ALPHA || P::SOURCE_SELECTED) || d.role != PlaneRole::Mask || !ThresholdAlphaPolicy::accepts(d) {
             return Err(IoError::Unsupported("plain staged endpoint has no filter-mask transfer".into()));
         }
         let width = i32::try_from(d.width).map_err(|_| IoError::Unsupported("staged mask width".into()))?;
@@ -450,7 +481,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         Ok((owner, layer, None))
     }
     fn legacy_point_candidate(owner: &Drawable<Self>, _: bool, _: bool, _: Size) -> Result<bool, IoError> {
-        if !P::THRESHOLD_ALPHA && !owner.effects.is_empty() {
+        if !(P::THRESHOLD_ALPHA || P::SOURCE_SELECTED) && !owner.effects.is_empty() {
             return Err(unsupported(owner, "staged effect evaluation unsupported"));
         }
         Ok(false)
@@ -558,7 +589,7 @@ pub(super) fn complete_staged_plain_source<'b, 'a>(
     budget: &'b photocraft_xcf::Budget<'a>,
     accounting: photocraft_xcf::PlainSourceAccounting,
 ) -> Result<CompletedStagedImport<'b, 'a>, IoError> {
-    complete_staged_source::<PlainPolicy>(name, source, control, options, budget, accounting)
+    complete_staged_source::<PlainPolicy>(name, source, control, options, budget, accounting).map(|(completed, _)| completed)
 }
 
 pub(super) fn complete_staged_threshold_alpha_source<'b, 'a>(
@@ -569,7 +600,18 @@ pub(super) fn complete_staged_threshold_alpha_source<'b, 'a>(
     budget: &'b photocraft_xcf::Budget<'a>,
     accounting: photocraft_xcf::PlainSourceAccounting,
 ) -> Result<CompletedStagedImport<'b, 'a>, IoError> {
-    complete_staged_source::<ThresholdAlphaPolicy>(name, source, control, options, budget, accounting)
+    complete_staged_source::<ThresholdAlphaPolicy>(name, source, control, options, budget, accounting).map(|(completed, _)| completed)
+}
+
+pub(super) fn complete_staged_selected_source<'b, 'a>(
+    name: &str,
+    source: &mut dyn photocraft_xcf::Source,
+    control: &Interrupt<'_>,
+    options: &DecodeOptions<'_>,
+    budget: &'b photocraft_xcf::Budget<'a>,
+    accounting: photocraft_xcf::PlainSourceAccounting,
+) -> Result<(CompletedStagedImport<'b, 'a>, SelectedStagedFamily), IoError> {
+    complete_staged_source::<SourceSelectedPolicy>(name, source, control, options, budget, accounting)
 }
 
 fn complete_staged_source<'b, 'a, P: StagePolicy>(
@@ -579,7 +621,7 @@ fn complete_staged_source<'b, 'a, P: StagePolicy>(
     options: &DecodeOptions<'_>,
     budget: &'b photocraft_xcf::Budget<'a>,
     accounting: photocraft_xcf::PlainSourceAccounting,
-) -> Result<CompletedStagedImport<'b, 'a>, IoError> {
+) -> Result<(CompletedStagedImport<'b, 'a>, SelectedStagedFamily), IoError> {
     control.check().map_err(|_| IoError::Cancelled)?;
     // Sink registry is declared before decoded/mapped storage so errors destroy
     // actual Surfaces before their final token/registry refunds.
@@ -588,6 +630,7 @@ fn complete_staged_source<'b, 'a, P: StagePolicy>(
     let photocraft_xcf::BudgetDecodedImport { decoded, reservations } =
         photocraft_xcf::decode_plain_source_into_sink_with_budget(source, &strict, budget, accounting, &mut sink).map_err(accounting_error)?;
     let mut file = decoded.file;
+    let family = P::family(&file);
     let encoded = usize::try_from(decoded.encoded_bytes).map_err(|_| IoError::Unsupported("staged source address space".into()))?;
     file.charged_bytes = file.charged_bytes.checked_sub(encoded).ok_or_else(|| IoError::Unsupported("staged source accounting mismatch".into()))?;
     let previous = std::cell::Cell::new(file.charged_bytes);
@@ -617,8 +660,12 @@ fn complete_staged_source<'b, 'a, P: StagePolicy>(
     if active.is_some() {
         return Err(IoError::Unsupported("staged import left an active plane".into()));
     }
-    Ok(CompletedStagedImport { result, tokens, registry_lease, reservations })
+    Ok((CompletedStagedImport { result, tokens, registry_lease, reservations }, family))
 }
+
+#[cfg(test)]
+#[path = "staged_selected_source_tests.rs"]
+mod selected_source_tests;
 
 #[cfg(test)]
 #[path = "staged_threshold_alpha_tests.rs"]

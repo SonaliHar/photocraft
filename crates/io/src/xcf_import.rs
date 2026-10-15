@@ -47,9 +47,16 @@ pub use staged_source::import_staged_plain_source_with_budget;
 mod staged_threshold_alpha;
 pub use staged_threshold_alpha::{StagedThresholdAlphaImport, import_staged_threshold_alpha_bytes_with_budget};
 
+#[path = "xcf_import/staged_selected_source.rs"]
+mod staged_selected_source;
+
+#[path = "xcf_import/owned_xcf_source.rs"]
+mod owned_xcf_source;
+pub use owned_xcf_source::{OwnedXcfImport, import_owned_xcf_bytes_in_quota};
+
 #[path = "xcf_import/owned_plain_source.rs"]
 mod owned_plain_source;
-pub use owned_plain_source::{OwnedPlainXcfImport, import_owned_staged_plain_bytes, import_owned_staged_plain_bytes_in_quota, import_owned_staged_plain_from_reader_in_quota};
+pub use owned_plain_source::{OwnedPlainXcfImport, import_owned_staged_plain_bytes, import_owned_staged_plain_bytes_in_quota, import_owned_staged_plain_from_reader_in_quota, import_owned_xcf_from_reader_in_quota};
 
 #[path = "xcf_import/owned_threshold_source.rs"]
 mod owned_threshold_source;
@@ -2530,7 +2537,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 .map(accounting_error)
                 .unwrap_or_else(|| if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF rendering consumer: {error}")) }));
         }
-    } else if P::requires_budgeted_rendering_preparation() {
+    } else if P::requires_budgeted_rendering_preparation_for(threshold_alpha_domain) {
         // A sealed staged family must qualify the actual current scene while
         // its source and Surface reservations remain live. It cannot run the
         // legacy unbudgeted constructor and claim a later paid pass covered it.

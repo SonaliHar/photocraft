@@ -532,6 +532,11 @@ fn shell_word(s: &str) -> String {
 
 pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) -> Services {
     let clip: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
+    let automation_owned_current_xcf_open = automation.clone().filter(|workspace| workspace.has_read_root()).map(|workspace| {
+        Box::new(move |path: &str, quota: Option<&photocraft_raster::backing::quota::BackingQuota>, control: &photocraft_raster::backing::ReadControl<'_>| {
+            owned_xcf_open::rooted_current(&workspace, path, quota, control)
+        }) as photocraft_ui_egui::services::OwnedCurrentXcfOpenFn
+    });
     let automation_owned_xcf_open = automation.clone().filter(|workspace| workspace.has_read_root()).map(|workspace| {
         Box::new(move |path: &str, quota: Option<&photocraft_raster::backing::quota::BackingQuota>, control: &photocraft_raster::backing::ReadControl<'_>| {
             owned_xcf_open::rooted(&workspace, path, quota, control)
@@ -628,6 +633,8 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         automation_owned_native_open,
         owned_xcf_open: Some(Box::new(owned_xcf_open::open)),
         automation_owned_xcf_open,
+        owned_current_xcf_open: Some(Box::new(owned_xcf_open::open_current)),
+        automation_owned_current_xcf_open,
         native_save: Some(Box::new(save_native)),
         accounted_native_save: Some(Box::new(save_accounted_native)),
         automation_accounted_native_save,

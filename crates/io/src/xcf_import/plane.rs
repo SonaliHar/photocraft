@@ -47,6 +47,12 @@ impl ExactParsedPlane for Plane {
 /// Private mapper dispatch. Unsupported storage families never become dummy eager planes.
 pub(super) trait MappingPlane: ExactParsedPlane + Sized {
     fn requires_budgeted_rendering_preparation() -> bool { false }
+    /// Dynamic selection is private to a sealed source-selected plane. The
+    /// argument comes from the mapper's already admitted original-source
+    /// domain, never a caller flag or current operation-name guess.
+    fn requires_budgeted_rendering_preparation_for(_threshold_alpha_domain: bool) -> bool {
+        Self::requires_budgeted_rendering_preparation()
+    }
     fn admissions(file: &XcfFile<Self>, ctl: &Interrupt<'_>, budget: Option<&photocraft_xcf::Budget<'_>>) -> Result<admission::AdmissionDomains, IoError>;
     fn late_admissions(file: &XcfFile<Self>) -> admission::LateAdmissionDomains;
     fn eager_original(&self) -> Result<&Plane, IoError>;

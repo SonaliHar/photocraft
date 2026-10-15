@@ -106,3 +106,43 @@ fn selected_fifo_without_writer_refuses_without_blocking_open() {
     assert!(matches!(open_owned_plain_xcf_selected_path(path.to_str().unwrap(), q.clone(), &ctl()), Err(AutomationError::BadRequest(_))));
     assert_eq!(q.usage().unwrap(), QuotaUsage::default());
 }
+
+#[test]
+fn combined_selected_route_owns_plain_native_result_on_the_same_catalog() {
+    let directory = Directory::new();
+    let path = directory.0.join("selected-original.data");
+    std::fs::write(&path, fixture::image(13, 150, 0, 1, 1, &[31, 61, 91, 255])).unwrap();
+    let q = quota();
+    let result = open_owned_current_xcf_selected_path(path.to_str().unwrap(), q.clone(), &ctl()).unwrap();
+    assert!(matches!(&result, photocraft_io::OwnedXcfImport::Plain(_)));
+    assert!(result.document().quota().shares_ledger(&q));
+    assert!(result.source_read_only());
+    std::fs::remove_file(path).unwrap();
+    let photocraft_doc::LayerContent::BackedRaster(layer) = &result.document().document().layers[0].content else { panic!() };
+    let mut pixel = [0; 4];
+    layer.checked_view().read_logical_pixel_native_into(0, 0, &mut pixel, &ctl()).unwrap();
+    assert_eq!(pixel, [31, 61, 91, 255]);
+    drop(result);
+    assert_eq!(q.usage().unwrap(), QuotaUsage::default());
+}
+
+#[test]
+fn common_selected_capture_invokes_one_decoder_and_never_retries_a_failed_family() {
+    let directory = Directory::new();
+    let path = directory.0.join("actual-name.xcf");
+    std::fs::write(&path, b"one retained selected original").unwrap();
+    let q = quota();
+    let calls = AtomicU64::new(0);
+    let result: Result<(), AutomationError> = open_selected(path.to_str().unwrap(), q.clone(), &ctl(), |name, _, length, _, _, actual, _| {
+        calls.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(name, "actual-name.xcf");
+        assert_eq!(length, 30);
+        assert!(actual.shares_ledger(&q));
+        Err(photocraft_io::IoError::Unsupported("selected family refused".into()))
+    });
+    assert!(result.is_err());
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert_eq!(q.usage().unwrap(), QuotaUsage::default());
+    assert!(open_owned_current_xcf_selected_path(path.to_str().unwrap(), q.clone(), &ctl()).is_err());
+    assert_eq!(q.usage().unwrap(), QuotaUsage::default());
+}

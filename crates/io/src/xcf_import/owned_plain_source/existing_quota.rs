@@ -6,7 +6,7 @@ use photocraft_raster::backing::{
     quota::{QuotaKind, QuotaLease},
 };
 
-pub(super) struct Context<'c, 'i> {
+pub(in crate::xcf_import) struct Context<'c, 'i> {
     pub quota: BackingQuota,
     pub control: &'c ReadControl<'i>,
 }

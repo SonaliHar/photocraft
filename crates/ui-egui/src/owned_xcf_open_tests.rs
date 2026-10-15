@@ -137,6 +137,7 @@ fn diagnostics_reply_matches_actual_import_assessment_and_failed_copy_refunds_lo
         &c,
     )
     .unwrap();
+    let owned = photocraft_io::OwnedXcfImport::Plain(owned);
     let baseline = q.usage().unwrap();
     let prepared = PreparedReply::new(&owned, "safe/literal.xcf", "literal.xcf", Authority::HeldRoot, &c).unwrap();
     assert_eq!(prepared.value["assessment"], serde_json::to_value(owned.assessment()).unwrap());

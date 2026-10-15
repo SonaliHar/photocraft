@@ -447,6 +447,8 @@ pub struct Services {
     /// Explicit original-XCF read capabilities, separately scoped by the host.
     pub owned_xcf_open: Option<services::OwnedPlainXcfOpenFn>,
     pub automation_owned_xcf_open: Option<services::OwnedPlainXcfOpenFn>,
+    pub owned_current_xcf_open: Option<services::OwnedCurrentXcfOpenFn>,
+    pub automation_owned_current_xcf_open: Option<services::OwnedCurrentXcfOpenFn>,
     /// Encode a document for a file name (format chosen by extension).
     pub export: Option<ExportFn>,
     /// Atomic streamed native saves with all open-document source exclusions.

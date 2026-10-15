@@ -2,6 +2,7 @@
 //! Runtime storage adoption is read-only: no source, renderer, edit or default
 //! loader authority is inferred from the persisted node or receipt sizes.
 use super::owned_plain_source::{census, existing_quota::PreparationHold, store};
+use super::owned_xcf_source::PromotionSource;
 use super::*;
 use photocraft_doc::{BackedLayer, accounted_document::AccountedDocument};
 use photocraft_raster::backing::{
@@ -165,14 +166,6 @@ pub fn import_owned_staged_threshold_alpha_bytes_in_quota(
         })
     };
     let budget = photocraft_xcf::Budget::new_persistent_with_work(effective, Some(&cancelled), Some(&observer)).map_err(accounting_error)?;
-    // Supplemental capacity fees are declared before the holder: every error
-    // destroys the already-mapped payload before these extra real fees refund.
-    struct Supplemental<'b, 'a> {
-        model: Option<photocraft_xcf::Reservation<'b, 'a>>,
-        payload: Option<photocraft_xcf::Reservation<'b, 'a>>,
-        bridge: Option<photocraft_xcf::Reservation<'b, 'a>>,
-    }
-    let mut supplemental = Supplemental { model: None, payload: None, bridge: None };
     let staged = staged_threshold_alpha::import_staged_threshold_alpha_bytes_with_budget(
         name,
         input.bytes.take().ok_or_else(|| invalid("threshold source already moved"))?,
@@ -180,19 +173,38 @@ pub fn import_owned_staged_threshold_alpha_bytes_in_quota(
         options,
         &budget,
     )?;
-    let measured = census::measure_threshold(staged.document(), &budget, control.interrupt)?;
+    promote_source(staged, &budget, quota, control, &mut input.hold)
+}
+
+/// Completion-consuming storage adoption shared by the typed Threshold source
+/// and the single-decode source-selected factory. No public arbitrary model hook.
+pub(in crate::xcf_import) fn promote_source<'b, 'a, S: PromotionSource<'b, 'a>>(
+    source: S,
+    budget: &'b photocraft_xcf::Budget<'a>,
+    quota: BackingQuota,
+    control: &ReadControl<'_>,
+    preparation: &mut Option<PreparationHold>,
+) -> Result<OwnedThresholdAlphaXcfImport, IoError> {
+    struct Incoming<'b, 'a, S> {
+        source: S,
+        model: Option<photocraft_xcf::Reservation<'b, 'a>>,
+        payload: Option<photocraft_xcf::Reservation<'b, 'a>>,
+        bridge: Option<photocraft_xcf::Reservation<'b, 'a>>,
+    }
+    let mut incoming = Incoming { source, model: None, payload: None, bridge: None };
+    let measured = census::measure_threshold(incoming.source.document(), &budget, control.interrupt)?;
     // The holder's result is exposed only as borrowed fields; this sibling
     // report census does not acquire a public extraction or source grant.
-    let reports = staged.report_capacity_with_budget(&budget)?;
-    supplemental.model =
+    let reports = incoming.source.report_capacity_with_budget(&budget)?;
+    incoming.model =
         Some(budget.reserve(BudgetKind::Index, add(measured.model, reports)?, "threshold actual model/report capacities").map_err(accounting_error)?);
-    supplemental.payload = Some(budget.reserve(BudgetKind::Resident, measured.payload, "threshold raw/profile capacities").map_err(accounting_error)?);
+    incoming.payload = Some(budget.reserve(BudgetKind::Resident, measured.payload, "threshold raw/profile capacities").map_err(accounting_error)?);
     let bridge_bytes = add(
         add(std::mem::size_of::<Retention>() as u64, std::mem::size_of::<OwnedThresholdAlphaXcfImport>() as u64)?,
         add(std::mem::size_of::<store::SurfaceStore<Retention>>() as u64, 4096)?,
     )?;
-    supplemental.bridge = Some(budget.reserve(BudgetKind::Index, bridge_bytes, "threshold owned bridge headers").map_err(accounting_error)?);
-    let phase = phase_work(staged.document(), measured.model, measured.payload, staged.original_bytes().len() as u64, &budget)?;
+    incoming.bridge = Some(budget.reserve(BudgetKind::Index, bridge_bytes, "threshold owned bridge headers").map_err(accounting_error)?);
+    let phase = phase_work(incoming.source.document(), measured.model, measured.payload, incoming.source.original_bytes().len() as u64, &budget)?;
     prepay(&budget, phase)?;
     let remaining = AtomicU64::new(phase);
     let work = |units| remaining.try_update(Ordering::AcqRel, Ordering::Relaxed, |left| left.checked_sub(units)).map(|_| ()).map_err(|_| BackingError::Work);
@@ -202,21 +214,21 @@ pub fn import_owned_staged_threshold_alpha_bytes_in_quota(
             .map_err(|error| if error.kind == ErrorKind::Cancelled { BackingError::Cancelled } else { BackingError::Work })
     };
     let read = ReadControl { interrupt: control.interrupt, work: &work };
-    let bounds = staged.document().bounds();
-    for layer in &staged.document().layers {
+    let bounds = incoming.source.document().bounds();
+    for layer in &incoming.source.document().layers {
         let LayerContent::Raster(surface) = &layer.content else { return Err(invalid("threshold staged layer")) };
         store::validate(surface, bounds, &read, &poll).map_err(backing)?;
     }
-    if let Some(state) = &staged.document().xcf_state {
+    if let Some(state) = &incoming.source.document().xcf_state {
         for mask in &state.filter_masks {
             store::validate(&mask.surface, mask.bounds, &read, &poll).map_err(backing)?;
         }
     }
-    let owned = staged.detach_owned(
+    let owned = incoming.source.detach_owned(
         &mut [
-            supplemental.model.as_mut().ok_or_else(|| invalid("threshold model fee missing"))?,
-            supplemental.payload.as_mut().ok_or_else(|| invalid("threshold payload fee missing"))?,
-            supplemental.bridge.as_mut().ok_or_else(|| invalid("threshold bridge fee missing"))?,
+            incoming.model.as_mut().ok_or_else(|| invalid("threshold model fee missing"))?,
+            incoming.payload.as_mut().ok_or_else(|| invalid("threshold payload fee missing"))?,
+            incoming.bridge.as_mut().ok_or_else(|| invalid("threshold bridge fee missing"))?,
         ],
         &budget,
     )?;
@@ -229,13 +241,13 @@ pub fn import_owned_staged_threshold_alpha_bytes_in_quota(
         physical = combined(physical, source.physical_usage())?;
     }
     physical = combined(physical, header.physical_usage())?;
-    let hold = input.hold.as_mut().ok_or_else(|| invalid("threshold preparation hold missing"))?;
+    let hold = preparation.as_mut().ok_or_else(|| invalid("threshold preparation hold missing"))?;
     hold.retain_physical(physical, measured.layers, &read)?;
-    let hold = input.hold.take().ok_or_else(|| invalid("threshold preparation hold moved"))?;
+    let hold = preparation.take().ok_or_else(|| invalid("threshold preparation hold moved"))?;
     let baseline = match hold.into_baseline() {
         Ok(baseline) => baseline,
         Err((error, hold)) => {
-            input.hold = Some(hold);
+            *preparation = Some(hold);
             return Err(error);
         }
     };

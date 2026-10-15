@@ -13,7 +13,7 @@ mod owned_native_open;
 pub use owned_native_open::open_accounted_native_selected_path;
 #[path = "files/owned_xcf_open.rs"]
 pub(crate) mod owned_xcf_open;
-pub use owned_xcf_open::open_owned_plain_xcf_selected_path;
+pub use owned_xcf_open::{open_owned_plain_xcf_selected_path, open_owned_current_xcf_selected_path};
 
 #[path = "files/protected_save.rs"]
 mod protected_save;

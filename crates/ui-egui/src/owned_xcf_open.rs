@@ -42,7 +42,7 @@ pub(crate) fn invoke(app: &mut PhotocraftApp, params: &Value) -> Result<Value, S
     if app.automation_input {
         return Err("explicit XCF Open is unavailable through automation; use capability-scoped app.open".into());
     }
-    if app.services.owned_xcf_open.is_none() {
+    if app.services.owned_current_xcf_open.is_none() && app.services.owned_xcf_open.is_none() {
         return Err("owned XCF Open service is not configured".into());
     }
     if let Some(path) = path {
@@ -64,6 +64,10 @@ enum Authority {
     Interactive,
     HeldRoot,
 }
+enum Reader<'a> {
+    Selected(&'a mut crate::services::OwnedCurrentXcfOpenFn),
+    Plain(&'a mut crate::services::OwnedPlainXcfOpenFn),
+}
 /// Only the caller's independently installed held-root capability may read here.
 pub(crate) fn invoke_authorized(app: &mut PhotocraftApp, params: &Value) -> Result<Value, String> {
     let path = parameters(params)?.ok_or("scoped XCF Open requires an explicit path")?;
@@ -83,20 +87,40 @@ fn open_path(app: &mut PhotocraftApp, path: &str, authority: Authority) -> Resul
         return Err("owned XCF Open path contains NUL".into());
     }
     let quota = app.session.accounted_open_quota().cloned();
+    // Choose one capability before reading. A configured source-selected
+    // reader's refusal is authoritative; there is no retry through plain Open.
     let open = match authority {
-        Authority::Interactive => app.services.owned_xcf_open.as_mut(),
-        Authority::HeldRoot => app.services.automation_owned_xcf_open.as_mut(),
-    }
-    .ok_or("owned XCF Open service is not configured for this authority")?;
-    let imported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| open(path, quota.as_ref(), &control)))
-        .map_err(|_| "owned XCF Open failed unexpectedly; existing documents were retained".to_owned())??;
+        Authority::Interactive => {
+            if let Some(open) = app.services.owned_current_xcf_open.as_mut() {
+                Reader::Selected(open)
+            } else {
+                Reader::Plain(app.services.owned_xcf_open.as_mut().ok_or("owned XCF Open service is not configured for this authority")?)
+            }
+        }
+        Authority::HeldRoot => {
+            if let Some(open) = app.services.automation_owned_current_xcf_open.as_mut() {
+                Reader::Selected(open)
+            } else {
+                Reader::Plain(app.services.automation_owned_xcf_open.as_mut().ok_or("owned XCF Open service is not configured for this authority")?)
+            }
+        }
+    };
+    let imported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match open {
+        Reader::Selected(open) => open(path, quota.as_ref(), &control),
+        Reader::Plain(open) => open(path, quota.as_ref(), &control).map(photocraft_io::OwnedXcfImport::Plain),
+    }))
+    .map_err(|_| "owned XCF Open failed unexpectedly; existing documents were retained".to_owned())??;
     if quota.as_ref().is_some_and(|q| !q.shares_ledger(imported.document().quota())) {
         return Err("owned XCF Open returned a different catalog quota".into());
     }
     let name = path.rsplit(['/', '\\']).next().filter(|name| !name.is_empty()).ok_or("owned XCF Open has no file name")?;
     let prepared = PreparedReply::new(&imported, path, name, authority, &control)?;
     control.check(1).map_err(|e| e.to_string())?;
-    app.session.add_owned_plain_xcf_import(&imported, name, Some(path), &control).map_err(|e| e.to_string())?;
+    match &imported {
+        photocraft_io::OwnedXcfImport::Plain(imported) => app.session.add_owned_plain_xcf_import(imported, name, Some(path), &control),
+        photocraft_io::OwnedXcfImport::ThresholdAlpha(imported) => app.session.add_owned_threshold_alpha_xcf_import(imported, name, Some(path), &control),
+    }
+    .map_err(|e| e.to_string())?;
     // Identity/path/profile publication is complete. Existing optional user
     // notifications cannot turn that success into an error. Passing None avoids
     // opened_from() repeating uncharged source/path mutation on the paid owner.
@@ -189,7 +213,7 @@ fn tree_bytes(value: &Value, depth: usize, control: &ReadControl<'_>) -> Result<
     Ok(bytes)
 }
 impl PreparedReply {
-    fn new(imported: &photocraft_io::OwnedPlainXcfImport, path: &str, name: &str, authority: Authority, control: &ReadControl<'_>) -> Result<Self, String> {
+    fn new(imported: &photocraft_io::OwnedXcfImport, path: &str, name: &str, authority: Authority, control: &ReadControl<'_>) -> Result<Self, String> {
         let assessment = imported.assessment();
         let original = imported.warnings();
         let diagnostics = assessment.map_or(0, |a| a.diagnostics.len());
@@ -296,3 +320,7 @@ impl PreparedReply {
 #[cfg(test)]
 #[path = "owned_xcf_open_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "owned_current_xcf_open_tests.rs"]
+mod current_tests;
