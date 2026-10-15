@@ -1,4 +1,4 @@
-//! UNRUN: authentic 64-case NL/Linear/Perceptual Union geometry host continuation. Source and
+//! UNRUN: authentic 256-case NL/Linear/Perceptual four-operator geometry host continuation. Source and
 //! output Vecs/files are external harness captures, not quota receipts.
 use super::*;
 use photocraft_doc::{Document, LayerContent};
@@ -35,10 +35,9 @@ fn cases() -> Vec<(PathBuf, Value)> {
                 assert_eq!(hash(&std::fs::read(root.join(name)).unwrap()), pins[variant][name].as_str().unwrap());
             }
             let data: Value = serde_json::from_slice(&std::fs::read(root.join("observations.json")).unwrap()).unwrap();
+            let faithful: Value = serde_json::from_slice(&std::fs::read(root.join("faithful-observations.json")).unwrap()).unwrap();
             for row in data["records"].as_array().unwrap() {
-                if row["layers"][0]["spaces"]["composite_mode"] != 1 {
-                    continue;
-                }
+                assert!((1..=4).contains(&row["layers"][0]["spaces"]["composite_mode"].as_i64().unwrap()));
                 let expected = match set {
                     "linear" => "_LINEAR",
                     "perceptual" => "_PERCEPTUAL",
@@ -51,11 +50,19 @@ fn cases() -> Vec<(PathBuf, Value)> {
                 // hash actual imported ICC bytes directly against these pins.
                 assert_eq!(row["assigned_icc"]["sha256"], row["effective_icc"]["sha256"]);
                 assert_eq!(row["assigned_icc"]["bytes"], row["effective_icc"]["bytes"]);
-                result.push((root.clone(), row.clone()));
+                let witness = faithful["records"].as_array().unwrap().iter().find(|r| r["id"] == row["id"]).unwrap();
+                assert_eq!(witness["source_sha256"], row["source_sha256"]);
+                let reference = &witness["reference"];
+                let png = std::fs::read(root.join(reference["file"].as_str().unwrap())).unwrap();
+                assert_eq!(hash(&png), reference["sha256"].as_str().unwrap());
+                assert_eq!(png.len() as u64, reference["bytes"].as_u64().unwrap());
+                let mut row = row.clone();
+                row["faithful_reference"] = reference.clone();
+                result.push((root.clone(), row));
             }
         }
     }
-    assert_eq!(result.len(), 64);
+    assert_eq!(result.len(), 256);
     result
 }
 // Observation ICC values describe GIMP source/profile roles. The canonical
@@ -84,6 +91,23 @@ fn profiles(doc: &Document, row: &Value) {
     let expected = photocraft_cms::xcf_color::effective_profile(Some(original), space, encoding).unwrap().to_bytes();
     assert_eq!(current, expected.as_ref());
     assert_ne!(current, original);
+}
+fn operators(doc: &Document, row: &Value) {
+    let explicit: Vec<_> =
+        doc.xcf_state.as_ref().unwrap().items.iter().filter_map(|item| item.composition.as_ref()).filter(|policy| policy.stored_operator != -1).collect();
+    assert_eq!(explicit.len(), 1);
+    let policy = explicit[0];
+    assert_eq!((policy.source_mode, policy.stored_blend_space, policy.stored_composite_space), (28, 0, 1));
+    let observed = row["layers"][0]["spaces"]["composite_mode"].as_i64().unwrap() as i32;
+    assert_eq!(policy.stored_operator, observed);
+    let expected = match observed {
+        1 => photocraft_doc::import_compositing::GimpOperator::Union,
+        2 => photocraft_doc::import_compositing::GimpOperator::ClipToBackdrop,
+        3 => photocraft_doc::import_compositing::GimpOperator::ClipToLayer,
+        4 => photocraft_doc::import_compositing::GimpOperator::Intersection,
+        _ => panic!("closed independently captured operator"),
+    };
+    assert_eq!(policy.resolved.as_ref().unwrap().operator, expected);
 }
 fn native(doc: &Document) -> Vec<(photocraft_raster::backing::NativePlaneDescriptor, String)> {
     doc.layers
@@ -144,7 +168,7 @@ impl Drop for Directory {
 }
 
 #[test]
-#[ignore = "UNRUN: 64 actual assigned ICC NL/Linear/Perceptual Union source/edit states use paid host/native routes and preserve original masks"]
+#[ignore = "UNRUN: 256 actual assigned ICC NL/Linear/Perceptual four-operator source/edit states use paid host/native routes and preserve original masks"]
 fn assigned_geometry_host_source_protection_title_save_and_native_continuation() {
     for (root, row) in cases() {
         let original = std::fs::read(root.join(row["source_file"].as_str().unwrap())).unwrap();
@@ -155,6 +179,7 @@ fn assigned_geometry_host_source_protection_title_save_and_native_continuation()
         drop(h.open_owned_xcf_keep_current(&source, &ctl()).unwrap());
         let before = h.session.active().unwrap().doc.clone();
         profiles(&before, &row);
+        operators(&before, &row);
         let identity = h.session.active().unwrap().source.clone();
         assert!(h.session.active().unwrap().source_read_only);
         before.accounted().unwrap().validate_assigned_analytic_geometry_storage(&ctl()).unwrap();
@@ -201,7 +226,7 @@ fn assigned_geometry_host_source_protection_title_save_and_native_continuation()
 #[ignore = "UNRUN: authentic assigned geometry host authorizer and preparation control refuse before publication"]
 fn assigned_geometry_host_denial_keeps_session_and_source() {
     // One actual source from each retained NL-float/NL-integer/Linear/Perceptual family.
-    for (root, row) in cases().into_iter().step_by(16) {
+    for (root, row) in cases().into_iter().step_by(64) {
         let original = std::fs::read(root.join(row["source_file"].as_str().unwrap())).unwrap();
         let dir = Directory::new();
         let source = dir.0.join("source.xcf");

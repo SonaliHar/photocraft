@@ -278,3 +278,71 @@ fn assigned_factory_refuses_other_model_binding_and_control_without_mutation() {
     ));
     assert_eq!(q.usage().unwrap(), before);
 }
+
+// CURRENT gate compatibility only. Per-operator compositing equations are
+// exercised separately by the leaf/host groups; this is not a source witness.
+fn assigned_operator(sample: SampleType, stored: SampleEncoding, raw: i32, operator: GimpOperator) -> AccountedDocument {
+    let owner = if stored == SampleEncoding::NonlinearProfile {
+        let (doc, q, guard, _) = model(sample);
+        adopt(doc, q, guard)
+    } else {
+        assigned_model(sample, stored).0
+    };
+    let q = owner.quota().clone();
+    let fee = q.reserve(QuotaKind::Index, 1 << 20).unwrap();
+    let mut doc = owner.document().clone();
+    let id = doc.layers[1].id;
+    let policy = doc.xcf_state.as_mut().unwrap().items.iter_mut().find(|i| i.item == ItemRef::Layer(id)).unwrap().composition.as_mut().unwrap();
+    policy.stored_operator = raw;
+    policy.resolved.as_mut().unwrap().operator = operator;
+    adopt(doc, q, Arc::new((owner, fee)))
+}
+#[test]
+fn typed_nonunion_gates_preserve_bare_profile_compatibility_and_native_storage() {
+    use crate::backed_assigned_current_profile::PreparedAssignedCurrentProfile;
+    for (sample, stored) in [
+        (SampleType::U16, SampleEncoding::NonlinearProfile),
+        (SampleType::U32, SampleEncoding::NonlinearProfile),
+        (SampleType::F32, SampleEncoding::NonlinearProfile),
+        (SampleType::F64, SampleEncoding::NonlinearProfile),
+        (SampleType::F32, SampleEncoding::Linear),
+        (SampleType::F64, SampleEncoding::Linear),
+        (SampleType::F32, SampleEncoding::Perceptual),
+        (SampleType::F64, SampleEncoding::Perceptual),
+    ] {
+        for (word, op) in [(1, GimpOperator::Union), (2, GimpOperator::ClipToBackdrop), (3, GimpOperator::ClipToLayer), (4, GimpOperator::Intersection)] {
+            let owner = assigned_operator(sample, stored, word, op);
+            let raw = native_storage_hash(&owner);
+            let binding = PreparedAssignedCurrentProfile::prepare(&owner, Default::default(), &ctl()).unwrap();
+            assert_eq!(qualify_assigned(&owner, &binding, &ctl()).unwrap(), GimpSpace::LinearRgb);
+            assert_eq!(qualify(&owner, binding.profile(), &ctl()).is_ok(), stored == SampleEncoding::NonlinearProfile && word == 1);
+            let baseline = owner.quota().usage().unwrap();
+            let denied = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Err(BackingError::Work) };
+            assert!(qualify_assigned(&owner, &binding, &denied).is_err());
+            let stop = Interrupt::cancel_only(&|| true);
+            assert!(qualify_assigned(&owner, &binding, &ReadControl { interrupt: &stop, work: &|_| Ok(()) }).is_err());
+            assert_eq!(owner.quota().usage().unwrap(), baseline);
+            assert_eq!(native_storage_hash(&owner), raw);
+        }
+    }
+}
+#[test]
+fn typed_geometry_rejects_raw_resolved_operator_contradictions_and_nonunion_backdrop() {
+    use crate::backed_assigned_current_profile::PreparedAssignedCurrentProfile;
+    for (word, op) in [(0, GimpOperator::Union), (5, GimpOperator::Union), (2, GimpOperator::Intersection)] {
+        let owner = assigned_operator(SampleType::F32, SampleEncoding::Linear, word, op);
+        let baseline = owner.quota().usage().unwrap();
+        assert!(PreparedAssignedCurrentProfile::prepare(&owner, Default::default(), &ctl()).is_err());
+        assert_eq!(owner.quota().usage().unwrap(), baseline);
+    }
+    let source = assigned_operator(SampleType::F64, SampleEncoding::Perceptual, 4, GimpOperator::Intersection);
+    let q = source.quota().clone();
+    let fee = q.reserve(QuotaKind::Index, 1 << 20).unwrap();
+    let mut doc = source.document().clone();
+    let id = doc.layers[0].id;
+    let p = doc.xcf_state.as_mut().unwrap().items.iter_mut().find(|i| i.item == ItemRef::Layer(id)).unwrap().composition.as_mut().unwrap();
+    p.stored_operator = 2;
+    p.resolved.as_mut().unwrap().operator = GimpOperator::ClipToBackdrop;
+    let invalid = adopt(doc, q, Arc::new((source, fee)));
+    assert!(PreparedAssignedCurrentProfile::prepare(&invalid, Default::default(), &ctl()).is_err());
+}

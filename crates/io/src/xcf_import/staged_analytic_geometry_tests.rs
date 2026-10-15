@@ -1,4 +1,4 @@
-//! UNRUN genuine assigned-ICC NL Union geometry storage drafts.
+//! UNRUN genuine assigned-ICC analytic geometry storage drafts.
 //! Corpus/reference captures are external harness owners, not product receipts.
 use super::*;
 use photocraft_raster::backing::{
@@ -140,8 +140,8 @@ fn all_originals_single_decode_real_quota_and_exact_world_native_storage() {
     }
 }
 #[test]
-#[ignore = "UNRUN: exact original predicate plus NL/Union restriction, no fallback to plain"]
-fn selector_rejects_other_operators_encodings_and_bad_mask_placement() {
+#[ignore = "UNRUN: exact original predicate, invalid operator/encoding restriction, no fallback to plain"]
+fn selector_rejects_unknown_operators_encodings_and_bad_mask_placement() {
     let root = corpus();
     let (path, pin) = fixtures()[0];
     let bytes = std::fs::read(root.join(path)).unwrap();
@@ -149,7 +149,7 @@ fn selector_rejects_other_operators_encodings_and_bad_mask_placement() {
     for fault in 0..5 {
         let mut file = photocraft_xcf::decode(&bytes, &Default::default()).unwrap();
         match fault {
-            0 => file.layers[0].composite_mode = 2,
+            0 => file.layers[0].composite_mode = 5,
             1 => file.encoding = Encoding::Linear,
             2 => file.layers[0].mask.as_mut().unwrap().offset = (1, 0),
             3 => file.layers[0].mask_enabled = false,
@@ -316,7 +316,7 @@ fn original_encoding_geometry_preserves_source_and_generates_actual_current_prof
 }
 #[test]
 #[ignore = "UNRUN: Linear/Perceptual Union gates preserve source precision/tuple and atomic work refusal"]
-fn encoding_geometry_does_not_relabel_mismatched_precision_or_other_operator() {
+fn encoding_geometry_does_not_relabel_mismatched_precision_or_unknown_operator() {
     let root = encoding_corpus();
     let (path, pin) = encoding_fixtures()[0];
     let raw = Arc::new(std::fs::read(root.join(path)).unwrap());
@@ -324,7 +324,7 @@ fn encoding_geometry_does_not_relabel_mismatched_precision_or_other_operator() {
     for fault in 0..4 {
         let mut file = photocraft_xcf::decode(&raw, &Default::default()).unwrap();
         match fault {
-            0 => file.layers[0].composite_mode = 2,
+            0 => file.layers[0].composite_mode = 5,
             1 => file.precision = 650,
             2 => file.layers[0].mask_shown = true,
             _ => file.layers[0].mask.as_mut().unwrap().offset = (1, 0),
@@ -381,4 +381,136 @@ fn semantic_profile_work_denial_keeps_temporary_receipts_and_source_atomic() {
         assert_eq!(budget.used(BudgetKind::Resident), resident);
         assert_eq!(hash(&raw), pin);
     }
+}
+
+fn operator_fixtures(operator: i32) -> Vec<(String, String)> {
+    let root = PathBuf::from(std::env::var_os("PHOTOCRAFT_XCF_FULL_CORPUS").unwrap());
+    let mut out = Vec::new();
+    for (path, pin) in [
+        ("normal-mask-geometry-holdout-evidence/left-top/observations.json", "1a565ade2d3f9f3dcef51124cda6b46d656e7785c0958a6bed75043b85f01633"),
+        ("normal-mask-geometry-holdout-evidence/right-bottom/observations.json", "52b4a0906fdc09d4f84e264bd9cff45bb6b53457cdb7808248599f5d007c557e"),
+        ("normal-mask-geometry-integer-evidence/left-top/observations.json", "b55d75f1fe4b8fe47ff7eef87e2806bbf4d4c27401c392411f16297d29673884"),
+        ("normal-mask-geometry-integer-evidence/right-bottom/observations.json", "1044b554b418b68f213e7c04ba055896255a937c55fd01fbcc114922ed039d4f"),
+        ("normal-mask-geometry-linear-evidence/left-top/observations.json", "80d017fc2897fd449b8386c98e73f1d6caaded57f74cd0aaec6d2eddb80822cc"),
+        ("normal-mask-geometry-linear-evidence/right-bottom/observations.json", "a4c12094204696a243d8136ebbda762681fe02ae68cea984b2beae1950364566"),
+        ("normal-mask-geometry-perceptual-evidence/left-top/observations.json", "6cd4ad61905af74728ced7d2b13e8ea47c16ffc64d4de9cedc6a24f3a9478abc"),
+        ("normal-mask-geometry-perceptual-evidence/right-bottom/observations.json", "4618d2efdf9c21196634ebd60cc9a92369f9ae0cebe4d17469282c68f7bce1c2"),
+    ] {
+        let proof = std::fs::read(root.join(path)).unwrap();
+        assert_eq!(hash(&proof), pin);
+        let json: serde_json::Value = serde_json::from_slice(&proof).unwrap();
+        for row in json["records"].as_array().unwrap() {
+            let name = row["source_file"].as_str().unwrap();
+            assert!(!name.contains(['/', '\\']));
+            if !name.contains(&format!("-op{operator}.")) {
+                continue;
+            }
+            let relative = PathBuf::from(path).parent().unwrap().join(name);
+            let pin = row["source_sha256"].as_str().unwrap().to_string();
+            assert_eq!(hash(&std::fs::read(root.join(&relative)).unwrap()), pin);
+            out.push((relative.to_string_lossy().into_owned(), pin));
+        }
+    }
+    assert_eq!(out.len(), 64);
+    out
+}
+fn check_nonunion_operator(operator: i32) {
+    use photocraft_doc::{import_compositing::GimpOperator, item_identity::ItemRef};
+    let expected_op = match operator {
+        2 => GimpOperator::ClipToBackdrop,
+        3 => GimpOperator::ClipToLayer,
+        4 => GimpOperator::Intersection,
+        _ => panic!("test operator"),
+    };
+    let root = PathBuf::from(std::env::var_os("PHOTOCRAFT_XCF_FULL_CORPUS").unwrap());
+    for (path, pin) in operator_fixtures(operator) {
+        let raw = std::fs::read(root.join(&path)).unwrap();
+        let original = photocraft_xcf::decode(&raw, &Default::default()).unwrap();
+        assert!(qualified_analytic_normal_geometry(&original));
+        assert_eq!(original.layers[0].composite_mode, operator);
+        let quota = q();
+        let before = quota.usage().unwrap();
+        let starts = AtomicU64::new(0);
+        let progress = |v: f32| {
+            if v.to_bits() == 0.05f32.to_bits() {
+                starts.fetch_add(1, Ordering::Relaxed);
+            }
+        };
+        let options = DecodeOptions { progress: Some(&progress), ..Default::default() };
+        let import = crate::import_owned_xcf_bytes_in_quota(&path, Arc::new(raw.clone()), &options, &limits(), quota.clone(), &ctl()).unwrap();
+        assert_eq!(starts.load(Ordering::Relaxed), 1);
+        let crate::OwnedXcfImport::AnalyticGeometry(import) = import else { panic!("same private geometry carrier") };
+        let owner = import.document();
+        owner.validate_assigned_analytic_geometry_storage(&ctl()).unwrap();
+        assert!(owner.validate_masked_analytic_normal_storage(&ctl()).is_err());
+        assert!(owner.quota().shares_ledger(&quota));
+        assert!(import.source_read_only());
+        assert!(!import.preview_only());
+        let doc = owner.document();
+        let state = doc.xcf_state.as_ref().unwrap();
+        let item = state.items.iter().find(|v| v.item == ItemRef::Layer(doc.layers[1].id)).unwrap();
+        let policy = item.composition.as_ref().unwrap();
+        assert_eq!(policy.stored_operator, operator);
+        assert_eq!(policy.checked_resolved().unwrap().operator, expected_op);
+        // A standalone malformed policy clone has no owner/source authority. Its
+        // contradictory cached resolution must refuse, and the real owner stays intact.
+        let mut wrong = policy.clone();
+        wrong.resolved.as_mut().unwrap().operator = GimpOperator::Union;
+        assert!(wrong.checked_resolved().is_err());
+        let mut unknown = original.clone();
+        unknown.layers[0].composite_mode = 5;
+        let b = photocraft_xcf::Budget::new_persistent(limits(), None).unwrap();
+        assert!(!qualify(&unknown, &Interrupt::NONE, &b).unwrap());
+        assert_eq!(doc.source_color_context.as_ref().unwrap().original_icc.as_ref().unwrap().as_slice(), original.icc);
+        let ce = match original.encoding {
+            Encoding::Linear => photocraft_cms::xcf_color::Encoding::Linear,
+            Encoding::Perceptual => photocraft_cms::xcf_color::Encoding::Perceptual,
+            Encoding::NonlinearProfile => photocraft_cms::xcf_color::Encoding::NonlinearProfile,
+        };
+        let space = if original.model == Model::Gray { photocraft_cms::ColorSpace::Gray } else { photocraft_cms::ColorSpace::Rgb };
+        let effective = photocraft_cms::xcf_color::effective_profile(Some(&original.icc), space, ce).unwrap().to_bytes();
+        assert_eq!(doc.icc_profile.as_ref().unwrap().as_slice(), effective.as_slice());
+        for (layer, source) in doc.layers.iter().zip(original.layers.iter().rev()) {
+            let LayerContent::BackedRaster(backed) = &layer.content else { panic!("real charged raster") };
+            let p = source.plane.as_ref().unwrap();
+            let r = bounds(source).unwrap();
+            let bpp = backed.checked_view().format().bytes_per_pixel();
+            let mut native = vec![0; p.bytes.len()];
+            for y in 0..source.height {
+                for x in 0..source.width {
+                    let at = (y as usize * source.width as usize + x as usize) * bpp;
+                    backed.checked_view().read_logical_pixel_native_into(r.x0 + x as i32, r.y0 + y as i32, &mut native[at..at + bpp], &ctl()).unwrap();
+                }
+            }
+            assert_eq!(native, p.bytes);
+            if let Some(source_mask) = &source.mask {
+                let mask = &layer.mask.as_ref().unwrap().surface;
+                let expected = Surface::try_from_interleaved_with(mask.format(), r, &source_mask.plane.as_ref().unwrap().bytes, &Interrupt::NONE).unwrap();
+                assert_eq!(mask.default_bytes(), expected.default_bytes());
+                assert_eq!(mask.tile_count(), expected.tile_count());
+                for (coord, tile) in expected.tiles() {
+                    assert_eq!(mask.tile(*coord).unwrap().bytes(), tile.bytes());
+                }
+            }
+        }
+        owner.validate_assigned_analytic_geometry_storage(&ctl()).unwrap();
+        drop(import);
+        assert_eq!(quota.usage().unwrap(), before);
+        assert_eq!(hash(&std::fs::read(root.join(&path)).unwrap()), pin);
+    }
+}
+#[test]
+#[ignore = "UNRUN:64 actual ClipToBackdrop original/edit sources, exact profile/native/mask/resolved controls"]
+fn original_clip_to_backdrop_geometry_uses_same_sealed_source_owner() {
+    check_nonunion_operator(2);
+}
+#[test]
+#[ignore = "UNRUN:64 actual ClipToLayer original/edit sources, exact profile/native/mask/resolved controls"]
+fn original_clip_to_layer_geometry_uses_same_sealed_source_owner() {
+    check_nonunion_operator(3);
+}
+#[test]
+#[ignore = "UNRUN:64 actual Intersection original/edit sources, exact profile/native/mask/resolved controls"]
+fn original_intersection_geometry_uses_same_sealed_source_owner() {
+    check_nonunion_operator(4);
 }

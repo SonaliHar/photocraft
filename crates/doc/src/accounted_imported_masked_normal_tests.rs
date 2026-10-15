@@ -265,3 +265,64 @@ fn assigned_transfer_title_failures_and_full_quota_noop_keep_exact_owners() {
     assert!(source.try_with_document_name("changed", &ReadControl { interrupt: &interrupt, work: &|_| Ok(()) }).is_err());
     assert_eq!(q.usage().unwrap(), baseline);
 }
+
+// Synthetic metadata-only operator custody. checked_resolved, not a guessed
+// enum alias, binds each explicit native word. No source/render proof here.
+fn operator_owner(sample: SampleType, encoding: SampleEncoding, raw: i32, resolved: GimpOperator) -> AccountedDocument {
+    let source = fixture_encoding(sample, encoding);
+    let q = source.quota().clone();
+    let fee = q.reserve(QuotaKind::Index, 2 << 20).unwrap();
+    let mut doc = source.document().clone();
+    let top = doc.layers[1].id;
+    let p = doc.xcf_state.as_mut().unwrap().items.iter_mut().find(|i| i.item == ItemRef::Layer(top)).unwrap().composition.as_mut().unwrap();
+    p.stored_operator = raw;
+    p.resolved.as_mut().unwrap().operator = resolved;
+    AccountedDocument::from_owned(doc, Arc::new((source, fee)), q, &ctl()).unwrap()
+}
+#[test]
+fn broad_operator_custody_preserves_raw_policy_while_old_nonlinear_gate_stays_union_only() {
+    let operators = [(1, GimpOperator::Union), (2, GimpOperator::ClipToBackdrop), (3, GimpOperator::ClipToLayer), (4, GimpOperator::Intersection)];
+    for (sample, encoding) in [
+        (SampleType::U16, SampleEncoding::NonlinearProfile),
+        (SampleType::U32, SampleEncoding::NonlinearProfile),
+        (SampleType::F32, SampleEncoding::NonlinearProfile),
+        (SampleType::F64, SampleEncoding::NonlinearProfile),
+        (SampleType::F32, SampleEncoding::Linear),
+        (SampleType::F64, SampleEncoding::Linear),
+        (SampleType::F32, SampleEncoding::Perceptual),
+        (SampleType::F64, SampleEncoding::Perceptual),
+    ] {
+        for (raw, resolved) in operators {
+            let source = operator_owner(sample, encoding, raw, resolved);
+            source.validate_assigned_analytic_geometry_storage(&ctl()).unwrap();
+            assert_eq!(source.validate_masked_analytic_normal_storage(&ctl()).is_ok(), encoding == SampleEncoding::NonlinearProfile && raw == 1);
+            let renamed = source.try_with_document_name("operator.pcraft", &ctl()).unwrap();
+            assert_eq!(renamed.document().xcf_state, source.document().xcf_state);
+            assert!(Arc::ptr_eq(&renamed.document().layers[1].mask.as_ref().unwrap().surface, &source.document().layers[1].mask.as_ref().unwrap().surface));
+            assert_eq!(renamed.document().icc_profile, source.document().icc_profile);
+            assert_eq!(renamed.document().source_color_context, source.document().source_color_context);
+            assert!(renamed.try_replace_selection(None, &ctl()).is_err());
+        }
+    }
+}
+#[test]
+fn operator_mismatch_out_of_domain_and_backdrop_nonunion_fail_without_fee_change() {
+    for (raw, resolved) in [(0, GimpOperator::Union), (5, GimpOperator::Union), (2, GimpOperator::Intersection)] {
+        let source = operator_owner(SampleType::F32, SampleEncoding::NonlinearProfile, raw, resolved);
+        let baseline = source.quota().usage().unwrap();
+        assert!(source.validate_assigned_analytic_geometry_storage(&ctl()).is_err());
+        assert!(source.try_with_document_name("refused", &ctl()).is_err());
+        assert_eq!(source.quota().usage().unwrap(), baseline);
+    }
+    let source = fixture(SampleType::F64);
+    let q = source.quota().clone();
+    let fee = q.reserve(QuotaKind::Index, 2 << 20).unwrap();
+    let mut doc = source.document().clone();
+    let p = doc.xcf_state.as_mut().unwrap().items.iter_mut().find_map(|i| i.composition.as_mut()).unwrap();
+    p.stored_operator = 2;
+    p.resolved.as_mut().unwrap().operator = GimpOperator::ClipToBackdrop;
+    let invalid = AccountedDocument::from_owned(doc, Arc::new((source, fee)), q, &ctl()).unwrap();
+    assert!(invalid.validate_assigned_analytic_geometry_storage(&ctl()).is_err());
+    let denied = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Err(BackingError::Work) };
+    assert!(invalid.validate_assigned_analytic_geometry_storage(&denied).is_err());
+}

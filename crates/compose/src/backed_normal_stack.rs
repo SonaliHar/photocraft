@@ -1,7 +1,10 @@
 //! Explicit bounded Normal/Union stack foundation, independent of Document routing.
 use crate::backed_normal::{BackedNormalError, NormalBandLimits, NormalMask, OwnedNormalBand, PreparedBackedNormal, ResidentNormalMask};
 use photocraft_cms::{ColorSpace, Profile};
-use photocraft_doc::{BackedLayer, SampleEncoding, import_compositing::GimpSpace};
+use photocraft_doc::{
+    BackedLayer, SampleEncoding,
+    import_compositing::{GimpOperator, GimpSpace},
+};
 use photocraft_geom::Rect;
 use photocraft_raster::backing::{
     ReadControl,
@@ -19,6 +22,13 @@ pub struct NormalStackLayer<'a> {
 pub struct ResidentNormalStackLayer<'a> {
     pub input: NormalStackLayer<'a>,
     pub mask: Option<ResidentNormalMask<'a>>,
+}
+/// Explicit bottom-to-top operator metadata. The caller retains the actual
+/// native/mask owners; this is no Document or import qualification.
+#[derive(Clone, Copy, Debug)]
+pub struct NormalStackOperatorLayer<'a> {
+    pub input: ResidentNormalStackLayer<'a>,
+    pub operator: GimpOperator,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct NormalStackLimits {
@@ -86,7 +96,17 @@ impl<'a> PreparedBackedNormalStack<'a> {
         limits: NormalStackLimits,
         control: &ReadControl<'_>,
     ) -> Result<Self, BackedNormalError> {
-        Self::prepare(layers.iter().map(|input| ResidentNormalStackLayer { input: *input, mask: None }), quota, profile, stored, composite, limits, control)
+        Self::prepare(
+            layers
+                .iter()
+                .map(|input| NormalStackOperatorLayer { input: ResidentNormalStackLayer { input: *input, mask: None }, operator: GimpOperator::Union }),
+            quota,
+            profile,
+            stored,
+            composite,
+            limits,
+            control,
+        )
     }
     pub fn new_with_resident_masks(
         layers: &[ResidentNormalStackLayer<'a>],
@@ -97,10 +117,32 @@ impl<'a> PreparedBackedNormalStack<'a> {
         limits: NormalStackLimits,
         control: &ReadControl<'_>,
     ) -> Result<Self, BackedNormalError> {
+        Self::prepare(
+            layers.iter().map(|input| NormalStackOperatorLayer { input: *input, operator: GimpOperator::Union }),
+            quota,
+            profile,
+            stored,
+            composite,
+            limits,
+            control,
+        )
+    }
+    /// Additive four-operator stack. Hidden layers are skipped completely;
+    /// visible zero-opacity layers still apply ClipToLayer/Intersection and can
+    /// clear a backdrop. All operator math belongs to the prepared leaf.
+    pub fn new_with_operators(
+        layers: &[NormalStackOperatorLayer<'a>],
+        quota: &BackingQuota,
+        profile: &Profile,
+        stored: SampleEncoding,
+        composite: GimpSpace,
+        limits: NormalStackLimits,
+        control: &ReadControl<'_>,
+    ) -> Result<Self, BackedNormalError> {
         Self::prepare(layers.iter().copied(), quota, profile, stored, composite, limits, control)
     }
     fn prepare(
-        layers: impl ExactSizeIterator<Item = ResidentNormalStackLayer<'a>> + Clone,
+        layers: impl ExactSizeIterator<Item = NormalStackOperatorLayer<'a>> + Clone,
         quota: &BackingQuota,
         profile: &Profile,
         stored: SampleEncoding,
@@ -126,11 +168,17 @@ impl<'a> PreparedBackedNormalStack<'a> {
         // Count/validate visible metadata without reading a tile. Disabled mask
         // fields and hidden entries remain unused, as in the single-layer API.
         let mut count = 0_usize;
-        for pair in layers.clone() {
+        for operator_layer in layers.clone() {
+            let pair = operator_layer.input;
             let input = pair.input;
             control.check(std::mem::size_of::<NormalStackLayer<'_>>() as u64).map_err(BackedNormalError::Backing)?;
             if !input.visible {
                 continue;
+            }
+            // Explicit exhaustive match prevents future enum variants from
+            // silently acquiring this stack contract.
+            match operator_layer.operator {
+                GimpOperator::Union | GimpOperator::ClipToBackdrop | GimpOperator::ClipToLayer | GimpOperator::Intersection => (),
             }
             valid_coverage(input.opacity)?;
             if !quota.shares_ledger(input.layer.quota()) {
@@ -171,14 +219,23 @@ impl<'a> PreparedBackedNormalStack<'a> {
             .and_then(|n| n.checked_add(owner))
             .ok_or(BackedNormalError::Invalid("stack index capacity"))?;
         out._lease.reconcile_capacity(actual as u64).map_err(BackedNormalError::Quota)?;
-        for pair in layers.clone() {
+        for operator_layer in layers.clone() {
+            let pair = operator_layer.input;
             let input = pair.input;
             control.check(1).map_err(BackedNormalError::Backing)?;
             if !input.visible {
                 continue;
             }
-            let prepared =
-                PreparedBackedNormal::new_with_composite_space(input.layer, profile, stored, composite, input.layer.descriptor(), limits.band, control)?;
+            let prepared = PreparedBackedNormal::new_with_composite_operator(
+                input.layer,
+                profile,
+                stored,
+                composite,
+                operator_layer.operator,
+                input.layer.descriptor(),
+                limits.band,
+                control,
+            )?;
             out.entries.push(Entry { prepared, opacity: input.opacity, mask: input.mask, resident_mask: pair.mask });
         }
         control.check(1).map_err(BackedNormalError::Backing)?;
@@ -241,3 +298,7 @@ fn valid_coverage(value: f64) -> Result<(), BackedNormalError> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "backed_normal_stack_operator_tests.rs"]
+mod operator_tests;

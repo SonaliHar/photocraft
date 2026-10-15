@@ -3,7 +3,7 @@
 //! ICC interpretation, plus a closed accounted plain-import current-storage lane.
 //! Unsupported semantics return errors before any pixel reads.
 use crate::backed_normal::{BackedNormalError, NormalBandLimits, ResidentNormalMask};
-use crate::backed_normal_stack::{NormalStackLayer, NormalStackLimits, OwnedNormalStackBand, PreparedBackedNormalStack, ResidentNormalStackLayer};
+use crate::backed_normal_stack::{NormalStackLayer, NormalStackLimits, NormalStackOperatorLayer, OwnedNormalStackBand, PreparedBackedNormalStack, ResidentNormalStackLayer};
 use photocraft_cms::Profile;
 use photocraft_color::{ColorMode, blend::BlendMode};
 use photocraft_doc::{Document, LayerContent, SampleEncoding, WorkingProfileInterpretation, import_compositing::GimpSpace};
@@ -247,6 +247,7 @@ impl<'a> PreparedBackedDocument<'a> {
                 return Err(BackedNormalError::Unsupported("backed Document semantics not migrated"));
             }
         }
+        let operator_metadata = if assigned_profile.is_some() { std::mem::size_of::<[NormalStackOperatorLayer<'a>; 2]>() } else { 0 };
         let capacity = doc
             .layers
             .len()
@@ -254,15 +255,20 @@ impl<'a> PreparedBackedDocument<'a> {
             .and_then(|v| v.checked_mul(2))
             .and_then(|v| v.checked_add(64))
             .and_then(|v| v.checked_add(std::mem::size_of::<Self>()))
+            .and_then(|v| v.checked_add(operator_metadata))
             .ok_or(BackedNormalError::Invalid("backed Document index size"))?;
         let mut index = first.quota().reserve(QuotaKind::Index, capacity as u64).map_err(BackedNormalError::Quota)?;
         let mut inputs = Vec::new();
         inputs.try_reserve_exact(doc.layers.len()).map_err(|_| BackedNormalError::Allocation)?;
+        if inputs.capacity() > doc.layers.len().checked_mul(2).ok_or(BackedNormalError::Allocation)? {
+            return Err(BackedNormalError::Allocation);
+        }
         index
             .reconcile_capacity(
                 (inputs.capacity() as u64)
                     .checked_mul(std::mem::size_of::<ResidentNormalStackLayer<'a>>() as u64)
                     .and_then(|n| n.checked_add(std::mem::size_of::<Self>() as u64))
+                    .and_then(|n| n.checked_add(operator_metadata as u64))
                     .ok_or(BackedNormalError::Invalid("backed Document index capacity"))?,
             )
             .map_err(BackedNormalError::Quota)?;
@@ -289,15 +295,35 @@ impl<'a> PreparedBackedDocument<'a> {
                 mask,
             });
         }
-        let stack = PreparedBackedNormalStack::new_with_resident_masks(
-            &inputs,
-            first.quota(),
-            profile,
-            stored,
-            composite,
-            NormalStackLimits { band: limits, max_layers: 10_000 },
-            control,
-        )?;
+        let stack_limits = NormalStackLimits { band: limits, max_layers: 10_000 };
+        let stack = if assigned_profile.is_some() {
+            if inputs.len() != 2 || doc.layers.len() != 2 {
+                return Err(BackedNormalError::Unsupported("closed assigned geometry operator count"));
+            }
+            let state = doc.xcf_state.as_ref().ok_or(BackedNormalError::Unsupported("assigned geometry policy missing"))?;
+            let operator = |layer: photocraft_doc::LayerId| {
+                for item in &state.items {
+                    control.check(1).map_err(BackedNormalError::Backing)?;
+                    if item.item == photocraft_doc::item_identity::ItemRef::Layer(layer) {
+                        let policy = item.composition.as_ref().ok_or(BackedNormalError::Unsupported("assigned geometry composition missing"))?;
+                        control.check(u64::try_from(policy.compatibility_epoch.len()).map_err(|_| BackedNormalError::Allocation)?)
+                            .map_err(BackedNormalError::Backing)?;
+                        return policy.checked_resolved().map(|resolved| resolved.operator)
+                            .map_err(|_| BackedNormalError::Unsupported("assigned geometry composition unresolved"));
+                    }
+                }
+                Err(BackedNormalError::Unsupported("assigned geometry owner policy missing"))
+            };
+            let base = doc.layers.first().ok_or(BackedNormalError::Invalid("assigned geometry backdrop missing"))?;
+            let foreground = doc.layers.get(1).ok_or(BackedNormalError::Invalid("assigned geometry foreground missing"))?;
+            let operators = [
+                NormalStackOperatorLayer { input: *inputs.first().ok_or(BackedNormalError::Allocation)?, operator: operator(base.id)? },
+                NormalStackOperatorLayer { input: *inputs.get(1).ok_or(BackedNormalError::Allocation)?, operator: operator(foreground.id)? },
+            ];
+            PreparedBackedNormalStack::new_with_operators(&operators, first.quota(), profile, stored, composite, stack_limits, control)?
+        } else {
+            PreparedBackedNormalStack::new_with_resident_masks(&inputs, first.quota(), profile, stored, composite, stack_limits, control)?
+        };
         drop(inputs);
         // The construction-only vector is gone; retain only owner metadata.
         index.reconcile_capacity(std::mem::size_of::<Self>() as u64).map_err(BackedNormalError::Quota)?;

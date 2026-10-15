@@ -1517,7 +1517,7 @@ Source XCF remains read-only; native continuation uses `.pcraft`.
 This implementation has compilation checks only; behavioral acceptance is pending.
 
 The explicit keep-current owned XCF route also selects a separate assigned-ICC
-geometry family for the existing Normal/Union source intersections: nonlinear
+geometry family for the existing Normal source intersections: nonlinear
 RGB/Gray U16/U32/F32/F64 and Linear/Perceptual F32/F64. It retains two native
 layers, offsets, opacity and one ordinary layer mask. The original encoding and
 float/integer geometry epochs remain distinct. A shared paid profile owner
@@ -1528,4 +1528,8 @@ profile and complete canvas before publication, under the same quota and
 cancellation/work control. Native title changes preserve
 the shared mask and source owners. Paid `xcf.inspect` exposes the three items
 and mask metadata; generic layer/filter/selection edits remain outside this
-closed family. Broader operators, profiles and behavioral acceptance remain pending.
+closed family. The foreground retains its exact Union, Clip to Backdrop, Clip to
+Layer or Intersection policy, with a Union backdrop. Typed composition handles
+outside-layer and zero-opacity coverage; a hidden layer skips composition.
+Existing bare-profile constructors retain their Union scope. Other blend modes,
+profiles, editing domains and behavioral acceptance remain pending.

@@ -1,4 +1,4 @@
-//! Explicit checked Normal/Union over an owned-backed layer, in its caller-bound
+//! Explicit checked Normal composition over an owned-backed layer, in its caller-bound
 //! current encoding. This is not a Document consumer or an import qualification.
 use crate::gimp_composite::{CompositionError, WorkingSpace, encoding, space};
 use photocraft_cms::{Profile, xcf_color::qualify_effective_analytic_profile};
@@ -45,6 +45,7 @@ pub struct PreparedBackedNormal<'a> {
     layer: &'a BackedLayer,
     working: WorkingSpace,
     limits: NormalBandLimits,
+    operator: GimpOperator,
     _lease: QuotaLease,
 }
 /// Complete returned band in the caller's current stored encoding, straight RGBA
@@ -133,6 +134,20 @@ impl PreparedBackedNormal<'_> {
         limits: NormalBandLimits,
         control: &ReadControl<'_>,
     ) -> Result<PreparedBackedNormal<'a>, BackedNormalError> {
+        Self::new_with_composite_operator(layer, profile, stored, composite, GimpOperator::Union, expected, limits, control)
+    }
+    /// Explicit typed current operator; it grants no raw-policy/source eligibility.
+    /// Existing constructors remain Union. Working-space equations are shared.
+    pub fn new_with_composite_operator<'a>(
+        layer: &'a BackedLayer,
+        profile: &Profile,
+        stored: SampleEncoding,
+        composite: GimpSpace,
+        operator: GimpOperator,
+        expected: NativePlaneDescriptor,
+        limits: NormalBandLimits,
+        control: &ReadControl<'_>,
+    ) -> Result<PreparedBackedNormal<'a>, BackedNormalError> {
         control.check(1).map_err(BackedNormalError::Backing)?;
         if !matches!(composite, GimpSpace::LinearRgb | GimpSpace::ProfileRgb | GimpSpace::PerceptualRgb) {
             return Err(BackedNormalError::Unsupported("analytic RGB transfer composite spaces only"));
@@ -169,11 +184,16 @@ impl PreparedBackedNormal<'_> {
         {
             return Err(BackedNormalError::Unsupported("analytic profile curves only"));
         }
-        // Analytic qualification has no table/LUT traversal or copying. Reserve
-        // the bounded temporary profile String clones before WorkingSpace builds.
+        // Qualification evaluates operative curves; WorkingSpace validates the
+        // stored interpretation and (when different) its target interpretation.
+        // Prepay each actual schedule through the CMS-owned O(1) ceiling, before
+        // any semantic scan or constructor. No local work allowance is reset.
+        let semantic = photocraft_cms::xcf_color::semantic_analytic_profile_work_ceiling(profile).map_err(cms_error)?;
+        let cross_space = composite != space(stored);
+        let preparation = semantic.checked_mul(if cross_space { 3 } else { 2 }).ok_or(BackedNormalError::Backing(BackingError::Length))?;
+        control.check(preparation).map_err(BackedNormalError::Backing)?;
         qualify_effective_analytic_profile(profile, encoding(stored)).map_err(|e| BackedNormalError::Color(CompositionError::Color(e)))?;
         let strings = profile.description.len().checked_add(profile.copyright.len()).ok_or(BackedNormalError::Invalid("profile size"))?;
-        let cross_space = composite != space(stored);
         // Cross-space preparation builds two analytic profile clones and
         // retains one transfer profile. Prepay bounded copies before cloning.
         let temporary = (strings as u64)
@@ -186,12 +206,15 @@ impl PreparedBackedNormal<'_> {
             .ok_or(BackedNormalError::Invalid("profile size"))?;
         let lease = layer.quota().reserve(QuotaKind::Resident, retained).map_err(BackedNormalError::Quota)?;
         control.check(strings as u64 + 1).map_err(BackedNormalError::Backing)?;
-        let working = WorkingSpace::new(profile, stored, composite).map_err(BackedNormalError::Color)?;
+        let working = WorkingSpace::new_with_interrupt(profile, stored, composite, control.interrupt).map_err(|error| match error {
+            CompositionError::Raster(photocraft_raster::RasterInputError::Cancelled) => BackedNormalError::Backing(BackingError::Cancelled),
+            other => BackedNormalError::Color(other),
+        })?;
         // Analytic transfer spaces retain at most one bounded Profile; no LUT
         // pipelines or generic Transform allocations are admitted.
         drop(transient);
         control.check(1).map_err(BackedNormalError::Backing)?;
-        Ok(PreparedBackedNormal { layer, working, limits, _lease: lease })
+        Ok(PreparedBackedNormal { layer, working, limits, operator, _lease: lease })
     }
     pub fn render_band(&self, rect: Rect, backdrop: [f64; 4], control: &ReadControl<'_>) -> Result<OwnedNormalBand, BackedNormalError> {
         self.render(rect, Backdrop::Constant(backdrop), 1.0, None, None, control)
@@ -278,8 +301,16 @@ impl PreparedBackedNormal<'_> {
         output.lease.reconcile_capacity(actual).map_err(BackedNormalError::Quota)?;
         let view = self.layer.checked_view();
         let format = view.format();
-        for _ in rect.y0..rect.y1 {
-            for _ in rect.x0..rect.x1 {
+        let active = rect.intersect(&self.layer.operative_bounds());
+        let clears_zero = matches!(self.operator, GimpOperator::ClipToLayer | GimpOperator::Intersection);
+        if clears_zero {
+            let active_count = u64::from(active.width()).checked_mul(u64::from(active.height())).ok_or(BackedNormalError::Invalid("active band size"))?;
+            let visits =
+                if opacity == 0.0 { count as u64 } else { (count as u64).checked_sub(active_count).ok_or(BackedNormalError::Invalid("active band size"))? };
+            control.check(visits.checked_mul(128).ok_or(BackedNormalError::Backing(BackingError::Length))?).map_err(BackedNormalError::Backing)?;
+        }
+        for y in rect.y0..rect.y1 {
+            for x in rect.x0..rect.x1 {
                 control.check(32).map_err(BackedNormalError::Backing)?;
                 let bg = match &backdrop {
                     Backdrop::Constant(pixel) => *pixel,
@@ -289,11 +320,20 @@ impl PreparedBackedNormal<'_> {
                 if format.mode == ColorMode::Grayscale && (bg[0] != bg[1] || bg[0] != bg[2]) {
                     return Err(BackedNormalError::Invalid("Gray backdrop must repeat its stored component"));
                 }
-                output.pixels.push(bg);
+                // Outside the operative drawable is zero source coverage, not
+                // a skipped layer. ClipLayer/Intersection can therefore clear
+                // backdrop even there. Use the existing compositor equations.
+                let pixel = if clears_zero && (opacity == 0.0 || !active.contains(x, y)) {
+                    self.working.normal(bg, [0.0; 4], 0.0, self.operator).map_err(BackedNormalError::Color)?
+                } else {
+                    bg
+                };
+                output.pixels.push(pixel);
             }
         }
-        // Zero opacity has validated all arguments/backdrop, but does not read
-        // source or mask samples. Unused disabled-mask fields are never inspected.
+        // Zero opacity has applied the operator to all backdrop cells without
+        // reading source/mask samples. Union/ClipBackdrop retain their old path.
+        // Unused disabled-mask fields are never inspected.
         if opacity == 0.0 {
             control.check(1).map_err(BackedNormalError::Backing)?;
             return Ok(output);
@@ -313,7 +353,6 @@ impl PreparedBackedNormal<'_> {
         let mut mask_pin: Option<photocraft_raster::checked_view::CheckedTilePin> = None;
         // Pin each intersecting source tile once, rather than repeatedly missing
         // a bounded cache on successive rows of a wide band. No pin-all staging.
-        let active = rect.intersect(&self.layer.operative_bounds());
         let mut raw = [0; 40];
         for coord in active.tiles() {
             let pin = view.pin_tile(coord, control).map_err(BackedNormalError::View)?;
@@ -366,7 +405,7 @@ impl PreparedBackedNormal<'_> {
                     } else {
                         1.0
                     };
-                    let result = self.working.normal(*target, source, opacity * mask_coverage, GimpOperator::Union).map_err(BackedNormalError::Color)?;
+                    let result = self.working.normal(*target, source, opacity * mask_coverage, self.operator).map_err(BackedNormalError::Color)?;
                     control.check(1).map_err(BackedNormalError::Backing)?;
                     *target = result;
                 }
@@ -394,3 +433,15 @@ fn unit(pixel: [f64; 4]) -> Result<(), BackedNormalError> {
     }
     Ok(())
 }
+
+fn cms_error(error: photocraft_cms::control::Error) -> BackedNormalError {
+    match error {
+        photocraft_cms::control::Error::Cancelled => BackedNormalError::Backing(BackingError::Cancelled),
+        photocraft_cms::control::Error::Limit(message) => BackedNormalError::Unsupported(message),
+        photocraft_cms::control::Error::Allocation => BackedNormalError::Allocation,
+        photocraft_cms::control::Error::Cms(error) => BackedNormalError::Color(CompositionError::Color(error)),
+    }
+}
+#[cfg(test)]
+#[path = "backed_normal_operator_tests.rs"]
+mod operator_tests;

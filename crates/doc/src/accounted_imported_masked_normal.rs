@@ -151,12 +151,21 @@ fn validate_with(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>, transfer
             || policy.pass_through
             || policy.stored_blend_space != 0
             || policy.stored_composite_space != if index == 0 { -1 } else { 1 }
-            || policy.stored_operator != if index == 0 { -1 } else { 1 }
+            || if index == 0 {
+                policy.stored_operator != -1
+            } else if transfer_override {
+                !(1..=4).contains(&policy.stored_operator)
+            } else {
+                policy.stored_operator != 1
+            }
         {
             return Err(BackingError::Unsupported);
         }
         let resolved = policy.checked_resolved().map_err(|_| BackingError::Integrity)?;
-        if resolved.blend_space != GimpSpace::LinearRgb || resolved.composite_space != GimpSpace::LinearRgb || resolved.operator != GimpOperator::Union {
+        if resolved.blend_space != GimpSpace::LinearRgb
+            || resolved.composite_space != GimpSpace::LinearRgb
+            || ((index == 0 || !transfer_override) && resolved.operator != GimpOperator::Union)
+        {
             return Err(BackingError::Unsupported);
         }
         if index == 0 {

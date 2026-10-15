@@ -1,4 +1,4 @@
-//! Separate CURRENT assigned-ICC Normal/Union geometry qualification.
+//! Separate CURRENT assigned-ICC Normal geometry qualification.
 //! Original geometry epochs and raw policies are preserved verbatim. This
 //! borrows an actual paid owner and grants no source/profile interpretation.
 use crate::{backed_normal::BackedNormalError as E, gimp_composite::CompositionError};
@@ -225,9 +225,15 @@ fn qualify_inner(
             || policy.source_mode != 28
             || policy.legacy
             || policy.pass_through
-            || (policy.stored_blend_space, policy.stored_composite_space, policy.stored_operator)
-                != (0, if index == 0 { -1 } else { 1 }, if index == 0 { -1 } else { 1 })
-            || resolved.operator != GimpOperator::Union
+            || (policy.stored_blend_space, policy.stored_composite_space) != (0, if index == 0 { -1 } else { 1 })
+            || if index == 0 {
+                policy.stored_operator != -1
+            } else if binding.is_some() {
+                !(1..=4).contains(&policy.stored_operator)
+            } else {
+                policy.stored_operator != 1
+            }
+            || ((index == 0 || binding.is_none()) && resolved.operator != GimpOperator::Union)
             || resolved.blend_space != GimpSpace::LinearRgb
             || resolved.composite_space != GimpSpace::LinearRgb
             || physical.pass_through

@@ -1,4 +1,4 @@
-//! Exact existing assigned analytic geometry source, Union intersection.
+//! Exact existing assigned analytic geometry source, original four-operator intersection.
 use super::*;
 fn fail(message: &str) -> IoError {
     IoError::Unsupported(message.into())
@@ -19,7 +19,7 @@ pub(super) fn hint<P>(file: &XcfFile<P>) -> bool {
 pub(super) fn qualify<P: ExactParsedPlane>(file: &XcfFile<P>, ctl: &Interrupt<'_>, budget: &photocraft_xcf::Budget<'_>) -> Result<bool, IoError> {
     pay(budget, 128)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    if !hint(file) || file.layers.first().is_none_or(|d| d.composite_mode != 1) || !(132..=65536).contains(&file.icc.len()) || !metadata(file) {
+    if !hint(file) || !(132..=65536).contains(&file.icc.len()) || !metadata(file) {
         return Ok(false);
     }
     // Exact old profile parser/gate remains the semantic authority. Its controlled

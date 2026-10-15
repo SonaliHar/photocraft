@@ -438,7 +438,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         let family = P::family(file);
         let geometry = family == SelectedStagedFamily::AnalyticGeometry;
         if geometry && !analytic_geometry::qualify(file, ctl, shared.ok_or_else(|| IoError::Unsupported("geometry requires persistent source accounting".into()))?)? {
-            return Err(IoError::Unsupported("staged geometry is outside exact original Union predicate".into()));
+            return Err(IoError::Unsupported("staged geometry is outside exact original analytic geometry predicate".into()));
         }
         let histogram = family == SelectedStagedFamily::Threshold;
         let threshold = family == SelectedStagedFamily::ThresholdAlpha || histogram;
