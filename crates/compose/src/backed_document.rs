@@ -24,6 +24,7 @@ enum DocumentCompositor<'a> {
     Flat(PreparedBackedNormalStack<'a>),
     Group(group::PreparedGroup<'a>),
     GaussianGroup(crate::backed_gaussian_group::PreparedBackedGaussianGroupContext<'a>),
+    Separable(crate::backed_separable_document::PreparedBackedSeparableDocument<'a>),
     Threshold(crate::backed_threshold_document::PreparedBackedThresholdDocument<'a>),
     ThresholdAlpha(crate::backed_threshold_alpha_document::PreparedBackedThresholdAlphaDocument<'a>),
     Point(crate::backed_stock_point_document::PreparedBackedStockPointDocument<'a>),
@@ -82,6 +83,24 @@ impl<'a> PreparedBackedDocument<'a> {
         limits: NormalBandLimits,
         control: &ReadControl<'_>,
     ) -> Result<Self, BackedNormalError> {
+        if owner.is_readonly_flat_composite_storage() {
+            control.check(1).map_err(BackedNormalError::Backing)?;
+            let basis = photocraft_cms::Builtin::Srgb.profile();
+            control.check(1).map_err(BackedNormalError::Backing)?;
+            let supplied = profile.encoded_bytes().ok_or(BackedNormalError::Unsupported("flat composite requires retained implicit basis"))?;
+            if supplied.len() > 65536 {
+                return Err(BackedNormalError::Unsupported("flat composite basis size"));
+            }
+            control.check(supplied.len() as u64 * 2).map_err(BackedNormalError::Backing)?;
+            if profile.channels() != 3 || Some(supplied) != basis.encoded_bytes() {
+                return Err(BackedNormalError::Unsupported("flat composite basis mismatch"));
+            }
+            let prepared = crate::backed_separable_document::PreparedBackedSeparableDocument::new(owner, limits, control)?;
+            let bounds = prepared.bounds();
+            let index = owner.quota().reserve(QuotaKind::Index, std::mem::size_of::<Self>() as u64).map_err(BackedNormalError::Quota)?;
+            control.check(1).map_err(BackedNormalError::Backing)?;
+            return Ok(Self { stack: DocumentCompositor::Separable(prepared), limits, quota: owner.quota().clone(), bounds, _index: index });
+        }
         if owner.is_readonly_gaussian_group_storage() {
             control.check(1).map_err(BackedNormalError::Backing)?;
             let basis = photocraft_cms::Builtin::Srgb.profile();
@@ -358,6 +377,7 @@ impl<'a> PreparedBackedDocument<'a> {
             DocumentCompositor::Flat(stack) => stack.render_band(rect, [0.; 4], control),
             DocumentCompositor::Group(group) => group.render_band(rect, control),
             DocumentCompositor::GaussianGroup(group) => group.render_band(rect, control),
+            DocumentCompositor::Separable(prepared) => prepared.render_band(rect, control),
             DocumentCompositor::Threshold(prepared) => prepared.render_band(rect, control),
             DocumentCompositor::ThresholdAlpha(prepared) => prepared.render_band(rect, control),
             DocumentCompositor::Point(prepared) => prepared.render_band(rect, control),

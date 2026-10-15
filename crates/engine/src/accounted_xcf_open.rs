@@ -10,6 +10,8 @@ pub(crate) mod analytic_geometry;
 pub(crate) mod isolated_normal_group;
 #[path = "accounted_xcf_open/gaussian_group.rs"]
 pub(crate) mod gaussian_group;
+#[path = "accounted_xcf_open/separable_blend.rs"]
+pub(crate) mod separable_blend;
 
 struct ImportedModel<'a> {
     document: &'a photocraft_doc::accounted_document::AccountedDocument,
@@ -49,7 +51,8 @@ impl Session {
         source_path: Option<&str>,
         control: &ReadControl<'_>,
     ) -> Result<usize> {
-        if crate::accounted_native_open::is_current_isolated_normal_group_candidate(imported.document().document(), control)?
+        if imported.document().is_readonly_flat_composite_storage() || crate::accounted_native_open::is_current_separable_blend_candidate(imported.document().document(),control)?
+            || crate::accounted_native_open::is_current_isolated_normal_group_candidate(imported.document().document(), control)?
             || crate::accounted_native_open::is_current_isolated_gaussian_group_candidate(imported.document().document(), control)? {
             return Err(BackingError::Unsupported.into());
         }

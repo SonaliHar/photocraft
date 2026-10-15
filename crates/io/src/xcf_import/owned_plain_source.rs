@@ -300,8 +300,15 @@ pub(in crate::xcf_import) fn promote_isolated_gaussian_group_source<'b, 'a, S: P
 ) -> Result<OwnedPlainXcfImport, IoError> {
     promote_source_inner(source,budget,limits,aggregate,existing,preparation,control,PromotionKind::IsolatedGaussianGroup)
 }
+pub(in crate::xcf_import) fn promote_separable_blend_source<'b, 'a, S: PromotionSource<'b, 'a>>(
+    source: S, budget: &'b photocraft_xcf::Budget<'a>, limits: &photocraft_xcf::ResourceLimits,
+    aggregate: u64, existing: Option<&existing_quota::Context<'_, '_>>,
+    preparation: &mut Option<existing_quota::PreparationHold>, control: &Interrupt<'_>,
+) -> Result<OwnedPlainXcfImport, IoError> {
+    promote_source_inner(source,budget,limits,aggregate,existing,preparation,control,PromotionKind::SeparableBlend)
+}
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum PromotionKind { Plain, AnalyticGeometry, IsolatedNormalGroup, IsolatedGaussianGroup }
+enum PromotionKind { Plain, AnalyticGeometry, IsolatedNormalGroup, IsolatedGaussianGroup, SeparableBlend }
 #[allow(clippy::too_many_arguments)]
 fn promote_source_inner<'b, 'a, S: PromotionSource<'b, 'a>>(
     source: S,
@@ -322,6 +329,7 @@ fn promote_source_inner<'b, 'a, S: PromotionSource<'b, 'a>>(
     }
     let mut incoming = Incoming { source, model: None, payload: None, bridge: None };
     let geometry = kind == PromotionKind::AnalyticGeometry;
+    let separable = kind == PromotionKind::SeparableBlend;
     let gaussian_group = kind == PromotionKind::IsolatedGaussianGroup;
     let group = kind == PromotionKind::IsolatedNormalGroup || gaussian_group;
     let measured = if gaussian_group { census::measure_isolated_gaussian_group(incoming.source.document(), budget, control)? }
@@ -444,10 +452,13 @@ fn promote_source_inner<'b, 'a, S: PromotionSource<'b, 'a>>(
     let Promoting { result, retention } = staged;
     let ImportResult { document, warnings, origin, assessment, source_read_only, preview_only } = result;
     phase_poll().map_err(backing)?;
-    let document = if gaussian_group {
+    let document = if separable {
+        AccountedDocument::from_owned_readonly_flat_composite(document, retention.clone(), quota, &read).map_err(backing)?
+    } else if gaussian_group {
         AccountedDocument::from_owned_readonly_gaussian_group(document, retention.clone(), quota, &read).map_err(backing)?
     } else { AccountedDocument::from_owned(document, retention.clone(), quota, &read).map_err(backing)? };
     if geometry { document.validate_assigned_analytic_geometry_storage(&read).map_err(backing)?; }
+    if separable { document.validate_readonly_flat_composite_storage(&read).map_err(backing)?; }
     if gaussian_group { document.validate_gaussian_group_storage(&read).map_err(backing)?; }
     else if group { document.validate_assigned_isolated_normal_group_storage(&read).map_err(backing)?; }
     phase_poll().map_err(backing)?;

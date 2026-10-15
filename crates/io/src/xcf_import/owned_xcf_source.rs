@@ -22,6 +22,7 @@ fn backing(error: BackingError) -> IoError {
 /// Actual typed owner returned by the selected original-source family. The enum
 /// itself is not a persisted admission flag or a source/render authority.
 pub enum OwnedXcfImport {
+    SeparableBlend(owned_separable_blend_source::OwnedSeparableBlendXcfImport),
     IsolatedGaussianGroup(owned_gaussian_group_source::OwnedIsolatedGaussianGroupXcfImport),
     IsolatedNormalGroup(owned_isolated_normal_group_source::OwnedIsolatedNormalGroupXcfImport),
     Plain(owned_plain_source::OwnedPlainXcfImport),
@@ -38,6 +39,7 @@ impl std::fmt::Debug for OwnedXcfImport {
 impl OwnedXcfImport {
     pub fn document(&self) -> &photocraft_doc::accounted_document::AccountedDocument {
         match self {
+            Self::SeparableBlend(v) => v.document(),
             Self::IsolatedGaussianGroup(v) => v.document(),
             Self::IsolatedNormalGroup(v) => v.document(),
             Self::AnalyticGeometry(v) => v.document(),
@@ -49,6 +51,7 @@ impl OwnedXcfImport {
     }
     pub fn warnings(&self) -> &[String] {
         match self {
+            Self::SeparableBlend(v) => v.warnings(),
             Self::IsolatedGaussianGroup(v) => v.warnings(),
             Self::IsolatedNormalGroup(v) => v.warnings(),
             Self::AnalyticGeometry(v) => v.warnings(),
@@ -60,6 +63,7 @@ impl OwnedXcfImport {
     }
     pub fn origin(&self) -> ImportOrigin {
         match self {
+            Self::SeparableBlend(v) => v.origin(),
             Self::IsolatedGaussianGroup(v) => v.origin(),
             Self::IsolatedNormalGroup(v) => v.origin(),
             Self::AnalyticGeometry(v) => v.origin(),
@@ -71,6 +75,7 @@ impl OwnedXcfImport {
     }
     pub fn assessment(&self) -> Option<&crate::xcf_assessment::ImportAssessment> {
         match self {
+            Self::SeparableBlend(v) => v.assessment(),
             Self::IsolatedGaussianGroup(v) => v.assessment(),
             Self::IsolatedNormalGroup(v) => v.assessment(),
             Self::AnalyticGeometry(v) => v.assessment(),
@@ -82,6 +87,7 @@ impl OwnedXcfImport {
     }
     pub fn source_read_only(&self) -> bool {
         match self {
+            Self::SeparableBlend(v) => v.source_read_only(),
             Self::IsolatedGaussianGroup(v) => v.source_read_only(),
             Self::IsolatedNormalGroup(v) => v.source_read_only(),
             Self::AnalyticGeometry(v) => v.source_read_only(),
@@ -93,6 +99,7 @@ impl OwnedXcfImport {
     }
     pub fn preview_only(&self) -> bool {
         match self {
+            Self::SeparableBlend(v) => v.preview_only(),
             Self::IsolatedGaussianGroup(v) => v.preview_only(),
             Self::IsolatedNormalGroup(v) => v.preview_only(),
             Self::AnalyticGeometry(v) => v.preview_only(),
@@ -104,6 +111,7 @@ impl OwnedXcfImport {
     }
     pub fn into_accounted_document(self) -> photocraft_doc::accounted_document::AccountedDocument {
         match self {
+            Self::SeparableBlend(v) => v.into_accounted_document(),
             Self::IsolatedGaussianGroup(v) => v.into_accounted_document(),
             Self::IsolatedNormalGroup(v) => v.into_accounted_document(),
             Self::AnalyticGeometry(v) => v.into_accounted_document(),
@@ -160,6 +168,7 @@ pub fn import_owned_xcf_bytes_in_quota(
     let family = source.family();
     let context = Context { quota: quota.clone(), control };
     match family {
+        staged_selected_source::SelectedStagedFamily::SeparableBlend => owned_separable_blend_source::promote_source(source, &budget, &effective, aggregate, &context, &mut preparation.hold, control.interrupt).map(OwnedXcfImport::SeparableBlend),
         staged_selected_source::SelectedStagedFamily::IsolatedGaussianGroup => owned_gaussian_group_source::promote_source(source, &budget, &effective, aggregate, &context, &mut preparation.hold, control.interrupt).map(OwnedXcfImport::IsolatedGaussianGroup),
         staged_selected_source::SelectedStagedFamily::IsolatedNormalGroup => owned_isolated_normal_group_source::promote_source(source, &budget, &effective, aggregate, &context, &mut preparation.hold, control.interrupt).map(OwnedXcfImport::IsolatedNormalGroup),
         staged_selected_source::SelectedStagedFamily::AnalyticGeometry => owned_analytic_geometry_source::promote_source(source, &budget, &effective, aggregate, &context, &mut preparation.hold, control.interrupt).map(OwnedXcfImport::AnalyticGeometry),

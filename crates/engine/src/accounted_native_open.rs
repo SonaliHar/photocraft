@@ -19,6 +19,7 @@ enum NativeHandoff {
     CurrentAnalyticGeometry,
     CurrentIsolatedNormalGroup,
     CurrentIsolatedGaussianGroup,
+    CurrentSeparableBlend,
 }
 
 /// Allocation-free route hint selecting the stricter current Point endpoint.
@@ -110,6 +111,14 @@ pub fn is_current_isolated_gaussian_group_candidate(document:&photocraft_doc::Do
   }}
  }
  Ok(false)
+}
+/// Route hint only: a retained modern flat-blend source mode selects the strict
+/// endpoint even when other metadata is malformed. Exact epochs and tuples are
+/// checked by that endpoint, and refusal never retries generic native adoption.
+pub fn is_current_separable_blend_candidate(document:&photocraft_doc::Document,control:&ReadControl<'_>)->std::result::Result<bool,BackingError>{
+ if let Some(state)=&document.xcf_state {for item in &state.items {control.check(1)?;
+  if item.composition.as_ref().is_some_and(|p|matches!(p.source_mode,23|30..=36|41..=53)) {return Ok(true)}
+ }}Ok(false)
 }
 /// Exact retained geometry epochs select the stricter current endpoint only.
 /// No class, source/profile authority or locator access follows from this hint;
@@ -355,6 +364,11 @@ impl Session {
     pub fn add_owned_native_isolated_gaussian_group_archive(&mut self,archive:OwnedDocumentArchive,label:&str,authorized_native_path:Option<&str>,control:&ReadControl<'_>)->Result<usize>{
      self.add_owned_native_with(archive,label,authorized_native_path,control,NativeHandoff::CurrentIsolatedGaussianGroup)
     }
+    /// Strict readonly flat-composite native continuation; inert source locators
+    /// confer no authority and full current rendering precedes publication.
+    pub fn add_owned_native_separable_blend_archive(&mut self,archive:OwnedDocumentArchive,label:&str,authorized_native_path:Option<&str>,control:&ReadControl<'_>)->Result<usize>{
+        self.add_owned_native_with(archive,label,authorized_native_path,control,NativeHandoff::CurrentSeparableBlend)
+    }
     fn add_owned_native_with(
         &mut self,
         archive: OwnedDocumentArchive,
@@ -383,7 +397,8 @@ impl Session {
             && (is_current_point_candidate(archive.document(), control)?
                 || is_current_analytic_geometry_candidate(archive.document(), control)?
                 || is_current_isolated_normal_group_candidate(archive.document(), control)?
-                || is_current_isolated_gaussian_group_candidate(archive.document(), control)?)
+                || is_current_isolated_gaussian_group_candidate(archive.document(), control)?
+                || is_current_separable_blend_candidate(archive.document(), control)?)
         {
             return Err(BackingError::Unsupported.into());
         }
@@ -395,9 +410,10 @@ impl Session {
             NativeHandoff::CurrentHistogramThreshold => archive.into_accounted_readonly_threshold_storage(control),
             NativeHandoff::CurrentPoint => archive.into_accounted_readonly_point_storage(control),
             NativeHandoff::CurrentIsolatedGaussianGroup => archive.into_accounted_readonly_gaussian_group_storage(control),
+            NativeHandoff::CurrentSeparableBlend => archive.into_accounted_readonly_flat_composite_storage(control),
         }
         .map_err(|error| {
-            if matches!(handoff, NativeHandoff::CurrentPoint | NativeHandoff::CurrentAnalyticGeometry | NativeHandoff::CurrentIsolatedNormalGroup | NativeHandoff::CurrentIsolatedGaussianGroup) {
+            if matches!(handoff, NativeHandoff::CurrentPoint | NativeHandoff::CurrentAnalyticGeometry | NativeHandoff::CurrentIsolatedNormalGroup | NativeHandoff::CurrentIsolatedGaussianGroup | NativeHandoff::CurrentSeparableBlend) {
                 if let photocraft_format::FormatError::Io(io) = &error {
                     if let Some(backing) = io.get_ref().and_then(|source| source.downcast_ref::<BackingError>()) {
                         return EngineError::from(*backing);
@@ -410,6 +426,9 @@ impl Session {
                 EngineError::Other(format!("owned native reopen: {error}"))
             }
         })?;
+        if let NativeHandoff::CurrentSeparableBlend = handoff {
+            crate::accounted_xcf_open::separable_blend::validate_current_separable_blend_storage(&document,control)?;
+        }
         if let NativeHandoff::CurrentIsolatedGaussianGroup = handoff {
             crate::accounted_xcf_open::gaussian_group::validate_current_isolated_gaussian_group_storage(&document,control)?;
         }
@@ -533,3 +552,7 @@ mod gaussian_workflow_tests;
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_gaussian_group_workflow_tests.rs"]
 mod gaussian_group_workflow_tests;
+
+#[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
+#[path="accounted_separable_blend_workflow_tests.rs"]
+mod separable_blend_workflow_tests;

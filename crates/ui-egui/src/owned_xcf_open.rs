@@ -120,6 +120,7 @@ fn open_path(app: &mut PhotocraftApp, path: &str, authority: Authority) -> Resul
     let prepared = PreparedReply::new(&imported, path, name, authority, &control)?;
     control.check(1).map_err(|e| e.to_string())?;
     match &imported {
+        photocraft_io::OwnedXcfImport::SeparableBlend(imported) => app.session.add_owned_separable_blend_xcf_import(imported, name, Some(path), &control),
         photocraft_io::OwnedXcfImport::IsolatedGaussianGroup(imported) => {
             app.session.add_owned_isolated_gaussian_group_xcf_import(imported, name, Some(path), &control)
         }
@@ -344,6 +345,7 @@ pub(crate) fn adopt_bytes(app: &mut PhotocraftApp, name: &str, imported: &photoc
     let prepared = PreparedReply::new(imported, "", name, Authority::Interactive, control)?;
     control.check(1).map_err(|e| e.to_string())?;
     match imported {
+        photocraft_io::OwnedXcfImport::SeparableBlend(value) => app.session.add_owned_separable_blend_xcf_import(value, name, None, control),
         photocraft_io::OwnedXcfImport::IsolatedGaussianGroup(value) => app.session.add_owned_isolated_gaussian_group_xcf_import(value, name, None, control),
         photocraft_io::OwnedXcfImport::IsolatedNormalGroup(value) => app.session.add_owned_isolated_normal_group_xcf_import(value, name, None, control),
         photocraft_io::OwnedXcfImport::AnalyticGeometry(value) => app.session.add_owned_analytic_geometry_xcf_import(value, name, None, control),

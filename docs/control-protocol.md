@@ -1669,3 +1669,19 @@ first label. Any target lock, invalid extent, cancellation or quota failure
 leaves the entire command unpublished. Assigned foreground movement continues
 to require a single selected layer; groups and linked-layer expansion need
 their own qualified transactions.
+
+The explicit owned flat-composite route now preserves the qualified 21 modern
+separable blend modes and four non-Lab explicit Multiply space cases. Source
+staging selects one family and retains the actual codec/native receipts. Canvas
+rendering uses the shared blend equations with prospectively paid requested RGB
+working spaces and bounded bands. Current native/default/profile data is fully
+validated even for hidden content. Canonical composition metadata determines the
+operation; physical blend enums remain inert, including grain-mode surrogates.
+
+This first route retains the existing two-layer F32 nonlinear implicit-sRGB
+source intersection. Native continuation, paid document-title changes and
+`xcf.inspect` project replies are connected; project inspection stays limited
+to two items, no filters and at most one selected item. The structural runtime
+class grants no broader source, render or query eligibility. Generic metadata,
+Move, pixel and selection edits require separate transactions. Tests and
+behavioral acceptance remain deferred.

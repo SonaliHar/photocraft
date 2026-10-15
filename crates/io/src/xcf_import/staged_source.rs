@@ -26,6 +26,8 @@ use neighborhood::NeighborhoodSourceFamily;
 mod analytic_geometry;
 #[path = "staged_gaussian_group.rs"]
 mod gaussian_group;
+#[path = "staged_separable_blend.rs"]
+mod separable_blend;
 
 trait StagePolicy {
     const THRESHOLD_ALPHA: bool;
@@ -39,6 +41,7 @@ trait StagePolicy {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum SelectedStagedFamily {
     Plain,
+    SeparableBlend,
     AnalyticGeometry,
     IsolatedNormalGroup,
     IsolatedGaussianGroup,
@@ -55,6 +58,7 @@ impl std::fmt::Debug for SelectedStagedFamily {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Plain => "Plain",
+            Self::SeparableBlend => "SeparableBlend",
             Self::AnalyticGeometry => "AnalyticGeometry",
             Self::IsolatedNormalGroup => "IsolatedNormalGroup",
             Self::IsolatedGaussianGroup => "IsolatedGaussianGroup",
@@ -81,6 +85,7 @@ impl StagePolicy for SourceSelectedPolicy {
     fn family<Q: ExactParsedPlane>(file: &XcfFile<Q>) -> SelectedStagedFamily {
         // Select exactly one old gate, before mapping or mutation. A refusal
         // never retries the other gate. This is not eligibility by name/epoch.
+        if separable_blend::hint(file) { return SelectedStagedFamily::SeparableBlend; }
         if gaussian_group::hint(file) { return SelectedStagedFamily::IsolatedGaussianGroup; }
         if staged_accounted_group::hint(file) { return SelectedStagedFamily::IsolatedNormalGroup; }
         if analytic_geometry::hint(file) { return SelectedStagedFamily::AnalyticGeometry; }
@@ -436,6 +441,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     }
     fn requires_budgeted_neighborhood_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn requires_budgeted_gaussian_group_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
+    fn requires_budgeted_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn effective_profile(file: &XcfFile<Self>, space: photocraft_cms::ColorSpace, ce: photocraft_cms::xcf_color::Encoding, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<photocraft_cms::Profile, IoError> {
         if matches!(P::family(file), SelectedStagedFamily::AnalyticGeometry | SelectedStagedFamily::IsolatedNormalGroup) {
             analytic_geometry::effective(file,space,ce,ctl,shared.ok_or_else(||IoError::Unsupported("geometry profile needs accounting".into()))?)
@@ -445,6 +451,11 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     }
     fn admissions(file: &XcfFile<Self>, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<admission::AdmissionDomains, IoError> {
         let family = P::family(file);
+        let separable = family == SelectedStagedFamily::SeparableBlend;
+        let separable_domain = if separable {
+            Some(separable_blend::qualify(file,ctl,shared.ok_or_else(||IoError::Unsupported("separable source requires accounting".into()))?)?
+                .ok_or_else(||IoError::Unsupported("separable source outside exact original predicate".into()))?)
+        } else { None };
         let gaussian_group = family == SelectedStagedFamily::IsolatedGaussianGroup;
         if gaussian_group && !gaussian_group::qualify(file, ctl, shared.ok_or_else(||IoError::Unsupported("Gaussian group requires persistent accounting".into()))?)? {
             return Err(IoError::Unsupported("staged Gaussian group is outside its exact original source predicate".into()));
@@ -499,7 +510,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             }
             Some(expected)
         } else { None };
-        if gaussian_group || group || geometry || point.is_some() || owned_point.is_some() || neighborhood.is_some() {
+        if separable || gaussian_group || group || geometry || point.is_some() || owned_point.is_some() || neighborhood.is_some() {
             // Full original source, precision, geometry, mask flags and unit
             // domains were just checked by the unchanged classifier policy.
         } else if histogram {
@@ -532,6 +543,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
                 && !geometry
                 && !group
                 && !gaussian_group
+                && !separable
                 && point.is_none()
                 && owned_point.is_none()
                 && neighborhood.is_none()
@@ -574,6 +586,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             validate_drawable_alpha(d, point.is_some(), false, ctl, 0)?;
         }
         let mut domains = admission::AdmissionDomains {
+            multiply_spaces_domain: separable_domain == Some(separable_blend::Domain::MultiplySpaces),
             gaussian_group_domain: gaussian_group,
             masked_group_domain: gaussian_group,
             accounted_group_domain: group,
@@ -593,6 +606,13 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         // domain handoff. Only the private Threshold factory can select this
         // type, and its admissions above propagate the shared exact predicate.
         let mut domains = admission::LateAdmissionDomains::default();
+        if P::family(file) == SelectedStagedFamily::SeparableBlend {
+            match separable_blend::domain(file) {
+                Some(separable_blend::Domain::Basic) => domains.basic_blend_domain=true,
+                Some(separable_blend::Domain::MultiplyAuto) => domains.multiply_domain=true,
+                _ => {},
+            }
+        }
         if let SelectedStagedFamily::ResidualPoint(family) = P::family(file) {
             family.set_late(&mut domains);
         }

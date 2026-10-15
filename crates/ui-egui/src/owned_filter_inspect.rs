@@ -26,7 +26,10 @@ pub(crate) fn handle(app: &mut PhotocraftApp, request: &ControlRequest, command:
         return None;
     }
     let owner = app.session.active()?.doc.accounted()?;
-    let filtered = owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage() || owner.is_readonly_gaussian_group_storage();
+    let filtered = owner.is_readonly_threshold_alpha_storage()
+        || owner.is_readonly_threshold_storage()
+        || owner.is_readonly_point_storage()
+        || owner.is_readonly_gaussian_group_storage();
     if (command == "xcf.filter.inspect" && !filtered) || (command == "xcf.inspect" && owner.document().xcf_state.is_none()) {
         return None;
     }
@@ -65,7 +68,7 @@ pub(crate) fn handle(app: &mut PhotocraftApp, request: &ControlRequest, command:
             authorize(command, params).map_err(|error| error.to_string())?;
         }
         let reply = if command == "xcf.inspect" {
-            if filtered {
+            if filtered || owner.is_readonly_flat_composite_storage() {
                 photocraft_engine::accounted_xcf_inspect::prepare(&app.session, params, &control)
             } else {
                 photocraft_engine::accounted_plain_xcf_inspect::prepare(&app.session, params, &control)

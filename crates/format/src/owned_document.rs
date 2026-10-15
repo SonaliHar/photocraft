@@ -70,6 +70,7 @@ enum AccountedHandoff {
     ReadonlyHistogramThresholdStorage,
     ReadonlyPointStorage,
     ReadonlyGaussianGroupStorage,
+    ReadonlyFlatCompositeStorage,
 }
 impl OwnedDocumentArchive {
     /// The actual ledger retaining this archive's model and encoded storage.
@@ -118,6 +119,13 @@ impl OwnedDocumentArchive {
         self.into_accounted_with(control, AccountedHandoff::ReadonlyGaussianGroupStorage)
     }
 
+    /// Consume the actual archive/model/native receipts into the explicit
+    /// readonly flat-composite storage class on their original quota. Current
+    /// source/profile/render eligibility remains the caller's responsibility.
+    pub fn into_accounted_readonly_flat_composite_storage(self, control: &ReadControl<'_>) -> Result<photocraft_doc::accounted_document::AccountedDocument> {
+        self.into_accounted_with(control, AccountedHandoff::ReadonlyFlatCompositeStorage)
+    }
+
     fn into_accounted_with(self, control: &ReadControl<'_>, handoff: AccountedHandoff) -> Result<photocraft_doc::accounted_document::AccountedDocument> {
         struct NativeRetention {
             _archive: Arc<dyn ImmutableCanonicalArchive>,
@@ -139,6 +147,7 @@ impl OwnedDocumentArchive {
             AccountedHandoff::ReadonlyHistogramThresholdStorage => photocraft_doc::accounted_document::AccountedDocument::new_readonly_threshold_storage(document, retention, quota, control),
             AccountedHandoff::ReadonlyPointStorage => photocraft_doc::accounted_document::AccountedDocument::new_readonly_point_storage(document, retention, quota, control),
             AccountedHandoff::ReadonlyGaussianGroupStorage => photocraft_doc::accounted_document::AccountedDocument::from_owned_readonly_gaussian_group(document, retention, quota, control),
+            AccountedHandoff::ReadonlyFlatCompositeStorage => photocraft_doc::accounted_document::AccountedDocument::from_owned_readonly_flat_composite(document, retention, quota, control),
         }.map_err(error)
     }
 

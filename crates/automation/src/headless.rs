@@ -958,3 +958,7 @@ mod owned_gaussian_group_metadata_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_gaussian_group_parameter_tests.rs"]
 mod owned_gaussian_group_parameter_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_separable_blend_tests.rs"]
+mod owned_separable_blend_tests;

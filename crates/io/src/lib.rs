@@ -125,6 +125,7 @@ pub mod xcf_import;
 pub use xcf_import::{OwnedPlainXcfImport, import_owned_staged_plain_bytes, import_owned_staged_plain_bytes_in_quota, import_owned_staged_plain_from_reader_in_quota};
 pub use xcf_import::{OwnedThresholdAlphaXcfImport, import_owned_staged_threshold_alpha_bytes_in_quota};
 pub use xcf_import::{OwnedHistogramThresholdXcfImport, OwnedPointXcfImport, OwnedAnalyticGeometryXcfImport, OwnedIsolatedNormalGroupXcfImport, OwnedIsolatedGaussianGroupXcfImport};
+pub use xcf_import::OwnedSeparableBlendXcfImport;
 pub use xcf_import::{OwnedXcfImport, import_owned_xcf_bytes_in_quota, import_owned_xcf_from_reader_in_quota};
 pub use xcf_import::{
     AssembledStoredChannel, CorrespondenceRequirements, NamespaceBacking, StoredChannelCorrespondence, assemble_owned_stored_channel,

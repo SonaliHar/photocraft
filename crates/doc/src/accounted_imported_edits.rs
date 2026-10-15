@@ -12,6 +12,12 @@ pub(super) enum EditDomain {
 }
 
 pub(super) fn validate_owner(owner: &AccountedDocument, edit: AccountedEdit<'_>, c: &ReadControl<'_>) -> Result<EditDomain, BackingError> {
+    // Refuse before generic no-op/history admission, including modes whose
+    // physical BlendMode is a Normal surrogate for canonical imported policy.
+    if owner.is_readonly_flat_composite_storage() {
+        c.check(1)?;
+        return Err(BackingError::Unsupported);
+    }
     // A genuine Gaussian class must never fall through to the unrelated
     // assigned group hint or acquire plain/native-pixel edit authority.
     if owner.is_readonly_gaussian_group_storage() {

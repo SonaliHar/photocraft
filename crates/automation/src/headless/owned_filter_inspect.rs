@@ -23,10 +23,12 @@ fn bounded<R>(run: impl FnOnce(&ReadControl<'_>) -> Result<R, AutomationError>) 
 impl Headless {
     /// Cheap runtime routing only; the paid query validates the real class.
     pub fn has_owned_filter_inspection(&self) -> bool {
-        self.session
-            .active()
-            .and_then(|state| state.doc.accounted())
-            .is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage() || owner.is_readonly_gaussian_group_storage())
+        self.session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| {
+            owner.is_readonly_threshold_alpha_storage()
+                || owner.is_readonly_threshold_storage()
+                || owner.is_readonly_point_storage()
+                || owner.is_readonly_gaussian_group_storage()
+        })
     }
     /// Routing hint only: CURRENT XCF metadata is not original-source proof.
     /// The selected paid factory must still validate its exact runtime class.
@@ -79,7 +81,9 @@ impl Headless {
         Ok(match id {
             "xcf.filter.inspect" => photocraft_engine::accounted_filter_inspect::prepare(&self.session, params, control)?,
             "xcf.inspect" => {
-                if self.has_owned_filter_inspection() {
+                if self.has_owned_filter_inspection()
+                    || self.session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_flat_composite_storage())
+                {
                     photocraft_engine::accounted_xcf_inspect::prepare(&self.session, params, control)?
                 } else {
                     photocraft_engine::accounted_plain_xcf_inspect::prepare(&self.session, params, control)?

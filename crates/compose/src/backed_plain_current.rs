@@ -59,6 +59,11 @@ fn scan(view: CheckedRasterView<'_>, control: &ReadControl<'_>) -> Result<(), Er
 /// and this same caller control. No receipt or source capability is synthesized.
 pub fn validate_current_plain_import_storage(owner: &AccountedDocument, control: &ReadControl<'_>) -> Result<(), Error> {
     control.check(1).map_err(Error::Backing)?;
+    // The shared display factory has additional class-specific consumers.
+    // Those consumers do not acquire this Normal-only editing prerequisite.
+    if owner.is_readonly_flat_composite_storage() {
+        return Err(scope());
+    }
     let doc = owner.document();
     owner.validate_selection_replacement(control).map_err(Error::Backing)?;
     let builtin = match (&doc.working_profile_interpretation, doc.mode) {

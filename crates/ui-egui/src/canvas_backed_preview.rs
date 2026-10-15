@@ -27,7 +27,7 @@ fn backed_display_image_with_owner(
 ) -> Result<(egui::ColorImage, QuotaLease), String> {
     let render = || -> Result<_, String> {
         let builtin_basis = owner
-            .is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage() || owner.is_readonly_gaussian_group_storage());
+            .is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage() || owner.is_readonly_gaussian_group_storage() || owner.is_readonly_flat_composite_storage());
         // Current bytes alone supply interpretation; import provenance is inert.
         if !builtin_basis && !matches!(doc.working_profile_interpretation, WorkingProfileInterpretation::Icc) {
             return Err("backed canvas requires explicit current ICC".into());
@@ -250,3 +250,7 @@ mod gaussian_original_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_gaussian_group_tests.rs"]
 mod gaussian_group_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "canvas_backed_separable_blend_tests.rs"]
+mod separable_blend_tests;

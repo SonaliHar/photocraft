@@ -29,6 +29,8 @@ mod threshold_readonly;
 mod point_readonly;
 #[path = "accounted_gaussian_group_readonly.rs"]
 mod gaussian_group_readonly;
+#[path = "accounted_flat_composite_readonly.rs"]
+mod flat_composite_readonly;
 pub use gaussian_group_readonly::{GaussianGroupEnabledPatch, GaussianGroupPatch};
 pub use point_readonly::{PointArgumentPatch, PointArgumentValue, PointFilterMovePatch, PointFilterPatch, PointFilterRemovePatch};
 pub use point_readonly::{
@@ -81,6 +83,7 @@ enum StorageClass {
     ReadonlyHistogramThreshold,
     ReadonlyPoint,
     ReadonlyGaussianGroup,
+    ReadonlyFlatComposite,
 }
 struct ModelOwner {
     _storage_class: StorageClass,

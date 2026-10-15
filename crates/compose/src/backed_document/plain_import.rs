@@ -78,6 +78,9 @@ fn profile(doc: &Document, definition: &Profile, control: &ReadControl<'_>) -> R
 }
 pub(super) fn qualify(owner: &AccountedDocument, definition: &Profile, control: &ReadControl<'_>) -> Result<GimpSpace, BackedNormalError> {
     control.check(1).map_err(BackedNormalError::Backing)?;
+    if owner.is_readonly_flat_composite_storage() {
+        return Err(scope());
+    }
     let doc = owner.document();
     let source = doc.source_color_context.as_ref().ok_or_else(scope)?;
     let state = doc.xcf_state.as_ref().ok_or_else(scope)?;

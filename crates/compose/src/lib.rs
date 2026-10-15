@@ -20,6 +20,8 @@ pub mod adjust;
 pub mod advanced;
 pub mod backed_document;
 pub mod backed_gaussian_group;
+pub mod backed_separable;
+pub mod backed_separable_document;
 mod gimp_group_gaussian;
 pub mod backed_plain_current;
 pub mod backed_assigned_current;
