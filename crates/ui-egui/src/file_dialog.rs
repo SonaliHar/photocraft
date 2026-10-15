@@ -206,6 +206,11 @@ impl PhotocraftApp {
         })
     }
 
+    /// Ask for a folder: `then` gets its path. The web has no folder picker and answers Cancel.
+    pub(crate) fn pick_folder(&mut self, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
+        self.ask_folder(then)
+    }
+
     /// File › Open: opens every chosen file, reporting each failure (see [`Self::open_paths`]).
     pub fn open_dialog_file(&mut self) -> Result<Value, String> {
         let initial_dir = last_used_dir(&self.ui.recent_files);

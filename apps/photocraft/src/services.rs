@@ -212,6 +212,11 @@ pub fn presets_dir() -> Option<PathBuf> {
     config_dir().map(|d| d.join("Presets"))
 }
 
+/// Installed LUT packs for Color Lookup (see `photocraft_engine::lut_library`).
+pub fn luts_dir() -> Option<PathBuf> {
+    presets_dir().map(|d| d.join("LUTs"))
+}
+
 fn recovery_dir() -> Option<PathBuf> {
     config_dir().map(|d| d.join("Recovery"))
 }
