@@ -58,10 +58,7 @@ fn metadata_mode(doc: &Document, b: &mut impl PlanBudget, i: &Interrupt<'_>, cur
     if doc.mode != ColorMode::Rgb
         || !matches!(doc.depth, SampleType::F32 | SampleType::F64)
         || doc.sample_encoding != Some(SampleEncoding::NonlinearProfile)
-        || doc.source_color_context.as_ref().is_none_or(|v| {
-            !matches!((doc.depth, v.source_precision), (SampleType::F32, 650) | (SampleType::F64, 750))
-                || v.original_icc.is_some() && doc.depth != SampleType::F32
-        })
+        || doc.source_color_context.as_ref().is_none_or(|v| !matches!((doc.depth, v.source_precision), (SampleType::F32, 650) | (SampleType::F64, 750)))
         || state.provenance.format_version != 22
         || state.current_filter_output_precision != photocraft_doc::FilterOutputPrecision::Canonical
         || state.items.len() != 2

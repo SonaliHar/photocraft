@@ -1,5 +1,7 @@
 //! UNRUN full-radius consumers. External reference Surfaces are harness memory;
 //! no numerical producer acceptance, deadline or large-image throughput claim.
+#[path = "backed_box_assigned_f64_tests.rs"]
+mod assigned_f64;
 #[path = "backed_box_activity_tests.rs"]
 mod layer_activity;
 #[path = "backed_box_move_tests.rs"]

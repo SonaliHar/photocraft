@@ -1037,3 +1037,7 @@ mod owned_observed_box_move_tests;
 #[cfg(all(test, not(target_arch="wasm32")))]
 #[path="headless/owned_observed_box_source_activity_tests.rs"]
 mod owned_observed_box_source_activity_tests;
+
+#[cfg(all(test, not(target_arch="wasm32")))]
+#[path="headless/owned_assigned_f64_box_tests.rs"]
+mod owned_assigned_f64_box_tests;

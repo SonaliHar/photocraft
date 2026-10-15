@@ -13,7 +13,7 @@ pub(super) fn hint<P: ExactParsedPlane>(f: &XcfFile<P>) -> bool {
     f.layers.len() == 1
         && f.model == Model::Rgb
         && matches!((f.sample, f.precision), (Sample::F32, 650) | (Sample::F64, 750))
-        && (f.icc.is_empty() || (f.sample == Sample::F32 && f.icc.len() <= 16 << 20))
+        && f.icc.len() <= 16 << 20
         && !old_identity
 }
 
@@ -34,7 +34,7 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, 
         || f.model != Model::Rgb
         || !matches!((f.sample, f.precision), (Sample::F32, 650) | (Sample::F64, 750))
         || f.encoding != Encoding::NonlinearProfile
-        || (!f.icc.is_empty() && (f.sample != Sample::F32 || f.icc.len() > 16 << 20))
+        || f.icc.len() > 16 << 20
         || f.layers.len() != 1
         || !f.channels.is_empty()
         || !f.paths.is_empty()
@@ -198,3 +198,7 @@ mod radius_tests;
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "box_geometry_activity_tests.rs"]
 mod activity_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "box_geometry_assigned_f64_tests.rs"]
+mod assigned_f64_tests;

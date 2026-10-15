@@ -112,7 +112,7 @@ fn f64_precision_controls_and_assigned_role() {
             3 => f.layers[0].effects[0].mask.as_mut().unwrap().plane.as_mut().unwrap().bytes[..8].copy_from_slice(&2f64.powi(-200).to_ne_bytes()),
             4 => f.layers[0].effects[0].mask.as_mut().unwrap().plane.as_mut().unwrap().sample = Sample::F32,
             5 => f.precision = 650,
-            6 => f.icc.push(1),
+            6 => f.icc.resize((16 << 20) + 1, 0),
             7 => f.layers[0].effects[0].state.enabled = None,
             8 => f.layers[0].effects[0].state.mode = Some(28),
             9 => f.layers[0].effects[0].state.opacity_bits = Some(0.5f32.to_bits()),

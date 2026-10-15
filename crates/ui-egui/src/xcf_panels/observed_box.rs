@@ -18,7 +18,6 @@ pub(super) fn radius(document: &DocumentSnapshot, layer: LayerId, node: &FilterN
         || document.source_color_context.as_ref().is_none_or(|source| {
             !matches!((document.depth, source.source_precision), (photocraft_doc::SampleType::F32, 650) | (photocraft_doc::SampleType::F64, 750))
                 || assigned != source.original_icc.is_some()
-                || assigned && document.depth != photocraft_doc::SampleType::F32
         })
     {
         return None;
@@ -90,3 +89,7 @@ pub(super) fn controls(
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "observed_box_tests.rs"]
 mod tests;
+
+#[cfg(all(test, not(target_arch="wasm32")))]
+#[path="assigned_f64_box_tests.rs"]
+mod assigned_f64_tests;

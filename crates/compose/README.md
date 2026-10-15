@@ -866,7 +866,8 @@ persistent document lifetime are separate accounting responsibilities.
 `PreparedBackedBoxContext` and `PreparedBackedBoxDocument` render the admitted
 CURRENT/native Box recipe over checked drawable and canvas geometry. The
 observed `xcf22-observed-box-geometry-v1` envelope admits implicit RGB F32
-nonlinear650, implicit RGB F64 nonlinear750 and assigned RGB F32 nonlinear650.
+nonlinear650, implicit RGB F64 nonlinear750, and assigned RGB F32/F64 at the
+exact nonlinear650/750 sample pairs.
 Assigned profiles retain the existing paid original-to-current binding and both
 independent ICC owners. Other source/eager constructors keep their exact gates;
 old source identities retain selection priority and final refusal.
@@ -916,6 +917,6 @@ pixels/defaults, profiles and raw policy stay immutable.
 Regression drafts remain UNRUN/uncompiled during the implementation-first pass.
 Independent GIMP controls establish storage/activity observations, not PhotoCraft
 numerical or workflow acceptance. Effective-profile date-byte differences and
-assigned producer straight-RGB instability remain explicit evidence limits.
+assigned F32 producer straight-RGB instability remain explicit evidence limits.
 Dense large/high-radius throughput, native_large and full-stock/visual/behavioral
 acceptance remain open.

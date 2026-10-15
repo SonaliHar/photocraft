@@ -262,9 +262,8 @@ fn shape(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>, policy
         // established here. Both independent owners are priced by the census.
         let bounded = |profile: Option<&Arc<Vec<u8>>>| profile.is_some_and(|p| !p.is_empty() && p.len() <= 16 * 1024 * 1024);
         if doc.mode != crate::ColorMode::Rgb
-            || doc.depth != crate::SampleType::F32
+            || !matches!((doc.depth, source.source_precision), (crate::SampleType::F32, 650) | (crate::SampleType::F64, 750))
             || doc.sample_encoding != Some(crate::SampleEncoding::NonlinearProfile)
-            || source.source_precision != 650
             || doc.working_profile_interpretation != crate::WorkingProfileInterpretation::Icc
             || !bounded(doc.icc_profile.as_ref())
             || !bounded(source.original_icc.as_ref())

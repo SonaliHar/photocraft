@@ -192,7 +192,7 @@ impl<'a> PreparedBackedBoxContext<'a> {
         if doc.mode != ColorMode::Rgb
             || doc.sample_encoding != Some(SampleEncoding::NonlinearProfile)
             || !matches!((doc.depth, source_color.source_precision), (SampleType::F32, 650) | (SampleType::F64, 750))
-            || assigned && doc.depth != SampleType::F32
+            || assigned && !observed && doc.depth != SampleType::F32
             || assigned != source_color.original_icc.is_some()
             || state.provenance.format_version != 22
             || state.current_filter_output_precision != photocraft_doc::FilterOutputPrecision::Canonical

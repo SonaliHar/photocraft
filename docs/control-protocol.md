@@ -2020,3 +2020,27 @@ identity remains distinct from disabled native identity. Old source identities
 retain priority/final refusal and old specific/eager contracts stay exact.
 Assigned producer RGB variability and effective ICC date-byte HOLDs remain;
 PhotoCraft numerical/visual/runtime acceptance is still deferred.
+
+Observed Box now also admits assigned RGB F64 nonlinear750 through an additive
+source role and actual assigned native owner. Its native32-byte pixels and
+GrayF64 mask8-byte samples remain exact, including finite HDR, signed-zero and
+sub-F32-resolution controls; both original/current ICC owners retain the existing
+controlled profile relation and paid preparation. There is no F32 narrowing or
+new CMS/kernel math. Old assigned Box/Median/Gaussian specific/eager contracts
+stay F32-only, and original old-identity selection/final refusal stays exact.
+
+The new role intentionally shares the existing observed radius0..1000,
+activation, layer metadata and Move command scope under the same full current/
+staged proof and transaction fences. UI controls keep actual class/profile and
+exact precision-pair eligibility. Source activity uses the existing explicit
+compatibility policy; the independent F64 r4/r5/reopen controls do not establish
+an exhaustive numerical theorem. Its captured profile roles are distinct from
+unresolved older F32 evidence and replace none of those HOLDs.
+
+Input/capture/work/deadline limits remain unchanged. Decoded RGBAF64 alone costs
+768MB at24MP or1.152GB at36MP before padding, source/encoded storage, physical mask,
+profiles and renderer overlaps. Browser128MiB and wasm512MiB resident ceilings
+cannot fit those floors; native whole-workflow fit/throughput is unproven. Bounded
+16MiB/32MiB renderer guards do not enable native_large or promise input fit.
+New regression drafts remain UNRUN/uncompiled; PhotoCraft runtime, numerical,
+visual and workflow acceptance remains deferred.

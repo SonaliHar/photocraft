@@ -321,3 +321,6 @@ fn control_and_actual_index_failure_leave_owner_and_ledger_unchanged() {
     assert!(matches!(AccountedDocument::new_readonly_assigned_point_storage(doc, guard, q2.clone(), &failed), Err(BackingError::Work)));
     assert_eq!(q2.usage().unwrap(), Default::default());
 }
+
+#[path = "assigned_f64_tests.rs"]
+mod f64;
