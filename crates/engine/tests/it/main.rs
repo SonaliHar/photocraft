@@ -44,6 +44,7 @@ mod rasterize_selected_layers;
 mod rendering_preferences;
 mod save_keeps_encoding;
 mod selection_layer_commands;
+mod shortcut_sets;
 mod smart_clipboard_sources;
 mod smart_duplicates;
 mod smart_filter_canvas_geometry;
