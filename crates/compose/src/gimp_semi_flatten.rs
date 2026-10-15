@@ -17,6 +17,31 @@ pub const EPOCH: &str = "xcf22-gimp-semi-flatten-literal-v1";
 fn scope() -> CompositionError {
     CompositionError::Unsupported("closed Semi-Flatten recipe")
 }
+/// Common O(1) geometry constraint for these three pure-point families and
+/// their separately declared derived empty CURRENT role. No operation grant.
+pub(crate) fn positive_origin(extent: Rect) -> Result<()> {
+    if extent.x0 != 0 || extent.y0 != 0 || extent.is_empty() || extent.width() > 262_144 || extent.height() > 262_144 {
+        return Err(CompositionError::Unsupported("pure point checked origin geometry"));
+    }
+    let pixels = u64::from(extent.width()).checked_mul(u64::from(extent.height())).ok_or(CompositionError::Invalid("pure point geometry length"))?;
+    if pixels > 1 << 30 {
+        return Err(CompositionError::Unsupported("pure point geometry pixel bound"));
+    }
+    Ok(())
+}
+/// Every retained physical tile must intersect the declared origin mask.
+/// Scan its complete payload afterward, including out-of-operative padding.
+pub(crate) fn mask_tile(extent: Rect, coordinate: photocraft_geom::TileCoord) -> Result<()> {
+    positive_origin(extent)?;
+    let x0 = i64::from(coordinate.tx).checked_mul(i64::from(photocraft_geom::TILE_SIZE)).ok_or_else(scope)?;
+    let y0 = i64::from(coordinate.ty).checked_mul(i64::from(photocraft_geom::TILE_SIZE)).ok_or_else(scope)?;
+    let x1 = x0.checked_add(i64::from(photocraft_geom::TILE_SIZE)).ok_or_else(scope)?;
+    let y1 = y0.checked_add(i64::from(photocraft_geom::TILE_SIZE)).ok_or_else(scope)?;
+    if x0 >= i64::from(extent.x1) || y0 >= i64::from(extent.y1) || x1 <= 0 || y1 <= 0 {
+        return Err(scope());
+    }
+    Ok(())
+}
 pub(crate) fn claims(node: &FilterNode) -> bool {
     node.operation.name == "gimp:semi-flatten" || node.operation.schema_epoch == EPOCH
 }
@@ -39,12 +64,12 @@ pub(crate) fn literal_arguments(arguments: &[FilterArgument]) -> Result<([f32; 4
     Ok((color, *encoding))
 }
 pub(crate) fn canonical(node: &FilterNode, stored: SampleEncoding, version: u32, extent: Rect) -> Result<()> {
+    crate::gimp_semi_flatten::positive_origin(extent)?;
     if version != 22
         || node.operation.name != "gimp:semi-flatten"
         || node.operation.stored_version != "0:0"
         || node.operation.schema_epoch != EPOCH
         || stored != SampleEncoding::NonlinearProfile
-        || extent != Rect::new(0, 0, 8, 6)
         || node.opacity_f64_bits != 1f64.to_bits()
         || node.source_clipping != Some(0)
         || node.source_region != Some(0)
@@ -117,10 +142,17 @@ impl PreparedSemiFlatten {
     }
 }
 pub(crate) fn qualify_context(doc: &Document, extent: Rect, node: &FilterNode) -> Result<()> {
+    let [layer] = doc.layers.as_slice() else { return Err(scope()) };
+    let state = doc.xcf_state.as_ref().ok_or_else(scope)?;
+    // Plain source-preparation callers have no runtime L1 owner gate. Join
+    // canonical mask geometry to the actual native/doc extent here as well.
+    if state.items.len() != 2 || state.items.iter().find(|item| item.item == ItemRef::Layer(layer.id)).and_then(|item| item.raster_bounds) != Some(extent) {
+        return Err(scope());
+    }
     let source = doc.source_color_context.as_ref().ok_or_else(scope)?;
     if doc.mode != ColorMode::Rgb
         || doc.sample_encoding != Some(SampleEncoding::NonlinearProfile)
-        || doc.size != photocraft_doc::Size::new(8, 6)
+        || doc.size != extent.size()
         || extent != doc.bounds()
         || !matches!((doc.depth, source.source_precision), (SampleType::F32, 650) | (SampleType::F64, 750))
         || source.original_icc.is_some()
@@ -136,12 +168,17 @@ pub(crate) fn qualify_mask(state: &photocraft_doc::XcfState, node: &FilterNode, 
     control.check().map_err(|_| RasterInputError::Cancelled)?;
     let Some(ItemRef::Mask(id)) = node.mask else { return Err(scope()) };
     let [mask] = state.filter_masks.as_slice() else { return Err(scope()) };
+    if state.items.len() != 2 {
+        return Err(scope());
+    }
+    let extent = state.items.iter().find(|item| item.item == ItemRef::Layer(owner)).and_then(|item| item.raster_bounds).ok_or_else(scope)?;
+    crate::gimp_semi_flatten::positive_origin(extent)?;
     if state.items.len() != 2
         || mask.id != id
         || mask.owner != node.id
-        || mask.bounds != Rect::new(0, 0, 8, 6)
+        || mask.bounds != extent
         || mask.surface.format() != PixelFormat::new(ColorMode::Grayscale, sample, false)
-        || mask.surface.tile_count() > 1
+        || mask.surface.tile_count() > 4096
     {
         return Err(scope());
     }
@@ -177,9 +214,7 @@ pub(crate) fn qualify_mask(state: &photocraft_doc::XcfState, node: &FilterNode, 
     };
     check(mask.surface.default_bytes())?;
     for (coordinate, tile) in mask.surface.tiles() {
-        if coordinate.tx != 0 || coordinate.ty != 0 {
-            return Err(scope());
-        }
+        crate::gimp_semi_flatten::mask_tile(extent, *coordinate)?;
         check(tile.bytes())?;
     }
     Ok(())

@@ -26,7 +26,7 @@ fn authored_vibrance_source_and_current_native_lifecycle() {
         let mut refused = Headless::trusted_local();
         assert!(refused.open_owned_xcf_keep_current_bounded(&path).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        assert!(refused.session.active().is_err());
+        assert!(refused.session.active().is_none());
     }
     for case in fixture::cases() {
         let directory = Directory::new();

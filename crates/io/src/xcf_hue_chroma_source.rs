@@ -63,7 +63,11 @@ pub(crate) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b:
         || f.encoding != Encoding::NonlinearProfile
         || !matches!((f.sample, f.precision), (Sample::F32, 650) | (Sample::F64, 750))
         || !f.icc.is_empty()
-        || (f.width, f.height) != (8, 6)
+        || f.width == 0
+        || f.height == 0
+        || f.width > 262144
+        || f.height > 262144
+        || u64::from(f.width).checked_mul(u64::from(f.height)).is_none_or(|n| n > (1u64 << 30))
         || f.layers.len() != 1
         || !f.channels.is_empty()
         || !f.paths.is_empty()
@@ -78,7 +82,7 @@ pub(crate) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b:
         || !d.alpha
         || !d.visible
         || d.opacity.to_bits() != 1f32.to_bits()
-        || (d.width, d.height, d.offset) != (8, 6, (0, 0))
+        || (d.width, d.height, d.offset) != (f.width, f.height, (0, 0))
         || d.mode != 28
         || (d.blend_space, d.composite_space, d.composite_mode) != (0, -1, -1)
         || d.path.len() > 1
@@ -103,7 +107,7 @@ pub(crate) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b:
         return Ok(false);
     }
     let Some(p) = d.plane.as_ref() else { return Ok(false) };
-    if !native(p, f.sample, 4, false, i, b)? {
+    if !native(p, f.sample, f.width, f.height, 4, false, i, b)? {
         return Ok(false);
     }
     let Some(m) = e.mask.as_ref() else { return Ok(false) };
@@ -112,7 +116,7 @@ pub(crate) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b:
         || m.model != Model::Gray
         || !m.visible
         || m.opacity.to_bits() != 0.5f32.to_bits()
-        || (m.width, m.height, m.offset) != (8, 6, (0, 0))
+        || (m.width, m.height, m.offset) != (f.width, f.height, (0, 0))
         || !m.mask_enabled
         || m.mask_shown
         || m.mask_editing
@@ -134,11 +138,13 @@ pub(crate) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b:
         return Ok(false);
     }
     let Some(p) = m.plane.as_ref() else { return Ok(false) };
-    native(p, f.sample, 1, true, i, b)
+    native(p, f.sample, f.width, f.height, 1, true, i, b)
 }
 fn native<P: ExactParsedPlane>(
     p: &P,
     sample: Sample,
+    width: u32,
+    height: u32,
     channels: usize,
     zero: bool,
     i: &Interrupt<'_>,
@@ -149,10 +155,13 @@ fn native<P: ExactParsedPlane>(
         Sample::F64 => 8,
         _ => return Ok(false),
     };
-    let expected =
-        48u64.checked_mul(channels as u64).and_then(|n| n.checked_mul(word as u64)).ok_or_else(|| IoError::Unsupported("Hue-Chroma source length".into()))?;
+    let expected = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|n| n.checked_mul(channels as u64))
+        .and_then(|n| n.checked_mul(word as u64))
+        .ok_or_else(|| IoError::Unsupported("Hue-Chroma source length".into()))?;
     let d = p.descriptor();
-    if d.sample != sample || (d.width, d.height, d.channels) != (8, 6, channels) || p.native_byte_len() != Some(expected) {
+    if d.sample != sample || (d.width, d.height, d.channels) != (width, height, channels) || p.native_byte_len() != Some(expected) {
         return Ok(false);
     }
     let mut valid = true;
@@ -181,3 +190,7 @@ fn native<P: ExactParsedPlane>(
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "xcf_hue_chroma_source_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "xcf_hue_chroma_source_geometry_tests.rs"]
+mod geometry_tests;

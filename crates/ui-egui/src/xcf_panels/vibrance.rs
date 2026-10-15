@@ -35,7 +35,10 @@ fn words(node: &FilterNode) -> Option<[u32; 2]> {
 pub(super) fn candidate(document: &DocumentSnapshot, layer: LayerId, node: &FilterNode) -> bool {
     if !scope(document, node)
         || document.mode != photocraft_doc::ColorMode::Rgb
-        || document.size != photocraft_doc::Size::new(8, 6)
+        || document.size.is_empty()
+        || document.size.width > 262_144
+        || document.size.height > 262_144
+        || document.size.area() > (1 << 30)
         || document.sample_encoding != Some(SampleEncoding::NonlinearProfile)
         || document.source_color_context.as_ref().is_none_or(|source| {
             source.original_icc.is_some()

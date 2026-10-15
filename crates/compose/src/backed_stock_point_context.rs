@@ -1014,3 +1014,7 @@ mod hue_chroma_tests;
 #[cfg(test)]
 #[path = "backed_vibrance_tests.rs"]
 mod vibrance_tests;
+
+#[cfg(test)]
+#[path = "backed_point_origin_geometry_tests.rs"]
+mod origin_geometry_tests;

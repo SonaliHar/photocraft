@@ -1491,3 +1491,7 @@ mod red_eye_geometry_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "xcf_panels/gaussian_group_activation_tests.rs"]
 mod gaussian_group_activation_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "xcf_panels/pure_point_geometry_tests.rs"]
+mod pure_point_geometry_tests;

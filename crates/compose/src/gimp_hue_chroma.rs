@@ -86,12 +86,12 @@ pub(crate) fn parameters(arguments: &[FilterArgument]) -> Result<Parameters> {
     Ok(p)
 }
 pub(crate) fn canonical(node: &FilterNode, stored: SampleEncoding, version: u32, extent: Rect) -> Result<Parameters> {
+    crate::gimp_semi_flatten::positive_origin(extent)?;
     if version != 22
         || node.operation.name != "gegl:hue-chroma"
         || node.operation.stored_version != "0:0"
         || node.operation.schema_epoch != EPOCH
         || stored != SampleEncoding::NonlinearProfile
-        || extent != Rect::new(0, 0, 8, 6)
         || node.opacity_f64_bits != 1f64.to_bits()
         || node.source_clipping != Some(0)
         || node.source_region != Some(0)
@@ -106,10 +106,17 @@ pub(crate) fn canonical(node: &FilterNode, stored: SampleEncoding, version: u32,
     parameters(&node.arguments)
 }
 pub(crate) fn qualify_context(doc: &Document, extent: Rect, node: &FilterNode) -> Result<Parameters> {
+    let [layer] = doc.layers.as_slice() else { return Err(scope()) };
+    let state = doc.xcf_state.as_ref().ok_or_else(scope)?;
+    // Plain source-preparation callers have no runtime L1 owner gate. Join
+    // canonical mask geometry to the actual native/doc extent here as well.
+    if state.items.len() != 2 || state.items.iter().find(|item| item.item == ItemRef::Layer(layer.id)).and_then(|item| item.raster_bounds) != Some(extent) {
+        return Err(scope());
+    }
     let source = doc.source_color_context.as_ref().ok_or_else(scope)?;
     if doc.mode != ColorMode::Rgb
         || doc.sample_encoding != Some(SampleEncoding::NonlinearProfile)
-        || doc.size != photocraft_doc::Size::new(8, 6)
+        || doc.size != extent.size()
         || extent != doc.bounds()
         || !matches!((doc.depth, source.source_precision), (SampleType::F32, 650) | (SampleType::F64, 750))
         || source.original_icc.is_some()
@@ -260,12 +267,17 @@ pub(crate) fn qualify_mask(state: &photocraft_doc::XcfState, node: &FilterNode, 
     control.check().map_err(|_| RasterInputError::Cancelled)?;
     let Some(ItemRef::Mask(id)) = node.mask else { return Err(scope()) };
     let [mask] = state.filter_masks.as_slice() else { return Err(scope()) };
+    if state.items.len() != 2 {
+        return Err(scope());
+    }
+    let extent = state.items.iter().find(|item| item.item == ItemRef::Layer(owner)).and_then(|item| item.raster_bounds).ok_or_else(scope)?;
+    crate::gimp_semi_flatten::positive_origin(extent)?;
     if state.items.len() != 2
         || mask.id != id
         || mask.owner != node.id
-        || mask.bounds != Rect::new(0, 0, 8, 6)
+        || mask.bounds != extent
         || mask.surface.format() != PixelFormat::new(ColorMode::Grayscale, sample, false)
-        || mask.surface.tile_count() > 1
+        || mask.surface.tile_count() > 4096
     {
         return Err(scope());
     }
@@ -301,9 +313,7 @@ pub(crate) fn qualify_mask(state: &photocraft_doc::XcfState, node: &FilterNode, 
     };
     check(mask.surface.default_bytes())?;
     for (coordinate, tile) in mask.surface.tiles() {
-        if coordinate.tx != 0 || coordinate.ty != 0 {
-            return Err(scope());
-        }
+        crate::gimp_semi_flatten::mask_tile(extent, *coordinate)?;
         check(tile.bytes())?;
     }
     Ok(())

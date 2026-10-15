@@ -1069,3 +1069,7 @@ mod owned_hue_chroma_tests;
 #[cfg(all(test, not(target_arch="wasm32")))]
 #[path="headless/owned_vibrance_tests.rs"]
 mod owned_vibrance_tests;
+
+#[cfg(all(test, not(target_arch="wasm32")))]
+#[path="headless/owned_pure_point_geometry_tests.rs"]
+mod owned_pure_point_geometry_tests;

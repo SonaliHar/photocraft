@@ -768,3 +768,7 @@ mod hue_chroma_tests;
 #[cfg(test)]
 #[path="point_vibrance_tests.rs"]
 mod vibrance_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "point_origin_geometry_tests.rs"]
+mod origin_geometry_tests;

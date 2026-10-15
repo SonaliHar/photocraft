@@ -2116,7 +2116,7 @@ PhotoCraft numerical acceptance is inferred; regression groups remain UNRUN.
 Owned Semi-Flatten continuation uses the existing `xcf.filter.set`,
 `xcf.filter.enable`, `xcf.filter.remove` and singleton reorder transactions.
 The new role is exact v22 `gimp:semi-flatten` / `0:0`, implicit RGB nonlinear
-F32/650 or F64/750, 8x6 native/canvas bounds at the origin, finite unit RGBA,
+F32/650 or F64/750, equal checked positive native/canvas bounds at the origin, finite unit RGBA,
 and its separate `xcf22-gimp-semi-flatten-literal-v1` epoch. Source import
 requires the authored visible/unit-opacity layer, enabled filter and declared
 zero selection mask. Complete current/staged proof and the existing paid
@@ -2135,7 +2135,7 @@ alpha words, and simultaneous colour/activation edits use one transaction.
 The existing readonly `layer.setProps` adapter for layer name, visibility and
 finite unit opacity also applies after complete proof, including simultaneous
 supported fields. The direct compound metadata API and Move remain closed.
-Removal uses a separate narrow derived-current empty RGB F32/F64 8x6 role;
+Removal uses a separate derived-current empty RGB F32/F64 origin role;
 it does not enroll new empty original-XCF sources. Save/reopen here means the
 native `.pcraft` continuation. Exact GIMP conversion/rounding, PhotoCraft
 numerical results and all regression/native/visual/performance checks remain
@@ -2145,7 +2145,7 @@ deferred; the GIMP research captures do not complete those gates.
 Owned Hue-Chroma continuation uses the existing filter transactions under
 `xcf22-gegl-hue-chroma-lch-float-v1`. The first role is exact v22
 `gegl:hue-chroma` / `0:0`, implicit RGB nonlinear F32/650 or F64/750, native and
-canvas 8x6 bounds at the origin, finite unit native RGBA and the separate
+canvas checked positive equal bounds at the origin, finite unit native RGBA and the separate
 singleton Replace source/current policy. Exactly three unique stored arguments
 use `Number.Float32Bits`: `hue` [-180,180], `chroma` [-100,100] and `lightness`
 [-100,100]. Preserve raw words and stored order; no gdouble/F64 wire alias or
@@ -2168,9 +2168,9 @@ All new regression and native/widget workflows remain UNRUN and uncompiled.
 
 
 Owned Vibrance continuation uses the existing filter wire commands under exact
-`gegl:vibrance` / `0:0` and `xcf22-gegl-vibrance-linear-lch-float-v1`. The initial
+`gegl:vibrance` / `0:0` and `xcf22-gegl-vibrance-linear-lch-float-v1`. The
 actual Point role is implicit RGB nonlinear F32/650 or F64/750, original ICC
-absent, 8x6 native/canvas at the origin and finite unit native RGBA. Its separate
+absent, equal checked positive native/canvas bounds at the origin and finite unit native RGBA. Its separate
 source/current Replace policy and full current/staged proof remain mandatory.
 Exactly two unique arguments use `Number.Float32Bits`: `vibrance` [-100,100] and
 `saturation` [0,10]. Saturation is a scale with default1, without percent or F64
@@ -2190,3 +2190,21 @@ Old HDR-native/U8 inputs are refusal references, not unit-source evidence. Stron
 F32 and smaller F64 author/fresh producer differences, scalar rounding, profile,
 padding and Babl conversion limits remain HOLD; no tolerance or numerical
 acceptance follows from public graph equality. New workflows remain UNRUN.
+
+Semi-Flatten, Hue-Chroma and Vibrance now share an explicit checked positive
+origin geometry policy: canvas and native drawable bounds must match exactly.
+Controls remain candidates only; complete engine CURRENT and staged proof is
+required for every supported transaction, including disabled and exact no-op
+requests. The source/depth/profile/unit-input/raw-policy and singleton restrictions
+remain unchanged. Their full-canvas zero masks may retain multiple valid tiles;
+proof includes default words and all physical padding, under existing stored-tile
+and actual byte/work limits. Larger removed-empty native `.pcraft` continuation
+uses a separate CURRENT role and does not identify a new original XCF source.
+
+All actual caller limits remain binding, including the existing 2^32 registered
+transaction work ceiling. Structural dimension admission is not a promise that a
+large current-plus-staged operation fits that allowance. Source Surfaces remain
+fully retained; output bands do not imply lazy input or a process memory bound.
+This geometry expansion adds no offsets, profiles, Gray, precision, HDR-native
+input or filter-stack permission, and changes no numerical acceptance tolerance.
+PhotoCraft tests and runtime/native/widget/performance validation remain deferred.

@@ -682,7 +682,11 @@ pub(crate) fn qualify_selection_mask_with_interrupt(state: &photocraft_doc::XcfS
 fn qualify_selection_mask_controlled(state: &photocraft_doc::XcfState, node: &FilterNode, owner: photocraft_doc::LayerId, extent: Rect, control: &Interrupt<'_>) -> Result<()> {
     if crate::gimp_semi_flatten::claims(node) {
         let [mask] = state.filter_masks.as_slice() else { return Err(CompositionError::Unsupported("Semi-Flatten singleton selection mask")); };
-        if extent != Rect::new(0, 0, 8, 6) || !matches!(mask.surface.format().sample, photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64) {
+        crate::gimp_semi_flatten::positive_origin(extent)?;
+        if state.items.len() != 2 { return Err(CompositionError::Unsupported("Semi-Flatten owner mask cardinality")); }
+        let owner_extent = state.items.iter().find(|item| item.item == photocraft_doc::item_identity::ItemRef::Layer(owner))
+            .and_then(|item| item.raster_bounds);
+        if owner_extent != Some(extent) || !matches!(mask.surface.format().sample, photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64) {
             return Err(CompositionError::Unsupported("Semi-Flatten exact selection mask precision"));
         }
         return crate::gimp_semi_flatten::qualify_mask(state, node, owner, mask.surface.format().sample, control);

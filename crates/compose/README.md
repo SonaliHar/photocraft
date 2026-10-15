@@ -953,7 +953,7 @@ acceptance remain open.
 
 The separate `gimp:semi-flatten` route uses epoch
 `xcf22-gimp-semi-flatten-literal-v1`: implicit RGB nonlinear F32/650 or F64/750,
-an 8x6 canvas and native drawable at the origin, finite unit RGBA, and the exact
+equal checked positive canvas/native bounds at the origin, finite unit RGBA, and the exact
 v22 singleton Replace envelope. Original source admission requires a visible
 unit-opacity layer and enabled filter. Current validation also supports the
 existing readonly name/visibility/unit-opacity adapter (including combined
@@ -971,7 +971,7 @@ full physical zero selection-mask scan have independent resource admission.
 Present raw filter policy words remain opaque provenance under this separate
 unit Replace policy; they are not enum aliases or borrowed Box rules.
 
-Removal has a narrow derived-current empty RGB nonlinear F32/F64 8x6 role,
+Removal has a separate derived-current empty RGB nonlinear F32/F64 origin role,
 including native/default/unit/profile and actual current-owner proof. It grants
 no new empty original-XCF identity. Generic native point writeback and graph
 adapters do not acquire Semi-Flatten authority. Exact producer Babl conversion,
@@ -982,7 +982,7 @@ native workflows and visual/performance acceptance remain deferred.
 
 Owned `gegl:hue-chroma` uses the separate
 `xcf22-gegl-hue-chroma-lch-float-v1` epoch for implicit RGB nonlinear F32/650
-and F64/750, an 8x6 native drawable/canvas at the origin, and finite unit native
+and F64/750, equal checked positive native/canvas bounds at the origin, and finite unit native
 RGBA. Source admission requires the observed enabled singleton Replace62/unit
 envelope, visible unit-opacity layer, three present opaque raw policy words,
 and a declared same-depth numeric-zero selection mask. The stored parameters
@@ -1017,9 +1017,9 @@ and all numerical, native workflow, visual and performance acceptance are deferr
 
 
 Owned `gegl:vibrance` / `0:0` uses the separate
-`xcf22-gegl-vibrance-linear-lch-float-v1` epoch. Its first source/current role is
-implicit RGB nonlinear F32/650 or F64/750, an 8x6 native drawable/canvas at the
-origin, original ICC absent and finite unit native RGBA. Source admission keeps
+`xcf22-gegl-vibrance-linear-lch-float-v1` epoch. Its source/current role is
+implicit RGB nonlinear F32/650 or F64/750, equal checked positive native/canvas
+bounds at the origin, original ICC absent and finite unit native RGBA. Source admission keeps
 the observed enabled singleton Replace62/unit/clip0/region0/no-auxiliary envelope,
 visible unit-opacity layer, same-depth numeric-zero selection mask, and three
 present opaque raw policy words under its own compatibility policy. Stored
@@ -1052,3 +1052,29 @@ captures match. Old 9x7 HDR-native and U8 files remain separate refusal referenc
 ICC date bytes, profile/diagnostic roles, precision and physical default/padding
 identity remain HOLD. All regression, numerical, native workflow, visual and
 performance acceptance remains deferred.
+
+The three pure point families above now admit checked positive dimensions with
+equal canvas and drawable bounds at the origin. Their compatibility epochs,
+equations, profile/depth/unit-native restrictions and singleton Replace policies
+remain authoritative. This explicit geometry policy extends the implementation
+beyond the independently authored 8x6 controls; those observations do not prove
+all producer geometries. Offsets, off-canvas content, assigned profiles, Gray,
+other precisions, HDR native input and multiple filters remain outside these roles.
+
+Source visitors retain the exact plane contract of at most 64 complete pixels
+per callback, checked descriptor/byte totals and cumulative work. Mask validation
+checks the same-depth full-canvas default and every stored physical tile,
+including edge padding; tile coordinates must intersect the checked canvas.
+The existing 4096 stored-mask-tile cap does not cap the logical canvas tile grid.
+Zero-valued retained tiles are neither pruned nor exempted from proof. Removal
+uses a separately qualified empty CURRENT role of the same origin geometry,
+without inventing original-source provenance.
+
+Existing side/pixel, actual resident/native/index/cache and caller work limits
+all apply together. Bounded output bands do not make decoded source custody
+lazy: complete source Surfaces and their owners remain retained. Registered
+filter transactions still use their existing 2^32 work ceiling, including both
+current and staged proofs; large operations may refuse within structural bounds.
+No guaranteed maximum image size, large-image edit throughput or native_large
+qualification follows from admitting larger geometry. All numerical, workflow,
+visual, cancellation-timing and performance acceptance remains deferred.

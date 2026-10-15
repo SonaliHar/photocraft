@@ -43,8 +43,9 @@ pub(super) fn prepare<B: PlanBudget>(
     let float_current =
         matches!((doc.depth, doc.source_color_context.as_ref().map(|s| s.source_precision)), (SampleType::F32, Some(650)) | (SampleType::F64, Some(750)));
     if float_current {
-        if doc.size != photocraft_doc::Size::new(8, 6)
-            || extent != Rect::new(0, 0, 8, 6)
+        crate::gimp_semi_flatten::positive_origin(extent).map_err(BackedNormalError::Color)?;
+        if doc.size != extent.size()
+            || extent != doc.bounds()
             || doc.mode != ColorMode::Rgb
             || stored != SampleEncoding::NonlinearProfile
             || format != doc.pixel_format()
