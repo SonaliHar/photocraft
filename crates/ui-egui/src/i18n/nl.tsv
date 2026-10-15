@@ -3935,3 +3935,61 @@ curves	Smooth	Vloeiend maken
 # View › Guides › right-click a guide
 	Edit Selected Guides	Geselecteerde hulplijnen bewerken
 	Clear Selected Guides	Geselecteerde hulplijnen wissen
+# Dutch (nl) catalog. Columns, separated by a TAB:  context <TAB> source <TAB> translation
+# (the format is described in ja.tsv).
+#
+# Clean-room: every entry was written from the plain meaning of the English label using ordinary
+# Dutch computing vocabulary (laag, selectie, masker, aanpassingslaag, penseel, verloop ...). No
+# proprietary localisation resource, string table or product UI was consulted or copied; add
+# entries the same way. Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...)
+# stay as they are; the trailing "…" of dialog commands is kept. UI text addresses the user
+# informally ("je") and uses sentence case.
+
+# Guide layout dialog
+
+# Select and Mask dialog labels
+	Convert document's colors to the working space	Kleuren van document omzetten naar de werkruimte
+
+# Layers-panel trash confirmation
+
+	Use the embedded profile (instead of the working space)	Het ingesloten profiel gebruiken (in plaats van de werkruimte)
+	Import Brushes… (.abr)	Penselen importeren… (.abr)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+
+# Painting symmetry presets.
+
+
+# Shared Layer Style color picker
+# File Info ▸ Camera Data (read-only EXIF fields; "Make" is the camera maker, not the verb).
+# Shared panel docking
+# Select and Mask view modes (#1754)
+# Select and Mask Refine Edge Brush (#2972)
+
+# Color Sampler (added with the i18n coverage repair)
+# Print dialog (#2697)
+# Counted status messages and labels (#3454; adapted from PR #3821)
+# View › Guides › New Guide… › Color
+
+# Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
+
+# Actions panel: set folders, dialog toggle, Insert Stop
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	Alt-tekst voor het beeld
+	Ask anything	Vraag wat u maar wilt
+	Ask in any language	Vraag in elke gewenste taal
+	Assistant	Assistent
+	Best for: a step up in quality, still light	Het best voor: een stapje hoger in kwaliteit, nog altijd licht
+	Best for: balanced everyday and technical work	Het best voor: evenwichtig dagelijks en technisch werk
+	Best for: everyday help on the lightest machines	Het best voor: alledaagse hulp op de lichtste machines
+	Best for: near-flagship answers at MoE speed	Het best voor: bijna topprestaties op MoE-snelheid
+	Best for: the deepest reasoning this family has	Het best voor: het diepste redeneervermogen van deze familie
+	Export recipe	Exportrecept
+	Layers and masks strategy	Strategie voor lagen en maskers
+	Menu path finder	Menupad-vinder
+	Retouch plan	Retucheplan
+	The flaws to fix — spots, wrinkles, objects, noise	De gebreken om te fixen — vlekken, rimpels, objecten, ruis
+	What the image is made of, and what should change	Waaruit het beeld bestaat en wat er moet veranderen
+	The image and who the text is for	Het beeld en voor wie de tekst is
+	What you want to do, in your own words	Wat je wilt doen, in eigen woorden
+	Where the file goes and what matters (size, quality, format)	Waar het bestand heen gaat en wat telt (grootte, kwaliteit, formaat)

@@ -3661,3 +3661,140 @@ curves	Smooth	Làm mượt
 # View › Guides › right-click a guide
 	Edit Selected Guides	Sửa đường căn đã chọn
 	Clear Selected Guides	Xóa đường căn đã chọn
+# Vietnamese (vi) catalog. Columns, separated by a TAB:  context <TAB> source <TAB> translation
+#
+#   context  empty                a plain UI string; `source` is the English text in the code
+#            @id                  a command id (e.g. file.saveAs): wins over the English text for
+#                                 that menu item, so one id can read differently from its twin
+#            @plural              `source` is "one|other" (English forms); the translation lists the
+#                                 language's forms separated by "|" (see `plural` in i18n/mod.rs)
+#            anything else        a disambiguating context passed to `tr_ctx`
+#   escapes  \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns.
+#   lines starting with # and blank lines are ignored.
+#
+# Status: complete. Every source key is translated (`complete_menus`), and the coverage test in
+# xtask/src/i18n_coverage.rs keeps it that way: new `tl!` strings need a Vietnamese row.
+#
+# Clean-room: every entry was written from the plain meaning of the English label using ordinary
+# Vietnamese computing and image-editing vocabulary. No proprietary localisation resource, string
+# table or product UI was consulted or copied; add entries the same way. Product and technology
+# names (PhotoCraft, ArtCraft, OpenType, RGB, CMYK, Lab, PSD, PNG, JPEG, WebP, OpenEXR, AVIF …)
+# stay as they are; the trailing "…" of dialog commands is kept. Plural rule: one form
+# (`plural_none` in i18n/mod.rs).
+
+
+# Phase 3.1 — top-level menus, File menu, Edit menu
+
+
+# Phase 3.2 — Image menu, Layer menu
+
+
+# Phase 3.3 — Type menu, Select menu
+
+
+# Phase 3.4 — Filter menu
+
+
+# Phase 3.5 — View menu
+
+
+# Phase 3.6 — Window menu, Help menu
+
+
+# Phase 3.7 — tool names + Tool Options bar
+
+
+# Phase 3.8 — Layers + Properties + History panel internals
+
+
+# Phase 3.9 — Character + Paragraph + Glyphs typography panels
+
+
+# Phase 3.10 — Brushes + Brush Settings panel internals
+
+# Phase 3.11 — Gradients + Patterns + Swatches asset panels
+
+# Phase 3.12 — Channels + Paths + Navigator + Info + Histogram
+
+# Mixer Brush (required for every registered non-English language)
+
+# Camera Raw labels (required for every registered non-English language)
+
+# Phase 4.1 — Preferences dialog
+
+
+# Phase 4.2 — general dialogs, status/progress, warnings/errors
+	Use the embedded profile (instead of the working space)	Dùng hồ sơ nhúng (thay vì không gian làm việc)
+	Convert document's colors to the working space	Chuyển màu tài liệu sang không gian làm việc
+
+# Phase 4.3 — Keyboard Shortcuts and Menus editor
+
+# Phase 4.4 — Color Settings dialog
+
+# Phase 4.5 — Preset Manager + Export/Import Presets
+
+# Phase 4.6 — Camera Raw chrome + Light/Color basics (tone, WB, presence)
+
+# Phase 4.7 — Camera Raw Curve + Color Mixer
+
+# Phase 4.8 — Camera Raw Color Grading + Detail
+
+# Phase 4.10 — Camera Raw Effects (Texture/Clarity/Dehaze + Vignetting + Grain)
+
+# Phase 4.13 — New Document + Home + Image Size
+
+# Phase 4.14 — Export / Save for Web / TIFF options
+
+# Phase 4.15 — Warp / Liquify / Perspective / Puppet
+
+# Gap Batch 4 — Layer Comps / Styles leftovers / Color Range / plurals / command palette
+
+# Visual QA finalization
+
+# Post-rebase gate-required strings
+
+# Phase 5.1 — tools / paths / assets / filters / layers
+
+# Phase 5.2 — dialogs / chrome / preferences / file UI / engine labels
+
+# Phase 5.3A — print / proof
+
+# Phase 5.3B — specialist workflows
+
+# Phase 5.4 — Help / About / credits
+
+# Phase 5.5 — final stable-key completion
+
+# Phase 5.6 — upstream kys first-launch import prompt
+
+# Upstream sync after rebase onto main
+
+# Labels added on main since this catalog was written (maintainer pass)
+
+# Rows from @tonguyenducmanh's Vietnamese catalog (#3453), merged here so the catalog is complete
+
+# Remaining labels (maintainer pass)
+
+# Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
+
+# Actions panel: set folders, dialog toggle, Insert Stop
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	Văn bản thay thế cho ảnh
+	Ask anything	Hỏi bất cứ điều gì
+	Ask in any language	Hỏi bằng bất kỳ ngôn ngữ nào
+	Assistant	Trợ lý
+	Best for: a step up in quality, still light	Phù hợp nhất: chất lượng nhích thêm một bậc, vẫn nhẹ
+	Best for: balanced everyday and technical work	Phù hợp nhất: cân bằng việc hằng ngày và việc kỹ thuật
+	Best for: everyday help on the lightest machines	Phù hợp nhất: trợ giúp hằng ngày trên những máy nhẹ nhất
+	Best for: near-flagship answers at MoE speed	Phù hợp nhất: câu trả lời gần hàng đầu với tốc độ MoE
+	Best for: the deepest reasoning this family has	Phù hợp nhất: suy luận sâu nhất mà dòng này có
+	Export recipe	Công thức xuất
+	Layers and masks strategy	Chiến lược lớp và mặt nạ
+	Menu path finder	Tìm đường dẫn menu
+	Retouch plan	Kế hoạch retouch
+	The flaws to fix — spots, wrinkles, objects, noise	Khiếm khuyết cần sửa — đốm, nếp nhăn, vật thể, nhiễu
+	What the image is made of, and what should change	Ảnh gồm những gì và cần thay đổi gì
+	The image and who the text is for	Ảnh và văn bản dành cho ai
+	What you want to do, in your own words	Điều bạn muốn làm, bằng lời của bạn
+	Where the file goes and what matters (size, quality, format)	Tệp đi đâu và điều gì quan trọng (kích thước, chất lượng, định dạng)

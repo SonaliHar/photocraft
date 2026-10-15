@@ -3905,3 +3905,38 @@ cameraData	Lens	Lens
 # View › Guides › right-click a guide
 	Edit Selected Guides	Seçili Kılavuzları Düzenle
 	Clear Selected Guides	Seçili Kılavuzları Temizle
+# Turkish (tr) catalog. Columns, separated by a TAB:  context <TAB> source <TAB> translation
+# (the format is described in ja.tsv).
+#
+# Clean-room: every entry was written from the plain meaning of the English label using ordinary
+# Turkish computing vocabulary (katman, seçim, maske, ayar katmanı, fırça, degrade ...). No
+# proprietary localisation resource, string table or product UI was consulted or copied; add
+# entries the same way. Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...)
+# stay as they are; the trailing "…" of dialog commands is kept.
+#
+	Convert document's colors to the working space	Belgenin renklerini çalışma alanına dönüştürün
+	Use the embedded profile (instead of the working space)	Gömülü profili kullanın (çalışma alanı yerine)
+
+# Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
+
+# Actions panel: set folders, dialog toggle, Insert Stop
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	Görüntü için alternatif metin
+	Ask anything	Her şeyi sorun
+	Ask in any language	Herhangi bir dilde sorun
+	Assistant	Yardımcı
+	Best for: a step up in quality, still light	Şunun için en iyisi: kalitede bir adım yukarı, yine de hafif
+	Best for: balanced everyday and technical work	Şunun için en iyisi: dengeli günlük ve teknik iş
+	Best for: everyday help on the lightest machines	Şunun için en iyisi: en hafif makinelerde günlük yardım
+	Best for: near-flagship answers at MoE speed	Şunun için en iyisi: MoE hızıyla amiral gemisine yakın yanıtlar
+	Best for: the deepest reasoning this family has	Şunun için en iyisi: bu ailenin en derin akıl yürütmesi
+	Export recipe	Dışa aktarma tarifı
+	Layers and masks strategy	Katman ve maske stratejisi
+	Menu path finder	Menü yolu bulucu
+	Retouch plan	Rötuş planı
+	The flaws to fix — spots, wrinkles, objects, noise	Düzeltilmesi gereken kusurlar — lekeler, kırışıklıklar, nesneler, gürültü
+	What the image is made of, and what should change	Görüntü neden oluşuyor ve ne değişmeli
+	The image and who the text is for	Görüntü ve metin kime yönelik
+	What you want to do, in your own words	Ne yapmak istediğiniz, kendi kelimelerinizle
+	Where the file goes and what matters (size, quality, format)	Dosya nereye gidiyor ve ne önemli (boyut, kalite, biçim)

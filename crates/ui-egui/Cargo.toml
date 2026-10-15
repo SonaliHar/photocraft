@@ -38,11 +38,18 @@ log = { workspace = true }
 base64 = "0.22"
 # Inflating the translation catalogs, stored deflated (build.rs); already linked through photocraft-io.
 flate2 = { workspace = true }
+# The Arabic catalog is parsed into visual order (i18n/bidi.rs): a UAX #9 pass for
+# egui's run-by-run, left-to-right text layout.
+unicode-bidi = "0.3.18"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }
 # Safe native UI-language APIs (Windows/macOS); no subprocess or web dependency.
 sys-locale = "=0.3.2"
+# Craft AI's loopback HTTP client (`craft_ai`): talks to a local model runtime on 127.0.0.1 and
+# downloads model files. Native-only — its TLS stack does not build for wasm32, and the web build
+# shows a note instead of the pane.
+ureq = { version = "2", features = ["json"] }
 
 # Installed RAM for the GPU memory budget (`gpu_canvas::physical_memory`): the safe binding the
 # desktop app already uses, pinned to the same version.

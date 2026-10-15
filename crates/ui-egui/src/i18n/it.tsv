@@ -4296,3 +4296,114 @@ shape	Appearance	Aspetto
 # View › Guides › right-click a guide
 	Edit Selected Guides	Modifica guide selezionate
 	Clear Selected Guides	Cancella guide selezionate
+# Italian (it) catalog. Columns, separated by a TAB:  context <TAB> source <TAB> translation
+#
+#   context  empty                a plain UI string; `source` is the English text in the code
+#            @plural              `source` is `one|other` (English forms); the translation lists
+#                                 the language's forms separated by `|` (see `plural` in i18n/mod.rs)
+#   escapes  \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns.
+#   lines starting with # and blank lines are ignored.
+#
+# Clean-room: every entry was written from the plain meaning of the English label using ordinary
+# Italian computing vocabulary (livello, pennello, selezione, quadro ...). No proprietary localisation
+# resource, string table or product UI was consulted or copied; add entries the same way.
+# Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...) stay in Latin
+# letters; the trailing … of dialog commands is kept.
+
+# Guide layout dialog
+
+# Select and Mask dialog labels
+
+# Dialogs and panels
+	Convert document's colors to the working space	Converti colori documento in spazio di lavoro
+
+# Layers-panel trash confirmation
+
+	Use the embedded profile (instead of the working space)	Usa profilo incorporato (invece dello spazio di lavoro)
+
+# Tool names, brush and style option tables
+
+# Templates with placeholders
+
+# Preferences (labels are generated from the setting names)
+
+# Added with the rebase onto the dock / brush picker work
+
+# Strings added to the UI after this catalog was first written (rebase onto main, 2026-10).
+# Gradient Editor window, opened from the options bar's gradient swatch.
+
+# Tool, filter, warp-style, path, layer-comp and metadata names that fell outside the `tl!` test.
+# Italian follows the tool wording used above (Strumento X).
+
+# Command-id override: under Edit > Purge a bare Annulla reads as an action, not the history.
+# Rendering mode and recovery
+
+
+
+
+
+# Camera Raw: contextual controls and window title
+
+# Strings added on main after this catalog was written (2026-10).
+
+
+# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+# Layer Style > Blending Options (Advanced Blending)
+
+# Swatches panel
+
+# Shared screen eyedropper and text Color Picker (#1128).
+
+# Fill dialog, layer style contours and Image Size
+
+
+# Layer colour labels.
+
+# Pattern Stamp tool
+
+# Painting symmetry presets.
+
+# Eyedropper Sample Size and Sample (#1649).
+
+# Color Picker warnings
+
+
+# Shared Layer Style color picker
+# File Info ▸ Camera Data (read-only EXIF fields; "Make" is the camera maker, not the verb).
+# Shared panel docking
+# Select and Mask view modes (#1754)
+# Select and Mask Refine Edge Brush (#2972)
+
+# Color Sampler (added with the i18n coverage repair)
+# Print dialog (#2697)
+# Counted status messages and labels (#3454; adapted from PR #3821)
+# View › Guides › New Guide… › Color
+
+# Dynamic labels (filter and adjustment parameters, Camera Raw, panels, dialogs) that the
+# other catalogs already translate
+
+# Path, channel, layer style, status and System Info labels the Czech catalog added
+
+# Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
+
+# Actions panel: set folders, dialog toggle, Insert Stop
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	Testo alternativo dell’immagine
+	Ask anything	Chiedi qualsiasi cosa
+	Ask in any language	Chiedi in qualsiasi lingua
+	Assistant	Assistente
+	Best for: a step up in quality, still light	Ideale per: un gradino di qualità in più, ancora leggero
+	Best for: balanced everyday and technical work	Ideale per: equilibrare il quotidiano e il tecnico
+	Best for: everyday help on the lightest machines	Ideale per: l'aiuto quotidiano sulle macchine più leggere
+	Best for: near-flagship answers at MoE speed	Ideale per: risposte quasi di punta alla velocità MoE
+	Best for: the deepest reasoning this family has	Ideale per: il ragionamento più profondo di questa famiglia
+	Export recipe	Ricetta di esportazione
+	Layers and masks strategy	Strategia di livelli e maschere
+	Menu path finder	Cerca nei menu
+	Retouch plan	Piano di ritocco
+	The flaws to fix — spots, wrinkles, objects, noise	I difetti da correggere — macchie, rughe, oggetti, rumore
+	What the image is made of, and what should change	Di che è fatta l’immagine e cosa deve cambiare
+	The image and who the text is for	L’immagine e per chi è il testo
+	What you want to do, in your own words	Cosa vuoi fare, a parole tue
+	Where the file goes and what matters (size, quality, format)	Dove va il file e cosa conta (dimensione, qualità, formato)

@@ -3353,3 +3353,91 @@ curves	Smooth	매끄럽게
 # View › Guides › right-click a guide
 	Edit Selected Guides	선택한 안내선 편집
 	Clear Selected Guides	선택한 안내선 지우기
+# Korean (ko) catalog. UTF-8: context<TAB>English source<TAB>translation.
+# Empty context: plain UI text; @id: command ID; @plural: one|other source
+# with one Korean form. Other contexts disambiguate English meanings.
+# Preserve {name} placeholders, trailing ellipses and column escapes.
+# Original translations from the meaning of PhotoCraft's English labels.
+# No proprietary translation resources were consulted or extracted.
+# Licensed MIT OR Apache-2.0. See LICENSE-translations.txt and ATTRIBUTION.md.
+# Product names and technology names retain their spelling.
+
+# Guide layout dialog
+
+# Select and Mask dialog labels
+	Convert document's colors to the working space	문서 색상을 작업 색상 공간으로 변환
+
+# Layers-panel trash confirmation
+
+	Use the embedded profile (instead of the working space)	포함된 프로파일 사용(작업 색상 공간 대신)
+	Import Brushes… (.abr)	브러시 가져오기… (.abr)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+
+# Labels added on main before the Korean/live-switching split.
+
+# Warp grid presets merged on main in #388.
+
+# Type layer thumbnails (#598)
+
+# UI scale steps (#611)
+
+
+
+
+# Additional generated filter labels and Photoshop-aligned UI terminology.
+
+
+# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+
+# Swatches panel
+# Layer Style > Blending Options (Advanced Blending)
+
+# Shared screen eyedropper and text Color Picker (#1128).
+
+# Fill dialog, layer style contours and Image Size
+
+
+# Layer colour labels.
+
+# Pattern Stamp tool
+
+# Painting symmetry presets.
+
+# Eyedropper Sample Size and Sample (#1649).
+
+# Color Picker warnings
+
+
+# Shared Layer Style color picker
+# File Info ▸ Camera Data (read-only EXIF fields; "Make" is the camera maker, not the verb).
+# Shared panel docking
+# Select and Mask view modes (#1754)
+# Select and Mask Refine Edge Brush (#2972)
+
+# Color Sampler (added with the i18n coverage repair)
+# Print dialog (#2697)
+# View › Guides › New Guide… › Color
+
+# Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
+
+# Actions panel: set folders, dialog toggle, Insert Stop
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	이미지 대체 텍스트
+	Ask anything	무엇이든 물어보기
+	Ask in any language	어느 언어로든 물어보세요
+	Assistant	어시스턴트
+	Best for: a step up in quality, still light	이런 용도에 최적: 한 단계 나은 품질, 여전히 가벼움
+	Best for: balanced everyday and technical work	이런 용도에 최적: 일상과 기술 작업의 균형
+	Best for: everyday help on the lightest machines	이런 용도에 최적: 가장 가벼운 컴퓨터에서의 일상적인 도움
+	Best for: near-flagship answers at MoE speed	이런 용도에 최적: MoE 속도로 기함급에 가까운 답변
+	Best for: the deepest reasoning this family has	이런 용도에 최적: 이 패밀리에서 가장 깊은 추론
+	Export recipe	내보내기 요령
+	Layers and masks strategy	레이어와 마스크 전략
+	Menu path finder	메뉴 경로 찾기
+	Retouch plan	보정 계획
+	The flaws to fix — spots, wrinkles, objects, noise	고칠 결함 — 반점, 주름, 사물, 노이즈
+	What the image is made of, and what should change	이미지의 구성과 바꿔야 할 것
+	The image and who the text is for	이미지와 텍스트를 읽을 사람
+	What you want to do, in your own words	하고 싶은 일을 직접 쓰기
+	Where the file goes and what matters (size, quality, format)	파일의 행선지와 중요점(크기·품질·형식)

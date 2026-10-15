@@ -3874,3 +3874,183 @@ curves	Smooth	Згладити
 # View › Guides › right-click a guide
 	Edit Selected Guides	Редагувати вибрані напрямні
 	Clear Selected Guides	Очистити вибрані напрямні
+# Ukrainian (uk) catalog. UTF-8: context<TAB>English source<TAB>translation.
+# Context: empty = plain label; @id = command id; @plural = English one|other;
+# other values disambiguate labels (for example cameraRaw and fontWeight).
+# Integer plural forms: one|few|many (1, 21; 2–4, 22–24; 0, 5–19).
+# Rule: https://www.unicode.org/cldr/charts/48/supplemental/language_plural_rules.html#uk
+# Preserve {name} placeholders, shortcut names and trailing dialog ellipses.
+# Original translations from the meaning of PhotoCraft's English source keys.
+# No proprietary translation resources were used.
+# Licensed MIT OR Apache-2.0. See LICENSE-translations.txt and ATTRIBUTION.md.
+
+# Menus
+
+# Guide layout dialog
+
+
+# File
+
+# Edit
+
+# Image
+
+# Layer
+
+# Type
+
+# Select
+# Select and Mask dialog labels
+
+# Filter
+
+# View
+
+# Window
+
+# Help
+
+# Tools and options bar
+
+# Panels, dialogs and common widgets
+
+# Preferences dialog
+
+# Document and canvas status bar
+
+# Layers panel
+
+# Channels panel
+
+# Color picker and swatches
+
+# Filters and adjustments dialogs
+
+# Camera Raw and lens dialogs
+	Convert document's colors to the working space	Перетворити кольори документа в робочий простір
+	Use the embedded profile (instead of the working space)	Використати вбудований профіль (замість робочого простору)
+
+# Adjustments panel
+
+# History panel
+
+# Navigator panel
+
+# Brush Settings panel
+
+# Tool presets
+
+# Paragraph and character panels
+
+# Glyphs panel
+
+# Paths panel
+
+# Clone Source panel
+
+# Timeline panel
+
+# Info panel
+
+# Layer Comps panel
+
+# Analysis and variables
+
+# Automate
+
+# Color Settings dialog
+
+# Themes
+
+# Workspaces
+
+# New Document dialog
+
+# Placeholders, tooltips, status and keyboard hints
+
+# Transform / warp overlays
+
+# Vanishing Point
+
+# Misc dialog strings
+
+# Blend modes
+
+# Saved views and other bits
+
+# Plurals
+
+# Remaining menu strings (second pass)
+
+# tl! literals (third pass)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+
+# Preference dialog: generated setting labels and dropdown choices
+# Rendering mode and recovery
+# Camera Raw: contextual controls and window title
+
+
+
+
+
+
+# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+
+# Swatches panel
+# Layer Style > Blending Options (Advanced Blending)
+
+# Shared screen eyedropper and text Color Picker (#1128).
+
+# Fill dialog, layer style contours and Image Size
+
+
+
+# Layer colour labels.
+
+# Pattern Stamp tool
+
+# Additional shell controls, dynamic dialog fields and command labels.
+
+# Layers-panel trash confirmation
+
+	Import Brushes… (.abr)	Імпортувати пензлі… (.abr)
+
+# Native macOS application menu.
+
+# Painting symmetry presets.
+
+
+# Shared Layer Style color picker
+# File Info ▸ Camera Data (read-only EXIF fields; "Make" is the camera maker, not the verb).
+# Shared panel docking
+# Select and Mask view modes (#1754)
+# Select and Mask Refine Edge Brush (#2972)
+
+# Color Sampler (added with the i18n coverage repair)
+# Print dialog (#2697)
+# Counted status messages and labels (#3454; adapted from PR #3821)
+# View › Guides › New Guide… › Color
+
+# Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
+
+# Actions panel: set folders, dialog toggle, Insert Stop
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	Альтернативний текст зображення
+	Ask anything	Питайте про що завгодно
+	Ask in any language	Питайте будь-якою мовою
+	Assistant	Асистент
+	Best for: a step up in quality, still light	Найкращий для: якість на сходинку вище, досі легкий
+	Best for: balanced everyday and technical work	Найкращий для: балансу повсякденного й технічного
+	Best for: everyday help on the lightest machines	Найкращий для: повсякменної допомоги на найлегших машинах
+	Best for: near-flagship answers at MoE speed	Найкращий для: відповідей майже флагманського рівня зі швидкістю MoE
+	Best for: the deepest reasoning this family has	Найкращий для: найглибшого міркування в цьому сімействі
+	Export recipe	Рецепт експорту
+	Layers and masks strategy	Стратегія шарів і масок
+	Menu path finder	Пошук шляху в меню
+	Retouch plan	План ретушування
+	The flaws to fix — spots, wrinkles, objects, noise	Вади, які треба виправити — плями, зморшки, обʼєкти, шум
+	What the image is made of, and what should change	З чого складається зображення і що має змінитися
+	The image and who the text is for	Зображення і для кого цей текст
+	What you want to do, in your own words	Що ви хочете зробити, своїми словами
+	Where the file goes and what matters (size, quality, format)	Куди йде файл і що важливо (розмір, якість, формат)

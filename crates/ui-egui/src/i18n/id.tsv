@@ -3166,3 +3166,92 @@ curves	Smooth	Haluskan
 # View › Guides › right-click a guide
 	Edit Selected Guides	Edit Panduan Terpilih
 	Clear Selected Guides	Hapus Panduan Terpilih
+# Indonesian (id) catalog. Columns, separated by a TAB:  context <TAB> source <TAB> translation
+#
+#   context  empty                a plain UI string; `source` is the English text in the code
+#            @plural              `source` is "one|other" (English forms); the translation lists
+#                                 the language's forms separated by "|" (see `plural` in i18n/mod.rs)
+#   escapes  \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns.
+#   lines starting with # and blank lines are ignored.
+#
+# Clean-room: every entry was written from the plain meaning of the English label using ordinary
+# Indonesian computing vocabulary (layer, kuas, seleksi, kanvas ...). No proprietary localisation
+# resource, string table or product UI was consulted or copied; add entries the same way.
+# Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...) stay in Latin
+# letters; the trailing "…" of dialog commands is kept.
+
+# Guide layout dialog
+
+# Select and Mask dialog labels
+	Convert document's colors to the working space	Konversi warna dokumen ke working space
+
+# Layers-panel trash confirmation
+
+	Use the embedded profile (instead of the working space)	Pakai profil tertanam (bukan working space)
+	Import Brushes… (.abr)	Impor Kuas… (.abr)
+# Gradient Editor window, opened from the options bar's gradient swatch.
+
+# Labels added on main after this catalog (depth labels, Wayland drop, profiles, Camera Raw, Patch tool, rendering mode)
+
+# Warp grid presets (#388)
+
+
+
+
+
+
+# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+
+# Swatches panel
+# Layer Style > Blending Options (Advanced Blending)
+
+# Shared screen eyedropper and text Color Picker (#1128).
+
+# Fill dialog, layer style contours and Image Size
+
+
+
+# Layer colour labels.
+
+# Pattern Stamp tool
+
+# Painting symmetry presets.
+
+# Eyedropper Sample Size and Sample (#1649).
+
+# Color Picker warnings
+
+
+# Shared Layer Style color picker
+# File Info ▸ Camera Data (read-only EXIF fields; "Make" is the camera maker, not the verb).
+# Shared panel docking
+# Select and Mask view modes (#1754)
+# Select and Mask Refine Edge Brush (#2972)
+
+# Color Sampler (added with the i18n coverage repair)
+# Print dialog (#2697)
+# View › Guides › New Guide… › Color
+
+# Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
+
+# Actions panel: set folders, dialog toggle, Insert Stop
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	Teks alternatif untuk gambar
+	Ask anything	Tanya apa saja
+	Ask in any language	Tanya dalam bahasa apa pun
+	Assistant	Asisten
+	Best for: a step up in quality, still light	Terbaik untuk: kualitas satu tingkat lebih tinggi, tetap ringan
+	Best for: balanced everyday and technical work	Terbaik untuk: kerja harian dan teknis yang seimbang
+	Best for: everyday help on the lightest machines	Terbaik untuk: bantuan harian di mesin paling ringan
+	Best for: near-flagship answers at MoE speed	Terbaik untuk: jawaban nyaris kelas atas dengan kecepatan MoE
+	Best for: the deepest reasoning this family has	Terbaik untuk: penalaran terdalam di keluarga ini
+	Export recipe	Resep ekspor
+	Layers and masks strategy	Strategi lapisan dan masker
+	Menu path finder	Pencari jalur menu
+	Retouch plan	Rencana retas
+	The flaws to fix — spots, wrinkles, objects, noise	Cacat yang akan diperbaiki — noda, kerutan, objek, derau
+	What the image is made of, and what should change	Dari apa gambar tersusun, dan apa yang harus berubah
+	The image and who the text is for	Gambar dan untuk siapa teks itu
+	What you want to do, in your own words	Apa yang ingin Anda lakukan, dengan kata-kata Anda sendiri
+	Where the file goes and what matters (size, quality, format)	Ke mana berkas pergi dan apa yang penting (ukuran, kualitas, format)

@@ -60,6 +60,7 @@ pub mod comps_ui;
 pub mod control;
 pub mod corner_radius;
 pub mod credits;
+pub mod craft_ai;
 pub mod crop_mode;
 pub mod crop_overlay;
 pub mod crop_presets;
@@ -1942,6 +1943,7 @@ impl eframe::App for PhotocraftApp {
             canvas::document_area(self, ui);
         });
         panels::properties_window(self, &ctx);
+        panels::craft_ai_window(self, &ctx);
         brush_panel::window(self, &ctx);
         preset_panels::windows(self, &ctx);
         gradient_ui::editor_window(self, &ctx);

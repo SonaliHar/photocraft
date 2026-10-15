@@ -2790,3 +2790,91 @@ curves	Smooth	平滑
 # View › Guides › right-click a guide
 	Edit Selected Guides	编辑所选参考线
 	Clear Selected Guides	清除所选参考线
+# Simplified Chinese (zh-hans) catalog. UTF-8, TAB-separated columns:
+# context <TAB> English source <TAB> Simplified Chinese translation
+#
+# Empty context: plain UI text. @id: stable command ID. @plural: one|other source
+# with a single Chinese form. Other contexts disambiguate the English meaning.
+# Escapes inside columns: \n, \t, \\. Keep {name} placeholders and trailing ….
+#
+# Original translations from the meaning of PhotoCraft's English source keys,
+# including the current menus, panels and platform-specific shortcut templates.
+# No proprietary translation resources were consulted or extracted.
+# Licensed MIT OR Apache-2.0, as the code.
+# Product and technology names retain their spelling. See docs/localization-zh-hans.md.
+
+# Guide layout dialog
+
+# Select and Mask dialog labels
+	Convert document's colors to the working space	将文档颜色转换到工作空间
+
+# Layers-panel trash confirmation
+
+	Use the embedded profile (instead of the working space)	使用嵌入的配置文件（替代工作空间）
+	Import Brushes… (.abr)	导入画笔… (.abr)
+# Camera Raw: contextual controls and window title
+# Current shell labels and shortcut templates. Keep {key} platform-dependent.
+# Gradient Editor window, opened from the options bar's gradient swatch.
+# Layer navigation, copy transforms and cancellable opening (labels added on main since this catalog).
+# Rendering mode and recovery
+
+
+
+
+
+
+# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+
+# Swatches panel
+# Layer Style > Blending Options (Advanced Blending)
+
+# Shared screen eyedropper and text Color Picker (#1128).
+
+# Fill dialog, layer style contours and Image Size
+
+
+
+# Layer colour labels.
+
+# Pattern Stamp tool
+
+# Painting symmetry presets.
+
+# Eyedropper Sample Size and Sample (#1649).
+
+# Color Picker warnings
+
+
+# Shared Layer Style color picker
+# File Info ▸ Camera Data (read-only EXIF fields; "Make" is the camera maker, not the verb).
+# Shared panel docking
+# Select and Mask view modes (#1754)
+# Select and Mask Refine Edge Brush (#2972)
+
+# Color Sampler (added with the i18n coverage repair)
+# Print dialog (#2697)
+# View › Guides › New Guide… › Color
+
+# Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
+
+# Actions panel: set folders, dialog toggle, Insert Stop
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	图像替代文字
+	Ask anything	什么都可以问
+	Ask in any language	可以用任何语言提问
+	Assistant	助手
+	Best for: a step up in quality, still light	最适合：品质再上一阶，依然轻巧
+	Best for: balanced everyday and technical work	最适合：日常与技术工作并重
+	Best for: everyday help on the lightest machines	最适合：在最轻量的机器上处理日常事务
+	Best for: near-flagship answers at MoE speed	最适合：以 MoE 速度给出接近旗舰级的回答
+	Best for: the deepest reasoning this family has	最适合：这个系列中最深入的推理
+	Export recipe	导出方案
+	Layers and masks strategy	图层与蒙版策略
+	Menu path finder	菜单路径查找
+	Retouch plan	修饰方案
+	The flaws to fix — spots, wrinkles, objects, noise	要修复的瑕疵——斑点、皱纹、杂物、噪点
+	What the image is made of, and what should change	图像由什么构成、哪些要变
+	The image and who the text is for	图像与这段文字的读者
+	What you want to do, in your own words	想做什么，用自己的话
+	Where the file goes and what matters (size, quality, format)	文件去向与要点（大小、质量、格式）

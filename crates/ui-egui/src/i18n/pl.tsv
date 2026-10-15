@@ -3773,3 +3773,103 @@ curves	Smooth	Wygładź
 # View › Guides › right-click a guide
 	Edit Selected Guides	Edytuj zaznaczone prowadnice
 	Clear Selected Guides	Usuń zaznaczone prowadnice
+# Polish (pl) catalog. Columns, separated by a TAB:  context <TAB> source <TAB> translation
+#
+#   context  empty                a plain UI string; `source` is the English text in the code
+#            @id                  a command id (e.g. file.saveAs): wins over the English text for
+#                                 that menu item, so one id can read differently from its twin
+#            @plural              `source` is "one|other" (English forms); the translation lists the
+#                                 Polish forms "one|few|many" (1 | 2–4 except 12–14 | 0, 5+), see
+#                                 `plural` in i18n/mod.rs
+#            anything else        a disambiguating context passed to `tr_ctx`
+#   escapes  \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns.
+#   lines starting with # and blank lines are ignored.
+#
+# Clean-room: every entry was written from the plain meaning of the English label using ordinary
+# Polish image-editing vocabulary (warstwa, maska, zaznaczenie, pędzel, rozmycie, krycie ...). No
+# proprietary localisation resource, string table or product UI was consulted or copied; add
+# entries the same way. Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...)
+# stay in Latin letters; the trailing "…" of dialog commands is kept.
+# Conventions: menus are nouns (Plik, Edycja, Obraz ...), commands are infinitives (Otwórz…,
+# Zapisz jako…), sentence case as in the English source. Quotes: „…”.
+
+# Guide layout dialog
+
+# Select and Mask dialog labels
+
+# Dialogs and panels
+	Convert document's colors to the working space	Konwertuj kolory dokumentu na przestrzeń roboczą
+
+# Layers-panel trash confirmation
+
+	Use the embedded profile (instead of the working space)	Użyj osadzonego profilu (zamiast przestrzeni roboczej)
+
+# Tool names, brush and style option tables
+
+# Templates with placeholders
+
+# Preferences (labels are generated from the setting names)
+
+# Added with the dock / brush picker work
+	Import Brushes… (.abr)	Importuj pędzle… (.abr)
+
+# Strings added to the UI later
+# Gradient Editor window, opened from the options bar's gradient swatch.
+
+# Tool, filter, warp-style, path, layer-comp and metadata names
+
+# Command-id overrides
+
+# Rendering mode and recovery
+
+# About ▸ Contributors / Models (credits)
+
+# Text Color Picker and screen sampling
+
+# Swatches panel
+
+# Fill dialog, layer style contours and Image Size
+
+# Layer colour labels.
+# Pattern Stamp tool
+
+# Painting symmetry presets.
+
+# Eyedropper Sample Size and Sample (#1649).
+
+# Color Picker warnings
+
+
+# Shared Layer Style color picker
+# File Info ▸ Camera Data (read-only EXIF fields; "Make" is the camera maker, not the verb).
+# Shared panel docking
+# Select and Mask view modes (#1754)
+# Select and Mask Refine Edge Brush (#2972)
+
+# Color Sampler (added with the i18n coverage repair)
+# Print dialog (#2697)
+# View › Guides › New Guide… › Color
+
+# Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
+
+# Actions panel: set folders, dialog toggle, Insert Stop
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	Tekst alternatywny obrazu
+	Ask anything	Zapytaj o cokolwiek
+	Ask in any language	Pytaj w dowolnym języku
+	Assistant	Asystent
+	Best for: a step up in quality, still light	Najlepszy do: o stopień lepszej jakości, wciąż lekki
+	Best for: balanced everyday and technical work	Najlepszy do: równowagi codziennej i technicznej pracy
+	Best for: everyday help on the lightest machines	Najlepszy do: codziennej pomocy na najlżejszych maszynach
+	Best for: near-flagship answers at MoE speed	Najlepszy do: odpowiedzi blisko flagowych z prędkością MoE
+	Best for: the deepest reasoning this family has	Najlepszy do: najgłębszego rozumowania w tej rodzinie
+	Export recipe	Recepta eksportu
+	Layers and masks strategy	Strategia warstw i masek
+	Menu path finder	Wyszukiwarka ścieżek menu
+	Retouch plan	Plan retuszu
+	The flaws to fix — spots, wrinkles, objects, noise	Wady do poprawienia — plamy, zmarszczki, obiekty, szum
+	What the image is made of, and what should change	Z czego składa się obraz i co ma się zmienić
+	The image and who the text is for	Obraz i dla kogo jest ten tekst
+	What you want to do, in your own words	Co chcesz zrobić, własnymi słowami
+	Where the file goes and what matters (size, quality, format)	Dokąd idzie plik i co ważne (rozmiar, jakość, format)

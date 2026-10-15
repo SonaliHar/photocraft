@@ -4094,3 +4094,70 @@ cameraRaw	Yellow	Sárga
 # View › Guides › right-click a guide
 	Edit Selected Guides	Kijelölt segédvonalak szerkesztése
 	Clear Selected Guides	Kijelölt segédvonalak törlése
+# Hungarian (hu) catalog. Columns, separated by a TAB:  context <TAB> source <TAB> translation
+#
+#   context  empty                a plain UI string; `source` is the English text in the code
+#            @id                  a command id (e.g. file.saveAs): wins over the English text for
+#                                 that menu item, so one id can read differently from its twin
+#            @plural              `source` is "one|other" (English forms); the translation lists the
+#                                 language's forms separated by "|" (see `plural` in i18n/mod.rs)
+#            anything else        a disambiguating context passed to `tr_ctx`
+#   escapes  \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns.
+#   lines starting with # and blank lines are ignored.
+#
+# Clean-room: every entry was written from the plain meaning of the English label using ordinary
+# Hungarian image-editing vocabulary (réteg, maszk, kijelölés ...). No proprietary localisation
+# resource, string table or product UI was consulted or copied; add entries the same way.
+# Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...) stay in Latin
+# letters; the trailing "…" of dialog commands is kept. Plural rule: a count is followed by the
+# singular noun in Hungarian, so every @plural entry has a single form.
+
+# Plural messages and command id overrides
+
+# Menus: File, Edit, Image
+
+# Menus: Layer, Select
+
+# Menus: Type, Filter, View, Window; UI and engine commands
+
+# Tools, brushes and the options bar
+
+# Layers, masks, layer styles and blend modes
+
+# Panels
+
+# Adjustments and filters
+
+# Camera Raw and camera data
+
+# Dialogs, preferences and file formats
+	Convert document's colors to the working space	A dokumentum színeinek átalakítása a munkaszíntérbe
+	Use the embedded profile (instead of the working space)	A beágyazott profil használata (a munkaszíntér helyett)
+
+# Status bar, messages and other labels
+
+# Labels kept for parity with the other catalogs
+
+# Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
+
+# Actions panel: set folders, dialog toggle, Insert Stop
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	Alt-szöveg a képhez
+	Ask anything	Kérdezzen bármit
+	Ask in any language	Kérdezzen bármely nyelven
+	Assistant	Asszisztens
+	Best for: a step up in quality, still light	Erre való a leginkább: egy fokkal jobb minőség, még mindig könnyű
+	Best for: balanced everyday and technical work	Erre való a leginkább: hétköznapi és szakmai munka egyensúlyban
+	Best for: everyday help on the lightest machines	Erre való a leginkább: hétköznapi segítség a legkönnyebb gépeken
+	Best for: near-flagship answers at MoE speed	Erre való a leginkább: zászlóshajó közeli válaszok MoE-sebességgel
+	Best for: the deepest reasoning this family has	Erre való a leginkább: a legmélyebb gondolkodás ebben a családban
+	Export recipe	Exportrecept
+	Layers and masks strategy	Réteg- és maszkstratégia
+	Menu path finder	Menüútvonal-kereső
+	Retouch plan	Retusálási terv
+	The flaws to fix — spots, wrinkles, objects, noise	A javítandó hibák — foltok, ráncok, objektumok, zaj
+	What the image is made of, and what should change	Miből áll a kép, és mi változzon
+	The image and who the text is for	A kép és kinek szól a szöveg
+	What you want to do, in your own words	Amit tenni szeretne, saját szavaival
+	Where the file goes and what matters (size, quality, format)	Hová megy a fájl és mi számít (méret, minőség, formátum)
