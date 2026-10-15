@@ -97,7 +97,10 @@ fn plan(state: &XcfState, resolution: &photocraft_doc::PhysicalResolution, offse
             add(&mut scanned, text.len())?;
         }
     }
-    // Page objects are in the base. Each item includes composition/locks/bounds;
+    // Page objects are in the base. Each item includes composition/locks/bounds
+    // and the existing mask object (owner reference, bounds, offset, flags and
+    // fixed 18-byte outsideFloat64Bits). The 96/12/64 item envelope also covers
+    // the closed MaskItem, which has no composition; no pixel payload is read.
     // each set includes its own page object, with independently paged members.
     // No limit multiplication is guessed: members is the actual sum above.
     let mut nodes = 128usize;
@@ -177,7 +180,13 @@ impl<'a> Facts<'a> {
 pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> Result<OwnedFilterInspectReply> {
     let (offset, limit) = pagination(params, control)?;
     let owner = session.active().ok_or(EngineError::NoDocument)?.doc.accounted().ok_or(BackingError::Unsupported)?;
-    owner.validate_plain_xcf_inspection(control)?;
+    if crate::accounted_native_open::is_current_analytic_geometry_candidate(owner.document(), control)? {
+        // This metadata-only branch requires the actual paid storage gate. A
+        // malformed matching geometry never retries the broader plain gate.
+        owner.validate_masked_analytic_normal_storage(control)?;
+    } else {
+        owner.validate_plain_xcf_inspection(control)?;
+    }
     let doc = owner.document();
     let state = doc.xcf_state.as_ref().ok_or(BackingError::Integrity)?;
     if !doc.paths.is_empty() {
@@ -200,3 +209,7 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
 #[cfg(test)]
 #[path = "accounted_plain_xcf_inspect_tests.rs"]
 mod tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "accounted_masked_analytic_inspect_tests.rs"]
+mod masked_analytic_tests;

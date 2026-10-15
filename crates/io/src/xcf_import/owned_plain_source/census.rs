@@ -86,13 +86,13 @@ impl Walk<'_, '_> {
     }
 }
 pub(super) fn measure(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &Interrupt<'_>) -> Result<Census, IoError> {
-    measure_inner(doc, budget, control, false)
+    measure_inner(doc, budget, control, false, false)
 }
 /// Only the sealed staged Threshold Alpha producer may call this sibling seam.
 /// Its original source/Surface receipts remain mandatory; this measures storage.
 pub(in crate::xcf_import) fn measure_threshold(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &Interrupt<'_>) -> Result<Census, IoError> {
     threshold_shape(doc)?;
-    measure_inner(doc, budget, control, true)
+    measure_inner(doc, budget, control, true, false)
 }
 /// Closed Histogram Threshold source promotion only; not a caller source proof.
 pub(in crate::xcf_import) fn measure_histogram_threshold(
@@ -103,13 +103,13 @@ pub(in crate::xcf_import) fn measure_histogram_threshold(
     control.check().map_err(|_| IoError::Cancelled)?;
     budget.consume_work(32, "histogram threshold census shape").map_err(accounting_error)?;
     histogram_threshold_shape(doc)?;
-    measure_inner(doc, budget, control, true)
+    measure_inner(doc, budget, control, true, false)
 }
 /// Storage-only shared walker, reached after the sealed Point shape gate.
 pub(in crate::xcf_import) fn measure_point_storage(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &Interrupt<'_>) -> Result<Census, IoError> {
-    measure_inner(doc, budget, control, true)
+    measure_inner(doc, budget, control, true, false)
 }
-fn measure_inner(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &Interrupt<'_>, threshold: bool) -> Result<Census, IoError> {
+fn measure_inner(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &Interrupt<'_>, threshold: bool, geometry: bool) -> Result<Census, IoError> {
     use photocraft_doc::{WorkingProfileInterpretation, physical_resolution::PhysicalUnit, xcf_editing::ItemSetRule};
     control.check().map_err(|_| IoError::Cancelled)?;
     let Document {
@@ -238,7 +238,7 @@ fn measure_inner(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &
     w.vector(&doc.guides.colors)?;
     for layer in &doc.layers {
         w.visit()?;
-        if layer.mask.is_some()
+        if layer.mask.is_some() && !geometry
             || layer.vector_mask.is_some()
             || layer.indexed_source.is_some()
             || !layer.effects.items.is_empty()
@@ -250,6 +250,10 @@ fn measure_inner(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &
         let LayerContent::Raster(surface) = &layer.content else {
             return Err(invalid("owned plain layer requires genuine staged Surface"));
         };
+        if geometry { if let Some(mask)=&layer.mask {
+            w.visit()?;
+            w.add(size_of::<LayerMask>().checked_add(size_of::<Surface>()+128).and_then(|n|mask.surface.tile_count().checked_mul(256).and_then(|m|n.checked_add(m))).and_then(|n|mask.surface.default_bytes().len().checked_mul(2).and_then(|d|n.checked_add(d))).ok_or_else(||invalid("geometry mask metadata"))?)?;
+        }}
         w.string(&layer.name)?;
         w.vector(&layer.effects.items)?;
         if let Some(v) = &layer.effects.psd_raw {
@@ -303,7 +307,7 @@ fn measure_inner(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &
     for item in &state.items {
         w.string(&item.name)?;
         w.composition(&item.composition)?;
-        if !threshold && item.mask.is_some() {
+        if !threshold && !geometry && item.mask.is_some() {
             return Err(invalid("owned plain item mask unsupported"));
         }
     }
@@ -535,4 +539,10 @@ fn threshold_storage(state: &photocraft_doc::XcfState, w: &mut Walk<'_, '_>, con
         {}
     }
     Ok(())
+}
+
+/// Only the sealed original analytic geometry promotion reaches this walker.
+pub(in crate::xcf_import) fn measure_analytic_geometry(doc:&Document,budget:&photocraft_xcf::Budget<'_>,control:&Interrupt<'_>)->Result<Census,IoError>{
+ if doc.layers.len()!=2 || doc.xcf_state.as_ref().is_none_or(|s|s.items.len()!=3 || !s.filter_stacks.is_empty() || !s.filter_masks.is_empty()) || doc.layers.iter().filter(|l|l.mask.is_some()).count()!=1 {return Err(invalid("analytic geometry census shape"));}
+ measure_inner(doc,budget,control,false,true)
 }

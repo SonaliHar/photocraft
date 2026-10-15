@@ -64,6 +64,9 @@ pub(super) trait MappingPlane: ExactParsedPlane + Sized {
     /// Only an already admitted original Point domain can select this paid path.
     fn requires_budgeted_point_preparation(_point_domain: bool) -> bool { false }
     fn requires_budgeted_neighborhood_preparation(_domain: bool) -> bool { false }
+    fn effective_profile(file: &XcfFile<Self>, space: photocraft_cms::ColorSpace, ce: photocraft_cms::xcf_color::Encoding, _: &Interrupt<'_>, _: Option<&photocraft_xcf::Budget<'_>>) -> Result<photocraft_cms::Profile, IoError> {
+        photocraft_cms::xcf_color::effective_profile(if file.icc.is_empty() {None}else{Some(&file.icc)},space,ce).map_err(|e|IoError::Unsupported(format!("XCF source profile/encoding: {e}")))
+    }
     fn admissions(file: &XcfFile<Self>, ctl: &Interrupt<'_>, budget: Option<&photocraft_xcf::Budget<'_>>) -> Result<admission::AdmissionDomains, IoError>;
     fn late_admissions(file: &XcfFile<Self>) -> admission::LateAdmissionDomains;
     fn eager_original(&self) -> Result<&Plane, IoError>;
@@ -73,6 +76,11 @@ pub(super) trait MappingPlane: ExactParsedPlane + Sized {
     /// already checked source eligibility; this hook grants no additional domain.
     /// A staged implementation moves its retained Surface without materializing
     /// a Plane or changing sample words/defaults. Original storage fees stay live.
+    /// Ordinary local-zero mask placement, independently validated by the mapper.
+    fn current_layer_mask_surface(&mut self, rect: Rect, budget: &mut Budget<'_>, ctl: &Interrupt<'_>) -> Result<Surface, IoError> {
+        let p = self.eager_original()?;
+        surface(budget, p, rect, ColorMode::Grayscale, false, &p.bytes, ctl)
+    }
     fn current_filter_mask_surface(&mut self, rect: Rect, budget: &mut Budget<'_>, ctl: &Interrupt<'_>) -> Result<Surface, IoError>;
     fn current_owner(
         owner: Drawable<Self>,

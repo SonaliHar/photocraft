@@ -29,15 +29,10 @@ pub(super) fn validate<P: MappingPlane>(owner: &Drawable<P>, source_sample: Samp
     if actual.width != mask.width || actual.height != mask.height || actual.channels != 1 || actual.sample != sample {
         return Err(unsupported(mask, "layer-mask native descriptor mismatch"));
     }
-    // Ordinary layer masks currently use the eager native adapter. A different
-    // provider must supply its own exact checked storage route, never a dummy Plane.
-    let native = plane.eager_original()?;
-    let expected = usize::try_from(mask.width)
-        .ok()
-        .and_then(|w| usize::try_from(mask.height).ok().and_then(|h| w.checked_mul(h)))
-        .and_then(|n| n.checked_mul(sample.source_bytes()))
+    let expected = u64::from(mask.width).checked_mul(u64::from(mask.height))
+        .and_then(|n| n.checked_mul(sample.source_bytes() as u64))
         .ok_or_else(|| unsupported(mask, "layer-mask native length overflow"))?;
-    if native.width != actual.width || native.height != actual.height || native.channels != 1 || native.sample != sample || native.bytes.len() != expected {
+    if plane.native_byte_len() != Some(expected) {
         return Err(unsupported(mask, "layer-mask native length/format mismatch"));
     }
     let world_bounds = bounds(owner)?;

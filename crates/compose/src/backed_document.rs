@@ -152,9 +152,20 @@ impl<'a> PreparedBackedDocument<'a> {
         {
             return Err(BackedNormalError::Unsupported("initial backed Document explicit ICC RGB/Gray slice"));
         }
-        let ordinary = if plain.is_some() { false } else { qualify_ordinary_mask(doc, control)? };
+        let analytic_geometry = if crate::backed_analytic_geometry::is_candidate(doc, control).map_err(BackedNormalError::Backing)? {
+            Some(crate::backed_analytic_geometry::qualify(
+                retained_source.ok_or(BackedNormalError::Unsupported("analytic geometry requires accounted source ownership"))?,
+                profile,
+                control,
+            )?)
+        } else {
+            None
+        };
+        let ordinary = if analytic_geometry.is_some() { true } else if plain.is_some() { false } else { qualify_ordinary_mask(doc, control)? };
         let stored = doc.sample_encoding.ok_or(BackedNormalError::Unsupported("backed Document requires explicit current encoding"))?;
         let composite = if let Some(composite) = plain {
+            composite
+        } else if let Some(composite) = analytic_geometry {
             composite
         } else if ordinary {
             GimpSpace::LinearRgb

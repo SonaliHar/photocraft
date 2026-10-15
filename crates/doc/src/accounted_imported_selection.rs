@@ -3,6 +3,23 @@
 //! enclosing codec guard continues to own all shared immutable payloads.
 use super::*;
 use crate::{xcf_editing::*, xcf_provenance::*, xcf_resources::*, xcf_state::*};
+#[path = "accounted_imported_masked_normal.rs"]
+mod masked_normal;
+pub(super) fn validate_masked_normal(doc: &Document, quota: &BackingQuota, c: &ReadControl<'_>) -> Result<(), BackingError> {
+    masked_normal::validate(doc, quota, c)
+}
+pub(super) fn copy_masked_normal(doc: &Document, quota: &BackingQuota, c: &ReadControl<'_>) -> Result<Document, BackingError> {
+    masked_normal::validate(doc, quota, c)?;
+    let mut copied = copy_document(doc, c)?;
+    for (source, destination) in doc.layers.iter().zip(&mut copied.layers) {
+        c.check(std::mem::size_of::<crate::LayerMask>() as u64)?;
+        // Only the immutable Arc handle is cloned. Its original physical map,
+        // default and native tiles remain paid by the retained codec guard.
+        destination.mask = source.mask.clone();
+    }
+    c.check(1)?;
+    Ok(copied)
+}
 
 pub(super) fn applies(doc: &Document) -> bool {
     doc.xcf_state.is_some() || doc.source_color_context.is_some()

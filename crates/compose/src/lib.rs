@@ -19,6 +19,7 @@
 pub mod adjust;
 pub mod advanced;
 pub mod backed_document;
+pub(crate) mod backed_analytic_geometry;
 pub mod backed_normal;
 pub mod backed_normal_stack;
 pub mod backed_neighborhood_context;

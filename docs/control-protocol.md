@@ -1515,3 +1515,14 @@ identity at the input extent, with no kernel, pixel CMS conversion or halo.
 The existing `xcf.filter.enable` command supplies undo/redo and native continuation.
 Source XCF remains read-only; native continuation uses `.pcraft`.
 This implementation has compilation checks only; behavioral acceptance is pending.
+
+The explicit keep-current owned XCF route also selects a separate assigned-ICC
+geometry family for the existing nonlinear Normal/Union source intersection.
+It retains two native RGB/Gray layers at U16/U32/F32/F64, offsets, opacity and
+one ordinary layer mask. The original float/integer geometry epochs remain
+distinct. Strict source and native handoffs validate the current assigned
+profile and complete canvas before publication; canvas profile parsing uses
+the same quota and cancellation/work control. Native title changes preserve
+the shared mask and source owners. Paid `xcf.inspect` exposes the three items
+and mask metadata; generic layer/filter/selection edits remain outside this
+closed family. Broader operators, encodings and behavioral acceptance remain pending.

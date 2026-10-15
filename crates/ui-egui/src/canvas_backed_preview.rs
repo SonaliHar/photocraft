@@ -1,5 +1,7 @@
 //! Explicit bounded backed CPU preview; no resident fallback or source materialization.
 use super::display_image;
+#[path = "canvas_backed_analytic_profile.rs"]
+mod analytic_profile;
 use photocraft_doc::{Document, LayerContent, WorkingProfileInterpretation};
 use photocraft_raster::{
     Interrupt,
@@ -48,12 +50,19 @@ fn backed_display_image_with_owner(
             .map_err(|_| BackingError::Work)
         };
         let control = ReadControl { interrupt, work: &charge };
+        let analytic_profile = if let Some(owner) = owner
+            && photocraft_engine::accounted_native_open::is_current_analytic_geometry_candidate(doc, &control).map_err(|e| e.to_string())?
+        {
+            Some(analytic_profile::prepare(owner, &control)?)
+        } else {
+            None
+        };
         // Explicit runtime classes use an actual nonlinear builtin basis. Their
         // compositors validate current effective bytes and the implicit marker;
         // no source epoch or supplied profile name substitutes for that check.
         // The ordinary ICC parser and its existing envelope stay unchanged.
         let mut profile_lease = None;
-        let parsed = if builtin_basis {
+        let parsed = if builtin_basis || analytic_profile.is_some() {
             None
         } else {
             if bytes.len() > 64 << 10 {
@@ -81,7 +90,9 @@ fn backed_display_image_with_owner(
             photocraft_cms::xcf_color::qualify_analytic_profile(&profile).map_err(|e| e.to_string())?;
             Some(profile)
         };
-        let profile = if let Some(profile) = &parsed {
+        let profile = if let Some(profile) = &analytic_profile {
+            &profile.profile
+        } else if let Some(profile) = &parsed {
             profile
         } else {
             control.check(1).map_err(|e| e.to_string())?;
@@ -188,6 +199,10 @@ mod residual_point_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_neighborhood_tests.rs"]
 mod neighborhood_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "canvas_backed_analytic_geometry_tests.rs"]
+mod analytic_geometry_tests;
 
 #[cfg(test)]
 fn backed_display_image(

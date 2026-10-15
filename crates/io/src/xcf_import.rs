@@ -65,6 +65,9 @@ mod owned_histogram_threshold_source;
 #[path = "xcf_import/owned_point_source.rs"]
 mod owned_point_source;
 pub use owned_point_source::OwnedPointXcfImport;
+#[path="xcf_import/owned_analytic_geometry_source.rs"]
+mod owned_analytic_geometry_source;
+pub use owned_analytic_geometry_source::OwnedAnalyticGeometryXcfImport;
 pub use owned_histogram_threshold_source::OwnedHistogramThresholdXcfImport;
 pub use owned_threshold_source::{OwnedThresholdAlphaXcfImport, import_owned_staged_threshold_alpha_bytes_in_quota};
 
@@ -615,7 +618,7 @@ fn qualified_known_normal_profile(file: &XcfFile) -> bool {
     }
 }
 
-pub(crate) fn qualified_analytic_normal_profile(file: &XcfFile) -> bool {
+pub(crate) fn qualified_analytic_normal_profile<P>(file: &XcfFile<P>) -> bool {
     if file.version != 12
         || !matches!(
             (file.precision, file.sample, file.encoding),
@@ -636,7 +639,7 @@ pub(crate) fn qualified_analytic_normal_profile(file: &XcfFile) -> bool {
 }
 
 /// Semantic profile qualification after the caller validates its source epoch.
-pub(crate) fn qualified_analytic_normal_icc(file: &XcfFile) -> bool {
+pub(crate) fn qualified_analytic_normal_icc<P>(file: &XcfFile<P>) -> bool {
     if !(132..=65536).contains(&file.icc.len()) {
         return false;
     }
@@ -1710,8 +1713,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         Encoding::NonlinearProfile => photocraft_cms::xcf_color::Encoding::NonlinearProfile,
         Encoding::Perceptual => photocraft_cms::xcf_color::Encoding::Perceptual,
     };
-    let effective = photocraft_cms::xcf_color::effective_profile(if file.icc.is_empty() { None } else { Some(&file.icc) }, space, ce)
-        .map_err(|e| IoError::Unsupported(format!("XCF source profile/encoding: {e}")))?;
+    let effective = P::effective_profile(&file, space, ce, ctl, preparation.as_ref().map(|(budget,_)|*budget))?;
     let mode = match file.model {
         Model::Rgb => ColorMode::Rgb,
         Model::Gray => ColorMode::Grayscale,
@@ -1997,10 +1999,10 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
             Some(ImportCompositing { blend_encoding: working(d, d.blend_space)?, composite_encoding: working(d, d.composite_space)?, pass_through: pass })
         };
         warnings.extend(d.diagnostics.iter().cloned());
-        if let Some(m) = &d.mask {
-            let p = m.plane.as_ref().ok_or_else(|| unsupported(m, "missing mask plane"))?.eager_original()?;
-            let r = mask_placement.ok_or_else(|| unsupported(m, "missing validated layer-mask placement"))?.world_bounds;
-            let s = surface(&mut budget, p, r, ColorMode::Grayscale, false, &p.bytes, ctl)?;
+        if let Some(m) = &mut d.mask {
+            let r = mask_placement.ok_or_else(|| IoError::Unsupported("missing validated layer-mask placement".into()))?.world_bounds;
+            let p = m.plane.as_mut().ok_or_else(|| IoError::Unsupported("missing mask plane".into()))?;
+            let s = p.current_layer_mask_surface(r, &mut budget, ctl)?;
             budget.charge(std::mem::size_of::<Surface>() + 128)?;
             l.mask = Some(LayerMask { surface: std::sync::Arc::new(s), enabled: d.mask_enabled, linked: true, density: 1.0, feather: 0.0 });
         }

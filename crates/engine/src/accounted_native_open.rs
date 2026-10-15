@@ -16,6 +16,7 @@ enum NativeHandoff {
     CurrentThresholdAlpha,
     CurrentHistogramThreshold,
     CurrentPoint,
+    CurrentAnalyticGeometry,
 }
 
 /// Allocation-free route hint selecting the stricter current Point endpoint.
@@ -70,6 +71,26 @@ pub fn is_current_point_candidate(document: &photocraft_doc::Document, control: 
                         | "gegl:pixelize"
                         | "gegl:gaussian-blur"
                 ) {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// Exact retained geometry epochs select the stricter current endpoint only.
+/// No class, source/profile authority or locator access follows from this hint;
+/// even malformed matching metadata must undergo the full typed validation.
+pub fn is_current_analytic_geometry_candidate(document: &photocraft_doc::Document, control: &ReadControl<'_>) -> std::result::Result<bool, BackingError> {
+    use photocraft_doc::import_compositing::{XCF12_ANALYTIC_INTEGER_NORMAL_MASK_GEOMETRY_EPOCH, XCF12_ANALYTIC_NORMAL_MASK_GEOMETRY_EPOCH};
+    if let Some(state) = &document.xcf_state {
+        for item in &state.items {
+            control.check(1)?;
+            if let Some(policy) = &item.composition {
+                control.check(policy.compatibility_epoch.len() as u64)?;
+                if matches!(policy.compatibility_epoch.as_str(), XCF12_ANALYTIC_NORMAL_MASK_GEOMETRY_EPOCH | XCF12_ANALYTIC_INTEGER_NORMAL_MASK_GEOMETRY_EPOCH)
+                {
                     return Ok(true);
                 }
             }
@@ -264,6 +285,19 @@ impl Session {
         self.add_owned_native_with(archive, label, authorized_native_path, control, NativeHandoff::CurrentPoint)
     }
 
+    /// Strict assigned-ICC analytic masked geometry continuation. Native current
+    /// storage is genuinely retained; profile and full canvas validation precede
+    /// history/view/tab publication. Saved XCF locators remain inert evidence.
+    pub fn add_owned_native_analytic_geometry_archive(
+        &mut self,
+        archive: OwnedDocumentArchive,
+        label: &str,
+        authorized_native_path: Option<&str>,
+        control: &ReadControl<'_>,
+    ) -> Result<usize> {
+        self.add_owned_native_with(archive, label, authorized_native_path, control, NativeHandoff::CurrentAnalyticGeometry)
+    }
+
     fn add_owned_native_with(
         &mut self,
         archive: OwnedDocumentArchive,
@@ -288,17 +322,19 @@ impl Session {
                 return Err(EngineError::Other("an open document already owns this accounted identity".into()));
             }
         }
-        if matches!(handoff, NativeHandoff::Document) && is_current_point_candidate(archive.document(), control)? {
+        if matches!(handoff, NativeHandoff::Document)
+            && (is_current_point_candidate(archive.document(), control)? || is_current_analytic_geometry_candidate(archive.document(), control)?)
+        {
             return Err(BackingError::Unsupported.into());
         }
         let document = match handoff {
-            NativeHandoff::Document => archive.into_accounted_document(control),
+            NativeHandoff::Document | NativeHandoff::CurrentAnalyticGeometry => archive.into_accounted_document(control),
             NativeHandoff::CurrentThresholdAlpha => archive.into_accounted_readonly_threshold_alpha_storage(control),
             NativeHandoff::CurrentHistogramThreshold => archive.into_accounted_readonly_threshold_storage(control),
             NativeHandoff::CurrentPoint => archive.into_accounted_readonly_point_storage(control),
         }
         .map_err(|error| {
-            if matches!(handoff, NativeHandoff::CurrentPoint) {
+            if matches!(handoff, NativeHandoff::CurrentPoint | NativeHandoff::CurrentAnalyticGeometry) {
                 if let photocraft_format::FormatError::Io(io) = &error {
                     if let Some(backing) = io.get_ref().and_then(|source| source.downcast_ref::<BackingError>()) {
                         return EngineError::from(*backing);
@@ -348,6 +384,9 @@ impl Session {
         }
         if let NativeHandoff::CurrentPoint = handoff {
             validate_current_stock_point_storage(&document, control)?;
+        }
+        if let NativeHandoff::CurrentAnalyticGeometry = handoff {
+            crate::accounted_xcf_open::analytic_geometry::validate_current_analytic_geometry_storage(&document, control)?;
         }
         let history_states = self.prefs.get().performance.history_states.max(1) as usize;
         let mut state = DocState::new_accounted(document, None, history_states, control)?;
@@ -409,3 +448,7 @@ mod scalar_point_workflow_tests;
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_neighborhood_workflow_tests.rs"]
 mod neighborhood_workflow_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "accounted_analytic_geometry_workflow_tests.rs"]
+mod analytic_geometry_workflow_tests;

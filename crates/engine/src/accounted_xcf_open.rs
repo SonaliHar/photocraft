@@ -4,6 +4,9 @@ use crate::{DocState, EngineError, Result, Session, source_policy::SourceIdentit
 use photocraft_io::OwnedPlainXcfImport;
 use photocraft_raster::backing::{BackingError, ReadControl};
 
+#[path = "accounted_xcf_open/analytic_geometry.rs"]
+pub(crate) mod analytic_geometry;
+
 struct ImportedModel<'a> {
     document: &'a photocraft_doc::accounted_document::AccountedDocument,
     origin: photocraft_io::ImportOrigin,

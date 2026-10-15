@@ -22,6 +22,8 @@ use legacy_scalar::LegacyScalarFamily;
 #[path = "staged_neighborhood.rs"]
 mod neighborhood;
 use neighborhood::NeighborhoodSourceFamily;
+#[path = "staged_analytic_geometry.rs"]
+mod analytic_geometry;
 
 trait StagePolicy {
     const THRESHOLD_ALPHA: bool;
@@ -35,6 +37,7 @@ trait StagePolicy {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum SelectedStagedFamily {
     Plain,
+    AnalyticGeometry,
     ThresholdAlpha,
     Threshold,
     Point(crate::xcf_filters::PointReplaceFamily),
@@ -48,6 +51,7 @@ impl std::fmt::Debug for SelectedStagedFamily {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Plain => "Plain",
+            Self::AnalyticGeometry => "AnalyticGeometry",
             Self::ThresholdAlpha => "ThresholdAlpha",
             Self::Threshold => "Threshold",
             Self::Point(_) => "Point",
@@ -71,6 +75,7 @@ impl StagePolicy for SourceSelectedPolicy {
     fn family<Q: ExactParsedPlane>(file: &XcfFile<Q>) -> SelectedStagedFamily {
         // Select exactly one old gate, before mapping or mutation. A refusal
         // never retries the other gate. This is not eligibility by name/epoch.
+        if analytic_geometry::hint(file) { return SelectedStagedFamily::AnalyticGeometry; }
         if file.layers.len() == 1 && file.layers.first().is_some_and(|layer| !layer.effects.is_empty()) {
             // This chooses a strict validator only. admissions() must obtain
             // the SAME family from the original whole-file classifier before
@@ -422,8 +427,19 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         P::SOURCE_SELECTED && point_domain
     }
     fn requires_budgeted_neighborhood_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
+    fn effective_profile(file: &XcfFile<Self>, space: photocraft_cms::ColorSpace, ce: photocraft_cms::xcf_color::Encoding, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<photocraft_cms::Profile, IoError> {
+        if P::family(file)==SelectedStagedFamily::AnalyticGeometry {
+            analytic_geometry::effective(file,space,ctl,shared.ok_or_else(||IoError::Unsupported("geometry profile needs accounting".into()))?)
+        }else{
+            photocraft_cms::xcf_color::effective_profile(if file.icc.is_empty(){None}else{Some(&file.icc)},space,ce).map_err(|e|IoError::Unsupported(format!("XCF source profile/encoding: {e}")))
+        }
+    }
     fn admissions(file: &XcfFile<Self>, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<admission::AdmissionDomains, IoError> {
         let family = P::family(file);
+        let geometry = family == SelectedStagedFamily::AnalyticGeometry;
+        if geometry && !analytic_geometry::qualify(file, ctl, shared.ok_or_else(|| IoError::Unsupported("geometry requires persistent source accounting".into()))?)? {
+            return Err(IoError::Unsupported("staged geometry is outside exact original nonlinear Union predicate".into()));
+        }
         let histogram = family == SelectedStagedFamily::Threshold;
         let threshold = family == SelectedStagedFamily::ThresholdAlpha || histogram;
         let point = match family {
@@ -466,7 +482,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             }
             Some(expected)
         } else { None };
-        if point.is_some() || owned_point.is_some() || neighborhood.is_some() {
+        if geometry || point.is_some() || owned_point.is_some() || neighborhood.is_some() {
             // Full original source, precision, geometry, mask flags and unit
             // domains were just checked by the unchanged classifier policy.
         } else if histogram {
@@ -496,6 +512,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         for d in &file.layers {
             ctl.check().map_err(|_| IoError::Cancelled)?;
             if !threshold
+                && !geometry
                 && point.is_none()
                 && owned_point.is_none()
                 && neighborhood.is_none()
@@ -534,6 +551,9 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             validate_drawable_alpha(d, point.is_some(), false, ctl, 0)?;
         }
         let mut domains = admission::AdmissionDomains {
+            analytic_geometry_domain: geometry,
+            normal_mask_domain: geometry,
+            analytic_normal_domain: geometry,
             point_replace_domain: point,
             owned_point_domain: owned_point,
             unpremultiply_domain: matches!(family, SelectedStagedFamily::LegacyScalar(LegacyScalarFamily::Unpremultiply)),
@@ -573,6 +593,44 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     }
     fn retained_source_bytes(&self) -> usize {
         0
+    }
+    fn current_layer_mask_surface(&mut self, rect: Rect, budget: &mut Budget<'_>, ctl: &Interrupt<'_>) -> Result<Surface, IoError> {
+        let d = &self.descriptor;
+        if !P::SOURCE_SELECTED || d.role != PlaneRole::Mask || d.offset != (0,0) || !point_plane(d)
+            || rect.is_empty() || rect.width()!=d.width || rect.height()!=d.height
+            || u64::from(d.width).checked_mul(u64::from(d.height)).is_none_or(|n|n>4096) {
+            return Err(IoError::Unsupported("staged ordinary mask placement".into()));
+        }
+        let format = PixelFormat::new(ColorMode::Grayscale, depth(d.sample), false);
+        let length = usize::try_from(self.native_byte_len().ok_or_else(||IoError::Unsupported("mask native length".into()))?).map_err(|_|IoError::Unsupported("mask length".into()))?;
+        // Both the old local Surface and this world-positioned Surface stay
+        // charged concurrently. Include actual padded tiles, map nodes and
+        // ingestion temporary buffers before constructing either destination.
+        let tiles=rect.tiles().count();
+        let tile_bytes=65536usize.checked_mul(format.bytes_per_pixel()).ok_or_else(||IoError::Unsupported("mask tile bytes".into()))?;
+        let envelope=tiles.checked_mul(tile_bytes.checked_mul(3).and_then(|n|n.checked_add(1024)).ok_or_else(||IoError::Unsupported("mask envelope".into()))?)
+            .and_then(|n|n.checked_add(4096)).ok_or_else(||IoError::Unsupported("mask envelope".into()))?;
+        budget.charge(envelope)?;
+        budget.charge(length.checked_mul(2).and_then(|n|n.checked_add(std::mem::size_of::<Vec<u8>>())).ok_or_else(||IoError::Unsupported("mask capture fee".into()))?)?;
+        let mut bytes=Vec::new();
+        bytes.try_reserve_exact(length).map_err(|_|IoError::Unsupported("mask capture allocation".into()))?;
+        if bytes.capacity()>length.checked_mul(2).ok_or_else(||IoError::Unsupported("mask capture capacity".into()))? {return Err(IoError::Unsupported("mask capture capacity".into()));}
+
+        analytic_geometry::pay(self._token.budget,length as u64)?;
+        for _ in 0..length.div_ceil(65536) { ctl.check().map_err(|_|IoError::Cancelled)?; let n=length.saturating_sub(bytes.len()).min(65536);bytes.resize(bytes.len()+n,0); }
+        let mut cursor=0usize;
+        analytic_geometry::pay(self._token.budget,length as u64)?;
+        self.visit_native(ctl,&mut |block|{
+            let end=cursor.checked_add(block.len()).ok_or_else(||IoError::Unsupported("mask copy overflow".into()))?;
+            bytes.get_mut(cursor..end).ok_or_else(||IoError::Unsupported("mask copy bounds".into()))?.copy_from_slice(block);
+            cursor=end;Ok(())
+        })?;
+        if cursor!=length {return Err(IoError::Unsupported("mask capture incomplete".into()));}
+        let physical=(tiles as u64).checked_mul(tile_bytes as u64).and_then(|n|n.checked_mul(4)).and_then(|n|n.checked_add(length as u64)).ok_or_else(||IoError::Unsupported("mask ingestion work".into()))?;
+        analytic_geometry::pay(self._token.budget,physical)?;
+        let result=Surface::try_from_interleaved_with(format,rect,&bytes,ctl).map_err(|e| if e==photocraft_raster::RasterInputError::Cancelled {IoError::Cancelled}else{IoError::Unsupported(format!("mask world ingestion: {e}"))})?;
+        if result.tile_count()>tiles || result.resident_accounted_bytes().map_err(|_|IoError::Unsupported("mask capacity census".into()))?>envelope as u64 {return Err(IoError::Unsupported("mask actual capacity".into()));}
+        Ok(result)
     }
     fn current_filter_mask_surface(&mut self, rect: Rect, _: &mut Budget<'_>, ctl: &Interrupt<'_>) -> Result<Surface, IoError> {
         ctl.check().map_err(|_| IoError::Cancelled)?;

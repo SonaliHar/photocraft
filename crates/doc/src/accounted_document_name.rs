@@ -16,7 +16,14 @@ impl AccountedDocument {
             return Err(BackingError::Unsupported);
         }
         imported_edits::validate_name(name, control)?;
-        imported_selection::validate(self.document(), self.quota(), control)?;
+        // Dispatch only this file-identity copy; generic selection and layer
+        // edits retain the original strict unmasked validator.
+        let masked_normal = self.document().layers.len() == 2 && self.document().layers.get(1).is_some_and(|layer| layer.mask.is_some());
+        if masked_normal {
+            imported_selection::validate_masked_normal(self.document(), self.quota(), control)?;
+        } else {
+            imported_selection::validate(self.document(), self.quota(), control)?;
+        }
         let logical = selection_census(self.document(), false, self.owner._selection.as_ref(), self.quota(), control)?;
         if imported_edits::names_equal(&self.document().name, name, control)? {
             return Ok(self.clone());
@@ -34,7 +41,12 @@ impl AccountedDocument {
         let mut payload_lease = self.quota().reserve(QuotaKind::Resident, payload_envelope).map_err(|_| BackingError::Quota)?;
         control.check(logical.total()?)?;
         let view = self.owner._selection.as_ref().map(|guard| guard.clone_view(control)).transpose()?;
-        let mut staged = ModelStaging { document: imported_selection::copy_document(self.document(), control)?, selection_view: None };
+        let document = if masked_normal {
+            imported_selection::copy_masked_normal(self.document(), self.quota(), control)?
+        } else {
+            imported_selection::copy_document(self.document(), control)?
+        };
+        let mut staged = ModelStaging { document, selection_view: None };
         if let Some(SelectionView { surface, charges }) = view {
             staged.document.selection = Some(surface);
             staged.selection_view = Some(charges);
