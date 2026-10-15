@@ -580,8 +580,8 @@ fn qualified_stack_with_activation<P>(
     first_id: u64, version: u32, domain: NeighborhoodDomain, activation: StackActivation,
 ) -> Result<FilterStack, IoError> {
     // This observational envelope is Box-only; raw fields never authorize
-    // another operation, activation, opacity or ordinary composition mode.
-    if domain==NeighborhoodDomain::BoxGeometry && (effects.len()!=1 || effects.first().is_none_or(|e|e.operation!="gegl:box-blur" || e.version.as_deref()!=Some("0:0") || e.arguments.len()!=1 || e.state.enabled!=Some(true))) {
+    // another operation, filter opacity or ordinary composition mode.
+    if domain==NeighborhoodDomain::BoxGeometry && (effects.len()!=1 || effects.first().is_none_or(|e|e.operation!="gegl:box-blur" || e.version.as_deref()!=Some("0:0") || e.arguments.len()!=1 || e.state.enabled.is_none())) {
         return Err(IoError::Unsupported("observational Box source envelope".into()));
     }
     let generic_replace = matches!(domain, NeighborhoodDomain::PointReplace(_));
@@ -922,7 +922,7 @@ fn qualified_stack_with_activation<P>(
             return Err(unsupported(effect, "unqualified stored filter envelope"));
         }
         let enabled = source.enabled.ok_or_else(|| unsupported(effect, "missing enabled state"))?;
-        if (finite_gaussian || box_blur || median || motion || pixelize) && !enabled && activation != StackActivation::OwnedNeighborhood {
+        if (finite_gaussian || box_blur || median || motion || pixelize) && !enabled && activation != StackActivation::OwnedNeighborhood && !observed_box_geometry {
             return Err(unsupported(effect, "unqualified disabled neighborhood envelope"));
         }
         if gaussian

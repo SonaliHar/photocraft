@@ -2,6 +2,8 @@
 //! foundation controls, not independent GIMP producer or ingestion evidence.
 #[path = "backed_box_radius_tests.rs"]
 mod full_radius;
+#[path = "backed_box_source_activity_tests.rs"]
+mod source_activity;
 use super::*;
 use crate::backed_box_source::{BOX_GEOMETRY_EPOCH, LeasedStreamedBoxPipeline};
 use crate::gimp_composite::CompositionError;

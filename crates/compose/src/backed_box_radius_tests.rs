@@ -74,8 +74,8 @@ fn active_zero_keeps_cms_roundtrip_and_disabled_identity_has_no_halo() {
     }
 }
 #[test]
-#[ignore = "UNRUN source/current radius and activation policy separation"]
-fn observed_source_range_stays_enabled_only_and_old_epochs_do_not_expand() {
+#[ignore = "UNRUN observed source radius/activity and old epoch separation"]
+fn observed_source_range_accepts_disabled_without_expanding_old_epochs() {
     let s = Rect::new(-3, 5, 2, 8);
     for radius in [0, 1, 127, 1000] {
         let (d, q, g, _) = observed(s, radius);
@@ -83,7 +83,7 @@ fn observed_source_range_stays_enabled_only_and_old_epochs_do_not_expand() {
         let mut budget = Budget { q: q.clone(), work: u64::MAX, deny: false };
         drop(LeasedStreamedBoxPipeline::new_geometry_budgeted(&input.document, &Interrupt::NONE, &mut budget, &input).unwrap());
         input.document.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].enabled = false;
-        assert!(LeasedStreamedBoxPipeline::new_geometry_budgeted(&input.document, &Interrupt::NONE, &mut budget, &input).is_err());
+        drop(LeasedStreamedBoxPipeline::new_geometry_budgeted(&input.document, &Interrupt::NONE, &mut budget, &input).unwrap());
     }
     for radius in [-1, 1001] {
         let (mut d, q, g, _) = observed(s, radius);

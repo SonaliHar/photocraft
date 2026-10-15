@@ -864,95 +864,58 @@ persistent document lifetime are separate accounting responsibilities.
 ### Streamed current Box Blur
 
 `PreparedBackedBoxContext` and `PreparedBackedBoxDocument` render the admitted
-CURRENT/native float Box recipe over checked drawable and canvas geometry.
-They share the existing Box arithmetic: taps clamp to the original drawable,
-the output expands by the radius, and each canonical 256-pixel tile completes
-before an ROI is cropped. Implicit RGB F32/F64 and assigned RGB F32 retain their
-existing profile, raw-field and radius contracts. Source/eager constructors
-keep their previous admission rules.
+CURRENT/native Box recipe over checked drawable and canvas geometry. The
+observed `xcf22-observed-box-geometry-v1` envelope admits implicit RGB F32
+nonlinear650, implicit RGB F64 nonlinear750 and assigned RGB F32 nonlinear650.
+Assigned profiles retain the existing paid original-to-current binding and both
+independent ICC owners. Other source/eager constructors keep their exact gates;
+old source identities retain selection priority and final refusal.
 
-Packed input and kernel scratch have a 16 MiB guard. Box preparation, its
-current band and overlapping renderer scratch have a 32 MiB guard, including
-wrapper headers and profile preparation peaks. Persistent input/provider
-caches, previously returned bands and the generic reduced-preview caller's
-output/accumulator keep their real shared-quota leases; these are outside
-that Box temporary guard. This does not make decoded XCF input lazy or bound
-total document/process memory.
+The observed envelope accepts a Signed32 radius in `0..=1000`, layer visibility,
+finite unit effective F32 layer opacity and filter activation independently.
+The filter itself remains Replace 62 at unit opacity, region/clipping zero,
+without auxiliary inputs and with a canvas-sized numeric-zero physical mask.
+Three stored effect-policy words remain opaque provenance with no enum aliases.
+Float layer opacity is distinct from both filter opacity and the legacy byte
+opacity; its raw source properties are preserved without quantization.
 
-Work uses the caller's single cumulative control. Full enabled validation of
-24–36 MP currently exceeds the normal registered/open work allowances, so
-large-image publication remains unfinished even where individual ROI bands
-fit. The new regression groups are authored but remain UNRUN/uncompiled during
-the implementation-first pass; no numerical or performance qualification is
-claimed.
+`LeasedStreamedBoxPipeline::new_geometry_budgeted` validates source tiles,
+defaults, physical mask words and profile/working-space preparation. It creates
+no full filtered Surface. Hidden, zero-opacity and disabled sources still take
+all those checks; promotion repeats complete proof on the actual native owner.
+Decoded XCF source input remains a retained full Surface: bounded rendering does
+not make input decoding lazy or establish a total document/process memory bound.
 
-`LeasedStreamedBoxPipeline::new_geometry_budgeted` is the separate original-XCF
-preparation route for `xcf22-observed-box-geometry-v1`. Its implicit RGB F32
-nonlinear source envelope requires enabled Box radius4/5, Replace62 at unit
-opacity, region/clipping zero, no auxiliary input and an actual canvas-sized
-numeric-zero physical mask. Three stored effect-policy words remain opaque
-provenance with no resolved enum interpretation. Checked geometry is generic;
-the independent GIMP controls establish the observed behavior rather than a
-filename or coordinate whitelist. Older source constructors retain their exact
-contracts. The old source identity keeps selection priority and final refusal.
+Taps clamp to the original operative drawable. Enabled output expands by the
+radius, and each world-aligned canonical 256-pixel tile completes before ROI
+cropping. Packed radii 4/5 retains its previous schedule. Other positive radii use one
+native/CMS input row, two horizontal rows, per-column sums and full-tile output,
+with the previous per-column arithmetic order. Typed callback errors survive.
+Active radius 0 keeps native-to-Linear conversion, packed working identity and inverse;
+disabled filtering is a separate native identity path. Existing output-domain
+refusals remain; alpha/color samples are never clamped to hide a failure.
 
-This adapter checks retained source tiles/defaults and every stored mask word,
-then retains paid profile/working-space preparation. It creates no full filtered
-Surface. Promotion still requires complete CURRENT validation of the actual
-native owner and expanded output. This observational epoch currently refuses
-mutations while supporting viewing and native continuation. Its drafts are
-UNRUN/uncompiled, with no independent negative-zero mask qualification.
+Private input/kernel scratch has a 16 MiB guard. Box preparation, current band and
+renderer overlaps have a 32 MiB guard, including wrapper/profile peaks. Persistent
+source/provider/native caches, previous returned bands and generic preview
+output/accumulator keep their real shared-quota leases outside that temporary
+guard. Actual capacities, repeated native reads and CMS conversions are charged
+on the caller's one cumulative control. Standard native `2^40` / wasm `2^36` work and
+120-second active-operation deadline are hard maxima, not completion promises.
+Explicit owned intake selects this policy before input access; unrelated caps
+and external caller controls stay authoritative.
 
-Box host services now select the existing standard policy work ceiling
-(native2^40, wasm2^36) and active-operation deadline (120 seconds), retaining
-one used counter, clock and cancellation owner. External caller controls stay
-authoritative. Every provider debit remains charged; these are hard maxima,
-not sufficient-work or throughput promises. Native/XCF ingress still has its
-legacy8-billion bootstrap before the actual Box owner is known. The clock is
-retained across it, but the selected deadline is enforced only after selection;
-an already expired operation then fails immediately. Existing native logical
-extent limits and retained-input costs remain separate large-image work.
+Observed CURRENT radius/activation, layer metadata and Move use the existing
+registered engine transactions with complete current/staged proof and paid
+history/view/source/channel/journal/reply fences. Move translates the fixed-root
+raw native view and canonical layer bounds, preserving the canvas filter mask
+and filter stack, then recomputes the global tile schedule. Shifting an existing
+filtered bitmap would use different rolling reset points. Original source
+pixels/defaults, profiles and raw policy stay immutable.
 
-The observed Box source role also accepts implicit RGB F64 nonlinear750 with
-actual32-byte native pixels and8-byte mask samples. The existing packed F64
-renderer and working transfer are reused without narrowing. Assigned geometry
-remains separately gated; source/current validation and readonly mutation policy
-remain mandatory. New role regression groups are UNRUN/uncompiled.
-
-Assigned RGB F32 nonlinear650 also joins the observed geometry epoch through
-its actual assigned storage/profile role and existing paid original-to-current
-relation. Full native/default/mask/profile proof and readonly mutations remain.
-GIMP straight-color repeat instability is retained as evidence; alpha-weighted
-saved-sample analysis is not PhotoCraft/CMS qualification or a tolerance change.
-
-The observed geometry epoch now accepts integer Box radii 0..=1000 for enabled
-original sources and CURRENT radius/activation edits. This supersedes its earlier
-radius4/5 and readonly notes. Old source identities and specific/eager admission
-rules keep their original priority and final refusal. Actual implicit RGB F32/F64
-and assigned RGB F32 profiles, native/default samples and the physical zero mask
-remain fully checked before activity/no-op shortcuts.
-
-Positive radii other than4/5 use a row-fed kernel: one original native input row,
-two horizontal rows, per-column sums and complete canonical-tile output. Each
-column retains the previous arithmetic order and original-source edge clamp;
-full tile color conversion precedes ROI cropping. Existing packed4/5 remains.
-Active radius0 retains native-to-Linear conversion, packed working identity and
-inverse conversion; disabled filtering is the separate native identity path.
-The16MiB private and32MiB Box overlap guards remain, with actual-capacity and
-provider charges on the same quota. Repeated conversions and native reads are
-real work; high-radius/large-image operations can reach the finite work/deadline
-ceiling. No throughput or numerical qualification is claimed.
-
-Observed Box CURRENT layer metadata now permits coherent visibility and finite
-unit opacity, independently of the filter's activation and unit Replace opacity.
-The original-source envelope still requires a visible, unit-opacity layer and an
-enabled filter. Existing Normal-over-zero display consumes layer activity after
-full native/default/mask/profile and operative validation; hiding a layer or
-setting opacity zero never skips that proof. No kernel/CMS arithmetic changes.
-
-Observed Box CURRENT Move translates the fixed-root native input view and
-canonical layer bounds, then rebuilds the context for the new operative source
-rectangle. Box is recomputed on the world-aligned canonical tile grid; shifting
-an old filtered bitmap would change the rolling reset schedule. The canvas-bound
-zero effect mask, source pixels/defaults, profiles and filter stack remain exact.
-New translated-render reference drafts are UNRUN; no compose arithmetic changes.
+Regression drafts remain UNRUN/uncompiled during the implementation-first pass.
+Independent GIMP controls establish storage/activity observations, not PhotoCraft
+numerical or workflow acceptance. Effective-profile date-byte differences and
+assigned producer straight-RGB instability remain explicit evidence limits.
+Dense large/high-radius throughput, native_large and full-stock/visual/behavioral
+acceptance remain open.

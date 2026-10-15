@@ -1033,3 +1033,7 @@ mod owned_observed_box_metadata_tests;
 #[cfg(all(test, not(target_arch="wasm32")))]
 #[path="headless/owned_observed_box_move_tests.rs"]
 mod owned_observed_box_move_tests;
+
+#[cfg(all(test, not(target_arch="wasm32")))]
+#[path="headless/owned_observed_box_source_activity_tests.rs"]
+mod owned_observed_box_source_activity_tests;

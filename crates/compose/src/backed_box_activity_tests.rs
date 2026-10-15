@@ -91,8 +91,8 @@ fn hidden_and_zero_coverage_never_waive_current_input_proof() {
     }
 }
 #[test]
-#[ignore = "UNRUN hidden full expanded-output work and source activity remains strict"]
-fn hidden_enabled_still_validates_expanded_output_and_original_activity_is_closed() {
+#[ignore = "UNRUN hidden full expanded-output work and observed source full preparation"]
+fn hidden_enabled_still_validates_expanded_output_and_source_retains_full_preparation() {
     let s = Rect::new(13, 9, 18, 12);
     for (visible, opacity) in [(false, 1.), (true, 0.), (true, 0.375)] {
         let (d, q, g, _, _) = activity(SampleType::F32, false, visible, opacity, true, 127);
@@ -116,7 +116,14 @@ fn hidden_enabled_still_validates_expanded_output_and_original_activity_is_close
         assert!(armed.load(Ordering::Relaxed));
         let (d, q, g, _, _) = activity(SampleType::F32, false, visible, opacity, true, 127);
         let input = resident_source(d, &q, g, s);
-        let mut budget = Budget { q, work: u64::MAX, deny: false };
-        assert!(LeasedStreamedBoxPipeline::new_geometry_budgeted(&input.document, &Interrupt::NONE, &mut budget, &input).is_err());
+        let baseline = q.usage().unwrap();
+        let mut budget = Budget { q: q.clone(), work: u64::MAX, deny: false };
+        // Observed source activity is now admitted, while all profile/Space
+        // preparation is retained and charged even for hidden or zero coverage.
+        let prepared = LeasedStreamedBoxPipeline::new_geometry_budgeted(&input.document, &Interrupt::NONE, &mut budget, &input).unwrap();
+        assert!(budget.work < u64::MAX);
+        assert!(q.usage().unwrap().resident > baseline.resident);
+        drop(prepared);
+        assert_eq!(q.usage().unwrap(), baseline);
     }
 }

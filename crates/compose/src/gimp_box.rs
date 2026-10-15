@@ -28,19 +28,18 @@ pub(crate) fn radius_for_current_float(node: &FilterNode, version: u32) -> Resul
 /// Distinct observed Replace envelope. The three retained i32 values are opaque
 /// provenance and deliberately never interpreted or compared to an alias.
 pub(crate) fn radius_for_observed_geometry(node: &FilterNode, version: u32) -> Result<u32> {
-    observed_radius(node, version, false)
+    observed_radius(node, version)
 }
 pub(crate) fn radius_for_observed_current(node: &FilterNode, version: u32) -> Result<u32> {
-    observed_radius(node, version, true)
+    observed_radius(node, version)
 }
-fn observed_radius(node: &FilterNode, version: u32, current: bool) -> Result<u32> {
+fn observed_radius(node: &FilterNode, version: u32) -> Result<u32> {
     let c = node.composition.as_ref().ok_or(CompositionError::Unsupported("missing observed Box policy"))?;
     if version != 22
         || node.operation.name != "gegl:box-blur"
         || node.operation.stored_version != "0:0"
         || node.operation.schema_epoch != crate::backed_box_source::BOX_GEOMETRY_EPOCH
         || c.compatibility_epoch != crate::backed_box_source::BOX_GEOMETRY_EPOCH
-        || (!current && !node.enabled)
         || node.opacity_f64_bits != 1f64.to_bits()
         || node.source_clipping != Some(0)
         || node.source_region != Some(0)

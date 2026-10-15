@@ -85,7 +85,7 @@ fn genuine_radius_originals_map_without_identity_shortcut() {
     }
 }
 #[test]
-#[ignore = "UNRUN: exact integer range, enabled-only envelope, opaque source preservation and oldidentity final refusal"]
+#[ignore = "UNRUN: exact integer range, explicit activity envelope, opaque source preservation and oldidentity final refusal"]
 fn range_and_old_identity_fail_closed() {
     for r in [0, 1, 2, 126, 127, 999, 1000] {
         let mut f = file(0);
@@ -101,7 +101,7 @@ fn range_and_old_identity_fail_closed() {
     f.layers[0].effects[0].arguments[0].value = ArgumentValue::Float32Bits(1f32.to_bits());
     assert!(!qualify(&f, &Interrupt::NONE, Some(&budget())).unwrap());
     let mut f = file(3);
-    f.layers[0].effects[0].state.enabled = Some(false);
+    f.layers[0].effects[0].state.enabled = None;
     assert!(!qualify(&f, &Interrupt::NONE, Some(&budget())).unwrap());
     for r in [0, 127, 1000] {
         let mut f = file(0);

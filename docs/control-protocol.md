@@ -2002,3 +2002,21 @@ roles stay unchanged. Linked/mask/selection/pixel editing is not added. Renderin
 recomputes Box on the shifted world tile grid instead of shifting a filtered
 bitmap. Original source admission stays unchanged; numerical, visual, native
 workflow and performance checks remain deferred.
+
+Original observed Box source admission now accepts visibility, finite unit
+effective F32 layer opacity and enabled/disabled filter state for the existing
+implicit RGB F32/F64 and assigned RGB F32 roles. This supersedes the earlier
+visible/unit-opacity/enabled source-only restriction. The compatibility policy
+uses the independent activity controls; it does not claim every activity/radius
+combination was numerically qualified. Filter Replace opacity stays exactly1.
+
+FLOAT_OPACITY tag33 is authoritative over compatibility tag6; both original
+payloads remain intact. A .375 source can correctly carry legacy byte95 while
+its float property is exactly0x3ec00000. Source staging does not quantize the
+float or require equality to the byte divided by255. Hidden, zero-opacity and
+disabled sources still undergo complete native/default/physical-mask/profile/
+working-space checks and actual CURRENT proof before publication. Active0 CMS
+identity remains distinct from disabled native identity. Old source identities
+retain priority/final refusal and old specific/eager contracts stay exact.
+Assigned producer RGB variability and effective ICC date-byte HOLDs remain;
+PhotoCraft numerical/visual/runtime acceptance is still deferred.

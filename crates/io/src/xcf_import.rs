@@ -2210,9 +2210,9 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                     return Err(unsupported(d, "owned neighborhood source domain mismatch"));
                 }
                 if matches!(domain, crate::xcf_filters::NeighborhoodDomain::RasterOriginal | crate::xcf_filters::NeighborhoodDomain::BoxGeometry) {
-                    // Separately selected original-source recipes stay enabled-only.
-                    // Observational Box has a distinct opaque Replace envelope;
-                    // neither route inherits the owned activation extension, and
+                    // RasterOriginal remains enabled-only. Observational Box
+                    // admits its own explicit activity policy under the opaque
+                    // Replace envelope; neither inherits the old activation whitelist, and
                     // a refusal never retries another source route.
                     crate::xcf_filters::qualified_stack(&d.effects, &masks, owner, next_filter_id, file.version, domain)?
                 } else {

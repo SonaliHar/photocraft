@@ -52,12 +52,12 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, 
     }
     if d.group
         || d.path.len() > 1
-        || !d.visible
         || !d.alpha
         || d.model != Model::Rgb
         || d.mode != 28
         || (d.blend_space, d.composite_space, d.composite_mode) != (0, -1, -1)
-        || d.opacity.to_bits() != 1f32.to_bits()
+        || !d.opacity.is_finite()
+        || !(0.0..=1.0).contains(&d.opacity)
         || d.mask.is_some()
         || d.text.is_some()
         || d.vector.is_some()
@@ -77,7 +77,7 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, 
     if e.operation != "gegl:box-blur"
         || e.version.as_deref() != Some("0:0")
         || e.arguments.len() != 1
-        || s.enabled != Some(true)
+        || s.enabled.is_none()
         || s.mode != Some(62)
         || s.opacity_u8.is_some()
         || s.opacity_bits != Some(1f32.to_bits())
@@ -194,3 +194,7 @@ mod assigned_tests;
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "box_geometry_radius_tests.rs"]
 mod radius_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "box_geometry_activity_tests.rs"]
+mod activity_tests;

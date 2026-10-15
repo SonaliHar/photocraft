@@ -100,7 +100,7 @@ fn source_refusals_and_old_priority() {
         match case {
             0 => f.layers[0].effects[0].state.mode = Some(28),
             1 => f.layers[0].effects[0].state.opacity_bits = Some(0.5f32.to_bits()),
-            2 => f.layers[0].effects[0].state.enabled = Some(false),
+            2 => f.layers[0].effects[0].state.enabled = None,
             3 => f.layers[0].effects[0].state.blend_space = None,
             4 => f.layers[0].effects[0].state.clipping = Some(1),
             5 => f.layers[0].effects[0].arguments[0].value = ArgumentValue::Integer(1001),
@@ -110,7 +110,7 @@ fn source_refusals_and_old_priority() {
             9 => f.layers[0].plane.as_mut().unwrap().bytes[12..16].copy_from_slice(&1.25f32.to_ne_bytes()),
             10 => f.icc.resize((16 << 20) + 1, 0),
             11 => f.sample = Sample::F64,
-            12 => f.layers[0].visible = false,
+            12 => f.layers[0].opacity = f32::NAN,
             _ => f.layers[0].offset = (i32::MAX, 0),
         }
         assert!(!qualify(&f, &Interrupt::NONE, Some(&budget())).unwrap(), "case{case}");

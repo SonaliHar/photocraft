@@ -31,8 +31,8 @@ fn check(b: &mut impl PlanBudget, i: &Interrupt<'_>, n: u64) -> Result<(), E> {
     b.check(n)?;
     i.check().map_err(|_| E::Backing(BackingError::Cancelled))
 }
-/// Sealed original preparation: activation remains enabled-only, independently
-/// of the additive CURRENT activation policy below.
+/// Sealed observed source preparation accepts effective F32 layer activity and
+/// filter activation independently; every native/mask/profile proof still runs.
 pub(crate) fn metadata(doc: &Document, b: &mut impl PlanBudget, i: &Interrupt<'_>) -> Result<(Rect, u32), E> {
     metadata_mode(doc, b, i, false)
 }
@@ -68,9 +68,6 @@ fn metadata_mode(doc: &Document, b: &mut impl PlanBudget, i: &Interrupt<'_>, cur
         || state.filter_masks.len() != 1
         || !state.editable_indexed.is_empty()
         || stack.owner != ItemRef::Layer(layer.id)
-        || (!current && !layer.visible)
-        || (!current && layer.opacity.to_bits() != 1f32.to_bits())
-        || (!current && !node.enabled)
         || item.name != layer.name
         || item.raster_bounds != Some(s)
         || item.parent.is_some()
