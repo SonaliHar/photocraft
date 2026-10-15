@@ -274,8 +274,8 @@ fn full_quota_title_noop_and_all_generic_edit_selection_routes_stay_closed() {
     assert!(source.try_with_document_name("changed", &ctl()).is_err());
     let id = source.document().layers[1].id;
     for edit in [
-        AccountedEdit::LayerMetadata { layer: id, name: Some("new"), visible: None, opacity: None },
-        AccountedEdit::MaskEnabled { layer: id, enabled: false },
+        AccountedEdit::LayerName { layer: id, name: "new" },
+        AccountedEdit::MaskLinked { layer: id, linked: false },
         AccountedEdit::NativePixels { layer: id, rect: Rect::from_xywh(0, 0, 1, 1), bytes: &[0; 16] },
     ] {
         assert!(source.try_edit(edit, &ctl()).is_err());

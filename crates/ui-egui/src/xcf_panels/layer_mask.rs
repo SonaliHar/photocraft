@@ -218,3 +218,7 @@ mod tests {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "layer_mask/isolated_group_tests.rs"]
 mod isolated_group_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "layer_mask/gaussian_group_metadata_tests.rs"]
+mod gaussian_group_metadata_tests;

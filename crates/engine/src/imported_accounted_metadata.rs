@@ -128,7 +128,8 @@ impl<'a> Request<'a> {
             Target::Id(id) => id,
             Target::Name(name) => {
                 let mut found = None;
-                if matches!(MetadataPolicy::for_owner(owner), MetadataPolicy::IsolatedNormalGroup) {
+                if matches!(MetadataPolicy::for_owner(owner), MetadataPolicy::IsolatedNormalGroup | MetadataPolicy::GaussianGroup) {
+                    if owner.is_readonly_gaussian_group_storage() { owner.validate_gaussian_group_storage(control)?; }
                     // Reverse depth-first order is upper child, lower child,
                     // group, backdrop. The hint bounds this traversal to four
                     // borrowed layers; full storage validation follows below.
@@ -172,7 +173,7 @@ impl<'a> Request<'a> {
         policy.validate_current(owner, control)?;
         let assigned = match policy {
             MetadataPolicy::Plain => None,
-            MetadataPolicy::AssignedGeometry | MetadataPolicy::IsolatedNormalGroup => Some(AssignedFence::prepare::<Prepared<'_>>(session, control)?),
+            MetadataPolicy::AssignedGeometry | MetadataPolicy::IsolatedNormalGroup | MetadataPolicy::GaussianGroup => Some(AssignedFence::prepare::<Prepared<'_>>(session, control)?),
         };
         check_locks(owner.document(), edit, control)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;

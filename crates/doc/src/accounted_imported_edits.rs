@@ -8,9 +8,16 @@ pub(super) enum EditDomain {
     Plain,
     AssignedGeometry,
     IsolatedGroup,
+    GaussianGroup,
 }
 
 pub(super) fn validate_owner(owner: &AccountedDocument, edit: AccountedEdit<'_>, c: &ReadControl<'_>) -> Result<EditDomain, BackingError> {
+    // A genuine Gaussian class must never fall through to the unrelated
+    // assigned group hint or acquire plain/native-pixel edit authority.
+    if owner.is_readonly_gaussian_group_storage() {
+        gaussian_group_readonly::metadata::validate(owner, edit, c)?;
+        return Ok(EditDomain::GaussianGroup);
+    }
     let imported = imported_selection::applies(owner.document());
     if imported {
         // Only this exact bounded group lane can copy recursive containers;

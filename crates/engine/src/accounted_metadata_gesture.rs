@@ -7,6 +7,7 @@ use photocraft_raster::backing::quota::{BackingQuota, QuotaLease};
 /// Constant-time routing hint over an actual owner. Full closed structural and
 /// current profile/native validation remains mandatory; this grants no authority.
 pub fn assigned_geometry_metadata_candidate(owner: &AccountedDocument) -> bool {
+    if owner.is_readonly_gaussian_group_storage() { return true; }
     if owner.is_readonly_point_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_threshold_alpha_storage() {
         return false;
     }
@@ -25,10 +26,13 @@ pub(crate) enum MetadataPolicy {
     Plain,
     AssignedGeometry,
     IsolatedNormalGroup,
+    GaussianGroup,
 }
 impl MetadataPolicy {
     pub(crate) fn for_owner(owner: &AccountedDocument) -> Self {
-        if isolated_normal_group_metadata_candidate(owner) {
+        if owner.is_readonly_gaussian_group_storage() {
+            Self::GaussianGroup
+        } else if isolated_normal_group_metadata_candidate(owner) {
             Self::IsolatedNormalGroup
         } else if assigned_geometry_metadata_candidate(owner) {
             Self::AssignedGeometry
@@ -44,6 +48,7 @@ impl MetadataPolicy {
             Self::Plain => Err(BackingError::Unsupported.into()),
             Self::AssignedGeometry => Ok(owner.validate_assigned_analytic_geometry_storage(c)?),
             Self::IsolatedNormalGroup => Ok(owner.validate_assigned_isolated_normal_group_storage(c)?),
+            Self::GaussianGroup => Ok(owner.validate_gaussian_group_storage(c)?),
         }
     }
     pub(crate) fn validate_current(self, owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<()> {
@@ -51,6 +56,7 @@ impl MetadataPolicy {
             Self::Plain => Ok(()),
             Self::AssignedGeometry => crate::accounted_xcf_open::analytic_geometry::validate_current_analytic_geometry_storage(owner, c),
             Self::IsolatedNormalGroup => crate::accounted_xcf_open::isolated_normal_group::validate_current_isolated_normal_group_storage(owner, c),
+            Self::GaussianGroup => crate::accounted_xcf_open::gaussian_group::validate_current_isolated_gaussian_group_storage(owner,c),
         }
     }
 }
@@ -172,3 +178,7 @@ impl Session {
 #[cfg(test)]
 #[path = "accounted_metadata_gesture_tests.rs"]
 mod tests;
+
+#[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
+#[path="accounted_gaussian_group_metadata_tests.rs"]
+mod gaussian_group_tests;

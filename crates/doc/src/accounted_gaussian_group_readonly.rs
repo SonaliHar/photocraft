@@ -9,6 +9,8 @@ const FILTER_EPOCH: &str = "xcf22-isolated-small-auto-v1";
 #[path = "accounted_gaussian_group_readonly_enabled.rs"]
 mod enabled;
 pub use enabled::GaussianGroupEnabledPatch;
+#[path = "accounted_gaussian_group_readonly_metadata.rs"]
+pub(super) mod metadata;
 fn fail() -> BackingError {
     BackingError::Unsupported
 }
@@ -177,8 +179,6 @@ pub(super) fn shape(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Re
     for (index, layer) in layers.iter().enumerate() {
         c.check(1)?;
         if layer.id.0 == 0
-            || !layer.visible
-            || (index != 2 && layer.opacity.to_bits() != 1f32.to_bits())
             || !layer.opacity.is_finite()
             || !(0.0..=1.0).contains(&layer.opacity)
             || layer.fill_opacity.to_bits() != 1f32.to_bits()
@@ -258,15 +258,14 @@ pub(super) fn shape(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Re
     let extent = extents[1];
     if extents[0] != doc.bounds()
         || extents[3] != Rect::from_xywh(0, 0, 11, 8)
-        || !((extent == Rect::from_xywh(0, -1, 12, 9) && extents[2] == Rect::from_xywh(2, -1, 10, 9) && multiply.opacity.to_bits() == 0.7125f32.to_bits())
-            || (extent == Rect::from_xywh(-1, 0, 12, 11) && extents[2] == Rect::from_xywh(-1, 2, 10, 9) && multiply.opacity.to_bits() == 0.4375f32.to_bits()))
+        || !((extent == Rect::from_xywh(0, -1, 12, 9) && extents[2] == Rect::from_xywh(2, -1, 10, 9))
+            || (extent == Rect::from_xywh(-1, 0, 12, 11) && extents[2] == Rect::from_xywh(-1, 2, 10, 9)))
     {
         return Err(fail());
     }
     let physical = group.mask.as_ref().ok_or_else(fail)?;
     if physical.surface.format() != PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false)
         || physical.surface.tile_count() > 4
-        || !physical.enabled
         || !physical.linked
         || physical.density.to_bits() != 1f32.to_bits()
         || physical.feather.to_bits() != 0f32.to_bits()
@@ -301,7 +300,7 @@ pub(super) fn shape(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Re
                 || item.composition.is_some()
                 || !item.visible
                 || m.owner != ItemRef::Layer(group.id)
-                || !m.enabled
+                || m.enabled != if is_filter { true } else { physical.enabled }
                 || m.shown
                 || m.bounds != if is_filter { doc.bounds() } else { extent }
                 || m.offset != if is_filter { [0, 0] } else { [extent.x0, extent.y0] }
@@ -492,11 +491,13 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, c: &ReadControl<'_>
 enum CopyKind<'a> {
     Title(&'a str),
     Enabled(enabled::Plan),
+    Metadata(metadata::Plan<'a>),
 }
 fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<'_>, c: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
     let name_bytes = match kind {
         CopyKind::Title(name) => name.len() as u64,
         CopyKind::Enabled(_) => 0,
+        CopyKind::Metadata(plan) => plan.replacement_name_bytes()?,
     };
     let wrapper = std::mem::size_of::<OriginalRetention>() as u64 + 128;
     let envelope = logical
@@ -530,6 +531,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
     match kind {
         CopyKind::Title(name) => staged.document.name = imported_edits::copy_name(name, c)?,
         CopyKind::Enabled(plan) => enabled::apply(&mut staged.document, plan, c)?,
+        CopyKind::Metadata(plan) => metadata::apply(&mut staged.document, plan, c)?,
     }
     let actual = measured(&staged.document, owner.quota(), c)?;
     let actual_index = actual.index.checked_add(wrapper).ok_or(BackingError::Length)?;

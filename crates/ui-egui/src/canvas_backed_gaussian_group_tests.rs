@@ -86,7 +86,7 @@ fn gaussian_group_ui_preserves_live_tree_and_masks_through_pathless_native() {
         }
         // Parameter and layer edits remain outside this exact activation lane.
         assert!(app.run("xcf.filter.set", json!({"filterId":id,"enabled":false,"arguments":[]})).is_err());
-        assert!(app.run("layer.setProps", json!({"name":"unsupported"})).is_err());
+        assert!(app.run("layer.setProps", json!({"blend":"multiply"})).is_err());
         assert!(app.session.active().unwrap().doc.shares_state(&before));
         let cancelled = || true;
         let interrupt = Interrupt::cancel_only(&cancelled);

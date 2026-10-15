@@ -29,6 +29,15 @@ fn relation(owner: &AccountedDocument, target: Target, c: &ReadControl<'_>) -> R
     for item in &state.items {
         c.check(1)?;
         let (ItemRef::Mask(id), Some(metadata)) = (item.item, item.mask.as_ref()) else { continue };
+        // Effect selection masks share a layer owner with the physical group
+        // mask. They are never targets of the physical MaskEnabled command.
+        if !state.filter_masks.is_empty() {
+            c.check(state.filter_masks.len() as u64)?;
+            if state.filter_masks.iter().any(|mask|mask.id==id) {
+                if matches!(target,Target::Mask(want) if want==id) {return Err(mask_error("unsupported-filter-mask"));}
+                continue;
+            }
+        }
         let ItemRef::Layer(layer) = metadata.owner else { return Err(mask_error("unsupported-owner")) };
         let matches = match target {
             Target::Mask(want) => id == want,

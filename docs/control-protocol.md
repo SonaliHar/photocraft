@@ -1543,7 +1543,13 @@ or opacity fields refuse even when empty or unchanged. Changed activation adds
 one `Set GIMP Group Filter Enabled` undo step; a no-op preserves redo. Inherited
 content locks and complete current/proposed validation apply before publication,
 and a saved disabled-only raw tuple cannot be enabled by rewriting it. Dispatch
-is synchronous. Mode 61, other Gaussian arguments and broader source
+is synchronous. The same owned class accepts combined `layer.setProps`
+name/visible/opacity for its four layer IDs through the existing metadata
+transaction, including exact coalescing keys and first undo labels. Physical
+group-mask activation uses `xcf.mask.enabled.set`; its mask lookup excludes the
+distinct filter-mask ID. The filter mask retains its empty-selection semantics.
+Current and proposed native/default/mask/profile state validate even for hidden
+or disabled output. Mode 61, other Gaussian arguments and broader source
 geometry/profile policies remain outside this route. Source XCF is read-only;
 save/reopen continues in `.pcraft`. Behavioral acceptance remains pending.
 

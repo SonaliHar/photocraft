@@ -64,7 +64,7 @@ fn isolated_gaussian_headless_preserves_source_and_native_tree_custody() {
         };
         h.session.authorize = None;
         assert!(h.command_run("xcf.filter.set", json!({"filterId":id,"enabled":false,"arguments":[]})).is_err());
-        assert!(h.command_run("layer.setProps", json!({"name":"unsupported"})).is_err());
+        assert!(h.command_run("layer.setProps", json!({"blend":"multiply"})).is_err());
         assert!(h.session.active().unwrap().doc.shares_state(&before));
         assert!(h.session.active().unwrap().history.shares_accounted_history(&history));
         assert_eq!(h.session.active().unwrap().revision, revision);

@@ -202,8 +202,11 @@ impl AccountedHistory {
         self.cursor.checked_add(1).is_some_and(|next| next < self.states.len())
     }
     pub fn try_commit(&mut self, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<(), BackingError> {
-        imported_edits::validate_owner(self.current()?, edit, control)?;
-        if is_noop(self.current()?.document(), edit, control)? {
+        let domain = imported_edits::validate_owner(self.current()?, edit, control)?;
+        let unchanged = if domain == imported_edits::EditDomain::GaussianGroup {
+            gaussian_group_readonly::metadata::noop(self.current()?, edit, control)?
+        } else { is_noop(self.current()?.document(), edit, control)? };
+        if unchanged {
             control.check(1)?;
             return Ok(());
         }
@@ -392,6 +395,10 @@ impl AccountedDocument {
     /// Borrowed preflight for the closed imported current-metadata transaction.
     /// No allocation or mutation authority; final try_edit repeats these gates.
     pub fn validate_imported_metadata_edit(&self, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<(), BackingError> {
+        if self.is_readonly_gaussian_group_storage() {
+            if !matches!(edit, AccountedEdit::LayerMetadata { .. }) { return Err(BackingError::Unsupported); }
+            return gaussian_group_readonly::metadata::validate(self, edit, control);
+        }
         if self.owner._storage_class != StorageClass::Legacy || !imported_selection::applies(self.document())
             || !matches!(edit, AccountedEdit::LayerMetadata { .. } | AccountedEdit::LayerName { .. } | AccountedEdit::LayerVisibility { .. } | AccountedEdit::LayerOpacity { .. })
         { return Err(BackingError::Unsupported); }
@@ -403,6 +410,10 @@ impl AccountedDocument {
     /// This grants no linked/pixel edit or source/render eligibility; try_edit
     /// independently repeats storage, target and canonical association checks.
     pub fn validate_assigned_analytic_mask_edit(&self, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<(), BackingError> {
+        if self.is_readonly_gaussian_group_storage() {
+            if !matches!(edit, AccountedEdit::MaskEnabled { .. }) { return Err(BackingError::Unsupported); }
+            return gaussian_group_readonly::metadata::validate(self, edit, control);
+        }
         if self.owner._storage_class != StorageClass::Legacy || !matches!(edit, AccountedEdit::MaskEnabled { .. }) {
             return Err(BackingError::Unsupported);
         }
@@ -428,6 +439,9 @@ impl AccountedDocument {
     /// Unknown collections refuse before clone. Native COW allocation uses the
     /// same source ledger and never replaces immutable source/default samples.
     pub fn try_edit(&self, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<Self, BackingError> {
+        if self.is_readonly_gaussian_group_storage() {
+            return gaussian_group_readonly::metadata::edited(self, edit, control);
+        }
         if self.owner._storage_class != StorageClass::Legacy { return Err(BackingError::Unsupported); }
         let domain = imported_edits::validate_owner(self, edit, control)?;
         let imported = domain != imported_edits::EditDomain::Resident;
