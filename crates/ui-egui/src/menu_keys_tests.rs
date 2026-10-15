@@ -258,3 +258,25 @@ fn alt_letter_opens_menus_in_whole_app_without_picking_tools() {
     h.run_steps(2);
     assert!(!is_open(&h.ctx));
 }
+
+/// Holding Alt through sequential mnemonic presses navigates inside the open menu,
+/// as in Photoshop (e.g. Alt+V then Zoom In's mnemonic runs Zoom In, not another top menu).
+#[test]
+fn holding_alt_navigates_inside_the_open_menu() {
+    let mut h = bar();
+    // Open View with Alt+V
+    alt_key(&mut h, egui::Key::V);
+    h.run_steps(2);
+    assert!(is_open(&h.ctx) && h.query_by_label_contains("Zoom In").is_some(), "View is open");
+
+    let level = rows(&h, 0);
+    let zoom_in = level.iter().find(|r| r.command.as_deref() == Some("view.zoomIn")).expect("Zoom In row");
+    let letter = zoom_in.mnemonic.expect("Zoom In has a mnemonic");
+
+    let zoom = h.state().ui.views[0].zoom;
+    // With Alt STILL held, press the letter for Zoom In
+    alt_key(&mut h, egui::Key::from_name(&letter.to_string()).unwrap());
+    h.run_steps(3);
+    assert!(h.state().ui.views[0].zoom > zoom, "holding Alt ran Zoom In ({letter}) inside the open menu");
+    assert!(!is_open(&h.ctx), "and closed the menu");
+}
