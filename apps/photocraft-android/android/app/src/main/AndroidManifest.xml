@@ -18,5 +18,10 @@
             </intent-filter>
             <meta-data android:name="android.app.lib_name" android:value="photocraft_android" />
         </activity>
+        <provider
+            android:name=".ImageProvider"
+            android:authorities="ai.storyteller.photocraft.clipboard"
+            android:exported="true"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

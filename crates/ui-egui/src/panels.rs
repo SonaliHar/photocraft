@@ -128,9 +128,15 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // doesn't hide them.)
             let tool_tips = ui.data(|d| d.get_temp::<(egui::Id, Rect)>(flyout_id)).is_none() && !ui.input(|i| i.pointer.primary_down());
             let ctx = ui.ctx().clone();
+            let touch_mod_h = if app.services.touch_ui {
+                8.0 + if double { (bx + 3.0) * 2.0 } else { (bx + 3.0) * 4.0 }
+            } else {
+                0.0
+            };
             let footer = (if t.pro { 8.0 } else { 14.0 })
                 + chips_height(t.pro, t.round_chips, t.round_chips && double)
                 + if t.pro { 8.0 + if double { bx } else { bx * 2.0 + 3.0 } } else { 0.0 }
+                + touch_mod_h
                 + 6.0;
             // As tall as the tools, so the colour chips sit right under them (Photoshop); a column
             // taller than the window scrolls and keeps the chips at the bottom.
@@ -364,7 +370,75 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     });
                 });
             }
+            if app.services.touch_ui {
+                touch_modifier_keys(app, ui, bx, double);
+            }
         });
+}
+
+fn touch_modifier_keys(app: &mut PhotocraftApp, ui: &mut egui::Ui, bx: f32, double: bool) {
+    let t = Tokens::get(ui.ctx());
+    ui.add_space(4.0);
+    let sep_w = if double { bx * 2.0 + 2.0 } else { bx };
+    let (r, _) = ui.allocate_exact_size(vec2(sep_w, 1.0), Sense::hover());
+    ui.painter().line_segment([r.left_center() + vec2(4.0, 0.0), r.right_center() - vec2(4.0, 0.0)], Stroke::new(1.0, t.separator));
+    ui.add_space(3.0);
+
+    let mut s = app.ui.shell.clone();
+    let draw_btn = |ui: &mut egui::Ui, label: &str, selected: bool, tip: &str| -> egui::Response {
+        let (rect, resp) = ui.allocate_exact_size(vec2(bx, bx), Sense::click());
+        let ink = icons::button_chrome(ui, rect, selected, resp.hovered());
+        let font_size = if label.len() > 4 { 10.0 } else { 11.5 };
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            label,
+            egui::FontId::proportional(font_size),
+            ink,
+        );
+        resp.on_hover_text(tip)
+    };
+
+    if double {
+        ui.horizontal(|ui| {
+            if draw_btn(ui, "Shift", s.sticky_shift, tl!("Shift: constrain proportions, straight lines")).clicked() {
+                s.sticky_shift = !s.sticky_shift;
+            }
+            if draw_btn(ui, "Alt", s.sticky_alt, tl!("Alt: eyedropper, duplicate, subtract")).clicked() {
+                s.sticky_alt = !s.sticky_alt;
+            }
+        });
+        ui.horizontal(|ui| {
+            if draw_btn(ui, "Ctrl", s.sticky_command, tl!("Ctrl/Cmd: multi-select, direct select")).clicked() {
+                s.sticky_command = !s.sticky_command;
+            }
+            if (s.sticky_shift || s.sticky_alt || s.sticky_command)
+                && icons::button_with_icon_size(ui, "x", bx, 12.0, false, tl!("Clear modifier keys")).clicked()
+            {
+                s.sticky_shift = false;
+                s.sticky_alt = false;
+                s.sticky_command = false;
+            }
+        });
+    } else {
+        if draw_btn(ui, "Shift", s.sticky_shift, tl!("Shift: constrain proportions, straight lines")).clicked() {
+            s.sticky_shift = !s.sticky_shift;
+        }
+        if draw_btn(ui, "Alt", s.sticky_alt, tl!("Alt: eyedropper, duplicate, subtract")).clicked() {
+            s.sticky_alt = !s.sticky_alt;
+        }
+        if draw_btn(ui, "Ctrl", s.sticky_command, tl!("Ctrl/Cmd: multi-select, direct select")).clicked() {
+            s.sticky_command = !s.sticky_command;
+        }
+        if (s.sticky_shift || s.sticky_alt || s.sticky_command)
+            && icons::button_with_icon_size(ui, "x", bx, 12.0, false, tl!("Clear modifier keys")).clicked()
+        {
+            s.sticky_shift = false;
+            s.sticky_alt = false;
+            s.sticky_command = false;
+        }
+    }
+    app.ui.shell = s;
 }
 
 /// Glyph size of a toolbar tool button. Pro fills two thirds of the button, close to Photoshop's
@@ -650,7 +724,7 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     // the theme toggle (Preferences), then search (Edit › Search), and narrows
                     // the switcher (Window › Workspace) before anything runs over.
                     let room = ui.available_width();
-                    let exit_slot = if app.services.touch_ui { ICON_SLOT } else { 0.0 };
+                    let exit_slot = if app.services.touch_ui { 6.0 * ICON_SLOT } else { 0.0 };
                     let optional_room = (room - exit_slot).max(0.0);
                     let icons_shown: u8 = if optional_room >= WORKSPACE_MIN + 2.0 * ICON_SLOT {
                         2
@@ -682,8 +756,33 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         }
                         button.context_menu(|ui| crate::prefs_ui::appearance_context_menu(app, ui));
                     }
-                    if app.services.touch_ui && icons::button(ui, "x", 28.0, false, tl!("Exit PhotoCraft")).clicked() {
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                    if app.services.touch_ui {
+                        let can_undo = app.session.active().is_some_and(|st| st.history.can_undo());
+                        if icons::button_with_icon_size(ui, "undo-2", 28.0, 16.0, false, &crate::shortcuts::tip_label(app, "Undo", "edit.undo")).clicked() && can_undo {
+                            let _ = app.run("edit.undo", serde_json::json!({}));
+                        }
+                        let can_redo = app.session.active().is_some_and(|st| st.history.can_redo());
+                        if icons::button_with_icon_size(ui, "redo-2", 28.0, 16.0, false, &crate::shortcuts::tip_label(app, "Redo", "edit.redo")).clicked() && can_redo {
+                            let _ = app.run("edit.redo", serde_json::json!({}));
+                        }
+                        if icons::button_with_icon_size(ui, "maximize-2", 28.0, 16.0, false, &crate::shortcuts::tip_label(app, "Fit on Screen", "view.fitOnScreen")).clicked() {
+                            let _ = crate::menus::invoke(app, ui.ctx(), "view.fitOnScreen", serde_json::json!({}));
+                        }
+                        let add_label = if app.session.active().is_some() { tl!("Add Image as Layer…") } else { tl!("Open Image…") };
+                        if icons::button_with_icon_size(ui, "image", 28.0, 16.0, false, add_label).clicked() {
+                            if app.session.active().is_some() {
+                                let _ = crate::menus::invoke(app, ui.ctx(), "file.placeEmbedded", serde_json::json!({}));
+                            } else {
+                                let _ = crate::menus::invoke(app, ui.ctx(), "file.open", serde_json::json!({}));
+                            }
+                        }
+                        let has_paste = app.session.clipboard.is_some() || app.services.clipboard_get_image.is_some();
+                        if icons::button_with_icon_size(ui, "file-plus", 28.0, 16.0, false, tl!("Paste Image")).clicked() && has_paste {
+                            let _ = crate::menus::invoke(app, ui.ctx(), "edit.paste", serde_json::json!({}));
+                        }
+                        if icons::button(ui, "x", 28.0, false, tl!("Exit PhotoCraft")).clicked() {
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
                     }
                     // The community Discord, one click away while the bar has room for it
                     // (narrow windows drop it first; it is also Help › Discord).

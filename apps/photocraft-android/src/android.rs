@@ -55,6 +55,8 @@ fn android_services(data_dir: PathBuf, ctx: egui::Context) -> Services {
     let prefs_for_save = prefs.clone();
     let save_bridge = bridge::shared();
     let gesture_bridge = save_bridge.clone();
+    let clipboard_set_bridge = save_bridge.clone();
+    let clipboard_get_bridge = save_bridge.clone();
     let recovery = recovery_services(data_dir.join("Recovery"));
     Services {
         import: Some(Box::new(|name, bytes, max_svg_group_depth| {
@@ -73,6 +75,8 @@ fn android_services(data_dir: PathBuf, ctx: egui::Context) -> Services {
         write: Some(Box::new(move |target, bytes| save_bridge.write(target, bytes))),
         load_prefs: Some(Box::new(move || std::fs::read_to_string(&prefs_for_load).ok())),
         save_prefs: Some(Box::new(move |text| write_atomic(&prefs_for_save, text.as_bytes()))),
+        clipboard_set_image: Some(Box::new(move |w, h, rgba| clipboard_set_bridge.set_clipboard_image(w, h, rgba))),
+        clipboard_get_image: Some(Box::new(move || clipboard_get_bridge.get_clipboard_image())),
         raw_input: Some(Box::new({
             let mut router = TabletGestureRouter::default();
             move |raw, mode| {

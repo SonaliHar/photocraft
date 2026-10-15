@@ -25,6 +25,7 @@ unimplemented = "deny"
 unreachable = "deny"
 
 [dependencies]
+photocraft-codecs = { workspace = true }
 photocraft-doc = { workspace = true }
 photocraft-engine = { workspace = true }
 photocraft-format = { workspace = true }

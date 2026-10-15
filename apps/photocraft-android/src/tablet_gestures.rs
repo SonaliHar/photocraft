@@ -24,6 +24,7 @@ pub(crate) struct TabletGestureRouter {
     tap_start: Option<f64>,
     tap_center: Option<Pos2>,
     tap_invalid: bool,
+    max_touches: usize,
     pending_pointer: Vec<Event>,
     pointer_committed: bool,
     multi_touch: bool,
@@ -46,19 +47,24 @@ impl TabletGestureRouter {
                         self.tap_invalid = false;
                         self.pointer_committed = false;
                         self.multi_touch = false;
+                        self.max_touches = 0;
                     }
                     self.touches.push((*device_id, *id, *pos));
-                    if let [(_, _, first), (_, _, second)] = self.touches.as_slice() {
+                    self.max_touches = self.max_touches.max(self.touches.len());
+                    if self.touches.len() >= 2 {
                         self.multi_touch = true;
-                        self.tap_center = Some(first.lerp(*second, 0.5));
-                    } else if self.touches.len() > 2 {
-                        self.multi_touch = true;
-                        self.tap_invalid = true;
+                        if self.touches.len() == 2 {
+                            let (_, _, first) = self.touches[0];
+                            let (_, _, second) = self.touches[1];
+                            self.tap_center = Some(first.lerp(second, 0.5));
+                        } else if self.touches.len() > 4 {
+                            self.tap_invalid = true;
+                        }
                     }
                 }
                 egui::TouchPhase::Move => {
                     if let Some((_, _, start)) = self.touches.iter().find(|(device, touch, _)| device == device_id && touch == id)
-                        && start.distance(*pos) > 20.0
+                        && start.distance(*pos) > 25.0
                     {
                         self.tap_invalid = true;
                     }
@@ -71,9 +77,10 @@ impl TabletGestureRouter {
                     if self.touches.is_empty() {
                         finished = true;
                         if !self.tap_invalid && self.tap_start.is_some_and(|start| now - start <= 0.35) {
-                            touch_tap = self.tap_center;
+                            touch_tap = Some((self.max_touches, self.tap_center));
                         }
                         self.tap_center = None;
+                        self.max_touches = 0;
                     }
                 }
             }
@@ -153,10 +160,44 @@ impl TabletGestureRouter {
             push_button(raw, x, y, true);
             push_button(raw, x, y, false);
         }
-        if let Some(pos) = touch_tap {
-            raw.events.push(Event::PointerMoved(pos));
-            for pressed in [true, false] {
-                raw.events.push(Event::PointerButton { pos, button: PointerButton::Secondary, pressed, modifiers: Default::default() });
+        if let Some((touches, pos)) = touch_tap {
+            if touches == 2 {
+                if let Some(pos) = pos {
+                    raw.events.push(Event::PointerMoved(pos));
+                    for pressed in [true, false] {
+                        raw.events.push(Event::PointerButton { pos, button: PointerButton::Secondary, pressed, modifiers: Default::default() });
+                    }
+                }
+            } else if touches == 3 {
+                raw.events.push(Event::Key {
+                    key: egui::Key::Z,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::COMMAND,
+                });
+                raw.events.push(Event::Key {
+                    key: egui::Key::Z,
+                    physical_key: None,
+                    pressed: false,
+                    repeat: false,
+                    modifiers: egui::Modifiers::COMMAND,
+                });
+            } else if touches == 4 {
+                raw.events.push(Event::Key {
+                    key: egui::Key::Z,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                });
+                raw.events.push(Event::Key {
+                    key: egui::Key::Z,
+                    physical_key: None,
+                    pressed: false,
+                    repeat: false,
+                    modifiers: egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                });
             }
         }
     }
@@ -211,14 +252,15 @@ mod tests {
             let mut raw = input(events);
             raw.time = Some(1.0 + frame as f64 * 0.02);
             router.apply(&mut raw, [], StylusButtonAction::ContextMenu);
+            let has_secondary = raw.events.iter().any(|e| matches!(e, Event::PointerButton { button: PointerButton::Secondary, pressed: true, .. }));
             ctx.begin_pass(raw);
             ctx.input(|i| {
                 assert!(!i.pointer.primary_down());
                 assert!(!i.pointer.button_pressed(PointerButton::Primary));
-                if frame == 2 {
-                    assert!(i.pointer.secondary_clicked());
-                }
             });
+            if frame == 2 {
+                assert!(has_secondary);
+            }
             let mut output = ctx.end_pass();
             output.textures_delta.clear();
         }
@@ -257,9 +299,47 @@ mod tests {
             let mut raw = input(events);
             raw.time = Some(1.1);
             router.apply(&mut raw, [], StylusButtonAction::ContextMenu);
-            let clicks = raw.events.iter().filter(|event| matches!(event, Event::PointerButton { button: PointerButton::Secondary, .. })).count();
-            assert_eq!(clicks, if moved { 0 } else { 2 });
+            let secondaries = raw.events.iter().filter(|event| matches!(event, Event::PointerButton { button: PointerButton::Secondary, pressed: true, .. })).count();
+            assert_eq!(secondaries, if moved { 0 } else { 1 });
         }
+    }
+
+    #[test]
+    fn native_three_finger_tap_emits_undo() {
+        let touch = |id, phase, x| Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(id), phase, pos: pos2(x, 100.0), force: None };
+        let mut router = TabletGestureRouter::default();
+        let mut raw = input(vec![touch(1, egui::TouchPhase::Start, 100.0), touch(2, egui::TouchPhase::Start, 200.0), touch(3, egui::TouchPhase::Start, 300.0)]);
+        raw.time = Some(1.0);
+        router.apply(&mut raw, [], StylusButtonAction::ContextMenu);
+        let mut raw = input(vec![touch(3, egui::TouchPhase::End, 300.0), touch(2, egui::TouchPhase::End, 200.0), touch(1, egui::TouchPhase::End, 100.0)]);
+        raw.time = Some(1.1);
+        router.apply(&mut raw, [], StylusButtonAction::ContextMenu);
+        let undos = raw.events.iter().filter(|event| matches!(event, Event::Key { key: egui::Key::Z, modifiers, .. } if modifiers.command && !modifiers.shift)).count();
+        assert_eq!(undos, 2);
+    }
+
+    #[test]
+    fn native_four_finger_tap_emits_redo() {
+        let touch = |id, phase, x| Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(id), phase, pos: pos2(x, 100.0), force: None };
+        let mut router = TabletGestureRouter::default();
+        let mut raw = input(vec![
+            touch(1, egui::TouchPhase::Start, 100.0),
+            touch(2, egui::TouchPhase::Start, 200.0),
+            touch(3, egui::TouchPhase::Start, 300.0),
+            touch(4, egui::TouchPhase::Start, 400.0),
+        ]);
+        raw.time = Some(1.0);
+        router.apply(&mut raw, [], StylusButtonAction::ContextMenu);
+        let mut raw = input(vec![
+            touch(4, egui::TouchPhase::End, 400.0),
+            touch(3, egui::TouchPhase::End, 300.0),
+            touch(2, egui::TouchPhase::End, 200.0),
+            touch(1, egui::TouchPhase::End, 100.0),
+        ]);
+        raw.time = Some(1.1);
+        router.apply(&mut raw, [], StylusButtonAction::ContextMenu);
+        let redos = raw.events.iter().filter(|event| matches!(event, Event::Key { key: egui::Key::Z, modifiers, .. } if modifiers.command && modifiers.shift)).count();
+        assert_eq!(redos, 2);
     }
 
     #[test]

@@ -1850,14 +1850,47 @@ impl eframe::App for PhotocraftApp {
         panels::sync_window_title(self, &ctx);
         let chrome = !self.ui.view.hides_chrome();
         if self.services.touch_ui && !chrome {
+            let frame = egui::Frame::NONE
+                .fill(egui::Color32::from_black_alpha(190))
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha(35)))
+                .corner_radius(20)
+                .inner_margin(egui::Margin::symmetric(8, 4));
             egui::Area::new(egui::Id::new("tablet-fullscreen-exit"))
-                .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 12.0))
+                .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-16.0, 16.0))
                 .order(egui::Order::Foreground)
                 .show(&ctx, |ui| {
-                    let exit = egui::Button::new(egui::RichText::new("×").size(24.0)).min_size(egui::vec2(44.0, 44.0));
-                    if ui.add(exit).on_hover_text(tl!("Exit Full Screen")).clicked() {
-                        let _ = crate::menus::invoke(self, &ctx, "view.screenMode.standard", serde_json::json!({}));
-                    }
+                    frame.show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let can_undo = self.session.active().is_some_and(|st| st.history.can_undo());
+                            if ui
+                                .add_enabled_ui(can_undo, |ui| {
+                                    icons::button_with_icon_size(ui, "undo-2", 32.0, 16.0, false, &crate::shortcuts::tip_label(self, "Undo", "edit.undo"))
+                                })
+                                .inner
+                                .clicked()
+                                && can_undo
+                            {
+                                let _ = self.run("edit.undo", serde_json::json!({}));
+                            }
+                            let can_redo = self.session.active().is_some_and(|st| st.history.can_redo());
+                            if ui
+                                .add_enabled_ui(can_redo, |ui| {
+                                    icons::button_with_icon_size(ui, "redo-2", 32.0, 16.0, false, &crate::shortcuts::tip_label(self, "Redo", "edit.redo"))
+                                })
+                                .inner
+                                .clicked()
+                                && can_redo
+                            {
+                                let _ = self.run("edit.redo", serde_json::json!({}));
+                            }
+                            if icons::button_with_icon_size(ui, "maximize-2", 32.0, 16.0, false, &crate::shortcuts::tip_label(self, "Fit on Screen", "view.fitOnScreen")).clicked() {
+                                let _ = crate::menus::invoke(self, &ctx, "view.fitOnScreen", serde_json::json!({}));
+                            }
+                            if icons::button_with_icon_size(ui, "x", 32.0, 16.0, false, tl!("Exit Full Screen")).clicked() {
+                                let _ = crate::menus::invoke(self, &ctx, "view.screenMode.standard", serde_json::json!({}));
+                            }
+                        });
+                    });
                 });
         }
         if chrome && self.ui.panels.menu_bar {

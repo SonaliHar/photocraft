@@ -39,6 +39,8 @@ struct State {
     write: Option<SaveRequest>,
     tablet_actions: VecDeque<TabletAction>,
     barrel_held: bool,
+    clipboard_incoming: Option<(u32, u32, Vec<u8>)>,
+    clipboard_outgoing: Option<Vec<u8>>,
 }
 
 /// One pending picker or write at a time. PhotoCraft itself serializes file dialogs, and the
@@ -221,6 +223,47 @@ impl Bridge {
         }
         state.tablet_actions.push_back(action);
     }
+
+    pub(crate) fn set_clipboard_incoming_bytes(&self, bytes: &[u8]) {
+        match photocraft_codecs::decode(bytes) {
+            Ok(image) => {
+                let w = image.width();
+                let h = image.height();
+                let rgba8 = image.to_rgba8();
+                let mut state = lock(&self.state);
+                state.clipboard_incoming = Some((w, h, rgba8));
+            }
+            Err(error) => {
+                eprintln!("PhotoCraft cannot decode incoming clipboard image: {error}");
+            }
+        }
+    }
+
+    pub(crate) fn clear_clipboard_incoming(&self) {
+        let mut state = lock(&self.state);
+        state.clipboard_incoming = None;
+    }
+
+    pub(crate) fn get_clipboard_image(&self) -> Option<(u32, u32, Vec<u8>)> {
+        let state = lock(&self.state);
+        state.clipboard_incoming.clone()
+    }
+
+    pub(crate) fn set_clipboard_image(&self, w: u32, h: u32, rgba8: &[u8]) -> Result<(), String> {
+        let image = photocraft_codecs::Image::from_u8(w, h, photocraft_codecs::ChannelLayout::Rgba, rgba8.to_vec())
+            .map_err(|e| format!("cannot create image: {e}"))?;
+        let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &photocraft_codecs::EncodeOptions::default())
+            .map_err(|e| format!("cannot encode clipboard png: {e}"))?;
+        let mut state = lock(&self.state);
+        state.clipboard_incoming = Some((w, h, rgba8.to_vec()));
+        state.clipboard_outgoing = Some(png);
+        Ok(())
+    }
+
+    pub(crate) fn take_clipboard_outgoing(&self) -> Option<Vec<u8>> {
+        let mut state = lock(&self.state);
+        state.clipboard_outgoing.take()
+    }
 }
 
 fn safe_file_name(suggested: &str) -> String {
@@ -351,6 +394,44 @@ pub extern "system" fn Java_ai_storyteller_photocraft_PhotoCraftActivity_nativeS
         Ok::<(), jni::errors::Error>(())
     })
     .resolve::<ThrowRuntimeExAndDefault>();
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_storyteller_photocraft_PhotoCraftActivity_nativeClipboardImageChanged<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    bytes: jni::objects::JByteArray<'local>,
+) {
+    env.with_env(|env| {
+        let data = env.convert_byte_array(&bytes)?;
+        shared().set_clipboard_incoming_bytes(&data);
+        Ok::<(), jni::errors::Error>(())
+    })
+    .resolve::<ThrowRuntimeExAndDefault>();
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_storyteller_photocraft_PhotoCraftActivity_nativeClipboardImageCleared<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) {
+    env.with_env(|_| {
+        shared().clear_clipboard_incoming();
+        Ok::<(), jni::errors::Error>(())
+    })
+    .resolve::<ThrowRuntimeExAndDefault>();
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_ai_storyteller_photocraft_PhotoCraftActivity_nativeTakeClipboardSetBytes<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+) -> jni::objects::JByteArray<'local> {
+    env.with_env(|env| {
+        let bytes = shared().take_clipboard_outgoing().unwrap_or_default();
+        env.byte_array_from_slice(&bytes)
+    })
+    .resolve::<ThrowRuntimeExAndDefault>()
 }
 
 #[cfg(test)]

@@ -1,6 +1,10 @@
 package ai.storyteller.photocraft;
 
 import android.app.NativeActivity;
+import android.content.ClipData;
+import android.content.ClipDescription;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
@@ -18,6 +22,7 @@ import android.view.WindowInsetsController;
 import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -48,6 +53,9 @@ public final class PhotoCraftActivity extends NativeActivity {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final SparseArray<float[]> touchStarts = new SparseArray<>();
+    private ClipboardManager clipboardManager;
+    private Uri lastCopiedUri;
+    private final ClipboardManager.OnPrimaryClipChangedListener clipListener = this::checkClipboard;
     private boolean pickerOpen;
     private boolean twoFingerEligible;
     private boolean twoFingerMoved;
@@ -65,6 +73,7 @@ public final class PhotoCraftActivity extends NativeActivity {
         public void run() {
             dispatchPickerRequest();
             dispatchSave();
+            dispatchTakeClipboardSetImage();
             handler.postDelayed(this, POLL_MS);
         }
     };
@@ -79,6 +88,9 @@ public final class PhotoCraftActivity extends NativeActivity {
     private static native void nativeSaveFinished(boolean success, String error);
     private static native void nativeTwoFingerTap(float x, float y);
     private static native void nativeStylusBarrel(float x, float y, boolean pressed);
+    private static native void nativeClipboardImageChanged(byte[] bytes);
+    private static native void nativeClipboardImageCleared();
+    private static native byte[] nativeTakeClipboardSetBytes();
 
     @Override
     protected void onCreate(Bundle state) {
@@ -88,7 +100,12 @@ public final class PhotoCraftActivity extends NativeActivity {
             backCallback = () -> moveTaskToBack(true);
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback);
         }
+        clipboardManager = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (clipboardManager != null) {
+            clipboardManager.addPrimaryClipChangedListener(clipListener);
+        }
         enterImmersiveMode();
+        checkClipboard();
         handler.post(bridgePump);
     }
 
@@ -96,6 +113,7 @@ public final class PhotoCraftActivity extends NativeActivity {
     protected void onResume() {
         super.onResume();
         enterImmersiveMode();
+        checkClipboard();
     }
 
     @Override
@@ -103,6 +121,7 @@ public final class PhotoCraftActivity extends NativeActivity {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) {
             enterImmersiveMode();
+            checkClipboard();
         }
     }
 
@@ -110,6 +129,9 @@ public final class PhotoCraftActivity extends NativeActivity {
     protected void onDestroy() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && backCallback != null) {
             getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backCallback);
+        }
+        if (clipboardManager != null) {
+            clipboardManager.removePrimaryClipChangedListener(clipListener);
         }
         handler.removeCallbacks(bridgePump);
         io.shutdownNow();
@@ -460,5 +482,103 @@ public final class PhotoCraftActivity extends NativeActivity {
     private static String message(Exception error) {
         String detail = error.getMessage();
         return detail == null || detail.isEmpty() ? error.getClass().getSimpleName() : detail;
+    }
+
+    private void checkClipboard() {
+        if (clipboardManager == null || !clipboardManager.hasPrimaryClip()) {
+            nativeClipboardImageCleared();
+            return;
+        }
+        ClipData clip = clipboardManager.getPrimaryClip();
+        if (clip == null || clip.getItemCount() == 0) {
+            nativeClipboardImageCleared();
+            return;
+        }
+        Uri uri = null;
+        for (int i = 0; i < clip.getItemCount(); i++) {
+            ClipData.Item item = clip.getItemAt(i);
+            if (item != null && item.getUri() != null) {
+                uri = item.getUri();
+                break;
+            }
+        }
+        if (uri == null) {
+            nativeClipboardImageCleared();
+            return;
+        }
+        if (uri.equals(lastCopiedUri)) {
+            return;
+        }
+        String type = getContentResolver().getType(uri);
+        boolean isImage = (type != null && type.startsWith("image/"))
+            || (clip.getDescription() != null && clip.getDescription().hasMimeType("image/*"));
+        if (!isImage && uri.getPath() != null) {
+            String path = uri.getPath().toLowerCase();
+            isImage = path.endsWith(".png") || path.endsWith(".jpg") || path.endsWith(".jpeg")
+                || path.endsWith(".webp") || path.endsWith(".bmp") || path.endsWith(".tiff");
+        }
+        if (!isImage) {
+            nativeClipboardImageCleared();
+            return;
+        }
+        final Uri finalUri = uri;
+        io.execute(() -> {
+            try (InputStream is = getContentResolver().openInputStream(finalUri)) {
+                if (is == null) {
+                    nativeClipboardImageCleared();
+                    return;
+                }
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                byte[] buffer = new byte[64 * 1024];
+                int read;
+                long total = 0;
+                while ((read = is.read(buffer)) != -1) {
+                    total += read;
+                    if (total > 64 * 1024 * 1024) {
+                        break;
+                    }
+                    baos.write(buffer, 0, read);
+                }
+                byte[] bytes = baos.toByteArray();
+                if (bytes.length > 0) {
+                    nativeClipboardImageChanged(bytes);
+                } else {
+                    nativeClipboardImageCleared();
+                }
+            } catch (Exception e) {
+                nativeClipboardImageCleared();
+            }
+        });
+    }
+
+    private void dispatchTakeClipboardSetImage() {
+        byte[] bytes = nativeTakeClipboardSetBytes();
+        if (bytes == null || bytes.length == 0) {
+            return;
+        }
+        io.execute(() -> {
+            try {
+                File dir = new File(getCacheDir(), "clipboard");
+                if (!dir.exists()) {
+                    dir.mkdirs();
+                }
+                File file = new File(dir, "clipboard.png");
+                try (FileOutputStream fos = new FileOutputStream(file)) {
+                    fos.write(bytes);
+                    fos.flush();
+                }
+                Uri uri = Uri.parse("content://" + ImageProvider.AUTHORITY + "/clipboard.png");
+                lastCopiedUri = uri;
+                handler.post(() -> {
+                    if (clipboardManager != null) {
+                        ClipDescription desc = new ClipDescription("PhotoCraft Image", new String[] {"image/png"});
+                        ClipData clip = new ClipData(desc, new ClipData.Item(uri));
+                        clipboardManager.setPrimaryClip(clip);
+                    }
+                });
+            } catch (Exception e) {
+                // ignore
+            }
+        });
     }
 }

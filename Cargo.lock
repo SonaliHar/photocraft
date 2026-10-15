@@ -4686,6 +4686,7 @@ dependencies = [
  "eframe",
  "egui",
  "jni",
+ "photocraft-codecs",
  "photocraft-doc",
  "photocraft-engine",
  "photocraft-format",

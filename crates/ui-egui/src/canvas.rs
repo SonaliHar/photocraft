@@ -3157,6 +3157,34 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         }
     }
 
+    // Touchscreen / tablet multi-touch gestures (two-finger pan, pinch zoom, rotation)
+    let multi_touch = ui.input(|i| i.multi_touch());
+    let multi_touch_active = multi_touch.as_ref().is_some_and(|t| t.num_touches >= 2);
+    if let Some(touch) = multi_touch {
+        if touch.num_touches >= 2 && (rect.contains(touch.center_pos) || rect.contains(touch.start_pos) || response.hovered()) {
+            if touch.translation_delta.is_finite() && touch.translation_delta != egui::Vec2::ZERO {
+                let d = xf.unmap_vec(touch.translation_delta) / (view.zoom / ppp);
+                view.center[0] -= d.x;
+                view.center[1] -= d.y;
+            }
+            if touch.zoom_delta.is_finite() && touch.zoom_delta > 0.0 && touch.zoom_delta != 1.0 {
+                let nz = crate::zoom_levels::clamp(view.zoom * touch.zoom_delta, view.doc_size);
+                if nz != view.zoom {
+                    let at = wheel_anchor(&xf, touch.center_pos, view.doc_size);
+                    zoom_about(&mut view, &xf, at, nz, false, ppp);
+                }
+            }
+            let rotate_enabled = app.session.prefs().enhanced_controls.rotate_view_with_trackpad;
+            if rotate_enabled && touch.rotation_delta.abs() > 0.001 {
+                let delta_deg = touch.rotation_delta.to_degrees();
+                let next = view.rotation + crate::rotate_view::screen_delta(delta_deg, xf.flip);
+                if next.is_finite() {
+                    view.rotation = crate::rotate_view::wrap_deg(next);
+                }
+            }
+        }
+    }
+
     // Pen pressure/tilt for this frame's tool events (mouse = 1.0), unless Preferences › Tools ›
     // Use Tablet Pressure is off; the pen's eraser end selects the Eraser.
     app.stylus.use_pressure = app.session.prefs().tools.use_tablet_pressure;
@@ -3412,8 +3440,17 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         }
         // The (temporary) Hand pans above; its gestures never reach the tool underneath. While a
         // Free Transform box is open the Hand does not pan, so the box gets these events (#2302).
-        if hand_pan {
-            (buttons.started, buttons.dragged, buttons.stopped) = (false, false, false);
+        if hand_pan || multi_touch_active {
+            (buttons.started, buttons.dragged, buttons.stopped, buttons.clicked) = (false, false, false, false);
+            if multi_touch_active {
+                if let Some(d) = app.drag.take() {
+                    if strokes_live(d.tool) {
+                        app.live_stroke = None;
+                        app.trail = None;
+                        app.press_stroke = false;
+                    }
+                }
+            }
         }
         // Rotate View: drag around the view centre. Compass clicks are not a rotate drag.
         let over_compass = crate::rotate_view::compass_visible(view.rotation)
