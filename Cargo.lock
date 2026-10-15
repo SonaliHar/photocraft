@@ -4371,6 +4371,7 @@ dependencies = [
  "photocraft-geom",
  "photocraft-io",
  "photocraft-raster",
+ "photocraft-xcf",
  "rmcp",
  "rustix 1.1.5",
  "same-file",

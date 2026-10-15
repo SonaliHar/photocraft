@@ -105,6 +105,23 @@ is an error. Automation retains its suppression of recent files and script event
 Both explicit routes retain the persisted document title; the reply name and
 runtime source label identify the actual input basename independently.
 
+Explicit owned original-XCF Open uses the separate
+`{"path":"chosen.xcf","xcfProfilePolicy":"keepCurrent"}` option on trusted local
+`file.open`, or on held-read-root `app.open`. Only the existing staged plain,
+implicit nonlinear RGB/Gray raster class is supported; this is not a fallback
+for unsupported XCF effects, masks, groups, channels or source profiles. It keeps
+the importer's current interpretation without applying Color Settings. Omitting
+the key preserves ordinary Open and its questions/conversions. Combining this
+key with `nativeProfilePolicy`, unknown policies or extra fields is an error.
+Interactive callers may omit `path` to choose one `.xcf`; scoped callers must
+supply a path and an independently installed held-root callback. Neither route
+falls back to another reader/importer on failure. Input/source capture and model
+ownership share the real existing document-catalog quota. The original remains
+source-protected/read-only; no saved locator becomes read authority. Replies
+include actual `warnings`, `assessment` (or null), and `sourceReadOnly`; scoped
+replies also include `path` and basename `name`. These import-time diagnostics
+are not a claim about later edits or unqualified source/render families.
+
 ## Engine commands
 
 Change the UI language without restarting with `prefs.set`:

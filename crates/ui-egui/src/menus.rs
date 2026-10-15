@@ -296,6 +296,9 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             Ok(json!({"dialog": d}))
         }
         "file.open" => {
+            if params.get("xcfProfilePolicy").is_some() {
+                return crate::owned_xcf_open::invoke(app, &params);
+            }
             if params.get("nativeProfilePolicy").is_some() {
                 return crate::owned_native_open::invoke(app, &params);
             }

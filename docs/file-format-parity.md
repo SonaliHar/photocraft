@@ -101,7 +101,10 @@ metadata and anonymous selection edits, and `.pcraft` save and reopen through ex
 endpoints. Native saving has interactive and rooted capability routes. Explicit native reopen
 also has a desktop path/picker and a separate held-root control route, with the current color
 interpretation preserved. Default Open routing and open-time profile policy integration for
-these owned paths remain unfinished. Broader
+these owned paths remain unfinished. An explicit current-interpretation XCF Open route also
+connects the owned plain raster subset to desktop and held-root services, with source files
+read-only and diagnostics prepared before adoption. Its host limits are 16 MiB source and
+128 MiB preparation, with source capture and headers charged separately. Broader
 stock-filter rendering and source classes remain gated; unsupported cases still refuse rather
 than being admitted by these storage and lifecycle paths. XCF writing is not implemented.
 

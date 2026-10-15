@@ -6,6 +6,9 @@
 //! construction is a bounded infallible allocator limitation, not an allocation proof.
 use std::sync::{Arc, Mutex};
 
+#[path = "quota/repartition.rs"]
+mod repartition;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuotaKind {
     Resident,

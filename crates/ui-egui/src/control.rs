@@ -1493,6 +1493,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             Outcome::Screenshot { token, path }
         }
         "app.open" if p.get("nativeProfilePolicy").is_some() => wrap(crate::owned_native_open::invoke_authorized(app, p)),
+        "app.open" if p.get("xcfProfilePolicy").is_some() => wrap(crate::owned_xcf_open::invoke_authorized(app, p)),
         "app.open" => match s("path") {
             Some(path) => {
                 // Directory .pcraft (the native on-disk form) loads through a capability-scoped
@@ -1723,6 +1724,47 @@ mod tests {
         for policy in [json!("keepCurrent"), json!("convert"), Value::Null, json!(5)] {
             let reply = call(&mut app, &ctx, "app.open", json!({"path":"safe/current.pcraft","nativeProfilePolicy":policy}));
             assert_eq!(reply["ok"], false);
+            assert!(app.session.active().is_none());
+        }
+    }
+
+    // UNRUN: scoped XCF refusal must preserve every existing tab and must not
+    // retry a trusted interactive service or the ordinary resident importer.
+    #[test]
+    fn explicit_owned_xcf_control_refusal_never_falls_back() {
+        let attempts = std::rc::Rc::new(std::cell::Cell::new(0));
+        let seen = attempts.clone();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services {
+            automation_owned_xcf_open: Some(Box::new(move |_, _, _| {
+                seen.set(seen.get() + 1);
+                Err("closed XCF class refused".into())
+            })),
+            owned_xcf_open: Some(Box::new(|_, _, _| panic!("interactive XCF authority must not run"))),
+            automation_read: Some(Box::new(|_| panic!("resident fallback must not run"))),
+            ..Default::default()
+        });
+        app.session.add_document(photocraft_doc::Document::new("existing", photocraft_geom::Size::new(1, 1),
+            photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8), None).unwrap();
+        let before = app.session.active().unwrap().doc.clone();
+        let reply = call(&mut app, &egui::Context::default(), "app.open", json!({"path":"source.xcf","xcfProfilePolicy":"keepCurrent"}));
+        assert_eq!(reply["ok"], false);
+        assert!(reply["error"].as_str().unwrap().contains("closed XCF class refused"));
+        assert_eq!(attempts.get(), 1);
+        assert_eq!(app.session.documents().len(), 1);
+        assert!(app.session.active().unwrap().doc.shares_state(&before));
+    }
+
+    // UNRUN: explicit policies cannot silently disappear into ordinary Open.
+    #[test]
+    fn explicit_owned_xcf_control_bad_or_conflicting_policy_is_denied() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services {
+            automation_read: Some(Box::new(|_| panic!("ordinary read must not run"))),
+            ..Default::default()
+        });
+        for params in [json!({"path":"source.xcf","xcfProfilePolicy":"convert"}),
+            json!({"path":"source.xcf","xcfProfilePolicy":null}),
+            json!({"path":"source.xcf","xcfProfilePolicy":"keepCurrent","nativeProfilePolicy":"keepCurrent"})] {
+            assert_eq!(call(&mut app, &egui::Context::default(), "app.open", params)["ok"], false);
             assert!(app.session.active().is_none());
         }
     }

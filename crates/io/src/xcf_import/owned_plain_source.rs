@@ -11,22 +11,30 @@ use photocraft_raster::backing::{
 use photocraft_xcf::{BudgetKind, OwnedReservationBatch, PhysicalUsage};
 #[path = "owned_plain_source/census.rs"]
 mod census;
+#[path = "owned_plain_source/existing_quota.rs"]
+mod existing_quota;
 #[path = "owned_plain_source/store.rs"]
 mod store;
+pub use existing_quota::import_owned_staged_plain_bytes_in_quota;
+#[path = "owned_plain_source/reader.rs"]
+mod reader;
+pub use reader::import_owned_staged_plain_from_reader_in_quota;
 fn invalid(message: &str) -> IoError {
     IoError::Unsupported(message.into())
 }
 fn add(a: u64, b: u64) -> Result<u64, IoError> {
     a.checked_add(b).ok_or_else(|| invalid("owned XCF capacity overflow"))
 }
-fn backing(error: BackingError) -> IoError {
-    let kind = match error {
+fn backing_kind(error: BackingError) -> ErrorKind {
+    match error {
         BackingError::Cancelled => ErrorKind::Cancelled,
         BackingError::Quota | BackingError::Allocation | BackingError::Work | BackingError::Length => ErrorKind::Limit,
         BackingError::Unsupported => ErrorKind::Unsupported,
         _ => ErrorKind::Structure,
-    };
-    accounting_error(XcfError { kind, offset: 0, item: String::new(), message: format!("owned XCF backing: {error}") })
+    }
+}
+fn backing(error: BackingError) -> IoError {
+    accounting_error(XcfError { kind: backing_kind(error), offset: 0, item: String::new(), message: format!("owned XCF backing: {error}") })
 }
 fn raster_error(error: photocraft_raster::RasterInputError) -> BackingError {
     use photocraft_raster::RasterInputError as E;
@@ -180,6 +188,16 @@ pub fn import_owned_staged_plain_bytes(
     limits: &photocraft_xcf::ResourceLimits,
     control: &Interrupt<'_>,
 ) -> Result<OwnedPlainXcfImport, IoError> {
+    import_impl(name, bytes, options, limits, control, None)
+}
+fn import_impl(
+    name: &str,
+    bytes: Arc<Vec<u8>>,
+    options: &DecodeOptions<'_>,
+    limits: &photocraft_xcf::ResourceLimits,
+    control: &Interrupt<'_>,
+    existing: Option<existing_quota::Context<'_, '_>>,
+) -> Result<OwnedPlainXcfImport, IoError> {
     control.check().map_err(|_| IoError::Cancelled)?;
     if name.len() > 1 << 20 {
         return Err(invalid("owned import name ceiling"));
@@ -188,19 +206,50 @@ pub fn import_owned_staged_plain_bytes(
     // the same lowered immutable resident ceiling from their first allocation.
     let aggregate = limits.get(BudgetKind::Resident).min(options.limits.resident_bytes as u64);
     let effective_limits = limits.lowered(&[("residentBytes", aggregate)]).map_err(accounting_error)?;
+    let preparation = match &existing {
+        Some(context) => Some(existing_quota::PreparationHold::reserve(&context.quota, &effective_limits, context.control)?),
+        None => None,
+    };
+    // Move the input immediately after complete parent admission. On every
+    // failure, source bytes drop before their real preparation fees, including
+    // failures constructing the private persistent decoder Budget itself.
+    struct PreparationInput {
+        bytes: Option<Arc<Vec<u8>>>,
+        hold: Option<existing_quota::PreparationHold>,
+    }
+    let mut preparation_input = PreparationInput { bytes: Some(bytes), hold: preparation };
     let cancelled = || control.cancelled() || options.cancelled.is_some_and(|f| f());
-    let budget = photocraft_xcf::Budget::new_persistent(effective_limits.clone(), Some(&cancelled)).map_err(accounting_error)?;
+    let observer = |units| match &existing {
+        Some(context) => context.control.check(units).map_err(|error| XcfError {
+            kind: backing_kind(error),
+            offset: 0,
+            item: String::new(),
+            message: format!("owned XCF enclosing work: {error}"),
+        }),
+        None => Ok(()),
+    };
+    let budget = match &existing {
+        Some(_) => photocraft_xcf::Budget::new_persistent_with_work(effective_limits.clone(), Some(&cancelled), Some(&observer)),
+        None => photocraft_xcf::Budget::new_persistent(effective_limits.clone(), Some(&cancelled)),
+    }
+    .map_err(accounting_error)?;
     // The decoder owns encoded length+resident length receipts. This real extra
     // reservation covers spare input capacity and the immutable Arc/Vec owner.
-    let extra =
-        add(bytes.capacity().checked_sub(bytes.len()).ok_or_else(|| invalid("owned source capacity"))? as u64, (std::mem::size_of::<Vec<u8>>() + 128) as u64)?;
+    let source_bytes = preparation_input.bytes.as_ref().ok_or_else(|| invalid("owned preparation source missing"))?;
+    let extra = add(
+        source_bytes.capacity().checked_sub(source_bytes.len()).ok_or_else(|| invalid("owned source capacity"))? as u64,
+        (std::mem::size_of::<Vec<u8>>() + 128) as u64,
+    )?;
     struct Input<'b, 'a> {
         bytes: Arc<Vec<u8>>,
         extra: photocraft_xcf::Reservation<'b, 'a>,
     }
     let name_bytes = (name.len() as u64).checked_mul(4).and_then(|n| n.checked_add(1024)).ok_or_else(|| invalid("owned name envelope"))?;
     let mut name_lease = budget.reserve(BudgetKind::Index, name_bytes, "owned mapped name copies").map_err(accounting_error)?;
-    let mut input = Input { bytes, extra: budget.reserve(BudgetKind::Resident, extra, "owned source spare capacity/header").map_err(accounting_error)? };
+    let mut input = Input {
+        bytes: preparation_input.bytes.take().ok_or_else(|| invalid("owned preparation source already transferred"))?,
+        extra: budget.reserve(BudgetKind::Resident, extra, "owned source spare capacity/header").map_err(accounting_error)?,
+    };
     let completed = {
         let mut source = Bytes(input.bytes.as_slice());
         staged_source::complete_staged_plain_source(name, &mut source, control, options, &budget, photocraft_xcf::PlainSourceAccounting::BorrowedMemory)?
@@ -258,13 +307,30 @@ pub fn import_owned_staged_plain_bytes(
         physical = combined(physical, source.physical_usage())?;
     }
     physical = combined(physical, header.physical_usage())?;
-    let quota_limits = QuotaLimits { resident: aggregate, scratch: limits.get(BudgetKind::Scratch), index: limits.get(BudgetKind::Index) };
-    let (quota, baseline) = BackingQuota::new_with_aggregate_initial(
-        quota_limits,
-        aggregate,
-        QuotaUsage { resident: physical.resident_bytes, index: physical.index_bytes, scratch: physical.scratch_bytes },
-    )
-    .map_err(|_| backing(BackingError::Quota))?;
+    let (quota, baseline) = if let Some(context) = &existing {
+        let hold = preparation_input.hold.as_mut().ok_or_else(|| invalid("owned preparation fees missing"))?;
+        hold.retain_physical(physical, measured.layers, context.control)?;
+        let hold = preparation_input.hold.take().ok_or_else(|| invalid("owned preparation fees already transferred"))?;
+        let baseline = match hold.into_baseline() {
+            Ok(baseline) => baseline,
+            Err((error, hold)) => {
+                // Restore every actual fee before this function drops the later
+                // declared owned result/model/native surfaces on its error path.
+                preparation_input.hold = Some(hold);
+                return Err(error);
+            }
+        };
+        (context.quota.clone(), baseline)
+    } else {
+        let quota_limits = QuotaLimits { resident: aggregate, scratch: limits.get(BudgetKind::Scratch), index: limits.get(BudgetKind::Index) };
+        let (quota, baseline) = BackingQuota::new_with_aggregate_initial(
+            quota_limits,
+            aggregate,
+            QuotaUsage { resident: physical.resident_bytes, index: physical.index_bytes, scratch: physical.scratch_bytes },
+        )
+        .map_err(|_| backing(BackingError::Quota))?;
+        (quota, baseline)
+    };
     let staged_source::OwnedStagedImport { result, encoded, source_batch, surface_batch } = owned;
     let retention = Arc::new(Retention { _encoded: encoded, _source: source_batch, _surfaces: surface_batch, _baseline: baseline, quota: quota.clone() });
     struct Promoting {

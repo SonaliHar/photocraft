@@ -14,6 +14,7 @@ use std::sync::Arc;
 #[cfg(test)]
 mod recovery_tests;
 mod owned_native_open;
+mod owned_xcf_open;
 
 /// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster, Krita and Affinity documents, flat images, and
 /// Photoshop brushes (.abr), gradients (.grd), swatches (.aco, .ase) and keyboard shortcut sets
@@ -531,6 +532,11 @@ fn shell_word(s: &str) -> String {
 
 pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) -> Services {
     let clip: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
+    let automation_owned_xcf_open = automation.clone().filter(|workspace| workspace.has_read_root()).map(|workspace| {
+        Box::new(move |path: &str, quota: Option<&photocraft_raster::backing::quota::BackingQuota>, control: &photocraft_raster::backing::ReadControl<'_>| {
+            owned_xcf_open::rooted(&workspace, path, quota, control)
+        }) as photocraft_ui_egui::services::OwnedPlainXcfOpenFn
+    });
     let automation_owned_native_open = automation.clone().filter(|workspace| workspace.has_read_root()).map(|workspace| {
         Box::new(move |path: &str, quota: Option<&photocraft_raster::backing::quota::BackingQuota>, control: &photocraft_raster::backing::ReadControl<'_>| {
             crate::crash_guard::guard("Open", || {
@@ -620,6 +626,8 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     Services {
         owned_native_open: Some(Box::new(owned_native_open::open)),
         automation_owned_native_open,
+        owned_xcf_open: Some(Box::new(owned_xcf_open::open)),
+        automation_owned_xcf_open,
         native_save: Some(Box::new(save_native)),
         accounted_native_save: Some(Box::new(save_accounted_native)),
         automation_accounted_native_save,

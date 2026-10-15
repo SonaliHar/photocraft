@@ -12,6 +12,7 @@ use crate::AutomationError;
 
 mod accounted_native_open;
 mod accounted_native_save;
+mod owned_xcf_open;
 mod linked_read;
 mod source_write;
 mod stored_channel_read;

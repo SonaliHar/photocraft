@@ -11,6 +11,9 @@ use crate::AutomationError;
 #[path = "files/owned_native_open.rs"]
 mod owned_native_open;
 pub use owned_native_open::open_accounted_native_selected_path;
+#[path = "files/owned_xcf_open.rs"]
+pub(crate) mod owned_xcf_open;
+pub use owned_xcf_open::open_owned_plain_xcf_selected_path;
 
 #[path = "files/protected_save.rs"]
 mod protected_save;

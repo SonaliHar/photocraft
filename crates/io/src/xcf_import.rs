@@ -19,6 +19,9 @@ mod authorized_font_tests;
 mod plane;
 use plane::{ExactParsedPlane, MappingPlane};
 
+#[path = "xcf_import/precision_point_source.rs"]
+mod precision_point_source;
+
 #[path = "xcf_import/layer_mask_geometry.rs"]
 mod layer_mask_geometry;
 
@@ -40,7 +43,7 @@ pub use staged_source::import_staged_plain_source_with_budget;
 
 #[path = "xcf_import/owned_plain_source.rs"]
 mod owned_plain_source;
-pub use owned_plain_source::{OwnedPlainXcfImport, import_owned_staged_plain_bytes};
+pub use owned_plain_source::{OwnedPlainXcfImport, import_owned_staged_plain_bytes, import_owned_staged_plain_bytes_in_quota, import_owned_staged_plain_from_reader_in_quota};
 
 #[path = "xcf_import/source.rs"]
 mod source;
@@ -1241,96 +1244,9 @@ fn qualified_precision_point(file: &XcfFile, operation: &str) -> bool {
     qualified_precision_point_impl(file, operation, false, false)
 }
 fn qualified_precision_point_impl(file: &XcfFile, operation: &str, balance_depth: bool, exposure_geometry: bool) -> bool {
-    let canvas = if exposure_geometry { (295, 160) } else { (8, 6) };
-    let drawable = if exposure_geometry { (257, 129) } else { (8, 6) };
-    let wide = matches!(
-        operation,
-        "gegl:brightness-contrast"
-            | "gegl:levels"
-            | "gegl:exposure"
-            | "gimp:color-balance"
-            | "gegl:color-temperature"
-            | "gimp:desaturate"
-            | "gegl:saturation"
-            | "gegl:sepia"
-            | "gegl:alien-map"
-            | "gimp:threshold"
-            | "gimp:threshold-alpha"
-    );
-    let width = match (file.precision, file.sample, file.encoding) {
-        (100, Sample::U8, Encoding::Linear) | (150, Sample::U8, Encoding::NonlinearProfile) | (175, Sample::U8, Encoding::Perceptual) if balance_depth => 1,
-        (300, Sample::U32, Encoding::Linear) | (350, Sample::U32, Encoding::NonlinearProfile) | (375, Sample::U32, Encoding::Perceptual) if balance_depth => 4,
-        (500, Sample::F16, Encoding::Linear) | (550, Sample::F16, Encoding::NonlinearProfile) | (575, Sample::F16, Encoding::Perceptual) if balance_depth => 4,
-        (275, Sample::U16, Encoding::Perceptual) if balance_depth => 2,
-        (675, Sample::F32, Encoding::Perceptual) if balance_depth => 4,
-        (775, Sample::F64, Encoding::Perceptual) if balance_depth => 8,
-        (250, Sample::U16, Encoding::NonlinearProfile) if !balance_depth => 2,
-        (600, Sample::F32, Encoding::Linear) if !balance_depth => 4,
-        (750, Sample::F64, Encoding::NonlinearProfile) if !balance_depth => 8,
-        (200, Sample::U16, Encoding::Linear) if wide && !balance_depth => 2,
-        (650, Sample::F32, Encoding::NonlinearProfile) if wide && !balance_depth => 4,
-        (700, Sample::F64, Encoding::Linear) if wide && !balance_depth => 8,
-        _ => return false,
-    };
-    file.version == 22
-        && (file.model == Model::Rgb
-            || wide
-                && !matches!(operation, "gimp:color-balance" | "gimp:desaturate" | "gimp:threshold" | "gegl:sepia" | "gegl:alien-map")
-                && file.model == Model::Gray)
-        && file.icc.is_empty()
-        && (file.width, file.height) == canvas
-        && file.channels.is_empty()
-        && file.paths.is_empty()
-        && file.layers.len() == 1
-        && file.layers.first().is_some_and(|d| {
-            !d.group
-                && d.path.len() <= 1
-                && d.visible
-                && d.alpha
-                && d.model == file.model
-                && (d.width, d.height) == drawable
-                && if exposure_geometry { matches!(d.offset, (-13, 13) | (17, -11)) } else { d.offset == (0, 0) }
-                && d.mode == 28
-                && (d.blend_space, d.composite_space, d.composite_mode) == (0, -1, -1)
-                && d.opacity.to_bits() == 1.0_f32.to_bits()
-                && d.mask.is_none()
-                && d.text.is_none()
-                && d.vector.is_none()
-                && d.link.is_none()
-                && d.transform.is_none()
-                && d.floating_attachment.is_none()
-                && d.effects.len() == 1
-                && d.effects.first().is_some_and(|effect| {
-                    effect.operation == operation
-                        && (operation != "gegl:saturation"
-                            || effect.arguments.iter().any(|argument| {
-                                argument.name == "colorspace"
-                                    && (matches!(argument.value, ArgumentValue::Enum(0 | 1))
-                                        || argument.value == ArgumentValue::Enum(2)
-                                            && (file.model == Model::Gray || matches!(file.sample, Sample::U16 | Sample::F32)))
-                            }))
-                })
-                && d.plane.as_ref().is_some_and(|plane| {
-                    plane.sample == if file.sample == Sample::F16 { Sample::F32 } else { file.sample }
-                        && plane.channels == if file.model == Model::Gray { 2 } else { 4 }
-                        && plane.width == drawable.0
-                        && plane.height == drawable.1
-                        && plane.bytes.len() == drawable.0 as usize * drawable.1 as usize * plane.channels * width
-                        && plane.bytes.chunks_exact(width).all(|bytes| match file.sample {
-                            Sample::U8 | Sample::U16 | Sample::U32 => true,
-                            Sample::F16 | Sample::F32 => {
-                                let Ok(raw) = <[u8; 4]>::try_from(bytes) else { return false };
-                                let value = f32::from_ne_bytes(raw);
-                                value.is_finite() && (0.0..=1.0).contains(&value) && (file.sample != Sample::F16 || exact_half_unit_f32(value))
-                            }
-                            Sample::F64 => {
-                                let Ok(raw) = <[u8; 8]>::try_from(bytes) else { return false };
-                                let value = f64::from_ne_bytes(raw);
-                                value.is_finite() && (0.0..=1.0).contains(&value)
-                            }
-                        })
-                })
-        })
+    // Preserve the eager Boolean interface's original refusal behavior. The
+    // shared fallible endpoint carries actual controls for future staged callers.
+    precision_point_source::qualify(file, operation, balance_depth, exposure_geometry, &Interrupt::NONE, None).unwrap_or(false)
 }
 /// Saved-source and edit witnesses qualify this varying-alpha, noncommuting stack.
 /// Its opaque envelope is deliberately distinct from the ordinary point epoch.

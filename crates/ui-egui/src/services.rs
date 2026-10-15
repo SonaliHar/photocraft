@@ -24,6 +24,16 @@ pub type OwnedNativeOpenFn = Box<
     ) -> Result<photocraft_format::owned_document::OwnedDocumentArchive, String>,
 >;
 
+/// Explicit original-XCF input. A host captures its already authorized reader
+/// on the actual supplied catalog quota; retained source locators grant no reads.
+pub type OwnedPlainXcfOpenFn = Box<
+    dyn FnMut(
+        &str,
+        Option<&photocraft_raster::backing::quota::BackingQuota>,
+        &photocraft_raster::backing::ReadControl<'_>,
+    ) -> Result<photocraft_io::OwnedPlainXcfImport, String>,
+>;
+
 /// Explicit accounted native output. Preparation, source protection and the
 /// atomic writer use the caller's same control and the snapshot's actual quota.
 /// This capability does not complete Session save bookkeeping itself.

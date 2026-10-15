@@ -90,6 +90,7 @@ pub mod field_tab;
 pub mod file_dialog;
 pub mod file_open;
 mod owned_native_open;
+mod owned_xcf_open;
 pub mod file_ui;
 pub mod fill_ui;
 pub mod filter_dialog;
@@ -443,6 +444,9 @@ pub struct Services {
     pub owned_native_open: Option<services::OwnedNativeOpenFn>,
     /// Explicit held-root native open; never falls back to the interactive reader.
     pub automation_owned_native_open: Option<services::OwnedNativeOpenFn>,
+    /// Explicit original-XCF read capabilities, separately scoped by the host.
+    pub owned_xcf_open: Option<services::OwnedPlainXcfOpenFn>,
+    pub automation_owned_xcf_open: Option<services::OwnedPlainXcfOpenFn>,
     /// Encode a document for a file name (format chosen by extension).
     pub export: Option<ExportFn>,
     /// Atomic streamed native saves with all open-document source exclusions.
