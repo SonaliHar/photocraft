@@ -437,7 +437,7 @@ fn curve_drag_moves_the_existing_point_without_creating_another() {
     let ctx = h.ctx.clone();
     menu(h.state_mut(), &ctx, json!({"ui":{"set":{"pointCurve":[[0,0],[128,128],[255,255]]}}})).unwrap();
     h.run_steps(3);
-    let a = pos2(graph.left() + 128.0 / 255.0 * 260.0, graph.bottom() - 128.0 / 255.0 * 260.0);
+    let a = pos2(graph.left() + 128.0 / 255.0 * graph.width(), graph.bottom() - 128.0 / 255.0 * graph.height());
     let b = a + vec2(40.0, -32.0);
     drag(&mut h, a, b);
     let points = inspect(&h)["params"]["pointCurve"].clone();
@@ -746,6 +746,7 @@ fn alt_drag_diagnostics_follow_light_tone_sliders_not_same_named_ones() {
     assert_eq!(during["overlayRevision"], during["previewRevision"], "Light tone sliders drive Alt diagnostics");
 
     let mut h = fixture(ThemeKind::Pro);
+    h.state_mut().ui.camera_raw_workspace.curve_channel = photocraft_ui_egui::camera_raw_workspace_ui::CurveChannel::Parametric;
     h.get_by_label(tr("Light")).click();
     h.run_steps(12);
     h.get_by_label(tr("Curve")).click();

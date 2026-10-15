@@ -3194,3 +3194,16 @@ curves	Smooth	Lisser
 	set name	nom du jeu
 	{set} (modified)	{set} (modifié)
 	Random	Aléatoire
+
+# Camera Raw workspace metadata and controls
+	Capture Date	Date de prise de vue
+	Dimensions	Dimensions
+	File Name	Nom du fichier
+	Manual Noise Reduction	Réduction manuelle du bruit
+	Reset to Open	Rétablir les paramètres à l’ouverture
+	White Balance: Custom	Balance des blancs : Personnalisée
+	Collapse All	Tout réduire
+	Color Sampler	Échantillonnage de couleur
+	Color Wheel	Roue chromatique
+	Expand All	Tout développer
+	Single Panel Mode	Mode panneau unique

@@ -710,7 +710,7 @@ mod tests {
         camera_raw_ui::open(&mut app, &ctx).unwrap();
         frame(&mut app, &|app, ctx| camera_raw_ui::show(app, ctx));
         let drawn = app.camera_raw.as_ref().unwrap().viewport.expect("the dialog laid out its view");
-        assert_eq!(drawn, camera_raw_ui::layout(ctx.content_rect(), false).view);
+        assert_eq!(drawn, camera_raw_ui::layout(&ctx, ctx.content_rect(), false).view);
         let reported = crate::control::viewport(&app, &ctx)["cameraRaw"]["view"].clone();
         assert_eq!(promised, reported, "the picture a host laid over the frame does not move when the dialog takes over");
     }
@@ -1170,7 +1170,7 @@ mod tests {
         open_in_camera_raw(&mut app, &ctx, spec(None));
         let dialog = app.camera_raw.as_ref().expect("a dialog");
         assert!(dialog.is_stand_in());
-        let described = dialog.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview);
+        let described = dialog.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview, &app.ui.camera_raw_workspace);
         assert_eq!(described["sourceSize"], json!([3700, 1900]), "the photo's size, not the stand-in's");
         let size = app.session.active().unwrap().doc.size;
         assert!(size.width < 3700 && size.width >= 1800, "the document is reduced: {}x{}", size.width, size.height);
@@ -1387,7 +1387,10 @@ mod tests {
 
     fn dialog_name(app: &PhotocraftApp) -> String {
         let d = app.camera_raw.as_ref().expect("a dialog is open");
-        d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)["openingRaw"]["name"].as_str().unwrap_or_default().to_string()
+        d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview, &app.ui.camera_raw_workspace)["openingRaw"]["name"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
     }
 
     #[test]

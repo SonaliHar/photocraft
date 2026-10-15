@@ -497,6 +497,8 @@ fn take_label_scrub(ui: &Ui, rect: Rect) -> Option<LabelScrub> {
 struct FieldOpts {
     /// Decimal places shown (default: one, or two for a small range).
     decimals: Option<u32>,
+    fixed_decimals: bool,
+    appearance: Option<ValueFieldAppearance>,
     /// The unit typed units convert into (default: the suffix's, at [`set_field_resolution`]).
     units: Option<FieldUnits>,
     wrap_drag: bool,
@@ -526,9 +528,10 @@ fn value_field_box(
     trailing: f32,
     opts: FieldOpts,
 ) -> (Response, Rect) {
-    let FieldOpts { decimals, units, wrap_drag } = opts;
+    let FieldOpts { decimals, fixed_decimals, appearance, units, wrap_drag } = opts;
     let t = Tokens::get(ui.ctx());
     let (rect, slot) = ui.allocate_exact_size(size, Sense::hover());
+    let rect = rect.translate(vec2(0.0, appearance.map_or(0.0, |a| a.box_offset_y)));
     let scrub = take_label_scrub(ui, rect).map(|s| {
         if !s.option_area {
             return s;
@@ -558,11 +561,13 @@ fn value_field_box(
     // Centred: the digits' ink then sits within 0.2 pt of the box's centre, where a 1 pt lift
     // (#1322) put it 0.9 pt high and the focus outline off-centre (#5150). The slot is at least
     // one text row tall, so a slim box's number isn't pushed out of it (#2823).
-    let font = theme::mono(12.0);
+    let font = appearance
+        .map_or_else(|| theme::mono(12.0), |a| if a.monospace { egui::FontId::monospace(a.font_size) } else { egui::FontId::proportional(a.font_size) });
     let row_h = ui.painter().layout_no_wrap("0".into(), font.clone(), t.text).size().y;
     let slot_h = (rect.height() - 4.0).max(row_h).min(rect.height() - 2.0);
-    let cy = rect.center().y;
-    let field = Rect::from_min_max(pos2(rect.left() + 4.0, cy - slot_h / 2.0), pos2(rect.right() - 4.0 - suffix_w - trailing, cy + slot_h / 2.0));
+    let cy = rect.center().y + appearance.map_or(0.0, |a| a.text_offset_y);
+    let padding = appearance.map_or(4.0, |a| a.text_padding);
+    let field = Rect::from_min_max(pos2(rect.left() + padding, cy - slot_h / 2.0), pos2(rect.right() - padding - suffix_w - trailing, cy + slot_h / 2.0));
     // Small ranges (gamma 0.01–9.99, 0–1 centres) need two decimals and a finer drag, like Photoshop.
     let fine = range.end() - range.start() <= 10.0;
     let (lo, hi) = (*range.start(), *range.end());
@@ -578,14 +583,22 @@ fn value_field_box(
             ui.style_mut().visuals.widgets.hovered.bg_stroke = Stroke::NONE;
             ui.style_mut().visuals.widgets.hovered.weak_bg_fill = Color32::TRANSPARENT;
             ui.style_mut().override_font_id = Some(font);
+            if appearance.is_some() {
+                ui.visuals_mut().override_text_color = Some(t.text_dim);
+            }
             // The theme's interact height (24) is taller than the number's slot: the DragValue
             // would grow past the slot's bottom and sit low, or spill out of a slim box (#2823).
             // Its horizontal padding would push a long number out of the box's left edge.
             ui.spacing_mut().interact_size.y = field.height();
             ui.spacing_mut().button_padding = Vec2::ZERO;
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let layout = egui::Layout::centered_and_justified(ui.layout().main_dir());
-                ui.allocate_ui_with_layout(field.size(), layout, |ui| number_edit(ui, value, range, fine, decimals, units, wrap_drag)).inner
+                let layout = if appearance.is_some_and(|a| a.left_aligned) {
+                    ui.spacing_mut().interact_size.x = field.width();
+                    egui::Layout::left_to_right(egui::Align::Center).with_main_justify(true)
+                } else {
+                    egui::Layout::centered_and_justified(ui.layout().main_dir())
+                };
+                ui.allocate_ui_with_layout(field.size(), layout, |ui| number_edit(ui, value, range, fine, decimals, units, wrap_drag, fixed_decimals)).inner
             })
             .inner
         }
@@ -796,6 +809,7 @@ pub fn focus_first_field(ctx: &egui::Context, on: bool) {
 /// The number in a [`value_field`]. A typed number applies as it's typed; arithmetic waits for
 /// Enter, Tab or click-away, because per keystroke `5/2` would land first and a caller that
 /// rounds it would cut `5/2*2` short. `changed()` means a new value, not just a keystroke.
+#[allow(clippy::too_many_arguments)]
 fn number_edit(
     ui: &mut Ui,
     value: &mut f32,
@@ -804,6 +818,7 @@ fn number_edit(
     decimals: Option<u32>,
     units: crate::numeric_expression::Units,
     wrap_drag: bool,
+    fixed_decimals: bool,
 ) -> Response {
     let (id, ctx) = (ui.next_auto_id(), ui.ctx().clone());
     // Focused before the DragValue is drawn, so it gains focus this frame and selects its text.
@@ -830,6 +845,7 @@ fn number_edit(
             // A warp is an absolute-position jump. The scoped scrub below removes that jump.
             .speed(if wrapped_drag { 0.0 } else { speed })
             .custom_formatter(move |v, _| match decimals {
+                Some(d) if fixed_decimals => format!("{:.*}", d.min(8) as usize, v),
                 Some(d) => fmt_num_prec(v, d),
                 None if fine => fmt_num2(v),
                 None => fmt_num(v),
@@ -887,7 +903,7 @@ fn arrow_step(ui: &mut Ui, slot: egui::Id, step: f32) -> (f32, f32) {
 
 /// Thin-track slider with a round knob. `gradient` paints the track (e.g. hue spectrum).
 pub fn slider(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, gradient: Option<&[Color32]>) -> Response {
-    slider_with(ui, value, range, gradient, RowGestures::default())
+    slider_with(ui, value, range, gradient, RowGestures::default(), None)
 }
 
 /// Photoshop's gestures on a slider row beyond click and drag, as measured on Color Balance in
@@ -975,12 +991,33 @@ fn second_click(ui: &Ui, resp: &Response) -> bool {
     double
 }
 
-fn slider_with(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, gradient: Option<&[Color32]>, g: RowGestures) -> Response {
+fn slider_with(
+    ui: &mut Ui,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    gradient: Option<&[Color32]>,
+    g: RowGestures,
+    style: Option<SliderRowStyle>,
+) -> Response {
     let t = Tokens::get(ui.ctx());
+    let neutral_track = [t.field_border, t.text_dim];
+    let gradient = gradient.or_else(|| style.filter(|s| s.triangle_handle).map(|_| neutral_track.as_slice()));
     let width = ui.available_width().max(60.0);
-    let (rect, mut resp) = ui.allocate_exact_size(vec2(width, 18.0), Sense::click_and_drag());
+    let (rect, mut resp) = ui.allocate_exact_size(vec2(width, style.map_or(18.0, |s| s.track_height)), Sense::click_and_drag());
     let (lo, hi) = (*range.start(), *range.end());
-    let track = Rect::from_center_size(rect.center(), vec2(rect.width() - 14.0, if gradient.is_some() { 5.0 } else { 3.0 }));
+    let track = Rect::from_center_size(
+        rect.center(),
+        vec2(
+            rect.width() - style.map_or(14.0, |s| s.track_inset * 2.0),
+            if style.is_some() {
+                3.0
+            } else if gradient.is_some() {
+                5.0
+            } else {
+                3.0
+            },
+        ),
+    );
     if let Some(p) = resp.interact_pointer_pos()
         && (resp.dragged() || resp.clicked())
     {
@@ -1035,7 +1072,10 @@ fn slider_with(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
         }
     }
     let knob = pos2(knob_x, rect.center().y);
-    if t.bevel {
+    if style.is_some_and(|s| s.triangle_handle) {
+        let points = vec![knob + vec2(0.0, -5.0), knob + vec2(6.0, 1.0), knob + vec2(6.0, 5.0), knob + vec2(-6.0, 5.0), knob + vec2(-6.0, 1.0)];
+        painter.add(egui::Shape::convex_polygon(points, t.text_dim, Stroke::new(1.0, t.separator)));
+    } else if t.bevel {
         let kr = Rect::from_center_size(knob, vec2(10.0, 16.0));
         surface(ui, kr, t.card, true);
     } else {
@@ -1083,17 +1123,92 @@ pub fn slider_row_prec(
     g: RowGestures,
     decimals: Option<u32>,
 ) -> Response {
+    slider_row_prec_width(ui, label, value, range, suffix, gradient, g, decimals, 74.0)
+}
+
+/// The labelled row with an explicit numeric-field width (for live layout previews).
+#[allow(clippy::too_many_arguments)]
+pub fn slider_row_prec_width(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    gradient: Option<&[Color32]>,
+    g: RowGestures,
+    decimals: Option<u32>,
+    field_width: f32,
+) -> Response {
+    slider_row_prec_styled(ui, label, value, range, suffix, gradient, g, decimals, field_width, None)
+}
+
+/// Camera Raw's numeric field typography and placement; ordinary editor fields keep their defaults.
+#[derive(Clone, Copy, Debug)]
+pub struct ValueFieldAppearance {
+    pub font_size: f32,
+    pub monospace: bool,
+    pub left_aligned: bool,
+    pub text_padding: f32,
+    pub text_offset_y: f32,
+    pub box_offset_y: f32,
+}
+
+/// Optional visual metrics; absent preserves the shared editor slider appearance.
+#[derive(Clone, Copy)]
+pub struct SliderRowStyle {
+    pub field_appearance: ValueFieldAppearance,
+    pub field_height: f32,
+    pub label_row_height: f32,
+    pub track_inset: f32,
+    pub track_height: f32,
+    pub inner_gap: f32,
+    pub bottom_gap: f32,
+    pub triangle_handle: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn slider_row_prec_styled(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    gradient: Option<&[Color32]>,
+    g: RowGestures,
+    decimals: Option<u32>,
+    field_width: f32,
+    style: Option<SliderRowStyle>,
+) -> Response {
     let t = Tokens::get(ui.ctx());
+    let original_gap = ui.spacing().item_spacing.y;
+    let original_height = ui.spacing().interact_size.y;
+    if let Some(style) = style {
+        ui.spacing_mut().item_spacing.y = style.inner_gap;
+        ui.spacing_mut().interact_size.y = style.label_row_height;
+    }
     let mut changed_resp = None;
     ui.horizontal(|ui| {
         // The label scrubs the row's field, across the row (Photoshop's scrubby labels).
         let l = ui.label(egui::RichText::new(tl!(label)).color(t.text_dim));
         scrub_label_within(ui, &l, f32::INFINITY);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            changed_resp = Some(value_field_in(ui, value, range.clone(), suffix, 74.0, 0.0, FieldOpts { decimals, ..Default::default() }).0);
+            changed_resp = Some(
+                value_field_box(
+                    ui,
+                    value,
+                    range.clone(),
+                    suffix,
+                    vec2(field_width.clamp(40.0, 120.0), style.map_or(VALUE_FIELD_H, |s| s.field_height)),
+                    0.0,
+                    FieldOpts { decimals, fixed_decimals: style.is_some(), appearance: style.map(|s| s.field_appearance), ..Default::default() },
+                )
+                .0,
+            );
         });
     });
-    let s = slider_with(ui, value, range, gradient, g);
+    let s = slider_with(ui, value, range, gradient, g, style);
+    ui.spacing_mut().item_spacing.y = original_gap;
+    ui.spacing_mut().interact_size.y = original_height;
     let mut r = s.clone();
     if let Some(v) = changed_resp {
         if v.changed() {
@@ -1103,7 +1218,7 @@ pub fn slider_row_prec(
         use egui::response::Flags;
         r.flags |= v.flags & (Flags::DRAG_STARTED | Flags::DRAGGED | Flags::DRAG_STOPPED);
     }
-    ui.add_space(4.0);
+    ui.add_space(style.map_or(4.0, |s| s.bottom_gap));
     r
 }
 

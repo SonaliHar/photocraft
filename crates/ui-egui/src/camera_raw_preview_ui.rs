@@ -234,25 +234,7 @@ pub(crate) fn interact(ui: &mut Ui, state: &mut CameraRawPreviewState, viewport:
     (state.image_rect(viewport, size), response, panning || temporary_zoom, zoom_box)
 }
 
-pub(crate) fn toolbar(ui: &mut Ui, state: &mut CameraRawPreviewState, viewport: Rect, size: Vec2, sampler: &mut bool) {
-    let zoom_tool = crate::icons::button(ui, "zoom-in", 28.0, !state.hand && !*sampler, tl!("Zoom Tool"));
-    zoom_tool.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!("Zoom Tool")));
-    if zoom_tool.double_clicked() {
-        state.fit();
-    }
-    if zoom_tool.clicked() {
-        state.hand = false;
-        *sampler = false;
-    }
-    let hand_tool = crate::icons::button(ui, "hand", 28.0, state.hand && !*sampler, tl!("Hand Tool"));
-    hand_tool.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!("Hand Tool")));
-    if hand_tool.double_clicked() {
-        state.fit();
-    }
-    if hand_tool.clicked() {
-        state.hand = true;
-        *sampler = false;
-    }
+pub(crate) fn toolbar(ui: &mut Ui, state: &mut CameraRawPreviewState, viewport: Rect, size: Vec2, _sampler: &mut bool) {
     if widgets::secondary_button(ui, tl!("Fit in View"), 84.0).clicked() {
         state.fit();
     }

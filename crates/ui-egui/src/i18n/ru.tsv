@@ -3159,3 +3159,16 @@ curves	Smooth	Сгладить
 	set name	имя набора
 	{set} (modified)	{set} (изменён)
 	Random	Случайно
+
+# Camera Raw workspace metadata and controls
+	Capture Date	Дата съёмки
+	Dimensions	Размеры
+	File Name	Имя файла
+	Manual Noise Reduction	Ручное шумоподавление
+	Reset to Open	Сбросить к состоянию при открытии
+	White Balance: Custom	Баланс белого: Заказной
+	Collapse All	Свернуть всё
+	Color Sampler	Цветовой эталон
+	Color Wheel	Цветовой круг
+	Expand All	Развернуть всё
+	Single Panel Mode	Режим одной панели

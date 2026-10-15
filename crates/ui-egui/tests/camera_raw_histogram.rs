@@ -124,7 +124,7 @@ fn settings_sections_group_existing_controls_without_rendering_or_document_edits
         h.run_steps(12);
         h.get_by_role_and_label(Role::Button, tr("Effects")).click();
         h.run_steps(12);
-        for label in ["Texture", "Clarity", "Dehaze", "Vignetting", "Grain"] {
+        for label in ["Texture", "Clarity", "Dehaze", "Vignette", "Grain"] {
             assert!(h.query_by_label(tr(label)).is_some(), "effects control: {label}");
         }
         let after = control::inspect(h.state(), &h.ctx);

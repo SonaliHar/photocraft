@@ -3949,3 +3949,16 @@ curves	Smooth	Vloeiend maken
 	There are too many sets: delete one first.	Er zijn te veel sets: verwijder er eerst een.
 	set name	naam van de set
 	{set} (modified)	{set} (gewijzigd)
+
+# Camera Raw workspace metadata and controls
+	Capture Date	Opnamedatum
+	Dimensions	Afmetingen
+cameraRaw	File Name	Bestandsnaam
+	Manual Noise Reduction	Handmatige ruisreductie
+	Reset to Open	Herstellen naar openingsstatus
+	White Balance: Custom	Witbalans: Aangepast
+	Collapse All	Alles samenvouwen
+	Color Sampler	Kleurenpipet
+	Color Wheel	Kleurenwiel
+	Expand All	Alles uitvouwen
+	Single Panel Mode	Modus met één deelvenster

@@ -2790,3 +2790,17 @@ curves	Smooth	平滑
 	set name	組合名稱
 	{set} (modified)	{set}（已修改）
 	Random	隨機
+
+# Camera Raw workspace metadata and controls
+	Capture Date	拍攝日期
+	Dimensions	尺寸
+	File Name	檔案名稱
+	Manual Noise Reduction	手動減少雜訊
+	Reset to Open	重設為開啟時狀態
+	White Balance: Custom	白平衡：自訂
+	Collapse All	全部收合
+	Color Sampler	顏色取樣器
+	Color Wheel	色輪
+	Expand All	全部展開
+	Single Panel Mode	單一面板模式
+	Lens	鏡頭

@@ -3865,3 +3865,16 @@ curves	Smooth	スムーズ
 	There are too many sets: delete one first.	セットが多すぎます。先に 1 つ削除してください。
 	set name	セット名
 	{set} (modified)	{set}（変更あり）
+
+# Camera Raw workspace metadata and controls
+	Capture Date	撮影日時
+	Dimensions	寸法
+	File Name	ファイル名
+	Manual Noise Reduction	手動ノイズ軽減
+	Reset to Open	開いた状態にリセット
+	White Balance: Custom	ホワイトバランス：カスタム
+	Collapse All	すべて折りたたむ
+	Color Sampler	カラーサンプラー
+	Color Wheel	カラーホイール
+	Expand All	すべて展開
+	Single Panel Mode	単一パネルモード

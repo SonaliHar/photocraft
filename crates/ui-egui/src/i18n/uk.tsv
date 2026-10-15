@@ -3888,3 +3888,16 @@ curves	Smooth	Згладити
 	There are too many sets: delete one first.	Забагато наборів: спершу видаліть один.
 	set name	назва набору
 	{set} (modified)	{set} (змінено)
+
+# Camera Raw workspace metadata and controls
+	Capture Date	Дата знімання
+	Dimensions	Розміри
+	File Name	Ім’я файлу
+	Manual Noise Reduction	Ручне зменшення шуму
+	Reset to Open	Скинути до стану при відкритті
+	White Balance: Custom	Баланс білого: Власний
+	Collapse All	Згорнути все
+	Color Sampler	Зразок кольору
+	Color Wheel	Колірне коло
+	Expand All	Розгорнути все
+	Single Panel Mode	Режим однієї панелі

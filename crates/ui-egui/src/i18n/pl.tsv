@@ -3787,3 +3787,16 @@ curves	Smooth	Wygładź
 	There are too many sets: delete one first.	Zestawów jest za dużo: najpierw usuń jeden.
 	set name	nazwa zestawu
 	{set} (modified)	{set} (zmieniony)
+
+# Camera Raw workspace metadata and controls
+	Capture Date	Data wykonania
+	Dimensions	Wymiary
+	File Name	Nazwa pliku
+	Manual Noise Reduction	Ręczna redukcja szumu
+	Reset to Open	Przywróć stan przy otwarciu
+	White Balance: Custom	Balans bieli: Własny
+	Collapse All	Zwiń wszystko
+	Color Sampler	Próbnik koloru
+	Color Wheel	Koło kolorów
+	Expand All	Rozwiń wszystko
+	Single Panel Mode	Tryb pojedynczego panelu

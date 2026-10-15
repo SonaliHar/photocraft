@@ -3889,3 +3889,16 @@ curves	Smooth	Εξομάλυνση
 	There are too many sets: delete one first.	Υπάρχουν πάρα πολλά σύνολα: διαγράψτε πρώτα ένα.
 	set name	όνομα συνόλου
 	{set} (modified)	{set} (τροποποιημένο)
+
+# Camera Raw workspace metadata and controls
+	Capture Date	Ημερομηνία λήψης
+	Dimensions	Διαστάσεις
+cameraRaw	File Name	Όνομα αρχείου
+	Manual Noise Reduction	Χειροκίνητη μείωση θορύβου
+	Reset to Open	Επαναφορά κατά το άνοιγμα
+	White Balance: Custom	Ισορροπία λευκού: Προσαρμοσμένη
+	Collapse All	Σύμπτυξη όλων
+	Color Sampler	Δειγματολήπτης χρώματος
+	Color Wheel	Χρωματικός τροχός
+	Expand All	Ανάπτυξη όλων
+	Single Panel Mode	Λειτουργία ενός πίνακα

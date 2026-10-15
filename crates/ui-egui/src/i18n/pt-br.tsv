@@ -3979,3 +3979,16 @@ layerLabel	No Color	Sem cor
 	There are too many sets: delete one first.	Há conjuntos demais: exclua um primeiro.
 	set name	nome do conjunto
 	{set} (modified)	{set} (modificado)
+
+# Camera Raw workspace metadata and controls
+	Capture Date	Data da captura
+	Dimensions	Dimensões
+cameraRaw	File Name	Nome do arquivo
+	Manual Noise Reduction	Redução de ruído manual
+	Reset to Open	Redefinir para estado de abertura
+	White Balance: Custom	Equilíbrio de branco: Personalizado
+	Collapse All	Recolher tudo
+	Color Sampler	Amostrador de cores
+	Color Wheel	Roda de cores
+	Expand All	Expandir tudo
+	Single Panel Mode	Modo de painel único

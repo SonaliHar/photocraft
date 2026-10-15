@@ -1350,7 +1350,7 @@ pub fn viewport(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         Some(dialog) => json!({"open": true, "busy": dialog.busy(), "view": dialog.viewport.map(rect), "preview": dialog.scope.preview_rect.map(rect)}),
         // The workspace is waiting for the next photo's dialog: its frame stands in, with the dialog's own view.
         None if crate::raw_workspace::shell_active(app) => {
-            let view = crate::camera_raw_ui::layout(screen, false).view;
+            let view = crate::camera_raw_ui::layout(ctx, screen, false).view;
             json!({"open": false, "loading": true, "view": rect(view), "preview": rect(view)})
         }
         None => Value::Null,
@@ -1431,7 +1431,8 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "brush": {"size": app.session.tools.brush.size, "hardness": app.session.tools.brush.hardness, "opacity": app.session.tools.brush.opacity},
         "distort": app.distort.describe(),
         "jobs": crate::jobs_ui::inspect(app),
-        "cameraRaw": app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)),
+        "cameraRawDesign": super::camera_raw_design::get(ctx).as_ref(),
+        "cameraRaw": app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview, &app.ui.camera_raw_workspace)),
     })
 }
 

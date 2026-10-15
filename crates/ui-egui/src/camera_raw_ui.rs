@@ -12,7 +12,7 @@
 //! settings files, see [`photocraft_io::camera_raw_xmp`]) through the file dialog.
 
 use egui::{Align2, Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
-use photocraft_algo::camera_raw::{CameraRaw, Wheel, curve_lut};
+use photocraft_algo::camera_raw::{CameraRaw, curve_lut};
 use photocraft_algo::histogram::RgbHistogram;
 
 use crate::camera_raw_scope_ui::{MAX_SAMPLERS, ToneZone};
@@ -130,11 +130,6 @@ pub(crate) fn proxy_for(document: &photocraft_doc::Document) -> Option<ProxyData
     let pixels = proxy_pixels(&surf, &geometry);
     Some(ProxyData { area: geometry.area, k: geometry.k, pw: geometry.pw, ph: geometry.ph, pixels: std::sync::Arc::new(pixels), curve: None })
 }
-const PANEL_W: f32 = 330.0;
-/// In the workspace (the editor hosted in Image Triage) the photo gets more of the window than in the filter's own window: a narrower
-/// settings panel, a thinner margin around the photo, and no strip under it (the zoom tools sit in the footer). See [`layout`].
-const WORKSPACE_PANEL_W: f32 = 270.0;
-const WORKSPACE_VIEW_MARGIN: f32 = 8.0;
 const BANDS: [&str; 8] = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"];
 
 pub struct CameraRawDialog {
@@ -171,7 +166,8 @@ pub struct CameraRawDialog {
     histogram_ms: f64,
     pub(crate) dirty: bool,
     pub show_before: bool,
-    mixer_tab: usize,
+    camera_info: photocraft_algo::exif::CameraInfo,
+    document_name: String,
     pub render_ms: f64,
     /// Set for the open-time dialog ([`Target::OpenRaw`]).
     raw_open: Option<RawOpen>,
@@ -198,7 +194,12 @@ impl CameraRawDialog {
         self.raw_open.as_ref().is_some_and(|raw| raw.full_size.is_some())
     }
 
-    pub fn describe(&self, view: &crate::state::CameraRawScopeState, navigation: &crate::state::CameraRawPreviewState) -> Value {
+    pub fn describe(
+        &self,
+        view: &crate::state::CameraRawScopeState,
+        navigation: &crate::state::CameraRawPreviewState,
+        workspace: &crate::camera_raw_workspace_ui::WorkspaceState,
+    ) -> Value {
         let h = self.histogram();
         let mut result = json!({"layer": self.layer.0, "params": serde_json::to_value(&self.params).unwrap_or(Value::Null), "proxy": [self.pw, self.ph],
             "renderMs": self.render_ms, "histogramMs": self.histogram_ms, "previewRevision": self.preview_revision, "before": self.show_before,
@@ -211,6 +212,7 @@ impl CameraRawDialog {
         });
         result["openingRaw"] = json!(self.raw_open.as_ref().map(|r| json!({"name": r.name, "path": r.path})));
         result["view"] = json!(navigation);
+        result["workspace"] = json!(workspace);
         result["sourceSize"] = json!([self.full_w, self.full_h]);
         result["previewApproximate"] = json!(!self.detail.ready && (self.pw != self.full_w || self.ph != self.full_h));
         result["detailPending"] = json!(self.detail.pending());
@@ -760,7 +762,13 @@ fn open_pixels(
         before_display_key: None,
         dirty: true,
         show_before: false,
-        mixer_tab: 1,
+        camera_info: app
+            .session
+            .active()
+            .and_then(|state| state.doc.metadata.exif.as_ref())
+            .map(|bytes| photocraft_algo::exif::read(bytes))
+            .unwrap_or_default(),
+        document_name: app.session.active().map(|state| state.doc.name.clone()).unwrap_or_default(),
         curve_state: Default::default(),
         curve_rect: None,
         render_ms: 0.0,
@@ -787,9 +795,12 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
         return Some(Err("Camera Raw params must be an object".into()));
     };
     if fields.is_empty() {
-        return Some(
-            open(app, ctx).map(|_| app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)).unwrap_or(Value::Null)),
-        );
+        return Some(open(app, ctx).map(|_| {
+            app.camera_raw
+                .as_ref()
+                .map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview, &app.ui.camera_raw_workspace))
+                .unwrap_or(Value::Null)
+        }));
     }
     if let Some(sf) = params.get("smartFilter") {
         let opened = (|| {
@@ -799,7 +810,11 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
             let layer = sf.get("layer").and_then(Value::as_u64).ok_or("smartFilter.layer must be a layer id")?;
             let index = sf.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or("smartFilter.index must be a filter index")?;
             open_smart_filter(app, ctx, LayerId(layer), index)?;
-            Ok(app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)).unwrap_or(Value::Null))
+            Ok(app
+                .camera_raw
+                .as_ref()
+                .map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview, &app.ui.camera_raw_workspace))
+                .unwrap_or(Value::Null))
         })();
         return Some(opened);
     }
@@ -809,7 +824,9 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     };
     for (key, value) in fields {
         match key.as_str() {
-            "set" | "scope" | "view" => {}
+            "set" | "scope" | "view" | "workspace" => {}
+            "reset" if matches!(value.as_str(), Some("open" | "default")) => {}
+            "reset" => return Some(Err("Camera Raw reset must be open or default".into())),
             "before" | "commit" | "cancel" | "saveSettings" | "loadSettings" | "undo" | "redo" if value.is_boolean() => {}
             "before" | "commit" | "cancel" | "saveSettings" | "loadSettings" | "undo" | "redo" => {
                 return Some(Err(format!("Camera Raw {key} must be a boolean")));
@@ -831,6 +848,7 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     let was_closed = app.camera_raw.is_none();
     let previous_view = app.ui.camera_raw_scope.clone();
     let previous_navigation = app.ui.camera_raw_preview;
+    let previous_workspace = app.ui.camera_raw_workspace.clone();
     if was_closed && let Err(e) = open(app, ctx) {
         return Some(Err(e));
     }
@@ -839,6 +857,7 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
         app.camera_raw = None;
         app.ui.camera_raw_scope = previous_view;
         app.ui.camera_raw_preview = previous_navigation;
+        app.ui.camera_raw_workspace = previous_workspace;
     }
     result
 }
@@ -847,7 +866,21 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     // Stage both filter and presentation updates. No texture, preference or dialog mutation
     // occurs until every part of the request has passed validation.
     let d = app.camera_raw.as_ref()?;
-    let mut next_params = d.params.clone();
+    let mut next_params = match ui.get("reset").and_then(Value::as_str) {
+        Some("open") => d.original.clone(),
+        Some("default") => CameraRaw { encoding_gamma: d.params.encoding_gamma, pixel_scale: d.params.pixel_scale, ..Default::default() },
+        _ => d.params.clone(),
+    };
+    if ui.get("reset").is_some() && ui.get("set").is_some() {
+        return Some(Err("Camera Raw reset and set must be separate requests".into()));
+    }
+    let workspace = match ui.get("workspace") {
+        Some(value) => match super::camera_raw_workspace_ui::prepare(&app.ui.camera_raw_workspace, value) {
+            Ok(next) => Some(next),
+            Err(error) => return Some(Err(error)),
+        },
+        None => None,
+    };
     if let Some(set) = ui.get("set") {
         if !set.is_object() {
             return Some(Err("bad Camera Raw settings: expected an object".into()));
@@ -884,10 +917,17 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
         None => None,
     };
     let d = app.camera_raw.as_mut()?;
+    if let Some(next) = workspace {
+        app.ui.camera_raw_workspace = next;
+    }
     if let Some(view) = navigation {
         app.ui.camera_raw_preview = view;
     }
-    if d.params.point_curve != next_params.point_curve {
+    if d.params.point_curve != next_params.point_curve
+        || d.params.point_curve_red != next_params.point_curve_red
+        || d.params.point_curve_green != next_params.point_curve_green
+        || d.params.point_curve_blue != next_params.point_curve_blue
+    {
         d.curve_state = Default::default();
     }
     if d.params != next_params {
@@ -923,7 +963,11 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     if ui.get("commit").and_then(Value::as_bool) == Some(true) {
         return Some(commit(app));
     }
-    Some(Ok(app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)).unwrap_or(Value::Null)))
+    Some(Ok(app
+        .camera_raw
+        .as_ref()
+        .map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview, &app.ui.camera_raw_workspace))
+        .unwrap_or(Value::Null)))
 }
 
 /// Save Settings…: the dialog's settings as a Camera Raw `.xmp` settings file.
@@ -1146,14 +1190,40 @@ fn row(ui: &mut egui::Ui, dirty: &mut bool, label: &str, v: &mut f32, range: std
 }
 
 fn slider(ui: &mut egui::Ui, dirty: &mut bool, label: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>, grad: Option<&[Color32]>) -> egui::Response {
-    let r = widgets::slider_row(ui, crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", label), v, range, "", grad);
-    if r.changed() {
-        *dirty = true;
-    }
-    if r.double_clicked() {
-        *v = 0.0;
-        *dirty = true;
-    }
+    slider_default(ui, dirty, label, v, range, grad, 0.0)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn slider_default(
+    ui: &mut egui::Ui,
+    dirty: &mut bool,
+    label: &str,
+    v: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    grad: Option<&[Color32]>,
+    default: f32,
+) -> egui::Response {
+    let decimals = Some(if label == "Exposure" {
+        2
+    } else if *range.start() == 0.5 {
+        1
+    } else {
+        0
+    });
+    let label = crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", label);
+    let r = widgets::slider_row_prec_styled(
+        ui,
+        label,
+        v,
+        range,
+        "",
+        grad,
+        widgets::RowGestures { reset: Some(default), wheel_step: None },
+        decimals,
+        super::camera_raw_design::get(ui.ctx()).value_field_width,
+        Some(super::camera_raw_design::get(ui.ctx()).slider_style()),
+    );
+    *dirty |= r.changed();
     r
 }
 
@@ -1165,48 +1235,89 @@ fn tone_row(ui: &mut egui::Ui, dirty: &mut bool, alt: &mut Option<ToneZone>, zon
     }
 }
 
-fn section(ui: &mut egui::Ui, title: &str, open: bool, body: impl FnOnce(&mut egui::Ui)) {
-    egui::CollapsingHeader::new(egui::RichText::new(crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", title)).font(FontId::proportional(13.0)))
-        .id_salt(("camera-raw-section", title))
-        .default_open(open)
-        .show(ui, body);
-}
-
-fn wheel(ui: &mut egui::Ui, dirty: &mut bool, title: &str, w: &mut Wheel) {
-    widgets::section_label(ui, crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", title));
-    let hs = widgets::hue_stops();
-    row(ui, dirty, "Hue", &mut w.hue, 0.0..=360.0, Some(&hs));
-    row(ui, dirty, "Saturation", &mut w.sat, 0.0..=100.0, None);
-    row(ui, dirty, "Luminance", &mut w.lum, -100.0..=100.0, None);
-}
-
 // The shared Curve editor must never produce a curve `CameraRaw::validate` rejects.
 const _: () = assert!(crate::point_curve::MAX_POINTS == photocraft_algo::camera_raw::MAX_CURVE_POINTS && crate::point_curve::MIN_GAP >= 1.0);
 
 /// Small point-curve editor (master channel): click to add, drag to move, right-click to delete.
-fn curve_editor(ui: &mut egui::Ui, p: &mut CameraRaw, dirty: &mut bool, state: &mut crate::state::PointCurveState) -> ERect {
+fn curve_editor(
+    ui: &mut egui::Ui,
+    p: &mut CameraRaw,
+    dirty: &mut bool,
+    state: &mut crate::state::PointCurveState,
+    channel: super::camera_raw_workspace_ui::CurveChannel,
+    histogram: &RgbHistogram,
+) -> ERect {
     let t = Tokens::get(ui.ctx());
     let side = ui.available_width().min(260.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(side, side), Sense::click_and_drag());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, t.radius_sm, t.field);
+    use super::camera_raw_workspace_ui::CurveChannel;
+    let counts: Vec<u64> = (0..256)
+        .map(|i| match channel {
+            CurveChannel::Red => histogram.channels[0][i],
+            CurveChannel::Green => histogram.channels[1][i],
+            CurveChannel::Blue => histogram.channels[2][i],
+            _ => histogram.channels.iter().fold(0_u64, |sum, band| sum.saturating_add(band[i])),
+        })
+        .collect();
+    let peak = counts.iter().copied().max().unwrap_or(1).max(1) as f32;
+    for (i, count) in counts.iter().enumerate() {
+        let x0 = rect.left() + i as f32 / 256.0 * side;
+        let x1 = rect.left() + (i + 1) as f32 / 256.0 * side;
+        painter.rect_filled(ERect::from_min_max(pos2(x0, rect.bottom() - *count as f32 / peak * side), pos2(x1, rect.bottom())), 0.0, t.canvas);
+    }
     for i in 1..4 {
         let f = i as f32 / 4.0;
         painter.line_segment([pos2(rect.left() + f * side, rect.top()), pos2(rect.left() + f * side, rect.bottom())], Stroke::new(1.0, t.separator));
         painter.line_segment([pos2(rect.left(), rect.top() + f * side), pos2(rect.right(), rect.top() + f * side)], Stroke::new(1.0, t.separator));
     }
     let to_screen = |x: f32, y: f32| pos2(rect.left() + x / 255.0 * side, rect.bottom() - y / 255.0 * side);
+    let selected = match channel {
+        CurveChannel::Red => &mut p.point_curve_red,
+        CurveChannel::Green => &mut p.point_curve_green,
+        CurveChannel::Blue => &mut p.point_curve_blue,
+        _ => &mut p.point_curve,
+    };
     // The identity handles are presentation until a gesture actually edits them.
-    let mut points = if p.point_curve.is_empty() { vec![[0.0, 0.0], [255.0, 255.0]] } else { p.point_curve.clone() };
-    if crate::point_curve::interact(ui, &resp, rect, &mut points, state).changed {
-        p.point_curve = points.clone();
+    let mut points = if selected.is_empty() { vec![[0.0, 0.0], [255.0, 255.0]] } else { selected.clone() };
+    if channel != CurveChannel::Parametric && crate::point_curve::interact(ui, &resp, rect, &mut points, state).changed {
+        *selected = points.clone();
         *dirty = true;
     }
     // Curve (point curve after the parametric one).
-    let lut = curve_lut(&points, 256);
+    let lut = if channel == CurveChannel::Parametric {
+        let curve = CameraRaw {
+            curve_highlights: p.curve_highlights,
+            curve_lights: p.curve_lights,
+            curve_darks: p.curve_darks,
+            curve_shadows: p.curve_shadows,
+            curve_splits: p.curve_splits,
+            ..Default::default()
+        };
+        let mut ramp: Vec<[f32; 4]> = (0..256)
+            .map(|i| {
+                let v = i as f32 / 255.0;
+                [v, v, v, 1.0]
+            })
+            .collect();
+        photocraft_algo::camera_raw::develop(&mut ramp, 256, 1, &curve, true);
+        ramp.into_iter().map(|pixel| pixel[0]).collect()
+    } else {
+        curve_lut(&points, 256)
+    };
     let pts: Vec<Pos2> = lut.iter().enumerate().map(|(i, value)| to_screen(i as f32, value * 255.0)).collect();
-    painter.add(egui::Shape::line(pts, Stroke::new(1.5, t.text)));
+    let color = match channel {
+        CurveChannel::Red => Color32::from_rgb(220, 65, 65),
+        CurveChannel::Green => Color32::from_rgb(70, 185, 90),
+        CurveChannel::Blue => Color32::from_rgb(70, 130, 235),
+        _ => t.text,
+    };
+    painter.add(egui::Shape::line(pts, Stroke::new(1.5, color)));
     for (i, c) in points.iter().enumerate() {
+        if channel == CurveChannel::Parametric {
+            break;
+        }
         let center = to_screen(c[0], c[1]);
         if state.selected == Some(i) {
             painter.circle_filled(center, 3.0, t.accent);
@@ -1278,26 +1389,32 @@ pub(crate) struct Layout {
     pub view: ERect,
     /// The settings panel.
     pub right: ERect,
+    pub rail: ERect,
+    pub nav: ERect,
     pub foot: ERect,
 }
 
-pub(crate) fn layout(screen: ERect, own_window: bool) -> Layout {
-    let footer_h = 48.0;
-    // `own_window`: the filter's own OS window, as upstream lays it out (16 px around the photo, a 48 px strip under it for the zoom tools,
-    // a 330 px panel). In the workspace the photo takes the strip and part of the margin, and the panel is narrower.
-    let panel_w = if own_window { PANEL_W } else { WORKSPACE_PANEL_W };
-    let margin = if own_window { 16.0 } else { WORKSPACE_VIEW_MARGIN };
-    let below = if own_window { 48.0 } else { WORKSPACE_VIEW_MARGIN };
-    let title = ERect::from_min_size(screen.min, vec2(screen.width(), if own_window { 0.0 } else { 30.0 }));
+pub(crate) fn layout(ctx: &egui::Context, screen: ERect, _own_window: bool) -> Layout {
+    let design = super::camera_raw_design::get(ctx);
+    let footer_h = design.footer_height.min(screen.height() * 0.2);
+    let rail_w = design.rail_width.min(screen.width() * 0.1);
+    let panel_w = design.panel_width.min(screen.width() * 0.45);
+    let title = ERect::from_min_size(screen.min, vec2(screen.width(), design.header_height.min(screen.height() * 0.15)));
     let body = ERect::from_min_max(pos2(screen.left(), title.bottom()), pos2(screen.right(), screen.bottom() - footer_h));
-    let preview_body = ERect::from_min_max(body.min, pos2((body.right() - panel_w).max(body.left() + 1.0), body.bottom()));
+    let rail = ERect::from_min_max(pos2(body.right() - rail_w, body.top()), body.max);
+    let right = ERect::from_min_max(pos2(rail.left() - panel_w, body.top()), rail.left_bottom());
+    let preview_body = ERect::from_min_max(body.min, right.left_bottom());
+    let nav = ERect::from_min_max(
+        pos2(preview_body.left(), (preview_body.bottom() - design.navigation_height.min(preview_body.height() * 0.25)).max(preview_body.top())),
+        preview_body.max,
+    );
+    let margin = design.preview_margin.min(preview_body.width() * 0.25).min((nav.top() - preview_body.top()) * 0.25);
     let view = ERect::from_min_max(
         preview_body.min + vec2(margin, margin),
-        pos2((preview_body.right() - margin).max(preview_body.left() + margin + 1.0), (preview_body.bottom() - below).max(preview_body.top() + margin + 1.0)),
+        pos2((preview_body.right() - margin).max(preview_body.left() + margin + 1.0), (nav.top() - margin).max(preview_body.top() + margin + 1.0)),
     );
-    let right = ERect::from_min_max(pos2(body.right() - panel_w, body.top()), body.max);
     let foot = ERect::from_min_max(pos2(screen.left(), screen.bottom() - footer_h), screen.max);
-    Layout { title, body, preview_body, view, right, foot }
+    Layout { title, body, preview_body, view, right, rail, nav, foot }
 }
 
 /// Leaves the open-time dialog's photo without closing the dialog: the next photo is on its way and takes the dialog
@@ -1331,7 +1448,7 @@ pub(crate) fn leave_in_place(app: &mut PhotocraftApp) -> Result<(), String> {
 pub(crate) fn draw_shell(ctx: &egui::Context, name: &str) {
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
-    let lay = layout(screen, false);
+    let lay = layout(ctx, screen, false);
     // No fade-in: while it fades, the editor's own windows show through, which is what the frame is there to hide.
     egui::Area::new(egui::Id::new("camera-raw-shell")).order(egui::Order::Foreground).fixed_pos(screen.min).fade_in(false).show(ctx, |ui| {
         let (full, _) = ui.allocate_exact_size(screen.size(), Sense::click_and_drag());
@@ -1360,7 +1477,9 @@ pub(crate) fn draw_shell(ctx: &egui::Context, name: &str) {
         }
         painter.rect_filled(lay.right, 0.0, t.dock);
         painter.line_segment([lay.right.left_top(), lay.right.left_bottom()], Stroke::new(1.0, t.separator));
-        let mut y = lay.right.top() + 26.0;
+        painter.rect_filled(lay.nav, 0.0, t.dock);
+        painter.line_segment([lay.rail.left_top(), lay.rail.left_bottom()], Stroke::new(1.0, t.separator));
+        let mut y = lay.right.top() + 158.0;
         for section in ["Light", "Color", "Effects", "Curve", "Color Mixer", "Color Grading", "Detail"] {
             painter.text(
                 pos2(lay.right.left() + 18.0, y),
@@ -1391,6 +1510,8 @@ pub(crate) fn draw_shell(ctx: &egui::Context, name: &str) {
 fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
+    let design = super::camera_raw_design::get(ctx);
+    super::camera_raw_design::apply_preview(ctx, &design, &mut app.ui.camera_raw_workspace);
     let current_display = app.session.active().and_then(|st| app.session.color.canvas_display(&st.doc).ok());
     let mut action: Option<&str> = None;
     // The photo was left for the next one, which has not taken the dialog over yet: nothing in the dialog may act
@@ -1404,6 +1525,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
     egui::Area::new(egui::Id::new("camera-raw-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let Some(d) = app.camera_raw.as_mut() else { return };
         history_keys(d, ctx);
+        let frame_origin = d.params.clone();
         let pointer = ctx.input(|i| i.pointer.primary_down());
         if pointer && d.edit_origin.is_none() {
             d.edit_origin = Some(d.params.clone());
@@ -1422,9 +1544,9 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         let (full, _) = ui.allocate_exact_size(screen.size(), Sense::click());
         let painter = ui.painter().clone();
         painter.rect_filled(full, 0.0, t.chrome);
-        let lay = layout(screen, own_window);
+        let lay = layout(ctx, screen, own_window);
         let title = lay.title;
-        if !own_window {
+        {
             painter.rect_filled(title, 0.0, t.dock);
             painter.line_segment([title.left_bottom(), title.right_bottom()], Stroke::new(1.0, t.separator));
             painter.text(title.center(), Align2::CENTER_CENTER, d.window_title(), FontId::proportional(13.0), t.text);
@@ -1432,12 +1554,12 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         let ok_label = if d.target == Target::OpenRaw { tl!("Open") } else { tl!("OK") };
         let scope = &mut app.ui.camera_raw_scope;
         // Clip both pixels and scope overlays before painting the settings dock/footer.
-        let preview_body = lay.preview_body;
         let view = lay.view;
         d.viewport = Some(view);
         d.preview_ppp = ctx.pixels_per_point();
         let size = vec2(d.full_w as f32, d.full_h as f32) / ctx.pixels_per_point();
         let navigation = &mut app.ui.camera_raw_preview;
+        let workspace = &mut app.ui.camera_raw_workspace;
         let mut preview = ui.new_child(egui::UiBuilder::new().max_rect(view));
         preview.set_clip_rect(view.intersect(ui.clip_rect()));
         preview.painter().rect_filled(view, 0.0, t.canvas);
@@ -1458,134 +1580,294 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             d.scope.preview_rect = Some(r);
             super::camera_raw_scope_ui::preview(&mut preview, d, scope, r, &response, panning);
         }
+        super::camera_raw_workspace_ui::grid(&preview, r, view, workspace);
         if let Some(region) = zoom_box {
             preview.painter().rect_stroke(region, 0.0, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
         }
-        if own_window {
-            let toolbar = ERect::from_min_max(pos2(preview_body.left() + 16.0, view.bottom() + 8.0), preview_body.right_bottom() - vec2(16.0, 4.0));
-            let mut nav_ui = ui.new_child(egui::UiBuilder::new().max_rect(toolbar).layout(egui::Layout::left_to_right(egui::Align::Center)));
-            nav_ui.set_clip_rect(preview_body.intersect(ui.clip_rect()));
-            super::camera_raw_preview_ui::toolbar(&mut nav_ui, navigation, view, size, &mut scope.sampler_tool);
-            if d.detail.pending() || busy_visible {
-                nav_ui.spinner();
-            }
-            if let Some(error) = &d.detail.error {
-                nav_ui.label(egui::RichText::new(tl!("Full-resolution preview unavailable")).color(t.text_faint)).on_hover_text(error);
-            }
+        painter.rect_filled(lay.nav, 0.0, t.dock);
+        painter.line_segment([lay.nav.left_top(), lay.nav.right_top()], Stroke::new(1.0, t.separator));
+        let mut nav_ui =
+            ui.new_child(egui::UiBuilder::new().max_rect(lay.nav.shrink2(vec2(8.0, 2.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        nav_ui.set_clip_rect(lay.nav.intersect(ui.clip_rect()));
+        super::camera_raw_preview_ui::toolbar(&mut nav_ui, navigation, view, size, &mut scope.sampler_tool);
+        widgets::checkbox(&mut nav_ui, &mut d.show_before, tl!("Before (Y)"));
+        if d.detail.pending() || busy_visible {
+            nav_ui.spinner();
+        }
+        if let Some(error) = &d.detail.error {
+            nav_ui.label(egui::RichText::new(tl!("Full-resolution preview unavailable")).color(t.text_faint)).on_hover_text(error);
         }
         // Panels.
         let right = lay.right;
         painter.rect_filled(right, 0.0, t.dock);
         painter.line_segment([right.left_top(), right.left_bottom()], Stroke::new(1.0, t.separator));
-        let mut props = ui.new_child(egui::UiBuilder::new().max_rect(right.shrink2(vec2(14.0, 10.0))));
+        let mut props = ui.new_child(egui::UiBuilder::new().max_rect(right.shrink2(vec2(0.0, 10.0))));
+        props.style_mut().override_font_id = Some(FontId::proportional(design.panel_font_size));
+        // Overflow must not resize a curve while selecting a point reveals its fields.
+        props.spacing_mut().scroll.floating = true;
         if busy_visible {
             props.disable();
         }
         // This header is outside the settings scroll area and follows the same Before/After
         // selector as the texture. Both derive from the same completed preview revision.
-        super::camera_raw_scope_ui::header(&mut props, d, scope);
+        egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 0)).show(&mut props, |ui| {
+            super::camera_raw_scope_ui::header(ui, d, scope);
+            let summary = super::camera_raw_workspace_ui::capture_summary(&d.camera_info);
+            if !summary.is_empty() {
+                ui.label(egui::RichText::new(summary).size(11.0).color(t.text_dim));
+            }
+        });
+        props.horizontal(|ui| {
+            ui.add_space(14.0);
+            ui.strong(if workspace.info { tl!("Info") } else { tl!("Edit") });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.menu_button("…", |ui| {
+                    if ui.button(tl!("Reset to Open")).clicked() {
+                        action = Some("reset-open");
+                        ui.close();
+                    }
+                    if ui.button(tl!("Reset to Default")).clicked() {
+                        action = Some("reset-default");
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button(tl!("Load Settings…")).clicked() {
+                        action = Some("load");
+                        ui.close();
+                    }
+                    if ui.button(tl!("Save Settings…")).clicked() {
+                        action = Some("save");
+                        ui.close();
+                    }
+                });
+            });
+        });
+        props.add_space(8.0);
         d.scope.alt_tone = None;
         let mut dirty = false;
         egui::ScrollArea::vertical().id_salt("camera-raw-props").show(&mut props, |ui| {
-            ui.spacing_mut().item_spacing.y = 4.0;
+            if workspace.info {
+                egui::Frame::new().inner_margin(14).show(ui, |ui| {
+                    ui.strong(tl!("File Name"));
+                    ui.label(&d.document_name);
+                    if let Some(model) = &d.camera_info.model {
+                        ui.strong(model);
+                    }
+                    if let Some(date) = &d.camera_info.date_taken {
+                        ui.strong(tl!("Capture Date"));
+                        ui.label(date);
+                    }
+                    if let Some(lens) = &d.camera_info.lens {
+                        ui.strong(tl!("Lens"));
+                        ui.label(lens);
+                    }
+                    ui.separator();
+                    ui.strong(tl!("Dimensions"));
+                    ui.label(format!("{} × {}", d.full_w, d.full_h));
+                    if let Some(raw) = &d.raw_open {
+                        ui.label(&raw.name);
+                    }
+                });
+                return;
+            }
+            ui.spacing_mut().item_spacing.y = design.row_gap;
             let p = &mut d.params;
             let alt = &mut d.scope.alt_tone;
             let (ts, tn) = (temp_stops(), tint_stops());
-            section(ui, "Light", true, |ui| {
-                tone_row(ui, &mut dirty, alt, ToneZone::Exposure, &mut p.exposure);
-                row(ui, &mut dirty, "Contrast", &mut p.contrast, -100.0..=100.0, None);
-                tone_row(ui, &mut dirty, alt, ToneZone::Highlights, &mut p.highlights);
-                tone_row(ui, &mut dirty, alt, ToneZone::Shadows, &mut p.shadows);
-                tone_row(ui, &mut dirty, alt, ToneZone::Whites, &mut p.whites);
-                tone_row(ui, &mut dirty, alt, ToneZone::Blacks, &mut p.blacks);
-            });
-            section(ui, "Color", false, |ui| {
-                widgets::section_label(ui, tl!("White Balance: As Shot"));
-                row(ui, &mut dirty, "Temperature", &mut p.temperature, -100.0..=100.0, Some(&ts));
-                row(ui, &mut dirty, "Tint", &mut p.tint, -100.0..=100.0, Some(&tn));
-                row(ui, &mut dirty, "Vibrance", &mut p.vibrance, -100.0..=100.0, None);
-                row(ui, &mut dirty, "Saturation", &mut p.saturation, -100.0..=100.0, None);
-            });
-            section(ui, "Effects", false, |ui| {
-                row(ui, &mut dirty, "Texture", &mut p.texture, -100.0..=100.0, None);
-                row(ui, &mut dirty, "Clarity", &mut p.clarity, -100.0..=100.0, None);
-                row(ui, &mut dirty, "Dehaze", &mut p.dehaze, -100.0..=100.0, None);
-                widgets::section_label(ui, tl!("Vignetting"));
-                let mut style = p.vignette_style.clone();
-                if widgets::dropdown(
-                    ui,
-                    "cr-vig-style",
-                    &mut style,
-                    &[
-                        ("highlightPriority".to_string(), tl!("Highlight Priority")),
-                        ("colorPriority".to_string(), tl!("Color Priority")),
-                        ("paintOverlay".to_string(), tl!("Paint Overlay")),
-                    ],
-                    200.0,
-                ) {
-                    p.vignette_style = style;
-                    dirty = true;
-                }
-                row(ui, &mut dirty, "Amount", &mut p.vignette_amount, -100.0..=100.0, None);
-                row(ui, &mut dirty, "Midpoint", &mut p.vignette_midpoint, 0.0..=100.0, None);
-                row(ui, &mut dirty, "Roundness", &mut p.vignette_roundness, -100.0..=100.0, None);
-                row(ui, &mut dirty, "Feather", &mut p.vignette_feather, 0.0..=100.0, None);
-                row(ui, &mut dirty, "Highlights", &mut p.vignette_highlights, 0.0..=100.0, None);
-                widgets::section_label(ui, tl!("Grain"));
-                row(ui, &mut dirty, "Amount", &mut p.grain_amount, 0.0..=100.0, None);
-                row(ui, &mut dirty, "Size", &mut p.grain_size, 0.0..=100.0, None);
-                row(ui, &mut dirty, "Roughness", &mut p.grain_roughness, 0.0..=100.0, None);
-            });
-            section(ui, "Curve", false, |ui| {
-                d.curve_rect = Some(curve_editor(ui, p, &mut dirty, &mut d.curve_state));
-                row(ui, &mut dirty, "Highlights", &mut p.curve_highlights, -100.0..=100.0, None);
-                row(ui, &mut dirty, "Lights", &mut p.curve_lights, -100.0..=100.0, None);
-                row(ui, &mut dirty, "Darks", &mut p.curve_darks, -100.0..=100.0, None);
-                row(ui, &mut dirty, "Shadows", &mut p.curve_shadows, -100.0..=100.0, None);
-            });
-            section(ui, "Color Mixer", false, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    for (i, source) in ["Hue", "Saturation", "Luminance"].iter().enumerate() {
-                        let name = crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", source);
-                        let response = widgets::pill_tab(ui, name, d.mixer_tab == i);
-                        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), d.mixer_tab == i, name));
-                        if response.clicked() {
-                            d.mixer_tab = i;
-                        }
+            for panel_name in &design.panel_order {
+                match panel_name.as_str() {
+                    "Light" => {
+                        super::camera_raw_workspace_ui::section(ui, "Light", &mut workspace.panels, |ui| {
+                            tone_row(ui, &mut dirty, alt, ToneZone::Exposure, &mut p.exposure);
+                            row(ui, &mut dirty, "Contrast", &mut p.contrast, -100.0..=100.0, None);
+                            tone_row(ui, &mut dirty, alt, ToneZone::Highlights, &mut p.highlights);
+                            tone_row(ui, &mut dirty, alt, ToneZone::Shadows, &mut p.shadows);
+                            tone_row(ui, &mut dirty, alt, ToneZone::Whites, &mut p.whites);
+                            tone_row(ui, &mut dirty, alt, ToneZone::Blacks, &mut p.blacks);
+                        });
                     }
-                });
-                let arr = match d.mixer_tab {
-                    0 => &mut p.hsl_hue,
-                    1 => &mut p.hsl_sat,
-                    _ => &mut p.hsl_lum,
-                };
-                for (k, name) in BANDS.iter().enumerate() {
-                    let c = photocraft_algo::camera_raw::HSL_BANDS[k];
-                    let base = hue_color(c);
-                    let grad = [Color32::from_gray(128), base];
-                    row(ui, &mut dirty, name, &mut arr[k], -100.0..=100.0, Some(&grad));
+                    "Color" => {
+                        super::camera_raw_workspace_ui::section(ui, "Color", &mut workspace.panels, |ui| {
+                            widgets::section_label(
+                                ui,
+                                if p.temperature == 0.0 && p.tint == 0.0 { tl!("White Balance: As Shot") } else { tl!("White Balance: Custom") },
+                            );
+                            row(ui, &mut dirty, "Temperature", &mut p.temperature, -100.0..=100.0, Some(&ts));
+                            row(ui, &mut dirty, "Tint", &mut p.tint, -100.0..=100.0, Some(&tn));
+                            row(ui, &mut dirty, "Vibrance", &mut p.vibrance, -100.0..=100.0, None);
+                            row(ui, &mut dirty, "Saturation", &mut p.saturation, -100.0..=100.0, None);
+                        });
+                    }
+                    "Effects" => {
+                        super::camera_raw_workspace_ui::section(ui, "Effects", &mut workspace.panels, |ui| {
+                            row(ui, &mut dirty, "Texture", &mut p.texture, -100.0..=100.0, None);
+                            row(ui, &mut dirty, "Clarity", &mut p.clarity, -100.0..=100.0, None);
+                            row(ui, &mut dirty, "Dehaze", &mut p.dehaze, -100.0..=100.0, None);
+                            dirty |= super::camera_raw_workspace_ui::disclosed_slider(
+                                ui,
+                                "Vignette",
+                                &mut p.vignette_amount,
+                                -100.0..=100.0,
+                                &mut workspace.vignette_details,
+                            );
+                            if workspace.vignette_details {
+                                let mut style = p.vignette_style.clone();
+                                if widgets::dropdown(
+                                    ui,
+                                    "cr-vig-style",
+                                    &mut style,
+                                    &[
+                                        ("highlightPriority".to_string(), tl!("Highlight Priority")),
+                                        ("colorPriority".to_string(), tl!("Color Priority")),
+                                        ("paintOverlay".to_string(), tl!("Paint Overlay")),
+                                    ],
+                                    200.0,
+                                ) {
+                                    p.vignette_style = style;
+                                    dirty = true;
+                                }
+                                let _ = slider_default(ui, &mut dirty, "Midpoint", &mut p.vignette_midpoint, 0.0..=100.0, None, 50.0);
+                                row(ui, &mut dirty, "Roundness", &mut p.vignette_roundness, -100.0..=100.0, None);
+                                let _ = slider_default(ui, &mut dirty, "Feather", &mut p.vignette_feather, 0.0..=100.0, None, 50.0);
+                                row(ui, &mut dirty, "Highlights", &mut p.vignette_highlights, 0.0..=100.0, None);
+                            }
+                            dirty |=
+                                super::camera_raw_workspace_ui::disclosed_slider(ui, "Grain", &mut p.grain_amount, 0.0..=100.0, &mut workspace.grain_details);
+                            if workspace.grain_details {
+                                let _ = slider_default(ui, &mut dirty, "Size", &mut p.grain_size, 0.0..=100.0, None, 25.0);
+                                let _ = slider_default(ui, &mut dirty, "Roughness", &mut p.grain_roughness, 0.0..=100.0, None, 50.0);
+                            }
+                        });
+                    }
+                    "Curve" => {
+                        super::camera_raw_workspace_ui::section(ui, "Curve", &mut workspace.panels, |ui| {
+                            use super::camera_raw_workspace_ui::CurveChannel;
+                            let previous = workspace.curve_channel;
+                            ui.horizontal_wrapped(|ui| {
+                                for (channel, label) in [
+                                    (CurveChannel::Parametric, "Parametric"),
+                                    (CurveChannel::Master, "RGB"),
+                                    (CurveChannel::Red, "Red"),
+                                    (CurveChannel::Green, "Green"),
+                                    (CurveChannel::Blue, "Blue"),
+                                ] {
+                                    if widgets::pill_tab(
+                                        ui,
+                                        crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", label),
+                                        workspace.curve_channel == channel,
+                                    )
+                                    .clicked()
+                                    {
+                                        workspace.curve_channel = channel;
+                                    }
+                                }
+                            });
+                            if previous != workspace.curve_channel {
+                                d.curve_state = Default::default();
+                            }
+                            d.curve_rect = Some(curve_editor(ui, p, &mut dirty, &mut d.curve_state, workspace.curve_channel, &d.after_histogram));
+                            if workspace.curve_channel == CurveChannel::Parametric {
+                                row(ui, &mut dirty, "Highlights", &mut p.curve_highlights, -100.0..=100.0, None);
+                                row(ui, &mut dirty, "Lights", &mut p.curve_lights, -100.0..=100.0, None);
+                                row(ui, &mut dirty, "Darks", &mut p.curve_darks, -100.0..=100.0, None);
+                                row(ui, &mut dirty, "Shadows", &mut p.curve_shadows, -100.0..=100.0, None);
+                            }
+                        });
+                    }
+                    "Color Mixer" => {
+                        super::camera_raw_workspace_ui::section(ui, "Color Mixer", &mut workspace.panels, |ui| {
+                            let mut mode = workspace.mixer;
+                            widgets::dropdown(
+                                ui,
+                                "cr-mixer-mode",
+                                &mut mode,
+                                &[(super::camera_raw_workspace_ui::MixerMode::Hsl, "HSL"), (super::camera_raw_workspace_ui::MixerMode::Color, tl!("Color"))],
+                                120.0,
+                            );
+                            workspace.mixer = mode;
+                            if mode == super::camera_raw_workspace_ui::MixerMode::Color {
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 3.0;
+                                    let side = ((ui.available_width() - 21.0) / 8.0).clamp(12.0, 28.0);
+                                    for (k, name) in BANDS.iter().enumerate() {
+                                        let (rect, response) = ui.allocate_exact_size(vec2(side, side), Sense::click());
+                                        let name = crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", name);
+                                        response.widget_info(|| {
+                                            egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), workspace.band == k, name)
+                                        });
+                                        if response.clicked() {
+                                            workspace.band = k;
+                                        }
+                                        let color = hue_color(photocraft_algo::camera_raw::HSL_BANDS[k]);
+                                        ui.painter().circle_stroke(rect.center(), side * 0.35, Stroke::new(2.0, color));
+                                        if workspace.band == k {
+                                            ui.painter().circle_filled(rect.center(), side * 0.15, t.text);
+                                        }
+                                        response.on_hover_text(name);
+                                    }
+                                });
+                                let band = workspace.band.min(7);
+                                row(ui, &mut dirty, "Hue", &mut p.hsl_hue[band], -100.0..=100.0, Some(&widgets::hue_stops()));
+                                row(ui, &mut dirty, "Saturation", &mut p.hsl_sat[band], -100.0..=100.0, None);
+                                row(ui, &mut dirty, "Luminance", &mut p.hsl_lum[band], -100.0..=100.0, None);
+                            } else {
+                                ui.horizontal_wrapped(|ui| {
+                                    for (i, source) in ["Hue", "Saturation", "Luminance"].iter().enumerate() {
+                                        let name = crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", source);
+                                        let response = widgets::pill_tab(ui, name, workspace.hsl_channel == i);
+                                        response.widget_info(|| {
+                                            egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, ui.is_enabled(), workspace.hsl_channel == i, name)
+                                        });
+                                        if response.clicked() {
+                                            workspace.hsl_channel = i;
+                                        }
+                                    }
+                                });
+                                let arr = match workspace.hsl_channel {
+                                    0 => &mut p.hsl_hue,
+                                    1 => &mut p.hsl_sat,
+                                    _ => &mut p.hsl_lum,
+                                };
+                                for (k, name) in BANDS.iter().enumerate() {
+                                    let grad = [Color32::from_gray(128), hue_color(photocraft_algo::camera_raw::HSL_BANDS[k])];
+                                    row(ui, &mut dirty, name, &mut arr[k], -100.0..=100.0, Some(&grad));
+                                }
+                            }
+                        });
+                    }
+                    "Color Grading" => {
+                        super::camera_raw_workspace_ui::section(ui, "Color Grading", &mut workspace.panels, |ui| {
+                            dirty |= super::camera_raw_workspace_ui::grading(ui, p, &mut workspace.grading);
+                        });
+                    }
+                    "Detail" => {
+                        super::camera_raw_workspace_ui::section(ui, "Detail", &mut workspace.panels, |ui| {
+                            dirty |= super::camera_raw_workspace_ui::disclosed_slider(
+                                ui,
+                                "Sharpening",
+                                &mut p.sharpen_amount,
+                                0.0..=150.0,
+                                &mut workspace.sharpening_details,
+                            );
+                            if workspace.sharpening_details {
+                                let _ = slider_default(ui, &mut dirty, "Radius", &mut p.sharpen_radius, 0.5..=3.0, None, 1.0);
+                                let _ = slider_default(ui, &mut dirty, "Detail", &mut p.sharpen_detail, 0.0..=100.0, None, 25.0);
+                                row(ui, &mut dirty, "Masking", &mut p.sharpen_masking, 0.0..=100.0, None);
+                            }
+                            if ui.selectable_label(workspace.noise_details, tl!("Manual Noise Reduction")).clicked() {
+                                workspace.noise_details = !workspace.noise_details;
+                            }
+                            if workspace.noise_details {
+                                row(ui, &mut dirty, "Luminance", &mut p.noise_luminance, 0.0..=100.0, None);
+                                let _ = slider_default(ui, &mut dirty, "Luminance Detail", &mut p.noise_luminance_detail, 0.0..=100.0, None, 50.0);
+                                row(ui, &mut dirty, "Color", &mut p.noise_color, 0.0..=100.0, None);
+                                let _ = slider_default(ui, &mut dirty, "Color Detail", &mut p.noise_color_detail, 0.0..=100.0, None, 50.0);
+                            }
+                        });
+                    }
+                    _ => {}
                 }
-            });
-            section(ui, "Color Grading", false, |ui| {
-                wheel(ui, &mut dirty, "Shadows", &mut p.grade_shadows);
-                wheel(ui, &mut dirty, "Midtones", &mut p.grade_midtones);
-                wheel(ui, &mut dirty, "Highlights", &mut p.grade_highlights);
-                wheel(ui, &mut dirty, "Global", &mut p.grade_global);
-                row(ui, &mut dirty, "Blending", &mut p.grade_blending, 0.0..=100.0, None);
-                row(ui, &mut dirty, "Balance", &mut p.grade_balance, -100.0..=100.0, None);
-            });
-            section(ui, "Detail", false, |ui| {
-                widgets::section_label(ui, tl!("Sharpening"));
-                row(ui, &mut dirty, "Amount", &mut p.sharpen_amount, 0.0..=150.0, None);
-                row(ui, &mut dirty, "Radius", &mut p.sharpen_radius, 0.5..=3.0, None);
-                row(ui, &mut dirty, "Detail", &mut p.sharpen_detail, 0.0..=100.0, None);
-                row(ui, &mut dirty, "Masking", &mut p.sharpen_masking, 0.0..=100.0, None);
-                widgets::section_label(ui, tl!("Noise Reduction"));
-                row(ui, &mut dirty, "Luminance", &mut p.noise_luminance, 0.0..=100.0, None);
-                row(ui, &mut dirty, "Luminance Detail", &mut p.noise_luminance_detail, 0.0..=100.0, None);
-                row(ui, &mut dirty, "Color", &mut p.noise_color, 0.0..=100.0, None);
-                row(ui, &mut dirty, "Color Detail", &mut p.noise_color_detail, 0.0..=100.0, None);
-            });
+            }
         });
         super::camera_raw_scope_ui::floating(ctx, d, scope, right);
         super::camera_raw_scope_ui::shortcuts(ctx, scope);
@@ -1593,6 +1875,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         if d.dirty {
             ctx.request_repaint();
         }
+        ui.add_enabled_ui(!busy_visible, |ui| super::camera_raw_workspace_ui::rail(ui, lay.rail, workspace, navigation, &mut scope.sampler_tool));
         // Footer.
         let foot = lay.foot;
         painter.rect_filled(foot, 0.0, t.dock);
@@ -1610,40 +1893,16 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         ) {
             action = Some(if role == widgets::ButtonRole::Default { "ok" } else { "cancel" });
         }
-        fu.add_space(12.0);
-        widgets::checkbox(&mut fu, &mut d.show_before, tl!("Before (Y)"));
-        fu.label(egui::RichText::new(format!("{:.0} ms", d.render_ms)).color(t.text_faint));
-        fu.add_space(12.0);
-        if fu.button(tl!("Save Settings…")).on_hover_text(tl!("Save these settings as a Camera Raw .xmp file")).clicked() {
-            action = Some("save");
+        if d.target == Target::OpenRaw && widgets::secondary_button(&mut fu, tl!("Done"), 70.0).clicked() {
+            action = Some("done");
         }
-        if fu.button(tl!("Load Settings…")).on_hover_text(tl!("Load settings from a Camera Raw .xmp file")).clicked() {
-            action = Some("load");
-        }
-        if !own_window {
-            // The zoom tools: in the workspace they are in the footer, in what the buttons leave free on its left, so the photo has the
-            // strip they used to have. In a window too narrow for both, the tools are clipped, never the buttons.
-            let free = ERect::from_min_max(
-                pos2(foot.left() + 16.0, foot.top() + 9.0),
-                pos2((fu.min_rect().left() - 12.0).max(foot.left() + 16.0), foot.bottom() - 9.0),
-            );
-            let mut tools = ui.new_child(egui::UiBuilder::new().max_rect(free).layout(egui::Layout::left_to_right(egui::Align::Center)));
-            tools.set_clip_rect(free.intersect(ui.clip_rect()));
-            super::camera_raw_preview_ui::toolbar(&mut tools, navigation, view, size, &mut scope.sampler_tool);
-            if d.detail.pending() || busy_visible {
-                tools.spinner();
+        if !ctx.input(|i| i.pointer.primary_down()) {
+            let origin = d.edit_origin.take().unwrap_or(frame_origin);
+            if origin != d.params {
+                let edited = std::mem::replace(&mut d.params, origin);
+                remember_edit(d);
+                d.params = edited;
             }
-            if let Some(error) = &d.detail.error {
-                tools.label(egui::RichText::new(tl!("Full-resolution preview unavailable")).color(t.text_faint)).on_hover_text(error);
-            }
-        }
-        if !ctx.input(|i| i.pointer.primary_down())
-            && let Some(origin) = d.edit_origin.take()
-            && origin != d.params
-        {
-            let edited = std::mem::replace(&mut d.params, origin);
-            remember_edit(d);
-            d.params = edited;
         }
     });
     super::camera_raw_scope_ui::persist(app, ctx);
@@ -1665,6 +1924,17 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             }
         }
         Some("cancel") => cancel(app),
+        Some("done") => {
+            if let Err(error) = done(app) {
+                app.ui.status = error;
+            }
+        }
+        Some("reset-open" | "reset-default") => {
+            let reset = if action == Some("reset-open") { "open" } else { "default" };
+            if let Some(Err(error)) = menu_update(app, ctx, &json!({"reset":reset})) {
+                app.ui.status = error;
+            }
+        }
         Some("save") => {
             let r = save_settings(app);
             report_file_error(app, r);
@@ -1696,38 +1966,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_filters_own_window_keeps_upstreams_layout() {
-        let screen = ERect::from_min_size(pos2(0.0, 0.0), vec2(1365.0, 767.0));
-        let lay = layout(screen, true);
-        assert_eq!(lay.right.width(), 330.0);
-        assert_eq!(lay.view.left(), 16.0);
-        assert_eq!(lay.view.top(), 16.0);
-        assert_eq!(lay.preview_body.bottom() - lay.view.bottom(), 48.0, "the strip under the photo, for the zoom tools");
-    }
-
-    #[test]
-    fn the_workspace_gives_the_photo_the_strip_and_part_of_the_margin_and_narrows_the_panel() {
-        let screen = ERect::from_min_size(pos2(0.0, 0.0), vec2(1365.0, 767.0));
-        let lay = layout(screen, false);
-        let upstream = layout(screen, true);
-        assert_eq!(lay.right.width(), WORKSPACE_PANEL_W);
-        assert!(lay.right.width() < upstream.right.width());
-        assert_eq!(lay.view.left() - lay.preview_body.left(), WORKSPACE_VIEW_MARGIN);
-        assert_eq!(lay.preview_body.right() - lay.view.right(), WORKSPACE_VIEW_MARGIN);
-        assert_eq!(lay.view.top() - lay.preview_body.top(), WORKSPACE_VIEW_MARGIN);
-        assert_eq!(lay.preview_body.bottom() - lay.view.bottom(), WORKSPACE_VIEW_MARGIN, "no strip under the photo any more");
-        assert!(lay.view.width() > upstream.view.width() && lay.view.height() > upstream.view.height());
-        assert_eq!(lay.foot.height(), 48.0, "the footer is what holds the tools now");
-    }
-
-    #[test]
-    fn the_workspace_panel_stays_clear_of_the_photo_and_the_footer() {
-        for width in [700.0, 1000.0, 1365.0, 2560.0] {
-            let lay = layout(ERect::from_min_size(pos2(0.0, 0.0), vec2(width, 700.0)), false);
-            assert!(lay.view.right() <= lay.right.left(), "{width}: the photo runs into the panel");
-            assert!(lay.view.bottom() <= lay.foot.top(), "{width}: the photo runs into the footer");
-            assert!(lay.view.width() > 0.0 && lay.view.height() > 0.0);
-            assert_eq!(lay.right.right(), width);
+    fn both_entry_points_share_the_reference_shell_without_overlapping_controls() {
+        for (width, height) in [(480.0, 400.0), (700.0, 600.0), (1365.0, 767.0), (2560.0, 1440.0)] {
+            let screen = ERect::from_min_size(pos2(12.0, 20.0), vec2(width, height));
+            let ctx = egui::Context::default();
+            let lay = layout(&ctx, screen, false);
+            assert_eq!(lay, layout(&ctx, screen, true));
+            assert!(screen.contains_rect(lay.rail) && screen.contains_rect(lay.right));
+            assert!(lay.view.is_positive() && screen.contains_rect(lay.view));
+            assert!(lay.view.right() <= lay.right.left());
+            assert!(lay.view.bottom() <= lay.nav.top());
+            assert!(lay.nav.bottom() <= lay.foot.top());
+            assert_eq!(lay.right.right(), lay.rail.left());
+            assert_eq!(lay.rail.right(), screen.right());
+            assert!(lay.right.width() <= crate::camera_raw_design::Design::default().panel_width);
         }
     }
 
@@ -1932,7 +2184,7 @@ mod tests {
         open_raw(&mut app, &ctx, raw).unwrap();
         let d = app.camera_raw.as_ref().unwrap();
         assert_eq!(d.target, Target::OpenRaw);
-        assert_eq!(d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)["openingRaw"]["name"], "IMG_0001.dng");
+        assert_eq!(d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview, &app.ui.camera_raw_workspace)["openingRaw"]["name"], "IMG_0001.dng");
         let before = mean_red(&app);
         menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0, "temperature": 30, "contrast": 20}}})).unwrap().unwrap();
         let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();

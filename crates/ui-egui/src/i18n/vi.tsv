@@ -3675,3 +3675,16 @@ curves	Smooth	Làm mượt
 	There are too many sets: delete one first.	Có quá nhiều bộ: hãy xóa một bộ trước.
 	set name	tên bộ
 	{set} (modified)	{set} (đã sửa đổi)
+
+# Camera Raw workspace metadata and controls
+	Capture Date	Ngày chụp
+	Dimensions	Kích thước
+	File Name	Tên tệp
+	Manual Noise Reduction	Giảm nhiễu thủ công
+	Reset to Open	Đặt lại về trạng thái khi mở
+	White Balance: Custom	Cân bằng trắng: Tùy chỉnh
+	Collapse All	Thu gọn tất cả
+	Color Sampler	Bộ lấy mẫu màu
+	Color Wheel	Vòng màu
+	Expand All	Mở rộng tất cả
+	Single Panel Mode	Chế độ một bảng

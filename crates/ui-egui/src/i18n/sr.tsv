@@ -4262,3 +4262,16 @@ shape	Appearance	Izgled
 	There are too many sets: delete one first.	Previše skupova: prvo obrišite jedan.
 	set name	ime skupa
 	{set} (modified)	{set} (izmenjen)
+
+# Camera Raw workspace metadata and controls
+	Capture Date	Датум снимања
+	Dimensions	Димензије
+cameraRaw	File Name	Назив датотеке
+	Manual Noise Reduction	Ручно смањење шума
+	Reset to Open	Врати на стање при отварању
+	White Balance: Custom	Баланс белог: Прилагођено
+	Collapse All	Скупи све
+	Color Sampler	Узорак боје
+	Color Wheel	Круг боја
+	Expand All	Прошири све
+	Single Panel Mode	Режим једног панела

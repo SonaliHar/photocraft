@@ -3919,3 +3919,16 @@ cameraData	Lens	Lens
 	There are too many sets: delete one first.	Çok fazla küme var: önce birini silin.
 	set name	küme adı
 	{set} (modified)	{set} (değiştirildi)
+
+# Camera Raw workspace metadata and controls
+	Capture Date	Çekim tarihi
+	Dimensions	Boyutlar
+cameraRaw	File Name	Dosya adı
+	Manual Noise Reduction	Manuel gürültü azaltma
+	Reset to Open	Açılış durumuna sıfırla
+	White Balance: Custom	Beyaz dengesi: Özel
+	Collapse All	Tümünü daralt
+	Color Sampler	Renk örnekleyici
+	Color Wheel	Renk çarkı
+	Expand All	Tümünü genişlet
+	Single Panel Mode	Tek panel modu

@@ -3191,3 +3191,16 @@ curves	Smooth	Glätten
 	There are too many sets: delete one first.	Zu viele Sätze: Löschen Sie zuerst einen.
 	set name	Name des Satzes
 	{set} (modified)	{set} (geändert)
+
+# Camera Raw workspace metadata and controls
+	Capture Date	Aufnahmedatum
+	Dimensions	Abmessungen
+	File Name	Dateiname
+	Manual Noise Reduction	Manuelle Rauschreduzierung
+	Reset to Open	Auf Öffnungszustand zurücksetzen
+	White Balance: Custom	Weißabgleich: Benutzerdefiniert
+	Collapse All	Alle reduzieren
+	Color Sampler	Farbaufnehmer
+	Color Wheel	Farbrad
+	Expand All	Alle erweitern
+	Single Panel Mode	Einzelbedienfeldmodus

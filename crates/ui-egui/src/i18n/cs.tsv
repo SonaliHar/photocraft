@@ -3797,3 +3797,16 @@ navigator	Zoom	Zvětšení
 	There are too many sets: delete one first.	Sad je příliš mnoho: nejprve jednu smažte.
 	set name	název sady
 	{set} (modified)	{set} (změněno)
+
+# Camera Raw workspace metadata and controls
+	Capture Date	Datum pořízení
+	Dimensions	Rozměry
+cameraRaw	File Name	Název souboru
+	Manual Noise Reduction	Ruční redukce šumu
+	Reset to Open	Obnovit stav při otevření
+	White Balance: Custom	Vyvážení bílé: Vlastní
+	Collapse All	Sbalit vše
+	Color Sampler	Vzorkování barev
+	Color Wheel	Barevný kruh
+	Expand All	Rozbalit vše
+	Single Panel Mode	Režim jednoho panelu

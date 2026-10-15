@@ -20,6 +20,12 @@ fn all_seven_languages_render_camera_raw_and_switch_without_resetting_view_or_fi
             camera_raw_ui::open(&mut app, &cc.egui_ctx).unwrap();
             app
         });
+        h.state_mut().ui.camera_raw_workspace.mixer = photocraft_ui_egui::camera_raw_workspace_ui::MixerMode::Hsl;
+        h.state_mut().ui.camera_raw_workspace.curve_channel = photocraft_ui_egui::camera_raw_workspace_ui::CurveChannel::Parametric;
+        h.state_mut().ui.camera_raw_workspace.vignette_details = true;
+        h.state_mut().ui.camera_raw_workspace.grain_details = true;
+        h.state_mut().ui.camera_raw_workspace.sharpening_details = true;
+        h.state_mut().ui.camera_raw_workspace.noise_details = true;
         h.run_steps(3);
         let ctx = h.ctx.clone();
         h.state_mut().set_theme(&ctx, ThemeKind::Pro);
@@ -51,10 +57,10 @@ fn all_seven_languages_render_camera_raw_and_switch_without_resetting_view_or_fi
         h.get_by_role_and_label(Role::Button, tr("Color Mixer")).click();
         h.run_steps(12);
         for (section, labels) in [
-            ("Effects", vec!["Texture", "Clarity", "Dehaze", "Vignetting", "Grain", "Roughness"]),
+            ("Effects", vec!["Texture", "Clarity", "Dehaze", "Vignette", "Grain", "Roughness"]),
             ("Curve", vec!["Highlights", "Lights", "Darks", "Shadows"]),
-            ("Color Grading", vec!["Midtones", "Global", "Hue", "Saturation", "Luminance", "Blending", "Balance"]),
-            ("Detail", vec!["Sharpening", "Masking", "Noise Reduction", "Luminance Detail", "Color Detail"]),
+            ("Color Grading", vec!["Midtones", "Global", "Luminance", "Blending", "Balance"]),
+            ("Detail", vec!["Sharpening", "Masking", "Manual Noise Reduction", "Luminance Detail", "Color Detail"]),
         ] {
             h.get_by_role_and_label(Role::Button, tr(section)).click();
             h.run_steps(12);

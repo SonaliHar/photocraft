@@ -3181,3 +3181,16 @@ curves	Smooth	Haluskan
 	set name	nama set
 	{set} (modified)	{set} (diubah)
 	Random	Acak
+
+# Camera Raw workspace metadata and controls
+	Capture Date	Tanggal pengambilan
+	Dimensions	Dimensi
+	File Name	Nama berkas
+	Manual Noise Reduction	Pengurangan derau manual
+	Reset to Open	Atur ulang ke keadaan saat dibuka
+	White Balance: Custom	Keseimbangan putih: Kustom
+	Collapse All	Ciutkan semua
+	Color Sampler	Pengambil sampel warna
+	Color Wheel	Roda warna
+	Expand All	Luaskan semua
+	Single Panel Mode	Mode satu panel

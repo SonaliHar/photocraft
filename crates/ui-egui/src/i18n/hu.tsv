@@ -4108,3 +4108,16 @@ cameraRaw	Yellow	Sárga
 	There are too many sets: delete one first.	Túl sok készlet van: előbb töröljön egyet.
 	set name	készlet neve
 	{set} (modified)	{set} (módosítva)
+
+# Camera Raw workspace metadata and controls
+	Capture Date	Felvétel dátuma
+	Dimensions	Méretek
+cameraRaw	File Name	Fájlnév
+	Manual Noise Reduction	Kézi zajcsökkentés
+	Reset to Open	Megnyitáskori állapot visszaállítása
+	White Balance: Custom	Fehéregyensúly: Egyéni
+	Collapse All	Összes összecsukása
+	Color Sampler	Színmintavevő
+	Color Wheel	Színkerék
+	Expand All	Összes kibontása
+	Single Panel Mode	Egypaneles mód

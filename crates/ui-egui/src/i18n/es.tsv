@@ -4151,3 +4151,16 @@ navigator	Zoom	Zoom
 	There are too many sets: delete one first.	Hay demasiados conjuntos: elimine uno primero.
 	set name	nombre del conjunto
 	{set} (modified)	{set} (modificado)
+
+# Camera Raw workspace metadata and controls
+	Capture Date	Fecha de captura
+	Dimensions	Dimensiones
+cameraRaw	File Name	Nombre de archivo
+	Manual Noise Reduction	Reducción de ruido manual
+	Reset to Open	Restablecer al estado de apertura
+	White Balance: Custom	Equilibrio de blancos: Personalizado
+	Collapse All	Contraer todo
+	Color Sampler	Muestra de color
+	Color Wheel	Rueda de color
+	Expand All	Expandir todo
+	Single Panel Mode	Modo de panel único

@@ -1,0 +1,55 @@
+{
+  "panelWidth": 270,
+  "railWidth": 36,
+  "headerHeight": 32,
+  "navigationHeight": 32,
+  "footerHeight": 48,
+  "previewMargin": 8,
+  "sectionHeight": 42,
+  "sectionFontSize": 13,
+  "sectionPadding": 24,
+  "sectionVerticalPadding": 0,
+  "panelFontSize": 12,
+  "valueFieldWidth": 45,
+  "rowGap": 0,
+  "wheelMaxSize": 130,
+  "panelOrder": [
+    "Light",
+    "Color",
+    "Effects",
+    "Curve",
+    "Color Mixer",
+    "Color Grading",
+    "Detail"
+  ],
+  "preview": {
+    "panels": {
+      "open": [
+        "Light",
+        "Color",
+        "Effects"
+      ],
+      "single": false
+    },
+    "grading": "threeWay",
+    "mixer": "color",
+    "curveChannel": "parametric"
+  },
+  "sliderFieldHeight": 20,
+  "sliderTrackHeight": 10,
+  "sliderInnerGap": 0,
+  "sliderBottomGap": 0,
+  "triangleHandles": true,
+  "sectionTextInset": 44,
+  "sectionIconInset": 27,
+  "sliderLabelRowHeight": 22.7,
+  "sliderTrackInset": 0,
+  "sectionBottomPadding": 24,
+  "sectionRightPadding": 16,
+  "valueFontSize": 12,
+  "valueMonospace": false,
+  "valueTextLeftAligned": true,
+  "valueTextPadding": 4,
+  "valueTextOffsetY": 1,
+  "valueFieldOffsetY": 1
+}

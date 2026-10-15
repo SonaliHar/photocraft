@@ -4310,3 +4310,16 @@ shape	Appearance	Aspetto
 	There are too many sets: delete one first.	Ci sono troppi set: eliminane prima uno.
 	set name	nome del set
 	{set} (modified)	{set} (modificato)
+
+# Camera Raw workspace metadata and controls
+	Capture Date	Data di acquisizione
+	Dimensions	Dimensioni
+cameraRaw	File Name	Nome file
+	Manual Noise Reduction	Riduzione disturbo manuale
+	Reset to Open	Ripristina impostazioni all’apertura
+	White Balance: Custom	Bilanciamento bianco: Personale
+	Collapse All	Comprimi tutto
+	Color Sampler	Campionatore colore
+	Color Wheel	Ruota colore
+	Expand All	Espandi tutto
+	Single Panel Mode	Modalità pannello singolo
