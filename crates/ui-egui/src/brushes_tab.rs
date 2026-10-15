@@ -885,6 +885,15 @@ pub fn preset_list(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&
     let show = (st.show_name, st.show_stroke, st.show_tip);
     let collapsed = &st.collapsed;
     egui::ScrollArea::vertical().id_salt(layout.id).max_height(layout.max_height).auto_shrink([false, true]).show(ui, |ui| {
+        // A preset, group or folder dragged to the list's top or bottom edge (or past it) scrolls
+        // the list, as the Layers panel's rows do, so it can be dropped on rows out of view (#5741).
+        let dragging = egui::DragAndDrop::has_payload_of_type::<BrushDrag>(ui.ctx()) && ui.input(|i| i.pointer.primary_down());
+        let pointer = ui.ctx().pointer_interact_pos();
+        let delta = crate::panels::layer_drag_edge_scroll(pointer, ui.clip_rect(), dragging, ui.input(|i| i.stable_dt));
+        if delta != 0.0 {
+            ui.scroll_with_delta(vec2(0.0, delta));
+            ui.ctx().request_repaint();
+        }
         ui.spacing_mut().item_spacing.y = 1.0;
         for (label, items) in grouped_presets(presets) {
             let items: Vec<&BrushPreset> =
@@ -925,7 +934,28 @@ pub fn preset_list(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&
         egui::Area::new(egui::Id::new(("brush-drag-label", layout.id))).order(egui::Order::Tooltip).fixed_pos(p + vec2(12.0, 8.0)).interactable(false).show(
             ui.ctx(),
             |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| ui.label(name));
+                if matches!(&*d, BrushDrag::Preset(_)) {
+                    ui.set_opacity(0.8);
+                }
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        if let BrushDrag::Preset(n) = &*d
+                            && let Some(preset) = presets.iter().find(|preset| preset.name == *n)
+                        {
+                            let brush = &preset.brush;
+                            let tip = brush_preview::tip_texture(
+                                ui.ctx(),
+                                &format!("brushes-drag-tip:{}", preset.name),
+                                &brush.tip,
+                                (brush.hardness, brush.angle, brush.roundness),
+                                36,
+                                Tokens::get(ui.ctx()).text,
+                            );
+                            ui.add(egui::Image::new(&tip).fit_to_exact_size(vec2(36.0, 36.0)).alt_text(&preset.name));
+                        }
+                        ui.label(name);
+                    });
+                });
             },
         );
     }
@@ -996,8 +1026,8 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if crate::brush_picker::named(new, "Create new brush from the current settings").clicked() {
                 crate::brush_preset_dialog::open(app, None);
             }
-            if icons::button(ui, "folder-open", 24.0, false, "Import Brushes… (.abr)").clicked() {
-                let _ = app.open_dialog_file();
+            if icons::button(ui, "folder-open", 24.0, false, "Import Brushes… (.abr or image)").clicked() {
+                let _ = crate::preset_files_ui::import_brushes(app);
             }
         });
     });
