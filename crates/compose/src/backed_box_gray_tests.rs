@@ -2,6 +2,8 @@
 //! independent harness controls, not GIMP numerical/profile equivalence proof.
 #[path = "backed_box_gray_factory_tests.rs"]
 mod factory;
+#[path = "backed_box_gray_transfer_tests.rs"]
+mod transfer;
 use super::*;
 
 #[derive(Debug)]
@@ -300,12 +302,8 @@ fn malformed_gray_inputs_refuse_even_when_inactive() {
         for encoding in [SampleEncoding::Linear, SampleEncoding::Perceptual] {
             let (mut doc, q, guard, _, _) = gray_fixture(sample, s, 4, true);
             doc.sample_encoding = Some(encoding);
-            doc.source_color_context.as_mut().unwrap().source_precision = match (sample, encoding) {
-                (SampleType::F32, SampleEncoding::Linear) => 600,
-                (SampleType::F64, SampleEncoding::Linear) => 700,
-                (SampleType::F32, _) => 675,
-                _ => 775,
-            };
+            // A stored transfer edit alone cannot reinterpret old nonlinear
+            // source precision. New transfer roles require their exact pair.
             assert!(!is_candidate(&doc, &ctl()).unwrap());
             let owned = owner(doc, q, guard, false);
             assert!(PreparedBackedBoxContext::new(&owned, Default::default(), &ctl()).is_err());

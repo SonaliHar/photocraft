@@ -216,3 +216,6 @@ fn gray_paid_failures_and_copy_chain_preserve_source_owners() {
         assert_eq!(q.usage().unwrap(), Default::default());
     }
 }
+
+#[path = "implicit_gray_transfer_tests.rs"]
+mod transfer;

@@ -1053,3 +1053,7 @@ mod owned_perceptual_box_tests;
 #[cfg(all(test, not(target_arch="wasm32")))]
 #[path="headless/owned_gray_box_tests.rs"]
 mod owned_gray_box_tests;
+
+#[cfg(all(test, not(target_arch="wasm32")))]
+#[path="headless/owned_gray_transfer_box_tests.rs"]
+mod owned_gray_transfer_box_tests;

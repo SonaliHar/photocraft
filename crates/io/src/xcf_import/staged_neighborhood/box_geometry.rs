@@ -8,7 +8,12 @@ fn role<P>(f: &XcfFile<P>) -> bool {
             f.icc.is_empty()
                 && matches!(
                     (f.sample, f.precision, f.encoding),
-                    (Sample::F32, 650, Encoding::NonlinearProfile) | (Sample::F64, 750, Encoding::NonlinearProfile)
+                    (Sample::F32, 650, Encoding::NonlinearProfile)
+                        | (Sample::F64, 750, Encoding::NonlinearProfile)
+                        | (Sample::F32, 600, Encoding::Linear)
+                        | (Sample::F64, 700, Encoding::Linear)
+                        | (Sample::F32, 675, Encoding::Perceptual)
+                        | (Sample::F64, 775, Encoding::Perceptual)
                 )
         }
         _ => false,
@@ -233,3 +238,7 @@ mod perceptual_tests;
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "box_geometry_gray_tests.rs"]
 mod gray_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "box_geometry_gray_transfer_tests.rs"]
+mod gray_transfer_tests;

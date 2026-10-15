@@ -462,7 +462,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     fn requires_budgeted_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn requires_budgeted_general_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn effective_profile(file: &XcfFile<Self>, space: photocraft_cms::ColorSpace, ce: photocraft_cms::xcf_color::Encoding, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<photocraft_cms::Profile, IoError> {
-        if matches!(P::family(file), SelectedStagedFamily::Neighborhood(NeighborhoodSourceFamily::BoxGeometryGrayF32 | NeighborhoodSourceFamily::BoxGeometryGrayF64 | NeighborhoodSourceFamily::BoxGeometryLinearF32 | NeighborhoodSourceFamily::BoxGeometryLinearF64 | NeighborhoodSourceFamily::BoxGeometryPerceptualF32 | NeighborhoodSourceFamily::BoxGeometryPerceptualF64)) {
+        if matches!(P::family(file), SelectedStagedFamily::Neighborhood(NeighborhoodSourceFamily::BoxGeometryGrayF32 | NeighborhoodSourceFamily::BoxGeometryGrayF64 | NeighborhoodSourceFamily::BoxGeometryGrayLinearF32 | NeighborhoodSourceFamily::BoxGeometryGrayLinearF64 | NeighborhoodSourceFamily::BoxGeometryGrayPerceptualF32 | NeighborhoodSourceFamily::BoxGeometryGrayPerceptualF64 | NeighborhoodSourceFamily::BoxGeometryLinearF32 | NeighborhoodSourceFamily::BoxGeometryLinearF64 | NeighborhoodSourceFamily::BoxGeometryPerceptualF32 | NeighborhoodSourceFamily::BoxGeometryPerceptualF64)) {
             return implicit_box_effective(file,space,ce,ctl,shared.ok_or_else(||IoError::Unsupported("implicit transfer Box profile needs accounting".into()))?);
         }
         if matches!(P::family(file), SelectedStagedFamily::AnalyticGeometry | SelectedStagedFamily::IsolatedNormalGroup | SelectedStagedFamily::Neighborhood(NeighborhoodSourceFamily::BoxGeometryAssignedF32 | NeighborhoodSourceFamily::BoxGeometryAssignedF64 | NeighborhoodSourceFamily::BoxAssignedF32 | NeighborhoodSourceFamily::MedianAssignedF32 | NeighborhoodSourceFamily::GaussianAssignedF32)) {
@@ -1117,7 +1117,11 @@ fn implicit_box_effective<P>(file:&XcfFile<P>,space:photocraft_cms::ColorSpace,c
     let gray=file.model==Model::Gray && space==photocraft_cms::ColorSpace::Gray
         && matches!((file.sample,file.precision,file.encoding,ce),
             (Sample::F32,650,Encoding::NonlinearProfile,xcf_color::Encoding::NonlinearProfile)
-            |(Sample::F64,750,Encoding::NonlinearProfile,xcf_color::Encoding::NonlinearProfile));
+            |(Sample::F64,750,Encoding::NonlinearProfile,xcf_color::Encoding::NonlinearProfile)
+            |(Sample::F32,600,Encoding::Linear,xcf_color::Encoding::Linear)
+            |(Sample::F64,700,Encoding::Linear,xcf_color::Encoding::Linear)
+            |(Sample::F32,675,Encoding::Perceptual,xcf_color::Encoding::Perceptual)
+            |(Sample::F64,775,Encoding::Perceptual,xcf_color::Encoding::Perceptual));
     if !file.icc.is_empty() || !(rgb || gray) { return Err(IoError::Unsupported("implicit Box profile role".into())); }
     let stop=||ctl.cancelled();
     let cms=|e| if matches!(e,control::Error::Cancelled){IoError::Cancelled}else{IoError::Unsupported("implicit transfer Box effective profile".into())};
@@ -1146,3 +1150,7 @@ mod perceptual_box_profile_tests;
 #[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
 #[path="staged_neighborhood/box_geometry_gray_profile_tests.rs"]
 mod gray_box_profile_tests;
+
+#[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
+#[path="staged_neighborhood/box_geometry_gray_transfer_profile_tests.rs"]
+mod gray_transfer_box_profile_tests;

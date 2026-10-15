@@ -2095,3 +2095,20 @@ words differ by up to 2.384185791015625e-7; fresh-to-repeat projection is exact.
 This producer variability, effective Gray ICC date bytes and the distinct RGB
 Babl space-profile role remain explicit evidence limits. PhotoCraft tests and
 all numerical, visual, performance and workflow acceptance remain deferred.
+
+The observed implicit Gray envelope now also accepts Linear F32/600 and F64/700
+and Perceptual F32/675 and F64/775, with the same source/activity/edit/native
+continuation policy. Their actual stored encoding selects existing SGray
+working-space preparation and generated current ICC/ImplicitSGray identity;
+native YA storage, masks and internal RGBA kernel fees remain unchanged.
+Actual Gray canvas display selects sRGB encoding for Linear and retains the
+Perceptual profile interpretation for Perceptual. Assigned Gray stays outside
+the envelope.
+
+Combined independent captures preserve a new Linear F32 variability limit:
+both projection and merged Gray words differ by up to 5.960464477539063e-8,
+including merged differences between fresh and repeated reopen captures.
+Source and alpha remain exact; the other three roles are capture-stable.
+Effective Gray ICC date bytes, distinct Babl RGB-space profiles and each actual
+opaque raw triple remain provenance. No tolerance, profile normalization or
+PhotoCraft numerical acceptance is inferred; regression groups remain UNRUN.

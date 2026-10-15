@@ -31,6 +31,10 @@ pub(crate) fn observed_encoding(doc: &Document) -> Result<SampleEncoding, E> {
         | (ColorMode::Rgb, Some(SampleEncoding::Perceptual), SampleType::F64, 775, false) => Ok(SampleEncoding::Perceptual),
         (ColorMode::Grayscale, Some(SampleEncoding::NonlinearProfile), SampleType::F32, 650, false)
         | (ColorMode::Grayscale, Some(SampleEncoding::NonlinearProfile), SampleType::F64, 750, false) => Ok(SampleEncoding::NonlinearProfile),
+        (ColorMode::Grayscale, Some(SampleEncoding::Linear), SampleType::F32, 600, false)
+        | (ColorMode::Grayscale, Some(SampleEncoding::Linear), SampleType::F64, 700, false) => Ok(SampleEncoding::Linear),
+        (ColorMode::Grayscale, Some(SampleEncoding::Perceptual), SampleType::F32, 675, false)
+        | (ColorMode::Grayscale, Some(SampleEncoding::Perceptual), SampleType::F64, 775, false) => Ok(SampleEncoding::Perceptual),
         _ => Err(scope()),
     }
 }
