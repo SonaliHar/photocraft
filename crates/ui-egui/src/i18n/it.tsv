@@ -4310,3 +4310,13 @@ shape	Appearance	Aspetto
 	There are too many sets: delete one first.	Ci sono troppi set: eliminane prima uno.
 	set name	nome del set
 	{set} (modified)	{set} (modificato)
+
+# Optional brush wheel controls and font favorites
+	All Fonts	Tutti i caratteri
+	Favorite	Aggiungi ai preferiti
+	Favorites	Preferiti
+	Mark fonts with a star in All Fonts to add favorites.	Contrassegna i caratteri con una stella in Tutti i caratteri per aggiungerli ai preferiti.
+	Remove favorite	Rimuovi dai preferiti
+	Favorite fonts	Caratteri preferiti
+	Invert brush size wheel	Inverti la rotella per la dimensione del pennello
+	Resize brush with scroll wheel	Ridimensiona il pennello con la rotella

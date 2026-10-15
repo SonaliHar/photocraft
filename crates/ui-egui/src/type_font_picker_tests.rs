@@ -23,7 +23,11 @@ fn harness_with(preview: FontPreview) -> Harness<'static, State> {
     let mut families: Vec<String> = (0..60).map(|i| format!("Family {i:02}")).collect();
     families.push("Zeta Sans".into());
     let state = State { current: "Family 00".into(), families, popup: egui::Id::NULL, preview };
-    let mut h = Harness::builder().with_size(vec2(600.0, 900.0)).build_ui_state(
+    let mut builder = Harness::builder().with_size(vec2(600.0, 900.0));
+    if std::env::var_os("PHOTOCRAFT_UI_SHOTS").is_some() {
+        builder = builder.wgpu();
+    }
+    let mut h = builder.build_ui_state(
         |ui, s: &mut State| {
             s.popup = ui.make_persistent_id(egui::IdSalt::new("type-font")).with("popup");
             let fams = s.families.clone();
@@ -529,4 +533,47 @@ fn options_bar_hover_previews_with_the_character_picker_also_shown() {
     h.query_all_by_role(Role::TextInput).find(|n| n.is_focused()).expect("search field focused").hover();
     h.run();
     assert_eq!(font(&mut h), "Inter", "leaving the row restores the committed font");
+}
+#[test]
+fn favorites_can_be_bookmarked_filtered_selected_and_removed() {
+    let mut h = harness();
+    open(&mut h);
+    h.get_by_label("Favorite Family 02").click();
+    h.run();
+    assert_eq!(h.state().current, "Family 00", "bookmarking must not apply a font");
+    h.get_by_label("Favorites").click();
+    h.run();
+    assert!(h.query_by_label("Family 00").is_none());
+    assert!(h.query_by_label("Family 02").is_some());
+    if let Some(dir) = std::env::var_os("PHOTOCRAFT_UI_SHOTS") {
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        h.render().unwrap().save(dir.join("font-favorites.png")).unwrap();
+    }
+    h.get_by_label("Family 02").click();
+    h.run();
+    assert_eq!(h.state().current, "Family 02");
+    open(&mut h);
+    h.get_by_label("Remove favorite Family 02").click();
+    h.run();
+    assert!(h.query_by_label("Family 02").is_none());
+    h.get_by_label("All Fonts").click();
+    h.run();
+    assert!(h.query_by_label("Family 02").is_some());
+}
+
+#[test]
+fn favorite_font_changes_round_trip_through_preferences() {
+    let ctx = egui::Context::default();
+    let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    crate::font_favorites::sync(&ctx, &[]);
+    crate::font_favorites::toggle(&ctx, "Inter");
+    crate::font_favorites::toggle(&ctx, "JetBrains Mono");
+    crate::font_favorites::persist(&mut app, &ctx);
+    let saved = app.session.prefs_to_json();
+    let mut restored = photocraft_engine::Session::new();
+    restored.load_prefs_json(&saved).unwrap();
+    assert_eq!(restored.prefs().type_.favorite_fonts, ["Inter", "JetBrains Mono"]);
+    assert!(restored.execute("prefs.set", serde_json::json!({"values": {"type.favoriteFonts": ["Inter", "Inter"]}})).is_err());
+    assert_eq!(restored.prefs().type_.favorite_fonts.len(), 2);
 }

@@ -3865,3 +3865,13 @@ curves	Smooth	スムーズ
 	There are too many sets: delete one first.	セットが多すぎます。先に 1 つ削除してください。
 	set name	セット名
 	{set} (modified)	{set}（変更あり）
+
+# Optional brush wheel controls and font favorites
+	All Fonts	すべてのフォント
+	Favorite	お気に入りに追加
+	Favorites	お気に入り
+	Mark fonts with a star in All Fonts to add favorites.	「すべてのフォント」で星を付けると、お気に入りに追加されます。
+	Remove favorite	お気に入りから削除
+	Favorite fonts	お気に入りのフォント
+	Invert brush size wheel	ブラシサイズのホイール方向を反転
+	Resize brush with scroll wheel	スクロールホイールでブラシサイズを変更

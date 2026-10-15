@@ -3797,3 +3797,13 @@ navigator	Zoom	Zvětšení
 	There are too many sets: delete one first.	Sad je příliš mnoho: nejprve jednu smažte.
 	set name	název sady
 	{set} (modified)	{set} (změněno)
+
+# Optional brush wheel controls and font favorites
+	All Fonts	Všechna písma
+	Favorite	Přidat k oblíbeným
+	Favorites	Oblíbené
+	Mark fonts with a star in All Fonts to add favorites.	Označte písma hvězdičkou v seznamu Všechna písma a přidejte je k oblíbeným.
+	Remove favorite	Odebrat z oblíbených
+	Favorite fonts	Oblíbená písma
+	Invert brush size wheel	Obrátit směr kolečka pro velikost štětce
+	Resize brush with scroll wheel	Měnit velikost štětce kolečkem

@@ -1475,7 +1475,18 @@ pub(crate) fn family_picker_in(
             d.insert_temp(search_id, q.clone());
         });
         let ql = q.to_lowercase();
-        let rows = font_menu_rows(families, labels, &ql);
+        let favorite_filter_id = search_id.with("favorites-only");
+        let mut favorites_only = ui.data(|d| d.get_temp::<bool>(favorite_filter_id)).unwrap_or(false);
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut favorites_only, false, tl!("All Fonts"));
+            ui.selectable_value(&mut favorites_only, true, tl!("Favorites"));
+        });
+        ui.data_mut(|d| d.insert_temp(favorite_filter_id, favorites_only));
+        let favorites = crate::font_favorites::get(ui.ctx());
+        let rows: Vec<_> = font_menu_rows(families, labels, &ql).into_iter().filter(|(f, _)| !favorites_only || favorites.contains(f)).collect();
+        if favorites_only && rows.is_empty() {
+            ui.label(tl!("Mark fonts with a star in All Fonts to add favorites."));
+        }
         if down || up {
             let index = rows.iter().position(|(f, _)| *f == current);
             let next = match index {
@@ -1506,7 +1517,18 @@ pub(crate) fn family_picker_in(
                 button =
                     button.right_text(egui::Atom::custom(ui.id().with(("font-sample", f)), egui::vec2(crate::font_preview::slot_width(ui.ctx(), f, size), h)));
             }
-            let response = ui.add_sized([330.0, row_h], button);
+            let response = ui
+                .horizontal(|ui| {
+                    let favorite = favorites.contains(f);
+                    let tip = if favorite { format!("{} {f}", tl!("Remove favorite")) } else { format!("{} {f}", tl!("Favorite")) };
+                    let star = ui.add_sized([24.0, row_h], egui::Button::new(if favorite { "★" } else { "☆" })).on_hover_text(&tip);
+                    star.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &tip));
+                    if star.clicked() {
+                        crate::font_favorites::toggle(ui.ctx(), f);
+                    }
+                    ui.add_sized([330.0, row_h], button)
+                })
+                .inner;
             if (down || up) && f == current {
                 response.scroll_to_me(Some(egui::Align::Center));
             }

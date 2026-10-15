@@ -379,6 +379,9 @@ pub struct Tools {
     pub right_click_with_painting_tools: RightClickPaint,
     /// Pen tablets: pressure, tilt and rotation reach the brush (off: a pen paints like a mouse).
     pub use_tablet_pressure: bool,
+    /// Plain wheel over the canvas or Brush picker's Size controls changes stroke size.
+    pub resize_brush_with_scroll_wheel: bool,
+    pub invert_brush_size_wheel: bool,
     /// Pen pressure response: `[input, output]` control points in 0..1 that the pen's pressure
     /// passes through before it reaches any brush ([`PressureCurve`]). Linear by default.
     pub pressure_curve: Vec<[f32; 2]>,
@@ -406,6 +409,8 @@ impl Default for Tools {
             double_click_layer_mask_launches_select_and_mask: true,
             right_click_with_painting_tools: RightClickPaint::BrushPicker,
             use_tablet_pressure: true,
+            resize_brush_with_scroll_wheel: false,
+            invert_brush_size_wheel: false,
             pressure_curve: vec![[0.0, 0.0], [1.0, 1.0]],
             bundle_nudges: true,
             nudge_bundle_pause_ms: 1000,
@@ -791,6 +796,7 @@ pub struct TypePrefs {
     pub font_preview: FontPreview,
     pub fill_new_type_layers_with_placeholder: bool,
     pub recent_fonts: u32,
+    pub favorite_fonts: Vec<String>,
 }
 
 impl Default for TypePrefs {
@@ -804,6 +810,7 @@ impl Default for TypePrefs {
             font_preview: FontPreview::Medium,
             fill_new_type_layers_with_placeholder: true,
             recent_fonts: 10,
+            favorite_fonts: Vec::new(),
         }
     }
 }
@@ -1193,6 +1200,19 @@ fn set_path(root: &mut Value, path: &str, value: Value) -> std::result::Result<(
 
 /// Validate one value for `path` before it is stored (choices, ranges, colours).
 fn check_value(path: &str, v: &Value) -> std::result::Result<(), String> {
+    if path == "type.favoriteFonts" {
+        let items = v.as_array().ok_or("`type.favoriteFonts` must be a list of font families")?;
+        if items.len() > 256 {
+            return Err("at most 256 favorite font families are supported".into());
+        }
+        let mut seen = std::collections::HashSet::new();
+        for item in items {
+            let family = item.as_str().filter(|s| !s.trim().is_empty() && s.len() <= 256).ok_or("invalid favorite font family")?;
+            if !seen.insert(family) {
+                return Err("duplicate favorite font family".into());
+            }
+        }
+    }
     if path == "interface.favoriteThemes" {
         let items = v.as_array().ok_or("`interface.favoriteThemes` must be a list of theme ids")?;
         if items.len() > Theme::NAMES.len() {

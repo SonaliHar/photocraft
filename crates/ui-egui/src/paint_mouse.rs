@@ -185,9 +185,11 @@ pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let area = egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
         let before = app.session.tools.brush.clone();
         let mut b = before.clone();
+        let wheel = (app.session.prefs().tools.resize_brush_with_scroll_wheel, app.session.prefs().tools.invert_brush_size_wheel);
         let list = &mut app.ui.brush_picker_list;
-        let frame = egui::Frame::popup(ui.style())
-            .show(ui, |ui| crate::brush_picker::body(ui, &mut b, &app.session.tools.presets, app.session.tools.current_preset.as_deref(), list, content));
+        let frame = egui::Frame::popup(ui.style()).show(ui, |ui| {
+            crate::brush_picker::body(ui, &mut b, &app.session.tools.presets, app.session.tools.current_preset.as_deref(), list, content, wheel)
+        });
         let picks = frame.inner;
         // The corner grip resizes the picker, and the size is remembered across opens.
         if let Some(new) = crate::brush_picker::resize_grip(ui, frame.response.rect, content) {

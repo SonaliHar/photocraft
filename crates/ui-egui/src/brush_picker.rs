@@ -216,6 +216,7 @@ pub fn body(
     current: Option<&str>,
     st: &mut BrushesPanelState,
     size: egui::Vec2,
+    wheel: (bool, bool),
 ) -> Vec<Pick> {
     let t = Tokens::get(ui.ctx());
     let mut picks = Vec::new();
@@ -229,6 +230,14 @@ pub fn body(
     // stretching the rows across it.
     ui.scope(|ui| {
         ui.set_max_width(ui.available_width().min(HEAD_MAX_W));
+        let size_rect_id = ui.id().with("brush-size-wheel-rect");
+        let hovered = ui.data(|d| d.get_temp::<egui::Rect>(size_rect_id)).is_some_and(|rect| ui.rect_contains_pointer(rect));
+        if let Some(steps) = crate::brush_wheel::consume(ui.ctx(), size_rect_id, wheel.0 && hovered, wheel.1) {
+            for _ in 0..steps.unsigned_abs() {
+                b.size = photocraft_engine::brush_key_cmds::size_step(b.size, steps > 0);
+            }
+        }
+        let size_top = ui.cursor().min;
         // Size: value field plus a logarithmic slider (small sizes get most of the travel).
         ui.horizontal(|ui| {
             ui.label(RichText::new(tl!("Size")).color(t.text_dim));
@@ -245,6 +254,8 @@ pub fn body(
             b.size = lv.exp().round().clamp(1.0, MAX_BRUSH_SIZE);
         }
         dismiss_popup(&size_slider);
+        let size_rect = egui::Rect::from_min_max(size_top, size_slider.rect.max);
+        ui.data_mut(|d| d.insert_temp(size_rect_id, size_rect));
         if b.tip == TipShape::Round {
             let mut hard = b.hardness * 100.0;
             let hardness = widgets::slider_row(ui, "Hardness", &mut hard, 0.0..=100.0, "%", None);

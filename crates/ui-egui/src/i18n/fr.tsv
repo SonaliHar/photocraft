@@ -3194,3 +3194,13 @@ curves	Smooth	Lisser
 	set name	nom du jeu
 	{set} (modified)	{set} (modifié)
 	Random	Aléatoire
+
+# Optional brush wheel controls and font favorites
+	All Fonts	Toutes les polices
+	Favorite	Ajouter aux favoris
+	Favorites	Favoris
+	Mark fonts with a star in All Fonts to add favorites.	Marquez les polices avec une étoile dans Toutes les polices pour les ajouter aux favoris.
+	Remove favorite	Retirer des favoris
+	Favorite fonts	Polices favorites
+	Invert brush size wheel	Inverser la molette de taille du pinceau
+	Resize brush with scroll wheel	Redimensionner le pinceau avec la molette

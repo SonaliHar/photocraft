@@ -2790,3 +2790,13 @@ curves	Smooth	平滑
 	set name	組合名稱
 	{set} (modified)	{set}（已修改）
 	Random	隨機
+
+# Optional brush wheel controls and font favorites
+	All Fonts	所有字型
+	Favorite	加入我的最愛
+	Favorites	我的最愛
+	Mark fonts with a star in All Fonts to add favorites.	在「所有字型」中點擊星號以加入我的最愛。
+	Remove favorite	移除我的最愛
+	Favorite fonts	最愛字型
+	Invert brush size wheel	反轉筆刷大小滾輪方向
+	Resize brush with scroll wheel	使用滾輪調整筆刷大小

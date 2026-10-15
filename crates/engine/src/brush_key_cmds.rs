@@ -17,7 +17,7 @@ pub const MAX_SIZE: f32 = 5000.0;
 
 /// `[` / `]`: 25 % smaller or larger, and at least a pixel either way so small brushes still grow
 /// and shrink (2 / 1.25 rounds back to 2, which kept `[` from reaching 1 px, #3229).
-fn size_step(size: f32, up: bool) -> f32 {
+pub fn size_step(size: f32, up: bool) -> f32 {
     let next = if up { (size * 1.25).round().max(size + 1.0) } else { (size / 1.25).round().min(size - 1.0) };
     next.clamp(1.0, MAX_SIZE)
 }

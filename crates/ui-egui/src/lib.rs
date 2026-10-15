@@ -36,6 +36,7 @@ pub mod brush_preset_dialog;
 pub mod brush_preview;
 pub mod brush_resize;
 pub mod brush_sections;
+mod brush_wheel;
 pub mod brushes_tab;
 pub(crate) mod cam_preview;
 mod cam_transform;
@@ -94,6 +95,7 @@ mod filter_preview_ui;
 #[cfg(not(target_arch = "wasm32"))]
 mod filter_preview_worker;
 pub mod flick_pan;
+mod font_favorites;
 mod font_preview;
 pub mod frame_tool;
 pub mod gallery_ui;
@@ -1810,6 +1812,7 @@ impl eframe::App for PhotocraftApp {
         // Control requests and persisted preferences can change the language in this frame.
         i18n::sync_context(ctx, &self.session.prefs().interface.language);
         type_tool::sync_font_names(ctx, self.session.prefs().type_.show_font_names_in_english);
+        font_favorites::sync(ctx, &self.session.prefs().type_.favorite_fonts);
         // A window bigger than its display (1440 × 900 on 1366 × 768) runs under the taskbar:
         // maximize it into the work area once (#315).
         work_area::fit_window(ctx);
@@ -1983,6 +1986,7 @@ impl eframe::App for PhotocraftApp {
         // remembered once the pointer is up. Here, after every panel, rather than in the
         // picker's own code: the control channel can set it while the picker is closed.
         brush_picker::persist(self, &ctx);
+        font_favorites::persist(self, &ctx);
         // The tool's brush (settings and tip references) is remembered the same way. Like the
         // picker's view, in the frame loop, so the control channel can set it with the panels
         // closed; the engine's revision counter keeps an unchanged brush free.

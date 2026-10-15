@@ -3181,3 +3181,13 @@ curves	Smooth	Haluskan
 	set name	nama set
 	{set} (modified)	{set} (diubah)
 	Random	Acak
+
+# Optional brush wheel controls and font favorites
+	All Fonts	Semua Font
+	Favorite	Tambahkan ke favorit
+	Favorites	Favorit
+	Mark fonts with a star in All Fonts to add favorites.	Tandai font dengan bintang di Semua Font untuk menambahkannya ke favorit.
+	Remove favorite	Hapus dari favorit
+	Favorite fonts	Font favorit
+	Invert brush size wheel	Balik arah roda ukuran kuas
+	Resize brush with scroll wheel	Ubah ukuran kuas dengan roda gulir

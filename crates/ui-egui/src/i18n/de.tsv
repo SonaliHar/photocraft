@@ -3191,3 +3191,13 @@ curves	Smooth	Glätten
 	There are too many sets: delete one first.	Zu viele Sätze: Löschen Sie zuerst einen.
 	set name	Name des Satzes
 	{set} (modified)	{set} (geändert)
+
+# Optional brush wheel controls and font favorites
+	All Fonts	Alle Schriftarten
+	Favorite	Zu Favoriten hinzufügen
+	Favorites	Favoriten
+	Mark fonts with a star in All Fonts to add favorites.	Markieren Sie Schriftarten unter Alle Schriftarten mit einem Stern, um sie als Favoriten zu speichern.
+	Remove favorite	Aus Favoriten entfernen
+	Favorite fonts	Bevorzugte Schriftarten
+	Invert brush size wheel	Mausrad für Pinselgröße umkehren
+	Resize brush with scroll wheel	Pinselgröße mit dem Mausrad ändern
