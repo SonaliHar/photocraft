@@ -270,13 +270,14 @@ fn corner_bounds(corners: &[(f64, f64); 4]) -> Option<Rect> {
 /// map keeps 1:1 while it squashes the other, and the wide side of a Distort (#4864), so each axis
 /// gets its own: the length of its Jacobian column, at the least reduction found at the corners
 /// and centre of the source, or with a clip at the source points under the clip's corners and
-/// centre. The near side of a strong perspective then stays as sharp as a direct sample, while the
-/// far side gets less filtering than its own reduction calls for. A map that squashes along a
-/// slant (a rotated squash, or a skew that also flattens) shrinks a direction between the axes far
-/// more than either axis, which no axis-aligned prefilter follows; there both axes come down
-/// together until no direction is left a stronger reduction than the one factor left it (at most
-/// 50 %, where a 4×4 kernel starts to alias). Such a map aliases no more than it did with the one
-/// factor, and each tile's source footprint stays as small.
+/// centre. The wide side of a perspective Distort then stays as sharp as a direct sample. Its
+/// narrow side gets less filtering than its own reduction calls for: when the wide side stays
+/// about 1:1, the source is reduced little or not at all, so the 4×4 kernel samples the narrow side
+/// at nearly its whole reduction and aliases, and its tiles read wider source windows than the one
+/// factor left them. A map that squashes along a slant (a rotated squash, or a skew that also
+/// flattens) shrinks a direction between the axes far more than either axis, which no axis-aligned
+/// prefilter follows; there both axes come down together until no direction is left a stronger
+/// reduction than the one factor left it (at most 50 %, where a 4×4 kernel starts to alias).
 fn prefilter_scales(h: &Homography, src_rect: Rect, clip: Option<Rect>) -> (f64, f64) {
     let r = [f64::from(src_rect.x0), f64::from(src_rect.y0), f64::from(src_rect.x1), f64::from(src_rect.y1)];
     let points = |r: [f64; 4]| [(r[0], r[1]), (r[2], r[1]), (r[2], r[3]), (r[0], r[3]), ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0)];
