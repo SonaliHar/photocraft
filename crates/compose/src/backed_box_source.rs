@@ -68,8 +68,8 @@ fn metadata_mode(doc: &Document, b: &mut impl PlanBudget, i: &Interrupt<'_>, cur
         || state.filter_masks.len() != 1
         || !state.editable_indexed.is_empty()
         || stack.owner != ItemRef::Layer(layer.id)
-        || !layer.visible
-        || layer.opacity.to_bits() != 1f32.to_bits()
+        || (!current && !layer.visible)
+        || (!current && layer.opacity.to_bits() != 1f32.to_bits())
         || (!current && !node.enabled)
         || item.name != layer.name
         || item.raster_bounds != Some(s)

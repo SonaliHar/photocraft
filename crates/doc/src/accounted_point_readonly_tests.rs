@@ -240,7 +240,7 @@ fn requirements_are_not_a_receipt_noop_is_shared_and_generic_mutations_stay_clos
     let id = owner.document().layers[0].id;
     assert!(owner.try_edit(AccountedEdit::LayerName { layer: id, name: "generic" }, &ctl()).is_err());
     assert!(owner.try_replace_selection(None, &ctl()).is_err());
-    assert!(owner.try_edit(AccountedEdit::LayerMetadata { layer: id, name: None, visible: Some(false), opacity: None }, &ctl()).is_err());
+    assert!(owner.try_edit(AccountedEdit::LayerVisibility { layer: id, visible: false }, &ctl()).is_err());
     assert_eq!(q.usage().unwrap(), baseline);
 }
 #[test]

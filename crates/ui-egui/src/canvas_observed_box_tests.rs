@@ -57,7 +57,7 @@ fn observed_box_current_raw_tuple_is_not_mutation_authority() {
         ("xcf.filter.enable", json!({"filterId":id,"enabled":null})),
         ("xcf.filter.enable", json!({"filterId":id,"enabled":false,"opacityF64Bits":"0x3ff0000000000000"})),
         ("xcf.filter.set", json!({"filterId":id,"arguments":[{"name":"radius","value":{"Number":{"Signed":{"width":32,"value":1001}}}}]})),
-        ("layer.setProps", json!({"name":"closed"})),
+        ("layer.setProps", json!({"blend":"multiply"})),
         ("layer.translate", json!({"dx":1})),
         ("select.all", Value::Null),
         ("edit.clear", Value::Null),

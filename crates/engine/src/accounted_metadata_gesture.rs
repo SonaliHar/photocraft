@@ -9,7 +9,20 @@ use photocraft_raster::backing::quota::{BackingQuota, QuotaLease};
 /// Layer-properties routing only; unlike the assigned helper this may include
 /// readonly flat composites and must never be used for mask or Move admission.
 pub fn owned_layer_metadata_candidate(owner:&AccountedDocument)->bool {
-    owner.is_readonly_flat_composite_storage() || assigned_geometry_metadata_candidate(owner)
+    observed_box_layer_metadata_candidate(owner) || owner.is_readonly_flat_composite_storage() || assigned_geometry_metadata_candidate(owner)
+}
+pub(crate) fn point_metadata_class(owner: &AccountedDocument) -> bool {
+    owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage()
+}
+/// Either retained epoch selects strict validation; divergent epochs never fall back.
+pub(crate) fn observed_box_layer_metadata_candidate(owner: &AccountedDocument) -> bool {
+    point_metadata_class(owner) && owner.document().xcf_state.as_ref().is_some_and(|state| {
+        // Actual Point storage admits at most two nodes. Inspect both fixed
+        // slots so a malformed multi-node observed owner cannot use an older route.
+        state.filter_stacks.first().is_some_and(|stack| stack.nodes.iter().take(2).any(|node|
+            node.operation.schema_epoch == photocraft_compose::backed_box_source::BOX_GEOMETRY_EPOCH
+                || node.composition.as_ref().is_some_and(|p| p.compatibility_epoch == photocraft_compose::backed_box_source::BOX_GEOMETRY_EPOCH)))
+    })
 }
 pub fn assigned_geometry_metadata_candidate(owner: &AccountedDocument) -> bool {
     if owner.is_readonly_gaussian_group_storage() { return true; }
@@ -29,6 +42,7 @@ fn isolated_normal_group_metadata_candidate(owner: &AccountedDocument) -> bool {
 #[derive(Clone, Copy)]
 pub(crate) enum MetadataPolicy {
     Plain,
+    ObservedBox,
     FlatComposite,
     AssignedGeometry,
     IsolatedNormalGroup,
@@ -36,7 +50,9 @@ pub(crate) enum MetadataPolicy {
 }
 impl MetadataPolicy {
     pub(crate) fn for_owner(owner: &AccountedDocument) -> Self {
-        if owner.is_readonly_flat_composite_storage() {
+        if observed_box_layer_metadata_candidate(owner) {
+            Self::ObservedBox
+        } else if owner.is_readonly_flat_composite_storage() {
             Self::FlatComposite
         } else if owner.is_readonly_gaussian_group_storage() {
             Self::GaussianGroup
@@ -54,6 +70,7 @@ impl MetadataPolicy {
     pub(crate) fn validate_storage(self, owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<()> {
         match self {
             Self::Plain => Err(BackingError::Unsupported.into()),
+            Self::ObservedBox => if owner.is_readonly_assigned_point_storage() { Ok(owner.validate_readonly_assigned_point_storage(c)?) } else { Ok(owner.validate_readonly_point_storage(c)?) },
             Self::FlatComposite => Ok(owner.validate_readonly_flat_composite_storage(c)?),
             Self::AssignedGeometry => Ok(owner.validate_assigned_analytic_geometry_storage(c)?),
             Self::IsolatedNormalGroup => Ok(owner.validate_assigned_isolated_normal_group_storage(c)?),
@@ -62,7 +79,8 @@ impl MetadataPolicy {
     }
     pub(crate) fn validate_current(self, owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<()> {
         match self {
-            Self::Plain => Ok(()),
+            Self::Plain => if point_metadata_class(owner) { Err(BackingError::Unsupported.into()) } else { Ok(()) },
+            Self::ObservedBox => crate::accounted_native_open::validate_current_observed_box_metadata(owner,c),
             Self::FlatComposite => crate::accounted_xcf_open::separable_blend::validate_current_separable_blend_storage(owner,c),
             Self::AssignedGeometry => crate::accounted_xcf_open::analytic_geometry::validate_current_analytic_geometry_storage(owner, c),
             Self::IsolatedNormalGroup => crate::accounted_xcf_open::isolated_normal_group::validate_current_isolated_normal_group_storage(owner, c),
@@ -127,8 +145,9 @@ impl Session {
             return Err(BackingError::Unsupported.into());
         }
         let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
-        owner.validate_imported_metadata_edit(edit, c)?;
         let policy = MetadataPolicy::for_owner(owner);
+        if point_metadata_class(owner) && !matches!(policy, MetadataPolicy::ObservedBox) { return Err(BackingError::Unsupported.into()); }
+        owner.validate_imported_metadata_edit(edit, c)?;
         if policy.needs_assigned_fence() && !state.history.current()?.shares_state(&state.doc) {
             return Err(BackingError::Integrity.into());
         }
@@ -192,3 +211,7 @@ mod tests;
 #[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
 #[path="accounted_gaussian_group_metadata_tests.rs"]
 mod gaussian_group_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "accounted_observed_box_metadata_tests.rs"]
+mod observed_box_tests;

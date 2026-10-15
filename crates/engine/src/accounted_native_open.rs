@@ -195,6 +195,37 @@ pub(crate) fn validate_current_stock_point_storage(owner: &photocraft_doc::accou
     validate_current_owned_filter_storage(owner, control)
 }
 
+/// Metadata publication proves the full Box recipe and actual canvas under the caller's one control.
+pub(crate) fn validate_current_observed_box_metadata(owner: &photocraft_doc::accounted_document::AccountedDocument, control: &ReadControl<'_>) -> Result<()> {
+    if !crate::accounted_session::metadata_gesture::observed_box_layer_metadata_candidate(owner) {
+        return Err(BackingError::Unsupported.into());
+    }
+    let limits = photocraft_compose::backed_normal::NormalBandLimits::default();
+    let prepared = photocraft_compose::backed_box_document::PreparedBackedBoxDocument::new(owner, limits, control).map_err(|e|point_error(e,control))?;
+    prepared.validate_operative(control).map_err(|e|point_error(e,control))?;
+    let rect = prepared.bounds();
+    if rect.is_empty() { return Err(BackingError::Bounds.into()); }
+    let columns = u64::from(rect.width()).min(limits.max_pixels).min(photocraft_geom::TILE_SIZE as u64);
+    if columns == 0 { return Err(BackingError::Bounds.into()); }
+    let rows = (limits.max_pixels / columns).min(u64::from(limits.max_rows));
+    let columns = i32::try_from(columns).map_err(|_|BackingError::Bounds)?;
+    let rows = i32::try_from(rows).map_err(|_|BackingError::Bounds)?;
+    if rows == 0 { return Err(BackingError::Bounds.into()); }
+    let mut y=rect.y0;
+    while y<rect.y1 {
+        let end_y=y.saturating_add(rows.min(photocraft_geom::TILE_SIZE-y.rem_euclid(photocraft_geom::TILE_SIZE))).min(rect.y1);
+        let mut x=rect.x0;
+        while x<rect.x1 {
+            let end_x=x.saturating_add(columns.min(photocraft_geom::TILE_SIZE-x.rem_euclid(photocraft_geom::TILE_SIZE))).min(rect.x1);
+            drop(prepared.render_band(photocraft_geom::Rect::new(x,y,end_x,end_y),control).map_err(|e|point_error(e,control))?);
+            control.check(1)?;
+            x=end_x;
+        }
+        y=end_y;
+    }
+    drop(prepared);control.check(1)?;Ok(())
+}
+
 /// Shared current-filter recipe validation. The exact neighborhood name hint
 /// selects a stricter semantic context only; no failure retries another family.
 /// Both contexts retain the real model quota and visit the full operative input.

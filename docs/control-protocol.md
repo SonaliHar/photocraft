@@ -1968,3 +1968,20 @@ before cropping, typed source errors survive and all actual reads/conversions
 are charged. Existing16MiB/32MiB temporary guards and standard operation caps
 remain. Large/high-radius completion and numerical/UI/runtime acceptance remain
 pending; all new regression drafts are UNRUN/uncompiled.
+
+Observed Box owners now join the existing layer.setProps name/visible/opacity
+transaction, including its upstream target, coalesce-key, drag/eye and undo-label
+semantics. Both actual implicit and assigned Point classes use the same full
+CURRENT/staged Box validation and paid gesture/history/view/source/channel/reply
+fences. Direct compound Point metadata calls fail closed outside that exact
+observed Box policy. Other filter families keep their existing registered paths;
+no mask, Move, selection, native-pixel or composition edit is added.
+
+Layer name and visibility are synchronized with their canonical item fields;
+layer opacity retains its exact F32 bits. The filter's own Replace opacity,
+arguments, raw words, mask and stack revision remain unchanged by layer metadata.
+Original source admission remains visible/unit-opacity/enabled. Hidden or
+zero-opacity CURRENT documents still receive complete proof. The standard Box
+work/deadline policy applies to this narrow command route; all provider work is
+charged and high-radius/large workflows may still reach its limits. New drafts
+and runtime/visual acceptance remain deferred.

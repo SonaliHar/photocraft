@@ -175,7 +175,7 @@ fn assigned(q: &BackingQuota) -> (Document, Arc<SourceGuard>) {
     doc.working_profile_interpretation = crate::WorkingProfileInterpretation::Icc;
     (doc, guard)
 }
-pub(super) fn owner() -> AccountedDocument {
+pub(in crate::accounted_document) fn owner() -> AccountedDocument {
     owner_at_revision(u64::MAX)
 }
 pub(super) fn owner_at_revision(revision: u64) -> AccountedDocument {
@@ -277,7 +277,7 @@ fn title_copy_preserves_class_raw_owners_and_original_codec_without_model_chains
 fn generic_noop_history_layer_selection_and_typed_implicit_routes_refuse() {
     let owner = owner();
     let layer = owner.document().layers[0].id;
-    let edit = AccountedEdit::LayerMetadata { layer, name: None, visible: None, opacity: None };
+    let edit = AccountedEdit::LayerVisibility { layer, visible: true };
     assert!(owner.try_edit(edit, &ctl()).is_err());
     assert!(owner.validate_imported_metadata_edit(edit, &ctl()).is_err());
     assert!(owner.try_replace_selection(None, &ctl()).is_err());

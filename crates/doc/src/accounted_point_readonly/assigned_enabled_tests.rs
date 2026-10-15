@@ -135,7 +135,7 @@ fn full_current_and_exact_singleton_ids_precede_noop_without_generic_grants() {
             )
             .is_err()
     );
-    let noop = AccountedEdit::LayerMetadata { layer: original.document().layers[0].id, name: None, visible: None, opacity: None };
+    let noop = AccountedEdit::LayerVisibility { layer: original.document().layers[0].id, visible: true };
     assert!(original.try_edit(noop, &ctl()).is_err());
     let mut history = AccountedHistory::new(original.clone(), 4, &ctl()).unwrap();
     assert!(history.try_commit(noop, &ctl()).is_err());

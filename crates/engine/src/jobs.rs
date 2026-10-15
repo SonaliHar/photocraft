@@ -746,7 +746,7 @@ impl Session {
             crate::accounted_commands::imported_translation_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
         }
         if matches!(id, "layer.setProps" | "xcf.filter.move" | "xcf.filter.remove")
-            && self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_assigned_point_storage())
+            && self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_assigned_point_storage() && !(id == "layer.setProps" && crate::accounted_session::metadata_gesture::observed_box_layer_metadata_candidate(owner)))
         {
             return Err(EngineError::Disabled(id.into(), "this command has not yet been qualified for an assigned native filter document".into()));
         }
@@ -1190,7 +1190,8 @@ impl Session {
             // Box uses the declared finite standard profile, with one cumulative
             // work counter and active-operation deadline across both proofs and
             // publication. Other registered commands retain their old ceiling.
-            if matches!(id, "xcf.filter.set" | "xcf.filter.enable")
+            if (matches!(id, "xcf.filter.set" | "xcf.filter.enable")
+                || id == "layer.setProps" && self.active().and_then(|s|s.doc.accounted()).is_some_and(crate::accounted_session::metadata_gesture::observed_box_layer_metadata_candidate))
                 && let Some(owner) = self.active().and_then(|state| state.doc.accounted())
                 && (owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())
                 && crate::accounted_native_open::is_current_box_work_candidate(owner.document(), &control)?

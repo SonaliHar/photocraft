@@ -21,7 +21,7 @@ pub(super) struct Request<'a> {
     only_visibility: bool,
 }
 pub(super) fn applies(session: &Session) -> bool {
-    session.active().and_then(|s| s.doc.accounted()).is_some_and(|o| o.is_readonly_threshold_alpha_storage() || o.is_readonly_threshold_storage() || o.is_readonly_point_storage())
+    session.active().and_then(|s| s.doc.accounted()).is_some_and(|o| o.is_readonly_threshold_alpha_storage() || o.is_readonly_threshold_storage() || (o.is_readonly_point_storage() && !crate::accounted_session::metadata_gesture::observed_box_layer_metadata_candidate(o)))
 }
 impl<'a> Request<'a> {
     pub(super) fn parse(params: &'a Value, ctl: &ReadControl<'_>) -> Result<Self> {

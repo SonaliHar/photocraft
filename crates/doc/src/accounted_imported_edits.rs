@@ -10,12 +10,15 @@ pub(super) enum EditDomain {
     IsolatedGroup,
     GaussianGroup,
     FlatComposite,
+    PointMetadata,
 }
 
 pub(super) fn validate_owner(owner: &AccountedDocument, edit: AccountedEdit<'_>, c: &ReadControl<'_>) -> Result<EditDomain, BackingError> {
-    // Assigned Point custody grants no generic edit or history/no-op route.
-    if owner.is_readonly_assigned_point_storage() {
-        return Err(BackingError::Unsupported);
+    // Actual Point classes admit only the structural compound metadata plan.
+    // This runs before generic no-op/history admission and grants no recipe.
+    if owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage() {
+        point_readonly::metadata::validate(owner, edit, c)?;
+        return Ok(EditDomain::PointMetadata);
     }
     // The separate compound-only plan validates actual class/current metadata
     // before generic no-op/history admission, including Normal-surrogate modes.

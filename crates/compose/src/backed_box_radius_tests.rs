@@ -1,5 +1,7 @@
 //! UNRUN full-radius consumers. External reference Surfaces are harness memory;
 //! no numerical producer acceptance, deadline or large-image throughput claim.
+#[path = "backed_box_activity_tests.rs"]
+mod layer_activity;
 use super::*;
 fn canonical_reference(sample: SampleType, s: Rect, r: u32, tile: photocraft_geom::TileCoord, p: &Profile) -> (Rect, Surface) {
     let source = resident(photocraft_color::PixelFormat::new(ColorMode::Rgb, sample, true), s);

@@ -28,12 +28,12 @@ fn observational_epoch_is_readonly_before_wire_helpers_or_native_reads() {
     for (id, params) in [
         ("xcf.filter.move", json!({"filterId":"100","index":0})),
         ("xcf.filter.remove", json!({"filterId":"100"})),
-        ("layer.setProps", json!({"name":"changed"})),
+        ("layer.setProps", json!({"blend":"multiply"})),
         ("edit.clear", json!({})),
         ("edit.fill", json!({})),
         ("select.all", json!({})),
     ] {
-        assert!(super::super::super::disabled_reason(&s, id, &Value::Null).unwrap().is_some());
+        if id != "layer.setProps" { assert!(super::super::super::disabled_reason(&s, id, &Value::Null).unwrap().is_some()); }
         if id.starts_with("xcf.filter.") {
             assert!(Request::parse(&s, id, &params, &ctl()).is_err());
         }

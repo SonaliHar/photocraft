@@ -120,7 +120,7 @@ fn observed_wire_and_noop_cannot_bypass_current_state_or_control() {
         assert!(Request::parse_observed_box(&s, "xcf.filter.set", &p, &ReadControl { interrupt: &interrupt, work: &|_| Ok(()) }).is_err());
         assert!(s.start("xcf.filter.set", p).is_err());
         assert!(!s.has_jobs());
-        for (id, p) in [("layer.setProps", json!({"name":"closed"})), ("layer.translate", json!({"dx":1})), ("xcf.filter.remove", json!({"filterId":"1"}))] {
+        for (id, p) in [("layer.setProps", json!({"blend":"multiply"})), ("layer.translate", json!({"dx":1})), ("xcf.filter.remove", json!({"filterId":"1"}))] {
             assert!(s.execute(id, p).is_err());
         }
         s.active_mut().unwrap().revision = u64::MAX;

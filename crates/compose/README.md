@@ -942,3 +942,10 @@ The16MiB private and32MiB Box overlap guards remain, with actual-capacity and
 provider charges on the same quota. Repeated conversions and native reads are
 real work; high-radius/large-image operations can reach the finite work/deadline
 ceiling. No throughput or numerical qualification is claimed.
+
+Observed Box CURRENT layer metadata now permits coherent visibility and finite
+unit opacity, independently of the filter's activation and unit Replace opacity.
+The original-source envelope still requires a visible, unit-opacity layer and an
+enabled filter. Existing Normal-over-zero display consumes layer activity after
+full native/default/mask/profile and operative validation; hiding a layer or
+setting opacity zero never skips that proof. No kernel/CMS arithmetic changes.
