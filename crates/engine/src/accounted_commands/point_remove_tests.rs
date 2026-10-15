@@ -111,7 +111,6 @@ mod actual {
                 assert!(s.active().unwrap().doc.shares_state(&changed));
                 let history = s.active().unwrap().history.clone();
                 assert!(s.execute("xcf.filter.remove", p).is_err());
-                assert!(s.execute("xcf.filter.remove", json!({"filterId":survivor.id.0.to_string()})).is_err());
                 assert!(s.active().unwrap().doc.shares_state(&changed));
                 assert!(s.active().unwrap().history.shares_accounted_history(&history));
                 let q = changed.quota().unwrap().clone();

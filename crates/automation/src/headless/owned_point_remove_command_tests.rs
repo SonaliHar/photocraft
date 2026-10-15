@@ -148,7 +148,7 @@ fn remove_each_id_archives_its_mask_preserves_remaining_current_state_and_native
 }
 
 #[test]
-#[ignore = "UNRUN: authentic Point removal keeps waitfalse/authorizers and refuses unknown/last IDs transactionally"]
+#[ignore = "UNRUN: authentic Point removal keeps waitfalse/authorizers and refuses repeated unknown IDs transactionally"]
 fn remove_refusals_leave_history_journal_jobs_and_source_untouched() {
     let dir = Directory::new();
     let path = dir.0.join("stack.xcf");
@@ -178,12 +178,14 @@ fn remove_refusals_leave_history_journal_jobs_and_source_untouched() {
     assert_eq!(h.session.active().unwrap().revision, revision);
     assert_eq!(h.session.journal.len(), journal);
     h.command_run("xcf.filter.remove", json!({"filterId":id})).unwrap();
+    // The explicit empty CURRENT lifecycle now permits the final removal;
+    // a repeated request still has no target and must not publish again.
+    assert_eq!(h.command_run("xcf.filter.remove", json!({"filterId":survivor})).unwrap()["updated"], true);
     let current = h.session.active().unwrap().doc.clone();
     let history = h.session.active().unwrap().history.clone();
     let revision = h.session.active().unwrap().revision;
     let journal = h.session.journal.len();
-    let error = h.command_run("xcf.filter.remove", json!({"filterId":survivor})).unwrap_err();
-    assert!(error.to_string().contains("removing the last Point filter is unsupported"));
+    assert!(h.command_run("xcf.filter.remove", json!({"filterId":survivor})).is_err());
     assert!(h.session.active().unwrap().doc.shares_state(&current));
     assert!(h.session.active().unwrap().history.shares_accounted_history(&history));
     assert_eq!(h.session.active().unwrap().revision, revision);

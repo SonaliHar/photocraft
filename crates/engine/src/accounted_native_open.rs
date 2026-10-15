@@ -18,11 +18,18 @@ enum NativeHandoff {
     CurrentPoint,
 }
 
-/// Allocation-free name hint selecting the stricter current Point endpoint.
+/// Allocation-free route hint selecting the stricter current Point endpoint.
 /// Version, arguments, profile and storage still require the typed handoff;
 /// a refusal must never retry through the generic archive endpoint.
 pub fn is_current_point_candidate(document: &photocraft_doc::Document, control: &ReadControl<'_>) -> std::result::Result<bool, BackingError> {
     if let Some(state) = &document.xcf_state {
+        // A retained empty stack has no operation name. Select the same strict
+        // current endpoint; only its complete storage/profile/native recipe
+        // can admit it. This never changes effectless XCF source selection.
+        if let [stack] = state.filter_stacks.as_slice() && stack.nodes.is_empty() {
+            control.check(1)?;
+            return Ok(true);
+        }
         for stack in &state.filter_stacks {
             control.check(1)?;
             for node in &stack.nodes {

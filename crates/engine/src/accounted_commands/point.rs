@@ -266,9 +266,6 @@ impl<'a> Request<'a> {
             if self.move_to.is_some_and(|index| index >= stack.nodes.len()) {
                 return Err(bad(self.id, "index is outside the current owner stack"));
             }
-            if self.id == "xcf.filter.remove" && stack.nodes.len() != 2 {
-                return Err(bad(self.id, "removing the last Point filter is unsupported"));
-            }
             // Preserve upstream stack-change revision headroom, including a
             // same-position move. Other typed set/no-op policies stay unchanged.
             if stack.revision == u64::MAX {
@@ -595,3 +592,7 @@ mod move_tests;
 #[cfg(test)]
 #[path = "point_remove_tests.rs"]
 mod remove_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "point_empty_lifecycle_tests.rs"]
+mod empty_lifecycle_tests;

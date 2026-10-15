@@ -77,6 +77,14 @@ pub(crate) fn stock_configured_preparation_bytes(name:&str)->Result<u64> {
     u64::try_from(bytes).map_err(|_|CompositionError::Invalid("stock configured envelope"))
 }
 impl OrderedStack {
+    /// Explicit current identity recipe. No profile/step is manufactured and
+    /// no working-space conversion or integer storage boundary is installed.
+    pub(crate) fn empty_for_stock(extent: Rect, control: &Interrupt<'_>) -> Result<Self> {
+        control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
+        Ok(Self { stages: Vec::new(), extent, output_extent: extent, spaces: Vec::new(),
+            integer_point_storage: None, current_point_sample: None,
+            filter_output_precision: photocraft_doc::FilterOutputPrecision::Canonical, stock_disabled: false })
+    }
     /// Actual Vec capacities for the scalar-only preparation class. Complex
     /// stages remain accounting-unsupported even if separately render-qualified.
     pub(crate) fn scalar_retained_bytes(&self) -> Result<u64> {
@@ -268,11 +276,20 @@ impl OrderedStack {
     }
     pub(crate) fn stock_retained_bytes(&self)->Result<u64> {
         let own=self.stages.capacity().checked_mul(std::mem::size_of::<Stage>()).and_then(|n|self.spaces.capacity().checked_mul(std::mem::size_of::<WorkingSpace>()).and_then(|v|n.checked_add(v))).ok_or(CompositionError::Invalid("stock ordered capacity"))? as u64;
+        if self.stages.is_empty() { return Ok(own); }
         let [stage]=self.stages.as_slice() else {return Err(CompositionError::Unsupported("stock singleton stage"))};
         let payload=match stage {Stage::Point(point)=>point.stock_retained_bytes()?,Stage::Curves(node)=>node.stock_retained_bytes(),Stage::Levels(node)=>node.stock_retained_bytes(),Stage::ColorBalance(node)=>node.stock_retained_bytes(),_=>return Err(CompositionError::Unsupported("stock retained stage"))};
         own.checked_add(payload).ok_or(CompositionError::Invalid("stock ordered capacity"))
     }
     pub(crate) fn validate_stock_input(&self,position:(i32,i32),pixel:[f64;4],control:&Interrupt<'_>,poll:&mut impl FnMut(WideWork)->Result<()>)->Result<()> {
+        if self.stages.is_empty() {
+            control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
+            poll(WideWork::SampleUnits(4))?;
+            if pixel.iter().any(|value| !value.is_finite() || !(0.0..=1.0).contains(value)) {
+                return Err(CompositionError::Unsupported("empty current Point finite unit input"));
+            }
+            return Ok(());
+        }
         let [stage]=self.stages.as_slice() else {return Err(CompositionError::Unsupported("stock singleton stage"))};
         match stage {Stage::Point(point)=>point.validate_stock_input(position,pixel,control,poll),Stage::Curves(node)=>node.validate_stock_input(pixel,poll),Stage::Levels(node)=>node.validate_stock_input(pixel,poll),Stage::ColorBalance(node)=>node.validate_stock_input(pixel,poll),_=>Err(CompositionError::Unsupported("stock input stage"))}
     }

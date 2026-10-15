@@ -104,9 +104,11 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
     let point = owner.is_readonly_point_storage();
     // Actual class/census already enforces these; repeat the small shape before
     // deriving response counts so future class expansion cannot widen this API.
+    // An empty CURRENT Point retains its stack/owner/revision, with no masks
+    // and exactly one layer item. This is metadata, not a source/render grant.
     let filters_in_owner = if point {
         let [stack] = state.filter_stacks.as_slice() else { return Err(BackingError::Unsupported.into()) };
-        if !(1..=2).contains(&stack.nodes.len())
+        if stack.nodes.len() > 2
             || state.filter_masks.len() > stack.nodes.len()
             || state.items.len() != state.filter_masks.len().checked_add(1).ok_or(BackingError::Length)?
         {
@@ -224,3 +226,7 @@ mod tests;
 #[cfg(all(test, feature = "corpus"))]
 #[path = "accounted_point_stack_inspect_tests.rs"]
 mod point_stack_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "accounted_empty_point_inspect_tests.rs"]
+mod empty_point_tests;

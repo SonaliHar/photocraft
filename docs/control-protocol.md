@@ -527,9 +527,13 @@ dispatch and the shared cumulative work limit still apply.
 qualified two-filter witnessed stack. It preserves the survivor, archives the
 removed mask's source-property records with their exact raw bytes, and commits
 one undo step. Required or dependent mask state and archive-name collisions
-refuse atomically. Removing the last filter remains explicitly unsupported
-until the empty-stack lifecycle is implemented; insertion requires separate
-template support.
+refuse atomically. Removing the last witnessed filter retains its empty stack,
+owner and incremented revision. The closed current empty recipe preserves the
+underlying pixels and Canonical output metadata; paid discovery reports zero
+filters while preserving the stack row, and native `.pcraft` continuation keeps
+that state. Filter-ID queries and edits then have no target. Empty continuation
+retains the original RGB U8 nonlinear 8x6, implicit-profile and Normal-composition
+restrictions. Insertion requires separate template support.
 
 For explicit owned native reopen, use exactly `{"path":"current.pcraft","nativeProfilePolicy":"keepCurrent"}`
 with `doc.open` or MCP `doc_open`. Exactly one profile policy is permitted; both together,

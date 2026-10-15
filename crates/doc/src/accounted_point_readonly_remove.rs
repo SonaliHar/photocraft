@@ -1,4 +1,4 @@
-//! Bounded two-to-one Point removal with inert source-mask archival.
+//! Bounded Point removal with inert source-mask archival and retained empty stack.
 use super::*;
 use crate::{
     LayerId,
@@ -32,10 +32,7 @@ impl Plan {
 }
 
 fn target(nodes: &[FilterNode], id: FilterId, c: &ReadControl<'_>) -> Result<usize, BackingError> {
-    if nodes.len() == 1 {
-        return refused();
-    }
-    if nodes.len() != 2 || id.0 == 0 {
+    if nodes.is_empty() || nodes.len() > 2 || id.0 == 0 {
         return Err(BackingError::Integrity);
     }
     let mut found = None;
@@ -152,9 +149,9 @@ fn archive_plan(state: &crate::XcfState, mask: Option<MaskId>, filter: FilterId,
     Ok((bytes, work))
 }
 impl AccountedDocument {
-    /// Remove an existing node only from a two-node structural Point stack.
+    /// Remove an existing node from a one- or two-node structural Point stack.
     /// Its inert source-property records are archived with exact original bytes;
-    /// a last-node removal remains unsupported rather than changing class.
+    /// last-node removal retains the empty stack owner/revision and storage class.
     pub fn try_remove_readonly_point_filter(&self, patch: PointFilterRemovePatch, c: &ReadControl<'_>) -> Result<Self, BackingError> {
         c.check(1)?;
         if !self.is_readonly_point_storage() {
@@ -226,7 +223,7 @@ pub(super) fn apply(document: &mut Document, plan: Plan, c: &ReadControl<'_>) ->
         state.items.retain(|item| item.item != ItemRef::Mask(mask));
     }
     let stack = state.filter_stacks.first_mut().ok_or(BackingError::Integrity)?;
-    // Private copied vector, checked index, length exactly two. Removal shifts
+    // Private copied vector, checked index, length one or two. Removal shifts
     // the survivor without allocation and preserves all its raw fields/order.
     if plan.index >= stack.nodes.len() {
         return Err(BackingError::Integrity);

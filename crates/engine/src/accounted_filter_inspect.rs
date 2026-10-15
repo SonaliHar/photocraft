@@ -294,7 +294,7 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
         return Err(BackingError::Integrity.into());
     };
     let node = if point {
-        if stack.nodes.is_empty() || stack.nodes.len() > 2 {
+        if stack.nodes.len() > 2 {
             return Err(BackingError::Integrity.into());
         }
         let mut found = None;

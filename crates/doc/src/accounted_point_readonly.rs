@@ -266,7 +266,9 @@ fn shape(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>) -> Res
         return refused();
     }
     let stack = state.filter_stacks.first().ok_or(BackingError::Integrity)?;
-    if stack.owner != ItemRef::Layer(layer.id) || stack.nodes.is_empty() || stack.nodes.len() > MAX_NODES {
+    // An empty CURRENT stack retains its owner and revision. This structural
+    // custody does not qualify a source recipe or an empty-stack evaluator.
+    if stack.owner != ItemRef::Layer(layer.id) || stack.nodes.len() > MAX_NODES {
         return refused();
     }
     let mut f64_words = 0u64;

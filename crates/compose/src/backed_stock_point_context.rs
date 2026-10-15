@@ -25,6 +25,15 @@ use photocraft_raster::backing::{
     quota::{BackingQuota, QuotaKind, QuotaLease},
 };
 
+#[path = "backed_stock_point_empty.rs"]
+mod empty;
+
+#[derive(Clone, Copy)]
+enum Recipe {
+    Empty,
+    Filtered,
+}
+
 fn scope() -> BackedNormalError {
     BackedNormalError::Unsupported("closed current stock Point recipe")
 }
@@ -497,6 +506,7 @@ fn bound_profile(
 /// complete model/source/native backing and their independent original proof.
 /// All heaps are destroyed before their real same-ledger preparation charge.
 struct StockPointPlan {
+    recipe: Recipe,
     stack: OrderedStack,
     _current_profile: Profile,
     format: PixelFormat,
@@ -527,6 +537,9 @@ fn prepare_plan<B: PlanBudget>(
     let state = doc.xcf_state.as_ref().ok_or_else(scope)?;
     let [layer] = doc.layers.as_slice() else { return Err(scope()) };
     let [filters] = state.filter_stacks.as_slice() else { return Err(scope()) };
+    if filters.nodes.is_empty() {
+        return empty::prepare(doc, supplied, header, interrupt, budget);
+    }
     let witnessed = matches!(filters.nodes.len(), 1..=2) && filters.nodes.iter().all(|node| node.operation.schema_epoch == gimp_filters::STACK_EDITS_EPOCH);
     if !witnessed && filters.nodes.len() != 1 {
         return Err(scope());
@@ -660,6 +673,7 @@ fn prepare_plan<B: PlanBudget>(
     // Keep the entire admitted peak for the pipeline lifetime; no phase
     // refund can expose headroom while this owned plan remains live.
     let plan = StockPointPlan {
+        recipe: Recipe::Filtered,
         stack,
         _current_profile: current_profile,
         format,
@@ -814,7 +828,7 @@ pub struct PreparedBackedStockPointContext<'a> {
     pipeline: PreparedStockPointPipeline,
     owner: &'a AccountedDocument,
     layer: LayerId,
-    node: FilterId,
+    node: Option<FilterId>,
     descriptor: NativePlaneDescriptor,
     limits: NormalBandLimits,
     visible: bool,
@@ -845,15 +859,18 @@ impl<'a> PreparedBackedStockPointContext<'a> {
         let LayerContent::BackedRaster(backed) = &layer.content else { return Err(scope()) };
         let state = doc.xcf_state.as_ref().ok_or_else(scope)?;
         let filters = state.filter_stacks.first().ok_or_else(scope)?;
-        let node = filters.nodes.first().ok_or_else(scope)?;
         let header = (std::mem::size_of::<Self>() as u64).checked_add(128).ok_or_else(length)?;
         let lease = owner.quota().reserve(QuotaKind::Index, header).map_err(BackedNormalError::Quota)?;
         let pipeline = PreparedStockPointPipeline::prepare(doc, profile, owner.quota(), control)?;
+        let node = match pipeline.plan.recipe {
+            Recipe::Empty => None,
+            Recipe::Filtered => Some(filters.nodes.first().ok_or_else(scope)?.id),
+        };
         let result = Self {
             pipeline,
             owner,
             layer: layer.id,
-            node: node.id,
+            node,
             descriptor: backed.descriptor(),
             limits,
             visible: layer.visible,
@@ -866,7 +883,7 @@ impl<'a> PreparedBackedStockPointContext<'a> {
     pub fn layer_id(&self) -> LayerId {
         self.layer
     }
-    pub fn node_id(&self) -> FilterId {
+    pub fn node_id(&self) -> Option<FilterId> {
         self.node
     }
     /// Saved top-to-bottom identities; this iterator grants no edit authority.
@@ -943,3 +960,7 @@ mod stack_tests;
 #[cfg(test)]
 #[path = "backed_stock_point_scalar_tests.rs"]
 mod scalar_tests;
+
+#[cfg(test)]
+#[path = "backed_stock_point_empty_tests.rs"]
+mod empty_tests;

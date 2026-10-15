@@ -103,6 +103,24 @@ fn structured_point_errors_do_not_parse_text_or_erase_work_and_cancel() {
     assert_eq!(point_error(E::Allocation, &ctl()).to_string(), EngineError::from(BackingError::Allocation).to_string());
 }
 
+#[test]
+fn retained_empty_stack_selects_only_the_strict_current_endpoint_under_actual_control() {
+    // Deliberately invalid storage/profile metadata: this test proves routing
+    // only. The typed native endpoint must still qualify the complete recipe.
+    let mut document = hint("current:not-an-operation-proof");
+    document.xcf_state.as_mut().unwrap().filter_stacks[0].nodes.clear();
+    let work = AtomicU64::new(0);
+    let debit = |units| { work.fetch_add(units, Ordering::Relaxed); Ok(()) };
+    assert_eq!(is_current_point_candidate(&document, &ReadControl { interrupt: &Interrupt::NONE, work: &debit }), Ok(true));
+    assert_eq!(work.load(Ordering::Relaxed), 1);
+    assert_eq!(is_current_point_candidate(&document, &ReadControl { interrupt: &Interrupt::NONE, work: &|_| Err(BackingError::Work) }), Err(BackingError::Work));
+    let stop = || true;
+    let interrupt = Interrupt::cancel_only(&stop);
+    assert_eq!(is_current_point_candidate(&document, &ReadControl { interrupt: &interrupt, work: &|_| Ok(()) }), Err(BackingError::Cancelled));
+    document.xcf_state.as_mut().unwrap().filter_stacks.clear();
+    assert_eq!(is_current_point_candidate(&document, &ctl()), Ok(false));
+}
+
 #[cfg(feature = "corpus")]
 mod originals {
     use super::*;

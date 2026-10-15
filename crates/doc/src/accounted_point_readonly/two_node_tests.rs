@@ -105,7 +105,7 @@ fn duplicate_ids_or_shared_orphan_wrong_owner_and_item_relations_refuse_privatel
                 let extra = state.filter_stacks[0].nodes[1].clone();
                 state.filter_stacks[0].nodes.push(extra);
             }
-            _ => state.filter_stacks[0].nodes.clear(),
+            _ => state.filter_stacks[0].nodes.clear(), // empty stack with orphan masks still refuses
         }
         assert!(AccountedDocument::new_readonly_point_storage(doc, guard, q.clone(), &ctl()).is_err());
         assert_eq!(q.usage().unwrap(), Default::default());

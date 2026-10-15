@@ -85,12 +85,13 @@ fn either_stable_id_removes_only_its_node_and_mask_and_archives_exact_original_r
         assert!(removed.quota().shares_ledger(original.quota()));
         let root = removed.owner.retention.downcast_ref::<OriginalRetention>().unwrap();
         assert!(root.original.shares_model(&original));
-        assert!(matches!(
-            removed.try_remove_readonly_point_filter(patch(&removed, after.filter_stacks[0].nodes[0].id), &ctl()),
-            Err(BackingError::Unsupported)
-        ));
+        let empty = removed.try_remove_readonly_point_filter(patch(&removed, after.filter_stacks[0].nodes[0].id), &ctl()).unwrap();
+        assert!(empty.document().xcf_state.as_ref().unwrap().filter_stacks[0].nodes.is_empty());
     }
 }
+
+#[path = "accounted_point_readonly_empty_tests.rs"]
+mod empty;
 #[test]
 fn required_non_source_orphan_and_archive_collisions_refuse_before_copy() {
     for case in 0..6 {
