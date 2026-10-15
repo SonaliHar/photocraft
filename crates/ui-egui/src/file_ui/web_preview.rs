@@ -84,21 +84,25 @@ pub fn table(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         ui.spacing_mut().item_spacing = egui::vec2(1.0, 1.0);
         egui::Grid::new("web-color-table").spacing(egui::vec2(1.0, 1.0)).show(ui, |ui| {
             for (i, source) in table.iter().enumerate() {
-                let mut color = settings.color_table_edits.get(&i).copied().unwrap_or(*source);
-                let response = ui.push_id(i, |ui| crate::widgets::color_edit_button_srgb(ui, &mut color)).inner;
-                response.clone().on_hover_text(format!("Index {i}: {}", web_cmds::rgb_hex(color)));
-                if response.clicked() {
+                let color = settings.color_table_edits.get(&i).copied().unwrap_or(*source);
+                let hex = web_cmds::rgb_hex(color);
+                let swatch = egui::Color32::from_rgb(color[0], color[1], color[2]);
+                let response = ui.push_id(i, |ui| crate::widgets::color_swatch_button(ui, swatch, &format!("Index {i}: {hex}"))).inner;
+                if response.clicked() || response.double_clicked() {
                     f.insert("__selectedColor".into(), json!(i));
+                }
+                // A double-click opens the Color Picker on the entry, as in Photoshop; OK writes the
+                // colour into this entry's edit.
+                if response.double_clicked() {
+                    let edits = f.entry("colorTableEdits").or_insert_with(|| json!({}));
+                    if let Some(edits) = edits.as_object_mut() {
+                        edits.entry(i.to_string()).or_insert_with(|| json!(hex));
+                    }
+                    crate::color_picker_ui::request_field(f, &format!("/colorTableEdits/{i}"), tl!("Color Picker"));
                 }
                 if f.get("__selectedColor").and_then(Value::as_u64) == Some(i as u64) {
                     let t = Tokens::get(ui.ctx());
                     ui.painter().rect_stroke(response.rect, t.radius_sm, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
-                }
-                if response.changed() {
-                    let edits = f.entry("colorTableEdits").or_insert_with(|| json!({}));
-                    if let Some(edits) = edits.as_object_mut() {
-                        edits.insert(i.to_string(), json!(web_cmds::rgb_hex(color)));
-                    }
                 }
                 if i % 16 == 15 {
                     ui.end_row();
