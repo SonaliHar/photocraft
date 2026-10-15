@@ -1,5 +1,6 @@
-//! Closed immutable filter storage and file-title copying only. This class grants
-//! no source correspondence, evaluator, profile, pixel or selection edit authority.
+//! Closed immutable-pixel filter storage with paid file-title and typed current
+//! threshold/activation copies. No source correspondence, evaluator, profile,
+//! generic pixel or selection edit authority is granted.
 //! Runtime adoption is explicit; no persisted field can enable the class.
 use super::*;
 use crate::{
@@ -8,6 +9,9 @@ use crate::{
     xcf_filters::{ExactNumber, FilterStack, FilterValue},
 };
 use photocraft_raster::Surface;
+#[path = "accounted_filter_readonly_patch.rs"]
+mod patch;
+pub use patch::ThresholdAlphaPatch;
 
 // Same established logical publication envelope as raster::staged. BTreeMap
 // nodes have no stable fallible allocator/capacity API: at most one prepaid,
@@ -356,6 +360,12 @@ fn copy_node(node: &crate::xcf_filters::FilterNode, c: &ReadControl<'_>) -> Resu
 struct OriginalRetention {
     original: AccountedDocument,
 }
+#[derive(Clone, Copy)]
+enum CopyKind<'n> {
+    Rename(&'n str),
+    ThresholdAlpha { value_f32_bits: Option<u32>, enabled: Option<bool>, revision: u64 },
+}
+
 pub(super) fn renamed(owner: &AccountedDocument, name: &str, control: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
     imported_edits::validate_name(name, control)?;
     if name.len() > 4096 {
@@ -365,11 +375,20 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, control: &ReadContr
     if imported_edits::names_equal(&owner.document().name, name, control)? {
         return Ok(owner.clone());
     }
+    current_copy(owner, logical, CopyKind::Rename(name), control)
+}
+// Both routes copy current metadata under the original paid recipe. Only the
+// Rename case includes replacement-name slack, exactly as before this split.
+fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<'_>, control: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
+    let replacement_name_bytes = match kind {
+        CopyKind::Rename(name) => name.len() as u64,
+        CopyKind::ThresholdAlpha { .. } => 0,
+    };
     let owner_bytes = AccountedDocument::owned_model_reservation_bytes();
     let envelope = logical
         .index
         .checked_mul(2)
-        .and_then(|n| n.checked_add((name.len() as u64).checked_mul(2)?))
+        .and_then(|n| n.checked_add(replacement_name_bytes.checked_mul(2)?))
         .and_then(|n| n.checked_add(4096 + std::mem::size_of::<OriginalRetention>() as u64 + 128))
         .ok_or(BackingError::Length)?;
     let allocation = owner.quota().reserve(QuotaKind::Index, owner_bytes).map_err(|_| BackingError::Quota)?;
@@ -396,7 +415,24 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, control: &ReadContr
         let plan = MaskCopyPlan::new(&mask.surface, control)?;
         destination.filter_masks.push(FilterMask { id: mask.id, owner: mask.owner, bounds: mask.bounds, surface: plan.copy(&mask.surface, control)? });
     }
-    document.name = imported_edits::copy_name(name, control)?;
+    match kind {
+        CopyKind::Rename(name) => document.name = imported_edits::copy_name(name, control)?,
+        CopyKind::ThresholdAlpha { value_f32_bits, enabled, revision } => {
+            let state = document.xcf_state.as_mut().ok_or(BackingError::Integrity)?;
+            let stack = state.filter_stacks.first_mut().ok_or(BackingError::Integrity)?;
+            let node = stack.nodes.first_mut().ok_or(BackingError::Integrity)?;
+            control.check(1)?;
+            if let Some(bits) = value_f32_bits {
+                let argument = node.arguments.first_mut().ok_or(BackingError::Integrity)?;
+                let FilterValue::Number(ExactNumber::Float32Bits(_)) = argument.value else { return unsupported() };
+                argument.value = FilterValue::Number(ExactNumber::Float32Bits(bits));
+            }
+            if let Some(value) = enabled {
+                node.enabled = value;
+            }
+            stack.revision = revision;
+        }
+    }
     let actual =
         measured(&document, owner.quota(), control)?.index.checked_add(std::mem::size_of::<OriginalRetention>() as u64 + 128).ok_or(BackingError::Length)?;
     if actual > envelope {
@@ -404,7 +440,7 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, control: &ReadContr
     }
     index.reconcile_capacity(actual).map_err(|_| BackingError::Quota)?;
     control.check(1)?;
-    // Flatten repeat title changes to the original real owner rather than form
+    // Flatten repeated title/current-node changes to the original real owner rather than form
     // an unbounded recursive retention/drop chain. Native tile Arc identity is
     // unchanged; no second tile payload receipt is fabricated for those Arcs.
     let original = owner.owner.retention.downcast_ref::<OriginalRetention>().map_or_else(|| owner.clone(), |r| r.original.clone());
@@ -425,3 +461,7 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, control: &ReadContr
 #[cfg(test)]
 #[path = "accounted_filter_readonly_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "accounted_filter_readonly_patch_tests.rs"]
+mod patch_tests;

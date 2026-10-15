@@ -18,6 +18,9 @@ pub use save_journal::PreparedAccountedSaveReply;
 pub(crate) use save_journal::PreparedSaveJournalWitness;
 #[path = "imported_accounted_metadata.rs"]
 mod imported_metadata;
+mod threshold_alpha;
+#[cfg(test)]
+mod threshold_alpha_journal_tests;
 pub(crate) use job_journal::PreparedAccountedJobJournal;
 
 const MAX_RECORDS: usize = 256;
@@ -27,7 +30,19 @@ const MAX_NODES: usize = 4096;
 const MAX_DEPTH: usize = 4;
 
 pub fn supports(id: &str) -> bool {
-    matches!(id, "layer.select" | "layer.setProps" | "select.all" | "select.deselect" | "select.colorRange" | "edit.undo" | "edit.redo" | "history.selectState")
+    matches!(
+        id,
+        "layer.select"
+            | "layer.setProps"
+            | "select.all"
+            | "select.deselect"
+            | "select.colorRange"
+            | "edit.undo"
+            | "edit.redo"
+            | "history.selectState"
+            | "xcf.filter.set"
+            | "xcf.filter.enable"
+    )
 }
 
 fn bad(id: &str, message: &str) -> EngineError {
@@ -37,6 +52,8 @@ fn bad(id: &str, message: &str) -> EngineError {
 enum Request<'a> {
     ImportedMetadata(imported_metadata::Request<'a>),
     PreparedMetadata(imported_metadata::Prepared<'a>),
+    ThresholdAlpha(threshold_alpha::Request<'a>),
+    PreparedThresholdAlpha(threshold_alpha::Prepared<'a>),
     Select(LayerId),
     Edit(AccountedEdit<'a>),
     ClearSelection,
@@ -59,6 +76,9 @@ fn require_history_selection_enabled(session: &Session) -> Result<()> {
 }
 
 fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadControl<'_>) -> Result<Request<'a>> {
+    if matches!(id, "xcf.filter.set" | "xcf.filter.enable") {
+        return Ok(Request::ThresholdAlpha(threshold_alpha::Request::parse(session, id, params, control)?));
+    }
     if id == "history.selectState" {
         require_history_selection_enabled(session)?;
         // Preserve upstream ignored fields. The shared bounded journal census
@@ -187,6 +207,9 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
     if id == "history.selectState" && history_selection_disabled(session)? {
         return Ok(Some("the history holds only one state"));
     }
+    if matches!(id, "xcf.filter.set" | "xcf.filter.enable") && !state.doc.accounted().is_some_and(|owner| owner.is_readonly_threshold_alpha_storage()) {
+        return Ok(Some("this accounted filter storage has no qualified editing recipe"));
+    }
     // Null is the existing enabled-query shape, not a layer-property call.
     // Do not disable a menu because its eventual call parameters are absent.
     if !params.is_null() {
@@ -211,8 +234,23 @@ struct Census {
     payload: usize,
     nodes: usize,
     envelope: u64,
+    // Only the exact closed scalar filter wire needs one extra JSON level.
+    // This is set per command entry; all other journal values retain depth4.
+    depth_extra: usize,
 }
 impl Census {
+    fn command_value(&mut self, id: &str, value: &Value, control: &ReadControl<'_>) -> Result<()> {
+        self.depth_extra = usize::from(threshold_alpha::journal_depth(id, value) == MAX_DEPTH + 1);
+        let result = self.value(value, 0, control);
+        self.depth_extra = 0;
+        result
+    }
+    fn retained_command_value(&mut self, id: &str, value: &Value, control: &ReadControl<'_>) -> Result<()> {
+        self.depth_extra = usize::from(threshold_alpha::journal_depth(id, value) == MAX_DEPTH + 1);
+        let result = self.retained_value(value, 0, control);
+        self.depth_extra = 0;
+        result
+    }
     fn retained_string(&mut self, value: &String) -> Result<()> {
         if value.len() > MAX_STRING || value.capacity() > MAX_STRING.saturating_mul(2) {
             return Err(BackingError::Length.into());
@@ -222,7 +260,7 @@ impl Census {
     fn retained_value(&mut self, value: &Value, depth: usize, control: &ReadControl<'_>) -> Result<()> {
         control.check(1)?;
         self.nodes = self.nodes.checked_add(1).ok_or(BackingError::Length)?;
-        if self.nodes > MAX_NODES || depth > MAX_DEPTH {
+        if self.nodes > MAX_NODES || depth > MAX_DEPTH + self.depth_extra {
             return Err(BackingError::Length.into());
         }
         match value {
@@ -269,7 +307,7 @@ impl Census {
     fn value(&mut self, value: &Value, depth: usize, control: &ReadControl<'_>) -> Result<()> {
         control.check(1)?;
         self.nodes = self.nodes.checked_add(1).ok_or(BackingError::Length)?;
-        if self.nodes > MAX_NODES || depth > MAX_DEPTH {
+        if self.nodes > MAX_NODES || depth > MAX_DEPTH + self.depth_extra {
             return Err(BackingError::Length.into());
         }
         match value {
@@ -446,6 +484,7 @@ impl<'a> PreparedAccountedCommand<'a> {
         }
         let request = match request {
             Request::ImportedMetadata(request) => Request::PreparedMetadata(request.prepare(session, control)?),
+            Request::ThresholdAlpha(request) => Request::PreparedThresholdAlpha(request.prepare(session, control)?),
             other => other,
         };
         let quota = session.active().and_then(|state| state.doc.quota()).ok_or(BackingError::Unsupported)?.clone();
@@ -483,7 +522,7 @@ impl<'a> PreparedAccountedCommand<'a> {
         )?;
         for (label, value) in &session.journal {
             old.retained_string(label)?;
-            old.retained_value(value, 0, control)?;
+            old.retained_command_value(label, value, control)?;
         }
         let mut census = Census::default();
         census.add(
@@ -496,10 +535,16 @@ impl<'a> PreparedAccountedCommand<'a> {
         )?;
         for (label, value) in &session.journal {
             census.string(label)?;
-            census.value(value, 0, control)?;
+            census.command_value(label, value, control)?;
         }
         census.string(id)?;
-        census.value(params, 0, control)?;
+        census.command_value(id, params, control)?;
+        if matches!(&request, Request::PreparedThresholdAlpha(_)) {
+            // The staged adapter already owns its temporary reply fee. This
+            // overlapping retained charge survives publication with the journal
+            // and covers the synchronous returned reply after that stage drops.
+            census.add(0, usize::try_from(threshold_alpha::REPLY_ENVELOPE).map_err(|_| BackingError::Length)?)?;
+        }
         // The copier polls Value visits but String copies do not debit bytes.
         // Prepay actual bounded payload and known Value/entry slot copies before
         // any destination allocation. Later equality admission is independent.
@@ -533,7 +578,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             }
             None => CommandLease::Journal(lease),
         };
-        let history = if matches!(&request, Request::HistorySelect(_)) { Some(state.history.clone()) } else { None };
+        let history = if matches!(&request, Request::HistorySelect(_) | Request::PreparedThresholdAlpha(_)) { Some(state.history.clone()) } else { None };
         Ok(Self { request, snapshot: state.doc.clone(), revision: state.revision, view_revision: state.view_revision, history, journal, lease, overlap, quota })
     }
     pub fn execute(self, session: &mut Session, control: &ReadControl<'_>) -> Result<Value> {
@@ -558,7 +603,12 @@ impl<'a> PreparedAccountedCommand<'a> {
         }
         if matches!(
             &self.request,
-            Request::ClearSelection | Request::SelectAll(_) | Request::ColorRange(_) | Request::PreparedMetadata(_) | Request::HistorySelect(_)
+            Request::ClearSelection
+                | Request::SelectAll(_)
+                | Request::ColorRange(_)
+                | Request::PreparedMetadata(_)
+                | Request::PreparedThresholdAlpha(_)
+                | Request::HistorySelect(_)
         ) && state.view_revision != self.view_revision
         {
             return Err(EngineError::Other("the prepared accounted selection targets an older view".into()));
@@ -587,6 +637,8 @@ impl<'a> PreparedAccountedCommand<'a> {
         }
         let result = match self.request {
             Request::PreparedMetadata(prepared) => prepared.execute(session, control)?,
+            Request::PreparedThresholdAlpha(prepared) => prepared.execute(session, control)?,
+            Request::ThresholdAlpha(_) => return Err(BackingError::Integrity.into()),
             Request::ImportedMetadata(_) => return Err(BackingError::Integrity.into()),
             Request::Select(layer) => {
                 session.select_accounted_with_control(layer, control)?;

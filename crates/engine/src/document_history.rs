@@ -370,6 +370,64 @@ impl DocumentHistory {
             Ok(snapshot)
         })
     }
+    /// Record a genuine already-prepared model without copying or editing it.
+    /// The typed caller must establish the patch and current renderer/source
+    /// contract before this history-only handoff. It must stage this on a private
+    /// history and fence the matching Session state before publication.
+    ///
+    /// An exact current-owner no-op preserves the physical history and redo
+    /// before changed-only limits or metadata allocations are considered.
+    pub(crate) fn try_commit_prepared_accounted(
+        &mut self,
+        expected: &AccountedDocument,
+        staged: AccountedDocument,
+        label: &str,
+        layers: &LayerTarget,
+        ctl: &ReadControl<'_>,
+    ) -> Result<DocumentSnapshot, BackingError> {
+        ctl.check(1)?;
+        let Branch::Accounted(owner) = &self.branch else {
+            return Err(BackingError::Unsupported);
+        };
+        let current = owner.states.get(owner.cursor).ok_or(BackingError::Integrity)?;
+        if !current.document.shares_model(expected)
+            || staged.document().id != expected.document().id
+            || !staged.quota().shares_ledger(expected.quota())
+        {
+            return Err(BackingError::Integrity);
+        }
+        let snapshot = DocumentSnapshot::from_accounted(staged.clone())?;
+        if staged.shares_model(&current.document) {
+            ctl.check(1)?;
+            return Ok(snapshot);
+        }
+        self.sync_limits()?;
+        let max_states = self.max_states;
+        let meta = Arc::new(metadata(staged.quota(), label, layers, ctl)?);
+        // update prepays and copies only bounded Entry slots. Both the old
+        // history and staged model retain their actual metadata/native owners.
+        self.update(ctl, |history| {
+            let current = history.states.get(history.cursor).ok_or(BackingError::Integrity)?;
+            if !current.document.shares_model(expected) {
+                return Err(BackingError::Integrity);
+            }
+            let next = history.cursor.checked_add(1).ok_or(BackingError::Length)?;
+            let drop_oldest = history.cursor >= max_states;
+            let retained = next.checked_sub(usize::from(drop_oldest)).ok_or(BackingError::Integrity)?;
+            if retained >= history.states.capacity() {
+                return Err(BackingError::Integrity);
+            }
+            ctl.check(1)?;
+            history.states.truncate(next);
+            if drop_oldest {
+                history.states.remove(0);
+            }
+            history.states.push(Entry { document: staged, metadata: meta });
+            history.cursor = retained;
+            Ok(snapshot)
+        })
+    }
+
     /// Stage a save-identity replacement without recording an undo step.
     /// The caller must prepare this in a cloned history before external output,
     /// and fence/publish that history with the matching Session snapshot. Only a
@@ -727,3 +785,7 @@ mod accounted_replacement_tests;
 #[cfg(test)]
 #[path = "document_history_accounted_continuation_tests.rs"]
 mod accounted_continuation_tests;
+
+#[cfg(test)]
+#[path = "document_history_accounted_prepared_tests.rs"]
+mod accounted_prepared_tests;

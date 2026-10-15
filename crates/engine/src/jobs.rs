@@ -980,8 +980,22 @@ impl Session {
         if id == "layer.renameLayer" {
             crate::layer_multi_cmds::rename_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
         }
-        crate::xcf_filter_cmds::pre_dispatch_stack_change_with_background(self, id, &params, background || self.jobs.spawn)?;
-        crate::xcf_filter_cmds::pre_dispatch_set_change(self, id, &params, background || self.jobs.spawn)?;
+        // These family-specific validators deliberately refuse unrelated ids.
+        if matches!(id, "xcf.filter.move" | "xcf.filter.remove") {
+            crate::xcf_filter_cmds::pre_dispatch_stack_change_with_background(self, id, &params, background || self.jobs.spawn)?;
+        }
+        if matches!(id, "xcf.filter.set" | "xcf.filter.enable") {
+            if self.active().is_some_and(|state| state.doc.accounted().is_some()) {
+                // The closed accounted parser runs under the typed dispatch
+                // control below. Preserve the caller's original start mode
+                // before that dispatch can normalize job context.
+                if background || self.jobs.spawn {
+                    return Err(EngineError::BadParams { cmd: id.into(), msg: "accounted filter edits require synchronous dispatch".into() });
+                }
+            } else {
+                crate::xcf_filter_cmds::pre_dispatch_set_change(self, id, &params, background || self.jobs.spawn)?;
+            }
+        }
         if id == "xcf.filter.mask.enabled.set" {
             crate::xcf_filter_mask_cmds::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
         }

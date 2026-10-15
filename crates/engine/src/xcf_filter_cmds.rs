@@ -26,13 +26,15 @@ fn object<'a>(cmd: &str, value: &'a Value, keys: &[&str]) -> Result<&'a serde_js
     }
     Ok(object)
 }
-fn id(cmd: &str, value: &Value) -> Result<FilterId> {
+pub(crate) fn id(cmd: &str, value: &Value) -> Result<FilterId> {
     let text = value.get("filterId").and_then(Value::as_str).ok_or_else(|| bad(cmd, "filterId must be a nonzero decimal string"))?;
     if text.is_empty() || text.len() > 20 || !text.bytes().all(|b| b.is_ascii_digit()) {
         return Err(bad(cmd, "invalid decimal filterId"));
     }
     let raw = text.parse::<u64>().map_err(|_| bad(cmd, "filterId overflow"))?;
-    if raw == 0 || raw.to_string() != text {
+    // Digits-only parsing plus no leading zero is canonical without allocating
+    // a temporary formatted String during borrowed dispatch validation.
+    if raw == 0 || text.starts_with('0') {
         return Err(bad(cmd, "filterId must use canonical nonzero decimal notation"));
     }
     Ok(FilterId(raw))

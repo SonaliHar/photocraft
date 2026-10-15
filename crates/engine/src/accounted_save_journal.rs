@@ -37,7 +37,7 @@ impl PreparedSaveJournalWitness {
         )?;
         for (label, value) in &session.journal {
             census.string(label)?;
-            census.value(value, 0, c)?;
+            census.command_value(label, value, c)?;
         }
         admit_copy(&census, session.journal.len(), 0, c)?;
         let lease = quota.reserve(QuotaKind::Index, census.envelope).map_err(|_| BackingError::Quota)?;
@@ -117,13 +117,13 @@ impl PreparedAccountedSaveReply {
         )?;
         for (label, value) in &session.journal {
             old.retained_string(label)?;
-            old.retained_value(value, 0, c)?;
+            old.retained_command_value(label, value, c)?;
             census.string(label)?;
-            census.value(value, 0, c)?;
+            census.command_value(label, value, c)?;
         }
         if let Some((id, params)) = record {
             census.string(id)?;
-            census.value(params, 0, c)?;
+            census.command_value(id, params, c)?;
         }
         // Two fixed map entries plus empty warnings vector and a bounded path String;
         // same standard serde map allocator boundary as existing command journals.

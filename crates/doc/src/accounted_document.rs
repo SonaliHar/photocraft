@@ -19,6 +19,7 @@ mod imported_edits;
 mod selection_rehydrate;
 #[path = "accounted_filter_readonly.rs"]
 mod filter_readonly;
+pub use filter_readonly::ThresholdAlphaPatch;
 #[path = "accounted_document_name.rs"]
 mod document_name;
 #[cfg(test)]
