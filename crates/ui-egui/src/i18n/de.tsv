@@ -3191,3 +3191,35 @@ curves	Smooth	Glätten
 	There are too many sets: delete one first.	Zu viele Sätze: Löschen Sie zuerst einen.
 	set name	Name des Satzes
 	{set} (modified)	{set} (geändert)
+
+
+
+# BCS V2 - Perspective Warp linked-plane labels
+	Link Edges	Kanten verbinden
+	Join matching neighbouring edges within 8 document pixels; preserves other planes	Übereinstimmende benachbarte Kanten innerhalb von 8 Dokumentpixeln verbinden; andere Ebenen bleiben unverändert
+
+# BCS Global Perspective Warp V3: original translations
+	Global Perspective Warp	Globale Perspektivkorrektur
+	Global V3: draw independent guides on doors and windows, then rectify the whole photo	Global V3: Unabhängige Hilfsrahmen auf Türen und Fenster zeichnen, dann das ganze Foto entzerren
+	One global transform; guides are not image regions	Eine globale Transformation; Hilfsrahmen sind keine Bildbereiche
+	Edit guides	Hilfsrahmen bearbeiten
+	Rectify globally	Global entzerren
+	Delete guide	Hilfsrahmen löschen
+	Fit whole photo	Ganzes Foto einpassen
+	Global aspect	Globale Proportionen
+	Guide weight	Gewichtung des Hilfsrahmens
+	True proportions require a known measurement	Echte Proportionen erfordern ein bekanntes Maß
+	Inconsistent guides	Unvereinbare Hilfsrahmen
+	Compatible guides	Vereinbare Hilfsrahmen
+	Commit global rectification	Globale Entzerrung anwenden
+
+# Perspective Warp review: interactive geometry and commit feedback
+	Perspective Warp preview belongs to another document	Die Vorschau der Perspektivverformung gehört zu einem anderen Dokument
+	Perspective Warp: invalid plane; drag ignored	Perspektivisch verkrümmen: Ungültige Ebene; Ziehen ignoriert
+	Perspective Warp: no changes to apply	Perspektivisch verkrümmen: Keine Änderungen anzuwenden
+	Perspective Warp: {error}	Perspektivisch verkrümmen: {error}
+	a plane is degenerate (its corners must form a quad)	Eine Ebene ist degeneriert (ihre Ecken müssen ein Viereck bilden)
+	plane coordinates must be finite	Ebenenkoordinaten müssen endlich sein
+
+# Global Perspective Warp: local perspective-axis dragging
+	Ctrl: image axes; Shift: perspective axes (corners)	Strg: Bildachsen; Umschalt: Perspektivachsen (Ecken)

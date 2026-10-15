@@ -3194,3 +3194,34 @@ curves	Smooth	Lisser
 	set name	nom du jeu
 	{set} (modified)	{set} (modifié)
 	Random	Aléatoire
+
+
+# BCS V2 - Perspective Warp linked-plane labels
+	Link Edges	Lier les arêtes
+	Join matching neighbouring edges within 8 document pixels; preserves other planes	Relie les arêtes voisines correspondantes à moins de 8 pixels du document ; préserve les autres plans
+
+# BCS Global Perspective Warp V3: original translations
+	Global Perspective Warp	Déformation de perspective globale
+	Global V3: draw independent guides on doors and windows, then rectify the whole photo	Global V3 : placez des repères indépendants sur les portes et fenêtres, puis redressez toute la photo
+	One global transform; guides are not image regions	Une seule transformation globale ; les repères ne sont pas des zones d’image
+	Edit guides	Modifier les repères
+	Rectify globally	Redresser globalement
+	Delete guide	Supprimer le repère
+	Fit whole photo	Conserver toute la photo
+	Global aspect	Proportions globales
+	Guide weight	Poids du repère
+	True proportions require a known measurement	Les proportions réelles nécessitent une mesure connue
+	Inconsistent guides	Repères incompatibles
+	Compatible guides	Repères compatibles
+	Commit global rectification	Appliquer le redressement global
+
+# Perspective Warp review: interactive geometry and commit feedback
+	Perspective Warp preview belongs to another document	L’aperçu de déformation de la perspective appartient à un autre document
+	Perspective Warp: invalid plane; drag ignored	Déformation de la perspective : plan invalide ; déplacement ignoré
+	Perspective Warp: no changes to apply	Déformation de la perspective : aucune modification à appliquer
+	Perspective Warp: {error}	Déformation de la perspective : {error}
+	a plane is degenerate (its corners must form a quad)	un plan est dégénéré (ses coins doivent former un quadrilatère)
+	plane coordinates must be finite	les coordonnées du plan doivent être finies
+
+# Global Perspective Warp: local perspective-axis dragging
+	Ctrl: image axes; Shift: perspective axes (corners)	Ctrl : axes de l’image ; Maj : axes du repère (coins)

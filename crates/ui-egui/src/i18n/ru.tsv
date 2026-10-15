@@ -3159,3 +3159,35 @@ curves	Smooth	Сгладить
 	set name	имя набора
 	{set} (modified)	{set} (изменён)
 	Random	Случайно
+
+
+
+# BCS V2 - Perspective Warp linked-plane labels
+	Link Edges	Связать края
+	Join matching neighbouring edges within 8 document pixels; preserves other planes	Соединяет совпадающие соседние края на расстоянии до 8 пикселей документа; остальные плоскости не изменяются
+
+# BCS Global Perspective Warp V3: original translations
+	Global Perspective Warp	Глобальная коррекция перспективы
+	Global V3: draw independent guides on doors and windows, then rectify the whole photo	Global V3: нарисуйте независимые направляющие на дверях и окнах и выпрямите всё фото
+	One global transform; guides are not image regions	Одно глобальное преобразование; направляющие не являются областями изображения
+	Edit guides	Изменить направляющие
+	Rectify globally	Выпрямить глобально
+	Delete guide	Удалить направляющую
+	Fit whole photo	Вместить всё фото
+	Global aspect	Общие пропорции
+	Guide weight	Вес направляющей
+	True proportions require a known measurement	Для истинных пропорций нужен известный размер
+	Inconsistent guides	Несовместимые направляющие
+	Compatible guides	Совместимые направляющие
+	Commit global rectification	Применить глобальную коррекцию
+
+# Perspective Warp review: interactive geometry and commit feedback
+	Perspective Warp preview belongs to another document	Предварительный просмотр перспективной деформации относится к другому документу
+	Perspective Warp: invalid plane; drag ignored	Перспективная деформация: недопустимая плоскость; перетаскивание отклонено
+	Perspective Warp: no changes to apply	Перспективная деформация: нет изменений для применения
+	Perspective Warp: {error}	Перспективная деформация: {error}
+	a plane is degenerate (its corners must form a quad)	плоскость вырождена (её углы должны образовывать четырёхугольник)
+	plane coordinates must be finite	координаты плоскости должны быть конечными
+
+# Global Perspective Warp: local perspective-axis dragging
+	Ctrl: image axes; Shift: perspective axes (corners)	Ctrl: оси изображения; Shift: оси перспективы (углы)

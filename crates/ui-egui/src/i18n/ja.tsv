@@ -3865,3 +3865,35 @@ curves	Smooth	スムーズ
 	There are too many sets: delete one first.	セットが多すぎます。先に 1 つ削除してください。
 	set name	セット名
 	{set} (modified)	{set}（変更あり）
+
+
+
+# BCS V2 - Perspective Warp linked-plane labels
+	Link Edges	エッジを連結
+	Join matching neighbouring edges within 8 document pixels; preserves other planes	ドキュメント上で8ピクセル以内の隣接する対応エッジを連結し、他の面は変更しません
+
+# BCS Global Perspective Warp V3: original translations
+	Global Perspective Warp	グローバル遠近補正
+	Global V3: draw independent guides on doors and windows, then rectify the whole photo	Global V3：ドアや窓に独立したガイドを描き、写真全体を補正します
+	One global transform; guides are not image regions	全体に一つの変換を適用します。ガイドは画像領域ではありません
+	Edit guides	ガイドを編集
+	Rectify globally	全体を補正
+	Delete guide	ガイドを削除
+	Fit whole photo	写真全体を収める
+	Global aspect	全体の縦横比
+	Guide weight	ガイドの重み
+	True proportions require a known measurement	実際の比率には既知の寸法が必要です
+	Inconsistent guides	不整合なガイド
+	Compatible guides	整合するガイド
+	Commit global rectification	全体補正を適用
+
+# Perspective Warp review: interactive geometry and commit feedback
+	Perspective Warp preview belongs to another document	遠近法ワープのプレビューは別のドキュメントに属しています
+	Perspective Warp: invalid plane; drag ignored	遠近法ワープ：無効な平面です。ドラッグは無視されました
+	Perspective Warp: no changes to apply	遠近法ワープ：適用する変更はありません
+	Perspective Warp: {error}	遠近法ワープ：{error}
+	a plane is degenerate (its corners must form a quad)	平面が退化しています（4つの頂点で四角形を形成する必要があります）
+	plane coordinates must be finite	平面の座標には有限の数値を指定してください
+
+# Global Perspective Warp: local perspective-axis dragging
+	Ctrl: image axes; Shift: perspective axes (corners)	Ctrl：画像の軸、Shift：遠近方向の軸（頂点）

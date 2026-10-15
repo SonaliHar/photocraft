@@ -3979,3 +3979,34 @@ layerLabel	No Color	Sem cor
 	There are too many sets: delete one first.	Há conjuntos demais: exclua um primeiro.
 	set name	nome do conjunto
 	{set} (modified)	{set} (modificado)
+
+
+# BCS V2 - Perspective Warp linked-plane labels
+	Link Edges	Vincular arestas
+	Join matching neighbouring edges within 8 document pixels; preserves other planes	Vincula arestas adjacentes correspondentes em até 8 pixels do documento; preserva os demais planos
+
+# BCS Global Perspective Warp V3: original translations
+	Global Perspective Warp	Correção global de perspectiva
+	Global V3: draw independent guides on doors and windows, then rectify the whole photo	Global V3: desenhe guias independentes em portas e janelas e retifique a foto inteira
+	One global transform; guides are not image regions	Uma transformação global; as guias não são regiões da imagem
+	Edit guides	Editar guias
+	Rectify globally	Retificar globalmente
+	Delete guide	Excluir guia
+	Fit whole photo	Ajustar a foto inteira
+	Global aspect	Proporções globais
+	Guide weight	Peso da guia
+	True proportions require a known measurement	As proporções reais exigem uma medida conhecida
+	Inconsistent guides	Guias incompatíveis
+	Compatible guides	Guias compatíveis
+	Commit global rectification	Aplicar retificação global
+
+# Perspective Warp review: interactive geometry and commit feedback
+	Perspective Warp preview belongs to another document	A pré-visualização da distorção de perspectiva pertence a outro documento
+	Perspective Warp: invalid plane; drag ignored	Distorção de perspectiva: plano inválido; arraste ignorado
+	Perspective Warp: no changes to apply	Distorção de perspectiva: nenhuma alteração a aplicar
+	Perspective Warp: {error}	Distorção de perspectiva: {error}
+	a plane is degenerate (its corners must form a quad)	um plano é degenerado (seus cantos devem formar um quadrilátero)
+	plane coordinates must be finite	as coordenadas do plano devem ser finitas
+
+# Global Perspective Warp: local perspective-axis dragging
+	Ctrl: image axes; Shift: perspective axes (corners)	Ctrl: eixos da imagem; Shift: eixos de perspectiva (cantos)

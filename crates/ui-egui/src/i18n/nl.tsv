@@ -3949,3 +3949,34 @@ curves	Smooth	Vloeiend maken
 	There are too many sets: delete one first.	Er zijn te veel sets: verwijder er eerst een.
 	set name	naam van de set
 	{set} (modified)	{set} (gewijzigd)
+
+
+# BCS V2 - Perspective Warp linked-plane labels
+	Link Edges	Randen koppelen
+	Join matching neighbouring edges within 8 document pixels; preserves other planes	Verbindt overeenkomende aangrenzende randen binnen 8 documentpixels; behoudt overige vlakken
+
+# BCS Global Perspective Warp V3: original translations
+	Global Perspective Warp	Globale perspectiefcorrectie
+	Global V3: draw independent guides on doors and windows, then rectify the whole photo	Global V3: teken afzonderlijke hulpkaders op deuren en ramen en corrigeer de hele foto
+	One global transform; guides are not image regions	Eén globale transformatie; hulpkaders zijn geen afbeeldingsgebieden
+	Edit guides	Hulpkaders bewerken
+	Rectify globally	Globaal rechtzetten
+	Delete guide	Hulpkader verwijderen
+	Fit whole photo	Hele foto inpassen
+	Global aspect	Globale verhoudingen
+	Guide weight	Gewicht van hulpkader
+	True proportions require a known measurement	Werkelijke verhoudingen vereisen een bekende maat
+	Inconsistent guides	Onverenigbare hulpkaders
+	Compatible guides	Verenigbare hulpkaders
+	Commit global rectification	Globale correctie toepassen
+
+# Perspective Warp review: interactive geometry and commit feedback
+	Perspective Warp preview belongs to another document	Het voorbeeld van perspectiefvervorming hoort bij een ander document
+	Perspective Warp: invalid plane; drag ignored	Perspectiefvervorming: ongeldig vlak; slepen genegeerd
+	Perspective Warp: no changes to apply	Perspectiefvervorming: geen wijzigingen om toe te passen
+	Perspective Warp: {error}	Perspectiefvervorming: {error}
+	a plane is degenerate (its corners must form a quad)	een vlak is gedegenereerd (de hoekpunten moeten een vierhoek vormen)
+	plane coordinates must be finite	vlakcoördinaten moeten eindige waarden hebben
+
+# Global Perspective Warp: local perspective-axis dragging
+	Ctrl: image axes; Shift: perspective axes (corners)	Ctrl: beeldassen; Shift: perspectiefassen (hoekpunten)

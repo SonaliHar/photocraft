@@ -3889,3 +3889,35 @@ curves	Smooth	Εξομάλυνση
 	There are too many sets: delete one first.	Υπάρχουν πάρα πολλά σύνολα: διαγράψτε πρώτα ένα.
 	set name	όνομα συνόλου
 	{set} (modified)	{set} (τροποποιημένο)
+
+
+
+# BCS V2 - Perspective Warp linked-plane labels
+	Link Edges	Σύνδεση ακμών
+	Join matching neighbouring edges within 8 document pixels; preserves other planes	Συνδέει γειτονικές ακμές που ταιριάζουν σε απόσταση έως 8 εικονοστοιχεία εγγράφου· τα άλλα επίπεδα διατηρούνται
+
+# BCS Global Perspective Warp V3: original translations
+	Global Perspective Warp	Καθολική διόρθωση προοπτικής
+	Global V3: draw independent guides on doors and windows, then rectify the whole photo	Global V3: σχεδιάστε ανεξάρτητους οδηγούς σε πόρτες και παράθυρα και διορθώστε όλη τη φωτογραφία
+	One global transform; guides are not image regions	Ένας καθολικός μετασχηματισμός· οι οδηγοί δεν είναι περιοχές εικόνας
+	Edit guides	Επεξεργασία οδηγών
+	Rectify globally	Καθολική διόρθωση
+	Delete guide	Διαγραφή οδηγού
+	Fit whole photo	Προσαρμογή όλης της φωτογραφίας
+	Global aspect	Καθολικές αναλογίες
+	Guide weight	Βάρος οδηγού
+	True proportions require a known measurement	Οι πραγματικές αναλογίες απαιτούν γνωστή μέτρηση
+	Inconsistent guides	Ασύμβατοι οδηγοί
+	Compatible guides	Συμβατοί οδηγοί
+	Commit global rectification	Εφαρμογή καθολικής διόρθωσης
+
+# Perspective Warp review: interactive geometry and commit feedback
+	Perspective Warp preview belongs to another document	Η προεπισκόπηση παραμόρφωσης προοπτικής ανήκει σε άλλο έγγραφο
+	Perspective Warp: invalid plane; drag ignored	Παραμόρφωση προοπτικής: μη έγκυρο επίπεδο· η μετακίνηση αγνοήθηκε
+	Perspective Warp: no changes to apply	Παραμόρφωση προοπτικής: δεν υπάρχουν αλλαγές για εφαρμογή
+	Perspective Warp: {error}	Παραμόρφωση προοπτικής: {error}
+	a plane is degenerate (its corners must form a quad)	ένα επίπεδο είναι εκφυλισμένο (οι κορυφές του πρέπει να σχηματίζουν τετράπλευρο)
+	plane coordinates must be finite	οι συντεταγμένες του επιπέδου πρέπει να είναι πεπερασμένες
+
+# Global Perspective Warp: local perspective-axis dragging
+	Ctrl: image axes; Shift: perspective axes (corners)	Ctrl: άξονες εικόνας· Shift: άξονες προοπτικής (γωνίες)

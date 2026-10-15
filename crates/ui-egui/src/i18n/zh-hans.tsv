@@ -2805,3 +2805,35 @@ curves	Smooth	平滑
 	set name	组名称
 	{set} (modified)	{set}（已修改）
 	Random	随机
+
+
+
+# BCS V2 - Perspective Warp linked-plane labels
+	Link Edges	连接边缘
+	Join matching neighbouring edges within 8 document pixels; preserves other planes	连接文档中相距不超过 8 像素的匹配相邻边缘；其他平面保持不变
+
+# BCS Global Perspective Warp V3: original translations
+	Global Perspective Warp	全局透视校正
+	Global V3: draw independent guides on doors and windows, then rectify the whole photo	Global V3：在门窗上绘制独立参考框，然后校正整张照片
+	One global transform; guides are not image regions	只使用一个全局变换；参考框不是图像分区
+	Edit guides	编辑参考框
+	Rectify globally	全局校正
+	Delete guide	删除参考框
+	Fit whole photo	容纳整张照片
+	Global aspect	全局比例
+	Guide weight	参考框权重
+	True proportions require a known measurement	真实比例需要已知尺寸
+	Inconsistent guides	不兼容的参考框
+	Compatible guides	兼容的参考框
+	Commit global rectification	应用全局校正
+
+# Perspective Warp review: interactive geometry and commit feedback
+	Perspective Warp preview belongs to another document	透视变形预览属于另一个文档
+	Perspective Warp: invalid plane; drag ignored	透视变形：平面无效，已忽略拖动
+	Perspective Warp: no changes to apply	透视变形：没有可应用的更改
+	Perspective Warp: {error}	透视变形：{error}
+	a plane is degenerate (its corners must form a quad)	平面已退化（四个角点必须构成四边形）
+	plane coordinates must be finite	平面坐标必须是有限数值
+
+# Global Perspective Warp: local perspective-axis dragging
+	Ctrl: image axes; Shift: perspective axes (corners)	Ctrl：图像轴；Shift：透视轴（角点）

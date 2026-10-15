@@ -3888,3 +3888,34 @@ curves	Smooth	Згладити
 	There are too many sets: delete one first.	Забагато наборів: спершу видаліть один.
 	set name	назва набору
 	{set} (modified)	{set} (змінено)
+
+
+# BCS V2 - Perspective Warp linked-plane labels
+	Link Edges	З’єднати краї
+	Join matching neighbouring edges within 8 document pixels; preserves other planes	З’єднує суміжні краї, що збігаються, у межах 8 пікселів документа; інші площини залишаються без змін
+
+# BCS Global Perspective Warp V3: original translations
+	Global Perspective Warp	Глобальна корекція перспективи
+	Global V3: draw independent guides on doors and windows, then rectify the whole photo	Global V3: намалюйте незалежні напрямні на дверях і вікнах та випряміть усе фото
+	One global transform; guides are not image regions	Одне глобальне перетворення; напрямні не є ділянками зображення
+	Edit guides	Редагувати напрямні
+	Rectify globally	Випрямити глобально
+	Delete guide	Видалити напрямну
+	Fit whole photo	Вмістити все фото
+	Global aspect	Загальні пропорції
+	Guide weight	Вага напрямної
+	True proportions require a known measurement	Для справжніх пропорцій потрібен відомий розмір
+	Inconsistent guides	Несумісні напрямні
+	Compatible guides	Сумісні напрямні
+	Commit global rectification	Застосувати глобальну корекцію
+
+# Perspective Warp review: interactive geometry and commit feedback
+	Perspective Warp preview belongs to another document	Попередній перегляд перспективної деформації належить іншому документу
+	Perspective Warp: invalid plane; drag ignored	Перспективна деформація: недопустима площина; перетягування проігноровано
+	Perspective Warp: no changes to apply	Перспективна деформація: немає змін для застосування
+	Perspective Warp: {error}	Перспективна деформація: {error}
+	a plane is degenerate (its corners must form a quad)	площина вироджена (її кути мають утворювати чотирикутник)
+	plane coordinates must be finite	координати площини мають бути скінченними
+
+# Global Perspective Warp: local perspective-axis dragging
+	Ctrl: image axes; Shift: perspective axes (corners)	Ctrl: осі зображення; Shift: осі перспективи (кути)

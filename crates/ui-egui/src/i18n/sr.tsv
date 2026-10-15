@@ -4262,3 +4262,35 @@ shape	Appearance	Izgled
 	There are too many sets: delete one first.	Previše skupova: prvo obrišite jedan.
 	set name	ime skupa
 	{set} (modified)	{set} (izmenjen)
+
+
+
+# BCS V2 - Perspective Warp linked-plane labels
+	Link Edges	Poveži ivice
+	Join matching neighbouring edges within 8 document pixels; preserves other planes	Povezuje odgovarajuće susedne ivice udaljene do 8 piksela dokumenta; ostale ravni ostaju nepromenjene
+
+# BCS Global Perspective Warp V3: original translations
+	Global Perspective Warp	Глобална корекција перспективе
+	Global V3: draw independent guides on doors and windows, then rectify the whole photo	Global V3: нацртајте независне водилице на вратима и прозорима, па исправите целу фотографију
+	One global transform; guides are not image regions	Једна глобална трансформација; водилице нису области слике
+	Edit guides	Уреди водилице
+	Rectify globally	Исправи глобално
+	Delete guide	Обриши водилицу
+	Fit whole photo	Уклопи целу фотографију
+	Global aspect	Глобалне пропорције
+	Guide weight	Тежина водилице
+	True proportions require a known measurement	Стварне пропорције захтевају познату меру
+	Inconsistent guides	Неусаглашене водилице
+	Compatible guides	Усаглашене водилице
+	Commit global rectification	Примени глобалну корекцију
+
+# Perspective Warp review: interactive geometry and commit feedback
+	Perspective Warp preview belongs to another document	Pregled perspektivnog krivljenja pripada drugom dokumentu
+	Perspective Warp: invalid plane; drag ignored	Perspektivno krivljenje: nevažeća ravan; prevlačenje je zanemareno
+	Perspective Warp: no changes to apply	Perspektivno krivljenje: nema izmena za primenu
+	Perspective Warp: {error}	Perspektivno krivljenje: {error}
+	a plane is degenerate (its corners must form a quad)	ravan je degenerisana (njeni uglovi moraju da obrazuju četvorougao)
+	plane coordinates must be finite	koordinate ravni moraju biti konačne
+
+# Global Perspective Warp: local perspective-axis dragging
+	Ctrl: image axes; Shift: perspective axes (corners)	Ctrl: ose slike; Shift: ose perspektive (uglovi)

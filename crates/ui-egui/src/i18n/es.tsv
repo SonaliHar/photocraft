@@ -4151,3 +4151,35 @@ navigator	Zoom	Zoom
 	There are too many sets: delete one first.	Hay demasiados conjuntos: elimine uno primero.
 	set name	nombre del conjunto
 	{set} (modified)	{set} (modificado)
+
+
+
+# BCS V2 - Perspective Warp linked-plane labels
+	Link Edges	Unir bordes
+	Join matching neighbouring edges within 8 document pixels; preserves other planes	Une bordes vecinos coincidentes a menos de 8 píxeles del documento; conserva los demás planos
+
+# BCS Global Perspective Warp V3: original translations
+	Global Perspective Warp	Corrección global de perspectiva
+	Global V3: draw independent guides on doors and windows, then rectify the whole photo	Global V3: dibuje guías independientes en puertas y ventanas y rectifique toda la foto
+	One global transform; guides are not image regions	Una transformación global; las guías no son regiones de la imagen
+	Edit guides	Editar guías
+	Rectify globally	Rectificar globalmente
+	Delete guide	Eliminar guía
+	Fit whole photo	Ajustar toda la foto
+	Global aspect	Proporciones globales
+	Guide weight	Peso de la guía
+	True proportions require a known measurement	Las proporciones reales requieren una medida conocida
+	Inconsistent guides	Guías incompatibles
+	Compatible guides	Guías compatibles
+	Commit global rectification	Aplicar rectificación global
+
+# Perspective Warp review: interactive geometry and commit feedback
+	Perspective Warp preview belongs to another document	La vista previa de deformación de perspectiva pertenece a otro documento
+	Perspective Warp: invalid plane; drag ignored	Deformación de perspectiva: plano no válido; se ignoró el arrastre
+	Perspective Warp: no changes to apply	Deformación de perspectiva: no hay cambios que aplicar
+	Perspective Warp: {error}	Deformación de perspectiva: {error}
+	a plane is degenerate (its corners must form a quad)	un plano es degenerado (sus esquinas deben formar un cuadrilátero)
+	plane coordinates must be finite	las coordenadas del plano deben ser finitas
+
+# Global Perspective Warp: local perspective-axis dragging
+	Ctrl: image axes; Shift: perspective axes (corners)	Ctrl: ejes de la imagen; Mayús: ejes de perspectiva (esquinas)
