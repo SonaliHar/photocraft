@@ -43,7 +43,7 @@ mod platform {
         if vk == 0 {
             return false;
         }
-        let vk = VK::from_raw(vk as u16);
+        let vk = unsafe { VK::from_raw(vk as u16) };
         winsafe::GetAsyncKeyState(vk)
     }
 
@@ -55,7 +55,7 @@ mod platform {
                 if vk == 0 {
                     false
                 } else {
-                    winsafe::GetAsyncKeyState(VK::from_raw(vk as u16))
+                    winsafe::GetAsyncKeyState(unsafe { VK::from_raw(vk as u16) })
                 }
             };
             (numpad, main)
