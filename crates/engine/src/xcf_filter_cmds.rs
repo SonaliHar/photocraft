@@ -941,6 +941,18 @@ pub(crate) fn pre_dispatch_point_move(s: &Session, cmd: &str, params: &Value, ba
     stack_context_for(s, cmd, true)
 }
 
+/// Separate actual-Point removal fence; the paid transaction enforces the
+/// remaining-stack recipe and preserves removed mask metadata as inert data.
+pub(crate) fn pre_dispatch_point_remove(s: &Session, cmd: &str, params: &Value, background: bool) -> Result<()> {
+    if cmd != REMOVE || !s.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_point_storage()) {
+        return Err(bad(cmd, "Point removal requires actual Point storage"));
+    }
+    if background { return Err(bad(cmd, "filter stack edit requires synchronous context")); }
+    object(cmd, params, &["filterId"])?;
+    id(cmd, params)?;
+    stack_context_for(s, cmd, true)
+}
+
 fn stack_context(s: &Session, cmd: &str) -> Result<()> {
     stack_context_for(s, cmd, false)
 }

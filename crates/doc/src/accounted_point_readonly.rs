@@ -21,6 +21,9 @@ pub use structured_patch::{PointStructuredArgumentPatch, PointStructuredFilterPa
 #[path = "accounted_point_readonly_move.rs"]
 mod filter_move;
 pub use filter_move::PointFilterMovePatch;
+#[path = "accounted_point_readonly_remove.rs"]
+mod filter_remove;
+pub use filter_remove::PointFilterRemovePatch;
 #[path = "accounted_point_readonly/properties.rs"]
 mod properties;
 pub(super) fn layer_named(owner: &AccountedDocument, patch: ReadonlyLayerNamePatch<'_>, control: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
@@ -474,6 +477,7 @@ pub(super) enum CopyKind<'a> {
     Filter(patch::Plan),
     Structured(structured_patch::Plan<'a>),
     Move(filter_move::Plan),
+    Remove(filter_remove::Plan),
 }
 pub(super) fn renamed(owner: &AccountedDocument, name: &str, control: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
     imported_edits::validate_name(name, control)?;
@@ -499,10 +503,16 @@ pub(super) fn current_copy(
         CopyKind::Rename(name) => name.len() as u64,
         CopyKind::LayerName(patch) => (patch.name.len() as u64).checked_mul(2).ok_or(BackingError::Length)?,
         CopyKind::LayerProperties(plan) => plan.replacement_name_bytes()?,
-        CopyKind::Filter(_) | CopyKind::Structured(_) | CopyKind::Move(_) => 0,
+        CopyKind::Filter(_) | CopyKind::Structured(_) | CopyKind::Move(_) | CopyKind::Remove(_) => 0,
     };
     let replacement_value_bytes = match kind {
         CopyKind::Structured(plan) => plan.copy_index_bytes(),
+        CopyKind::Remove(plan) => plan.copy_index_bytes(),
+        _ => 0,
+    };
+    let additional_copy_work = match kind {
+        CopyKind::Structured(_) => replacement_value_bytes,
+        CopyKind::Remove(plan) => plan.copy_work(),
         _ => 0,
     };
     let envelope = logical
@@ -516,10 +526,10 @@ pub(super) fn current_copy(
     let mut index = owner.quota().reserve(QuotaKind::Index, envelope).map_err(|_| BackingError::Quota)?;
     let payload = owner.quota().reserve(QuotaKind::Resident, 0).map_err(|_| BackingError::Quota)?;
     control.check(logical.total()?)?;
-    if replacement_value_bytes != 0 {
-        // The replacement's newly initialized dynamic bytes are additional to
-        // the old-model copy above, and receive their own nonrefundable work.
-        control.check(replacement_value_bytes)?;
+    if additional_copy_work != 0 {
+        // Replacement values or archived identity strings are additional to the
+        // old-model copy above, and receive their own nonrefundable work.
+        control.check(additional_copy_work)?;
     }
     let mut document = imported_selection::copy_document(owner.document(), control)?;
     let source = owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
@@ -551,6 +561,7 @@ pub(super) fn current_copy(
         CopyKind::Filter(plan) => patch::apply(&mut document, plan, control)?,
         CopyKind::Structured(plan) => structured_patch::apply(&mut document, plan, control)?,
         CopyKind::Move(plan) => filter_move::apply(&mut document, plan, control)?,
+        CopyKind::Remove(plan) => filter_remove::apply(&mut document, plan, control)?,
     }
     let actual =
         measured(&document, owner.quota(), control)?.index.checked_add(std::mem::size_of::<OriginalRetention>() as u64 + 128).ok_or(BackingError::Length)?;

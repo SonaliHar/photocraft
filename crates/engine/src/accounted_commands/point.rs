@@ -182,9 +182,22 @@ fn move_wire(params: &Value) -> Option<(Fields<'_>, usize)> {
     let index = usize::try_from(p.get("index")?.as_u64().filter(|v| *v < 1024)?).ok()?;
     Some((Fields { filter, arguments: [None; 10], count: 0, enabled: None }, index))
 }
+fn remove_wire(params: &Value) -> Option<Fields<'_>> {
+    let p = params.as_object()?;
+    if p.len() != 1 {
+        return None;
+    }
+    let text = p.get("filterId")?.as_str()?;
+    if text.is_empty() || text.len() > 20 || text.starts_with('0') || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(Fields { filter: FilterId(text.parse().ok()?), arguments: [None; 10], count: 0, enabled: None })
+}
 fn pre_dispatch(session: &Session, id: &str, params: &Value) -> Result<()> {
     if id == "xcf.filter.move" {
         crate::xcf_filter_cmds::pre_dispatch_point_move(session, id, params, false)
+    } else if id == "xcf.filter.remove" {
+        crate::xcf_filter_cmds::pre_dispatch_point_remove(session, id, params, false)
     } else {
         crate::xcf_filter_cmds::pre_dispatch_set_change(session, id, params, false)
     }
@@ -204,11 +217,14 @@ impl<'a> Request<'a> {
             "xcf.filter.set" => "xcf.filter.set",
             "xcf.filter.enable" => "xcf.filter.enable",
             "xcf.filter.move" => "xcf.filter.move",
+            "xcf.filter.remove" => "xcf.filter.remove",
             _ => return Err(BackingError::Unsupported.into()),
         };
         let (fields, structured, move_to) = if id == "xcf.filter.move" {
             let (fields, index) = move_wire(params).ok_or_else(|| bad(id, "canonical filterId and bounded owner-local index required"))?;
             (fields, None, Some(index))
+        } else if id == "xcf.filter.remove" {
+            (remove_wire(params).ok_or_else(|| bad(id, "canonical filterId required"))?, None, None)
         } else if let Some(fields) = wire(id, params) {
             (fields, None, None)
         } else {
@@ -246,12 +262,15 @@ impl<'a> Request<'a> {
             }
         }
         let node = target.ok_or_else(|| bad(self.id, "filterId does not identify a current Point filter"))?;
-        if let Some(index) = self.move_to {
-            if index >= stack.nodes.len() {
+        if self.move_to.is_some() || self.id == "xcf.filter.remove" {
+            if self.move_to.is_some_and(|index| index >= stack.nodes.len()) {
                 return Err(bad(self.id, "index is outside the current owner stack"));
             }
-            // Preserve upstream stack-move revision headroom, even for a same-
-            // position request. Other typed set/no-op policies stay unchanged.
+            if self.id == "xcf.filter.remove" && stack.nodes.len() != 2 {
+                return Err(bad(self.id, "removing the last Point filter is unsupported"));
+            }
+            // Preserve upstream stack-change revision headroom, including a
+            // same-position move. Other typed set/no-op policies stay unchanged.
             if stack.revision == u64::MAX {
                 return Err(BackingError::Length.into());
             }
@@ -325,6 +344,11 @@ impl<'a> Request<'a> {
                 photocraft_doc::accounted_document::PointFilterMovePatch { layer, filter: self.fields.filter, expected_stack_revision: stack.revision, index },
                 ctl,
             )?
+        } else if self.id == "xcf.filter.remove" {
+            owner.try_remove_readonly_point_filter(
+                photocraft_doc::accounted_document::PointFilterRemovePatch { layer, filter: self.fields.filter, expected_stack_revision: stack.revision },
+                ctl,
+            )?
         } else if let Some(plan) = self.structured {
             let temporary = structured::Temporary::parse(self.params, &node.operation.name, plan, owner.quota(), ctl)?;
             let sentinel = photocraft_doc::xcf_filters::FilterValue::Bool(false);
@@ -391,7 +415,13 @@ impl<'a> Request<'a> {
             history.try_commit_prepared_accounted(
                 owner,
                 staged,
-                if self.move_to.is_some() { "Move GIMP Stock Filter" } else { "Edit GIMP Stock Filter" },
+                if self.move_to.is_some() {
+                    "Move GIMP Stock Filter"
+                } else if self.id == "xcf.filter.remove" {
+                    "Remove GIMP Stock Filter"
+                } else {
+                    "Edit GIMP Stock Filter"
+                },
                 view.target(),
                 ctl,
             )?
@@ -561,3 +591,7 @@ mod stack_tests;
 #[cfg(test)]
 #[path = "point_move_tests.rs"]
 mod move_tests;
+
+#[cfg(test)]
+#[path = "point_remove_tests.rs"]
+mod remove_tests;

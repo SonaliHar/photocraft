@@ -113,3 +113,20 @@ fn point_move_dispatch_hint_preserves_wire_and_background_fences_without_grantin
     assert_eq!(reads.load(Ordering::Relaxed), 0);
     assert!(quota.usage().is_ok());
 }
+
+#[test]
+fn point_remove_dispatch_hint_keeps_exact_wire_and_cannot_authorize_an_unqualified_recipe() {
+    let (mut s, quota, reads) = session();
+    let before = s.active().unwrap().doc.clone();
+    let params = json!({"filterId":"200"});
+    assert!(crate::xcf_filter_cmds::pre_dispatch_point_remove(&s, "xcf.filter.remove", &params, false).is_ok());
+    assert!(crate::xcf_filter_cmds::pre_dispatch_point_remove(&s, "xcf.filter.remove", &params, true).is_err());
+    assert!(crate::xcf_filter_cmds::pre_dispatch_point_remove(&s, "xcf.filter.move", &params, false).is_err());
+    for params in [json!({"filterId":"0200"}), json!({"filterId":200}), json!({"filterId":"200","index":0}), json!({"filterId":"200","coalesce":null})] {
+        assert!(crate::xcf_filter_cmds::pre_dispatch_point_remove(&s, "xcf.filter.remove", &params, false).is_err());
+    }
+    assert!(s.execute("xcf.filter.remove", params).is_err());
+    assert!(s.active().unwrap().doc.shares_state(&before));
+    assert_eq!(reads.load(Ordering::Relaxed), 0);
+    assert!(quota.usage().is_ok());
+}

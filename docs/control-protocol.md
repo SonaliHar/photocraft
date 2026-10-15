@@ -521,8 +521,15 @@ argument changes and activation. A changed move publishes one undo step;
 moving to the current index preserves redo. The complete current and proposed
 stack must validate, including its original saved-order interpretation and
 half-opacity Invert rules. Content locks, source protection, synchronous
-dispatch and the shared cumulative work limit still apply. Filter removal
-and insertion require their own storage and transaction support.
+dispatch and the shared cumulative work limit still apply.
+
+`xcf.filter.remove` accepts exactly `{"filterId":"123"}` for removal from a
+qualified two-filter witnessed stack. It preserves the survivor, archives the
+removed mask's source-property records with their exact raw bytes, and commits
+one undo step. Required or dependent mask state and archive-name collisions
+refuse atomically. Removing the last filter remains explicitly unsupported
+until the empty-stack lifecycle is implemented; insertion requires separate
+template support.
 
 For explicit owned native reopen, use exactly `{"path":"current.pcraft","nativeProfilePolicy":"keepCurrent"}`
 with `doc.open` or MCP `doc_open`. Exactly one profile policy is permitted; both together,

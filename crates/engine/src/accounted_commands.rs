@@ -48,6 +48,7 @@ pub fn supports(id: &str) -> bool {
             | "xcf.filter.set"
             | "xcf.filter.enable"
             | "xcf.filter.move"
+            | "xcf.filter.remove"
     )
 }
 
@@ -100,11 +101,11 @@ fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadCon
         crate::accounted_clear::validate_request(session, params)?;
         return Ok(Request::Clear(params));
     }
-    if matches!(id, "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.move") {
+    if matches!(id, "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.move" | "xcf.filter.remove") {
         if session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_point_storage()) {
             return Ok(Request::Point(point::Request::parse(session, id, params, control)?));
         }
-        if id == "xcf.filter.move" {
+        if matches!(id, "xcf.filter.move" | "xcf.filter.remove") {
             return Err(BackingError::Unsupported.into());
         }
         if session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_threshold_storage()) {
@@ -243,8 +244,8 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
     if id == "history.selectState" && history_selection_disabled(session)? {
         return Ok(Some("the history holds only one state"));
     }
-    if id == "xcf.filter.move" && !state.doc.accounted().is_some_and(|owner| owner.is_readonly_point_storage()) {
-        return Ok(Some("this accounted filter storage has no qualified stack move recipe"));
+    if matches!(id, "xcf.filter.move" | "xcf.filter.remove") && !state.doc.accounted().is_some_and(|owner| owner.is_readonly_point_storage()) {
+        return Ok(Some("this accounted filter storage has no qualified stack edit recipe"));
     }
     if matches!(id, "xcf.filter.set" | "xcf.filter.enable") && !state.doc.accounted().is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage()) {
         return Ok(Some("this accounted filter storage has no qualified editing recipe"));
