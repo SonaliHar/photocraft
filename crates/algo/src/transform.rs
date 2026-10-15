@@ -271,11 +271,12 @@ fn corner_bounds(corners: &[(f64, f64); 4]) -> Option<Rect> {
 /// gets its own: the length of its Jacobian column, at the least reduction found at the corners
 /// and centre of the source, or with a clip at the source points under the clip's corners and
 /// centre. The near side of a strong perspective then stays as sharp as a direct sample, while the
-/// far side gets less filtering than its own reduction calls for, as with Bilinear. A skew that
-/// also flattens shrinks the area far more than either axis, along a slant no axis-aligned
-/// prefilter follows; there both axes come down in proportion until the warp is left at most a
-/// 4× area reduction (50 % × 50 %, where a 4×4 kernel starts to alias), which also keeps each
-/// tile's source footprint small; the reduced source still keeps 4× the pixels the one factor kept.
+/// far side gets less filtering than its own reduction calls for. A map that squashes along a
+/// slant (a rotated squash, or a skew that also flattens) shrinks a direction between the axes far
+/// more than either axis, which no axis-aligned prefilter follows; there both axes come down
+/// together until no direction is left a stronger reduction than the one factor left it (at most
+/// 50 %, where a 4×4 kernel starts to alias). Such a map aliases no more than it did with the one
+/// factor, and each tile's source footprint stays as small.
 fn prefilter_scales(h: &Homography, src_rect: Rect, clip: Option<Rect>) -> (f64, f64) {
     let r = [f64::from(src_rect.x0), f64::from(src_rect.y0), f64::from(src_rect.x1), f64::from(src_rect.y1)];
     let points = |r: [f64; 4]| [(r[0], r[1]), (r[2], r[1]), (r[2], r[3]), (r[0], r[3]), ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0)];
@@ -290,27 +291,52 @@ fn prefilter_scales(h: &Homography, src_rect: Rect, clip: Option<Rect>) -> (f64,
     };
     // Only points on the side of the horizon that is drawn (#4863) count; past it the lengths mean nothing.
     let side = h.front_side(r);
-    // Per point: the two axes' scales and the area's.
-    let measures = at.iter().filter(|(u, v)| side * h.w(*u, *v) > 0.0).map(|&(u, v)| {
-        let j = h.jacobian(u, v);
-        (j[0].hypot(j[2]), j[1].hypot(j[3]), (j[0] * j[3] - j[1] * j[2]).abs())
-    });
-    let usable = measures.filter(|m| m.0.is_finite() && m.1.is_finite() && m.2.is_finite());
-    let (lx, ly, area) = usable.reduce(|a, b| (a.0.max(b.0), a.1.max(b.1), a.2.max(b.2))).unwrap_or_else(|| {
+    // The Jacobian at each point that counts and is finite.
+    let finite = |j: &[f64; 4]| j.iter().all(|e| e.is_finite()) && j[0].hypot(j[2]).is_finite() && j[1].hypot(j[3]).is_finite();
+    let js = at.map(|(u, v)| Some(h.jacobian(u, v)).filter(|j| side * h.w(u, v) > 0.0 && finite(j)));
+    // `resize_surface_per_axis` copies an axis whose scale is exactly 1; 1/64 bounds the filter's width.
+    let snap = |f: f64| if f > 0.0 && f < 0.999 { f.max(1.0 / 64.0) } else { 1.0 };
+    let Some((lx, ly)) = js.iter().flatten().map(|j| (j[0].hypot(j[2]), j[1].hypot(j[3]))).reduce(|a, b| (a.0.max(b.0), a.1.max(b.1))) else {
         // None of them is usable: the one factor at the centre, as before.
         let (cx, cy) = match inv {
             Some((c, inv)) => inv.apply((f64::from(c.x0) + f64::from(c.x1)) / 2.0, (f64::from(c.y0) + f64::from(c.y1)) / 2.0),
             None => ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0),
         };
-        let f = h.local_scale(cx, cy);
-        (f, f, f * f)
-    });
-    // `resize_surface_per_axis` copies an axis whose scale is exactly 1; 1/64 bounds the filter's width.
-    let snap = |f: f64| if f > 0.0 && f < 0.999 { f.max(1.0 / 64.0) } else { 1.0 };
+        let f = snap(h.local_scale(cx, cy));
+        return (f, f);
+    };
     let (fx, fy) = (snap(lx), snap(ly));
-    // The area the warp is left to shrink is `area / (fx * fy)`; a map that collapses it (0) reduces nothing, as before.
-    let c = (4.0 * area / (fx * fy)).sqrt();
+    // The warp is left `J · diag(1/fx, 1/fy)`. Along a slant both columns stay long while the map
+    // squashes the direction between them, so both axes come down together until no direction is
+    // left a stronger reduction than the one factor √|det J| left it, √(σmin / σmax), or 50 %.
+    // Taken at the point that needs it least, like the factors; a point that collapses counts for
+    // nothing, and if all do (c = 0), nothing is reduced, as before.
+    let c = js
+        .iter()
+        .flatten()
+        .map(|j| {
+            let (hi, lo) = singular_values(*j);
+            let (_, left) = singular_values([j[0] / fx, j[1] / fy, j[2] / fx, j[3] / fy]);
+            let target = if hi > 0.0 { (lo / hi).sqrt().min(0.5) } else { 0.0 };
+            if target > 0.0 && left.is_finite() { left / target } else { 0.0 }
+        })
+        .fold(0.0, f64::max);
     if c < 1.0 { (snap(fx * c), snap(fy * c)) } else { (fx, fy) }
+}
+
+/// The singular values of the 2×2 matrix `[a, b, c, d]` (row-major), largest first: how far a
+/// unit step is stretched along the map's strongest and weakest directions. 0 for a matrix that
+/// isn't finite.
+fn singular_values(j: [f64; 4]) -> (f64, f64) {
+    // Scaled by the largest entry, so the squares can't overflow.
+    let m = j.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+    if !(m > 0.0 && m.is_finite()) {
+        return (0.0, 0.0);
+    }
+    let [a, b, c, d] = j.map(|v| v / m);
+    let (f, det) = (a * a + b * b + c * c + d * d, (a * d - b * c).abs());
+    let hi = ((f + (f * f - 4.0 * det * det).max(0.0).sqrt()) / 2.0).sqrt();
+    (hi * m, if hi > 0.0 { det / hi * m } else { 0.0 })
 }
 
 /// A cancelled `ctl` skips the remaining tiles; the caller discards the result.
@@ -859,8 +885,8 @@ mod tests {
 
     /// #4864: the prefilter's factors, per axis. An affine map gives the same pair with or without
     /// a clip, so a clipped warp matches the full one; a Distort keeps its wide side's; a skew
-    /// reduces nothing, and a skew that also flattens leaves the warp a 4× area reduction; a corner
-    /// past the horizon doesn't count; and a map that isn't finite reduces nothing.
+    /// reduces nothing, and a squash along a slant keeps the one factor; a corner past the horizon
+    /// doesn't count; and a map that isn't finite reduces nothing.
     #[test]
     fn prefilter_scales_are_per_axis_and_finite() {
         let r = Rect::new(0, 0, 64, 64);
@@ -872,9 +898,14 @@ mod tests {
         let (fx, fy) = prefilter_scales(&quad([[0.0, 0.0], [64.0, 0.0], [48.0, 24.0], [16.0, 24.0]]), r, None);
         assert!(fx == 1.0 && (fy - 0.901).abs() < 0.001, "{fx} x {fy}");
         assert_eq!(prefilter_scales(&quad([[0.0, 0.0], [64.0, 0.0], [256.0, 64.0], [192.0, 64.0]]), r, None), (1.0, 1.0));
-        // Skewed by 2 and flattened to 5 %: the one factor was √0.05 ≈ 0.22 for both axes.
+        // Skewed by 2 and flattened to 5 %, and a rhombus squashed to 25 % along its diagonal: both
+        // keep the one factor, √|det J|. A 4× area rule left the skew's warp 5 % along its slant (the
+        // one factor 10 %), and the column lengths left the rhombus's 34 % (the one factor 50 %).
         let (fx, fy) = prefilter_scales(&quad([[0.0, 0.0], [64.0, 0.0], [192.0, 3.2], [128.0, 3.2]]), r, None);
-        assert!(fx == fy && (fx * fy - 4.0 * 0.05).abs() < 1e-9, "{fx} x {fy}");
+        assert!(fx == fy && (fx * fy - 0.05).abs() < 1e-9, "{fx} x {fy}");
+        let h = std::f64::consts::FRAC_1_SQRT_2 * 64.0;
+        let (fx, fy) = prefilter_scales(&quad([[0.0, 0.0], [h, h / 4.0], [0.0, h / 2.0], [-h, h / 4.0]]), r, None);
+        assert!(fx == fy && (fx - 0.5).abs() < 1e-9, "{fx} x {fy}");
         let past = Homography::rect_to_quad([0.0, 0.0, 100.0, 100.0], [[0.0, 0.0], [300.0, 0.0], [60.0, 60.0], [0.0, 300.0]]).unwrap();
         for clip in [None, Some(Rect::new(-400, -400, 700, 700))] {
             let (fx, fy) = prefilter_scales(&past, Rect::new(0, 0, 100, 100), clip);
@@ -920,5 +951,156 @@ mod tests {
         assert!(Homography([2.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 2.0]).is_identity());
         assert!(!Homography([1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]).is_identity());
         assert!(!Homography([1.0, 0.1, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]).is_identity());
+    }
+
+    /// #4864: a rhombus squashed to 25 % along its diagonal (rotated 45°, then squashed vertically).
+    /// Both columns of the map are 73 % long, so prefiltering each axis by its column left the warp
+    /// a 34 % reduction along the slant, and 2 px diagonal stripes came out as moiré (standard
+    /// deviation 0.27 around the 0.5 grey they average to, at 8 bits); the one factor, 50 %, gives
+    /// 0.06, and so does this.
+    #[test]
+    fn a_squash_along_a_slant_does_not_alias() {
+        let k = std::f64::consts::FRAC_1_SQRT_2 * 128.0;
+        let h = Homography::rect_to_quad([0.0, 0.0, 128.0, 128.0], [[0.0, 0.0], [k, k / 4.0], [0.0, k / 2.0], [-k, k / 4.0]]).unwrap();
+        for sample in photocraft_color::SampleType::ALL {
+            let mut s = Surface::new(PixelFormat::new(photocraft_color::ColorMode::Rgb, sample, true));
+            s.fill_rect(Rect::new(0, 0, 128, 128), &[0.0, 0.0, 0.0, 1.0]);
+            for y in 0..128 {
+                for x in (0..128).filter(|x| (x + y) % 4 < 2) {
+                    s.fill_rect(Rect::new(x, y, x + 1, y + 1), &[1.0, 1.0, 1.0, 1.0]);
+                }
+            }
+            let o = warp_surface(&s, s.content_bounds(), &h, Interp::Bicubic).unwrap();
+            let b = o.content_bounds();
+            let opaque = |x: i32, y: i32| (-1..=1).all(|j| (-1..=1).all(|i| o.pixel(x + i, y + j)[3] > 0.999));
+            let v: Vec<f64> =
+                (b.y0..b.y1).flat_map(|y| (b.x0..b.x1).map(move |x| (x, y))).filter(|&(x, y)| opaque(x, y)).map(|(x, y)| f64::from(o.pixel(x, y)[0])).collect();
+            let mean = v.iter().sum::<f64>() / v.len() as f64;
+            let sd = (v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / v.len() as f64).sqrt();
+            assert!(v.len() > 1000 && (mean - 0.5).abs() < 0.02 && sd < 0.1, "{sample:?}: {} pixels, mean {mean}, sd {sd}", v.len());
+        }
+    }
+
+    /// #4864: whatever the map, rect or clip (zero, NaN, huge, tiny, on or past the horizon,
+    /// collapsed to a line), each factor stays within [1/64, 1].
+    #[test]
+    fn prefilter_scales_stay_in_range_for_hostile_maps() {
+        let big = Rect::new(i32::MIN / 2, i32::MIN / 2, i32::MAX / 2, i32::MAX / 2);
+        let rects = [Rect::new(0, 0, 64, 64), Rect::new(-5, -7, -4, -6), big, Rect::new(0, 0, 1, 100_000), Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX)];
+        let maps = [
+            Homography([0.0; 9]),
+            Homography([f64::NAN; 9]),
+            Homography([1e300, 0.0, 0.0, 0.0, 1e300, 0.0, 0.0, 0.0, 1.0]),
+            Homography([1e-300, 0.0, 0.0, 0.0, 1e-300, 0.0, 0.0, 0.0, 1.0]),
+            Homography([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0]),
+            Homography([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0]),
+            Homography([1.0, 0.0, 0.0, 0.0, 1e-9, 0.0, 0.0, 0.0, 1.0]),
+            Homography([1.0, 1e9, 0.0, 0.0, 1e-9, 0.0, 0.0, 0.0, 1.0]),
+            Homography([f64::MAX, f64::MAX, 0.0, f64::MAX, f64::MAX, 0.0, 0.0, 0.0, 1.0]),
+            Homography([-0.25, 0.0, 0.0, 0.0, -0.5, 0.0, 0.0, 0.0, 1.0]),
+            Homography([0.5, 0.0, 0.0, 0.0, 0.5, 0.0, 1e-3, 1e-3, 1.0]),
+            Homography([0.5, 0.0, 0.0, 0.0, 0.5, 0.0, -1e-3, -1e-3, 1.0]),
+            Homography([f64::MIN_POSITIVE, 0.0, 0.0, 0.0, f64::MIN_POSITIVE, 0.0, 0.0, 0.0, 1.0]),
+            Homography([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, f64::MIN_POSITIVE]),
+        ];
+        let clips =
+            [None, Some(Rect::new(0, 0, 64, 64)), Some(big), Some(Rect::new(1000, 1000, 1001, 1001)), Some(Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX))];
+        for r in rects {
+            for h in maps {
+                for c in clips {
+                    let (fx, fy) = prefilter_scales(&h, r, c);
+                    assert!((1.0 / 64.0..=1.0).contains(&fx) && (1.0 / 64.0..=1.0).contains(&fy), "{h:?} {r:?} {c:?}: {fx} x {fy}");
+                }
+            }
+        }
+    }
+
+    /// #4864: a Bicubic warp by a degenerate map, or one that shrinks a single axis far below the
+    /// 1/64 the prefilter stops at, returns finite pixels in range instead of panicking.
+    #[test]
+    fn bicubic_warp_survives_degenerate_and_extreme_maps() {
+        let mut s = Surface::new(PixelFormat::RGBA8);
+        s.fill_rect(Rect::new(0, 0, 40, 30), &[0.3, 0.6, 0.9, 1.0]);
+        let maps = [
+            Homography([0.0; 9]),
+            Homography([f64::NAN; 9]),
+            Homography([1e-300, 0.0, 0.0, 0.0, 1e-300, 0.0, 0.0, 0.0, 1.0]),
+            Homography([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0]),
+            Homography([1.0, 0.0, 0.0, 0.0, 1e-9, 0.0, 0.0, 0.0, 1.0]),
+            Homography([1e-9, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
+            Homography([1.0, 0.0, 0.0, 0.0, 0.001, 0.0, 0.0, 0.0, 1.0]),
+            Homography([0.001, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
+            Homography([1.0, 3.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 1.0]),
+            Homography([-0.25, 0.0, 0.0, 0.0, -0.5, 0.0, 0.0, 0.0, 1.0]),
+            Homography([0.5, 0.0, 0.0, 0.0, 0.5, 0.0, 0.05, 0.0, 1.0]),
+            Homography([0.5, 0.0, 0.0, 0.0, 0.5, 0.0, -0.05, -0.05, 1.0]),
+        ];
+        for h in maps {
+            for clip in [None, Some(Rect::new(-50, -50, 50, 50))] {
+                let o = match clip {
+                    None => warp_surface(&s, s.content_bounds(), &h, Interp::Bicubic),
+                    Some(c) => warp_surface_clipped(&s, s.content_bounds(), &h, Interp::Bicubic, c),
+                };
+                if let Ok(o) = o {
+                    let b = o.content_bounds();
+                    if !b.is_empty() {
+                        assert!(o.read_region(b).iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "{h:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// #4864: the per-axis prefilter keeps a flat layer flat in Grayscale, RGB, CMYK and Lab, at
+    /// every depth, with or without alpha (2 to 5 channels through each pass).
+    #[test]
+    fn the_per_axis_prefilter_keeps_flat_colour_in_every_mode() {
+        use photocraft_color::{ColorMode, SampleType};
+        let quads = [
+            ([[0.0, 0.0], [64.0, 0.0], [64.0, 16.0], [0.0, 16.0]], (32, 8)),
+            ([[0.0, 0.0], [56.0, 0.0], [56.0, 16.0], [0.0, 16.0]], (28, 8)),
+            ([[0.0, 0.0], [64.0, 0.0], [48.0, 24.0], [16.0, 24.0]], (32, 12)),
+            ([[0.0, 0.0], [8.0, 0.0], [8.0, 64.0], [0.0, 64.0]], (4, 32)),
+        ];
+        for mode in [ColorMode::Grayscale, ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab] {
+            for sample in SampleType::ALL {
+                for alpha in [false, true] {
+                    let fmt = PixelFormat::new(mode, sample, alpha);
+                    let n = fmt.channels();
+                    let col: Vec<f32> = (0..n).map(|c| if alpha && c == n - 1 { 1.0 } else { 0.2 + 0.15 * c as f32 }).collect();
+                    let mut s = Surface::new(fmt);
+                    s.fill_rect(Rect::new(0, 0, 64, 64), &col);
+                    for (q, (x, y)) in quads {
+                        let h = Homography::rect_to_quad([0.0, 0.0, 64.0, 64.0], q).unwrap();
+                        let o = warp_surface(&s, s.content_bounds(), &h, Interp::Bicubic).unwrap();
+                        let p = o.pixel(x, y);
+                        let m = o.format().channels();
+                        assert_eq!(m, mode.color_channels() + 1);
+                        assert!((p[m - 1] - 1.0).abs() < 1e-3, "{mode:?} {sample:?} {alpha} {q:?}: alpha {p:?}");
+                        for c in 0..mode.color_channels() {
+                            assert!((p[c] - col[c]).abs() < 2.5 / 255.0, "{mode:?} {sample:?} {alpha} {q:?}: channel {c} {p:?} vs {col:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// #4864: squashed to 100 % × 25 %, the layer's left and right edges stay as crisp as a direct
+    /// (Bilinear) sample. The one factor (50 %) also reduced x, which left the first column inside
+    /// the left edge at 0.93 alpha against Bilinear's 1.
+    #[test]
+    fn a_one_axis_reduction_keeps_the_side_edges_sharp() {
+        let h = Homography::rect_to_quad([0.0, 0.0, 64.0, 64.0], [[10.0, 0.0], [74.0, 0.0], [74.0, 16.0], [10.0, 16.0]]).unwrap();
+        for sample in photocraft_color::SampleType::ALL {
+            let mut s = Surface::new(PixelFormat::new(photocraft_color::ColorMode::Rgb, sample, true));
+            s.fill_rect(Rect::new(0, 0, 64, 64), &[0.5, 0.5, 0.5, 1.0]);
+            let bc = warp_surface(&s, s.content_bounds(), &h, Interp::Bicubic).unwrap();
+            let bl = warp_surface(&s, s.content_bounds(), &h, Interp::Bilinear).unwrap();
+            for x in [9, 10, 11, 72, 73, 74] {
+                let (a, b) = (bc.pixel(x, 8)[3], bl.pixel(x, 8)[3]);
+                assert!((a - b).abs() < 0.02, "{sample:?} x {x}: Bicubic alpha {a} vs Bilinear {b}");
+            }
+        }
     }
 }
