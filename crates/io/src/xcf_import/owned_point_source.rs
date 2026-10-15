@@ -136,6 +136,8 @@ fn prepay(budget: &photocraft_xcf::Budget<'_>, units: u64) -> Result<(), IoError
 /// The selected factory must restrict its actual classified domain to the existing
 /// supported Point branches before this consuming custody handoff. This is not
 /// a caller-supplied Document or a source/renderer grant from census statistics.
+#[derive(Clone,Copy)]
+enum PointStorage { Implicit,Assigned }
 pub(in crate::xcf_import) fn promote_source<'b, 'a, S: PromotionSource<'b, 'a>>(
     source: S,
     budget: &'b photocraft_xcf::Budget<'a>,
@@ -143,6 +145,12 @@ pub(in crate::xcf_import) fn promote_source<'b, 'a, S: PromotionSource<'b, 'a>>(
     control: &ReadControl<'_>,
     preparation: &mut Option<PreparationHold>,
 ) -> Result<OwnedPointXcfImport, IoError> {
+    promote_with_storage(source,budget,quota,control,preparation,PointStorage::Implicit)
+}
+pub(in crate::xcf_import) fn promote_assigned_source<'b,'a,S:PromotionSource<'b,'a>>(source:S,budget:&'b photocraft_xcf::Budget<'a>,quota:BackingQuota,control:&ReadControl<'_>,preparation:&mut Option<PreparationHold>)->Result<OwnedPointXcfImport,IoError>{
+    promote_with_storage(source,budget,quota,control,preparation,PointStorage::Assigned)
+}
+fn promote_with_storage<'b,'a,S:PromotionSource<'b,'a>>(source:S,budget:&'b photocraft_xcf::Budget<'a>,quota:BackingQuota,control:&ReadControl<'_>,preparation:&mut Option<PreparationHold>,storage:PointStorage)->Result<OwnedPointXcfImport,IoError>{
     struct Incoming<'b, 'a, S> {
         source: S,
         model: Option<photocraft_xcf::Reservation<'b, 'a>>,
@@ -240,7 +248,7 @@ pub(in crate::xcf_import) fn promote_source<'b, 'a, S: PromotionSource<'b, 'a>>(
     let retention_guard = promoting.retention.clone();
     let Promoting { result, retention } = promoting;
     let ImportResult { document, warnings, origin, assessment, source_read_only, preview_only } = result;
-    let document = AccountedDocument::new_readonly_point_storage(document, retention.clone(), quota, &read).map_err(backing)?;
+    let document = if matches!(storage,PointStorage::Assigned) { AccountedDocument::new_readonly_assigned_point_storage(document,retention.clone(),quota,&read) } else { AccountedDocument::new_readonly_point_storage(document, retention.clone(), quota, &read) }.map_err(backing)?;
     poll().map_err(backing)?;
     control.interrupt.check().map_err(|_| IoError::Cancelled)?;
     let output = OwnedPointXcfImport { document, warnings, origin, assessment, source_read_only, preview_only, _retention: retention };

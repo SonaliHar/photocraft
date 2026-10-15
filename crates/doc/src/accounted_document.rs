@@ -83,6 +83,7 @@ enum StorageClass {
     ReadonlyThresholdAlpha,
     ReadonlyHistogramThreshold,
     ReadonlyPoint,
+    ReadonlyAssignedPoint,
     ReadonlyGaussianGroup,
     ReadonlyFlatComposite,
 }

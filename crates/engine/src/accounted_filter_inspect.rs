@@ -287,6 +287,9 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
     } else if owner.is_readonly_gaussian_group_storage() {
         owner.validate_gaussian_group_storage(control)?;
         false
+    } else if owner.is_readonly_assigned_point_storage() {
+        owner.validate_readonly_assigned_point_storage(control)?;
+        true
     } else if owner.is_readonly_point_storage() {
         owner.validate_readonly_point_storage(control)?;
         true

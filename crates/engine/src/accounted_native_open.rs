@@ -16,6 +16,7 @@ enum NativeHandoff {
     CurrentThresholdAlpha,
     CurrentHistogramThreshold,
     CurrentPoint,
+    CurrentAssignedPoint,
     CurrentAnalyticGeometry,
     CurrentIsolatedNormalGroup,
     CurrentIsolatedGaussianGroup,
@@ -192,6 +193,11 @@ pub(crate) fn validate_current_stock_point_storage(owner: &photocraft_doc::accou
 /// Both contexts retain the real model quota and visit the full operative input.
 pub(crate) fn validate_current_owned_filter_storage(owner: &photocraft_doc::accounted_document::AccountedDocument, control: &ReadControl<'_>) -> Result<()> {
     control.check(1)?;
+    if owner.is_readonly_assigned_point_storage() {
+        let prepared=photocraft_compose::backed_neighborhood_context::PreparedBackedNeighborhoodContext::new_assigned_box(owner,Default::default(),control).map_err(|e|point_error(e,control))?;
+        prepared.validate_operative(control).map_err(|e|point_error(e,control))?;
+        drop(prepared);control.check(1)?;return Ok(());
+    }
     let profile = match owner.document().mode {
         photocraft_doc::ColorMode::Rgb => photocraft_cms::Builtin::Srgb.profile(),
         photocraft_doc::ColorMode::Grayscale => photocraft_cms::Builtin::SGray.profile(),
@@ -351,7 +357,8 @@ impl Session {
         authorized_native_path: Option<&str>,
         control: &ReadControl<'_>,
     ) -> Result<usize> {
-        self.add_owned_native_with(archive, label, authorized_native_path, control, NativeHandoff::CurrentPoint)
+        let handoff=if archive.document().source_color_context.as_ref().is_some_and(|s|s.original_icc.is_some()){NativeHandoff::CurrentAssignedPoint}else{NativeHandoff::CurrentPoint};
+        self.add_owned_native_with(archive, label, authorized_native_path, control, handoff)
     }
 
     /// Strict assigned-ICC analytic masked geometry continuation. Native current
@@ -429,11 +436,12 @@ impl Session {
             NativeHandoff::CurrentThresholdAlpha => archive.into_accounted_readonly_threshold_alpha_storage(control),
             NativeHandoff::CurrentHistogramThreshold => archive.into_accounted_readonly_threshold_storage(control),
             NativeHandoff::CurrentPoint => archive.into_accounted_readonly_point_storage(control),
+            NativeHandoff::CurrentAssignedPoint => archive.into_accounted_readonly_assigned_point_storage(control),
             NativeHandoff::CurrentIsolatedGaussianGroup => archive.into_accounted_readonly_gaussian_group_storage(control),
             NativeHandoff::CurrentSeparableBlend => archive.into_accounted_readonly_flat_composite_storage(control),
         }
         .map_err(|error| {
-            if matches!(handoff, NativeHandoff::CurrentPoint | NativeHandoff::CurrentAnalyticGeometry | NativeHandoff::CurrentIsolatedNormalGroup | NativeHandoff::CurrentIsolatedGaussianGroup | NativeHandoff::CurrentSeparableBlend) {
+            if matches!(handoff, NativeHandoff::CurrentAssignedPoint | NativeHandoff::CurrentPoint | NativeHandoff::CurrentAnalyticGeometry | NativeHandoff::CurrentIsolatedNormalGroup | NativeHandoff::CurrentIsolatedGaussianGroup | NativeHandoff::CurrentSeparableBlend) {
                 if let photocraft_format::FormatError::Io(io) = &error {
                     if let Some(backing) = io.get_ref().and_then(|source| source.downcast_ref::<BackingError>()) {
                         return EngineError::from(*backing);
@@ -490,7 +498,7 @@ impl Session {
         if let NativeHandoff::CurrentHistogramThreshold = handoff {
             validate_current_threshold_storage(&document, control)?;
         }
-        if let NativeHandoff::CurrentPoint = handoff {
+        if matches!(handoff,NativeHandoff::CurrentPoint|NativeHandoff::CurrentAssignedPoint) {
             validate_current_stock_point_storage(&document, control)?;
         }
         if let NativeHandoff::CurrentAnalyticGeometry = handoff {
@@ -576,3 +584,7 @@ mod gaussian_group_workflow_tests;
 #[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
 #[path="accounted_separable_blend_workflow_tests.rs"]
 mod separable_blend_workflow_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "accounted_assigned_box_workflow_tests.rs"]
+mod assigned_box_workflow_tests;

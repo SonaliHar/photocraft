@@ -1804,3 +1804,18 @@ composition carries Lab authority. Existing RGB modern20 explicit transitions
 may replace it with their matching physical hint. No LCh composition setter,
 new profile grant or native normalization is added. Tests and numerical/profile
 acceptance remain deferred.
+Owned assigned-profile F32 Box Blur uses a distinct readonly runtime class
+and dedicated source/CURRENT validators. Both actual ICC roles remain owned;
+controlled parse/analytic qualification and generated-current encoded equality
+precede rendering with three independent transfer curves. The assigned canvas
+route ignores caller-supplied profile placeholders and fails finally. Native
+reopen uses an explicit consuming handoff followed by full current validation;
+serialized fields grant no runtime authority. Hidden/disabled content still
+receives complete native/default/mask/profile validation. Title and paid read-only
+inspection are supported; generic filter/metadata/Move/selection/pixel edits are
+closed for this foundation slice. Old implicit Point admission remains unchanged.
+The named unit-F32 samples contain five out-of-unit RGB words, independently
+decoded and retained without clamp. The new Box gate follows the existing finite
+RGB/unit-alpha equation domain; every other source/profile gate stays exact.
+Four missing loose producer ICC captures remain HOLD. Tests and numerical/profile
+acceptance remain deferred.

@@ -24,6 +24,10 @@ use photocraft_raster::{
     },
     checked_view::NativeTileBytes,
 };
+#[path = "backed_neighborhood_assigned_profile.rs"]
+mod assigned_profile;
+use assigned_profile::BoundAssignedNeighborhoodProfile;
+
 fn scope() -> E {
     E::Unsupported("closed owned neighborhood current recipe")
 }
@@ -74,20 +78,49 @@ impl<B: PreparationBudget> PlanBudget for Shared<'_, B> {
     }
 }
 struct RetainedPlan {
-    plan: Plan,
+    plan: Plan<QuotaLease>,
     _lease: QuotaLease,
 }
-struct Plan {
+enum ProfileBinding<L> {
+    Implicit(Profile),
+    Assigned(BoundAssignedNeighborhoodProfile<L>),
+}
+impl<L> ProfileBinding<L> {
+    fn profile(&self) -> &Profile {
+        match self {
+            Self::Implicit(p) => p,
+            Self::Assigned(p) => p.profile(),
+        }
+    }
+}
+struct Plan<L> {
     stack: OrderedStack,
-    _profile: Profile,
+    _profile: ProfileBinding<L>,
     opaque: bool,
 }
 pub struct LeasedStockNeighborhoodPipeline<S, L> {
-    _plan: Plan,
+    _plan: Plan<L>,
     _source: S,
     _lease: L,
 }
-fn prepare<B: PlanBudget>(doc: &Document, supplied: Option<&Profile>, header: u64, interrupt: &Interrupt<'_>, b: &mut B) -> Result<(Plan, B::Lease), E> {
+fn prepare<B: PlanBudget>(
+    doc: &Document,
+    supplied: Option<&Profile>,
+    header: u64,
+    interrupt: &Interrupt<'_>,
+    b: &mut B,
+) -> Result<(Plan<B::Lease>, B::Lease), E> {
+    prepare_mode(doc, supplied, header, interrupt, b, false, false)
+}
+fn prepare_mode<B: PlanBudget>(
+    doc: &Document,
+    supplied: Option<&Profile>,
+    header: u64,
+    interrupt: &Interrupt<'_>,
+    b: &mut B,
+    assigned: bool,
+    current: bool,
+) -> Result<(Plan<B::Lease>, B::Lease), E> {
     b.check(32768)?;
     interrupt.check().map_err(|_| E::Backing(BackingError::Cancelled))?;
     let [layer] = doc.layers.as_slice() else { return Err(scope()) };
@@ -109,16 +142,28 @@ fn prepare<B: PlanBudget>(doc: &Document, supplied: Option<&Profile>, header: u6
         || state.filter_masks.len() > 1
         || state.items.len() != state.filter_masks.len() + 1
         || stack.owner != ItemRef::Layer(layer.id)
-        || doc.source_color_context.as_ref().is_none_or(|s| s.original_icc.is_some())
+        || doc.source_color_context.as_ref().is_none_or(|s| if assigned { s.original_icc.is_none() } else { s.original_icc.is_some() })
         || !state.editable_indexed.is_empty()
-        || !layer.visible
-        || layer.opacity.to_bits() != 1f32.to_bits()
+        || (!(assigned && current) && !layer.visible)
+        || (!(assigned && current) && layer.opacity.to_bits() != 1f32.to_bits())
+        || (assigned && !current && !node.enabled)
     {
         return Err(scope());
     }
     let finite = extent == Rect::new(0, 0, 16, 12);
     let original_gaussian = extent == Rect::new(0, 0, 96, 80);
     let source = doc.source_color_context.as_ref().ok_or_else(scope)?;
+    if assigned
+        && (!finite
+            || doc.mode != ColorMode::Rgb
+            || doc.depth != SampleType::F32
+            || source.source_precision != 650
+            || node.operation.name != "gegl:box-blur"
+            || node.mask.is_none()
+            || state.filter_masks.len() != 1)
+    {
+        return Err(scope());
+    }
     if finite {
         if !matches!((doc.depth, source.source_precision), (SampleType::F32, 650) | (SampleType::F64, 750))
             || !(doc.mode == ColorMode::Rgb || doc.mode == ColorMode::Grayscale && node.operation.name == "gegl:median-blur")
@@ -191,8 +236,31 @@ fn prepare<B: PlanBudget>(doc: &Document, supplied: Option<&Profile>, header: u6
     let scalar = crate::gimp_neighborhood::scalar_preparation_bytes(2).map_err(E::Color)?;
     let envelope = scalar.checked_add(2 * 65536).and_then(|v| v.checked_add(header)).ok_or_else(size)?;
     let lease = b.reserve(envelope)?;
-    let (profile, basis) = bound_profile(doc, supplied, b, interrupt)?;
+    let (profile, implicit_basis) = if assigned {
+        let binding = BoundAssignedNeighborhoodProfile::prepare(doc, interrupt, b)?;
+        // Both profile peaks are real retained fees, separate from the ordered
+        // stack's prospective curve/header envelope.
+        let _ = binding.held_peak()?;
+        (ProfileBinding::Assigned(binding), None)
+    } else {
+        let (profile, basis) = bound_profile(doc, supplied, b, interrupt)?;
+        (ProfileBinding::Implicit(profile), Some(basis))
+    };
     b.check(envelope.checked_mul(64).ok_or_else(size)?)?;
+    let basis: &Profile = match implicit_basis {
+        Some(basis) => basis,
+        None => profile.profile(),
+    };
+    if assigned {
+        let semantic = photocraft_cms::xcf_color::assigned_effective_planning_work_ceiling(basis, photocraft_cms::xcf_color::Encoding::NonlinearProfile)
+            .map_err(|e| match e {
+                photocraft_cms::control::Error::Cancelled => E::Backing(BackingError::Cancelled),
+                photocraft_cms::control::Error::Allocation => E::Allocation,
+                photocraft_cms::control::Error::Limit(_) => E::Backing(BackingError::Quota),
+                photocraft_cms::control::Error::Cms(e) => E::Color(CompositionError::Color(e)),
+            })?;
+        b.check(semantic.checked_mul(3).ok_or_else(size)?)?;
+    }
     let ordered = OrderedStack::new_owned_neighborhood(stack, basis, SampleEncoding::NonlinearProfile, 22, extent, interrupt).map_err(E::Color)?;
     let retained = ordered.neighborhood_retained_bytes().map_err(E::Color)?.checked_add(65536).and_then(|v| v.checked_add(header)).ok_or_else(size)?;
     if retained > envelope {
@@ -224,6 +292,22 @@ impl<S, L> LeasedStockNeighborhoodPipeline<S, L> {
         })?;
         Ok(Self { _plan: plan, _source: source_lease, _lease: lease })
     }
+    /// Dedicated assigned-Box source preparation. Actual source/native admission
+    /// remains the mapper's authority; this proves and retains the ICC relation.
+    pub fn new_assigned_box_budgeted<B: PreparationBudget<Lease = L>>(
+        doc: &Document,
+        interrupt: &Interrupt<'_>,
+        budget: &mut B,
+        source_lease: S,
+    ) -> Result<Self, CompositionError> {
+        let (plan, lease) =
+            prepare_mode(doc, None, std::mem::size_of::<Self>() as u64 + 128, interrupt, &mut Shared { budget }, true, false).map_err(|e| match e {
+                E::Color(e) => e,
+                E::Backing(BackingError::Cancelled) => photocraft_raster::RasterInputError::Cancelled.into(),
+                _ => CompositionError::Unsupported("assigned Box preparation"),
+            })?;
+        Ok(Self { _plan: plan, _source: source_lease, _lease: lease })
+    }
 }
 pub struct PreparedBackedNeighborhoodContext<'a> {
     derived: OwnedNeighborhoodSurface,
@@ -239,16 +323,31 @@ struct Materialized {
 }
 impl<'a> PreparedBackedNeighborhoodContext<'a> {
     pub fn new(owner: &'a AccountedDocument, profile: &Profile, limits: NormalBandLimits, c: &ReadControl<'_>) -> Result<Self, E> {
+        Self::new_mode(owner, Some(profile), limits, c, false)
+    }
+    /// Assigned original/current profile relation is constructed from the actual
+    /// immutable owner, never from a supplied standalone Profile or name/hash.
+    pub fn new_assigned_box(owner: &'a AccountedDocument, limits: NormalBandLimits, c: &ReadControl<'_>) -> Result<Self, E> {
+        Self::new_mode(owner, None, limits, c, true)
+    }
+    fn new_mode(owner: &'a AccountedDocument, profile: Option<&Profile>, limits: NormalBandLimits, c: &ReadControl<'_>, assigned: bool) -> Result<Self, E> {
         c.check(1).map_err(E::Backing)?;
         let max = NormalBandLimits::default();
         if limits.max_rows == 0 || limits.max_rows > max.max_rows || limits.max_pixels == 0 || limits.max_pixels > max.max_pixels {
             return Err(scope());
         }
-        owner.validate_readonly_point_storage(c).map_err(E::Backing)?;
+        if assigned { owner.validate_readonly_assigned_point_storage(c) } else { owner.validate_readonly_point_storage(c) }.map_err(E::Backing)?;
         let header = std::mem::size_of::<Self>() as u64 + 128;
         let lease = owner.quota().reserve(QuotaKind::Index, header).map_err(E::Quota)?;
-        let (plan, plan_lease) =
-            prepare(owner.document(), Some(profile), std::mem::size_of::<Plan>() as u64 + 128, c.interrupt, &mut NativeBudget { q: owner.quota(), c })?;
+        let (plan, plan_lease) = prepare_mode(
+            owner.document(),
+            profile,
+            std::mem::size_of::<Plan<QuotaLease>>() as u64 + 128,
+            c.interrupt,
+            &mut NativeBudget { q: owner.quota(), c },
+            assigned,
+            true,
+        )?;
         let prepared = RetainedPlan { plan, _lease: plan_lease };
         let layer = owner.document().layers.first().ok_or_else(scope)?;
         let LayerContent::BackedRaster(backed) = &layer.content else { return Err(scope()) };
@@ -275,6 +374,16 @@ impl<'a> PreparedBackedNeighborhoodContext<'a> {
         }
         if input.surface.resident_payload_bytes().map_err(|e| E::Color(e.into()))? > envelope {
             return Err(E::Allocation);
+        }
+        if assigned {
+            for channel in 0..format.channels() {
+                c.check(1).map_err(E::Backing)?;
+                let value = photocraft_color::try_read_sample_f64(backed.default_bytes(), format.sample, channel)
+                    .map_err(|_| E::Color(photocraft_raster::RasterInputError::InvalidSample.into()))?;
+                if !value.is_finite() || (channel == format.channels() - 1 && !(0.0..=1.0).contains(&value)) {
+                    return Err(scope());
+                }
+            }
         }
         for y in bounds.y0..bounds.y1 {
             for x in bounds.x0..bounds.x1 {

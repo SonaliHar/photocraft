@@ -9,7 +9,7 @@ impl AccountedDocument {
         if self.owner._storage_class == StorageClass::ReadonlyGaussianGroup {
             return gaussian_group_readonly::renamed(self, name, control);
         }
-        if self.owner._storage_class == StorageClass::ReadonlyPoint {
+        if matches!(self.owner._storage_class, StorageClass::ReadonlyPoint | StorageClass::ReadonlyAssignedPoint) {
             return point_readonly::renamed(self, name, control);
         }
         if self.owner._storage_class == StorageClass::ReadonlyThresholdAlpha {
@@ -24,7 +24,8 @@ impl AccountedDocument {
         imported_edits::validate_name(name, control)?;
         // Dispatch only this file-identity copy; generic selection and layer
         // edits retain the original strict unmasked validator.
-        let isolated_group = self.document().layers.len() == 2 && self.document().layers.get(1).is_some_and(|layer| matches!(layer.content, LayerContent::Group(_)));
+        let isolated_group =
+            self.document().layers.len() == 2 && self.document().layers.get(1).is_some_and(|layer| matches!(layer.content, LayerContent::Group(_)));
         let masked_normal = self.document().layers.len() == 2 && self.document().layers.get(1).is_some_and(|layer| layer.mask.is_some());
         if isolated_group {
             imported_isolated_group::validate(self.document(), self.quota(), control)?;

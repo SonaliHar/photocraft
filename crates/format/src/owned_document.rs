@@ -69,6 +69,7 @@ enum AccountedHandoff {
     ReadonlyThresholdAlphaStorage,
     ReadonlyHistogramThresholdStorage,
     ReadonlyPointStorage,
+    ReadonlyAssignedPointStorage,
     ReadonlyGaussianGroupStorage,
     ReadonlyFlatCompositeStorage,
 }
@@ -112,6 +113,15 @@ impl OwnedDocumentArchive {
         self.into_accounted_with(control, AccountedHandoff::ReadonlyPointStorage)
     }
 
+    /// Consume the actual archive/model/native receipts into explicit assigned
+    /// Point storage on their original quota. This structural handoff preserves
+    /// both encoded profile owners without granting profile, source, rendering
+    /// or edit authority. The caller must qualify the complete current recipe
+    /// before publication; serialized fields never select this runtime class.
+    pub fn into_accounted_readonly_assigned_point_storage(self, control: &ReadControl<'_>) -> Result<photocraft_doc::accounted_document::AccountedDocument> {
+        self.into_accounted_with(control, AccountedHandoff::ReadonlyAssignedPointStorage)
+    }
+
     /// Explicit consuming custody for the closed Gaussian group. The actual
     /// archive/model/native leases remain on their original ledger; source and
     /// complete current profile/render admission belong to the caller.
@@ -146,6 +156,7 @@ impl OwnedDocumentArchive {
             AccountedHandoff::ReadonlyThresholdAlphaStorage => photocraft_doc::accounted_document::AccountedDocument::from_owned_readonly_threshold_alpha_storage(document, retention, quota, control),
             AccountedHandoff::ReadonlyHistogramThresholdStorage => photocraft_doc::accounted_document::AccountedDocument::new_readonly_threshold_storage(document, retention, quota, control),
             AccountedHandoff::ReadonlyPointStorage => photocraft_doc::accounted_document::AccountedDocument::new_readonly_point_storage(document, retention, quota, control),
+            AccountedHandoff::ReadonlyAssignedPointStorage => photocraft_doc::accounted_document::AccountedDocument::new_readonly_assigned_point_storage(document, retention, quota, control),
             AccountedHandoff::ReadonlyGaussianGroupStorage => photocraft_doc::accounted_document::AccountedDocument::from_owned_readonly_gaussian_group(document, retention, quota, control),
             AccountedHandoff::ReadonlyFlatCompositeStorage => photocraft_doc::accounted_document::AccountedDocument::from_owned_readonly_flat_composite(document, retention, quota, control),
         }.map_err(error)
@@ -165,6 +176,9 @@ mod threshold_storage_tests;
 #[cfg(test)]
 #[path = "owned_document/translated_storage_tests.rs"]
 mod translated_storage_tests;
+#[cfg(test)]
+#[path = "owned_document/assigned_point_storage_tests.rs"]
+mod assigned_point_storage_tests;
 pub(crate) fn error(error: BackingError) -> FormatError {
     if error == BackingError::Cancelled { FormatError::Cancelled } else { FormatError::Io(std::io::Error::other(error)) }
 }

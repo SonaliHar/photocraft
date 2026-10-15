@@ -1687,6 +1687,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
     authorized_font: Option<&PreparedRuntimeFont<'_>>,
 ) -> Result<(ImportResult, usize), IoError> {
     let admission::AdmissionDomains {
+        owned_assigned_box_domain,
         general_separable_domain,
         legacy_separable_domain,
         component_separable_domain,
@@ -2656,6 +2657,11 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         let mut adapter=SharedPreparation{shared,failure:None};
         let checked=photocraft_compose::backed_gaussian_group::LeasedGaussianGroupPipeline::new_budgeted(&doc,ctl,&mut adapter,source_lease);
         if let Err(error)=checked {return Err(adapter.failure.map(accounting_error).unwrap_or_else(||if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("XCF staged Gaussian group rendering consumer: {error}"))}))}
+    } else if P::requires_budgeted_assigned_box_preparation(owned_assigned_box_domain) {
+        let (shared,source_lease)=preparation.ok_or_else(||IoError::Unsupported("assigned Box requires accounting".into()))?;
+        let mut adapter=SharedPreparation{shared,failure:None};
+        let checked=photocraft_compose::backed_neighborhood_context::LeasedStockNeighborhoodPipeline::new_assigned_box_budgeted(&doc,ctl,&mut adapter,source_lease);
+        if let Err(error)=checked{return Err(adapter.failure.map(accounting_error).unwrap_or_else(||if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("assigned Box preparation: {error}"))}))}
     } else if P::requires_budgeted_neighborhood_preparation(owned_neighborhood_domain.is_some()) {
         let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("staged neighborhood scene requires transaction accounting".into()))?;
         let mut adapter = SharedPreparation { shared, failure: None };

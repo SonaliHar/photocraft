@@ -3,10 +3,13 @@ use super::*;
 use crate::xcf_filters::NeighborhoodDomain;
 #[path = "staged_neighborhood/original_gaussian.rs"]
 mod original_gaussian;
+#[path="staged_neighborhood/assigned_box.rs"]
+mod assigned_box;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::xcf_import) enum NeighborhoodSourceFamily {
     BoxOriginal,
     BoxFinite,
+    BoxAssignedF32,
     MedianOriginal,
     MedianFinite,
     MedianGray,
@@ -23,6 +26,7 @@ impl NeighborhoodSourceFamily {
         }
         let finite = matches!((file.sample, file.precision), (Sample::F32, 650) | (Sample::F64, 750));
         Some(match effect.operation.as_str() {
+            "gegl:box-blur" if file.sample==Sample::F32 && file.precision==650 && !file.icc.is_empty() => Self::BoxAssignedF32,
             "gegl:box-blur" if finite => Self::BoxFinite,
             "gegl:box-blur" => Self::BoxOriginal,
             "gegl:median-blur" if file.model == Model::Gray => Self::MedianGray,
@@ -42,7 +46,7 @@ impl NeighborhoodSourceFamily {
     pub(super) fn domain(self) -> NeighborhoodDomain {
         match self {
             Self::BoxOriginal => NeighborhoodDomain::BoxOriginal,
-            Self::BoxFinite => NeighborhoodDomain::BoxFinite,
+            Self::BoxFinite | Self::BoxAssignedF32 => NeighborhoodDomain::BoxFinite,
             Self::MedianOriginal => NeighborhoodDomain::MedianOriginal,
             Self::MedianFinite => NeighborhoodDomain::MedianFinite,
             Self::MedianGray => NeighborhoodDomain::MedianGray,
@@ -57,6 +61,7 @@ impl NeighborhoodSourceFamily {
         match self {
             Self::BoxOriginal => domains.opaque_box_domain = true,
             Self::BoxFinite => domains.finite_box_domain = true,
+            Self::BoxAssignedF32 => { domains.finite_box_domain=true; domains.owned_assigned_box_domain=true; },
             Self::MedianOriginal => domains.opaque_median_domain = true,
             Self::MedianFinite => domains.finite_median_domain = true,
             Self::MedianGray => domains.gray_median_domain = true,
@@ -76,6 +81,7 @@ impl NeighborhoodSourceFamily {
             return Ok(false);
         }
         match self {
+            Self::BoxAssignedF32 => assigned_box::qualify(file,ctl,budget),
             Self::BoxOriginal => residual::opaque_original(file, "gegl:box-blur", ctl, budget),
             Self::MedianOriginal => residual::opaque_original(file, "gegl:median-blur", ctl, budget),
             Self::MotionOriginal => residual::opaque_original(file, "gegl:motion-blur-linear", ctl, budget),

@@ -13,6 +13,10 @@ pub(super) enum EditDomain {
 }
 
 pub(super) fn validate_owner(owner: &AccountedDocument, edit: AccountedEdit<'_>, c: &ReadControl<'_>) -> Result<EditDomain, BackingError> {
+    // Assigned Point custody grants no generic edit or history/no-op route.
+    if owner.is_readonly_assigned_point_storage() {
+        return Err(BackingError::Unsupported);
+    }
     // The separate compound-only plan validates actual class/current metadata
     // before generic no-op/history admission, including Normal-surrogate modes.
     if owner.is_readonly_flat_composite_storage() {

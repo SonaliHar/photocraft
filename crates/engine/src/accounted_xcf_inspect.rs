@@ -98,6 +98,8 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
         owner.validate_readonly_threshold_storage(control)?;
     } else if owner.is_readonly_gaussian_group_storage() {
         owner.validate_gaussian_group_storage(control)?;
+    } else if owner.is_readonly_assigned_point_storage() {
+        owner.validate_readonly_assigned_point_storage(control)?;
     } else if owner.is_readonly_point_storage() {
         owner.validate_readonly_point_storage(control)?;
     } else {
@@ -105,7 +107,7 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
     }
     let doc = owner.document();
     let state = doc.xcf_state.as_ref().ok_or(BackingError::Integrity)?;
-    let point = owner.is_readonly_point_storage();
+    let point = owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage();
     let gaussian_group=owner.is_readonly_gaussian_group_storage();
     // Actual class/census already enforces these; repeat the small shape before
     // deriving response counts so future class expansion cannot widen this API.

@@ -27,8 +27,9 @@ fn backed_display_image_with_owner(
 ) -> Result<(egui::ColorImage, QuotaLease), String> {
     let render = || -> Result<_, String> {
         let builtin_basis = owner
-            .is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage() || owner.is_readonly_gaussian_group_storage() || owner.is_readonly_flat_composite_storage());
-        // Current bytes alone supply interpretation; import provenance is inert.
+            .is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage() || owner.is_readonly_gaussian_group_storage() || owner.is_readonly_flat_composite_storage());
+        // Ordinary profiles require explicit current ICC interpretation. Typed
+        // runtime classes validate their own current/source relation below.
         if !builtin_basis && !matches!(doc.working_profile_interpretation, WorkingProfileInterpretation::Icc) {
             return Err("backed canvas requires explicit current ICC".into());
         }
@@ -61,9 +62,11 @@ fn backed_display_image_with_owner(
         } else {
             None
         };
-        // Explicit runtime classes use an actual nonlinear builtin basis. Their
+        // Explicit implicit-profile runtime classes use a nonlinear builtin basis. Their
         // compositors validate current effective bytes and the implicit marker;
         // no source epoch or supplied profile name substitutes for that check.
+        // Assigned Point dispatch ignores this placeholder and owns its paid
+        // original-to-current profile binding; it never uses this builtin.
         // The ordinary ICC parser and its existing envelope stay unchanged.
         let mut profile_lease = None;
         let parsed = if builtin_basis || analytic_profile.is_some() {
@@ -286,3 +289,7 @@ mod alpha_flat_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_lch_flat_tests.rs"]
 mod lch_flat_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "canvas_backed_assigned_box_tests.rs"]
+mod assigned_box_tests;

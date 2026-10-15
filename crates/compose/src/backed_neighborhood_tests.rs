@@ -229,3 +229,6 @@ mod disabled;
 
 #[path = "backed_original_gaussian_tests.rs"]
 mod original_gaussian;
+
+#[path = "backed_neighborhood_assigned_tests.rs"]
+mod assigned;

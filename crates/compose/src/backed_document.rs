@@ -74,8 +74,9 @@ impl<'a> PreparedBackedDocument<'a> {
         Self::new_internal(doc, profile, limits, control, None, None)
     }
     /// Qualified resident masks and closed imports require the actual paid
-    /// model/source guard. Point storage takes an explicit nonlinear builtin
-    /// basis; its context separately binds the actual current effective profile.
+    /// model/source guard. Implicit Point storage takes a nonlinear builtin
+    /// basis; assigned Point storage binds both actual encoded profile roles
+    /// internally and ignores the supplied profile.
     /// This does not extend ordinary bare-Document admission.
     pub fn new_accounted(
         owner: &'a photocraft_doc::accounted_document::AccountedDocument,
@@ -115,6 +116,13 @@ impl<'a> PreparedBackedDocument<'a> {
             let index = owner.quota().reserve(QuotaKind::Index, std::mem::size_of::<Self>() as u64).map_err(BackedNormalError::Quota)?;
             control.check(1).map_err(BackedNormalError::Backing)?;
             return Ok(Self { stack: DocumentCompositor::GaussianGroup(prepared), limits, quota: owner.quota().clone(), bounds: owner.document().bounds(), _index: index });
+        }
+        if owner.is_readonly_assigned_point_storage() {
+            let prepared = crate::backed_neighborhood_document::PreparedBackedNeighborhoodDocument::new_assigned_box(owner, limits, control)?;
+            let index = owner.quota().reserve(QuotaKind::Index, std::mem::size_of::<Self>() as u64).map_err(BackedNormalError::Quota)?;
+            let bounds = prepared.bounds();
+            control.check(1).map_err(BackedNormalError::Backing)?;
+            return Ok(Self { stack: DocumentCompositor::Neighborhood(prepared), limits, quota: owner.quota().clone(), bounds, _index: index });
         }
         if owner.is_readonly_point_storage() {
             if crate::backed_neighborhood_context::is_candidate(owner.document(), control).map_err(BackedNormalError::Backing)? {

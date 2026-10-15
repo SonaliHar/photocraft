@@ -210,7 +210,12 @@ pub(super) fn mask_census(masks: &Vec<FilterMask>, census: &mut CanonicalCensus<
     }
     Ok(())
 }
-fn shape(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>) -> Result<(), BackingError> {
+#[derive(Clone, Copy)]
+enum PointProfileStorage {
+    Implicit,
+    Assigned,
+}
+fn shape(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>, policy: PointProfileStorage) -> Result<(), BackingError> {
     control.check(1)?;
     if doc.layers.len() != 1
         || !matches!(doc.mode, crate::ColorMode::Rgb | crate::ColorMode::Grayscale)
@@ -244,9 +249,24 @@ fn shape(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>) -> Res
         || state.selection.selected.len() > 1
         || !state.selection.selected_paths.is_empty()
         || state.selection.mask_target.is_some()
-        || source.original_icc.is_some()
+        || matches!(policy, PointProfileStorage::Implicit) && source.original_icc.is_some()
     {
         return refused();
+    }
+    if matches!(policy, PointProfileStorage::Assigned) {
+        // Custody only: neither ICC parsing nor original/current equivalence is
+        // established here. Both independent owners are priced by the census.
+        let bounded = |profile: Option<&Arc<Vec<u8>>>| profile.is_some_and(|p| !p.is_empty() && p.len() <= 16 * 1024 * 1024);
+        if doc.mode != crate::ColorMode::Rgb
+            || doc.depth != crate::SampleType::F32
+            || doc.sample_encoding != Some(crate::SampleEncoding::NonlinearProfile)
+            || source.source_precision != 650
+            || doc.working_profile_interpretation != crate::WorkingProfileInterpretation::Icc
+            || !bounded(doc.icc_profile.as_ref())
+            || !bounded(source.original_icc.as_ref())
+        {
+            return refused();
+        }
     }
     let layer = doc.layers.first().ok_or(BackingError::Integrity)?;
     let LayerContent::BackedRaster(backed) = &layer.content else { return refused() };
@@ -300,7 +320,9 @@ fn shape(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>) -> Res
                     found = true;
                 }
             }
-            if !found { return Err(BackingError::Integrity); }
+            if !found {
+                return Err(BackingError::Integrity);
+            }
         }
     }
     if mask_refs != state.filter_masks.len() {
@@ -328,13 +350,17 @@ fn shape(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>) -> Res
         }
         for previous in state.filter_masks.get(..index).ok_or(BackingError::Length)? {
             control.check(1)?;
-            if previous.id == mask.id { return Err(BackingError::Integrity); }
+            if previous.id == mask.id {
+                return Err(BackingError::Integrity);
+            }
         }
         let mut metadata = None;
         for item in &state.items {
             control.check(1)?;
             if item.item == ItemRef::Mask(mask.id) {
-                if metadata.is_some() { return Err(BackingError::Integrity); }
+                if metadata.is_some() {
+                    return Err(BackingError::Integrity);
+                }
                 metadata = Some(item);
             }
         }
@@ -370,11 +396,20 @@ fn shape(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>) -> Res
     Ok(())
 }
 pub(super) fn measured(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
-    shape(doc, quota, control)?;
+    shape(doc, quota, control, PointProfileStorage::Implicit)?;
     // Private parent seam selects this module's mask census, with every other
     // original full capacity/payload bound and accounting rule unchanged.
     point_readonly_census(doc, quota, control)
 }
+fn measured_assigned(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
+    shape(doc, quota, control, PointProfileStorage::Assigned)?;
+    point_readonly_census(doc, quota, control)
+}
+fn measured_owner(owner: &AccountedDocument, doc: &Document, control: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
+    if owner.is_readonly_assigned_point_storage() { measured_assigned(doc, owner.quota(), control) } else { measured(doc, owner.quota(), control) }
+}
+#[path = "accounted_point_readonly/assigned.rs"]
+mod assigned;
 impl AccountedDocument {
     /// Prospective additional owner metadata only. All existing model/source/
     /// native/default/map allocations must already be genuinely retained on q.
@@ -486,7 +521,7 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, control: &ReadContr
     if name.len() > 4096 {
         return Err(BackingError::Length);
     }
-    let logical = measured(owner.document(), owner.quota(), control)?;
+    let logical = measured_owner(owner, owner.document(), control)?;
     if imported_edits::names_equal(&owner.document().name, name, control)? {
         control.check(1)?;
         return Ok(owner.clone());
@@ -501,6 +536,9 @@ pub(super) fn current_copy(
     kind: CopyKind<'_>,
     control: &ReadControl<'_>,
 ) -> Result<AccountedDocument, BackingError> {
+    if owner.is_readonly_assigned_point_storage() && !matches!(kind, CopyKind::Rename(_)) {
+        return refused();
+    }
     let replacement_name_bytes = match kind {
         CopyKind::Rename(name) => name.len() as u64,
         CopyKind::LayerName(patch) => (patch.name.len() as u64).checked_mul(2).ok_or(BackingError::Length)?,
@@ -566,7 +604,7 @@ pub(super) fn current_copy(
         CopyKind::Remove(plan) => filter_remove::apply(&mut document, plan, control)?,
     }
     let actual =
-        measured(&document, owner.quota(), control)?.index.checked_add(std::mem::size_of::<OriginalRetention>() as u64 + 128).ok_or(BackingError::Length)?;
+        measured_owner(owner, &document, control)?.index.checked_add(std::mem::size_of::<OriginalRetention>() as u64 + 128).ok_or(BackingError::Length)?;
     if actual > envelope {
         return Err(BackingError::Allocation);
     }
@@ -575,7 +613,7 @@ pub(super) fn current_copy(
     let original = owner.owner.retention.downcast_ref::<OriginalRetention>().map_or_else(|| owner.clone(), |r| r.original.clone());
     Ok(AccountedDocument {
         owner: Arc::new(ModelOwner {
-            _storage_class: StorageClass::ReadonlyPoint,
+            _storage_class: owner.owner._storage_class,
             document,
             _selection: None,
             _selection_view: None,

@@ -16,7 +16,8 @@ fn invalid(message: &str) -> EngineError {
 }
 /// A routing hint only; the actual L1/current renderer gates remain mandatory.
 pub(super) fn candidate(owner: &AccountedDocument) -> bool {
-    !owner.is_readonly_gaussian_group_storage()
+    !owner.is_readonly_assigned_point_storage()
+        && !owner.is_readonly_gaussian_group_storage()
         && !owner.is_readonly_point_storage()
         && !owner.is_readonly_threshold_storage()
         && !owner.is_readonly_threshold_alpha_storage()
