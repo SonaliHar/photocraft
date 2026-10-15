@@ -510,7 +510,7 @@ fn main() -> eframe::Result {
             // save never queues behind one of its requests.
             if let Some(backend) = cloud::service(cc.egui_ctx.clone()) {
                 app.cloud.connect(backend);
-                app.share.connect(collabcraft_share::CollabCraft::from_fn(cloud::client));
+                app.share.connect(collabcraft_share::CollabCraft::from_fn(cloud::client).for_app("photocraft"));
             }
             // Tablet pressure/tilt/eraser (winit drops them): the macOS monitor and the X11 reader
             // write into the stylus feed. The monitor goes in here, not before the event loop:

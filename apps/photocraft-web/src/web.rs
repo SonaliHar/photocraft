@@ -100,7 +100,7 @@ pub fn start() {
                     // cookie the service set at sign-in; no device flow, no token file.
                     app.cloud.connect(crate::cloud::Service::new(cc.egui_ctx.clone()));
                     if let Some(share) = collabcraft_share::CollabCraft::from_env() {
-                        app.share.connect(share);
+                        app.share.connect(share.for_app("photocraft"));
                     }
                     photocraft_ui_egui::cloud::start(&mut app);
                     // `?file=<id>` is the deep link CollabCraft passes when opening a document from
