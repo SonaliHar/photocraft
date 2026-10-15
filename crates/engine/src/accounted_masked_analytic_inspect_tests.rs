@@ -105,7 +105,7 @@ fn query_failures_refund_and_do_not_open_filter_or_edit_routes() {
     assert!(prepare(&session, &Value::Null, &ctl()).is_err());
     drop(blocker);
     assert!(crate::accounted_filter_inspect::prepare(&session, &json!({"filterId":"1"}), &ctl()).is_err());
-    assert!(session.execute("layer.setProps", json!({"name":"not enabled by inspection"})).is_err());
+    assert!(session.execute("layer.setProps", json!({"blend":"Multiply"})).is_err());
     assert!(session.active().unwrap().doc.shares_state(&before));
     assert!(session.active().unwrap().history.shares_accounted_history(&history));
     assert_eq!(session.active().unwrap().revision, revision);

@@ -12,3 +12,9 @@ pub(super) fn prepare(owner: &AccountedDocument, control: &ReadControl<'_>) -> R
     let binding = PreparedAssignedCurrentProfile::prepare(owner, Default::default(), control).map_err(|e| e.to_string())?;
     Ok(PaidProfile { binding })
 }
+
+pub(super) fn prepare_isolated_normal_group(owner: &AccountedDocument, control: &ReadControl<'_>) -> Result<PaidProfile, String> {
+    owner.validate_assigned_isolated_normal_group_storage(control).map_err(|e| e.to_string())?;
+    let binding = PreparedAssignedCurrentProfile::prepare_isolated_normal_group(owner, Default::default(), control).map_err(|e| e.to_string())?;
+    Ok(PaidProfile { binding })
+}

@@ -50,10 +50,14 @@ fn backed_display_image_with_owner(
             .map_err(|_| BackingError::Work)
         };
         let control = ReadControl { interrupt, work: &charge };
-        let analytic_profile = if let Some(owner) = owner
-            && photocraft_engine::accounted_native_open::is_current_analytic_geometry_candidate(doc, &control).map_err(|e| e.to_string())?
-        {
-            Some(analytic_profile::prepare(owner, &control)?)
+        let analytic_profile = if let Some(owner) = owner {
+            if photocraft_engine::accounted_native_open::is_current_isolated_normal_group_candidate(doc, &control).map_err(|e| e.to_string())? {
+                Some(analytic_profile::prepare_isolated_normal_group(owner, &control)?)
+            } else if photocraft_engine::accounted_native_open::is_current_analytic_geometry_candidate(doc, &control).map_err(|e| e.to_string())? {
+                Some(analytic_profile::prepare(owner, &control)?)
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -107,7 +111,9 @@ fn backed_display_image_with_owner(
         let limits = photocraft_compose::backed_normal::NormalBandLimits::default();
         // Only the typed owner establishes retained model/mask/source accounting.
         // Errors from this route are authoritative; never retry a resident route.
-        let prepared = if let Some(owner) = owner && let Some(profile) = &analytic_profile {
+        let prepared = if let Some(owner) = owner
+            && let Some(profile) = &analytic_profile
+        {
             photocraft_compose::backed_document::PreparedBackedDocument::new_accounted_with_assigned_profile(owner, &profile.binding, limits, &control)
         } else if let Some(owner) = owner {
             photocraft_compose::backed_document::PreparedBackedDocument::new_accounted(owner, profile, limits, &control)
@@ -209,6 +215,10 @@ pub(crate) mod analytic_geometry_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_analytic_geometry_layer_props_tests.rs"]
 mod analytic_geometry_layer_props_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "canvas_backed_isolated_normal_group_tests.rs"]
+mod isolated_normal_group_tests;
 
 #[cfg(test)]
 fn backed_display_image(

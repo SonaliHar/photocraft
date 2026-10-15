@@ -6,6 +6,8 @@ use photocraft_raster::backing::{BackingError, ReadControl};
 
 #[path = "accounted_xcf_open/analytic_geometry.rs"]
 pub(crate) mod analytic_geometry;
+#[path = "accounted_xcf_open/isolated_normal_group.rs"]
+pub(crate) mod isolated_normal_group;
 
 struct ImportedModel<'a> {
     document: &'a photocraft_doc::accounted_document::AccountedDocument,
@@ -45,6 +47,9 @@ impl Session {
         source_path: Option<&str>,
         control: &ReadControl<'_>,
     ) -> Result<usize> {
+        if crate::accounted_native_open::is_current_isolated_normal_group_candidate(imported.document().document(), control)? {
+            return Err(BackingError::Unsupported.into());
+        }
         self.add_owned_xcf_model(
             ImportedModel {
                 document: imported.document(),

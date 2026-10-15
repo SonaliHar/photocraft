@@ -18,8 +18,11 @@ impl AccountedDocument {
         imported_edits::validate_name(name, control)?;
         // Dispatch only this file-identity copy; generic selection and layer
         // edits retain the original strict unmasked validator.
+        let isolated_group = self.document().layers.len() == 2 && self.document().layers.get(1).is_some_and(|layer| matches!(layer.content, LayerContent::Group(_)));
         let masked_normal = self.document().layers.len() == 2 && self.document().layers.get(1).is_some_and(|layer| layer.mask.is_some());
-        if masked_normal {
+        if isolated_group {
+            imported_isolated_group::validate(self.document(), self.quota(), control)?;
+        } else if masked_normal {
             imported_selection::validate_assigned_geometry(self.document(), self.quota(), control)?;
         } else {
             imported_selection::validate(self.document(), self.quota(), control)?;
@@ -41,7 +44,9 @@ impl AccountedDocument {
         let mut payload_lease = self.quota().reserve(QuotaKind::Resident, payload_envelope).map_err(|_| BackingError::Quota)?;
         control.check(logical.total()?)?;
         let view = self.owner._selection.as_ref().map(|guard| guard.clone_view(control)).transpose()?;
-        let document = if masked_normal {
+        let document = if isolated_group {
+            imported_selection::copy_isolated_group(self.document(), self.quota(), control)?
+        } else if masked_normal {
             imported_selection::copy_masked_normal(self.document(), self.quota(), control)?
         } else {
             imported_selection::copy_document(self.document(), control)?

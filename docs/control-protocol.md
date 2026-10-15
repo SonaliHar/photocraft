@@ -1548,3 +1548,17 @@ Current and staged profile/canvas validation precede one undo step; unchanged
 requests preserve redo. Disabled masks still undergo complete validation.
 The command remains synchronous, rejects coalescing and has no journal entry.
 Headless nonwaiting requests retain their existing synchronous-dispatch refusal.
+
+The explicit keep-current owned route also retains the existing isolated Normal
+group family: one group with two editable raster children above a backdrop,
+RGB/Gray U16/F32/F64 nonlinear assigned ICC, and an optional group mask. The
+original 17-by-13 source predicate includes hidden-group and disabled-mask
+controls. No group projection replaces its children. Source-selected staging
+and consuming promotion retain the three actual native leaf owners and mask
+receipts. Strict source/native handoffs validate the exact original/current
+profile relation and complete canvas before publication, including hidden and
+disabled content. Paid title changes, native continuation and `xcf.inspect`
+preserve the hierarchy and its four or five canonical items. Group rendering
+reuses the existing isolated Normal equations with paid band overlap and caller
+cancellation. Other group modes, deeper hierarchy and general group editing
+remain outside this owned family; tests and behavioral acceptance are pending.

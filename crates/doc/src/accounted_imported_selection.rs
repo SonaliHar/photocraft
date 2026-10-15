@@ -370,6 +370,9 @@ fn state(s: &XcfState, c: &ReadControl<'_>) -> Result<XcfState, BackingError> {
 }
 
 fn layer(v: &crate::Layer, c: &ReadControl<'_>) -> Result<crate::Layer, BackingError> {
+    layer_with_group(v, c, false)
+}
+fn layer_with_group(v: &crate::Layer, c: &ReadControl<'_>, isolated: bool) -> Result<crate::Layer, BackingError> {
     use crate::{Effects, Layer};
     let Layer {
         indexed_source: _,
@@ -396,7 +399,15 @@ fn layer(v: &crate::Layer, c: &ReadControl<'_>) -> Result<crate::Layer, BackingE
         advanced,
         video: _,
     } = v;
-    let LayerContent::BackedRaster(backed) = content else { return Err(BackingError::Unsupported) };
+    let content = match content {
+        LayerContent::BackedRaster(backed) => LayerContent::BackedRaster(backed.clone()),
+        LayerContent::Group(group) if isolated && group.children.len() == 2 && group.artboard.is_none() => {
+            let mut children = vector(group.children.len())?;
+            for child in &group.children { c.check(1)?; children.push(layer(child, c)?); }
+            LayerContent::Group(crate::Group { children, expanded: group.expanded, artboard: None })
+        }
+        _ => return Err(BackingError::Unsupported),
+    };
     Ok(Layer {
         indexed_source: None,
         import_compositing: *import_compositing,
@@ -412,7 +423,7 @@ fn layer(v: &crate::Layer, c: &ReadControl<'_>) -> Result<crate::Layer, BackingE
         vector_mask: None,
         effects: Effects { enabled: effects.enabled, items: Vec::new(), psd_raw: effects.psd_raw.clone(), reference: effects.reference },
         label: *label,
-        content: LayerContent::BackedRaster(backed.clone()),
+        content,
         psd_blocks: copied(psd_blocks, c)?,
         psd_id: *psd_id,
         fill_cache: None,
@@ -442,13 +453,22 @@ fn physical(v: &crate::physical_resolution::PhysicalResolution, c: &ReadControl<
     Ok(PhysicalResolution { x_dpi: v.x_dpi, y_dpi: v.y_dpi, unit })
 }
 pub(super) fn copy_document(doc: &Document, c: &ReadControl<'_>) -> Result<Document, BackingError> {
+    copy_document_inner(doc, c, false)
+}
+pub(super) fn copy_isolated_group(doc: &Document, quota: &BackingQuota, c: &ReadControl<'_>) -> Result<Document, BackingError> {
+    super::imported_isolated_group::validate(doc, quota, c)?;
+    copy_document_inner(doc, c, true)
+}
+fn copy_document_inner(doc: &Document, c: &ReadControl<'_>, isolated: bool) -> Result<Document, BackingError> {
     // Called only after the complete selection-specific census and reservations.
     // Every owned string/vector copied below is fallible and polls per record or
     // <=32KiB text chunk. Immutable blobs/backings keep their original guard.
     let mut new_layers = vector(doc.layers.len())?;
     for value in &doc.layers {
         c.check(1)?;
-        new_layers.push(layer(value, c)?);
+        let mut copied = if isolated { layer_with_group(value, c, true)? } else { layer(value, c)? };
+        if isolated { c.check(std::mem::size_of::<crate::LayerMask>() as u64)?; copied.mask = value.mask.clone(); }
+        new_layers.push(copied);
     }
     let mut text = vector(doc.metadata.text.len())?;
     for (key, value) in &doc.metadata.text {

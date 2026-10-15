@@ -5,6 +5,14 @@ use super::*;
 pub(super) const EPOCH: &str = "own-accounted-isolated-normal-group-v1";
 
 pub(super) fn qualifies(file: &XcfFile, ctl: &Interrupt<'_>) -> Result<bool, IoError> {
+    qualifies_with(file, ctl, None)
+}
+
+pub(super) fn qualifies_with<P: ExactParsedPlane>(
+    file: &XcfFile<P>,
+    ctl: &Interrupt<'_>,
+    budget: Option<&photocraft_xcf::Budget<'_>>,
+) -> Result<bool, IoError> {
     // GIMP writes its minimum required XCF version: these authored masked
     // groups are v13 and the otherwise identical no-mask controls are v12.
     let source_version = if file.layers.first().is_some_and(|group| group.mask.is_some()) { 13 } else { 12 };
@@ -18,7 +26,7 @@ pub(super) fn qualifies(file: &XcfFile, ctl: &Interrupt<'_>) -> Result<bool, IoE
         || !file.channels.is_empty()
         || !file.paths.is_empty()
         || !file.palette.is_empty()
-        || !qualified_analytic_normal_icc(file)
+        || !super::staged_accounted_group::profile(file, ctl, budget)?
     {
         return Ok(false);
     }
@@ -38,7 +46,7 @@ pub(super) fn qualifies(file: &XcfFile, ctl: &Interrupt<'_>) -> Result<bool, IoE
             || d.floating_attachment.is_some()
             // The parser validates and skips the optional group hierarchy.
             // Only leaf planes are authoritative editable pixel storage.
-            || if d.group { d.plane.is_some() } else { !plane_matches(d, file.sample, channels) }
+            || if d.group { d.plane.is_some() } else { !plane_matches_with(d, file.sample, channels, ctl, budget)? }
         {
             return Ok(false);
         }
@@ -69,13 +77,55 @@ pub(super) fn qualifies(file: &XcfFile, ctl: &Interrupt<'_>) -> Result<bool, IoE
                     || mask.link.is_some()
                     || mask.transform.is_some()
                     || mask.floating_attachment.is_some()
-                    || !plane_matches(mask, file.sample, 1))
+                    || !plane_matches_with(mask, file.sample, 1, ctl, budget)?)
             {
                 return Ok(false);
             }
         }
     }
     Ok(true)
+}
+
+// The exact old plane shape/unit predicate, using bounded native reads for both
+// eager and staged storage. No conversion or group projection is substituted.
+fn plane_matches_with<P: ExactParsedPlane>(
+    d: &Drawable<P>,
+    sample: Sample,
+    channels: usize,
+    ctl: &Interrupt<'_>,
+    budget: Option<&photocraft_xcf::Budget<'_>>,
+) -> Result<bool, IoError> {
+    let Some(plane) = d.plane.as_ref() else { return Ok(false) };
+    let bytes = if sample == Sample::F16 { 4 } else { sample.source_bytes() };
+    let expected = u64::from(d.width).checked_mul(u64::from(d.height)).and_then(|n| n.checked_mul(channels as u64)).and_then(|n| n.checked_mul(bytes as u64));
+    let desc = plane.descriptor();
+    if desc.sample != if sample == Sample::F16 { Sample::F32 } else { sample }
+        || desc.channels != channels
+        || desc.width != d.width
+        || desc.height != d.height
+        || plane.native_byte_len() != expected
+    {
+        return Ok(false);
+    }
+    let mut valid = true;
+    plane.visit_native(ctl, &mut |block| {
+        if let Some(budget) = budget {
+            super::staged_accounted_group::pay(budget, block.len() as u64)?;
+        }
+        for raw in block.chunks_exact(bytes) {
+            if matches!(sample, Sample::U8 | Sample::U16 | Sample::U32) {
+                continue;
+            }
+            let value = if sample == Sample::F64 {
+                f64::from_ne_bytes(raw.try_into().map_err(|_| IoError::Unsupported("group native F64 word".into()))?)
+            } else {
+                f64::from(f32::from_ne_bytes(raw.try_into().map_err(|_| IoError::Unsupported("group native F32 word".into()))?))
+            };
+            valid &= value.is_finite() && (0.0..=1.0).contains(&value) && (sample != Sample::F16 || exact_half_unit_f32(value as f32));
+        }
+        Ok(())
+    })?;
+    Ok(valid)
 }
 
 #[cfg(all(test, feature = "corpus"))]

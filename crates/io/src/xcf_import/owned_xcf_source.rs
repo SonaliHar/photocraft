@@ -22,6 +22,7 @@ fn backing(error: BackingError) -> IoError {
 /// Actual typed owner returned by the selected original-source family. The enum
 /// itself is not a persisted admission flag or a source/render authority.
 pub enum OwnedXcfImport {
+    IsolatedNormalGroup(owned_isolated_normal_group_source::OwnedIsolatedNormalGroupXcfImport),
     Plain(owned_plain_source::OwnedPlainXcfImport),
     AnalyticGeometry(owned_analytic_geometry_source::OwnedAnalyticGeometryXcfImport),
     Point(owned_point_source::OwnedPointXcfImport),
@@ -36,6 +37,7 @@ impl std::fmt::Debug for OwnedXcfImport {
 impl OwnedXcfImport {
     pub fn document(&self) -> &photocraft_doc::accounted_document::AccountedDocument {
         match self {
+            Self::IsolatedNormalGroup(v) => v.document(),
             Self::AnalyticGeometry(v) => v.document(),
             Self::Plain(v) => v.document(),
             Self::Point(v) => v.document(),
@@ -45,6 +47,7 @@ impl OwnedXcfImport {
     }
     pub fn warnings(&self) -> &[String] {
         match self {
+            Self::IsolatedNormalGroup(v) => v.warnings(),
             Self::AnalyticGeometry(v) => v.warnings(),
             Self::Plain(v) => v.warnings(),
             Self::Point(v) => v.warnings(),
@@ -54,6 +57,7 @@ impl OwnedXcfImport {
     }
     pub fn origin(&self) -> ImportOrigin {
         match self {
+            Self::IsolatedNormalGroup(v) => v.origin(),
             Self::AnalyticGeometry(v) => v.origin(),
             Self::Plain(v) => v.origin(),
             Self::Point(v) => v.origin(),
@@ -63,6 +67,7 @@ impl OwnedXcfImport {
     }
     pub fn assessment(&self) -> Option<&crate::xcf_assessment::ImportAssessment> {
         match self {
+            Self::IsolatedNormalGroup(v) => v.assessment(),
             Self::AnalyticGeometry(v) => v.assessment(),
             Self::Plain(v) => v.assessment(),
             Self::Point(v) => v.assessment(),
@@ -72,6 +77,7 @@ impl OwnedXcfImport {
     }
     pub fn source_read_only(&self) -> bool {
         match self {
+            Self::IsolatedNormalGroup(v) => v.source_read_only(),
             Self::AnalyticGeometry(v) => v.source_read_only(),
             Self::Plain(v) => v.source_read_only(),
             Self::Point(v) => v.source_read_only(),
@@ -81,6 +87,7 @@ impl OwnedXcfImport {
     }
     pub fn preview_only(&self) -> bool {
         match self {
+            Self::IsolatedNormalGroup(v) => v.preview_only(),
             Self::AnalyticGeometry(v) => v.preview_only(),
             Self::Plain(v) => v.preview_only(),
             Self::Point(v) => v.preview_only(),
@@ -90,6 +97,7 @@ impl OwnedXcfImport {
     }
     pub fn into_accounted_document(self) -> photocraft_doc::accounted_document::AccountedDocument {
         match self {
+            Self::IsolatedNormalGroup(v) => v.into_accounted_document(),
             Self::AnalyticGeometry(v) => v.into_accounted_document(),
             Self::Plain(v) => v.into_accounted_document(),
             Self::Point(v) => v.into_accounted_document(),
@@ -144,6 +152,7 @@ pub fn import_owned_xcf_bytes_in_quota(
     let family = source.family();
     let context = Context { quota: quota.clone(), control };
     match family {
+        staged_selected_source::SelectedStagedFamily::IsolatedNormalGroup => owned_isolated_normal_group_source::promote_source(source, &budget, &effective, aggregate, &context, &mut preparation.hold, control.interrupt).map(OwnedXcfImport::IsolatedNormalGroup),
         staged_selected_source::SelectedStagedFamily::AnalyticGeometry => owned_analytic_geometry_source::promote_source(source, &budget, &effective, aggregate, &context, &mut preparation.hold, control.interrupt).map(OwnedXcfImport::AnalyticGeometry),
         staged_selected_source::SelectedStagedFamily::Point(_) | staged_selected_source::SelectedStagedFamily::ResidualPoint(_) | staged_selected_source::SelectedStagedFamily::ConfiguredPoint(_) | staged_selected_source::SelectedStagedFamily::PointStackEdits | staged_selected_source::SelectedStagedFamily::LegacyScalar(_) | staged_selected_source::SelectedStagedFamily::Neighborhood(_) => owned_point_source::promote_source(source, &budget, quota, control, &mut preparation.hold).map(OwnedXcfImport::Point),
         staged_selected_source::SelectedStagedFamily::Plain => {

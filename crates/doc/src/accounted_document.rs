@@ -43,6 +43,8 @@ mod document_name;
 mod constructor_requirements_tests;
 #[path = "accounted_imported_selection.rs"]
 mod imported_selection;
+#[path = "accounted_imported_isolated_group.rs"]
+mod imported_isolated_group;
 #[path = "accounted_document/plain_xcf_inspection.rs"]
 mod plain_xcf_inspection;
 

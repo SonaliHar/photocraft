@@ -32,6 +32,8 @@ mod admission;
 
 #[path = "xcf_import/accounted_group.rs"]
 mod accounted_group;
+#[path = "xcf_import/staged_accounted_group.rs"]
+mod staged_accounted_group;
 
 #[path = "xcf_import/unpremultiply.rs"]
 pub(crate) mod unpremultiply;
@@ -68,6 +70,9 @@ pub use owned_point_source::OwnedPointXcfImport;
 #[path="xcf_import/owned_analytic_geometry_source.rs"]
 mod owned_analytic_geometry_source;
 pub use owned_analytic_geometry_source::OwnedAnalyticGeometryXcfImport;
+#[path="xcf_import/owned_isolated_normal_group_source.rs"]
+mod owned_isolated_normal_group_source;
+pub use owned_isolated_normal_group_source::OwnedIsolatedNormalGroupXcfImport;
 pub use owned_histogram_threshold_source::OwnedHistogramThresholdXcfImport;
 pub use owned_threshold_source::{OwnedThresholdAlphaXcfImport, import_owned_staged_threshold_alpha_bytes_in_quota};
 

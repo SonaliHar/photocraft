@@ -96,10 +96,28 @@ fn parse_original(bytes: &[u8], owner: &AccountedDocument, work: &mut Work<'_, '
         .map_err(cms)?;
     Ok(ParsedOriginal { profile, peak: required.peak_resident_bytes, _fee: fee })
 }
+#[derive(Clone, Copy)]
+enum Admission {
+    Geometry,
+    IsolatedNormalGroup,
+}
 impl PreparedAssignedCurrentProfile {
     /// Exact current relation over genuine accounted storage. This method does
     /// not infer an original ICC from current bytes or substitute a builtin.
     pub fn prepare(owner: &AccountedDocument, limits: AssignedCurrentProfileLimits, control: &ReadControl<'_>) -> Result<Self, Error> {
+        Self::prepare_admitted(owner, limits, control, Admission::Geometry)
+    }
+    /// Exact same original/effective relation, separately admitted by the closed
+    /// editable isolated-Normal-group storage gate. No group projection is used.
+    pub fn prepare_isolated_normal_group(owner: &AccountedDocument, limits: AssignedCurrentProfileLimits, control: &ReadControl<'_>) -> Result<Self, Error> {
+        Self::prepare_admitted(owner, limits, control, Admission::IsolatedNormalGroup)
+    }
+    fn prepare_admitted(
+        owner: &AccountedDocument,
+        limits: AssignedCurrentProfileLimits,
+        control: &ReadControl<'_>,
+        admission: Admission,
+    ) -> Result<Self, Error> {
         let maximum = AssignedCurrentProfileLimits::default();
         if limits.max_encoded_bytes > maximum.max_encoded_bytes
             || limits.max_encoded_bytes < 132
@@ -110,7 +128,11 @@ impl PreparedAssignedCurrentProfile {
         }
         let mut work = Work { control, limits: limits.cms, used: 0 };
         work.charge(1)?;
-        owner.validate_assigned_analytic_geometry_storage(control).map_err(Error::Backing)?;
+        match admission {
+            Admission::Geometry => owner.validate_assigned_analytic_geometry_storage(control),
+            Admission::IsolatedNormalGroup => owner.validate_assigned_isolated_normal_group_storage(control),
+        }
+        .map_err(Error::Backing)?;
         let holder_fee = owner.quota().reserve(QuotaKind::Index, std::mem::size_of::<Self>() as u64).map_err(Error::Quota)?;
         let doc = owner.document();
         if doc.working_profile_interpretation != WorkingProfileInterpretation::Icc {

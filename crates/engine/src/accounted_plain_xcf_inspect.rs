@@ -180,7 +180,11 @@ impl<'a> Facts<'a> {
 pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> Result<OwnedFilterInspectReply> {
     let (offset, limit) = pagination(params, control)?;
     let owner = session.active().ok_or(EngineError::NoDocument)?.doc.accounted().ok_or(BackingError::Unsupported)?;
-    if crate::accounted_native_open::is_current_analytic_geometry_candidate(owner.document(), control)? {
+    if crate::accounted_native_open::is_current_isolated_normal_group_candidate(owner.document(), control)? {
+        // Canonical group rows use the same paginated metadata schema. This
+        // branch grants no profile, native-render or original-source authority.
+        owner.validate_assigned_isolated_normal_group_storage(control)?;
+    } else if crate::accounted_native_open::is_current_analytic_geometry_candidate(owner.document(), control)? {
         // This metadata-only branch requires the actual paid storage gate. A
         // malformed matching geometry never retries the broader plain gate.
         owner.validate_assigned_analytic_geometry_storage(control)?;

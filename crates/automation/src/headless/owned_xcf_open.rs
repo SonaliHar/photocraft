@@ -92,6 +92,9 @@ impl Headless {
         }
         control.check(1).map_err(photocraft_engine::EngineError::from)?;
         match &imported {
+            photocraft_io::OwnedXcfImport::IsolatedNormalGroup(value) => {
+                self.session.add_owned_isolated_normal_group_xcf_import(value, name, Some(path), control)?
+            }
             photocraft_io::OwnedXcfImport::AnalyticGeometry(value) => self.session.add_owned_analytic_geometry_xcf_import(value, name, Some(path), control)?,
             photocraft_io::OwnedXcfImport::Point(value) => self.session.add_owned_point_xcf_import(value, name, Some(path), control)?,
             photocraft_io::OwnedXcfImport::Plain(value) => self.session.add_owned_plain_xcf_import(value, name, Some(path), control)?,

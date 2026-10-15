@@ -38,6 +38,7 @@ trait StagePolicy {
 pub(super) enum SelectedStagedFamily {
     Plain,
     AnalyticGeometry,
+    IsolatedNormalGroup,
     ThresholdAlpha,
     Threshold,
     Point(crate::xcf_filters::PointReplaceFamily),
@@ -52,6 +53,7 @@ impl std::fmt::Debug for SelectedStagedFamily {
         f.write_str(match self {
             Self::Plain => "Plain",
             Self::AnalyticGeometry => "AnalyticGeometry",
+            Self::IsolatedNormalGroup => "IsolatedNormalGroup",
             Self::ThresholdAlpha => "ThresholdAlpha",
             Self::Threshold => "Threshold",
             Self::Point(_) => "Point",
@@ -75,6 +77,7 @@ impl StagePolicy for SourceSelectedPolicy {
     fn family<Q: ExactParsedPlane>(file: &XcfFile<Q>) -> SelectedStagedFamily {
         // Select exactly one old gate, before mapping or mutation. A refusal
         // never retries the other gate. This is not eligibility by name/epoch.
+        if staged_accounted_group::hint(file) { return SelectedStagedFamily::IsolatedNormalGroup; }
         if analytic_geometry::hint(file) { return SelectedStagedFamily::AnalyticGeometry; }
         if file.layers.len() == 1 && file.layers.first().is_some_and(|layer| !layer.effects.is_empty()) {
             // This chooses a strict validator only. admissions() must obtain
@@ -428,7 +431,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     }
     fn requires_budgeted_neighborhood_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn effective_profile(file: &XcfFile<Self>, space: photocraft_cms::ColorSpace, ce: photocraft_cms::xcf_color::Encoding, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<photocraft_cms::Profile, IoError> {
-        if P::family(file)==SelectedStagedFamily::AnalyticGeometry {
+        if matches!(P::family(file), SelectedStagedFamily::AnalyticGeometry | SelectedStagedFamily::IsolatedNormalGroup) {
             analytic_geometry::effective(file,space,ce,ctl,shared.ok_or_else(||IoError::Unsupported("geometry profile needs accounting".into()))?)
         }else{
             photocraft_cms::xcf_color::effective_profile(if file.icc.is_empty(){None}else{Some(&file.icc)},space,ce).map_err(|e|IoError::Unsupported(format!("XCF source profile/encoding: {e}")))
@@ -437,6 +440,10 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     fn admissions(file: &XcfFile<Self>, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<admission::AdmissionDomains, IoError> {
         let family = P::family(file);
         let geometry = family == SelectedStagedFamily::AnalyticGeometry;
+        let group = family == SelectedStagedFamily::IsolatedNormalGroup;
+        if group && !accounted_group::qualifies_with(file, ctl, Some(shared.ok_or_else(|| IoError::Unsupported("group requires persistent source accounting".into()))?))? {
+            return Err(IoError::Unsupported("staged group is outside its exact original source predicate".into()));
+        }
         if geometry && !analytic_geometry::qualify(file, ctl, shared.ok_or_else(|| IoError::Unsupported("geometry requires persistent source accounting".into()))?)? {
             return Err(IoError::Unsupported("staged geometry is outside exact original analytic geometry predicate".into()));
         }
@@ -482,7 +489,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             }
             Some(expected)
         } else { None };
-        if geometry || point.is_some() || owned_point.is_some() || neighborhood.is_some() {
+        if group || geometry || point.is_some() || owned_point.is_some() || neighborhood.is_some() {
             // Full original source, precision, geometry, mask flags and unit
             // domains were just checked by the unchanged classifier policy.
         } else if histogram {
@@ -513,6 +520,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             ctl.check().map_err(|_| IoError::Cancelled)?;
             if !threshold
                 && !geometry
+                && !group
                 && point.is_none()
                 && owned_point.is_none()
                 && neighborhood.is_none()
@@ -531,6 +539,10 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             {
                 return Err(unsupported(d, "staged endpoint unsupported owner family"));
             }
+            // The parser deliberately skips the non-authoritative group projection.
+            // The exact shared predicate above requires it absent; only leaves
+            // and the optional physical mask retain real staged storage.
+            if group && d.group { continue; }
             let p = d.plane.as_ref().ok_or_else(|| unsupported(d, "staged owner missing pixels"))?;
             if p.descriptor.width != d.width
                 || p.descriptor.height != d.height
@@ -551,6 +563,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             validate_drawable_alpha(d, point.is_some(), false, ctl, 0)?;
         }
         let mut domains = admission::AdmissionDomains {
+            accounted_group_domain: group,
             analytic_geometry_domain: geometry,
             normal_mask_domain: geometry,
             analytic_normal_domain: geometry,
@@ -696,6 +709,13 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         ctl: &Interrupt<'_>,
     ) -> Result<(Drawable<Self>, Layer, Option<IndexedSource>), IoError> {
         ctl.check().map_err(|_| IoError::Cancelled)?;
+        if owner.group {
+            if !P::SOURCE_SELECTED || owner.plane.is_some() {
+                return Err(IoError::Unsupported("staged group projection is not authoritative".into()));
+            }
+            let layer = Layer::group(&owner.name, Vec::new());
+            return Ok((owner, layer, None));
+        }
         let p = owner.plane.as_mut().ok_or_else(|| IoError::Unsupported("staged owner missing pixels".into()))?;
         let storage = std::mem::replace(&mut p.storage, Storage::Transferred);
         let Storage::Ready(surface) = storage else { return Err(IoError::Unsupported("staged Surface transferred twice".into())) };

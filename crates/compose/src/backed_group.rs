@@ -41,15 +41,52 @@ pub(super) struct PreparedGroup<'a> {
 }
 impl<'a> PreparedGroup<'a> {
     pub(super) fn new(owner: &'a AccountedDocument, profile: &Profile, limits: NormalBandLimits, control: &ReadControl<'_>) -> Result<Self, Error> {
+        Self::prepare(owner, profile, limits, control, false)
+    }
+    pub(super) fn new_assigned(
+        owner: &'a AccountedDocument,
+        binding: &crate::backed_assigned_current_profile::PreparedAssignedCurrentProfile,
+        limits: NormalBandLimits,
+        control: &ReadControl<'_>,
+    ) -> Result<Self, Error> {
+        control.check(1).map_err(Error::Backing)?;
+        if !binding.matches(owner, SampleEncoding::NonlinearProfile) {
+            return Err(Error::Invalid("isolated group profile binding mismatch"));
+        }
+        owner.validate_assigned_isolated_normal_group_storage(control).map_err(Error::Backing)?;
+        Self::prepare(owner, binding.profile(), limits, control, true)
+    }
+    fn prepare(owner: &'a AccountedDocument, profile: &Profile, limits: NormalBandLimits, control: &ReadControl<'_>, assigned: bool) -> Result<Self, Error> {
         let doc = owner.document();
         qualify(owner, control)?;
+        if limits.max_rows == 0 || limits.max_rows > 256 || limits.max_pixels == 0 || limits.max_pixels > 65536 {
+            return Err(Error::Invalid("group band limits"));
+        }
+        if assigned && (doc.size.width != 17 || doc.size.height != 13) {
+            return Err(Error::Unsupported("observed isolated group canvas"));
+        }
+        control.check(doc.icc_profile.as_ref().map_or(0, |v| v.len()) as u64 * 2).map_err(Error::Backing)?;
         if doc.icc_profile.as_deref().map(Vec::as_slice) != profile.encoded_bytes() || profile.channels() != doc.mode.color_channels() {
             return Err(Error::Invalid("group current ICC mismatch"));
         }
         let quota = owner.quota();
-        let index = quota.reserve(QuotaKind::Index, (6 * std::mem::size_of::<Leaf<'a>>() + std::mem::size_of::<Self>() + 64) as u64).map_err(Error::Quota)?;
+        let mut index =
+            quota.reserve(QuotaKind::Index, (6 * std::mem::size_of::<Leaf<'a>>() + std::mem::size_of::<Self>() + 64) as u64).map_err(Error::Quota)?;
         let mut leaves = Vec::new();
         leaves.try_reserve_exact(3).map_err(|_| Error::Allocation)?;
+        let actual = leaves
+            .capacity()
+            .checked_mul(std::mem::size_of::<Leaf<'a>>())
+            .and_then(|n| n.checked_add(std::mem::size_of::<Self>()))
+            .ok_or(Error::Invalid("group index capacity"))?;
+        let ceiling = 6usize
+            .checked_mul(std::mem::size_of::<Leaf<'a>>())
+            .and_then(|n| n.checked_add(std::mem::size_of::<Self>() + 64))
+            .ok_or(Error::Invalid("group index capacity"))?;
+        if actual > ceiling {
+            return Err(Error::Invalid("group index capacity"));
+        }
+        index.reconcile_capacity(actual as u64).map_err(Error::Quota)?;
         for layer in &doc.layers {
             match &layer.content {
                 LayerContent::BackedRaster(backed) => leaves.push(Leaf {
@@ -101,16 +138,52 @@ impl<'a> PreparedGroup<'a> {
                     .ok_or(Error::Invalid("group profile size"))?,
             )
             .map_err(Error::Quota)?;
-        control.check(strings + 1).map_err(Error::Backing)?;
-        let working = WorkingSpace::new(profile, SampleEncoding::NonlinearProfile, GimpSpace::LinearRgb).map_err(Error::Color)?;
+        let semantic = photocraft_cms::xcf_color::semantic_analytic_profile_work_ceiling(profile).map_err(cms_error)?;
+        control
+            .check(semantic.checked_mul(2).and_then(|n| n.checked_add(strings + 1)).ok_or(Error::Backing(photocraft_raster::backing::BackingError::Length))?)
+            .map_err(Error::Backing)?;
+        let working =
+            WorkingSpace::new_with_interrupt(profile, SampleEncoding::NonlinearProfile, GimpSpace::LinearRgb, control.interrupt).map_err(|e| match e {
+                crate::gimp_composite::CompositionError::Raster(photocraft_raster::RasterInputError::Cancelled) => {
+                    Error::Backing(photocraft_raster::backing::BackingError::Cancelled)
+                }
+                other => Error::Color(other),
+            })?;
         drop(temporary);
         let mut result = Self { doc, leaves, working, quota: quota.clone(), limits, _working: working_lease, _index: index };
         result
             ._index
             .reconcile_capacity((result.leaves.capacity() * std::mem::size_of::<Leaf<'a>>() + std::mem::size_of::<Self>()) as u64)
             .map_err(Error::Quota)?;
+        result.validate_operative(control)?;
         control.check(1).map_err(Error::Backing)?;
         Ok(result)
+    }
+    fn validate_operative(&self, control: &ReadControl<'_>) -> Result<(), Error> {
+        let _scratch = self
+            .quota
+            .reserve(QuotaKind::Resident, (std::mem::size_of::<photocraft_raster::checked_view::CheckedTilePin>() + 40 + 128) as u64)
+            .map_err(Error::Quota)?;
+        // Qualification fixed this complete tree to three leaves and one group.
+        // No visibility, opacity, or mask-enable short circuit is allowed here.
+        for layer in &self.doc.layers {
+            match &layer.content {
+                LayerContent::BackedRaster(v) => scan(v.checked_view(), control)?,
+                LayerContent::Group(g) => {
+                    for child in &g.children {
+                        let LayerContent::BackedRaster(v) = &child.content else {
+                            return Err(Error::Unsupported("group child changed"));
+                        };
+                        scan(v.checked_view(), control)?;
+                    }
+                    if let Some(mask) = mask(self.doc, layer, control)? {
+                        scan(mask.view, control)?;
+                    }
+                }
+                _ => return Err(Error::Unsupported("group content changed")),
+            }
+        }
+        control.check(0).map_err(Error::Backing)
     }
     pub(super) fn render_band(&self, rect: Rect, control: &ReadControl<'_>) -> Result<OwnedNormalStackBand, Error> {
         let count = u64::from(rect.width()).checked_mul(u64::from(rect.height())).ok_or(Error::Invalid("group band"))?;
@@ -138,8 +211,10 @@ impl<'a> PreparedGroup<'a> {
                     if output.pixels.len() != next.pixels().len() {
                         return Err(Error::Invalid("group leaf band length"));
                     }
-                    for (target, source) in output.pixels.iter_mut().zip(next.pixels()) {
-                        *target = *source;
+                    control.check((output.pixels.len() as u64).checked_mul(32).ok_or(Error::Invalid("group band copy work"))?).map_err(Error::Backing)?;
+                    for (targets, sources) in output.pixels.chunks_mut(64).zip(next.pixels().chunks(64)) {
+                        control.check(0).map_err(Error::Backing)?;
+                        targets.copy_from_slice(sources);
                     }
                 }
                 LayerContent::Group(group) => {
@@ -205,18 +280,23 @@ impl<'a> PreparedGroup<'a> {
     }
     fn blank(&self, rect: Rect, control: &ReadControl<'_>) -> Result<ScratchBand, Error> {
         let count = usize::try_from(u64::from(rect.width()) * u64::from(rect.height())).map_err(|_| Error::Invalid("group band allocation"))?;
-        let mut lease = self
+        let header = std::mem::size_of::<ScratchBand>().max(std::mem::size_of::<OwnedNormalStackBand>()) as u64;
+        let lease = self
             .quota
-            .reserve(QuotaKind::Resident, (count as u64).checked_mul(64).and_then(|n| n.checked_add(64)).ok_or(Error::Invalid("group band allocation"))?)
+            .reserve(QuotaKind::Resident, (count as u64).checked_mul(64).and_then(|n| n.checked_add(header)).ok_or(Error::Invalid("group band allocation"))?)
             .map_err(Error::Quota)?;
-        let mut pixels = Vec::new();
-        pixels.try_reserve_exact(count).map_err(|_| Error::Allocation)?;
-        lease.reconcile_capacity((pixels.capacity() as u64).checked_mul(32).ok_or(Error::Invalid("group band capacity"))?).map_err(Error::Quota)?;
+        let mut output = ScratchBand { pixels: Vec::new(), lease };
+        output.pixels.try_reserve_exact(count).map_err(|_| Error::Allocation)?;
+        let capacity = (output.pixels.capacity() as u64).checked_mul(32).ok_or(Error::Invalid("group band capacity"))?;
+        if capacity > (count as u64).checked_mul(64).ok_or(Error::Invalid("group band capacity"))? {
+            return Err(Error::Invalid("group band capacity"));
+        }
+        output.lease.reconcile_capacity(capacity.checked_add(header).ok_or(Error::Invalid("group band header"))?).map_err(Error::Quota)?;
         for _ in 0..count {
             control.check(32).map_err(Error::Backing)?;
-            pixels.push([0.; 4]);
+            output.pixels.push([0.; 4]);
         }
-        Ok(ScratchBand { pixels, lease })
+        Ok(output)
     }
 }
 fn item_bounds(doc: &Document, layer: &Layer) -> Result<Rect, Error> {
@@ -353,3 +433,48 @@ fn qualify(owner: &AccountedDocument, control: &ReadControl<'_>) -> Result<(), E
     }
     Ok(())
 }
+
+fn cms_error(error: photocraft_cms::control::Error) -> Error {
+    match error {
+        photocraft_cms::control::Error::Cancelled => Error::Backing(photocraft_raster::backing::BackingError::Cancelled),
+        photocraft_cms::control::Error::Limit(s) => Error::Unsupported(s),
+        photocraft_cms::control::Error::Allocation => Error::Allocation,
+        photocraft_cms::control::Error::Cms(e) => Error::Color(crate::gimp_composite::CompositionError::Color(e)),
+    }
+}
+fn scan(view: CheckedRasterView<'_>, control: &ReadControl<'_>) -> Result<(), Error> {
+    let format = view.format();
+    let bpp = format.bytes_per_pixel();
+    for channel in 0..format.channels() {
+        control.check(1).map_err(Error::Backing)?;
+        let value = photocraft_color::try_read_sample_f64(view.default_bytes(), format.sample, channel)
+            .map_err(|e| Error::View(photocraft_raster::checked_view::RasterViewError::Sample(e)))?;
+        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+            return Err(Error::Unsupported("group native default must be finite unit"));
+        }
+    }
+    let bounds = view.logical_bounds();
+    for coord in bounds.tiles() {
+        let pin = view.pin_tile(coord, control).map_err(Error::View)?;
+        let part = coord.rect().intersect(&bounds);
+        for y in part.y0..part.y1 {
+            for x in part.x0..part.x1 {
+                control.check(format.channels() as u64).map_err(Error::Backing)?;
+                let mut raw = [0; 40];
+                let bytes = raw.get_mut(..bpp).ok_or(Error::Invalid("group native layout"))?;
+                pin.read_pixel_native_into(x, y, bytes, control).map_err(Error::View)?;
+                for channel in 0..format.channels() {
+                    let value = photocraft_color::try_read_sample_f64(bytes, format.sample, channel)
+                        .map_err(|e| Error::View(photocraft_raster::checked_view::RasterViewError::Sample(e)))?;
+                    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                        return Err(Error::Unsupported("group native samples must be finite unit"));
+                    }
+                }
+            }
+        }
+    }
+    control.check(0).map_err(Error::Backing)
+}
+#[cfg(test)]
+#[path = "backed_group_tests.rs"]
+mod tests;

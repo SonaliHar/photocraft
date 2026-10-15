@@ -134,9 +134,16 @@ impl<'a> PreparedBackedDocument<'a> {
     ) -> Result<Self, BackedNormalError> {
         control.check(1).map_err(BackedNormalError::Backing)?;
         let encoding = owner.document().sample_encoding.ok_or(BackedNormalError::Unsupported("assigned geometry encoding missing"))?;
-        if !profile.matches(owner, encoding)
-            || !crate::backed_analytic_geometry::is_candidate(owner.document(), control).map_err(BackedNormalError::Backing)?
-        {
+        if !profile.matches(owner, encoding) {
+            return Err(BackedNormalError::Unsupported("assigned profile requires exact current model"));
+        }
+        if owner.document().layers.iter().any(|layer| matches!(layer.content, LayerContent::Group(_))) {
+            let prepared = group::PreparedGroup::new_assigned(owner, profile, limits, control)?;
+            let index = owner.quota().reserve(QuotaKind::Index, std::mem::size_of::<Self>() as u64).map_err(BackedNormalError::Quota)?;
+            control.check(1).map_err(BackedNormalError::Backing)?;
+            return Ok(Self { stack: DocumentCompositor::Group(prepared), limits, quota: owner.quota().clone(), bounds: owner.document().bounds(), _index: index });
+        }
+        if !crate::backed_analytic_geometry::is_candidate(owner.document(), control).map_err(BackedNormalError::Backing)? {
             return Err(BackedNormalError::Unsupported("assigned profile requires exact current geometry owner"));
         }
         Self::new_internal(owner.document(), profile.profile(), limits, control, Some(owner), Some(profile))

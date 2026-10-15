@@ -19,6 +19,8 @@ pub(in crate::xcf_import) mod store;
 pub use existing_quota::import_owned_staged_plain_bytes_in_quota;
 #[path = "owned_plain_source/reader.rs"]
 mod reader;
+#[path = "owned_plain_source/isolated_group.rs"]
+mod isolated_group;
 pub use reader::{import_owned_staged_plain_from_reader_in_quota, import_owned_xcf_from_reader_in_quota};
 fn invalid(message: &str) -> IoError {
     IoError::Unsupported(message.into())
@@ -271,7 +273,7 @@ pub(in crate::xcf_import) fn promote_source<'b, 'a, S: PromotionSource<'b, 'a>>(
     preparation: &mut Option<existing_quota::PreparationHold>,
     control: &Interrupt<'_>,
 ) -> Result<OwnedPlainXcfImport, IoError> {
-    promote_source_inner(source,budget,limits,aggregate,existing,preparation,control,false)
+    promote_source_inner(source,budget,limits,aggregate,existing,preparation,control,PromotionKind::Plain)
 }
 pub(in crate::xcf_import) fn promote_analytic_geometry_source<'b, 'a, S: PromotionSource<'b, 'a>>(
     source: S,
@@ -282,8 +284,17 @@ pub(in crate::xcf_import) fn promote_analytic_geometry_source<'b, 'a, S: Promoti
     preparation: &mut Option<existing_quota::PreparationHold>,
     control: &Interrupt<'_>,
 ) -> Result<OwnedPlainXcfImport, IoError> {
-    promote_source_inner(source,budget,limits,aggregate,existing,preparation,control,true)
+    promote_source_inner(source,budget,limits,aggregate,existing,preparation,control,PromotionKind::AnalyticGeometry)
 }
+pub(in crate::xcf_import) fn promote_isolated_normal_group_source<'b, 'a, S: PromotionSource<'b, 'a>>(
+    source: S, budget: &'b photocraft_xcf::Budget<'a>, limits: &photocraft_xcf::ResourceLimits,
+    aggregate: u64, existing: Option<&existing_quota::Context<'_, '_>>,
+    preparation: &mut Option<existing_quota::PreparationHold>, control: &Interrupt<'_>,
+) -> Result<OwnedPlainXcfImport, IoError> {
+    promote_source_inner(source,budget,limits,aggregate,existing,preparation,control,PromotionKind::IsolatedNormalGroup)
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PromotionKind { Plain, AnalyticGeometry, IsolatedNormalGroup }
 #[allow(clippy::too_many_arguments)]
 fn promote_source_inner<'b, 'a, S: PromotionSource<'b, 'a>>(
     source: S,
@@ -293,7 +304,7 @@ fn promote_source_inner<'b, 'a, S: PromotionSource<'b, 'a>>(
     existing: Option<&existing_quota::Context<'_, '_>>,
     preparation: &mut Option<existing_quota::PreparationHold>,
     control: &Interrupt<'_>,
-    geometry: bool,
+    kind: PromotionKind,
 ) -> Result<OwnedPlainXcfImport, IoError> {
     // The source payload precedes supplemental capacity fees on all failures.
     struct Incoming<'b, 'a, S> {
@@ -303,7 +314,11 @@ fn promote_source_inner<'b, 'a, S: PromotionSource<'b, 'a>>(
         bridge: Option<photocraft_xcf::Reservation<'b, 'a>>,
     }
     let mut incoming = Incoming { source, model: None, payload: None, bridge: None };
-    let measured = if geometry { census::measure_analytic_geometry(incoming.source.document(), &budget, control)? } else { census::measure(&incoming.source.document(), &budget, control)? };
+    let geometry = kind == PromotionKind::AnalyticGeometry;
+    let group = kind == PromotionKind::IsolatedNormalGroup;
+    let measured = if group { census::measure_isolated_normal_group(incoming.source.document(), budget, control)? }
+        else if geometry { census::measure_analytic_geometry(incoming.source.document(), &budget, control)? }
+        else { census::measure(&incoming.source.document(), &budget, control)? };
     let reports = incoming.source.report_capacity_with_budget(budget)?;
     // A second explicit index receipt conservatively retains the real owned
     // model/map/report capacities alongside the mapper's original reservations.
@@ -323,7 +338,8 @@ fn promote_source_inner<'b, 'a, S: PromotionSource<'b, 'a>>(
     // and a conservative four traversals of all measured model/raw/source bytes.
     // Original budget callbacks/deadline still run serially in each row/ID pass.
     let state = incoming.source.document().xcf_state.as_ref().ok_or_else(|| invalid("owned source missing state"))?;
-    let mut phase_work = native_phase_work(&incoming.source.document(), measured.model, measured.payload, incoming.source.original_bytes().len() as u64, &budget)?;
+    let mut phase_work = if group { isolated_group::phase_work(incoming.source.document(), measured.model, measured.payload, incoming.source.original_bytes().len() as u64, budget)? }
+        else { native_phase_work(&incoming.source.document(), measured.model, measured.payload, incoming.source.original_bytes().len() as u64, &budget)? };
     if geometry { phase_work = add(phase_work, geometry_mask_work(incoming.source.document(), &budget)?)?; }
     prepay_phase_work(&budget, phase_work)?;
     let remaining = std::sync::atomic::AtomicU64::new(phase_work);
@@ -339,10 +355,12 @@ fn promote_source_inner<'b, 'a, S: PromotionSource<'b, 'a>>(
             .map_err(|e| if e.kind == ErrorKind::Cancelled { BackingError::Cancelled } else { BackingError::Work })
     };
     let read = ReadControl { interrupt: control, work: &work };
-    for layer in &incoming.source.document().layers {
+    if group {
+        isolated_group::validate(incoming.source.document(), &read, &phase_poll)?;
+    } else { for layer in &incoming.source.document().layers {
         let LayerContent::Raster(surface) = &layer.content else { return Err(invalid("owned source requires staged raster")) };
         store::validate(surface, layer_bounds(state, layer.id, &read, &phase_poll).map_err(backing)?, &read, &phase_poll).map_err(backing)?;
-    }
+    } }
     budget.poll("owned source preparation closed").map_err(accounting_error)?;
     let owned = incoming.source.detach_owned(
         &mut [
@@ -395,7 +413,9 @@ fn promote_source_inner<'b, 'a, S: PromotionSource<'b, 'a>>(
     }
     let mut staged = Promoting { result, retention };
     let state = staged.result.document.xcf_state.as_ref().ok_or_else(|| invalid("owned source state lost"))?;
-    for layer in &mut staged.result.document.layers {
+    if group {
+        isolated_group::promote(&mut staged.result.document.layers, state, &staged.retention, &quota, &read, &phase_poll)?;
+    } else { for layer in &mut staged.result.document.layers {
         phase_poll().map_err(backing)?;
         read.check(1).map_err(backing)?;
         let bounds = layer_bounds(state, layer.id, &read, &phase_poll).map_err(backing)?;
@@ -409,13 +429,14 @@ fn promote_source_inner<'b, 'a, S: PromotionSource<'b, 'a>>(
             _ => backing(BackingError::Integrity),
         })?);
         phase_poll().map_err(backing)?;
-    }
+    } }
     read.check(1).map_err(backing)?;
     let Promoting { result, retention } = staged;
     let ImportResult { document, warnings, origin, assessment, source_read_only, preview_only } = result;
     phase_poll().map_err(backing)?;
     let document = AccountedDocument::from_owned(document, retention.clone(), quota, &read).map_err(backing)?;
     if geometry { document.validate_assigned_analytic_geometry_storage(&read).map_err(backing)?; }
+    if group { document.validate_assigned_isolated_normal_group_storage(&read).map_err(backing)?; }
     phase_poll().map_err(backing)?;
     control.check().map_err(|_| IoError::Cancelled)?;
     Ok(OwnedPlainXcfImport { document, warnings, origin, assessment, source_read_only, preview_only, _retention: retention })
