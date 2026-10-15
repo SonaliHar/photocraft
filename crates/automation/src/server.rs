@@ -307,7 +307,8 @@ pub struct MenuParams {
 #[serde(deny_unknown_fields)]
 pub struct UiSetParams {
     /// Fields for the control method `ui.set`: tool, panels, dock, dockTabs, dockWidth, colorPanel
-    /// ({background: bool} picks which swatch the Color panel edits), maskTarget,
+    /// ({background: bool} picks which swatch the Color panel edits), layerFilter (an array of
+    /// layer-panel kind filters to enable: pixel, adjustment, type, shape, smart, deep), maskTarget,
     /// vectorMaskTarget, selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
     /// studioLight, classic, solarizedDark, adwaita, adwaitaDark, breezeLight, breezeDark, softLight, softDark), brushSection, brushTab,
     /// brushesView, brushPicker ([x, y] opens the Brush Preset picker there, null closes it),
