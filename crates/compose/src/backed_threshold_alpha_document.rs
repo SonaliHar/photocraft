@@ -43,7 +43,7 @@ fn native_error(error: BackedPointError) -> BackedNormalError {
 }
 impl<'a> PreparedBackedThresholdAlphaDocument<'a> {
     /// Requires the actual readonly current model and its exact retained profile.
-    /// The context validates the enabled singleton, native layout, physical empty
+    /// The context validates the singleton, native layout, physical empty
     /// selection, visible full-opacity layer and Normal/Union current policy.
     /// This bridge prepares no CMS pipeline: the existing transparent-backdrop
     /// identity uses source color samples directly in their current encoding.

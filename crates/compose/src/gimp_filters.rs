@@ -95,10 +95,24 @@ pub(crate) fn validated_enabled_threshold_alpha(
     stored: SampleEncoding,
     version: u32,
 ) -> Result<photocraft_algo::gimp::threshold_alpha::ThresholdAlpha> {
-    let [node] = source else { return Err(CompositionError::Unsupported("enabled singleton Threshold Alpha required")); };
+    let (operation, enabled) = validated_current_threshold_alpha(source, channels, stored, version)?;
+    if !enabled {
+        return Err(CompositionError::Unsupported("unqualified enabled Threshold Alpha current policy"));
+    }
+    Ok(operation)
+}
+/// Exact current singleton recipe, including a disabled node. The disabled
+/// consumer must bypass the operation with raw native identity; threshold zero
+/// is not an identity. No source correspondence is established here.
+pub(crate) fn validated_current_threshold_alpha(
+    source: &[FilterNode],
+    channels: usize,
+    stored: SampleEncoding,
+    version: u32,
+) -> Result<(photocraft_algo::gimp::threshold_alpha::ThresholdAlpha, bool)> {
+    let [node] = source else { return Err(CompositionError::Unsupported("singleton Threshold Alpha required")); };
     let policy = node.composition.as_ref().ok_or(CompositionError::Unsupported("missing Threshold Alpha effect policy"))?;
-    if !node.enabled
-        || version != 22
+    if version != 22
         || !matches!(channels, 1 | 3)
         || !matches!(stored, SampleEncoding::Linear | SampleEncoding::NonlinearProfile)
         || node.operation.name != "gimp:threshold-alpha"
@@ -126,7 +140,7 @@ pub(crate) fn validated_enabled_threshold_alpha(
     let PointOperation::ThresholdAlpha { value } = operation else { return Err(CompositionError::Invalid("Threshold Alpha registry member")); };
     let operation = photocraft_algo::gimp::threshold_alpha::ThresholdAlpha { value };
     operation.validate()?;
-    Ok(operation)
+    Ok((operation, node.enabled))
 }
 pub const THRESHOLD_PRECISION_EPOCH: &str = "xcf-22-stock-threshold-precision-v1";
 pub const SATURATION_GRAY_PRECISION_EPOCH: &str = "xcf-22-stock-gray-saturation-precision-v1";

@@ -24,7 +24,7 @@ use photocraft_raster::backing::{
 
 /// Borrows the actual immutable storage owner and checks an encoded current-profile
 /// witness during preparation. No profile is parsed, encoded, cloned or inferred from source epochs.
-/// There is one enabled filter, an empty physical selection mask and Normal/Union
+/// There is one enabled or disabled filter, an empty physical selection mask and Normal/Union
 /// at opacity one. Returned bands are straight native current owner samples,
 /// not a display composite, Surface, persistence receipt or editable result.
 pub struct PreparedBackedThresholdAlphaContext<'a> {
@@ -36,7 +36,7 @@ pub struct PreparedBackedThresholdAlphaContext<'a> {
     _lease: QuotaLease,
 }
 fn scope() -> BackedNormalError {
-    BackedNormalError::Unsupported("closed enabled current backed Threshold Alpha operative/default recipe")
+    BackedNormalError::Unsupported("closed current backed Threshold Alpha operative/default recipe")
 }
 fn paid_bytes_equal(a: &[u8], b: &[u8], control: &ReadControl<'_>) -> Result<bool, BackedNormalError> {
     control.check(1).map_err(BackedNormalError::Backing)?;
@@ -118,7 +118,6 @@ impl<'a> PreparedBackedThresholdAlphaContext<'a> {
             || !layer.effects.items.is_empty()
             || layer.effects.psd_raw.is_some()
             || !layer.psd_blocks.is_empty()
-            || !node.enabled
             || stack.owner != ItemRef::Layer(layer.id)
         {
             return Err(scope());
@@ -152,7 +151,7 @@ impl<'a> PreparedBackedThresholdAlphaContext<'a> {
         }
         // This shared pure validator is also called by PointStack's enabled
         // Threshold Alpha branch. Alpha-only execution needs no color transfer.
-        let operation = crate::gimp_filters::validated_enabled_threshold_alpha(&stack.nodes, known.channels(), stored, state.provenance.format_version)
+        let (operation, enabled) = crate::gimp_filters::validated_current_threshold_alpha(&stack.nodes, known.channels(), stored, state.provenance.format_version)
             .map_err(BackedNormalError::Color)?;
         let mask = state.filter_masks.first().ok_or_else(scope)?;
         if node.mask != Some(ItemRef::Mask(mask.id)) || mask.owner != node.id {
@@ -183,7 +182,7 @@ impl<'a> PreparedBackedThresholdAlphaContext<'a> {
             return Err(scope());
         }
         let descriptor = backed.descriptor();
-        let native = PreparedBackedThresholdAlpha::new(backed, descriptor, operation, limits, control).map_err(|e| match e {
+        let native = PreparedBackedThresholdAlpha::new_with_enabled(backed, descriptor, operation, enabled, limits, control).map_err(|e| match e {
             BackedPointError::Backing(e) => BackedNormalError::Backing(e),
             _ => scope(),
         })?;

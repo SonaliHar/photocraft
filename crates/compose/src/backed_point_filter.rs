@@ -41,6 +41,7 @@ impl std::error::Error for BackedPointError {}
 pub struct PreparedBackedThresholdAlpha<'a> {
     layer: &'a BackedLayer,
     operation: ThresholdAlpha,
+    enabled: bool,
     limits: NormalBandLimits,
     _lease: QuotaLease,
 }
@@ -100,6 +101,19 @@ impl<'a> PreparedBackedThresholdAlpha<'a> {
         limits: NormalBandLimits,
         control: &ReadControl<'_>,
     ) -> Result<Self, BackedPointError> {
+        Self::new_with_enabled(layer, expected, operation, true, limits, control)
+    }
+    /// Explicit current disabled-node bypass. Disabled bands still validate the
+    /// same finite-unit native domain, but copy every native word without alpha
+    /// evaluation or re-encoding. This supplies no original-source authority.
+    pub fn new_with_enabled(
+        layer: &'a BackedLayer,
+        expected: NativePlaneDescriptor,
+        operation: ThresholdAlpha,
+        enabled: bool,
+        limits: NormalBandLimits,
+        control: &ReadControl<'_>,
+    ) -> Result<Self, BackedPointError> {
         control.check(1).map_err(BackedPointError::Backing)?;
         let maximum = NormalBandLimits::default();
         if limits.max_rows == 0 || limits.max_rows > maximum.max_rows || limits.max_pixels == 0 || limits.max_pixels > maximum.max_pixels {
@@ -118,7 +132,7 @@ impl<'a> PreparedBackedThresholdAlpha<'a> {
         operation.validate().map_err(BackedPointError::Operation)?;
         let header = plus(std::mem::size_of::<Self>(), 128)?;
         let lease = layer.quota().reserve(QuotaKind::Resident, bytes_u64(header)?).map_err(|_| BackedPointError::Backing(BackingError::Quota))?;
-        let prepared = Self { layer, operation, limits, _lease: lease };
+        let prepared = Self { layer, operation, enabled, limits, _lease: lease };
         control.check(0).map_err(BackedPointError::Backing)?;
         Ok(prepared)
     }
@@ -182,20 +196,28 @@ impl<'a> PreparedBackedThresholdAlpha<'a> {
                     for (index, sample) in input.get_mut(..channels).ok_or(BackedPointError::Invalid("native channel count"))?.iter_mut().enumerate() {
                         *sample = try_read_sample_f64(native, format.sample, index).map_err(BackedPointError::Sample)?;
                     }
-                    // Original kernel validates the input components, copies
-                    // them, and performs its alpha conversion/comparison. Price
-                    // those bounded visits, distinct from native byte copies.
-                    control
-                        .check(bytes_u64(channels.checked_mul(2).and_then(|n| n.checked_add(2)).ok_or(BackedPointError::Invalid("pixel work overflow"))?)?)
-                        .map_err(BackedPointError::Backing)?;
                     let mut evaluated = [0f64; 4];
-                    self.operation
-                        .try_eval_pixel(
-                            input.get(..channels).ok_or(BackedPointError::Invalid("native channel count"))?,
-                            color_channels,
-                            evaluated.get_mut(..channels).ok_or(BackedPointError::Invalid("native channel count"))?,
-                        )
-                        .map_err(BackedPointError::Operation)?;
+                    if self.enabled {
+                        // Keep the original enabled validation/comparison and
+                        // its bounded visits unchanged.
+                        control
+                            .check(bytes_u64(channels.checked_mul(2).and_then(|n| n.checked_add(2)).ok_or(BackedPointError::Invalid("pixel work overflow"))?)?)
+                            .map_err(BackedPointError::Backing)?;
+                        self.operation
+                            .try_eval_pixel(
+                                input.get(..channels).ok_or(BackedPointError::Invalid("native channel count"))?,
+                                color_channels,
+                                evaluated.get_mut(..channels).ok_or(BackedPointError::Invalid("native channel count"))?,
+                            )
+                            .map_err(BackedPointError::Operation)?;
+                    } else {
+                        control.check(bytes_u64(channels)?).map_err(BackedPointError::Backing)?;
+                        if input.get(..channels).ok_or(BackedPointError::Invalid("native channel count"))?
+                            .iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+                        {
+                            return Err(BackedPointError::Operation(RasterInputError::UnsupportedConversion));
+                        }
+                    }
                     let row = usize::try_from(i64::from(y) - i64::from(rect.y0)).map_err(|_| BackedPointError::Invalid("native band row"))?;
                     let col = usize::try_from(i64::from(x) - i64::from(rect.x0)).map_err(|_| BackedPointError::Invalid("native band column"))?;
                     let start = row
@@ -204,15 +226,17 @@ impl<'a> PreparedBackedThresholdAlpha<'a> {
                         .and_then(|n| n.checked_mul(bpp))
                         .ok_or(BackedPointError::Invalid("native band pixel offset"))?;
                     let target = output.bytes.get_mut(start..plus(start, bpp)?).ok_or(BackedPointError::Invalid("native band pixel length"))?;
-                    control.check(bytes_u64(plus(bpp, format.sample.bytes())?)?).map_err(BackedPointError::Backing)?;
+                    control.check(bytes_u64(if self.enabled { plus(bpp, format.sample.bytes())? } else { bpp })?).map_err(BackedPointError::Backing)?;
                     target.copy_from_slice(native);
-                    try_write_sample_f64(
-                        target,
-                        format.sample,
-                        color_channels,
-                        *evaluated.get(color_channels).ok_or(BackedPointError::Invalid("native alpha index"))?,
-                    )
-                    .map_err(BackedPointError::Sample)?;
+                    if self.enabled {
+                        try_write_sample_f64(
+                            target,
+                            format.sample,
+                            color_channels,
+                            *evaluated.get(color_channels).ok_or(BackedPointError::Invalid("native alpha index"))?,
+                        )
+                        .map_err(BackedPointError::Sample)?;
+                    }
                 }
             }
         }

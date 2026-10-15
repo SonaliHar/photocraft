@@ -215,12 +215,12 @@ fn current_rgb_gray_native_bands_preserve_colors_all_depths_and_encodings() {
     }
 }
 #[test]
-fn storage_only_marker_does_not_grant_disabled_outer_or_nonempty_mask_semantics() {
+fn storage_only_marker_does_not_grant_contradictory_outer_or_nonempty_mask_semantics() {
     for bad in 0..4 {
         let (mut doc, q, guard, reads, p, _) = fixture(ColorMode::Rgb, SampleType::F64, SampleEncoding::NonlinearProfile);
         let state = doc.xcf_state.as_mut().unwrap();
         match bad {
-            0 => state.filter_stacks[0].nodes[0].enabled = false,
+            0 => state.filter_stacks[0].nodes[0].composition.as_mut().unwrap().stored_operator = 0,
             1 => state.filter_stacks[0].nodes[0].source_clipping = Some(2),
             2 => state.filter_masks[0].surface.try_write_pixel_f64(0, 0, &[f64::from_bits(1)]).unwrap(),
             _ => doc.layers[0].fill_opacity = f32::NAN,
@@ -258,8 +258,12 @@ fn shared_validator_rejects_f64_storage_and_preserves_disabled_pointstack_behavi
     nodes[0].arguments[0].value = FilterValue::Number(ExactNumber::Float64Bits(0.5f64.to_bits()));
     assert!(crate::gimp_filters::validated_enabled_threshold_alpha(nodes, 3, SampleEncoding::NonlinearProfile, 22).is_err());
     nodes[0].enabled = false;
+    assert!(crate::gimp_filters::validated_current_threshold_alpha(nodes, 3, SampleEncoding::NonlinearProfile, 22).is_err());
     assert!(
         crate::gimp_filters::PointStack::from_nodes_with_interrupt(nodes, p, SampleEncoding::NonlinearProfile, 22, &Interrupt::NONE).is_ok(),
         "old disabled branch remains untouched"
     );
 }
+
+#[path = "backed_threshold_alpha_disabled_tests.rs"]
+mod disabled;

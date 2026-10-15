@@ -28,9 +28,6 @@ fn actual_owned_sources_and_native_reopens_use_current_canvas_without_resident_f
         .unwrap();
     for row in proof["checks"].as_array().unwrap() {
         let id = row["id"].as_str().unwrap();
-        if id.ends_with(".disabled") {
-            continue; // enabled-only current recipe; disabled remains a named refusal
-        }
         let name = format!("{id}.xcf");
         let bytes = Arc::new(std::fs::read(root.join(&name)).unwrap());
         assert_eq!(hash(&bytes), manifest[&name].as_str().unwrap());

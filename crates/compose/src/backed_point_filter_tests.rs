@@ -209,3 +209,6 @@ fn retained_bands_keep_their_real_charges_after_prepared_layer_and_source_drop()
     drop(second);
     assert_eq!(q.usage().unwrap(), QuotaUsage::default());
 }
+
+#[path = "backed_point_filter_disabled_tests.rs"]
+mod disabled;

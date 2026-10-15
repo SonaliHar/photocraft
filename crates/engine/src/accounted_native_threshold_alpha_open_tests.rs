@@ -220,7 +220,7 @@ impl ImmutableCanonicalArchive for Archive {
 fn packet(bad: u8) -> (Arc<Archive>, BackingQuota) {
     let (mut doc, q, guard, _, _, _) = fixture(ColorMode::Rgb, SampleType::F64, SampleEncoding::NonlinearProfile, bad == 4);
     match bad {
-        1 => doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].enabled = false,
+        1 => doc.layers[0].fill_opacity = 0.5,
         2 => doc.xcf_state.as_mut().unwrap().filter_masks[0].surface.try_write_pixel_f64(0, 0, &[0.5]).unwrap(),
         3 => doc.working_profile_interpretation = WorkingProfileInterpretation::Icc,
         _ => {}
@@ -261,7 +261,7 @@ fn explicit_reopen_validates_current_recipe_and_keeps_native_identity_title_clas
     assert_eq!(q.usage().unwrap(), QuotaUsage::default());
 }
 #[test]
-fn stored_filter_shape_never_bypasses_current_profile_enabled_or_empty_mask_qualification() {
+fn stored_filter_shape_never_bypasses_current_profile_fill_opacity_or_empty_mask_qualification() {
     for bad in [1, 2, 3, 4] {
         let (source, q) = packet(bad);
         let baseline = q.usage().unwrap();
@@ -270,6 +270,72 @@ fn stored_filter_shape_never_bypasses_current_profile_enabled_or_empty_mask_qual
         assert!(session.docs.is_empty());
         assert_eq!(q.usage().unwrap(), baseline);
     }
+}
+
+#[test]
+fn disabled_native_reopen_save_as_and_canvas_preserve_fractional_f64_alpha_and_raw_words() {
+    fn native_words(owner: &photocraft_doc::accounted_document::AccountedDocument) -> Vec<u8> {
+        let LayerContent::BackedRaster(layer) = &owner.document().layers[0].content else { panic!() };
+        let mut output = vec![0; 48 * 32];
+        for y in 0..6 {
+            for x in 0..8 {
+                let at = (y * 8 + x) * 32;
+                layer.checked_view().read_logical_pixel_native_into(x as i32, y as i32, &mut output[at..at + 32], &ctl()).unwrap();
+            }
+        }
+        output
+    }
+    fn display(owner: &photocraft_doc::accounted_document::AccountedDocument) -> Vec<[u64; 4]> {
+        let prepared =
+            photocraft_compose::backed_document::PreparedBackedDocument::new_accounted(owner, Builtin::Srgb.profile(), Default::default(), &ctl()).unwrap();
+        prepared.render_band(owner.document().bounds(), &ctl()).unwrap().pixels().iter().map(|p| p.map(f64::to_bits)).collect()
+    }
+    let (mut doc, q, guard, _, _, raw) = fixture(ColorMode::Rgb, SampleType::F64, SampleEncoding::NonlinearProfile, false);
+    doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].enabled = false;
+    let bytes = save_current_document_archive(&doc, std::io::Cursor::new(Vec::new()), Default::default(), &q, &ctl()).unwrap().into_inner();
+    let fee = q.reserve(QuotaKind::Resident, bytes.capacity() as u64 + 128).unwrap();
+    let source = Arc::new(Archive { bytes, quota: q.clone(), _lease: fee });
+    drop(doc);
+    drop(guard);
+    let mut session = Session::new();
+    session.add_owned_native_threshold_alpha_archive(load(source, &q), "disabled.pcraft", Some("authorized/disabled.pcraft"), &ctl()).unwrap();
+    let owner = session.active().unwrap().doc.accounted().unwrap();
+    assert!(owner.is_readonly_threshold_alpha_storage());
+    assert!(!owner.document().xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].enabled);
+    assert_eq!(native_words(owner), raw);
+    let expected = raw
+        .chunks_exact(32)
+        .map(|p| std::array::from_fn(|c| f64::from_ne_bytes(p[c * 8..(c + 1) * 8].try_into().unwrap()).to_bits()))
+        .collect::<Vec<[u64; 4]>>();
+    let output = display(owner);
+    assert_eq!(output, expected, "disabled threshold is raw identity before existing Normal/transparent-backdrop composition");
+    for (i, pixel) in output.iter().enumerate() {
+        assert_eq!(f64::from_bits(pixel[3]), if i % 2 == 0 { 0.25 } else { 0.75 });
+    }
+    let source_identity = session.active().unwrap().source.clone();
+    let prepared = crate::accounted_native_save::PreparedAccountedNativeSave::prepare(&session, "disabled-copy.pcraft", &ctl()).unwrap();
+    let saved = prepared
+        .write_and_publish(&mut session, &ctl(), |snapshot, _| {
+            save_current_document_archive(snapshot, std::io::Cursor::new(Vec::new()), Default::default(), &q, &ctl())
+                .map(|writer| writer.into_inner())
+                .map_err(|e| EngineError::Other(e.to_string()))
+        })
+        .unwrap();
+    assert_eq!(session.active().unwrap().source, source_identity);
+    assert_eq!(session.active().unwrap().path.as_deref(), Some("disabled-copy.pcraft"));
+    assert!(session.active().unwrap().doc.accounted().unwrap().is_readonly_threshold_alpha_storage());
+    assert!(!session.active().unwrap().doc.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].enabled);
+    let fee = q.reserve(QuotaKind::Resident, saved.capacity() as u64 + 128).unwrap();
+    let source = Arc::new(Archive { bytes: saved, quota: q.clone(), _lease: fee });
+    let mut reopened = Session::new();
+    reopened.add_owned_native_threshold_alpha_archive(load(source, &q), "disabled-copy.pcraft", Some("authorized/disabled-copy.pcraft"), &ctl()).unwrap();
+    let state = reopened.active().unwrap();
+    assert!(state.doc.quota().unwrap().shares_ledger(&q));
+    assert!(!state.source_read_only);
+    let owner = state.doc.accounted().unwrap();
+    assert!(!owner.document().xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].enabled);
+    assert_eq!(native_words(owner), raw);
+    assert_eq!(display(owner), expected);
 }
 #[test]
 fn duplicate_cancel_and_quota_failures_never_publish_partial_tab_or_release_other_owner() {
