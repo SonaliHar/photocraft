@@ -5,13 +5,13 @@ use photocraft_doc::{Document, LayerContent};
 use photocraft_raster::{Interrupt, backing::ReadControl, checked_view::NativeTileBytes};
 use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicU64, Ordering};
-fn ctl() -> ReadControl<'static> {
+pub(super) fn ctl() -> ReadControl<'static> {
     ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) }
 }
 fn hash(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|v| format!("{v:02x}")).collect()
 }
-fn cases() -> Vec<(PathBuf, Value)> {
+pub(super) fn cases() -> Vec<(PathBuf, Value)> {
     let corpus = PathBuf::from(std::env::var_os("PHOTOCRAFT_XCF_FULL_CORPUS").unwrap());
     let mut result = Vec::new();
     for (set, pins) in [
@@ -68,7 +68,7 @@ fn cases() -> Vec<(PathBuf, Value)> {
 // Observation ICC values describe GIMP source/profile roles. The canonical
 // current ICC for Linear/Perceptual is the existing CMS derivative of ORIGINAL;
 // parsing its rounded serialized curves as original would change the recipe.
-fn profiles(doc: &Document, row: &Value) {
+pub(super) fn profiles(doc: &Document, row: &Value) {
     let original = doc.source_color_context.as_ref().unwrap().original_icc.as_deref().unwrap();
     assert_eq!(hash(original), row["assigned_icc"]["sha256"].as_str().unwrap());
     assert_eq!(original.len() as u64, row["assigned_icc"]["bytes"].as_u64().unwrap());
@@ -92,7 +92,7 @@ fn profiles(doc: &Document, row: &Value) {
     assert_eq!(current, expected.as_ref());
     assert_ne!(current, original);
 }
-fn operators(doc: &Document, row: &Value) {
+pub(super) fn operators(doc: &Document, row: &Value) {
     let explicit: Vec<_> =
         doc.xcf_state.as_ref().unwrap().items.iter().filter_map(|item| item.composition.as_ref()).filter(|policy| policy.stored_operator != -1).collect();
     assert_eq!(explicit.len(), 1);
@@ -109,7 +109,7 @@ fn operators(doc: &Document, row: &Value) {
     };
     assert_eq!(policy.resolved.as_ref().unwrap().operator, expected);
 }
-fn native(doc: &Document) -> Vec<(photocraft_raster::backing::NativePlaneDescriptor, String)> {
+pub(super) fn native(doc: &Document) -> Vec<(photocraft_raster::backing::NativePlaneDescriptor, String)> {
     doc.layers
         .iter()
         .map(|layer| {
@@ -188,7 +188,7 @@ fn assigned_geometry_host_source_protection_title_save_and_native_continuation()
         query(reply.value(), &before);
         drop(reply);
         for (id, params) in
-            [("select.all", json!({})), ("layer.setProps", json!({"name":"unsupported"})), ("xcf.filter.enable", json!({"filterId":"1","enabled":false}))]
+            [("select.all", json!({})), ("layer.setProps", json!({"blend":"multiply"})), ("xcf.filter.enable", json!({"filterId":"1","enabled":false}))]
         {
             assert!(h.command_run(id, params).is_err());
             assert!(h.session.active().unwrap().doc.shares_state(&before));

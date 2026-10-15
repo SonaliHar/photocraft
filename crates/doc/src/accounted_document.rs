@@ -405,7 +405,8 @@ impl AccountedDocument {
     /// same source ledger and never replaces immutable source/default samples.
     pub fn try_edit(&self, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<Self, BackingError> {
         if self.owner._storage_class != StorageClass::Legacy { return Err(BackingError::Unsupported); }
-        let imported = imported_edits::validate_owner(self, edit, control)?;
+        let domain = imported_edits::validate_owner(self, edit, control)?;
+        let imported = domain != imported_edits::EditDomain::Resident;
         if is_noop(self.document(), edit, control)? {
             control.check(1)?;
             return Ok(self.clone());
@@ -448,7 +449,9 @@ impl AccountedDocument {
         // The admitted Clone only duplicates the prepaid bounded tree containers and
         // strings below. Native tiles/ICC/source guards retain shared ownership.
         let view = self.owner._selection.as_ref().map(|guard| guard.clone_view(control)).transpose()?;
-        let copied = if imported { imported_selection::copy_document(doc, control)? } else { clone_model_without_selection(doc) };
+        let copied = if domain == imported_edits::EditDomain::AssignedGeometry {
+            imported_selection::copy_masked_normal(doc, self.quota(), control)?
+        } else if imported { imported_selection::copy_document(doc, control)? } else { clone_model_without_selection(doc) };
         let mut staged = ModelStaging { document: copied, selection_view: None };
         if let Some(SelectionView { surface, charges }) = view {
             staged.document.selection = Some(surface);

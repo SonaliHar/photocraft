@@ -206,6 +206,10 @@ mod neighborhood_tests;
 #[path = "canvas_backed_analytic_geometry_tests.rs"]
 mod analytic_geometry_tests;
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "canvas_analytic_geometry_layer_props_tests.rs"]
+mod analytic_geometry_layer_props_tests;
+
 #[cfg(test)]
 fn backed_display_image(
     doc: &Document,

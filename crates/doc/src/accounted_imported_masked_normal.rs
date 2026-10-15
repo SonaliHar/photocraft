@@ -101,7 +101,7 @@ fn validate_with(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>, transfer
         }
         let extent = backed.operative_bounds();
         bounds(extent)?;
-        if !layer.visible
+        if (!transfer_override && !layer.visible)
             || !layer.opacity.is_finite()
             || !(0.0..=1.0).contains(&layer.opacity)
             || layer.fill_opacity.to_bits() != 1f32.to_bits()
@@ -143,7 +143,7 @@ fn validate_with(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>, transfer
         if item.parent.is_some()
             || item.mask.is_some()
             || item.source_flags != 0
-            || !item.visible
+            || if transfer_override { item.visible != layer.visible } else { !item.visible }
             || item.raster_bounds != Some(extent)
             || policy.compatibility_epoch != epoch
             || policy.source_mode != 28
@@ -169,7 +169,7 @@ fn validate_with(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>, transfer
             return Err(BackingError::Unsupported);
         }
         if index == 0 {
-            if extent != doc.bounds() || layer.opacity.to_bits() != 1f32.to_bits() || layer.mask.is_some() {
+            if extent != doc.bounds() || (!transfer_override && layer.opacity.to_bits() != 1f32.to_bits()) || layer.mask.is_some() {
                 return Err(BackingError::Unsupported);
             }
         } else {
@@ -263,3 +263,7 @@ impl AccountedDocument {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "accounted_imported_masked_metadata_tests.rs"]
+mod metadata_tests;

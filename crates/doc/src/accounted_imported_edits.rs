@@ -2,18 +2,49 @@
 //! and shared; raw native writes do not grant source or renderer qualification.
 use super::*;
 
-pub(super) fn validate_owner(owner: &AccountedDocument, edit: AccountedEdit<'_>, c: &ReadControl<'_>) -> Result<bool, BackingError> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum EditDomain {
+    Resident,
+    Plain,
+    AssignedGeometry,
+}
+
+pub(super) fn validate_owner(owner: &AccountedDocument, edit: AccountedEdit<'_>, c: &ReadControl<'_>) -> Result<EditDomain, BackingError> {
     let imported = imported_selection::applies(owner.document());
     if imported {
+        // This hint selects only a validator. It cannot grant source, pixel or
+        // generic imported edit authority, and a selected refusal is final.
+        if matches!(edit, AccountedEdit::LayerMetadata { .. })
+            && owner.document().layers.len() == 2
+            && owner.document().layers.get(1).is_some_and(|layer| layer.mask.is_some())
+        {
+            validate_parameters(edit, c)?;
+            owner.validate_assigned_analytic_geometry_storage(c)?;
+            // A malformed native current with divergent canonical names is
+            // refused; omitted fields do not silently repair unrelated state.
+            validate_current_items(owner.document(), true, c)?;
+            return Ok(EditDomain::AssignedGeometry);
+        }
         validate(owner.document(), edit, owner.quota(), c)?;
         selection_census(owner.document(), false, owner.owner._selection.as_ref(), owner.quota(), c)?;
     } else if matches!(edit, AccountedEdit::LayerMetadata { .. }) {
         return Err(BackingError::Unsupported);
     }
-    Ok(imported)
+    Ok(if imported { EditDomain::Plain } else { EditDomain::Resident })
 }
 
 pub(super) fn validate(doc: &Document, edit: AccountedEdit<'_>, quota: &BackingQuota, c: &ReadControl<'_>) -> Result<(), BackingError> {
+    if let AccountedEdit::NativePixels { layer, rect, bytes } = edit {
+        let target = accounted_layer_access(doc, layer, c)?.ok_or(BackingError::Bounds)?;
+        let LayerContent::BackedRaster(backed) = &target.layer.content else { return Err(BackingError::Unsupported) };
+        validate_native(backed, rect, bytes, c)?;
+    }
+    validate_parameters(edit, c)?;
+    imported_selection::validate(doc, quota, c)?;
+    validate_current_items(doc, false, c)
+}
+
+fn validate_parameters(edit: AccountedEdit<'_>, c: &ReadControl<'_>) -> Result<(), BackingError> {
     match edit {
         AccountedEdit::LayerMetadata { name, opacity, .. } => {
             if let Some(name) = name {
@@ -27,11 +58,7 @@ pub(super) fn validate(doc: &Document, edit: AccountedEdit<'_>, quota: &BackingQ
             validate_name(name, c)?;
         }
         AccountedEdit::LayerVisibility { .. } => {}
-        AccountedEdit::NativePixels { layer, rect, bytes } => {
-            let target = accounted_layer_access(doc, layer, c)?.ok_or(BackingError::Bounds)?;
-            let LayerContent::BackedRaster(backed) = &target.layer.content else { return Err(BackingError::Unsupported) };
-            validate_native(backed, rect, bytes, c)?;
-        }
+        AccountedEdit::NativePixels { .. } => {}
         AccountedEdit::LayerOpacity { opacity, .. } => {
             if !opacity.is_finite() || !(0.0..=1.0).contains(&opacity) {
                 return Err(BackingError::Bounds);
@@ -39,13 +66,19 @@ pub(super) fn validate(doc: &Document, edit: AccountedEdit<'_>, quota: &BackingQ
         }
         _ => return Err(BackingError::Unsupported),
     }
-    imported_selection::validate(doc, quota, c)?;
+    Ok(())
+}
+
+fn validate_current_items(doc: &Document, allow_mask: bool, c: &ReadControl<'_>) -> Result<(), BackingError> {
     // Preserve one unambiguous current name/visibility representation. No
     // source payload is rewritten, and arbitrary composition remains unchanged.
     if let Some(state) = &doc.xcf_state {
         for item in &state.items {
             c.check(1)?;
             let crate::item_identity::ItemRef::Layer(id) = item.item else {
+                if allow_mask && matches!(item.item, crate::item_identity::ItemRef::Mask(_)) {
+                    continue;
+                }
                 return Err(BackingError::Unsupported);
             };
             let mut found = None;

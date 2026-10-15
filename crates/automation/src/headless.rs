@@ -45,6 +45,9 @@ mod owned_neighborhood_command_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_analytic_geometry_command_tests.rs"]
 mod owned_analytic_geometry_command_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_analytic_geometry_layer_props_tests.rs"]
+mod owned_analytic_geometry_layer_props_tests;
 pub use photocraft_engine::accounted_filter_inspect::{OwnedFilterInspectReply, OwnedFilterInspectWire};
 pub use owned_native_open::OwnedNativeOpenReply;
 pub use owned_xcf_open::OwnedXcfOpenReply;
@@ -778,11 +781,13 @@ impl Headless {
             }
             authorize_engine_command(id, &params)?;
         }
-        // Current Point metadata uses the same synchronous paid engine adapter
+        // Current Point and assigned geometry metadata use the synchronous paid engine adapter
         // as its filter edits. Refuse start before syncing unrelated jobs; a
         // browser/native storage marker does not grant background execution.
         if id == "layer.setProps"
-            && self.session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_point_storage())
+            && self.session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| {
+                owner.is_readonly_point_storage() || photocraft_engine::assigned_geometry_metadata_candidate(owner)
+            })
         {
             if !wait {
                 return Err(AutomationError::BadRequest(format!("{id}.context: synchronous dispatch is required")));

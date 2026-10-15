@@ -2,11 +2,14 @@
 //! name/visibility/opacity subset of the existing registered upstream command;
 //! it grants neither native pixel editing nor source/render qualification.
 use super::*;
+use crate::accounted_session::metadata_gesture::MetadataPolicy;
 use crate::{
     accounted_view::AccountedView,
     channel_cmds::{ChannelTarget, ChannelView},
 };
 use photocraft_doc::accounted_document::accounted_layer_access;
+#[path = "imported_accounted_metadata/assigned.rs"]
+mod assigned;
 #[derive(Clone, Copy)]
 enum Target<'a> {
     Active,
@@ -97,6 +100,7 @@ pub(super) struct Prepared<'a> {
     anchor: Option<LayerId>,
     channel: ChannelView,
     only_visibility: bool,
+    assigned: Option<assigned::AssignedFence>,
     _lease: QuotaLease,
 }
 impl<'a> Request<'a> {
@@ -126,6 +130,14 @@ impl<'a> Request<'a> {
         };
         let edit = AccountedEdit::LayerMetadata { layer: id, name: self.name, visible: self.visible, opacity: self.opacity };
         owner.validate_imported_metadata_edit(edit, control)?;
+        let policy = MetadataPolicy::for_owner(owner);
+        // Current validation precedes copied channel/journal containers. The
+        // eventual transaction repeats it under the same cumulative control.
+        policy.validate_current(owner, control)?;
+        let assigned = match policy {
+            MetadataPolicy::Plain => None,
+            MetadataPolicy::AssignedGeometry => Some(assigned::AssignedFence::prepare(session, control)?),
+        };
         check_locks(owner.document(), edit, control)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
         if state.active_layer != view.target().active || state.layer_anchor != view.anchor() || !state.selected_layers.is_empty() {
@@ -159,6 +171,7 @@ impl<'a> Request<'a> {
             anchor: state.layer_anchor,
             channel,
             only_visibility: self.only_visibility,
+            assigned,
             _lease: lease,
         })
     }
@@ -177,6 +190,9 @@ fn check_locks(doc: &photocraft_doc::Document, edit: AccountedEdit<'_>, control:
 impl Prepared<'_> {
     pub(super) fn execute(self, session: &mut Session, control: &ReadControl<'_>) -> Result<Value> {
         control.check(1)?;
+        if let Some(assigned) = &self.assigned {
+            assigned.check(session, control)?;
+        }
         let state = session.active().ok_or(EngineError::NoDocument)?;
         let owner = state.doc.accounted().ok_or(BackingError::Integrity)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
@@ -203,3 +219,7 @@ impl Prepared<'_> {
 #[cfg(test)]
 #[path = "imported_accounted_metadata_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "imported_accounted_metadata/assigned_tests.rs"]
+mod assigned_tests;

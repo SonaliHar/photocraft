@@ -108,6 +108,8 @@ pub(crate) fn qualify(owner: &AccountedDocument, profile: &Profile, c: &ReadCont
 /// Typed assigned original/effective-current relation. Matching the immutable
 /// model and ledger is required; encoded bytes or epoch hints cannot fabricate
 /// this binding. The generated effective definition supplies the renderer math.
+/// CURRENT layer activity may differ from the source recipe; every layer and
+/// mask is still validated, including hidden or zero-opacity native content.
 pub(crate) fn qualify_assigned(
     owner: &AccountedDocument,
     binding: &crate::backed_assigned_current_profile::PreparedAssignedCurrentProfile,
@@ -220,7 +222,7 @@ fn qualify_inner(
         if item.parent.is_some()
             || item.raster_bounds != Some(extent)
             || item.visible != layer.visible
-            || !layer.visible
+            || (binding.is_none() && !layer.visible)
             || policy.compatibility_epoch != expected
             || policy.source_mode != 28
             || policy.legacy
@@ -262,7 +264,7 @@ fn qualify_inner(
         }
         composite = Some(resolved.composite_space);
         if index == 0 {
-            if extent != doc.bounds() || layer.opacity.to_bits() != 1f32.to_bits() || layer.mask.is_some() {
+            if extent != doc.bounds() || (binding.is_none() && layer.opacity.to_bits() != 1f32.to_bits()) || layer.mask.is_some() {
                 return Err(scope());
             }
         } else {

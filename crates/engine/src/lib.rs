@@ -21,6 +21,7 @@ pub(crate) mod accounted_clear;
 pub(crate) mod accounted_fill;
 mod accounted_native_pixels;
 mod accounted_session;
+pub use accounted_session::metadata_gesture::assigned_geometry_metadata_candidate;
 mod accounted_xcf_open;
 pub mod accounted_selection_session;
 pub mod accounted_view;

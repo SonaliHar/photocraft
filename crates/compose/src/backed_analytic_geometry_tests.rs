@@ -346,3 +346,114 @@ fn typed_geometry_rejects_raw_resolved_operator_contradictions_and_nonunion_back
     let invalid = adopt(doc, q, Arc::new((source, fee)));
     assert!(PreparedAssignedCurrentProfile::prepare(&invalid, Default::default(), &ctl()).is_err());
 }
+
+// Activity belongs to CURRENT metadata only. These generated fixtures retain
+// their genuine paid native/source owners; no hidden-source eligibility follows.
+fn activity_owner(visible: [bool; 2], opacity: [f32; 2], defect: u8) -> AccountedDocument {
+    let source = assigned_operator(SampleType::F64, SampleEncoding::NonlinearProfile, 4, GimpOperator::Intersection);
+    let q = source.quota().clone();
+    let fee = q.reserve(QuotaKind::Resident, 1 << 20).unwrap();
+    let mut doc = source.document().clone();
+    for (index, layer) in doc.layers.iter_mut().enumerate() {
+        layer.visible = visible[index];
+        layer.opacity = opacity[index];
+        doc.xcf_state.as_mut().unwrap().items.iter_mut().find(|i| i.item == ItemRef::Layer(layer.id)).unwrap().visible = visible[index];
+    }
+    match defect {
+        1 | 2 => {
+            let layer = doc.layers.get_mut(if defect == 1 { 0 } else { 1 }).unwrap();
+            let LayerContent::BackedRaster(backed) = &layer.content else { panic!("generated backed fixture") };
+            let r = backed.operative_bounds();
+            let last = photocraft_geom::Rect::new(r.x1 - 1, r.y1 - 1, r.x1, r.y1);
+            let mut raw = [0; 32];
+            backed.checked_view().read_logical_pixel_native_into(last.x0, last.y0, &mut raw, &ctl()).unwrap();
+            photocraft_color::try_write_sample_f64(&mut raw, SampleType::F64, 0, 1.5).unwrap();
+            layer.content = LayerContent::BackedRaster(backed.try_edited_native(last, &raw, &ctl()).unwrap());
+        }
+        3 => {
+            let r = doc.bounds();
+            let layer = &mut doc.layers[1];
+            let mask = layer.mask.as_mut().unwrap();
+            let mut surface = Surface::new(mask.surface.format());
+            surface.try_write_pixel_f64(r.x1 - 1, r.y1 - 1, &[1.5]).unwrap();
+            mask.surface = Arc::new(surface);
+        }
+        4 => doc.xcf_state.as_mut().unwrap().items.iter_mut().find(|i| i.item == ItemRef::Layer(doc.layers[1].id)).unwrap().visible = !visible[1],
+        5 => {
+            let mut bytes = doc.icc_profile.as_ref().unwrap().as_ref().clone();
+            bytes[0] = 255;
+            doc.icc_profile = Some(Arc::new(bytes));
+        }
+        _ => (),
+    }
+    adopt(doc, q, Arc::new((source, fee)))
+}
+#[test]
+fn typed_current_activity_allows_hidden_and_both_layer_opacities_without_narrow_route_enrollment() {
+    use crate::{backed_assigned_current_profile::PreparedAssignedCurrentProfile, backed_document::PreparedBackedDocument};
+    for (visible, opacity) in [
+        ([false, false], [0.25, 0.375]),
+        ([false, true], [0.0, 0.375]),
+        ([true, false], [0.25, 0.0]),
+        ([true, true], [0.0, 0.0]),
+        ([true, true], [0.25, 0.375]),
+    ] {
+        let owner = activity_owner(visible, opacity, 0);
+        let raw = native_storage_hash(&owner);
+        let binding = PreparedAssignedCurrentProfile::prepare(&owner, Default::default(), &ctl()).unwrap();
+        assert_eq!(qualify_assigned(&owner, &binding, &ctl()).unwrap(), GimpSpace::LinearRgb);
+        assert!(qualify(&owner, binding.profile(), &ctl()).is_err(), "old narrow source-visible/full-backdrop path remains closed");
+        let renderer = PreparedBackedDocument::new_accounted_with_assigned_profile(&owner, &binding, Default::default(), &ctl()).unwrap();
+        let band = renderer.render_band(owner.document().bounds(), &ctl()).unwrap();
+        assert!(band.pixels().iter().flatten().all(|v| v.is_finite()));
+        if !visible[0] || opacity[0] == 0.0 || (visible[1] && opacity[1] == 0.0) {
+            assert!(band.pixels().iter().all(|v| *v == [0.; 4]), "Intersection with hidden/zero source or backdrop is transparent");
+        }
+        assert_eq!(native_storage_hash(&owner), raw);
+        // Isolate the activity gate from the independent old non-Union refusal.
+        let q = owner.quota().clone();
+        let fee = q.reserve(QuotaKind::Resident, 1 << 20).unwrap();
+        let mut union = owner.document().clone();
+        let id = union.layers[1].id;
+        let p = union.xcf_state.as_mut().unwrap().items.iter_mut().find(|i| i.item == ItemRef::Layer(id)).unwrap().composition.as_mut().unwrap();
+        p.stored_operator = 1;
+        p.resolved.as_mut().unwrap().operator = GimpOperator::Union;
+        let union = adopt(union, q, Arc::new((owner.clone(), fee)));
+        let union_binding = PreparedAssignedCurrentProfile::prepare(&union, Default::default(), &ctl()).unwrap();
+        qualify_assigned(&union, &union_binding, &ctl()).unwrap();
+        assert!(qualify(&union, union_binding.profile(), &ctl()).is_err(), "old Union path still rejects changed source activity");
+    }
+}
+#[test]
+fn hidden_current_layers_and_mask_still_validate_last_native_word_and_profile() {
+    use crate::backed_assigned_current_profile::PreparedAssignedCurrentProfile;
+    for defect in [1, 2, 3] {
+        let owner = activity_owner([false, false], [0.0, 0.0], defect);
+        let binding = PreparedAssignedCurrentProfile::prepare(&owner, Default::default(), &ctl()).unwrap();
+        // Descriptor/profile preparation is insufficient: the hidden malformed
+        // last pixel in EACH layer or mask must fail full operative validation.
+        assert!(qualify_assigned(&owner, &binding, &ctl()).is_err(), "hidden malformed tail {defect}");
+    }
+    for defect in [4, 5] {
+        let owner = activity_owner([false, false], [0.0, 0.0], defect);
+        assert!(PreparedAssignedCurrentProfile::prepare(&owner, Default::default(), &ctl()).is_err(), "hidden metadata/profile defect {defect}");
+    }
+    for opacity in [[f32::NAN, 0.0], [0.0, f32::INFINITY], [-0.25, 0.0], [0.0, 1.25]] {
+        let owner = activity_owner([false, false], opacity, 0);
+        assert!(PreparedAssignedCurrentProfile::prepare(&owner, Default::default(), &ctl()).is_err());
+    }
+}
+#[test]
+fn hidden_current_full_validation_preserves_control_and_refunds_private_scratch() {
+    use crate::backed_assigned_current_profile::PreparedAssignedCurrentProfile;
+    let owner = activity_owner([false, false], [0.0, 0.0], 0);
+    let binding = PreparedAssignedCurrentProfile::prepare(&owner, Default::default(), &ctl()).unwrap();
+    qualify_assigned(&owner, &binding, &ctl()).unwrap(); // warm genuine native cache before baseline
+    let before = owner.quota().usage().unwrap();
+    let denied = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Err(BackingError::Work) };
+    assert!(matches!(qualify_assigned(&owner, &binding, &denied), Err(E::Backing(BackingError::Work))));
+    let cancelled = || true;
+    let stop = Interrupt::cancel_only(&cancelled);
+    assert!(matches!(qualify_assigned(&owner, &binding, &ReadControl { interrupt: &stop, work: &|_| Ok(()) }), Err(E::Backing(BackingError::Cancelled))));
+    assert_eq!(owner.quota().usage().unwrap(), before);
+}

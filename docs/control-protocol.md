@@ -1527,8 +1527,13 @@ transfer constants. Strict source and native handoffs validate the current
 profile and complete canvas before publication, under the same quota and
 cancellation/work control. Native title changes preserve
 the shared mask and source owners. Paid `xcf.inspect` exposes the three items
-and mask metadata; generic layer/filter/selection edits remain outside this
-closed family. The foreground retains its exact Union, Clip to Backdrop, Clip to
+and mask metadata. The existing `layer.setProps` command accepts combined name,
+visibility and opacity changes for either layer through the paid imported
+metadata transaction. It retains upstream exact coalescing keys, undo grouping,
+cast/clamp and unchanged-value behavior, with current and staged profile/canvas
+validation before publication. These edits require synchronous dispatch and
+share the registered finite work ledger; other layer/filter/selection edits
+remain outside this closed family. The foreground retains its exact Union, Clip to Backdrop, Clip to
 Layer or Intersection policy, with a Union backdrop. Typed composition handles
 outside-layer and zero-opacity coverage; a hidden layer skips composition.
 Existing bare-profile constructors retain their Union scope. Other blend modes,

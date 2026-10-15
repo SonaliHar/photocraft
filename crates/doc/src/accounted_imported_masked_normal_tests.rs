@@ -25,7 +25,7 @@ impl NativePlaneStore for Store {
 fn fixture(sample: SampleType) -> AccountedDocument {
     fixture_encoding(sample, SampleEncoding::NonlinearProfile)
 }
-fn fixture_encoding(sample: SampleType, encoding: SampleEncoding) -> AccountedDocument {
+pub(super) fn fixture_encoding(sample: SampleType, encoding: SampleEncoding) -> AccountedDocument {
     let q = BackingQuota::new(QuotaLimits { resident: 64 << 20, index: 16 << 20, scratch: 0 });
     // Genuine prospective fee before fixture DTO/maps/profile allocation. All
     // native stores also retain their actual backing allocations on this q.

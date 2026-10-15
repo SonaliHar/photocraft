@@ -229,6 +229,11 @@ impl Session {
 
     fn edit_accounted_inner(&mut self, label: &str, edit: AccountedEdit<'_>, alpha_check: NativeAlphaCheck, control: &ReadControl<'_>) -> Result<()> {
         control.check(1)?;
+        if matches!(edit, AccountedEdit::LayerMetadata { .. })
+            && self.active().and_then(|state| state.doc.accounted()).is_some_and(metadata_gesture::assigned_geometry_metadata_candidate)
+        {
+            return self.edit_accounted_metadata_with_coalesce(label, edit, None, control);
+        }
         if self.active_job().is_some() {
             return Err(EngineError::Other("the document has an active background job".into()));
         }

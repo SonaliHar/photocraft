@@ -4,6 +4,32 @@
 use super::*;
 use photocraft_doc::DocId;
 use photocraft_raster::backing::quota::{BackingQuota, QuotaLease};
+/// Constant-time routing hint over an actual owner. Full closed structural and
+/// current profile/native validation remains mandatory; this grants no authority.
+pub fn assigned_geometry_metadata_candidate(owner: &AccountedDocument) -> bool {
+    !owner.is_readonly_point_storage()
+        && !owner.is_readonly_threshold_storage()
+        && !owner.is_readonly_threshold_alpha_storage()
+        && owner.document().layers.len() == 2
+        && owner.document().layers.get(1).is_some_and(|layer| layer.mask.is_some())
+        && owner.document().xcf_state.as_ref().is_some_and(|state| state.items.len() == 3)
+}
+#[derive(Clone, Copy)]
+pub(crate) enum MetadataPolicy {
+    Plain,
+    AssignedGeometry,
+}
+impl MetadataPolicy {
+    pub(crate) fn for_owner(owner: &AccountedDocument) -> Self {
+        if assigned_geometry_metadata_candidate(owner) { Self::AssignedGeometry } else { Self::Plain }
+    }
+    pub(crate) fn validate_current(self, owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<()> {
+        match self {
+            Self::Plain => Ok(()),
+            Self::AssignedGeometry => crate::accounted_xcf_open::analytic_geometry::validate_current_analytic_geometry_storage(owner, c),
+        }
+    }
+}
 struct KeyOwner {
     key: String,
     document: DocId,
@@ -62,6 +88,11 @@ impl Session {
         }
         let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
         owner.validate_imported_metadata_edit(edit, c)?;
+        let policy = MetadataPolicy::for_owner(owner);
+        if matches!(policy, MetadataPolicy::AssignedGeometry) && !state.history.current()?.shares_state(&state.doc) {
+            return Err(BackingError::Integrity.into());
+        }
+        policy.validate_current(owner, c)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
         if state.active_layer != view.target().active || state.layer_anchor != view.anchor() || !state.selected_layers.is_empty() {
             return Err(BackingError::Integrity.into());
@@ -95,6 +126,7 @@ impl Session {
             return Ok(());
         }
         let current = snapshot.accounted().ok_or(BackingError::Integrity)?;
+        policy.validate_current(current, c)?;
         let next_view = view.try_replace(current, state.active_layer, view.selected(), state.layer_anchor, c)?;
         let gesture = match key {
             None => None,
