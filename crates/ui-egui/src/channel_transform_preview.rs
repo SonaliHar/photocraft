@@ -313,7 +313,12 @@ mod tests {
                                 }
                             }
                             let texture = fast.texture(&t, &st.channel_view, false, false, factor);
-                            if geometry == 1 || (geometry == 6 && selection == 0) || geometry == 7 || (geometry >= 8 && interpolation == "bicubic") {
+                            if geometry == 1
+                                || (geometry == 3 && texture.is_none())
+                                || (geometry == 6 && selection == 0)
+                                || geometry == 7
+                                || (geometry >= 8 && interpolation == "bicubic")
+                            {
                                 assert!(texture.is_none(), "shrinking or explicitly clipped Warp needs the CPU oracle");
                                 continue;
                             }
@@ -330,6 +335,90 @@ mod tests {
                                 .max()
                                 .unwrap();
                             assert!(max <= 2, "{depth:?}/{pattern}/{selection}/{interpolation}/{geometry}: max error {max}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn gpu_stretched_thin_channel_warp_matches_native_sampling() {
+        let _gpu_test = GPU_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let rs = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
+        }));
+        let Ok(rs) = rs else {
+            eprintln!("no GPU adapter for stretched channel Warp readback");
+            return;
+        };
+        let gpu = crate::gpu_canvas::GpuCanvas::new(&rs);
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            for selected in [false, true] {
+                let mut doc = Document::with_background("thin channel Warp", Size::new(128, 128), ColorMode::Rgb, depth, Color::rgba(0.0, 0.4, 0.6, 0.75));
+                doc.layers[0].surface_mut().unwrap().fill_rect(Rect::new(40, 20, 43, 60), &[0.8, 0.4, 0.6, 0.75]);
+                if selected {
+                    let mut sel = photocraft_raster::Surface::new(photocraft_color::PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
+                    sel.fill_rect(Rect::new(40, 20, 43, 60), &[1.0]);
+                    sel.fill_rect(Rect::new(40, 20, 41, 60), &[0.5]);
+                    doc.selection = Some(sel);
+                }
+                let mut session = Session::new();
+                session.tools.background = [0.0, 0.0, 0.0, 1.0];
+                session.add_document(doc, None);
+                let mut a = PhotocraftApp::new(session, crate::Services::default());
+                a.run("channel.target", json!({"channel":"red"})).unwrap();
+                a.run("channel.setVisible", json!({"channel":"composite","visible":true})).unwrap();
+                crate::transform_tool::begin(&mut a, &egui::Context::default()).unwrap();
+                let st = a.session.active().unwrap();
+                let doc = &st.doc;
+                let fill = [0.0, 0.0, 0.0, 1.0];
+                let mut fast = crate::channel_transform_gpu::Preview::new(&gpu, doc, st.active_layer, fill).unwrap();
+                for factor in [1, 2] {
+                    for offset in [0.0, 0.125] {
+                        for interpolation in ["bilinear", "bicubic"] {
+                            let mut t = a.ui.transform.clone().unwrap();
+                            let k = f64::from(factor);
+                            // The 3 px source becomes a 90 px band with a 30 px sag. A grid sized
+                            // only by the source has one cell across and loses the entire curve.
+                            // Factor 2 also checks the map in reduced-preview coordinates.
+                            t.rect = [40.0, 20.0, 43.0, 60.0].map(|v| v * k);
+                            let mesh = BezierMesh::identity(t.rect, 1, 1).map_points(|p| {
+                                let u = (p[0] / k - 40.0) / 3.0;
+                                [k * (41.5 + (p[0] / k - 41.5) * 30.0 + offset), p[1] + k * 180.0 * u * (1.0 - u)]
+                            });
+                            t.warp = Some(Warp::custom(mesh, t.rect));
+                            t.interpolation = interpolation.into();
+                            let texture = fast.texture(&t, &st.channel_view, false, false, factor);
+                            let mut oracle = Preview::new(doc, st.active_layer, fill, false);
+                            oracle.factor = factor;
+                            oracle.update(&t).unwrap();
+                            let expected = oracle.image(&st.channel_view, false, None);
+                            if selected && offset != 0.0 {
+                                texture.expect("unfolded selected thin Warp keeps the GPU path");
+                                let actual = fast.readback();
+                                let max = actual
+                                    .iter()
+                                    .zip(&expected.pixels)
+                                    .flat_map(|(a, b)| a.to_array().into_iter().zip(b.to_array()).map(|(a, b)| a.abs_diff(b)))
+                                    .max()
+                                    .unwrap();
+                                assert!(max <= 2, "{depth:?}, selected={selected}, factor={factor}, offset={offset}, {interpolation}: max error {max}");
+                            } else {
+                                // An explicit frame smaller than the canvas has clipped coverage;
+                                // the existing CPU fallback must remain in force without a selection.
+                                assert!(texture.is_none(), "clipped frames and pixel-centre edge ties keep the CPU oracle");
+                            }
+                            let shown = oracle.shown.layers[0].surface().unwrap();
+                            assert!(shown.sample_channel(41, 70, 0) > 0.6, "the middle follows the sag");
+                            assert!(shown.sample_channel(41, 20, 0) < 0.01, "the old straight band is cleared");
+                            for y in 0..128 {
+                                for x in 0..128 {
+                                    for c in [1, 2, 3] {
+                                        assert_eq!(shown.sample_channel(x, y, c).to_bits(), doc.layers[0].surface().unwrap().sample_channel(x, y, c).to_bits());
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -435,8 +524,11 @@ mod tests {
                             view.clone_from(&session.active().unwrap().channel_view);
                             for in_color in [false, true] {
                                 let texture = fast.texture(&t, &view, in_color, encode, 1);
-                                if (interpolation == "nearest" && geometry > 1) || (interpolation == "bicubic" && matches!(geometry, 2 | 4)) {
-                                    assert!(texture.is_none(), "fractional nearest ties and Bicubic reductions use the CPU oracle");
+                                if (interpolation == "nearest" && geometry > 1)
+                                    || (interpolation == "bicubic" && matches!(geometry, 2 | 4))
+                                    || (geometry == 7 && selection != 1)
+                                {
+                                    assert!(texture.is_none(), "fractional nearest ties, Bicubic reductions and ambiguous curved outlines use the CPU oracle");
                                     continue;
                                 }
                                 texture.unwrap();

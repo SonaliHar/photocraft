@@ -413,6 +413,47 @@ fn write_band(rs: &RenderState, texture: &wgpu::Texture, width: u32, y: u32, row
     );
 }
 
+/// Detect curved outline coverage that changes on the GPU's subpixel raster grid. This
+/// visits at most 4096 pixel centres per segment; oversized/degenerate edges use the CPU.
+fn rounded_outline_changes_coverage(a: [f64; 2], b: [f64; 2]) -> bool {
+    let axis = usize::from((b[1] - a[1]).abs() > (b[0] - a[0]).abs());
+    let other = 1 - axis;
+    let lo = (a[axis].min(b[axis]) - 0.5).ceil();
+    let hi = (a[axis].max(b[axis]) - 0.5).floor();
+    let count = hi - lo + 1.0;
+    if count <= 0.0 {
+        return false;
+    }
+    if !count.is_finite() || count > 4096.0 || lo.abs().max(hi.abs()) > f64::from(1 << 24) {
+        return true;
+    }
+    let span = b[axis] - a[axis];
+    if span.abs() < 1e-12 {
+        return true;
+    }
+    (0..count as usize).any(|i| {
+        let at = lo + i as f64 + 0.5;
+        let v = a[other] + (at - a[axis]) * (b[other] - a[other]) / span - 0.5;
+        // Vulkan guarantees at least four fractional raster bits, not eight. Check
+        // 4..16-bit grids and bound finer rounding rather than assuming one adapter.
+        // https://docs.vulkan.org/spec/latest/chapters/limits.html#limits-minmax
+        let fine_error = 2.0 * (1.0 + ((b[other] - a[other]) / span).abs()) / 65536.0;
+        !v.is_finite()
+            || (v - v.round()).abs() <= fine_error
+            || (4..=16).any(|bits| {
+                let scale = f64::from(1 << bits);
+                let rounded = |p: [f64; 2]| p.map(|v| (v * scale).round() / scale);
+                let (ra, rb) = (rounded(a), rounded(b));
+                let rspan = rb[axis] - ra[axis];
+                if rspan.abs() < 1e-12 {
+                    return true;
+                }
+                let rv = ra[other] + (at - ra[axis]) * (rb[other] - ra[other]) / rspan - 0.5;
+                !rv.is_finite() || v.floor() != rv.floor() || (rv - rv.round()).abs() < 1e-9
+            })
+    })
+}
+
 fn warp_geometry(w: &photocraft_geom::warp::Warp, rect: [f64; 4], factor: f64) -> Option<(Vec<f32>, Vec<u32>)> {
     // Bound cloning, tessellation and index allocation before visiting input-driven knots.
     if !factor.is_finite() || factor <= 0.0 || w.mesh.as_ref().is_some_and(|m| m.us.len() > 65 || m.vs.len() > 65 || m.points.len() > 193 * 193) {
@@ -436,9 +477,13 @@ fn warp_geometry(w: &photocraft_geom::warp::Warp, rect: [f64; 4], factor: f64) -
                 p.iter().zip(o).zip(x).zip(y).all(|(((p, o), x), y)| (p - (o + (x - o) * (i % 4) as f64 / 3.0 + (y - o) * (i / 4) as f64 / 3.0)).abs() < 1e-9)
             })
         });
+    let map = |x: f64, y: f64| {
+        let (u, v) = w.map(x * factor, y * factor);
+        (u / factor, v / factor)
+    };
     // An affine Bezier patch has identical sampling through any tessellation. Keep translations,
-    // scaling and shear cheap; curved maps use exactly the CPU oracle's source grid.
-    let (nx, ny) = if affine { (1, 1) } else { photocraft_algo::warp::mesh_grid(bounds) };
+    // scaling and shear cheap; curved maps share the CPU grid in source and destination pixels.
+    let (nx, ny) = if affine { (1, 1) } else { photocraft_algo::warp::mesh_grid(bounds, &map) };
     let us: Vec<f64> = (0..=nx).map(|i| i as f64 / nx as f64).collect();
     let vs: Vec<f64> = (0..=ny).map(|i| i as f64 / ny as f64).collect();
     let mut vertices = Vec::with_capacity(us.len().checked_mul(vs.len())?.checked_mul(4)?);
@@ -446,8 +491,8 @@ fn warp_geometry(w: &photocraft_geom::warp::Warp, rect: [f64; 4], factor: f64) -
     for v in &vs {
         for u in &us {
             let src = [rect[0] + u * (rect[2] - rect[0]), rect[1] + v * (rect[3] - rect[1])];
-            let dst = w.map(src[0] * factor, src[1] * factor);
-            let dst = [dst.0 / factor, dst.1 / factor];
+            let dst = map(src[0], src[1]);
+            let dst = [dst.0, dst.1];
             if dst.iter().any(|v| !v.is_finite() || !(*v as f32).is_finite()) {
                 return None;
             }
@@ -471,6 +516,19 @@ fn warp_geometry(w: &photocraft_geom::warp::Warp, rect: [f64; 4], factor: f64) -
             let bottom_index = a.checked_add(stride)?;
             let diagonal_index = bottom_index.checked_add(1)?;
             let (origin, right, bottom, diagonal) = (point(a)?, point(right_index)?, point(bottom_index)?, point(diagonal_index)?);
+            // CPU triangles include their boundary. GPU top-left rasterization can omit an
+            // outer axis-aligned edge through pixel centres, losing a whole colour column.
+            // Preserve the CPU coverage for these ties rather than nudging source geometry.
+            let through_centres =
+                |a: [f64; 2], b: [f64; 2]| (0..2).any(|axis| (a[axis] - b[axis]).abs() < 1e-9 && (a[axis] - 0.5 - (a[axis] - 0.5).round()).abs() < 1e-6);
+            let needs_cpu = |a, b| through_centres(a, b) || (!affine && rounded_outline_changes_coverage(a, b));
+            if (i == 0 && needs_cpu(origin, bottom))
+                || (i + 1 == nx && needs_cpu(right, diagonal))
+                || (j == 0 && needs_cpu(origin, right))
+                || (j + 1 == ny && needs_cpu(bottom, diagonal))
+            {
+                return None;
+            }
             let dx = (us.get(i + 1)? - us.get(i)?) * (rect[2] - rect[0]);
             let dy = (vs.get(j + 1)? - vs.get(j)?) * (rect[3] - rect[1]);
             if dx <= 0.0 || dy <= 0.0 {
@@ -658,5 +716,14 @@ mod tests {
         assert!(warp_geometry(&Warp::custom(folded, rect), rect, 1.0).is_none());
         let w = Warp::custom(BezierMesh { us: vec![], vs: vec![], points: vec![] }, rect);
         assert!(warp_geometry(&w, rect, 1.0).is_none());
+        // The CPU covers pixel (27, 0), but rounding this curved top edge to the GPU
+        // subpixel grid moves it just below that pixel's centre.
+        assert!(rounded_outline_changes_coverage([24.88888888888889, 0.4240329218106997], [28.444444444444443, 0.5267489711934157]));
+        assert!(
+            rounded_outline_changes_coverage([21.57758620689655, 43.97146254458978], [24.68103448275862, 45.68370986920333]),
+            "coarser raster grids also need the CPU coverage"
+        );
+        assert!(!rounded_outline_changes_coverage([0.0, 0.0], [4.0, 0.0]));
+        assert!(rounded_outline_changes_coverage([0.0, 0.0], [10000.0, 1.0]), "outline scans stay bounded");
     }
 }
