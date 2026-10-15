@@ -1,6 +1,6 @@
 # Brush and painting parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (optional right-drag resize, Shift precision and temporary hardness/opacity switching; dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed) · **Target:** Adobe Photoshop 2026
 
 Painting is where Photoshop users notice differences first, so it gets its own checklist: the
 brush engine (`crates/paint/src/brush.rs`), the Brush Settings UI
@@ -56,7 +56,7 @@ tablets against Photoshop side by side.
 | Smooth line weight along a pressure ramp | partial | stair-steps (#1776) |
 | Interpolation and smoothing match Photoshop | partial | #2138, #2057 |
 | Soft-edge falloff matches Photoshop's curve | partial | #2149, #1619 |
-| Brush preview and cursor crisp, not pixelated | partial | #1433 |
+| Brush preview and cursor crisp, not pixelated | partial | #1433; one-pixel Pencil retains a visible pointer at pixel-grid zoom (#5098) |
 | Cursor outline equals the painted footprint at every zoom | partial | #1761, #2364; shaped tips trace their outline (#3467), turned and flipped with a rotated or flipped view |
 | Latency: dab to screen within a frame | partial | budgets P13/P16/P33 over (scorecard); big-brush lag #2619, #1994; cursor lag #2566, #1343 |
 | No hitch at mouse-up on a long stroke | not measurable | P32 needs a frame harness |
@@ -69,6 +69,7 @@ tablets against Photoshop side by side.
 | Behaviour | Status | Evidence |
 |---|---|---|
 | ⌃⌥-drag (macOS) / Alt+right-drag (Windows) resizes and changes hardness with a readout | done | TOOL-213-10 |
+| Optional unmodified right-drag resize (Tools preference); Shift precision; primary tap during a held right drag switches hardness/opacity | done | #5254, #4944, #4882; `brush_resize.rs`, `paint_mouse.rs` |
 | `[` `]` size, `⇧[` `⇧]` hardness, number keys opacity, ⇧+numbers flow | done | 2026-10-07 |
 | ⌥-click samples a colour with painting tools; Eyedropper comparison ring | done | TOOL-213-9 |
 | ⇧-click draws a straight line from the last point | done | |
@@ -124,3 +125,5 @@ tablets against Photoshop side by side.
 | 2026-10-13 | minor | Shape Dynamics and Transfer minimum inputs follow their Control and retain their values while disabled (#3825, partial). No brush-feel estimate changed. |
 | 2026-10-13 | minor | Hue Jitter uses the same themed amount slider as other jitter controls (#3825, partial). No brush-feel estimate changed. |
 | 2026-10-13 | minor | Dragging a brush preset shows its cached tip thumbnail and name in the Brushes panel and preset picker (#4225, partial). No brush-feel estimate changed. |
+
+| 2026-10-15 | minor | Added opt-in right-drag resizing, Shift precision independent of zoom, and temporary hardness/opacity switching during the held gesture. Also added original opaque Pen/Eyedropper cursor glyphs (#5943) and a visible one-pixel Pencil pointer (#5098). Defaults and brush-feel estimates unchanged. |

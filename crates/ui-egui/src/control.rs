@@ -1047,6 +1047,14 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     }
                     continue;
                 }
+                // Match a primary tap during a held secondary HUD resize. Its release must
+                // not end the right-button gesture or start a brush stroke.
+                if button == "left" && app.brush_resize.is_some_and(|r| r.secondary) {
+                    if matches!(ev, ToolEvent::Down { .. }) {
+                        crate::brush_resize::toggle_vertical(app, [x, y]);
+                    }
+                    continue;
+                }
                 if secondary {
                     let down = matches!(ev, ToolEvent::Down { .. });
                     // Right-click while transforming: the box's menu, as on the canvas.
@@ -1383,6 +1391,37 @@ mod tests {
             Outcome::Done(v) => v,
             _ => panic!("{method}: expected an immediate reply"),
         }
+    }
+
+    #[test]
+    fn pointer_primary_tap_switches_the_secondary_brush_hud_axis() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 400, "height": 400})).unwrap();
+        app.ui.tool = Tool::Brush;
+        app.run("tools.setBrush", json!({"brush": {"size": 20, "hardness": 0.2, "opacity": 0.4}})).unwrap();
+        app.run("prefs.set", json!({"path": "tools.rightClickWithPaintingTools", "value": "resize"})).unwrap();
+        let mut pointer = |button: &str, kind: &str, x: f64, y: f64| {
+            let v = call(&mut app, &ctx, "ui.pointer", json!({"button": button, "events": [{"kind": kind, "x": x, "y": y}]}));
+            assert_eq!(v["ok"], true, "{v}");
+        };
+        pointer("secondary", "down", 100.0, 100.0);
+        pointer("secondary", "move", 110.0, 140.0);
+        pointer("left", "down", 110.0, 140.0);
+        pointer("left", "up", 110.0, 140.0);
+        pointer("secondary", "move", 110.0, 180.0);
+        pointer("secondary", "up", 110.0, 180.0);
+        assert!(app.brush_resize.is_none());
+        assert!(app.session.tools.brush.hardness > 0.2);
+        assert!(app.session.tools.brush.opacity > 0.4);
+        assert!(!app.session.journal.iter().any(|(id, _)| id == "paint.stroke"));
+        let mut replay = photocraft_engine::Session::new();
+        for (id, params) in &app.session.journal {
+            replay.execute(id, params.clone()).unwrap();
+        }
+        assert_eq!(replay.tools.brush.size, app.session.tools.brush.size);
+        assert_eq!(replay.tools.brush.hardness, app.session.tools.brush.hardness);
+        assert_eq!(replay.tools.brush.opacity, app.session.tools.brush.opacity);
     }
 
     #[test]
