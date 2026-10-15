@@ -24,6 +24,7 @@ mod zoom;
 /// reject them) past that, so stay within it there (#968 used 128). Either way it keeps allocations
 /// bounded for hostile brush sizes or zooms.
 const MAX_SIDE: u16 = if cfg!(any(target_os = "windows", target_os = "macos")) { 2048 } else { 255 };
+const DISPLAY_SCALE_EPSILON: f32 = 0.001;
 
 /// What a bitmap cursor shows. `Hand` is the Hand tool's open hand, or its fist while it drags;
 /// `Zoom` is the Zoom tool's magnifier, with a minus when it zooms out. `Outline` is a brush tip
@@ -103,7 +104,8 @@ fn native(ctx: &egui::Context) -> bool {
     // destination: a 160% display enlarges the tip and moves its centre below/right of
     // the actual pointer. The canvas painter shares the stroke's transform and avoids
     // that mismatch. UI zoom alone is safe; this is the native display scale only.
-    let scaled_display = ctx.input(|i| i.viewport().native_pixels_per_point.unwrap_or(1.0)) != 1.0;
+    let native_pixels_per_point = ctx.input(|i| i.viewport().native_pixels_per_point.unwrap_or(1.0));
+    let scaled_display = (native_pixels_per_point - 1.0).abs() > DISPLAY_SCALE_EPSILON;
     cfg!(not(target_arch = "wasm32")) && ctx.viewport_id() == egui::ViewportId::ROOT && !(ignores_viewport && scaled_display)
 }
 

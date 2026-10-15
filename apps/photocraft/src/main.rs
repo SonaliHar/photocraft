@@ -11,6 +11,10 @@
 //! `--in-window-menus` (or `PHOTOCRAFT_IN_WINDOW_MENUS=1`) keeps the menus inside the window on
 //! macOS instead of the macOS menu bar (`mac_menu`).
 //!
+//! `PHOTOCRAFT_CURSOR_VIEWPORT_UNRELIABLE=1` paints tool cursors on the canvas at fractional
+//! native Wayland scales when a compositor (for example older Mutter or KWin configurations)
+//! ignores custom cursor viewport sizing.
+//!
 //! `--control <port>` (or `PHOTOCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server.
 //! The first line must authenticate; subsequent request lines get reply lines.
 //! `{"id":1,"ok":true,"result":…}`. See `photocraft_ui_egui::control` for the methods.
@@ -384,7 +388,11 @@ fn main() -> eframe::Result {
                 services.is_wayland = display == Some(tablet::DisplayKind::Wayland);
                 // Hyprland's cursor surfaces ignore winit's viewport sizing at display scales
                 // other than 1; let the canvas draw the outline at the stroke's own position.
-                services.cursor_bitmap_ignores_viewport = services.is_wayland && std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some();
+                // PHOTOCRAFT_CURSOR_VIEWPORT_UNRELIABLE extends this workaround to other
+                // compositors with the same issue.
+                let override_unreliable = std::env::var_os("PHOTOCRAFT_CURSOR_VIEWPORT_UNRELIABLE").is_some_and(|v| !v.is_empty() && v != "0");
+                services.cursor_bitmap_ignores_viewport =
+                    services.is_wayland && (std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() || override_unreliable);
                 file_dialog_probe::start();
                 if services.is_wayland {
                     let var = |name| std::env::var(name).ok();

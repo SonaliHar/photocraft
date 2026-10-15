@@ -48,6 +48,22 @@ fn scaled_compositors_without_cursor_viewports_paint_the_tip_at_the_pointer() {
 }
 
 #[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn near_one_display_scales_keep_native_cursor_bitmaps() {
+    let ctx = egui::Context::default();
+    set_bitmap_viewport_unreliable(&ctx, true);
+    for display_scale in [0.9995, 1.0005] {
+        let mut input = egui::RawInput::default();
+        input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(display_scale);
+        let mut output = ctx.run_ui(input, |ui| {
+            ui.ctx().set_cursor_icon(circle(ui.painter(), egui::pos2(123.0, 94.0), 20.0, true));
+        });
+        output.textures_delta.clear();
+        assert!(output.platform_output.cursor_image.is_some(), "scale {display_scale} is within the 1.0 epsilon");
+    }
+}
+
+#[test]
 fn bitmap_has_a_transparent_hotspot_and_the_correct_radius_at_each_dpi() {
     for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
         let radius = 20.0;
