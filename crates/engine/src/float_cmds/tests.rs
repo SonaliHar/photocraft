@@ -249,4 +249,3 @@ fn float_feathered_selection_preserves_partial_alpha_across_depths() {
         assert!(edge_a > 0.1 && edge_a < 0.9, "{depth}-bit feathered edge alpha={edge_a}");
     }
 }
-

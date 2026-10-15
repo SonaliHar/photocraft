@@ -480,10 +480,12 @@ fn render_reduced_in_bands(doc: &Document, b: Rect, w: u32, h: u32, damage: Opti
         Ok(())
     });
     debug_assert!(ok.is_ok());
-    let col_w: Vec<usize> = (0..ow).map(|x| {
-        let (x0, x1) = span(ox0 + x, fw, w);
-        (x1 - x0).max(1)
-    }).collect();
+    let col_w: Vec<usize> = (0..ow)
+        .map(|x| {
+            let (x0, x1) = span(ox0 + x, fw, w);
+            (x1 - x0).max(1)
+        })
+        .collect();
     let norm_row = |row: usize, out: &mut [[f32; 4]]| {
         let (y0, y1) = span(oy0 + row, fh, h);
         let rh = (y1 - y0).max(1);
