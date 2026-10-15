@@ -1021,3 +1021,7 @@ mod owned_assigned_median_tests;
 #[cfg(all(test, not(target_arch="wasm32")))]
 #[path="headless/owned_assigned_gaussian_tests.rs"]
 mod owned_assigned_gaussian_tests;
+
+#[cfg(all(test, not(target_arch="wasm32")))]
+#[path="headless/owned_streamed_box_tests.rs"]
+mod owned_streamed_box_tests;

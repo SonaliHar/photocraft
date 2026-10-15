@@ -17,6 +17,15 @@ fn radius_mode(node: &FilterNode, version: u32, extent: Rect, owned: bool) -> Re
         Rect { x0: 0, y0: 0, x1: 32, y1: 32 } => -261651887,
         _ => return Err(CompositionError::Unsupported("Box Blur source extent")),
     };
+    radius_policy(node, c, version, raw, owned)
+}
+/// Additive CURRENT float recipe: geometry is checked by its owned consumer,
+/// while this reuses the unchanged typed/raw float policy. No source admission.
+pub(crate) fn radius_for_current_float(node: &FilterNode, version: u32) -> Result<u32> {
+    let c = node.composition.as_ref().ok_or(CompositionError::Unsupported("missing Box Blur policy"))?;
+    radius_policy(node, c, version, -1474592175, true)
+}
+fn radius_policy(node: &FilterNode, c: &photocraft_doc::import_compositing::GimpComposition, version: u32, raw: i32, owned: bool) -> Result<u32> {
     if version != 22
         || node.operation.name != "gegl:box-blur"
         || node.operation.stored_version != "0:0"

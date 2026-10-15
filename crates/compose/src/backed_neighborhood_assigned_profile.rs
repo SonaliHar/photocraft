@@ -60,16 +60,16 @@ struct PaidProfile<L> {
     peak: usize,
     _lease: L,
 }
-pub(super) struct BoundAssignedNeighborhoodProfile<L> {
+pub(crate) struct BoundAssignedNeighborhoodProfile<L> {
     original: PaidProfile<L>,
     current: PaidProfile<L>,
     _holder: L,
 }
 impl<L> BoundAssignedNeighborhoodProfile<L> {
-    pub(super) fn profile(&self) -> &Profile {
+    pub(crate) fn profile(&self) -> &Profile {
         &self.current.profile
     }
-    pub(super) fn prepare<B: PlanBudget<Lease = L>>(doc: &Document, interrupt: &Interrupt<'_>, budget: &mut B) -> Result<Self, E> {
+    pub(crate) fn prepare<B: PlanBudget<Lease = L>>(doc: &Document, interrupt: &Interrupt<'_>, budget: &mut B) -> Result<Self, E> {
         if doc.mode != ColorMode::Rgb
             || doc.sample_encoding != Some(SampleEncoding::NonlinearProfile)
             || doc.working_profile_interpretation != WorkingProfileInterpretation::Icc
@@ -141,7 +141,7 @@ impl<L> BoundAssignedNeighborhoodProfile<L> {
         w.charge(0)?;
         Ok(Self { original, current: current_model, _holder: holder })
     }
-    pub(super) fn held_peak(&self) -> Result<usize, E> {
+    pub(crate) fn held_peak(&self) -> Result<usize, E> {
         self.original.peak.checked_add(self.current.peak).ok_or_else(size)
     }
 }

@@ -1,8 +1,8 @@
 //! Checked f64 square-neighborhood mean, independently derived from public
 //! GEGL box-blur documentation and original native edge/alpha observations.
 //! Caller supplies linear working-space samples and owns CMS/envelope mapping.
-use super::{GaussianAbyss, GaussianLimits, NeighborhoodRequirements, allocate, poll, read_premultiplied};
-use photocraft_color::try_write_sample_f64;
+use super::{GaussianLimits, NeighborhoodRequirements, allocate, poll};
+use photocraft_color::{PixelFormat, try_write_sample_f64};
 use photocraft_geom::Rect;
 use photocraft_raster::{Interrupt, MAX_CHECKED_RASTER_BYTES, RasterInputError, Surface, checked_region_byte_len};
 
@@ -37,13 +37,7 @@ pub fn box_blur_requirements(
         None => super::clone_requirements(source, interrupt),
     }
 }
-fn plan(
-    source: &Surface,
-    output: Rect,
-    input: Rect,
-    radius: u32,
-    interrupt: &Interrupt<'_>,
-) -> Result<Option<NeighborhoodRequirements>, RasterInputError> {
+fn plan(source: &Surface, output: Rect, input: Rect, radius: u32, interrupt: &Interrupt<'_>) -> Result<Option<NeighborhoodRequirements>, RasterInputError> {
     checked_region_byte_len(input, source.format())?;
     checked_region_byte_len(output, source.format())?;
     source.try_validate_tile_origins_with(interrupt)?;
@@ -121,76 +115,8 @@ pub fn try_box_blur(
     let mut units = 0;
     for tile in output.tiles() {
         let part = tile.rect().intersect(&output);
-        let w = part.width() as usize;
-        let h = part.height() as usize;
-        let rows = h + 2 * r;
-        let mut horizontal = allocate::<f64>(w.checked_mul(rows).and_then(|v| v.checked_mul(channels)).ok_or(RasterInputError::LimitExceeded)?)?;
-        for (row, dest) in horizontal.chunks_exact_mut(w * channels).enumerate() {
-            let y = i64::from(part.y0) + row as i64 - r as i64;
-            let mut sum = [0.; 5];
-            let mut pixel = [0.; 5];
-            for offset in 0..window {
-                poll(&mut units, channels, interrupt)?;
-                read_premultiplied(
-                    source,
-                    input,
-                    GaussianAbyss::Clamp,
-                    i64::from(part.x0) + offset as i64 - r as i64,
-                    y,
-                    pixel.get_mut(..channels).ok_or(RasterInputError::LengthMismatch)?,
-                )?;
-                for (s, v) in sum.iter_mut().zip(pixel.iter()).take(channels) {
-                    *s += v;
-                }
-            }
-            for (x, p) in dest.chunks_exact_mut(channels).enumerate() {
-                poll(&mut units, channels * 4, interrupt)?;
-                for (v, s) in p.iter_mut().zip(&sum) {
-                    *v = *s / window as f64;
-                }
-                if x + 1 < w {
-                    for (sign, xx) in [(-1., i64::from(part.x0) + x as i64 - r as i64), (1., i64::from(part.x0) + x as i64 + r as i64 + 1)] {
-                        read_premultiplied(source, input, GaussianAbyss::Clamp, xx, y, pixel.get_mut(..channels).ok_or(RasterInputError::LengthMismatch)?)?;
-                        for (s, v) in sum.iter_mut().zip(pixel.iter()).take(channels) {
-                            *s += sign * v;
-                        }
-                    }
-                }
-            }
-        }
-        let mut raw = allocate::<u8>(checked_region_byte_len(part, source.format())?)?;
-        for x in 0..w {
-            let mut sum = [0.; 5];
-            for row in 0..window {
-                poll(&mut units, channels, interrupt)?;
-                let sample = horizontal.get((row * w + x) * channels..(row * w + x + 1) * channels).ok_or(RasterInputError::LengthMismatch)?;
-                for (s, v) in sum.iter_mut().zip(sample) {
-                    *s += v;
-                }
-            }
-            for y in 0..h {
-                poll(&mut units, channels * 4, interrupt)?;
-                let alpha = if source.format().alpha { sum.get(channels - 1).copied().ok_or(RasterInputError::LengthMismatch)? / window as f64 } else { 1. };
-                let offset = (y * w + x) * source.format().bytes_per_pixel();
-                let pixel = raw.get_mut(offset..offset + source.format().bytes_per_pixel()).ok_or(RasterInputError::LengthMismatch)?;
-                for (c, s) in sum.iter().take(channels).enumerate() {
-                    let value =
-                        if source.format().alpha && c + 1 < channels { if alpha > 0. { *s / window as f64 / alpha } else { 0. } } else { *s / window as f64 };
-                    if !value.is_finite() {
-                        return Err(RasterInputError::InvalidSample);
-                    }
-                    try_write_sample_f64(pixel, source.format().sample, c, value).map_err(|_| RasterInputError::InvalidSample)?;
-                }
-                if y + 1 < h {
-                    for (sign, row) in [(-1., y), (1., y + window)] {
-                        let sample = horizontal.get((row * w + x) * channels..(row * w + x + 1) * channels).ok_or(RasterInputError::LengthMismatch)?;
-                        for (s, v) in sum.iter_mut().zip(sample) {
-                            *s += sign * v;
-                        }
-                    }
-                }
-            }
-        }
+        let raw =
+            tile_core(part, input, source.format(), channels, r, window, &mut units, interrupt, &mut |x, y, output| source.try_read_pixel_f64(x, y, output))?;
         result.try_write_interleaved_with(part, &raw, interrupt)?;
     }
     if interrupt.cancelled() {
@@ -198,3 +124,119 @@ pub fn try_box_blur(
     }
     Ok(result)
 }
+
+// One shared numeric loop. Legacy callers retain their requested-ROI tilepart;
+// bounded callers supply the canonical tilepart of the full operation extent.
+fn tile_core(
+    part: Rect,
+    input: Rect,
+    format: PixelFormat,
+    channels: usize,
+    r: usize,
+    window: usize,
+    units: &mut usize,
+    interrupt: &Interrupt<'_>,
+    read: &mut impl FnMut(i32, i32, &mut [f64]) -> Result<(), RasterInputError>,
+) -> Result<Vec<u8>, RasterInputError> {
+    let w = part.width() as usize;
+    let h = part.height() as usize;
+    let rows = h + 2 * r;
+    let mut horizontal = allocate::<f64>(w.checked_mul(rows).and_then(|v| v.checked_mul(channels)).ok_or(RasterInputError::LimitExceeded)?)?;
+    for (row, dest) in horizontal.chunks_exact_mut(w * channels).enumerate() {
+        let y = i64::from(part.y0) + row as i64 - r as i64;
+        let mut sum = [0.; 5];
+        let mut pixel = [0.; 5];
+        for offset in 0..window {
+            poll(units, channels, interrupt)?;
+            read_box_premultiplied(
+                read,
+                format,
+                input,
+                i64::from(part.x0) + offset as i64 - r as i64,
+                y,
+                pixel.get_mut(..channels).ok_or(RasterInputError::LengthMismatch)?,
+            )?;
+            for (s, v) in sum.iter_mut().zip(pixel.iter()).take(channels) {
+                *s += v;
+            }
+        }
+        for (x, p) in dest.chunks_exact_mut(channels).enumerate() {
+            poll(units, channels * 4, interrupt)?;
+            for (v, s) in p.iter_mut().zip(&sum) {
+                *v = *s / window as f64;
+            }
+            if x + 1 < w {
+                for (sign, xx) in [(-1., i64::from(part.x0) + x as i64 - r as i64), (1., i64::from(part.x0) + x as i64 + r as i64 + 1)] {
+                    read_box_premultiplied(read, format, input, xx, y, pixel.get_mut(..channels).ok_or(RasterInputError::LengthMismatch)?)?;
+                    for (s, v) in sum.iter_mut().zip(pixel.iter()).take(channels) {
+                        *s += sign * v;
+                    }
+                }
+            }
+        }
+    }
+    let mut raw = allocate::<u8>(checked_region_byte_len(part, format)?)?;
+    for x in 0..w {
+        let mut sum = [0.; 5];
+        for row in 0..window {
+            poll(units, channels, interrupt)?;
+            let sample = horizontal.get((row * w + x) * channels..(row * w + x + 1) * channels).ok_or(RasterInputError::LengthMismatch)?;
+            for (s, v) in sum.iter_mut().zip(sample) {
+                *s += v;
+            }
+        }
+        for y in 0..h {
+            poll(units, channels * 4, interrupt)?;
+            let alpha = if format.alpha { sum.get(channels - 1).copied().ok_or(RasterInputError::LengthMismatch)? / window as f64 } else { 1. };
+            let offset = (y * w + x) * format.bytes_per_pixel();
+            let pixel = raw.get_mut(offset..offset + format.bytes_per_pixel()).ok_or(RasterInputError::LengthMismatch)?;
+            for (c, s) in sum.iter().take(channels).enumerate() {
+                let value = if format.alpha && c + 1 < channels { if alpha > 0. { *s / window as f64 / alpha } else { 0. } } else { *s / window as f64 };
+                if !value.is_finite() {
+                    return Err(RasterInputError::InvalidSample);
+                }
+                try_write_sample_f64(pixel, format.sample, c, value).map_err(|_| RasterInputError::InvalidSample)?;
+            }
+            if y + 1 < h {
+                for (sign, row) in [(-1., y), (1., y + window)] {
+                    let sample = horizontal.get((row * w + x) * channels..(row * w + x + 1) * channels).ok_or(RasterInputError::LengthMismatch)?;
+                    for (s, v) in sum.iter_mut().zip(sample) {
+                        *s += sign * v;
+                    }
+                }
+            }
+        }
+    }
+    Ok(raw)
+}
+// Exact old Box Clamp/read/premultiply order. The original source rectangle
+// remains authoritative; packed support/output rectangles never replace it.
+fn read_box_premultiplied(
+    read: &mut impl FnMut(i32, i32, &mut [f64]) -> Result<(), RasterInputError>,
+    format: PixelFormat,
+    extent: Rect,
+    x: i64,
+    y: i64,
+    output: &mut [f64],
+) -> Result<(), RasterInputError> {
+    let x = x.clamp(i64::from(extent.x0), i64::from(extent.x1) - 1);
+    let y = y.clamp(i64::from(extent.y0), i64::from(extent.y1) - 1);
+    read(i32::try_from(x).map_err(|_| RasterInputError::InvalidBounds)?, i32::try_from(y).map_err(|_| RasterInputError::InvalidBounds)?, output)?;
+    if output.iter().any(|v| !v.is_finite()) {
+        return Err(RasterInputError::InvalidSample);
+    }
+    if format.alpha {
+        let alpha = output.last().copied().ok_or(RasterInputError::LengthMismatch)?;
+        if !(0.0..=1.0).contains(&alpha) {
+            return Err(RasterInputError::InvalidSample);
+        }
+        let colors = output.len() - 1;
+        for value in output.iter_mut().take(colors) {
+            *value *= alpha;
+        }
+    }
+    Ok(())
+}
+#[path = "box_blur/packed.rs"]
+mod packed;
+pub use packed::{BoxBlurTilePlan, try_box_blur_packed_tile};

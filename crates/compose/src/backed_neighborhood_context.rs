@@ -25,7 +25,7 @@ use photocraft_raster::{
     checked_view::NativeTileBytes,
 };
 #[path = "backed_neighborhood_assigned_profile.rs"]
-mod assigned_profile;
+pub(crate) mod assigned_profile;
 use assigned_profile::BoundAssignedNeighborhoodProfile;
 
 fn scope() -> E {

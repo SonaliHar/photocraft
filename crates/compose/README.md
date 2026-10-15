@@ -860,3 +860,28 @@ owns its document, and this helper does not claim a process-wide charge for
 that persistent owner. Flat export instead retains `ScenePrepared` and the
 codec destination lease through every band. Returned output lifetime and
 persistent document lifetime are separate accounting responsibilities.
+
+### Streamed current Box Blur
+
+`PreparedBackedBoxContext` and `PreparedBackedBoxDocument` render the admitted
+CURRENT/native float Box recipe over checked drawable and canvas geometry.
+They share the existing Box arithmetic: taps clamp to the original drawable,
+the output expands by the radius, and each canonical 256-pixel tile completes
+before an ROI is cropped. Implicit RGB F32/F64 and assigned RGB F32 retain their
+existing profile, raw-field and radius contracts. Source/eager constructors
+keep their previous admission rules.
+
+Packed input and kernel scratch have a 16 MiB guard. Box preparation, its
+current band and overlapping renderer scratch have a 32 MiB guard, including
+wrapper headers and profile preparation peaks. Persistent input/provider
+caches, previously returned bands and the generic reduced-preview caller's
+output/accumulator keep their real shared-quota leases; these are outside
+that Box temporary guard. This does not make decoded XCF input lazy or bound
+total document/process memory.
+
+Work uses the caller's single cumulative control. Full enabled validation of
+24–36 MP currently exceeds the normal registered/open work allowances, so
+large-image publication remains unfinished even where individual ROI bands
+fit. The new regression groups are authored but remain UNRUN/uncompiled during
+the implementation-first pass; no numerical or performance qualification is
+claimed.

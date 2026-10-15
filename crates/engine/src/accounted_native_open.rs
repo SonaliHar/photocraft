@@ -193,6 +193,13 @@ pub(crate) fn validate_current_stock_point_storage(owner: &photocraft_doc::accou
 /// Both contexts retain the real model quota and visit the full operative input.
 pub(crate) fn validate_current_owned_filter_storage(owner: &photocraft_doc::accounted_document::AccountedDocument, control: &ReadControl<'_>) -> Result<()> {
     control.check(1)?;
+    // This CURRENT-only selector does not widen original source admission.
+    // Once selected, a failed bounded Box recipe never retries an eager lane.
+    if photocraft_compose::backed_box_context::is_candidate(owner.document(),control)? {
+        let prepared=photocraft_compose::backed_box_context::PreparedBackedBoxContext::new(owner,Default::default(),control).map_err(|e|point_error(e,control))?;
+        prepared.validate_operative(control).map_err(|e|point_error(e,control))?;
+        drop(prepared);control.check(1)?;return Ok(());
+    }
     if owner.is_readonly_assigned_point_storage() {
         let prepared=photocraft_compose::backed_neighborhood_context::PreparedBackedNeighborhoodContext::new_assigned(owner,Default::default(),control).map_err(|e|point_error(e,control))?;
         prepared.validate_operative(control).map_err(|e|point_error(e,control))?;

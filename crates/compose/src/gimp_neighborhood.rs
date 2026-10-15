@@ -20,7 +20,7 @@ mod mask_controlled;
 mod raster_gaussian;
 pub(crate) use raster_gaussian::EPOCH as FINITE_GAUSSIAN_EPOCH;
 #[path = "gimp_box.rs"]
-mod box_blur;
+pub(crate) mod box_blur;
 pub(crate) use box_blur::EPOCH as BOX_BLUR_EPOCH;
 #[path = "gimp_median.rs"]
 mod median_blur;

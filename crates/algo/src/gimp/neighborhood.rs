@@ -12,7 +12,7 @@ mod motion;
 mod pixelize;
 mod recursive_requirements;
 pub use recursive_requirements::gaussian_young_recursive_requirements;
-pub use box_blur::{box_blur_extent, box_blur_requirements, try_box_blur};
+pub use box_blur::{BoxBlurTilePlan, box_blur_extent, box_blur_requirements, try_box_blur, try_box_blur_packed_tile};
 pub use finite::{GaussianFilter, gaussian_finite_requirements, try_gaussian_finite_clamp, try_gaussian_small_auto};
 pub use median::{MedianNeighborhood, MedianParams, median_requirements, try_median_blur, try_median_blur_quantized_encoded};
 pub use motion::{MotionBlurParams, motion_blur_extent, motion_blur_requirements, try_motion_blur_linear};

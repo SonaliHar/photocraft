@@ -280,3 +280,6 @@ mod median;
 
 #[path = "backed_neighborhood_assigned_gaussian_tests.rs"]
 mod gaussian;
+
+#[path = "backed_box_tests.rs"]
+mod streamed_box;

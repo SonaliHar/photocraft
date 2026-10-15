@@ -29,6 +29,7 @@ enum DocumentCompositor<'a> {
     ThresholdAlpha(crate::backed_threshold_alpha_document::PreparedBackedThresholdAlphaDocument<'a>),
     Point(crate::backed_stock_point_document::PreparedBackedStockPointDocument<'a>),
     Neighborhood(crate::backed_neighborhood_document::PreparedBackedNeighborhoodDocument<'a>),
+    BoxBlur(crate::backed_box_document::PreparedBackedBoxDocument<'a>),
 }
 
 pub struct PreparedBackedDocument<'a> {
@@ -116,6 +117,28 @@ impl<'a> PreparedBackedDocument<'a> {
             let index = owner.quota().reserve(QuotaKind::Index, std::mem::size_of::<Self>() as u64).map_err(BackedNormalError::Quota)?;
             control.check(1).map_err(BackedNormalError::Backing)?;
             return Ok(Self { stack: DocumentCompositor::GaussianGroup(prepared), limits, quota: owner.quota().clone(), bounds: owner.document().bounds(), _index: index });
+        }
+        if (owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())
+            && crate::backed_box_context::is_candidate(owner.document(), control).map_err(BackedNormalError::Backing)?
+        {
+            if owner.is_readonly_point_storage() {
+                // Preserve the existing implicit Point caller-basis contract.
+                // The new context binds the actual current profile separately.
+                control.check(1).map_err(BackedNormalError::Backing)?;
+                let known = photocraft_cms::Builtin::Srgb.profile();
+                let encoded = profile.encoded_bytes().ok_or(BackedNormalError::Unsupported("Box requires retained implicit basis encoding"))?;
+                let expected = known.encoded_bytes().ok_or(BackedNormalError::Unsupported("Box implicit basis encoding missing"))?;
+                if encoded.len() > 65536 || profile.channels() != 3 || encoded.len() != expected.len() {
+                    return Err(BackedNormalError::Unsupported("Box implicit basis mismatch"));
+                }
+                control.check(encoded.len() as u64 * 2).map_err(BackedNormalError::Backing)?;
+                if encoded != expected { return Err(BackedNormalError::Unsupported("Box implicit basis mismatch")); }
+            }
+            let prepared = crate::backed_box_document::PreparedBackedBoxDocument::new_with_overlap(owner, limits, std::mem::size_of::<Self>() as u64, control)?;
+            let bounds = prepared.bounds();
+            let index = owner.quota().reserve(QuotaKind::Index, std::mem::size_of::<Self>() as u64).map_err(BackedNormalError::Quota)?;
+            control.check(1).map_err(BackedNormalError::Backing)?;
+            return Ok(Self { stack: DocumentCompositor::BoxBlur(prepared), limits, quota: owner.quota().clone(), bounds, _index: index });
         }
         if owner.is_readonly_assigned_point_storage() {
             let prepared = crate::backed_neighborhood_document::PreparedBackedNeighborhoodDocument::new_assigned(owner, limits, control)?;
@@ -390,6 +413,7 @@ impl<'a> PreparedBackedDocument<'a> {
             DocumentCompositor::ThresholdAlpha(prepared) => prepared.render_band(rect, control),
             DocumentCompositor::Point(prepared) => prepared.render_band(rect, control),
             DocumentCompositor::Neighborhood(prepared) => prepared.render_band(rect, control),
+            DocumentCompositor::BoxBlur(prepared) => prepared.render_band(rect, control),
         }
     }
 

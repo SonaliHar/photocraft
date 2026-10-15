@@ -1847,3 +1847,21 @@ same-value activation requests, remain unsupported. Native .pcraft saves/reopen,
 title and paid inspection use the existing assigned storage class. Eight missing
 producer ICC captures remain HOLD. Tests, numerical/profile and visual acceptance
 are deferred; this does not establish general image geometry or lazy source IO.
+CURRENT/native float Box now uses bounded canonical-tile rendering over checked
+arbitrary drawable/canvas geometry. Its exact old radius4/5, raw/schema and
+implicit RGB F32/F64 or assigned RGB F32 profile contracts remain authoritative.
+Every full native/default/mask/profile check still precedes hidden/disabled
+shortcuts. Implicit Point radius edits and assigned Box enable-only transactions
+use complete old/staged validation; their wire and locks remain unchanged.
+Original XCF source admission remains separate and unchanged.
+
+The kernel clamps to original drawable S and expands only output O. Full global
+256-pixel tile parts complete before cropping a requested band. Private packed
+input/kernel scratch is guarded at16MiB, and Box preparation/current-band/scratch
+at32MiB including wrapper headers/profile peaks. Persistent input/provider cache,
+previously returned output and generic reduced-preview caller buffers retain
+actual same-quota leases outside that child temporary guard. This is not lazy
+XCF input or a total-process memory bound. Full24–36MP enabled proof currently
+exceeds normal4.295b/8b caller work allowances; bounded work admission remains
+unfinished. Twelve new regression groups are UNRUN/uncompiled. Tests and
+numerical/visual/performance acceptance remain deferred.
