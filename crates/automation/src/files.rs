@@ -8,6 +8,9 @@ use photocraft_format::{PcraftWriter, SaveOptions};
 use photocraft_io::ExportOptions;
 
 use crate::AutomationError;
+#[path = "files/owned_native_open.rs"]
+mod owned_native_open;
+pub use owned_native_open::open_accounted_native_selected_path;
 
 #[path = "files/protected_save.rs"]
 mod protected_save;

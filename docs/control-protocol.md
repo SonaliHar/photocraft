@@ -87,6 +87,24 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
 - `app.open {path}` / `app.save {path?, tgaBits?}`: relative file I/O through the configured automation roots (`app.open` reads under the read root, `app.save` writes under the write root; absolute paths, `..` and paths escaping the root are refused, and both fail closed when no root was granted). Both reply with `warnings` (import/export notes such as "adjustment layer flattened"; `[]` when none), also shown to the user in the status bar and as a notice (`notices` in `ui.inspect`); `app.open` also returns the `path` and document `name` (directory `.pcraft` — the native on-disk form — loads through the read root's capability; the single-file (zip) form takes the bytes path), `app.save` the `path` written. `app.save` without `path` writes back only to the document's own PSD, PSB or `.pcraft` file, like File › Save. `tgaBits` (24 or 32) sets a TGA's bits per pixel: 32 writes the alpha channel (or else the transparency) as its alpha, 24 none; without it, 32 with an alpha channel or transparency, else 24. Automation saves never show TGA or TIFF options. Automation opens and saves never fire script events. Use these two rather than `file.open`, `file.save`, `file.saveAs` or `file.saveACopy`, which the control channel refuses (see [Engine commands](#engine-commands))
 - `app.quit`
 
+Trusted local `file.open` callers may explicitly pass
+`{"path":"chosen.pcraft","nativeProfilePolicy":"keepCurrent"}`. This optional
+native-only lane retains the saved current ICC/encoding/working interpretation
+without applying Color Settings or opening its profile question. Omitting
+`nativeProfilePolicy` preserves ordinary Open policy, including profile prompts
+and conversion. With the explicit option but no `path`, the interactive picker
+accepts one `.pcraft` path. Other policies, malformed parameters, byte-only
+browser input, unavailable services, unsupported models and quota failures are
+errors; they never fall back to ordinary import. The platform must supply the
+actual authorized reader, and retained source/resource locators grant no reads.
+Control/MCP `file.open` remains denied. Capability-scoped `app.open` may explicitly
+supply the same policy with a required `.pcraft` path; it uses a separately
+installed held-read-root service and never falls back to the interactive reader
+or a chooser. Its reply is `{path,name,warnings:[]}`. Missing rooted capability
+is an error. Automation retains its suppression of recent files and script events.
+Both explicit routes retain the persisted document title; the reply name and
+runtime source label identify the actual input basename independently.
+
 ## Engine commands
 
 Change the UI language without restarting with `prefs.set`:

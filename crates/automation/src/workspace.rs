@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use crate::AutomationError;
 
+mod accounted_native_open;
 mod accounted_native_save;
 mod linked_read;
 mod source_write;

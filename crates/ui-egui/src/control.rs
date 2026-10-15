@@ -1492,6 +1492,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             ctx.request_repaint();
             Outcome::Screenshot { token, path }
         }
+        "app.open" if p.get("nativeProfilePolicy").is_some() => wrap(crate::owned_native_open::invoke_authorized(app, p)),
         "app.open" => match s("path") {
             Some(path) => {
                 // Directory .pcraft (the native on-disk form) loads through a capability-scoped
@@ -1681,6 +1682,48 @@ mod tests {
         match handle(app, ctx, &req) {
             Outcome::Done(v) => v,
             _ => panic!("{method}: expected an immediate reply"),
+        }
+    }
+
+    // UNRUN: an explicit owned-native request must never fall through to an
+    // ambient picker/reader or to the legacy byte loader after a scoped denial.
+    #[test]
+    fn explicit_native_open_control_uses_only_the_scoped_service() {
+        let scoped = std::rc::Rc::new(std::cell::Cell::new(0));
+        let seen = scoped.clone();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services {
+            automation_owned_native_open: Some(Box::new(move |_, _, _| {
+                seen.set(seen.get() + 1);
+                Err("scoped native denial".into())
+            })),
+            owned_native_open: Some(Box::new(|_, _, _| panic!("ambient open must not run"))),
+            automation_read: Some(Box::new(|_| panic!("legacy read must not run"))),
+            automation_open_pcraft: Some(Box::new(|_| panic!("legacy directory open must not run"))),
+            ..Default::default()
+        });
+        let ctx = egui::Context::default();
+        let reply = call(&mut app, &ctx, "app.open", json!({"path":"safe/current.pcraft","nativeProfilePolicy":"keepCurrent"}));
+        assert_eq!(reply["ok"], false);
+        assert!(reply["error"].as_str().unwrap().contains("scoped native denial"));
+        assert_eq!(scoped.get(), 1);
+        assert!(app.session.active().is_none());
+        assert!(app.ui.recent_files.is_empty());
+    }
+
+    // UNRUN: an unknown explicit policy is a request error, never permission to
+    // silently use the ordinary loader or a trusted interactive capability.
+    #[test]
+    fn explicit_native_open_control_refuses_missing_authority_and_bad_policy() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services {
+            owned_native_open: Some(Box::new(|_, _, _| panic!("ambient open must not run"))),
+            automation_read: Some(Box::new(|_| panic!("legacy read must not run"))),
+            ..Default::default()
+        });
+        let ctx = egui::Context::default();
+        for policy in [json!("keepCurrent"), json!("convert"), Value::Null, json!(5)] {
+            let reply = call(&mut app, &ctx, "app.open", json!({"path":"safe/current.pcraft","nativeProfilePolicy":policy}));
+            assert_eq!(reply["ok"], false);
+            assert!(app.session.active().is_none());
         }
     }
 

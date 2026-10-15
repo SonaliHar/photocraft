@@ -89,6 +89,7 @@ pub mod eyedropper_ui;
 pub mod field_tab;
 pub mod file_dialog;
 pub mod file_open;
+mod owned_native_open;
 pub mod file_ui;
 pub mod fill_ui;
 pub mod filter_dialog;
@@ -438,6 +439,10 @@ pub struct Services {
     pub screen_pick: Option<screen_picker::Service>,
     /// Decode a file's bytes into a document (PSD, PNG, JPEG, …).
     pub import: Option<ImportFn>,
+    /// Explicit keep-current native open; ordinary Open keeps its color policy.
+    pub owned_native_open: Option<services::OwnedNativeOpenFn>,
+    /// Explicit held-root native open; never falls back to the interactive reader.
+    pub automation_owned_native_open: Option<services::OwnedNativeOpenFn>,
     /// Encode a document for a file name (format chosen by extension).
     pub export: Option<ExportFn>,
     /// Atomic streamed native saves with all open-document source exclusions.

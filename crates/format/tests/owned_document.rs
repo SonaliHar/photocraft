@@ -153,6 +153,30 @@ fn owned_model_quota_denial_and_mixed_ledger_happen_without_document_publication
     assert_eq!(q.usage().unwrap().resident, 0);
 }
 
+/// UNRUN: the public handoff ledger is the genuine retained owner, not an equal
+/// limits reconstruction; related metadata keeps its own charge through drop.
+#[test]
+fn owned_quota_accessor_exposes_actual_ledger_without_replacing_storage_ownership() {
+    let doc = document(ColorMode::Grayscale, SampleType::F32);
+    let q = quota(128 << 20);
+    let source = memory(photocraft_format::save_to_bytes(&doc, &SaveOptions::default()).unwrap(), &q);
+    let weak = Arc::downgrade(&source);
+    let ctl = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) };
+    let owned = load_document_from_owned_archive(source, &LoadOptions::default(), OwnedDocumentLimits::default(), q.clone(), &ctl).unwrap();
+    let before = q.usage().unwrap();
+    assert!(owned.quota().shares_ledger(&q));
+    assert!(!owned.quota().shares_ledger(&quota(128 << 20)));
+    assert_eq!(q.usage().unwrap(), before);
+    let reply = owned.quota().reserve(QuotaKind::Resident, 137).unwrap();
+    assert_eq!(q.usage().unwrap().resident, before.resident + 137);
+    assert!(weak.upgrade().is_some());
+    drop(owned);
+    assert!(weak.upgrade().is_none());
+    assert_eq!(q.usage().unwrap().resident, 137);
+    drop(reply);
+    assert_eq!(q.usage().unwrap(), QuotaUsage::default());
+}
+
 #[test]
 fn owned_save_stream_preserves_shared_mapping_native_and_metadata() {
     let doc = document(ColorMode::Rgb, SampleType::F64);

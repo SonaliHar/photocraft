@@ -97,9 +97,11 @@ D5100 colour profile. Counts and the G14 estimate are unchanged.
 
 2026-10-15: The [full XCF import work](../specs/002-full-xcf-import/spec.md) now has source
 implementation for a limited plain raster subset with owned native storage: import, current
-metadata and anonymous selection edits, and `.pcraft` save and reopen through explicit lower
-endpoints. Native saving also has interactive and rooted capability routes. Default Open routing
-and open-time profile policy integration for these owned paths remain unfinished. Broader
+metadata and anonymous selection edits, and `.pcraft` save and reopen through explicit owned
+endpoints. Native saving has interactive and rooted capability routes. Explicit native reopen
+also has a desktop path/picker and a separate held-root control route, with the current color
+interpretation preserved. Default Open routing and open-time profile policy integration for
+these owned paths remain unfinished. Broader
 stock-filter rendering and source classes remain gated; unsupported cases still refuse rather
 than being admitted by these storage and lifecycle paths. XCF writing is not implemented.
 

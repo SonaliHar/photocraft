@@ -12,6 +12,18 @@ pub struct NativeSaveResult {
 /// Standard admission limits remain owned by the platform/native writer.
 pub type NativeSaveFn = Box<dyn FnMut(&DocumentSnapshot, &str, &WriteProtection) -> Result<NativeSaveResult, String>>;
 
+/// Explicit native input from a platform-authorized selected path. The host
+/// retains its actual reader until immutable capture finishes. Existing catalog
+/// quota, when present, must be reused rather than copying its statistics.
+/// No retained document locator or profile policy grants read authority.
+pub type OwnedNativeOpenFn = Box<
+    dyn FnMut(
+        &str,
+        Option<&photocraft_raster::backing::quota::BackingQuota>,
+        &photocraft_raster::backing::ReadControl<'_>,
+    ) -> Result<photocraft_format::owned_document::OwnedDocumentArchive, String>,
+>;
+
 /// Explicit accounted native output. Preparation, source protection and the
 /// atomic writer use the caller's same control and the snapshot's actual quota.
 /// This capability does not complete Session save bookkeeping itself.

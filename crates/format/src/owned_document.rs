@@ -39,7 +39,9 @@ impl Default for OwnedDocumentLimits {
     }
 }
 impl OwnedDocumentLimits {
-    fn validate(self) -> Result<()> {
+    /// Check the supported owned-codec profile before preparing input storage.
+    /// This performs no resource admission and grants no source or IO authority.
+    pub fn validate(self) -> Result<()> {
         let max = Self::default();
         if self.max_manifest_bytes > max.max_manifest_bytes
             || self.max_object_bytes > max.max_object_bytes
@@ -61,6 +63,13 @@ pub struct OwnedDocumentArchive {
     _model: RetainedReservations,
 }
 impl OwnedDocumentArchive {
+    /// The actual ledger retaining this archive's model and encoded storage.
+    /// Borrow it to prepay related handoff metadata on the same owner; equal
+    /// limits or a separately constructed quota do not establish that identity.
+    pub fn quota(&self) -> &BackingQuota {
+        self._model.quota()
+    }
+
     /// Move the native model and every retained archive/model lease into the
     /// application lifecycle owner. No model clone or unaccounted extraction.
     pub fn into_accounted_document(self, control: &ReadControl<'_>) -> Result<photocraft_doc::accounted_document::AccountedDocument> {

@@ -131,6 +131,8 @@ pub struct Budget<'a> {
     peak: [Cell<u64>; BUDGET_COUNT],
     started: Instant,
     cancelled: Option<&'a dyn Fn() -> bool>,
+    // Borrowed job-local observer only; never copied into the persistent ledger.
+    work_observer: Option<&'a dyn Fn(u64) -> Result<(), XcfError>>,
     cancelled_observed: Cell<bool>,
     shared: Option<persistent::SharedLedger>,
 }
@@ -142,6 +144,7 @@ impl<'a> Budget<'a> {
             peak: std::array::from_fn(|_| Cell::new(0)),
             started: Instant::now(),
             cancelled,
+            work_observer: None,
             cancelled_observed: Cell::new(false),
             shared: None,
         }
@@ -150,6 +153,21 @@ impl<'a> Budget<'a> {
     /// no Arc allocation or synchronization. Callback/deadline authority remains
     /// borrowed by this job-local Budget, never retained by an owned receipt.
     pub fn new_persistent(limits: ResourceLimits, cancelled: Option<&'a dyn Fn() -> bool>) -> Result<Self, XcfError> {
+        Self::new_persistent_with_work(limits, cancelled, None)
+    }
+    /// Explicit cumulative work bridge to a caller's real enclosing budget.
+    /// The observer is borrowed by this job-local Budget, with no allocation or
+    /// owned callback storage. Persistent receipts/owners retain no observer.
+    /// Full local work admission precedes observer calls. Successful chunks are
+    /// debited in both budgets before the associated work; a later refusal never
+    /// refunds the successful prefix. Errors propagate without fallback/mapping.
+    /// This forwards actual consume_work debits, not visits or reservation sizes;
+    /// an already-prepaid phase must not forward its local counter a second time.
+    pub fn new_persistent_with_work(
+        limits: ResourceLimits,
+        cancelled: Option<&'a dyn Fn() -> bool>,
+        work: Option<&'a dyn Fn(u64) -> Result<(), XcfError>>,
+    ) -> Result<Self, XcfError> {
         let started = Instant::now();
         if cancelled.is_some_and(|f| f()) {
             return Err(XcfError::new(ErrorKind::Cancelled, 0, "cancelled during persistent budget construction"));
@@ -161,6 +179,7 @@ impl<'a> Budget<'a> {
             peak: std::array::from_fn(|_| Cell::new(0)),
             started,
             cancelled,
+            work_observer: work,
             cancelled_observed: Cell::new(false),
             shared: Some(shared),
         })
@@ -244,6 +263,34 @@ impl<'a> Budget<'a> {
     }
     /// Performed work is never refunded. Kernels must call this at <=4096-unit boundaries.
     pub fn consume_work(&self, n: u64, phase: &str) -> Result<(), XcfError> {
+        if let Some(observer) = self.work_observer {
+            self.poll(phase)?;
+            // Refuse impossible work before spending any parent allowance.
+            let total = self.used(BudgetKind::Work).checked_add(n).ok_or_else(|| self.denial(BudgetKind::Work, u64::MAX, phase))?;
+            self.check(BudgetKind::Work, total, phase)?;
+            let mut remaining = n;
+            while remaining != 0 {
+                self.poll(phase)?;
+                let chunk = remaining.min(4096);
+                if let Err(error) = observer(chunk) {
+                    if error.kind == ErrorKind::Cancelled {
+                        self.mark_cancelled();
+                    }
+                    return Err(error);
+                }
+                // No refund on later observer or local-ledger failure. The
+                // caller's successful debit stays consumed on every error path.
+                if let Some(shared) = &self.shared {
+                    shared.reserve(BudgetKind::Work, chunk, false, phase)?;
+                } else {
+                    let used = self.added(BudgetKind::Work, chunk, phase)?;
+                    self.set(BudgetKind::Work, used);
+                }
+                remaining -= chunk;
+            }
+            self.poll(phase)?;
+            return Ok(());
+        }
         if let Some(shared) = &self.shared {
             self.poll(phase)?;
             return shared.reserve(BudgetKind::Work, n, false, phase);
@@ -437,3 +484,7 @@ impl Source for FileSource {
         read_exact_controlled(&mut self.file, out, budget)
     }
 }
+
+#[cfg(test)]
+#[path = "source/work_observer_tests.rs"]
+mod work_observer_tests;

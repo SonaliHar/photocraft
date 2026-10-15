@@ -1,6 +1,11 @@
 //! Optional owned native archive IO. Path authority is supplied explicitly by a
 //! trusted platform service, never recovered from document/resource locators.
 //! This is not a Session/default loader or native_large route.
+mod reader_memory;
+pub use reader_memory::open_accounted_native_from_reader;
+mod standard_quota;
+pub use standard_quota::new_accounted_native_open_quota;
+
 use photocraft_doc::Document;
 use photocraft_format::owned_document::{OwnedDocumentArchive, OwnedDocumentLimits};
 use photocraft_raster::backing::{

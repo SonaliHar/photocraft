@@ -133,6 +133,13 @@ fn edit_locks(document: &AccountedDocument, edit: AccountedEdit<'_>, control: &R
 }
 
 impl Session {
+    /// The actual ledger retaining this session's document catalog. Open
+    /// services must reuse it even when the active tab is resident or the last
+    /// accounted document has closed; those catalog slots remain charged.
+    pub fn accounted_open_quota(&self) -> Option<&photocraft_raster::backing::quota::BackingQuota> {
+        self.accounted_slots.as_ref().map(|(quota, _)| quota)
+    }
+
     /// Stages the document slots before moving any existing state. Allocation,
     /// quota and cancellation failures preserve the old active tab and owners.
     pub(crate) fn publish_document_state(&mut self, state: DocState, control: &ReadControl<'_>) -> Result<usize> {

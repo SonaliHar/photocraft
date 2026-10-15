@@ -14,7 +14,13 @@ use photocraft_raster::{
     Interrupt,
     backing::quota::{BackingQuota, QuotaKind, QuotaLease},
 };
-use std::{io::Cursor, sync::Arc};
+use std::{
+    io::Cursor,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 #[path = "../../xcf/tests/common/mod.rs"]
 mod xcf;
 fn control() -> ReadControl<'static> {
@@ -113,12 +119,12 @@ fn duplicate_and_late_cancel_never_publish_partial_native_tab() {
     for threshold in [0u64, 1, 8, 32, 128] {
         let archive = load(source.clone(), &q);
         let mut target = Session::new();
-        let work = std::cell::Cell::new(0u64);
+        let work = AtomicU64::new(0);
         let late = ReadControl {
             interrupt: &Interrupt::NONE,
             work: &|n| {
-                work.set(work.get().saturating_add(n));
-                if work.get() > threshold { Err(BackingError::Cancelled) } else { Ok(()) }
+                let previous = work.fetch_add(n, Ordering::Relaxed);
+                if previous.saturating_add(n) > threshold { Err(BackingError::Cancelled) } else { Ok(()) }
             },
         };
         if target
@@ -144,4 +150,33 @@ fn malformed_labels_and_foreign_ledger_tabs_refuse() {
     let (foreign, fq, _) = packet();
     assert!(session.add_owned_native_archive(load(foreign, &fq), AccountedNativeOpenPolicy::KeepCurrentInterpretation, "foreign", None, &control()).is_err());
     assert_eq!(session.docs.len(), 1);
+}
+
+#[test]
+fn catalog_quota_survives_resident_focus_and_last_accounted_tab_close() {
+    let (source, quota, _original) = packet();
+    let mut session = Session::new();
+    assert!(session.accounted_open_quota().is_none());
+    session.add_owned_native_archive(load(source.clone(), &quota), AccountedNativeOpenPolicy::KeepCurrentInterpretation, "owned", None, &control()).unwrap();
+    session
+        .add_document(
+            photocraft_doc::Document::new("resident", photocraft_geom::Size::new(1, 1), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8),
+            None,
+        )
+        .unwrap();
+    assert!(session.active().unwrap().doc.accounted().is_none());
+    assert!(session.accounted_open_quota().unwrap().shares_ledger(&quota));
+    drop(session.close(0).unwrap());
+    assert!(session.accounted_open_quota().unwrap().shares_ledger(&quota));
+    let (foreign, foreign_quota, _) = packet();
+    assert!(
+        session
+            .add_owned_native_archive(load(foreign, &foreign_quota), AccountedNativeOpenPolicy::KeepCurrentInterpretation, "foreign", None, &control())
+            .is_err()
+    );
+    assert_eq!(session.docs.len(), 1);
+    session.add_owned_native_archive(load(source, &quota), AccountedNativeOpenPolicy::KeepCurrentInterpretation, "same ledger", None, &control()).unwrap();
+    drop(session.close(1).unwrap());
+    drop(session.close(0).unwrap());
+    assert!(session.accounted_open_quota().is_none());
 }
