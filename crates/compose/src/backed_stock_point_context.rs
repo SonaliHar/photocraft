@@ -142,7 +142,9 @@ fn initial_member(node: &FilterNode, budget: &mut impl PlanBudget, interrupt: &I
         }
         work(budget, interrupt, text.len() as u64)?;
     }
-    let epoch_ok = configured_kind(node).is_some()
+    let epoch_ok = (node.operation.schema_epoch == gimp_filters::STACK_EDITS_EPOCH
+        && matches!(node.operation.name.as_str(), "gegl:exposure" | "gegl:invert-linear"))
+        || configured_kind(node).is_some()
         || match node.operation.name.as_str() {
             "gimp:desaturate" => node.operation.schema_epoch == gimp_filters::DESATURATE_PRECISION_EPOCH,
             "gegl:saturation" => matches!(
@@ -193,6 +195,7 @@ fn initial_member(node: &FilterNode, budget: &mut impl PlanBudget, interrupt: &I
     }
     work(budget, interrupt, policy.compatibility_epoch.len() as u64)?;
     let compatibility = match node.operation.schema_epoch.as_str() {
+        gimp_filters::STACK_EDITS_EPOCH => gimp_filters::STACK_EDITS_EPOCH,
         crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH => crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH,
         crate::gimp_video_degradation::VIDEO_DEGRADATION_OPTIONS_EPOCH => crate::gimp_video_degradation::VIDEO_DEGRADATION_OPTIONS_EPOCH,
         gimp_filters::DESATURATE_PRECISION_EPOCH
@@ -227,6 +230,65 @@ fn initial_member(node: &FilterNode, budget: &mut impl PlanBudget, interrupt: &I
                 work(budget, interrupt, 4)?
             }
             _ => return Err(scope()),
+        }
+    }
+    Ok(())
+}
+
+fn qualify_witnessed_metadata(
+    doc: &Document,
+    layer: &photocraft_doc::Layer,
+    state: &photocraft_doc::XcfState,
+    filters: &photocraft_doc::xcf_filters::FilterStack,
+    extent: Rect,
+    stored: SampleEncoding,
+    format: PixelFormat,
+    default: &[u8],
+) -> Result<(), BackedNormalError> {
+    if doc.size != photocraft_doc::Size::new(8, 6)
+        || extent != Rect::new(0, 0, 8, 6)
+        || doc.mode != ColorMode::Rgb
+        || doc.depth != SampleType::U8
+        || stored != SampleEncoding::NonlinearProfile
+        || format != PixelFormat::RGBA8
+        || default.iter().any(|byte| *byte != 0)
+        || !layer.visible
+        || layer.opacity.to_bits() != 1f32.to_bits()
+        || layer.mask.is_some()
+        || doc.source_color_context.as_ref().is_none_or(|source| source.source_precision != 150 || source.original_icc.is_some())
+        || state.items.iter().find(|item| item.item == ItemRef::Layer(layer.id)).is_none_or(|item| {
+            item.visible != layer.visible
+                || item.raster_bounds != Some(extent)
+                || item.composition.as_ref().is_none_or(|p| {
+                    p.source_mode != 28 || (p.stored_blend_space, p.stored_composite_space, p.stored_operator) != (0, 2, 1) || p.legacy || p.pass_through
+                })
+        })
+    {
+        return Err(scope());
+    }
+    for (index, node) in filters.nodes.iter().enumerate() {
+        if node.id.0 == 0 || filters.nodes.iter().take(index).any(|earlier| earlier.id == node.id) {
+            return Err(scope());
+        }
+        match node.mask {
+            None => {}
+            Some(ItemRef::Mask(id)) => {
+                if filters.nodes.iter().take(index).any(|earlier| earlier.mask == node.mask)
+                    || state.filter_masks.iter().filter(|mask| mask.id == id && mask.owner == node.id).count() != 1
+                {
+                    return Err(scope());
+                }
+            }
+            _ => return Err(scope()),
+        }
+    }
+    for mask in &state.filter_masks {
+        if mask.bounds != doc.bounds()
+            || mask.surface.format() != PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false)
+            || filters.nodes.iter().filter(|node| node.id == mask.owner && node.mask == Some(ItemRef::Mask(mask.id))).count() != 1
+            || state.items.iter().filter(|item| item.item == ItemRef::Mask(mask.id)).count() != 1
+        {
+            return Err(scope());
         }
     }
     Ok(())
@@ -387,10 +449,14 @@ fn prepare_plan<B: PlanBudget>(
     let state = doc.xcf_state.as_ref().ok_or_else(scope)?;
     let [layer] = doc.layers.as_slice() else { return Err(scope()) };
     let [filters] = state.filter_stacks.as_slice() else { return Err(scope()) };
-    let [node] = filters.nodes.as_slice() else { return Err(scope()) };
+    let witnessed = matches!(filters.nodes.len(), 1..=2) && filters.nodes.iter().all(|node| node.operation.schema_epoch == gimp_filters::STACK_EDITS_EPOCH);
+    if !witnessed && filters.nodes.len() != 1 {
+        return Err(scope());
+    }
+    let node = filters.nodes.first().ok_or_else(scope)?;
     if state.provenance.format_version != 22
-        || state.items.len() != 2
-        || state.filter_masks.len() != 1
+        || state.filter_masks.len().checked_add(1) != Some(state.items.len())
+        || (if witnessed { state.filter_masks.len() > filters.nodes.len() } else { state.filter_masks.len() != 1 })
         || !state.source_items.is_empty()
         || !state.editable_indexed.is_empty()
         || state.floating.is_some()
@@ -403,7 +469,9 @@ fn prepare_plan<B: PlanBudget>(
     {
         return Err(scope());
     }
-    initial_member(node, budget, interrupt)?;
+    for node in &filters.nodes {
+        initial_member(node, budget, interrupt)?;
+    }
     let (extent, format, default) = match &layer.content {
         LayerContent::BackedRaster(backed) => (backed.operative_bounds(), backed.format(), backed.default_bytes()),
         LayerContent::Raster(surface) => {
@@ -417,13 +485,16 @@ fn prepare_plan<B: PlanBudget>(
     // PointNode/argument storage and two 64KiB implicit analytic profile
     // envelopes (one WorkingSpace and the retained effective-profile preparation).
     // Header slack is explicit; it is not a replacement source/model fee.
-    let scalar = if configured_kind(node).is_some() {
-        crate::gimp_neighborhood::stock_configured_preparation_bytes(&node.operation.name)
-    } else {
-        gimp_filters::scalar_preparation_bytes(1, node.arguments.len())
+    let mut scalar = crate::gimp_neighborhood::scalar_preparation_bytes(1).map_err(BackedNormalError::Color)?;
+    for node in &filters.nodes {
+        let own = if configured_kind(node).is_some() {
+            crate::gimp_neighborhood::stock_configured_preparation_bytes(&node.operation.name)
+        } else {
+            gimp_filters::scalar_preparation_bytes(1, node.arguments.len())
+        }
+        .map_err(BackedNormalError::Color)?;
+        scalar = scalar.checked_add(own).ok_or_else(length)?;
     }
-    .and_then(|n| n.checked_add(crate::gimp_neighborhood::scalar_preparation_bytes(1)?).ok_or(CompositionError::Invalid("stock stage preparation")))
-    .map_err(BackedNormalError::Color)?;
     // Four additional existing analytic-space envelopes cover the scoped
     // candidate's cloned profile/effective-profile/paired transform preparation.
     // This is the same bounded implicit candidate class used by accounted
@@ -445,14 +516,19 @@ fn prepare_plan<B: PlanBudget>(
     } else {
         0
     };
-    let envelope = scalar.checked_add((2 + extra_spaces) * 65536).and_then(|n| n.checked_add(header)).ok_or_else(length)?;
+    let envelope = scalar.checked_add((1 + filters.nodes.len() as u64 + extra_spaces) * 65536).and_then(|n| n.checked_add(header)).ok_or_else(length)?;
     let lease = budget.reserve(envelope)?;
     let (current_profile, known) = bound_profile(doc, supplied, budget, interrupt)?;
     // Price bounded repeated string/registry comparisons and the admitted
     // fixed analytic profile preparation before PointStack allocates.
     work(budget, interrupt, envelope.checked_mul(64).ok_or_else(length)?)?;
-    crate::gimp_render::qualify_current_point_layer_coverage_metadata(doc, layer, state, filters, extent, stored, format, default)
-        .map_err(BackedNormalError::Color)?;
+    if witnessed {
+        qualify_witnessed_metadata(doc, layer, state, filters, extent, stored, format, default)?;
+    } else {
+        crate::gimp_render::qualify_current_point_layer_coverage_metadata(doc, layer, state, filters, extent, stored, format, default)
+            .map_err(BackedNormalError::Color)?;
+    }
+
     let item = state.items.iter().find(|item| item.item == ItemRef::Layer(layer.id)).ok_or_else(scope)?;
     let resolved = item.composition.as_ref().ok_or_else(scope)?.checked_resolved().map_err(|_| scope())?;
     let physical = layer.import_compositing.as_ref().ok_or_else(scope)?;
@@ -472,26 +548,28 @@ fn prepare_plan<B: PlanBudget>(
     {
         return Err(scope());
     }
-    let mask = state.filter_masks.first().ok_or_else(scope)?;
-    let physical_pixels = (mask.surface.tile_count() as u64)
-        .checked_mul(TILE_SIZE as u64)
-        .and_then(|n| n.checked_mul(TILE_SIZE as u64))
-        .and_then(|n| n.checked_add(1))
-        .ok_or_else(length)?;
-    let logical = u64::from(mask.bounds.width()).checked_mul(u64::from(mask.bounds.height())).ok_or_else(length)?;
-    work(budget, interrupt, physical_pixels.max(logical).checked_mul(32).ok_or_else(length)?)?;
-    // Reuse the exact old canvas-relative mask/default/full-tile/metadata
-    // qualifier, including enabled/disabled mask-state semantics. Native
-    // tile padding and signed zero are never normalized into an empty mask.
-    let valid_mask = crate::gimp_neighborhood::qualify_selection_mask_with_interrupt(state, node, layer.id, doc.bounds(), interrupt);
-    work(budget, interrupt, 0)?;
-    valid_mask.map_err(BackedNormalError::Color)?;
+    let mut mask_work = 0u64;
+    for mask in &state.filter_masks {
+        let physical_pixels = (mask.surface.tile_count() as u64)
+            .checked_mul(TILE_SIZE as u64)
+            .and_then(|n| n.checked_mul(TILE_SIZE as u64))
+            .and_then(|n| n.checked_add(1))
+            .ok_or_else(length)?;
+        let logical = u64::from(mask.bounds.width()).checked_mul(u64::from(mask.bounds.height())).ok_or_else(length)?;
+        mask_work = mask_work.checked_add(physical_pixels.max(logical).checked_mul(32).ok_or_else(length)?).ok_or_else(length)?;
+    }
+    work(budget, interrupt, mask_work)?;
+    for node in &filters.nodes {
+        let valid_mask = crate::gimp_neighborhood::qualify_selection_mask_with_interrupt(state, node, layer.id, doc.bounds(), interrupt);
+        work(budget, interrupt, 0)?;
+        valid_mask.map_err(BackedNormalError::Color)?;
+    }
     qualify_configured_metadata(doc, node, extent, stored).map_err(BackedNormalError::Color)?;
     crate::gimp_render::qualify_residual_point_metadata(doc, layer, state, filters, extent, stored, interrupt).map_err(BackedNormalError::Color)?;
     crate::gimp_render::qualify_point_family_context(doc, layer, state, filters, extent, known, stored, interrupt).map_err(BackedNormalError::Color)?;
     let stack = OrderedStack::new_for_stock(filters, known, stored, state.provenance.format_version, extent, interrupt)
         .map_err(BackedNormalError::Color)?
-        .with_current_point_storage(Some(format.sample))
+        .with_current_point_storage(if witnessed { None } else { Some(format.sample) })
         .with_filter_output_precision(state.current_filter_output_precision);
     let retained = stack.stock_retained_bytes().map_err(BackedNormalError::Color)?.checked_add(header).and_then(|n| n.checked_add(65536)).ok_or_else(length)?;
     if retained > envelope {
@@ -709,6 +787,16 @@ impl<'a> PreparedBackedStockPointContext<'a> {
     pub fn node_id(&self) -> FilterId {
         self.node
     }
+    /// Saved top-to-bottom identities; this iterator grants no edit authority.
+    pub fn node_ids(&self) -> impl Iterator<Item = FilterId> + '_ {
+        self.owner
+            .document()
+            .xcf_state
+            .as_ref()
+            .into_iter()
+            .flat_map(|state| state.filter_stacks.first())
+            .flat_map(|stack| stack.nodes.iter().map(|node| node.id))
+    }
     pub fn descriptor(&self) -> NativePlaneDescriptor {
         self.descriptor
     }
@@ -765,3 +853,7 @@ mod residual_tests;
 #[cfg(test)]
 #[path = "backed_stock_point_configured_tests.rs"]
 mod configured_tests;
+
+#[cfg(test)]
+#[path = "backed_stock_point_stack_tests.rs"]
+mod stack_tests;

@@ -9,6 +9,7 @@ use photocraft_doc::{
 };
 
 pub(super) const REPLY_ENVELOPE: u64 = 8192;
+const STACK_EDITS_EPOCH: &str = "xcf-22-stock-point-stack-edits-v1";
 #[path = "point_structured.rs"]
 mod structured;
 #[derive(Clone, Copy)]
@@ -168,11 +169,33 @@ pub(super) fn journal_depth_controlled(id: &str, params: &Value, control: &ReadC
     Ok(structured::preflight(id, params, control)?.map_or(4, |p| p.depth))
 }
 
+fn move_wire(params: &Value) -> Option<(Fields<'_>, usize)> {
+    let p = params.as_object()?;
+    if p.len() != 2 || !p.contains_key("filterId") || !p.contains_key("index") {
+        return None;
+    }
+    let text = p.get("filterId")?.as_str()?;
+    if text.is_empty() || text.len() > 20 || text.starts_with('0') || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let filter = FilterId(text.parse().ok()?);
+    let index = usize::try_from(p.get("index")?.as_u64().filter(|v| *v < 1024)?).ok()?;
+    Some((Fields { filter, arguments: [None; 10], count: 0, enabled: None }, index))
+}
+fn pre_dispatch(session: &Session, id: &str, params: &Value) -> Result<()> {
+    if id == "xcf.filter.move" {
+        crate::xcf_filter_cmds::pre_dispatch_point_move(session, id, params, false)
+    } else {
+        crate::xcf_filter_cmds::pre_dispatch_set_change(session, id, params, false)
+    }
+}
+
 pub(super) struct Request<'a> {
     id: &'static str,
     params: &'a Value,
     fields: Fields<'a>,
     structured: Option<structured::Plan>,
+    move_to: Option<usize>,
 }
 impl<'a> Request<'a> {
     pub(super) fn parse(session: &Session, id: &str, params: &'a Value, ctl: &ReadControl<'_>) -> Result<Self> {
@@ -180,24 +203,28 @@ impl<'a> Request<'a> {
         let id = match id {
             "xcf.filter.set" => "xcf.filter.set",
             "xcf.filter.enable" => "xcf.filter.enable",
+            "xcf.filter.move" => "xcf.filter.move",
             _ => return Err(BackingError::Unsupported.into()),
         };
-        let (fields, structured) = if let Some(fields) = wire(id, params) {
-            (fields, None)
+        let (fields, structured, move_to) = if id == "xcf.filter.move" {
+            let (fields, index) = move_wire(params).ok_or_else(|| bad(id, "canonical filterId and bounded owner-local index required"))?;
+            (fields, None, Some(index))
+        } else if let Some(fields) = wire(id, params) {
+            (fields, None, None)
         } else {
             let plan = structured::preflight(id, params, ctl)?.ok_or_else(|| bad(id, "unsupported bounded Point patch wire"))?;
-            (Fields { filter: plan.filter, arguments: [None; 10], count: 0, enabled: plan.enabled }, Some(plan))
+            (Fields { filter: plan.filter, arguments: [None; 10], count: 0, enabled: plan.enabled }, Some(plan), None)
         };
         // The closed shape has at most four fixed keys and ten bounded typed patches,
         // bounded identity digits and opacity characters. Price its
         // repeated upstream wire/identity checks before invoking those helpers.
         ctl.check(structured.map_or(Ok(32768), |plan| plan.helper_work())?)?;
-        crate::xcf_filter_cmds::pre_dispatch_set_change(session, id, params, false)?;
+        pre_dispatch(session, id, params)?;
         // Preserve the upstream canonical identity parser as the command authority.
         if crate::xcf_filter_cmds::id(id, params)? != fields.filter {
             return Err(BackingError::Integrity.into());
         }
-        Ok(Self { id, params, fields, structured })
+        Ok(Self { id, params, fields, structured, move_to })
     }
     pub(super) fn prepare(self, session: &Session, ctl: &ReadControl<'_>) -> Result<Prepared<'a>> {
         let state = session.active().ok_or(EngineError::NoDocument)?;
@@ -205,8 +232,39 @@ impl<'a> Request<'a> {
         owner.validate_readonly_point_storage(ctl)?;
         let xcf = owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
         let stack = xcf.filter_stacks.first().ok_or(BackingError::Integrity)?;
-        let node =
-            stack.nodes.first().filter(|n| n.id == self.fields.filter).ok_or_else(|| bad(self.id, "filterId does not identify the current Point filter"))?;
+        if stack.nodes.is_empty() || stack.nodes.len() > 2 {
+            return Err(BackingError::Unsupported.into());
+        }
+        let mut target = None;
+        for candidate in &stack.nodes {
+            ctl.check(1)?;
+            if candidate.id == self.fields.filter {
+                if target.is_some() {
+                    return Err(BackingError::Integrity.into());
+                }
+                target = Some(candidate);
+            }
+        }
+        let node = target.ok_or_else(|| bad(self.id, "filterId does not identify a current Point filter"))?;
+        if let Some(index) = self.move_to {
+            if index >= stack.nodes.len() {
+                return Err(bad(self.id, "index is outside the current owner stack"));
+            }
+            // Preserve upstream stack-move revision headroom, even for a same-
+            // position request. Other typed set/no-op policies stay unchanged.
+            if stack.revision == u64::MAX {
+                return Err(BackingError::Length.into());
+            }
+            for candidate in &stack.nodes {
+                ctl.check(8192)?;
+                if candidate.operation.schema_epoch != STACK_EDITS_EPOCH
+                    || candidate.composition.as_ref().is_none_or(|p| p.compatibility_epoch != STACK_EDITS_EPOCH)
+                {
+                    return Err(BackingError::Unsupported.into());
+                }
+            }
+        }
+
         let ItemRef::Layer(layer) = stack.owner else { return Err(BackingError::Unsupported.into()) };
         let visibility_changed = self.fields.enabled.is_some_and(|v| v != node.enabled);
         locks(owner, layer, visibility_changed, ctl)?;
@@ -262,7 +320,12 @@ impl<'a> Request<'a> {
         validate_recipe(owner, ctl)?;
         // Fixed stack storage retains the original argument names and enum domains.
         // No parser proxy or per-operation arithmetic is reconstructed here.
-        let staged = if let Some(plan) = self.structured {
+        let staged = if let Some(index) = self.move_to {
+            owner.try_move_readonly_point_filter(
+                photocraft_doc::accounted_document::PointFilterMovePatch { layer, filter: self.fields.filter, expected_stack_revision: stack.revision, index },
+                ctl,
+            )?
+        } else if let Some(plan) = self.structured {
             let temporary = structured::Temporary::parse(self.params, &node.operation.name, plan, owner.quota(), ctl)?;
             let sentinel = photocraft_doc::xcf_filters::FilterValue::Bool(false);
             let mut patches = [photocraft_doc::accounted_document::PointStructuredArgumentPatch { name: "", value: &sentinel }; 10];
@@ -325,7 +388,13 @@ impl<'a> Request<'a> {
             history.max_states = session.prefs().performance.history_states.max(1) as usize;
             history.max_bytes = session.prefs().performance.history_budget_bytes();
             history.set_current_layers_borrowed(view.target(), ctl)?;
-            history.try_commit_prepared_accounted(owner, staged, "Edit GIMP Stock Filter", view.target(), ctl)?
+            history.try_commit_prepared_accounted(
+                owner,
+                staged,
+                if self.move_to.is_some() { "Move GIMP Stock Filter" } else { "Edit GIMP Stock Filter" },
+                view.target(),
+                ctl,
+            )?
         } else {
             state.doc.clone()
         };
@@ -437,7 +506,7 @@ pub(super) struct Prepared<'a> {
 impl Prepared<'_> {
     pub(super) fn execute(self, session: &mut Session, ctl: &ReadControl<'_>) -> Result<Value> {
         ctl.check(self.request.structured.map_or(Ok(32768), |plan| plan.helper_work())?)?;
-        crate::xcf_filter_cmds::pre_dispatch_set_change(session, self.request.id, self.request.params, false)?;
+        pre_dispatch(session, self.request.id, self.request.params)?;
         let state = session.active().ok_or(EngineError::NoDocument)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
         channel_shape(&state.channel_view)?;
@@ -484,3 +553,11 @@ impl Prepared<'_> {
 #[cfg(test)]
 #[path = "point_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "point_stack_tests.rs"]
+mod stack_tests;
+
+#[cfg(test)]
+#[path = "point_move_tests.rs"]
+mod move_tests;

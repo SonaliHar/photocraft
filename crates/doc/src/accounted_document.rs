@@ -23,7 +23,7 @@ mod filter_readonly;
 mod threshold_readonly;
 #[path = "accounted_point_readonly.rs"]
 mod point_readonly;
-pub use point_readonly::{PointArgumentPatch, PointArgumentValue, PointFilterPatch};
+pub use point_readonly::{PointArgumentPatch, PointArgumentValue, PointFilterMovePatch, PointFilterPatch};
 pub use point_readonly::{
     PointArgumentShape, PointStructuredArgumentPatch, PointStructuredFilterPatch,
     point_argument_shape, point_argument_shape_with, point_value_shape, point_values_equal, point_values_same_shape,

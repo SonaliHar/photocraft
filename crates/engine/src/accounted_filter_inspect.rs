@@ -293,12 +293,30 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
     let [stack] = state.filter_stacks.as_slice() else {
         return Err(BackingError::Integrity.into());
     };
-    let [node] = stack.nodes.as_slice() else {
-        return Err(BackingError::Integrity.into());
+    let node = if point {
+        if stack.nodes.is_empty() || stack.nodes.len() > 2 {
+            return Err(BackingError::Integrity.into());
+        }
+        let mut found = None;
+        for node in &stack.nodes {
+            control.check(1)?;
+            if node.id == id {
+                if found.is_some() {
+                    return Err(BackingError::Integrity.into());
+                }
+                found = Some(node);
+            }
+        }
+        found.ok_or_else(|| bad("unknown filterId"))?
+    } else {
+        let [node] = stack.nodes.as_slice() else {
+            return Err(BackingError::Integrity.into());
+        };
+        if node.id != id {
+            return Err(bad("unknown filterId"));
+        }
+        node
     };
-    if node.id != id {
-        return Err(bad("unknown filterId"));
-    }
     if point {
         control.check(node.arguments.len() as u64 + 1)?;
         let structured = node.arguments.iter().any(|argument| {
@@ -368,3 +386,7 @@ mod point_tests;
 #[cfg(test)]
 #[path = "accounted_configured_point_inspect_tests.rs"]
 mod configured_point_tests;
+
+#[cfg(test)]
+#[path = "accounted_point_stack_filter_inspect_tests.rs"]
+mod point_stack_tests;

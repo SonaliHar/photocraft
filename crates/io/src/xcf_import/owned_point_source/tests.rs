@@ -456,3 +456,101 @@ fn configured_nested_vectors_and_curve_spare_capacity_are_real_model_fees() {
     samples_f64_bits[0] = f64::NAN.to_bits();
     assert!(census::measure(&doc, &budget, &Interrupt::NONE).is_err());
 }
+
+
+#[test]
+fn bounded_stack_mask_correspondence_allows_absence_but_never_orphans_or_shared_owners() {
+    let budget = Budget::new(limits(), None);
+    let mut doc = census_fixture();
+    let state = doc.xcf_state.as_mut().unwrap();
+    let mut second = state.filter_stacks[0].nodes[0].clone();
+    second.id = FilterId(9);
+    second.mask = None;
+    state.filter_stacks[0].nodes.push(second);
+    assert!(census::measure(&doc, &budget, &Interrupt::NONE).is_ok());
+    let state = doc.xcf_state.as_mut().unwrap();
+    let mut mask = state.filter_masks[0].clone();
+    mask.id = MaskId(10); mask.owner = FilterId(9);
+    state.filter_stacks[0].nodes[1].mask = Some(ItemRef::Mask(mask.id));
+    let mut item = state.items[1].clone(); item.item = ItemRef::Mask(mask.id);
+    state.items.push(item); state.filter_masks.push(mask);
+    let both = census::measure(&doc, &budget, &Interrupt::NONE).unwrap();
+    let state = doc.xcf_state.as_mut().unwrap();
+    state.filter_stacks[0].nodes[1].mask = state.filter_stacks[0].nodes[0].mask;
+    assert!(census::measure(&doc, &budget, &Interrupt::NONE).is_err());
+    let state = doc.xcf_state.as_mut().unwrap();
+    state.filter_stacks[0].nodes[1].mask = Some(ItemRef::Mask(MaskId(10)));
+    state.filter_stacks[0].nodes[1].id = state.filter_stacks[0].nodes[0].id;
+    assert!(census::measure(&doc, &budget, &Interrupt::NONE).is_err());
+    let state = doc.xcf_state.as_mut().unwrap();
+    state.filter_stacks[0].nodes[1].id = FilterId(9);
+    for node in &mut state.filter_stacks[0].nodes { node.mask = None; }
+    state.filter_masks.clear(); state.items.retain(|item| matches!(item.item, ItemRef::Layer(_)));
+    let absent = census::measure(&doc, &budget, &Interrupt::NONE).unwrap();
+    assert!(absent.model < both.model);
+    let state = doc.xcf_state.as_mut().unwrap();
+    let mut extra = state.filter_stacks[0].nodes[0].clone(); extra.id = FilterId(11);
+    state.filter_stacks[0].nodes.push(extra);
+    assert!(census::measure(&doc, &budget, &Interrupt::NONE).is_err());
+}
+
+
+#[test]
+#[ignore = "requires reviewed unpublished filter-stack-edits-evidence originals; UNRUN"]
+fn five_original_witnessed_stacks_decode_once_with_order_raw_words_masks_and_catalog_retained() {
+    use sha2::{Digest, Sha256};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let hash = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
+    let root = std::path::PathBuf::from(std::env::var_os("PHOTOCRAFT_XCF_FULL_CORPUS").unwrap()).join("filter-stack-edits-evidence");
+    let observations = std::fs::read(root.join("observations.json")).unwrap();
+    assert_eq!(hash(&observations), "104ba73e04806be7547efae7f6362b0ecad66dbb02e7973eda26d499b0d63386");
+    let observations: serde_json::Value = serde_json::from_slice(&observations).unwrap();
+    let rows = observations["records"].as_array().unwrap();
+    assert_eq!(rows.len(), 5);
+    for row in rows {
+        assert!(matches!(row["id"].as_str().unwrap(), "stack.source" | "stack.disable" | "stack.remove" | "stack.reverse" | "stack.opacity-half"));
+        let path = root.join(row["file"].as_str().unwrap());
+        let bytes = Arc::new(std::fs::read(&path).unwrap());
+        assert_eq!(hash(&bytes), row["sha256"]);
+        let raw = photocraft_xcf::decode(&bytes, &DecodeOptions::default()).unwrap();
+        assert!(super::super::qualified_point_stack_edits(&raw));
+        let eager = crate::import("stack.xcf", &bytes).unwrap().document;
+        let q = quota(); let retained = q.reserve(QuotaKind::Index, 4096).unwrap();
+        let baseline = q.usage().unwrap();
+        let starts = AtomicU64::new(0);
+        let progress = |p: f32| { if p.to_bits() == 0.05f32.to_bits() { starts.fetch_add(1, Ordering::Relaxed); } };
+        let options = DecodeOptions { progress: Some(&progress), ..Default::default() };
+        let selected = super::super::owned_xcf_source::import_owned_xcf_bytes_in_quota("stack.xcf", bytes.clone(), &options, &limits(), q.clone(), &control()).unwrap();
+        assert_eq!(starts.load(Ordering::Relaxed), 1);
+        assert!(matches!(&selected, super::super::owned_xcf_source::OwnedXcfImport::Point(_)));
+        selected.document().validate_readonly_point_storage(&control()).unwrap();
+        assert!(selected.document().quota().shares_ledger(&q));
+        let doc = selected.document().document();
+        let LayerContent::BackedRaster(layer) = &doc.layers[0].content else { panic!() };
+        let original = raw.layers[0].plane.as_ref().unwrap();
+        let mut actual = vec![0u8; 192];
+        for y in 0..6 { for x in 0..8 {
+            let at = (y as usize * 8 + x as usize) * 4;
+            layer.checked_view().read_logical_pixel_native_into(x, y, &mut actual[at..at+4], &control()).unwrap();
+        }}
+        assert_eq!(actual, original.bytes);
+        let current = doc.xcf_state.as_ref().unwrap(); let old = eager.xcf_state.as_ref().unwrap();
+        assert_eq!(current.filter_stacks[0].nodes.len(), raw.layers[0].effects.len());
+        assert_eq!(current.filter_masks.len(), raw.layers[0].effects.len()); // Actual five proofs all Some; optional absence is not newly observed.
+        for (node, expected) in current.filter_stacks[0].nodes.iter().zip(&old.filter_stacks[0].nodes) {
+            assert_eq!(node.operation, expected.operation); assert_eq!(node.arguments, expected.arguments);
+            assert_eq!(node.operation.schema_epoch, "xcf-22-stock-point-stack-edits-v1");
+            assert_eq!(node.composition, expected.composition); assert_eq!(node.enabled, expected.enabled);
+            assert_eq!(node.opacity_f64_bits, expected.opacity_f64_bits);
+            let ItemRef::Mask(id) = node.mask.unwrap() else { panic!() };
+            let mask = current.filter_masks.iter().find(|mask| mask.id == id).unwrap();
+            assert_eq!(mask.owner, node.id);
+            let ordinal = current.filter_stacks[0].nodes.iter().position(|n| n.id == node.id).unwrap();
+            assert_eq!(mask.surface.try_read_interleaved(doc.bounds()).unwrap(), raw.layers[0].effects[ordinal].mask.as_ref().unwrap().plane.as_ref().unwrap().bytes);
+        }
+        drop(selected);
+        assert_eq!(q.usage().unwrap(), baseline);
+        assert_eq!(hash(&std::fs::read(path).unwrap()), row["sha256"]);
+        drop(retained);
+    }
+}

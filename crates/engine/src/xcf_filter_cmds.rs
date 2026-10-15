@@ -928,7 +928,24 @@ pub fn pre_dispatch_stack_change_with_background(s: &Session, cmd: &str, params:
     stack_context(s, cmd)
 }
 
+/// Separate typed Point preflight. This selects a paid transaction only;
+/// complete current/staged storage and operative validation remain mandatory.
+pub(crate) fn pre_dispatch_point_move(s: &Session, cmd: &str, params: &Value, background: bool) -> Result<()> {
+    if cmd != MOVE || !s.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_point_storage()) {
+        return Err(bad(cmd, "Point move requires actual Point storage"));
+    }
+    if background { return Err(bad(cmd, "filter stack edit requires synchronous context")); }
+    object(cmd, params, &["filterId", "index"])?;
+    id(cmd, params)?;
+    params.get("index").and_then(Value::as_u64).filter(|index| *index < 1024).ok_or_else(|| bad(cmd, "index must be a bounded owner-local integer"))?;
+    stack_context_for(s, cmd, true)
+}
+
 fn stack_context(s: &Session, cmd: &str) -> Result<()> {
+    stack_context_for(s, cmd, false)
+}
+
+fn stack_context_for(s: &Session, cmd: &str, point: bool) -> Result<()> {
     if s.coalesce_request.is_some() || s.color_restrict.is_some() || s.command_is_background() || s.command_has_pending_job() || s.has_jobs() {
         return Err(bad(cmd, "filter stack edit requires synchronous uncoalesced context without jobs"));
     }
@@ -937,7 +954,11 @@ fn stack_context(s: &Session, cmd: &str) -> Result<()> {
     if s.documents().iter().any(|document| document.floating.is_some() || document.doc.xcf_state.as_ref().is_some_and(|state| state.floating.is_some())) {
         return Err(bad(cmd, "filter stack edit refuses an existing floating selection or imported attachment"));
     }
-    if active.revision == u64::MAX || active.doc.accounted().is_some() {
+    if active.revision == u64::MAX || if point {
+        active.doc.accounted().is_none_or(|owner| !owner.is_readonly_point_storage())
+    } else {
+        active.doc.accounted().is_some()
+    } {
         return Err(bad(cmd, "resident document and revision headroom required"));
     }
     Ok(())

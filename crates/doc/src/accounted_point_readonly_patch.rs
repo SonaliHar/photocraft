@@ -32,6 +32,7 @@ pub struct PointFilterPatch<'a> {
 pub(in crate::accounted_document) struct Plan {
     layer: LayerId,
     filter: FilterId,
+    node_index: usize,
     old_revision: u64,
     revision: u64,
     replacements: [Option<(usize, PointArgumentValue)>; 10],
@@ -57,6 +58,24 @@ fn original(value: &FilterValue, control: &ReadControl<'_>) -> Result<PointArgum
         _ => refused(),
     }
 }
+// Allocation-free stable-ID selection is independent of operation semantics.
+// Repeat it on the private copied stack before applying the captured plan.
+fn node_index(nodes: &[FilterNode], filter: FilterId, control: &ReadControl<'_>) -> Result<usize, BackingError> {
+    if nodes.is_empty() || nodes.len() > 2 || filter.0 == 0 {
+        return Err(BackingError::Integrity);
+    }
+    let mut found = None;
+    for (index, node) in nodes.iter().enumerate() {
+        control.check(1)?;
+        if node.id == filter {
+            if found.is_some() {
+                return Err(BackingError::Integrity);
+            }
+            found = Some(index);
+        }
+    }
+    found.ok_or(BackingError::Bounds)
+}
 impl AccountedDocument {
     /// Replace at most ten uniquely named, existing arguments of the same raw
     /// type and/or the activation bit in one paid current-model copy. The enum
@@ -80,7 +99,8 @@ impl AccountedDocument {
         let layer = self.document().layers.first().ok_or(BackingError::Integrity)?;
         let state = self.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
         let stack = state.filter_stacks.first().ok_or(BackingError::Integrity)?;
-        let node = stack.nodes.first().ok_or(BackingError::Integrity)?;
+        let node_index = node_index(&stack.nodes, patch.filter, control)?;
+        let node = stack.nodes.get(node_index).ok_or(BackingError::Integrity)?;
         if layer.id != patch.layer || stack.owner != ItemRef::Layer(patch.layer) || node.id != patch.filter || stack.revision != patch.expected_stack_revision {
             return Err(BackingError::Integrity);
         }
@@ -119,7 +139,15 @@ impl AccountedDocument {
         current_copy(
             self,
             logical,
-            CopyKind::Filter(Plan { layer: patch.layer, filter: patch.filter, old_revision: stack.revision, revision, replacements, enabled: patch.enabled }),
+            CopyKind::Filter(Plan {
+                layer: patch.layer,
+                filter: patch.filter,
+                node_index,
+                old_revision: stack.revision,
+                revision,
+                replacements,
+                enabled: patch.enabled,
+            }),
             control,
         )
     }
@@ -130,7 +158,10 @@ pub(super) fn apply(document: &mut Document, plan: Plan, control: &ReadControl<'
     if stack.owner != ItemRef::Layer(plan.layer) || stack.revision != plan.old_revision {
         return Err(BackingError::Integrity);
     }
-    let node = stack.nodes.first_mut().ok_or(BackingError::Integrity)?;
+    if node_index(&stack.nodes, plan.filter, control)? != plan.node_index {
+        return Err(BackingError::Integrity);
+    }
+    let node = stack.nodes.get_mut(plan.node_index).ok_or(BackingError::Integrity)?;
     if node.id != plan.filter {
         return Err(BackingError::Integrity);
     }

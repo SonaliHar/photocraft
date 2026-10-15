@@ -8,7 +8,7 @@ use photocraft_doc::{item_identity::ItemRef, xcf_filters::{ExactNumber, FilterAr
 /// infer it from sparse tile occupancy, default samples or the canvas rectangle.
 pub(super) fn raster_bounds(doc: &Document, layer: photocraft_doc::LayerId) -> Result<Rect, IoError> {
     let state = doc.xcf_state.as_ref().ok_or_else(|| invalid("Point state missing"))?;
-    if doc.layers.len() != 1 || state.items.len() != 2 {
+    if doc.layers.len() != 1 || state.filter_masks.len() > 2 || state.items.len() != 1 + state.filter_masks.len() {
         return Err(invalid("Point singleton layer/mask shape"));
     }
     let mut found = None;
@@ -42,9 +42,9 @@ pub(super) fn shape(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control
         || doc.size.width > 262144
         || doc.size.height > 262144
         || doc.layers.len() != 1
-        || state.items.len() != 2
+        || state.filter_masks.len() > 2
+        || state.items.len() != 1 + state.filter_masks.len()
         || state.filter_stacks.len() != 1
-        || state.filter_masks.len() != 1
         || !matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale)
         || !matches!(doc.depth, SampleType::U8 | SampleType::U16 | SampleType::U32 | SampleType::F32 | SampleType::F64)
     {
@@ -53,34 +53,55 @@ pub(super) fn shape(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control
     let layer = doc.layers.first().ok_or_else(|| invalid("Point layer missing"))?;
     raster_bounds(doc, layer.id)?;
     let stack = state.filter_stacks.first().ok_or_else(|| invalid("Point stack missing"))?;
-    if stack.owner != ItemRef::Layer(layer.id) || stack.nodes.len() != 1 {
-        return Err(invalid("Point singleton stack owner"));
+    if stack.owner != ItemRef::Layer(layer.id) || !matches!(stack.nodes.len(), 1..=2) {
+        return Err(invalid("Point bounded stack owner"));
     }
-    let node = stack.nodes.first().ok_or_else(|| invalid("Point node missing"))?;
-    let mask = state.filter_masks.first().ok_or_else(|| invalid("Point mask missing"))?;
-    if node.arguments.len() > 10
-        || !node.auxiliary.is_empty()
-        || node.mask != Some(ItemRef::Mask(mask.id))
-        || mask.owner != node.id
-        || mask.bounds != doc.bounds()
-        || mask.surface.format() != PixelFormat::new(ColorMode::Grayscale, doc.depth, false)
-    {
-        return Err(invalid("Point flat arguments or native full-canvas mask"));
+    for (index, node) in stack.nodes.iter().enumerate() {
+        control.check().map_err(|_| IoError::Cancelled)?;
+        if node.id.0 == 0 || stack.nodes.iter().take(index).any(|earlier| earlier.id == node.id)
+            || node.arguments.len() > 10 || !node.auxiliary.is_empty() {
+            return Err(invalid("Point unique bounded node"));
+        }
+        match node.mask {
+            None => {}
+            Some(ItemRef::Mask(id)) => {
+                let mask = state.filter_masks.iter().find(|mask| mask.id == id).ok_or_else(|| invalid("Point node mask missing"))?;
+                if id.0 == 0 || mask.owner != node.id { return Err(invalid("Point node mask owner")); }
+            }
+            _ => return Err(invalid("Point node mask reference")),
+        }
+        // Same immutable bounded tree and same enclosing real work ledger.
+        let failure = std::cell::RefCell::new(None);
+        let debit = |units| budget.consume_work(units, "Point argument storage shape").map_err(|error| {
+            let kind = if error.kind == ErrorKind::Cancelled { BackingError::Cancelled } else { BackingError::Work };
+            *failure.borrow_mut() = Some(error);
+            kind
+        });
+        let checked = photocraft_doc::accounted_document::point_argument_shape_with(&node.arguments, control, &debit);
+        if let Some(error) = failure.into_inner() { return Err(accounting_error(error)); }
+        checked.map_err(backing)?;
+        finite_arguments(&node.arguments, budget, control)?;
     }
-    // Reuse L1's exact operation-independent bounded storage shape and debit
-    // every real validation step to the enclosing XCF ledger, without a second
-    // counter/reset or asserted peak. The following walker counts actual spare
-    // capacities (including the top Vec, whose API here is a borrowed slice).
-    let failure = std::cell::RefCell::new(None);
-    let debit = |units| budget.consume_work(units, "Point argument storage shape").map_err(|error| {
-        let kind = if error.kind == ErrorKind::Cancelled { BackingError::Cancelled } else { BackingError::Work };
-        *failure.borrow_mut() = Some(error);
-        kind
-    });
-    let checked = photocraft_doc::accounted_document::point_argument_shape_with(&node.arguments, control, &debit);
-    if let Some(error) = failure.into_inner() { return Err(accounting_error(error)); }
-    checked.map_err(backing)?;
-    finite_arguments(&node.arguments, budget, control)?;
+    for (index, mask) in state.filter_masks.iter().enumerate() {
+        control.check().map_err(|_| IoError::Cancelled)?;
+        if mask.id.0 == 0 || state.filter_masks.iter().take(index).any(|earlier| earlier.id == mask.id)
+            || !stack.nodes.iter().any(|node| node.id == mask.owner && node.mask == Some(ItemRef::Mask(mask.id)))
+            || mask.bounds != doc.bounds()
+            || mask.surface.format() != PixelFormat::new(ColorMode::Grayscale, doc.depth, false) {
+            return Err(invalid("Point exact owned native full-canvas mask"));
+        }
+    }
+    for (index, item) in state.items.iter().enumerate() {
+        control.check().map_err(|_| IoError::Cancelled)?;
+        if state.items.iter().take(index).any(|earlier| earlier.item == item.item) {
+            return Err(invalid("Point duplicate current item"));
+        }
+        match item.item {
+            ItemRef::Layer(id) if id == layer.id => {}
+            ItemRef::Mask(id) if state.filter_masks.iter().any(|mask| mask.id == id) => {}
+            _ => return Err(invalid("Point orphan current item")),
+        }
+    }
     Ok(())
 }
 

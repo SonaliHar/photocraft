@@ -18,6 +18,9 @@ pub use structured::{PointArgumentShape, point_argument_shape, point_argument_sh
 #[path = "accounted_point_readonly_structured_patch.rs"]
 mod structured_patch;
 pub use structured_patch::{PointStructuredArgumentPatch, PointStructuredFilterPatch};
+#[path = "accounted_point_readonly_move.rs"]
+mod filter_move;
+pub use filter_move::PointFilterMovePatch;
 #[path = "accounted_point_readonly/properties.rs"]
 mod properties;
 pub(super) fn layer_named(owner: &AccountedDocument, patch: ReadonlyLayerNamePatch<'_>, control: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
@@ -34,6 +37,10 @@ pub(super) fn layer_properties(
 const SIDE: u32 = 262_144;
 const PIXELS: u64 = 1 << 30;
 const MAP_ENTRY: u64 = 256;
+const MAX_NODES: usize = 2;
+const STACK_F64_WORDS: u64 = 2560;
+// Two nodes, each with ten roots and at most 5 + 25 nested entries per root.
+const STACK_ARGUMENT_ENTRIES: u64 = 620;
 fn refused<T>() -> Result<T, BackingError> {
     Err(BackingError::Unsupported)
 }
@@ -81,12 +88,14 @@ fn precision(doc: &Document) -> bool {
             | (775, S::F64, Some(E::Perceptual))
     )
 }
-fn node_shape(node: &FilterNode, control: &ReadControl<'_>) -> Result<(), BackingError> {
+fn node_shape(node: &FilterNode, control: &ReadControl<'_>) -> Result<PointArgumentShape, BackingError> {
     control.check(1)?;
+    let opacity = f64::from_bits(node.opacity_f64_bits);
     if node.id.0 == 0
         || node.arguments.len() > 10
         || !node.auxiliary.is_empty()
-        || node.opacity_f64_bits != 1f64.to_bits()
+        || !opacity.is_finite()
+        || !(0.0..=1.0).contains(&opacity)
         || node.source_clipping != Some(0)
         || node.source_region != Some(0)
     {
@@ -110,8 +119,7 @@ fn node_shape(node: &FilterNode, control: &ReadControl<'_>) -> Result<(), Backin
     {
         return refused();
     }
-    point_argument_shape(&node.arguments, control)?;
-    Ok(())
+    point_argument_shape(&node.arguments, control)
 }
 
 /// Only opaque map/default metadata is copied. Native tile words, padding and
@@ -189,10 +197,10 @@ impl MaskPlan {
 // Parent's Point-only census policy calls this; old strict mask policies must
 // continue calling their unchanged Threshold helper.
 pub(super) fn mask_census(masks: &Vec<FilterMask>, census: &mut CanonicalCensus<'_, '_>) -> Result<(), BackingError> {
-    if masks.len() != 1 {
+    if masks.len() > MAX_NODES {
         return refused();
     }
-    census.vec(masks, 1)?;
+    census.vec(masks, MAX_NODES)?;
     for mask in masks {
         let plan = MaskPlan::new(&mask.surface, mask.bounds, census.control)?;
         census.counted.index = census.counted.index.checked_add(plan.bytes).ok_or(BackingError::Length)?;
@@ -222,9 +230,9 @@ fn shape(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>) -> Res
     let source = doc.source_color_context.as_ref().ok_or(BackingError::Unsupported)?;
     if state.provenance.format != "xcf"
         || state.provenance.format_version != 22
-        || state.items.len() != 2
+        || state.items.len() != state.filter_masks.len().checked_add(1).ok_or(BackingError::Length)?
         || state.filter_stacks.len() != 1
-        || state.filter_masks.len() != 1
+        || state.filter_masks.len() > MAX_NODES
         || !state.source_items.is_empty()
         || !state.editable_indexed.is_empty()
         || !state.resources.is_empty()
@@ -255,27 +263,52 @@ fn shape(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>) -> Res
         return refused();
     }
     let stack = state.filter_stacks.first().ok_or(BackingError::Integrity)?;
-    if stack.owner != ItemRef::Layer(layer.id) || stack.nodes.len() != 1 {
+    if stack.owner != ItemRef::Layer(layer.id) || stack.nodes.is_empty() || stack.nodes.len() > MAX_NODES {
         return refused();
     }
-    let node = stack.nodes.first().ok_or(BackingError::Integrity)?;
-    node_shape(node, control)?;
-    let mask = state.filter_masks.first().ok_or(BackingError::Integrity)?;
-    if mask.id.0 == 0
-        || mask.owner != node.id
-        || node.mask != Some(ItemRef::Mask(mask.id))
-        || mask.bounds != canvas
-        || mask.surface.format().sample != doc.depth
-    {
+    let mut f64_words = 0u64;
+    let mut entries = 0u64;
+    let mut mask_refs = 0usize;
+    for (index, node) in stack.nodes.iter().enumerate() {
+        let count = node_shape(node, control)?;
+        f64_words = f64_words.checked_add(count.f64_words).ok_or(BackingError::Length)?;
+        entries = entries.checked_add(count.config_entries).and_then(|n| n.checked_add(node.arguments.len() as u64)).ok_or(BackingError::Length)?;
+        if f64_words > STACK_F64_WORDS || entries > STACK_ARGUMENT_ENTRIES {
+            return Err(BackingError::Length);
+        }
+        for previous in stack.nodes.get(..index).ok_or(BackingError::Length)? {
+            control.check(1)?;
+            if previous.id == node.id || node.mask.is_some() && previous.mask == node.mask {
+                return Err(BackingError::Integrity);
+            }
+        }
+        if let Some(reference) = node.mask {
+            let ItemRef::Mask(id) = reference else { return Err(BackingError::Integrity) };
+            mask_refs = mask_refs.checked_add(1).ok_or(BackingError::Length)?;
+            let mut found = false;
+            for mask in &state.filter_masks {
+                control.check(1)?;
+                if mask.id == id {
+                    if found || id.0 == 0 || mask.owner != node.id {
+                        return Err(BackingError::Integrity);
+                    }
+                    found = true;
+                }
+            }
+            if !found { return Err(BackingError::Integrity); }
+        }
+    }
+    if mask_refs != state.filter_masks.len() {
         return Err(BackingError::Integrity);
     }
     let mut layer_item = None;
-    let mut mask_item = None;
     for item in &state.items {
         control.check(1)?;
         match item.item {
             ItemRef::Layer(id) if id == layer.id && layer_item.is_none() => layer_item = Some(item),
-            ItemRef::Mask(id) if id == mask.id && mask_item.is_none() => mask_item = Some(item),
+            // Exact membership and uniqueness are checked against each actual
+            // mask below; total item count leaves no unreferenced extra slot.
+            ItemRef::Mask(_) => {}
             _ => return Err(BackingError::Integrity),
         }
     }
@@ -283,23 +316,42 @@ fn shape(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>) -> Res
     if item.parent.is_some() || item.mask.is_some() || item.raster_bounds != Some(bounds) {
         return refused();
     }
-    let metadata = mask_item.ok_or(BackingError::Integrity)?;
-    let policy = metadata.mask.as_ref().ok_or(BackingError::Integrity)?;
-    if metadata.parent.is_some()
-        || metadata.composition.is_some()
-        || metadata.raster_bounds != Some(canvas)
-        || !metadata.visible
-        || metadata.source_flags != 0
-        || policy.owner != ItemRef::Layer(layer.id)
-        || policy.bounds != canvas
-        || policy.offset != [0, 0]
-        || policy.outside_f64_bits != 0f64.to_bits()
-        || !policy.enabled
-        || policy.shown
-        || policy.editing
-        || policy.linked
-    {
-        return refused();
+    for (index, mask) in state.filter_masks.iter().enumerate() {
+        control.check(1)?;
+        if mask.id.0 == 0 || mask.bounds != canvas || mask.surface.format().sample != doc.depth {
+            return Err(BackingError::Integrity);
+        }
+        for previous in state.filter_masks.get(..index).ok_or(BackingError::Length)? {
+            control.check(1)?;
+            if previous.id == mask.id { return Err(BackingError::Integrity); }
+        }
+        let mut metadata = None;
+        for item in &state.items {
+            control.check(1)?;
+            if item.item == ItemRef::Mask(mask.id) {
+                if metadata.is_some() { return Err(BackingError::Integrity); }
+                metadata = Some(item);
+            }
+        }
+        let metadata = metadata.ok_or(BackingError::Integrity)?;
+        let policy = metadata.mask.as_ref().ok_or(BackingError::Integrity)?;
+        if metadata.parent.is_some()
+            || metadata.composition.is_some()
+            || metadata.raster_bounds != Some(canvas)
+            || !metadata.visible
+            || metadata.source_flags != 0
+            || policy.owner != ItemRef::Layer(layer.id)
+            || policy.bounds != canvas
+            || policy.offset != [0, 0]
+            || policy.outside_f64_bits != 0f64.to_bits()
+            || !policy.enabled
+            || policy.shown
+            || policy.editing
+            || policy.linked
+        {
+            return refused();
+        }
+        MaskPlan::new(&mask.surface, canvas, control)?;
     }
     for selected in &state.selection.selected {
         control.check(1)?;
@@ -310,7 +362,6 @@ fn shape(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>) -> Res
     if state.selection.active.is_some_and(|id| id != ItemRef::Layer(layer.id)) {
         return Err(BackingError::Integrity);
     }
-    MaskPlan::new(&mask.surface, canvas, control)?;
     Ok(())
 }
 pub(super) fn measured(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
@@ -422,6 +473,7 @@ pub(super) enum CopyKind<'a> {
     LayerProperties(readonly_layer_properties::Plan<'a>),
     Filter(patch::Plan),
     Structured(structured_patch::Plan<'a>),
+    Move(filter_move::Plan),
 }
 pub(super) fn renamed(owner: &AccountedDocument, name: &str, control: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
     imported_edits::validate_name(name, control)?;
@@ -447,7 +499,7 @@ pub(super) fn current_copy(
         CopyKind::Rename(name) => name.len() as u64,
         CopyKind::LayerName(patch) => (patch.name.len() as u64).checked_mul(2).ok_or(BackingError::Length)?,
         CopyKind::LayerProperties(plan) => plan.replacement_name_bytes()?,
-        CopyKind::Filter(_) | CopyKind::Structured(_) => 0,
+        CopyKind::Filter(_) | CopyKind::Structured(_) | CopyKind::Move(_) => 0,
     };
     let replacement_value_bytes = match kind {
         CopyKind::Structured(plan) => plan.copy_index_bytes(),
@@ -473,17 +525,20 @@ pub(super) fn current_copy(
     let source = owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
     let destination = document.xcf_state.as_mut().ok_or(BackingError::Integrity)?;
     destination.filter_stacks.try_reserve_exact(1).map_err(|_| BackingError::Allocation)?;
-    destination.filter_masks.try_reserve_exact(1).map_err(|_| BackingError::Allocation)?;
-    if destination.filter_stacks.capacity() > 2 || destination.filter_masks.capacity() > 2 {
+    destination.filter_masks.try_reserve_exact(source.filter_masks.len()).map_err(|_| BackingError::Allocation)?;
+    if destination.filter_stacks.capacity() > 2 || destination.filter_masks.capacity() > source.filter_masks.len().checked_mul(2).ok_or(BackingError::Length)? {
         return Err(BackingError::Allocation);
     }
     let stack = source.filter_stacks.first().ok_or(BackingError::Integrity)?;
     let mut nodes = Vec::new();
-    nodes.try_reserve_exact(1).map_err(|_| BackingError::Allocation)?;
-    if nodes.capacity() > 2 {
+    nodes.try_reserve_exact(stack.nodes.len()).map_err(|_| BackingError::Allocation)?;
+    if nodes.capacity() > stack.nodes.len().checked_mul(2).ok_or(BackingError::Length)? {
         return Err(BackingError::Allocation);
     }
-    nodes.push(copy_node(stack.nodes.first().ok_or(BackingError::Integrity)?, control)?);
+    for node in &stack.nodes {
+        control.check(1)?;
+        nodes.push(copy_node(node, control)?);
+    }
     destination.filter_stacks.push(FilterStack { owner: stack.owner, nodes, revision: stack.revision });
     for mask in &source.filter_masks {
         let plan = MaskPlan::new(&mask.surface, mask.bounds, control)?;
@@ -495,6 +550,7 @@ pub(super) fn current_copy(
         CopyKind::LayerProperties(plan) => readonly_layer_properties::apply(&mut document, plan, control)?,
         CopyKind::Filter(plan) => patch::apply(&mut document, plan, control)?,
         CopyKind::Structured(plan) => structured_patch::apply(&mut document, plan, control)?,
+        CopyKind::Move(plan) => filter_move::apply(&mut document, plan, control)?,
     }
     let actual =
         measured(&document, owner.quota(), control)?.index.checked_add(std::mem::size_of::<OriginalRetention>() as u64 + 128).ok_or(BackingError::Length)?;
@@ -520,3 +576,7 @@ pub(super) fn current_copy(
 #[cfg(test)]
 #[path = "accounted_point_readonly_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "accounted_point_readonly/two_node_tests.rs"]
+mod two_node_tests;

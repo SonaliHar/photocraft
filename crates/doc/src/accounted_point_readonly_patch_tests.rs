@@ -332,3 +332,57 @@ fn alternating_patch_title_and_properties_keep_one_flat_original_root() {
     }
     assert!(owner.try_edit(AccountedEdit::LayerName { layer: owner.document().layers[0].id, name: "generic" }, &ctl()).is_err());
 }
+
+// The original fixture guard prepays these bounded CURRENT metadata additions;
+// the second node is deliberately maskless and carries no evaluation claim.
+fn two_nodes(revision: u64) -> AccountedDocument {
+    let q = quota();
+    let (mut doc, guard) = fixture(&q, SampleType::F64, SampleEncoding::NonlinearProfile, 750);
+    let stack = &mut doc.xcf_state.as_mut().unwrap().filter_stacks[0];
+    stack.revision = revision;
+    let mut second = stack.nodes[0].clone();
+    second.id = FilterId(200);
+    second.mask = None;
+    second.source_display_name = Some("independent second node".into());
+    stack.nodes.push(second);
+    AccountedDocument::new_readonly_point_storage(doc, guard, q, &ctl()).unwrap()
+}
+#[test]
+fn stable_ids_select_each_of_two_nodes_without_reordering_or_touching_the_other() {
+    for (index, id) in [(0, FilterId(100)), (1, FilterId(200))] {
+        let owner = two_nodes(7);
+        let args = [PointArgumentPatch { name: "raw-0", value: PointArgumentValue::Float32Bits(0x7fc05678) }];
+        let mut request = patch(&owner, &args, Some(true));
+        request.filter = id;
+        let next = owner.try_with_readonly_point_filter(request, &ctl()).unwrap();
+        let mut expected = owner.document().clone();
+        let stack = &mut expected.xcf_state.as_mut().unwrap().filter_stacks[0];
+        stack.revision = 8;
+        stack.nodes[index].enabled = true;
+        stack.nodes[index].arguments[0].value = FilterValue::Number(ExactNumber::Float32Bits(0x7fc05678));
+        assert_eq!(next.document(), &expected);
+        assert_eq!(owner.document().xcf_state.as_ref().unwrap().filter_stacks[0].revision, 7);
+        let usage = owner.quota().usage().unwrap();
+        for bad in [FilterId(0), FilterId(999)] {
+            request.filter = bad;
+            assert!(owner.try_with_readonly_point_filter(request, &ctl()).is_err());
+            assert_eq!(owner.quota().usage().unwrap(), usage);
+        }
+        request.filter = id;
+        request.expected_stack_revision = 8;
+        assert!(owner.try_with_readonly_point_filter(request, &ctl()).is_err());
+    }
+}
+#[test]
+fn second_node_noop_at_max_revision_and_full_quota_keeps_exact_owner() {
+    let owner = two_nodes(u64::MAX);
+    let q = owner.quota();
+    let before = q.usage().unwrap();
+    let blocker = q.reserve(QuotaKind::Index, (16 << 20) - before.index).unwrap();
+    let args = [PointArgumentPatch { name: "raw-0", value: PointArgumentValue::Float32Bits((-0f32).to_bits()) }];
+    let mut request = patch(&owner, &args, Some(false));
+    request.filter = FilterId(200);
+    assert!(owner.try_with_readonly_point_filter(request, &ctl()).unwrap().shares_model(&owner));
+    drop(blocker);
+    assert_eq!(q.usage().unwrap(), before);
+}

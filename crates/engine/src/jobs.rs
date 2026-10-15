@@ -996,7 +996,11 @@ impl Session {
         }
         // These family-specific validators deliberately refuse unrelated ids.
         if matches!(id, "xcf.filter.move" | "xcf.filter.remove") {
-            crate::xcf_filter_cmds::pre_dispatch_stack_change_with_background(self, id, &params, background || self.jobs.spawn)?;
+            if id == "xcf.filter.move" && self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_point_storage()) {
+                crate::xcf_filter_cmds::pre_dispatch_point_move(self, id, &params, background || self.jobs.spawn)?;
+            } else {
+                crate::xcf_filter_cmds::pre_dispatch_stack_change_with_background(self, id, &params, background || self.jobs.spawn)?;
+            }
         }
         if matches!(id, "xcf.filter.set" | "xcf.filter.enable") {
             if self.active().is_some_and(|state| state.doc.accounted().is_some()) {
@@ -1132,7 +1136,7 @@ impl Session {
                     && self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| {
                         owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage()
                     })
-                || matches!(id, "xcf.filter.set" | "xcf.filter.enable")
+                || matches!(id, "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.move")
                     && self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| {
                         owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage()
                     });

@@ -101,12 +101,25 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
     }
     let doc = owner.document();
     let state = doc.xcf_state.as_ref().ok_or(BackingError::Integrity)?;
+    let point = owner.is_readonly_point_storage();
     // Actual class/census already enforces these; repeat the small shape before
     // deriving response counts so future class expansion cannot widen this API.
-    if state.items.len() > 2
-        || state.filter_stacks.len() != 1
-        || state.filter_stacks.first().is_none_or(|s| s.nodes.len() != 1)
-        || !doc.paths.is_empty()
+    let filters_in_owner = if point {
+        let [stack] = state.filter_stacks.as_slice() else { return Err(BackingError::Unsupported.into()) };
+        if !(1..=2).contains(&stack.nodes.len())
+            || state.filter_masks.len() > stack.nodes.len()
+            || state.items.len() != state.filter_masks.len().checked_add(1).ok_or(BackingError::Length)?
+        {
+            return Err(BackingError::Unsupported.into());
+        }
+        stack.nodes.len()
+    } else {
+        if state.items.len() > 2 || state.filter_stacks.len() != 1 || state.filter_stacks.first().is_none_or(|s| s.nodes.len() != 1) {
+            return Err(BackingError::Unsupported.into());
+        }
+        1
+    };
+    if !doc.paths.is_empty()
         || !state.source_items.is_empty()
         || !state.resources.is_empty()
         || !state.item_sets.is_empty()
@@ -121,7 +134,7 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
     let resolution = doc.physical_resolution.as_ref().unwrap_or(&fallback);
     let items = count(state.items.len(), offset, limit);
     let stacks = count(state.filter_stacks.len(), offset, limit);
-    let filters = count(1, offset, limit);
+    let filters = count(filters_in_owner, offset, limit);
     let selected = count(state.selection.selected.len(), offset, limit);
     // Full byte lengths are read without traversing text. The shared builder's
     // truncation flags use chars().count(), which still visits the COMPLETE
@@ -189,7 +202,9 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
     let planned = u64::try_from(planned).map_err(|_| BackingError::Length)?;
     paid_reply(owner.quota(), ReplyKind::Project, bounds, planned, scanned, control, || {
         validate_resolution(resolution, control)?;
-        let mut facts = [None, None];
+        // Point has at most one layer plus two optional matched masks. The
+        // other readonly classes retain their original two-item shape above.
+        let mut facts = [None, None, None];
         for (index, item) in state.items.iter().enumerate() {
             let fact = crate::xcf_inspect_cmds::ItemTextFacts {
                 item,
@@ -198,9 +213,14 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
             };
             *facts.get_mut(index).ok_or(BackingError::Length)? = Some(fact);
         }
-        crate::xcf_inspect_cmds::build_inspect_reply(doc, state, resolution, offset, limit, Some(&facts))
+        let facts = facts.get(..state.items.len()).ok_or(BackingError::Length)?;
+        crate::xcf_inspect_cmds::build_inspect_reply(doc, state, resolution, offset, limit, Some(facts))
     })
 }
 #[cfg(test)]
 #[path = "accounted_xcf_inspect_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "corpus"))]
+#[path = "accounted_point_stack_inspect_tests.rs"]
+mod point_stack_tests;

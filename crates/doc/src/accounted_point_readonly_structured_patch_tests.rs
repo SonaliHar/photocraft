@@ -173,3 +173,47 @@ fn alternating_structured_title_and_layer_copies_keep_flat_original_retention() 
         previous = Some(usage);
     }
 }
+
+#[test]
+fn structured_stable_id_targets_second_node_and_preserves_full_first_tree() {
+    let q = quota();
+    let (mut doc, guard) = fixture(&q, SampleType::F64, SampleEncoding::NonlinearProfile, 750);
+    let stack = &mut doc.xcf_state.as_mut().unwrap().filter_stacks[0];
+    stack.revision = 7;
+    stack.nodes[0].arguments = vec![FilterArgument { name: "config".into(), value: curves() }];
+    let mut second = stack.nodes[0].clone();
+    second.id = FilterId(200);
+    second.mask = None;
+    stack.nodes.push(second);
+    let owner = AccountedDocument::new_readonly_point_storage(doc, guard, q, &ctl()).unwrap();
+    // Two independently bounded 1280-word nodes use the complete 2560-word
+    // storage envelope. Only the chosen second node receives replacements.
+    let mut replacement = curves();
+    let FilterValue::Config(channels) = &mut replacement else { panic!() };
+    let FilterValue::Curve { samples_f64_bits, .. } = &mut channels[4].value else { panic!() };
+    samples_f64_bits[255] = 0x7ff8000000001234;
+    let args = [PointStructuredArgumentPatch { name: "config", value: &replacement }];
+    let mut request = patch(&owner, &args);
+    request.filter = FilterId(200);
+    let next = owner.try_with_readonly_point_structured_filter(request, &ctl()).unwrap();
+    let mut expected = owner.document().clone();
+    let stack = &mut expected.xcf_state.as_mut().unwrap().filter_stacks[0];
+    stack.revision = 8;
+    stack.nodes[1].arguments[0].value = replacement.clone();
+    assert_eq!(next.document(), &expected);
+    let mut noop = patch(&next, &args);
+    noop.filter = FilterId(200);
+    assert!(next.try_with_readonly_point_structured_filter(noop, &ctl()).unwrap().shares_model(&next));
+    let before = owner.quota().usage().unwrap();
+    for id in [FilterId(0), FilterId(999)] {
+        request.filter = id;
+        assert!(owner.try_with_readonly_point_structured_filter(request, &ctl()).is_err());
+        assert_eq!(owner.quota().usage().unwrap(), before);
+    }
+    request.filter = FilterId(200);
+    request.expected_stack_revision = 8;
+    assert!(owner.try_with_readonly_point_structured_filter(request, &ctl()).is_err());
+    let denied = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Err(BackingError::Work) };
+    assert!(matches!(owner.try_with_readonly_point_structured_filter(patch(&owner, &args), &denied), Err(BackingError::Work)));
+    assert_eq!(owner.quota().usage().unwrap(), before);
+}

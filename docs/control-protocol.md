@@ -470,7 +470,10 @@ profiles stay retained, and no new original-source eligibility follows.
 
 The Point storage path now joins the existing 24 PointReplace family variants
 (19 stored GEGL names), retaining each family's source, precision, geometry,
-profile and composition restrictions. It remains a singleton stack; ordinary
+profile and composition restrictions. Those family paths retain singleton
+qualification. The separately qualified witnessed Exposure/Invert stack uses
+one or two nodes with its original order, composition and precision rules;
+arbitrary mixtures of the singleton families remain unsupported. Ordinary
 default Open enrollment and other stock families are separate work. Paid Point
 inspection exposes bounded literal Color storage as exact words, independently
 of evaluation or editing eligibility; resident inspection is unchanged.
@@ -502,6 +505,16 @@ stored shape, unknown fields and nonfinite operative numbers refuse. Paid
 `xcf.filter.inspect` returns the complete configuration, including exact raw
 words, under its own bounded reply owner. Original source/precision/profile
 qualification and complete current/staged validation remain mandatory.
+
+For the qualified witnessed Exposure/Invert stack, `xcf.filter.move` accepts
+exactly `{"filterId":"123","index":0}` with an owner-local index
+within the current stack. Stable IDs also target either node for inspection,
+argument changes and activation. A changed move publishes one undo step;
+moving to the current index preserves redo. The complete current and proposed
+stack must validate, including its original saved-order interpretation and
+half-opacity Invert rules. Content locks, source protection, synchronous
+dispatch and the shared cumulative work limit still apply. Filter removal
+and insertion require their own storage and transaction support.
 
 For explicit owned native reopen, use exactly `{"path":"current.pcraft","nativeProfilePolicy":"keepCurrent"}`
 with `doc.open` or MCP `doc_open`. Exactly one profile policy is permitted; both together,
