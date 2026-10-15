@@ -113,6 +113,9 @@ pub const MAX_NATIVE_TILE_VISIT_BYTES: usize = 64 * 1024;
 
 const ENTRY_ENVELOPE: u64 = 256;
 const MAX_ENTRIES: usize = 4096;
+#[cfg(test)]
+#[path = "backing/constructor_requirements_tests.rs"]
+mod constructor_requirements_tests;
 /// A pin retains its physical allocation reservation independently of cache eviction.
 #[derive(Debug)]
 pub struct TilePin {
@@ -159,6 +162,15 @@ pub struct BackedRaster {
     cache: Arc<Mutex<Cache>>,
 }
 impl BackedRaster {
+    /// Existing constructor's prospective cache/COW index reservations only.
+    /// Allocation-free and lower-policy neutral: this is not a ledger receipt,
+    /// store/native payload census, future COW budget or allocator/RSS claim.
+    pub fn metadata_reservation_bytes(limits: BackingLimits) -> Result<u64, BackingError> {
+        if limits.cache_tiles == 0 || limits.cache_tiles > MAX_ENTRIES || limits.override_tiles == 0 || limits.override_tiles > MAX_ENTRIES {
+            return Err(BackingError::Bounds);
+        }
+        entry_reservation_bytes(0)?.checked_add(entry_reservation_bytes(limits.cache_tiles)?).ok_or(BackingError::Quota)
+    }
     pub fn new(store: Arc<dyn NativePlaneStore>, quota: BackingQuota, cache_tiles: usize, control: &ReadControl<'_>) -> Result<Self, BackingError> {
         Self::new_with_limits(store, quota, BackingLimits { cache_tiles, override_tiles: MAX_ENTRIES }, control)
     }
@@ -170,9 +182,7 @@ impl BackedRaster {
     ) -> Result<Self, BackingError> {
         let cache_tiles = limits.cache_tiles;
         control.check(1)?;
-        if cache_tiles == 0 || cache_tiles > MAX_ENTRIES || limits.override_tiles == 0 || limits.override_tiles > MAX_ENTRIES {
-            return Err(BackingError::Bounds);
-        }
+        Self::metadata_reservation_bytes(limits)?;
         store.validate_quota(&quota)?;
         control.check(1)?;
         let descriptor = store.descriptor();
@@ -456,8 +466,11 @@ fn allocate(quota: &BackingQuota, length: usize) -> Result<Payload, BackingError
     bytes.resize(length, 0);
     Ok(Payload { bytes, _lease: lease })
 }
+fn entry_reservation_bytes(count: usize) -> Result<u64, BackingError> {
+    u64::try_from(count).ok().and_then(|count| count.checked_mul(ENTRY_ENVELOPE)).and_then(|n| n.checked_add(256)).ok_or(BackingError::Quota)
+}
 fn entries(quota: &BackingQuota, count: usize) -> Result<Entries, BackingError> {
-    let envelope = (count as u64).checked_mul(ENTRY_ENVELOPE).and_then(|n| n.checked_add(256)).ok_or(BackingError::Quota)?;
+    let envelope = entry_reservation_bytes(count)?;
     let mut lease = quota.reserve(QuotaKind::Index, envelope).map_err(|_| BackingError::Quota)?;
     let mut values = Vec::new();
     values.try_reserve_exact(count).map_err(|_| BackingError::Allocation)?;

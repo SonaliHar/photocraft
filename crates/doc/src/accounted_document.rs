@@ -19,6 +19,9 @@ mod imported_edits;
 mod selection_rehydrate;
 #[path = "accounted_document_name.rs"]
 mod document_name;
+#[cfg(test)]
+#[path = "accounted_constructor_requirements_tests.rs"]
+mod constructor_requirements_tests;
 #[path = "accounted_imported_selection.rs"]
 mod imported_selection;
 
@@ -211,6 +214,12 @@ impl AccountedHistory {
     }
 }
 impl AccountedDocument {
+    /// Existing `from_owned` owner/Arc index envelope. The codec's physical
+    /// document/native storage guard is separate; this value grants no receipt
+    /// or authority and performs no allocation or model traversal.
+    pub const fn owned_model_reservation_bytes() -> u64 {
+        (std::mem::size_of::<ModelOwner>() + 128) as u64
+    }
     /// Move a model together with a codec-owned guard retaining its existing
     /// model reservations and immutable archive. This is an explicit ownership
     /// transfer contract: the guard must already account this physical model.
@@ -228,7 +237,7 @@ impl AccountedDocument {
         }
         let incoming = Incoming { document, retention };
         validate_backing(&incoming.document, &quota, control)?;
-        let lease = quota.reserve(QuotaKind::Index, (std::mem::size_of::<ModelOwner>() + 128) as u64).map_err(|_| BackingError::Quota)?;
+        let lease = quota.reserve(QuotaKind::Index, Self::owned_model_reservation_bytes()).map_err(|_| BackingError::Quota)?;
         control.check(1)?;
         let Incoming { document, retention } = incoming;
         Ok(Self {
