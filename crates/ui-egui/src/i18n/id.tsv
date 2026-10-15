@@ -3181,3 +3181,12 @@ curves	Smooth	Haluskan
 	set name	nama set
 	{set} (modified)	{set} (diubah)
 	Random	Acak
+
+
+# Perspective Warp review: interactive geometry and commit feedback
+	Perspective Warp preview belongs to another document	Pratinjau distorsi perspektif ini milik dokumen lain
+	Perspective Warp: invalid plane; drag ignored	Distorsi perspektif: bidang tidak valid; seretan diabaikan
+	Perspective Warp: no changes to apply	Distorsi perspektif: tidak ada perubahan untuk diterapkan
+	Perspective Warp: {error}	Distorsi perspektif: {error}
+	a plane is degenerate (its corners must form a quad)	suatu bidang tidak valid (sudut-sudutnya harus membentuk segi empat)
+	plane coordinates must be finite	koordinat bidang harus berupa bilangan berhingga

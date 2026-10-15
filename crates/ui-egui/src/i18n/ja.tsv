@@ -3865,3 +3865,12 @@ curves	Smooth	スムーズ
 	There are too many sets: delete one first.	セットが多すぎます。先に 1 つ削除してください。
 	set name	セット名
 	{set} (modified)	{set}（変更あり）
+
+
+# Perspective Warp review: interactive geometry and commit feedback
+	Perspective Warp preview belongs to another document	遠近法ワープのプレビューは別のドキュメントに属しています
+	Perspective Warp: invalid plane; drag ignored	遠近法ワープ：無効な平面です。ドラッグは無視されました
+	Perspective Warp: no changes to apply	遠近法ワープ：適用する変更はありません
+	Perspective Warp: {error}	遠近法ワープ：{error}
+	a plane is degenerate (its corners must form a quad)	平面が退化しています（4つの頂点で四角形を形成する必要があります）
+	plane coordinates must be finite	平面の座標には有限の数値を指定してください

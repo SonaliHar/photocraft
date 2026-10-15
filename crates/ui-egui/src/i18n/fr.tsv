@@ -3194,3 +3194,12 @@ curves	Smooth	Lisser
 	set name	nom du jeu
 	{set} (modified)	{set} (modifié)
 	Random	Aléatoire
+
+
+# Perspective Warp review: interactive geometry and commit feedback
+	Perspective Warp preview belongs to another document	L’aperçu de déformation de la perspective appartient à un autre document
+	Perspective Warp: invalid plane; drag ignored	Déformation de la perspective : plan invalide ; déplacement ignoré
+	Perspective Warp: no changes to apply	Déformation de la perspective : aucune modification à appliquer
+	Perspective Warp: {error}	Déformation de la perspective : {error}
+	a plane is degenerate (its corners must form a quad)	un plan est dégénéré (ses coins doivent former un quadrilatère)
+	plane coordinates must be finite	les coordonnées du plan doivent être finies

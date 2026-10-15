@@ -4262,3 +4262,12 @@ shape	Appearance	Izgled
 	There are too many sets: delete one first.	Previše skupova: prvo obrišite jedan.
 	set name	ime skupa
 	{set} (modified)	{set} (izmenjen)
+
+
+# Perspective Warp review: interactive geometry and commit feedback
+	Perspective Warp preview belongs to another document	Pregled perspektivnog krivljenja pripada drugom dokumentu
+	Perspective Warp: invalid plane; drag ignored	Perspektivno krivljenje: nevažeća ravan; prevlačenje je zanemareno
+	Perspective Warp: no changes to apply	Perspektivno krivljenje: nema izmena za primenu
+	Perspective Warp: {error}	Perspektivno krivljenje: {error}
+	a plane is degenerate (its corners must form a quad)	ravan je degenerisana (njeni uglovi moraju da obrazuju četvorougao)
+	plane coordinates must be finite	koordinate ravni moraju biti konačne

@@ -3797,3 +3797,12 @@ navigator	Zoom	Zvětšení
 	There are too many sets: delete one first.	Sad je příliš mnoho: nejprve jednu smažte.
 	set name	název sady
 	{set} (modified)	{set} (změněno)
+
+
+# Perspective Warp review: interactive geometry and commit feedback
+	Perspective Warp preview belongs to another document	Náhled perspektivní deformace patří jinému dokumentu
+	Perspective Warp: invalid plane; drag ignored	Perspektivní deformace: neplatná rovina; tažení ignorováno
+	Perspective Warp: no changes to apply	Perspektivní deformace: žádné změny k použití
+	Perspective Warp: {error}	Perspektivní deformace: {error}
+	a plane is degenerate (its corners must form a quad)	rovina je degenerovaná (její rohy musí tvořit čtyřúhelník)
+	plane coordinates must be finite	souřadnice roviny musí být konečná čísla

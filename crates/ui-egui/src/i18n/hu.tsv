@@ -4108,3 +4108,12 @@ cameraRaw	Yellow	Sárga
 	There are too many sets: delete one first.	Túl sok készlet van: előbb töröljön egyet.
 	set name	készlet neve
 	{set} (modified)	{set} (módosítva)
+
+
+# Perspective Warp review: interactive geometry and commit feedback
+	Perspective Warp preview belongs to another document	A perspektivikus torzítás előnézete egy másik dokumentumhoz tartozik
+	Perspective Warp: invalid plane; drag ignored	Perspektivikus torzítás: érvénytelen sík; a húzás figyelmen kívül maradt
+	Perspective Warp: no changes to apply	Perspektivikus torzítás: nincs alkalmazható módosítás
+	Perspective Warp: {error}	Perspektivikus torzítás: {error}
+	a plane is degenerate (its corners must form a quad)	egy sík elfajult (sarkainak négyszöget kell alkotniuk)
+	plane coordinates must be finite	a sík koordinátáinak végesnek kell lenniük

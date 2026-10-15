@@ -4151,3 +4151,12 @@ navigator	Zoom	Zoom
 	There are too many sets: delete one first.	Hay demasiados conjuntos: elimine uno primero.
 	set name	nombre del conjunto
 	{set} (modified)	{set} (modificado)
+
+
+# Perspective Warp review: interactive geometry and commit feedback
+	Perspective Warp preview belongs to another document	La vista previa de deformación de perspectiva pertenece a otro documento
+	Perspective Warp: invalid plane; drag ignored	Deformación de perspectiva: plano no válido; se ignoró el arrastre
+	Perspective Warp: no changes to apply	Deformación de perspectiva: no hay cambios que aplicar
+	Perspective Warp: {error}	Deformación de perspectiva: {error}
+	a plane is degenerate (its corners must form a quad)	un plano es degenerado (sus esquinas deben formar un cuadrilátero)
+	plane coordinates must be finite	las coordenadas del plano deben ser finitas

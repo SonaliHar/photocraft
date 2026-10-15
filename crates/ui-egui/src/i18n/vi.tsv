@@ -3675,3 +3675,12 @@ curves	Smooth	Làm mượt
 	There are too many sets: delete one first.	Có quá nhiều bộ: hãy xóa một bộ trước.
 	set name	tên bộ
 	{set} (modified)	{set} (đã sửa đổi)
+
+
+# Perspective Warp review: interactive geometry and commit feedback
+	Perspective Warp preview belongs to another document	Bản xem trước biến dạng phối cảnh thuộc về một tài liệu khác
+	Perspective Warp: invalid plane; drag ignored	Biến dạng phối cảnh: mặt phẳng không hợp lệ; đã bỏ qua thao tác kéo
+	Perspective Warp: no changes to apply	Biến dạng phối cảnh: không có thay đổi nào để áp dụng
+	Perspective Warp: {error}	Biến dạng phối cảnh: {error}
+	a plane is degenerate (its corners must form a quad)	một mặt phẳng bị suy biến (các góc phải tạo thành tứ giác)
+	plane coordinates must be finite	tọa độ mặt phẳng phải là giá trị hữu hạn

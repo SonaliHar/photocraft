@@ -3888,3 +3888,12 @@ curves	Smooth	Згладити
 	There are too many sets: delete one first.	Забагато наборів: спершу видаліть один.
 	set name	назва набору
 	{set} (modified)	{set} (змінено)
+
+
+# Perspective Warp review: interactive geometry and commit feedback
+	Perspective Warp preview belongs to another document	Попередній перегляд перспективної деформації належить іншому документу
+	Perspective Warp: invalid plane; drag ignored	Перспективна деформація: недопустима площина; перетягування проігноровано
+	Perspective Warp: no changes to apply	Перспективна деформація: немає змін для застосування
+	Perspective Warp: {error}	Перспективна деформація: {error}
+	a plane is degenerate (its corners must form a quad)	площина вироджена (її кути мають утворювати чотирикутник)
+	plane coordinates must be finite	координати площини мають бути скінченними

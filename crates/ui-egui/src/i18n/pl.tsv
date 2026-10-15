@@ -3787,3 +3787,12 @@ curves	Smooth	Wygładź
 	There are too many sets: delete one first.	Zestawów jest za dużo: najpierw usuń jeden.
 	set name	nazwa zestawu
 	{set} (modified)	{set} (zmieniony)
+
+
+# Perspective Warp review: interactive geometry and commit feedback
+	Perspective Warp preview belongs to another document	Podgląd wypaczenia perspektywy należy do innego dokumentu
+	Perspective Warp: invalid plane; drag ignored	Wypaczenie perspektywy: nieprawidłowa płaszczyzna; przeciąganie zignorowane
+	Perspective Warp: no changes to apply	Wypaczenie perspektywy: brak zmian do zastosowania
+	Perspective Warp: {error}	Wypaczenie perspektywy: {error}
+	a plane is degenerate (its corners must form a quad)	płaszczyzna jest zdegenerowana (jej narożniki muszą tworzyć czworokąt)
+	plane coordinates must be finite	współrzędne płaszczyzny muszą być skończone

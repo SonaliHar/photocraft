@@ -2790,3 +2790,12 @@ curves	Smooth	平滑
 	set name	組合名稱
 	{set} (modified)	{set}（已修改）
 	Random	隨機
+
+
+# Perspective Warp review: interactive geometry and commit feedback
+	Perspective Warp preview belongs to another document	透視彎曲預覽屬於另一份文件
+	Perspective Warp: invalid plane; drag ignored	透視彎曲：平面無效，已忽略拖曳
+	Perspective Warp: no changes to apply	透視彎曲：沒有可套用的變更
+	Perspective Warp: {error}	透視彎曲：{error}
+	a plane is degenerate (its corners must form a quad)	平面已退化（四個角點必須構成四邊形）
+	plane coordinates must be finite	平面座標必須是有限數值
