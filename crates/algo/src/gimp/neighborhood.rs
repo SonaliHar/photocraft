@@ -10,6 +10,8 @@ mod finite;
 mod median;
 mod motion;
 mod pixelize;
+mod recursive_requirements;
+pub use recursive_requirements::gaussian_young_recursive_requirements;
 pub use box_blur::{box_blur_extent, box_blur_requirements, try_box_blur};
 pub use finite::{GaussianFilter, gaussian_finite_requirements, try_gaussian_finite_clamp, try_gaussian_small_auto};
 pub use median::{MedianNeighborhood, MedianParams, median_requirements, try_median_blur, try_median_blur_quantized_encoded};
@@ -402,23 +404,7 @@ pub fn try_gaussian_young_recursive(
     limits: GaussianLimits,
     interrupt: &Interrupt<'_>,
 ) -> Result<Surface, RasterInputError> {
-    checked_region_byte_len(output, source.format())?;
-    checked_region_byte_len(input_extent, source.format())?;
-    if input_extent.is_empty() {
-        return Err(RasterInputError::InvalidBounds);
-    }
-    if interrupt.cancelled() {
-        return Err(RasterInputError::Cancelled);
-    }
-    for s in [params.std_dev_x, params.std_dev_y] {
-        if !s.is_finite() || !(0.0..=1500.0).contains(&s) {
-            return Err(RasterInputError::InvalidSample);
-        }
-        if s > 0.0 && s < 0.5 {
-            return Err(RasterInputError::UnsupportedConversion);
-        }
-    }
-    let output = if params.clip_extent { output.intersect(&input_extent) } else { output };
+    let output = recursive_requirements::validated_output(source, output, input_extent, params, interrupt)?;
     if limits.work_units == 0 || limits.resident_bytes == 0 {
         return Err(RasterInputError::LimitExceeded);
     }
@@ -428,18 +414,7 @@ pub fn try_gaussian_young_recursive(
     let gx = kernel_length(params.std_dev_x, KernelKind::Young)?.checked_sub(1).ok_or(RasterInputError::LimitExceeded)?;
     let gy = kernel_length(params.std_dev_y, KernelKind::Young)?.checked_sub(1).ok_or(RasterInputError::LimitExceeded)?;
     let channels = source.channels();
-    let mut work = 0_u64;
-    for tile in output.tiles() {
-        if interrupt.cancelled() {
-            return Err(RasterInputError::Cancelled);
-        }
-        let rect = tile.rect().intersect(&output);
-        let width = (rect.width() as u64).checked_add((gx as u64) * 2).ok_or(RasterInputError::LimitExceeded)?;
-        let height = (rect.height() as u64).checked_add((gy as u64) * 2).ok_or(RasterInputError::LimitExceeded)?;
-        let units =
-            width.checked_mul(height).and_then(|v| v.checked_mul(channels as u64)).and_then(|v| v.checked_mul(64)).ok_or(RasterInputError::LimitExceeded)?;
-        work = work.checked_add(units).ok_or(RasterInputError::LimitExceeded)?;
-    }
+    let work = recursive_requirements::work(output, gx, gy, channels, interrupt)?;
     if work > limits.work_units {
         return Err(RasterInputError::LimitExceeded);
     }
@@ -447,24 +422,9 @@ pub fn try_gaussian_young_recursive(
     let mut poll_units = 0;
     for tile in output.tiles() {
         let part = tile.rect().intersect(&output);
-        let width = part.width() as usize;
-        let height = part.height() as usize;
-        let line_width = width.checked_add(gx.checked_mul(2).ok_or(RasterInputError::LimitExceeded)?).ok_or(RasterInputError::LimitExceeded)?;
-        let rows = height.checked_add(gy.checked_mul(2).ok_or(RasterInputError::LimitExceeded)?).ok_or(RasterInputError::LimitExceeded)?;
-        let samples = width.checked_mul(rows).and_then(|v| v.checked_mul(channels)).ok_or(RasterInputError::LimitExceeded)?;
-        let line_samples = line_width.max(rows).checked_mul(channels).ok_or(RasterInputError::LimitExceeded)?;
-        let raw_len = checked_region_byte_len(part, source.format())?;
-        let scratch = (samples as u64)
-            .checked_add(line_samples as u64)
-            .and_then(|v| v.checked_mul(8))
-            .and_then(|v| v.checked_add(raw_len as u64))
-            .ok_or(RasterInputError::LimitExceeded)?;
-        let peak = source
-            .resident_payload_bytes()?
-            .checked_add(out.resident_payload_bytes()?)
-            .and_then(|v| v.checked_add(scratch))
-            .and_then(|v| v.checked_add((256 * 256 * source.format().bytes_per_pixel()) as u64))
-            .ok_or(RasterInputError::LimitExceeded)?;
+        let recursive_requirements::TileRequirements { width, height, line_width, rows, samples, line_samples, raw_len, scratch } =
+            recursive_requirements::tile_requirements(source, part, gx, gy)?;
+        let peak = recursive_requirements::peak(source.resident_payload_bytes()?, out.resident_payload_bytes()?, scratch, source.format().bytes_per_pixel())?;
         if peak > limits.resident_bytes.min(MAX_CHECKED_RASTER_BYTES) {
             return Err(RasterInputError::LimitExceeded);
         }

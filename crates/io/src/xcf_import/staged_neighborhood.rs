@@ -1,6 +1,8 @@
-//! Existing eight neighborhood source domains; no Point evaluator authority.
+//! Existing neighborhood source domains; no Point evaluator authority.
 use super::*;
 use crate::xcf_filters::NeighborhoodDomain;
+#[path = "staged_neighborhood/original_gaussian.rs"]
+mod original_gaussian;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::xcf_import) enum NeighborhoodSourceFamily {
     BoxOriginal,
@@ -11,6 +13,7 @@ pub(in crate::xcf_import) enum NeighborhoodSourceFamily {
     MotionOriginal,
     PixelizeOriginal,
     RasterFinite,
+    OriginalGaussian,
 }
 impl NeighborhoodSourceFamily {
     pub(super) fn hint<P: ExactParsedPlane>(file: &XcfFile<P>) -> Option<Self> {
@@ -27,8 +30,12 @@ impl NeighborhoodSourceFamily {
             "gegl:median-blur" => Self::MedianOriginal,
             "gegl:motion-blur-linear" => Self::MotionOriginal,
             "gegl:pixelize" => Self::PixelizeOriginal,
-            // Never enroll original 96x80 Gaussian or recursive Auto here.
             "gegl:gaussian-blur" if finite => Self::RasterFinite,
+            // Routing only. The separate exact legacy predicate must pass;
+            // this does not enroll arbitrary Auto, geometry, alpha or profiles.
+            "gegl:gaussian-blur" if file.model == Model::Rgb && file.sample == Sample::U8 && file.precision == 150 && (file.width, file.height) == (96, 80) => {
+                Self::OriginalGaussian
+            }
             _ => return None,
         })
     }
@@ -42,6 +49,7 @@ impl NeighborhoodSourceFamily {
             Self::MotionOriginal => NeighborhoodDomain::MotionOriginal,
             Self::PixelizeOriginal => NeighborhoodDomain::PixelizeOriginal,
             Self::RasterFinite => NeighborhoodDomain::RasterFinite,
+            Self::OriginalGaussian => NeighborhoodDomain::RasterOriginal,
         }
     }
     pub(super) fn set_admission(self, domains: &mut admission::AdmissionDomains) {
@@ -55,6 +63,7 @@ impl NeighborhoodSourceFamily {
             Self::MotionOriginal => domains.opaque_motion_domain = true,
             Self::PixelizeOriginal => domains.opaque_pixelize_domain = true,
             Self::RasterFinite => domains.finite_gaussian_domain = true,
+            Self::OriginalGaussian => {}
         }
     }
     pub(super) fn qualify<P: ExactParsedPlane>(
@@ -75,6 +84,7 @@ impl NeighborhoodSourceFamily {
             Self::MedianFinite => finite(file, "gegl:median-blur", Model::Rgb, ctl, budget),
             Self::MedianGray => finite(file, "gegl:median-blur", Model::Gray, ctl, budget),
             Self::RasterFinite => finite(file, "gegl:gaussian-blur", Model::Rgb, ctl, budget),
+            Self::OriginalGaussian => original_gaussian::qualify(file, ctl, budget),
         }
     }
 }

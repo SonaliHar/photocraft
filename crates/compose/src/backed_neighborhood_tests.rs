@@ -226,3 +226,6 @@ fn owned_retained_outputs_hold_real_quota_until_drop() {
 
 #[path = "backed_neighborhood_disabled_tests.rs"]
 mod disabled;
+
+#[path = "backed_original_gaussian_tests.rs"]
+mod original_gaussian;

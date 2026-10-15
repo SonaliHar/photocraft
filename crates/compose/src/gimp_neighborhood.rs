@@ -292,7 +292,7 @@ impl OrderedStack {
             return Ok(result);
         }
         let [stage]=result.stages.as_slice() else {return Err(CompositionError::Unsupported("owned neighborhood stage"))};
-        if !matches!(stage,Stage::BoxBlur{..}|Stage::MotionBlur{..}|Stage::Pixelize{..}|Stage::MedianBlur{..}|Stage::GaussianFinite{..}) {
+        if !matches!(stage,Stage::BoxBlur{..}|Stage::MotionBlur{..}|Stage::Pixelize{..}|Stage::MedianBlur{..}|Stage::GaussianFinite{..}|Stage::Gaussian{..}) {
             return Err(CompositionError::Unsupported("owned finite neighborhood stage"));
         }
         Ok(result)

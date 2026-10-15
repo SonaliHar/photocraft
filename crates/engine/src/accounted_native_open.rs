@@ -503,3 +503,7 @@ mod analytic_geometry_workflow_tests;
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_isolated_normal_group_workflow_tests.rs"]
 mod isolated_normal_group_workflow_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "accounted_gaussian_workflow_tests.rs"]
+mod gaussian_workflow_tests;

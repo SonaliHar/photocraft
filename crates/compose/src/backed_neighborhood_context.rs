@@ -102,7 +102,7 @@ fn prepare<B: PlanBudget>(doc: &Document, supplied: Option<&Profile>, header: u6
         _ => return Err(scope()),
     };
     if extent != doc.bounds()
-        || !matches!((extent.width(), extent.height()), (32, 32) | (16, 12))
+        || !matches!((extent.width(), extent.height()), (32, 32) | (16, 12) | (96, 80))
         || doc.sample_encoding != Some(SampleEncoding::NonlinearProfile)
         || state.provenance.format_version != 22
         || state.current_filter_output_precision != photocraft_doc::FilterOutputPrecision::Canonical
@@ -117,6 +117,7 @@ fn prepare<B: PlanBudget>(doc: &Document, supplied: Option<&Profile>, header: u6
         return Err(scope());
     }
     let finite = extent == Rect::new(0, 0, 16, 12);
+    let original_gaussian = extent == Rect::new(0, 0, 96, 80);
     let source = doc.source_color_context.as_ref().ok_or_else(scope)?;
     if finite {
         if !matches!((doc.depth, source.source_precision), (SampleType::F32, 650) | (SampleType::F64, 750))
@@ -132,6 +133,18 @@ fn prepare<B: PlanBudget>(doc: &Document, supplied: Option<&Profile>, header: u6
             _ => return Err(scope()),
         };
         if node.operation.schema_epoch != epoch {
+            return Err(scope());
+        }
+    } else if original_gaussian {
+        if doc.mode != ColorMode::Rgb
+            || doc.depth != SampleType::U8
+            || source.source_precision != 150
+            || node.operation.name != "gegl:gaussian-blur"
+            || node.operation.schema_epoch != "xcf-22-stock-gaussian-replace"
+            || node.composition.as_ref().is_none_or(|policy| policy.compatibility_epoch != "xcf-22-stock-gaussian-replace")
+            || node.mask.is_none()
+            || state.filter_masks.len() != 1
+        {
             return Err(scope());
         }
     } else if extent != Rect::new(0, 0, 32, 32)

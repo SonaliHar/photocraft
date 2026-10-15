@@ -938,3 +938,7 @@ mod owned_assigned_translate_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_plain_bulk_translate_tests.rs"]
 mod owned_plain_bulk_translate_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_gaussian_original_tests.rs"]
+mod owned_gaussian_original_tests;

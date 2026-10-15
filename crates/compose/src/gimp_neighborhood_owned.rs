@@ -88,9 +88,11 @@ pub(super) fn evaluate(plan: &OrderedStack, source: &Surface, q: &BackingQuota, 
     }
     let [stage] = plan.stages.as_slice() else { return Err(invalid()) };
     let working = match stage {
-        Stage::BoxBlur { working, .. } | Stage::MotionBlur { working, .. } | Stage::Pixelize { working, .. } | Stage::GaussianFinite { working, .. } => {
-            Some(plan.spaces.get(*working).ok_or_else(invalid)?)
-        }
+        Stage::BoxBlur { working, .. }
+        | Stage::MotionBlur { working, .. }
+        | Stage::Pixelize { working, .. }
+        | Stage::GaussianFinite { working, .. }
+        | Stage::Gaussian { working, .. } => Some(plan.spaces.get(*working).ok_or_else(invalid)?),
         Stage::MedianBlur { .. } => None,
         _ => return Err(invalid()),
     };
@@ -98,6 +100,9 @@ pub(super) fn evaluate(plan: &OrderedStack, source: &Surface, q: &BackingQuota, 
         Some(map(&input.surface, plan.extent, q, c, |p| {
             if p.iter().any(|v| !v.is_finite()) || !(0.0..=1.0).contains(&p[3]) {
                 return Err(CompositionError::Unsupported("neighborhood finite color/unit alpha"));
+            }
+            if matches!(stage, Stage::Gaussian { .. }) && p[3] != 1.0 {
+                return Err(CompositionError::Unsupported("Gaussian opaque source domain"));
             }
             let rgb = space.convert([p[0], p[1], p[2]], true)?;
             Ok([rgb[0], rgb[1], rgb[2], p[3]])
@@ -114,6 +119,7 @@ pub(super) fn evaluate(plan: &OrderedStack, source: &Surface, q: &BackingQuota, 
         Stage::MotionBlur { params, .. } => n::motion_blur_requirements(native, roi, plan.extent, *params, c.interrupt),
         Stage::Pixelize { params, .. } => n::pixelize_requirements(native, roi, plan.extent, *params, c.interrupt),
         Stage::MedianBlur { params } => n::median_requirements(native, roi, plan.extent, *params, c.interrupt),
+        Stage::Gaussian { params, .. } => n::gaussian_young_recursive_requirements(native, roi, plan.extent, *params, c.interrupt),
         Stage::GaussianFinite { params, filter, .. } => n::gaussian_finite_requirements(native, plan.extent, plan.extent, *params, *filter, c.interrupt),
         _ => return Err(invalid()),
     }
@@ -136,6 +142,7 @@ pub(super) fn evaluate(plan: &OrderedStack, source: &Surface, q: &BackingQuota, 
                 n::try_median_blur_quantized_encoded(native, roi, plan.extent, *params, limits, c.interrupt)
             }
         }
+        Stage::Gaussian { params, .. } => n::try_gaussian_young_recursive(native, roi, plan.extent, *params, limits, c.interrupt),
         Stage::GaussianFinite { params, filter, .. } => n::try_gaussian_finite_clamp(native, plan.extent, plan.extent, *params, *filter, limits, c.interrupt),
         _ => return Err(invalid()),
     }
@@ -143,8 +150,16 @@ pub(super) fn evaluate(plan: &OrderedStack, source: &Surface, q: &BackingQuota, 
     let filtered = checked(filtered, lease)?;
     if let Some(space) = working {
         map(&filtered.surface, roi, q, c, |p| {
+            let alpha = if matches!(stage, Stage::Gaussian { .. }) {
+                if !p[3].is_finite() || (p[3] - 1.0).abs() > 1e-12 {
+                    return Err(CompositionError::Invalid("Gaussian opaque alpha invariant"));
+                }
+                1.0
+            } else {
+                p[3]
+            };
             let rgb = space.convert([p[0], p[1], p[2]], false)?;
-            Ok([rgb[0], rgb[1], rgb[2], p[3]])
+            Ok([rgb[0], rgb[1], rgb[2], alpha])
         })
     } else {
         Ok(filtered)

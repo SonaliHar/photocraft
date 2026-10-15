@@ -242,3 +242,7 @@ mod assigned_translate_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_bulk_translate_tests.rs"]
 mod bulk_translate_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "canvas_backed_gaussian_original_tests.rs"]
+mod gaussian_original_tests;

@@ -1503,8 +1503,8 @@ not persisted. Replaying that five-key request without the scoped host offer
 refuses. Native source/cache/filter state remains unchanged.
 
 Owned XCF neighborhood continuation uses the existing command and native-save
-interfaces for eight closed source domains: original/finite Box Blur and Median,
-finite Gray Median, original Motion Blur and Pixelize, and finite Gaussian.
+interfaces for nine closed runtime domains: original/finite Box Blur and Median,
+finite Gray Median, original Motion Blur and Pixelize, and original/finite Gaussian.
 The renderer evaluates the existing neighborhood kernels over their actual
 extents, including halos, under shared resident and work limits. Source and
 native adoption validate the complete current recipe before publication.
@@ -1515,6 +1515,20 @@ identity at the input extent, with no kernel, pixel CMS conversion or halo.
 The existing `xcf.filter.enable` command supplies undo/redo and native continuation.
 Source XCF remains read-only; native continuation uses `.pcraft`.
 This implementation has compilation checks only; behavioral acceptance is pending.
+
+The original Gaussian domain uses the existing 96-by-80 opaque RGB U8 nonlinear
+source case, exact implicit profile, saved filter mask, stored compatibility
+tuple and five arguments. Source selection requires enabled activation and the
+original parameter intersection: horizontal standard deviation 2.25 or 3.75,
+vertical 1.5, Auto filter, Clamp boundary and clipped extent. CURRENT edits use
+the existing filter set/enable commands, paid inspection and native continuation.
+Its evaluator preserves the existing source-to-linear conversion, Young
+recurrence, inverse conversion and opaque-alpha rule. Constructor-owned
+requirements price recursive scratch, lines, encoded writes and growing maps
+before the actual quota reservation and kernel call. Disabled CURRENT state
+validates the complete recipe and returns raw identity without executing the
+kernel. This does not admit independently saved disabled originals, different
+geometry, profiles or Gaussian policies through this source route.
 
 The explicit keep-current owned XCF route also selects a separate assigned-ICC
 geometry family for the existing Normal source intersections: nonlinear

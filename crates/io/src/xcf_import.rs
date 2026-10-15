@@ -2186,7 +2186,15 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 if domain != neighborhood_domain {
                     return Err(unsupported(d, "owned neighborhood source domain mismatch"));
                 }
-                crate::xcf_filters::qualified_owned_neighborhood_stack(&d.effects, &masks, owner, next_filter_id, file.version, domain)?
+                if domain == crate::xcf_filters::NeighborhoodDomain::RasterOriginal {
+                    // The exact original Gaussian source predicate selected
+                    // this private domain before mapping. Preserve its existing
+                    // strict legacy stack envelope, not the eight-domain owned
+                    // activation extension. A refusal never retries either path.
+                    crate::xcf_filters::qualified_stack(&d.effects, &masks, owner, next_filter_id, file.version, domain)?
+                } else {
+                    crate::xcf_filters::qualified_owned_neighborhood_stack(&d.effects, &masks, owner, next_filter_id, file.version, domain)?
+                }
             } else {
                 crate::xcf_filters::qualified_stack(&d.effects, &masks, owner, next_filter_id, file.version, neighborhood_domain)?
             };
