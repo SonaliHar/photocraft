@@ -33,6 +33,7 @@ trait StagePolicy {
     const THRESHOLD_ALPHA: bool;
     const SOURCE_SELECTED: bool = false;
     fn accepts(d: &PlaneDescriptor) -> bool;
+    fn family_controlled<Q:ExactParsedPlane>(file:&XcfFile<Q>,_:&Interrupt<'_>,_:Option<&photocraft_xcf::Budget<'_>>)->Result<SelectedStagedFamily,IoError>{Ok(Self::family(file))}
     fn family<Q: ExactParsedPlane>(_: &XcfFile<Q>) -> SelectedStagedFamily {
         if Self::THRESHOLD_ALPHA { SelectedStagedFamily::ThresholdAlpha } else { SelectedStagedFamily::Plain }
     }
@@ -81,6 +82,12 @@ impl StagePolicy for SourceSelectedPolicy {
     const SOURCE_SELECTED: bool = true;
     fn accepts(d: &PlaneDescriptor) -> bool {
         PlainPolicy::accepts(d) || ThresholdAlphaPolicy::accepts(d) || point_plane(d)
+    }
+    fn family_controlled<Q:ExactParsedPlane>(file:&XcfFile<Q>,ctl:&Interrupt<'_>,shared:Option<&photocraft_xcf::Budget<'_>>)->Result<SelectedStagedFamily,IoError>{
+        let old=Self::family(file);
+        if old!=SelectedStagedFamily::Plain{return Ok(old)}
+        let budget=shared.ok_or_else(||IoError::Unsupported("selected source requires accounting".into()))?;
+        if separable_blend::general_hint(file,ctl,budget)?{Ok(SelectedStagedFamily::SeparableBlend)}else{Ok(old)}
     }
     fn family<Q: ExactParsedPlane>(file: &XcfFile<Q>) -> SelectedStagedFamily {
         // Select exactly one old gate, before mapping or mutation. A refusal
@@ -442,6 +449,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     fn requires_budgeted_neighborhood_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn requires_budgeted_gaussian_group_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn requires_budgeted_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
+    fn requires_budgeted_general_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn effective_profile(file: &XcfFile<Self>, space: photocraft_cms::ColorSpace, ce: photocraft_cms::xcf_color::Encoding, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<photocraft_cms::Profile, IoError> {
         if matches!(P::family(file), SelectedStagedFamily::AnalyticGeometry | SelectedStagedFamily::IsolatedNormalGroup) {
             analytic_geometry::effective(file,space,ce,ctl,shared.ok_or_else(||IoError::Unsupported("geometry profile needs accounting".into()))?)
@@ -450,10 +458,10 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         }
     }
     fn admissions(file: &XcfFile<Self>, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<admission::AdmissionDomains, IoError> {
-        let family = P::family(file);
+        let family = P::family_controlled(file,ctl,shared)?;
         let separable = family == SelectedStagedFamily::SeparableBlend;
         let separable_domain = if separable {
-            Some(separable_blend::qualify(file,ctl,shared.ok_or_else(||IoError::Unsupported("separable source requires accounting".into()))?)?
+            Some(separable_blend::qualify_selected(file,ctl,shared.ok_or_else(||IoError::Unsupported("separable source requires accounting".into()))?)?
                 .ok_or_else(||IoError::Unsupported("separable source outside exact original predicate".into()))?)
         } else { None };
         let gaussian_group = family == SelectedStagedFamily::IsolatedGaussianGroup;
@@ -586,7 +594,9 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             validate_drawable_alpha(d, point.is_some(), false, ctl, 0)?;
         }
         let mut domains = admission::AdmissionDomains {
-            multiply_spaces_domain: separable_domain == Some(separable_blend::Domain::MultiplySpaces),
+            general_separable_domain: separable_domain == Some(separable_blend::SourceKind::General),
+            composition_command_domain: separable_domain == Some(separable_blend::SourceKind::General),
+            multiply_spaces_domain: separable_domain == Some(separable_blend::SourceKind::Strict(separable_blend::Domain::MultiplySpaces)),
             gaussian_group_domain: gaussian_group,
             masked_group_domain: gaussian_group,
             accounted_group_domain: group,
@@ -905,7 +915,7 @@ fn complete_staged_source<'b, 'a, P: StagePolicy>(
     let photocraft_xcf::BudgetDecodedImport { decoded, reservations } =
         photocraft_xcf::decode_plain_source_into_sink_with_budget(source, &strict, budget, accounting, &mut sink).map_err(accounting_error)?;
     let mut file = decoded.file;
-    let family = P::family(&file);
+    let family = P::family_controlled(&file,control,Some(budget))?;
     let encoded = usize::try_from(decoded.encoded_bytes).map_err(|_| IoError::Unsupported("staged source address space".into()))?;
     file.charged_bytes = file.charged_bytes.checked_sub(encoded).ok_or_else(|| IoError::Unsupported("staged source accounting mismatch".into()))?;
     let previous = std::cell::Cell::new(file.charged_bytes);

@@ -982,3 +982,7 @@ mod owned_flat_current_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_flat_composition_tests.rs"]
 mod owned_flat_composition_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_original_flat_tests.rs"]
+mod owned_original_flat_tests;

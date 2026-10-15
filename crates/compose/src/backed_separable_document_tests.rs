@@ -22,6 +22,8 @@ use std::sync::{
 const MODES: [i32; 21] = [23, 30, 31, 32, 33, 34, 35, 36, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53];
 #[path = "backed_separable_general_current_tests.rs"]
 mod general_current_tests;
+#[path = "backed_separable_general_source_tests.rs"]
+mod general_source_tests;
 fn ctl() -> ReadControl<'static> {
     ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) }
 }

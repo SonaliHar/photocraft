@@ -66,6 +66,7 @@ pub(super) trait MappingPlane: ExactParsedPlane + Sized {
     fn requires_budgeted_neighborhood_preparation(_domain: bool) -> bool { false }
     fn requires_budgeted_gaussian_group_preparation(_domain: bool) -> bool { false }
     fn requires_budgeted_separable_preparation(_domain: bool) -> bool { false }
+    fn requires_budgeted_general_separable_preparation(_domain: bool) -> bool { false }
     fn effective_profile(file: &XcfFile<Self>, space: photocraft_cms::ColorSpace, ce: photocraft_cms::xcf_color::Encoding, _: &Interrupt<'_>, _: Option<&photocraft_xcf::Budget<'_>>) -> Result<photocraft_cms::Profile, IoError> {
         photocraft_cms::xcf_color::effective_profile(if file.icc.is_empty() {None}else{Some(&file.icc)},space,ce).map_err(|e|IoError::Unsupported(format!("XCF source profile/encoding: {e}")))
     }

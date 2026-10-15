@@ -1729,3 +1729,15 @@ Full current/staged native/profile/canvas checks, prospective copy/history/view,
 retained reply/journal fees and final source/state fences precede publication.
 UI and Headless use synchronous dispatch for this actual class. Source import
 rules are unchanged; behavior and UI visual checks remain deferred.
+Original flat modern XCF source selection now has an additional bounded route
+for 1..4096 flat RGB F32 nonlinear native leaves using implicit builtin sRGB.
+It preserves original raw policy words and uses an exact version/tuple table
+for witnessed Auto policies plus the existing explicit20 mode subset. Hidden,
+zero-opacity and off-canvas native content still receives full validation.
+Existing strict source cases keep priority; refusal cannot retry through this
+route, and all-Normal source files retain Plain selection. This route uses the
+same owned FlatComposite storage, paid rendering, inspection and native .pcraft
+continuation. Assigned ICC, masks, effects, groups and other unsupported domains
+remain outside this intersection. Ten draft regression groups remain unrun;
+independent GIMP profile-byte and numerical observations do not establish
+PhotoCraft acceptance.

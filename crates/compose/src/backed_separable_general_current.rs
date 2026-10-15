@@ -43,6 +43,20 @@ fn policy(policy: &GimpComposition, version: u32, c: &ReadControl<'_>) -> Result
         return Err(scope());
     }
     let resolved = policy.checked_resolved().map_err(|_| scope())?;
+    if policy.compatibility_epoch == photocraft_doc::import_compositing::XCF_FLAT_MODERN_IMPLICIT_SOURCE_EPOCH {
+        let rule = photocraft_doc::import_compositing::flat_modern_source_rule(
+            version,
+            policy.source_mode,
+            policy.stored_blend_space,
+            policy.stored_composite_space,
+            policy.stored_operator,
+        )
+        .ok_or_else(scope)?;
+        if resolved != &rule.resolved() {
+            return Err(scope());
+        }
+        return Ok(Recipe { mode: policy.source_mode, blend: rule.blend_space, composite: rule.composite_space, operator: rule.operator });
+    }
     if let (Some(blend), Some(composite), Some(operator)) =
         (explicit_space(policy.stored_blend_space), explicit_space(policy.stored_composite_space), explicit_operator(policy.stored_operator))
     {

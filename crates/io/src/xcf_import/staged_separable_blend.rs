@@ -123,6 +123,145 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, 
     Ok(valid.then_some(domain))
 }
 
+// Selection is metadata-first. A selected strict native failure never retries
+// the general policy (whose per-entry numeric domain can differ).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SourceKind {
+    Strict(Domain),
+    General,
+}
+fn pay(ctl: &Interrupt<'_>, budget: &photocraft_xcf::Budget<'_>, units: u64) -> Result<(), IoError> {
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    budget.consume_work(units, "general flat source metadata/native validation").map_err(accounting_error)
+}
+/// Paid route hint only. In particular every all-Normal flat file remains Plain;
+/// an unusual all-Normal Plain refusal must not retry the separable validator.
+pub(super) fn general_hint<P>(f: &XcfFile<P>, ctl: &Interrupt<'_>, budget: &photocraft_xcf::Budget<'_>) -> Result<bool, IoError> {
+    pay(ctl, budget, 1)?;
+    if f.model != Model::Rgb
+        || f.sample != Sample::F32
+        || f.precision != 650
+        || f.encoding != Encoding::NonlinearProfile
+        || !f.icc.is_empty()
+        || f.layers.is_empty()
+        || f.layers.len() > 4096
+    {
+        return Ok(false);
+    }
+    let mut non_normal = false;
+    for d in &f.layers {
+        pay(ctl, budget, 1)?;
+        non_normal |= mode(d.mode);
+    }
+    Ok(non_normal)
+}
+pub(super) fn qualify_selected<P: ExactParsedPlane>(
+    f: &XcfFile<P>,
+    ctl: &Interrupt<'_>,
+    budget: &photocraft_xcf::Budget<'_>,
+) -> Result<Option<SourceKind>, IoError> {
+    if domain(f).is_some() {
+        return qualify(f, ctl, budget).map(|kind| kind.map(SourceKind::Strict));
+    }
+    qualify_general(f, ctl, budget).map(|ok| ok.then_some(SourceKind::General))
+}
+fn qualify_general<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, budget: &photocraft_xcf::Budget<'_>) -> Result<bool, IoError> {
+    use photocraft_doc::import_compositing::flat_modern_source_rule;
+    pay(ctl, budget, 1)?;
+    if f.model != Model::Rgb
+        || f.sample != Sample::F32
+        || f.precision != 650
+        || f.encoding != Encoding::NonlinearProfile
+        || !f.icc.is_empty()
+        || f.layers.is_empty()
+        || f.layers.len() > 4096
+        || f.width == 0
+        || f.height == 0
+        || f.width > 262144
+        || f.height > 262144
+        || u64::from(f.width).checked_mul(u64::from(f.height)).is_none_or(|n| n > 1 << 30)
+        || !f.palette.is_empty()
+        || !f.channels.is_empty()
+        || !f.paths.is_empty()
+        || !f.item_sets.is_empty()
+    {
+        return Ok(false);
+    }
+    let mut non_normal = false;
+    let mut valid = true;
+    for d in &f.layers {
+        pay(ctl, budget, 1)?;
+        non_normal |= mode(d.mode);
+        if d.group
+            || d.group_flags != 0
+            || d.path.len() > 1
+            || d.model != Model::Rgb
+            || !d.alpha
+            || d.mask.is_some()
+            || !d.effects.is_empty()
+            || d.text.is_some()
+            || d.text_flags != 0
+            || d.vector.is_some()
+            || d.link.is_some()
+            || d.legacy_linked
+            || d.transform.is_some()
+            || d.floating_attachment.is_some()
+            || d.selection
+            || !d.item_sets.is_empty()
+            || !d.unsupported.is_empty()
+            || !d.opacity.is_finite()
+            || !(0.0..=1.0).contains(&d.opacity)
+            || d.width == 0
+            || d.height == 0
+            || d.width > 262144
+            || d.height > 262144
+        {
+            return Ok(false);
+        }
+        let Some(rule) = flat_modern_source_rule(f.version, d.mode, d.blend_space, d.composite_space, d.composite_mode) else { return Ok(false) };
+        bounds(d)?;
+        let Some(p) = &d.plane else { return Ok(false) };
+        let descriptor = p.descriptor();
+        let expected = u64::from(d.width)
+            .checked_mul(u64::from(d.height))
+            .and_then(|n| n.checked_mul(16))
+            .ok_or_else(|| IoError::Unsupported("general flat native length".into()))?;
+        if descriptor.width != d.width
+            || descriptor.height != d.height
+            || descriptor.channels != 4
+            || descriptor.sample != Sample::F32
+            || p.native_byte_len() != Some(expected)
+        {
+            return Ok(false);
+        }
+        let mut seen = 0u64;
+        p.visit_native(ctl, &mut |block| {
+            if block.is_empty() || block.len() > 64 * 16 || block.len() % 16 != 0 {
+                return Err(IoError::Unsupported("general flat native block".into()));
+            }
+            seen = seen.checked_add(block.len() as u64).filter(|n| *n <= expected).ok_or_else(|| IoError::Unsupported("general flat excess native".into()))?;
+            pay(ctl, budget, block.len() as u64)?;
+            for pixel in block.chunks_exact(16) {
+                for (channel, word) in pixel.chunks_exact(4).enumerate() {
+                    let raw = <[u8; 4]>::try_from(word).map_err(|_| IoError::Unsupported("general flat native word".into()))?;
+                    let value = f64::from(f32::from_ne_bytes(raw));
+                    valid &= if channel == 3 { value.is_finite() && (0.0..=1.0).contains(&value) } else { rule.source_rgb_domain.accepts(value) };
+                }
+            }
+            Ok(())
+        })?;
+        if seen != expected {
+            return Err(IoError::Unsupported("general flat incomplete native".into()));
+        }
+    }
+    pay(ctl, budget, 1)?;
+    Ok(non_normal && valid)
+}
+
 #[cfg(all(test, feature = "corpus"))]
 #[path = "staged_separable_blend_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "corpus"))]
+#[path = "staged_general_separable_blend_tests.rs"]
+mod general_tests;

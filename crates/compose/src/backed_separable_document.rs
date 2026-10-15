@@ -32,6 +32,8 @@ mod tests;
 
 #[path = "backed_separable_general_current.rs"]
 mod general_current;
+#[path = "backed_separable_general_source.rs"]
+mod general_source;
 #[derive(Clone, Copy)]
 struct Recipe {
     mode: i32,
@@ -196,6 +198,7 @@ fn metadata(doc: &Document, source: bool, interrupt: &Interrupt<'_>, check: &mut
 /// Stage/profile preparation only for an independently admitted original source.
 /// No decoded source pixels are evaluated and no source authority is synthesized.
 pub struct LeasedSeparableBlendPipeline<S, L> {
+    _recipes: Option<general_source::Recipes<L>>,
     _spaces: Spaces<L>,
     _source: S,
 }
@@ -224,12 +227,30 @@ impl<S, L> LeasedSeparableBlendPipeline<S, L> {
             let fee = budget.reserve_prepared_bytes(bytes).map_err(E::Color)?;
             budget.consume_preparation_work(work).map_err(E::Color)?;
             let spaces = Spaces::prepare(profile, SampleEncoding::NonlinearProfile, needed, fee, interrupt)?;
-            Ok(Self { _spaces: spaces, _source: source_lease })
+            Ok(Self { _recipes: None, _spaces: spaces, _source: source_lease })
         })();
         result.map_err(|e| match e {
             E::Color(e) => e,
             E::Backing(BackingError::Cancelled) => photocraft_raster::RasterInputError::Cancelled.into(),
             _ => CompositionError::Unsupported("flat separable source preparation"),
+        })
+    }
+    /// Preparation only for the separately qualified generic original epoch.
+    /// This does not evaluate or promote source-native pixels.
+    pub fn new_general_budgeted<B: crate::gimp_render::PreparationBudget<Lease = L>>(
+        doc: &Document,
+        interrupt: &Interrupt<'_>,
+        budget: &mut B,
+        source_lease: S,
+    ) -> Result<Self, CompositionError> {
+        let result = (|| -> Result<Self, E> {
+            let (recipes, spaces) = general_source::prepare(doc, interrupt, budget, std::mem::size_of::<Self>())?;
+            Ok(Self { _recipes: Some(recipes), _spaces: spaces, _source: source_lease })
+        })();
+        result.map_err(|e| match e {
+            E::Color(e) => e,
+            E::Backing(BackingError::Cancelled) => photocraft_raster::RasterInputError::Cancelled.into(),
+            _ => CompositionError::Unsupported("general flat separable source preparation"),
         })
     }
 }

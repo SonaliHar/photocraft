@@ -1,6 +1,9 @@
 //! Opt-in normal/source-over import policy. No arbitrary operators are representable.
 use crate::SampleEncoding;
 use serde::{Deserialize, Serialize};
+#[path = "flat_modern_source.rs"]
+mod flat_modern_source;
+pub use flat_modern_source::{FlatModernSourceRule, FlatSourceRgbDomain, XCF_FLAT_MODERN_IMPLICIT_SOURCE_EPOCH, flat_modern_source_rule};
 /// Explicit structural behavior identity, independent of current profile assignment.
 pub const XCF13_ISOLATED_MULTIPLY_SEED_EPOCH: &str = "xcf13-isolated-multiply-seed-v1";
 /// Finite signed/over-one source alpha over an empty or opaque backdrop only.

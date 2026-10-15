@@ -507,6 +507,7 @@ fn admit<P: MappingPlane>(
     effects_candidate: bool,
     blend_domain: bool,
     normal_mask_domain: bool,
+    general_separable_domain: bool,
     modified: Option<crate::xcf_modified_sources::ModifiedSourceKind>,
     source_sample: Sample,
     ctl: &Interrupt<'_>,
@@ -524,7 +525,7 @@ fn admit<P: MappingPlane>(
         return Err(unsupported(d, format!("blend mode {} is unsupported; no verified stored-raster fallback", d.mode)));
     }
     if !(d.composite_mode.checked_abs() == Some(1)
-        || normal_mask_domain && d.mode == 28 && matches!(d.composite_mode, 1..=4)
+        || (normal_mask_domain || general_separable_domain) && d.mode == 28 && matches!(d.composite_mode, 1..=4)
         || matches!(d.mode, 3 | 4 | 6..=21 | 23..=27 | 30..=40 | 41..=60) && blend_domain && matches!(d.composite_mode, -2 | 1..=4)
         || d.composite_mode == 0 && matches!(d.mode, 0 | 28))
     {
@@ -1686,6 +1687,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
     authorized_font: Option<&PreparedRuntimeFont<'_>>,
 ) -> Result<(ImportResult, usize), IoError> {
     let admission::AdmissionDomains {
+        general_separable_domain,
         point_replace_domain,
         owned_point_domain,
         owned_neighborhood_domain,
@@ -1902,10 +1904,16 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
             effects_candidate,
             multiply_domain || basic_blend_domain || gray_mask_domain || masked_group_domain || multiply_spaces_domain || composition_command_domain,
             normal_mask_domain,
+            general_separable_domain,
             modified,
             file.sample,
             ctl,
         )?;
+        let general_rule = if general_separable_domain {
+            Some(photocraft_doc::import_compositing::flat_modern_source_rule(
+                file.version, d.mode, d.blend_space, d.composite_space, d.composite_mode,
+            ).ok_or_else(|| unsupported(d, "general flat source rule changed during mapping"))?)
+        } else { None };
         budget.charge(1024 + d.name.len() + d.path.len() * 4 + d.diagnostics.iter().map(|v| v.len() + std::mem::size_of::<String>()).sum::<usize>())?;
         let (mut drawable, mut l, side) = P::current_owner(drawable, &file.palette, &mut budget, ctl)?;
         l.id = layer_id;
@@ -2227,7 +2235,9 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
             raster_bounds: if d.group && !gaussian_group_domain && !accounted_group_domain { None } else { Some(bounds(d)?) },
             mask: None,
             composition: Some(photocraft_doc::import_compositing::GimpComposition {
-                compatibility_epoch: if accounted_group_domain {
+                compatibility_epoch: if general_separable_domain {
+                    photocraft_doc::import_compositing::XCF_FLAT_MODERN_IMPLICIT_SOURCE_EPOCH.into()
+                } else if accounted_group_domain {
                     accounted_group::EPOCH.into()
                 } else if ordinary_geometry_domain {
                     photocraft_doc::import_compositing::XCF12_ANALYTIC_ORDINARY_NORMAL_MASK_EPOCH.into()
@@ -2269,7 +2279,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 stored_blend_space: d.blend_space,
                 stored_composite_space: d.composite_space,
                 stored_operator: d.composite_mode,
-                resolved: Some(photocraft_doc::import_compositing::ResolvedGimpComposition {
+                resolved: if let Some(rule) = general_rule { Some(rule.resolved()) } else { Some(photocraft_doc::import_compositing::ResolvedGimpComposition {
                     blend_space: if matches!(d.mode, 24..=27) && d.blend_space == -3 {
                         photocraft_doc::import_compositing::GimpSpace::Lab
                     } else {
@@ -2292,7 +2302,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                     } else {
                         photocraft_doc::import_compositing::GimpOperator::Union
                     },
-                }),
+                }) },
                 pass_through: pass,
             }),
         });
@@ -2585,6 +2595,15 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         if let Err(error) = checked {
             return Err(adapter.failure.map(accounting_error).unwrap_or_else(|| {
                 if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF staged Point rendering consumer: {error}")) }
+            }));
+        }
+    } else if P::requires_budgeted_general_separable_preparation(general_separable_domain) {
+        let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("staged general separable scene requires accounting".into()))?;
+        let mut adapter = SharedPreparation { shared, failure: None };
+        let checked = photocraft_compose::backed_separable_document::LeasedSeparableBlendPipeline::new_general_budgeted(&doc, ctl, &mut adapter, source_lease);
+        if let Err(error) = checked {
+            return Err(adapter.failure.map(accounting_error).unwrap_or_else(|| {
+                if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF staged general separable preparation: {error}")) }
             }));
         }
     } else if P::requires_budgeted_separable_preparation(multiply_domain || basic_blend_domain || multiply_spaces_domain) {
