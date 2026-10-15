@@ -243,7 +243,10 @@ impl CloudApp for PhotocraftApp {
         // running off the UI thread, not a read.
         let before: Vec<u64> = self.session.documents().iter().map(|d| d.doc.id.0).collect();
         let background = std::mem::replace(&mut self.background_jobs, false);
-        let opened = self.open_bytes_from(name, &bytes, None);
+        // Pass `&bytes` so Rust resolves to the inherent `open_bytes(&str, &[u8])` rather
+        // than this trait method. Background jobs are suppressed so the document ID is
+        // available before this call returns.
+        let opened = self.open_bytes(name, &bytes);
         self.background_jobs = background;
         opened?;
         // A raw file or a colour profile prompt answers with a dialog rather than a document, and

@@ -723,9 +723,6 @@ pub struct PhotocraftApp {
     pub(crate) save_dirs: HashMap<photocraft_doc::DocId, std::path::PathBuf>,
     /// A save to an RGB Targa parked behind the Targa Options prompt (see `targa_options_ui`).
     pub(crate) targa_options: Option<targa_options_ui::Prompt>,
-    /// Files read but not opened yet: the first waits on its profile prompt, the rest behind it
-    /// (see `open_prompt`).
-    pub(crate) held_opens: std::collections::VecDeque<open_prompt::Held>,
     /// Open and Save against cloud storage ([`cloud`]). Nothing cloud-shaped is offered until the
     /// host connects a backend, so a build with no service configured is the app as it was.
     pub cloud: cloud::CloudFiles,
@@ -870,7 +867,6 @@ impl PhotocraftApp {
             tiff_options: None,
             save_dirs: HashMap::new(),
             targa_options: None,
-            held_opens: Default::default(),
             cloud: cloud::CloudFiles::new(),
             cloud_sent: cloud::Sent::new(),
             cloud_urls: std::cell::RefCell::new(Vec::new()),

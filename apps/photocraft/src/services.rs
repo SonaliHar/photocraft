@@ -422,7 +422,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &EncodeOptions::default()).map_err(|e| e.to_string())
         })),
         inbox: None,
-        open_url: Some(Box::new(|url: &str| open::that(url).map_err(|e| e.to_string()))),
+        open_url: Some(Box::new(|url: &str| crate::cloud::open_browser(url).map_err(|e| e.to_string()))),
         beep: Some(platform_beep),
         clipboard_set_image: Some({
             let clip = clip.clone();

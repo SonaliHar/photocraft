@@ -316,7 +316,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::write(path, bytes)
 }
 
-fn open_browser(url: &str) -> std::io::Result<()> {
+pub(crate) fn open_browser(url: &str) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]
     // `cmd` splits its command line on `&` before anything else sees it, and an
     // authorize URL is mostly `&`. Passed unquoted the browser receives the
