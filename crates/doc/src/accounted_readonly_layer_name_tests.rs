@@ -1,4 +1,7 @@
 //! UNRUN name-only storage drafts; fixtures grant no source/CMS/render proof.
+// The combined-properties drafts reuse this genuinely paid native fixture.
+#[path = "accounted_readonly_layer_properties_tests.rs"]
+mod properties_tests;
 use super::*;
 use crate::{
     BackedLayer, ColorMode, FilterMask, Layer, PixelFormat, SampleType, Size,

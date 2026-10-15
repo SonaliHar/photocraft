@@ -1173,6 +1173,31 @@ pub(crate) fn qualify_generic_point_storage_metadata(
     format: photocraft_color::PixelFormat,
     default_bytes: &[u8],
 ) -> Result<()> {
+    qualify_point_storage_metadata(doc, layer, state, stack, extent, stored, format, default_bytes, PointLayerCoverage::OriginalRecipe)
+}
+
+// Only genuine class-validated CURRENT callers may use dynamic layer coverage.
+// This changes neither the native filter output nor original-source eligibility.
+pub(crate) fn qualify_current_point_layer_coverage_metadata(
+    doc: &Document, layer: &Layer, state: &photocraft_doc::XcfState,
+    stack: &photocraft_doc::xcf_filters::FilterStack, extent: Rect,
+    stored: SampleEncoding, format: photocraft_color::PixelFormat, default_bytes: &[u8],
+) -> Result<()> {
+    qualify_point_storage_metadata(doc, layer, state, stack, extent, stored, format, default_bytes, PointLayerCoverage::Current)
+}
+#[derive(Clone, Copy)]
+enum PointLayerCoverage { OriginalRecipe, Current }
+fn qualify_point_storage_metadata(
+    doc: &Document,
+    layer: &Layer,
+    state: &photocraft_doc::XcfState,
+    stack: &photocraft_doc::xcf_filters::FilterStack,
+    extent: Rect,
+    stored: SampleEncoding,
+    format: photocraft_color::PixelFormat,
+    default_bytes: &[u8],
+    coverage_policy: PointLayerCoverage,
+) -> Result<()> {
     let item = state.items.iter().find(|item| item.item == ItemRef::Layer(layer.id));
     let bounds_valid = |bounds: Rect| {
         !bounds.is_empty()
@@ -1190,8 +1215,10 @@ pub(crate) fn qualify_generic_point_storage_metadata(
         || state.filter_stacks.len() != 1
         || stack.nodes.len() != 1
         || layer.mask.is_some()
-        || !layer.visible
-        || layer.opacity.to_bits() != 1f32.to_bits()
+        || (matches!(coverage_policy, PointLayerCoverage::OriginalRecipe) && !layer.visible)
+        || (matches!(coverage_policy, PointLayerCoverage::OriginalRecipe) && layer.opacity.to_bits() != 1f32.to_bits())
+        || (matches!(coverage_policy, PointLayerCoverage::Current)
+            && (!layer.opacity.is_finite() || !(0.0..=1.0).contains(&layer.opacity) || item.is_none_or(|item| item.visible != layer.visible)))
         || !matches!(doc.depth, photocraft_color::SampleType::U8 | photocraft_color::SampleType::U16 | photocraft_color::SampleType::U32 | photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64)
         || !matches!(stored, SampleEncoding::Linear | SampleEncoding::NonlinearProfile | SampleEncoding::Perceptual)
         || format != doc.pixel_format()

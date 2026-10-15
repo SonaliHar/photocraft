@@ -25,7 +25,7 @@ use photocraft_raster::backing::{
 /// Borrows the actual immutable storage owner and checks an encoded current-profile
 /// witness during preparation. No profile is parsed, encoded, cloned or inferred from source epochs.
 /// There is one enabled or disabled filter, an empty physical selection mask and Normal/Union
-/// at opacity one. Returned bands are straight native current owner samples,
+/// with CURRENT finite-unit layer coverage. Returned bands are straight native current owner samples,
 /// not a display composite, Surface, persistence receipt or editable result.
 /// This initial current recipe remains fixed at the class's 8-by-6 RGB extent.
 pub struct PreparedBackedThresholdContext<'a> {
@@ -35,6 +35,8 @@ pub struct PreparedBackedThresholdContext<'a> {
     node: FilterId,
     descriptor: NativePlaneDescriptor,
     limits: NormalBandLimits,
+    visible: bool,
+    opacity: f64,
     _lease: QuotaLease,
 }
 fn scope() -> BackedNormalError {
@@ -129,7 +131,7 @@ impl<'a> PreparedBackedThresholdContext<'a> {
         // Closed class has <=2 items/one node/three typed arguments. This prepays
         // bounded metadata/string/registry comparisons, not a CPU-cycle claim.
         control.check(4096).map_err(BackedNormalError::Backing)?;
-        crate::gimp_render::qualify_generic_point_storage_metadata(
+        crate::gimp_render::qualify_current_point_layer_coverage_metadata(
             doc,
             layer,
             state,
@@ -186,9 +188,26 @@ impl<'a> PreparedBackedThresholdContext<'a> {
             BackedThresholdError::Backing(e) => BackedNormalError::Backing(e),
             _ => scope(),
         })?;
-        let prepared = Self { native, _owner: owner, layer: layer.id, node: node.id, descriptor, limits, _lease: lease };
+        let prepared = Self {
+            native,
+            _owner: owner,
+            layer: layer.id,
+            node: node.id,
+            descriptor,
+            limits,
+            visible: layer.visible,
+            opacity: f64::from(layer.opacity),
+            _lease: lease,
+        };
         control.check(0).map_err(BackedNormalError::Backing)?;
         Ok(prepared)
+    }
+    /// Display-only layer state; native filter bands remain unscaled.
+    pub fn layer_visible(&self) -> bool {
+        self.visible
+    }
+    pub fn layer_opacity(&self) -> f64 {
+        self.opacity
     }
     pub fn layer_id(&self) -> LayerId {
         self.layer

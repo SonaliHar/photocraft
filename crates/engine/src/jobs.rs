@@ -745,7 +745,7 @@ impl Session {
             })
             && (background || self.jobs.spawn)
         {
-            return Err(EngineError::BadParams { cmd: id.into(), msg: "owned Threshold layer naming requires synchronous dispatch".into() });
+            return Err(EngineError::BadParams { cmd: id.into(), msg: "owned Threshold layer properties require synchronous dispatch".into() });
         }
         crate::brush_cmds::advanced_dispatch_preflight(self, id, &params)?;
         crate::xcf_composition_cmds::dispatch_preflight(self, id, &params)?;
@@ -1121,7 +1121,7 @@ impl Session {
                 }))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` failed with an internal error (logged); the document is unchanged"))));
             }
-            // Bounded native pixel, Threshold naming and Histogram preparation share one
+            // Bounded native pixel, Threshold properties and Histogram preparation share one
             // immutable registered work ledger; no per-cell allowance reset.
             let bounded_work = matches!(id, "edit.clear" | "edit.fill")
                 || id == "layer.setProps"

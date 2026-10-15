@@ -457,13 +457,16 @@ and establishes no original-XCF lineage, profile interpretation, render support
 or edit permission. Plain documents do not enter the retained filter-inspection
 route. The same paid replies, transport boundaries and authorizers apply.
 
-Those two owned Threshold classes also accept name-only `layer.setProps`, for
-example `{"layer":1,"name":"Foreground"}`. The layer target may be omitted or
-given as the existing numeric ID or exact name. The command preserves upstream
-canonical-name/custom-name behavior and uses the shared undo/redo history.
+Those two owned Threshold classes also accept current `layer.setProps` name,
+visibility and opacity edits, for example
+`{"layer":1,"name":"Foreground","visible":false,"opacity":0.5}`. The layer
+target may be omitted or given as the existing numeric ID or exact name.
+Combined fields publish one undo step; canonical names/visibility, opacity
+casting and changed-visibility locks follow upstream behavior. Layer opacity
+uses the existing Normal composition math; filter opacity is a separate field.
 Other properties and coalescing remain refused for these classes; background
-starts refuse before dispatch normalization. Renaming grants no new source,
-profile or rendering eligibility.
+starts refuse before dispatch normalization. Source/native samples, masks and
+profiles stay retained, and no new original-source eligibility follows.
 
 For explicit owned native reopen, use exactly `{"path":"current.pcraft","nativeProfilePolicy":"keepCurrent"}`
 with `doc.open` or MCP `doc_open`. Exactly one profile policy is permitted; both together,

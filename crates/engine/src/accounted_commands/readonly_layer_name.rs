@@ -1,9 +1,9 @@
-//! Name-only current-model adapter for the existing layer.setProps command.
+//! Bounded current-model name/visibility/opacity adapter for the existing layer.setProps command.
 //! A runtime storage class and a fresh complete operative recipe are mandatory;
 //! neither persisted operation names nor this request grant source authority.
 use super::*;
 use crate::{DocumentSnapshot, accounted_view::AccountedView, channel_cmds::ChannelView, document_history::DocumentHistory, source_policy::SourceIdentity};
-use photocraft_doc::accounted_document::{AccountedDocument, ReadonlyLayerNamePatch, accounted_layer_access};
+use photocraft_doc::accounted_document::{AccountedDocument, ReadonlyLayerNamePatch, ReadonlyLayerPropertiesPatch, accounted_layer_access};
 
 pub(super) const REPLY_ENVELOPE: u64 = 8192;
 #[derive(Clone, Copy)]
@@ -14,7 +14,11 @@ enum Target<'a> {
 }
 pub(super) struct Request<'a> {
     target: Target<'a>,
-    name: &'a str,
+    name: Option<&'a str>,
+    visible: Option<bool>,
+    opacity: Option<u32>,
+    extended: bool,
+    only_visibility: bool,
 }
 pub(super) fn applies(session: &Session) -> bool {
     session.active().and_then(|s| s.doc.accounted()).is_some_and(|o| o.is_readonly_threshold_alpha_storage() || o.is_readonly_threshold_storage())
@@ -22,16 +26,34 @@ pub(super) fn applies(session: &Session) -> bool {
 impl<'a> Request<'a> {
     pub(super) fn parse(params: &'a Value, ctl: &ReadControl<'_>) -> Result<Self> {
         ctl.check(1)?;
-        let p = params.as_object().ok_or_else(|| bad("layer.setProps", "readonly layer rename requires an object"))?;
-        if p.len() > 2 || p.keys().any(|k| !matches!(k.as_str(), "layer" | "name")) {
-            return Err(bad("layer.setProps", "readonly filter owners support name-only properties without coalescing"));
+        let p = params.as_object().ok_or_else(|| bad("layer.setProps", "readonly layer properties require an object"))?;
+        if p.len() > 4 || p.keys().any(|k| !matches!(k.as_str(), "layer" | "name" | "visible" | "opacity")) {
+            return Err(bad("layer.setProps", "readonly filter owners support name, visible and opacity without coalescing"));
         }
-        let name =
-            p.get("name").and_then(Value::as_str).filter(|n| n.len() <= MAX_STRING).ok_or_else(|| bad("layer.setProps", "name must be a bounded string"))?;
-        ctl.check(name.len() as u64)?;
-        if name.contains('\0') {
-            return Err(bad("layer.setProps", "name must not contain NUL"));
+        let extended = p.contains_key("visible") || p.contains_key("opacity");
+        // Old name-only accepted/refused shapes remain exact. New property
+        // shapes ignore recognized wrong types only if some typed field remains.
+        let name = p.get("name").and_then(Value::as_str);
+        if !extended && name.is_none() {
+            return Err(bad("layer.setProps", "name must be a bounded string"));
         }
+        if let Some(name) = name {
+            if name.len() > MAX_STRING {
+                return Err(bad("layer.setProps", "name must be a bounded string"));
+            }
+            ctl.check(name.len() as u64)?;
+            if name.contains('\0') {
+                return Err(bad("layer.setProps", "name must not contain NUL"));
+            }
+        }
+        let visible = p.get("visible").and_then(Value::as_bool);
+        // Match upstream's finite JSON f64 -> f32 THEN clamp order, including
+        // finite f64 overflow and signed zero. Never normalize the resulting bits.
+        let opacity = p.get("opacity").and_then(Value::as_f64).filter(|v| v.is_finite()).map(|v| (v as f32).clamp(0.0, 1.0).to_bits());
+        if name.is_none() && visible.is_none() && opacity.is_none() {
+            return Err(bad("layer.setProps", "at least one supported typed property is required"));
+        }
+        let only_visibility = p.contains_key("visible") && p.keys().all(|k| matches!(k.as_str(), "layer" | "visible"));
         let target = match p.get("layer") {
             None | Some(Value::Null) => Target::Active,
             Some(Value::Number(n)) => {
@@ -40,7 +62,7 @@ impl<'a> Request<'a> {
             Some(Value::String(n)) if n.len() <= MAX_STRING => Target::Name(n),
             _ => return Err(bad("layer.setProps", "layer must be a bounded name, integer identity, or null")),
         };
-        Ok(Self { target, name })
+        Ok(Self { target, name, visible, opacity, extended, only_visibility })
     }
     pub(super) fn prepare(self, session: &Session, ctl: &ReadControl<'_>) -> Result<Prepared<'a>> {
         idle(session)?;
@@ -66,7 +88,9 @@ impl<'a> Request<'a> {
                 found.ok_or_else(|| bad("layer.setProps", "no layer has the requested name"))?
             }
         };
-        target_exists(owner, layer, ctl)?;
+        let visibility_changed =
+            self.visible.is_some_and(|visible| owner.document().layers.first().is_some_and(|current| current.id == layer && visible != current.visible));
+        target_access(owner, layer, visibility_changed, ctl)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
         if state.active_layer != view.target().active || state.layer_anchor != view.anchor() || !state.selected_layers.is_empty() {
             return Err(BackingError::Integrity.into());
@@ -117,7 +141,14 @@ impl<'a> Request<'a> {
             .ok_or(BackingError::Length)?;
         lease.reconcile_capacity(actual as u64).map_err(|_| BackingError::Allocation)?;
         validate_recipe(owner, ctl)?;
-        let staged = owner.try_with_readonly_layer_name(ReadonlyLayerNamePatch { layer, name: self.name }, ctl)?;
+        let staged = if self.extended {
+            owner.try_with_readonly_layer_properties(
+                ReadonlyLayerPropertiesPatch { layer, name: self.name, visible: self.visible, opacity_f32_bits: self.opacity },
+                ctl,
+            )?
+        } else {
+            owner.try_with_readonly_layer_name(ReadonlyLayerNamePatch { layer, name: self.name.ok_or(BackingError::Integrity)? }, ctl)?
+        };
         validate_recipe(&staged, ctl)?;
         let updated = !staged.shares_model(owner);
         let mut history = state.history.clone();
@@ -125,7 +156,13 @@ impl<'a> Request<'a> {
             history.max_states = session.prefs().performance.history_states.max(1) as usize;
             history.max_bytes = session.prefs().performance.history_budget_bytes();
             history.set_current_layers_borrowed(view.target(), ctl)?;
-            history.try_commit_prepared_accounted(owner, staged, "Layer Properties", view.target(), ctl)?
+            history.try_commit_prepared_accounted(
+                owner,
+                staged,
+                if self.only_visibility { "Layer Visibility" } else { "Layer Properties" },
+                view.target(),
+                ctl,
+            )?
         } else {
             state.doc.clone()
         };
@@ -155,6 +192,7 @@ impl<'a> Request<'a> {
             history_states: session.prefs().performance.history_states,
             history_bytes: session.prefs().performance.history_budget_bytes(),
             layer,
+            visibility_changed,
             updated,
             reply,
             _reply_lease: reply_lease,
@@ -203,14 +241,18 @@ fn idle(session: &Session) -> Result<()> {
         || session.command_has_pending_job()
         || session.has_jobs()
     {
-        return Err(bad("layer.setProps", "readonly layer rename requires an idle synchronous color context without coalescing"));
+        return Err(bad("layer.setProps", "readonly layer properties require an idle synchronous color context without coalescing"));
     }
     Ok(())
 }
-// Upstream layer.setProps does not prohibit names under content/pixel/all,
-// position, alpha or visibility locks. Still validate actual target ancestry.
-fn target_exists(owner: &AccountedDocument, layer: LayerId, ctl: &ReadControl<'_>) -> Result<()> {
-    accounted_layer_access(owner.document(), layer, ctl)?.ok_or(EngineError::NoLayer(layer))?;
+// Upstream checks only ACTUAL Layer.visible transitions against imported
+// visibility locks. Canonical-only reconciliation does not create that change;
+// content/all/pixel/position/alpha locks do not prohibit names or opacity.
+fn target_access(owner: &AccountedDocument, layer: LayerId, visibility_changed: bool, ctl: &ReadControl<'_>) -> Result<()> {
+    let access = accounted_layer_access(owner.document(), layer, ctl)?.ok_or(EngineError::NoLayer(layer))?;
+    if visibility_changed && access.imported_locks.visibility {
+        return Err(bad("layer.setProps", "the imported layer is visibility-locked"));
+    }
     Ok(())
 }
 fn validate_recipe(owner: &AccountedDocument, ctl: &ReadControl<'_>) -> Result<()> {
@@ -260,6 +302,7 @@ pub(super) struct Prepared<'a> {
     history_states: u32,
     history_bytes: usize,
     layer: LayerId,
+    visibility_changed: bool,
     updated: bool,
     reply: Value,
     _reply_lease: QuotaLease,
@@ -293,9 +336,9 @@ impl Prepared<'_> {
             || session.prefs().performance.history_states != self.history_states
             || session.prefs().performance.history_budget_bytes() != self.history_bytes
         {
-            return Err(EngineError::Other("the prepared readonly layer rename targets older Session state".into()));
+            return Err(EngineError::Other("the prepared readonly layer properties target older Session state".into()));
         }
-        target_exists(state.doc.accounted().ok_or(BackingError::Integrity)?, self.layer, ctl)?;
+        target_access(state.doc.accounted().ok_or(BackingError::Integrity)?, self.layer, self.visibility_changed, ctl)?;
         let revision = state.revision.checked_add(u64::from(self.updated)).ok_or(BackingError::Length)?;
         ctl.check(1)?;
         if self.updated {

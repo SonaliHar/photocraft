@@ -44,7 +44,7 @@ fn native_error(error: BackedThresholdError) -> BackedNormalError {
 impl<'a> PreparedBackedThresholdDocument<'a> {
     /// Requires the actual readonly current model and its exact retained profile.
     /// The context validates the singleton, native layout, physical empty
-    /// selection, visible full-opacity layer and Normal/Union current policy.
+    /// selection, finite-unit layer coverage and Normal/Union current policy.
     /// This bridge prepares no CMS pipeline: the existing transparent-backdrop
     /// identity uses source color samples directly in their current encoding.
     pub fn new(owner: &'a AccountedDocument, profile: &Profile, limits: NormalBandLimits, control: &ReadControl<'_>) -> Result<Self, BackedNormalError> {
@@ -114,7 +114,10 @@ impl<'a> PreparedBackedThresholdDocument<'a> {
             let read = |channel| try_read_sample_f64(pixel, format.sample, channel).map_err(|_| invalid("Histogram Threshold native sample decode"));
             let rgb = [read(0)?, read(1)?, read(2)?];
             let source = [rgb[0], rgb[1], rgb[2], read(format.mode.color_channels())?];
-            output.pixels.push(normal_over_zero_backdrop(source, 1.0).map_err(BackedNormalError::Color)?);
+            output.pixels.push(
+                normal_over_zero_backdrop(source, if self.context.layer_visible() { self.context.layer_opacity() } else { 0.0 })
+                    .map_err(BackedNormalError::Color)?,
+            );
         }
         if output.pixels.len() != count {
             return Err(invalid("Histogram Threshold display pixel count"));

@@ -247,6 +247,51 @@ fn owned_layer_rename_uses_registered_control_then_paid_discovery_and_history() 
     }
 }
 #[test]
+#[ignore = "UNRUN: pinned originals and combined current layer-property control workflow"]
+fn owned_layer_coverage_changes_one_history_state_and_preserves_native_filter_owners() {
+    for histogram in [false, true] {
+        let (mut app, _) = app(histogram);
+        let original = app.session.active().unwrap().doc.clone();
+        let layer = app.session.active().unwrap().active_layer.unwrap();
+        let source = app.session.active().unwrap().source.clone();
+        let params = json!({"layer":layer.0,"name":"current coverage","visible":false,"opacity":0.5});
+        let ctx = egui::Context::default();
+        let (req, _) = ControlRequest::new("engine.execute", json!({"command":"layer.setProps","params":params}));
+        let Outcome::Done(reply) = crate::control::handle(&mut app, &ctx, &req) else { panic!("properties must finish synchronously") };
+        assert_eq!(reply["ok"], true);
+        let updated = app.session.active().unwrap().doc.clone();
+        let metadata = updated.layer(layer).unwrap();
+        assert!(!metadata.visible);
+        assert_eq!(metadata.opacity.to_bits(), 0.5f32.to_bits());
+        assert_eq!(metadata.name, "current coverage");
+        assert_eq!(metadata.content, original.layer(layer).unwrap().content);
+        assert_eq!(updated.xcf_state.as_ref().unwrap().filter_stacks, original.xcf_state.as_ref().unwrap().filter_stacks);
+        assert_eq!(updated.xcf_state.as_ref().unwrap().filter_masks, original.xcf_state.as_ref().unwrap().filter_masks);
+        assert_eq!(updated.icc_profile, original.icc_profile);
+        let item = updated.xcf_state.as_ref().unwrap().items.iter().find(|item| item.item == photocraft_doc::item_identity::ItemRef::Layer(layer)).unwrap();
+        assert_eq!(item.name, metadata.name);
+        assert!(!item.visible);
+        assert!(item.custom_name);
+        assert_eq!(app.session.active().unwrap().history.past_len(), 1);
+        let (undo, _) = ControlRequest::new("engine.execute", json!({"command":"edit.undo"}));
+        let Outcome::Done(reply) = crate::control::handle(&mut app, &ctx, &undo) else { panic!("undo must finish synchronously") };
+        assert_eq!(reply["ok"], true);
+        assert!(app.session.active().unwrap().doc.shares_state(&original));
+        let (redo, _) = ControlRequest::new("engine.execute", json!({"command":"edit.redo"}));
+        let Outcome::Done(reply) = crate::control::handle(&mut app, &ctx, &redo) else { panic!("redo must finish synchronously") };
+        assert_eq!(reply["ok"], true);
+        assert!(app.session.active().unwrap().doc.shares_state(&updated));
+        assert_eq!(app.session.active().unwrap().source, source);
+        let revision = app.session.active().unwrap().revision;
+        let history = app.session.active().unwrap().history.clone();
+        let (noop, _) = ControlRequest::new("engine.execute", json!({"command":"layer.setProps","params":params}));
+        let Outcome::Done(reply) = crate::control::handle(&mut app, &ctx, &noop) else { panic!("no-op must finish synchronously") };
+        assert_eq!(reply["ok"], true);
+        assert_eq!(app.session.active().unwrap().revision, revision);
+        assert!(app.session.active().unwrap().history.shares_accounted_history(&history));
+    }
+}
+#[test]
 #[ignore = "UNRUN: pinned originals; no UI/runtime or TCP execution"]
 fn real_owned_control_reply_is_queued_before_null_and_held_through_write_flush() {
     for histogram in [false, true] {

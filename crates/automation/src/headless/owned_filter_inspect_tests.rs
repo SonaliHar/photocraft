@@ -518,3 +518,222 @@ fn plain_current_retained_rpc_preserves_id_and_project_envelope() {
     assert_eq!(reads.load(Ordering::Relaxed), 0);
     assert_eq!(q.usage().unwrap(), baseline);
 }
+
+// Actual-original continuation is distinct from the synthetic CURRENT fixtures.
+mod combined_properties_continuation {
+    use super::*;
+    use photocraft_engine::DocumentSnapshot;
+    use sha2::{Digest, Sha256};
+    use std::path::PathBuf;
+    struct Directory(PathBuf);
+    impl Directory {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let p = std::env::temp_dir().join(format!("photocraft-compound-headless-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+            std::fs::create_dir(&p).unwrap();
+            Self(p)
+        }
+    }
+    impl Drop for Directory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    fn hash(b: &[u8]) -> String {
+        Sha256::digest(b).iter().map(|b| format!("{b:02x}")).collect()
+    }
+    fn original(histogram: bool) -> Vec<u8> {
+        let (packet, pin, name) = if histogram {
+            ("threshold-precision-evidence", "23015e327f45c490ed6dbeaa6f4a9541b13dbe8526e9abfff26da13d38c56142", "rgb-double_non_linear.channel0.xcf")
+        } else {
+            ("alpha-threshold-precision-evidence", "37eb14b73c0b873bc418781310b2bd384d873d9ebade486932bcdde0c4d27263", "rgb-double_non_linear.half.xcf")
+        };
+        let root = PathBuf::from(std::env::var_os("PHOTOCRAFT_XCF_FULL_CORPUS").expect("UNRUN requires SHA-pinned precision sources")).join(packet);
+        assert!(std::fs::metadata(root.join("SHA256SUMS.json")).unwrap().len() <= 1 << 20);
+        let bytes = std::fs::read(root.join("SHA256SUMS.json")).unwrap();
+        assert_eq!(hash(&bytes), pin);
+        let manifest: Value = serde_json::from_slice(&bytes).unwrap();
+        let n = std::fs::metadata(root.join(name)).unwrap().len();
+        assert!(n > 0 && n <= 16 << 20);
+        let bytes = std::fs::read(root.join(name)).unwrap();
+        assert_eq!(hash(&bytes), manifest[name].as_str().unwrap());
+        bytes
+    }
+    #[derive(Debug, PartialEq, Eq)]
+    struct RawStorage {
+        layer: photocraft_raster::backing::NativePlaneDescriptor,
+        layer_full_tile: bool,
+        layer_bytes: Vec<u8>,
+        masks: Vec<(photocraft_raster::backing::NativePlaneDescriptor, Option<(photocraft_geom::TileCoord, Vec<u8>)>)>,
+    }
+    #[derive(Debug)]
+    struct NativeSnapshot {
+        storage: RawStorage,
+        // Copied payload/metadata drop before their genuine same-ledger derivative fee.
+        _lease: QuotaLease,
+    }
+    impl PartialEq for NativeSnapshot {
+        fn eq(&self, other: &Self) -> bool {
+            self.storage == other.storage
+        }
+    }
+    impl Eq for NativeSnapshot {}
+    fn native(snapshot: &DocumentSnapshot) -> NativeSnapshot {
+        use photocraft_raster::{backing::NativePlaneDescriptor, checked_view::NativeTileBytes};
+        let LayerContent::BackedRaster(layer) = &snapshot.layers[0].content else { panic!("source is not native backed") };
+        assert_eq!(snapshot.layers.len(), 1);
+        assert_eq!(layer.operative_bounds(), photocraft_geom::Rect::new(0, 0, 8, 6));
+        let masks = &snapshot.xcf_state.as_ref().unwrap().filter_masks;
+        assert!(masks.len() <= 1);
+        let full_layer = 256usize.checked_mul(256).unwrap().checked_mul(layer.format().bytes_per_pixel()).unwrap();
+        let mut payload = full_layer;
+        for mask in masks {
+            assert!(mask.surface.tile_count() <= 1);
+            payload = payload.checked_add(256 * 256 * mask.surface.format().bytes_per_pixel()).unwrap();
+        }
+        // Double actual maximum payload admits allocator excess; 4096 prices the
+        // bounded descriptor/tuple/vector headers. No native data is narrowed.
+        let admitted = payload.checked_mul(2).unwrap().checked_add(4096).unwrap() as u64;
+        let mut fee = layer.quota().reserve(QuotaKind::Resident, admitted).unwrap();
+        fn copy(bytes: &[u8]) -> Vec<u8> {
+            let mut out = Vec::new();
+            out.try_reserve_exact(bytes.len()).unwrap();
+            assert!(out.capacity() <= bytes.len().checked_mul(2).unwrap());
+            for chunk in bytes.chunks(64 * 1024) {
+                ctl().check(chunk.len() as u64).unwrap();
+                out.extend_from_slice(chunk);
+            }
+            out
+        }
+        let pin = layer.checked_view().pin_tile(photocraft_geom::TileCoord::new(0, 0), &ctl()).unwrap();
+        let (layer_full_tile, layer_bytes) = match pin.encoded() {
+            NativeTileBytes::FullTile(bytes) => {
+                assert_eq!(bytes.len(), full_layer);
+                (true, copy(bytes))
+            }
+            NativeTileBytes::DefaultPixel(_) => panic!("backed authoritative tile was not full native storage"),
+        };
+        drop(pin);
+        let mut copied_masks = Vec::new();
+        copied_masks.try_reserve_exact(masks.len()).unwrap();
+        assert!(copied_masks.capacity() <= 2 * masks.len());
+        let mut actual = layer_bytes.capacity() + 4096;
+        for mask in masks {
+            ctl().check(1).unwrap();
+            let descriptor = NativePlaneDescriptor::new(mask.surface.format(), mask.bounds, mask.surface.default_bytes()).unwrap();
+            let mut tile = None;
+            for (coord, bytes) in mask.surface.tiles() {
+                assert_eq!(*coord, photocraft_geom::TileCoord::new(0, 0));
+                assert_eq!(bytes.bytes().len(), 256 * 256 * mask.surface.format().bytes_per_pixel());
+                let copied = copy(bytes.bytes());
+                actual = actual.checked_add(copied.capacity()).unwrap();
+                tile = Some((*coord, copied));
+            }
+            copied_masks.push((descriptor, tile));
+        }
+        assert!(actual as u64 <= admitted);
+        fee.reconcile_capacity(actual as u64).unwrap();
+        NativeSnapshot { storage: RawStorage { layer: layer.descriptor(), layer_full_tile, layer_bytes, masks: copied_masks }, _lease: fee }
+    }
+
+    fn retained(a: &DocumentSnapshot, b: &DocumentSnapshot) {
+        assert_eq!(a.xcf_state.as_ref().unwrap().filter_stacks, b.xcf_state.as_ref().unwrap().filter_stacks);
+        assert_eq!(a.icc_profile, b.icc_profile);
+        assert_eq!(a.source_color_context, b.source_color_context);
+        assert_eq!(a.working_profile_interpretation, b.working_profile_interpretation);
+    }
+    #[test]
+    #[ignore = "UNRUN: SHA-pinned Alpha/Histogram originals, compound properties and actual native host continuation"]
+    fn registered_compound_properties_native_reopen_discovery_undo_redo_and_resave_preserve_original_storage() {
+        for histogram in [false, true] {
+            let dir = Directory::new();
+            let original = original(histogram);
+            let source = dir.0.join("source.xcf");
+            std::fs::write(&source, &original).unwrap();
+            let mut h = Headless::trusted_local();
+            drop(h.open_owned_xcf_keep_current(&source, &ctl()).unwrap());
+            let before = h.session.active().unwrap().doc.clone();
+            assert_eq!(before.accounted().unwrap().is_readonly_threshold_storage(), histogram);
+            assert_eq!(before.accounted().unwrap().is_readonly_threshold_alpha_storage(), !histogram);
+            let raw = native(&before);
+            let layer = before.layers[0].id;
+            let source_identity = h.session.active().unwrap().source.clone();
+            assert_eq!(
+                h.command_run("layer.setProps", serde_json::json!({"layer":layer.0,"name":"Current compound name","visible":false,"opacity":0.5})).unwrap(),
+                Value::Null
+            );
+            let edited = h.session.active().unwrap().doc.clone();
+            assert_eq!(edited.layers[0].name, "Current compound name");
+            assert!(!edited.layers[0].visible);
+            assert_eq!(edited.layers[0].opacity.to_bits(), 0.5f32.to_bits());
+            assert_eq!(h.session.active().unwrap().history.past_len(), 1);
+            retained(&before, &edited);
+            assert_eq!(native(&edited), raw);
+            assert_eq!(edited.layers[0].content, before.layers[0].content);
+            let item = edited.xcf_state.as_ref().unwrap().items.iter().find(|v| v.item == ItemRef::Layer(layer)).unwrap();
+            assert_eq!(item.name, "Current compound name");
+            assert!(!item.visible);
+            assert!(item.custom_name);
+            let first = dir.0.join("compound.pcraft");
+            h.save_owned_native_active(Some(&first), Some("pcraft"), &ctl()).unwrap();
+            assert_eq!(h.session.active().unwrap().source, source_identity);
+            assert!(h.session.active().unwrap().source_read_only);
+            assert_eq!(std::fs::read(&source).unwrap(), original);
+            let archive_bytes = std::fs::read(&first).unwrap();
+            let mut reopened = Headless::trusted_local();
+            drop(reopened.open_owned_native_keep_current(&first, &ctl()).unwrap());
+            let saved = reopened.session.active().unwrap().doc.clone();
+            assert_eq!(saved.name, "compound.pcraft");
+            assert_eq!(saved.xcf_state, edited.xcf_state);
+            retained(&before, &saved);
+            assert_eq!(native(&saved), raw);
+            assert!(saved.quota().unwrap().shares_ledger(reopened.session.accounted_open_quota().unwrap()));
+            let discovery = reopened.inspect_owned_command_bounded("xcf.inspect", &Value::Null, true).unwrap();
+            let rows = discovery.value()["items"]["entries"].as_array().unwrap();
+            let item = rows.iter().find(|v| v["item"]["kind"] == "layer").unwrap();
+            assert_eq!(item["name"], "Current compound name");
+            assert_eq!(item["visible"], false);
+            assert_eq!(discovery.value()["filters"]["entries"][0]["id"], saved.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].id.0.to_string());
+            drop(discovery);
+            reopened.command_run("layer.setProps", serde_json::json!({"visible":true,"opacity":0.75})).unwrap();
+            let changed = reopened.session.active().unwrap().doc.clone();
+            assert!(changed.layers[0].visible);
+            assert_eq!(changed.layers[0].opacity.to_bits(), 0.75f32.to_bits());
+            retained(&before, &changed);
+            assert_eq!(native(&changed), raw);
+            reopened.command_run("edit.undo", serde_json::json!({})).unwrap();
+            let undone = &reopened.session.active().unwrap().doc;
+            assert_eq!(undone.name, "compound.pcraft");
+            assert!(!undone.layers[0].visible);
+            assert_eq!(undone.layers[0].opacity.to_bits(), 0.5f32.to_bits());
+            assert_eq!(native(undone), raw);
+            reopened.command_run("edit.redo", serde_json::json!({})).unwrap();
+            assert!(reopened.session.active().unwrap().doc.layers[0].visible);
+            assert_eq!(reopened.session.active().unwrap().doc.layers[0].opacity.to_bits(), 0.75f32.to_bits());
+            let last = dir.0.join("continued-compound.pcraft");
+            reopened.save_owned_native_active(Some(&last), Some("pcraft"), &ctl()).unwrap();
+            assert_eq!(std::fs::read(&first).unwrap(), archive_bytes);
+            assert_eq!(std::fs::read(&source).unwrap(), original);
+            let alias = dir.0.join("source-alias.pcraft");
+            std::fs::hard_link(&source, &alias).unwrap();
+            let before_denial = h.session.active().unwrap().doc.clone();
+            assert!(h.save_owned_native_active(Some(&alias), Some("pcraft"), &ctl()).is_err());
+            assert!(h.session.active().unwrap().doc.shares_state(&before_denial));
+            // Native reopening retains the original inert fingerprint exclusion,
+            // without treating the serialized source path as read authority.
+            let native_before_denial = reopened.session.active().unwrap().doc.clone();
+            assert!(reopened.save_owned_native_active(Some(&alias), Some("pcraft"), &ctl()).is_err());
+            assert!(reopened.session.active().unwrap().doc.shares_state(&native_before_denial));
+            assert_eq!(std::fs::read(&source).unwrap(), original);
+            let mut final_open = Headless::trusted_local();
+            drop(final_open.open_owned_native_keep_current(&last, &ctl()).unwrap());
+            let final_doc = &final_open.session.active().unwrap().doc;
+            assert_eq!(final_doc.name, "continued-compound.pcraft");
+            assert_eq!(final_doc.layers[0].name, "Current compound name");
+            assert!(final_doc.layers[0].visible);
+            assert_eq!(final_doc.layers[0].opacity.to_bits(), 0.75f32.to_bits());
+            retained(&before, final_doc);
+            assert_eq!(native(final_doc), raw);
+        }
+    }
+}
