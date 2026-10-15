@@ -3170,3 +3170,18 @@ curves	Smooth	Haluskan
 	PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	PhotoCraft tidak dapat mengakses papan klip sistem dalam sesi ini. Di Wayland, sandbox Flatpak menyembunyikan protokol yang digunakan untuk membaca gambar dari aplikasi lain.
 	To paste from other apps, start PhotoCraft under XWayland: `{command}`	Untuk menempel dari aplikasi lain, jalankan PhotoCraft di bawah XWayland: `{command}`
 	Nothing to paste: PhotoCraft can't read the system clipboard here	Tidak ada yang ditempel: PhotoCraft tidak dapat membaca papan klip sistem di sini
+	Delete this set	Hapus set ini
+	New Set…	Set Baru…
+	PhotoCraft Defaults	Bawaan PhotoCraft
+	Save a list of these shortcuts as a web page	Simpan daftar pintasan ini sebagai halaman web
+	Save the changes to this set	Simpan perubahan ke set ini
+	Save these shortcuts as a .kys file	Simpan pintasan ini sebagai file .kys
+	Save these shortcuts as a new set	Simpan pintasan ini sebagai set baru
+	Set deleted.	Set dihapus.
+	Set saved.	Set disimpan.
+	Set:	Set:
+	Summarize…	Ringkas…
+	There are too many sets: delete one first.	Terlalu banyak set: hapus satu terlebih dahulu.
+	set name	nama set
+	{set} (modified)	{set} (diubah)
+	Random	Acak

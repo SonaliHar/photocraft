@@ -3787,3 +3787,17 @@ navigator	Zoom	Zvětšení
 	PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	PhotoCraft v této relaci nemá přístup k systémové schránce. Na Waylandu sandbox Flatpaku skrývá protokol, přes který se čtou obrázky z jiných aplikací.
 	To paste from other apps, start PhotoCraft under XWayland: `{command}`	Chcete-li vkládat z jiných aplikací, spusťte PhotoCraft pod XWaylandem: `{command}`
 	Nothing to paste: PhotoCraft can't read the system clipboard here	Není co vložit: PhotoCraft zde nemůže číst systémovou schránku
+	Delete this set	Smazat tuto sadu
+	New Set…	Nová sada…
+	PhotoCraft Defaults	Výchozí PhotoCraft
+	Save a list of these shortcuts as a web page	Uložit seznam těchto zkratek jako webovou stránku
+	Save the changes to this set	Uložit změny do této sady
+	Save these shortcuts as a .kys file	Uložit tyto zkratky jako soubor .kys
+	Save these shortcuts as a new set	Uložit tyto zkratky jako novou sadu
+	Set deleted.	Sada smazána.
+	Set saved.	Sada uložena.
+	Set:	Sada:
+	Summarize…	Shrnout…
+	There are too many sets: delete one first.	Sad je příliš mnoho: nejprve jednu smažte.
+	set name	název sady
+	{set} (modified)	{set} (změněno)

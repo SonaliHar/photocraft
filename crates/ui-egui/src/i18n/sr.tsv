@@ -4252,3 +4252,17 @@ shape	Appearance	Izgled
 	PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	PhotoCraft u ovoj sesiji ne može da pristupi sistemskoj ostavi. Na Wayland-u, Flatpak sandbox skriva protokol preko kog se čitaju slike iz drugih aplikacija.
 	To paste from other apps, start PhotoCraft under XWayland: `{command}`	Da biste lepili iz drugih aplikacija, pokrenite PhotoCraft pod XWayland-om: `{command}`
 	Nothing to paste: PhotoCraft can't read the system clipboard here	Nema šta da se nalepi: PhotoCraft ovde ne može da čita sistemsku ostavu
+	Delete this set	Obriši ovaj skup
+	New Set…	Novi skup…
+	PhotoCraft Defaults	Podrazumevano za PhotoCraft
+	Save a list of these shortcuts as a web page	Sačuvaj listu ovih prečica kao veb stranicu
+	Save the changes to this set	Sačuvaj izmene u ovom skupu
+	Save these shortcuts as a .kys file	Sačuvaj ove prečice kao .kys datoteku
+	Save these shortcuts as a new set	Sačuvaj ove prečice kao novi skup
+	Set deleted.	Skup je obrisan.
+	Set saved.	Skup je sačuvan.
+	Set:	Skup:
+	Summarize…	Rezime…
+	There are too many sets: delete one first.	Previše skupova: prvo obrišite jedan.
+	set name	ime skupa
+	{set} (modified)	{set} (izmenjen)

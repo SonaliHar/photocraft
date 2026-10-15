@@ -3183,3 +3183,18 @@ curves	Smooth	Lisser
 	PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	PhotoCraft ne peut pas accéder au presse-papiers du système dans cette session. Sous Wayland, le bac à sable Flatpak masque le protocole par lequel les images des autres applications sont lues.
 	To paste from other apps, start PhotoCraft under XWayland: `{command}`	Pour coller depuis d’autres applications, lancez PhotoCraft sous XWayland : `{command}`
 	Nothing to paste: PhotoCraft can't read the system clipboard here	Rien à coller : PhotoCraft ne peut pas lire ici le presse-papiers du système
+	Delete this set	Supprimer ce jeu
+	New Set…	Nouveau jeu…
+	PhotoCraft Defaults	Valeurs par défaut de PhotoCraft
+	Save a list of these shortcuts as a web page	Enregistrer la liste de ces raccourcis en page web
+	Save the changes to this set	Enregistrer les modifications de ce jeu
+	Save these shortcuts as a .kys file	Enregistrer ces raccourcis dans un fichier .kys
+	Save these shortcuts as a new set	Enregistrer ces raccourcis comme nouveau jeu
+	Set deleted.	Jeu supprimé.
+	Set saved.	Jeu enregistré.
+	Set:	Jeu :
+	Summarize…	Résumer…
+	There are too many sets: delete one first.	Il y a trop de jeux : supprimez-en un d’abord.
+	set name	nom du jeu
+	{set} (modified)	{set} (modifié)
+	Random	Aléatoire
