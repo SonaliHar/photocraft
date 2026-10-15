@@ -3763,6 +3763,19 @@ navigator	Zoom	Zvětšení
 	Sent to {printer}	Odesláno do {printer}
 	set in Print Settings…	nastavuje se v nastavení tisku…
 	ICO is limited to 256 × 256 pixels	ICO je omezen na 256 × 256 pixelů
+# PhotoCraft release checks.
+	Check for Updates…	Zkontrolovat aktualizace…
+	PhotoCraft Updates	Aktualizace PhotoCraft
+	Checking for updates…	Kontrola aktualizací…
+	Open the release page to choose an installer for your system.	Otevřete stránku vydání a vyberte instalační program pro svůj systém.
+	Open Download Page	Otevřít stránku ke stažení
+	PhotoCraft is up to date.	PhotoCraft je aktuální.
+	Could not check for updates.	Aktualizace se nepodařilo zkontrolovat.
+	Updates have not been checked yet.	Aktualizace ještě nebyly zkontrolovány.
+	Check Again	Zkontrolovat znovu
+	Automatically Check for Updates	Automaticky kontrolovat aktualizace
+	Installed version: {version}	Nainstalovaná verze: {version}
+	PhotoCraft {version} is available.	PhotoCraft {version} je k dispozici.
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Použít vložený profil ({profile})
 	Convert to the working space ({profile})	Převést do pracovního prostoru barev ({profile})
