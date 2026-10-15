@@ -731,15 +731,15 @@ mod tests {
         use photocraft_doc::{BlendRange, Knockout, Path, PixelFormat, Subpath, VectorMask};
         let light = GlobalLight::default();
         let group = Layer::group("g", vec![Layer::raster("child", PixelFormat::RGBA8)]);
-        let base = group_key(&group, &light);
+        let base = group_key(&group, &light, &mut |_| {});
 
         let mask = |x: f64| VectorMask::new(Path::new(vec![Subpath::polygon(&[(x, 0.0), (x + 10.0, 0.0), (x + 10.0, 10.0)])]));
         let mut masked = group.clone();
         masked.vector_mask = Some(mask(0.0));
-        let with_mask = group_key(&masked, &light);
+        let with_mask = group_key(&masked, &light, &mut |_| {});
         assert_ne!(base, with_mask, "adding the group's vector mask");
         masked.vector_mask = Some(mask(5.0));
-        assert_ne!(with_mask, group_key(&masked, &light), "moving the group's vector mask");
+        assert_ne!(with_mask, group_key(&masked, &light, &mut |_| {}), "moving the group's vector mask");
 
         fn child_mut(g: &mut Layer) -> &mut Layer {
             let LayerContent::Group(gr) = &mut g.content else { unreachable!() };
@@ -747,11 +747,11 @@ mod tests {
         }
         let mut blend_if = group.clone();
         child_mut(&mut blend_if).blend_if.ranges = vec![[BlendRange { black: [128, 128], white: [255, 255] }, BlendRange::FULL]];
-        assert_ne!(base, group_key(&blend_if, &light), "a child's Blend If");
+        assert_ne!(base, group_key(&blend_if, &light, &mut |_| {}), "a child's Blend If");
 
         let mut advanced = group.clone();
         child_mut(&mut advanced).advanced.knockout = Knockout::Deep;
-        assert_ne!(base, group_key(&advanced, &light), "a child's Advanced Blending");
+        assert_ne!(base, group_key(&advanced, &light, &mut |_| {}), "a child's Advanced Blending");
     }
 
     #[test]
