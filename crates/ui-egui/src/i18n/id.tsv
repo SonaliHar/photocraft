@@ -3181,3 +3181,7 @@ curves	Smooth	Haluskan
 	set name	nama set
 	{set} (modified)	{set} (diubah)
 	Random	Acak
+
+# PNG export compression (#5409)
+	Compression	Kompresi
+	Best	Terbaik

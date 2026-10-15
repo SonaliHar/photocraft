@@ -14,6 +14,8 @@ use crate::theme::Tokens;
 use crate::{ExportSettings, PhotocraftApp};
 
 const FORMATS: [(&str, &str); 6] = [("png", "PNG"), ("jpg", "JPG"), ("webp", "WebP"), ("tif", "TIFF"), ("tga", "TGA"), ("ico", "ICO")];
+/// The PNG zlib efforts Export As offers (the `pngCompression` field).
+const PNG_COMPRESSIONS: [&str; 4] = ["none", "fast", "default", "best"];
 
 /// Preferences ▸ remembered dialog settings: Export As writes the settings it was used with
 /// last under its command id and seeds the next dialog from them, as Fill, Liquify and the
@@ -44,6 +46,9 @@ fn seed_remembered(app: &PhotocraftApp, f: &mut Map<String, Value>) {
     if let Some(v) = saved.get("tgaBits").and_then(Value::as_str).filter(|v| ["auto", "24", "32"].contains(v)) {
         f.insert("tgaBits".into(), json!(v));
     }
+    if let Some(v) = saved.get("pngCompression").and_then(Value::as_str).filter(|v| PNG_COMPRESSIONS.contains(v)) {
+        f.insert("pngCompression".into(), json!(v));
+    }
     if let Some(v) = saved.get("sizing").and_then(Value::as_str).filter(|v| ["scale", "pixels"].contains(v)) {
         f.insert("sizing".into(), json!(v));
     }
@@ -65,8 +70,22 @@ fn seed_remembered(app: &PhotocraftApp, f: &mut Map<String, Value>) {
 
 /// Record the settings for the next Export As (see [`seed_remembered`]).
 fn remember(app: &mut PhotocraftApp, f: &Map<String, Value>) {
-    const KEYS: [&str; 13] =
-        ["format", "quality", "lossless", "transparency", "scale", "metadata", "tgaBits", "sizing", "width", "height", "lockAspect", "profile", "embedProfile"];
+    const KEYS: [&str; 14] = [
+        "format",
+        "quality",
+        "lossless",
+        "transparency",
+        "scale",
+        "metadata",
+        "tgaBits",
+        "sizing",
+        "width",
+        "height",
+        "lockAspect",
+        "profile",
+        "embedProfile",
+        "pngCompression",
+    ];
     let saved: Map<String, Value> = KEYS.iter().filter_map(|k| f.get(*k).map(|v| ((*k).to_string(), v.clone()))).collect();
     app.session.prefs.edit(|p| {
         p.dialogs.insert(COMMAND.into(), Value::Object(saved));
@@ -373,6 +392,19 @@ fn lossless(f: &Map<String, Value>) -> bool {
     f.get("lossless").and_then(Value::as_bool).unwrap_or(false)
 }
 
+/// PNG zlib effort: how hard the encoder works to shrink the file. An unset or unrecognised
+/// value leaves the codec default, which is what Export As wrote before it offered the choice.
+fn png_compression(f: &Map<String, Value>) -> Option<photocraft_codecs::PngCompression> {
+    use photocraft_codecs::PngCompression as C;
+    match s(f, "pngCompression").as_str() {
+        "none" => Some(C::None),
+        "fast" => Some(C::Fast),
+        "default" => Some(C::Default),
+        "best" => Some(C::Best),
+        _ => None,
+    }
+}
+
 /// TGA bits per pixel: `"24"` or `"32"`; `"auto"` (the default) is 32 with an alpha channel or
 /// transparency, else 24, as Export As wrote before it offered the choice.
 fn tga_bits(f: &Map<String, Value>) -> Option<photocraft_io::TgaBits> {
@@ -389,6 +421,7 @@ fn settings(f: &Map<String, Value>) -> ExportSettings {
         webp_quality: (fmt == "webp" && !lossless(f)).then_some(quality),
         xmp_all: metadata == "all",
         tga_bits: if fmt == "tga" { tga_bits(f) } else { None },
+        png_compression: if fmt == "png" { png_compression(f) } else { None },
         embed_icc: f.get("embedProfile").and_then(Value::as_bool).unwrap_or(true),
         // Metadata: None drops EXIF and resolution as well as XMP. A missing key keeps them,
         // which is what Export As wrote before the choice existed.
@@ -729,6 +762,20 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 crate::widgets::slider_row(ui, tl!("Quality"), &mut q, 1.0..=100.0, "%", None);
                 f.insert("quality".into(), json!(q.round()));
             }
+            if fmt == "png" {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(tl!("Compression")).color(t.text_dim));
+                    let mut c = s(f, "pngCompression");
+                    if c.is_empty() {
+                        c = "default".into();
+                    }
+                    let opts: Vec<(String, &str)> =
+                        vec![("none".into(), tl!("None")), ("fast".into(), tl!("Fast")), ("default".into(), tl!("Default")), ("best".into(), tl!("Best"))];
+                    if crate::widgets::dropdown(ui, "export-png-compression", &mut c, &opts, 130.0) {
+                        f.insert("pngCompression".into(), json!(c));
+                    }
+                });
+            }
             if fmt == "tga" {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(tl!("Resolution")).color(t.text_dim));
@@ -784,7 +831,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             let layer = f.get("__layer").and_then(Value::as_u64);
             let key = egui::Id::new(("export-preview", doc.id.0, app.session.active().map_or(0, |s| s.revision), layer));
             let sig = format!(
-                "{}{}{}{}{}{}{}{}{}{}{}{}",
+                "{}{}{}{}{}{}{}{}{}{}{}{}{}",
                 s_fmt(f),
                 n(f, "quality", 85.0),
                 lossless(f),
@@ -794,6 +841,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                 n(f, "height", 0.0),
                 s(f, "metadata"),
                 s(f, "tgaBits"),
+                s(f, "pngCompression"),
                 s(f, "profile"),
                 f.get("embedProfile").and_then(Value::as_bool).unwrap_or(true),
                 s(f, "sizing")
@@ -1193,6 +1241,62 @@ mod tests {
         }
         f.insert("format".into(), json!("png"));
         assert_eq!(settings(&f).tga_bits, None, "only TGA has bits per pixel");
+    }
+
+    /// PNG's Compression: an unset or unrecognised value keeps the codec default, each offered
+    /// effort selects its own, and the choice applies only to PNG.
+    #[test]
+    fn png_settings_follow_the_compression_choice() {
+        use photocraft_codecs::PngCompression as C;
+        let mut f = Map::new();
+        f.insert("format".into(), json!("png"));
+        assert_eq!(settings(&f).png_compression, None, "no choice made");
+        for (v, want) in [("none", Some(C::None)), ("fast", Some(C::Fast)), ("default", Some(C::Default)), ("best", Some(C::Best)), ("smallest", None)] {
+            f.insert("pngCompression".into(), json!(v));
+            assert_eq!(settings(&f).png_compression, want, "{v}");
+        }
+        f.insert("format".into(), json!("jpg"));
+        assert_eq!(settings(&f).png_compression, None, "only PNG has a compression choice");
+    }
+
+    /// The effort reaches the encoder, so Smallest really writes a smaller file than None.
+    #[test]
+    fn png_compression_choice_changes_the_written_file() {
+        use photocraft_codecs::{ChannelLayout, Format, Image, PngCompression, SampleType};
+        let px: Vec<u8> = (0..64u32 * 64).flat_map(|i| [(i / 64 * 4) as u8, (i % 64 * 4) as u8, (i % 7 * 36) as u8]).collect();
+        let img = Image::from_raw(64, 64, ChannelLayout::Rgb, SampleType::U8, px).unwrap();
+        let encode = |effort: &str| {
+            let mut f = Map::new();
+            f.insert("format".into(), json!("png"));
+            f.insert("pngCompression".into(), json!(effort));
+            let opts = settings(&f).io_options();
+            photocraft_codecs::encode(&img, Format::Png, &opts.encode).unwrap().len()
+        };
+        let mut f = Map::new();
+        f.insert("format".into(), json!("png"));
+        f.insert("pngCompression".into(), json!("best"));
+        assert_eq!(settings(&f).io_options().encode.png_compression, PngCompression::Best);
+        let (best, none) = (encode("best"), encode("none"));
+        assert!(best < none, "Smallest {best} vs None {none}");
+    }
+
+    /// The effort is remembered for the next Export As; an unrecognised one is not restored.
+    #[test]
+    fn export_as_remembers_the_png_compression() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 20, "height": 10})).unwrap();
+        let mut f = Map::new();
+        f.insert("format".into(), json!("png"));
+        f.insert("pngCompression".into(), json!("best"));
+        remember(&mut app, &f);
+        let id = open(&mut app).unwrap();
+        assert_eq!(app.ui.dialog_mut(id).unwrap().fields["pngCompression"], "best");
+
+        app.session.prefs.edit(|p| {
+            p.dialogs.insert(COMMAND.into(), json!({"format": "png", "pngCompression": "tiny"}));
+        });
+        let id = open(&mut app).unwrap();
+        assert!(app.ui.dialog_mut(id).unwrap().fields.get("pngCompression").is_none(), "an unrecognised effort is not restored");
     }
 
     #[test]
