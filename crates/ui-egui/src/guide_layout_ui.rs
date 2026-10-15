@@ -45,10 +45,7 @@ pub(crate) fn in_ruler_unit(app: &PhotocraftApp, px: f64, along_x: bool) -> Stri
     let units = &app.session.prefs().units_and_rulers;
     let (dpi, extent) = app.session.active().map_or((72.0, 1.0), |st| {
         let d = &st.doc;
-        (
-            f64::from(d.resolution_dpi.max(1.0)),
-            f64::from(if along_x { d.size.width } else { d.size.height }),
-        )
+        (f64::from(d.resolution_dpi.max(1.0)), f64::from(if along_x { d.size.width } else { d.size.height }))
     });
     with_unit(&units.format(px, dpi, extent), units.rulers)
 }
@@ -83,10 +80,7 @@ fn parse_length_str(text: &str, app: &PhotocraftApp, along_x: bool) -> Option<f6
     let units = &app.session.prefs().units_and_rulers;
     let (dpi, extent) = app.session.active().map_or((72.0, 1.0), |st| {
         let d = &st.doc;
-        (
-            f64::from(d.resolution_dpi.max(1.0)),
-            f64::from(if along_x { d.size.width } else { d.size.height }),
-        )
+        (f64::from(d.resolution_dpi.max(1.0)), f64::from(if along_x { d.size.width } else { d.size.height }))
     });
     let ppi = units.point_size.per_inch();
     let ruler = units.rulers;
@@ -102,26 +96,14 @@ fn format_stored_length(app: &PhotocraftApp, val: &Value, along_x: bool, optiona
     match val {
         Value::Number(n) => {
             let px = n.as_f64().unwrap_or(0.0);
-            if optional && px <= 0.0 {
-                Value::Null
-            } else {
-                json!(in_ruler_unit(app, px, along_x))
-            }
+            if optional && px <= 0.0 { Value::Null } else { json!(in_ruler_unit(app, px, along_x)) }
         }
         Value::String(s) => {
             let t = s.trim();
             if t.is_empty() {
-                if optional {
-                    Value::Null
-                } else {
-                    json!(in_ruler_unit(app, 0.0, along_x))
-                }
+                if optional { Value::Null } else { json!(in_ruler_unit(app, 0.0, along_x)) }
             } else if let Some(px) = parse_length_str(t, app, along_x) {
-                if optional && px <= 0.0 {
-                    Value::Null
-                } else {
-                    json!(in_ruler_unit(app, px, along_x))
-                }
+                if optional && px <= 0.0 { Value::Null } else { json!(in_ruler_unit(app, px, along_x)) }
             } else {
                 json!(s)
             }
@@ -160,12 +142,7 @@ pub fn reset(app: &PhotocraftApp, f: &mut Map<String, Value>) {
     f.insert("rowGutter".into(), json!(in_ruler_unit(app, 0.0, false)));
     f.insert(
         "margin".into(),
-        json!([
-            in_ruler_unit(app, 0.0, false),
-            in_ruler_unit(app, 0.0, true),
-            in_ruler_unit(app, 0.0, false),
-            in_ruler_unit(app, 0.0, true)
-        ]),
+        json!([in_ruler_unit(app, 0.0, false), in_ruler_unit(app, 0.0, true), in_ruler_unit(app, 0.0, false), in_ruler_unit(app, 0.0, true)]),
     );
     f.insert("__preview".into(), json!(true));
 }
@@ -212,11 +189,7 @@ pub fn open(app: &mut PhotocraftApp) -> u64 {
     }
 
     let margin = f.get("margin").cloned().unwrap_or(json!(0));
-    let mut margins = if let Value::Array(a) = margin {
-        if a.len() == 4 { a } else { vec![json!(0); 4] }
-    } else {
-        vec![margin.clone(); 4]
-    };
+    let mut margins = if let Value::Array(a) = margin { if a.len() == 4 { a } else { vec![json!(0); 4] } } else { vec![margin.clone(); 4] };
     margins[0] = format_stored_length(app, &margins[0], false, false);
     margins[1] = format_stored_length(app, &margins[1], true, false);
     margins[2] = format_stored_length(app, &margins[2], false, false);
@@ -233,11 +206,7 @@ fn parse_length_value(val: Option<&Value>, app: Option<&PhotocraftApp>, along_x:
     match val {
         Some(Value::Number(n)) => {
             if let Some(num) = n.as_f64() {
-                if optional && num <= 0.0 {
-                    Value::Null
-                } else {
-                    json!(num)
-                }
+                if optional && num <= 0.0 { Value::Null } else { json!(num) }
             } else {
                 Value::Null
             }
@@ -245,21 +214,14 @@ fn parse_length_value(val: Option<&Value>, app: Option<&PhotocraftApp>, along_x:
         Some(Value::String(s)) => {
             let t = s.trim();
             if t.is_empty() {
-                if optional {
-                    Value::Null
-                } else {
-                    json!(0.0)
-                }
+                if optional { Value::Null } else { json!(0.0) }
             } else {
                 let (dpi, extent, ppi, ruler) = match app {
                     Some(app) => {
                         let units = &app.session.prefs().units_and_rulers;
                         let (dpi, extent) = app.session.active().map_or((72.0, 1.0), |st| {
                             let d = &st.doc;
-                            (
-                                f64::from(d.resolution_dpi.max(1.0)),
-                                f64::from(if along_x { d.size.width } else { d.size.height }),
-                            )
+                            (f64::from(d.resolution_dpi.max(1.0)), f64::from(if along_x { d.size.width } else { d.size.height }))
                         });
                         (dpi, extent, units.point_size.per_inch(), units.rulers)
                     }
@@ -268,18 +230,10 @@ fn parse_length_value(val: Option<&Value>, app: Option<&PhotocraftApp>, along_x:
 
                 if let Some((n, unit)) = Unit::parse_length(t) {
                     let px = unit.unwrap_or(ruler).to_px(n, dpi, extent, ppi);
-                    if optional && px <= 0.0 {
-                        Value::Null
-                    } else {
-                        serde_json::Number::from_f64(px).map(Value::Number).unwrap_or(Value::Null)
-                    }
+                    if optional && px <= 0.0 { Value::Null } else { serde_json::Number::from_f64(px).map(Value::Number).unwrap_or(Value::Null) }
                 } else if let Some(n) = widgets::parse_num(t) {
                     let px = ruler.to_px(n, dpi, extent, ppi);
-                    if optional && px <= 0.0 {
-                        Value::Null
-                    } else {
-                        serde_json::Number::from_f64(px).map(Value::Number).unwrap_or(Value::Null)
-                    }
+                    if optional && px <= 0.0 { Value::Null } else { serde_json::Number::from_f64(px).map(Value::Number).unwrap_or(Value::Null) }
                 } else {
                     json!(s)
                 }
@@ -424,35 +378,17 @@ fn should_select_all(response: &egui::Response, ui: &egui::Ui) -> bool {
     response.gained_focus() && !response.clicked() && !response.dragged() && !ui.input(|i| i.pointer.any_click() || i.pointer.any_down())
 }
 
-fn length_field(
-    app: &PhotocraftApp,
-    ui: &mut egui::Ui,
-    f: &mut Map<String, Value>,
-    key: &str,
-    width: f32,
-    optional: bool,
-    along_x: bool,
-) -> egui::Response {
+fn length_field(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, width: f32, optional: bool, along_x: bool) -> egui::Response {
     let mut text = match f.get(key) {
         Some(Value::String(s)) => s.clone(),
         Some(Value::Number(n)) => {
             let px = n.as_f64().unwrap_or(0.0);
-            if optional && px <= 0.0 {
-                String::new()
-            } else {
-                in_ruler_unit(app, px, along_x)
-            }
+            if optional && px <= 0.0 { String::new() } else { in_ruler_unit(app, px, along_x) }
         }
         _ => String::new(),
     };
     let t = Tokens::get(ui.ctx());
-    let response = ui.add(
-        egui::TextEdit::singleline(&mut text)
-            .id_salt(key)
-            .desired_width(width)
-            .font(crate::theme::mono(12.0))
-            .background_color(t.field),
-    );
+    let response = ui.add(egui::TextEdit::singleline(&mut text).id_salt(key).desired_width(width).font(crate::theme::mono(12.0)).background_color(t.field));
     if ui.is_enabled() {
         crate::field_tab::register(ui.ctx(), response.id);
     }
@@ -468,21 +404,10 @@ fn length_field(
         text = normalized;
         f.insert(key.into(), json!(text));
     }
-    if optional {
-        response.on_hover_text(tl!("Leave empty for automatic size"))
-    } else {
-        response
-    }
+    if optional { response.on_hover_text(tl!("Leave empty for automatic size")) } else { response }
 }
 
-fn margin_field(
-    app: &PhotocraftApp,
-    ui: &mut egui::Ui,
-    id_salt: &str,
-    value: &mut Value,
-    width: f32,
-    along_x: bool,
-) -> egui::Response {
+fn margin_field(app: &PhotocraftApp, ui: &mut egui::Ui, id_salt: &str, value: &mut Value, width: f32, along_x: bool) -> egui::Response {
     let mut text = match value {
         Value::String(s) => s.clone(),
         Value::Number(n) => {
@@ -492,13 +417,7 @@ fn margin_field(
         _ => in_ruler_unit(app, 0.0, along_x),
     };
     let t = Tokens::get(ui.ctx());
-    let response = ui.add(
-        egui::TextEdit::singleline(&mut text)
-            .id_salt(id_salt)
-            .desired_width(width)
-            .font(crate::theme::mono(12.0))
-            .background_color(t.field),
-    );
+    let response = ui.add(egui::TextEdit::singleline(&mut text).id_salt(id_salt).desired_width(width).font(crate::theme::mono(12.0)).background_color(t.field));
     if ui.is_enabled() {
         crate::field_tab::register(ui.ctx(), response.id);
     }
