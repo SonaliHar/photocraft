@@ -16,8 +16,8 @@
 //! [`fold_legacy_pinch`] turns those back into a pinch
 //! before egui sees them, so Ctrl + a notched mouse wheel scrolls sideways and the pinch still
 //! zooms. Other Wayland compositors deliver a pinch as a two-axis point-unit scroll with no Ctrl
-//! (#5122); those become a pinch only when Preferences › Enhanced Controls › Two-Axis Scroll
-//! Pinches is on, because such a scroll is otherwise indistinguishable from a diagonal pan.
+//! (#5122); those become a pinch only when Preferences › Enhanced Controls › Two Axis Scroll
+//! Zooms is on, because such a scroll is otherwise indistinguishable from a diagonal pan.
 //!
 //! The target behaviour is exact ×1.1 steps, one per notch, with no easing in between
 //! (measured frame by frame on a screen recording). egui smooths a wheel notch over several
@@ -127,7 +127,7 @@ fn two_axis_point_pinch(d: Vec2) -> bool {
 /// pinch events (`Event::Zoom`) at egui's Ctrl-scroll zoom speed (`notch` points per line,
 /// `speed` per point). Ctrl + wheel in whole notches (a mouse wheel) is left to scroll sideways,
 /// unless it comes within [`PINCH_GAP`] of a pinch step. When `two_axis_pinch` (Preferences ›
-/// Enhanced Controls › Two-Axis Scroll Pinches) is on, a two-axis point-unit scroll with no Ctrl
+/// Enhanced Controls › Two Axis Scroll Zooms) is on, a two-axis point-unit scroll with no Ctrl
 /// is treated as a pinch too; off, it stays a pan. `last` is the time of the previous pinch
 /// step; returns the time of the latest one.
 pub fn legacy_pinch_to_zoom(events: &mut [Event], now: f64, last: Option<f64>, notch: f32, speed: f32, two_axis_pinch: bool) -> Option<f64> {
@@ -563,21 +563,21 @@ mod tests {
     fn shift_scroll_snaps_through_egui_context() {
         let notch = Vec2::new(0.0, 1.0);
         // Shift + wheel with zoom_with_wheel on.
-        let (pan, zoom, snaps) = gesture(vec![vec![wheel(notch, Modifiers::SHIFT)]], true, false);
+        let (pan, zoom, snaps) = gesture(vec![vec![wheel(notch, Modifiers::SHIFT)]], true, false, false);
         assert_eq!(snaps, 1, "⇧ + wheel with zoom_with_wheel → snap");
         assert!(pan == Vec2::ZERO, "no pan: {pan:?}");
         assert_eq!(zoom, 1.0, "no continuous zoom: {zoom}");
-        let (_, _, snaps) = gesture(vec![vec![wheel(-notch, Modifiers::SHIFT)]], true, false);
+        let (_, _, snaps) = gesture(vec![vec![wheel(-notch, Modifiers::SHIFT)]], true, false, false);
         assert_eq!(snaps, -1, "⇧ + wheel down → snap out");
         // Some systems deliver Shift+wheel as horizontal (delta in x, y = 0).
         let h_notch = Vec2::new(1.0, 0.0);
-        let (pan, zoom, snaps) = gesture(vec![vec![wheel(h_notch, Modifiers::SHIFT)]], true, false);
+        let (pan, zoom, snaps) = gesture(vec![vec![wheel(h_notch, Modifiers::SHIFT)]], true, false, false);
         assert_eq!(snaps, 1, "⇧ + horizontal wheel with zoom_with_wheel → snap");
         assert!(pan == Vec2::ZERO, "no pan: {pan:?}");
         assert_eq!(zoom, 1.0, "no continuous zoom: {zoom}");
         // Shift + Alt + wheel without the preference.
         let shift_alt = Modifiers { shift: true, alt: true, ..Modifiers::NONE };
-        let (pan, zoom, snaps) = gesture(vec![vec![wheel(notch, shift_alt)]], false, false);
+        let (pan, zoom, snaps) = gesture(vec![vec![wheel(notch, shift_alt)]], false, false, false);
         assert_eq!(snaps, 1, "⇧ + ⌥ + wheel → snap");
         assert!(pan == Vec2::ZERO, "no pan: {pan:?}");
         assert_eq!(zoom, 1.0, "no continuous zoom: {zoom}");
@@ -627,7 +627,7 @@ mod tests {
         let mut pan = [Event::MouseWheel { unit: MouseWheelUnit::Point, delta: Vec2::new(0.0, 12.0), phase: TouchPhase::Move, modifiers: Modifiers::NONE }];
         assert_eq!(legacy_pinch_to_zoom(&mut pan, 1.0, None, 40.0, 0.005, true), None);
         assert!(matches!(pan[0], Event::MouseWheel { .. }), "two-finger scroll stays a pan");
-        // The heuristic is opt-in: with Two-Axis Scroll Pinches off (the default), a diagonal
+        // The heuristic is opt-in: with Two Axis Scroll Zooms off (the default), a diagonal
         // two-finger scroll must still pan, and a 14-degree-off-axis one must not zoom (#5122 review).
         for delta in [Vec2::new(6.0, 8.0), Vec2::new(10.0, 2.5)] {
             let mut off = [Event::MouseWheel { unit: MouseWheelUnit::Point, delta, phase: TouchPhase::Move, modifiers: Modifiers::NONE }];
@@ -978,9 +978,9 @@ mod tests {
 
     #[test]
     fn line_unit_snap_still_works_with_accumulation() {
-        let (_, _, snaps) = gesture(vec![vec![wheel(Vec2::new(0.0, 1.0), Modifiers::SHIFT)]], true, false);
+        let (_, _, snaps) = gesture(vec![vec![wheel(Vec2::new(0.0, 1.0), Modifiers::SHIFT)]], true, false, false);
         assert_eq!(snaps, 1, "Line-unit notch produces 1 step");
-        let (_, _, snaps) = gesture(vec![vec![wheel(Vec2::new(0.0, -1.0), Modifiers::SHIFT)]], true, false);
+        let (_, _, snaps) = gesture(vec![vec![wheel(Vec2::new(0.0, -1.0), Modifiers::SHIFT)]], true, false, false);
         assert_eq!(snaps, -1, "Line-unit notch down produces −1 step");
     }
 }

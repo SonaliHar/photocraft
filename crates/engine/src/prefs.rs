@@ -826,7 +826,7 @@ pub struct EnhancedControls {
     /// Some Wayland compositors deliver a trackpad pinch as a plain two-axis point-unit scroll
     /// with no Ctrl (#5122). Off by default: at event level such a scroll is indistinguishable
     /// from an ordinary diagonal two-finger pan, so users on those compositors opt in.
-    pub two_axis_scroll_pinches: bool,
+    pub two_axis_scroll_zooms: bool,
     pub rotate_view_with_trackpad: bool,
 }
 
@@ -836,7 +836,7 @@ impl Default for EnhancedControls {
             scrubby_slider_acceleration: true,
             touch_gestures: true,
             zoom_with_trackpad_pinch: true,
-            two_axis_scroll_pinches: false,
+            two_axis_scroll_zooms: false,
             rotate_view_with_trackpad: false,
         }
     }
