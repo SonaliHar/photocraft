@@ -14,6 +14,8 @@ use crate::{AuthorizedWorkspace, AutomationError, files};
 
 mod linked_root;
 mod stored_channel_root;
+mod owned_xcf_open;
+pub use owned_xcf_open::OwnedXcfOpenReply;
 pub use stored_channel_root::{load_stored_selection_from_root_with_context, validate_stored_selection_request};
 
 fn native_save_requested(name: &str, format: Option<&str>) -> bool {

@@ -289,7 +289,7 @@ fn measure_inner(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &
     w.vector(&state.filter_stacks)?;
     w.vector(&state.filter_masks)?;
     if threshold {
-        threshold_storage(state, &mut w)?;
+        threshold_storage(state, &mut w, control)?;
     }
     w.vector(&state.editable_indexed)?;
     w.vector(&state.selection.selected)?;
@@ -340,11 +340,15 @@ fn threshold_shape(doc: &Document) -> Result<(), IoError> {
     use photocraft_doc::xcf_filters::{ExactNumber, FilterValue};
     let state = doc.xcf_state.as_ref().ok_or_else(|| invalid("threshold census state"))?;
     if doc.layers.len() != 1
-        || doc.size.width != 8
-        || doc.size.height != 6
+        || doc.size.width == 0
+        || doc.size.height == 0
+        || doc.size.width > 262144
+        || doc.size.height > 262144
+        || u64::from(doc.size.width).checked_mul(u64::from(doc.size.height)).is_none_or(|n| n > 1 << 30)
         || state.filter_stacks.len() != 1
         || state.filter_masks.len() > 1
         || state.items.len() != 1 + state.filter_masks.len()
+        || state.filter_masks.iter().any(|mask| mask.bounds != doc.bounds())
     {
         return Err(invalid("threshold census closed storage shape"));
     }
@@ -368,7 +372,7 @@ fn threshold_shape(doc: &Document) -> Result<(), IoError> {
     }
     Ok(())
 }
-fn threshold_storage(state: &photocraft_doc::XcfState, w: &mut Walk<'_, '_>) -> Result<(), IoError> {
+fn threshold_storage(state: &photocraft_doc::XcfState, w: &mut Walk<'_, '_>, control: &Interrupt<'_>) -> Result<(), IoError> {
     use photocraft_doc::xcf_filters::{FilterArgument, FilterNode, FilterStack, OperationIdentity};
     for FilterStack { owner: _, nodes, revision: _ } in &state.filter_stacks {
         w.vector(nodes)?;
@@ -401,10 +405,33 @@ fn threshold_storage(state: &photocraft_doc::XcfState, w: &mut Walk<'_, '_>) -> 
             w.composition(composition)?;
         }
     }
-    for photocraft_doc::FilterMask { id: _, owner: _, surface, bounds: _ } in &state.filter_masks {
+    for photocraft_doc::FilterMask { id: _, owner: _, surface, bounds } in &state.filter_masks {
+        control.check().map_err(|_| IoError::Cancelled)?;
         w.visit()?;
-        if surface.tile_count() > 1 {
+        if bounds.x0 != 0 || bounds.y0 != 0 || bounds.is_empty() || bounds.width() > 262144 || bounds.height() > 262144 {
+            return Err(invalid("threshold census mask bounds"));
+        }
+        let pixels = u64::from(bounds.width()).checked_mul(u64::from(bounds.height())).ok_or_else(|| invalid("threshold mask pixels"))?;
+        let columns = u64::from(bounds.width()).checked_add(255).ok_or_else(|| invalid("threshold mask columns"))? / 256;
+        let rows = u64::from(bounds.height()).checked_add(255).ok_or_else(|| invalid("threshold mask rows"))? / 256;
+        let grid = columns.checked_mul(rows).ok_or_else(|| invalid("threshold mask grid"))?;
+        if pixels > 1 << 30 || u64::try_from(surface.tile_count()).ok().is_none_or(|n| n > grid) {
             return Err(invalid("threshold census mask tile count"));
+        }
+        let tile_bytes = 65536usize.checked_mul(surface.format().bytes_per_pixel()).ok_or_else(|| invalid("threshold mask tile bytes"))?;
+        for (coordinate, tile) in surface.tiles() {
+            control.check().map_err(|_| IoError::Cancelled)?;
+            w.visit()?;
+            if coordinate.tx < 0 || coordinate.ty < 0 || coordinate.tx as u64 >= columns || coordinate.ty as u64 >= rows {
+                return Err(invalid("threshold mask sparse coordinate"));
+            }
+            let x = coordinate.tx.checked_mul(256).ok_or_else(|| invalid("threshold mask tile origin"))?;
+            let y = coordinate.ty.checked_mul(256).ok_or_else(|| invalid("threshold mask tile origin"))?;
+            let right = x.checked_add(256).ok_or_else(|| invalid("threshold mask tile edge"))?;
+            let bottom = y.checked_add(256).ok_or_else(|| invalid("threshold mask tile edge"))?;
+            if [x, y, right, bottom].iter().any(|v| !(-(1 << 29)..=(1 << 29)).contains(v)) || tile.bytes().len() != tile_bytes {
+                return Err(invalid("threshold mask native tile structure"));
+            }
         }
         // Inline Surface is counted by FilterMask Vec capacity. Actual native
         // Tile/Box/default storage also remains with the original Sink receipts.

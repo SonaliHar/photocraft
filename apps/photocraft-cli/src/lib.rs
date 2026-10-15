@@ -13,6 +13,7 @@ use photocraft_io::ExportOptions;
 use serde_json::{Value, json};
 
 mod stored_channel_run;
+mod owned_xcf_open;
 
 pub const USAGE: &str = "\
 photocraft-cli: headless PhotoCraft
@@ -27,13 +28,18 @@ USAGE:
       --tga-bits sets a TGA's bits per pixel: 32 writes the alpha channel (or else the transparency) as
       its alpha, 24 none. Without it: 32 with an alpha channel or transparency, else 24.
       --dpx-bits sets a DPX's bits per sample. Without it: 8 for an 8-bit document, else 16.
-  photocraft-cli info <file> [--compact] [--json-errors]
+  photocraft-cli info <file> [--compact] [--json-errors] [--xcf-profile-policy keepCurrent]
       Print the document as JSON (size, mode, depth, layer tree).
-  photocraft-cli run (<file> | --new <json>) --cmd <id> [--params <json>] [--cmd …] [--out <file>] [--format <ext>] [--quality <1-100>] [--tiff-layers] [--tga-bits <24|32>] [--dpx-bits <8|10|12|16>] [--json-errors] [--automation-read-root <dir>]
+      Explicit --xcf-profile-policy keepCurrent uses the bounded owned XCF class and
+      prints an owned-import-summary; ordinary Open/profile settings stay unchanged.
+      Example: photocraft-cli info source.xcf --xcf-profile-policy keepCurrent
+  photocraft-cli run (<file> | --new <json>) --cmd <id> [--params <json>] [--cmd …] [--out <file>] [--format <ext>] [--quality <1-100>] [--tiff-layers] [--tga-bits <24|32>] [--dpx-bits <8|10|12|16>] [--json-errors] [--automation-read-root <dir>] [--xcf-profile-policy keepCurrent]
       Open a file, run engine commands in order, save the result. Each --params
       applies to the preceding --cmd. Prints each command's JSON result.
       Stored-original select.loadSelection requires an explicit --automation-read-root;
       its originalPath is relative to that held root, with no ambient fallback.
+      Explicit keepCurrent accepts a .xcf input only and currently refuses --new/--out;
+      registered commands retain their existing typed eligibility and source guards.
   photocraft-cli batch --actions <actions.json|set.atn> [--action <name>] --in <dir> --out <dir> [--format <ext>] [--quality <1-100>] [--in-place] [--tiff-layers] [--tga-bits <24|32>] [--dpx-bits <8|10|12|16>]
       --json-errors emits per-file JSON failures and a separate aggregate error on stderr.
       Apply an action list to every image in a directory. A Photoshop Actions file (.atn) is a
@@ -100,10 +106,10 @@ struct Subcommand {
 
 const SUBCOMMANDS: &[Subcommand] = &[
     Subcommand { name: "convert", values: &["--format", "--quality", "--tga-bits", "--dpx-bits"], bare: &["--tiff-layers", "--json", "--json-errors"], run: convert },
-    Subcommand { name: "info", values: &[], bare: &["--compact", "--json-errors"], run: |a, out, _| info(a, out) },
+    Subcommand { name: "info", values: &["--xcf-profile-policy"], bare: &["--compact", "--json-errors"], run: |a, out, _| info(a, out) },
     Subcommand {
         name: "run",
-        values: &["--new", "--cmd", "--params", "--out", "--format", "--quality", "--tga-bits", "--dpx-bits", "--automation-read-root"],
+        values: &["--new", "--cmd", "--params", "--out", "--format", "--quality", "--tga-bits", "--dpx-bits", "--automation-read-root", "--xcf-profile-policy"],
         bare: &["--tiff-layers", "--json-errors"],
         run: run_cmds,
     },
@@ -322,10 +328,15 @@ fn print_json(out: &mut dyn Write, v: &Value, compact: bool) -> R {
 }
 
 fn info(a: &Args, out: &mut dyn Write) -> R {
+    let owned = owned_xcf_open::policy(a, false)?;
     let [file] = a.positional.as_slice() else {
         return Err("info needs <file>".into());
     };
     let mut h = Headless::trusted_local();
+    if owned {
+        let reply = owned_xcf_open::open(&mut h, file).map_err(|e| automation_error(a,e))?;
+        return print_json(out, reply.value(), a.has("--compact"));
+    }
     let opened = h.open(Path::new(file)).map_err(|e| automation_error(a,e))?;
     let mut doc = h.inspect(None).map_err(|e| automation_error(a,e))?;
     let mut warnings = opened["warnings"].as_array().cloned().unwrap_or_default();
@@ -371,6 +382,7 @@ fn command_list(a: &Args) -> Result<Vec<(String, Value)>, String> {
 }
 
 fn run_cmds(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
+    let owned = owned_xcf_open::policy(a, true)?;
     let opts = export_opts(a)?;
     let cmds=command_list(a)?;
     if cmds.is_empty() && a.get("--out").is_none(){return Err("run needs at least one --cmd (or --out)".into());}
@@ -386,11 +398,18 @@ fn run_cmds(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
     let mut reported_fonts = std::collections::HashSet::<String>::new();
     match (a.positional.as_slice(), a.get("--new")) {
         ([file], None) => {
-            let o = h.open(Path::new(file)).map_err(|e| automation_error(a,e))?;
-            let ws: Vec<String> = serde_json::from_value(o["warnings"].clone()).unwrap_or_default();
-            reported_fonts.extend(ws.iter().cloned());
-            warn_all(err, &ws);
-            reported_fonts.extend(ws);
+            if owned {
+                let reply = owned_xcf_open::open(&mut h, file).map_err(|e|automation_error(a,e))?;
+                for warning in reply.warnings() {
+                    if reported_fonts.insert(warning.clone()) { warn_all(err, std::slice::from_ref(warning)); }
+                }
+            } else {
+                let o = h.open(Path::new(file)).map_err(|e| automation_error(a,e))?;
+                let ws: Vec<String> = serde_json::from_value(o["warnings"].clone()).unwrap_or_default();
+                reported_fonts.extend(ws.iter().cloned());
+                warn_all(err, &ws);
+                reported_fonts.extend(ws);
+            }
         }
         ([], Some(_)) => {
             let p=new_params.ok_or("missing prepared --new JSON")?;

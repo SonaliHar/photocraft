@@ -14,25 +14,49 @@ mod patch;
 pub use patch::ThresholdAlphaPatch;
 
 // Same established logical publication envelope as raster::staged. BTreeMap
-// nodes have no stable fallible allocator/capacity API: at most one prepaid,
-// polled insertion is allowed here, not a complete allocator/RSS claim.
+// nodes have no stable fallible allocator/capacity API: each actual entry is
+// prepaid and polled here, not a complete allocator/RSS claim.
 const MAP_ENTRY_ENVELOPE: u64 = 256;
+// Existing XCF ResourceLimits Side ceiling; this storage class cannot raise it.
+const MAX_CANVAS_SIDE: u32 = 262_144;
+fn canvas_layout(bounds: Rect) -> Result<(u64, u64, u64), BackingError> {
+    if bounds.x0 != 0 || bounds.y0 != 0 || bounds.is_empty()
+        || bounds.width() > MAX_CANVAS_SIDE || bounds.height() > MAX_CANVAS_SIDE
+    {
+        return Err(BackingError::Bounds);
+    }
+    let pixels = u64::from(bounds.width()).checked_mul(u64::from(bounds.height())).ok_or(BackingError::Length)?;
+    // Match the existing XCF ResourceLimits Pixels ceiling as well as Side.
+    if pixels > 1 << 30 {
+        return Err(BackingError::Length);
+    }
+    let side = u64::try_from(photocraft_geom::TILE_SIZE).map_err(|_| BackingError::Length)?;
+    let columns = u64::from(bounds.width()).checked_add(side.checked_sub(1).ok_or(BackingError::Length)?)
+        .ok_or(BackingError::Length)? / side;
+    let rows = u64::from(bounds.height()).checked_add(side.checked_sub(1).ok_or(BackingError::Length)?)
+        .ok_or(BackingError::Length)? / side;
+    Ok((columns, rows, columns.checked_mul(rows).ok_or(BackingError::Length)?))
+}
 const EPOCH: &str = "xcf-22-stock-threshold-alpha-precision-v1";
 fn unsupported<T>() -> Result<T, BackingError> {
     Err(BackingError::Unsupported)
 }
 struct MaskCopyPlan {
     bytes: u64,
+    canvas: Rect,
+    entries: usize,
+    format: crate::PixelFormat,
 }
 impl MaskCopyPlan {
-    fn new(surface: &Surface, control: &ReadControl<'_>) -> Result<Self, BackingError> {
+    fn new(surface: &Surface, canvas: Rect, control: &ReadControl<'_>) -> Result<Self, BackingError> {
         control.check(1)?;
+        let (columns, rows, maximum_entries) = canvas_layout(canvas)?;
         let format = surface.format();
         if format.mode != crate::ColorMode::Grayscale
             || format.alpha
             || !matches!(format.sample, crate::SampleType::U16 | crate::SampleType::F32 | crate::SampleType::F64)
             || surface.default_bytes().len() != format.bytes_per_pixel()
-            || surface.tile_count() > 1
+            || u64::try_from(surface.tile_count()).map_err(|_| BackingError::Length)? > maximum_entries
         {
             return unsupported();
         }
@@ -42,7 +66,9 @@ impl MaskCopyPlan {
             .ok_or(BackingError::Length)?;
         for (coordinate, tile) in surface.tiles() {
             control.check(1)?;
-            if coordinate.tx != 0 || coordinate.ty != 0 {
+            if u64::try_from(coordinate.tx).map_err(|_| BackingError::Bounds)? >= columns
+                || u64::try_from(coordinate.ty).map_err(|_| BackingError::Bounds)? >= rows
+            {
                 return Err(BackingError::Bounds);
             }
             for v in [coordinate.tx, coordinate.ty] {
@@ -61,11 +87,12 @@ impl MaskCopyPlan {
             .and_then(|n| n.checked_add((surface.tile_count() as u64).checked_mul(MAP_ENTRY_ENVELOPE)?))
             .and_then(|n| n.checked_add(std::mem::size_of::<Surface>() as u64 + 128))
             .ok_or(BackingError::Length)?;
-        Ok(Self { bytes })
+        Ok(Self { bytes, canvas, entries: surface.tile_count(), format })
     }
     // Caller has reserved this plan in the new model's real metadata lease.
     fn copy(&self, source: &Surface, control: &ReadControl<'_>) -> Result<Surface, BackingError> {
-        if Self::new(source, control)?.bytes > self.bytes {
+        let actual = Self::new(source, self.canvas, control)?;
+        if actual.bytes != self.bytes || actual.entries != self.entries || actual.format != self.format {
             return Err(BackingError::Integrity);
         }
         control.check(source.default_bytes().len() as u64 + 1)?;
@@ -84,7 +111,7 @@ pub(super) fn mask_census(masks: &Vec<FilterMask>, census: &mut CanonicalCensus<
     }
     census.vec(masks, 1)?;
     for mask in masks {
-        let plan = MaskCopyPlan::new(&mask.surface, census.control)?;
+        let plan = MaskCopyPlan::new(&mask.surface, mask.bounds, census.control)?;
         census.counted.index = census.counted.index.checked_add(plan.bytes).ok_or(BackingError::Length)?;
         // Existing native Tile payload/Arc owners remain with the original
         // accounted codec guard. This is only a new map/default metadata charge.
@@ -94,14 +121,23 @@ pub(super) fn mask_census(masks: &Vec<FilterMask>, census: &mut CanonicalCensus<
 fn shape(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>) -> Result<(), BackingError> {
     control.check(1)?;
     if doc.layers.len() != 1
-        || doc.size.width != 8
-        || doc.size.height != 6
+        || doc.size.width == 0
+        || doc.size.height == 0
+        || doc.size.width > MAX_CANVAS_SIDE
+        || doc.size.height > MAX_CANVAS_SIDE
         || !matches!(doc.mode, crate::ColorMode::Rgb | crate::ColorMode::Grayscale)
         || !matches!(doc.depth, crate::SampleType::U16 | crate::SampleType::F32 | crate::SampleType::F64)
         || doc.selection.is_some()
         || doc.selection_channel_id.is_some()
     {
         return unsupported();
+    }
+    let width = i32::try_from(doc.size.width).map_err(|_| BackingError::Bounds)?;
+    let height = i32::try_from(doc.size.height).map_err(|_| BackingError::Bounds)?;
+    let canvas = Rect::new(0, 0, width, height);
+    canvas_layout(canvas)?;
+    if doc.bounds() != canvas {
+        return Err(BackingError::Bounds);
     }
     validate_backing(doc, quota, control)?;
     let state = doc.xcf_state.as_ref().ok_or(BackingError::Unsupported)?;
@@ -228,7 +264,7 @@ fn shape(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>) -> Res
             {
                 return unsupported();
             }
-            MaskCopyPlan::new(&mask.surface, control)?;
+            MaskCopyPlan::new(&mask.surface, mask.bounds, control)?;
         }
         _ => return Err(BackingError::Integrity),
     }
@@ -412,7 +448,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
         return Err(BackingError::Allocation);
     }
     for mask in &source.filter_masks {
-        let plan = MaskCopyPlan::new(&mask.surface, control)?;
+        let plan = MaskCopyPlan::new(&mask.surface, mask.bounds, control)?;
         destination.filter_masks.push(FilterMask { id: mask.id, owner: mask.owner, bounds: mask.bounds, surface: plan.copy(&mask.surface, control)? });
     }
     match kind {
@@ -465,3 +501,7 @@ mod tests;
 #[cfg(test)]
 #[path = "accounted_filter_readonly_patch_tests.rs"]
 mod patch_tests;
+
+#[cfg(test)]
+#[path = "accounted_filter_readonly_multitile_tests.rs"]
+mod multitile_tests;

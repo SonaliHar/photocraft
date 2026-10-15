@@ -678,9 +678,18 @@ fn qualify_selection_mask_controlled(state: &photocraft_doc::XcfState, node: &Fi
         && format.mode == photocraft_color::ColorMode::Grayscale
         && !format.alpha
         && matches!(format.sample, photocraft_color::SampleType::U16 | photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64);
-    let color_temperature_precision_mask = (node.operation.name == "gimp:threshold-alpha"
+    let threshold_alpha_precision_mask = node.operation.name == "gimp:threshold-alpha"
         && node.operation.schema_epoch == crate::gimp_filters::THRESHOLD_ALPHA_PRECISION_EPOCH
-        || node.operation.name == "gimp:threshold" && node.operation.schema_epoch == crate::gimp_filters::THRESHOLD_PRECISION_EPOCH
+        && !extent.is_empty()
+        && extent.x0 == 0
+        && extent.y0 == 0
+        && extent.width() <= 262144
+        && extent.height() <= 262144
+        && u64::from(extent.width()).checked_mul(u64::from(extent.height())).is_some_and(|pixels| pixels <= 1 << 30)
+        && format.mode == photocraft_color::ColorMode::Grayscale
+        && !format.alpha
+        && matches!(format.sample, photocraft_color::SampleType::U16 | photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64);
+    let color_temperature_precision_mask = (node.operation.name == "gimp:threshold" && node.operation.schema_epoch == crate::gimp_filters::THRESHOLD_PRECISION_EPOCH
         || node.operation.name == "gegl:saturation"
             && matches!(
                 node.operation.schema_epoch.as_str(),
@@ -730,6 +739,7 @@ fn qualify_selection_mask_controlled(state: &photocraft_doc::XcfState, node: &Fi
         || brightness_precision_mask
         || gegl_levels_precision_mask
         || exposure_black_precision_mask
+        || threshold_alpha_precision_mask
         || color_temperature_precision_mask
         || saturation_yuv_mask
         || color_balance_mask)
@@ -737,7 +747,8 @@ fn qualify_selection_mask_controlled(state: &photocraft_doc::XcfState, node: &Fi
     {
         return Err(CompositionError::Unsupported("unqualified precision point selection mask bits"));
     }
-    let qualified_format = color_temperature_precision_mask
+    let qualified_format = threshold_alpha_precision_mask
+        || color_temperature_precision_mask
         || saturation_yuv_mask
         || color_balance_mask
         || exposure_black_precision_mask
@@ -758,24 +769,45 @@ fn qualify_selection_mask_controlled(state: &photocraft_doc::XcfState, node: &Fi
                     alpha: false
                 }
             ));
+    let mask_payload_limit = if threshold_alpha_precision_mask {
+        // Price the actual sparse full-canvas grid, retaining the existing
+        // preparation ceiling. Extra tiles outside that grid are not inert.
+        let side = photocraft_geom::TILE_SIZE as u64;
+        let columns = u64::from(extent.width()).checked_add(side - 1).ok_or(CompositionError::Invalid("threshold mask columns"))? / side;
+        let rows = u64::from(extent.height()).checked_add(side - 1).ok_or(CompositionError::Invalid("threshold mask rows"))? / side;
+        for (coordinate, _) in mask.surface.tiles() {
+            mask_controlled::poll(control)?;
+            if u64::try_from(coordinate.tx).ok().is_none_or(|x| x >= columns)
+                || u64::try_from(coordinate.ty).ok().is_none_or(|y| y >= rows)
+            {
+                return Err(CompositionError::Invalid("threshold mask tile outside canvas"));
+            }
+        }
+        columns.checked_mul(rows)
+            .and_then(|n| n.checked_mul(side))
+            .and_then(|n| n.checked_mul(side))
+            .and_then(|n| n.checked_mul(format.bytes_per_pixel() as u64))
+            .and_then(|n| n.checked_add(format.bytes_per_pixel() as u64))
+            .ok_or(CompositionError::Invalid("threshold mask capacity"))?
+            .min(CACHE_BYTES)
+    } else if ((value_precision_mask
+        || brightness_precision_mask
+        || gegl_levels_precision_mask
+        || exposure_black_precision_mask
+        || color_temperature_precision_mask
+        || color_balance_mask)
+        && format.sample == photocraft_color::SampleType::F64)
+        || matches!(node.operation.schema_epoch.as_str(), FINITE_GAUSSIAN_EPOCH | BOX_BLUR_EPOCH | MEDIAN_COLOR_EPOCH | MEDIAN_GRAY_EPOCH)
+    {
+        8 * 65536 + 8
+    } else {
+        4 * 65536 + 4
+    };
     if masks.next().is_some()
         || mask.owner != node.id
         || mask.bounds != extent
         || !qualified_format
-        || mask.surface.resident_payload_bytes()?
-            > if ((value_precision_mask
-                || brightness_precision_mask
-                || gegl_levels_precision_mask
-                || exposure_black_precision_mask
-                || color_temperature_precision_mask
-                || color_balance_mask)
-                && format.sample == photocraft_color::SampleType::F64)
-                || matches!(node.operation.schema_epoch.as_str(), FINITE_GAUSSIAN_EPOCH | BOX_BLUR_EPOCH | MEDIAN_COLOR_EPOCH | MEDIAN_GRAY_EPOCH)
-            {
-                8 * 65536 + 8
-            } else {
-                4 * 65536 + 4
-            }
+        || mask.surface.resident_payload_bytes()? > mask_payload_limit
     {
         return Err(CompositionError::Unsupported("unqualified selection filter mask domain"));
     }
@@ -788,6 +820,7 @@ fn qualify_selection_mask_controlled(state: &photocraft_doc::XcfState, node: &Fi
             || brightness_precision_mask
             || gegl_levels_precision_mask
             || exposure_black_precision_mask
+            || threshold_alpha_precision_mask
             || color_temperature_precision_mask
             || color_balance_mask)
             && !item.visible)

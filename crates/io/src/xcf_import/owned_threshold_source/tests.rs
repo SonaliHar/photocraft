@@ -184,3 +184,6 @@ fn actual_pinned_sources_promote_same_native_layer_mask_and_refund_catalog() {
     }
     drop(outside);
 }
+
+#[path = "geometry_tests.rs"]
+mod geometry;

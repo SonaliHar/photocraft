@@ -346,7 +346,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     fn admissions(file: &XcfFile<Self>, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<admission::AdmissionDomains, IoError> {
         let threshold = P::family(file) == SelectedStagedFamily::ThresholdAlpha;
         if threshold {
-            if !precision_point_source::qualify(file, "gimp:threshold-alpha", false, false, ctl, shared)? {
+            if !precision_point_source::qualify_threshold_geometry(file, ctl, shared)? {
                 return Err(IoError::Unsupported("staged Threshold Alpha source is outside the existing precision-point predicate".into()));
             }
         } else if file.encoding != Encoding::NonlinearProfile

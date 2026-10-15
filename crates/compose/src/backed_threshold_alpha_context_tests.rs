@@ -270,3 +270,6 @@ mod disabled;
 
 #[path = "backed_threshold_alpha_operative_tests.rs"]
 mod operative;
+
+#[path = "gimp_threshold_alpha_geometry_tests.rs"]
+mod geometry;

@@ -28,9 +28,45 @@ pub(super) fn qualify<P: ExactParsedPlane>(
     control: &Interrupt<'_>,
     budget: Option<&photocraft_xcf::Budget<'_>>,
 ) -> Result<bool, IoError> {
+    qualify_geometry(file, operation, balance_depth, Geometry::Frozen { exposure: exposure_geometry }, control, budget)
+}
+
+/// Private sealed staged Threshold Alpha route only. Eager/default callers keep
+/// the frozen geometry above; this changes dimensions, not source/working roles.
+pub(super) fn qualify_threshold_geometry<P: ExactParsedPlane>(
+    file: &XcfFile<P>,
+    control: &Interrupt<'_>,
+    budget: Option<&photocraft_xcf::Budget<'_>>,
+) -> Result<bool, IoError> {
+    qualify_geometry(file, "gimp:threshold-alpha", false, Geometry::ThresholdCanvas, control, budget)
+}
+enum Geometry {
+    Frozen { exposure: bool },
+    ThresholdCanvas,
+}
+fn qualify_geometry<P: ExactParsedPlane>(
+    file: &XcfFile<P>,
+    operation: &str,
+    balance_depth: bool,
+    geometry: Geometry,
+    control: &Interrupt<'_>,
+    budget: Option<&photocraft_xcf::Budget<'_>>,
+) -> Result<bool, IoError> {
     poll(control, budget, 32)?;
-    let canvas = if exposure_geometry { (295, 160) } else { (8, 6) };
-    let drawable = if exposure_geometry { (257, 129) } else { (8, 6) };
+    let (canvas, drawable, exposure_geometry) = match geometry {
+        Geometry::Frozen { exposure } => (if exposure { (295, 160) } else { (8, 6) }, if exposure { (257, 129) } else { (8, 6) }, exposure),
+        Geometry::ThresholdCanvas => {
+            if file.width == 0
+                || file.height == 0
+                || file.width > 262144
+                || file.height > 262144
+                || u64::from(file.width).checked_mul(u64::from(file.height)).is_none_or(|n| n > 1 << 30)
+            {
+                return Ok(false);
+            }
+            ((file.width, file.height), (file.width, file.height), false)
+        }
+    };
     let wide = matches!(
         operation,
         "gegl:brightness-contrast"
@@ -127,7 +163,7 @@ pub(super) fn qualify<P: ExactParsedPlane>(
     let stride = descriptor.channels.checked_mul(width).ok_or_else(|| bad("pixel stride overflow"))?;
     let expected = usize::try_from(drawable.0)
         .ok()
-        .and_then(|w| w.checked_mul(drawable.1 as usize))
+        .and_then(|w| usize::try_from(drawable.1).ok().and_then(|h| w.checked_mul(h)))
         .and_then(|n| n.checked_mul(stride))
         .ok_or_else(|| bad("plane byte count overflow"))?;
     let maximum_block = stride.checked_mul(64).ok_or_else(|| bad("visitor block overflow"))?;

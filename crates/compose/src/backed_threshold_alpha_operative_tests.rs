@@ -1,5 +1,5 @@
 //! UNRUN bounded scheduling/current-owner validation drafts. Wide rectangles
-//! exercise only the private scheduler, not a newly admitted storage dimension.
+//! exercise only the private scheduler, not source geometry authority.
 use super::*;
 use std::sync::atomic::AtomicBool;
 
@@ -87,7 +87,7 @@ fn actual_context_uses_its_one_pixel_limits_and_releases_private_bands_without_m
 }
 
 #[test]
-fn quota_denial_is_private_and_storage_dimension_admission_is_unchanged() {
+fn quota_denial_is_private_and_canvas_backing_mismatch_is_refused() {
     let (doc, q, guard, reads, p, _) = fixture(ColorMode::Grayscale, SampleType::F32, SampleEncoding::Linear);
     let owner = adopt(doc, guard, q.clone());
     let prepared = PreparedBackedThresholdAlphaContext::new(&owner, p, Default::default(), &ctl()).unwrap();
@@ -98,6 +98,8 @@ fn quota_denial_is_private_and_storage_dimension_admission_is_unchanged() {
     drop(hold);
     assert_eq!(q.usage().unwrap(), baseline);
     let (mut doc, q, guard, _, _, _) = fixture(ColorMode::Rgb, SampleType::F32, SampleEncoding::Linear);
+    // Changing only the canvas leaves the actual layer descriptor and mask at
+    // 8x6. Wider admitted geometry cannot authorize that backing mismatch.
     doc.size = Size::new(257, 3);
     assert!(AccountedDocument::from_owned_readonly_threshold_alpha_storage(doc, guard, q, &ctl()).is_err());
 }

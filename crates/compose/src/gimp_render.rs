@@ -701,6 +701,16 @@ fn prepare<'a>(
                                     && extent.width() == 257
                                     && extent.height() == 129
                                     && matches!((extent.x0, extent.y0), (-13, 13) | (17, -11))
+                            } else if precision_threshold_alpha {
+                                // This point operation has no neighborhood/offset dependency.
+                                // Keep its full-canvas geometry distinct from the other
+                                // independently scoped precision-point source families.
+                                doc.size.width > 0
+                                    && doc.size.height > 0
+                                    && doc.size.width <= 262144
+                                    && doc.size.height <= 262144
+                                    && u64::from(doc.size.width).checked_mul(u64::from(doc.size.height)).is_some_and(|pixels| pixels <= 1 << 30)
+                                    && extent == doc.bounds()
                             } else {
                                 doc.size == photocraft_doc::Size::new(8, 6) && extent == Rect::new(0, 0, 8, 6)
                             }
@@ -729,7 +739,16 @@ fn prepare<'a>(
                             && layer.surface().is_some_and(|surface| {
                                 surface.format() == doc.pixel_format()
                                     && surface.try_read_interleaved(extent).is_ok_and(|bytes| {
-                                        bytes.len() == (if exposure_geometry { 257 * 129 } else { 48 }) * surface.channels() * width
+                                        (if precision_threshold_alpha {
+                                            usize::try_from(extent.width())
+                                                .ok()
+                                                .and_then(|w| w.checked_mul(usize::try_from(extent.height()).ok()?))
+                                                .and_then(|n| n.checked_mul(surface.channels()))
+                                                .and_then(|n| n.checked_mul(width))
+                                                .is_some_and(|expected| bytes.len() == expected)
+                                        } else {
+                                            bytes.len() == (if exposure_geometry { 257 * 129 } else { 48 }) * surface.channels() * width
+                                        })
                                             && bytes.chunks_exact(width).all(|raw| match doc.depth {
                                                 photocraft_color::SampleType::U8 | photocraft_color::SampleType::U16 | photocraft_color::SampleType::U32 => {
                                                     true

@@ -327,3 +327,6 @@ fn legacy_oracle(file: &XcfFile, operation: &str, balance_depth: bool, exposure_
                 })
         })
 }
+
+#[path = "precision_point_source_geometry_tests.rs"]
+mod geometry;
