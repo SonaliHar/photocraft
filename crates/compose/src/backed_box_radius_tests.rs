@@ -2,6 +2,8 @@
 //! no numerical producer acceptance, deadline or large-image throughput claim.
 #[path = "backed_box_activity_tests.rs"]
 mod layer_activity;
+#[path = "backed_box_move_tests.rs"]
+mod translated_input;
 use super::*;
 fn canonical_reference(sample: SampleType, s: Rect, r: u32, tile: photocraft_geom::TileCoord, p: &Profile) -> (Rect, Surface) {
     let source = resident(photocraft_color::PixelFormat::new(ColorMode::Rgb, sample, true), s);

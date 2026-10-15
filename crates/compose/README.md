@@ -949,3 +949,10 @@ The original-source envelope still requires a visible, unit-opacity layer and an
 enabled filter. Existing Normal-over-zero display consumes layer activity after
 full native/default/mask/profile and operative validation; hiding a layer or
 setting opacity zero never skips that proof. No kernel/CMS arithmetic changes.
+
+Observed Box CURRENT Move translates the fixed-root native input view and
+canonical layer bounds, then rebuilds the context for the new operative source
+rectangle. Box is recomputed on the world-aligned canonical tile grid; shifting
+an old filtered bitmap would change the rolling reset schedule. The canvas-bound
+zero effect mask, source pixels/defaults, profiles and filter stack remain exact.
+New translated-render reference drafts are UNRUN; no compose arithmetic changes.

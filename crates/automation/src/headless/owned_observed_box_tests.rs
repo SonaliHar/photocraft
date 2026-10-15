@@ -14,7 +14,7 @@ fn refuse_mutations(h: &mut Headless) {
         ("xcf.filter.enable", json!({"filterId":id,"enabled":false,"opacityF64Bits":"0x3ff0000000000000"})),
         ("xcf.filter.set", json!({"filterId":id,"arguments":[{"name":"radius","value":{"Number":{"Signed":{"value":1001,"width":32}}}}]})),
         ("layer.setProps", json!({"blend":"multiply"})),
-        ("layer.translate", json!({"dx":1})),
+        ("layer.translate", json!({"target":"mask","dx":1})),
         ("select.all", Value::Null),
         ("edit.clear", Value::Null),
     ] {

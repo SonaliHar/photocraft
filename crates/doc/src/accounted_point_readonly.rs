@@ -28,6 +28,8 @@ pub use filter_remove::PointFilterRemovePatch;
 pub(super) mod metadata;
 #[path = "accounted_point_readonly/properties.rs"]
 mod properties;
+#[path = "accounted_point_readonly/translation.rs"]
+mod translation;
 pub(super) fn layer_named(owner: &AccountedDocument, patch: ReadonlyLayerNamePatch<'_>, control: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
     properties::layer_named(owner, patch, control)
 }
@@ -517,6 +519,8 @@ pub(super) enum CopyKind<'a> {
     LayerName(ReadonlyLayerNamePatch<'a>),
     LayerProperties(readonly_layer_properties::Plan<'a>),
     AssignedLayerProperties(readonly_layer_properties::Plan<'a>),
+    Translation(&'a translation::Plan),
+    AssignedTranslation(&'a translation::Plan),
     Filter(patch::Plan),
     Structured(structured_patch::Plan<'a>),
     Move(filter_move::Plan),
@@ -543,9 +547,19 @@ pub(super) fn current_copy(
     control: &ReadControl<'_>,
 ) -> Result<AccountedDocument, BackingError> {
     if owner.is_readonly_assigned_point_storage()
-        && !matches!(kind, CopyKind::Rename(_) | CopyKind::AssignedEnabled(_) | CopyKind::AssignedFilter(_) | CopyKind::AssignedLayerProperties(_))
+        && !matches!(
+            kind,
+            CopyKind::Rename(_)
+                | CopyKind::AssignedEnabled(_)
+                | CopyKind::AssignedFilter(_)
+                | CopyKind::AssignedLayerProperties(_)
+                | CopyKind::AssignedTranslation(_)
+        )
         || !owner.is_readonly_assigned_point_storage()
-            && matches!(kind, CopyKind::AssignedEnabled(_) | CopyKind::AssignedFilter(_) | CopyKind::AssignedLayerProperties(_))
+            && matches!(
+                kind,
+                CopyKind::AssignedEnabled(_) | CopyKind::AssignedFilter(_) | CopyKind::AssignedLayerProperties(_) | CopyKind::AssignedTranslation(_)
+            )
     {
         return refused();
     }
@@ -558,7 +572,9 @@ pub(super) fn current_copy(
         | CopyKind::Filter(_)
         | CopyKind::Structured(_)
         | CopyKind::Move(_)
-        | CopyKind::Remove(_) => 0,
+        | CopyKind::Remove(_)
+        | CopyKind::Translation(_)
+        | CopyKind::AssignedTranslation(_) => 0,
     };
     let replacement_value_bytes = match kind {
         CopyKind::Structured(plan) => plan.copy_index_bytes(),
@@ -618,6 +634,7 @@ pub(super) fn current_copy(
         CopyKind::Structured(plan) => structured_patch::apply(&mut document, plan, control)?,
         CopyKind::Move(plan) => filter_move::apply(&mut document, plan, control)?,
         CopyKind::Remove(plan) => filter_remove::apply(&mut document, plan, control)?,
+        CopyKind::Translation(plan) | CopyKind::AssignedTranslation(plan) => translation::apply(&mut document, plan, control)?,
     }
     let actual =
         measured_owner(owner, &document, control)?.index.checked_add(std::mem::size_of::<OriginalRetention>() as u64 + 128).ok_or(BackingError::Length)?;

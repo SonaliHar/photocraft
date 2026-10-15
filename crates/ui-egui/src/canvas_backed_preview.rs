@@ -313,3 +313,7 @@ mod assigned_gaussian_tests;
 #[cfg(all(test, not(target_arch="wasm32")))]
 #[path="canvas_streamed_box_tests.rs"]
 mod streamed_box_tests;
+
+#[cfg(all(test, not(target_arch="wasm32")))]
+#[path="canvas_observed_box_move_tests.rs"]
+mod observed_box_move_tests;

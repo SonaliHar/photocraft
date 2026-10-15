@@ -65,7 +65,7 @@ fn observed_box_metadata_headless_continues_native_and_preserves_permissions() {
             ("layer.setProps", json!({"blend":"multiply"})),
             ("layer.setProps", json!({"layer":u64::MAX,"visible":true})),
             ("layer.setProps", json!({"name":"refuse","coalesce":"a".repeat(129)})),
-            ("layer.translate", json!({"dx":1})),
+            ("layer.translate", json!({"target":"mask","dx":1})),
             ("select.all", Value::Null),
             ("xcf.mask.enabled.set", json!({"maskId":"1","enabled":false})),
         ] {

@@ -16,7 +16,7 @@ fn invalid(message: &str) -> EngineError {
 }
 /// A routing hint only; the actual L1/current renderer gates remain mandatory.
 pub(super) fn candidate(owner: &AccountedDocument) -> bool {
-    !owner.is_readonly_assigned_point_storage()
+    crate::observed_box_translation_candidate(owner) || (!owner.is_readonly_assigned_point_storage()
         && !owner.is_readonly_gaussian_group_storage()
         && !owner.is_readonly_point_storage()
         && !owner.is_readonly_threshold_storage()
@@ -25,20 +25,29 @@ pub(super) fn candidate(owner: &AccountedDocument) -> bool {
         && owner.document().layers.len() <= 4096
         && owner.document().xcf_state.is_some()
         && owner.document().source_color_context.is_some()
-        && owner.document().layers.first().is_some_and(|l| matches!(&l.content, photocraft_doc::LayerContent::BackedRaster(_)))
+        && owner.document().layers.first().is_some_and(|l| matches!(&l.content, photocraft_doc::LayerContent::BackedRaster(_))))
 }
 #[derive(Clone, Copy)]
 enum MovePolicy {
+    ObservedBox,
+    RefusedPoint,
     FlatComposite,
     Plain,
     Assigned,
 }
 impl MovePolicy {
     fn for_owner(owner: &AccountedDocument) -> Self {
-        if owner.is_readonly_flat_composite_storage() { Self::FlatComposite } else if super::assigned_translate::candidate(owner) { Self::Assigned } else { Self::Plain }
+        if crate::observed_box_translation_candidate(owner) { Self::ObservedBox }
+        else if owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage() { Self::RefusedPoint }
+        else if owner.is_readonly_flat_composite_storage() { Self::FlatComposite } else if super::assigned_translate::candidate(owner) { Self::Assigned } else { Self::Plain }
     }
     fn validate(self, owner: &AccountedDocument, layers: &[LayerId], dx: i32, dy: i32, c: &ReadControl<'_>) -> Result<()> {
         match self {
+            Self::RefusedPoint => Err(BackingError::Unsupported.into()),
+            Self::ObservedBox => {
+                let [layer] = layers else { return Err(BackingError::Unsupported.into()) };
+                Ok(owner.validate_readonly_point_layer_translation(*layer,dx,dy,c)?)
+            }
             Self::FlatComposite => Ok(owner.validate_flat_composite_layers_translation(layers, dx, dy, c)?),
             Self::Plain => Ok(owner.validate_imported_layers_translation(layers, dx, dy, c)?),
             Self::Assigned => {
@@ -49,6 +58,11 @@ impl MovePolicy {
     }
     fn stage(self, owner: &AccountedDocument, layers: &[LayerId], dx: i32, dy: i32, c: &ReadControl<'_>) -> Result<AccountedDocument> {
         match self {
+            Self::RefusedPoint => Err(BackingError::Unsupported.into()),
+            Self::ObservedBox => {
+                let [layer] = layers else { return Err(BackingError::Unsupported.into()) };
+                Ok(owner.try_with_readonly_point_layer_translation(*layer,dx,dy,c)?)
+            }
             Self::FlatComposite => Ok(owner.try_with_flat_composite_layers_translation(layers, dx, dy, c)?),
             Self::Plain => Ok(owner.try_with_imported_layers_translation(layers, dx, dy, c)?),
             Self::Assigned => {
@@ -59,6 +73,8 @@ impl MovePolicy {
     }
     fn current(self, owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<()> {
         match self {
+            Self::RefusedPoint => Err(BackingError::Unsupported.into()),
+            Self::ObservedBox => crate::accounted_native_open::validate_current_observed_box_storage(owner,c),
             Self::FlatComposite => crate::accounted_xcf_open::separable_blend::validate_current_separable_blend_storage(owner, c),
             Self::Plain => current(owner, c),
             Self::Assigned => super::assigned_translate::current(owner, c),
@@ -391,3 +407,7 @@ mod bulk_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "imported_translate_flat_tests.rs"]
 mod flat_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "imported_translate_observed_tests.rs"]
+mod observed_tests;

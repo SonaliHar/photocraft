@@ -11,6 +11,10 @@ use photocraft_raster::backing::quota::{BackingQuota, QuotaLease};
 pub fn owned_layer_metadata_candidate(owner:&AccountedDocument)->bool {
     observed_box_layer_metadata_candidate(owner) || owner.is_readonly_flat_composite_storage() || assigned_geometry_metadata_candidate(owner)
 }
+/// CURRENT Move routing only. Actual storage, target and Box proofs remain mandatory.
+pub fn observed_box_translation_candidate(owner: &AccountedDocument) -> bool {
+    observed_box_layer_metadata_candidate(owner)
+}
 pub(crate) fn point_metadata_class(owner: &AccountedDocument) -> bool {
     owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage()
 }
@@ -80,7 +84,7 @@ impl MetadataPolicy {
     pub(crate) fn validate_current(self, owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<()> {
         match self {
             Self::Plain => if point_metadata_class(owner) { Err(BackingError::Unsupported.into()) } else { Ok(()) },
-            Self::ObservedBox => crate::accounted_native_open::validate_current_observed_box_metadata(owner,c),
+            Self::ObservedBox => crate::accounted_native_open::validate_current_observed_box_storage(owner,c),
             Self::FlatComposite => crate::accounted_xcf_open::separable_blend::validate_current_separable_blend_storage(owner,c),
             Self::AssignedGeometry => crate::accounted_xcf_open::analytic_geometry::validate_current_analytic_geometry_storage(owner, c),
             Self::IsolatedNormalGroup => crate::accounted_xcf_open::isolated_normal_group::validate_current_isolated_normal_group_storage(owner, c),

@@ -1191,6 +1191,7 @@ impl Session {
             // work counter and active-operation deadline across both proofs and
             // publication. Other registered commands retain their old ceiling.
             if (matches!(id, "xcf.filter.set" | "xcf.filter.enable")
+                || id == "layer.translate" && self.active().and_then(|s|s.doc.accounted()).is_some_and(crate::observed_box_translation_candidate)
                 || id == "layer.setProps" && self.active().and_then(|s|s.doc.accounted()).is_some_and(crate::accounted_session::metadata_gesture::observed_box_layer_metadata_candidate))
                 && let Some(owner) = self.active().and_then(|state| state.doc.accounted())
                 && (owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())

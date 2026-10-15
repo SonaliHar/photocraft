@@ -195,8 +195,8 @@ pub(crate) fn validate_current_stock_point_storage(owner: &photocraft_doc::accou
     validate_current_owned_filter_storage(owner, control)
 }
 
-/// Metadata publication proves the full Box recipe and actual canvas under the caller's one control.
-pub(crate) fn validate_current_observed_box_metadata(owner: &photocraft_doc::accounted_document::AccountedDocument, control: &ReadControl<'_>) -> Result<()> {
+/// Typed CURRENT publication proves the full Box recipe and actual canvas under the caller's one control.
+pub(crate) fn validate_current_observed_box_storage(owner: &photocraft_doc::accounted_document::AccountedDocument, control: &ReadControl<'_>) -> Result<()> {
     if !crate::accounted_session::metadata_gesture::observed_box_layer_metadata_candidate(owner) {
         return Err(BackingError::Unsupported.into());
     }

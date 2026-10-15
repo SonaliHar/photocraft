@@ -90,7 +90,7 @@ fn observed_box_metadata_uses_existing_layer_controls_and_gestures() {
             for (command, params) in [
                 ("layer.setProps", json!({"blend":"multiply"})),
                 ("xcf.items.visibility.set", json!({"items":[{"kind":"layer","id":layer.id.0.to_string()}],"visible":false})),
-                ("layer.translate", json!({"dx":1})),
+                ("layer.translate", json!({"target":"mask","dx":1})),
             ] {
                 assert!(app.run(command, params).is_err());
             }

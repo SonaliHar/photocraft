@@ -182,7 +182,7 @@ pub fn run(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, St
     let owned_composition = id == "xcf.composition.set"
         && app.session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_flat_composite_storage());
     let owned_move = id == "layer.translate"
-        && app.session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_flat_composite_storage());
+        && app.session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_flat_composite_storage() || photocraft_engine::observed_box_translation_candidate(owner));
     // This registered operation prepares and publishes one synchronous transaction.
     // The engine deliberately refuses background/start callers.
     if !app.background_jobs || owned_metadata || owned_composition || owned_move || matches!(id,

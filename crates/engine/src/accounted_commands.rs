@@ -73,6 +73,7 @@ pub(crate) fn observed_box_mutation_refused(session: &Session, id: &str) -> bool
     supports(id)
         && !matches!(id, "layer.select" | "edit.undo" | "edit.redo" | "history.selectState")
         && session.active().and_then(|state| state.doc.accounted()).is_some_and(point::observed_box_readonly)
+        && !(id == "layer.translate" && session.active().and_then(|s|s.doc.accounted()).is_some_and(crate::observed_box_translation_candidate))
         && !(id == "layer.setProps" && session.active().and_then(|s|s.doc.accounted()).is_some_and(crate::accounted_session::metadata_gesture::observed_box_layer_metadata_candidate))
         && !(matches!(id, "xcf.filter.set" | "xcf.filter.enable")
             && session.active().and_then(|state| state.doc.accounted()).is_some_and(point::observed_box_edit_candidate))

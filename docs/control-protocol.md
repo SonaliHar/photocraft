@@ -1985,3 +1985,20 @@ zero-opacity CURRENT documents still receive complete proof. The standard Box
 work/deadline policy applies to this narrow command route; all provider work is
 charged and high-radius/large workflows may still reach its limits. New drafts
 and runtime/visual acceptance remain deferred.
+
+Observed Box CURRENT owners now join existing layer.translate through its shared
+Move parser, targets, px/pt conversion, hidden-layer guard, native Position/All
+locks, gesture key and first undo label. The synchronous UI/Headless routes retain
+existing behavior. A nonzero edit requires the exact observed Box policy and
+complete current/history/staged operative and canvas proof under one standard
+Box work/deadline control. Other actual Point families cannot fall through to a
+generic Move policy. Existing rounded/direct zero vectors remain mutation-free
+upstream no-ops before target/lock/render proof; that grants no edit authority.
+
+The data adapter retains the original native root and shifts only the operative
+view, canonical layer bounds and existing effects-reference arithmetic. Canvas
+filter masks and their offsets, nodes, raw words, stack revisions and both profile
+roles stay unchanged. Linked/mask/selection/pixel editing is not added. Rendering
+recomputes Box on the shifted world tile grid instead of shifting a filtered
+bitmap. Original source admission stays unchanged; numerical, visual, native
+workflow and performance checks remain deferred.
