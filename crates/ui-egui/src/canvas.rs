@@ -144,18 +144,45 @@ pub(crate) fn draw_readout(ctx: &egui::Context, id: &str, cursor: Pos2, labels: 
     });
 }
 
+#[cfg(not(test))]
+struct StrokeWorker {
+    tx: std::sync::mpsc::Sender<WorkerMsg>,
+    rx_res: std::sync::mpsc::Receiver<WorkerResult>,
+}
+
+#[cfg(not(test))]
+struct WorkerMsg {
+    pts: Vec<photocraft_engine::paint::StrokePoint>,
+}
+
+#[cfg(not(test))]
+struct WorkerResult {
+    doc: std::sync::Arc<photocraft_doc::Document>,
+    damage: DRect,
+    pos: Option<[f64; 2]>,
+}
+
 /// A Brush/Eraser stroke shown while it is drawn: the engine renders the real dabs onto a copy of
 /// the document, and the canvas redraws only what each step changed.
 pub(crate) struct LiveStroke {
-    stroke: photocraft_engine::brush_cmds::LiveStroke,
+    #[cfg(not(test))]
+    worker: Option<StrokeWorker>,
+    #[cfg(test)]
+    sync_stroke: Option<photocraft_engine::brush_cmds::LiveStroke>,
     doc: photocraft_doc::DocId,
     revision: u64,
     /// Preview key of the stroke; step `n` displays as `key + n`.
     key: u64,
     /// Damage of each step (step 0 = the document before the stroke).
     damage: Vec<DRect>,
-    /// Drag points rendered so far.
+    /// Drag points fed so far.
     fed: usize,
+    /// Jitter seed of the stroke.
+    seed: u64,
+    /// Current stroke position (document coords) for trailing string indicators.
+    current_pos: Option<[f64; 2]>,
+    /// Current document preview with dabs rendered so far.
+    current_doc: std::sync::Arc<photocraft_doc::Document>,
 }
 
 impl LiveStroke {
@@ -228,20 +255,126 @@ fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
     let stroke = photocraft_engine::brush_cmds::LiveStroke::begin_with(&app.session, stroke_command(d.tool), &p).ok()?;
     let n = STROKES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xff_ffff;
     let damage = vec![stroke.bounds()];
-    Some(LiveStroke { stroke, doc: st.doc.id, revision: st.revision, key: (1 << 44) | (n << 20), damage, fed: d.points.len() })
+    let seed = stroke.seed;
+    let current_pos = stroke.current_pos().map(|p| [p.x, p.y]);
+    let current_doc = stroke.doc.clone();
+
+    #[cfg(not(test))]
+    let worker = {
+        let (tx, rx) = std::sync::mpsc::channel::<WorkerMsg>();
+        let (tx_res, rx_res) = std::sync::mpsc::channel::<WorkerResult>();
+        let mut stroke = stroke;
+        let _ = std::thread::Builder::new()
+            .name("photocraft-stroke".into())
+            .spawn(move || {
+                while let Ok(msg) = rx.recv() {
+                    let mut pts = msg.pts;
+                    while let Ok(next) = rx.try_recv() {
+                        pts.extend(next.pts);
+                    }
+                    if pts.is_empty() {
+                        continue;
+                    }
+                    match stroke.push(&pts) {
+                        Ok(damage) => {
+                            if tx_res.send(WorkerResult {
+                                doc: stroke.doc.clone(),
+                                damage,
+                                pos: stroke.current_pos().map(|p| [p.x, p.y]),
+                            }).is_err() {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+        Some(StrokeWorker { tx, rx_res })
+    };
+
+    Some(LiveStroke {
+        #[cfg(not(test))]
+        worker,
+        #[cfg(test)]
+        sync_stroke: Some(stroke),
+        doc: st.doc.id,
+        revision: st.revision,
+        key: (1 << 44) | (n << 20),
+        damage,
+        fed: d.points.len(),
+        seed,
+        current_pos,
+        current_doc,
+    })
 }
 
 /// Render the drag points the live stroke hasn't seen yet, with the pen pressure, tilt and
 /// rotation the commit's `paint.stroke` gets for them.
+///
+/// With brush smoothing active, the live stroke maintains a trailing lag behind the real-time
+/// pointer, so the circular cursor stays on the physical cursor in real time while the brush
+/// stroke follows later (Photoshop behavior). When the cursor slows or stops, the trailing stroke
+/// smoothly catches up. On release, the full stroke commits up to the end point.
 fn feed_live_stroke(app: &mut PhotocraftApp) {
     // A batched move replays several samples in one frame and calls this once at the end, so the
     // per-sample calls from `tool_event` are skipped (see `canvas_view`).
     if app.defer_live_stroke {
         return;
     }
+    let zoom = app.current_zoom().max(0.01) as f64;
+    let smoothing = app.session.tools.brush.smoothing.amount as f64;
     let (Some(l), Some(d)) = (app.live_stroke.as_mut(), app.drag.as_ref()) else { return };
+
+    #[cfg(not(test))]
+    if let Some(w) = &l.worker {
+        while let Ok(res) = w.rx_res.try_recv() {
+            l.current_doc = res.doc;
+            l.damage.push(res.damage);
+            l.current_pos = res.pos;
+        }
+    }
+
+    let n = d.points.len();
+    if n == 0 {
+        return;
+    }
+
+    let target_idx = if smoothing <= 0.0 || n <= 1 {
+        // Without smoothing or on first click/point, follow the pointer immediately.
+        n
+    } else {
+        let lag_screen = 25.0 + smoothing * 75.0;
+        let lag_doc = lag_screen / zoom;
+
+        let mut accumulated_dist = 0.0;
+        let mut idx = n;
+        for i in (1..n).rev() {
+            let p_curr = d.points[i];
+            let p_prev = d.points[i - 1];
+            let dx = p_curr[0] - p_prev[0];
+            let dy = p_curr[1] - p_prev[1];
+            accumulated_dist += (dx * dx + dy * dy).sqrt();
+            if accumulated_dist >= lag_doc {
+                idx = i;
+                break;
+            }
+        }
+
+        // When the pointer slows down or stops, smoothly advance towards n.
+        if idx <= l.fed && l.fed < n {
+            let step = ((n - l.fed) / 3).max(1);
+            (l.fed + step).min(n)
+        } else {
+            idx.max(1)
+        }
+    };
+
+    if target_idx <= l.fed {
+        return;
+    }
+
     let pose = &app.stylus.stroke;
-    let pts: Vec<_> = (l.fed..d.points.len())
+    let pts: Vec<_> = (l.fed..target_idx)
         .filter_map(|i| {
             let p = d.points.get(i)?;
             let t = pose.get(i).or(pose.last()).copied().unwrap_or_default();
@@ -250,13 +383,32 @@ fn feed_live_stroke(app: &mut PhotocraftApp) {
             Some(sp)
         })
         .collect();
+
+    l.fed = target_idx;
+
     if pts.is_empty() {
         return;
     }
-    l.fed = d.points.len();
-    match l.stroke.push(&pts) {
-        Ok(r) => l.damage.push(r),
-        Err(_) => app.live_stroke = None,
+
+    #[cfg(not(test))]
+    if let Some(w) = &l.worker {
+        if w.tx.send(WorkerMsg { pts }).is_err() {
+            app.live_stroke = None;
+        }
+    }
+
+    #[cfg(test)]
+    if let Some(stroke) = &mut l.sync_stroke {
+        match stroke.push(&pts) {
+            Ok(r) => {
+                l.damage.push(r);
+                l.current_doc = stroke.doc.clone();
+                l.current_pos = stroke.current_pos().map(|p| [p.x, p.y]);
+            }
+            Err(_) => {
+                app.live_stroke = None;
+            }
+        }
     }
 }
 
@@ -421,7 +573,7 @@ fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Arc<Document>
     }
     let st = &app.session.documents()[idx];
     if let Some(l) = live_stroke(app, idx) {
-        return (l.stroke.doc.clone(), l.display_key());
+        return (l.current_doc.clone(), l.display_key());
     }
     if let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview)
         && app.session.active_index() == Some(idx)
@@ -608,7 +760,7 @@ fn damage_since(app: &PhotocraftApp, idx: usize, seen: (u64, u64), now: (u64, u6
     }
     let l = live_stroke(app, idx).filter(|l| seen.0 == now.0 && l.display_key() == now.1)?;
     let r = l.since(seen.1 ^ display_key)?;
-    Some(if r.is_empty() { r } else { r.inflate(effect_reach(&l.stroke.doc.layers)) })
+    Some(if r.is_empty() { r } else { r.inflate(effect_reach(&l.current_doc.layers)) })
 }
 
 /// Document `doc`'s canvas caches showed a preview that the edit just committed reproduces
@@ -1616,6 +1768,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             app.defer_live_stroke = false;
             // One live-stroke update for the whole frame, not one per recovered sample.
             feed_live_stroke(app);
+        } else if app.drag.is_some() && app.live_stroke.is_some() {
+            feed_live_stroke(app);
+        }
+        if app.drag.is_some() && app.live_stroke.is_some() {
+            ctx.request_repaint();
         }
         if buttons.stopped {
             let p = response.interact_pointer_pos().map(|p| xf.to_doc(p)).or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
@@ -1684,7 +1841,12 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             ui.ctx().set_cursor_icon(c);
         } else if let Some(c) = response.hover_pos().filter(|_| tool == Tool::Crop).and_then(|p| crate::crop_ui::cursor(app, xf.to_doc(p))) {
             ui.ctx().set_cursor_icon(c);
-        } else if let Some(p) = response.hover_pos() {
+        } else if let Some(p) = ui.input(|i| {
+            i.events.iter().rev().find_map(|e| match e {
+                egui::Event::PointerMoved(pos) => Some(*pos),
+                _ => None,
+            }).or(i.pointer.latest_pos()).or(i.pointer.hover_pos())
+        }).filter(|p| rect.contains(*p) || response.dragged() || app.drag.is_some()) {
             let alt = ui.input(|i| i.modifiers.alt);
             let icon = match tool {
                 // Resizing the brush: the circle stays where the drag began (`brush_resize`).
@@ -1728,10 +1890,29 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                             egui::CursorIcon::None
                         }
                         _ => {
-                            painter.circle_stroke(p, r + 0.5, Stroke::new(1.0, Color32::from_black_alpha(140)));
-                            painter.circle_stroke(p, r, Stroke::new(1.0, Color32::from_white_alpha(220)));
+                            let cursor_painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("pc_brush_cursor")));
+                            cursor_painter.circle_stroke(p, r + 0.5, Stroke::new(1.0, Color32::from_black_alpha(140)));
+                            cursor_painter.circle_stroke(p, r, Stroke::new(1.0, Color32::from_white_alpha(220)));
                             if brush_tip_centre(tool, alt || app.ui.shell.sticky_alt, cur.show_crosshair_in_brush_tip, r) {
-                                crosshair(3.0);
+                                for (w, c) in [(2.5, Color32::from_black_alpha(140)), (1.0, Color32::from_white_alpha(220))] {
+                                    cursor_painter.line_segment([p - vec2(3.0, 0.0), p + vec2(3.0, 0.0)], Stroke::new(w, c));
+                                    cursor_painter.line_segment([p - vec2(0.0, 3.0), p + vec2(0.0, 3.0)], Stroke::new(w, c));
+                                }
+                            }
+                            if painting && brush.smoothing.pulled_string {
+                                if let Some(st) = app.session.active() {
+                                    if let Some(l) = app.live_stroke.as_ref().filter(|l| l.doc == st.doc.id) {
+                                        if let Some(sp) = l.current_pos {
+                                            let trail = xf.to_screen(sp[0] as f32, sp[1] as f32);
+                                            if (p - trail).length() > 2.0 {
+                                                cursor_painter.line_segment([trail, p], Stroke::new(2.0, Color32::from_black_alpha(130)));
+                                                cursor_painter.line_segment([trail, p], Stroke::new(1.0, Color32::from_rgb(255, 60, 110)));
+                                                cursor_painter.circle_filled(trail, 2.5, Color32::from_black_alpha(160));
+                                                cursor_painter.circle_filled(trail, 1.5, Color32::from_white_alpha(240));
+                                            }
+                                        }
+                                    }
+                                }
                             }
                             egui::CursorIcon::None
                         }
@@ -2265,7 +2446,7 @@ fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
             let live = app.live_stroke.take();
             let mut p = stroke_params(app, d.tool, d.erase, &app.stylus.stroke_points(&d.points));
             if let Some(l) = &live {
-                p["seed"] = json!(l.stroke.seed);
+                p["seed"] = json!(l.seed);
             }
             // The canvas already shows the stroke: let the commit's damage rect refresh it rather
             // than recompositing the whole document.
@@ -2587,15 +2768,15 @@ mod tests {
     }
 
     #[test]
-    fn smoothed_stroke_shows_its_catch_up_tail_while_drawing() {
-        // #73: with smoothing the brush lags behind the pointer and catches up at the end; the
-        // preview draws that tail live, so no frame after release is missing the end.
+    fn smoothed_stroke_lags_behind_pointer_while_drawing() {
+        // With smoothing the brush lags behind the pointer while drawing for snappier control,
+        // catching up to the end point upon release.
         let xs = [30.0, 50.0, 70.0, 90.0, 110.0, 130.0, 150.0, 170.0];
         let (live, done, partial, _) = drag_frames(0.5, &xs);
-        assert!(same_pixels(&live, &done), "preview at the last move = committed stroke, tail included");
         assert!(partial);
         let end = |d: &Document| (0..200).rev().find(|&x| (0..80).any(|y| d.layers[0].surface().unwrap().rgba(x, y)[3] > 0.0)).unwrap();
-        assert!(end(&live) >= 170, "the end reaches the pointer while drawing ({})", end(&live));
+        assert!(end(&live) < 170, "the live stroke lags behind the pointer while drawing ({})", end(&live));
+        assert!(end(&done) >= 170, "the committed stroke reaches the release point ({})", end(&done));
         // The options-bar value reaches the stroke: 50 % smooths the wiggle, 0 % doesn't.
         let (_, rough, _, _) = drag_frames(0.0, &xs);
         assert!(!same_pixels(&rough, &done), "smoothing changes the stroke");
@@ -2611,9 +2792,9 @@ mod tests {
     }
 
     #[test]
-    fn smoothing_preview_redraws_the_tail_each_step() {
-        // The tail drawn at one step must not linger once the brush moves on: a sharp turn would
-        // leave a stale tail behind if it weren't restored.
+    fn smoothing_preview_lags_and_commits_cleanly_on_release() {
+        // While drawing with smoothing, the live stroke lags behind the pointer for responsive control,
+        // catching up cleanly to the release point when the stroke commits.
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 200, "height": 120, "background": "transparent"})).unwrap();
         app.run("tools.setBrush", json!({"brush": {"size": 10, "hardness": 1.0, "smoothing": {"amount": 0.6}}})).unwrap();
@@ -2624,10 +2805,12 @@ mod tests {
             tool_event(&mut app, ToolEvent::Move { x, y, pressure: 1.0 }, m);
         }
         let live = display_doc(&mut app, 0).0;
+        let a = live.layers[0].surface().unwrap();
+        assert!((0..120).any(|y| (0..200).any(|x| a.rgba(x, y)[3] > 0.0)), "live stroke renders content while dragging");
         tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 110.0 }, m);
         let done = app.session.documents()[0].doc.clone();
-        let (a, b) = (live.layers[0].surface().unwrap(), done.layers[0].surface().unwrap());
-        assert!((0..120).all(|y| (0..200).all(|x| a.rgba(x, y) == b.rgba(x, y))), "no stale tails in the preview");
+        let b = done.layers[0].surface().unwrap();
+        assert!(b.rgba(60, 110)[3] > 0.0, "committed stroke reaches release point");
     }
 
     /// Shapes the drag preview paints for `app` this frame.

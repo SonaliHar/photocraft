@@ -62,6 +62,7 @@ impl Smoother {
     pub fn push(&mut self, p: StrokePoint, out: &mut Vec<StrokePoint>) {
         let prev_input = self.last_input.replace(p);
         if !self.active() {
+            self.pos = Some(p);
             out.push(p);
             return;
         }
@@ -111,6 +112,11 @@ impl Smoother {
             self.pos = Some(last);
             out.push(last);
         }
+    }
+
+    /// The smoothed brush position so far, before any end-of-stroke catch-up.
+    pub fn current_pos(&self) -> Option<StrokePoint> {
+        self.pos
     }
 }
 
@@ -703,7 +709,7 @@ impl DabGenerator {
     pub fn new(brush: &BrushSettings, zoom: f32) -> Self {
         let interval = brush.build_up.then(|| 1000.0 / f64::from(brush.build_up_rate.clamp(0.1, 1000.0)));
         let dual_on = brush.dual_brush.enabled;
-        let curved = brush.smoothing.amount > 0.0 && !brush.smoothing.pulled_string;
+        let curved = brush.spacing_enabled && !brush.build_up && !brush.smoothing.pulled_string;
         Self {
             smoother: Smoother::new(&brush.smoothing, zoom),
             walker: if brush.spacing_enabled {
@@ -767,5 +773,15 @@ impl DabGenerator {
                 db.build(s, dual);
             }
         }
+    }
+
+    /// Current smoothed brush position.
+    pub fn current_pos(&self) -> Option<StrokePoint> {
+        self.smoother.current_pos()
+    }
+
+    /// Whether stroke smoothing is active.
+    pub fn is_smoothing_active(&self) -> bool {
+        self.smoother.active()
     }
 }

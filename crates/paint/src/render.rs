@@ -423,6 +423,11 @@ impl StrokeRenderer {
         self.cov.bounds
     }
 
+    /// Current smoothed brush position.
+    pub fn current_pos(&self) -> Option<StrokePoint> {
+        self.generator.current_pos()
+    }
+
     fn raster_pending(&mut self) {
         let mut dabs = std::mem::take(&mut self.dab_buf);
         let mut duals = std::mem::take(&mut self.dual_buf);
@@ -476,6 +481,9 @@ impl StrokeRenderer {
     /// tail touches with the tail rendered in, so its `composite` draws exactly those tiles as
     /// [`finish`](Self::finish) would leave them. `None` when finishing adds nothing.
     pub fn tail_preview(&self) -> Option<StrokeRenderer> {
+        if self.generator.is_smoothing_active() {
+            return None;
+        }
         let mut generator = self.generator.clone();
         let (mut dabs, mut duals) = (Vec::new(), Vec::new());
         generator.finish(&mut dabs, &mut duals);
