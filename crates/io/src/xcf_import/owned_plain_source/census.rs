@@ -74,6 +74,17 @@ pub(in crate::xcf_import) fn measure_threshold(doc: &Document, budget: &photocra
     threshold_shape(doc)?;
     measure_inner(doc, budget, control, true)
 }
+/// Closed Histogram Threshold source promotion only; not a caller source proof.
+pub(in crate::xcf_import) fn measure_histogram_threshold(
+    doc: &Document,
+    budget: &photocraft_xcf::Budget<'_>,
+    control: &Interrupt<'_>,
+) -> Result<Census, IoError> {
+    control.check().map_err(|_| IoError::Cancelled)?;
+    budget.consume_work(32, "histogram threshold census shape").map_err(accounting_error)?;
+    histogram_threshold_shape(doc)?;
+    measure_inner(doc, budget, control, true)
+}
 fn measure_inner(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &Interrupt<'_>, threshold: bool) -> Result<Census, IoError> {
     use photocraft_doc::{WorkingProfileInterpretation, physical_resolution::PhysicalUnit, xcf_editing::ItemSetRule};
     control.check().map_err(|_| IoError::Cancelled)?;
@@ -372,6 +383,62 @@ fn threshold_shape(doc: &Document) -> Result<(), IoError> {
     }
     Ok(())
 }
+fn histogram_threshold_shape(doc: &Document) -> Result<(), IoError> {
+    use photocraft_doc::xcf_filters::{ExactNumber, FilterValue};
+    let state = doc.xcf_state.as_ref().ok_or_else(|| invalid("histogram threshold census state"))?;
+    if doc.size != Size::new(8, 6)
+        || doc.mode != ColorMode::Rgb
+        || doc.sample_encoding != Some(photocraft_doc::SampleEncoding::NonlinearProfile)
+        || !matches!(
+            (doc.source_color_context.as_ref().map(|v| v.source_precision), doc.depth),
+            (Some(250), SampleType::U16) | (Some(650), SampleType::F32) | (Some(750), SampleType::F64)
+        )
+        || doc.layers.len() != 1
+        || state.filter_stacks.len() != 1
+        || state.filter_masks.len() != 1
+        || state.items.len() != 2
+        || state.filter_masks.iter().any(|mask| mask.bounds != doc.bounds())
+    {
+        return Err(invalid("histogram threshold census closed storage shape"));
+    }
+    let node = state
+        .filter_stacks
+        .first()
+        .and_then(|s| (s.nodes.len() == 1).then(|| s.nodes.first()).flatten())
+        .ok_or_else(|| invalid("histogram threshold census node"))?;
+    if node.operation.name != "gimp:threshold"
+        || node.operation.stored_version != "0:0"
+        || node.operation.schema_epoch != "xcf-22-stock-threshold-precision-v1"
+        || node.arguments.len() != 3
+        || !node.auxiliary.is_empty()
+    {
+        return Err(invalid("histogram threshold census canonical node"));
+    }
+    let mut seen = 0u8;
+    for a in &node.arguments {
+        let flag = match (a.name.as_str(), &a.value) {
+            ("channel", FilterValue::Enum { domain, value }) if domain == "GimpHistogramChannel" && (0..=5).contains(value) => 1,
+            (name @ ("low" | "high"), FilterValue::Number(ExactNumber::Float32Bits(bits)))
+                if f32::from_bits(*bits).is_finite() && (0.0..=1.0).contains(&f32::from_bits(*bits)) =>
+            {
+                if name == "low" {
+                    2
+                } else {
+                    4
+                }
+            }
+            _ => return Err(invalid("histogram threshold census argument")),
+        };
+        if seen & flag != 0 {
+            return Err(invalid("histogram threshold census duplicate argument"));
+        }
+        seen |= flag;
+    }
+    if seen != 7 {
+        return Err(invalid("histogram threshold census missing argument"));
+    }
+    Ok(())
+}
 fn threshold_storage(state: &photocraft_doc::XcfState, w: &mut Walk<'_, '_>, control: &Interrupt<'_>) -> Result<(), IoError> {
     use photocraft_doc::xcf_filters::{FilterArgument, FilterNode, FilterStack, OperationIdentity};
     for FilterStack { owner: _, nodes, revision: _ } in &state.filter_stacks {
@@ -397,10 +464,13 @@ fn threshold_storage(state: &photocraft_doc::XcfState, w: &mut Walk<'_, '_>, con
             w.optional(source_display_name)?;
             w.optional(source_icon)?;
             w.vector(arguments)?;
-            for FilterArgument { name, value: _ } in arguments {
+            for FilterArgument { name, value } in arguments {
                 w.string(name)?;
+                if let photocraft_doc::xcf_filters::FilterValue::Enum { domain, value: _ } = value {
+                    w.string(domain)?;
+                }
             }
-            // threshold_shape admits only an inline numeric value and zero aux.
+            // Closed shapes admit only inline numeric/enum values and zero aux.
             w.vector(auxiliary)?;
             w.composition(composition)?;
         }

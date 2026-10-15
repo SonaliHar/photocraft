@@ -352,6 +352,10 @@ fn services(inbox: Inbox) -> Services {
             // Pending owns this host-local handle until completion or cancellation.
             Some(Box::new(move || handle.cancel()))
         })),
+        owned_native_bytes_picker: Some(Box::new(move |request, reply| {
+            let handle = owned_xcf_picker::pick_resource(request, move |result| reply.send(result));
+            Some(Box::new(move || handle.cancel()))
+        })),
         screen_pick: screen_color_service(),
         import: Some(Box::new(|name: &str, bytes: &[u8], max_svg_group_depth: usize| {
             photocraft_io::import_with_svg_group_depth(name, bytes, max_svg_group_depth).map_err(|e| e.to_string())

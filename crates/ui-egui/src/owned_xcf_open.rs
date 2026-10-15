@@ -122,6 +122,9 @@ fn open_path(app: &mut PhotocraftApp, path: &str, authority: Authority) -> Resul
     match &imported {
         photocraft_io::OwnedXcfImport::Plain(imported) => app.session.add_owned_plain_xcf_import(imported, name, Some(path), &control),
         photocraft_io::OwnedXcfImport::ThresholdAlpha(imported) => app.session.add_owned_threshold_alpha_xcf_import(imported, name, Some(path), &control),
+        photocraft_io::OwnedXcfImport::HistogramThreshold(imported) => {
+            app.session.add_owned_histogram_threshold_xcf_import(imported, name, Some(path), &control)
+        }
     }
     .map_err(|e| e.to_string())?;
     // Identity/path/profile publication is complete. Existing optional user
@@ -335,7 +338,9 @@ pub(crate) fn adopt_bytes(app: &mut PhotocraftApp, name: &str, imported: &photoc
     match imported {
         photocraft_io::OwnedXcfImport::Plain(value) => app.session.add_owned_plain_xcf_import(value, name, None, control),
         photocraft_io::OwnedXcfImport::ThresholdAlpha(value) => app.session.add_owned_threshold_alpha_xcf_import(value, name, None, control),
-    }.map_err(|e| e.to_string())?;
+        photocraft_io::OwnedXcfImport::HistogramThreshold(value) => app.session.add_owned_histogram_threshold_xcf_import(value, name, None, control),
+    }
+    .map_err(|e| e.to_string())?;
     crate::jobs_ui::after_open(app, name, None, &prepared.warnings, None);
     Ok(prepared.value)
 }

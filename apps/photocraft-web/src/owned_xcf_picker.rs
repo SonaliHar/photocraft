@@ -102,6 +102,10 @@ fn setup(state: &Rc<State>) -> Result<(), Error> {
     let input = document.create_element("input").map_err(|_| Error::PickerStart)?.dyn_into::<HtmlInputElement>().map_err(|_| Error::UnsupportedPicker)?;
     input.set_type("file");
     input.set_multiple(false);
+    if let Some(request) = state.request.take() {
+        input.set_accept(request.extension());
+        state.request.set(Some(request));
+    }
     input.set_hidden(true);
     let change = handler(state, |state| {
         if state.reading.replace(true) {

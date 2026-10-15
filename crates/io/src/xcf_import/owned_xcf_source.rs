@@ -1,4 +1,4 @@
-//! Single-decode selection between the two existing owned source families.
+//! Single-decode selection between explicit owned source families.
 //! Selection consumes original parsed records; a failed family never retries a
 //! broader importer. This does not change either existing typed entry point.
 use super::owned_plain_source::existing_quota::{Context, PreparationHold};
@@ -24,6 +24,7 @@ fn backing(error: BackingError) -> IoError {
 pub enum OwnedXcfImport {
     Plain(owned_plain_source::OwnedPlainXcfImport),
     ThresholdAlpha(owned_threshold_source::OwnedThresholdAlphaXcfImport),
+    HistogramThreshold(owned_histogram_threshold_source::OwnedHistogramThresholdXcfImport),
 }
 impl std::fmt::Debug for OwnedXcfImport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -35,42 +36,49 @@ impl OwnedXcfImport {
         match self {
             Self::Plain(v) => v.document(),
             Self::ThresholdAlpha(v) => v.document(),
+            Self::HistogramThreshold(v) => v.document(),
         }
     }
     pub fn warnings(&self) -> &[String] {
         match self {
             Self::Plain(v) => v.warnings(),
             Self::ThresholdAlpha(v) => v.warnings(),
+            Self::HistogramThreshold(v) => v.warnings(),
         }
     }
     pub fn origin(&self) -> ImportOrigin {
         match self {
             Self::Plain(v) => v.origin(),
             Self::ThresholdAlpha(v) => v.origin(),
+            Self::HistogramThreshold(v) => v.origin(),
         }
     }
     pub fn assessment(&self) -> Option<&crate::xcf_assessment::ImportAssessment> {
         match self {
             Self::Plain(v) => v.assessment(),
             Self::ThresholdAlpha(v) => v.assessment(),
+            Self::HistogramThreshold(v) => v.assessment(),
         }
     }
     pub fn source_read_only(&self) -> bool {
         match self {
             Self::Plain(v) => v.source_read_only(),
             Self::ThresholdAlpha(v) => v.source_read_only(),
+            Self::HistogramThreshold(v) => v.source_read_only(),
         }
     }
     pub fn preview_only(&self) -> bool {
         match self {
             Self::Plain(v) => v.preview_only(),
             Self::ThresholdAlpha(v) => v.preview_only(),
+            Self::HistogramThreshold(v) => v.preview_only(),
         }
     }
     pub fn into_accounted_document(self) -> photocraft_doc::accounted_document::AccountedDocument {
         match self {
             Self::Plain(v) => v.into_accounted_document(),
             Self::ThresholdAlpha(v) => v.into_accounted_document(),
+            Self::HistogramThreshold(v) => v.into_accounted_document(),
         }
     }
 }
@@ -126,6 +134,9 @@ pub fn import_owned_xcf_bytes_in_quota(
         }
         staged_selected_source::SelectedStagedFamily::ThresholdAlpha => {
             owned_threshold_source::promote_source(source, &budget, quota, control, &mut preparation.hold).map(OwnedXcfImport::ThresholdAlpha)
+        }
+        staged_selected_source::SelectedStagedFamily::Threshold => {
+            owned_histogram_threshold_source::promote_source(source, &budget, quota, control, &mut preparation.hold).map(OwnedXcfImport::HistogramThreshold)
         }
     }
 }

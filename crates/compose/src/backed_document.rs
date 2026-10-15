@@ -23,6 +23,7 @@ mod plain_import;
 enum DocumentCompositor<'a> {
     Flat(PreparedBackedNormalStack<'a>),
     Group(group::PreparedGroup<'a>),
+    Threshold(crate::backed_threshold_document::PreparedBackedThresholdDocument<'a>),
     ThresholdAlpha(crate::backed_threshold_alpha_document::PreparedBackedThresholdAlphaDocument<'a>),
 }
 
@@ -76,6 +77,13 @@ impl<'a> PreparedBackedDocument<'a> {
         limits: NormalBandLimits,
         control: &ReadControl<'_>,
     ) -> Result<Self, BackedNormalError> {
+        if owner.is_readonly_threshold_storage() {
+            let prepared = crate::backed_threshold_document::PreparedBackedThresholdDocument::new(owner, profile, limits, control)?;
+            let index = owner.quota().reserve(QuotaKind::Index, std::mem::size_of::<Self>() as u64).map_err(BackedNormalError::Quota)?;
+            let bounds = prepared.bounds();
+            control.check(1).map_err(BackedNormalError::Backing)?;
+            return Ok(Self { stack: DocumentCompositor::Threshold(prepared), limits, quota: owner.quota().clone(), bounds, _index: index });
+        }
         if owner.is_readonly_threshold_alpha_storage() {
             let prepared = crate::backed_threshold_alpha_document::PreparedBackedThresholdAlphaDocument::new(owner, profile, limits, control)?;
             let index = owner.quota().reserve(QuotaKind::Index, std::mem::size_of::<Self>() as u64).map_err(BackedNormalError::Quota)?;
@@ -245,6 +253,7 @@ impl<'a> PreparedBackedDocument<'a> {
         match &self.stack {
             DocumentCompositor::Flat(stack) => stack.render_band(rect, [0.; 4], control),
             DocumentCompositor::Group(group) => group.render_band(rect, control),
+            DocumentCompositor::Threshold(prepared) => prepared.render_band(rect, control),
             DocumentCompositor::ThresholdAlpha(prepared) => prepared.render_band(rect, control),
         }
     }

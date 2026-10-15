@@ -95,6 +95,25 @@ impl Session {
         )
     }
 
+    /// Publish only a genuinely retained Histogram Threshold source import,
+    /// after the separate current profile, mask and native recipe has succeeded.
+    pub fn add_owned_histogram_threshold_xcf_import(
+        &mut self,
+        imported: &photocraft_io::OwnedHistogramThresholdXcfImport,
+        label: &str,
+        source_path: Option<&str>,
+        control: &ReadControl<'_>,
+    ) -> Result<usize> {
+        let owner = imported.document();
+        crate::accounted_native_open::validate_current_threshold_storage(owner, control)?;
+        self.add_owned_xcf_model(
+            ImportedModel { document: owner, origin: imported.origin(), source_read_only: imported.source_read_only(), preview_only: imported.preview_only() },
+            label,
+            source_path,
+            control,
+        )
+    }
+
     fn add_owned_xcf_model(&mut self, imported: ImportedModel<'_>, label: &str, source_path: Option<&str>, control: &ReadControl<'_>) -> Result<usize> {
         control.check(1)?;
         if imported.origin != photocraft_io::ImportOrigin::xcf() || imported.preview_only {

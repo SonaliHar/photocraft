@@ -75,7 +75,7 @@ impl Session {
         if matches!(state.channel_view.target,crate::channel_cmds::ChannelTarget::Color(i) if i>=state.doc.mode.color_channels()) {
             return Err(BackingError::Bounds.into());
         }
-        edit_locks(owner, edit, c)?;
+        edit_locks(owner, edit, None, c)?;
         let matching_key = match (key, state._accounted_metadata_gesture.as_ref()) {
             (Some(key), Some(marker)) => marker.matches(key, state.doc.id, owner.quota(), c)?,
             _ => false,

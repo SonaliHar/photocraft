@@ -951,7 +951,7 @@ impl Session {
             crate::selection_smooth_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         }
         if matches!(id, "edit.fill" | "edit.clear")
-            && !(id == "edit.clear" && self.active().is_some_and(|state| state.doc.accounted().is_some()))
+            && !self.active().is_some_and(|state| state.doc.accounted().is_some())
         {
             crate::native_gray_fill_controlled::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         }
@@ -1098,6 +1098,9 @@ impl Session {
             crate::xcf_link_substitution_cmds::dispatch_recovery_preflight(self, &params, background || self.jobs.spawn)?;
         }
         if accounted_dispatch {
+            if id == "edit.fill" && (background || self.jobs.spawn) {
+                return Err(EngineError::BadParams { cmd: id.into(), msg: "accounted Fill requires synchronous dispatch".into() });
+            }
             if let Some(why) = crate::accounted_commands::disabled_reason(self, id, &params)? {
                 return Err(EngineError::Disabled(id.to_string(), why.into()));
             }
@@ -1110,12 +1113,12 @@ impl Session {
                 }))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` failed with an internal error (logged); the document is unchanged"))));
             }
-            // Clear's bounded native preparation and final typed edit share one
+            // Bounded native pixel preparation and the final typed edit share one
             // immutable registered work ledger; no per-cell allowance reset.
-            let clear_work = std::sync::atomic::AtomicU64::new(crate::accounted_clear::REGISTERED_WORK_LIMIT);
+            let pixel_work = std::sync::atomic::AtomicU64::new(crate::accounted_clear::REGISTERED_WORK_LIMIT);
             let debit = |units| {
-                if id != "edit.clear" { return Ok(()); }
-                clear_work.try_update(std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Relaxed, |left| left.checked_sub(units))
+                if !matches!(id, "edit.clear" | "edit.fill") { return Ok(()); }
+                pixel_work.try_update(std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Relaxed, |left| left.checked_sub(units))
                     .map(|_| ()).map_err(|_| photocraft_raster::backing::BackingError::Work)
             };
             let control = photocraft_raster::backing::ReadControl { interrupt: &photocraft_raster::Interrupt::NONE, work: &debit };

@@ -87,6 +87,44 @@ impl OwnedThresholdAlphaXcfImport {
         self.document
     }
 }
+/// Private source-selected storage adoption; never caller supplied or serialized.
+#[derive(Clone, Copy)]
+pub(in crate::xcf_import) enum StorageClass {
+    Alpha,
+    Histogram,
+}
+pub(in crate::xcf_import) struct StorageParts {
+    document: AccountedDocument,
+    warnings: Vec<String>,
+    origin: ImportOrigin,
+    assessment: Option<crate::xcf_assessment::ImportAssessment>,
+    source_read_only: bool,
+    preview_only: bool,
+    _retention: Arc<Retention>,
+}
+impl StorageParts {
+    pub(in crate::xcf_import) fn document(&self) -> &AccountedDocument {
+        &self.document
+    }
+    pub(in crate::xcf_import) fn warnings(&self) -> &[String] {
+        &self.warnings
+    }
+    pub(in crate::xcf_import) fn origin(&self) -> ImportOrigin {
+        self.origin
+    }
+    pub(in crate::xcf_import) fn assessment(&self) -> Option<&crate::xcf_assessment::ImportAssessment> {
+        self.assessment.as_ref()
+    }
+    pub(in crate::xcf_import) fn source_read_only(&self) -> bool {
+        self.source_read_only
+    }
+    pub(in crate::xcf_import) fn preview_only(&self) -> bool {
+        self.preview_only
+    }
+    pub(in crate::xcf_import) fn into_accounted_document(self) -> AccountedDocument {
+        self.document
+    }
+}
 fn phase_work(doc: &Document, model: u64, payload: u64, source: u64, budget: &photocraft_xcf::Budget<'_>) -> Result<u64, IoError> {
     let state = doc.xcf_state.as_ref().ok_or_else(|| invalid("threshold phase state"))?;
     let mut native = 0u64;
@@ -185,6 +223,21 @@ pub(in crate::xcf_import) fn promote_source<'b, 'a, S: PromotionSource<'b, 'a>>(
     control: &ReadControl<'_>,
     preparation: &mut Option<PreparationHold>,
 ) -> Result<OwnedThresholdAlphaXcfImport, IoError> {
+    let parts = promote_storage(source, budget, quota, control, preparation, StorageClass::Alpha)?;
+    let StorageParts { document, warnings, origin, assessment, source_read_only, preview_only, _retention } = parts;
+    Ok(OwnedThresholdAlphaXcfImport { document, warnings, origin, assessment, source_read_only, preview_only, _retention })
+}
+
+/// Shared real receipt transfer for two sealed original-source families. Class
+/// selection changes only its exact census, header type and final codec adapter.
+pub(in crate::xcf_import) fn promote_storage<'b, 'a, S: PromotionSource<'b, 'a>>(
+    source: S,
+    budget: &'b photocraft_xcf::Budget<'a>,
+    quota: BackingQuota,
+    control: &ReadControl<'_>,
+    preparation: &mut Option<PreparationHold>,
+    class: StorageClass,
+) -> Result<StorageParts, IoError> {
     struct Incoming<'b, 'a, S> {
         source: S,
         model: Option<photocraft_xcf::Reservation<'b, 'a>>,
@@ -192,7 +245,10 @@ pub(in crate::xcf_import) fn promote_source<'b, 'a, S: PromotionSource<'b, 'a>>(
         bridge: Option<photocraft_xcf::Reservation<'b, 'a>>,
     }
     let mut incoming = Incoming { source, model: None, payload: None, bridge: None };
-    let measured = census::measure_threshold(incoming.source.document(), &budget, control.interrupt)?;
+    let measured = match class {
+        StorageClass::Alpha => census::measure_threshold(incoming.source.document(), &budget, control.interrupt)?,
+        StorageClass::Histogram => census::measure_histogram_threshold(incoming.source.document(), &budget, control.interrupt)?,
+    };
     // The holder's result is exposed only as borrowed fields; this sibling
     // report census does not acquire a public extraction or source grant.
     let reports = incoming.source.report_capacity_with_budget(&budget)?;
@@ -200,7 +256,13 @@ pub(in crate::xcf_import) fn promote_source<'b, 'a, S: PromotionSource<'b, 'a>>(
         Some(budget.reserve(BudgetKind::Index, add(measured.model, reports)?, "threshold actual model/report capacities").map_err(accounting_error)?);
     incoming.payload = Some(budget.reserve(BudgetKind::Resident, measured.payload, "threshold raw/profile capacities").map_err(accounting_error)?);
     let bridge_bytes = add(
-        add(std::mem::size_of::<Retention>() as u64, std::mem::size_of::<OwnedThresholdAlphaXcfImport>() as u64)?,
+        add(
+            std::mem::size_of::<Retention>() as u64,
+            match class {
+                StorageClass::Alpha => std::mem::size_of::<OwnedThresholdAlphaXcfImport>() as u64,
+                StorageClass::Histogram => std::mem::size_of::<super::owned_histogram_threshold_source::OwnedHistogramThresholdXcfImport>() as u64,
+            },
+        )?,
         add(std::mem::size_of::<store::SurfaceStore<Retention>>() as u64, 4096)?,
     )?;
     incoming.bridge = Some(budget.reserve(BudgetKind::Index, bridge_bytes, "threshold owned bridge headers").map_err(accounting_error)?);
@@ -279,10 +341,14 @@ pub(in crate::xcf_import) fn promote_source<'b, 'a, S: PromotionSource<'b, 'a>>(
     let retention_guard = promoting.retention.clone();
     let Promoting { result, retention } = promoting;
     let ImportResult { document, warnings, origin, assessment, source_read_only, preview_only } = result;
-    let document = AccountedDocument::from_owned_readonly_threshold_alpha_storage(document, retention.clone(), quota, &read).map_err(backing)?;
+    let document = match class {
+        StorageClass::Alpha => AccountedDocument::from_owned_readonly_threshold_alpha_storage(document, retention.clone(), quota, &read),
+        StorageClass::Histogram => AccountedDocument::new_readonly_threshold_storage(document, retention.clone(), quota, &read),
+    }
+    .map_err(backing)?;
     poll().map_err(backing)?;
     control.interrupt.check().map_err(|_| IoError::Cancelled)?;
-    let output = OwnedThresholdAlphaXcfImport { document, warnings, origin, assessment, source_read_only, preview_only, _retention: retention };
+    let output = StorageParts { document, warnings, origin, assessment, source_read_only, preview_only, _retention: retention };
     drop(retention_guard);
     Ok(output)
 }

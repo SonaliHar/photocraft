@@ -46,6 +46,9 @@ pub(crate) fn invoke(app: &mut PhotocraftApp, params: &Value) -> Result<Value, S
     if app.automation_input {
         return Err("explicit native Open is unavailable through automation; use capability-scoped app.open".into());
     }
+    if path.is_none() && app.services.owned_native_bytes_picker.is_some() {
+        return crate::owned_xcf_bytes::start_native(app);
+    }
     if app.services.owned_native_open.is_none() {
         return Err("owned native Open service is not configured".into());
     }
@@ -123,6 +126,8 @@ fn open_path(app: &mut PhotocraftApp, path: &str, authority: Authority) -> Resul
     control.check(1).map_err(|e| e.to_string())?;
     if threshold_candidate(archive.document(), &control)? {
         app.session.add_owned_native_threshold_alpha_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
+    } else if photocraft_engine::accounted_native_open::is_current_threshold_candidate(archive.document(), &control).map_err(|e| e.to_string())? {
+        app.session.add_owned_native_threshold_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
     } else {
         app.session
             .add_owned_native_archive(archive, AccountedNativeOpenPolicy::KeepCurrentInterpretation, name, Some(path), &control)
@@ -144,6 +149,27 @@ fn open_path(app: &mut PhotocraftApp, path: &str, authority: Authority) -> Resul
             crate::notices::io_warnings(app, &crate::i18n::fmt(tl!("Opened {name}"), &[("name", name)]), &[]);
         }
     }
+    Ok(reply)
+}
+
+/// Pathless browser adoption: the selected label never becomes a runtime path.
+pub(crate) fn adopt_bytes(
+    app: &mut PhotocraftApp,
+    name: &str,
+    archive: photocraft_format::owned_document::OwnedDocumentArchive,
+    control: &ReadControl<'_>,
+) -> Result<Value, String> {
+    let _reply_lease = archive.quota().reserve(QuotaKind::Index, 4096).map_err(|e| e.to_string())?;
+    control.check(4096).map_err(|e| e.to_string())?;
+    let reply = json!({"warnings":[]});
+    if threshold_candidate(archive.document(), control)? {
+        app.session.add_owned_native_threshold_alpha_archive(archive, name, None, control).map_err(|e| e.to_string())?;
+    } else if photocraft_engine::accounted_native_open::is_current_threshold_candidate(archive.document(), control).map_err(|e| e.to_string())? {
+        app.session.add_owned_native_threshold_archive(archive, name, None, control).map_err(|e| e.to_string())?;
+    } else {
+        app.session.add_owned_native_archive(archive, AccountedNativeOpenPolicy::KeepCurrentInterpretation, name, None, control).map_err(|e| e.to_string())?;
+    }
+    crate::jobs_ui::after_open(app, name, None, &[], None);
     Ok(reply)
 }
 

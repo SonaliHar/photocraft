@@ -6,6 +6,9 @@ impl AccountedDocument {
         if self.owner._storage_class == StorageClass::ReadonlyThresholdAlpha {
             return filter_readonly::renamed(self, name, control);
         }
+        if self.owner._storage_class == StorageClass::ReadonlyHistogramThreshold {
+            return threshold_readonly::renamed(self, name, control);
+        }
         if !imported_selection::applies(self.document()) || name.len() > 4096 {
             return Err(BackingError::Unsupported);
         }

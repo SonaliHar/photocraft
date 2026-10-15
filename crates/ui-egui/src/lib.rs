@@ -452,6 +452,7 @@ pub struct Services {
     pub automation_owned_current_xcf_open: Option<services::OwnedCurrentXcfOpenFn>,
     /// Explicit browser picker with capture charged to the current catalog.
     pub owned_xcf_bytes_picker: Option<services::OwnedXcfBytesPickerFn>,
+    pub owned_native_bytes_picker: Option<services::OwnedNativeBytesPickerFn>,
     /// Encode a document for a file name (format chosen by extension).
     pub export: Option<ExportFn>,
     /// Atomic streamed native saves with all open-document source exclusions.

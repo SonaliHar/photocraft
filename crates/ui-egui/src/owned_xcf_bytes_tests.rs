@@ -128,7 +128,7 @@ fn catalog_change_and_simultaneous_picker_refuse_before_publication() {
     start(&mut app).unwrap();
     assert!(start(&mut app).is_err());
     let other = captured(Request::new(quota()).unwrap(), &fixture());
-    apply(&mut app, &other).unwrap();
+    apply_xcf(&mut app, &other).unwrap();
     let old = app.session.active().unwrap().doc.clone();
     let (request, reply) = waiting.borrow_mut().take().unwrap();
     reply.send(Ok(Some(captured(request, &fixture()))));

@@ -60,6 +60,9 @@ pub use owned_plain_source::{OwnedPlainXcfImport, import_owned_staged_plain_byte
 
 #[path = "xcf_import/owned_threshold_source.rs"]
 mod owned_threshold_source;
+#[path = "xcf_import/owned_histogram_threshold_source.rs"]
+mod owned_histogram_threshold_source;
+pub use owned_histogram_threshold_source::OwnedHistogramThresholdXcfImport;
 pub use owned_threshold_source::{OwnedThresholdAlphaXcfImport, import_owned_staged_threshold_alpha_bytes_in_quota};
 
 #[path = "xcf_import/source.rs"]
@@ -2537,7 +2540,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 .map(accounting_error)
                 .unwrap_or_else(|| if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF rendering consumer: {error}")) }));
         }
-    } else if P::requires_budgeted_rendering_preparation_for(threshold_alpha_domain) {
+    } else if P::requires_budgeted_rendering_preparation_for(threshold_alpha_domain || threshold_domain) {
         // A sealed staged family must qualify the actual current scene while
         // its source and Surface reservations remain live. It cannot run the
         // legacy unbudgeted constructor and claim a later paid pass covered it.

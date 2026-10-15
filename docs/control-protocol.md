@@ -93,8 +93,9 @@ native-only lane retains the saved current ICC/encoding/working interpretation
 without applying Color Settings or opening its profile question. Omitting
 `nativeProfilePolicy` preserves ordinary Open policy, including profile prompts
 and conversion. With the explicit option but no `path`, the interactive picker
-accepts one `.pcraft` path. Other policies, malformed parameters, byte-only
-browser input, unavailable services, unsupported models and quota failures are
+accepts one `.pcraft` path, or a bounded byte upload when the dedicated browser
+capability is installed. Other policies, malformed parameters,
+unavailable services, unsupported models and quota failures are
 errors; they never fall back to ordinary import. The platform must supply the
 actual authorized reader, and retained source/resource locators grant no reads.
 Control/MCP `file.open` remains denied. Capability-scoped `app.open` may explicitly
@@ -109,7 +110,9 @@ Explicit owned original-XCF Open uses the separate
 `{"path":"chosen.xcf","xcfProfilePolicy":"keepCurrent"}` option on trusted local
 `file.open`, or on held-read-root `app.open`. The source-selected reader supports
 the existing staged plain implicit nonlinear RGB/Gray raster class and the
-separately qualified full-canvas Threshold Alpha class. This is not a fallback
+separate full-canvas Threshold Alpha class. A distinct Histogram Threshold lane
+accepts the existing RGB nonlinear 8x6 U16/F32/F64 source class with its exact
+three arguments and related empty filter mask. This is not a fallback
 for other XCF effects, masks, groups, channels or source profiles. It keeps
 the importer's current interpretation without applying Color Settings. Omitting
 the key preserves ordinary Open and its questions/conversions. Combining this
@@ -129,6 +132,11 @@ The actual catalog quota covers the provider buffer and immutable Rust capture
 before reading, with a 16 MiB input ceiling and bounded copies. Escape cancels
 the host read. The selected name is only a label: no path or read authority is
 installed, and ordinary browser picker/drop behavior is unchanged.
+The separate `file.open {"nativeProfilePolicy":"keepCurrent"}` browser picker
+uses the same input ceiling and capture lifecycle. It keeps the native archive's
+saved title and current interpretation; its label grants no filesystem path.
+Native archive reads retain the upload's actual quota owners and use the future
+operation's cancellation/work control after the picker has closed.
 
 ## Engine commands
 
@@ -413,7 +421,8 @@ no MCP framing, no app start-up per command. Configure its file access with the 
 
 Explicit owned XCF Open accepts exactly `{"path":"source.xcf","xcfProfilePolicy":"keepCurrent"}`
 through JSON-lines `doc.open` or MCP `doc_open`. The policy is optional; omitting it preserves
-ordinary Open. This finite plain/Threshold Alpha route uses the existing read authority and
+ordinary Open. These finite plain, Threshold Alpha and RGB nonlinear 8x6 Histogram
+Threshold routes use the existing read authority and
 catalog quota, retains current interpretation and returns an `owned-import-summary` with
 warnings/assessment. Unknown, null or extra policy fields refuse before file I/O; stored
 locators grant no access. MCP bridge mode forwards the same two fields to `app.open`.

@@ -21,6 +21,7 @@ trait StagePolicy {
 pub(super) enum SelectedStagedFamily {
     Plain,
     ThresholdAlpha,
+    Threshold,
 }
 struct PlainPolicy;
 struct ThresholdAlphaPolicy;
@@ -35,7 +36,11 @@ impl StagePolicy for SourceSelectedPolicy {
         // Select exactly one old gate, before mapping or mutation. A refusal
         // never retries the other gate. This is not eligibility by name/epoch.
         if file.layers.len() == 1 && file.layers.first().is_some_and(|layer| !layer.effects.is_empty()) {
-            SelectedStagedFamily::ThresholdAlpha
+            if file.layers.first().and_then(|layer| layer.effects.first()).is_some_and(|effect| effect.operation == "gimp:threshold") {
+                SelectedStagedFamily::Threshold
+            } else {
+                SelectedStagedFamily::ThresholdAlpha
+            }
         } else {
             SelectedStagedFamily::Plain
         }
@@ -344,8 +349,20 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         if P::SOURCE_SELECTED { threshold_alpha_domain } else { Self::requires_budgeted_rendering_preparation() }
     }
     fn admissions(file: &XcfFile<Self>, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<admission::AdmissionDomains, IoError> {
-        let threshold = P::family(file) == SelectedStagedFamily::ThresholdAlpha;
-        if threshold {
+        let family = P::family(file);
+        let histogram = family == SelectedStagedFamily::Threshold;
+        let threshold = family == SelectedStagedFamily::ThresholdAlpha || histogram;
+        if histogram {
+            if file.model != Model::Rgb
+                || file.encoding != Encoding::NonlinearProfile
+                || (file.width, file.height) != (8, 6)
+                || !matches!((file.precision, file.sample), (250, Sample::U16) | (650, Sample::F32) | (750, Sample::F64))
+                || file.layers.first().and_then(|layer| layer.effects.first()).is_none_or(|effect| effect.mask.is_none())
+                || !precision_point_source::qualify(file, "gimp:threshold", false, false, ctl, shared)?
+            {
+                return Err(IoError::Unsupported("staged Histogram Threshold source is outside the exact RGB nonlinear 8x6 precision predicate".into()));
+            }
+        } else if threshold {
             if !precision_point_source::qualify_threshold_geometry(file, ctl, shared)? {
                 return Err(IoError::Unsupported("staged Threshold Alpha source is outside the existing precision-point predicate".into()));
             }
@@ -402,7 +419,11 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         // Generic mapping always runs admissions before this side-effect-free
         // domain handoff. Only the private Threshold factory can select this
         // type, and its admissions above propagate the shared exact predicate.
-        admission::LateAdmissionDomains { threshold_alpha_domain: P::family(file) == SelectedStagedFamily::ThresholdAlpha, ..Default::default() }
+        admission::LateAdmissionDomains {
+            threshold_alpha_domain: P::family(file) == SelectedStagedFamily::ThresholdAlpha,
+            threshold_domain: P::family(file) == SelectedStagedFamily::Threshold,
+            ..Default::default()
+        }
     }
     fn eager_original(&self) -> Result<&Plane, IoError> {
         Err(IoError::Unsupported("staged storage has no eager Plane".into()))

@@ -13,6 +13,14 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     mpsc::{self, Receiver, Sender, TryRecvError},
 };
+mod native_archive;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Family {
+    Xcf,
+    Native,
+}
+
 const CAP: usize = 16 << 20;
 const WORK: u64 = 8_000_000_000;
 struct Work {
@@ -24,14 +32,25 @@ struct Work {
 pub struct Request {
     quota: BackingQuota,
     work: Arc<Work>,
+    family: Family,
 }
 impl Request {
     fn new(quota: BackingQuota) -> Result<Self, String> {
+        Self::with_family(quota, Family::Xcf)
+    }
+    fn with_family(quota: BackingQuota, family: Family) -> Result<Self, String> {
         let lease = quota.reserve(QuotaKind::Index, 4096).map_err(|e| e.to_string())?;
         if std::mem::size_of::<Work>() + std::mem::size_of::<Pending>() + 128 > 4096 {
             return Err("owned byte picker header exceeds admission".into());
         }
-        Ok(Self { quota, work: Arc::new(Work { used: AtomicU64::new(0), cancelled: AtomicBool::new(false), _lease: lease }) })
+        Ok(Self { quota, family, work: Arc::new(Work { used: AtomicU64::new(0), cancelled: AtomicBool::new(false), _lease: lease }) })
+    }
+    /// Advisory picker filter; content still passes the selected strict decoder.
+    pub fn extension(&self) -> &'static str {
+        match self.family {
+            Family::Xcf => ".xcf",
+            Family::Native => ".pcraft",
+        }
     }
     pub fn with_control<R>(&self, f: impl FnOnce(&ReadControl<'_>) -> Result<R, String>) -> Result<R, String> {
         let cancelled = || self.work.cancelled.load(Ordering::Relaxed);
@@ -58,6 +77,12 @@ impl Request {
         }
         self.with_control(|c| {
             c.check(name.len() as u64).map_err(|e| e.to_string())?;
+            if self.family == Family::Native {
+                c.check(name.len() as u64).map_err(|e| e.to_string())?;
+                if !std::path::Path::new(name).extension().and_then(|s| s.to_str()).is_some_and(|s| s.eq_ignore_ascii_case("pcraft")) {
+                    return Err("owned native bytes require a .pcraft label".into());
+                }
+            }
             if name.contains('\0') {
                 return Err("owned XCF label contains NUL".into());
             }
@@ -161,13 +186,22 @@ impl Drop for Pending {
     }
 }
 pub(crate) fn start(app: &mut PhotocraftApp) -> Result<Value, String> {
+    start_family(app, Family::Xcf)
+}
+pub(crate) fn start_native(app: &mut PhotocraftApp) -> Result<Value, String> {
+    start_family(app, Family::Native)
+}
+fn start_family(app: &mut PhotocraftApp, family: Family) -> Result<Value, String> {
     if app.automation_input {
         return Err("browser picker cannot be opened by scoped automation".into());
     }
     if app.file_dialog_open() {
         return Err("a file dialog is already open".into());
     }
-    if app.services.owned_xcf_bytes_picker.is_none() {
+    if match family {
+        Family::Xcf => app.services.owned_xcf_bytes_picker.is_none(),
+        Family::Native => app.services.owned_native_bytes_picker.is_none(),
+    } {
         return Err("owned XCF byte picker is unavailable".into());
     }
     let free = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) };
@@ -175,18 +209,39 @@ pub(crate) fn start(app: &mut PhotocraftApp) -> Result<Value, String> {
         Some(q) => q.clone(),
         None => photocraft_io::accounted_open_quota::new_accounted_open_quota(&free).map_err(|e| e.to_string())?,
     };
-    let request = Request::new(quota)?;
+    let request = match family {
+        Family::Xcf => Request::new(quota)?,
+        Family::Native => Request::with_family(quota, family)?,
+    };
     let response = json!({"fileDialog":"open"});
     let (sender, receiver) = mpsc::channel();
     app.owned_xcf_bytes_pending = Some(Pending { receiver, request: request.clone(), cancel: None });
-    let picker = app.services.owned_xcf_bytes_picker.as_mut().ok_or("owned XCF byte picker is unavailable")?;
+    let picker = match family {
+        Family::Xcf => app.services.owned_xcf_bytes_picker.as_mut(),
+        Family::Native => app.services.owned_native_bytes_picker.as_mut(),
+    }
+    .ok_or("owned byte picker is unavailable")?;
     let cancel = picker(request, Reply { sender });
     if let Some(pending) = app.owned_xcf_bytes_pending.as_mut() {
         pending.cancel = cancel;
     }
     Ok(response)
 }
-fn apply(app: &mut PhotocraftApp, capture: &Capture) -> Result<Value, String> {
+fn apply(app: &mut PhotocraftApp, capture: Capture) -> Result<Value, String> {
+    if capture.request.family == Family::Native {
+        let request = capture.request.clone();
+        return request.with_control(|control| {
+            if app.session.accounted_open_quota().is_some_and(|q| !q.shares_ledger(&request.quota)) {
+                return Err("catalog quota changed during browser selection".into());
+            }
+            let loaded = native_archive::load(capture, control)?;
+            let (label, archive) = loaded.into_parts();
+            crate::owned_native_open::adopt_bytes(app, label.name(), archive, control)
+        });
+    }
+    apply_xcf(app, &capture)
+}
+fn apply_xcf(app: &mut PhotocraftApp, capture: &Capture) -> Result<Value, String> {
     capture.request.with_control(|control| {
         if app.session.accounted_open_quota().is_some_and(|q| !q.shares_ledger(&capture.request.quota)) {
             return Err("catalog quota changed during browser selection".into());
@@ -226,7 +281,16 @@ pub(crate) fn poll(app: &mut PhotocraftApp, ctx: &egui::Context) {
     };
     let held = app.owned_xcf_bytes_pending.take();
     let outcome = match result {
-        Ok(Some(capture)) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| apply(app, &capture)))
+        Ok(Some(capture))
+            if held.as_ref().is_none_or(|p| {
+                p.request.family != capture.request.family
+                    || !Arc::ptr_eq(&p.request.work, &capture.request.work)
+                    || !p.request.quota.shares_ledger(&capture.request.quota)
+            }) =>
+        {
+            Err("owned byte picker returned a different request".into())
+        }
+        Ok(Some(capture)) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| apply(app, capture)))
             .unwrap_or_else(|_| Err("owned XCF byte import failed internally; existing documents retained".into())),
         Ok(None) => Ok(Value::Null),
         Err(e) => Err(e),
@@ -242,3 +306,7 @@ pub(crate) fn poll(app: &mut PhotocraftApp, ctx: &egui::Context) {
 #[cfg(test)]
 #[path = "owned_xcf_bytes_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "owned_native_bytes_tests.rs"]
+mod native_tests;

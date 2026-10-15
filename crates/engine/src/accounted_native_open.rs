@@ -14,6 +14,7 @@ pub enum AccountedNativeOpenPolicy {
 enum NativeHandoff {
     Document,
     CurrentThresholdAlpha,
+    CurrentHistogramThreshold,
 }
 
 /// Stored operation names select a stricter current-storage validator only.
@@ -32,6 +33,55 @@ pub fn is_current_threshold_alpha_candidate(document: &photocraft_doc::Document,
         }
     }
     Ok(false)
+}
+
+/// Select the separate strict Histogram Threshold handoff, without granting
+/// storage, profile or source eligibility. A refusal is final for this route.
+pub fn is_current_threshold_candidate(document: &photocraft_doc::Document, control: &ReadControl<'_>) -> std::result::Result<bool, BackingError> {
+    if let Some(state) = &document.xcf_state {
+        for stack in &state.filter_stacks {
+            control.check(1)?;
+            for node in &stack.nodes {
+                control.check(1)?;
+                if node.operation.name == "gimp:threshold" {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// Validate the entire current operative recipe before any Session publication.
+/// This does not establish original-source correspondence or retain a render grant.
+pub(crate) fn validate_current_threshold_storage(owner: &photocraft_doc::accounted_document::AccountedDocument, control: &ReadControl<'_>) -> Result<()> {
+    use photocraft_compose::{backed_normal::BackedNormalError, backed_threshold::BackedThresholdError};
+    use photocraft_raster::checked_view::RasterViewError;
+    control.check(1)?;
+    let profile = photocraft_cms::Builtin::Srgb.profile();
+    control.check(1)?;
+    let prepared =
+        photocraft_compose::backed_threshold_context::PreparedBackedThresholdContext::new(owner, profile, Default::default(), control).map_err(|error| {
+            match error {
+                BackedNormalError::Backing(error)
+                | BackedNormalError::View(RasterViewError::Backed(error) | RasterViewError::Control(error) | RasterViewError::Descriptor(error)) => {
+                    error.into()
+                }
+                BackedNormalError::Quota(_) => BackingError::Quota.into(),
+                BackedNormalError::Allocation => BackingError::Allocation.into(),
+                _ if control.interrupt.cancelled() => EngineError::Cancelled,
+                other => EngineError::Other(format!("owned Histogram Threshold current recipe: {other}")),
+            }
+        })?;
+    prepared.validate_operative(control).map_err(|error| match error {
+        BackedThresholdError::Backing(error)
+        | BackedThresholdError::View(RasterViewError::Backed(error) | RasterViewError::Control(error) | RasterViewError::Descriptor(error)) => error.into(),
+        _ if control.interrupt.cancelled() => EngineError::Cancelled,
+        other => EngineError::Other(format!("owned Histogram Threshold operative band: {other}")),
+    })?;
+    drop(prepared);
+    control.check(1)?;
+    Ok(())
 }
 
 fn text(value: &str, c: &ReadControl<'_>) -> Result<String> {
@@ -82,6 +132,18 @@ impl Session {
         self.add_owned_native_with(archive, label, authorized_native_path, control, NativeHandoff::CurrentThresholdAlpha)
     }
 
+    /// Explicit Histogram Threshold native continuation. Saved locators remain
+    /// inert and the current recipe must pass on its actual owned storage.
+    pub fn add_owned_native_threshold_archive(
+        &mut self,
+        archive: OwnedDocumentArchive,
+        label: &str,
+        authorized_native_path: Option<&str>,
+        control: &ReadControl<'_>,
+    ) -> Result<usize> {
+        self.add_owned_native_with(archive, label, authorized_native_path, control, NativeHandoff::CurrentHistogramThreshold)
+    }
+
     fn add_owned_native_with(
         &mut self,
         archive: OwnedDocumentArchive,
@@ -109,7 +171,9 @@ impl Session {
         let document = match handoff {
             NativeHandoff::Document => archive.into_accounted_document(control),
             NativeHandoff::CurrentThresholdAlpha => archive.into_accounted_readonly_threshold_alpha_storage(control),
-        }.map_err(|error| {
+            NativeHandoff::CurrentHistogramThreshold => archive.into_accounted_readonly_threshold_storage(control),
+        }
+        .map_err(|error| {
             if matches!(error, photocraft_format::FormatError::Cancelled) {
                 EngineError::Cancelled
             } else {
@@ -128,14 +192,14 @@ impl Session {
                 _ => return Err(BackingError::Unsupported.into()),
             };
             control.check(1)?;
-            let prepared = photocraft_compose::backed_threshold_alpha_context::PreparedBackedThresholdAlphaContext::new(
-                &document, profile, Default::default(), control,
-            ).map_err(|error| match error {
-                photocraft_compose::backed_normal::BackedNormalError::Backing(error) => EngineError::from(error),
-                _ if control.interrupt.cancelled() => EngineError::Cancelled,
-                other => EngineError::Other(format!("owned native current Threshold Alpha: {other}")),
-            })?;
-            // The closed canvas remains 8x6. Validate bounded operative bands on
+            let prepared =
+                photocraft_compose::backed_threshold_alpha_context::PreparedBackedThresholdAlphaContext::new(&document, profile, Default::default(), control)
+                    .map_err(|error| match error {
+                    photocraft_compose::backed_normal::BackedNormalError::Backing(error) => EngineError::from(error),
+                    _ if control.interrupt.cancelled() => EngineError::Cancelled,
+                    other => EngineError::Other(format!("owned native current Threshold Alpha: {other}")),
+                })?;
+            // Validate the complete supported canvas in bounded operative bands on
             // the same quota/control before publishing a tab; physical backing
             // padding and original-source correspondence remain separate.
             prepared.validate_operative(control).map_err(|error| match error {
@@ -147,6 +211,9 @@ impl Session {
             // A future render job must prepare/pay against its own held snapshot.
             drop(prepared);
             control.check(1)?;
+        }
+        if let NativeHandoff::CurrentHistogramThreshold = handoff {
+            validate_current_threshold_storage(&document, control)?;
         }
         let history_states = self.prefs.get().performance.history_states.max(1) as usize;
         let mut state = DocState::new_accounted(document, None, history_states, control)?;
@@ -188,3 +255,7 @@ mod threshold_alpha_tests;
 #[cfg(test)]
 #[path = "accounted_native_open_hint_tests.rs"]
 mod hint_tests;
+
+#[cfg(all(test, feature = "corpus"))]
+#[path = "accounted_histogram_threshold_open_tests.rs"]
+mod histogram_threshold_integration_tests;

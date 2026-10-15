@@ -86,6 +86,10 @@ impl Headless {
             control.check(1).map_err(photocraft_engine::EngineError::from)?;
             if threshold {
                 self.session.add_owned_native_threshold_alpha_archive(archive, label, Some(path), control)?;
+            } else if photocraft_engine::accounted_native_open::is_current_threshold_candidate(archive.document(), control)
+                .map_err(photocraft_engine::EngineError::from)?
+            {
+                self.session.add_owned_native_threshold_archive(archive, label, Some(path), control)?;
             } else {
                 self.session.add_owned_native_archive(
                     archive,

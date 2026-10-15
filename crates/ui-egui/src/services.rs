@@ -166,3 +166,6 @@ mod tests {
 
 /// Explicit browser selected-byte capability; no filesystem locator authority.
 pub type OwnedXcfBytesPickerFn = crate::owned_xcf_bytes::PickerFn;
+
+/// Explicit browser native archive selection; never a filesystem grant.
+pub type OwnedNativeBytesPickerFn = crate::owned_xcf_bytes::PickerFn;

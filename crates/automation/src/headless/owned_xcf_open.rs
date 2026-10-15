@@ -94,6 +94,9 @@ impl Headless {
         match &imported {
             photocraft_io::OwnedXcfImport::Plain(value) => self.session.add_owned_plain_xcf_import(value, name, Some(path), control)?,
             photocraft_io::OwnedXcfImport::ThresholdAlpha(value) => self.session.add_owned_threshold_alpha_xcf_import(value, name, Some(path), control)?,
+            photocraft_io::OwnedXcfImport::HistogramThreshold(value) => {
+                self.session.add_owned_histogram_threshold_xcf_import(value, name, Some(path), control)?
+            }
         };
         // No fallible operation or token poll after typed Session publication.
         Ok(reply)
@@ -397,20 +400,31 @@ impl OwnedXcfOpenReply {
 mod tests;
 
 impl OwnedXcfOpenReply {
-    pub(super) fn new_native(archive: &photocraft_format::owned_document::OwnedDocumentArchive, path: &str, index: usize, control: &ReadControl<'_>) -> Result<Self, ReplyError> {
+    pub(super) fn new_native(
+        archive: &photocraft_format::owned_document::OwnedDocumentArchive,
+        path: &str,
+        index: usize,
+        control: &ReadControl<'_>,
+    ) -> Result<Self, ReplyError> {
         let doc = archive.document();
-        if path.len() > 4096 || doc.name.len() > 1 << 20 { return Err("native summary text limit exceeded".into()); }
+        if path.len() > 4096 || doc.name.len() > 1 << 20 {
+            return Err("native summary text limit exceeded".into());
+        }
         let text = (path.len() as u64).checked_add(doc.name.len() as u64).ok_or("native summary text overflow")?;
         let envelope = text.checked_mul(8).and_then(|v| v.checked_add(16384)).ok_or("native summary envelope overflow")?;
         let mut lease = archive.quota().reserve(QuotaKind::Index, envelope).map_err(|e| e.to_string())?;
         // The authenticated archive already holds its complete bounded model.
         // Count layers with an explicitly bounded, polled borrowed recursion.
         fn layers(values: &[photocraft_doc::Layer], depth: usize, count: &mut usize, control: &ReadControl<'_>) -> Result<(), ReplyError> {
-            if depth > photocraft_doc::MAX_GROUP_DEPTH { return Err("native summary depth limit".into()); }
+            if depth > photocraft_doc::MAX_GROUP_DEPTH {
+                return Err("native summary depth limit".into());
+            }
             for layer in values {
                 control.check(1).map_err(ReplyError::Backing)?;
                 *count = count.checked_add(1).filter(|v| *v <= 4096).ok_or("native summary layer limit")?;
-                if let photocraft_doc::LayerContent::Group(group) = &layer.content { layers(&group.children, depth + 1, count, control)?; }
+                if let photocraft_doc::LayerContent::Group(group) = &layer.content {
+                    layers(&group.children, depth + 1, count, control)?;
+                }
             }
             Ok(())
         }
@@ -421,8 +435,10 @@ impl OwnedXcfOpenReply {
             "layers":count,"mode":doc.mode,"depth":doc.depth,"index":index,"warnings":[],
             "sourceReadOnly":false,"inspectionScope":"owned-native-summary","nativeProfilePolicy":"keepCurrent"});
         let actual = tree_bytes(&value, 0, control)?.checked_add(std::mem::size_of::<Self>() as u64 + 256).ok_or("native summary actual overflow")?;
-        if actual > envelope { return Err("native summary actual exceeds admission".into()); }
-        lease.reconcile_capacity(actual).map_err(|e|e.to_string())?;
+        if actual > envelope {
+            return Err("native summary actual exceeds admission".into());
+        }
+        lease.reconcile_capacity(actual).map_err(|e| e.to_string())?;
         Ok(Self { value, warnings: Vec::new(), _lease: lease })
     }
 }

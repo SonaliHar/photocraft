@@ -41,14 +41,14 @@ const EPOCH: &str = "xcf-22-stock-threshold-alpha-precision-v1";
 fn unsupported<T>() -> Result<T, BackingError> {
     Err(BackingError::Unsupported)
 }
-struct MaskCopyPlan {
+pub(super) struct MaskCopyPlan {
     bytes: u64,
     canvas: Rect,
     entries: usize,
     format: crate::PixelFormat,
 }
 impl MaskCopyPlan {
-    fn new(surface: &Surface, canvas: Rect, control: &ReadControl<'_>) -> Result<Self, BackingError> {
+    pub(super) fn new(surface: &Surface, canvas: Rect, control: &ReadControl<'_>) -> Result<Self, BackingError> {
         control.check(1)?;
         let (columns, rows, maximum_entries) = canvas_layout(canvas)?;
         let format = surface.format();
@@ -90,7 +90,7 @@ impl MaskCopyPlan {
         Ok(Self { bytes, canvas, entries: surface.tile_count(), format })
     }
     // Caller has reserved this plan in the new model's real metadata lease.
-    fn copy(&self, source: &Surface, control: &ReadControl<'_>) -> Result<Surface, BackingError> {
+    pub(super) fn copy(&self, source: &Surface, control: &ReadControl<'_>) -> Result<Surface, BackingError> {
         let actual = Self::new(source, self.canvas, control)?;
         if actual.bytes != self.bytes || actual.entries != self.entries || actual.format != self.format {
             return Err(BackingError::Integrity);
@@ -119,6 +119,32 @@ pub(super) fn mask_census(masks: &Vec<FilterMask>, census: &mut CanonicalCensus<
     Ok(())
 }
 fn shape(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>) -> Result<(), BackingError> {
+    physical_shape(doc, quota, control, alpha_node)
+}
+fn alpha_node(node: &crate::xcf_filters::FilterNode) -> Result<(), BackingError> {
+    if node.id.0 == 0
+        || node.operation.name != "gimp:threshold-alpha"
+        || node.operation.stored_version != "0:0"
+        || node.operation.schema_epoch != EPOCH
+        || node.arguments.len() != 1
+        || !node.auxiliary.is_empty()
+    {
+        return unsupported();
+    }
+    let argument = node.arguments.first().ok_or(BackingError::Integrity)?;
+    let FilterValue::Number(ExactNumber::Float32Bits(bits)) = argument.value else { return unsupported() };
+    let scalar = f32::from_bits(bits);
+    if argument.name != "value" || !scalar.is_finite() || !(0.0..=1.0).contains(&scalar) {
+        return unsupported();
+    }
+    Ok(())
+}
+// Physical storage only. Each distinct class supplies its own exact node gate;
+// Alpha still invokes its original gate at the same point before mask traversal.
+pub(super) fn physical_shape(
+    doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>,
+    validate_node: impl FnOnce(&crate::xcf_filters::FilterNode) -> Result<(), BackingError>,
+) -> Result<(), BackingError> {
     control.check(1)?;
     if doc.layers.len() != 1
         || doc.size.width == 0
@@ -215,21 +241,7 @@ fn shape(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>) -> Res
         return Err(BackingError::Integrity);
     }
     let node = stack.nodes.first().ok_or(BackingError::Integrity)?;
-    if node.id.0 == 0
-        || node.operation.name != "gimp:threshold-alpha"
-        || node.operation.stored_version != "0:0"
-        || node.operation.schema_epoch != EPOCH
-        || node.arguments.len() != 1
-        || !node.auxiliary.is_empty()
-    {
-        return unsupported();
-    }
-    let argument = node.arguments.first().ok_or(BackingError::Integrity)?;
-    let FilterValue::Number(ExactNumber::Float32Bits(bits)) = argument.value else { return unsupported() };
-    let scalar = f32::from_bits(bits);
-    if argument.name != "value" || !scalar.is_finite() || !(0.0..=1.0).contains(&scalar) {
-        return unsupported();
-    }
+    validate_node(node)?;
     match (node.mask, state.filter_masks.first()) {
         (None, None) => {}
         (Some(ItemRef::Mask(id)), Some(mask)) if id == mask.id && mask.id.0 != 0 && mask.owner == node.id => {

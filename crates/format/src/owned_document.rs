@@ -67,6 +67,7 @@ pub struct OwnedDocumentArchive {
 enum AccountedHandoff {
     Document,
     ReadonlyThresholdAlphaStorage,
+    ReadonlyHistogramThresholdStorage,
 }
 impl OwnedDocumentArchive {
     /// The actual ledger retaining this archive's model and encoded storage.
@@ -95,6 +96,12 @@ impl OwnedDocumentArchive {
         self.into_accounted_with(control, AccountedHandoff::ReadonlyThresholdAlphaStorage)
     }
 
+    /// Explicit current Histogram Threshold storage handoff. No serialized flag,
+    /// locator, profile or original-source/render authority is restored.
+    pub fn into_accounted_readonly_threshold_storage(self, control: &ReadControl<'_>) -> Result<photocraft_doc::accounted_document::AccountedDocument> {
+        self.into_accounted_with(control, AccountedHandoff::ReadonlyHistogramThresholdStorage)
+    }
+
     fn into_accounted_with(self, control: &ReadControl<'_>, handoff: AccountedHandoff) -> Result<photocraft_doc::accounted_document::AccountedDocument> {
         struct NativeRetention {
             _archive: Arc<dyn ImmutableCanonicalArchive>,
@@ -113,6 +120,7 @@ impl OwnedDocumentArchive {
         match handoff {
             AccountedHandoff::Document => photocraft_doc::accounted_document::AccountedDocument::from_owned_rehydrating_selection(document, retention, quota, control),
             AccountedHandoff::ReadonlyThresholdAlphaStorage => photocraft_doc::accounted_document::AccountedDocument::from_owned_readonly_threshold_alpha_storage(document, retention, quota, control),
+            AccountedHandoff::ReadonlyHistogramThresholdStorage => photocraft_doc::accounted_document::AccountedDocument::new_readonly_threshold_storage(document, retention, quota, control),
         }.map_err(error)
     }
 
@@ -124,6 +132,9 @@ impl OwnedDocumentArchive {
 #[cfg(test)]
 #[path = "owned_document/threshold_alpha_storage_tests.rs"]
 mod threshold_alpha_storage_tests;
+#[cfg(test)]
+#[path = "owned_document/threshold_storage_tests.rs"]
+mod threshold_storage_tests;
 pub(crate) fn error(error: BackingError) -> FormatError {
     if error == BackingError::Cancelled { FormatError::Cancelled } else { FormatError::Io(std::io::Error::other(error)) }
 }

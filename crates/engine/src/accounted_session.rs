@@ -15,6 +15,10 @@ use std::sync::{Arc, Mutex};
 #[path = "accounted_metadata_gesture.rs"]
 pub(crate) mod metadata_gesture;
 
+#[path = "accounted_native_alpha.rs"]
+mod native_alpha;
+use native_alpha::VerifiedNativeAlpha;
+
 impl DocState {
     pub(crate) fn new_accounted(document: AccountedDocument, path: Option<String>, history_states: usize, control: &ReadControl<'_>) -> Result<Self> {
         control.check(1)?;
@@ -112,7 +116,7 @@ fn initial_view(document: &AccountedDocument, control: &ReadControl<'_>) -> Resu
     Ok(AccountedView::new(document, active, &selected, active, control)?)
 }
 
-fn edit_locks(document: &AccountedDocument, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<()> {
+fn edit_locks(document: &AccountedDocument, edit: AccountedEdit<'_>, alpha: Option<&VerifiedNativeAlpha<'_>>, control: &ReadControl<'_>) -> Result<()> {
     let id = edit.layer_id();
     let doc = document.document();
     let access = accounted_layer_access(doc, id, control)?.ok_or(BackingError::Bounds)?;
@@ -125,7 +129,12 @@ fn edit_locks(document: &AccountedDocument, edit: AccountedEdit<'_>, control: &R
         AccountedEdit::LayerMetadata { visible: Some(visible), .. } if visible != layer.visible && imported.visibility => {
             Err(EngineError::Other("the imported layer is visibility-locked".into()))
         }
-        AccountedEdit::NativePixels { .. } if access.locks.pixels || access.locks.all || access.locks.transparency || imported.content || imported.alpha => {
+        AccountedEdit::NativePixels { .. }
+            if access.locks.pixels
+                || access.locks.all
+                || imported.content
+                || (access.locks.transparency || imported.alpha) && !alpha.is_some_and(|proof| proof.authorizes(document, edit)) =>
+        {
             Err(EngineError::Other("native pixel replacement cannot change a content- or alpha-locked layer".into()))
         }
         _ => Ok(()),
@@ -195,6 +204,25 @@ impl Session {
     /// Typed edits retain the quota and source owner. No mutable model callback
     /// can escape into this branch or mutate a model before history is prepared.
     pub fn edit_accounted(&mut self, label: &str, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<()> {
+        self.edit_accounted_inner(label, edit, NativeAlphaCheck::OrdinaryLocks, control)
+    }
+
+    /// Fill-only raw-alpha preservation. The active genuine imported owner is
+    /// independently checked here; a caller's preserve flag is not a proof.
+    /// Content/all/pixel locks remain mandatory and ordinary NativePixels edits
+    /// retain their existing transparency-lock refusal.
+    pub(crate) fn edit_accounted_preserving_native_alpha(
+        &mut self,
+        label: &str,
+        layer: photocraft_doc::LayerId,
+        rect: photocraft_geom::Rect,
+        bytes: &[u8],
+        control: &ReadControl<'_>,
+    ) -> Result<()> {
+        self.edit_accounted_inner(label, AccountedEdit::NativePixels { layer, rect, bytes }, NativeAlphaCheck::VerifyRawPreservation, control)
+    }
+
+    fn edit_accounted_inner(&mut self, label: &str, edit: AccountedEdit<'_>, alpha_check: NativeAlphaCheck, control: &ReadControl<'_>) -> Result<()> {
         control.check(1)?;
         if self.active_job().is_some() {
             return Err(EngineError::Other("the document has an active background job".into()));
@@ -204,7 +232,17 @@ impl Session {
         if state.active_layer != view.target().active || state.layer_anchor != view.anchor() || !state.selected_layers.is_empty() {
             return Err(BackingError::Integrity.into());
         }
-        edit_locks(state.doc.accounted().ok_or(BackingError::Integrity)?, edit, control)?;
+        let document = state.doc.accounted().ok_or(BackingError::Integrity)?;
+        let alpha = match alpha_check {
+            NativeAlphaCheck::OrdinaryLocks => None,
+            NativeAlphaCheck::VerifyRawPreservation => {
+                if !state.history.current()?.shares_state(&state.doc) {
+                    return Err(BackingError::Integrity.into());
+                }
+                Some(VerifiedNativeAlpha::verify(document, edit, control)?)
+            }
+        };
+        edit_locks(document, edit, alpha.as_ref(), control)?;
         let mut history = state.history.clone();
         history.set_current_layers_borrowed(view.target(), control)?;
         let snapshot = history.try_commit_accounted(edit, label, view.target(), control)?;
@@ -216,6 +254,7 @@ impl Session {
         let selection = view.try_replace(current, state.active_layer, view.selected(), state.layer_anchor, control)?;
         let revision = state.revision.checked_add(1).ok_or(BackingError::Length)?;
         control.check(1)?;
+        drop(alpha);
         state.doc = snapshot;
         state.history = history;
         state.accounted_view = Some(selection);
@@ -225,4 +264,9 @@ impl Session {
         state._accounted_metadata_gesture = None;
         Ok(())
     }
+}
+
+enum NativeAlphaCheck {
+    OrdinaryLocks,
+    VerifyRawPreservation,
 }

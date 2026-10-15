@@ -18,6 +18,113 @@ const CMD: &str = "edit.fill";
 /// Every `contents` value, in the dialog's order.
 pub const CONTENTS: [&str; 9] = ["foreground", "background", "color", "contentAware", "pattern", "history", "black", "gray", "white"];
 
+/// The ordinary Fill dialog's solid source and blend recipe. This is not a
+/// native-wide color conversion or permission to modify a target.
+#[derive(Clone, Copy)]
+pub(crate) struct SolidFill {
+    pub(crate) contents: &'static str,
+    color: [f32; 4],
+    blend: Blend,
+    foreground: Option<[u32; 4]>,
+    background: Option<[u32; 4]>,
+}
+impl SolidFill {
+    pub(crate) fn keeps_alpha(self) -> bool {
+        self.blend.keep_alpha
+    }
+    pub(crate) fn tools_match(self, session: &Session) -> bool {
+        self.foreground.is_none_or(|v| v == session.tools.foreground.map(f32::to_bits))
+            && self.background.is_none_or(|v| v == session.tools.background.map(f32::to_bits))
+    }
+    pub(crate) fn apply(self, target: &mut Surface, area: Rect, selection: Option<&Surface>, alpha_locked: bool) -> Result<()> {
+        // Absolute coordinates and the existing optimized/partial-tile paths
+        // are intentional, including Dissolve's coordinate-dependent noise.
+        blend_into(target, area, &Source::Color(self.color), selection, Blend { keep_alpha: self.blend.keep_alpha || alpha_locked, ..self.blend })
+    }
+    pub(crate) fn cell_requirements(self, area: Rect, bytes_per_pixel: usize) -> Result<(usize, u64)> {
+        let pixels = u64::from(area.width()).checked_mul(u64::from(area.height())).ok_or_else(|| bad("solid Fill work overflow"))?;
+        let tile = 65536usize.checked_mul(bytes_per_pixel).ok_or_else(|| bad("solid Fill tile overflow"))?;
+        // In addition to the shared native cell's input/COW/map allowance:
+        // solid_tile's cached pixel owner and the opaque encoded-color Vec.
+        let extra = tile.checked_mul(2).and_then(|n| n.checked_add(bytes_per_pixel.checked_mul(2)?)).ok_or_else(|| bad("solid Fill storage overflow"))?;
+        // RGB/Gray has at most four samples. The existing kernel performs at
+        // most two mask scans, one blend loop, fixed-size conversions and one
+        // fixed-size blend (including nonseparable modes) per selected pixel.
+        // 2048 is a conservative fixed-provider work ceiling per pixel, not
+        // a measured instruction count or a caller-supplied requirement.
+        let work = pixels.checked_mul(2048).and_then(|n| n.checked_add((tile as u64).checked_mul(16)?)).ok_or_else(|| bad("solid Fill work overflow"))?;
+        Ok((extra, work))
+    }
+}
+
+pub(crate) fn solid_fill_recipe(session: &Session, p: &Value, control: &photocraft_raster::backing::ReadControl<'_>) -> Result<SolidFill> {
+    control.check(1)?;
+    // Refuse malformed values without formatting/traversing arbitrary JSON in
+    // an error before the enclosing command's journal census has admitted it.
+    for key in ["contents", "mode"] {
+        if p.get(key).is_some_and(|v| !v.is_null() && !v.is_string()) {
+            return Err(bad("Fill contents and mode must be strings or null"));
+        }
+    }
+    if p.get("opacity").is_some_and(|v| !v.is_null() && v.as_f64().is_none_or(|v| !v.is_finite())) {
+        return Err(bad("Fill opacity must be a finite number or null"));
+    }
+    if p.get("preserveTransparency").is_some_and(|v| !v.is_null() && !v.is_boolean()) {
+        return Err(bad("Fill preserveTransparency must be a boolean or null"));
+    }
+    if let Some(text) = p.get("contents").and_then(Value::as_str) {
+        control.check(text.len() as u64)?;
+        if !CONTENTS.iter().any(|name| name.eq_ignore_ascii_case(text)) {
+            return Err(bad("unknown Fill contents"));
+        }
+    }
+    let contents = contents(p)?;
+    // The existing blend-name normalizer allocates string temporaries. Retain
+    // a genuine same-catalog allowance before that call, including arbitrarily
+    // padded yet valid spellings; do not impose a new lexical alias policy.
+    let mode_bytes = p.get("mode").and_then(Value::as_str).map_or(0, str::len);
+    let parser_bytes = mode_bytes.checked_mul(4).and_then(|n| n.checked_add(8192)).ok_or_else(|| bad("Fill mode parser size overflow"))?;
+    let quota = session.active().and_then(|s| s.doc.quota()).ok_or_else(|| bad("Fill requires its actual accounted catalog"))?;
+    let _parser_lease =
+        quota.reserve(photocraft_raster::backing::quota::QuotaKind::Index, parser_bytes as u64).map_err(|_| photocraft_raster::backing::BackingError::Quota)?;
+    control.check(parser_bytes as u64)?;
+    let mode = match p.get("mode").and_then(Value::as_str) {
+        None => BlendMode::Normal,
+        Some(text) => blend_from_str(text).filter(|m| *m != BlendMode::PassThrough).ok_or_else(|| bad("unknown or unsupported Fill blend mode"))?,
+    };
+    let opacity = opacity(p)?;
+    let keep_alpha = flag(p, "preserveTransparency", false)?;
+    // Allocation-free equivalent of color_param for this solid lane: only the
+    // first RGB/optional alpha values are used, and invalid color forms retain
+    // the ordinary foreground fallback. Surplus array values remain ignored.
+    let color = match contents {
+        "foreground" => session.tools.foreground,
+        "background" => session.tools.background,
+        "color" => match p.get("color") {
+            Some(Value::Array(a)) if a.len() >= 3 => {
+                let channel = |i: usize| a.get(i).map(|v| v.as_f64().unwrap_or(0.0) as f32);
+                [channel(0).unwrap_or(0.0), channel(1).unwrap_or(0.0), channel(2).unwrap_or(0.0), channel(3).unwrap_or(1.0)]
+            }
+            Some(Value::String(text)) => {
+                control.check(text.len() as u64)?;
+                crate::commands::parse_hex(text).unwrap_or(session.tools.foreground)
+            }
+            _ => session.tools.foreground,
+        },
+        "black" => [0.0, 0.0, 0.0, 1.0],
+        "gray" => [128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0],
+        "white" => [1.0; 4],
+        _ => return Err(bad("accounted Fill supports solid contents only; pattern, history and Content-Aware require separate preparation")),
+    };
+    Ok(SolidFill {
+        contents,
+        color,
+        blend: Blend { mode, opacity, keep_alpha, restore: false },
+        foreground: matches!(contents, "foreground" | "color").then_some(session.tools.foreground.map(f32::to_bits)),
+        background: (contents == "background").then_some(session.tools.background.map(f32::to_bits)),
+    })
+}
+
 /// `src` over `surf` across `area` (Normal, 100 %), each pixel weighted by `limit` when given:
 /// a paste into a layer mask or channel, which keeps the pasted pixels' luminosity (#1035).
 pub(crate) fn composite_over(surf: &mut Surface, src: &Surface, area: Rect, limit: Option<&Surface>) -> Result<()> {
@@ -86,7 +193,7 @@ impl Source {
 }
 
 /// The `contents` param; without one, `color` (the old `{"color": …}` form, foreground by default).
-fn contents(p: &Value) -> Result<&str> {
+fn contents(p: &Value) -> Result<&'static str> {
     match p.get("contents") {
         None | Some(Value::Null) => Ok("color"),
         Some(Value::String(c)) => {

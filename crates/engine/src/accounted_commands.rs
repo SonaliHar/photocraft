@@ -35,6 +35,7 @@ pub fn supports(id: &str) -> bool {
         "layer.select"
             | "layer.setProps"
             | "edit.clear"
+            | "edit.fill"
             | "select.all"
             | "select.deselect"
             | "select.colorRange"
@@ -57,6 +58,8 @@ enum Request<'a> {
     PreparedThresholdAlpha(threshold_alpha::Prepared<'a>),
     Clear(&'a Value),
     PreparedClear(crate::accounted_clear::Prepared<'a>),
+    Fill(&'a Value),
+    PreparedFill(crate::accounted_fill::Prepared<'a>),
     Select(LayerId),
     Edit(AccountedEdit<'a>),
     ClearSelection,
@@ -79,6 +82,10 @@ fn require_history_selection_enabled(session: &Session) -> Result<()> {
 }
 
 fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadControl<'_>) -> Result<Request<'a>> {
+    if id == "edit.fill" {
+        crate::accounted_fill::validate_request(session, params)?;
+        return Ok(Request::Fill(params));
+    }
     if id == "edit.clear" {
         crate::accounted_clear::validate_request(session, params)?;
         return Ok(Request::Clear(params));
@@ -217,8 +224,14 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
     if matches!(id, "xcf.filter.set" | "xcf.filter.enable") && !state.doc.accounted().is_some_and(|owner| owner.is_readonly_threshold_alpha_storage()) {
         return Ok(Some("this accounted filter storage has no qualified editing recipe"));
     }
-    if id == "edit.clear" && (state.doc.xcf_state.is_none() || state.doc.accounted().is_none_or(|owner| owner.is_readonly_threshold_alpha_storage())) {
+    if id == "edit.clear" && (state.doc.xcf_state.is_none() || state.doc.accounted().is_none_or(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage())) {
         return Ok(Some("accounted Clear requires the plain imported native owner"));
+    }
+    if id == "edit.fill" && (state.doc.xcf_state.is_none() || state.doc.accounted().is_none_or(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage())) {
+        return Ok(Some("accounted Fill requires the plain imported native owner"));
+    }
+    if id == "edit.fill" && !matches!(state.doc.depth, photocraft_doc::SampleType::U8 | photocraft_doc::SampleType::U16 | photocraft_doc::SampleType::F32) {
+        return Ok(Some("accounted Fill requires U8/U16/F32 native pixels"));
     }
     // Null is the existing enabled-query shape, not a layer-property call.
     // Do not disable a menu because its eventual call parameters are absent.
@@ -496,6 +509,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             Request::ImportedMetadata(request) => Request::PreparedMetadata(request.prepare(session, control)?),
             Request::ThresholdAlpha(request) => Request::PreparedThresholdAlpha(request.prepare(session, control)?),
             Request::Clear(params) => Request::PreparedClear(crate::accounted_clear::Prepared::prepare(session, params, control)?),
+            Request::Fill(params) => Request::PreparedFill(crate::accounted_fill::Prepared::prepare(session, params, control)?),
             other => other,
         };
         let quota = session.active().and_then(|state| state.doc.quota()).ok_or(BackingError::Unsupported)?.clone();
@@ -556,6 +570,11 @@ impl<'a> PreparedAccountedCommand<'a> {
             // and covers the synchronous returned reply after that stage drops.
             census.add(0, usize::try_from(threshold_alpha::REPLY_ENVELOPE).map_err(|_| BackingError::Length)?)?;
         }
+        if matches!(&request, Request::PreparedFill(_)) {
+            // The temporary native transaction pays its prepared reply until
+            // publication; the retained journal covers the returned value.
+            census.add(0, usize::try_from(crate::accounted_fill::REPLY_ENVELOPE).map_err(|_| BackingError::Length)?)?;
+        }
         // The copier polls Value visits but String copies do not debit bytes.
         // Prepay actual bounded payload and known Value/entry slot copies before
         // any destination allocation. Later equality admission is independent.
@@ -589,7 +608,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             }
             None => CommandLease::Journal(lease),
         };
-        let history = if matches!(&request, Request::HistorySelect(_) | Request::PreparedThresholdAlpha(_) | Request::PreparedClear(_)) { Some(state.history.clone()) } else { None };
+        let history = if matches!(&request, Request::HistorySelect(_) | Request::PreparedThresholdAlpha(_) | Request::PreparedClear(_) | Request::PreparedFill(_)) { Some(state.history.clone()) } else { None };
         Ok(Self { request, snapshot: state.doc.clone(), revision: state.revision, view_revision: state.view_revision, history, journal, lease, overlap, quota })
     }
     pub fn execute(self, session: &mut Session, control: &ReadControl<'_>) -> Result<Value> {
@@ -620,6 +639,7 @@ impl<'a> PreparedAccountedCommand<'a> {
                 | Request::PreparedMetadata(_)
                 | Request::PreparedThresholdAlpha(_)
                 | Request::PreparedClear(_)
+                | Request::PreparedFill(_)
                 | Request::HistorySelect(_)
         ) && state.view_revision != self.view_revision
         {
@@ -651,7 +671,9 @@ impl<'a> PreparedAccountedCommand<'a> {
             Request::PreparedMetadata(prepared) => prepared.execute(session, control)?,
             Request::PreparedThresholdAlpha(prepared) => prepared.execute(session, control)?,
             Request::PreparedClear(prepared) => prepared.execute(session, control)?,
+            Request::PreparedFill(prepared) => prepared.execute(session, control)?,
             Request::Clear(_) => return Err(BackingError::Integrity.into()),
+            Request::Fill(_) => return Err(BackingError::Integrity.into()),
             Request::ThresholdAlpha(_) => return Err(BackingError::Integrity.into()),
             Request::ImportedMetadata(_) => return Err(BackingError::Integrity.into()),
             Request::Select(layer) => {
