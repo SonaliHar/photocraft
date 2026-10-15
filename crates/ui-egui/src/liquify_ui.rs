@@ -1056,6 +1056,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn selection_preview_matches_unchanged_commit_5989() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_layer();
+        app.session
+            .edit("select left", |doc, _| {
+                let mut selection = Surface::new(photocraft_doc::PixelFormat::GRAY8);
+                selection.fill_rect(Rect::new(0, 0, 30, 80), &[1.0]);
+                doc.selection = Some(selection);
+                Ok(())
+            })
+            .unwrap();
+        open(&mut app, &ctx).unwrap();
+        let (layer, before, preview_before) = {
+            let d = app.distort.liquify.as_ref().unwrap();
+            (d.layer, d.source.read_region(d.canvas), d.out.clone())
+        };
+        control(&mut app, &json!({"tool": "forwardWarp", "size": 24})).unwrap();
+        for ev in [ToolEvent::Down { x: 80.0, y: 40.0, pressure: 1.0 }, ToolEvent::Move { x: 90.0, y: 40.0, pressure: 1.0 }, ToolEvent::Up { x: 90.0, y: 40.0 }]
+        {
+            pointer(&mut app, ev, egui::Modifiers::NONE);
+        }
+        let preview_changed = app.distort.liquify.as_ref().unwrap().out != preview_before;
+        commit(&mut app);
+        let doc = &app.session.active().unwrap().doc;
+        let after = doc.layer(layer).unwrap().surface().unwrap().read_region(doc.bounds());
+        assert_eq!(before, after, "unselected stroke must not change committed pixels");
+        assert!(!preview_changed, "Liquify preview changes unselected pixels although commit preserves them");
+    }
+
+    #[test]
     fn alt_right_drag_resizes_the_liquify_brush_and_does_not_paint() {
         assert!(brush_resize_gesture(egui::Modifiers::ALT, true));
         assert!(brush_resize_gesture(egui::Modifiers::CTRL | egui::Modifiers::ALT, false));
