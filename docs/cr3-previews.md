@@ -31,3 +31,28 @@ Synthetic regression tests cover independent EXIF/GPS/maker blocks, relocation,
 unknown tags, endian conversion, cycle/size limits, truncation, colour-profile
 precedence, orientation and native-format metadata persistence. No camera
 photographs or external reference-decoder binaries are required by these tests.
+
+## Optional HEVC previews
+
+With the existing `heif` feature, a camera-rendered HEVC preview can also open.
+Canon's length-prefixed preview cells are placed into a standard HEIF item/grid
+container and passed to PhotoCraft's existing decoder. This adapter reads
+preview framing and metadata, not CRX entropy or wavelet coefficients.
+
+Eight-bit and ten-bit previews are distinguished from native RAW data. Ten-bit
+samples remain in a 16-bit document, rather than being reduced to eight bits.
+Supported nclx declarations are sRGB and Rec.2020/ST 2084 PQ; matching ICC tagging
+keeps the display transform consistent with the declared pixel encoding.
+Unsupported declarations are reported instead of being assumed to be sRGB.
+
+Prefer the larger supported preview, retaining a valid JPEG when optional HEVC
+support is absent or the HEVC preview cannot decode. HEVC-only files explain a
+missing decoder in builds without `heif`. Crop geometry, working-memory limits,
+cell/slice counts and parent-box extents are checked before decoding. The
+original preview precision and camera-rendered nature remain explicit in warnings.
+
+Synthetic regression coverage uses the permissively licensed 4:2:2 vector in
+`crates/heif/tests/fixtures/`; it requires the dependency correction in #5921.
+It verifies cropping, orientation, preserved decoded samples, ten-bit storage,
+PQ tagging, metadata persistence, no-HEIF behaviour and JPEG fallback. There is
+no camera calibration dataset or full-sensor reference decoder in this path.

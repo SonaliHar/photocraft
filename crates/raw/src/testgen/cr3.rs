@@ -48,3 +48,25 @@ pub fn with_metadata(jpeg: &[u8], orientation: u16, color: u16, xmp: &str) -> Ve
     let offset = (ftyp.len() + m.len() + bx(b"uuid", &xmp_body).len() + 8) as u64;
     [ftyp, movie(offset), bx(b"uuid", &xmp_body), bx(b"mdat", jpeg)].concat()
 }
+
+/// A single-cell HEVC PRVW with independently supplied coded bytes and metadata.
+/// This only wraps a camera-preview bitstream; it never encodes sensor samples.
+pub fn hevc_preview(p: &crate::cr3::HevcPreview<'_>, orientation: u16) -> Vec<u8> {
+    let mut bytes = with_metadata(&[], orientation, 1, "<xmp preview='retained'/>");
+    let size = [0u32.to_be_bytes(), p.tile_width.to_be_bytes(), p.tile_height.to_be_bytes()].concat();
+    let mut color = b"nclx".to_vec();
+    for code in p.color {
+        color.extend(code.to_be_bytes());
+    }
+    color.push(if p.full_range { 128 } else { 0 });
+    let properties = [bx(b"CISZ", &size), bx(b"hvcC", p.configuration), bx(b"colr", &color), bx(b"pixi", &[0, 0, 0, 0, 3, p.bits, p.bits, p.bits])].concat();
+    let data = [properties, bx(b"IMGD", p.sample)].concat();
+    let mut header = vec![0u8; 16];
+    header[..4].copy_from_slice(&0x0100_0000u32.to_be_bytes());
+    header[4..6].copy_from_slice(&2u16.to_be_bytes());
+    header[6..8].copy_from_slice(&(p.width as u16).to_be_bytes());
+    header[8..10].copy_from_slice(&(p.height as u16).to_be_bytes());
+    header[12..16].copy_from_slice(&(data.len() as u32).to_be_bytes());
+    bytes.extend(bx(b"PRVW", &[header, data].concat()));
+    bytes
+}
