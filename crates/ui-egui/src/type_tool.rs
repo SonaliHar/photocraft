@@ -295,6 +295,7 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     if let Some(e) = app.ui.text_edit.as_mut() {
         e.dragging = false;
         e.resize = None;
+        app.ui.caret_blink_time = app.last_frame_time;
         return;
     }
     let (w, h) = ((end[0] - start[0]).abs(), (end[1] - start[1]).abs());
@@ -334,6 +335,7 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
         }
         // Like Photoshop: the placeholder is selected, so typing replaces it.
         let n = text.chars().count();
+        app.ui.caret_blink_time = app.last_frame_time;
         app.ui.text_edit = Some(TextEdit { layer: id, caret: n, anchor: 0, session: key, created: true, mask, dragging: false, resize: None, preedit: None });
     }
 }
@@ -2666,6 +2668,21 @@ mod tests {
         insert(&mut app, "Hello");
         app.ui.caret_blink_time = 0.0;
         let ctx = egui::Context::default();
+
+        let has_caret = |app: &mut PhotocraftApp, ctx: &egui::Context, time: f64| -> bool {
+            let mut out = ctx.run_ui(egui::RawInput { time: Some(time), ..Default::default() }, |ui| {
+                let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0));
+                let painter = ui.ctx().layer_painter(egui::LayerId::background()).with_clip_rect(rect);
+                let xf = ViewXform { rect, zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+                draw_overlay(app, &painter, &xf);
+            });
+            out.textures_delta.clear();
+            out.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::LineSegment { stroke, .. } if (stroke.width - 1.5).abs() < 1e-4))
+        };
+
+        // Before resetting, the caret is in the off phase at t = 10.5 s (10500 / 530 = 19, odd phase)
+        assert!(!has_caret(&mut app, &ctx, 10.5), "caret should be off at t = 10.5 with phase 0.0");
+
         ctx.begin_pass(egui::RawInput {
             time: Some(10.5),
             events: vec![egui::Event::Key { key: egui::Key::ArrowRight, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }],
@@ -2673,5 +2690,19 @@ mod tests {
         });
         handle_keys(&mut app, &ctx);
         assert_eq!(app.ui.caret_blink_time, 10.5);
+
+        // draw_overlay paints the solid caret in the new phase
+        assert!(has_caret(&mut app, &ctx, 10.5), "caret should be painted right after arrow key");
+    }
+
+    #[test]
+    fn pointer_up_click_resets_caret_blink_phase() {
+        let mut app = app();
+        pointer_up(&mut app, [10.0, 50.0], [10.0, 50.0]);
+        insert(&mut app, "Hello");
+        app.ui.caret_blink_time = 0.0;
+        app.last_frame_time = 12.3;
+        pointer_up(&mut app, [10.0, 50.0], [10.0, 50.0]);
+        assert_eq!(app.ui.caret_blink_time, 12.3);
     }
 }
