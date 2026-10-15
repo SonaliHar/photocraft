@@ -623,6 +623,22 @@ invalid destinations return an error without changing the arrangement.
 
 Lock Workspace prevents moving, detaching, and closing panels; activating a panel remains available.
 
+`window.panel.dock {panel, side:"left"|"right", group?:bool}` docks one tab on the
+specified side without moving other panels. `group:true` moves its complete tab group.
+Left and right roots coexist around the document canvas. Moving a tab onto a panel inherits
+its destination side. Edge drops also create an empty side; dropping in the canvas floats a tab.
+The optional `dockingLeft` workspace field stores left-side membership alongside the existing
+`docking` tree. Older `dockSide` workspaces migrate on first customization. Floating panel
+geometry is clamped to the work area inside the menu/options/status bars and main toolbar.
+
+`window.toolbar.layout {placement?:"left"|"right"|"floating", position?:[x,y], height?:100..4096}`
+arranges the tools palette without moving panel groups. Docked tools occupy the innermost
+column on their side, next to the document canvas. Drag its dedicated top grip to detach or
+redock it, or right-click that grip for placement choices; the existing chevron still toggles
+one/two columns. Its layout is exposed by `ui.inspect.toolbarLayout` and saved in workspaces.
+Lock Workspace protects its placement. Floating tool palettes remain above other panels;
+docked tools exclude overlapping floating-panel geometry.
+
 `window.panel.layout {action}` also accepts the shared, externally tagged action schema.
 For example, `{"action":{"MoveFloating":{"panel":"properties","rect":[44,66,360,450]}}}`
 updates a floating group's position and size; `{"action":{"ResizeSplit":{"path":[],"size":{"Ratio":0.35}}}}`

@@ -1215,6 +1215,14 @@ pub struct UiState {
     pub workspace: String,
     pub palette_open: bool,
     pub dock_tabs: DockTabs,
+    /// Physical side of the canvas that hosts the customizable panel dock.
+    #[serde(default)]
+    pub dock_side: crate::dock::DockSide,
+    /// Per-panel side membership. None migrates the original single-column workspace.
+    #[serde(default)]
+    pub docking_left: Option<Vec<String>>,
+    #[serde(default)]
+    pub toolbar_layout: crate::toolbar_docking::ToolbarLayout,
     /// Right-dock group order, heights and collapsed groups (see `dock`).
     #[serde(default)]
     pub dock: crate::dock::DockLayout,
@@ -1358,6 +1366,9 @@ impl Default for UiState {
             workspace: "Essentials".into(),
             palette_open: false,
             dock_tabs: DockTabs::default(),
+            dock_side: crate::dock::DockSide::default(),
+            docking_left: None,
+            toolbar_layout: Default::default(),
             dock: Default::default(),
             docking: None,
             docking_hidden: Default::default(),

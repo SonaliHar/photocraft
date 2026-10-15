@@ -1,4 +1,4 @@
-//! Right-dock layout (#88): panel groups with fixed heights, like Photoshop's dock columns.
+//! Dock layout (#88): panel groups with fixed heights, like Photoshop's dock columns.
 //!
 //! A group's height never follows its content: content taller than the group scrolls inside
 //! it. The last expanded group (Layers by default) fills what the others leave. Drag the gap
@@ -21,6 +21,24 @@ use crate::PhotocraftApp;
 use crate::state::{DockTabs, Panels};
 use crate::theme::Tokens;
 use crate::widgets;
+
+/// Physical side of the canvas where the shared dock is attached.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DockSide {
+    Left,
+    #[default]
+    Right,
+}
+
+impl DockSide {
+    pub fn panel(self, id: impl Into<egui::Id>) -> egui::Panel {
+        match self {
+            Self::Left => egui::Panel::left(id),
+            Self::Right => egui::Panel::right(id),
+        }
+    }
+}
 
 /// A dock panel group (one tab strip).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -803,7 +821,7 @@ fn resize(layout: &mut DockLayout, heights: &[(Group, f32)], i: usize, dy: f32) 
 
 /// What `prefs.panelLayout` holds: the live layout and open panels.
 fn snapshot(app: &PhotocraftApp) -> Value {
-    json!({"workspace": app.ui.workspace, "panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock, "timelineOpen": app.ui.timeline.open, "docking": app.ui.docking, "dockingHidden": app.ui.docking_hidden, "dockingCollapsed": app.ui.docking_collapsed})
+    json!({"workspace": app.ui.workspace, "panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock, "dockSide": app.ui.dock_side, "dockingLeft": app.ui.docking_left, "toolbarLayout": app.ui.toolbar_layout, "timelineOpen": app.ui.timeline.open, "docking": app.ui.docking, "dockingHidden": app.ui.docking_hidden, "dockingCollapsed": app.ui.docking_collapsed})
 }
 
 /// Remember the layout in the preferences once the user lets go of the mouse (Workspace ›
@@ -838,6 +856,10 @@ pub fn restore(app: &mut PhotocraftApp) {
 /// (a workspace or `panelLayout`). Missing or invalid dock parts are left alone; old
 /// layouts without Timeline visibility restore it closed.
 pub fn apply(app: &mut PhotocraftApp, v: &Value) {
+    app.ui.dock_side = v.get("dockSide").and_then(|side| serde_json::from_value(side.clone()).ok()).unwrap_or_default();
+    app.ui.toolbar_layout =
+        v.get("toolbarLayout").and_then(|value| serde_json::from_value(value.clone()).ok()).filter(crate::toolbar_docking::valid).unwrap_or_default();
+    app.ui.docking_left = v.get("dockingLeft").and_then(|side| serde_json::from_value(side.clone()).ok());
     app.ui.docking_collapsed = v.get("dockingCollapsed").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
     app.ui.docking_reveal = None;
     app.ui.docking_generation = app.ui.docking_generation.wrapping_add(1);

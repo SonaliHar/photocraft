@@ -3017,6 +3017,8 @@ cameraData	Lens	Lente
 	Change Panel Layout	Alterar disposição dos painéis
 	Close Panel	Fechar painel
 	Dock Panel	Encaixar painel
+	Dock Panels Left	Encaixar painéis à esquerda
+	Dock Panels Right	Encaixar painéis à direita
 	Float Panel	Painel flutuante
 	Move Panel	Mover painel
 	Group with	Agrupar com
@@ -3986,3 +3988,11 @@ layerLabel	No Color	Sem cor
 	Take the shortcut from the other command and select it	Tirar o atalho do outro comando e selecioná-lo
 	Undo Changes	Desfazer alterações
 	{shortcut} is reserved by the system and can't be assigned.	{shortcut} é reservado pelo sistema e não pode ser atribuído.
+
+	Dock Panel Left	Encaixar este painel à esquerda
+	Dock Panel Right	Encaixar este painel à direita
+
+	Drag Toolbar	Arrastar barra de ferramentas
+	Dock Toolbar Left	Encaixar ferramentas à esquerda do canvas
+	Dock Toolbar Right	Encaixar ferramentas à direita do canvas
+	Float Toolbar	Deixar ferramentas flutuantes

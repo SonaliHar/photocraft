@@ -1319,6 +1319,8 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "dockTabs": app.ui.dock_tabs,
         "dock": app.ui.dock,
         "docking": app.ui.docking,
+        "dockingLeft": app.ui.docking_left,
+        "toolbarLayout": app.ui.toolbar_layout,
         "dockingHidden": app.ui.docking_hidden,
         "dockingCollapsed": app.ui.docking_collapsed,
         "view": app.ui.view,

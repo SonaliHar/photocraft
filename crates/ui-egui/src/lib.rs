@@ -151,6 +151,7 @@ pub mod outline;
 pub mod paint_mouse;
 pub mod palette;
 mod panel_docking;
+mod panel_surface;
 pub mod panels;
 pub mod parity;
 pub mod patch_preview;
@@ -210,6 +211,7 @@ pub mod tiff_options_ui;
 mod tile_overlay;
 mod timeline_ui;
 mod titlebar;
+mod toolbar_docking;
 pub use titlebar::{Caption, CaptionFamily, CaptionIcon, CaptionIcons, CaptionStyle, RenderIconFn};
 pub mod tone;
 mod tool_cursor;
@@ -1043,6 +1045,9 @@ impl PhotocraftApp {
             && let Some(authorize) = self.services.automation_command.as_ref()
         {
             authorize(id, &params)?;
+        }
+        if id == "window.toolbar.layout" {
+            return toolbar_docking::command(self, &params);
         }
         if let Some(result) = panel_docking::command(self, id, &params) {
             return result;
@@ -1938,11 +1943,14 @@ impl eframe::App for PhotocraftApp {
         if chrome && self.ui.panels.status_bar {
             panels::status_bar(self, ui);
         }
-        if chrome && self.ui.panels.toolbar {
-            panels::toolbar(self, ui);
+        if chrome {
+            toolbar_docking::begin_frame(ui);
         }
         if chrome && self.ui.panels.dock {
             panels::right_dock(self, ui);
+        }
+        if chrome && self.ui.panels.toolbar && !toolbar_docking::was_rendered(&ctx) {
+            panels::toolbar(self, ui);
         }
         let t = theme::Tokens::get(&ctx);
         let backdrop = if chrome { prefs_ui::pasteboard_color(self).unwrap_or(t.canvas) } else { egui::Color32::BLACK };

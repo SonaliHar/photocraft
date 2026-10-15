@@ -79,290 +79,280 @@ fn visible_sections(hidden: &[String]) -> Vec<Vec<(usize, Vec<Tool>)>> {
 }
 
 pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    crate::toolbar_docking::show(app, ui);
+}
+
+pub(crate) fn toolbar_contents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    let (w1, bx, m) = if t.pro { (40.0, 30.0, 5i8) } else { (50.0, 36.0, 7i8) };
+    let bx = if t.pro { 30.0 } else { 36.0 };
     let sections = visible_sections(&app.session.prefs().toolbar.hidden);
-    // Two columns when the header chevron asks for them; a column that doesn't fit scrolls.
     let double = app.ui.panels.toolbar_double;
-    let w = if double { w1 + bx + 2.0 } else { w1 };
-    crate::direction::start_panel("toolbar")
-        .resizable(false)
-        .exact_size(w)
-        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(m, 8)))
+    crate::toolbar_docking::handle(app, ui);
+    // Toolbar width is a user preference, not a Pro-only feature.
+    // Keep the same hit target in every theme (including RTL layouts).
+    let (cr, resp) = ui.allocate_exact_size(vec2(bx, 14.0), Sense::click());
+    let (shrink, grow) = if crate::direction::is_rtl() { ("chevrons-right", "chevrons-left") } else { ("chevrons-left", "chevrons-right") };
+    icons::paint(ui, cr, if double { shrink } else { grow }, 11.0, if resp.hovered() { t.text } else { t.text_faint });
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Toolbar")));
+    if resp.clicked() {
+        app.ui.panels.toolbar_double = !double;
+    }
+    ui.add_space(4.0);
+    // Subtle violet wash at the bottom of the toolbar.
+    let full = ui.max_rect();
+    if !t.bevel && !t.pro && t.dark() {
+        let mut mesh = egui::Mesh::default();
+        let r = Rect::from_min_max(pos2(full.left() - 7.0, full.bottom() - 260.0), pos2(full.right() + 7.0, full.bottom() + 8.0));
+        let top = Color32::TRANSPARENT;
+        let bottom = Color32::from_rgba_unmultiplied(90, 70, 190, 34);
+        mesh.colored_vertex(r.left_top(), top);
+        mesh.colored_vertex(r.right_top(), top);
+        mesh.colored_vertex(r.right_bottom(), bottom);
+        mesh.colored_vertex(r.left_bottom(), bottom);
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        ui.painter().add(mesh);
+    }
+    ui.spacing_mut().item_spacing = vec2(2.0, 3.0);
+    let flyout_id = egui::Id::new("tool-flyout");
+    let held_id = flyout_id.with("held");
+    if ui.input(|i| i.pointer.any_pressed()) {
+        ui.data_mut(|d| d.remove::<egui::Id>(held_id));
+    }
+    // No tool tooltips over an open flyout, or while a button is held to open one (#4450):
+    // Photoshop shows none there. (The flyout is our own Area, so egui's rule for popups
+    // doesn't hide them.)
+    let tool_tips = ui.data(|d| d.get_temp::<(egui::Id, Rect)>(flyout_id)).is_none() && !ui.input(|i| i.pointer.primary_down());
+    let ctx = ui.ctx().clone();
+    let footer = (if t.pro { 8.0 } else { 14.0 })
+        + chips_height(t.pro, t.round_chips, t.round_chips && double)
+        + if t.pro { 8.0 + if double { bx } else { bx * 2.0 + 3.0 } } else { 0.0 }
+        + 6.0;
+    // As tall as the tools, so the colour chips sit right under them (Photoshop); a column
+    // taller than the window scrolls and keeps the chips at the bottom.
+    egui::ScrollArea::vertical()
+        .id_salt("toolbar-columns")
+        .auto_shrink([false, true])
+        .max_height((ui.available_height() - footer).max(0.0))
+        .min_scrolled_height(0.0)
         .show(ui, |ui| {
-            // Toolbar width is a user preference, not a Pro-only feature.
-            // Keep the same hit target in every theme (including RTL layouts).
-            let (cr, resp) = ui.allocate_exact_size(vec2(bx, 14.0), Sense::click());
-            let (shrink, grow) = if crate::direction::is_rtl() { ("chevrons-right", "chevrons-left") } else { ("chevrons-left", "chevrons-right") };
-            icons::paint(ui, cr, if double { shrink } else { grow }, 11.0, if resp.hovered() { t.text } else { t.text_faint });
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Toolbar")));
-            if resp.clicked() {
-                app.ui.panels.toolbar_double = !double;
-            }
-            ui.add_space(4.0);
-            // Subtle violet wash at the bottom of the toolbar.
-            let full = ui.max_rect();
-            if !t.bevel && !t.pro && t.dark() {
-                let mut mesh = egui::Mesh::default();
-                let r = Rect::from_min_max(pos2(full.left() - 7.0, full.bottom() - 260.0), pos2(full.right() + 7.0, full.bottom() + 8.0));
-                let top = Color32::TRANSPARENT;
-                let bottom = Color32::from_rgba_unmultiplied(90, 70, 190, 34);
-                mesh.colored_vertex(r.left_top(), top);
-                mesh.colored_vertex(r.right_top(), top);
-                mesh.colored_vertex(r.right_bottom(), bottom);
-                mesh.colored_vertex(r.left_bottom(), bottom);
-                mesh.add_triangle(0, 1, 2);
-                mesh.add_triangle(0, 2, 3);
-                ui.painter().add(mesh);
-            }
-            ui.spacing_mut().item_spacing = vec2(2.0, 3.0);
-            let flyout_id = egui::Id::new("tool-flyout");
-            let held_id = flyout_id.with("held");
-            if ui.input(|i| i.pointer.any_pressed()) {
-                ui.data_mut(|d| d.remove::<egui::Id>(held_id));
-            }
-            // No tool tooltips over an open flyout, or while a button is held to open one (#4450):
-            // Photoshop shows none there. (The flyout is our own Area, so egui's rule for popups
-            // doesn't hide them.)
-            let tool_tips = ui.data(|d| d.get_temp::<(egui::Id, Rect)>(flyout_id)).is_none() && !ui.input(|i| i.pointer.primary_down());
-            let ctx = ui.ctx().clone();
-            let footer = (if t.pro { 8.0 } else { 14.0 })
-                + chips_height(t.pro, t.round_chips, t.round_chips && double)
-                + if t.pro { 8.0 + if double { bx } else { bx * 2.0 + 3.0 } } else { 0.0 }
-                + 6.0;
-            // As tall as the tools, so the colour chips sit right under them (Photoshop); a column
-            // taller than the window scrolls and keeps the chips at the bottom.
-            egui::ScrollArea::vertical()
-                .id_salt("toolbar-columns")
-                .auto_shrink([false, true])
-                .max_height((ui.available_height() - footer).max(0.0))
-                .min_scrolled_height(0.0)
-                .show(ui, |ui| {
-                    // Pro has no group dividers, so its two columns fill every row across groups.
-                    let sections: Vec<Vec<(usize, Vec<Tool>)>> = if t.pro { vec![sections.into_iter().flatten().collect()] } else { sections };
-                    for (si, section) in sections.iter().enumerate() {
-                        // Photoshop 2026 draws one uninterrupted column (no group dividers).
-                        if si > 0 && !t.pro {
-                            ui.add_space(4.0);
-                            let (r, _) = ui.allocate_exact_size(vec2(if double { bx * 2.0 + 2.0 } else { bx }, 1.0), Sense::hover());
-                            ui.painter().line_segment([r.left_center() + vec2(8.0, 0.0), r.right_center() - vec2(8.0, 0.0)], Stroke::new(1.0, t.separator));
-                            ui.add_space(4.0);
-                        }
-                        let rows: Vec<&[(usize, Vec<Tool>)]> = if double { section.chunks(2).collect() } else { section.chunks(1).collect() };
-                        for row in rows {
-                            ui.horizontal(|ui| {
-                                for (slot_index, slot) in row.iter() {
-                                    let key = egui::Id::new(("tool-slot", *slot_index));
-                                    let tool = slot_tool(ui, app.ui.tool, slot, key);
-                                    let sel = slot.contains(&app.ui.tool);
-                                    let tip = match crate::tool_shortcuts::shortcut(app, tool) {
-                                        Some(sc) => format!("{}  ({})", tl!(tool.label()), crate::shortcuts::pretty(&sc)),
-                                        None => tl!(tool.label()).to_string(),
-                                    };
-                                    let resp =
-                                        icons::button_with_icon_size_tip(ui, icons::tool_icon(tool), bx, toolbar_icon_size(bx, t.pro), sel, &tip, tool_tips);
-                                    if slot.len() > 1 {
-                                        paint_toolbar_flyout_indicator(ui, &t, &resp);
+            // Pro has no group dividers, so its two columns fill every row across groups.
+            let sections: Vec<Vec<(usize, Vec<Tool>)>> = if t.pro { vec![sections.into_iter().flatten().collect()] } else { sections };
+            for (si, section) in sections.iter().enumerate() {
+                // Photoshop 2026 draws one uninterrupted column (no group dividers).
+                if si > 0 && !t.pro {
+                    ui.add_space(4.0);
+                    let (r, _) = ui.allocate_exact_size(vec2(if double { bx * 2.0 + 2.0 } else { bx }, 1.0), Sense::hover());
+                    ui.painter().line_segment([r.left_center() + vec2(8.0, 0.0), r.right_center() - vec2(8.0, 0.0)], Stroke::new(1.0, t.separator));
+                    ui.add_space(4.0);
+                }
+                let rows: Vec<&[(usize, Vec<Tool>)]> = if double { section.chunks(2).collect() } else { section.chunks(1).collect() };
+                for row in rows {
+                    ui.horizontal(|ui| {
+                        for (slot_index, slot) in row.iter() {
+                            let key = egui::Id::new(("tool-slot", *slot_index));
+                            let tool = slot_tool(ui, app.ui.tool, slot, key);
+                            let sel = slot.contains(&app.ui.tool);
+                            let tip = match crate::tool_shortcuts::shortcut(app, tool) {
+                                Some(sc) => format!("{}  ({})", tl!(tool.label()), crate::shortcuts::pretty(&sc)),
+                                None => tl!(tool.label()).to_string(),
+                            };
+                            let resp = icons::button_with_icon_size_tip(ui, icons::tool_icon(tool), bx, toolbar_icon_size(bx, t.pro), sel, &tip, tool_tips);
+                            if slot.len() > 1 {
+                                paint_toolbar_flyout_indicator(ui, &t, &resp);
+                            }
+                            if resp.clicked() && ui.data(|d| d.get_temp::<egui::Id>(held_id)) != Some(key) {
+                                crate::tool_memory::select(app, tool);
+                            }
+                            // Double-clicking the Hand tool fits the image on screen (Photoshop).
+                            if resp.double_clicked() && tool == Tool::Hand {
+                                crate::tool_memory::select(app, tool);
+                                // With no document open there is nothing to fit.
+                                let _ = app.run("view.fitOnScreen", json!({}));
+                            }
+                            if resp.double_clicked() && tool == Tool::Zoom {
+                                crate::tool_memory::select(app, tool);
+                                let _ = app.run("view.actualPixels", json!({}));
+                            }
+                            // Right-click or long-press opens the flyout (Photoshop).
+                            let held_for = resp.is_pointer_button_down_on().then(|| ui.input(|i| i.pointer.press_start_time().map(|t0| i.time - t0))).flatten();
+                            if slot.len() > 1
+                                && let Some(seconds) = held_for
+                                && seconds < 0.35
+                            {
+                                ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(0.35 - seconds));
+                            }
+                            let long_press = held_for.is_some_and(|seconds| seconds >= 0.35);
+                            // Clicking the button of its open flyout again, with either button, closes
+                            // it (#4932); the release that ends the long press that opened it doesn't.
+                            let open_here = ui.data(|d| d.get_temp::<(egui::Id, Rect)>(flyout_id)).is_some_and(|(k, _)| k == key);
+                            let reclicked =
+                                open_here && (resp.secondary_clicked() || (resp.clicked() && ui.data(|d| d.get_temp::<egui::Id>(held_id)) != Some(key)));
+                            if reclicked {
+                                ui.data_mut(|d| d.remove::<(egui::Id, Rect)>(flyout_id));
+                            } else if slot.len() > 1 && (resp.secondary_clicked() || long_press) {
+                                ui.data_mut(|d| {
+                                    d.insert_temp(flyout_id, (key, resp.rect));
+                                    if long_press {
+                                        d.insert_temp(held_id, key);
                                     }
-                                    if resp.clicked() && ui.data(|d| d.get_temp::<egui::Id>(held_id)) != Some(key) {
-                                        crate::tool_memory::select(app, tool);
-                                    }
-                                    // Double-clicking the Hand tool fits the image on screen (Photoshop).
-                                    if resp.double_clicked() && tool == Tool::Hand {
-                                        crate::tool_memory::select(app, tool);
-                                        // With no document open there is nothing to fit.
-                                        let _ = app.run("view.fitOnScreen", json!({}));
-                                    }
-                                    if resp.double_clicked() && tool == Tool::Zoom {
-                                        crate::tool_memory::select(app, tool);
-                                        let _ = app.run("view.actualPixels", json!({}));
-                                    }
-                                    // Right-click or long-press opens the flyout (Photoshop).
-                                    let held_for =
-                                        resp.is_pointer_button_down_on().then(|| ui.input(|i| i.pointer.press_start_time().map(|t0| i.time - t0))).flatten();
-                                    if slot.len() > 1
-                                        && let Some(seconds) = held_for
-                                        && seconds < 0.35
-                                    {
-                                        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(0.35 - seconds));
-                                    }
-                                    let long_press = held_for.is_some_and(|seconds| seconds >= 0.35);
-                                    // Clicking the button of its open flyout again, with either button, closes
-                                    // it (#4932); the release that ends the long press that opened it doesn't.
-                                    let open_here = ui.data(|d| d.get_temp::<(egui::Id, Rect)>(flyout_id)).is_some_and(|(k, _)| k == key);
-                                    let reclicked = open_here
-                                        && (resp.secondary_clicked() || (resp.clicked() && ui.data(|d| d.get_temp::<egui::Id>(held_id)) != Some(key)));
-                                    if reclicked {
-                                        ui.data_mut(|d| d.remove::<(egui::Id, Rect)>(flyout_id));
-                                    } else if slot.len() > 1 && (resp.secondary_clicked() || long_press) {
-                                        ui.data_mut(|d| {
-                                            d.insert_temp(flyout_id, (key, resp.rect));
-                                            if long_press {
-                                                d.insert_temp(held_id, key);
+                                });
+                            }
+                            if slot.len() > 1 && long_press {
+                                // Holding a tool button selects the tool it shows, as a click would (#4453).
+                                crate::tool_memory::select(app, tool);
+                                ui.ctx().request_repaint();
+                            }
+                            if let Some((open_key, anchor)) = ui.data(|d| d.get_temp::<(egui::Id, Rect)>(flyout_id))
+                                && open_key == key
+                            {
+                                // Beside the tool, towards the canvas.
+                                let (pivot, pos) = if crate::direction::is_rtl() {
+                                    (egui::Align2::RIGHT_TOP, anchor.left_top() - vec2(6.0, 0.0))
+                                } else {
+                                    (egui::Align2::LEFT_TOP, anchor.right_top() + vec2(6.0, 0.0))
+                                };
+                                let area =
+                                    egui::Area::new(key.with("flyout")).order(egui::Order::Foreground).pivot(pivot).fixed_pos(pos).show(ui.ctx(), |ui| {
+                                        egui::Frame::popup(ui.style()).show(ui, |ui| {
+                                            let label_w = slot
+                                                .iter()
+                                                .map(|it| {
+                                                    ui.painter().layout_no_wrap(tl!(it.label()).to_string(), egui::FontId::proportional(12.5), t.text).size().x
+                                                })
+                                                .fold(0.0f32, f32::max);
+                                            let fw = (label_w + 42.0 + 40.0).max(180.0);
+                                            for &item in slot.iter() {
+                                                let (r, ir) = ui.allocate_exact_size(vec2(fw, 26.0), Sense::click());
+                                                if ir.hovered() {
+                                                    ui.painter().rect_filled(r, 3.0, t.hover);
+                                                }
+                                                if item == tool {
+                                                    ui.painter().rect_filled(
+                                                        Rect::from_center_size(pos2(r.left() + 8.0, r.center().y), vec2(4.0, 4.0)),
+                                                        0.0,
+                                                        t.text,
+                                                    );
+                                                }
+                                                icons::paint(
+                                                    ui,
+                                                    Rect::from_center_size(pos2(r.left() + 26.0, r.center().y), vec2(18.0, 18.0)),
+                                                    icons::tool_icon(item),
+                                                    14.0,
+                                                    t.icon,
+                                                );
+                                                ui.painter().text(
+                                                    pos2(r.left() + 42.0, r.center().y),
+                                                    Align2::LEFT_CENTER,
+                                                    tl!(item.label()),
+                                                    egui::FontId::proportional(12.5),
+                                                    t.text,
+                                                );
+                                                if let Some(sc) = crate::tool_shortcuts::shortcut(app, item) {
+                                                    ui.painter().text(
+                                                        pos2(r.right() - 8.0, r.center().y),
+                                                        Align2::RIGHT_CENTER,
+                                                        crate::shortcuts::pretty(&sc),
+                                                        egui::FontId::proportional(12.0),
+                                                        t.text_dim,
+                                                    );
+                                                }
+                                                if ir.clicked() {
+                                                    crate::tool_memory::select(app, item);
+                                                    ui.data_mut(|d| d.remove::<(egui::Id, Rect)>(flyout_id));
+                                                }
                                             }
                                         });
-                                    }
-                                    if slot.len() > 1 && long_press {
-                                        // Holding a tool button selects the tool it shows, as a click would (#4453).
-                                        crate::tool_memory::select(app, tool);
-                                        ui.ctx().request_repaint();
-                                    }
-                                    if let Some((open_key, anchor)) = ui.data(|d| d.get_temp::<(egui::Id, Rect)>(flyout_id))
-                                        && open_key == key
-                                    {
-                                        // Beside the tool, towards the canvas.
-                                        let (pivot, pos) = if crate::direction::is_rtl() {
-                                            (egui::Align2::RIGHT_TOP, anchor.left_top() - vec2(6.0, 0.0))
-                                        } else {
-                                            (egui::Align2::LEFT_TOP, anchor.right_top() + vec2(6.0, 0.0))
-                                        };
-                                        let area = egui::Area::new(key.with("flyout")).order(egui::Order::Foreground).pivot(pivot).fixed_pos(pos).show(
-                                            ui.ctx(),
-                                            |ui| {
-                                                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                                                    let label_w = slot
-                                                        .iter()
-                                                        .map(|it| {
-                                                            ui.painter()
-                                                                .layout_no_wrap(tl!(it.label()).to_string(), egui::FontId::proportional(12.5), t.text)
-                                                                .size()
-                                                                .x
-                                                        })
-                                                        .fold(0.0f32, f32::max);
-                                                    let fw = (label_w + 42.0 + 40.0).max(180.0);
-                                                    for &item in slot.iter() {
-                                                        let (r, ir) = ui.allocate_exact_size(vec2(fw, 26.0), Sense::click());
-                                                        if ir.hovered() {
-                                                            ui.painter().rect_filled(r, 3.0, t.hover);
-                                                        }
-                                                        if item == tool {
-                                                            ui.painter().rect_filled(
-                                                                Rect::from_center_size(pos2(r.left() + 8.0, r.center().y), vec2(4.0, 4.0)),
-                                                                0.0,
-                                                                t.text,
-                                                            );
-                                                        }
-                                                        icons::paint(
-                                                            ui,
-                                                            Rect::from_center_size(pos2(r.left() + 26.0, r.center().y), vec2(18.0, 18.0)),
-                                                            icons::tool_icon(item),
-                                                            14.0,
-                                                            t.icon,
-                                                        );
-                                                        ui.painter().text(
-                                                            pos2(r.left() + 42.0, r.center().y),
-                                                            Align2::LEFT_CENTER,
-                                                            tl!(item.label()),
-                                                            egui::FontId::proportional(12.5),
-                                                            t.text,
-                                                        );
-                                                        if let Some(sc) = crate::tool_shortcuts::shortcut(app, item) {
-                                                            ui.painter().text(
-                                                                pos2(r.right() - 8.0, r.center().y),
-                                                                Align2::RIGHT_CENTER,
-                                                                crate::shortcuts::pretty(&sc),
-                                                                egui::FontId::proportional(12.0),
-                                                                t.text_dim,
-                                                            );
-                                                        }
-                                                        if ir.clicked() {
-                                                            crate::tool_memory::select(app, item);
-                                                            ui.data_mut(|d| d.remove::<(egui::Id, Rect)>(flyout_id));
-                                                        }
-                                                    }
-                                                });
-                                            },
-                                        );
-                                        // Any press outside the flyout and its button closes it, as in Photoshop: a
-                                        // drag on the canvas (cropping, painting) isn't a click (#4460).
-                                        let pressed_outside = ui.input(|i| {
-                                            i.pointer.any_pressed()
-                                                && i.pointer.press_origin().is_some_and(|p| !area.response.rect.contains(p) && !resp.rect.contains(p))
-                                        });
-                                        if pressed_outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                                            ui.data_mut(|d| d.remove::<(egui::Id, Rect)>(flyout_id));
-                                        }
-                                    }
+                                    });
+                                // Any press outside the flyout and its button closes it, as in Photoshop: a
+                                // drag on the canvas (cropping, painting) isn't a click (#4460).
+                                let pressed_outside = ui.input(|i| {
+                                    i.pointer.any_pressed()
+                                        && i.pointer.press_origin().is_some_and(|p| !area.response.rect.contains(p) && !resp.rect.contains(p))
+                                });
+                                if pressed_outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                    ui.data_mut(|d| d.remove::<(egui::Id, Rect)>(flyout_id));
                                 }
-                            });
-                        }
-                    }
-                    if t.pro && icons::button(ui, "ellipsis", bx, false, tl!("Edit Toolbar…")).clicked() {
-                        let _ = crate::menus::invoke(app, &ctx, "edit.toolbar", json!({}));
-                    }
-                    reveal_focused_control(ui);
-                });
-            ui.add_space(if t.pro { 8.0 } else { 14.0 });
-            color_chips(app, ui, double);
-            if t.pro {
-                ui.add_space(8.0);
-
-                let layout = if double { egui::Layout::left_to_right(egui::Align::Min) } else { egui::Layout::top_down(egui::Align::Min) };
-
-                ui.with_layout(layout, |ui| {
-                    let quick_mask = app.session.active().is_some_and(|s| s.doc.quick_mask.is_some());
-                    if icons::button_with_icon_size_tip(
-                        ui,
-                        "square-dashed",
-                        bx,
-                        (bx * 0.52).round(),
-                        quick_mask,
-                        if quick_mask { tl!("Edit in Standard Mode  (Q)") } else { tl!("Edit in Quick Mask Mode  (Q)") },
-                        tool_tips,
-                    )
-                    .clicked()
-                    {
-                        let _ = crate::menus::invoke(app, &ctx, "select.editInQuickMaskMode", json!({}));
-                    }
-                    let sm = icons::button_with_icon_size_tip(ui, "app-window", bx, (bx * 0.52).round(), false, tl!("Change Screen Mode  (F)"), tool_tips);
-                    paint_toolbar_flyout_indicator(ui, &t, &sm);
-
-                    // Right-click, or click and hold like the tool flyouts (#4444), lists the modes,
-                    // like Photoshop's flyout. The release that ends a hold doesn't cycle the mode.
-                    let held_id = sm.id.with("held");
-                    let was_held = ui.data(|d| d.get_temp::<bool>(held_id)).unwrap_or(false);
-                    let held_for = sm.is_pointer_button_down_on().then(|| ui.input(|i| i.pointer.press_start_time().map(|t0| i.time - t0))).flatten();
-                    if let Some(seconds) = held_for
-                        && seconds < 0.35
-                    {
-                        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(0.35 - seconds));
-                    }
-                    let long_press = !was_held && held_for.is_some_and(|seconds| seconds >= 0.35);
-                    if long_press {
-                        ui.data_mut(|d| d.insert_temp(held_id, true));
-                    } else if was_held && !sm.is_pointer_button_down_on() {
-                        ui.data_mut(|d| d.remove::<bool>(held_id));
-                    }
-                    let cycle = sm.clicked() && !was_held;
-                    if cycle {
-                        let _ = crate::menus::invoke(app, &ctx, "view.screenMode.cycle", json!({}));
-                    }
-                    let open = if sm.secondary_clicked() || long_press {
-                        Some(egui::SetOpenCommand::Bool(true))
-                    } else if cycle {
-                        Some(egui::SetOpenCommand::Bool(false))
-                    } else {
-                        None
-                    };
-                    // The release ending the hold counts as a click; it mustn't close the list it opened.
-                    let close = if was_held || long_press { egui::PopupCloseBehavior::IgnoreClicks } else { egui::PopupCloseBehavior::CloseOnClick };
-                    egui::Popup::menu(&sm).open_memory(open).close_behavior(close).at_pointer_fixed().show(|ui| {
-                        ui.set_min_width(220.0);
-                        for (id, label) in [
-                            ("view.screenMode.standard", tl!("Standard Screen Mode")),
-                            ("view.screenMode.fullScreenWithMenuBar", tl!("Full Screen Mode With Menu Bar")),
-                            ("view.screenMode.fullScreen", tl!("Full Screen Mode")),
-                        ] {
-                            let on = crate::view_cmds::checked(app, id).unwrap_or(false);
-                            if ui.add(egui::Button::selectable(on, label)).clicked() {
-                                let _ = crate::menus::invoke(app, &ctx, id, json!({}));
-                                ui.close();
                             }
                         }
                     });
-                });
+                }
             }
+            if t.pro && icons::button(ui, "ellipsis", bx, false, tl!("Edit Toolbar…")).clicked() {
+                let _ = crate::menus::invoke(app, &ctx, "edit.toolbar", json!({}));
+            }
+            reveal_focused_control(ui);
         });
+    ui.add_space(if t.pro { 8.0 } else { 14.0 });
+    color_chips(app, ui, double);
+    if t.pro {
+        ui.add_space(8.0);
+
+        let layout = if double { egui::Layout::left_to_right(egui::Align::Min) } else { egui::Layout::top_down(egui::Align::Min) };
+
+        ui.with_layout(layout, |ui| {
+            let quick_mask = app.session.active().is_some_and(|s| s.doc.quick_mask.is_some());
+            if icons::button_with_icon_size_tip(
+                ui,
+                "square-dashed",
+                bx,
+                (bx * 0.52).round(),
+                quick_mask,
+                if quick_mask { tl!("Edit in Standard Mode  (Q)") } else { tl!("Edit in Quick Mask Mode  (Q)") },
+                tool_tips,
+            )
+            .clicked()
+            {
+                let _ = crate::menus::invoke(app, &ctx, "select.editInQuickMaskMode", json!({}));
+            }
+            let sm = icons::button_with_icon_size_tip(ui, "app-window", bx, (bx * 0.52).round(), false, tl!("Change Screen Mode  (F)"), tool_tips);
+            paint_toolbar_flyout_indicator(ui, &t, &sm);
+
+            // Right-click, or click and hold like the tool flyouts (#4444), lists the modes,
+            // like Photoshop's flyout. The release that ends a hold doesn't cycle the mode.
+            let held_id = sm.id.with("held");
+            let was_held = ui.data(|d| d.get_temp::<bool>(held_id)).unwrap_or(false);
+            let held_for = sm.is_pointer_button_down_on().then(|| ui.input(|i| i.pointer.press_start_time().map(|t0| i.time - t0))).flatten();
+            if let Some(seconds) = held_for
+                && seconds < 0.35
+            {
+                ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(0.35 - seconds));
+            }
+            let long_press = !was_held && held_for.is_some_and(|seconds| seconds >= 0.35);
+            if long_press {
+                ui.data_mut(|d| d.insert_temp(held_id, true));
+            } else if was_held && !sm.is_pointer_button_down_on() {
+                ui.data_mut(|d| d.remove::<bool>(held_id));
+            }
+            let cycle = sm.clicked() && !was_held;
+            if cycle {
+                let _ = crate::menus::invoke(app, &ctx, "view.screenMode.cycle", json!({}));
+            }
+            let open = if sm.secondary_clicked() || long_press {
+                Some(egui::SetOpenCommand::Bool(true))
+            } else if cycle {
+                Some(egui::SetOpenCommand::Bool(false))
+            } else {
+                None
+            };
+            // The release ending the hold counts as a click; it mustn't close the list it opened.
+            let close = if was_held || long_press { egui::PopupCloseBehavior::IgnoreClicks } else { egui::PopupCloseBehavior::CloseOnClick };
+            egui::Popup::menu(&sm).open_memory(open).close_behavior(close).at_pointer_fixed().show(|ui| {
+                ui.set_min_width(220.0);
+                for (id, label) in [
+                    ("view.screenMode.standard", tl!("Standard Screen Mode")),
+                    ("view.screenMode.fullScreenWithMenuBar", tl!("Full Screen Mode With Menu Bar")),
+                    ("view.screenMode.fullScreen", tl!("Full Screen Mode")),
+                ] {
+                    let on = crate::view_cmds::checked(app, id).unwrap_or(false);
+                    if ui.add(egui::Button::selectable(on, label)).clicked() {
+                        let _ = crate::menus::invoke(app, &ctx, id, json!({}));
+                        ui.close();
+                    }
+                }
+            });
+        });
+    }
 }
 
 /// Glyph size of a toolbar tool button. Pro fills two thirds of the button, close to Photoshop's
@@ -1668,46 +1658,51 @@ pub fn right_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if t.pro && !customized {
         dock_panels(app, ui, &p, &t);
     }
-    // Narrow icon rail, unless an embedding app hides it: shows, expands or collapses panel groups.
-    if p.rail {
-        let (rw, rb) = if t.pro { (36.0, 28.0) } else { (44.0, 32.0) };
-        crate::direction::end_panel("rail")
-            .resizable(false)
-            .exact_size(rw)
-            .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(4, 8)))
-            .show(ui, |ui| {
-                // The separator is on the canvas side.
-                let r = ui.max_rect();
-                let x = if crate::direction::is_rtl() { r.right() + 6.0 } else { r.left() - 6.0 };
-                ui.painter().line_segment([pos2(x, r.top() - 8.0), pos2(x, r.bottom() + 8.0)], Stroke::new(1.0, t.separator));
-                ui.spacing_mut().item_spacing.y = 4.0;
-                use crate::dock::Group;
-                let entries: [(&str, &str, Group); 6] = [
-                    ("sliders-horizontal", tl!("Properties"), Group::Properties),
-                    ("navigation", tl!("Navigator"), Group::Navigator),
-                    ("palette", tl!("Color & Swatches"), Group::Color),
-                    ("layers", tl!("Layers"), Group::Layers),
-                    ("clock", tl!("History"), Group::History),
-                    ("brush", tl!("Brushes"), Group::Brushes),
-                ];
-                for (icon, name, g) in entries {
-                    // Studio floats Properties outside the dock.
-                    let docked = t.pro || g != Group::Properties;
-                    let on = if customized { crate::panel_docking::rail_on(app, g) } else { g.shown(&p) && !(docked && app.ui.dock.is_collapsed(g)) };
-                    if icons::rail_button(ui, icon, rb, on, name).clicked() {
-                        if customized {
-                            crate::panel_docking::rail_click(app, g);
-                        } else {
-                            crate::dock::rail_click(app, g, docked);
-                        }
-                    }
-                }
-            });
+    if !customized {
+        dock_rail(app, ui, false);
     }
     if !t.pro && !customized {
         dock_panels(app, ui, &p, &t);
     }
     crate::dock::persist(app, ui.ctx());
+}
+
+pub(crate) fn dock_rail(app: &mut PhotocraftApp, ui: &mut egui::Ui, customized: bool) {
+    let t = Tokens::get(ui.ctx());
+    let p = app.ui.panels.clone();
+    // Narrow icon rail, unless an embedding app hides it: shows, expands or collapses panel groups.
+    if p.rail {
+        let (rw, rb) = if t.pro { (36.0, 28.0) } else { (44.0, 32.0) };
+        let rail = crate::direction::end_panel("rail");
+        rail.resizable(false).exact_size(rw).frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(4, 8))).show(ui, |ui| {
+            // The separator is on the canvas side.
+            let r = ui.max_rect();
+            let x = if crate::direction::is_rtl() { r.right() + 6.0 } else { r.left() - 6.0 };
+            ui.painter().line_segment([pos2(x, r.top() - 8.0), pos2(x, r.bottom() + 8.0)], Stroke::new(1.0, t.separator));
+            ui.spacing_mut().item_spacing.y = 4.0;
+            use crate::dock::Group;
+            let entries: [(&str, &str, Group); 6] = [
+                ("sliders-horizontal", tl!("Properties"), Group::Properties),
+                ("navigation", tl!("Navigator"), Group::Navigator),
+                ("palette", tl!("Color & Swatches"), Group::Color),
+                ("layers", tl!("Layers"), Group::Layers),
+                ("clock", tl!("History"), Group::History),
+                ("brush", tl!("Brushes"), Group::Brushes),
+            ];
+            for (icon, name, g) in entries {
+                // Studio floats Properties outside the dock.
+                let docked = t.pro || g != Group::Properties;
+                let on = if customized { crate::panel_docking::rail_on(app, g) } else { g.shown(&p) && !(docked && app.ui.dock.is_collapsed(g)) };
+                if icons::rail_button(ui, icon, rb, on, name).clicked() {
+                    if customized {
+                        crate::panel_docking::rail_click(app, g);
+                    } else {
+                        crate::dock::rail_click(app, g, docked);
+                    }
+                }
+            }
+        });
+    }
 }
 
 /// The dock's width range (points). It is the right dock, on the left in a right-to-left UI.

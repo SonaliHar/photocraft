@@ -26,6 +26,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("tool.reset", "Reset Tool", &[], None),
     ("tool.resetAll", "Reset All Tools", &[], None),
     ("window.panel.group", "Change Panel Group", &[], None),
+    ("window.toolbar.layout", "Arrange Tools", &[], None),
     ("window.panel.layout", "Change Panel Layout", &[], None),
     ("window.panel.move", "Move Panel", &[], None),
     ("window.panel.float", "Float Panel", &[], None),
@@ -190,6 +191,9 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
     if id == "image.crop" && crate::crop_ui::pending(app) {
         crate::canvas::commit_crop(app);
         return Ok(json!({"committed": true}));
+    }
+    if id == "window.toolbar.layout" {
+        return crate::toolbar_docking::command(app, &params);
     }
     if let Some(result) = crate::panel_docking::command(app, id, &params) {
         return result;
@@ -767,7 +771,9 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
     }
     match id {
         "window.panel.activate" | "window.panel.layout" => true,
-        "window.panel.group" | "window.panel.move" | "window.panel.float" | "window.panel.dock" | "window.panel.close" => !app.session.prefs().workspace_locked,
+        "window.toolbar.layout" => !app.session.prefs().workspace_locked,
+        "window.panel.group" | "window.panel.move" | "window.panel.float" | "window.panel.dock" | "window.panel.close" | "window.dock.left"
+        | "window.dock.right" => !app.session.prefs().workspace_locked,
         "file.open" | "file.exit" | "file.clearRecent" | "file.removeRecent" | "help.about" | "help.systemInfo" | "edit.search" => true,
         i if i.starts_with("file.openRecent.") => true,
         i if i.starts_with(DOCUMENT_ITEM) => true,
@@ -1611,6 +1617,9 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
     }
     // Presets use the default group order, heights and tabs (Reset brings everything back).
     app.ui.dock = Default::default();
+    app.ui.dock_side = crate::dock::DockSide::default();
+    app.ui.docking_left = None;
+    app.ui.toolbar_layout = Default::default();
     app.ui.docking_reveal = None;
     app.ui.docking_generation = app.ui.docking_generation.wrapping_add(1);
     app.ui.docking = None;

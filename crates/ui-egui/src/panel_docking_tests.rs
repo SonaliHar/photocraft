@@ -7,6 +7,109 @@ fn app() -> PhotocraftApp {
 }
 
 #[test]
+fn independent_sides_float_restore_and_workspace_roundtrip() {
+    let mut app = app();
+    app.run("window.panel.dock", json!({"panel":"layers","side":"left"})).unwrap();
+    let layout = app.ui.docking.as_ref().unwrap();
+    let left = left_members(&app, layout);
+    let (l, r) = partition_root(layout.root.as_ref(), &left);
+    assert!(l.is_some() && r.is_some());
+    assert_eq!(left, ["layers"]);
+    assert!(layout.contains(&"color".into()));
+    app.run("window.panel.float", json!({"panel":"layers"})).unwrap();
+    app.run("window.panel.dock", json!({"panel":"layers","side":"right"})).unwrap();
+    assert!(!app.ui.docking_left.as_ref().unwrap().contains(&"layers".into()));
+    app.run("window.panel.dock", json!({"panel":"navigator","side":"left"})).unwrap();
+    app.run("window.panel.move", json!({"panel":"swatches","anchor":"navigator"})).unwrap();
+    assert!(app.ui.docking_left.as_ref().unwrap().contains(&"swatches".into()));
+    let saved = json!({"docking":app.ui.docking,"dockingLeft":app.ui.docking_left,"dockSide":app.ui.dock_side});
+    let mut restored = self::app();
+    crate::dock::apply(&mut restored, &saved);
+    assert_eq!(restored.ui.docking_left, app.ui.docking_left);
+    assert_eq!(restored.ui.docking, app.ui.docking);
+    let before = serde_json::to_value(&app.ui).unwrap();
+    assert!(app.run("window.panel.dock", json!({"panel":"layers","side":"invalid"})).is_err());
+    assert_eq!(serde_json::to_value(&app.ui).unwrap(), before);
+}
+
+#[test]
+fn tab_pointer_drag_docks_on_empty_edges_and_crosses_between_columns() {
+    let mut app = app();
+    app.run("window.panel.dock", json!({"panel":"layers","side":"right"})).unwrap();
+    let mut h = harness(app, vec2(1280.0, 800.0));
+    let tab = |h: &Harness<'static, PhotocraftApp>, name: &str| {
+        h.ctx.read_response(egui::Id::new("photocraft-panel-docking").with(("tab", &name.to_owned()))).unwrap().rect.center()
+    };
+    let source = tab(&h, "layers");
+    drag(&mut h, source, egui::pos2(8.0, 240.0));
+    assert!(h.state().ui.docking_left.as_ref().unwrap().contains(&"layers".into()));
+    assert!(h.state().ui.docking.as_ref().unwrap().floating.is_empty());
+    assert!(tab(&h, "layers").x < 400.0);
+    assert!(tab(&h, "color").x > 800.0);
+    if let Some(path) = std::env::var_os("PHOTOCRAFT_DOCK_CAPTURE") {
+        h.render().unwrap().save(std::path::Path::new(&path).join("bilateral.png")).unwrap();
+    }
+    let source = tab(&h, "layers");
+    let destination = tab(&h, "color");
+    drag(&mut h, source, destination);
+    assert!(!h.state().ui.docking_left.as_ref().unwrap().contains(&"layers".into()));
+    assert!(group_members(h.state().ui.docking.as_ref().unwrap(), "layers").contains(&"color".into()));
+    let source = tab(&h, "layers");
+    drag(&mut h, source, egui::pos2(500.0, 200.0));
+    assert!(h.state().ui.docking.as_ref().unwrap().floating.iter().any(|g| g.panels.contains(&"layers".into())));
+    let source = tab(&h, "layers");
+    drag(&mut h, source, egui::pos2(8.0, 240.0));
+    assert!(h.state().ui.docking_left.as_ref().unwrap().contains(&"layers".into()));
+    assert!(valid(h.state().ui.docking.as_ref().unwrap()));
+}
+
+#[test]
+fn floating_panel_geometry_keeps_main_toolbars_accessible() {
+    let mut app = app();
+    app.run("window.panel.float", json!({"panel":"navigator","x":-200,"y":-200,"width":400,"height":400})).unwrap();
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+            egui::Panel::top("main-options").exact_size(60.0).show(ui, |_| {});
+            egui::Panel::left("main-tools").exact_size(44.0).show(ui, |_| {});
+            crate::panels::right_dock(app, ui);
+            egui::CentralPanel::default().show(ui, |_| {});
+        },
+        app,
+    );
+    h.run_steps(5);
+    let rect = h.ctx.read_response(egui::Id::new("photocraft-panel-docking").with(("tab", &"navigator".to_owned()))).unwrap().rect;
+    assert!(rect.left() >= 44.0, "{rect:?}");
+    assert!(rect.top() >= 60.0, "{rect:?}");
+    if let Some(path) = std::env::var_os("PHOTOCRAFT_DOCK_CAPTURE") {
+        h.render().unwrap().save(std::path::Path::new(&path).join("protected-toolbar.png")).unwrap();
+    }
+}
+
+#[test]
+fn whole_block_grip_moves_between_sides_and_floats_without_losing_tabs() {
+    let mut app = app();
+    app.ui.theme = crate::theme::ThemeKind::ProMedium;
+    app.run("window.panel.dock", json!({"panel":"layers","side":"right"})).unwrap();
+    let original = group_members(app.ui.docking.as_ref().unwrap(), "color");
+    let mut h = harness(app, vec2(1280.0, 800.0));
+    let grip = |h: &Harness<'static, PhotocraftApp>| {
+        h.ctx.read_response(egui::Id::new("photocraft-panel-docking").with(("move-group", Some(&"color".to_owned())))).unwrap().rect.center()
+    };
+    let source = grip(&h);
+    drag(&mut h, source, egui::pos2(8.0, 250.0));
+    assert!(original.iter().all(|id| h.state().ui.docking_left.as_ref().unwrap().contains(id)));
+    let source = grip(&h);
+    drag(&mut h, source, egui::pos2(550.0, 260.0));
+    let floating = h.state().ui.docking.as_ref().unwrap().floating.iter().find(|g| g.panels.contains(&"color".into())).unwrap();
+    assert_eq!(floating.panels, original);
+    let source = grip(&h);
+    drag(&mut h, source, egui::pos2(1272.0, 260.0));
+    assert!(original.iter().all(|id| !h.state().ui.docking_left.as_ref().unwrap().contains(id)));
+    assert!(h.state().ui.docking.as_ref().unwrap().floating.is_empty());
+}
+
+#[test]
 fn panel_commands_group_split_reorder_float_and_restore_without_duplicate_ownership() {
     let mut app = app();
     app.run("window.panel.move", json!({"panel":"swatches", "anchor":"layers", "zone":"top"})).unwrap();
