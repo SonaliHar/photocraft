@@ -370,3 +370,6 @@ fn source_preparation_only_retains_actual_stage_owner() {
         }
     }
 }
+
+#[path = "backed_gaussian_group_parameter_tests.rs"]
+mod parameters;

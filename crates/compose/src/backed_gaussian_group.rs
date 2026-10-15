@@ -300,7 +300,7 @@ impl<'a> PreparedBackedGaussianGroupContext<'a> {
             c.check((mask.surface.tile_count() as u64 + 1).checked_mul(65536 * 4).ok_or_else(size)?).map_err(E::Backing)?;
         }
         let prepared = Prepared {
-            filter: gaussian::GroupGaussian::new_owned(
+            filter: gaussian::GroupGaussian::new_current_owned(
                 doc,
                 group_layer,
                 state,
@@ -318,7 +318,7 @@ impl<'a> PreparedBackedGaussianGroupContext<'a> {
             let input = map_group(doc, &group.children, &native, &prepared, q, c)?;
             use photocraft_algo::gimp::neighborhood as n;
             c.check((input.surface.tile_count() as u64 + 1) * 1024).map_err(E::Backing)?;
-            let params = n::GaussianParams { std_dev_x: f64::from(0.8f32), std_dev_y: f64::from(1.3f32), abyss: n::GaussianAbyss::Clamp, clip_extent: true };
+            let params = prepared.filter.parameters();
             let req =
                 n::gaussian_finite_requirements(&input.surface, prepared.filter.extent, prepared.filter.extent, params, n::GaussianFilter::Auto, c.interrupt)
                     .map_err(|e| color(e.into()))?;

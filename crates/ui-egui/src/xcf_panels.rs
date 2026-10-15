@@ -19,6 +19,7 @@ mod filter_stack;
 mod filter_insert;
 mod filter_mask;
 mod graph_inspect;
+mod gaussian_group;
 pub(crate) mod source_inspect;
 mod item_sets;
 mod indexed_palette;
@@ -348,6 +349,14 @@ pub(crate) fn filter_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, laye
                     run_checked(app, &document, revision, "xcf.filter.enable", json!({"filterId":node.id.0.to_string(),"enabled":enabled}));
                 }
             });
+            if document.accounted().is_some_and(|owner| owner.is_readonly_gaussian_group_storage()) {
+                if gaussian_group::candidate(&document, layer, node) {
+                    gaussian_group::controls(app, ui, &document, revision, node, unlocked);
+                } else {
+                    ui.label(tl!("Filter editing is unavailable"));
+                }
+                return;
+            }
             if color_rotate {
                 color_rotate::controls(app, ui, &document, revision, node, editable);
                 if !editable {

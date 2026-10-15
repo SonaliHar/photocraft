@@ -1,6 +1,6 @@
 //! Narrow independent isolated-group small Auto Gaussian member.
 use crate::gimp_composite::{CompositionError, Result, WorkingSpace};
-use photocraft_algo::gimp::neighborhood::{GaussianAbyss, GaussianLimits, GaussianParams, try_gaussian_small_auto};
+use photocraft_algo::gimp::neighborhood::{GaussianAbyss, GaussianFilter, GaussianLimits, GaussianParams, try_gaussian_finite_clamp, try_gaussian_small_auto};
 use photocraft_cms::{Profile, WideWork};
 use photocraft_doc::{
     Document, Layer, SampleEncoding,
@@ -10,10 +10,18 @@ use photocraft_doc::{
 };
 use photocraft_geom::Rect;
 use photocraft_raster::{Interrupt, Surface};
+#[derive(Clone, Copy)]
+enum PreparationPolicy {
+    Legacy,
+    SourceOwned,
+    CurrentOwned,
+}
 pub(super) struct GroupGaussian {
     pub extent: Rect,
     pub enabled: bool,
     working: WorkingSpace,
+    params: GaussianParams,
+    policy: PreparationPolicy,
 }
 impl GroupGaussian {
     pub fn new(
@@ -24,7 +32,7 @@ impl GroupGaussian {
         context: (Rect, &Profile, SampleEncoding),
         interrupt: &Interrupt,
     ) -> Result<Self> {
-        Self::prepare(doc, layer, state, stack, context, interrupt, false)
+        Self::prepare(doc, layer, state, stack, context, interrupt, PreparationPolicy::Legacy)
     }
     pub(super) fn new_owned(
         doc: &Document,
@@ -34,7 +42,23 @@ impl GroupGaussian {
         context: (Rect, &Profile, SampleEncoding),
         interrupt: &Interrupt<'_>,
     ) -> Result<Self> {
-        Self::prepare(doc, layer, state, stack, context, interrupt, true)
+        Self::prepare(doc, layer, state, stack, context, interrupt, PreparationPolicy::SourceOwned)
+    }
+    /// CURRENT-only parameter preparation after the actual runtime class gate.
+    /// Original source/legacy entry points retain the literal observed pair.
+    pub(super) fn new_current_owned(
+        doc: &Document,
+        layer: &Layer,
+        state: &XcfState,
+        stack: &FilterStack,
+        context: (Rect, &Profile, SampleEncoding),
+        interrupt: &Interrupt<'_>,
+    ) -> Result<Self> {
+        Self::prepare(doc, layer, state, stack, context, interrupt, PreparationPolicy::CurrentOwned)
+    }
+    /// The exact retained values drive both prospective requirements and execution.
+    pub(super) fn parameters(&self) -> GaussianParams {
+        self.params
     }
     fn prepare(
         doc: &Document,
@@ -43,8 +67,10 @@ impl GroupGaussian {
         stack: &FilterStack,
         context: (Rect, &Profile, SampleEncoding),
         interrupt: &Interrupt<'_>,
-        owned: bool,
+        policy_kind: PreparationPolicy,
     ) -> Result<Self> {
+        let owned = !matches!(policy_kind, PreparationPolicy::Legacy);
+        let current = matches!(policy_kind, PreparationPolicy::CurrentOwned);
         let (extent, profile, stored) = context;
         // The owned caller has already validated its genuine class/model (or
         // the mapper's exact source predicate). Do not repeat the unrelated
@@ -104,9 +130,28 @@ impl GroupGaussian {
         {
             return Err(CompositionError::Unsupported("isolated small Gaussian effect envelope"));
         }
+        let axis = |name, original_bits| -> Result<f64> {
+            let mut arguments = node.arguments.iter().filter(|arg| arg.name == name);
+            let value = &arguments.next().ok_or(CompositionError::Unsupported("Gaussian axis absent"))?.value;
+            if arguments.next().is_some() {
+                return Err(CompositionError::Unsupported("duplicate Gaussian axis"));
+            }
+            let FilterValue::Number(ExactNumber::Float32Bits(bits)) = value else {
+                return Err(CompositionError::Unsupported("Gaussian axis stored type"));
+            };
+            let value = f32::from_bits(*bits);
+            if if current { !value.is_finite() || !(0.0..=15.0).contains(&value) } else { *bits != original_bits } {
+                return Err(CompositionError::Unsupported("Gaussian axis parameter domain"));
+            }
+            Ok(f64::from(value))
+        };
+        let params = GaussianParams {
+            std_dev_x: axis("std-dev-x", 1061997773)?,
+            std_dev_y: axis("std-dev-y", 1067869798)?,
+            abyss: GaussianAbyss::Clamp,
+            clip_extent: true,
+        };
         for (name, expected) in [
-            ("std-dev-x", FilterValue::Number(ExactNumber::Float32Bits(1061997773))),
-            ("std-dev-y", FilterValue::Number(ExactNumber::Float32Bits(1067869798))),
             ("filter", FilterValue::Enum { domain: "gegl:gaussian-blur::filter".into(), value: 0 }),
             ("abyss-policy", FilterValue::Enum { domain: "gegl:gaussian-blur::abyss-policy".into(), value: 1 }),
             ("clip-extent", FilterValue::Bool(true)),
@@ -151,7 +196,7 @@ impl GroupGaussian {
         } else {
             WorkingSpace::new(profile, stored, photocraft_doc::import_compositing::GimpSpace::LinearRgb)?
         };
-        Ok(Self { extent, enabled: node.enabled, working })
+        Ok(Self { extent, enabled: node.enabled, working, params, policy: policy_kind })
     }
     pub fn linear(&self, p: [f64; 4]) -> Result<[f64; 4]> {
         if p.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
@@ -181,14 +226,13 @@ impl GroupGaussian {
     ) -> Result<Surface> {
         let units = u64::from(self.extent.width()) * u64::from(self.extent.height()) * 4 * 128;
         poll(WideWork::SampleUnits(units))?;
-        let filtered = try_gaussian_small_auto(
-            input,
-            self.extent,
-            self.extent,
-            GaussianParams { std_dev_x: f64::from(0.8f32), std_dev_y: f64::from(1.3f32), abyss: GaussianAbyss::Clamp, clip_extent: true },
-            owned_limits.unwrap_or(GaussianLimits { resident_bytes: 64 * 1024 * 1024, work_units: units }),
-            interrupt,
-        )?;
+        let limits = owned_limits.unwrap_or(GaussianLimits { resident_bytes: 64 * 1024 * 1024, work_units: units });
+        let filtered = match self.policy {
+            PreparationPolicy::CurrentOwned => try_gaussian_finite_clamp(input, self.extent, self.extent, self.params, GaussianFilter::Auto, limits, interrupt),
+            PreparationPolicy::Legacy | PreparationPolicy::SourceOwned => {
+                try_gaussian_small_auto(input, self.extent, self.extent, self.params, limits, interrupt)
+            }
+        }?;
         let mut samples = Vec::new();
         samples
             .try_reserve_exact((self.extent.width() * self.extent.height() * 4) as usize)

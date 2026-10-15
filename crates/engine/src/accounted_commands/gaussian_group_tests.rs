@@ -284,3 +284,6 @@ fn group_activation_stale_and_resource_failures_leave_live_state_unchanged() {
     assert!(s.active().unwrap().history.shares_accounted_history(&h));
     assert_eq!(s.journal, journal);
 }
+
+#[path = "gaussian_group_parameter_tests.rs"]
+mod parameter_tests;

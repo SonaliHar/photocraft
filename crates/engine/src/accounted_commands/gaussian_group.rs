@@ -1,9 +1,9 @@
-//! Paid adapter for the existing exact isolated Gaussian-group activation lane.
-//! Source policy, raw tuples, parameters and native payloads remain retained.
+//! Paid CURRENT isolated Gaussian-group parameters and existing activation.
+//! Source admission, raw tuples, argument order and native payloads stay retained.
 use super::*;
 use crate::{DocumentSnapshot, accounted_view::AccountedView, channel_cmds::ChannelView, document_history::DocumentHistory, source_policy::SourceIdentity};
 use photocraft_doc::{
-    accounted_document::{AccountedDocument, GaussianGroupEnabledPatch, accounted_layer_access},
+    accounted_document::{AccountedDocument, GaussianGroupPatch, accounted_layer_access},
     item_identity::{FilterId, ItemRef},
 };
 
@@ -11,15 +11,18 @@ pub(super) const REPLY_ENVELOPE: u64 = 8192;
 #[derive(Clone, Copy)]
 struct Fields {
     filter: FilterId,
-    enabled: bool,
+    x: Option<u32>,
+    y: Option<u32>,
+    enabled: Option<bool>,
+    parameters: bool,
 }
-// Exact existing activation wire for both IDs; no operation/source authority.
+// Bounded CURRENT wire only. Stored order and all source policy remain intact.
 fn wire(id: &str, params: &Value) -> Option<Fields> {
     if !matches!(id, "xcf.filter.set" | "xcf.filter.enable") {
         return None;
     }
     let p = params.as_object()?;
-    if p.len() != 2 {
+    if p.len() > 3 || p.keys().any(|key| !matches!(key.as_str(), "filterId" | "enabled" | "arguments")) {
         return None;
     }
     let text = p.get("filterId")?.as_str()?;
@@ -27,7 +30,56 @@ fn wire(id: &str, params: &Value) -> Option<Fields> {
         return None;
     }
     let filter = FilterId(text.parse::<u64>().ok()?);
-    Some(Fields { filter, enabled: p.get("enabled")?.as_bool()? })
+    let enabled = match p.get("enabled") {
+        Some(v) => Some(v.as_bool()?),
+        None => None,
+    };
+    let mut x = None;
+    let mut y = None;
+    let parameters = if let Some(arguments) = p.get("arguments") {
+        if id != "xcf.filter.set" {
+            return None;
+        }
+        let args = arguments.as_array()?;
+        if !(1..=2).contains(&args.len()) {
+            return None;
+        }
+        for argument in args {
+            let a = argument.as_object()?;
+            if a.len() != 2 {
+                return None;
+            }
+            let destination = match a.get("name")?.as_str()? {
+                "std-dev-x" => &mut x,
+                "std-dev-y" => &mut y,
+                _ => return None,
+            };
+            if destination.is_some() {
+                return None;
+            }
+            let value = a.get("value")?.as_object()?;
+            if value.len() != 1 {
+                return None;
+            }
+            let number = value.get("Number")?.as_object()?;
+            if number.len() != 1 {
+                return None;
+            }
+            let bits = u32::try_from(number.get("Float32Bits")?.as_u64()?).ok()?;
+            let value = f32::from_bits(bits);
+            if !value.is_finite() || !(0.0..=15.0).contains(&value) {
+                return None;
+            }
+            *destination = Some(bits);
+        }
+        true
+    } else {
+        false
+    };
+    if !parameters && (p.len() != 2 || enabled.is_none()) {
+        return None;
+    }
+    Some(Fields { filter, x, y, enabled, parameters })
 }
 pub(super) struct Request<'a> {
     id: &'static str,
@@ -42,10 +94,9 @@ impl<'a> Request<'a> {
             "xcf.filter.enable" => "xcf.filter.enable",
             _ => return Err(BackingError::Unsupported.into()),
         };
-        let fields = wire(id, params).ok_or_else(|| bad(id, "accounted isolated Gaussian group supports only exact filter activation"))?;
-        // The closed shape has two fixed keys, twenty identity digits and one
-        // boolean. Price its
-        // repeated upstream wire/identity checks before invoking those helpers.
+        let fields = wire(id, params).ok_or_else(|| bad(id, "accounted isolated Gaussian group requires exact activation or one/two Float32 std-dev axes"))?;
+        // At most three fixed keys, two fixed scalar argument patches, twenty
+        // identity digits and one bool. Prepay repeated borrowed wire checks.
         ctl.check(512)?;
         crate::xcf_filter_cmds::pre_dispatch_set_change(session, id, params, false)?;
         // Preserve the upstream canonical identity parser as the command authority.
@@ -70,7 +121,7 @@ impl<'a> Request<'a> {
             .filter(|n| n.id == self.fields.filter)
             .ok_or_else(|| bad(self.id, "filterId does not identify the current isolated Gaussian group filter"))?;
         let ItemRef::Layer(layer) = stack.owner else { return Err(BackingError::Unsupported.into()) };
-        let visibility_changed = self.fields.enabled != node.enabled;
+        let visibility_changed = self.fields.enabled.is_some_and(|value| value != node.enabled);
         locks(owner, layer, visibility_changed, ctl)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
         if state.active_layer != view.target().active || state.layer_anchor != view.anchor() || !state.selected_layers.is_empty() {
@@ -122,8 +173,15 @@ impl<'a> Request<'a> {
             .ok_or(BackingError::Length)?;
         lease.reconcile_capacity(actual as u64).map_err(|_| BackingError::Allocation)?;
         validate_recipe(owner, ctl)?;
-        let staged = owner.try_with_gaussian_group_enabled(
-            GaussianGroupEnabledPatch { layer, filter: self.fields.filter, expected_stack_revision: stack.revision, enabled: self.fields.enabled },
+        let staged = owner.try_with_gaussian_group_patch(
+            GaussianGroupPatch {
+                layer,
+                filter: self.fields.filter,
+                expected_stack_revision: stack.revision,
+                std_dev_x_f32_bits: self.fields.x,
+                std_dev_y_f32_bits: self.fields.y,
+                enabled: self.fields.enabled,
+            },
             ctl,
         )?;
         validate_recipe(&staged, ctl)?;
@@ -133,7 +191,13 @@ impl<'a> Request<'a> {
             history.max_states = session.prefs().performance.history_states.max(1) as usize;
             history.max_bytes = session.prefs().performance.history_budget_bytes();
             history.set_current_layers_borrowed(view.target(), ctl)?;
-            history.try_commit_prepared_accounted(owner, staged, "Set GIMP Group Filter Enabled", view.target(), ctl)?
+            history.try_commit_prepared_accounted(
+                owner,
+                staged,
+                if self.fields.parameters { "Set GIMP Group Filter Parameters" } else { "Set GIMP Group Filter Enabled" },
+                view.target(),
+                ctl,
+            )?
         } else {
             state.doc.clone()
         };

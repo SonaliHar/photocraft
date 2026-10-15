@@ -9,6 +9,9 @@ const FILTER_EPOCH: &str = "xcf22-isolated-small-auto-v1";
 #[path = "accounted_gaussian_group_readonly_enabled.rs"]
 mod enabled;
 pub use enabled::GaussianGroupEnabledPatch;
+#[path = "accounted_gaussian_group_readonly_patch.rs"]
+mod patch;
+pub use patch::GaussianGroupPatch;
 #[path = "accounted_gaussian_group_readonly_metadata.rs"]
 pub(super) mod metadata;
 fn fail() -> BackingError {
@@ -98,8 +101,8 @@ fn node_shape(node: &FilterNode, extent: Rect, c: &ReadControl<'_>) -> Result<()
         }
         c.check(arg.name.len() as u64)?;
         let index = match (arg.name.as_str(), &arg.value) {
-            ("std-dev-x", FilterValue::Number(ExactNumber::Float32Bits(1061997773))) => 0,
-            ("std-dev-y", FilterValue::Number(ExactNumber::Float32Bits(1067869798))) => 1,
+            ("std-dev-x", FilterValue::Number(ExactNumber::Float32Bits(bits))) if patch::valid_axis(*bits) => 0,
+            ("std-dev-y", FilterValue::Number(ExactNumber::Float32Bits(bits))) if patch::valid_axis(*bits) => 1,
             ("filter", FilterValue::Enum { domain, value: 0 }) if exact(domain, "gegl:gaussian-blur::filter", c)? => 2,
             ("abyss-policy", FilterValue::Enum { domain, value: 1 }) if exact(domain, "gegl:gaussian-blur::abyss-policy", c)? => 3,
             ("clip-extent", FilterValue::Bool(true)) => 4,
@@ -490,13 +493,13 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, c: &ReadControl<'_>
 #[derive(Clone, Copy)]
 enum CopyKind<'a> {
     Title(&'a str),
-    Enabled(enabled::Plan),
+    Filter(patch::Plan),
     Metadata(metadata::Plan<'a>),
 }
 fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<'_>, c: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
     let name_bytes = match kind {
         CopyKind::Title(name) => name.len() as u64,
-        CopyKind::Enabled(_) => 0,
+        CopyKind::Filter(_) => 0,
         CopyKind::Metadata(plan) => plan.replacement_name_bytes()?,
     };
     let wrapper = std::mem::size_of::<OriginalRetention>() as u64 + 128;
@@ -530,7 +533,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
     target.filter_masks.push(crate::FilterMask { id: mask.id, owner: mask.owner, bounds: mask.bounds, surface: plan.copy(&mask.surface, c)? });
     match kind {
         CopyKind::Title(name) => staged.document.name = imported_edits::copy_name(name, c)?,
-        CopyKind::Enabled(plan) => enabled::apply(&mut staged.document, plan, c)?,
+        CopyKind::Filter(plan) => patch::apply(&mut staged.document, plan, c)?,
         CopyKind::Metadata(plan) => metadata::apply(&mut staged.document, plan, c)?,
     }
     let actual = measured(&staged.document, owner.quota(), c)?;

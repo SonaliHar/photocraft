@@ -1538,12 +1538,30 @@ native leaves remain separate model objects in the native `.pcraft` project. Ren
 uses the existing child composition, Gaussian and group-mask order. This typed
 route supports paid project/filter inspection, title copies and the existing
 group activation transaction. Both `xcf.filter.set` and `xcf.filter.enable`
-accept exactly `{"filterId":"123","enabled":false}` for that filter. Arguments
-or opacity fields refuse even when empty or unchanged. Changed activation adds
+accept `{"filterId":"123","enabled":false}` for that filter. Pure activation adds
 one `Set GIMP Group Filter Enabled` undo step; a no-op preserves redo. Inherited
 content locks and complete current/proposed validation apply before publication,
 and a saved disabled-only raw tuple cannot be enabled by rewriting it. Dispatch
-is synchronous. The same owned class accepts combined `layer.setProps`
+is synchronous.
+
+For that owned CURRENT group, `xcf.filter.set` also accepts one or two unique
+`std-dev-x`/`std-dev-y` arguments as exact `Number.Float32Bits` values, with
+optional `enabled`. Each axis must be finite and within `0..=15`; signed zero
+is retained. For example:
+
+```json
+{"filterId":"123","arguments":[{"name":"std-dev-x","value":{"Number":{"Float32Bits":0}}}],"enabled":true}
+```
+
+Parameter requests add one `Set GIMP Group Filter Parameters` undo step even
+when activation changes in the same request. Raw no-ops preserve redo. Empty
+argument arrays, duplicates, opacity and changes to Auto/Clamp/clip fields
+refuse. An enabled both-zero Gaussian still follows the conversion/filter/
+inverse schedule. The original source and legacy parameter gates stay strict;
+native `.pcraft` continuation retains the CURRENT values. Broader numerical
+acceptance remains pending.
+
+The same owned class accepts combined `layer.setProps`
 name/visible/opacity for its four layer IDs through the existing metadata
 transaction, including exact coalescing keys and first undo labels. Physical
 group-mask activation uses `xcf.mask.enabled.set`; its mask lookup excludes the
