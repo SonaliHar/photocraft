@@ -98,17 +98,40 @@ fn embedded_source_bytes(meta: &Metadata, src: &SmartSource) -> Option<(String, 
     }
 }
 
-/// The actual path is stored in the document, not in the command's params. Recheck it before
-/// reading, reusing embedded PSD bytes rather than parsing their global blocks a second time.
-fn authorized_source_bytes(s: &Session, cmd: &str, meta: &Metadata, src: &SmartSource) -> Result<Option<(String, Arc<Vec<u8>>)>> {
-    if let Some(source) = embedded_source_bytes(meta, src) {
-        return Ok(Some(source));
+/// Resolve relative links beside their owning document, including Edit Contents children.
+fn source_directory(s: &Session) -> Option<std::path::PathBuf> {
+    let state = s.active()?;
+    state_source_directory(state)
+}
+
+fn state_source_directory(state: &crate::DocState) -> Option<std::path::PathBuf> {
+    state.path.as_deref().and_then(|p| std::path::Path::new(p).parent()).map(std::path::Path::to_path_buf).or_else(|| state.smart_source_dir.clone())
+}
+
+fn linked_path(s: &Session, path: &str) -> std::path::PathBuf {
+    let path = std::path::Path::new(path);
+    if path.is_absolute() { path.to_path_buf() } else { source_directory(s).map_or_else(|| path.to_path_buf(), |dir| dir.join(path)) }
+}
+
+struct EditableSource {
+    name: String,
+    bytes: Arc<Vec<u8>>,
+    directory: Option<std::path::PathBuf>,
+}
+
+/// Recheck stored filesystem sources before reading; embedded PSD bytes need no file access.
+fn authorized_source_bytes(s: &Session, cmd: &str, meta: &Metadata, src: &SmartSource) -> Result<Option<EditableSource>> {
+    if let Some((name, bytes)) = embedded_source_bytes(meta, src) {
+        return Ok(Some(EditableSource { name, bytes, directory: source_directory(s) }));
     }
     let SmartSource::Linked { path } = src else { return Ok(None) };
+    let resolved = linked_path(s, path);
     if let Some(gate) = s.authorize {
-        gate(cmd, &json!({"path": path}))?;
+        gate(cmd, &json!({"path": resolved}))?;
     }
-    Ok(read_file(path).map(|b| (base_name(path), Arc::new(b))))
+    let bytes = photocraft_format::read_file(&resolved)
+        .map_err(|e| other(format!("Cannot open linked smart object '{}': {e}. Use Relink to File to locate its source.", resolved.display())))?;
+    Ok(Some(EditableSource { name: base_name(path), bytes: Arc::new(bytes), directory: resolved.parent().map(std::path::Path::to_path_buf) }))
 }
 
 /// Recheck a source's actual path before an untrusted command reads it: the path lives in the
@@ -868,13 +891,16 @@ fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({"document": index, "parentLayer": id.0}));
     }
     let source = &smart(&st.doc, id)?.source;
-    let (name, bytes) = authorized_source_bytes(s, "layer.smartObjects.editContents", &st.doc.metadata, source)?
+    let source = authorized_source_bytes(s, "layer.smartObjects.editContents", &st.doc.metadata, source)?
         .ok_or_else(|| other("the smart object's contents are unavailable"))?;
-    let mut child = decode_source(&name, &bytes)?;
+    let mut child = decode_source(&source.name, &source.bytes)?;
     // Bundles keep their document id; each open copy needs its own.
     child.id = DocId::fresh();
-    child.name = name;
+    child.name = source.name;
     let index = s.add_document(child, None);
+    if let Some(state) = s.docs.get_mut(index) {
+        state.smart_source_dir = source.directory;
+    }
     // Admission may replace an ID already owned by another open document.
     let child_id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;
     s.smart_links.retain(|l| l.child != child_id);
