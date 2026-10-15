@@ -4262,3 +4262,16 @@ shape	Appearance	Izgled
 	There are too many sets: delete one first.	Previše skupova: prvo obrišite jedan.
 	set name	ime skupa
 	{set} (modified)	{set} (izmenjen)
+# System print job controls
+	Auto-Rotate Image	Automatski rotiraj sliku
+	C5 Envelope	Koverta C5
+	Collate	Razvrstaj kopije
+	Print in Grayscale	Štampaj u sivim tonovima
+	Printer Default	Podrazumevano za štampač
+	Printer Properties	Svojstva štampača
+	Printer preferences opened	Podešavanja štampača su otvorena
+	Single-Sided	Jednostrano
+	System Default	Sistemski podrazumevano
+	Two-Sided, Flip on Long Edge	Dvostrano, okretanje po dužoj ivici
+	Two-Sided, Flip on Short Edge	Dvostrano, okretanje po kraćoj ivici
+	Unavailable	Nedostupno

@@ -2790,3 +2790,16 @@ curves	Smooth	平滑
 	set name	組合名稱
 	{set} (modified)	{set}（已修改）
 	Random	隨機
+# System print job controls
+	Auto-Rotate Image	自動旋轉影像
+	C5 Envelope	C5 信封
+	Collate	逐份列印
+	Print in Grayscale	以灰階列印
+	Printer Default	印表機預設值
+	Printer Properties	印表機內容
+	Printer preferences opened	已開啟印表機偏好設定
+	Single-Sided	單面
+	System Default	系統預設值
+	Two-Sided, Flip on Long Edge	雙面，長邊翻轉
+	Two-Sided, Flip on Short Edge	雙面，短邊翻轉
+	Unavailable	無法使用

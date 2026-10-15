@@ -3919,3 +3919,16 @@ cameraData	Lens	Lens
 	There are too many sets: delete one first.	Çok fazla küme var: önce birini silin.
 	set name	küme adı
 	{set} (modified)	{set} (değiştirildi)
+# System print job controls
+	Auto-Rotate Image	Görüntüyü Otomatik Döndür
+	C5 Envelope	C5 Zarf
+	Collate	Harmanla
+	Print in Grayscale	Gri Tonlamalı Yazdır
+	Printer Default	Yazıcı Varsayılanı
+	Printer Properties	Yazıcı Özellikleri
+	Printer preferences opened	Yazıcı tercihleri açıldı
+	Single-Sided	Tek Taraflı
+	System Default	Sistem Varsayılanı
+	Two-Sided, Flip on Long Edge	Çift Taraflı, Uzun Kenardan Çevir
+	Two-Sided, Flip on Short Edge	Çift Taraflı, Kısa Kenardan Çevir
+	Unavailable	Kullanılamıyor

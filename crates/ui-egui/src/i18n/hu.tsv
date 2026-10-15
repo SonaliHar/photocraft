@@ -4108,3 +4108,16 @@ cameraRaw	Yellow	Sárga
 	There are too many sets: delete one first.	Túl sok készlet van: előbb töröljön egyet.
 	set name	készlet neve
 	{set} (modified)	{set} (módosítva)
+# System print job controls
+	Auto-Rotate Image	Kép automatikus elforgatása
+	C5 Envelope	C5 boríték
+	Collate	Példányok leválogatása
+	Print in Grayscale	Nyomtatás szürkeárnyalatban
+	Printer Default	Nyomtató alapértelmezése
+	Printer Properties	Nyomtató tulajdonságai
+	Printer preferences opened	Nyomtatóbeállítások megnyitva
+	Single-Sided	Egyoldalas
+	System Default	Rendszer alapértelmezése
+	Two-Sided, Flip on Long Edge	Kétoldalas, fordítás a hosszú él mentén
+	Two-Sided, Flip on Short Edge	Kétoldalas, fordítás a rövid él mentén
+	Unavailable	Nem érhető el

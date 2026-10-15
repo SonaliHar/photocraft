@@ -3787,3 +3787,16 @@ curves	Smooth	Wygładź
 	There are too many sets: delete one first.	Zestawów jest za dużo: najpierw usuń jeden.
 	set name	nazwa zestawu
 	{set} (modified)	{set} (zmieniony)
+# System print job controls
+	Auto-Rotate Image	Automatycznie obróć obraz
+	C5 Envelope	Koperta C5
+	Collate	Sortuj kopie
+	Print in Grayscale	Drukuj w skali szarości
+	Printer Default	Domyślne ustawienie drukarki
+	Printer Properties	Właściwości drukarki
+	Printer preferences opened	Otwarto preferencje drukarki
+	Single-Sided	Jednostronnie
+	System Default	Domyślne ustawienie systemu
+	Two-Sided, Flip on Long Edge	Dwustronnie, obracaj wzdłuż długiej krawędzi
+	Two-Sided, Flip on Short Edge	Dwustronnie, obracaj wzdłuż krótkiej krawędzi
+	Unavailable	Niedostępne

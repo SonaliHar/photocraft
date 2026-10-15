@@ -3865,3 +3865,17 @@ curves	Smooth	スムーズ
 	There are too many sets: delete one first.	セットが多すぎます。先に 1 つ削除してください。
 	set name	セット名
 	{set} (modified)	{set}（変更あり）
+
+# System print job controls
+	Auto-Rotate Image	画像を自動回転
+	C5 Envelope	C5封筒
+	Collate	部単位で印刷
+	Print in Grayscale	グレースケールで印刷
+	Printer Default	プリンターの既定値
+	Printer Properties	プリンターのプロパティ
+	Printer preferences opened	プリンターの設定を開きました
+	Single-Sided	片面
+	System Default	システムの既定値
+	Two-Sided, Flip on Long Edge	両面、長辺でとじる
+	Two-Sided, Flip on Short Edge	両面、短辺でとじる
+	Unavailable	使用不可

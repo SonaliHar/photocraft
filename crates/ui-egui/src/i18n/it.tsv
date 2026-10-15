@@ -4310,3 +4310,16 @@ shape	Appearance	Aspetto
 	There are too many sets: delete one first.	Ci sono troppi set: eliminane prima uno.
 	set name	nome del set
 	{set} (modified)	{set} (modificato)
+# System print job controls
+	Auto-Rotate Image	Ruota automaticamente l’immagine
+	C5 Envelope	Busta C5
+	Collate	Fascicola
+	Print in Grayscale	Stampa in scala di grigi
+	Printer Default	Predefinito della stampante
+	Printer Properties	Proprietà della stampante
+	Printer preferences opened	Preferenze della stampante aperte
+	Single-Sided	Un solo lato
+	System Default	Predefinito di sistema
+	Two-Sided, Flip on Long Edge	Due lati, capovolgi sul lato lungo
+	Two-Sided, Flip on Short Edge	Due lati, capovolgi sul lato corto
+	Unavailable	Non disponibile

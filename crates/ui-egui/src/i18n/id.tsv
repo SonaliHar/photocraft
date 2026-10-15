@@ -3181,3 +3181,16 @@ curves	Smooth	Haluskan
 	set name	nama set
 	{set} (modified)	{set} (diubah)
 	Random	Acak
+# System print job controls
+	Auto-Rotate Image	Putar Gambar Otomatis
+	C5 Envelope	Amplop C5
+	Collate	Susun Salinan
+	Print in Grayscale	Cetak dalam Skala Abu-abu
+	Printer Default	Default Printer
+	Printer Properties	Properti Printer
+	Printer preferences opened	Preferensi printer dibuka
+	Single-Sided	Satu Sisi
+	System Default	Default Sistem
+	Two-Sided, Flip on Long Edge	Dua Sisi, Balik pada Tepi Panjang
+	Two-Sided, Flip on Short Edge	Dua Sisi, Balik pada Tepi Pendek
+	Unavailable	Tidak Tersedia

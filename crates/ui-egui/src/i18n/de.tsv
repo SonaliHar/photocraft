@@ -3191,3 +3191,16 @@ curves	Smooth	Glätten
 	There are too many sets: delete one first.	Zu viele Sätze: Löschen Sie zuerst einen.
 	set name	Name des Satzes
 	{set} (modified)	{set} (geändert)
+# System print job controls
+	Auto-Rotate Image	Bild automatisch drehen
+	C5 Envelope	C5-Umschlag
+	Collate	Sortieren
+	Print in Grayscale	In Graustufen drucken
+	Printer Default	Druckerstandard
+	Printer Properties	Druckereigenschaften
+	Printer preferences opened	Druckereinstellungen geöffnet
+	Single-Sided	Einseitig
+	System Default	Systemstandard
+	Two-Sided, Flip on Long Edge	Beidseitig, an langer Kante wenden
+	Two-Sided, Flip on Short Edge	Beidseitig, an kurzer Kante wenden
+	Unavailable	Nicht verfügbar

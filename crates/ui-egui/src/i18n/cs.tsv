@@ -3797,3 +3797,16 @@ navigator	Zoom	Zvětšení
 	There are too many sets: delete one first.	Sad je příliš mnoho: nejprve jednu smažte.
 	set name	název sady
 	{set} (modified)	{set} (změněno)
+# System print job controls
+	Auto-Rotate Image	Automaticky otočit obraz
+	C5 Envelope	Obálka C5
+	Collate	Kompletovat
+	Print in Grayscale	Tisknout ve stupních šedi
+	Printer Default	Výchozí nastavení tiskárny
+	Printer Properties	Vlastnosti tiskárny
+	Printer preferences opened	Předvolby tiskárny otevřeny
+	Single-Sided	Jednostranně
+	System Default	Výchozí nastavení systému
+	Two-Sided, Flip on Long Edge	Oboustranně, převracet po dlouhé hraně
+	Two-Sided, Flip on Short Edge	Oboustranně, převracet po krátké hraně
+	Unavailable	Nedostupné

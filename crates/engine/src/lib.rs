@@ -456,6 +456,10 @@ pub struct Session {
     /// the same check a top-level request sees. `None` runs everything, which is what a local
     /// UI and `photocraft-cli run` do.
     pub authorize: Option<fn(&str, &serde_json::Value) -> Result<()>>,
+    /// Desktop-shell bridge for File › Print. The engine supplies the fully composed PDF and
+    /// the shell opens the platform print confirmation dialog. Headless and web sessions leave
+    /// this unset; direct `file.printOneCopy` remains available through `craft-print`.
+    pub system_print_dialog: Option<print_cmds::SystemPrintDialog>,
     /// Background jobs (see [`jobs`]).
     jobs: jobs::Jobs,
     /// Color Sampler points dropped by the last canvas-size change (crop, Canvas Size, Image Size,
