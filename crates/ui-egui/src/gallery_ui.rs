@@ -306,6 +306,20 @@ pub fn open(app: &mut PhotocraftApp) -> Result<(), String> {
     open_on(app, layer, src, effects, [fg, bg], None)
 }
 
+/// The Color Picker's OK for a colour of the open gallery ([`show`] opens it): the selected
+/// effect's Glow Color (`glow`).
+pub fn set_color(app: &mut PhotocraftApp, which: &str, rgb: [f32; 3]) -> Result<(), String> {
+    let d = app.distort.gallery.as_mut().ok_or("the Filter Gallery is closed")?;
+    match which {
+        "glow" => {
+            let e = d.effects.get_mut(d.selected).ok_or("no effect is selected")?;
+            e.params.insert("glowColor".into(), json!([rgb[0], rgb[1], rgb[2], 1.0]));
+        }
+        _ => return Err(format!("the Filter Gallery has no colour {which}")),
+    }
+    Ok(())
+}
+
 /// Re-opens Filter Gallery smart filter `index` of smart object `layer` with its recorded stack,
 /// previewing on the pixels below it; OK updates that filter (`layer.smartFilter.setParams`).
 pub fn open_smart_filter(app: &mut PhotocraftApp, layer: LayerId, index: usize) -> Result<(), String> {
@@ -603,6 +617,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
     let mut action: Option<&str> = None;
+    // A colour swatch clicked this frame: the Color Picker opens on it once the gallery is drawn.
+    let mut pick: Option<(&str, String, [f32; 3])> = None;
     let background = app.background_jobs;
     egui::Area::new(egui::Id::new("gallery-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let Some(d) = app.distort.gallery.as_mut() else { return };
@@ -775,10 +791,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                             .map(|a| a.iter().filter_map(Value::as_f64).map(|v| v as f32).collect::<Vec<_>>())
                             .filter(|v| v.len() >= 3);
                         let neon = photocraft_algo::GalleryEffect::new(GalleryFilter::NeonGlow).color;
-                        let mut rgb = c.map_or([neon[0], neon[1], neon[2]], |v| [v[0], v[1], v[2]]);
+                        let rgb = c.map_or([neon[0], neon[1], neon[2]], |v| [v[0], v[1], v[2]]);
+                        let title = crate::color_picker_ui::title_for(tl!("Glow Color"));
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new(tl!("Glow Color")).color(t.text_dim));
-                            crate::widgets::color_edit_button_rgb(ui, &mut rgb);
+                            if widgets::color_swatch_button(ui, color32(rgb), &title).clicked() {
+                                pick = Some(("gallery:glow", title.clone(), rgb));
+                            }
                         });
                         e.params.insert("glowColor".into(), json!([rgb[0], rgb[1], rgb[2], 1.0]));
                     }
@@ -849,6 +868,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         Some("cancel") => app.distort.gallery = None,
         _ => {}
     }
+    if let Some((target, title, rgb)) = pick.filter(|_| app.distort.gallery.is_some()) {
+        crate::color_picker_ui::open_for_target(app, target, &title, rgb);
+    }
+}
+
+fn color32(c: [f32; 3]) -> egui::Color32 {
+    let b = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+    egui::Color32::from_rgb(b(c[0]), b(c[1]), b(c[2]))
 }
 
 #[cfg(test)]
@@ -1157,5 +1184,79 @@ mod tests {
             let screen = ms(t);
             println!("{f:>14}: old fit {old:>5.0} ms, new fit {fit:>6.0} ms, new 100 % (1100x800) {screen:>5.0} ms");
         }
+    }
+}
+
+/// The Color Picker over the full-window gallery, through the whole app with real pointer input.
+#[cfg(test)]
+mod picker_tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    fn harness() -> egui_kittest::Harness<'static, PhotocraftApp> {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            app.run("file.new", json!({"width": 90, "height": 60})).unwrap();
+            app.run("layer.new.layer", json!({})).unwrap();
+            app.run("edit.fill", json!({"color": "#808080"})).unwrap();
+            app
+        });
+        h.run_steps(8);
+        open(h.state_mut()).unwrap();
+        h.run_steps(4);
+        h
+    }
+
+    fn press(h: &mut egui_kittest::Harness<'static, PhotocraftApp>, at: egui::Pos2) {
+        h.event(egui::Event::PointerMoved(at));
+        h.step();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+            h.step();
+        }
+        h.run_steps(3);
+    }
+
+    fn glow(h: &egui_kittest::Harness<'static, PhotocraftApp>) -> Value {
+        let d = h.state().distort.gallery.as_ref().unwrap();
+        d.effects[d.selected].params.get("glowColor").cloned().unwrap_or_default()
+    }
+
+    /// Neon Glow's Glow Color opens the Color Picker ("Color Picker (Glow Color)", as Photoshop
+    /// titles it) over the gallery, which takes clicks above it: Cancel keeps the colour, OK sets
+    /// it on the selected effect, and the gallery stays open.
+    #[test]
+    fn glow_color_opens_the_color_picker_over_the_gallery() {
+        let mut h = harness();
+        h.state_mut().distort.gallery.as_mut().unwrap().set_filter(GalleryFilter::NeonGlow);
+        h.run_steps(3);
+        let before = glow(&h);
+        let swatch = h.get_by_label("Color Picker (Glow Color)").rect().center();
+        press(&mut h, swatch);
+        let picker = crate::color_picker_ui::top(h.state()).expect("the swatch opens the Color Picker");
+        let fields = h.state().ui.dialogs.iter().find(|d| d.id == picker).unwrap().fields.clone();
+        assert_eq!(fields["__label"], json!("Color Picker (Glow Color)"));
+        // The picker's own Cancel takes a real click, though the gallery fills the window.
+        let cancel = h.get_all_by_label("Cancel").map(|n| n.rect().center()).next().unwrap();
+        press(&mut h, cancel);
+        assert!(crate::color_picker_ui::top(h.state()).is_none(), "the picker's Cancel is clicked, not the gallery under it");
+        assert!(h.state().distort.gallery.is_some());
+        assert_eq!(glow(&h), before);
+        // OK sets the colour.
+        press(&mut h, swatch);
+        let picker = crate::color_picker_ui::top(h.state()).unwrap();
+        h.state_mut().ui.dialog_mut(picker).unwrap().fields.insert("color".into(), json!("#ff00ff"));
+        crate::dialogs::confirm(h.state_mut(), picker).unwrap();
+        h.run_steps(3);
+        assert!(h.state().distort.gallery.is_some(), "the gallery stays open");
+        assert_eq!(glow(&h), json!([1.0, 0.0, 1.0, 1.0]));
+    }
+
+    /// With no gallery open, a gallery colour from the picker is an error, not a panic.
+    #[test]
+    fn a_gallery_colour_with_the_gallery_closed_is_refused() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        assert!(set_color(&mut app, "glow", [1.0, 0.0, 0.0]).is_err());
     }
 }
