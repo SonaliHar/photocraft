@@ -1,10 +1,10 @@
-//! CLI transport for paid readonly XCF discovery/filter replies. No raw Value is detached.
+//! CLI transport for paid current-XCF discovery and closed-filter replies. No raw Value is detached.
 use photocraft_automation::{AutomationError, Headless, budgets};
 use serde_json::Value;
 use std::io::Write;
 
 pub(super) fn handles(headless: &Headless, command: &str) -> bool {
-    matches!(command, "xcf.filter.inspect" | "xcf.inspect") && headless.has_owned_filter_inspection()
+    matches!(command, "xcf.filter.inspect" | "xcf.inspect") && headless.has_owned_inspection_command(command)
 }
 
 pub(super) fn write(headless: &mut Headless, command: &str, params: &Value, output: &mut dyn Write) -> Result<(), AutomationError> {

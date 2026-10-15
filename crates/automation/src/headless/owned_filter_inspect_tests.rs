@@ -427,3 +427,94 @@ fn retained_rpc_discovery_accepts_missing_params_and_keeps_legacy_envelope() {
     assert_eq!(reads.load(Ordering::Relaxed), 0);
     assert_eq!(q.usage().unwrap(), baseline);
 }
+
+// CURRENT metadata only: the actual paid native fixture is not original-XCF proof.
+fn plain_current_headless() -> (Headless, BackingQuota, Arc<AtomicU64>) {
+    let (mut document, q, guard, reads, _, _) = fixture(ColorMode::Rgb, SampleType::F64, SampleEncoding::NonlinearProfile);
+    let state = document.xcf_state.as_mut().unwrap();
+    state.filter_stacks.clear();
+    state.filter_masks.clear();
+    state.items.retain(|item| matches!(item.item, ItemRef::Layer(_)));
+    let owner = AccountedDocument::from_owned(document, guard, q.clone(), &ctl()).unwrap();
+    let mut h = Headless::new();
+    h.session.add_accounted_document(owner, None, &ctl()).unwrap();
+    (h, q, reads)
+}
+#[test]
+fn plain_current_project_routes_by_command_without_filter_or_raw_escape() {
+    let (mut h, q, reads) = plain_current_headless();
+    assert!(h.has_owned_inspection_command("xcf.inspect"));
+    assert!(!h.has_owned_filter_inspection());
+    assert!(!h.has_owned_inspection_command("xcf.filter.inspect"));
+    assert!(!h.has_owned_inspection_command("xcf.assess"));
+    let baseline = q.usage().unwrap();
+    let snapshot = h.session.active().unwrap().doc.clone();
+    let revision = h.session.active().unwrap().revision;
+    let journal = h.session.journal.clone();
+    for wait in [false, true] {
+        let reply = h.inspect_owned_command_bounded("xcf.inspect", &Value::Null, wait).unwrap();
+        assert_eq!(reply.command(), "xcf.inspect");
+        assert_eq!(reply.value()["filters"]["total"], 0);
+        assert_eq!(reply.value()["items"]["total"], 1);
+        assert!(q.usage().unwrap().index > baseline.index);
+        drop(reply);
+        assert_eq!(q.usage().unwrap(), baseline);
+    }
+    let wire = h.inspect_owned_command_cli_bounded("xcf.inspect", &Value::Null, true, crate::budgets::MAX_RESPONSE_BYTES).unwrap();
+    let response: Value = serde_json::from_slice(wire.bytes()).unwrap();
+    assert_eq!(response["command"], "xcf.inspect");
+    drop(wire);
+    assert!(h.inspect_owned_filter_bounded(&serde_json::json!({"filterId":"100"}), true).is_err());
+    assert!(h.command_run("xcf.inspect", Value::Null).is_err());
+    assert!(h.handle("engine.execute", serde_json::json!({"command":"xcf.inspect"})).is_err());
+    assert_eq!(h.batch(&serde_json::json!({"steps":[{"command":"xcf.inspect"}]})).unwrap()["failed"], 1);
+    assert_eq!(reads.load(Ordering::Relaxed), 0);
+    assert!(h.session.active().unwrap().doc.shares_state(&snapshot));
+    assert_eq!(h.session.active().unwrap().revision, revision);
+    assert_eq!(h.session.journal, journal);
+    assert_eq!(q.usage().unwrap(), baseline);
+}
+#[test]
+fn plain_project_authorization_work_and_threshold_refusal_are_final() {
+    let (mut h, q, _) = plain_current_headless();
+    fn deny(id: &str, _: &Value) -> photocraft_engine::Result<()> {
+        assert_eq!(id, "xcf.inspect");
+        Err(photocraft_engine::EngineError::Other("plain project denied".into()))
+    }
+    let baseline = q.usage().unwrap();
+    h.session.authorize = Some(deny);
+    assert!(h.inspect_owned_command_bounded("xcf.inspect", &Value::Null, true).is_err());
+    h.session.authorize = None;
+    let denied = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Err(BackingError::Work) };
+    assert!(h.inspect_owned_command_with_read_control("xcf.inspect", &Value::Null, true, &denied).is_err());
+    assert_eq!(q.usage().unwrap(), baseline);
+    for histogram in [false, true] {
+        let (mut threshold, q, _) = headless(histogram);
+        let baseline = q.usage().unwrap();
+        assert!(threshold.has_owned_inspection_command("xcf.inspect"));
+        assert!(threshold.has_owned_inspection_command("xcf.filter.inspect"));
+        assert!(threshold.inspect_owned_command_bounded("xcf.inspect", &serde_json::json!({"limit":0}), true).is_err());
+        assert_eq!(q.usage().unwrap(), baseline);
+    }
+}
+#[test]
+fn plain_current_retained_rpc_preserves_id_and_project_envelope() {
+    use std::sync::Mutex;
+    let (h, q, reads) = plain_current_headless();
+    let baseline = q.usage().unwrap();
+    let h = Mutex::new(h);
+    let mut bytes = Vec::new();
+    crate::rpc::serve_lines(
+        &h,
+        std::io::Cursor::new(b"{\"id\":\"plain\",\"method\":\"engine.execute\",\"params\":{\"command\":\"xcf.inspect\",\"wait\":false}}\n"),
+        &mut bytes,
+    )
+    .unwrap();
+    let reply: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(reply["id"], "plain");
+    assert_eq!(reply["ok"], true);
+    assert_eq!(reply["result"]["items"]["total"], 1);
+    assert_eq!(reply["result"]["filters"]["total"], 0);
+    assert_eq!(reads.load(Ordering::Relaxed), 0);
+    assert_eq!(q.usage().unwrap(), baseline);
+}

@@ -7,7 +7,7 @@ pub(super) async fn run(server: &PhotocraftMcp, id: String, params: Value, wait:
         Backend::Headless(_) => {
             let result = server
                 .headless_op_without_sync(move |headless| {
-                    if headless.has_owned_filter_inspection() {
+                    if headless.has_owned_inspection_command(&id) {
                         let reply = headless.inspect_owned_command_bounded(&id, &params, wait)?;
                         // The actual engine fee remains live through payload JSON
                         // encoding and bounded SDK-envelope serialization checking.

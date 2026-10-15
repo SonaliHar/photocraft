@@ -172,3 +172,115 @@ mod actual_source {
         assert_eq!(q.usage().unwrap(), baseline);
     }
 }
+
+#[path = "../../../xcf/tests/common/mod.rs"]
+mod plain_fixture;
+
+mod plain_current {
+    use super::*;
+    use std::{
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+    struct Directory(PathBuf);
+    impl Directory {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!("photocraft-mcp-plain-current-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for Directory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    fn headless(dir: &Directory) -> Headless {
+        std::fs::write(dir.0.join("plain.xcf"), plain_fixture::image(13, 150, 0, 1, 1, &[31, 61, 91, 255])).unwrap();
+        let mut h = Headless::trusted_local();
+        drop(h.open_owned_xcf_keep_current_bounded(&dir.0.join("plain.xcf")).unwrap());
+        assert!(h.session.active().unwrap().doc.accounted().is_some());
+        assert!(h.has_owned_inspection_command("xcf.inspect"));
+        assert!(!h.has_owned_inspection_command("xcf.filter.inspect"));
+        h
+    }
+    fn text(reply: &CallToolResult) -> &str {
+        reply.content.iter().find_map(|v| v.as_text()).unwrap().text.as_str()
+    }
+    #[tokio::test]
+    #[ignore = "UNRUN: genuine plain owned current metadata MCP reply custody"]
+    async fn project_only_plain_discovery_preserves_current_ids_pages_owner_and_sdk_boundary() {
+        let dir = Directory::new();
+        let h = Arc::new(Mutex::new(headless(&dir)));
+        let server = PhotocraftMcp::with_backend(Backend::Headless(h.clone()));
+        let (snapshot, history, revision, journal, q, baseline) = {
+            let h = h.lock().unwrap();
+            let st = h.session.active().unwrap();
+            let q = st.doc.quota().unwrap().clone();
+            (st.doc.clone(), st.history.clone(), st.revision, h.session.journal.clone(), q.clone(), q.usage().unwrap())
+        };
+        for wait in [false, true] {
+            let reply = server.run_command("xcf.inspect".into(), Value::Null, wait).await.unwrap();
+            assert_ne!(reply.is_error, Some(true));
+            let value: Value = serde_json::from_str(text(&reply)).unwrap();
+            assert_eq!(value["format"], "xcf");
+            assert_eq!(value["filters"]["total"], 0);
+            assert_eq!(value["items"]["total"], 1);
+            assert_eq!(value["items"]["entries"][0]["item"]["id"], snapshot.layers[0].id.0.to_string());
+            assert!(crate::budgets::json_bytes(&reply).is_ok());
+            let page = server.run_command("xcf.inspect".into(), json!({"offset":1,"limit":128}), wait).await.unwrap();
+            let page: Value = serde_json::from_str(text(&page)).unwrap();
+            assert_eq!(page["items"]["entries"], json!([]));
+            assert_eq!(server.run_command("xcf.filter.inspect".into(), json!({"filterId":"1"}), wait).await.unwrap().is_error, Some(true));
+        }
+        let h = h.lock().unwrap();
+        let st = h.session.active().unwrap();
+        assert!(st.doc.shares_state(&snapshot));
+        assert!(st.history.shares_accounted_history(&history));
+        assert_eq!(st.revision, revision);
+        assert_eq!(h.session.journal, journal);
+        assert_eq!(q.usage().unwrap(), baseline);
+    }
+    #[tokio::test]
+    #[ignore = "UNRUN: plain current discovery auth/malformed/raw-batch refusal and native persistence"]
+    async fn plain_discovery_keeps_original_authorizer_and_no_raw_escape_then_reads_saved_current_name() {
+        let dir = Directory::new();
+        let h = Arc::new(Mutex::new(headless(&dir)));
+        let server = PhotocraftMcp::with_backend(Backend::Headless(h.clone()));
+        let before = h.lock().unwrap().session.active().unwrap().doc.clone();
+        for params in [json!({"limit":0}), json!({"offset":100001}), json!({"path":"not-authority"})] {
+            assert_eq!(server.run_command("xcf.inspect".into(), params, true).await.unwrap().is_error, Some(true));
+        }
+        {
+            let mut h = h.lock().unwrap();
+            assert!(h.command_run("xcf.inspect", json!({})).is_err());
+            let batch = h.handle("batch", json!({"steps":[{"command":"xcf.inspect","params":{}}]})).unwrap();
+            assert_eq!(batch["failed"], 1);
+            h.session.authorize =
+                Some(|id, _| if id == "xcf.inspect" { Err(photocraft_engine::EngineError::Other("deny original project command".into())) } else { Ok(()) });
+        }
+        assert_eq!(server.run_command("xcf.inspect".into(), json!({}), false).await.unwrap().is_error, Some(true));
+        {
+            let mut h = h.lock().unwrap();
+            assert!(h.session.active().unwrap().doc.shares_state(&before));
+            h.session.authorize = None;
+        }
+        assert_ne!(server.run_command("layer.setProps".into(), json!({"name":"MCP current name"}), true).await.unwrap().is_error, Some(true));
+        let reply = server.run_command("xcf.inspect".into(), json!({}), true).await.unwrap();
+        let value: Value = serde_json::from_str(text(&reply)).unwrap();
+        assert_eq!(value["items"]["entries"][0]["name"], "MCP current name");
+        let original = std::fs::read(dir.0.join("plain.xcf")).unwrap();
+        let saved = dir.0.join("current.pcraft");
+        h.lock().unwrap().save(None, Some(&saved), Some("pcraft"), &Default::default()).unwrap();
+        assert_eq!(std::fs::read(dir.0.join("plain.xcf")).unwrap(), original);
+        let mut reopened = Headless::trusted_local();
+        drop(reopened.open_owned_native_keep_current_bounded(&saved).unwrap());
+        let reopened = Arc::new(Mutex::new(reopened));
+        let again = PhotocraftMcp::with_backend(Backend::Headless(reopened));
+        let reply = again.run_command("xcf.inspect".into(), Value::Null, true).await.unwrap();
+        assert_ne!(reply.is_error, Some(true));
+        let value: Value = serde_json::from_str(text(&reply)).unwrap();
+        assert_eq!(value["items"]["entries"][0]["name"], "MCP current name");
+    }
+}

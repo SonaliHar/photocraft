@@ -28,6 +28,15 @@ impl Headless {
             .and_then(|state| state.doc.accounted())
             .is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage())
     }
+    /// Routing hint only: CURRENT XCF metadata is not original-source proof.
+    /// The selected paid factory must still validate its exact runtime class.
+    pub fn has_owned_inspection_command(&self, id: &str) -> bool {
+        match id {
+            "xcf.filter.inspect" => self.has_owned_filter_inspection(),
+            "xcf.inspect" => self.session.active().is_some_and(|state| state.doc.accounted().is_some_and(|owner| owner.document().xcf_state.is_some())),
+            _ => false,
+        }
+    }
     pub fn inspect_owned_filter_bounded(&mut self, params: &Value, wait: bool) -> Result<OwnedFilterInspectReply, AutomationError> {
         self.inspect_owned_command_bounded(COMMAND, params, wait)
     }
@@ -69,7 +78,13 @@ impl Headless {
         }
         Ok(match id {
             "xcf.filter.inspect" => photocraft_engine::accounted_filter_inspect::prepare(&self.session, params, control)?,
-            "xcf.inspect" => photocraft_engine::accounted_xcf_inspect::prepare(&self.session, params, control)?,
+            "xcf.inspect" => {
+                if self.has_owned_filter_inspection() {
+                    photocraft_engine::accounted_xcf_inspect::prepare(&self.session, params, control)?
+                } else {
+                    photocraft_engine::accounted_plain_xcf_inspect::prepare(&self.session, params, control)?
+                }
+            }
             _ => return Err(AutomationError::BadRequest("unsupported owned inspection command".into())),
         })
     }

@@ -426,8 +426,8 @@ fn run_cmds(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
         if owned_filter_inspect::handles(&h, &id) {
             owned_filter_inspect::write(&mut h, &id, &params, out)
                 .map_err(|e| format!("`{id}`: {}", automation_error(a, e)))?;
-            // Both admitted classes contain no text layers, so the ordinary
-            // missing-font walk cannot add warnings to this exact reply.
+            // Successfully admitted current-metadata storage contains no text
+            // layers, so the ordinary font walk adds no warnings to this reply.
             continue;
         }
         let r = match stored_channel_run::execute(&mut h.session, stored_workspace.as_ref(), &id, &params) {

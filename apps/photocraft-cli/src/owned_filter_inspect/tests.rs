@@ -432,3 +432,129 @@ fn discovery_supplies_real_filter_id_for_cli_inspection_edit_and_native_continua
         assert_eq!(reopened.session.active().unwrap().doc.name, "continued-discovery.pcraft");
     }
 }
+
+#[path = "../../../../crates/xcf/tests/common/mod.rs"]
+mod plain_fixture;
+
+fn owned_plain(dir: &Directory) -> Headless {
+    let original = plain_fixture::image(13, 150, 0, 1, 1, &[31, 61, 91, 255]);
+    std::fs::write(dir.0.join("plain.xcf"), original).unwrap();
+    let mut h = Headless::trusted_local();
+    drop(h.open_owned_xcf_keep_current_bounded(&dir.0.join("plain.xcf")).unwrap());
+    assert!(h.session.active().unwrap().doc.accounted().is_some());
+    assert!(!h.has_owned_filter_inspection());
+    h
+}
+#[test]
+#[ignore = "UNRUN: genuine plain owned XCF current metadata paid CLI transport"]
+fn plain_current_project_only_hint_paid_output_and_denials_preserve_state() {
+    let dir = Directory::new();
+    let mut h = owned_plain(&dir);
+    assert!(handles(&h, "xcf.inspect"));
+    assert!(!handles(&h, "xcf.filter.inspect"));
+    assert!(!handles(&h, "xcf.resource.inspect"));
+    let before = h.session.active().unwrap().doc.clone();
+    let history = h.session.active().unwrap().history.clone();
+    let revision = h.session.active().unwrap().revision;
+    let journal = h.session.journal.clone();
+    let q = before.quota().unwrap().clone();
+    let baseline = q.usage().unwrap();
+    let mut bytes = Vec::new();
+    write(
+        &mut h,
+        "xcf.inspect",
+        &Value::Null,
+        &mut Probe(
+            |chunk: &[u8]| {
+                assert!(q.usage().unwrap().index > baseline.index);
+                bytes.extend_from_slice(chunk);
+                Ok(chunk.len())
+            },
+            || {
+                assert!(q.usage().unwrap().index > baseline.index);
+                Ok(())
+            },
+        ),
+    )
+    .unwrap();
+    let reply: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(reply["command"], "xcf.inspect");
+    assert_eq!(reply["result"]["filters"]["total"], 0);
+    assert_eq!(reply["result"]["items"]["total"], 1);
+    assert_eq!(q.usage().unwrap(), baseline);
+    for params in [json!({"limit":0}), json!({"offset":100001}), json!({"sourceGrant":true})] {
+        let mut out = Vec::new();
+        assert!(write(&mut h, "xcf.inspect", &params, &mut out).is_err());
+        assert!(out.is_empty());
+    }
+    assert!(h.command_run("xcf.inspect", json!({})).is_err());
+    assert!(h.command_run("xcf.filter.inspect", json!({"filterId":"1"})).is_err());
+    let batch = h.handle("batch", json!({"steps":[{"command":"xcf.inspect","params":{}}]})).unwrap();
+    assert_eq!(batch["failed"], 1);
+    h.session.authorize =
+        Some(|id, _| if id == "xcf.inspect" { Err(photocraft_engine::EngineError::Other("deny original project ID".into())) } else { Ok(()) });
+    let mut out = Vec::new();
+    assert!(write(&mut h, "xcf.inspect", &json!({}), &mut out).is_err());
+    assert!(out.is_empty());
+    assert!(h.session.active().unwrap().doc.shares_state(&before));
+    assert!(h.session.active().unwrap().history.shares_accounted_history(&history));
+    assert_eq!(h.session.active().unwrap().revision, revision);
+    assert_eq!(h.session.journal, journal);
+    assert_eq!(q.usage().unwrap(), baseline);
+}
+#[test]
+#[ignore = "UNRUN: actual plain XCF CLI current-name discovery and native Save As/reopen"]
+fn plain_current_discovery_tracks_paid_metadata_name_and_survives_native_save_without_touching_source() {
+    let dir = Directory::new();
+    drop(owned_plain(&dir));
+    let input = dir.0.join("plain.xcf");
+    let native = dir.0.join("plain-current.pcraft");
+    let original = std::fs::read(&input).unwrap();
+    let (code, text, error) = invoke(&[
+        "run",
+        input.to_str().unwrap(),
+        "--xcf-profile-policy",
+        "keepCurrent",
+        "--cmd",
+        "xcf.inspect",
+        "--cmd",
+        "layer.setProps",
+        "--params",
+        r#"{"name":"current plain name"}"#,
+        "--cmd",
+        "xcf.inspect",
+        "--out",
+        native.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{error}");
+    let rows: Vec<Value> = text.lines().map(|v| serde_json::from_str(v).unwrap()).collect();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0]["command"], "xcf.inspect");
+    assert_eq!(rows[2]["command"], "xcf.inspect");
+    assert_eq!(rows[2]["result"]["items"]["entries"][0]["name"], "current plain name");
+    assert_eq!(rows[2]["result"]["filters"]["total"], 0);
+    assert_eq!(std::fs::read(&input).unwrap(), original);
+    let mut actual = Headless::trusted_local();
+    drop(actual.open_owned_native_keep_current_bounded(&native).unwrap());
+    assert!(actual.has_owned_inspection_command("xcf.inspect"));
+    assert!(!actual.has_owned_inspection_command("xcf.filter.inspect"));
+    assert_eq!(actual.session.active().unwrap().doc.layers[0].name, "current plain name");
+    let saved = std::fs::read(&native).unwrap();
+    let (code, text, error) =
+        invoke(&["run", native.to_str().unwrap(), "--native-profile-policy", "keepCurrent", "--cmd", "xcf.inspect", "--params", r#"{"offset":0,"limit":128}"#]);
+    assert_eq!(code, 0, "{error}");
+    let row: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(row["result"]["items"]["entries"][0]["name"], "current plain name");
+    assert_eq!(std::fs::read(&native).unwrap(), saved);
+    let alias = dir.0.join("source-alias.pcraft");
+    std::fs::hard_link(&input, &alias).unwrap();
+    let (code, _, _) =
+        invoke(&["run", input.to_str().unwrap(), "--xcf-profile-policy", "keepCurrent", "--cmd", "xcf.inspect", "--out", alias.to_str().unwrap()]);
+    assert_ne!(code, 0);
+    assert_eq!(std::fs::read(&input).unwrap(), original);
+    let mut resident = Headless::trusted_local();
+    resident.open(&input).unwrap();
+    assert!(!handles(&resident, "xcf.inspect"));
+    assert!(!handles(&resident, "xcf.filter.inspect"));
+    assert!(resident.command_run("xcf.inspect", json!({})).is_ok());
+}

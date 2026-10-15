@@ -26,7 +26,8 @@ pub(crate) fn handle(app: &mut PhotocraftApp, request: &ControlRequest, command:
         return None;
     }
     let owner = app.session.active()?.doc.accounted()?;
-    if !owner.is_readonly_threshold_alpha_storage() && !owner.is_readonly_threshold_storage() {
+    let threshold = owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage();
+    if (command == "xcf.filter.inspect" && !threshold) || (command == "xcf.inspect" && owner.document().xcf_state.is_none()) {
         return None;
     }
     let mut rejected_id = false;
@@ -64,7 +65,11 @@ pub(crate) fn handle(app: &mut PhotocraftApp, request: &ControlRequest, command:
             authorize(command, params).map_err(|error| error.to_string())?;
         }
         let reply = if command == "xcf.inspect" {
-            photocraft_engine::accounted_xcf_inspect::prepare(&app.session, params, &control)
+            if threshold {
+                photocraft_engine::accounted_xcf_inspect::prepare(&app.session, params, &control)
+            } else {
+                photocraft_engine::accounted_plain_xcf_inspect::prepare(&app.session, params, &control)
+            }
         } else {
             prepare(&app.session, params, &control)
         }
@@ -86,3 +91,7 @@ pub(crate) fn handle(app: &mut PhotocraftApp, request: &ControlRequest, command:
 #[cfg(test)]
 #[path = "owned_filter_inspect_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "owned_plain_xcf_inspect_tests.rs"]
+mod plain_tests;

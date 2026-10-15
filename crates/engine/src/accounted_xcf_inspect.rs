@@ -11,7 +11,7 @@ const COMMAND: &str = "xcf.inspect";
 fn bad(message: &'static str) -> EngineError {
     EngineError::BadParams { cmd: COMMAND.into(), msg: message.into() }
 }
-fn pagination(params: &Value, control: &ReadControl<'_>) -> Result<(usize, usize)> {
+pub(crate) fn pagination(params: &Value, control: &ReadControl<'_>) -> Result<(usize, usize)> {
     control.check(4)?;
     // Registered resident dispatch treats null as {}, before its old parser.
     let fields = if params.is_null() {
@@ -50,7 +50,7 @@ fn add(total: &mut usize, n: usize) -> Result<()> {
 }
 // A str is valid UTF8; counting non-continuation bytes gives its code-point
 // count even when a bounded byte chunk ends inside a multi-byte character.
-fn over_256(text: &str, control: &ReadControl<'_>) -> Result<bool> {
+pub(crate) fn over_256(text: &str, control: &ReadControl<'_>) -> Result<bool> {
     let mut characters = 0usize;
     for chunk in text.as_bytes().chunks(32 * 1024) {
         control.check(chunk.len() as u64 + 1)?;
@@ -58,7 +58,7 @@ fn over_256(text: &str, control: &ReadControl<'_>) -> Result<bool> {
     }
     Ok(characters > 256)
 }
-fn validate_resolution(resolution: &photocraft_doc::PhysicalResolution, control: &ReadControl<'_>) -> Result<()> {
+pub(crate) fn validate_resolution(resolution: &photocraft_doc::PhysicalResolution, control: &ReadControl<'_>) -> Result<()> {
     control.check(1)?;
     if !resolution.x_dpi.is_finite() || !resolution.y_dpi.is_finite() || resolution.x_dpi <= 0. || resolution.y_dpi <= 0. {
         return Err(bad("invalid physical resolution"));
@@ -169,7 +169,7 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
         .and_then(|n| n.checked_add(filters.checked_mul(16)?))
         .and_then(|n| n.checked_add(selected.checked_mul(4)?))
         .ok_or(BackingError::Length)?;
-    let bounds = ReplyBounds { nodes, objects, members, depth: 8 };
+    let bounds = ReplyBounds { nodes, objects, members, depth: 8, max_string: 4096 };
     // At most 256 UTF8 code points (1024 bytes) for every shortened string;
     // fixed text covers all schema keys, literal values and decimal identities.
     let short_fields = 1usize

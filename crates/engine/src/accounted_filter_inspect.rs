@@ -37,8 +37,9 @@ pub(crate) struct ReplyBounds {
     pub(crate) objects: usize,
     pub(crate) members: usize,
     pub(crate) depth: usize,
+    pub(crate) max_string: usize,
 }
-const FILTER_BOUNDS: ReplyBounds = ReplyBounds { nodes: MAX_NODES, objects: MAX_OBJECTS, members: MAX_MEMBERS, depth: MAX_DEPTH };
+const FILTER_BOUNDS: ReplyBounds = ReplyBounds { nodes: MAX_NODES, objects: MAX_OBJECTS, members: MAX_MEMBERS, depth: MAX_DEPTH, max_string: MAX_TEXT };
 
 /// The copied Value drops before its actual quota reservation. There is no raw
 /// Value extractor: callers retain this owner until their output is complete.
@@ -124,8 +125,8 @@ struct Census {
     members: usize,
 }
 impl Census {
-    fn string(&mut self, value: &String, control: &ReadControl<'_>) -> Result<()> {
-        if value.len() > MAX_TEXT || value.capacity() > MAX_TEXT * 2 {
+    fn string(&mut self, value: &String, bounds: ReplyBounds, control: &ReadControl<'_>) -> Result<()> {
+        if value.len() > bounds.max_string || value.capacity() > bounds.max_string.checked_mul(2).ok_or(BackingError::Length)? {
             return Err(BackingError::Length.into());
         }
         control.check(value.len() as u64 + 1)?;
@@ -139,9 +140,9 @@ impl Census {
         }
         checked_add(&mut self.bytes, std::mem::size_of::<Value>())?;
         match value {
-            Value::String(value) => self.string(value, control)?,
+            Value::String(value) => self.string(value, bounds, control)?,
             Value::Array(values) => {
-                if values.capacity() > 2 * bounds.nodes {
+                if values.capacity() > bounds.nodes.checked_mul(2).ok_or(BackingError::Length)? {
                     return Err(BackingError::Length.into());
                 }
                 checked_add(&mut self.bytes, values.capacity().checked_mul(std::mem::size_of::<Value>()).ok_or(BackingError::Length)?)?;
@@ -164,7 +165,7 @@ impl Census {
                         .ok_or(BackingError::Length)?,
                 )?;
                 for (key, value) in values {
-                    self.string(key, control)?;
+                    self.string(key, bounds, control)?;
                     self.value(value, depth + 1, bounds, control)?;
                 }
             }

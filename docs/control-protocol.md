@@ -449,6 +449,14 @@ Stack revisions remain decimal strings in project discovery. Typed callers use
 the returned carrier. Resident inspection keeps its existing behavior. Inspection
 of other owned classes remains separate work.
 
+`xcf.inspect` also supports coherent flat plain documents held by the actual
+accounted owner. It includes paginated resources, saved sets and independently
+paginated set members. Resource locators remain inert and `accessGranted` stays
+false; inspection reads no resource payloads. This describes the current model
+and establishes no original-XCF lineage, profile interpretation, render support
+or edit permission. Plain documents do not enter the retained filter-inspection
+route. The same paid replies, transport boundaries and authorizers apply.
+
 Those two owned Threshold classes also accept name-only `layer.setProps`, for
 example `{"layer":1,"name":"Foreground"}`. The layer target may be omitted or
 given as the existing numeric ID or exact name. The command preserves upstream

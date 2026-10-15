@@ -311,7 +311,7 @@ fn respond_retained(h: &Mutex<Headless>, line: &str, allow_owned:bool) -> Routed
         // or the legacy handle's job synchronization. Resident behavior is unchanged.
         if method == "engine.execute" && req.get("params").and_then(|p|p.get("command")).and_then(Value::as_str).is_some_and(|command|matches!(command,"xcf.filter.inspect"|"xcf.inspect")) {
             let mut headless=h.lock().unwrap_or_else(PoisonError::into_inner);
-            if headless.has_owned_filter_inspection() {
+            if req.get("params").and_then(|p|p.get("command")).and_then(Value::as_str).is_some_and(|command|headless.has_owned_inspection_command(command)) {
                 if let Err(error)=owned_xcf_open::validate_id_shape(id) {
                     return Ok(RoutedReply::Legacy(json!({"id":null,"ok":false,"error":error.to_string()})));
                 }
