@@ -7,13 +7,10 @@ use crate::{
 use photocraft_engine::accounted_filter_inspect::{OwnedFilterInspectWire, encode_rpc, prepare, validate_rpc_id};
 use photocraft_raster::{
     Interrupt,
-    backing::{BackingError, ReadControl},
+    backing::ReadControl,
 };
 use serde_json::Value;
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    mpsc::Sender,
-};
+use std::sync::mpsc::Sender;
 
 pub(crate) struct RetainedQuery {
     pub(crate) id: Value,
@@ -49,18 +46,18 @@ pub(crate) fn handle(app: &mut PhotocraftApp, request: &ControlRequest, command:
         }
         let empty = Value::Null;
         let params = fields.get("params").unwrap_or(&empty);
-        let cancelled = || request.deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline);
+        let work = photocraft_io::accounted_operation_work::OperationWork::legacy(4_294_967_296);
+        let debit = |units| work.check(units);
+        let cancelled = || request.deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) || work.deadline_expired();
         let interrupt = Interrupt::cancel_only(&cancelled);
-        let used = AtomicU64::new(0);
-        let debit = |units: u64| {
-            used.try_update(Ordering::Relaxed, Ordering::Relaxed, |value| value.checked_add(units).filter(|value| *value <= 4_294_967_296))
-                .map(|_| ())
-                .map_err(|_| BackingError::Work)
-        };
         let control = ReadControl { interrupt: &interrupt, work: &debit };
         if validate_rpc_id(&retained.id, &control).is_err() {
             rejected_id = true;
             return Err("retained inspection request ID or control limit rejected".into());
+        }
+        if photocraft_engine::accounted_native_open::is_current_pure_point_work_candidate(owner, &control).map_err(|error| error.to_string())? {
+            let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|error| error.to_string())?;
+            work.select_standard(&limits).map_err(|error| error.to_string())?;
         }
         if let Some(authorize) = app.services.automation_command.as_ref() {
             authorize(command, params)?;

@@ -5,20 +5,24 @@ use crate::{AutomationError, workspace::authorize_engine_command};
 use photocraft_engine::accounted_filter_inspect::{OwnedFilterInspectReply, OwnedFilterInspectWire};
 use photocraft_raster::{
     Interrupt,
-    backing::{BackingError, ReadControl},
+    backing::ReadControl,
 };
 use serde_json::Value;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 const COMMAND: &str = "xcf.filter.inspect";
-fn bounded<R>(run: impl FnOnce(&ReadControl<'_>) -> Result<R, AutomationError>) -> Result<R, AutomationError> {
-    let used = AtomicU64::new(0);
-    let charge = |units| {
-        used.try_update(Ordering::Relaxed, Ordering::Relaxed, |used| used.checked_add(units).filter(|n| *n <= 8_000_000_000))
-            .map_err(|_| BackingError::Work)?;
-        Ok(())
-    };
-    run(&ReadControl { interrupt: &Interrupt::NONE, work: &charge })
+fn bounded<R>(owner: Option<&photocraft_doc::accounted_document::AccountedDocument>, run: impl FnOnce(&ReadControl<'_>) -> Result<R, AutomationError>) -> Result<R, AutomationError> {
+    let work = photocraft_io::accounted_operation_work::OperationWork::legacy(8_000_000_000);
+    let charge = |units| work.check(units);
+    let cancelled = || work.deadline_expired();
+    let interrupt = Interrupt::cancel_only(&cancelled);
+    let control = ReadControl { interrupt: &interrupt, work: &charge };
+    if let Some(owner) = owner
+        && photocraft_engine::accounted_native_open::is_current_pure_point_work_candidate(owner, &control).map_err(photocraft_engine::EngineError::from)?
+    {
+        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|error| AutomationError::Other(error.to_string()))?;
+        work.select_standard(&limits).map_err(photocraft_engine::EngineError::from)?;
+    }
+    run(&control)
 }
 impl Headless {
     /// Cheap runtime routing only; the paid query validates the real class.
@@ -60,7 +64,8 @@ impl Headless {
     /// Whitelisted typed metadata query. Both wait forms inspect the currently
     /// installed snapshot inline; completed queued jobs are not applied.
     pub fn inspect_owned_command_bounded(&mut self, id: &str, params: &Value, wait: bool) -> Result<OwnedFilterInspectReply, AutomationError> {
-        bounded(|control| self.inspect_owned_command_with_read_control(id, params, wait, control))
+        let snapshot = self.session.active().map(|state| state.doc.clone());
+        bounded(snapshot.as_ref().and_then(|snapshot| snapshot.accounted()), |control| self.inspect_owned_command_with_read_control(id, params, wait, control))
     }
     pub fn inspect_owned_command_with_read_control(
         &mut self,
@@ -101,7 +106,8 @@ impl Headless {
         compact: bool,
         limit: usize,
     ) -> Result<OwnedFilterInspectWire, AutomationError> {
-        bounded(|control| {
+        let snapshot = self.session.active().map(|state| state.doc.clone());
+        bounded(snapshot.as_ref().and_then(|snapshot| snapshot.accounted()), |control| {
             let reply = self.inspect_owned_command_with_read_control(id, params, true, control)?;
             Ok(photocraft_engine::accounted_filter_inspect::encode_cli(reply, compact, limit, control)?)
         })
@@ -113,7 +119,8 @@ impl Headless {
         wait: bool,
         id: &Value,
     ) -> Result<OwnedFilterInspectWire, AutomationError> {
-        bounded(|control| {
+        let snapshot = self.session.active().map(|state| state.doc.clone());
+        bounded(snapshot.as_ref().and_then(|snapshot| snapshot.accounted()), |control| {
             photocraft_engine::accounted_filter_inspect::validate_rpc_id(id, control)?;
             let reply = self.inspect_owned_command_with_read_control(command, params, wait, control)?;
             Ok(photocraft_engine::accounted_filter_inspect::encode_rpc(reply, id, crate::budgets::MAX_RESPONSE_BYTES, control)?)
@@ -128,3 +135,7 @@ mod tests;
 #[cfg(test)]
 #[path = "owned_point_inspect_tests.rs"]
 mod point_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "owned_filter_inspect/pure_point_work_tests.rs"]
+mod pure_point_work_tests;

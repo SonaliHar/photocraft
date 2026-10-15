@@ -1072,9 +1072,29 @@ without inventing original-source provenance.
 
 Existing side/pixel, actual resident/native/index/cache and caller work limits
 all apply together. Bounded output bands do not make decoded source custody
-lazy: complete source Surfaces and their owners remain retained. Registered
-filter transactions still use their existing 2^32 work ceiling, including both
-current and staged proofs; large operations may refuse within structural bounds.
+lazy: complete source Surfaces and their owners remain retained. Explicitly selected bounded services for these three families and the separate
+derived float empty CURRENT role now use one finite standard work/deadline meter,
+including current and staged proofs; large operations may still refuse within
+structural, resource or deadline bounds.
 No guaranteed maximum image size, large-image edit throughput or native_large
 qualification follows from admitting larger geometry. All numerical, workflow,
 visual, cancellation-timing and performance acceptance remains deferred.
+
+The shared runtime work-route hint selects bounded service for an actual owned
+Point role; it does not qualify source or current content. The three operation
+names or retained epochs select their strict rendering/import/edit endpoint,
+where malformed claims must refuse. Metadata queries retain their existing
+metadata-only validation and do not prove renderability. The separate derived-empty hint retains its
+own class, origin, precision and structural restrictions without inventing a
+removed operation. Existing Box work routing is preserved independently.
+
+Selected host services use the existing native_standard 2^40 or wasm_standard
+2^36 work ceiling and 120-second active deadline, with one cumulative used count,
+first-active clock and original cancellation token. Work is never refunded or
+reset between preparation, current/staged proof and publication. Interrupt-only
+CMS and full physical-mask scans also observe the same meter deadline after
+upfront work payment. Current preparation/equations, profile and source/mask
+custody, all resident fees and strict final refusal remain unchanged. These
+finite ceilings promise no completion time, image size, RSS or numerical fidelity.
+Caller-supplied ReadControl APIs retain their own lower controls; no hidden
+standard selection replaces them. Native-large remains unavailable.

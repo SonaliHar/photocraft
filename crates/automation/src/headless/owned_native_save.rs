@@ -118,11 +118,10 @@ impl Headless {
         let timed = Interrupt::new(&cancelled, &progress);
         let control = ReadControl { interrupt: &timed, work: &charge };
         if let Some(owner) = self.session.active().and_then(|state| state.doc.accounted())
-            && (owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())
-            && photocraft_engine::accounted_native_open::is_current_box_work_candidate(owner.document(), &control).map_err(photocraft_engine::EngineError::from)?
+            && photocraft_engine::accounted_native_open::is_current_standard_work_candidate(owner, &control).map_err(photocraft_engine::EngineError::from)?
         {
             let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|e| AutomationError::Other(e.to_string()))?;
-            work.select_standard_box(&limits).map_err(photocraft_engine::EngineError::from)?;
+            work.select_standard(&limits).map_err(photocraft_engine::EngineError::from)?;
         }
         self.save_owned_native_active(path, format, &control)
     }

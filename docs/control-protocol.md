@@ -2201,10 +2201,38 @@ proof includes default words and all physical padding, under existing stored-til
 and actual byte/work limits. Larger removed-empty native `.pcraft` continuation
 uses a separate CURRENT role and does not identify a new original XCF source.
 
-All actual caller limits remain binding, including the existing 2^32 registered
-transaction work ceiling. Structural dimension admission is not a promise that a
-large current-plus-staged operation fits that allowance. Source Surfaces remain
+All actual caller limits remain binding. Selected bounded services for these
+three families and the separate derived float empty CURRENT role use the finite
+standard work/deadline policy described below. Structural dimension admission
+does not promise that a large current-plus-staged operation fits its allowance. Source Surfaces remain
 fully retained; output bands do not imply lazy input or a process memory bound.
 This geometry expansion adds no offsets, profiles, Gray, precision, HDR-native
 input or filter-stack permission, and changes no numerical acceptance tolerance.
 PhotoCraft tests and runtime/native/widget/performance validation remain deferred.
+
+Bounded host work routing for the three pure point families and separate derived
+float empty CURRENT uses the existing native_standard 2^40 or wasm_standard 2^36
+work ceiling and a 120-second active deadline. A cheap bounded hint requires the
+actual owned runtime class and operation or empty-role metadata. It selects an
+attempted service budget, never source/current validity, a new operation or a
+read-only mutation permission. Rendering/import/edit requests with malformed
+family claims still reach their strict endpoint and refuse. Metadata-only queries
+keep their existing validation and do not certify renderability. Existing
+Box-specific routing and unrelated legacy behavior
+are preserved.
+
+Existing filter set/enable/singleton reorder/remove, registered supported layer
+metadata, selection, undo/redo and history selection keep one used count, clock
+and cancellation token through preparation, old/staged proof, title/view/history
+work and publication fences. Bounded inspection, preview and native save wrappers
+use the same finite service policy through their existing phases and reply/write
+controls. Authentication, RPC/request deadlines, reply limits, source protection
+and atomic publication remain mandatory. Prepaid CMS/mask work polls the same
+deadline through its Interrupt, rather than waiting for the next work debit.
+
+Explicit caller-supplied controls are unchanged and remain authoritative; lower
+limits, cancellation and deadlines cannot be raised or replaced. Source/native
+intake already selects standard work before parsing and is not reselected here.
+No resource-policy UI, native_large, memory exemption or new Move/compound-metadata
+permission is added. Tests, native/widget workflows, timing, memory and numerical
+acceptance remain deferred.

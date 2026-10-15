@@ -1,5 +1,5 @@
 //! Finite operation work accounting for explicitly selected owned intake and
-//! CURRENT Box services.
+//! CURRENT Box and explicitly selected pure-point services.
 //!
 //! This is a policy ceiling, not a completion estimate or source/render grant.
 //! Callers must select the actual eligible route themselves. Existing caller-owned

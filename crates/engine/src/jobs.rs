@@ -1180,27 +1180,37 @@ impl Session {
                                 && (owner.is_readonly_gaussian_group_storage() || owner.is_readonly_assigned_point_storage())
                     });
             let registered_work = photocraft_io::accounted_operation_work::OperationWork::legacy(crate::accounted_clear::REGISTERED_WORK_LIMIT);
-            let debit = |units| {
-                if !bounded_work { return Ok(()); }
-                registered_work.check(units)
-            };
+            // This synchronous boundary has no external Interrupt. The same
+            // meter deadline remains active during interrupt-only CMS/mask loops;
+            // externally controlled APIs retain their original caller control.
             let deadline = || registered_work.deadline_expired();
             let interrupt = photocraft_raster::Interrupt::cancel_only(&deadline);
-            let control = photocraft_raster::backing::ReadControl { interrupt: &interrupt, work: &debit };
-            // Box uses the declared finite standard profile, with one cumulative
-            // work counter and active-operation deadline across both proofs and
-            // publication. Other registered commands retain their old ceiling.
-            if (matches!(id, "xcf.filter.set" | "xcf.filter.enable")
+            // The route probe itself debits this very ledger, including for
+            // history/view commands whose old dispatch debit was a no-op.
+            let probe_debit = |units| registered_work.check(units);
+            let probe = photocraft_raster::backing::ReadControl { interrupt: &interrupt, work: &probe_debit };
+            let pure_point_standard = matches!(id, "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.move" | "xcf.filter.remove"
+                | "layer.setProps" | "layer.select" | "edit.undo" | "edit.redo" | "history.selectState")
+                && if let Some(owner)=self.active().and_then(|state|state.doc.accounted()) {
+                    crate::accounted_native_open::is_current_pure_point_work_candidate(owner,&probe)?
+                } else { false };
+            // Preserve the original Box command selection exactly.
+            let box_standard = (matches!(id, "xcf.filter.set" | "xcf.filter.enable")
                 || id == "layer.translate" && self.active().and_then(|s|s.doc.accounted()).is_some_and(crate::observed_box_translation_candidate)
                 || id == "layer.setProps" && self.active().and_then(|s|s.doc.accounted()).is_some_and(crate::accounted_session::metadata_gesture::observed_box_layer_metadata_candidate))
-                && let Some(owner) = self.active().and_then(|state| state.doc.accounted())
-                && (owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())
-                && crate::accounted_native_open::is_current_box_work_candidate(owner.document(), &control)?
-            {
-                let limits = photocraft_xcf::ResourceLimits::for_policy(photocraft_xcf::ResourcePolicy::default())
-                    .map_err(|error| EngineError::Other(error.to_string()))?;
-                registered_work.select_standard_box(&limits)?;
+                && if let Some(owner)=self.active().and_then(|state|state.doc.accounted()) {
+                    (owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())
+                        && crate::accounted_native_open::is_current_box_work_candidate(owner.document(),&probe)?
+                } else {false};
+            if pure_point_standard || box_standard {
+                let limits=photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|error|EngineError::Other(error.to_string()))?;
+                registered_work.select_standard(&limits)?;
             }
+            let debit = |units| {
+                if !(bounded_work || pure_point_standard) { return Ok(()); }
+                registered_work.check(units)
+            };
+            let control = photocraft_raster::backing::ReadControl { interrupt: &interrupt, work: &debit };
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::accounted_commands::dispatch(self, id, &params, &control)))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` failed with an internal error (logged); the document is unchanged"))));
             // The carrier publishes a prepaid journal with the successful

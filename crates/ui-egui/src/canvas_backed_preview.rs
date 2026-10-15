@@ -50,11 +50,11 @@ fn backed_display_image_with_owner(
         let progress = |value| interrupt.progress(value);
         let timed_interrupt = Interrupt::new(&cancelled, &progress);
         let control = ReadControl { interrupt: &timed_interrupt, work: &charge };
-        if owner.is_some_and(|owner| owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())
-            && photocraft_engine::accounted_native_open::is_current_box_work_candidate(doc, &control).map_err(|e| e.to_string())?
+        if let Some(owner) = owner
+            && photocraft_engine::accounted_native_open::is_current_standard_work_candidate(owner, &control).map_err(|e| e.to_string())?
         {
             let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|e| e.to_string())?;
-            work.select_standard_box(&limits).map_err(|e| e.to_string())?;
+            work.select_standard(&limits).map_err(|e| e.to_string())?;
         }
         let analytic_profile = if let Some(owner) = owner {
             if photocraft_engine::accounted_native_open::is_current_isolated_normal_group_candidate(doc, &control).map_err(|e| e.to_string())? {

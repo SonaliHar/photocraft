@@ -30,6 +30,11 @@ pub fn is_current_box_work_candidate(document: &photocraft_doc::Document, contro
     photocraft_compose::backed_box_context::is_candidate(document, control)
 }
 
+#[path="accounted_point_work.rs"]
+mod standard_work;
+pub use standard_work::is_current_standard_work_candidate;
+pub use standard_work::is_current_pure_point_work_candidate;
+
 /// Allocation-free route hint selecting the stricter current Point endpoint.
 /// Version, arguments, profile and storage still require the typed handoff;
 /// a refusal must never retry through the generic archive endpoint.

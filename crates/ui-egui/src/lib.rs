@@ -1665,11 +1665,10 @@ impl PhotocraftApp {
         control.check(path.len() as u64).map_err(|e| e.to_string())?;
         if path.contains('\0') { return Err("accounted save destination contains NUL".into()); }
         if let Some(owner) = self.session.active().and_then(|state| state.doc.accounted())
-            && (owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())
-            && photocraft_engine::accounted_native_open::is_current_box_work_candidate(owner.document(), &control).map_err(|e| e.to_string())?
+            && photocraft_engine::accounted_native_open::is_current_standard_work_candidate(owner, &control).map_err(|e| e.to_string())?
         {
             let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|e| e.to_string())?;
-            work.select_standard_box(&limits).map_err(|e| e.to_string())?;
+            work.select_standard(&limits).map_err(|e| e.to_string())?;
         }
         let protection = services::AccountedSaveProtection::prepare(&self.session, &control)?;
         // This allocation-free spelling comparison is the early inert source
@@ -3280,3 +3279,6 @@ mod channel_tint_tests {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_native_save_work_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod pure_point_standard_work_tests;
