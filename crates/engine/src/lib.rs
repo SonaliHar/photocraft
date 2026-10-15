@@ -235,6 +235,9 @@ pub struct DocState {
     pub snapshots: Vec<history_cmds::Snapshot>,
     /// The id the next snapshot gets; ids are never reused, so deleting one keeps the others.
     next_snapshot: u64,
+    /// The snapshot the latest save added (History Options › Automatically Create New Snapshot
+    /// When Saving), so saving an unchanged document again doesn't add a duplicate row.
+    save_snapshot: Option<u64>,
 }
 
 impl DocState {
@@ -283,6 +286,7 @@ impl DocState {
             color_samplers: Vec::new(),
             snapshots: vec![first],
             next_snapshot: 1,
+            save_snapshot: None,
         }
     }
     /// The selected layers in bottom-to-top document order, always including the active layer.

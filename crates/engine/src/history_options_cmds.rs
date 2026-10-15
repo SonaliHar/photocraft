@@ -62,19 +62,36 @@ pub fn show_new_snapshot_dialog(s: &Session) -> bool {
 /// History Options › Automatically Create New Snapshot When Saving: after the active document
 /// was saved to its own file (not a copy or an export), add a snapshot of it named with the local
 /// time of the save, as Photoshop does. Not a history state. Returns the new snapshot's id, or
-/// `None` when the option is off or no document is active. Shells call it where they record a
-/// document save.
+/// `None` when the option is off, no document is active, or the document is unchanged since the
+/// snapshot the previous save added (and that snapshot is still there), so saving a clean
+/// document again doesn't add a duplicate row. Shells call it where they record a document save.
+///
+/// Memory: like every History panel snapshot, each one pins a copy of the document for the
+/// session (only the tiles that differ from the document and the other snapshots cost memory).
+/// [`crate::DocState::trim_history`] counts those tiles against the History & Cache budget by
+/// dropping the oldest history states, but never drops a snapshot itself: many saves of a
+/// changing document can hold more than the budget until snapshots are deleted or the document
+/// is closed.
 pub fn snapshot_on_save(s: &mut Session) -> Option<u64> {
     if !s.prefs().history_options.automatically_create_new_snapshot_when_saving {
         return None;
     }
     let st = s.active_mut()?;
+    // Saved again without a change: the previous save's snapshot already shows this document.
+    if let Some(prev) = st.save_snapshot
+        && st.snapshots.iter().any(|snap| snap.id == prev && std::sync::Arc::ptr_eq(&snap.doc, &st.doc))
+    {
+        return None;
+    }
     let name = save_snapshot_name().unwrap_or_else(|| crate::history_cmds::next_snapshot_name(st));
     let id = st.next_snapshot;
     st.next_snapshot = id.saturating_add(1);
     let (doc, layers) = (st.doc.clone(), st.layer_target());
     // Like the camera button: the document and its saved state are unchanged.
     st.snapshots.push(Snapshot { id, name, doc, layers });
+    st.save_snapshot = Some(id);
+    // The snapshot's tiles count against the history budget.
+    st.trim_history();
     Some(id)
 }
 
@@ -398,6 +415,30 @@ mod tests {
         let mut empty = Session::new();
         empty.execute(CMD, json!({"automaticallyCreateNewSnapshotWhenSaving": true})).unwrap();
         assert_eq!(snapshot_on_save(&mut empty), None);
+    }
+
+    /// Saving an unchanged document again (⌘S on a clean document) adds no duplicate row; a
+    /// change, or deleting the previous save's snapshot, makes the next save add one again.
+    #[test]
+    fn saving_an_unchanged_document_adds_no_duplicate_snapshot() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        s.execute(CMD, json!({"automaticallyCreateNewSnapshotWhenSaving": true})).unwrap();
+        let first = snapshot_on_save(&mut s).unwrap();
+        assert_eq!(snapshot_on_save(&mut s), None, "unchanged since the last save snapshot");
+        assert_eq!(snapshot_names(&s).len(), 2, "the first snapshot and one save snapshot");
+        // A view-only change (no document change) doesn't count either.
+        s.active_mut().unwrap().revision += 1;
+        assert_eq!(snapshot_on_save(&mut s), None);
+        // An edit does.
+        s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        let second = snapshot_on_save(&mut s).unwrap();
+        assert!(second > first);
+        assert_eq!(snapshot_on_save(&mut s), None);
+        // The previous save's snapshot deleted: the next save shows the document again.
+        s.execute("history.deleteSnapshot", json!({"snapshot": second})).unwrap();
+        assert!(snapshot_on_save(&mut s).is_some());
+        assert_eq!(snapshot_names(&s).len(), 3);
     }
 
     #[test]
