@@ -1791,6 +1791,16 @@ mod tests {
     use egui::{Key, Modifiers};
 
     #[test]
+    fn ctrl_rounds_percentages_only_during_slider_drags() {
+        for value in [0.49, 10.2, 55.5, 99.8] {
+            assert_eq!(super::percentage_on_drag(value, false), value, "ordinary drag retains fractions");
+            assert_eq!(super::percentage_on_drag(value, true), value.round(), "Ctrl snaps to whole percentages");
+        }
+        assert_eq!(super::percentage_on_drag(0.0, true), 0.0);
+        assert_eq!(super::percentage_on_drag(100.0, true), 100.0);
+    }
+
+    #[test]
     fn checkbox_label_is_a_button_target_not_selectable_text() {
         use egui::CursorIcon;
         use egui_kittest::{Harness, kittest::Queryable};
