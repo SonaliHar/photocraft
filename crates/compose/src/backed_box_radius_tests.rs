@@ -2,6 +2,8 @@
 //! no numerical producer acceptance, deadline or large-image throughput claim.
 #[path = "backed_box_assigned_f64_tests.rs"]
 mod assigned_f64;
+#[path = "backed_box_gray_tests.rs"]
+mod gray;
 #[path = "backed_box_activity_tests.rs"]
 mod layer_activity;
 #[path = "backed_box_linear_tests.rs"]

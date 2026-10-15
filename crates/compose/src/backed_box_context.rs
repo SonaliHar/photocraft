@@ -49,7 +49,7 @@ fn cms(e: photocraft_cms::control::Error) -> E {
 /// `new`; this does not authorize a source or an implicit fallback.
 pub fn is_candidate(doc: &Document, c: &ReadControl<'_>) -> Result<bool, BackingError> {
     c.check(1)?;
-    if doc.mode != ColorMode::Rgb || !matches!(doc.depth, SampleType::F32 | SampleType::F64) {
+    if !matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale) || !matches!(doc.depth, SampleType::F32 | SampleType::F64) {
         return Ok(false);
     }
     let Some(state) = doc.xcf_state.as_ref() else { return Ok(false) };
@@ -62,9 +62,9 @@ pub fn is_candidate(doc: &Document, c: &ReadControl<'_>) -> Result<bool, Backing
     if node.operation.name != "gegl:box-blur" {
         return Ok(false);
     }
-    match doc.sample_encoding {
-        Some(SampleEncoding::NonlinearProfile) => Ok(true),
-        Some(SampleEncoding::Linear | SampleEncoding::Perceptual) => {
+    match (doc.mode, doc.sample_encoding) {
+        (ColorMode::Rgb, Some(SampleEncoding::NonlinearProfile)) => Ok(true),
+        (_, Some(SampleEncoding::Linear | SampleEncoding::Perceptual)) | (ColorMode::Grayscale, Some(SampleEncoding::NonlinearProfile)) => {
             if node.operation.schema_epoch.len() > 128 {
                 return Ok(false);
             }
@@ -201,7 +201,7 @@ impl<'a> PreparedBackedBoxContext<'a> {
         let source_color = doc.source_color_context.as_ref().ok_or_else(scope)?;
         let observed = node.operation.schema_epoch == crate::backed_box_source::BOX_GEOMETRY_EPOCH;
         let stored = if observed { crate::backed_box_source::observed_encoding(doc)? } else { SampleEncoding::NonlinearProfile };
-        if doc.mode != ColorMode::Rgb
+        if (doc.mode != ColorMode::Rgb && !(observed && doc.mode == ColorMode::Grayscale))
             || doc.sample_encoding != Some(stored)
             || !observed && !matches!((doc.depth, source_color.source_precision), (SampleType::F32, 650) | (SampleType::F64, 750))
             || assigned && !observed && doc.depth != SampleType::F32
@@ -305,11 +305,7 @@ impl<'a> PreparedBackedBoxContext<'a> {
     fn validate_native(&self, c: &ReadControl<'_>) -> Result<(), E> {
         let format = self.layer.format();
         c.check(format.bytes_per_pixel() as u64).map_err(E::Backing)?;
-        let mut default = [0.; 4];
-        for (channel, v) in default.iter_mut().enumerate() {
-            *v = try_read_sample_f64(self.layer.default_bytes(), format.sample, channel)
-                .map_err(|e| E::View(photocraft_raster::checked_view::RasterViewError::Sample(e)))?;
-        }
+        let default = decode_native(self.layer.default_bytes(), format)?;
         valid(default)?;
         let view = self.layer.checked_view();
         for coordinate in self.source.tiles() {
@@ -347,7 +343,7 @@ impl<'a> PreparedBackedBoxContext<'a> {
                     c.check(4 + 3 * 128).map_err(E::Backing)?;
                     let p = read_pin(&pin, x, y, self.layer.format(), c)?;
                     valid(p)?;
-                    let rgb = self.binding.working.convert([p[0], p[1], p[2]], true).map_err(E::Color)?;
+                    let rgb = self.working_rgb(p, true)?;
                     let index = index(read, x, y)?;
                     *out.pixels.get_mut(index).ok_or_else(size)? = [rgb[0], rgb[1], rgb[2], p[3]];
                 }
@@ -445,7 +441,7 @@ impl<'a> PreparedBackedBoxContext<'a> {
             for x in part.x0..part.x1 {
                 let p = read_pin(&pin, x, y, self.layer.format(), c)?;
                 valid(p)?;
-                let rgb = self.binding.working.convert([p[0], p[1], p[2]], true).map_err(E::Color)?;
+                let rgb = self.working_rgb(p, true)?;
                 let at = usize::try_from(i64::from(x) - i64::from(x0)).map_err(|_| size())?;
                 *pixels.get_mut(at).ok_or_else(size)? = [rgb[0], rgb[1], rgb[2], p[3]];
             }
@@ -462,7 +458,7 @@ impl<'a> PreparedBackedBoxContext<'a> {
             c.check(4 + 3 * 128).map_err(E::Backing)?;
             let p = decode(bytes)?;
             valid(p)?;
-            let rgb = self.binding.working.convert([p[0], p[1], p[2]], false).map_err(E::Color)?;
+            let rgb = self.working_rgb(p, false)?;
             let p = [rgb[0], rgb[1], rgb[2], p[3]];
             valid(p)?;
             for (channel, value) in p.into_iter().enumerate() {
@@ -472,6 +468,12 @@ impl<'a> PreparedBackedBoxContext<'a> {
         }
         c.check(0).map_err(E::Backing)?;
         Ok(tile)
+    }
+    fn working_rgb(&self, p: [f64; 4], forward: bool) -> Result<[f64; 3], E> {
+        let rgb = self.binding.working.convert([p[0], p[1], p[2]], forward).map_err(E::Color)?;
+        // Native Gray remains two-channel. Only the existing four-lane working
+        // representation repeats the single converted color, including inverse.
+        Ok(if self.layer.format().mode == ColorMode::Grayscale { [rgb[0]; 3] } else { rgb })
     }
     /// Full expanded operative validation is required before publication, even if
     /// the canvas, layer activity or requested ROI would hide a failing word.
@@ -576,9 +578,19 @@ fn read_pin(
     let mut raw = [0; 40];
     let bytes = raw.get_mut(..format.bytes_per_pixel()).ok_or_else(size)?;
     pin.read_pixel_native_into(x, y, bytes, c).map_err(E::View)?;
-    let mut p = [0.; 4];
-    for (channel, value) in p.iter_mut().enumerate() {
-        *value = try_read_sample_f64(bytes, format.sample, channel).map_err(|e| E::View(photocraft_raster::checked_view::RasterViewError::Sample(e)))?;
+    decode_native(bytes, format)
+}
+fn decode_native(bytes: &[u8], format: photocraft_color::PixelFormat) -> Result<[f64; 4], E> {
+    let sample = |channel| try_read_sample_f64(bytes, format.sample, channel).map_err(|e| E::View(photocraft_raster::checked_view::RasterViewError::Sample(e)));
+    if !format.alpha {
+        return Err(scope());
     }
-    Ok(p)
+    match format.mode {
+        ColorMode::Rgb => Ok([sample(0)?, sample(1)?, sample(2)?, sample(3)?]),
+        ColorMode::Grayscale => {
+            let gray = sample(0)?;
+            Ok([gray, gray, gray, sample(1)?])
+        }
+        _ => Err(scope()),
+    }
 }

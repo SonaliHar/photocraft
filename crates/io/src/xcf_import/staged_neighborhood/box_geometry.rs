@@ -2,6 +2,19 @@
 use super::*;
 // Encoding and original-profile roles are exact pairs; assigned transfer overrides are closed.
 fn role<P>(f: &XcfFile<P>) -> bool {
+    match f.model {
+        Model::Rgb => rgb_role(f),
+        Model::Gray => {
+            f.icc.is_empty()
+                && matches!(
+                    (f.sample, f.precision, f.encoding),
+                    (Sample::F32, 650, Encoding::NonlinearProfile) | (Sample::F64, 750, Encoding::NonlinearProfile)
+                )
+        }
+        _ => false,
+    }
+}
+fn rgb_role<P>(f: &XcfFile<P>) -> bool {
     matches!((f.sample, f.precision, f.encoding), (Sample::F32, 650, Encoding::NonlinearProfile) | (Sample::F64, 750, Encoding::NonlinearProfile))
         || (f.icc.is_empty()
             && matches!(
@@ -22,7 +35,7 @@ pub(super) fn hint<P: ExactParsedPlane>(f: &XcfFile<P>) -> bool {
         && d.effects.first().is_some_and(|e| {
             (e.state.blend_space, e.state.composite_space, e.state.composite_mode) == (Some(-1474592175), Some(-1474592175), Some(-1474592175))
         });
-    f.layers.len() == 1 && f.model == Model::Rgb && role(f) && f.icc.len() <= 16 << 20 && !old_identity
+    f.layers.len() == 1 && role(f) && f.icc.len() <= 16 << 20 && !old_identity
 }
 
 fn rectangle(width: u32, height: u32, offset: (i32, i32)) -> Option<Rect> {
@@ -39,7 +52,6 @@ fn rectangle(width: u32, height: u32, offset: (i32, i32)) -> Option<Rect> {
 pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, budget: Option<&photocraft_xcf::Budget<'_>>) -> Result<bool, IoError> {
     poll(ctl, budget, 32)?;
     if f.version != 22
-        || f.model != Model::Rgb
         || !role(f)
         || f.icc.len() > 16 << 20
         || f.layers.len() != 1
@@ -60,7 +72,7 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, 
     if d.group
         || d.path.len() > 1
         || !d.alpha
-        || d.model != Model::Rgb
+        || d.model != f.model
         || d.mode != 28
         || (d.blend_space, d.composite_space, d.composite_mode) != (0, -1, -1)
         || !d.opacity.is_finite()
@@ -105,7 +117,7 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, 
         return Ok(false);
     }
     let Some(p) = d.plane.as_ref() else { return Ok(false) };
-    if !native(p, d.width, d.height, f.sample, 4, false, ctl, budget)? {
+    if !native(p, d.width, d.height, f.sample, if f.model == Model::Gray { 2 } else { 4 }, false, ctl, budget)? {
         return Ok(false);
     }
     let Some(m) = e.mask.as_ref() else { return Ok(false) };
@@ -217,3 +229,7 @@ mod linear_tests;
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "box_geometry_perceptual_tests.rs"]
 mod perceptual_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "box_geometry_gray_tests.rs"]
+mod gray_tests;

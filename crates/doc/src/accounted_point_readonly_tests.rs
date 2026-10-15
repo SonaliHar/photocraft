@@ -319,3 +319,6 @@ mod implicit_linear;
 
 #[path = "accounted_point_readonly/implicit_perceptual_tests.rs"]
 mod implicit_perceptual;
+
+#[path = "accounted_point_readonly/implicit_gray_tests.rs"]
+mod implicit_gray;

@@ -125,10 +125,14 @@ impl<'a> PreparedBackedDocument<'a> {
                 // Preserve the existing implicit Point caller-basis contract.
                 // The new context binds the actual current profile separately.
                 control.check(1).map_err(BackedNormalError::Backing)?;
-                let known = photocraft_cms::Builtin::Srgb.profile();
+                let known = match owner.document().mode {
+                    ColorMode::Rgb => photocraft_cms::Builtin::Srgb,
+                    ColorMode::Grayscale => photocraft_cms::Builtin::SGray,
+                    _ => return Err(BackedNormalError::Unsupported("Box implicit basis mode")),
+                }.profile();
                 let encoded = profile.encoded_bytes().ok_or(BackedNormalError::Unsupported("Box requires retained implicit basis encoding"))?;
                 let expected = known.encoded_bytes().ok_or(BackedNormalError::Unsupported("Box implicit basis encoding missing"))?;
-                if encoded.len() > 65536 || profile.channels() != 3 || encoded.len() != expected.len() {
+                if encoded.len() > 65536 || profile.channels() != known.channels() || encoded.len() != expected.len() {
                     return Err(BackedNormalError::Unsupported("Box implicit basis mismatch"));
                 }
                 control.check(encoded.len() as u64 * 2).map_err(BackedNormalError::Backing)?;

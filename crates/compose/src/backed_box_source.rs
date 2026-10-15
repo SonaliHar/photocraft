@@ -22,14 +22,15 @@ pub const BOX_GEOMETRY_EPOCH: &str = "xcf22-observed-box-geometry-v1";
 /// nonlinear basis used to construct a Linear WorkingSpace.
 pub(crate) fn observed_encoding(doc: &Document) -> Result<SampleEncoding, E> {
     let source = doc.source_color_context.as_ref().ok_or_else(scope)?;
-    match (doc.sample_encoding, doc.depth, source.source_precision, source.original_icc.is_some()) {
-        (Some(SampleEncoding::NonlinearProfile), SampleType::F32, 650, _) | (Some(SampleEncoding::NonlinearProfile), SampleType::F64, 750, _) => {
-            Ok(SampleEncoding::NonlinearProfile)
-        }
-        (Some(SampleEncoding::Linear), SampleType::F32, 600, false) | (Some(SampleEncoding::Linear), SampleType::F64, 700, false) => Ok(SampleEncoding::Linear),
-        (Some(SampleEncoding::Perceptual), SampleType::F32, 675, false) | (Some(SampleEncoding::Perceptual), SampleType::F64, 775, false) => {
-            Ok(SampleEncoding::Perceptual)
-        }
+    match (doc.mode, doc.sample_encoding, doc.depth, source.source_precision, source.original_icc.is_some()) {
+        (ColorMode::Rgb, Some(SampleEncoding::NonlinearProfile), SampleType::F32, 650, _)
+        | (ColorMode::Rgb, Some(SampleEncoding::NonlinearProfile), SampleType::F64, 750, _) => Ok(SampleEncoding::NonlinearProfile),
+        (ColorMode::Rgb, Some(SampleEncoding::Linear), SampleType::F32, 600, false)
+        | (ColorMode::Rgb, Some(SampleEncoding::Linear), SampleType::F64, 700, false) => Ok(SampleEncoding::Linear),
+        (ColorMode::Rgb, Some(SampleEncoding::Perceptual), SampleType::F32, 675, false)
+        | (ColorMode::Rgb, Some(SampleEncoding::Perceptual), SampleType::F64, 775, false) => Ok(SampleEncoding::Perceptual),
+        (ColorMode::Grayscale, Some(SampleEncoding::NonlinearProfile), SampleType::F32, 650, false)
+        | (ColorMode::Grayscale, Some(SampleEncoding::NonlinearProfile), SampleType::F64, 750, false) => Ok(SampleEncoding::NonlinearProfile),
         _ => Err(scope()),
     }
 }
@@ -68,7 +69,7 @@ fn metadata_mode(doc: &Document, b: &mut impl PlanBudget, i: &Interrupt<'_>, cur
         LayerContent::BackedRaster(v) => (v.operative_bounds(), v.format(), v.default_bytes()),
         _ => return Err(scope()),
     };
-    if doc.mode != ColorMode::Rgb
+    if !matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale)
         || !matches!(doc.depth, SampleType::F32 | SampleType::F64)
         || state.provenance.format_version != 22
         || state.current_filter_output_precision != photocraft_doc::FilterOutputPrecision::Canonical
@@ -222,9 +223,9 @@ impl<S, L> LeasedStreamedBoxPipeline<S, L> {
         let stored = observed_encoding(doc)?;
         let [layer] = doc.layers.as_slice() else { return Err(scope()) };
         let LayerContent::Raster(surface) = &layer.content else { return Err(scope()) };
-        native(surface.default_bytes(), doc.depth, &mut b, i)?;
+        native(surface.default_bytes(), surface.format(), &mut b, i)?;
         for (_, tile) in surface.tiles() {
-            native(tile.bytes(), doc.depth, &mut b, i)?;
+            native(tile.bytes(), surface.format(), &mut b, i)?;
         }
         let envelope = crate::gimp_neighborhood::scalar_preparation_bytes(2)
             .map_err(E::Color)?
@@ -254,17 +255,22 @@ impl<S, L> LeasedStreamedBoxPipeline<S, L> {
         Ok(out)
     }
 }
-fn native(bytes: &[u8], sample_type: SampleType, b: &mut impl PlanBudget, i: &Interrupt<'_>) -> Result<(), E> {
-    let pixel_bytes = sample_type.bytes().checked_mul(4).ok_or_else(length)?;
+fn native(bytes: &[u8], format: PixelFormat, b: &mut impl PlanBudget, i: &Interrupt<'_>) -> Result<(), E> {
+    if !format.alpha || !matches!(format.mode, ColorMode::Rgb | ColorMode::Grayscale) {
+        return Err(scope());
+    }
+    let channels = format.channels();
+    let alpha = channels.checked_sub(1).ok_or_else(length)?;
+    let pixel_bytes = format.bytes_per_pixel();
     if !bytes.len().is_multiple_of(pixel_bytes) {
         return Err(scope());
     }
     for block in bytes.chunks(1024) {
         check(b, i, block.len() as u64)?;
         for p in block.chunks_exact(pixel_bytes) {
-            for channel in 0..4 {
-                let v = try_read_sample_f64(p, sample_type, channel).map_err(|e| E::View(photocraft_raster::checked_view::RasterViewError::Sample(e)))?;
-                if !v.is_finite() || channel == 3 && !(0.0..=1.0).contains(&v) {
+            for channel in 0..channels {
+                let v = try_read_sample_f64(p, format.sample, channel).map_err(|e| E::View(photocraft_raster::checked_view::RasterViewError::Sample(e)))?;
+                if !v.is_finite() || channel == alpha && !(0.0..=1.0).contains(&v) {
                     return Err(scope());
                 }
             }

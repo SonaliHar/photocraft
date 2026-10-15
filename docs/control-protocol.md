@@ -2075,3 +2075,23 @@ Independent Perceptual source/projection/merged captures are bit-exact across
 the live/same/fresh/repeat controls at both depths. Their effective ICC date-byte
 HOLD and distinct Babl profile remain explicit. PhotoCraft regression drafts,
 runtime, numerical, visual and performance acceptance remain deferred.
+
+Observed Box additionally accepts implicit Gray nonlinear F32/650 and F64/750
+with no original ICC, under the existing observed activity/radius/metadata/Move
+and native continuation policy. Native pixels remain Gray+Alpha at 8/16 bytes,
+alpha in channel 1; masks remain one channel at 4/8 bytes. Rendering repeats
+Gray only in its internal RGBA working/output lanes, preserving native source
+words, defaults and source ownership. Internal kernel memory remains fully paid.
+
+The generic caller-basis check requires exact nonlinear SGray bytes and one
+channel for Gray; the current effective ICC and ImplicitSGray marker still take
+their independent controlled binding. Nonlinear effective SGray may have the
+same encoded bytes as the builtin basis. RGB basis checks retain their previous
+behavior. Assigned Gray and Gray Linear/Perceptual remain outside this envelope.
+
+Independent Gray F64 captures are stable across live/same/fresh/repeat. Gray F32
+source, alpha and merged captures are exact, while live-to-fresh projection Gray
+words differ by up to 2.384185791015625e-7; fresh-to-repeat projection is exact.
+This producer variability, effective Gray ICC date bytes and the distinct RGB
+Babl space-profile role remain explicit evidence limits. PhotoCraft tests and
+all numerical, visual, performance and workflow acceptance remain deferred.

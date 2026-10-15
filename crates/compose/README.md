@@ -868,7 +868,8 @@ CURRENT/native Box recipe over checked drawable and canvas geometry. The
 observed `xcf22-observed-box-geometry-v1` envelope admits implicit RGB F32
 nonlinear650/linear600/perceptual675, implicit RGB F64
 nonlinear750/linear700/perceptual775, and assigned
-RGB F32/F64 at the exact nonlinear650/750 sample pairs.
+RGB F32/F64 at the exact nonlinear650/750 sample pairs. It also admits implicit
+Gray nonlinear F32/650 and F64/750 with native Gray+Alpha storage.
 Assigned profiles retain the existing paid original-to-current binding and both
 independent ICC owners. Other source/eager constructors keep their exact gates;
 old source identities retain selection priority and final refusal.
@@ -883,7 +884,18 @@ Perceptual pixels use the existing Perceptual-to-Linear transfer and its inverse
 equal transfer-curve definitions do not make the encoded current profile
 interchangeable with the builtin basis.
 Controlled source profile construction retains its real work and resident fees.
-Assigned Linear/Perceptual and all Gray roles remain outside this envelope.
+Gray nonlinear roles bind `ImplicitSGray` and the generated effective Gray ICC.
+The generic caller-basis check compares exact SGray bytes and one channel;
+RGB retains its exact sRGB/three-channel check. Nonlinear effective SGray can
+share the builtin's encoded bytes; the marker and semantic binding still run
+independently. Assigned Linear/Perceptual, assigned Gray and Gray
+Linear/Perceptual roles remain outside this envelope.
+
+Gray native pixels retain two channels and 8/16-byte F32/F64 strides, with alpha
+in channel 1. The existing four-lane working representation repeats the single
+Gray value after forward and inverse transfer. Native defaults and every native
+pixel are checked in their actual format; masks remain single-channel. Internal
+RGBAF64 kernel/row/output memory and its charges remain unchanged.
 
 The observed envelope accepts a Signed32 radius in `0..=1000`, layer visibility,
 finite unit effective F32 layer opacity and filter activation independently.
@@ -931,5 +943,8 @@ Regression drafts remain UNRUN/uncompiled during the implementation-first pass.
 Independent GIMP controls establish storage/activity observations, not PhotoCraft
 numerical or workflow acceptance. Effective-profile date-byte differences and
 assigned F32 producer straight-RGB instability remain explicit evidence limits.
+Gray F32 live-to-fresh projections also show small producer Gray-word changes;
+alpha, native source and merged captures remain exact. That observation changes
+no numerical tolerance or acceptance gate.
 Dense large/high-radius throughput, native_large and full-stock/visual/behavioral
 acceptance remain open.
