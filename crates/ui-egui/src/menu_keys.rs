@@ -207,14 +207,19 @@ impl Keys {
             return;
         }
         if open {
-            // A letter runs the row with that mnemonic in the level the arrows are in.
+            // A letter runs the row with that mnemonic in the level the arrows are in, unless a
+            // text field has the keyboard (the rows never take egui's focus; Help › Search menus
+            // does): typing a query must not run the Help rows whose mnemonics the letters
+            // happen to be (#5996).
+            let typing = ctx.memory(|m| m.focused().is_some());
             let letter = events.iter().find_map(|e| match e {
                 Event::Key { key, pressed: true, modifiers, .. } if !modifiers.command && !modifiers.ctrl && !modifiers.alt => {
                     key_char(*key).map(|c| (*key, c))
                 }
                 _ => None,
             });
-            if let Some((key, c)) = letter
+            if !typing
+                && let Some((key, c)) = letter
                 && let Some(row) = nav.row_with_mnemonic(c)
             {
                 consume(Modifiers::NONE, key);

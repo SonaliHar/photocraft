@@ -210,3 +210,24 @@ fn the_shortcuts_wait_while_the_keyboard_is_on_the_bar() {
     h.run_steps(3);
     assert_ne!(h.state().ui.tool, tool, "off the bar, E picks the Eraser again");
 }
+
+/// #5996: Help › Search menus has the keyboard once the Help menu opens, so the letters typed
+/// there are the query, not the mnemonics of the Help rows (an S ran System Info, an A the
+/// website). The menu stays open with the letters in the field.
+#[test]
+fn letters_typed_into_help_search_do_not_run_the_help_rows() {
+    let mut h = bar();
+    alt_key(&mut h, egui::Key::H);
+    h.run_steps(3);
+    assert!(is_open(&h.ctx) && h.query_by_label_contains("System Info").is_some(), "Help is open");
+    let level = rows(&h, 0);
+    let system_info = level.iter().find(|r| r.command.as_deref() == Some("help.systemInfo")).expect("System Info row");
+    let letter = system_info.mnemonic.expect("System Info has a mnemonic");
+    let k = egui::Key::from_name(&letter.to_string()).unwrap();
+    h.event(egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+    h.event(egui::Event::Text(letter.to_string()));
+    h.run_steps(3);
+    assert!(is_open(&h.ctx), "the letter went to the search field, not to the {letter:?} row");
+    let query: String = h.ctx.data(|d| d.get_temp(egui::Id::new("help-menu-search"))).unwrap_or_default();
+    assert_eq!(query, letter.to_string(), "the field has it");
+}
