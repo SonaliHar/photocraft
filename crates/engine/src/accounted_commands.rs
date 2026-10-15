@@ -34,6 +34,7 @@ pub fn supports(id: &str) -> bool {
         id,
         "layer.select"
             | "layer.setProps"
+            | "edit.clear"
             | "select.all"
             | "select.deselect"
             | "select.colorRange"
@@ -54,6 +55,8 @@ enum Request<'a> {
     PreparedMetadata(imported_metadata::Prepared<'a>),
     ThresholdAlpha(threshold_alpha::Request<'a>),
     PreparedThresholdAlpha(threshold_alpha::Prepared<'a>),
+    Clear(&'a Value),
+    PreparedClear(crate::accounted_clear::Prepared<'a>),
     Select(LayerId),
     Edit(AccountedEdit<'a>),
     ClearSelection,
@@ -76,6 +79,10 @@ fn require_history_selection_enabled(session: &Session) -> Result<()> {
 }
 
 fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadControl<'_>) -> Result<Request<'a>> {
+    if id == "edit.clear" {
+        crate::accounted_clear::validate_request(session, params)?;
+        return Ok(Request::Clear(params));
+    }
     if matches!(id, "xcf.filter.set" | "xcf.filter.enable") {
         return Ok(Request::ThresholdAlpha(threshold_alpha::Request::parse(session, id, params, control)?));
     }
@@ -209,6 +216,9 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
     }
     if matches!(id, "xcf.filter.set" | "xcf.filter.enable") && !state.doc.accounted().is_some_and(|owner| owner.is_readonly_threshold_alpha_storage()) {
         return Ok(Some("this accounted filter storage has no qualified editing recipe"));
+    }
+    if id == "edit.clear" && (state.doc.xcf_state.is_none() || state.doc.accounted().is_none_or(|owner| owner.is_readonly_threshold_alpha_storage())) {
+        return Ok(Some("accounted Clear requires the plain imported native owner"));
     }
     // Null is the existing enabled-query shape, not a layer-property call.
     // Do not disable a menu because its eventual call parameters are absent.
@@ -485,6 +495,7 @@ impl<'a> PreparedAccountedCommand<'a> {
         let request = match request {
             Request::ImportedMetadata(request) => Request::PreparedMetadata(request.prepare(session, control)?),
             Request::ThresholdAlpha(request) => Request::PreparedThresholdAlpha(request.prepare(session, control)?),
+            Request::Clear(params) => Request::PreparedClear(crate::accounted_clear::Prepared::prepare(session, params, control)?),
             other => other,
         };
         let quota = session.active().and_then(|state| state.doc.quota()).ok_or(BackingError::Unsupported)?.clone();
@@ -578,7 +589,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             }
             None => CommandLease::Journal(lease),
         };
-        let history = if matches!(&request, Request::HistorySelect(_) | Request::PreparedThresholdAlpha(_)) { Some(state.history.clone()) } else { None };
+        let history = if matches!(&request, Request::HistorySelect(_) | Request::PreparedThresholdAlpha(_) | Request::PreparedClear(_)) { Some(state.history.clone()) } else { None };
         Ok(Self { request, snapshot: state.doc.clone(), revision: state.revision, view_revision: state.view_revision, history, journal, lease, overlap, quota })
     }
     pub fn execute(self, session: &mut Session, control: &ReadControl<'_>) -> Result<Value> {
@@ -608,6 +619,7 @@ impl<'a> PreparedAccountedCommand<'a> {
                 | Request::ColorRange(_)
                 | Request::PreparedMetadata(_)
                 | Request::PreparedThresholdAlpha(_)
+                | Request::PreparedClear(_)
                 | Request::HistorySelect(_)
         ) && state.view_revision != self.view_revision
         {
@@ -638,6 +650,8 @@ impl<'a> PreparedAccountedCommand<'a> {
         let result = match self.request {
             Request::PreparedMetadata(prepared) => prepared.execute(session, control)?,
             Request::PreparedThresholdAlpha(prepared) => prepared.execute(session, control)?,
+            Request::PreparedClear(prepared) => prepared.execute(session, control)?,
+            Request::Clear(_) => return Err(BackingError::Integrity.into()),
             Request::ThresholdAlpha(_) => return Err(BackingError::Integrity.into()),
             Request::ImportedMetadata(_) => return Err(BackingError::Integrity.into()),
             Request::Select(layer) => {

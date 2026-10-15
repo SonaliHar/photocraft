@@ -362,7 +362,20 @@ impl AccountedDocument {
     /// Borrowed preflight for the closed imported current-metadata transaction.
     /// No allocation or mutation authority; final try_edit repeats these gates.
     pub fn validate_imported_metadata_edit(&self, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<(), BackingError> {
-        if self.owner._storage_class != StorageClass::Legacy || !imported_selection::applies(self.document()) { return Err(BackingError::Unsupported); }
+        if self.owner._storage_class != StorageClass::Legacy || !imported_selection::applies(self.document())
+            || !matches!(edit, AccountedEdit::LayerMetadata { .. } | AccountedEdit::LayerName { .. } | AccountedEdit::LayerVisibility { .. } | AccountedEdit::LayerOpacity { .. })
+        { return Err(BackingError::Unsupported); }
+        imported_edits::validate_owner(self, edit, control)?;
+        accounted_layer_access(self.document(), edit.layer_id(), control)?.ok_or(BackingError::Bounds)?;
+        Ok(())
+    }
+    /// Borrowed preflight for raw native writes in the existing closed imported
+    /// plain class. Empty/outside regions and wrong native lengths refuse. This
+    /// grants no mutable model access; final try_edit independently revalidates.
+    pub fn validate_imported_native_edit(&self, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<(), BackingError> {
+        if self.owner._storage_class != StorageClass::Legacy || !imported_selection::applies(self.document())
+            || !matches!(edit, AccountedEdit::NativePixels { .. })
+        { return Err(BackingError::Unsupported); }
         imported_edits::validate_owner(self, edit, control)?;
         accounted_layer_access(self.document(), edit.layer_id(), control)?.ok_or(BackingError::Bounds)?;
         Ok(())
@@ -523,7 +536,9 @@ fn is_noop(doc: &Document, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -
             }
             Ok(layer.name == name)
         }
-        AccountedEdit::NativePixels { .. } => Ok(false),
+        AccountedEdit::NativePixels { rect, bytes, .. } => {
+            if imported_selection::applies(doc) { imported_edits::native_is_noop(layer, rect, bytes, control) } else { Ok(false) }
+        },
         AccountedEdit::MaskEnabled { enabled, .. } => {
             let mask = validate_mask_control(doc, layer, control)?;
             Ok(mask.enabled == enabled)

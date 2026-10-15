@@ -182,7 +182,7 @@ fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
     let Some(i) = index_of(app, doc) else { return false };
     app.session.set_active(i);
     let saved = crate::menus::invoke_unguarded(app, ctx, "file.save", json!({}));
-    if saved.is_ok() && app.file_dialog_open() {
+    if saved.is_ok() && app.file_dialog.is_some() {
         let ctx = ctx.clone();
         app.after_file_dialog(move |app, saved| {
             let saved = saved.map_err(couldnt_save)?;
@@ -692,6 +692,37 @@ mod tests {
         h.run_steps(2);
         assert_eq!(asked.borrow().len(), 1, "no second dialog");
         assert_eq!(docs_left(&h), Some(1), "Enter pressed the focused No");
+    }
+
+    #[test]
+    fn synchronous_save_is_not_parked_behind_an_unrelated_owned_open_picker() {
+        // UNRUN implementation-first regression for the dedicated picker join.
+        use std::{cell::RefCell, rc::Rc};
+        let mut app = app_with_docs(1);
+        make_dirty(&mut app, 0);
+        let id = doc_id(&app, 0);
+        app.session.active_mut().unwrap().path = Some("/pics/current.png".into());
+        app.services.export = Some(Box::new(|_, _, _| Ok((b"out".to_vec(), Vec::new()))));
+        let written = Rc::new(RefCell::new(Vec::new()));
+        let writes = written.clone();
+        app.services.write = Some(Box::new(move |path, _| {
+            writes.borrow_mut().push(path.to_owned());
+            Ok(())
+        }));
+        let waiting = Rc::new(RefCell::new(None));
+        let held = waiting.clone();
+        app.services.owned_xcf_bytes_picker = Some(Box::new(move |_, reply| {
+            *held.borrow_mut() = Some(reply);
+            None
+        }));
+        crate::owned_xcf_bytes::start(&mut app).unwrap();
+        assert!(app.file_dialog_open());
+        assert!(app.file_dialog.is_none());
+        assert!(save(&mut app, &egui::Context::default(), id));
+        assert!(!app.session.active().unwrap().is_dirty());
+        assert_eq!(&*written.borrow(), &["/pics/current.png"]);
+        assert!(app.owned_xcf_bytes_pending.is_some());
+        waiting.borrow_mut().take().unwrap().send(Ok(None));
     }
 
     #[test]

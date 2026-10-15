@@ -45,11 +45,68 @@ pub struct DocIndex {
     pub index: Option<usize>,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, JsonSchema)]
+#[schemars(transform = open_params_schema)]
 pub struct OpenParams {
     /// Path beneath the configured automation read root: relative (forward slashes) or absolute.
     pub path: String,
+    /// Explicit owned original-XCF current interpretation. Omit for ordinary Open.
+    #[serde(default, rename="xcfProfilePolicy")]
+    #[schemars(with="XcfProfilePolicy")]
+    pub xcf_profile_policy: Option<XcfProfilePolicy>,
+}
+#[derive(Debug, Deserialize, JsonSchema)]
+pub enum XcfProfilePolicy {
+    #[serde(rename="keepCurrent")]
+    KeepCurrent,
+}
+fn open_params_schema(schema:&mut schemars::Schema) {
+    // Legacy absent-policy requests retain ignored extension fields. Only the
+    // explicit policy opts into the exact two-field request contract.
+    schema.insert("allOf".into(),json!([{
+        "if":{"required":["xcfProfilePolicy"]},
+        "then":{"properties":{"path":true,"xcfProfilePolicy":true},"additionalProperties":false}
+    }]));
+}
+impl<'de> Deserialize<'de> for OpenParams {
+    fn deserialize<D:serde::Deserializer<'de>>(deserializer:D)->Result<Self,D::Error> {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all="camelCase")]
+        enum Field {
+            Path,
+            #[serde(rename="xcfProfilePolicy")]
+            Policy,
+            #[serde(other)]
+            Other,
+        }
+        struct OpenVisitor;
+        impl<'de> serde::de::Visitor<'de> for OpenVisitor {
+            type Value=OpenParams;
+            fn expecting(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result { f.write_str("Open parameters object") }
+            fn visit_map<A:serde::de::MapAccess<'de>>(self,mut map:A)->Result<Self::Value,A::Error> {
+                let mut path=None;
+                let mut policy=None;
+                let mut extra=false;
+                while let Some(field)=map.next_key::<Field>()? {
+                    match field {
+                        Field::Path=>{
+                            if path.is_some(){return Err(serde::de::Error::duplicate_field("path"));}
+                            path=Some(map.next_value::<String>()?);
+                        },
+                        Field::Policy=>{
+                            if policy.is_some(){return Err(serde::de::Error::duplicate_field("xcfProfilePolicy"));}
+                            // Presence never treats null as omission.
+                            policy=Some(map.next_value::<XcfProfilePolicy>()?);
+                        },
+                        Field::Other=>{extra=true;map.next_value::<serde::de::IgnoredAny>()?;},
+                    }
+                }
+                if policy.is_some() && extra {return Err(serde::de::Error::custom("explicit owned Open accepts path and xcfProfilePolicy only"));}
+                Ok(OpenParams{path:path.ok_or_else(||serde::de::Error::missing_field("path"))?,xcf_profile_policy:policy})
+            }
+        }
+        deserializer.deserialize_map(OpenVisitor)
+    }
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -649,6 +706,18 @@ impl PhotocraftMcp {
 
     #[tool(description = "Open an image or document file and make it active. Returns index, size and import warnings.")]
     async fn doc_open(&self, Parameters(p): Parameters<OpenParams>) -> Result<CallToolResult, McpError> {
+        if p.xcf_profile_policy.is_some() {
+            if let Err(error)=crate::rpc::validate_owned_path(&p.path) { return to_result(Err(error)); }
+            let path=PathBuf::from(&p.path);
+            if let Some(result)=self.headless_op_without_sync(move |h|h.open_owned_xcf_keep_current_bounded(&path)).await {
+                return match result {
+                    Ok(reply)=>Ok(ok_json(reply.value())),
+                    Err(error)=>to_result(Err(error)),
+                };
+            }
+            let Some(bridge)=self.bridge_client() else { return Ok(no_backend()); };
+            return to_result(bridge.call("app.open",json!({"path":p.path,"xcfProfilePolicy":"keepCurrent"})).await);
+        }
         let path = PathBuf::from(&p.path);
         if let Some(r) = self.headless_op(move |h| h.open(&path)).await {
             return to_result(r);
@@ -1291,3 +1360,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path="server/owned_xcf_open_tests.rs"]
+mod owned_xcf_open_tests;

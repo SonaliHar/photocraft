@@ -1,35 +1,27 @@
 //! Fresh standard-profile ledger for an explicitly requested owned native open.
 //! Existing catalog owners must reuse their actual ledger instead of this factory.
 use super::AccountedNativeError;
-use photocraft_raster::backing::{
-    BackingError, ReadControl,
-    quota::{BackingQuota, QuotaLimits, QuotaUsage},
-};
-use photocraft_xcf::{BudgetKind, DecodeOptions, ResourceLimits, ResourcePolicy};
+use photocraft_raster::backing::{ReadControl, quota::BackingQuota};
 
 /// Construct a genuine fresh ledger under the existing standard import ceiling.
 /// No document, path, permission, usage receipt or source qualification is implied.
 /// The permanent ledger header is charged by the quota constructor; the returned
 /// zero baseline owns no payload and can be dropped immediately.
 pub fn new_accounted_native_open_quota(control: &ReadControl<'_>) -> Result<BackingQuota, AccountedNativeError> {
-    control.check(u64::try_from(BudgetKind::ALL.len()).map_err(|_| BackingError::Bounds)?)?;
-    let policy = ResourceLimits::for_policy(ResourcePolicy::default())
-        .map_err(|_| AccountedNativeError::Unsupported("standard native open resource policy is unavailable"))?;
-    // Match the existing owned plain import's decoder/bridge aggregate ceiling,
-    // rather than copying platform-specific numeric budgets into this service.
-    let aggregate = policy.get(BudgetKind::Resident).min(u64::try_from(DecodeOptions::default().limits.resident_bytes).map_err(|_| BackingError::Bounds)?);
-    let limits = QuotaLimits { resident: aggregate, scratch: policy.get(BudgetKind::Scratch), index: policy.get(BudgetKind::Index) };
-    control.check(1)?;
-    let (quota, zero_baseline) = BackingQuota::new_with_aggregate_initial(limits, aggregate, QuotaUsage::default()).map_err(|_| BackingError::Quota)?;
-    drop(zero_baseline);
-    control.check(0)?;
-    Ok(quota)
+    crate::accounted_open_quota::new_accounted_open_quota(control).map_err(|error| match error {
+        crate::accounted_open_quota::AccountedOpenQuotaError::Backing(error) => AccountedNativeError::Backing(error),
+        crate::accounted_open_quota::AccountedOpenQuotaError::PolicyUnavailable => {
+            AccountedNativeError::Unsupported("standard native open resource policy is unavailable")
+        }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use photocraft_raster::backing::{BackingError, quota::QuotaUsage};
     use photocraft_raster::{Interrupt, backing::quota::QuotaKind};
+    use photocraft_xcf::{BudgetKind, DecodeOptions, ResourceLimits, ResourcePolicy};
 
     /// UNRUN: real header remains charged and scratch plus resident shares the
     /// standard aggregate instead of obtaining an independent extra allowance.

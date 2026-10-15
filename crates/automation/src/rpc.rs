@@ -7,7 +7,7 @@
 //! Methods (camelCase params):
 //! - `engine.execute {command, params?, wait?}` / `engine.commands {filter?}`
 //! - `jobs.list` / `jobs.cancel {job?}`: background jobs (#210)
-//! - `session.list`, `doc.open {path}`, `doc.new {…file.new params}`,
+//! - `session.list`, `doc.open {path, xcfProfilePolicy?: "keepCurrent"}`, `doc.new {…file.new params}`,
 //!   `doc.place {path, scale?, fit?, center?, index?}` (#2810: the read root is the scope,
 //!   the counterpart of the refused ambient `file.placeEmbedded`),
 //!   `doc.exportLayers {dir, format?, prefix?, visibleOnly?, quality?, index?}`,
@@ -33,6 +33,9 @@ use crate::security::{
     read_bounded_line, repeat_auth_reply,
 };
 use crate::{AutomationError, Headless};
+mod owned_xcf_open;
+use owned_xcf_open::RoutedReply;
+pub(crate) use owned_xcf_open::validate_owned_path;
 
 /// Method names served by [`Headless::handle`].
 pub const METHODS: &[&str] = &[
@@ -79,6 +82,9 @@ fn str_of<'a>(p: &'a Value, k: &str) -> Option<&'a str> {
 impl Headless {
     /// Dispatch one request. Unknown methods and bad params are errors, never panics.
     pub fn handle(&mut self, method: &str, params: Value) -> Result<Value, AutomationError> {
+        if method=="doc.open" && params.get("xcfProfilePolicy").is_some() {
+            return Err(bad("explicit owned doc.open requires the retained RPC transport or owned Headless API"));
+        }
         if method == "xcf.link.substituteFromRoot" {
             return self.substitute_xcf_link_from_root(&params);
         }
@@ -267,28 +273,40 @@ impl Headless {
 
 /// Answer one request line. Malformed JSON gets an error reply with `id: null`.
 pub fn respond(h: &Mutex<Headless>, line: &str) -> Value {
-    let req: Value = match serde_json::from_str(line) {
-        Ok(v) => v,
-        Err(e) => return json!({"id": null, "ok": false, "error": format!("bad JSON: {e}")}),
+    // Legacy raw Value entry never publishes a new owner with an escaping fee.
+    match respond_retained(h,line,false) {
+        RoutedReply::Legacy(value)=>value,
+        RoutedReply::Owned(_)=>json!({"id":null,"ok":false,"error":"owned reply requires a retained transport"}),
+    }
+}
+fn respond_retained(h: &Mutex<Headless>, line: &str, allow_owned:bool) -> RoutedReply {
+    let req:Value=match serde_json::from_str(line) {
+        Ok(value)=>value,
+        Err(error)=>return RoutedReply::Legacy(json!({"id":null,"ok":false,"error":format!("bad JSON: {error}")})),
     };
-    let id = req.get("id").cloned().unwrap_or(Value::Null);
-    let Some(method) = req.get("method").and_then(Value::as_str) else {
-        return json!({"id": id, "ok": false, "error": "missing `method`"});
+    let id=req.get("id").unwrap_or(&Value::Null);
+    let Some(method)=req.get("method").and_then(Value::as_str) else {
+        return RoutedReply::Legacy(json!({"id":id,"ok":false,"error":"missing `method`"}));
     };
-    let params = req.get("params").cloned().unwrap_or(Value::Null);
-    // Last-resort guard (AGENTS.md, Never crash): a command that panics answers this request
-    // with an error instead of taking down the connection (or the whole stdio server). Edits
-    // run on a copy of the document (`Session::edit`), so the session stays consistent and a
-    // poisoned lock is safe to keep using, the same as the MCP server does.
-    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| h.lock().unwrap_or_else(PoisonError::into_inner).handle(method, params)))
-        .unwrap_or_else(|_| Err(AutomationError::Other(format!("internal error: `{method}` panicked"))));
-    match r {
-        Ok(v) => json!({"id": id, "ok": true, "result": v}),
-        Err(e) => {
-            let mut reply = e.error_reply();
-            reply["id"] = id;
-            reply
+    let owned=method=="doc.open" && req.get("params").is_some_and(|p|p.get("xcfProfilePolicy").is_some());
+    if owned {
+        if let Err(error)=owned_xcf_open::validate_id_shape(id) {
+            return RoutedReply::Legacy(json!({"id":null,"ok":false,"error":error.to_string()}));
         }
+    }
+    let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if owned && allow_owned {
+            let path=owned_xcf_open::parameters(req.get("params").ok_or_else(||bad("missing owned doc.open parameters"))?)?;
+            let mut headless=h.lock().unwrap_or_else(PoisonError::into_inner);
+            return headless.open_owned_xcf_rpc_bounded(std::path::Path::new(path),id).map(RoutedReply::Owned);
+        }
+        let params=req.get("params").cloned().unwrap_or(Value::Null);
+        h.lock().unwrap_or_else(PoisonError::into_inner).handle(method,params)
+            .map(|value|RoutedReply::Legacy(json!({"id":id,"ok":true,"result":value})))
+    })).unwrap_or_else(|_|Err(AutomationError::Other(format!("internal error: `{method}` panicked"))));
+    match result {
+        Ok(reply)=>reply,
+        Err(error)=> { let mut reply=error.error_reply();reply["id"]=id.clone();RoutedReply::Legacy(reply) }
     }
 }
 
@@ -299,13 +317,13 @@ pub fn serve_lines(h: &Mutex<Headless>, mut r: impl BufRead, mut w: impl Write) 
     loop {
         let (reply, unread_rest) = match read_bounded_line(&mut r, &mut line) {
             Ok(LineRead::Eof) => return Ok(()),
-            Ok(LineRead::TooLong) => (json!({"id": null, "ok": false, "error": format!("request exceeds {MAX_REQUEST_BYTES} bytes")}), !line.ends_with('\n')),
-            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => (json!({"id": null, "ok": false, "error": "request is not valid UTF-8"}), false),
+            Ok(LineRead::TooLong) => (RoutedReply::Legacy(json!({"id": null, "ok": false, "error": format!("request exceeds {MAX_REQUEST_BYTES} bytes")})), !line.ends_with('\n')),
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => (RoutedReply::Legacy(json!({"id": null, "ok": false, "error": "request is not valid UTF-8"})), false),
             Err(e) => return Err(e),
             Ok(LineRead::Line) if line.trim().is_empty() => continue,
-            Ok(LineRead::Line) => (respond(h, &line), false),
+            Ok(LineRead::Line) => (respond_retained(h, &line, true), false),
         };
-        write_reply(&mut w, &reply)?;
+        write_reply(&mut w, reply.value())?;
         w.flush()?;
         if unread_rest {
             discard_rest_of_line(&mut r)?;
@@ -337,13 +355,13 @@ fn serve_tcp_connection(h: &Mutex<Headless>, stream: std::net::TcpStream, token:
             LineRead::Line => {}
         }
         let reply = if authenticated {
-            repeat_auth_reply(&line).unwrap_or_else(|| respond(h, &line))
+            repeat_auth_reply(&line).map(RoutedReply::Legacy).unwrap_or_else(|| respond_retained(h, &line, true))
         } else {
             let (reply, ok) = authentication_reply(&line, token);
             authenticated = ok;
-            reply
+            RoutedReply::Legacy(reply)
         };
-        write_reply(&mut out, &reply)?;
+        write_reply(&mut out, reply.value())?;
         out.flush()?;
         if !authenticated {
             return Ok(());

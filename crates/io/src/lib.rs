@@ -35,6 +35,7 @@
 pub mod abr_map;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod accounted_native;
+pub mod accounted_open_quota;
 mod adjust_map;
 pub mod affinity;
 pub mod annotations_map;

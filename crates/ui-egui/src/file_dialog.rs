@@ -97,7 +97,7 @@ const UNEXPECTED: &str = "the file dialog gave an unexpected answer";
 impl PhotocraftApp {
     /// Whether a file dialog is open (or about to be shown).
     pub fn file_dialog_open(&self) -> bool {
-        self.file_dialog.is_some()
+        self.file_dialog.is_some() || self.owned_xcf_bytes_pending.is_some()
     }
 
     /// Show a file dialog; `then` continues with the user's choice on a later frame (see the
@@ -114,7 +114,7 @@ impl PhotocraftApp {
             }
             return Err(CANCELLED.into());
         }
-        if self.file_dialog.is_some() {
+        if self.file_dialog_open() {
             return Err("a file dialog is already open".into());
         }
         let kind = match request {
@@ -142,7 +142,7 @@ impl PhotocraftApp {
         path: &str,
         then: impl FnOnce(&mut Self, Option<FileDialogAnswer>) -> Result<Value, String> + 'static,
     ) -> Result<(), String> {
-        if self.file_dialog.is_some() {
+        if self.file_dialog_open() {
             return Err(format!("{code}.busy"));
         }
         let read = self.services.automation_read_xcf_linked_replacement.as_mut().ok_or_else(|| format!("{code}.read-unavailable"))?;

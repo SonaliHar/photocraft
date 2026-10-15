@@ -107,9 +107,10 @@ runtime source label identify the actual input basename independently.
 
 Explicit owned original-XCF Open uses the separate
 `{"path":"chosen.xcf","xcfProfilePolicy":"keepCurrent"}` option on trusted local
-`file.open`, or on held-read-root `app.open`. Only the existing staged plain,
-implicit nonlinear RGB/Gray raster class is supported; this is not a fallback
-for unsupported XCF effects, masks, groups, channels or source profiles. It keeps
+`file.open`, or on held-read-root `app.open`. The source-selected reader supports
+the existing staged plain implicit nonlinear RGB/Gray raster class and the
+separately qualified full-canvas Threshold Alpha class. This is not a fallback
+for other XCF effects, masks, groups, channels or source profiles. It keeps
 the importer's current interpretation without applying Color Settings. Omitting
 the key preserves ordinary Open and its questions/conversions. Combining this
 key with `nativeProfilePolicy`, unknown policies or extra fields is an error.
@@ -121,6 +122,13 @@ source-protected/read-only; no saved locator becomes read authority. Replies
 include actual `warnings`, `assessment` (or null), and `sourceReadOnly`; scoped
 replies also include `path` and basename `name`. These import-time diagnostics
 are not a claim about later edits or unqualified source/render families.
+
+With the browser byte-picker capability installed, interactive
+`file.open {"xcfProfilePolicy":"keepCurrent"}` instead opens a dedicated picker.
+The actual catalog quota covers the provider buffer and immutable Rust capture
+before reading, with a 16 MiB input ceiling and bounded copies. Escape cancels
+the host read. The selected name is only a label: no path or read authority is
+installed, and ordinary browser picker/drop behavior is unchanged.
 
 ## Engine commands
 
@@ -334,7 +342,7 @@ How each MCP tool maps onto control methods in bridge mode:
 | `command_list {filter?, enabled_only?}` | `engine.commands` (filtered by the MCP server; replies with the same bare array, rows keep `disabledReason` and `needsDocument`, see [Command list replies](#command-list-replies)) |
 | `doc_new {…}` | `engine.execute {command: "file.new", params}` |
 | `doc_inspect` | `engine.execute {command: "document.inspect"}` |
-| `doc_open {path}` | `app.open {path}` |
+| `doc_open {path, xcfProfilePolicy?}` | `app.open {path, xcfProfilePolicy?}` |
 | `doc_place {path, …}` | `engine.execute {command: "file.placeEmbedded", params}` |
 | `doc_export_layers {dir, …}` | `engine.execute {command: "file.export.layersToFiles", params}` |
 | `doc_export_data_sets {dir, …}` | `engine.execute {command: "file.export.dataSetsAsFiles", params}` |
@@ -391,7 +399,7 @@ no MCP framing, no app start-up per command. Configure its file access with the 
 | `jobs.list` / `jobs.cancel` | `{}` / `{job?}`: background jobs; cancel one or all. Every request (and MCP tool call) first applies the jobs that finished, so `doc.save`, `doc.inspect`, `doc.render` and `session.list` include a finished job's result without polling `jobs.list` first |
 | `engine.commands` | `{filter?}`: registry with params docs and enablement (`enabled`, `disabledReason`, `needsDocument`); `result` is a bare array of command objects ([Command list replies](#command-list-replies)) |
 | `session.list` | open documents and the active index |
-| `doc.open` / `doc.new` | `{path}` / `file.new` params |
+| `doc.open` / `doc.new` | `{path, xcfProfilePolicy?}` / `file.new` params |
 | `doc.place` | `{path, scale? (percent), fit? (true), center? ([x, y]), index?}`: places a file as a Smart Object layer above the active one and returns `{layer, scale, bounds}`. `path` resolves beneath the read root, so this is the capability-scoped `file.placeEmbedded` — that command itself still refuses an ambient path |
 | `doc.exportLayers` | `{dir, format? (png), prefix?, visibleOnly? (true), quality?, index?}` → `{files, count}`: one file per exported layer, named like `file.export.layersToFiles` names them. `dir` resolves beneath the write root, so the ambient command stays refused. The bytes come from the command's own core, so both paths write the same files; the write capability refuses to overwrite an existing file |
 | `doc.exportDataSets` | `{dir, format? (png), dataSets? (all), naming? ("{name}\|{index}\|{document}"), index?}` → `{files, count}`: the capability-scoped `file.export.dataSetsAsFiles`. The batch is planned first and colliding names are refused before any file is written, as in the command |
@@ -402,6 +410,17 @@ no MCP framing, no app start-up per command. Configure its file access with the 
 | `doc.select` / `doc.close` | `{index}` / `{index?}` |
 | `batch` | `{steps: [{command, params?, wait?} \| {method, params?}], stopOnError? (true)}` → `{completed, failed, results}` (a step with `wait: false` starts a long command as a background job, like `engine.execute`) |
 | `methods` | the list above |
+
+Explicit owned XCF Open accepts exactly `{"path":"source.xcf","xcfProfilePolicy":"keepCurrent"}`
+through JSON-lines `doc.open` or MCP `doc_open`. The policy is optional; omitting it preserves
+ordinary Open. This finite plain/Threshold Alpha route uses the existing read authority and
+catalog quota, retains current interpretation and returns an `owned-import-summary` with
+warnings/assessment. Unknown, null or extra policy fields refuse before file I/O; stored
+locators grant no access. MCP bridge mode forwards the same two fields to `app.open`.
+The retained JSON-lines transport keeps its paid complete reply through writing; direct
+raw-Value `Headless::handle`/`respond` and nested generic batches refuse this explicit policy.
+The typed Headless owned method remains available to callers that retain its reply carrier.
+
 
 ```sh
 printf '%s\n' \

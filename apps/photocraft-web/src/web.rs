@@ -1,5 +1,7 @@
 //! The browser shell: web `Services`, drag-and-drop, and the eframe web runner.
 
+#[path = "owned_xcf_picker.rs"]
+mod owned_xcf_picker;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -345,6 +347,11 @@ impl eframe::App for WebShell {
 fn services(inbox: Inbox) -> Services {
     let mut resource_picker: Option<crate::bounded_resource_read::PickerHandle> = None;
     Services {
+        owned_xcf_bytes_picker: Some(Box::new(move |request, reply| {
+            let handle = owned_xcf_picker::pick_resource(request, move |result| reply.send(result));
+            // Pending owns this host-local handle until completion or cancellation.
+            Some(Box::new(move || handle.cancel()))
+        })),
         screen_pick: screen_color_service(),
         import: Some(Box::new(|name: &str, bytes: &[u8], max_svg_group_depth: usize| {
             photocraft_io::import_with_svg_group_depth(name, bytes, max_svg_group_depth).map_err(|e| e.to_string())

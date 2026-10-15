@@ -27,6 +27,12 @@ impl Headless {
     /// CLI convenience with the same finite lower work policy as explicit UI
     /// Open. Controlled callers should supply their own cumulative ReadControl.
     pub fn open_owned_xcf_keep_current_bounded(&mut self, path: &Path) -> Result<OwnedXcfOpenReply, AutomationError> {
+        self.open_owned_xcf_bounded(path, None)
+    }
+    pub(crate) fn open_owned_xcf_rpc_bounded(&mut self, path: &Path, id: &Value) -> Result<OwnedXcfOpenReply, AutomationError> {
+        self.open_owned_xcf_bounded(path, Some(id))
+    }
+    fn open_owned_xcf_bounded(&mut self, path: &Path, id: Option<&Value>) -> Result<OwnedXcfOpenReply, AutomationError> {
         use std::sync::atomic::{AtomicU64, Ordering};
         let used = AtomicU64::new(0);
         let charge = |units: u64| {
@@ -34,11 +40,17 @@ impl Headless {
                 .map_err(|_| BackingError::Work)?;
             Ok(())
         };
-        self.open_owned_xcf_keep_current(path, &ReadControl { interrupt: &photocraft_raster::Interrupt::NONE, work: &charge })
+        self.open_owned_xcf_impl(path, id, &ReadControl { interrupt: &photocraft_raster::Interrupt::NONE, work: &charge })
     }
     /// Explicitly keep the current interpretation of one eligible original XCF.
     /// The installed authority is selected once; a failed reader never retries.
     pub fn open_owned_xcf_keep_current(&mut self, path: &Path, control: &ReadControl<'_>) -> Result<OwnedXcfOpenReply, AutomationError> {
+        self.open_owned_xcf_impl(path, None, control)
+    }
+    fn open_owned_xcf_impl(&mut self, path: &Path, id: Option<&Value>, control: &ReadControl<'_>) -> Result<OwnedXcfOpenReply, AutomationError> {
+        // Bound hostile request IDs before reading any source. This is an
+        // allocation-free recipe for the later owned copy, not an input fee.
+        let id_bytes = id.map(|value| id_copy_bound(value, control)).transpose().map_err(ReplyError::into_automation)?;
         let path = path.to_str().ok_or_else(|| AutomationError::BadRequest("owned XCF path must be UTF-8".into()))?;
         if path.is_empty() || path.len() > 4096 || !Path::new(path).extension().and_then(|v| v.to_str()).is_some_and(|v| v.eq_ignore_ascii_case("xcf")) {
             return Err(AutomationError::BadRequest("explicit keepCurrent requires a bounded .xcf path".into()));
@@ -73,7 +85,11 @@ impl Headless {
             .next()
             .filter(|name| !name.is_empty())
             .ok_or_else(|| AutomationError::BadRequest("owned XCF path has no file name".into()))?;
-        let reply = OwnedXcfOpenReply::new(&imported, path, name, self.session.documents().len(), control).map_err(ReplyError::into_automation)?;
+        let mut reply = OwnedXcfOpenReply::new(&imported, path, name, self.session.documents().len(), control).map_err(ReplyError::into_automation)?;
+        if let (Some(id), Some(bytes)) = (id, id_bytes) {
+            reply.wrap_rpc(id, bytes, control).map_err(ReplyError::into_automation)?;
+            reply.validate_rpc_wire_size(control).map_err(ReplyError::into_automation)?;
+        }
         control.check(1).map_err(photocraft_engine::EngineError::from)?;
         match &imported {
             photocraft_io::OwnedXcfImport::Plain(value) => self.session.add_owned_plain_xcf_import(value, name, Some(path), control)?,
@@ -81,6 +97,107 @@ impl Headless {
         };
         // No fallible operation or token poll after typed Session publication.
         Ok(reply)
+    }
+}
+
+fn id_copy_bound(value: &Value, control: &ReadControl<'_>) -> Result<u64, ReplyError> {
+    fn visit(value: &Value, depth: usize, nodes: &mut usize, text: &mut usize, control: &ReadControl<'_>) -> Result<u64, ReplyError> {
+        control.check(1).map_err(ReplyError::Backing)?;
+        *nodes = nodes.checked_add(1).ok_or("RPC ID node overflow")?;
+        if depth > 8 || *nodes > 4096 {
+            return Err("owned RPC ID exceeds depth/node limit".into());
+        }
+        let mut bytes = std::mem::size_of::<Value>() as u64;
+        let mut string = |s: &str| -> Result<u64, ReplyError> {
+            *text = text.checked_add(s.len()).ok_or("RPC ID text overflow")?;
+            if *text > crate::security::MAX_REQUEST_BYTES {
+                return Err("owned RPC ID text limit exceeded".into());
+            }
+            control.check(s.len() as u64).map_err(ReplyError::Backing)?;
+            (s.len() as u64).checked_mul(2).ok_or_else(|| "RPC ID capacity overflow".into())
+        };
+        match value {
+            Value::String(s) => bytes = bytes.checked_add(string(s)?).ok_or("RPC ID overflow")?,
+            Value::Array(a) => {
+                bytes = bytes
+                    .checked_add((a.len() as u64).checked_mul(2 * std::mem::size_of::<Value>() as u64).ok_or("RPC ID overflow")?)
+                    .ok_or("RPC ID overflow")?;
+                for v in a {
+                    bytes = bytes.checked_add(visit(v, depth + 1, nodes, text, control)?).ok_or("RPC ID overflow")?;
+                }
+            }
+            Value::Object(o) => {
+                bytes = bytes.checked_add((o.len() as u64).checked_mul(256).ok_or("RPC ID overflow")?).ok_or("RPC ID overflow")?;
+                for (key, v) in o {
+                    // End the short closure borrow before recursing.
+                    control.check(key.len() as u64).map_err(ReplyError::Backing)?;
+                    *text = text.checked_add(key.len()).ok_or("RPC ID text overflow")?;
+                    if *text > crate::security::MAX_REQUEST_BYTES {
+                        return Err("owned RPC ID text limit exceeded".into());
+                    }
+                    bytes = bytes
+                        .checked_add((key.len() as u64).checked_mul(2).ok_or("RPC ID overflow")?)
+                        .and_then(|b| b.checked_add(256))
+                        .ok_or("RPC ID overflow")?;
+                    bytes = bytes.checked_add(visit(v, depth + 1, nodes, text, control)?).ok_or("RPC ID overflow")?;
+                }
+            }
+            _ => {}
+        }
+        Ok(bytes)
+    }
+    visit(value, 0, &mut 0, &mut 0, control)
+}
+impl OwnedXcfOpenReply {
+    fn validate_rpc_wire_size(&self, control: &ReadControl<'_>) -> Result<(), ReplyError> {
+        // Allocation-free serialization census prevents an oversized successful
+        // envelope being replaced by a transport-limit error after adoption.
+        control.check(self._lease.bytes().checked_mul(8).ok_or("RPC wire work overflow")?).map_err(ReplyError::Backing)?;
+        struct Count<'a, 'b> {
+            used: usize,
+            control: &'a ReadControl<'b>,
+            failure: Option<BackingError>,
+        }
+        impl std::io::Write for Count<'_, '_> {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if let Err(error) = self.control.check(bytes.len() as u64 + 1) {
+                    self.failure = Some(error);
+                    return Err(std::io::Error::other("RPC wire census interrupted"));
+                }
+                let Some(next) = self.used.checked_add(bytes.len()).filter(|n| *n < crate::budgets::MAX_RESPONSE_BYTES) else {
+                    return Err(std::io::Error::other("RPC reply exceeds transport limit"));
+                };
+                self.used = next;
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut count = Count { used: 0, control, failure: None };
+        let result = serde_json::to_writer(&mut count, &self.value);
+        if let Some(error) = count.failure {
+            return Err(ReplyError::Backing(error));
+        }
+        result.map_err(|_| ReplyError::from("owned RPC reply exceeds transport limit"))
+    }
+    fn wrap_rpc(&mut self, id: &Value, id_bound: u64, control: &ReadControl<'_>) -> Result<(), ReplyError> {
+        let before = self._lease.bytes();
+        let extra = id_bound.checked_mul(4).and_then(|v| v.checked_add(4096)).ok_or("RPC envelope overflow")?;
+        self._lease.try_resize(before.checked_add(extra).ok_or("RPC envelope overflow")?).map_err(|e| e.to_string())?;
+        control.check(extra).map_err(ReplyError::Backing)?;
+        let id = id.clone(); // Bounded library copy after genuine admission.
+        let actual = tree_bytes(&id, 0, control)?.checked_add(4096).ok_or("RPC envelope overflow")?;
+        if actual > extra {
+            return Err("RPC ID capacity exceeded admitted envelope".into());
+        }
+        let mut envelope = serde_json::Map::new();
+        envelope.insert("id".into(), id);
+        envelope.insert("ok".into(), Value::Bool(true));
+        envelope.insert("result".into(), std::mem::take(&mut self.value));
+        self.value = Value::Object(envelope);
+        self._lease.reconcile_capacity(before.checked_add(actual).ok_or("RPC envelope overflow")?).map_err(|e| e.to_string())?;
+        Ok(())
     }
 }
 

@@ -195,3 +195,6 @@ fn late_cancel_during_long_name_validation_and_repeated_comparison() {
     };
     assert!(matches!(names_equal(&renamed.document().layers[0].name, &name, &late), Err(BackingError::Cancelled)));
 }
+
+#[path = "accounted_imported_native_tests.rs"]
+mod native;

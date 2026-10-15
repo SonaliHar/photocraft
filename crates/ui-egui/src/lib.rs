@@ -91,6 +91,7 @@ pub mod file_dialog;
 pub mod file_open;
 mod owned_native_open;
 mod owned_xcf_open;
+pub mod owned_xcf_bytes;
 pub mod file_ui;
 pub mod fill_ui;
 pub mod filter_dialog;
@@ -449,6 +450,8 @@ pub struct Services {
     pub automation_owned_xcf_open: Option<services::OwnedPlainXcfOpenFn>,
     pub owned_current_xcf_open: Option<services::OwnedCurrentXcfOpenFn>,
     pub automation_owned_current_xcf_open: Option<services::OwnedCurrentXcfOpenFn>,
+    /// Explicit browser picker with capture charged to the current catalog.
+    pub owned_xcf_bytes_picker: Option<services::OwnedXcfBytesPickerFn>,
     /// Encode a document for a file name (format chosen by extension).
     pub export: Option<ExportFn>,
     /// Atomic streamed native saves with all open-document source exclusions.
@@ -810,6 +813,7 @@ pub struct PhotocraftApp {
     pub(crate) discard: Option<discard_ui::Prompt>,
     /// The Open or Save dialog in progress, and the action waiting on it (see `file_dialog`).
     pub(crate) file_dialog: Option<file_dialog::Pending>,
+    pub(crate) owned_xcf_bytes_pending: Option<owned_xcf_bytes::Pending>,
     /// A Save As to a layered TIFF parked behind the TIFF Options prompt (see `tiff_options_ui`).
     pub(crate) tiff_options: Option<tiff_options_ui::Prompt>,
     /// Where each document was last saved or exported to through a dialog (#1826): its next Save
@@ -969,6 +973,7 @@ impl PhotocraftApp {
             prefs_rt: Default::default(),
             discard: None,
             file_dialog: None,
+            owned_xcf_bytes_pending: None,
             tiff_options: None,
             save_dirs: HashMap::new(),
             targa_options: None,
@@ -2074,6 +2079,7 @@ impl eframe::App for PhotocraftApp {
         if !self.pending_screenshots.is_empty() {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
+        owned_xcf_bytes::poll(self, ctx);
         self.poll_file_dialog(ctx, Some(frame));
     }
 
@@ -2236,6 +2242,7 @@ impl eframe::App for PhotocraftApp {
         // polling it even when the platform would otherwise put the event loop to sleep.
         jobs_ui::keep_polling(self, &ctx);
         // Menus and buttons in this frame may have asked for a file dialog.
+        owned_xcf_bytes::poll(self, &ctx);
         self.poll_file_dialog(&ctx, Some(frame));
     }
 }

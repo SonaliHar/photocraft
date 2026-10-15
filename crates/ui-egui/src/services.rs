@@ -228,3 +228,6 @@ mod tests {
         assert!(app.session.active().unwrap().path.is_none());
     }
 }
+
+/// Explicit browser selected-byte capability; no filesystem locator authority.
+pub type OwnedXcfBytesPickerFn = crate::owned_xcf_bytes::PickerFn;

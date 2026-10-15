@@ -1,5 +1,5 @@
-//! Closed current metadata edits. Original imported evidence remains inert and
-//! shared; this is neither source qualification nor permission to edit pixels.
+//! Closed current metadata/native edits. Original imported evidence remains inert
+//! and shared; raw native writes do not grant source or renderer qualification.
 use super::*;
 
 pub(super) fn validate_owner(owner: &AccountedDocument, edit: AccountedEdit<'_>, c: &ReadControl<'_>) -> Result<bool, BackingError> {
@@ -27,6 +27,11 @@ pub(super) fn validate(doc: &Document, edit: AccountedEdit<'_>, quota: &BackingQ
             validate_name(name, c)?;
         }
         AccountedEdit::LayerVisibility { .. } => {}
+        AccountedEdit::NativePixels { layer, rect, bytes } => {
+            let target = accounted_layer_access(doc, layer, c)?.ok_or(BackingError::Bounds)?;
+            let LayerContent::BackedRaster(backed) = &target.layer.content else { return Err(BackingError::Unsupported) };
+            validate_native(backed, rect, bytes, c)?;
+        }
         AccountedEdit::LayerOpacity { opacity, .. } => {
             if !opacity.is_finite() || !(0.0..=1.0).contains(&opacity) {
                 return Err(BackingError::Bounds);
@@ -92,10 +97,75 @@ pub(super) fn synchronize(doc: &mut Document, edit: AccountedEdit<'_>, c: &ReadC
             }
         }
         AccountedEdit::LayerVisibility { visible, .. } => item.visible = visible,
-        AccountedEdit::LayerOpacity { .. } => {} // No interpretation of original composition.
+        AccountedEdit::LayerOpacity { .. } | AccountedEdit::NativePixels { .. } => {} // Original metadata/composition is unchanged.
         _ => return Err(BackingError::Unsupported),
     }
     Ok(())
+}
+
+fn validate_native(backed: &crate::BackedLayer, rect: Rect, bytes: &[u8], c: &ReadControl<'_>) -> Result<usize, BackingError> {
+    c.check(1)?;
+    if rect.is_empty() || !backed.operative_bounds().contains_rect(&rect) {
+        return Err(BackingError::Bounds);
+    }
+    let bpp = backed.format().bytes_per_pixel();
+    if bpp == 0 || bpp > 40 {
+        return Err(BackingError::Unsupported);
+    }
+    let required = u64::from(rect.width()).checked_mul(u64::from(rect.height())).and_then(|n| n.checked_mul(bpp as u64)).ok_or(BackingError::Length)?;
+    if required > photocraft_raster::MAX_CHECKED_RASTER_BYTES || required != bytes.len() as u64 {
+        return Err(BackingError::Length);
+    }
+    Ok(bpp)
+}
+fn native_view_error(error: photocraft_raster::checked_view::RasterViewError) -> BackingError {
+    use photocraft_raster::checked_view::RasterViewError as E;
+    match error {
+        E::Backed(e) | E::Control(e) | E::Descriptor(e) => e,
+        E::Length => BackingError::Length,
+        E::Bounds => BackingError::Bounds,
+        E::Resident(_) | E::Sample(_) => BackingError::Integrity,
+    }
+}
+/// Raw equality in the already validated imported plain class. Tile/cache IO
+/// remains genuinely charged to its original owner; no source plane or Surface
+/// copy is created. Stack scratch is fixed, and every read/comparison polls.
+pub(super) fn native_is_noop(layer: &crate::Layer, rect: Rect, bytes: &[u8], c: &ReadControl<'_>) -> Result<bool, BackingError> {
+    let LayerContent::BackedRaster(backed) = &layer.content else { return Err(BackingError::Unsupported) };
+    let bpp = validate_native(backed, rect, bytes, c)?;
+    let width = usize::try_from(rect.width()).map_err(|_| BackingError::Length)?;
+    let view = backed.checked_view();
+    let mut scratch = [0u8; 40];
+    for coord in rect.tiles() {
+        c.check(1)?;
+        let x = coord.tx.checked_mul(photocraft_geom::TILE_SIZE).ok_or(BackingError::Bounds)?;
+        let y = coord.ty.checked_mul(photocraft_geom::TILE_SIZE).ok_or(BackingError::Bounds)?;
+        let tile = Rect::new(
+            x,
+            y,
+            x.checked_add(photocraft_geom::TILE_SIZE).ok_or(BackingError::Bounds)?,
+            y.checked_add(photocraft_geom::TILE_SIZE).ok_or(BackingError::Bounds)?,
+        );
+        let overlap = tile.intersect(&rect);
+        let pin = view.pin_tile(coord, c).map_err(native_view_error)?;
+        for y in overlap.y0..overlap.y1 {
+            for x in overlap.x0..overlap.x1 {
+                c.check((bpp as u64).checked_mul(2).ok_or(BackingError::Length)?)?;
+                let row = usize::try_from(i64::from(y) - i64::from(rect.y0)).map_err(|_| BackingError::Bounds)?;
+                let column = usize::try_from(i64::from(x) - i64::from(rect.x0)).map_err(|_| BackingError::Bounds)?;
+                let offset = row.checked_mul(width).and_then(|n| n.checked_add(column)).and_then(|n| n.checked_mul(bpp)).ok_or(BackingError::Length)?;
+                let end = offset.checked_add(bpp).ok_or(BackingError::Length)?;
+                let expected = bytes.get(offset..end).ok_or(BackingError::Length)?;
+                let actual = scratch.get_mut(..bpp).ok_or(BackingError::Length)?;
+                pin.read_pixel_native_into(x, y, actual, c).map_err(native_view_error)?;
+                if &*actual != expected {
+                    return Ok(false);
+                }
+            }
+        }
+    }
+    c.check(1)?;
+    Ok(true)
 }
 
 pub(super) fn validate_name(name: &str, c: &ReadControl<'_>) -> Result<(), BackingError> {

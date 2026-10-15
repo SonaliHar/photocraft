@@ -42,6 +42,9 @@ pub(crate) fn invoke(app: &mut PhotocraftApp, params: &Value) -> Result<Value, S
     if app.automation_input {
         return Err("explicit XCF Open is unavailable through automation; use capability-scoped app.open".into());
     }
+    if path.is_none() && app.services.owned_xcf_bytes_picker.is_some() {
+        return crate::owned_xcf_bytes::start(app);
+    }
     if app.services.owned_current_xcf_open.is_none() && app.services.owned_xcf_open.is_none() {
         return Err("owned XCF Open service is not configured".into());
     }
@@ -324,3 +327,15 @@ mod tests;
 #[cfg(test)]
 #[path = "owned_current_xcf_open_tests.rs"]
 mod current_tests;
+
+/// Browser labels never become native paths or source-file capabilities.
+pub(crate) fn adopt_bytes(app: &mut PhotocraftApp, name: &str, imported: &photocraft_io::OwnedXcfImport, control: &ReadControl<'_>) -> Result<Value, String> {
+    let prepared = PreparedReply::new(imported, "", name, Authority::Interactive, control)?;
+    control.check(1).map_err(|e| e.to_string())?;
+    match imported {
+        photocraft_io::OwnedXcfImport::Plain(value) => app.session.add_owned_plain_xcf_import(value, name, None, control),
+        photocraft_io::OwnedXcfImport::ThresholdAlpha(value) => app.session.add_owned_threshold_alpha_xcf_import(value, name, None, control),
+    }.map_err(|e| e.to_string())?;
+    crate::jobs_ui::after_open(app, name, None, &prepared.warnings, None);
+    Ok(prepared.value)
+}

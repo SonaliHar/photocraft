@@ -29,6 +29,7 @@ egui = { workspace = true }
 log = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+photocraft-raster = { workspace = true }
 # The ready asset bank supplies all original fonts before the first frame.
 photocraft-ui-egui = { workspace = true, default-features = false, features = ["web_external_assets"] }
 photocraft-text = { workspace = true, features = ["web_external_bundled_fonts"] }
