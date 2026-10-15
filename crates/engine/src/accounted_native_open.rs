@@ -55,6 +55,8 @@ pub fn is_current_point_candidate(document: &photocraft_doc::Document, control: 
                         | "gimp:color-balance"
                         | "gimp:levels"
                         | "gimp:curves"
+                        | "gegl:rgb-clip"
+                        | "gegl:unpremultiply"
                 ) {
                     return Ok(true);
                 }
@@ -373,3 +375,7 @@ mod point_handoff_tests;
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_residual_point_workflow_tests.rs"]
 mod residual_point_workflow_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "accounted_scalar_point_workflow_tests.rs"]
+mod scalar_point_workflow_tests;

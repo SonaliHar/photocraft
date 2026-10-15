@@ -64,6 +64,8 @@ fn exact_point_names_hint_only_stricter_route_and_propagate_actual_control() {
         "gimp:color-balance",
         "gimp:levels",
         "gimp:curves",
+        "gegl:rgb-clip",
+        "gegl:unpremultiply",
     ] {
         let document = hint(name);
         let work = AtomicU64::new(0);
@@ -81,7 +83,7 @@ fn exact_point_names_hint_only_stricter_route_and_propagate_actual_control() {
         let interrupt = Interrupt::cancel_only(&stop);
         assert_eq!(is_current_point_candidate(&document, &ReadControl { interrupt: &interrupt, work: &|_| Ok(()) }), Err(BackingError::Cancelled));
     }
-    for name in ["GEGL:exposure", "gegl:exposure ", "gimp:brightness-contrast", "gimp:levels ", "gimp:threshold", "gegl:gamma"] {
+    for name in ["GEGL:exposure", "gegl:exposure ", "gimp:brightness-contrast", "gimp:levels ", "gimp:threshold", "gegl:gamma", "gegl:rgb-clip ", "GEGL:unpremultiply"] {
         assert_eq!(is_current_point_candidate(&hint(name), &ctl()), Ok(false));
     }
     let empty = Document::new("empty", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);

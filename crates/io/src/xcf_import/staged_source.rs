@@ -16,6 +16,9 @@ mod configured;
 use configured::ConfiguredPointFamily;
 #[path = "staged_point_stack.rs"]
 mod point_stack;
+#[path = "staged_legacy_scalar.rs"]
+mod legacy_scalar;
+use legacy_scalar::LegacyScalarFamily;
 
 trait StagePolicy {
     const THRESHOLD_ALPHA: bool;
@@ -35,6 +38,7 @@ pub(super) enum SelectedStagedFamily {
     ResidualPoint(ResidualPointFamily),
     ConfiguredPoint(ConfiguredPointFamily),
     PointStackEdits,
+    LegacyScalar(LegacyScalarFamily),
 }
 impl std::fmt::Debug for SelectedStagedFamily {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -46,6 +50,7 @@ impl std::fmt::Debug for SelectedStagedFamily {
             Self::ResidualPoint(_) => "ResidualPoint",
             Self::ConfiguredPoint(_) => "ConfiguredPoint",
             Self::PointStackEdits => "PointStackEdits",
+            Self::LegacyScalar(_) => "LegacyScalar",
         })
     }
 }
@@ -67,6 +72,9 @@ impl StagePolicy for SourceSelectedPolicy {
             // mapping; completion cannot return this route after a refusal.
             if point_stack::hint(file) {
                 return SelectedStagedFamily::PointStackEdits;
+            }
+            if let Some(family) = LegacyScalarFamily::hint(file) {
+                return SelectedStagedFamily::LegacyScalar(family);
             }
             if let Some(family) = ConfiguredPointFamily::hint(file) {
                 return SelectedStagedFamily::ConfiguredPoint(family);
@@ -437,7 +445,13 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             }
             _ => None,
         };
-        if point.is_some() {
+        let owned_point = if let SelectedStagedFamily::LegacyScalar(family) = family {
+            if !family.qualify(file, ctl, shared)? {
+                return Err(IoError::Unsupported("staged legacy scalar source is outside its exact whole-file predicate".into()));
+            }
+            Some(family.domain())
+        } else { None };
+        if point.is_some() || owned_point.is_some() {
             // Full original source, precision, geometry, mask flags and unit
             // domains were just checked by the unchanged classifier policy.
         } else if histogram {
@@ -468,6 +482,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             ctl.check().map_err(|_| IoError::Cancelled)?;
             if !threshold
                 && point.is_none()
+                && owned_point.is_none()
                 && (d.group
                     || d.path.len() > 1
                     || d.model != file.model
@@ -502,7 +517,12 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             })?;
             validate_drawable_alpha(d, point.is_some(), false, ctl, 0)?;
         }
-        Ok(admission::AdmissionDomains { point_replace_domain: point, ..Default::default() })
+        Ok(admission::AdmissionDomains {
+            point_replace_domain: point,
+            owned_point_domain: owned_point,
+            unpremultiply_domain: matches!(family, SelectedStagedFamily::LegacyScalar(LegacyScalarFamily::Unpremultiply)),
+            ..Default::default()
+        })
     }
     fn late_admissions(file: &XcfFile<Self>) -> admission::LateAdmissionDomains {
         // Generic mapping always runs admissions before this side-effect-free
@@ -517,6 +537,9 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         }
         if P::family(file) == SelectedStagedFamily::PointStackEdits {
             domains.point_stack_edits_domain = true;
+        }
+        if let SelectedStagedFamily::LegacyScalar(family) = P::family(file) {
+            family.set_late(&mut domains);
         }
         admission::LateAdmissionDomains {
             threshold_alpha_domain: P::family(file) == SelectedStagedFamily::ThresholdAlpha,

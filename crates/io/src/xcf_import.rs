@@ -1673,6 +1673,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
 ) -> Result<(ImportResult, usize), IoError> {
     let admission::AdmissionDomains {
         point_replace_domain,
+        owned_point_domain,
         unpremultiply_domain,
         finite_normal_domain,
         floating_records,
@@ -1853,6 +1854,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         };
         let effects_candidate = !d.effects.is_empty()
             && (point_replace_domain.is_some()
+                || owned_point_domain.is_some()
                 || unpremultiply_domain
                 || point_stack_edits_domain
                 || finite_gaussian_domain
@@ -2098,7 +2100,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 exposure_geometry_domain,
                 point_replace_domain.map(|_| doc.bounds()),
             )?;
-            let neighborhood_domain = if let Some(domain) = point_replace_domain {
+            let neighborhood_domain = if let Some(domain) = point_replace_domain.or(owned_point_domain) {
                 domain
             } else if unpremultiply_domain {
                 crate::xcf_filters::NeighborhoodDomain::UnpremultiplyRgbFloatLinear
@@ -2543,7 +2545,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 .map(accounting_error)
                 .unwrap_or_else(|| if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF rendering consumer: {error}")) }));
         }
-    } else if P::requires_budgeted_point_preparation(point_replace_domain.is_some()) {
+    } else if P::requires_budgeted_point_preparation(point_replace_domain.is_some() || owned_point_domain.is_some()) {
         // The original exact classifier and qualified_stack already succeeded.
         // This sealed path must also hold the actual controlled source->working
         // ->source PointStack preparation before any owned storage publication.

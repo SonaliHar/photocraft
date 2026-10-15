@@ -53,7 +53,7 @@ impl ResidualPointFamily {
             Self::Desaturate => "gimp:desaturate",
             Self::SaturationRgb | Self::SaturationGray | Self::SaturationYuv => "gegl:saturation",
             Self::ValueInvertPrecision => "gegl:value-invert",
-            Self::Posterize => return opaque_posterize(file, ctl, budget),
+            Self::Posterize => return opaque_original(file, "gimp:posterize", ctl, budget),
         };
         if matches!(self, Self::SaturationRgb | Self::SaturationYuv) && file.model != Model::Rgb {
             return Ok(false);
@@ -81,7 +81,7 @@ fn poll(ctl: &Interrupt<'_>, budget: Option<&photocraft_xcf::Budget<'_>>, units:
 // Exact existing qualified_opaque_neighborhood metadata and alpha predicate,
 // using bounded real native visitors instead of materializing an eager Plane.
 // Existing eager/default function remains unchanged for all its old callers.
-fn opaque_posterize<P: ExactParsedPlane>(file: &XcfFile<P>, ctl: &Interrupt<'_>, budget: Option<&photocraft_xcf::Budget<'_>>) -> Result<bool, IoError> {
+pub(super) fn opaque_original<P: ExactParsedPlane>(file: &XcfFile<P>, operation: &str, ctl: &Interrupt<'_>, budget: Option<&photocraft_xcf::Budget<'_>>) -> Result<bool, IoError> {
     poll(ctl, budget, 32)?;
     if !(file.version == 22
         && file.precision == 150
@@ -118,7 +118,7 @@ fn opaque_posterize<P: ExactParsedPlane>(file: &XcfFile<P>, ctl: &Interrupt<'_>,
         && d.transform.is_none()
         && d.floating_attachment.is_none()
         && d.effects.len() == 1
-        && d.effects.first().is_some_and(|e| e.operation == "gimp:posterize"))
+        && d.effects.first().is_some_and(|e| e.operation == operation))
     {
         return Ok(false);
     }

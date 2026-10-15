@@ -30,6 +30,9 @@ mod owned_configured_point_command_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_point_stack_command_tests.rs"]
 mod owned_point_stack_command_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_scalar_point_command_tests.rs"]
+mod owned_scalar_point_command_tests;
 pub use photocraft_engine::accounted_filter_inspect::{OwnedFilterInspectReply, OwnedFilterInspectWire};
 pub use owned_native_open::OwnedNativeOpenReply;
 pub use owned_xcf_open::OwnedXcfOpenReply;

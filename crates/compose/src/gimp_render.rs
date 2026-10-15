@@ -1222,8 +1222,11 @@ pub(crate) fn qualify_residual_point_metadata(
     interrupt.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
     Ok(())
 }
+pub(crate) fn qualify_current_point_optional_mask_metadata(doc:&Document,layer:&Layer,state:&photocraft_doc::XcfState,stack:&photocraft_doc::xcf_filters::FilterStack,extent:Rect,stored:SampleEncoding,format:photocraft_color::PixelFormat,default_bytes:&[u8])->Result<()> {
+    qualify_point_storage_metadata(doc,layer,state,stack,extent,stored,format,default_bytes,PointLayerCoverage::CurrentOptionalMask)
+}
 #[derive(Clone, Copy)]
-enum PointLayerCoverage { OriginalRecipe, Current }
+enum PointLayerCoverage { OriginalRecipe, Current, CurrentOptionalMask }
 fn qualify_point_storage_metadata(
     doc: &Document,
     layer: &Layer,
@@ -1254,7 +1257,7 @@ fn qualify_point_storage_metadata(
         || layer.mask.is_some()
         || (matches!(coverage_policy, PointLayerCoverage::OriginalRecipe) && !layer.visible)
         || (matches!(coverage_policy, PointLayerCoverage::OriginalRecipe) && layer.opacity.to_bits() != 1f32.to_bits())
-        || (matches!(coverage_policy, PointLayerCoverage::Current)
+        || (matches!(coverage_policy, PointLayerCoverage::Current|PointLayerCoverage::CurrentOptionalMask)
             && (!layer.opacity.is_finite() || !(0.0..=1.0).contains(&layer.opacity) || item.is_none_or(|item| item.visible != layer.visible)))
         || !matches!(doc.depth, photocraft_color::SampleType::U8 | photocraft_color::SampleType::U16 | photocraft_color::SampleType::U32 | photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64)
         || !matches!(stored, SampleEncoding::Linear | SampleEncoding::NonlinearProfile | SampleEncoding::Perceptual)
@@ -1268,9 +1271,10 @@ fn qualify_point_storage_metadata(
                 || (policy.stored_blend_space, policy.stored_composite_space, policy.stored_operator) != (0, -1, -1)
         })
         || stack.nodes.iter().any(|node| {
-            node.mask.is_none_or(|reference| {
-                !state.filter_masks.iter().any(|mask| ItemRef::Mask(mask.id) == reference && mask.owner == node.id && mask.surface.format().sample == doc.depth)
-            })
+            match node.mask {
+                None=>!matches!(coverage_policy,PointLayerCoverage::CurrentOptionalMask),
+                Some(reference)=>!state.filter_masks.iter().any(|mask|ItemRef::Mask(mask.id)==reference && mask.owner==node.id && mask.surface.format().sample==doc.depth),
+            }
         })
     {
         return Err(CompositionError::Unsupported("unqualified generic point current raster context"));

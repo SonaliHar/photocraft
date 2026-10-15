@@ -484,6 +484,14 @@ distinct schema/composition epochs and original model, precision, encoding and
 geometry requirements remain mandatory. Posterize uses exact signed width-32
 integer arguments; other widths and integers outside the i32 range refuse.
 
+Additional separately qualified scalar routes cover offset Exposure, HDR RGB
+Clip, Unpremultiply, original and edited Mono Mixer, and original Value Invert.
+Their original source/current geometry, precision, profile, finite-value and
+mask restrictions remain. The opaque original Mono Mixer, Value Invert and
+Posterize paths keep their legacy wide results until composition, without
+adding an intermediate U8 rounding step. Unpremultiply has no stored arguments;
+activation still uses `xcf.filter.enable` and requires operative validation.
+
 For a qualified current Point document, existing `xcf.filter.set` and
 `xcf.filter.enable` accept activation and up to ten unique existing arguments.
 Arguments retain their exact Float32Bits, signed width-32, Bool, Enum or four-word Color shape;

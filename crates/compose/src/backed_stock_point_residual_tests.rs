@@ -62,7 +62,6 @@ fn compare(owner: &AccountedDocument, profile: &Profile) {
         &Interrupt::NONE,
     )
     .unwrap()
-    .with_current_point_storage(Some(doc.depth))
     .with_filter_output_precision(state.current_filter_output_precision);
     let mut raw = [0u8; 40];
     let mut index = 0;

@@ -102,6 +102,19 @@ fn configured_kind(node: &FilterNode) -> Option<ConfiguredKind> {
         _ => None,
     }
 }
+fn legacy_opaque(node: &FilterNode) -> bool {
+    matches!(
+        (node.operation.name.as_str(), node.operation.schema_epoch.as_str()),
+        ("gimp:posterize", "xcf-22-stock-point-replace")
+            | ("gegl:value-invert", "xcf-22-stock-point-replace")
+            | ("gegl:mono-mixer", "xcf-22-stock-point-replace")
+            | ("gegl:mono-mixer", gimp_filters::MONO_MIXER_EDITS_EPOCH)
+    )
+}
+fn remaining_optional_mask(node: &FilterNode) -> bool {
+    (legacy_opaque(node) && node.operation.name != "gimp:posterize")
+        || (node.operation.name == "gegl:rgb-clip" && node.operation.schema_epoch == gimp_filters::RGB_CLIP_HDR_EPOCH)
+}
 fn configured_arguments(
     arguments: &[photocraft_doc::xcf_filters::FilterArgument],
     depth: u8,
@@ -151,11 +164,15 @@ fn initial_member(node: &FilterNode, budget: &mut impl PlanBudget, interrupt: &I
                 node.operation.schema_epoch.as_str(),
                 gimp_filters::SATURATION_PRECISION_EPOCH | gimp_filters::SATURATION_GRAY_PRECISION_EPOCH | gimp_filters::SATURATION_RGB_YUV_PRECISION_EPOCH
             ),
-            "gegl:value-invert" => node.operation.schema_epoch == gimp_filters::VALUE_INVERT_PRECISION_EPOCH,
+            "gegl:value-invert" => matches!(node.operation.schema_epoch.as_str(), gimp_filters::VALUE_INVERT_PRECISION_EPOCH | "xcf-22-stock-point-replace"),
+            "gegl:rgb-clip" => node.operation.schema_epoch == gimp_filters::RGB_CLIP_HDR_EPOCH,
+            "gegl:unpremultiply" => node.operation.schema_epoch == crate::gimp_unpremultiply::UNPREMULTIPLY_EPOCH,
             "gimp:posterize" => node.operation.schema_epoch == "xcf-22-stock-point-replace",
             "gegl:brightness-contrast" => node.operation.schema_epoch == gimp_filters::BRIGHTNESS_CONTRAST_PRECISION_EPOCH,
             "gegl:levels" => node.operation.schema_epoch == gimp_filters::GEGL_LEVELS_PRECISION_EPOCH,
-            "gegl:exposure" => node.operation.schema_epoch == gimp_filters::EXPOSURE_BLACK_PRECISION_EPOCH,
+            "gegl:exposure" => {
+                matches!(node.operation.schema_epoch.as_str(), gimp_filters::EXPOSURE_BLACK_PRECISION_EPOCH | gimp_filters::EXPOSURE_GEOMETRY_EPOCH)
+            }
             "gegl:color-temperature" => node.operation.schema_epoch == gimp_filters::COLOR_TEMPERATURE_PRECISION_EPOCH,
             "gegl:sepia" => node.operation.schema_epoch == gimp_filters::SEPIA_PRECISION_EPOCH,
             "gegl:alien-map" => {
@@ -167,7 +184,10 @@ fn initial_member(node: &FilterNode, budget: &mut impl PlanBudget, interrupt: &I
             "gegl:color-exchange" => node.operation.schema_epoch == gimp_filters::COLOR_EXCHANGE_PRECISION_EPOCH,
             "gegl:color-overlay" => node.operation.schema_epoch == gimp_filters::COLOR_OVERLAY_PRECISION_EPOCH,
             "gegl:channel-mixer" => node.operation.schema_epoch == gimp_filters::CHANNEL_MIXER_PRECISION_EPOCH,
-            "gegl:mono-mixer" => node.operation.schema_epoch == gimp_filters::MONO_MIXER_SIGNED_PRECISION_EPOCH,
+            "gegl:mono-mixer" => matches!(
+                node.operation.schema_epoch.as_str(),
+                gimp_filters::MONO_MIXER_SIGNED_PRECISION_EPOCH | gimp_filters::MONO_MIXER_EDITS_EPOCH | "xcf-22-stock-point-replace"
+            ),
             "gegl:red-eye-removal" => {
                 matches!(node.operation.schema_epoch.as_str(), gimp_filters::RED_EYE_PRECISION_EPOCH | crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH)
             }
@@ -195,6 +215,10 @@ fn initial_member(node: &FilterNode, budget: &mut impl PlanBudget, interrupt: &I
     }
     work(budget, interrupt, policy.compatibility_epoch.len() as u64)?;
     let compatibility = match node.operation.schema_epoch.as_str() {
+        gimp_filters::EXPOSURE_GEOMETRY_EPOCH
+        | gimp_filters::RGB_CLIP_HDR_EPOCH
+        | gimp_filters::MONO_MIXER_EDITS_EPOCH
+        | crate::gimp_unpremultiply::UNPREMULTIPLY_EPOCH => node.operation.schema_epoch.as_str(),
         gimp_filters::STACK_EDITS_EPOCH => gimp_filters::STACK_EDITS_EPOCH,
         crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH => crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH,
         crate::gimp_video_degradation::VIDEO_DEGRADATION_OPTIONS_EPOCH => crate::gimp_video_degradation::VIDEO_DEGRADATION_OPTIONS_EPOCH,
@@ -286,6 +310,60 @@ fn qualify_witnessed_metadata(
         if mask.bounds != doc.bounds()
             || mask.surface.format() != PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false)
             || filters.nodes.iter().filter(|node| node.id == mask.owner && node.mask == Some(ItemRef::Mask(mask.id))).count() != 1
+            || state.items.iter().filter(|item| item.item == ItemRef::Mask(mask.id)).count() != 1
+        {
+            return Err(scope());
+        }
+    }
+    Ok(())
+}
+
+fn qualify_remaining_metadata(
+    doc: &Document,
+    layer: &photocraft_doc::Layer,
+    state: &photocraft_doc::XcfState,
+    node: &FilterNode,
+    extent: Rect,
+    stored: SampleEncoding,
+) -> Result<(), BackedNormalError> {
+    let exposure = node.operation.name == "gegl:exposure" && node.operation.schema_epoch == gimp_filters::EXPOSURE_GEOMETRY_EPOCH;
+    let hdr = node.operation.name == "gegl:rgb-clip";
+    let unpremultiply = node.operation.name == "gegl:unpremultiply";
+    let opaque = legacy_opaque(node) && node.operation.name != "gimp:posterize";
+    if !(exposure || hdr || unpremultiply || opaque) {
+        return Ok(());
+    }
+    let source = doc.source_color_context.as_ref().ok_or_else(scope)?;
+    let valid = if exposure {
+        doc.size == photocraft_doc::Size::new(295, 160)
+            && extent.width() == 257
+            && extent.height() == 129
+            && matches!((extent.x0, extent.y0), (-13, 13) | (17, -11))
+            && matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale)
+            && matches!(doc.depth, SampleType::U16 | SampleType::F32 | SampleType::F64)
+            && matches!(stored, SampleEncoding::Linear | SampleEncoding::NonlinearProfile)
+    } else if opaque {
+        doc.size == photocraft_doc::Size::new(32, 32)
+            && extent == Rect::new(0, 0, 32, 32)
+            && doc.mode == ColorMode::Rgb
+            && doc.depth == SampleType::U8
+            && stored == SampleEncoding::NonlinearProfile
+            && source.source_precision == 150
+    } else {
+        doc.size == photocraft_doc::Size::new(8, 6)
+            && extent == Rect::new(0, 0, 8, 6)
+            && doc.mode == ColorMode::Rgb
+            && doc.depth == SampleType::F32
+            && stored == SampleEncoding::Linear
+            && source.source_precision == 600
+    };
+    if !valid || !layer.visible || layer.opacity.to_bits() != 1f32.to_bits() {
+        return Err(scope());
+    }
+    for mask in &state.filter_masks {
+        if node.mask != Some(ItemRef::Mask(mask.id))
+            || mask.owner != node.id
+            || mask.bounds != doc.bounds()
             || state.items.iter().filter(|item| item.item == ItemRef::Mask(mask.id)).count() != 1
         {
             return Err(scope());
@@ -456,7 +534,7 @@ fn prepare_plan<B: PlanBudget>(
     let node = filters.nodes.first().ok_or_else(scope)?;
     if state.provenance.format_version != 22
         || state.filter_masks.len().checked_add(1) != Some(state.items.len())
-        || (if witnessed { state.filter_masks.len() > filters.nodes.len() } else { state.filter_masks.len() != 1 })
+        || (if witnessed || remaining_optional_mask(node) { state.filter_masks.len() > filters.nodes.len() } else { state.filter_masks.len() != 1 })
         || !state.source_items.is_empty()
         || !state.editable_indexed.is_empty()
         || state.floating.is_some()
@@ -524,6 +602,9 @@ fn prepare_plan<B: PlanBudget>(
     work(budget, interrupt, envelope.checked_mul(64).ok_or_else(length)?)?;
     if witnessed {
         qualify_witnessed_metadata(doc, layer, state, filters, extent, stored, format, default)?;
+    } else if remaining_optional_mask(node) {
+        crate::gimp_render::qualify_current_point_optional_mask_metadata(doc, layer, state, filters, extent, stored, format, default)
+            .map_err(BackedNormalError::Color)?;
     } else {
         crate::gimp_render::qualify_current_point_layer_coverage_metadata(doc, layer, state, filters, extent, stored, format, default)
             .map_err(BackedNormalError::Color)?;
@@ -564,12 +645,13 @@ fn prepare_plan<B: PlanBudget>(
         work(budget, interrupt, 0)?;
         valid_mask.map_err(BackedNormalError::Color)?;
     }
+    qualify_remaining_metadata(doc, layer, state, node, extent, stored)?;
     qualify_configured_metadata(doc, node, extent, stored).map_err(BackedNormalError::Color)?;
     crate::gimp_render::qualify_residual_point_metadata(doc, layer, state, filters, extent, stored, interrupt).map_err(BackedNormalError::Color)?;
     crate::gimp_render::qualify_point_family_context(doc, layer, state, filters, extent, known, stored, interrupt).map_err(BackedNormalError::Color)?;
     let stack = OrderedStack::new_for_stock(filters, known, stored, state.provenance.format_version, extent, interrupt)
         .map_err(BackedNormalError::Color)?
-        .with_current_point_storage(if witnessed { None } else { Some(format.sample) })
+        .with_current_point_storage(if witnessed || legacy_opaque(node) { None } else { Some(format.sample) })
         .with_filter_output_precision(state.current_filter_output_precision);
     let retained = stack.stock_retained_bytes().map_err(BackedNormalError::Color)?.checked_add(header).and_then(|n| n.checked_add(65536)).ok_or_else(length)?;
     if retained > envelope {
@@ -581,7 +663,7 @@ fn prepare_plan<B: PlanBudget>(
         stack,
         _current_profile: current_profile,
         format,
-        opaque_input: node.operation.name == "gimp:posterize",
+        opaque_input: legacy_opaque(node) || node.operation.name == "gegl:rgb-clip",
         half_input: matches!(configured_kind(node), Some(ConfiguredKind::Balance))
             && doc.source_color_context.as_ref().is_some_and(|s| matches!(s.source_precision, 500 | 550 | 575)),
     };
@@ -857,3 +939,7 @@ mod configured_tests;
 #[cfg(test)]
 #[path = "backed_stock_point_stack_tests.rs"]
 mod stack_tests;
+
+#[cfg(test)]
+#[path = "backed_stock_point_scalar_tests.rs"]
+mod scalar_tests;

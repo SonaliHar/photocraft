@@ -1000,6 +1000,7 @@ impl PointStack {
             else if let Some(candidate)=&node.red_eye { candidate.working_input(input)?; }
             else if node.gray_color_exchange.is_some() || matches!(node.operation,PointOperation::AlphaClipPrecision{..}|PointOperation::AlphaClipFinitePrecision{..}|PointOperation::ColorExchange{..}|PointOperation::ColorToAlpha{..}|PointOperation::ComponentExtract{..}) {
                 if node.working.convert([pixel[0],pixel[1],pixel[2]],true)?.iter().any(|v|!(*v as f32).is_finite() || !(0.0..=1.0).contains(&(*v as f32))) { return Err(CompositionError::Unsupported("literal-color working samples outside unit domain")); }
+            }else if matches!(node.operation,PointOperation::RgbClip{..}) { /* Existing Linear Float HDR colors are finite above. */
             }else if pixel.iter().any(|v|!(0.0..=1.0).contains(v)) { return Err(CompositionError::Unsupported("generic point source unit samples")); }
         }
         Ok(())
