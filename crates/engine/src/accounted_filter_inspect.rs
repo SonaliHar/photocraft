@@ -277,11 +277,15 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
     let id = crate::xcf_filter_cmds::id(COMMAND, params)?;
     let active = session.active().ok_or(EngineError::NoDocument)?;
     let owner = active.doc.accounted().ok_or(BackingError::Unsupported)?;
+    let gaussian_group=owner.is_readonly_gaussian_group_storage();
     let point = if owner.is_readonly_threshold_alpha_storage() {
         owner.validate_readonly_threshold_alpha_storage(control)?;
         false
     } else if owner.is_readonly_threshold_storage() {
         owner.validate_readonly_threshold_storage(control)?;
+        false
+    } else if owner.is_readonly_gaussian_group_storage() {
+        owner.validate_gaussian_group_storage(control)?;
         false
     } else if owner.is_readonly_point_storage() {
         owner.validate_readonly_point_storage(control)?;
@@ -317,6 +321,17 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
         }
         node
     };
+    if gaussian_group {
+        // The separate actual class fixes five flat F32/Enum/Bool arguments.
+        // Use the already bounded complete flat reply envelope; old class
+        // selection, thresholds and formulas remain unchanged.
+        if node.arguments.len()!=5 {return Err(BackingError::Integrity.into())}
+        let text=point_metadata(node,control)?;
+        let planned=point_envelope(text)?;
+        return paid_reply(owner.quota(),ReplyKind::Filter,POINT_FILTER_BOUNDS,planned,text,control,||{
+            crate::xcf_filter_cmds::build_point_storage_inspect_reply(id,stack,node)
+        });
+    }
     if point {
         control.check(node.arguments.len() as u64 + 1)?;
         let structured = node.arguments.iter().any(|argument| {

@@ -18,6 +18,7 @@ enum NativeHandoff {
     CurrentPoint,
     CurrentAnalyticGeometry,
     CurrentIsolatedNormalGroup,
+    CurrentIsolatedGaussianGroup,
 }
 
 /// Allocation-free route hint selecting the stricter current Point endpoint.
@@ -98,6 +99,17 @@ pub fn is_current_isolated_normal_group_candidate(document: &photocraft_doc::Doc
         }
     }
     Ok(false)
+}
+/// Route hint only. Exact retained Gaussian-group schema selects its strict
+/// class/profile/native handoff; a refusal never retries another endpoint.
+pub fn is_current_isolated_gaussian_group_candidate(document:&photocraft_doc::Document,control:&ReadControl<'_>)->std::result::Result<bool,BackingError>{
+ if let Some(state)=&document.xcf_state {
+  for stack in &state.filter_stacks {control.check(1)?;for node in &stack.nodes {control.check(1)?;
+   control.check(node.operation.schema_epoch.len() as u64)?;
+   if node.operation.schema_epoch=="xcf22-isolated-small-auto-v1" {return Ok(true)}
+  }}
+ }
+ Ok(false)
 }
 /// Exact retained geometry epochs select the stricter current endpoint only.
 /// No class, source/profile authority or locator access follows from this hint;
@@ -338,6 +350,11 @@ impl Session {
     ) -> Result<usize> {
         self.add_owned_native_with(archive, label, authorized_native_path, control, NativeHandoff::CurrentIsolatedNormalGroup)
     }
+    /// Strict current isolated Gaussian group native continuation, without
+    /// source locator authority or a broader retry after typed refusal.
+    pub fn add_owned_native_isolated_gaussian_group_archive(&mut self,archive:OwnedDocumentArchive,label:&str,authorized_native_path:Option<&str>,control:&ReadControl<'_>)->Result<usize>{
+     self.add_owned_native_with(archive,label,authorized_native_path,control,NativeHandoff::CurrentIsolatedGaussianGroup)
+    }
     fn add_owned_native_with(
         &mut self,
         archive: OwnedDocumentArchive,
@@ -365,7 +382,8 @@ impl Session {
         if matches!(handoff, NativeHandoff::Document)
             && (is_current_point_candidate(archive.document(), control)?
                 || is_current_analytic_geometry_candidate(archive.document(), control)?
-                || is_current_isolated_normal_group_candidate(archive.document(), control)?)
+                || is_current_isolated_normal_group_candidate(archive.document(), control)?
+                || is_current_isolated_gaussian_group_candidate(archive.document(), control)?)
         {
             return Err(BackingError::Unsupported.into());
         }
@@ -376,9 +394,10 @@ impl Session {
             NativeHandoff::CurrentThresholdAlpha => archive.into_accounted_readonly_threshold_alpha_storage(control),
             NativeHandoff::CurrentHistogramThreshold => archive.into_accounted_readonly_threshold_storage(control),
             NativeHandoff::CurrentPoint => archive.into_accounted_readonly_point_storage(control),
+            NativeHandoff::CurrentIsolatedGaussianGroup => archive.into_accounted_readonly_gaussian_group_storage(control),
         }
         .map_err(|error| {
-            if matches!(handoff, NativeHandoff::CurrentPoint | NativeHandoff::CurrentAnalyticGeometry | NativeHandoff::CurrentIsolatedNormalGroup) {
+            if matches!(handoff, NativeHandoff::CurrentPoint | NativeHandoff::CurrentAnalyticGeometry | NativeHandoff::CurrentIsolatedNormalGroup | NativeHandoff::CurrentIsolatedGaussianGroup) {
                 if let photocraft_format::FormatError::Io(io) = &error {
                     if let Some(backing) = io.get_ref().and_then(|source| source.downcast_ref::<BackingError>()) {
                         return EngineError::from(*backing);
@@ -391,6 +410,9 @@ impl Session {
                 EngineError::Other(format!("owned native reopen: {error}"))
             }
         })?;
+        if let NativeHandoff::CurrentIsolatedGaussianGroup = handoff {
+            crate::accounted_xcf_open::gaussian_group::validate_current_isolated_gaussian_group_storage(&document,control)?;
+        }
         if let NativeHandoff::CurrentIsolatedNormalGroup = handoff {
             crate::accounted_xcf_open::isolated_normal_group::validate_current_isolated_normal_group_storage(&document, control)?;
         }
@@ -507,3 +529,7 @@ mod isolated_normal_group_workflow_tests;
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_gaussian_workflow_tests.rs"]
 mod gaussian_workflow_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "accounted_gaussian_group_workflow_tests.rs"]
+mod gaussian_group_workflow_tests;

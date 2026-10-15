@@ -639,3 +639,46 @@ pub(in crate::xcf_import) fn measure_isolated_normal_group(
 #[cfg(test)]
 #[path = "census_group_tests.rs"]
 mod group_tests;
+
+/// Fixed one-level Gaussian group storage only. Eligibility belongs to the
+/// sealed original-source selector and the independent CURRENT renderer.
+pub(in crate::xcf_import) fn measure_isolated_gaussian_group(
+    doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &Interrupt<'_>,
+) -> Result<Census, IoError> {
+    use photocraft_doc::xcf_filters::{ExactNumber, FilterValue};
+    control.check().map_err(|_| IoError::Cancelled)?;
+    budget.consume_work(32, "Gaussian group census shape").map_err(accounting_error)?;
+    let bottom = doc.layers.first().ok_or_else(|| invalid("Gaussian group census bottom"))?;
+    let top = doc.layers.get(1).ok_or_else(|| invalid("Gaussian group census top"))?;
+    let LayerContent::Group(group) = &top.content else { return Err(invalid("Gaussian group census tree")) };
+    let state = doc.xcf_state.as_ref().ok_or_else(|| invalid("Gaussian group census state"))?;
+    if doc.layers.len() != 2 || doc.size != Size::new(16, 12) || doc.mode != ColorMode::Rgb || doc.depth != SampleType::F32
+        || !matches!(bottom.content, LayerContent::Raster(_)) || bottom.mask.is_some() || top.mask.is_none()
+        || group.children.len() != 2 || group.artboard.is_some()
+        || state.items.len() != 6 || state.filter_stacks.len() != 1 || state.filter_masks.len() != 1
+    { return Err(invalid("Gaussian group census closed shape")); }
+    for child in &group.children {
+        control.check().map_err(|_| IoError::Cancelled)?;
+        budget.consume_work(1, "Gaussian group child census").map_err(accounting_error)?;
+        if !matches!(child.content, LayerContent::Raster(_)) || child.mask.is_some() {
+            return Err(invalid("Gaussian group census leaf"));
+        }
+    }
+    let stack = state.filter_stacks.first().ok_or_else(|| invalid("Gaussian group census stack"))?;
+    let node = stack.nodes.first().ok_or_else(|| invalid("Gaussian group census node"))?;
+    if stack.owner != photocraft_doc::item_identity::ItemRef::Layer(top.id) || stack.nodes.len() != 1
+        || node.arguments.len() != 5 || !node.auxiliary.is_empty()
+        || state.filter_masks.iter().any(|mask| mask.bounds != doc.bounds())
+    { return Err(invalid("Gaussian group census filter shape")); }
+    for argument in &node.arguments {
+        control.check().map_err(|_| IoError::Cancelled)?;
+        budget.consume_work(1, "Gaussian group argument census").map_err(accounting_error)?;
+        if !matches!(&argument.value, FilterValue::Number(ExactNumber::Float32Bits(_)) | FilterValue::Bool(_) | FilterValue::Enum { .. }) {
+            return Err(invalid("Gaussian group census flat argument storage"));
+        }
+    }
+    // Existing threshold storage is the bounded flat-node/filter-mask census;
+    // existing isolated storage is the four-header/three-store tree census.
+    // Their original entry points keep their original flags and shape gates.
+    measure_inner(doc, budget, control, true, false, true)
+}

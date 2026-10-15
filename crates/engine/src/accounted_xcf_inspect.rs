@@ -94,6 +94,8 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
         owner.validate_readonly_threshold_alpha_storage(control)?;
     } else if owner.is_readonly_threshold_storage() {
         owner.validate_readonly_threshold_storage(control)?;
+    } else if owner.is_readonly_gaussian_group_storage() {
+        owner.validate_gaussian_group_storage(control)?;
     } else if owner.is_readonly_point_storage() {
         owner.validate_readonly_point_storage(control)?;
     } else {
@@ -102,11 +104,16 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
     let doc = owner.document();
     let state = doc.xcf_state.as_ref().ok_or(BackingError::Integrity)?;
     let point = owner.is_readonly_point_storage();
+    let gaussian_group=owner.is_readonly_gaussian_group_storage();
     // Actual class/census already enforces these; repeat the small shape before
     // deriving response counts so future class expansion cannot widen this API.
     // An empty CURRENT Point retains its stack/owner/revision, with no masks
     // and exactly one layer item. This is metadata, not a source/render grant.
-    let filters_in_owner = if point {
+    let filters_in_owner = if gaussian_group {
+        if state.items.len()!=6 || state.filter_masks.len()!=1 || state.filter_stacks.len()!=1
+            || state.filter_stacks.first().is_none_or(|s|s.nodes.len()!=1) {return Err(BackingError::Unsupported.into())}
+        1
+    } else if point {
         let [stack] = state.filter_stacks.as_slice() else { return Err(BackingError::Unsupported.into()) };
         if stack.nodes.len() > 2
             || state.filter_masks.len() > stack.nodes.len()
@@ -206,7 +213,9 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
         validate_resolution(resolution, control)?;
         // Point has at most one layer plus two optional matched masks. The
         // other readonly classes retain their original two-item shape above.
-        let mut facts = [None, None, None];
+        // Six fixed slots admit only the explicit checked Gaussian-group branch;
+        // old class shapes and their computed bounds are unchanged.
+        let mut facts = [None, None, None, None, None, None];
         for (index, item) in state.items.iter().enumerate() {
             let fact = crate::xcf_inspect_cmds::ItemTextFacts {
                 item,

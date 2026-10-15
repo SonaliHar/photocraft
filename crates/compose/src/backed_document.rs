@@ -23,6 +23,7 @@ mod plain_import;
 enum DocumentCompositor<'a> {
     Flat(PreparedBackedNormalStack<'a>),
     Group(group::PreparedGroup<'a>),
+    GaussianGroup(crate::backed_gaussian_group::PreparedBackedGaussianGroupContext<'a>),
     Threshold(crate::backed_threshold_document::PreparedBackedThresholdDocument<'a>),
     ThresholdAlpha(crate::backed_threshold_alpha_document::PreparedBackedThresholdAlphaDocument<'a>),
     Point(crate::backed_stock_point_document::PreparedBackedStockPointDocument<'a>),
@@ -81,6 +82,21 @@ impl<'a> PreparedBackedDocument<'a> {
         limits: NormalBandLimits,
         control: &ReadControl<'_>,
     ) -> Result<Self, BackedNormalError> {
+        if owner.is_readonly_gaussian_group_storage() {
+            control.check(1).map_err(BackedNormalError::Backing)?;
+            let basis = photocraft_cms::Builtin::Srgb.profile();
+            control.check(1).map_err(BackedNormalError::Backing)?;
+            let supplied = profile.encoded_bytes().ok_or(BackedNormalError::Unsupported("Gaussian group requires retained implicit basis"))?;
+            if supplied.len() > 65536 { return Err(BackedNormalError::Unsupported("Gaussian group basis size")); }
+            control.check(supplied.len() as u64 * 2).map_err(BackedNormalError::Backing)?;
+            if profile.channels() != 3 || Some(supplied) != basis.encoded_bytes() {
+                return Err(BackedNormalError::Unsupported("Gaussian group basis mismatch"));
+            }
+            let prepared = crate::backed_gaussian_group::PreparedBackedGaussianGroupContext::new(owner, limits, control)?;
+            let index = owner.quota().reserve(QuotaKind::Index, std::mem::size_of::<Self>() as u64).map_err(BackedNormalError::Quota)?;
+            control.check(1).map_err(BackedNormalError::Backing)?;
+            return Ok(Self { stack: DocumentCompositor::GaussianGroup(prepared), limits, quota: owner.quota().clone(), bounds: owner.document().bounds(), _index: index });
+        }
         if owner.is_readonly_point_storage() {
             if crate::backed_neighborhood_context::is_candidate(owner.document(), control).map_err(BackedNormalError::Backing)? {
                 let prepared = crate::backed_neighborhood_document::PreparedBackedNeighborhoodDocument::new(owner, profile, limits, control)?;
@@ -341,6 +357,7 @@ impl<'a> PreparedBackedDocument<'a> {
         match &self.stack {
             DocumentCompositor::Flat(stack) => stack.render_band(rect, [0.; 4], control),
             DocumentCompositor::Group(group) => group.render_band(rect, control),
+            DocumentCompositor::GaussianGroup(group) => group.render_band(rect, control),
             DocumentCompositor::Threshold(prepared) => prepared.render_band(rect, control),
             DocumentCompositor::ThresholdAlpha(prepared) => prepared.render_band(rect, control),
             DocumentCompositor::Point(prepared) => prepared.render_band(rect, control),

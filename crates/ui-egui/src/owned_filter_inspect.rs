@@ -26,7 +26,7 @@ pub(crate) fn handle(app: &mut PhotocraftApp, request: &ControlRequest, command:
         return None;
     }
     let owner = app.session.active()?.doc.accounted()?;
-    let filtered = owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage();
+    let filtered = owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage() || owner.is_readonly_gaussian_group_storage();
     if (command == "xcf.filter.inspect" && !filtered) || (command == "xcf.inspect" && owner.document().xcf_state.is_none()) {
         return None;
     }

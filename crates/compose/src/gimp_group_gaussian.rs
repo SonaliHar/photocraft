@@ -24,14 +24,40 @@ impl GroupGaussian {
         context: (Rect, &Profile, SampleEncoding),
         interrupt: &Interrupt,
     ) -> Result<Self> {
+        Self::prepare(doc, layer, state, stack, context, interrupt, false)
+    }
+    pub(super) fn new_owned(
+        doc: &Document,
+        layer: &Layer,
+        state: &XcfState,
+        stack: &FilterStack,
+        context: (Rect, &Profile, SampleEncoding),
+        interrupt: &Interrupt<'_>,
+    ) -> Result<Self> {
+        Self::prepare(doc, layer, state, stack, context, interrupt, true)
+    }
+    fn prepare(
+        doc: &Document,
+        layer: &Layer,
+        state: &XcfState,
+        stack: &FilterStack,
+        context: (Rect, &Profile, SampleEncoding),
+        interrupt: &Interrupt<'_>,
+        owned: bool,
+    ) -> Result<Self> {
         let (extent, profile, stored) = context;
-        state.validate_with(doc, interrupt).map_err(|error| {
-            if error.code == "cancelled" {
-                photocraft_raster::RasterInputError::Cancelled.into()
-            } else {
-                CompositionError::Invalid("invalid Gaussian group state")
-            }
-        })?;
+        // The owned caller has already validated its genuine class/model (or
+        // the mapper's exact source predicate). Do not repeat the unrelated
+        // global metadata validator and its temporary indexes without payment.
+        if !owned {
+            state.validate_with(doc, interrupt).map_err(|error| {
+                if error.code == "cancelled" {
+                    photocraft_raster::RasterInputError::Cancelled.into()
+                } else {
+                    CompositionError::Invalid("invalid Gaussian group state")
+                }
+            })?;
+        }
         let policy = state
             .items
             .iter()
@@ -43,7 +69,11 @@ impl GroupGaussian {
             || doc.mode != photocraft_doc::ColorMode::Rgb
             || doc.depth != photocraft_doc::SampleType::F32
             || stored != SampleEncoding::NonlinearProfile
-            || profile.to_bytes() != photocraft_cms::Builtin::Srgb.profile().to_bytes()
+            || if owned {
+                profile.encoded_bytes() != photocraft_cms::Builtin::Srgb.profile().encoded_bytes()
+            } else {
+                profile.to_bytes() != photocraft_cms::Builtin::Srgb.profile().to_bytes()
+            }
             || doc.source_color_context.as_ref().is_none_or(|c| c.original_icc.is_some())
             || policy.source_mode != 28
             || policy.pass_through
@@ -106,11 +136,22 @@ impl GroupGaussian {
             || metadata.linked
             || metadata.outside_f64_bits != 0.0f64.to_bits()
             || mask.surface.resident_payload_bytes()? > 262144 + 4
-            || !mask.is_empty_selection_with(interrupt).map_err(|_| CompositionError::Invalid("group Gaussian mask validation"))?
+            || !mask.is_empty_selection_with(interrupt).map_err(|_| {
+                if owned && interrupt.cancelled() {
+                    photocraft_raster::RasterInputError::Cancelled.into()
+                } else {
+                    CompositionError::Invalid("group Gaussian mask validation")
+                }
+            })?
         {
             return Err(CompositionError::Unsupported("group Gaussian empty selection mask domain"));
         }
-        Ok(Self { extent, enabled: node.enabled, working: WorkingSpace::new(profile, stored, photocraft_doc::import_compositing::GimpSpace::LinearRgb)? })
+        let working = if owned {
+            WorkingSpace::new_with_interrupt(profile, stored, photocraft_doc::import_compositing::GimpSpace::LinearRgb, interrupt)?
+        } else {
+            WorkingSpace::new(profile, stored, photocraft_doc::import_compositing::GimpSpace::LinearRgb)?
+        };
+        Ok(Self { extent, enabled: node.enabled, working })
     }
     pub fn linear(&self, p: [f64; 4]) -> Result<[f64; 4]> {
         if p.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
@@ -120,6 +161,24 @@ impl GroupGaussian {
         Ok([rgb[0], rgb[1], rgb[2], p[3]])
     }
     pub fn evaluate(&self, input: &Surface, poll: &mut impl FnMut(WideWork) -> Result<()>, interrupt: &Interrupt<'_>) -> Result<Surface> {
+        self.evaluate_inner(input, poll, interrupt, None)
+    }
+    pub(super) fn evaluate_owned(
+        &self,
+        input: &Surface,
+        poll: &mut impl FnMut(WideWork) -> Result<()>,
+        interrupt: &Interrupt<'_>,
+        limits: GaussianLimits,
+    ) -> Result<Surface> {
+        self.evaluate_inner(input, poll, interrupt, Some(limits))
+    }
+    fn evaluate_inner(
+        &self,
+        input: &Surface,
+        poll: &mut impl FnMut(WideWork) -> Result<()>,
+        interrupt: &Interrupt<'_>,
+        owned_limits: Option<GaussianLimits>,
+    ) -> Result<Surface> {
         let units = u64::from(self.extent.width()) * u64::from(self.extent.height()) * 4 * 128;
         poll(WideWork::SampleUnits(units))?;
         let filtered = try_gaussian_small_auto(
@@ -127,13 +186,16 @@ impl GroupGaussian {
             self.extent,
             self.extent,
             GaussianParams { std_dev_x: f64::from(0.8f32), std_dev_y: f64::from(1.3f32), abyss: GaussianAbyss::Clamp, clip_extent: true },
-            GaussianLimits { resident_bytes: 64 * 1024 * 1024, work_units: units },
+            owned_limits.unwrap_or(GaussianLimits { resident_bytes: 64 * 1024 * 1024, work_units: units }),
             interrupt,
         )?;
         let mut samples = Vec::new();
         samples
             .try_reserve_exact((self.extent.width() * self.extent.height() * 4) as usize)
             .map_err(|_| CompositionError::Invalid("group Gaussian output allocation"))?;
+        if owned_limits.is_some() && samples.capacity() > (self.extent.width() * self.extent.height() * 8) as usize {
+            return Err(CompositionError::Invalid("group Gaussian output capacity"));
+        }
         for y in self.extent.y0..self.extent.y1 {
             poll(WideWork::SampleUnits(u64::from(self.extent.width()) * 128))?;
             for x in self.extent.x0..self.extent.x1 {

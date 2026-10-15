@@ -11,8 +11,7 @@ use photocraft_geom::Rect;
 use photocraft_text::xcf::runtime_font_input::{self, PreparedRuntimeFont};
 #[path = "gimp_accounted.rs"]
 mod accounted;
-#[path = "gimp_group_gaussian.rs"]
-mod group_gaussian;
+use crate::gimp_group_gaussian as group_gaussian;
 #[path = "gimp_normal_geometry.rs"]
 mod normal_geometry;
 #[path = "gimp_normal_ordinary.rs"]

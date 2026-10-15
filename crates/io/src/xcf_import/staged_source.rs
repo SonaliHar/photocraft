@@ -24,6 +24,8 @@ mod neighborhood;
 use neighborhood::NeighborhoodSourceFamily;
 #[path = "staged_analytic_geometry.rs"]
 mod analytic_geometry;
+#[path = "staged_gaussian_group.rs"]
+mod gaussian_group;
 
 trait StagePolicy {
     const THRESHOLD_ALPHA: bool;
@@ -39,6 +41,7 @@ pub(super) enum SelectedStagedFamily {
     Plain,
     AnalyticGeometry,
     IsolatedNormalGroup,
+    IsolatedGaussianGroup,
     ThresholdAlpha,
     Threshold,
     Point(crate::xcf_filters::PointReplaceFamily),
@@ -54,6 +57,7 @@ impl std::fmt::Debug for SelectedStagedFamily {
             Self::Plain => "Plain",
             Self::AnalyticGeometry => "AnalyticGeometry",
             Self::IsolatedNormalGroup => "IsolatedNormalGroup",
+            Self::IsolatedGaussianGroup => "IsolatedGaussianGroup",
             Self::ThresholdAlpha => "ThresholdAlpha",
             Self::Threshold => "Threshold",
             Self::Point(_) => "Point",
@@ -77,6 +81,7 @@ impl StagePolicy for SourceSelectedPolicy {
     fn family<Q: ExactParsedPlane>(file: &XcfFile<Q>) -> SelectedStagedFamily {
         // Select exactly one old gate, before mapping or mutation. A refusal
         // never retries the other gate. This is not eligibility by name/epoch.
+        if gaussian_group::hint(file) { return SelectedStagedFamily::IsolatedGaussianGroup; }
         if staged_accounted_group::hint(file) { return SelectedStagedFamily::IsolatedNormalGroup; }
         if analytic_geometry::hint(file) { return SelectedStagedFamily::AnalyticGeometry; }
         if file.layers.len() == 1 && file.layers.first().is_some_and(|layer| !layer.effects.is_empty()) {
@@ -430,6 +435,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         P::SOURCE_SELECTED && point_domain
     }
     fn requires_budgeted_neighborhood_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
+    fn requires_budgeted_gaussian_group_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn effective_profile(file: &XcfFile<Self>, space: photocraft_cms::ColorSpace, ce: photocraft_cms::xcf_color::Encoding, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<photocraft_cms::Profile, IoError> {
         if matches!(P::family(file), SelectedStagedFamily::AnalyticGeometry | SelectedStagedFamily::IsolatedNormalGroup) {
             analytic_geometry::effective(file,space,ce,ctl,shared.ok_or_else(||IoError::Unsupported("geometry profile needs accounting".into()))?)
@@ -439,6 +445,10 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     }
     fn admissions(file: &XcfFile<Self>, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<admission::AdmissionDomains, IoError> {
         let family = P::family(file);
+        let gaussian_group = family == SelectedStagedFamily::IsolatedGaussianGroup;
+        if gaussian_group && !gaussian_group::qualify(file, ctl, shared.ok_or_else(||IoError::Unsupported("Gaussian group requires persistent accounting".into()))?)? {
+            return Err(IoError::Unsupported("staged Gaussian group is outside its exact original source predicate".into()));
+        }
         let geometry = family == SelectedStagedFamily::AnalyticGeometry;
         let group = family == SelectedStagedFamily::IsolatedNormalGroup;
         if group && !accounted_group::qualifies_with(file, ctl, Some(shared.ok_or_else(|| IoError::Unsupported("group requires persistent source accounting".into()))?))? {
@@ -489,7 +499,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             }
             Some(expected)
         } else { None };
-        if group || geometry || point.is_some() || owned_point.is_some() || neighborhood.is_some() {
+        if gaussian_group || group || geometry || point.is_some() || owned_point.is_some() || neighborhood.is_some() {
             // Full original source, precision, geometry, mask flags and unit
             // domains were just checked by the unchanged classifier policy.
         } else if histogram {
@@ -521,6 +531,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             if !threshold
                 && !geometry
                 && !group
+                && !gaussian_group
                 && point.is_none()
                 && owned_point.is_none()
                 && neighborhood.is_none()
@@ -542,7 +553,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             // The parser deliberately skips the non-authoritative group projection.
             // The exact shared predicate above requires it absent; only leaves
             // and the optional physical mask retain real staged storage.
-            if group && d.group { continue; }
+            if (group || gaussian_group) && d.group { continue; }
             let p = d.plane.as_ref().ok_or_else(|| unsupported(d, "staged owner missing pixels"))?;
             if p.descriptor.width != d.width
                 || p.descriptor.height != d.height
@@ -563,6 +574,8 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             validate_drawable_alpha(d, point.is_some(), false, ctl, 0)?;
         }
         let mut domains = admission::AdmissionDomains {
+            gaussian_group_domain: gaussian_group,
+            masked_group_domain: gaussian_group,
             accounted_group_domain: group,
             analytic_geometry_domain: geometry,
             normal_mask_domain: geometry,

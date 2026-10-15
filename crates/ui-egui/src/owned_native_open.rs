@@ -128,6 +128,8 @@ fn open_path(app: &mut PhotocraftApp, path: &str, authority: Authority) -> Resul
         app.session.add_owned_native_threshold_alpha_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
     } else if photocraft_engine::accounted_native_open::is_current_threshold_candidate(archive.document(), &control).map_err(|e| e.to_string())? {
         app.session.add_owned_native_threshold_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
+    } else if photocraft_engine::accounted_native_open::is_current_isolated_gaussian_group_candidate(archive.document(), &control).map_err(|e| e.to_string())? {
+        app.session.add_owned_native_isolated_gaussian_group_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
     } else if photocraft_engine::accounted_native_open::is_current_isolated_normal_group_candidate(archive.document(), &control).map_err(|e| e.to_string())? {
         app.session.add_owned_native_isolated_normal_group_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
     } else if photocraft_engine::accounted_native_open::is_current_analytic_geometry_candidate(archive.document(), &control).map_err(|e| e.to_string())? {
@@ -172,6 +174,8 @@ pub(crate) fn adopt_bytes(
         app.session.add_owned_native_threshold_alpha_archive(archive, name, None, control).map_err(|e| e.to_string())?;
     } else if photocraft_engine::accounted_native_open::is_current_threshold_candidate(archive.document(), control).map_err(|e| e.to_string())? {
         app.session.add_owned_native_threshold_archive(archive, name, None, control).map_err(|e| e.to_string())?;
+    } else if photocraft_engine::accounted_native_open::is_current_isolated_gaussian_group_candidate(archive.document(), control).map_err(|e| e.to_string())? {
+        app.session.add_owned_native_isolated_gaussian_group_archive(archive, name, None, control).map_err(|e| e.to_string())?;
     } else if photocraft_engine::accounted_native_open::is_current_isolated_normal_group_candidate(archive.document(), control).map_err(|e| e.to_string())? {
         app.session.add_owned_native_isolated_normal_group_archive(archive, name, None, control).map_err(|e| e.to_string())?;
     } else if photocraft_engine::accounted_native_open::is_current_analytic_geometry_candidate(archive.document(), control).map_err(|e| e.to_string())? {

@@ -293,8 +293,15 @@ pub(in crate::xcf_import) fn promote_isolated_normal_group_source<'b, 'a, S: Pro
 ) -> Result<OwnedPlainXcfImport, IoError> {
     promote_source_inner(source,budget,limits,aggregate,existing,preparation,control,PromotionKind::IsolatedNormalGroup)
 }
+pub(in crate::xcf_import) fn promote_isolated_gaussian_group_source<'b, 'a, S: PromotionSource<'b, 'a>>(
+    source: S, budget: &'b photocraft_xcf::Budget<'a>, limits: &photocraft_xcf::ResourceLimits,
+    aggregate: u64, existing: Option<&existing_quota::Context<'_, '_>>,
+    preparation: &mut Option<existing_quota::PreparationHold>, control: &Interrupt<'_>,
+) -> Result<OwnedPlainXcfImport, IoError> {
+    promote_source_inner(source,budget,limits,aggregate,existing,preparation,control,PromotionKind::IsolatedGaussianGroup)
+}
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum PromotionKind { Plain, AnalyticGeometry, IsolatedNormalGroup }
+enum PromotionKind { Plain, AnalyticGeometry, IsolatedNormalGroup, IsolatedGaussianGroup }
 #[allow(clippy::too_many_arguments)]
 fn promote_source_inner<'b, 'a, S: PromotionSource<'b, 'a>>(
     source: S,
@@ -315,8 +322,10 @@ fn promote_source_inner<'b, 'a, S: PromotionSource<'b, 'a>>(
     }
     let mut incoming = Incoming { source, model: None, payload: None, bridge: None };
     let geometry = kind == PromotionKind::AnalyticGeometry;
-    let group = kind == PromotionKind::IsolatedNormalGroup;
-    let measured = if group { census::measure_isolated_normal_group(incoming.source.document(), budget, control)? }
+    let gaussian_group = kind == PromotionKind::IsolatedGaussianGroup;
+    let group = kind == PromotionKind::IsolatedNormalGroup || gaussian_group;
+    let measured = if gaussian_group { census::measure_isolated_gaussian_group(incoming.source.document(), budget, control)? }
+        else if group { census::measure_isolated_normal_group(incoming.source.document(), budget, control)? }
         else if geometry { census::measure_analytic_geometry(incoming.source.document(), &budget, control)? }
         else { census::measure(&incoming.source.document(), &budget, control)? };
     let reports = incoming.source.report_capacity_with_budget(budget)?;
@@ -341,6 +350,7 @@ fn promote_source_inner<'b, 'a, S: PromotionSource<'b, 'a>>(
     let mut phase_work = if group { isolated_group::phase_work(incoming.source.document(), measured.model, measured.payload, incoming.source.original_bytes().len() as u64, budget)? }
         else { native_phase_work(&incoming.source.document(), measured.model, measured.payload, incoming.source.original_bytes().len() as u64, &budget)? };
     if geometry { phase_work = add(phase_work, geometry_mask_work(incoming.source.document(), &budget)?)?; }
+    if gaussian_group { phase_work = add(phase_work, gaussian_filter_mask_work(incoming.source.document(), budget)?)?; }
     prepay_phase_work(&budget, phase_work)?;
     let remaining = std::sync::atomic::AtomicU64::new(phase_work);
     let work = |units: u64| -> Result<(), BackingError> {
@@ -434,9 +444,12 @@ fn promote_source_inner<'b, 'a, S: PromotionSource<'b, 'a>>(
     let Promoting { result, retention } = staged;
     let ImportResult { document, warnings, origin, assessment, source_read_only, preview_only } = result;
     phase_poll().map_err(backing)?;
-    let document = AccountedDocument::from_owned(document, retention.clone(), quota, &read).map_err(backing)?;
+    let document = if gaussian_group {
+        AccountedDocument::from_owned_readonly_gaussian_group(document, retention.clone(), quota, &read).map_err(backing)?
+    } else { AccountedDocument::from_owned(document, retention.clone(), quota, &read).map_err(backing)? };
     if geometry { document.validate_assigned_analytic_geometry_storage(&read).map_err(backing)?; }
-    if group { document.validate_assigned_isolated_normal_group_storage(&read).map_err(backing)?; }
+    if gaussian_group { document.validate_gaussian_group_storage(&read).map_err(backing)?; }
+    else if group { document.validate_assigned_isolated_normal_group_storage(&read).map_err(backing)?; }
     phase_poll().map_err(backing)?;
     control.check().map_err(|_| IoError::Cancelled)?;
     Ok(OwnedPlainXcfImport { document, warnings, origin, assessment, source_read_only, preview_only, _retention: retention })
@@ -452,4 +465,22 @@ fn geometry_mask_work(doc:&Document,budget:&photocraft_xcf::Budget<'_>)->Result<
  let native=(mask.surface.tile_count() as u64).checked_mul(65536).and_then(|n|n.checked_mul(mask.surface.format().bytes_per_pixel() as u64)).and_then(|n|n.checked_add(mask.surface.default_bytes().len() as u64)).ok_or_else(||invalid("geometry mask work"))?;
  work=add(work,native.checked_mul(4).and_then(|n|n.checked_add(4096)).ok_or_else(||invalid("geometry mask work"))?)?;
  }}Ok(work)
+}
+
+// Separate saved filter-mask storage coexists with the physical group mask
+// already counted by isolated_group::phase_work. No projection is fabricated.
+fn gaussian_filter_mask_work(doc: &Document, budget: &photocraft_xcf::Budget<'_>) -> Result<u64, IoError> {
+    let state = doc.xcf_state.as_ref().ok_or_else(|| invalid("Gaussian group mask state"))?;
+    if state.filter_masks.len() != 1 { return Err(invalid("Gaussian group mask count")); }
+    let mut work = 0u64;
+    for mask in &state.filter_masks {
+        budget.consume_work(1, "Gaussian group filter-mask work").map_err(accounting_error)?;
+        let native = (mask.surface.tile_count() as u64).checked_mul(65536)
+            .and_then(|n| n.checked_mul(mask.surface.format().bytes_per_pixel() as u64))
+            .and_then(|n| n.checked_add(mask.surface.default_bytes().len() as u64))
+            .ok_or_else(|| invalid("Gaussian group filter-mask work"))?;
+        work = add(work, native.checked_mul(8).and_then(|n| n.checked_add(65536))
+            .ok_or_else(|| invalid("Gaussian group filter-mask work"))?)?;
+    }
+    Ok(work)
 }

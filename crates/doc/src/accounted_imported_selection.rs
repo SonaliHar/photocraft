@@ -459,6 +459,10 @@ pub(super) fn copy_isolated_group(doc: &Document, quota: &BackingQuota, c: &Read
     super::imported_isolated_group::validate(doc, quota, c)?;
     copy_document_inner(doc, c, true)
 }
+pub(super) fn copy_gaussian_group(doc: &Document, quota: &BackingQuota, c: &ReadControl<'_>) -> Result<Document, BackingError> {
+    super::gaussian_group_readonly::shape(doc, quota, c)?;
+    copy_document_inner(doc, c, true)
+}
 fn copy_document_inner(doc: &Document, c: &ReadControl<'_>, isolated: bool) -> Result<Document, BackingError> {
     // Called only after the complete selection-specific census and reservations.
     // Every owned string/vector copied below is fallible and polls per record or

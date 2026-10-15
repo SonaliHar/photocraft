@@ -73,6 +73,9 @@ pub use owned_analytic_geometry_source::OwnedAnalyticGeometryXcfImport;
 #[path="xcf_import/owned_isolated_normal_group_source.rs"]
 mod owned_isolated_normal_group_source;
 pub use owned_isolated_normal_group_source::OwnedIsolatedNormalGroupXcfImport;
+#[path="xcf_import/owned_gaussian_group_source.rs"]
+mod owned_gaussian_group_source;
+pub use owned_gaussian_group_source::OwnedIsolatedGaussianGroupXcfImport;
 pub use owned_histogram_threshold_source::OwnedHistogramThresholdXcfImport;
 pub use owned_threshold_source::{OwnedThresholdAlphaXcfImport, import_owned_staged_threshold_alpha_bytes_in_quota};
 
@@ -2581,6 +2584,11 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF staged Point rendering consumer: {error}")) }
             }));
         }
+    } else if P::requires_budgeted_gaussian_group_preparation(gaussian_group_domain) {
+        let (shared, source_lease)=preparation.ok_or_else(||IoError::Unsupported("staged Gaussian group requires transaction accounting".into()))?;
+        let mut adapter=SharedPreparation{shared,failure:None};
+        let checked=photocraft_compose::backed_gaussian_group::LeasedGaussianGroupPipeline::new_budgeted(&doc,ctl,&mut adapter,source_lease);
+        if let Err(error)=checked {return Err(adapter.failure.map(accounting_error).unwrap_or_else(||if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("XCF staged Gaussian group rendering consumer: {error}"))}))}
     } else if P::requires_budgeted_neighborhood_preparation(owned_neighborhood_domain.is_some()) {
         let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("staged neighborhood scene requires transaction accounting".into()))?;
         let mut adapter = SharedPreparation { shared, failure: None };

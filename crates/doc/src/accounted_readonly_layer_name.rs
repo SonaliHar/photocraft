@@ -19,7 +19,7 @@ impl AccountedDocument {
             StorageClass::ReadonlyThresholdAlpha => filter_readonly::layer_named(self, patch, control),
             StorageClass::ReadonlyHistogramThreshold => threshold_readonly::layer_named(self, patch, control),
             StorageClass::ReadonlyPoint => point_readonly::layer_named(self, patch, control),
-            StorageClass::Legacy => Err(BackingError::Unsupported),
+            StorageClass::Legacy | StorageClass::ReadonlyGaussianGroup => Err(BackingError::Unsupported),
         }
     }
 }

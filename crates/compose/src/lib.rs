@@ -19,6 +19,8 @@
 pub mod adjust;
 pub mod advanced;
 pub mod backed_document;
+pub mod backed_gaussian_group;
+mod gimp_group_gaussian;
 pub mod backed_plain_current;
 pub mod backed_assigned_current;
 pub(crate) mod backed_analytic_geometry;
