@@ -1714,8 +1714,11 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         params = crate::select_mask_view::request_params(&d.fields, params);
     }
     let st = app.session.documents().get(idx)?;
-    // Filters whose features don't scale with a proxy preview at full resolution (#2063).
+    // Filters whose features don't scale with a proxy preview at full resolution (#2063). Never
+    // coarser than the screen, as adjustment previews (#5764): at 100 % a reduced proxy showed
+    // k-pixel blocks, hiding what Unsharp Mask or High Pass does (#6326).
     let k = crate::filter_dialog::preview_factor(&cmd, &params, crate::proxy::preview_factor(&st.doc, crate::proxy::reduced_previews(app)));
+    let k = crate::proxy::view_factor(k, app.current_zoom());
     let request = crate::filter_dialog::FilterPreviewKey {
         doc: st.doc.id,
         revision: st.revision,
@@ -8334,6 +8337,28 @@ mod layer_edges_tests;
 mod rotation_preview_isolation_tests {
     use super::*;
     use serde_json::json;
+
+    /// #6326: a filter's live preview is never coarser than the screen. On a document big
+    /// enough for a reduced proxy, the view at 100 % previews at full resolution, and only a view
+    /// zoomed out far enough uses the proxy.
+    #[test]
+    fn filter_preview_at_100_percent_is_full_resolution() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.background_jobs = false;
+        app.run("file.new", json!({"width": 2400, "height": 2200})).unwrap();
+        assert_eq!(crate::proxy::preview_factor(&app.session.active().unwrap().doc, true), 2, "big enough for a proxy");
+        crate::filter_dialog::open(&mut app, "filter.stylize.solarize").unwrap();
+        let ctx = egui::Context::default();
+        for (zoom, k) in [(1.0, 1), (0.25, 2)] {
+            if let Some(v) = app.ui.views.get_mut(0) {
+                v.zoom = zoom;
+            }
+            assert_eq!(app.current_zoom(), zoom);
+            let (got, _, size) = ensure_filter_preview(&mut app, 0, &ctx).unwrap();
+            assert_eq!(got, k, "zoom {zoom}");
+            assert_eq!(size, [2400 / k, 2200 / k], "zoom {zoom}");
+        }
+    }
 
     #[test]
     fn channel_overlay_shows_filter_preview_and_restores_on_cancel() {
