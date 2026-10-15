@@ -51,6 +51,10 @@ pub use staged_threshold_alpha::{StagedThresholdAlphaImport, import_staged_thres
 mod owned_plain_source;
 pub use owned_plain_source::{OwnedPlainXcfImport, import_owned_staged_plain_bytes, import_owned_staged_plain_bytes_in_quota, import_owned_staged_plain_from_reader_in_quota};
 
+#[path = "xcf_import/owned_threshold_source.rs"]
+mod owned_threshold_source;
+pub use owned_threshold_source::{OwnedThresholdAlphaXcfImport, import_owned_staged_threshold_alpha_bytes_in_quota};
+
 #[path = "xcf_import/source.rs"]
 mod source;
 pub use source::import_plain_source_with_budget;

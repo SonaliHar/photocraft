@@ -58,6 +58,85 @@ impl StagedThresholdAlphaImport<'_, '_> {
     }
 }
 
+impl<'b, 'a> StagedThresholdAlphaImport<'b, 'a> {
+    /// Internal owned-promotion preparation only. This census observes the
+    /// actual result capacities, never a caller-asserted statistics receipt.
+    pub(in crate::xcf_import) fn report_capacity_with_budget(&self, budget: &Budget<'_>) -> Result<u64, IoError> {
+        super::owned_plain_source::census::reports(&self.completed.result, budget)
+    }
+
+    /// Consumes the private transaction into existing genuine persistent
+    /// reservations. The caller must still perform its independently admitted
+    /// current-model/native-store adoption; this grants no renderer/source class.
+    pub(in crate::xcf_import) fn detach_owned(
+        self,
+        extra: &mut [&mut Reservation<'b, 'a>],
+        budget: &'b Budget<'a>,
+    ) -> Result<staged_source::OwnedStagedImport, IoError> {
+        struct Transfer<'b, 'a> {
+            // Every failure drops bytes/result BEFORE their actual entry fees.
+            encoded: Option<Arc<Vec<u8>>>,
+            completed: Option<staged_source::CompletedStagedImport<'b, 'a>>,
+            encoded_fee: Option<Reservation<'b, 'a>>,
+            resident_fee: Option<Reservation<'b, 'a>>,
+            header_names: Reservation<'b, 'a>,
+        }
+        let Self { encoded, completed, _encoded_fee, _resident_fee, _header_names } = self;
+        let mut transfer = Transfer {
+            encoded: Some(encoded),
+            completed: Some(completed),
+            encoded_fee: _encoded_fee,
+            resident_fee: _resident_fee,
+            header_names: _header_names,
+        };
+        if extra.len() > 4096 {
+            return Err(IoError::Unsupported("staged Threshold Alpha owned receipt count".into()));
+        }
+        let count = extra.len().checked_add(3).ok_or_else(|| IoError::Unsupported("staged Threshold Alpha owned receipt count".into()))?;
+        let requested = count
+            .checked_mul(std::mem::size_of::<&mut Reservation<'b, 'a>>())
+            .and_then(|n| n.checked_mul(2))
+            .and_then(|n| n.checked_add(128))
+            .ok_or_else(|| IoError::Unsupported("staged Threshold Alpha owned receipt index".into()))?;
+        let mut index =
+            budget.reserve(BudgetKind::Index, checked_u64(requested)?, "staged Threshold Alpha owned receipt references").map_err(accounting_error)?;
+        let mut references = Vec::new();
+        references.try_reserve_exact(count).map_err(|_| {
+            accounting_error(XcfError {
+                kind: ErrorKind::Allocation,
+                offset: 0,
+                item: String::new(),
+                message: "staged Threshold Alpha owned references allocation".into(),
+            })
+        })?;
+        let actual = references
+            .capacity()
+            .checked_mul(std::mem::size_of::<&mut Reservation<'b, 'a>>())
+            .and_then(|n| n.checked_add(128))
+            .ok_or_else(|| IoError::Unsupported("staged Threshold Alpha owned receipt capacity".into()))?;
+        if actual > requested {
+            return Err(IoError::Unsupported("staged Threshold Alpha owned receipt allocator capacity".into()));
+        }
+        index.resize(checked_u64(actual)?, "staged Threshold Alpha actual owned references").map_err(accounting_error)?;
+        budget.consume_work(count as u64, "staged Threshold Alpha owned receipt references").map_err(accounting_error)?;
+        references.push(transfer.encoded_fee.as_mut().ok_or_else(|| IoError::Unsupported("staged Threshold Alpha encoded receipt missing".into()))?);
+        references.push(transfer.resident_fee.as_mut().ok_or_else(|| IoError::Unsupported("staged Threshold Alpha resident receipt missing".into()))?);
+        references.push(&mut transfer.header_names);
+        for fee in extra {
+            references.push(&mut **fee);
+        }
+        // Only checked payload moves follow reference preparation. The called
+        // existing transfer owns both payloads across every fallible batch step;
+        // entry fees stay here until that transfer succeeds or drops its payload.
+        let completed = transfer.completed.take().ok_or_else(|| IoError::Unsupported("staged Threshold Alpha completion missing".into()))?;
+        let encoded = transfer.encoded.take().ok_or_else(|| IoError::Unsupported("staged Threshold Alpha source missing".into()))?;
+        let owned = completed.detach_owned(encoded, &mut references, budget)?;
+        drop(references);
+        drop(index);
+        Ok(owned)
+    }
+}
+
 fn plus(a: usize, b: usize) -> Result<usize, IoError> {
     a.checked_add(b).ok_or_else(|| IoError::Unsupported("staged Threshold Alpha retained capacity overflow".into()))
 }

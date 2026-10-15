@@ -84,6 +84,50 @@ pub const ALIEN_MAP_HSL_PRECISION_EPOCH: &str = "xcf-22-stock-alien-map-hsl-prec
 pub const ALIEN_MAP_PRECISION_EPOCH: &str = "xcf-22-stock-alien-map-precision-v1";
 pub const SEPIA_PRECISION_EPOCH: &str = "xcf-22-stock-sepia-precision-v1";
 pub const THRESHOLD_ALPHA_PRECISION_EPOCH: &str = "xcf-22-stock-threshold-alpha-precision-v1";
+
+/// Shared exact enabled singleton leaf check. This is current operation policy,
+/// not source correspondence. The original PointStack still performs its full
+/// generic preparation after this check; the alpha-only native consumer needs
+/// no unused color-transfer WorkingSpace allocation.
+pub(crate) fn validated_enabled_threshold_alpha(
+    source: &[FilterNode],
+    channels: usize,
+    stored: SampleEncoding,
+    version: u32,
+) -> Result<photocraft_algo::gimp::threshold_alpha::ThresholdAlpha> {
+    let [node] = source else { return Err(CompositionError::Unsupported("enabled singleton Threshold Alpha required")); };
+    let policy = node.composition.as_ref().ok_or(CompositionError::Unsupported("missing Threshold Alpha effect policy"))?;
+    if !node.enabled
+        || version != 22
+        || !matches!(channels, 1 | 3)
+        || !matches!(stored, SampleEncoding::Linear | SampleEncoding::NonlinearProfile)
+        || node.operation.name != "gimp:threshold-alpha"
+        || node.operation.stored_version != "0:0"
+        || node.operation.schema_epoch != THRESHOLD_ALPHA_PRECISION_EPOCH
+        || policy.compatibility_epoch != THRESHOLD_ALPHA_PRECISION_EPOCH
+        || policy.source_mode != 62
+        || policy.legacy
+        || policy.pass_through
+        || policy.resolved.is_some()
+        || (policy.stored_blend_space, policy.stored_composite_space, policy.stored_operator) != (2061861457, 2061861457, 2061861457)
+        || node.opacity_f64_bits != 1f64.to_bits()
+        || node.source_clipping != Some(0)
+        || node.source_region != Some(0)
+        || !node.auxiliary.is_empty()
+    {
+        return Err(CompositionError::Unsupported("unqualified enabled Threshold Alpha current policy"));
+    }
+    let [argument] = node.arguments.as_slice() else { return Err(CompositionError::Unsupported("Threshold Alpha single stored argument")); };
+    let FilterValue::Number(ExactNumber::Float32Bits(bits)) = argument.value else { return Err(CompositionError::Unsupported("Threshold Alpha stored Float32 argument")); };
+    if argument.name != "value" {
+        return Err(CompositionError::Unsupported("Threshold Alpha stored argument name"));
+    }
+    let (_, operation) = point_member("gimp:threshold-alpha", Some(&node.operation.stored_version), &[("value", f64::from(f32::from_bits(bits)))])?;
+    let PointOperation::ThresholdAlpha { value } = operation else { return Err(CompositionError::Invalid("Threshold Alpha registry member")); };
+    let operation = photocraft_algo::gimp::threshold_alpha::ThresholdAlpha { value };
+    operation.validate()?;
+    Ok(operation)
+}
 pub const THRESHOLD_PRECISION_EPOCH: &str = "xcf-22-stock-threshold-precision-v1";
 pub const SATURATION_GRAY_PRECISION_EPOCH: &str = "xcf-22-stock-gray-saturation-precision-v1";
 pub const SATURATION_PRECISION_EPOCH: &str = "xcf-22-stock-saturation-precision-v1";
@@ -371,6 +415,9 @@ impl PointStack {
                 || controlled::iter(source, control).any(|node| node.operation.schema_epoch != THRESHOLD_ALPHA_PRECISION_EPOCH || node.operation.name != "gimp:threshold-alpha"))
         {
             return Err(CompositionError::Unsupported("unqualified witnessed Alpha Threshold precision domain"));
+        }
+        if threshold_alpha && source.first().is_some_and(|node| node.enabled) {
+            validated_enabled_threshold_alpha(source, profile.channels(), stored, version)?;
         }
         let threshold = controlled::iter(source, control).any(|node| node.operation.schema_epoch == THRESHOLD_PRECISION_EPOCH);
         if controlled::iter(source, control).any(|node| node.operation.name == "gimp:threshold")

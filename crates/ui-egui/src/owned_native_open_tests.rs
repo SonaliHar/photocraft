@@ -196,3 +196,61 @@ fn scoped_open_requires_path_and_capability_without_picker_or_ambient_fallback()
     assert!(app.session.documents().is_empty());
     assert!(app.file_dialog.is_none());
 }
+
+// UNRUN: a stored name selects the strict validator, never successful adoption
+// or a retry through the ordinary Legacy class when that validator refuses.
+#[test]
+fn unqualified_threshold_archive_refuses_both_native_authorities_without_legacy_fallback() {
+    use photocraft_doc::{
+        item_identity::{FilterId, ItemRef},
+        xcf_filters::{FilterNode, FilterStack, OperationIdentity},
+    };
+    let plain = packet();
+    let _model_fee = plain.quota.reserve(QuotaKind::Resident, 2 << 20).unwrap();
+    let mut document = plain.original.document().clone();
+    let layer = document.layers[0].id;
+    document.xcf_state.as_mut().unwrap().filter_stacks.push(FilterStack {
+        owner: ItemRef::Layer(layer),
+        revision: 0,
+        nodes: vec![FilterNode {
+            id: FilterId(100),
+            operation: OperationIdentity { name: "gimp:threshold-alpha".into(), stored_version: "0:0".into(), schema_epoch: "unqualified".into() },
+            arguments: Vec::new(),
+            source_display_name: None,
+            source_icon: None,
+            enabled: true,
+            opacity_f64_bits: 1f64.to_bits(),
+            source_clipping: Some(0),
+            source_region: Some(0),
+            mask: None,
+            auxiliary: Vec::new(),
+            composition: None,
+        }],
+    });
+    let bytes =
+        photocraft_format::owned_document::save_current_document_archive(&document, Cursor::new(Vec::new()), Default::default(), &plain.quota, &control())
+            .unwrap()
+            .into_inner();
+    let lease = plain.quota.reserve(QuotaKind::Resident, bytes.capacity() as u64).unwrap();
+    let source = Arc::new(Packet { bytes, original: plain.original.clone(), quota: plain.quota.clone(), _lease: lease });
+    for rooted in [false, true] {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let services = if rooted {
+            Services { automation_owned_native_open: Some(service(source.clone(), seen.clone())), ..Default::default() }
+        } else {
+            Services { owned_native_open: Some(service(source.clone(), seen.clone())), ..Default::default() }
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let before = source.quota.usage().unwrap();
+        let result = if rooted {
+            invoke_authorized(&mut app, &json!({"path":"rooted/current.pcraft","nativeProfilePolicy":"keepCurrent"}))
+        } else {
+            invoke(&mut app, &json!({"path":"selected/current.pcraft","nativeProfilePolicy":"keepCurrent"}))
+        };
+        assert!(result.is_err());
+        assert_eq!(seen.borrow().len(), 1);
+        assert!(app.session.documents().is_empty());
+        assert!(app.ui.recent_files.is_empty());
+        assert_eq!(source.quota.usage().unwrap(), before);
+    }
+}

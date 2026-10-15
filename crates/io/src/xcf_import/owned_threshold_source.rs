@@ -1,0 +1,280 @@
+//! Explicit same-catalog promotion of the sealed staged Threshold Alpha class.
+//! Runtime storage adoption is read-only: no source, renderer, edit or default
+//! loader authority is inferred from the persisted node or receipt sizes.
+use super::owned_plain_source::{census, existing_quota::PreparationHold, store};
+use super::*;
+use photocraft_doc::{BackedLayer, accounted_document::AccountedDocument};
+use photocraft_raster::backing::{
+    BackedRaster, BackingError, NativePlaneDescriptor, ReadControl,
+    quota::{BackingQuota, QuotaBaseline},
+};
+use photocraft_xcf::{BudgetKind, OwnedReservationBatch, PhysicalUsage};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+fn invalid(message: &str) -> IoError {
+    IoError::Unsupported(message.into())
+}
+fn add(a: u64, b: u64) -> Result<u64, IoError> {
+    a.checked_add(b).ok_or_else(|| invalid("owned Threshold Alpha capacity overflow"))
+}
+fn kind(error: BackingError) -> ErrorKind {
+    match error {
+        BackingError::Cancelled => ErrorKind::Cancelled,
+        BackingError::Quota | BackingError::Allocation | BackingError::Work | BackingError::Length => ErrorKind::Limit,
+        BackingError::Unsupported => ErrorKind::Unsupported,
+        _ => ErrorKind::Structure,
+    }
+}
+fn backing(error: BackingError) -> IoError {
+    accounting_error(XcfError { kind: kind(error), offset: 0, item: String::new(), message: format!("owned Threshold Alpha: {error}") })
+}
+fn combined(a: PhysicalUsage, b: PhysicalUsage) -> Result<PhysicalUsage, IoError> {
+    Ok(PhysicalUsage {
+        resident_bytes: add(a.resident_bytes, b.resident_bytes)?,
+        index_bytes: add(a.index_bytes, b.index_bytes)?,
+        scratch_bytes: add(a.scratch_bytes, b.scratch_bytes)?,
+    })
+}
+// No Document or Surface in this owner, so stores/model cannot form an Arc cycle.
+// Every source allocation dies before its actual decoder/surface/baseline fees.
+struct Retention {
+    _encoded: Arc<Vec<u8>>,
+    _source: Option<OwnedReservationBatch>,
+    _surfaces: OwnedReservationBatch,
+    _baseline: QuotaBaseline,
+    quota: BackingQuota,
+}
+impl store::RetainedSource for Retention {
+    fn actual_quota(&self) -> &BackingQuota {
+        &self.quota
+    }
+}
+pub struct OwnedThresholdAlphaXcfImport {
+    document: AccountedDocument,
+    warnings: Vec<String>,
+    origin: ImportOrigin,
+    assessment: Option<crate::xcf_assessment::ImportAssessment>,
+    source_read_only: bool,
+    preview_only: bool,
+    _retention: Arc<Retention>,
+}
+impl std::fmt::Debug for OwnedThresholdAlphaXcfImport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OwnedThresholdAlphaXcfImport").field("document_id", &self.document.document().id).finish_non_exhaustive()
+    }
+}
+impl OwnedThresholdAlphaXcfImport {
+    pub fn document(&self) -> &AccountedDocument {
+        &self.document
+    }
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
+    }
+    pub fn origin(&self) -> ImportOrigin {
+        self.origin
+    }
+    pub fn assessment(&self) -> Option<&crate::xcf_assessment::ImportAssessment> {
+        self.assessment.as_ref()
+    }
+    pub fn source_read_only(&self) -> bool {
+        self.source_read_only
+    }
+    pub fn preview_only(&self) -> bool {
+        self.preview_only
+    }
+    pub fn into_accounted_document(self) -> AccountedDocument {
+        self.document
+    }
+}
+fn phase_work(doc: &Document, model: u64, payload: u64, source: u64, budget: &photocraft_xcf::Budget<'_>) -> Result<u64, IoError> {
+    let state = doc.xcf_state.as_ref().ok_or_else(|| invalid("threshold phase state"))?;
+    let mut native = 0u64;
+    let mut tiles = 0u64;
+    // Real padded native tiles and defaults, including the retained resident mask.
+    // No logical 8x6 estimate substitutes for those physical validation visits.
+    for surface in doc
+        .layers
+        .iter()
+        .filter_map(|layer| match &layer.content {
+            LayerContent::Raster(s) => Some(s),
+            _ => None,
+        })
+        .chain(state.filter_masks.iter().map(|mask| &mask.surface))
+    {
+        budget.consume_work(1, "threshold phase physical census").map_err(accounting_error)?;
+        let count = surface.tile_count() as u64;
+        tiles = add(tiles, count)?;
+        native = add(
+            native,
+            count
+                .checked_mul(65536)
+                .and_then(|n| n.checked_mul(surface.format().bytes_per_pixel() as u64))
+                .ok_or_else(|| invalid("threshold phase native bytes"))?,
+        )?;
+        native = add(native, surface.default_bytes().len() as u64)?;
+    }
+    let retained = add(add(model, payload)?, source)?.checked_mul(4).ok_or_else(|| invalid("threshold retained work"))?;
+    add(
+        add(native.checked_mul(2).ok_or_else(|| invalid("threshold native validation work"))?, retained)?,
+        add(tiles.checked_mul(512).ok_or_else(|| invalid("threshold tile metadata work"))?, 8192)?,
+    )
+}
+fn prepay(budget: &photocraft_xcf::Budget<'_>, units: u64) -> Result<(), IoError> {
+    budget.check(BudgetKind::Work, add(budget.used(BudgetKind::Work), units)?, "threshold native phase admission").map_err(accounting_error)?;
+    let mut left = units;
+    while left != 0 {
+        let n = left.min(4096);
+        budget.consume_work(n, "threshold native phase prepaid").map_err(accounting_error)?;
+        left -= n;
+    }
+    Ok(())
+}
+/// Import only the existing sealed source class into the caller's actual catalog.
+/// Explicit Scratch0 is required. Initial input allocation remains caller-owned;
+/// bounded reader capture must retain its overlapping fee until this call returns.
+/// A complete lowered R/I preparation hold precedes the persistent decoder Budget.
+/// Its real fees become the exact detached source/surface/model baseline without
+/// a refund/recharge interval. Standard prepaid Arc/map allocator boundaries apply.
+pub fn import_owned_staged_threshold_alpha_bytes_in_quota(
+    name: &str,
+    bytes: Arc<Vec<u8>>,
+    options: &DecodeOptions<'_>,
+    limits: &photocraft_xcf::ResourceLimits,
+    quota: BackingQuota,
+    control: &ReadControl<'_>,
+) -> Result<OwnedThresholdAlphaXcfImport, IoError> {
+    control.check(1).map_err(backing)?;
+    if name.len() > 1 << 20 {
+        return Err(invalid("threshold import name ceiling"));
+    }
+    let effective =
+        limits.lowered(&[("residentBytes", limits.get(BudgetKind::Resident).min(options.limits.resident_bytes as u64))]).map_err(accounting_error)?;
+    struct Input {
+        bytes: Option<Arc<Vec<u8>>>,
+        hold: Option<PreparationHold>,
+    }
+    let mut input = Input { bytes: Some(bytes), hold: None };
+    input.hold = Some(PreparationHold::reserve(&quota, &effective, control)?);
+    let cancelled = || control.interrupt.cancelled() || options.cancelled.is_some_and(|f| f());
+    let observer = |units| {
+        control.check(units).map_err(|error| XcfError {
+            kind: kind(error),
+            offset: 0,
+            item: String::new(),
+            message: format!("Threshold Alpha enclosing work: {error}"),
+        })
+    };
+    let budget = photocraft_xcf::Budget::new_persistent_with_work(effective, Some(&cancelled), Some(&observer)).map_err(accounting_error)?;
+    // Supplemental capacity fees are declared before the holder: every error
+    // destroys the already-mapped payload before these extra real fees refund.
+    struct Supplemental<'b, 'a> {
+        model: Option<photocraft_xcf::Reservation<'b, 'a>>,
+        payload: Option<photocraft_xcf::Reservation<'b, 'a>>,
+        bridge: Option<photocraft_xcf::Reservation<'b, 'a>>,
+    }
+    let mut supplemental = Supplemental { model: None, payload: None, bridge: None };
+    let staged = staged_threshold_alpha::import_staged_threshold_alpha_bytes_with_budget(
+        name,
+        input.bytes.take().ok_or_else(|| invalid("threshold source already moved"))?,
+        control.interrupt,
+        options,
+        &budget,
+    )?;
+    let measured = census::measure_threshold(staged.document(), &budget, control.interrupt)?;
+    // The holder's result is exposed only as borrowed fields; this sibling
+    // report census does not acquire a public extraction or source grant.
+    let reports = staged.report_capacity_with_budget(&budget)?;
+    supplemental.model =
+        Some(budget.reserve(BudgetKind::Index, add(measured.model, reports)?, "threshold actual model/report capacities").map_err(accounting_error)?);
+    supplemental.payload = Some(budget.reserve(BudgetKind::Resident, measured.payload, "threshold raw/profile capacities").map_err(accounting_error)?);
+    let bridge_bytes = add(
+        add(std::mem::size_of::<Retention>() as u64, std::mem::size_of::<OwnedThresholdAlphaXcfImport>() as u64)?,
+        add(std::mem::size_of::<store::SurfaceStore<Retention>>() as u64, 4096)?,
+    )?;
+    supplemental.bridge = Some(budget.reserve(BudgetKind::Index, bridge_bytes, "threshold owned bridge headers").map_err(accounting_error)?);
+    let phase = phase_work(staged.document(), measured.model, measured.payload, staged.original_bytes().len() as u64, &budget)?;
+    prepay(&budget, phase)?;
+    let remaining = AtomicU64::new(phase);
+    let work = |units| remaining.try_update(Ordering::AcqRel, Ordering::Relaxed, |left| left.checked_sub(units)).map(|_| ()).map_err(|_| BackingError::Work);
+    let poll = || {
+        budget
+            .poll("threshold promotion original controls")
+            .map_err(|error| if error.kind == ErrorKind::Cancelled { BackingError::Cancelled } else { BackingError::Work })
+    };
+    let read = ReadControl { interrupt: control.interrupt, work: &work };
+    let bounds = staged.document().bounds();
+    for layer in &staged.document().layers {
+        let LayerContent::Raster(surface) = &layer.content else { return Err(invalid("threshold staged layer")) };
+        store::validate(surface, bounds, &read, &poll).map_err(backing)?;
+    }
+    if let Some(state) = &staged.document().xcf_state {
+        for mask in &state.filter_masks {
+            store::validate(&mask.surface, mask.bounds, &read, &poll).map_err(backing)?;
+        }
+    }
+    let owned = staged.detach_owned(
+        &mut [
+            supplemental.model.as_mut().ok_or_else(|| invalid("threshold model fee missing"))?,
+            supplemental.payload.as_mut().ok_or_else(|| invalid("threshold payload fee missing"))?,
+            supplemental.bridge.as_mut().ok_or_else(|| invalid("threshold bridge fee missing"))?,
+        ],
+        &budget,
+    )?;
+    let mut physical = owned.surface_batch.physical_usage();
+    let header = owned.surface_batch.ledger_header();
+    if let Some(source) = &owned.source_batch {
+        if !header.shares_ledger(source.ledger_header()) {
+            return Err(invalid("threshold receipt ledger mismatch"));
+        }
+        physical = combined(physical, source.physical_usage())?;
+    }
+    physical = combined(physical, header.physical_usage())?;
+    let hold = input.hold.as_mut().ok_or_else(|| invalid("threshold preparation hold missing"))?;
+    hold.retain_physical(physical, measured.layers, &read)?;
+    let hold = input.hold.take().ok_or_else(|| invalid("threshold preparation hold moved"))?;
+    let baseline = match hold.into_baseline() {
+        Ok(baseline) => baseline,
+        Err((error, hold)) => {
+            input.hold = Some(hold);
+            return Err(error);
+        }
+    };
+    let staged_source::OwnedStagedImport { result, encoded, source_batch, surface_batch } = owned;
+    let retention = Arc::new(Retention { _encoded: encoded, _source: source_batch, _surfaces: surface_batch, _baseline: baseline, quota: quota.clone() });
+    struct Promoting {
+        result: ImportResult,
+        retention: Arc<Retention>,
+    }
+    let mut promoting = Promoting { result, retention };
+    for layer in &mut promoting.result.document.layers {
+        poll().map_err(backing)?;
+        read.check(1).map_err(backing)?;
+        let placeholder = LayerContent::Group(photocraft_doc::Group { children: Vec::new(), expanded: false, artboard: None });
+        let LayerContent::Raster(surface) = std::mem::replace(&mut layer.content, placeholder) else {
+            return Err(invalid("threshold raster transferred twice"));
+        };
+        let descriptor = NativePlaneDescriptor::new(surface.format(), bounds, surface.default_bytes()).map_err(backing)?;
+        let store = Arc::new(store::SurfaceStore::new(surface, descriptor, promoting.retention.clone(), quota.clone()));
+        let raster = BackedRaster::new(store, quota.clone(), 1, &read).map_err(backing)?;
+        layer.content = LayerContent::BackedRaster(BackedLayer::new(raster, descriptor, &read).map_err(|error| match error {
+            photocraft_doc::BackedLayerError::Backing(error) => backing(error),
+            _ => backing(BackingError::Integrity),
+        })?);
+    }
+    poll().map_err(backing)?;
+    // Keep one already-paid Arc reference declared before all extracted report
+    // locals, so adoption/poll failures cannot refund their physical owner early.
+    let retention_guard = promoting.retention.clone();
+    let Promoting { result, retention } = promoting;
+    let ImportResult { document, warnings, origin, assessment, source_read_only, preview_only } = result;
+    let document = AccountedDocument::from_owned_readonly_threshold_alpha_storage(document, retention.clone(), quota, &read).map_err(backing)?;
+    poll().map_err(backing)?;
+    control.interrupt.check().map_err(|_| IoError::Cancelled)?;
+    let output = OwnedThresholdAlphaXcfImport { document, warnings, origin, assessment, source_read_only, preview_only, _retention: retention };
+    drop(retention_guard);
+    Ok(output)
+}
+
+#[cfg(test)]
+#[path = "owned_threshold_source/tests.rs"]
+mod tests;

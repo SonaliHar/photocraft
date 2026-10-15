@@ -2,18 +2,28 @@
 use super::*;
 use photocraft_geom::TileCoord;
 use photocraft_raster::backing::{NativePlaneDescriptor, NativePlaneStore, NativeTileVisitor};
-pub(super) struct SurfaceStore {
+/// Internal lifetime contract for a moved native Surface. This exposes only the
+/// actual ledger; it is not a census receipt or source/render authority.
+pub(in crate::xcf_import) trait RetainedSource: Send + Sync {
+    fn actual_quota(&self) -> &BackingQuota;
+}
+impl RetainedSource for Retention {
+    fn actual_quota(&self) -> &BackingQuota {
+        &self.quota
+    }
+}
+pub(in crate::xcf_import) struct SurfaceStore<R: RetainedSource = Retention> {
     surface: Surface,
     descriptor: NativePlaneDescriptor,
-    retention: Arc<Retention>,
+    retention: Arc<R>,
     quota: BackingQuota,
 }
-impl std::fmt::Debug for SurfaceStore {
+impl<R: RetainedSource> std::fmt::Debug for SurfaceStore<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OwnedXcfSurfaceStore").field("descriptor", &self.descriptor).finish_non_exhaustive()
     }
 }
-pub(super) fn validate(
+pub(in crate::xcf_import) fn validate(
     surface: &Surface,
     bounds: Rect,
     c: &ReadControl<'_>,
@@ -49,17 +59,17 @@ pub(super) fn validate(
     c.check(1)?;
     Ok(descriptor)
 }
-impl SurfaceStore {
-    pub(super) fn new(surface: Surface, descriptor: NativePlaneDescriptor, retention: Arc<Retention>, quota: BackingQuota) -> Self {
+impl<R: RetainedSource> SurfaceStore<R> {
+    pub(in crate::xcf_import) fn new(surface: Surface, descriptor: NativePlaneDescriptor, retention: Arc<R>, quota: BackingQuota) -> Self {
         Self { surface, descriptor, retention, quota }
     }
 }
-impl NativePlaneStore for SurfaceStore {
+impl<R: RetainedSource> NativePlaneStore for SurfaceStore<R> {
     fn descriptor(&self) -> NativePlaneDescriptor {
         self.descriptor
     }
     fn validate_quota(&self, q: &BackingQuota) -> Result<(), BackingError> {
-        if self.quota.shares_ledger(q) && self.retention.quota.shares_ledger(q) { Ok(()) } else { Err(BackingError::Quota) }
+        if self.quota.shares_ledger(q) && self.retention.actual_quota().shares_ledger(q) { Ok(()) } else { Err(BackingError::Quota) }
     }
     fn visit_native_tile(&self, coord: TileCoord, c: &ReadControl<'_>, stage: &mut NativeTileVisitor<'_>) -> Result<bool, BackingError> {
         c.check(1)?;
@@ -101,3 +111,7 @@ impl NativePlaneStore for SurfaceStore {
         c.check(1)
     }
 }
+
+#[cfg(test)]
+#[path = "store_tests.rs"]
+mod tests;

@@ -62,6 +62,12 @@ pub struct OwnedDocumentArchive {
     _archive: Arc<dyn ImmutableCanonicalArchive>,
     _model: RetainedReservations,
 }
+// This is a stack-only choice. Neither native manifest data nor an archive
+// loader selects the immutable storage class on the caller's behalf.
+enum AccountedHandoff {
+    Document,
+    ReadonlyThresholdAlphaStorage,
+}
 impl OwnedDocumentArchive {
     /// The actual ledger retaining this archive's model and encoded storage.
     /// Borrow it to prepay related handoff metadata on the same owner; equal
@@ -73,6 +79,23 @@ impl OwnedDocumentArchive {
     /// Move the native model and every retained archive/model lease into the
     /// application lifecycle owner. No model clone or unaccounted extraction.
     pub fn into_accounted_document(self, control: &ReadControl<'_>) -> Result<photocraft_doc::accounted_document::AccountedDocument> {
+        self.into_accounted_with(control, AccountedHandoff::Document)
+    }
+
+    /// Explicit consuming handoff of the closed immutable Threshold Alpha
+    /// storage class. Retains the actual archive/model/native leases on their
+    /// original quota; no whole-document clone or sample conversion occurs.
+    ///
+    /// This validates current storage only. The caller must establish any source,
+    /// profile, rendering or application recipe separately; persisted epochs and
+    /// locators restore none of those authorities. Saved selection is refused by
+    /// the closed document constructor. The normal archive handoff is unchanged
+    /// and never automatically selects this endpoint from serialized fields.
+    pub fn into_accounted_readonly_threshold_alpha_storage(self, control: &ReadControl<'_>) -> Result<photocraft_doc::accounted_document::AccountedDocument> {
+        self.into_accounted_with(control, AccountedHandoff::ReadonlyThresholdAlphaStorage)
+    }
+
+    fn into_accounted_with(self, control: &ReadControl<'_>, handoff: AccountedHandoff) -> Result<photocraft_doc::accounted_document::AccountedDocument> {
         struct NativeRetention {
             _archive: Arc<dyn ImmutableCanonicalArchive>,
             _model: RetainedReservations,
@@ -87,13 +110,20 @@ impl OwnedDocumentArchive {
         control.check(0).map_err(error)?;
         let Self { document, _archive, _model } = self;
         let retention = Arc::new(NativeRetention { _archive, _model, _owner: lease });
-        photocraft_doc::accounted_document::AccountedDocument::from_owned_rehydrating_selection(document, retention, quota, control).map_err(error)
+        match handoff {
+            AccountedHandoff::Document => photocraft_doc::accounted_document::AccountedDocument::from_owned_rehydrating_selection(document, retention, quota, control),
+            AccountedHandoff::ReadonlyThresholdAlphaStorage => photocraft_doc::accounted_document::AccountedDocument::from_owned_readonly_threshold_alpha_storage(document, retention, quota, control),
+        }.map_err(error)
     }
 
     pub fn document(&self) -> &Document {
         &self.document
     }
 }
+
+#[cfg(test)]
+#[path = "owned_document/threshold_alpha_storage_tests.rs"]
+mod threshold_alpha_storage_tests;
 pub(crate) fn error(error: BackingError) -> FormatError {
     if error == BackingError::Cancelled { FormatError::Cancelled } else { FormatError::Io(std::io::Error::other(error)) }
 }

@@ -46,6 +46,7 @@ impl AccountedDocument {
         let Incoming { document, selection, view, retention } = incoming;
         Ok(Self {
             owner: Arc::new(ModelOwner {
+                _storage_class: StorageClass::Legacy,
                 document,
                 _selection: selection,
                 _selection_view: view,

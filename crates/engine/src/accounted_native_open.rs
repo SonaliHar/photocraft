@@ -10,6 +10,11 @@ use photocraft_raster::backing::{BackingError, ReadControl};
 pub enum AccountedNativeOpenPolicy {
     KeepCurrentInterpretation,
 }
+#[derive(Clone, Copy)]
+enum NativeHandoff {
+    Document,
+    CurrentThresholdAlpha,
+}
 
 fn text(value: &str, c: &ReadControl<'_>) -> Result<String> {
     let mut owned = String::new();
@@ -41,6 +46,32 @@ impl Session {
         match policy {
             AccountedNativeOpenPolicy::KeepCurrentInterpretation => {}
         }
+        self.add_owned_native_with(archive, label, authorized_native_path, control, NativeHandoff::Document)
+    }
+
+    /// Explicit current Threshold Alpha reopen over the closed immutable native
+    /// storage class. Current encoded ICC, implicit marker, composition and mask
+    /// recipe are checked on their actual retained owner before publication.
+    /// This supplies no original-XCF correspondence or restored locator grant.
+    /// The ordinary owned native endpoint never selects this class itself.
+    pub fn add_owned_native_threshold_alpha_archive(
+        &mut self,
+        archive: OwnedDocumentArchive,
+        label: &str,
+        authorized_native_path: Option<&str>,
+        control: &ReadControl<'_>,
+    ) -> Result<usize> {
+        self.add_owned_native_with(archive, label, authorized_native_path, control, NativeHandoff::CurrentThresholdAlpha)
+    }
+
+    fn add_owned_native_with(
+        &mut self,
+        archive: OwnedDocumentArchive,
+        label: &str,
+        authorized_native_path: Option<&str>,
+        control: &ReadControl<'_>,
+        handoff: NativeHandoff,
+    ) -> Result<usize> {
         control.check(1)?;
         let path_len = authorized_native_path.map_or(0, str::len);
         if label.len() > 4096 || path_len > 4096 || self.docs.len() >= 4096 {
@@ -57,13 +88,49 @@ impl Session {
                 return Err(EngineError::Other("an open document already owns this accounted identity".into()));
             }
         }
-        let document = archive.into_accounted_document(control).map_err(|error| {
+        let document = match handoff {
+            NativeHandoff::Document => archive.into_accounted_document(control),
+            NativeHandoff::CurrentThresholdAlpha => archive.into_accounted_readonly_threshold_alpha_storage(control),
+        }.map_err(|error| {
             if matches!(error, photocraft_format::FormatError::Cancelled) {
                 EngineError::Cancelled
             } else {
                 EngineError::Other(format!("owned native reopen: {error}"))
             }
         })?;
+        if let NativeHandoff::CurrentThresholdAlpha = handoff {
+            // Builtin initialization is the existing outer-polled provider
+            // boundary. No current Profile parsing, cloning, or encoding is
+            // requested here: the context requires already-retained encoding
+            // and compares it exactly with actual saved current ICC bytes.
+            control.check(1)?;
+            let profile = match document.document().mode {
+                photocraft_doc::ColorMode::Rgb => photocraft_cms::Builtin::Srgb.profile(),
+                photocraft_doc::ColorMode::Grayscale => photocraft_cms::Builtin::SGray.profile(),
+                _ => return Err(BackingError::Unsupported.into()),
+            };
+            control.check(1)?;
+            let prepared = photocraft_compose::backed_threshold_alpha_context::PreparedBackedThresholdAlphaContext::new(
+                &document, profile, Default::default(), control,
+            ).map_err(|error| match error {
+                photocraft_compose::backed_normal::BackedNormalError::Backing(error) => EngineError::from(error),
+                _ if control.interrupt.cancelled() => EngineError::Cancelled,
+                other => EngineError::Other(format!("owned native current Threshold Alpha: {other}")),
+            })?;
+            // The closed canvas is 8x6. Validate its operative native values on
+            // the same quota/control before publishing a tab; physical backing
+            // padding and original-source correspondence remain separate.
+            let band = prepared.render_band(document.document().bounds(), control).map_err(|error| match error {
+                photocraft_compose::backed_point_filter::BackedPointError::Backing(error) => EngineError::from(error),
+                _ if control.interrupt.cancelled() => EngineError::Cancelled,
+                other => EngineError::Other(format!("owned native current Threshold Alpha band: {other}")),
+            })?;
+            drop(band);
+            // This borrowed preparation is not a persistent rendering grant.
+            // A future render job must prepare/pay against its own held snapshot.
+            drop(prepared);
+            control.check(1)?;
+        }
         let history_states = self.prefs.get().performance.history_states.max(1) as usize;
         let mut state = DocState::new_accounted(document, None, history_states, control)?;
         // Inline SourceIdentity/path fields were priced by new_accounted. Pay
@@ -97,3 +164,6 @@ impl Session {
 #[cfg(test)]
 #[path = "accounted_native_open_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "accounted_native_threshold_alpha_open_tests.rs"]
+mod threshold_alpha_tests;

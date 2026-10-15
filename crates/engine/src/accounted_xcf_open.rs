@@ -4,6 +4,13 @@ use crate::{DocState, EngineError, Result, Session, source_policy::SourceIdentit
 use photocraft_io::OwnedPlainXcfImport;
 use photocraft_raster::backing::{BackingError, ReadControl};
 
+struct ImportedModel<'a> {
+    document: &'a photocraft_doc::accounted_document::AccountedDocument,
+    origin: photocraft_io::ImportOrigin,
+    source_read_only: bool,
+    preview_only: bool,
+}
+
 fn text(value: &str, control: &ReadControl<'_>) -> Result<String> {
     let mut copy = String::new();
     copy.try_reserve_exact(value.len()).map_err(|_| BackingError::Allocation)?;
@@ -35,8 +42,63 @@ impl Session {
         source_path: Option<&str>,
         control: &ReadControl<'_>,
     ) -> Result<usize> {
+        self.add_owned_xcf_model(
+            ImportedModel {
+                document: imported.document(),
+                origin: imported.origin(),
+                source_read_only: imported.source_read_only(),
+                preview_only: imported.preview_only(),
+            },
+            label,
+            source_path,
+            control,
+        )
+    }
+
+    /// Publish a genuinely retained qualified Threshold Alpha import. The
+    /// current recipe and complete operative band must succeed before a tab,
+    /// history or runtime source identity is installed. Original encoded source
+    /// ownership remains with the import; persisted locators grant no access.
+    pub fn add_owned_threshold_alpha_xcf_import(
+        &mut self,
+        imported: &photocraft_io::OwnedThresholdAlphaXcfImport,
+        label: &str,
+        source_path: Option<&str>,
+        control: &ReadControl<'_>,
+    ) -> Result<usize> {
         control.check(1)?;
-        if imported.origin() != photocraft_io::ImportOrigin::xcf() || imported.preview_only() {
+        let owner = imported.document();
+        let builtin = match owner.document().mode {
+            photocraft_doc::ColorMode::Rgb => photocraft_cms::Builtin::Srgb,
+            photocraft_doc::ColorMode::Grayscale => photocraft_cms::Builtin::SGray,
+            _ => return Err(BackingError::Unsupported.into()),
+        };
+        let profile = builtin.profile();
+        control.check(1)?;
+        let prepared =
+            photocraft_compose::backed_threshold_alpha_context::PreparedBackedThresholdAlphaContext::new(owner, profile, Default::default(), control).map_err(
+                |error| match error {
+                    photocraft_compose::backed_normal::BackedNormalError::Backing(error) => EngineError::from(error),
+                    other => EngineError::Other(format!("owned Threshold Alpha current recipe: {other}")),
+                },
+            )?;
+        let band = prepared.render_band(owner.document().bounds(), control).map_err(|error| match error {
+            photocraft_compose::backed_point_filter::BackedPointError::Backing(error) => EngineError::from(error),
+            other => EngineError::Other(format!("owned Threshold Alpha operative band: {other}")),
+        })?;
+        drop(band);
+        drop(prepared);
+        self.add_owned_xcf_model(
+            ImportedModel { document: owner, origin: imported.origin(), source_read_only: imported.source_read_only(), preview_only: imported.preview_only() },
+            label,
+            source_path,
+            control,
+        )
+    }
+
+    fn add_owned_xcf_model(&mut self, imported: ImportedModel<'_>, label: &str, source_path: Option<&str>, control: &ReadControl<'_>) -> Result<usize> {
+        control.check(1)?;
+        if imported.origin != photocraft_io::ImportOrigin::xcf() || imported.preview_only {
             return Err(BackingError::Unsupported.into());
         }
         let path_len = source_path.map_or(0, str::len);
@@ -48,7 +110,7 @@ impl Session {
         if label.contains('\0') || source_path.is_some_and(|p| p.contains('\0')) {
             return Err(BackingError::Length.into());
         }
-        let document = imported.document();
+        let document = imported.document;
         if self.docs.len() >= 4096 {
             return Err(BackingError::Length.into());
         }
@@ -73,8 +135,8 @@ impl Session {
         metadata
             .reconcile_capacity(previous.checked_add(actual as u64).and_then(|n| n.checked_add(128)).ok_or(BackingError::Length)?)
             .map_err(|_| BackingError::Quota)?;
-        state.source = Some(SourceIdentity::new(label, path, imported.origin()));
-        state.source_read_only = imported.source_read_only() || imported.origin().is_read_only();
+        state.source = Some(SourceIdentity::new(label, path, imported.origin));
+        state.source_read_only = imported.source_read_only || imported.origin.is_read_only();
         control.check(1)?;
         self.publish_document_state(state, control)
     }
@@ -83,3 +145,6 @@ impl Session {
 #[cfg(test)]
 #[path = "accounted_xcf_open_tests.rs"]
 mod tests;
+#[cfg(all(test, feature = "corpus"))]
+#[path = "accounted_threshold_alpha_xcf_open_tests.rs"]
+mod threshold_alpha_tests;

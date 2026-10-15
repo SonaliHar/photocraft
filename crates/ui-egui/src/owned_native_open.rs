@@ -68,6 +68,22 @@ enum Authority {
     Interactive,
     HeldRoot,
 }
+// Stored operation names select a stricter current-storage validator. They do
+// not establish the runtime storage class, original-source proof or read access.
+fn threshold_candidate(document: &photocraft_doc::Document, control: &ReadControl<'_>) -> Result<bool, String> {
+    if let Some(state) = &document.xcf_state {
+        for stack in &state.filter_stacks {
+            control.check(1).map_err(|e| e.to_string())?;
+            for node in &stack.nodes {
+                control.check(1).map_err(|e| e.to_string())?;
+                if node.operation.name == "gimp:threshold-alpha" {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
 /// Only the caller's independently installed held-root capability may read here.
 pub(crate) fn invoke_authorized(app: &mut PhotocraftApp, params: &Value) -> Result<Value, String> {
     let path = parameters(params)?.ok_or("scoped native Open requires an explicit path")?;
@@ -116,9 +132,13 @@ fn open_path(app: &mut PhotocraftApp, path: &str, authority: Authority) -> Resul
         Authority::HeldRoot => json!({"path":path,"name":name,"warnings":[]}),
     };
     control.check(1).map_err(|e| e.to_string())?;
-    app.session
-        .add_owned_native_archive(archive, AccountedNativeOpenPolicy::KeepCurrentInterpretation, name, Some(path), &control)
-        .map_err(|e| e.to_string())?;
+    if threshold_candidate(archive.document(), &control)? {
+        app.session.add_owned_native_threshold_alpha_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
+    } else {
+        app.session
+            .add_owned_native_archive(archive, AccountedNativeOpenPolicy::KeepCurrentInterpretation, name, Some(path), &control)
+            .map_err(|e| e.to_string())?;
+    }
     // Identity/path/profile publication is complete. Existing optional user
     // notifications cannot turn that success into an error. Passing None avoids
     // opened_from() repeating uncharged source/path mutation on the paid owner.

@@ -103,7 +103,8 @@ fn qualified_saved_sources_retain_original_native_masks_and_fees_until_holder_dr
         let encoded = Arc::new(std::fs::read(root.join(&name)).unwrap());
         assert_eq!(hash(&encoded), manifest[&name].as_str().unwrap());
         let original = encoded.clone();
-        let budget = photocraft_xcf::Budget::new(limits(), None);
+        let budget = photocraft_xcf::Budget::new_persistent(limits(), None).unwrap();
+        let baseline = [BudgetKind::Resident, BudgetKind::Index, BudgetKind::Encoded].map(|kind| budget.used(kind));
         let candidate = open(&name, encoded, &Interrupt::NONE, &DecodeOptions::default(), &budget).unwrap();
         assert_eq!(candidate.original_bytes(), original.as_slice());
         let raw = photocraft_xcf::decode(&original, &DecodeOptions::default()).unwrap();
@@ -133,9 +134,15 @@ fn qualified_saved_sources_retain_original_native_masks_and_fees_until_holder_dr
         assert_eq!(budget.used(BudgetKind::Resident), held);
         drop(original);
         assert!(!candidate.original_bytes().is_empty());
-        drop(candidate);
-        for kind in [BudgetKind::Resident, BudgetKind::Index, BudgetKind::Encoded] {
-            assert_eq!(budget.used(kind), 0);
+        let held = candidate.report_capacity_with_budget(&budget).unwrap();
+        let mut extra = budget.reserve(BudgetKind::Index, held.max(1), "test real report owner").unwrap();
+        let owned = candidate.detach_owned(&mut [&mut extra], &budget).unwrap();
+        assert!(!owned.encoded.is_empty());
+        assert!(budget.used(BudgetKind::Resident) > 0);
+        assert_eq!(extra.bytes(), 0, "actual caller receipt moved into owned batch");
+        drop(owned);
+        for (kind, before) in [BudgetKind::Resident, BudgetKind::Index, BudgetKind::Encoded].into_iter().zip(baseline) {
+            assert_eq!(budget.used(kind), before);
         }
     }
 }

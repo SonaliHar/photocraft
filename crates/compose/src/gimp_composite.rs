@@ -187,6 +187,9 @@ impl WorkingSpace {
         validate_pixel(backdrop)?;
         validate_pixel(source)?;
         coverage(opacity)?;
+        if operator == GimpOperator::Union && backdrop.iter().all(|value| value.to_bits() == 0) {
+            return normal_over_zero_backdrop(source, opacity);
+        }
         let ab = backdrop[3];
         let alpha = source[3] * opacity;
         if alpha == 0.0 && matches!(operator, GimpOperator::Union | GimpOperator::ClipToBackdrop) {
@@ -657,6 +660,19 @@ impl WorkingSpace {
         Ok(output)
     }
 }
+/// Pure existing Normal/Union identity over an all-bit-positive-zero backdrop.
+/// The caller has selected that exact operator/backdrop. This performs no color
+/// transfer and grants no permission to substitute it for another composition.
+pub(crate) fn normal_over_zero_backdrop(source: [f64; 4], opacity: f64) -> Result<[f64; 4]> {
+    validate_pixel(source)?;
+    coverage(opacity)?;
+    let alpha = source[3] * opacity;
+    if alpha == 0.0 {
+        return Ok([0.0; 4]);
+    }
+    Ok([source[0], source[1], source[2], alpha])
+}
+
 pub fn coverage(value: f64) -> Result<()> {
     if value.is_finite() && (0.0..=1.0).contains(&value) { Ok(()) } else { Err(CompositionError::Invalid("coverage outside finite unit interval")) }
 }

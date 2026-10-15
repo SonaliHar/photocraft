@@ -3,6 +3,9 @@
 use super::*;
 impl AccountedDocument {
     pub fn try_with_document_name(&self, name: &str, control: &ReadControl<'_>) -> Result<Self, BackingError> {
+        if self.owner._storage_class == StorageClass::ReadonlyThresholdAlpha {
+            return filter_readonly::renamed(self, name, control);
+        }
         if !imported_selection::applies(self.document()) || name.len() > 4096 {
             return Err(BackingError::Unsupported);
         }
@@ -42,6 +45,7 @@ impl AccountedDocument {
         let ModelStaging { document, selection_view } = staged;
         Ok(Self {
             owner: Arc::new(ModelOwner {
+                _storage_class: StorageClass::Legacy,
                 document,
                 _selection: self.owner._selection.clone(),
                 _selection_view: selection_view,

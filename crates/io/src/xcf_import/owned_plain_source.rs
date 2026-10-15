@@ -10,11 +10,11 @@ use photocraft_raster::backing::{
 };
 use photocraft_xcf::{BudgetKind, OwnedReservationBatch, PhysicalUsage};
 #[path = "owned_plain_source/census.rs"]
-mod census;
+pub(in crate::xcf_import) mod census;
 #[path = "owned_plain_source/existing_quota.rs"]
-mod existing_quota;
+pub(in crate::xcf_import) mod existing_quota;
 #[path = "owned_plain_source/store.rs"]
-mod store;
+pub(in crate::xcf_import) mod store;
 pub use existing_quota::import_owned_staged_plain_bytes_in_quota;
 #[path = "owned_plain_source/reader.rs"]
 mod reader;
@@ -48,7 +48,7 @@ fn raster_error(error: photocraft_raster::RasterInputError) -> BackingError {
 }
 // No model or Surface here: stores/model may retain this without an Arc cycle.
 // Encoded storage dies before the genuine source receipts and quota baseline.
-struct Retention {
+pub(in crate::xcf_import) struct Retention {
     _encoded: Arc<Vec<u8>>,
     _source: Option<OwnedReservationBatch>,
     _surfaces: OwnedReservationBatch,
@@ -262,7 +262,7 @@ fn import_impl(
     let index_bytes = add(measured.model, reports)?;
     let mut model_lease = budget.reserve(BudgetKind::Index, index_bytes, "owned exact model/index capacities").map_err(accounting_error)?;
     let mut payload_lease = budget.reserve(BudgetKind::Resident, measured.payload, "owned shared profile/raw capacities").map_err(accounting_error)?;
-    let per_store = add(std::mem::size_of::<store::SurfaceStore>() as u64, 128)?;
+    let per_store = add(std::mem::size_of::<store::SurfaceStore<Retention>>() as u64, 128)?;
     let bridge_bytes = add(
         add(std::mem::size_of::<Retention>() as u64, std::mem::size_of::<OwnedPlainXcfImport>() as u64)?,
         add((measured.layers as u64).checked_mul(per_store).ok_or_else(|| invalid("owned store headers"))?, 4096)?,

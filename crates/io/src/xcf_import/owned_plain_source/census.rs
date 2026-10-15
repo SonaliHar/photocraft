@@ -4,7 +4,7 @@
 use super::*;
 use std::mem::size_of;
 #[derive(Default)]
-pub(super) struct Census {
+pub(in crate::xcf_import) struct Census {
     pub model: u64,
     pub payload: u64,
     pub layers: usize,
@@ -66,6 +66,15 @@ impl Walk<'_, '_> {
     }
 }
 pub(super) fn measure(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &Interrupt<'_>) -> Result<Census, IoError> {
+    measure_inner(doc, budget, control, false)
+}
+/// Only the sealed staged Threshold Alpha producer may call this sibling seam.
+/// Its original source/Surface receipts remain mandatory; this measures storage.
+pub(in crate::xcf_import) fn measure_threshold(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &Interrupt<'_>) -> Result<Census, IoError> {
+    threshold_shape(doc)?;
+    measure_inner(doc, budget, control, true)
+}
+fn measure_inner(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &Interrupt<'_>, threshold: bool) -> Result<Census, IoError> {
     use photocraft_doc::{WorkingProfileInterpretation, physical_resolution::PhysicalUnit, xcf_editing::ItemSetRule};
     control.check().map_err(|_| IoError::Cancelled)?;
     let Document {
@@ -236,8 +245,8 @@ pub(super) fn measure(doc: &Document, budget: &photocraft_xcf::Budget<'_>, contr
         opaque: _,
     } = state;
     if !state.source_items.is_empty()
-        || !state.filter_stacks.is_empty()
-        || !state.filter_masks.is_empty()
+        || (!threshold && !state.filter_stacks.is_empty())
+        || (!threshold && !state.filter_masks.is_empty())
         || !state.editable_indexed.is_empty()
         || state.floating.is_some()
     {
@@ -259,7 +268,7 @@ pub(super) fn measure(doc: &Document, budget: &photocraft_xcf::Budget<'_>, contr
     for item in &state.items {
         w.string(&item.name)?;
         w.composition(&item.composition)?;
-        if item.mask.is_some() {
+        if !threshold && item.mask.is_some() {
             return Err(invalid("owned plain item mask unsupported"));
         }
     }
@@ -279,6 +288,9 @@ pub(super) fn measure(doc: &Document, budget: &photocraft_xcf::Budget<'_>, contr
     w.vector(&state.source_items)?;
     w.vector(&state.filter_stacks)?;
     w.vector(&state.filter_masks)?;
+    if threshold {
+        threshold_storage(state, &mut w)?;
+    }
     w.vector(&state.editable_indexed)?;
     w.vector(&state.selection.selected)?;
     w.vector(&state.selection.selected_paths)?;
@@ -303,7 +315,7 @@ pub(super) fn measure(doc: &Document, budget: &photocraft_xcf::Budget<'_>, contr
     Ok(w.out)
 }
 
-pub(super) fn reports(result: &ImportResult, budget: &photocraft_xcf::Budget<'_>) -> Result<u64, IoError> {
+pub(in crate::xcf_import) fn reports(result: &ImportResult, budget: &photocraft_xcf::Budget<'_>) -> Result<u64, IoError> {
     let mut w = Walk { out: Census::default(), budget, visits: 0 };
     w.vector(&result.warnings)?;
     for v in &result.warnings {
@@ -322,4 +334,89 @@ pub(super) fn reports(result: &ImportResult, budget: &photocraft_xcf::Budget<'_>
         }
     }
     Ok(w.out.model)
+}
+
+fn threshold_shape(doc: &Document) -> Result<(), IoError> {
+    use photocraft_doc::xcf_filters::{ExactNumber, FilterValue};
+    let state = doc.xcf_state.as_ref().ok_or_else(|| invalid("threshold census state"))?;
+    if doc.layers.len() != 1
+        || doc.size.width != 8
+        || doc.size.height != 6
+        || state.filter_stacks.len() != 1
+        || state.filter_masks.len() > 1
+        || state.items.len() != 1 + state.filter_masks.len()
+    {
+        return Err(invalid("threshold census closed storage shape"));
+    }
+    let stack = state.filter_stacks.first().ok_or_else(|| invalid("threshold census stack"))?;
+    let node = stack.nodes.first().ok_or_else(|| invalid("threshold census node"))?;
+    if stack.nodes.len() != 1
+        || node.operation.name != "gimp:threshold-alpha"
+        || node.operation.stored_version != "0:0"
+        || node.operation.schema_epoch != "xcf-22-stock-threshold-alpha-precision-v1"
+        || node.arguments.len() != 1
+        || !node.auxiliary.is_empty()
+    {
+        return Err(invalid("threshold census canonical node"));
+    }
+    let argument = node.arguments.first().ok_or_else(|| invalid("threshold census argument"))?;
+    let FilterValue::Number(ExactNumber::Float32Bits(bits)) = argument.value else {
+        return Err(invalid("threshold census scalar storage"));
+    };
+    if argument.name != "value" || !f32::from_bits(bits).is_finite() || !(0.0..=1.0).contains(&f32::from_bits(bits)) {
+        return Err(invalid("threshold census scalar domain"));
+    }
+    Ok(())
+}
+fn threshold_storage(state: &photocraft_doc::XcfState, w: &mut Walk<'_, '_>) -> Result<(), IoError> {
+    use photocraft_doc::xcf_filters::{FilterArgument, FilterNode, FilterStack, OperationIdentity};
+    for FilterStack { owner: _, nodes, revision: _ } in &state.filter_stacks {
+        w.vector(nodes)?;
+        for FilterNode {
+            id: _,
+            operation: OperationIdentity { name, stored_version, schema_epoch },
+            source_display_name,
+            source_icon,
+            arguments,
+            enabled: _,
+            opacity_f64_bits: _,
+            source_clipping: _,
+            source_region: _,
+            mask: _,
+            auxiliary,
+            composition,
+        } in nodes
+        {
+            w.string(name)?;
+            w.string(stored_version)?;
+            w.string(schema_epoch)?;
+            w.optional(source_display_name)?;
+            w.optional(source_icon)?;
+            w.vector(arguments)?;
+            for FilterArgument { name, value: _ } in arguments {
+                w.string(name)?;
+            }
+            // threshold_shape admits only an inline numeric value and zero aux.
+            w.vector(auxiliary)?;
+            w.composition(composition)?;
+        }
+    }
+    for photocraft_doc::FilterMask { id: _, owner: _, surface, bounds: _ } in &state.filter_masks {
+        w.visit()?;
+        if surface.tile_count() > 1 {
+            return Err(invalid("threshold census mask tile count"));
+        }
+        // Inline Surface is counted by FilterMask Vec capacity. Actual native
+        // Tile/Box/default storage also remains with the original Sink receipts.
+        w.add(surface.default_bytes().len())?;
+        w.add(surface.tile_count().checked_mul(256).ok_or_else(|| invalid("threshold mask map envelope"))?)?;
+    }
+    // MaskState has only inline scalar/identity fields and is included in the
+    // actual ItemState Vec capacity. Destructure it to detect future heap fields.
+    for item in &state.items {
+        if let Some(photocraft_doc::xcf_state::MaskState { owner: _, bounds: _, offset: _, outside_f64_bits: _, enabled: _, shown: _, editing: _, linked: _ }) =
+            &item.mask
+        {}
+    }
+    Ok(())
 }

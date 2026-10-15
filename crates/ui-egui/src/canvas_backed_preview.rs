@@ -24,8 +24,9 @@ fn backed_display_image_with_owner(
     interrupt: &Interrupt<'_>,
 ) -> Result<(egui::ColorImage, QuotaLease), String> {
     let render = || -> Result<_, String> {
+        let threshold = owner.is_some_and(|owner| owner.is_readonly_threshold_alpha_storage());
         // Current bytes alone supply interpretation; import provenance is inert.
-        if !matches!(doc.working_profile_interpretation, WorkingProfileInterpretation::Icc) {
+        if !threshold && !matches!(doc.working_profile_interpretation, WorkingProfileInterpretation::Icc) {
             return Err("backed canvas requires explicit current ICC".into());
         }
         let bytes = doc.icc_profile.as_deref().ok_or("backed canvas current ICC is missing")?;
@@ -37,28 +38,6 @@ fn backed_display_image_with_owner(
                 _ => None,
             })
             .ok_or("backed canvas has no owned source")?;
-        if bytes.len() > 64 << 10 {
-            return Err("backed canvas ICC exceeds bounded analytic profile scope".into());
-        }
-        let tags = bytes.get(128..132).and_then(|raw| <[u8; 4]>::try_from(raw).ok()).map(u32::from_be_bytes).ok_or("backed canvas ICC tag table missing")?;
-        if tags > 32 {
-            return Err("backed canvas ICC tag count exceeds scope".into());
-        }
-        let envelope = u64::try_from(bytes.len())
-            .ok()
-            .and_then(|n| n.checked_mul(u64::from(tags).max(1)))
-            .and_then(|n| n.checked_mul(8))
-            .and_then(|n| n.checked_add(65_536))
-            .ok_or("backed canvas profile size overflow")?;
-        let _profile_lease = quota.reserve(QuotaKind::Resident, envelope).map_err(|e| e.to_string())?;
-        doc.working_profile_interpretation.validate_with(Some(bytes), doc.mode).map_err(|e| e.to_string())?;
-        let space = match doc.mode {
-            photocraft_doc::ColorMode::Rgb => photocraft_cms::ColorSpace::Rgb,
-            photocraft_doc::ColorMode::Grayscale => photocraft_cms::ColorSpace::Gray,
-            _ => return Err("backed canvas model unsupported".into()),
-        };
-        let profile = photocraft_cms::xcf_color::parse_bounded_profile(bytes, space).map_err(|e| e.to_string())?;
-        photocraft_cms::xcf_color::qualify_analytic_profile(&profile).map_err(|e| e.to_string())?;
         let work = std::sync::atomic::AtomicU64::new(0);
         let charge = |units: u64| {
             work.try_update(std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Acquire, |used| {
@@ -68,16 +47,64 @@ fn backed_display_image_with_owner(
             .map_err(|_| BackingError::Work)
         };
         let control = ReadControl { interrupt, work: &charge };
+        // The explicit runtime class uses an actual builtin byte witness. Its
+        // compositor validates current bytes and the implicit marker again;
+        // no source epoch or supplied profile name substitutes for that check.
+        // The ordinary ICC parser and its existing envelope stay unchanged.
+        let mut profile_lease = None;
+        let parsed = if threshold {
+            None
+        } else {
+            if bytes.len() > 64 << 10 {
+                return Err("backed canvas ICC exceeds bounded analytic profile scope".into());
+            }
+            let tags =
+                bytes.get(128..132).and_then(|raw| <[u8; 4]>::try_from(raw).ok()).map(u32::from_be_bytes).ok_or("backed canvas ICC tag table missing")?;
+            if tags > 32 {
+                return Err("backed canvas ICC tag count exceeds scope".into());
+            }
+            let envelope = u64::try_from(bytes.len())
+                .ok()
+                .and_then(|n| n.checked_mul(u64::from(tags).max(1)))
+                .and_then(|n| n.checked_mul(8))
+                .and_then(|n| n.checked_add(65_536))
+                .ok_or("backed canvas profile size overflow")?;
+            profile_lease = Some(quota.reserve(QuotaKind::Resident, envelope).map_err(|e| e.to_string())?);
+            doc.working_profile_interpretation.validate_with(Some(bytes), doc.mode).map_err(|e| e.to_string())?;
+            let space = match doc.mode {
+                photocraft_doc::ColorMode::Rgb => photocraft_cms::ColorSpace::Rgb,
+                photocraft_doc::ColorMode::Grayscale => photocraft_cms::ColorSpace::Gray,
+                _ => return Err("backed canvas model unsupported".into()),
+            };
+            let profile = photocraft_cms::xcf_color::parse_bounded_profile(bytes, space).map_err(|e| e.to_string())?;
+            photocraft_cms::xcf_color::qualify_analytic_profile(&profile).map_err(|e| e.to_string())?;
+            Some(profile)
+        };
+        let profile = if let Some(profile) = &parsed {
+            profile
+        } else {
+            control.check(1).map_err(|e| e.to_string())?;
+            let known = match doc.mode {
+                photocraft_doc::ColorMode::Rgb => photocraft_cms::Builtin::Srgb.profile(),
+                photocraft_doc::ColorMode::Grayscale => photocraft_cms::Builtin::SGray.profile(),
+                _ => return Err("backed canvas model unsupported".into()),
+            };
+            control.check(1).map_err(|e| e.to_string())?;
+            known
+        };
         let limits = photocraft_compose::backed_normal::NormalBandLimits::default();
         // Only the typed owner establishes retained model/mask/source accounting.
         // Errors from this route are authoritative; never retry a resident route.
         let prepared = if let Some(owner) = owner {
-            photocraft_compose::backed_document::PreparedBackedDocument::new_accounted(owner, &profile, limits, &control)
+            photocraft_compose::backed_document::PreparedBackedDocument::new_accounted(owner, profile, limits, &control)
         } else {
-            photocraft_compose::backed_document::PreparedBackedDocument::new(doc, &profile, limits, &control)
+            photocraft_compose::backed_document::PreparedBackedDocument::new(doc, profile, limits, &control)
         }
         .map_err(|e| e.to_string())?;
         let output = prepared.render_reduced(width, height, &control).map_err(|e| e.to_string())?;
+        // Keep any parsed profile allocation charged until its prepared consumer
+        // and the parsed profile itself leave this scope.
+        let _ = &profile_lease;
         let (buffer, lease) = output.into_parts();
         let input = ReducedInput { buffer, _lease: lease };
         let buffer = &input.buffer;
@@ -144,6 +171,10 @@ pub(super) fn backed_snapshot_display_image(
 #[cfg(test)]
 #[path = "canvas_backed_mask_tests.rs"]
 mod mask_tests;
+
+#[cfg(test)]
+#[path = "canvas_backed_threshold_tests.rs"]
+mod threshold_tests;
 
 #[cfg(test)]
 fn backed_display_image(

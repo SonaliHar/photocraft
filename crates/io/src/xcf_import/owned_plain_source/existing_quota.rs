@@ -12,7 +12,7 @@ pub(super) struct Context<'c, 'i> {
 }
 /// Reserve a complete caller-lowered preparation envelope before constructing
 /// even the private persistent decoder Budget. No usage/peak totals become proof.
-pub(super) struct PreparationHold {
+pub(in crate::xcf_import) struct PreparationHold {
     index: QuotaLease,
     resident: QuotaLease,
     scratch: QuotaLease,

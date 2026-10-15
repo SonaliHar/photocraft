@@ -1140,6 +1140,61 @@ pub struct PreparedRenderer<'a> {
     spaces: Vec<(GimpSpace, WorkingSpace)>,
 }
 
+/// Current metadata/layout checks shared with the explicit backed operative
+/// recipe. This does not validate a profile, samples, raw tile padding or source
+/// correspondence. The resident caller below retains all of those old checks.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn qualify_generic_point_storage_metadata(
+    doc: &Document,
+    layer: &Layer,
+    state: &photocraft_doc::XcfState,
+    stack: &photocraft_doc::xcf_filters::FilterStack,
+    extent: Rect,
+    stored: SampleEncoding,
+    format: photocraft_color::PixelFormat,
+    default_bytes: &[u8],
+) -> Result<()> {
+    let item = state.items.iter().find(|item| item.item == ItemRef::Layer(layer.id));
+    let bounds_valid = |bounds: Rect| {
+        !bounds.is_empty()
+            && bounds.width() <= 262144
+            && bounds.height() <= 262144
+            && [bounds.x0, bounds.y0, bounds.x1, bounds.y1].iter().all(|value| (-(1i32 << 29)..=(1i32 << 29)).contains(value))
+    };
+    if !bounds_valid(doc.bounds())
+        || !bounds_valid(extent)
+        || doc.layers.len() != 1
+        || !doc.channels.is_empty()
+        || !doc.paths.is_empty()
+        || !state.source_items.is_empty()
+        || state.floating.is_some()
+        || state.filter_stacks.len() != 1
+        || stack.nodes.len() != 1
+        || layer.mask.is_some()
+        || !layer.visible
+        || layer.opacity.to_bits() != 1f32.to_bits()
+        || !matches!(doc.depth, photocraft_color::SampleType::U8 | photocraft_color::SampleType::U16 | photocraft_color::SampleType::U32 | photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64)
+        || !matches!(stored, SampleEncoding::Linear | SampleEncoding::NonlinearProfile | SampleEncoding::Perceptual)
+        || format != doc.pixel_format()
+        || !format.alpha
+        || default_bytes.iter().any(|byte| *byte != 0)
+        || item.and_then(|item| item.composition.as_ref()).is_none_or(|policy| {
+            policy.source_mode != 28
+                || policy.legacy
+                || policy.pass_through
+                || (policy.stored_blend_space, policy.stored_composite_space, policy.stored_operator) != (0, -1, -1)
+        })
+        || stack.nodes.iter().any(|node| {
+            node.mask.is_none_or(|reference| {
+                !state.filter_masks.iter().any(|mask| ItemRef::Mask(mask.id) == reference && mask.owner == node.id && mask.surface.format().sample == doc.depth)
+            })
+        })
+    {
+        return Err(CompositionError::Unsupported("unqualified generic point current raster context"));
+    }
+    Ok(())
+}
+
 /// Current structural/profile semantics, independent of inert original provenance.
 fn qualify_generic_point_context(
     doc: &Document,
@@ -1151,12 +1206,6 @@ fn qualify_generic_point_context(
 ) -> Result<()> {
     let (extent, profile, stored) = context;
     let item = state.items.iter().find(|item| item.item == ItemRef::Layer(layer.id));
-    let bounds_valid = |bounds: Rect| {
-        !bounds.is_empty()
-            && bounds.width() <= 262144
-            && bounds.height() <= 262144
-            && [bounds.x0, bounds.y0, bounds.x1, bounds.y1].iter().all(|value| (-(1i32 << 29)..=(1i32 << 29)).contains(value))
-    };
     let Some(surface) = layer.surface() else { return Err(CompositionError::Unsupported("generic point raster owner")) };
     let profile_kind = match doc.mode {
         ColorMode::Rgb => photocraft_cms::Builtin::Srgb,
@@ -1308,44 +1357,8 @@ fn qualify_generic_point_context(
     if alpha_clip && (doc.size != photocraft_doc::Size::new(8, 6) || extent != Rect::new(0, 0, 8, 6)) {
         return Err(CompositionError::Unsupported("unqualified Alpha Clip current extent"));
     }
-    if !bounds_valid(doc.bounds())
-        || !bounds_valid(extent)
-        || doc.layers.len() != 1
-        || !doc.channels.is_empty()
-        || !doc.paths.is_empty()
-        || !state.source_items.is_empty()
-        || state.floating.is_some()
-        || state.filter_stacks.len() != 1
-        || stack.nodes.len() != 1
-        || layer.mask.is_some()
-        || !layer.visible
-        || layer.opacity.to_bits() != 1f32.to_bits()
-        || !implicit
-        || profile.to_bytes() != profile_kind.profile().to_bytes()
-        || !matches!(
-            doc.depth,
-            photocraft_color::SampleType::U8
-                | photocraft_color::SampleType::U16
-                | photocraft_color::SampleType::U32
-                | photocraft_color::SampleType::F32
-                | photocraft_color::SampleType::F64
-        )
-        || !matches!(stored, SampleEncoding::Linear | SampleEncoding::NonlinearProfile | SampleEncoding::Perceptual)
-        || surface.format() != doc.pixel_format()
-        || !surface.format().alpha
-        || surface.default_bytes().iter().any(|byte| *byte != 0)
-        || item.and_then(|item| item.composition.as_ref()).is_none_or(|policy| {
-            policy.source_mode != 28
-                || policy.legacy
-                || policy.pass_through
-                || (policy.stored_blend_space, policy.stored_composite_space, policy.stored_operator) != (0, -1, -1)
-        })
-        || stack.nodes.iter().any(|node| {
-            node.mask.is_none_or(|reference| {
-                !state.filter_masks.iter().any(|mask| ItemRef::Mask(mask.id) == reference && mask.owner == node.id && mask.surface.format().sample == doc.depth)
-            })
-        })
-    {
+    qualify_generic_point_storage_metadata(doc, layer, state, stack, extent, stored, surface.format(), surface.default_bytes())?;
+    if !implicit || profile.to_bytes() != profile_kind.profile().to_bytes() {
         return Err(CompositionError::Unsupported("unqualified generic point current raster context"));
     }
     let format = surface.format();

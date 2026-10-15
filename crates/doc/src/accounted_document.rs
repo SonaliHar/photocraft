@@ -17,6 +17,8 @@ use std::{
 mod imported_edits;
 #[path = "accounted_selection_rehydrate.rs"]
 mod selection_rehydrate;
+#[path = "accounted_filter_readonly.rs"]
+mod filter_readonly;
 #[path = "accounted_document_name.rs"]
 mod document_name;
 #[cfg(test)]
@@ -44,7 +46,13 @@ struct ModelStaging {
     document: Document,
     selection_view: Option<SelectionViewCharges>,
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StorageClass {
+    Legacy,
+    ReadonlyThresholdAlpha,
+}
 struct ModelOwner {
+    _storage_class: StorageClass,
     document: Document,
     _selection: Option<AccountedSelection>,
     _selection_view: Option<SelectionViewCharges>,
@@ -241,7 +249,7 @@ impl AccountedDocument {
         control.check(1)?;
         let Incoming { document, retention } = incoming;
         Ok(Self {
-            owner: Arc::new(ModelOwner { document, _selection: None, _selection_view: None, retention, quota, _model: None, _allocation: Arc::new(lease) }),
+            owner: Arc::new(ModelOwner { _storage_class: StorageClass::Legacy, document, _selection: None, _selection_view: None, retention, quota, _model: None, _allocation: Arc::new(lease) }),
         })
     }
     pub fn document(&self) -> &Document {
@@ -263,6 +271,7 @@ impl AccountedDocument {
     fn selection_noop(&self, selection: Option<&AccountedSelection>, control: &ReadControl<'_>) -> Result<bool, BackingError> {
         let doc = self.document();
         control.check(1)?;
+        if self.owner._storage_class != StorageClass::Legacy { return Err(BackingError::Unsupported); }
         if doc.selection_channel_id.is_some() {
             return Err(BackingError::Unsupported);
         }
@@ -338,6 +347,7 @@ impl AccountedDocument {
         let ModelStaging { document, selection_view } = staged;
         Ok(Self {
             owner: Arc::new(ModelOwner {
+                _storage_class: StorageClass::Legacy,
                 document,
                 _selection: selection.cloned(),
                 _selection_view: selection_view,
@@ -351,7 +361,7 @@ impl AccountedDocument {
     /// Borrowed preflight for the closed imported current-metadata transaction.
     /// No allocation or mutation authority; final try_edit repeats these gates.
     pub fn validate_imported_metadata_edit(&self, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<(), BackingError> {
-        if !imported_selection::applies(self.document()) { return Err(BackingError::Unsupported); }
+        if self.owner._storage_class != StorageClass::Legacy || !imported_selection::applies(self.document()) { return Err(BackingError::Unsupported); }
         imported_edits::validate_owner(self, edit, control)?;
         accounted_layer_access(self.document(), edit.layer_id(), control)?.ok_or(BackingError::Bounds)?;
         Ok(())
@@ -360,6 +370,7 @@ impl AccountedDocument {
     /// Unknown collections refuse before clone. Native COW allocation uses the
     /// same source ledger and never replaces immutable source/default samples.
     pub fn try_edit(&self, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<Self, BackingError> {
+        if self.owner._storage_class != StorageClass::Legacy { return Err(BackingError::Unsupported); }
         let imported = imported_edits::validate_owner(self, edit, control)?;
         if is_noop(self.document(), edit, control)? {
             control.check(1)?;
@@ -467,6 +478,7 @@ impl AccountedDocument {
         let ModelStaging { document, selection_view } = staged;
         Ok(Self {
             owner: Arc::new(ModelOwner {
+                _storage_class: StorageClass::Legacy,
                 document,
                 _selection: self.owner._selection.clone(),
                 _selection_view: selection_view,
@@ -701,10 +713,10 @@ fn selection_format_allowed(format: photocraft_color::PixelFormat, depth: crate:
 /// Capacity census for an intentionally explicit bounded tree model-copy domain.
 /// Owned complex collections are refused, never assigned a fabricated size.
 fn census(doc: &Document, actual: bool, guard: Option<&AccountedSelection>, quota: &BackingQuota, control: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
-    census_inner(doc, actual, false, guard, quota, control)
+    census_inner(doc, actual, false, guard, quota, control, false)
 }
 fn selection_census(doc: &Document, actual: bool, guard: Option<&AccountedSelection>, quota: &BackingQuota, control: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
-    census_inner(doc, actual, imported_selection::applies(doc), guard, quota, control)
+    census_inner(doc, actual, imported_selection::applies(doc), guard, quota, control, false)
 }
 fn census_inner(
     doc: &Document,
@@ -713,6 +725,7 @@ fn census_inner(
     selection_guard: Option<&AccountedSelection>,
     expected_quota: &BackingQuota,
     control: &ReadControl<'_>,
+    readonly_filter_masks: bool,
 ) -> Result<ModelCensus, BackingError> {
     let crate::Metadata { xmp: _, exif: _, psd_resources: _, psd_global_blocks: _, text: _ } = &doc.metadata;
     let crate::Guides { horizontal: _, vertical: _, colors: _ } = &doc.guides;
@@ -853,6 +866,7 @@ fn census_inner(
         return Err(BackingError::Length);
     }
     let mut canonical = CanonicalCensus::new(size, actual, control);
+    canonical.readonly_filter_masks = readonly_filter_masks;
     if imported_selection {
         imported_selection::shared_payloads(doc, &mut canonical, control)?;
     }
@@ -1036,6 +1050,7 @@ fn sync_current_item(document: &mut Document, edit: AccountedEdit<'_>) -> Result
 /// an evaluator. The codec/importer retains the original source and validation
 /// evidence; clones copy owned buffers and share immutable Arc payloads.
 struct CanonicalCensus<'a, 'i> {
+    readonly_filter_masks: bool,
     counted: ModelCensus,
     text: u64,
     resources: u64,
@@ -1045,7 +1060,7 @@ struct CanonicalCensus<'a, 'i> {
 }
 impl<'a, 'i> CanonicalCensus<'a, 'i> {
     fn new(index: u64, actual: bool, control: &'a ReadControl<'i>) -> Self {
-        Self { counted: ModelCensus { index, payload: 0 }, text: 0, resources: 0, visits: 0, actual, control }
+        Self { readonly_filter_masks: false, counted: ModelCensus { index, payload: 0 }, text: 0, resources: 0, visits: 0, actual, control }
     }
     fn visit(&mut self) -> Result<(), BackingError> {
         self.visits = self.visits.checked_add(1).ok_or(BackingError::Length)?;
@@ -1185,9 +1200,10 @@ impl<'a, 'i> CanonicalCensus<'a, 'i> {
         } = state;
         // These contain independent Surface/private-map payloads not yet covered
         // by this ownership contract. Refuse them before Document::clone.
-        if !editable_indexed.is_empty() || !filter_masks.is_empty() {
+        if !editable_indexed.is_empty() || (!self.readonly_filter_masks && !filter_masks.is_empty()) {
             return Err(BackingError::Unsupported);
         }
+        if self.readonly_filter_masks { filter_readonly::mask_census(filter_masks, self)?; }
         let ProjectProvenance {
             format,
             format_version: _,
