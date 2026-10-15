@@ -8,10 +8,7 @@ use crate::{
     gimp_composite::{CompositionError, WorkingSpace},
 };
 use photocraft_algo::gimp::neighborhood::{BoxBlurRowError, BoxBlurRowPlan, BoxBlurTilePlan, GaussianLimits, try_box_blur_packed_tile, try_box_blur_row_tile};
-use photocraft_cms::{
-    Profile,
-    xcf_color::{self, Encoding},
-};
+use photocraft_cms::{Profile, xcf_color};
 use photocraft_color::{ColorMode, SampleType, try_read_sample_f64, try_write_sample_f64};
 use photocraft_doc::{
     BackedLayer, Document, LayerContent, LayerId, SampleEncoding,
@@ -52,7 +49,7 @@ fn cms(e: photocraft_cms::control::Error) -> E {
 /// `new`; this does not authorize a source or an implicit fallback.
 pub fn is_candidate(doc: &Document, c: &ReadControl<'_>) -> Result<bool, BackingError> {
     c.check(1)?;
-    if doc.mode != ColorMode::Rgb || doc.sample_encoding != Some(SampleEncoding::NonlinearProfile) || !matches!(doc.depth, SampleType::F32 | SampleType::F64) {
+    if doc.mode != ColorMode::Rgb || !matches!(doc.depth, SampleType::F32 | SampleType::F64) {
         return Ok(false);
     }
     let Some(state) = doc.xcf_state.as_ref() else { return Ok(false) };
@@ -62,7 +59,20 @@ pub fn is_candidate(doc: &Document, c: &ReadControl<'_>) -> Result<bool, Backing
         return Ok(false);
     }
     c.check(128)?;
-    Ok(node.operation.name == "gegl:box-blur")
+    if node.operation.name != "gegl:box-blur" {
+        return Ok(false);
+    }
+    match doc.sample_encoding {
+        Some(SampleEncoding::NonlinearProfile) => Ok(true),
+        Some(SampleEncoding::Linear) => {
+            if node.operation.schema_epoch.len() > 128 {
+                return Ok(false);
+            }
+            c.check(128)?;
+            Ok(node.operation.schema_epoch == crate::backed_box_source::BOX_GEOMETRY_EPOCH && crate::backed_box_source::observed_encoding(doc).is_ok())
+        }
+        _ => Ok(false),
+    }
 }
 struct Budget<'a, 'i> {
     q: &'a BackingQuota,
@@ -104,6 +114,7 @@ struct Binding {
 }
 impl Binding {
     fn new(owner: &AccountedDocument, assigned: bool, base_bytes: u64, c: &ReadControl<'_>) -> Result<Self, E> {
+        let stored = owner.document().sample_encoding.ok_or_else(scope)?;
         let envelope = crate::gimp_neighborhood::scalar_preparation_bytes(2)
             .map_err(E::Color)?
             .checked_add(2 * 65536)
@@ -130,10 +141,10 @@ impl Binding {
             Some(p) => p,
             None => profile.profile(),
         };
-        let semantic = xcf_color::assigned_effective_planning_work_ceiling(basis, Encoding::NonlinearProfile).map_err(cms)?;
+        let semantic = xcf_color::assigned_effective_planning_work_ceiling(basis, crate::gimp_composite::encoding(stored)).map_err(cms)?;
         c.check(semantic.checked_mul(3).ok_or_else(size)?).map_err(E::Backing)?;
         c.check(envelope.checked_mul(64).ok_or_else(size)?).map_err(E::Backing)?;
-        let working = WorkingSpace::new_with_interrupt(basis, SampleEncoding::NonlinearProfile, GimpSpace::LinearRgb, c.interrupt).map_err(E::Color)?;
+        let working = WorkingSpace::new_with_interrupt(basis, stored, GimpSpace::LinearRgb, c.interrupt).map_err(E::Color)?;
         let out = Self { working, _profile: profile, bytes, _lease: fee };
         c.check(0).map_err(E::Backing)?;
         Ok(out)
@@ -189,9 +200,10 @@ impl<'a> PreparedBackedBoxContext<'a> {
         let [node] = stack.nodes.as_slice() else { return Err(scope()) };
         let source_color = doc.source_color_context.as_ref().ok_or_else(scope)?;
         let observed = node.operation.schema_epoch == crate::backed_box_source::BOX_GEOMETRY_EPOCH;
+        let stored = if observed { crate::backed_box_source::observed_encoding(doc)? } else { SampleEncoding::NonlinearProfile };
         if doc.mode != ColorMode::Rgb
-            || doc.sample_encoding != Some(SampleEncoding::NonlinearProfile)
-            || !matches!((doc.depth, source_color.source_precision), (SampleType::F32, 650) | (SampleType::F64, 750))
+            || doc.sample_encoding != Some(stored)
+            || !observed && !matches!((doc.depth, source_color.source_precision), (SampleType::F32, 650) | (SampleType::F64, 750))
             || assigned && !observed && doc.depth != SampleType::F32
             || assigned != source_color.original_icc.is_some()
             || state.provenance.format_version != 22
@@ -207,17 +219,8 @@ impl<'a> PreparedBackedBoxContext<'a> {
         {
             return Err(scope());
         }
-        crate::gimp_render::qualify_current_point_optional_mask_metadata(
-            doc,
-            layer,
-            state,
-            stack,
-            source,
-            SampleEncoding::NonlinearProfile,
-            backed.format(),
-            backed.default_bytes(),
-        )
-        .map_err(E::Color)?;
+        crate::gimp_render::qualify_current_point_optional_mask_metadata(doc, layer, state, stack, source, stored, backed.format(), backed.default_bytes())
+            .map_err(E::Color)?;
         let item = state.items.iter().find(|i| i.item == ItemRef::Layer(layer.id)).ok_or_else(scope)?;
         let resolved = item.composition.as_ref().ok_or_else(scope)?.checked_resolved().map_err(|_| scope())?;
         let physical = layer.import_compositing.as_ref().ok_or_else(scope)?;

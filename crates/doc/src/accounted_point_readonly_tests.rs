@@ -313,3 +313,6 @@ fn repeated_titles_keep_flat_original_retention_without_enrolling_an_operation()
     assert_eq!(current.document().xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].operation.name, "unqualified:raw-point");
     assert_eq!(current.document().xcf_state.as_ref().unwrap().filter_stacks[0].revision, u64::MAX);
 }
+
+#[path = "accounted_point_readonly/implicit_linear_tests.rs"]
+mod implicit_linear;

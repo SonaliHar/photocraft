@@ -2044,3 +2044,19 @@ cannot fit those floors; native whole-workflow fit/throughput is unproven. Bound
 16MiB/32MiB renderer guards do not enable native_large or promise input fit.
 New regression drafts remain UNRUN/uncompiled; PhotoCraft runtime, numerical,
 visual and workflow acceptance remains deferred.
+
+Observed Box additionally accepts implicit RGB Linear F32/600 and F64/700 with
+no original ICC. The current effective Linear ICC and its byte-identity marker
+remain distinct from the nonlinear builtin profile used as the preparation
+basis. Import and current rendering use the actual stored encoding throughout
+profile planning and working-space preparation. The same observed radius,
+activation, metadata and Move transactions apply, with full current/staged
+proof and existing source/history protections. Assigned Linear is not admitted.
+Source profile construction is controlled and paid on the existing shared
+budget; inactive and radius-zero paths retain their checks and charges.
+
+Independent GIMP Linear source/projection/merged captures matched across live,
+same-process, fresh and repeated reopen controls. Effective-profile date-byte
+differences remain recorded separately from stable, distinct Babl profile bytes.
+Those observations establish implementation inputs, not PhotoCraft numerical
+or workflow acceptance. Tests and final gates remain deferred.

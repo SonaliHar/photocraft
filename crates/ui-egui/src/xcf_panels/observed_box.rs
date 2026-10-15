@@ -14,10 +14,13 @@ pub(super) fn radius(document: &DocumentSnapshot, layer: LayerId, node: &FilterN
     }
     let assigned = document.accounted()?.is_readonly_assigned_point_storage();
     if document.mode != photocraft_doc::ColorMode::Rgb
-        || document.sample_encoding != Some(photocraft_doc::SampleEncoding::NonlinearProfile)
         || document.source_color_context.as_ref().is_none_or(|source| {
-            !matches!((document.depth, source.source_precision), (photocraft_doc::SampleType::F32, 650) | (photocraft_doc::SampleType::F64, 750))
-                || assigned != source.original_icc.is_some()
+            let nonlinear = document.sample_encoding == Some(photocraft_doc::SampleEncoding::NonlinearProfile)
+                && matches!((document.depth, source.source_precision), (photocraft_doc::SampleType::F32, 650) | (photocraft_doc::SampleType::F64, 750));
+            let implicit_linear = !assigned && source.original_icc.is_none()
+                && document.sample_encoding == Some(photocraft_doc::SampleEncoding::Linear)
+                && matches!((document.depth, source.source_precision), (photocraft_doc::SampleType::F32, 600) | (photocraft_doc::SampleType::F64, 700));
+            (!nonlinear && !implicit_linear) || assigned != source.original_icc.is_some()
         })
     {
         return None;
@@ -93,3 +96,7 @@ mod tests;
 #[cfg(all(test, not(target_arch="wasm32")))]
 #[path="assigned_f64_box_tests.rs"]
 mod assigned_f64_tests;
+
+#[cfg(all(test, not(target_arch="wasm32")))]
+#[path="linear_box_tests.rs"]
+mod linear_tests;

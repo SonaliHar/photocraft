@@ -7,10 +7,7 @@ use crate::{
     gimp_composite::{CompositionError, WorkingSpace},
     gimp_render::PreparationBudget,
 };
-use photocraft_cms::{
-    Profile,
-    xcf_color::{self, Encoding},
-};
+use photocraft_cms::{Profile, xcf_color};
 use photocraft_color::{ColorMode, PixelFormat, SampleType, try_read_sample_f64};
 use photocraft_doc::{
     Document, LayerContent, SampleEncoding,
@@ -21,6 +18,18 @@ use photocraft_geom::{Rect, TileCoord};
 use photocraft_raster::backing::BackingError;
 use photocraft_raster::{Interrupt, RasterInputError};
 pub const BOX_GEOMETRY_EPOCH: &str = "xcf22-observed-box-geometry-v1";
+/// Actual stored roles of this observed envelope, independent of the implicit
+/// nonlinear basis used to construct a Linear WorkingSpace.
+pub(crate) fn observed_encoding(doc: &Document) -> Result<SampleEncoding, E> {
+    let source = doc.source_color_context.as_ref().ok_or_else(scope)?;
+    match (doc.sample_encoding, doc.depth, source.source_precision, source.original_icc.is_some()) {
+        (Some(SampleEncoding::NonlinearProfile), SampleType::F32, 650, _) | (Some(SampleEncoding::NonlinearProfile), SampleType::F64, 750, _) => {
+            Ok(SampleEncoding::NonlinearProfile)
+        }
+        (Some(SampleEncoding::Linear), SampleType::F32, 600, false) | (Some(SampleEncoding::Linear), SampleType::F64, 700, false) => Ok(SampleEncoding::Linear),
+        _ => Err(scope()),
+    }
+}
 fn scope() -> E {
     E::Unsupported("observed Box geometry envelope")
 }
@@ -41,6 +50,7 @@ pub(crate) fn metadata_current(doc: &Document, b: &mut impl PlanBudget, i: &Inte
 }
 fn metadata_mode(doc: &Document, b: &mut impl PlanBudget, i: &Interrupt<'_>, current: bool) -> Result<(Rect, u32), E> {
     check(b, i, 32768)?;
+    let stored = observed_encoding(doc)?;
     let [layer] = doc.layers.as_slice() else { return Err(scope()) };
     let state = doc.xcf_state.as_ref().ok_or_else(scope)?;
     if state.items.len() != 2 || state.filter_masks.len() != 1 {
@@ -57,8 +67,6 @@ fn metadata_mode(doc: &Document, b: &mut impl PlanBudget, i: &Interrupt<'_>, cur
     };
     if doc.mode != ColorMode::Rgb
         || !matches!(doc.depth, SampleType::F32 | SampleType::F64)
-        || doc.sample_encoding != Some(SampleEncoding::NonlinearProfile)
-        || doc.source_color_context.as_ref().is_none_or(|v| !matches!((doc.depth, v.source_precision), (SampleType::F32, 650) | (SampleType::F64, 750)))
         || state.provenance.format_version != 22
         || state.current_filter_output_precision != photocraft_doc::FilterOutputPrecision::Canonical
         || state.items.len() != 2
@@ -72,8 +80,7 @@ fn metadata_mode(doc: &Document, b: &mut impl PlanBudget, i: &Interrupt<'_>, cur
     {
         return Err(scope());
     }
-    crate::gimp_render::qualify_current_point_optional_mask_metadata(doc, layer, state, stack, s, SampleEncoding::NonlinearProfile, format, default)
-        .map_err(E::Color)?;
+    crate::gimp_render::qualify_current_point_optional_mask_metadata(doc, layer, state, stack, s, stored, format, default).map_err(E::Color)?;
     let r = item.composition.as_ref().ok_or_else(scope)?.checked_resolved().map_err(|_| scope())?;
     let p = layer.import_compositing.as_ref().ok_or_else(scope)?;
     if r.operator != GimpOperator::Union
@@ -209,6 +216,7 @@ impl<S, L> LeasedStreamedBoxPipeline<S, L> {
     fn prepare<B: PreparationBudget<Lease = L>>(doc: &Document, i: &Interrupt<'_>, budget: &mut B, source: S) -> Result<Self, E> {
         let mut b = Shared { budget, held: 0 };
         let (_s, _radius) = metadata(doc, &mut b, i)?;
+        let stored = observed_encoding(doc)?;
         let [layer] = doc.layers.as_slice() else { return Err(scope()) };
         let LayerContent::Raster(surface) = &layer.content else { return Err(scope()) };
         native(surface.default_bytes(), doc.depth, &mut b, i)?;
@@ -234,10 +242,10 @@ impl<S, L> LeasedStreamedBoxPipeline<S, L> {
             Some(p) => p,
             None => profile.profile(),
         };
-        let semantic = xcf_color::assigned_effective_planning_work_ceiling(basis, Encoding::NonlinearProfile).map_err(|_| scope())?;
+        let semantic = xcf_color::assigned_effective_planning_work_ceiling(basis, crate::gimp_composite::encoding(stored)).map_err(|_| scope())?;
         check(&mut b, i, semantic.checked_mul(3).ok_or_else(length)?)?;
         check(&mut b, i, envelope.checked_mul(64).ok_or_else(length)?)?;
-        let working = WorkingSpace::new_with_interrupt(basis, SampleEncoding::NonlinearProfile, GimpSpace::LinearRgb, i).map_err(E::Color)?;
+        let working = WorkingSpace::new_with_interrupt(basis, stored, GimpSpace::LinearRgb, i).map_err(E::Color)?;
         let out = Self { _working: working, _profile: profile, _lease: fee, _source: source };
         check(&mut b, i, 0)?;
         Ok(out)

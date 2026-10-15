@@ -4,6 +4,8 @@
 mod assigned_f64;
 #[path = "backed_box_activity_tests.rs"]
 mod layer_activity;
+#[path = "backed_box_linear_tests.rs"]
+mod linear;
 #[path = "backed_box_move_tests.rs"]
 mod translated_input;
 use super::*;

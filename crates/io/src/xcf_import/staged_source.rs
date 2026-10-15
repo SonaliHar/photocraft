@@ -462,6 +462,9 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     fn requires_budgeted_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn requires_budgeted_general_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn effective_profile(file: &XcfFile<Self>, space: photocraft_cms::ColorSpace, ce: photocraft_cms::xcf_color::Encoding, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<photocraft_cms::Profile, IoError> {
+        if matches!(P::family(file), SelectedStagedFamily::Neighborhood(NeighborhoodSourceFamily::BoxGeometryLinearF32 | NeighborhoodSourceFamily::BoxGeometryLinearF64)) {
+            return linear_box_effective(file,space,ce,ctl,shared.ok_or_else(||IoError::Unsupported("linear Box profile needs accounting".into()))?);
+        }
         if matches!(P::family(file), SelectedStagedFamily::AnalyticGeometry | SelectedStagedFamily::IsolatedNormalGroup | SelectedStagedFamily::Neighborhood(NeighborhoodSourceFamily::BoxGeometryAssignedF32 | NeighborhoodSourceFamily::BoxGeometryAssignedF64 | NeighborhoodSourceFamily::BoxAssignedF32 | NeighborhoodSourceFamily::MedianAssignedF32 | NeighborhoodSourceFamily::GaussianAssignedF32)) {
             analytic_geometry::effective(file,space,ce,ctl,shared.ok_or_else(||IoError::Unsupported("geometry profile needs accounting".into()))?)
         }else{
@@ -1100,3 +1103,28 @@ mod tests {
 #[cfg(test)]
 #[path = "staged_point_source_tests.rs"]
 mod point_source_tests;
+
+// Only the selected implicit Linear Box role reaches this controlled constructor.
+// The mapping preparation holder separately covers the returned encoded profile.
+fn linear_box_effective<P>(file:&XcfFile<P>,space:photocraft_cms::ColorSpace,ce:photocraft_cms::xcf_color::Encoding,ctl:&Interrupt<'_>,budget:&photocraft_xcf::Budget<'_>)->Result<photocraft_cms::Profile,IoError>{
+    use photocraft_cms::{control, xcf_color};
+    if !file.icc.is_empty() || space!=photocraft_cms::ColorSpace::Rgb || ce!=xcf_color::Encoding::Linear { return Err(IoError::Unsupported("implicit Linear Box profile role".into())); }
+    let stop=||ctl.cancelled();
+    let cms=|e| if matches!(e,control::Error::Cancelled){IoError::Cancelled}else{IoError::Unsupported("implicit Linear Box effective profile".into())};
+    ctl.check().map_err(|_|IoError::Cancelled)?;
+    let basis=photocraft_cms::Builtin::Srgb.profile();
+    ctl.check().map_err(|_|IoError::Cancelled)?;
+    // Same bounded implicit planning envelope as the controlled CURRENT binder.
+    analytic_geometry::pay(budget,65536*64)?;
+    let limits=control::Limits{resident_bytes:65536,work_units:65536*64};
+    let req=xcf_color::effective_profile_requirements_with_control(basis,ce,limits,&stop).map_err(cms)?;
+    let _fee=budget.reserve(BudgetKind::Resident,req.peak_resident_bytes as u64,"implicit Linear Box effective construction").map_err(accounting_error)?;
+    let work=req.work_units.checked_mul(4).ok_or_else(||IoError::Unsupported("implicit Linear Box profile work".into()))?;
+    if req.peak_resident_bytes>limits.resident_bytes || work>limits.work_units { return Err(IoError::Unsupported("implicit Linear Box effective bounds".into())); }
+    analytic_geometry::pay(budget,work)?;
+    xcf_color::effective_profile_from_definition_with_control(basis,ce,control::Limits{work_units:work,..limits},&stop).map_err(cms)
+}
+
+#[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
+#[path="staged_neighborhood/box_geometry_linear_profile_tests.rs"]
+mod linear_box_profile_tests;

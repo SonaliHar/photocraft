@@ -1,5 +1,10 @@
 //! Explicit observational Box geometry source. Opaque Replace fields are retained, never resolved.
 use super::*;
+// Encoding and original-profile roles are exact pairs; assigned Linear is closed.
+fn role<P>(f: &XcfFile<P>) -> bool {
+    matches!((f.sample, f.precision, f.encoding), (Sample::F32, 650, Encoding::NonlinearProfile) | (Sample::F64, 750, Encoding::NonlinearProfile))
+        || (f.icc.is_empty() && matches!((f.sample, f.precision, f.encoding), (Sample::F32, 600, Encoding::Linear) | (Sample::F64, 700, Encoding::Linear)))
+}
 pub(super) fn hint<P: ExactParsedPlane>(f: &XcfFile<P>) -> bool {
     let Some(d) = f.layers.first() else { return false };
     let old_identity = f.width == 16
@@ -10,11 +15,7 @@ pub(super) fn hint<P: ExactParsedPlane>(f: &XcfFile<P>) -> bool {
         && d.effects.first().is_some_and(|e| {
             (e.state.blend_space, e.state.composite_space, e.state.composite_mode) == (Some(-1474592175), Some(-1474592175), Some(-1474592175))
         });
-    f.layers.len() == 1
-        && f.model == Model::Rgb
-        && matches!((f.sample, f.precision), (Sample::F32, 650) | (Sample::F64, 750))
-        && f.icc.len() <= 16 << 20
-        && !old_identity
+    f.layers.len() == 1 && f.model == Model::Rgb && role(f) && f.icc.len() <= 16 << 20 && !old_identity
 }
 
 fn rectangle(width: u32, height: u32, offset: (i32, i32)) -> Option<Rect> {
@@ -32,8 +33,7 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, 
     poll(ctl, budget, 32)?;
     if f.version != 22
         || f.model != Model::Rgb
-        || !matches!((f.sample, f.precision), (Sample::F32, 650) | (Sample::F64, 750))
-        || f.encoding != Encoding::NonlinearProfile
+        || !role(f)
         || f.icc.len() > 16 << 20
         || f.layers.len() != 1
         || !f.channels.is_empty()
@@ -202,3 +202,7 @@ mod activity_tests;
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "box_geometry_assigned_f64_tests.rs"]
 mod assigned_f64_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "box_geometry_linear_tests.rs"]
+mod linear_tests;

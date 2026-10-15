@@ -866,11 +866,20 @@ persistent document lifetime are separate accounting responsibilities.
 `PreparedBackedBoxContext` and `PreparedBackedBoxDocument` render the admitted
 CURRENT/native Box recipe over checked drawable and canvas geometry. The
 observed `xcf22-observed-box-geometry-v1` envelope admits implicit RGB F32
-nonlinear650, implicit RGB F64 nonlinear750, and assigned RGB F32/F64 at the
-exact nonlinear650/750 sample pairs.
+nonlinear650/linear600, implicit RGB F64 nonlinear750/linear700, and assigned
+RGB F32/F64 at the exact nonlinear650/750 sample pairs.
 Assigned profiles retain the existing paid original-to-current binding and both
 independent ICC owners. Other source/eager constructors keep their exact gates;
 old source identities retain selection priority and final refusal.
+
+Implicit Linear roles bind the actual generated effective Linear ICC and its
+`ImplicitSrgb` byte-identity marker. That marker identifies the profile basis;
+sample encoding remains separate data. The caller's nonlinear builtin sRGB
+preparation basis remains distinct from the current effective profile. Source
+and current preparation use the actual stored encoding for planning and
+WorkingSpace construction, so Linear pixels take no extra sRGB transfer.
+Controlled source profile construction retains its real work and resident fees.
+Assigned Linear, Gray and Perceptual roles remain outside this envelope.
 
 The observed envelope accepts a Signed32 radius in `0..=1000`, layer visibility,
 finite unit effective F32 layer opacity and filter activation independently.
