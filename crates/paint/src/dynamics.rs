@@ -236,11 +236,16 @@ impl PathWalker {
             return false;
         }
         let steps = n as u64;
+        // The pixel nearest the ideal line at step `i`, a half rounding up in absolute pixel
+        // coordinates (not away from the start): a line then paints the same pixels whichever
+        // end it starts from, as Photoshop's does (#6336). In integers, so no step lands a hair
+        // off its half.
+        let (n_i, x0_i, y0_i, dx_i, dy_i) = (n as i64, x0 as i64, y0 as i64, dx as i64, dy as i64);
+        let nearest = |v0: i64, d: i64, i: i64| (2 * (v0 * n_i + d * i) + n_i).div_euclid(2 * n_i) as f64;
         for i in 1..=steps {
-            let i = i as f64;
-            let mut q = lerp_pt(a, p, i / n);
-            q.x = x0 + (dx * i / n).round() + offset;
-            q.y = y0 + (dy * i / n).round() + offset;
+            let mut q = lerp_pt(a, p, i as f64 / n);
+            q.x = nearest(x0_i, dx_i, i as i64) + offset;
+            q.y = nearest(y0_i, dy_i, i as i64) + offset;
             self.emit(q, out);
         }
         true

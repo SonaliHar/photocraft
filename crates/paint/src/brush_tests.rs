@@ -211,6 +211,22 @@ fn pencil_1px_line_is_a_clean_8_connected_staircase() {
     }
 }
 
+#[test]
+fn pencil_1px_line_paints_the_same_pixels_in_both_directions() {
+    // #6336: a step halfway between two pixels rounded away from the start, so a line drawn
+    // from its other end took the other pixel; 1 right and 2 down was the plainest case.
+    let b = BrushSettings { aliased: true, hardness: 1.0, size: 1.0, ..brush() };
+    let painted = |a: (f64, f64), e: (f64, f64)| {
+        let s = paint(&b, &[StrokePoint::new(a.0, a.1, 1.0), StrokePoint::new(e.0, e.1, 1.0)], 40, 40);
+        (0..40).flat_map(|y| (0..40).map(move |x| (x, y))).filter(|&(x, y)| s.rgba(x, y)[3] > 0.0).collect::<Vec<(i32, i32)>>()
+    };
+    let cases = [((10.5, 10.5), (11.5, 12.5)), ((10.5, 10.5), (13.5, 11.5)), ((4.5, 4.5), (30.5, 17.5)), ((2.5, 30.5), (8.5, 3.5)), ((6.2, 3.9), (21.7, 26.4))];
+    for (a, e) in cases {
+        assert_eq!(painted(a, e), painted(e, a), "{a:?} <-> {e:?}");
+    }
+    assert_eq!(painted((10.5, 10.5), (11.5, 12.5)).len(), 3, "one pixel per row");
+}
+
 // ---------- spacing ----------
 
 #[test]
