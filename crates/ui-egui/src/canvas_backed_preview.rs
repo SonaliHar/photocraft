@@ -278,3 +278,7 @@ mod legacy_flat_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_component_flat_tests.rs"]
 mod component_flat_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "canvas_backed_alpha_flat_tests.rs"]
+mod alpha_flat_tests;

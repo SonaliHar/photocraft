@@ -31,6 +31,9 @@ pub fn is_supported_legacy_mode(mode: i32) -> bool {
 pub fn is_supported_component_mode(mode: i32) -> bool {
     matches!(mode, 37..=40 | 54..=56)
 }
+pub fn is_supported_alpha_mode(mode: i32) -> bool {
+    matches!(mode, 57..=60)
+}
 pub(crate) fn error() -> E {
     E::Unsupported("bounded modern separable RGB transfer stack")
 }
@@ -179,7 +182,8 @@ impl<'a> PreparedBackedSeparableStack<'a> {
                 || !(input.source_mode == 28
                     || is_supported_mode(input.source_mode)
                     || is_supported_legacy_mode(input.source_mode)
-                    || is_supported_component_mode(input.source_mode))
+                    || is_supported_component_mode(input.source_mode)
+                    || is_supported_alpha_mode(input.source_mode))
             {
                 return Err(error());
             }
@@ -222,7 +226,9 @@ impl<'a> PreparedBackedSeparableStack<'a> {
             let format = view.format();
             c.check(format.channels() as u64).map_err(E::Backing)?;
             let default = decode(view.default_bytes(), format)?;
-            if (is_supported_legacy_mode(entry.input.source_mode) || is_supported_component_mode(entry.input.source_mode))
+            if (is_supported_legacy_mode(entry.input.source_mode)
+                || is_supported_component_mode(entry.input.source_mode)
+                || is_supported_alpha_mode(entry.input.source_mode))
                 && default.iter().any(|v| !(0.0..=1.0).contains(v))
             {
                 return Err(error());
@@ -237,7 +243,9 @@ impl<'a> PreparedBackedSeparableStack<'a> {
                         let raw = bytes.get_mut(..format.bytes_per_pixel()).ok_or_else(error)?;
                         pin.read_pixel_native_into(x, y, raw, c).map_err(E::View)?;
                         let pixel = decode(raw, format)?;
-                        if (is_supported_legacy_mode(entry.input.source_mode) || is_supported_component_mode(entry.input.source_mode))
+                        if (is_supported_legacy_mode(entry.input.source_mode)
+                            || is_supported_component_mode(entry.input.source_mode)
+                            || is_supported_alpha_mode(entry.input.source_mode))
                             && pixel.iter().any(|v| !(0.0..=1.0).contains(v))
                         {
                             return Err(error());

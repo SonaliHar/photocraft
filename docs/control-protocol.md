@@ -1773,3 +1773,18 @@ refusal and finite HDR Luminance results remain unchanged, with no new clamp.
 The existing modern20 composition mutation wire remains the available explicit
 transition path; these additions do not add component or legacy mutation modes.
 Tests and numerical acceptance remain deferred.
+Owned alpha/color modes57..60 have separate exact v12 RGB and Gray source
+routes using the established two-layer geometry and complete finite-unit native
+validation with four or two channels. Current Gray binds actual BuiltinSGray
+bytes and ImplicitSGray interpretation and permits only Normal28 plus at least
+one alpha mode; other blend families retain their RGB gates. Existing alpha-zero,
+hidden-RGB, exterior zero-source and output-alpha behavior remains unchanged.
+Native Gray storage remains two channels; display replication is separate.
+
+Gray composition mutation is unavailable in the typed model API and registered
+engine path before no-op, including explicit Normal changes on the background
+layer. Its composition UI stays read-only. RGB retains the existing modern20
+transition wire; metadata and Move use the same paid transactions in both models.
+Eight referenced producer Gray effective-ICC captures are missing locally and
+remain an evidence HOLD; no byte equivalence is asserted. Tests, UI visual checks
+and numerical/profile acceptance remain deferred.

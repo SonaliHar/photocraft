@@ -63,6 +63,9 @@ fn eligibility(app: &PhotocraftApp, layer: LayerId, current: &Current) -> Result
         return Err(tl!("Editing this legacy or source-specific composition mode is unavailable.").to_owned());
     }
     let active = app.session.active().ok_or_else(stale)?;
+    if flat && active.doc.mode == photocraft_doc::ColorMode::Grayscale {
+        return Err(tl!("Composition editing for this Gray document is unavailable.").to_owned());
+    }
     let state = active.doc.xcf_state.as_ref().ok_or_else(stale)?;
     photocraft_engine::xcf_item_locks::effective_layer_locks(&active.doc, layer)
         .and_then(|locks| locks.require(photocraft_engine::xcf_item_locks::EditKind::Content)).map_err(|error| error.to_string())?;
@@ -128,6 +131,7 @@ pub(crate) fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: Laye
     let Some(active) = app.session.active() else { return; };
     let stamp = (active.doc.id.0, active.revision, layer.0);
     let flat = owned_flat(app);
+    let editable_flat = flat && active.doc.mode == photocraft_doc::ColorMode::Rgb;
     let permission = eligibility(app, layer, &metadata);
     let mut draft = app.ui.xcf_composition_draft.take().filter(|draft| (draft.document, draft.revision, draft.layer) == stamp && (flat || draft.source_mode == metadata.mode));
     if app.ui.xcf_composition_origin.as_ref().is_some_and(|origin| origin.layer != layer || !stable(app, origin)) { app.ui.xcf_composition_origin = None; }
@@ -150,7 +154,7 @@ pub(crate) fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: Laye
         if let Some(value) = draft.as_mut() {
             if !witnessed { ui.label(tl!("Choose Edit to capture the current layer before applying.")); }
             ui.add_enabled_ui(witnessed && permission.is_ok(), |ui| {
-                if flat {
+                if editable_flat {
                     ui.horizontal(|ui| { ui.label(tl!("Mode")); egui::ComboBox::from_id_salt("source_mode").selected_text(mode_label(value.source_mode).map(crate::i18n::t).unwrap_or(tl!("Choose explicit mode"))).show_ui(ui, |ui| {
                         for mode in EDITABLE_MODES { if let Some(label)=mode_label(mode) { ui.selectable_value(&mut value.source_mode,mode,crate::i18n::t(label)); } }
                     }); });
@@ -264,3 +268,6 @@ mod tests {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "composition/flat_current_tests.rs"]
 mod flat_current_tests;
+
+#[cfg(test)]
+pub(crate) fn capture_alpha_composition_test(app: &PhotocraftApp, layer: LayerId) -> Result<(), String> { capture(app, layer).map(|_| ()) }

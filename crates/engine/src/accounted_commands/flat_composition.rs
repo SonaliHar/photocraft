@@ -16,6 +16,7 @@ impl<'a> Request<'a> {
     pub(super) fn parse(s: &Session, p: &'a Value, c: &ReadControl<'_>) -> Result<Self> {
         c.check(1)?;
         let owner = s.active().and_then(|s| s.doc.accounted()).filter(|o| o.is_readonly_flat_composite_storage()).ok_or(BackingError::Unsupported)?;
+        if owner.document().mode != photocraft_doc::ColorMode::Rgb { return Err(BackingError::Unsupported.into()); }
         let fields = p.as_object().filter(|m| m.len() <= 8).ok_or_else(|| bad(ID, "expected bounded explicit composition fields"))?;
         // The shared parser rejects every unknown key and every unsupported value.
         // Fixed valid strings are <=20bytes; prepay bounded upstream parse/error work
@@ -28,6 +29,7 @@ impl<'a> Request<'a> {
     pub(super) fn prepare(self, s: &Session, c: &ReadControl<'_>) -> Result<Prepared<'a>> {
         let state = s.active().ok_or(EngineError::NoDocument)?;
         let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
+        if owner.document().mode != photocraft_doc::ColorMode::Rgb { return Err(BackingError::Unsupported.into()); }
         owner.validate_readonly_flat_composite_storage(c)?;
         let fence = AssignedFence::prepare::<Prepared<'_>>(s, c)?;
         locks(owner, self.patch.layer, c)?;

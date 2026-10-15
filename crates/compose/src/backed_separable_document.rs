@@ -30,8 +30,17 @@ fn scope() -> E {
 #[path = "backed_separable_document_tests.rs"]
 mod tests;
 
+#[path = "backed_separable_alpha_source.rs"]
+mod alpha_source;
 #[path = "backed_separable_component_source.rs"]
 mod component_source;
+fn implicit_basis(doc: &Document) -> Result<&'static photocraft_cms::Profile, E> {
+    match (doc.mode, &doc.working_profile_interpretation) {
+        (ColorMode::Rgb, WorkingProfileInterpretation::ImplicitSrgb { .. }) => Ok(Builtin::Srgb.profile()),
+        (ColorMode::Grayscale, WorkingProfileInterpretation::ImplicitSGray { .. }) => Ok(Builtin::SGray.profile()),
+        _ => Err(scope()),
+    }
+}
 #[path = "backed_separable_general_current.rs"]
 mod general_current;
 #[path = "backed_separable_general_source.rs"]
@@ -305,6 +314,39 @@ impl<S, L> LeasedSeparableBlendPipeline<S, L> {
             _ => CompositionError::Unsupported("component/luma flat source preparation"),
         })
     }
+    /// Preparation for separately admitted exact RGB/Gray alpha originals.
+    pub fn new_alpha_budgeted<B: crate::gimp_render::PreparationBudget<Lease = L>>(
+        doc: &Document,
+        interrupt: &Interrupt<'_>,
+        budget: &mut B,
+        source_lease: S,
+    ) -> Result<Self, CompositionError> {
+        let result = (|| -> Result<Self, E> {
+            let mut check = |n| {
+                if interrupt.cancelled() {
+                    return Err(E::Backing(BackingError::Cancelled));
+                }
+                budget.consume_preparation_work(n).map_err(E::Color)
+            };
+            let recipes = alpha_source::metadata(doc, interrupt, &mut check)?;
+            let mut needed = [false; 3];
+            for r in recipes {
+                *needed.get_mut(lower::slot(r.blend)?).ok_or_else(scope)? = true;
+                *needed.get_mut(lower::slot(r.composite)?).ok_or_else(scope)? = true;
+            }
+            let profile = implicit_basis(doc)?;
+            let (bytes, work) = lower::space_requirements(profile, SampleEncoding::NonlinearProfile, needed, std::mem::size_of::<Self>())?;
+            let fee = budget.reserve_prepared_bytes(bytes).map_err(E::Color)?;
+            budget.consume_preparation_work(work).map_err(E::Color)?;
+            let spaces = Spaces::prepare(profile, SampleEncoding::NonlinearProfile, needed, fee, interrupt)?;
+            Ok(Self { _recipes: None, _spaces: spaces, _source: source_lease })
+        })();
+        result.map_err(|e| match e {
+            E::Color(e) => e,
+            E::Backing(BackingError::Cancelled) => photocraft_raster::RasterInputError::Cancelled.into(),
+            _ => CompositionError::Unsupported("alpha RGB/Gray flat source preparation"),
+        })
+    }
     /// Preparation only for the separately qualified generic original epoch.
     /// This does not evaluate or promote source-native pixels.
     pub fn new_general_budgeted<B: crate::gimp_render::PreparationBudget<Lease = L>>(
@@ -336,7 +378,8 @@ impl<'a> PreparedBackedSeparableDocument<'a> {
         owner.validate_readonly_flat_composite_storage(c).map_err(E::Backing)?;
         let index = owner.quota().reserve(QuotaKind::Index, std::mem::size_of::<Self>() as u64).map_err(E::Quota)?;
         let metadata = general_current::Metadata::new(owner, c)?;
-        let stack = PreparedBackedSeparableStack::new(&metadata.inputs, owner.quota(), Builtin::Srgb.profile(), SampleEncoding::NonlinearProfile, limits, c)?;
+        let stack =
+            PreparedBackedSeparableStack::new(&metadata.inputs, owner.quota(), implicit_basis(owner.document())?, SampleEncoding::NonlinearProfile, limits, c)?;
         let out = Self { stack, _metadata: metadata, owner, limits, _index: index };
         out.validate_operative(c)?;
         Ok(out)
@@ -352,7 +395,10 @@ impl<'a> PreparedBackedSeparableDocument<'a> {
             .map_err(E::Quota)?;
         for (layer, recipe) in self.owner.document().layers.iter().zip(&self._metadata.recipes) {
             let mode = recipe.mode;
-            let unit = matches!(mode, 41..=49 | 51 | 53) || lower::is_supported_legacy_mode(mode) || lower::is_supported_component_mode(mode);
+            let unit = matches!(mode, 41..=49 | 51 | 53)
+                || lower::is_supported_legacy_mode(mode)
+                || lower::is_supported_component_mode(mode)
+                || lower::is_supported_alpha_mode(mode);
             let LayerContent::BackedRaster(backed) = &layer.content else { return Err(scope()) };
             let view = backed.checked_view();
             let f = view.format();

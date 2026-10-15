@@ -1690,6 +1690,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         general_separable_domain,
         legacy_separable_domain,
         component_separable_domain,
+        alpha_separable_domain,
         point_replace_domain,
         owned_point_domain,
         owned_neighborhood_domain,
@@ -2597,6 +2598,15 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         if let Err(error) = checked {
             return Err(adapter.failure.map(accounting_error).unwrap_or_else(|| {
                 if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF staged Point rendering consumer: {error}")) }
+            }));
+        }
+    } else if P::requires_budgeted_alpha_separable_preparation(alpha_separable_domain) {
+        let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("staged alpha separable scene requires accounting".into()))?;
+        let mut adapter = SharedPreparation { shared, failure: None };
+        let checked = photocraft_compose::backed_separable_document::LeasedSeparableBlendPipeline::new_alpha_budgeted(&doc, ctl, &mut adapter, source_lease);
+        if let Err(error) = checked {
+            return Err(adapter.failure.map(accounting_error).unwrap_or_else(|| {
+                if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF staged alpha separable preparation: {error}")) }
             }));
         }
     } else if P::requires_budgeted_component_separable_preparation(component_separable_domain) {

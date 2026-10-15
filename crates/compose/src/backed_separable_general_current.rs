@@ -31,7 +31,8 @@ fn policy(policy: &GimpComposition, version: u32, c: &ReadControl<'_>) -> Result
         || !(policy.source_mode == 28
             || lower::is_supported_mode(policy.source_mode)
             || lower::is_supported_legacy_mode(policy.source_mode)
-            || lower::is_supported_component_mode(policy.source_mode))
+            || lower::is_supported_component_mode(policy.source_mode)
+            || lower::is_supported_alpha_mode(policy.source_mode))
     {
         return Err(scope());
     }
@@ -57,6 +58,18 @@ fn policy(policy: &GimpComposition, version: u32, c: &ReadControl<'_>) -> Result
             return Err(scope());
         }
         let rule = flat_component_source_rule(version, policy.source_mode, policy.stored_blend_space, policy.stored_composite_space, policy.stored_operator)
+            .ok_or_else(scope)?;
+        if policy.checked_resolved().map_err(|_| scope())? != &rule.resolved() {
+            return Err(scope());
+        }
+        return Ok(Recipe { mode: policy.source_mode, blend: rule.blend_space, composite: rule.composite_space, operator: rule.operator });
+    }
+    if lower::is_supported_alpha_mode(policy.source_mode) {
+        use photocraft_doc::import_compositing::{XCF12_FLAT_ALPHA_SOURCE_EPOCH, flat_alpha_source_rule};
+        if policy.compatibility_epoch != XCF12_FLAT_ALPHA_SOURCE_EPOCH {
+            return Err(scope());
+        }
+        let rule = flat_alpha_source_rule(version, policy.source_mode, policy.stored_blend_space, policy.stored_composite_space, policy.stored_operator)
             .ok_or_else(scope)?;
         if policy.checked_resolved().map_err(|_| scope())? != &rule.resolved() {
             return Err(scope());
@@ -158,10 +171,9 @@ impl<'a> Metadata<'a> {
             || n > 4096
             || state.items.len() != n
             || doc.bounds().is_empty()
-            || doc.mode != ColorMode::Rgb
+            || !matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale)
             || doc.depth != SampleType::F32
             || doc.sample_encoding != Some(SampleEncoding::NonlinearProfile)
-            || !matches!(doc.working_profile_interpretation, WorkingProfileInterpretation::ImplicitSrgb { .. })
             || source.source_precision != 650
             || source.original_icc.is_some()
             || !matches!(state.provenance.format_version, 12 | 23)
@@ -176,7 +188,7 @@ impl<'a> Metadata<'a> {
             return Err(scope());
         }
         c.check(1).map_err(E::Backing)?;
-        let profile = Builtin::Srgb.profile();
+        let profile = implicit_basis(doc)?;
         c.check(1).map_err(E::Backing)?;
         let current = doc.icc_profile.as_deref().map(Vec::as_slice).ok_or_else(scope)?;
         if !equal(current, profile.encoded_bytes().ok_or_else(scope)?, &mut |n| c.check(n).map_err(E::Backing))? {
@@ -214,6 +226,7 @@ impl<'a> Metadata<'a> {
             .and_then(|v| v.checked_add(std::mem::size_of::<Self>()))
             .ok_or_else(scope)?;
         out._fee.reconcile_capacity(actual as u64).map_err(E::Quota)?;
+        let mut has_alpha = false;
         for layer in &doc.layers {
             c.check(1).map_err(E::Backing)?;
             let LayerContent::BackedRaster(backed) = &layer.content else { return Err(scope()) };
@@ -250,6 +263,10 @@ impl<'a> Metadata<'a> {
                 return Err(scope());
             }
             let recipe = policy(item.composition.as_ref().ok_or_else(scope)?, state.provenance.format_version, c)?;
+            if doc.mode == ColorMode::Grayscale && recipe.mode != 28 && !lower::is_supported_alpha_mode(recipe.mode) {
+                return Err(scope());
+            }
+            has_alpha |= lower::is_supported_alpha_mode(recipe.mode);
             let physical = layer.import_compositing.as_ref().ok_or_else(scope)?;
             if physical.pass_through || physical.blend_encoding != transfer(recipe.blend)? || physical.composite_encoding != transfer(recipe.composite)? {
                 return Err(scope());
@@ -265,6 +282,9 @@ impl<'a> Metadata<'a> {
                 operator: recipe.operator,
             });
             out.recipes.push(recipe);
+        }
+        if doc.mode == ColorMode::Grayscale && !has_alpha {
+            return Err(scope());
         }
         c.check(0).map_err(E::Backing)?;
         Ok(out)

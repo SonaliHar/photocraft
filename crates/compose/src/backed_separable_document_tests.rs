@@ -20,6 +20,8 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 const MODES: [i32; 21] = [23, 30, 31, 32, 33, 34, 35, 36, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53];
+#[path = "backed_separable_alpha_tests.rs"]
+mod alpha_tests;
 #[path = "backed_separable_component_tests.rs"]
 mod component_tests;
 #[path = "backed_separable_general_current_tests.rs"]

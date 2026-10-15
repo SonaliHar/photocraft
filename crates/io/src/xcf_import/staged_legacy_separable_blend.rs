@@ -4,8 +4,14 @@ pub(super) fn mode(value: i32) -> bool {
     matches!(value, 3 | 4 | 6..=21)
 }
 pub(super) fn geometry<P: ExactParsedPlane>(f: &XcfFile<P>) -> bool {
+    geometry_model(f, Model::Rgb)
+}
+pub(super) fn geometry_model<P: ExactParsedPlane>(f: &XcfFile<P>, model: Model) -> bool {
+    if !matches!(model, Model::Rgb | Model::Gray) {
+        return false;
+    }
     if f.version != 12
-        || f.model != Model::Rgb
+        || f.model != model
         || f.sample != Sample::F32
         || f.precision != 650
         || f.encoding != Encoding::NonlinearProfile
@@ -25,13 +31,13 @@ pub(super) fn geometry<P: ExactParsedPlane>(f: &XcfFile<P>) -> bool {
             && d.visible
             && d.floating_attachment.is_none()
             && d.mask.is_none()
-            && d.model == Model::Rgb
+            && d.model == model
             && d.alpha
             && d.text.is_none()
             && d.vector.is_none()
             && d.link.is_none()
             && d.transform.is_none()
-            && d.plane.as_ref().is_some_and(|p| p.descriptor().sample == Sample::F32 && p.descriptor().channels == 4)
+            && d.plane.as_ref().is_some_and(|p| p.descriptor().sample == Sample::F32 && p.descriptor().channels == if model == Model::Gray { 2 } else { 4 })
     }) {
         return false;
     }
@@ -63,6 +69,18 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, 
 // Caller has selected an exact bounded two-plane metadata domain before this
 // common unit visitor. Source activity never skips operative native words.
 pub(super) fn native<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, budget: &photocraft_xcf::Budget<'_>) -> Result<bool, IoError> {
+    native_layout(f, 4, ctl, budget)
+}
+pub(super) fn native_layout<P: ExactParsedPlane>(
+    f: &XcfFile<P>,
+    channels: usize,
+    ctl: &Interrupt<'_>,
+    budget: &photocraft_xcf::Budget<'_>,
+) -> Result<bool, IoError> {
+    if !matches!(channels, 2 | 4) {
+        return Err(IoError::Unsupported("strict source native channel count".into()));
+    }
+    let pixel_bytes = channels * 4;
     let mut valid = true;
     for d in &f.layers {
         pay(ctl, budget, 1)?;
@@ -70,14 +88,15 @@ pub(super) fn native<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, b
         let desc = p.descriptor();
         let expected = u64::from(d.width)
             .checked_mul(u64::from(d.height))
-            .and_then(|n| n.checked_mul(16))
+            .and_then(|n| n.checked_mul(pixel_bytes as u64))
             .ok_or_else(|| IoError::Unsupported("legacy separable native length".into()))?;
-        if desc.width != d.width || desc.height != d.height || desc.channels != 4 || desc.sample != Sample::F32 || p.native_byte_len() != Some(expected) {
+        if desc.width != d.width || desc.height != d.height || desc.channels != channels || desc.sample != Sample::F32 || p.native_byte_len() != Some(expected)
+        {
             return Ok(false);
         }
         let mut seen = 0u64;
         p.visit_native(ctl, &mut |block| {
-            if block.is_empty() || block.len() > 64 * 16 || block.len() % 16 != 0 {
+            if block.is_empty() || block.len() > 64 * pixel_bytes || block.len() % pixel_bytes != 0 {
                 return Err(IoError::Unsupported("legacy separable native block".into()));
             }
             seen =

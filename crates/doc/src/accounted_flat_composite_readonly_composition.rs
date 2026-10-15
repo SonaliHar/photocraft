@@ -64,7 +64,7 @@ fn transfer(space: GimpSpace) -> Result<(i32, SampleEncoding), BackingError> {
 }
 fn prepare(owner: &AccountedDocument, patch: FlatCompositeCompositionPatch, c: &ReadControl<'_>) -> Result<(ModelCensus, Option<Plan>), BackingError> {
     c.check(32)?;
-    if !owner.is_readonly_flat_composite_storage() {
+    if !owner.is_readonly_flat_composite_storage() || owner.document().mode != crate::ColorMode::Rgb {
         return Err(BackingError::Unsupported);
     }
     let ordinary = ordinary(patch.source_mode)?;
