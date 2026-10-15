@@ -187,7 +187,8 @@ struct GpuProxy {
 fn dialog(app: &PhotocraftApp) -> Option<(String, Value, bool)> {
     let d = app.ui.dialogs.iter().find(|d| crate::adjust_dialog::owns(&d.fields))?;
     let kind = d.fields.get("__adjust")?.as_str()?.to_string();
-    let preview = d.fields.get("__preview").and_then(Value::as_bool).unwrap_or(true);
+    // No Preview key: a smart filter being re-edited, which must not preview (`smart_ui::edit_filter`).
+    let preview = d.fields.get("__preview").and_then(Value::as_bool).unwrap_or(false);
     Some((kind, crate::filter_dialog::params_of(&d.fields), preview))
 }
 

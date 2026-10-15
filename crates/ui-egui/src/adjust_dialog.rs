@@ -250,10 +250,13 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
             fields.insert(CURVE_PICKER_BASE.into(), base);
         }
     }
-    let mut preview = fields.get("__preview").and_then(Value::as_bool).unwrap_or(true);
-    ui.add_space(6.0);
-    if crate::widgets::checkbox(ui, &mut preview, tl!("Preview")).changed() {
-        fields.insert("__preview".into(), json!(preview));
+    // A smart filter being re-edited has no Preview (`smart_ui::edit_filter`), as in filter
+    // dialogs: previewing would run the adjustment again on top of the recorded filter.
+    if let Some(mut preview) = fields.get("__preview").and_then(Value::as_bool) {
+        ui.add_space(6.0);
+        if crate::widgets::checkbox(ui, &mut preview, tl!("Preview")).changed() {
+            fields.insert("__preview".into(), json!(preview));
+        }
     }
 }
 

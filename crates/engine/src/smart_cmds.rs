@@ -1000,6 +1000,9 @@ fn set_filter_visible(s: &mut Session, p: &Value) -> Result<Value> {
 fn set_filter_params(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "layer.smartFilter.setParams";
     let new = p.get("params").cloned().ok_or_else(|| bad(CMD, "pass `params` (merged into the filter's parameters)"))?;
+    // A dialog holding the filter's complete settings replaces them, so a key its editor dropped
+    // (a Channel Mixer's gray row once Monochrome is off) doesn't linger from the old ones.
+    let replace = p.get("replace").and_then(Value::as_bool).unwrap_or(false);
     edit_filters(s, p, "Edit Smart Filter", |sm| {
         let i = filter_index(CMD, p, sm)?;
         let f = &mut sm.smart_filters[i];
@@ -1007,7 +1010,7 @@ fn set_filter_params(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad(CMD, "this smart filter isn't implemented in PhotoCraft: it is kept as is (it can be hidden, moved or deleted)"));
         }
         match (&mut f.params, new) {
-            (Value::Object(old), Value::Object(n)) => old.extend(n),
+            (Value::Object(old), Value::Object(n)) if !replace => old.extend(n),
             (slot, n) => *slot = n,
         }
         Ok(())
@@ -1325,7 +1328,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.smartFilter.setParams",
             "Edit Smart Filter",
             &[],
-            r##"{"layer":id?,"index":u32?,"params":{…} (merged)}"##,
+            r##"{"layer":id?,"index":u32?,"params":{…} (merged),"replace":bool?=false (params replace the filter's instead)}"##,
             has_smart_filters,
             set_filter_params
         ),

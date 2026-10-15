@@ -313,24 +313,49 @@ pub fn open_editor(app: &mut PhotocraftApp, ctx: &egui::Context, layer: u64, sm:
 /// Hands the open dialog `id` the smart filter's recorded `params` and makes OK update that
 /// filter (`layer.smartFilter.setParams`, see [`confirm_command`]) instead of adding another.
 fn edit_filter(app: &mut PhotocraftApp, id: u64, layer: u64, index: usize, params: &Value) {
-    if let Some(d) = app.ui.dialog_mut(id) {
-        // The live preview would stack a second copy of the filter on the smart object.
-        d.fields.remove("__preview");
-        d.fields.insert("__smartFilter".into(), json!({"layer": layer, "index": index}));
-        if let Value::Object(p) = params {
+    let mode = app.session.active().map_or(photocraft_doc::ColorMode::Rgb, |s| s.doc.mode);
+    let Some(d) = app.ui.dialog_mut(id) else { return };
+    // The live preview would stack a second copy of the filter on the smart object.
+    d.fields.remove("__preview");
+    d.fields.insert("__smartFilter".into(), json!({"layer": layer, "index": index}));
+    // An adjustment dialog holds the kind's complete settings: show the ones the filter renders
+    // with, read as the engine reads the recorded params. Copying only the keys the defaults
+    // have would drop the others (a monochrome Channel Mixer's gray row, a pencil Curves), and
+    // OK on the untouched dialog would change the image.
+    let adjustment = d
+        .fields
+        .get("__adjust")
+        .and_then(Value::as_str)
+        .and_then(|kind| photocraft_engine::adjust_params::from_params(kind, params, None, mode).ok())
+        .map(|adj| photocraft_engine::adjust_params::to_params(&adj));
+    match (adjustment, params) {
+        (Some(Value::Object(p)), _) => {
+            d.fields.retain(|k, _| k.starts_with("__"));
+            d.fields.extend(p);
+            // OK sets these complete settings, keys the editor drops included (`confirm_command`).
+            d.fields.insert("__smartFilter".into(), json!({"layer": layer, "index": index, "replace": true}));
+        }
+        (_, Value::Object(p)) => {
             for (k, v) in p {
                 if d.fields.contains_key(k) {
                     d.fields.insert(k.clone(), v.clone());
                 }
             }
         }
+        _ => {}
     }
 }
 
 /// The command a confirmed filter dialog runs: smart-filter edits update the recorded filter.
 pub fn confirm_command(fields: &serde_json::Map<String, Value>, command: String, params: Value) -> (String, Value) {
     match fields.get("__smartFilter") {
-        Some(sf) => ("layer.smartFilter.setParams".into(), json!({"layer": sf["layer"], "index": sf["index"], "params": params})),
+        Some(sf) => {
+            let mut p = json!({"layer": sf["layer"], "index": sf["index"], "params": params});
+            if sf.get("replace") == Some(&Value::Bool(true)) {
+                p["replace"] = Value::Bool(true);
+            }
+            ("layer.smartFilter.setParams".into(), p)
+        }
         None => (command, params),
     }
 }
@@ -451,5 +476,68 @@ mod tests {
         assert_eq!(sm.smart_filters.len(), 1, "no filter was stacked");
         assert_eq!(sm.smart_filters[0].params.get("brightness").and_then(Value::as_f64), Some(40.0));
         assert_eq!(sm.smart_filters[0].params.get("contrast").and_then(Value::as_f64), Some(-10.0));
+    }
+
+    /// #5689 follow-up: an adjustment re-opens with the settings it renders with, without a
+    /// Preview checkbox, and OK sets them whole. A monochrome Channel Mixer recorded without its
+    /// gray row renders Photoshop's grey mix: copying only the keys the defaults have showed the
+    /// identity rows instead, and OK on the untouched dialog swapped the mix for the red channel.
+    /// Turning Monochrome off drops the gray row, and OK must drop it from the filter too, not
+    /// merge the rest over it (the old row kept overriding the red channel).
+    #[test]
+    fn an_adjustment_smart_filter_reopens_with_the_settings_it_renders() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 32, "height": 24})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"color": "#c06030"})).unwrap();
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let flat = |app: &PhotocraftApp| photocraft_compose::flatten(&app.session.active().unwrap().doc).px;
+        let unfiltered = flat(&app);
+        app.run("image.adjustments.channelMixer", json!({"monochrome": true})).unwrap();
+        let layer = app.session.active().unwrap().active_layer.unwrap();
+        let smart = |app: &PhotocraftApp| match &app.session.active().unwrap().doc.layer(layer).unwrap().content {
+            LayerContent::Smart(sm) => sm.clone(),
+            _ => panic!("not a smart object"),
+        };
+        let (before, steps) = (flat(&app), app.session.active().unwrap().history.past_len());
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 700.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        let ctx = h.ctx.clone();
+
+        let sm = smart(h.state());
+        open_editor(h.state_mut(), &ctx, layer.0, &sm, 0);
+        h.run();
+        assert!(h.query_by_label("Preview").is_none(), "no Preview: it would stack a second filter");
+        let d = h.state().ui.dialogs.last().expect("the adjustment dialog opened");
+        assert_eq!(d.fields["__adjust"], "channelMixer");
+        assert_eq!(d.fields["__smartFilter"], json!({"layer": layer.0, "index": 0, "replace": true}));
+        assert_eq!(d.fields["monochrome"], true);
+        assert_eq!(d.fields["gray"], json!([40.0, 40.0, 20.0, 0.0]), "the grey mix the filter renders");
+        let id = d.id;
+        crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        assert_eq!(smart(h.state()).smart_filters.len(), 1, "edited in place, not added");
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+        assert_eq!(flat(h.state()), before, "OK on the untouched dialog keeps the image");
+
+        // Monochrome off, as the editor leaves it: no gray row, the identity mix.
+        let sm = smart(h.state());
+        open_editor(h.state_mut(), &ctx, layer.0, &sm, 0);
+        let d = h.state_mut().ui.dialogs.last_mut().expect("the adjustment dialog opened");
+        d.fields.insert("monochrome".into(), json!(false));
+        d.fields.remove("gray");
+        for (row, mix) in [("red", [100, 0, 0, 0]), ("green", [0, 100, 0, 0]), ("blue", [0, 0, 100, 0])] {
+            d.fields.insert(row.into(), json!(mix));
+        }
+        let id = d.id;
+        crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        assert!(smart(h.state()).smart_filters[0].params.get("gray").is_none(), "the gray row went with Monochrome");
+        let off = flat(h.state());
+        assert!(off.iter().zip(&unfiltered).all(|(a, b)| (0..4).all(|c| (a[c] - b[c]).abs() < 1e-6)), "the identity mix");
+
+        // A dialog opened from the menu keeps its Preview.
+        crate::adjust_dialog::open(h.state_mut(), "image.adjustments.channelMixer").unwrap();
+        h.run();
+        assert!(h.query_by_label("Preview").is_some());
     }
 }
