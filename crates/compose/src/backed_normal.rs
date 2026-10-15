@@ -445,3 +445,7 @@ fn cms_error(error: photocraft_cms::control::Error) -> BackedNormalError {
 #[cfg(test)]
 #[path = "backed_normal_operator_tests.rs"]
 mod operator_tests;
+
+#[cfg(test)]
+#[path = "backed_translation_consumer_tests.rs"]
+mod translation_consumer_tests;

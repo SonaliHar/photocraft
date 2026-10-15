@@ -144,6 +144,9 @@ mod threshold_alpha_storage_tests;
 #[cfg(test)]
 #[path = "owned_document/threshold_storage_tests.rs"]
 mod threshold_storage_tests;
+#[cfg(test)]
+#[path = "owned_document/translated_storage_tests.rs"]
+mod translated_storage_tests;
 pub(crate) fn error(error: BackingError) -> FormatError {
     if error == BackingError::Cancelled { FormatError::Cancelled } else { FormatError::Io(std::io::Error::other(error)) }
 }

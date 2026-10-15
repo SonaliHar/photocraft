@@ -74,6 +74,14 @@ impl BackedLayer {
     pub fn try_content_equal(&self, other: &Self, control: &ReadControl<'_>) -> Result<bool, BackedLayerError> {
         self.raster.try_content_equal(&other.raster, control).map_err(BackedLayerError::Backing)
     }
+    /// Translate the operative coordinate view while retaining the original
+    /// immutable storage, quota and COW history. Native format and default bits
+    /// remain exact; this grants no source, sample-domain or rendering authority.
+    pub fn try_translated(&self, dx: i32, dy: i32, control: &ReadControl<'_>) -> Result<Self, BackedLayerError> {
+        let raster = self.raster.try_translated(dx, dy, control).map_err(BackedLayerError::Backing)?;
+        let descriptor = raster.descriptor();
+        Self::new(raster, descriptor, control)
+    }
     /// Stage exact native bytes inside the operative extent. The original owner
     /// and history clones remain unchanged on IO, quota, work or cancellation.
     /// This does not admit a color/sample edit domain or infer finite alpha.

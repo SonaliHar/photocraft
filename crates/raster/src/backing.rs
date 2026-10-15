@@ -10,6 +10,8 @@ use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
 pub mod current_stream;
 #[path = "backing/quota.rs"]
 pub mod quota;
+#[path = "backing/translated.rs"]
+mod translated;
 use quota::{BackingQuota, QuotaKind, QuotaLease};
 use std::sync::{Arc, Mutex};
 
@@ -156,6 +158,9 @@ pub struct BackingLimits {
 pub struct BackedRaster {
     store: Arc<dyn NativePlaneStore>,
     descriptor: NativePlaneDescriptor,
+    // Storage/cache/COW keys remain in this fixed original coordinate grid.
+    root_descriptor: NativePlaneDescriptor,
+    view_offset: (i64, i64),
     quota: BackingQuota,
     overrides: Arc<Entries>,
     override_limit: usize,
@@ -190,7 +195,7 @@ impl BackedRaster {
         let overrides = Arc::new(entries(&quota, 0)?);
         let cache = Arc::new(Mutex::new(Cache { entries: entries(&quota, cache_tiles)?, capacity: cache_tiles }));
         control.check(1)?;
-        Ok(Self { store, descriptor, quota, overrides, override_limit: limits.override_tiles, cache })
+        Ok(Self { store, descriptor, root_descriptor: descriptor, view_offset: (0, 0), quota, overrides, override_limit: limits.override_tiles, cache })
     }
     pub fn descriptor(&self) -> NativePlaneDescriptor {
         self.descriptor
@@ -208,6 +213,9 @@ impl BackedRaster {
         Ok(())
     }
     pub fn pin_tile(&self, coord: TileCoord, control: &ReadControl<'_>) -> Result<TilePin, BackingError> {
+        if self.view_offset != (0, 0) {
+            return self.pin_translated_tile(coord, control);
+        }
         control.check(1)?;
         let rect = tile_rect(coord)?;
         if let Some((_, tile)) = self.overrides.values.iter().find(|(c, _)| *c == coord) {
@@ -309,6 +317,9 @@ impl BackedRaster {
     /// Atomic COW region write, currently constrained to the declared native extent.
     /// Every affected tile and metadata entry is staged before a single publication.
     pub fn write_region(&mut self, bounds: Rect, bytes: &[u8], control: &ReadControl<'_>) -> Result<(), BackingError> {
+        if self.view_offset != (0, 0) {
+            return self.write_translated_region(bounds, bytes, control);
+        }
         control.check(1)?;
         if bounds.is_empty() || !self.descriptor.bounds.contains_rect(&bounds) {
             return Err(BackingError::Bounds);
@@ -377,6 +388,8 @@ impl BackedRaster {
     pub fn shares_exact_state(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.store, &other.store)
             && self.descriptor == other.descriptor
+            && self.root_descriptor == other.root_descriptor
+            && self.view_offset == other.view_offset
             && (Arc::ptr_eq(&self.overrides, &other.overrides)
                 || (self.overrides.values.len() == other.overrides.values.len()
                     && self.overrides.values.iter().zip(&other.overrides.values).all(|((a, x), (b, y))| a == b && Arc::ptr_eq(&x.payload, &y.payload))))
