@@ -100,7 +100,7 @@ fn parse_hash(value: &str) -> Result<[u8; 32]> {
 impl Fetch for OwnedFetch<'_, '_> {
     fn finite_raster(&mut self, metadata: &crate::finite_raster::FiniteRasterM) -> Result<photocraft_doc::BackedLayer> {
         let descriptor = metadata.descriptor_with(
-            crate::finite_raster::FiniteRasterLimits { max_logical_bytes: 256 << 20, max_tiles: self.limits.max_reservations },
+            crate::finite_raster::FiniteRasterLimits { max_logical_bytes: self.limits.max_finite_logical_bytes, max_tiles: self.limits.max_reservations },
             self.control,
         )?;
         let count = metadata.tiles.len();

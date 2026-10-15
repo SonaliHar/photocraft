@@ -17,6 +17,11 @@ mod source;
 use accounting::RetainedReservations;
 pub use save::save_current_document_archive;
 
+/// Standard owned-codec per-raster logical ceiling. This is a descriptor allowance,
+/// not a resident allocation or encoded archive allowance. Native-large remains
+/// separate; callers may lower this value through `OwnedDocumentLimits`.
+pub const STANDARD_MAX_FINITE_LOGICAL_BYTES: u64 = 2 << 30;
+
 #[derive(Clone, Copy, Debug)]
 pub struct OwnedDocumentLimits {
     pub zip: crate::zip::stream::Limits,
@@ -25,6 +30,9 @@ pub struct OwnedDocumentLimits {
     pub max_layers: usize,
     pub max_reservations: usize,
     pub decoder_window: u64,
+    /// Logical bytes per finite raster, independent of document totals and
+    /// actual resident/encoded storage. Zero refuses nonempty finite rasters.
+    pub max_finite_logical_bytes: u64,
 }
 impl Default for OwnedDocumentLimits {
     fn default() -> Self {
@@ -35,6 +43,7 @@ impl Default for OwnedDocumentLimits {
             max_layers: 4096,
             max_reservations: 4096,
             decoder_window: 4 << 20,
+            max_finite_logical_bytes: STANDARD_MAX_FINITE_LOGICAL_BYTES,
         }
     }
 }
@@ -50,6 +59,7 @@ impl OwnedDocumentLimits {
             || self.decoder_window > 16 << 20
             || self.max_reservations == 0
             || self.max_reservations > 4096
+            || self.max_finite_logical_bytes > STANDARD_MAX_FINITE_LOGICAL_BYTES
         {
             return Err(FormatError::LimitExceeded("owned document profile".into()));
         }

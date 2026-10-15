@@ -1648,7 +1648,6 @@ impl PhotocraftApp {
     /// response before writing. Resident save bookkeeping is never reused.
     fn save_accounted_native(&mut self, path: &str, copy: bool, automation: bool, record: Option<&str>) -> Result<Value, String> {
         use photocraft_raster::backing::{BackingError, ReadControl, quota::QuotaKind};
-        use std::sync::atomic::{AtomicU64, Ordering};
         if path.len() > 4096 || !std::path::Path::new(path).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pcraft")) {
             return Err("accounted save requires a bounded .pcraft destination".into());
         }
@@ -1656,15 +1655,22 @@ impl PhotocraftApp {
         if !available {
             return Err(if automation { "accounted native automation write authority is not configured" } else { "accounted native writer is not configured" }.into());
         }
-        let work = AtomicU64::new(0);
-        let charge = |units: u64| {
-            work.try_update(Ordering::Relaxed, Ordering::Relaxed, |used| used.checked_add(units).filter(|next| *next <= 8_000_000_000))
-                .map_err(|_| BackingError::Length)?;
-            Ok(())
-        };
-        let control = ReadControl { interrupt: &photocraft_raster::Interrupt::NONE, work: &charge };
+        let work = photocraft_io::accounted_operation_work::OperationWork::legacy(8_000_000_000);
+        let charge = |units| work.check(units).map_err(|error| {
+            if error == BackingError::Work && work.diagnostics().policy.is_none() { BackingError::Length } else { error }
+        });
+        let expired = || work.deadline_expired();
+        let interrupt = photocraft_raster::Interrupt::cancel_only(&expired);
+        let control = ReadControl { interrupt: &interrupt, work: &charge };
         control.check(path.len() as u64).map_err(|e| e.to_string())?;
         if path.contains('\0') { return Err("accounted save destination contains NUL".into()); }
+        if let Some(owner) = self.session.active().and_then(|state| state.doc.accounted())
+            && (owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())
+            && photocraft_engine::accounted_native_open::is_current_box_work_candidate(owner.document(), &control).map_err(|e| e.to_string())?
+        {
+            let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|e| e.to_string())?;
+            work.select_standard_box(&limits).map_err(|e| e.to_string())?;
+        }
         let protection = services::AccountedSaveProtection::prepare(&self.session, &control)?;
         // This allocation-free spelling comparison is the early inert source
         // exclusion. The host still checks actual identity/content at commit.
@@ -3271,3 +3277,6 @@ mod channel_tint_tests {
         assert_eq!(channel_tint(Rgb, 0, 77, false), Color32::from_gray(77));
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod box_native_save_work_tests;

@@ -24,7 +24,10 @@ impl PreparationBudget for Budget {
     }
 }
 fn observed(s: Rect, r: i64) -> (Document, BackingQuota, Arc<dyn std::any::Any + Send + Sync>, Profile) {
-    let (mut d, q, g, p, _) = fixture(SampleType::F32, false, s, Rect::new(0, 0, 283, 281), r, true);
+    observed_depth(SampleType::F32, s, r)
+}
+fn observed_depth(sample: SampleType, s: Rect, r: i64) -> (Document, BackingQuota, Arc<dyn std::any::Any + Send + Sync>, Profile) {
+    let (mut d, q, g, p, _) = fixture(sample, false, s, Rect::new(0, 0, 283, 281), r, true);
     let n = &mut d.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0];
     n.operation.schema_epoch = BOX_GEOMETRY_EPOCH.into();
     let c = n.composition.as_mut().unwrap();
@@ -42,8 +45,9 @@ struct ResidentSource {
     _resident_lease: QuotaLease,
 }
 fn resident_source(d: Document, q: &BackingQuota, guard: Arc<dyn std::any::Any + Send + Sync>, s: Rect) -> ResidentSource {
-    let physical = (s.tiles().count() as u64).checked_mul(256 * 256 * 16).unwrap();
-    let raw = u64::from(s.width()).checked_mul(u64::from(s.height())).unwrap().checked_mul(16).unwrap();
+    let bpp = d.pixel_format().bytes_per_pixel() as u64;
+    let physical = (s.tiles().count() as u64).checked_mul(256 * 256 * bpp).unwrap();
+    let raw = u64::from(s.width()).checked_mul(u64::from(s.height())).unwrap().checked_mul(bpp).unwrap();
     // Two physical payload envelopes cover destination construction, growing
     // replacement map and tile temporaries. The staging Vec may reserve twice
     // its logical raw length. Map/default/holder overhead is separately added.
@@ -52,7 +56,7 @@ fn resident_source(d: Document, q: &BackingQuota, guard: Arc<dyn std::any::Any +
         .unwrap()
         .checked_add(raw.checked_mul(2).unwrap())
         .unwrap()
-        .checked_add(2 * 256 * 256 * 16 + (s.tiles().count() as u64) * 1024 + 65536 + std::mem::size_of::<ResidentSource>() as u64)
+        .checked_add(2 * 256 * 256 * bpp + (s.tiles().count() as u64) * 1024 + 65536 + std::mem::size_of::<ResidentSource>() as u64)
         .unwrap();
     let fee = q.reserve(QuotaKind::Resident, peak).unwrap();
     let mut out = ResidentSource { document: d, _original_guard: guard, _resident_lease: fee };
@@ -172,4 +176,94 @@ fn source_preparation_refuses_budget_and_caller_cancellation() {
         LeasedStreamedBoxPipeline::new_geometry_budgeted(&d, &interrupt, &mut budget, (&input._original_guard, &input._resident_lease)),
         Err(CompositionError::Raster(RasterInputError::Cancelled))
     ));
+}
+
+#[test]
+#[ignore = "UNRUN implicit F64 source raw preservation; not producer ICC equivalence"]
+fn f64_source_retains_low_bits_and_signed_zero_without_f32_narrowing() {
+    let s = Rect::new(-7, 11, 250, 270);
+    for radius in [4, 5] {
+        let (d, q, g, _) = observed_depth(SampleType::F64, s, radius);
+        let mut input = resident_source(d, &q, g, s);
+        let mut pixel = [0u8; 32];
+        for (index, value) in [1. + 2f64.powi(-40), -0., -2f64.powi(-150), 0.5].into_iter().enumerate() {
+            pixel[index * 8..index * 8 + 8].copy_from_slice(&value.to_ne_bytes());
+        }
+        let LayerContent::Raster(surface) = &mut input.document.layers[0].content else { panic!() };
+        surface.try_write_interleaved(Rect::new(s.x0, s.y0, s.x0 + 1, s.y0 + 1), &pixel).unwrap();
+        input.document.xcf_state.as_mut().unwrap().filter_masks[0]
+            .surface
+            .try_write_interleaved(Rect::new(511, 511, 512, 512), &(-0f64).to_ne_bytes())
+            .unwrap();
+        let expected = input.document.clone(); // External raw oracle, not a production receipt.
+        let baseline = q.usage().unwrap();
+        let mut budget = Budget { q: q.clone(), work: u64::MAX, deny: false };
+        let prepared = LeasedStreamedBoxPipeline::new_geometry_budgeted(&input.document, &Interrupt::NONE, &mut budget, &input).unwrap();
+        assert_eq!(input.document, expected);
+        assert!(q.usage().unwrap().resident > baseline.resident);
+        drop(prepared);
+        assert_eq!(q.usage().unwrap(), baseline);
+        let consumed = u64::MAX - budget.work;
+        let LayerContent::Raster(surface) = &input.document.layers[0].content else { panic!() };
+        assert!(consumed >= surface.resident_payload_bytes().unwrap());
+        let mut late = Budget { q: q.clone(), work: consumed - 1, deny: false };
+        assert!(LeasedStreamedBoxPipeline::new_geometry_budgeted(&input.document, &Interrupt::NONE, &mut late, &input).is_err());
+        assert_eq!(q.usage().unwrap(), baseline);
+    }
+}
+#[test]
+#[ignore = "UNRUN F64 observational CURRENT full-tile reference and reordered ROI"]
+fn f64_current_preserves_wide_full_tile_schedule() {
+    let s = Rect::new(13, 9, 270, 268);
+    for radius in [4, 5] {
+        let (d, q, g, p) = observed_depth(SampleType::F64, s, radius);
+        let owned = owner(d, q, g, false);
+        let context = PreparedBackedBoxContext::new(&owned, NormalBandLimits::default(), &ctl()).unwrap();
+        let (o, expected) = reference(owned.document().pixel_format(), s, radius as u32, &p);
+        assert_eq!(context.bounds(), o);
+        for roi in [Rect::new(255, 255, 273, 257), Rect::new(8, 10, 17, 13), Rect::new(257, 250, 261, 254)] {
+            let got = context.render_wide_band(roi, &ctl()).unwrap();
+            for (index, actual) in got.pixels().iter().enumerate() {
+                let x = roi.x0 + (index % roi.width() as usize) as i32;
+                let y = roi.y0 + (index / roi.width() as usize) as i32;
+                let mut pixel = [0.; 4];
+                expected.try_read_pixel_f64(x, y, &mut pixel).unwrap();
+                assert_eq!(*actual, pixel);
+            }
+        }
+    }
+}
+#[test]
+#[ignore = "UNRUN F64 physical/default/role domains and late work cleanup"]
+fn f64_source_rejects_mismatched_roles_and_nonfinite_or_nonunit_physical_words() {
+    let s = Rect::new(13, 9, 270, 268);
+    for defect in 0..5 {
+        let (d, q, g, _) = observed_depth(SampleType::F64, s, 4);
+        let mut input = resident_source(d, &q, g, s);
+        match defect {
+            0 => input.document.source_color_context.as_mut().unwrap().source_precision = 650,
+            1 => {
+                input.document.xcf_state.as_mut().unwrap().filter_masks[0].surface =
+                    Surface::new(photocraft_color::PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false))
+            }
+            2 | 3 => {
+                let mut raw = [0u8; 32];
+                let values = if defect == 2 { [f64::INFINITY, 0., 0., 1.] } else { [0., 0., 0., 1. + 2f64.powi(-40)] };
+                for (index, value) in values.into_iter().enumerate() {
+                    raw[index * 8..index * 8 + 8].copy_from_slice(&value.to_ne_bytes());
+                }
+                let LayerContent::Raster(v) = &mut input.document.layers[0].content else { panic!() };
+                // Outside S, but inside an owned physical source tile.
+                v.try_write_interleaved(Rect::new(511, 511, 512, 512), &raw).unwrap();
+            }
+            _ => input.document.xcf_state.as_mut().unwrap().filter_masks[0]
+                .surface
+                .try_write_interleaved(Rect::new(511, 511, 512, 512), &2f64.powi(-150).to_ne_bytes())
+                .unwrap(),
+        }
+        let baseline = q.usage().unwrap();
+        let mut budget = Budget { q: q.clone(), work: u64::MAX, deny: false };
+        assert!(LeasedStreamedBoxPipeline::new_geometry_budgeted(&input.document, &Interrupt::NONE, &mut budget, &input).is_err());
+        assert_eq!(q.usage().unwrap(), baseline);
+    }
 }

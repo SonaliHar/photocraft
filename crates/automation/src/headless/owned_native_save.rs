@@ -6,8 +6,10 @@ use crate::AutomationError;
 use photocraft_engine::{accounted_commands::PreparedAccountedSaveReply, accounted_native_save::PreparedAccountedNativeSave};
 use photocraft_raster::{
     Interrupt,
-    backing::{BackingError, ReadControl},
+    backing::ReadControl,
 };
+#[cfg(test)]
+use photocraft_raster::backing::BackingError;
 use serde_json::Value;
 use std::path::Path;
 impl Headless {
@@ -109,15 +111,25 @@ impl Headless {
         format: Option<&str>,
         interrupt: &Interrupt<'_>,
     ) -> Result<Value, AutomationError> {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        let used = AtomicU64::new(0);
-        let charge = |units: u64| {
-            used.try_update(Ordering::Relaxed, Ordering::Relaxed, |old| old.checked_add(units).filter(|next| *next <= 8_000_000_000))
-                .map_err(|_| BackingError::Work)?;
-            Ok(())
-        };
-        self.save_owned_native_active(path, format, &ReadControl { interrupt, work: &charge })
+        let work = photocraft_io::accounted_operation_work::OperationWork::legacy(8_000_000_000);
+        let charge = |units| work.check(units);
+        let cancelled = || interrupt.cancelled() || work.deadline_expired();
+        let progress = |value| interrupt.progress(value);
+        let timed = Interrupt::new(&cancelled, &progress);
+        let control = ReadControl { interrupt: &timed, work: &charge };
+        if let Some(owner) = self.session.active().and_then(|state| state.doc.accounted())
+            && (owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())
+            && photocraft_engine::accounted_native_open::is_current_box_work_candidate(owner.document(), &control).map_err(photocraft_engine::EngineError::from)?
+        {
+            let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|e| AutomationError::Other(e.to_string()))?;
+            work.select_standard_box(&limits).map_err(photocraft_engine::EngineError::from)?;
+        }
+        self.save_owned_native_active(path, format, &control)
     }
 }
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "owned_native_save/box_work_tests.rs"]
+mod box_work_tests;

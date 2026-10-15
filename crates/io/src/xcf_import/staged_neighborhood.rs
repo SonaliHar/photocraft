@@ -14,6 +14,7 @@ mod box_geometry;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::xcf_import) enum NeighborhoodSourceFamily {
     BoxGeometryF32,
+    BoxGeometryF64,
     BoxOriginal,
     BoxFinite,
     BoxAssignedF32,
@@ -36,7 +37,7 @@ impl NeighborhoodSourceFamily {
         let finite = matches!((file.sample, file.precision), (Sample::F32, 650) | (Sample::F64, 750));
         Some(match effect.operation.as_str() {
             "gegl:box-blur" if file.sample==Sample::F32 && file.precision==650 && !file.icc.is_empty() => Self::BoxAssignedF32,
-            "gegl:box-blur" if box_geometry::hint(file) => Self::BoxGeometryF32,
+            "gegl:box-blur" if box_geometry::hint(file) => if file.sample==Sample::F64{Self::BoxGeometryF64}else{Self::BoxGeometryF32},
             "gegl:box-blur" if finite => Self::BoxFinite,
             "gegl:box-blur" => Self::BoxOriginal,
             "gegl:median-blur" if file.model==Model::Rgb && file.sample==Sample::F32 && file.precision==650 && !file.icc.is_empty() => Self::MedianAssignedF32,
@@ -57,7 +58,7 @@ impl NeighborhoodSourceFamily {
     }
     pub(super) fn domain(self) -> NeighborhoodDomain {
         match self {
-            Self::BoxGeometryF32 => NeighborhoodDomain::BoxGeometry,
+            Self::BoxGeometryF32 | Self::BoxGeometryF64 => NeighborhoodDomain::BoxGeometry,
             Self::BoxOriginal => NeighborhoodDomain::BoxOriginal,
             Self::BoxFinite | Self::BoxAssignedF32 => NeighborhoodDomain::BoxFinite,
             Self::MedianOriginal => NeighborhoodDomain::MedianOriginal,
@@ -72,7 +73,7 @@ impl NeighborhoodSourceFamily {
     pub(super) fn set_admission(self, domains: &mut admission::AdmissionDomains) {
         domains.owned_neighborhood_domain = Some(self.domain());
         match self {
-            Self::BoxGeometryF32 => {domains.finite_box_domain=true;domains.observed_box_geometry_domain=true;},
+            Self::BoxGeometryF32 | Self::BoxGeometryF64 => {domains.finite_box_domain=true;domains.observed_box_geometry_domain=true;},
             Self::BoxOriginal => domains.opaque_box_domain = true,
             Self::BoxFinite => domains.finite_box_domain = true,
             Self::BoxAssignedF32 => { domains.finite_box_domain=true; domains.owned_assigned_box_domain=true; },
@@ -97,7 +98,7 @@ impl NeighborhoodSourceFamily {
             return Ok(false);
         }
         match self {
-            Self::BoxGeometryF32 => box_geometry::qualify(file,ctl,budget),
+            Self::BoxGeometryF32 | Self::BoxGeometryF64 => box_geometry::qualify(file,ctl,budget),
             Self::BoxAssignedF32 => assigned_box::qualify(file,ctl,budget),
             Self::MedianAssignedF32 => assigned_median::qualify(file,ctl,budget),
             Self::GaussianAssignedF32 => assigned_gaussian::qualify(file,ctl,budget),

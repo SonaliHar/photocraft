@@ -132,7 +132,7 @@ impl<'a> Sink<'a> for OwnedSink<'a, '_, '_> {
                 self.reservations.quota().clone(),
                 self.limits.max_reservations,
                 self.limits.max_layers,
-                256 << 20,
+                self.limits.max_finite_logical_bytes,
                 self.control,
             )?);
         }

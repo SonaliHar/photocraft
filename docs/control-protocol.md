@@ -1896,3 +1896,23 @@ selected120s enforcement in that earlier phase; selection retains elapsed time
 and immediately refuses an expired operation. Native logical extent limits,
 decoded input costs, lower wasm allowances and numerical/performance acceptance
 remain unfinished large-image boundaries. New regression groups are UNRUN.
+
+The observational Box geometry epoch now includes implicit RGB F64 nonlinear750.
+Actual native32-byte pixels and GrayF64 mask8-byte samples are scanned without
+narrowing; current source/default/mask/profile checks, opaque raw policy, readonly
+mutation boundary and old-identity final refusal remain. GIMP F64 captures retain
+exact native/output roles; two effective ICC captures differ only in date-header
+bytes33/35 and remain separate immutable evidence. No source ICC is normalized.
+
+Owned native save/reopen now share max_finite_logical_bytes in OwnedDocumentLimits:
+a per-raster default/hard2GiB descriptor allowance, caller-lowerable including
+zero. It replaces the old private256MiB save/reader constants without allocating
+a whole raster or supplying additional resident/encoded/index/tile capacity.
+Box UI/Headless bounded Save/Save As also selects the same finite standard work
+and active deadline before snapshot/catalog/writer. Actual parent cancellation,
+source exclusions, destination/atomic writer, history/journal/publication fences
+and external caller controls stay authoritative. Other bounded saves retain
+legacy work limits. Encoded native256MiB/browser16MiB intake and preselection
+work/deadline boundaries remain; no dense24–36MP or native_large completion is
+claimed. Nine new regression groups are UNRUN/uncompiled; runtime/visual/numerical
+and performance acceptance stay deferred.

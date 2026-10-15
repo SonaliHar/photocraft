@@ -49,9 +49,12 @@ pub(crate) fn metadata(doc: &Document, b: &mut impl PlanBudget, i: &Interrupt<'_
         _ => return Err(scope()),
     };
     if doc.mode != ColorMode::Rgb
-        || doc.depth != SampleType::F32
+        || !matches!(doc.depth, SampleType::F32 | SampleType::F64)
         || doc.sample_encoding != Some(SampleEncoding::NonlinearProfile)
-        || doc.source_color_context.as_ref().is_none_or(|v| v.source_precision != 650 || v.original_icc.is_some())
+        || doc
+            .source_color_context
+            .as_ref()
+            .is_none_or(|v| !matches!((doc.depth, v.source_precision), (SampleType::F32, 650) | (SampleType::F64, 750)) || v.original_icc.is_some())
         || state.provenance.format_version != 22
         || state.current_filter_output_precision != photocraft_doc::FilterOutputPrecision::Canonical
         || state.items.len() != 2
@@ -97,7 +100,7 @@ pub(crate) fn metadata(doc: &Document, b: &mut impl PlanBudget, i: &Interrupt<'_
     if node.mask != Some(ItemRef::Mask(mask.id))
         || mask.owner != node.id
         || mask.bounds != doc.bounds()
-        || mask.surface.format() != PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false)
+        || mask.surface.format() != PixelFormat::new(ColorMode::Grayscale, doc.depth, false)
         || !mi.visible
         || mi.composition.is_some()
         || mi.source_flags != 0
@@ -114,26 +117,26 @@ pub(crate) fn metadata(doc: &Document, b: &mut impl PlanBudget, i: &Interrupt<'_
         return Err(scope());
     }
     let mut bytes = mask.surface.default_bytes().len() as u64;
-    zero(mask.surface.default_bytes(), b, i)?;
+    zero(mask.surface.default_bytes(), doc.depth, b, i)?;
     for (_, tile) in mask.surface.tiles() {
         bytes = bytes.checked_add(tile.bytes().len() as u64).ok_or_else(length)?;
         if bytes > 16 << 20 {
             return Err(scope());
         }
-        zero(tile.bytes(), b, i)?;
+        zero(tile.bytes(), doc.depth, b, i)?;
     }
     check(b, i, 1024)?;
     photocraft_algo::gimp::neighborhood::BoxBlurTilePlan::new(s, TileCoord::containing(s.x0, s.y0), radius, i).map_err(|e| E::Color(e.into()))?;
     Ok((s, radius))
 }
-fn zero(bytes: &[u8], b: &mut impl PlanBudget, i: &Interrupt<'_>) -> Result<(), E> {
-    if !bytes.len().is_multiple_of(4) {
+fn zero(bytes: &[u8], sample_type: SampleType, b: &mut impl PlanBudget, i: &Interrupt<'_>) -> Result<(), E> {
+    if !bytes.len().is_multiple_of(sample_type.bytes()) {
         return Err(scope());
     }
     for part in bytes.chunks(1024) {
         check(b, i, part.len() as u64)?;
-        for sample in part.chunks_exact(4) {
-            if try_read_sample_f64(sample, SampleType::F32, 0).map_err(|e| E::View(photocraft_raster::checked_view::RasterViewError::Sample(e)))? != 0. {
+        for sample in part.chunks_exact(sample_type.bytes()) {
+            if try_read_sample_f64(sample, sample_type, 0).map_err(|e| E::View(photocraft_raster::checked_view::RasterViewError::Sample(e)))? != 0. {
                 return Err(scope());
             }
         }
@@ -186,9 +189,9 @@ impl<S, L> LeasedStreamedBoxPipeline<S, L> {
         let (_s, _radius) = metadata(doc, &mut b, i)?;
         let [layer] = doc.layers.as_slice() else { return Err(scope()) };
         let LayerContent::Raster(surface) = &layer.content else { return Err(scope()) };
-        native(surface.default_bytes(), &mut b, i)?;
+        native(surface.default_bytes(), doc.depth, &mut b, i)?;
         for (_, tile) in surface.tiles() {
-            native(tile.bytes(), &mut b, i)?;
+            native(tile.bytes(), doc.depth, &mut b, i)?;
         }
         let envelope = crate::gimp_neighborhood::scalar_preparation_bytes(2)
             .map_err(E::Color)?
@@ -206,15 +209,16 @@ impl<S, L> LeasedStreamedBoxPipeline<S, L> {
         Ok(out)
     }
 }
-fn native(bytes: &[u8], b: &mut impl PlanBudget, i: &Interrupt<'_>) -> Result<(), E> {
-    if !bytes.len().is_multiple_of(16) {
+fn native(bytes: &[u8], sample_type: SampleType, b: &mut impl PlanBudget, i: &Interrupt<'_>) -> Result<(), E> {
+    let pixel_bytes = sample_type.bytes().checked_mul(4).ok_or_else(length)?;
+    if !bytes.len().is_multiple_of(pixel_bytes) {
         return Err(scope());
     }
     for block in bytes.chunks(1024) {
         check(b, i, block.len() as u64)?;
-        for p in block.chunks_exact(16) {
+        for p in block.chunks_exact(pixel_bytes) {
             for channel in 0..4 {
-                let v = try_read_sample_f64(p, SampleType::F32, channel).map_err(|e| E::View(photocraft_raster::checked_view::RasterViewError::Sample(e)))?;
+                let v = try_read_sample_f64(p, sample_type, channel).map_err(|e| E::View(photocraft_raster::checked_view::RasterViewError::Sample(e)))?;
                 if !v.is_finite() || channel == 3 && !(0.0..=1.0).contains(&v) {
                     return Err(scope());
                 }

@@ -16,6 +16,9 @@ use std::{
     io::{Cursor, Seek, SeekFrom, Write},
     sync::atomic::{AtomicU64, Ordering},
 };
+
+#[path = "logical_limit_tests.rs"]
+mod logical_limit_tests;
 fn ctl() -> ReadControl<'static> {
     ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) }
 }

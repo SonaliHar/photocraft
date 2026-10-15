@@ -10,7 +10,11 @@ pub(super) fn hint<P: ExactParsedPlane>(f: &XcfFile<P>) -> bool {
         && d.effects.first().is_some_and(|e| {
             (e.state.blend_space, e.state.composite_space, e.state.composite_mode) == (Some(-1474592175), Some(-1474592175), Some(-1474592175))
         });
-    f.layers.len() == 1 && f.model == Model::Rgb && f.sample == Sample::F32 && f.precision == 650 && f.icc.is_empty() && !old_identity
+    f.layers.len() == 1
+        && f.model == Model::Rgb
+        && matches!((f.sample, f.precision), (Sample::F32, 650) | (Sample::F64, 750))
+        && f.icc.is_empty()
+        && !old_identity
 }
 
 fn rectangle(width: u32, height: u32, offset: (i32, i32)) -> Option<Rect> {
@@ -28,8 +32,7 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, 
     poll(ctl, budget, 32)?;
     if f.version != 22
         || f.model != Model::Rgb
-        || f.sample != Sample::F32
-        || f.precision != 650
+        || !matches!((f.sample, f.precision), (Sample::F32, 650) | (Sample::F64, 750))
         || f.encoding != Encoding::NonlinearProfile
         || !f.icc.is_empty()
         || f.layers.len() != 1
@@ -95,7 +98,7 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, 
         return Ok(false);
     }
     let Some(p) = d.plane.as_ref() else { return Ok(false) };
-    if !native(p, d.width, d.height, 4, false, ctl, budget)? {
+    if !native(p, d.width, d.height, f.sample, 4, false, ctl, budget)? {
         return Ok(false);
     }
     let Some(m) = e.mask.as_ref() else { return Ok(false) };
@@ -126,34 +129,45 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, 
         return Ok(false);
     }
     let Some(p) = m.plane.as_ref() else { return Ok(false) };
-    native(p, f.width, f.height, 1, true, ctl, budget)
+    native(p, f.width, f.height, f.sample, 1, true, ctl, budget)
 }
 fn native<P: ExactParsedPlane>(
     p: &P,
     width: u32,
     height: u32,
+    sample: Sample,
     channels: usize,
     empty: bool,
     ctl: &Interrupt<'_>,
     budget: Option<&photocraft_xcf::Budget<'_>>,
 ) -> Result<bool, IoError> {
     let d = p.descriptor();
-    let Some(size) = u64::from(width).checked_mul(u64::from(height)).and_then(|n| n.checked_mul(channels as u64)).and_then(|n| n.checked_mul(4)) else {
+    let word = match sample {
+        Sample::F32 => 4,
+        Sample::F64 => 8,
+        _ => return Ok(false),
+    };
+    let Some(size) = u64::from(width).checked_mul(u64::from(height)).and_then(|n| n.checked_mul(channels as u64)).and_then(|n| n.checked_mul(word as u64))
+    else {
         return Ok(false);
     };
-    if d.sample != Sample::F32 || d.width != width || d.height != height || d.channels != channels || p.native_byte_len() != Some(size) {
+    if d.sample != sample || d.width != width || d.height != height || d.channels != channels || p.native_byte_len() != Some(size) {
         return Ok(false);
     }
     let mut seen = 0u64;
     let mut valid = true;
     p.visit_native(ctl, &mut |b| {
-        if b.is_empty() || b.len() > 64 * channels * 4 || b.len() % (channels * 4) != 0 {
+        if b.is_empty() || b.len() > 64 * channels * word || b.len() % (channels * word) != 0 {
             return Err(IoError::Unsupported("observed Box geometry native block".into()));
         }
         seen = seen.checked_add(b.len() as u64).filter(|n| *n <= size).ok_or_else(|| IoError::Unsupported("observed Box geometry native excess".into()))?;
         poll(ctl, budget, b.len() as u64)?;
-        for (index, word) in b.chunks_exact(4).enumerate() {
-            let v = f32::from_ne_bytes(word.try_into().map_err(|_| IoError::Unsupported("observed Box geometry native word".into()))?);
+        for (index, word) in b.chunks_exact(word).enumerate() {
+            let v = if sample == Sample::F64 {
+                f64::from_ne_bytes(word.try_into().map_err(|_| IoError::Unsupported("observed Box geometry native word".into()))?)
+            } else {
+                f64::from(f32::from_ne_bytes(word.try_into().map_err(|_| IoError::Unsupported("observed Box geometry native word".into()))?))
+            };
             valid &= v.is_finite() && if empty { v == 0.0 } else { index % channels != channels - 1 || (0.0..=1.0).contains(&v) };
         }
         Ok(())
@@ -168,3 +182,7 @@ fn native<P: ExactParsedPlane>(
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "box_geometry_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "box_geometry_f64_tests.rs"]
+mod f64_tests;

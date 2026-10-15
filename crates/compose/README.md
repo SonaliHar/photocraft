@@ -912,3 +912,9 @@ legacy8-billion bootstrap before the actual Box owner is known. The clock is
 retained across it, but the selected deadline is enforced only after selection;
 an already expired operation then fails immediately. Existing native logical
 extent limits and retained-input costs remain separate large-image work.
+
+The observed Box source role also accepts implicit RGB F64 nonlinear750 with
+actual32-byte native pixels and8-byte mask samples. The existing packed F64
+renderer and working transfer are reused without narrowing. Assigned geometry
+remains separately gated; source/current validation and readonly mutation policy
+remain mandatory. New role regression groups are UNRUN/uncompiled.
