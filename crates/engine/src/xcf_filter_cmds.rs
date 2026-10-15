@@ -161,6 +161,16 @@ fn inspect(s: &mut Session, params: &Value) -> Result<Value> {
     let state = doc.xcf_state.as_ref().ok_or_else(|| bad(INSPECT, "missing imported filter state"))?;
     let stack = state.filter_stacks.iter().find(|stack| stack.nodes.iter().any(|node| node.id == id)).ok_or_else(|| bad(INSPECT, "unknown filterId"))?;
     let node = stack.nodes.iter().find(|node| node.id == id).ok_or_else(|| bad(INSPECT, "unknown filterId"))?;
+    build_inspect_reply(id, stack, node)
+}
+/// Shared bounded metadata response only. The resident caller validates its
+/// complete XCF state first; accounted callers must separately validate their
+/// actual closed storage owner and prepay all response/copy allocations.
+pub(crate) fn build_inspect_reply(
+    id: FilterId,
+    stack: &photocraft_doc::xcf_filters::FilterStack,
+    node: &FilterNode,
+) -> Result<Value> {
     if [&node.operation.name, &node.operation.stored_version, &node.operation.schema_epoch].iter().any(|text| text.len() > 4096)
         || node.composition.as_ref().is_some_and(|policy| policy.compatibility_epoch.len() > 4096)
         || node.arguments.iter().take(64).any(|argument| argument.name.len() > 128)

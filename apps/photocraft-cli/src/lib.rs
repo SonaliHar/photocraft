@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 
 mod stored_channel_run;
 mod owned_xcf_open;
+mod owned_filter_inspect;
 
 pub const USAGE: &str = "\
 photocraft-cli: headless PhotoCraft
@@ -422,6 +423,13 @@ fn run_cmds(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
         _ => return Err("run needs exactly one of <file> or --new <json>".into()),
     }
     for (id, params) in cmds {
+        if owned_filter_inspect::handles(&h, &id) {
+            owned_filter_inspect::write(&mut h, &params, out)
+                .map_err(|e| format!("`{id}`: {}", automation_error(a, e)))?;
+            // Both admitted classes contain no text layers, so the ordinary
+            // missing-font walk cannot add warnings to this exact reply.
+            continue;
+        }
         let r = match stored_channel_run::execute(&mut h.session, stored_workspace.as_ref(), &id, &params) {
             Some(result) => result,
             None => h.command_run(&id, params),

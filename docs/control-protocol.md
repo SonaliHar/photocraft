@@ -430,6 +430,19 @@ The retained JSON-lines transport keeps its paid complete reply through writing;
 raw-Value `Headless::handle`/`respond` and nested generic batches refuse this explicit policy.
 The typed Headless owned method remains available to callers that retain its reply carrier.
 
+For an active owned Threshold Alpha or Histogram Threshold document, single-command
+`engine.execute` can run `xcf.filter.inspect` with exactly
+`{"filterId":"1"}` (replace `1` with the actual canonical nonzero decimal ID).
+The reply preserves the existing exact argument, operation, owner and revision
+fields; inspection supplies no activation or source-fidelity proof. CLI `run`
+and MCP `command_run` support the same command. These routes inspect the installed
+snapshot without applying queued jobs. Retained RPC and desktop control keep the
+paid reply through writing and flushing; MCP uses its bounded SDK text handoff.
+Bare-Value Headless methods and generic batches refuse accounted inspection;
+typed callers use `inspect_owned_filter_bounded` and retain its returned carrier.
+Resident inspection keeps its existing behavior. Discovery and inspection of
+other owned classes remain separate work.
+
 For explicit owned native reopen, use exactly `{"path":"current.pcraft","nativeProfilePolicy":"keepCurrent"}`
 with `doc.open` or MCP `doc_open`. Exactly one profile policy is permitted; both together,
 null/unknown values, extra explicit fields and mismatched suffixes refuse before job

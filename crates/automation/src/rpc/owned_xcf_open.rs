@@ -5,15 +5,28 @@ use crate::headless::OwnedXcfOpenReply;
 pub(super) enum RoutedReply {
     Legacy(Value),
     Owned(OwnedXcfOpenReply),
+    FilterInspect(photocraft_engine::accounted_filter_inspect::OwnedFilterInspectWire),
 }
 impl RoutedReply {
-    pub(super) fn value(&self) -> &Value {
+    // Existing transport drafts inspect their replies without adding a
+    // production Value escape to the paid wire-only variant.
+    #[cfg(test)]
+    pub(super) fn value(&self) -> Value {
         match self {
-            Self::Legacy(value) => value,
-            Self::Owned(reply) => reply.value(),
+            Self::Legacy(value) => value.clone(),
+            Self::Owned(reply) => reply.value().clone(),
+            Self::FilterInspect(reply) => serde_json::from_slice(reply.bytes()).unwrap(),
+        }
+    }
+    pub(super) fn write_line_to(&self, output: &mut impl std::io::Write) -> std::io::Result<()> {
+        match self {
+            Self::Legacy(value) => crate::budgets::write_reply(output,value),
+            Self::Owned(reply) => crate::budgets::write_reply(output,reply.value()),
+            Self::FilterInspect(reply) => reply.write_line_to(output),
         }
     }
 }
+
 pub(crate) fn validate_owned_path(path: &str) -> Result<(), AutomationError> {
     if path.is_empty()
         || path.len() > 4096

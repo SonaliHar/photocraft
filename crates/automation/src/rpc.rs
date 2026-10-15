@@ -82,6 +82,10 @@ fn str_of<'a>(p: &'a Value, k: &str) -> Option<&'a str> {
 impl Headless {
     /// Dispatch one request. Unknown methods and bad params are errors, never panics.
     pub fn handle(&mut self, method: &str, params: Value) -> Result<Value, AutomationError> {
+        if method == "engine.execute" && params.get("command").and_then(Value::as_str) == Some("xcf.filter.inspect")
+            && self.session.active().is_some_and(|state| state.doc.accounted().is_some()) {
+            return Err(bad("accounted filter inspection requires the retained RPC transport or typed Headless API"));
+        }
         if method=="doc.open" && (params.get("xcfProfilePolicy").is_some() || params.get("nativeProfilePolicy").is_some()) {
             return Err(bad("explicit owned doc.open requires the retained RPC transport or owned Headless API"));
         }
@@ -276,7 +280,7 @@ pub fn respond(h: &Mutex<Headless>, line: &str) -> Value {
     // Legacy raw Value entry never publishes a new owner with an escaping fee.
     match respond_retained(h,line,false) {
         RoutedReply::Legacy(value)=>value,
-        RoutedReply::Owned(_)=>json!({"id":null,"ok":false,"error":"owned reply requires a retained transport"}),
+        RoutedReply::Owned(_) | RoutedReply::FilterInspect(_)=>json!({"id":null,"ok":false,"error":"owned reply requires a retained transport"}),
     }
 }
 fn respond_retained(h: &Mutex<Headless>, line: &str, allow_owned:bool) -> RoutedReply {
@@ -303,6 +307,22 @@ fn respond_retained(h: &Mutex<Headless>, line: &str, allow_owned:bool) -> Routed
                 owned_xcf_open::OpenRequest::Native(path)=>headless.open_owned_native_rpc_bounded(std::path::Path::new(path),id),
             }.map(RoutedReply::Owned);
         }
+        // Intercept the paid installed-snapshot query before parameter cloning
+        // or the legacy handle's job synchronization. Resident behavior is unchanged.
+        if method == "engine.execute" && req.get("params").and_then(|p|p.get("command")).and_then(Value::as_str) == Some("xcf.filter.inspect") {
+            let mut headless=h.lock().unwrap_or_else(PoisonError::into_inner);
+            if headless.has_owned_filter_inspection() {
+                if let Err(error)=owned_xcf_open::validate_id_shape(id) {
+                    return Ok(RoutedReply::Legacy(json!({"id":null,"ok":false,"error":error.to_string()})));
+                }
+                if !allow_owned { return Err(bad("accounted filter inspection requires the retained RPC transport")); }
+                let params=req.get("params").and_then(Value::as_object).ok_or_else(||bad("engine.execute requires an object"))?;
+                if params.len()>3 || params.keys().any(|key|!matches!(key.as_str(),"command"|"params"|"wait")) { return Err(bad("unknown owned inspection engine.execute field")); }
+                let wait=match params.get("wait") {None=>true,Some(Value::Bool(wait))=>*wait,_=>return Err(bad("owned inspection wait must be boolean"))};
+                let query=params.get("params").ok_or_else(||bad("owned inspection params required"))?;
+                return headless.inspect_owned_filter_rpc_bounded(query,wait,id).map(RoutedReply::FilterInspect);
+            }
+        }
         let params=req.get("params").cloned().unwrap_or(Value::Null);
         h.lock().unwrap_or_else(PoisonError::into_inner).handle(method,params)
             .map(|value|RoutedReply::Legacy(json!({"id":id,"ok":true,"result":value})))
@@ -326,7 +346,7 @@ pub fn serve_lines(h: &Mutex<Headless>, mut r: impl BufRead, mut w: impl Write) 
             Ok(LineRead::Line) if line.trim().is_empty() => continue,
             Ok(LineRead::Line) => (respond_retained(h, &line, true), false),
         };
-        write_reply(&mut w, reply.value())?;
+        reply.write_line_to(&mut w)?;
         w.flush()?;
         if unread_rest {
             discard_rest_of_line(&mut r)?;
@@ -364,7 +384,7 @@ fn serve_tcp_connection(h: &Mutex<Headless>, stream: std::net::TcpStream, token:
             authenticated = ok;
             RoutedReply::Legacy(reply)
         };
-        write_reply(&mut out, reply.value())?;
+        reply.write_line_to(&mut out)?;
         out.flush()?;
         if !authenticated {
             return Ok(());

@@ -1,0 +1,212 @@
+//! Paid metadata-only inspection of actual readonly Threshold storage owners.
+//! No source, profile, renderer or editing authority follows. This additive API
+//! does not enroll generic Session commands: a typed caller MUST retain the
+//! returned carrier through serialization and the complete output operation.
+use crate::{EngineError, Result, Session};
+use photocraft_doc::xcf_filters::{FilterNode, FilterValue};
+use photocraft_raster::backing::{
+    BackingError, ReadControl,
+    quota::{BackingQuota, QuotaKind, QuotaLease},
+};
+use serde_json::Value;
+mod wire;
+pub use wire::{OwnedFilterInspectWire, encode_cli, encode_rpc, validate_rpc_id};
+const COMMAND: &str = "xcf.filter.inspect";
+const MAX_TEXT: usize = 4096;
+// Closed Alpha/Histogram recipes have <=3 scalar/enum arguments, no auxiliary
+// entries, and no recursively serialized values. These finite structural bounds
+// cover the complete shared response, including optional composition/identity.
+const MAX_NODES: usize = 256;
+const MAX_OBJECTS: usize = 32;
+const MAX_MEMBERS: usize = 256;
+const MAX_DEPTH: usize = 8;
+const FIXED_TEXT: usize = 8192;
+// Same established serde/BTreeMap logical envelope as accounted journal code;
+// allocator nodes have no stable fallible capacity API. This is not an RSS census.
+const MAP_HEADER: usize = 4096;
+const MAP_ENTRY: usize = 256;
+
+/// The copied Value drops before its actual quota reservation. There is no raw
+/// Value extractor: callers retain this owner until their output is complete.
+pub struct OwnedFilterInspectReply {
+    value: Value,
+    quota: BackingQuota,
+    _lease: QuotaLease,
+}
+impl OwnedFilterInspectReply {
+    pub fn value(&self) -> &Value {
+        &self.value
+    }
+    /// The real catalog ledger, for a caller's separately paid serialization or
+    /// transport envelope. This is not proof for caller-created allocations.
+    pub fn quota(&self) -> &BackingQuota {
+        &self.quota
+    }
+    pub fn charged_index_bytes(&self) -> u64 {
+        self._lease.bytes()
+    }
+}
+fn bad(message: &'static str) -> EngineError {
+    EngineError::BadParams { cmd: COMMAND.into(), msg: message.into() }
+}
+fn checked_add(total: &mut usize, bytes: usize) -> Result<()> {
+    *total = total.checked_add(bytes).ok_or(BackingError::Length)?;
+    Ok(())
+}
+fn text(total: &mut usize, value: &str, maximum: usize, control: &ReadControl<'_>) -> Result<()> {
+    if value.len() > maximum {
+        return Err(bad("filter metadata exceeds bounded inspection reply"));
+    }
+    // We only count lengths here; all later byte reads/copies are prepaid below.
+    control.check(1)?;
+    checked_add(total, value.len())
+}
+fn metadata(node: &FilterNode, control: &ReadControl<'_>) -> Result<usize> {
+    let mut total = 0;
+    for value in [&node.operation.name, &node.operation.stored_version, &node.operation.schema_epoch] {
+        text(&mut total, value, MAX_TEXT, control)?;
+    }
+    if let Some(policy) = &node.composition {
+        text(&mut total, &policy.compatibility_epoch, MAX_TEXT, control)?;
+    }
+    for value in [&node.source_display_name, &node.source_icon].into_iter().flatten() {
+        text(&mut total, value, MAX_TEXT, control)?;
+    }
+    if node.arguments.len() > 3 || !node.auxiliary.is_empty() {
+        return Err(BackingError::Unsupported.into());
+    }
+    for argument in &node.arguments {
+        text(&mut total, &argument.name, 128, control)?;
+        match &argument.value {
+            FilterValue::Number(photocraft_doc::xcf_filters::ExactNumber::Float32Bits(_)) => {}
+            FilterValue::Enum { domain, .. } => text(&mut total, domain, 256, control)?,
+            _ => return Err(BackingError::Unsupported.into()),
+        }
+    }
+    Ok(total)
+}
+fn envelope(text: usize) -> Result<u64> {
+    let bytes = MAX_NODES
+        .checked_mul(std::mem::size_of::<Value>())
+        .and_then(|n| n.checked_add(MAX_OBJECTS.checked_mul(MAP_HEADER)?))
+        .and_then(|n| n.checked_add(MAX_MEMBERS.checked_mul(MAP_ENTRY)?))
+        .and_then(|n| n.checked_add(text.checked_add(FIXED_TEXT)?.checked_mul(2)?))
+        .and_then(|n| n.checked_add(std::mem::size_of::<OwnedFilterInspectReply>() + 128))
+        .ok_or(BackingError::Length)?;
+    u64::try_from(bytes).map_err(|_| BackingError::Length.into())
+}
+#[derive(Default)]
+struct Census {
+    bytes: usize,
+    nodes: usize,
+    objects: usize,
+    members: usize,
+}
+impl Census {
+    fn string(&mut self, value: &String, control: &ReadControl<'_>) -> Result<()> {
+        if value.len() > MAX_TEXT || value.capacity() > MAX_TEXT * 2 {
+            return Err(BackingError::Length.into());
+        }
+        control.check(value.len() as u64 + 1)?;
+        checked_add(&mut self.bytes, value.capacity())
+    }
+    fn value(&mut self, value: &Value, depth: usize, control: &ReadControl<'_>) -> Result<()> {
+        control.check(1)?;
+        self.nodes = self.nodes.checked_add(1).ok_or(BackingError::Length)?;
+        if self.nodes > MAX_NODES || depth > MAX_DEPTH {
+            return Err(BackingError::Length.into());
+        }
+        checked_add(&mut self.bytes, std::mem::size_of::<Value>())?;
+        match value {
+            Value::String(value) => self.string(value, control)?,
+            Value::Array(values) => {
+                if values.capacity() > 2 * MAX_NODES {
+                    return Err(BackingError::Length.into());
+                }
+                checked_add(&mut self.bytes, values.capacity().checked_mul(std::mem::size_of::<Value>()).ok_or(BackingError::Length)?)?;
+                for value in values {
+                    self.value(value, depth + 1, control)?;
+                }
+            }
+            Value::Object(values) => {
+                self.objects = self.objects.checked_add(1).ok_or(BackingError::Length)?;
+                self.members = self.members.checked_add(values.len()).ok_or(BackingError::Length)?;
+                if self.objects > MAX_OBJECTS || self.members > MAX_MEMBERS {
+                    return Err(BackingError::Length.into());
+                }
+                checked_add(
+                    &mut self.bytes,
+                    values
+                        .len()
+                        .checked_mul(MAP_ENTRY)
+                        .and_then(|n| n.checked_add(if values.is_empty() { 0 } else { MAP_HEADER }))
+                        .ok_or(BackingError::Length)?,
+                )?;
+                for (key, value) in values {
+                    self.string(key, control)?;
+                    self.value(value, depth + 1, control)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+/// Inspect exactly one canonical nonzero decimal filterId, with the unchanged
+/// registered resident response fields. Only genuine Alpha/Histogram readonly
+/// runtime classes are admitted; neither a stored name nor a schema grants it.
+/// The immutable Session borrow precludes intervening publication. No model,
+/// view, history, redo, coalescing marker, source identity or journal is mutated.
+/// This is not an authorization bypass: typed frontends must apply their existing
+/// command/workspace authorization to the original command and parameters first.
+pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> Result<OwnedFilterInspectReply> {
+    control.check(1)?;
+    params.as_object().filter(|fields| fields.len() == 1 && fields.contains_key("filterId")).ok_or_else(|| bad("expected exactly filterId"))?;
+    // Canonical parsing is bounded to twenty bytes by the existing helper.
+    control.check(64)?;
+    let id = crate::xcf_filter_cmds::id(COMMAND, params)?;
+    let active = session.active().ok_or(EngineError::NoDocument)?;
+    let owner = active.doc.accounted().ok_or(BackingError::Unsupported)?;
+    if owner.is_readonly_threshold_alpha_storage() {
+        owner.validate_readonly_threshold_alpha_storage(control)?;
+    } else if owner.is_readonly_threshold_storage() {
+        owner.validate_readonly_threshold_storage(control)?;
+    } else {
+        return Err(BackingError::Unsupported.into());
+    }
+    let state = owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
+    let [stack] = state.filter_stacks.as_slice() else {
+        return Err(BackingError::Integrity.into());
+    };
+    let [node] = stack.nodes.as_slice() else {
+        return Err(BackingError::Integrity.into());
+    };
+    if node.id != id {
+        return Err(bad("unknown filterId"));
+    }
+    let text = metadata(node, control)?;
+    let planned = envelope(text)?;
+    // Actual serde constructs multiple temporary maps/argument vectors before
+    // returning its tree. Hold a second complete envelope throughout that stage
+    // and final capacity reconciliation; standard serde allocation is the same
+    // explicitly bounded provider boundary used by other paid replies.
+    let lease = owner.quota().reserve(QuotaKind::Index, planned).map_err(|_| BackingError::Quota)?;
+    let mut reply = OwnedFilterInspectReply { value: Value::Null, quota: owner.quota().clone(), _lease: lease };
+    let temporary = owner.quota().reserve(QuotaKind::Index, planned).map_err(|_| BackingError::Quota)?;
+    let work = planned.checked_mul(2).and_then(|n| n.checked_add((text as u64).checked_mul(4)?)).ok_or(BackingError::Length)?;
+    control.check(work)?;
+    reply.value = crate::xcf_filter_cmds::build_inspect_reply(id, stack, node)?;
+    let mut actual = Census::default();
+    actual.value(&reply.value, 0, control)?;
+    checked_add(&mut actual.bytes, std::mem::size_of::<OwnedFilterInspectReply>() + 128)?;
+    if actual.bytes as u64 > planned {
+        return Err(BackingError::Allocation.into());
+    }
+    reply._lease.reconcile_capacity(actual.bytes as u64).map_err(|_| BackingError::Quota)?;
+    control.check(1)?;
+    drop(temporary);
+    Ok(reply)
+}
+#[cfg(test)]
+#[path = "accounted_filter_inspect_tests.rs"]
+mod tests;

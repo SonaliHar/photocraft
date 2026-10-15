@@ -8,6 +8,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod accounted_commands;
+pub mod accounted_filter_inspect;
 pub mod accounted_native_open;
 pub mod accounted_native_save;
 pub(crate) mod accounted_color_range;

@@ -81,12 +81,27 @@ pub struct ControlRequest {
     pub deadline: Option<std::time::Instant>,
     /// Shared with the transport, so that when it stops waiting it knows whether the command ran.
     pub dispatch: Dispatch,
+    pub(crate) retained_query: Option<crate::owned_filter_inspect::RetainedQuery>,
 }
 
 impl ControlRequest {
     pub fn new(method: impl Into<String>, params: Value) -> (Self, std::sync::mpsc::Receiver<ControlResponse>) {
         let (tx, rx) = std::sync::mpsc::channel();
-        (Self { method: method.into(), params, reply: tx, deadline: None, dispatch: Dispatch::default() }, rx)
+        (Self { method: method.into(), params, reply: tx, deadline: None, dispatch: Dispatch::default(), retained_query: None }, rx)
+    }
+
+    /// A transport retaining the paid wire through writing/flush opts in here.
+    /// Ordinary Value-only callers cannot discard an accounted query's charge.
+    pub fn with_retained_query(
+        method: impl Into<String>,
+        params: Value,
+        id: Value,
+        limit: usize,
+    ) -> (Self, std::sync::mpsc::Receiver<ControlResponse>, std::sync::mpsc::Receiver<photocraft_engine::accounted_filter_inspect::OwnedFilterInspectWire>) {
+        let (mut request, response) = Self::new(method, params);
+        let (reply, wire) = std::sync::mpsc::channel();
+        request.retained_query = Some(crate::owned_filter_inspect::RetainedQuery { id, limit, reply });
+        (request, response, wire)
     }
 }
 
@@ -642,6 +657,11 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         }
         "engine.execute" | "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
+            if req.method == "engine.execute" && id == "xcf.filter.inspect"
+                && let Some(outcome) = crate::owned_filter_inspect::handle(app, req)
+            {
+                return outcome;
+            }
             if req.method == "engine.execute" && matches!(id, "xcf.link.substitute" | "xcf.link.recover") && !wait {
                 return err(format!("{id}.context"));
             }

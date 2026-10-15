@@ -1,0 +1,130 @@
+//! UNRUN retained single-query MCP / legacy-route / denial regression drafts.
+use super::*;
+
+#[tokio::test]
+async fn ordinary_commands_and_resident_inspection_keep_the_legacy_result_path() {
+    let h = Arc::new(Mutex::new(Headless::new()));
+    let server = PhotocraftMcp::with_backend(Backend::Headless(h.clone()));
+    let before = h.lock().unwrap().session.documents().len();
+    let error = server.run_command("xcf.filter.inspect".into(), json!({"filterId":"1"}), false).await.unwrap();
+    assert_eq!(error.is_error, Some(true));
+    assert_eq!(h.lock().unwrap().session.documents().len(), before);
+    let result = server.run_command("file.new".into(), json!({"width":2,"height":2}), true).await.unwrap();
+    assert_ne!(result.is_error, Some(true));
+    assert_eq!(h.lock().unwrap().session.documents().len(), before + 1);
+    assert!(!h.lock().unwrap().has_owned_filter_inspection());
+    let error = server.run_command("xcf.filter.inspect".into(), json!({"filterId":"01"}), true).await.unwrap();
+    assert_eq!(error.is_error, Some(true));
+}
+
+mod actual_source {
+    use super::*;
+    // The engine companion binds the independently authored corpus SHA256
+    // manifest and every source. These transport-only drafts reuse those files;
+    // no new hashing dependency or independent source qualification is claimed.
+    fn headless(alpha: bool) -> Headless {
+        let root = std::path::PathBuf::from(std::env::var_os("PHOTOCRAFT_XCF_FULL_CORPUS").expect("requires pinned source corpus")).join(if alpha {
+            "alpha-threshold-precision-evidence"
+        } else {
+            "threshold-precision-evidence"
+        });
+        let manifest = std::fs::read(root.join("SHA256SUMS.json")).unwrap();
+        let manifest: Value = serde_json::from_slice(&manifest).unwrap();
+        let proof: Value = serde_json::from_slice(&std::fs::read(root.join("fresh-verification.json")).unwrap()).unwrap();
+        for row in proof["checks"].as_array().unwrap() {
+            let name = format!("{}.xcf", row["id"].as_str().unwrap());
+            assert!(!name.contains(['/', '\\']));
+            let path = root.join(&name);
+            assert!(std::fs::metadata(&path).unwrap().len() <= 16 << 20);
+            let bytes = std::fs::read(&path).unwrap();
+            assert_eq!(manifest[&name].as_str().unwrap().len(), 64);
+            let raw = photocraft_xcf::decode(&bytes, &Default::default()).unwrap();
+            if raw.model != photocraft_xcf::Model::Rgb
+                || raw.sample != photocraft_xcf::Sample::F64
+                || raw.encoding != photocraft_xcf::Encoding::NonlinearProfile
+                || !raw
+                    .layers
+                    .first()
+                    .and_then(|l| l.effects.first())
+                    .is_some_and(|f| f.operation == if alpha { "gimp:threshold-alpha" } else { "gimp:threshold" })
+            {
+                continue;
+            }
+            let mut h = Headless::trusted_local();
+            drop(h.open_owned_xcf_keep_current_bounded(&path).unwrap());
+            assert!(h.has_owned_filter_inspection());
+            return h;
+        }
+        panic!("missing pinned closed source")
+    }
+    fn text(result: &CallToolResult) -> &str {
+        result.content.iter().find_map(|v| v.as_text()).unwrap().text.as_str()
+    }
+    #[tokio::test]
+    #[ignore = "UNRUN: requires actual pinned Alpha/Histogram original owned imports"]
+    async fn actual_query_keeps_exact_metadata_and_fee_through_sdk_text_but_never_publishes_state() {
+        for alpha in [true, false] {
+            let mut h = headless(alpha);
+            let state = h.session.active().unwrap();
+            let snapshot = state.doc.clone();
+            let rev = state.revision;
+            let history = state.history.clone();
+            let journal = h.session.journal.clone();
+            let q = snapshot.accounted().unwrap().quota().clone();
+            let baseline = q.usage().unwrap();
+            let id = snapshot.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].id.0.to_string();
+            let params = json!({"filterId":id});
+            let owned = h.inspect_owned_filter_bounded(&params, true).unwrap();
+            assert!(q.usage().unwrap().index > baseline.index);
+            // Existing bounded encoded SDK transport is independent of catalog
+            // model ownership; no raw Value is extracted from the paid carrier.
+            let expected = crate::budgets::json_bytes(owned.value()).unwrap();
+            drop(owned);
+            assert_eq!(q.usage().unwrap(), baseline);
+            let h = Arc::new(Mutex::new(h));
+            let server = PhotocraftMcp::with_backend(Backend::Headless(h.clone()));
+            for wait in [false, true] {
+                let result = server.run_command("xcf.filter.inspect".into(), params.clone(), wait).await.unwrap();
+                assert_ne!(result.is_error, Some(true));
+                assert_eq!(text(&result).as_bytes(), expected);
+                assert!(crate::budgets::json_bytes(&result).is_ok());
+                let h = h.lock().unwrap();
+                let state = h.session.active().unwrap();
+                assert!(state.doc.shares_state(&snapshot));
+                assert_eq!(state.revision, rev);
+                assert!(state.history.shares_accounted_history(&history));
+                assert_eq!(h.session.journal, journal);
+                assert_eq!(q.usage().unwrap(), baseline);
+            }
+        }
+    }
+    #[tokio::test]
+    #[ignore = "UNRUN: requires actual pinned Histogram source; authorizer/malformed/batch declines"]
+    async fn actual_authorization_and_raw_batch_refusals_cannot_bypass_paid_reply_contract() {
+        let h = Arc::new(Mutex::new(headless(false)));
+        let server = PhotocraftMcp::with_backend(Backend::Headless(h.clone()));
+        let (params, snapshot, baseline, q) = {
+            let h = h.lock().unwrap();
+            let state = h.session.active().unwrap();
+            let q = state.doc.accounted().unwrap().quota().clone();
+            (json!({"filterId":state.doc.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].id.0.to_string()}), state.doc.clone(), q.usage().unwrap(), q)
+        };
+        for p in [json!({"filterId":"01"}), json!({"filterId":params["filterId"],"extra":true})] {
+            assert_eq!(server.run_command("xcf.filter.inspect".into(), p, true).await.unwrap().is_error, Some(true));
+        }
+        h.lock().unwrap().session.authorize = Some(|_, _| Err(photocraft_engine::EngineError::Other("explicit policy denial".into())));
+        assert_eq!(server.run_command("xcf.filter.inspect".into(), params.clone(), true).await.unwrap().is_error, Some(true));
+        h.lock().unwrap().session.authorize = None;
+        {
+            let mut h = h.lock().unwrap();
+            assert!(h.command_start("xcf.filter.inspect", params.clone(), true).is_err());
+            assert!(h.handle("engine.execute", json!({"command":"xcf.filter.inspect","params":params})).is_err());
+            let batch = h.batch_with_budget(&json!({"steps":[{"command":"xcf.filter.inspect","params":params}]}), BatchReplyBudget::escaped()).unwrap();
+            assert_eq!(batch["failed"], 1);
+            assert_eq!(batch["results"][0]["ok"], false);
+        }
+        let h = h.lock().unwrap();
+        assert!(h.session.active().unwrap().doc.shares_state(&snapshot));
+        assert_eq!(q.usage().unwrap(), baseline);
+    }
+}

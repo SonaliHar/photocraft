@@ -90,6 +90,7 @@ pub mod field_tab;
 pub mod file_dialog;
 pub mod file_open;
 mod owned_native_open;
+mod owned_filter_inspect;
 mod owned_xcf_open;
 pub mod owned_xcf_bytes;
 pub mod file_ui;

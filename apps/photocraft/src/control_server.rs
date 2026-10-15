@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Instant;
 
-use photocraft_automation::budgets::write_reply;
+use photocraft_automation::budgets::{MAX_RESPONSE_BYTES, write_reply};
 use photocraft_automation::security::{
     ConnectionLimiter, LineRead, MAX_CONNECTIONS, MAX_REQUEST_BYTES, authentication_reply, configure_stream, read_bounded_line, repeat_auth_reply,
 };
@@ -91,17 +91,41 @@ fn serve(stream: TcpStream, token: &str, tx: Sender<ControlRequest>, ctx: egui::
                 let method = msg.get("method").and_then(Value::as_str).unwrap_or("").to_string();
                 let params = msg.get("params").cloned().unwrap_or(json!({}));
                 let deadline = Instant::now() + REPLY_DEADLINE;
-                let (mut req, rrx) = ControlRequest::new(method, params);
+                let retained =
+                    method == "engine.execute" && params.get("command").or_else(|| params.get("id")).and_then(Value::as_str) == Some("xcf.filter.inspect");
+                let (mut req, rrx, wire) = if retained {
+                    let (request, response, wire) = ControlRequest::with_retained_query(method, params, id.clone(), MAX_RESPONSE_BYTES - 1);
+                    (request, response, Some(wire))
+                } else {
+                    let (request, response) = ControlRequest::new(method, params);
+                    (request, response, None)
+                };
                 req.deadline = Some(deadline);
                 let dispatch = req.dispatch.clone();
                 if tx.send(req).is_err() {
                     break;
                 }
                 ctx.request_repaint();
-                let mut r =
-                    rrx.recv_timeout(deadline.saturating_duration_since(Instant::now())).unwrap_or_else(|_| json!({"ok": false, "error": dispatch.give_up()}));
+                let received = rrx.recv_timeout(deadline.saturating_duration_since(Instant::now()));
+                if received.is_ok()
+                    && let Some(wire) = wire.as_ref().and_then(|receiver| receiver.try_recv().ok())
+                {
+                    if wire.write_line_to(&mut out).is_err() || out.flush().is_err() {
+                        break;
+                    }
+                    // The carrier stays alive through both write and flush.
+                    continue;
+                }
+                let mut r = received.unwrap_or_else(|_| json!({"ok": false, "error": dispatch.give_up()}));
+                if retained && r.is_null() {
+                    r = json!({"ok":false,"error":"retained inspection reply unavailable"});
+                }
                 if let Some(o) = r.as_object_mut() {
-                    o.insert("id".into(), id);
+                    // An owned-query shape refusal deliberately omits the
+                    // rejected ID instead of cloning it into an error reply.
+                    if !(retained && o.get("id").is_some_and(Value::is_null)) {
+                        o.insert("id".into(), id);
+                    }
                 }
                 r
             }

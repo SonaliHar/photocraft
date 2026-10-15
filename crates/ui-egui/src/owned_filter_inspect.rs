@@ -1,0 +1,80 @@
+//! A dedicated retained metadata reply; no model edit, job synchronization or
+//! Value-only escape. The transport owns the encoded carrier through flush.
+use crate::{
+    PhotocraftApp,
+    control::{ControlRequest, Outcome},
+};
+use photocraft_engine::accounted_filter_inspect::{OwnedFilterInspectWire, encode_rpc, prepare, validate_rpc_id};
+use photocraft_raster::{
+    Interrupt,
+    backing::{BackingError, ReadControl},
+};
+use serde_json::Value;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    mpsc::Sender,
+};
+
+pub(crate) struct RetainedQuery {
+    pub(crate) id: Value,
+    pub(crate) limit: usize,
+    pub(crate) reply: Sender<OwnedFilterInspectWire>,
+}
+
+pub(crate) fn handle(app: &mut PhotocraftApp, request: &ControlRequest) -> Option<Outcome> {
+    let owner = app.session.active()?.doc.accounted()?;
+    if !owner.is_readonly_threshold_alpha_storage() && !owner.is_readonly_threshold_storage() {
+        return None;
+    }
+    let mut rejected_id = false;
+    let result = (|| -> Result<(), String> {
+        let retained = request.retained_query.as_ref().ok_or("accounted filter inspection requires a retained control transport")?;
+        let fields = request.params.as_object().ok_or("engine.execute parameters must be an object")?;
+        if fields.len() > 4 || fields.keys().any(|key| !matches!(key.as_str(), "command" | "id" | "params" | "wait")) {
+            return Err("accounted filter inspection accepts command, params and wait only".into());
+        }
+        if fields.get("wait").is_some_and(|value| !value.is_boolean())
+            || fields.get("command").is_some_and(|value| value.as_str() != Some("xcf.filter.inspect"))
+            || fields.get("id").is_some_and(|value| value.as_str() != Some("xcf.filter.inspect"))
+        {
+            return Err("invalid accounted filter inspection command or wait".into());
+        }
+        let empty = Value::Null;
+        let params = fields.get("params").unwrap_or(&empty);
+        let cancelled = || request.deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline);
+        let interrupt = Interrupt::cancel_only(&cancelled);
+        let used = AtomicU64::new(0);
+        let debit = |units: u64| {
+            used.try_update(Ordering::Relaxed, Ordering::Relaxed, |value| value.checked_add(units).filter(|value| *value <= 4_294_967_296))
+                .map(|_| ())
+                .map_err(|_| BackingError::Work)
+        };
+        let control = ReadControl { interrupt: &interrupt, work: &debit };
+        if validate_rpc_id(&retained.id, &control).is_err() {
+            rejected_id = true;
+            return Err("retained inspection request ID or control limit rejected".into());
+        }
+        if let Some(authorize) = app.services.automation_command.as_ref() {
+            authorize("xcf.filter.inspect", params)?;
+        }
+        if let Some(authorize) = app.session.authorize {
+            authorize("xcf.filter.inspect", params).map_err(|error| error.to_string())?;
+        }
+        let reply = prepare(&app.session, params, &control).map_err(|error| error.to_string())?;
+        let wire = encode_rpc(reply, &retained.id, retained.limit, &control).map_err(|error| error.to_string())?;
+        // Queue the actual paid carrier BEFORE waking the ordinary receiver.
+        // A timeout/disconnect drops it without changing installed state.
+        retained.reply.send(wire).map_err(|_| "retained control receiver closed")?;
+        let _ = request.reply.send(Value::Null);
+        Ok(())
+    })();
+    Some(match result {
+        Ok(()) => Outcome::Deferred,
+        Err(error) if rejected_id => Outcome::Done(serde_json::json!({"id":null,"ok":false,"error":error})),
+        Err(error) => Outcome::Done(serde_json::json!({"ok":false,"error":error})),
+    })
+}
+
+#[cfg(test)]
+#[path = "owned_filter_inspect_tests.rs"]
+mod tests;
