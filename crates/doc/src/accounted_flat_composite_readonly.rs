@@ -6,6 +6,8 @@ use crate::{ColorMode, FilterOutputPrecision, SampleType, item_identity::ItemRef
 mod composition;
 #[path = "accounted_flat_composite_readonly_metadata.rs"]
 pub(super) mod metadata;
+#[path = "accounted_flat_composite_readonly_translation.rs"]
+mod translation;
 pub use composition::FlatCompositeCompositionPatch;
 
 fn text(value: &str, c: &ReadControl<'_>) -> Result<(), BackingError> {
@@ -285,6 +287,7 @@ enum CopyKind<'a> {
     Title(&'a str),
     Metadata(metadata::Plan<'a>),
     Composition(composition::Plan),
+    Translation(&'a translation::Plan),
 }
 fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<'_>, c: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
     let header = AccountedDocument::owned_model_reservation_bytes();
@@ -293,6 +296,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
         CopyKind::Title(name) => (name.len() as u64).checked_mul(2).ok_or(BackingError::Length)?,
         CopyKind::Metadata(plan) => plan.replacement_name_bytes()?,
         CopyKind::Composition(_) => 0,
+        CopyKind::Translation(_) => 0,
     };
     let envelope = index.checked_add(name_bytes).and_then(|v| v.checked_mul(2)).and_then(|v| v.checked_add(4096)).ok_or(BackingError::Length)?;
     let payload = logical.payload.checked_mul(2).ok_or(BackingError::Length)?;
@@ -305,6 +309,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
         CopyKind::Title(name) => staged.document.name = imported_edits::copy_name(name, c)?,
         CopyKind::Metadata(plan) => metadata::apply(&mut staged.document, plan, c)?,
         CopyKind::Composition(plan) => composition::apply(&mut staged.document, plan, c)?,
+        CopyKind::Translation(plan) => translation::apply(&mut staged.document, plan, c)?,
     }
     let actual = measured(&staged.document, owner.quota(), c)?;
     let actual_index = actual.index.checked_sub(header).ok_or(BackingError::Integrity)?;

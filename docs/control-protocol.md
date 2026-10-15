@@ -1741,3 +1741,12 @@ continuation. Assigned ICC, masks, effects, groups and other unsupported domains
 remain outside this intersection. Ten draft regression groups remain unrun;
 independent GIMP profile-byte and numerical observations do not establish
 PhotoCraft acceptance.
+Owned FlatComposite layers also use the existing `layer.translate` command.
+Selection, explicit target, px/pt deltas, hidden-target handling, position locks,
+gesture coalescing and raw no-op behavior follow the existing Move path. Every
+requested fixed-root native coordinate view is checked before one paid model
+copy; current canonical bounds and existing effect-reference arithmetic move
+with it. Source pixels, defaults and original composition records remain exact.
+Masks and linked-layer expansion are outside this route. Desktop dispatch uses
+the synchronous transaction even when background jobs are enabled; Headless
+retains its existing wait/auth rules. Behavioral checks remain deferred.

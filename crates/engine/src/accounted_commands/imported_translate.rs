@@ -28,15 +28,17 @@ pub(super) fn candidate(owner: &AccountedDocument) -> bool {
 }
 #[derive(Clone, Copy)]
 enum MovePolicy {
+    FlatComposite,
     Plain,
     Assigned,
 }
 impl MovePolicy {
     fn for_owner(owner: &AccountedDocument) -> Self {
-        if super::assigned_translate::candidate(owner) { Self::Assigned } else { Self::Plain }
+        if owner.is_readonly_flat_composite_storage() { Self::FlatComposite } else if super::assigned_translate::candidate(owner) { Self::Assigned } else { Self::Plain }
     }
     fn validate(self, owner: &AccountedDocument, layers: &[LayerId], dx: i32, dy: i32, c: &ReadControl<'_>) -> Result<()> {
         match self {
+            Self::FlatComposite => Ok(owner.validate_flat_composite_layers_translation(layers, dx, dy, c)?),
             Self::Plain => Ok(owner.validate_imported_layers_translation(layers, dx, dy, c)?),
             Self::Assigned => {
                 let [layer] = layers else { return Err(BackingError::Unsupported.into()) };
@@ -46,6 +48,7 @@ impl MovePolicy {
     }
     fn stage(self, owner: &AccountedDocument, layers: &[LayerId], dx: i32, dy: i32, c: &ReadControl<'_>) -> Result<AccountedDocument> {
         match self {
+            Self::FlatComposite => Ok(owner.try_with_flat_composite_layers_translation(layers, dx, dy, c)?),
             Self::Plain => Ok(owner.try_with_imported_layers_translation(layers, dx, dy, c)?),
             Self::Assigned => {
                 let [layer] = layers else { return Err(BackingError::Unsupported.into()) };
@@ -55,6 +58,7 @@ impl MovePolicy {
     }
     fn current(self, owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<()> {
         match self {
+            Self::FlatComposite => crate::accounted_xcf_open::separable_blend::validate_current_separable_blend_storage(owner, c),
             Self::Plain => current(owner, c),
             Self::Assigned => super::assigned_translate::current(owner, c),
         }
@@ -382,3 +386,7 @@ mod tests;
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "imported_translate_bulk_tests.rs"]
 mod bulk_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "imported_translate_flat_tests.rs"]
+mod flat_tests;
