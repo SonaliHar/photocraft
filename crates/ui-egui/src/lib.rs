@@ -952,6 +952,9 @@ impl PhotocraftApp {
         };
         // Saved preferences are in place before the first frame; recovery starts in upkeep.
         prefs_ui::load(&mut app);
+        if app.services.touch_ui {
+            app.ui.tool_options.move_show_transform = true;
+        }
         // After the saved preferences, which say whether the set was already offered.
         kys_import::offer_import(&mut app);
         notices::wayland_file_drop_guidance(&mut app);
@@ -1778,6 +1781,7 @@ impl eframe::App for PhotocraftApp {
     }
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new("is_touch_ui"), self.services.touch_ui));
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
         // Caps Lock state read from the OS once per frame (see `Services::caps_lock`): the canvas
         // cursor block needs it before the frame renders. `None` (Wayland/web) keeps `false`.
@@ -2078,6 +2082,14 @@ impl eframe::App for PhotocraftApp {
         jobs_ui::keep_polling(self, &ctx);
         // Menus and buttons in this frame may have asked for a file dialog.
         self.poll_file_dialog(&ctx, Some(frame));
+        if self.services.touch_ui {
+            ctx.set_cursor_icon(egui::CursorIcon::None);
+            ctx.set_cursor_image(None);
+            ctx.output_mut(|o| {
+                o.cursor_icon = egui::CursorIcon::None;
+                o.cursor_image = None;
+            });
+        }
     }
 }
 
