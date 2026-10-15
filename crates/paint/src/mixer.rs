@@ -24,11 +24,11 @@ pub struct MixerSettings {
     /// Use the independent Blending / Dilution / Persistence color-state model instead of the
     /// reservoir model below. This is opt-in so existing Mixer Brush presets keep their meaning.
     pub wet_blending: bool,
-    /// Current-color contribution (0..1; mapped to `(1 - value)^1.6`).
+    /// Current-color contribution (0..1; mapped linearly to `1 - value`).
     pub blending: f32,
-    /// Sampled-opacity correction (0..1; mapped to `(1 - value)^1.6`).
+    /// Sampled-opacity correction (0..1; mapped linearly to `1 - value`).
     pub dilution: f32,
-    /// Retention of the previous mixed color (0..1; mapped to `(1 - value)^2.4`).
+    /// Retention of the previous mixed color (0..1; candidate interpolation is `1 - value`).
     pub persistence: f32,
     pub wet: f32,
     pub load: f32,
@@ -185,6 +185,7 @@ fn apply_wet_blending_stroke(
 
 /// Stroke-local Wet Blending color state. `dab` is public so live previews and the committed
 /// whole-stroke renderer use the same sample, recurrence, and deposition path.
+#[derive(Clone)]
 pub struct WetBlending {
     fmt: photocraft_color::PixelFormat,
     nc: usize,
@@ -208,9 +209,9 @@ impl WetBlending {
             fmt,
             nc,
             alpha: alpha_index(&fmt),
-            blend0: (1.0 - settings.blending.clamp(0.0, 1.0)).powf(1.6),
-            dilution: (1.0 - settings.dilution.clamp(0.0, 1.0)).powf(1.6),
-            persistence: (1.0 - settings.persistence.clamp(0.0, 1.0)).powf(2.4),
+            blend0: 1.0 - settings.blending.clamp(0.0, 1.0),
+            dilution: 1.0 - settings.dilution.clamp(0.0, 1.0),
+            persistence: 1.0 - settings.persistence.clamp(0.0, 1.0),
             flow: settings.flow.clamp(0.0, 1.0),
             carried: None,
             sampled: vec![0.0; nc],

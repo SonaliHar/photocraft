@@ -7,9 +7,9 @@ Wet Blending is an optional color mixing mode for PhotoCraft's Mixer Brush. Enab
 Each slider uses a value from 0 to 1. The model converts those values into per-dab coefficients:
 
 ```text
-B0 = (1 - Blending)^1.6
-D0 = (1 - Dilution)^1.6
-R0 = (1 - Persistence)^2.4
+B0 = 1 - Blending
+D0 = 1 - Dilution
+R0 = 1 - Persistence
 ```
 
 - **Blending** controls how much the brush color contributes to the mixed paint.
@@ -19,6 +19,8 @@ R0 = (1 - Persistence)^2.4
 ## How it works
 
 For each dab, the brush samples color and opacity under its footprint. It combines that sample with the brush color using Dilution and Blending, then carries part of the previous mixture forward using Persistence. The first dab initializes the carried mixture. Each dab deposits the result using its coverage, brush flow, opacity, stroke opacity, selection and transparency lock. The carried mixture resets at the start of each stroke.
+
+While drawing, the live preview includes the finishing dabs that releasing the pointer would add, including smoothing catch-up. These dabs use a copy of the carried mixture and working pixels, so showing the preview does not change the paint carried into the next pointer movement.
 
 For an opaque brush color, the component-wise calculation is:
 

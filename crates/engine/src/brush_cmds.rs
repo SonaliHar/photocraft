@@ -704,20 +704,31 @@ pub fn live_mixer_blending(s: &Session, p: &Value) -> Result<crate::retouch_cmds
     // `apply_wet_blending_stroke` runs its dab renderer at unit stroke opacity; source opacity is
     // carried in each dab's Transfer value and the mixer recurrence.
     stroke.brush.opacity = 1.0;
-    crate::retouch_cmds::LiveDab::with_effect_working_depth(s, cmd, p, stroke, id, 0, true, |pre, lock| {
-        let mut wet = photocraft_paint::mixer::WetBlending::new(pre.format(), &settings);
-        let mut sample = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA32F);
-        Box::new(move |work, fp| {
-            if let Some(doc) = sample_doc.as_deref() {
-                let buf = photocraft_compose::render(doc, fp.rect);
-                let flat: Vec<f32> = buf.px.iter().flatten().copied().collect();
-                sample.write_region(fp.rect, &flat);
-                wet.dab(work, fp, Some(&sample), lock);
-            } else {
-                wet.dab(work, fp, None, lock);
-            }
-        })
-    })
+    crate::retouch_cmds::LiveDab::with_effect_working_depth(
+        s,
+        cmd,
+        p,
+        stroke,
+        id,
+        crate::retouch_cmds::LiveDabOptions { halo: 0, float_work: true },
+        |pre, lock| {
+            let mut wet = photocraft_paint::mixer::WetBlending::new(pre.format(), &settings);
+            let mut sample = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA32F);
+            crate::retouch_cmds::LiveDabEffect::Forkable(Box::new(
+                move |work: &mut photocraft_paint::retouch::Region, fp: &photocraft_paint::retouch::Footprint| {
+                    if let Some(doc) = sample_doc.as_deref() {
+                        let buf = photocraft_compose::render(doc, fp.rect);
+                        let flat: Vec<f32> = buf.px.iter().flatten().copied().collect();
+                        sample.write_region(fp.rect, &flat);
+                        wet.dab(work, fp, Some(&sample), lock);
+                    } else {
+                        wet.dab(work, fp, None, lock);
+                    }
+                },
+            ))
+        },
+    )?
+    .with_tail_preview()
 }
 
 /// `paint.colorReplacement`'s stroke and settings. The replacement colour is the brush colour
