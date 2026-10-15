@@ -586,6 +586,31 @@ fn uses_logarithmic_slider(min: f32, max: f32) -> bool {
 /// Schema dialogs whose `profile` menu lists the installed profiles after the built-ins.
 const PROFILE_DIALOGS: &[&str] = &["edit.assignProfile", "edit.convertToProfile", "view.proofSetup"];
 
+/// Whether the menu `key` of dialog `cmd` lists installed profiles, and of which colour space
+/// (`None` inside: any destination profile). The profile dialogs' `profile` menu takes any, and
+/// Color Settings' working spaces take theirs (#6323): Coated GRACoL 2006 or Coated FOGRA39 as
+/// the CMYK working space, as Photoshop's Color Settings offers.
+fn installed_menu(cmd: &str, key: &str) -> Option<Option<photocraft_cms::ColorSpace>> {
+    use photocraft_cms::ColorSpace;
+    match (cmd, key) {
+        (c, "profile") if PROFILE_DIALOGS.contains(&c) => Some(None),
+        ("edit.colorSettings", "workingRgb") => Some(Some(ColorSpace::Rgb)),
+        ("edit.colorSettings", "workingCmyk") => Some(Some(ColorSpace::Cmyk)),
+        ("edit.colorSettings", "workingGray") => Some(Some(ColorSpace::Gray)),
+        _ => None,
+    }
+}
+
+/// The installed profiles menu `key` of dialog `cmd` lists ([`installed_menu`]).
+fn installed_choices(
+    cmd: &str,
+    key: &str,
+    installed: Vec<photocraft_engine::installed_profiles::InstalledProfile>,
+) -> Vec<photocraft_engine::installed_profiles::InstalledProfile> {
+    let Some(space) = installed_menu(cmd, key) else { return Vec::new() };
+    installed.into_iter().filter(|i| i.is_destination() && space.is_none_or(|s| i.color_space == s)).collect()
+}
+
 /// Commands whose `angle` is a direction in document angles (counter-clockwise from three
 /// o'clock): a light or a blur direction, edited on a dial as in Photoshop's Motion Blur, Emboss
 /// and Global Light (#3152). Rotation amounts (Twirl, Rotate Arbitrary, Crop, Lens Correction,
@@ -713,11 +738,9 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     let mut opts: Vec<(String, &str)> = options.iter().cloned().zip(labels.iter().map(String::as_str)).collect();
                     // Like Photoshop, the profile menus also list every profile installed in
                     // the system (printer and paper profiles), by description.
-                    let installed = if p.key == "profile" && PROFILE_DIALOGS.contains(&cmd.as_str()) {
-                        photocraft_engine::installed_profiles::installed().into_iter().filter(|i| i.is_destination()).collect()
-                    } else {
-                        Vec::new()
-                    };
+                    let lists_installed = installed_menu(&cmd, &p.key).is_some();
+                    let installed =
+                        if lists_installed { installed_choices(&cmd, &p.key, photocraft_engine::installed_profiles::installed()) } else { Vec::new() };
                     opts.extend(installed.iter().map(|i| (i.path.clone(), i.description.as_str())));
                     // Assign Profile: only what the document's colour mode can take (#4951).
                     if p.key == "profile"
@@ -728,7 +751,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     // A profile given by path that isn't listed (typed by an agent, or spelled with
                     // different case) still shows, by its file name, instead of a blank menu.
                     let stem = std::path::Path::new(&cur).file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    if p.key == "profile" && PROFILE_DIALOGS.contains(&cmd.as_str()) && !opts.iter().any(|(v, _)| *v == cur) {
+                    if lists_installed && !opts.iter().any(|(v, _)| *v == cur) {
                         opts.push((cur.clone(), stem.as_str()));
                     }
                     crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &mut cur, &opts, 170.0);
@@ -2333,6 +2356,33 @@ mod tests {
         open(&mut app, "image.rotation.arbitrary").unwrap();
         let fields = &app.ui.dialogs.last().unwrap().fields;
         assert_eq!(fields["direction"], json!("cw"), "Explicit default matching first option is preserved");
+    }
+
+    /// #6323: Color Settings' working-space menus list the installed profiles of their colour
+    /// space after the built-ins, as the profile dialogs list every destination profile.
+    #[test]
+    fn color_settings_working_spaces_list_installed_profiles_of_their_space() {
+        use photocraft_cms::{ColorSpace, ProfileClass};
+        use photocraft_engine::installed_profiles::InstalledProfile;
+        let p = |name: &str, class, color_space| InstalledProfile { path: format!("/icc/{name}.icc"), description: name.into(), class, color_space };
+        let installed = vec![
+            p("Coated GRACoL 2006", ProfileClass::Output, ColorSpace::Cmyk),
+            p("Coated FOGRA39", ProfileClass::Output, ColorSpace::Cmyk),
+            p("Monitor", ProfileClass::Display, ColorSpace::Rgb),
+            p("Dot Gain 15%", ProfileClass::Output, ColorSpace::Gray),
+            p("CMYK link", ProfileClass::DeviceLink, ColorSpace::Cmyk),
+            p("Lab space", ProfileClass::ColorSpace, ColorSpace::Lab),
+        ];
+        let names = |cmd: &str, key: &str| installed_choices(cmd, key, installed.clone()).into_iter().map(|i| i.description).collect::<Vec<_>>();
+        assert_eq!(names("edit.colorSettings", "workingCmyk"), ["Coated GRACoL 2006", "Coated FOGRA39"], "device links are no working space");
+        assert_eq!(names("edit.colorSettings", "workingRgb"), ["Monitor"]);
+        assert_eq!(names("edit.colorSettings", "workingGray"), ["Dot Gain 15%"]);
+        assert!(names("edit.colorSettings", "policyCmyk").is_empty() && names("edit.colorSettings", "intent").is_empty());
+        // Convert to Profile still lists every destination profile.
+        assert_eq!(names("edit.convertToProfile", "profile").len(), 4);
+        // The engine takes an installed profile's path as the working space.
+        let spec = photocraft_engine::commands::find("edit.colorSettings").unwrap();
+        assert!(spec.params.contains("working spaces and the monitor profile also accept .icc paths"));
     }
 
     /// #4143: Replace Color shows the From colour (defaulting to the foreground) and its canvas
