@@ -192,12 +192,15 @@ pub(crate) fn initial_fields(target: &str, label: &str, rgb: [f32; 3]) -> Map<St
     f
 }
 
-/// Seed [`initial_fields`] with the last Only Web Colors setting.
+/// Seed [`initial_fields`] with the last Only Web Colors setting. With web-only on, the opening
+/// colour is snapped and `__orig` follows it: OK without an edit is "unchanged", so opening the
+/// picker never rewrites a fill behind the user's back (#4995).
 pub(crate) fn fields_with_web(app: &PhotocraftApp, target: &str, label: &str, rgb: [f32; 3]) -> Map<String, Value> {
     let mut f = initial_fields(target, label, rgb);
     f.insert("__webOnly".into(), json!(app.ui.color_panel.web_only));
     if app.ui.color_panel.web_only {
         set_rgb(&mut f, rgb, Keep::Nothing);
+        f.insert("__orig".into(), f["color"].clone());
     }
     f
 }
@@ -1070,11 +1073,13 @@ mod tests {
         let f = &app.ui.dialog_mut(id).unwrap().fields;
         assert_eq!(f["__webOnly"], json!(true));
         assert_eq!(f["color"], json!(hex(web_safe([app.session.tools.foreground[0], app.session.tools.foreground[1], app.session.tools.foreground[2]]))));
+        assert_eq!(f["__orig"], f["color"], "the opening snap moves __orig too, so OK with no edit is unchanged");
         app.ui.dialogs.clear();
         let id = open_for_target(&mut app, "noteColor", "Color Picker", [1.0, 0.53, 0.0]);
         let f = &app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields;
         assert_eq!(f["__webOnly"], json!(true));
         assert_eq!(f["color"], json!("#ff9900"));
+        assert_eq!(f["__orig"], json!("#ff9900"), "a non-web-safe start colour is not committed by opening the picker");
     }
 
     #[test]
