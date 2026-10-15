@@ -3,6 +3,9 @@
 #[cfg(test)]
 #[path = "selection_backed_sampling_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "selection_backed_exact_tests.rs"]
+mod exact_tests;
 use super::*;
 use crate::channel_cmds::ChannelView;
 use photocraft_doc::{Layer, LayerContent, SampleEncoding, WorkingProfileInterpretation};
@@ -15,6 +18,25 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 const WORK_LIMIT: u64 = 8_000_000_000;
+// This plan borrows the immutable Transform; it never enters a self-referential
+// query owner. The existing actual leases cover its bounded metadata/scratch.
+fn exact_plan<'t>(
+    transform: &'t photocraft_cms::Transform,
+    owner: &Retention,
+    extra_held: u64,
+    control: &Interrupt<'_>,
+    parent: Option<&ReadControl<'_>>,
+) -> Result<(photocraft_cms::transform::PreparedRgbLabF32<'t>, photocraft_cms::control::Limits)> {
+    let default = photocraft_cms::control::Limits::default();
+    let held = owner._transform.bytes().checked_add(extra_held).ok_or_else(|| failure("exact CMS held envelope"))?;
+    let resident_bytes = usize::try_from(held).map_err(|_| failure("exact CMS held bytes"))?.min(default.resident_bytes);
+    let preparation = photocraft_cms::Transform::RGB_LAB_F32_PREPARATION_WORK;
+    owner.work.consume(preparation, control, parent)?;
+    let plan = transform.prepare_rgb_lab_f32_with_control(
+        photocraft_cms::control::Limits { resident_bytes, work_units: preparation }, &|| control.cancelled(),
+    ).map_err(cms_error)?;
+    Ok((plan, photocraft_cms::control::Limits { resident_bytes, ..default }))
+}
 struct Work {
     used: AtomicU64,
 }
@@ -434,6 +456,10 @@ fn prepare_captured(captured: CapturedBackedColorRange, control: &Interrupt<'_>,
         _query: query_lease,
     });
     let context = QueryContext { to_lab: Arc::new(to_lab), grid: sample_source.depth == SampleType::U8, foreground, backed: Some(Arc::clone(&retention)) };
+    let (exact, exact_limits) = exact_plan(&context.to_lab, &retention, retention._query.bytes(), control, parent)?;
+    let point_work = exact.requirements_rgb(1, exact_limits, &|| control.cancelled()).map_err(cms_error)?.work_units;
+    let conversion_bound = points.checked_add(fixed).and_then(|n| n.checked_add(1)).ok_or_else(|| failure("query conversion count"))?;
+    retention.work.consume(mul(conversion_bound as u64, add(point_work, 512)?)?, control, parent)?;
     let format = backed.format();
     let charge = |n| {
         retention.work.consume(n, control, parent).map_err(|e| if matches!(e, EngineError::Cancelled) { BackingError::Cancelled } else { BackingError::Work })
@@ -473,8 +499,7 @@ fn prepare_captured(captured: CapturedBackedColorRange, control: &Interrupt<'_>,
     };
     let plus = sample("points")?;
     let minus = sample("subtractPoints")?;
-    retention.work.consume(mul((points + fixed + 1) as u64, 1024)?, control, parent)?;
-    let result = with_context(&context, p, sample_source.bounds(), &plus, &minus, control)?;
+    let result = with_context_conversion(&context, p, sample_source.bounds(), &plus, &minus, control, Some((&exact, exact_limits)))?;
     poll(control)?;
     Ok(result)
 }
@@ -502,13 +527,14 @@ pub(in crate::selection_cmds) fn owned_coverage(
     if bytes > limits.resident_bytes {
         return Err(failure("backed coverage lower resident limit"));
     }
-    let units = mul(px.len() as u64, add(mul(active_localized_points(query) as u64, 48)?, 1024)?)?;
+    let lease = reserve_owner(&owner.quota, bytes)?;
+    let (exact, exact_limits) = exact_plan(&query.to_lab, owner, lease.bytes(), control, parent)?;
+    let (units, _) = coverage_work(query, px.len(), Some((&exact, exact_limits)), control)?;
     if units > limits.work_units {
         return Err(failure("backed coverage lower work limit"));
     }
     owner.work.consume(units, control, parent)?;
-    let lease = reserve_owner(&owner.quota, bytes)?;
-    let mask = coverage_inner(query, px, width, scale, origin, limits, control)?;
+    let mask = coverage_inner_conversion(query, px, width, scale, origin, limits, control, Some((&exact, exact_limits)))?;
     if mul(mask.capacity() as u64, 4)? > bytes {
         return Err(failure("backed actual output exceeded reservation"));
     }

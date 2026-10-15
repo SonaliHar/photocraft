@@ -63,6 +63,18 @@ fn with_context(
     minus: &[sel::RangeSample],
     control: &Interrupt<'_>,
 ) -> Result<ColorRangeSamples> {
+    with_context_conversion(context, p, area, plus, minus, control, None)
+}
+#[allow(clippy::too_many_arguments)]
+fn with_context_conversion(
+    context: &QueryContext,
+    p: &Value,
+    area: Rect,
+    plus: &[sel::RangeSample],
+    minus: &[sel::RangeSample],
+    control: &Interrupt<'_>,
+    exact: Option<(&photocraft_cms::transform::PreparedRgbLabF32<'_>, photocraft_cms::control::Limits)>,
+) -> Result<ColorRangeSamples> {
     envelope(p)?;
     poll(control)?;
     if plus.len().checked_add(minus.len()).is_none_or(|n| n > 4096) {
@@ -131,15 +143,23 @@ fn with_context(
     // 8-bit documents are compared on the 8-bit Lab grid, samples and pixels alike.
     let grid = context.grid;
     let q = |c: [f32; 3]| if grid { sel::quantize_lab8(c) } else { c };
-    let colour_to_lab = |t: &photocraft_cms::Transform, c: [f32; 3]| q(super::colour_to_lab(t, c));
-    let foreground = || {
+    let colour_to_lab = |c: [f32; 3]| -> Result<[f32; 3]> {
+        let value = if let Some((plan, limits)) = exact {
+            let cancel = || control.cancelled();
+            let required = plan.requirements_rgb(1, limits, &cancel).map_err(cms_error)?;
+            let encoded = plan.eval_rgb_with_control(c.map(|v| v.clamp(0., 1.)), photocraft_cms::control::Limits { work_units: required.work_units, ..limits }, &cancel).map_err(cms_error)?;
+            super::decode_lab(encoded)
+        } else { super::colour_to_lab(&to_lab, c) };
+        Ok(q(value))
+    };
+    let foreground = || -> Result<sel::LabRange> {
         let [r, g, b, _] = context.foreground;
-        sel::LabRange::point(colour_to_lab(&to_lab, [r, g, b]))
+        Ok(sel::LabRange::point(colour_to_lab([r, g, b])?))
     };
     let mut fixed_lab = reserve(fixed.len())?;
     for c in &fixed {
         poll(control)?;
-        fixed_lab.push(colour_to_lab(&to_lab, *c));
+        fixed_lab.push(colour_to_lab(*c)?);
     }
     let mut range = sel::LabRange::spanning(&fixed_lab);
     let (mut pi, mut mi) = (plus.iter(), minus.iter());
@@ -147,14 +167,15 @@ fn with_context(
         poll(control)?;
         if add {
             if let Some(x) = pi.next() {
-                let c = colour_to_lab(&to_lab, x.color);
+                let c = colour_to_lab(x.color)?;
                 range = Some(range.map_or(sel::LabRange::point(c), |r| r.grow(&c)));
             }
         } else if let Some(x) = mi.next() {
-            range = Some(range.unwrap_or_else(foreground).subtract(&colour_to_lab(&to_lab, x.color), fuzz(40.0)));
+            let previous = match range { Some(range) => range, None => foreground()? };
+            range = Some(previous.subtract(&colour_to_lab(x.color)?, fuzz(40.0)));
         }
     }
-    let range = range.unwrap_or_else(foreground);
+    let range = match range { Some(range) => range, None => foreground()? };
     poll(control)?;
     Ok(ColorRangeSamples { to_lab, range, grid, fuzziness: fuzz(40.0), localized, plus_at, backed: context.backed.clone() })
 }
@@ -622,6 +643,19 @@ pub(super) fn coverage(
 fn active_localized_points(query: &ColorRangeSamples) -> usize {
     if query.localized.is_some() && !query.plus_at.is_empty() { query.plus_at.len() } else { 0 }
 }
+type ExactLab<'a, 't> = (&'a photocraft_cms::transform::PreparedRgbLabF32<'t>, photocraft_cms::control::Limits);
+// Preserve the existing 512/pixel non-CMS allowance and localization work.
+// Only the old 512/pixel CMS portion is replaced by the actual prepared recipe.
+fn coverage_work(query: &ColorRangeSamples, pixels: usize, exact: Option<ExactLab<'_, '_>>, control: &Interrupt<'_>) -> Result<(u64, u64)> {
+    let cms_pixel = if let Some((plan, limits)) = exact {
+        plan.requirements_rgba(1, limits, &|| control.cancelled()).map_err(cms_error)?.work_units
+    } else { 512 };
+    let count = u64::try_from(pixels).map_err(|_| failure("query pixel count"))?;
+    let cms = count.checked_mul(cms_pixel).ok_or_else(|| failure("query CMS work"))?;
+    let non_cms = (active_localized_points(query) as u64).checked_mul(48).and_then(|n| n.checked_add(512))
+        .and_then(|n| count.checked_mul(n)).ok_or_else(|| failure("query non-CMS work"))?;
+    Ok((cms.checked_add(non_cms).ok_or_else(|| failure("query total work"))?, cms))
+}
 fn coverage_inner(
     query: &ColorRangeSamples,
     px: &[[f32; 4]],
@@ -630,6 +664,19 @@ fn coverage_inner(
     origin: [f32; 2],
     limits: sel::ColorRangeLimits,
     control: &Interrupt<'_>,
+) -> Result<Vec<f32>> {
+    coverage_inner_conversion(query, px, width, scale, origin, limits, control, None)
+}
+#[allow(clippy::too_many_arguments)]
+fn coverage_inner_conversion(
+    query: &ColorRangeSamples,
+    px: &[[f32; 4]],
+    width: usize,
+    scale: f32,
+    origin: [f32; 2],
+    limits: sel::ColorRangeLimits,
+    control: &Interrupt<'_>,
+    exact: Option<ExactLab<'_, '_>>,
 ) -> Result<Vec<f32>> {
     poll(control)?;
     let default = sel::ColorRangeLimits::default();
@@ -648,10 +695,8 @@ fn coverage_inner(
         .and_then(|n| n.checked_add(2 * 512 * 16))
         .filter(|n| *n <= limits.resident_bytes)
         .ok_or_else(|| failure("query Lab/mask residency limit"))?;
-    (px.len() as u64)
-        .checked_mul((active_localized_points(query) as u64).checked_mul(48).and_then(|n| n.checked_add(1024)).ok_or_else(|| failure("query work"))?)
-        .filter(|n| *n <= limits.work_units)
-        .ok_or_else(|| failure("query CMS/sample work limit"))?;
+    let (total_work, cms_work) = coverage_work(query, px.len(), exact, control)?;
+    if total_work > limits.work_units { return Err(failure("query CMS/sample work limit")); }
     let mut lab = reserve(px.len())?;
     for start in (0..px.len()).step_by(4096) {
         poll(control)?;
@@ -664,7 +709,13 @@ fn coverage_inner(
         for p in input {
             source.push([p[0].clamp(0., 1.), p[1].clamp(0., 1.), p[2].clamp(0., 1.), p[3]]);
         }
-        query.to_lab.convert_f32(source.as_flattened(), 4, output.as_flattened_mut(), 4, true);
+        if let Some((plan, limits)) = exact {
+            let cancel = || control.cancelled();
+            let required = plan.requirements_rgba(source.len(), limits, &cancel).map_err(cms_error)?;
+            plan.convert_rgba_with_control(&source, output, photocraft_cms::control::Limits { work_units: required.work_units, ..limits }, &cancel).map_err(cms_error)?;
+        } else {
+            query.to_lab.convert_f32(source.as_flattened(), 4, output.as_flattened_mut(), 4, true);
+        }
         poll(control)?;
         for p in output {
             let [l, a, b] = super::decode_lab([p[0], p[1], p[2]]);
@@ -682,8 +733,7 @@ fn coverage_inner(
     }
     let held = (px.len() as u64) * 16 + (query.plus_at.capacity() as u64) * 8 + (source.capacity() as u64) * 16;
     let available = limits.resident_bytes.checked_sub(held).ok_or_else(|| failure("retained query buffers"))?;
-    let work =
-        limits.work_units.checked_sub((px.len() as u64).checked_mul(512).ok_or_else(|| failure("CMS work"))?).ok_or_else(|| failure("CMS work limit"))?;
+    let work = limits.work_units.checked_sub(cms_work).ok_or_else(|| failure("CMS work limit"))?;
     sel::color_range_lab_with_interrupt(
         &lab,
         width,

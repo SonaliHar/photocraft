@@ -11,6 +11,9 @@ use crate::pipeline::{Pipeline, Stage};
 use crate::profile::{ColorSpace, Pcs, Profile, ProfileClass};
 use crate::{CmsError, Intent};
 
+mod rgb_lab_f32;
+pub use rgb_lab_f32::{ExactF32Work, PreparedRgbLabF32, RgbLabF32Requirements};
+
 /// Sample storage of a byte buffer for [`Transform::convert_bytes_many`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SampleKind {

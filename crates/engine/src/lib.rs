@@ -358,6 +358,8 @@ pub struct DocState {
     _accounted_metadata: Option<photocraft_raster::backing::quota::QuotaLease>,
     /// Retains the separately prepared native save path after publication.
     _accounted_save_identity: Option<photocraft_raster::backing::quota::QuotaLease>,
+    /// Exact paid metadata gesture key; model/source validation stays per request.
+    _accounted_metadata_gesture: Option<accounted_session::metadata_gesture::PaidMetadataGesture>,
     /// Color Sampler points (`view.colorSamplers.*`, #1046): numbered sample positions in document
     /// pixel coordinates. Per-document view state: discarded when the document closes, never saved
     /// to `.pcraft` or PSD, and not a history step.
@@ -401,6 +403,7 @@ impl DocState {
             accounted_view: None,
             _accounted_metadata: None,
             _accounted_save_identity: None,
+            _accounted_metadata_gesture: None,
         })
     }
     /// Record the detected policy without granting filesystem authority.
@@ -496,6 +499,7 @@ impl DocState {
             accounted_view: None,
             _accounted_metadata: None,
             _accounted_save_identity: None,
+            _accounted_metadata_gesture: None,
         };
         poll()?;
         Ok(state)
@@ -1406,10 +1410,20 @@ impl Session {
         let change = if redo { history.redo(&st.doc, control)? } else { history.undo(&st.doc, control)? };
         let Some(change) = change else {
             st.coalesce = None;
+            st._accounted_metadata_gesture = None;
             return Ok(false);
         };
         let (mut snapshot, target) = change.into_parts();
         let revision = st.revision.checked_add(1).ok_or(photocraft_raster::backing::BackingError::Length)?;
+        if let Some(owner) = snapshot.accounted()
+            && snapshot.name != st.doc.name
+        {
+            // File identity is outside editing history, as on the resident route.
+            // Prepare its paid copy in the private travelled history before any
+            // Session publication, preserving the saved title across undo/redo.
+            let named = owner.try_with_document_name(&st.doc.name, control)?;
+            snapshot = history.try_replace_accounted_current(owner, named, control)?;
+        }
         if let Some(owner) = snapshot.accounted() {
             let values = target.values();
             let view = accounted_view::AccountedView::new(owner, values.active, &values.selected, values.active, control)?;
@@ -1422,6 +1436,7 @@ impl Session {
             st.revision = revision;
             st.last_damage = None;
             st.coalesce = None;
+            st._accounted_metadata_gesture = None;
             return Ok(true);
         }
         // Save As updates the document title outside history. Upstream preserves
@@ -1455,6 +1470,7 @@ impl Session {
         st.layer_anchor = anchor;
         channel_cmds::fix_view(st);
         st.coalesce = None;
+        st._accounted_metadata_gesture = None;
         st.revision = revision;
         st.last_damage = damage;
         Ok(true)

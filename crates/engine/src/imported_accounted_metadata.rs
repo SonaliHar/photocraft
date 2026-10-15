@@ -19,6 +19,7 @@ pub(super) struct Request<'a> {
     name: Option<&'a str>,
     visible: Option<bool>,
     opacity: Option<f32>,
+    coalesce: Option<&'a str>,
     only_visibility: bool,
 }
 fn invalid(message: &str) -> EngineError {
@@ -39,12 +40,11 @@ pub(super) fn parse(params: &Value) -> Result<Request<'_>> {
             ));
         }
     }
-    if let Some(value) = p.get("coalesce") {
-        match value {
-            Value::Null => {}
-            Value::String(v) if v.len() <= 128 => return Err(EngineError::Other("accounted command coalescing is not yet supported".into())),
-            _ => return Err(invalid("coalesce must be null or a bounded string")),
-        }
+    // Match the ordinary dispatcher's as_str(): absent, null and nonstrings
+    // carry no key. Strings are opaque exact bytes, including empty/NUL keys.
+    let coalesce = p.get("coalesce").and_then(Value::as_str);
+    if coalesce.is_some_and(|key| key.len() > 128) {
+        return Err(invalid("coalesce string exceeds 128 bytes"));
     }
     let target = match p.get("layer") {
         None | Some(Value::Null) => Target::Active,
@@ -61,7 +61,7 @@ pub(super) fn parse(params: &Value) -> Result<Request<'_>> {
     let visible = p.get("visible").and_then(Value::as_bool);
     let opacity = p.get("opacity").and_then(Value::as_f64).map(|v| (v as f32).clamp(0.0, 1.0));
     let only_visibility = p.contains_key("visible") && p.keys().all(|k| matches!(k.as_str(), "layer" | "visible" | "coalesce"));
-    Ok(Request { target, name, visible, opacity, only_visibility })
+    Ok(Request { target, name, visible, opacity, coalesce, only_visibility })
 }
 fn channel_check(channel: &ChannelView, colors: usize) -> Result<()> {
     if channel.color_hidden.len() > 32 || channel.alpha_visible.len() > 4096 {
@@ -91,6 +91,7 @@ fn booleans(values: &[bool], control: &ReadControl<'_>) -> Result<Vec<bool>> {
 // an actual paid owner, not a copied list or caller-asserted selection witness.
 pub(super) struct Prepared<'a> {
     edit: AccountedEdit<'a>,
+    coalesce: Option<&'a str>,
     view: AccountedView,
     active: Option<LayerId>,
     anchor: Option<LayerId>,
@@ -152,6 +153,7 @@ impl<'a> Request<'a> {
         control.check(1)?;
         Ok(Prepared {
             edit,
+            coalesce: self.coalesce,
             view: view.clone(),
             active: state.active_layer,
             anchor: state.layer_anchor,
@@ -189,7 +191,12 @@ impl Prepared<'_> {
         check_locks(owner.document(), self.edit, control)?;
         let result = Value::Null;
         control.check(1)?;
-        session.edit_accounted(if self.only_visibility { "Layer Visibility" } else { "Layer Properties" }, self.edit, control)?;
+        session.edit_accounted_metadata_with_coalesce(
+            if self.only_visibility { "Layer Visibility" } else { "Layer Properties" },
+            self.edit,
+            self.coalesce,
+            control,
+        )?;
         Ok(result)
     }
 }

@@ -14,8 +14,8 @@ use serde_json::Value;
 mod job_journal;
 #[path = "accounted_save_journal.rs"]
 mod save_journal;
-pub(crate) use save_journal::PreparedSaveJournalWitness;
 pub use save_journal::PreparedAccountedSaveReply;
+pub(crate) use save_journal::PreparedSaveJournalWitness;
 #[path = "imported_accounted_metadata.rs"]
 mod imported_metadata;
 pub(crate) use job_journal::PreparedAccountedJobJournal;
@@ -27,7 +27,7 @@ const MAX_NODES: usize = 4096;
 const MAX_DEPTH: usize = 4;
 
 pub fn supports(id: &str) -> bool {
-    matches!(id, "layer.select" | "layer.setProps" | "select.all" | "select.deselect" | "select.colorRange" | "edit.undo" | "edit.redo")
+    matches!(id, "layer.select" | "layer.setProps" | "select.all" | "select.deselect" | "select.colorRange" | "edit.undo" | "edit.redo" | "history.selectState")
 }
 
 fn bad(id: &str, message: &str) -> EngineError {
@@ -44,9 +44,28 @@ enum Request<'a> {
     ColorRange(&'a Value),
     Undo,
     Redo,
+    HistorySelect(usize),
 }
 
-fn request<'a>(session: &Session, id: &str, params: &'a Value) -> Result<Request<'a>> {
+fn history_selection_disabled(session: &Session) -> Result<bool> {
+    let state = session.active().ok_or(EngineError::NoDocument)?;
+    Ok(!state.history.can_undo() && !state.history.can_redo())
+}
+fn require_history_selection_enabled(session: &Session) -> Result<()> {
+    if history_selection_disabled(session)? {
+        return Err(EngineError::Disabled("history.selectState".into(), "the history holds only one state".into()));
+    }
+    Ok(())
+}
+
+fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadControl<'_>) -> Result<Request<'a>> {
+    if id == "history.selectState" {
+        require_history_selection_enabled(session)?;
+        // Preserve upstream ignored fields. The shared bounded journal census
+        // admits their actual retained payload before any journal copies.
+        params.as_object().ok_or_else(|| bad(id, "parameters must be an object"))?;
+        return Ok(Request::HistorySelect(crate::history_select_cmds::validate_request(session, params, control)?));
+    }
     if id == "layer.setProps" && imported_metadata::applies(session) {
         return Ok(Request::ImportedMetadata(imported_metadata::parse(params)?));
     }
@@ -165,10 +184,13 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
     if let Some(reason) = global_refusal(session) {
         return Ok(Some(reason));
     }
+    if id == "history.selectState" && history_selection_disabled(session)? {
+        return Ok(Some("the history holds only one state"));
+    }
     // Null is the existing enabled-query shape, not a layer-property call.
     // Do not disable a menu because its eventual call parameters are absent.
     if !params.is_null() {
-        request(session, id, params)?;
+        request(session, id, params, &crate::read_control_none())?;
     }
     Ok(match id {
         "select.deselect" if state.doc.selection.is_none() => Some("no selection"),
@@ -322,9 +344,9 @@ fn copied_value(value: &Value, control: &ReadControl<'_>) -> Result<Value> {
 /// Owns the replacement journal until the caller publishes it with its lease.
 struct AccountedCommandOutcome {
     journal: Vec<(String, Value)>,
+    result: Value,
     lease: QuotaLease,
     overlap: QuotaLease,
-    result: Value,
 }
 impl AccountedCommandOutcome {
     fn publish(self, session: &mut Session) -> Value {
@@ -336,20 +358,89 @@ impl AccountedCommandOutcome {
     }
 }
 
+/// Actual combined journal/response reservation, never caller-asserted payment.
+/// The result's synchronous return boundary is covered while this command's
+/// retained journal lease lives; this does not own arbitrary Values after Session.
+pub(crate) struct HistoryResponseAllowance {
+    lease: QuotaLease,
+    quota: BackingQuota,
+    target: usize,
+    changed: bool,
+    max_label: usize,
+}
+impl HistoryResponseAllowance {
+    pub(crate) fn response(
+        &self,
+        owner: &photocraft_doc::accounted_document::AccountedDocument,
+        target: usize,
+        changed: bool,
+        current: Option<&str>,
+        control: &ReadControl<'_>,
+    ) -> Result<Value> {
+        control.check(1)?;
+        if !self.quota.shares_ledger(owner.quota())
+            || target != self.target
+            || changed != self.changed
+            || current.is_some_and(|label| label.len() > self.max_label)
+            || (!changed && current.is_some())
+        {
+            return Err(BackingError::Integrity.into());
+        }
+        let length = current.map_or(0, str::len);
+        control.check((length as u64).checked_mul(2).and_then(|n| n.checked_add(256)).ok_or(BackingError::Length)?)?;
+        let label = match current {
+            Some(value) => {
+                let mut owned = String::new();
+                owned.try_reserve_exact(value.len()).map_err(|_| BackingError::Allocation)?;
+                if owned.capacity() > value.len().checked_mul(2).ok_or(BackingError::Length)? {
+                    return Err(BackingError::Allocation.into());
+                }
+                owned.push_str(value);
+                Some(Value::String(owned))
+            }
+            None => None,
+        };
+        // Three fixed map nodes/key strings fit the prepaid 4096-byte logical
+        // envelope. Standard serde map allocator internals are not RSS control.
+        let mut object = serde_json::Map::new();
+        object.insert("state".into(), Value::from(u64::try_from(target).map_err(|_| BackingError::Length)?));
+        object.insert("changed".into(), Value::Bool(changed));
+        if changed {
+            object.insert("current".into(), label.unwrap_or(Value::Null));
+        }
+        control.check(1)?;
+        Ok(Value::Object(object))
+    }
+}
+
+enum CommandLease {
+    Journal(QuotaLease),
+    History(HistoryResponseAllowance),
+}
+impl CommandLease {
+    fn into_lease(self) -> QuotaLease {
+        match self {
+            Self::Journal(lease) => lease,
+            Self::History(response) => response.lease,
+        }
+    }
+}
+
 pub struct PreparedAccountedCommand<'a> {
     request: Request<'a>,
     snapshot: crate::document_snapshot::DocumentSnapshot,
     revision: u64,
     view_revision: u64,
+    history: Option<crate::document_history::DocumentHistory>,
     journal: Vec<(String, Value)>,
-    lease: QuotaLease,
+    lease: CommandLease,
     overlap: QuotaLease,
     quota: BackingQuota,
 }
 impl<'a> PreparedAccountedCommand<'a> {
     pub fn prepare(session: &Session, id: &str, params: &'a Value, control: &ReadControl<'_>) -> Result<Self> {
         control.check(1)?;
-        let request = request(session, id, params)?;
+        let request = request(session, id, params, control)?;
         if let Some(reason) = global_refusal(session) {
             return Err(EngineError::Other(reason.into()));
         }
@@ -358,6 +449,26 @@ impl<'a> PreparedAccountedCommand<'a> {
             other => other,
         };
         let quota = session.active().and_then(|state| state.doc.quota()).ok_or(BackingError::Unsupported)?.clone();
+        let response_plan = if let Request::HistorySelect(target) = &request {
+            // At most 256 retained slots. Charge before each borrowed label visit;
+            // no compatibility label Vec or model copy is constructed here.
+            let state = session.active().ok_or(EngineError::NoDocument)?;
+            let mut visits = 0usize;
+            let mut max_label = 0usize;
+            for label in state.history.entry_labels().chain(state.history.redo_labels()) {
+                control.check(1)?;
+                visits = visits.checked_add(1).ok_or(BackingError::Length)?;
+                if visits > 256 || label.len() > MAX_STRING {
+                    return Err(BackingError::Length.into());
+                }
+                max_label = max_label.max(label.len());
+            }
+            let bytes =
+                max_label.checked_mul(2).and_then(|n| n.checked_add(4096 + std::mem::size_of::<HistoryResponseAllowance>())).ok_or(BackingError::Length)?;
+            Some((*target, *target != state.history.past_len(), max_label, bytes as u64))
+        } else {
+            None
+        };
         let count = session.journal.len().checked_add(1).ok_or(BackingError::Length)?;
         if count > MAX_RECORDS {
             return Err(BackingError::Length.into());
@@ -389,11 +500,22 @@ impl<'a> PreparedAccountedCommand<'a> {
         }
         census.string(id)?;
         census.value(params, 0, control)?;
+        // The copier polls Value visits but String copies do not debit bytes.
+        // Prepay actual bounded payload and known Value/entry slot copies before
+        // any destination allocation. Later equality admission is independent.
+        let copy_work = census
+            .nodes
+            .checked_mul(std::mem::size_of::<Value>())
+            .and_then(|n| count.checked_mul(std::mem::size_of::<(String, Value)>()).and_then(|v| n.checked_add(v)))
+            .and_then(|n| n.checked_add(census.payload))
+            .ok_or(BackingError::Length)?;
+        control.check(u64::try_from(copy_work).map_err(|_| BackingError::Length)?)?;
         // Separate old-capacity overlap charge is intentionally conservative
         // when an older journal lease already charges the same ledger. It is
         // never retained after the old physical payload is destroyed.
         let overlap = quota.reserve(QuotaKind::Index, old.envelope).map_err(|_| BackingError::Quota)?;
-        let lease = quota.reserve(QuotaKind::Index, census.envelope).map_err(|_| BackingError::Quota)?;
+        let envelope = census.envelope.checked_add(response_plan.map_or(0, |p| p.3)).ok_or(BackingError::Length)?;
+        let lease = quota.reserve(QuotaKind::Index, envelope).map_err(|_| BackingError::Quota)?;
         let mut journal = Vec::new();
         journal.try_reserve_exact(count).map_err(|_| BackingError::Allocation)?;
         if journal.capacity() > count.saturating_mul(2) {
@@ -405,7 +527,14 @@ impl<'a> PreparedAccountedCommand<'a> {
         journal.push((copied_string(id)?, copied_value(params, control)?));
         control.check(1)?;
         let state = session.active().ok_or(EngineError::NoDocument)?;
-        Ok(Self { request, snapshot: state.doc.clone(), revision: state.revision, view_revision: state.view_revision, journal, lease, overlap, quota })
+        let lease = match response_plan {
+            Some((target, changed, max_label, _)) => {
+                CommandLease::History(HistoryResponseAllowance { lease, quota: quota.clone(), target, changed, max_label })
+            }
+            None => CommandLease::Journal(lease),
+        };
+        let history = if matches!(&request, Request::HistorySelect(_)) { Some(state.history.clone()) } else { None };
+        Ok(Self { request, snapshot: state.doc.clone(), revision: state.revision, view_revision: state.view_revision, history, journal, lease, overlap, quota })
     }
     pub fn execute(self, session: &mut Session, control: &ReadControl<'_>) -> Result<Value> {
         let outcome = self.execute_staged(session, control)?;
@@ -416,6 +545,9 @@ impl<'a> PreparedAccountedCommand<'a> {
         if let Some(reason) = global_refusal(session) {
             return Err(EngineError::Other(reason.into()));
         }
+        if matches!(&self.request, Request::HistorySelect(_)) {
+            require_history_selection_enabled(session)?;
+        }
         let quota = session.active().and_then(|state| state.doc.quota()).ok_or(BackingError::Unsupported)?;
         if !quota.shares_ledger(&self.quota) {
             return Err(BackingError::Quota.into());
@@ -424,8 +556,21 @@ impl<'a> PreparedAccountedCommand<'a> {
         if state.revision != self.revision || !state.doc.shares_state(&self.snapshot) {
             return Err(EngineError::Other("the prepared accounted command targets an older document state".into()));
         }
-        if matches!(&self.request, Request::ClearSelection | Request::SelectAll(_) | Request::ColorRange(_) | Request::PreparedMetadata(_)) && state.view_revision != self.view_revision {
+        if matches!(
+            &self.request,
+            Request::ClearSelection | Request::SelectAll(_) | Request::ColorRange(_) | Request::PreparedMetadata(_) | Request::HistorySelect(_)
+        ) && state.view_revision != self.view_revision
+        {
             return Err(EngineError::Other("the prepared accounted selection targets an older view".into()));
+        }
+        if let Some(history) = &self.history {
+            control.check(1)?;
+            if !state.history.shares_accounted_history(history)
+                || state.history.max_states != history.max_states
+                || state.history.max_bytes != history.max_bytes
+            {
+                return Err(EngineError::Other("the prepared history selection targets an older history".into()));
+            }
         }
         let previous = self.journal.get(..self.journal.len().checked_sub(1).ok_or(BackingError::Integrity)?).ok_or(BackingError::Integrity)?;
         control.check(MAX_PAYLOAD as u64)?;
@@ -435,6 +580,11 @@ impl<'a> PreparedAccountedCommand<'a> {
         // This poll precedes the transactional API publication. No fallible
         // bookkeeping runs after a successful edit.
         control.check(1)?;
+        // A private enum owns the real combined reservation. Validate the
+        // request/allowance relationship before invoking any publication body.
+        if matches!(&self.request, Request::HistorySelect(_)) != matches!(&self.lease, CommandLease::History(_)) {
+            return Err(BackingError::Integrity.into());
+        }
         let result = match self.request {
             Request::PreparedMetadata(prepared) => prepared.execute(session, control)?,
             Request::ImportedMetadata(_) => return Err(BackingError::Integrity.into()),
@@ -456,8 +606,13 @@ impl<'a> PreparedAccountedCommand<'a> {
             Request::SelectAll(params) => crate::accounted_select_all::run(session, params, control)?,
             Request::Undo => Value::Bool(session.undo_with_control(control)?),
             Request::Redo => Value::Bool(session.redo_with_control(control)?),
+            Request::HistorySelect(target) => {
+                let CommandLease::History(response) = &self.lease else { return Err(BackingError::Integrity.into()) };
+                crate::history_select_cmds::run_accounted(session, target, control, response)?
+            }
         };
-        Ok(AccountedCommandOutcome { journal: self.journal, lease: self.lease, overlap: self.overlap, result })
+        let lease = self.lease.into_lease();
+        Ok(AccountedCommandOutcome { journal: self.journal, lease, overlap: self.overlap, result })
     }
 }
 
@@ -497,3 +652,7 @@ impl Session {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "accounted_history_select_tests.rs"]
+mod history_select_tests;

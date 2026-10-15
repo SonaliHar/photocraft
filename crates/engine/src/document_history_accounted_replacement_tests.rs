@@ -73,12 +73,12 @@ fn wrong_current_or_ledger_and_cancel_or_quota_leave_history_unchanged() {
     assert!(history.try_replace_accounted_current(&prepared, prepared.clone(), &control()).is_err());
     let (other, _, _) = fixture();
     assert!(history.try_replace_accounted_current(&initial, other, &control()).is_err());
-    let calls = std::cell::Cell::new(0);
+    let calls = std::sync::atomic::AtomicUsize::new(0);
     let late = ReadControl {
         interrupt: &Interrupt::NONE,
         work: &|_| {
-            calls.set(calls.get() + 1);
-            if calls.get() > 3 { Err(BackingError::Cancelled) } else { Ok(()) }
+            let count = calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if count > 3 { Err(BackingError::Cancelled) } else { Ok(()) }
         },
     };
     let usage = q.usage().unwrap();

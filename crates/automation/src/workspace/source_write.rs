@@ -72,7 +72,13 @@ impl<'a> Target<'a> {
         let parent = root.dir.open_dir(parent_path).map_err(|e| file_error("open write parent", request, e))?;
         Ok(Self { workspace, parent, leaf, relative, request })
     }
-    fn check(&self, sources: Sources<'_>, fingerprints: &[String], control: &photocraft_raster::Interrupt<'_>) -> Result<(), AutomationError> {
+    fn check(
+        &self,
+        sources: Sources<'_>,
+        fingerprints: &[String],
+        control: &photocraft_raster::Interrupt<'_>,
+        resident_limit: Option<u64>,
+    ) -> Result<(), AutomationError> {
         poll(control)?;
         let root = self.workspace.write.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: write authority is absent")))?;
         #[cfg(not(target_arch = "wasm32"))]
@@ -122,7 +128,11 @@ impl<'a> Target<'a> {
                         return Err(AutomationError::BadRequest("an alias of the original XCF source is protected; choose a different destination".into()));
                     }
                 }
-                photocraft_io::source_protection::check_reader_with_interrupt(&mut file, metadata.len(), fingerprints, control).map_err(protection_error)?;
+                match resident_limit {
+                    Some(limit) => photocraft_io::source_protection::check_reader_with_resident_limit(&mut file, metadata.len(), fingerprints, limit, control),
+                    None => photocraft_io::source_protection::check_reader_with_interrupt(&mut file, metadata.len(), fingerprints, control),
+                }
+                .map_err(protection_error)?;
                 if file.metadata().map_err(|e| file_error("inspect write", self.request, e))?.len() != metadata.len() {
                     return Err(AutomationError::BadRequest("automation destination changed during protection check".into()));
                 }
@@ -149,7 +159,7 @@ pub(super) fn check_with_interrupt(
     photocraft_io::source_protection::validate_fingerprints_with_interrupt(fingerprints, control).map_err(protection_error)?;
     poll(control)?;
     let target = Target::open(workspace, path)?;
-    target.check(sources, fingerprints, control)?;
+    target.check(sources, fingerprints, control, None)?;
     poll(control)
 }
 
@@ -185,11 +195,36 @@ pub(super) fn write_stream_with_interrupt<R>(
     control: &photocraft_raster::Interrupt<'_>,
     write: impl FnOnce(&mut cap_std::fs::File) -> Result<R, AutomationError>,
 ) -> Result<R, AutomationError> {
+    write_stream_inner(workspace, path, sources, fingerprints, control, None, write)
+}
+
+/// Same held-parent transaction with a caller-paid, lower inspection ceiling.
+pub(super) fn write_stream_with_resident_limit<R>(
+    workspace: &AuthorizedWorkspace,
+    path: &str,
+    sources: Sources<'_>,
+    fingerprints: &[String],
+    control: &photocraft_raster::Interrupt<'_>,
+    resident_limit: u64,
+    write: impl FnOnce(&mut cap_std::fs::File) -> Result<R, AutomationError>,
+) -> Result<R, AutomationError> {
+    write_stream_inner(workspace, path, sources, fingerprints, control, Some(resident_limit), write)
+}
+
+fn write_stream_inner<R>(
+    workspace: &AuthorizedWorkspace,
+    path: &str,
+    sources: Sources<'_>,
+    fingerprints: &[String],
+    control: &photocraft_raster::Interrupt<'_>,
+    resident_limit: Option<u64>,
+    write: impl FnOnce(&mut cap_std::fs::File) -> Result<R, AutomationError>,
+) -> Result<R, AutomationError> {
     sources.validate(workspace, control)?;
     photocraft_io::source_protection::validate_fingerprints_with_interrupt(fingerprints, control).map_err(protection_error)?;
     poll(control)?;
     let target = Target::open(workspace, path)?;
-    target.check(sources, fingerprints, control)?;
+    target.check(sources, fingerprints, control, resident_limit)?;
     let leaf = target.leaf.to_string_lossy();
     let tmp = PathBuf::from(photocraft_format::atomic::temp_name(&leaf));
     let mut options = OpenOptions::new();
@@ -220,7 +255,7 @@ pub(super) fn write_stream_with_interrupt<R>(
         // Cancellation and protection are rechecked beneath the same held parent
         // immediately before every attempt. A successful rename is the commit point:
         // later cancellation does not report failure for already-published bytes.
-        if let Err(error) = target.check(sources, fingerprints, control).and_then(|()| poll(control)) {
+        if let Err(error) = target.check(sources, fingerprints, control, resident_limit).and_then(|()| poll(control)) {
             let message = error.to_string();
             protection_failure = Some(error);
             return Err(std::io::Error::other(message));

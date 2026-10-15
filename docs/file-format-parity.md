@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-13 · **Change:** minor (palette PNGs open in Indexed Color mode, #4804; earlier: CMYK Invert, Posterize and Threshold on the inks; 16-bit Lab Invert; Photoshop-oracle floor 145/258; `.atn` import maps 112 events; DDS textures open, #1327; DPX read and write, #1049; #2465 fixed: CS2 placed layers with only a `PlLd` block open their contents; Photoshop Actions `.atn` read and write; `.shc` contour files read and write; earlier the same day: indexed BMP palette mode; Save keeps a JPEG's quality and a WebP's encoding) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (XCF implementation pending validation; measured coverage unchanged; earlier: palette PNGs open in Indexed Color mode, #4804; earlier: CMYK Invert, Posterize and Threshold on the inks; 16-bit Lab Invert; Photoshop-oracle floor 145/258; `.atn` import maps 112 events; DDS textures open, #1327; DPX read and write, #1049; #2465 fixed: CS2 placed layers with only a `PlLd` block open their contents; Photoshop Actions `.atn` read and write; `.shc` contour files read and write; earlier the same day: indexed BMP palette mode; Save keeps a JPEG's quality and a WebP's encoding) · **Target:** Adobe Photoshop 2026
 
 Every format Photoshop 2026 (27.11.0) reads or writes, with PhotoCraft's support, fidelity and
 tests. Photoshop's list comes from its `Info.plist` `CFBundleDocumentTypes`, the PiPL read/write
@@ -93,6 +93,20 @@ D5100 colour profile. Counts and the G14 estimate are unchanged.
 | DirectDraw Surface `.dds` | yes | no | Top mip level of a 2D texture: uncompressed RGB, RGBA or luminance, BC1–BC3 (DXT1/3/5), legacy or DX10 header. Cubemaps, arrays, volumes and BC4–BC7 are refused (#1327). Photoshop needs a plug-in |
 | Krita `.kra`, GIMP `.xcf`, Procreate | no | no | Not in Photoshop either |
 
+### XCF implementation pending validation
+
+2026-10-15: The [full XCF import work](../specs/002-full-xcf-import/spec.md) now has source
+implementation for a limited plain raster subset with owned native storage: import, current
+metadata and anonymous selection edits, and `.pcraft` save and reopen through explicit lower
+endpoints. Native saving also has interactive and rooted capability routes. Default Open routing
+and open-time profile policy integration for these owned paths remain unfinished. Broader
+stock-filter rendering and source classes remain gated; unsupported cases still refuse rather
+than being admitted by these storage and lifecycle paths. XCF writing is not implemented.
+
+PhotoCraft tests, native round-trip checks and end-to-end workflow validation are deferred. The
+XCF row above remains unpromoted pending validation; measured format counts, corpus floors,
+readiness percentages and effort estimates are unchanged.
+
 ### Affinity import notes (moved from `roadmap.md`)
 
 2026-10-08: Affinity `.af`, `.afdesign`, `.afphoto` and `.afpub` documents (container versions
@@ -142,6 +156,7 @@ remaining gaps in #1606 stay tracked with per-sample corpus ceilings.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | XCF source implementation and explicit owned native lifecycle noted as pending tests and workflow validation; no measured coverage, floor, readiness or estimate changed |
 | 2026-10-13 | minor | Palette PNGs open in Indexed Color mode (#4804) |
 | 2026-10-12 | minor | `.atn`: 112 events mapped (Select and Mask, Filter Gallery Spatter, Ripple, Crystallize, Pattern Fill layers, mask targeting, Step Backward, points, Bitmap) |
 | 2026-10-12 | minor | DDS textures open, read-only (#1327) |

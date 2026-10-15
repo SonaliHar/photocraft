@@ -1,0 +1,118 @@
+//! Paid, per-document metadata gesture key. A key is only coalescing policy;
+//! it is never source, model, profile, layer, or view authority. All actual
+//! current-owner and history validation is repeated by the typed transaction.
+use super::*;
+use photocraft_doc::DocId;
+use photocraft_raster::backing::quota::{BackingQuota, QuotaLease};
+struct KeyOwner {
+    key: String,
+    document: DocId,
+    quota: BackingQuota,
+    _lease: QuotaLease,
+}
+#[derive(Clone)]
+pub(crate) struct PaidMetadataGesture {
+    owner: Arc<KeyOwner>,
+}
+impl std::fmt::Debug for PaidMetadataGesture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PaidMetadataGesture").field("document", &self.owner.document).finish_non_exhaustive()
+    }
+}
+impl PaidMetadataGesture {
+    fn matches(&self, key: &str, document: DocId, quota: &BackingQuota, c: &ReadControl<'_>) -> Result<bool> {
+        c.check((self.owner.key.len() + key.len() + 1) as u64)?;
+        Ok(self.owner.document == document && self.owner.quota.shares_ledger(quota) && self.owner.key == key)
+    }
+    fn prepare(key: &str, document: DocId, quota: &BackingQuota, c: &ReadControl<'_>) -> Result<Self> {
+        if key.len() > 128 {
+            return Err(BackingError::Length.into());
+        }
+        c.check(key.len() as u64)?;
+        let bytes = key.len().checked_mul(2).and_then(|n| n.checked_add(std::mem::size_of::<KeyOwner>() + 128)).ok_or(BackingError::Length)?;
+        let mut lease = quota.reserve(QuotaKind::Index, bytes as u64).map_err(|_| BackingError::Quota)?;
+        let mut owned = String::new();
+        owned.try_reserve_exact(key.len()).map_err(|_| BackingError::Allocation)?;
+        if owned.capacity() > key.len().checked_mul(2).ok_or(BackingError::Length)? {
+            return Err(BackingError::Allocation.into());
+        }
+        // Empty and NUL-containing keys are inert exact strings, as upstream.
+        owned.push_str(key);
+        let actual = owned.capacity().checked_add(std::mem::size_of::<KeyOwner>() + 128).ok_or(BackingError::Length)?;
+        lease.reconcile_capacity(actual as u64).map_err(|_| BackingError::Allocation)?;
+        c.check(1)?;
+        Ok(Self { owner: Arc::new(KeyOwner { key: owned, document, quota: quota.clone(), _lease: lease }) })
+    }
+}
+impl Session {
+    /// Same exact per-document key continues the existing typed metadata anchor.
+    /// Requested layer and changed fields do not form an implicit key prefix.
+    /// Errors and actual no-ops preserve both the paid key and the redo branch.
+    pub fn edit_accounted_metadata_with_coalesce(&mut self, label: &str, edit: AccountedEdit<'_>, key: Option<&str>, c: &ReadControl<'_>) -> Result<()> {
+        c.check(1)?;
+        if !matches!(edit, AccountedEdit::LayerMetadata { .. }) || key.is_some_and(|v| v.len() > 128) {
+            return Err(BackingError::Unsupported.into());
+        }
+        if self.active_job().is_some() {
+            return Err(EngineError::Other("the document has an active background job".into()));
+        }
+        let state = self.active_mut().ok_or(EngineError::NoDocument)?;
+        if state.floating.is_some() || state.coalesce.is_some() {
+            return Err(BackingError::Unsupported.into());
+        }
+        let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
+        owner.validate_imported_metadata_edit(edit, c)?;
+        let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
+        if state.active_layer != view.target().active || state.layer_anchor != view.anchor() || !state.selected_layers.is_empty() {
+            return Err(BackingError::Integrity.into());
+        }
+        if state.channel_view.layer_mask.is_some()
+            || state.channel_view.editing_mask.is_some()
+            || !matches!(state.channel_view.target, crate::channel_cmds::ChannelTarget::Composite | crate::channel_cmds::ChannelTarget::Color(_))
+        {
+            return Err(BackingError::Unsupported.into());
+        }
+        if matches!(state.channel_view.target,crate::channel_cmds::ChannelTarget::Color(i) if i>=state.doc.mode.color_channels()) {
+            return Err(BackingError::Bounds.into());
+        }
+        edit_locks(owner, edit, c)?;
+        let matching_key = match (key, state._accounted_metadata_gesture.as_ref()) {
+            (Some(key), Some(marker)) => marker.matches(key, state.doc.id, owner.quota(), c)?,
+            _ => false,
+        };
+        // Upstream appends when no undo anchor remains, even for the same key.
+        let continuation = matching_key && state.history.can_undo();
+        let mut history = state.history.clone();
+        history.set_current_layers_borrowed(view.target(), c)?;
+        let snapshot = if continuation {
+            let current_history = history.clone();
+            history.try_continue_accounted_metadata(&current_history, owner, edit, label, view.target(), c)?
+        } else {
+            history.try_commit_accounted(edit, label, view.target(), c)?
+        };
+        if snapshot.shares_state(&state.doc) {
+            c.check(1)?;
+            return Ok(());
+        }
+        let current = snapshot.accounted().ok_or(BackingError::Integrity)?;
+        let next_view = view.try_replace(current, state.active_layer, view.selected(), state.layer_anchor, c)?;
+        let gesture = match key {
+            None => None,
+            Some(_) if matching_key => state._accounted_metadata_gesture.clone(),
+            Some(key) => Some(PaidMetadataGesture::prepare(key, state.doc.id, owner.quota(), c)?),
+        };
+        let revision = state.revision.checked_add(1).ok_or(BackingError::Length)?;
+        c.check(1)?;
+        state.doc = snapshot;
+        state.history = history;
+        state.accounted_view = Some(next_view);
+        state.revision = revision;
+        state.last_damage = None;
+        state.coalesce = None;
+        state._accounted_metadata_gesture = gesture;
+        Ok(())
+    }
+}
+#[cfg(test)]
+#[path = "accounted_metadata_gesture_tests.rs"]
+mod tests;

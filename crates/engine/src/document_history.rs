@@ -408,6 +408,72 @@ impl DocumentHistory {
         })
     }
 
+    /// Continue an already-authorized metadata gesture at the current history tip.
+    /// Key/anchor continuity is the Session witness's responsibility. A paid view
+    /// transition may supply a newly captured expected_history; this method does
+    /// not equate a gesture key with a layer or freeze the original focus view.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn try_continue_accounted_metadata(
+        &mut self,
+        expected_history: &DocumentHistory,
+        expected_current: &AccountedDocument,
+        edit: AccountedEdit<'_>,
+        _label: &str,
+        layers: &LayerTarget,
+        ctl: &ReadControl<'_>,
+    ) -> Result<DocumentSnapshot, BackingError> {
+        ctl.check(1)?;
+        if !matches!(edit, AccountedEdit::LayerMetadata { .. }) {
+            return Err(BackingError::Unsupported);
+        }
+        if !self.shares_accounted_history(expected_history) || self.max_states != expected_history.max_states || self.max_bytes != expected_history.max_bytes {
+            return Err(BackingError::Integrity);
+        }
+        let Branch::Accounted(owner) = &self.branch else {
+            return Err(BackingError::Unsupported);
+        };
+        let current = owner.states.get(owner.cursor).ok_or(BackingError::Integrity)?;
+        if !current.document.shares_model(expected_current) {
+            return Err(BackingError::Integrity);
+        }
+        let staged = current.document.try_edit(edit, ctl)?;
+        let snapshot = DocumentSnapshot::from_accounted(staged.clone())?;
+        // No-op requests never destroy redo or alter the current gesture marker,
+        // even when the caller is at an undo destination or initial history slot.
+        if staged.shares_model(&current.document) {
+            ctl.check(1)?;
+            return Ok(snapshot);
+        }
+        if owner.cursor == 0 || owner.cursor.checked_add(1) != Some(owner.states.len()) {
+            return Err(BackingError::Integrity);
+        }
+        if layers.selected.len() > 4096 {
+            return Err(BackingError::Length);
+        }
+        ctl.check(layers.selected.len() as u64)?;
+        if current.metadata.target != *layers {
+            return Err(BackingError::Integrity);
+        }
+        // A resident matching-key frame updates only the current target, keeping
+        // the first changed frame's label. Retain its actual charged owner while
+        // preparing the fresh metadata copy; caller label is intentionally unused.
+        let first_metadata = Arc::clone(&current.metadata);
+        self.sync_limits()?;
+        let meta = Arc::new(metadata(staged.quota(), &first_metadata.label, layers, ctl)?);
+        self.update(ctl, |history| {
+            if history.cursor == 0 || history.cursor.checked_add(1) != Some(history.states.len()) {
+                return Err(BackingError::Integrity);
+            }
+            let current = history.states.get_mut(history.cursor).ok_or(BackingError::Integrity)?;
+            if !current.document.shares_model(expected_current) {
+                return Err(BackingError::Integrity);
+            }
+            ctl.check(1)?;
+            *current = Entry { document: staged, metadata: meta };
+            Ok(snapshot)
+        })
+    }
+
     /// Typed charged pixel selection, separate from layer-target transactions.
     pub fn try_commit_accounted_selection(
         &mut self,
@@ -657,3 +723,7 @@ impl DocumentHistory {
 #[cfg(test)]
 #[path = "document_history_accounted_replacement_tests.rs"]
 mod accounted_replacement_tests;
+
+#[cfg(test)]
+#[path = "document_history_accounted_continuation_tests.rs"]
+mod accounted_continuation_tests;

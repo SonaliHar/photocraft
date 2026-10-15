@@ -169,12 +169,13 @@ fn late_cancel_during_long_name_validation_and_repeated_comparison() {
     let original = model(&q, "source", false, false);
     let id = original.document().layers[0].id;
     let name = "n".repeat(1 << 20);
-    let bytes = std::cell::Cell::new(0u64);
+    let bytes = std::sync::atomic::AtomicU64::new(0);
     let late = ReadControl {
         interrupt: &Interrupt::NONE,
         work: &|n| {
-            bytes.set(bytes.get().saturating_add(n));
-            if bytes.get() > 65536 { Err(BackingError::Cancelled) } else { Ok(()) }
+            let previous =
+                bytes.fetch_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |used| Some(used.saturating_add(n))).unwrap();
+            if previous.saturating_add(n) > 65536 { Err(BackingError::Cancelled) } else { Ok(()) }
         },
     };
     assert!(matches!(
@@ -183,12 +184,13 @@ fn late_cancel_during_long_name_validation_and_repeated_comparison() {
     ));
     assert_eq!(original.document().layers[0].name, "retained");
     let renamed = original.try_edit(AccountedEdit::LayerName { layer: id, name: &name }, &control()).unwrap();
-    let bytes = std::cell::Cell::new(0u64);
+    let bytes = std::sync::atomic::AtomicU64::new(0);
     let late = ReadControl {
         interrupt: &Interrupt::NONE,
         work: &|n| {
-            bytes.set(bytes.get().saturating_add(n));
-            if bytes.get() > 65536 { Err(BackingError::Cancelled) } else { Ok(()) }
+            let previous =
+                bytes.fetch_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |used| Some(used.saturating_add(n))).unwrap();
+            if previous.saturating_add(n) > 65536 { Err(BackingError::Cancelled) } else { Ok(()) }
         },
     };
     assert!(matches!(names_equal(&renamed.document().layers[0].name, &name, &late), Err(BackingError::Cancelled)));

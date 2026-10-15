@@ -12,6 +12,9 @@ use photocraft_doc::{
 use photocraft_raster::backing::{BackingError, ReadControl, quota::QuotaKind};
 use std::sync::{Arc, Mutex};
 
+#[path = "accounted_metadata_gesture.rs"]
+pub(crate) mod metadata_gesture;
+
 impl DocState {
     pub(crate) fn new_accounted(document: AccountedDocument, path: Option<String>, history_states: usize, control: &ReadControl<'_>) -> Result<Self> {
         control.check(1)?;
@@ -57,6 +60,7 @@ impl DocState {
             accounted_view: Some(view),
             _accounted_metadata: Some(metadata),
             _accounted_save_identity: None,
+            _accounted_metadata_gesture: None,
         })
     }
 }
@@ -211,6 +215,7 @@ impl Session {
         state.revision = revision;
         state.last_damage = None;
         state.coalesce = None;
+        state._accounted_metadata_gesture = None;
         Ok(())
     }
 }

@@ -75,6 +75,7 @@ impl Session {
         state.revision = revision;
         state.last_damage = None;
         state.coalesce = None;
+        state._accounted_metadata_gesture = None;
         Ok(())
     }
 }

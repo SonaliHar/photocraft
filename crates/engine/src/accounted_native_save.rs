@@ -236,3 +236,7 @@ impl PreparedAccountedNativeSave {
 #[cfg(test)]
 #[path = "accounted_native_save_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "accounted_native_save_title_tests.rs"]
+mod title_tests;

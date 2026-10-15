@@ -569,6 +569,20 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             })
         }) as photocraft_ui_egui::services::NativeSaveFn
     });
+    let automation_accounted_native_save = automation.clone().map(|workspace| {
+        Box::new(
+            move |snapshot: &photocraft_engine::DocumentSnapshot,
+                  path: &str,
+                  protection: &photocraft_engine::WriteProtection,
+                  control: &photocraft_raster::backing::ReadControl<'_>| {
+                crate::crash_guard::guard("Save", || {
+                    workspace
+                        .save_accounted_native_with_read_control(snapshot, path, protection, Default::default(), control)
+                        .map_err(|error| error.to_string())
+                })
+            },
+        ) as photocraft_ui_egui::services::AccountedNativeSaveFn
+    });
     let automation_open_pcraft = automation.clone().map(|workspace| {
         Box::new(move |path: &str| {
             let name = Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path).to_string();
@@ -591,8 +605,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     Services {
         native_save: Some(Box::new(save_native)),
         accounted_native_save: Some(Box::new(save_accounted_native)),
-        // Rooted accounted streaming requires its own namespace-safe adapter.
-        automation_accounted_native_save: None,
+        automation_accounted_native_save,
         validate_write: Some(Box::new(|path, source| {
             photocraft_automation::files::validate_destination(Path::new(path), source, None).map_err(|e| e.to_string())
         })),

@@ -24,10 +24,24 @@ fn select_state(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn select_state_with_control(s: &mut Session, p: &Value, control: &photocraft_raster::backing::ReadControl<'_>) -> Result<Value> {
+    if s.active().is_some_and(|state| state.doc.accounted().is_some()) {
+        return Err(photocraft_raster::backing::BackingError::Unsupported.into());
+    }
+    let target = validate_request(s, p, control)?;
+    select_target(s, target, control, None)
+}
+
+/// Borrowed target validation. Keep the existing numeric helper's rounding and
+/// overflow semantics; the paid dispatcher owns its additional request envelope.
+pub(crate) fn validate_request(s: &Session, p: &Value, control: &photocraft_raster::backing::ReadControl<'_>) -> Result<usize> {
     control.check(1)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let past = st.history.past_len();
-    let last = past.checked_add(st.history.redo_labels().count()).ok_or_else(|| bad("history state count overflow"))?;
+    let mut last = past;
+    for _ in st.history.redo_labels() {
+        control.check(1)?;
+        last = last.checked_add(1).ok_or_else(|| bad("history state count overflow"))?;
+    }
     let v = match p.get("state") {
         None | Some(Value::Null) => return Err(bad("missing `state` (the History entry to return to, 0 = oldest)")),
         Some(_) => int(p, "state").ok_or_else(|| bad("`state` must be a number"))?,
@@ -36,7 +50,39 @@ fn select_state_with_control(s: &mut Session, p: &Value, control: &photocraft_ra
     if s.active_job().is_some() {
         return Err(EngineError::Other("the history can't move while a command is still running on this document".into()));
     }
+    Ok(target)
+}
+
+/// Only the genuine prepaid response owner can enter the accounted command body.
+pub(crate) fn run_accounted(
+    s: &mut Session,
+    target: usize,
+    control: &photocraft_raster::backing::ReadControl<'_>,
+    response: &crate::accounted_commands::HistoryResponseAllowance,
+) -> Result<Value> {
+    control.check(1)?;
+    if s.active_job().is_some() {
+        return Err(EngineError::Other("the history can't move while a command is still running on this document".into()));
+    }
+    if s.active().is_none_or(|state| state.doc.accounted().is_none()) {
+        return Err(photocraft_raster::backing::BackingError::Unsupported.into());
+    }
+    select_target(s, target, control, Some(response))
+}
+
+fn select_target(
+    s: &mut Session,
+    target: usize,
+    control: &photocraft_raster::backing::ReadControl<'_>,
+    paid_response: Option<&crate::accounted_commands::HistoryResponseAllowance>,
+) -> Result<Value> {
+    control.check(1)?;
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let past = st.history.past_len();
     if target == past {
+        if let Some(owner) = st.doc.accounted() {
+            return paid_response.ok_or(photocraft_raster::backing::BackingError::Unsupported)?.response(owner, target, false, None, control);
+        }
         return Ok(json!({"state":target,"changed":false}));
     }
     let revision = st.revision.checked_add(1).ok_or(photocraft_raster::backing::BackingError::Length)?;
@@ -59,9 +105,19 @@ fn select_state_with_control(s: &mut Session, p: &Value, control: &photocraft_ra
         at = if target < at { at.checked_sub(1) } else { at.checked_add(1) }.ok_or(photocraft_raster::backing::BackingError::Length)?;
     }
     let target_layers = layers.ok_or_else(|| EngineError::Other("the history can't step right now".into()))?;
-    // Save As identity/title is outside history. Accounted models cannot be
-    // detached for renaming; a missing owner-aware title edit refuses atomically.
-    if doc.name != start.name {
+    // Save As identity/title is outside history. Repair the private accounted
+    // target through its paid copier before publishing the travelled cursor.
+    let title_changed = if doc.accounted().is_some() {
+        !same_accounted_title(&doc.name, &start.name, control)?
+    } else {
+        doc.name != start.name
+    };
+    if let Some(owner) = doc.accounted()
+        && title_changed
+    {
+        let named = owner.try_with_document_name(&start.name, control)?;
+        doc = history.try_replace_accounted_current(owner, named, control)?;
+    } else if title_changed {
         doc.validate_resident()?;
         let limits = photocraft_io::NativeSaveLimits::default().preparation;
         photocraft_io::retained_native_model_bytes(&doc, limits, control.interrupt)
@@ -72,7 +128,16 @@ fn select_state_with_control(s: &mut Session, p: &Value, control: &photocraft_ra
         name.push_str(&start.name);
         doc.try_resident_mut_with_raster_limit(photocraft_raster::MAX_CHECKED_RASTER_BYTES, control.interrupt)?.name = name;
     }
-    let response = json!({"state":target,"changed":true,"current":history.entry_labels().last()});
+    let mut label = None;
+    for current in history.entry_labels() {
+        control.check(1)?;
+        label = Some(current);
+    }
+    let response = if let Some(owner) = doc.accounted() {
+        paid_response.ok_or(photocraft_raster::backing::BackingError::Unsupported)?.response(owner, target, true, label, control)?
+    } else {
+        json!({"state":target,"changed":true,"current":label})
+    };
     if let Some(owner) = doc.accounted() {
         let values = target_layers.values();
         let view = crate::accounted_view::AccountedView::new(owner, values.active, &values.selected, values.active, control)?;
@@ -86,6 +151,7 @@ fn select_state_with_control(s: &mut Session, p: &Value, control: &photocraft_ra
         st.revision = revision;
         st.last_damage = None;
         st.coalesce = None;
+        st._accounted_metadata_gesture = None;
         return Ok(response);
     }
     let (mut values, lease) = target_layers.into_parts();
@@ -108,6 +174,24 @@ fn select_state_with_control(s: &mut Session, p: &Value, control: &photocraft_ra
     st.coalesce = None;
     Ok(response)
 }
+
+fn same_accounted_title(a: &str, b: &str, control: &photocraft_raster::backing::ReadControl<'_>) -> Result<bool> {
+    control.check(1)?;
+    if a.len() != b.len() {
+        return Ok(false);
+    }
+    for (left, right) in a.as_bytes().chunks(32768).zip(b.as_bytes().chunks(32768)) {
+        control.check((left.len() as u64).checked_mul(2).ok_or(photocraft_raster::backing::BackingError::Length)?)?;
+        if left != right {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+#[cfg(test)]
+#[path = "history_select_accounted_title_tests.rs"]
+mod accounted_title_tests;
 
 /// Same target repair as checked Undo/Redo, prepared fallibly before publication.
 fn restore_resident_target(
