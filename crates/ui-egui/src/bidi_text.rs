@@ -12,15 +12,60 @@
 
 use std::borrow::Cow;
 
-use unicode_bidi::{BidiClass, BidiInfo, bidi_class};
+use unicode_bidi::{BidiClass, BidiInfo, Level, bidi_class};
 
 /// `text` in the order egui should lay it out from left to right. Text without right-to-left
 /// characters comes back unchanged, without allocating.
 pub fn visual(text: &str) -> Cow<'_, str> {
+    visual_at(text, None)
+}
+
+/// [`visual`] for a line that reads left to right as a whole even when it starts with a
+/// right-to-left name, such as the title bar's "*صورة.psd — PhotoCraft": with the paragraph
+/// direction taken from the name, the "— PhotoCraft" tail moved to the left.
+pub fn visual_ltr(text: &str) -> Cow<'_, str> {
+    visual_at(text, Some(Level::ltr()))
+}
+
+/// Whether `text` reads right to left as a paragraph: its first strong letter is Hebrew, Arabic…
+pub fn is_rtl_paragraph(text: &str) -> bool {
+    text.chars()
+        .find_map(|c| match bidi_class(c) {
+            BidiClass::L => Some(false),
+            BidiClass::R | BidiClass::AL => Some(true),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
+/// `text` in display order, cut with "…" where it doesn't fit (`fits` measures a display-order
+/// string). A right-to-left name is cut in logical order before it is reordered, so its *start*
+/// stays and the "…" lands at the left, the end of a right-to-left line; cutting after the
+/// reordering lost the start of the name instead. `None`: `text` fits as it is (or a
+/// left-to-right one, which the caller elides at its right end as usual).
+pub fn elide(text: &str, fits: impl Fn(&str) -> bool) -> Option<String> {
+    if !is_rtl_paragraph(text) || fits(&visual(text)) {
+        return None;
+    }
+    // The longest logical prefix (whole characters) that fits with "…" after it.
+    let ends: Vec<usize> = text.char_indices().map(|(i, _)| i).skip(1).chain(std::iter::once(text.len())).collect();
+    let cut = |n: usize| -> String {
+        let end = if n == 0 { 0 } else { ends.get(n - 1).copied().unwrap_or(text.len()) };
+        visual(&format!("{}…", text.get(..end).unwrap_or_default().trim_end())).into_owned()
+    };
+    let (mut lo, mut hi) = (0usize, ends.len());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if fits(&cut(mid)) { lo = mid } else { hi = mid - 1 }
+    }
+    Some(cut(lo))
+}
+
+fn visual_at(text: &str, level: Option<Level>) -> Cow<'_, str> {
     if !text.chars().any(is_rtl) {
         return Cow::Borrowed(text);
     }
-    let info = BidiInfo::new(text, None);
+    let info = BidiInfo::new(text, level);
     let mut out = String::with_capacity(text.len());
     for para in &info.paragraphs {
         let (levels, runs) = info.visual_runs(para, para.range.clone());
@@ -125,6 +170,29 @@ mod tests {
         assert_eq!(visual("Layer 1 نص"), "Layer 1 نص");
         // Latin inside an Arabic name stays readable.
         assert_eq!(visual("نص PhotoCraft هنا"), "هنا PhotoCraft نص");
+    }
+
+    /// #5385 review: the title bar's line is left to right as a whole, so a right-to-left
+    /// document name keeps "— PhotoCraft" after it, at the right.
+    #[test]
+    fn the_title_line_stays_left_to_right_around_a_right_to_left_name() {
+        assert_eq!(visual_ltr("*صورة.psd — PhotoCraft"), "*صورة.psd — PhotoCraft");
+        assert_eq!(visual_ltr("لاشي مكتوب.png — PhotoCraft"), "مكتوب لاشي.png — PhotoCraft");
+        assert!(matches!(visual_ltr("Untitled-1 — PhotoCraft"), Cow::Borrowed(_)));
+    }
+
+    /// #5385 review: a right-to-left name that doesn't fit keeps its first words and ends with
+    /// "…" at the left; a left-to-right or fitting name is left to the caller.
+    #[test]
+    fn right_to_left_names_are_cut_at_their_logical_end() {
+        let fits = |n: usize| move |s: &str| s.chars().count() <= n;
+        // Cut anywhere, as egui elides: the first word and the start of the second.
+        assert_eq!(elide("لاشي مكتوب هنا", fits(8)).as_deref(), Some("…مك لاشي"));
+        assert_eq!(elide("לשלום עולם גדול", fits(11)).as_deref(), Some("…עולם לשלום"));
+        assert_eq!(elide("لاشي مكتوب هنا", fits(40)), None, "fits");
+        assert_eq!(elide("Layer copy 12", fits(4)), None, "left to right: elided by egui at its end");
+        assert_eq!(elide("نص", fits(0)).as_deref(), Some("…"), "nothing fits: just the ellipsis");
+        assert!(is_rtl_paragraph("12 نص") && !is_rtl_paragraph("Layer نص") && !is_rtl_paragraph("123"));
     }
 
     #[test]
