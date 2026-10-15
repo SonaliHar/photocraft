@@ -3530,7 +3530,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         }
         // A drag is only recognised once the pointer has moved past egui's click distance: the
         // gesture starts where the button went down, not where it is now (#123).
-        let gesture_active_before = app.drag.is_some();
+        let gesture_active_before = app.drag.is_some() || app.brush_resize.is_some();
         // Stroke timing: egui's events carry no timestamps, so a press takes the frame time and
         // the moves below are spread between the previous point and this frame (`spread_ms`).
         let now_ms = ui.input(|i| i.time) * 1000.0;
@@ -3540,6 +3540,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         // and a click (or a long press that never moved) just ends it.
         if strokes_live(tool)
             && app.drag.is_none()
+            && app.brush_resize.is_none()
             && response.is_pointer_button_down_on()
             && ui.input(|i| i.pointer.primary_pressed())
             && let Some(p) = ui.input(|i| i.pointer.press_origin()).filter(|p| rect.contains(*p))
@@ -3578,7 +3579,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             // press..release interval (`pointer_moves`), so the start and stop frames keep their
             // valid samples without leaking a move from outside the gesture.
             let events = ui.input(|i| i.events.clone());
-            let button = if response.dragged_by(PointerButton::Secondary)
+            let button = if app.brush_resize.is_some_and(|r| r.secondary)
+                || response.dragged_by(PointerButton::Secondary)
                 || response.drag_started_by(PointerButton::Secondary)
                 || response.drag_stopped_by(PointerButton::Secondary)
             {
@@ -3631,7 +3633,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             if press_stroke {
                 buttons.clicked = false;
             }
-            let p = response.interact_pointer_pos().map(|p| xf.to_doc(p)).or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
+            let p = response
+                .interact_pointer_pos()
+                .or_else(|| app.brush_resize.and_then(|_| ui.input(|i| i.pointer.latest_pos())))
+                .map(|p| xf.to_doc(p))
+                .or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
             if let Some(d) = p {
                 tap_at_peak_pressure(app);
                 tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
@@ -3949,9 +3955,14 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                                 }
                                 // Too small to see where it is: the hotspot as well.
                                 if cur.show_crosshair_in_brush_tip || sq.width() < 6.0 {
-                                    crate::tool_cursor::crosshair(&painter, p, 4.0, 0.0);
+                                    crate::tool_cursor::crosshair(&painter, p, 4.0, 0.0)
+                                } else if tool == Tool::Pencil && size <= 1.0 {
+                                    // Keep the snapped pixel outline and a visible pointer at
+                                    // the exact hotspot, even over a white pixel-grid cell.
+                                    crate::tool_cursor::pixel(&painter, p)
+                                } else {
+                                    egui::CursorIcon::None
                                 }
-                                egui::CursorIcon::None
                             }
                             // A shaped tip (sampled bitmap, or a rotated/flattened round tip)
                             // traces its outline, turned and flipped with the view; a plain round
@@ -4945,26 +4956,14 @@ fn precise_other_cursor(app: &PhotocraftApp) -> bool {
     (app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise) != app.caps_lock
 }
 
-/// A pen tool's standard cursor: its toolbar icon with the nib (the Convert Point tool: the
-/// anchor) on `p`. Draws it at `p` and returns the OS cursor to set (hidden).
-pub(crate) fn pen_cursor(ctx: &egui::Context, tool: Tool, p: Pos2) -> egui::CursorIcon {
-    // Where each icon's point is in its 24-unit box: the full-size pen's nib at (2.3, 2.3); the
-    // Freeform and Curvature pens draw it at 0.68 × from (7, 7); Convert Point's apex anchor.
-    let hot = match tool {
-        Tool::FreeformPen | Tool::CurvaturePen => vec2(8.56, 8.56),
-        Tool::ConvertPoint => vec2(12.0, 7.0),
-        _ => vec2(2.3, 2.3),
-    };
-    crate::icons::cursor(ctx, crate::icons::tool_icon(tool), p, hot / 24.0, 22.0);
-    egui::CursorIcon::None
+/// All Pen variants share a simple nib; tool_feedback draws the live mode badge separately.
+pub(crate) fn pen_cursor(ctx: &egui::Context, _tool: Tool, p: Pos2) -> egui::CursorIcon {
+    crate::tool_cursor::pen(ctx, p)
 }
 
-/// The sampling cursor: a pipette whose tip is the sampled pixel. Draws it at `p` and returns the
-/// OS cursor to set (hidden).
+/// The pipette's tip is the sampled pixel.
 pub(crate) fn pipette_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
-    // The tip of the icon's pipette is at (2, 22) of its 24-unit box.
-    crate::icons::cursor(ctx, "pipette", p, vec2(2.0, 22.0) / 24.0, 20.0);
-    egui::CursorIcon::None
+    crate::tool_cursor::eyedropper(ctx, p)
 }
 
 /// The Paint Bucket's cursor: a bucket whose pouring corner is the filled pixel. Draws it at `p`

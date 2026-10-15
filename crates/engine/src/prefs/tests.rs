@@ -488,6 +488,11 @@ fn right_click_with_painting_tools_pref() {
         assert!(s.execute("prefs.set", json!({"path": "tools.rightClickWithPaintingTools", "value": bad})).is_err());
     }
     assert_eq!(s.prefs().tools.right_click_with_painting_tools, RightClickPaint::Erase, "rejected values change nothing");
+    s.execute("prefs.set", json!({"path": "tools.rightClickWithPaintingTools", "value": "resize"})).unwrap();
+    assert_eq!(s.prefs().tools.right_click_with_painting_tools, RightClickPaint::Resize);
+    let saved = serde_json::to_value(s.prefs()).unwrap();
+    let loaded: Preferences = serde_json::from_value(saved).unwrap();
+    assert_eq!(loaded.tools.right_click_with_painting_tools, RightClickPaint::Resize);
     // Preferences saved before the option existed load with the default.
     let old: Tools = serde_json::from_value(json!({"showTooltips": false})).unwrap();
     assert_eq!(old.right_click_with_painting_tools, RightClickPaint::BrushPicker);

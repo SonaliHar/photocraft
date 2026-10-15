@@ -311,6 +311,12 @@ fn scaled_wayland_paints_the_brush_outline_instead_of_an_os_bitmap() {
 #[ignore = "writes target/tool-cursor-preview.png for visual inspection"]
 fn write_cursor_preview() {
     let cases = [
+        (Shape::Glyph(Glyph::Pen), 1.0),
+        (Shape::Glyph(Glyph::Pen), 2.0),
+        (Shape::Glyph(Glyph::Eyedropper), 1.0),
+        (Shape::Glyph(Glyph::Eyedropper), 2.0),
+        (Shape::Glyph(Glyph::Pixel), 1.0),
+        (Shape::Glyph(Glyph::Pixel), 2.0),
         (Shape::Circle { radius: 20.0, centre: false }, 1.0),
         (Shape::Circle { radius: 20.0, centre: false }, 1.5),
         (Shape::Circle { radius: 20.0, centre: true }, 2.0),
@@ -514,4 +520,54 @@ fn resize_follows_the_view() {
         let got = directions.map(|d| resize(d, &view(rotation, flip)));
         assert_eq!(got, want, "view turned {rotation}°, flip {flip}");
     }
+}
+
+#[test]
+fn tool_glyphs_have_opaque_fills_and_outlines_at_each_scale() {
+    for kind in [Glyph::Pen, Glyph::Eyedropper, Glyph::Pixel] {
+        for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
+            let image = rasterize(&Shape::Glyph(kind), scale).unwrap();
+            let pixels = image.rgba.as_chunks::<4>().0;
+            assert!(pixels.contains(&[255, 255, 255, 255]), "opaque white fill: {kind:?}");
+            assert!(pixels.contains(&[0, 0, 0, 255]), "opaque black outline: {kind:?}");
+            assert_eq!(alpha(&image, 0, 0), 0);
+            assert!(alpha(&image, image.hotspot[0], image.hotspot[1]) > 0, "the tip marks the hotspot");
+        }
+    }
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn pen_modes_share_a_nib_and_one_pixel_pencil_keeps_a_visible_pointer() {
+    let mut h = harness();
+    let mut nib = None;
+    for tool in [
+        crate::Tool::Pen,
+        crate::Tool::FreeformPen,
+        crate::Tool::CurvaturePen,
+        crate::Tool::ConvertPoint,
+        crate::Tool::AddAnchorPoint,
+        crate::Tool::DeleteAnchorPoint,
+    ] {
+        h.state_mut().ui.tool = tool;
+        h.run_steps(3);
+        let cursor = h.output().platform_output.cursor_image.clone().unwrap();
+        if let Some(first) = &nib {
+            assert_eq!(&cursor.rgba, first);
+        } else {
+            nib = Some(cursor.rgba);
+        }
+    }
+    h.state_mut().ui.tool = crate::Tool::Pencil;
+    h.state_mut().run("tools.setBrush", json!({"brush": {"size": 1}})).unwrap();
+    h.state_mut().sync_views();
+    h.state_mut().ui.views[0].zoom = 16.0;
+    h.state_mut().ui.views[0].fit_pending = false;
+    h.run_steps(3);
+    let cursor = h.output().platform_output.cursor_image.clone().expect("pixel-grid pencil must stay visible");
+    let expected = rasterize(&Shape::Glyph(Glyph::Pixel), native_scale(&h.ctx)).unwrap();
+    assert_eq!(cursor.rgba, expected.rgba);
+    h.state_mut().caps_lock = true;
+    h.run_steps(2);
+    assert_ne!(h.output().platform_output.cursor_image.as_ref().unwrap().rgba, cursor.rgba, "Caps Lock still gives a crosshair");
 }

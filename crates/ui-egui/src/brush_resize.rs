@@ -3,7 +3,8 @@
 //! brush instead of painting. Left and right
 //! set the diameter (the circle's edge follows the pointer), up and down the hardness (down makes
 //! it harder). The brush circle stays where the drag began, tinted to show the hardness, with a
-//! Diameter/Hardness readout beside the pointer.
+//! Diameter/Hardness readout beside the pointer. Shift provides screen-relative fine control.
+//! A primary tap while holding the secondary button switches hardness/opacity for this gesture.
 //!
 //! The change is `tools.setBrush` calls sharing one `coalesce` key, so the whole drag is one
 //! journal entry (Rule 1) and, the brush being tool state, no history step. Krita's ⇧+drag (the
@@ -34,6 +35,12 @@ pub struct Resize {
     pub start: (f32, f32),
     /// The `coalesce` key of this drag's `tools.setBrush` calls.
     key: u64,
+    /// Rebased when a modifier or vertical-axis toggle changes, while the preview stays anchored.
+    origin: [f64; 2],
+    last: [f64; 2],
+    precision: bool,
+    hardness: bool,
+    mixed: bool,
     /// Begun by an Alt+right-drag (#297): it ends when the right button is up.
     pub secondary: bool,
 }
@@ -82,18 +89,32 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers, ar
                 let b = &app.session.tools.brush;
                 (b.size, if vary { b.hardness } else { b.opacity })
             };
-            app.brush_resize = Some(Resize { anchor: [x, y], start: (size, v), key: KEY.fetch_add(1, Ordering::Relaxed), secondary: armed });
+            app.brush_resize = Some(Resize {
+                anchor: [x, y],
+                origin: [x, y],
+                last: [x, y],
+                start: (size, v),
+                key: KEY.fetch_add(1, Ordering::Relaxed),
+                secondary: armed,
+                precision: mods.shift,
+                hardness: vary,
+                mixed: false,
+            });
             true
         }
         ToolEvent::Move { x, y, .. } => match app.brush_resize {
-            Some(r) => {
+            Some(mut r) => {
+                rebase_precision(app, &mut r, mods.shift);
                 update(app, r, x, y);
+                r.last = [x, y];
+                app.brush_resize = Some(r);
                 true
             }
             None => false,
         },
         ToolEvent::Up { x, y } => match app.brush_resize.take() {
-            Some(r) => {
+            Some(mut r) => {
+                rebase_precision(app, &mut r, mods.shift);
                 update(app, r, x, y);
                 true
             }
@@ -110,26 +131,56 @@ pub fn release_stale(app: &mut PhotocraftApp, secondary_down: bool) {
     }
 }
 
+fn rebase_precision(app: &PhotocraftApp, r: &mut Resize, precision: bool) {
+    if precision != r.precision {
+        let b = &app.session.tools.brush;
+        r.start = (b.size, if r.hardness { b.hardness } else { b.opacity });
+        r.origin = r.last;
+        r.precision = precision;
+    }
+}
+
+/// Switch hardness/opacity for this gesture only; the persisted preference supplies the next one.
+pub(crate) fn toggle_vertical(app: &mut PhotocraftApp, point: [f64; 2]) {
+    if let Some(r) = app.brush_resize.as_mut() {
+        let b = &app.session.tools.brush;
+        r.hardness = !r.hardness;
+        r.mixed = true;
+        r.start = (b.size, if r.hardness { b.hardness } else { b.opacity });
+        r.origin = point;
+        r.last = point;
+    }
+}
+
 fn update(app: &mut PhotocraftApp, r: Resize, x: f64, y: f64) {
     // Screen-relative, as in Photoshop (#4228): right is bigger and down harder on screen, however
     // the view is rotated or flipped. The screen delta over the zoom is in document pixels at 0°.
     let (dx, dy, zoom) = match ViewXform::active(app) {
         Some(xf) if xf.zoom.is_finite() && xf.zoom > 0.0 => {
-            let d = xf.to_screen(x as f32, y as f32) - xf.to_screen(r.anchor[0] as f32, r.anchor[1] as f32);
+            let d = xf.to_screen(x as f32, y as f32) - xf.to_screen(r.origin[0] as f32, r.origin[1] as f32);
             (f64::from(d.x / xf.zoom), f64::from(d.y / xf.zoom), xf.zoom)
         }
         // No view: document axes, mirrored by View › Flip Horizontal.
-        _ => ((x - r.anchor[0]) * if app.ui.view.flip_horizontal { -1.0 } else { 1.0 }, y - r.anchor[1], app.point_zoom()),
+        _ => ((x - r.origin[0]) * if app.ui.view.flip_horizontal { -1.0 } else { 1.0 }, y - r.origin[1], app.point_zoom()),
     };
+    // Shift gives one diameter pixel per five screen points, even on a zoomed-out canvas.
+    let (dx, dy) = if r.precision { (dx * f64::from(zoom) * 0.1, dy * 0.1) } else { (dx, dy) };
     let (size, v) = resized(r.start, dx, dy, zoom);
     // "Vary Round Brush Hardness on HUD" (Preferences ▸ Tools, on by default): off, the vertical
     // movement takes the opacity instead of the hardness, as in Photoshop.
-    let vary = app.session.prefs().tools.vary_round_brush_hardness_on_hud;
+    let vary = r.hardness;
     let b = &app.session.tools.brush;
     if b.size == size && if vary { b.hardness == v } else { b.opacity == v } {
         return;
     }
-    let brush = if vary { json!({ "size": size, "hardness": v }) } else { json!({ "size": size, "opacity": v }) };
+    let brush = if r.mixed {
+        // Coalescing replaces the prior journal entry: retain both axes after a toggle.
+        json!({"size": size, "hardness": if vary { v } else { b.hardness }, "opacity": if vary { b.opacity } else { v }})
+    } else if vary {
+        json!({"size": size, "hardness": v})
+    } else {
+        json!({"size": size, "opacity": v})
+    };
     let p = json!({ "brush": brush, "coalesce": format!("brush-resize:{}", r.key) });
     if let Err(e) = app.run("tools.setBrush", p) {
         app.ui.status = e;
@@ -150,7 +201,7 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) -> boo
     // Photoshop hides the pointer while the circle stays put.
     painter.ctx().set_cursor_icon(egui::CursorIcon::None);
     let at = painter.ctx().pointer_latest_pos().unwrap_or(c);
-    let (label, value) = if app.session.prefs().tools.vary_round_brush_hardness_on_hud {
+    let (label, value) = if r.hardness {
         (tl!("Hardness:"), format!("{}%", (b.hardness * 100.0).round() as i64))
     } else {
         (tl!("Opacity:"), format!("{}%", (b.opacity * 100.0).round() as i64))
@@ -278,7 +329,7 @@ mod tests {
     fn canvas_drag_shows_the_circle_and_readout() {
         let mut a = app(Tool::Brush);
         a.sync_views();
-        let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
+        let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).wgpu().build_ui_state(
             |ui, app: &mut PhotocraftApp| {
                 let ctx = ui.ctx().clone();
                 if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
@@ -534,5 +585,76 @@ mod tests {
         assert_eq!(preview_tint(&app), Color32::from_rgba_unmultiplied(0, 255, 128, 110));
         app.session.prefs.edit(|p| p.cursors.brush_preview_color = "nonsense".into());
         assert_eq!(preview_tint(&app), Color32::from_rgba_unmultiplied(255, 0, 0, 110), "unreadable values keep the red");
+    }
+    #[test]
+    fn shift_precision_is_one_pixel_per_five_screen_points_at_every_zoom() {
+        for zoom in [0.05, 0.25, 1.0, 4.0] {
+            let mut a = app(Tool::Brush);
+            a.sync_views();
+            a.ui.views[0].zoom = zoom;
+            a.run("tools.setBrush", json!({"brush": {"size": 2}})).unwrap();
+            let mods = CTRL_ALT | Modifiers::SHIFT;
+            tool_event(&mut a, ToolEvent::Down { x: 100.0, y: 100.0, pressure: 1.0 }, mods);
+            let xf = ViewXform::active(&a).unwrap();
+            let start = xf.to_screen(100.0, 100.0);
+            for n in 1..=3 {
+                let [x, y] = xf.to_doc(start + vec2(5.0 * n as f32, 0.0));
+                tool_event(&mut a, ToolEvent::Move { x, y, pressure: 1.0 }, mods);
+                assert_eq!(a.session.tools.brush.size, 2.0 + n as f32, "zoom {zoom}");
+            }
+            let [x, y] = xf.to_doc(start + vec2(15.0, 0.0));
+            tool_event(&mut a, ToolEvent::Move { x, y, pressure: 1.0 }, CTRL_ALT);
+            assert_eq!(a.session.tools.brush.size, 5.0, "releasing Shift cannot jump");
+            tool_event(&mut a, ToolEvent::Up { x, y }, CTRL_ALT);
+            assert_eq!(a.session.tools.brush.size, 5.0);
+            assert!(!a.session.journal.iter().any(|(id, _)| id == "paint.stroke"));
+        }
+    }
+
+    #[test]
+    fn primary_taps_toggle_hardness_and_opacity_without_ending_secondary_resize() {
+        let mut a = app(Tool::Brush);
+        a.run("tools.setBrush", json!({"brush": {"opacity": 0.4}})).unwrap();
+        a.sync_views();
+        let mut h = canvas(a);
+        let c = h.state().last_canvas_rect.center();
+        h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+        h.event(egui::Event::PointerMoved(c));
+        h.run_steps(1);
+        button(&mut h, c, PointerButton::Secondary, true, Modifiers::ALT);
+        let mut at = c + vec2(20.0, 40.0);
+        h.event(egui::Event::PointerMoved(at));
+        h.run_steps(2);
+        let hardness = h.state().session.tools.brush.hardness;
+        assert!(hardness > 0.2);
+        for pressed in [true, false] {
+            button(&mut h, at, PointerButton::Primary, pressed, Modifiers::ALT);
+        }
+        assert!(h.state().brush_resize.is_some_and(|r| !r.hardness && r.secondary));
+        at += vec2(0.0, 40.0);
+        h.event(egui::Event::PointerMoved(at));
+        h.run_steps(2);
+        assert_eq!(h.state().session.tools.brush.hardness, hardness);
+        let opacity = h.state().session.tools.brush.opacity;
+        assert!((opacity - 0.6).abs() < 0.001);
+        if let Ok(dir) = std::env::var("PHOTOCRAFT_UI_SHOTS") {
+            std::fs::create_dir_all(&dir).unwrap();
+            h.render().unwrap().save(std::path::Path::new(&dir).join("brush-hud-opacity.png")).unwrap();
+        }
+        for pressed in [true, false] {
+            button(&mut h, at, PointerButton::Primary, pressed, Modifiers::ALT);
+        }
+        assert!(h.state().brush_resize.is_some_and(|r| r.hardness));
+        at += vec2(0.0, 20.0);
+        h.event(egui::Event::PointerMoved(at));
+        h.run_steps(2);
+        button(&mut h, at, PointerButton::Secondary, false, Modifiers::ALT);
+        assert!(h.state().brush_resize.is_none());
+        assert_eq!(h.state().session.tools.brush.opacity, opacity);
+        assert!((h.state().session.tools.brush.hardness - hardness - 0.1).abs() < 0.001);
+        let brush = &h.state().session.journal.last().unwrap().1["brush"];
+        assert!(brush.get("hardness").is_some() && brush.get("opacity").is_some(), "replay retains both changes");
+        assert!(!h.state().session.journal.iter().any(|(id, _)| id == "paint.stroke"));
+        assert!(h.state().session.prefs().tools.vary_round_brush_hardness_on_hud, "temporary toggle leaves default unchanged");
     }
 }

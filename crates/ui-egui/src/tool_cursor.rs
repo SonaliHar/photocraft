@@ -11,7 +11,9 @@ use egui::{CursorIcon, CustomCursorImage, Painter, Pos2, Stroke, Vec2, vec2};
 
 use crate::canvas::ViewXform;
 
+mod glyph;
 mod hand;
+use glyph::Glyph;
 mod zoom;
 
 /// The largest cursor bitmap (physical pixels; points on macOS, see [`native_scale`]); a larger tip
@@ -32,6 +34,7 @@ enum Shape {
     Crosshair { length: f32, gap: f32 },
     Hand { closed: bool },
     Zoom { out: bool },
+    Glyph(Glyph),
     Outline { rings: Arc<[Vec<Vec2>]>, centre: bool },
 }
 
@@ -68,6 +71,19 @@ impl egui::plugin::Plugin for CursorLifecycle {
             }
         });
     }
+}
+
+/// A shared, opaque nib for every Pen mode; mode badges are drawn separately.
+pub(crate) fn pen(ctx: &egui::Context, at: Pos2) -> CursorIcon {
+    show(&ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("pen-cursor"))), at, Shape::Glyph(Glyph::Pen))
+}
+
+pub(crate) fn eyedropper(ctx: &egui::Context, at: Pos2) -> CursorIcon {
+    show(&ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("eyedropper-cursor"))), at, Shape::Glyph(Glyph::Eyedropper))
+}
+
+pub(crate) fn pixel(painter: &Painter, at: Pos2) -> CursorIcon {
+    show(painter, at, Shape::Glyph(Glyph::Pixel))
 }
 
 pub(crate) fn circle(painter: &Painter, at: Pos2, radius: f32, centre: bool) -> CursorIcon {
@@ -205,6 +221,25 @@ fn paint(painter: &Painter, at: Pos2, shape: &Shape) {
     if extent(shape).is_none() {
         return;
     }
+    if let Shape::Glyph(kind) = shape {
+        // A cached bitmap also supplies the web/floating-window fallback, with identical fill.
+        let scale = painter.ctx().pixels_per_point();
+        let id = egui::Id::new(("cursor-glyph-texture", format!("{kind:?}"), scale.to_bits()));
+        let cached = painter.ctx().data(|d| d.get_temp::<(egui::TextureHandle, CustomCursorImage)>(id));
+        let pair = cached.or_else(|| {
+            let image = rasterize(shape, scale)?;
+            let color = egui::ColorImage::from_rgba_unmultiplied(image.size.map(usize::from), &image.rgba);
+            let texture = painter.ctx().load_texture("cursor-glyph", color, egui::TextureOptions::LINEAR);
+            painter.ctx().data_mut(|d| d.insert_temp(id, (texture.clone(), image.clone())));
+            Some((texture, image))
+        });
+        if let Some((texture, image)) = pair {
+            let min = at - vec2(f32::from(image.hotspot[0]), f32::from(image.hotspot[1])) / scale;
+            let size = vec2(f32::from(image.size[0]), f32::from(image.size[1])) / scale;
+            painter.image(texture.id(), egui::Rect::from_min_size(min, size), egui::Rect::from_min_max(Pos2::ZERO, egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+        }
+        return;
+    }
     let [dark, light] = crate::theme::Tokens::cursor_outline();
     for (width, color) in [(3.0, dark), (1.0, light)] {
         let stroke = Stroke::new(width, color);
@@ -227,7 +262,7 @@ fn paint(painter: &Painter, at: Pos2, shape: &Shape) {
                 }
             }
             // Only ever a bitmap: without one the OS draws its own grab cursors.
-            Shape::Hand { .. } | Shape::Zoom { .. } => {}
+            Shape::Hand { .. } | Shape::Zoom { .. } | Shape::Glyph(_) => {}
         }
     }
 }
@@ -274,6 +309,8 @@ fn extent(shape: &Shape) -> Option<f32> {
             }
             if *centre { e.max(3.0) } else { e }
         }
+        Shape::Glyph(Glyph::Pixel) => 2.0,
+        Shape::Glyph(_) => 19.0,
         Shape::Hand { .. } => hand::HALF,
         Shape::Zoom { .. } => zoom::HALF,
     })
@@ -315,6 +352,7 @@ fn coverage(shape: &Shape, dx: f32, dy: f32, scale: f32) -> (f32, f32) {
             }
             stroke_coverage(distance * scale, scale)
         }
+        Shape::Glyph(kind) => glyph::coverage(*kind, dx / scale, dy / scale, scale),
         Shape::Hand { closed } => {
             let (lx, ly) = (dx / scale, dy / scale);
             silhouette(hand::shape(*closed, lx, ly), hand::crease(*closed, lx, ly), 0.45, scale)
@@ -422,7 +460,11 @@ fn rasterize(shape: &Shape, scale: f32) -> Option<CustomCursorImage> {
     // Transparent to start; only pixels a shape can reach are evaluated below (a big tip's
     // outline is a thin ring in a large square, #1343).
     let mut rgba = vec![0u8; bytes];
-    let [dark, light] = crate::theme::Tokens::cursor_outline();
+    let [mut dark, mut light] = crate::theme::Tokens::cursor_outline();
+    if matches!(shape, Shape::Glyph(_)) {
+        dark = dark.to_opaque();
+        light = light.to_opaque();
+    }
     let n = usize::from(side);
     let hotf = f32::from(hot);
     let mut put = |col: usize, row: usize, cov: (f32, f32)| {

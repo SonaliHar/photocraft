@@ -96,8 +96,8 @@ choice!(
 );
 choice!(
     /// Right mouse button on the canvas with a painting tool: open the Brush Preset picker at the
-    /// pointer (Photoshop), or erase with the current brush while dragging (Krita, Paint).
-    RightClickPaint { BrushPicker = "brushPicker", Erase = "erase" } default BrushPicker
+    /// pointer (Photoshop), erase with the current brush, or resize it while dragging.
+    RightClickPaint { BrushPicker = "brushPicker", Erase = "erase", Resize = "resize" } default BrushPicker
 );
 choice!(OtherCursor { Standard = "standard", Precise = "precise" } default Standard);
 choice!(CheckerSize { None = "none", Small = "small", Medium = "medium", Large = "large" } default Medium);

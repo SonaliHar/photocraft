@@ -100,15 +100,32 @@ pub fn right_erases(app: &PhotocraftApp, tool: Tool) -> bool {
 /// brush with Alt held (#297), erases (Erase preference) or opens the Brush Preset picker. Arms
 /// `secondary_erase` or `brush_resize_armed` for this frame's `Down`.
 pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) -> Buttons {
-    let (mods, right_down) = response.ctx.input(|i| (i.modifiers, i.pointer.secondary_down()));
+    let (mods, right_down, right_released) = response.ctx.input(|i| (i.modifiers, i.pointer.secondary_down(), i.pointer.secondary_released()));
     // Alt+right-drag resizes the brush (brush_resize.rs); its events reach `tool_event` like a
     // left drag's, and nothing paints. A resize whose release was missed ends here.
-    crate::brush_resize::release_stale(app, right_down || response.drag_stopped_by(PointerButton::Secondary));
+    crate::brush_resize::release_stale(app, right_down || right_released);
     let resize_start = crate::brush_resize::applies(tool)
         && app.drag.is_none()
-        && crate::brush_resize::is_right_gesture(crate::workspace_ui::sticky_mods(app, mods))
+        && app.brush_resize.is_none()
+        && (crate::brush_resize::is_right_gesture(crate::workspace_ui::sticky_mods(app, mods))
+            || (mods.is_none() && app.session.prefs().tools.right_click_with_painting_tools == RightClickPaint::Resize))
         && response.drag_started_by(PointerButton::Secondary);
     let resizing = app.brush_resize.is_some_and(|r| r.secondary);
+    // A primary tap switches the vertical axis without ending the held secondary gesture.
+    if resizing
+        && right_down
+        && response.ctx.input(|i| i.pointer.primary_pressed())
+        && let Some(p) = response.ctx.pointer_latest_pos()
+        && let Some(xf) = crate::canvas::ViewXform::active(app)
+    {
+        crate::brush_resize::toggle_vertical(app, xf.to_doc(p));
+    }
+    if resizing {
+        // egui's shared drag response can stop when the primary tap is released. This
+        // captured gesture belongs to the secondary button until that button releases.
+        app.brush_resize_armed = false;
+        return Buttons { dragged: right_down, stopped: right_released, ..Default::default() };
+    }
     app.brush_resize_armed = resize_start;
     // ⌘/Ctrl+right-click lists the layers under the pointer instead (layer_pick_ui.rs, #307).
     let layer_menu = crate::layer_pick_ui::is_gesture(tool, mods);
@@ -128,10 +145,10 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     app.secondary_erase = right_start || erase_click;
     let right_drag = right_stroke || resizing;
     Buttons {
-        started: response.drag_started_by(PointerButton::Primary) || right_start || resize_start,
-        dragged: response.dragged_by(PointerButton::Primary) || (right_drag && response.dragged_by(PointerButton::Secondary)),
-        stopped: response.drag_stopped_by(PointerButton::Primary) || (right_drag && response.drag_stopped_by(PointerButton::Secondary)),
-        clicked: response.clicked() || erase_click,
+        started: (!resizing && response.drag_started_by(PointerButton::Primary)) || right_start || resize_start,
+        dragged: (!resizing && response.dragged_by(PointerButton::Primary)) || (right_drag && response.dragged_by(PointerButton::Secondary)),
+        stopped: (!resizing && response.drag_stopped_by(PointerButton::Primary)) || (right_drag && response.drag_stopped_by(PointerButton::Secondary)),
+        clicked: (!resizing && response.clicked()) || erase_click,
     }
 }
 
@@ -141,7 +158,11 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
 /// the Brush Preset picker at screen point `at`, and nothing paints.
 pub fn pointer_secondary(app: &mut PhotocraftApp, ctx: &egui::Context, down: bool, mods: egui::Modifiers, at: [f32; 2]) -> bool {
     let tool = app.ui.tool;
-    if crate::brush_resize::applies(tool) && (crate::brush_resize::is_right_gesture(mods) || app.brush_resize.is_some_and(|r| r.secondary)) {
+    if crate::brush_resize::applies(tool)
+        && (crate::brush_resize::is_right_gesture(mods)
+            || app.brush_resize.is_some_and(|r| r.secondary)
+            || (mods.is_none() && app.session.prefs().tools.right_click_with_painting_tools == RightClickPaint::Resize))
+    {
         app.brush_resize_armed = down && app.drag.is_none();
         return true;
     }
@@ -277,6 +298,25 @@ mod tests {
 
     fn strokes(h: &Harness<'static, PhotocraftApp>) -> Vec<serde_json::Value> {
         h.state().session.journal.iter().filter(|(id, _)| id == "paint.stroke").map(|(_, p)| p.clone()).collect()
+    }
+
+    #[test]
+    fn optional_plain_right_drag_resizes_without_painting() {
+        let mut h = harness(Some("resize"));
+        let before = h.state().session.tools.brush.size;
+        let undo = h.state().session.active().unwrap().history.past_len();
+        drag(&mut h, PointerButton::Secondary);
+        assert!(h.state().session.tools.brush.size > before);
+        assert!(strokes(&h).is_empty());
+        assert!(h.state().brush_resize.is_none() && h.state().ui.brush_picker.is_none());
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), undo);
+        // A click without motion still opens the preset picker.
+        let c = h.state().last_canvas_rect.center();
+        h.event(egui::Event::PointerMoved(c));
+        h.run_steps(1);
+        press(&mut h, c, PointerButton::Secondary, true);
+        press(&mut h, c, PointerButton::Secondary, false);
+        assert!(h.state().ui.brush_picker.is_some());
     }
 
     #[test]
