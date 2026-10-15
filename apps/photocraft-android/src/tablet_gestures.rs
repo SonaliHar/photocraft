@@ -87,10 +87,19 @@ impl TabletGestureRouter {
         }
         // Reserve a short chord window before forwarding the first finger's emulated mouse
         // press. Otherwise a two-finger context click first starts moving the selection.
-        if touch_frame && !self.pointer_committed {
+        if self.multi_touch {
+            self.pending_pointer.clear();
+            // During multi-touch gestures (pinch-zoom, pan), suppress primary mouse clicks/drags.
+            raw.events.retain(|event| !matches!(event, Event::PointerButton { button: PointerButton::Primary, .. }));
+            if let Some(center) = self.tap_center
+                && !raw.events.iter().any(|e| matches!(e, Event::PointerMoved(_)))
+            {
+                raw.events.push(Event::PointerMoved(center));
+            }
+        } else if touch_frame && !self.pointer_committed {
             let mut retained = Vec::new();
             for event in std::mem::take(&mut raw.events) {
-                if matches!(event, Event::PointerMoved(_) | Event::PointerGone | Event::PointerButton { button: PointerButton::Primary, .. }) {
+                if matches!(event, Event::PointerButton { button: PointerButton::Primary, .. }) {
                     if self.pending_pointer.len() < 256 {
                         self.pending_pointer.push(event);
                     }
@@ -99,17 +108,18 @@ impl TabletGestureRouter {
                 }
             }
             raw.events = retained;
-        }
-        if self.multi_touch {
-            self.pending_pointer.clear();
-        } else if !self.pointer_committed && (finished || self.tap_invalid || self.tap_start.is_some_and(|start| now - start >= 0.08)) {
-            let mut events = std::mem::take(&mut self.pending_pointer);
-            events.append(&mut raw.events);
-            raw.events = events;
-            self.pointer_committed = true;
+
+            if finished || self.tap_invalid || self.tap_start.is_some_and(|start| now - start >= 0.08) {
+                let mut events = std::mem::take(&mut self.pending_pointer);
+                events.append(&mut raw.events);
+                raw.events = events;
+                self.pointer_committed = true;
+            }
         }
         if finished {
             self.tap_start = None;
+            self.multi_touch = false;
+            self.pointer_committed = false;
         }
         let mut secondary_taps = Vec::new();
         let mut barrel_press = None;
@@ -376,5 +386,123 @@ mod tests {
         assert!(
             matches!(raw.events.as_slice(), [Event::PointerMoved(pos), Event::PointerButton { pos: down, button: PointerButton::Secondary, pressed: true, .. }, Event::PointerMoved(release_pos), Event::PointerButton { pos: up, button: PointerButton::Secondary, pressed: false, .. }] if *pos == pos2(250.0, 400.0) && *down == *pos && *release_pos == *pos && *up == *pos)
         );
+    }
+
+    #[test]
+    fn test_pinch_zoom_multi_touch() {
+        let mut router = TabletGestureRouter::default();
+        let ctx = egui::Context::default();
+        let touch = |id, phase, x| Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(id), phase, pos: pos2(x, 100.0), force: None };
+        let mut raw1 = input(vec![touch(1, egui::TouchPhase::Start, 100.0), Event::PointerMoved(pos2(100.0, 100.0)), Event::PointerButton { pos: pos2(100.0, 100.0), button: PointerButton::Primary, pressed: true, modifiers: Default::default() }]);
+        raw1.time = Some(1.0);
+        router.apply(&mut raw1, [], StylusButtonAction::ContextMenu);
+        ctx.begin_pass(raw1);
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+
+        let mut raw2 = input(vec![touch(2, egui::TouchPhase::Start, 200.0)]);
+        raw2.time = Some(1.02);
+        router.apply(&mut raw2, [], StylusButtonAction::ContextMenu);
+        ctx.begin_pass(raw2);
+        let _multi2 = ctx.input(|i| i.multi_touch());
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+
+        let mut raw3 = input(vec![
+            touch(1, egui::TouchPhase::Move, 80.0),
+            touch(2, egui::TouchPhase::Move, 220.0),
+            Event::PointerMoved(pos2(80.0, 100.0)),
+        ]);
+        raw3.time = Some(1.04);
+        router.apply(&mut raw3, [], StylusButtonAction::ContextMenu);
+        ctx.begin_pass(raw3);
+        let multi3 = ctx.input(|i| i.multi_touch());
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+
+        assert!(multi3.is_some());
+        assert!(multi3.unwrap().zoom_delta > 1.0);
+    }
+
+    #[test]
+    fn simultaneous_two_finger_pinch_zooms() {
+        let mut router = TabletGestureRouter::default();
+        let ctx = egui::Context::default();
+        let touch = |id, phase, x| Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(id), phase, pos: pos2(x, 100.0), force: None };
+        // Both fingers touch down in frame 1
+        let mut raw1 = input(vec![touch(1, egui::TouchPhase::Start, 100.0), touch(2, egui::TouchPhase::Start, 200.0)]);
+        raw1.time = Some(1.0);
+        router.apply(&mut raw1, [], StylusButtonAction::ContextMenu);
+        ctx.begin_pass(raw1);
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+
+        // Frame 2: fingers pinch outward
+        let mut raw2 = input(vec![
+            touch(1, egui::TouchPhase::Move, 80.0),
+            touch(2, egui::TouchPhase::Move, 220.0),
+        ]);
+        raw2.time = Some(1.02);
+        router.apply(&mut raw2, [], StylusButtonAction::ContextMenu);
+        ctx.begin_pass(raw2);
+        let _multi2 = ctx.input(|i| i.multi_touch());
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+
+        // Frame 3: fingers pinch more
+        let mut raw3 = input(vec![
+            touch(1, egui::TouchPhase::Move, 60.0),
+            touch(2, egui::TouchPhase::Move, 240.0),
+        ]);
+        raw3.time = Some(1.04);
+        router.apply(&mut raw3, [], StylusButtonAction::ContextMenu);
+        ctx.begin_pass(raw3);
+        let multi3 = ctx.input(|i| i.multi_touch());
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+
+        assert!(multi3.is_some());
+        let info = multi3.unwrap();
+        assert!(info.zoom_delta > 1.0);
+    }
+
+    #[test]
+    fn two_finger_pan_navigates() {
+        let mut router = TabletGestureRouter::default();
+        let ctx = egui::Context::default();
+        let touch = |id, phase, x, y| Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(id), phase, pos: pos2(x, y), force: None };
+        let mut raw1 = input(vec![touch(1, egui::TouchPhase::Start, 100.0, 100.0), touch(2, egui::TouchPhase::Start, 200.0, 100.0)]);
+        raw1.time = Some(1.0);
+        router.apply(&mut raw1, [], StylusButtonAction::ContextMenu);
+        ctx.begin_pass(raw1);
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+
+        let mut raw2 = input(vec![
+            touch(1, egui::TouchPhase::Move, 130.0, 100.0),
+            touch(2, egui::TouchPhase::Move, 230.0, 100.0),
+        ]);
+        raw2.time = Some(1.02);
+        router.apply(&mut raw2, [], StylusButtonAction::ContextMenu);
+        ctx.begin_pass(raw2);
+        let _ = ctx.input(|i| i.multi_touch());
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+
+        let mut raw3 = input(vec![
+            touch(1, egui::TouchPhase::Move, 160.0, 100.0),
+            touch(2, egui::TouchPhase::Move, 260.0, 100.0),
+        ]);
+        raw3.time = Some(1.04);
+        router.apply(&mut raw3, [], StylusButtonAction::ContextMenu);
+        ctx.begin_pass(raw3);
+        let multi3 = ctx.input(|i| i.multi_touch());
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+
+        assert!(multi3.is_some());
+        let info = multi3.unwrap();
+        assert_eq!(info.translation_delta.x, 30.0);
+        assert_eq!(info.translation_delta.y, 0.0);
     }
 }

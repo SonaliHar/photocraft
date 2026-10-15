@@ -3254,27 +3254,31 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // Touchscreen / tablet multi-touch gestures (two-finger pan, pinch zoom, rotation)
     let multi_touch = ui.input(|i| i.multi_touch());
     let multi_touch_active = multi_touch.as_ref().is_some_and(|t| t.num_touches >= 2);
-    if let Some(touch) = multi_touch {
-        if touch.num_touches >= 2 && (rect.contains(touch.center_pos) || rect.contains(touch.start_pos) || response.hovered()) {
-            if touch.translation_delta.is_finite() && touch.translation_delta != egui::Vec2::ZERO {
-                let d = xf.unmap_vec(touch.translation_delta) / (view.zoom / ppp);
-                view.center[0] -= d.x;
-                view.center[1] -= d.y;
+    if let Some(touch) = multi_touch
+        && touch.num_touches >= 2
+        && (rect.contains(touch.center_pos) || rect.contains(touch.start_pos) || response.hovered())
+    {
+        if touch.translation_delta.is_finite() && touch.translation_delta != egui::Vec2::ZERO {
+            let d = xf.unmap_vec(touch.translation_delta) / (view.zoom / ppp);
+            view.center[0] -= d.x;
+            view.center[1] -= d.y;
+            ctx.request_repaint();
+        }
+        if touch.zoom_delta.is_finite() && touch.zoom_delta > 0.0 && touch.zoom_delta != 1.0 {
+            let nz = crate::zoom_levels::clamp(view.zoom * touch.zoom_delta, view.doc_size);
+            if nz != view.zoom {
+                let at = wheel_anchor(&xf, touch.center_pos, view.doc_size);
+                zoom_about(&mut view, &xf, at, nz, false, ppp);
+                ctx.request_repaint();
             }
-            if touch.zoom_delta.is_finite() && touch.zoom_delta > 0.0 && touch.zoom_delta != 1.0 {
-                let nz = crate::zoom_levels::clamp(view.zoom * touch.zoom_delta, view.doc_size);
-                if nz != view.zoom {
-                    let at = wheel_anchor(&xf, touch.center_pos, view.doc_size);
-                    zoom_about(&mut view, &xf, at, nz, false, ppp);
-                }
-            }
-            let rotate_enabled = app.session.prefs().enhanced_controls.rotate_view_with_trackpad;
-            if rotate_enabled && touch.rotation_delta.abs() > 0.001 {
-                let delta_deg = touch.rotation_delta.to_degrees();
-                let next = view.rotation + crate::rotate_view::screen_delta(delta_deg, xf.flip);
-                if next.is_finite() {
-                    view.rotation = crate::rotate_view::wrap_deg(next);
-                }
+        }
+        let rotate_enabled = app.session.prefs().enhanced_controls.rotate_view_with_trackpad;
+        if rotate_enabled && touch.rotation_delta.abs() > 0.001 {
+            let delta_deg = touch.rotation_delta.to_degrees();
+            let next = view.rotation + crate::rotate_view::screen_delta(delta_deg, xf.flip);
+            if next.is_finite() {
+                view.rotation = crate::rotate_view::wrap_deg(next);
+                ctx.request_repaint();
             }
         }
     }
