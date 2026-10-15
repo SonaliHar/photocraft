@@ -3888,3 +3888,13 @@ curves	Smooth	Згладити
 	There are too many sets: delete one first.	Забагато наборів: спершу видаліть один.
 	set name	назва набору
 	{set} (modified)	{set} (змінено)
+
+# Optional brush wheel controls and font favorites
+	All Fonts	Усі шрифти
+	Favorite	До обраного
+	Favorites	Обране
+	Mark fonts with a star in All Fonts to add favorites.	Позначте шрифти зірочкою в розділі «Усі шрифти», щоб додати їх до обраного.
+	Remove favorite	Вилучити з обраного
+	Favorite fonts	Обрані шрифти
+	Invert brush size wheel	Інвертувати коліщатко розміру пензля
+	Resize brush with scroll wheel	Змінювати розмір пензля коліщатком

@@ -3949,3 +3949,13 @@ curves	Smooth	Vloeiend maken
 	There are too many sets: delete one first.	Er zijn te veel sets: verwijder er eerst een.
 	set name	naam van de set
 	{set} (modified)	{set} (gewijzigd)
+
+# Optional brush wheel controls and font favorites
+	All Fonts	Alle lettertypen
+	Favorite	Toevoegen aan favorieten
+	Favorites	Favorieten
+	Mark fonts with a star in All Fonts to add favorites.	Markeer lettertypen met een ster onder Alle lettertypen om ze aan favorieten toe te voegen.
+	Remove favorite	Verwijderen uit favorieten
+	Favorite fonts	Favoriete lettertypen
+	Invert brush size wheel	Wielrichting voor penseelgrootte omkeren
+	Resize brush with scroll wheel	Penseelgrootte wijzigen met het scrollwiel

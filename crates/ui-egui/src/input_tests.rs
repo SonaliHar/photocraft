@@ -1087,3 +1087,54 @@ fn move_tool_controls_rotate_from_just_outside_the_box() {
     let tilt = (end[1][1] - end[0][1]).atan2(end[1][0] - end[0][0]).to_degrees();
     assert!((tilt - 90.0).abs() < 8.0 || (tilt + 270.0).abs() < 8.0, "rotated about a quarter turn, got {tilt}° (zoom {zoom})");
 }
+#[test]
+fn plain_wheel_resizes_every_stroke_tool_without_navigating_and_can_be_inverted() {
+    use crate::Tool;
+    let mut h = harness();
+    h.state_mut().session.edit_prefs(|p| p.tools.resize_brush_with_scroll_wheel = true);
+    let at = h.state().last_canvas_rect.center();
+    h.hover_at(at);
+    h.run_steps(2);
+    for tool in [
+        Tool::Brush,
+        Tool::Pencil,
+        Tool::MixerBrush,
+        Tool::ColorReplacement,
+        Tool::Eraser,
+        Tool::BackgroundEraser,
+        Tool::Remove,
+        Tool::SpotHealing,
+        Tool::Healing,
+        Tool::CloneStamp,
+        Tool::PatternStamp,
+        Tool::HistoryBrush,
+        Tool::Blur,
+        Tool::Sharpen,
+        Tool::Smudge,
+        Tool::Dodge,
+        Tool::Burn,
+        Tool::Sponge,
+    ] {
+        h.state_mut().ui.tool = tool;
+        h.state_mut().session.tools.brush.size = 100.0;
+        let before = h.state().ui.views[0].clone();
+        wheel(&h, 1.0, Modifiers::NONE);
+        h.run_steps(30);
+        assert_eq!(h.state().session.tools.brush.size, 125.0, "{tool:?}");
+        assert_eq!(h.state().ui.views[0].center, before.center, "wheel tail must not pan ({tool:?})");
+        assert_eq!(h.state().ui.views[0].zoom, before.zoom);
+    }
+    h.state_mut().session.edit_prefs(|p| p.tools.invert_brush_size_wheel = true);
+    wheel(&h, 1.0, Modifiers::NONE);
+    h.run_steps(3);
+    assert_eq!(h.state().session.tools.brush.size, 100.0);
+    let before_zoom = zoom(&h);
+    wheel(&h, 1.0, Modifiers::ALT);
+    h.run_steps(3);
+    assert!(zoom(&h) > before_zoom, "Alt keeps canvas zoom");
+    assert_eq!(h.state().session.tools.brush.size, 100.0);
+    h.state_mut().session.edit_prefs(|p| p.tools.resize_brush_with_scroll_wheel = false);
+    wheel(&h, 1.0, Modifiers::NONE);
+    h.run_steps(3);
+    assert_eq!(h.state().session.tools.brush.size, 100.0);
+}

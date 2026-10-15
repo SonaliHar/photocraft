@@ -3203,6 +3203,18 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let bars_id = egui::Id::new(("pc-canvas-bars-hover", idx));
     let over_bars = ctx.data(|d| d.get_temp::<bool>(bars_id)).unwrap_or(false);
     let nav_hovered = response.hovered() || free_hover || over_bars;
+    let resize = crate::brush_wheel::consume(
+        &ctx,
+        response.id,
+        response.hovered() && !under_dialog && app.ui.tool.is_brushlike() && app.session.prefs().tools.resize_brush_with_scroll_wheel,
+        app.session.prefs().tools.invert_brush_size_wheel,
+    );
+    if let Some(steps) = resize {
+        let command = if steps > 0 { "tools.increaseBrushSize" } else { "tools.decreaseBrushSize" };
+        for _ in 0..steps.unsigned_abs() {
+            let _ = app.run(command, json!({}));
+        }
+    }
     // Interface › Enable Animations off: the wheel moves the canvas without a glide (#5721).
     let wheel = crate::wheel_nav::read_with(
         &ctx,

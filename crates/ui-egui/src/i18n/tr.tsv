@@ -3919,3 +3919,13 @@ cameraData	Lens	Lens
 	There are too many sets: delete one first.	Çok fazla küme var: önce birini silin.
 	set name	küme adı
 	{set} (modified)	{set} (değiştirildi)
+
+# Optional brush wheel controls and font favorites
+	All Fonts	Tüm Yazı Tipleri
+	Favorite	Favorilere ekle
+	Favorites	Favoriler
+	Mark fonts with a star in All Fonts to add favorites.	Favorilere eklemek için Tüm Yazı Tipleri bölümünde yazı tiplerini yıldızla işaretleyin.
+	Remove favorite	Favorilerden kaldır
+	Favorite fonts	Favori yazı tipleri
+	Invert brush size wheel	Fırça boyutu tekerleğini ters çevir
+	Resize brush with scroll wheel	Kaydırma tekerleğiyle fırça boyutunu değiştir

@@ -3979,3 +3979,13 @@ layerLabel	No Color	Sem cor
 	There are too many sets: delete one first.	Há conjuntos demais: exclua um primeiro.
 	set name	nome do conjunto
 	{set} (modified)	{set} (modificado)
+
+# Optional brush wheel controls and font favorites
+	All Fonts	Todas as fontes
+	Favorite	Adicionar aos favoritos
+	Favorites	Favoritos
+	Mark fonts with a star in All Fonts to add favorites.	Marque as fontes com uma estrela em Todas as fontes para adicioná-las aos favoritos.
+	Remove favorite	Remover dos favoritos
+	Favorite fonts	Fontes favoritas
+	Invert brush size wheel	Inverter a roda de tamanho do pincel
+	Resize brush with scroll wheel	Redimensionar o pincel com a roda de rolagem

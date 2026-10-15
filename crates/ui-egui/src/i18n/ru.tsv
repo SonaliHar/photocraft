@@ -3159,3 +3159,13 @@ curves	Smooth	Сгладить
 	set name	имя набора
 	{set} (modified)	{set} (изменён)
 	Random	Случайно
+
+# Optional brush wheel controls and font favorites
+	All Fonts	Все шрифты
+	Favorite	В избранное
+	Favorites	Избранное
+	Mark fonts with a star in All Fonts to add favorites.	Отметьте шрифты звёздочкой в разделе «Все шрифты», чтобы добавить их в избранное.
+	Remove favorite	Удалить из избранного
+	Favorite fonts	Избранные шрифты
+	Invert brush size wheel	Инвертировать колесо размера кисти
+	Resize brush with scroll wheel	Менять размер кисти колёсиком

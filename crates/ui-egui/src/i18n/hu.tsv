@@ -4108,3 +4108,13 @@ cameraRaw	Yellow	Sárga
 	There are too many sets: delete one first.	Túl sok készlet van: előbb töröljön egyet.
 	set name	készlet neve
 	{set} (modified)	{set} (módosítva)
+
+# Optional brush wheel controls and font favorites
+	All Fonts	Összes betűtípus
+	Favorite	Hozzáadás a kedvencekhez
+	Favorites	Kedvencek
+	Mark fonts with a star in All Fonts to add favorites.	Jelölje meg csillaggal a betűtípusokat az Összes betűtípus listában a kedvencekhez adáshoz.
+	Remove favorite	Eltávolítás a kedvencekből
+	Favorite fonts	Kedvenc betűtípusok
+	Invert brush size wheel	Ecsetméret-görgő irányának megfordítása
+	Resize brush with scroll wheel	Ecset átméretezése görgővel

@@ -3675,3 +3675,13 @@ curves	Smooth	Làm mượt
 	There are too many sets: delete one first.	Có quá nhiều bộ: hãy xóa một bộ trước.
 	set name	tên bộ
 	{set} (modified)	{set} (đã sửa đổi)
+
+# Optional brush wheel controls and font favorites
+	All Fonts	Tất cả phông chữ
+	Favorite	Thêm vào yêu thích
+	Favorites	Yêu thích
+	Mark fonts with a star in All Fonts to add favorites.	Đánh dấu sao cho phông chữ trong Tất cả phông chữ để thêm vào mục yêu thích.
+	Remove favorite	Xóa khỏi yêu thích
+	Favorite fonts	Phông chữ yêu thích
+	Invert brush size wheel	Đảo chiều con lăn chỉnh cỡ cọ
+	Resize brush with scroll wheel	Đổi cỡ cọ bằng con lăn

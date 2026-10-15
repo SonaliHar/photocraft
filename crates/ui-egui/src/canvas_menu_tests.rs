@@ -306,3 +306,25 @@ fn brush_preset_menu_action_outside_the_picker_keeps_it_open() {
     assert!(h.state().ui.brush_picker_list.renaming.is_none());
     assert!(document_state(&h) == before, "pixels, selection, layers and history are unchanged");
 }
+#[test]
+fn brush_size_popup_wheel_uses_scaled_steps_and_inversion() {
+    let mut h = harness(Tool::Brush, false, 1.0);
+    h.state_mut().session.edit_prefs(|p| p.tools.resize_brush_with_scroll_wheel = true);
+    h.state_mut().session.tools.brush.size = 100.0;
+    let at = fractional_point(&h, 1.0);
+    tap(&mut h, at, Modifiers::NONE, false);
+    let label = h.get_by_label("Size").rect();
+    h.hover_at(pos2(label.left() + 100.0, label.bottom() + 12.0));
+    h.run_steps(3);
+    let wheel = |h: &Harness<'_, PhotocraftApp>| {
+        h.event(Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, 1.0), modifiers: Modifiers::NONE, phase: egui::TouchPhase::Move })
+    };
+    wheel(&h);
+    h.run_steps(30);
+    assert_eq!(h.state().session.tools.brush.size, 125.0, "slider hover changes size once per notch");
+    h.state_mut().session.edit_prefs(|p| p.tools.invert_brush_size_wheel = true);
+    wheel(&h);
+    h.run_steps(30);
+    assert_eq!(h.state().session.tools.brush.size, 100.0);
+    assert!(h.state().ui.brush_picker.is_some());
+}

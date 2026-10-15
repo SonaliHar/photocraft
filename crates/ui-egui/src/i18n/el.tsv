@@ -3889,3 +3889,13 @@ curves	Smooth	Εξομάλυνση
 	There are too many sets: delete one first.	Υπάρχουν πάρα πολλά σύνολα: διαγράψτε πρώτα ένα.
 	set name	όνομα συνόλου
 	{set} (modified)	{set} (τροποποιημένο)
+
+# Optional brush wheel controls and font favorites
+	All Fonts	Όλες οι γραμματοσειρές
+	Favorite	Προσθήκη στα αγαπημένα
+	Favorites	Αγαπημένα
+	Mark fonts with a star in All Fonts to add favorites.	Σημειώστε γραμματοσειρές με αστέρι στις Όλες οι γραμματοσειρές για να τις προσθέσετε στα αγαπημένα.
+	Remove favorite	Αφαίρεση από τα αγαπημένα
+	Favorite fonts	Αγαπημένες γραμματοσειρές
+	Invert brush size wheel	Αντιστροφή τροχού μεγέθους πινέλου
+	Resize brush with scroll wheel	Αλλαγή μεγέθους πινέλου με τον τροχό κύλισης

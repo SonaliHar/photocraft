@@ -4151,3 +4151,13 @@ navigator	Zoom	Zoom
 	There are too many sets: delete one first.	Hay demasiados conjuntos: elimine uno primero.
 	set name	nombre del conjunto
 	{set} (modified)	{set} (modificado)
+
+# Optional brush wheel controls and font favorites
+	All Fonts	Todas las fuentes
+	Favorite	Añadir a favoritos
+	Favorites	Favoritos
+	Mark fonts with a star in All Fonts to add favorites.	Marca las fuentes con una estrella en Todas las fuentes para añadirlas a favoritos.
+	Remove favorite	Quitar de favoritos
+	Favorite fonts	Fuentes favoritas
+	Invert brush size wheel	Invertir la rueda de tamaño del pincel
+	Resize brush with scroll wheel	Cambiar el tamaño del pincel con la rueda

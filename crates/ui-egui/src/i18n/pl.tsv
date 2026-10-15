@@ -3787,3 +3787,13 @@ curves	Smooth	Wygładź
 	There are too many sets: delete one first.	Zestawów jest za dużo: najpierw usuń jeden.
 	set name	nazwa zestawu
 	{set} (modified)	{set} (zmieniony)
+
+# Optional brush wheel controls and font favorites
+	All Fonts	Wszystkie czcionki
+	Favorite	Dodaj do ulubionych
+	Favorites	Ulubione
+	Mark fonts with a star in All Fonts to add favorites.	Oznacz czcionki gwiazdką na liście Wszystkie czcionki, aby dodać je do ulubionych.
+	Remove favorite	Usuń z ulubionych
+	Favorite fonts	Ulubione czcionki
+	Invert brush size wheel	Odwróć kierunek kółka rozmiaru pędzla
+	Resize brush with scroll wheel	Zmieniaj rozmiar pędzla kółkiem

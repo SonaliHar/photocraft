@@ -4262,3 +4262,13 @@ shape	Appearance	Izgled
 	There are too many sets: delete one first.	Previše skupova: prvo obrišite jedan.
 	set name	ime skupa
 	{set} (modified)	{set} (izmenjen)
+
+# Optional brush wheel controls and font favorites
+	All Fonts	Svi fontovi
+	Favorite	Dodaj u omiljene
+	Favorites	Omiljeni
+	Mark fonts with a star in All Fonts to add favorites.	Označite fontove zvezdicom u odeljku Svi fontovi da biste ih dodali u omiljene.
+	Remove favorite	Ukloni iz omiljenih
+	Favorite fonts	Omiljeni fontovi
+	Invert brush size wheel	Obrni smer točkića za veličinu četkice
+	Resize brush with scroll wheel	Menjaj veličinu četkice točkićem
