@@ -17,6 +17,8 @@ mod authorized_font_tests;
 
 #[path = "xcf_import/plane.rs"]
 mod plane;
+#[path = "xcf_import/effect_mask_mapping.rs"]
+mod effect_mask_mapping;
 use plane::{ExactParsedPlane, MappingPlane};
 
 #[path = "xcf_import/precision_point_source.rs"]
@@ -40,6 +42,10 @@ mod provenance;
 #[path = "xcf_import/staged_source.rs"]
 mod staged_source;
 pub use staged_source::import_staged_plain_source_with_budget;
+
+#[path = "xcf_import/staged_threshold_alpha.rs"]
+mod staged_threshold_alpha;
+pub use staged_threshold_alpha::{StagedThresholdAlphaImport, import_staged_threshold_alpha_bytes_with_budget};
 
 #[path = "xcf_import/owned_plain_source.rs"]
 mod owned_plain_source;
@@ -1921,7 +1927,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 warnings.push(warning.into());
             }
         }
-        let d = &drawable;
+        let d = &mut drawable;
         l.indexed_source = side;
         l.opacity = d.opacity;
         l.visible = d.visible;
@@ -2023,6 +2029,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 })
                 .ok_or_else(|| unsupported(d, "filter metadata overflow"))?;
             budget.charge(metadata)?;
+            let canvas_group_mask = gaussian_group_domain && d.group;
             let masks = effect_masks(
                 d,
                 owner,
@@ -2031,7 +2038,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 &mut state,
                 &mut budget,
                 ctl,
-                gaussian_group_domain && d.group,
+                canvas_group_mask,
                 finite_gaussian_domain
                     || finite_box_domain
                     || finite_median_domain
@@ -2519,6 +2526,19 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 .map(accounting_error)
                 .unwrap_or_else(|| if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF rendering consumer: {error}")) }));
         }
+    } else if P::requires_budgeted_rendering_preparation() {
+        // A sealed staged family must qualify the actual current scene while
+        // its source and Surface reservations remain live. It cannot run the
+        // legacy unbudgeted constructor and claim a later paid pass covered it.
+        let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("staged scene requires transaction accounting".into()))?;
+        let mut adapter = SharedPreparation { shared, failure: None };
+        let checked = photocraft_compose::gimp_render::PreparedRenderer::new_accounted(&doc, ctl, &mut adapter, source_lease);
+        if let Err(error) = checked {
+            return Err(adapter
+                .failure
+                .map(accounting_error)
+                .unwrap_or_else(|| if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF staged rendering consumer: {error}")) }));
+        }
     } else if !doc.channels.is_empty()
         || doc.xcf_state.as_ref().is_some_and(|state| !state.filter_stacks.is_empty() || !state.source_items.is_empty() || state.floating.is_some())
     {
@@ -2534,7 +2554,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
 
 #[allow(clippy::too_many_arguments)]
 fn effect_masks<P: MappingPlane>(
-    drawable: &Drawable<P>,
+    drawable: &mut Drawable<P>,
     owner: photocraft_doc::item_identity::ItemRef,
     first_filter: u64,
     next_mask: &mut u64,
@@ -2548,95 +2568,9 @@ fn effect_masks<P: MappingPlane>(
     exposure_geometry_mask: bool,
     point_replace_canvas: Option<Rect>,
 ) -> Result<Vec<Option<photocraft_doc::item_identity::ItemRef>>, IoError> {
-    use photocraft_doc::{
-        item_identity::{FilterId, ItemRef, MaskId},
-        xcf_state::{ItemLocks, ItemState, MaskState},
-    };
-    let mut mapped = Vec::new();
-    mapped.try_reserve_exact(drawable.effects.len()).map_err(|_| unsupported(drawable, "filter mask allocation failed"))?;
-    for (ordinal, effect) in drawable.effects.iter().enumerate() {
-        ctl.check().map_err(|_| IoError::Cancelled)?;
-        let Some(mask) = &effect.mask else {
-            mapped.push(None);
-            continue;
-        };
-        let rect = bounds(mask)?;
-        let plane = mask.plane.as_ref().ok_or_else(|| unsupported(mask, "missing filter mask plane"))?.eager_original()?;
-        if !mask.unsupported.is_empty()
-            || !(plane.sample == Sample::U8
-                || point_replace_canvas.is_some() && matches!(plane.sample, Sample::U16 | Sample::U32 | Sample::F32 | Sample::F64)
-                || color_balance_depth_mask && plane.sample == Sample::U32
-                || (value_precision_mask || exposure_geometry_mask) && plane.sample == Sample::U16
-                || (effect.operation == "gimp:levels" || canvas_group_mask) && plane.sample == Sample::F32
-                || (finite_raster_mask || exposure_geometry_mask)
-                    && matches!(plane.sample, Sample::F32 | Sample::F64)
-                    && drawable.plane.as_ref().is_some_and(|p| p.descriptor().sample == plane.sample))
-            || (finite_raster_mask || exposure_geometry_mask || point_replace_canvas.is_some())
-                && !drawable.plane.as_ref().is_some_and(|p| p.descriptor().sample == plane.sample)
-            || plane.channels != 1
-            || rect
-                != if let Some(canvas) = point_replace_canvas {
-                    canvas
-                } else if exposure_geometry_mask {
-                    Rect::new(0, 0, 295, 160)
-                } else if canvas_group_mask {
-                    Rect::new(0, 0, 16, 12)
-                } else {
-                    bounds(drawable)?
-                }
-            || (finite_raster_mask || exposure_geometry_mask || point_replace_canvas.is_some())
-                && (mask.model != Model::Gray
-                    || mask.alpha
-                    || !mask.visible
-                    || !mask.mask_enabled
-                    || mask.mask_shown
-                    || mask.mask_editing
-                    || mask.legacy_linked
-                    || mask.mode != 0
-                    || (mask.blend_space, mask.composite_space, mask.composite_mode) != (2, 2, 1)
-                    || !mask.effects.is_empty())
-        {
-            return Err(unsupported(mask, "unqualified filter selection mask domain"));
-        }
-        let surface = surface(budget, plane, rect, ColorMode::Grayscale, false, &plane.bytes, ctl)?;
-        let id = MaskId(*next_mask);
-        *next_mask = next_mask.checked_add(1).ok_or_else(|| unsupported(mask, "filter mask identity overflow"))?;
-        let filter =
-            FilterId(u64::try_from(ordinal).ok().and_then(|n| first_filter.checked_add(n)).ok_or_else(|| unsupported(mask, "filter identity overflow"))?);
-        let current = photocraft_doc::xcf_filter_masks::FilterMask { id, owner: filter, surface, bounds: rect };
-        if !current.is_empty_selection_with(ctl).map_err(|e| if e.code == "cancelled" { IoError::Cancelled } else { unsupported(mask, e) })? {
-            return Err(unsupported(mask, "nonempty filter selection mask evaluation is unqualified"));
-        }
-        budget.charge(1024 + mask.name.len())?;
-        state.filter_masks.try_reserve_exact(1).map_err(|_| unsupported(mask, "filter mask state allocation failed"))?;
-        state.items.try_reserve_exact(1).map_err(|_| unsupported(mask, "filter mask item allocation failed"))?;
-        let item = ItemRef::Mask(id);
-        state.items.push(ItemState {
-            item,
-            name: mask.name.clone(),
-            custom_name: false,
-            visible: mask.visible,
-            locks: ItemLocks { content: mask.lock_content, position: mask.lock_position, alpha: mask.lock_alpha, visibility: mask.lock_visibility },
-            parent: None,
-            source_tattoo: mask.tattoo,
-            source_flags: mask.group_flags,
-            raster_bounds: Some(rect),
-            composition: None,
-            mask: Some(MaskState {
-                owner,
-                bounds: rect,
-                offset: [mask.offset.0, mask.offset.1],
-                outside_f64_bits: 0.0_f64.to_bits(),
-                enabled: mask.mask_enabled,
-                shown: mask.mask_shown,
-                editing: mask.mask_editing,
-                linked: mask.legacy_linked,
-            }),
-        });
-        state.filter_masks.push(current);
-        mapped.push(Some(item));
-    }
-    Ok(mapped)
+    effect_mask_mapping::map(drawable, owner, first_filter, next_mask, state, budget, ctl,
+        canvas_group_mask, finite_raster_mask, value_precision_mask, color_balance_depth_mask,
+        exposure_geometry_mask, point_replace_canvas)
 }
 
 fn record_memberships(

@@ -1,10 +1,41 @@
-//! Additive staged plain-raster source path; never a default loader retry.
+//! Private type-selected staged source paths; never a default loader retry.
 //! Rc/map publication uses bounded prepaid standard allocations, not a complete
 //! fallible allocator or process RSS guarantee. No consumed storage DTO escapes.
 use super::*;
 use photocraft_raster::staged::{StagedSurfaceBuilder, StagingBudget};
 use photocraft_xcf::{BudgetKind, PlaneDescriptor, PlaneRole, PlaneSink, PlaneSinkControl, Reservation};
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, marker::PhantomData, rc::Rc};
+
+// Private type-selected factories only: file data and callers cannot opt an
+// already decoded plain plane into a different admission policy.
+trait StagePolicy {
+    const THRESHOLD_ALPHA: bool;
+    fn accepts(d: &PlaneDescriptor) -> bool;
+}
+struct PlainPolicy;
+struct ThresholdAlphaPolicy;
+impl StagePolicy for PlainPolicy {
+    const THRESHOLD_ALPHA: bool = false;
+    fn accepts(d: &PlaneDescriptor) -> bool {
+        d.role == PlaneRole::Raster
+            && d.sample == decoded_sample(d.source_sample)
+            && d.alpha
+            && matches!(d.model, Model::Rgb | Model::Gray)
+            && d.channels == if d.model == Model::Gray { 2 } else { 4 }
+    }
+}
+impl StagePolicy for ThresholdAlphaPolicy {
+    const THRESHOLD_ALPHA: bool = true;
+    fn accepts(d: &PlaneDescriptor) -> bool {
+        d.sample == decoded_sample(d.source_sample)
+            && matches!(d.source_sample, Sample::U16 | Sample::F32 | Sample::F64)
+            && match d.role {
+                PlaneRole::Raster => d.alpha && matches!(d.model, Model::Rgb | Model::Gray) && d.channels == if d.model == Model::Gray { 2 } else { 4 },
+                PlaneRole::Mask => !d.alpha && d.model == Model::Gray && d.channels == 1,
+                PlaneRole::Channel => false,
+            }
+    }
+}
 
 type Token<'b, 'a> = Rc<LeaseToken<'b, 'a>>;
 struct LeaseToken<'b, 'a> {
@@ -16,11 +47,12 @@ enum Storage {
     Ready(Surface),
     Transferred,
 }
-struct StagedPlane<'b, 'a> {
+struct StagedPlane<'b, 'a, P: StagePolicy = PlainPolicy> {
     descriptor: PlaneDescriptor,
     // Actual raster must die before its last reservation token.
     storage: Storage,
     _token: Token<'b, 'a>,
+    _policy: PhantomData<P>,
 }
 /// Parser widens finite Half exactly; all other native widths are unchanged.
 fn decoded_sample(source: Sample) -> Sample {
@@ -72,26 +104,28 @@ impl<'b, 'a> StagingBudget for BuilderBudget<'b, 'a> {
         })
     }
 }
-struct Sink<'b, 'a, 'c, 'i> {
+struct Sink<'b, 'a, 'c, 'i, P: StagePolicy = PlainPolicy> {
     // All completed storage returned to parser drops before this final registry.
     active: Option<(PlaneDescriptor, StagedSurfaceBuilder<Reservation<'b, 'a>>)>,
     tokens: Vec<Token<'b, 'a>>,
     registry_lease: Option<Reservation<'b, 'a>>,
     budget: &'b photocraft_xcf::Budget<'a>,
     interrupt: &'c Interrupt<'i>,
+    _policy: PhantomData<P>,
 }
-impl<'b, 'a> PlaneSink for Sink<'b, 'a, '_, '_> {
-    type Plane = StagedPlane<'b, 'a>;
+impl<'b, 'a, P: StagePolicy> PlaneSink for Sink<'b, 'a, '_, '_, P> {
+    type Plane = StagedPlane<'b, 'a, P>;
     fn begin(&mut self, d: &PlaneDescriptor, control: &mut PlaneSinkControl<'_, '_, '_>) -> Result<(), XcfError> {
         control.poll()?;
-        if self.active.is_some()
-            || d.role != PlaneRole::Raster
-            || d.sample != decoded_sample(d.source_sample)
-            || !d.alpha
-            || !matches!(d.model, Model::Rgb | Model::Gray)
-            || d.channels != if d.model == Model::Gray { 2 } else { 4 }
-        {
-            return Err(stage_error(ErrorKind::Unsupported, "staged endpoint requires alpha-bearing RGB/Gray native plain raster"));
+        if self.active.is_some() || !P::accepts(d) {
+            return Err(stage_error(
+                ErrorKind::Unsupported,
+                if P::THRESHOLD_ALPHA {
+                    "staged Threshold Alpha endpoint does not admit this native plane role/format"
+                } else {
+                    "staged endpoint requires alpha-bearing RGB/Gray native plain raster"
+                },
+            ));
         }
         let width = i32::try_from(d.width).map_err(|_| stage_error(ErrorKind::Limit, "staged width"))?;
         let height = i32::try_from(d.height).map_err(|_| stage_error(ErrorKind::Limit, "staged height"))?;
@@ -100,7 +134,7 @@ impl<'b, 'a> PlaneSink for Sink<'b, 'a, '_, '_> {
         if width <= 0 || height <= 0 || [d.offset.0, d.offset.1, right, bottom].iter().any(|n| !(-(1 << 29)..=(1 << 29)).contains(n)) {
             return Err(stage_error(ErrorKind::Limit, "staged extent"));
         }
-        let format = PixelFormat::new(if d.model == Model::Gray { ColorMode::Grayscale } else { ColorMode::Rgb }, depth(d.sample), true);
+        let format = PixelFormat::new(if d.model == Model::Gray { ColorMode::Grayscale } else { ColorMode::Rgb }, depth(d.sample), d.alpha);
         let mut adapter = BuilderBudget { budget: self.budget, failure: None };
         let default = [0u8; 32];
         let builder = StagedSurfaceBuilder::new(
@@ -177,13 +211,13 @@ impl<'b, 'a> PlaneSink for Sink<'b, 'a, '_, '_> {
         let (surface, lease) = staged.into_parts();
         let token = Rc::new(LeaseToken { _surface: lease, _metadata: metadata, budget: self.budget });
         self.tokens.push(Rc::clone(&token));
-        Ok(StagedPlane { descriptor, storage: Storage::Ready(surface), _token: token })
+        Ok(StagedPlane { descriptor, storage: Storage::Ready(surface), _token: token, _policy: PhantomData })
     }
     fn abort(&mut self) {
         self.active.take();
     }
 }
-impl StagedPlane<'_, '_> {
+impl<P: StagePolicy> StagedPlane<'_, '_, P> {
     fn descriptor(&self) -> plane::ParsedPlaneDescriptor {
         plane::ParsedPlaneDescriptor {
             width: self.descriptor.width,
@@ -261,7 +295,7 @@ impl StagedPlane<'_, '_> {
         Ok(())
     }
 }
-impl ExactParsedPlane for StagedPlane<'_, '_> {
+impl<P: StagePolicy> ExactParsedPlane for StagedPlane<'_, '_, P> {
     fn descriptor(&self) -> plane::ParsedPlaneDescriptor {
         StagedPlane::descriptor(self)
     }
@@ -275,9 +309,16 @@ impl ExactParsedPlane for StagedPlane<'_, '_> {
         }
     }
 }
-impl MappingPlane for StagedPlane<'_, '_> {
+impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
+    fn requires_budgeted_rendering_preparation() -> bool {
+        P::THRESHOLD_ALPHA
+    }
     fn admissions(file: &XcfFile<Self>, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<admission::AdmissionDomains, IoError> {
-        if file.encoding != Encoding::NonlinearProfile
+        if P::THRESHOLD_ALPHA {
+            if !precision_point_source::qualify(file, "gimp:threshold-alpha", false, false, ctl, shared)? {
+                return Err(IoError::Unsupported("staged Threshold Alpha source is outside the existing precision-point predicate".into()));
+            }
+        } else if file.encoding != Encoding::NonlinearProfile
             || !matches!(file.model, Model::Rgb | Model::Gray)
             || !file.icc.is_empty()
             || !file.palette.is_empty()
@@ -289,18 +330,19 @@ impl MappingPlane for StagedPlane<'_, '_> {
         }
         for d in &file.layers {
             ctl.check().map_err(|_| IoError::Cancelled)?;
-            if d.group
-                || d.path.len() > 1
-                || d.model != file.model
-                || !d.alpha
-                || !matches!(d.mode, 0 | 28)
-                || d.mask.is_some()
-                || !d.effects.is_empty()
-                || d.text.is_some()
-                || d.vector.is_some()
-                || d.link.is_some()
-                || d.transform.is_some()
-                || d.floating_attachment.is_some()
+            if !P::THRESHOLD_ALPHA
+                && (d.group
+                    || d.path.len() > 1
+                    || d.model != file.model
+                    || !d.alpha
+                    || !matches!(d.mode, 0 | 28)
+                    || d.mask.is_some()
+                    || !d.effects.is_empty()
+                    || d.text.is_some()
+                    || d.vector.is_some()
+                    || d.link.is_some()
+                    || d.transform.is_some()
+                    || d.floating_attachment.is_some())
             {
                 return Err(unsupported(d, "staged endpoint unsupported owner family"));
             }
@@ -326,7 +368,10 @@ impl MappingPlane for StagedPlane<'_, '_> {
         Ok(admission::AdmissionDomains::default())
     }
     fn late_admissions(_: &XcfFile<Self>) -> admission::LateAdmissionDomains {
-        admission::LateAdmissionDomains::default()
+        // Generic mapping always runs admissions before this side-effect-free
+        // domain handoff. Only the private Threshold factory can select this
+        // type, and its admissions above propagate the shared exact predicate.
+        admission::LateAdmissionDomains { threshold_alpha_domain: P::THRESHOLD_ALPHA, ..Default::default() }
     }
     fn eager_original(&self) -> Result<&Plane, IoError> {
         Err(IoError::Unsupported("staged storage has no eager Plane".into()))
@@ -336,6 +381,60 @@ impl MappingPlane for StagedPlane<'_, '_> {
     }
     fn retained_source_bytes(&self) -> usize {
         0
+    }
+    fn current_filter_mask_surface(&mut self, rect: Rect, _: &mut Budget<'_>, ctl: &Interrupt<'_>) -> Result<Surface, IoError> {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        let d = &self.descriptor;
+        if !P::THRESHOLD_ALPHA || d.role != PlaneRole::Mask || !ThresholdAlphaPolicy::accepts(d) {
+            return Err(IoError::Unsupported("plain staged endpoint has no filter-mask transfer".into()));
+        }
+        let width = i32::try_from(d.width).map_err(|_| IoError::Unsupported("staged mask width".into()))?;
+        let height = i32::try_from(d.height).map_err(|_| IoError::Unsupported("staged mask height".into()))?;
+        let expected = Rect::new(
+            d.offset.0,
+            d.offset.1,
+            d.offset.0.checked_add(width).ok_or_else(|| IoError::Unsupported("staged mask right".into()))?,
+            d.offset.1.checked_add(height).ok_or_else(|| IoError::Unsupported("staged mask bottom".into()))?,
+        );
+        let Storage::Ready(surface) = &self.storage else { return Err(IoError::Unsupported("staged mask Surface transferred twice".into())) };
+        if rect != expected || surface.format() != PixelFormat::new(ColorMode::Grayscale, depth(d.sample), false) {
+            return Err(IoError::Unsupported("staged mask operative native descriptor mismatch".into()));
+        }
+        // The common mapper next scans the current mask's default and complete
+        // resident tile samples, including padding. Pay that physical schedule
+        // on the real staging ledger before transfer/scan, not merely its small
+        // logical rectangle. Preserve the existing conservative per-sample32
+        // allowance; it is a logical work envelope, not CPU-cycle measurement.
+        let side = u64::try_from(photocraft_geom::TILE_SIZE).map_err(|_| IoError::Unsupported("staged mask tile side".into()))?;
+        let physical = (surface.tile_count() as u64)
+            .checked_mul(side)
+            .and_then(|n| n.checked_mul(side))
+            .and_then(|n| n.checked_add(1))
+            .ok_or_else(|| IoError::Unsupported("staged mask physical scan work".into()))?;
+        let logical =
+            u64::from(rect.width()).checked_mul(u64::from(rect.height())).ok_or_else(|| IoError::Unsupported("staged mask logical scan work".into()))?;
+        let work = physical.max(logical).checked_mul(32).ok_or_else(|| IoError::Unsupported("staged mask scan work overflow".into()))?;
+        let budget = self._token.budget;
+        budget
+            .check(
+                BudgetKind::Work,
+                budget.used(BudgetKind::Work).checked_add(work).ok_or_else(|| IoError::Unsupported("staged mask cumulative work".into()))?,
+                "staged mask prospective emptiness scan",
+            )
+            .map_err(accounting_error)?;
+        let mut left = work;
+        while left != 0 {
+            ctl.check().map_err(|_| IoError::Cancelled)?;
+            let part = left.min(4096);
+            budget.consume_work(part, "staged mask default/full-tile emptiness scan").map_err(accounting_error)?;
+            left -= part;
+        }
+        let storage = std::mem::replace(&mut self.storage, Storage::Transferred);
+        let Storage::Ready(surface) = storage else { return Err(IoError::Unsupported("staged mask transfer state".into())) };
+        // Original Sink registry owns the actual pixel/map reservations after
+        // this plane token disappears, through CompletedStagedImport's drop.
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        Ok(surface)
     }
     fn current_owner(
         mut owner: Drawable<Self>,
@@ -351,7 +450,7 @@ impl MappingPlane for StagedPlane<'_, '_> {
         Ok((owner, layer, None))
     }
     fn legacy_point_candidate(owner: &Drawable<Self>, _: bool, _: bool, _: Size) -> Result<bool, IoError> {
-        if !owner.effects.is_empty() {
+        if !P::THRESHOLD_ALPHA && !owner.effects.is_empty() {
             return Err(unsupported(owner, "staged effect evaluation unsupported"));
         }
         Ok(false)
@@ -391,29 +490,53 @@ impl<'b, 'a> CompletedStagedImport<'b, 'a> {
             source_batch: Option<photocraft_xcf::OwnedReservationBatch>,
         }
         let mut transfer = Transfer { completed: self, encoded, source_batch: None };
-        if transfer.completed.tokens.len() > 4096 {return Err(IoError::Unsupported("owned staged plane count".into()));}
-        let count = transfer.completed.tokens.len().checked_mul(2)
-            .and_then(|n|n.checked_add(usize::from(transfer.completed.registry_lease.is_some())))
-            .and_then(|n|n.checked_add(extra.len())).ok_or_else(||IoError::Unsupported("owned staged receipt count".into()))?;
-        let requested=count.checked_mul(std::mem::size_of::<&mut Reservation<'b,'a>>()).and_then(|n|n.checked_mul(2)).and_then(|n|n.checked_add(128)).ok_or_else(||IoError::Unsupported("owned staged handle index".into()))?;
-        let mut handle_lease=budget.reserve(BudgetKind::Index,requested as u64,"owned staged receipt references").map_err(accounting_error)?;
-        let mut references=Vec::new();references.try_reserve_exact(count).map_err(|_|accounting_error(stage_error(ErrorKind::Allocation,"owned staged receipt allocation")))?;
-        let actual=references.capacity().checked_mul(std::mem::size_of::<&mut Reservation<'b,'a>>()).and_then(|n|n.checked_add(128)).ok_or_else(||IoError::Unsupported("owned staged receipt capacity".into()))?;
-        if actual>requested {return Err(IoError::Unsupported("owned staged receipt allocator capacity".into()));}
-        handle_lease.resize(actual as u64,"owned staged receipt actual capacity").map_err(accounting_error)?;
-        transfer.source_batch=Some(transfer.completed.reservations.detach_owned().map_err(accounting_error)?);
-        for token in &mut transfer.completed.tokens {
-            budget.consume_work(1,"owned staged receipt traversal").map_err(accounting_error)?;
-            let token=Rc::get_mut(token).ok_or_else(||IoError::Unsupported("owned staged Surface token escaped transaction".into()))?;
-            references.push(&mut token._surface);references.push(&mut token._metadata);
+        if transfer.completed.tokens.len() > 4096 {
+            return Err(IoError::Unsupported("owned staged plane count".into()));
         }
-        if let Some(lease)=&mut transfer.completed.registry_lease {references.push(lease);}
-        for lease in extra {references.push(&mut **lease);}
-        let surface_batch=Reservation::detach_owned_batch(&mut references).map_err(accounting_error)?;
-        drop(references);drop(handle_lease);
-        let Transfer{completed,encoded,source_batch}=transfer;
-        let CompletedStagedImport{result,..}=completed;
-        Ok(OwnedStagedImport{result,encoded,source_batch,surface_batch})
+        let count = transfer
+            .completed
+            .tokens
+            .len()
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(usize::from(transfer.completed.registry_lease.is_some())))
+            .and_then(|n| n.checked_add(extra.len()))
+            .ok_or_else(|| IoError::Unsupported("owned staged receipt count".into()))?;
+        let requested = count
+            .checked_mul(std::mem::size_of::<&mut Reservation<'b, 'a>>())
+            .and_then(|n| n.checked_mul(2))
+            .and_then(|n| n.checked_add(128))
+            .ok_or_else(|| IoError::Unsupported("owned staged handle index".into()))?;
+        let mut handle_lease = budget.reserve(BudgetKind::Index, requested as u64, "owned staged receipt references").map_err(accounting_error)?;
+        let mut references = Vec::new();
+        references.try_reserve_exact(count).map_err(|_| accounting_error(stage_error(ErrorKind::Allocation, "owned staged receipt allocation")))?;
+        let actual = references
+            .capacity()
+            .checked_mul(std::mem::size_of::<&mut Reservation<'b, 'a>>())
+            .and_then(|n| n.checked_add(128))
+            .ok_or_else(|| IoError::Unsupported("owned staged receipt capacity".into()))?;
+        if actual > requested {
+            return Err(IoError::Unsupported("owned staged receipt allocator capacity".into()));
+        }
+        handle_lease.resize(actual as u64, "owned staged receipt actual capacity").map_err(accounting_error)?;
+        transfer.source_batch = Some(transfer.completed.reservations.detach_owned().map_err(accounting_error)?);
+        for token in &mut transfer.completed.tokens {
+            budget.consume_work(1, "owned staged receipt traversal").map_err(accounting_error)?;
+            let token = Rc::get_mut(token).ok_or_else(|| IoError::Unsupported("owned staged Surface token escaped transaction".into()))?;
+            references.push(&mut token._surface);
+            references.push(&mut token._metadata);
+        }
+        if let Some(lease) = &mut transfer.completed.registry_lease {
+            references.push(lease);
+        }
+        for lease in extra {
+            references.push(&mut **lease);
+        }
+        let surface_batch = Reservation::detach_owned_batch(&mut references).map_err(accounting_error)?;
+        drop(references);
+        drop(handle_lease);
+        let Transfer { completed, encoded, source_batch } = transfer;
+        let CompletedStagedImport { result, .. } = completed;
+        Ok(OwnedStagedImport { result, encoded, source_batch, surface_batch })
     }
 }
 pub fn import_staged_plain_source_with_budget(
@@ -435,10 +558,32 @@ pub(super) fn complete_staged_plain_source<'b, 'a>(
     budget: &'b photocraft_xcf::Budget<'a>,
     accounting: photocraft_xcf::PlainSourceAccounting,
 ) -> Result<CompletedStagedImport<'b, 'a>, IoError> {
+    complete_staged_source::<PlainPolicy>(name, source, control, options, budget, accounting)
+}
+
+pub(super) fn complete_staged_threshold_alpha_source<'b, 'a>(
+    name: &str,
+    source: &mut dyn photocraft_xcf::Source,
+    control: &Interrupt<'_>,
+    options: &DecodeOptions<'_>,
+    budget: &'b photocraft_xcf::Budget<'a>,
+    accounting: photocraft_xcf::PlainSourceAccounting,
+) -> Result<CompletedStagedImport<'b, 'a>, IoError> {
+    complete_staged_source::<ThresholdAlphaPolicy>(name, source, control, options, budget, accounting)
+}
+
+fn complete_staged_source<'b, 'a, P: StagePolicy>(
+    name: &str,
+    source: &mut dyn photocraft_xcf::Source,
+    control: &Interrupt<'_>,
+    options: &DecodeOptions<'_>,
+    budget: &'b photocraft_xcf::Budget<'a>,
+    accounting: photocraft_xcf::PlainSourceAccounting,
+) -> Result<CompletedStagedImport<'b, 'a>, IoError> {
     control.check().map_err(|_| IoError::Cancelled)?;
     // Sink registry is declared before decoded/mapped storage so errors destroy
     // actual Surfaces before their final token/registry refunds.
-    let mut sink = Sink { active: None, tokens: Vec::new(), registry_lease: None, budget, interrupt: control };
+    let mut sink = Sink::<P> { active: None, tokens: Vec::new(), registry_lease: None, budget, interrupt: control, _policy: PhantomData };
     let strict = DecodeOptions { limits: options.limits.clone(), allow_finite_drawable_alpha: false, cancelled: options.cancelled, progress: options.progress };
     let photocraft_xcf::BudgetDecodedImport { decoded, reservations } =
         photocraft_xcf::decode_plain_source_into_sink_with_budget(source, &strict, budget, accounting, &mut sink).map_err(accounting_error)?;
@@ -469,9 +614,15 @@ pub(super) fn complete_staged_plain_source<'b, 'a>(
     // actual surface registry and source/mapping receipts until explicit transfer.
     let reservations = leases.into_inner();
     let Sink { active, tokens, registry_lease, .. } = sink;
-    if active.is_some() {return Err(IoError::Unsupported("staged import left an active plane".into()));}
+    if active.is_some() {
+        return Err(IoError::Unsupported("staged import left an active plane".into()));
+    }
     Ok(CompletedStagedImport { result, tokens, registry_lease, reservations })
 }
+
+#[cfg(test)]
+#[path = "staged_threshold_alpha_tests.rs"]
+mod threshold_alpha_tests;
 
 #[cfg(test)]
 mod tests {
@@ -497,7 +648,14 @@ mod tests {
             let eager = photocraft_xcf::decode(&encoded, &DecodeOptions::default()).unwrap();
             let budget = photocraft_xcf::Budget::new(photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(), None);
             let mut source = Bytes(encoded);
-            let mut sink = Sink { active: None, tokens: Vec::new(), registry_lease: None, budget: &budget, interrupt: &Interrupt::NONE };
+            let mut sink = Sink::<PlainPolicy> {
+                active: None,
+                tokens: Vec::new(),
+                registry_lease: None,
+                budget: &budget,
+                interrupt: &Interrupt::NONE,
+                _policy: PhantomData,
+            };
             let parsed = photocraft_xcf::decode_plain_source_into_sink_with_budget(
                 &mut source,
                 &DecodeOptions::default(),
@@ -552,7 +710,8 @@ mod tests {
     fn actual_surface_move_keeps_token_after_owner_drop_and_late_native_reads_fail() {
         let budget = photocraft_xcf::Budget::new(photocraft_xcf::ResourceLimits::for_policy(photocraft_xcf::ResourcePolicy::NativeStandard).unwrap(), None);
         let mut source = Bytes(fixture::image(12, 150, 0, 1, 1, &[11, 31, 97, 0]));
-        let mut sink = Sink { active: None, tokens: Vec::new(), registry_lease: None, budget: &budget, interrupt: &Interrupt::NONE };
+        let mut sink =
+            Sink::<PlainPolicy> { active: None, tokens: Vec::new(), registry_lease: None, budget: &budget, interrupt: &Interrupt::NONE, _policy: PhantomData };
         let mut parsed = photocraft_xcf::decode_plain_source_into_sink_with_budget(
             &mut source,
             &DecodeOptions::default(),

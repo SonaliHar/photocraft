@@ -224,6 +224,20 @@ pub(super) fn bytes(doc: &Document, interrupt: &Interrupt<'_>, budget: &mut impl
         .and_then(|n| n.checked_add(crate::gimp_neighborhood::scalar_preparation_bytes(nodes).ok()?))
         .ok_or(CompositionError::Invalid("accounted preparation overflow"))
 }
+fn prepay_empty_mask_scan(mask: &photocraft_doc::xcf_filter_masks::FilterMask, budget: &mut impl PreparationBudget) -> Result<()> {
+    // The authoritative empty-mask scan visits the default and every complete
+    // physical tile, including padding outside the logical mask bounds. Keep
+    // the prior conservative pass multiplier and logical allowance, but never
+    // price a full stored tile as its small canvas intersection.
+    let physical = u64::try_from(mask.surface.tile_count())
+        .ok()
+        .and_then(|n| n.checked_mul(photocraft_geom::TILE_SIZE as u64))
+        .and_then(|n| n.checked_mul(photocraft_geom::TILE_SIZE as u64))
+        .and_then(|n| n.checked_add(1))
+        .ok_or_else(unsupported)?;
+    let logical = u64::from(mask.bounds.width()).checked_mul(u64::from(mask.bounds.height())).ok_or_else(unsupported)?;
+    budget.consume_preparation_work(logical.max(physical).checked_mul(32).ok_or_else(unsupported)?)
+}
 fn plane(surface: &Surface, mask: bool, interrupt: &Interrupt<'_>, budget: &mut impl PreparationBudget) -> Result<()> {
     for _ in surface.tiles() {
         poll(interrupt)?;
@@ -371,9 +385,7 @@ pub(super) fn validate(doc: &Document, interrupt: &Interrupt<'_>, budget: &mut i
             for node in &stack.nodes {
                 poll(interrupt)?;
                 if let Some(mask) = state.filter_masks.iter().find(|mask| node.mask == Some(photocraft_doc::item_identity::ItemRef::Mask(mask.id))) {
-                    budget.consume_preparation_work(
-                        u64::from(mask.bounds.width()).checked_mul(u64::from(mask.bounds.height())).and_then(|n| n.checked_mul(32)).ok_or_else(unsupported)?,
-                    )?;
+                    prepay_empty_mask_scan(mask, budget)?;
                 }
             }
         }
@@ -507,6 +519,36 @@ mod tests {
         state.filter_stacks[0].nodes.push(invert);
         doc
     }
+    // UNRUN: a logically tiny empty mask may still retain a complete native
+    // tile. Both the current-plane validation and later empty-mask qualification
+    // must be paid, even when all retained words are signed zero.
+    #[test]
+    fn empty_mask_preparation_accounts_for_physical_padding_per_invocation() {
+        use photocraft_doc::{item_identity::{ItemRef, MaskId}, xcf_filter_masks::FilterMask};
+        let mut sparse = points();
+        let bounds = sparse.bounds();
+        let format = PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false);
+        let state = sparse.xcf_state.as_mut().unwrap();
+        let node = state.filter_stacks.first_mut().unwrap().nodes.first_mut().unwrap();
+        node.mask = Some(ItemRef::Mask(MaskId(41)));
+        state.filter_masks.push(FilterMask { id: MaskId(41), owner: node.id, surface: Surface::new(format), bounds });
+        let mut dense = sparse.clone();
+        let mask = dense.xcf_state.as_mut().unwrap().filter_masks.first_mut().unwrap();
+        mask.surface.try_write_pixel_f64(0, 0, &[-0.0]).unwrap();
+        assert!(mask.is_empty_selection_with(&Interrupt::NONE).unwrap());
+        let physical_words = mask.surface.tiles().map(|(_, tile)| (tile.bytes().len() / format.sample.bytes()) as u64).sum::<u64>();
+        assert!(physical_words > u64::from(bounds.width()) * u64::from(bounds.height()));
+        let mut baseline = Budget::new();
+        super::validate(&sparse, &Interrupt::NONE, &mut baseline).unwrap();
+        let mut actual = Budget::new();
+        super::validate(&dense, &Interrupt::NONE, &mut actual).unwrap();
+        assert!(actual.work - baseline.work >= physical_words * 2);
+        let mut denied = Budget::new();
+        denied.work_limit = baseline.work + physical_words;
+        assert!(super::validate(&dense, &Interrupt::NONE, &mut denied).is_err());
+        assert!(dense.xcf_state.as_ref().unwrap().filter_masks.first().unwrap().is_empty_selection_with(&Interrupt::NONE).unwrap());
+    }
+
     #[test]
     fn color_rotate_census_precharges_builtin_gray_transform_and_rejects_bad_width() {
         use photocraft_doc::xcf_filters::{ExactNumber, FilterArgument, FilterValue};

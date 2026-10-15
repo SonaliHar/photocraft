@@ -46,11 +46,17 @@ impl ExactParsedPlane for Plane {
 
 /// Private mapper dispatch. Unsupported storage families never become dummy eager planes.
 pub(super) trait MappingPlane: ExactParsedPlane + Sized {
+    fn requires_budgeted_rendering_preparation() -> bool { false }
     fn admissions(file: &XcfFile<Self>, ctl: &Interrupt<'_>, budget: Option<&photocraft_xcf::Budget<'_>>) -> Result<admission::AdmissionDomains, IoError>;
     fn late_admissions(file: &XcfFile<Self>) -> admission::LateAdmissionDomains;
     fn eager_original(&self) -> Result<&Plane, IoError>;
     fn into_original(self) -> Result<Plane, IoError>;
     fn retained_source_bytes(&self) -> usize;
+    /// Construct or transfer the exact current native Gray mask. Caller has
+    /// already checked source eligibility; this hook grants no additional domain.
+    /// A staged implementation moves its retained Surface without materializing
+    /// a Plane or changing sample words/defaults. Original storage fees stay live.
+    fn current_filter_mask_surface(&mut self, rect: Rect, budget: &mut Budget<'_>, ctl: &Interrupt<'_>) -> Result<Surface, IoError>;
     fn current_owner(
         owner: Drawable<Self>,
         palette: &[[u8; 3]],
@@ -74,6 +80,9 @@ impl MappingPlane for Plane {
     }
     fn retained_source_bytes(&self) -> usize {
         self.bytes.len()
+    }
+    fn current_filter_mask_surface(&mut self, rect: Rect, budget: &mut Budget<'_>, ctl: &Interrupt<'_>) -> Result<Surface, IoError> {
+        surface(budget, self, rect, ColorMode::Grayscale, false, &self.bytes, ctl)
     }
     fn current_owner(
         owner: Drawable,
