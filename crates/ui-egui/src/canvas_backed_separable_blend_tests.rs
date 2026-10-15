@@ -75,7 +75,7 @@ fn fifty_flat_blends_keep_native_policy_and_pathless_custody() {
         let revision = app.session.active().unwrap().revision;
         let journal = app.session.journal.clone();
         for (id, params) in [
-            ("layer.setProps", json!({"name":"closed"})),
+            ("layer.setProps", json!({"blend":"multiply"})),
             ("layer.translate", json!({"dx":1})),
             ("select.all", Value::Null),
             ("xcf.filter.enable", json!({"filterId":"1","enabled":false})),

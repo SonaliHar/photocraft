@@ -57,7 +57,7 @@ fn separable_headless_explicit_paths_have_no_filter_or_edit_grant() {
         let revision = h.session.active().unwrap().revision;
         let journal = h.session.journal.clone();
         for (id, p) in [
-            ("layer.setProps", json!({"name":"closed"})),
+            ("layer.setProps", json!({"blend":"multiply"})),
             ("layer.translate", json!({"dx":1})),
             ("select.all", Value::Null),
             ("xcf.filter.set", json!({"filterId":"1","enabled":false})),

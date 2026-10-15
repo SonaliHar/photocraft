@@ -792,7 +792,7 @@ impl Headless {
         // browser/native storage marker does not grant background execution.
         if id == "layer.setProps"
             && self.session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| {
-                owner.is_readonly_point_storage() || photocraft_engine::assigned_geometry_metadata_candidate(owner)
+                owner.is_readonly_point_storage() || photocraft_engine::owned_layer_metadata_candidate(owner)
             })
         {
             if !wait {
@@ -962,3 +962,7 @@ mod owned_gaussian_group_parameter_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_separable_blend_tests.rs"]
 mod owned_separable_blend_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_separable_metadata_tests.rs"]
+mod owned_separable_metadata_tests;

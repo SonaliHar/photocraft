@@ -150,7 +150,7 @@ fn genuine_readonly_source_title_native_and_project() {
         assert_eq!(reply.value()["filters"]["total"], 0);
         drop(reply);
         assert!(crate::accounted_filter_inspect::prepare(&s, &serde_json::json!({"filterId":"1"}), &ctl()).is_err());
-        assert!(s.execute("layer.setProps", serde_json::json!({"name":"refuse"})).is_err());
+        assert!(s.execute("layer.setProps", serde_json::json!({"blend":"multiply"})).is_err());
         assert!(s.execute("layer.translate", serde_json::json!({"dx":1})).is_err());
         let bytes = crate::accounted_native_save::PreparedAccountedNativeSave::prepare(&s, "FlatTitle.pcraft", &ctl())
             .unwrap()
@@ -192,3 +192,6 @@ fn generic_adoption_and_failure_have_no_prefix() {
     drop(hold);
     assert!(s.docs.is_empty());
 }
+
+#[path = "accounted_flat_composite_metadata_tests.rs"]
+mod metadata_tests;

@@ -2,6 +2,8 @@
 //! operation, profile, source, renderer or editable-domain eligibility.
 use super::*;
 use crate::{ColorMode, FilterOutputPrecision, SampleType, item_identity::ItemRef};
+#[path = "accounted_flat_composite_readonly_metadata.rs"]
+pub(super) mod metadata;
 
 fn text(value: &str, c: &ReadControl<'_>) -> Result<(), BackingError> {
     if value.len() > 1 << 20 {
@@ -273,20 +275,31 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, c: &ReadControl<'_>
     if imported_edits::names_equal(&owner.document().name, name, c)? {
         return Ok(owner.clone());
     }
+    current_copy(owner, logical, CopyKind::Title(name), c)
+}
+#[derive(Clone, Copy)]
+enum CopyKind<'a> {
+    Title(&'a str),
+    Metadata(metadata::Plan<'a>),
+}
+fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<'_>, c: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
     let header = AccountedDocument::owned_model_reservation_bytes();
     let index = logical.index.checked_sub(header).ok_or(BackingError::Integrity)?;
-    let envelope = index
-        .checked_add((name.len() as u64).checked_mul(2).ok_or(BackingError::Length)?)
-        .and_then(|v| v.checked_mul(2))
-        .and_then(|v| v.checked_add(4096))
-        .ok_or(BackingError::Length)?;
+    let name_bytes = match kind {
+        CopyKind::Title(name) => (name.len() as u64).checked_mul(2).ok_or(BackingError::Length)?,
+        CopyKind::Metadata(plan) => plan.replacement_name_bytes()?,
+    };
+    let envelope = index.checked_add(name_bytes).and_then(|v| v.checked_mul(2)).and_then(|v| v.checked_add(4096)).ok_or(BackingError::Length)?;
     let payload = logical.payload.checked_mul(2).ok_or(BackingError::Length)?;
     let allocation = owner.quota().reserve(QuotaKind::Index, header).map_err(|_| BackingError::Quota)?;
     let mut index_lease = owner.quota().reserve(QuotaKind::Index, envelope).map_err(|_| BackingError::Quota)?;
     let mut payload_lease = owner.quota().reserve(QuotaKind::Resident, payload).map_err(|_| BackingError::Quota)?;
     c.check(logical.total()?)?;
     let mut staged = ModelStaging { document: imported_selection::copy_document(owner.document(), c)?, selection_view: None };
-    staged.document.name = imported_edits::copy_name(name, c)?;
+    match kind {
+        CopyKind::Title(name) => staged.document.name = imported_edits::copy_name(name, c)?,
+        CopyKind::Metadata(plan) => metadata::apply(&mut staged.document, plan, c)?,
+    }
     let actual = measured(&staged.document, owner.quota(), c)?;
     let actual_index = actual.index.checked_sub(header).ok_or(BackingError::Integrity)?;
     if actual_index > envelope || actual.payload > payload {

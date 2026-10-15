@@ -9,14 +9,15 @@ pub(super) enum EditDomain {
     AssignedGeometry,
     IsolatedGroup,
     GaussianGroup,
+    FlatComposite,
 }
 
 pub(super) fn validate_owner(owner: &AccountedDocument, edit: AccountedEdit<'_>, c: &ReadControl<'_>) -> Result<EditDomain, BackingError> {
-    // Refuse before generic no-op/history admission, including modes whose
-    // physical BlendMode is a Normal surrogate for canonical imported policy.
+    // The separate compound-only plan validates actual class/current metadata
+    // before generic no-op/history admission, including Normal-surrogate modes.
     if owner.is_readonly_flat_composite_storage() {
-        c.check(1)?;
-        return Err(BackingError::Unsupported);
+        flat_composite_readonly::metadata::validate(owner, edit, c)?;
+        return Ok(EditDomain::FlatComposite);
     }
     // A genuine Gaussian class must never fall through to the unrelated
     // assigned group hint or acquire plain/native-pixel edit authority.

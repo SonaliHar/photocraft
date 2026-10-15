@@ -8,10 +8,10 @@ use photocraft_raster::{
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 
-fn ctl() -> ReadControl<'static> {
+pub(super) fn ctl() -> ReadControl<'static> {
     ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) }
 }
-fn quota() -> BackingQuota {
+pub(super) fn quota() -> BackingQuota {
     BackingQuota::new(QuotaLimits { resident: 64 << 20, index: 16 << 20, scratch: 0 })
 }
 #[derive(Debug)]
@@ -35,7 +35,7 @@ impl NativePlaneStore for Store {
         Ok(())
     }
 }
-fn fixture(q: &BackingQuota, mode: ColorMode, sample: SampleType) -> (Document, Arc<dyn Any + Send + Sync>, Arc<AtomicU64>) {
+pub(super) fn fixture(q: &BackingQuota, mode: ColorMode, sample: SampleType) -> (Document, Arc<dyn Any + Send + Sync>, Arc<AtomicU64>) {
     // Real prospective same-ledger source model/blob preholds precede all fixture
     // allocations, including the later bounded negative/opaque additions.
     let index = q.reserve(QuotaKind::Index, 2 << 20).unwrap();
@@ -90,11 +90,11 @@ fn fixture(q: &BackingQuota, mode: ColorMode, sample: SampleType) -> (Document, 
     doc.xcf_state = Some(state);
     (doc, Arc::new((index, payload)), reads)
 }
-fn owned(q: &BackingQuota, mode: ColorMode, sample: SampleType) -> (AccountedDocument, Arc<AtomicU64>) {
+pub(super) fn owned(q: &BackingQuota, mode: ColorMode, sample: SampleType) -> (AccountedDocument, Arc<AtomicU64>) {
     let (doc, guard, reads) = fixture(q, mode, sample);
     (AccountedDocument::from_owned_readonly_flat_composite(doc, guard, q.clone(), &ctl()).unwrap(), reads)
 }
-fn leaf(owner: &AccountedDocument, index: usize) -> &crate::BackedLayer {
+pub(super) fn leaf(owner: &AccountedDocument, index: usize) -> &crate::BackedLayer {
     let LayerContent::BackedRaster(backed) = &owner.document().layers[index].content else { panic!("fixture") };
     backed
 }
@@ -155,7 +155,7 @@ fn runtime_class_closes_generic_edits_history_noops_selection_move_and_normal_su
         AccountedEdit::LayerName { layer: id, name: "leaf0" },
         AccountedEdit::LayerVisibility { layer: id, visible: true },
         AccountedEdit::LayerOpacity { layer: id, opacity: 1.0 },
-        AccountedEdit::LayerMetadata { layer: id, name: None, visible: None, opacity: None },
+        AccountedEdit::MaskLinked { layer: id, linked: true },
         AccountedEdit::NativePixels { layer: id, rect: Rect::new(-3, -2, -2, -1), bytes: &[0; 16] },
     ] {
         assert!(owner.try_edit(edit, &ctl()).is_err());

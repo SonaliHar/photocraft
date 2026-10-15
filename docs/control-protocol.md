@@ -1685,3 +1685,12 @@ to two items, no filters and at most one selected item. The structural runtime
 class grants no broader source, render or query eligibility. Generic metadata,
 Move, pixel and selection edits require separate transactions. Tests and
 behavioral acceptance remain deferred.
+For that owned flat-composite family, `layer.setProps` now accepts compound
+name, visibility and opacity changes on either leaf through the existing
+transaction. Exact gesture keys preserve the first undo label, and unchanged
+requests preserve redo. Native/canonical names and visibility stay coherent;
+opacity retains its F32 bits, including signed zero. Complete current and staged
+profile/native/canvas validation precedes publication under the actual quota and
+work control. The synchronous UI route applies even with background jobs enabled.
+A separate metadata-only routing hint preserves mask and Move restrictions.
+Original source gates stay unchanged; behavior tests remain deferred.

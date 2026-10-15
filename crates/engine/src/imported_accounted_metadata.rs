@@ -123,6 +123,8 @@ impl<'a> Request<'a> {
         if state.doc.layers.len() > 4096 {
             return Err(BackingError::Length.into());
         }
+        let policy = MetadataPolicy::for_owner(owner);
+        if matches!(policy,MetadataPolicy::FlatComposite) {policy.validate_storage(owner,control)?;}
         let id = match self.target {
             Target::Active => state.active_layer.ok_or(EngineError::NoDocument)?,
             Target::Id(id) => id,
@@ -156,7 +158,7 @@ impl<'a> Request<'a> {
                     // Preserve the original flat topmost-name policy.
                     for layer in state.doc.layers.iter().rev() {
                         control.check((name.len() + 1) as u64)?;
-                        if layer.name == name {
+                        if if matches!(policy,MetadataPolicy::FlatComposite) {same_name(&layer.name,name,control)?} else {layer.name == name} {
                             found = Some(layer.id);
                             break;
                         }
@@ -173,7 +175,7 @@ impl<'a> Request<'a> {
         policy.validate_current(owner, control)?;
         let assigned = match policy {
             MetadataPolicy::Plain => None,
-            MetadataPolicy::AssignedGeometry | MetadataPolicy::IsolatedNormalGroup | MetadataPolicy::GaussianGroup => Some(AssignedFence::prepare::<Prepared<'_>>(session, control)?),
+            MetadataPolicy::FlatComposite | MetadataPolicy::AssignedGeometry | MetadataPolicy::IsolatedNormalGroup | MetadataPolicy::GaussianGroup => Some(AssignedFence::prepare::<Prepared<'_>>(session, control)?),
         };
         check_locks(owner.document(), edit, control)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;

@@ -6,6 +6,11 @@ use photocraft_doc::DocId;
 use photocraft_raster::backing::quota::{BackingQuota, QuotaLease};
 /// Constant-time routing hint over an actual owner. Full closed structural and
 /// current profile/native validation remains mandatory; this grants no authority.
+/// Layer-properties routing only; unlike the assigned helper this may include
+/// readonly flat composites and must never be used for mask or Move admission.
+pub fn owned_layer_metadata_candidate(owner:&AccountedDocument)->bool {
+    owner.is_readonly_flat_composite_storage() || assigned_geometry_metadata_candidate(owner)
+}
 pub fn assigned_geometry_metadata_candidate(owner: &AccountedDocument) -> bool {
     if owner.is_readonly_gaussian_group_storage() { return true; }
     if owner.is_readonly_point_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_threshold_alpha_storage() {
@@ -24,13 +29,16 @@ fn isolated_normal_group_metadata_candidate(owner: &AccountedDocument) -> bool {
 #[derive(Clone, Copy)]
 pub(crate) enum MetadataPolicy {
     Plain,
+    FlatComposite,
     AssignedGeometry,
     IsolatedNormalGroup,
     GaussianGroup,
 }
 impl MetadataPolicy {
     pub(crate) fn for_owner(owner: &AccountedDocument) -> Self {
-        if owner.is_readonly_gaussian_group_storage() {
+        if owner.is_readonly_flat_composite_storage() {
+            Self::FlatComposite
+        } else if owner.is_readonly_gaussian_group_storage() {
             Self::GaussianGroup
         } else if isolated_normal_group_metadata_candidate(owner) {
             Self::IsolatedNormalGroup
@@ -46,6 +54,7 @@ impl MetadataPolicy {
     pub(crate) fn validate_storage(self, owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<()> {
         match self {
             Self::Plain => Err(BackingError::Unsupported.into()),
+            Self::FlatComposite => Ok(owner.validate_readonly_flat_composite_storage(c)?),
             Self::AssignedGeometry => Ok(owner.validate_assigned_analytic_geometry_storage(c)?),
             Self::IsolatedNormalGroup => Ok(owner.validate_assigned_isolated_normal_group_storage(c)?),
             Self::GaussianGroup => Ok(owner.validate_gaussian_group_storage(c)?),
@@ -54,6 +63,7 @@ impl MetadataPolicy {
     pub(crate) fn validate_current(self, owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<()> {
         match self {
             Self::Plain => Ok(()),
+            Self::FlatComposite => crate::accounted_xcf_open::separable_blend::validate_current_separable_blend_storage(owner,c),
             Self::AssignedGeometry => crate::accounted_xcf_open::analytic_geometry::validate_current_analytic_geometry_storage(owner, c),
             Self::IsolatedNormalGroup => crate::accounted_xcf_open::isolated_normal_group::validate_current_isolated_normal_group_storage(owner, c),
             Self::GaussianGroup => crate::accounted_xcf_open::gaussian_group::validate_current_isolated_gaussian_group_storage(owner,c),

@@ -745,15 +745,17 @@ impl Session {
         if id == "layer.setProps"
             && self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| {
                 owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage()
-                    || crate::assigned_geometry_metadata_candidate(owner)
+                    || crate::owned_layer_metadata_candidate(owner)
             })
             && (background || self.jobs.spawn)
         {
             let point = self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_point_storage());
+            let flat=self.active().and_then(|state|state.doc.accounted()).is_some_and(|owner|owner.is_readonly_flat_composite_storage());
             let assigned = self.active().and_then(|state| state.doc.accounted()).is_some_and(crate::assigned_geometry_metadata_candidate);
             return Err(EngineError::BadParams {
                 cmd: id.into(),
-                msg: if point { "owned Point layer properties require synchronous dispatch" }
+                msg: if flat { "owned flat composite layer properties require synchronous dispatch" }
+                    else if point { "owned Point layer properties require synchronous dispatch" }
                     else if assigned { "owned assigned geometry layer properties require synchronous dispatch" }
                     else { "owned Threshold layer properties require synchronous dispatch" }.into(),
             });
@@ -1148,7 +1150,7 @@ impl Session {
                 || id == "layer.setProps"
                     && self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| {
                         owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage()
-                            || crate::assigned_geometry_metadata_candidate(owner)
+                            || crate::owned_layer_metadata_candidate(owner)
                     })
                 || matches!(id, "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.move" | "xcf.filter.remove")
                     && self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| {

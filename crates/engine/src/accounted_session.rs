@@ -240,7 +240,7 @@ impl Session {
             return self.edit_accounted_assigned_mask_enabled(label, layer, enabled, control).map(|_| ());
         }
         if matches!(edit, AccountedEdit::LayerMetadata { .. })
-            && self.active().and_then(|state| state.doc.accounted()).is_some_and(metadata_gesture::assigned_geometry_metadata_candidate)
+            && self.active().and_then(|state| state.doc.accounted()).is_some_and(metadata_gesture::owned_layer_metadata_candidate)
         {
             return self.edit_accounted_metadata_with_coalesce(label, edit, None, control);
         }

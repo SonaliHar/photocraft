@@ -254,3 +254,7 @@ mod gaussian_group_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_separable_blend_tests.rs"]
 mod separable_blend_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "canvas_backed_separable_metadata_tests.rs"]
+mod separable_metadata_tests;
