@@ -364,6 +364,8 @@ fn main() -> eframe::Result {
     let gpu_note: std::sync::Arc<std::sync::Mutex<Option<String>>> = Default::default();
     // The adapter's real texture limits (egui asks for 8192 px), so big documents stay on the GPU.
     gpu_startup::configure(&mut options.wgpu_options.wgpu_setup, &plan, os, sentinel.clone(), gpu_note.clone());
+    #[cfg(target_os = "macos")]
+    let startup_errors = gpu_startup::precreate_device(&mut options.wgpu_options.wgpu_setup);
     let sentinel_ms = t_sentinel.elapsed().as_secs_f64() * 1000.0;
     log::info!("GPU startup: {:?} ({sentinel_ms:.2} ms)", plan);
     let retry_cpu = !safe_gpu && plan.backend != photocraft_engine::prefs::GpuBackend::Cpu;
@@ -375,6 +377,12 @@ fn main() -> eframe::Result {
         "PhotoCraft",
         options,
         Box::new(move |cc| {
+            // wgpu errors raised while eframe built its renderer (macOS): stop with a message
+            // rather than draw with a broken pipeline.
+            #[cfg(target_os = "macos")]
+            if let Some(message) = startup_errors.as_ref().and_then(gpu_startup::startup_failure) {
+                return Err(message.into());
+            }
             created_in_callback.store(true, std::sync::atomic::Ordering::Relaxed);
             let automation = control.as_ref().map(|(_, _, workspace)| workspace.clone());
             let mut services = services::native(automation);
