@@ -4234,7 +4234,7 @@ layerLabel	Magenta	მეწამული
 	Checkerboard	ჭადრაკის დაფა
 	browser preset storage timed out	ბრაუზერის პრესეტების საცავმა დროულად არ უპასუხა
 	Drag the handles on the outline to resize and turn it, the square to round its corners, and the dots inside to set where the blur starts.	გადაათრიეთ კონტურის სახელურები ზომის შესაცვლელად და შესაბრუნებლად, კვადრატი — კუთხეების მოსამრგვალებლად, შიგნით მდებარე წერტილები კი — გაბუნდოვნების დაწყების ადგილის დასაყენებლად.
-	Drag the pin to move the band, or its ring to change its blur. Drag the solid lines to widen the sharp band, the dashed lines to set the transition, and the dots to turn it.	გადაათრიეთ ქინძისთავი ზოლის გადასაადგილებლად, ან მისი რგოლი — გაბუნდოვნების შესაცვლელად. გადაათრიეთ უწყვეტი ხაზები მკვეთრი ზოლის გასაფართოებლად, წყვეტილი ხაზები — გარდამავალი არის დასაყენებლად, წერტილები კი — შესაბრუნებლად.
+	Drag the pin to move the band, or its ring to change its blur. Drag the solid lines to widen the sharp band, the dashed lines to set the transition, and the dots to turn it.	გადაათრიეთ სამაგრი ზოლის გადასაადგილებლად, ან მისი რგოლი — გაბუნდოვნების შესაცვლელად. გადაათრიეთ უწყვეტი ხაზები მკვეთრი ზოლის გასაფართოებლად, წყვეტილი ხაზები — გარდამავალი არის დასაყენებლად, წერტილები კი — შესაბრუნებლად.
 	Drag the handles on the outline to resize and turn it; the ring sets the blur angle.	გადაათრიეთ კონტურის სახელურები ზომის შესაცვლელად და შესაბრუნებლად; რგოლი გაბუნდოვნების კუთხეს აყენებს.
 	Add Shortcut	მალსახმობის დამატება
 	Clip thumbnails to layer bounds	მინიატიურების შრის საზღვრებით მოჭრა
@@ -4264,3 +4264,17 @@ layerLabel	Magenta	მეწამული
 	Open color-less EXR as ACEScg	ფერის სივრცის გარეშე EXR-ის გახსნა ACEScg-ად
 	Edit Selected Guides	მონიშნული დამხმარე ხაზების რედაქტირება
 	Clear Selected Guides	მონიშნული დამხმარე ხაზების გასუფთავება
+	Delete this set	ამ ნაკრების წაშლა
+	New Set…	ახალი ნაკრები…
+	PhotoCraft Defaults	PhotoCraft-ის ნაგულისხმევი
+	Save a list of these shortcuts as a web page	ამ მალსახმობების სიის ვებგვერდად შენახვა
+	Save the changes to this set	ამ ნაკრებში ცვლილებების შენახვა
+	Save these shortcuts as a .kys file	ამ მალსახმობების .kys ფაილად შენახვა
+	Save these shortcuts as a new set	ამ მალსახმობების ახალ ნაკრებად შენახვა
+	Set deleted.	ნაკრები წაიშალა.
+	Set saved.	ნაკრები შენახულია.
+	Set:	ნაკრები:
+	Summarize…	შეჯამება…
+	There are too many sets: delete one first.	ნაკრები ძალიან ბევრია: ჯერ ერთი წაშალეთ.
+	set name	ნაკრების სახელი
+	{set} (modified)	{set} (შეცვლილი)
