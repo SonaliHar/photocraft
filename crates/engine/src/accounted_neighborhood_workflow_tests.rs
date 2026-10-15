@@ -179,7 +179,7 @@ fn original_neighborhood_sources_publish_only_after_full_current_validation_and_
     }
 }
 #[test]
-#[ignore = "UNRUN: eight neighborhood domains refuse disabled staged recipes, stack edits and cancellation without publication"]
+#[ignore = "UNRUN: eight neighborhood domains refuse wrong arguments, stack edits and cancellation without publication"]
 fn neighborhood_refusal_cannot_fallback_or_mutate_current_model() {
     for (path, pin, _) in CASES {
         let bytes = source(path, pin);
@@ -193,7 +193,6 @@ fn neighborhood_refusal_cannot_fallback_or_mutate_current_model() {
         let q = before.quota().unwrap().clone();
         let usage = q.usage().unwrap();
         for (command, params) in [
-            ("xcf.filter.enable", json!({"filterId":id,"enabled":false})),
             ("xcf.filter.set", json!({"filterId":id,"arguments":[{"name":"not-an-original-argument","value":{"Bool":true}}]})),
             ("xcf.filter.move", json!({"filterId":id,"index":0})),
             ("xcf.filter.remove", json!({"filterId":id})),
@@ -209,6 +208,140 @@ fn neighborhood_refusal_cannot_fallback_or_mutate_current_model() {
         assert!(crate::accounted_commands::dispatch(&mut s, "xcf.filter.enable", &json!({"filterId":id,"enabled":true}), &control).is_err());
         assert!(s.active().unwrap().doc.shares_state(&before));
         assert_eq!(s.active().unwrap().revision, revision);
+        assert_eq!(native(&s), raw);
+        assert_eq!(q.usage().unwrap(), usage);
+    }
+}
+
+#[test]
+#[ignore = "UNRUN: eight original neighborhood domains, disabled history/noopredo/native continuation/re-enable with exact raw conservation"]
+fn disabled_neighborhood_lifecycle_retains_current_words_and_real_source_owners() {
+    for (path, pin, _) in CASES {
+        let bytes = source(path, pin);
+        let mut s = session(path, &bytes);
+        let enabled = s.active().unwrap().doc.clone();
+        let raw = native(&s);
+        let xcf = enabled.xcf_state.as_ref().unwrap();
+        let node = &xcf.filter_stacks[0].nodes[0];
+        assert!(node.enabled);
+        let id = node.id.0.to_string();
+        let source_identity = s.active().unwrap().source.clone();
+        let revision = s.active().unwrap().revision;
+        assert_eq!(s.execute("xcf.filter.enable", json!({"filterId":id,"enabled":false})).unwrap(), json!({"filterId":id,"updated":true}));
+        let disabled = s.active().unwrap().doc.clone();
+        let next = disabled.xcf_state.as_ref().unwrap();
+        let changed = &next.filter_stacks[0].nodes[0];
+        assert!(!changed.enabled);
+        assert_eq!(changed.id, node.id);
+        assert_eq!(changed.operation, node.operation);
+        assert_eq!(changed.arguments, node.arguments);
+        assert_eq!(changed.opacity_f64_bits, node.opacity_f64_bits);
+        assert_eq!(changed.mask, node.mask);
+        assert_eq!(changed.composition, node.composition);
+        assert_eq!(changed.auxiliary, node.auxiliary);
+        assert_eq!(changed.source_clipping, node.source_clipping);
+        assert_eq!(changed.source_region, node.source_region);
+        assert_eq!(next.filter_stacks[0].owner, xcf.filter_stacks[0].owner);
+        assert_eq!(next.filter_stacks[0].revision, xcf.filter_stacks[0].revision + 1);
+        assert_eq!(next.filter_masks, xcf.filter_masks);
+        assert_eq!(next.items, xcf.items);
+        assert_eq!(next.opaque, xcf.opaque);
+        assert_eq!(next.provenance, xcf.provenance);
+        assert_eq!(next.current_filter_output_precision, xcf.current_filter_output_precision);
+        assert_eq!(disabled.depth, enabled.depth);
+        assert_eq!(disabled.mode, enabled.mode);
+        assert_eq!(disabled.icc_profile, enabled.icc_profile);
+        assert_eq!(disabled.source_color_context, enabled.source_color_context);
+        assert_eq!(disabled.working_profile_interpretation, enabled.working_profile_interpretation);
+        assert_eq!(native(&s), raw);
+        assert_eq!(s.active().unwrap().source, source_identity);
+        assert!(s.active().unwrap().source_read_only);
+        assert_eq!(s.active().unwrap().revision, revision + 1);
+        assert_eq!(s.active().unwrap().history.past_len(), 1);
+        assert_eq!(s.active().unwrap().history.undo_label(), Some("Edit GIMP Stock Filter"));
+        assert!(s.undo_with_control(&ctl()).unwrap());
+        assert!(s.active().unwrap().doc.shares_state(&enabled));
+        let history = s.active().unwrap().history.clone();
+        let before_noop = s.active().unwrap().revision;
+        assert_eq!(s.execute("xcf.filter.enable", json!({"filterId":id,"enabled":true})).unwrap()["updated"], false);
+        assert_eq!(s.execute("xcf.filter.set", exact_arguments(&s)).unwrap()["updated"], false);
+        assert!(s.active().unwrap().history.shares_accounted_history(&history));
+        assert_eq!(s.active().unwrap().revision, before_noop);
+        assert!(s.redo_with_control(&ctl()).unwrap());
+        assert!(s.active().unwrap().doc.shares_state(&disabled));
+        let history = s.active().unwrap().history.clone();
+        assert_eq!(s.execute("xcf.filter.enable", json!({"filterId":id,"enabled":false})).unwrap()["updated"], false);
+        assert_eq!(s.execute("xcf.filter.set", exact_arguments(&s)).unwrap()["updated"], false);
+        assert!(s.active().unwrap().history.shares_accounted_history(&history));
+        // Source/archive Vecs remain external captures, not fabricated buffer leases.
+        let q = disabled.quota().unwrap().clone();
+        let saved = photocraft_format::owned_document::save_current_document_archive(&disabled, Cursor::new(Vec::new()), Default::default(), &q, &ctl())
+            .unwrap()
+            .into_inner();
+        let archive = photocraft_io::accounted_native::open_accounted_native_from_reader(
+            &mut Cursor::new(saved.as_slice()),
+            saved.len() as u64,
+            Default::default(),
+            q.clone(),
+            &ctl(),
+        )
+        .unwrap();
+        let mut reopened = Session::new();
+        reopened.add_owned_native_point_archive(archive, "disabled-neighborhood.pcraft", None, &ctl()).unwrap();
+        let reopened_before = reopened.active().unwrap().doc.clone();
+        assert_eq!(reopened_before.xcf_state, disabled.xcf_state);
+        assert!(reopened_before.accounted().unwrap().is_readonly_point_storage());
+        assert!(reopened_before.quota().unwrap().shares_ledger(&q));
+        assert_eq!(reopened_before.depth, disabled.depth);
+        assert_eq!(reopened_before.icc_profile, disabled.icc_profile);
+        assert_eq!(reopened_before.source_color_context, disabled.source_color_context);
+        assert_eq!(reopened_before.working_profile_interpretation, disabled.working_profile_interpretation);
+        assert_eq!(native(&reopened), raw);
+        let state = reopened.active().unwrap();
+        assert_eq!(state.source.as_ref().unwrap().origin, photocraft_io::ImportOrigin::writable(photocraft_io::ImportFormat::Pcraft));
+        assert!(state.source.as_ref().unwrap().path.is_none());
+        assert!(!state.source_read_only);
+        assert!(state.path.is_none());
+        assert_eq!(reopened.execute("xcf.filter.enable", json!({"filterId":id,"enabled":false})).unwrap()["updated"], false);
+        assert_eq!(reopened.execute("xcf.filter.enable", json!({"filterId":id,"enabled":true})).unwrap()["updated"], true);
+        assert!(reopened.active().unwrap().doc.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].enabled);
+        assert_eq!(native(&reopened), raw);
+        assert!(reopened.undo_with_control(&ctl()).unwrap());
+        assert!(reopened.active().unwrap().doc.shares_state(&reopened_before));
+        assert_eq!(hash(&bytes), pin);
+        assert_eq!(hash(&source(path, pin)), pin);
+    }
+}
+
+#[test]
+#[ignore = "UNRUN: eight disabled neighborhood domains preserve model/history/journal/native owners on cancelled or quota-denied re-enable"]
+fn disabled_neighborhood_failed_reenable_preserves_every_publication_owner() {
+    for (path, pin, _) in CASES {
+        let bytes = source(path, pin);
+        let mut s = session(path, &bytes);
+        let id = s.active().unwrap().doc.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].id.0.to_string();
+        s.execute("xcf.filter.enable", json!({"filterId":id,"enabled":false})).unwrap();
+        let before = s.active().unwrap().doc.clone();
+        let raw = native(&s);
+        let history = s.active().unwrap().history.clone();
+        let revision = s.active().unwrap().revision;
+        let journal = s.journal.clone();
+        let source_identity = s.active().unwrap().source.clone();
+        let q = before.quota().unwrap().clone();
+        let usage = q.usage().unwrap();
+        let params = json!({"filterId":id,"enabled":true});
+        let stop = || true;
+        let interrupt = Interrupt::cancel_only(&stop);
+        let control = ReadControl { interrupt: &interrupt, work: &|_| Ok(()) };
+        assert!(crate::accounted_commands::dispatch(&mut s, "xcf.filter.enable", &params, &control).is_err());
+        let fee = q.reserve(photocraft_raster::backing::quota::QuotaKind::Index, (32 << 20) - q.usage().unwrap().index).unwrap();
+        assert!(s.execute("xcf.filter.enable", params).is_err());
+        drop(fee);
+        assert!(s.active().unwrap().doc.shares_state(&before));
+        assert!(s.active().unwrap().history.shares_accounted_history(&history));
+        assert_eq!(s.active().unwrap().revision, revision);
+        assert_eq!(s.journal, journal);
+        assert_eq!(s.active().unwrap().source, source_identity);
         assert_eq!(native(&s), raw);
         assert_eq!(q.usage().unwrap(), usage);
     }

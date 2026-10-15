@@ -4,12 +4,19 @@ use photocraft_algo::gimp::neighborhood::{GaussianAbyss, GaussianFilter, Gaussia
 use photocraft_doc::xcf_filters::{ExactNumber, FilterNode, FilterValue};
 pub(crate) const EPOCH: &str = "xcf22-rgb-alpha-finite-gaussian-v1";
 pub(crate) fn parameters(node: &FilterNode, version: u32) -> Result<(GaussianParams, GaussianFilter)> {
+    parameters_mode(node, version, false)
+}
+/// Owned CURRENT metadata validation; activation does not erase typed arguments.
+pub(crate) fn parameters_for_owned(node: &FilterNode, version: u32) -> Result<(GaussianParams, GaussianFilter)> {
+    parameters_mode(node, version, true)
+}
+fn parameters_mode(node: &FilterNode, version: u32, owned: bool) -> Result<(GaussianParams, GaussianFilter)> {
     let c = node.composition.as_ref().ok_or(CompositionError::Unsupported("missing finite Gaussian policy"))?;
     if version != 22
         || node.operation.name != "gegl:gaussian-blur"
         || node.operation.stored_version != "0:0"
         || node.operation.schema_epoch != EPOCH
-        || !node.enabled
+        || (!owned && !node.enabled)
         || node.opacity_f64_bits != 1.0f64.to_bits()
         || node.source_clipping != Some(0)
         || node.source_region != Some(0)

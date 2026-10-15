@@ -192,7 +192,7 @@ fn current_shape_profile_activation_and_actual_work_refusals_are_private() {
     for case in 0..3 {
         let (mut doc, q, _guard, profile, _) = model(0);
         match case {
-            0 => doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].enabled = false,
+            0 => doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].operation.stored_version = "99:0".into(),
             1 => doc.source_color_context.as_mut().unwrap().source_precision = 250,
             _ => doc.sample_encoding = Some(SampleEncoding::Linear),
         };
@@ -223,3 +223,6 @@ fn owned_retained_outputs_hold_real_quota_until_drop() {
     }
     assert_eq!(q.usage().unwrap(), before);
 }
+
+#[path = "backed_neighborhood_disabled_tests.rs"]
+mod disabled;

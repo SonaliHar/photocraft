@@ -196,7 +196,7 @@ impl OrderedStack {
                 stock_disabled:false,
             });
         }
-        for node in source.nodes.iter().filter(|n| n.enabled) {
+        for node in source.nodes.iter().filter(|n| n.enabled || owned) {
             control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
             if node.operation.name == "gegl:gaussian-blur" {
                 if !qualified[0] {
@@ -210,7 +210,7 @@ impl OrderedStack {
                     {
                         return Err(CompositionError::Unsupported("finite Gaussian raster source context"));
                     }
-                    let (params, filter) = raster_gaussian::parameters(node, version)?;
+                    let (params, filter) = if owned {raster_gaussian::parameters_for_owned(node,version)?} else {raster_gaussian::parameters(node, version)?};
                     spaces.push(WorkingSpace::new_with_interrupt(profile, stored, GimpSpace::LinearRgb, control)?);
                     stages.push(Stage::GaussianFinite { working: spaces.len() - 1, params, filter });
                     continue;
@@ -222,7 +222,7 @@ impl OrderedStack {
                 if !qualified[0] || profile.channels() != 3 || stored != SampleEncoding::NonlinearProfile || source.nodes.len() != 1 {
                     return Err(CompositionError::Unsupported("Box Blur source context"));
                 }
-                let radius = box_blur::radius(node, version, extent)?;
+                let radius = if owned {box_blur::radius_for_owned(node,version,extent)?} else {box_blur::radius(node, version, extent)?};
                 output_extent = photocraft_algo::gimp::neighborhood::box_blur_extent(extent, radius)?;
                 spaces.push(WorkingSpace::new_with_interrupt(profile, stored, GimpSpace::LinearRgb, control)?);
                 stages.push(Stage::BoxBlur { working: spaces.len() - 1, radius });
@@ -230,7 +230,7 @@ impl OrderedStack {
                 if !qualified[0] || profile.channels() != 3 || stored != SampleEncoding::NonlinearProfile || source.nodes.len() != 1 {
                     return Err(CompositionError::Unsupported("Motion source context"));
                 }
-                let params = motion_blur::parameters(node, version, extent)?;
+                let params = if owned {motion_blur::parameters_for_owned(node,version,extent)?} else {motion_blur::parameters(node, version, extent)?};
                 output_extent = photocraft_algo::gimp::neighborhood::motion_blur_extent(extent, params)?;
                 spaces.push(WorkingSpace::new_with_interrupt(profile, stored, GimpSpace::LinearRgb, control)?);
                 stages.push(Stage::MotionBlur { working: spaces.len() - 1, params });
@@ -238,7 +238,7 @@ impl OrderedStack {
                 if !qualified[0] || profile.channels() != 3 || stored != SampleEncoding::NonlinearProfile || source.nodes.len() != 1 {
                     return Err(CompositionError::Unsupported("Pixelize source context"));
                 }
-                let params = pixelize::parameters(node, version, extent)?;
+                let params = if owned {pixelize::parameters_for_owned(node,version,extent)?} else {pixelize::parameters(node, version, extent)?};
                 spaces.push(WorkingSpace::new_with_interrupt(profile, stored, GimpSpace::LinearRgb, control)?);
                 stages.push(Stage::Pixelize { working: spaces.len() - 1, params });
             } else if node.operation.name == "gegl:median-blur" {
@@ -250,7 +250,7 @@ impl OrderedStack {
                 if !separable || profile.a2b.iter().any(Option::is_some) || profile.b2a.iter().any(Option::is_some) {
                     return Err(CompositionError::Unsupported("Median separable profile domain"));
                 }
-                stages.push(Stage::MedianBlur { params: median_blur::parameters(node, version, extent)? });
+                stages.push(Stage::MedianBlur { params: if owned {median_blur::parameters_for_owned(node,version,extent)?} else {median_blur::parameters(node, version, extent)?} });
             } else if node.operation.name == "gimp:curves" {
                 if !qualified[1] {
                     return Err(CompositionError::Unsupported("FREE curves source color/extent domain"));
@@ -270,23 +270,27 @@ impl OrderedStack {
                 stages.push(Stage::Point(PointStack::from_nodes_at_with_interrupt(std::slice::from_ref(node), profile, stored, version, extent, control)?));
             }
         }
+        let disabled=owned && source.nodes.first().is_some_and(|node|!node.enabled);
+        if disabled {
+            // Parsed metadata and preparation were validated above. Retain no
+            // operator/working-space owner for the legacy disabled identity.
+            stages.clear();spaces.clear();output_extent=extent;
+        }
         Ok(Self {
-            stages,
-            extent,
-            output_extent,
-            spaces,
-            integer_point_storage: None,
-            current_point_sample: None,
-            filter_output_precision: photocraft_doc::FilterOutputPrecision::Canonical,
-                stock_disabled:false,
+            stages,extent,output_extent,spaces,integer_point_storage:None,current_point_sample:None,
+            filter_output_precision:photocraft_doc::FilterOutputPrecision::Canonical,stock_disabled:disabled,
         })
     }
     pub(crate) fn new_owned_neighborhood(source:&FilterStack,profile:&Profile,stored:SampleEncoding,version:u32,extent:Rect,control:&Interrupt<'_>)->Result<Self> {
         let [node]=source.nodes.as_slice() else {return Err(CompositionError::Unsupported("owned neighborhood singleton"))};
-        if !node.enabled || !matches!(node.operation.name.as_str(), "gegl:box-blur"|"gegl:median-blur"|"gegl:motion-blur-linear"|"gegl:pixelize"|"gegl:gaussian-blur") {
-            return Err(CompositionError::Unsupported("owned neighborhood enabled recipe"));
+        if !matches!(node.operation.name.as_str(), "gegl:box-blur"|"gegl:median-blur"|"gegl:motion-blur-linear"|"gegl:pixelize"|"gegl:gaussian-blur") {
+            return Err(CompositionError::Unsupported("owned neighborhood recipe"));
         }
         let result=Self::prepare_with_interrupt(source,profile,stored,version,extent,[true,false,false],control,false,true)?;
+        if !node.enabled {
+            if !result.stock_disabled || !result.stages.is_empty() || !result.spaces.is_empty() || result.output_extent!=extent {return Err(CompositionError::Invalid("owned disabled neighborhood identity"));}
+            return Ok(result);
+        }
         let [stage]=result.stages.as_slice() else {return Err(CompositionError::Unsupported("owned neighborhood stage"))};
         if !matches!(stage,Stage::BoxBlur{..}|Stage::MotionBlur{..}|Stage::Pixelize{..}|Stage::MedianBlur{..}|Stage::GaussianFinite{..}) {
             return Err(CompositionError::Unsupported("owned finite neighborhood stage"));
@@ -295,7 +299,7 @@ impl OrderedStack {
     }
     pub(crate) fn neighborhood_retained_bytes(&self)->Result<u64> {
         let own=self.stages.capacity().checked_mul(std::mem::size_of::<Stage>()).and_then(|v|self.spaces.capacity().checked_mul(std::mem::size_of::<WorkingSpace>()).and_then(|s|v.checked_add(s))).ok_or(CompositionError::Invalid("neighborhood retained size"))?;
-        if self.stages.len()!=1 || self.stages.capacity()>2 || self.spaces.capacity()>2 {return Err(CompositionError::Invalid("neighborhood retained capacity"));}
+        if (self.stock_disabled && (!self.stages.is_empty() || !self.spaces.is_empty())) || (!self.stock_disabled && self.stages.len()!=1) || self.stages.capacity()>2 || self.spaces.capacity()>2 {return Err(CompositionError::Invalid("neighborhood retained capacity"));}
         (own as u64).checked_add((self.spaces.len() as u64)*65536).ok_or(CompositionError::Invalid("neighborhood retained size"))
     }
     pub(crate) fn output_bounds(&self)->Rect {self.output_extent}
@@ -1384,5 +1388,17 @@ mod exposure_canvas_mask_tests {
             assert!(qualify_selection_mask(&state, &absent, owner, bounds).is_err());
             assert_eq!(state, before);
         }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn legacy_disabled_neighborhood_parameters_refuse(node:&FilterNode,extent:Rect)->bool {
+    match node.operation.name.as_str() {
+        "gegl:box-blur"=>box_blur::radius(node,22,extent).is_err(),
+        "gegl:median-blur"=>median_blur::parameters(node,22,extent).is_err(),
+        "gegl:motion-blur-linear"=>motion_blur::parameters(node,22,extent).is_err(),
+        "gegl:pixelize"=>pixelize::parameters(node,22,extent).is_err(),
+        "gegl:gaussian-blur"=>raster_gaussian::parameters(node,22).is_err(),
+        _=>false,
     }
 }

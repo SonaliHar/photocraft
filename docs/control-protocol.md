@@ -1508,6 +1508,10 @@ finite Gray Median, original Motion Blur and Pixelize, and finite Gaussian.
 The renderer evaluates the existing neighborhood kernels over their actual
 extents, including halos, under shared resident and work limits. Source and
 native adoption validate the complete current recipe before publication.
-Existing geometry, precision, implicit-profile and enabled-filter restrictions
-still apply. Source XCF remains read-only; native continuation uses `.pcraft`.
+Existing geometry, precision and implicit-profile restrictions still apply.
+The owned path preserves enabled or disabled activation while validating the
+complete typed recipe in either state. A disabled filter produces native
+identity at the input extent, with no kernel, pixel CMS conversion or halo.
+The existing `xcf.filter.enable` command supplies undo/redo and native continuation.
+Source XCF remains read-only; native continuation uses `.pcraft`.
 This implementation has compilation checks only; behavioral acceptance is pending.

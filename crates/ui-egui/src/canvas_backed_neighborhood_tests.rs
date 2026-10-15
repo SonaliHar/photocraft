@@ -57,6 +57,11 @@ fn neighborhood_ui_canvas_matches_existing_resident_adapter_and_preserves_native
         let renderer = photocraft_compose::gimp_render::PreparedRenderer::new(&resident).unwrap();
         let reference = renderer.render(resident.bounds(), &mut |_| Ok(())).unwrap().try_display().unwrap();
         let expected = display_image(None, &reference);
+        let mut disabled_reference = resident.clone();
+        disabled_reference.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].enabled = false;
+        let renderer = photocraft_compose::gimp_render::PreparedRenderer::new(&disabled_reference).unwrap();
+        let reference = renderer.render(disabled_reference.bounds(), &mut |_| Ok(())).unwrap().try_display().unwrap();
+        let expected_disabled = display_image(None, &reference);
         let quota = BackingQuota::new(QuotaLimits { resident: 256 << 20, index: 32 << 20, scratch: 0 });
         let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default())
             .unwrap()
@@ -96,7 +101,6 @@ fn neighborhood_ui_canvas_matches_existing_resident_adapter_and_preserves_native
         let inspection = photocraft_engine::accounted_filter_inspect::prepare(&app.session, &json!({"filterId":id}), &ctl()).unwrap();
         assert_eq!(inspection.value()["operation"]["name"], node.operation.name);
         drop(inspection);
-        assert!(app.run("xcf.filter.enable", json!({"filterId":id,"enabled":false})).is_err());
         assert!(app.session.active().unwrap().doc.shares_state(&before));
         app.run("layer.setProps", json!({"name":"Neighborhood UI current"})).unwrap();
         app.run("edit.undo", json!({})).unwrap();
@@ -111,16 +115,26 @@ fn neighborhood_ui_canvas_matches_existing_resident_adapter_and_preserves_native
         let (display, fee) = backed_snapshot_display_image(&edited, width, height, None, &Interrupt::NONE).unwrap();
         assert_eq!(display.pixels, expected.pixels);
         drop((display, fee));
+        assert_eq!(app.run("xcf.filter.enable", json!({"filterId":id,"enabled":false})).unwrap()["updated"], true);
+        let disabled = app.session.active().unwrap().doc.clone();
+        assert_eq!(native(&disabled), raw);
+        let (display, fee) = backed_snapshot_display_image(&disabled, width, height, None, &Interrupt::NONE).unwrap();
+        assert_eq!(display.pixels, expected_disabled.pixels, "disabled {relative}");
+        drop((display, fee));
+        app.run("edit.undo", json!({})).unwrap();
+        assert!(app.session.active().unwrap().doc.shares_state(&edited));
+        app.run("edit.redo", json!({})).unwrap();
+        assert!(app.session.active().unwrap().doc.shares_state(&disabled));
         // Warm retained source/profile caches before checking cancellation;
         // real output fees must return without changing model/history.
         let baseline = quota.usage().unwrap();
         let stop = || true;
         let interrupt = Interrupt::cancel_only(&stop);
-        assert!(backed_snapshot_display_image(&edited, width, height, None, &interrupt).is_err());
+        assert!(backed_snapshot_display_image(&disabled, width, height, None, &interrupt).is_err());
         assert_eq!(quota.usage().unwrap(), baseline);
         // Cursor output remains an external harness capture; the reader's
         // immutable native archive and adopted owner have actual same-q fees.
-        let saved = photocraft_format::owned_document::save_current_document_archive(&edited, Cursor::new(Vec::new()), Default::default(), &quota, &ctl())
+        let saved = photocraft_format::owned_document::save_current_document_archive(&disabled, Cursor::new(Vec::new()), Default::default(), &quota, &ctl())
             .unwrap()
             .into_inner();
         let archive = photocraft_io::accounted_native::open_accounted_native_from_reader(
@@ -137,15 +151,21 @@ fn neighborhood_ui_canvas_matches_existing_resident_adapter_and_preserves_native
         assert!(current.path.is_none());
         assert!(!current.source_read_only);
         assert!(current.doc.accounted().unwrap().is_readonly_point_storage());
-        assert_eq!(current.doc.xcf_state, edited.xcf_state);
+        assert_eq!(current.doc.xcf_state, disabled.xcf_state);
         assert_eq!(current.doc.icc_profile, before.icc_profile);
         assert_eq!(current.doc.source_color_context, before.source_color_context);
         assert_eq!(current.doc.working_profile_interpretation, before.working_profile_interpretation);
         assert_eq!(native(&current.doc), raw);
         let (display, fee) = backed_snapshot_display_image(&current.doc, width, height, None, &Interrupt::NONE).unwrap();
-        assert_eq!(display.pixels, expected.pixels, "native {relative}");
+        assert_eq!(display.pixels, expected_disabled.pixels, "disabled native {relative}");
         drop((display, fee));
-        assert_eq!(reopened.run("xcf.filter.enable", json!({"filterId":id,"enabled":true})).unwrap()["updated"], false);
+        assert_eq!(reopened.run("xcf.filter.enable", json!({"filterId":id,"enabled":false})).unwrap()["updated"], false);
+        assert_eq!(reopened.run("xcf.filter.enable", json!({"filterId":id,"enabled":true})).unwrap()["updated"], true);
+        let current = &reopened.session.active().unwrap().doc;
+        let (display, fee) = backed_snapshot_display_image(current, width, height, None, &Interrupt::NONE).unwrap();
+        assert_eq!(display.pixels, expected.pixels, "reenabled native {relative}");
+        drop((display, fee));
+        assert_eq!(native(current), raw);
         assert_eq!(hash(&bytes), pin);
         assert_eq!(std::fs::read(root.join(relative)).unwrap(), bytes);
     }

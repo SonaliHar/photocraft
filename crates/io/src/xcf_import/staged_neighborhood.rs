@@ -166,3 +166,7 @@ fn finite<P: ExactParsedPlane>(
 #[cfg(test)]
 #[path = "staged_neighborhood_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "corpus"))]
+#[path = "staged_neighborhood_disabled_tests.rs"]
+mod disabled_tests;

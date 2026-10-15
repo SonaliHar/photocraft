@@ -552,6 +552,32 @@ pub(crate) fn qualified_stack<P>(
     version: u32,
     domain: NeighborhoodDomain,
 ) -> Result<FilterStack, IoError> {
+    qualified_stack_with_activation(effects, masks, owner, first_id, version, domain, StackActivation::Strict)
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StackActivation { Strict, OwnedNeighborhood }
+/// Private owned-only activation mapping. The original whole-file source gate,
+/// shared preparation and exact current recipe are independent requirements.
+/// Only a successfully admitted sealed owned neighborhood route calls this;
+/// the ordinary/default mapper continues through the strict entry point.
+pub(crate) fn qualified_owned_neighborhood_stack<P>(
+    effects: &[Effect<P>], masks: &[Option<ItemRef>], owner: ItemRef,
+    first_id: u64, version: u32, domain: NeighborhoodDomain,
+) -> Result<FilterStack, IoError> {
+    if !matches!(domain, NeighborhoodDomain::BoxOriginal | NeighborhoodDomain::BoxFinite
+        | NeighborhoodDomain::MedianOriginal | NeighborhoodDomain::MedianFinite | NeighborhoodDomain::MedianGray
+        | NeighborhoodDomain::MotionOriginal | NeighborhoodDomain::PixelizeOriginal | NeighborhoodDomain::RasterFinite)
+        || effects.len() != 1 || effects.first().is_none_or(|effect| effect.arguments.len() > 10)
+    {
+        return Err(IoError::Unsupported("owned neighborhood activation domain".into()));
+    }
+    qualified_stack_with_activation(effects, masks, owner, first_id, version, domain, StackActivation::OwnedNeighborhood)
+}
+#[allow(clippy::too_many_arguments)]
+fn qualified_stack_with_activation<P>(
+    effects: &[Effect<P>], masks: &[Option<ItemRef>], owner: ItemRef,
+    first_id: u64, version: u32, domain: NeighborhoodDomain, activation: StackActivation,
+) -> Result<FilterStack, IoError> {
     let generic_replace = matches!(domain, NeighborhoodDomain::PointReplace(_));
     let domain = if let NeighborhoodDomain::PointReplace(family) = domain { family.domain() } else { domain };
     if generic_replace && effects.len() != 1 {
@@ -889,7 +915,7 @@ pub(crate) fn qualified_stack<P>(
             return Err(unsupported(effect, "unqualified stored filter envelope"));
         }
         let enabled = source.enabled.ok_or_else(|| unsupported(effect, "missing enabled state"))?;
-        if (finite_gaussian || box_blur || median || motion || pixelize) && !enabled {
+        if (finite_gaussian || box_blur || median || motion || pixelize) && !enabled && activation != StackActivation::OwnedNeighborhood {
             return Err(unsupported(effect, "unqualified disabled neighborhood envelope"));
         }
         if gaussian
@@ -1576,3 +1602,7 @@ pub fn graph_argument_candidate<'a>(
     let graph=argument.graph.as_ref().ok_or_else(||IoError::Unsupported("XCF graph argument has no retained grammar".into()))?;
     crate::xcf_graph_candidate::map_with_schemas(graph,original,schemas,limits,control,fresh,resolve,ports,auxiliary,resources,charge)
 }
+
+#[cfg(test)]
+#[path = "xcf_filters/owned_neighborhood_activation_tests.rs"]
+mod owned_neighborhood_activation_tests;

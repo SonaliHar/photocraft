@@ -78,9 +78,15 @@ fn map(
 pub(super) fn evaluate(plan: &OrderedStack, source: &Surface, q: &BackingQuota, c: &ReadControl<'_>) -> std::result::Result<OwnedNeighborhoodSurface, E> {
     use photocraft_algo::gimp::neighborhood as n;
     c.check(1).map_err(E::Backing)?;
-    let [stage] = plan.stages.as_slice() else { return Err(invalid()) };
     let roi = plan.output_extent;
     let input = map(source, plan.extent, q, c, Ok)?;
+    if plan.stock_disabled {
+        if !plan.stages.is_empty() || !plan.spaces.is_empty() || roi != plan.extent {
+            return Err(invalid());
+        }
+        return Ok(input);
+    }
+    let [stage] = plan.stages.as_slice() else { return Err(invalid()) };
     let working = match stage {
         Stage::BoxBlur { working, .. } | Stage::MotionBlur { working, .. } | Stage::Pixelize { working, .. } | Stage::GaussianFinite { working, .. } => {
             Some(plan.spaces.get(*working).ok_or_else(invalid)?)

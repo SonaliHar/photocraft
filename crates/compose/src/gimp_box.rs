@@ -4,6 +4,13 @@ use photocraft_doc::xcf_filters::{ExactNumber, FilterNode, FilterValue};
 use photocraft_geom::Rect;
 pub(crate) const EPOCH: &str = "xcf22-rgb-box-replace-v1";
 pub(crate) fn radius(node: &FilterNode, version: u32, extent: Rect) -> Result<u32> {
+    radius_mode(node, version, extent, false)
+}
+/// Owned CURRENT metadata validation; activation does not erase typed arguments.
+pub(crate) fn radius_for_owned(node: &FilterNode, version: u32, extent: Rect) -> Result<u32> {
+    radius_mode(node, version, extent, true)
+}
+fn radius_mode(node: &FilterNode, version: u32, extent: Rect, owned: bool) -> Result<u32> {
     let c = node.composition.as_ref().ok_or(CompositionError::Unsupported("missing Box Blur policy"))?;
     let raw = match extent {
         Rect { x0: 0, y0: 0, x1: 16, y1: 12 } => -1474592175,
@@ -14,7 +21,7 @@ pub(crate) fn radius(node: &FilterNode, version: u32, extent: Rect) -> Result<u3
         || node.operation.name != "gegl:box-blur"
         || node.operation.stored_version != "0:0"
         || node.operation.schema_epoch != EPOCH
-        || !node.enabled
+        || (!owned && !node.enabled)
         || node.opacity_f64_bits != 1.0f64.to_bits()
         || node.source_clipping != Some(0)
         || node.source_region != Some(0)

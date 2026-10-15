@@ -6,6 +6,9 @@ pub(crate) const GRAY_EPOCH: &str = "xcf22-gray-alpha-median-v1";
 pub(crate) const COLOR_EPOCH: &str = "xcf22-rgb-alpha-median-v1";
 pub(crate) const EPOCH: &str = "xcf22-rgb-u8-quantized-median-v1";
 pub(crate) fn radius(node: &FilterNode, version: u32, extent: Rect) -> Result<u32> {
+    radius_mode(node,version,extent,false)
+}
+fn radius_mode(node: &FilterNode, version: u32, extent: Rect, owned: bool) -> Result<u32> {
     let c = node.composition.as_ref().ok_or(CompositionError::Unsupported("missing quantized Median Blur policy"))?;
     let color = matches!(node.operation.schema_epoch.as_str(), COLOR_EPOCH | GRAY_EPOCH);
     if extent != if color { Rect::new(0, 0, 16, 12) } else { Rect::new(0, 0, 32, 32) } {
@@ -16,7 +19,7 @@ pub(crate) fn radius(node: &FilterNode, version: u32, extent: Rect) -> Result<u3
         || node.operation.name != "gegl:median-blur"
         || node.operation.stored_version != "0:0"
         || (!color && node.operation.schema_epoch != EPOCH)
-        || !node.enabled
+        || (!owned && !node.enabled)
         || node.opacity_f64_bits != 1.0f64.to_bits()
         || node.source_clipping != Some(0)
         || node.source_region != Some(0)
@@ -65,7 +68,14 @@ pub(crate) fn radius(node: &FilterNode, version: u32, extent: Rect) -> Result<u3
     Ok(radius)
 }
 pub(crate) fn parameters(node: &FilterNode, version: u32, extent: Rect) -> Result<photocraft_algo::gimp::neighborhood::MedianParams> {
-    let radius = radius(node, version, extent)?;
+    parameters_mode(node,version,extent,false)
+}
+/// Owned CURRENT metadata validation retains all exact typed/epoch predicates.
+pub(crate) fn parameters_for_owned(node: &FilterNode, version: u32, extent: Rect) -> Result<photocraft_algo::gimp::neighborhood::MedianParams> {
+    parameters_mode(node,version,extent,true)
+}
+fn parameters_mode(node: &FilterNode, version: u32, extent: Rect, owned:bool) -> Result<photocraft_algo::gimp::neighborhood::MedianParams> {
+    let radius = if owned {radius_mode(node,version,extent,true)?} else {radius(node, version, extent)?};
     Ok(photocraft_algo::gimp::neighborhood::MedianParams {
         radius: radius as i32,
         neighborhood: photocraft_algo::gimp::neighborhood::MedianNeighborhood::Circle,

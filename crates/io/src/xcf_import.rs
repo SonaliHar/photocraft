@@ -2175,7 +2175,14 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
             } else {
                 crate::xcf_filters::NeighborhoodDomain::Unqualified
             };
-            let stack = crate::xcf_filters::qualified_stack(&d.effects, &masks, owner, next_filter_id, file.version, neighborhood_domain)?;
+            let stack = if let Some(domain) = owned_neighborhood_domain {
+                if domain != neighborhood_domain {
+                    return Err(unsupported(d, "owned neighborhood source domain mismatch"));
+                }
+                crate::xcf_filters::qualified_owned_neighborhood_stack(&d.effects, &masks, owner, next_filter_id, file.version, domain)?
+            } else {
+                crate::xcf_filters::qualified_stack(&d.effects, &masks, owner, next_filter_id, file.version, neighborhood_domain)?
+            };
             next_filter_id = next_filter_id
                 .checked_add(u64::try_from(stack.nodes.len()).map_err(|_| unsupported(d, "filter count overflow"))?)
                 .ok_or_else(|| unsupported(d, "filter identity overflow"))?;

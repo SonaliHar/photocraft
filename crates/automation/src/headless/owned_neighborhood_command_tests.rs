@@ -93,9 +93,6 @@ fn eight_neighborhood_sources_use_typed_adoption_and_registered_current_commands
         assert!(h.command_run("xcf.filter.enable", json!({"filterId":id,"enabled":true})).is_err());
         assert!(h.command_run("layer.setProps", json!({"name":"denied"})).is_err());
         h.session.authorize = None;
-        // The initial strict CURRENT neighborhood recipe deliberately keeps
-        // enabled=true; activation does not bypass its original envelope.
-        assert!(h.command_run("xcf.filter.enable", json!({"filterId":id,"enabled":false})).is_err());
         assert!(h.session.active().unwrap().doc.shares_state(&before));
         assert_eq!(h.session.journal.len(), journal);
         assert!(!h.session.has_jobs());
@@ -113,6 +110,19 @@ fn eight_neighborhood_sources_use_typed_adoption_and_registered_current_commands
         let edited = h.session.active().unwrap().doc.clone();
         assert_eq!(edited.xcf_state.as_ref().unwrap().filter_stacks, before.xcf_state.as_ref().unwrap().filter_stacks);
         assert_eq!(native(&h), raw);
+        assert_eq!(h.command_run("xcf.filter.enable", json!({"filterId":id,"enabled":false})).unwrap()["updated"], true);
+        let disabled = h.session.active().unwrap().doc.clone();
+        assert!(!disabled.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].enabled);
+        assert_eq!(native(&h), raw);
+        h.command_run("edit.undo", json!({})).unwrap();
+        assert!(h.session.active().unwrap().doc.shares_state(&edited));
+        let history = h.session.active().unwrap().history.clone();
+        let revision = h.session.active().unwrap().revision;
+        assert_eq!(h.command_run("xcf.filter.enable", json!({"filterId":id,"enabled":true})).unwrap()["updated"], false);
+        assert!(h.session.active().unwrap().history.shares_accounted_history(&history));
+        assert_eq!(h.session.active().unwrap().revision, revision);
+        h.command_run("edit.redo", json!({})).unwrap();
+        assert!(h.session.active().unwrap().doc.shares_state(&disabled));
         let output = dir.0.join("current.pcraft");
         assert!(h.save_owned_native_active(Some(&path), Some("pcraft"), &ctl()).is_err());
         h.save_owned_native_active(Some(&output), Some("pcraft"), &ctl()).unwrap();
@@ -122,12 +132,15 @@ fn eight_neighborhood_sources_use_typed_adoption_and_registered_current_commands
         let current = reopened.session.active().unwrap();
         assert!(current.doc.accounted().unwrap().is_readonly_point_storage());
         assert!(!current.source_read_only);
-        assert_eq!(current.doc.xcf_state, edited.xcf_state);
+        assert_eq!(current.doc.xcf_state, disabled.xcf_state);
         assert_eq!(current.doc.icc_profile, before.icc_profile);
         assert_eq!(current.doc.source_color_context, before.source_color_context);
         assert_eq!(current.doc.working_profile_interpretation, before.working_profile_interpretation);
         assert_eq!(native(&reopened), raw);
-        assert_eq!(reopened.command_run("xcf.filter.enable", json!({"filterId":id,"enabled":true})).unwrap()["updated"], false);
+        assert_eq!(reopened.command_run("xcf.filter.enable", json!({"filterId":id,"enabled":false})).unwrap()["updated"], false);
+        assert_eq!(reopened.command_run("xcf.filter.enable", json!({"filterId":id,"enabled":true})).unwrap()["updated"], true);
+        assert_eq!(native(&reopened), raw);
+        assert_eq!(reopened.session.active().unwrap().doc.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].arguments, node.arguments);
         assert_eq!(std::fs::read(&path).unwrap(), original);
     }
 }
