@@ -286,7 +286,8 @@ fn scaled_wayland_paints_the_brush_outline_instead_of_an_os_bitmap() {
             ui.ctx().set_cursor_icon(icon);
         });
         output.textures_delta.clear();
-        let circles: Vec<_> = output.shapes.iter().filter_map(|s| if let egui::Shape::Circle(c) = &s.shape { Some((c.center, c.radius)) } else { None }).collect();
+        let circles: Vec<_> =
+            output.shapes.iter().filter_map(|s| if let egui::Shape::Circle(c) = &s.shape { Some((c.center, c.radius)) } else { None }).collect();
         (output.platform_output.cursor_image.is_some(), output.platform_output.cursor_icon, circles)
     };
     let ctx = egui::Context::default();
