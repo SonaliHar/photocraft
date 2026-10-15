@@ -110,7 +110,6 @@ pub fn edit_active(app: &mut PhotocraftApp) -> Result<(), String> {
     let st = app.session.active().ok_or("no document open")?;
     let id = st.active_layer.ok_or("no active layer")?;
     let n = text_layer(&st.doc, id).ok_or("active layer is not a type layer")?.text.chars().count();
-    let previous_tool = app.ui.tool;
     if app.ui.text_edit.as_ref().is_none_or(|ed| ed.layer != id.0) {
         commit(app);
         let key = session_key(app);
@@ -122,9 +121,7 @@ pub fn edit_active(app: &mut PhotocraftApp) -> Result<(), String> {
         ed.caret = n;
     }
     let vertical = app.session.active().and_then(|st| text_layer(&st.doc, id)).is_some_and(|t| t.orientation == photocraft_doc::text::Orientation::Vertical);
-    if !previous_tool.is_type() {
-        app.ui.text_edit_return_tool = Some(previous_tool);
-    }
+    app.ui.text_edit_return_tool = None;
     app.ui.tool = if vertical { crate::state::Tool::VerticalType } else { crate::state::Tool::Type };
     app.ui.mask_target = false;
     app.ui.vector_mask_target = false;
@@ -783,6 +780,7 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     let id = LayerId(ed.layer);
     let Some(text) = current_text(app, id) else {
         app.ui.text_edit = None;
+        app.ui.text_edit_return_tool = None;
         return false;
     };
     // Undo/redo can shorten the text under us.
@@ -970,7 +968,9 @@ pub fn commit_with(app: &mut PhotocraftApp, mods: egui::Modifiers) {
     }
     crate::type_transform::reset(app);
     let Some(ed) = app.ui.text_edit.take() else { return };
-    if let Some(tool) = app.ui.text_edit_return_tool.take() {
+    if let Some(tool) = app.ui.text_edit_return_tool.take()
+        && app.ui.tool.is_type()
+    {
         app.ui.tool = tool;
     }
     let Some(text) = current_text(app, LayerId(ed.layer)) else { return };
@@ -2372,7 +2372,9 @@ fn type_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 pub fn cancel(app: &mut PhotocraftApp) {
     crate::type_transform::reset(app);
     let Some(ed) = app.ui.text_edit.take() else { return };
-    if let Some(tool) = app.ui.text_edit_return_tool.take() {
+    if let Some(tool) = app.ui.text_edit_return_tool.take()
+        && app.ui.tool.is_type()
+    {
         app.ui.tool = tool;
     }
     undo_session(app, &ed);
@@ -2683,5 +2685,23 @@ mod tests {
         cancel(&mut app);
         assert_eq!(app.ui.tool, crate::state::Tool::Move, "cancel restores the Move tool");
         assert_eq!(app.ui.text_edit_return_tool, None);
+
+        // Switching tools mid-edit commits without overriding the newly chosen tool
+        app.ui.tool = crate::state::Tool::Move;
+        assert!(edit_at(&mut app, ON_TEXT.0, ON_TEXT.1));
+        assert_eq!(app.ui.tool, crate::state::Tool::Type);
+        assert_eq!(app.ui.text_edit_return_tool, Some(crate::state::Tool::Move));
+        app.ui.tool = crate::state::Tool::Brush;
+        commit(&mut app);
+        assert_eq!(app.ui.tool, crate::state::Tool::Brush, "switching tools keeps the chosen tool");
+        assert_eq!(app.ui.text_edit_return_tool, None);
+
+        // Layers-thumbnail edit stays on Type tool (matches Photoshop)
+        app.ui.tool = crate::state::Tool::Move;
+        edit_active(&mut app).unwrap();
+        assert_eq!(app.ui.tool, crate::state::Tool::Type);
+        assert_eq!(app.ui.text_edit_return_tool, None);
+        commit(&mut app);
+        assert_eq!(app.ui.tool, crate::state::Tool::Type, "Layers-thumbnail edit stays on Type tool");
     }
 }
