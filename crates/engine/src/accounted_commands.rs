@@ -276,18 +276,19 @@ struct Census {
     nodes: usize,
     envelope: u64,
     // Only exact closed filter wires gain their own bounded depth: scalar5
-    // Signed32 depth6 or literal Point Color7. Unrelated values retain depth4.
+    // Signed32 depth6, Color7, FREE256 config9 or ordered Levels/CB config11.
+    // Unrelated values retain depth4; structured scans use the same control.
     depth_extra: usize,
 }
 impl Census {
     fn command_value(&mut self, id: &str, value: &Value, control: &ReadControl<'_>) -> Result<()> {
-        self.depth_extra = threshold_alpha::journal_depth(id, value).max(threshold::journal_depth(id, value)).max(point::journal_depth(id, value)).saturating_sub(MAX_DEPTH);
+        self.depth_extra = threshold_alpha::journal_depth(id, value).max(threshold::journal_depth(id, value)).max(point::journal_depth_controlled(id, value, control)?).saturating_sub(MAX_DEPTH);
         let result = self.value(value, 0, control);
         self.depth_extra = 0;
         result
     }
     fn retained_command_value(&mut self, id: &str, value: &Value, control: &ReadControl<'_>) -> Result<()> {
-        self.depth_extra = threshold_alpha::journal_depth(id, value).max(threshold::journal_depth(id, value)).max(point::journal_depth(id, value)).saturating_sub(MAX_DEPTH);
+        self.depth_extra = threshold_alpha::journal_depth(id, value).max(threshold::journal_depth(id, value)).max(point::journal_depth_controlled(id, value, control)?).saturating_sub(MAX_DEPTH);
         let result = self.retained_value(value, 0, control);
         self.depth_extra = 0;
         result

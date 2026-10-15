@@ -58,6 +58,26 @@ impl Walk<'_, '_> {
         }
         Ok(())
     }
+    fn arguments(&mut self, arguments: &Vec<photocraft_doc::xcf_filters::FilterArgument>, depth: usize) -> Result<(), IoError> {
+        use photocraft_doc::xcf_filters::{FilterArgument, FilterValue};
+        if depth > 2 { return Err(invalid("owned Point argument depth")); }
+        self.vector(arguments)?;
+        for FilterArgument { name, value } in arguments {
+            self.string(name)?;
+            match value {
+                FilterValue::Enum { domain, .. } => self.string(domain)?,
+                FilterValue::Color { components, .. } => self.vector(components)?,
+                FilterValue::Config(fields) => self.arguments(fields, depth + 1)?,
+                FilterValue::Curve { points_f64_bits, point_types, samples_f64_bits, .. } => {
+                    self.vector(points_f64_bits)?;
+                    self.vector(point_types)?;
+                    self.vector(samples_f64_bits)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
     fn composition(&mut self, v: &Option<photocraft_doc::import_compositing::GimpComposition>) -> Result<(), IoError> {
         if let Some(v) = v {
             self.string(&v.compatibility_epoch)?;
@@ -444,7 +464,7 @@ fn histogram_threshold_shape(doc: &Document) -> Result<(), IoError> {
     Ok(())
 }
 fn threshold_storage(state: &photocraft_doc::XcfState, w: &mut Walk<'_, '_>, control: &Interrupt<'_>) -> Result<(), IoError> {
-    use photocraft_doc::xcf_filters::{FilterArgument, FilterNode, FilterStack, OperationIdentity};
+    use photocraft_doc::xcf_filters::{FilterNode, FilterStack, OperationIdentity};
     for FilterStack { owner: _, nodes, revision: _ } in &state.filter_stacks {
         w.vector(nodes)?;
         for FilterNode {
@@ -467,20 +487,9 @@ fn threshold_storage(state: &photocraft_doc::XcfState, w: &mut Walk<'_, '_>, con
             w.string(schema_epoch)?;
             w.optional(source_display_name)?;
             w.optional(source_icon)?;
-            w.vector(arguments)?;
-            for FilterArgument { name, value } in arguments {
-                w.string(name)?;
-                if let photocraft_doc::xcf_filters::FilterValue::Enum { domain, value: _ } = value {
-                    w.string(domain)?;
-                }
-                if let photocraft_doc::xcf_filters::FilterValue::Color { components, .. } = value {
-                    // Only the separate Point shape admits Color here: exactly
-                    // four inline Float32 words, nonlinear and no profile owner.
-                    // Original Threshold shape gates still reject every Color.
-                    w.vector(components)?;
-                }
-            }
-            // Closed shapes admit inline values, bounded Point Color components, and zero aux.
+            // The separate Point shape validates the shared bounded tree.
+            // Threshold shapes still only admit their original inline values.
+            w.arguments(arguments, 0)?;
             w.vector(auxiliary)?;
             w.composition(composition)?;
         }

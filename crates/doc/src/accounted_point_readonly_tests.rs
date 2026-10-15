@@ -169,6 +169,8 @@ pub(super) fn owned(sample: SampleType, encoding: SampleEncoding, precision: u32
 
 #[path = "accounted_point_readonly_patch_tests.rs"]
 mod patch_tests;
+#[path = "accounted_point_readonly_structured_patch_tests.rs"]
+mod structured_patch_tests;
 #[test]
 fn all_canonical_depths_and_encodings_keep_literal_half_correspondence_and_distinct_bounds() {
     for (sample, precisions) in [
@@ -257,7 +259,10 @@ fn wrong_quota_layout_precision_mask_ids_and_nested_or_oversized_arguments_refus
             4 => doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0]
                 .arguments
                 .push(FilterArgument { name: "eleventh".into(), value: FilterValue::Bool(true) }),
-            5 => doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].arguments[0].value = FilterValue::Config(Vec::new()),
+            5 => {
+                doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].arguments[0].value =
+                    FilterValue::Config(vec![FilterArgument { name: "too-many-children".into(), value: FilterValue::Bool(false) }; 6])
+            }
             6 => doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].opacity_f64_bits = 0.5f64.to_bits(),
             7 => doc.xcf_state.as_mut().unwrap().filter_masks[0].surface.try_tile_mut(TileCoord::new(2, 0)).map(|_| ()).unwrap(),
             _ => {}

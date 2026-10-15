@@ -56,6 +56,7 @@ pub(crate) struct OrderedStack {
     integer_point_storage: Option<u64>,
     current_point_sample: Option<photocraft_color::SampleType>,
     filter_output_precision: photocraft_doc::FilterOutputPrecision,
+    stock_disabled:bool,
 }
 /// Conservative capacity for one scalar stage/space per source node. Scalar
 /// PointStack ownership and analytic profile clones are charged separately.
@@ -64,6 +65,16 @@ pub(crate) fn scalar_preparation_bytes(nodes: usize) -> Result<u64> {
         .checked_mul(std::mem::size_of::<Stage>() + std::mem::size_of::<WorkingSpace>())
         .ok_or(CompositionError::Invalid("ordered preparation size overflow"))?;
     u64::try_from(bytes).map_err(|_| CompositionError::Invalid("ordered preparation size overflow"))
+}
+/// Exact sealed configured box/temporary envelopes, separate from stage Vecs.
+pub(crate) fn stock_configured_preparation_bytes(name:&str)->Result<u64> {
+    let bytes=match name {
+        "gimp:curves"=>std::mem::size_of::<crate::gimp_curves::CurvesNode>().checked_mul(3).and_then(|v|v.checked_add(5*512*8+5*std::mem::size_of::<Vec<f64>>())),
+        "gimp:levels"=>std::mem::size_of::<crate::gimp_levels::LevelsNode>().checked_add(65536),
+        "gimp:color-balance"=>std::mem::size_of::<crate::gimp_color_balance::ColorBalanceNode>().checked_add(65536),
+        _=>return Err(CompositionError::Unsupported("stock configured preparation")),
+    }.ok_or(CompositionError::Invalid("stock configured envelope"))?;
+    u64::try_from(bytes).map_err(|_|CompositionError::Invalid("stock configured envelope"))
 }
 impl OrderedStack {
     /// Actual Vec capacities for the scalar-only preparation class. Complex
@@ -117,6 +128,17 @@ impl OrderedStack {
         let mut spaces = Vec::new();
         spaces.try_reserve_exact(source.nodes.len()).map_err(|_| CompositionError::Invalid("ordered space allocation denied"))?;
         stages.try_reserve_exact(source.nodes.len()).map_err(|_| CompositionError::Invalid("ordered preparation allocation denied"))?;
+        if stock && source.nodes.first().is_some_and(|n|matches!(n.operation.name.as_str(),"gimp:curves"|"gimp:levels"|"gimp:color-balance")) {
+            let [node]=source.nodes.as_slice() else {return Err(CompositionError::Unsupported("stock configured singleton"))};
+            let stage=match node.operation.name.as_str() {
+                "gimp:curves"=>Stage::Curves(Box::new(crate::gimp_curves::CurvesNode::new_with_interrupt(node,version,control)?)),
+                "gimp:levels"=>Stage::Levels(Box::new(crate::gimp_levels::LevelsNode::new_with_interrupt(node,profile,stored,version,control)?)),
+                "gimp:color-balance"=>Stage::ColorBalance(Box::new(crate::gimp_color_balance::ColorBalanceNode::new_with_interrupt(node,profile,stored,version,control)?)),
+                _=>return Err(CompositionError::Unsupported("stock configured stage")),
+            };
+            stages.push(stage);
+            return Ok(Self {stages,extent,output_extent,spaces,integer_point_storage:None,current_point_sample:None,filter_output_precision:photocraft_doc::FilterOutputPrecision::Canonical,stock_disabled:!node.enabled});
+        }
         if stock || source
             .nodes
             .iter()
@@ -137,6 +159,7 @@ impl OrderedStack {
                 integer_point_storage: None,
                 current_point_sample: None,
                 filter_output_precision: photocraft_doc::FilterOutputPrecision::Canonical,
+                stock_disabled:false,
             });
         }
         if source.nodes.iter().any(|node| node.operation.schema_epoch == crate::gimp_filters::STACK_EDITS_EPOCH) {
@@ -155,6 +178,7 @@ impl OrderedStack {
                 integer_point_storage: None,
                 current_point_sample: None,
                 filter_output_precision: photocraft_doc::FilterOutputPrecision::Canonical,
+                stock_disabled:false,
             });
         }
         for node in source.nodes.iter().filter(|n| n.enabled) {
@@ -239,16 +263,18 @@ impl OrderedStack {
             integer_point_storage: None,
             current_point_sample: None,
             filter_output_precision: photocraft_doc::FilterOutputPrecision::Canonical,
+                stock_disabled:false,
         })
     }
     pub(crate) fn stock_retained_bytes(&self)->Result<u64> {
         let own=self.stages.capacity().checked_mul(std::mem::size_of::<Stage>()).and_then(|n|self.spaces.capacity().checked_mul(std::mem::size_of::<WorkingSpace>()).and_then(|v|n.checked_add(v))).ok_or(CompositionError::Invalid("stock ordered capacity"))? as u64;
-        let [Stage::Point(point)]=self.stages.as_slice() else { return Err(CompositionError::Unsupported("stock singleton point stage")); };
-        own.checked_add(point.stock_retained_bytes()?).ok_or(CompositionError::Invalid("stock ordered capacity"))
+        let [stage]=self.stages.as_slice() else {return Err(CompositionError::Unsupported("stock singleton stage"))};
+        let payload=match stage {Stage::Point(point)=>point.stock_retained_bytes()?,Stage::Curves(node)=>node.stock_retained_bytes(),Stage::Levels(node)=>node.stock_retained_bytes(),Stage::ColorBalance(node)=>node.stock_retained_bytes(),_=>return Err(CompositionError::Unsupported("stock retained stage"))};
+        own.checked_add(payload).ok_or(CompositionError::Invalid("stock ordered capacity"))
     }
     pub(crate) fn validate_stock_input(&self,position:(i32,i32),pixel:[f64;4],control:&Interrupt<'_>,poll:&mut impl FnMut(WideWork)->Result<()>)->Result<()> {
-        let [Stage::Point(point)]=self.stages.as_slice() else { return Err(CompositionError::Unsupported("stock singleton point stage")); };
-        point.validate_stock_input(position,pixel,control,poll)
+        let [stage]=self.stages.as_slice() else {return Err(CompositionError::Unsupported("stock singleton stage"))};
+        match stage {Stage::Point(point)=>point.validate_stock_input(position,pixel,control,poll),Stage::Curves(node)=>node.validate_stock_input(pixel,poll),Stage::Levels(node)=>node.validate_stock_input(pixel,poll),Stage::ColorBalance(node)=>node.validate_stock_input(pixel,poll),_=>Err(CompositionError::Unsupported("stock input stage"))}
     }
     /// The qualified U8/U32 point source writes an integer drawable buffer before
     /// layer composition. Round stored colors at that boundary, preserving
@@ -325,6 +351,7 @@ impl OrderedStack {
         self.point_with(pixel, None, poll)
     }
     fn point_with(&self, mut pixel: [f64; 4], position: Option<(i32, i32)>, poll: &mut impl FnMut(WideWork) -> Result<()>) -> Result<[f64; 4]> {
+        if self.stock_disabled {return Ok(pixel)}
         for stage in &self.stages {
             pixel = match stage {
                 Stage::Point(point) => {
@@ -1072,6 +1099,7 @@ mod gray_scratch_tests {
             integer_point_storage: None,
             current_point_sample: None,
             filter_output_precision: photocraft_doc::FilterOutputPrecision::Canonical,
+                stock_disabled:false,
         };
         // A Levels result this small must become zero in the U8 buffer before
         // nonlinear display conversion. Coverage remains the original sample.
@@ -1093,6 +1121,7 @@ mod gray_scratch_tests {
             integer_point_storage: None,
             current_point_sample: None,
             filter_output_precision: photocraft_doc::FilterOutputPrecision::Canonical,
+                stock_disabled:false,
         };
         let input = [-0.125, 1.125, 0.25 / 4294967295.0, -0.0];
         assert_eq!(wide.stored_point_result(input, false), input);

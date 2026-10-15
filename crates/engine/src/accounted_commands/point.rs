@@ -9,6 +9,8 @@ use photocraft_doc::{
 };
 
 pub(super) const REPLY_ENVELOPE: u64 = 8192;
+#[path = "point_structured.rs"]
+mod structured;
 #[derive(Clone, Copy)]
 struct Argument<'a> {
     name: &'a str,
@@ -21,6 +23,67 @@ struct Fields<'a> {
     arguments: [Option<Argument<'a>>; 10],
     count: usize,
     enabled: Option<bool>,
+}
+
+fn flat_value(v: &serde_json::Map<String, Value>) -> Option<(PointArgumentValue, Option<&str>)> {
+    if v.len() != 1 {
+        return None;
+    }
+    let result = if let Some(n) = v.get("Number") {
+        let n = n.as_object()?;
+        if n.len() != 1 {
+            return None;
+        }
+        if let Some(signed) = n.get("Signed") {
+            let signed = signed.as_object()?;
+            if signed.len() != 2 || signed.get("width")?.as_u64()? != 32 {
+                return None;
+            }
+            (PointArgumentValue::Signed32(i32::try_from(signed.get("value")?.as_i64()?).ok()?), None)
+        } else {
+            let bits = u32::try_from(n.get("Float32Bits")?.as_u64()?).ok()?;
+            if !f32::from_bits(bits).is_finite() {
+                return None;
+            }
+            (PointArgumentValue::Float32Bits(bits), None)
+        }
+    } else if let Some(color) = v.get("Color") {
+        let color = color.as_object()?;
+        if color.len() != 3 || color.get("encoding")?.as_str()? != "nonlinear_profile" || !color.get("profile")?.is_null() {
+            return None;
+        }
+        let components = color.get("components")?.as_array()?;
+        if components.len() != 4 {
+            return None;
+        }
+        let mut words = [0; 4];
+        for (word, component) in words.iter_mut().zip(components) {
+            let component = component.as_object()?;
+            if component.len() != 1 {
+                return None;
+            }
+            let bits = u32::try_from(component.get("Float32Bits")?.as_u64()?).ok()?;
+            let value = f32::from_bits(bits);
+            if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                return None;
+            }
+            *word = bits;
+        }
+        (PointArgumentValue::Color4F32(words), None)
+    } else if let Some(v) = v.get("Bool") {
+        (PointArgumentValue::Bool(v.as_bool()?), None)
+    } else {
+        let e = v.get("Enum")?.as_object()?;
+        if e.len() != 2 {
+            return None;
+        }
+        let domain = e.get("domain")?.as_str()?;
+        if domain.is_empty() || domain.len() > 256 || domain.as_bytes().contains(&0) {
+            return None;
+        }
+        (PointArgumentValue::Enum(i32::try_from(e.get("value")?.as_i64()?).ok()?), Some(domain))
+    };
+    Some(result)
 }
 
 // This is a bounded borrowed wire check, not operation or source eligibility.
@@ -63,64 +126,7 @@ fn wire<'a>(id: &str, params: &'a Value) -> Option<Fields<'a>> {
             if name.is_empty() || name.len() > 128 || name.as_bytes().contains(&0) || arguments.iter().flatten().any(|v: &Argument<'_>| v.name == name) {
                 return None;
             }
-            let v = a.get("value")?.as_object()?;
-            if v.len() != 1 {
-                return None;
-            }
-            let (value, domain) = if let Some(n) = v.get("Number") {
-                let n = n.as_object()?;
-                if n.len() != 1 {
-                    return None;
-                }
-                if let Some(signed) = n.get("Signed") {
-                    let signed = signed.as_object()?;
-                    if signed.len() != 2 || signed.get("width")?.as_u64()? != 32 {
-                        return None;
-                    }
-                    (PointArgumentValue::Signed32(i32::try_from(signed.get("value")?.as_i64()?).ok()?), None)
-                } else {
-                    let bits = u32::try_from(n.get("Float32Bits")?.as_u64()?).ok()?;
-                    if !f32::from_bits(bits).is_finite() {
-                        return None;
-                    }
-                    (PointArgumentValue::Float32Bits(bits), None)
-                }
-            } else if let Some(color) = v.get("Color") {
-                let color = color.as_object()?;
-                if color.len() != 3 || color.get("encoding")?.as_str()? != "nonlinear_profile" || !color.get("profile")?.is_null() {
-                    return None;
-                }
-                let components = color.get("components")?.as_array()?;
-                if components.len() != 4 {
-                    return None;
-                }
-                let mut words = [0; 4];
-                for (word, component) in words.iter_mut().zip(components) {
-                    let component = component.as_object()?;
-                    if component.len() != 1 {
-                        return None;
-                    }
-                    let bits = u32::try_from(component.get("Float32Bits")?.as_u64()?).ok()?;
-                    let value = f32::from_bits(bits);
-                    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
-                        return None;
-                    }
-                    *word = bits;
-                }
-                (PointArgumentValue::Color4F32(words), None)
-            } else if let Some(v) = v.get("Bool") {
-                (PointArgumentValue::Bool(v.as_bool()?), None)
-            } else {
-                let e = v.get("Enum")?.as_object()?;
-                if e.len() != 2 {
-                    return None;
-                }
-                let domain = e.get("domain")?.as_str()?;
-                if domain.is_empty() || domain.len() > 256 || domain.as_bytes().contains(&0) {
-                    return None;
-                }
-                (PointArgumentValue::Enum(i32::try_from(e.get("value")?.as_i64()?).ok()?), Some(domain))
-            };
+            let (value, domain) = flat_value(a.get("value")?.as_object()?)?;
             *arguments.get_mut(count)? = Some(Argument { name, value, domain });
             count += 1;
         }
@@ -130,7 +136,7 @@ fn wire<'a>(id: &str, params: &'a Value) -> Option<Fields<'a>> {
     }
     Some(Fields { filter, arguments, count, enabled })
 }
-pub(super) fn journal_depth(id: &str, params: &Value) -> usize {
+pub(super) fn flat_journal_depth(id: &str, params: &Value) -> usize {
     if id != "xcf.filter.set" {
         return 4;
     }
@@ -150,10 +156,23 @@ pub(super) fn journal_depth(id: &str, params: &Value) -> usize {
     }
 }
 
+#[cfg(test)]
+pub(super) fn journal_depth(id: &str, params: &Value) -> usize {
+    journal_depth_controlled(id, params, &crate::read_control_none()).unwrap_or(4)
+}
+pub(super) fn journal_depth_controlled(id: &str, params: &Value, control: &ReadControl<'_>) -> Result<usize> {
+    let flat = flat_journal_depth(id, params);
+    if flat > 4 || id != "xcf.filter.set" {
+        return Ok(flat);
+    }
+    Ok(structured::preflight(id, params, control)?.map_or(4, |p| p.depth))
+}
+
 pub(super) struct Request<'a> {
     id: &'static str,
     params: &'a Value,
     fields: Fields<'a>,
+    structured: Option<structured::Plan>,
 }
 impl<'a> Request<'a> {
     pub(super) fn parse(session: &Session, id: &str, params: &'a Value, ctl: &ReadControl<'_>) -> Result<Self> {
@@ -163,19 +182,22 @@ impl<'a> Request<'a> {
             "xcf.filter.enable" => "xcf.filter.enable",
             _ => return Err(BackingError::Unsupported.into()),
         };
-        let fields = wire(id, params).ok_or_else(|| {
-            bad(id, "accounted Point supports at most ten existing flat Float32, signed32, Bool, Enum or exact literal Color patches, activation, and exact opacity one")
-        })?;
+        let (fields, structured) = if let Some(fields) = wire(id, params) {
+            (fields, None)
+        } else {
+            let plan = structured::preflight(id, params, ctl)?.ok_or_else(|| bad(id, "unsupported bounded Point patch wire"))?;
+            (Fields { filter: plan.filter, arguments: [None; 10], count: 0, enabled: plan.enabled }, Some(plan))
+        };
         // The closed shape has at most four fixed keys and ten bounded typed patches,
         // bounded identity digits and opacity characters. Price its
         // repeated upstream wire/identity checks before invoking those helpers.
-        ctl.check(32768)?;
+        ctl.check(structured.map_or(Ok(32768), |plan| plan.helper_work())?)?;
         crate::xcf_filter_cmds::pre_dispatch_set_change(session, id, params, false)?;
         // Preserve the upstream canonical identity parser as the command authority.
         if crate::xcf_filter_cmds::id(id, params)? != fields.filter {
             return Err(BackingError::Integrity.into());
         }
-        Ok(Self { id, params, fields })
+        Ok(Self { id, params, fields, structured })
     }
     pub(super) fn prepare(self, session: &Session, ctl: &ReadControl<'_>) -> Result<Prepared<'a>> {
         let state = session.active().ok_or(EngineError::NoDocument)?;
@@ -240,37 +262,63 @@ impl<'a> Request<'a> {
         validate_recipe(owner, ctl)?;
         // Fixed stack storage retains the original argument names and enum domains.
         // No parser proxy or per-operation arithmetic is reconstructed here.
-        let mut patches = [PointArgumentPatch { name: "", value: PointArgumentValue::Bool(false) }; 10];
-        for (index, argument) in self.fields.arguments.iter().take(self.fields.count).enumerate() {
-            let argument = argument.as_ref().ok_or(BackingError::Integrity)?;
-            ctl.check(4096)?;
-            let stored = node.arguments.iter().find(|v| v.name == argument.name).ok_or(BackingError::Unsupported)?;
-            use photocraft_doc::xcf_filters::{ExactNumber, FilterValue};
-            match (&stored.value, argument.value, argument.domain) {
-                (FilterValue::Number(ExactNumber::Signed { width: 32, value }), PointArgumentValue::Signed32(_), None) if i32::try_from(*value).is_ok() => {}
-                (FilterValue::Number(ExactNumber::Float32Bits(_)), PointArgumentValue::Float32Bits(_), None)
-                | (FilterValue::Bool(_), PointArgumentValue::Bool(_), None) => {}
-                (FilterValue::Enum { domain, .. }, PointArgumentValue::Enum(_), Some(requested)) if domain == requested => {}
-                (
-                    FilterValue::Color { components, encoding: photocraft_doc::SampleEncoding::NonlinearProfile, profile: None },
-                    PointArgumentValue::Color4F32(_),
-                    None,
-                ) if components.len() == 4 && components.iter().all(|c| matches!(c, ExactNumber::Float32Bits(_))) => {}
-                _ => return Err(BackingError::Unsupported.into()),
+        let staged = if let Some(plan) = self.structured {
+            let temporary = structured::Temporary::parse(self.params, &node.operation.name, plan, owner.quota(), ctl)?;
+            let sentinel = photocraft_doc::xcf_filters::FilterValue::Bool(false);
+            let mut patches = [photocraft_doc::accounted_document::PointStructuredArgumentPatch { name: "", value: &sentinel }; 10];
+            for (slot, argument) in patches.iter_mut().zip(temporary.arguments()) {
+                *slot = photocraft_doc::accounted_document::PointStructuredArgumentPatch { name: &argument.name, value: &argument.value };
             }
-            *patches.get_mut(index).ok_or(BackingError::Integrity)? = PointArgumentPatch { name: argument.name, value: argument.value };
+            let staged = owner.try_with_readonly_point_structured_filter(
+                photocraft_doc::accounted_document::PointStructuredFilterPatch {
+                    layer,
+                    filter: self.fields.filter,
+                    expected_stack_revision: stack.revision,
+                    arguments: patches.get(..temporary.arguments().len()).ok_or(BackingError::Integrity)?,
+                    enabled: self.fields.enabled,
+                },
+                ctl,
+            )?;
+            validate_recipe(&staged, ctl)?;
+            drop(temporary);
+            staged
+        } else {
+            let mut patches = [PointArgumentPatch { name: "", value: PointArgumentValue::Bool(false) }; 10];
+            for (index, argument) in self.fields.arguments.iter().take(self.fields.count).enumerate() {
+                let argument = argument.as_ref().ok_or(BackingError::Integrity)?;
+                ctl.check(4096)?;
+                let stored = node.arguments.iter().find(|v| v.name == argument.name).ok_or(BackingError::Unsupported)?;
+                use photocraft_doc::xcf_filters::{ExactNumber, FilterValue};
+                match (&stored.value, argument.value, argument.domain) {
+                    (FilterValue::Number(ExactNumber::Signed { width: 32, value }), PointArgumentValue::Signed32(_), None) if i32::try_from(*value).is_ok() => {
+                    }
+                    (FilterValue::Number(ExactNumber::Float32Bits(_)), PointArgumentValue::Float32Bits(_), None)
+                    | (FilterValue::Bool(_), PointArgumentValue::Bool(_), None) => {}
+                    (FilterValue::Enum { domain, .. }, PointArgumentValue::Enum(_), Some(requested)) if domain == requested => {}
+                    (
+                        FilterValue::Color { components, encoding: photocraft_doc::SampleEncoding::NonlinearProfile, profile: None },
+                        PointArgumentValue::Color4F32(_),
+                        None,
+                    ) if components.len() == 4 && components.iter().all(|c| matches!(c, ExactNumber::Float32Bits(_))) => {}
+                    _ => return Err(BackingError::Unsupported.into()),
+                }
+                *patches.get_mut(index).ok_or(BackingError::Integrity)? = PointArgumentPatch { name: argument.name, value: argument.value };
+            }
+            let staged = owner.try_with_readonly_point_filter(
+                PointFilterPatch {
+                    layer,
+                    filter: self.fields.filter,
+                    expected_stack_revision: stack.revision,
+                    arguments: patches.get(..self.fields.count).ok_or(BackingError::Integrity)?,
+                    enabled: self.fields.enabled,
+                },
+                ctl,
+            )?;
+            staged
+        };
+        if self.structured.is_none() {
+            validate_recipe(&staged, ctl)?;
         }
-        let staged = owner.try_with_readonly_point_filter(
-            PointFilterPatch {
-                layer,
-                filter: self.fields.filter,
-                expected_stack_revision: stack.revision,
-                arguments: patches.get(..self.fields.count).ok_or(BackingError::Integrity)?,
-                enabled: self.fields.enabled,
-            },
-            ctl,
-        )?;
-        validate_recipe(&staged, ctl)?;
         let updated = !staged.shares_model(owner);
         let mut history = state.history.clone();
         let snapshot = if updated {
@@ -388,7 +436,7 @@ pub(super) struct Prepared<'a> {
 }
 impl Prepared<'_> {
     pub(super) fn execute(self, session: &mut Session, ctl: &ReadControl<'_>) -> Result<Value> {
-        ctl.check(32768)?;
+        ctl.check(self.request.structured.map_or(Ok(32768), |plan| plan.helper_work())?)?;
         crate::xcf_filter_cmds::pre_dispatch_set_change(session, self.request.id, self.request.params, false)?;
         let state = session.active().ok_or(EngineError::NoDocument)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;

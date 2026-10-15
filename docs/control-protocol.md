@@ -493,6 +493,16 @@ uses `.pcraft`; the original XCF stays read-only. These command paths are
 synchronous and use the existing transport authorization and cumulative work
 limit.
 
+The same qualified Point path accepts the existing Color Balance, Levels and
+FREE Curves configuration shapes. `xcf.filter.set` preserves their nested
+Config field names and order, exact Float64 hexadecimal words and existing
+Curve array shapes. FREE Curves retain five channels of 256 samples; aggregate
+F64 input is capped at 1280 words before temporary conversion. Changes to the
+stored shape, unknown fields and nonfinite operative numbers refuse. Paid
+`xcf.filter.inspect` returns the complete configuration, including exact raw
+words, under its own bounded reply owner. Original source/precision/profile
+qualification and complete current/staged validation remain mandatory.
+
 For explicit owned native reopen, use exactly `{"path":"current.pcraft","nativeProfilePolicy":"keepCurrent"}`
 with `doc.open` or MCP `doc_open`. Exactly one profile policy is permitted; both together,
 null/unknown values, extra explicit fields and mismatched suffixes refuse before job

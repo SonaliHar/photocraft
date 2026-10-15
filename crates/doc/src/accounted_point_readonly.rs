@@ -12,6 +12,12 @@ use photocraft_raster::Surface;
 #[path = "accounted_point_readonly_patch.rs"]
 mod patch;
 pub use patch::{PointArgumentPatch, PointArgumentValue, PointFilterPatch};
+#[path = "accounted_point_readonly/structured.rs"]
+mod structured;
+pub use structured::{PointArgumentShape, point_argument_shape, point_argument_shape_with, point_value_shape, point_values_equal, point_values_same_shape};
+#[path = "accounted_point_readonly_structured_patch.rs"]
+mod structured_patch;
+pub use structured_patch::{PointStructuredArgumentPatch, PointStructuredFilterPatch};
 #[path = "accounted_point_readonly/properties.rs"]
 mod properties;
 pub(super) fn layer_named(owner: &AccountedDocument, patch: ReadonlyLayerNamePatch<'_>, control: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
@@ -104,20 +110,7 @@ fn node_shape(node: &FilterNode, control: &ReadControl<'_>) -> Result<(), Backin
     {
         return refused();
     }
-    for argument in &node.arguments {
-        control.check(1)?;
-        if argument.name.is_empty() || argument.name.len() > 4096 {
-            return refused();
-        }
-        match &argument.value {
-            FilterValue::Number(ExactNumber::Float32Bits(_)) | FilterValue::Bool(_) => {}
-            FilterValue::Number(ExactNumber::Signed { width: 32, value }) if i32::try_from(*value).is_ok() => {}
-            FilterValue::Enum { domain, .. } if !domain.is_empty() && domain.len() <= 4096 => {}
-            FilterValue::Color { components, encoding: crate::SampleEncoding::NonlinearProfile, profile: None }
-                if components.len() == 4 && components.iter().all(|value| matches!(value, ExactNumber::Float32Bits(_))) => {}
-            _ => return refused(),
-        }
-    }
+    point_argument_shape(&node.arguments, control)?;
     Ok(())
 }
 
@@ -386,29 +379,7 @@ fn copy_node(node: &FilterNode, control: &ReadControl<'_>) -> Result<FilterNode,
     }
     for argument in &node.arguments {
         control.check(1)?;
-        let value = match &argument.value {
-            FilterValue::Number(ExactNumber::Float32Bits(bits)) => FilterValue::Number(ExactNumber::Float32Bits(*bits)),
-            FilterValue::Number(ExactNumber::Signed { width: 32, value }) if i32::try_from(*value).is_ok() => {
-                FilterValue::Number(ExactNumber::Signed { width: 32, value: *value })
-            }
-            FilterValue::Bool(value) => FilterValue::Bool(*value),
-            FilterValue::Enum { domain, value } => FilterValue::Enum { domain: imported_edits::copy_name(domain, control)?, value: *value },
-            FilterValue::Color { components, encoding, profile } => {
-                // node_shape fixed the exact four raw words and independent
-                // encoding/profile tags. No color conversion or normalization.
-                let mut copied = Vec::new();
-                copied.try_reserve_exact(components.len()).map_err(|_| BackingError::Allocation)?;
-                if copied.capacity() > components.len().checked_mul(2).ok_or(BackingError::Length)? {
-                    return Err(BackingError::Allocation);
-                }
-                for value in components {
-                    control.check(1)?;
-                    copied.push(value.clone());
-                }
-                FilterValue::Color { components: copied, encoding: *encoding, profile: *profile }
-            }
-            _ => return refused(),
-        };
+        let value = structured::copy_value(&argument.value, control)?;
         arguments.push(FilterArgument { name: imported_edits::copy_name(&argument.name, control)?, value });
     }
     let old = node.composition.as_ref().ok_or(BackingError::Integrity)?;
@@ -450,6 +421,7 @@ pub(super) enum CopyKind<'a> {
     LayerName(ReadonlyLayerNamePatch<'a>),
     LayerProperties(readonly_layer_properties::Plan<'a>),
     Filter(patch::Plan),
+    Structured(structured_patch::Plan<'a>),
 }
 pub(super) fn renamed(owner: &AccountedDocument, name: &str, control: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
     imported_edits::validate_name(name, control)?;
@@ -475,18 +447,28 @@ pub(super) fn current_copy(
         CopyKind::Rename(name) => name.len() as u64,
         CopyKind::LayerName(patch) => (patch.name.len() as u64).checked_mul(2).ok_or(BackingError::Length)?,
         CopyKind::LayerProperties(plan) => plan.replacement_name_bytes()?,
-        CopyKind::Filter(_) => 0,
+        CopyKind::Filter(_) | CopyKind::Structured(_) => 0,
+    };
+    let replacement_value_bytes = match kind {
+        CopyKind::Structured(plan) => plan.copy_index_bytes(),
+        _ => 0,
     };
     let envelope = logical
         .index
         .checked_mul(2)
         .and_then(|v| v.checked_add(replacement_name_bytes.checked_mul(2)?))
+        .and_then(|v| v.checked_add(replacement_value_bytes))
         .and_then(|v| v.checked_add(4096 + std::mem::size_of::<OriginalRetention>() as u64 + 128))
         .ok_or(BackingError::Length)?;
     let allocation = owner.quota().reserve(QuotaKind::Index, AccountedDocument::owned_model_reservation_bytes()).map_err(|_| BackingError::Quota)?;
     let mut index = owner.quota().reserve(QuotaKind::Index, envelope).map_err(|_| BackingError::Quota)?;
     let payload = owner.quota().reserve(QuotaKind::Resident, 0).map_err(|_| BackingError::Quota)?;
     control.check(logical.total()?)?;
+    if replacement_value_bytes != 0 {
+        // The replacement's newly initialized dynamic bytes are additional to
+        // the old-model copy above, and receive their own nonrefundable work.
+        control.check(replacement_value_bytes)?;
+    }
     let mut document = imported_selection::copy_document(owner.document(), control)?;
     let source = owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
     let destination = document.xcf_state.as_mut().ok_or(BackingError::Integrity)?;
@@ -512,6 +494,7 @@ pub(super) fn current_copy(
         CopyKind::LayerName(patch) => readonly_layer_name::apply(&mut document, patch, control)?,
         CopyKind::LayerProperties(plan) => readonly_layer_properties::apply(&mut document, plan, control)?,
         CopyKind::Filter(plan) => patch::apply(&mut document, plan, control)?,
+        CopyKind::Structured(plan) => structured_patch::apply(&mut document, plan, control)?,
     }
     let actual =
         measured(&document, owner.quota(), control)?.index.checked_add(std::mem::size_of::<OriginalRetention>() as u64 + 128).ok_or(BackingError::Length)?;

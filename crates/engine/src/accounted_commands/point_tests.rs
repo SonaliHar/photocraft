@@ -456,3 +456,6 @@ fn registered_literal_color_patch_retains_typed_storage_one_history_and_noop_red
 
 #[path = "point_signed_tests.rs"]
 mod signed;
+
+#[path = "point_configured_tests.rs"]
+mod configured;

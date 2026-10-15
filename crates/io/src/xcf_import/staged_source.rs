@@ -11,6 +11,9 @@ use std::{cell::RefCell, marker::PhantomData, rc::Rc};
 #[path = "staged_residual_point.rs"]
 mod residual;
 use residual::ResidualPointFamily;
+#[path = "staged_configured_point.rs"]
+mod configured;
+use configured::ConfiguredPointFamily;
 
 trait StagePolicy {
     const THRESHOLD_ALPHA: bool;
@@ -28,6 +31,7 @@ pub(super) enum SelectedStagedFamily {
     Threshold,
     Point(crate::xcf_filters::PointReplaceFamily),
     ResidualPoint(ResidualPointFamily),
+    ConfiguredPoint(ConfiguredPointFamily),
 }
 impl std::fmt::Debug for SelectedStagedFamily {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -37,6 +41,7 @@ impl std::fmt::Debug for SelectedStagedFamily {
             Self::Threshold => "Threshold",
             Self::Point(_) => "Point",
             Self::ResidualPoint(_) => "ResidualPoint",
+            Self::ConfiguredPoint(_) => "ConfiguredPoint",
         })
     }
 }
@@ -56,6 +61,9 @@ impl StagePolicy for SourceSelectedPolicy {
             // This chooses a strict validator only. admissions() must obtain
             // the SAME family from the original whole-file classifier before
             // mapping; completion cannot return this route after a refusal.
+            if let Some(family) = ConfiguredPointFamily::hint(file) {
+                return SelectedStagedFamily::ConfiguredPoint(family);
+            }
             if let Some(family) = ResidualPointFamily::hint(file) {
                 return SelectedStagedFamily::ResidualPoint(family);
             }
@@ -408,6 +416,12 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
                 }
                 Some(expected.domain())
             }
+            SelectedStagedFamily::ConfiguredPoint(expected) => {
+                if !expected.qualify(file, ctl, shared)? {
+                    return Err(IoError::Unsupported("staged configured Point source is outside its exact whole-file predicate".into()));
+                }
+                Some(expected.domain())
+            }
             _ => None,
         };
         if point.is_some() {
@@ -483,6 +497,9 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         // type, and its admissions above propagate the shared exact predicate.
         let mut domains = admission::LateAdmissionDomains::default();
         if let SelectedStagedFamily::ResidualPoint(family) = P::family(file) {
+            family.set_late(&mut domains);
+        }
+        if let SelectedStagedFamily::ConfiguredPoint(family) = P::family(file) {
             family.set_late(&mut domains);
         }
         admission::LateAdmissionDomains {

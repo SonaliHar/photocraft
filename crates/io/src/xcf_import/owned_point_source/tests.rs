@@ -420,3 +420,39 @@ fn remaining_fifteen_existing_source_families_promote_once_with_unchanged_native
     assert_eq!(seen.len(), 15);
     drop(outside);
 }
+
+
+#[test]
+fn configured_nested_vectors_and_curve_spare_capacity_are_real_model_fees() {
+    let budget = Budget::new(limits(), None);
+    let mut doc = census_fixture();
+    let node = &mut doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0];
+    node.arguments = vec![FilterArgument {
+        name: "config".into(),
+        value: FilterValue::Config(["value", "red", "green", "blue", "alpha"].into_iter().map(|name| FilterArgument {
+            name: name.into(),
+            value: FilterValue::Curve { free: true, points_f64_bits: Vec::new(), point_types: Vec::new(), samples_f64_bits: vec![0.5f64.to_bits(); 256] },
+        }).collect()),
+    }];
+    let first = census::measure(&doc, &budget, &Interrupt::NONE).unwrap();
+    let node = &mut doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0];
+    let FilterValue::Config(channels) = &mut node.arguments[0].value else { panic!() };
+    let previous = channels.capacity();
+    channels.reserve_exact(16);
+    let mut extra = (channels.capacity() - previous) * std::mem::size_of::<FilterArgument>();
+    let FilterValue::Curve { samples_f64_bits, .. } = &mut channels[0].value else { panic!() };
+    let words = samples_f64_bits.clone();
+    let previous = samples_f64_bits.capacity();
+    samples_f64_bits.reserve_exact(512);
+    extra += (samples_f64_bits.capacity() - previous) * 8;
+    assert_eq!(*samples_f64_bits, words);
+    let next = census::measure(&doc, &budget, &Interrupt::NONE).unwrap();
+    assert_eq!(next.model, first.model + extra as u64);
+    assert!(super::super::owned_plain_source::census::measure(&doc, &budget, &Interrupt::NONE).is_err());
+    assert!(super::super::owned_plain_source::census::measure_threshold(&doc, &budget, &Interrupt::NONE).is_err());
+    let node = &mut doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0];
+    let FilterValue::Config(channels) = &mut node.arguments[0].value else { panic!() };
+    let FilterValue::Curve { samples_f64_bits, .. } = &mut channels[0].value else { panic!() };
+    samples_f64_bits[0] = f64::NAN.to_bits();
+    assert!(census::measure(&doc, &budget, &Interrupt::NONE).is_err());
+}

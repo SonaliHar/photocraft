@@ -35,7 +35,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-fn ctl() -> ReadControl<'static> {
+pub(super) fn ctl() -> ReadControl<'static> {
     ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) }
 }
 #[derive(Debug)]
@@ -62,7 +62,7 @@ impl NativePlaneStore for Store {
         Ok(())
     }
 }
-fn fixture(
+pub(super) fn fixture(
     mode: ColorMode,
     sample: SampleType,
     stored: SampleEncoding,

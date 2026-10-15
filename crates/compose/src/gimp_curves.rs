@@ -9,6 +9,13 @@ pub(crate) struct CurvesNode {
 }
 impl CurvesNode {
     pub(crate) fn new(node: &FilterNode, version: u32) -> Result<Self> {
+        Self::prepare(node,version,&photocraft_raster::Interrupt::NONE,false)
+    }
+    pub(crate) fn new_with_interrupt(node:&FilterNode,version:u32,control:&photocraft_raster::Interrupt<'_>)->Result<Self> {
+        Self::prepare(node,version,control,true)
+    }
+    fn prepare(node:&FilterNode,version:u32,control:&photocraft_raster::Interrupt<'_>,bounded:bool)->Result<Self> {
+        control.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
         let policy = node.composition.as_ref().ok_or(CompositionError::Unsupported("missing curves policy"))?;
         if version != 22
             || node.operation.stored_version != "0:0"
@@ -41,6 +48,7 @@ impl CurvesNode {
         }
         let mut tables: [Vec<f64>; 5] = std::array::from_fn(|_| Vec::new());
         for ((arg, name), table) in channels.iter().zip(["value", "red", "green", "blue", "alpha"]).zip(tables.iter_mut()) {
+            control.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
             let FilterValue::Curve { free, points_f64_bits, point_types, samples_f64_bits } = &arg.value else {
                 return Err(CompositionError::Unsupported("FREE curves channel type"));
             };
@@ -48,9 +56,19 @@ impl CurvesNode {
                 return Err(CompositionError::Unsupported("FREE256 stored schema"));
             }
             table.try_reserve_exact(256).map_err(|_| CompositionError::Invalid("FREE curves allocation denied"))?;
-            table.extend(samples_f64_bits.iter().map(|bits| f64::from_bits(*bits)));
+            if bounded && table.capacity()>512 {return Err(CompositionError::Unsupported("FREE256 temporary capacity envelope"))}
+            for block in samples_f64_bits.chunks(64) {
+                control.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
+                table.extend(block.iter().map(|bits| f64::from_bits(*bits)));
+            }
         }
         Ok(Self { tables: OwnedPreparedCurveTables::try_new(tables)? })
+    }
+    pub(crate) fn stock_retained_bytes(&self)->u64 { std::mem::size_of::<Self>() as u64 }
+    pub(crate) fn validate_stock_input(&self,pixel:[f64;4],poll:&mut impl FnMut(WideWork)->Result<()>)->Result<()> {
+        poll(WideWork::SampleUnits(160))?;
+        if pixel.iter().any(|value|!value.is_finite() || !(0.0..=1.0).contains(value)) {return Err(CompositionError::Unsupported("FREE256 current unit native input"))}
+        Ok(())
     }
     pub(crate) fn apply(&self, pixel: [f64; 4], poll: &mut impl FnMut(WideWork) -> Result<()>) -> Result<[f64; 4]> {
         poll(WideWork::SampleUnits(160))?;

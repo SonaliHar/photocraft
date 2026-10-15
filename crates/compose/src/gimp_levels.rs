@@ -14,6 +14,10 @@ pub(crate) struct LevelsNode {
 }
 impl LevelsNode {
     pub(crate) fn new(node: &FilterNode, profile: &Profile, stored: SampleEncoding, version: u32) -> Result<Self> {
+        Self::new_with_interrupt(node,profile,stored,version,&photocraft_raster::Interrupt::NONE)
+    }
+    pub(crate) fn new_with_interrupt(node:&FilterNode,profile:&Profile,stored:SampleEncoding,version:u32,control:&photocraft_raster::Interrupt<'_>)->Result<Self> {
+        control.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
         let policy = node.composition.as_ref().ok_or(CompositionError::Unsupported("missing structured Levels policy"))?;
         if version != 22
             || node.operation.stored_version != "0:0"
@@ -59,6 +63,7 @@ impl LevelsNode {
         }
         let mut decoded = [LevelsChannel::default(); 5];
         for ((arg, name), channel) in channels.iter().zip(["value", "red", "green", "blue", "alpha"]).zip(decoded.iter_mut()) {
+            control.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
             let FilterValue::Config(fields) = &arg.value else {
                 return Err(CompositionError::Unsupported("Levels channel type"));
             };
@@ -79,8 +84,16 @@ impl LevelsNode {
         }
         let config = LevelsConfiguration { channels: decoded, clamp_input, clamp_output };
         config.validate()?;
-        let working = WorkingSpace::new(profile, stored, if *value == 0 { GimpSpace::LinearRgb } else { GimpSpace::ProfileRgb })?;
+        let working = WorkingSpace::new_with_interrupt(profile, stored, if *value == 0 { GimpSpace::LinearRgb } else { GimpSpace::ProfileRgb },control)?;
         Ok(Self { config, working })
+    }
+    pub(crate) fn stock_retained_bytes(&self)->u64 { std::mem::size_of::<Self>() as u64 +65536 }
+    pub(crate) fn validate_stock_input(&self,pixel:[f64;4],poll:&mut impl FnMut(WideWork)->Result<()>)->Result<()> {
+        poll(WideWork::SampleUnits(384))?;
+        if pixel.iter().any(|value|!value.is_finite()) || !(0.0..=1.0).contains(&pixel[3]) {return Err(CompositionError::Unsupported("configured stock finite native colors/unit alpha"))}
+        let color=self.working.convert([pixel[0],pixel[1],pixel[2]],true)?;
+        if color.iter().any(|value|!value.is_finite()) {return Err(CompositionError::Unsupported("configured stock working input"))}
+        Ok(())
     }
     pub(crate) fn apply(&self, pixel: [f64; 4], poll: &mut impl FnMut(WideWork) -> Result<()>) -> Result<[f64; 4]> {
         poll(WideWork::SampleUnits(320))?;

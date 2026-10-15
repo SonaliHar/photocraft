@@ -111,7 +111,7 @@ fn metadata(node: &FilterNode, control: &ReadControl<'_>) -> Result<usize> {
     }
     Ok(total)
 }
-fn point_metadata(node: &FilterNode, control: &ReadControl<'_>) -> Result<usize> {
+fn point_header_metadata(node: &FilterNode, control: &ReadControl<'_>) -> Result<usize> {
     let mut total = 0;
     for value in [&node.operation.name, &node.operation.stored_version, &node.operation.schema_epoch] {
         text(&mut total, value, MAX_TEXT, control)?;
@@ -125,6 +125,10 @@ fn point_metadata(node: &FilterNode, control: &ReadControl<'_>) -> Result<usize>
     if node.arguments.len() > 10 || !node.auxiliary.is_empty() {
         return Err(BackingError::Unsupported.into());
     }
+    Ok(total)
+}
+fn point_metadata(node: &FilterNode, control: &ReadControl<'_>) -> Result<usize> {
+    let mut total = point_header_metadata(node, control)?;
     for argument in &node.arguments {
         text(&mut total, &argument.name, 128, control)?;
         match &argument.value {
@@ -143,6 +147,41 @@ fn point_metadata(node: &FilterNode, control: &ReadControl<'_>) -> Result<usize>
         }
     }
     Ok(total)
+}
+fn structured_point_plan(node: &FilterNode, control: &ReadControl<'_>) -> Result<(usize, ReplyBounds, u64)> {
+    let mut scanned = point_header_metadata(node, control)?;
+    let shape = photocraft_doc::accounted_document::point_argument_shape(&node.arguments, control)?;
+    // The same bounded raw shape precedes the existing canonical config wire
+    // builder. Count nested names and prospective hexadecimal word strings;
+    // the returned facts grant no source, rendering or quota authority.
+    for argument in &node.arguments {
+        text(&mut scanned, &argument.name, 128, control)?;
+    }
+    let nested_text = shape
+        .utf8_bytes
+        .checked_add(shape.f64_words.checked_mul(32).ok_or(BackingError::Length)?)
+        .and_then(|n| n.checked_add(shape.config_entries.checked_mul(64)?))
+        .and_then(|n| n.checked_add(shape.curve_arrays.checked_mul(128)?))
+        .ok_or(BackingError::Length)?;
+    checked_add(&mut scanned, usize::try_from(nested_text).map_err(|_| BackingError::Length)?)?;
+    let count = |base: u64, words: u64, entries: u64, arrays: u64| -> Result<usize> {
+        let n = base
+            .checked_add(shape.f64_words.checked_mul(words).ok_or(BackingError::Length)?)
+            .and_then(|n| n.checked_add(shape.config_entries.checked_mul(entries)?))
+            .and_then(|n| n.checked_add(shape.curve_arrays.checked_mul(arrays)?))
+            .ok_or(BackingError::Length)?;
+        usize::try_from(n).map_err(|_| BackingError::Length.into())
+    };
+    let bounds = ReplyBounds { nodes: count(512, 4, 16, 32)?, objects: count(128, 0, 4, 4)?, members: count(512, 0, 16, 32)?, depth: 16, max_string: MAX_TEXT };
+    let planned = bounds
+        .nodes
+        .checked_mul(std::mem::size_of::<Value>())
+        .and_then(|n| n.checked_add(bounds.objects.checked_mul(MAP_HEADER)?))
+        .and_then(|n| n.checked_add(bounds.members.checked_mul(MAP_ENTRY)?))
+        .and_then(|n| n.checked_add(scanned.checked_add(FIXED_TEXT)?.checked_mul(2)?))
+        .and_then(|n| n.checked_add(std::mem::size_of::<OwnedFilterInspectReply>() + 128))
+        .ok_or(BackingError::Length)?;
+    Ok((scanned, bounds, u64::try_from(planned).map_err(|_| BackingError::Length)?))
 }
 fn point_envelope(text: usize) -> Result<u64> {
     let bytes = POINT_FILTER_BOUNDS
@@ -261,6 +300,19 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
         return Err(bad("unknown filterId"));
     }
     if point {
+        control.check(node.arguments.len() as u64 + 1)?;
+        let structured = node.arguments.iter().any(|argument| {
+            matches!(
+                argument.value,
+                FilterValue::Config(_) | FilterValue::Curve { .. } | FilterValue::Number(photocraft_doc::xcf_filters::ExactNumber::Float64Bits(_))
+            )
+        });
+        if structured {
+            let (text, bounds, planned) = structured_point_plan(node, control)?;
+            return paid_reply(owner.quota(), ReplyKind::Filter, bounds, planned, text, control, || {
+                crate::xcf_filter_cmds::build_point_storage_inspect_reply(id, stack, node)
+            });
+        }
         let text = point_metadata(node, control)?;
         let planned = point_envelope(text)?;
         return paid_reply(owner.quota(), ReplyKind::Filter, POINT_FILTER_BOUNDS, planned, text, control, || {
@@ -312,3 +364,7 @@ mod tests;
 #[cfg(test)]
 #[path = "accounted_point_inspect_tests.rs"]
 mod point_tests;
+
+#[cfg(test)]
+#[path = "accounted_configured_point_inspect_tests.rs"]
+mod configured_point_tests;

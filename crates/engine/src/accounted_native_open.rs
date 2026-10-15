@@ -52,6 +52,9 @@ pub fn is_current_point_candidate(document: &photocraft_doc::Document, control: 
                         | "gegl:saturation"
                         | "gegl:value-invert"
                         | "gimp:posterize"
+                        | "gimp:color-balance"
+                        | "gimp:levels"
+                        | "gimp:curves"
                 ) {
                     return Ok(true);
                 }

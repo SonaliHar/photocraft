@@ -16,6 +16,10 @@ pub(crate) struct ColorBalanceNode {
 }
 impl ColorBalanceNode {
     pub(crate) fn new(node: &FilterNode, profile: &Profile, stored: SampleEncoding, version: u32) -> Result<Self> {
+        Self::new_with_interrupt(node,profile,stored,version,&photocraft_raster::Interrupt::NONE)
+    }
+    pub(crate) fn new_with_interrupt(node:&FilterNode,profile:&Profile,stored:SampleEncoding,version:u32,control:&photocraft_raster::Interrupt<'_>)->Result<Self> {
+        control.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
         let policy = node.composition.as_ref().ok_or(CompositionError::Unsupported("missing Color Balance policy"))?;
         let depth = node.operation.schema_epoch == DEPTH_EPOCH;
         let raw = if depth { -1215462831 } else { -113999279 };
@@ -52,6 +56,7 @@ impl ColorBalanceNode {
         }
         let mut ranges = [[0.0; 3]; 3];
         for ((argument, name), output) in source.iter().zip(["shadows", "midtones", "highlights"]).zip(ranges.iter_mut()) {
+            control.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
             let FilterValue::Config(fields) = &argument.value else {
                 return Err(CompositionError::Unsupported("Color Balance scalar type"));
             };
@@ -70,7 +75,15 @@ impl ColorBalanceNode {
         }
         let config = ColorBalance { ranges, preserve_luminosity };
         config.validate()?;
-        Ok(Self { config, working: WorkingSpace::new(profile, stored, GimpSpace::ProfileRgb)? })
+        Ok(Self { config, working: WorkingSpace::new_with_interrupt(profile, stored, GimpSpace::ProfileRgb,control)? })
+    }
+    pub(crate) fn stock_retained_bytes(&self)->u64 { std::mem::size_of::<Self>() as u64 +65536 }
+    pub(crate) fn validate_stock_input(&self,pixel:[f64;4],poll:&mut impl FnMut(WideWork)->Result<()>)->Result<()> {
+        poll(WideWork::SampleUnits(384))?;
+        if pixel.iter().any(|value|!value.is_finite() || !(0.0..=1.0).contains(value)) || !(0.0..=1.0).contains(&pixel[3]) {return Err(CompositionError::Unsupported("configured stock finite native colors/unit alpha"))}
+        let color=self.working.convert([pixel[0],pixel[1],pixel[2]],true)?;
+        if color.iter().any(|value|!value.is_finite() || !(0.0..=1.0).contains(value)) {return Err(CompositionError::Unsupported("configured stock working input"))}
+        Ok(())
     }
     pub(crate) fn apply(&self, pixel: [f64; 4], poll: &mut impl FnMut(WideWork) -> Result<()>) -> Result<[f64; 4]> {
         poll(WideWork::SampleUnits(384))?;

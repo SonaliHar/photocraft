@@ -223,6 +223,7 @@ fn build_inspect_reply_with_point_colors(
         .map(|argument| -> Result<Value> {
             let value = match &argument.value {
                 FilterValue::StoredColor(storage) => json!({"value":crate::inspect_xcf_typed::stored_color_inspection(&storage.layout,&storage.samples,&storage.opaque_tail,&Interrupt::NONE)?,"editable":false}),
+                FilterValue::Number(ExactNumber::Float64Bits(bits)) if point_colors => json!({"value":{"Number":{"Float64Bits":format!("0x{bits:016x}")}}}),
                 FilterValue::Number(_) | FilterValue::Bool(_) => json!({"value":argument.value}),
                 FilterValue::Color { components, encoding: photocraft_doc::SampleEncoding::NonlinearProfile, profile: None }
                     if point_colors && components.len() == 4
@@ -463,6 +464,11 @@ fn config_wire(operation: &str, input: &FilterValue) -> Option<Value> {
     }
     Some(json!({"Config":output}))
 }
+/// Only the paid Point adapter may use this borrowed conversion seam. The
+/// caller MUST first check its closed bounded wire and reserve a genuine same-
+/// quota temporary envelope, then census/reconcile returned actual capacities
+/// before model/renderer work. This helper itself grants no storage authority.
+pub(crate) fn paid_point_patches(params:&Value,operation:&str)->Result<Vec<FilterArgument>> { patches(params,operation) }
 fn patches(params: &Value, operation: &str) -> Result<Vec<FilterArgument>> {
     let Some(input) = params.get("arguments") else {
         return Ok(Vec::new());
